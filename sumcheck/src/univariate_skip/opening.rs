@@ -53,15 +53,21 @@ pub const OPENING_DEGREE: usize = 2;
 ///
 /// # Verifier cost
 ///
-/// The verifier reads the Lagrange vector at the output point:
+/// The verifier holds the same Lagrange vector and reads it at the output point.
 ///
-/// ```text
-///     L^(tau) = Z_S(lam) / Z_S'(S) * sum_c eq(tau, c) / (lam + s_c)
-/// ```
+/// That is `2^k` terms.
 ///
-/// That is `2^k` terms and one batch inversion.
+/// Building the vector costs `2^k` terms and one batch inversion, off the subspace.
 ///
-/// It adds no new asymptotic, since reading the round message already costs `2^k`.
+/// A challenge on a subspace point makes one entry one and the rest zero.
+///
+/// The barycentric form cannot express that, so it is handled separately.
+///
+/// Neither adds a new asymptotic, since reading the round message already costs `2^k`.
+///
+/// The vector is all the verifier needs.
+///
+/// The round hands it over without the byte table only the prover's row reading uses.
 #[derive(Debug, Clone)]
 pub struct SkipOpening<EF> {
     /// The Lagrange vector of the skipped subspace, read at the round's challenge.
@@ -235,6 +241,69 @@ impl<EF: Field> SkipOpening<EF> {
             .fold(EF::ZERO, |accumulator, &claim| accumulator * gamma + claim)
     }
 
+    /// Check that a proof of this reduction discharges the claims it was started from.
+    ///
+    /// # Overview
+    ///
+    /// Two equalities carry the reduction, and both are easy to leave out of a caller:
+    ///
+    /// ```text
+    ///     starting sum  ==  sum_i gamma^i * blend_i
+    ///     closing value ==  L^(tau) * sum_i gamma^i * opening_i
+    /// ```
+    ///
+    /// The first ties the delegated sumcheck to the claims the round left behind.
+    ///
+    /// That matters because the sumcheck driver takes its starting sum from the proof.
+    ///
+    /// The second strips the Lagrange weight off the value the rounds closed on.
+    ///
+    /// What is left is the evaluations a commitment can answer for.
+    ///
+    /// # Arguments
+    ///
+    /// - The per-polynomial blended values the round left behind.
+    /// - The challenge the transcript drew to separate them.
+    /// - The sum the delegated sumcheck was run on.
+    /// - The point the rounds ended on.
+    /// - The committed evaluations at that point.
+    /// - The value the sumcheck closed on.
+    ///
+    /// # Errors
+    ///
+    /// - The blends and the openings disagree on count.
+    /// - The starting sum is not the batch of the blends.
+    /// - The closing value is not the weighted batch of the openings.
+    pub fn verify(
+        &self,
+        blends: &[EF],
+        gamma: EF,
+        starting_sum: EF,
+        tau: &Point<EF>,
+        openings: &[EF],
+        closing_value: EF,
+    ) -> Result<(), SkipOpeningError> {
+        // One opening per blend, or the two batches weigh different things.
+        if blends.len() != openings.len() {
+            return Err(SkipOpeningError::ClaimCountMismatch {
+                blends: blends.len(),
+                openings: openings.len(),
+            });
+        }
+
+        // The sumcheck driver reads its starting sum from the proof, so tie it down here.
+        if starting_sum != Self::batch_claims(blends, gamma) {
+            return Err(SkipOpeningError::StartingSumMismatch);
+        }
+
+        // The rounds close on the weighted batch, weight included.
+        if closing_value != self.lagrange_at(tau) * Self::batch_claims(openings, gamma) {
+            return Err(SkipOpeningError::ClosingValueMismatch);
+        }
+
+        Ok(())
+    }
+
     /// Build the prover state for the reduction's sumcheck.
     #[must_use]
     pub fn prover(&self, batched: Poly<EF>) -> SkipOpeningProver<EF> {
@@ -243,6 +312,25 @@ impl<EF: Field> SkipOpening<EF> {
             batched,
         }
     }
+}
+
+/// Reasons a proof of the opening reduction is rejected.
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+pub enum SkipOpeningError {
+    /// The blends and the openings disagree on how many polynomials were batched.
+    #[error("the proof carries {blends} blends and {openings} openings")]
+    ClaimCountMismatch {
+        /// Number of blended values the proof carries.
+        blends: usize,
+        /// Number of committed evaluations it carries.
+        openings: usize,
+    },
+    /// The delegated sumcheck was run on a sum that is not the batch of the blends.
+    #[error("the sumcheck's starting sum is not the batch of the claims")]
+    StartingSumMismatch,
+    /// The value the rounds closed on is not the weighted batch of the openings.
+    #[error("the sumcheck's closing value is not the weighted batch of the openings")]
+    ClosingValueMismatch,
 }
 
 /// Prover state of the reduction's sumcheck.
@@ -305,20 +393,173 @@ impl<EF: Field> RoundProver<EF> for SkipOpeningProver<EF> {
 
 #[cfg(test)]
 mod tests {
-    use p3_binary_field::{BinaryField8, BinaryField128};
+    use p3_binary_field::{BinaryChallenger, BinaryField8, BinaryField128};
+    use p3_challenger::HashChallenger;
     use p3_field::PrimeCharacteristicRing;
+    use p3_keccak::Keccak256Hash;
     use proptest::prelude::*;
     use rand::rngs::SmallRng;
     use rand::{RngExt, SeedableRng};
 
     use super::*;
-    use crate::univariate_skip::SkipRound;
+    use crate::generic_degree::GenericDegreeProof;
+    use crate::univariate_skip::{
+        SkipOpeningProverTranscript, SkipOpeningShape, SkipOpeningTranscriptError,
+        SkipOpeningVerifierTranscript, SkipRound,
+    };
 
     /// The subspace the skip round runs over lives in a byte field.
     type F = BinaryField8;
 
     /// Challenges and folded values live in the 128-bit field above it.
     type EF = BinaryField128;
+
+    /// The transcript both sides are driven with.
+    type Challenger = BinaryChallenger<EF, HashChallenger<u8, Keccak256Hash, 32>>;
+
+    /// Skipped variables in every round-trip fixture below.
+    const LOG_SKIP: usize = 3;
+
+    /// Row variables in every round-trip fixture below.
+    const LOG_ROWS: usize = 2;
+
+    /// Committed polynomials the round trip batches.
+    const NUM_POLYS: usize = 3;
+
+    const fn fresh_challenger() -> Challenger {
+        Challenger::from_hasher(Vec::new(), Keccak256Hash)
+    }
+
+    /// Everything one run of the reduction puts on the wire.
+    #[derive(Clone, Debug)]
+    struct Run {
+        /// The blended value the skip round left behind, one per committed polynomial.
+        blends: Vec<EF>,
+        /// The delegated sumcheck's record.
+        sumcheck: GenericDegreeProof<EF, EF>,
+        /// The committed evaluations at the point the rounds ended on.
+        ///
+        /// A real verifier reads these from a commitment.
+        ///
+        /// Here the run carries them.
+        openings: Vec<EF>,
+    }
+
+    /// Why a replay of one run was rejected.
+    #[derive(Debug, PartialEq, Eq)]
+    enum Rejected {
+        /// The transcript refused the proof.
+        Transcript(SkipOpeningTranscriptError),
+        /// A delegated sumcheck round failed.
+        Sumcheck,
+        /// The reduction's own checks refused the proof.
+        Reduction(SkipOpeningError),
+    }
+
+    /// The shape both sides of the round trip are described with.
+    const fn shape() -> SkipOpeningShape {
+        SkipOpeningShape::new(LOG_SKIP, NUM_POLYS, 0)
+    }
+
+    /// Prove one reduction over several committed polynomials.
+    fn prove(seed: u64) -> (SkipOpening<EF>, Point<EF>, Run) {
+        let mut rng = SmallRng::seed_from_u64(seed);
+        let round = SkipRound::<F>::new(LOG_SKIP, 2).unwrap();
+        let num_rows = 1 << LOG_ROWS;
+
+        // One packed witness per committed polynomial, and the point the rows are read at.
+        let witnesses = (0..NUM_POLYS)
+            .map(|_| packed(&mut rng, num_rows, round.row_bytes()))
+            .collect::<Vec<_>>();
+        let lambda = rng.random::<EF>();
+        let opening = SkipOpening::new(round.lagrange::<EF>(lambda));
+        let rho = Point::new((0..LOG_ROWS).map(|_| rng.random::<EF>()).collect());
+
+        // The fold each polynomial contributes, and the blend the round left on it.
+        let folded = opening.partial_evaluations(witnesses.iter().map(Vec::as_slice), &rho);
+        let blends = folded
+            .iter()
+            .map(|poly| {
+                poly.as_slice()
+                    .iter()
+                    .zip(opening.lagrange().as_slice())
+                    .map(|(&value, &weight)| value * weight)
+                    .sum::<EF>()
+            })
+            .collect::<Vec<_>>();
+
+        let mut challenger = fresh_challenger();
+        let mut transcript =
+            SkipOpeningProverTranscript::<Challenger, EF, EF>::new(&mut challenger, shape());
+
+        // The claims are bound here, before the challenge that separates them.
+        let gamma = transcript.batching_challenge(&blends);
+        let starting_sum = SkipOpening::batch_claims(&blends, gamma);
+
+        let mut prover = opening.prover(SkipOpening::batch(&folded, gamma));
+        let (sumcheck, tau) = transcript.sumcheck(|challenger| {
+            prover.prove::<EF, _>(challenger, LOG_SKIP, OPENING_DEGREE, 0, starting_sum)
+        });
+        transcript.finish();
+
+        // Each polynomial read at the point the rounds ended on, residual variables first.
+        let whole = Point::new(rho.as_slice().iter().copied().chain(tau).collect());
+        let openings = witnesses
+            .iter()
+            .map(|rows| Poly::new(unpack(rows)).eval_base(&whole))
+            .collect::<Vec<_>>();
+
+        (
+            opening,
+            rho,
+            Run {
+                blends,
+                sumcheck,
+                openings,
+            },
+        )
+    }
+
+    /// Replay one run the way a verifier would, holding only the run and the shape.
+    fn verify(opening: &SkipOpening<EF>, run: &Run) -> Result<(), Rejected> {
+        let mut challenger = fresh_challenger();
+        let mut transcript =
+            SkipOpeningVerifierTranscript::<Challenger, EF, EF>::new(&mut challenger, shape());
+
+        let gamma = transcript
+            .batching_challenge(&run.blends)
+            .map_err(Rejected::Transcript)?;
+
+        let rounds = transcript
+            .sumcheck(|challenger| run.sumcheck.verify(challenger, LOG_SKIP, OPENING_DEGREE, 0));
+        let (tau, closing) = match rounds {
+            Ok(pair) => pair,
+            Err(_) => return Err(Rejected::Sumcheck),
+        };
+        transcript.finish();
+
+        opening
+            .verify(
+                &run.blends,
+                gamma,
+                run.sumcheck.claimed_sum,
+                &tau,
+                &run.openings,
+                closing,
+            )
+            .map_err(Rejected::Reduction)
+    }
+
+    /// The batching challenge one set of claims produces.
+    fn challenge_for(claims: &[EF]) -> EF {
+        let mut challenger = fresh_challenger();
+        let mut transcript =
+            SkipOpeningProverTranscript::<Challenger, EF, EF>::new(&mut challenger, shape());
+        let gamma = transcript.batching_challenge(claims);
+        transcript.sumcheck(|_| ());
+        transcript.finish();
+        gamma
+    }
 
     /// Read one packed bit-valued polynomial as its values over the hypercube.
     fn unpack(packed: &[u8]) -> Vec<EF> {
@@ -439,6 +680,196 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(combined, SkipOpening::batch_claims(&claims, gamma));
+    }
+
+    #[test]
+    fn an_honest_run_verifies_through_both_drivers() {
+        // Fixture state: 3 skipped variables, 2 row variables, 3 committed polynomials.
+        //
+        //     blends -> gamma -> 3 sumcheck rounds -> tau -> openings
+        //
+        // Invariant: the run replays, and both of the reduction's equalities hold on it.
+        let (opening, _, run) = prove(0xE2E);
+
+        assert_eq!(verify(&opening, &run), Ok(()));
+    }
+
+    #[test]
+    fn the_batching_challenge_follows_the_claims() {
+        // Invariant: the challenge is a function of the claims it separates.
+        //
+        // Were it drawn first, a prover seeing it could move value between two claims:
+        //
+        //     v_0 += gamma * d,  v_1 -= d      leaves the batch unchanged
+        //
+        // Binding the claims ahead of the draw is what makes that shift change gamma.
+        let mut rng = SmallRng::seed_from_u64(0x6A3);
+        let claims = (0..NUM_POLYS)
+            .map(|_| rng.random::<EF>())
+            .collect::<Vec<_>>();
+        let gamma = challenge_for(&claims);
+
+        // The shift that leaves the batch fixed, applied to the claims.
+        let delta = rng.random::<EF>();
+        let mut shifted = claims.clone();
+        shifted[0] += gamma * delta;
+        shifted[1] -= delta;
+        assert_eq!(
+            SkipOpening::batch_claims(&shifted, gamma),
+            SkipOpening::batch_claims(&claims, gamma),
+            "the shift is chosen to leave the batch alone"
+        );
+
+        // The challenge nonetheless moves, so the shifted claims are batched differently.
+        assert_ne!(challenge_for(&shifted), gamma);
+    }
+
+    #[test]
+    fn a_shift_that_preserves_the_batch_is_still_rejected() {
+        // Mutation: move value between two blends, leaving their honest batch unchanged.
+        //
+        // The claims are bound before the draw, so the replay draws a different challenge.
+        //
+        // The starting sum the proof carries then no longer matches.
+        let (opening, _, honest) = prove(0x5417);
+        let gamma = challenge_for(&honest.blends);
+
+        // A nonzero shift, drawn rather than built from an integer.
+        //
+        // In characteristic two an integer collapses to its parity, so an even one is zero.
+        let delta = SmallRng::seed_from_u64(0x5418).random::<EF>();
+        let mut run = honest;
+        run.blends[0] += gamma * delta;
+        run.blends[1] -= delta;
+
+        // Under the honest challenge the batch is untouched, which is the whole attack.
+        assert_eq!(
+            SkipOpening::batch_claims(&run.blends, gamma),
+            run.sumcheck.claimed_sum
+        );
+
+        assert_eq!(
+            verify(&opening, &run),
+            Err(Rejected::Reduction(SkipOpeningError::StartingSumMismatch))
+        );
+    }
+
+    #[test]
+    fn a_tampered_starting_sum_is_rejected() {
+        // Mutation: the sumcheck's starting sum, which the driver reads from the proof.
+        //
+        // Nothing inside the sumcheck ties it to the claims, so the reduction must.
+        let (opening, _, honest) = prove(0x57A47);
+
+        let mut run = honest;
+        run.sumcheck.claimed_sum += EF::ONE;
+
+        // The replay rejects: the altered sum is bound, so the rounds no longer close.
+        assert!(verify(&opening, &run).is_err());
+    }
+
+    #[test]
+    fn a_tampered_opening_is_rejected() {
+        // Mutation: one of the committed evaluations the reduction closes against.
+        //
+        // This is the check that strips the Lagrange weight.
+        //
+        // It is all that stands between the rounds and a wrong commitment answer.
+        let (opening, _, honest) = prove(0x09E1);
+
+        let mut run = honest;
+        run.openings[2] += EF::ONE;
+
+        assert_eq!(
+            verify(&opening, &run),
+            Err(Rejected::Reduction(SkipOpeningError::ClosingValueMismatch))
+        );
+    }
+
+    #[test]
+    fn a_tampered_round_polynomial_is_rejected() {
+        // Mutation: zero one round polynomial, as a prover skipping the round would.
+        //
+        // A degree-two round reports two nodes and recovers the third from the claim.
+        //
+        // No round is therefore self-contradicting, and the sumcheck alone accepts.
+        //
+        // The rounds are a reduction, not a filter, so the tamper survives to the end.
+        //
+        // The closing check against the committed openings is what refuses it.
+        let (opening, _, honest) = prove(0x20D);
+
+        let mut run = honest;
+        run.sumcheck.round_polys[1] = alloc::vec![EF::ZERO; OPENING_DEGREE];
+
+        assert_eq!(
+            verify(&opening, &run),
+            Err(Rejected::Reduction(SkipOpeningError::ClosingValueMismatch))
+        );
+    }
+
+    #[test]
+    fn a_wrong_claim_count_is_rejected() {
+        // Mutation: drop one blend, so the batch is narrower than the description fixes.
+        //
+        // The count is bound as the claims step's width, so the replay refuses it.
+        let (opening, _, honest) = prove(0xC07);
+
+        let mut run = honest;
+        run.blends.pop();
+
+        assert_eq!(
+            verify(&opening, &run),
+            Err(Rejected::Transcript(
+                SkipOpeningTranscriptError::ClaimCountMismatch {
+                    expected: NUM_POLYS,
+                    actual: NUM_POLYS - 1,
+                }
+            ))
+        );
+    }
+
+    #[test]
+    fn blends_and_openings_must_agree_on_count() {
+        // The two batches weigh the same polynomials, so a count mismatch is meaningless.
+        let (opening, _, honest) = prove(0xC08);
+
+        let mut run = honest;
+        run.openings.pop();
+
+        assert_eq!(
+            verify(&opening, &run),
+            Err(Rejected::Reduction(SkipOpeningError::ClaimCountMismatch {
+                blends: NUM_POLYS,
+                openings: NUM_POLYS - 1,
+            }))
+        );
+    }
+
+    #[test]
+    fn the_verifier_builds_the_same_lagrange_vector_as_the_prover() {
+        // The verifier needs the vector alone, not the 32 KiB byte table beside it.
+        //
+        // Both come from one computation, so the two cannot drift apart.
+        let mut rng = SmallRng::seed_from_u64(0x1A6);
+        let round = SkipRound::<F>::new(LOG_SKIP, 2).unwrap();
+
+        for lambda in (0..8)
+            .map(|_| rng.random::<EF>())
+            .chain(round.domain().subspace().iter().map(|&s| EF::from(s)))
+        {
+            assert_eq!(
+                round.lagrange::<EF>(lambda),
+                *round.selector::<EF>(lambda).lagrange()
+            );
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "batches at least one polynomial")]
+    fn an_empty_batch_is_refused() {
+        // Nothing to reduce, and every later step assumes one claim at least.
+        let _ = SkipOpeningShape::new(LOG_SKIP, 0, 0);
     }
 
     proptest! {

@@ -60,6 +60,9 @@ struct ResidualSumcheck;
 /// Protocol name bound into the opening reduction's seed.
 const OPENING_NAME: &[u8] = b"p3-sumcheck-univariate-skip-opening";
 
+/// Step label of the per-polynomial claims the reduction starts from.
+const OPENING_CLAIMS: &str = "opening_claims";
+
 /// Step label of the challenge that batches the committed polynomials.
 const OPENING_BATCHING: &str = "opening_batching";
 
@@ -72,6 +75,28 @@ struct OpeningSumcheck;
 /// Numbers that fix the transcript of one opening reduction.
 ///
 /// Both sides build this from their own configuration, never from a proof.
+///
+/// # What this binds
+///
+/// The claims the reduction starts from, and their count.
+///
+/// Both land before the challenge that separates them.
+///
+/// The delegated sumcheck binds its own rounds and its starting sum, under its own seed.
+///
+/// # What the caller owes
+///
+/// The evaluations the reduction ends on are not bound here.
+///
+/// They are what a commitment answers for.
+///
+/// Discharging them against one is the caller's business.
+///
+/// That is the same obligation the skip round leaves for its zerocheck point.
+///
+/// Two equalities tie those evaluations to this run.
+///
+/// The reduction owns both, so a caller cannot forget one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SkipOpeningShape {
     /// Number of skipped variables the reduction binds, one round each.
@@ -84,8 +109,18 @@ pub struct SkipOpeningShape {
 
 impl SkipOpeningShape {
     /// Collect the numbers that fix one reduction.
+    ///
+    /// # Panics
+    ///
+    /// Panics if no polynomial is batched.
+    ///
+    /// An empty batch has nothing to reduce, and every later step assumes one claim at least.
     #[must_use]
     pub const fn new(num_variables: usize, num_polynomials: usize, pow_bits: usize) -> Self {
+        assert!(
+            num_polynomials > 0,
+            "an opening reduction batches at least one polynomial"
+        );
         Self {
             num_variables,
             num_polynomials,
@@ -112,12 +147,25 @@ impl SkipOpeningShape {
         F: TranscriptField,
         EF: ExtensionField<F>,
     {
-        // One challenge, then the bracket the rounds run inside.
+        // The claims, then a challenge to separate them, then the bracket the rounds run in.
         //
-        // A single-polynomial run has no batching step at all.
+        // The claims come first because the challenge is drawn on them.
+        //
+        // Reversed, a prover seeing the challenge could shift value between two claims.
+        //
+        // Their batch would be unchanged, and no later check would catch it.
+        //
+        // A single-polynomial run has nothing to separate, so it has no challenge step.
         //
         // The description therefore differs, so one cannot be replayed as the other.
-        let mut steps = Vec::with_capacity(3);
+        let mut steps = Vec::with_capacity(4);
+
+        steps.push(Interaction::algebra::<F, EF>(
+            Hierarchy::Atomic,
+            Kind::Message,
+            OPENING_CLAIMS,
+            Length::Fixed(self.num_polynomials),
+        ));
 
         if self.num_polynomials > 1 {
             steps.push(Interaction::algebra::<F, EF>(
@@ -180,10 +228,35 @@ where
         }
     }
 
-    /// Draw the challenge that separates the committed polynomials.
+    /// Bind the per-polynomial claims, then draw the challenge that separates them.
     ///
-    /// A single-polynomial run has nothing to separate, so it draws nothing and batches by one.
-    pub fn batching_challenge(&mut self) -> EF {
+    /// # Overview
+    ///
+    /// The two steps are one call because their order is what makes the batch sound.
+    ///
+    /// A challenge drawn before the claims lets a prover move value between them:
+    ///
+    /// ```text
+    ///     v_0 += gamma * d,  v_1 -= d      leaves sum_i gamma^i v_i unchanged
+    /// ```
+    ///
+    /// A single-polynomial run has nothing to separate, so it batches by one and draws nothing.
+    ///
+    /// The claims are bound either way, and their count with them.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the claim count differs from the described one.
+    pub fn batching_challenge(&mut self, claims: &[EF]) -> EF {
+        assert_eq!(
+            claims.len(),
+            self.shape.num_polynomials,
+            "one claim per committed polynomial"
+        );
+
+        self.state
+            .observe_extensions::<F, EF, FieldToFieldCodec<F>>(OPENING_CLAIMS, claims);
+
         if self.shape.num_polynomials <= 1 {
             return EF::ONE;
         }
@@ -202,6 +275,12 @@ where
     }
 
     /// Close the transcript once every described step has been played.
+    ///
+    /// Every value this run binds is one the caller already holds.
+    ///
+    /// The driver's own buffer therefore stays empty.
+    ///
+    /// Closing is purely the check that the description was consumed.
     ///
     /// # Panics
     ///
@@ -243,14 +322,32 @@ where
         }
     }
 
-    /// Draw the same batching challenge the prover saw.
-    pub fn batching_challenge(&mut self) -> EF {
-        if self.shape.num_polynomials <= 1 {
-            return EF::ONE;
-        }
+    /// Bind the claims the proof carries, then draw the same challenge the prover saw.
+    ///
+    /// The count comes from the proof, so a mismatch is a rejection rather than a panic.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the proof carries a claim count the description does not allow.
+    pub fn batching_challenge(&mut self, claims: &[EF]) -> Result<EF, SkipOpeningTranscriptError> {
         self.state
+            .observe_extensions::<F, EF, FieldToFieldCodec<F>>(OPENING_CLAIMS, claims)
+            .map_err(|_| {
+                // Two described steps may still be unplayed, and this plays neither.
+                self.state.abort();
+                SkipOpeningTranscriptError::ClaimCountMismatch {
+                    expected: self.shape.num_polynomials,
+                    actual: claims.len(),
+                }
+            })?;
+
+        if self.shape.num_polynomials <= 1 {
+            return Ok(EF::ONE);
+        }
+        Ok(self
+            .state
             .challenge_extension::<F, EF, FieldToFieldCodec<F>>(OPENING_BATCHING)
-            .into_inner()
+            .into_inner())
     }
 
     /// Lend the sponge to the reduction's sumcheck, bracketed as a sub-protocol.
@@ -282,6 +379,10 @@ where
     }
 
     /// Close the transcript once every described step has been played.
+    ///
+    /// The claims and the round polynomials all arrive in the proof.
+    ///
+    /// This side binds them from there, so the driver has no wire bytes left to read.
     ///
     /// # Panics
     ///
@@ -651,6 +752,21 @@ where
             .finalize()
             .expect("the univariate-skip reduction reads an empty wire");
     }
+}
+
+/// Reasons the opening reduction's transcript replay rejects a proof.
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+pub enum SkipOpeningTranscriptError {
+    /// The proof carries a different number of claims than the description fixes.
+    ///
+    /// The count is bound, so a batch of one width cannot be replayed as another.
+    #[error("opening claim count mismatch: expected {expected}, got {actual}")]
+    ClaimCountMismatch {
+        /// Number of claims the description fixes.
+        expected: usize,
+        /// Number the proof carries.
+        actual: usize,
+    },
 }
 
 /// Reasons the transcript replay rejects a proof.
