@@ -1,4 +1,4 @@
-//! Trait for builders that record bus interactions.
+//! Trait for builders that record bus interactions and indexed reads.
 
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -7,6 +7,7 @@ use p3_air::{AirBuilder, DebugConstraintBuilder, SymbolicExpression};
 use p3_field::{ExtensionField, Field};
 
 use crate::count::Count;
+use crate::indexed::TraceWindow;
 
 /// One message sent on a named bus during symbolic evaluation.
 ///
@@ -99,10 +100,16 @@ pub struct SymbolicExclusiveBranch<F> {
     pub count_weight: u32,
 }
 
-/// Opt-in extension to the AIR builder for AIRs that speak on buses.
+/// Opt-in extension to the AIR builder for AIRs that speak on buses or read indexed tables.
 ///
 /// - AIRs that emit messages bound their builder on this trait.
 /// - Builders that do not care about interactions never implement it.
+///
+/// A bus message and an indexed read are different mechanisms recorded by one pass.
+///
+/// A bus message fingerprints arbitrary expressions, so it names expressions.
+///
+/// An indexed read is opened against a commitment, so it names committed columns instead.
 pub trait InteractionBuilder: AirBuilder {
     /// Record one global (cross-AIR) message on a named bus.
     ///
@@ -168,6 +175,58 @@ pub trait InteractionBuilder: AirBuilder {
         branches.into_iter().for_each(drop);
     }
 
+    /// Record that this AIR reads a named table at a position column.
+    ///
+    /// ```text
+    ///     payload[j][i] = table_column[j][position[i]]     for every row i
+    /// ```
+    ///
+    /// # Arguments
+    ///
+    /// - `table` — name the providing AIR declares the same table under.
+    /// - `position` — main-trace column holding the entry each row names.
+    /// - `payload` — main-trace columns holding the values pulled, in table-column order.
+    ///
+    /// # Soundness
+    ///
+    /// The position column holds the field's embedding of the entry index.
+    ///
+    /// Over a prime field that embedding is the index itself.
+    ///
+    /// Over a binary tower it is the tower element whose bit pattern is the index.
+    ///
+    /// Recording builders override this.
+    /// Other builders inherit a no-op default.
+    fn push_indexed_read(
+        &mut self,
+        _table: &str,
+        _position: usize,
+        payload: impl IntoIterator<Item = usize>,
+    ) {
+        // Drain the iterator so side effects in a wrapping adapter still fire.
+        payload.into_iter().for_each(drop);
+    }
+
+    /// Record that this AIR provides a named table.
+    ///
+    /// # Arguments
+    ///
+    /// - `name` — name every reader of this table agrees on.
+    /// - `window` — which committed window the columns address.
+    /// - `columns` — the columns an entry carries, in the order readers pull them.
+    ///
+    /// Recording builders override this.
+    /// Other builders inherit a no-op default.
+    fn push_indexed_table(
+        &mut self,
+        _name: &str,
+        _window: TraceWindow,
+        columns: impl IntoIterator<Item = usize>,
+    ) {
+        // Drain the iterator so side effects in a wrapping adapter still fire.
+        columns.into_iter().for_each(drop);
+    }
+
     /// Global interactions pushed so far.
     fn num_global_interactions(&self) -> usize {
         0
@@ -180,6 +239,16 @@ pub trait InteractionBuilder: AirBuilder {
 
     /// Exclusive interactions pushed so far.
     fn num_exclusive_interactions(&self) -> usize {
+        0
+    }
+
+    /// Indexed reads pushed so far.
+    fn num_indexed_reads(&self) -> usize {
+        0
+    }
+
+    /// Indexed tables pushed so far.
+    fn num_indexed_tables(&self) -> usize {
         0
     }
 }
