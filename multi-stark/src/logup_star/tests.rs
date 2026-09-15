@@ -773,12 +773,22 @@ fn tampered_verdict(
 
 #[test]
 fn rejects_a_tampered_pushforward() {
-    // The pushforward is what the whole reduction pins down.
+    // The pushforward is what the whole reduction pins down, so moving one entry of it has
+    // to land somewhere.
     //
-    // Moving one entry of it has to land somewhere.
+    // Where it lands says which property is doing the work.
     //
-    // It is absorbed before every challenge, so the reduction itself fails.
-    assert!(tampered_verdict(|proof| proof.pushforwards[0][0] += Binary::ONE).is_err());
+    //     absorbed before the entry challenges  ->  every later draw moves
+    //                                           ->  the reduction's own replay diverges
+    //
+    //     not absorbed                          ->  the draws are unchanged
+    //                                           ->  only the rebuilt opening disagrees
+    //
+    // So pinning the reduction as the rejecting party is what pins the ordering.
+    assert!(matches!(
+        tampered_verdict(|proof| proof.pushforwards[0][0] += Binary::ONE),
+        Err(LogupStarError::FractionGkr(_))
+    ));
 }
 
 #[test]
