@@ -9,11 +9,13 @@ use core::ops::Deref;
 
 use p3_air::BaseAir;
 use p3_field::Field;
+use p3_lookup::TraceWindow;
 use p3_multilinear_util::point::Point;
 use p3_sumcheck::layout::Table;
 use p3_sumcheck::{OpeningBatch, OpeningProtocol, TableShape, TableSpec};
 
 use crate::config::MultiStarkConfig;
+use crate::indexed::IndexedPlan;
 pub use crate::keys::{ProvingKey, VerifyingKey, setup};
 pub use crate::proof::MultiStarkProof;
 pub use crate::prover::prove;
@@ -28,6 +30,38 @@ pub use crate::verifier::{VerificationError, verify};
 /// Only the trailing coordinates addressing this table's rows are opened.
 pub(super) fn trace_suffix<EF: Field>(point: &Point<EF>, num_variables: usize) -> Point<EF> {
     point.split_at(point.num_variables() - num_variables).1
+}
+
+/// What one opening batch answers.
+///
+/// A batch is found by what it answers rather than by its position.
+///
+/// A caller reading a claim back never re-derives the order they were laid down in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum BatchRole {
+    /// An AIR's own columns, at the point the zerocheck bound.
+    Air,
+    /// One reader's position column, at the point the reduction left its position claims.
+    Position {
+        /// Position of the table in plan order.
+        table: usize,
+        /// Position of the reader within that table.
+        reader: usize,
+    },
+    /// One table's own columns, at the point the reduction left its table claims.
+    TableColumns {
+        /// Position of the table in plan order.
+        table: usize,
+    },
+}
+
+/// One batch's role, and what it is opened against.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct Opening<P> {
+    /// What this batch answers.
+    pub(super) role: BatchRole,
+    /// The point on the proving path, and nothing on the assessment path.
+    pub(super) against: P,
 }
 
 /// What one committed batch of tables opens, and what each batch is opened against.
@@ -106,14 +140,17 @@ impl<P> OpeningSchedule<P> {
         &self.protocol
     }
 
+    /// What each batch is opened against, in the order the scheme walks the batches.
+    ///
+    /// The run reads this through the point-taking accessor below.
+    #[cfg(test)]
+    pub(super) fn payloads(&self) -> &[P] {
+        &self.payloads
+    }
+
     /// The shape agreement alone, for a caller that never resolves the payloads.
     pub(super) fn into_protocol(self) -> OpeningProtocol {
         self.protocol
-    }
-
-    /// What each batch is opened against, in the order the scheme walks the batches.
-    pub(super) fn payloads(&self) -> &[P] {
-        &self.payloads
     }
 
     /// Where each table's own columns land among the per-batch results, in table order.
@@ -137,6 +174,16 @@ impl<P> OpeningSchedule<P> {
             }
         }
         first
+    }
+}
+
+impl<P: Clone> OpeningSchedule<Opening<P>> {
+    /// What each batch is opened against, in the order the scheme walks the batches.
+    pub(super) fn against(&self) -> Vec<P> {
+        self.payloads
+            .iter()
+            .map(|opening| opening.against.clone())
+            .collect()
     }
 }
 
@@ -450,59 +497,138 @@ where
             .collect()
     }
 
-    /// Schedule the main trace opening, one batch per table over its whole width.
+    /// Schedule the main trace opening, in the order the scheme walks the batches.
+    ///
+    /// Every table opens its whole width at the point the zerocheck bound.
+    ///
+    /// A table the indexed reduction reaches opens further batches.
+    ///
+    /// Those are taken at the points that reduction closes on.
     ///
     /// The security assessment walks this same schedule, so the two cannot diverge.
     ///
     /// # Arguments
     ///
-    /// - `against`: what to open a table of this many row variables against.
-    pub(super) fn main_schedule<P>(&self, against: impl Fn(usize) -> P) -> OpeningSchedule<P> {
-        OpeningSchedule::new(
-            self.num_variables()
-                .iter()
-                .zip(self.widths().iter())
-                .zip(self.next_columns())
-                .map(|((&log_height, &width), next_columns)| {
-                    (
-                        TableShape::new(log_height, width),
-                        alloc::vec![(
-                            OpeningBatch::new((0..width).collect::<Vec<_>>(), next_columns),
-                            against(log_height),
-                        )],
-                    )
-                }),
-        )
+    /// - `indexed`: the indexed-lookup plan, when the batch declares one.
+    /// - `against`: what to open a batch of this role, over this many row variables, against.
+    pub(super) fn main_schedule<P>(
+        &self,
+        indexed: Option<&IndexedPlan>,
+        against: impl Fn(BatchRole, usize) -> P,
+    ) -> OpeningSchedule<Opening<P>> {
+        let mut tables = self
+            .num_variables()
+            .iter()
+            .zip(self.widths().iter())
+            .zip(self.next_columns())
+            .map(|((&log_height, &width), next_columns)| {
+                (
+                    TableShape::new(log_height, width),
+                    alloc::vec![(
+                        OpeningBatch::new((0..width).collect::<Vec<_>>(), next_columns),
+                        Opening {
+                            role: BatchRole::Air,
+                            against: against(BatchRole::Air, log_height),
+                        },
+                    )],
+                )
+            })
+            .collect::<Vec<_>>();
+
+        // A reader's position column and a main-window table's columns both live here.
+        if let Some(plan) = indexed {
+            for (table, planned) in plan.tables().iter().enumerate() {
+                for (reader, placement) in planned.readers.iter().enumerate() {
+                    let role = BatchRole::Position { table, reader };
+                    tables[placement.air].1.push((
+                        OpeningBatch::new(alloc::vec![placement.position], Vec::new()),
+                        Opening {
+                            role,
+                            against: against(role, placement.num_variables),
+                        },
+                    ));
+                }
+                if planned.table.window == TraceWindow::Main {
+                    let role = BatchRole::TableColumns { table };
+                    tables[planned.table.air].1.push((
+                        OpeningBatch::new(planned.table.columns.clone(), Vec::new()),
+                        Opening {
+                            role,
+                            against: against(role, planned.table.num_variables),
+                        },
+                    ));
+                }
+            }
+        }
+
+        OpeningSchedule::new(tables)
     }
 
-    /// Schedule the preprocessed trace opening, one batch per committed table.
+    /// Schedule the preprocessed trace opening, in the order the scheme walks the batches.
     ///
     /// AIRs declaring no preprocessed columns commit nothing and are skipped.
     ///
+    /// A table the indexed reduction reads out of this window opens one further batch.
+    ///
     /// # Arguments
     ///
-    /// - `against`: what to open a table of this many row variables against.
+    /// - `indexed`: the indexed-lookup plan, when the batch declares one.
+    /// - `against`: what to open a batch of this role, over this many row variables, against.
     pub(super) fn preprocessed_schedule<P>(
         &self,
-        against: impl Fn(usize) -> P,
-    ) -> OpeningSchedule<P> {
-        OpeningSchedule::new(
-            self.iter()
-                .filter(|instance| instance.air.preprocessed_width() != 0)
-                .map(|instance| {
-                    let width = instance.air.preprocessed_width();
-                    (
-                        TableShape::new(instance.num_variables, width),
-                        alloc::vec![(
-                            OpeningBatch::new(
-                                (0..width).collect::<Vec<_>>(),
-                                instance.air.preprocessed_next_row_columns(),
-                            ),
-                            against(instance.num_variables),
-                        )],
-                    )
-                }),
-        )
+        indexed: Option<&IndexedPlan>,
+        against: impl Fn(BatchRole, usize) -> P,
+    ) -> OpeningSchedule<Opening<P>> {
+        // Only AIRs with preprocessed columns are committed, so the two orders differ.
+        let committed = self
+            .iter()
+            .enumerate()
+            .filter(|(_, instance)| instance.air.preprocessed_width() != 0)
+            .map(|(air, _)| air)
+            .collect::<Vec<_>>();
+
+        let mut tables = committed
+            .iter()
+            .map(|&air| {
+                let instance = &self.0[air];
+                let width = instance.air.preprocessed_width();
+                (
+                    TableShape::new(instance.num_variables, width),
+                    alloc::vec![(
+                        OpeningBatch::new(
+                            (0..width).collect::<Vec<_>>(),
+                            instance.air.preprocessed_next_row_columns(),
+                        ),
+                        Opening {
+                            role: BatchRole::Air,
+                            against: against(BatchRole::Air, instance.num_variables),
+                        },
+                    )],
+                )
+            })
+            .collect::<Vec<_>>();
+
+        if let Some(plan) = indexed {
+            for (table, planned) in plan.tables().iter().enumerate() {
+                if planned.table.window != TraceWindow::Preprocessed {
+                    continue;
+                }
+                let slot = committed
+                    .iter()
+                    .position(|&air| air == planned.table.air)
+                    .expect("a preprocessed table's AIR commits preprocessed columns");
+                let role = BatchRole::TableColumns { table };
+                tables[slot].1.push((
+                    OpeningBatch::new(planned.table.columns.clone(), Vec::new()),
+                    Opening {
+                        role,
+                        against: against(role, planned.table.num_variables),
+                    },
+                ));
+            }
+        }
+
+        OpeningSchedule::new(tables)
     }
 
     pub(super) fn preprocessed_next_columns(&self) -> Vec<Vec<usize>> {

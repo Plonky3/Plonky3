@@ -98,6 +98,8 @@ pub struct MultilinearLogupStarParams {
     pub num_leaves: usize,
     /// Largest number of readers pulling from any one table.
     pub max_readers_per_table: usize,
+    /// Variable count of the tallest reader, which the claim point spans.
+    pub max_reader_variables: usize,
     /// Arity of the widest table, hence the product sumcheck's round count.
     pub max_table_variables: usize,
     /// Column claims the reduction closes on, counted over every table.
@@ -243,9 +245,17 @@ pub fn reduction_terms(
         //
         // Every pole is a reader row or a table entry.
         //
-        // A table's own challenge is fixed while the others vary.
+        // One table's challenge varies while every other table's is held fixed.
         //
-        // The other tables therefore move the identity by a constant, adding one degree.
+        // The others then move the identity by a constant rather than cancelling it.
+        //
+        // Clearing that constant against the denominator adds one degree.
+        //
+        // The event is bounded by the largest table's pole count.
+        //
+        // Summing over tables is what is charged.
+        //
+        // That is safe, and looser than the bound by up to the table count.
         //
         // Each challenge is rejection-sampled away from zero.
         //
@@ -254,6 +264,22 @@ pub fn reduction_terms(
             "logup-star-entry-challenge",
             logup_star.num_leaves as f64,
             nonzero_field_bits,
+        );
+        // The reduction also inherits the point its claims are taken at.
+        //
+        // Turning `X(r) = <T, I_* eq_r>` into `X = T . I` is a Schwartz-Zippel event.
+        //
+        // So is the range check the argument gets for free.
+        //
+        // One wrong pulled value survives every check above where its weight vanishes.
+        //
+        // The weight is multilinear in the reader's own variables.
+        //
+        // Its degree is therefore their count.
+        add(
+            "logup-star-claim-point",
+            logup_star.max_reader_variables as f64,
+            field_bits,
         );
         // The same reduction the lookup argument uses, over this statement's leaf table.
         let layers = logup_star.num_variables as f64;
@@ -334,6 +360,7 @@ mod tests {
             num_variables,
             constraint_degree: 2,
             lookup: None,
+            logup_star: None,
             skip: None,
         }
     }
@@ -588,10 +615,12 @@ mod tests {
             num_variables: 5,
             constraint_degree: 1,
             lookup: None,
+            skip: None,
             logup_star: Some(MultilinearLogupStarParams {
                 num_variables: 5,
                 num_leaves: 24,
                 max_readers_per_table: 3,
+                max_reader_variables: 3,
                 max_table_variables: 4,
                 num_column_claims: 6,
             }),
@@ -624,6 +653,9 @@ mod tests {
 
         // Five roots separate six column claims.
         assert!((find("logup-star-column-batching") - (100.0 - libm::log2(5.0))).abs() < 1e-12);
+
+        // The tallest reader's variables, over the field its claim point comes from.
+        assert!((find("logup-star-claim-point") - (100.0 - libm::log2(3.0))).abs() < 1e-12);
     }
 
     #[test]
@@ -680,6 +712,7 @@ mod tests {
                 num_variables: 4,
                 constraint_degree: 3,
                 lookup: None,
+                skip: None,
                 logup_star: None,
             },
             100,

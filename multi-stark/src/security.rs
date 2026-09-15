@@ -187,6 +187,13 @@ impl IndexedPlan {
                 .map(|plan| plan.readers.len())
                 .max()
                 .expect("a plan exists only when some table is declared"),
+            max_reader_variables: self
+                .tables()
+                .iter()
+                .flat_map(|plan| plan.readers.iter())
+                .map(|reader| reader.num_variables)
+                .max()
+                .expect("a table with no reader is rejected when the plan is built"),
             max_table_variables: self
                 .tables()
                 .iter()
@@ -408,16 +415,20 @@ where
     // It also understates the candidate count subtracted from every reduction term below.
     let mut log2_candidates = report.add_opening_evidence(
         "main-pcs",
-        config
-            .pcs()
-            .prescribed_security(&instances.main_schedule(|_| ()).into_protocol()),
+        config.pcs().prescribed_security(
+            &instances
+                .main_schedule(indexed.as_ref(), |_, _| ())
+                .into_protocol(),
+        ),
     );
     if preprocessed_cells > 0 {
         log2_candidates += report.add_opening_evidence(
             "preprocessed-pcs",
-            config
-                .preprocessed_pcs()
-                .prescribed_security(&instances.preprocessed_schedule(|_| ()).into_protocol()),
+            config.preprocessed_pcs().prescribed_security(
+                &instances
+                    .preprocessed_schedule(indexed.as_ref(), |_, _| ())
+                    .into_protocol(),
+            ),
         );
     }
     for term in &mut report.terms[..num_reduction_terms] {
