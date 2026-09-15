@@ -463,7 +463,15 @@ mod tests {
         //
         //     final codeword all-zero  ->  one position set
         //     final codeword all-one   ->  another
-        let config = BinaryPcsConfig::try_new(10, params())
+        //
+        // The difficulty is zero here on purpose. A parallel grind returns whichever
+        // valid witness a worker reaches first, so a ground run draws from a sponge
+        // that is not a function of the transcript alone.
+        let unground = BinaryPcsParams {
+            pow_bits: 0,
+            ..params()
+        };
+        let config = BinaryPcsConfig::try_new(10, unground)
             .unwrap()
             .try_with_folding(1)
             .unwrap();
