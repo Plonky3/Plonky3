@@ -133,9 +133,10 @@ pub(crate) fn statement_values<EF: Field>(lookups: &[TableLookup<'_, EF>]) -> Ve
 pub struct ReaderWitness<'a> {
     /// Table entry each row pulls, one per row.
     ///
-    /// The committed column is this list under the field's own enumeration of the integers.
+    /// The committed column is this list under the position embedding, which sums the
+    /// interpolation nodes of the bits an entry has set.
     ///
-    /// That is how the reduction rebuilds it.
+    /// That embedding is what the reduction rebuilds the column from.
     pub positions: &'a [usize],
 }
 
