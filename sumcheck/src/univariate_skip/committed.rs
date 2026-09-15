@@ -1,4 +1,10 @@
 //! Reading a packed bit witness as a polynomial a commitment can hold.
+//!
+//! One element per bit.
+//!
+//! That is the unoptimised cost.
+//!
+//! It is also short of a sound bit statement, as the function below records.
 
 use alloc::vec::Vec;
 
@@ -23,17 +29,51 @@ use super::lde::CHUNK_BITS;
 ///     embedded multilinear     one field element per cell
 /// ```
 ///
-/// # Cost
+/// # What this proves, and what it does not
 ///
-/// This is the unoptimised path, and the cost is not small.
+/// A cell of the commitment is a whole field element.
 ///
-/// One 128-bit element per bit is 128 times the commitment the witness needs.
+/// Nothing in the proof constrains one to a bit.
+///
+/// The constraint cannot tell the difference either:
+///
+/// ```text
+///     a * b - c = 0        holds for any field a, b with c = a*b
+/// ```
+///
+/// So what a verifier learns is a statement about field cells, not about bits.
+///
+/// Booleanity is supplied here only by the prover's own interface.
+///
+/// It takes packed bytes, and can therefore represent nothing else.
+///
+/// A prover that forms the round message itself, over field values, is not held to it.
+///
+/// This path is therefore a scaffold for the chain's mechanics.
+///
+/// The transcript, the point, the opening, the recombination.
+///
+/// It is not a sound proof of a bit statement.
+///
+/// # Why the packed commitment is the answer
+///
+/// Committing the bits packed, `2^k` of them to an element, is usually called a size win.
+///
+/// And it is: one element per bit is 128 times the commitment the witness needs.
 ///
 /// Not paying that is the whole point of a binary field.
 ///
-/// The optimisation is to commit the bits packed, `2^k` of them to an element.
+/// It is also what makes the statement a bit statement.
 ///
-/// Ring switching then relates a claim about the bit polynomial to one about the packed one.
+/// There a witness cell is an `F_2`-coordinate of a committed element.
+///
+/// It is a bit by construction, not by a constraint anyone has to add.
+///
+/// Booleanity stops being something to prove.
+///
+/// # Why the packed path is not here yet
+///
+/// Relating a claim about the bit polynomial to one about the packed one is ring switching.
 ///
 /// That reduction is already written generically in this crate.
 ///
@@ -49,11 +89,11 @@ use super::lde::CHUNK_BITS;
 ///
 /// # Panics
 ///
-/// Panics if the packed length is not a whole number of bytes' worth of cells.
+/// Panics unless the cell count is a power of two.
 pub fn embed_bits<F: Field>(packed: &[u8]) -> Poly<F> {
     assert!(
         (packed.len() * CHUNK_BITS).is_power_of_two(),
-        "the hypercube covers a power of two cells"
+        "the cell count must be a power of two"
     );
 
     // One element per bit, least significant bit first within each byte.
@@ -86,6 +126,7 @@ mod tests {
     use rand::{RngExt, SeedableRng};
 
     use super::*;
+    use crate::univariate_skip::{Composition, Conjunction};
 
     type EF = BinaryField128;
 
@@ -121,12 +162,14 @@ mod tests {
     }
 
     #[test]
-    fn every_cell_is_a_bit() {
-        // The embedded polynomial's cells are exactly zero and one.
+    fn this_embedding_puts_only_bits_in_the_cells() {
+        // Every cell of what this function returns is zero or one.
         //
-        // That is the premise every reduction over a bit witness rests on.
+        // That is a property of this function and of nothing else.
         //
-        // It is pinned here rather than assumed from the construction.
+        // A verifier never runs it, so no proof carries the fact.
+        //
+        // The test beside this one is the one that matters for soundness.
         let mut rng = SmallRng::seed_from_u64(0xB175);
         let packed = (0..32).map(|_| rng.random::<u8>()).collect::<Vec<_>>();
         let embedded = embed_bits::<EF>(&packed);
@@ -137,6 +180,37 @@ mod tests {
                 .iter()
                 .all(|&value| value == EF::ZERO || value == EF::ONE)
         );
+    }
+
+    #[test]
+    fn the_constraint_cannot_tell_a_bit_from_a_field_element() {
+        // Invariant: the conjunction vanishes on field triples that are not bits.
+        //
+        //     a, b uniform in GF(2^128),  c = a*b   ->   a*b - c = 0
+        //
+        // This is why one element per cell proves a field statement and not a bit statement.
+        //
+        // The commitment holds field cells.
+        //
+        // The constraint is satisfied by field cells that are nowhere near Boolean.
+        //
+        // Only the prover's interface keeps the witness Boolean, and an interface is no proof.
+        //
+        // Under the packed commitment this test would have nothing to say.
+        //
+        // A cell there is an `F_2`-coordinate, so a non-bit cell cannot be expressed at all.
+        let mut rng = SmallRng::seed_from_u64(0xF1E1D);
+        for _ in 0..32 {
+            let (a, b) = (rng.random::<EF>(), rng.random::<EF>());
+            let c = a * b;
+
+            // Not bits, by overwhelming probability over a 128-bit field.
+            assert!(a != EF::ZERO && a != EF::ONE);
+            assert!(b != EF::ZERO && b != EF::ONE);
+
+            // And yet the constraint the zerocheck proves vanishing is satisfied.
+            assert_eq!(Composition::<EF>::eval(&Conjunction, &[a, b, c]), EF::ZERO);
+        }
     }
 
     #[test]
@@ -160,7 +234,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "power of two")]
+    #[should_panic(expected = "cell count must be a power of two")]
     fn rejects_a_witness_that_is_not_a_hypercube() {
         // Three bytes is 24 cells, which is no hypercube.
         let _ = embed_bits::<EF>(&[0u8; 3]);
