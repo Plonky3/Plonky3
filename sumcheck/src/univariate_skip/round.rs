@@ -324,18 +324,17 @@ impl<F: TowerLevel> SkipRound<F> {
         RowSelector::new(&self.domain, lambda)
     }
 
-    /// The Lagrange vector of the skipped subspace at one challenge, on its own.
+    /// The Lagrange vector of the skipped subspace at one challenge, alone.
     ///
     /// # Overview
     ///
     /// Entry `c` is the weight the skipped point `c` carries in a bound row.
     ///
     /// The byte table above is this vector summed over subsets.
-    ///
     /// Only the prover reads rows through it.
     ///
-    /// A verifier needs the vector alone, and this is how it gets it without paying for the
-    /// 32 KiB of partial sums it would never touch.
+    /// A verifier needs the vector alone.
+    /// It gets it here without the 32 KiB of partial sums it never touches.
     pub fn lagrange<EF>(&self, lambda: EF) -> Poly<EF>
     where
         EF: ExtensionField<F>,
@@ -354,9 +353,8 @@ impl<F: TowerLevel> SkipRound<F> {
 ///     L_c(lam) = Z_S(lam) / Z_S'(S) / (lam + s_c)
 /// ```
 ///
-/// A challenge landing on a subspace point makes that basis value one and the rest zero.
-///
-/// The barycentric form cannot express that, so that case is handled on its own.
+/// A challenge on a subspace point makes that value one and the rest zero.
+/// The barycentric form cannot express that, so it is handled on its own.
 ///
 /// # Performance
 ///
@@ -366,7 +364,7 @@ where
     F: TowerLevel,
     EF: ExtensionField<F>,
 {
-    // The subspace lives in the base field, so narrowing once keeps the search there too.
+    // The subspace is in the base field, so the search stays there too.
     let hit = lambda
         .as_base()
         .and_then(|base| domain.subspace().iter().position(|&s| s == base));
@@ -375,11 +373,11 @@ where
         || {
             // The derivative is a base-field constant.
             //
-            // Inverting and applying it there is cheaper than widening it first.
+            // Inverting and applying it there beats widening it first.
             let scale =
                 vanishing_at(domain.log_size(), lambda) * domain.derivative_on_subspace().inverse();
 
-            // One inversion plus a few products per point, rather than one inversion each.
+            // One inversion plus a few products, not one inversion each.
             let offsets = domain
                 .subspace()
                 .iter()
@@ -435,12 +433,12 @@ pub struct RowSelector<EF> {
     table: Vec<EF>,
     /// Number of chunk positions, which is the number of bytes in a packed row.
     num_chunks: usize,
-    /// The basis value at each subspace point, as a multilinear over the skipped variables.
+    /// The basis value at each subspace point, over the skipped variables.
     ///
     /// The table above is this vector summed over byte-sized subsets.
     ///
-    /// The opening reduction needs the unaggregated form, and both must come from one place:
-    /// two computations of the same Lagrange vector could disagree and nothing would catch it.
+    /// The opening reduction needs the unaggregated form, from one place.
+    /// Two computations of one vector could disagree with nothing to catch it.
     lagrange: Poly<EF>,
 }
 
@@ -486,7 +484,7 @@ impl<EF: Field> RowSelector<EF> {
     ///
     /// Entry `c` is the weight the skipped point `c` carries in a bound row.
     ///
-    /// The opening reduction consumes it, and takes it from here rather than recomputing it.
+    /// The opening reduction takes it from here rather than recomputing it.
     pub const fn lagrange(&self) -> &Poly<EF> {
         &self.lagrange
     }
