@@ -1,6 +1,6 @@
+use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
-use alloc::{format, vec};
 
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_binary_field::{BinaryChallenger, BinaryField32, BinaryField128, TowerLevel};
@@ -423,10 +423,19 @@ fn a_fixed_base_leaf_instance_always_produces_the_same_proof() {
     // Pinning a digest of the three is what ties this path to a fixed reference, rather
     // than to a second run of the same code.
     //
-    // Fixture state: a fixed seed, variable counts 1 through 8, and both denominator
-    // storages at each count.
+    // Fixture state: a fixed seed, variable counts 1 through 8, scalar storage.
     //
-    //     n = 1 .. 8   x   { scalar, packed }
+    // Only the scalar runs feed the digest, because the lane count is a property of the
+    // machine the test runs on:
+    //
+    //     one target:     n = 1 .. 8   ->  packed from n = 2
+    //     another:        n = 1 .. 8   ->  packed from n = 3
+    //
+    // A digest over both storages would therefore cover a different number of runs per
+    // target and could not be written down.
+    //
+    // The packed storage is pinned against the scalar run instead, wherever the target
+    // offers it, which says the same thing without leaving the field.
     //
     // A failure here is not automatically a bug.
     //
@@ -435,30 +444,38 @@ fn a_fixed_base_leaf_instance_always_produces_the_same_proof() {
     let mut rng = SmallRng::seed_from_u64(0x0_6014E);
     let mut transcript = Vec::new();
 
+    // A field with one lane per element has no packed form to compare against.
+    let lanes = log2_strict_usize(<F as Field>::Packing::WIDTH);
+
     for num_variables in 1..=8 {
         let (numer, denom) = zero_sum::<F, EF>(&mut rng, num_variables);
 
-        // Packing needs one variable per lane, so a narrow table only runs scalar.
-        let lanes = log2_strict_usize(<F as Field>::Packing::WIDTH);
-        let mut storages = vec![PolyMaybePacked::Scalar(denom.clone())];
-        if num_variables >= lanes {
-            storages.push(PolyMaybePacked::Packed(denom.pack::<F, EF>()));
-        }
+        let scalar = PolyMaybePacked::Scalar(denom.clone());
+        let mut challenger = fresh_challenger();
+        let (proof, output) = prove_base_leaf(&numer, &scalar, &mut challenger);
 
-        for storage in &storages {
-            let mut challenger = fresh_challenger();
-            let (proof, output) = prove_base_leaf(&numer, storage, &mut challenger);
+        // What the surrounding protocol would draw next, so a change the proof bytes
+        // cannot show still surfaces here.
+        let next = challenger.sample_algebra_element::<EF>();
 
-            transcript.extend(postcard::to_allocvec(&proof).expect("a proof serializes"));
-            transcript.extend(
-                postcard::to_allocvec(&(&output.numerator, &output.denominator))
-                    .expect("an opening serializes"),
-            );
+        transcript.extend(postcard::to_allocvec(&proof).expect("a proof serializes"));
+        transcript.extend(
+            postcard::to_allocvec(&(&output.numerator, &output.denominator))
+                .expect("an opening serializes"),
+        );
+        transcript.extend(postcard::to_allocvec(&next).expect("a challenge serializes"));
 
-            // What the surrounding protocol would draw next, so a change the proof bytes
-            // cannot show still surfaces here.
-            let next = challenger.sample_algebra_element::<EF>();
-            transcript.extend(postcard::to_allocvec(&next).expect("a challenge serializes"));
+        // Packing moves the trailing variables into lanes, so a table has to be wide
+        // enough to address them before the packed form exists at all.
+        if lanes > 0 && num_variables >= lanes {
+            let packed = PolyMaybePacked::Packed(denom.pack::<F, EF>());
+            let mut packed_challenger = fresh_challenger();
+            let (packed_proof, packed_output) =
+                prove_base_leaf(&numer, &packed, &mut packed_challenger);
+
+            assert_eq!(packed_proof, proof);
+            assert_eq!(packed_output, output);
+            assert_eq!(packed_challenger.sample_algebra_element::<EF>(), next);
         }
     }
 
@@ -470,7 +487,7 @@ fn a_fixed_base_leaf_instance_always_produces_the_same_proof() {
 
     assert_eq!(
         hex,
-        "b52004a51464f2a4ecfcfdcbde390bd183094598cbbb361bad1e6fed88df5115"
+        "7beefa760db5e923dd7ebc824997919dd639a957e54a45f978b0808761bdc49e"
     );
 }
 
