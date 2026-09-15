@@ -21,6 +21,7 @@ pub mod folder;
 pub mod fractional_gkr;
 pub mod instance;
 pub mod keys;
+pub mod logup_star;
 pub mod lookup;
 pub mod opening;
 pub mod packed_ext;

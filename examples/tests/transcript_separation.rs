@@ -37,6 +37,7 @@ use p3_circle::CirclePcsShape;
 use p3_field::extension::BinomialExtensionField;
 use p3_fri::{FriShape, PcsShape};
 use p3_multi_stark::fractional_gkr::FractionGkrShape;
+use p3_multi_stark::logup_star::transcript::{LogupStarShape, LogupStarTableShape};
 use p3_multi_stark::lookup::transcript::{LookupInstanceShape, LookupShape};
 use p3_multi_stark::rounds::AirDegrees;
 use p3_multi_stark::transcript::{MultiStarkInstanceShape, MultiStarkShape};
@@ -86,7 +87,7 @@ type Case = (String, DomainSeparator<Alphabet>);
 /// Number of protocols on the typed transcript layer.
 ///
 /// A protocol added without an entry below leaves its name unchecked against the others.
-const NUM_PROTOCOLS: usize = 24;
+const NUM_PROTOCOLS: usize = 25;
 
 /// Configurations swept per protocol: one default, then two single-field moves of it.
 ///
@@ -95,7 +96,7 @@ const NUM_PROTOCOLS: usize = 24;
 /// A protocol with no configuration at all contributes one case instead of three.
 ///
 /// ```text
-///     22 protocols x 3 + 2 protocols x 1 = 68 seeds -> 2278 pairs
+///     23 protocols x 3 + 2 protocols x 1 = 71 seeds -> 2485 pairs
 /// ```
 const MAX_CASES_PER_PROTOCOL: usize = 3;
 
@@ -515,6 +516,48 @@ fn lookup_cases() -> Vec<Case> {
     .collect()
 }
 
+/// The logUp* cases: two tables of different sizes, then two single-field moves.
+fn logup_star_cases() -> Vec<Case> {
+    let plain = LogupStarShape {
+        tables: vec![
+            LogupStarTableShape {
+                num_variables: 5,
+                width: 3,
+                readers: vec![4, 3],
+            },
+            LogupStarTableShape {
+                num_variables: 4,
+                width: 2,
+                readers: vec![3],
+            },
+        ],
+        num_variables: 7,
+    };
+
+    let mut wider = plain.clone();
+    wider.tables[0].width += 1;
+
+    // Moving one reader from the first table to the second keeps every total unchanged.
+    //
+    //     plain:  [reader, reader | reader]
+    //     split:  [reader         | reader, reader]
+    let mut split = plain.clone();
+    let moved = plain.tables[0].readers[1];
+    split.tables[0].readers.pop();
+    split.tables[1].readers.push(moved);
+
+    [("plain", plain), ("width", wider), ("readers", split)]
+        .into_iter()
+        .map(|(name, shape)| {
+            case(
+                "p3-multi-stark-logup-star",
+                name,
+                shape.domain_separator::<F, EF>(),
+            )
+        })
+        .collect()
+}
+
 /// The multi-STARK fractional-GKR cases: three layer counts.
 fn fraction_gkr_cases() -> Vec<Case> {
     [3, 4, 5]
@@ -845,6 +888,7 @@ fn protocols() -> Vec<Vec<Case>> {
         zk_whir_base_case_cases(),
         zerocheck_cases(),
         lookup_cases(),
+        logup_star_cases(),
         fraction_gkr_cases(),
         sumcheck_generic_degree_cases(),
         sumcheck_quadratic_cases(),
