@@ -54,7 +54,7 @@ impl<A: PrimeCharacteristicRing + Copy> SplitFraction<A> {
 /// The proof messages for one layer of the fractional reduction tree.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FractionGkrLayerProof<EF> {
-    /// Sumcheck polynomial evaluations at points zero, two, and three.
+    /// Sumcheck polynomial evaluations at interpolation nodes zero, two and three.
     pub round_polys: Vec<[EF; 3]>,
     /// The two child fractions to which the layer's sumcheck reduces.
     pub claims: SplitFraction<EF>,

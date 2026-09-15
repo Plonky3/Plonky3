@@ -1,8 +1,9 @@
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
-use p3_binary_field::{BinaryChallenger, BinaryField128};
+use p3_binary_field::{BinaryChallenger, BinaryField32, BinaryField128, TowerLevel};
+use p3_challenger::fs::TranscriptField;
 use p3_challenger::{DuplexChallenger, FieldChallenger, HashChallenger};
 use p3_field::extension::BinomialExtensionField;
-use p3_field::{Field, PackedValue, PrimeCharacteristicRing};
+use p3_field::{ExtensionField, Field, PackedValue, PrimeCharacteristicRing};
 use p3_keccak::Keccak256Hash;
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::{Poly, PolyMaybePacked};
@@ -25,26 +26,36 @@ fn fresh_challenger() -> Challenger {
     Challenger::new(Perm::new_from_rng_128(&mut rng))
 }
 
-fn zero_sum_fraction(rng: &mut SmallRng, num_variables: usize) -> (Poly<F>, Poly<EF>) {
+/// Draw a random fraction table whose fractions sum to zero.
+///
+/// The last leaf is solved for, so every other leaf is unconstrained.
+fn zero_sum<N, A>(rng: &mut SmallRng, num_variables: usize) -> (Poly<N>, Poly<A>)
+where
+    N: Field,
+    A: ExtensionField<N>,
+    StandardUniform: Distribution<N> + Distribution<A>,
+{
     loop {
-        let mut numer = Poly::<F>::rand(rng, num_variables);
-        let mut denom = Poly::<EF>::rand(rng, num_variables);
+        let mut numer = Poly::<N>::rand(rng, num_variables);
+        let mut denom = Poly::<A>::rand(rng, num_variables);
         let last = numer.num_evals() - 1;
 
-        if denom.as_slice()[..last].contains(&EF::ZERO) {
+        // A zero denominator anywhere would leave the table meaningless.
+        if denom.as_slice()[..last].contains(&A::ZERO) {
             continue;
         }
 
+        // Everything but the last leaf sums to this, which the last leaf has to cancel.
         let partial_sum = numer.as_slice()[..last]
             .iter()
             .zip(&denom.as_slice()[..last])
             .map(|(&numer, &denom)| denom.inverse() * numer)
-            .sum::<EF>();
-        if partial_sum == EF::ZERO {
+            .sum::<A>();
+        if partial_sum == A::ZERO {
             continue;
         }
 
-        numer.as_mut_slice()[last] = F::ONE;
+        numer.as_mut_slice()[last] = N::ONE;
         denom.as_mut_slice()[last] = -partial_sum.inverse();
         return (numer, denom);
     }
@@ -52,7 +63,7 @@ fn zero_sum_fraction(rng: &mut SmallRng, num_variables: usize) -> (Poly<F>, Poly
 
 #[test]
 fn accepts_honest_proofs() {
-    let (numer, denom) = zero_sum_fraction(&mut SmallRng::seed_from_u64(3), 6);
+    let (numer, denom) = zero_sum::<F, EF>(&mut SmallRng::seed_from_u64(3), 6);
     let mut prover_challenger = fresh_challenger();
     let (proof, prover_output) = prove_fractional_gkr(
         &Fraction {
@@ -72,7 +83,7 @@ fn accepts_honest_proofs() {
 
 #[test]
 fn rejects_a_tampered_round_polynomial() {
-    let (numer, denom) = zero_sum_fraction(&mut SmallRng::seed_from_u64(4), 6);
+    let (numer, denom) = zero_sum::<F, EF>(&mut SmallRng::seed_from_u64(4), 6);
     let mut prover_challenger = fresh_challenger();
     let (mut proof, _) = prove_fractional_gkr(
         &Fraction {
@@ -92,7 +103,7 @@ fn rejects_a_tampered_round_polynomial() {
 
 #[test]
 fn rejects_a_tampered_claim() {
-    let (numer, denom) = zero_sum_fraction(&mut SmallRng::seed_from_u64(5), 6);
+    let (numer, denom) = zero_sum::<F, EF>(&mut SmallRng::seed_from_u64(5), 6);
     let mut prover_challenger = fresh_challenger();
     let (mut proof, _) = prove_fractional_gkr(
         &Fraction {
@@ -112,7 +123,7 @@ fn rejects_a_tampered_claim() {
 
 #[test]
 fn rejects_a_tampered_root_denominator() {
-    let (numer, denom) = zero_sum_fraction(&mut SmallRng::seed_from_u64(7), 6);
+    let (numer, denom) = zero_sum::<F, EF>(&mut SmallRng::seed_from_u64(7), 6);
     let mut prover_challenger = fresh_challenger();
     let (mut proof, _) = prove_fractional_gkr(
         &Fraction {
@@ -132,7 +143,7 @@ fn rejects_a_tampered_root_denominator() {
 
 #[test]
 fn rejects_the_wrong_layer_shape() {
-    let (numer, denom) = zero_sum_fraction(&mut SmallRng::seed_from_u64(6), 6);
+    let (numer, denom) = zero_sum::<F, EF>(&mut SmallRng::seed_from_u64(6), 6);
     let mut prover_challenger = fresh_challenger();
     let (mut proof, _) = prove_fractional_gkr(
         &Fraction {
@@ -162,7 +173,7 @@ fn rejects_a_layer_carrying_the_wrong_round_count() {
     //
     // The check has to happen first. The driver panics on a step it was never
     // described with, and a panic there would land on top of the drop-time check.
-    let (numer, denom) = zero_sum_fraction(&mut SmallRng::seed_from_u64(11), 6);
+    let (numer, denom) = zero_sum::<F, EF>(&mut SmallRng::seed_from_u64(11), 6);
     let mut prover_challenger = fresh_challenger();
     let (mut proof, _) = prove_fractional_gkr(
         &Fraction {
@@ -190,7 +201,7 @@ fn rejects_a_variable_count_the_prover_never_ran() {
     //
     // A verifier holding a different one seeds a different sponge, so the two
     // never share a challenge. The layer count catches this first.
-    let (numer, denom) = zero_sum_fraction(&mut SmallRng::seed_from_u64(12), 6);
+    let (numer, denom) = zero_sum::<F, EF>(&mut SmallRng::seed_from_u64(12), 6);
     let mut prover_challenger = fresh_challenger();
     let (proof, _) = prove_fractional_gkr(
         &Fraction {
@@ -216,7 +227,7 @@ fn the_reduction_leaves_both_sponges_in_the_same_state() {
     //
     // The driver seeds on construction and absorbs on every step, so a prover
     // and a verifier that agree step for step must agree here too.
-    let (numer, denom) = zero_sum_fraction(&mut SmallRng::seed_from_u64(13), 5);
+    let (numer, denom) = zero_sum::<F, EF>(&mut SmallRng::seed_from_u64(13), 5);
     let mut prover_challenger = fresh_challenger();
     let (proof, _) = prove_fractional_gkr(
         &Fraction {
@@ -240,7 +251,7 @@ fn test_gkr_identities() {
     let mut rng = SmallRng::seed_from_u64(1);
 
     for num_variables in 1..=10 {
-        let (numer, denom) = zero_sum_fraction(&mut rng, num_variables);
+        let (numer, denom) = zero_sum::<F, EF>(&mut rng, num_variables);
 
         let mut prover_challenger = fresh_challenger();
         let (proof, prover_output) = prove_fractional_gkr(
@@ -286,7 +297,7 @@ fn packed_denominator_preserves_the_gkr_transcript() {
     let packing_variables = log2_strict_usize(<F as Field>::Packing::WIDTH);
 
     for num_variables in packing_variables.max(1)..=10 {
-        let (numer, denom) = zero_sum_fraction(&mut rng, num_variables);
+        let (numer, denom) = zero_sum::<F, EF>(&mut rng, num_variables);
         let packed_denom = PolyMaybePacked::Packed(denom.pack::<F, EF>());
         let mut scalar_challenger = fresh_challenger();
         let (scalar_proof, scalar_output) = prove_fractional_gkr(
@@ -344,85 +355,76 @@ fn split_fraction_matches_unsplit_sum_and_evaluation() {
     }
 }
 
-/// Draw a random fraction table over one field whose fractions sum to zero.
+/// Round-trip a reduction over a binary tower, in both storage modes.
 ///
-/// The last leaf is solved for, so every other leaf is unconstrained.
-fn zero_sum_ext<A: Field>(rng: &mut SmallRng, num_variables: usize) -> (Poly<A>, Poly<A>)
+/// A round polynomial is sent at the field's own first four values.
+///
+/// Over a binary tower those are bit patterns, not the integers zero through three.
+///
+/// Repeated addition, or naming a node by an integer, folds two of them onto one point.
+///
+/// The message then no longer pins the round polynomial down.
+fn binary_round_trip<F, EF>(seed: u64)
 where
-    StandardUniform: Distribution<A>,
+    F: TranscriptField + TowerLevel,
+    EF: ExtensionField<F>,
+    StandardUniform: Distribution<F> + Distribution<EF>,
 {
-    loop {
-        let mut numer = Poly::<A>::rand(rng, num_variables);
-        let mut denom = Poly::<A>::rand(rng, num_variables);
-        let last = numer.num_evals() - 1;
-
-        // A zero denominator anywhere would leave the table meaningless.
-        if denom.as_slice()[..last].contains(&A::ZERO) {
-            continue;
-        }
-
-        // Everything but the last leaf sums to this, which the last leaf has to cancel.
-        let partial_sum = numer.as_slice()[..last]
-            .iter()
-            .zip(&denom.as_slice()[..last])
-            .map(|(&numer, &denom)| denom.inverse() * numer)
-            .sum::<A>();
-        if partial_sum == A::ZERO {
-            continue;
-        }
-
-        numer.as_mut_slice()[last] = A::ONE;
-        denom.as_mut_slice()[last] = -partial_sum.inverse();
-        return (numer, denom);
-    }
-}
-
-#[test]
-fn a_binary_field_reduction_round_trips() {
-    // A round polynomial is sent at the field's own first four values.
-    //
-    // Over a binary tower those are bit patterns, not the integers zero through three.
-    //
-    // Repeated addition, or naming a node by an integer, folds two of them onto one point.
-    //
-    // The message then no longer pins the round polynomial down.
-    //
-    // Every layer count from the degenerate single-variable case upwards runs here.
-    type B = BinaryField128;
     let challenger = || {
-        BinaryChallenger::<B, HashChallenger<u8, Keccak256Hash, 32>>::from_hasher(
+        BinaryChallenger::<F, HashChallenger<u8, Keccak256Hash, 32>>::from_hasher(
             b"p3-fraction-gkr-binary-test".to_vec(),
             Keccak256Hash,
         )
     };
 
-    let mut rng = SmallRng::seed_from_u64(0x0B14_A247);
+    let mut rng = SmallRng::seed_from_u64(seed);
     for num_variables in 1..=8 {
-        let (numer, denom) = zero_sum_ext::<B>(&mut rng, num_variables);
+        let (numer, denom) = zero_sum::<F, EF>(&mut rng, num_variables);
 
-        let mut prover_challenger = challenger();
-        let (proof, prover_output) = prove_fractional_gkr(
-            &Fraction {
-                n: numer.clone(),
-                d: PolyMaybePacked::Scalar(denom.clone()),
-            },
-            &mut prover_challenger,
-        );
+        // Both storages describe the same table, so both must reduce to the same claims.
+        let storages = [
+            PolyMaybePacked::Scalar(denom.clone()),
+            PolyMaybePacked::Packed(denom.pack::<F, EF>()),
+        ];
+        for storage in storages {
+            let mut prover_challenger = challenger();
+            let (proof, prover_output) = prove_fractional_gkr(
+                &Fraction {
+                    n: numer.clone(),
+                    d: storage,
+                },
+                &mut prover_challenger,
+            );
 
-        let mut verifier_challenger = challenger();
-        let verifier_output =
-            verify_fractional_gkr::<B, B, _>(&proof, num_variables, &mut verifier_challenger)
-                .expect("an honest reduction verifies");
-        assert_eq!(verifier_output, prover_output);
+            let mut verifier_challenger = challenger();
+            let verifier_output =
+                verify_fractional_gkr::<F, EF, _>(&proof, num_variables, &mut verifier_challenger)
+                    .expect("an honest reduction verifies");
+            assert_eq!(verifier_output, prover_output);
 
-        // The openings have to be the tables themselves at the point the reduction reached.
-        assert_eq!(
-            prover_output.numerator,
-            numer.eval_ext::<B>(&prover_output.point)
-        );
-        assert_eq!(
-            prover_output.denominator,
-            denom.eval_ext::<B>(&prover_output.point)
-        );
+            // The openings have to be the tables themselves at the point reached.
+            assert_eq!(
+                prover_output.numerator,
+                numer.eval_base::<EF>(&prover_output.point)
+            );
+            assert_eq!(
+                prover_output.denominator,
+                denom.eval_ext::<F>(&prover_output.point)
+            );
+        }
     }
+}
+
+#[test]
+fn a_binary_field_reduction_round_trips() {
+    // One level, where the numerator and the denominator share a type.
+    binary_round_trip::<BinaryField128, BinaryField128>(0x0B14_A247);
+}
+
+#[test]
+fn a_mixed_binary_tower_reduction_round_trips() {
+    // Two levels, so the leaf walk runs with a narrow numerator against a wide denominator.
+    //
+    // That is the arm a single-level pair never reaches.
+    binary_round_trip::<BinaryField32, BinaryField128>(0x0B14_A248);
 }
