@@ -341,19 +341,19 @@ pub const GRINDING_VOCABULARY: [GrindingStep; 10] = [
 ///
 /// A protocol here credits the step inside its own security report.
 ///
-/// The shared budget therefore skips it, and the comparison never sees it.
+/// The shared budget skips it, so the comparison never sees it.
 ///
 /// # Soundness
 ///
-/// A step in neither this table nor the vocabulary is a difficulty nobody
-/// compares, which is how a budget and a transcript drift apart unseen.
+/// A step in neither table is a difficulty nobody compares.
 ///
-/// The workspace transcript suite walks every described step and asserts that
-/// one of the two tables names it.
+/// That is how a budget and a transcript drift apart unseen.
 ///
-/// Listing a step here is therefore a decision, recorded where the model can
-/// see it, rather than an omission.
-pub const UNPRICED_GRINDING_SITES: [(&str, &str); 11] = [
+/// The transcript suites walk every described step and assert one table names it.
+///
+/// A step listed here is therefore a decision, not an omission.
+pub const UNPRICED_GRINDING_SITES: [(&str, &str); 12] = [
+    ("p3-binary-pcs", "query_pow"),
     ("p3-whir", "query_pow"),
     ("p3-whir", "final_query_pow"),
     ("p3-whir-hvzk", "query_pow"),

@@ -581,6 +581,68 @@ impl<C, U: Unit> ProverState<C, U> {
             .collect()
     }
 
+    /// Sample `count` index challenges the caller's predicate accepts, under one step.
+    ///
+    /// # Overview
+    ///
+    /// A candidate is drawn and shown to `accept` alongside the indices already kept.
+    ///
+    /// ```text
+    ///     draw -> accept? -> keep     until `count` indices are kept
+    ///                     -> discard
+    /// ```
+    ///
+    /// # When to use this
+    ///
+    /// A query schedule that opens distinct positions.
+    ///
+    /// Drawing a position twice costs a query and buys no soundness.
+    ///
+    /// # Shape
+    ///
+    /// The step records the width and the count kept, not the count drawn.
+    ///
+    /// Both sides know the kept count from their own configuration.
+    ///
+    /// # What the shape does not part
+    ///
+    /// This draw and the unconstrained one record the same step, so no seed parts them.
+    ///
+    /// The extension draws carry the same caveat, and one step type would fix both.
+    ///
+    /// # Panics
+    ///
+    /// Never for a challenger that rejects internally, which is what `RESAMPLE = true` asks for.
+    pub fn challenge_uniform_bits_rejecting<W>(
+        &mut self,
+        label: Label,
+        width: usize,
+        count: usize,
+        mut accept: impl FnMut(usize, &[usize]) -> bool,
+    ) -> Vec<TranscriptBound<usize>>
+    where
+        C: CanSampleUniformBits<W>,
+    {
+        self.player.interact(Interaction::uniform_bits(
+            Hierarchy::Atomic,
+            Kind::Challenge,
+            label,
+            width,
+            Length::Fixed(count),
+        ));
+        let mut kept: Vec<usize> = Vec::with_capacity(count);
+        while kept.len() < count {
+            let candidate = self
+                .challenger
+                .sample_uniform_bits::<true>(width)
+                .expect("RESAMPLE = true: rejection loops internally, never errors");
+            if accept(candidate, &kept) {
+                kept.push(candidate);
+            }
+        }
+        kept.into_iter().map(TranscriptBound::wrap).collect()
+    }
+
     /// Sample `count` extension challenges the caller's predicate accepts, under one step.
     ///
     /// # Overview

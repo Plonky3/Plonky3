@@ -1,7 +1,11 @@
 //! Typed reasons an opening proof was rejected.
 
+use core::fmt::Debug;
+
 use p3_binary_field::BinaryField128;
 use thiserror::Error;
+
+use crate::transcript::TranscriptFailure;
 
 /// Why an opening proof was rejected.
 ///
@@ -134,4 +138,21 @@ pub enum BinaryPcsError<MmcsError> {
     // Zero is the only value an honest prover emits, so zero is the only value accepted.
     #[error("the grinding witness is {actual} at zero difficulty, expected zero")]
     NonCanonicalPowWitness { actual: BinaryField128 },
+}
+
+impl<E: Debug> From<TranscriptFailure> for BinaryPcsError<E> {
+    fn from(failure: TranscriptFailure) -> Self {
+        match failure {
+            TranscriptFailure::FinalCodewordLength { expected, got } => {
+                Self::FinalCodewordLengthMismatch {
+                    expected,
+                    actual: got,
+                }
+            }
+            TranscriptFailure::PowWitness { .. } => Self::InvalidPowWitness,
+            TranscriptFailure::NonCanonicalPowWitness { actual } => {
+                Self::NonCanonicalPowWitness { actual }
+            }
+        }
+    }
 }

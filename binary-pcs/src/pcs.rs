@@ -20,7 +20,7 @@ use p3_commit::{Mmcs, MultilinearPcs};
 use p3_field::PrimeCharacteristicRing;
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
-use p3_sumcheck::layout::{Layout, Verifier, Witness};
+use p3_sumcheck::layout::{Layout, Verifier, Witness, observe_commitment};
 use p3_sumcheck::strategy::Basis;
 use p3_sumcheck::{
     OpeningEvals, OpeningProtocol, PrescribedOpeningSecurity, PrescribedPointPcs, SumcheckData,
@@ -33,6 +33,7 @@ use crate::error::BinaryPcsError;
 use crate::params::BinaryPcsConfig;
 use crate::proof::BinaryPcsProof;
 use crate::prover::{BinaryPcsProverData, commit, fold_rounds_with, open_queries};
+use crate::transcript::{BinaryPcsProverTranscript, BinaryPcsShape, BinaryPcsVerifierTranscript};
 use crate::verifier::{
     check_canonical_pow_witness, check_round_and_final_lengths, verify_query_paths,
 };
@@ -214,21 +215,30 @@ where
             + CanSampleUniformBits<BinaryField128>
             + CanObserve<MT::Commitment>,
     {
+        // One driver spans the fold batches and the query phase.
+        //
+        // The description is therefore walked exactly once.
+        let shape = BinaryPcsShape::new(&self.config);
+        let mut transcript = BinaryPcsProverTranscript::new(challenger, shape);
+
         let (base_merkle_data, sumcheck_data, rounds, _randomness, final_codeword) =
             fold_rounds_with::<BIND_EACH_ROUND, _, _>(
                 prover_data,
                 &self.config,
                 &self.mmcs,
-                challenger,
+                &mut transcript,
             );
         let query_proofs = open_queries(
             &self.config,
             &self.mmcs,
-            challenger,
+            &mut transcript,
             &base_merkle_data,
             &rounds,
             &final_codeword,
         );
+
+        // Require that every described step was played.
+        transcript.finish();
 
         BinaryPcsProof {
             sumcheck: sumcheck_data,
@@ -357,7 +367,13 @@ where
         // Both sides draw it through the layout.
         //
         // The recorded claim counts therefore reach the sponge first.
-        let alpha = layout_verifier.batching_challenge(challenger);
+        // One driver spans the fold batches and the query phase.
+        //
+        // The prover seeds at the same point, just before the batching challenge.
+        let shape = BinaryPcsShape::new(&self.config);
+        let mut transcript = BinaryPcsVerifierTranscript::new(challenger, shape);
+
+        let alpha = transcript.fold_batch(|ch| layout_verifier.batching_challenge(ch));
         let constraint = layout_verifier.constraint(alpha);
         let mut claimed_sum = BinaryField128::ZERO;
         constraint.combine_evals(&mut claimed_sum);
@@ -371,17 +387,20 @@ where
                     polynomial_evaluations: vec![proof.sumcheck.polynomial_evaluations()[r]],
                     pow_witnesses: Vec::new(),
                 };
-                let round_point = round_data.verify_rounds(
-                    challenger,
-                    &mut claimed_sum,
-                    1,
-                    0,
-                    Basis::Evaluation,
-                )?;
+                // A rejection leaves the driver mid-description, so release it first.
+                let round_point = match transcript.fold_batch(|ch| {
+                    round_data.verify_rounds(ch, &mut claimed_sum, 1, 0, Basis::Evaluation)
+                }) {
+                    Ok(point) => point,
+                    Err(error) => {
+                        transcript.abort();
+                        return Err(error.into());
+                    }
+                };
                 betas.push(round_point.as_slice()[0]);
             }
             if batch + 1 < self.config.num_fold_batches() {
-                challenger.observe(proof.rounds[batch].commitment.clone());
+                transcript.oracle_commitment(proof.rounds[batch].commitment.clone());
             }
         }
 
@@ -400,17 +419,24 @@ where
             .iter()
             .all(|&v| v == final_value);
         if !final_codeword_is_uniform || claimed_sum != evaluation_of_weights * final_value {
+            transcript.abort();
             return Err(BinaryPcsError::FinalCheck);
         }
 
-        verify_query_paths(
+        match verify_query_paths(
             &self.config,
             &self.mmcs,
             commitment,
             fold_point.as_slice(),
             proof,
-            challenger,
-        )?;
+            &mut transcript,
+        ) {
+            Ok(()) => transcript.finish(),
+            Err(error) => {
+                transcript.abort();
+                return Err(error);
+            }
+        }
 
         Ok(&proof.evals)
     }
@@ -451,10 +477,7 @@ where
     }
 
     fn observe_commitment(&self, commitment: &Self::Commitment, challenger: &mut Challenger) {
-        // A binary tower field is not a transcript field.
-        //
-        // So this scheme binds the root directly, with no typed phase.
-        challenger.observe(commitment.clone());
+        observe_commitment::<BinaryField128, _, _>(challenger, commitment.clone());
     }
 
     /// Rejects an over-budget protocol before touching the challenger.
@@ -541,7 +564,7 @@ mod tests {
     use alloc::{format, vec};
 
     use p3_binary_field::BinaryField128;
-    use p3_challenger::{CanObserve, FieldChallenger};
+    use p3_challenger::FieldChallenger;
     use p3_commit::{Mmcs, MultilinearPcs};
     use p3_multilinear_util::point::Point;
     use p3_sumcheck::layout::{Layout, SuffixProver, Table};
@@ -789,7 +812,7 @@ mod tests {
         // `verify_at` does not absorb the commitment; the caller does, exactly once, before
         // deriving the point it then hands to `verify_at`.
         let mut verifier_challenger = challenger();
-        verifier_challenger.observe(commitment.clone());
+        pcs.observe_commitment(&commitment, &mut verifier_challenger);
         let sample: F = verifier_challenger.sample_algebra_element();
         let verifier_point = Point::expand_from_univariate(sample, NUM_VARIABLES);
         assert_eq!(
@@ -811,7 +834,7 @@ mod tests {
     fn batched_verify_at_round_trips_with_transcript_derived_points() {
         let (pcs, commitment, proof, protocol, point) = open_at_fixture(0xFEED, 3);
         let mut verifier_challenger = challenger();
-        verifier_challenger.observe(commitment.clone());
+        pcs.observe_commitment(&commitment, &mut verifier_challenger);
         let sample: F = verifier_challenger.sample_algebra_element();
         let verifier_point = Point::expand_from_univariate(sample, NUM_VARIABLES);
         assert_eq!(verifier_point, point);

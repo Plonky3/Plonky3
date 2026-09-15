@@ -899,6 +899,16 @@ fn every_protocol_is_listed_here() {
     // this file would widen that crate's API for a test. They are compared against
     // the crate's other four names in `p3_sumcheck`'s own suite instead, by
     // `no_two_protocols_in_this_crate_share_a_name`.
+    //
+    // A fourth cannot join for a different reason.
+    //
+    // `p3-binary-pcs` seeds over a binary tower field.
+    //
+    // Its separator therefore has a different sponge alphabet, and a different type.
+    //
+    // Two protocols over different alphabets cannot collide on a sponge state anyway.
+    //
+    // Its own knobs are swept inside `p3-binary-pcs`.
     assert_eq!(default_cases().len(), NUM_PROTOCOLS);
 }
 
@@ -1174,6 +1184,15 @@ fn every_unpriced_grinding_site_is_described_by_the_protocol_that_owns_it() {
         .collect();
 
     for &(protocol, label) in &UNPRICED_GRINDING_SITES {
+        // One protocol seeds over a binary tower field.
+        //
+        // Its separator has a different sponge alphabet, so it cannot join the sweep above.
+        //
+        // Its own crate asserts that its site is classified.
+        if protocol == "p3-binary-pcs" {
+            continue;
+        }
+
         assert!(
             described.contains(&(String::from(protocol), String::from(label))),
             "{protocol}/{label} is listed as priced elsewhere, but no pattern describes it",

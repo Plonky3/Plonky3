@@ -132,7 +132,7 @@ fn zero_claim_final_codeword_is_bound_before_query_grinding_and_sampling() {
                 let replay = |proof: &crate::BinaryPcsProof<MyMmcs>,
                               ch: &mut RecordingChallenger| {
                     if prescribed {
-                        ch.observe(root.clone());
+                        pcs.observe_commitment(&root, ch);
                         pcs.verify_at(&root, proof, &protocol, &[], ch).map(|_| ())
                     } else {
                         pcs.verify(&root, proof, ch, protocol.clone())
@@ -162,9 +162,17 @@ fn zero_claim_final_codeword_is_bound_before_query_grinding_and_sampling() {
 
                 // Every symbol, not just the first value or a post-query observation,
                 // must be bound before the query phase's grinding call on both sides.
-                let final_word = proof.final_codeword.as_slice();
-                assert!(pc.fields_before_query_grind.ends_with(final_word));
-                assert!(vc.fields_before_query_grind.ends_with(final_word));
+                //
+                // A zero-difficulty site plays no grind.
+                //
+                // There is then no such moment to inspect.
+                //
+                // The query-divergence check above already shows it is still bound.
+                if pow_bits > 0 {
+                    let final_word = proof.final_codeword.as_slice();
+                    assert!(pc.fields_before_query_grind.ends_with(final_word));
+                    assert!(vc.fields_before_query_grind.ends_with(final_word));
+                }
             }
         }
     }
@@ -179,13 +187,24 @@ fn matches_model(
     let Some((fields, rest)) = events.split_at_checked(field_samples) else {
         return false;
     };
+    if !fields.iter().all(|&e| e == Event::FieldSample) {
+        return false;
+    }
+
+    // A zero-difficulty site describes no step, so no grind separates the two phases.
+    //
+    //     bits = 0  ->  field samples, then query samples
+    //     bits > 0  ->  field samples, one grind, then query samples
+    if regime.query_pow_bits() == 0 {
+        return !rest.is_empty() && rest.iter().all(|&e| e == Event::QuerySample);
+    }
+
     let expected = if prover {
         Event::Grind(regime.query_pow_bits())
     } else {
         Event::Check(regime.query_pow_bits())
     };
-    fields.iter().all(|&e| e == Event::FieldSample)
-        && rest.first() == Some(&expected)
+    rest.first() == Some(&expected)
         && rest.len() > 1
         && rest[1..].iter().all(|&e| e == Event::QuerySample)
 }
