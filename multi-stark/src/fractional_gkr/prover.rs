@@ -338,7 +338,7 @@ impl<'a, F: Field, EF: ExtensionField<F>> InputLayer<'a, F, EF> {
                     d1_lo,
                     d1_hi,
                     EF::ExtensionPacking::from(lambda),
-                    stepped_past::<EF>().map(EF::ExtensionPacking::from),
+                    scaled_node::<EF>().map(EF::ExtensionPacking::from),
                 )
                 .map(|value| EF::ExtensionPacking::to_ext_iter([value]).sum())
             }
@@ -366,7 +366,7 @@ impl<'a, F: Field, EF: ExtensionField<F>> InputLayer<'a, F, EF> {
                     d1_lo,
                     d1_hi,
                     lambda,
-                    stepped_past::<EF>(),
+                    scaled_node::<EF>(),
                 )
             }
             _ => unreachable!("{MIXED_LEAF_STORAGE}"),
