@@ -153,8 +153,11 @@ where
 /// `betas` is the fold challenge used at each round, `betas[r]` for round `r`, in the order
 /// `fold_rounds_with` samples them; the caller derives it by replaying the sumcheck transcript
 /// (this function does not touch the sumcheck rounds or the commitments' own transcript
-/// order). All proof-shape checks run before `challenger` is touched, so a malformed proof is
-/// rejected without ever grinding or sampling against it.
+/// order).
+///
+/// All proof-shape checks run before the transcript is touched.
+///
+/// A malformed proof is therefore rejected without ever grinding or sampling against it.
 ///
 /// # Panics
 ///
@@ -355,6 +358,15 @@ mod tests {
     ///
     /// The driver is the only sampler, so a property test asks it, not a copy of it.
     fn drawn_positions(config: &BinaryPcsConfig) -> Vec<usize> {
+        drawn_positions_for(config, F::default())
+    }
+
+    /// Draw one run's query positions with `fill` as every final-codeword symbol.
+    ///
+    /// The codeword is the last thing bound before the positions are drawn.
+    ///
+    /// Varying it is therefore the cheapest way to move the transcript under them.
+    fn drawn_positions_for(config: &BinaryPcsConfig, fill: F) -> Vec<usize> {
         let shape = BinaryPcsShape::new(config);
         let mut ch = challenger();
         let mut transcript = BinaryPcsProverTranscript::new(&mut ch, shape);
@@ -363,7 +375,7 @@ mod tests {
         for _ in 0..shape.num_oracles {
             transcript.oracle_commitment(MerkleCap::<F, [u8; 32]>::new(vec![[0u8; 32]]));
         }
-        transcript.final_codeword(&vec![F::default(); shape.final_codeword_len]);
+        transcript.final_codeword(&vec![fill; shape.final_codeword_len]);
         let _witness = transcript.query_pow();
 
         let shift = config.log_folding_factor() - 1;
@@ -441,11 +453,36 @@ mod tests {
 
     #[test]
     fn sampling_is_transcript_dependent() {
+        // Invariant: the positions come out of the sponge, not out of the configuration.
+        //
+        // A prover that could fix them would choose which symbols it is asked for.
+        //
+        // Fixture state: one configuration, drawn twice.
+        //
+        // Mutation: change the last thing bound before the draw.
+        //
+        //     final codeword all-zero  ->  one position set
+        //     final codeword all-one   ->  another
         let config = BinaryPcsConfig::try_new(10, params())
             .unwrap()
             .try_with_folding(1)
             .unwrap();
+
+        // The same transcript draws the same positions.
         assert_eq!(drawn_positions(&config), drawn_positions(&config));
+
+        // A different transcript draws different ones.
+        //
+        // The draw covers only part of the domain here, so the two sets can differ.
+        let shape = BinaryPcsShape::new(&config);
+        assert!(
+            shape.num_pairs < 1 << shape.pair_bits,
+            "a saturated draw opens every position whatever the transcript says",
+        );
+        assert_ne!(
+            drawn_positions_for(&config, F::ZERO),
+            drawn_positions_for(&config, F::ONE),
+        );
     }
 
     #[test]

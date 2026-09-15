@@ -466,6 +466,8 @@ impl<'a, C, U: Unit> VerifierState<'a, C, U> {
     ///
     /// The prover-side method of the same name carries what the step does and does not record.
     ///
+    /// It also carries the obligation that makes the loop terminate.
+    ///
     /// # Panics
     ///
     /// Never for a challenger that rejects internally, which is what `RESAMPLE = true` asks for.

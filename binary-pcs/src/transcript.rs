@@ -43,6 +43,10 @@ type Alphabet = FieldUnit<BinaryField128>;
 /// Both sides derive this from their own configuration, never from a proof.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BinaryPcsShape {
+    /// Arity of the committed polynomial.
+    pub num_variables: usize,
+    /// Variables each fold batch consumes.
+    pub log_folding_factor: usize,
     /// Folded oracles committed between the fold batches.
     ///
     /// The last batch sends its codeword in the clear, so it commits nothing.
@@ -74,6 +78,8 @@ impl BinaryPcsShape {
         let pair_domain = config.domain_size() >> shift;
 
         Self {
+            num_variables: config.num_variables(),
+            log_folding_factor: config.log_folding_factor(),
             // Every batch but the last commits its folded oracle.
             num_oracles: config.num_fold_batches() - 1,
             final_codeword_len: 1 << config.log_final_len(),
@@ -144,12 +150,33 @@ impl BinaryPcsShape {
 
     /// Bind the protocol identity and this shape into a seed.
     ///
-    /// Every number above moves the step sequence or a step's width.
+    /// # Soundness
     ///
-    /// The fingerprint therefore carries all of them, and none needs a chunk of its own.
+    /// The step counts and widths ride the fingerprint on their own.
+    ///
+    /// The arity and the folding factor move no step, so they are bound as chunks.
+    ///
+    /// Without them, a run folding every variable at once shares a description.
+    ///
+    /// Every other arity at the same rate lands on it.
+    ///
+    /// ```text
+    ///     nv = 8, k = 8   ->  one batch, no oracle, rate-wide final word
+    ///     nv = 9, k = 9   ->  the same three numbers
+    /// ```
+    ///
+    /// The surrounding layout binds the arity too.
+    ///
+    /// This makes the seed self-contained rather than closing a reachable gap.
     #[must_use]
     pub fn domain_separator(&self) -> DomainSeparator<Alphabet> {
-        DomainSeparator::new(VERSION, NAME, self.pattern())
+        let mut separator = DomainSeparator::new(VERSION, NAME, self.pattern());
+
+        separator
+            .instance(&(self.num_variables as u64).to_be_bytes())
+            .instance(&(self.log_folding_factor as u64).to_be_bytes());
+
+        separator
     }
 }
 
@@ -359,6 +386,8 @@ where
             //
             // Pinning it here is what stops any value from riding along unbound.
             if witness != BinaryField128::default() {
+                // Releasing the completeness check keeps this rejection the only failure.
+                self.state.abort();
                 return Err(TranscriptFailure::NonCanonicalPowWitness { actual: witness });
             }
             return Ok(());
@@ -455,7 +484,9 @@ mod tests {
     use p3_challenger::fs::PROTOCOL_ID_LEN;
     use p3_challenger::testing::{assert_seeds_pairwise_distinct, pow_difficulties, seed_digest};
     use p3_field::PrimeCharacteristicRing;
-    use p3_security::grinding::{grinding_step, is_unpriced_grinding_site};
+    use p3_security::grinding::{
+        UNPRICED_GRINDING_SITES, grinding_step, is_unpriced_grinding_site,
+    };
 
     use super::*;
     use crate::params::BinaryPcsParams;
@@ -489,6 +520,8 @@ mod tests {
         //
         // A field added to the shape stops this from compiling.
         let BinaryPcsShape {
+            num_variables: _,
+            log_folding_factor: _,
             num_oracles: _,
             final_codeword_len: _,
             pow_bits: _,
@@ -500,6 +533,16 @@ mod tests {
         let base = BinaryPcsShape::new(&base_config());
 
         let mut seeds = vec![(String::from("baseline"), digest(base))];
+
+        // The arity moves no step, so it is bound as a chunk instead.
+        let mut wider = base;
+        wider.num_variables += 1;
+        seeds.push((String::from("num variables"), digest(wider)));
+
+        // So does the folding factor.
+        let mut coarser = base;
+        coarser.log_folding_factor += 1;
+        seeds.push((String::from("folding factor"), digest(coarser)));
 
         // One more folded oracle is one more described step.
         let mut more_oracles = base;
@@ -531,8 +574,9 @@ mod tests {
 
     #[test]
     fn a_zero_difficulty_run_describes_no_grinding_step() {
-        // Invariant: a zero-difficulty site contributes no step, so the two cases
-        // cannot share a description.
+        // Invariant: a zero-difficulty site contributes no step.
+        //
+        // The two cases therefore cannot share a description.
         //
         //     bits = 0  ->  no grinding step at all
         //     bits = 4  ->  one step carrying the difficulty
@@ -551,13 +595,14 @@ mod tests {
         // It must fit the identifier, which carries its length in the last byte.
         assert!(NAME.len() < PROTOCOL_ID_LEN - 1);
 
-        // No workspace protocol name starts with this one, so no prefix relation
-        // needs a length byte to part it from a longer name.
+        // No workspace protocol name starts with this one.
+        //
+        // No prefix relation therefore needs a length byte to part it from a longer name.
         assert!(!NAME.starts_with(b"p3-binary-field"));
     }
 
     #[test]
-    fn every_grinding_site_this_run_describes_is_classified() {
+    fn the_grinding_sites_and_the_unpriced_table_name_each_other() {
         // Invariant: a proof-of-work step is a soundness parameter in two places.
         //
         //     transcript  ->  the difficulty the pattern describes
@@ -565,10 +610,11 @@ mod tests {
         //
         // A site in neither vocabulary is a difficulty nobody compares.
         //
-        // The workspace suite runs this walk for every protocol it can reach.
+        // The workspace suite runs both directions for every protocol it can reach.
         //
-        // This one seeds over a binary tower field, so its separator has a different
-        // sponge alphabet and cannot join that sweep.
+        // This one seeds over a binary tower field.
+        //
+        // Its separator has a different sponge alphabet, so it cannot join that sweep.
         let shape = BinaryPcsShape::new(&base_config());
 
         for (label, _bits) in pow_difficulties(&shape.pattern()) {
@@ -582,6 +628,24 @@ mod tests {
             assert!(
                 !(budgeted && priced_elsewhere),
                 "p3-binary-pcs/{label} is both compared against the model and priced elsewhere",
+            );
+        }
+
+        // The other direction: a listed row must name a step this run describes.
+        //
+        // Without it, dropping the grind would leave the row silently stale.
+        let described: Vec<&str> = pow_difficulties(&shape.pattern())
+            .into_iter()
+            .map(|(label, _)| label)
+            .collect();
+
+        for &(protocol, label) in &UNPRICED_GRINDING_SITES {
+            if protocol != NAME_STR {
+                continue;
+            }
+            assert!(
+                described.contains(&label),
+                "p3-binary-pcs/{label} is listed as priced elsewhere, but no step describes it",
             );
         }
     }

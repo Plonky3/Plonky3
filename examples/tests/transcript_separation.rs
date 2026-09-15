@@ -1188,7 +1188,7 @@ fn every_unpriced_grinding_site_is_described_by_the_protocol_that_owns_it() {
         //
         // Its separator has a different sponge alphabet, so it cannot join the sweep above.
         //
-        // Its own crate asserts that its site is classified.
+        // Its own crate runs both directions of this check instead.
         if protocol == "p3-binary-pcs" {
             continue;
         }
