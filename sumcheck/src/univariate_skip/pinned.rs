@@ -1,6 +1,7 @@
 //! Zerocheck challenge coordinates fixed ahead of time, with structured equality weights.
 
 use alloc::vec::Vec;
+use core::marker::PhantomData;
 
 use p3_binary_field::TowerLevel;
 use p3_field::{ExtensionField, Field};
@@ -58,6 +59,12 @@ pub enum PinnedEqError {
 /// See Dao, Thaler, *More Optimizations to Sum-Check Proving*, and Bünz, Rothblum, Wang,
 /// *Flock*, Section 4.3.
 ///
+/// This is a reduction of its own, with no consumer in the crate yet.
+///
+/// A skip round weighs its rows with whatever equality table the caller supplies.
+///
+/// Laying those rows out so the pinned coordinates index blocks is the arithmetization's choice.
+///
 /// The pinned coordinates sit at the tail of the point, so they weigh contiguous blocks:
 ///
 /// ```text
@@ -91,12 +98,30 @@ pub enum PinnedEqError {
 ///
 /// Every constructor here rejects a dependent weight set for that reason.
 ///
-/// The caller owes the other half of the argument:
+/// The caller owes the other half, and it is a strong obligation:
 ///
-/// - **The constraint must take values in the prime field on the hypercube.**
-/// - That holds for a zerocheck over a bit-valued witness, which is what this module serves.
-/// - A constraint valued in a larger subfield needs independence over *that* subfield instead.
-/// - That stronger condition is not checked here.
+/// **Every witness the prover can commit to must keep the constraint prime-field-valued.**
+///
+/// Not the honest witness, every witness.
+///
+/// Over a wider alphabet the fold `y -> sum_b weight_b * y_b` has a large kernel.
+///
+/// Any cell pattern inside that kernel is invisible to this check.
+///
+/// - The premise must therefore come from the commitment alphabet.
+/// - A prime-field-packed commitment gives it, and so does ring switching.
+/// - **A booleanity constraint in the same zerocheck does not give it.**
+/// - The pinned fold is what would have to catch the non-bit witness in the first place.
+///
+/// Batching several prime-field-valued constraints stays sound.
+///
+/// The coefficients must be drawn after the commitment.
+///
+/// The batched sum is then prime-field-valued for every committed witness, whatever they are.
+///
+/// A constraint valued in a larger subfield needs independence over *that* subfield.
+///
+/// That is a stronger condition, and it is not checked here.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PinnedEqWeights<F> {
     /// The pinned coordinates, ordered as they sit at the tail of the challenge point.
@@ -295,29 +320,47 @@ impl<F: Field> PinnedEqWeights<F> {
 ///
 /// Folding a block is then one lookup and one exclusive-or per entry, with no multiplications.
 ///
+/// # Soundness
+///
+/// This is an arithmetic shortcut, not a weaker premise.
+///
+/// The weights it tabulates were only certified independent over the **prime** field.
+///
+/// - Safe where the values are off-hypercube, as the extended round values are.
+/// - **Not** safe as the pinned fold of a zerocheck whose hypercube cells are byte-valued.
+/// - That case needs the weights independent over the byte field, which nothing here checks.
+///
 /// # Performance
 ///
 /// The table is `2^d * 256` large-field elements.
 /// Four pinned coordinates over a 128-bit field make that 64 KiB, built once at setup.
 #[derive(Debug, Clone)]
-pub struct SubfieldFoldTable<F> {
+pub struct SubfieldFoldTable<F, Sub> {
     /// One row of products per weight, each row indexed by the subfield element's byte.
     table: Vec<F>,
     /// Number of values one block covers, which is the number of rows.
     block_len: usize,
+    /// Marker for the subfield the rows were tabulated against.
+    ///
+    /// Carrying it on the type stops a fold reading the table through another subfield.
+    ///
+    /// That would index the right row with the wrong column.
+    _sub: PhantomData<Sub>,
 }
 
-impl<F: Field> SubfieldFoldTable<F> {
+impl<F, Sub> SubfieldFoldTable<F, Sub>
+where
+    F: Field + ExtensionField<Sub>,
+    Sub: TowerLevel,
+{
     /// Tabulate the weights against every value of a byte-wide subfield.
     ///
     /// # Panics
     ///
     /// Panics if the subfield is not byte-wide, since the table is indexed by a single byte.
     #[must_use]
-    pub fn new<Sub>(weights: &PinnedEqWeights<F>) -> Self
+    pub fn new(weights: &PinnedEqWeights<F>) -> Self
     where
-        Sub: TowerLevel,
-        F: ExtensionField<Sub>,
         Sub::Repr: From<u8>,
     {
         assert_eq!(
@@ -342,7 +385,11 @@ impl<F: Field> SubfieldFoldTable<F> {
             }
         }
 
-        Self { table, block_len }
+        Self {
+            table,
+            block_len,
+            _sub: PhantomData,
+        }
     }
 
     /// Number of values one block covers.
@@ -357,9 +404,8 @@ impl<F: Field> SubfieldFoldTable<F> {
     ///
     /// Panics if the block length differs from the tabulated one.
     #[must_use]
-    pub fn fold<Sub>(&self, block: &[Sub]) -> F
+    pub fn fold(&self, block: &[Sub]) -> F
     where
-        Sub: TowerLevel,
         Sub::Repr: Into<u128>,
     {
         assert_eq!(block.len(), self.block_len, "one value per weight");
@@ -617,21 +663,15 @@ mod tests {
     }
 
     #[test]
-    fn the_progression_needs_a_polynomial_basis_and_is_refused_in_a_tower_basis() {
-        // The progression is only useful when the generator's powers form a basis.
+    fn a_generator_from_a_small_subfield_is_refused() {
+        // Independence of the powers is a property of the generator, not of the representation.
         //
-        // That is a property of the representation, not of the field.
+        //     {g^k : k < 2^d} independent  <=>  g has degree at least 2^d over the prime field
         //
-        //     polynomial basis:  1, x, x^2, ...  are the standard basis vectors
-        //     tower basis:       low elements span small subfields and repeat
+        // A generator in a small subfield has too few independent powers, in any basis.
         //
-        // This is why a protocol wanting many pinned coordinates fixes a polynomial basis.
-        // The check keeps a tower-basis choice from silently producing an unsound weight set.
-        assert!(PinnedEqWeights::geometric(indeterminate(), 7).is_ok());
-
-        // In the tower basis that bit pattern generates a four-element subfield.
-        //
-        // Its square is already spanned, so two coordinates cannot be independent.
+        //     from_repr(2) in the tower basis generates the four-element subfield
+        //     its square is already spanned, so four weights cannot be independent
         assert_eq!(
             PinnedEqWeights::geometric(BinaryField128::from_repr(2), 2).unwrap_err(),
             PinnedEqError::DependentWeights
@@ -639,6 +679,15 @@ mod tests {
         assert_eq!(
             PinnedEqWeights::geometric(BinaryField16::from_repr(2), 2).unwrap_err(),
             PinnedEqError::DependentWeights
+        );
+
+        // A full-degree generator works in either representation, so the basis is not the gate.
+        //
+        // What the basis decides is only whether multiplying by the generator is a shift.
+        assert!(PinnedEqWeights::geometric(indeterminate(), 7).is_ok());
+        assert!(
+            PinnedEqWeights::geometric(BinaryField128::from(indeterminate()), 7).is_ok(),
+            "the same element in the tower basis is still full degree"
         );
     }
 
@@ -666,7 +715,7 @@ mod tests {
         // Fixture state: 4 pinned coordinates, blocks of 16 byte-field values.
         let mut rng = SmallRng::seed_from_u64(31);
         let pinned = tower_pinned(4);
-        let table = SubfieldFoldTable::new::<BinaryField8>(&pinned);
+        let table = SubfieldFoldTable::<_, BinaryField8>::new(&pinned);
 
         let block = (0..pinned.block_len())
             .map(|_| rng.random::<BinaryField8>())
@@ -685,7 +734,7 @@ mod tests {
         // Fixture state: 16 weights, 256 byte values, 16 bytes per large-field element.
         //
         //     16 * 256 * 16 = 64 KiB, built once at setup
-        let table = SubfieldFoldTable::new::<BinaryField8>(&tower_pinned(4));
+        let table = SubfieldFoldTable::<_, BinaryField8>::new(&tower_pinned(4));
         assert_eq!(table.block_len(), 16);
         assert_eq!(table.table.len() * size_of::<BinaryField128>(), 64 * 1024);
     }
@@ -709,7 +758,7 @@ mod tests {
             // Invariant: the tabulated fold and the multiplying fold agree at every block width.
             let mut rng = SmallRng::seed_from_u64(seed);
             let pinned = tower_pinned(count);
-            let table = SubfieldFoldTable::new::<BinaryField8>(&pinned);
+            let table = SubfieldFoldTable::<_, BinaryField8>::new(&pinned);
 
             let block = (0..pinned.block_len())
                 .map(|_| rng.random::<BinaryField8>())

@@ -17,16 +17,12 @@
 //!     skip:   1 subspace round, then m - k ordinary rounds
 //! ```
 //!
-//! # What lives here
+//! # What the caller owes
 //!
-//! - The subspace the round vanishes on, and the larger one it is transmitted on.
-//! - The lookup table that carries bit-valued rows from the first to the second.
-//! - Zerocheck challenge coordinates fixed ahead of time, with their equality weights.
-//! - The round itself: its message, its verifier check, and the binding it leaves behind.
+//! Two things are not discharged here, both stated in full on the round:
 //!
-//! The round hands back an ordinary multilinear claim.
-//!
-//! The generic-degree sumcheck driver finishes it from there.
+//! - The zerocheck point, which the surrounding protocol draws after committing.
+//! - The final opening, which is an inner product and not yet a multilinear evaluation.
 //!
 //! # References
 //!
@@ -41,9 +37,11 @@ pub mod round;
 pub mod transcript;
 
 pub use domain::{SkipDomain, SkipDomainError};
-pub use lde::{CHUNK_BITS, CompressedLde, CompressedLdeError, extend_reference};
+#[cfg(any(test, feature = "test-util"))]
+pub use lde::extend_reference;
+pub use lde::{CHUNK_BITS, CompressedLde, CompressedLdeError};
 pub use pinned::{PinnedEqError, PinnedEqWeights, SubfieldFoldTable};
-pub use round::{RowSelector, SkipRound, SkipRoundError};
+pub use round::{MessageLenMismatch, RowSelector, SkipRound, SkipRoundError};
 pub use transcript::{
     UnivariateSkipProverTranscript, UnivariateSkipShape, UnivariateSkipTranscriptError,
     UnivariateSkipVerifierTranscript,

@@ -3,12 +3,22 @@
 use alloc::vec::Vec;
 
 use p3_binary_field::TowerLevel;
-use p3_field::{ExtensionField, Field};
+use p3_field::{ExtensionField, Field, batch_multiplicative_inverse};
 use p3_maybe_rayon::prelude::*;
 use p3_multilinear_util::poly::Poly;
 
 use super::domain::{SkipDomain, SkipDomainError};
 use super::lde::{CHUNK_BITS, CompressedLde, CompressedLdeError, TABLE_ROWS};
+
+/// The round message does not carry one value per transmitted point.
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+#[error("round message length mismatch: expected {expected}, got {actual}")]
+pub struct MessageLenMismatch {
+    /// Number of values this round transmits.
+    pub expected: usize,
+    /// Number of values the message carries.
+    pub actual: usize,
+}
 
 /// Reasons a skip round cannot be set up.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -71,16 +81,38 @@ pub enum SkipRoundError {
 /// Allowing degree up to the extension size costs the verifier nothing beyond that term.
 ///
 /// It also saves it a consistency check on the honest degree bound.
+///
+/// # What the caller still owes
+///
+/// Two obligations sit outside this round, and neither is discharged here.
+///
+/// **The zerocheck point.**
+/// This transcript neither absorbs nor draws the equality point the message is weighted by.
+///
+/// The surrounding protocol draws it from its own transcript, after the witness is committed.
+///
+/// A point chosen before the commitment, or chosen by the prover, makes the reduction vacuous.
+///
+/// **The final opening is not a plain multilinear evaluation.**
+/// The residual rounds end on the rows read at the skip challenge, which unfold as
+///
+/// ```text
+///     f(rho, lam) = sum_c L_c(lam) * f~(rho, c)
+/// ```
+///
+/// an inner product of the witness's partial evaluation with the subspace's Lagrange vector.
+///
+/// - It is one claim, but not one that a commitment can open directly.
+/// - Reducing it to a single evaluation `f~(rho, tau)` takes a further `k`-round degree-two
+///   sumcheck, or any equivalent reduction.
+/// - A caller that hands a commitment the bound rows evaluated at the residual point is proving
+///   a different statement.
 #[derive(Debug, Clone)]
 pub struct SkipRound<F> {
     /// Where the round polynomial vanishes, and where it is transmitted.
     domain: SkipDomain<F>,
     /// The tabulated map from a row's bits to its transmitted values.
     lde: CompressedLde<F>,
-    /// The vanishing polynomial of the whole extension, evaluated nowhere yet.
-    ///
-    /// Kept as the dimension it is built from, since the verifier evaluates it in the large field.
-    log_extended: usize,
     /// The formal derivative of the extension's vanishing polynomial, constant on the extension.
     derivative_on_extension: F,
 }
@@ -115,7 +147,6 @@ impl<F: TowerLevel> SkipRound<F> {
             .product::<F>();
 
         Ok(Self {
-            log_extended: domain.log_extended(),
             domain,
             lde,
             derivative_on_extension,
@@ -226,15 +257,21 @@ impl<F: TowerLevel> SkipRound<F> {
     ///
     /// and the subspace terms drop out because the polynomial is zero there.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if the message length differs from the transmitted-point count.
-    #[must_use]
-    pub fn evaluate<EF>(&self, message: &[EF], lambda: EF) -> EF
+    /// Returns an error when the message does not carry one value per transmitted point.
+    ///
+    /// The message comes from a proof, so the width is reported rather than asserted.
+    pub fn evaluate<EF>(&self, message: &[EF], lambda: EF) -> Result<EF, MessageLenMismatch>
     where
         EF: ExtensionField<F>,
     {
-        assert_eq!(message.len(), self.num_transmitted(), "one value per point");
+        if message.len() != self.num_transmitted() {
+            return Err(MessageLenMismatch {
+                expected: self.num_transmitted(),
+                actual: message.len(),
+            });
+        }
 
         // A challenge landing on a domain point reads the value there rather than dividing by zero.
         //
@@ -242,10 +279,10 @@ impl<F: TowerLevel> SkipRound<F> {
         // Narrowing once keeps the search itself in the base field.
         if let Some(base) = lambda.as_base() {
             if let Some(index) = self.domain.transmitted().iter().position(|&t| t == base) {
-                return message[index];
+                return Ok(message[index]);
             }
             if self.domain.subspace().contains(&base) {
-                return EF::ZERO;
+                return Ok(EF::ZERO);
             }
         }
 
@@ -254,14 +291,24 @@ impl<F: TowerLevel> SkipRound<F> {
         // The derivative is a base-field constant.
         //
         // Inverting and applying it there is cheaper than widening it first.
-        let scale =
-            vanishing_at(self.log_extended, lambda) * self.derivative_on_extension.inverse();
-        scale
+        let scale = vanishing_at(self.domain.log_extended(), lambda)
+            * self.derivative_on_extension.inverse();
+
+        // One inversion plus a few products per point, rather than one inversion each.
+        let offsets = self
+            .domain
+            .transmitted()
+            .iter()
+            .map(|&point| lambda + point)
+            .collect::<Vec<_>>();
+        let inverses = batch_multiplicative_inverse(&offsets);
+
+        Ok(scale
             * message
                 .iter()
-                .zip(self.domain.transmitted())
-                .map(|(&value, &point)| value * (lambda + point).inverse())
-                .sum::<EF>()
+                .zip(&inverses)
+                .map(|(&value, &inverse)| value * inverse)
+                .sum::<EF>())
     }
 
     /// Build the table that binds packed rows at the verifier's challenge.
@@ -344,10 +391,16 @@ impl<EF: Field> RowSelector<EF> {
                 // Inverting and applying it there is cheaper than widening it first.
                 let scale = vanishing_at(domain.log_size(), lambda)
                     * domain.derivative_on_subspace().inverse();
-                domain
+
+                // One inversion plus a few products per point, rather than one inversion each.
+                let offsets = domain
                     .subspace()
                     .iter()
-                    .map(|&s| scale * (lambda + s).inverse())
+                    .map(|&s| lambda + s)
+                    .collect::<Vec<_>>();
+                batch_multiplicative_inverse(&offsets)
+                    .into_iter()
+                    .map(|inverse| scale * inverse)
                     .collect::<Vec<_>>()
             },
             |hit| {
@@ -526,7 +579,7 @@ mod tests {
 
         // Verifier side: read the message back at a random challenge.
         let lambda = rng.random::<EF>();
-        let read = round.evaluate(&message, lambda);
+        let read = round.evaluate(&message, lambda).unwrap();
 
         // One table binds every row of every committed polynomial at that same challenge.
         let selector = round.selector::<EF>(lambda);
@@ -622,7 +675,7 @@ mod tests {
         let bound = [&witness.a, &witness.b, &witness.c].map(|packed| selector.bind(packed));
 
         assert_ne!(
-            round.evaluate(&message, lambda),
+            round.evaluate(&message, lambda).unwrap(),
             direct_sum(&bound, &eq, num_rows)
         );
     }
@@ -639,7 +692,35 @@ mod tests {
             .collect::<Vec<_>>();
 
         for (index, &point) in round.domain().transmitted().iter().enumerate() {
-            assert_eq!(round.evaluate(&message, EF::from(point)), message[index]);
+            assert_eq!(
+                round.evaluate(&message, EF::from(point)).unwrap(),
+                message[index]
+            );
+        }
+    }
+
+    #[test]
+    fn reading_the_message_on_the_subspace_returns_zero() {
+        // This is the imposed vanishing written out as code, and the one place it appears.
+        //
+        // A random challenge reaches it with negligible probability.
+        //
+        // Replacing the zero with a stored entry passes every other test, so only this pins it.
+        //
+        //     nonzero message, challenge on any subspace point  ->  zero
+        let mut rng = SmallRng::seed_from_u64(0x2E80);
+        let round = SkipRound::<F>::new(4, 2).unwrap();
+        let message = (0..round.num_transmitted())
+            .map(|_| rng.random::<EF>())
+            .collect::<Vec<_>>();
+        assert!(message.iter().any(|&value| value != EF::ZERO));
+
+        for &s in round.domain().subspace() {
+            assert_eq!(
+                round.evaluate(&message, EF::from(s)).unwrap(),
+                EF::ZERO,
+                "s={s:?}"
+            );
         }
     }
 
@@ -705,7 +786,10 @@ mod tests {
             let selector = round.selector::<EF>(lambda);
             let bound = [&witness.a, &witness.b, &witness.c].map(|p| selector.bind(p));
 
-            prop_assert_eq!(round.evaluate(&message, lambda), direct_sum(&bound, &eq, num_rows));
+            prop_assert_eq!(
+                round.evaluate(&message, lambda).unwrap(),
+                direct_sum(&bound, &eq, num_rows)
+            );
         }
 
         #[test]

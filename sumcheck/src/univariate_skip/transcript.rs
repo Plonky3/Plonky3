@@ -320,6 +320,7 @@ where
     /// - The message width differs from the described one.
     /// - Grinding is enabled and the proof carries no witness.
     /// - The witness misses the required difficulty.
+    /// - Grinding is off and the proof carries a witness anyway.
     pub fn round_message(
         &mut self,
         message: &[EF],
@@ -347,6 +348,14 @@ where
             self.state
                 .observe_pow(ROUND_POW, self.shape.pow_bits, witness)
                 .map_err(|_| UnivariateSkipTranscriptError::InvalidPowWitness)?;
+        } else if witness.is_some() {
+            // At zero difficulty the description has no grinding step to play.
+            //
+            // Ignoring a witness would leave one proof with two accepting forms.
+            //
+            // Refusing it is what keeps the shape canonical.
+            self.state.abort();
+            return Err(UnivariateSkipTranscriptError::UnexpectedPowWitness);
         }
 
         // Draw the same challenge the prover saw.
@@ -357,10 +366,31 @@ where
     }
 
     /// Lend the sponge to the residual sumcheck, bracketed as a sub-protocol.
-    pub fn residual_sumcheck<R>(&mut self, run: impl FnOnce(&mut C) -> R) -> R {
+    ///
+    /// The delegated run reports its own rejection, and a rejection ends this reduction too.
+    ///
+    /// Releasing the completeness check there is what makes a malformed proof a rejection.
+    ///
+    /// Without it, dropping this driver panics instead.
+    /// Taking the failure rather than a plain value is what stops a caller forgetting to.
+    ///
+    /// # Errors
+    ///
+    /// Returns whatever the delegated run rejected with.
+    pub fn residual_sumcheck<T, E>(
+        &mut self,
+        run: impl FnOnce(&mut C) -> Result<T, E>,
+    ) -> Result<T, E> {
         self.state
             .begin_protocol::<ResidualSumcheck>(RESIDUAL_SUMCHECK);
         let output = run(self.state.challenger_mut());
+
+        // A delegated rejection leaves the bracket half-played, so the driver is released here.
+        if output.is_err() {
+            self.state.abort();
+            return output;
+        }
+
         self.state
             .end_protocol::<ResidualSumcheck>(RESIDUAL_SUMCHECK);
         output
@@ -400,6 +430,11 @@ pub enum UnivariateSkipTranscriptError {
     /// Grinding is enabled but the proof carries no witness for it.
     #[error("the round carries no grinding witness")]
     MissingPowWitness,
+    /// Grinding is off but the proof carries a witness anyway.
+    ///
+    /// Accepting it would give one statement two accepting proofs.
+    #[error("the round carries a grinding witness at zero difficulty")]
+    UnexpectedPowWitness,
     /// The grinding witness does not meet the required difficulty.
     #[error("the round's grinding witness is invalid")]
     InvalidPowWitness,

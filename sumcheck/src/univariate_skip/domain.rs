@@ -288,12 +288,26 @@ impl<F: TowerLevel> SkipDomain<F> {
     /// - Every difference is nonzero, because the transmitted points lie outside the subspace.
     #[must_use]
     pub fn resampling_matrix(&self) -> Vec<F> {
+        self.resampling_prefix(self.size())
+    }
+
+    /// The first `columns` columns of the resampling matrix, still one row per transmitted point.
+    ///
+    /// A caller that reaches the remaining columns by another route pays only for these.
+    ///
+    /// # Panics
+    ///
+    /// Panics if more columns are asked for than the subspace has points.
+    #[must_use]
+    pub fn resampling_prefix(&self, columns: usize) -> Vec<F> {
+        assert!(columns <= self.size(), "one column per subspace point");
+
         // The derivative is the same at every subspace point, so it leaves the inner loop.
         let inverse_derivative = self.derivative_on_subspace.inverse();
 
         // Fill row by row over the transmitted points, column by column over the subspace.
-        let mut matrix = F::zero_vec(self.num_transmitted() * self.size());
-        let rows = matrix.chunks_exact_mut(self.size());
+        let mut matrix = F::zero_vec(self.num_transmitted() * columns);
+        let rows = matrix.chunks_exact_mut(columns);
         for ((row, &t), &vanishing) in rows
             .zip(self.transmitted())
             .zip(&self.vanishing_on_extension)

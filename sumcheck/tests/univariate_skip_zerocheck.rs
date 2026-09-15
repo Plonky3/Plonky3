@@ -78,6 +78,9 @@ impl Witness {
     }
 }
 
+/// One edit applied to a finished proof, to check the verifier refuses it.
+type Mutation = fn(&mut Proof);
+
 /// Everything the prover sends.
 struct Proof {
     /// The round polynomial on the transmitted points.
@@ -173,7 +176,21 @@ fn prove(
 ) -> Proof {
     let eq = Poly::new_from_point(zerocheck_point, EF::ONE);
     let message = round_message(round, witness, &eq);
+    prove_with_message(round, witness, eq, message, pow_bits).0
+}
 
+/// Prove with a caller-supplied round message, and report the challenge it induced.
+///
+/// An honest prover always passes the message the witness produces.
+///
+/// Taking it as an argument is what lets a test play a prover that sends something else.
+fn prove_with_message(
+    round: &SkipRound<F>,
+    witness: &Witness,
+    eq: Poly<EF>,
+    message: Vec<EF>,
+    pow_bits: usize,
+) -> (Proof, EF) {
     // The skip round and the sumcheck it delegates to run under one transcript.
     let mut challenger = fresh_challenger();
     let mut transcript = UnivariateSkipProverTranscript::<Challenger, EF, EF>::new(
@@ -189,7 +206,9 @@ fn prove(
     let operands = witness.operands().map(|packed| selector.bind(packed));
 
     // The residual claim is the message read back at the same challenge.
-    let claimed_sum = round.evaluate(&message, lambda);
+    let claimed_sum = round
+        .evaluate(&message, lambda)
+        .expect("the prover built the message at this round's width");
     let (residual, _) = transcript.residual_sumcheck(|challenger| {
         ResidualProver { eq, operands }.prove::<EF, _>(
             challenger,
@@ -201,11 +220,14 @@ fn prove(
     });
     transcript.finish();
 
-    Proof {
-        message,
-        pow_witness,
-        residual,
-    }
+    (
+        Proof {
+            message,
+            pow_witness,
+            residual,
+        },
+        lambda,
+    )
 }
 
 /// Replay the transcript and run every check the verifier owes.
@@ -232,13 +254,18 @@ fn verify(
     // The round polynomial is defined to vanish on the subspace and match the message off it.
     //
     // Reading it at the challenge therefore needs nothing further from the prover.
-    let claimed_sum = round.evaluate(&proof.message, lambda);
+    let Ok(claimed_sum) = round.evaluate(&proof.message, lambda) else {
+        transcript.abort();
+        return false;
+    };
     if proof.residual.claimed_sum != claimed_sum {
         transcript.abort();
         return false;
     }
 
     // Replay the residual rounds inside the same bracket the prover used.
+    //
+    // The delegated rejection travels out as an error, which releases the outer driver too.
     let replayed = transcript.residual_sumcheck(|challenger| {
         proof
             .residual
@@ -379,4 +406,122 @@ fn the_packing_convention_is_the_one_the_round_documents() {
 
     // The second byte holds cells 8 through 15, which is what the chunk width fixes.
     assert_eq!(CHUNK_BITS, 8);
+}
+
+#[test]
+fn a_message_adapted_to_the_challenge_is_rejected() {
+    // This is the attack binding exists to stop, and the only test that exercises it.
+    //
+    // A prover with a broken witness learns the challenge an honest message induces.
+    //
+    // It then edits the message so the read-back matches the sum it can prove there.
+    //
+    //     message bound first:  editing it moves the challenge, and the edit no longer fits
+    //     message unbound:      the edit lands on the challenge it was built for
+    //
+    // Tampering after the fact does not test this.
+    //
+    // It leaves the residual proof inconsistent, so it is refused either way.
+    let (round, mut witness, point) = fixture(0xADA);
+    witness.c[0] ^= 1;
+    let eq = Poly::new_from_point(&point, EF::ONE);
+    let honest = round_message(&round, &witness, &eq);
+
+    // Learn the challenge the honest message induces.
+    let (_, lambda) = prove_with_message(&round, &witness, eq.clone(), honest.clone(), 0);
+
+    // The residual sum the broken witness really has at that challenge.
+    let selector = round.selector::<EF>(lambda);
+    let operands = witness.operands().map(|packed| selector.bind(packed));
+    let truth = (0..eq.num_evals())
+        .map(|row| {
+            let a = operands[0].as_slice()[row];
+            let b = operands[1].as_slice()[row];
+            let c = operands[2].as_slice()[row];
+            eq.as_slice()[row] * (a * b + c)
+        })
+        .sum::<EF>();
+
+    // Patch the last entry so the read-back at that challenge equals the provable sum.
+    //
+    // The read-back is linear in the message, so one entry carries the whole correction.
+    let last = honest.len() - 1;
+    let mut unit = vec![EF::ZERO; honest.len()];
+    unit[last] = EF::ONE;
+    let gap = truth - round.evaluate(&honest, lambda).unwrap();
+    let mut cheat = honest;
+    cheat[last] += gap * round.evaluate(&unit, lambda).unwrap().inverse();
+
+    // The edit does fit the challenge it was built for.
+    assert_eq!(round.evaluate(&cheat, lambda).unwrap(), truth);
+
+    // Running the real transcript on it draws a different challenge, so the edit misses.
+    let (proof, adapted) = prove_with_message(&round, &witness, eq, cheat, 0);
+    assert_ne!(
+        adapted, lambda,
+        "binding the message must move the challenge"
+    );
+    assert!(!verify(&round, &witness, &point, &proof, 0));
+}
+
+#[test]
+fn a_malformed_residual_proof_is_rejected_rather_than_panicking() {
+    // The outer driver panics on drop if it is left unfinalized.
+    //
+    // That check is live in release builds whenever panics unwind.
+    //
+    // A delegated rejection therefore has to release it.
+    //
+    // Otherwise a malformed proof aborts the verifier instead of being refused.
+    //
+    // Each mutation below makes the residual replay fail at a different point.
+    let (round, witness, point) = fixture(0xF00);
+    let honest = prove(&round, &witness, &point, 0);
+
+    let mutations: [(&str, Mutation); 5] = [
+        ("one round popped", |proof| {
+            proof.residual.round_polys.pop();
+        }),
+        ("every round dropped", |proof| {
+            proof.residual.round_polys.clear();
+        }),
+        ("one round one element too wide", |proof| {
+            proof.residual.round_polys[0].push(EF::ONE);
+        }),
+        ("an extra round appended", |proof| {
+            let extra = proof.residual.round_polys[0].clone();
+            proof.residual.round_polys.push(extra);
+        }),
+        ("a grinding witness at zero difficulty", |proof| {
+            proof.pow_witness = Some(EF::ONE);
+        }),
+    ];
+
+    for (what, mutate) in mutations {
+        let mut proof = Proof {
+            message: honest.message.clone(),
+            pow_witness: honest.pow_witness,
+            residual: honest.residual.clone(),
+        };
+        mutate(&mut proof);
+        assert!(
+            !verify(&round, &witness, &point, &proof, 0),
+            "must reject: {what}"
+        );
+    }
+}
+
+#[test]
+fn a_grinding_witness_at_zero_difficulty_is_rejected() {
+    // Proofs stay canonical: one statement must not have two accepting forms.
+    //
+    // At zero difficulty the description has no grinding step.
+    //
+    // A witness is therefore not merely useless, it is refused.
+    let (round, witness, point) = fixture(0xCA1);
+    let mut proof = prove(&round, &witness, &point, 0);
+    assert_eq!(proof.pow_witness, None);
+
+    proof.pow_witness = Some(EF::from_u64(12345));
+    assert!(!verify(&round, &witness, &point, &proof, 0));
 }

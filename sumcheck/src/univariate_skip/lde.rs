@@ -13,9 +13,14 @@ use super::domain::SkipDomain;
 /// # Why this value
 ///
 /// - A byte indexes with a single load and needs no unpacking.
-/// - The resulting table stays in the first-level data cache at every supported skip width.
-/// - Four bits would double the lookups per row to save a sixteenth of the table.
-/// - Sixteen bits would grow the table by a factor of 256 and spill every cache level.
+/// - Four bits would double the lookups per row to shrink the table to a sixteenth.
+/// - Sixteen bits would grow it by a factor of 256 and spill every cache level.
+///
+/// Table size is `256 * (2^(k+e) - 2^k)` elements, which nothing here bounds.
+///
+/// The six-bit skip of a degree-two composition makes that 16 KiB, which stays in L1.
+///
+/// Wider skips leave it, and the win becomes locality rather than residency.
 pub const CHUNK_BITS: usize = 8;
 
 /// Number of distinct values one chunk can take, and so the number of rows in the base table.
@@ -122,11 +127,12 @@ impl<F: TowerLevel> CompressedLde<F> {
         let stride = domain.num_transmitted();
         let num_chunks = domain.size() / CHUNK_BITS;
 
-        // The resampling matrix holds one row per transmitted point.
-        // Only its first eight columns are ever read.
+        // Only the first chunk's worth of resampling columns is ever read.
         //
         // The identity above reaches the rest by offsetting the output index instead.
-        let matrix = domain.resampling_matrix();
+        //
+        // The remaining columns are therefore never built.
+        let columns = domain.resampling_prefix(CHUNK_BITS);
 
         // Each table row is the extension of a chunk sitting at position zero.
         //
@@ -140,9 +146,9 @@ impl<F: TowerLevel> CompressedLde<F> {
             let (built, building) = table.split_at_mut(value * stride);
             let previous = &built[(value & (value - 1)) * stride..][..stride];
 
-            // Add the selected column of the matrix onto the row for the remaining bits.
+            // Add the selected column onto the row for the remaining bits.
             for (index, entry) in building[..stride].iter_mut().enumerate() {
-                *entry = previous[index] + matrix[index * domain.size() + bit];
+                *entry = previous[index] + columns[index * CHUNK_BITS + bit];
             }
         }
 
@@ -255,11 +261,15 @@ impl<F: TowerLevel> CompressedLde<F> {
 /// Extend one packed row by interpolating it directly, without a table.
 ///
 /// This is the definition the tabulated path stands in for, and exists to test against.
-/// It costs one inversion per subspace point per output, so it is only usable in tests.
+///
+/// It costs one inversion per subspace point per output, so it is far too slow to prove with.
+///
+/// Reaching it needs the test-utility feature, so no production path can pick it up by mistake.
 ///
 /// # Panics
 ///
 /// Panics if either slice has the wrong length for this domain.
+#[cfg(any(test, feature = "test-util"))]
 pub fn extend_reference<F: TowerLevel>(domain: &SkipDomain<F>, row: &[u8], out: &mut [F]) {
     assert_eq!(row.len() * CHUNK_BITS, domain.size(), "one byte per chunk");
     assert_eq!(
@@ -440,10 +450,14 @@ mod tests {
         #[test]
         fn tabulated_extension_matches_across_domain_shapes(
             seed: u64,
-            log_size in 3usize..6,
-            extra in 1usize..3,
+            log_size in 3usize..=8,
+            extra in 1usize..=4,
         ) {
             // Invariant: the shared table's identity holds at every dimension and width.
+            //
+            // The widest shapes here give several cosets.
+            //
+            // A block index then runs past `2^(k-3)`, and the offset must stay in its coset.
             //
             // It is not special to the product-form configuration.
             //
