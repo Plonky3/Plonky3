@@ -283,12 +283,13 @@ where
 
     // 6. Open the committed main trace tables at their suffixes of the bound point.
     // The returned values are bound to the main commitment.
+    let main_schedule = instances.main_schedule(&reduction.point);
     let main_evals = match transcript.main_opening(|challenger| {
         config.pcs().verify_at(
             &proof.commitment,
             &proof.opening,
-            &instances.opening_protocol(),
-            &instances.main_points(&reduction.point),
+            main_schedule.protocol(),
+            main_schedule.points(),
             challenger,
         )
     }) {
@@ -302,6 +303,7 @@ where
 
     // 7. Open the preprocessed tables at their suffixes of the same bound point.
     // The owned batches are kept local so the closing check can borrow them.
+    let preprocessed_schedule = instances.preprocessed_schedule(&reduction.point);
     let opened_preprocessed = transcript.preprocessed_opening(|challenger| {
         let commitment = preprocessed_commitment
             .expect("a described preprocessed commitment is checked before the replay");
@@ -312,8 +314,8 @@ where
         config.preprocessed_pcs().verify_at(
             commitment,
             opening,
-            &instances.preprocessed_opening_protocol(),
-            &instances.preprocessed_points(&reduction.point),
+            preprocessed_schedule.protocol(),
+            preprocessed_schedule.points(),
             challenger,
         )
     });
@@ -327,10 +329,17 @@ where
 
     let preprocessed_next_columns = instances.preprocessed_next_columns();
     let next_columns = instances.next_columns();
-    let main_openings = main_evals
-        .iter()
+    // An AIR reads its own columns out of the first batch its table is opened in.
+    //
+    // Walking the results in order agrees with the AIR order only while each table owns one.
+    let main_openings = main_schedule
+        .first_batch_per_table()
+        .into_iter()
         .zip(next_columns.iter())
-        .map(|(batch, next_columns)| TableOpening::new(batch.current(), next_columns, batch.next()))
+        .map(|(batch, next_columns)| {
+            let batch = &main_evals[batch];
+            TableOpening::new(batch.current(), next_columns, batch.next())
+        })
         .collect::<Vec<_>>();
 
     // Build one preprocessed opening view per instance, in instance order.
@@ -339,9 +348,12 @@ where
     // Opened batches and their next-column lists share the non-empty order.
     // One iterator advances through them, stepping only for non-empty AIRs.
     // A shortfall yields an empty view, which the closing check rejects instead of panicking.
-    let mut preprocessed_batches = preprocessed_evals
+    // As on the main side, a table's own columns are the first batch it owns.
+    let preprocessed_own_batches = preprocessed_schedule.first_batch_per_table();
+    let opened = preprocessed_evals.iter().flatten().collect::<Vec<_>>();
+    let mut preprocessed_batches = preprocessed_own_batches
         .iter()
-        .flatten()
+        .filter_map(|&batch| opened.get(batch).copied())
         .zip(preprocessed_next_columns.iter());
     let preprocessed_openings = instances
         .iter()
