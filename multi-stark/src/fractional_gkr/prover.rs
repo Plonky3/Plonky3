@@ -33,14 +33,18 @@ enum SplitFractionMaybePacked<F: Field, EF: ExtensionField<F>> {
     Scalar(SplitFraction<Poly<EF>>),
 }
 
-/// The second interpolation node, unless one step of a line already lands on it.
+/// The second interpolation node, when a line has to be scaled onto it.
 ///
 /// Stepping a line once evaluates it at `1 + 1`.
 ///
-/// Over a prime field that is the second node, and the step stays in the narrow type.
+/// A field that enumerates its nodes as the integers is already there.
 ///
-/// Over a binary tower `1 + 1` is zero, so the node has to be applied as a factor.
-fn stepped_past<A: Field>() -> Option<A> {
+/// That is odd characteristic, extensions included, and the step stays in the narrow type.
+///
+/// A binary tower enumerates by bit pattern, where `1 + 1` is zero.
+///
+/// The node then has to be applied as a factor instead.
+fn scaled_node<A: Field>() -> Option<A> {
     let node = A::interpolation_node(2);
     (node != A::TWO).then_some(node)
 }
@@ -249,7 +253,7 @@ impl<'a, F: Field, EF: ExtensionField<F>> InputLayer<'a, F, EF> {
                     d1_lo,
                     d1_hi,
                     EF::ExtensionPacking::from(lambda),
-                    stepped_past::<EF>().map(EF::ExtensionPacking::from),
+                    scaled_node::<EF>().map(EF::ExtensionPacking::from),
                 )
                 .map(|value| EF::ExtensionPacking::to_ext_iter([value]).sum())
             }
@@ -272,7 +276,7 @@ impl<'a, F: Field, EF: ExtensionField<F>> InputLayer<'a, F, EF> {
                     d1_lo,
                     d1_hi,
                     lambda,
-                    stepped_past::<EF>(),
+                    scaled_node::<EF>(),
                 )
             }
             _ => unreachable!("input denominator and equality table use the same representation"),
@@ -354,11 +358,11 @@ impl<F: Field, EF: ExtensionField<F>> Layer<F, EF> {
                 .round_polys(
                     eq,
                     EF::ExtensionPacking::from(lambda),
-                    stepped_past::<EF>().map(EF::ExtensionPacking::from),
+                    scaled_node::<EF>().map(EF::ExtensionPacking::from),
                 )
                 .map(|value| EF::ExtensionPacking::to_ext_iter([value]).sum()),
             (SplitFractionMaybePacked::Scalar(fraction), PolyMaybePacked::Scalar(eq)) => {
-                fraction.round_polys(eq, lambda, stepped_past::<EF>())
+                fraction.round_polys(eq, lambda, scaled_node::<EF>())
             }
             _ => unreachable!("fraction and equality tables use the same representation"),
         }
@@ -563,7 +567,7 @@ impl<F: Field, EF: ExtensionField<F>> SplitFractionMaybePacked<F, EF> {
 ///
 /// Those nodes are the field's own enumeration of the first four values, not the integers.
 ///
-/// The two coincide over a prime field.
+/// The two coincide in odd characteristic, extensions included.
 ///
 /// Over a binary tower they do not.
 ///
@@ -584,9 +588,9 @@ fn restore_equality_factor<EF: Field>(
     //     eq(0)         = 1 - coordinate
     //     eq(1) - eq(0) = 2 * coordinate - 1
     //
-    // Each node scales the step directly rather than walking one step at a time.
+    // Each node scales the step.
     //
-    // A node is one past its predecessor only over a prime field.
+    // Stepping would reach the next node only in odd characteristic.
     let equality_0 = EF::ONE - coordinate;
     let equality_step = coordinate.double() - EF::ONE;
     let equality_2 = equality_0 + EF::interpolation_node(2) * equality_step;
