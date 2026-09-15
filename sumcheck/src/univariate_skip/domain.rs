@@ -171,15 +171,58 @@ impl<F: TowerLevel> SkipDomain<F> {
     /// - When the resulting extension needs more directions than the field has.
     pub fn for_degree(log_size: usize, degree: usize) -> Result<Self, SkipDomainError> {
         // A degree-zero composition has nothing to transmit.
-        if degree == 0 {
+        let Some(extra) = Self::extra_dimensions(degree) else {
             return Err(SkipDomainError::EmptyExtension {
                 log_size,
                 log_extended: log_size,
             });
+        };
+        Self::new(log_size, log_size + extra)
+    }
+
+    /// Dimensions above the subspace a constraint of the given degree needs.
+    ///
+    /// # Algorithm
+    ///
+    /// A degree-`d` constraint over multilinears reads as a univariate on the subspace.
+    ///
+    /// Its degree there is `d * (2^k - 1)` for a dimension-`k` subspace.
+    ///
+    /// Reconstructing it needs `d` rounded up to a power of two:
+    ///
+    /// ```text
+    ///     d = 1, 2  ->  one extra dimension
+    ///     d = 3, 4  ->  two
+    ///     d = 5..8  ->  three
+    /// ```
+    ///
+    /// # Returns
+    ///
+    /// Nothing for degree zero, which is not a degree a round can carry.
+    #[must_use]
+    pub const fn extra_dimensions(degree: usize) -> Option<usize> {
+        if degree == 0 {
+            return None;
         }
-        // Round the degree up to a power of two to get the number of extra dimensions.
         let extra = usize::BITS as usize - (degree - 1).leading_zeros() as usize;
-        Self::new(log_size, log_size + extra.max(1))
+
+        // A degree-one constraint still needs a coset to be read on.
+        Some(if extra == 0 { 1 } else { extra })
+    }
+
+    /// Whether this domain is wide enough to transmit a constraint of the given degree.
+    ///
+    /// A domain that is too narrow does not make the round unsound.
+    ///
+    /// It makes it incomplete.
+    ///
+    /// The honest round polynomial no longer fits in what is sent, so it is rejected.
+    #[must_use]
+    pub const fn admits_degree(&self, degree: usize) -> bool {
+        match Self::extra_dimensions(degree) {
+            Some(extra) => self.log_size + extra <= self.log_extended,
+            None => false,
+        }
     }
 
     /// The point an index maps to, as the sum of the basis vectors its set bits select.
