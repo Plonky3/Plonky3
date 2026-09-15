@@ -362,6 +362,13 @@ pub struct RowSelector<EF> {
     table: Vec<EF>,
     /// Number of chunk positions, which is the number of bytes in a packed row.
     num_chunks: usize,
+    /// The basis value at each subspace point, as a multilinear over the skipped variables.
+    ///
+    /// The table above is this vector summed over byte-sized subsets.
+    ///
+    /// The opening reduction needs the unaggregated form, and both must come from one place:
+    /// two computations of the same Lagrange vector could disagree and nothing would catch it.
+    lagrange: Poly<EF>,
 }
 
 impl<EF: Field> RowSelector<EF> {
@@ -421,13 +428,26 @@ impl<EF: Field> RowSelector<EF> {
             }
         }
 
-        Self { table, num_chunks }
+        Self {
+            table,
+            num_chunks,
+            lagrange: Poly::new(basis),
+        }
     }
 
     /// Number of bytes one packed row occupies.
     #[must_use]
     pub const fn row_bytes(&self) -> usize {
         self.num_chunks
+    }
+
+    /// The Lagrange vector of the subspace, read at this round's challenge.
+    ///
+    /// Entry `c` is the weight the skipped point `c` carries in a bound row.
+    ///
+    /// The opening reduction consumes it, and takes it from here rather than recomputing it.
+    pub const fn lagrange(&self) -> &Poly<EF> {
+        &self.lagrange
     }
 
     /// Read one packed row at the point this table was built for.

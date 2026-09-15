@@ -29,6 +29,7 @@ use p3_challenger::fs::{
 use p3_challenger::{CanObserve, CanSample, GrindingChallenger};
 use p3_field::ExtensionField;
 
+use super::opening::OPENING_DEGREE;
 use crate::generic_degree::GenericDegreeShape;
 
 /// Version byte bound into the transcript seed.
@@ -55,6 +56,242 @@ const RESIDUAL_SUMCHECK: &str = "residual_sumcheck";
 ///
 /// It is a local diagnostic and does not reach the pattern fingerprint.
 struct ResidualSumcheck;
+
+/// Protocol name bound into the opening reduction's seed.
+const OPENING_NAME: &[u8] = b"p3-sumcheck-univariate-skip-opening";
+
+/// Step label of the challenge that batches the committed polynomials.
+const OPENING_BATCHING: &str = "opening_batching";
+
+/// Step label of the sumcheck the opening reduction delegates to.
+const OPENING_SUMCHECK: &str = "opening_sumcheck";
+
+/// Marker recorded on the bracket around the opening reduction's sumcheck.
+struct OpeningSumcheck;
+
+/// Numbers that fix the transcript of one opening reduction.
+///
+/// Both sides build this from their own configuration, never from a proof.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SkipOpeningShape {
+    /// Number of skipped variables the reduction binds, one round each.
+    pub num_variables: usize,
+    /// Number of committed polynomials batched into one run.
+    pub num_polynomials: usize,
+    /// Grinding difficulty guarding each sumcheck challenge, or zero to omit grinding.
+    pub pow_bits: usize,
+}
+
+impl SkipOpeningShape {
+    /// Collect the numbers that fix one reduction.
+    #[must_use]
+    pub const fn new(num_variables: usize, num_polynomials: usize, pow_bits: usize) -> Self {
+        Self {
+            num_variables,
+            num_polynomials,
+            pow_bits,
+        }
+    }
+
+    /// The description the delegated sumcheck seeds itself from.
+    ///
+    /// Both sides derive it here, so neither can drift on the nested run.
+    #[must_use]
+    pub const fn sumcheck_shape(&self) -> GenericDegreeShape {
+        GenericDegreeShape::new(self.num_variables, OPENING_DEGREE, self.pow_bits)
+    }
+
+    /// Describe the transcript this shape fixes.
+    ///
+    /// # Panics
+    ///
+    /// Never in practice, since one matched bracket always validates.
+    #[must_use]
+    pub fn pattern<F, EF>(&self) -> InteractionPattern
+    where
+        F: TranscriptField,
+        EF: ExtensionField<F>,
+    {
+        // One challenge, then the bracket the rounds run inside.
+        //
+        // A single-polynomial run has no batching step at all.
+        //
+        // The description therefore differs, so one cannot be replayed as the other.
+        let mut steps = Vec::with_capacity(3);
+
+        if self.num_polynomials > 1 {
+            steps.push(Interaction::algebra::<F, EF>(
+                Hierarchy::Atomic,
+                Kind::Challenge,
+                OPENING_BATCHING,
+                Length::Scalar,
+            ));
+        }
+
+        steps.push(Interaction::marker::<OpeningSumcheck>(
+            Hierarchy::Begin,
+            Kind::Protocol,
+            OPENING_SUMCHECK,
+        ));
+        steps.push(Interaction::marker::<OpeningSumcheck>(
+            Hierarchy::End,
+            Kind::Protocol,
+            OPENING_SUMCHECK,
+        ));
+
+        InteractionPattern::new(steps).expect("one matched bracket is always well formed")
+    }
+
+    /// Bind the protocol identity and the transcript shape into a seed.
+    #[must_use]
+    pub fn domain_separator<F, EF>(&self) -> DomainSeparator<Alphabet<F>>
+    where
+        F: TranscriptField,
+        EF: ExtensionField<F>,
+    {
+        DomainSeparator::new(VERSION, OPENING_NAME, self.pattern::<F, EF>())
+    }
+}
+
+/// Prover-side transcript of one opening reduction.
+pub struct SkipOpeningProverTranscript<'a, C, F: TranscriptField, EF> {
+    /// Driver walking the description and holding the borrowed sponge.
+    state: ProverState<&'a mut C, Alphabet<F>>,
+    /// The numbers this run was described with.
+    shape: SkipOpeningShape,
+    /// Marker for the extension field the challenge carries.
+    _ef: PhantomData<EF>,
+}
+
+impl<'a, C, F, EF> SkipOpeningProverTranscript<'a, C, F, EF>
+where
+    F: TranscriptField,
+    EF: ExtensionField<F>,
+    C: CanObserve<F> + CanSample<F> + GrindingChallenger<Witness = F>,
+{
+    /// Seed the transcript from the shape both sides agreed on.
+    pub fn new(challenger: &'a mut C, shape: SkipOpeningShape) -> Self {
+        let separator = shape.domain_separator::<F, EF>();
+        let state = ProverState::new(challenger, &separator);
+        Self {
+            state,
+            shape,
+            _ef: PhantomData,
+        }
+    }
+
+    /// Draw the challenge that separates the committed polynomials.
+    ///
+    /// A single-polynomial run has nothing to separate, so it draws nothing and batches by one.
+    pub fn batching_challenge(&mut self) -> EF {
+        if self.shape.num_polynomials <= 1 {
+            return EF::ONE;
+        }
+        self.state
+            .challenge_extension::<F, EF, FieldToFieldCodec<F>>(OPENING_BATCHING)
+            .into_inner()
+    }
+
+    /// Lend the sponge to the reduction's sumcheck, bracketed as a sub-protocol.
+    pub fn sumcheck<R>(&mut self, run: impl FnOnce(&mut C) -> R) -> R {
+        self.state
+            .begin_protocol::<OpeningSumcheck>(OPENING_SUMCHECK);
+        let output = run(self.state.challenger_mut());
+        self.state.end_protocol::<OpeningSumcheck>(OPENING_SUMCHECK);
+        output
+    }
+
+    /// Close the transcript once every described step has been played.
+    ///
+    /// # Panics
+    ///
+    /// When fewer steps were played than the run was described with.
+    pub fn finish(self) {
+        assert!(
+            self.state.finalize().is_empty(),
+            "the opening reduction carries every value in its own proof",
+        );
+    }
+}
+
+/// Verifier-side transcript of one opening reduction.
+///
+/// Mirrors the prover side call for call, over the same description.
+pub struct SkipOpeningVerifierTranscript<'a, C, F: TranscriptField, EF> {
+    /// Driver walking the description and holding the borrowed sponge.
+    state: VerifierState<'static, &'a mut C, Alphabet<F>>,
+    /// The numbers this run was described with.
+    shape: SkipOpeningShape,
+    /// Marker for the extension field the challenge carries.
+    _ef: PhantomData<EF>,
+}
+
+impl<'a, C, F, EF> SkipOpeningVerifierTranscript<'a, C, F, EF>
+where
+    F: TranscriptField,
+    EF: ExtensionField<F>,
+    C: CanObserve<F> + CanSample<F> + GrindingChallenger<Witness = F>,
+{
+    /// Seed the transcript from the shape both sides agreed on.
+    pub fn new(challenger: &'a mut C, shape: SkipOpeningShape) -> Self {
+        let separator = shape.domain_separator::<F, EF>();
+        let state = VerifierState::new(challenger, &separator, &[]);
+        Self {
+            state,
+            shape,
+            _ef: PhantomData,
+        }
+    }
+
+    /// Draw the same batching challenge the prover saw.
+    pub fn batching_challenge(&mut self) -> EF {
+        if self.shape.num_polynomials <= 1 {
+            return EF::ONE;
+        }
+        self.state
+            .challenge_extension::<F, EF, FieldToFieldCodec<F>>(OPENING_BATCHING)
+            .into_inner()
+    }
+
+    /// Lend the sponge to the reduction's sumcheck, bracketed as a sub-protocol.
+    ///
+    /// A delegated rejection releases the driver.
+    ///
+    /// Without that, dropping this one after a malformed proof panics.
+    ///
+    /// # Errors
+    ///
+    /// Returns whatever the delegated run rejected with.
+    pub fn sumcheck<T, E>(&mut self, run: impl FnOnce(&mut C) -> Result<T, E>) -> Result<T, E> {
+        self.state
+            .begin_protocol::<OpeningSumcheck>(OPENING_SUMCHECK);
+        let output = run(self.state.challenger_mut());
+
+        if output.is_err() {
+            self.state.abort();
+            return output;
+        }
+
+        self.state.end_protocol::<OpeningSumcheck>(OPENING_SUMCHECK);
+        output
+    }
+
+    /// Release the completeness check after a rejection outside this driver.
+    pub fn abort(&mut self) {
+        self.state.abort();
+    }
+
+    /// Close the transcript once every described step has been played.
+    ///
+    /// # Panics
+    ///
+    /// When fewer steps were played than the run was described with.
+    pub fn finish(self) {
+        self.state
+            .finalize()
+            .expect("the opening reduction reads an empty wire");
+    }
+}
 
 /// Sponge alphabet of a challenger that speaks the base field natively.
 type Alphabet<F> = FieldUnit<F>;
