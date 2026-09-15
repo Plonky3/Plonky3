@@ -14,10 +14,10 @@ use rand::{RngExt, SeedableRng};
 /// The subspace the skip round runs over lives in a byte field.
 type F = BinaryField8;
 
-/// Challenges and every value the rounds carry live in the 128-bit field above it.
+/// Challenges and the values the rounds carry live in the field above it.
 type EF = BinaryField128;
 
-/// Keccak-backed Fiat-Shamir, the same instantiation the binary sumcheck tests use.
+/// Keccak-backed Fiat-Shamir, as the binary sumcheck tests instantiate it.
 type Challenger = BinaryChallenger<EF, HashChallenger<u8, Keccak256Hash, 32>>;
 
 /// Variables the skip round binds in one go.
@@ -63,8 +63,7 @@ impl Witness {
     /// One operand read as a multilinear over the whole hypercube.
     ///
     /// This stands in for a commitment opening.
-    ///
-    /// A real verifier would read these from the commitment, never from the witness.
+    /// A real verifier reads these from the commitment, never the witness.
     fn multilinear(&self, operand: usize) -> Poly<EF> {
         let packed = &self.operands[operand];
         Poly::new(
@@ -94,7 +93,7 @@ fn fixture(seed: u64, pow_bits: usize) -> (BinaryZerocheck<F, Conjunction>, Witn
 
 /// Verify a proof and discharge its claim the way a commitment would.
 ///
-/// Both halves report, so a test can tell a refused proof from a claim no opening answers.
+/// Both halves report, so a test tells a refused proof from a bad claim.
 fn verify_and_discharge(
     check: &BinaryZerocheck<F, Conjunction>,
     witness: &Witness,
@@ -104,9 +103,7 @@ fn verify_and_discharge(
     let claim = check.verify::<EF, _>(proof, LOG_HEIGHT, &mut challenger)?;
 
     // The commitment would open each operand at the claimed point.
-    //
-    // The claim owns the recombination, so a caller cannot batch them differently.
-    //
+    // The claim owns the recombination, so a caller cannot batch differently.
     // Nor can a caller silently leave the comparison out.
     let openings = (0..3)
         .map(|operand| witness.multilinear(operand).eval_base(&claim.point))
@@ -119,10 +116,9 @@ fn verify_and_discharge(
 fn a_satisfied_constraint_ends_on_a_point_the_commitment_confirms() {
     // Fixture state: 10 variables, 6 skipped in one round, 4 residual rounds.
     //
-    //     packed witness -> skip round -> residual rounds -> opening reduction -> point
+    //     packed witness -> skip -> residual rounds -> opening -> point
     //
-    // Invariant: the operands really take the claimed value at the point the run ends on.
-    //
+    // Invariant: the operands take the claimed value where the run ends.
     // That is the whole chain closing.
     let (check, witness) = fixture(0x21C, 0);
     let mut challenger = fresh_challenger();
@@ -131,7 +127,7 @@ fn a_satisfied_constraint_ends_on_a_point_the_commitment_confirms() {
 
     verify_and_discharge(&check, &witness, &proof).unwrap();
 
-    // Both sides reach the same point and the same value, with nothing passed between them.
+    // Both sides reach the same point and value, with nothing passed between.
     let mut challenger = fresh_challenger();
     let verifier_claim = check
         .verify::<EF, _>(&proof, LOG_HEIGHT, &mut challenger)
@@ -143,7 +139,7 @@ fn a_satisfied_constraint_ends_on_a_point_the_commitment_confirms() {
 
 #[test]
 fn the_claimed_point_covers_every_variable() {
-    // The opening point has to name the whole hypercube, residual variables first.
+    // The opening point must name the whole cube, residual variables first.
     //
     //     4 residual + 6 skipped = 10
     //
@@ -169,26 +165,22 @@ fn grinding_guards_every_challenge_end_to_end() {
 #[test]
 fn a_broken_constraint_is_rejected() {
     // Mutation: flip one bit of the claimed conjunction.
-    //
     // The round polynomial stops vanishing on the skipped subspace.
-    //
-    // The verifier's reconstruction still does, so the two disagree at the challenge.
+    // The verifier's reconstruction still does, so the two disagree.
     let (check, mut witness) = fixture(0xBAD, 0);
     witness.operands[2][0] ^= 1;
 
     let mut challenger = fresh_challenger();
     let (proof, _) = check.prove::<EF, _>(&witness.packed(), LOG_HEIGHT, &mut challenger);
 
-    // Either the replay refuses it, or the claim does not match what the operands open to.
+    // Either the replay refuses it, or the claim misses what the operands open.
     assert!(verify_and_discharge(&check, &witness, &proof).is_err());
 }
 
 #[test]
 fn tampered_operand_blends_are_rejected() {
     // Mutation: change one blended value the proof carries.
-    //
-    // These cross the wire because the residual rounds leave one equation in three unknowns.
-    //
+    // They cross the wire: the residual rounds leave one equation in three.
     // That equation is what checks them, rather than the binding alone.
     let (check, witness) = fixture(0xB1E, 0);
     let mut challenger = fresh_challenger();
@@ -204,8 +196,7 @@ fn tampered_operand_blends_are_rejected() {
 #[test]
 fn a_tampered_round_message_is_rejected() {
     // The message is bound before the skip challenge is drawn.
-    //
-    // A tamper moves the challenge, and the proof no longer answers what gets asked.
+    // A tamper moves the challenge, and the proof answers the wrong question.
     let (check, witness) = fixture(0x7A3, 0);
     let mut challenger = fresh_challenger();
     let (mut proof, _) = check.prove::<EF, _>(&witness.packed(), LOG_HEIGHT, &mut challenger);
@@ -217,8 +208,7 @@ fn a_tampered_round_message_is_rejected() {
 #[test]
 fn a_message_of_the_wrong_width_is_rejected() {
     // The described step declares its width.
-    //
-    // The replay therefore refuses the message rather than reading a shorter polynomial.
+    // The replay refuses the message rather than reading a shorter one.
     let (check, witness) = fixture(0x9E1, 0);
     let mut challenger = fresh_challenger();
     let (mut proof, _) = check.prove::<EF, _>(&witness.packed(), LOG_HEIGHT, &mut challenger);
@@ -230,9 +220,7 @@ fn a_message_of_the_wrong_width_is_rejected() {
 #[test]
 fn a_malformed_residual_proof_is_rejected_rather_than_panicking() {
     // The transcript driver panics on drop if it is left unfinalized.
-    //
     // That check is live in release builds whenever panics unwind.
-    //
     // Each mutation fails a delegated replay at a different point.
     //
     // Every one of them has to come back as a rejection.
@@ -271,7 +259,6 @@ fn a_malformed_residual_proof_is_rejected_rather_than_panicking() {
 #[test]
 fn a_proof_replayed_under_a_different_height_is_rejected() {
     // The height reaches the seed through the residual width.
-    //
     // Both sides therefore diverge from the very first draw.
     let (check, witness) = fixture(0x4B2, 0);
     let mut challenger = fresh_challenger();
@@ -284,13 +271,11 @@ fn a_proof_replayed_under_a_different_height_is_rejected() {
 
 #[test]
 fn the_prover_cannot_choose_the_zerocheck_point() {
-    // The point is drawn inside the reduction, from the transcript, after the commitment.
-    //
+    // The point is drawn in the reduction, from the transcript, after commit.
     // Nothing in the proof carries it, so there is no field a prover could set.
-    //
     // That is the obligation the skip round used to leave to its caller.
     //
-    // Two runs on the same witness under the same transcript therefore agree exactly.
+    // Two runs on one witness under one transcript therefore agree exactly.
     let (check, witness) = fixture(0x90, 0);
 
     let mut first = fresh_challenger();
@@ -301,7 +286,7 @@ fn the_prover_cannot_choose_the_zerocheck_point() {
     assert_eq!(one.point, two.point);
     assert_eq!(one.value, two.value);
 
-    // And a different commitment absorbed first moves the point, so it is genuinely bound to it.
+    // A different commitment absorbed first moves it, so it is bound to one.
     let mut third = fresh_challenger();
     third.observe(EF::from_repr(7));
     let (_, other) = check.prove::<EF, _>(&witness.packed(), LOG_HEIGHT, &mut third);
