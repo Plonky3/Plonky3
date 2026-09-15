@@ -44,8 +44,28 @@ pub fn batch_multiplicative_inverse<F: Field>(x: &[F]) -> Vec<F> {
     // Pre-allocate the output: each Rayon task writes a disjoint sub-slice.
     let mut result = F::zero_vec(x.len());
 
+    // One item is a whole chunk of Montgomery steps, not a chunk of reads.
+    //
+    // Per element the three multiplies and the amortized inversion dominate the move.
+    //
+    // So the chunk is priced by the time it takes, in multiples of what it would cost to read.
+    //
+    // A wider field is charged more because its multiply costs more, not because it moves more.
+    // Measured on Zen 5 with `-C target-cpu=native`, per element, as a multiple of one read:
+    //
+    //     BabyBear             4 B   2.3 ns   5.8 reads
+    //     BabyBear quartic    16 B   8.4 ns   5.2
+    //     BabyBear quintic    20 B  15.9 ns   7.9
+    //     Goldilocks           8 B   1.5 ns   1.8
+    //     Goldilocks quadratic 16 B   8.1 ns   5.1
+    //     Ghash128            16 B   6.7 ns   4.2
+    //
+    // Five reads sits inside a factor of 1.6 of every one of them.
+    // A build without the wide carryless multiply puts the binary field at 44 reads instead,
+    // so the residual error is an undercharge, which only ever leaves a loop whole.
     x.par_chunks(CHUNK_SIZE)
         .zip(result.par_chunks_mut(CHUNK_SIZE))
+        .with_min_task_bytes(5 * CHUNK_SIZE * size_of::<F>())
         .for_each(|(x_chunk, result_chunk)| {
             // Phase 1 — split the chunk:
             //   - packed: 4-aligned prefix viewed as 4-lane arrays,

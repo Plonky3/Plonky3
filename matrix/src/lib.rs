@@ -455,6 +455,14 @@ pub trait Matrix<T: Send + Sync + Clone>: Send + Sync {
         // Avoid multi-worker scheduling for modest products while bounding both input
         // traffic and per-call extension-coefficient work. Larger products, serial
         // builds, and one-worker pools retain the existing reduction.
+        //
+        // The task-size model cannot place this gate, since the two arms are different
+        // kernels rather than one kernel cut two ways.
+        //
+        // The serial arm defers modular reductions across rows; the reduction below cannot.
+        //
+        // So on Zen 5 at 32 workers the serial arm stays ahead to between 80 and 340 us of
+        // priced work, where the model asks for 20.
         const SERIAL_PACKED_ELEMS: usize = 4096;
         const SERIAL_PACKED_COEFF_OPS: usize = 512;
         if T::Packing::WIDTH > 1
@@ -515,8 +523,16 @@ pub trait Matrix<T: Send + Sync + Clone>: Send + Sync {
         // Split the rows into a bounded number of contiguous chunks; each task runs the
         // field's columnwise kernel serially over its chunk (letting it defer modular
         // reductions across rows) and the per-task accumulators are summed at the end.
-        let num_chunks = (4 * current_num_threads()).clamp(1, height.max(1));
-        let chunk_rows = height.div_ceil(num_chunks);
+        //
+        // The floor collapses the split to a single chunk on a small matrix.
+        //
+        // Below that size the work is not worth handing to another worker.
+        let row_bytes = columnwise_row_bytes::<T, EF>(self.width(), N);
+        // The floor is never zero, so the chunk length is always usable as a divisor.
+        let chunk_rows = height
+            .div_ceil((4 * current_num_threads()).clamp(1, height.max(1)))
+            .max(min_task_len(height, row_bytes));
+        let num_chunks = height.div_ceil(chunk_rows);
 
         let packed_results: Vec<EF::ExtensionPacking> =
             (0..num_chunks).into_par_iter().par_fold_reduce(
@@ -592,6 +608,54 @@ pub trait Matrix<T: Send + Sync + Clone>: Send + Sync {
                 EF::ExtensionPacking::to_ext_iter([packed_result]).sum()
             })
     }
+}
+
+/// Extension widths one [`COLUMNWISE_MAC_LANES`]-column multiply-accumulate step is charged.
+///
+/// Measured on Zen 5 at four weight vectors, [`COLUMNWISE_MAC_LANES`] columns per step:
+///
+/// ```text
+///     columns   real bytes per row   widths per step
+///          16                  602               7.4
+///          64                 2235               7.5
+///         256                 8716               7.4
+///         512                17424               7.5
+/// ```
+const COLUMNWISE_MAC_WIDTHS: usize = 7;
+
+/// Columns one packed step carried on the host the figure above was measured on.
+///
+/// Seven widths over sixteen lanes is 0.74 ns per column.
+///
+/// A four-lane NEON host reproduces that per column, not per packed step.
+///
+/// So the arithmetic is charged per column; per packed element it would scale with the
+/// host's lane count and overcharge that build by about 3.5x.
+const COLUMNWISE_MAC_LANES: usize = 16;
+
+/// Bytes one matrix row moves when weighted into `weight_vectors` accumulators.
+///
+/// ```text
+///     traffic : one packed row, plus the weights it scales
+///     arith   : one multiply-accumulate per column, per weight vector
+/// ```
+///
+/// Pricing the row by traffic alone puts the gate seven times too high, leaving a
+/// compute-bound matrix serial: 64 columns by 512 rows costs 114 us against 19 us split.
+const fn columnwise_row_bytes<T, EF>(width: usize, weight_vectors: usize) -> usize
+where
+    T: Field,
+    EF: ExtensionField<T>,
+{
+    // The kernel walks whole packed words, so padding lanes are multiplied like any other.
+    //
+    // That rounding is the only place the host's lane count enters the price.
+    let columns = width.div_ceil(T::Packing::WIDTH) * T::Packing::WIDTH;
+
+    columns * size_of::<T>()
+        + weight_vectors * size_of::<EF>()
+        + (COLUMNWISE_MAC_WIDTHS * weight_vectors * columns * size_of::<EF>())
+            .div_ceil(COLUMNWISE_MAC_LANES)
 }
 
 #[inline(never)]
