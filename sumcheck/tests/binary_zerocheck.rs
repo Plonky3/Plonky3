@@ -94,23 +94,25 @@ fn fixture(seed: u64, pow_bits: usize) -> (BinaryZerocheck<F, Conjunction>, Witn
 
 /// Verify a proof and discharge its claim the way a commitment would.
 ///
-/// Returns the verifier's outcome, so a test can tell a rejection from a bad claim.
+/// Both halves report, so a test can tell a refused proof from a claim no opening answers.
 fn verify_and_discharge(
     check: &BinaryZerocheck<F, Conjunction>,
     witness: &Witness,
     proof: &ZerocheckProof<EF>,
-) -> Result<bool, ZerocheckError> {
+) -> Result<(), ZerocheckError> {
     let mut challenger = fresh_challenger();
     let claim = check.verify::<EF, _>(proof, LOG_HEIGHT, &mut challenger)?;
 
     // The commitment would open each operand at the claimed point.
     //
-    // The claim itself owns the recombination, so a caller cannot batch them differently.
+    // The claim owns the recombination, so a caller cannot batch them differently.
+    //
+    // Nor can a caller silently leave the comparison out.
     let openings = (0..3)
         .map(|operand| witness.multilinear(operand).eval_base(&claim.point))
         .collect::<Vec<_>>();
 
-    Ok(claim.is_answered_by(&openings))
+    claim.discharge(&openings)
 }
 
 #[test]
@@ -127,7 +129,7 @@ fn a_satisfied_constraint_ends_on_a_point_the_commitment_confirms() {
     let (proof, prover_claim) =
         check.prove::<EF, _>(&witness.packed(), LOG_HEIGHT, &mut challenger);
 
-    assert!(verify_and_discharge(&check, &witness, &proof).unwrap());
+    verify_and_discharge(&check, &witness, &proof).unwrap();
 
     // Both sides reach the same point and the same value, with nothing passed between them.
     let mut challenger = fresh_challenger();
@@ -161,7 +163,7 @@ fn grinding_guards_every_challenge_end_to_end() {
     let (proof, _) = check.prove::<EF, _>(&witness.packed(), LOG_HEIGHT, &mut challenger);
 
     assert!(proof.skip_pow.is_some());
-    assert!(verify_and_discharge(&check, &witness, &proof).unwrap());
+    verify_and_discharge(&check, &witness, &proof).unwrap();
 }
 
 #[test]
@@ -178,8 +180,7 @@ fn a_broken_constraint_is_rejected() {
     let (proof, _) = check.prove::<EF, _>(&witness.packed(), LOG_HEIGHT, &mut challenger);
 
     // Either the replay refuses it, or the claim does not match what the operands open to.
-    let outcome = verify_and_discharge(&check, &witness, &proof);
-    assert!(outcome.is_err() || !outcome.unwrap());
+    assert!(verify_and_discharge(&check, &witness, &proof).is_err());
 }
 
 #[test]
@@ -187,7 +188,8 @@ fn tampered_operand_blends_are_rejected() {
     // Mutation: change one blended value the proof carries.
     //
     // These cross the wire because the residual rounds leave one equation in three unknowns.
-    // They are therefore checked against that equation rather than trusted.
+    //
+    // That equation is what checks them, rather than the binding alone.
     let (check, witness) = fixture(0xB1E, 0);
     let mut challenger = fresh_challenger();
     let (mut proof, _) = check.prove::<EF, _>(&witness.packed(), LOG_HEIGHT, &mut challenger);
@@ -195,7 +197,7 @@ fn tampered_operand_blends_are_rejected() {
     proof.blends[0] += EF::ONE;
     assert_eq!(
         verify_and_discharge(&check, &witness, &proof).unwrap_err(),
-        ZerocheckError::ResidualClaimMismatch
+        ZerocheckError::BlendConstraintMismatch
     );
 }
 
@@ -209,8 +211,7 @@ fn a_tampered_round_message_is_rejected() {
     let (mut proof, _) = check.prove::<EF, _>(&witness.packed(), LOG_HEIGHT, &mut challenger);
 
     proof.message[7] += EF::ONE;
-    let outcome = verify_and_discharge(&check, &witness, &proof);
-    assert!(outcome.is_err() || !outcome.unwrap());
+    assert!(verify_and_discharge(&check, &witness, &proof).is_err());
 }
 
 #[test]
@@ -260,8 +261,10 @@ fn a_malformed_residual_proof_is_rejected_rather_than_panicking() {
     for (what, mutate) in mutations {
         let mut proof = honest.clone();
         mutate(&mut proof);
-        let outcome = verify_and_discharge(&check, &witness, &proof);
-        assert!(outcome.is_err() || !outcome.unwrap(), "must reject: {what}");
+        assert!(
+            verify_and_discharge(&check, &witness, &proof).is_err(),
+            "must reject: {what}"
+        );
     }
 }
 
