@@ -23,11 +23,17 @@ use p3_field::Algebra;
 ///
 /// It therefore has to be an upper bound on the total degree in the operands.
 ///
-/// Declaring it too low leaves the round polynomial unrecoverable from what is sent.
+/// Declaring it too low costs completeness, not soundness.
 ///
-/// That makes the reduction unsound.
+/// The verifier imposes vanishing on the subspace and reconstructs below the size sent.
 ///
-/// Declaring it too high only costs cosets.
+/// A broken witness therefore still leaves a nonzero difference, and is still caught.
+///
+/// What breaks is that honest proofs stop fitting in what is sent, and are rejected.
+///
+/// Declaring it too high costs cosets.
+///
+/// It also widens the domain the verifier reconstructs on, which the budget charges for.
 pub trait Composition<F> {
     /// Number of operands the constraint reads.
     fn arity(&self) -> usize;
@@ -53,7 +59,11 @@ pub trait Composition<F> {
 ///     a & b = c        on bits,  a * b = c
 /// ```
 ///
-/// Characteristic two makes subtraction addition, so the constraint is read as `a*b + c`.
+/// The constraint is read as the difference `a*b - c`.
+///
+/// Written that way it says the same thing in any characteristic.
+///
+/// In characteristic two that is also `a*b + c`.
 ///
 /// This is the shape a batch of Boolean circuits reduces to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -71,15 +81,51 @@ impl<F> Composition<F> for Conjunction {
     fn eval<A: Algebra<F> + Copy>(&self, values: &[A]) -> A {
         assert_eq!(values.len(), 3, "the conjunction reads three operands");
 
-        // In characteristic two the difference and the sum coincide.
-        values[0] * values[1] + values[2]
+        // Written as a difference, so the constraint means the same in any characteristic.
+        values[0] * values[1] - values[2]
+    }
+}
+
+/// A cubic constraint over three operands.
+///
+/// # Overview
+///
+/// Three operands, asserting that the third is the square of the first times the second:
+///
+/// ```text
+///     a^2 * b = c
+/// ```
+///
+/// Total degree three, so it needs one transmitted dimension more than the conjunction.
+///
+/// It exists to exercise the generalisation.
+///
+/// A round sized for a quadratic constraint cannot carry this one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct SquareProduct;
+
+impl<F> Composition<F> for SquareProduct {
+    fn arity(&self) -> usize {
+        3
+    }
+
+    fn degree(&self) -> usize {
+        3
+    }
+
+    fn eval<A: Algebra<F> + Copy>(&self, values: &[A]) -> A {
+        assert_eq!(values.len(), 3, "the cubic constraint reads three operands");
+
+        values[0] * values[0] * values[1] - values[2]
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use p3_binary_field::{BinaryField8, BinaryField128, TowerLevel};
+    use p3_binary_field::{BinaryField8, BinaryField128};
     use p3_field::PrimeCharacteristicRing;
+    use rand::rngs::SmallRng;
+    use rand::{RngExt, SeedableRng};
 
     use super::*;
 
@@ -124,13 +170,42 @@ mod tests {
         // Embedding then reading must agree with reading then embedding.
         //
         // Otherwise the message and the residual rounds prove different things.
-        let small = [1u8, 1, 0].map(F::from_repr);
-        let large = small.map(BinaryField128::from);
+        //
+        // The operands are not bits, because the transmitted points carry extended rows.
+        //
+        // The product there is a real subfield multiplication rather than an and.
+        let mut rng = SmallRng::seed_from_u64(0xCA2);
+        for _ in 0..32 {
+            let small: [F; 3] = core::array::from_fn(|_| rng.random());
+            let large = small.map(BinaryField128::from);
 
-        assert_eq!(
-            BinaryField128::from(in_alphabet(&small)),
-            in_extension(&large)
-        );
+            assert_eq!(
+                BinaryField128::from(in_alphabet(&small)),
+                in_extension(&large)
+            );
+            assert_eq!(
+                BinaryField128::from(Composition::<F>::eval(&SquareProduct, &small)),
+                Composition::<F>::eval(&SquareProduct, &large)
+            );
+        }
+    }
+
+    #[test]
+    fn the_cubic_constraint_vanishes_exactly_where_it_should() {
+        // Fixture state: random subfield triples, with the satisfying third operand.
+        //
+        //     a^2 * b - c  ->  zero exactly when c = a^2 * b
+        let mut rng = SmallRng::seed_from_u64(0xCB1C);
+        for _ in 0..32 {
+            let (a, b) = (rng.random::<F>(), rng.random::<F>());
+            let c = a * a * b;
+
+            assert_eq!(Composition::<F>::eval(&SquareProduct, &[a, b, c]), F::ZERO);
+            assert_ne!(
+                Composition::<F>::eval(&SquareProduct, &[a, b, c + F::ONE]),
+                F::ZERO
+            );
+        }
     }
 
     #[test]
@@ -140,5 +215,7 @@ mod tests {
         // Both are read by the round rather than inferred, so they are pinned here.
         assert_eq!(Composition::<F>::arity(&Conjunction), 3);
         assert_eq!(Composition::<F>::degree(&Conjunction), 2);
+        assert_eq!(Composition::<F>::arity(&SquareProduct), 3);
+        assert_eq!(Composition::<F>::degree(&SquareProduct), 3);
     }
 }

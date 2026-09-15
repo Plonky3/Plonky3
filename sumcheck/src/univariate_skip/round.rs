@@ -236,6 +236,16 @@ impl<F: TowerLevel> SkipRound<F> {
         let arity = composition.arity();
         assert_eq!(operands.len(), arity, "one packed witness per operand");
 
+        // The domain was sized for some degree, and the constraint declares its own.
+        //
+        // A constraint the domain cannot carry is unrecoverable from what is sent.
+        //
+        // Honest proofs would then be rejected.
+        assert!(
+            self.domain.admits_degree(composition.degree()),
+            "the transmitted domain must carry the constraint's degree"
+        );
+
         let stride = self.num_transmitted();
         let row_bytes = self.row_bytes();
         for rows in operands {
@@ -248,7 +258,9 @@ impl<F: TowerLevel> SkipRound<F> {
 
         // Rows are independent contributions to the same sum.
         //
-        // Each thread carries its own message accumulator and its own row scratch.
+        // Each split task carries its own message accumulator and its own row scratch.
+        //
+        // Scratch therefore scales with the split count, not with the rows.
         //
         // Nothing of row-by-transmitted size is ever allocated.
         (0..eq.len())
@@ -319,7 +331,7 @@ impl<F: TowerLevel> SkipRound<F> {
 
         // Rows are independent contributions to the same sum.
         //
-        // Each thread keeps a private accumulator, and the partials are added at the end.
+        // Each split task keeps a private accumulator, and the partials are added at the end.
         composed
             .par_chunks_exact(stride)
             .zip(eq.par_iter())
@@ -638,7 +650,7 @@ mod tests {
     use rand::{RngExt, SeedableRng};
 
     use super::*;
-    use crate::univariate_skip::Conjunction;
+    use crate::univariate_skip::{Conjunction, SquareProduct};
 
     /// The subspace domain lives in a byte field, and challenges in the 128-bit field above it.
     type F = BinaryField8;
@@ -723,27 +735,104 @@ mod tests {
         //     materialised: rows * transmitted subfield values per operand, then weighed
         //     streamed:     one row's scratch per thread, weighed as it goes
         //
-        // Fixture state: 2^5 rows of 2^6 bits, an odd-sized batch of three operands.
+        // Fixture state: rows of 2^6 bits, three operands, several row counts.
+        //
+        // One count is no power of two, so the parallel split is uneven.
+        //
+        //     1, 32, 37       the last leaves a short trailing task
+        //
+        // The weights are drawn rather than tabulated.
+        //
+        // The identity is that the two paths agree, not that the weights are an eq table.
         let mut rng = SmallRng::seed_from_u64(0x57EA);
         let round = SkipRound::<F>::new(LOG_SKIP, 2).unwrap();
-        let num_rows = 1 << 5;
-        let witness = random_witness(&mut rng, num_rows, round.row_bytes());
 
-        let r = (0..5).map(|_| rng.random::<EF>()).collect::<Vec<_>>();
-        let eq = Poly::new_from_point(&r, EF::ONE);
+        for num_rows in [1usize, 32, 37] {
+            let witness = random_witness(&mut rng, num_rows, round.row_bytes());
+            let eq = (0..num_rows)
+                .map(|_| rng.random::<EF>())
+                .collect::<Vec<_>>();
 
-        let materialised = {
-            let composed = compose(&round, &witness, num_rows);
-            round.round_message::<EF>(&composed, eq.as_slice())
-        };
+            let materialised = {
+                let composed = compose(&round, &witness, num_rows);
+                round.round_message::<EF>(&composed, &eq)
+            };
 
-        let streamed = round.stream_round_message::<EF, _>(
+            let streamed = round.stream_round_message::<EF, _>(
+                &[&witness.a, &witness.b, &witness.c],
+                &eq,
+                &Conjunction,
+            );
+
+            assert_eq!(streamed, materialised, "{num_rows} rows");
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "must carry the constraint's degree")]
+    fn a_constraint_the_domain_cannot_carry_is_refused() {
+        // A round sized for a quadratic constraint has one transmitted dimension.
+        //
+        // A cubic constraint needs two dimensions, so its round polynomial would be lost.
+        //
+        // Honest proofs would then be rejected.
+        //
+        // The declared degree is checked against the domain rather than assumed to match.
+        let mut rng = SmallRng::seed_from_u64(0xDE9);
+        let round = SkipRound::<F>::new(LOG_SKIP, 2).unwrap();
+        let witness = random_witness(&mut rng, 4, round.row_bytes());
+        let eq = alloc::vec![EF::ONE; 4];
+
+        let _ = round.stream_round_message::<EF, _>(
             &[&witness.a, &witness.b, &witness.c],
-            eq.as_slice(),
-            &Conjunction,
+            &eq,
+            &SquareProduct,
         );
+    }
 
-        assert_eq!(streamed, materialised);
+    #[test]
+    fn a_cubic_constraint_streams_on_a_domain_sized_for_it() {
+        // The same identity as above, on a round wide enough for a degree-three constraint.
+        //
+        // Every other test reads the conjunction.
+        //
+        // This is what exercises the generalisation rather than one instance of it.
+        let mut rng = SmallRng::seed_from_u64(0xCB1);
+        let round = SkipRound::<F>::new(LOG_SKIP, 3).unwrap();
+        assert_eq!(round.domain().log_extended(), LOG_SKIP + 2);
+
+        for num_rows in [1usize, 37] {
+            let witness = random_witness(&mut rng, num_rows, round.row_bytes());
+            let eq = (0..num_rows)
+                .map(|_| rng.random::<EF>())
+                .collect::<Vec<_>>();
+
+            // The reference extends every operand in the subfield, then composes, then weighs.
+            let stride = round.num_transmitted();
+            let extended = [&witness.a, &witness.b, &witness.c].map(|packed| {
+                let mut out = F::zero_vec(num_rows * stride);
+                round.extend_rows(packed, &mut out);
+                out
+            });
+            let composed = (0..num_rows * stride)
+                .map(|index| {
+                    Composition::<F>::eval(
+                        &SquareProduct,
+                        &[extended[0][index], extended[1][index], extended[2][index]],
+                    )
+                })
+                .collect::<Vec<_>>();
+
+            assert_eq!(
+                round.stream_round_message::<EF, _>(
+                    &[&witness.a, &witness.b, &witness.c],
+                    &eq,
+                    &SquareProduct,
+                ),
+                round.round_message::<EF>(&composed, &eq),
+                "{num_rows} rows"
+            );
+        }
     }
 
     #[test]
