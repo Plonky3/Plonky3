@@ -12,6 +12,8 @@ use thiserror::Error;
 use crate::VerifierInstances;
 use crate::config::{Commitment, MultiStarkConfig, PcsError};
 use crate::folder::VerifierAir;
+use crate::indexed::IndexedPlan;
+use crate::instance::BoundPoints;
 use crate::lookup::{LookupError, verify_lookup};
 use crate::opening::TableOpening;
 use crate::proof::MultiStarkProof;
@@ -48,6 +50,9 @@ where
     /// A statement-level transcript step could not be replayed.
     #[error("transcript: {0}")]
     Transcript(MultiStarkTranscriptFailure),
+    /// The batch's indexed lookups do not describe a reduction.
+    #[error("indexed lookup: {0}")]
+    IndexedLookup(p3_lookup::IndexedLookupError),
     /// An AIR names a public boundary cell or public value it does not have.
     #[error("instance {instance} boundary IO: {error}")]
     BoundaryIo {
@@ -207,9 +212,15 @@ where
         .map_err(|error| VerificationError::BoundaryIo { instance, error })?;
     }
 
+    // Indexed lookups change the described sequence, so the plan is settled first.
+    //
+    // Both sides derive it from the AIRs alone, so no proof value reaches it.
+    let indexed_plan = IndexedPlan::build::<C::Val, C::Challenge, A>(&airs, &log_heights)
+        .map_err(VerificationError::IndexedLookup)?;
+
     let mut transcript = MultiStarkVerifierTranscript::<C::Challenger, C::Val>::new(
         challenger,
-        MultiStarkShape::new::<C::Val, A>(&airs, &log_heights, pow_bits),
+        MultiStarkShape::new::<C::Val, A>(&airs, &log_heights, pow_bits, indexed_plan.is_some()),
     );
 
     // 1. Replay the reusable batched preprocessed commitment before any challenge
@@ -283,7 +294,8 @@ where
 
     // 6. Open the committed main trace tables at their suffixes of the bound point.
     // The returned values are bound to the main commitment.
-    let main_schedule = instances.main_schedule(&reduction.point);
+    let main_layout = instances.main_layout(None);
+    let main_schedule = main_layout.schedule(&BoundPoints::at(&reduction.point));
     let main_evals = match transcript.main_opening(|challenger| {
         config.pcs().verify_at(
             &proof.commitment,
@@ -303,7 +315,8 @@ where
 
     // 7. Open the preprocessed tables at their suffixes of the same bound point.
     // The owned batches are kept local so the closing check can borrow them.
-    let preprocessed_schedule = instances.preprocessed_schedule(&reduction.point);
+    let preprocessed_layout = instances.preprocessed_layout(None);
+    let preprocessed_schedule = preprocessed_layout.schedule(&BoundPoints::at(&reduction.point));
     let opened_preprocessed = transcript.preprocessed_opening(|challenger| {
         let commitment = preprocessed_commitment
             .expect("a described preprocessed commitment is checked before the replay");

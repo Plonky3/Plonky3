@@ -8,15 +8,145 @@ use alloc::vec::Vec;
 use core::ops::Deref;
 
 use p3_air::BaseAir;
+use p3_field::Field;
+use p3_lookup::TraceWindow;
 use p3_multilinear_util::point::Point;
 use p3_sumcheck::layout::Table;
 use p3_sumcheck::{OpeningBatch, OpeningProtocol, TableShape, TableSpec};
 
 use crate::config::MultiStarkConfig;
+use crate::indexed::IndexedPlan;
 pub use crate::keys::{ProvingKey, VerifyingKey, setup};
 pub use crate::proof::MultiStarkProof;
 pub use crate::prover::prove;
 pub use crate::verifier::{VerificationError, verify};
+
+/// Which point a schedule resolves one opening batch against.
+///
+/// A batch names columns, and its point is settled only when the run reaches it.
+///
+/// Naming the point rather than carrying it lets one description serve two readers.
+///
+/// The security assessment runs before any point exists, and the run itself needs them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum BatchPoint {
+    /// The point the zerocheck bound.
+    Bound,
+    /// The point the indexed reduction left its position claims at.
+    Position,
+    /// The point the indexed reduction left its table claims at.
+    Table,
+}
+
+/// The points one run reached, for a layout to resolve its batches against.
+pub(super) struct BoundPoints<'a, EF> {
+    /// Where the zerocheck landed.
+    pub(super) bound: &'a Point<EF>,
+    /// Where the indexed reduction left its position claims, when a batch asks for it.
+    pub(super) position: Option<&'a Point<EF>>,
+    /// Where the indexed reduction left its table claims, when a batch asks for it.
+    pub(super) table: Option<&'a Point<EF>>,
+}
+
+impl<'a, EF> BoundPoints<'a, EF> {
+    /// The points of a run that reached no indexed reduction.
+    pub(super) const fn at(bound: &'a Point<EF>) -> Self {
+        Self {
+            bound,
+            position: None,
+            table: None,
+        }
+    }
+
+    /// The point a batch names.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a batch names a point this run never reached.
+    const fn resolve(&self, which: BatchPoint) -> &Point<EF> {
+        match which {
+            BatchPoint::Bound => self.bound,
+            BatchPoint::Position => self
+                .position
+                .expect("a position batch needs the reduction's position point"),
+            BatchPoint::Table => self
+                .table
+                .expect("a table batch needs the reduction's table point"),
+        }
+    }
+}
+
+/// One table's committed shape, and every batch it is opened in.
+type TableBatches = (TableShape, Vec<(OpeningBatch<usize>, BatchPoint)>);
+
+/// What every committed table of one commitment opens, before the points are known.
+///
+/// The security assessment and the run must agree on this exactly.
+///
+/// An assessment covering fewer batches than the run reports a bound the proof misses.
+///
+/// So both read this one description rather than building their own.
+pub(super) struct OpeningLayout {
+    /// One entry per committed table, in commitment order.
+    tables: Vec<TableBatches>,
+}
+
+impl OpeningLayout {
+    /// Lay out one entry per committed table, tables in commitment order.
+    pub(super) fn new<I>(tables: I) -> Self
+    where
+        I: IntoIterator<Item = TableBatches>,
+    {
+        Self {
+            tables: tables.into_iter().collect(),
+        }
+    }
+
+    /// The shape agreement, which no point enters.
+    pub(super) fn protocol(&self) -> OpeningProtocol {
+        OpeningProtocol::new(
+            self.tables
+                .iter()
+                .map(|(shape, batches)| {
+                    TableSpec::new(
+                        *shape,
+                        batches.iter().map(|(batch, _)| batch.clone()).collect(),
+                    )
+                })
+                .collect(),
+        )
+    }
+
+    /// Resolve every batch against the points this run reached.
+    ///
+    /// Each table is opened at the trailing coordinates addressing its own rows.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a batch names a point this run never reached.
+    ///
+    /// Panics if a point does not cover the table it is resolved for.
+    pub(super) fn schedule<EF: Field>(&self, points: &BoundPoints<'_, EF>) -> OpeningSchedule<EF> {
+        OpeningSchedule::new(self.tables.iter().map(|(shape, batches)| {
+            let openings = batches
+                .iter()
+                .map(|(batch, which)| {
+                    let point = points.resolve(*which);
+                    let rows = shape.num_variables();
+                    assert!(
+                        point.num_variables() >= rows,
+                        "an opening point must cover the table it is taken for"
+                    );
+                    (
+                        batch.clone(),
+                        point.split_at(point.num_variables() - rows).1,
+                    )
+                })
+                .collect();
+            (*shape, openings)
+        }))
+    }
+}
 
 /// What one committed batch of tables opens, and at which point.
 ///
@@ -92,55 +222,6 @@ impl<EF> OpeningSchedule<EF> {
     /// One point per batch, in the order the scheme walks the batches.
     pub(super) fn points(&self) -> &[Point<EF>] {
         &self.points
-    }
-
-    /// Open one batch per table: every column, at that table's own point.
-    ///
-    /// This is the shape every committed table has had since before a second point existed.
-    ///
-    /// # Arguments
-    ///
-    /// - `tables`: each table's row-count logarithm, width, successor-view columns, and point.
-    pub(super) fn whole_tables<I>(tables: I) -> Self
-    where
-        I: IntoIterator<Item = (usize, usize, Vec<usize>, Point<EF>)>,
-    {
-        Self::new(
-            tables
-                .into_iter()
-                .map(|(log_height, width, next_columns, point)| {
-                    (
-                        TableShape::new(log_height, width),
-                        alloc::vec![(Self::whole_table_batch(width, next_columns), point)],
-                    )
-                }),
-        )
-    }
-
-    /// The shape agreement of a whole-table opening, before any point is bound.
-    ///
-    /// Security assessment runs ahead of the proof and reads the shapes alone.
-    ///
-    /// It sits here so the two builders cannot disagree on what a table opens.
-    ///
-    /// # Arguments
-    ///
-    /// - `tables`: each table's row-count logarithm, width, and successor-view columns.
-    pub(super) fn whole_table_protocol<I>(tables: I) -> OpeningProtocol
-    where
-        I: IntoIterator<Item = (usize, usize, Vec<usize>)>,
-    {
-        OpeningProtocol::new(
-            tables
-                .into_iter()
-                .map(|(log_height, width, next_columns)| {
-                    TableSpec::new(
-                        TableShape::new(log_height, width),
-                        alloc::vec![Self::whole_table_batch(width, next_columns)],
-                    )
-                })
-                .collect(),
-        )
     }
 
     /// The batch reading a table's whole width, plus its successor-view columns.
@@ -477,79 +558,123 @@ where
     }
 
     /// Shape agreement for the main trace opening, without the points.
-    pub(super) fn opening_protocol(&self) -> OpeningProtocol {
-        OpeningSchedule::<C::Challenge>::whole_table_protocol(
-            self.num_variables()
-                .iter()
-                .zip(self.widths().iter())
-                .zip(self.next_columns())
-                .map(|((&log_height, &width), next_columns)| (log_height, width, next_columns)),
-        )
-    }
-
-    /// Shape agreement for the preprocessed trace opening, without the points.
-    pub(super) fn preprocessed_opening_protocol(&self) -> OpeningProtocol {
-        OpeningSchedule::<C::Challenge>::whole_table_protocol(
-            self.iter()
-                .filter(|instance| instance.air.preprocessed_width() != 0)
-                .map(|instance| {
-                    (
-                        instance.num_variables,
-                        instance.air.preprocessed_width(),
-                        instance.air.preprocessed_next_row_columns(),
-                    )
-                }),
-        )
-    }
-
-    /// Schedule the main trace opening at the bound point.
+    /// What the main commitment opens, before any point is bound.
     ///
-    /// # Panics
+    /// Every table contributes its whole width at the point the zerocheck binds.
     ///
-    /// Panics if the bound point does not cover the tallest trace.
-    pub(super) fn main_schedule(
-        &self,
-        point: &Point<C::Challenge>,
-    ) -> OpeningSchedule<C::Challenge> {
-        OpeningSchedule::whole_tables(
-            self.num_variables()
-                .iter()
-                .zip(self.widths().iter())
-                .zip(self.next_columns())
-                .map(|((&log_height, &width), next_columns)| {
-                    (
-                        log_height,
-                        width,
-                        next_columns,
-                        self.trace_suffix(point, log_height),
-                    )
-                }),
-        )
+    /// A table an indexed lookup reaches contributes further batches.
+    ///
+    /// Those are taken at the points that reduction closes on.
+    ///
+    /// # Arguments
+    ///
+    /// - `indexed`: the indexed-lookup plan, when the batch declares one.
+    pub(super) fn main_layout(&self, indexed: Option<&IndexedPlan>) -> OpeningLayout {
+        let mut tables = self
+            .num_variables()
+            .iter()
+            .zip(self.widths().iter())
+            .zip(self.next_columns())
+            .map(|((&log_height, &width), next_columns)| {
+                (
+                    TableShape::new(log_height, width),
+                    alloc::vec![(
+                        OpeningSchedule::<C::Challenge>::whole_table_batch(width, next_columns),
+                        BatchPoint::Bound,
+                    )],
+                )
+            })
+            .collect::<Vec<_>>();
+
+        // The reduction closes on two points, and both land on this commitment.
+        //
+        // Both live in the main trace, so both land on this commitment.
+        if let Some(plan) = indexed {
+            for table in plan.tables() {
+                for reader in &table.readers {
+                    tables[reader.air].1.push((
+                        OpeningBatch::new(alloc::vec![reader.position], Vec::new()),
+                        BatchPoint::Position,
+                    ));
+                }
+                if table.table.window == TraceWindow::Main {
+                    tables[table.table.air].1.push((
+                        OpeningBatch::new(table.table.columns.clone(), Vec::new()),
+                        BatchPoint::Table,
+                    ));
+                }
+            }
+        }
+
+        OpeningLayout::new(tables)
     }
 
-    /// Schedule the preprocessed trace opening at the bound point.
+    /// What the preprocessed commitment opens, before any point is bound.
     ///
     /// AIRs declaring no preprocessed columns commit nothing and are skipped.
     ///
-    /// # Panics
+    /// A table an indexed lookup reads out of this window contributes one further batch.
     ///
-    /// Panics if the bound point does not cover the tallest trace.
-    pub(super) fn preprocessed_schedule(
+    /// # Arguments
+    ///
+    /// - `indexed`: the indexed-lookup plan, when the batch declares one.
+    pub(super) fn preprocessed_layout(&self, indexed: Option<&IndexedPlan>) -> OpeningLayout {
+        // Only AIRs with preprocessed columns are committed, so the two orders differ.
+        let committed = self
+            .iter()
+            .enumerate()
+            .filter(|(_, instance)| instance.air.preprocessed_width() != 0)
+            .map(|(air, _)| air)
+            .collect::<Vec<_>>();
+
+        let mut tables = committed
+            .iter()
+            .map(|&air| {
+                let instance = &self.0[air];
+                let width = instance.air.preprocessed_width();
+                (
+                    TableShape::new(instance.num_variables, width),
+                    alloc::vec![(
+                        OpeningSchedule::<C::Challenge>::whole_table_batch(
+                            width,
+                            instance.air.preprocessed_next_row_columns(),
+                        ),
+                        BatchPoint::Bound,
+                    )],
+                )
+            })
+            .collect::<Vec<_>>();
+
+        if let Some(plan) = indexed {
+            for table in plan.tables() {
+                if table.table.window != TraceWindow::Preprocessed {
+                    continue;
+                }
+                let slot = committed
+                    .iter()
+                    .position(|&air| air == table.table.air)
+                    .expect("a preprocessed table's AIR commits preprocessed columns");
+                tables[slot].1.push((
+                    OpeningBatch::new(table.table.columns.clone(), Vec::new()),
+                    BatchPoint::Table,
+                ));
+            }
+        }
+
+        OpeningLayout::new(tables)
+    }
+
+    /// Shape agreement for the main trace opening, without the points.
+    pub(super) fn opening_protocol(&self, indexed: Option<&IndexedPlan>) -> OpeningProtocol {
+        self.main_layout(indexed).protocol()
+    }
+
+    /// Shape agreement for the preprocessed trace opening, without the points.
+    pub(super) fn preprocessed_opening_protocol(
         &self,
-        point: &Point<C::Challenge>,
-    ) -> OpeningSchedule<C::Challenge> {
-        OpeningSchedule::whole_tables(
-            self.iter()
-                .filter(|instance| instance.air.preprocessed_width() != 0)
-                .map(|instance| {
-                    (
-                        instance.num_variables,
-                        instance.air.preprocessed_width(),
-                        instance.air.preprocessed_next_row_columns(),
-                        self.trace_suffix(point, instance.num_variables),
-                    )
-                }),
-        )
+        indexed: Option<&IndexedPlan>,
+    ) -> OpeningProtocol {
+        self.preprocessed_layout(indexed).protocol()
     }
 
     pub(super) fn preprocessed_next_columns(&self) -> Vec<Vec<usize>> {
@@ -557,33 +682,6 @@ where
             .filter(|instance| instance.air.preprocessed_width() != 0)
             .map(|instance| instance.air.preprocessed_next_row_columns())
             .collect()
-    }
-
-    pub(super) fn max_num_variables(&self) -> usize {
-        self.num_variables().iter().cloned().max().unwrap()
-    }
-
-    /// Cut the row coordinates of one table out of a bound point.
-    ///
-    /// The lookup reduction may add leading block-selector coordinates.
-    ///
-    /// A short table also carries fewer row coordinates than a tall one.
-    ///
-    /// Only the trailing coordinates addressing this table's rows are opened.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the bound point does not cover the tallest trace.
-    fn trace_suffix(
-        &self,
-        point: &Point<C::Challenge>,
-        num_variables: usize,
-    ) -> Point<C::Challenge> {
-        assert!(
-            point.num_variables() >= self.max_num_variables(),
-            "the bound point must cover the tallest trace"
-        );
-        point.split_at(point.num_variables() - num_variables).1
     }
 }
 
@@ -670,15 +768,48 @@ mod tests {
     }
 
     #[test]
-    fn one_batch_per_table_numbers_the_batches_like_the_tables() {
-        // The shape every committed table has today, where the two orders coincide.
-        let schedule = OpeningSchedule::whole_tables([
-            (3, 2, vec![], labelled(1)),
-            (2, 1, vec![0], labelled(2)),
-        ]);
+    fn a_layout_resolves_every_batch_against_the_point_it_names() {
+        // One table opened twice: its whole width at the bound point.
+        //
+        // Its second batch takes one column at the reduction's table point.
+        //
+        //     batch 0 -> Bound     batch 1 -> Table
+        //
+        // The layout carries the names, and the run supplies the points.
+        let layout = OpeningLayout::new(vec![(
+            TableShape::new(1, 2),
+            vec![
+                (OpeningBatch::new(vec![0, 1], Vec::new()), BatchPoint::Bound),
+                (OpeningBatch::new(vec![1], Vec::new()), BatchPoint::Table),
+            ],
+        )]);
 
-        assert_eq!(schedule.first_batch_per_table(), vec![0, 1]);
-        assert_eq!(schedule.points(), [labelled(1), labelled(2)]);
+        // The shape agreement is the same whether or not a point exists yet.
+        assert_eq!(layout.protocol().num_openings(), 2);
+
+        let bound = labelled(7);
+        let table = labelled(9);
+        let schedule = layout.schedule(&BoundPoints {
+            bound: &bound,
+            position: None,
+            table: Some(&table),
+        });
+
+        assert_eq!(schedule.points(), [bound, table]);
+        assert_eq!(schedule.first_batch_per_table(), vec![0]);
+    }
+
+    #[test]
+    #[should_panic(expected = "a table batch needs the reduction's table point")]
+    fn a_layout_cannot_resolve_a_point_the_run_never_reached() {
+        // A run with no reduction cannot answer a batch naming the reduction's point.
+        let layout = OpeningLayout::new(vec![(
+            TableShape::new(1, 1),
+            vec![(OpeningBatch::new(vec![0], Vec::new()), BatchPoint::Table)],
+        )]);
+
+        let bound = labelled(1);
+        let _ = layout.schedule(&BoundPoints::at(&bound));
     }
 
     #[test]
