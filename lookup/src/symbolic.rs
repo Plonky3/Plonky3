@@ -1,4 +1,4 @@
-//! Symbolic builder that records constraints plus bus interactions.
+//! Symbolic builder that records constraints, bus interactions and indexed declarations.
 
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -16,8 +16,9 @@ use crate::builder::{
     SymbolicLocalInteraction,
 };
 use crate::count::Count;
+use crate::indexed::{IndexedRead, IndexedTable, TraceWindow};
 
-/// Symbolic builder that captures constraints and bus interactions side by side.
+/// Symbolic builder that captures constraints, bus interactions and indexed declarations.
 #[derive(Debug)]
 pub struct InteractionSymbolicBuilder<F: Field, EF: ExtensionField<F> = F> {
     /// Wrapped constraint-only builder. All non-interaction methods forward here.
@@ -28,6 +29,10 @@ pub struct InteractionSymbolicBuilder<F: Field, EF: ExtensionField<F> = F> {
     local_interactions: Vec<SymbolicLocalInteraction<F>>,
     /// Mutually-exclusive groups pushed so far, in emission order.
     exclusive_interactions: Vec<SymbolicExclusiveInteraction<F>>,
+    /// Indexed reads pushed so far, in emission order.
+    indexed_reads: Vec<IndexedRead>,
+    /// Indexed tables pushed so far, in emission order.
+    indexed_tables: Vec<IndexedTable>,
 }
 
 impl<F: Field, EF: ExtensionField<F>> InteractionSymbolicBuilder<F, EF> {
@@ -38,6 +43,8 @@ impl<F: Field, EF: ExtensionField<F>> InteractionSymbolicBuilder<F, EF> {
             global_interactions: Vec::new(),
             local_interactions: Vec::new(),
             exclusive_interactions: Vec::new(),
+            indexed_reads: Vec::new(),
+            indexed_tables: Vec::new(),
         }
     }
 
@@ -78,6 +85,16 @@ impl<F: Field, EF: ExtensionField<F>> InteractionSymbolicBuilder<F, EF> {
     /// Mutually-exclusive interactions recorded so far, in the order they were pushed.
     pub fn exclusive_interactions(&self) -> &[SymbolicExclusiveInteraction<F>] {
         &self.exclusive_interactions
+    }
+
+    /// Indexed reads recorded so far, in the order they were pushed.
+    pub fn indexed_reads(&self) -> &[IndexedRead] {
+        &self.indexed_reads
+    }
+
+    /// Indexed tables recorded so far, in the order they were pushed.
+    pub fn indexed_tables(&self) -> &[IndexedTable] {
+        &self.indexed_tables
     }
 
     /// Symbolic base-field constraints captured by the inner builder.
@@ -240,6 +257,34 @@ impl<F: Field, EF: ExtensionField<F>> InteractionBuilder for InteractionSymbolic
             });
     }
 
+    fn push_indexed_read(
+        &mut self,
+        table: &str,
+        position: usize,
+        payload: impl IntoIterator<Item = usize>,
+    ) {
+        // Push order is preserved, since it fixes the reader order both sides walk.
+        self.indexed_reads.push(IndexedRead {
+            table: String::from(table),
+            position,
+            payload: payload.into_iter().collect(),
+        });
+    }
+
+    fn push_indexed_table(
+        &mut self,
+        name: &str,
+        window: TraceWindow,
+        columns: impl IntoIterator<Item = usize>,
+    ) {
+        // Column order is the order readers pull, so it is stored verbatim.
+        self.indexed_tables.push(IndexedTable {
+            name: String::from(name),
+            window,
+            columns: columns.into_iter().collect(),
+        });
+    }
+
     fn num_global_interactions(&self) -> usize {
         self.global_interactions.len()
     }
@@ -250,5 +295,13 @@ impl<F: Field, EF: ExtensionField<F>> InteractionBuilder for InteractionSymbolic
 
     fn num_exclusive_interactions(&self) -> usize {
         self.exclusive_interactions.len()
+    }
+
+    fn num_indexed_reads(&self) -> usize {
+        self.indexed_reads.len()
+    }
+
+    fn num_indexed_tables(&self) -> usize {
+        self.indexed_tables.len()
     }
 }
