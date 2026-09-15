@@ -15,10 +15,8 @@
 //!
 //! # Why the point is drawn here
 //!
-//! The equality point has to come after the witness is committed, and from the transcript.
-//!
+//! The equality point comes after the commitment, and from the transcript.
 //! Drawing it inside this description stops a caller drawing it early.
-//!
 //! It stops a prover choosing it at all.
 
 use alloc::vec::Vec;
@@ -82,7 +80,7 @@ pub struct ZerocheckShape {
     pub log_skip: usize,
     /// Dimension of the subspace the round polynomial is transmitted on.
     pub log_extended: usize,
-    /// Per-variable degree of the residual summand, the equality weight included.
+    /// Per-variable degree of the residual summand, equality weight included.
     pub residual_degree: usize,
     /// Number of operands the constraint reads.
     pub arity: usize,
@@ -136,7 +134,7 @@ impl ZerocheckShape {
     {
         let mut steps = Vec::with_capacity(10);
 
-        // The point comes first, so every later draw depends on where the claim is stated.
+        // The point comes first, so every later draw depends on the claim.
         steps.push(Interaction::algebra::<F, EF>(
             Hierarchy::Atomic,
             Kind::Challenge,
@@ -181,9 +179,7 @@ impl ZerocheckShape {
         ));
 
         // The residual rounds end on the constraint of the operand blends.
-        //
         // That is one equation in as many unknowns as there are operands.
-        //
         // The blends therefore cross the wire.
         //
         // They are bound before the challenge that combines them.
@@ -327,7 +323,7 @@ where
 
     /// Draw the challenge that combines the operands.
     ///
-    /// A single operand has nothing to combine, so it draws nothing and combines by one.
+    /// A single operand has nothing to combine, so it combines by one.
     pub fn opening_batching(&mut self) -> EF {
         if self.shape.arity <= 1 {
             return EF::ONE;
@@ -337,7 +333,7 @@ where
             .into_inner()
     }
 
-    /// Lend the sponge to the opening reduction's sumcheck, bracketed as a sub-protocol.
+    /// Lend the sponge to the opening sumcheck, bracketed as a sub-protocol.
     pub fn opening_sumcheck<R>(&mut self, run: impl FnOnce(&mut C) -> R) -> R {
         self.state.begin_protocol::<Opening>(OPENING_SUMCHECK);
         let output = run(self.state.challenger_mut());
@@ -403,12 +399,12 @@ where
         )
     }
 
-    /// Replay the skip round: bind the message, re-check the grind, draw the challenge.
+    /// Replay the skip round: bind the message, re-grind, draw the challenge.
     ///
     /// # Errors
     ///
     /// - The message width differs from the described one.
-    /// - Grinding is enabled and the proof carries no witness, or an invalid one.
+    /// - Grinding is enabled and the witness is missing or invalid.
     /// - Grinding is off and the proof carries a witness anyway.
     pub fn skip_round(
         &mut self,
@@ -433,8 +429,7 @@ where
                 .map_err(|_| ZerocheckTranscriptError::InvalidPowWitness)?;
         } else if witness.is_some() {
             // At zero difficulty the description has no grinding step.
-            //
-            // Ignoring a witness would leave one proof with two accepting forms.
+            // Ignoring one would give a statement two accepting proofs.
             self.state.abort();
             return Err(ZerocheckTranscriptError::UnexpectedPowWitness);
         }
@@ -448,7 +443,6 @@ where
     /// Lend the sponge to the residual sumcheck, bracketed as a sub-protocol.
     ///
     /// A delegated rejection releases the driver.
-    ///
     /// Without that, dropping this one after a malformed proof panics.
     ///
     /// # Errors
@@ -494,7 +488,7 @@ where
             .into_inner()
     }
 
-    /// Lend the sponge to the opening reduction's sumcheck, bracketed as a sub-protocol.
+    /// Lend the sponge to the opening sumcheck, bracketed as a sub-protocol.
     ///
     /// # Errors
     ///

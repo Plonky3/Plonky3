@@ -23,14 +23,13 @@ use crate::generic_degree::{GenericDegreeError, GenericDegreeProof, RoundProver}
 pub struct ZerocheckProof<EF> {
     /// The skip round's polynomial on the transmitted points.
     pub message: Vec<EF>,
-    /// The grinding witness guarding the skip challenge, when grinding is enabled.
+    /// The grinding witness guarding the skip challenge, when it is enabled.
     pub skip_pow: Option<EF>,
     /// The sumcheck over the variables the skip round did not bind.
     pub residual: GenericDegreeProof<EF, EF>,
     /// Each operand's blended value, as the residual rounds left it.
     ///
     /// The residual rounds pin only their constraint.
-    ///
     /// That is one equation in as many unknowns as there are operands.
     ///
     /// The blends cannot be recovered from it, so they are sent.
@@ -50,11 +49,11 @@ pub struct ZerocheckClaim<EF> {
     pub gamma: EF,
     /// The combined value the operands must open to.
     ///
-    /// Opening each operand at the point and recombining under the challenge must match this.
+    /// Opening each operand at the point and recombining must match this.
     pub value: EF,
     /// Number of operands the claim was batched over.
     ///
-    /// Held so discharging can refuse a batch of the wrong width rather than weighing it.
+    /// Held so discharging refuses a wrong-width batch rather than weighing it.
     pub num_operands: usize,
 }
 
@@ -63,20 +62,17 @@ impl<EF: Field> ZerocheckClaim<EF> {
     ///
     /// # Overview
     ///
-    /// This is the last step of the chain, and the one a caller holding a commitment runs:
+    /// The last step of the chain, and the one a commitment holder runs:
     ///
     /// ```text
-    ///     open every operand at the point  ->  recombine under the challenge  ->  compare
+    ///     open each operand  ->  recombine under the challenge  ->  compare
     /// ```
     ///
     /// Nothing before this ties the proof to the commitment.
-    ///
-    /// A caller that skips it has verified a zerocheck over no particular witness.
-    ///
+    /// A caller that skips it has verified a zerocheck over no witness.
     /// That is why the recombination lives here rather than in each caller.
     ///
     /// Its orientation has to match the batching the reduction proved over.
-    ///
     /// Its order has to match the operand order.
     ///
     /// # Arguments
@@ -116,20 +112,19 @@ pub enum ZerocheckError {
     /// The opening reduction's sumcheck rejected.
     #[error("opening sumcheck: {0}")]
     Opening(GenericDegreeError),
-    /// The residual sumcheck claims a sum the skip round's message does not give.
+    /// The residual sumcheck claims a sum the round message does not give.
     #[error("the residual claim does not match the round message")]
     ResidualClaimMismatch,
     /// The operand blends the proof carries do not satisfy the constraint.
     ///
     /// The residual rounds end on the equality weight times that constraint.
-    ///
     /// That is what checks the blends rather than trusting them.
     #[error("the operand blends do not satisfy the constraint")]
     BlendConstraintMismatch,
     /// The opening reduction claims a sum the residual rounds did not leave.
     #[error("the opening claim does not match the residual rounds")]
     OpeningClaimMismatch,
-    /// The commitment opened a different number of operands than the claim was batched over.
+    /// The commitment opened a different number of operands than the batch.
     #[error("the commitment opened {actual} operands, expected {expected}")]
     OpeningCountMismatch {
         /// Operands the claim was batched over.
@@ -137,13 +132,12 @@ pub enum ZerocheckError {
         /// Openings the commitment supplied.
         actual: usize,
     },
-    /// The committed openings do not recombine to the value the zerocheck claimed.
+    /// The committed openings do not recombine to the claimed value.
     #[error("the committed openings do not recombine to the claimed value")]
     OpeningsDoNotMatchClaim,
-    /// The Lagrange weight vanished at the opening point, leaving the claim undetermined.
+    /// The Lagrange weight vanished at the point, leaving the claim open.
     ///
     /// The point is drawn after the weight is fixed.
-    ///
     /// An honest run therefore reaches this with negligible probability.
     #[error("the Lagrange weight vanished at the opening point")]
     DegenerateOpening,
@@ -153,29 +147,26 @@ pub enum ZerocheckError {
 ///
 /// # Overview
 ///
-/// This owns the whole sequence, so nothing about the order is left to a caller:
+/// This owns the whole sequence, so no ordering is left to a caller:
 ///
 /// ```text
-///     draw the zerocheck point      over the kept variables, after the commitment
-///     skip round                     one message, one challenge, k variables bound
+///     draw the zerocheck point   over the kept variables, after commit
+///     skip round                 one message, one challenge, k bound
 ///     residual sumcheck              m - k ordinary rounds
 ///     opening reduction              k degree-two rounds
 ///     -> one evaluation point
 /// ```
 ///
-/// The two obligations the skip round documents are discharged here rather than described.
+/// The skip round's two obligations are discharged here, not described.
 ///
-/// - The point is drawn inside, from the transcript, so a prover cannot choose it and a caller
-///   cannot draw it before committing.
-/// - The run ends on a point a commitment opens, not on the blend the skip round leaves.
+/// - The point is drawn inside, from the transcript, so no prover chooses it.
+/// - The run ends on a point a commitment opens, not on the round's blend.
 ///
 /// # What the caller still owes
 ///
 /// The witness has to be committed before this runs.
-///
 /// Its commitment has to be absorbed into the transcript this borrows.
-///
-/// Discharging the claim at the end against that commitment is the caller's too.
+/// Discharging the closing claim against that commitment is the caller's too.
 #[derive(Debug, Clone)]
 pub struct BinaryZerocheck<F, C> {
     /// The skip round this opens with.
@@ -205,11 +196,11 @@ where
     F: p3_binary_field::TowerLevel + Send + Sync,
     C: Composition<F> + Sync,
 {
-    /// Set up a zerocheck skipping `log_skip` variables of the given constraint.
+    /// Set up a zerocheck skipping `log_skip` variables of a constraint.
     ///
     /// # Errors
     ///
-    /// Returns an error when no skip round of that shape and degree is realisable.
+    /// Returns an error when no round of that shape and degree is realisable.
     pub fn new(
         log_skip: usize,
         composition: C,
@@ -273,11 +264,11 @@ where
         let mut transcript =
             ZerocheckProverTranscript::<Challenger, EF, EF>::new(challenger, shape);
 
-        // The point is drawn here, after the commitment, so the prover never chooses it.
+        // The point is drawn here, after the commitment, never by the prover.
         let zerocheck_point = transcript.zerocheck_point(log_rows);
         let eq = Poly::new_from_point(zerocheck_point.as_slice(), EF::ONE);
 
-        // The message streams out of the packed witness, one row's scratch at a time.
+        // The message streams out of the witness, one row's scratch at a time.
         let message =
             self.round
                 .stream_round_message::<EF, _>(operands, eq.as_slice(), &self.composition);
@@ -312,10 +303,8 @@ where
         });
 
         // The residual rounds end on each operand's blended value.
-        //
         // The final value pins only their constraint.
-        //
-        // One equation in three unknowns, so the blends themselves cross the wire.
+        // One equation in three unknowns, so the blends cross the wire.
         let blends = residual_prover
             .operands
             .iter()
@@ -341,7 +330,7 @@ where
         });
         transcript.finish();
 
-        // The residual variables come first, then the ones the skip round bound.
+        // The residual variables come first, then the skipped ones.
         let point = Point::new(
             rho.as_slice()
                 .iter()
@@ -402,10 +391,8 @@ where
         let lambda = transcript.skip_round(&proof.message, proof.skip_pow)?;
 
         // The round polynomial is defined to vanish on the subspace.
-        //
         // Off it, it matches the message.
-        //
-        // Reading it at the challenge therefore needs nothing further from the prover.
+        // Reading it at the challenge needs nothing more from the prover.
         let residual_claim = match self.round.evaluate(&proof.message, lambda) {
             Ok(claim) => claim,
             Err(error) => {
@@ -429,10 +416,8 @@ where
             })
             .map_err(ZerocheckError::Residual)?;
 
-        // The residual rounds end on the equality weight times the constraint of the blends.
-        //
+        // The residual rounds end on the weight times the blend constraint.
         // The verifier knows the weight and the constraint.
-        //
         // The blends the proof carries are therefore checked here, not trusted.
         if let Err(error) = transcript.operand_blends(&proof.blends) {
             return Err(error.into());
@@ -463,12 +448,10 @@ where
         transcript.finish();
 
         // The reduction's final value still carries the Lagrange weight.
-        //
         // The verifier reads that for itself and divides it out.
-        //
         // Only the vector is needed here.
         //
-        // The round hands that over without the byte table its own row reading uses.
+        // The round hands it over without the byte table its rows use.
         let opening = SkipOpening::new(self.round.lagrange::<EF>(lambda));
         let weight = opening.lagrange_at(&tau);
         if weight.is_zero() {
@@ -503,8 +486,7 @@ struct ResidualProver<'a, F, EF, C> {
     /// Marker for the witness alphabet the constraint is stated over.
     ///
     /// The rounds read it in the large field.
-    ///
-    /// The constraint itself belongs to the alphabet the witness was committed in.
+    /// The constraint belongs to the alphabet the witness was committed in.
     _f: PhantomData<F>,
 }
 
@@ -528,7 +510,7 @@ where
         let half = self.eq.num_evals() / 2;
         let mut tuple = alloc::vec![EF::ZERO; self.operands.len()];
 
-        // Nodes zero and two upward, the value at one being recoverable from the claim.
+        // Nodes zero and two upward, the value at one coming from the claim.
         core::iter::once(0)
             .chain(2..=degree)
             .map(|node| {
@@ -586,21 +568,17 @@ mod tests {
         Challenger::from_hasher(Vec::new(), Keccak256Hash)
     }
 
-    /// What a dishonest prover substitutes, in place of a value the protocol pins.
+    /// What a dishonest prover substitutes for a value the protocol pins.
     ///
     /// # Why substitute rather than mutate
     ///
     /// Editing a finished proof desynchronises the transcript.
-    ///
-    /// Every later challenge moves, so the replay rejects for that reason alone.
-    ///
+    /// Every later challenge moves, so the replay rejects for that alone.
     /// Substituting during proving leaves the transcript self-consistent.
     ///
     /// The rounds really run on the substituted value.
-    ///
     /// Only the check named below then stands between the proof and acceptance.
-    ///
-    /// Each field therefore pins one check, rather than pinning the transcript again.
+    /// Each field pins one check, rather than pinning the transcript again.
     #[derive(Debug, Clone, Default)]
     struct Dishonest {
         /// Replaces the sum the residual rounds are run on.
@@ -622,11 +600,10 @@ mod tests {
         [a, b, c]
     }
 
-    /// Prove the zerocheck, substituting whatever the dishonest prover was told to.
+    /// Prove the zerocheck, substituting whatever this prover was told to.
     ///
     /// A mirror of the honest prover, kept beside it.
-    ///
-    /// A reader can then see that the two differ only in the three substitutions.
+    /// A reader can see the two differ only in the three substitutions.
     fn prove_dishonest(
         check: &BinaryZerocheck<F, Conjunction>,
         operands: &[&[u8]],
@@ -746,10 +723,8 @@ mod tests {
 
     #[test]
     fn the_mirrored_prover_agrees_with_the_real_one() {
-        // Invariant: with nothing substituted, this prover is the honest prover.
-        //
+        // Invariant: with nothing substituted, this is the honest prover.
         // Every rejection below therefore isolates one substitution.
-        //
         // None of them is a drift between the mirror and the code it mirrors.
         let (check, operands) = fixture(0x111A);
         let packed = [
@@ -775,13 +750,12 @@ mod tests {
 
     #[test]
     fn a_residual_sum_the_message_does_not_give_is_rejected() {
-        // Substitution: the residual rounds run on a sum of the prover's choosing.
+        // Substitution: the residual rounds run on a sum of its own choosing.
         //
         //     honest:  sum = the round message read at the skip challenge
         //     here:    sum = that, plus one
         //
         // The transcript is consistent with it.
-        //
         // All that is left is the check reading the message back and comparing.
         let dishonest = Dishonest {
             residual_claim: Some(SmallRng::seed_from_u64(0x2350).random::<EF>()),
@@ -797,13 +771,10 @@ mod tests {
     #[test]
     fn blends_that_do_not_satisfy_the_constraint_are_rejected() {
         // Substitution: the proof carries blends of the prover's choosing.
-        //
         // The residual rounds pin only the constraint of the blends.
+        // That is one equation in three unknowns, so they are checked on it.
         //
-        // That is one equation in three unknowns, so the blends are checked against it.
-        //
-        // They are bound before the batching challenge, but binding does not make them right.
-        //
+        // They are bound before the challenge, but binding is not checking.
         // What refuses these is the constraint, read by the verifier.
         let dishonest = Dishonest {
             blends: Some(vec![EF::ONE, EF::ONE, EF::ONE]),
@@ -818,11 +789,9 @@ mod tests {
 
     #[test]
     fn an_opening_sum_the_blends_do_not_give_is_rejected() {
-        // Substitution: the opening rounds run on a sum of the prover's choosing.
-        //
+        // Substitution: the opening rounds run on a sum of its own choosing.
         // The sumcheck driver reads its starting sum from the proof.
-        //
-        // Nothing inside the reduction ties that sum to the blends the round left behind.
+        // Nothing inside the reduction ties it to the blends left behind.
         //
         // The check that does is the one this pins.
         let dishonest = Dishonest {
@@ -839,14 +808,11 @@ mod tests {
     #[test]
     fn the_batching_challenge_follows_the_blends() {
         // The blends are bound before the batching challenge is drawn.
-        //
-        // Were they not, a prover seeing it could move value between two blends.
-        //
-        // Their batch would be unchanged and the opening check above would pass.
+        // Were they not, a prover seeing it could move value between two.
+        // Their batch would be unchanged and the opening check would pass.
         //
         // Forcing the challenge to one has the same effect.
-        //
-        // So this pins that it is drawn at all, and that it moves with what it separates.
+        // So this pins that it is drawn, and that it moves with the blends.
         let (check, operands) = fixture(0x6A3);
         let packed = [
             operands[0].as_slice(),
@@ -872,7 +838,6 @@ mod tests {
     #[test]
     fn a_discharge_refuses_openings_of_the_wrong_width() {
         // The claim knows how many operands it was batched over.
-        //
         // A batch of another width is therefore refused rather than weighed.
         let (check, operands) = fixture(0xC07);
         let packed = [
