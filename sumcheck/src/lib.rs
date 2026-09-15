@@ -44,6 +44,7 @@ pub mod test_util;
 #[cfg(test)]
 mod tests;
 pub mod transcript;
+pub mod univariate_skip;
 pub mod zk;
 
 pub use data::{SumcheckData, verify_final_sumcheck_rounds};
