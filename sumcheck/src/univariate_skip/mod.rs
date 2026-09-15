@@ -38,7 +38,7 @@ pub mod pinned;
 pub mod round;
 pub mod transcript;
 
-pub use composition::{Composition, Conjunction};
+pub use composition::{Composition, Conjunction, SquareProduct};
 pub use domain::{SkipDomain, SkipDomainError};
 #[cfg(any(test, feature = "test-util"))]
 pub use lde::extend_reference;
