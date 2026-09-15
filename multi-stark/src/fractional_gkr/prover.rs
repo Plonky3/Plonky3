@@ -33,6 +33,29 @@ enum SplitFractionMaybePacked<F: Field, EF: ExtensionField<F>> {
     Scalar(SplitFraction<Poly<EF>>),
 }
 
+/// The second interpolation node, when a line has to be scaled onto it.
+///
+/// Stepping a line once evaluates it at `1 + 1`.
+///
+/// A field that enumerates its nodes as the integers is already there.
+///
+/// That is odd characteristic, extensions included, and the step stays in the narrow type.
+///
+/// A binary tower enumerates by bit pattern, where `1 + 1` is zero.
+///
+/// The node then has to be applied as a factor instead.
+fn scaled_node<A: Field>() -> Option<A> {
+    let node = A::interpolation_node(2);
+    (node != A::TWO).then_some(node)
+}
+
+/// Sum the round polynomial's two transmitted values over one layer's leaves.
+///
+/// The second value is taken at the second interpolation node, reached either by stepping
+/// each line once or by scaling its step, whichever the field allows.
+///
+/// The choice is made once here rather than per leaf: scaling widens the numerators into the
+/// extension, which turns the gate's mixed products into extension products.
 #[allow(clippy::too_many_arguments)]
 fn mixed_round_polys<N, A>(
     eq_suffix: &[A],
@@ -45,6 +68,7 @@ fn mixed_round_polys<N, A>(
     d1_lo: &[A],
     d1_hi: &[A],
     lambda: A,
+    node: Option<A>,
 ) -> [A; 2]
 where
     N: PrimeCharacteristicRing + Copy + Send + Sync,
@@ -59,13 +83,21 @@ where
     debug_assert_eq!(eq_suffix.len(), d1_lo.len());
     debug_assert_eq!(eq_suffix.len(), d1_hi.len());
 
-    eq_suffix
-        .par_iter()
-        .zip(n0_lo.par_iter().zip(n0_hi.par_iter()))
-        .zip(n1_lo.par_iter().zip(n1_hi.par_iter()))
-        .zip(d0_lo.par_iter().zip(d0_hi.par_iter()))
-        .zip(d1_lo.par_iter().zip(d1_hi.par_iter()))
-        .par_fold_reduce(
+    let leaves = || {
+        eq_suffix
+            .par_iter()
+            .zip(n0_lo.par_iter().zip(n0_hi.par_iter()))
+            .zip(n1_lo.par_iter().zip(n1_hi.par_iter()))
+            .zip(d0_lo.par_iter().zip(d0_hi.par_iter()))
+            .zip(d1_lo.par_iter().zip(d1_hi.par_iter()))
+    };
+
+    // Each arm carries its own fold body, so a combinator would have to wrap both of them.
+    #[allow(clippy::option_if_let_else)]
+    match node {
+        // Stepping once lands on the node, so numerators stay in their own type and the
+        // products stay mixed.
+        None => leaves().par_fold_reduce(
             || [A::ZERO; 2],
             |mut acc, ((((&eq_suffix, n0), n1), d0), d1)| {
                 let (&n0_lo, &n0_hi) = n0;
@@ -93,7 +125,35 @@ where
                 lhs.iter_mut().zip(rhs).for_each(|(lhs, rhs)| *lhs += rhs);
                 lhs
             },
-        )
+        ),
+        // Scaling lifts the numerators into the extension, so the second value is taken
+        // entirely there.
+        Some(node) => leaves().par_fold_reduce(
+            || [A::ZERO; 2],
+            |mut acc, ((((&eq_suffix, n0), n1), d0), d1)| {
+                let (&n0_lo, &n0_hi) = n0;
+                let (&n1_lo, &n1_hi) = n1;
+                let (&d0_lo, &d0_hi) = d0;
+                let (&d1_lo, &d1_hi) = d1;
+                let evaluate = |n0: A, n1: A, d0: A, d1: A| d1 * n0 + d0 * n1 + lambda * d0 * d1;
+
+                acc[0] += eq_suffix * (d1_lo * n0_lo + d0_lo * n1_lo + lambda * d0_lo * d1_lo);
+
+                let n0 = node * (n0_hi - n0_lo) + n0_lo;
+                let n1 = node * (n1_hi - n1_lo) + n1_lo;
+                let d0 = node * (d0_hi - d0_lo) + d0_lo;
+                let d1 = node * (d1_hi - d1_lo) + d1_lo;
+
+                acc[1] += eq_suffix * evaluate(n0, n1, d0, d1);
+
+                acc
+            },
+            |mut lhs, rhs| {
+                lhs.iter_mut().zip(rhs).for_each(|(lhs, rhs)| *lhs += rhs);
+                lhs
+            },
+        ),
+    }
 }
 
 fn reduce_fraction<N, A>(n0: &[N], n1: &[N], d0: &[A], d1: &[A]) -> SplitFraction<Poly<A>>
@@ -193,6 +253,7 @@ impl<'a, F: Field, EF: ExtensionField<F>> InputLayer<'a, F, EF> {
                     d1_lo,
                     d1_hi,
                     EF::ExtensionPacking::from(lambda),
+                    scaled_node::<EF>().map(EF::ExtensionPacking::from),
                 )
                 .map(|value| EF::ExtensionPacking::to_ext_iter([value]).sum())
             }
@@ -215,6 +276,7 @@ impl<'a, F: Field, EF: ExtensionField<F>> InputLayer<'a, F, EF> {
                     d1_lo,
                     d1_hi,
                     lambda,
+                    scaled_node::<EF>(),
                 )
             }
             _ => unreachable!("input denominator and equality table use the same representation"),
@@ -293,10 +355,14 @@ impl<F: Field, EF: ExtensionField<F>> Layer<F, EF> {
     fn round_polys(&self, lambda: EF) -> [EF; 2] {
         match (&self.fraction, &self.eq_suffix) {
             (SplitFractionMaybePacked::Packed(fraction), PolyMaybePacked::Packed(eq)) => fraction
-                .round_polys(eq, EF::ExtensionPacking::from(lambda))
+                .round_polys(
+                    eq,
+                    EF::ExtensionPacking::from(lambda),
+                    scaled_node::<EF>().map(EF::ExtensionPacking::from),
+                )
                 .map(|value| EF::ExtensionPacking::to_ext_iter([value]).sum()),
             (SplitFractionMaybePacked::Scalar(fraction), PolyMaybePacked::Scalar(eq)) => {
-                fraction.round_polys(eq, lambda)
+                fraction.round_polys(eq, lambda, scaled_node::<EF>())
             }
             _ => unreachable!("fraction and equality tables use the same representation"),
         }
@@ -372,7 +438,7 @@ where
         )
     }
 
-    fn round_polys(&self, eq_suffix: &Poly<A>, lambda: A) -> [A; 2] {
+    fn round_polys(&self, eq_suffix: &Poly<A>, lambda: A, node: Option<A>) -> [A; 2] {
         let half = eq_suffix.num_evals();
         let (n0_lo, n0_hi) = self.n0.as_slice().split_at(half);
         let (n1_lo, n1_hi) = self.n1.as_slice().split_at(half);
@@ -390,6 +456,7 @@ where
             d1_lo,
             d1_hi,
             lambda,
+            node,
         )
     }
 
@@ -493,6 +560,18 @@ impl<F: Field, EF: ExtensionField<F>> SplitFractionMaybePacked<F, EF> {
 ///
 /// The returned message contains the cubic evaluations expected by the existing verifier.
 /// `q_sum` is the normalized quadratic sum `q(0) + q(1)` used only by the prover.
+///
+/// # Interpolation domain
+///
+/// The message carries the cubic at the four nodes the verifier interpolates over.
+///
+/// Those nodes are the field's own enumeration of the first four values, not the integers.
+///
+/// The two coincide in odd characteristic, extensions included.
+///
+/// Over a binary tower they do not.
+///
+/// There the integer three collapses onto the second node, and two onto the first.
 fn restore_equality_factor<EF: Field>(
     quadratic_evals: [EF; 2],
     normalized_sum: EF,
@@ -502,11 +581,20 @@ fn restore_equality_factor<EF: Field>(
 ) -> ([EF; 3], EF) {
     let q1 = (normalized_sum - (EF::ONE - coordinate) * quadratic_evals[0]) * coordinate.inverse();
     let q_sum = quadratic_evals[0] + q1;
-    let q3 = interpolator.eval(&quadratic_evals, q_sum, EF::from_u8(3));
+    let q3 = interpolator.eval(&quadratic_evals, q_sum, EF::interpolation_node(3));
+
+    // The equality factor in this variable is affine, so two values fix it everywhere:
+    //
+    //     eq(0)         = 1 - coordinate
+    //     eq(1) - eq(0) = 2 * coordinate - 1
+    //
+    // Each node scales the step.
+    //
+    // Stepping would reach the next node only in odd characteristic.
     let equality_0 = EF::ONE - coordinate;
     let equality_step = coordinate.double() - EF::ONE;
-    let equality_2 = equality_0 + EF::TWO * equality_step;
-    let equality_3 = equality_2 + equality_step;
+    let equality_2 = equality_0 + EF::interpolation_node(2) * equality_step;
+    let equality_3 = equality_0 + EF::interpolation_node(3) * equality_step;
     let round_poly = [
         equality_prefix * equality_0 * quadratic_evals[0],
         equality_prefix * equality_2 * quadratic_evals[1],

@@ -129,8 +129,8 @@ impl<F: Field> LookupPlan<F> {
     ///
     /// Returns an error if the worst-case multiplicity sum reaches the field characteristic.
     /// A multiplicity could otherwise wrap around and forge a balanced bus.
-    /// Returns an error for active characteristic-two lookups: the counting argument and
-    /// fractional-GKR interpolation used here require an odd-characteristic field.
+    /// Returns an error for active characteristic-two lookups: the counting argument needs
+    /// multiplicities that do not wrap, which an odd characteristic gives.
     ///
     /// # Panics
     ///
@@ -618,7 +618,7 @@ pub enum LookupError {
     /// Distinct bus identifiers must remain distinct in the prime subfield.
     #[error("lookup bus identifiers wrap around the characteristic")]
     BusIdentifierCapacityExceeded,
-    /// The counting argument and fractional-GKR kernels do not support binary fields.
+    /// The counting argument does not support binary fields.
     #[error("multi-STARK lookups do not support characteristic two")]
     UnsupportedCharacteristic,
     /// An AIR declares a lookup, but the proof carries no reduction for it.
