@@ -633,11 +633,15 @@ fn test_invalid_pow_witness() {
 /// `p3-examples` runs the workspace-wide pairwise check, but it can only reach
 /// names whose shapes are public. The three layout names are `pub(crate)`, so
 /// they are checked here instead, against the four that do travel.
-const CRATE_PROTOCOL_NAMES: [(&str, &[u8]); 7] = [
+const CRATE_PROTOCOL_NAMES: [(&str, &[u8]); 8] = [
     ("quadratic", crate::transcript::NAME),
     ("hvzk", crate::zk::transcript::NAME),
     ("ring switch", crate::ring_switch::transcript::NAME),
     ("generic degree", crate::generic_degree::transcript::NAME),
+    (
+        "layout commitment",
+        crate::layout::transcript::COMMITMENT_NAME,
+    ),
     ("layout opening", crate::layout::transcript::OPENING_NAME),
     ("layout ood", crate::layout::transcript::VIRTUAL_NAME),
     ("layout batching", crate::layout::transcript::BATCHING_NAME),
@@ -669,16 +673,18 @@ fn no_two_protocols_in_this_crate_share_a_name() {
 fn a_layout_name_is_separated_from_the_one_it_extends() {
     // Invariant: a name is separated from a shorter name it starts with.
     //
-    // Fixture state: the three layout names all extend `p3-sumcheck-layout`.
+    // Fixture state: the four layout names all extend `p3-sumcheck-layout`.
     //
-    //     [1 | p3-sumcheck-layout-opening   | 0 .. 0 | 26]
-    //     [1 | p3-sumcheck-layout-ood       | 0 .. 0 | 22]
-    //     [1 | p3-sumcheck-layout-batching  | 0 .. 0 | 27]
+    //     [1 | p3-sumcheck-layout-ood        | 0 .. 0 | 22]
+    //     [1 | p3-sumcheck-layout-opening    | 0 .. 0 | 26]
+    //     [1 | p3-sumcheck-layout-batching   | 0 .. 0 | 27]
+    //     [1 | p3-sumcheck-layout-commitment | 0 .. 0 | 29]
     //
     // Zero padding alone cannot part names in a prefix relation.
     //
     // The last byte carries the name length, and that is what parts them.
     let layout_names = [
+        crate::layout::transcript::COMMITMENT_NAME,
         crate::layout::transcript::OPENING_NAME,
         crate::layout::transcript::VIRTUAL_NAME,
         crate::layout::transcript::BATCHING_NAME,

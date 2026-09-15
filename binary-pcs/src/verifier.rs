@@ -500,8 +500,10 @@ mod tests {
         let mmcs_instance = mmcs();
 
         let mut prover_ch = challenger();
-        let (base_commitment, prover_data) =
-            commit(&config, &encoder, &mmcs_instance, &mut prover_ch, witness);
+        let (base_commitment, prover_data) = commit(&config, &encoder, &mmcs_instance, witness);
+        // Mirror what the scheme's commit phase binds, so this replay walks the
+        // same sponge stream production does.
+        prover_ch.observe(base_commitment.clone());
         let (base_merkle_data, sumcheck_data, rounds, randomness, final_codeword) =
             fold_rounds_with::<false, _, _>(prover_data, &config, &mmcs_instance, &mut prover_ch);
 
@@ -562,8 +564,10 @@ mod tests {
         let mmcs_instance = mmcs();
 
         let mut prover_ch = challenger();
-        let (base_commitment, prover_data) =
-            commit(&config, &encoder, &mmcs_instance, &mut prover_ch, witness);
+        let (base_commitment, prover_data) = commit(&config, &encoder, &mmcs_instance, witness);
+        // Mirror what the scheme's commit phase binds, so this replay walks the
+        // same sponge stream production does.
+        prover_ch.observe(base_commitment.clone());
         let (base_merkle_data, sumcheck_data, rounds, randomness, final_codeword) =
             fold_rounds_with::<false, _, _>(prover_data, &config, &mmcs_instance, &mut prover_ch);
 
@@ -666,8 +670,10 @@ mod tests {
         let mmcs_instance = mmcs();
 
         let mut prover_ch = challenger();
-        let (base_commitment, prover_data) =
-            commit(&config, &encoder, &mmcs_instance, &mut prover_ch, witness);
+        let (base_commitment, prover_data) = commit(&config, &encoder, &mmcs_instance, witness);
+        // Mirror what the scheme's commit phase binds, so this replay walks the
+        // same sponge stream production does.
+        prover_ch.observe(base_commitment.clone());
         let (base_merkle_data, sumcheck_data, mut rounds, randomness, final_codeword) =
             fold_rounds_with::<false, _, _>(prover_data, &config, &mmcs_instance, &mut prover_ch);
 

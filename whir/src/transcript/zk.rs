@@ -73,6 +73,7 @@
 //!
 //! That earlier binding keeps its effect.
 
+use alloc::vec;
 use alloc::vec::Vec;
 use core::marker::PhantomData;
 
@@ -84,6 +85,7 @@ use p3_challenger::{
     CanObserve, CanSample, CanSampleUniformBits, FieldChallenger, GrindingChallenger,
 };
 use p3_field::{ExtensionField, TwoAdicField};
+use p3_multilinear_util::point::Point;
 use p3_util::log2_strict_usize;
 
 use super::{
@@ -108,6 +110,26 @@ const VERSION: u8 = 2;
 ///
 /// The two pipelines can therefore never share a seed.
 const NAME: &[u8] = b"p3-whir-hvzk";
+
+/// Version byte bound into the statement phases that precede a hiding run.
+///
+/// The commitment and the opening claims each seed under this byte.
+const STATEMENT_VERSION: u8 = 1;
+
+/// Protocol name of the absorption that binds a hiding commitment.
+const COMMITMENT_NAME: &[u8] = b"p3-whir-hvzk-commitment";
+
+/// Protocol name of the absorption that binds a hiding run's opening claims.
+const CLAIMS_NAME: &[u8] = b"p3-whir-hvzk-claims";
+
+/// Step label of the Merkle root a hiding commitment carries.
+const COMMITMENT: &str = "commitment";
+
+/// Step label of one opening claim's evaluation point.
+const CLAIM_POINT: &str = "claim_point";
+
+/// Step label of the claimed value at that point.
+const CLAIM_EVAL: &str = "claim_eval";
 
 /// Version byte bound into the masked base case's own transcript seed.
 const BASE_VERSION: u8 = 1;
@@ -774,6 +796,239 @@ impl ZkWhirShape {
         let shape = &self.rounds[round];
         (shape.index_bits, shape.query_draws)
     }
+}
+
+/// Describe the phase that binds a hiding commitment.
+///
+/// A commitment is one Merkle root, so this phase has one step and no knobs.
+///
+/// Every other phase here carries its configuration in a shape type.
+///
+/// This one has no configuration to carry, so it has no shape type either.
+///
+/// # Panics
+///
+/// Never in practice.
+///
+/// A single leaf step always passes structural validation.
+#[must_use]
+pub fn commitment_domain_separator<F: TranscriptField>() -> DomainSeparator<Alphabet<F>> {
+    let pattern = InteractionPattern::new(vec![Interaction::opaque(
+        Hierarchy::Atomic,
+        Kind::Message,
+        COMMITMENT,
+        Length::Scalar,
+    )])
+    .expect("a single leaf step is always well formed");
+
+    DomainSeparator::new(STATEMENT_VERSION, COMMITMENT_NAME, pattern)
+}
+
+/// Bind the Merkle root a hiding commitment carries.
+///
+/// # Overview
+///
+/// The commitment precedes every claim stated against it.
+///
+/// Both sides bind it under a phase of its own.
+///
+/// ```text
+///     prover  : commits, then binds the root it produced
+///     verifier: never commits, so it binds the root it was handed
+/// ```
+///
+/// # Soundness
+///
+/// The root travels as an opaque value, so the challenger owns its encoding.
+///
+/// Its own seed keeps this absorption apart from the plain pipeline's.
+///
+/// A hiding commitment and a plain one never leave the sponge in one state.
+///
+/// # Arguments
+///
+/// - `challenger`: sponge of the surrounding protocol, borrowed for the absorption.
+/// - `root`: the Merkle root of the committed hiding codeword.
+///
+/// # Panics
+///
+/// Never in practice.
+///
+/// The single described step is played before the driver is closed.
+pub fn observe_commitment<F, C, Com>(challenger: &mut C, root: Com)
+where
+    F: TranscriptField,
+    C: CanObserve<F> + CanObserve<Com>,
+    Com: Clone,
+{
+    let separator = commitment_domain_separator::<F>();
+    let mut state = ProverState::new(challenger, &separator);
+
+    state.observe_opaque(COMMITMENT, root);
+
+    // The root travels in the caller's own commitment value, never on the wire.
+    assert!(
+        state.finalize().is_empty(),
+        "a commitment absorption carries no wire bytes",
+    );
+}
+
+/// Numbers that fix the transcript of one hiding run's opening claims.
+///
+/// Both sides build this from their own inputs, never from a proof.
+///
+/// The prover's inputs are the points it was asked to open at.
+///
+/// The verifier's are the points it was asked to check.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ZkClaimsShape {
+    /// Number of claims the statement holds.
+    ///
+    /// Two steps are described per claim, so this is half the step count.
+    pub num_claims: usize,
+    /// Coordinate count every opening point carries.
+    ///
+    /// This is the width of every point step.
+    pub num_variables: usize,
+}
+
+impl ZkClaimsShape {
+    /// Collect the numbers that fix one statement.
+    ///
+    /// # Arguments
+    ///
+    /// - `num_claims`: how many claims the statement holds.
+    /// - `num_variables`: coordinate count every point carries.
+    #[must_use]
+    pub const fn new(num_claims: usize, num_variables: usize) -> Self {
+        Self {
+            num_claims,
+            num_variables,
+        }
+    }
+
+    /// Describe the transcript this shape fixes.
+    ///
+    /// Two steps per claim: the point it is stated at, then the value claimed there.
+    ///
+    /// # Panics
+    ///
+    /// Never in practice.
+    ///
+    /// A flat sequence of leaf steps always passes structural validation.
+    #[must_use]
+    pub fn pattern<F, EF>(&self) -> InteractionPattern
+    where
+        F: TranscriptField,
+        EF: ExtensionField<F>,
+    {
+        let steps = (0..self.num_claims)
+            .flat_map(|_| {
+                [
+                    Interaction::algebra::<F, EF>(
+                        Hierarchy::Atomic,
+                        Kind::Message,
+                        CLAIM_POINT,
+                        Length::Fixed(self.num_variables),
+                    ),
+                    Interaction::algebra::<F, EF>(
+                        Hierarchy::Atomic,
+                        Kind::Message,
+                        CLAIM_EVAL,
+                        Length::Scalar,
+                    ),
+                ]
+            })
+            .collect();
+
+        InteractionPattern::new(steps).expect("a flat sequence of leaf steps is always well formed")
+    }
+
+    /// Bind the protocol identity and this shape into a seed.
+    ///
+    /// Both numbers move the step sequence, so the fingerprint carries them.
+    ///
+    /// Neither needs an instance chunk of its own.
+    #[must_use]
+    pub fn domain_separator<F, EF>(&self) -> DomainSeparator<Alphabet<F>>
+    where
+        F: TranscriptField,
+        EF: ExtensionField<F>,
+    {
+        DomainSeparator::new(STATEMENT_VERSION, CLAIMS_NAME, self.pattern::<F, EF>())
+    }
+}
+
+/// Bind the opening claims a hiding run is asked to prove.
+///
+/// # Overview
+///
+/// A claim is a point and the value claimed at it.
+///
+/// Both are statement, not proof data.
+///
+/// So both sides bind them before the run seeds its own driver.
+///
+/// ```text
+///     one claim of n coordinates  ->  seed(1 claim, n wide), point, eval
+///     two claims of n coordinates ->  seed(2 claims, n wide), point, eval, point, eval
+/// ```
+///
+/// # Soundness
+///
+/// The claim count is the step count.
+///
+/// The point width is the width of every point step.
+///
+/// Both therefore reach the fingerprint.
+///
+/// Two runs share a seed only when they state the same number of claims.
+///
+/// Those claims must also stand over points of the same arity.
+///
+/// # Arguments
+///
+/// - `challenger`: sponge of the surrounding protocol, borrowed for the absorption.
+/// - `claims`: each opening point paired with the value claimed at it.
+/// - `num_variables`: coordinate count every point carries.
+///
+/// # Panics
+///
+/// When a point does not carry the stated coordinate count.
+pub fn observe_claims<F, EF, C>(
+    challenger: &mut C,
+    claims: &[(Point<EF>, EF)],
+    num_variables: usize,
+) where
+    F: TranscriptField,
+    EF: ExtensionField<F>,
+    C: CanObserve<F> + CanSample<F>,
+{
+    // A point of the wrong arity would absorb a width the description never named.
+    //
+    // The count is the caller's own configuration, so a mismatch is a caller bug.
+    assert!(
+        claims
+            .iter()
+            .all(|(point, _)| point.num_variables() == num_variables),
+        "every opening point must carry {num_variables} coordinates",
+    );
+
+    let separator = ZkClaimsShape::new(claims.len(), num_variables).domain_separator::<F, EF>();
+    let mut state = ProverState::new(challenger, &separator);
+
+    // Each claim is bound point-first, so a value can never precede its point.
+    for (point, eval) in claims {
+        let _point =
+            state.observe_extensions::<F, EF, FieldToFieldCodec<F>>(CLAIM_POINT, point.as_slice());
+        let _eval = state.observe_extension::<F, EF, FieldToFieldCodec<F>>(CLAIM_EVAL, eval);
+    }
+
+    // The claims are the caller's own statement, never bytes on the wire.
+    assert!(
+        state.finalize().is_empty(),
+        "a claim absorption carries no wire bytes",
+    );
 }
 
 /// Prover-side transcript of one HVZK-WHIR run.
@@ -2522,5 +2777,170 @@ mod tests {
         // The sequence ends exactly one past the last mask.
         assert!(base.reveal_lengths(base.num_masks()).is_some());
         assert_eq!(base.reveal_lengths(base.num_masks() + 1), None);
+    }
+
+    #[test]
+    fn a_perturbed_commitment_moves_the_state_the_caller_continues_from() {
+        // Invariant: the committed root reaches the sponge.
+        //
+        // Every challenge the hiding run draws therefore depends on it.
+        //
+        // Fixture state: an eight-element digest, shaped like a Merkle root.
+        //
+        // Mutation: flip the first limb.
+        let bind = |root: [F; 8]| {
+            let mut challenger = fresh_challenger();
+            observe_commitment::<F, _, _>(&mut challenger, root);
+            CanSample::<F>::sample(&mut challenger)
+        };
+
+        let honest = [F::ONE; 8];
+        let mut tampered = honest;
+        tampered[0] = F::TWO;
+
+        assert_ne!(bind(honest), bind(tampered));
+    }
+
+    /// One statement of `n` claims, each over `vars` coordinates, filled deterministically.
+    fn statement(num_claims: usize, vars: usize) -> Vec<(Point<EF>, EF)> {
+        (0..num_claims)
+            .map(|claim| {
+                let coords = (0..vars)
+                    .map(|i| EF::from_u64((claim * vars + i) as u64 + 1))
+                    .collect();
+                (Point::new(coords), EF::from_u64(claim as u64 + 100))
+            })
+            .collect()
+    }
+
+    /// Bind one statement and return the state the caller would continue from.
+    fn bind_statement(claims: &[(Point<EF>, EF)], vars: usize) -> F {
+        let mut challenger = fresh_challenger();
+        observe_claims::<F, EF, _>(&mut challenger, claims, vars);
+        CanSample::<F>::sample(&mut challenger)
+    }
+
+    #[test]
+    fn every_part_of_a_claim_reaches_the_state_the_caller_continues_from() {
+        // Invariant: both halves of every claim are bound.
+        //
+        // Perturbing either one moves every later challenge.
+        //
+        // Fixture state: two claims over four coordinates each.
+        //
+        // Mutation: one coordinate, then one claimed value.
+        const VARS: usize = 4;
+        let honest = statement(2, VARS);
+
+        // A moved coordinate restates the claim at a different point.
+        let mut moved_point = honest.clone();
+        moved_point[1].0 = Point::new(
+            moved_point[1]
+                .0
+                .as_slice()
+                .iter()
+                .enumerate()
+                .map(|(i, &c)| if i == 0 { c + EF::ONE } else { c })
+                .collect(),
+        );
+
+        // A moved value claims something else at the same point.
+        let mut moved_eval = honest.clone();
+        moved_eval[0].1 += EF::ONE;
+
+        let base = bind_statement(&honest, VARS);
+        assert_ne!(base, bind_statement(&moved_point, VARS));
+        assert_ne!(base, bind_statement(&moved_eval, VARS));
+    }
+
+    #[test]
+    fn the_claim_order_reaches_the_state_the_caller_continues_from() {
+        // Invariant: claims are bound in order, so a statement is a sequence.
+        //
+        // Two runs proving the same pair in the opposite order stay apart.
+        //
+        // Fixture state: two claims over four coordinates.
+        //
+        // Mutation: swap them.
+        const VARS: usize = 4;
+        let honest = statement(2, VARS);
+        let swapped = vec![honest[1].clone(), honest[0].clone()];
+
+        assert_ne!(
+            bind_statement(&honest, VARS),
+            bind_statement(&swapped, VARS)
+        );
+    }
+
+    #[test]
+    fn the_shape_of_a_statement_reaches_its_seed() {
+        // Invariant: the claim count and the point width are the description.
+        //
+        // Neither can change without moving the seed.
+        //
+        // Fixture state: one claim over four coordinates.
+        //
+        //     claims  1 -> 2   two more steps
+        //     vars    4 -> 5   one wider point step
+        let seeds = [
+            (
+                "baseline",
+                seed_digest(&ZkClaimsShape::new(1, 4).domain_separator::<F, EF>()),
+            ),
+            (
+                "claim count",
+                seed_digest(&ZkClaimsShape::new(2, 4).domain_separator::<F, EF>()),
+            ),
+            (
+                "point width",
+                seed_digest(&ZkClaimsShape::new(1, 5).domain_separator::<F, EF>()),
+            ),
+        ];
+
+        assert_seeds_pairwise_distinct(&seeds);
+    }
+
+    #[test]
+    #[should_panic(expected = "every opening point must carry")]
+    fn a_point_of_the_wrong_arity_is_a_caller_bug() {
+        // The width is the caller's own configuration.
+        //
+        // A point that cannot fill it therefore never came from a proof.
+        //
+        // Fixture state: one claim over four coordinates, bound as five.
+        let mut challenger = fresh_challenger();
+        observe_claims::<F, EF, _>(&mut challenger, &statement(1, 4), 5);
+    }
+
+    #[test]
+    fn the_statement_phases_never_share_a_seed_with_the_run_they_precede() {
+        // Invariant: each statement phase carries a name of its own.
+        //
+        // A commitment, a claim list and the run itself cannot collide.
+        let config = base_config();
+        let seeds = [
+            (
+                "commitment",
+                seed_digest(&commitment_domain_separator::<F>()),
+            ),
+            (
+                "claims",
+                seed_digest(&ZkClaimsShape::new(1, NUM_VARIABLES).domain_separator::<F, EF>()),
+            ),
+            (
+                "run",
+                seed_digest(&ZkWhirShape::new(&config).domain_separator::<F, EF>()),
+            ),
+            (
+                "base case",
+                seed_digest(
+                    &ZkWhirShape::new(&config)
+                        .base_case
+                        .domain_separator::<F, EF>(),
+                ),
+            ),
+        ];
+
+        assert_seeds_pairwise_distinct(&seeds);
     }
 }

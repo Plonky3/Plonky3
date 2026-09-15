@@ -14,7 +14,7 @@ use alloc::vec::Vec;
 use masks::VerifierMasks;
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
 use p3_commit::{ExtensionMmcs, Mmcs};
-use p3_field::{ExtensionField, PrimeField64, TwoAdicField};
+use p3_field::{ExtensionField, Field, PrimeField64, TwoAdicField};
 use p3_matrix::Dimensions;
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
@@ -121,6 +121,35 @@ enum ActiveOracle<'a, C> {
     Ext(&'a C),
 }
 
+/// Reject a statement whose points do not match the committed arity.
+///
+/// # Overview
+///
+/// A point of the wrong arity cannot be lifted into the committed polynomial.
+///
+/// The statement is the caller's own, so this is a rejection rather than a panic.
+///
+/// # Errors
+///
+/// When a point carries a coordinate count other than the committed one.
+pub(crate) fn check_claim_arity<EF: Field>(
+    claims: &[(Point<EF>, EF)],
+    num_variables: usize,
+) -> Result<(), ZkVerifierError> {
+    // The first offending claim names itself, so a caller can find it.
+    for (claim, (point, _)) in claims.iter().enumerate() {
+        if point.num_variables() != num_variables {
+            return Err(ZkVerifierError::ClaimArityMismatch {
+                claim,
+                expected: num_variables,
+                actual: point.num_variables(),
+            });
+        }
+    }
+
+    Ok(())
+}
+
 /// HVZK-WHIR verifier.
 #[derive(Debug)]
 pub struct HidingWhirVerifier<'a, EF, F, MT, Challenger>
@@ -221,16 +250,12 @@ where
 
         // Reject malformed statements before any folding arithmetic runs.
         //
-        //     point arity != committed arity  ->  error, never a panic
-        for (claim, (point, _)) in claims.iter().enumerate() {
-            if point.num_variables() != self.config.num_variables {
-                return Err(ZkVerifierError::ClaimArityMismatch {
-                    claim,
-                    expected: self.config.num_variables,
-                    actual: point.num_variables(),
-                });
-            }
-        }
+        // The adapter checks this before binding the claims, so through that path
+        // it has already passed.
+        //
+        // A caller reaching this entry point directly has had no such check, which
+        // is why it stands here too.
+        check_claim_arity(claims, self.config.num_variables)?;
 
         // One driver spans the whole run.
         //

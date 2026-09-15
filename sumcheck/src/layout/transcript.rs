@@ -143,6 +143,9 @@ use crate::table::{OpeningEvals, TableShape};
 /// It separates them even when their step sequences agree.
 const VERSION: u8 = 1;
 
+/// Protocol name of the absorption that binds the stacked commitment.
+pub(crate) const COMMITMENT_NAME: &[u8] = b"p3-sumcheck-layout-commitment";
+
 /// Protocol name of one recorded batch of concrete openings.
 pub(crate) const OPENING_NAME: &[u8] = b"p3-sumcheck-layout-opening";
 
@@ -151,6 +154,9 @@ pub(crate) const VIRTUAL_NAME: &[u8] = b"p3-sumcheck-layout-ood";
 
 /// Protocol name of the claim-batching challenge.
 pub(crate) const BATCHING_NAME: &[u8] = b"p3-sumcheck-layout-batching";
+
+/// Step label of the Merkle root the stacked codeword is committed under.
+const COMMITMENT: &str = "commitment";
 
 /// Step label of a local-frame opening point drawn from the transcript.
 const OPENING_POINT: &str = "opening_point";
@@ -172,6 +178,92 @@ const BATCHING: &str = "batching";
 
 /// Sponge alphabet of a challenger that speaks the base field natively.
 type Alphabet<F> = FieldUnit<F>;
+
+/// Describe the phase that binds the stacked commitment.
+///
+/// A commitment is one Merkle root, so this phase has one step and no knobs.
+///
+/// Every other phase here carries its configuration in a shape type.
+///
+/// This one has no configuration to carry, so it has no shape type either.
+///
+/// The layout geometry is deliberately absent.
+///
+/// The root is bound before any claim names a table.
+///
+/// Every later phase binds that geometry itself.
+///
+/// # Panics
+///
+/// Never in practice.
+///
+/// A single leaf step always passes structural validation.
+#[must_use]
+pub fn commitment_domain_separator<F: TranscriptField>() -> DomainSeparator<Alphabet<F>> {
+    let pattern = InteractionPattern::new(vec![Interaction::opaque(
+        Hierarchy::Atomic,
+        Kind::Message,
+        COMMITMENT,
+        Length::Scalar,
+    )])
+    .expect("a single leaf step is always well formed");
+
+    DomainSeparator::new(VERSION, COMMITMENT_NAME, pattern)
+}
+
+/// Bind the Merkle root the stacked codeword is committed under.
+///
+/// # Overview
+///
+/// The commitment is the first thing either side sees.
+///
+/// It precedes every claim recorded against it.
+///
+/// It is bound under a phase of its own.
+///
+/// The two sides therefore bind it in the same place.
+///
+/// They reach that place from opposite directions.
+///
+/// ```text
+///     prover  : commits, then binds the root it produced
+///     verifier: never commits, so it binds the root it was handed
+/// ```
+///
+/// # Soundness
+///
+/// The root travels as an opaque value, so the challenger owns its encoding.
+///
+/// A caller that skips this call leaves every later challenge free of the commitment.
+///
+/// # Arguments
+///
+/// - `challenger`: sponge of the surrounding protocol, borrowed for the absorption.
+/// - `root`: the Merkle root of the committed stacked codeword.
+///
+/// # Panics
+///
+/// Never in practice.
+///
+/// The single described step is played before the driver is closed.
+pub fn observe_commitment<F, C, Com>(challenger: &mut C, root: Com)
+where
+    F: TranscriptField,
+    C: CanObserve<F> + CanObserve<Com>,
+    Com: Clone,
+{
+    // Seeding folds this phase's identity into the sponge before the root lands.
+    let separator = commitment_domain_separator::<F>();
+    let mut state = ProverState::new(challenger, &separator);
+
+    state.observe_opaque(COMMITMENT, root);
+
+    // The root travels in the caller's own commitment value, never on the wire.
+    assert!(
+        state.finalize().is_empty(),
+        "a commitment absorption carries no wire bytes",
+    );
+}
 
 /// Geometry of one stacked layout.
 ///
@@ -1700,5 +1792,62 @@ mod tests {
             CanSample::<F>::sample(&mut prover_challenger),
             CanSample::<F>::sample(&mut verifier_challenger),
         );
+    }
+
+    #[test]
+    fn a_perturbed_commitment_moves_the_state_the_caller_continues_from() {
+        // Invariant: the committed root reaches the sponge.
+        //
+        // Every challenge drawn afterwards therefore depends on it.
+        //
+        // Fixture state: an eight-element digest, shaped like a Merkle root.
+        //
+        // Mutation: flip the first limb.
+        //
+        //     honest   [1, 1, 1, 1, 1, 1, 1, 1]
+        //     tampered [2, 1, 1, 1, 1, 1, 1, 1]
+        let bind = |root: [F; 8]| {
+            let mut challenger = fresh_challenger();
+            observe_commitment::<F, _, _>(&mut challenger, root);
+            CanSample::<F>::sample(&mut challenger)
+        };
+
+        let honest = [F::ONE; 8];
+        let mut tampered = honest;
+        tampered[0] = F::TWO;
+
+        assert_ne!(bind(honest), bind(tampered));
+    }
+
+    #[test]
+    fn the_commitment_phase_never_shares_a_seed_with_the_phases_that_follow_it() {
+        // Invariant: the commitment is bound under a name of its own.
+        //
+        // A root and a claim recorded against it therefore cannot collide.
+        //
+        // Fixture state: the commitment phase, and the three phases of one layout.
+        let seeds = [
+            (
+                "commitment",
+                seed_digest(&commitment_domain_separator::<F>()),
+            ),
+            (
+                "one-column batch",
+                seed_digest(
+                    &OpeningShape::new(base_binding(), 0, 11, &[0], &[], PointSource::Drawn)
+                        .domain_separator::<F, EF>(),
+                ),
+            ),
+            (
+                "out-of-domain claim",
+                seed_digest(&VirtualShape::new(base_binding()).domain_separator::<F, EF>()),
+            ),
+            (
+                "batching challenge",
+                seed_digest(&BatchingShape::new(base_binding(), 1, 1).domain_separator::<F, EF>()),
+            ),
+        ];
+
+        assert_seeds_pairwise_distinct(&seeds);
     }
 }

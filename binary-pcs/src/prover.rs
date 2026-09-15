@@ -69,21 +69,21 @@ pub(crate) struct RoundCommitment<MT: Mmcs<BinaryField128>> {
 /// Commits `witness`'s stacked polynomial and returns the base commitment alongside the data
 /// needed to run the residual sumcheck and later open the base codeword's queries.
 ///
+/// Nothing is bound here.
+///
+/// The root is returned instead, and the caller binds it.
+///
 /// `witness` must have `config.num_variables()` variables and be built at [`FOLDING`].
 #[tracing::instrument(name = "binary pcs commit", skip_all)]
-pub(crate) fn commit<E, MT, Ch>(
+pub(crate) fn commit<E, MT>(
     config: &BinaryPcsConfig,
     encoder: &E,
     mmcs: &MT,
-    challenger: &mut Ch,
     witness: Witness<BinaryField128>,
 ) -> (MT::Commitment, BinaryPcsProverData<MT>)
 where
     E: Encoder<BinaryField128>,
     MT: Mmcs<BinaryField128>,
-    Ch: FieldChallenger<BinaryField128>
-        + GrindingChallenger<Witness = BinaryField128>
-        + CanObserve<MT::Commitment>,
 {
     assert_eq!(
         witness.num_variables(),
@@ -91,14 +91,8 @@ where
         "witness arity must match the config it is committed against"
     );
 
-    let (layout, commitment, merkle_data) = PcsLayout::commit(
-        encoder,
-        mmcs,
-        challenger,
-        witness,
-        FOLDING,
-        config.log_inv_rate(),
-    );
+    let (layout, commitment, merkle_data) =
+        PcsLayout::commit(encoder, mmcs, witness, FOLDING, config.log_inv_rate());
 
     (
         commitment,
@@ -368,7 +362,6 @@ mod tests {
         let (mut layout, _root, data) = SuffixProver::<F, F>::commit(
             &AdditiveRsEncoder::<F, NaiveAdditiveNtt<F>>::default(),
             &mmcs(),
-            &mut ch,
             witness,
             0,
             LOG_INV_RATE,
@@ -409,7 +402,6 @@ mod tests {
         let (mut layout, _root, data) = PrefixProver::<F, F>::commit(
             &AdditiveRsEncoder::<F, NaiveAdditiveNtt<F>>::default(),
             &mmcs(),
-            &mut ch,
             witness,
             0,
             LOG_INV_RATE,
@@ -455,8 +447,7 @@ mod tests {
         let mmcs_instance = mmcs();
 
         let mut ch = challenger();
-        let (_commitment, prover_data) =
-            commit(&config, &encoder, &mmcs_instance, &mut ch, witness);
+        let (_commitment, prover_data) = commit(&config, &encoder, &mmcs_instance, witness);
         let (_merkle_data, _sumcheck_data, rounds, randomness, final_codeword) =
             fold_rounds_with::<false, _, _>(prover_data, &config, &mmcs_instance, &mut ch);
 
@@ -528,7 +519,6 @@ mod tests {
                 &config,
                 &encoder,
                 &mmcs_instance,
-                &mut got_ch,
                 SuffixProver::<F, F>::new_witness(vec![table.clone()], 0),
             );
             let (_, got_sumcheck, got_rounds, got_randomness, got_final) =
@@ -540,7 +530,6 @@ mod tests {
                 &config,
                 &encoder,
                 &mmcs_instance,
-                &mut want_ch,
                 SuffixProver::<F, F>::new_witness(vec![table], 0),
             );
             let (_, want_sumcheck, want_rounds, want_randomness, want_final) =
@@ -604,11 +593,10 @@ mod tests {
         let config = BinaryPcsConfig::try_new(NUM_VARIABLES, params).unwrap();
         let encoder = AdditiveRsEncoder::<F, NaiveAdditiveNtt<F>>::default();
         let mmcs_instance = mmcs();
-        let mut ch = challenger();
         let mut rng = SmallRng::seed_from_u64(0);
         let table = Table::rand(&mut rng, 1, NUM_VARIABLES - 1);
         let witness = SuffixProver::<F, F>::new_witness(vec![table], 0);
 
-        let _ = commit(&config, &encoder, &mmcs_instance, &mut ch, witness);
+        let _ = commit(&config, &encoder, &mmcs_instance, witness);
     }
 }

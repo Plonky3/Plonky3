@@ -5,6 +5,7 @@ use core::fmt::Debug;
 
 use p3_air::{BoundaryIoError, boundary};
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
+use p3_commit::MultilinearPcs;
 use p3_sumcheck::PrescribedPointPcs;
 use thiserror::Error;
 
@@ -217,9 +218,16 @@ where
         .preprocessed_commitment(preprocessed_commitment.cloned())
         .map_err(VerificationError::Transcript)?;
 
-    // 2. Replay the absorb the commitment scheme performs inside the prover's commit phase.
-    // The verifier never calls `commit`, so it absorbs the same commitment in the same bracket.
-    transcript.main_commitment(|challenger| challenger.observe(proof.commitment.clone()));
+    // 2. Replay the binding the commitment scheme performs inside the prover's commit phase.
+    //
+    // The scheme owns that binding, and asking it is what keeps the two sides together.
+    //
+    // A scheme whose commitment rides a typed phase replays that same phase here.
+    transcript.main_commitment(|challenger| {
+        config
+            .pcs()
+            .observe_commitment(&proof.commitment, challenger);
+    });
 
     // 3. Replay the public values, one step per instance.
     transcript

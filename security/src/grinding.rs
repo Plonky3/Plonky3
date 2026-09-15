@@ -271,17 +271,7 @@ pub struct GrindingStep {
 /// | `p3-circle-pcs`  | `query_pow`  | ldt-query-phase   | elided              |
 /// | `p3-stir-pcs-batch` | `batch_pow` | batch-combination | elided           |
 ///
-/// These protocols have additional grinding sites outside this vocabulary.
-///
-/// | protocol                     | steps it grinds                                              |
-/// | ---------------------------- | ------------------------------------------------------------ |
-/// | `p3-whir`                    | `sumcheck_pow`, `query_pow`, `final_query_pow`               |
-/// | `p3-whir-hvzk`               | `zk_sumcheck_pow`, `base_pow`                                |
-/// | `p3-stir`                    | `folding_pow`, `query_pow`, `final_folding_pow`, `final_pow` |
-/// | `p3-sumcheck-quadratic`      | `round_pow`                                                  |
-/// | `p3-sumcheck-generic-degree` | `round_pow`                                                  |
-///
-/// [`GrindingBudget::check`] does not compare these additional sites.
+/// Sites outside this vocabulary are named by the unpriced table below.
 pub const GRINDING_VOCABULARY: [GrindingStep; 10] = [
     GrindingStep {
         protocol: "p3-circle-pcs",
@@ -344,6 +334,46 @@ pub const GRINDING_VOCABULARY: [GrindingStep; 10] = [
         zero_bits: ZeroBitConvention::Elided,
     },
 ];
+
+/// Every grinding step this crate does not price, named once.
+///
+/// # Overview
+///
+/// A protocol here credits the step inside its own security report.
+///
+/// The shared budget therefore skips it, and the comparison never sees it.
+///
+/// # Soundness
+///
+/// A step in neither this table nor the vocabulary is a difficulty nobody
+/// compares, which is how a budget and a transcript drift apart unseen.
+///
+/// The workspace transcript suite walks every described step and asserts that
+/// one of the two tables names it.
+///
+/// Listing a step here is therefore a decision, recorded where the model can
+/// see it, rather than an omission.
+pub const UNPRICED_GRINDING_SITES: [(&str, &str); 11] = [
+    ("p3-whir", "query_pow"),
+    ("p3-whir", "final_query_pow"),
+    ("p3-whir-hvzk", "query_pow"),
+    ("p3-whir-hvzk-base", "base_pow"),
+    ("p3-stir", "folding_pow"),
+    ("p3-stir", "query_pow"),
+    ("p3-stir", "final_folding_pow"),
+    ("p3-stir", "final_pow"),
+    ("p3-sumcheck-quadratic", "round_pow"),
+    ("p3-sumcheck-hvzk", "round_pow"),
+    ("p3-sumcheck-generic-degree", "round_pow"),
+];
+
+/// Whether a protocol's step label is priced by its own report rather than the budget.
+#[must_use]
+pub fn is_unpriced_grinding_site(protocol: &str, label: &str) -> bool {
+    UNPRICED_GRINDING_SITES
+        .iter()
+        .any(|&(p, l)| p == protocol && l == label)
+}
 
 /// The vocabulary row for one protocol's step label, or `None` when the pair
 /// names no site this crate models.

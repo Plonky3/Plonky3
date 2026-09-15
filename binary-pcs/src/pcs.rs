@@ -442,13 +442,19 @@ where
         witness: Self::Witness,
         challenger: &mut Challenger,
     ) -> Result<(Self::Commitment, Self::ProverData), Self::ProverError> {
-        Ok(commit(
-            &self.config,
-            &self.encoder,
-            &self.mmcs,
-            challenger,
-            witness,
-        ))
+        let (commitment, prover_data) = commit(&self.config, &self.encoder, &self.mmcs, witness);
+
+        // The verifier reaches the same call, so neither side can bind differently.
+        self.observe_commitment(&commitment, challenger);
+
+        Ok((commitment, prover_data))
+    }
+
+    fn observe_commitment(&self, commitment: &Self::Commitment, challenger: &mut Challenger) {
+        // A binary tower field is not a transcript field.
+        //
+        // So this scheme binds the root directly, with no typed phase.
+        challenger.observe(commitment.clone());
     }
 
     /// Rejects an over-budget protocol before touching the challenger.
@@ -468,9 +474,8 @@ where
         challenger: &mut Challenger,
         protocol: Self::OpeningProtocol,
     ) -> Result<(), Self::Error> {
-        // `commit` absorbs the base commitment itself (via `Layout::commit` -> `commit_base`);
-        // the verifier never calls `commit`, so it absorbs the same root here instead.
-        challenger.observe(commitment.clone());
+        // The prover binds the root while committing, so the verifier binds it here.
+        self.observe_commitment(commitment, challenger);
         self.verify_opening(commitment, proof, &protocol, None, challenger)
             .map(|_| ())
     }

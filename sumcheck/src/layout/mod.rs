@@ -83,6 +83,7 @@ pub use opening::{
     VerifierVirtualClaim,
 };
 pub use prover::{Layout, PrefixProver, StackedClaims, SuffixProver};
+pub use transcript::{commitment_domain_separator, observe_commitment};
 pub use verifier::Verifier;
 pub use witness::{Selector, Table, TablePlacement, Witness};
 

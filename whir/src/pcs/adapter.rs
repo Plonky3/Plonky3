@@ -10,7 +10,7 @@ use p3_dft::TwoAdicSubgroupDft;
 use p3_field::{ExtensionField, PrimeField64, TwoAdicField};
 use p3_matrix::dense::DenseMatrix;
 use p3_multilinear_util::point::Point;
-use p3_sumcheck::layout::{Layout, Table, Verifier, Witness};
+use p3_sumcheck::layout::{Layout, Table, Verifier, Witness, observe_commitment};
 use p3_sumcheck::{OpeningEvals, OpeningProtocol, PrescribedPointPcs};
 
 use super::prover::WhirProver;
@@ -95,11 +95,15 @@ where
         let (layout, commitment, merkle_data) = L::commit(
             &self.dft,
             &self.mmcs,
-            challenger,
             witness,
             self.config.round_folding_factor(0),
             self.config.starting_log_inv_rate,
         );
+
+        // The verifier binds the same root, through the same call.
+        //
+        // It does so before replaying anything else.
+        self.observe_commitment(&commitment, challenger);
         Ok((
             commitment,
             WhirProverData {
@@ -108,6 +112,10 @@ where
                 _marker: PhantomData,
             },
         ))
+    }
+
+    fn observe_commitment(&self, commitment: &Self::Commitment, challenger: &mut Challenger) {
+        observe_commitment::<F, _, _>(challenger, commitment.clone());
     }
 
     fn open(
@@ -155,7 +163,7 @@ where
         challenger: &mut Challenger,
         protocol: Self::OpeningProtocol,
     ) -> Result<(), Self::Error> {
-        challenger.observe(commitment.clone());
+        self.observe_commitment(commitment, challenger);
 
         let mut layout_verifier = Verifier::<F, EF>::new(&protocol.table_shapes(), L::strategy());
 
@@ -294,8 +302,11 @@ where
 
     /// Verify each batch at its supplied point.
     ///
-    /// The commitment is not absorbed here.
-    /// The caller absorbs it once before its own challenges.
+    /// The commitment is not bound here.
+    ///
+    /// The caller binds it once, through the layout's commitment phase.
+    ///
+    /// That happens before the caller draws any challenge of its own.
     fn verify_at(
         &self,
         commitment: &Self::Commitment,
