@@ -8,7 +8,7 @@ use p3_challenger::DuplexChallenger;
 use p3_dft::Radix2DFTSmallBatch;
 use p3_field::extension::BinomialExtensionField;
 use p3_field::{Field, PrimeCharacteristicRing};
-use p3_lookup::{Count, InteractionBuilder};
+use p3_lookup::{Count, InteractionBuilder, TraceWindow};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_multi_stark::config::MultiStarkConfig;
@@ -1935,4 +1935,185 @@ fn security_checked_roundtrip_for_an_air_bound_only_by_boundary_io() {
         &mut challenger(),
     )
     .expect("honest pin-only proof must verify");
+}
+
+/// The two AIRs of the indexed-lookup batch, so one batch can hold both.
+enum SquaresBatch {
+    /// Provides the table out of its main trace.
+    Table,
+    /// Reads the table, naming an entry per row.
+    Reader,
+}
+
+impl BaseAir<F> for SquaresBatch {
+    fn width(&self) -> usize {
+        match self {
+            Self::Table => 1,
+            Self::Reader => 2,
+        }
+    }
+
+    fn main_next_row_columns(&self) -> Vec<usize> {
+        Vec::new()
+    }
+}
+
+impl<AB> Air<AB> for SquaresBatch
+where
+    AB: AirBuilder<F = F> + InteractionBuilder,
+{
+    fn eval(&self, builder: &mut AB) {
+        // Every AIR owes the zerocheck a constraint, and both traces open at zero.
+        //
+        //     table  : entry 0 squares to 0
+        //     reader : the first row names entry 0
+        let main = builder.main();
+        let local = main.current_slice();
+        builder.when_first_row().assert_zero(local[0]);
+
+        match self {
+            // The table's single column carries one value per entry.
+            Self::Table => builder.push_indexed_table("squares", TraceWindow::Main, [0]),
+            // Column 0 names the entry, column 1 holds what that row pulled.
+            Self::Reader => builder.push_indexed_read("squares", 0, [1]),
+        }
+    }
+}
+
+#[test]
+fn prove_verify_indexed_lookup_roundtrips_through_pcs() {
+    // Fixture state: a four-entry table of squares, read by an eight-row reader.
+    //
+    //     table  : entry  0 1 2 3   ->  value  0 1 4 9
+    //     reader : names  0 1 2 3 3 2 1 0
+    //              holds  0 1 4 9 9 4 1 0
+    //
+    // Every entry is read exactly twice.
+    //
+    // A logarithmic-derivative lookup reads counts modulo the characteristic.
+    //
+    // Modulo two it could not tell two reads from none.
+    //
+    // That is the failure this reduction exists to avoid.
+    let table_rows = 4usize;
+    let reader_rows = 8usize;
+    let table_log = log2_strict_usize(table_rows);
+    let reader_log = log2_strict_usize(reader_rows);
+
+    let squares = RowMajorMatrix::new((0..table_rows).map(|v| F::from_usize(v * v)).collect(), 1);
+
+    // A position column holds the entry under the reduction's embedding.
+    //
+    // Over a prime field that embedding is the entry itself.
+    let named = [0usize, 1, 2, 3, 3, 2, 1, 0];
+    let reads = RowMajorMatrix::new(
+        named
+            .iter()
+            .flat_map(|&v| [F::from_usize(v), F::from_usize(v * v)])
+            .collect(),
+        2,
+    );
+
+    let reader = SquaresBatch::Reader;
+    let table = SquaresBatch::Table;
+    // Both traces are stacked into one committed polynomial.
+    //
+    //     reader  8 rows x 2 columns = 16
+    //     table   4 rows x 1 column  =  4
+    let stacked_num_variables = log2_ceil_usize(2 * reader_rows + table_rows);
+    let config = config_for_stacked(stacked_num_variables);
+    let (pk, vk) = setup(&config, &[&reader, &table], &mut challenger()).unwrap();
+
+    let proof = prove(
+        &config,
+        ProverInstances::new(vec![
+            ProverInstance::new(&reader, Table::new(reads.transpose()), &pk, &[]),
+            ProverInstance::new(&table, Table::new(squares.transpose()), &pk, &[]),
+        ]),
+        0,
+        &mut challenger(),
+    )
+    .unwrap();
+
+    // An AIR declaring an indexed read must produce a reduction section in the proof.
+    assert!(proof.indexed.is_some());
+
+    verify(
+        &config,
+        VerifierInstances::new(vec![
+            VerifierInstance::new(&reader, &vk, reader_log, &[]),
+            VerifierInstance::new(&table, &vk, table_log, &[]),
+        ]),
+        &proof,
+        0,
+        &mut challenger(),
+    )
+    .expect("an honest indexed lookup must verify through the trace PCS opening");
+}
+
+#[test]
+fn a_reader_pulling_the_wrong_value_is_rejected() {
+    // Invariant: a row's pulled value has to be what the table holds at the entry it names.
+    //
+    // Fixture state: the same squares table and eight-row reader.
+    //
+    // Mutation: row 5 names entry 2 but holds 5 instead of 4.
+    //
+    //     honest : names 2 -> holds 4
+    //     forged : names 2 -> holds 5
+    //
+    // The position column is untouched, so the pushforward is the honest one.
+    //
+    // What breaks is the claim tying the table's columns to it.
+    let table_rows = 4usize;
+    let reader_rows = 8usize;
+    let table_log = log2_strict_usize(table_rows);
+    let reader_log = log2_strict_usize(reader_rows);
+
+    let squares = RowMajorMatrix::new((0..table_rows).map(|v| F::from_usize(v * v)).collect(), 1);
+
+    let named = [0usize, 1, 2, 3, 3, 2, 1, 0];
+    let mut values = named
+        .iter()
+        .flat_map(|&v| [F::from_usize(v), F::from_usize(v * v)])
+        .collect::<Vec<_>>();
+    values[11] = F::from_usize(5);
+    let reads = RowMajorMatrix::new(values, 2);
+
+    let reader = SquaresBatch::Reader;
+    let table = SquaresBatch::Table;
+    let stacked_num_variables = log2_ceil_usize(2 * reader_rows + table_rows);
+    let config = config_for_stacked(stacked_num_variables);
+    let (pk, vk) = setup(&config, &[&reader, &table], &mut challenger()).unwrap();
+
+    // The prover catches a false statement itself rather than building a proof nobody takes.
+    let proved = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        prove(
+            &config,
+            ProverInstances::new(vec![
+                ProverInstance::new(&reader, Table::new(reads.transpose()), &pk, &[]),
+                ProverInstance::new(&table, Table::new(squares.transpose()), &pk, &[]),
+            ]),
+            0,
+            &mut challenger(),
+        )
+    }));
+
+    let Ok(Ok(proof)) = proved else {
+        // Rejected while proving, which is the honest outcome for a false statement.
+        return;
+    };
+
+    // Should a proof come out anyway, no verifier may take it.
+    verify(
+        &config,
+        VerifierInstances::new(vec![
+            VerifierInstance::new(&reader, &vk, reader_log, &[]),
+            VerifierInstance::new(&table, &vk, table_log, &[]),
+        ]),
+        &proof,
+        0,
+        &mut challenger(),
+    )
+    .expect_err("a reader pulling a value the table does not hold must be rejected");
 }
