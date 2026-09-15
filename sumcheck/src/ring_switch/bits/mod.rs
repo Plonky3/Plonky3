@@ -1,34 +1,29 @@
 //! Ring switching at a bit alphabet.
 //!
-//! The reduction beside this one is generic over a base field and an extension of it.
-//!
-//! It cannot be instantiated at `F_2`.
-//!
-//! The basis accessor it rests on hands out a borrowed slice.
-//!
-//! 128 one-byte coefficients cannot be borrowed out of a 16-byte element.
+//! The reduction beside this one is generic over a field and an extension.
+//! It cannot be instantiated at `F_2`, because its basis accessor borrows.
+//! A borrowed slice cannot hold 128 coefficients of one bit each.
 //!
 //! # What changes at a bit alphabet
 //!
-//! The construction is the same one, but two things about it stop being incidental.
+//! Two things about the same construction stop being incidental.
 //!
-//! A coefficient is one bit, so every product by a coefficient is a conditional add:
+//! A coefficient is one bit, so a product by one is a conditional add:
 //!
 //! ```text
 //!     general alphabet   ->  d multiplications per point
 //!     bit alphabet       ->  the set bits, added
 //! ```
 //!
-//! And the tensor element is a `d x d` bit matrix, which is one `EF` element per row:
+//! And the tensor element is a `d x d` bit matrix, one `EF` element per row:
 //!
 //! ```text
 //!     one byte per coefficient   ->  16 KB at d = 128
 //!     one bit per coefficient    ->   2 KB
 //! ```
 //!
-//! That matters because the tensor element crosses the wire.
-//!
-//! So the element is held by rows, and the two readings of the matrix are a transpose apart.
+//! That matters because the element crosses the wire, so it is held by rows.
+//! The two readings of the matrix are then a transpose apart.
 //!
 //! # The pieces
 //!
@@ -39,25 +34,20 @@
 //!     BitRingSwitch   one reduction, and the five values it produces
 //! ```
 //!
-//! The witness being bit-valued is what the reduction's soundness rests on.
-//!
+//! Soundness rests on the witness being bit-valued.
 //! The packing carries that as a type rather than as a convention.
 //!
-//! The two points every value depends on live on the reduction.
-//!
-//! So the equality tables are built once, and the widths they agree on are checked once.
+//! Every value depends on the same two points, so the reduction holds them.
+//! The equality tables are built once, and their widths checked once.
 //!
 //! # The basis
 //!
-//! A tower level may hold its elements in any `F_2`-basis of the field.
-//!
+//! A tower level may hold its elements in any `F_2`-basis.
 //! This module fixes the one its byte representation already defines.
+//! Coefficient `j` is bit `j` of the little-endian bytes, so `beta_0 = 1`.
 //!
-//! Coefficient `j` is bit `j` of the little-endian byte string, so `beta_0 = 1`.
-//!
-//! Nothing here depends on which basis that is, only on both sides using the same one.
-//!
-//! The payoff is that packing becomes a reinterpretation rather than a computation.
+//! Nothing depends on which basis that is, only on both sides agreeing.
+//! The payoff is that packing becomes a reinterpretation, not a computation.
 
 pub mod basis;
 pub mod packing;

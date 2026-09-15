@@ -1,4 +1,4 @@
-//! A bit witness held as the packed multilinear a commitment holds (Construction 3.1).
+//! A bit witness held as the multilinear a commitment holds (Construction 3.1).
 
 use alloc::vec::Vec;
 
@@ -12,11 +12,9 @@ use super::basis::Coefficients;
 ///
 /// # Overview
 ///
-/// The reduction's soundness rests on the committed polynomial being a packing of bits.
-///
+/// Soundness rests on the committed polynomial being a packing of bits.
 /// An arbitrary multilinear will not do.
-///
-/// Carrying that as a type stops the wrong polynomial being handed to the reduction.
+/// Carrying that as a type stops the wrong one reaching the reduction.
 ///
 /// # The packing
 ///
@@ -41,12 +39,12 @@ impl<EF: TowerLevel> BitPacking<EF> {
     ///
     /// # Arguments
     ///
-    /// The witness as it is held, eight cells to the byte, least significant bit first.
+    /// The witness as held, eight cells to the byte, lowest bit first.
     ///
     /// # Errors
     ///
     /// - The cell count is no power of two, so the witness covers no hypercube.
-    /// - The witness is too short to fill one element, so there is nothing to pack.
+    /// - The witness is too short to fill one element, so nothing to pack.
     pub fn new(bits: &[u8]) -> Result<Self, BitPackingError> {
         let stride = EF::NUM_BYTES;
         if !(bits.len() * 8).is_power_of_two() {
@@ -75,7 +73,7 @@ impl<EF: TowerLevel> BitPacking<EF> {
         &self.packed
     }
 
-    /// Variables the packed multilinear has, which is the witness's less the absorbed ones.
+    /// Variables the packing has: the witness's, less the absorbed ones.
     pub fn num_variables(&self) -> usize {
         self.packed.num_variables()
     }
@@ -87,7 +85,7 @@ impl<EF: TowerLevel> BitPacking<EF> {
 
     /// Whether the packing holds no element.
     ///
-    /// Never true of a value this type builds, since one element is the minimum it accepts.
+    /// Never true of a value this type builds: one element is its minimum.
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
@@ -143,7 +141,7 @@ mod tests {
 
     #[test]
     fn the_coordinates_are_the_cells_in_order() {
-        // Invariant: coordinate `j` of element `w` is cell `d*w + j` of the witness.
+        // Invariant: coordinate `j` of element `w` is cell `d*w + j`.
         //
         // Both sides of the reduction index the same cells only if this holds.
         let witness = bits(0x9AC, 8);
@@ -185,7 +183,7 @@ mod tests {
 
     #[test]
     fn the_packing_loses_exactly_the_absorbed_variables() {
-        // Fixture state: 256 cells is 8 variables, of which a 16-bit level absorbs 4.
+        // Fixture state: 256 cells is 8 variables, of which 16 bits absorb 4.
         let packing = BitPacking::<EF>::new(&[0u8; 32]).unwrap();
 
         assert_eq!(
@@ -196,11 +194,11 @@ mod tests {
 
     #[test]
     fn the_packing_is_the_bit_planes_read_together() {
-        // Invariant: the packing at a point is the basis-weighted sum of the bit planes.
+        // Invariant: the packing at a point is the weighted sum of bit planes.
         //
-        //     t'(r) = sum_j g_j(r) * beta_j,   g_j the multilinear of cells d*w + j
+        //     t'(r) = sum_j g_j(r) * beta_j,   g_j = cells d*w + j
         //
-        // This is the identity the whole reduction is built on, so it is pinned directly.
+        // The whole reduction is built on this, so it is pinned directly.
         let mut rng = SmallRng::seed_from_u64(0x91A2);
         let witness = bits(0x91A3, 16);
         let packing = BitPacking::<EF>::new(&witness).unwrap();
@@ -213,7 +211,7 @@ mod tests {
         let d = Coefficients::<EF>::DIMENSION;
         let mut expected = EF::ZERO;
         for j in 0..d {
-            // Bit plane `j`, read as its own multilinear over the packed variables.
+            // Bit plane `j`, as its own multilinear over the packed variables.
             let plane = Poly::new(
                 (0..packing.len())
                     .map(|w| {

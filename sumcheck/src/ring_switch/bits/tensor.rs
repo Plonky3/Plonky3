@@ -13,9 +13,7 @@ use super::basis::Coefficients;
 /// # Overview
 ///
 /// Fix the `F_2`-basis the coordinates define.
-///
-/// The element is the matrix `m` with `m[u][v]` the coefficient of `beta_u ⊗ beta_v`.
-///
+/// The element is the matrix `m`, with `m[u][v]` the `beta_u ⊗ beta_v` term.
 /// A row of bits is an element of `EF`, so the matrix is `d` elements:
 ///
 /// ```text
@@ -24,20 +22,15 @@ use super::basis::Coefficients;
 /// ```
 ///
 /// Rows are what this type stores, so the row reading is free.
-///
 /// The column reading is one bit transpose away.
 ///
 /// # What crosses the wire
 ///
-/// The rows, as `d` elements of `EF`.
-///
-/// That is the whole element at one bit per coefficient.
-///
+/// The rows, as `d` elements of `EF`: the whole element, one bit per entry.
 /// 2 KB at `d = 128`, against the 16 KB a byte per coefficient would cost.
 ///
-/// The only route from untrusted data to a value of this type checks the row count.
-///
-/// An element that was deserialized is therefore already the right shape.
+/// The only route from untrusted data to this type checks the row count.
+/// A deserialized element is therefore already the right shape.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(
     into = "Vec<EF>",
@@ -45,12 +38,12 @@ use super::basis::Coefficients;
     bound(serialize = "EF: TowerLevel", deserialize = "EF: TowerLevel")
 )]
 pub struct BitTensor<EF> {
-    /// Row `u` read as an element: bit `v` of this is the coefficient of `beta_u ⊗ beta_v`.
+    /// Row `u` as an element: bit `v` is the coefficient of `beta_u ⊗ beta_v`.
     rows: Vec<EF>,
 }
 
 impl<EF: TowerLevel> BitTensor<EF> {
-    /// The side length of the matrix, which is the field's dimension over `F_2`.
+    /// The side length of the matrix: the field's dimension over `F_2`.
     pub const DIMENSION: usize = Coefficients::<EF>::DIMENSION;
 
     /// The additive identity: the all-zero matrix.
@@ -73,7 +66,7 @@ impl<EF: TowerLevel> BitTensor<EF> {
 
     /// Adds `a ⊗ b` into this element, without forming the product separately.
     ///
-    /// Coordinates are bits, so each term is an addition rather than a multiplication.
+    /// Coordinates are bits, so a term is an addition, not a multiplication.
     ///
     /// Row `u` takes `b` exactly when coordinate `u` of `a` is set.
     pub fn add_exterior_product(&mut self, a: EF, b: EF) {
@@ -102,7 +95,7 @@ impl<EF: TowerLevel> BitTensor<EF> {
 
     /// The rows, each read as an element.
     ///
-    /// These are what a transcript absorbs, since they are what crosses the wire.
+    /// These are what a transcript absorbs, being what crosses the wire.
     #[must_use]
     pub fn rows(&self) -> &[EF] {
         &self.rows
@@ -117,7 +110,7 @@ impl<EF: TowerLevel> BitTensor<EF> {
     pub fn columns(&self) -> Vec<EF> {
         let d = Self::DIMENSION;
 
-        // Read every row's coordinates once, so the transpose is a gather, not `d` re-reads.
+        // Read each row's coordinates once, so the transpose is one gather.
         let source = self
             .rows
             .iter()
@@ -139,7 +132,7 @@ impl<EF: TowerLevel> BitTensor<EF> {
 
     /// Scales the row reading: row `u` becomes `b * row u`.
     ///
-    /// This is multiplication by `1 ⊗ b`, which acts on the second tensor leg alone.
+    /// This is multiplication by `1 ⊗ b`, acting on the second tensor leg.
     pub fn scale_rows(&mut self, b: EF) {
         for row in &mut self.rows {
             *row *= b;
@@ -148,10 +141,8 @@ impl<EF: TowerLevel> BitTensor<EF> {
 
     /// Scales the column reading: column `v` becomes `a * column v`.
     ///
-    /// This is multiplication by `a ⊗ 1`, which acts on the first tensor leg alone.
-    ///
+    /// This is multiplication by `a ⊗ 1`, acting on the first tensor leg.
     /// The stored rows are the wrong reading for it.
-    ///
     /// So the matrix is transposed, scaled, and transposed back.
     pub fn scale_columns(&mut self, a: EF) {
         let mut columns = self.columns();
@@ -186,7 +177,7 @@ impl<EF: TowerLevel> TryFrom<Vec<EF>> for BitTensor<EF> {
     type Error = MalformedBitTensor;
 
     fn try_from(rows: Vec<EF>) -> Result<Self, Self::Error> {
-        // Both readings index a square matrix, so a wrong row count leaves neither defined.
+        // Both readings index a square matrix, so a wrong count defines none.
         if rows.len() == Self::DIMENSION {
             Ok(Self { rows })
         } else {
@@ -237,7 +228,7 @@ mod tests {
 
     #[test]
     fn the_matrix_is_square_in_the_fields_dimension() {
-        // Fixture state: 16 bits over `F_2` is a 16 x 16 matrix, 128 bits a 128 x 128 one.
+        // Fixture state: 16 bits give a 16 x 16 matrix, 128 bits a 128 x 128.
         assert_eq!(BitTensor::<BinaryField16>::DIMENSION, 16);
         assert_eq!(BitTensor::<BinaryField128>::DIMENSION, 128);
         assert_eq!(BitTensor::<BinaryField16>::zero().rows().len(), 16);
@@ -245,7 +236,7 @@ mod tests {
 
     #[test]
     fn an_exterior_product_is_the_outer_product_of_the_coordinates() {
-        // Invariant: entry `(u, v)` is coordinate `u` of `a` times coordinate `v` of `b`.
+        // Invariant: entry `(u, v)` is coordinate `u` of `a` times `v` of `b`.
         //
         // Over `F_2` that is the two bits being set together.
         let mut rng = SmallRng::seed_from_u64(0x0117);
@@ -266,7 +257,7 @@ mod tests {
     fn the_identity_is_one_tensor_one() {
         // The identity seeds the equality recurrence.
         //
-        // A wrong value there is a silent completeness failure, not a rejection.
+        // A wrong value there is a silent completeness failure, no rejection.
         assert_eq!(
             BitTensor::<EF>::one(),
             BitTensor::exterior_product(EF::ONE, EF::ONE)
@@ -275,7 +266,7 @@ mod tests {
 
     #[test]
     fn transposing_twice_is_the_identity() {
-        // The column reading is the transpose, so reading it twice must return the element.
+        // The column reading is the transpose, so twice must be the identity.
         let original = element(0x7A5);
 
         assert_eq!(transpose(&transpose(&original)), original);
@@ -301,7 +292,7 @@ mod tests {
 
     #[test]
     fn scaling_the_rows_scales_every_row_reading() {
-        // Multiplication by `1 ⊗ b` acts on the second leg, which is the row reading.
+        // Multiplying by `1 ⊗ b` acts on the second leg, the row reading.
         let mut scaled = element(0x505);
         let before = scaled.rows().to_vec();
 
@@ -315,7 +306,7 @@ mod tests {
 
     #[test]
     fn scaling_the_columns_scales_every_column_reading() {
-        // Multiplication by `a ⊗ 1` acts on the first leg, which is the column reading.
+        // Multiplying by `a ⊗ 1` acts on the first leg, the column reading.
         //
         // The stored rows are the other reading, so this is the transpose path.
         let mut scaled = element(0xC015);
@@ -331,7 +322,7 @@ mod tests {
 
     #[test]
     fn the_two_scalings_commute() {
-        // The equality recurrence forms one term by scaling both legs, in either order.
+        // The equality recurrence scales both legs, in either order.
         let original = element(0xC0119);
         let mut rng = SmallRng::seed_from_u64(0xC011A);
         let (a, b) = (rng.random::<EF>(), rng.random::<EF>());
@@ -349,7 +340,7 @@ mod tests {
 
     #[test]
     fn a_wrong_row_count_is_refused() {
-        // The only route from untrusted data checks the shape both readings index.
+        // The only route from untrusted data checks the shape it indexes.
         assert_eq!(
             BitTensor::<EF>::try_from(alloc::vec![EF::ZERO; 15]).unwrap_err(),
             MalformedBitTensor {
@@ -363,7 +354,7 @@ mod tests {
 
     #[test]
     fn the_wire_form_round_trips() {
-        // What crosses the wire is the rows, and reading them back must rebuild the element.
+        // The rows cross the wire, so reading them back must rebuild it.
         let original = element(0x5E4);
 
         let encoded = serde_json::to_string(&original).unwrap();
@@ -375,7 +366,7 @@ mod tests {
     proptest! {
         #[test]
         fn addition_is_entrywise(a: u16, b: u16, c: u16, d: u16) {
-            // Adding two elements adds their matrices, which over `F_2` is a row-wise add.
+            // Adding two elements adds their matrices, a row-wise add here.
             let mut left = BitTensor::exterior_product(EF::from_repr(a), EF::from_repr(b));
             let right = BitTensor::exterior_product(EF::from_repr(c), EF::from_repr(d));
             let expected: Vec<EF> = left
