@@ -1002,6 +1002,7 @@ mod tests {
 
     use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
     use p3_challenger::fs::TypeTag;
+    use p3_challenger::testing::pow_difficulties;
     use p3_challenger::{CanSample, DuplexChallenger};
     use p3_field::PrimeCharacteristicRing;
     use p3_field::extension::BinomialExtensionField;
@@ -1688,5 +1689,41 @@ mod tests {
         assert_eq!(query_draws(8, 8), 0);
         assert_eq!(query_draws(8, 9), 0);
         assert_eq!(query_draws(8, 7), 7);
+    }
+
+    #[test]
+    fn the_described_grinding_matches_the_configured_difficulty() {
+        // Invariant: a grinding difficulty lives in two places.
+        //
+        //     transcript  ->  the bits the pattern describes
+        //     model       ->  the bits this protocol's own report credits
+        //
+        // Both read the same configuration, so they must agree site for site.
+        //
+        // WHIR prices its own grinding, so the shared budget never compares it.
+        //
+        // Fixture state: the reference configuration, and one with no grinding.
+        for ground in [false, true] {
+            let mut params = base_params();
+            if !ground {
+                params.pow_bits = 0;
+            }
+            let shape = shape_of(&config_from(params));
+
+            // One site per round, then one closing the run.
+            //
+            // A zero difficulty describes no step, so it contributes nothing.
+            let mut expected: Vec<(&str, usize)> = shape
+                .rounds
+                .iter()
+                .filter(|round| round.query_pow_bits > 0)
+                .map(|round| (QUERY_POW, round.query_pow_bits))
+                .collect();
+            if shape.final_pow_bits > 0 {
+                expected.push((FINAL_QUERY_POW, shape.final_pow_bits));
+            }
+
+            assert_eq!(pow_difficulties(&shape.pattern::<F, EF>()), expected);
+        }
     }
 }
