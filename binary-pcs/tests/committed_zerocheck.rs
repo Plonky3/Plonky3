@@ -1,30 +1,23 @@
 //! A binary zerocheck whose closing claim a real commitment discharges.
 //!
 //! Every step goes through a public surface a caller would use.
-//!
-//! The scheme's prescribed-point opening, and the zerocheck's prove, verify, discharge.
+//! The scheme's prescribed-point opening, and the zerocheck's own three.
 //!
 //! # What this establishes
 //!
 //! That the mechanics close.
-//!
-//! The point the proof ends on is where the committed operands take the claimed value.
-//!
+//! The point the proof ends on is where the operands take the claimed value.
 //! No step reads the witness on the verifying side.
 //!
 //! It does not establish that the witness is bit-valued.
-//!
 //! A cell of this commitment is a whole field element.
+//! The constraint holds on field cells that are not bits, as its tests say.
 //!
-//! The constraint is satisfied by field cells that are not bits, as its own tests record.
-//!
-//! The packed commitment is what makes the statement a bit statement, and it is not here yet.
-//!
-//! The prover and the verifier run on two independently constructed challengers.
-//!
+//! The packed commitment makes it a bit statement, and is not here yet.
+//! The prover and verifier run on two independently built challengers.
 //! One cloned after proving already carries every observation the prover made.
 //!
-//! Such a challenger can never disagree with a proof that desyncs the transcript.
+//! Such a challenger can never disagree with a proof that desyncs.
 
 use p3_binary_field::{BinaryChallenger, BinaryField8, BinaryField128};
 use p3_binary_pcs::{BinaryPcs, BinaryPcsConfig, BinaryPcsParams};
@@ -45,7 +38,7 @@ use rand::{RngExt, SeedableRng};
 /// The subspace the skip round runs over lives in a byte field.
 type A = BinaryField8;
 
-/// The commitment, the challenges and every value the rounds carry live in the field above it.
+/// The commitment, the challenges and the round values live above it.
 type F = BinaryField128;
 
 type MyHash = SerializingHasher<Keccak256Hash>;
@@ -73,7 +66,7 @@ const LOG_STACKED: usize = LOG_HEIGHT + 2;
 /// The three packed operands, in the order the constraint reads them.
 type Operands = [Vec<u8>; ARITY];
 
-/// What the chain ends on: the opened operand values, and the claim they must answer.
+/// What the chain ends on: the opened values, and the claim they answer.
 #[derive(Debug)]
 struct Closing {
     /// One opened value per operand, in column order.
@@ -86,8 +79,7 @@ impl Closing {
     /// Ask the claim whether the commitment's answer is the one it wanted.
     ///
     /// The comparison lives in the library.
-    ///
-    /// So this test cannot batch the openings in an order the proof did not use.
+    /// So this test cannot batch the openings in an order the proof did not.
     ///
     /// Nor can it pass by leaving the comparison out.
     fn discharge(&self) -> Result<(), ZerocheckError> {
@@ -109,7 +101,7 @@ const fn challenger() -> MyChallenger {
 
 /// The commitment scheme the operands are held in.
 ///
-/// A modest security level keeps the round trip quick, and the shape is what is under test.
+/// A modest security level keeps it quick, and the shape is what is tested.
 fn pcs() -> MyPcs {
     BinaryPcs::new(
         BinaryPcsConfig::try_new(
@@ -157,7 +149,7 @@ fn table(operands: &Operands) -> Table<F> {
         .flat_map(|packed| embed_bits::<F>(packed).into_evals())
         .collect::<Vec<_>>();
 
-    // One matrix row per column of the logical table, each holding that column's hypercube.
+    // One matrix row per logical column, each holding that column's cube.
     Table::new(RowMajorMatrix::new(evals, 1 << LOG_HEIGHT))
 }
 
@@ -166,8 +158,7 @@ fn table(operands: &Operands) -> Table<F> {
 ///     commit(committed) -> zerocheck(proven) -> claim at a point -> open there
 ///
 /// The two coincide in honest use.
-///
-/// Passing them apart checks that the commitment, not the witness, discharges the claim.
+/// Passing them apart checks that the commitment discharges, not the witness.
 fn run(
     committed: &Operands,
     proven: &Operands,
@@ -176,7 +167,7 @@ fn run(
     let scheme = pcs();
     let protocol = protocol();
 
-    // Prover: commit, prove against the transcript the commitment is now in, then open.
+    // Prover: commit, prove against the transcript it is now in, then open.
     let mut prover_challenger = challenger();
     let (commitment, prover_data) = scheme
         .commit(
@@ -200,9 +191,8 @@ fn run(
         )
         .unwrap();
 
-    // Verifier: replay from a fresh transcript, holding only the commitment and the proofs.
-    //
-    // Bound through the scheme's own method, which is what the commit side called.
+    // Verifier: replay from a fresh transcript, with commitment and proofs.
+    // Bound through the scheme's own method, which the commit side called.
     let mut verifier_challenger = challenger();
     scheme.observe_commitment(&commitment, &mut verifier_challenger);
 
@@ -227,10 +217,8 @@ fn run(
 
 #[test]
 fn the_commitment_discharges_the_claim_the_zerocheck_leaves() {
-    // Fixture state: 10 variables, 6 skipped, 3 operands committed as one 3-column table.
-    //
-    // Invariant: the opened values, batched under the challenge, are the claimed value.
-    //
+    // Fixture state: 10 variables, 6 skipped, 3 operands as one table.
+    // Invariant: the opened values, batched under the challenge, are the value.
     // Nothing on the verifying side is read from the witness.
     let check = BinaryZerocheck::<A, _>::new(LOG_SKIP, Conjunction, 0).unwrap();
     let num_rows = 1 << (LOG_HEIGHT - LOG_SKIP);
@@ -245,8 +233,7 @@ fn the_commitment_discharges_the_claim_the_zerocheck_leaves() {
 #[test]
 fn grinding_carries_through_the_committed_chain() {
     // Fixture state: 4 bits of difficulty, cheap enough for a test.
-    //
-    // The grinding witness travels in the proof, so the whole chain has to survive it.
+    // The grinding witness travels in the proof, so the chain must survive it.
     let check = BinaryZerocheck::<A, _>::new(LOG_SKIP, Conjunction, 4).unwrap();
     let num_rows = 1 << (LOG_HEIGHT - LOG_SKIP);
     let operands = witness(0x6D1, num_rows, check.round().row_bytes());
@@ -262,7 +249,7 @@ fn a_broken_constraint_is_refused_before_any_opening() {
     //
     //     a & b  ->  (a & b) ^ 1  in cell 0
     //
-    // The residual rounds then no longer end on the constraint of the blends they carry.
+    // The residual rounds then miss the constraint of the blends they carry.
     let check = BinaryZerocheck::<A, _>::new(LOG_SKIP, Conjunction, 0).unwrap();
     let num_rows = 1 << (LOG_HEIGHT - LOG_SKIP);
     let mut operands = witness(0xBAD, num_rows, check.round().row_bytes());
@@ -276,16 +263,14 @@ fn a_broken_constraint_is_refused_before_any_opening() {
 
 #[test]
 fn a_claim_about_another_witness_does_not_open_against_this_commitment() {
-    // Mutation: commit one satisfying witness and prove over a different satisfying one.
+    // Mutation: commit one satisfying witness, prove over a different one.
     //
     //     commit(seed 1)  ->  opens the first witness at the point
     //     prove (seed 2)  ->  claims the second witness's value there
     //
-    // Both witnesses satisfy the constraint, so the zerocheck itself has nothing to catch.
-    //
+    // Both witnesses satisfy the constraint, so the zerocheck catches nothing.
     // Only the commitment separates them, which is what closing the chain buys.
-    //
-    // Both `verify` and `verify_at` return `Ok` here: the discharge is the whole rejection.
+    // Both `verify` and `verify_at` return `Ok`: the discharge rejects it.
     let check = BinaryZerocheck::<A, _>::new(LOG_SKIP, Conjunction, 0).unwrap();
     let num_rows = 1 << (LOG_HEIGHT - LOG_SKIP);
     let row_bytes = check.round().row_bytes();
@@ -295,8 +280,7 @@ fn a_claim_about_another_witness_does_not_open_against_this_commitment() {
     let closing = run(&committed, &proven, &check).unwrap();
 
     // The library refuses it.
-    //
-    // This test therefore reports a rejection rather than comparing two field elements.
+    // This test therefore reports a rejection, comparing no field elements.
     assert_eq!(
         closing.discharge().unwrap_err(),
         ZerocheckError::OpeningsDoNotMatchClaim

@@ -6,17 +6,15 @@ use p3_binary_field::TowerLevel;
 
 /// The widest tower level these coordinates hold.
 ///
-/// A fixed buffer of this width lets one element's coordinates be read without allocating.
-///
-/// An exactly sized array cannot, while the byte count is an associated constant.
+/// A fixed buffer of this width reads coordinates without allocating.
+/// An exactly sized array cannot, while the byte count is a trait const.
 const MAX_BYTES: usize = 16;
 
-/// The `F_2`-coordinates of one element, in the basis its byte representation defines.
+/// The `F_2`-coordinates of one element, in the basis its bytes define.
 ///
 /// # Overview
 ///
 /// A tower level may hold its elements in any `F_2`-basis of the field.
-///
 /// This type fixes the one the representation already carries:
 ///
 /// ```text
@@ -24,17 +22,15 @@ const MAX_BYTES: usize = 16;
 /// ```
 ///
 /// Coordinate zero is therefore the coefficient of one.
-///
 /// That is the convention the tensor algebra's matrix indexing assumes.
-///
-/// Nothing here depends on which basis that is, only on every reader using the same one.
+/// Nothing here depends on which basis that is, only on readers agreeing.
 ///
 /// # Why a value type
 ///
-/// A coordinate is one bit, so three operations matter: read, set, walk the set ones.
+/// A coordinate is one bit, so three operations matter.
+/// Reading one, setting one, and walking the ones that are set.
 ///
-/// Holding the buffer once and offering those keeps callers free of byte arithmetic.
-///
+/// Holding the buffer once keeps callers free of byte arithmetic.
 /// It also keeps the set-bit walk in one place.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Coefficients<EF> {
@@ -45,7 +41,7 @@ pub struct Coefficients<EF> {
 }
 
 impl<EF: TowerLevel> Coefficients<EF> {
-    /// Number of coordinates one element has, which is the level's dimension over `F_2`.
+    /// Coordinates one element has, the level's dimension over `F_2`.
     pub const DIMENSION: usize = 1 << EF::LOG_BITS;
 
     /// Number of Boolean variables one element's coordinates index.
@@ -95,8 +91,7 @@ impl<EF: TowerLevel> Coefficients<EF> {
 
     /// The indices of the set coordinates, lowest first.
     ///
-    /// This replaces the per-coordinate multiplication a general alphabet needs.
-    ///
+    /// This replaces the multiplication a general alphabet needs.
     /// Every accumulation over a bit alphabet is written around it.
     pub fn iter_set(&self) -> impl Iterator<Item = usize> + '_ {
         self.bytes[..EF::NUM_BYTES]
@@ -115,7 +110,7 @@ impl<EF: TowerLevel> Coefficients<EF> {
 
     /// The element these coordinates describe.
     ///
-    /// The inverse of reading one, so a round trip through this type is the identity.
+    /// The inverse of reading one, so a round trip here is the identity.
     #[must_use]
     pub fn element(&self) -> EF {
         EF::from_le_byte_iter(self.bytes.iter().copied())
@@ -157,7 +152,7 @@ mod tests {
 
     #[test]
     fn a_level_has_one_coordinate_per_bit() {
-        // Fixture state: a 128-bit level has 128 coordinates, a 16-bit level 16.
+        // Fixture state: 128 bits give 128 coordinates, 16 bits give 16.
         assert_eq!(Coefficients::<BinaryField128>::DIMENSION, 128);
         assert_eq!(Coefficients::<BinaryField128>::LOG_DIMENSION, 7);
         assert_eq!(Coefficients::<BinaryField16>::DIMENSION, 16);
@@ -166,9 +161,8 @@ mod tests {
 
     #[test]
     fn reading_coordinates_and_rebuilding_is_the_identity() {
-        // Invariant: every coordinate index means the same thing in both directions.
-        //
-        // That is what lets a bit witness be packed by reinterpretation, not rearrangement.
+        // Invariant: a coordinate index means the same in both directions.
+        // That is what lets a witness be packed by reinterpretation.
         let mut rng = SmallRng::seed_from_u64(0xB17E);
         for _ in 0..64 {
             let value = rng.random::<BinaryField128>();
@@ -196,11 +190,11 @@ mod tests {
 
     #[test]
     fn the_coordinates_are_a_basis_decomposition() {
-        // Invariant: an element is the sum of the basis vectors its coordinates select.
+        // Invariant: an element is the sum of the vectors it selects.
         //
-        //     x = sum over set j of beta_j,   beta_j the element with only coordinate j set
+        //     x = sum over set j of beta_j,  beta_j = only bit j set
         //
-        // That is what makes these positions a basis rather than an arbitrary encoding.
+        // That is what makes these positions a basis and not an encoding.
         let mut rng = SmallRng::seed_from_u64(0xBA515);
         for _ in 0..64 {
             let value = rng.random::<BinaryField128>();
@@ -216,7 +210,7 @@ mod tests {
 
     #[test]
     fn a_narrow_level_reads_none_of_its_padding() {
-        // The buffer is wider than most levels, and the padding must never be a coordinate.
+        // The buffer is wider than most levels, and padding is no coordinate.
         let mut rng = SmallRng::seed_from_u64(0x9A44);
         for _ in 0..64 {
             let coefficients = Coefficients::of(rng.random::<BinaryField16>());
@@ -227,7 +221,7 @@ mod tests {
     proptest! {
         #[test]
         fn the_set_walk_finds_exactly_the_set_coordinates(raw: u128) {
-            // The set-bit walk is the hot path, and the full decomposition is the reference.
+            // The set-bit walk is the hot path, decomposition the reference.
             let coefficients = Coefficients::of(BinaryField128::from_repr(raw));
 
             let walked = coefficients.iter_set().collect::<Vec<_>>();
