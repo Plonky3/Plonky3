@@ -184,8 +184,7 @@ impl<F: TowerLevel> SkipDomain<F> {
     ///
     /// # Algorithm
     ///
-    /// A degree-`d` constraint over multilinears reads as a univariate on the subspace.
-    ///
+    /// A degree-`d` constraint over multilinears reads as a univariate here.
     /// Its degree there is `d * (2^k - 1)` for a dimension-`k` subspace.
     ///
     /// Reconstructing it needs `d` rounded up to a power of two:
@@ -210,13 +209,12 @@ impl<F: TowerLevel> SkipDomain<F> {
         Some(if extra == 0 { 1 } else { extra })
     }
 
-    /// Whether this domain is wide enough to transmit a constraint of the given degree.
+    /// Whether this domain is wide enough for a constraint of that degree.
     ///
     /// A domain that is too narrow does not make the round unsound.
     ///
     /// It makes it incomplete.
-    ///
-    /// The honest round polynomial no longer fits in what is sent, so it is rejected.
+    /// The honest round polynomial no longer fits what is sent, so it fails.
     #[must_use]
     pub const fn admits_degree(&self, degree: usize) -> bool {
         match Self::extra_dimensions(degree) {
