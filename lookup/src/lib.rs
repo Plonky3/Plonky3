@@ -8,6 +8,7 @@ mod bus;
 mod challenges;
 mod count;
 pub mod debug_util;
+pub mod indexed;
 pub mod logup;
 pub mod protocol;
 pub mod symbolic;
@@ -20,6 +21,7 @@ pub use builder::{InteractionBuilder, LocalTuple, SymbolicInteraction, SymbolicL
 pub use bus::{LookupBus, PermutationCheckBus};
 pub use challenges::Challenges;
 pub use count::Count;
+pub use indexed::{IndexedLookupError, IndexedLookups, IndexedRead, IndexedTable, TraceWindow};
 pub use logup::LogUpGadget;
 pub use protocol::LookupProtocol;
 pub use symbolic::InteractionSymbolicBuilder;
