@@ -53,7 +53,17 @@ pub struct MultilinearSkipParams {
     /// The verifier admits any polynomial of degree below this size.
     ///
     /// That is what the reconstruction term charges for.
+    ///
+    /// This must be the dimension the verifier actually interpolates on.
+    ///
+    /// It is not a value re-derived from the constraint degree.
+    ///
+    /// A prover choosing a wider domain than the verifier reads is charged too little.
     pub log_extended: usize,
+    /// Number of committed polynomials the opening reduction batches into one run.
+    ///
+    /// One challenge separates them, and separating `n` claims costs `(n - 1)/q`.
+    pub num_polynomials: usize,
 }
 
 /// Exact tuple count and padded GKR shape derived from the lookup plan.
@@ -67,6 +77,17 @@ pub struct MultilinearLookupParams {
     pub max_message_width: usize,
 }
 
+/// Largest subspace dimension a term may be computed from.
+///
+/// Two of the skip terms raise two to a dimension.
+///
+/// At or above the word width that shift leaves range.
+///
+/// It panics in debug builds and drops the term in release.
+///
+/// No real statement comes near it, so refusing the shape is the safe reading.
+const SHIFT_LIMIT: usize = 63;
+
 /// Terms to union-compose with each prescribed-point PCS opening and a hash cap.
 ///
 /// `field_bits` and `nonzero_field_bits` must be lower bounds on respectively
@@ -78,7 +99,28 @@ pub fn reduction_terms(
     field_bits: usize,
     nonzero_field_bits: usize,
 ) -> Vec<SecurityTerm> {
-    if air.num_instances == 0 || air.num_variables == 0 || air.constraint_degree == 0 {
+    // Every scalar that a term is computed from is checked before any term is formed.
+    //
+    // A shape this function cannot charge honestly yields zero bits.
+    //
+    // The alternative is a term that silently drops, rounds down, or overflows a shift.
+    let skip_is_valid = air.skip.is_none_or(|skip| {
+        // The transmitted dimension has to exceed the skipped one.
+        //
+        // Otherwise the reconstruction term is zero and the round is charged nothing.
+        skip.log_extended > skip.log_size
+            // Both dimensions reach a shift, and the widths below keep it in range.
+            && skip.log_extended < SHIFT_LIMIT
+            // A round cannot bind more variables than the statement has.
+            && skip.log_size <= air.num_variables
+            // An empty batch has no claims to separate and no reduction to run.
+            && skip.num_polynomials > 0
+    });
+    if air.num_instances == 0
+        || air.num_variables == 0
+        || air.constraint_degree == 0
+        || !skip_is_valid
+    {
         return alloc::vec![SecurityTerm::new(
             "invalid-multilinear-shape",
             ErrorBits::from_log2(0.0)
@@ -123,14 +165,29 @@ pub fn reduction_terms(
         // The verifier reconstructs the round polynomial itself, admitting any degree
         // below the extension size that vanishes on the subspace.
         //
-        // That is one degree more than an honest prover uses.
+        //     admitted   2^(k + e) - 1        what the interpolation accepts
+        //     honest     d * (2^k - 1)        what a correct prover sends
         //
-        // The challenge must separate a dishonest message from the true one over all of it.
-        let reconstruction = ((1u64 << skip.log_extended) - 1) as f64;
-        add("skip-reconstruction", reconstruction, field_bits);
+        // A dishonest message must be separated from the true one over whichever is wider.
+        //
+        // A narrow transmitted domain does not make the round cheap.
+        //
+        // It makes the honest degree the binding one, and an honest proof stops fitting.
+        let admitted = ((1u64 << skip.log_extended) - 1) as f64;
+        let honest = air.constraint_degree as f64 * ((1u64 << skip.log_size) - 1) as f64;
+        add("skip-reconstruction", admitted.max(honest), field_bits);
 
         // Collapsing the blend takes one degree-two round per skipped variable.
         add("skip-opening", skipped as f64 * 2.0, field_bits);
+
+        // One challenge separates the committed polynomials the blend is taken over.
+        //
+        // Its powers are what keeps their claims apart, so a wider batch costs more.
+        add(
+            "skip-opening-batching",
+            skip.num_polynomials.saturating_sub(1) as f64,
+            field_bits,
+        );
     }
 
     // The equality weight raises the native AIR degree by one in every round.
@@ -162,6 +219,19 @@ pub fn reduction_terms(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// One skip shape, with the three numbers every test below varies.
+    const fn skip(
+        log_size: usize,
+        log_extended: usize,
+        num_polynomials: usize,
+    ) -> MultilinearSkipParams {
+        MultilinearSkipParams {
+            log_size,
+            log_extended,
+            num_polynomials,
+        }
+    }
 
     #[test]
     fn reduction_charges_batching_zerocheck_and_every_sumcheck_round() {
@@ -238,10 +308,7 @@ mod tests {
         //     skip-reconstruction  2^7 - 1    the degree the verifier's interpolation admits
         //     skip-opening         6 * 2      one degree-two round per skipped variable
         let mut params = plain(10);
-        params.skip = Some(MultilinearSkipParams {
-            log_size: 6,
-            log_extended: 7,
-        });
+        params.skip = Some(skip(6, 7, 4));
         let terms = reduction_terms(&params, 100, 99);
 
         assert_eq!(charged(&terms, "zerocheck"), Some(99.0 - libm::log2(4.0)));
@@ -257,6 +324,98 @@ mod tests {
             charged(&terms, "skip-opening"),
             Some(100.0 - libm::log2(12.0))
         );
+        assert_eq!(
+            charged(&terms, "skip-opening-batching"),
+            Some(100.0 - libm::log2(3.0))
+        );
+    }
+
+    #[test]
+    fn the_honest_degree_binds_when_the_transmitted_domain_is_narrow() {
+        // Fixture state: degree 5, 6 skipped variables, one extra dimension transmitted.
+        //
+        //     admitted  2^7 - 1        = 127
+        //     honest    5 * (2^6 - 1)  = 315
+        //
+        // The wider of the two is what a dishonest message must be separated over.
+        let mut params = plain(10);
+        params.constraint_degree = 5;
+        params.skip = Some(skip(6, 7, 1));
+
+        assert_eq!(
+            charged(&reduction_terms(&params, 100, 99), "skip-reconstruction"),
+            Some(100.0 - libm::log2(315.0))
+        );
+    }
+
+    #[test]
+    fn the_admitted_degree_binds_when_the_transmitted_domain_is_wide() {
+        // Fixture state: degree 2, 6 skipped variables, two extra dimensions transmitted.
+        //
+        //     admitted  2^8 - 1        = 255
+        //     honest    2 * (2^6 - 1)  = 126
+        //
+        // Here the interpolation is what admits more, which is the usual case.
+        let mut params = plain(10);
+        params.constraint_degree = 2;
+        params.skip = Some(skip(6, 8, 1));
+
+        assert_eq!(
+            charged(&reduction_terms(&params, 100, 99), "skip-reconstruction"),
+            Some(100.0 - libm::log2(255.0))
+        );
+    }
+
+    #[test]
+    fn a_single_polynomial_batch_costs_no_separating_draw() {
+        // One claim needs no challenge to keep it apart from anything.
+        let mut params = plain(10);
+        params.skip = Some(skip(6, 7, 1));
+
+        assert_eq!(
+            charged(&reduction_terms(&params, 100, 99), "skip-opening-batching"),
+            None
+        );
+    }
+
+    #[test]
+    fn a_skip_shape_no_term_can_charge_honestly_is_refused() {
+        // Every one of these would otherwise be charged wrongly rather than refused:
+        //
+        //     transmitted <= skipped   the reconstruction term is zero, so it vanishes
+        //     transmitted at 63        the shift leaves range
+        //     skipped > variables      a round binding more than the statement has
+        //     empty batch              no claims to separate and no reduction to run
+        for (log_size, log_extended, num_polynomials) in
+            [(6, 6, 1), (6, 5, 1), (6, 63, 1), (11, 12, 1), (6, 7, 0)]
+        {
+            let mut params = plain(10);
+            params.skip = Some(skip(log_size, log_extended, num_polynomials));
+            let terms = reduction_terms(&params, 100, 99);
+
+            assert_eq!(
+                terms.len(),
+                1,
+                "{log_size} {log_extended} {num_polynomials}"
+            );
+            assert_eq!(terms[0].label, "invalid-multilinear-shape");
+            assert_eq!(terms[0].bits.bits(), 0.0);
+        }
+    }
+
+    #[test]
+    fn a_skip_shape_every_term_can_charge_is_accepted() {
+        // The boundary just inside each refusal above, so the guard is not over-tight.
+        for (log_size, log_extended, num_polynomials) in [(6, 7, 1), (10, 11, 1), (6, 62, 1)] {
+            let mut params = plain(10);
+            params.skip = Some(skip(log_size, log_extended, num_polynomials));
+            let terms = reduction_terms(&params, 100, 99);
+
+            assert!(
+                terms.len() > 1,
+                "{log_size} {log_extended} {num_polynomials}"
+            );
+        }
     }
 
     #[test]
@@ -266,10 +425,7 @@ mod tests {
         //
         // Nothing may read the skip as strictly cheaper, so the direction is pinned here.
         let mut params = plain(10);
-        params.skip = Some(MultilinearSkipParams {
-            log_size: 6,
-            log_extended: 7,
-        });
+        params.skip = Some(skip(6, 7, 1));
 
         let plain_terms = reduction_terms(&plain(10), 100, 99);
         let skip_terms = reduction_terms(&params, 100, 99);
@@ -284,6 +440,23 @@ mod tests {
             .bits()
         };
 
+        // The rounds the skip gave up: the plain per-round terms, against the kept ones.
+        //
+        // Fewer bits is more error, so the comparison is on the error each side carries.
+        let error = |bits: f64| libm::exp2(-bits);
+        let given_up = error(charged(&plain_terms, "zerocheck").unwrap())
+            + error(charged(&plain_terms, "constraint-sumcheck").unwrap())
+            - error(charged(&skip_terms, "zerocheck").unwrap())
+            - error(charged(&skip_terms, "constraint-sumcheck").unwrap());
+        let reconstruction = error(charged(&skip_terms, "skip-reconstruction").unwrap());
+
+        // The one term the skip adds outweighs every term it removed.
+        assert!(
+            reconstruction > given_up,
+            "reconstruction={reconstruction} given_up={given_up}"
+        );
+
+        // And so the composed budget is worse, not better.
         assert!(
             total(&skip_terms) < total(&plain_terms),
             "the skip costs bits overall: skip={} plain={}",
@@ -297,10 +470,7 @@ mod tests {
         // The widest legal skip binds the whole cube, so the residual terms disappear rather
         // than going negative.
         let mut params = plain(6);
-        params.skip = Some(MultilinearSkipParams {
-            log_size: 6,
-            log_extended: 7,
-        });
+        params.skip = Some(skip(6, 7, 1));
         let terms = reduction_terms(&params, 100, 99);
 
         assert_eq!(charged(&terms, "zerocheck"), None);
