@@ -190,6 +190,24 @@ impl IndexedLookups {
 /// What makes a set of indexed declarations fail to describe a reduction.
 #[derive(Clone, Debug, PartialEq, Eq, Error)]
 pub enum IndexedLookupError {
+    /// A proof carries a claim list the statement does not describe.
+    #[error("the statement describes {expected} readers, and the claim list carries {actual}")]
+    ClaimCount {
+        /// Readers the statement describes.
+        expected: usize,
+        /// Entries the claim list carries.
+        actual: usize,
+    },
+    /// A proof claims a different number of values than a reader pulls columns.
+    #[error("reader {reader} pulls {expected} columns, and claims {actual} values")]
+    ClaimWidth {
+        /// Position of the reader in plan order.
+        reader: usize,
+        /// Columns that reader pulls.
+        expected: usize,
+        /// Values the claim list carries for it.
+        actual: usize,
+    },
     /// A declaration names a column past the end of the window it addresses.
     #[error("table {table}: column {column} is out of range for a window of width {width}")]
     ColumnOutOfRange {

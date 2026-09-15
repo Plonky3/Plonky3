@@ -66,6 +66,37 @@ where
     where
         Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
     {
+        Self::prove_inner(lookups, witness, challenger, true)
+    }
+
+    /// Prove without checking the statement against the witness.
+    ///
+    /// The check that entry point performs is a courtesy to an honest caller, not a step of
+    /// the protocol.
+    ///
+    /// A forging prover omits it, so a test driving the verifier has to omit it too.
+    #[cfg(test)]
+    pub(crate) fn prove_unchecked<Challenger>(
+        lookups: &[TableLookup<'_, EF>],
+        witness: &[TableWitness<'_, F>],
+        challenger: &mut Challenger,
+    ) -> (Self, LogupStarOutput<EF>)
+    where
+        Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
+    {
+        Self::prove_inner(lookups, witness, challenger, false)
+    }
+
+    /// The reduction, with the statement check under the caller's control.
+    fn prove_inner<Challenger>(
+        lookups: &[TableLookup<'_, EF>],
+        witness: &[TableWitness<'_, F>],
+        challenger: &mut Challenger,
+        check_statement: bool,
+    ) -> (Self, LogupStarOutput<EF>)
+    where
+        Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
+    {
         assert_eq!(
             lookups.len(),
             witness.len(),
@@ -185,11 +216,13 @@ where
         // It is not left to build a proof no verifier would take.
         //
         // The cost is one pass over the claims, so this stays a hard assertion.
-        assert_eq!(
-            claimed_sum,
-            product::claimed_sum(lookups, reader_batching, column_batching),
-            "the claims the statement carries are not the ones the witness produces"
-        );
+        if check_statement {
+            assert_eq!(
+                claimed_sum,
+                product::claimed_sum(lookups, reader_batching, column_batching),
+                "the claims the statement carries are not the ones the witness produces"
+            );
+        }
 
         let (product, product_point) = transcript.product_sumcheck(|challenger| {
             product_prover.prove::<F, Challenger>(

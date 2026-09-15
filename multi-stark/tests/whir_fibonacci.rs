@@ -7,8 +7,8 @@ use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_challenger::DuplexChallenger;
 use p3_dft::Radix2DFTSmallBatch;
 use p3_field::extension::BinomialExtensionField;
-use p3_field::{Field, PrimeCharacteristicRing};
-use p3_lookup::{Count, InteractionBuilder};
+use p3_field::{Field, PackedValue, PrimeCharacteristicRing};
+use p3_lookup::{Count, IndexedLookupBuilder, InteractionBuilder, TraceWindow};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_multi_stark::config::MultiStarkConfig;
@@ -1935,4 +1935,330 @@ fn security_checked_roundtrip_for_an_air_bound_only_by_boundary_io() {
         &mut challenger(),
     )
     .expect("honest pin-only proof must verify");
+}
+
+/// The two AIRs of the indexed-lookup batch, so one batch can hold both.
+enum SquaresBatch {
+    /// Provides the table out of its main trace.
+    Table,
+    /// Reads the table, naming an entry per row.
+    Reader,
+}
+
+impl BaseAir<F> for SquaresBatch {
+    fn width(&self) -> usize {
+        match self {
+            Self::Table => 1,
+            Self::Reader => 2,
+        }
+    }
+
+    fn main_next_row_columns(&self) -> Vec<usize> {
+        Vec::new()
+    }
+}
+
+impl<AB> Air<AB> for SquaresBatch
+where
+    AB: AirBuilder<F = F> + IndexedLookupBuilder,
+{
+    fn eval(&self, builder: &mut AB) {
+        // Every AIR owes the zerocheck a constraint, and both traces open at zero.
+        //
+        //     table  : entry 0 squares to 0
+        //     reader : the first row names entry 0
+        let main = builder.main();
+        let local = main.current_slice();
+        builder.when_first_row().assert_zero(local[0]);
+
+        match self {
+            // The table's single column carries one value per entry.
+            Self::Table => builder.push_indexed_table("squares", TraceWindow::Main, [0]),
+            // Column 0 names the entry, column 1 holds what that row pulled.
+            Self::Reader => builder.push_indexed_read("squares", 0, [1]),
+        }
+    }
+}
+
+#[test]
+fn prove_verify_indexed_lookup_roundtrips_through_pcs() {
+    // Fixture state: a four-entry table of squares, read by an eight-row reader.
+    //
+    //     table  : entry  0 1 2 3   ->  value  0 1 4 9
+    //     reader : names  0 1 2 3 3 2 1 0
+    //              holds  0 1 4 9 9 4 1 0
+    //
+    // Every entry is read exactly twice.
+    //
+    // A logarithmic-derivative lookup reads counts modulo the characteristic.
+    //
+    // Modulo two it could not tell two reads from none.
+    //
+    // That is the failure this reduction exists to avoid.
+    //
+    // The table grows with the target's packing, because the stacked commitment needs a
+    // full packed element per prefix variable below the padding floor.
+    //
+    //     scalar   4 entries, 8 reader rows
+    //     avx2     8 entries, 16 reader rows
+    //     avx512  16 entries, 32 reader rows
+    let table_rows = ((1 << FOLDING) * PackedF::WIDTH / 4).max(1 << FOLDING);
+    let reader_rows = 2 * table_rows;
+    let table_log = log2_strict_usize(table_rows);
+    let reader_log = log2_strict_usize(reader_rows);
+
+    let squares = RowMajorMatrix::new((0..table_rows).map(|v| F::from_usize(v * v)).collect(), 1);
+
+    // Each entry is named once on the way up and once on the way down.
+    //
+    //     names  0 1 .. n-1 n-1 .. 1 0
+    let named = (0..table_rows)
+        .chain((0..table_rows).rev())
+        .collect::<Vec<_>>();
+
+    // A position column holds the entry under the reduction's embedding.
+    //
+    // Over a prime field that embedding is the entry itself.
+    let reads = RowMajorMatrix::new(
+        named
+            .iter()
+            .flat_map(|&v| [F::from_usize(v), F::from_usize(v * v)])
+            .collect(),
+        2,
+    );
+
+    let reader = SquaresBatch::Reader;
+    let table = SquaresBatch::Table;
+    // Both traces are stacked into one committed polynomial, two reader columns beside
+    // the table's one.
+    let stacked_num_variables = log2_ceil_usize(2 * reader_rows + table_rows);
+    let config = config_for_stacked(stacked_num_variables);
+    let (pk, vk) = setup(&config, &[&reader, &table], &mut challenger()).unwrap();
+
+    let proof = prove(
+        &config,
+        ProverInstances::new(vec![
+            ProverInstance::new(&reader, Table::new(reads.transpose()), &pk, &[]),
+            ProverInstance::new(&table, Table::new(squares.transpose()), &pk, &[]),
+        ]),
+        0,
+        &mut challenger(),
+    )
+    .unwrap();
+
+    // An AIR declaring an indexed read must produce a reduction section in the proof.
+    assert!(proof.indexed.is_some());
+
+    verify(
+        &config,
+        VerifierInstances::new(vec![
+            VerifierInstance::new(&reader, &vk, reader_log, &[]),
+            VerifierInstance::new(&table, &vk, table_log, &[]),
+        ]),
+        &proof,
+        0,
+        &mut challenger(),
+    )
+    .expect("an honest indexed lookup must verify through the trace PCS opening");
+
+    // The same statement, priced.
+    //
+    // Every soundness term the reduction adds has to reach the report, or a batch reading a
+    // table would be charged as if it read nothing.
+    let instances = VerifierInstances::new(vec![
+        VerifierInstance::new(&reader, &vk, reader_log, &[]),
+        VerifierInstance::new(&table, &vk, table_log, &[]),
+    ]);
+    let report = p3_multi_stark::security_report(&config, &instances).unwrap();
+    let charged = report
+        .terms()
+        .iter()
+        .map(|term| term.label)
+        .filter(|label| label.starts_with("logup-star-"))
+        .collect::<Vec<_>>();
+
+    // One per challenge the reduction draws, and one per point it closes at.
+    //
+    // Batching is priced by how much there is to batch, and this batch has one reader
+    // pulling one column, so neither batching term costs anything here.
+    assert_eq!(
+        charged,
+        [
+            "logup-star-entry-challenge",
+            "logup-star-claim-point",
+            "logup-star-fractional-gkr",
+            "logup-star-product-sumcheck",
+        ]
+    );
+
+    // Each one costs something, so none of them is a placeholder that prices nothing.
+    assert!(
+        report
+            .terms()
+            .iter()
+            .filter(|term| term.label.starts_with("logup-star-"))
+            .all(|term| term.bits.bits() > 0.0)
+    );
+}
+
+#[test]
+fn a_batch_declaring_no_read_is_charged_for_no_reduction() {
+    // The counterpart to the round trip above, through the same entry point, on a batch
+    // whose AIR declares no indexed read.
+    //
+    // Nothing the reduction would charge may appear, or every batch would pay for it.
+    let config = config_for(4, NUM_COLS);
+    let air = FibAir;
+    let (_, vk) = setup(&config, &[&air], &mut challenger()).unwrap();
+    let public = fib_public_values(16);
+
+    let instances = VerifierInstances::new(vec![VerifierInstance::new(&air, &vk, 4, &public)]);
+    let report = p3_multi_stark::security_report(&config, &instances).unwrap();
+
+    assert!(
+        !report
+            .terms()
+            .iter()
+            .any(|term| term.label.starts_with("logup-star-"))
+    );
+}
+
+#[test]
+fn a_reader_pulling_the_wrong_value_is_rejected() {
+    // Invariant: a row's pulled value has to be what the table holds at the entry it names.
+    //
+    // Fixture state: the same squares table and eight-row reader.
+    //
+    // Mutation: row 5 names entry 2 but holds 5 instead of 4.
+    //
+    //     honest : names 2 -> holds 4
+    //     forged : names 2 -> holds 5
+    //
+    // The position column is untouched, so the pushforward is the honest one.
+    //
+    // What breaks is the claim tying the table's columns to it.
+    let table_rows = 4usize;
+    let reader_rows = 8usize;
+    let table_log = log2_strict_usize(table_rows);
+    let reader_log = log2_strict_usize(reader_rows);
+
+    let squares = RowMajorMatrix::new((0..table_rows).map(|v| F::from_usize(v * v)).collect(), 1);
+
+    let named = [0usize, 1, 2, 3, 3, 2, 1, 0];
+    let mut values = named
+        .iter()
+        .flat_map(|&v| [F::from_usize(v), F::from_usize(v * v)])
+        .collect::<Vec<_>>();
+    values[11] = F::from_usize(5);
+    let reads = RowMajorMatrix::new(values, 2);
+
+    let reader = SquaresBatch::Reader;
+    let table = SquaresBatch::Table;
+    let stacked_num_variables = log2_ceil_usize(2 * reader_rows + table_rows);
+    let config = config_for_stacked(stacked_num_variables);
+    let (pk, vk) = setup(&config, &[&reader, &table], &mut challenger()).unwrap();
+
+    // This pins the prover's refusal, not the verifier's.
+    //
+    // A wrong pulled value fails the prover's own claim check before a proof exists.
+    let proved = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        prove(
+            &config,
+            ProverInstances::new(vec![
+                ProverInstance::new(&reader, Table::new(reads.transpose()), &pk, &[]),
+                ProverInstance::new(&table, Table::new(squares.transpose()), &pk, &[]),
+            ]),
+            0,
+            &mut challenger(),
+        )
+    }));
+
+    let Ok(Ok(proof)) = proved else {
+        // Rejected while proving, which is the honest outcome for a false statement.
+        return;
+    };
+
+    // Should a proof come out anyway, no verifier may take it.
+    verify(
+        &config,
+        VerifierInstances::new(vec![
+            VerifierInstance::new(&reader, &vk, reader_log, &[]),
+            VerifierInstance::new(&table, &vk, table_log, &[]),
+        ]),
+        &proof,
+        0,
+        &mut challenger(),
+    )
+    .expect_err("a reader pulling a value the table does not hold must be rejected");
+}
+
+#[test]
+fn a_row_naming_an_entry_its_table_does_not_have_is_rejected() {
+    // Invariant: a row may only name an entry of the table it reads.
+    //
+    // Fixture state: the four-entry squares table, read by an eight-row AIR.
+    //
+    // Mutation: row 7 names entry 5, one past the table.
+    //
+    //     honest : names 0 1 2 3 3 2 1 0
+    //     forged : names 0 1 2 3 3 2 1 5
+    //
+    // Entry 5 has no embedding in this table, so no scatter can place that row.
+    //
+    // Row 7 rather than row 0, which the AIR pins to zero.
+    //
+    // Entry 5 panics while the witness is built either way, but a proof naming it on row 0
+    // would fail the zerocheck close on its own.
+    //
+    // The verifier would then reject it whether or not the position comparison exists.
+    let table_rows = 4usize;
+    let reader_rows = 8usize;
+    let reader_log = log2_strict_usize(reader_rows);
+    let table_log = log2_strict_usize(table_rows);
+
+    let squares = RowMajorMatrix::new((0..table_rows).map(|v| F::from_usize(v * v)).collect(), 1);
+
+    let named = [0usize, 1, 2, 3, 3, 2, 1, 5];
+    let reads = RowMajorMatrix::new(
+        named
+            .iter()
+            .flat_map(|&v| [F::from_usize(v), F::from_usize(v * v)])
+            .collect(),
+        2,
+    );
+
+    let reader = SquaresBatch::Reader;
+    let table = SquaresBatch::Table;
+    let stacked_num_variables = log2_ceil_usize(2 * reader_rows + table_rows);
+    let config = config_for_stacked(stacked_num_variables);
+    let (pk, vk) = setup(&config, &[&reader, &table], &mut challenger()).unwrap();
+
+    let proved = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        prove(
+            &config,
+            ProverInstances::new(vec![
+                ProverInstance::new(&reader, Table::new(reads.transpose()), &pk, &[]),
+                ProverInstance::new(&table, Table::new(squares.transpose()), &pk, &[]),
+            ]),
+            0,
+            &mut challenger(),
+        )
+    }));
+
+    let Ok(Ok(proof)) = proved else {
+        // Rejected while proving, which is where an unmatched entry surfaces.
+        return;
+    };
+
+    verify(
+        &config,
+        VerifierInstances::new(vec![
+            VerifierInstance::new(&reader, &vk, reader_log, &[]),
+            VerifierInstance::new(&table, &vk, table_log, &[]),
+        ]),
+        &proof,
+        0,
+        &mut challenger(),
+    )
+    .expect_err("a row naming an entry outside its table must be rejected");
 }
