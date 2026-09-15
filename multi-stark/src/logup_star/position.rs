@@ -19,7 +19,9 @@ use p3_multilinear_util::point::Point;
 /// An implementation free to choose could make the explicit table and the closed form
 /// disagree, and this definition cannot.
 ///
-/// Over both a prime field and a binary tower the two coincide, which a test pins.
+/// The two coincide in odd characteristic, extensions included, and over a binary tower.
+///
+/// A test pins both.
 #[inline]
 pub fn embed<F: Field>(entry: usize) -> F {
     (0..usize::BITS as usize)
