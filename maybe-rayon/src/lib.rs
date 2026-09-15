@@ -3,6 +3,8 @@
 
 #![no_std]
 
+extern crate alloc;
+
 #[cfg(any(feature = "parallel", test))]
 extern crate std;
 

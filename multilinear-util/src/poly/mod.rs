@@ -463,8 +463,7 @@ impl<A: Copy + Send + Sync + PrimeCharacteristicRing> Poly<A> {
         // One item reads a high-half entry and rewrites the matching low-half entry.
         p0.par_iter_mut()
             .zip(p1.par_iter())
-            .with_min_task_bytes(3 * size_of::<A>())
-            .for_each(|(a0, &a1)| *a0 += (a1 - *a0) * r);
+            .for_each_min_task_bytes(3 * size_of::<A>(), |(a0, &a1)| *a0 += (a1 - *a0) * r);
 
         // Discard the second half; the first half now holds the folded result.
         self.0.truncate(mid);
@@ -499,8 +498,7 @@ impl<A: Copy + Send + Sync + PrimeCharacteristicRing> Poly<A> {
         // One item reads a high-half entry and rewrites the matching low-half entry.
         p0.par_iter_mut()
             .zip(p1.par_iter())
-            .with_min_task_bytes(3 * size_of::<A>())
-            .for_each(|(a0, &a1)| *a0 += a1);
+            .for_each_min_task_bytes(3 * size_of::<A>(), |(a0, &a1)| *a0 += a1);
 
         // Discard the second half; the first half now holds the summed result.
         self.0.truncate(mid);
@@ -538,8 +536,7 @@ impl<A: Copy + Send + Sync + PrimeCharacteristicRing> Poly<A> {
         // One item reads a high-half entry and rewrites the matching low-half entry.
         p0.par_iter_mut()
             .zip(p1.par_iter())
-            .with_min_task_bytes(3 * size_of::<A>())
-            .for_each(|(a0, &a1)| *a0 += a1 * r);
+            .for_each_min_task_bytes(3 * size_of::<A>(), |(a0, &a1)| *a0 += a1 * r);
 
         // Discard the second half; the first half now holds the folded result.
         self.0.truncate(mid);
@@ -596,9 +593,7 @@ impl<A: Copy + Send + Sync + PrimeCharacteristicRing> Poly<A> {
         let folded: Vec<_> = self
             .0
             .par_chunks(2)
-            .with_min_task_bytes(3 * size_of::<A>())
-            .map(|a| (a[1] - a[0]) * r + a[0])
-            .collect();
+            .map_collect_min_task_bytes(3 * size_of::<A>(), |a| (a[1] - a[0]) * r + a[0]);
         debug_assert_eq!(folded.len(), mid);
         self.0 = folded;
     }
@@ -633,9 +628,9 @@ where
         Poly::new(
             p0.par_iter()
                 .zip(p1.par_iter())
-                .with_min_task_bytes(2 * size_of::<A>() + size_of::<F>())
-                .map(|(&a0, &a1)| r * (a1 - a0) + a0)
-                .collect(),
+                .map_collect_min_task_bytes(2 * size_of::<A>() + size_of::<F>(), |(&a0, &a1)| {
+                    r * (a1 - a0) + a0
+                }),
         )
     }
 
@@ -688,15 +683,10 @@ where
         let poly = A::Packing::pack_slice(evals);
         let (p0, p1) = poly.split_at(poly.len() / 2);
         // One item reads a pair of packed base entries and writes one packed extension.
-        Poly::new(
-            p0.par_iter()
-                .zip(p1.par_iter())
-                .with_min_task_bytes(
-                    2 * size_of::<A::Packing>() + size_of::<Ext::ExtensionPacking>(),
-                )
-                .map(|(&a0, &a1)| r * (a1 - a0) + a0)
-                .collect(),
-        )
+        Poly::new(p0.par_iter().zip(p1.par_iter()).map_collect_min_task_bytes(
+            2 * size_of::<A::Packing>() + size_of::<Ext::ExtensionPacking>(),
+            |(&a0, &a1)| r * (a1 - a0) + a0,
+        ))
     }
 
     /// Fixes the suffix variable at a challenge value, returning a folded polynomial.
@@ -722,9 +712,9 @@ where
         Poly::new(
             evals
                 .par_chunks(2)
-                .with_min_task_bytes(2 * size_of::<A>() + size_of::<F>())
-                .map(|a| r * (a[1] - a[0]) + a[0])
-                .collect(),
+                .map_collect_min_task_bytes(2 * size_of::<A>() + size_of::<F>(), |a| {
+                    r * (a[1] - a[0]) + a[0]
+                }),
         )
     }
 

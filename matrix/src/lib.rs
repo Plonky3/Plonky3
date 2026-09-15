@@ -610,7 +610,7 @@ pub trait Matrix<T: Send + Sync + Clone>: Send + Sync {
     }
 }
 
-/// Extension widths one column of a columnwise multiply-accumulate is charged.
+/// Extension widths one [`COLUMNWISE_MAC_LANES`]-column multiply-accumulate step is charged.
 ///
 /// Measured on Zen 5 at four weight vectors, [`COLUMNWISE_MAC_LANES`] columns per step:
 ///

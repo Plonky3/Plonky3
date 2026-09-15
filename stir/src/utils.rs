@@ -48,6 +48,9 @@ pub fn eval_poly_parallel<F: Field>(poly: &[F], point: F) -> F {
     //     -> one coefficient is charged as seven
     let chunk_size = min_task_len(poly.len(), 7 * size_of::<F>());
     // A chunk spanning the whole polynomial means the split would never pay.
+    //
+    // Zeroing both budget overrides pins the floor at one, so an A/B run of this site
+    // compares against the body below rather than against the knobs.
     if chunk_size >= poly.len() {
         return eval_poly(poly, point);
     }

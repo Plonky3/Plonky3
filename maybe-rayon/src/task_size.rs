@@ -4,12 +4,29 @@
 //! Both sides of that trade collapse into one number, the fewest items a task may hold:
 //!
 //! ```text
-//!     floor >= total items  ->  one task, which is a serial loop
+//!     floor >= total items  ->  one task
 //!     floor <  total items  ->  total / floor tasks
 //! ```
 //!
 //! A floor lets a call site write its loop body once.
 //! Branching on a length writes the body twice, and can only ask for one task or for all.
+//!
+//! # Entering a loop
+//!
+//! One task is not yet a serial loop.
+//! rayon reaches a body through its own bridge and consumer, even with nothing to split.
+//!
+//! That costs about 1 ns per item, which is a tenth of a fold of a few field operations.
+//!
+//! Two terminals take the leaf iterator directly once the floor forbids a split:
+//!
+//! - [`TaskSizeExt::for_each_min_task_bytes`]
+//! - [`TaskSizeExt::map_collect_min_task_bytes`]
+//!
+//! A loop written with either runs as a plain serial loop, with no bridge to pay for.
+//!
+//! [`TaskSizeExt::with_min_task_bytes`] floors the split and does nothing else.
+//! Use it where one item is a whole chunk, whose own work dwarfs the per-item cost.
 //!
 //! # Cost model
 //!
@@ -39,7 +56,13 @@
 //!
 //! - `P3_MIN_PARALLEL_NS` fixes the serial time a loop must be worth, ignoring the pool size.
 //! - `P3_MAX_TASK_NS` sets the time budget one task holds once a loop does split.
-//! - Setting both to `0` restores rayon's own unbounded splitting, for an A/B run.
+//! - Setting both to `0` drops every floor to a single item.
+//!
+//! A floor of one is rayon's own unbounded splitting, which is what an A/B run of a loop wants.
+//!
+//! A site that uses the floor as its own chunk length reads that same `0` as a chunk of one item.
+//! That shape is slower than either arm and is not one the model ever picks, so such a site is
+//! measured against its own body rather than through these knobs.
 //!
 //! A caller that would rather not depend on the ambient environment sets both from code.
 //!
@@ -62,6 +85,11 @@
 //! let chunk = min_task_len(data.len(), size_of::<u64>());
 //! assert!((1..=data.len()).contains(&chunk));
 //! ```
+
+use alloc::vec::Vec;
+
+#[cfg(feature = "parallel")]
+use rayon::iter::plumbing::{Producer, ProducerCallback};
 
 use super::prelude::*;
 
@@ -309,6 +337,8 @@ fn min_task_len_with(budget: Budget, threads: usize, len: usize, item_bytes: usi
 ///
 /// A count in `1..=max(len, 1)`, never zero, so it is always a usable chunk length.
 /// Equal to the total when the loop should not split at all.
+///
+/// Zeroing both budget overrides pins the answer at one, which a chunked caller must expect.
 #[inline]
 pub fn min_task_len(len: usize, item_bytes: usize) -> usize {
     // The worker count both scales the gate and turns a time budget into a task count,
@@ -335,6 +365,82 @@ pub fn min_task_len(len: usize, item_bytes: usize) -> usize {
 pub fn should_split(len: usize, item_bytes: usize) -> bool {
     // A floor that reaches the whole length is exactly the answer "do not split".
     min_task_len(len, item_bytes) < len
+}
+
+/// A body an indexed iterator can run on one core, over its items in order.
+///
+/// A parallel iterator hands its items to a consumer, never to a plain `Iterator`.
+/// Naming the body separately is what lets a floored loop reach the serial path
+/// without the call site writing that body a second time.
+trait SerialOp<T> {
+    /// What running the body over every item produces.
+    type Output;
+
+    /// Runs the body over every item, in order.
+    fn run<I: ExactSizeIterator<Item = T>>(self, items: I) -> Self::Output;
+}
+
+/// Runs a body for its effect on every item.
+struct ForEachSerially<F>(F);
+
+impl<T, F: Fn(T)> SerialOp<T> for ForEachSerially<F> {
+    type Output = ();
+
+    #[inline]
+    fn run<I: ExactSizeIterator<Item = T>>(self, items: I) {
+        items.for_each(self.0);
+    }
+}
+
+/// Maps every item and gathers the results into a vector.
+struct MapCollectSerially<F>(F);
+
+impl<T, B, F: Fn(T) -> B> SerialOp<T> for MapCollectSerially<F> {
+    type Output = Vec<B>;
+
+    #[inline]
+    fn run<I: ExactSizeIterator<Item = T>>(self, items: I) -> Vec<B> {
+        items.map(self.0).collect()
+    }
+}
+
+/// Runs `op` over the whole loop on one core.
+///
+/// An indexed iterator lends out the leaf iterator rayon would walk inside a single task.
+/// Taking it directly skips rayon's bridge, its consumer, and its collect folder.
+#[cfg(feature = "parallel")]
+#[inline]
+fn drive_serially<I, Op>(iter: I, op: Op) -> Op::Output
+where
+    I: IndexedParallelIterator,
+    Op: SerialOp<I::Item>,
+{
+    iter.with_producer(SerialCallback(op))
+}
+
+/// Carries `op` into the one place a producer's concrete type is nameable.
+#[cfg(feature = "parallel")]
+struct SerialCallback<Op>(Op);
+
+#[cfg(feature = "parallel")]
+impl<T: Send, Op: SerialOp<T>> ProducerCallback<T> for SerialCallback<Op> {
+    type Output = Op::Output;
+
+    #[inline]
+    fn callback<P: Producer<Item = T>>(self, producer: P) -> Self::Output {
+        self.0.run(producer.into_iter())
+    }
+}
+
+/// Runs `op` over the whole loop, which is all a serial build ever does.
+#[cfg(not(feature = "parallel"))]
+#[inline]
+fn drive_serially<I, Op>(iter: I, op: Op) -> Op::Output
+where
+    I: IndexedParallelIterator,
+    Op: SerialOp<I::Item>,
+{
+    op.run(iter)
 }
 
 /// Task-size adapters for parallel iterators.
@@ -375,13 +481,58 @@ pub trait TaskSizeExt: IndexedParallelIterator {
         // A serial build has no split to constrain, and drops the floor on the floor.
         self.with_min_len(min_len)
     }
+
+    /// Runs a body over every item, with the split floored by the cost model.
+    ///
+    /// The count sums every element one item reads and every element it writes.
+    ///
+    /// A loop the floor keeps whole is driven as a plain serial iterator, not as one task.
+    /// rayon reaches a body through its own bridge, which costs about 1 ns per item.
+    #[inline]
+    fn for_each_min_task_bytes<F>(self, item_bytes: usize, op: F)
+    where
+        Self: Sized,
+        F: Fn(Self::Item) + Send + Sync,
+    {
+        let len = self.len();
+        let min_len = min_task_len(len, item_bytes);
+
+        // A floor reaching the whole length is the answer "do not split".
+        if min_len >= len {
+            return drive_serially(self, ForEachSerially(op));
+        }
+        self.with_min_len(min_len).for_each(op);
+    }
+
+    /// Maps every item and collects the results, with the split floored by the cost model.
+    ///
+    /// The count sums every element one item reads and every element it writes.
+    ///
+    /// A loop the floor keeps whole is collected serially, not through rayon's collect folder.
+    /// That folder costs about 1 ns per item more than `Extend`, which a cheap body feels.
+    #[inline]
+    fn map_collect_min_task_bytes<B, F>(self, item_bytes: usize, map_op: F) -> Vec<B>
+    where
+        Self: Sized,
+        B: Send,
+        F: Fn(Self::Item) -> B + Send + Sync,
+    {
+        let len = self.len();
+        let min_len = min_task_len(len, item_bytes);
+
+        // A floor reaching the whole length is the answer "do not split".
+        if min_len >= len {
+            return drive_serially(self, MapCollectSerially(map_op));
+        }
+        self.with_min_len(min_len).map(map_op).collect()
+    }
 }
 
 impl<I: IndexedParallelIterator> TaskSizeExt for I {}
 
 #[cfg(test)]
 mod tests {
-    use std::vec::Vec;
+    use alloc::vec;
 
     use super::*;
 
@@ -609,5 +760,37 @@ mod tests {
             data.par_iter().with_min_task_bytes(1 << 20).sum::<u64>(),
             expected
         );
+    }
+
+    #[test]
+    fn the_terminals_match_the_serial_loop_on_both_arms() {
+        // The two terminals take different paths either side of the gate.
+        //
+        // The serial one reads the iterator's own leaf; the split one goes through rayon.
+        // Both must visit every item once, in order, so a reference loop pins them.
+        //
+        // Fixture state: three shapes, chosen to reach every path.
+        //
+        //     empty         : nothing to visit, and a floor that must not be zero
+        //     64 x 4 B      : priced at 25 ns, under the gate on any pool  -> serial leaf
+        //     16384 x 4 KiB : priced at 6.7 ms, over the gate on any pool  -> split
+        for (len, item_bytes) in [(0usize, 4usize), (64, 4), (1 << 14, 1 << 12)] {
+            let src: Vec<u64> = (0..len as u64).collect();
+            let expected: Vec<u64> = src.iter().map(|&x| x * 3 + 1).collect();
+
+            // A mapped collect keeps the order of the source, whichever arm runs.
+            assert_eq!(
+                src.par_iter()
+                    .map_collect_min_task_bytes(item_bytes, |&x| x * 3 + 1),
+                expected
+            );
+
+            // A for-each writes through, so the same order shows up in the output buffer.
+            let mut out = vec![0u64; len];
+            out.par_iter_mut()
+                .zip(src.par_iter())
+                .for_each_min_task_bytes(item_bytes, |(out, &x)| *out = x * 3 + 1);
+            assert_eq!(out, expected);
+        }
     }
 }
