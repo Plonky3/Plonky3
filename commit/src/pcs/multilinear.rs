@@ -67,11 +67,11 @@ where
     ///     forbidden  ->  any other absorb, any sample, any grind
     /// ```
     ///
-    /// That binding is the one this scheme's commitment-binding method performs.
+    /// This method performs that binding by calling the scheme's own binding method.
     ///
-    /// A verifier never reaches this method, so it calls that same one in its place.
+    /// A verifier never reaches this one, so it calls that same binding method instead.
     ///
-    /// Sharing the call is what makes the two sides interchangeable.
+    /// Routing both sides through one call is what makes them interchangeable.
     ///
     /// An absorbed table height, or a batching challenge drawn here, desyncs the two sides.
     ///
@@ -109,15 +109,19 @@ where
     ///
     /// # Soundness
     ///
-    /// Both sides reach the binding through this one method.
+    /// Every implementation's commit phase binds by calling this method, and so
+    /// does every verifier.
     ///
-    /// Neither can then drift from the other:
+    /// Neither side can then drift from the other:
     ///
     /// - by absorbing a different value,
     /// - in a different encoding,
     /// - or under a different phase.
     ///
     /// A scheme whose binding is a typed phase keeps that phase here.
+    ///
+    /// The conformance tests pin the two against each other, so an implementation
+    /// that binds inside its commit phase instead is caught rather than trusted.
     ///
     /// # Arguments
     ///

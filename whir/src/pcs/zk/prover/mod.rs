@@ -42,7 +42,7 @@ use crate::pcs::zk::code_switch::{ZkMaskClaim, switch_mask_covector};
 use crate::pcs::zk::committer::zk_padded_matrix;
 use crate::pcs::zk::config::ZkWhirConfig;
 use crate::pcs::zk::proof::{ZkRoundProof, ZkWhirProof};
-use crate::transcript::zk::{ZkWhirProverTranscript, ZkWhirShape, observe_commitment};
+use crate::transcript::zk::{ZkWhirProverTranscript, ZkWhirShape};
 use crate::utils::{eval_ze_star_n, par_add_scaled_powers, par_eval_ze_star_n};
 
 /// Chunk length for the parallel power runs over message-length vectors.
@@ -92,15 +92,15 @@ where
     }
 
     /// Commits the witness as an interleaved ZK Reed-Solomon codeword.
+    ///
+    /// Nothing is bound here.
+    ///
+    /// The root is returned instead, and the caller binds it.
     pub fn commit<R: Rng>(
         &self,
         message: Poly<F>,
-        challenger: &mut Challenger,
         rng: &mut R,
-    ) -> (MT::Commitment, HidingWhirProverData<F, EF, MT>)
-    where
-        F: PrimeField64,
-    {
+    ) -> (MT::Commitment, HidingWhirProverData<F, EF, MT>) {
         assert_eq!(message.num_variables(), self.config.num_variables);
         let folding = self.config.round_folding_factor(0);
         let randomness: Vec<F> = (0..(self.config.oracle_randomness[0] << folding))
@@ -112,11 +112,6 @@ where
         let padded = zk_padded_matrix(message.as_slice(), &randomness, folding, height);
         let encoded = self.dft.dft_batch(padded).to_row_major_matrix();
         let (commitment, merkle) = self.mmcs.commit_matrix(encoded);
-
-        // The verifier binds the same root, through the same phase.
-        //
-        // It does so before replaying anything else.
-        observe_commitment::<F, _, _>(challenger, commitment.clone());
         (
             commitment,
             HidingWhirProverData {

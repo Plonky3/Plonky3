@@ -4,7 +4,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
-use p3_challenger::DuplexChallenger;
+use p3_challenger::{CanSample, DuplexChallenger};
 use p3_commit::MultilinearPcs;
 use p3_dft::Radix2DFTSmallBatch;
 use p3_field::extension::BinomialExtensionField;
@@ -1470,4 +1470,48 @@ mod keccak_tests {
         // Prefix mode binds the SVO prefix variables first; covers the other layout path.
         run_keccak_end_to_end::<PrefixProver<F, EF>>();
     }
+}
+
+#[test]
+fn the_commit_phase_binds_exactly_what_the_binding_method_binds() {
+    // Invariant: a verifier never commits, so it replays the prover's binding by
+    // calling the scheme's binding method.
+    //
+    // The two are interchangeable only while they leave the sponge in one state.
+    //
+    //     prover  : commit(witness, a)          -> a
+    //     verifier: observe_commitment(root, b) -> b
+    //     a and b must sample alike
+    //
+    // A commit phase that bound something else, or bound it twice, would move
+    // only one of the two.
+    type L = PrefixProver<F, EF>;
+    let mut rng = SmallRng::seed_from_u64(31);
+    let witness = L::new_witness(vec![Table::rand(&mut rng, 1, 6)], 4);
+    let perm = Perm::new_from_rng_128(&mut rng);
+    let mmcs = MyMmcs::new(MyHash::new(perm.clone()), MyCompress::new(perm), 0);
+    let config = WhirConfig::new(
+        witness.num_variables(),
+        ProtocolParameters {
+            security_level: 32,
+            pow_bits: 0,
+            round_log_inv_rates: vec![],
+            folding_factor: FoldingFactor::Constant(4),
+            soundness_type: SecurityAssumption::CapacityBound,
+            starting_log_inv_rate: 1,
+        },
+    )
+    .unwrap();
+    let pcs = TestWhirPcs::<L>::new(config, MyDft::default(), mmcs);
+
+    let mut committed = challenger();
+    let (commitment, _) = pcs.commit(witness, &mut committed).unwrap();
+
+    let mut replayed = challenger();
+    pcs.observe_commitment(&commitment, &mut replayed);
+
+    assert_eq!(
+        CanSample::<F>::sample(&mut committed),
+        CanSample::<F>::sample(&mut replayed),
+    );
 }

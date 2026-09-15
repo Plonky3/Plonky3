@@ -42,7 +42,10 @@ use p3_multi_stark::rounds::AirDegrees;
 use p3_multi_stark::transcript::{MultiStarkInstanceShape, MultiStarkShape};
 use p3_multi_stark::zerocheck::transcript::ZerocheckShape;
 use p3_security::fri::FriRegime;
-use p3_security::grinding::{GrindingBudget, GrindingSites, RecordedGrind, grinding_step};
+use p3_security::grinding::{
+    GrindingBudget, GrindingSites, RecordedGrind, UNPRICED_GRINDING_SITES, grinding_step,
+    is_unpriced_grinding_site,
+};
 use p3_stir::pcs_transcript::{
     StirPcsBucketShape, StirPcsClaimShape, StirPcsCommitmentShape, StirPcsOpeningShape,
 };
@@ -95,6 +98,14 @@ const NUM_PROTOCOLS: usize = 24;
 ///     22 protocols x 3 + 2 protocols x 1 = 68 seeds -> 2278 pairs
 /// ```
 const MAX_CASES_PER_PROTOCOL: usize = 3;
+
+/// Phases whose description is fixed, so there is nothing to sweep.
+///
+/// A commitment is one Merkle root at every configuration.
+///
+/// These contribute one case each, and every other protocol contributes three.
+const CONFIGURATION_FREE_PHASES: [&str; 2] =
+    ["p3-sumcheck-layout-commitment", "p3-whir-hvzk-commitment"];
 
 /// Variable count both WHIR pipelines are configured at.
 const WHIR_NUM_VARIABLES: usize = 16;
@@ -984,48 +995,125 @@ fn no_two_configurations_of_any_two_protocols_share_a_seed() {
     //     across two protocols ->  can any configuration of one reach another's seed
     let seeds = digested(all_cases());
 
-    // Every protocol contributes at least one case and at most the sweep budget.
+    // Every protocol sweeps the full budget, except the two that have nothing to sweep.
     //
-    // A configuration-free phase has one seed to offer.
+    // A configuration-free phase has exactly one seed to offer, and a fixed
+    // product would demand two duplicates of it.
     //
-    // A fixed product would demand two duplicates of it.
-    //
-    // The pairwise check below would then fail on its own fixtures.
+    // Pinning the count per protocol is what stops a sweep from quietly
+    // shrinking and taking its per-knob coverage with it.
     let groups = protocols();
     assert_eq!(groups.len(), NUM_PROTOCOLS);
-    assert!(groups.iter().all(|group| !group.is_empty()));
-    assert!(
-        groups
-            .iter()
-            .all(|group| group.len() <= MAX_CASES_PER_PROTOCOL)
-    );
-    assert_eq!(seeds.len(), groups.iter().map(Vec::len).sum::<usize>(),);
+    for group in &groups {
+        let protocol = group[0]
+            .0
+            .split('/')
+            .next()
+            .expect("a case label names its protocol");
+        let expected = if CONFIGURATION_FREE_PHASES.contains(&protocol) {
+            1
+        } else {
+            MAX_CASES_PER_PROTOCOL
+        };
+        assert_eq!(
+            group.len(),
+            expected,
+            "{protocol} sweeps {} cases",
+            group.len()
+        );
+    }
+    assert_eq!(seeds.len(), groups.iter().map(Vec::len).sum::<usize>());
 
     assert_seeds_pairwise_distinct(&seeds);
 }
 
-/// Grinding sites the shared budget deliberately does not compare.
+/// One configuration per grinding protocol, every difficulty positive.
 ///
-/// A protocol here credits its own grinding inside its own security report.
+/// The sweep above picks configurations that separate seeds, and most of them
+/// grind at zero bits.
 ///
-/// It does not go through the budget every FRI-backed STARK shares.
+/// A zero-bit step is elided from the pattern, so that sweep cannot see the
+/// sites it never describes.
 ///
-/// The entry is the acknowledgement.
-///
-/// A site is either compared against the model, or listed here on purpose.
-const UNBUDGETED_GRINDING_SITES: [(&str, &str); 5] = [
-    // The hiding sumcheck grinds once per masked round, priced by the round itself.
-    ("p3-sumcheck-hvzk", "round_pow"),
-    // WHIR prices each round's query grind in its own per-round error term.
-    ("p3-whir", "query_pow"),
-    ("p3-whir", "final_query_pow"),
-    ("p3-whir-hvzk", "query_pow"),
-    // The masked base case prices the grind guarding its spot checks.
-    ("p3-whir-hvzk-base", "base_pow"),
-];
+/// This one exists to make every grinding step visible at least once.
+fn grinding_sweep() -> Vec<(String, DomainSeparator<Alphabet>)> {
+    // STIR grinds at four sites: two per round, two in the closing phase.
+    let stir = StirShape {
+        commits_initial: true,
+        instances: vec![StirInstanceShape {
+            rounds: vec![StirRoundShape {
+                folding_pow_bits: 3,
+                num_ood_samples: 1,
+                pow_bits: 4,
+                num_queries: 3,
+                log_fold_domain_size: 6,
+                log_degree: 8,
+                log_domain_size: 9,
+                log_folding_factor: 3,
+                domain_shift: 31,
+                eta_bits: 0.25_f64.to_bits(),
+            }],
+            final_folding_pow_bits: 5,
+            final_poly_len: 2,
+            final_pow_bits: 6,
+            final_queries: 2,
+            final_log_domain_size: 5,
+            log_starting_degree: 8,
+            log_blowup: 1,
+            log_folding_factor: 3,
+            log_starting_folding_factor: 3,
+            log_final_degree: 1,
+            security_level: 100,
+            max_pow_bits: 20,
+            soundness_type: SecurityAssumption::JohnsonBound,
+            final_eta_bits: 0.125_f64.to_bits(),
+            max_log_final_poly_len: None,
+        }],
+    };
+
+    // Each WHIR pipeline grinds inside its own rounds, and the hiding one also
+    // grinds in its base case.
+    let whir_config = WhirConfig::<EF, F, Ch>::new(WHIR_NUM_VARIABLES, whir_params())
+        .expect("the fixture parameters are valid");
+    let zk_config = ZkWhirConfig::<EF, F, Ch>::new(
+        WHIR_NUM_VARIABLES,
+        whir_params(),
+        zk_whir_parameters()[0].1.clone(),
+    )
+    .expect("the fixture parameters are valid");
+    let zk_shape = ZkWhirShape::new(&zk_config);
+
+    vec![
+        (String::from("p3-stir"), stir.domain_separator::<F, EF>()),
+        (
+            String::from("p3-whir"),
+            WhirShape::new(&whir_config, WHIR_NUM_OPENING_CLAIMS).domain_separator::<F, EF>(),
+        ),
+        (
+            String::from("p3-whir-hvzk"),
+            zk_shape.domain_separator::<F, EF>(),
+        ),
+        (
+            String::from("p3-whir-hvzk-base"),
+            zk_shape.base_case.domain_separator::<F, EF>(),
+        ),
+        (
+            String::from("p3-sumcheck-quadratic"),
+            SumcheckShape::new(4, 2, Basis::Evaluation).domain_separator::<F, EF>(),
+        ),
+        (
+            String::from("p3-sumcheck-hvzk"),
+            ZkSumcheckShape::new_batching(3, 4, 2).domain_separator::<F, EF>(),
+        ),
+        (
+            String::from("p3-sumcheck-generic-degree"),
+            GenericDegreeShape::new(4, 3, 2).domain_separator::<F, EF>(),
+        ),
+    ]
+}
 
 #[test]
-fn every_grinding_site_is_either_budgeted_or_listed_as_unbudgeted() {
+fn every_grinding_site_is_either_budgeted_or_priced_elsewhere() {
     // Invariant: a proof-of-work step is a soundness parameter in two places.
     //
     //     transcript  ->  the difficulty the pattern describes
@@ -1035,9 +1123,8 @@ fn every_grinding_site_is_either_budgeted_or_listed_as_unbudgeted() {
     //
     // That is how a grinding budget and a transcript drift apart unnoticed.
     //
-    // This walks the configurations swept above.
-    //
-    // So it sees a site only where one of them describes it.
+    // Both vocabularies live in `p3-security`, so this walk compares the
+    // described steps against them rather than against a list kept here.
     for group in protocols() {
         for (name, separator) in group {
             // Case labels are "protocol/configuration", and the name leads.
@@ -1053,17 +1140,43 @@ fn every_grinding_site_is_either_budgeted_or_listed_as_unbudgeted() {
             // So the difficulty itself is not read here.
             for (label, _bits) in pow_difficulties(separator.pattern()) {
                 let budgeted = grinding_step(protocol, label).is_some();
-                let unbudgeted = UNBUDGETED_GRINDING_SITES.contains(&(protocol, label));
+                let priced_elsewhere = is_unpriced_grinding_site(protocol, label);
 
                 assert!(
-                    budgeted || unbudgeted,
+                    budgeted || priced_elsewhere,
                     "{protocol}/{label} grinds, but no vocabulary classifies it",
                 );
                 assert!(
-                    !(budgeted && unbudgeted),
-                    "{protocol}/{label} is both compared against the model and listed as exempt",
+                    !(budgeted && priced_elsewhere),
+                    "{protocol}/{label} is both compared against the model and priced elsewhere",
                 );
             }
         }
+    }
+}
+
+#[test]
+fn every_unpriced_grinding_site_is_described_by_the_protocol_that_owns_it() {
+    // Invariant: the unpriced table names real steps.
+    //
+    // A stale row would exempt a site that no longer exists, and would hide a
+    // renamed one behind a classification that can never fire.
+    //
+    // Fixture state: every protocol below is swept at a positive difficulty, so
+    // each of its grinding steps reaches a pattern.
+    let described: Vec<(String, String)> = grinding_sweep()
+        .into_iter()
+        .flat_map(|(protocol, separator)| {
+            pow_difficulties(separator.pattern())
+                .into_iter()
+                .map(move |(label, _)| (protocol.clone(), String::from(label)))
+        })
+        .collect();
+
+    for &(protocol, label) in &UNPRICED_GRINDING_SITES {
+        assert!(
+            described.contains(&(String::from(protocol), String::from(label))),
+            "{protocol}/{label} is listed as priced elsewhere, but no pattern describes it",
+        );
     }
 }

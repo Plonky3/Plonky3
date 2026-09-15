@@ -442,13 +442,12 @@ where
         witness: Self::Witness,
         challenger: &mut Challenger,
     ) -> Result<(Self::Commitment, Self::ProverData), Self::ProverError> {
-        Ok(commit(
-            &self.config,
-            &self.encoder,
-            &self.mmcs,
-            challenger,
-            witness,
-        ))
+        let (commitment, prover_data) = commit(&self.config, &self.encoder, &self.mmcs, witness);
+
+        // The verifier reaches the same call, so neither side can bind differently.
+        self.observe_commitment(&commitment, challenger);
+
+        Ok((commitment, prover_data))
     }
 
     fn observe_commitment(&self, commitment: &Self::Commitment, challenger: &mut Challenger) {
