@@ -323,6 +323,77 @@ impl<F: TowerLevel> SkipRound<F> {
     {
         RowSelector::new(&self.domain, lambda)
     }
+
+    /// The Lagrange vector of the skipped subspace at one challenge, alone.
+    ///
+    /// # Overview
+    ///
+    /// Entry `c` is the weight the skipped point `c` carries in a bound row.
+    ///
+    /// The byte table above is this vector summed over subsets.
+    /// Only the prover reads rows through it.
+    ///
+    /// A verifier needs the vector alone.
+    /// It gets it here without the 32 KiB of partial sums it never touches.
+    pub fn lagrange<EF>(&self, lambda: EF) -> Poly<EF>
+    where
+        EF: ExtensionField<F>,
+    {
+        Poly::new(lagrange_basis(&self.domain, lambda))
+    }
+}
+
+/// The Lagrange basis of a subspace, read at one large-field point.
+///
+/// # Algorithm
+///
+/// Off the subspace the barycentric form applies:
+///
+/// ```text
+///     L_c(lam) = Z_S(lam) / Z_S'(S) / (lam + s_c)
+/// ```
+///
+/// A challenge on a subspace point makes that value one and the rest zero.
+/// The barycentric form cannot express that, so it is handled on its own.
+///
+/// # Performance
+///
+/// One inversion for the whole vector, plus a few products per point.
+fn lagrange_basis<F, EF>(domain: &SkipDomain<F>, lambda: EF) -> Vec<EF>
+where
+    F: TowerLevel,
+    EF: ExtensionField<F>,
+{
+    // The subspace is in the base field, so the search stays there too.
+    let hit = lambda
+        .as_base()
+        .and_then(|base| domain.subspace().iter().position(|&s| s == base));
+
+    hit.map_or_else(
+        || {
+            // The derivative is a base-field constant.
+            //
+            // Inverting and applying it there beats widening it first.
+            let scale =
+                vanishing_at(domain.log_size(), lambda) * domain.derivative_on_subspace().inverse();
+
+            // One inversion plus a few products, not one inversion each.
+            let offsets = domain
+                .subspace()
+                .iter()
+                .map(|&s| lambda + s)
+                .collect::<Vec<_>>();
+            batch_multiplicative_inverse(&offsets)
+                .into_iter()
+                .map(|inverse| scale * inverse)
+                .collect::<Vec<_>>()
+        },
+        |hit| {
+            (0..domain.size())
+                .map(|index| if index == hit { EF::ONE } else { EF::ZERO })
+                .collect::<Vec<_>>()
+        },
+    )
 }
 
 /// Evaluate the vanishing polynomial of a dimension-`log_size` subspace at a large-field point.
@@ -362,6 +433,13 @@ pub struct RowSelector<EF> {
     table: Vec<EF>,
     /// Number of chunk positions, which is the number of bytes in a packed row.
     num_chunks: usize,
+    /// The basis value at each subspace point, over the skipped variables.
+    ///
+    /// The table above is this vector summed over byte-sized subsets.
+    ///
+    /// The opening reduction needs the unaggregated form, from one place.
+    /// Two computations of one vector could disagree with nothing to catch it.
+    lagrange: Poly<EF>,
 }
 
 impl<EF: Field> RowSelector<EF> {
@@ -375,40 +453,8 @@ impl<EF: Field> RowSelector<EF> {
 
         // The basis value at each subspace point, read at the challenge.
         //
-        //     L_c(lam) = Z_S(lam) / Z_S'(S) / (lam + s_c)
-        //
-        // A challenge landing on a subspace point makes that basis value one and the rest zero.
-        //
-        // The barycentric form cannot express that, so it is handled on its own.
-        // The subspace lives in the base field, so narrowing once keeps the search there too.
-        let hit = lambda
-            .as_base()
-            .and_then(|base| domain.subspace().iter().position(|&s| s == base));
-        let basis = hit.map_or_else(
-            || {
-                // The derivative is a base-field constant.
-                //
-                // Inverting and applying it there is cheaper than widening it first.
-                let scale = vanishing_at(domain.log_size(), lambda)
-                    * domain.derivative_on_subspace().inverse();
-
-                // One inversion plus a few products per point, rather than one inversion each.
-                let offsets = domain
-                    .subspace()
-                    .iter()
-                    .map(|&s| lambda + s)
-                    .collect::<Vec<_>>();
-                batch_multiplicative_inverse(&offsets)
-                    .into_iter()
-                    .map(|inverse| scale * inverse)
-                    .collect::<Vec<_>>()
-            },
-            |hit| {
-                (0..domain.size())
-                    .map(|index| if index == hit { EF::ONE } else { EF::ZERO })
-                    .collect::<Vec<_>>()
-            },
-        );
+        // Shared with the verifier's own path, so the two can never disagree.
+        let basis = lagrange_basis(domain, lambda);
 
         // Each chunk position gets the sums of every subset of the eight basis values it covers.
         //
@@ -421,13 +467,26 @@ impl<EF: Field> RowSelector<EF> {
             }
         }
 
-        Self { table, num_chunks }
+        Self {
+            table,
+            num_chunks,
+            lagrange: Poly::new(basis),
+        }
     }
 
     /// Number of bytes one packed row occupies.
     #[must_use]
     pub const fn row_bytes(&self) -> usize {
         self.num_chunks
+    }
+
+    /// The Lagrange vector of the subspace, read at this round's challenge.
+    ///
+    /// Entry `c` is the weight the skipped point `c` carries in a bound row.
+    ///
+    /// The opening reduction takes it from here rather than recomputing it.
+    pub const fn lagrange(&self) -> &Poly<EF> {
+        &self.lagrange
     }
 
     /// Read one packed row at the point this table was built for.
