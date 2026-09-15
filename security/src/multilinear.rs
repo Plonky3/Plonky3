@@ -31,6 +31,29 @@ pub struct MultilinearAirParams {
     pub constraint_degree: usize,
     /// Fractional lookup reduction, if the statement declares one.
     pub lookup: Option<MultilinearLookupParams>,
+    /// Univariate-skip round, if the statement opens with one.
+    pub skip: Option<MultilinearSkipParams>,
+}
+
+/// Shape of a univariate-skip round opening the constraint sumcheck.
+///
+/// A skip round binds several variables with one challenge instead of one each.
+///
+/// That moves error out of the per-round terms and into one reconstruction term.
+///
+/// The two shapes are therefore charged apart, rather than one bounding the other.
+#[derive(Clone, Copy, Debug)]
+pub struct MultilinearSkipParams {
+    /// Dimension of the subspace the round polynomial vanishes on.
+    ///
+    /// This is how many variables the round binds in one go.
+    pub log_size: usize,
+    /// Dimension of the subspace the round polynomial is transmitted on.
+    ///
+    /// The verifier admits any polynomial of degree below this size.
+    ///
+    /// That is what the reconstruction term charges for.
+    pub log_extended: usize,
 }
 
 /// Exact tuple count and padded GKR shape derived from the lookup plan.
@@ -80,14 +103,40 @@ pub fn reduction_terms(
         air.num_instances.saturating_sub(1) as f64,
         field_bits,
     );
+    // A skip round takes its variables out of both the point and the rounds.
+    //
+    //     plain:  a point over m variables, then m rounds
+    //     skip:   a point over m - k variables, then one skip round, then m - k rounds
+    //
+    // The skipped variables are never drawn into the equality point.
+    //
+    // The zerocheck term therefore shrinks with the round count.
+    let skipped = air.skip.map_or(0, |skip| skip.log_size);
+    let kept = air.num_variables.saturating_sub(skipped);
+
     // A fixed nonzero constraint table has a multilinear extension. Its
     // evaluation at tau vanishes with probability at most h/(q-1). The tail
     // inherited from GKR is also rejection-sampled over the nonzero elements.
-    add("zerocheck", air.num_variables as f64, nonzero_field_bits);
+    add("zerocheck", kept as f64, nonzero_field_bits);
+
+    if let Some(skip) = air.skip {
+        // The verifier reconstructs the round polynomial itself, admitting any degree
+        // below the extension size that vanishes on the subspace.
+        //
+        // That is one degree more than an honest prover uses.
+        //
+        // The challenge must separate a dishonest message from the true one over all of it.
+        let reconstruction = ((1u64 << skip.log_extended) - 1) as f64;
+        add("skip-reconstruction", reconstruction, field_bits);
+
+        // Collapsing the blend takes one degree-two round per skipped variable.
+        add("skip-opening", skipped as f64 * 2.0, field_bits);
+    }
+
     // The equality weight raises the native AIR degree by one in every round.
     add(
         "constraint-sumcheck",
-        air.num_variables as f64 * (air.constraint_degree as f64 + 1.0),
+        kept as f64 * (air.constraint_degree as f64 + 1.0),
         field_bits,
     );
     if let Some(lookup) = air.lookup {
@@ -123,6 +172,7 @@ mod tests {
                 num_variables: 4,
                 constraint_degree: 3,
                 lookup: None,
+                skip: None,
             },
             100,
             99,
@@ -139,6 +189,128 @@ mod tests {
         assert!((bits - (100.0 - libm::log2(27.0))).abs() < 1e-12);
     }
 
+    /// The plain shape the skip variants are compared against.
+    fn plain(num_variables: usize) -> MultilinearAirParams {
+        MultilinearAirParams {
+            num_instances: 1,
+            max_num_constraints: 1,
+            num_variables,
+            constraint_degree: 2,
+            lookup: None,
+            skip: None,
+        }
+    }
+
+    /// The bits charged under one label.
+    fn charged(terms: &[SecurityTerm], label: &str) -> Option<f64> {
+        terms
+            .iter()
+            .find(|term| term.label == label)
+            .map(|term| term.bits.bits())
+    }
+
+    #[test]
+    fn a_statement_without_a_skip_is_charged_exactly_as_before() {
+        // Adding the skip shape must not move a statement that declares none.
+        //
+        // Fixture state: 10 variables, degree 2, no lookup.
+        //
+        //     zerocheck            10
+        //     constraint-sumcheck  10 * 3
+        //     and no skip term at all
+        let terms = reduction_terms(&plain(10), 100, 99);
+
+        assert_eq!(charged(&terms, "zerocheck"), Some(99.0 - libm::log2(10.0)));
+        assert_eq!(
+            charged(&terms, "constraint-sumcheck"),
+            Some(100.0 - libm::log2(30.0))
+        );
+        assert_eq!(charged(&terms, "skip-reconstruction"), None);
+        assert_eq!(charged(&terms, "skip-opening"), None);
+    }
+
+    #[test]
+    fn a_skip_moves_error_out_of_the_rounds_and_into_the_reconstruction() {
+        // Fixture state: 10 variables, 6 of them skipped, transmitted on dimension 7.
+        //
+        //     zerocheck            4          the point covers the kept variables only
+        //     constraint-sumcheck  4 * 3      four rounds, not ten
+        //     skip-reconstruction  2^7 - 1    the degree the verifier's interpolation admits
+        //     skip-opening         6 * 2      one degree-two round per skipped variable
+        let mut params = plain(10);
+        params.skip = Some(MultilinearSkipParams {
+            log_size: 6,
+            log_extended: 7,
+        });
+        let terms = reduction_terms(&params, 100, 99);
+
+        assert_eq!(charged(&terms, "zerocheck"), Some(99.0 - libm::log2(4.0)));
+        assert_eq!(
+            charged(&terms, "constraint-sumcheck"),
+            Some(100.0 - libm::log2(12.0))
+        );
+        assert_eq!(
+            charged(&terms, "skip-reconstruction"),
+            Some(100.0 - libm::log2(127.0))
+        );
+        assert_eq!(
+            charged(&terms, "skip-opening"),
+            Some(100.0 - libm::log2(12.0))
+        );
+    }
+
+    #[test]
+    fn the_reconstruction_term_dominates_what_the_rounds_gave_up() {
+        // The skip is not a free saving in soundness: it trades many small round terms for one
+        // large reconstruction term, and the reconstruction is the bigger of the two.
+        //
+        // Nothing may read the skip as strictly cheaper, so the direction is pinned here.
+        let mut params = plain(10);
+        params.skip = Some(MultilinearSkipParams {
+            log_size: 6,
+            log_extended: 7,
+        });
+
+        let plain_terms = reduction_terms(&plain(10), 100, 99);
+        let skip_terms = reduction_terms(&params, 100, 99);
+
+        let total = |terms: &[SecurityTerm]| {
+            ErrorBits::sum(
+                &terms
+                    .iter()
+                    .map(|term| term.bits)
+                    .collect::<alloc::vec::Vec<_>>(),
+            )
+            .bits()
+        };
+
+        assert!(
+            total(&skip_terms) < total(&plain_terms),
+            "the skip costs bits overall: skip={} plain={}",
+            total(&skip_terms),
+            total(&plain_terms)
+        );
+    }
+
+    #[test]
+    fn skipping_every_variable_leaves_no_rounds_to_charge() {
+        // The widest legal skip binds the whole cube, so the residual terms disappear rather
+        // than going negative.
+        let mut params = plain(6);
+        params.skip = Some(MultilinearSkipParams {
+            log_size: 6,
+            log_extended: 7,
+        });
+        let terms = reduction_terms(&params, 100, 99);
+
+        assert_eq!(charged(&terms, "zerocheck"), None);
+        assert_eq!(charged(&terms, "constraint-sumcheck"), None);
+        assert_eq!(
+            charged(&terms, "skip-reconstruction"),
+            Some(100.0 - libm::log2(127.0))
+        );
+    }
+
     #[test]
     fn lookup_charges_fingerprint_gkr_and_both_links() {
         let params = MultilinearAirParams {
@@ -151,6 +323,7 @@ mod tests {
                 num_fractions: 64,
                 max_message_width: 1,
             }),
+            skip: None,
         };
         let terms = reduction_terms(&params, 100, 99);
         let find = |label| {
