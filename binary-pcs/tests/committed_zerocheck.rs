@@ -2,7 +2,23 @@
 //!
 //! Every step goes through a public surface a caller would use.
 //!
-//! The scheme's prescribed-point opening, and the zerocheck's own prove and verify.
+//! The scheme's prescribed-point opening, and the zerocheck's prove, verify, discharge.
+//!
+//! # What this establishes
+//!
+//! That the mechanics close.
+//!
+//! The point the proof ends on is where the committed operands take the claimed value.
+//!
+//! No step reads the witness on the verifying side.
+//!
+//! It does not establish that the witness is bit-valued.
+//!
+//! A cell of this commitment is a whole field element.
+//!
+//! The constraint is satisfied by field cells that are not bits, as its own tests record.
+//!
+//! The packed commitment is what makes the statement a bit statement, and it is not here yet.
 //!
 //! The prover and the verifier run on two independently constructed challengers.
 //!
@@ -12,7 +28,7 @@
 
 use p3_binary_field::{BinaryChallenger, BinaryField8, BinaryField128};
 use p3_binary_pcs::{BinaryPcs, BinaryPcsConfig, BinaryPcsParams};
-use p3_challenger::{CanObserve, HashChallenger};
+use p3_challenger::HashChallenger;
 use p3_commit::MultilinearPcs;
 use p3_keccak::Keccak256Hash;
 use p3_matrix::dense::RowMajorMatrix;
@@ -67,13 +83,15 @@ struct Closing {
 }
 
 impl Closing {
-    /// Whether the commitment's answer is the one the zerocheck asked for.
+    /// Ask the claim whether the commitment's answer is the one it wanted.
     ///
-    /// The claim owns the recombination.
+    /// The comparison lives in the library.
     ///
-    /// This test therefore cannot batch the openings in an order the proof did not use.
-    fn is_answered(&self) -> bool {
-        self.claim.is_answered_by(&self.opened)
+    /// So this test cannot batch the openings in an order the proof did not use.
+    ///
+    /// Nor can it pass by leaving the comparison out.
+    fn discharge(&self) -> Result<(), ZerocheckError> {
+        self.claim.discharge(&self.opened)
     }
 }
 
@@ -183,8 +201,10 @@ fn run(
         .unwrap();
 
     // Verifier: replay from a fresh transcript, holding only the commitment and the proofs.
+    //
+    // Bound through the scheme's own method, which is what the commit side called.
     let mut verifier_challenger = challenger();
-    verifier_challenger.observe(commitment.clone());
+    scheme.observe_commitment(&commitment, &mut verifier_challenger);
 
     let claim = check.verify::<F, _>(&proof, LOG_HEIGHT, &mut verifier_challenger)?;
     assert_eq!(claim.point, prover_claim.point);
@@ -219,7 +239,7 @@ fn the_commitment_discharges_the_claim_the_zerocheck_leaves() {
     let closing = run(&operands, &operands, &check).unwrap();
 
     assert_eq!(closing.opened.len(), ARITY);
-    assert!(closing.is_answered());
+    closing.discharge().unwrap();
 }
 
 #[test]
@@ -233,7 +253,7 @@ fn grinding_carries_through_the_committed_chain() {
 
     let closing = run(&operands, &operands, &check).unwrap();
 
-    assert!(closing.is_answered());
+    closing.discharge().unwrap();
 }
 
 #[test]
@@ -250,7 +270,7 @@ fn a_broken_constraint_is_refused_before_any_opening() {
 
     assert_eq!(
         run(&operands, &operands, &check).unwrap_err(),
-        ZerocheckError::ResidualClaimMismatch
+        ZerocheckError::BlendConstraintMismatch
     );
 }
 
@@ -264,6 +284,8 @@ fn a_claim_about_another_witness_does_not_open_against_this_commitment() {
     // Both witnesses satisfy the constraint, so the zerocheck itself has nothing to catch.
     //
     // Only the commitment separates them, which is what closing the chain buys.
+    //
+    // Both `verify` and `verify_at` return `Ok` here: the discharge is the whole rejection.
     let check = BinaryZerocheck::<A, _>::new(LOG_SKIP, Conjunction, 0).unwrap();
     let num_rows = 1 << (LOG_HEIGHT - LOG_SKIP);
     let row_bytes = check.round().row_bytes();
@@ -272,5 +294,11 @@ fn a_claim_about_another_witness_does_not_open_against_this_commitment() {
 
     let closing = run(&committed, &proven, &check).unwrap();
 
-    assert!(!closing.is_answered());
+    // The library refuses it.
+    //
+    // This test therefore reports a rejection rather than comparing two field elements.
+    assert_eq!(
+        closing.discharge().unwrap_err(),
+        ZerocheckError::OpeningsDoNotMatchClaim
+    );
 }
