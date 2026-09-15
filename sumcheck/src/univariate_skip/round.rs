@@ -7,6 +7,7 @@ use p3_field::{ExtensionField, Field, batch_multiplicative_inverse};
 use p3_maybe_rayon::prelude::*;
 use p3_multilinear_util::poly::Poly;
 
+use super::composition::Composition;
 use super::domain::{SkipDomain, SkipDomainError};
 use super::lde::{CHUNK_BITS, CompressedLde, CompressedLdeError, TABLE_ROWS};
 
@@ -194,11 +195,111 @@ impl<F: TowerLevel> SkipRound<F> {
         self.lde.extend_batch(packed, out);
     }
 
-    /// Weigh composed row values by the equality polynomial to form the round message.
+    /// Form the round message straight from the packed witness, row by row.
+    ///
+    /// # Overview
+    ///
+    /// The unstreamed path materialises every operand's extension, then the composed values.
+    ///
+    /// That is `rows * transmitted` subfield elements per operand before anything is weighed.
+    ///
+    /// Streaming keeps only one row's worth of scratch per thread:
+    ///
+    /// ```text
+    ///     per row:  extend each operand  ->  compose  ->  weigh  ->  accumulate
+    /// ```
+    ///
+    /// The message is the only thing that survives the row.
     ///
     /// # Arguments
     ///
-    /// - `composed`: the composition's value at every transmitted point of every row.
+    /// - `operands`: one packed witness per operand the constraint reads.
+    /// - `eq`: the zerocheck's equality weight for each row.
+    /// - `composition`: the constraint being proved.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the operand count disagrees with the constraint's arity.
+    /// Panics if any operand's packed rows do not match the equality weights.
+    #[must_use]
+    pub fn stream_round_message<EF, C>(
+        &self,
+        operands: &[&[u8]],
+        eq: &[EF],
+        composition: &C,
+    ) -> Vec<EF>
+    where
+        EF: ExtensionField<F>,
+        F: Send + Sync,
+        C: Composition<F> + Sync,
+    {
+        let arity = composition.arity();
+        assert_eq!(operands.len(), arity, "one packed witness per operand");
+
+        let stride = self.num_transmitted();
+        let row_bytes = self.row_bytes();
+        for rows in operands {
+            assert_eq!(
+                rows.len(),
+                eq.len() * row_bytes,
+                "one packed row per equality weight"
+            );
+        }
+
+        // Rows are independent contributions to the same sum.
+        //
+        // Each thread carries its own message accumulator and its own row scratch.
+        //
+        // Nothing of row-by-transmitted size is ever allocated.
+        (0..eq.len())
+            .into_par_iter()
+            .par_fold_reduce(
+                || {
+                    (
+                        EF::zero_vec(stride),
+                        F::zero_vec(arity * stride),
+                        alloc::vec![F::ZERO; arity],
+                    )
+                },
+                |(mut message, mut extended, mut tuple), row| {
+                    // Extend this row of every operand onto the transmitted points.
+                    for (operand, rows) in operands.iter().enumerate() {
+                        let packed = &rows[row * row_bytes..][..row_bytes];
+                        self.lde
+                            .extend(packed, &mut extended[operand * stride..][..stride]);
+                    }
+
+                    // Read the constraint at each transmitted point and weigh the row once.
+                    let weight = eq[row];
+                    for (point, entry) in message.iter_mut().enumerate() {
+                        for (operand, value) in tuple.iter_mut().enumerate() {
+                            *value = extended[operand * stride + point];
+                        }
+                        *entry += weight * composition.eval(&tuple);
+                    }
+
+                    (message, extended, tuple)
+                },
+                |(mut left, extended, tuple), (right, _, _)| {
+                    // Addition is associative, so regrouping the splits cannot change the sum.
+                    for (entry, value) in left.iter_mut().zip(right) {
+                        *entry += value;
+                    }
+                    (left, extended, tuple)
+                },
+            )
+            .0
+    }
+
+    /// Weigh composed row values by the equality polynomial to form the round message.
+    ///
+    /// The streaming path never materialises the composed values, so a prover wants that one.
+    ///
+    /// This one serves callers already holding them, and is that path's reference.
+    ///
+    /// # Arguments
+    ///
+    /// - `composed`: the constraint's value at every transmitted point of every row.
     /// - `eq`: the zerocheck's equality weight for each row.
     ///
     /// # Returns
@@ -537,6 +638,7 @@ mod tests {
     use rand::{RngExt, SeedableRng};
 
     use super::*;
+    use crate::univariate_skip::Conjunction;
 
     /// The subspace domain lives in a byte field, and challenges in the 128-bit field above it.
     type F = BinaryField8;
@@ -612,6 +714,36 @@ mod tests {
                 eq.as_slice()[row] * (a * b + c)
             })
             .sum()
+    }
+
+    #[test]
+    fn streaming_the_message_agrees_with_materialising_it() {
+        // Invariant: the streaming path is only a cheaper route to the same message.
+        //
+        //     materialised: rows * transmitted subfield values per operand, then weighed
+        //     streamed:     one row's scratch per thread, weighed as it goes
+        //
+        // Fixture state: 2^5 rows of 2^6 bits, an odd-sized batch of three operands.
+        let mut rng = SmallRng::seed_from_u64(0x57EA);
+        let round = SkipRound::<F>::new(LOG_SKIP, 2).unwrap();
+        let num_rows = 1 << 5;
+        let witness = random_witness(&mut rng, num_rows, round.row_bytes());
+
+        let r = (0..5).map(|_| rng.random::<EF>()).collect::<Vec<_>>();
+        let eq = Poly::new_from_point(&r, EF::ONE);
+
+        let materialised = {
+            let composed = compose(&round, &witness, num_rows);
+            round.round_message::<EF>(&composed, eq.as_slice())
+        };
+
+        let streamed = round.stream_round_message::<EF, _>(
+            &[&witness.a, &witness.b, &witness.c],
+            eq.as_slice(),
+            &Conjunction,
+        );
+
+        assert_eq!(streamed, materialised);
     }
 
     #[test]
