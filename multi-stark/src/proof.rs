@@ -1,10 +1,42 @@
 //! Proof data and opening shapes for multilinear AIR verification.
 
+use alloc::vec::Vec;
+
 use p3_sumcheck::generic_degree::GenericDegreeProof;
 use serde::{Deserialize, Serialize};
 
 use crate::config::{Commitment, MultiStarkConfig, PcsProof};
 use crate::fractional_gkr::FractionGkrProof;
+use crate::logup_star::LogupStarProof;
+
+/// One batch's indexed-lookup round.
+///
+/// # Soundness
+///
+/// The claims travel in the proof because the reduction runs before the opening.
+///
+/// A verifier cannot have them earlier.
+///
+/// They are values of committed columns, and only an opening supplies those.
+///
+/// Two things then stand between a prover and a forged claim.
+///
+/// The reduction binds every claim before drawing any challenge of its own.
+///
+/// The closing check compares each claim against the opening at the bound point.
+///
+/// So a claim is fixed before it can be tuned, and authenticated before it is believed.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(bound(serialize = "F: Serialize, EF: Serialize"))]
+#[serde(bound(deserialize = "F: Deserialize<'de>, EF: Deserialize<'de>"))]
+pub struct IndexedLookupProof<F, EF> {
+    /// What each reader claims it pulled, at the bound point, in plan order.
+    ///
+    /// One inner vector per reader, holding one value per column of the table it reads.
+    pub reader_claims: Vec<Vec<EF>>,
+    /// The reduction tying those claims to the tables and the position columns.
+    pub reduction: LogupStarProof<F, EF>,
+}
 
 /// A complete proof for AIR instances sharing one zerocheck.
 ///
@@ -21,6 +53,8 @@ pub struct MultiStarkProof<C: MultiStarkConfig> {
     pub commitment: Commitment<C>,
     /// Fractional-GKR lookup proof, absent when no AIR declares interactions.
     pub lookup: Option<FractionGkrProof<C::Challenge>>,
+    /// Indexed-lookup round, absent when no AIR declares an indexed read.
+    pub indexed: Option<IndexedLookupProof<C::Val, C::Challenge>>,
     /// Zerocheck sumcheck transcript for the beta-batched AIR constraints.
     pub sumcheck: GenericDegreeProof<C::Val, C::Challenge>,
     /// Main-trace opening for every committed main table.

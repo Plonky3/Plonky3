@@ -88,6 +88,9 @@ const PUBLIC_VALUES: &str = "public_values";
 /// Step label of the bracket around the delegated lookup argument.
 const LOOKUP_ARGUMENT: &str = "lookup_argument";
 
+/// Step label of the bracket around the delegated indexed-lookup reduction.
+const INDEXED_LOOKUP: &str = "indexed_lookup";
+
 /// Step label of the bracket around the delegated AIR zerocheck.
 const ZEROCHECK: &str = "zerocheck";
 
@@ -108,6 +111,9 @@ struct MainCommitment;
 
 /// Type-level name of the sub-protocol the statement delegates its lookups to.
 struct LookupArgument;
+
+/// Type-level name of the sub-protocol the statement delegates its indexed lookups to.
+struct IndexedLookup;
 
 /// Type-level name of the sub-protocol the statement delegates its constraints to.
 struct Zerocheck;
@@ -163,6 +169,12 @@ pub struct MultiStarkShape {
     pub instances: Vec<MultiStarkInstanceShape>,
     /// Grinding difficulty each delegated sumcheck round runs at.
     pub pow_bits: usize,
+    /// Whether any AIR of the batch declares an indexed read.
+    ///
+    /// A batch declaring none plays no indexed bracket.
+    ///
+    /// Its transcript is then the one it had before indexed lookups existed.
+    pub has_indexed: bool,
 }
 
 impl MultiStarkShape {
@@ -187,7 +199,12 @@ impl MultiStarkShape {
     /// When the two slices disagree on length.
     /// Both are keyed by the instance's position in batch order.
     #[must_use]
-    pub fn new<F, A>(airs: &[&A], num_variables: &[usize], pow_bits: usize) -> Self
+    pub fn new<F, A>(
+        airs: &[&A],
+        num_variables: &[usize],
+        pow_bits: usize,
+        has_indexed: bool,
+    ) -> Self
     where
         A: BaseAir<F> + ?Sized,
     {
@@ -211,6 +228,7 @@ impl MultiStarkShape {
                 })
                 .collect(),
             pow_bits,
+            has_indexed,
         }
     }
 
@@ -283,6 +301,15 @@ impl MultiStarkShape {
         // What this pattern states is that the delegation happens, and where.
         steps.extend(delegation::<LookupArgument>(LOOKUP_ARGUMENT));
         steps.extend(delegation::<Zerocheck>(ZEROCHECK));
+
+        // The indexed reduction reads the point the zerocheck bound.
+        //
+        // It also closes on claims the opening below has to cover, so it sits between them.
+        //
+        // A batch declaring no indexed read never runs it, and never describes it.
+        if self.has_indexed {
+            steps.extend(delegation::<IndexedLookup>(INDEXED_LOOKUP));
+        }
         steps.extend(delegation::<MainOpening>(MAIN_OPENING));
 
         // Nothing is opened against a commitment the batch never made.
@@ -445,6 +472,14 @@ where
     /// # Returns
     ///
     /// Whatever the delegated run produced.
+    /// Lend the sponge to the indexed-lookup reduction, bracketed as a sub-protocol.
+    pub fn indexed_lookup<R>(&mut self, run: impl FnOnce(&mut C) -> R) -> R {
+        self.state.begin_protocol::<IndexedLookup>(INDEXED_LOOKUP);
+        let output = run(self.state.challenger_mut());
+        self.state.end_protocol::<IndexedLookup>(INDEXED_LOOKUP);
+        output
+    }
+
     pub fn lookup_argument<R>(&mut self, run: impl FnOnce(&mut C) -> R) -> R {
         self.state.begin_protocol::<LookupArgument>(LOOKUP_ARGUMENT);
         let output = run(self.state.challenger_mut());
@@ -635,6 +670,14 @@ where
     /// # Returns
     ///
     /// Whatever the delegated run produced.
+    /// Lend the sponge to the indexed-lookup reduction, bracketed as a sub-protocol.
+    pub fn indexed_lookup<R>(&mut self, run: impl FnOnce(&mut C) -> R) -> R {
+        self.state.begin_protocol::<IndexedLookup>(INDEXED_LOOKUP);
+        let output = run(self.state.challenger_mut());
+        self.state.end_protocol::<IndexedLookup>(INDEXED_LOOKUP);
+        output
+    }
+
     pub fn lookup_argument<R>(&mut self, run: impl FnOnce(&mut C) -> R) -> R {
         self.state.begin_protocol::<LookupArgument>(LOOKUP_ARGUMENT);
         let output = run(self.state.challenger_mut());
@@ -788,6 +831,7 @@ mod tests {
                 },
             ],
             pow_bits: 4,
+            has_indexed: false,
         }
     }
 
@@ -821,14 +865,14 @@ mod tests {
             }
         }
         let baseline =
-            MultiStarkShape::new::<F, _>(&[&ColumnsAir(vec![0, 1], vec![0, 1])], &[4], 0);
+            MultiStarkShape::new::<F, _>(&[&ColumnsAir(vec![0, 1], vec![0, 1])], &[4], 0, false);
         for air in [
             ColumnsAir(vec![1, 0], vec![0, 1]),
             ColumnsAir(vec![0, 2], vec![0, 1]),
             ColumnsAir(vec![0, 1], vec![1, 0]),
             ColumnsAir(vec![0, 1], vec![0, 2]),
         ] {
-            let changed = MultiStarkShape::new::<F, _>(&[&air], &[4], 0);
+            let changed = MultiStarkShape::new::<F, _>(&[&air], &[4], 0, false);
             assert!(!seeds_agree(&baseline, &changed));
         }
     }
@@ -853,6 +897,7 @@ mod tests {
         let MultiStarkShape {
             instances,
             pow_bits,
+            has_indexed: _,
         } = base_shape();
         let num_instances = instances.len();
         let MultiStarkInstanceShape {
@@ -1054,7 +1099,7 @@ mod tests {
         };
 
         // The arities and the difficulty come from the caller's own configuration.
-        let shape = MultiStarkShape::new::<F, _>(&[&first, &second], &[9, 4], 6);
+        let shape = MultiStarkShape::new::<F, _>(&[&first, &second], &[9, 4], 6, false);
 
         assert_eq!(
             shape,
@@ -1078,6 +1123,7 @@ mod tests {
                     },
                 ],
                 pow_bits: 6,
+                has_indexed: false,
             }
         );
         assert_eq!(shape.num_preprocessed_tables(), 1);
@@ -1361,6 +1407,7 @@ mod tests {
             |(instances, pow_bits)| MultiStarkShape {
                 instances,
                 pow_bits,
+                has_indexed: false,
             },
         )
     }
