@@ -90,15 +90,21 @@ jobs:
             compile_only: true
             target: x86_64-unknown-linux-gnu
             modes: serial parallel
-          # SHA-NI sits in no x86-64 microarchitecture level, so no other leg turns `sha`
-          # on and the four-lane SHA-256 kernel would otherwise never be compiled. GitHub's
-          # runner pool mixes parts with and without the instructions, so the build is the
-          # guaranteed part and the tests below run only where the host reports them.
+          # No microarchitecture level enables `sha`, so nothing else compiles the
+          # four-lane SHA-256 kernel. Runners vary, so only the build is guaranteed.
           - name: linux, sha, build only
             os: ubuntu-latest
             features: "+sha,+sse4.1"
             compile_only: true
             sha_ni: true
+            target: x86_64-unknown-linux-gnu
+            modes: serial parallel
+          # `+avx512f` implies neither `+avx512bw` nor `+gfni`, so every other leg
+          # compiles the scalar stub in place of the blocked change-of-basis kernel.
+          - name: linux, avx512f+avx512bw+gfni, build only
+            os: ubuntu-latest
+            features: "+avx512f,+avx512bw,+gfni"
+            compile_only: true
             target: x86_64-unknown-linux-gnu
             modes: serial parallel
           - name: arm64, sve2, build only
@@ -117,6 +123,9 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
         id: rs-stable
+        with:
+          # The minimal profile ships no clippy, and the build-only legs lint too.
+          components: clippy
 
       - name: Set flags
         if: ${{ matrix.features }}
@@ -154,12 +163,13 @@ jobs:
         if: ${{ !matrix.compile_only && contains(matrix.modes, 'parallel') }}
         run: ${{ runner.os == 'Windows' && 'python' || 'python3' }} scripts/check.py doctest --parallel
 
-      - name: Build
+      - name: Build and lint
         if: ${{ matrix.compile_only && contains(matrix.modes, 'serial') }}
         # Keep target-feature RUSTFLAGS off host build scripts and proc macros.
+        # Clippy runs here too, since the baseline lint job cannot reach gated code.
         run: python3 scripts/check.py architecture --target ${{ matrix.target }}
 
-      - name: Build with parallel
+      - name: Build and lint with parallel
         if: ${{ matrix.compile_only && contains(matrix.modes, 'parallel') }}
         run: python3 scripts/check.py architecture --target ${{ matrix.target }} --parallel
 

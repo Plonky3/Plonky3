@@ -53,7 +53,10 @@ mod portable;
     )
 ))]
 pub(crate) use basis::TAIL_128;
-pub(crate) use basis::{poly_to_tower_128, tower_image_128, tower_to_poly_128};
+pub(crate) use basis::{
+    poly_to_tower_128, poly_to_tower_128_slice, tower_image_128, tower_to_poly_128,
+    tower_to_poly_128_slice,
+};
 
 use crate::BinaryField64;
 use crate::tower::TowerLevel;

@@ -400,6 +400,28 @@ fn bench_representation_convert(c: &mut Criterion) {
                 })
         });
     });
+
+    // The same conversions over a run of elements, which is how every bulk caller asks.
+    let bits: Vec<u128> = tower.iter().map(|&x| x.to_repr()).collect();
+    group.bench_function("bulk tower to ghash", |b| {
+        b.iter_batched_ref(
+            || bits.clone(),
+            |v| poly_basis::from_tower_slice(v),
+            BatchSize::SmallInput,
+        );
+    });
+    let coordinates = {
+        let mut coordinates = bits.clone();
+        poly_basis::from_tower_slice(&mut coordinates);
+        coordinates
+    };
+    group.bench_function("bulk ghash to tower", |b| {
+        b.iter_batched_ref(
+            || coordinates.clone(),
+            |v| poly_basis::to_tower_slice(v),
+            BatchSize::SmallInput,
+        );
+    });
     group.finish();
 }
 
