@@ -929,7 +929,11 @@ mod tests {
             "the read-back at the honest challenge cannot see it"
         );
 
-        assert!(verify(&check, &forged).is_err());
+        // The binding is what rejects it, so the residual check is what fires.
+        assert_eq!(
+            verify(&check, &forged).unwrap_err(),
+            ZerocheckError::ResidualClaimMismatch
+        );
     }
 
     #[test]
