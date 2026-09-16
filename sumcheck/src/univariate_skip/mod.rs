@@ -30,6 +30,7 @@
 //! - Dao, Thaler, *More Optimizations to Sum-Check Proving*, <https://eprint.iacr.org/2024/1210>
 //! - Bünz, Rothblum, Wang, *Flock*, Sections 4.2 and 4.3, <https://eprint.iacr.org/2026/1329>
 
+pub mod committed;
 pub mod composition;
 pub mod domain;
 pub mod lde;
@@ -40,6 +41,7 @@ pub mod transcript;
 pub mod zerocheck;
 pub mod zerocheck_transcript;
 
+pub use committed::embed_bits;
 pub use composition::{Composition, Conjunction, SquareProduct};
 pub use domain::{SkipDomain, SkipDomainError};
 #[cfg(any(test, feature = "test-util"))]
