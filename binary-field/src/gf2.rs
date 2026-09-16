@@ -34,8 +34,14 @@ impl Gf2 {
     ///
     /// Only the least significant bit of `bit` is used.
     #[inline]
-    const fn new(bit: u8) -> Self {
+    pub(crate) const fn new(bit: u8) -> Self {
         Self(bit & 1)
+    }
+
+    /// The element's single bit, as `0` or `1`.
+    #[inline]
+    pub(crate) const fn to_bit(self) -> u8 {
+        self.0
     }
 
     /// Construct a field element from its little-endian byte representation.
@@ -150,6 +156,13 @@ impl PrimeCharacteristicRing for Gf2 {
 }
 
 impl Field for Gf2 {
+    /// No packing: the packed-value contract requires a packing to be castable to and from
+    /// an array of `WIDTH` scalars, which a bit-sliced packing cannot satisfy.
+    ///
+    /// Eight elements occupy eight bytes as scalars and one byte bit-sliced, so the cast
+    /// would read eight times past the end of the buffer.
+    ///
+    /// The bit-sliced packings therefore live beside this type rather than inside it.
     type Packing = Self;
 
     // The only nonzero element, `1`, trivially generates the (trivial) multiplicative group.
