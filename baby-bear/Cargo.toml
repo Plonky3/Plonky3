@@ -9,6 +9,8 @@ homepage.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
+exclude = ["proofs"]
+
 [dependencies]
 p3-field.workspace = true
 p3-mds.workspace = true
