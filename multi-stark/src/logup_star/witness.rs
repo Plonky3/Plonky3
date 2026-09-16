@@ -84,28 +84,53 @@ impl<EF: Field> Weights<EF> {
                     );
                 }
 
-                // One pass over every row of the table, readers included.
+                // Number every row of every reader of this table, readers in order.
                 //
-                // A pass per reader would seed a table-sized accumulator per split, per reader.
+                //     reader 0 rows | reader 1 rows | ...
+                //     0 .......... a a ........... b
                 //
-                // That costs readers times splits times entries rather than rows.
-                //
-                // Rows split across threads, and each split fills its own copy of the table.
+                // One range over that numbering splits once, rather than once per reader.
+                let starts = table_witness
+                    .readers
+                    .iter()
+                    .scan(0, |start, reader| {
+                        let here = *start;
+                        *start += reader.positions.len();
+                        Some(here)
+                    })
+                    .chain(core::iter::once(
+                        table_witness
+                            .readers
+                            .iter()
+                            .map(|reader| reader.positions.len())
+                            .sum(),
+                    ))
+                    .collect::<Vec<_>>();
+                let num_rows = starts[starts.len() - 1];
+
+                // Each split fills its own copy of the table.
                 //
                 // Scattering in place would let two rows naming one entry race.
                 //
+                // A split therefore costs one table-sized allocation.
+                //
+                // Refusing to split below the table's width bounds that by rows over entries.
+                //
+                // A table is then never copied more often than it is filled.
+                //
                 // The splits merge afterwards, because addition ignores order.
-                (0..table_witness.readers.len())
+                (0..num_rows)
                     .into_par_iter()
-                    .flat_map(|index| {
-                        table_witness.readers[index]
-                            .positions
-                            .par_iter()
-                            .zip(readers[first + index].as_slice().par_iter())
-                    })
+                    .with_min_len(num_entries)
                     .par_fold_reduce(
                         || EF::zero_vec(num_entries),
-                        |mut split, (&entry, &weight)| {
+                        |mut split, row| {
+                            // This row belongs to the last reader starting at or before it.
+                            let index = starts.partition_point(|&start| start <= row) - 1;
+                            let local = row - starts[index];
+                            let entry = table_witness.readers[index].positions[local];
+                            let weight = readers[first + index].as_slice()[local];
+
                             *split
                                 .get_mut(entry)
                                 .expect("a row names an entry outside its table") += weight;

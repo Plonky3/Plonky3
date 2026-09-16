@@ -42,9 +42,11 @@
 //!
 //! # What the caller owes
 //!
-//! The claim point must be drawn after the position column and the table are committed.
+//! The claim point must be a challenge the surrounding protocol drew.
 //!
-//! A point chosen earlier costs the argument its free range check.
+//! It must be drawn after the position column and the table are committed.
+//!
+//! A point the prover could predict when it committed costs the free range check.
 //!
 //! # References
 //!
@@ -75,11 +77,13 @@ pub use proof::{LogupStarOutput, LogupStarProof, TableOutput};
 ///
 /// # Soundness
 ///
-/// The claim point must be drawn after the position column and the table are committed.
+/// The claim point must be a challenge the surrounding protocol drew.
+///
+/// It must be drawn after the position column and the table are committed.
 ///
 /// The reduction takes the point as given and cannot check this.
 ///
-/// A point chosen before those commitments costs the free range check.
+/// A point the prover could predict when it committed costs the free range check.
 ///
 /// An out-of-range position is caught because it leaves a nonzero multilinear behind.
 ///
@@ -93,6 +97,12 @@ pub struct Reader<'a, EF> {
 }
 
 /// One table together with every reader that pulls from it.
+///
+/// # Soundness
+///
+/// Every reader's claim point carries a precondition the caller owes.
+///
+/// The reader type itself describes it.
 #[derive(Clone, Copy, Debug)]
 pub struct TableLookup<'a, EF> {
     /// Base-two logarithm of the number of table entries.

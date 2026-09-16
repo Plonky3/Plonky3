@@ -854,6 +854,73 @@ fn rejects_a_pushforward_of_the_wrong_width() {
     );
 }
 
+#[test]
+#[should_panic(expected = "the claims the statement carries are not the ones the witness produces")]
+fn a_claim_moved_between_two_readers_of_one_table_cannot_be_hidden() {
+    // Readers of one table are weighted by consecutive powers of the batching challenge.
+    //
+    // Fixture state: one four-entry table of one column, read by two readers of two rows.
+    //
+    // Mutation: move one unit of claim off reader 0 and onto reader 1.
+    //
+    //     honest : X_0          X_1
+    //     forged : X_0 + delta  X_1 - delta
+    //
+    // The batched sum is `X_0 + lambda * X_1`.
+    //
+    // The shift moves it by `delta * (1 - lambda)`.
+    //
+    // That vanishes exactly when lambda is one.
+    //
+    // A batching challenge forced to one would let the pair through.
+    let mut rng = SmallRng::seed_from_u64(0x00BA_7C41);
+    let mut instance = Instance::<Binary, Binary>::random(&mut rng, &[(2, 1, &[1, 1])]);
+
+    let delta = Binary::ONE;
+    instance.claims[0][0][0] += delta;
+    instance.claims[0][1][0] -= delta;
+
+    let readers = instance.readers();
+    let lookups = instance.lookups(&readers);
+    let columns = instance.column_views();
+    let reader_witnesses = instance.reader_witnesses();
+    let witness = Instance::<Binary, Binary>::witness(&columns, &reader_witnesses);
+
+    let mut challenger = binary_challenger();
+    let _ = LogupStarProof::prove(&lookups, &witness, &mut challenger);
+}
+
+#[test]
+#[should_panic(expected = "the claims the statement carries are not the ones the witness produces")]
+fn a_claim_moved_between_two_columns_of_one_table_cannot_be_hidden() {
+    // Every column claim earns its own power of the column batching challenge.
+    //
+    // Fixture state: one four-entry table of two columns, read by one reader of two rows.
+    //
+    // Mutation: move one unit of claim off column 0 and onto column 1.
+    //
+    // The batched sum is `X_0 + mu * X_1`, which the shift moves by `delta * (1 - mu)`.
+    //
+    // That vanishes exactly when mu is one.
+    //
+    // A batching challenge forced to one would let the pair through.
+    let mut rng = SmallRng::seed_from_u64(0x00BA_7C42);
+    let mut instance = Instance::<Binary, Binary>::random(&mut rng, &[(2, 2, &[1])]);
+
+    let delta = Binary::ONE;
+    instance.claims[0][0][0] += delta;
+    instance.claims[0][0][1] -= delta;
+
+    let readers = instance.readers();
+    let lookups = instance.lookups(&readers);
+    let columns = instance.column_views();
+    let reader_witnesses = instance.reader_witnesses();
+    let witness = Instance::<Binary, Binary>::witness(&columns, &reader_witnesses);
+
+    let mut challenger = binary_challenger();
+    let _ = LogupStarProof::prove(&lookups, &witness, &mut challenger);
+}
+
 /// Digest of one proof's encoding, so a change in what the run derives is visible.
 fn proof_digest(proof: &LogupStarProof<Binary, Binary>) -> [u8; 32] {
     let bytes = postcard::to_allocvec(proof).expect("a proof serializes");
@@ -875,7 +942,11 @@ fn a_fixed_statement_always_produces_the_same_proof() {
     //
     // That includes one keeping prover and verifier agreed, which no round trip would show.
     //
-    // Fixture state: two tables of four entries, one reader each, fixed seed.
+    // Fixture state: two tables of four entries, fixed seed.
+    //
+    // The first carries two columns and two readers.
+    //
+    // Both batching challenges therefore reach the digest, raised above the zeroth power.
     //
     // A failure here is not automatically a bug.
     //
@@ -883,7 +954,7 @@ fn a_fixed_statement_always_produces_the_same_proof() {
     //
     // The new digest is right exactly when that change was intended.
     let mut rng = SmallRng::seed_from_u64(0x0_901D);
-    let instance = Instance::<Binary, Binary>::random(&mut rng, &[(2, 1, &[2]), (2, 2, &[1])]);
+    let instance = Instance::<Binary, Binary>::random(&mut rng, &[(2, 2, &[2, 1]), (2, 2, &[1])]);
 
     let readers = instance.readers();
     let lookups = instance.lookups(&readers);
@@ -896,7 +967,7 @@ fn a_fixed_statement_always_produces_the_same_proof() {
 
     assert_eq!(
         hex(&proof_digest(&proof)),
-        "460d8984f75ef5c7bcad06133f058e3fbe051dcf21124462500b4259d4bb2f8d"
+        "ef40ccf9220c64d51e0b9b8e9990037b622bd82cb681cf3e25794066279128d2"
     );
 }
 

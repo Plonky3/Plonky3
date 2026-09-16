@@ -36,11 +36,23 @@ where
     ///
     /// The proof, and the evaluation claims the caller must discharge against its commitments.
     ///
+    /// # Soundness
+    ///
+    /// Every reader's claim point carries a precondition the caller owes.
+    ///
+    /// The reader type describes it.
+    ///
     /// # Panics
     ///
     /// Panics if the statement and the witness disagree on how many tables or readers there are.
     ///
     /// Panics if a row names an entry its table does not have.
+    ///
+    /// Panics if a reader's row count is not the one its claim point addresses.
+    ///
+    /// Panics if a table column does not carry one value per entry.
+    ///
+    /// Panics on any statement shape the layout rejects, which its own documentation lists.
     ///
     /// Panics if the claims the statement carries are not the ones the witness produces.
     ///

@@ -783,12 +783,18 @@ mod tests {
         // Totals alone do not separate those.
         //
         // Each table's reader count is bound with its heights rather than after them.
+        //
+        // The two tables share a width, so nothing else in the label parts them.
+        //
+        // A width of one would leave the statement lengths unequal.
+        //
+        // The pattern would then separate the pair before the count was ever read.
         let left = LogupStarShape {
-            tables: vec![table(3, 1, &[2, 2]), table(3, 1, &[2])],
+            tables: vec![table(3, 2, &[2, 2]), table(3, 2, &[2])],
             num_variables: 5,
         };
         let right = LogupStarShape {
-            tables: vec![table(3, 1, &[2]), table(3, 1, &[2, 2])],
+            tables: vec![table(3, 2, &[2]), table(3, 2, &[2, 2])],
             num_variables: 5,
         };
 

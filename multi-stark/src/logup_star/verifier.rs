@@ -34,6 +34,12 @@ where
     ///
     /// What is proved is that those claims and the statement's own stand or fall together.
     ///
+    /// # Soundness
+    ///
+    /// Every reader's claim point carries a precondition the caller owes.
+    ///
+    /// The reader type describes it.
+    ///
     /// # Errors
     ///
     /// Returns an error when the proof is malformed.

@@ -557,6 +557,38 @@ fn an_extension_numerator_matches_a_base_numerator() {
 }
 
 #[test]
+#[should_panic(expected = "leaf numerator and denominator must share a storage mode")]
+fn a_mixed_leaf_storage_is_rejected_before_the_size_decides() {
+    // A scalar numerator against a packed denominator has no meaning.
+    //
+    // The round kernel reads the two halves side by side.
+    //
+    // Where an unrejected pair would surface depends on the table's size.
+    //
+    //     narrow  ->  the scalar-unpack shim runs first and accepts it silently
+    //     wide    ->  it reaches an arm that cannot handle it
+    //
+    // Only the entry check can catch the narrow case.
+    //
+    // So the table here is exactly one lane wide.
+    let mut rng = SmallRng::seed_from_u64(0x0E47_0003);
+    let num_variables = log2_strict_usize(<F as Field>::Packing::WIDTH).max(1);
+    let (numer, denom) = zero_sum::<EF, EF>(&mut rng, num_variables);
+
+    let scalar_numerator = PolyMaybePacked::<F, EF>::Scalar(numer);
+    let packed_denominator = PolyMaybePacked::<F, EF>::Packed(denom.pack::<F, EF>());
+
+    let mut challenger = fresh_challenger();
+    let _ = prove_fractional_gkr(
+        Fraction {
+            n: LeafNumerator::Ext(&scalar_numerator),
+            d: &packed_denominator,
+        },
+        &mut challenger,
+    );
+}
+
+#[test]
 fn a_packed_extension_numerator_preserves_the_transcript() {
     // Packing moves the trailing variables into SIMD lanes and changes nothing else.
     //
