@@ -51,7 +51,17 @@ const CHUNK: usize = 1 << 1;
 /// A bit matrix solving two `F_2`-linear systems moves the claim, sum held.
 /// The rounds and the closing check then accept a true surviving claim.
 ///
-/// The split is what stops a driver reaching for that order.
+/// # What the split settles, and what it leaves
+///
+/// It settles that `tensor` never needs the challenge.
+/// No driver is pushed into drawing one early just to obtain an element.
+///
+/// It does not settle the order.
+/// `batch` borrows this stage alone, so a caller can reach it first.
+/// The forgery goes through in the order `new`, `batch`, `tensor`.
+///
+/// Only a transcript binding `r` and the element before `r''` fixes that.
+/// The driver owning that transcript owes the ordering test.
 ///
 /// # What it costs a verifier
 ///
@@ -265,8 +275,8 @@ impl<EF: TowerLevel> BitRingSwitch<EF> {
 
 /// The same reduction, once the batching challenge has been drawn.
 ///
-/// Reaching this stage is the proof that the element was bound first.
-/// That is the order the construction's soundness rests on.
+/// Holding one of these is not evidence that the element was bound first.
+/// Enforcing that is the transcript's job, as the stage above records.
 #[derive(Clone, Debug)]
 pub struct BitRingSwitchBatch<'a, EF> {
     /// The stage the evaluation point alone fixes.
@@ -518,10 +528,13 @@ mod tests {
         let batch = reduction.batch(&r_batch).unwrap();
         let weights = batch.weights();
 
+        // Built from the challenge here, not read off the stage under test.
+        let eq_batch = Poly::<EF>::new_from_point(r_batch.as_slice(), EF::ONE);
+
         for (w, &value) in reduction.eq_high().as_slice().iter().enumerate() {
             let expected: EF = Coefficients::of(value)
                 .iter()
-                .zip(batch.eq_batch.as_slice())
+                .zip(eq_batch.as_slice())
                 .filter(|&(bit, _)| bit)
                 .map(|(_, &weight)| weight)
                 .sum();
@@ -550,6 +563,35 @@ mod tests {
             .sum();
 
         assert_eq!(dot, batch.initial_sum(&tensor));
+    }
+
+    #[test]
+    fn the_batched_rows_weigh_by_the_challenge_itself() {
+        // Invariant: row `u` carries the equality weight at point `u`.
+        //
+        //     initial_sum(s_hat) == sum_u eq(hypercube(u, k), r'') * row u
+        //
+        // Every other batch-stage test reads the table this stage holds.
+        // A stage ignoring the challenge would pass all of them.
+        // That is the forgery with a challenge every prover knows.
+        //
+        // So the reference here is built from the challenge itself.
+        let (reduction, packing, _, r_batch) = fixture(0xC4A, 16);
+        let batch = reduction.batch(&r_batch).unwrap();
+        let tensor = reduction.tensor(&packing).unwrap();
+        let absorbed = BitRingSwitch::<EF>::ABSORBED;
+
+        let expected: EF = tensor
+            .rows()
+            .iter()
+            .enumerate()
+            .map(|(u, &row)| {
+                let point = Point::<EF>::hypercube(u, absorbed);
+                row * Point::eval_eq(point.as_slice(), r_batch.as_slice())
+            })
+            .sum();
+
+        assert_eq!(batch.initial_sum(&tensor), expected);
     }
 
     #[test]
