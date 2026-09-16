@@ -1,4 +1,4 @@
-//! Trait for builders that record bus interactions and indexed reads.
+//! Traits for builders that record bus interactions, and for those that record indexed reads.
 
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -100,16 +100,10 @@ pub struct SymbolicExclusiveBranch<F> {
     pub count_weight: u32,
 }
 
-/// Opt-in extension to the AIR builder for AIRs that speak on buses or read indexed tables.
+/// Opt-in extension to the AIR builder for AIRs that speak on buses.
 ///
 /// - AIRs that emit messages bound their builder on this trait.
 /// - Builders that do not care about interactions never implement it.
-///
-/// A bus message and an indexed read are different mechanisms recorded by one pass.
-///
-/// A bus message fingerprints arbitrary expressions, so it names expressions.
-///
-/// An indexed read is opened against a commitment, so it names committed columns instead.
 pub trait InteractionBuilder: AirBuilder {
     /// Record one global (cross-AIR) message on a named bus.
     ///
@@ -175,6 +169,40 @@ pub trait InteractionBuilder: AirBuilder {
         branches.into_iter().for_each(drop);
     }
 
+    /// Global interactions pushed so far.
+    fn num_global_interactions(&self) -> usize {
+        0
+    }
+
+    /// Local interactions pushed so far.
+    fn num_local_interactions(&self) -> usize {
+        0
+    }
+
+    /// Exclusive interactions pushed so far.
+    fn num_exclusive_interactions(&self) -> usize {
+        0
+    }
+}
+
+/// Opt-in extension to the AIR builder for AIRs that read indexed tables.
+///
+/// A bus message and an indexed read are different mechanisms.
+///
+/// A bus message fingerprints arbitrary expressions, so it names expressions.
+///
+/// An indexed read is opened against a commitment, so it names committed columns instead.
+///
+/// Every method here is required, which makes the trait a claim about the backend.
+///
+/// A backend whose builders implement it undertakes to run the reduction.
+///
+/// Its own folders may still drop a declaration, since a read has no row-local form.
+///
+/// A backend running no reduction leaves its builders outside this trait.
+///
+/// An AIR declaring a read then fails to compile against it.
+pub trait IndexedLookupBuilder: AirBuilder {
     /// Record that this AIR reads a named table at a position column.
     ///
     /// ```text
@@ -194,18 +222,12 @@ pub trait InteractionBuilder: AirBuilder {
     /// Over a prime field that embedding is the index itself.
     ///
     /// Over a binary tower it is the tower element whose bit pattern is the index.
-    ///
-    /// Recording builders override this.
-    /// Other builders inherit a no-op default.
     fn push_indexed_read(
         &mut self,
-        _table: &str,
-        _position: usize,
+        table: &str,
+        position: usize,
         payload: impl IntoIterator<Item = usize>,
-    ) {
-        // Drain the iterator so side effects in a wrapping adapter still fire.
-        payload.into_iter().for_each(drop);
-    }
+    );
 
     /// Record that this AIR provides a named table.
     ///
@@ -214,43 +236,18 @@ pub trait InteractionBuilder: AirBuilder {
     /// - `name` — name every reader of this table agrees on.
     /// - `window` — which committed window the columns address.
     /// - `columns` — the columns an entry carries, in the order readers pull them.
-    ///
-    /// Recording builders override this.
-    /// Other builders inherit a no-op default.
     fn push_indexed_table(
         &mut self,
-        _name: &str,
-        _window: TraceWindow,
+        name: &str,
+        window: TraceWindow,
         columns: impl IntoIterator<Item = usize>,
-    ) {
-        // Drain the iterator so side effects in a wrapping adapter still fire.
-        columns.into_iter().for_each(drop);
-    }
-
-    /// Global interactions pushed so far.
-    fn num_global_interactions(&self) -> usize {
-        0
-    }
-
-    /// Local interactions pushed so far.
-    fn num_local_interactions(&self) -> usize {
-        0
-    }
-
-    /// Exclusive interactions pushed so far.
-    fn num_exclusive_interactions(&self) -> usize {
-        0
-    }
+    );
 
     /// Indexed reads pushed so far.
-    fn num_indexed_reads(&self) -> usize {
-        0
-    }
+    fn num_indexed_reads(&self) -> usize;
 
     /// Indexed tables pushed so far.
-    fn num_indexed_tables(&self) -> usize {
-        0
-    }
+    fn num_indexed_tables(&self) -> usize;
 }
 
 impl<F: Field, EF: ExtensionField<F>> InteractionBuilder for DebugConstraintBuilder<'_, F, EF> {
@@ -274,5 +271,36 @@ impl<F: Field, EF: ExtensionField<F>> InteractionBuilder for DebugConstraintBuil
         //
         // Swallow the iterator to keep caller-observable behavior consistent across builder implementations.
         tuples.into_iter().for_each(drop);
+    }
+}
+
+impl<F: Field, EF: ExtensionField<F>> IndexedLookupBuilder for DebugConstraintBuilder<'_, F, EF> {
+    fn push_indexed_read(
+        &mut self,
+        _table: &str,
+        _position: usize,
+        payload: impl IntoIterator<Item = usize>,
+    ) {
+        // This builder checks constraints row by row and proves nothing.
+        //
+        // An indexed read is discharged by a reduction, which has no row-local form to check.
+        payload.into_iter().for_each(drop);
+    }
+
+    fn push_indexed_table(
+        &mut self,
+        _name: &str,
+        _window: TraceWindow,
+        columns: impl IntoIterator<Item = usize>,
+    ) {
+        columns.into_iter().for_each(drop);
+    }
+
+    fn num_indexed_reads(&self) -> usize {
+        0
+    }
+
+    fn num_indexed_tables(&self) -> usize {
+        0
     }
 }

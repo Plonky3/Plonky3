@@ -12,8 +12,8 @@ use p3_field::{Algebra, ExtensionField, Field};
 use p3_matrix::dense::RowMajorMatrix;
 
 use crate::builder::{
-    InteractionBuilder, SymbolicExclusiveBranch, SymbolicExclusiveInteraction, SymbolicInteraction,
-    SymbolicLocalInteraction,
+    IndexedLookupBuilder, InteractionBuilder, SymbolicExclusiveBranch,
+    SymbolicExclusiveInteraction, SymbolicInteraction, SymbolicLocalInteraction,
 };
 use crate::count::Count;
 use crate::indexed::{IndexedRead, IndexedTable, TraceWindow};
@@ -257,6 +257,20 @@ impl<F: Field, EF: ExtensionField<F>> InteractionBuilder for InteractionSymbolic
             });
     }
 
+    fn num_global_interactions(&self) -> usize {
+        self.global_interactions.len()
+    }
+
+    fn num_local_interactions(&self) -> usize {
+        self.local_interactions.len()
+    }
+
+    fn num_exclusive_interactions(&self) -> usize {
+        self.exclusive_interactions.len()
+    }
+}
+
+impl<F: Field, EF: ExtensionField<F>> IndexedLookupBuilder for InteractionSymbolicBuilder<F, EF> {
     fn push_indexed_read(
         &mut self,
         table: &str,
@@ -283,18 +297,6 @@ impl<F: Field, EF: ExtensionField<F>> InteractionBuilder for InteractionSymbolic
             window,
             columns: columns.into_iter().collect(),
         });
-    }
-
-    fn num_global_interactions(&self) -> usize {
-        self.global_interactions.len()
-    }
-
-    fn num_local_interactions(&self) -> usize {
-        self.local_interactions.len()
-    }
-
-    fn num_exclusive_interactions(&self) -> usize {
-        self.exclusive_interactions.len()
     }
 
     fn num_indexed_reads(&self) -> usize {

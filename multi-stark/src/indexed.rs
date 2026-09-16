@@ -69,7 +69,13 @@ pub struct IndexedTablePlan {
 ///
 /// Tables are ordered by name rather than by the position of the AIR providing them.
 ///
-/// A batch that reorders its AIRs therefore still plans the same statement.
+/// That gives the table list one canonical order, independent of how the batch is arranged.
+///
+/// Readers are not: they follow caller order, and each carries its AIR's position.
+///
+/// Swapping two reader AIRs of one table therefore changes the statement.
+///
+/// Both sides read the same instance order and the seed binds it, so they still agree.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct IndexedPlan {
     /// One entry per table, in name order.
@@ -132,7 +138,7 @@ impl IndexedPlan {
         //
         // Tables are keyed by name, not by the position of the AIR providing them.
         //
-        // A batch that reorders its AIRs therefore still plans the same statement.
+        // The name sort is what gives the table list one canonical order.
         let mut tables: BTreeMap<String, IndexedTablePlan> = BTreeMap::new();
         for (air, lookups) in declared.iter().enumerate() {
             for table in lookups.tables() {
@@ -381,7 +387,7 @@ mod tests {
     use p3_baby_bear::BabyBear;
     use p3_field::PrimeCharacteristicRing;
     use p3_field::extension::BinomialExtensionField;
-    use p3_lookup::InteractionBuilder;
+    use p3_lookup::IndexedLookupBuilder;
 
     use super::*;
 
@@ -398,6 +404,8 @@ mod tests {
     struct Declaring {
         /// Width the AIR reports for its main trace.
         width: usize,
+        /// Width the AIR reports for its preprocessed trace.
+        preprocessed_width: usize,
         /// Reads emitted, in order.
         reads: Vec<ReadScript>,
         /// Tables provided, in order.
@@ -409,6 +417,7 @@ mod tests {
         fn bare(width: usize) -> Self {
             Self {
                 width,
+                preprocessed_width: 0,
                 reads: Vec::new(),
                 tables: Vec::new(),
             }
@@ -425,15 +434,27 @@ mod tests {
             self.tables.push((name, TraceWindow::Main, columns));
             self
         }
+
+        /// Add one provided table in the preprocessed trace, widening that trace to hold it.
+        fn providing_preprocessed(mut self, name: &'static str, columns: Vec<usize>) -> Self {
+            let widest = columns.iter().copied().max().map_or(0, |column| column + 1);
+            self.preprocessed_width = self.preprocessed_width.max(widest);
+            self.tables.push((name, TraceWindow::Preprocessed, columns));
+            self
+        }
     }
 
     impl BaseAir<F> for Declaring {
         fn width(&self) -> usize {
             self.width
         }
+
+        fn preprocessed_width(&self) -> usize {
+            self.preprocessed_width
+        }
     }
 
-    impl<AB: InteractionBuilder<F = F>> Air<AB> for Declaring {
+    impl<AB: IndexedLookupBuilder<F = F>> Air<AB> for Declaring {
         fn eval(&self, builder: &mut AB) {
             for (table, position, payload) in &self.reads {
                 builder.push_indexed_read(table, *position, payload.iter().copied());
@@ -460,6 +481,36 @@ mod tests {
         let air = Declaring::bare(4);
 
         assert_eq!(plan(&[&air, &air], &[3, 3]), Ok(None));
+    }
+
+    #[test]
+    fn a_table_keeps_the_window_its_air_declared() {
+        // The window decides which commitment the table's claims are opened against.
+        //
+        //     Main          ->  the batch's main commitment
+        //     Preprocessed  ->  the preprocessed commitment in the keys
+        //
+        // A preprocessed range table checked against main columns is one the prover picks.
+        //
+        // The verifying key is what should fix it.
+        //
+        // So the window has to survive planning rather than defaulting to the main trace.
+        let reader = Declaring::bare(2).reading("range", 0, vec![1]);
+        let fixed = Declaring::bare(1).providing_preprocessed("range", vec![0]);
+
+        let preprocessed = plan(&[&reader, &fixed], &[3, 2]).unwrap().unwrap();
+        let table = &preprocessed.tables()[0];
+
+        assert_eq!(table.table.window, TraceWindow::Preprocessed);
+        assert_eq!(table.table.air, 1);
+        assert_eq!(table.table.columns, vec![0]);
+
+        // A main-window provider of the same shape must not land in the same place.
+        let live = Declaring::bare(1).providing("range", vec![0]);
+        let other = plan(&[&reader, &live], &[3, 2]).unwrap().unwrap();
+
+        assert_eq!(other.tables()[0].table.window, TraceWindow::Main);
+        assert_ne!(other.tables()[0].table.window, table.table.window);
     }
 
     #[test]
@@ -521,9 +572,11 @@ mod tests {
         //     batch A:  air 1 provides "a",  air 2 provides "b"
         //     batch B:  air 1 provides "b",  air 2 provides "a"
         //
-        // An AIR order would make these two different statements.
+        // An AIR order would list the tables differently in the two batches.
         //
-        // A name order makes them the same one, so the plan lists "a" first either way.
+        // A name order lists "a" first either way, which is all this compares.
+        //
+        // The placements still differ: "a" is provided by a different AIR in each.
         let reader = Declaring::bare(2)
             .reading("a", 0, vec![0])
             .reading("b", 1, vec![0]);

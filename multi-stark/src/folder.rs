@@ -9,7 +9,9 @@ use alloc::vec::Vec;
 
 use p3_air::{Air, AirBuilder, BaseAir, BoundaryEnd, BoundaryPublic, RowWindow, WindowAccess};
 use p3_field::{Algebra, ExtensionField, Field, PrimeCharacteristicRing, dot_product};
-use p3_lookup::{Count, InteractionBuilder, InteractionSymbolicBuilder};
+use p3_lookup::{
+    Count, IndexedLookupBuilder, InteractionBuilder, InteractionSymbolicBuilder, TraceWindow,
+};
 
 use crate::lookup::AirLinkInstance;
 use crate::packed_ext::PackedExt;
@@ -392,6 +394,47 @@ where
     }
 }
 
+/// Indexed reads are dropped here, as every other declaration is.
+///
+/// This folder evaluates ordinary constraints, and a read has no row-local form.
+///
+/// The reduction reads the declarations off the symbolic pass instead.
+impl<'a, F, Var, Acc> IndexedLookupBuilder for MultilinearFolder<'a, F, Var, Acc>
+where
+    F: PrimeCharacteristicRing + Copy + Sync,
+    Var: Algebra<F> + Copy + Send + Sync,
+    Acc: Algebra<Var> + Copy,
+{
+    fn push_indexed_read(
+        &mut self,
+        _table: &str,
+        _position: usize,
+        payload: impl IntoIterator<Item = usize>,
+    ) {
+        // This folder evaluates constraints at one point and carries no reduction.
+        //
+        // The indexed reduction discharges it, reading the declaration off the symbolic pass.
+        payload.into_iter().for_each(drop);
+    }
+
+    fn push_indexed_table(
+        &mut self,
+        _name: &str,
+        _window: TraceWindow,
+        columns: impl IntoIterator<Item = usize>,
+    ) {
+        columns.into_iter().for_each(drop);
+    }
+
+    fn num_indexed_reads(&self) -> usize {
+        0
+    }
+
+    fn num_indexed_tables(&self) -> usize {
+        0
+    }
+}
+
 impl<'a, F, Var, Acc> AirBuilder for MultilinearFolder<'a, F, Var, Acc>
 where
     F: PrimeCharacteristicRing + Copy + Sync,
@@ -610,6 +653,42 @@ where
     #[inline]
     fn periodic_values(&self) -> &[Self::PeriodicVar] {
         self.inner.periodic_values()
+    }
+}
+
+impl<'a, F, Var, Acc> IndexedLookupBuilder for InteractionMultilinearFolder<'a, F, Var, Acc>
+where
+    F: PrimeCharacteristicRing + Copy + Sync,
+    Var: Algebra<F> + Copy + Send + Sync,
+    Acc: Algebra<Var> + Copy,
+{
+    fn push_indexed_read(
+        &mut self,
+        _table: &str,
+        _position: usize,
+        payload: impl IntoIterator<Item = usize>,
+    ) {
+        // This folder evaluates constraints at one point and carries no reduction.
+        //
+        // The indexed reduction discharges it, reading the declaration off the symbolic pass.
+        payload.into_iter().for_each(drop);
+    }
+
+    fn push_indexed_table(
+        &mut self,
+        _name: &str,
+        _window: TraceWindow,
+        columns: impl IntoIterator<Item = usize>,
+    ) {
+        columns.into_iter().for_each(drop);
+    }
+
+    fn num_indexed_reads(&self) -> usize {
+        0
+    }
+
+    fn num_indexed_tables(&self) -> usize {
+        0
     }
 }
 
