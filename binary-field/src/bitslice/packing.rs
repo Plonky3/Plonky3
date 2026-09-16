@@ -14,8 +14,7 @@ use crate::Gf2;
 
 /// Masks selecting the low `s` bits of every `2s`-bit block, indexed by `log2(s)`.
 ///
-/// Both the block interleave and the blocked transpose swap a high `s`-bit block against the
-/// low `s`-bit block beside it, and this is the pattern that isolates the low side:
+/// The interleave and the transpose swap a high block against the low one beside it:
 ///
 /// ```text
 ///     s = 1   ...0101 0101      every second bit
@@ -23,7 +22,7 @@ use crate::Gf2;
 ///     s = 4   ...00001111       every second nibble
 /// ```
 ///
-/// A `u64` needs only six entries, since `s` never exceeds half a word.
+/// Six entries suffice, since `s` never exceeds half a `u64`.
 const BLOCK_MASKS: [u64; 6] = [
     0x5555_5555_5555_5555,
     0x3333_3333_3333_3333,
@@ -35,8 +34,8 @@ const BLOCK_MASKS: [u64; 6] = [
 
 /// The mask selecting the low `block` bits of every `2 * block`-bit block.
 ///
-/// Truncating the result to a narrower word keeps the pattern, because it repeats with
-/// period `2 * block` and every word width is a multiple of that period.
+/// The pattern repeats with period `2 * block`, and every word width is a multiple of it.
+/// So truncating the result to a narrower word keeps it intact.
 ///
 /// # Panics
 /// Panics if `block` is not a power of two in `1 ..= 32`.
@@ -56,11 +55,10 @@ pub(super) const fn block_mask(block: usize) -> u64 {
 ///          -> b0 __ b1 __ b2 __ b3 __
 /// ```
 ///
-/// Each rung of the ladder doubles the gap between neighbouring blocks by folding a shifted
-/// copy in and masking out the half that the fold duplicated.
+/// Each rung doubles the gap: fold in a shifted copy, mask out the half it duplicated.
 ///
-/// The ladder starts one rung below the half word and stops at the block size, so a block as
-/// wide as half the input is already in place and no rung runs.
+/// The ladder runs from one rung below the half word down to the block size.
+/// A block as wide as half the input is already in place, so no rung runs.
 #[inline]
 const fn spread(mut bits: u64, block: usize, word_bits: usize) -> u64 {
     // Gap doubling, from the coarsest split of the half word down to single blocks.
@@ -74,12 +72,12 @@ const fn spread(mut bits: u64, block: usize, word_bits: usize) -> u64 {
 
 /// Several independent elements of `GF(2)`, one per bit of a block of storage.
 ///
-/// Lane `i` is bit `i mod B` of word `i / B`, where `B` is the width of the backing word,
-/// counting bits from the least significant one.
+/// Lane `i` is bit `i mod B` of word `i / B`, counting from the least significant bit.
+/// Read as bytes, that puts lane `i` at bit `i mod 8` of byte `i / 8`.
 ///
-/// Read as bytes, that puts lane `i` at bit `i mod 8` of byte `i / 8`, lowest bit first.
+/// This is the order a bit witness already has on the wire, so packing one moves no bits.
 ///
-/// The arithmetic is what the field does to a single bit, applied to the whole block at once:
+/// The arithmetic is what the field does to one bit, applied to the whole block at once:
 ///
 /// ```text
 ///     a + b   ->  a XOR b
@@ -140,8 +138,7 @@ impl<U: Underlier> PackedGf2<U> {
 
     /// The backing words, lowest lanes first.
     ///
-    /// Every bit pattern is a valid packing, so writing through this cannot break any
-    /// invariant.
+    /// Every bit pattern is a valid packing, so writing here cannot break an invariant.
     #[inline]
     pub fn words_mut(&mut self) -> &mut [U::Word] {
         self.0.words_mut()
@@ -226,8 +223,7 @@ impl<U: Underlier> PackedGf2<U> {
 
     /// This value read as a run of narrower packings, lowest lanes first.
     ///
-    /// The bits do not move: a wide block is laid out as narrow blocks side by side, so lane
-    /// `i` of the wide value is lane `i mod w` of narrow packing `i / w`.
+    /// A wide block is narrow ones side by side: lane `i` is lane `i mod w` of part `i / w`.
     #[inline]
     pub fn narrow<V: Underlier>(&self) -> &[PackedGf2<V>]
     where
@@ -247,9 +243,7 @@ impl<U: Underlier> PackedGf2<U> {
 
     /// A run of these packings read as a run of narrower ones, lowest lanes first.
     ///
-    /// This is the free half of reading a bit witness at another width: the same bytes carry
-    /// the same lanes in the same order, so a caller that wants narrower packings copies
-    /// nothing.
+    /// The same bytes carry the same lanes in order, so a narrower read copies nothing.
     #[inline]
     pub fn narrow_slice<V: Underlier>(slice: &[Self]) -> &[PackedGf2<V>]
     where
@@ -269,38 +263,33 @@ impl<U: Underlier> PackedGf2<U> {
 
     /// A run of these packings read as bytes, lowest lanes first.
     ///
-    /// Byte `k` holds lanes `8k .. 8k + 8`, lowest lane at the lowest bit, which is the
-    /// layout a bit witness already has on the wire.
+    /// Byte `k` holds lanes `8k .. 8k + 8`, lowest lane at the lowest bit.
     #[inline]
     #[must_use]
     pub const fn as_bytes(slice: &[Self]) -> &[u8] {
-        // A packing is exactly its block and a block is exactly its words, so the byte count
-        // is the lane count over eight.
+        // A packing is exactly its words, so the byte count is the lane count over eight.
         const {
             assert!(size_of::<Self>() * 8 == U::BITS);
         }
         let len = slice.len() * (U::BITS / 8);
 
-        // SAFETY: the assertion pins that the run occupies exactly `len` initialised bytes,
-        // and the byte slice borrows the same region for the same lifetime.
+        // SAFETY: the assertion pins the run at exactly `len` initialised bytes.
+        // The byte slice borrows the same region for the same lifetime.
         unsafe { slice::from_raw_parts(slice.as_ptr().cast::<u8>(), len) }
     }
 
     /// Cut both operands into chunks of `block_len` lanes and interleave the chunks.
     ///
-    /// The two inputs stack into one sequence of `2 * WIDTH` lanes, which is cut into chunks
-    /// and dealt out alternately, first chunk of the left, first chunk of the right, and so
-    /// on:
+    /// The two inputs stack into `2 * WIDTH` lanes, cut into chunks, dealt out alternately:
     ///
     /// ```text
-    ///     a = [x0, y0, x1, y1]
-    ///     b = [x2, y2, x3, y3]
+    ///     A = [x0, y0, x1, y1]
+    ///     B = [x2, y2, x3, y3]
     ///
     ///     block_len = 1  ->  ([x0, x2, x1, x3], [y0, y2, y1, y3])
     /// ```
     ///
-    /// Equivalently, stack the two values, cut the stack into two-by-two matrices of
-    /// `block_len`-lane chunks, and transpose each of them.
+    /// Equivalently: cut the stack into two-by-two matrices of chunks, and transpose each.
     ///
     /// A block as wide as the value leaves both operands untouched.
     ///
@@ -321,8 +310,7 @@ impl<U: Underlier> PackedGf2<U> {
 
     /// One output value of the interleave, starting at stacked lane `base`.
     ///
-    /// Stacked lane `l` of the output comes from block `q = l / block_len`, which is chunk
-    /// `q / 2` of the left operand when `q` is even and of the right when odd.
+    /// Stacked lane `l` comes from block `q = l / block_len`, left when `q` is even.
     fn interleave_from(&self, other: Self, block_len: usize, base: usize) -> U {
         let bits = Self::WORD_BITS;
         let (left, right) = (self.0.words(), other.0.words());
@@ -357,12 +345,10 @@ impl<U: Underlier> PackedGf2<U> {
 
 /// A run of blocks read as a run of packings over them.
 ///
-/// A packing is a transparent wrapper, so the two have the same layout and the reading moves
-/// nothing.
+/// A packing is a transparent wrapper, so the two have one layout and nothing moves.
 #[inline]
 const fn wrap<V: Underlier>(parts: &[V]) -> &[PackedGf2<V>] {
-    // SAFETY: the packing is `repr(transparent)` over its block, so the two types have the
-    // same size and alignment and every block is a valid packing.
+    // SAFETY: `repr(transparent)` gives one size and alignment, and every block is valid.
     unsafe { slice::from_raw_parts(parts.as_ptr().cast(), parts.len()) }
 }
 
@@ -615,9 +601,7 @@ mod tests {
 
     /// One test module per packing width.
     ///
-    /// Every scenario is stated once, against a reference built from the lane accessors
-    /// alone, so a disagreement between the word-level kernel and the lane view shows up
-    /// here rather than in a caller.
+    /// Each scenario is stated once, against a reference built from the lane accessors.
     macro_rules! packing_tests {
         ($module:ident, $alias:ident, $underlier:ty, $word:ty, $words:literal, $width:literal) => {
             mod $module {
@@ -648,14 +632,13 @@ mod tests {
 
                 /// The interleave written straight from its definition.
                 ///
-                /// Stack the two operands into `2 * WIDTH` lanes, cut the stack into chunks,
-                /// and deal the chunks out alternately from the left and the right operand.
+                /// Stack, cut into chunks, and deal out alternately left then right.
                 fn reference_interleave(a: $alias, b: $alias, block: usize) -> ($alias, $alias) {
                     let chunks = 2 * $width / block;
                     let mut stacked = vec![Gf2::ZERO; 2 * $width];
 
-                    // Output chunk `q` is chunk `q / 2` of the left operand when `q` is even,
-                    // and of the right operand when it is odd.
+                    // An even output chunk `q` is chunk `q / 2` of the left operand.
+                    // An odd one is chunk `q / 2` of the right operand.
                     for q in 0..chunks {
                         let source = if q % 2 == 0 { a } else { b };
                         for t in 0..block {
@@ -689,9 +672,7 @@ mod tests {
 
                 #[test]
                 fn lane_i_is_bit_i() {
-                    // Invariant: lane `i` is bit `i mod B` of word `i / B`, lowest bit first.
-                    //
-                    // Setting exactly one lane must light exactly one bit, at that position.
+                    // Setting one lane lights exactly one bit, at `i mod B` of word `i / B`.
                     for lane in 0..$width {
                         let mut value = $alias::ZERO;
                         value.set(lane, Gf2::ONE);
@@ -711,12 +692,10 @@ mod tests {
 
                 #[test]
                 fn lane_i_is_bit_i_mod_8_of_byte_i_div_8() {
-                    // The byte view of the same contract, which is what a bit witness on the
-                    // wire is read with: eight lanes to the byte, lowest lane at the lowest
-                    // bit.
+                    // The byte view: eight lanes to the byte, lowest lane at the lowest bit.
                     //
-                    //     lane:  0 1 2 3 4 5 6 7 | 8 9 ...
-                    //     byte:  <---- byte 0 ---> <- byte 1 ...
+                    //     | lane:  0 1 2 3 4 5 6 7 | 8 9 ...
+                    //     | byte:  <--- byte 0 ---> <- byte 1 ...
                     for lane in 0..$width {
                         let mut value = $alias::ZERO;
                         value.set(lane, Gf2::ONE);
@@ -759,8 +738,7 @@ mod tests {
 
                 #[test]
                 fn from_fn_inverts_get() {
-                    // Rebuilding a value from its own lanes returns the same value, for each
-                    // of the corner patterns.
+                    // Rebuilding from its own lanes returns the same value.
                     for value in specials() {
                         assert_eq!($alias::from_fn(|i| value.get(i)), value);
                     }
@@ -768,8 +746,7 @@ mod tests {
 
                 #[test]
                 fn every_operation_matches_the_lane_view_at_the_corners() {
-                    // Invariant: the word-level kernels are lane-local, so every pair of
-                    // corner patterns must agree with the one-lane-at-a-time reference.
+                    // The kernels are lane-local, so the corners match lane by lane.
                     for a in specials() {
                         for b in specials() {
                             assert_eq!(a + b, reference_add(a, b));
@@ -813,11 +790,10 @@ mod tests {
 
                 #[test]
                 fn interleave_matches_the_reference_at_every_block_size() {
-                    // Fixture: two values whose lanes are distinguishable, so a permutation
-                    // that moves a lane to the wrong place cannot go unnoticed.
+                    // Distinguishable lanes, so a misplaced one shows:
                     //
-                    //     a: lane i set iff i is even
-                    //     b: lane i set iff i is a multiple of three
+                    //     | a: lane i set iff i is even
+                    //     | b: lane i set iff i is a multiple of three
                     let a = $alias::from_fn(|i| Gf2::from_bool(i % 2 == 0));
                     let b = $alias::from_fn(|i| Gf2::from_bool(i % 3 == 0));
 
@@ -920,12 +896,11 @@ mod tests {
 
     #[test]
     fn widths_are_the_advertised_sizes() {
-        // A packing holds one bit per lane and nothing else, so its size is the width in
-        // bytes and its alignment is the widest register that holds it.
+        // One bit per lane and nothing else, aligned to the register that holds it:
         //
-        //     width   bytes   alignment
-        //       8       1        1
-        //     512      64       64
+        //     | width   bytes   alignment
+        //     |     8       1        1
+        //     |   512      64       64
         assert_eq!(size_of::<PackedGf2x8>(), PackedGf2x8::WIDTH / 8);
         assert_eq!(size_of::<PackedGf2x16>(), PackedGf2x16::WIDTH / 8);
         assert_eq!(size_of::<PackedGf2x32>(), PackedGf2x32::WIDTH / 8);
@@ -941,14 +916,11 @@ mod tests {
 
     #[test]
     fn a_wide_packing_is_a_run_of_narrow_ones() {
-        // Invariant: narrowing moves no bits, so lane `i` of the wide value is lane `i mod w`
-        // of narrow packing `i / w`.
+        // Invariant: narrowing moves no bits, so a 512-lane value splits as
         //
-        // Fixture: a 512-lane value with lanes 0, 65 and 511 set.
-        //
-        //     lane 0    -> 64-lane packing 0, lane 0
-        //     lane 65   -> 64-lane packing 1, lane 1
-        //     lane 511  -> 64-lane packing 7, lane 63
+        //     | lane 0    -> 64-lane packing 0, lane 0
+        //     | lane 65   -> 64-lane packing 1, lane 1
+        //     | lane 511  -> 64-lane packing 7, lane 63
         let mut wide = PackedGf2x512::ZERO;
         for lane in [0usize, 65, 511] {
             wide.set(lane, Gf2::ONE);
@@ -978,12 +950,9 @@ mod tests {
 
     #[test]
     fn a_run_of_wide_packings_is_a_run_of_narrow_ones() {
-        // Invariant: the same relation across a whole buffer, which is what makes reading a
-        // committed bit witness at another width free.
+        // The same relation across a whole buffer, which is what makes a re-read free.
         //
-        // Fixture: two 256-lane values, lane `i` set iff `i` is a multiple of five.
-        //
-        //     512 lanes total  ->  8 packings of 64 lanes  ->  64 packings of 8 lanes
+        //     | 512 lanes  ->  8 packings of 64 lanes  ->  64 packings of 8 lanes
         let wide: [PackedGf2x256; 2] = core::array::from_fn(|w| {
             PackedGf2x256::from_fn(|i| Gf2::from_bool((w * 256 + i) % 5 == 0))
         });
@@ -1006,10 +975,10 @@ mod tests {
 
     #[test]
     fn debug_prints_words_in_lane_order() {
-        // The lowest lanes print first, so the text reads in the same direction as the lanes.
+        // The lowest lanes print first, so the text reads in lane order:
         //
-        //     lane 0 set   -> the first word ends in one
-        //     lane 64 set  -> the second word ends in one
+        //     | lane 0 set   -> the first word ends in one
+        //     | lane 64 set  -> the second word ends in one
         let mut value = PackedGf2x128::ZERO;
         value.set(0, Gf2::ONE);
         value.set(64, Gf2::ONE);
@@ -1021,10 +990,7 @@ mod tests {
 
     #[test]
     fn spreading_widens_the_gap_between_blocks() {
-        // A block as wide as half the word needs no gap, so the ladder runs zero rungs.
-        //
-        //     input  0b1010 (four bits of an eight-bit word)
-        //     block  4      -> nothing to spread
+        // A block as wide as half the word needs no gap, so no rung runs.
         assert_eq!(spread(0b1010, 4, 8), 0b1010);
 
         // Single bits of a nibble spread to every second bit of a byte.

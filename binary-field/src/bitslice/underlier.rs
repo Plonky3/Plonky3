@@ -1,44 +1,27 @@
-//! The storage layer the bit-sliced types are built on: fixed-width blocks of bits with no
-//! field structure attached, and the relation that makes a wide block an array of narrow ones.
+//! Fixed-width blocks of bits, 8 to 512 wide, with no field structure attached.
 //!
-//! # What an underlier is
+//! A block is addressed as an array of machine words, lowest bits in word `0`.
+//! Nothing above this layer names a register: it asks for words, and the compiler chooses.
 //!
-//! A block of `BITS` bits, addressed as a fixed number of machine words.
+//! # Why an aligned word array, not a vector intrinsic
 //!
-//! Nothing above this layer knows how wide a register the target has; it asks the underlier
-//! for words and the compiler picks the register:
+//! The wide blocks hold plain 64-bit words, aligned to the register that fits them.
+//! That is the convention the crate's packed `GF(2^128)` already follows.
 //!
-//! ```text
-//!     M512   8 words of 64 bits    ->  one 512-bit register, or two 256, or four 128
-//! ```
+//! It keeps a block constructible in a constant, and derivable for equality and hashing.
+//! It is also one representation on every target, with no per-feature `cfg` to get wrong.
 //!
-//! # Why the representation is an aligned word array
+//! Exclusive or, conjunction and shifts still reach the widest register the build enables.
 //!
-//! The wide types hold `[u64; n]` at the alignment of the register that fits them, rather
-//! than a vector intrinsic type.
+//! # Divisibility
 //!
-//! This is the convention the crate's packed `GF(2^128)` already uses: hold the array, and
-//! view it as a register at the point where an intrinsic needs one.
-//!
-//! It keeps the types constructible in a constant, comparable and hashable by derive, and
-//! identical on every target, while exclusive or, conjunction and shifts lower to the widest
-//! register the build actually enables.
-//!
-//! A vector intrinsic type in the field would instead have to be selected by `cfg` per target
-//! feature, because holding a 512-bit value in a build without those registers splits it
-//! anyway.
-//!
-//! # The divisibility relation
-//!
-//! A wide block is laid out as several narrow ones side by side, so reading it at the narrow
-//! width moves no bits:
+//! A wide block is laid out as narrow ones side by side, so reading it narrow moves no bits:
 //!
 //! ```text
 //!     M512  ->  [M128; 4]  ->  [u64; 8]  ->  [u8; 64]
 //! ```
 //!
-//! That relation is what lets a bit witness committed at one width be read at another for
-//! free, and what lets the transpose sweep a whole run of rows as one flat word slice.
+//! That is what makes a width change a borrow, and what lets the transpose sweep flat.
 
 use core::fmt::Debug;
 use core::hash::Hash;
@@ -47,10 +30,9 @@ use core::slice;
 
 use rand::{Rng, RngExt};
 
-/// The machine integer a bit kernel does its shifting and masking on.
+/// The machine integer a bit kernel shifts and masks.
 ///
-/// Every operation the bit-sliced layer performs inside a word goes through this trait, so
-/// the kernels are written once and instantiated at each width.
+/// Every operation inside a word goes through this, so a kernel is written once per shape.
 pub trait Word:
     Copy
     + Default
@@ -120,7 +102,7 @@ impl_word!(u64);
 
 /// A fixed-width block of bits, addressed as an array of words.
 ///
-/// Word `0` holds the lowest bits of the block, and within a word bit `0` is the lowest.
+/// Word `0` holds the lowest bits of the block, and bit `0` of a word is the lowest of all.
 ///
 /// # Safety
 /// A value must be exactly its words and nothing else:
@@ -204,11 +186,9 @@ impl_scalar_underlier!(u16);
 impl_scalar_underlier!(u32);
 impl_scalar_underlier!(u64);
 
-/// Define a wide block of 64-bit words.
+/// Define a wide block of 64-bit words, aligned to the register that holds all of it.
 ///
-/// The alignment is the width of the register that holds the whole block, so a buffer of them
-/// is laid out the way a vectorised pass wants to read it, and a wide block starts on the
-/// boundary every narrower block inside it needs.
+/// That alignment also starts the block on the boundary every narrower block inside needs.
 macro_rules! wide_underlier {
     ($name:ident, $words:literal, $align:literal, $doc:literal) => {
         #[doc = $doc]
@@ -234,8 +214,7 @@ macro_rules! wide_underlier {
             }
         }
 
-        // SAFETY: the type is `repr(C)` over exactly its word array, so its size is the array's,
-        // and `repr(align)` only raises the alignment above a word's.
+        // SAFETY: `repr(C)` over the word array gives the array's size, `align` only raises.
         unsafe impl Underlier for $name {
             type Word = u64;
 
@@ -270,15 +249,14 @@ wide_underlier!(M128, 2, 16, "A 128-bit block of bits.");
 wide_underlier!(M256, 4, 32, "A 256-bit block of bits.");
 wide_underlier!(M512, 8, 64, "A 512-bit block of bits.");
 
-/// A block that is exactly several narrower blocks laid end to end.
-///
-/// The narrow blocks appear in order of increasing significance, so part `0` holds the lowest
-/// bits of the wide block.
+/// A block that is exactly several narrower blocks laid end to end, part `0` lowest.
 ///
 /// # Safety
-/// An implementation asserts that the wide block's size is the ratio times the narrow one's
-/// and that its alignment is at least the narrow one's, which is what makes reinterpreting a
-/// run of wide blocks as a run of narrow ones sound.
+/// An implementation asserts, at compile time:
+/// - that the wide size is the ratio times the narrow size,
+/// - that the wide alignment is at least the narrow alignment.
+///
+/// Both are what make the reinterpretations below sound.
 pub unsafe trait Divisible<Narrow: Underlier>: Underlier {
     /// How many narrow blocks fit in one wide block.
     const RATIO: usize = Self::BITS / Narrow::BITS;
@@ -286,9 +264,7 @@ pub unsafe trait Divisible<Narrow: Underlier>: Underlier {
     /// The narrow blocks this one is made of, lowest bits first.
     #[inline]
     fn parts(&self) -> &[Narrow] {
-        // SAFETY: the layout assertions below hold for every implementation, so one wide
-        // block covers exactly `RATIO` narrow ones at a suitable alignment, and every bit
-        // pattern of a narrow block is valid.
+        // SAFETY: the ratio exists only when the layout assertions hold, so the parts fit.
         unsafe { slice::from_raw_parts(core::ptr::from_ref(self).cast(), Self::RATIO) }
     }
 
@@ -302,8 +278,7 @@ pub unsafe trait Divisible<Narrow: Underlier>: Underlier {
     /// A run of wide blocks read as one run of narrow ones, lowest bits first.
     #[inline]
     fn split_slice(slice: &[Self]) -> &[Narrow] {
-        // SAFETY: consecutive wide blocks are contiguous and each is exactly `RATIO` narrow
-        // ones, so the run covers `len` narrow blocks and no more.
+        // SAFETY: wide blocks are contiguous and each covers exactly `RATIO` narrow ones.
         unsafe { slice::from_raw_parts(slice.as_ptr().cast(), slice.len() * Self::RATIO) }
     }
 
@@ -319,8 +294,7 @@ pub unsafe trait Divisible<Narrow: Underlier>: Underlier {
 /// Declare that one block is an array of another, with the layout checked at compile time.
 macro_rules! divisible {
     ($wide:ty, $narrow:ty) => {
-        // SAFETY: the constants below are rejected at compile time unless the wide block is
-        // exactly `RATIO` narrow blocks and is at least as aligned as one.
+        // SAFETY: the ratio below does not compile unless the layout assertions hold.
         unsafe impl Divisible<$narrow> for $wide {
             const RATIO: usize = {
                 let ratio = <$wide as Underlier>::BITS / <$narrow as Underlier>::BITS;
@@ -365,8 +339,7 @@ mod tests {
 
     #[test]
     fn a_block_is_its_words() {
-        // Invariant: word `0` holds the lowest bits, and the constants are all-clear and
-        // all-set.
+        // Invariant: word 0 holds the lowest bits, and the constants are all-clear, all-set.
         assert_eq!(M512::ZERO.words(), &[0u64; 8]);
         assert_eq!(M512::ONES.words(), &[u64::MAX; 8]);
         assert_eq!(M512::BITS, 512);
@@ -384,29 +357,25 @@ mod tests {
     #[test]
     fn a_wide_block_is_an_array_of_narrow_ones() {
         // Fixture: the 512-bit block whose word `i` is `i`.
-        //
-        //     words:  0 1 2 3 4 5 6 7
         let block = M512::from_words_fn(|i| i as u64);
 
-        // Read as 64-bit words, the parts are the words themselves.
+        // As 64-bit words, the parts are the words themselves.
         let words: &[u64] = block.parts();
         assert_eq!(words, &[0u64, 1, 2, 3, 4, 5, 6, 7]);
 
-        // Read as 128-bit blocks, part `k` holds words `2k` and `2k + 1`.
+        // As 128-bit blocks, part `k` holds words `2k` and `2k + 1`.
         let halves: &[M128] = block.parts();
         assert_eq!(halves.len(), 4);
         assert_eq!(halves[0].to_words(), [0, 1]);
         assert_eq!(halves[3].to_words(), [6, 7]);
 
-        // Read as 256-bit blocks, part `0` holds the low four words.
+        // As 256-bit blocks, part 0 holds the low four words.
         let quarters: &[M256] = block.parts();
         assert_eq!(quarters.len(), 2);
         assert_eq!(quarters[0].to_words(), [0, 1, 2, 3]);
         assert_eq!(quarters[1].to_words(), [4, 5, 6, 7]);
 
-        // Read as bytes, the first byte is the lowest byte of word 0.
-        //
-        //     word 1 = 1  ->  byte 8 = 1
+        // As bytes, byte 0 is the lowest byte of word 0, so word 1 lands at byte 8.
         let bytes: &[u8] = block.parts();
         assert_eq!(bytes.len(), 64);
         assert_eq!(bytes[0], 0);
@@ -424,13 +393,13 @@ mod tests {
             bytes[15] = 1;
         }
 
-        // Byte 0 is the lowest byte of word 0; byte 15 is the highest byte of word 1.
+        // Byte 0 is the lowest byte of word 0, and byte 15 the highest of word 1.
         assert_eq!(block.to_words(), [0xff, 1 << 56]);
     }
 
     #[test]
     fn a_word_widens_and_truncates() {
-        // Widening is zero extension, and narrowing keeps the low bits.
+        // Widening is zero extension, narrowing keeps the low bits.
         assert_eq!(<u8 as Word>::to_u64(0xff), 255);
         assert_eq!(<u8 as Word>::from_u64(0x1234), 0x34);
         assert_eq!(<u16 as Word>::from_u64(0x1_2345), 0x2345);

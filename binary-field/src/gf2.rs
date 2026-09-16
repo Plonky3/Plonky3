@@ -156,11 +156,8 @@ impl PrimeCharacteristicRing for Gf2 {
 }
 
 impl Field for Gf2 {
-    /// No packing: the packed-value contract requires a packing to be castable to and from
-    /// an array of `WIDTH` scalars, which a bit-sliced packing cannot satisfy.
-    ///
-    /// Eight elements occupy eight bytes as scalars and one byte bit-sliced, so the cast
-    /// would read eight times past the end of the buffer.
+    /// No packing: the packed-value contract needs a cast to an array of `WIDTH` scalars.
+    /// Eight elements are eight bytes as scalars and one byte bit-sliced, so that cast lies.
     ///
     /// The bit-sliced packings therefore live beside this type rather than inside it.
     type Packing = Self;

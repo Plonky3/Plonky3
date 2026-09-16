@@ -1,12 +1,8 @@
-//! Bit-sliced `GF(2)`: the packed operations against the one-element-per-byte scalar path,
-//! and the blocked bit transpose against the lane-by-lane reference.
+//! Bit-sliced `GF(2)`, measured against what a caller would otherwise write.
 //!
-//! Throughput is reported in field elements per second for the arithmetic and in bits per
-//! second for the transpose, so the packed and scalar rows are directly comparable.
+//! Elements per second for the arithmetic, bytes per second for the transpose.
 //!
-//! The packings are plain word arrays, so the vector width the arithmetic reaches is the one
-//! the compiler is allowed to use. Rerunning with `RUSTFLAGS="-C target-cpu=native"` measures
-//! the same code with the host's widest registers unlocked.
+//! The vector width is whatever the build allows, so `-C target-cpu=native` measures more.
 
 use std::hint::black_box;
 
@@ -21,14 +17,12 @@ use rand::{RngExt, SeedableRng};
 
 /// Field elements touched by one iteration of an arithmetic benchmark.
 ///
-/// Large enough that loop overhead disappears, small enough that both operand buffers stay
-/// in L2 even in the scalar layout, where one element costs a whole byte.
+/// Big enough to hide loop overhead, small enough that the scalar buffers stay in L2.
 const ELEMENTS: usize = 1 << 16;
 
 /// Square bit matrices transposed by one iteration of a transpose benchmark.
 ///
-/// Fixed rather than scaled with the side, so the larger sides do proportionally more work
-/// and the reported bit rate stays the comparable quantity.
+/// Fixed rather than scaled with the side, so the reported byte rate stays comparable.
 const MATRICES: usize = 64;
 
 /// Exclusive or and conjunction over a buffer of one element per byte.
@@ -113,8 +107,7 @@ fn bench_packed(c: &mut Criterion) {
 
 /// The blocked transpose against the lane-by-lane reference, at every width.
 ///
-/// The reference reads one bit at a time through the lane accessors, which is the only other
-/// way to get the same answer and therefore the honest baseline for the blocked kernel.
+/// The reference reads one bit at a time, which is the only other way to get the answer.
 macro_rules! bench_transpose {
     ($group:expr, $name:ident, $width:literal) => {{
         let mut rng = SmallRng::seed_from_u64(1);
@@ -165,8 +158,7 @@ fn bench_transpose(c: &mut Criterion) {
 
 /// Re-reading a committed bit witness at a narrower packing width.
 ///
-/// The view is a reinterpretation of the same bytes, so the comparison is against the only
-/// alternative that does not need one: copying the lanes across.
+/// The view reinterprets the same bytes, so the alternative measured is copying lanes.
 fn bench_narrow(c: &mut Criterion) {
     let mut rng = SmallRng::seed_from_u64(1);
 
