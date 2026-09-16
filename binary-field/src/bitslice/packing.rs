@@ -3,12 +3,13 @@
 use core::fmt::{self, Debug, Formatter};
 use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
+use core::slice;
 
 use p3_field::{Algebra, Field, PrimeCharacteristicRing};
 use rand::Rng;
 use rand::distr::{Distribution, StandardUniform};
 
-use super::underlier::{M128, M256, M512, Underlier, Word};
+use super::underlier::{Divisible, M128, M256, M512, Underlier, Word};
 use crate::Gf2;
 
 /// Masks selecting the low `s` bits of every `2s`-bit block, indexed by `log2(s)`.
@@ -223,6 +224,68 @@ impl<U: Underlier> PackedGf2<U> {
         self
     }
 
+    /// This value read as a run of narrower packings, lowest lanes first.
+    ///
+    /// The bits do not move: a wide block is laid out as narrow blocks side by side, so lane
+    /// `i` of the wide value is lane `i mod w` of narrow packing `i / w`.
+    #[inline]
+    pub fn narrow<V: Underlier>(&self) -> &[PackedGf2<V>]
+    where
+        U: Divisible<V>,
+    {
+        wrap(self.0.parts())
+    }
+
+    /// This value read as a run of narrower packings, lowest lanes first.
+    #[inline]
+    pub fn narrow_mut<V: Underlier>(&mut self) -> &mut [PackedGf2<V>]
+    where
+        U: Divisible<V>,
+    {
+        wrap_mut(self.0.parts_mut())
+    }
+
+    /// A run of these packings read as a run of narrower ones, lowest lanes first.
+    ///
+    /// This is the free half of reading a bit witness at another width: the same bytes carry
+    /// the same lanes in the same order, so a caller that wants narrower packings copies
+    /// nothing.
+    #[inline]
+    pub fn narrow_slice<V: Underlier>(slice: &[Self]) -> &[PackedGf2<V>]
+    where
+        U: Divisible<V>,
+    {
+        wrap(<U as Divisible<V>>::split_slice(unwrap(slice)))
+    }
+
+    /// A run of these packings read as a run of narrower ones, lowest lanes first.
+    #[inline]
+    pub fn narrow_slice_mut<V: Underlier>(slice: &mut [Self]) -> &mut [PackedGf2<V>]
+    where
+        U: Divisible<V>,
+    {
+        wrap_mut(<U as Divisible<V>>::split_slice_mut(unwrap_mut(slice)))
+    }
+
+    /// A run of these packings read as bytes, lowest lanes first.
+    ///
+    /// Byte `k` holds lanes `8k .. 8k + 8`, lowest lane at the lowest bit, which is the
+    /// layout a bit witness already has on the wire.
+    #[inline]
+    #[must_use]
+    pub const fn as_bytes(slice: &[Self]) -> &[u8] {
+        // A packing is exactly its block and a block is exactly its words, so the byte count
+        // is the lane count over eight.
+        const {
+            assert!(size_of::<Self>() * 8 == U::BITS);
+        }
+        let len = slice.len() * (U::BITS / 8);
+
+        // SAFETY: the assertion pins that the run occupies exactly `len` initialised bytes,
+        // and the byte slice borrows the same region for the same lifetime.
+        unsafe { slice::from_raw_parts(slice.as_ptr().cast::<u8>(), len) }
+    }
+
     /// Cut both operands into chunks of `block_len` lanes and interleave the chunks.
     ///
     /// The two inputs stack into one sequence of `2 * WIDTH` lanes, which is cut into chunks
@@ -290,6 +353,38 @@ impl<U: Underlier> PackedGf2<U> {
             }
         })
     }
+}
+
+/// A run of blocks read as a run of packings over them.
+///
+/// A packing is a transparent wrapper, so the two have the same layout and the reading moves
+/// nothing.
+#[inline]
+const fn wrap<V: Underlier>(parts: &[V]) -> &[PackedGf2<V>] {
+    // SAFETY: the packing is `repr(transparent)` over its block, so the two types have the
+    // same size and alignment and every block is a valid packing.
+    unsafe { slice::from_raw_parts(parts.as_ptr().cast(), parts.len()) }
+}
+
+/// A run of blocks read as a run of packings over them.
+#[inline]
+const fn wrap_mut<V: Underlier>(parts: &mut [V]) -> &mut [PackedGf2<V>] {
+    // SAFETY: as above, and the exclusive borrow is not duplicated.
+    unsafe { slice::from_raw_parts_mut(parts.as_mut_ptr().cast(), parts.len()) }
+}
+
+/// A run of packings read as a run of the blocks behind them.
+#[inline]
+const fn unwrap<V: Underlier>(packings: &[PackedGf2<V>]) -> &[V] {
+    // SAFETY: the inverse of the transparent wrapping above.
+    unsafe { slice::from_raw_parts(packings.as_ptr().cast(), packings.len()) }
+}
+
+/// A run of packings read as a run of the blocks behind them.
+#[inline]
+const fn unwrap_mut<V: Underlier>(packings: &mut [PackedGf2<V>]) -> &mut [V] {
+    // SAFETY: the inverse of the transparent wrapping above.
+    unsafe { slice::from_raw_parts_mut(packings.as_mut_ptr().cast(), packings.len()) }
 }
 
 impl<U: Underlier> Debug for PackedGf2<U> {
@@ -615,6 +710,24 @@ mod tests {
                 }
 
                 #[test]
+                fn lane_i_is_bit_i_mod_8_of_byte_i_div_8() {
+                    // The byte view of the same contract, which is what a bit witness on the
+                    // wire is read with: eight lanes to the byte, lowest lane at the lowest
+                    // bit.
+                    //
+                    //     lane:  0 1 2 3 4 5 6 7 | 8 9 ...
+                    //     byte:  <---- byte 0 ---> <- byte 1 ...
+                    for lane in 0..$width {
+                        let mut value = $alias::ZERO;
+                        value.set(lane, Gf2::ONE);
+
+                        let mut expected = [0u8; $width / 8];
+                        expected[lane / 8] = 1 << (lane % 8);
+                        assert_eq!($alias::as_bytes(&[value]), expected, "lane {lane}");
+                    }
+                }
+
+                #[test]
                 fn constants_and_broadcast_agree_with_the_lane_view() {
                     // Zero is every lane clear, one is every lane set.
                     assert_eq!($alias::ZERO.count_ones(), 0);
@@ -824,6 +937,71 @@ mod tests {
         assert_eq!(align_of::<PackedGf2x128>(), 16);
         assert_eq!(align_of::<PackedGf2x256>(), 32);
         assert_eq!(align_of::<PackedGf2x512>(), 64);
+    }
+
+    #[test]
+    fn a_wide_packing_is_a_run_of_narrow_ones() {
+        // Invariant: narrowing moves no bits, so lane `i` of the wide value is lane `i mod w`
+        // of narrow packing `i / w`.
+        //
+        // Fixture: a 512-lane value with lanes 0, 65 and 511 set.
+        //
+        //     lane 0    -> 64-lane packing 0, lane 0
+        //     lane 65   -> 64-lane packing 1, lane 1
+        //     lane 511  -> 64-lane packing 7, lane 63
+        let mut wide = PackedGf2x512::ZERO;
+        for lane in [0usize, 65, 511] {
+            wide.set(lane, Gf2::ONE);
+        }
+
+        let narrow: &[PackedGf2x64] = wide.narrow();
+        assert_eq!(narrow.len(), 8);
+        assert_eq!(narrow[0].get(0), Gf2::ONE);
+        assert_eq!(narrow[1].get(1), Gf2::ONE);
+        assert_eq!(narrow[7].get(63), Gf2::ONE);
+        assert_eq!(
+            narrow.iter().map(PackedGf2x64::count_ones).sum::<u32>(),
+            wide.count_ones()
+        );
+
+        // Every intermediate width sees the same lanes in the same order.
+        let bytes: &[PackedGf2x8] = wide.narrow();
+        assert_eq!(bytes.len(), 64);
+        assert_eq!(bytes[0].get(0), Gf2::ONE);
+        assert_eq!(bytes[8].get(1), Gf2::ONE);
+        assert_eq!(bytes[63].get(7), Gf2::ONE);
+
+        // Writing through a narrow view writes the wide value.
+        wide.narrow_mut::<u64>()[3].set(5, Gf2::ONE);
+        assert_eq!(wide.get(3 * 64 + 5), Gf2::ONE);
+    }
+
+    #[test]
+    fn a_run_of_wide_packings_is_a_run_of_narrow_ones() {
+        // Invariant: the same relation across a whole buffer, which is what makes reading a
+        // committed bit witness at another width free.
+        //
+        // Fixture: two 256-lane values, lane `i` set iff `i` is a multiple of five.
+        //
+        //     512 lanes total  ->  8 packings of 64 lanes  ->  64 packings of 8 lanes
+        let wide: [PackedGf2x256; 2] = core::array::from_fn(|w| {
+            PackedGf2x256::from_fn(|i| Gf2::from_bool((w * 256 + i) % 5 == 0))
+        });
+
+        let narrow: &[PackedGf2x64] = PackedGf2x256::narrow_slice(&wide);
+        assert_eq!(narrow.len(), 8);
+        for lane in 0..512 {
+            let want = Gf2::from_bool(lane % 5 == 0);
+            assert_eq!(narrow[lane / 64].get(lane % 64), want, "lane {lane}");
+        }
+
+        // And the byte view of the same buffer agrees with the lane order.
+        let bytes = PackedGf2x256::as_bytes(&wide);
+        assert_eq!(bytes.len(), 64);
+        for lane in 0..512 {
+            let bit = (bytes[lane / 8] >> (lane % 8)) & 1;
+            assert_eq!(bit == 1, lane % 5 == 0, "lane {lane}");
+        }
     }
 
     #[test]

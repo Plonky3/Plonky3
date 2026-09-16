@@ -65,6 +65,18 @@
 //!
 //! They implement the prime-characteristic ring trait and the algebra over `GF(2)`, so generic
 //! ring code runs on them unchanged.
+//!
+//! # Reading a witness at another width
+//!
+//! A wide block is laid out as narrower blocks side by side, so a run of wide packings and a
+//! run of narrow ones over the same bytes hold the same lanes in the same order:
+//!
+//! ```text
+//!     one PackedGf2x512   ==   four PackedGf2x128   ==   sixty-four PackedGf2x8
+//! ```
+//!
+//! Narrowing is therefore a borrow, not a conversion, and a committed bit witness can be read
+//! at whatever width a consumer wants without copying it.
 
 mod packing;
 mod underlier;
