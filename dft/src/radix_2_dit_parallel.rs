@@ -1,5 +1,3 @@
-use alloc::collections::BTreeMap;
-use alloc::collections::btree_map::Entry;
 use alloc::slice;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
@@ -14,10 +12,10 @@ use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView, RowMajorMatrixViewMut
 use p3_matrix::util::reverse_matrix_index_bits;
 use p3_maybe_rayon::prelude::*;
 use p3_util::{log2_strict_usize, reverse_bits_len, reverse_slice_index_bits};
-use spin::RwLock;
 use tracing::{debug_span, instrument};
 
 use crate::butterflies::{Butterfly, DitButterfly, ScaledDitButterfly, TwiddleFreeButterfly};
+use crate::twiddle_cache::TwiddleCache;
 use crate::{Layout, TwoAdicSubgroupDft};
 
 /// A parallel FFT algorithm which divides a butterfly network's layers into two halves.
@@ -30,14 +28,14 @@ use crate::{Layout, TwoAdicSubgroupDft};
 #[derive(Default, Clone, Debug)]
 pub struct Radix2DitParallel<F> {
     /// Twiddles based on roots of unity, used in the forward DFT.
-    twiddles: Arc<RwLock<BTreeMap<usize, Arc<VectorPair<F>>>>>,
+    twiddles: Arc<TwiddleCache<usize, VectorPair<F>>>,
 
     /// A map from `(log_h, shift)` to forward DFT twiddles with that coset shift baked in.
     #[allow(clippy::type_complexity)]
-    coset_twiddles: Arc<RwLock<BTreeMap<(usize, F), Arc<[Vec<F>]>>>>,
+    coset_twiddles: Arc<TwiddleCache<(usize, F), [Vec<F>]>>,
 
     /// Twiddles based on inverse roots of unity, used in the inverse DFT.
-    inverse_twiddles: Arc<RwLock<BTreeMap<usize, Arc<VectorPair<F>>>>>,
+    inverse_twiddles: Arc<TwiddleCache<usize, VectorPair<F>>>,
 }
 
 /// A pair of vectors, one with twiddle factors in their natural order, the other bit-reversed.
@@ -47,31 +45,12 @@ struct VectorPair<F> {
     bitrev_twiddles: Vec<F>,
 }
 
-/// Compute missing twiddles outside cache locks: Rayon may run another transform sharing the cache.
-/// Concurrent misses can duplicate work; all callers reuse the first published entry.
-fn get_or_compute_cached<K: Ord, V: ?Sized>(
-    cache: &RwLock<BTreeMap<K, Arc<V>>>,
-    key: K,
-    compute: impl FnOnce() -> Arc<V>,
-) -> Arc<V> {
-    if let Some(value) = cache.read().get(&key) {
-        return value.clone();
-    }
-    let value = compute();
-    // Declare the guard after `value` so an unused table is dropped after unlocking.
-    let mut entries = cache.write();
-    match entries.entry(key) {
-        Entry::Occupied(entry) => entry.get().clone(),
-        Entry::Vacant(entry) => entry.insert(value).clone(),
-    }
-}
-
 impl<F> Radix2DitParallel<F>
 where
     F: TwoAdicField + Ord,
 {
     fn get_or_compute_twiddles(&self, log_h: usize) -> Arc<VectorPair<F>> {
-        get_or_compute_cached(&self.twiddles, log_h, || {
+        self.twiddles.get_or_compute(log_h, || {
             let half_h = (1 << log_h) >> 1;
             let root = F::two_adic_generator(log_h);
             let twiddles = root.powers().collect_n(half_h);
@@ -86,7 +65,7 @@ where
     }
 
     fn get_or_compute_coset_twiddles(&self, (log_h, shift): (usize, F)) -> Arc<[Vec<F>]> {
-        get_or_compute_cached(&self.coset_twiddles, (log_h, shift), || {
+        self.coset_twiddles.get_or_compute((log_h, shift), || {
             let mid = log_h.div_ceil(2);
             let h = 1 << log_h;
             let root = F::two_adic_generator(log_h);
@@ -110,7 +89,7 @@ where
     }
 
     fn get_or_compute_inverse_twiddles(&self, log_h: usize) -> Arc<VectorPair<F>> {
-        get_or_compute_cached(&self.inverse_twiddles, log_h, || {
+        self.inverse_twiddles.get_or_compute(log_h, || {
             let half_h = (1 << log_h) >> 1;
             let root_inv = F::two_adic_generator(log_h).inverse();
             let twiddles = root_inv.powers().collect_n(half_h);
@@ -842,9 +821,6 @@ fn dit_layer_rev<F: Field>(
 
 #[cfg(test)]
 mod tests {
-    use alloc::sync::Weak;
-    use core::sync::atomic::{AtomicBool, Ordering};
-
     use p3_baby_bear::BabyBear;
     use p3_field::TwoAdicField;
     use p3_matrix::Matrix;
@@ -855,76 +831,6 @@ mod tests {
     use super::*;
 
     type F = BabyBear;
-
-    #[test]
-    fn cache_hit_reuses_table_without_computing() {
-        let cache = RwLock::new(BTreeMap::new());
-        let expected: Arc<[u64]> = alloc::vec![1, 2, 3].into();
-        let first = get_or_compute_cached(&cache, 4, || expected.clone());
-        let second = get_or_compute_cached(&cache, 4, || {
-            panic!("a cached table must not be recomputed")
-        });
-
-        assert!(Arc::ptr_eq(&first, &expected));
-        assert!(Arc::ptr_eq(&second, &expected));
-    }
-
-    #[test]
-    fn cache_miss_reuses_entry_inserted_during_computation() {
-        let cache = RwLock::new(BTreeMap::new());
-        let inserted = Arc::new(17_u64);
-        let result = get_or_compute_cached(&cache, 4, || {
-            // Model another caller publishing the same key while this one computes.
-            cache
-                .try_write()
-                .expect("twiddle construction must not hold a cache lock")
-                .insert(4, inserted.clone());
-            Arc::new(23_u64)
-        });
-
-        assert!(Arc::ptr_eq(&result, &inserted));
-        assert!(Arc::ptr_eq(cache.read().get(&4).unwrap(), &inserted));
-    }
-
-    #[test]
-    fn cache_miss_drops_unused_table_after_unlocking() {
-        type Cache = RwLock<BTreeMap<usize, Arc<DropProbe>>>;
-
-        #[derive(Default)]
-        struct DropProbe {
-            cache: Weak<Cache>,
-            dropped: Arc<AtomicBool>,
-        }
-
-        impl Drop for DropProbe {
-            fn drop(&mut self) {
-                if let Some(cache) = self.cache.upgrade() {
-                    assert!(
-                        cache.try_write().is_some(),
-                        "discarded table must be dropped after unlocking the cache"
-                    );
-                }
-                self.dropped.store(true, Ordering::Relaxed);
-            }
-        }
-
-        let cache = Arc::new(Cache::new(BTreeMap::new()));
-        let inserted = Arc::new(DropProbe::default());
-        let dropped = Arc::new(AtomicBool::new(false));
-        let result = get_or_compute_cached(&cache, 4, || {
-            cache
-                .try_write()
-                .expect("twiddle construction must not hold a cache lock")
-                .insert(4, inserted.clone());
-            Arc::new(DropProbe {
-                cache: Arc::downgrade(&cache),
-                dropped: dropped.clone(),
-            })
-        });
-
-        assert!(Arc::ptr_eq(&result, &inserted));
-        assert!(dropped.load(Ordering::Relaxed));
-    }
 
     #[test]
     #[should_panic(expected = "incorrect number of twiddle layers")]
