@@ -12,6 +12,7 @@ use thiserror::Error;
 use crate::VerifierInstances;
 use crate::config::{Commitment, MultiStarkConfig, PcsError};
 use crate::folder::VerifierAir;
+use crate::instance::trace_suffix;
 use crate::lookup::{LookupError, verify_lookup};
 use crate::opening::TableOpening;
 use crate::proof::MultiStarkProof;
@@ -283,13 +284,13 @@ where
 
     // 6. Open the committed main trace tables at their suffixes of the bound point.
     // The returned values are bound to the main commitment.
-    let main_schedule = instances.main_schedule(&reduction.point);
+    let main_schedule = instances.main_schedule(|rows| trace_suffix(&reduction.point, rows));
     let main_evals = match transcript.main_opening(|challenger| {
         config.pcs().verify_at(
             &proof.commitment,
             &proof.opening,
             main_schedule.protocol(),
-            main_schedule.points(),
+            main_schedule.payloads(),
             challenger,
         )
     }) {
@@ -303,7 +304,8 @@ where
 
     // 7. Open the preprocessed tables at their suffixes of the same bound point.
     // The owned batches are kept local so the closing check can borrow them.
-    let preprocessed_schedule = instances.preprocessed_schedule(&reduction.point);
+    let preprocessed_schedule =
+        instances.preprocessed_schedule(|rows| trace_suffix(&reduction.point, rows));
     let opened_preprocessed = transcript.preprocessed_opening(|challenger| {
         let commitment = preprocessed_commitment
             .expect("a described preprocessed commitment is checked before the replay");
@@ -315,7 +317,7 @@ where
             commitment,
             opening,
             preprocessed_schedule.protocol(),
-            preprocessed_schedule.points(),
+            preprocessed_schedule.payloads(),
             challenger,
         )
     });
@@ -335,11 +337,9 @@ where
     let main_openings = main_schedule
         .first_batch_per_table()
         .into_iter()
+        .filter_map(|batch| main_evals.get(batch))
         .zip(next_columns.iter())
-        .map(|(batch, next_columns)| {
-            let batch = &main_evals[batch];
-            TableOpening::new(batch.current(), next_columns, batch.next())
-        })
+        .map(|(batch, next_columns)| TableOpening::new(batch.current(), next_columns, batch.next()))
         .collect::<Vec<_>>();
 
     // Build one preprocessed opening view per instance, in instance order.

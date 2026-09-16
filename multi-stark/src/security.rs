@@ -329,14 +329,14 @@ where
         "main-pcs",
         config
             .pcs()
-            .prescribed_security(&instances.opening_protocol()),
+            .prescribed_security(&instances.main_schedule(|_| ()).into_protocol()),
     );
     if preprocessed_cells > 0 {
         log2_candidates += report.add_opening_evidence(
             "preprocessed-pcs",
             config
                 .preprocessed_pcs()
-                .prescribed_security(&instances.preprocessed_opening_protocol()),
+                .prescribed_security(&instances.preprocessed_schedule(|_| ()).into_protocol()),
         );
     }
     for term in &mut report.terms[..num_reduction_terms] {

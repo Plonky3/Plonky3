@@ -8,6 +8,7 @@ use alloc::vec::Vec;
 use core::ops::Deref;
 
 use p3_air::BaseAir;
+use p3_field::Field;
 use p3_multilinear_util::point::Point;
 use p3_sumcheck::layout::Table;
 use p3_sumcheck::{OpeningBatch, OpeningProtocol, TableShape, TableSpec};
@@ -18,7 +19,18 @@ pub use crate::proof::MultiStarkProof;
 pub use crate::prover::prove;
 pub use crate::verifier::{VerificationError, verify};
 
-/// What one committed batch of tables opens, and at which point.
+/// Cut the row coordinates of one table out of a bound point.
+///
+/// The lookup reduction may add leading block-selector coordinates.
+///
+/// A short table also carries fewer row coordinates than a tall one.
+///
+/// Only the trailing coordinates addressing this table's rows are opened.
+pub(super) fn trace_suffix<EF: Field>(point: &Point<EF>, num_variables: usize) -> Point<EF> {
+    point.split_at(point.num_variables() - num_variables).1
+}
+
+/// What one committed batch of tables opens, and what each batch is opened against.
 ///
 /// A scheme takes two lists: the columns of every batch, and one point per batch.
 ///
@@ -28,59 +40,64 @@ pub use crate::verifier::{VerificationError, verify};
 ///
 /// A claim checked at another table's point still verifies.
 ///
-/// So both come out of one pass here.
-pub(super) struct OpeningSchedule<EF> {
+/// Today's shapes make that loud rather than silent.
+///
+/// Two tables of different heights fail the arity check.
+///
+/// Two of the same height share a suffix, so nothing moves.
+///
+/// It turns silent once one commitment carries two distinct points of one arity.
+///
+/// A table opened more than once is what introduces that.
+///
+/// So the batches and what they are opened against come out of one walk.
+///
+/// The payload is a point on the proving path.
+///
+/// On the assessment path, which runs before any point exists, it is nothing at all.
+pub(super) struct OpeningSchedule<P> {
     /// Shape agreement handed to the commitment scheme.
     protocol: OpeningProtocol,
-    /// One point per batch, in the protocol's own opening order.
-    points: Vec<Point<EF>>,
-    /// Position of the table owning each batch, in the same order.
-    owners: Vec<usize>,
+    /// What each batch is opened against, in the protocol's own opening order.
+    payloads: Vec<P>,
 }
 
-impl<EF> OpeningSchedule<EF> {
+impl<P> OpeningSchedule<P> {
     /// Lay out one entry per committed table, tables in commitment order.
     ///
     /// # Arguments
     ///
     /// - `tables`: each table's committed shape, and the batches it is opened in paired with
-    ///   the point each is taken at.
+    ///   what each is opened against.
     ///
     /// # Panics
     ///
     /// Panics if a table schedules no opening, which would commit columns nothing reads.
     pub(super) fn new<I>(tables: I) -> Self
     where
-        I: IntoIterator<Item = (TableShape, Vec<(OpeningBatch<usize>, Point<EF>)>)>,
+        I: IntoIterator<Item = (TableShape, Vec<(OpeningBatch<usize>, P)>)>,
     {
         let mut specs = Vec::new();
-        let mut points = Vec::new();
-        let mut owners = Vec::new();
+        let mut payloads = Vec::new();
 
-        // One walk over the tables fills all three lists.
-        //
-        // Their order then agrees by construction.
-        //
-        // Two functions keeping a convention is what it replaces.
-        for (table, (shape, openings)) in tables.into_iter().enumerate() {
+        // One walk over the tables fills both lists, so their order agrees by construction.
+        for (shape, openings) in tables {
             assert!(
                 !openings.is_empty(),
                 "a committed table must be opened at least once"
             );
 
             let mut batches = Vec::with_capacity(openings.len());
-            for (batch, point) in openings {
+            for (batch, payload) in openings {
                 batches.push(batch);
-                points.push(point);
-                owners.push(table);
+                payloads.push(payload);
             }
             specs.push(TableSpec::new(shape, batches));
         }
 
         Self {
             protocol: OpeningProtocol::new(specs),
-            points,
-            owners,
+            payloads,
         }
     }
 
@@ -89,76 +106,33 @@ impl<EF> OpeningSchedule<EF> {
         &self.protocol
     }
 
-    /// One point per batch, in the order the scheme walks the batches.
-    pub(super) fn points(&self) -> &[Point<EF>] {
-        &self.points
+    /// The shape agreement alone, for a caller that never resolves the payloads.
+    pub(super) fn into_protocol(self) -> OpeningProtocol {
+        self.protocol
     }
 
-    /// Open one batch per table: every column, at that table's own point.
-    ///
-    /// This is the shape every committed table has had since before a second point existed.
-    ///
-    /// # Arguments
-    ///
-    /// - `tables`: each table's row-count logarithm, width, successor-view columns, and point.
-    pub(super) fn whole_tables<I>(tables: I) -> Self
-    where
-        I: IntoIterator<Item = (usize, usize, Vec<usize>, Point<EF>)>,
-    {
-        Self::new(
-            tables
-                .into_iter()
-                .map(|(log_height, width, next_columns, point)| {
-                    (
-                        TableShape::new(log_height, width),
-                        alloc::vec![(Self::whole_table_batch(width, next_columns), point)],
-                    )
-                }),
-        )
-    }
-
-    /// The shape agreement of a whole-table opening, before any point is bound.
-    ///
-    /// Security assessment runs ahead of the proof and reads the shapes alone.
-    ///
-    /// It sits here so the two builders cannot disagree on what a table opens.
-    ///
-    /// # Arguments
-    ///
-    /// - `tables`: each table's row-count logarithm, width, and successor-view columns.
-    pub(super) fn whole_table_protocol<I>(tables: I) -> OpeningProtocol
-    where
-        I: IntoIterator<Item = (usize, usize, Vec<usize>)>,
-    {
-        OpeningProtocol::new(
-            tables
-                .into_iter()
-                .map(|(log_height, width, next_columns)| {
-                    TableSpec::new(
-                        TableShape::new(log_height, width),
-                        alloc::vec![Self::whole_table_batch(width, next_columns)],
-                    )
-                })
-                .collect(),
-        )
-    }
-
-    /// The batch reading a table's whole width, plus its successor-view columns.
-    fn whole_table_batch(width: usize, next_columns: Vec<usize>) -> OpeningBatch<usize> {
-        OpeningBatch::new((0..width).collect::<Vec<_>>(), next_columns)
+    /// What each batch is opened against, in the order the scheme walks the batches.
+    pub(super) fn payloads(&self) -> &[P] {
+        &self.payloads
     }
 
     /// Where each table's own columns land among the per-batch results, in table order.
     ///
     /// A table's columns are opened in the first batch it owns.
+    ///
+    /// The batches of one table are consecutive.
+    ///
+    /// This reads that off the shape agreement the scheme itself walks.
+    ///
+    /// A list kept beside it would be one more thing to hold in step.
     pub(super) fn first_batch_per_table(&self) -> Vec<usize> {
         let mut first = Vec::new();
 
         // Owners are non-decreasing.
         //
         // A batch starts a table when its owner is the first one not yet recorded.
-        for (batch, &owner) in self.owners.iter().enumerate() {
-            if first.len() == owner {
+        for (batch, (table, _)) in self.protocol.iter_openings().enumerate() {
+            if first.len() == table {
                 first.push(batch);
             }
         }
@@ -476,77 +450,56 @@ where
             .collect()
     }
 
-    /// Shape agreement for the main trace opening, without the points.
-    pub(super) fn opening_protocol(&self) -> OpeningProtocol {
-        OpeningSchedule::<C::Challenge>::whole_table_protocol(
-            self.num_variables()
-                .iter()
-                .zip(self.widths().iter())
-                .zip(self.next_columns())
-                .map(|((&log_height, &width), next_columns)| (log_height, width, next_columns)),
-        )
-    }
-
-    /// Shape agreement for the preprocessed trace opening, without the points.
-    pub(super) fn preprocessed_opening_protocol(&self) -> OpeningProtocol {
-        OpeningSchedule::<C::Challenge>::whole_table_protocol(
-            self.iter()
-                .filter(|instance| instance.air.preprocessed_width() != 0)
-                .map(|instance| {
-                    (
-                        instance.num_variables,
-                        instance.air.preprocessed_width(),
-                        instance.air.preprocessed_next_row_columns(),
-                    )
-                }),
-        )
-    }
-
-    /// Schedule the main trace opening at the bound point.
+    /// Schedule the main trace opening, one batch per table over its whole width.
     ///
-    /// # Panics
+    /// The security assessment walks this same schedule, so the two cannot diverge.
     ///
-    /// Panics if the bound point does not cover the tallest trace.
-    pub(super) fn main_schedule(
-        &self,
-        point: &Point<C::Challenge>,
-    ) -> OpeningSchedule<C::Challenge> {
-        OpeningSchedule::whole_tables(
+    /// # Arguments
+    ///
+    /// - `against`: what to open a table of this many row variables against.
+    pub(super) fn main_schedule<P>(&self, against: impl Fn(usize) -> P) -> OpeningSchedule<P> {
+        OpeningSchedule::new(
             self.num_variables()
                 .iter()
                 .zip(self.widths().iter())
                 .zip(self.next_columns())
                 .map(|((&log_height, &width), next_columns)| {
                     (
-                        log_height,
-                        width,
-                        next_columns,
-                        self.trace_suffix(point, log_height),
+                        TableShape::new(log_height, width),
+                        alloc::vec![(
+                            OpeningBatch::new((0..width).collect::<Vec<_>>(), next_columns),
+                            against(log_height),
+                        )],
                     )
                 }),
         )
     }
 
-    /// Schedule the preprocessed trace opening at the bound point.
+    /// Schedule the preprocessed trace opening, one batch per committed table.
     ///
     /// AIRs declaring no preprocessed columns commit nothing and are skipped.
     ///
-    /// # Panics
+    /// # Arguments
     ///
-    /// Panics if the bound point does not cover the tallest trace.
-    pub(super) fn preprocessed_schedule(
+    /// - `against`: what to open a table of this many row variables against.
+    pub(super) fn preprocessed_schedule<P>(
         &self,
-        point: &Point<C::Challenge>,
-    ) -> OpeningSchedule<C::Challenge> {
-        OpeningSchedule::whole_tables(
+        against: impl Fn(usize) -> P,
+    ) -> OpeningSchedule<P> {
+        OpeningSchedule::new(
             self.iter()
                 .filter(|instance| instance.air.preprocessed_width() != 0)
                 .map(|instance| {
+                    let width = instance.air.preprocessed_width();
                     (
-                        instance.num_variables,
-                        instance.air.preprocessed_width(),
-                        instance.air.preprocessed_next_row_columns(),
-                        self.trace_suffix(point, instance.num_variables),
+                        TableShape::new(instance.num_variables, width),
+                        alloc::vec![(
+                            OpeningBatch::new(
+                                (0..width).collect::<Vec<_>>(),
+                                instance.air.preprocessed_next_row_columns(),
+                            ),
+                            against(instance.num_variables),
+                        )],
                     )
                 }),
         )
@@ -557,33 +510,6 @@ where
             .filter(|instance| instance.air.preprocessed_width() != 0)
             .map(|instance| instance.air.preprocessed_next_row_columns())
             .collect()
-    }
-
-    pub(super) fn max_num_variables(&self) -> usize {
-        self.num_variables().iter().cloned().max().unwrap()
-    }
-
-    /// Cut the row coordinates of one table out of a bound point.
-    ///
-    /// The lookup reduction may add leading block-selector coordinates.
-    ///
-    /// A short table also carries fewer row coordinates than a tall one.
-    ///
-    /// Only the trailing coordinates addressing this table's rows are opened.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the bound point does not cover the tallest trace.
-    fn trace_suffix(
-        &self,
-        point: &Point<C::Challenge>,
-        num_variables: usize,
-    ) -> Point<C::Challenge> {
-        assert!(
-            point.num_variables() >= self.max_num_variables(),
-            "the bound point must cover the tallest trace"
-        );
-        point.split_at(point.num_variables() - num_variables).1
     }
 }
 
@@ -608,7 +534,7 @@ mod tests {
     ///     table 0:  batch 0 -> point 10
     ///     table 1:  batch 1 -> point 20, batch 2 -> point 21
     ///     table 2:  batch 3 -> point 30
-    fn uneven_schedule() -> OpeningSchedule<F> {
+    fn uneven_schedule() -> OpeningSchedule<Point<F>> {
         OpeningSchedule::new(vec![
             (
                 TableShape::new(3, 2),
@@ -645,8 +571,11 @@ mod tests {
         let schedule = uneven_schedule();
         let expected = [10, 20, 21, 30].map(labelled);
 
-        assert_eq!(schedule.points().len(), schedule.protocol().num_openings());
-        assert_eq!(schedule.points(), expected);
+        assert_eq!(
+            schedule.payloads().len(),
+            schedule.protocol().num_openings()
+        );
+        assert_eq!(schedule.payloads(), expected);
 
         // The owning table of each batch follows the same order.
         let owners = schedule
@@ -672,13 +601,19 @@ mod tests {
     #[test]
     fn one_batch_per_table_numbers_the_batches_like_the_tables() {
         // The shape every committed table has today, where the two orders coincide.
-        let schedule = OpeningSchedule::whole_tables([
-            (3, 2, vec![], labelled(1)),
-            (2, 1, vec![0], labelled(2)),
+        let schedule = OpeningSchedule::new(vec![
+            (
+                TableShape::new(3, 2),
+                vec![(OpeningBatch::new(vec![0, 1], Vec::new()), labelled(1))],
+            ),
+            (
+                TableShape::new(2, 1),
+                vec![(OpeningBatch::new(vec![0], vec![0]), labelled(2))],
+            ),
         ]);
 
         assert_eq!(schedule.first_batch_per_table(), vec![0, 1]);
-        assert_eq!(schedule.points(), [labelled(1), labelled(2)]);
+        assert_eq!(schedule.payloads(), [labelled(1), labelled(2)]);
     }
 
     #[test]
