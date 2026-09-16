@@ -172,23 +172,24 @@ impl<F: TwoAdicField + Ord> TwoAdicSubgroupDft<F> for Radix2DitParallel<F> {
         self.lde_with_consumer(mat, added_bits, shift, transform, &|_, _| {})
     }
 
-    fn lde_output_block_rows(&self, input_height: usize, _added_bits: usize) -> usize {
-        1 << (log2_strict_usize(input_height) / 2)
-    }
-
     #[instrument(skip_all, level = "debug", fields(dims = %mat.dimensions(), added_bits = added_bits))]
-    fn coset_lde_batch_with_blocks<T, C>(
+    fn coset_lde_batch_with_blocks<T, K, C>(
         &self,
         mat: RowMajorMatrix<F>,
         added_bits: usize,
         shift: F,
         transform: T,
-        consume: C,
+        make_consumer: K,
     ) -> Self::Evaluations
     where
         T: FnOnce(&mut RowMajorMatrixViewMut<'_, F>, Layout),
+        K: FnOnce(usize) -> C,
         C: Fn(usize, RowMajorMatrixView<'_, F>) + Sync,
     {
+        // Blocks are the second butterfly half's sub-FFTs; see `second_half_general`.
+        let log_h = log2_strict_usize(mat.height());
+        let mid = log_h.div_ceil(2);
+        let consume = make_consumer(1 << (log_h - mid));
         self.lde_with_consumer(mat, added_bits, shift, transform, &consume)
     }
 }
