@@ -32,6 +32,7 @@
 
 pub mod domain;
 pub mod lde;
+pub mod opening;
 pub mod pinned;
 pub mod round;
 pub mod transcript;
@@ -40,9 +41,13 @@ pub use domain::{SkipDomain, SkipDomainError};
 #[cfg(any(test, feature = "test-util"))]
 pub use lde::extend_reference;
 pub use lde::{CHUNK_BITS, CompressedLde, CompressedLdeError};
+pub use opening::{
+    OPENING_DEGREE, SkipOpening, SkipOpeningClaim, SkipOpeningError, SkipOpeningProver,
+};
 pub use pinned::{PinnedEqError, PinnedEqWeights, SubfieldFoldTable};
 pub use round::{MessageLenMismatch, RowSelector, SkipRound, SkipRoundError};
 pub use transcript::{
-    UnivariateSkipProverTranscript, UnivariateSkipShape, UnivariateSkipTranscriptError,
-    UnivariateSkipVerifierTranscript,
+    SkipOpeningProverTranscript, SkipOpeningShape, SkipOpeningTranscriptError,
+    SkipOpeningVerifierTranscript, UnivariateSkipProverTranscript, UnivariateSkipShape,
+    UnivariateSkipTranscriptError, UnivariateSkipVerifierTranscript,
 };

@@ -1,4 +1,4 @@
-//! Fiat-Shamir transcript of a univariate-skip round and the sumcheck it delegates to.
+//! Fiat-Shamir transcript of a skip round and the sumcheck it delegates to.
 //!
 //! # Shape
 //!
@@ -12,12 +12,10 @@
 //! # What the shape binds
 //!
 //! A fingerprint of the description enters the sponge before any step runs.
-//!
-//! The skipped width, the transmitted width and the difficulty each change the description.
-//!
+//! The skipped width, the transmitted width and the difficulty each change it.
 //! The residual round count and degree do not appear here.
 //!
-//! They shape the nested description instead, which seeds itself inside the bracket.
+//! They shape the nested description, which seeds itself in the bracket.
 
 use alloc::vec::Vec;
 use core::marker::PhantomData;
@@ -29,11 +27,12 @@ use p3_challenger::fs::{
 use p3_challenger::{CanObserve, CanSample, GrindingChallenger};
 use p3_field::ExtensionField;
 
+use super::opening::OPENING_DEGREE;
 use crate::generic_degree::GenericDegreeShape;
 
 /// Version byte bound into the transcript seed.
 ///
-/// Bumping it separates two revisions of this protocol even when their steps agree.
+/// Bumping it separates two revisions even when their steps agree.
 const VERSION: u8 = 1;
 
 /// Protocol name bound into the transcript seed.
@@ -48,13 +47,342 @@ const ROUND_POW: &str = "round_pow";
 /// Step label of the challenge the skipped variables collapse to.
 const SKIP_CHALLENGE: &str = "skip_challenge";
 
-/// Step label of the delegated sumcheck over the variables the round did not bind.
+/// Step label of the sumcheck over the variables the round left unbound.
 const RESIDUAL_SUMCHECK: &str = "residual_sumcheck";
 
 /// Marker recorded on the bracket around the delegated sumcheck.
 ///
 /// It is a local diagnostic and does not reach the pattern fingerprint.
 struct ResidualSumcheck;
+
+/// Protocol name bound into the opening reduction's seed.
+const OPENING_NAME: &[u8] = b"p3-sumcheck-univariate-skip-opening";
+
+/// Step label of the per-polynomial claims the reduction starts from.
+const OPENING_CLAIMS: &str = "opening_claims";
+
+/// Step label of the challenge that batches the committed polynomials.
+const OPENING_BATCHING: &str = "opening_batching";
+
+/// Step label of the sumcheck the opening reduction delegates to.
+const OPENING_SUMCHECK: &str = "opening_sumcheck";
+
+/// Marker recorded on the bracket around the opening reduction's sumcheck.
+struct OpeningSumcheck;
+
+/// Numbers that fix the transcript of one opening reduction.
+///
+/// Both sides build this from their own configuration, never from a proof.
+///
+/// # What this binds
+///
+/// The claims the reduction starts from, and their count.
+/// Both land before the challenge that separates them.
+/// The delegated sumcheck binds its rounds and sum under its own seed.
+///
+/// # What the caller owes
+///
+/// The evaluations the reduction ends on are not bound here.
+/// They are what a commitment answers for.
+/// Discharging them against one is the caller's business.
+///
+/// That is the same obligation the skip round leaves for its zerocheck point.
+///
+/// Nothing else is left to a caller.
+/// The reduction's own verifier drives this whole description.
+/// It reads the starting sum from the proof and checks it after finishing.
+///
+/// What comes back is a point and the value the batched openings owe.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SkipOpeningShape {
+    /// Number of skipped variables the reduction binds, one round each.
+    pub num_variables: usize,
+    /// Number of committed polynomials batched into one run.
+    pub num_polynomials: usize,
+    /// Grinding difficulty guarding each sumcheck round, or zero to omit it.
+    ///
+    /// It reaches the delegated rounds only.
+    /// No grinding step stands before the batching challenge.
+    /// A soundness budget must not credit grinding to the batching term.
+    pub pow_bits: usize,
+}
+
+impl SkipOpeningShape {
+    /// Collect the numbers that fix one reduction.
+    ///
+    /// # Panics
+    ///
+    /// Panics if no polynomial is batched.
+    /// An empty batch has nothing to reduce, and later steps assume one.
+    #[must_use]
+    pub const fn new(num_variables: usize, num_polynomials: usize, pow_bits: usize) -> Self {
+        assert!(
+            num_polynomials > 0,
+            "an opening reduction batches at least one polynomial"
+        );
+        Self {
+            num_variables,
+            num_polynomials,
+            pow_bits,
+        }
+    }
+
+    /// The description the delegated sumcheck seeds itself from.
+    ///
+    /// Both sides derive it here, so neither can drift on the nested run.
+    #[must_use]
+    pub const fn sumcheck_shape(&self) -> GenericDegreeShape {
+        GenericDegreeShape::new(self.num_variables, OPENING_DEGREE, self.pow_bits)
+    }
+
+    /// Describe the transcript this shape fixes.
+    ///
+    /// # Panics
+    ///
+    /// Never in practice, since one matched bracket always validates.
+    #[must_use]
+    pub fn pattern<F, EF>(&self) -> InteractionPattern
+    where
+        F: TranscriptField,
+        EF: ExtensionField<F>,
+    {
+        // The claims, a challenge to separate them, then the rounds' bracket.
+        // The claims come first because the challenge is drawn on them.
+        // Reversed, a prover seeing the challenge could shift between claims.
+        //
+        // Their batch would be unchanged, and no later check would catch it.
+        // A single-polynomial run has nothing to separate, so no challenge.
+        // The description differs, so one cannot be replayed as the other.
+        let mut steps = Vec::with_capacity(4);
+
+        steps.push(Interaction::algebra::<F, EF>(
+            Hierarchy::Atomic,
+            Kind::Message,
+            OPENING_CLAIMS,
+            Length::Fixed(self.num_polynomials),
+        ));
+
+        if self.num_polynomials > 1 {
+            steps.push(Interaction::algebra::<F, EF>(
+                Hierarchy::Atomic,
+                Kind::Challenge,
+                OPENING_BATCHING,
+                Length::Scalar,
+            ));
+        }
+
+        steps.push(Interaction::marker::<OpeningSumcheck>(
+            Hierarchy::Begin,
+            Kind::Protocol,
+            OPENING_SUMCHECK,
+        ));
+        steps.push(Interaction::marker::<OpeningSumcheck>(
+            Hierarchy::End,
+            Kind::Protocol,
+            OPENING_SUMCHECK,
+        ));
+
+        InteractionPattern::new(steps).expect("one matched bracket is always well formed")
+    }
+
+    /// Bind the protocol identity and the transcript shape into a seed.
+    #[must_use]
+    pub fn domain_separator<F, EF>(&self) -> DomainSeparator<Alphabet<F>>
+    where
+        F: TranscriptField,
+        EF: ExtensionField<F>,
+    {
+        DomainSeparator::new(VERSION, OPENING_NAME, self.pattern::<F, EF>())
+    }
+}
+
+/// Prover-side transcript of one opening reduction.
+pub struct SkipOpeningProverTranscript<'a, C, F: TranscriptField, EF> {
+    /// Driver walking the description and holding the borrowed sponge.
+    state: ProverState<&'a mut C, Alphabet<F>>,
+    /// The numbers this run was described with.
+    shape: SkipOpeningShape,
+    /// Marker for the extension field the challenge carries.
+    _ef: PhantomData<EF>,
+}
+
+impl<'a, C, F, EF> SkipOpeningProverTranscript<'a, C, F, EF>
+where
+    F: TranscriptField,
+    EF: ExtensionField<F>,
+    C: CanObserve<F> + CanSample<F> + GrindingChallenger<Witness = F>,
+{
+    /// Seed the transcript from the shape both sides agreed on.
+    pub fn new(challenger: &'a mut C, shape: SkipOpeningShape) -> Self {
+        let separator = shape.domain_separator::<F, EF>();
+        let state = ProverState::new(challenger, &separator);
+        Self {
+            state,
+            shape,
+            _ef: PhantomData,
+        }
+    }
+
+    /// Bind the per-polynomial claims, then draw the separating challenge.
+    ///
+    /// # Overview
+    ///
+    /// The two steps are one call because their order makes the batch sound.
+    /// A challenge drawn first lets a prover move value between claims:
+    ///
+    /// ```text
+    ///     v_0 += gamma * d,  v_1 -= d      leaves sum_i gamma^i v_i unchanged
+    /// ```
+    ///
+    /// A single-polynomial run has nothing to separate: it batches by one.
+    /// The claims are bound either way, and their count with them.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the claim count differs from the described one.
+    pub fn batching_challenge(&mut self, claims: &[EF]) -> EF {
+        assert_eq!(
+            claims.len(),
+            self.shape.num_polynomials,
+            "one claim per committed polynomial"
+        );
+
+        self.state
+            .observe_extensions::<F, EF, FieldToFieldCodec<F>>(OPENING_CLAIMS, claims);
+
+        if self.shape.num_polynomials <= 1 {
+            return EF::ONE;
+        }
+        self.state
+            .challenge_extension::<F, EF, FieldToFieldCodec<F>>(OPENING_BATCHING)
+            .into_inner()
+    }
+
+    /// Lend the sponge to the reduction's sumcheck, as a sub-protocol.
+    pub fn sumcheck<R>(&mut self, run: impl FnOnce(&mut C) -> R) -> R {
+        self.state
+            .begin_protocol::<OpeningSumcheck>(OPENING_SUMCHECK);
+        let output = run(self.state.challenger_mut());
+        self.state.end_protocol::<OpeningSumcheck>(OPENING_SUMCHECK);
+        output
+    }
+
+    /// Close the transcript once every described step has been played.
+    ///
+    /// Every value this run binds is one the caller already holds.
+    /// The driver's own buffer therefore stays empty.
+    ///
+    /// Closing is purely the check that the description was consumed.
+    ///
+    /// # Panics
+    ///
+    /// When fewer steps were played than the run was described with.
+    pub fn finish(self) {
+        assert!(
+            self.state.finalize().is_empty(),
+            "the opening reduction carries every value in its own proof",
+        );
+    }
+}
+
+/// Verifier-side transcript of one opening reduction.
+///
+/// Mirrors the prover side call for call, over the same description.
+pub struct SkipOpeningVerifierTranscript<'a, C, F: TranscriptField, EF> {
+    /// Driver walking the description and holding the borrowed sponge.
+    state: VerifierState<'static, &'a mut C, Alphabet<F>>,
+    /// The numbers this run was described with.
+    shape: SkipOpeningShape,
+    /// Marker for the extension field the challenge carries.
+    _ef: PhantomData<EF>,
+}
+
+impl<'a, C, F, EF> SkipOpeningVerifierTranscript<'a, C, F, EF>
+where
+    F: TranscriptField,
+    EF: ExtensionField<F>,
+    C: CanObserve<F> + CanSample<F> + GrindingChallenger<Witness = F>,
+{
+    /// Seed the transcript from the shape both sides agreed on.
+    pub fn new(challenger: &'a mut C, shape: SkipOpeningShape) -> Self {
+        let separator = shape.domain_separator::<F, EF>();
+        let state = VerifierState::new(challenger, &separator, &[]);
+        Self {
+            state,
+            shape,
+            _ef: PhantomData,
+        }
+    }
+
+    /// Bind the claims the proof carries, then draw the prover's challenge.
+    ///
+    /// The count comes from the proof, so a mismatch rejects, never panics.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the claim count is one the description forbids.
+    pub fn batching_challenge(&mut self, claims: &[EF]) -> Result<EF, SkipOpeningTranscriptError> {
+        self.state
+            .observe_extensions::<F, EF, FieldToFieldCodec<F>>(OPENING_CLAIMS, claims)
+            .map_err(|_| {
+                // Two described steps may be unplayed, and this plays neither.
+                self.state.abort();
+                SkipOpeningTranscriptError::ClaimCountMismatch {
+                    expected: self.shape.num_polynomials,
+                    actual: claims.len(),
+                }
+            })?;
+
+        if self.shape.num_polynomials <= 1 {
+            return Ok(EF::ONE);
+        }
+        Ok(self
+            .state
+            .challenge_extension::<F, EF, FieldToFieldCodec<F>>(OPENING_BATCHING)
+            .into_inner())
+    }
+
+    /// Lend the sponge to the reduction's sumcheck, as a sub-protocol.
+    ///
+    /// A delegated rejection releases the driver.
+    /// Without that, dropping this one after a malformed proof panics.
+    ///
+    /// # Errors
+    ///
+    /// Returns whatever the delegated run rejected with.
+    pub fn sumcheck<T, E>(&mut self, run: impl FnOnce(&mut C) -> Result<T, E>) -> Result<T, E> {
+        self.state
+            .begin_protocol::<OpeningSumcheck>(OPENING_SUMCHECK);
+        let output = run(self.state.challenger_mut());
+
+        if output.is_err() {
+            self.state.abort();
+            return output;
+        }
+
+        self.state.end_protocol::<OpeningSumcheck>(OPENING_SUMCHECK);
+        output
+    }
+
+    /// Release the completeness check after a rejection outside this driver.
+    pub fn abort(&mut self) {
+        self.state.abort();
+    }
+
+    /// Close the transcript once every described step has been played.
+    ///
+    /// The claims and the round polynomials all arrive in the proof.
+    /// This side binds them from there, so no wire bytes are left to read.
+    ///
+    /// # Panics
+    ///
+    /// When fewer steps were played than the run was described with.
+    pub fn finish(self) {
+        self.state
+            .finalize()
+            .expect("the opening reduction reads an empty wire");
+    }
+}
 
 /// Sponge alphabet of a challenger that speaks the base field natively.
 type Alphabet<F> = FieldUnit<F>;
@@ -107,7 +435,7 @@ impl UnivariateSkipShape {
 
     /// The description the delegated sumcheck seeds itself from.
     ///
-    /// Both sides derive it here, so neither can drift from the other on the nested run.
+    /// Both sides derive it here, so neither can drift on the nested run.
     #[must_use]
     pub const fn residual_shape(&self) -> GenericDegreeShape {
         GenericDegreeShape::new(
@@ -131,7 +459,7 @@ impl UnivariateSkipShape {
         // Up to three leaf steps, then one matched bracket.
         let mut steps = Vec::with_capacity(5);
 
-        // The message comes first, so the challenge depends on every value it carries.
+        // The message comes first, so the challenge depends on its values.
         steps.push(Interaction::algebra::<F, EF>(
             Hierarchy::Atomic,
             Kind::Message,
@@ -140,9 +468,7 @@ impl UnivariateSkipShape {
         ));
 
         // Grinding sits between the message and the challenge it protects.
-        //
         // The difficulty travels inside the step.
-        //
         // A verifier expecting a cheaper grind therefore fails the shape check.
         if self.pow_bits > 0 {
             steps.push(Interaction::algebra::<F, F>(
@@ -162,8 +488,7 @@ impl UnivariateSkipShape {
         ));
 
         // The bracket records that a sub-protocol runs here.
-        //
-        // Its steps live in the callee's description, under the callee's own seed.
+        // Its steps live in the callee's description, under its own seed.
         steps.push(Interaction::marker::<ResidualSumcheck>(
             Hierarchy::Begin,
             Kind::Protocol,
@@ -181,8 +506,7 @@ impl UnivariateSkipShape {
     /// Bind the protocol identity and the transcript shape into a seed.
     ///
     /// Every number that shapes this run also shapes the description.
-    ///
-    /// The fingerprint covers all of them, so no separate instance label is needed.
+    /// The fingerprint covers all of them, so no instance label is needed.
     #[must_use]
     pub fn domain_separator<F, EF>(&self) -> DomainSeparator<Alphabet<F>>
     where
@@ -198,8 +522,7 @@ impl UnivariateSkipShape {
 /// # Borrowing
 ///
 /// The challenger is borrowed, not consumed.
-///
-/// A skip round runs inside a larger protocol, whose own transcript continues where this stops.
+/// A skip round runs inside a larger protocol, whose transcript continues on.
 pub struct UnivariateSkipProverTranscript<'a, C, F: TranscriptField, EF> {
     /// Driver walking the description and holding the borrowed sponge.
     state: ProverState<&'a mut C, Alphabet<F>>,
@@ -234,7 +557,7 @@ where
     /// - The challenge the skipped variables collapse to.
     /// - The grinding witness, when the difficulty is positive.
     pub fn round_message(&mut self, message: &[EF]) -> (EF, Option<F>) {
-        // Bind the whole message before the challenge that will be evaluated on it.
+        // Bind the whole message before the challenge read on it.
         self.state
             .observe_extensions::<F, EF, FieldToFieldCodec<F>>(ROUND_MESSAGE, message);
 
@@ -270,7 +593,6 @@ where
     /// When fewer steps were played than the run was described with.
     pub fn finish(self) {
         // Nothing was written to the driver's own buffer.
-        //
         // Closing is purely the check that the description was consumed.
         assert!(
             self.state.finalize().is_empty(),
@@ -311,7 +633,7 @@ where
         }
     }
 
-    /// Replay the round: bind the message, re-check the grind, draw the challenge.
+    /// Replay the round: bind the message, re-grind, draw the challenge.
     ///
     /// Every value comes from the proof, so every disagreement is a rejection.
     ///
@@ -326,8 +648,7 @@ where
         message: &[EF],
         witness: Option<F>,
     ) -> Result<EF, UnivariateSkipTranscriptError> {
-        // Bind the whole message before the challenge that will be evaluated on it.
-        //
+        // Bind the whole message before the challenge read on it.
         // The width comes from the proof, so a mismatch is a rejection.
         self.state
             .observe_extensions::<F, EF, FieldToFieldCodec<F>>(ROUND_MESSAGE, message)
@@ -339,8 +660,7 @@ where
         // Re-run the prover's grinding step on the witness it committed to.
         if self.shape.pow_bits > 0 {
             // With no witness the described step cannot be played at all.
-            //
-            // Releasing the completeness check keeps this rejection the only failure.
+            // Releasing the completeness check keeps this the only failure.
             let Some(witness) = witness else {
                 self.state.abort();
                 return Err(UnivariateSkipTranscriptError::MissingPowWitness);
@@ -350,9 +670,7 @@ where
                 .map_err(|_| UnivariateSkipTranscriptError::InvalidPowWitness)?;
         } else if witness.is_some() {
             // At zero difficulty the description has no grinding step to play.
-            //
-            // Ignoring a witness would leave one proof with two accepting forms.
-            //
+            // Ignoring one would give a statement two accepting proofs.
             // Refusing it is what keeps the shape canonical.
             self.state.abort();
             return Err(UnivariateSkipTranscriptError::UnexpectedPowWitness);
@@ -367,12 +685,11 @@ where
 
     /// Lend the sponge to the residual sumcheck, bracketed as a sub-protocol.
     ///
-    /// The delegated run reports its own rejection, and a rejection ends this reduction too.
-    ///
-    /// Releasing the completeness check there is what makes a malformed proof a rejection.
+    /// The delegated run reports its own rejection, which ends this one too.
+    /// Releasing the completeness check makes a malformed proof a rejection.
     ///
     /// Without it, dropping this driver panics instead.
-    /// Taking the failure rather than a plain value is what stops a caller forgetting to.
+    /// Taking the failure rather than a value stops a caller forgetting to.
     ///
     /// # Errors
     ///
@@ -385,7 +702,7 @@ where
             .begin_protocol::<ResidualSumcheck>(RESIDUAL_SUMCHECK);
         let output = run(self.state.challenger_mut());
 
-        // A delegated rejection leaves the bracket half-played, so the driver is released here.
+        // A delegated rejection half-plays the bracket, so it is released here.
         if output.is_err() {
             self.state.abort();
             return output;
@@ -398,7 +715,7 @@ where
 
     /// Release the completeness check after a rejection outside this driver.
     ///
-    /// A caller that stops early still has to leave the driver in a droppable state.
+    /// A caller stopping early must still leave the driver droppable.
     pub fn abort(&mut self) {
         self.state.abort();
     }
@@ -414,6 +731,21 @@ where
             .finalize()
             .expect("the univariate-skip reduction reads an empty wire");
     }
+}
+
+/// Reasons the opening reduction's transcript replay rejects a proof.
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+pub enum SkipOpeningTranscriptError {
+    /// The proof carries a different number of claims than described.
+    ///
+    /// The count is bound, so one width cannot be replayed as another.
+    #[error("opening claim count mismatch: expected {expected}, got {actual}")]
+    ClaimCountMismatch {
+        /// Number of claims the description fixes.
+        expected: usize,
+        /// Number the proof carries.
+        actual: usize,
+    },
 }
 
 /// Reasons the transcript replay rejects a proof.
@@ -465,7 +797,7 @@ mod tests {
 
     #[test]
     fn the_numbers_shaping_this_run_reach_its_own_seed() {
-        // Fixture state: skip 6 of 10 variables, degree 3 residual, no grinding.
+        // Fixture state: skip 6 of 10, degree 3 residual, no grinding.
         let base = first_challenge(UnivariateSkipShape::new(6, 7, 4, 3, 0));
 
         // A wider transmitted domain changes the message step's declared width.
@@ -496,22 +828,20 @@ mod tests {
     #[test]
     fn the_residual_numbers_are_bound_by_the_nested_seed() {
         // The bracket records only that a sub-protocol runs.
-        //
-        // The residual numbers therefore do not move this run's own fingerprint.
+        // The residual numbers therefore do not move this run's fingerprint.
         //
         //     outer seed  : skip widths and grinding
         //     nested seed : residual rounds, residual degree, grinding
         //
         // They are bound when the nested run seeds itself inside the bracket.
-        //
-        // That is why both sides must derive that description from the same place.
+        // That is why both sides derive that description from one place.
         let base = UnivariateSkipShape::new(6, 7, 4, 3, 0);
         assert_eq!(
             first_challenge(base),
             first_challenge(UnivariateSkipShape::new(6, 7, 5, 4, 0))
         );
 
-        // The nested description does separate them, so nothing is left unbound overall.
+        // The nested description separates them, so nothing is left unbound.
         let nested = |shape: UnivariateSkipShape| {
             let mut challenger = fresh_challenger();
             shape
@@ -533,8 +863,7 @@ mod tests {
     #[test]
     fn the_skip_transcript_does_not_collide_with_the_plain_sumcheck() {
         // Two protocols sharing a sponge must not share a seed.
-        //
-        // Otherwise a message bound in one could be replayed as a message in the other.
+        // Otherwise a message bound in one could be replayed in the other.
         let mut skip = fresh_challenger();
         UnivariateSkipShape::new(6, 7, 4, 3, 0)
             .domain_separator::<F, F>()
@@ -580,7 +909,7 @@ mod tests {
 
     #[test]
     fn a_round_missing_its_grinding_witness_is_rejected() {
-        // A described grinding step cannot be replayed with no witness to feed it.
+        // A described grinding step cannot be replayed with no witness.
         let mut challenger = fresh_challenger();
         let shape = UnivariateSkipShape::new(3, 4, 2, 3, 4);
         let mut transcript =
@@ -598,7 +927,7 @@ mod tests {
         // The transmitted count is the extension size minus the subspace size.
         //
         //     2^7 - 2^6 = 64        one coset, the product-form shape
-        //     2^8 - 2^6 = 192       three cosets, what a degree-three composition needs
+        //     2^8 - 2^6 = 192       three cosets, as degree three needs
         assert_eq!(UnivariateSkipShape::new(6, 7, 4, 3, 0).message_len(), 64);
         assert_eq!(UnivariateSkipShape::new(6, 8, 4, 3, 0).message_len(), 192);
     }
