@@ -4,13 +4,14 @@ use p3_field::Field;
 
 use crate::CryptographicHasher;
 
-/// Byte budget for the buffer holding the serialized bytes of one group of rows.
+/// Byte target for the buffer holding the serialized bytes of one group of rows.
 ///
-/// The batched inner hash needs its messages back to back in memory.
-/// Field elements reach byte form only through a serializing iterator.
+/// The batched inner hash needs its messages back to back in memory, and field elements reach
+/// byte form only through a serializing iterator, so a group is staged here before it is hashed.
 ///
-/// 8 KiB stays inside a typical 32 KiB L1 data cache.
-/// It still holds eight messages of 1 KiB, enough to fill a vector sponge's lanes.
+/// 8 KiB stays inside a typical 32 KiB L1 data cache. It is a target rather than a cap: a group
+/// is always a whole number of lane groups, so one lane group of wider rows overshoots it rather
+/// than leaving lanes idle. The inner hasher is the one that knows what a full call costs.
 const ROW_BYTES_SCRATCH: usize = 8 * 1024;
 
 /// Converts a hasher which can hash bytes, u32's or u64's into a hasher which can hash field elements.
@@ -74,8 +75,9 @@ where
             return;
         }
 
-        // A row too wide for the byte budget gains nothing from grouping.
-        // Hash it straight from the serializing iterator, with no buffer at all.
+        // One row past the target is where grouping stops paying: a lane group of rows that
+        // wide is more buffer than the saved calls are worth. Hash it straight from the
+        // serializing iterator instead, with no buffer at all.
         if row_bytes > ROW_BYTES_SCRATCH {
             for (digest, row) in out.iter_mut().zip(input.chunks_exact(row_len)) {
                 *digest = self.hash_iter(row.iter().copied());
@@ -89,18 +91,13 @@ where
         //     rows:    [ r_0 | r_1 | ... ]              row_len field elements each
         //     scratch: [ b_0 | b_1 | ... ]              row_bytes bytes each
         //
-        // Rounding the group down to whole lane groups keeps every permutation of every call
-        // fully occupied.
-        //
-        // Invariant: 1 <= rows_per_group <= ROW_BYTES_SCRATCH / row_bytes
-        //     the wide-row case returned above, so at least one row fits the budget
-        //     a budget too small for one lane group keeps every row that does fit
+        // The group is a whole number of lane groups, so every call fills the inner hasher's
+        // lanes. A row wide enough that not even one lane group fits the target still gets a
+        // full one: splitting it would push the remainder onto the inner scalar path, which is
+        // the cost the grouping exists to avoid. This mirrors `p3-merkle-tree`'s `rows_per_call`,
+        // whose groups arrive here and must not be re-split.
         let lanes = Inner::LANES.max(1);
-        let rows_fitting = ROW_BYTES_SCRATCH / row_bytes;
-        let rows_per_group = match rows_fitting / lanes {
-            0 => rows_fitting,
-            groups => groups * lanes,
-        };
+        let rows_per_group = (ROW_BYTES_SCRATCH / row_bytes / lanes).max(1) * lanes;
 
         // One buffer per call, refilled group by group, holding the largest group exactly.
         // Every byte of a group is written before it is read, so none of it is zeroed first.
@@ -418,17 +415,18 @@ mod tests {
     }
 
     #[test]
-    fn hash_many_keeps_single_rows_when_a_lane_group_will_not_fit() {
+    fn hash_many_still_fills_the_lanes_when_a_lane_group_overshoots_the_target() {
         let (inner, calls) = LaneRecorder::new();
         let hasher = SerializingHasher::new(inner);
 
-        // 2800 bytes a row leaves room for two rows, fewer than the three a lane group needs, so
-        // the group falls back to as many rows as do fit rather than overrunning the budget.
-        let input = rows_of(3, 700);
-        let mut out = vec![[0u8; 4]; 3];
+        // 2800 bytes a row leaves room for two rows, fewer than the three a lane group needs.
+        // Overshooting the target beats splitting the group, which would strand the third row
+        // on the inner hasher's scalar path.
+        let input = rows_of(6, 700);
+        let mut out = vec![[0u8; 4]; 6];
         hasher.hash_many(&input, &mut out);
 
-        assert_eq!(*calls.borrow(), vec![2, 1]);
+        assert_eq!(*calls.borrow(), vec![3, 3]);
         assert_eq!(out, digests_one_by_one(&hasher, &input, 700));
     }
 
