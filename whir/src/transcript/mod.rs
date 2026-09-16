@@ -1696,34 +1696,43 @@ mod tests {
         // Invariant: a grinding difficulty lives in two places.
         //
         //     transcript  ->  the bits the pattern describes
-        //     model       ->  the bits this protocol's own report credits
-        //
-        // Both read the same configuration, so they must agree site for site.
+        //     report      ->  the bits the configuration derives
         //
         // WHIR prices its own grinding, so the shared budget never compares it.
         //
-        // Fixture state: the reference configuration, and one with no grinding.
+        // Reading both sides through the shape compares it against itself.
+        // So only the described side is read there.
+        //
+        // The folding sites belong to the delegated sumcheck's description.
+        // A query site is all this pattern carries.
+        //
+        // Fixture state: the reference configuration, and one with no budget.
         for ground in [false, true] {
             let mut params = base_params();
             if !ground {
                 params.pow_bits = 0;
             }
-            let shape = shape_of(&config_from(params));
+            let config = config_from(params);
 
-            // One site per round, then one closing the run.
+            // One query site per round, then one closing the run.
             //
             // A zero difficulty describes no step, so it contributes nothing.
-            let mut expected: Vec<(&str, usize)> = shape
-                .rounds
+            let mut expected: Vec<(&str, usize)> = config
+                .round_parameters
                 .iter()
-                .filter(|round| round.query_pow_bits > 0)
-                .map(|round| (QUERY_POW, round.query_pow_bits))
+                .filter(|round| round.pow_bits > 0)
+                .map(|round| (QUERY_POW, round.pow_bits))
                 .collect();
-            if shape.final_pow_bits > 0 {
-                expected.push((FINAL_QUERY_POW, shape.final_pow_bits));
+            if config.final_pow_bits > 0 {
+                expected.push((FINAL_QUERY_POW, config.final_pow_bits));
             }
 
-            assert_eq!(pow_difficulties(&shape.pattern::<F, EF>()), expected);
+            // The ground run really grinds and the unground one never does.
+            // Otherwise an empty list on both sides would satisfy this.
+            assert_eq!(expected.is_empty(), !ground, "the budget did not bite");
+
+            let described = pow_difficulties(&shape_of(&config).pattern::<F, EF>());
+            assert_eq!(described, expected);
         }
     }
 }
