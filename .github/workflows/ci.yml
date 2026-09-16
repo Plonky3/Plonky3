@@ -90,6 +90,17 @@ jobs:
             compile_only: true
             target: x86_64-unknown-linux-gnu
             modes: serial parallel
+          # SHA-NI sits in no x86-64 microarchitecture level, so no other leg turns `sha`
+          # on and the four-lane SHA-256 kernel would otherwise never be compiled. GitHub's
+          # runner pool mixes parts with and without the instructions, so the build is the
+          # guaranteed part and the tests below run only where the host reports them.
+          - name: linux, sha, build only
+            os: ubuntu-latest
+            features: "+sha,+sse4.1"
+            compile_only: true
+            sha_ni: true
+            target: x86_64-unknown-linux-gnu
+            modes: serial parallel
           - name: arm64, sve2, build only
             os: ubuntu-24.04-arm
             features: "+sve2"
@@ -122,7 +133,7 @@ jobs:
       # running binaries one at a time, so idle cores get filled by other
       # crates' tests while a single long-running test is still executing.
       - uses: taiki-e/install-action@v2
-        if: ${{ !matrix.compile_only }}
+        if: ${{ !matrix.compile_only || matrix.sha_ni }}
         with:
           tool: cargo-nextest
 
@@ -157,6 +168,17 @@ jobs:
         env:
           RUSTFLAGS: -C debuginfo=0 -C target-feature=-sha3
         run: python3 scripts/check.py test --package p3-keccak
+
+      # `+sha` also makes `sha2` emit SHA-NI unconditionally, so every SHA-256 test here
+      # needs the instructions rather than just the four-lane kernel under test.
+      - name: Test sha256 (x86-64 SHA-NI)
+        if: ${{ matrix.sha_ni }}
+        run: |
+          if grep -qw sha_ni /proc/cpuinfo; then
+            python3 scripts/check.py test --package p3-sha256
+          else
+            echo "This runner has no SHA-NI; the build above is the coverage."
+          fi
 
   check_embedded:
     name: Build embedded
