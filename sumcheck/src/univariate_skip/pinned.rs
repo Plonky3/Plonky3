@@ -3,8 +3,8 @@
 use alloc::vec::Vec;
 use core::marker::PhantomData;
 
-use p3_binary_field::TowerLevel;
-use p3_field::{ExtensionField, Field};
+use p3_binary_field::{Ghash128, TowerLevel};
+use p3_field::{ExtensionField, Field, PrimeCharacteristicRing};
 use p3_multilinear_util::poly::Poly;
 use thiserror::Error;
 
@@ -266,6 +266,12 @@ impl<F: Field> PinnedEqWeights<F> {
 
     /// Combine one block of values under the pinned weights.
     ///
+    /// The weights span the field, so on cells that are not `0` or `1` this map has a large
+    /// kernel.
+    ///
+    /// A pinned zerocheck may only fold prime-field-valued cells, where the bit form holds
+    /// that by construction.
+    ///
     /// # Panics
     ///
     /// Panics if the block length differs from the number of weights.
@@ -300,6 +306,238 @@ impl<F: Field> PinnedEqWeights<F> {
         // Each block collapses independently to one value.
         for (block, entry) in values.chunks_exact(self.weights.len()).zip(out) {
             *entry = self.fold(block);
+        }
+    }
+}
+
+/// Pinned coordinates whose equality weights are the successive powers of the indeterminate.
+///
+/// # Overview
+///
+/// A general weight set stores one weight per assignment and multiplies by each in turn.
+///
+/// Pinning to the geometric progression makes every weight one constant times one power:
+///
+/// ```text
+///     sum_k y_k * C * x^k  =  C * sum_k y_k * x^k
+/// ```
+///
+/// In the polynomial basis a power of the indeterminate is a shift.
+///
+/// So the inner sum is shifts and exclusive ors, with the modulus folded in once at the end.
+///
+/// No multiplication survives in the hot loop, and the constant travels outside it.
+///
+/// Nothing is stored per weight either, so this is two words whatever the block width.
+///
+/// # Soundness
+///
+/// The obligation is the one stated at the top of this module, unchanged.
+///
+/// What this shape settles for free is the independence half of it:
+///
+/// - The weights are a nonzero constant times `1, x, ..., x^(n-1)`.
+/// - Those powers are a prime-field basis of everything below the field's degree.
+/// - Scaling by a nonzero constant is invertible, so it carries independence across.
+///
+/// So the weights are independent exactly while a block fits the field's degree.
+///
+/// The constructor is what holds them to it.
+///
+/// The caller still owes the other half, and it is the strong one.
+///
+/// **Every witness the prover can commit to must keep the constraint prime-field-valued.**
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GeometricEqWeights {
+    /// Number of pinned coordinates.
+    num_pinned: usize,
+    /// The constant factor every weight carries.
+    scale: Ghash128,
+}
+
+impl GeometricEqWeights {
+    /// Pin the given number of coordinates to the geometric progression.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a block would outgrow the field's degree.
+    ///
+    /// Past that width the weights repeat a pattern the zerocheck can no longer see.
+    pub fn new(num_pinned: usize) -> Result<Self, PinnedEqError> {
+        let field_bits = 1usize << Ghash128::LOG_BITS;
+
+        // One weight per assignment.
+        //
+        // Only as many powers stay independent as the field has prime-field dimensions.
+        if num_pinned >= usize::BITS as usize || (1usize << num_pinned) > field_bits {
+            return Err(PinnedEqError::TooManyPinned {
+                count: num_pinned,
+                field_bits,
+            });
+        }
+
+        // The constant is the product of `1 + r_i` over the pinned coordinates.
+        //
+        // Each coordinate is `u / (1 + u)`, so each factor is `1 / (1 + u)`.
+        //
+        // Those denominators telescope:
+        //
+        //     prod_{i < d} (1 + x^(2^i))  =  sum_{k < 2^d} x^k
+        //
+        // because every exponent below the block width has exactly one binary spelling.
+        //
+        // So the element to invert is the one whose low bits are all set.
+        let block_len = 1usize << num_pinned;
+        let all_powers = Ghash128::from_repr(u128::MAX >> (field_bits - block_len));
+
+        // A block covers at least one weight, so that element has a bit set and inverts.
+        let scale = all_powers.inverse();
+
+        Ok(Self { num_pinned, scale })
+    }
+
+    /// Number of pinned coordinates.
+    #[must_use]
+    pub const fn num_pinned(&self) -> usize {
+        self.num_pinned
+    }
+
+    /// Number of values one pinned block covers.
+    #[must_use]
+    pub const fn block_len(&self) -> usize {
+        1 << self.num_pinned
+    }
+
+    /// The constant factor every weight carries.
+    ///
+    /// A fold that leaves it out is short of exactly this.
+    ///
+    /// Applying it once to the surrounding sum is what keeps it out of the inner loop.
+    pub const fn scale(&self) -> Ghash128 {
+        self.scale
+    }
+
+    /// The pinned coordinates, ordered as they sit at the tail of the challenge point.
+    #[must_use]
+    pub fn challenges(&self) -> Vec<Ghash128> {
+        // Coordinate `i` is `u / (1 + u)` for `u = x^(2^i)`.
+        //
+        // That is the choice that makes the weights telescope into the progression.
+        //
+        // An evaluation table indexes its first variable most significantly.
+        //
+        // So the tail lists the highest power first.
+        (0..self.num_pinned)
+            .rev()
+            .map(|i| {
+                // The exponent stays below the field's degree, so this is a bare bit pattern.
+                let u = Ghash128::from_repr(1u128 << (1usize << i));
+
+                // That pattern is never one, so the denominator here is never zero.
+                u * (Ghash128::ONE + u).inverse()
+            })
+            .collect()
+    }
+
+    /// Combine one block of bit-valued cells, leaving out the constant factor.
+    ///
+    /// Cell `k` is bit `k` of the argument.
+    ///
+    /// # Overview
+    ///
+    /// The weights are the powers of the indeterminate.
+    ///
+    /// A bit-valued cell therefore contributes its power, or contributes nothing:
+    ///
+    /// ```text
+    ///     sum_k b_k * x^k
+    /// ```
+    ///
+    /// That sum is the element whose coefficient of `x^k` is `b_k`.
+    ///
+    /// Which is the argument itself, read as a field element rather than as an integer.
+    ///
+    /// So the fold is a reinterpretation, with no arithmetic at all.
+    ///
+    /// This is the case the soundness argument asks for to begin with.
+    ///
+    /// The cells a pinned zerocheck may fold have to be prime-field-valued.
+    ///
+    /// Cell `k` at bit `k` is the order a committed bit witness already has on the wire.
+    ///
+    /// An eight-cell block is therefore the byte itself, and a full block is its bytes read
+    /// little-endian.
+    ///
+    /// Reading them the other way round would pair every cell with the wrong power.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a bit at or above the block width is set, since it names no cell.
+    pub fn fold_bits_unscaled(&self, bits: u128) -> Ghash128 {
+        // The block covers the low bits, and the rest of the word has to be clear.
+        let mask = u128::MAX >> ((1usize << Ghash128::LOG_BITS) - self.block_len());
+        assert_eq!(bits & !mask, 0, "one bit per weight");
+
+        Ghash128::from_repr(bits)
+    }
+
+    /// Combine one block of bit-valued cells under the pinned weights.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a bit at or above the block width is set.
+    pub fn fold_bits(&self, bits: u128) -> Ghash128 {
+        self.scale * self.fold_bits_unscaled(bits)
+    }
+
+    /// Combine one block of values under the pinned weights.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the block length differs from the block width.
+    pub fn fold(&self, block: &[Ghash128]) -> Ghash128 {
+        self.scale * self.fold_unscaled(block)
+    }
+
+    /// Combine one block, leaving out the constant factor.
+    ///
+    /// This is the shape the inner loop wants: shifts and exclusive ors, one reduction.
+    ///
+    /// The result is short of one factor, which the caller applies once to the sum it feeds.
+    ///
+    /// The weights span the field, so on cells that are not `0` or `1` this map has a large
+    /// kernel.
+    ///
+    /// A pinned zerocheck may only fold prime-field-valued cells, where the bit form holds
+    /// that by construction.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the block length differs from the block width.
+    pub fn fold_unscaled(&self, block: &[Ghash128]) -> Ghash128 {
+        assert_eq!(block.len(), self.block_len(), "one value per weight");
+
+        // Setting the constant aside leaves the powers themselves as the weights.
+        Ghash128::dot_powers_of_x(block)
+    }
+
+    /// Combine every block of a slice, leaving out the constant factor.
+    ///
+    /// The weights span the field, so on cells that are not `0` or `1` this map has a large
+    /// kernel.
+    ///
+    /// A pinned zerocheck may only fold prime-field-valued cells, where the bit form holds
+    /// that by construction.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the input is not a whole number of blocks.
+    pub fn fold_blocks_unscaled(&self, values: &[Ghash128], out: &mut [Ghash128]) {
+        assert_eq!(values.len(), out.len() * self.block_len(), "whole blocks");
+
+        // Each block collapses on its own, so one constant covers all of them at the end.
+        for (block, entry) in values.chunks_exact(self.block_len()).zip(out) {
+            *entry = Ghash128::dot_powers_of_x(block);
         }
     }
 }
@@ -739,6 +977,191 @@ mod tests {
         assert_eq!(table.table.len() * size_of::<BinaryField128>(), 64 * 1024);
     }
 
+    #[test]
+    fn the_geometric_form_pins_the_same_coordinates_as_the_general_one() {
+        // Invariant: both constructions describe one zerocheck point.
+        //
+        // A verifier reading either must therefore land on the same coordinates.
+        //
+        // Fixture state: every width the field admits, from nothing pinned to seven.
+        for count in 0..=7 {
+            let general = PinnedEqWeights::geometric(indeterminate(), count).unwrap();
+            let structured = GeometricEqWeights::new(count).unwrap();
+
+            assert_eq!(
+                structured.challenges(),
+                general.challenges(),
+                "count={count}"
+            );
+            assert_eq!(structured.block_len(), general.block_len(), "count={count}");
+        }
+    }
+
+    #[test]
+    fn the_constant_is_the_weight_of_the_all_zero_assignment() {
+        // The progression reads C, Cx, Cx^2, ..., so its first entry is the constant itself.
+        //
+        // Keeping that one element is what replaces the whole weight table.
+        for count in 0..=7 {
+            let general = PinnedEqWeights::geometric(indeterminate(), count).unwrap();
+            let structured = GeometricEqWeights::new(count).unwrap();
+
+            assert_eq!(structured.scale(), general.weights()[0], "count={count}");
+        }
+    }
+
+    #[test]
+    fn the_geometric_fold_agrees_with_the_general_weighted_sum() {
+        // Invariant: the shift path computes the same weighted sum as the weight table.
+        //
+        // This is what pins the shift path's block ordering to the equality table's:
+        //
+        //     block position k   <->   weight C * x^k
+        //
+        // A disagreement here would weigh the right values in the wrong order.
+        let mut rng = SmallRng::seed_from_u64(37);
+
+        for count in 0..=7 {
+            let general = PinnedEqWeights::geometric(indeterminate(), count).unwrap();
+            let structured = GeometricEqWeights::new(count).unwrap();
+
+            let block = (0..structured.block_len())
+                .map(|_| rng.random::<Ghash128>())
+                .collect::<Vec<_>>();
+
+            assert_eq!(
+                structured.fold(&block),
+                general.fold(&block),
+                "count={count}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_unscaled_fold_is_short_of_exactly_the_constant() {
+        // The inner loop leaves the constant out and the caller puts it back once.
+        //
+        //     fold = scale * fold_unscaled
+        //
+        // Fixture state: 4 pinned coordinates, so a block of 16.
+        let mut rng = SmallRng::seed_from_u64(41);
+        let structured = GeometricEqWeights::new(4).unwrap();
+
+        let block = (0..structured.block_len())
+            .map(|_| rng.random::<Ghash128>())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            structured.fold(&block),
+            structured.scale() * structured.fold_unscaled(&block)
+        );
+    }
+
+    #[test]
+    fn a_bit_valued_block_folds_to_its_own_bit_pattern() {
+        // Invariant: the weights are the powers of the indeterminate.
+        //
+        // A block of bits therefore contributes exactly the powers its set bits name.
+        //
+        //     sum_k b_k x^k   =   the element whose coefficient of x^k is b_k
+        //
+        // Fixture state: 7 pinned coordinates, so 128 cells, one per coefficient of the field.
+        let mut rng = SmallRng::seed_from_u64(47);
+        let structured = GeometricEqWeights::new(7).unwrap();
+        let general = PinnedEqWeights::geometric(indeterminate(), 7).unwrap();
+
+        let bits = rng.random::<u128>();
+
+        // Reading the word as a field element is the whole computation.
+        assert_eq!(
+            structured.fold_bits_unscaled(bits),
+            Ghash128::from_repr(bits)
+        );
+
+        // The same cells spelled out one field element each.
+        let block = (0..structured.block_len())
+            .map(|k| Ghash128::from_bool((bits >> k) & 1 == 1))
+            .collect::<Vec<_>>();
+
+        // Weighing them one at a time has to land on the same value.
+        assert_eq!(structured.fold_bits(bits), general.fold(&block));
+    }
+
+    #[test]
+    #[should_panic(expected = "one bit per weight")]
+    fn the_bit_just_above_the_block_is_refused() {
+        // Fixture state: 3 pinned coordinates, so cells 0..8 and bit 8 names none.
+        //
+        // Accepting it would silently weigh a cell the block does not have.
+        let _ = GeometricEqWeights::new(3)
+            .unwrap()
+            .fold_bits_unscaled(1 << 8);
+    }
+
+    #[test]
+    #[should_panic(expected = "one bit per weight")]
+    fn the_top_bit_of_the_word_is_refused() {
+        // The case above alone is passed by a check that only looks at the first bit out.
+        //
+        //     3 pinned coordinates -> cells 0..8, and bit 127 is as far out as a word goes
+        let _ = GeometricEqWeights::new(3)
+            .unwrap()
+            .fold_bits_unscaled(1 << 127);
+    }
+
+    #[test]
+    #[should_panic(expected = "one bit per weight")]
+    fn the_first_bit_above_a_half_word_block_is_refused() {
+        // A check written against the low half of the word would pass both cases above.
+        //
+        //     6 pinned coordinates -> cells 0..64, so bit 64 is the first one out, and it
+        //     is exactly where a half-word mask stops looking
+        let _ = GeometricEqWeights::new(6)
+            .unwrap()
+            .fold_bits_unscaled(1 << 64);
+    }
+
+    #[test]
+    fn the_geometric_form_stops_where_independence_does() {
+        // 128 weights is the dimension of the field over the prime field.
+        //
+        // Seven pinned coordinates is therefore the most that can stay independent.
+        //
+        // An eighth would ask for 256 weights out of a 128-dimensional space.
+        assert!(GeometricEqWeights::new(7).is_ok());
+        assert_eq!(
+            GeometricEqWeights::new(8).unwrap_err(),
+            PinnedEqError::TooManyPinned {
+                count: 8,
+                field_bits: 128,
+            }
+        );
+    }
+
+    #[test]
+    fn the_geometric_form_folds_each_block_on_its_own() {
+        // Fixture state: 5 blocks of 8 values each.
+        //
+        //     values: [ b0 | b1 | b2 | b3 | b4 ]   ->  out: [ f0, f1, f2, f3, f4 ]
+        //
+        // The constant is left out of every block alike.
+        //
+        // That is what keeps it factorable out of the sum the caller builds.
+        let mut rng = SmallRng::seed_from_u64(43);
+        let structured = GeometricEqWeights::new(3).unwrap();
+        let num_blocks = 5;
+
+        let values = (0..num_blocks * structured.block_len())
+            .map(|_| rng.random::<Ghash128>())
+            .collect::<Vec<_>>();
+        let mut out = Ghash128::zero_vec(num_blocks);
+        structured.fold_blocks_unscaled(&values, &mut out);
+
+        for (index, block) in values.chunks_exact(structured.block_len()).enumerate() {
+            assert_eq!(out[index], structured.fold_unscaled(block), "block={index}");
+        }
+    }
+
     proptest! {
         #[test]
         fn pinned_coordinates_agree_with_the_equality_polynomial_at_every_width(
@@ -766,6 +1189,42 @@ mod tests {
             let embedded = block.iter().map(|&v| BinaryField128::from(v)).collect::<Vec<_>>();
 
             prop_assert_eq!(table.fold(&block), pinned.fold(&embedded));
+        }
+
+        #[test]
+        fn the_geometric_fold_matches_the_general_one_at_every_width(
+            count in 0usize..=7,
+            seed: u64,
+        ) {
+            // Invariant: the shift path and the multiplying path agree at every width.
+            let mut rng = SmallRng::seed_from_u64(seed);
+            let general = PinnedEqWeights::geometric(indeterminate(), count).unwrap();
+            let structured = GeometricEqWeights::new(count).unwrap();
+
+            let block = (0..structured.block_len())
+                .map(|_| rng.random::<Ghash128>())
+                .collect::<Vec<_>>();
+
+            prop_assert_eq!(structured.fold(&block), general.fold(&block));
+        }
+
+        #[test]
+        fn the_bit_fold_matches_the_spelled_out_block_at_every_width(
+            count in 0usize..=7,
+            bits: u128,
+        ) {
+            // Invariant: a packed bit block and the same cells written out agree.
+            let structured = GeometricEqWeights::new(count).unwrap();
+            let general = PinnedEqWeights::geometric(indeterminate(), count).unwrap();
+
+            // Only the cells the block actually has.
+            let bits = bits & (u128::MAX >> (128 - structured.block_len()));
+
+            let block = (0..structured.block_len())
+                .map(|k| Ghash128::from_bool((bits >> k) & 1 == 1))
+                .collect::<Vec<_>>();
+
+            prop_assert_eq!(structured.fold_bits(bits), general.fold(&block));
         }
     }
 }

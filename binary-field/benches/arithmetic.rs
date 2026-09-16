@@ -531,6 +531,156 @@ fn bench_ghash_dot(c: &mut Criterion) {
     bench_dot_width::<<Ghash128 as Field>::Packing, 64>(c, "packed");
 }
 
+/// Compare the three ways to weigh a block by the successive powers of the indeterminate.
+///
+/// The pinned zerocheck weights are one constant times those powers.
+///
+/// This is that fold with the constant set aside.
+fn bench_powers_width<const N: usize>(c: &mut Criterion) {
+    let mut rng = SmallRng::seed_from_u64(5);
+
+    // The values being folded.
+    let block: [Ghash128; N] = core::array::from_fn(|_| rng.random());
+
+    // The same powers, materialized as a weight table for the two multiplying baselines.
+    let mut power = Ghash128::ONE;
+    let weights: [Ghash128; N] = core::array::from_fn(|_| {
+        let current = power;
+        power *= Ghash128::from_repr(2);
+        current
+    });
+
+    let mut group = c.benchmark_group(format!("ghash/powers/{N}"));
+
+    // One product per term, each reduced on its own.
+    group.bench_function("multiply", |bencher| {
+        bencher.iter(|| {
+            black_box(&block)
+                .iter()
+                .zip(black_box(&weights))
+                .map(|(&value, &weight)| value * weight)
+                .sum::<Ghash128>()
+        });
+    });
+
+    // One product per term, with the reduction deferred to the end of the sum.
+    group.bench_function("deferred", |bencher| {
+        bencher.iter(|| Ghash128::dot_product(black_box(&block), black_box(&weights)));
+    });
+
+    // The public entry point, which picks the shift or the deferred product per target.
+    group.bench_function("powers", |bencher| {
+        bencher.iter(|| Ghash128::dot_powers_of_x(black_box(&block)));
+    });
+
+    group.finish();
+}
+
+/// Fold a run of blocks against the powers of the indeterminate, from two witness layouts.
+///
+/// A pinned zerocheck may only fold cells valued in the prime field.
+///
+/// So both layouts hold the same bits.
+///
+/// What differs is how they are stored:
+///
+/// ```text
+///     one element per cell   2 MiB   every cell a full field element
+///     one bit per cell      16 KiB   a whole block in one word
+/// ```
+fn bench_powers_stream(c: &mut Criterion) {
+    /// Cells per block, the widest a pinned zerocheck can ask for.
+    const WIDTH: usize = 128;
+    /// Blocks folded by one iteration.
+    const BLOCKS: usize = 1024;
+
+    let mut rng = SmallRng::seed_from_u64(7);
+
+    // The witness as one word per block, each bit a cell.
+    let packed: Vec<u128> = (0..BLOCKS).map(|_| rng.random()).collect();
+
+    // The same cells, written out one field element each.
+    let spelled: Vec<Ghash128> = packed
+        .iter()
+        .flat_map(|&word| (0..WIDTH).map(move |k| Ghash128::from_bool((word >> k) & 1 == 1)))
+        .collect();
+
+    // The weights the multiplying baseline needs materialized.
+    let mut power = Ghash128::ONE;
+    let weights: [Ghash128; WIDTH] = core::array::from_fn(|_| {
+        let current = power;
+        power *= Ghash128::from_repr(2);
+        current
+    });
+
+    let mut group = c.benchmark_group("ghash/powers/stream");
+
+    // One product per cell, each reduced on its own.
+    //
+    // That is what a stored weight table costs, walked one weight at a time.
+    group.bench_function("elements/multiply", |bencher| {
+        bencher.iter(|| {
+            black_box(&spelled)
+                .as_chunks::<WIDTH>()
+                .0
+                .iter()
+                .map(|block| {
+                    block
+                        .iter()
+                        .zip(black_box(&weights))
+                        .map(|(&value, &weight)| value * weight)
+                        .sum::<Ghash128>()
+                })
+                .sum::<Ghash128>()
+        });
+    });
+
+    // One product per cell, with the reduction deferred to the end of each block.
+    group.bench_function("elements/deferred", |bencher| {
+        bencher.iter(|| {
+            black_box(&spelled)
+                .as_chunks::<WIDTH>()
+                .0
+                .iter()
+                .map(|block| Ghash128::dot_product(block, black_box(&weights)))
+                .sum::<Ghash128>()
+        });
+    });
+
+    // The same cells, still one element each, through the public entry point.
+    group.bench_function("elements/powers", |bencher| {
+        bencher.iter(|| {
+            black_box(&spelled)
+                .as_chunks::<WIDTH>()
+                .0
+                .iter()
+                .map(|block| Ghash128::dot_powers_of_x(block))
+                .sum::<Ghash128>()
+        });
+    });
+
+    // The same cells bit-packed, where the fold is the reinterpretation itself.
+    group.bench_function("bits", |bencher| {
+        bencher.iter(|| {
+            black_box(&packed)
+                .iter()
+                .map(|&word| Ghash128::from_repr(word))
+                .sum::<Ghash128>()
+        });
+    });
+
+    group.finish();
+}
+
+/// Exercise the fold at every block width a pinned zerocheck can ask for.
+fn bench_powers_of_x(c: &mut Criterion) {
+    bench_powers_width::<8>(c);
+    bench_powers_width::<16>(c);
+    bench_powers_width::<32>(c);
+    bench_powers_width::<64>(c);
+    bench_powers_width::<128>(c);
+}
+
 fn bench_maps(c: &mut Criterion) {
     let mut rng = SmallRng::seed_from_u64(17);
     let values: Vec<BinaryField128> = (0..REPS).map(|_| rng.random()).collect();
@@ -718,6 +868,8 @@ criterion_group!(
     bench_packing,
     bench_ghash_sqrt,
     bench_ghash_dot,
+    bench_powers_of_x,
+    bench_powers_stream,
     bench_maps,
     bench_grind,
     bench_bulk,

@@ -14,8 +14,10 @@
 //! registers; every backend is checked against portable arithmetic.
 
 mod basis;
+mod powers;
 mod sqrt;
 
+pub(crate) use powers::poly_dot_powers_128;
 pub(crate) use sqrt::poly_sqrt_128;
 
 // The addition chain pays for its 320 KiB of Frobenius maps only where a product is fast
