@@ -37,6 +37,8 @@ pub mod opening;
 pub mod pinned;
 pub mod round;
 pub mod transcript;
+pub mod zerocheck;
+pub mod zerocheck_transcript;
 
 pub use composition::{Composition, Conjunction, SquareProduct};
 pub use domain::{SkipDomain, SkipDomainError};
@@ -52,4 +54,9 @@ pub use transcript::{
     SkipOpeningProverTranscript, SkipOpeningShape, SkipOpeningTranscriptError,
     SkipOpeningVerifierTranscript, UnivariateSkipProverTranscript, UnivariateSkipShape,
     UnivariateSkipTranscriptError, UnivariateSkipVerifierTranscript,
+};
+pub use zerocheck::{BinaryZerocheck, ZerocheckClaim, ZerocheckError, ZerocheckProof};
+pub use zerocheck_transcript::{
+    ZerocheckProverTranscript, ZerocheckShape, ZerocheckTranscriptError,
+    ZerocheckVerifierTranscript,
 };
