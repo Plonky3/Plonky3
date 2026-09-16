@@ -167,13 +167,27 @@ pub enum ZerocheckError {
 /// The witness has to be committed before this runs.
 /// Its commitment has to be absorbed into the transcript this borrows.
 /// Discharging the closing claim against that commitment is the caller's too.
+///
+/// So is booleanity.
+/// This proves the constraint vanishes on whatever cells were committed.
+/// A commitment over a large field holds cells that are not bits.
+///
+/// Two ways to discharge it are open.
+///
+/// - A packed commitment makes a cell an `F_2`-coordinate, so bits come free.
+/// - One arity-one zerocheck per operand on `v*v - v` settles it otherwise.
+///
+/// The second needs no batching challenge and keeps the subfield message.
 #[derive(Debug, Clone)]
 pub struct BinaryZerocheck<F, C> {
     /// The skip round this opens with.
     round: SkipRound<F>,
     /// The constraint being proved vanishing.
     composition: C,
-    /// Grinding difficulty guarding each challenge, or zero to omit grinding.
+    /// Grinding difficulty, or zero to omit it.
+    /// It guards the skip challenge and every sumcheck round.
+    ///
+    /// The zerocheck point and the batching challenge carry no grinding step.
     pow_bits: usize,
 }
 
@@ -422,7 +436,11 @@ where
         if let Err(error) = transcript.operand_blends(&proof.blends) {
             return Err(error.into());
         }
-        let eq_at_rho = Poly::new_from_point(zerocheck_point.as_slice(), EF::ONE).eval_base(&rho);
+        // One value of the equality polynomial, not the whole table.
+        //
+        //     table then read   2^(m-k) elements, 4 MiB at 2^18 rows
+        //     product over m-k  one pass, no allocation
+        let eq_at_rho = Point::eval_eq(zerocheck_point.as_slice(), rho.as_slice());
         if residual_final != eq_at_rho * self.composition.eval(&proof.blends) {
             transcript.abort();
             return Err(ZerocheckError::BlendConstraintMismatch);
@@ -609,7 +627,7 @@ mod tests {
         operands: &[&[u8]],
         challenger: &mut Challenger,
         dishonest: &Dishonest,
-    ) -> ZerocheckProof<EF> {
+    ) -> (ZerocheckProof<EF>, EF) {
         let log_rows = LOG_HEIGHT - check.round().log_size();
         let mut transcript = ZerocheckProverTranscript::<Challenger, EF, EF>::new(
             challenger,
@@ -685,13 +703,24 @@ mod tests {
         });
         transcript.finish();
 
-        ZerocheckProof {
-            message,
-            skip_pow,
-            residual,
-            blends,
-            opening: opening_proof,
-        }
+        (
+            ZerocheckProof {
+                message,
+                skip_pow,
+                residual,
+                blends,
+                opening: opening_proof,
+            },
+            lambda,
+        )
+    }
+
+    /// The mirror prover with nothing substituted, and the challenge it drew.
+    fn prove_honest(
+        check: &BinaryZerocheck<F, Conjunction>,
+        operands: &[&[u8]],
+    ) -> (ZerocheckProof<EF>, EF) {
+        prove_dishonest(check, operands, &mut challenger(), &Default::default())
     }
 
     /// The shape every test below runs, and its witness.
@@ -717,7 +746,7 @@ mod tests {
             operands[1].as_slice(),
             operands[2].as_slice(),
         ];
-        let proof = prove_dishonest(&check, &packed, &mut challenger(), dishonest);
+        let (proof, _) = prove_dishonest(&check, &packed, &mut challenger(), dishonest);
         verify(&check, &proof)
     }
 
@@ -733,7 +762,7 @@ mod tests {
             operands[2].as_slice(),
         ];
 
-        let mirrored = prove_dishonest(&check, &packed, &mut challenger(), &Dishonest::default());
+        let (mirrored, _) = prove_honest(&check, &packed);
         let (honest, claim) = check.prove::<EF, _>(&packed, LOG_HEIGHT, &mut challenger());
 
         assert_eq!(mirrored.message, honest.message);
@@ -806,33 +835,101 @@ mod tests {
     }
 
     #[test]
-    fn the_batching_challenge_follows_the_blends() {
+    fn blends_shifted_along_the_constraint_fiber_are_rejected() {
         // The blends are bound before the batching challenge is drawn.
-        // Were they not, a prover seeing it could move value between two.
-        // Their batch would be unchanged and the opening check would pass.
+        // What that buys is only visible on a shift the later checks miss.
         //
-        // Forcing the challenge to one has the same effect.
-        // So this pins that it is drawn, and that it moves with the blends.
+        // Pick one that holds both of them at the honest challenge:
+        //
+        //     C(v + s) == C(v)            the blend constraint still passes
+        //     sum_i gamma^i (v + s)_i     the opening sum still matches
+        //
+        // Binding first is the only thing left.
+        // The replay draws another challenge, and the sum no longer matches.
         let (check, operands) = fixture(0x6A3);
         let packed = [
             operands[0].as_slice(),
             operands[1].as_slice(),
             operands[2].as_slice(),
         ];
+        let (honest, _) = prove_honest(&check, &packed);
 
-        // The challenge an honest run draws.
-        let (_, honest) = check.prove::<EF, _>(&packed, LOG_HEIGHT, &mut challenger());
+        // The challenge an honest replay draws, which the shift is built on.
+        let gamma = verify(&check, &honest).unwrap().gamma;
+        let v = &honest.blends;
 
-        // The challenge a run carrying different blends draws.
-        let dishonest = Dishonest {
-            blends: Some(vec![EF::ONE, EF::ONE, EF::ONE]),
-            ..Dishonest::default()
+        // Solve the two equations for a shift with `b = 1`.
+        //
+        //     c = v0*b + a*v1 + a*b        from C(v + s) == C(v)
+        //     a + gamma*b + gamma^2*c = 0  from the batch being fixed
+        let b = EF::ONE;
+        let denominator = EF::ONE + gamma.square() * (v[1] + b);
+        assert!(!denominator.is_zero(), "the fiber is one dimensional here");
+        let a = b * gamma * (EF::ONE + gamma * v[0]) * denominator.inverse();
+        let c = v[0] * b + a * v[1] + a * b;
+
+        let shifted = alloc::vec![v[0] + a, v[1] + b, v[2] + c];
+
+        // Both later checks are blind to this shift, by construction.
+        assert_eq!(
+            Composition::<F>::eval(&Conjunction, &shifted),
+            Composition::<F>::eval(&Conjunction, v),
+            "the constraint cannot see it"
+        );
+        assert_eq!(
+            SkipOpening::batch_claims(&shifted, gamma),
+            SkipOpening::batch_claims(v, gamma),
+            "the batch at the honest challenge cannot see it"
+        );
+
+        let mut forged = honest;
+        forged.blends = shifted;
+
+        assert_eq!(
+            verify(&check, &forged).unwrap_err(),
+            ZerocheckError::OpeningClaimMismatch
+        );
+    }
+
+    #[test]
+    fn a_message_tamper_the_read_back_cannot_see_is_rejected() {
+        // The round message is bound before the skip challenge is drawn.
+        //
+        // Every later check reads the message only through `evaluate(.., lam)`.
+        // A tamper in that map's kernel is therefore invisible to all of them.
+        // The binding refuses it: the challenge moves with the message.
+        let (check, operands) = fixture(0x7A3);
+        let packed = [
+            operands[0].as_slice(),
+            operands[1].as_slice(),
+            operands[2].as_slice(),
+        ];
+        let (honest, lambda) = prove_honest(&check, &packed);
+
+        // The read-back is linear, so a unit vector gives one weight.
+        let weight = |index: usize| {
+            let mut unit = alloc::vec![EF::ZERO; honest.message.len()];
+            unit[index] = EF::ONE;
+            check.round().evaluate(&unit, lambda).unwrap()
         };
-        let mut transcript_challenger = challenger();
-        let forged = prove_dishonest(&check, &packed, &mut transcript_challenger, &dishonest);
+        let (first, second) = (weight(0), weight(1));
+        assert!(!first.is_zero() && !second.is_zero());
 
-        assert_ne!(forged.opening.claimed_sum, honest.value);
-        assert_ne!(honest.gamma, EF::ONE);
+        // In characteristic two the two weights cancel each other exactly.
+        //
+        //     first * second + second * first = 0
+        let mut forged = honest.clone();
+        forged.message[0] += second;
+        forged.message[1] += first;
+
+        assert_ne!(forged.message, honest.message, "the message really moved");
+        assert_eq!(
+            check.round().evaluate(&forged.message, lambda).unwrap(),
+            check.round().evaluate(&honest.message, lambda).unwrap(),
+            "the read-back at the honest challenge cannot see it"
+        );
+
+        assert!(verify(&check, &forged).is_err());
     }
 
     #[test]

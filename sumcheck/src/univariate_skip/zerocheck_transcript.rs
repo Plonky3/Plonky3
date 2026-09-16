@@ -84,7 +84,10 @@ pub struct ZerocheckShape {
     pub residual_degree: usize,
     /// Number of operands the constraint reads.
     pub arity: usize,
-    /// Grinding difficulty guarding each challenge, or zero to omit grinding.
+    /// Grinding difficulty, or zero to omit it.
+    /// It guards the skip challenge and every sumcheck round.
+    ///
+    /// The zerocheck point and the batching challenge carry no grinding step.
     pub pow_bits: usize,
 }
 

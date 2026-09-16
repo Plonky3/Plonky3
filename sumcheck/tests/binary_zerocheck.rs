@@ -152,7 +152,7 @@ fn the_claimed_point_covers_every_variable() {
 }
 
 #[test]
-fn grinding_guards_every_challenge_end_to_end() {
+fn grinding_guards_the_skip_challenge_and_every_round() {
     // Fixture state: 4 bits of difficulty, cheap enough for a test.
     let (check, witness) = fixture(0x6D1, 4);
     let mut challenger = fresh_challenger();
@@ -164,11 +164,15 @@ fn grinding_guards_every_challenge_end_to_end() {
 
 #[test]
 fn a_broken_constraint_is_rejected() {
-    // Mutation: flip one bit of the claimed conjunction.
+    // Mutation: flip one bit of the claimed conjunction, in row five.
     // The round polynomial stops vanishing on the skipped subspace.
     // The verifier's reconstruction still does, so the two disagree.
+    //
+    // A break in row zero would pass even with the point zeroed on both sides.
+    // The weight there covers exactly that row.
+    // Breaking a later row makes this depend on the drawn point.
     let (check, mut witness) = fixture(0xBAD, 0);
-    witness.operands[2][0] ^= 1;
+    witness.operands[2][5 * check.round().row_bytes()] ^= 1;
 
     let mut challenger = fresh_challenger();
     let (proof, _) = check.prove::<EF, _>(&witness.packed(), LOG_HEIGHT, &mut challenger);
