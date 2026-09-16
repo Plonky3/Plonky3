@@ -1,10 +1,12 @@
-//! Bit-sliced `GF(2)`: one field element per bit of a machine word.
+//! Bit-sliced `GF(2)`: one field element per bit of a machine word, plus the square bit
+//! transpose that converts between the two readings of those bits.
 //!
-//! # The two layers
+//! # The three layers
 //!
 //! ```text
 //!     underlier   a block of bits, 8 to 512 wide, with no field structure
 //!     packing     that block read as one GF(2) element per bit
+//!     transpose   a square matrix of packings, turned on its diagonal
 //! ```
 //!
 //! The underlier is the join point: the packing is generic over it, so a width is added by
@@ -77,8 +79,20 @@
 //!
 //! Narrowing is therefore a borrow, not a conversion, and a committed bit witness can be read
 //! at whatever width a consumer wants without copying it.
+//!
+//! # The transpose
+//!
+//! One bit slice is one row of a bit matrix, and both readings of that matrix are needed:
+//!
+//! - a bit-sliced trace read by rows, and the same trace read by columns,
+//! - a boolean witness rearranged into the layout a commitment expects,
+//! - the two readings of the ring-switch tensor element, which are a transpose apart,
+//! - the rows a univariate-skip round extracts from a packed trace.
+//!
+//! The square bit transpose beside the packings is what converts between them, in place.
 
 mod packing;
+mod transpose;
 mod underlier;
 
 pub use packing::{
