@@ -87,15 +87,23 @@ struct OpeningSumcheck;
 /// Discharging them against one is the caller's business.
 ///
 /// That is the same obligation the skip round leaves for its zerocheck point.
-/// Two equalities tie those evaluations to this run.
-/// The reduction owns both, so a caller cannot forget one.
+///
+/// Nothing else is left to a caller.
+/// The reduction's own verifier drives this whole description.
+/// It reads the starting sum from the proof and checks it after finishing.
+///
+/// What comes back is a point and the value the batched openings owe.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SkipOpeningShape {
     /// Number of skipped variables the reduction binds, one round each.
     pub num_variables: usize,
     /// Number of committed polynomials batched into one run.
     pub num_polynomials: usize,
-    /// Grinding difficulty guarding each challenge, or zero to omit it.
+    /// Grinding difficulty guarding each sumcheck round, or zero to omit it.
+    ///
+    /// It reaches the delegated rounds only.
+    /// No grinding step stands before the batching challenge.
+    /// A soundness budget must not credit grinding to the batching term.
     pub pow_bits: usize,
 }
 

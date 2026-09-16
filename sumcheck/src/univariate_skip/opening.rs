@@ -2,13 +2,18 @@
 
 use alloc::vec::Vec;
 
+use p3_challenger::fs::TranscriptField;
+use p3_challenger::{FieldChallenger, GrindingChallenger};
 use p3_field::Field;
 use p3_maybe_rayon::prelude::*;
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
 
 use super::lde::CHUNK_BITS;
-use crate::generic_degree::RoundProver;
+use super::transcript::{
+    SkipOpeningShape, SkipOpeningTranscriptError, SkipOpeningVerifierTranscript,
+};
+use crate::generic_degree::{GenericDegreeError, GenericDegreeProof, RoundProver};
 
 /// Per-variable degree of the summand this reduction proves.
 ///
@@ -232,65 +237,108 @@ impl<EF: Field> SkipOpening<EF> {
             .fold(EF::ZERO, |accumulator, &claim| accumulator * gamma + claim)
     }
 
-    /// Check that a proof discharges the claims it was started from.
+    /// Replay one reduction against its own transcript.
     ///
     /// # Overview
     ///
-    /// Two equalities carry the reduction, and both are easy to leave out:
+    /// The whole sequence lives here because its order is what makes it sound:
     ///
     /// ```text
-    ///     starting sum  ==  sum_i gamma^i * blend_i
-    ///     closing value ==  L^(tau) * sum_i gamma^i * opening_i
+    ///     bind the claims  ->  draw gamma  ->  replay the rounds  ->  finish
+    ///     then             ->  starting sum == sum_i gamma^i * blend_i
     /// ```
     ///
-    /// The first ties the sumcheck to the claims the round left behind.
-    /// That matters because the driver takes its starting sum from the proof.
-    /// The second strips the Lagrange weight off the closing value.
-    ///
-    /// What is left is the evaluations a commitment can answer for.
+    /// The starting sum is read from the proof, not taken as an argument.
+    /// A caller passing its own batch would make that check vacuous.
+    /// It runs after the driver is finished, so a rejection is never a panic.
     ///
     /// # Arguments
     ///
-    /// - The per-polynomial blended values the round left behind.
-    /// - The challenge the transcript drew to separate them.
-    /// - The sum the delegated sumcheck was run on.
-    /// - The point the rounds ended on.
-    /// - The committed evaluations at that point.
-    /// - The value the sumcheck closed on.
+    /// - The shape both sides derive from configuration, never from a proof.
+    /// - The delegated sumcheck's record.
+    /// - The per-polynomial blends the skip round left behind.
+    /// - The transcript, in the state the prover left it.
+    ///
+    /// # Returns
+    ///
+    /// The point the rounds ended on, and the value the batched openings owe.
     ///
     /// # Errors
     ///
-    /// - The blends and the openings disagree on count.
+    /// - The shape disagrees with this reduction's width.
+    /// - The proof carries a claim count the shape forbids.
+    /// - A delegated sumcheck round fails.
     /// - The starting sum is not the batch of the blends.
-    /// - The closing value is not the weighted batch of the openings.
-    pub fn verify(
+    /// - The Lagrange weight vanished, leaving the openings unconstrained.
+    pub fn verify<C>(
         &self,
+        shape: SkipOpeningShape,
+        proof: &GenericDegreeProof<EF, EF>,
         blends: &[EF],
-        gamma: EF,
-        starting_sum: EF,
-        tau: &Point<EF>,
-        openings: &[EF],
-        closing_value: EF,
-    ) -> Result<(), SkipOpeningError> {
-        // One opening per blend, or the two batches weigh different things.
-        if blends.len() != openings.len() {
-            return Err(SkipOpeningError::ClaimCountMismatch {
-                blends: blends.len(),
-                openings: openings.len(),
+        challenger: &mut C,
+    ) -> Result<SkipOpeningClaim<EF>, SkipOpeningError>
+    where
+        EF: TranscriptField,
+        C: FieldChallenger<EF> + GrindingChallenger<Witness = EF>,
+    {
+        // The shape is the caller's configuration.
+        // It has to describe this very reduction.
+        if shape.num_variables != self.num_variables() {
+            return Err(SkipOpeningError::WidthMismatch {
+                expected: self.num_variables(),
+                actual: shape.num_variables,
             });
         }
 
-        // The driver reads its starting sum from the proof, so tie it here.
-        if starting_sum != Self::batch_claims(blends, gamma) {
+        let mut transcript = SkipOpeningVerifierTranscript::<C, EF, EF>::new(challenger, shape);
+
+        // The claims are bound before the challenge that separates them.
+        let gamma = transcript.batching_challenge(blends)?;
+
+        // The rounds are a sub-protocol.
+        // A rejection there releases the driver rather than panicking on drop.
+        let (tau, closing_value) = transcript.sumcheck(|challenger| {
+            proof.verify(
+                challenger,
+                shape.num_variables,
+                OPENING_DEGREE,
+                shape.pow_bits,
+            )
+        })?;
+        transcript.finish();
+
+        // Nothing inside the sumcheck ties its starting sum to the blends.
+        if proof.claimed_sum != Self::batch_claims(blends, gamma) {
             return Err(SkipOpeningError::StartingSumMismatch);
         }
 
-        // The rounds close on the weighted batch, weight included.
-        if closing_value != self.lagrange_at(tau) * Self::batch_claims(openings, gamma) {
-            return Err(SkipOpeningError::ClosingValueMismatch);
-        }
+        Ok(SkipOpeningClaim {
+            value: self.closing_target(&tau, closing_value)?,
+            point: tau,
+            gamma,
+            num_polynomials: shape.num_polynomials,
+        })
+    }
 
-        Ok(())
+    /// Strip the Lagrange weight off the value the rounds closed on.
+    ///
+    /// The rounds close on `L^(tau) * sum_i gamma^i * opening_i`.
+    /// Dividing leaves what the openings themselves owe.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the weight vanished where the rounds reached.
+    /// The closing check would then read `0 == 0` and constrain nothing.
+    pub fn closing_target(
+        &self,
+        tau: &Point<EF>,
+        closing_value: EF,
+    ) -> Result<EF, SkipOpeningError> {
+        let weight = self.lagrange_at(tau);
+        if weight.is_zero() {
+            return Err(SkipOpeningError::DegenerateWeight);
+        }
+        Ok(closing_value * weight.inverse())
     }
 
     /// Build the prover state for the reduction's sumcheck.
@@ -320,6 +368,68 @@ pub enum SkipOpeningError {
     /// The closing value is not the weighted batch of the openings.
     #[error("the sumcheck's closing value is not the weighted batch of the openings")]
     ClosingValueMismatch,
+    /// The shape describes a reduction of a different width than this one.
+    #[error("the reduction binds {expected} variables, the shape says {actual}")]
+    WidthMismatch {
+        /// Variables this reduction binds.
+        expected: usize,
+        /// Variables the shape declares.
+        actual: usize,
+    },
+    /// The Lagrange weight vanished where the rounds ended.
+    ///
+    /// The closing check would read `0 == 0` and constrain no opening.
+    #[error("the Lagrange weight vanished at the point the rounds reached")]
+    DegenerateWeight,
+    /// The transcript replay refused the proof.
+    #[error(transparent)]
+    Transcript(#[from] SkipOpeningTranscriptError),
+    /// A delegated sumcheck round failed.
+    #[error("opening sumcheck: {0}")]
+    Sumcheck(#[from] GenericDegreeError),
+}
+/// What a replayed opening reduction leaves for a commitment to answer.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SkipOpeningClaim<EF> {
+    /// The point the rounds ended on.
+    pub point: Point<EF>,
+    /// The challenge the openings are batched under.
+    pub gamma: EF,
+    /// The value the batched openings must equal.
+    ///
+    /// The Lagrange weight is already divided out.
+    /// So this is what a commitment answers for directly.
+    pub value: EF,
+    /// Number of polynomials the batch covers.
+    pub num_polynomials: usize,
+}
+
+impl<EF: Field> SkipOpeningClaim<EF> {
+    /// Check committed openings against this claim.
+    ///
+    /// Nothing before this ties the replay to a commitment.
+    /// A caller that skips it has verified a reduction over no witness.
+    ///
+    /// # Arguments
+    ///
+    /// The openings in the order the batch was taken over.
+    ///
+    /// # Errors
+    ///
+    /// - The opening count is not the width the batch covers.
+    /// - The openings do not recombine to the claimed value.
+    pub fn discharge(&self, openings: &[EF]) -> Result<(), SkipOpeningError> {
+        if openings.len() != self.num_polynomials {
+            return Err(SkipOpeningError::ClaimCountMismatch {
+                blends: self.num_polynomials,
+                openings: openings.len(),
+            });
+        }
+        if SkipOpening::batch_claims(openings, self.gamma) != self.value {
+            return Err(SkipOpeningError::ClosingValueMismatch);
+        }
+        Ok(())
+    }
 }
 
 /// Prover state of the reduction's sumcheck.
@@ -390,10 +500,9 @@ mod tests {
     use rand::{RngExt, SeedableRng};
 
     use super::*;
-    use crate::generic_degree::GenericDegreeProof;
+    use crate::generic_degree::{GenericDegreeError, GenericDegreeProof};
     use crate::univariate_skip::{
-        SkipOpeningProverTranscript, SkipOpeningShape, SkipOpeningTranscriptError,
-        SkipOpeningVerifierTranscript, SkipRound,
+        SkipOpeningProverTranscript, SkipOpeningShape, SkipOpeningTranscriptError, SkipRound,
     };
 
     /// The subspace the skip round runs over lives in a byte field.
@@ -432,24 +541,23 @@ mod tests {
         openings: Vec<EF>,
     }
 
-    /// Why a replay of one run was rejected.
-    #[derive(Debug, PartialEq, Eq)]
-    enum Rejected {
-        /// The transcript refused the proof.
-        Transcript(SkipOpeningTranscriptError),
-        /// A delegated sumcheck round failed.
-        Sumcheck,
-        /// The reduction's own checks refused the proof.
-        Reduction(SkipOpeningError),
+    /// The shape both sides of the round trip are described with.
+    const fn shape_at(pow_bits: usize) -> SkipOpeningShape {
+        SkipOpeningShape::new(LOG_SKIP, NUM_POLYS, pow_bits)
     }
 
-    /// The shape both sides of the round trip are described with.
+    /// The shape every test without grinding uses.
     const fn shape() -> SkipOpeningShape {
-        SkipOpeningShape::new(LOG_SKIP, NUM_POLYS, 0)
+        shape_at(0)
     }
 
     /// Prove one reduction over several committed polynomials.
     fn prove(seed: u64) -> (SkipOpening<EF>, Point<EF>, Run) {
+        prove_at(seed, 0)
+    }
+
+    /// The same, with the grinding difficulty spelled out.
+    fn prove_at(seed: u64, pow_bits: usize) -> (SkipOpening<EF>, Point<EF>, Run) {
         let mut rng = SmallRng::seed_from_u64(seed);
         let round = SkipRound::<F>::new(LOG_SKIP, 2).unwrap();
         let num_rows = 1 << LOG_ROWS;
@@ -476,8 +584,10 @@ mod tests {
             .collect::<Vec<_>>();
 
         let mut challenger = fresh_challenger();
-        let mut transcript =
-            SkipOpeningProverTranscript::<Challenger, EF, EF>::new(&mut challenger, shape());
+        let mut transcript = SkipOpeningProverTranscript::<Challenger, EF, EF>::new(
+            &mut challenger,
+            shape_at(pow_bits),
+        );
 
         // The claims are bound here, before the challenge that separates them.
         let gamma = transcript.batching_challenge(&blends);
@@ -485,7 +595,7 @@ mod tests {
 
         let mut prover = opening.prover(SkipOpening::batch(&folded, gamma));
         let (sumcheck, tau) = transcript.sumcheck(|challenger| {
-            prover.prove::<EF, _>(challenger, LOG_SKIP, OPENING_DEGREE, 0, starting_sum)
+            prover.prove::<EF, _>(challenger, LOG_SKIP, OPENING_DEGREE, pow_bits, starting_sum)
         });
         transcript.finish();
 
@@ -507,34 +617,27 @@ mod tests {
         )
     }
 
-    /// Replay one run as a verifier would, with only the run and the shape.
-    fn verify(opening: &SkipOpening<EF>, run: &Run) -> Result<(), Rejected> {
+    /// Replay one run the way a caller would, with only the run and the shape.
+    ///
+    /// The library owns the whole replay, so this holds only the discharge.
+    fn verify(opening: &SkipOpening<EF>, run: &Run) -> Result<(), SkipOpeningError> {
+        verify_at(opening, run, 0)
+    }
+
+    /// The same, replaying under the difficulty the run was proved with.
+    fn verify_at(
+        opening: &SkipOpening<EF>,
+        run: &Run,
+        pow_bits: usize,
+    ) -> Result<(), SkipOpeningError> {
         let mut challenger = fresh_challenger();
-        let mut transcript =
-            SkipOpeningVerifierTranscript::<Challenger, EF, EF>::new(&mut challenger, shape());
-
-        let gamma = transcript
-            .batching_challenge(&run.blends)
-            .map_err(Rejected::Transcript)?;
-
-        let rounds = transcript
-            .sumcheck(|challenger| run.sumcheck.verify(challenger, LOG_SKIP, OPENING_DEGREE, 0));
-        let (tau, closing) = match rounds {
-            Ok(pair) => pair,
-            Err(_) => return Err(Rejected::Sumcheck),
-        };
-        transcript.finish();
-
-        opening
-            .verify(
-                &run.blends,
-                gamma,
-                run.sumcheck.claimed_sum,
-                &tau,
-                &run.openings,
-                closing,
-            )
-            .map_err(Rejected::Reduction)
+        let claim = opening.verify(
+            shape_at(pow_bits),
+            &run.sumcheck,
+            &run.blends,
+            &mut challenger,
+        )?;
+        claim.discharge(&run.openings)
     }
 
     /// The batching challenge one set of claims produces.
@@ -731,7 +834,7 @@ mod tests {
 
         assert_eq!(
             verify(&opening, &run),
-            Err(Rejected::Reduction(SkipOpeningError::StartingSumMismatch))
+            Err(SkipOpeningError::StartingSumMismatch)
         );
     }
 
@@ -760,7 +863,7 @@ mod tests {
 
         assert_eq!(
             verify(&opening, &run),
-            Err(Rejected::Reduction(SkipOpeningError::ClosingValueMismatch))
+            Err(SkipOpeningError::ClosingValueMismatch)
         );
     }
 
@@ -779,8 +882,49 @@ mod tests {
 
         assert_eq!(
             verify(&opening, &run),
-            Err(Rejected::Reduction(SkipOpeningError::ClosingValueMismatch))
+            Err(SkipOpeningError::ClosingValueMismatch)
         );
+    }
+
+    #[test]
+    fn a_round_the_nested_sumcheck_refuses_is_an_error_not_a_panic() {
+        // Mutation: drop one round, so the nested replay refuses the shape.
+        //
+        // The driver's bracket is half played when that happens.
+        // The transcript panics on drop unless the rejection releases it.
+        // So this pins the release, which a tamper caught later cannot.
+        let (opening, _, honest) = prove(0xAB07);
+
+        let mut run = honest;
+        run.sumcheck.round_polys.pop();
+
+        assert_eq!(
+            verify(&opening, &run),
+            Err(SkipOpeningError::Sumcheck(
+                GenericDegreeError::RoundCountMismatch {
+                    expected: LOG_SKIP,
+                    actual: LOG_SKIP - 1,
+                }
+            ))
+        );
+    }
+
+    #[test]
+    fn a_grinding_witness_the_nested_sumcheck_refuses_is_an_error() {
+        // The same release, through the other rejection the replay can raise.
+        //
+        // Fixture state: 4 bits of difficulty, one witness per round.
+        let (opening, _, honest) = prove_at(0xA607, 4);
+
+        let mut run = honest;
+        run.sumcheck.pow_witnesses.pop();
+
+        assert!(matches!(
+            verify_at(&opening, &run, 4),
+            Err(SkipOpeningError::Sumcheck(
+                GenericDegreeError::PowWitnessCountMismatch { .. }
+            ))
+        ));
     }
 
     #[test]
@@ -794,7 +938,7 @@ mod tests {
 
         assert_eq!(
             verify(&opening, &run),
-            Err(Rejected::Transcript(
+            Err(SkipOpeningError::Transcript(
                 SkipOpeningTranscriptError::ClaimCountMismatch {
                     expected: NUM_POLYS,
                     actual: NUM_POLYS - 1,
@@ -813,10 +957,10 @@ mod tests {
 
         assert_eq!(
             verify(&opening, &run),
-            Err(Rejected::Reduction(SkipOpeningError::ClaimCountMismatch {
+            Err(SkipOpeningError::ClaimCountMismatch {
                 blends: NUM_POLYS,
                 openings: NUM_POLYS - 1,
-            }))
+            })
         );
     }
 
