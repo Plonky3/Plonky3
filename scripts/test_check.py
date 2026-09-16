@@ -47,13 +47,15 @@ class CheckCliTests(unittest.TestCase):
             ["+ cargo test --doc -p p3-util"],
         )
 
-    def test_architecture_build_is_compile_only(self):
+    def test_architecture_builds_and_lints_without_running(self):
         self.assertEqual(
             self.dry_run_lines(
                 "architecture", "--target", "x86_64-unknown-linux-gnu", "--parallel"
             ),
             [
-                "+ cargo build --target x86_64-unknown-linux-gnu --all-targets --features parallel"
+                "+ cargo build --target x86_64-unknown-linux-gnu --all-targets --features parallel",
+                "+ cargo clippy --target x86_64-unknown-linux-gnu --all-targets"
+                " --features parallel -- -D warnings",
             ],
         )
 

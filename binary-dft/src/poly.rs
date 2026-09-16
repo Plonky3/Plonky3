@@ -91,37 +91,35 @@ fn for_chunks(
     }
 }
 
-/// The polynomial-basis coordinates of an element held in the tower basis.
-#[inline]
-fn into_poly(value: u128) -> u128 {
-    poly_basis::from_tower(BinaryField128::from_repr(value))
-}
+/// A change of basis applied to a whole run of elements at once.
+///
+/// The kernel behind it converts several elements together where the target allows.
+///
+/// A run therefore has to reach it unbroken, which is why this is not a per-element map.
+type Conversion = fn(&mut [u128]);
 
-/// The tower-basis bit pattern of an element held in polynomial coordinates.
-#[inline]
-fn into_tower(value: u128) -> u128 {
-    poly_basis::to_tower(value).to_repr()
-}
+/// Rewrites tower-basis bit patterns as polynomial coordinates.
+const INTO_POLY: Conversion = poly_basis::from_tower_slice;
 
-fn convert(values: &mut [u128], conversion: impl Fn(u128) -> u128 + Send + Sync) {
+/// Rewrites polynomial coordinates as tower-basis bit patterns.
+const INTO_TOWER: Conversion = poly_basis::to_tower_slice;
+
+/// Change the basis of a whole matrix, in a pass of its own.
+fn convert(values: &mut [u128], conversion: Conversion) {
     // Basis conversion does several dependent lookups per element, more work than
     // a butterfly, so it amortizes dispatch at a smaller byte volume.
+    //
+    // A task is a whole grain, so every task still reaches the blocked kernel.
     if use_parallel(values.len().saturating_mul(4)) {
-        values
-            .par_iter_mut()
-            .for_each(|value| *value = conversion(*value));
+        values.par_chunks_mut(BUTTERFLY_GRAIN).for_each(conversion);
     } else {
-        values
-            .iter_mut()
-            .for_each(|value| *value = conversion(*value));
+        conversion(values);
     }
 }
 
-/// Apply a per-element map to a tile the schedule is already holding in cache.
-fn convert_tile(tile: &mut [u128], conversion: impl Fn(u128) -> u128) {
-    for value in tile {
-        *value = conversion(*value);
-    }
+/// Apply a change of basis to a tile the schedule is already holding in cache.
+fn convert_tile(tile: &mut [u128], conversion: Conversion) {
+    conversion(tile);
 }
 
 /// Where the two basis conversions ride, instead of taking a pass over the matrix each.
@@ -219,7 +217,6 @@ const STAGING_BYTES: usize = 64 * 1024;
 ///
 /// At one element per row that waste outweighs the full passes the fusion removes, so such a
 /// shape keeps the plain per-stage passes instead.
-///
 /// This is the smallest line size the supported targets have, so it is the point past which no
 /// target wastes more than half of a line.
 const STAGED_ROW_BYTES: usize = 64;
@@ -238,7 +235,6 @@ const STAGED_ROW_BYTES: usize = 64;
 /// ```
 ///
 /// The middle band holds the stages a staging tile would not pay for.
-///
 /// It is one stage wide at most, unless the staging tile cannot hold two rows.
 ///
 /// The count of contiguous-tile stages never exceeds the count of stages there are.
@@ -356,11 +352,11 @@ fn local_stages(values: &mut [u128], plan: Plan, twiddles: &Twiddles, inverse: b
         // The tile is the first read of every element it holds when it runs before every
         // other stage, and the last write when it runs after them.
         if fold.entry {
-            convert_tile(tile, into_poly);
+            convert_tile(tile, INTO_POLY);
         }
         tile_stages(tile, width, local, local, twiddles, inverse, index);
         if fold.exit {
-            convert_tile(tile, into_tower);
+            convert_tile(tile, INTO_TOWER);
         }
     });
 }
@@ -398,7 +394,6 @@ impl Rows {
     /// matrix.
     ///
     /// The walk is increasing, so bounding its last row bounds all of them.
-    ///
     /// This runs once per tile rather than once per row, which is why it is a hard check and
     /// not a debug one.
     ///
@@ -416,7 +411,6 @@ impl Rows {
     /// Copy the rows `first`, `first + stride`, ... into consecutive rows of the tile.
     ///
     /// The tile is emptied first and then grown one row at a time.
-    ///
     /// So it holds no element the walk did not write.
     ///
     /// And a worker never has to zero a tile it is about to overwrite in full.
@@ -464,7 +458,6 @@ impl Rows {
 }
 
 /// Run stages `top - 1` down to `top - depth` through one staging tile per worker.
-///
 /// Each of those stages pairs rows far apart, so on its own it reads and writes the whole
 /// matrix.
 ///
@@ -482,7 +475,6 @@ impl Rows {
 /// ```
 ///
 /// Stage `top-1-s` pairs rows `2^(top-1-s) = 2^(depth-1-s) * S` apart.
-///
 /// That is a distance of `2^(depth-1-s)` in `k`, which stays inside the set for every
 /// `s < depth`, so the set is closed.
 ///
@@ -498,7 +490,6 @@ impl Rows {
 ///
 /// Writing `k = q * 2^(depth-s) + r` gives `offset + r * S < 2^(top-s)`, so only
 /// `q = k >> (depth-s)` survives the shift.
-///
 /// That is precisely the block index a contiguous run of `2^(depth-s)` staged rows carries.
 ///
 /// So the tile runs as an ordinary radix-2 network whose twiddle walk starts at `block << s`.
@@ -548,13 +539,13 @@ fn fused_stages(
         // The gather is the first read of every element when this is the first group of a
         // forward transform.
         if convert_basis && !inverse {
-            convert_tile(tile, into_poly);
+            convert_tile(tile, INTO_POLY);
         }
         tile_stages(tile, width, depth, top, twiddles, inverse, block);
         // The scatter is the last write of every element when this is the last group of an
         // inverse transform.
         if convert_basis && inverse {
-            convert_tile(tile, into_tower);
+            convert_tile(tile, INTO_TOWER);
         }
         // SAFETY: the rows are the ones the gather read, so the argument above applies
         // unchanged.
@@ -605,7 +596,7 @@ fn forward(values: &mut [u128], plan: Plan, shift: BinaryField128, fold: Fold) {
     // A plain pass carries no per-element map, so a conversion still owed ahead of one takes
     // a pass of its own.
     if entry && top > local {
-        convert(values, into_poly);
+        convert(values, INTO_POLY);
         entry = false;
     }
     for j in (local..top).rev() {
@@ -668,7 +659,7 @@ fn inverse(values: &mut [u128], plan: Plan, shift: BinaryField128, fold: Fold) {
 
     // No group ran, so the exit conversion needs a pass of its own.
     if exit {
-        convert(values, into_tower);
+        convert(values, INTO_TOWER);
     }
 }
 
@@ -724,7 +715,7 @@ impl AdditiveNtt<BinaryField128> for PolyBasisNtt {
         //
         // Converting each copy instead would repeat the sixteen dependent lookups per element
         // once per coset, for nothing.
-        convert(message, into_poly);
+        convert(message, INTO_POLY);
         // Only the conversion back is left, and each coset's contiguous tile carries its own.
         if len >= 2 * BUTTERFLY_GRAIN * p3_maybe_rayon::prelude::current_num_threads() {
             // Keep large coefficient copies next to evaluation so the copied data
@@ -1045,14 +1036,14 @@ mod tests {
 
                 // Conversion in, then the schedule.
                 let mut expected = input.clone();
-                super::convert(&mut expected, super::into_poly);
+                super::convert(&mut expected, super::INTO_POLY);
                 scheduled(&mut expected, plan, inverse, NONE);
                 let mut actual = input.clone();
                 scheduled(&mut actual, plan, inverse, Fold::ENTRY);
                 assert_eq!(actual, expected, "entry {plan:?} inverse={inverse}");
 
                 // Conversion in, the schedule, conversion out.
-                super::convert(&mut expected, super::into_tower);
+                super::convert(&mut expected, super::INTO_TOWER);
                 let mut actual = input.clone();
                 scheduled(&mut actual, plan, inverse, Fold::BOTH);
                 assert_eq!(actual, expected, "both {plan:?} inverse={inverse}");
@@ -1060,7 +1051,7 @@ mod tests {
                 // The schedule, then conversion out.
                 let mut expected = input.clone();
                 scheduled(&mut expected, plan, inverse, NONE);
-                super::convert(&mut expected, super::into_tower);
+                super::convert(&mut expected, super::INTO_TOWER);
                 let mut actual = input;
                 scheduled(&mut actual, plan, inverse, Fold::EXIT);
                 assert_eq!(actual, expected, "exit {plan:?} inverse={inverse}");
