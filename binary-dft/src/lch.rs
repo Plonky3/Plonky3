@@ -4,12 +4,12 @@ use alloc::vec::Vec;
 use core::marker::PhantomData;
 
 use p3_binary_field::TowerLevel;
-use p3_field::{PackedValue, PrimeCharacteristicRing};
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_maybe_rayon::prelude::*;
 use p3_util::{DisjointMutPtr, log2_ceil_usize, log2_floor_usize, log2_strict_usize};
 
+use crate::butterfly::ButterflyField;
 use crate::domain::{domain_point, domain_point_steps};
 use crate::traits::AdditiveNtt;
 
@@ -89,7 +89,7 @@ const STAGED_WORKERS: usize = 16;
 /// A staging tile therefore holds whole runs of rows wherever a row is shorter than this.
 const CACHE_LINE_BYTES: usize = 64;
 
-impl<F: TowerLevel> AdditiveNtt<F> for LchNtt<F> {
+impl<F: ButterflyField> AdditiveNtt<F> for LchNtt<F> {
     fn shifted_ntt_batch(&self, mat: RowMajorMatrix<F>, shift: F) -> RowMajorMatrix<F> {
         transform::<F, false>(mat, shift)
     }
@@ -144,7 +144,7 @@ impl<F: TowerLevel> Twiddles<F> {
 }
 
 /// One stage, as a single pass over every row.
-fn stage_pass<F: TowerLevel, const INVERSE: bool>(
+fn stage_pass<F: ButterflyField, const INVERSE: bool>(
     values: &mut [F],
     width: usize,
     j: usize,
@@ -166,7 +166,7 @@ fn stage_pass<F: TowerLevel, const INVERSE: bool>(
                 }
                 let (lo, hi) = block.split_at_mut(half);
                 let butterfly = |lo: &mut [F], hi: &mut [F]| {
-                    packed_butterfly::<F, INVERSE>(lo, hi, t);
+                    F::butterfly::<INVERSE>(lo, hi, t);
                 };
                 // Pairs are independent across the block.
                 //
@@ -189,7 +189,7 @@ fn stage_pass<F: TowerLevel, const INVERSE: bool>(
 /// so only the first has to be passed in.
 ///
 /// Forward runs its widest stage first, inverse the narrowest.
-fn tile_stages<F: TowerLevel, const INVERSE: bool>(
+fn tile_stages<F: ButterflyField, const INVERSE: bool>(
     tile: &mut [F],
     row_len: usize,
     log_rows: usize,
@@ -211,7 +211,7 @@ fn tile_stages<F: TowerLevel, const INVERSE: bool>(
                 t += twiddles.step(first + i);
             }
             let (lo, hi) = block.split_at_mut(half);
-            packed_butterfly::<F, INVERSE>(lo, hi, t);
+            F::butterfly::<INVERSE>(lo, hi, t);
         }
     }
 }
@@ -220,7 +220,7 @@ fn tile_stages<F: TowerLevel, const INVERSE: bool>(
 ///
 /// Those stages pair rows less than `2^log_rows` apart, so a tile is closed under all of them
 /// and is read once and written once instead of once per stage.
-fn deep_tiles<F: TowerLevel, const INVERSE: bool>(
+fn deep_tiles<F: ButterflyField, const INVERSE: bool>(
     values: &mut [F],
     width: usize,
     log_rows: usize,
@@ -297,7 +297,7 @@ impl StagedRows {
 ///
 /// # Panics
 /// Panics if a task's row walk reaches past the end of `values`.
-fn fused_group<F: TowerLevel, const INVERSE: bool>(
+fn fused_group<F: ButterflyField, const INVERSE: bool>(
     values: &mut [F],
     width: usize,
     log_n: usize,
@@ -441,7 +441,7 @@ impl Schedule {
 ///
 /// A group of a single stage is a plain pass: gathering two rows half the matrix apart moves
 /// the bytes the pass moves, and copies them twice on top.
-fn group_pass<F: TowerLevel, const INVERSE: bool>(
+fn group_pass<F: ButterflyField, const INVERSE: bool>(
     values: &mut [F],
     width: usize,
     log_n: usize,
@@ -480,7 +480,7 @@ fn group_pass<F: TowerLevel, const INVERSE: bool>(
 /// The boundaries are counted up from the tile, so a short remainder falls to the top group.
 /// The forward direction runs the groups from the top and the tile last, the inverse the other
 /// way round.
-fn run<F: TowerLevel, const INVERSE: bool>(
+fn run<F: ButterflyField, const INVERSE: bool>(
     values: &mut [F],
     width: usize,
     log_n: usize,
@@ -523,7 +523,7 @@ fn run<F: TowerLevel, const INVERSE: bool>(
 }
 
 /// Transform a matrix in place, in whichever direction the flag selects.
-fn transform<F: TowerLevel, const INVERSE: bool>(
+fn transform<F: ButterflyField, const INVERSE: bool>(
     mut mat: RowMajorMatrix<F>,
     shift: F,
 ) -> RowMajorMatrix<F> {
@@ -546,45 +546,6 @@ fn transform<F: TowerLevel, const INVERSE: bool>(
     mat
 }
 
-/// Apply a butterfly to full SIMD vectors and any remaining scalar elements.
-#[inline]
-fn packed_butterfly<F: TowerLevel, const INVERSE: bool>(lo: &mut [F], hi: &mut [F], t: F) {
-    // Both sides have equal length, so their packed prefixes and tails pair exactly.
-    let (lo, lo_tail) = F::Packing::pack_slice_with_suffix_mut(lo);
-    let (hi, hi_tail) = F::Packing::pack_slice_with_suffix_mut(hi);
-    let zero = t.is_zero();
-    butterfly_values::<_, INVERSE>(lo, hi, t.into(), zero);
-    butterfly_values::<_, INVERSE>(lo_tail, hi_tail, t, zero);
-}
-
-/// Apply the same field identities to scalar or packed values.
-#[inline]
-fn butterfly_values<R: PrimeCharacteristicRing + Copy, const INVERSE: bool>(
-    lo: &mut [R],
-    hi: &mut [R],
-    t: R,
-    zero: bool,
-) {
-    if zero {
-        // A zero twiddle reduces both transform directions to (u, u + v).
-        for (u, v) in lo.iter_mut().zip(hi) {
-            *v += *u;
-        }
-    } else if INVERSE {
-        // Recover v first, then remove its twiddle contribution from u.
-        for (u, v) in lo.iter_mut().zip(hi) {
-            *v += *u;
-            *u += t * *v;
-        }
-    } else {
-        // Evaluate the pair as (u + t*v, u + t*v + v).
-        for (u, v) in lo.iter_mut().zip(hi) {
-            *u += t * *v;
-            *v += *u;
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use alloc::{format, vec};
@@ -600,8 +561,8 @@ mod tests {
     use proptest::prelude::*;
 
     use super::{
-        DEEP_TILE_BYTES, LchNtt, MIN_FUSED_STAGES, STAGED_WORKERS, Schedule, StagedRows, Twiddles,
-        run, stage_pass,
+        ButterflyField, DEEP_TILE_BYTES, LchNtt, MIN_FUSED_STAGES, STAGED_WORKERS, Schedule,
+        StagedRows, Twiddles, run, stage_pass,
     };
     use crate::domain::{domain_point, subspace_polynomial};
     use crate::naive::NaiveAdditiveNtt;
@@ -648,12 +609,12 @@ mod tests {
     const SHIFTS: [u64; 2] = [0, 0x5555_1234_9abc_def0];
 
     /// Builds an element of any level from a 64-bit pattern, repeating it for wider levels.
-    fn sample<F: TowerLevel>(bits: u64) -> F {
+    fn sample<F: ButterflyField>(bits: u64) -> F {
         F::from_le_byte_iter(bits.to_le_bytes().into_iter().cycle())
     }
 
     /// Builds a matrix whose entries are distinct functions of the seed and the position.
-    fn matrix<F: TowerLevel>(log_n: usize, width: usize, seed: u64) -> RowMajorMatrix<F> {
+    fn matrix<F: ButterflyField>(log_n: usize, width: usize, seed: u64) -> RowMajorMatrix<F> {
         RowMajorMatrix::new(
             (0..(width << log_n))
                 .map(|i| {
@@ -669,7 +630,10 @@ mod tests {
 
     /// The forward transform with every twiddle walked out from its own block index, in one
     /// serial pass and with no zero shortcut.
-    fn twiddle_walk_ntt<F: TowerLevel>(mut mat: RowMajorMatrix<F>, shift: F) -> RowMajorMatrix<F> {
+    fn twiddle_walk_ntt<F: ButterflyField>(
+        mut mat: RowMajorMatrix<F>,
+        shift: F,
+    ) -> RowMajorMatrix<F> {
         let width = mat.width();
         let log_n = log2_strict_usize(mat.height());
         for j in (0..log_n).rev() {
@@ -689,7 +653,10 @@ mod tests {
 
     /// The inverse transform walked the same way, every twiddle from its own block index.
     /// One serial pass, with the stage order reversed and the butterfly undone.
-    fn twiddle_walk_intt<F: TowerLevel>(mut mat: RowMajorMatrix<F>, shift: F) -> RowMajorMatrix<F> {
+    fn twiddle_walk_intt<F: ButterflyField>(
+        mut mat: RowMajorMatrix<F>,
+        shift: F,
+    ) -> RowMajorMatrix<F> {
         let width = mat.width();
         let log_n = log2_strict_usize(mat.height());
         for j in 0..log_n {
@@ -708,7 +675,7 @@ mod tests {
     }
 
     /// One stage at a time over the whole matrix, which is the schedule blocking has to match.
-    fn stage_by_stage<F: TowerLevel, const INVERSE: bool>(
+    fn stage_by_stage<F: ButterflyField, const INVERSE: bool>(
         mat: &mut RowMajorMatrix<F>,
         twiddles: &Twiddles<F>,
     ) {
@@ -721,7 +688,7 @@ mod tests {
     }
 
     /// The blocked schedule and the plain one agree element for element, in both directions.
-    fn check_schedules_agree<F: TowerLevel>(log_n: usize, width: usize, schedule: &Schedule) {
+    fn check_schedules_agree<F: ButterflyField>(log_n: usize, width: usize, schedule: &Schedule) {
         let coeffs = matrix::<F>(log_n, width, 3);
         for shift_bits in SHIFTS {
             let shift = sample::<F>(shift_bits);
@@ -747,7 +714,7 @@ mod tests {
     }
 
     /// `LchNtt` agrees with the oracle on a random matrix and a random coset.
-    fn check_matches_naive<F: TowerLevel>(log_n: usize, width: usize, seed: u64, shift: u64) {
+    fn check_matches_naive<F: ButterflyField>(log_n: usize, width: usize, seed: u64, shift: u64) {
         let coeffs = matrix::<F>(log_n, width, seed);
         let shift = sample::<F>(shift);
 
@@ -762,7 +729,7 @@ mod tests {
     /// Every schedule below carries a twiddle forward across blocks instead of computing it.
     /// An error in the increment table is therefore a drift that starts at one block index.
     /// So the starts below seed the walk at several block indices per stage, not at zero alone.
-    fn check_the_twiddle_walk<F: TowerLevel>(log_n: usize, shift_bits: u64) {
+    fn check_the_twiddle_walk<F: ButterflyField>(log_n: usize, shift_bits: u64) {
         let shift = sample::<F>(shift_bits);
         let twiddles = Twiddles::new(log_n, shift);
 
@@ -798,7 +765,7 @@ mod tests {
     }
 
     /// The transform agrees with the serial walk, element for element, in both directions.
-    fn check_walk_agrees<F: TowerLevel>(log_n: usize, width: usize, shift_bits: u64) {
+    fn check_walk_agrees<F: ButterflyField>(log_n: usize, width: usize, shift_bits: u64) {
         let coeffs = matrix::<F>(log_n, width, 41);
         let shift = sample::<F>(shift_bits);
         let ntt = LchNtt::<F>::default();
@@ -821,7 +788,7 @@ mod tests {
     /// [`transform`] picks its own schedule from the shape and the thread count, so what it
     /// covers moves with the machine. This drives `run` directly instead: the walk then pins the
     /// blocked path whatever the ambient thread count is.
-    fn check_the_blocked_walk_agrees<F: TowerLevel>(
+    fn check_the_blocked_walk_agrees<F: ButterflyField>(
         log_n: usize,
         width: usize,
         shift_bits: u64,
@@ -849,7 +816,7 @@ mod tests {
     }
 
     /// `LchNtt` agrees with the oracle in both directions, on the subspace and on a coset.
-    fn check_oracle_agrees<F: TowerLevel>(log_n: usize, width: usize, shift_bits: u64) {
+    fn check_oracle_agrees<F: ButterflyField>(log_n: usize, width: usize, shift_bits: u64) {
         let coeffs = matrix::<F>(log_n, width, 53);
         let shift = sample::<F>(shift_bits);
         let fast = LchNtt::<F>::default();
@@ -1231,7 +1198,7 @@ mod tests {
     /// The walk shares no code with the transform below the field arithmetic.
     /// It recomputes `W_j(shift)` from the recurrence and every block twiddle from its index.
     /// So it pins the blocked schedule's twiddles and not merely its memory order.
-    fn sweep_against_the_walk<F: TowerLevel>(heights: core::ops::RangeInclusive<usize>) {
+    fn sweep_against_the_walk<F: ButterflyField>(heights: core::ops::RangeInclusive<usize>) {
         for width in WIDTHS {
             for log_n in heights.clone() {
                 for shift_bits in SHIFTS {
@@ -1278,7 +1245,7 @@ mod tests {
     ///
     /// The boundary moves with the element size and the width, so it is read back out of the
     /// schedule rather than written down.
-    fn sweep_across_the_tile_boundaries<F: TowerLevel>() {
+    fn sweep_across_the_tile_boundaries<F: ButterflyField>() {
         for width in BOUNDARY_WIDTHS {
             // Neither the height nor the worker count binds at a height no level can reach, so
             // this reads the raw budget.
@@ -1322,7 +1289,7 @@ mod tests {
     /// A row shorter than a cache line turns one staged row into a run of matrix rows. The
     /// boundary sweep above already compares these shapes element for element, so this pins
     /// only that they really take the run branch.
-    fn check_a_staged_run_of_rows<F: TowerLevel>(log_n: usize) {
+    fn check_a_staged_run_of_rows<F: ButterflyField>(log_n: usize) {
         // The heights above come from the deepest tile the budget allows, which is the one a
         // lone worker takes.
         let alone = Schedule::for_workers::<F>(1, log_n, 1);
