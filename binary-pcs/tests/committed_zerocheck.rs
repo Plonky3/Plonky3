@@ -14,6 +14,8 @@
 //! The constraint holds on field cells that are not bits, as its tests say.
 //!
 //! The packed commitment makes it a bit statement, and is not here yet.
+//! One arity-one zerocheck per operand on `v*v - v` would do it here.
+//!
 //! The prover and verifier run on two independently built challengers.
 //! One cloned after proving already carries every observation the prover made.
 //!

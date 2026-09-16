@@ -10,11 +10,16 @@ use super::basis::Coefficients;
 
 /// A bit witness read as the packed multilinear over a tower level.
 ///
-/// # Overview
+/// # What the type does and does not carry
 ///
-/// Soundness rests on the committed polynomial being a packing of bits.
-/// An arbitrary multilinear will not do.
-/// Carrying that as a type stops the wrong one reaching the reduction.
+/// At a byte-aligned level, reading bytes and reading them back are inverse.
+/// So every packed multilinear unpacks to exactly one bit witness.
+///
+/// No multilinear is excluded, and booleanity comes from the packing itself.
+/// This type carries no part of that argument.
+///
+/// What it does carry is the width and the level.
+/// The reduction it feeds cannot be handed a polynomial of another shape.
 ///
 /// # The packing
 ///
@@ -43,10 +48,25 @@ impl<EF: TowerLevel> BitPacking<EF> {
     ///
     /// # Errors
     ///
+    /// - The level's elements are narrower than the byte its stride reads.
     /// - The cell count is no power of two, so the witness covers no hypercube.
     /// - The witness is too short to fill one element, so nothing to pack.
     pub fn new(bits: &[u8]) -> Result<Self, BitPackingError> {
         let stride = EF::NUM_BYTES;
+
+        // Below a byte the stride still reads a whole one.
+        // The level keeps only its own low bits.
+        //
+        //     Gf2           1 bit  of 8 kept, 7 dropped
+        //     BinaryField4  4 bits of 8 kept, 4 dropped
+        //
+        // The dropped cells leave a polynomial that is not the witness.
+        // So the level is refused rather than packed.
+        if 8 * stride != Coefficients::<EF>::DIMENSION {
+            return Err(BitPackingError::SubByteLevel {
+                bits: Coefficients::<EF>::DIMENSION,
+            });
+        }
         if !(bits.len() * 8).is_power_of_two() {
             return Err(BitPackingError::NotAHypercube {
                 cells: bits.len() * 8,
@@ -104,6 +124,14 @@ impl<EF: TowerLevel> BitPacking<EF> {
 /// Reasons a bit witness cannot be packed.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum BitPackingError {
+    /// The level's elements are narrower than one byte.
+    ///
+    /// Its stride still reads a whole byte, so cells would be dropped.
+    #[error("a {bits}-bit level cannot pack a byte's worth of cells")]
+    SubByteLevel {
+        /// Bits one element of the level holds.
+        bits: usize,
+    },
     /// The witness does not cover a power-of-two number of cells.
     #[error("a bit witness covers {cells} cells, which is no hypercube")]
     NotAHypercube {
@@ -122,7 +150,7 @@ pub enum BitPackingError {
 
 #[cfg(test)]
 mod tests {
-    use p3_binary_field::{BinaryField16, BinaryField128};
+    use p3_binary_field::{BinaryField4, BinaryField16, BinaryField128, Gf2};
     use p3_field::PrimeCharacteristicRing;
     use p3_multilinear_util::point::Point;
     use rand::rngs::SmallRng;
@@ -229,6 +257,28 @@ mod tests {
         }
 
         assert_eq!(packing.poly().eval_base(&point), expected);
+    }
+
+    #[test]
+    fn a_level_narrower_than_a_byte_is_refused() {
+        // The stride reads a whole byte whatever the level holds.
+        //
+        //     BinaryField4  keeps 4 of the 8 cells, drops the rest
+        //     Gf2           keeps 1 of the 8
+        //
+        // Packing anyway would make two different witnesses equal.
+        // It hands back a polynomial that is neither of them.
+        assert_eq!(
+            BitPacking::<BinaryField4>::new(&[0x0F, 0x0F]).unwrap_err(),
+            BitPackingError::SubByteLevel { bits: 4 }
+        );
+        assert_eq!(
+            BitPacking::<Gf2>::new(&[0xFE]).unwrap_err(),
+            BitPackingError::SubByteLevel { bits: 1 }
+        );
+
+        // A byte-aligned level is unaffected.
+        assert!(BitPacking::<EF>::new(&[0u8; 2]).is_ok());
     }
 
     #[test]

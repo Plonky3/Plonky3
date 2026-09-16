@@ -31,14 +31,16 @@
 //!     Coefficients    the F_2-coordinates of one element
 //!     BitPacking      a bit witness read as the multilinear a commitment holds
 //!     BitTensor       an element of EF (x) EF, as a bit matrix
-//!     BitRingSwitch   one reduction, and the five values it produces
+//!     BitRingSwitch   one reduction, before the batching draw
+//!     BitRingSwitchBatch  the same reduction, after it
 //! ```
 //!
-//! Soundness rests on the witness being bit-valued.
-//! The packing carries that as a type rather than as a convention.
+//! Booleanity comes from the packing itself, not from the wrapper.
+//! At a byte-aligned level a packed multilinear unpacks to one bit witness.
 //!
-//! Every value depends on the same two points, so the reduction holds them.
-//! The equality tables are built once, and their widths checked once.
+//! The reduction is split where the protocol splits.
+//! The batching challenge is drawn after the tensor element is bound.
+//! A type taking it up front would invite the unsound order.
 //!
 //! # The basis
 //!
@@ -56,5 +58,5 @@ pub mod tensor;
 
 pub use basis::Coefficients;
 pub use packing::{BitPacking, BitPackingError};
-pub use reduction::{BitRingSwitch, BitRingSwitchError};
+pub use reduction::{BitRingSwitch, BitRingSwitchBatch, BitRingSwitchError};
 pub use tensor::{BitTensor, MalformedBitTensor};

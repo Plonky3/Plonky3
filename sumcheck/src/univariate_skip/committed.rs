@@ -34,15 +34,26 @@ use super::lde::CHUNK_BITS;
 /// A prover forming the message itself, over field values, is not bound.
 /// So this is a scaffold for the mechanics, not a proof about bits.
 ///
+/// # How a caller gets a bit statement on this path
+///
+/// One arity-one zerocheck per operand on `v*v - v`.
+/// It is committed, opened and discharged the same way as the rest.
+///
+/// It needs no batching challenge, so it keeps the subfield message intact.
+/// The cost is one zerocheck and one opening point per operand.
+///
 /// # What the packed commitment fixes
 ///
-/// Both halves of that, so it is not only a size win.
+/// Both halves at once, so it is not only a size win.
 /// A cell there is an `F_2`-coordinate, hence a bit by construction.
 /// It also costs 128 times less, which is the point of a binary field.
 ///
-/// Relating the two claims is ring switching, already in this crate.
-/// It cannot be instantiated at a bit alphabet, because its accessor borrows.
-/// A borrowed slice cannot hold 128 coefficients of one bit each.
+/// Relating the two claims is ring switching.
+/// The generic reduction cannot be instantiated at `F_2`.
+/// Its accessor borrows a slice that 128 one-bit coefficients cannot fill.
+///
+/// `ring_switch::bits` supplies that algebra.
+/// The driver that commits the packing is still to come.
 ///
 /// # Panics
 ///

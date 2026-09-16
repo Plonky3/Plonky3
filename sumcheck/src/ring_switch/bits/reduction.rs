@@ -24,7 +24,7 @@ const CHUNK: usize = 1 << 12;
 #[cfg(test)]
 const CHUNK: usize = 1 << 1;
 
-/// One ring-switching reduction at a bit alphabet.
+/// One ring-switching reduction at a bit alphabet, before the batching draw.
 ///
 /// # Overview
 ///
@@ -36,24 +36,30 @@ const CHUNK: usize = 1 << 1;
 ///     t'(r') = s'     a claim about the packing, which a commitment answers
 /// ```
 ///
-/// Every value that takes part is a function of the same two points.
-/// One is the evaluation point of the incoming claim.
-/// The other is the batching challenge collapsing the element's rows.
+/// # The order the protocol fixes
 ///
-/// This type holds them, so each value's equality tables are built once.
-/// The widths they must agree on are then checked once, not per operation.
-///
-/// # What it produces
-///
-/// Five values, each named for its part in the protocol:
+/// The batching challenge is drawn after the tensor element is bound.
+/// So it cannot be a constructor argument.
 ///
 /// ```text
-///     tensor           the element the prover sends
-///     incoming_claim   what the claim being reduced must equal
-///     weights          the multilinear the sumcheck runs on
-///     initial_sum      the sum the sumcheck starts from, never sent
-///     closing_weight   the weight the surviving claim is scaled by
+///     new(r)          tensor, incoming_claim
+///     bind r, bind s_hat, draw r''
+///     batch(r'')      initial_sum, closing_weight, weights
 /// ```
+///
+/// Drawing `r''` first is unsound.
+/// A bit matrix solving two `F_2`-linear systems moves the claim, sum held.
+/// The rounds and the closing check then accept a true surviving claim.
+///
+/// The split is what stops a driver reaching for that order.
+///
+/// # What it costs a verifier
+///
+/// Nothing witness-sized.
+/// This stage holds the kept coordinates and one `d`-entry table.
+///
+/// Only `tensor` and `weights` touch the `2^l'` equality table.
+/// Both are prover-side, so each builds it rather than every caller paying.
 ///
 /// # Why a bit alphabet is different
 ///
@@ -64,40 +70,31 @@ const CHUNK: usize = 1 << 1;
 pub struct BitRingSwitch<EF> {
     /// The coordinates of the evaluation point the packing keeps.
     high: Point<EF>,
-    /// The equality table of those coordinates, over the packed variables.
-    eq_high: Poly<EF>,
     /// The equality table of the coordinates one packed element absorbs.
     eq_low: Poly<EF>,
-    /// The equality table of the batching challenge.
-    eq_batch: Poly<EF>,
 }
 
 impl<EF: TowerLevel> BitRingSwitch<EF> {
     /// Number of coordinates one packed element absorbs.
     pub const ABSORBED: usize = Coefficients::<EF>::LOG_DIMENSION;
 
-    /// Set up the reduction of a claim at one point, under one challenge.
+    /// Set up the reduction of a claim at one point.
+    ///
+    /// The batching challenge is not an argument.
+    /// It belongs after the element is bound, which the second stage is for.
     ///
     /// # Arguments
     ///
-    /// - The evaluation point of the claim, over every variable of the witness.
-    /// - The batching challenge that collapses the tensor element's rows.
+    /// The evaluation point of the claim, over every variable of the witness.
     ///
     /// # Errors
     ///
-    /// - The point names fewer variables than one packed element absorbs.
-    /// - The batching challenge does not name exactly the absorbed coordinates.
-    pub fn new(r: &Point<EF>, r_batch: &Point<EF>) -> Result<Self, BitRingSwitchError> {
+    /// Returns an error when the point is narrower than one element absorbs.
+    pub fn new(r: &Point<EF>) -> Result<Self, BitRingSwitchError> {
         if r.num_variables() < Self::ABSORBED {
             return Err(BitRingSwitchError::PointTooNarrow {
                 needed: Self::ABSORBED,
                 actual: r.num_variables(),
-            });
-        }
-        if r_batch.num_variables() != Self::ABSORBED {
-            return Err(BitRingSwitchError::BatchWidthMismatch {
-                expected: Self::ABSORBED,
-                actual: r_batch.num_variables(),
             });
         }
 
@@ -105,9 +102,7 @@ impl<EF: TowerLevel> BitRingSwitch<EF> {
         let (high, low) = r.split_at(r.num_variables() - Self::ABSORBED);
 
         Ok(Self {
-            eq_high: Poly::new_from_point(high.as_slice(), EF::ONE),
             eq_low: Poly::new_from_point(low.as_slice(), EF::ONE),
-            eq_batch: Poly::new_from_point(r_batch.as_slice(), EF::ONE),
             high,
         })
     }
@@ -117,6 +112,34 @@ impl<EF: TowerLevel> BitRingSwitch<EF> {
     /// This is also the number of sumcheck rounds the reduction takes.
     pub const fn num_variables(&self) -> usize {
         self.high.num_variables()
+    }
+
+    /// Move on to the stage the batching challenge opens.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error unless the challenge names the absorbed coordinates.
+    pub fn batch<'a>(
+        &'a self,
+        r_batch: &Point<EF>,
+    ) -> Result<BitRingSwitchBatch<'a, EF>, BitRingSwitchError> {
+        if r_batch.num_variables() != Self::ABSORBED {
+            return Err(BitRingSwitchError::BatchWidthMismatch {
+                expected: Self::ABSORBED,
+                actual: r_batch.num_variables(),
+            });
+        }
+        Ok(BitRingSwitchBatch {
+            reduction: self,
+            eq_batch: Poly::new_from_point(r_batch.as_slice(), EF::ONE),
+        })
+    }
+
+    /// The equality table over the kept coordinates.
+    ///
+    /// `2^l'` entries, so only the prover's two operations build it.
+    fn eq_high(&self) -> Poly<EF> {
+        Poly::new_from_point(self.high.as_slice(), EF::ONE)
     }
 
     /// `sum_w eq(r_high, w) ⊗ t'(w)`, the element the prover sends.
@@ -135,6 +158,10 @@ impl<EF: TowerLevel> BitRingSwitch<EF> {
     /// Accumulated in place, one partial element per task.
     /// Forming each term separately would allocate `d` elements per point.
     ///
+    /// The `2^l'` equality table is built here rather than held.
+    /// That is strictly below the accumulation it feeds.
+    /// It also keeps a verifier from paying for a table it never reads.
+    ///
     /// # Errors
     ///
     /// Returns an error unless the packing has the reduction's variables.
@@ -145,7 +172,7 @@ impl<EF: TowerLevel> BitRingSwitch<EF> {
         self.check_width(packing.num_variables())?;
 
         Ok(self
-            .eq_high
+            .eq_high()
             .as_slice()
             .par_chunks(CHUNK)
             .zip(packing.poly().as_slice().par_chunks(CHUNK))
@@ -187,69 +214,16 @@ impl<EF: TowerLevel> BitRingSwitch<EF> {
             .sum()
     }
 
-    /// The weight multilinear the sumcheck runs against the packing.
-    ///
-    /// # Algorithm
-    ///
-    /// The equality table decomposes over `F_2`, and the challenge weighs it:
-    ///
-    /// ```text
-    ///     A(w) = sum_u eq(u, r_batch) * coordinate u of eq(r_high, w)
-    /// ```
-    ///
-    /// The coordinates are bits, so each entry is a subset sum.
-    pub fn weights(&self) -> Poly<EF>
-    where
-        EF: Send + Sync,
-    {
-        Poly::new(
-            self.eq_high
-                .as_slice()
-                .par_iter()
-                .map(|&value| {
-                    Coefficients::of(value)
-                        .iter_set()
-                        .map(|u| self.eq_batch.as_slice()[u])
-                        .sum()
-                })
-                .collect::<Vec<_>>(),
-        )
-    }
-
-    /// The sum the reduction's sumcheck starts from.
-    ///
-    /// Derived from the element's rows rather than taken from the prover.
-    /// That ties the sumcheck to the coefficients the claim was checked on.
-    #[must_use]
-    pub fn initial_sum(&self, tensor: &BitTensor<EF>) -> EF {
-        self.batch_rows(tensor)
-    }
-
-    /// The weight the surviving claim is scaled by, where the rounds ended.
-    ///
-    /// # Overview
-    ///
-    /// This is the weight multilinear read at that point.
-    /// Taken through the equality element, not by a pass over the weights.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error unless the point names the reduction's variables.
-    pub fn closing_weight(&self, r_prime: &Point<EF>) -> Result<EF, BitRingSwitchError> {
-        self.check_width(r_prime.num_variables())?;
-        Ok(self.batch_rows(&self.equality_element(r_prime)))
-    }
-
-    /// The rows of an element, batched against the batching challenge.
-    ///
-    /// Both ends of the sumcheck are this operation on a different element.
-    fn batch_rows(&self, tensor: &BitTensor<EF>) -> EF {
-        tensor
-            .rows()
-            .iter()
-            .zip(self.eq_batch.as_slice())
-            .map(|(&row, &weight)| row * weight)
-            .sum()
+    /// Check that something names the variables this reduction runs over.
+    const fn check_width(&self, actual: usize) -> Result<(), BitRingSwitchError> {
+        if actual == self.num_variables() {
+            Ok(())
+        } else {
+            Err(BitRingSwitchError::WidthMismatch {
+                expected: self.num_variables(),
+                actual,
+            })
+        }
     }
 
     /// The equality element at the kept coordinates and one other point.
@@ -287,17 +261,90 @@ impl<EF: TowerLevel> BitRingSwitch<EF> {
         }
         element
     }
+}
 
-    /// Check that something names the variables this reduction runs over.
-    const fn check_width(&self, actual: usize) -> Result<(), BitRingSwitchError> {
-        if actual == self.num_variables() {
-            Ok(())
-        } else {
-            Err(BitRingSwitchError::WidthMismatch {
-                expected: self.num_variables(),
-                actual,
-            })
-        }
+/// The same reduction, once the batching challenge has been drawn.
+///
+/// Reaching this stage is the proof that the element was bound first.
+/// That is the order the construction's soundness rests on.
+#[derive(Clone, Debug)]
+pub struct BitRingSwitchBatch<'a, EF> {
+    /// The stage the evaluation point alone fixes.
+    reduction: &'a BitRingSwitch<EF>,
+    /// The equality table of the batching challenge.
+    eq_batch: Poly<EF>,
+}
+
+impl<EF: TowerLevel> BitRingSwitchBatch<'_, EF> {
+    /// The weight multilinear the sumcheck runs against the packing.
+    ///
+    /// # Algorithm
+    ///
+    /// The equality table decomposes over `F_2`.
+    /// The challenge weighs those coordinates:
+    ///
+    /// ```text
+    ///     A(w) = sum_u eq(u, r_batch) * coordinate u of eq(r_high, w)
+    /// ```
+    ///
+    /// The coordinates are bits, so each entry is a subset sum.
+    ///
+    /// # Performance
+    ///
+    /// Prover-side, and the only other place the `2^l'` table is built.
+    pub fn weights(&self) -> Poly<EF>
+    where
+        EF: Send + Sync,
+    {
+        Poly::new(
+            self.reduction
+                .eq_high()
+                .as_slice()
+                .par_iter()
+                .map(|&value| {
+                    Coefficients::of(value)
+                        .iter_set()
+                        .map(|u| self.eq_batch.as_slice()[u])
+                        .sum()
+                })
+                .collect::<Vec<_>>(),
+        )
+    }
+
+    /// The sum the reduction's sumcheck starts from.
+    ///
+    /// Derived from the element's rows rather than taken from the prover.
+    /// That ties the sumcheck to the coefficients the claim was checked on.
+    #[must_use]
+    pub fn initial_sum(&self, tensor: &BitTensor<EF>) -> EF {
+        self.batch_rows(tensor)
+    }
+
+    /// The weight the surviving claim is scaled by, where the rounds ended.
+    ///
+    /// # Overview
+    ///
+    /// This is the weight multilinear read at that point.
+    /// Taken through the equality element, not by a pass over the weights.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error unless the point names the reduction's variables.
+    pub fn closing_weight(&self, r_prime: &Point<EF>) -> Result<EF, BitRingSwitchError> {
+        self.reduction.check_width(r_prime.num_variables())?;
+        Ok(self.batch_rows(&self.reduction.equality_element(r_prime)))
+    }
+
+    /// The rows of an element, batched against the batching challenge.
+    ///
+    /// Both ends of the sumcheck are this operation on a different element.
+    fn batch_rows(&self, tensor: &BitTensor<EF>) -> EF {
+        tensor
+            .rows()
+            .iter()
+            .zip(self.eq_batch.as_slice())
+            .map(|(&row, &weight)| row * weight)
+            .sum()
     }
 }
 
@@ -314,7 +361,7 @@ pub enum BitRingSwitchError {
     },
     /// The batching challenge does not name the absorbed coordinates exactly.
     ///
-    /// A shorter one would silently drop rows from the sumcheck's identity.
+    /// A shorter one would zip-truncate, dropping identity rows.
     /// Both sides move the same way, so no later check would catch it.
     #[error("the batching challenge names {actual} variables, expected {expected}")]
     BatchWidthMismatch {
@@ -352,7 +399,13 @@ mod tests {
     }
 
     /// One reduction over a witness of the given byte length.
-    fn fixture(seed: u64, bytes: usize) -> (BitRingSwitch<EF>, BitPacking<EF>, Point<EF>) {
+    ///
+    /// The batching challenge comes back beside it rather than folded in.
+    /// A test then reaches the second stage the way a driver does.
+    fn fixture(
+        seed: u64,
+        bytes: usize,
+    ) -> (BitRingSwitch<EF>, BitPacking<EF>, Point<EF>, Point<EF>) {
         let packing = BitPacking::<EF>::new(&bits(seed, bytes)).unwrap();
         let mut rng = SmallRng::seed_from_u64(seed ^ 0xFFFF);
 
@@ -362,9 +415,9 @@ mod tests {
             packing.num_variables() + BitRingSwitch::<EF>::ABSORBED,
         );
         let r_batch = Point::<EF>::rand(&mut rng, BitRingSwitch::<EF>::ABSORBED);
-        let reduction = BitRingSwitch::new(&r, &r_batch).unwrap();
+        let reduction = BitRingSwitch::new(&r).unwrap();
 
-        (reduction, packing, r)
+        (reduction, packing, r, r_batch)
     }
 
     /// The witness as a multilinear over every variable, one element per bit.
@@ -385,7 +438,7 @@ mod tests {
     #[test]
     fn the_reduction_runs_over_the_variables_the_packing_keeps() {
         // Fixture state: 128 cells is 7 variables, of which 16 bits absorb 4.
-        let (reduction, packing, _) = fixture(0x5AE, 16);
+        let (reduction, packing, _, _) = fixture(0x5AE, 16);
 
         assert_eq!(BitRingSwitch::<EF>::ABSORBED, 4);
         assert_eq!(reduction.num_variables(), 3);
@@ -403,8 +456,7 @@ mod tests {
         let packing = BitPacking::<EF>::new(&witness).unwrap();
         let mut rng = SmallRng::seed_from_u64(0xF001);
         let r = Point::<EF>::rand(&mut rng, 7);
-        let r_batch = Point::<EF>::rand(&mut rng, 4);
-        let reduction = BitRingSwitch::new(&r, &r_batch).unwrap();
+        let reduction = BitRingSwitch::new(&r).unwrap();
 
         let tensor = reduction.tensor(&packing).unwrap();
 
@@ -418,8 +470,8 @@ mod tests {
     fn the_columns_are_the_bit_planes_at_the_kept_coordinates() {
         // Invariant: column `v` is cells `d*w + v` read at `r_high`.
         // Checked column by column, so a failure localises.
-        let (reduction, packing, _) = fixture(0xB1A, 16);
-        let eq = &reduction.eq_high;
+        let (reduction, packing, _, _) = fixture(0xB1A, 16);
+        let eq = reduction.eq_high();
 
         for (v, &column) in reduction
             .tensor(&packing)
@@ -441,8 +493,8 @@ mod tests {
         // Invariant: row `u` is the packing weighted by coordinate `u` of eq.
         //
         //     row u  =  sum_w A_{w,u} * t'(w)
-        let (reduction, packing, _) = fixture(0x0A5, 16);
-        let eq = &reduction.eq_high;
+        let (reduction, packing, _, _) = fixture(0x0A5, 16);
+        let eq = reduction.eq_high();
 
         for (u, &row) in reduction
             .tensor(&packing)
@@ -462,13 +514,14 @@ mod tests {
     #[test]
     fn a_weight_is_the_subset_sum_the_coordinates_select() {
         // Invariant: the weight at `w` adds the table where bits are set.
-        let (reduction, _, _) = fixture(0x5E7, 16);
-        let weights = reduction.weights();
+        let (reduction, _, _, r_batch) = fixture(0x5E7, 16);
+        let batch = reduction.batch(&r_batch).unwrap();
+        let weights = batch.weights();
 
-        for (w, &value) in reduction.eq_high.as_slice().iter().enumerate() {
+        for (w, &value) in reduction.eq_high().as_slice().iter().enumerate() {
             let expected: EF = Coefficients::of(value)
                 .iter()
-                .zip(reduction.eq_batch.as_slice())
+                .zip(batch.eq_batch.as_slice())
                 .filter(|&(bit, _)| bit)
                 .map(|(_, &weight)| weight)
                 .sum();
@@ -484,10 +537,11 @@ mod tests {
         //     sum_w A(w) * t'(w)  ==  sum_u eq(u, r_batch) * row u
         //
         // Both sides are derived, never sent, which a dishonest element hits.
-        let (reduction, packing, _) = fixture(0xBA7, 32);
+        let (reduction, packing, _, r_batch) = fixture(0xBA7, 32);
+        let batch = reduction.batch(&r_batch).unwrap();
         let tensor = reduction.tensor(&packing).unwrap();
 
-        let dot: EF = reduction
+        let dot: EF = batch
             .weights()
             .as_slice()
             .iter()
@@ -495,7 +549,7 @@ mod tests {
             .map(|(&weight, &value)| weight * value)
             .sum();
 
-        assert_eq!(dot, reduction.initial_sum(&tensor));
+        assert_eq!(dot, batch.initial_sum(&tensor));
     }
 
     #[test]
@@ -503,12 +557,13 @@ mod tests {
         // Invariant: the element closes the sumcheck with no weights pass.
         //
         //     closing_weight(r')  ==  A(r')
-        let (reduction, _, _) = fixture(0xA7, 16);
+        let (reduction, _, _, r_batch) = fixture(0xA7, 16);
+        let batch = reduction.batch(&r_batch).unwrap();
         let r_prime = Point::<EF>::rand(&mut SmallRng::seed_from_u64(0xA8), 3);
 
         assert_eq!(
-            reduction.closing_weight(&r_prime).unwrap(),
-            reduction.weights().eval_base(&r_prime)
+            batch.closing_weight(&r_prime).unwrap(),
+            batch.weights().eval_base(&r_prime)
         );
     }
 
@@ -521,13 +576,13 @@ mod tests {
         let mut rng = SmallRng::seed_from_u64(0xE9);
         for num_variables in 0..5 {
             let r = Point::<EF>::rand(&mut rng, num_variables + BitRingSwitch::<EF>::ABSORBED);
-            let r_batch = Point::<EF>::rand(&mut rng, BitRingSwitch::<EF>::ABSORBED);
-            let reduction = BitRingSwitch::new(&r, &r_batch).unwrap();
+            let reduction = BitRingSwitch::new(&r).unwrap();
             let r_prime = Point::<EF>::rand(&mut rng, num_variables);
 
             let eq_prime = Poly::<EF>::new_from_point(r_prime.as_slice(), EF::ONE);
             let mut expected = BitTensor::zero();
-            for (&a, &b) in reduction.eq_high.as_slice().iter().zip(eq_prime.as_slice()) {
+            let eq_high = reduction.eq_high();
+            for (&a, &b) in eq_high.as_slice().iter().zip(eq_prime.as_slice()) {
                 expected.add_exterior_product(a, b);
             }
 
@@ -544,10 +599,9 @@ mod tests {
         // Fewer coordinates than one element absorbs leaves nothing to keep.
         let mut rng = SmallRng::seed_from_u64(0xBAD);
         let r = Point::<EF>::rand(&mut rng, 3);
-        let r_batch = Point::<EF>::rand(&mut rng, 4);
 
         assert_eq!(
-            BitRingSwitch::new(&r, &r_batch).unwrap_err(),
+            BitRingSwitch::new(&r).unwrap_err(),
             BitRingSwitchError::PointTooNarrow {
                 needed: 4,
                 actual: 3
@@ -561,11 +615,12 @@ mod tests {
         // Both sides move the same way, so no later check would catch it.
         let mut rng = SmallRng::seed_from_u64(0xBAD2);
         let r = Point::<EF>::rand(&mut rng, 7);
+        let reduction = BitRingSwitch::new(&r).unwrap();
 
         for width in [3usize, 5] {
             let r_batch = Point::<EF>::rand(&mut rng, width);
             assert_eq!(
-                BitRingSwitch::new(&r, &r_batch).unwrap_err(),
+                reduction.batch(&r_batch).unwrap_err(),
                 BitRingSwitchError::BatchWidthMismatch {
                     expected: 4,
                     actual: width,
@@ -577,7 +632,8 @@ mod tests {
     #[test]
     fn a_packing_of_the_wrong_width_is_refused() {
         // A mismatched packing would zip-truncate the accumulation.
-        let (reduction, _, _) = fixture(0xBAD3, 16);
+        let (reduction, _, _, r_batch) = fixture(0xBAD3, 16);
+        let batch = reduction.batch(&r_batch).unwrap();
         let wider = BitPacking::<EF>::new(&bits(0xBAD4, 32)).unwrap();
 
         assert_eq!(
@@ -588,7 +644,7 @@ mod tests {
             }
         );
         assert_eq!(
-            reduction
+            batch
                 .closing_weight(&Point::<EF>::new(alloc::vec![EF::ONE; 4]))
                 .unwrap_err(),
             BitRingSwitchError::WidthMismatch {
@@ -603,11 +659,11 @@ mod tests {
         fn the_chunked_accumulation_matches_the_term_by_term_sum(seed: u64, log_n in 1usize..6) {
             // The parallel path accumulates in chunks, combining partials.
             // The reference forms every term as its own element and adds them.
-            let (reduction, packing, _) = fixture(seed, (1 << log_n) * 2);
+            let (reduction, packing, _, _) = fixture(seed, (1 << log_n) * 2);
 
             let mut expected = BitTensor::zero();
             for (&weight, &value) in reduction
-                .eq_high
+                .eq_high()
                 .as_slice()
                 .iter()
                 .zip(packing.poly().as_slice())
