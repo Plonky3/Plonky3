@@ -1,0 +1,27 @@
+# Patch:     020-raise-maxrecdepth
+# Phase:     post-extraction
+# Target:    extraction/p3_baby_bear.lean
+# Hunks:     1
+# Cost:      none
+# Drop when: hax emits a flatter encoding for wide permutation layers, or Lean's
+#            default recursion depth rises above what this file needs.
+#
+# The width-32 Poseidon2 internal layer is emitted as one long chain of nested
+# `let`s. Elaborating it exceeds Lean's default `maxRecDepth` (512) and fails
+# with a recursion-depth error rather than a type error.
+#
+# 8000 is empirical: it is comfortably above what the current file needs. The
+# option affects only the elaborator's stack budget -- it admits no new terms and
+# changes no logical content, so a run that succeeds with it would have succeeded
+# with an unbounded stack.
+#
+--- a/extraction/p3_baby_bear.lean
++++ b/extraction/p3_baby_bear.lean
+@@ -11,6 +11,7 @@
+ 
+ set_option mvcgen.warning false
+ set_option linter.unusedVariables false
++set_option maxRecDepth 8000 -- PATCHED: width-32 internal layer let-chain
+ 
+ 
+ namespace p3_baby_bear.baby_bear

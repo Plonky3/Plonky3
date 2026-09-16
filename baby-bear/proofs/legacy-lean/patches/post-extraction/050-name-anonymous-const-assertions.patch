@@ -1,0 +1,42 @@
+# Patch:     050-name-anonymous-const-assertions
+# Phase:     post-extraction
+# Target:    extraction/p3_baby_bear.lean
+# Hunks:     2
+# Cost:      none
+# Upstream:  hax bug -- emits `def _`, which is not valid Lean, for Rust's
+#            anonymous `const _: () = assert!(..)` items.
+# Drop when: hax generates a fresh name for anonymous consts.
+#
+# `MontyField31::new` carries its Montgomery invariants as anonymous const
+# assertions (`const _: () = assert!(..)` in monty-31/src/monty_31.rs). hax
+# translates the item but keeps the Rust name, emitting
+#
+#     def _ : rust_primitives.hax.Tuple0 := ...
+#
+# `_` is not an identifier in Lean, so the file does not parse. Renamed to
+# `const_check_1` and `const_check_2`.
+#
+# Both hunks are the same bug at two sites, which is why they share one patch:
+# fixing it upstream retires both at once. The bodies are untouched -- the
+# assertions still elaborate and still carry their `RustM.of_isOk` obligations.
+#
+--- a/extraction/p3_baby_bear.lean
++++ b/extraction/p3_baby_bear.lean
+@@ -1381,7 +1381,7 @@
+                                                   (403727924 : u32)])])))
+     (by rfl)
+ 
+-def _ : rust_primitives.hax.Tuple0 :=
++def const_check_1 : rust_primitives.hax.Tuple0 := -- PATCHED: hax emitted `def _`
+   RustM.of_isOk
+     (do
+     (hax_lib.assert
+@@ -2339,7 +2339,7 @@
+                                                   (506915399 : u32)])])))
+     (by rfl)
+ 
+-def _ : rust_primitives.hax.Tuple0 :=
++def const_check_2 : rust_primitives.hax.Tuple0 := -- PATCHED: hax emitted `def _`
+   RustM.of_isOk
+     (do
+     (hax_lib.assert

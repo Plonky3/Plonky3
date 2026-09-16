@@ -1,0 +1,26 @@
+# Patch:     010-import-axiomatized-interface
+# Phase:     post-extraction
+# Target:    extraction/p3_baby_bear.lean
+# Hunks:     1
+# Cost:      none
+# Drop when: hax gains a way to inject extra imports, or the dependency crates
+#            are extracted for real and the import names them instead.
+#
+# hax emits `import Hax` and nothing else, so the generated file has no way to
+# see the axiomatized dependency interface that stands in for p3-monty-31,
+# p3-field, p3-mds, p3-poseidon1/2 and p3-symmetric. `p3_baby_bear.dependencies`
+# is the aggregator for those stubs; without this import the file does not
+# elaborate at all.
+#
+# This is the one hunk that is pure wiring: it adds an import and nothing else.
+#
+--- a/extraction/p3_baby_bear.lean
++++ b/extraction/p3_baby_bear.lean
+@@ -2,6 +2,7 @@
+ -- Legacy lean backend for Hax
+ -- The Hax prelude library can be found in hax/proof-libs/legacy-lean
+ import Hax
++import p3_baby_bear.dependencies -- PATCHED
+ import Std.Tactic.Do
+ import Std.Do.Triple
+ import Std.Tactic.Do.Syntax
