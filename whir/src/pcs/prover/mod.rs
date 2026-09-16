@@ -19,6 +19,7 @@ use p3_sumcheck::layout::Layout;
 use p3_sumcheck::strategy::{SumcheckProver, VariableOrder};
 use tracing::instrument;
 
+use crate::WhirConfigError;
 use crate::parameters::WhirConfig;
 use crate::pcs::committer::writer::commit_extension;
 use crate::pcs::proof::{
@@ -143,19 +144,18 @@ where
         layout: L,
         prover_data: MT::ProverData<DenseMatrix<F>>,
         num_opening_claims: usize,
-    ) -> WhirProof<F, EF, MT>
+    ) -> Result<WhirProof<F, EF, MT>, WhirConfigError>
     where
         Dft: TwoAdicSubgroupDft<F>,
         Challenger: CanObserve<MT::Commitment>,
     {
         assert_eq!(self.round_folding_factor(0), layout.folding());
-        self.config
-            .validate_initial_claims(
-                layout
-                    .num_claims()
-                    .saturating_add(initial_ood_answers.len()),
-            )
-            .unwrap_or_else(|error| panic!("{error}"));
+        self.config.validate_initial_claims(
+            layout
+                .num_claims()
+                .checked_add(initial_ood_answers.len())
+                .ok_or(WhirConfigError::InitialClaimCountOverflow)?,
+        )?;
         let variable_order = L::variable_order();
 
         // One driver spans the whole run, so the description is walked exactly once.
@@ -197,7 +197,7 @@ where
         // Require that every described step was played.
         transcript.finish();
 
-        WhirProof {
+        Ok(WhirProof {
             initial_ood_answers,
             initial_sumcheck,
             rounds,
@@ -205,7 +205,7 @@ where
             final_pow_witness,
             final_openings,
             final_sumcheck,
-        }
+        })
     }
 
     #[instrument(skip_all, level = "debug", fields(round_number = round_index, log_size = self.num_variables - self.total_folded_through(round_index)))]

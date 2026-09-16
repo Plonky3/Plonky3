@@ -13,7 +13,7 @@
 
 use std::borrow::Cow;
 
-use p3_air::{Air, AirBuilder, BaseAir, WindowAccess};
+use p3_air::{Air, AirBuilder, BaseAir, BoundaryEnd, BoundaryPublic, WindowAccess};
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_challenger::DuplexChallenger;
 use p3_dft::Radix2DFTSmallBatch;
@@ -232,6 +232,113 @@ fn periodic_trace(n: usize) -> RowMajorMatrix<F> {
     RowMajorMatrix::new(values, MAIN_WIDTH)
 }
 
+/// The one cell the periodic AIR below binds by position.
+///
+/// ```text
+///     main column 0, last row -> public value 0
+/// ```
+const LAST_MAIN_CELL: [BoundaryPublic; 1] = [BoundaryPublic::new(0, BoundaryEnd::Last, 0)];
+
+/// The same periodic sum AIR, with its last main cell listed as a public input.
+///
+/// A pin is gated by the last-row selector, which the periodic values sit beside.
+/// Both are evaluated in the same fold, so the two must compose.
+struct PeriodicIoAir;
+
+impl BaseAir<F> for PeriodicIoAir {
+    fn width(&self) -> usize {
+        MAIN_WIDTH
+    }
+    fn num_public_values(&self) -> usize {
+        1
+    }
+    fn public_boundary_io(&self) -> &[BoundaryPublic] {
+        &LAST_MAIN_CELL
+    }
+    fn num_periodic_columns(&self) -> usize {
+        periodic_columns().len()
+    }
+    fn periodic_columns(&self) -> Cow<'_, [Vec<F>]> {
+        Cow::Owned(periodic_columns())
+    }
+    fn main_next_row_columns(&self) -> Vec<usize> {
+        // Current-row only: no successor claim is needed.
+        Vec::new()
+    }
+}
+
+impl<AB: AirBuilder<F = F>> Air<AB> for PeriodicIoAir {
+    fn eval(&self, builder: &mut AB) {
+        // Identical constraints, with only the declaration setting the two apart.
+        PeriodicAir.eval(builder);
+    }
+}
+
+/// Prove and verify the periodic AIR with a listed cell, under the given public value.
+fn prove_verify_periodic_io(
+    n: usize,
+    public: &[F],
+) -> Result<(), VerificationError<p3_whir::VerifierError>> {
+    let log_height = log2_strict_usize(n);
+    let trace = periodic_trace(n);
+    let config = config_for(log_height, MAIN_WIDTH);
+    let (pk, vk) = setup(&config, &[&PeriodicIoAir], &mut challenger()).unwrap();
+
+    let proof = prove(
+        &config,
+        ProverInstances::new(vec![ProverInstance::new(
+            &PeriodicIoAir,
+            Table::new(trace.transpose()),
+            &pk,
+            public,
+        )]),
+        0,
+        &mut challenger(),
+    )
+    .unwrap();
+
+    verify(
+        &config,
+        VerifierInstances::new(vec![VerifierInstance::new(
+            &PeriodicIoAir,
+            &vk,
+            log_height,
+            public,
+        )]),
+        &proof,
+        0,
+        &mut challenger(),
+    )
+}
+
+#[test]
+fn prove_verify_periodic_with_boundary_io_roundtrips() {
+    // Invariant: a listed cell is bound on an AIR that also reads periodic columns.
+    let n = 256;
+    let last = periodic_trace(n).values[n - 1];
+
+    prove_verify_periodic_io(n, &[last])
+        .expect("honest periodic proof with a listed cell verifies");
+}
+
+#[test]
+fn verify_rejects_a_wrong_public_value_beside_periodic_columns() {
+    // Mutation: claim a last-row value the trace does not carry.
+    //
+    // Both sides share the wrong claim, so only the pin can reject.
+    let n = 256;
+    let last = periodic_trace(n).values[n - 1];
+
+    let err = prove_verify_periodic_io(n, &[last + F::ONE]).unwrap_err();
+    assert!(
+        matches!(
+            err,
+            VerificationError::Zerocheck(ZerocheckError::FinalSumMismatch)
+        ),
+        "expected a zerocheck rejection, got {err:?}"
+    );
+}
+
 #[test]
 fn prove_verify_periodic_roundtrips() {
     // Invariant: a satisfying trace with periodic columns round-trips through WHIR.
@@ -241,7 +348,7 @@ fn prove_verify_periodic_roundtrips() {
 
     // This AIR has no preprocessed trace, and periodic columns are never committed.
     // Setup therefore commits nothing and yields empty keys.
-    let (pk, vk) = setup(&config, &[&PeriodicAir], &mut challenger());
+    let (pk, vk) = setup(&config, &[&PeriodicAir], &mut challenger()).unwrap();
 
     let proof = p3_multi_stark::prove_with_security(
         &config,
@@ -299,7 +406,7 @@ fn security_rejects_invalid_periodic_metadata() {
     }
     let config = config_for(4, 1);
     let air = InvalidPeriod;
-    let (_, vk) = setup(&config, &[&air], &mut challenger());
+    let (_, vk) = setup(&config, &[&air], &mut challenger()).unwrap();
     let instances = VerifierInstances::new(vec![VerifierInstance::new(&air, &vk, 4, &[])]);
     assert!(p3_multi_stark::security_report(&config, &instances).is_err());
 }
@@ -315,7 +422,7 @@ fn verify_rejects_violated_periodic_constraint() {
     trace.values[0] += F::ONE;
     let config = config_for(log2_strict_usize(n), MAIN_WIDTH);
 
-    let (pk, vk) = setup(&config, &[&PeriodicAir], &mut challenger());
+    let (pk, vk) = setup(&config, &[&PeriodicAir], &mut challenger()).unwrap();
 
     let proof = prove(
         &config,
@@ -327,7 +434,8 @@ fn verify_rejects_violated_periodic_constraint() {
         )]),
         0,
         &mut challenger(),
-    );
+    )
+    .unwrap();
 
     // The claimed zero sum cannot close against a nonzero constraint value.
     let err = verify(
@@ -442,7 +550,7 @@ fn prove_verify_periodic_with_preprocessed_roundtrips() {
     let config = config_for(log_height, MAIN_WIDTH);
 
     // Setup commits the preprocessed column and nothing else.
-    let (pk, vk) = setup(&config, &[&air], &mut challenger());
+    let (pk, vk) = setup(&config, &[&air], &mut challenger()).unwrap();
 
     let proof = prove(
         &config,
@@ -454,7 +562,8 @@ fn prove_verify_periodic_with_preprocessed_roundtrips() {
         )]),
         0,
         &mut challenger(),
-    );
+    )
+    .unwrap();
 
     // The preprocessed commitment is opened at the bound point, hence one opening here.
     assert!(proof.preprocessed_opening.is_some());
@@ -482,7 +591,7 @@ fn verify_rejects_violated_periodic_preprocessed_constraint() {
     trace.values[0] += F::ONE;
     let config = config_for(log_height, MAIN_WIDTH);
 
-    let (pk, vk) = setup(&config, &[&air], &mut challenger());
+    let (pk, vk) = setup(&config, &[&air], &mut challenger()).unwrap();
 
     let proof = prove(
         &config,
@@ -494,7 +603,8 @@ fn verify_rejects_violated_periodic_preprocessed_constraint() {
         )]),
         0,
         &mut challenger(),
-    );
+    )
+    .unwrap();
 
     // The claimed zero sum cannot close against a nonzero constraint value.
     let err = verify(

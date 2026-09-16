@@ -1,4 +1,4 @@
-//! Error types for STARK verification.
+//! Error types for STARK proving and verification.
 
 use alloc::format;
 use alloc::string::String;
@@ -6,6 +6,14 @@ use alloc::string::String;
 use thiserror::Error;
 
 use crate::StarkTranscriptFailure;
+
+/// A recoverable PCS configuration or budget failure during proof generation.
+#[derive(Debug, Error)]
+pub enum ProvingError<E> {
+    /// The backend error, annotated with the failing proving phase.
+    #[error("PCS {phase} failed: {source:?}")]
+    Pcs { phase: &'static str, source: E },
+}
 
 /// Specific reasons why a proof's shape is invalid.
 #[derive(Debug, Error)]

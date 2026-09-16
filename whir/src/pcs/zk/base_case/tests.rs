@@ -350,7 +350,7 @@ fn base_case_rejects_unbound_source_reveal() {
     // The committed source genuinely differs from the reveal, so the source
     // spot check fails. The failing position is fixed by the test seed and
     // the query-index sampler.
-    assert_eq!(err, BaseCaseZkError::SourceSpotCheckFailed { position: 2 });
+    assert_eq!(err, BaseCaseZkError::SourceSpotCheckFailed { position: 6 });
 }
 
 #[test]
@@ -375,7 +375,7 @@ fn base_case_rejects_unbound_mask_reveal() {
         err,
         BaseCaseZkError::MaskSpotCheckFailed {
             group: 0,
-            position: 3
+            position: 9
         }
     );
 }
@@ -427,3 +427,7 @@ fn base_case_reveals_are_one_time_padded() {
         assert_eq!(g_from_a, g_from_b, "recovered fresh mask differs at {i}");
     }
 }
+
+// A standalone base-case user plays exactly the description the full pipeline plays:
+// both sides derive it inside `prove` and `verify`, from the configuration they share.
+// So the tests here hand over a bare challenger and nothing else.

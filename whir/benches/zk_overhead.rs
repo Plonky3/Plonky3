@@ -120,8 +120,8 @@ fn bench_plain(group: &mut BenchmarkGroup<'_, WallTime>, num_variables: usize) {
                 (ch, witness)
             },
             |(mut ch, witness)| {
-                let (_, data) = pcs.commit(witness, &mut ch);
-                pcs.open(data, protocol.clone(), &mut ch)
+                let (_, data) = pcs.commit(witness, &mut ch).unwrap();
+                pcs.open(data, protocol.clone(), &mut ch).unwrap()
             },
             BatchSize::SmallInput,
         );
@@ -151,8 +151,8 @@ fn bench_zk(group: &mut BenchmarkGroup<'_, WallTime>, num_variables: usize) {
         b.iter_batched(
             || (challenger(), witness.clone()),
             |(mut ch, witness)| {
-                let (_, data) = pcs.commit(witness, &mut ch);
-                pcs.open(data, points.clone(), &mut ch)
+                let (_, data) = pcs.commit(witness, &mut ch).unwrap();
+                pcs.open(data, points.clone(), &mut ch).unwrap()
             },
             BatchSize::SmallInput,
         );
@@ -172,8 +172,8 @@ fn report_proof_sizes(num_variables: usize) {
     )]);
     let mut ch = challenger();
     let witness = PrefixProver::<F, EF>::new_witness(vec![table], FOLDING);
-    let (_, data) = pcs.commit(witness, &mut ch);
-    let plain_proof = pcs.open(data, protocol, &mut ch);
+    let (_, data) = pcs.commit(witness, &mut ch).unwrap();
+    let plain_proof = pcs.open(data, protocol, &mut ch).unwrap();
     let plain_size = postcard::to_allocvec(&plain_proof).unwrap().len();
 
     // Hiding proof size.
@@ -194,8 +194,8 @@ fn report_proof_sizes(num_variables: usize) {
     let witness = Poly::<F>::rand(&mut rng, num_variables);
     let points = vec![Point::<EF>::rand(&mut rng, num_variables)];
     let mut ch = challenger();
-    let (_, data) = pcs.commit(witness, &mut ch);
-    let zk_proof = pcs.open(data, points, &mut ch);
+    let (_, data) = pcs.commit(witness, &mut ch).unwrap();
+    let zk_proof = pcs.open(data, points, &mut ch).unwrap();
     let zk_size = postcard::to_allocvec(&zk_proof).unwrap().len();
 
     println!(
@@ -245,10 +245,10 @@ fn bench_octic_zk_open_no_pow(c: &mut Criterion) {
             b.iter_batched(
                 || {
                     let mut ch = challenger();
-                    let (_, data) = pcs.commit(witness.clone(), &mut ch);
+                    let (_, data) = pcs.commit(witness.clone(), &mut ch).unwrap();
                     (ch, data)
                 },
-                |(mut ch, data)| pcs.open(data, points.clone(), &mut ch),
+                |(mut ch, data)| pcs.open(data, points.clone(), &mut ch).unwrap(),
                 BatchSize::PerIteration,
             );
         });

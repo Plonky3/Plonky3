@@ -63,48 +63,34 @@ impl<F: Field, EF: ExtensionField<F>> Layout<F, EF> for SuffixProver<F, EF> {
         &self.claims
     }
 
-    /// Records opening claims for the selected columns of one table.
+    /// Evaluates the selected columns of one table at a point and records the claim.
     ///
-    /// All requested columns share one sampled local opening point.
+    /// All requested columns share the one supplied local opening point.
     ///
-    /// - Current openings evaluate a column at that point.
-    /// - Next openings evaluate the repeat-last successor view at that point.
-    /// - Returned evaluations list all current openings first, then all next openings.
+    /// - Direct openings evaluate a column at that point.
+    /// - Successor openings evaluate the repeat-last view at that point.
+    /// - Returned evaluations list every direct opening first.
     ///
     /// # Arguments
     ///
-    /// - `table_idx`  — source table index.
-    /// - `batch`      — current and next columns opened at this point.
-    /// - `challenger` — Fiat-Shamir transcript.
+    /// - Source table index.
+    /// - Columns opened directly and through the successor view.
+    /// - Local-frame opening point, one coordinate per table variable.
     ///
-    /// # Fiat-Shamir
+    /// # Performance
     ///
-    /// - Samples the opening point internally from the transcript.
-    /// - Absorbs the evaluations before returning.
-    /// - The verifier performs the symmetric absorption.
-    ///
-    /// # Panics
-    ///
-    /// - At least one current or next column must be requested.
+    /// - The point is factorised once and reused by every selected column.
+    /// - Each column is an independent linear pass, so columns run in parallel.
     #[tracing::instrument(skip_all)]
-    fn eval_at<Ch>(
+    fn record_opening(
         &mut self,
         table_idx: usize,
         batch: &OpeningRequest,
         point: &Point<EF>,
-        challenger: &mut Ch,
-    ) -> OpeningEvals<EF>
-    where
-        Ch: FieldChallenger<F> + GrindingChallenger<Witness = F>,
-    {
+    ) -> OpeningEvals<EF> {
         // Split the request into its two column groups.
         let current = batch.current();
         let next = batch.next();
-        // Precondition: opening nothing would silently push an empty claim.
-        assert!(
-            !batch.is_empty(),
-            "opening schedule must name at least one column"
-        );
 
         let table = &self.claims.tables[table_idx];
         // The opening point lives in the table's local frame, one coordinate per variable.
@@ -149,11 +135,6 @@ impl<F: Field, EF: ExtensionField<F>> Layout<F, EF> for SuffixProver<F, EF> {
             })
             .unzip();
 
-        // Bind the evaluations into the transcript, current group first then next.
-        // The verifier absorbs the same bytes in the same order.
-        challenger.observe_algebra_slice(&current_evals);
-        challenger.observe_algebra_slice(&next_evals);
-
         // Store the batch with its shared SVO point.
         self.claims.claim_map[table_idx].push(ProverMultiClaim::new(
             point,
@@ -165,11 +146,13 @@ impl<F: Field, EF: ExtensionField<F>> Layout<F, EF> for SuffixProver<F, EF> {
         OpeningBatch::new(current_evals, next_evals)
     }
 
-    /// Samples a virtual evaluation on the full stacked polynomial.
+    /// Evaluates the full stacked polynomial at a point and records the claim.
     ///
-    /// # Why heavier than prefix binding
+    /// # Overview
     ///
-    /// The stacked evaluation factors per column via the selector:
+    /// WHIR pins the stacked polynomial at a fresh point for soundness amplification.
+    ///
+    /// The stacked evaluation factors per column through the slot selector:
     ///
     /// ```text
     ///     stacked(point) = sum_{i}  eq(selector_i, point_selector_part)
@@ -180,18 +163,13 @@ impl<F: Field, EF: ExtensionField<F>> Layout<F, EF> for SuffixProver<F, EF> {
     ///
     /// - Each column is evaluated at its local sub-point.
     /// - Per-column partials are collected on the fly.
-    /// - Those partials feed the SVO accumulator batcher.
+    /// - Those partials feed the preprocessing accumulator batcher.
+    ///
+    /// # Arguments
+    ///
+    /// - Point covering every stacked variable.
     #[tracing::instrument(skip_all)]
-    fn add_virtual_eval<Ch>(&mut self, challenger: &mut Ch) -> EF
-    where
-        Ch: FieldChallenger<F> + GrindingChallenger<Witness = F>,
-    {
-        // Sample a challenge point covering every stacked variable.
-        let point = Point::expand_from_univariate(
-            challenger.sample_algebra_element(),
-            self.claims.num_variables,
-        );
-
+    fn record_virtual(&mut self, point: &Point<EF>) -> EF {
         // Per-column accumulation state:
         //
         // - eval    : running stacked evaluation.
@@ -237,7 +215,7 @@ impl<F: Field, EF: ExtensionField<F>> Layout<F, EF> for SuffixProver<F, EF> {
         // Batch every per-column opening into per-round SVO accumulators.
         let accumulators = calculate_accumulators_batch(
             &ProverMultiClaim::new(
-                SvoPoint::new_unpacked(self.claims.folding, &point, VariableOrder::Suffix),
+                SvoPoint::new_unpacked(self.claims.folding, point, VariableOrder::Suffix),
                 openings,
                 Vec::new(),
             ),
@@ -253,14 +231,11 @@ impl<F: Field, EF: ExtensionField<F>> Layout<F, EF> for SuffixProver<F, EF> {
             // Materialise the stacked polynomial with no challenges applied.
             let poly = &self.compress_stacked(&Point::default());
             // Check 1: weighted sum equals the direct evaluation.
-            assert_eq!(eval, poly.eval_base(&point));
+            assert_eq!(eval, poly.eval_base(point));
 
             // Build the reference opening by evaluating the materialised poly directly.
-            let ref_svo = SvoPoint::<EF, EF>::new_unpacked(
-                self.claims.folding,
-                &point,
-                VariableOrder::Suffix,
-            );
+            let ref_svo =
+                SvoPoint::<EF, EF>::new_unpacked(self.claims.folding, point, VariableOrder::Suffix);
             let (ref_eval, ref_partials) = ref_svo.eval(poly.as_view());
             let opening = Opening {
                 poly_idx: None,
@@ -274,7 +249,7 @@ impl<F: Field, EF: ExtensionField<F>> Layout<F, EF> for SuffixProver<F, EF> {
                 accumulators,
                 calculate_accumulators_batch(
                     &ProverMultiClaim::new(
-                        SvoPoint::new_unpacked(self.claims.folding, &point, VariableOrder::Suffix),
+                        SvoPoint::new_unpacked(self.claims.folding, point, VariableOrder::Suffix),
                         vec![opening],
                         Vec::new(),
                     ),
@@ -283,10 +258,9 @@ impl<F: Field, EF: ExtensionField<F>> Layout<F, EF> for SuffixProver<F, EF> {
             );
         }
 
-        // Commit the evaluation to the transcript and record the claim.
-        challenger.observe_algebra_element(eval);
+        // Record the claim so the folding rounds can read its accumulators.
         self.claims.virtual_claims.push(Claim {
-            point,
+            point: point.clone(),
             eval,
             data: accumulators,
         });
@@ -326,7 +300,11 @@ impl<F: Field, EF: ExtensionField<F>> Layout<F, EF> for SuffixProver<F, EF> {
     {
         // Sanity: preprocessing cannot consume more rounds than the stacked arity.
         assert!(self.claims.folding <= self.claims.num_variables);
-        let alpha: EF = challenger.sample_algebra_element();
+
+        // The batching challenge seeds a sub-transcript of its own.
+        //
+        // Both claim counts therefore reach the sponge before the challenge is drawn.
+        let alpha: EF = self.batching_challenge(challenger);
         let n_claims = self.num_claims();
 
         // Stage A: batch per-claim accumulators using insertion-order alpha powers.

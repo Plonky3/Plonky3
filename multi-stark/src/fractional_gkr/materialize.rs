@@ -101,12 +101,7 @@ impl<F: Field> LookupPlan<F> {
     /// `alpha` and `beta` are the lookup challenges used to separate buses and
     /// compress each contribution's payload.
     ///
-    /// Denominator blocks are stored one SIMD lane group at a time.
-    /// Every lookup-active trace must therefore be at least one lane group tall.
-    ///
-    /// That floor is a property of this prover's build target alone.
-    /// It changes neither the proof bytes nor the transcript.
-    /// The verifier never applies it.
+    /// Uses scalar materialization when any active trace is shorter than a SIMD lane group.
     ///
     /// # Panics
     ///
@@ -114,7 +109,6 @@ impl<F: Field> LookupPlan<F> {
     /// slices or a retained lookup expression refers to unavailable trace,
     /// preprocessed, or public-value data.
     ///
-    /// Panics if a lookup-active trace is shorter than the target's packing width.
     pub fn materialize_fraction<EF>(
         &self,
         main: &[&Table<F>],
@@ -126,14 +120,19 @@ impl<F: Field> LookupPlan<F> {
     where
         EF: ExtensionField<F>,
     {
-        // A shorter trace leaves its blocks with zero packed entries.
-        // Nothing would then be materialized for that AIR, silently.
-        assert!(
-            self.instances
-                .iter()
-                .all(|planned| 1usize << planned.num_variables >= F::Packing::WIDTH),
-            "lookup-active trace height must be at least the prover's SIMD packing width"
-        );
+        if self
+            .instances
+            .iter()
+            .any(|planned| 1usize << planned.num_variables < F::Packing::WIDTH)
+        {
+            return self.materialize_fraction_scalar(
+                main,
+                preprocessed,
+                public_values,
+                alpha,
+                beta,
+            );
+        }
 
         let packed_beta_powers = beta
             .powers()
@@ -191,6 +190,70 @@ impl<F: Field> LookupPlan<F> {
         Fraction {
             n: Poly::new(numerators),
             d: PolyMaybePacked::Packed(Poly::new(denominators)),
+        }
+    }
+
+    fn materialize_fraction_scalar<EF: ExtensionField<F>>(
+        &self,
+        main: &[&Table<F>],
+        preprocessed: &[Option<&Table<F>>],
+        public_values: &[&[F]],
+        alpha: EF,
+        beta: EF,
+    ) -> Fraction<Poly<F>, PolyMaybePacked<F, EF>> {
+        let challenges = Challenges::new(alpha, beta, self.max_width, self.num_buses);
+        let beta_powers = beta.powers().take(self.max_width).collect();
+        let mut numerators = F::zero_vec(1 << self.num_variables);
+        let mut denominators = vec![EF::ONE; 1 << self.num_variables];
+        for planned in &self.instances {
+            let main = main[planned.air_index];
+            let preprocessed = preprocessed[planned.air_index];
+            let height = 1 << planned.num_variables;
+            let mut scratch =
+                Scratch::new(main.num_polys(), preprocessed.map_or(0, Table::num_polys));
+            for row in 0..height {
+                let fill = |local: &mut [F], next: &mut [F], table: &Table<F>| {
+                    for ((local, next), column) in
+                        local.iter_mut().zip(next).zip(table.iter_polys())
+                    {
+                        *local = column[row];
+                        *next = column[(row + 1).min(height - 1)];
+                    }
+                };
+                fill(&mut scratch.local, &mut scratch.next, main);
+                if let Some(preprocessed) = preprocessed {
+                    fill(
+                        &mut scratch.preprocessed_local,
+                        &mut scratch.preprocessed_next,
+                        preprocessed,
+                    );
+                }
+                let evaluator = LookupRowEvaluator {
+                    main_window: RowWindow::from_two_rows(&scratch.local, &scratch.next),
+                    preprocessed_window: RowWindow::from_two_rows(
+                        &scratch.preprocessed_local,
+                        &scratch.preprocessed_next,
+                    ),
+                    boundary: BoundaryEvals::from_row(row, height),
+                    public_values: public_values[planned.air_index],
+                };
+                let mut offset = planned.base_offset + row;
+                for (lookup, &bus_id) in planned.lookups.iter().zip(&planned.bus_ids) {
+                    for (fields, count) in lookup.elements.iter().zip(&lookup.multiplicities) {
+                        numerators[offset] = count.resolve(&evaluator);
+                        denominators[offset] = challenges.bus_prefix[bus_id]
+                            - dot_product::<EF, _, _>(
+                                beta_powers.iter().copied(),
+                                fields.iter().map(|field| field.resolve(&evaluator)),
+                            );
+                        offset += height;
+                    }
+                }
+            }
+        }
+        Fraction {
+            n: Poly::new(numerators),
+            d: PolyMaybePacked::Scalar(Poly::new(denominators)),
         }
     }
 }
@@ -782,11 +845,79 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn the_scalar_fallback_matches_the_packed_path() {
+        // Invariant: the SIMD path and the row-by-row fallback compute the same map.
+        //
+        //     height >= lane group  ->  SIMD path
+        //     height <  lane group  ->  row-by-row fallback
+        //
+        // Only heights at or above the lane group admit both, so they are compared there.
+        let sources = TestAir(Declaration::SymbolicSources);
+        let next = TestAir(Declaration::NextGlobal);
+        let airs = [&sources, &next];
+
+        // Two distinct heights, so the second instance also exercises a nonzero base offset.
+        let tall = 2 << test_lookup_num_variables();
+        let short = 1 << test_lookup_num_variables();
+
+        // Counts stay inside the declared bound of three.
+        let counts = |height: usize| (0..height).map(|row| (row % 4) as u64).collect::<Vec<_>>();
+        let ramp = |height: usize, offset: u64| {
+            (0..height)
+                .map(|row| row as u64 + offset)
+                .collect::<Vec<_>>()
+        };
+
+        let sources_key = ramp(tall, 2);
+        let sources_count = counts(tall);
+        let sources_unused = vec![0; tall];
+        let sources_preprocessed_column = ramp(tall, 11);
+        let next_left = ramp(short, 3);
+        let next_right = ramp(short, 5);
+        let next_count = counts(short);
+
+        let sources_main = table(&[&sources_key, &sources_count, &sources_unused]);
+        let sources_preprocessed = table(&[&sources_preprocessed_column]);
+        let next_main = table(&[&next_left, &next_right, &next_count]);
+
+        let main = [&sources_main, &next_main];
+        let preprocessed = [Some(&sources_preprocessed), None];
+        let public_values = [F::from_u64(6)];
+        let publics: [&[F]; 2] = [&public_values, &[]];
+
+        let plan = LookupPlan::<F>::build::<EF, TestAir>(
+            &airs,
+            &[log2_strict_usize(tall), log2_strict_usize(short)],
+        )
+        .unwrap()
+        .unwrap();
+
+        let alpha = EF::from_u64(1_000);
+        let beta = EF::from_u64(7);
+        let packed = plan.materialize_fraction(&main, &preprocessed, &publics, alpha, beta);
+        let scalar = plan.materialize_fraction_scalar(&main, &preprocessed, &publics, alpha, beta);
+
+        // The comparison is only meaningful while the two paths stay distinct.
+        assert!(matches!(packed.d, PolyMaybePacked::Packed(_)));
+        assert!(matches!(scalar.d, PolyMaybePacked::Scalar(_)));
+
+        assert_eq!(packed.n.as_slice(), scalar.n.as_slice());
+        let packed_denominators = packed.d.unpack();
+        let scalar_denominators = scalar.d.unpack();
+        assert_eq!(
+            packed_denominators.as_slice(),
+            scalar_denominators.as_slice()
+        );
+    }
+
+    #[test]
     fn resolves_all_symbolic_sources_with_extension_challenges() {
         let air = TestAir(Declaration::SymbolicSources);
         let mut rng = SmallRng::seed_from_u64(0xA11_50CE5);
 
         for height in [
+            1,
+            2,
             1 << test_lookup_num_variables(),
             core::cmp::max(
                 2 << test_lookup_num_variables(),

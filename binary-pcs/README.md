@@ -21,7 +21,10 @@ Two obligations the types do not carry:
 
 `BinaryPcsConfig` delegates its algebraic budget to `p3_security::binary::BinaryPcsRegime`.
 The target covers the sum of opening-claim batching, every fold and sumcheck round, and
-query error. Query grinding applies only to queries; it runs after the alpha challenge.
+query error. Query grinding applies only to queries; it runs after the alpha challenge,
+every fold, and absorption of the entire final codeword. This final-codeword binding changes
+the Fiat–Shamir transcript: proofs generated without it are not guaranteed to verify, although
+the proof's serialization layout is unchanged.
 When every base coset is queried, query error is zero and its reserved budget is released.
 `PrescribedPointPcs::prescribed_security` supplies this composed bound and the unique-decoding
 candidate bound to security-checked multi-STARK callers, which also need collision evidence.

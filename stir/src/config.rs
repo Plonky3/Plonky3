@@ -92,7 +92,10 @@ pub struct StirParameters<M> {
     /// Target security level in bits.
     pub security_level: usize,
 
-    /// Fixed proof-of-work difficulty in bits applied to each Fiat-Shamir grinding step.
+    /// Maximum proof-of-work difficulty in bits for each Fiat-Shamir grinding step.
+    ///
+    /// Must be less than both the base-field bit length and `usize::BITS`, so every
+    /// derived difficulty fits the grinding witness and sampling implementation.
     ///
     /// This can reduce the algebraic target only for challenges sampled immediately after
     /// the corresponding grind. OOD and Ans-check errors receive no PoW credit.
@@ -307,6 +310,10 @@ pub enum StirConfigError {
     /// The PCS cannot enforce this difficulty with its base-field witness.
     #[error("invalid PCS batch grinding difficulty {bits}")]
     InvalidPcsBatchPowBits { bits: usize },
+
+    /// The maximum grinding budget exceeds the base-field or sampling capacity.
+    #[error("unsupported maximum grinding difficulty {bits}")]
+    InvalidMaxPowBits { bits: usize },
     /// The folding arities cannot reach the requested final coefficient bound.
     #[error(
         "requested final polynomial log length {max_log_final_poly_len} is below the minimum reachable {min_log_final_poly_len}"
@@ -690,7 +697,7 @@ where
         batch: PcsBatch<'_>,
         options: StirOptions,
     ) -> Result<Self, StirConfigError> {
-        if batch.pow_bits >= F::bits().min(usize::BITS as usize) {
+        if !Self::supports_pow_bits(batch.pow_bits) {
             return Err(StirConfigError::InvalidPcsBatchPowBits {
                 bits: batch.pow_bits,
             });
@@ -703,6 +710,10 @@ where
             options,
             &[],
         )
+    }
+
+    fn supports_pow_bits(bits: usize) -> bool {
+        bits < F::bits().min(usize::BITS as usize)
     }
 
     fn try_new_with_optional_combine(
@@ -765,6 +776,11 @@ where
 
         if matches!(params.soundness_type, SecurityAssumption::UniqueDecoding) {
             return Err(StirConfigError::UnsupportedSoundnessType);
+        }
+        if !Self::supports_pow_bits(params.max_pow_bits) {
+            return Err(StirConfigError::InvalidMaxPowBits {
+                bits: params.max_pow_bits,
+            });
         }
         if params.security_level <= params.max_pow_bits {
             return Err(StirConfigError::SecurityLevelNotGreaterThanPow {
@@ -1250,6 +1266,53 @@ mod tests {
             security_level: 80,
             max_pow_bits: 20,
             mmcs: TestMmcs::new(val_mmcs),
+        }
+    }
+
+    #[test]
+    fn try_new_rejects_unrepresentable_max_pow_bits() {
+        for bits in [31, 32, 40, usize::MAX] {
+            let mut params = test_params(1, 4);
+            params.max_pow_bits = bits;
+            assert_eq!(
+                StirConfig::<TestF, TestEF, TestMmcs, TestChallenger>::try_new(20, params)
+                    .unwrap_err(),
+                StirConfigError::InvalidMaxPowBits { bits }
+            );
+        }
+    }
+
+    #[test]
+    fn try_new_accepts_supported_max_pow_bits() {
+        for bits in [20, 30] {
+            let mut params = test_params(1, 4);
+            params.max_pow_bits = bits;
+            StirConfig::<TestF, TestEF, TestMmcs, TestChallenger>::try_new(20, params)
+                .expect("a supported grinding cap must remain usable");
+        }
+    }
+
+    #[test]
+    fn try_new_distinguishes_pcs_batch_and_max_pow_bits() {
+        for (max_pow_bits, batch_pow_bits, expected) in [
+            (20, 31, StirConfigError::InvalidPcsBatchPowBits { bits: 31 }),
+            (31, 20, StirConfigError::InvalidMaxPowBits { bits: 31 }),
+        ] {
+            let mut params = test_params(1, 4);
+            params.max_pow_bits = max_pow_bits;
+            let err =
+                StirConfig::<TestF, TestEF, TestMmcs, TestChallenger>::try_new_with_pcs_batch(
+                    20,
+                    params,
+                    PcsBatch {
+                        classes: &[(20, 1)],
+                        combine: None,
+                        pow_bits: batch_pow_bits,
+                    },
+                    StirOptions::default(),
+                )
+                .unwrap_err();
+            assert_eq!(err, expected);
         }
     }
 

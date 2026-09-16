@@ -116,37 +116,10 @@ where
 {
     assert!(is_zk <= 1, "is_zk must be either 0 or 1");
 
-    if let Some(degree_hint) = air.max_constraint_degree() {
-        let lookup_degree = contexts
-            .iter()
-            .map(|ctx| lookup_gadget.constraint_degree(ctx))
-            .max()
-            .unwrap_or(0);
-        let max_degree = degree_hint.max(lookup_degree);
-        let constraint_degree = (max_degree + is_zk).max(2);
-        let result = log2_ceil_usize(constraint_degree - 1);
-
-        // This check remains at the `debug` level, as the AIR is known by both
-        // prover and verifier, i.e. a malicious prover cannot feed the verifier
-        // a different hint than the verifier computes for itself.
-        debug_assert!(
-            {
-                let actual =
-                    get_max_constraint_degree(air, layout, trace_len, contexts, lookup_gadget);
-                max_degree >= actual
-            },
-            "max_constraint_degree() hint {} with lookup degree {} is too small; \
-             symbolic evaluation found a larger degree",
-            degree_hint,
-            lookup_degree
-        );
-
-        return result;
-    }
-
+    let degree = get_max_constraint_degree(air, layout, trace_len, contexts, lookup_gadget)
+        .max(air.max_constraint_degree().unwrap_or(0));
     // We pad to at least degree 2, since a quotient argument doesn't make sense with smaller degrees.
-    let constraint_degree =
-        (get_max_constraint_degree(air, layout, trace_len, contexts, lookup_gadget) + is_zk).max(2);
+    let constraint_degree = (degree + is_zk).max(2);
 
     // The quotient's actual degree is approximately (max_constraint_degree - 1) n,
     // where subtracting 1 comes from division by the vanishing polynomial.
@@ -240,4 +213,49 @@ where
     let base_constraints = builder.base_constraints();
     let extension_constraints = builder.extension_constraints();
     (base_constraints, extension_constraints)
+}
+
+#[cfg(test)]
+mod tests {
+    use p3_air::{AirBuilder, BaseAir, WindowAccess};
+    use p3_baby_bear::BabyBear;
+    use p3_lookup::LogUpGadget;
+
+    use super::*;
+
+    #[test]
+    fn undersized_cubic_hint_preserves_quotient_chunks() {
+        struct CubicAir;
+        impl BaseAir<BabyBear> for CubicAir {
+            fn width(&self) -> usize {
+                1
+            }
+            fn max_constraint_degree(&self) -> Option<usize> {
+                Some(1)
+            }
+        }
+        impl Air<InteractionSymbolicBuilder<BabyBear, BabyBear>> for CubicAir {
+            fn eval(&self, builder: &mut InteractionSymbolicBuilder<BabyBear, BabyBear>) {
+                let x = builder.main().current_slice()[0];
+                builder.assert_zero(x * x * x);
+            }
+        }
+        let layout = AirLayout {
+            main_width: 1,
+            ..Default::default()
+        };
+        for (is_zk, expected) in [(0, 1), (1, 2)] {
+            assert_eq!(
+                get_log_num_quotient_chunks::<BabyBear, BabyBear, _, _>(
+                    &CubicAir,
+                    layout,
+                    8,
+                    &[],
+                    is_zk,
+                    &LogUpGadget::new()
+                ),
+                expected
+            );
+        }
+    }
 }

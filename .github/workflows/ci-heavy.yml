@@ -8,6 +8,9 @@ on:
     branches: [ "*" ]
     paths:
       - "whir/src/**"
+      - "circle/src/**"
+      - "fri/src/**"
+      - "batch-stark/**"
       - "binary-pcs/**"
       - "multilinear-util/src/**"
       - "multi-stark/src/**"

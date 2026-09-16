@@ -4,7 +4,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
-use p3_challenger::DuplexChallenger;
+use p3_challenger::{CanSample, DuplexChallenger};
 use p3_commit::MultilinearPcs;
 use p3_dft::Radix2DFTSmallBatch;
 use p3_field::extension::BinomialExtensionField;
@@ -13,6 +13,7 @@ use p3_merkle_tree::MerkleTreeMmcs;
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
+use proptest::prelude::*;
 use rand::rngs::{SmallRng, StdRng};
 use rand::{RngExt, SeedableRng};
 
@@ -20,9 +21,12 @@ use super::adapter::HidingWhirPcs;
 use super::base_case::BaseCaseZkError;
 use super::config::{ZkParameters, ZkWhirConfig};
 use super::proof::ZkWhirProof;
+use super::prover::HidingWhirProver;
 use super::verifier::ZkVerifierError;
+use crate::WhirConfigError;
 use crate::parameters::{FoldingFactor, ProtocolParameters, SecurityAssumption};
 use crate::pcs::proof::QueryOpenings;
+use crate::transcript::zk::observe_claims;
 
 type F = BabyBear;
 type EF = BinomialExtensionField<F, 4>;
@@ -50,6 +54,7 @@ type TestCommitment = <TestZkPcs as MultilinearPcs<EF, MyChallenger>>::Commitmen
 ///     prove_with(w, pts)   ->  honest run on a caller-chosen statement
 /// ```
 struct Setup {
+    security_level: usize,
     /// Arity of the committed polynomial.
     num_variables: usize,
     /// Number of opened evaluation claims.
@@ -71,6 +76,7 @@ impl Setup {
     /// The seed drives both the PCS hiding randomness and the witness.
     const fn new(seed: u64) -> Self {
         Self {
+            security_level: 32,
             num_variables: 12,
             num_points: 1,
             folding_factor: FoldingFactor::Constant(4),
@@ -112,7 +118,7 @@ impl Setup {
         let config = ZkWhirConfig::new(
             self.num_variables,
             ProtocolParameters {
-                security_level: 32,
+                security_level: self.security_level,
                 pow_bits: self.pow_bits,
                 round_log_inv_rates: vec![],
                 folding_factor: self.folding_factor.clone(),
@@ -149,8 +155,10 @@ impl Setup {
     fn prove_with(self, witness: Poly<F>, points: Vec<Point<EF>>) -> Proven {
         let pcs = self.pcs();
         let mut prover_challenger = fresh_challenger();
-        let (commitment, prover_data) = pcs.commit(witness, &mut prover_challenger);
-        let proof = pcs.open(prover_data, points.clone(), &mut prover_challenger);
+        let (commitment, prover_data) = pcs.commit(witness, &mut prover_challenger).unwrap();
+        let proof = pcs
+            .open(prover_data, points.clone(), &mut prover_challenger)
+            .unwrap();
         Proven {
             pcs,
             commitment,
@@ -208,6 +216,52 @@ impl Proven {
 /// The scheme seeds its own transcript when it opens.
 fn fresh_challenger() -> MyChallenger {
     MyChallenger::new(Perm::new_from_rng_128(&mut SmallRng::seed_from_u64(1)))
+}
+
+#[test]
+fn zk_opening_budget_rejection_preserves_transcript_and_rng() {
+    use p3_challenger::CanSample;
+    let mut setup = Setup::new(945).pow_bits(32);
+    setup.security_level = 100;
+    let pcs = setup.pcs();
+    let control = setup.pcs();
+    let mut rng = SmallRng::seed_from_u64(946);
+    let witness = Poly::<F>::rand(&mut rng, setup.num_variables);
+    let point = Point::<EF>::rand(&mut rng, setup.num_variables);
+    let mut transcript = fresh_challenger();
+    let (_, data) = pcs.commit(witness.clone(), &mut transcript).unwrap();
+    let (_, direct_data) = control
+        .commit(witness.clone(), &mut fresh_challenger())
+        .unwrap();
+    let before: F = transcript.clone().sample();
+    let claims = vec![(point.clone(), witness.eval_base(&point)); 1 << 14];
+    let result = pcs.open(data, vec![point; 1 << 14], &mut transcript);
+    assert!(matches!(
+        result,
+        Err(WhirConfigError::InitialClaimsBelowTarget { .. })
+    ));
+    assert_eq!(CanSample::<F>::sample(&mut transcript), before);
+
+    let direct = super::prover::HidingWhirProver::new(&pcs.config, &pcs.dft, &pcs.mmcs);
+    let mut direct_rng = StdRng::seed_from_u64(948);
+    let mut before = transcript.clone();
+    let result = direct.prove(direct_data, &claims, &mut transcript, &mut direct_rng);
+    assert!(matches!(
+        result,
+        Err(WhirConfigError::InitialClaimsBelowTarget { .. })
+    ));
+    assert_eq!(CanSample::<F>::sample(&mut transcript), before.sample());
+    assert_eq!(
+        direct_rng.random::<u64>(),
+        StdRng::seed_from_u64(948).random::<u64>()
+    );
+    // An unsuccessful opening must not advance the adapter's masking RNG.
+    let next = pcs
+        .commit(witness.clone(), &mut fresh_challenger())
+        .unwrap()
+        .0;
+    let expected = control.commit(witness, &mut fresh_challenger()).unwrap().0;
+    assert_eq!(next, expected);
 }
 
 #[test]
@@ -743,5 +797,329 @@ fn zk_whir_masks_are_witness_independent() {
     assert_ne!(
         proof_a.base_case.blinded_message, proof_b.base_case.blinded_message,
         "different witnesses produce different (uniformly padded) reveals",
+    );
+}
+
+#[test]
+fn zk_whir_rejects_tampered_round_commitment() {
+    // Invariant: the oracle a code-switching round commits is bound at its own step.
+    //
+    // Fixture state: 12 variables at folding 4, giving 1 code-switching round.
+    //
+    // Mutation: swap in another witness's round oracle.
+    //
+    //     described  oracle_commitment       <- honest digest
+    //     supplied   oracle_commitment       <- a stranger's digest
+    //     -> every later challenge moves
+    //     -> the round-0 multiproof cannot authenticate
+    let mut proven = Setup::new(50).prove();
+    let other = Setup::new(51).prove();
+    proven.proof.rounds[0].commitment = other.proof.rounds[0].commitment.clone();
+    let err = proven.verify().unwrap_err();
+    assert_eq!(err, ZkVerifierError::MerkleVerificationFailed { round: 0 });
+}
+
+#[test]
+fn zk_whir_rejects_tampered_switch_mask_commitment() {
+    // Invariant: the code-switch mask is bound at a step of its own.
+    //
+    // It is committed right after the oracle it hides.
+    //
+    // Mutation: swap in another witness's mask oracle.
+    //
+    //     described  oracle_commitment  switch_mask_commitment
+    //     supplied   honest             a stranger's digest
+    //     -> the transcript diverges before the round's positions are drawn
+    let mut proven = Setup::new(52).prove();
+    let other = Setup::new(53).prove();
+    proven.proof.rounds[0].mask_commitment = other.proof.rounds[0].mask_commitment.clone();
+    let err = proven.verify().unwrap_err();
+    assert_eq!(err, ZkVerifierError::MerkleVerificationFailed { round: 0 });
+}
+
+#[test]
+fn zk_whir_rejects_tampered_sumcheck_mask_commitment() {
+    // Invariant: each masked batch binds its interleaved mask oracle.
+    //
+    // That happens inside the batch's own description, under its own seed.
+    //
+    // Mutation: swap the first batch's mask oracle for a stranger's.
+    //
+    //     batch 0  mask_commitment  <- a stranger's digest
+    //     -> the batch draws a different combining challenge
+    //     -> the batch cannot close
+    let mut proven = Setup::new(54).prove();
+    let other = Setup::new(55).prove();
+    proven.proof.sumcheck_mask_commitments[0] = other.proof.sumcheck_mask_commitments[0].clone();
+    let err = proven.verify().unwrap_err();
+    // The diverged batch fails its own round identity.
+    //
+    // Or it moves the positions the round-0 multiproof is checked at.
+    assert!(matches!(
+        err,
+        ZkVerifierError::Sumcheck(_) | ZkVerifierError::MerkleVerificationFailed { round: 0 },
+    ));
+}
+
+#[test]
+fn zk_whir_rejects_tampered_base_case_fresh_commitment() {
+    // Invariant: the base case binds its fresh source mask first.
+    //
+    // Nothing is drawn before that binding.
+    //
+    // The blinding challenge is what the binding protects.
+    //
+    // Mutation: swap in another run's fresh source mask.
+    //
+    //     described  base_fresh_commitment  <- honest digest
+    //     supplied   base_fresh_commitment  <- a stranger's digest
+    //     -> a different blinding challenge
+    //     -> the joint target identity fails
+    let mut proven = Setup::new(56).prove();
+    let other = Setup::new(57).prove();
+    proven.proof.base_case.fresh_main_commitment = other.proof.base_case.fresh_main_commitment;
+    let err = proven.verify().unwrap_err();
+    assert_eq!(
+        err,
+        ZkVerifierError::BaseCase(BaseCaseZkError::TargetCheckFailed),
+    );
+}
+
+#[test]
+fn zk_whir_rejects_tampered_base_case_blind_commitment() {
+    // Invariant: every fresh blind group is bound at a step of its own.
+    //
+    // Mutation: swap the first group's blind oracle for a stranger's.
+    //
+    //     group 0  base_blind_commitment  <- a stranger's digest
+    //     -> a different blinding challenge
+    //     -> the joint target identity fails
+    let mut proven = Setup::new(58).prove();
+    let other = Setup::new(59).prove();
+    assert!(
+        !proven.proof.base_case.fresh_mask_commitments.is_empty(),
+        "the fixture must commit at least one fresh blind group",
+    );
+    proven.proof.base_case.fresh_mask_commitments[0] =
+        other.proof.base_case.fresh_mask_commitments[0].clone();
+    let err = proven.verify().unwrap_err();
+    assert_eq!(
+        err,
+        ZkVerifierError::BaseCase(BaseCaseZkError::TargetCheckFailed),
+    );
+}
+
+#[test]
+fn zk_whir_rejects_tampered_base_case_randomness_reveal() {
+    // Invariant: the encoding-randomness half of a reveal is bound too.
+    //
+    // It does not enter the joint target identity.
+    //
+    // Only its binding can catch a shift in it.
+    //
+    // Mutation: shift one coefficient of the source randomness reveal.
+    //
+    //     absorbed  base_reveal_randomness  <- shifted
+    //     -> the spot positions drawn next differ from the ones the proof opens
+    let mut proven = Setup::new(60).prove();
+    proven.proof.base_case.blinded_randomness[0] += EF::ONE;
+    let err = proven.verify().unwrap_err();
+    assert_eq!(
+        err,
+        ZkVerifierError::BaseCase(BaseCaseZkError::SourceOpeningsRejected),
+    );
+}
+
+#[test]
+fn zk_whir_rejects_tampered_base_case_mask_reveal() {
+    // Invariant: each carried mask is revealed as its own pair of bound steps.
+    //
+    // Mutation: shift the message half of the first mask reveal.
+    //
+    //     absorbed  base_reveal_message  <- shifted
+    //     -> the reveal enters the joint target identity
+    //     -> that identity then fails
+    let mut proven = Setup::new(61).prove();
+    assert!(
+        !proven.proof.base_case.blinded_masks.is_empty(),
+        "the fixture must carry at least one mask",
+    );
+    proven.proof.base_case.blinded_masks[0].message[0] += EF::ONE;
+    let err = proven.verify().unwrap_err();
+    assert_eq!(
+        err,
+        ZkVerifierError::BaseCase(BaseCaseZkError::TargetCheckFailed),
+    );
+}
+
+#[test]
+fn zk_whir_rejects_tampered_base_case_mask_randomness_reveal() {
+    // Invariant: the randomness half of a mask reveal is bound at its own step.
+    //
+    // Mutation: shift the randomness half of the first mask reveal.
+    //
+    //     target identity  ->  unaffected, randomness is not in it
+    //     absorbed reveal  ->  lands before the spot positions are drawn
+    //     -> the positions move
+    //     -> the source multiproof opens the wrong leaves
+    let mut proven = Setup::new(62).prove();
+    proven.proof.base_case.blinded_masks[0].randomness[0] += EF::ONE;
+    let err = proven.verify().unwrap_err();
+    assert_eq!(
+        err,
+        ZkVerifierError::BaseCase(BaseCaseZkError::SourceOpeningsRejected),
+    );
+}
+
+#[test]
+fn zk_whir_rejects_tampered_base_case_pow_witness() {
+    // Invariant: the base case grinds once, before its spot positions are drawn.
+    //
+    // Fixture state: 5 grinding bits, which is real work.
+    //
+    // Mutation: shift the witness the base case grinding step reads.
+    //
+    //     described  base_pow(5)
+    //     supplied   witness + 1   -> clears 5 bits with probability 2^-5
+    let mut proven = Setup::new(63).pow_bits(5).prove();
+    assert!(
+        proven.pcs.config.final_pow_bits > 0,
+        "the fixture must grind before its spot checks",
+    );
+    proven.proof.base_case.pow_witness += F::ONE;
+    let err = proven.verify().unwrap_err();
+    // A shifted witness usually fails the grind outright.
+    //
+    // A lucky one still moves the spot positions.
+    //
+    // The openings are then rejected instead.
+    assert!(matches!(
+        err,
+        ZkVerifierError::BaseCase(
+            BaseCaseZkError::InvalidPowWitness | BaseCaseZkError::SourceOpeningsRejected
+        ),
+    ));
+}
+
+#[test]
+fn zk_whir_rejects_a_truncated_base_case_reveal() {
+    // Invariant: a reveal carries exactly the length the configuration describes.
+    //
+    // Fixture state: the source word is 2^final_sumcheck_rounds values wide.
+    //
+    // Mutation: drop one value from the source message reveal.
+    //
+    //     described  message_len
+    //     supplied   message_len - 1  -> rejected, nothing absorbed
+    let mut proven = Setup::new(64).prove();
+    let expected = proven.proof.base_case.blinded_message.len();
+    let _dropped = proven.proof.base_case.blinded_message.pop();
+    let err = proven.verify().unwrap_err();
+    assert_eq!(
+        err,
+        ZkVerifierError::BaseCase(BaseCaseZkError::BlindedLengthMismatch {
+            kind: "message",
+            expected,
+            actual: expected - 1,
+        }),
+    );
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(8))]
+
+    #[test]
+    fn prop_zk_whir_round_trip_accepts(seed in any::<u64>()) {
+        // Completeness over random statements and random hiding material.
+        //
+        // The seed drives the witness, the opened points and the prover's masks.
+        //
+        // Both sides play one description.
+        //
+        // Every honest run must therefore verify.
+        Setup::new(seed).num_points(2).assert_round_trip();
+    }
+}
+
+#[test]
+fn the_commit_phase_binds_exactly_what_the_binding_method_binds() {
+    // Invariant: a verifier never commits, so it replays the prover's binding by
+    // calling the scheme's binding method.
+    //
+    // The two are interchangeable only while they leave the sponge in one state.
+    //
+    //     prover  : commit(witness, a)          -> a
+    //     verifier: observe_commitment(root, b) -> b
+    //     a and b must sample alike
+    //
+    // A commit phase that bound something else, or bound it twice, would move
+    // only one of the two.
+    let setup = Setup::new(6);
+    let pcs = setup.pcs();
+    let mut rng = SmallRng::seed_from_u64(7);
+    let witness = Poly::<F>::rand(&mut rng, setup.num_variables);
+
+    let mut committed = fresh_challenger();
+    let (commitment, _) = pcs.commit(witness, &mut committed).unwrap();
+
+    let mut replayed = fresh_challenger();
+    pcs.observe_commitment(&commitment, &mut replayed);
+
+    assert_eq!(
+        CanSample::<F>::sample(&mut committed),
+        CanSample::<F>::sample(&mut replayed),
+    );
+}
+
+#[test]
+fn the_open_phase_binds_the_statement_and_nothing_else() {
+    // Invariant: opening binds the claims, as one phase, and then runs.
+    //
+    // Reconstructing that from the outside and landing on the same sponge state
+    // is what says the adapter binds the statement and only the statement.
+    //
+    //     adapter : open(data, points, a)              -> a
+    //     replay  : observe_claims(b, claims) + prove  -> b
+    //     a and b must sample alike
+    //
+    // Dropping the claim binding from both sides leaves the whole statement out
+    // of the transcript, and every honest proof still verifies.
+    //
+    // This is what notices: the replay still binds, so the two sponges part.
+    let setup = Setup::new(6);
+    let pcs = setup.pcs();
+    let mut rng = SmallRng::seed_from_u64(8);
+    let witness = Poly::<F>::rand(&mut rng, setup.num_variables);
+    let point = Point::<EF>::rand(&mut rng, setup.num_variables);
+    let eval = witness.eval_base(&point);
+
+    // The adapter's own route: commit, then open.
+    let mut adapter = fresh_challenger();
+    let (commitment, data) = pcs.commit(witness.clone(), &mut adapter).unwrap();
+    let _proof = pcs.open(data, vec![point.clone()], &mut adapter).unwrap();
+
+    // The same run, rebuilt from the pieces the adapter is supposed to use.
+    //
+    // Both start from one commitment, so only the statement binding is in question.
+    let mut replay = fresh_challenger();
+    pcs.observe_commitment(&commitment, &mut replay);
+    observe_claims::<F, EF, _>(&mut replay, &[(point.clone(), eval)], setup.num_variables);
+
+    // The adapter derives a fresh generator per call from the one it holds.
+    //
+    // Replaying the masking randomness means deriving the same two, in order.
+    let mut masking = StdRng::seed_from_u64(setup.seed);
+    let mut commit_rng = StdRng::from_rng(&mut masking);
+    let mut open_rng = StdRng::from_rng(&mut masking);
+
+    let inner = HidingWhirProver::new(&pcs.config, &pcs.dft, &pcs.mmcs);
+    let (_, inner_data) = inner.commit(witness, &mut commit_rng);
+    let _ = inner
+        .prove(inner_data, &[(point, eval)], &mut replay, &mut open_rng)
+        .unwrap();
+
+    assert_eq!(
+        CanSample::<F>::sample(&mut adapter),
+        CanSample::<F>::sample(&mut replay),
     );
 }

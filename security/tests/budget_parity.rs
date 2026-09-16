@@ -16,7 +16,7 @@ use p3_security::fri::{FriRegime, commit_phase_error_udr, conjectured_error};
 use p3_security::grinding::{GrindingSites, boost};
 use p3_security::logup::{LogUpAir, security_term as logup_security_term};
 use p3_security::shape::{InstanceShape as F64InstanceShape, StarkAirParams};
-use p3_security::{air, deep, fixed};
+use p3_security::{ErrorBits, SecurityAssumption, air, deep, fixed};
 use proptest::prelude::*;
 
 const TIGHT_TOL: f64 = 1e-4;
@@ -121,12 +121,14 @@ fn every_round_direction_and_tightness() {
                 let air_shape = AirShape {
                     num_composed_constraints: air_vector.num_composed_constraints,
                     max_constraint_degree: air_vector.max_constraint_degree,
+                    num_quotient_chunks: (air_vector.max_constraint_degree.max(2) - 1)
+                        .next_power_of_two(),
                     max_combo,
                     num_deep_terms: Some(air_vector.num_deep_terms),
-                    lookup: LookupShape {
+                    lookup: Some(LookupShape {
                         fractions_per_row: air_vector.fractions_per_row,
                         max_message_width: air_vector.max_message_width,
-                    },
+                    }),
                 };
 
                 for log_max_height in 6..=29u32 {
@@ -142,7 +144,7 @@ fn every_round_direction_and_tightness() {
                     check_composition(&report, air_vector);
                     check_ood(&report, air_vector, max_combo, log_max_height, ood_pow_bits);
                     check_folding(&report, log_max_height, folding_pow_bits);
-                    check_deep_composition(&report, air_vector, deep_pow_bits);
+                    check_deep_composition(&report, air_vector, log_max_height, deep_pow_bits);
                 }
             }
         }
@@ -232,6 +234,8 @@ fn check_ood(
     let stark_air = StarkAirParams {
         num_constraints: air_vector.num_composed_constraints as usize,
         max_constraint_degree: air_vector.max_constraint_degree as usize,
+        num_quotient_chunks: (air_vector.max_constraint_degree.max(2) - 1).next_power_of_two()
+            as usize,
         max_combo: max_combo as usize,
     };
     let p3_bits = cap(boost(
@@ -279,21 +283,42 @@ fn check_folding(report: &SecurityReport, log_max_height: u32, folding_pow_bits:
     );
 }
 
-fn check_deep_composition(report: &SecurityReport, air_vector: &AirVector, deep_pow_bits: u32) {
+fn check_deep_composition(
+    report: &SecurityReport,
+    air_vector: &AirVector,
+    log_max_height: u32,
+    deep_pow_bits: u32,
+) {
     let fixed_bits = term_bits(report, DEEP_COMPOSITION_LABEL);
+    let num_terms = air_vector.num_deep_terms as usize;
+    // The opening-batching term of `p3_security::stark`'s conjectured report: the proximity-gap
+    // error `(k − 1)·n / |F|` over the LDE domain.
     let p3_bits = cap(boost(
-        air::composition_error(air_vector.num_deep_terms as usize, 1.0, CAP_BITS),
+        ErrorBits::from_log2(
+            SecurityAssumption::UniqueDecoding
+                .prox_gaps_error(
+                    log_max_height as usize,
+                    LOG_BLOWUP as usize,
+                    CAP_BITS,
+                    num_terms,
+                )
+                .max(0.0),
+        ),
         deep_pow_bits as usize,
     )
     .bits());
 
+    // The budget's coefficient is `k` where the reference has `k − 1`, which costs it at most
+    // `log2(k / (k − 1))` bits.
+    let tolerance = (num_terms as f64 / (num_terms - 1) as f64).log2() + TIGHT_TOL;
     assert!(
         fixed_bits <= p3_bits + TIGHT_TOL,
-        "deep-composition: {fixed_bits} > {p3_bits}"
+        "deep-composition: {fixed_bits} > {p3_bits} at h={log_max_height}"
     );
     assert!(
-        p3_bits - fixed_bits < TIGHT_TOL,
-        "deep-composition: gap {} >= tolerance, fixed drifted conservative",
+        p3_bits - fixed_bits < tolerance,
+        "deep-composition: gap {} >= tolerance {tolerance} at h={log_max_height}, \
+         fixed drifted conservative",
         p3_bits - fixed_bits
     );
 }
@@ -320,12 +345,13 @@ fn collision_term_is_the_cap() {
     let air_shape = AirShape {
         num_composed_constraints: LARGE.num_composed_constraints,
         max_constraint_degree: LARGE.max_constraint_degree,
+        num_quotient_chunks: (LARGE.max_constraint_degree.max(2) - 1).next_power_of_two(),
         max_combo: OOD_MAX_COMBO,
         num_deep_terms: Some(LARGE.num_deep_terms),
-        lookup: LookupShape {
+        lookup: Some(LookupShape {
             fractions_per_row: LARGE.fractions_per_row,
             max_message_width: LARGE.max_message_width,
-        },
+        }),
     };
     let report = security_report(&params, &instance, &air_shape);
     assert_eq!(term_bits(&report, COLLISION_LABEL), 96.0);
@@ -344,7 +370,10 @@ proptest! {
         log_max_height in 0..=48u32,
         max_combo in 1..=16u32,
         ood_pow_bits in 0..=32u32,
+        is_zk in proptest::bool::ANY,
     ) {
+        let zk = u32::from(is_zk);
+        let num_quotient_chunks = ((max_constraint_degree + zk).max(2) - 1).next_power_of_two() << zk;
         let params = ProtocolParams {
             log_blowup: LOG_BLOWUP,
             log_folding_arity: LOG_FOLDING_ARITY,
@@ -364,11 +393,12 @@ proptest! {
             num_composed_constraints: SMALL.num_composed_constraints,
             max_constraint_degree,
             max_combo,
+            num_quotient_chunks,
             num_deep_terms: Some(SMALL.num_deep_terms),
-            lookup: LookupShape {
+            lookup: Some(LookupShape {
                 fractions_per_row: SMALL.fractions_per_row,
                 max_message_width: SMALL.max_message_width,
-            },
+            }),
         };
         let fixed_bits = term_bits(
             &security_report(&params, &instance, &air_shape),
@@ -378,6 +408,7 @@ proptest! {
         let stark_air = StarkAirParams {
             num_constraints: SMALL.num_composed_constraints as usize,
             max_constraint_degree: max_constraint_degree as usize,
+            num_quotient_chunks: num_quotient_chunks as usize,
             max_combo: max_combo as usize,
         };
         let reference = boost(

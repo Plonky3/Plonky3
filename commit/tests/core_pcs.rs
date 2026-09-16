@@ -17,6 +17,7 @@ impl Pcs<F, ()> for LinearPcs {
     type ProverData = Vec<Vec<F>>;
     type Proof = ();
     type Error = ();
+    type ProverError = core::convert::Infallible;
 
     fn natural_domain_for_degree(&self, degree: usize) -> Domain {
         assert_eq!(degree, 2);
@@ -26,20 +27,20 @@ impl Pcs<F, ()> for LinearPcs {
     fn commit(
         &self,
         evaluations: impl IntoIterator<Item = (Domain, RowMajorMatrix<F>)>,
-    ) -> (Self::Commitment, Self::ProverData) {
+    ) -> Result<(Self::Commitment, Self::ProverData), Self::ProverError> {
         let data: Vec<_> = evaluations
             .into_iter()
             .map(|(_, matrix)| matrix.values)
             .collect();
-        (data.clone(), data)
+        Ok((data.clone(), data))
     }
 
     fn open(
         &self,
         requests: Vec<OpeningRequest<'_, Self::ProverData, F>>,
         _: &mut (),
-    ) -> (OpenedValues<F>, ()) {
-        (
+    ) -> Result<(OpenedValues<F>, ()), Self::ProverError> {
+        Ok((
             requests
                 .into_iter()
                 .map(|request| {
@@ -57,7 +58,7 @@ impl Pcs<F, ()> for LinearPcs {
                 })
                 .collect(),
             (),
-        )
+        ))
     }
 
     fn verify(
@@ -93,24 +94,27 @@ fn core_only_pcs_preserves_round_matrix_and_point_order() {
     let domain = pcs.natural_domain_for_degree(2);
     // p(x) = 3 + 2x, q(x) = 7 - x, r(x) = 11 + 4x.
     let matrix = |a: u8, b: F| RowMajorMatrix::new(vec![F::from_u8(a) + b, F::from_u8(a) - b], 1);
-    let (first, first_data) =
-        pcs.commit([(domain, matrix(3, F::TWO)), (domain, matrix(7, -F::ONE))]);
-    let (second, second_data) = pcs.commit([(domain, matrix(11, F::from_u8(4)))]);
+    let (first, first_data) = pcs
+        .commit([(domain, matrix(3, F::TWO)), (domain, matrix(7, -F::ONE))])
+        .unwrap();
+    let (second, second_data) = pcs.commit([(domain, matrix(11, F::from_u8(4)))]).unwrap();
     let x = F::from_u8(5);
     let y = F::from_u8(9);
-    let (values, proof) = pcs.open(
-        vec![
-            OpeningRequest {
-                prover_data: &first_data,
-                points: vec![vec![y, x], vec![x]],
-            },
-            OpeningRequest {
-                prover_data: &second_data,
-                points: vec![vec![x, y]],
-            },
-        ],
-        &mut (),
-    );
+    let (values, proof) = pcs
+        .open(
+            vec![
+                OpeningRequest {
+                    prover_data: &first_data,
+                    points: vec![vec![y, x], vec![x]],
+                },
+                OpeningRequest {
+                    prover_data: &second_data,
+                    points: vec![vec![x, y]],
+                },
+            ],
+            &mut (),
+        )
+        .unwrap();
     assert_eq!(
         values,
         vec![

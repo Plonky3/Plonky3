@@ -151,6 +151,12 @@ impl BasedVectorSpace<Mersenne31> for QM31 {
     }
 }
 
+impl p3_field::AlgebraIdentity<Mersenne31> for QM31 {
+    fn algebra_id() -> Vec<u8> {
+        b"p3-QM31-v1:i^2=-1,u^2=2+i;basis=1,i,u,iu".to_vec()
+    }
+}
+
 impl ExtensionField<Mersenne31> for QM31 {
     type ExtensionPacking = PackedQM31;
 
@@ -194,6 +200,15 @@ impl PrimeCharacteristicRing for PackedQM31 {
     #[inline]
     fn halve(&self) -> Self {
         Self(self.0.map(|c| c.halve()))
+    }
+
+    #[inline(always)]
+    fn square(&self) -> Self {
+        let [a0, a1] = self.0;
+        Self([
+            a0.square() + packed_mul_by_w(a1.square()),
+            (a0 * a1).double(),
+        ])
     }
 
     #[inline]
@@ -565,6 +580,26 @@ mod tests {
             assert_eq!(
                 <PackedQM31 as PackedFieldExtension<F, EF>>::extract(&prod, lane),
                 xs[lane] * ys[lane]
+            );
+        }
+    }
+
+    #[test]
+    fn packed_square_matches_scalar() {
+        use p3_field::PackedFieldExtension;
+        use rand::rngs::SmallRng;
+        use rand::{RngExt, SeedableRng};
+
+        let mut rng = SmallRng::seed_from_u64(2);
+        let width = <PackedM31 as p3_field::PackedValue>::WIDTH;
+        let xs: alloc::vec::Vec<QM31> = (0..width).map(|_| rng.random()).collect();
+        let px = <PackedQM31 as PackedFieldExtension<F, EF>>::from_ext_slice(&xs);
+        let square = px.square();
+
+        for (lane, x) in xs.iter().enumerate() {
+            assert_eq!(
+                <PackedQM31 as PackedFieldExtension<F, EF>>::extract(&square, lane),
+                x.square()
             );
         }
     }

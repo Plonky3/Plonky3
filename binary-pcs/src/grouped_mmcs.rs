@@ -487,8 +487,10 @@ mod tests {
                     vec![OpeningBatch::new(vec![0], Vec::new())],
                 )]);
                 let mut prover_challenger = challenger();
-                let (commitment, data) = pcs.commit(witness, &mut prover_challenger);
-                let proof = pcs.open(data, protocol.clone(), &mut prover_challenger);
+                let (commitment, data) = pcs.commit(witness, &mut prover_challenger).unwrap();
+                let proof = pcs
+                    .open(data, protocol.clone(), &mut prover_challenger)
+                    .unwrap();
                 let bytes = postcard::to_allocvec(&proof).unwrap();
                 let decoded: BinaryPcsProof<GroupedCodewordMmcs<MyMmcs>> =
                     postcard::from_bytes(&bytes).unwrap();

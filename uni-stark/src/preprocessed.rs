@@ -2,7 +2,7 @@ use p3_commit::{Pcs, UnivariateStarkPcs};
 use p3_matrix::Matrix;
 use tracing::debug_span;
 
-use crate::{QuotientAir, StarkGenericConfig};
+use crate::{PcsProverError, ProvingError, QuotientAir, StarkGenericConfig};
 
 /// Prover-side reusable data for preprocessed columns.
 ///
@@ -41,13 +41,17 @@ pub struct PreprocessedVerifierKey<SC: StarkGenericConfig> {
 /// Set up and commit the preprocessed trace for a given `Air` and degree.
 ///
 /// This can be called once per `Air`/degree configuration to obtain reusable
-/// prover data for preprocessed columns. Returns `None` if the `Air` does not
-/// define any preprocessed columns.
+/// prover data for preprocessed columns. Returns `Ok(None)` if the `Air` does not
+/// define any preprocessed columns, or the PCS error if its commitment budget is insufficient.
+#[allow(clippy::type_complexity)]
 pub fn setup_preprocessed<SC, A>(
     config: &SC,
     air: &A,
     degree_bits: usize,
-) -> Option<(PreprocessedProverData<SC>, PreprocessedVerifierKey<SC>)>
+) -> Result<
+    Option<(PreprocessedProverData<SC>, PreprocessedVerifierKey<SC>)>,
+    ProvingError<PcsProverError<SC>>,
+>
 where
     SC: StarkGenericConfig,
     A: QuotientAir<SC>,
@@ -58,11 +62,13 @@ where
     let init_degree = 1 << degree_bits;
     let degree = 1 << (degree_bits + is_zk);
 
-    let preprocessed = air.preprocessed_trace()?;
+    let Some(preprocessed) = air.preprocessed_trace() else {
+        return Ok(None);
+    };
 
     let width = preprocessed.width();
     if width == 0 {
-        return None;
+        return Ok(None);
     }
 
     assert_eq!(
@@ -73,7 +79,11 @@ where
 
     let trace_domain = pcs.natural_domain_for_degree(degree);
     let (commitment, prover_data) = debug_span!("commit to preprocessed trace")
-        .in_scope(|| pcs.commit_preprocessing([(trace_domain, preprocessed)]));
+        .in_scope(|| pcs.commit_preprocessing([(trace_domain, preprocessed)]))
+        .map_err(|source| ProvingError::Pcs {
+            phase: "preprocessing commitment",
+            source,
+        })?;
 
     let degree_bits = degree_bits + is_zk;
     let prover_data = PreprocessedProverData {
@@ -87,5 +97,5 @@ where
         degree_bits,
         commitment,
     };
-    Some((prover_data, vk))
+    Ok(Some((prover_data, vk)))
 }

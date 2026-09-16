@@ -86,7 +86,7 @@ fn make_config() -> MyConfig {
 fn test_no_next_row_air() {
     let config = make_config();
     let trace = generate_square_trace::<Val>(1 << 3);
-    let proof = prove(&config, &SquareAir, trace, &[]);
+    let proof = prove(&config, &SquareAir, trace, &[]).unwrap();
 
     // trace_next should be None
     assert!(
@@ -101,7 +101,7 @@ fn test_no_next_row_air() {
 fn test_no_next_row_rejects_present_trace_next() {
     let config = make_config();
     let trace = generate_square_trace::<Val>(1 << 3);
-    let proof = prove(&config, &SquareAir, trace, &[]);
+    let proof = prove(&config, &SquareAir, trace, &[]).unwrap();
 
     // Tamper: set trace_next to Some(zeros) — verifier should reject
     let mut tampered = proof;

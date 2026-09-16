@@ -58,6 +58,13 @@ impl<'a, SC: SGC> VerifierData<'a, SC> {
     where
         A: for<'b> Air<VerifierConstraintFolderWithLookups<'b, SC>>,
     {
+        // Public inputs reach this proof only through AIR constraints.
+        // A cell listed for backend binding would go completely unbound.
+        assert!(
+            air.public_boundary_io().is_empty(),
+            "batch-stark does not support boundary-IO public values; bind them with AIR constraints"
+        );
+
         // The constraint check below divides by the vanishing polynomial of this trace domain.
         // Reject any zeta on the domain, where that polynomial is zero and `inv_vanishing` panics.
         // Honest Fiat-Shamir sampling reaches this only with probability |H| / |EF|.

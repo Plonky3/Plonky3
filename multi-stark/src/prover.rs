@@ -2,13 +2,14 @@
 
 use alloc::vec::Vec;
 
+use p3_air::boundary;
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
 use p3_commit::MultilinearPcs;
 use p3_field::{ExtensionField, Field};
 use p3_sumcheck::PrescribedPointPcs;
 
 use crate::ProverInstances;
-use crate::config::{Commitment, MultiStarkConfig, ProverData};
+use crate::config::{Commitment, MultiStarkConfig, PcsProverError, ProverData};
 use crate::folder::ProverAir;
 use crate::instance::ProverParts;
 use crate::lookup::prove_lookup;
@@ -16,6 +17,17 @@ use crate::proof::MultiStarkProof;
 use crate::security::{SecurityError, assess_statement};
 use crate::transcript::{MultiStarkProverTranscript, MultiStarkShape};
 use crate::zerocheck::AirZerocheck;
+
+/// A proving-time PCS budget failure or a failed statement security assessment.
+#[derive(Debug, thiserror::Error)]
+pub enum ProvingError<E> {
+    /// The PCS rejected a commitment or an opening budget.
+    #[error("PCS {phase} failed: {source:?}")]
+    Pcs { phase: &'static str, source: E },
+    /// The requested complete-statement security target was not met.
+    #[error(transparent)]
+    Security(#[from] SecurityError),
+}
 
 /// Prove only when the complete statement's security assessment meets `target_bits`.
 ///
@@ -29,11 +41,12 @@ pub fn prove_with_security<'a, C, A>(
     pow_bits: usize,
     target_bits: usize,
     challenger: &mut C::Challenger,
-) -> Result<MultiStarkProof<C>, SecurityError>
+) -> Result<MultiStarkProof<C>, ProvingError<PcsProverError<C>>>
 where
     C: MultiStarkConfig,
     C::Pcs: PrescribedPointPcs<C::Challenge, C::Challenger>,
-    C::Challenger: FieldChallenger<C::Val>
+    C::Challenger: Clone
+        + FieldChallenger<C::Val>
         + GrindingChallenger<Witness = C::Val>
         + CanSampleUniformBits<C::Val>
         + CanObserve<Commitment<C>>,
@@ -44,7 +57,7 @@ where
         From<C::Challenge> + From<<C::Val as Field>::Packing>,
 {
     assess_statement(config, &instances.statement())?.require_security(target_bits)?;
-    Ok(prove(config, instances, pow_bits, challenger))
+    prove(config, instances, pow_bits, challenger)
 }
 
 /// Prove that a batch of AIR instances is satisfied by committed execution traces.
@@ -84,6 +97,12 @@ where
 /// - `pow_bits`: grinding difficulty per sumcheck round.
 /// - `challenger`: Fiat-Shamir transcript.
 ///
+/// # Errors
+///
+/// Returns the PCS configuration or budget error with its proving phase. The supplied
+/// challenger is published only on success and is unchanged on a returned error.
+/// This transcript transaction does not roll back earlier PCS randomness or commitments.
+///
 /// # Panics
 ///
 /// - The instance list must not be empty.
@@ -97,17 +116,19 @@ where
 /// - A preprocessed key, when present, must have the same height as the main trace.
 /// - A periodic column's period must be a power of two dividing the trace height.
 /// - A lookup-active trace must meet the prover's SIMD packing width.
+/// - An AIR's public boundary declaration must name only cells and values it has.
 #[tracing::instrument(skip_all)]
 pub fn prove<'a, C, A>(
     config: &C,
     instances: ProverInstances<'a, C, A>,
     pow_bits: usize,
-    challenger: &mut C::Challenger,
-) -> MultiStarkProof<C>
+    caller_challenger: &mut C::Challenger,
+) -> Result<MultiStarkProof<C>, ProvingError<PcsProverError<C>>>
 where
     C: MultiStarkConfig,
     C::Pcs: PrescribedPointPcs<C::Challenge, C::Challenger>,
-    C::Challenger: FieldChallenger<C::Val>
+    C::Challenger: Clone
+        + FieldChallenger<C::Val>
         + GrindingChallenger<Witness = C::Val>
         + CanSampleUniformBits<C::Val>
         + CanObserve<Commitment<C>>,
@@ -117,6 +138,8 @@ where
     <C::Challenge as ExtensionField<C::Val>>::ExtensionPacking:
         From<C::Challenge> + From<<C::Val as Field>::Packing>,
 {
+    let mut candidate = caller_challenger.clone();
+    let challenger = &mut candidate;
     assert!(!instances.is_empty());
 
     let ProverParts {
@@ -138,12 +161,23 @@ where
         "every trace arity must be at least the commitment scheme's padding floor"
     );
 
+    // Reject a malformed public boundary declaration before anything indexes by it.
+    // The pins the folder injects read columns and public values by those numbers.
+    let airs = instances.airs();
+    for (instance, air) in airs.iter().enumerate() {
+        boundary::validate(
+            air.public_boundary_io(),
+            air.width(),
+            air.num_public_values(),
+        )
+        .unwrap_or_else(|error| panic!("instance {instance} boundary IO: {error}"));
+    }
+
     // Describe the statement before binding anything into it.
     //
     // Every number comes from the AIRs, from the tables this caller holds, and from `pow_bits`.
     // No proof exists yet, so none of them can come from one.
     let num_instances = instances.len();
-    let airs = instances.airs();
     let public_values = instances.public_values();
     let mut transcript = MultiStarkProverTranscript::<C::Challenger, C::Val>::new(
         challenger,
@@ -161,8 +195,13 @@ where
     // 2. Commit all main trace tables in instance order, inside the delegation bracket.
     // The scheme absorbs the commitment it produces, so the bracket records where that lands.
     let witness = config.build_witness(tables);
-    let (commitment, prover_data) =
-        transcript.main_commitment(|challenger| config.pcs().commit(witness, challenger));
+    let (commitment, prover_data) = transcript
+        .main_commitment(|challenger| config.pcs().commit(witness, challenger))
+        .inspect_err(|_| transcript.abort())
+        .map_err(|source| ProvingError::Pcs {
+            phase: "main commitment",
+            source,
+        })?;
 
     // Keep commitment-bound table views for zerocheck, one per instance.
     let tables = (0..num_instances)
@@ -233,6 +272,13 @@ where
         )
     });
 
+    let opening = opening
+        .inspect_err(|_| transcript.abort())
+        .map_err(|source| ProvingError::Pcs {
+            phase: "main opening",
+            source,
+        })?;
+
     // 7. Open each non-empty preprocessed table at its suffix of the same bound point.
     // The setup commitment data is reused rather than rebuilt.
     let preprocessed_opening = transcript.preprocessed_opening(|challenger| {
@@ -248,14 +294,23 @@ where
         )
     });
 
+    let preprocessed_opening = preprocessed_opening
+        .transpose()
+        .inspect_err(|_| transcript.abort())
+        .map_err(|source| ProvingError::Pcs {
+            phase: "preprocessed opening",
+            source,
+        })?;
+
     // Every described step has now been played.
     transcript.finish();
+    *caller_challenger = candidate;
 
-    MultiStarkProof {
+    Ok(MultiStarkProof {
         commitment,
         lookup: lookup_proof,
         sumcheck,
         opening,
         preprocessed_opening,
-    }
+    })
 }

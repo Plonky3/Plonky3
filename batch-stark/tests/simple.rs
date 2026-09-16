@@ -657,9 +657,9 @@ fn test_two_instances() -> Result<(), impl Debug> {
         },
     ];
 
-    let prover_data = ProverData::from_instances(&config, &instances);
+    let prover_data = ProverData::from_instances(&config, &instances).unwrap();
     let common = &prover_data.common;
-    let proof = prove_batch(&config, &instances, &prover_data);
+    let proof = prove_batch(&config, &instances, &prover_data).unwrap();
 
     let airs = vec![air_fib, air_mul];
     let pvs = vec![fib_pis, mul_pis];
@@ -694,9 +694,9 @@ fn security_estimate_with_and_without_lookups() {
             public_values: mul_pis.clone(),
         },
     ];
-    let prover_data = ProverData::from_instances(&config, &instances);
+    let prover_data = ProverData::from_instances(&config, &instances).unwrap();
     let common = &prover_data.common;
-    let proof = prove_batch(&config, &instances, &prover_data);
+    let proof = prove_batch(&config, &instances, &prover_data).unwrap();
     verify_batch(
         &config,
         &[air_fib, air_mul],
@@ -727,6 +727,7 @@ fn security_estimate_with_and_without_lookups() {
     let air = StarkAirParams {
         num_constraints: 3,
         max_constraint_degree: 2,
+        num_quotient_chunks: 1,
         max_combo: 2,
     };
     // A width-100 AIR that reads its own next row, committing two quotient chunks over the
@@ -798,9 +799,9 @@ fn test_periodic_air() -> Result<(), impl Debug> {
         trace: &trace,
         public_values: vec![],
     }];
-    let prover_data = ProverData::from_instances(&config, &instances);
+    let prover_data = ProverData::from_instances(&config, &instances).unwrap();
     let common = &prover_data.common;
-    let proof = prove_batch(&config, &instances, &prover_data);
+    let proof = prove_batch(&config, &instances, &prover_data).unwrap();
     verify_batch(&config, &[air], &proof, &[vec![]], common)
 }
 
@@ -816,9 +817,9 @@ fn periodic_column_non_power_of_two_is_rejected() {
         trace: &trace,
         public_values: vec![],
     }];
-    let prover_data = ProverData::from_instances(&config, &instances);
+    let prover_data = ProverData::from_instances(&config, &instances).unwrap();
     let common = &prover_data.common;
-    let proof = prove_batch(&config, &instances, &prover_data);
+    let proof = prove_batch(&config, &instances, &prover_data).unwrap();
 
     // Verifier: same symbolic shape, width 2 and two periodic columns.
     // The first column now has length 3, which has no evaluation subdomain.
@@ -848,6 +849,46 @@ fn periodic_column_non_power_of_two_is_rejected() {
 }
 
 #[test]
+fn hiding_budget_failure_aborts_batch_transcript() {
+    let config = make_config_zk(1234);
+    let air = PeriodicAir::<Val>::new();
+    let trace = air.valid_trace(4);
+    let instances = [StarkInstance {
+        air: &air,
+        trace: &trace,
+        public_values: vec![],
+    }];
+    let data = ProverData::from_instances(&config, &instances).unwrap();
+    let result = prove_batch(&config, &instances, &data);
+    assert!(matches!(
+        result,
+        Err(p3_batch_stark::ProvingError::Pcs {
+            phase: "trace commitment",
+            source: p3_fri::HidingFriProverError::HidingBudgetExceeded { mask_height: 4, .. },
+        })
+    ));
+}
+
+#[test]
+fn hiding_budget_failure_propagates_from_batch_setup() {
+    let config = make_config_zk(1234);
+    let (air, trace, public_values) = create_fib_instance(2);
+    let instances = [StarkInstance {
+        air: &air,
+        trace: &trace,
+        public_values,
+    }];
+    let result = ProverData::from_instances(&config, &instances);
+    assert!(matches!(
+        result,
+        Err(p3_batch_stark::ProvingError::Pcs {
+            phase: "preprocessing commitment",
+            source: p3_fri::HidingFriProverError::HidingBudgetExceeded { mask_height: 4, .. },
+        })
+    ));
+}
+
+#[test]
 fn test_periodic_air_zk() -> Result<(), impl Debug> {
     let config = make_config_zk(1234);
     let air = PeriodicAir::<Val>::new();
@@ -857,9 +898,9 @@ fn test_periodic_air_zk() -> Result<(), impl Debug> {
         trace: &trace,
         public_values: vec![],
     }];
-    let prover_data = ProverData::from_instances(&config, &instances);
+    let prover_data = ProverData::from_instances(&config, &instances).unwrap();
     let common = &prover_data.common;
-    let proof = prove_batch(&config, &instances, &prover_data);
+    let proof = prove_batch(&config, &instances, &prover_data).unwrap();
     verify_batch(&config, &[air], &proof, &[vec![]], common)
 }
 
@@ -883,9 +924,9 @@ fn test_two_instances_zk() -> Result<(), impl Debug> {
         },
     ];
 
-    let prover_data = ProverData::from_instances(&config, &instances);
+    let prover_data = ProverData::from_instances(&config, &instances).unwrap();
     let common = &prover_data.common;
-    let proof = prove_batch(&config, &instances, &prover_data);
+    let proof = prove_batch(&config, &instances, &prover_data).unwrap();
     let airs = vec![air_fib, air_mul];
     let pvs = vec![fib_pis, mul_pis];
     verify_batch(&config, &airs, &proof, &pvs, common)
@@ -917,9 +958,10 @@ fn test_three_instances_mixed_sizes() -> Result<(), impl Debug> {
         },
     ];
 
-    let prover_data: ProverData<MyConfig> = ProverData::from_instances(&config, &instances);
+    let prover_data: ProverData<MyConfig> =
+        ProverData::from_instances(&config, &instances).unwrap();
     let common = &prover_data.common;
-    let proof = prove_batch(&config, &instances, &prover_data);
+    let proof = prove_batch(&config, &instances, &prover_data).unwrap();
     let airs = vec![air_fib16, air_mul8, air_fib8];
     let pvs = vec![fib16_pis, mul8_pis, fib8_pis];
     verify_batch(&config, &airs, &proof, &pvs, common)
@@ -937,9 +979,9 @@ fn test_invalid_public_values_rejected() -> Result<(), Box<dyn std::error::Error
         trace: &trace,
         public_values: fib_pis,
     }];
-    let prover_data = ProverData::from_instances(&config, &instances);
+    let prover_data = ProverData::from_instances(&config, &instances).unwrap();
     let common = &prover_data.common;
-    let proof = prove_batch(&config, &instances, &prover_data);
+    let proof = prove_batch(&config, &instances, &prover_data).unwrap();
 
     // Wrong public value at verify => should reject
     let airs = vec![air_fib];
@@ -963,9 +1005,9 @@ fn test_short_public_values_rejected() -> Result<(), Box<dyn std::error::Error>>
         trace: &trace,
         public_values: fib_pis,
     }];
-    let prover_data = ProverData::from_instances(&config, &instances);
+    let prover_data = ProverData::from_instances(&config, &instances).unwrap();
     let common = &prover_data.common;
-    let proof = prove_batch(&config, &instances, &prover_data);
+    let proof = prove_batch(&config, &instances, &prover_data).unwrap();
 
     let airs = vec![air_fib];
     let short_pvs = vec![vec![Val::from_u64(0), Val::from_u64(1)]];
@@ -1000,9 +1042,9 @@ fn test_degree_bits_too_large_rejected() -> Result<(), Box<dyn std::error::Error
         trace: &trace,
         public_values: fib_pis.clone(),
     }];
-    let prover_data = ProverData::from_instances(&config, &instances);
+    let prover_data = ProverData::from_instances(&config, &instances).unwrap();
     let common = &prover_data.common;
-    let mut proof = prove_batch(&config, &instances, &prover_data);
+    let mut proof = prove_batch(&config, &instances, &prover_data).unwrap();
 
     // Mutation: overwrite the first AIR's degree_bits to exactly the bit
     // width of usize, which is the smallest value that overflows.
@@ -1051,9 +1093,9 @@ fn test_degree_bits_too_small_for_zk_rejected() -> Result<(), Box<dyn std::error
         trace: &trace,
         public_values: fib_pis.clone(),
     }];
-    let prover_data = ProverData::from_instances(&config, &instances);
+    let prover_data = ProverData::from_instances(&config, &instances).unwrap();
     let common = &prover_data.common;
-    let mut proof = prove_batch(&config, &instances, &prover_data);
+    let mut proof = prove_batch(&config, &instances, &prover_data).unwrap();
 
     // Mutation: set degree_bits to 0, which is below the ZK minimum.
     //
@@ -1112,9 +1154,9 @@ fn test_different_widths() -> Result<(), impl Debug> {
         },
     ];
 
-    let prover_data = ProverData::from_instances(&config, &instances);
+    let prover_data = ProverData::from_instances(&config, &instances).unwrap();
     let common = &prover_data.common;
-    let proof = prove_batch(&config, &instances, &prover_data);
+    let proof = prove_batch(&config, &instances, &prover_data).unwrap();
     let airs = vec![air_mul2, air_fib, air_mul3];
     let pvs = vec![mul2_pis, fib_pis, mul3_pis];
     verify_batch(&config, &airs, &proof, &pvs, common)
@@ -1132,9 +1174,9 @@ fn test_preprocessed_tampered_fails() -> Result<(), Box<dyn std::error::Error>> 
         public_values: fib_pis.clone(),
     }];
 
-    let prover_data = ProverData::from_instances(&config, &instances);
+    let prover_data = ProverData::from_instances(&config, &instances).unwrap();
     let common = &prover_data.common;
-    let proof = prove_batch(&config, &instances, &prover_data);
+    let proof = prove_batch(&config, &instances, &prover_data).unwrap();
 
     // First, sanity-check that verification succeeds with matching preprocessed data.
     let airs = vec![air];
@@ -1157,7 +1199,7 @@ fn test_preprocessed_tampered_fails() -> Result<(), Box<dyn std::error::Error>> 
     let degree_bits = proof.degree_bits.clone();
     let airs_tampered = vec![air_tampered];
     let prover_data_tampered =
-        ProverData::from_airs_and_degrees(&config, &airs_tampered, &degree_bits);
+        ProverData::from_airs_and_degrees(&config, &airs_tampered, &degree_bits).unwrap();
     let common_tampered = &prover_data_tampered.common;
 
     let res = verify_batch(&config, &airs_tampered, &proof, &[fib_pis], common_tampered);
@@ -1188,9 +1230,9 @@ fn test_preprocessed_reuse_common_multi_proofs() -> Result<(), Box<dyn std::erro
         trace: &trace1,
         public_values: fib_pis1.clone(),
     }];
-    let prover_data = ProverData::from_instances(&config, &instances1);
+    let prover_data = ProverData::from_instances(&config, &instances1).unwrap();
     let common = &prover_data.common;
-    let proof1 = prove_batch(&config, &instances1, &prover_data);
+    let proof1 = prove_batch(&config, &instances1, &prover_data).unwrap();
 
     // Verify the first proof.
     let airs = vec![air];
@@ -1210,7 +1252,7 @@ fn test_preprocessed_reuse_common_multi_proofs() -> Result<(), Box<dyn std::erro
         trace: &trace2,
         public_values: fib_pis2.clone(),
     }];
-    let proof2 = prove_batch(&config, &instances2, &prover_data);
+    let proof2 = prove_batch(&config, &instances2, &prover_data).unwrap();
 
     let res2 = verify_batch(&config, &airs, &proof2, &[fib_pis2], common);
     assert!(
@@ -1234,9 +1276,9 @@ fn test_single_instance() -> Result<(), impl Debug> {
         public_values: fib_pis.clone(),
     }];
 
-    let prover_data = ProverData::from_instances(&config, &instances);
+    let prover_data = ProverData::from_instances(&config, &instances).unwrap();
     let common = &prover_data.common;
-    let proof = prove_batch(&config, &instances, &prover_data);
+    let proof = prove_batch(&config, &instances, &prover_data).unwrap();
     let airs = vec![air_fib];
     verify_batch(&config, &airs, &proof, &[fib_pis], common)
 }
@@ -1254,9 +1296,9 @@ fn test_quotient_domain_size_not_multiple_of_packed_field_width() -> Result<(), 
         public_values: fib_pis.clone(),
     }];
 
-    let prover_data = ProverData::from_instances(&config, &instances);
+    let prover_data = ProverData::from_instances(&config, &instances).unwrap();
     let common = &prover_data.common;
-    let proof = prove_batch(&config, &instances, &prover_data);
+    let proof = prove_batch(&config, &instances, &prover_data).unwrap();
     let airs = vec![air_fib];
     verify_batch(&config, &airs, &proof, &[fib_pis], common)
 }
@@ -1281,10 +1323,10 @@ fn test_mixed_preprocessed() -> Result<(), impl Debug> {
         },
     ];
 
-    let prover_data = ProverData::from_instances(&config, &instances);
+    let prover_data = ProverData::from_instances(&config, &instances).unwrap();
     let common = &prover_data.common;
 
-    let proof = prove_batch(&config, &instances, &prover_data);
+    let proof = prove_batch(&config, &instances, &prover_data).unwrap();
 
     let airs = vec![air_fib, air_mul];
     let pvs = vec![fib_pis, mul_pis];
@@ -1309,9 +1351,9 @@ fn test_invalid_trace_width_rejected() {
     }];
 
     // Generate a valid proof
-    let prover_data = ProverData::from_instances(&config, &instances);
+    let prover_data = ProverData::from_instances(&config, &instances).unwrap();
     let common = &prover_data.common;
-    let valid_proof = prove_batch(&config, &instances, &prover_data);
+    let valid_proof = prove_batch(&config, &instances, &prover_data).unwrap();
 
     // Tamper with the proof: change trace_local to have wrong width
     let mut tampered_proof = p3_batch_stark::proof::BatchProof {
@@ -1413,13 +1455,13 @@ fn test_reorder_instances_rejected() {
     let degrees: Vec<usize> = instances.iter().map(|i| i.trace.height()).collect();
     let log_degrees: Vec<usize> = degrees.iter().copied().map(log2_strict_usize).collect();
 
-    let prover_data = ProverData::from_instances(&config, &instances);
-    let proof = prove_batch(&config, &instances, &prover_data);
+    let prover_data = ProverData::from_instances(&config, &instances).unwrap();
+    let proof = prove_batch(&config, &instances, &prover_data).unwrap();
 
     // Swap order at verify -> should fail (create new CommonData with swapped AIRs)
     let airs_swapped = vec![air_b, air_a];
     let prover_data_swapped =
-        ProverData::from_airs_and_degrees(&config, &airs_swapped, &log_degrees);
+        ProverData::from_airs_and_degrees(&config, &airs_swapped, &log_degrees).unwrap();
     let common_swapped = &prover_data_swapped.common;
     let res = verify_batch(
         &config,
@@ -1444,9 +1486,9 @@ fn test_quotient_chunk_element_len_rejected() {
         trace: &tr,
         public_values: pv.clone(),
     }];
-    let prover_data = ProverData::from_instances(&config, &instances);
+    let prover_data = ProverData::from_instances(&config, &instances).unwrap();
     let common = &prover_data.common;
-    let proof = prove_batch(&config, &instances, &prover_data);
+    let proof = prove_batch(&config, &instances, &prover_data).unwrap();
 
     let mut tampered = proof;
     tampered.opened_values.instances[0]
@@ -1510,7 +1552,7 @@ fn test_circle_stark_batch() -> Result<(), impl Debug> {
     // Generate batch-proof
     // Plain FibonacciAir doesn't have preprocessed columns
     let prover_data = ProverData::empty(airs.len());
-    let proof = prove_batch(&config, &instances, &prover_data);
+    let proof = prove_batch(&config, &instances, &prover_data).unwrap();
 
     // Verify batch-proof
     let public_values = vec![fib_pis1, fib_pis2];
@@ -1578,7 +1620,7 @@ fn check_circle_nonlinear_transition(with_hint: bool) {
         })
         .collect::<Vec<_>>();
     let prover_data = ProverData::empty(airs.len());
-    let proof = prove_batch(&config, &instances, &prover_data);
+    let proof = prove_batch(&config, &instances, &prover_data).unwrap();
     assert!(
         verify_batch(
             &config,
@@ -1652,13 +1694,13 @@ fn circle_lookup_packing_preserves_quotient_budget() {
             public_values: vec![],
         })
         .collect::<Vec<_>>();
-    let prover_data = ProverData::from_instances(&config, &instances);
+    let prover_data = ProverData::from_instances(&config, &instances).unwrap();
     for lookups in &prover_data.common.lookups {
         // Each transition * payload has degree 2. Two such tuples would pin
         // at degree 5 and exceed the unpacked degree-3 quotient bucket.
         assert_eq!(lookups.len(), 2);
     }
-    let proof = prove_batch(&config, &instances, &prover_data);
+    let proof = prove_batch(&config, &instances, &prover_data).unwrap();
     assert!(
         verify_batch(
             &config,
@@ -1784,7 +1826,8 @@ fn verify_two_adic_compat_fixture() -> Result<(), Box<dyn std::error::Error>> {
     let proof_bytes = read_fixture(TWO_ADIC_FIXTURE)
         .expect("Missing fixture. Run: cargo test -p p3-batch-stark --test simple -- --ignored");
     let proof: BatchProof<MyConfig> = postcard::from_bytes(&proof_bytes)?;
-    let prover_data = ProverData::from_airs_and_degrees(&config, &airs, &proof.degree_bits);
+    let prover_data =
+        ProverData::from_airs_and_degrees(&config, &airs, &proof.degree_bits).unwrap();
     let common = &prover_data.common;
     verify_batch(&config, &airs, &proof, &pvs, common)?;
     Ok(())
@@ -1796,7 +1839,8 @@ fn verify_circle_compat_fixture() -> Result<(), Box<dyn std::error::Error>> {
     let proof_bytes = read_fixture(CIRCLE_FIXTURE)
         .expect("Missing fixture. Run: cargo test -p p3-batch-stark --test simple -- --ignored");
     let proof: BatchProof<CircleConfig> = postcard::from_bytes(&proof_bytes)?;
-    let prover_data = ProverData::from_airs_and_degrees(&config, &airs, &proof.degree_bits);
+    let prover_data =
+        ProverData::from_airs_and_degrees(&config, &airs, &proof.degree_bits).unwrap();
     let common = &prover_data.common;
     verify_batch(&config, &airs, &proof, &pvs, common)?;
     Ok(())
@@ -1807,11 +1851,11 @@ fn verify_circle_compat_fixture() -> Result<(), Box<dyn std::error::Error>> {
 fn generate_two_adic_fixture() -> Result<(), Box<dyn std::error::Error>> {
     // Regen: cargo test -p p3-batch-stark --test simple -- --ignored
     let (config, airs, traces, pvs, log_degrees) = two_adic_compat_case();
-    let prover_data = ProverData::from_airs_and_degrees(&config, &airs, &log_degrees);
+    let prover_data = ProverData::from_airs_and_degrees(&config, &airs, &log_degrees).unwrap();
     let _common = &prover_data.common;
     let traces = [&traces[0], &traces[1]];
     let instances = StarkInstance::new_multiple(&airs, &traces, &pvs);
-    let proof = prove_batch(&config, &instances, &prover_data);
+    let proof = prove_batch(&config, &instances, &prover_data).unwrap();
     let bytes = postcard::to_allocvec(&proof)?;
     write_fixture(TWO_ADIC_FIXTURE, &bytes)?;
     Ok(())
@@ -1822,14 +1866,29 @@ fn generate_two_adic_fixture() -> Result<(), Box<dyn std::error::Error>> {
 fn generate_circle_fixture() -> Result<(), Box<dyn std::error::Error>> {
     // Regen: cargo test -p p3-batch-stark --test simple -- --ignored
     let (config, airs, traces, pvs, log_degrees) = circle_compat_case();
-    let prover_data = ProverData::from_airs_and_degrees(&config, &airs, &log_degrees);
+    let prover_data = ProverData::from_airs_and_degrees(&config, &airs, &log_degrees).unwrap();
     let _common = &prover_data.common;
     let traces = [&traces[0], &traces[1]];
     let instances = StarkInstance::new_multiple(&airs, &traces, &pvs);
-    let proof = prove_batch(&config, &instances, &prover_data);
+    let proof = prove_batch(&config, &instances, &prover_data).unwrap();
     let bytes = postcard::to_allocvec(&proof)?;
     write_fixture(CIRCLE_FIXTURE, &bytes)?;
     Ok(())
+}
+
+#[test]
+fn test_preprocessed_constraint_zk() {
+    let config = make_config_zk(8888);
+    let (air, trace, pis) = create_preprocessed_mul_instance(5, 2);
+    let instances = vec![StarkInstance {
+        air: &air,
+        trace: &trace,
+        public_values: pis.clone(),
+    }];
+    let prover_data = ProverData::from_instances(&config, &instances).unwrap();
+    assert!(prover_data.common.preprocessed.is_some());
+    let proof = prove_batch(&config, &instances, &prover_data).unwrap();
+    verify_batch(&config, &[air], &proof, &[pis], &prover_data.common).unwrap();
 }
 
 #[test]
@@ -1846,9 +1905,9 @@ fn test_preprocessed_constraint_positive() -> Result<(), impl Debug> {
         public_values: pis.clone(),
     }];
 
-    let prover_data = ProverData::from_instances(&config, &instances);
+    let prover_data = ProverData::from_instances(&config, &instances).unwrap();
     let common = &prover_data.common;
-    let proof = prove_batch(&config, &instances, &prover_data);
+    let proof = prove_batch(&config, &instances, &prover_data).unwrap();
     let airs = vec![air];
     verify_batch(&config, &airs, &proof, &[pis], common)
 }
@@ -1868,8 +1927,8 @@ fn test_preprocessed_constraint_negative() -> Result<(), Box<dyn std::error::Err
         public_values: pis.clone(),
     }];
 
-    let prover_data = ProverData::from_instances(&config, &instances);
-    let proof = prove_batch(&config, &instances, &prover_data);
+    let prover_data = ProverData::from_instances(&config, &instances).unwrap();
+    let proof = prove_batch(&config, &instances, &prover_data).unwrap();
 
     // Verify with wrong multiplier=3 (should fail)
     let air_verify = DemoAir::PreprocessedMul(PreprocessedMulAir {
@@ -1878,7 +1937,8 @@ fn test_preprocessed_constraint_negative() -> Result<(), Box<dyn std::error::Err
     });
     let airs = vec![air_verify];
     let degree_bits = proof.degree_bits.clone();
-    let prover_data_verify = ProverData::from_airs_and_degrees(&config, &airs, &degree_bits);
+    let prover_data_verify =
+        ProverData::from_airs_and_degrees(&config, &airs, &degree_bits).unwrap();
     let common_verify = &prover_data_verify.common;
 
     let res = verify_batch(&config, &airs, &proof, &[pis], common_verify);
@@ -1923,9 +1983,9 @@ fn test_mixed_preprocessed_constraints() -> Result<(), impl Debug> {
         },
     ];
 
-    let prover_data = ProverData::from_instances(&config, &instances);
+    let prover_data = ProverData::from_instances(&config, &instances).unwrap();
     let common = &prover_data.common;
-    let proof = prove_batch(&config, &instances, &prover_data);
+    let proof = prove_batch(&config, &instances, &prover_data).unwrap();
 
     let airs = vec![air_fib, air_mul, air_pp_mul];
     let pvs = vec![fib_pis, mul_pis, pp_mul_pis];
@@ -1950,13 +2010,14 @@ fn test_batch_stark_one_instance_local_only() -> Result<(), impl Debug> {
     let airs = [DemoAirWithLookups::MulLookups(mul_air_lookups)];
 
     // Get lookups from the lookup-enabled AIRs
-    let prover_data = ProverData::<MyConfig>::from_airs_and_degrees(&config, &airs, &[log_height]);
+    let prover_data =
+        ProverData::<MyConfig>::from_airs_and_degrees(&config, &airs, &[log_height]).unwrap();
     let common = &prover_data.common;
     let traces = [&mul_trace];
 
     let instances = StarkInstance::new_multiple(&airs, &traces, &[vec![]]);
 
-    let proof = prove_batch(&config, &instances, &prover_data);
+    let proof = prove_batch(&config, &instances, &prover_data).unwrap();
 
     let pvs = vec![vec![]];
     verify_batch(&config, &airs, &proof, &pvs, common)
@@ -1987,13 +2048,14 @@ fn test_batch_stark_one_instance_local_fails() {
     let airs = [DemoAirWithLookups::MulLookups(mul_air_lookups)];
 
     // Get lookups from the lookup-enabled AIRs
-    let prover_data = ProverData::<MyConfig>::from_airs_and_degrees(&config, &airs, &[log_height]);
+    let prover_data =
+        ProverData::<MyConfig>::from_airs_and_degrees(&config, &airs, &[log_height]).unwrap();
     let _common = &prover_data.common;
     let traces = [&mul_trace];
 
     let instances = StarkInstance::new_multiple(&airs, &traces, &[vec![]]);
 
-    prove_batch(&config, &instances, &prover_data);
+    prove_batch(&config, &instances, &prover_data).unwrap();
 }
 
 /// Test with local lookups only, which fail due to wrong permutation column.
@@ -2019,13 +2081,14 @@ fn test_batch_stark_one_instance_local_fails() {
     let airs = [DemoAirWithLookups::MulLookups(mul_air_lookups)];
 
     // Get lookups from the lookup-enabled AIRs
-    let prover_data = ProverData::<MyConfig>::from_airs_and_degrees(&config, &airs, &[log_height]);
+    let prover_data =
+        ProverData::<MyConfig>::from_airs_and_degrees(&config, &airs, &[log_height]).unwrap();
     let common = &prover_data.common;
     let traces = [&mul_trace];
 
     let instances = StarkInstance::new_multiple(&airs, &traces, &[vec![]]);
 
-    let proof = prove_batch(&config, &instances, &prover_data);
+    let proof = prove_batch(&config, &instances, &prover_data).unwrap();
 
     assert!(verify_batch(&config, &airs, &proof, &[vec![]], common).is_err());
 }
@@ -2061,13 +2124,14 @@ fn test_batch_stark_local_lookups_only() -> Result<(), impl Debug> {
 
     // Get lookups from the lookup-enabled AIRs
     let prover_data =
-        ProverData::<MyConfig>::from_airs_and_degrees(&config, &airs, &[log_height, log_height]);
+        ProverData::<MyConfig>::from_airs_and_degrees(&config, &airs, &[log_height, log_height])
+            .unwrap();
     let common = &prover_data.common;
     let traces = [&mul_trace, &fib_trace];
 
     let instances = StarkInstance::new_multiple(&airs, &traces, &[vec![], fib_pis.clone()]);
 
-    let proof = prove_batch(&config, &instances, &prover_data);
+    let proof = prove_batch(&config, &instances, &prover_data).unwrap();
 
     let pvs = vec![vec![], fib_pis];
     verify_batch(&config, &airs, &proof, &pvs, common)
@@ -2133,12 +2197,13 @@ fn lookup_grinding_case(
         prover_config,
         airs,
         &[log_height, log_height],
-    );
+    )
+    .unwrap();
     let common = &prover_data.common;
     let traces = [&mul_trace, &fib_trace];
     let instances = StarkInstance::new_multiple(airs, &traces, &[vec![], fib_pis.clone()]);
 
-    let mut proof = prove_batch(prover_config, &instances, &prover_data);
+    let mut proof = prove_batch(prover_config, &instances, &prover_data).unwrap();
     tamper(&mut proof);
 
     let pvs = vec![vec![], fib_pis];
@@ -2433,9 +2498,9 @@ fn a_substituted_randomization_commitment_is_rejected() {
         public_values: fib_pis.clone(),
     }];
 
-    let prover_data = ProverData::from_instances(&config, &instances);
+    let prover_data = ProverData::from_instances(&config, &instances).unwrap();
     let common = &prover_data.common;
-    let mut proof = prove_batch(&config, &instances, &prover_data);
+    let mut proof = prove_batch(&config, &instances, &prover_data).unwrap();
 
     // Swap in the main commitment, which is a real commitment to something else.
     proof.commitments.random = Some(proof.commitments.main.clone());
@@ -2483,13 +2548,13 @@ fn test_batch_stark_global_lookups_only() -> Result<(), impl Debug> {
     // Get lookups from the lookup-enabled AIRs
     let airs = [air1, air2];
     let prover_data =
-        ProverData::<MyConfig>::from_airs_and_degrees(&config, &airs, &[log_n, log_n]);
+        ProverData::<MyConfig>::from_airs_and_degrees(&config, &airs, &[log_n, log_n]).unwrap();
     let common = &prover_data.common;
     let traces = [&mul_trace, &fib_trace];
 
     let instances = StarkInstance::new_multiple(&airs, &traces, &[vec![], fib_pis.clone()]);
 
-    let proof = prove_batch(&config, &instances, &prover_data);
+    let proof = prove_batch(&config, &instances, &prover_data).unwrap();
 
     let pvs = vec![vec![], fib_pis];
     verify_batch(&config, &airs, &proof, &pvs, common)
@@ -2530,13 +2595,14 @@ fn test_batch_stark_both_lookups() -> Result<(), impl Debug> {
     let airs = [air1, air2];
     // Get lookups from the lookup-enabled AIRs
     let prover_data =
-        ProverData::<MyConfig>::from_airs_and_degrees(&config, &airs, &[log_height, log_height]);
+        ProverData::<MyConfig>::from_airs_and_degrees(&config, &airs, &[log_height, log_height])
+            .unwrap();
     let common = &prover_data.common;
     let traces = [&mul_trace, &fib_trace];
 
     let instances = StarkInstance::new_multiple(&airs, &traces, &[vec![], fib_pis.clone()]);
 
-    let proof = prove_batch(&config, &instances, &prover_data);
+    let proof = prove_batch(&config, &instances, &prover_data).unwrap();
 
     let pvs = vec![vec![], fib_pis];
     verify_batch(&config, &airs, &proof, &pvs, common)
@@ -2584,13 +2650,14 @@ fn test_batch_stark_both_lookups_zk() -> Result<(), impl Debug> {
         &config,
         &airs,
         &[log_height + config.is_zk(), log_height + config.is_zk()],
-    );
+    )
+    .unwrap();
     let common = &prover_data.common;
     let traces = [&mul_trace, &fib_trace];
 
     let instances = StarkInstance::new_multiple(&airs, &traces, &[vec![], fib_pis.clone()]);
 
-    let proof = prove_batch(&config, &instances, &prover_data);
+    let proof = prove_batch(&config, &instances, &prover_data).unwrap();
 
     let derived: usize = airs
         .iter()
@@ -2692,12 +2759,12 @@ fn test_batch_stark_failed_global_lookup_inner() {
     // Get lookups from the lookup-enabled AIRs
     let airs = [air1, air2];
     let prover_data =
-        ProverData::<MyConfig>::from_airs_and_degrees(&config, &airs, &[log_n, log_n]);
+        ProverData::<MyConfig>::from_airs_and_degrees(&config, &airs, &[log_n, log_n]).unwrap();
     let common = &prover_data.common;
 
     let instances = StarkInstance::new_multiple(&airs, &traces, &pvs);
 
-    let proof = prove_batch(&config, &instances, &prover_data);
+    let proof = prove_batch(&config, &instances, &prover_data).unwrap();
 
     // Imbalance: MulAir sends on "MulFib1" and "MulFib2"; only "MulFib1" is received.
     //
@@ -2736,13 +2803,13 @@ fn test_batch_stark_rejects_missing_lookup_terminal() {
 
     let airs = [air1, air2];
     let prover_data =
-        ProverData::<MyConfig>::from_airs_and_degrees(&config, &airs, &[log_n, log_n]);
+        ProverData::<MyConfig>::from_airs_and_degrees(&config, &airs, &[log_n, log_n]).unwrap();
     let common = &prover_data.common;
     let traces = [&mul_trace, &fib_trace];
     let pvs = vec![vec![], fib_pis];
 
     let instances = StarkInstance::new_multiple(&airs, &traces, &pvs);
-    let mut proof = prove_batch(&config, &instances, &prover_data);
+    let mut proof = prove_batch(&config, &instances, &prover_data).unwrap();
 
     // AIR 0 declares lookups so its terminal must be `Some(_)`.
     //
@@ -2807,13 +2874,14 @@ fn test_batch_stark_rejects_spurious_lookup_terminal() {
         DemoAirWithLookups::FibLookups(fib_air_no_lookups),
     ];
     let prover_data =
-        ProverData::<MyConfig>::from_airs_and_degrees(&config, &airs, &[log_n, log_n, log_n]);
+        ProverData::<MyConfig>::from_airs_and_degrees(&config, &airs, &[log_n, log_n, log_n])
+            .unwrap();
     let common = &prover_data.common;
     let traces = [&mul_trace, &fib_trace, &fib_trace];
     let pvs = vec![vec![], fib_pis.clone(), fib_pis];
 
     let instances = StarkInstance::new_multiple(&airs, &traces, &pvs);
-    let mut proof = prove_batch(&config, &instances, &prover_data);
+    let mut proof = prove_batch(&config, &instances, &prover_data).unwrap();
 
     // Mutation: AIR 2 declares no lookups, yet we attach an arbitrary terminal.
     //
@@ -2877,13 +2945,13 @@ fn test_batch_stark_rejects_tampered_lookup_terminal_value() {
         DemoAirWithLookups::FibLookups(fib_air_lookups),
     ];
     let prover_data =
-        ProverData::<MyConfig>::from_airs_and_degrees(&config, &airs, &[log_n, log_n]);
+        ProverData::<MyConfig>::from_airs_and_degrees(&config, &airs, &[log_n, log_n]).unwrap();
     let common = &prover_data.common;
     let traces = [&mul_trace, &fib_trace];
     let pvs = vec![vec![], fib_pis];
 
     let instances = StarkInstance::new_multiple(&airs, &traces, &pvs);
-    let mut proof = prove_batch(&config, &instances, &prover_data);
+    let mut proof = prove_batch(&config, &instances, &prover_data).unwrap();
 
     // Mutation: bump AIR 0's terminal by one field element.
     //
@@ -2997,7 +3065,7 @@ macro_rules! run_batch_stark_mixed_lookups {
             &config,
             &mut all_airs,
             &[log_n1, log_n2, log_n1, log_n2, log_n1, log_n1],
-        );
+        ).unwrap();
         let common = &prover_data.common;
 
         let traces = [&mul_with_lookups_trace, &fib_no_lookups_trace, &fib_with_lookups_trace, &mul_no_lookups_trace, &fib_with_lookups_trace, &mul_with_lookups_trace];
@@ -3015,7 +3083,7 @@ macro_rules! run_batch_stark_mixed_lookups {
         // Create instances - mixing lookup and non-lookup instances
         let instances = StarkInstance::new_multiple(&all_airs, &traces, &all_pvs);
 
-        let proof = prove_batch(&config, &instances, &prover_data);
+        let proof = prove_batch(&config, &instances, &prover_data).unwrap();
 
         // Verify with mixed AIRs
         verify_batch(&config, &all_airs, &proof, &all_pvs, common)
@@ -3144,7 +3212,8 @@ fn test_single_table_local_lookup() -> Result<(), impl Debug> {
     let airs = [air];
 
     // Get lookups from the lookup-enabled AIR
-    let prover_data = ProverData::<MyConfig>::from_airs_and_degrees(&config, &airs, &[log_height]);
+    let prover_data =
+        ProverData::<MyConfig>::from_airs_and_degrees(&config, &airs, &[log_height]).unwrap();
     let common = &prover_data.common;
 
     // Generate trace
@@ -3155,7 +3224,7 @@ fn test_single_table_local_lookup() -> Result<(), impl Debug> {
 
     let instances = StarkInstance::new_multiple(&airs, &traces, &pvs);
 
-    let proof = prove_batch(&config, &instances, &prover_data);
+    let proof = prove_batch(&config, &instances, &prover_data).unwrap();
 
     verify_batch(&config, &airs, &proof, &pvs, common)
 }
@@ -3187,12 +3256,13 @@ fn test_invalid_permutation_opening_len_rejected() {
     let airs = [air1, air2];
 
     let prover_data =
-        ProverData::<MyConfig>::from_airs_and_degrees(&config, &airs, &[log_height, log_height]);
+        ProverData::<MyConfig>::from_airs_and_degrees(&config, &airs, &[log_height, log_height])
+            .unwrap();
     let common = &prover_data.common;
     let traces = [&mul_trace, &fib_trace];
 
     let instances = StarkInstance::new_multiple(&airs, &traces, &[vec![], fib_pis.clone()]);
-    let mut proof = prove_batch(&config, &instances, &prover_data);
+    let mut proof = prove_batch(&config, &instances, &prover_data).unwrap();
 
     // Find the instance with non-empty permutation openings and truncate it.
     let inst = proof
@@ -3232,14 +3302,16 @@ fn from_airs_and_degrees_with_lookup_budgets_at_zero_matches_the_free_budget() {
     let (air, log_height) = mul_air_with_n_same_bus_lookups(4);
     let airs = [air];
 
-    let default = ProverData::<MyConfig>::from_airs_and_degrees(&config, &airs, &[log_height]);
+    let default =
+        ProverData::<MyConfig>::from_airs_and_degrees(&config, &airs, &[log_height]).unwrap();
     let overridden = ProverData::<MyConfig>::from_airs_and_degrees_with_lookup_budgets(
         &config,
         &airs,
         &[log_height],
         &[0],
         TESTING_LOG_BLOWUP,
-    );
+    )
+    .unwrap();
 
     assert_eq!(
         format!("{:?}", default.common.lookups),
@@ -3254,7 +3326,8 @@ fn from_airs_and_degrees_with_lookup_budgets_packs_past_the_free_budget() {
     let (air, log_height) = mul_air_with_n_same_bus_lookups(4);
     let airs = [air];
 
-    let free = ProverData::<MyConfig>::from_airs_and_degrees(&config, &airs, &[log_height]);
+    let free =
+        ProverData::<MyConfig>::from_airs_and_degrees(&config, &airs, &[log_height]).unwrap();
     let free_num_lookups = free.common.lookups[0].len();
 
     // An override past the free ceiling forces same-bus interactions into fewer columns,
@@ -3266,7 +3339,8 @@ fn from_airs_and_degrees_with_lookup_budgets_packs_past_the_free_budget() {
         &[log_height],
         &[4],
         TESTING_LOG_BLOWUP,
-    );
+    )
+    .unwrap();
     let forced_num_lookups = forced.common.lookups[0].len();
 
     assert!(
@@ -3291,7 +3365,8 @@ fn from_airs_and_degrees_with_lookup_budgets_rejects_overshooting_the_blowup() {
         &[log_height],
         &[usize::MAX],
         1,
-    );
+    )
+    .unwrap();
 }
 
 /// The three protocols a batch-STARK proof over `p3-fri` layers, outermost first.

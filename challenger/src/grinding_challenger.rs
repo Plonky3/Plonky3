@@ -78,6 +78,7 @@ pub trait UniformGrindingChallenger:
     /// (chance of about 1/P).
     ///
     /// Use this together with `check_witness_uniform`.
+    /// At zero difficulty, returns the canonical zero witness without changing the transcript.
     fn grind_uniform(&mut self, bits: usize) -> Self::Witness;
 
     /// Grinds based on *uniformly sampled bits*. This variant errors if a value is
@@ -85,6 +86,7 @@ pub trait UniformGrindingChallenger:
     /// See the `UniformSamplingField` trait implemented for each field for details.
     ///
     /// Use this together with `check_witness_uniform_may_error`.
+    /// At zero difficulty, returns the canonical zero witness without changing the transcript.
     fn grind_uniform_may_error(&mut self, bits: usize) -> Self::Witness;
 
     /// Check whether a given `witness` satisfies the PoW condition.
@@ -92,9 +94,14 @@ pub trait UniformGrindingChallenger:
     /// After absorbing the witness, the challenger samples `bits` random bits
     /// *uniformly* and verifies that all bits sampled are zero. The uniform
     /// sampling implies we do rejection sampling in about ~1/P cases.
+    /// At zero difficulty, accepts any witness without changing the transcript;
+    /// protocols requiring canonical proof encodings must separately require zero.
     ///
     /// Returns `true` if the witness passes the PoW check, `false` otherwise.
     fn check_witness_uniform(&mut self, bits: usize, witness: Self::Witness) -> bool {
+        if bits == 0 {
+            return true;
+        }
         self.observe(witness);
         self.sample_uniform_bits::<true>(bits)
             .expect("Error impossible here due to resampling strategy")
@@ -107,9 +114,14 @@ pub trait UniformGrindingChallenger:
     /// *uniformly* and verifies that all bits sampled are zero. In about ~1/P
     /// cases this function may error if a sampled value lies outside a range
     /// in which we can guarantee uniform bits.
+    /// At zero difficulty, accepts any witness without changing the transcript;
+    /// protocols requiring canonical proof encodings must separately require zero.
     ///
     /// Returns `true` if the witness passes the PoW check, `false` otherwise.
     fn check_witness_uniform_may_error(&mut self, bits: usize, witness: Self::Witness) -> bool {
+        if bits == 0 {
+            return true;
+        }
         self.observe(witness);
         self.sample_uniform_bits::<false>(bits)
             .is_ok_and(|v| v == 0)
@@ -293,12 +305,15 @@ where
     where
         CHECK: Fn(&mut Self, F) -> bool + Sync + Send,
     {
-        // Maybe check that bits is greater than 0?
         assert!(bits < (usize::BITS as usize), "bit count must be valid");
         assert!(
             (1u64 << bits) < F::ORDER_U64,
             "bit count exceeds field order"
         );
+        // Canonical witness for disabled PoW; leave the transcript untouched.
+        if bits == 0 {
+            return F::ZERO;
+        }
         // The core parallel brute-force search logic.
         let witness = (0..F::ORDER_U64)
             .into_par_iter()

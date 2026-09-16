@@ -73,8 +73,59 @@ pub(crate) fn run_lifecycle(
     let pcs = BinaryPcs::new(config, mmcs());
 
     let mut prover_challenger = challenger();
-    let (commitment, prover_data) = pcs.commit(witness, &mut prover_challenger);
-    let proof = pcs.open(prover_data, protocol.clone(), &mut prover_challenger);
+    let (commitment, prover_data) = pcs.commit(witness, &mut prover_challenger).unwrap();
+    let proof = pcs
+        .open(prover_data, protocol.clone(), &mut prover_challenger)
+        .unwrap();
 
     (pcs, commitment, proof, protocol)
+}
+
+#[cfg(test)]
+mod conformance {
+    use alloc::vec;
+
+    use p3_challenger::CanSample;
+    use p3_commit::MultilinearPcs;
+    use p3_sumcheck::layout::{Layout, SuffixProver, Table};
+    use rand::SeedableRng;
+    use rand::rngs::SmallRng;
+
+    use super::{F, challenger, mmcs, params};
+    use crate::{BinaryPcs, BinaryPcsConfig};
+
+    #[test]
+    fn the_commit_phase_binds_exactly_what_the_binding_method_binds() {
+        // Invariant: a verifier never commits, so it replays the prover's binding
+        // by calling the scheme's binding method.
+        //
+        // The two are interchangeable only while they leave the sponge in one state.
+        //
+        //     prover  : commit(witness, a)          -> a
+        //     verifier: observe_commitment(root, b) -> b
+        //     a and b must sample alike
+        //
+        // This scheme binds through the layout's typed commitment phase, like the others.
+        //
+        // The property is therefore checked the same way.
+        const NUM_VARIABLES: usize = 6;
+
+        let mut rng = SmallRng::seed_from_u64(0xB1DA);
+        let table = Table::rand(&mut rng, 1, NUM_VARIABLES);
+        let witness = SuffixProver::<F, F>::new_witness(vec![table], 0);
+
+        let config = BinaryPcsConfig::try_new(NUM_VARIABLES, params()).unwrap();
+        let pcs = BinaryPcs::new(config, mmcs());
+
+        let mut committed = challenger();
+        let (commitment, _) = pcs.commit(witness, &mut committed).unwrap();
+
+        let mut replayed = challenger();
+        pcs.observe_commitment(&commitment, &mut replayed);
+
+        assert_eq!(
+            CanSample::<F>::sample(&mut committed),
+            CanSample::<F>::sample(&mut replayed),
+        );
+    }
 }

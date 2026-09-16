@@ -6,21 +6,20 @@
 //! committed word (or the final word sent in full). Only base cosets are sampled distinctly;
 //! repeated projected cosets in later rounds remain the same base-query paths.
 
-use alloc::collections::BTreeSet;
 use alloc::vec;
 use alloc::vec::Vec;
 
 use p3_binary_field::BinaryField128;
 use p3_challenger::{CanSampleUniformBits, FieldChallenger, GrindingChallenger};
 use p3_commit::Mmcs;
-use p3_field::{Field, PrimeCharacteristicRing};
+use p3_field::PrimeCharacteristicRing;
 use p3_matrix::Dimensions;
-use p3_util::log2_strict_usize;
 
 use crate::error::BinaryPcsError;
 use crate::fold::{fold_coset, fold_pair};
 use crate::params::BinaryPcsConfig;
 use crate::proof::BinaryPcsProof;
+use crate::transcript::BinaryPcsVerifierTranscript;
 
 /// Number of distinct fold-chain tests a codeword of `domain_size` symbols admits.
 ///
@@ -33,78 +32,6 @@ pub(crate) const fn num_distinct_queries(domain_size: usize, num_queries: usize)
     } else {
         num_pairs
     }
-}
-
-/// Samples distinct fold pairs from the base codeword's domain.
-///
-/// Returns each sampled pair's low-indexed position, in ascending order.
-/// Every returned position is even.
-///
-/// # Why a pair index
-///
-/// Both symbols of a pair are read and folded together at every round.
-/// Two symbol positions differing only in bit 0 therefore name the same test.
-/// Drawing one bit fewer and doubling aligns the enforced distinctness with the query bound.
-///
-/// # Why uniform bits
-///
-/// A uniform element of the codeword alphabet is already a uniform 128-bit string.
-/// Its low bits therefore carry no bias.
-/// The binary challenger's uniform sampler is itself a plain mask over transcript bytes.
-/// That sampler is used because it is the interface that states the guarantee.
-/// A challenger over a prime field then cannot silently reintroduce bias.
-///
-/// # Returns
-///
-/// One position per distinct pair, capped at the number of pairs the domain holds.
-/// A request for more pairs than exist returns every pair.
-///
-/// # Panics
-///
-/// Panics unless `domain_size` is a power of two of at least two.
-pub(crate) fn sample_query_indices<Challenger, F>(
-    domain_size: usize,
-    num_queries: usize,
-    challenger: &mut Challenger,
-) -> Vec<usize>
-where
-    Challenger: FieldChallenger<F> + CanSampleUniformBits<F>,
-    F: Field,
-{
-    // One bit narrower than the domain: a sampled value indexes pairs, not symbols.
-    let pair_bits = log2_strict_usize(domain_size / 2);
-    let target = num_distinct_queries(domain_size, num_queries);
-
-    // A set, not a linear scan over what has already been drawn.
-    // Once the target approaches the pair count, the draw count is a coupon-collector tail.
-    // The small-domain configurations reach exactly that.
-    let mut pairs = BTreeSet::new();
-    while pairs.len() < target {
-        let pair = challenger
-            .sample_uniform_bits::<true>(pair_bits)
-            .expect("RESAMPLE = true: rejection loops internally, never errors");
-        pairs.insert(pair);
-    }
-
-    // `BTreeSet` iterates in ascending order, so doubling preserves it.
-    pairs.into_iter().map(|pair| pair << 1).collect()
-}
-
-/// Sample distinct base cosets. Reusing the pair sampler on a shorter index domain keeps
-/// the single-fold transcript unchanged; lifting its indices clears all first-batch low bits.
-pub(crate) fn sample_query_cosets<Ch>(config: &BinaryPcsConfig, challenger: &mut Ch) -> Vec<usize>
-where
-    Ch: FieldChallenger<BinaryField128> + CanSampleUniformBits<BinaryField128>,
-{
-    let shift = config.log_folding_factor() - 1;
-    sample_query_indices::<_, BinaryField128>(
-        config.domain_size() >> shift,
-        config.num_queries(),
-        challenger,
-    )
-    .into_iter()
-    .map(|index| index << shift)
-    .collect()
 }
 
 /// All symbols of every queried coset, in query order, with ascending offsets within a coset.
@@ -224,10 +151,13 @@ where
 /// to the next.
 ///
 /// `betas` is the fold challenge used at each round, `betas[r]` for round `r`, in the order
-/// `fold_rounds` samples them; the caller derives it by replaying the sumcheck transcript
+/// `fold_rounds_with` samples them; the caller derives it by replaying the sumcheck transcript
 /// (this function does not touch the sumcheck rounds or the commitments' own transcript
-/// order). All proof-shape checks run before `challenger` is touched, so a malformed proof is
-/// rejected without ever grinding or sampling against it.
+/// order).
+///
+/// All proof-shape checks run before the transcript is touched.
+///
+/// A malformed proof is therefore rejected without ever grinding or sampling against it.
 ///
 /// # Panics
 ///
@@ -240,7 +170,7 @@ pub(crate) fn verify_query_paths<MT, Ch>(
     base_commitment: &MT::Commitment,
     betas: &[BinaryField128],
     proof: &BinaryPcsProof<MT>,
-    challenger: &mut Ch,
+    transcript: &mut BinaryPcsVerifierTranscript<'_, Ch>,
 ) -> Result<(), BinaryPcsError<MT::Error>>
 where
     MT: Mmcs<BinaryField128>,
@@ -272,10 +202,18 @@ where
         check_round_shape(batch, round_values(batch), target_queries << arity)?;
     }
 
-    if !challenger.check_witness(config.pow_bits(), proof.pow_witness) {
-        return Err(BinaryPcsError::InvalidPowWitness);
-    }
-    let indices = sample_query_cosets(config, challenger);
+    // Match `open_queries`: this uncommitted word must precede both query grinding
+    // and sampling, even when there are no evaluation claims to constrain its value.
+    transcript.final_codeword(proof.final_codeword.as_slice())?;
+    transcript.query_pow(proof.pow_witness)?;
+
+    // The draw indexes pairs, so each position is lifted back to a coset start.
+    let shift = config.log_folding_factor() - 1;
+    let indices: Vec<usize> = transcript
+        .query_pairs()
+        .into_iter()
+        .map(|pair| pair << shift)
+        .collect();
     debug_assert_eq!(indices.len(), target_queries);
 
     for (batch, &(start, arity)) in batches.iter().enumerate() {
@@ -352,22 +290,27 @@ mod tests {
 
     use p3_binary_dft::{AdditiveRsEncoder, NaiveAdditiveNtt};
     use p3_binary_field::BinaryField128;
-    use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
+    use p3_challenger::{CanObserve, GrindingChallenger};
     use p3_commit::Mmcs;
     use p3_field::{Field, PrimeCharacteristicRing};
     use p3_matrix::dense::RowMajorMatrix;
     use p3_multilinear_util::poly::Poly;
-    use p3_sumcheck::layout::{Layout, SuffixProver, Table};
+    use p3_sumcheck::SumcheckData;
+    use p3_sumcheck::layout::{Layout, SuffixProver, Table, TableShape, Verifier};
     use p3_sumcheck::strategy::Basis;
     use p3_sumcheck::transcript::{SumcheckShape, VerifierTranscript};
+    use p3_symmetric::MerkleCap;
     use rand::SeedableRng;
     use rand::rngs::SmallRng;
 
-    use super::{BinaryPcsError, sample_query_cosets, sample_query_indices, verify_query_paths};
+    use super::{BinaryPcsError, verify_query_paths};
     use crate::params::{BinaryPcsConfig, BinaryPcsParams};
     use crate::proof::BinaryPcsProof;
-    use crate::prover::{RoundCommitment, commit, fold_rounds, open_queries};
-    use crate::test_util::{challenger, mmcs};
+    use crate::prover::{RoundCommitment, commit, fold_rounds_with, open_queries};
+    use crate::test_util::{MyChallenger, MyMmcs, challenger, mmcs};
+    use crate::transcript::{
+        BinaryPcsProverTranscript, BinaryPcsShape, BinaryPcsVerifierTranscript,
+    };
 
     type F = BinaryField128;
 
@@ -411,16 +354,59 @@ mod tests {
         // Moving the query phase's single grind onto that pair needs the check revisited too.
     }
 
+    /// Draw one run's query positions through the prover driver.
+    ///
+    /// The driver is the only sampler, so a property test asks it, not a copy of it.
+    fn drawn_positions(config: &BinaryPcsConfig) -> Vec<usize> {
+        drawn_positions_for(config, F::default())
+    }
+
+    /// Draw one run's query positions with `fill` as every final-codeword symbol.
+    ///
+    /// The codeword is the last thing bound before the positions are drawn.
+    ///
+    /// Varying it is therefore the cheapest way to move the transcript under them.
+    fn drawn_positions_for(config: &BinaryPcsConfig, fill: F) -> Vec<usize> {
+        let shape = BinaryPcsShape::new(config);
+        let mut ch = challenger();
+        let mut transcript = BinaryPcsProverTranscript::new(&mut ch, shape);
+
+        // The positions are the last described step, so everything before it is played first.
+        for _ in 0..shape.num_oracles {
+            transcript.oracle_commitment(MerkleCap::<F, [u8; 32]>::new(vec![[0u8; 32]]));
+        }
+        transcript.final_codeword(&vec![fill; shape.final_codeword_len]);
+        let _witness = transcript.query_pow();
+
+        let shift = config.log_folding_factor() - 1;
+        let positions: Vec<usize> = transcript
+            .query_pairs()
+            .into_iter()
+            .map(|pair| pair << shift)
+            .collect();
+        transcript.finish();
+        positions
+    }
+
     #[test]
     fn query_indices_are_distinct_sorted_even_and_in_range() {
-        let mut c = challenger();
-        let indices = sample_query_indices::<_, BinaryField128>(1 << 10, 12, &mut c);
-        assert_eq!(indices.len(), 12);
+        // Invariant: a query names a fold pair, so positions are distinct and pair-aligned.
+        //
+        // Fixture state: a 2^10 domain folded by one, so pairs index 2^9 slots.
+        let config = BinaryPcsConfig::try_new(10, params())
+            .unwrap()
+            .try_with_folding(1)
+            .unwrap();
+        let indices = drawn_positions(&config);
+        assert_eq!(indices.len(), config.num_queries());
         assert!(
             indices.windows(2).all(|w| w[0] < w[1]),
             "sorted and distinct"
         );
-        assert!(indices.iter().all(|&i| i < 1 << 10), "in range");
+        assert!(
+            indices.iter().all(|&i| i < config.domain_size()),
+            "in range"
+        );
         // Each position is a pair's low symbol, so bit 0 is clear by construction.
         // Distinct and even together mean no two draws are fold siblings.
         assert!(indices.iter().all(|&i| i.is_multiple_of(2)), "pair-aligned");
@@ -434,9 +420,13 @@ mod tests {
         //     pairs:   |0| |2| |4| |6|
         //
         // Asking for 100 therefore yields the 4 low positions, not 8 indices.
-        let mut c = challenger();
-        let indices = sample_query_indices::<_, BinaryField128>(8, 100, &mut c);
-        assert_eq!(indices, alloc::vec![0, 2, 4, 6]);
+        let config = BinaryPcsConfig::try_new(3, params())
+            .unwrap()
+            .try_with_folding(1)
+            .unwrap();
+        let indices = drawn_positions(&config);
+        let pairs = config.domain_size() / 2;
+        assert_eq!(indices, (0..pairs).map(|p| p << 1).collect::<Vec<_>>());
     }
 
     #[test]
@@ -446,7 +436,7 @@ mod tests {
                 .unwrap()
                 .try_with_folding(arity)
                 .unwrap();
-            let indices = sample_query_cosets(&config, &mut challenger());
+            let indices = drawn_positions(&config);
             let cosets = config.domain_size() >> arity;
             assert_eq!(indices.len(), config.num_queries().min(cosets));
             assert!(indices.windows(2).all(|w| w[0] < w[1]));
@@ -463,11 +453,43 @@ mod tests {
 
     #[test]
     fn sampling_is_transcript_dependent() {
-        let mut a = challenger();
-        let mut b = challenger();
-        assert_eq!(
-            sample_query_indices::<_, BinaryField128>(1 << 10, 4, &mut a),
-            sample_query_indices::<_, BinaryField128>(1 << 10, 4, &mut b),
+        // Invariant: the positions come out of the sponge, not out of the configuration.
+        //
+        // A prover that could fix them would choose which symbols it is asked for.
+        //
+        // Fixture state: one configuration, drawn twice.
+        //
+        // Mutation: change the last thing bound before the draw.
+        //
+        //     final codeword all-zero  ->  one position set
+        //     final codeword all-one   ->  another
+        //
+        // The difficulty is zero here on purpose. A parallel grind returns whichever
+        // valid witness a worker reaches first, so a ground run draws from a sponge
+        // that is not a function of the transcript alone.
+        let unground = BinaryPcsParams {
+            pow_bits: 0,
+            ..params()
+        };
+        let config = BinaryPcsConfig::try_new(10, unground)
+            .unwrap()
+            .try_with_folding(1)
+            .unwrap();
+
+        // The same transcript draws the same positions.
+        assert_eq!(drawn_positions(&config), drawn_positions(&config));
+
+        // A different transcript draws different ones.
+        //
+        // The draw covers only part of the domain here, so the two sets can differ.
+        let shape = BinaryPcsShape::new(&config);
+        assert!(
+            shape.num_pairs < 1 << shape.pair_bits,
+            "a saturated draw opens every position whatever the transcript says",
+        );
+        assert_ne!(
+            drawn_positions_for(&config, F::ZERO),
+            drawn_positions_for(&config, F::ONE),
         );
     }
 
@@ -496,21 +518,23 @@ mod tests {
         let encoder = AdditiveRsEncoder::<F, NaiveAdditiveNtt<F>>::default();
         let mmcs_instance = mmcs();
 
+        // Prover route: bind the root, then run the whole description.
         let mut prover_ch = challenger();
-        let (base_commitment, prover_data) =
-            commit(&config, &encoder, &mmcs_instance, &mut prover_ch, witness);
+        let (base_commitment, prover_data) = commit(&config, &encoder, &mmcs_instance, witness);
+        prover_ch.observe(base_commitment.clone());
+        let mut prover_t =
+            BinaryPcsProverTranscript::new(&mut prover_ch, BinaryPcsShape::new(&config));
         let (base_merkle_data, sumcheck_data, rounds, randomness, final_codeword) =
-            fold_rounds(prover_data, &config, &mmcs_instance, &mut prover_ch);
-
-        let mut verifier_ch = prover_ch.clone();
-
+            fold_rounds_with::<false, _, _>(prover_data, &config, &mmcs_instance, &mut prover_t);
         let query_proofs = open_queries(
             &config,
             &mmcs_instance,
-            &mut prover_ch,
+            &mut prover_t,
             &base_merkle_data,
             &rounds,
+            &final_codeword,
         );
+        prover_t.finish();
 
         let proof = BinaryPcsProof {
             sumcheck: sumcheck_data,
@@ -522,30 +546,85 @@ mod tests {
             evals: Vec::new(),
         };
 
+        // Verifier route: an empty challenger, replaying only what the proof carries.
+        let oracles: Vec<_> = proof.rounds.iter().map(|r| r.commitment.clone()).collect();
+        let mut verifier_ch = challenger();
+        verifier_ch.observe(base_commitment.clone());
+        let mut verifier_t =
+            replay_fold_phase(&config, &mut verifier_ch, &proof.sumcheck, &oracles);
+
         let result = verify_query_paths(
             &config,
             &mmcs_instance,
             &base_commitment,
             randomness.as_slice(),
             &proof,
-            &mut verifier_ch,
+            &mut verifier_t,
         );
         assert!(result.is_ok(), "{result:?}");
+        verifier_t.finish();
+    }
+
+    /// Replay the fold phase on the verifier's side and hand back the open driver.
+    ///
+    /// The prover plays the batching challenge, then one sumcheck round per fold round.
+    ///
+    /// An oracle commitment follows every batch boundary but the last.
+    ///
+    /// A replay that plays one step too many or too few desyncs the two sponges.
+    fn replay_fold_phase<'a>(
+        config: &BinaryPcsConfig,
+        challenger: &'a mut MyChallenger,
+        sumcheck_data: &SumcheckData<F, F>,
+        oracles: &[<MyMmcs as Mmcs<F>>::Commitment],
+    ) -> BinaryPcsVerifierTranscript<'a, MyChallenger> {
+        let mut transcript =
+            BinaryPcsVerifierTranscript::new(challenger, BinaryPcsShape::new(config));
+
+        // The layout draws its batching challenge before the first fold round.
+        //
+        // This replay records no claim, so both counts are zero, matching the prover.
+        let layout_verifier = Verifier::<F, F>::new(
+            &[TableShape::new(NUM_VARIABLES, 1)],
+            SuffixProver::<F, F>::strategy(),
+        );
+        let _alpha: F = transcript.fold_batch(|ch| layout_verifier.batching_challenge(ch));
+
+        let num_fold_rounds = config.num_fold_rounds();
+        // `r` indexes collections of two different lengths, so no single zip covers the loop.
+        #[allow(clippy::needless_range_loop)]
+        for r in 0..num_fold_rounds {
+            let [c0, c_inf] = sumcheck_data.polynomial_evaluations()[r];
+            // One fold round is one single-round sumcheck, seeded on its own.
+            let round_shape = SumcheckShape::new(1, 0, Basis::Evaluation);
+            let _beta = transcript.fold_batch(|ch| {
+                let mut t = VerifierTranscript::<_, F, F>::new(ch, round_shape);
+                let beta = t.round(c0, c_inf, None).unwrap();
+                t.finish();
+                beta
+            });
+            if r + 1 < num_fold_rounds {
+                transcript.oracle_commitment(oracles[r].clone());
+            }
+        }
+
+        transcript
     }
 
     /// A fresh verifier challenger, seeded identically to the prover's but touched only by
-    /// what the proof carries, must sample the same query indices the prover did.
+    /// what the proof carries, must sample the same query positions the prover did.
     ///
-    /// `a_genuine_proof_verifies` clones the prover's own challenger after `fold_rounds`
-    /// returns, so its `verifier_ch` already carries every observation the prover made,
-    /// correct or not — it can never disagree with the prover, so it cannot catch a mismatch
-    /// between what `fold_rounds` observes and what the proof actually carries. This test
-    /// instead rebuilds the verifier's side of the transcript from an empty challenger: the
-    /// base commitment, the batching challenge `into_sumcheck` samples even though it consumes
-    /// zero preprocessing rounds, each fold round's polynomial and challenge (from
-    /// `proof.sumcheck`), and each intermediate round's commitment (one per fold round except
-    /// the last). If `fold_rounds` observes one more or one fewer commitment than this replay
-    /// does, the two challengers desync and the sampled indices diverge.
+    /// The round-trip test clones the prover's own challenger.
+    ///
+    /// It therefore carries every observation the prover made, right or wrong.
+    ///
+    /// It can never disagree with the prover.
+    ///
+    /// This one rebuilds the verifier's side from an empty challenger.
+    ///
+    /// It runs through the same driver the real verifier uses.
+    ///
+    /// A prover that plays one step too many desyncs the two, and the positions diverge.
     #[test]
     fn a_fresh_verifier_challenger_samples_the_same_query_indices() {
         let mut rng = SmallRng::seed_from_u64(0x5EED);
@@ -556,71 +635,41 @@ mod tests {
         let config = BinaryPcsConfig::try_new(NUM_VARIABLES, params()).unwrap();
         let encoder = AdditiveRsEncoder::<F, NaiveAdditiveNtt<F>>::default();
         let mmcs_instance = mmcs();
+        let shape = BinaryPcsShape::new(&config);
+        let shift = config.log_folding_factor() - 1;
 
+        // Prover route: commit, bind the root, then run the whole description.
         let mut prover_ch = challenger();
-        let (base_commitment, prover_data) =
-            commit(&config, &encoder, &mmcs_instance, &mut prover_ch, witness);
-        let (base_merkle_data, sumcheck_data, rounds, randomness, _final_codeword) =
-            fold_rounds(prover_data, &config, &mmcs_instance, &mut prover_ch);
+        let (base_commitment, prover_data) = commit(&config, &encoder, &mmcs_instance, witness);
+        prover_ch.observe(base_commitment.clone());
+        let mut prover_t = BinaryPcsProverTranscript::new(&mut prover_ch, shape);
+        let (_base_merkle_data, sumcheck_data, rounds, _randomness, final_codeword) =
+            fold_rounds_with::<false, _, _>(prover_data, &config, &mmcs_instance, &mut prover_t);
+        prover_t.final_codeword(&final_codeword);
+        let pow_witness = prover_t.query_pow();
+        let prover_positions: Vec<usize> = prover_t
+            .query_pairs()
+            .into_iter()
+            .map(|pair| pair << shift)
+            .collect();
+        prover_t.finish();
 
-        // The prover's own transcript state, snapshotted right before the query phase, gives
-        // an independent readout of the indices `open_queries` samples: replaying the actual
-        // grinding witness it found and sampling from there reaches the same query phase by a
-        // second path. This checks the witness rather than re-grinding: with the `parallel`
-        // feature, `grind`'s search returns any witness that satisfies the difficulty, not a
-        // deterministic one, so a second independent grind could legitimately land on a
-        // different valid witness and desync the two readouts for a reason unrelated to what
-        // this test is checking.
-        let mut prover_snapshot = prover_ch.clone();
-
-        let query_proofs = open_queries(
-            &config,
-            &mmcs_instance,
-            &mut prover_ch,
-            &base_merkle_data,
-            &rounds,
-        );
-
-        assert!(prover_snapshot.check_witness(config.pow_bits(), query_proofs.pow_witness));
-        let domain_size = config.domain_size();
-        let prover_indices = sample_query_indices::<_, BinaryField128>(
-            domain_size,
-            config.num_queries(),
-            &mut prover_snapshot,
-        );
-
-        // A fresh, independently constructed challenger — the empty transcript, exactly like
-        // `challenger()` gave the prover — touched only by what a verifier can read off the
-        // proof and the config.
+        // Verifier route: an empty challenger, touched only by what the proof carries.
+        let oracles: Vec<_> = rounds.iter().map(|r| r.commitment.clone()).collect();
         let mut verifier_ch = challenger();
         verifier_ch.observe(base_commitment);
-        let _alpha: F = verifier_ch.sample_algebra_element();
+        let mut verifier_t = replay_fold_phase(&config, &mut verifier_ch, &sumcheck_data, &oracles);
 
-        let num_fold_rounds = config.num_fold_rounds();
-        // `r` indexes three collections of two different lengths (`rounds` holds one fewer
-        // entry than `num_fold_rounds`), so no single `.iter().enumerate()` covers the loop.
-        #[allow(clippy::needless_range_loop)]
-        for r in 0..num_fold_rounds {
-            let [c0, c_inf] = sumcheck_data.polynomial_evaluations()[r];
-            // One fold round is one single-round sumcheck, seeded on its own.
-            let shape = SumcheckShape::new(1, 0, Basis::Evaluation);
-            let mut transcript = VerifierTranscript::<_, F, F>::new(&mut verifier_ch, shape);
-            let beta = transcript.round(c0, c_inf, None).unwrap();
-            transcript.finish();
-            assert_eq!(beta, randomness.as_slice()[r], "round {r} challenge");
-            if r + 1 < num_fold_rounds {
-                verifier_ch.observe(rounds[r].commitment.clone());
-            }
-        }
+        verifier_t.final_codeword(&final_codeword).unwrap();
+        verifier_t.query_pow(pow_witness).unwrap();
+        let verifier_positions: Vec<usize> = verifier_t
+            .query_pairs()
+            .into_iter()
+            .map(|pair| pair << shift)
+            .collect();
+        verifier_t.finish();
 
-        assert!(verifier_ch.check_witness(config.pow_bits(), query_proofs.pow_witness));
-        let verifier_indices = sample_query_indices::<_, BinaryField128>(
-            domain_size,
-            config.num_queries(),
-            &mut verifier_ch,
-        );
-
-        assert_eq!(verifier_indices, prover_indices);
+        assert_eq!(verifier_positions, prover_positions);
     }
 
     /// The fold chain is the only thing tying one committed round to the next, and this is the
@@ -645,10 +694,23 @@ mod tests {
         let mmcs_instance = mmcs();
 
         let mut prover_ch = challenger();
-        let (base_commitment, prover_data) =
-            commit(&config, &encoder, &mmcs_instance, &mut prover_ch, witness);
+        let (base_commitment, prover_data) = commit(&config, &encoder, &mmcs_instance, witness);
+        // Mirror what the scheme's commit phase binds, so this replay walks the
+        // same sponge stream production does.
+        prover_ch.observe(base_commitment.clone());
+        let mut prover_t =
+            BinaryPcsProverTranscript::new(&mut prover_ch, BinaryPcsShape::new(&config));
         let (base_merkle_data, sumcheck_data, mut rounds, randomness, final_codeword) =
-            fold_rounds(prover_data, &config, &mmcs_instance, &mut prover_ch);
+            fold_rounds_with::<false, _, _>(prover_data, &config, &mmcs_instance, &mut prover_t);
+
+        // The prover bound this oracle before the tamper below replaces it.
+        //
+        // The verifier must replay that same value.
+        //
+        // Otherwise its query positions move.
+        //
+        // The Merkle check then fires before the fold check this test is about.
+        let bound_oracles: Vec<_> = rounds.iter().map(|r| r.commitment.clone()).collect();
 
         // `rounds[0]` carries fold round 1, the round the base round's fold must reproduce.
         let shifted: Vec<F> = mmcs_instance.get_matrices(&rounds[0].merkle_data)[0]
@@ -663,14 +725,15 @@ mod tests {
             merkle_data,
         };
 
-        let mut verifier_ch = prover_ch.clone();
         let query_proofs = open_queries(
             &config,
             &mmcs_instance,
-            &mut prover_ch,
+            &mut prover_t,
             &base_merkle_data,
             &rounds,
+            &final_codeword,
         );
+        prover_t.finish();
 
         let proof = BinaryPcsProof {
             sumcheck: sumcheck_data,
@@ -682,15 +745,21 @@ mod tests {
             evals: Vec::new(),
         };
 
+        let mut verifier_ch = challenger();
+        verifier_ch.observe(base_commitment.clone());
+        let mut verifier_t =
+            replay_fold_phase(&config, &mut verifier_ch, &proof.sumcheck, &bound_oracles);
+
         let err = verify_query_paths(
             &config,
             &mmcs_instance,
             &base_commitment,
             randomness.as_slice(),
             &proof,
-            &mut verifier_ch,
+            &mut verifier_t,
         )
         .unwrap_err();
+        verifier_t.abort();
         assert!(
             matches!(err, BinaryPcsError::FoldMismatch { round: 1, query: 0 }),
             "expected FoldMismatch at round 1 query 0, got {err:?}"

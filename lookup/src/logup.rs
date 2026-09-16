@@ -732,7 +732,7 @@ impl LookupProtocol for LogUpGadget {
                                     // the concrete witness so a violating trace fails loudly:
                                     //
                                     // - each flag is boolean (selects or skips its branch),
-                                    debug_assert!(
+                                    assert!(
                                         flag.is_zero() || flag == F::ONE,
                                         "exclusive flag must be boolean"
                                     );
@@ -753,7 +753,7 @@ impl LookupProtocol for LogUpGadget {
                                 }
 
                                 // - at most one flag fires, so the boolean flags sum to 0 or 1.
-                                debug_assert!(
+                                assert!(
                                     flag_sum.is_zero() || flag_sum == F::ONE,
                                     "exclusive flags must sum to at most one per row"
                                 );

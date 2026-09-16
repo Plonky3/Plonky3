@@ -1,7 +1,8 @@
 use core::any::type_name;
+use core::hint::black_box;
 
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
-use p3_field::{Field, PrimeCharacteristicRing};
+use p3_field::{Field, PackedValue, PrimeCharacteristicRing};
 use p3_field_testing::bench_func::{
     benchmark_add_latency, benchmark_add_throughput, benchmark_chunked_linear_combination,
     benchmark_dot_array, benchmark_inv, benchmark_iter_sum, benchmark_sqrt, benchmark_sub_latency,
@@ -61,5 +62,41 @@ fn bench_packedfield(c: &mut Criterion) {
     benchmark_chunked_linear_combination::<F, PF, 100>(c, &packed_name);
 }
 
-criterion_group!(mersenne31_arithmetics, bench_field, bench_packedfield);
+fn bench_packed_two_power_scaling(c: &mut Criterion) {
+    type PF = <F as Field>::Packing;
+
+    let mut rng = SmallRng::seed_from_u64(2);
+    let mut mul_values = (0..1024)
+        .map(|_| PF::from_fn(|_| rng.random()))
+        .collect::<Vec<_>>();
+    c.bench_function("Mersenne31Packing/mul_2exp_u64/1024", |b| {
+        b.iter(|| {
+            let exp = black_box(17);
+            for value in &mut mul_values {
+                *value = value.mul_2exp_u64(exp);
+            }
+            black_box(&mul_values);
+        });
+    });
+
+    let mut div_values = (0..1024)
+        .map(|_| PF::from_fn(|_| rng.random()))
+        .collect::<Vec<_>>();
+    c.bench_function("Mersenne31Packing/div_2exp_u64/1024", |b| {
+        b.iter(|| {
+            let exp = black_box(17);
+            for value in &mut div_values {
+                *value = value.div_2exp_u64(exp);
+            }
+            black_box(&div_values);
+        });
+    });
+}
+
+criterion_group!(
+    mersenne31_arithmetics,
+    bench_field,
+    bench_packedfield,
+    bench_packed_two_power_scaling
+);
 criterion_main!(mersenne31_arithmetics);

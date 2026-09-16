@@ -14,7 +14,7 @@ use p3_util::{log2_ceil_usize, log2_strict_usize, reverse_slice_index_bits};
 use tracing::{debug_span, instrument};
 
 use crate::domain::CircleDomain;
-use crate::point::{Point, compute_lagrange_den_batched};
+use crate::point::{Point, compute_lagrange_den_on_domain};
 use crate::{CfftPermutable, CfftView, cfft_permute_slice};
 
 #[derive(Clone)]
@@ -126,13 +126,13 @@ impl<F: ComplexExtendable, M: Matrix<F>> CircleEvaluations<F, M> {
         let permuted_points = cfft_permute_slice(&self.domain.points().collect_vec());
 
         // Compute the lagrange denominators. This is batched as it lets us make use of batched_multiplicative_inverse.
-        let lagrange_den = compute_lagrange_den_batched(&permuted_points, point, self.domain.log_n);
+        let lagrange_den = compute_lagrange_den_on_domain(&permuted_points, point, self.domain);
 
         self.evaluate_at_point_with_den(point, &lagrange_den)
     }
 
     /// Evaluate at `point` given precomputed Lagrange denominators for `(self.domain, point)`,
-    /// as produced by [`compute_lagrange_den_batched`] on the CFFT-ordered domain points.
+    /// as produced by `compute_lagrange_den_on_domain` on the CFFT-ordered domain points.
     pub(crate) fn evaluate_at_point_with_den<EF: ExtensionField<F>>(
         &self,
         point: Point<EF>,

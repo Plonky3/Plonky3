@@ -236,6 +236,12 @@ impl<F: CubicTrinomialExtendable> RawDataSerializable for CubicTrinomialExtensio
     }
 }
 
+impl<F: CubicTrinomialExtendable> crate::AlgebraIdentity<F> for CubicTrinomialExtensionField<F> {
+    fn algebra_id() -> Vec<u8> {
+        b"p3-power-basis-v1:X^3-X-1".to_vec()
+    }
+}
+
 impl<F: CubicTrinomialExtendable> Field for CubicTrinomialExtensionField<F> {
     type Packing = Self;
 

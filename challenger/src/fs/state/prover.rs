@@ -3,7 +3,7 @@
 use alloc::vec::Vec;
 use core::marker::PhantomData;
 
-use p3_field::{BasedVectorSpace, Field, PrimeField64};
+use p3_field::{AlgebraIdentity, Field, PrimeField64};
 
 use crate::fs::bound::TranscriptBound;
 use crate::fs::codecs::{
@@ -105,6 +105,12 @@ impl<C, U: Unit> ProverState<C, U> {
     /// Read-only access to the bytes buffered for the proof so far.
     pub fn narg(&self) -> &[u8] {
         &self.narg
+    }
+
+    /// Release the completeness check when proof generation returns an error.
+    /// This does not restore the underlying challenger or yield a partial proof.
+    pub fn abort(&mut self) {
+        self.player.abort();
     }
 
     /// Finalise the driver and return the serialised wire bytes.
@@ -318,7 +324,7 @@ impl<C, U: Unit> ProverState<C, U> {
     pub fn add_extension<F, EF, Cdc>(&mut self, label: Label, value: &EF) -> TranscriptBound<EF>
     where
         F: TranscriptField,
-        EF: Field + BasedVectorSpace<F>,
+        EF: Field + AlgebraIdentity<F>,
         Cdc: Codec<C, F>,
     {
         // Validate: the next pattern step is a scalar message of extension type.
@@ -358,7 +364,7 @@ impl<C, U: Unit> ProverState<C, U> {
     pub fn observe_extension<F, EF, Cdc>(&mut self, label: Label, value: &EF) -> TranscriptBound<EF>
     where
         F: TranscriptField,
-        EF: Field + BasedVectorSpace<F>,
+        EF: Field + AlgebraIdentity<F>,
         Cdc: Codec<C, F>,
     {
         // Validate: the next pattern step is a scalar message of extension type.
@@ -384,7 +390,7 @@ impl<C, U: Unit> ProverState<C, U> {
     ) -> Vec<TranscriptBound<EF>>
     where
         F: TranscriptField,
-        EF: Field + BasedVectorSpace<F>,
+        EF: Field + AlgebraIdentity<F>,
         Cdc: Codec<C, F>,
     {
         // Validate: the next pattern step is a fixed-length list of extension messages.
@@ -438,7 +444,7 @@ impl<C, U: Unit> ProverState<C, U> {
     ) -> Vec<TranscriptBound<EF>>
     where
         F: TranscriptField,
-        EF: Field + BasedVectorSpace<F>,
+        EF: Field + AlgebraIdentity<F>,
         C: CanObserve<U::Item>,
         Cdc: Codec<C, F>,
     {
@@ -575,6 +581,76 @@ impl<C, U: Unit> ProverState<C, U> {
             .collect()
     }
 
+    /// Sample `count` index challenges the caller's predicate accepts, under one step.
+    ///
+    /// # Overview
+    ///
+    /// A candidate is drawn and shown to `accept` alongside the indices already kept.
+    ///
+    /// ```text
+    ///     draw -> accept? -> keep     until `count` indices are kept
+    ///                     -> discard
+    /// ```
+    ///
+    /// # When to use this
+    ///
+    /// A query schedule that opens distinct positions.
+    ///
+    /// Drawing a position twice costs a query and buys no soundness.
+    ///
+    /// # Shape
+    ///
+    /// The step records the width and the count kept, not the count drawn.
+    ///
+    /// Both sides know the kept count from their own configuration.
+    ///
+    /// # What the shape does not part
+    ///
+    /// This draw and the unconstrained one record the same step, so no seed parts them.
+    ///
+    /// The extension draws carry the same caveat, and one step type would fix both.
+    ///
+    /// # Termination
+    ///
+    /// The loop runs until `count` candidates are kept.
+    ///
+    /// So `accept` must be able to admit that many.
+    ///
+    /// A distinctness predicate needs `count <= 2^width`, which is a caller obligation.
+    ///
+    /// # Panics
+    ///
+    /// Never for a challenger that rejects internally, which is what `RESAMPLE = true` asks for.
+    pub fn challenge_uniform_bits_rejecting<W>(
+        &mut self,
+        label: Label,
+        width: usize,
+        count: usize,
+        mut accept: impl FnMut(usize, &[usize]) -> bool,
+    ) -> Vec<TranscriptBound<usize>>
+    where
+        C: CanSampleUniformBits<W>,
+    {
+        self.player.interact(Interaction::uniform_bits(
+            Hierarchy::Atomic,
+            Kind::Challenge,
+            label,
+            width,
+            Length::Fixed(count),
+        ));
+        let mut kept: Vec<usize> = Vec::with_capacity(count);
+        while kept.len() < count {
+            let candidate = self
+                .challenger
+                .sample_uniform_bits::<true>(width)
+                .expect("RESAMPLE = true: rejection loops internally, never errors");
+            if accept(candidate, &kept) {
+                kept.push(candidate);
+            }
+        }
+        kept.into_iter().map(TranscriptBound::wrap).collect()
+    }
+
     /// Sample `count` extension challenges the caller's predicate accepts, under one step.
     ///
     /// # Overview
@@ -603,6 +679,17 @@ impl<C, U: Unit> ProverState<C, U> {
     ///
     /// So bind whatever shapes the predicate through the instance label.
     ///
+    /// # What the shape does not part
+    ///
+    /// This draw and the unconstrained one record the same step.
+    ///
+    /// So no fingerprint and no seed tells the two apart.
+    ///
+    /// A predicate changes both the distribution and the sponge stream.
+    ///
+    /// Replacing this call with the unconstrained draw is therefore a format change
+    /// no shape check catches.
+    ///
     /// # Panics
     ///
     /// Never returns if `accept` rejects every value in the field.
@@ -614,7 +701,7 @@ impl<C, U: Unit> ProverState<C, U> {
     ) -> Vec<TranscriptBound<EF>>
     where
         F: TranscriptField,
-        EF: Field + BasedVectorSpace<F>,
+        EF: Field + AlgebraIdentity<F>,
         Cdc: Codec<C, F>,
     {
         assert_challenge_security::<C, F, Cdc>();
@@ -790,7 +877,7 @@ impl<C, U: Unit> ProverState<C, U> {
     pub fn challenge_extension<F, EF, Cdc>(&mut self, label: Label) -> TranscriptBound<EF>
     where
         F: TranscriptField,
-        EF: Field + BasedVectorSpace<F>,
+        EF: Field + AlgebraIdentity<F>,
         Cdc: Codec<C, F>,
     {
         assert_challenge_security::<C, F, Cdc>();
@@ -803,6 +890,68 @@ impl<C, U: Unit> ProverState<C, U> {
         TranscriptBound::wrap(ExtensionFieldCodec::<F, EF, Cdc>::sample(
             &mut self.challenger,
         ))
+    }
+
+    /// Sample a fixed-length list of challenge extension-field elements as one step.
+    ///
+    /// ```text
+    ///     one step  of width n   <- here
+    ///     n steps   of width 1   <- not this
+    /// ```
+    ///
+    /// The count comes from the caller's configuration.
+    ///
+    /// It is part of the recorded shape.
+    ///
+    /// The seed covers it.
+    ///
+    /// Use the rejecting draw when the protocol constrains what a coordinate may be.
+    ///
+    /// # What the shape does not part
+    ///
+    /// This draw and the rejecting one record the same step.
+    ///
+    /// ```text
+    ///     both record  ->  Atomic Challenge <label> Fixed(n) Algebra{modulus, degree}
+    /// ```
+    ///
+    /// So no fingerprint and no seed tells the two apart.
+    ///
+    /// A predicate changes both the distribution and the sponge stream.
+    ///
+    /// Swapping one draw for the other is a format change.
+    ///
+    /// No shape check catches it.
+    ///
+    /// The bit-width tags carry that distinction for index draws, and this pair does not.
+    pub fn challenge_extensions<F, EF, Cdc>(
+        &mut self,
+        label: Label,
+        count: usize,
+    ) -> Vec<TranscriptBound<EF>>
+    where
+        F: TranscriptField,
+        EF: Field + AlgebraIdentity<F>,
+        Cdc: Codec<C, F>,
+    {
+        assert_challenge_security::<C, F, Cdc>();
+        // Validate: the next pattern step is a fixed-length list of extension challenges.
+        self.player.interact(Interaction::algebra::<F, EF>(
+            Hierarchy::Atomic,
+            Kind::Challenge,
+            label,
+            Length::Fixed(count),
+        ));
+        // Draw the coordinates in order.
+        //
+        // The replaying side then lands on the same list.
+        (0..count)
+            .map(|_| {
+                TranscriptBound::wrap(ExtensionFieldCodec::<F, EF, Cdc>::sample(
+                    &mut self.challenger,
+                ))
+            })
+            .collect()
     }
 
     /// Run a proof-of-work step and append the witness to the wire buffer.
@@ -881,6 +1030,7 @@ impl<C, U: Unit> ProverState<C, U> {
 
 #[cfg(test)]
 mod tests {
+    use alloc::string::String;
     use alloc::vec;
     use alloc::vec::Vec;
     #[cfg(panic = "unwind")]
@@ -1011,7 +1161,7 @@ mod tests {
     }
 
     #[test]
-    fn round_trip_over_a_native_field_sponge() {
+    fn native_field_unit_challenge_stream_is_pinned() {
         // Invariant: the field alphabet drives an existing production challenger.
         //
         // `SerializingChallenger32` observes and samples `F`, never bytes, so it
@@ -1040,6 +1190,14 @@ mod tests {
         assert_eq!(prover_challenges, verifier_challenges);
         // Property 3: the wire holds three canonical 4-byte encodings and nothing else.
         assert_eq!(narg.len(), 3 * 4);
+        // Literal FieldUnit KAT: pins native seed packing, absorption and sampling.
+        // Independently checked from the byte-level seed, 3-byte field packing,
+        // Montgomery observation bytes, and reversed Keccak output bytes.
+        let drawn: Vec<u32> = prover_challenges
+            .iter()
+            .map(|c| c.as_inner().as_canonical_u32())
+            .collect();
+        assert_eq!(drawn, [555_688_962, 664_512_199]);
     }
 
     #[test]
@@ -1203,6 +1361,108 @@ mod tests {
 
         assert_eq!(read.into_inner(), value);
         assert_eq!(zeta_p, zeta_v);
+    }
+
+    #[test]
+    fn a_fixed_length_extension_challenge_list_is_one_step_both_sides_replay() {
+        // Invariant: a whole point of challenges is one step.
+        //
+        // Both sides draw it alike.
+        //
+        // Fixture state: one step of 3 extension challenges, nothing on the wire.
+        //
+        //     described:  Fixed(3) of degree-4 elements
+        //     prover  :   draws 3, in order
+        //     verifier:   redraws the same 3 from the same seeded state
+        let pattern = InteractionPattern::new(vec![Interaction::algebra::<F, EF4>(
+            Hierarchy::Atomic,
+            Kind::Challenge,
+            "point",
+            Length::Fixed(3),
+        )])
+        .unwrap();
+        let ds: DomainSeparator<u8> = DomainSeparator::new(0, b"ext-point", pattern);
+
+        let mut p = ProverState::<_, u8>::new(byte_sponge(), &ds);
+        let drawn: Vec<EF4> = p
+            .challenge_extensions::<F, EF4, ByteCodec>("point", 3)
+            .into_iter()
+            .map(TranscriptBound::into_inner)
+            .collect();
+        let narg = p.finalize();
+
+        // A challenge is squeezed, never sent.
+        //
+        // The wire stays empty.
+        assert!(narg.is_empty());
+
+        // Three coordinates, and a sponge that advances between them.
+        assert_eq!(drawn.len(), 3);
+        assert_ne!(drawn[0], drawn[1]);
+        assert_ne!(drawn[1], drawn[2]);
+
+        let mut v = VerifierState::<_, u8>::new(byte_sponge(), &ds, &narg);
+        let replayed: Vec<EF4> = v
+            .challenge_extensions::<F, EF4, ByteCodec>("point", 3)
+            .into_iter()
+            .map(TranscriptBound::into_inner)
+            .collect();
+        v.finalize().expect("NARG fully consumed");
+
+        assert_eq!(drawn, replayed);
+    }
+
+    #[test]
+    fn an_extension_challenge_list_of_the_wrong_width_fails_the_shape_check() {
+        // Invariant: the count is part of the recorded shape, not a caller's free choice.
+        //
+        // Fixture state: the description asks for 3 coordinates.
+        //
+        // Mutation: draw 2 instead.
+        //
+        //     described:  Fixed(3)
+        //     drawn:      Fixed(2)  -> the player rejects the step
+        let pattern = InteractionPattern::new(vec![Interaction::algebra::<F, EF4>(
+            Hierarchy::Atomic,
+            Kind::Challenge,
+            "point",
+            Length::Fixed(3),
+        )])
+        .unwrap();
+        let ds: DomainSeparator<u8> = DomainSeparator::new(0, b"ext-point", pattern);
+
+        // The draw itself must be what fails, not the later completeness check.
+        //
+        //     shape check fails   ->  "Received interaction ... but expected ..."
+        //     nothing validated   ->  "Pattern not fully replayed" from finalisation
+        //
+        // So the payload is compared rather than merely asserted to exist.
+        //
+        // The driver is left unfinalised on purpose, and its drop check yields to
+        // the panic already in flight.
+        #[cfg(panic = "unwind")]
+        {
+            let payload = catch_unwind(AssertUnwindSafe(|| {
+                let mut p = ProverState::<_, u8>::new(byte_sponge(), &ds);
+                let _ = p.challenge_extensions::<F, EF4, ByteCodec>("point", 2);
+            }))
+            .expect_err("a narrower draw must fail the shape check");
+
+            let message = payload
+                .downcast_ref::<String>()
+                .map(String::as_str)
+                .or_else(|| payload.downcast_ref::<&str>().copied())
+                .expect("the player panics with a formatted message");
+
+            assert!(
+                message.starts_with("Received interaction "),
+                "the shape check must be the failure, got: {message}",
+            );
+            assert!(
+                message.contains("Fixed(2)") && message.contains("Fixed(3)"),
+                "the diff must name both widths, got: {message}",
+            );
+        }
     }
 
     #[test]
@@ -1588,6 +1848,15 @@ mod tests {
     }
 
     #[test]
+    fn prover_abort_releases_unfinished_pattern() {
+        let ds: DomainSeparator<u8> = DomainSeparator::new(0, b"abort", small_pattern());
+        let mut p = ProverState::<_, u8>::new(byte_sponge(), &ds);
+        p.add_scalars::<F, ByteCodec>("msgs", &[F::ONE, F::ONE, F::ONE]);
+        p.abort();
+        drop(p);
+    }
+
+    #[test]
     #[should_panic(expected = "Dropped unfinalized ProverState")]
     fn prover_dropped_without_finalize_panics() {
         // Invariant: abandoning a transcript halfway is a bug, not a silent no-op.
@@ -1716,7 +1985,164 @@ mod tests {
     }
 
     /// First challenge of the pinned end-to-end vector.
-    const PINNED_ALPHA_0: u32 = 252_236_841;
+    const PINNED_ALPHA_0: u32 = 1_177_455_429;
     /// Second challenge of the pinned end-to-end vector.
-    const PINNED_ALPHA_1: u32 = 884_894_143;
+    const PINNED_ALPHA_1: u32 = 1_345_535_025;
+
+    #[test]
+    fn a_predicate_moves_the_stream_but_not_the_shape() {
+        // Invariant: the two extension draws record one step, so no seed parts them.
+        //
+        // This is the format change the fingerprint does not catch.
+        //
+        // Fixture state: one description of three challenge coordinates.
+        //
+        //     unconstrained  ->  takes candidates 1, 2, 3
+        //     rejecting      ->  drops candidate 1, takes 2, 3, 4
+        //
+        // Both record `Atomic Challenge point Fixed(3) Algebra{..}`.
+        let pattern = InteractionPattern::new(vec![Interaction::algebra::<F, EF4>(
+            Hierarchy::Atomic,
+            Kind::Challenge,
+            "point",
+            Length::Fixed(3),
+        )])
+        .unwrap();
+        let ds: DomainSeparator<u8> = DomainSeparator::new(0, b"ext-point", pattern);
+
+        // The unconstrained draw takes every candidate in order.
+        let mut plain = ProverState::<_, u8>::new(byte_sponge(), &ds);
+        let unconstrained: Vec<EF4> = plain
+            .challenge_extensions::<F, EF4, ByteCodec>("point", 3)
+            .into_iter()
+            .map(TranscriptBound::into_inner)
+            .collect();
+        assert!(plain.finalize().is_empty());
+
+        // The rejecting draw drops the first candidate, so every value shifts by one.
+        let mut seen = 0;
+        let mut filtered = ProverState::<_, u8>::new(byte_sponge(), &ds);
+        let rejected: Vec<EF4> = filtered
+            .challenge_extensions_rejecting::<F, EF4, ByteCodec>("point", 3, |_, _| {
+                seen += 1;
+                seen != 1
+            })
+            .into_iter()
+            .map(TranscriptBound::into_inner)
+            .collect();
+        assert!(filtered.finalize().is_empty());
+
+        // The streams differ, which is the whole point of the predicate.
+        assert_ne!(unconstrained, rejected);
+
+        // Both drivers finalised against the SAME description, above.
+        //
+        // That is the finding: one shape accepted two different challenge streams.
+        //
+        // So the fingerprint derived from it cannot tell the two runs apart.
+        //
+        // Separating them needs a step type of its own, the way the bit-width tags
+        // separate a biased index draw from an unbiased one.
+        assert_eq!(unconstrained.len(), rejected.len());
+    }
+
+    /// One description of `count` index draws, `width` bits wide.
+    fn index_separator(width: usize, count: usize) -> DomainSeparator<FieldUnit<F>> {
+        let pattern = InteractionPattern::new(vec![Interaction::uniform_bits(
+            Hierarchy::Atomic,
+            Kind::Challenge,
+            "index",
+            width,
+            Length::Fixed(count),
+        )])
+        .unwrap();
+        DomainSeparator::new(0, b"index-draw", pattern)
+    }
+
+    #[test]
+    fn a_rejecting_index_draw_keeps_only_what_the_predicate_admits() {
+        // Invariant: the draw returns the count it was asked for, all admitted.
+        //
+        // Fixture state: four draws over three bits, rejecting odd candidates.
+        //
+        //     draw -> even? -> keep
+        //                   -> discard, draw again
+        let ds = index_separator(3, 4);
+        let mut state = ProverState::new(field_sponge(), &ds);
+
+        let kept: Vec<usize> = state
+            .challenge_uniform_bits_rejecting::<F>("index", 3, 4, |candidate, _| {
+                candidate.is_multiple_of(2)
+            })
+            .into_iter()
+            .map(TranscriptBound::into_inner)
+            .collect();
+
+        assert_eq!(kept.len(), 4);
+        assert!(kept.iter().all(|&i| i.is_multiple_of(2) && i < 8));
+        assert!(state.finalize().is_empty());
+    }
+
+    #[test]
+    fn a_distinctness_predicate_draws_until_the_kept_indices_differ() {
+        // Invariant: the count is what is kept, not what is drawn.
+        //
+        // A distinct draw is the query schedule's case, so it is the one pinned here.
+        //
+        // Fixture state: four draws over three bits, rejecting repeats.
+        let ds = index_separator(3, 4);
+        let mut state = ProverState::new(field_sponge(), &ds);
+
+        let kept: Vec<usize> = state
+            .challenge_uniform_bits_rejecting::<F>("index", 3, 4, |candidate, kept| {
+                !kept.contains(&candidate)
+            })
+            .into_iter()
+            .map(TranscriptBound::into_inner)
+            .collect();
+
+        let mut sorted = kept.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(sorted.len(), kept.len(), "every kept index differs");
+        assert!(state.finalize().is_empty());
+    }
+
+    #[test]
+    fn an_index_predicate_moves_the_stream_but_not_the_shape() {
+        // Invariant: the constrained and unconstrained index draws record one step.
+        //
+        // No seed parts them, which is the caveat both methods carry.
+        //
+        // Fixture state: one description of three draws, three bits wide.
+        let ds = index_separator(3, 3);
+
+        // The unconstrained draw takes every candidate in order.
+        let mut plain = ProverState::new(field_sponge(), &ds);
+        let unconstrained: Vec<usize> = plain
+            .challenge_uniform_bits::<F>("index", 3, 3)
+            .into_iter()
+            .map(TranscriptBound::into_inner)
+            .collect();
+        assert!(plain.finalize().is_empty());
+
+        // The rejecting draw drops the first candidate, so every value shifts by one.
+        let mut seen = 0;
+        let mut filtered = ProverState::new(field_sponge(), &ds);
+        let rejected: Vec<usize> = filtered
+            .challenge_uniform_bits_rejecting::<F>("index", 3, 3, |_, _| {
+                seen += 1;
+                seen != 1
+            })
+            .into_iter()
+            .map(TranscriptBound::into_inner)
+            .collect();
+        assert!(filtered.finalize().is_empty());
+
+        // The streams differ, which is the whole point of the predicate.
+        assert_ne!(unconstrained, rejected);
+
+        // Both drivers finalised against the SAME description, above.
+        assert_eq!(unconstrained.len(), rejected.len());
+    }
 }

@@ -33,6 +33,7 @@ thiserror.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
+p3-challenger = { path = "../challenger", features = ["test-utils"] }
 p3-keccak = { path = "../keccak" }
 p3-merkle-tree = { path = "../merkle-tree" }
 p3-symmetric = { path = "../symmetric" }

@@ -201,7 +201,8 @@ fn main() {
     let mut prover_challenger = challenger.clone();
     let time = Instant::now();
     let (commitment, prover_data) =
-        <MyPcs as MultilinearPcs<EF, MyChallenger>>::commit(&pcs, witness, &mut prover_challenger);
+        <MyPcs as MultilinearPcs<EF, MyChallenger>>::commit(&pcs, witness, &mut prover_challenger)
+            .unwrap();
     let commit_time = time.elapsed();
 
     // Phase 2: Opening proof (multi-round sumcheck + STIR queries + PoW).
@@ -211,7 +212,8 @@ fn main() {
         prover_data,
         protocol.clone(),
         &mut prover_challenger,
-    );
+    )
+    .unwrap();
     let opening_time = time.elapsed();
     // Why this is an upper bound, not the optimal wire size:
     //   - Postcard encodes integers as LEB128 varints.

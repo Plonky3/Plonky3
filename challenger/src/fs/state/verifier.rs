@@ -3,7 +3,7 @@
 use alloc::vec::Vec;
 use core::marker::PhantomData;
 
-use p3_field::{BasedVectorSpace, Field, PrimeField64};
+use p3_field::{AlgebraIdentity, Field, PrimeField64};
 
 use crate::fs::bound::TranscriptBound;
 use crate::fs::codecs::{
@@ -220,7 +220,7 @@ impl<'a, C, U: Unit> VerifierState<'a, C, U> {
     pub fn observe_extension<F, EF, Cdc>(&mut self, label: Label, value: &EF) -> TranscriptBound<EF>
     where
         F: TranscriptField,
-        EF: Field + BasedVectorSpace<F>,
+        EF: Field + AlgebraIdentity<F>,
         Cdc: Codec<C, F>,
     {
         // Validate: the next pattern step is a scalar message of extension type.
@@ -252,7 +252,7 @@ impl<'a, C, U: Unit> VerifierState<'a, C, U> {
     ) -> Result<Vec<TranscriptBound<EF>>, TranscriptError>
     where
         F: TranscriptField,
-        EF: Field + BasedVectorSpace<F>,
+        EF: Field + AlgebraIdentity<F>,
         Cdc: Codec<C, F>,
     {
         // The recorded count is the only one this step accepts.
@@ -312,7 +312,7 @@ impl<'a, C, U: Unit> VerifierState<'a, C, U> {
     ) -> Result<Vec<TranscriptBound<EF>>, TranscriptError>
     where
         F: TranscriptField,
-        EF: Field + BasedVectorSpace<F>,
+        EF: Field + AlgebraIdentity<F>,
         C: CanObserve<U::Item>,
         Cdc: Codec<C, F>,
     {
@@ -462,9 +462,59 @@ impl<'a, C, U: Unit> VerifierState<'a, C, U> {
             .collect()
     }
 
+    /// Sample `count` index challenges the caller's predicate accepts, under one step.
+    ///
+    /// The prover-side method of the same name carries what the step does and does not record.
+    ///
+    /// It also carries the obligation that makes the loop terminate.
+    ///
+    /// # Panics
+    ///
+    /// Never for a challenger that rejects internally, which is what `RESAMPLE = true` asks for.
+    pub fn challenge_uniform_bits_rejecting<W>(
+        &mut self,
+        label: Label,
+        width: usize,
+        count: usize,
+        mut accept: impl FnMut(usize, &[usize]) -> bool,
+    ) -> Vec<TranscriptBound<usize>>
+    where
+        C: CanSampleUniformBits<W>,
+    {
+        self.player.interact(Interaction::uniform_bits(
+            Hierarchy::Atomic,
+            Kind::Challenge,
+            label,
+            width,
+            Length::Fixed(count),
+        ));
+        let mut kept: Vec<usize> = Vec::with_capacity(count);
+        while kept.len() < count {
+            let candidate = self
+                .challenger
+                .sample_uniform_bits::<true>(width)
+                .expect("RESAMPLE = true: rejection loops internally, never errors");
+            if accept(candidate, &kept) {
+                kept.push(candidate);
+            }
+        }
+        kept.into_iter().map(TranscriptBound::wrap).collect()
+    }
+
     /// Sample `count` extension challenges the caller's predicate accepts, under one step.
     ///
     /// The prover-side method of the same name carries what the step does and does not record.
+    ///
+    /// # What the shape does not part
+    ///
+    /// This draw and the unconstrained one record the same step.
+    ///
+    /// So no fingerprint and no seed tells the two apart.
+    ///
+    /// A predicate changes both the distribution and the sponge stream.
+    ///
+    /// Replacing this call with the unconstrained draw is therefore a format change
+    /// no shape check catches.
     ///
     /// # Panics
     ///
@@ -477,7 +527,7 @@ impl<'a, C, U: Unit> VerifierState<'a, C, U> {
     ) -> Vec<TranscriptBound<EF>>
     where
         F: TranscriptField,
-        EF: Field + BasedVectorSpace<F>,
+        EF: Field + AlgebraIdentity<F>,
         Cdc: Codec<C, F>,
     {
         assert_challenge_security::<C, F, Cdc>();
@@ -644,7 +694,7 @@ impl<'a, C, U: Unit> VerifierState<'a, C, U> {
     ) -> Result<TranscriptBound<EF>, TranscriptError>
     where
         F: TranscriptField,
-        EF: Field + BasedVectorSpace<F>,
+        EF: Field + AlgebraIdentity<F>,
         Cdc: Codec<C, F>,
     {
         // Validate: the next pattern step is a scalar message of extension type `EF`.
@@ -802,7 +852,7 @@ impl<'a, C, U: Unit> VerifierState<'a, C, U> {
     pub fn challenge_extension<F, EF, Cdc>(&mut self, label: Label) -> TranscriptBound<EF>
     where
         F: TranscriptField,
-        EF: Field + BasedVectorSpace<F>,
+        EF: Field + AlgebraIdentity<F>,
         Cdc: Codec<C, F>,
     {
         assert_challenge_security::<C, F, Cdc>();
@@ -815,6 +865,41 @@ impl<'a, C, U: Unit> VerifierState<'a, C, U> {
         TranscriptBound::wrap(ExtensionFieldCodec::<F, EF, Cdc>::sample(
             &mut self.challenger,
         ))
+    }
+
+    /// Sample a fixed-length list of challenge extension-field elements as one step.
+    ///
+    /// Mirrors the proving side.
+    ///
+    /// Both draw the same list from the same sponge state.
+    ///
+    /// The count comes from the replaying side's own configuration, never from the wire.
+    pub fn challenge_extensions<F, EF, Cdc>(
+        &mut self,
+        label: Label,
+        count: usize,
+    ) -> Vec<TranscriptBound<EF>>
+    where
+        F: TranscriptField,
+        EF: Field + AlgebraIdentity<F>,
+        Cdc: Codec<C, F>,
+    {
+        assert_challenge_security::<C, F, Cdc>();
+        // Validate: the next pattern step is a fixed-length list of extension challenges.
+        self.player.interact(Interaction::algebra::<F, EF>(
+            Hierarchy::Atomic,
+            Kind::Challenge,
+            label,
+            Length::Fixed(count),
+        ));
+        // Draw the coordinates in the order the proving side drew them.
+        (0..count)
+            .map(|_| {
+                TranscriptBound::wrap(ExtensionFieldCodec::<F, EF, Cdc>::sample(
+                    &mut self.challenger,
+                ))
+            })
+            .collect()
     }
 
     /// Replay a proof-of-work step.

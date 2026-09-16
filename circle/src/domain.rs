@@ -234,15 +234,16 @@ impl<F: ComplexExtendable> PolynomialSpace for CircleDomain<F> {
         let neg_shift = -self.shift;
         let k = neg_shift.s_p_at_p(self.log_n);
         let z = self.vanishing_poly(point);
-        let den_shift = self.shift.v_tilde_p(point);
-        let den_negshift_k = neg_shift.v_tilde_p(point) * k;
+        let (num_shift, den_shift) = self.shift.recip_v_tilde_p_num_den(point);
+        let (num_negshift, den_negshift) = neg_shift.recip_v_tilde_p_num_den(point);
+        let den_negshift_k = den_negshift * k;
 
         let inv = batch_multiplicative_inverse(&[den_shift, den_negshift_k, z]);
         let (inv_den_shift, inv_den_negshift_k, inv_z) = (inv[0], inv[1], inv[2]);
 
-        let z_inv_dk = z * inv_den_negshift_k;
+        let z_inv_dk = z * num_negshift * inv_den_negshift_k;
         LagrangeSelectors {
-            is_first_row: z * inv_den_shift,
+            is_first_row: z * num_shift * inv_den_shift,
             is_last_row: z_inv_dk * k,
             is_transition: Ext::ONE - z_inv_dk,
             inv_vanishing: inv_z,
@@ -277,10 +278,10 @@ impl<F: ComplexExtendable> PolynomialSpace for CircleDomain<F> {
         // below instead of being recomputed (as a `log_n`-step squaring chain) per point.
         let shift_v_n = self.shift.v_n(self.log_n);
 
-        // Fused parallel pass over the coset points: `vanishing_poly`,
-        // `shift.v_tilde_p` and `(-shift).v_tilde_p * k` are independent per
-        // point. Computing them side-by-side reads `pts` once and writes the
-        // three outputs in parallel.
+        // Fused parallel pass over the coset points: `vanishing_poly` and the
+        // denominators of the two reciprocal selectors are independent per point.
+        // Keeping the selectors as numerators over denominators avoids two individual
+        // inversions per point before the batch inversion below.
         let mut z_vals = Self::Val::zero_vec(n);
         let mut den_shift = Self::Val::zero_vec(n);
         let mut den_negshift_k = Self::Val::zero_vec(n);
@@ -291,8 +292,10 @@ impl<F: ComplexExtendable> PolynomialSpace for CircleDomain<F> {
             .zip(pts.par_iter())
             .for_each(|(((z, ds), dnk), &at)| {
                 *z = at.v_n(self.log_n) - shift_v_n;
-                *ds = self.shift.v_tilde_p(at);
-                *dnk = neg_shift.v_tilde_p(at) * k;
+                let (_, den_shift) = self.shift.recip_v_tilde_p_num_den(at);
+                let (_, den_negshift) = neg_shift.recip_v_tilde_p_num_den(at);
+                *ds = den_shift;
+                *dnk = den_negshift * k;
             });
 
         // Batch inverses (already internally parallel).
@@ -311,9 +314,14 @@ impl<F: ComplexExtendable> PolynomialSpace for CircleDomain<F> {
             .zip(z_vals.par_iter())
             .zip(inv_den_shift.par_iter())
             .zip(inv_den_negshift_k.par_iter())
-            .for_each(|(((((ifr, ilr), itr), &z), &inv_d), &inv_dk)| {
-                let z_inv_dk = z * inv_dk;
-                *ifr = z * inv_d;
+            .zip(pts.par_iter())
+            .for_each(|((((((ifr, ilr), itr), &z), &inv_d), &inv_dk), &at)| {
+                // The numerators are recomputed rather than stored by the first pass: two more
+                // `n`-element buffers cost at least as much as the point subtractions they save.
+                let (num_shift, _) = self.shift.recip_v_tilde_p_num_den(at);
+                let (num_negshift, _) = neg_shift.recip_v_tilde_p_num_den(at);
+                let z_inv_dk = z * num_negshift * inv_dk;
+                *ifr = z * num_shift * inv_d;
                 *ilr = z_inv_dk * k;
                 *itr = Self::Val::ONE - z_inv_dk;
             });
@@ -544,6 +552,25 @@ mod tests {
                 .chain(iter::repeat_n(F::ZERO, n - 1))
                 .collect_vec()
         );
+    }
+
+    #[test]
+    fn selectors_on_nonstandard_disjoint_coset_match_single_point_selectors() {
+        type F = Mersenne31;
+
+        let domain = CircleDomain::<F>::new(8, Point::generator(31) * 3);
+        let coset = CircleDomain::<F>::new(8, Point::generator(31) * 5);
+        let domain_points: HashSet<_> = domain.points().collect();
+        assert!(coset.points().all(|point| !domain_points.contains(&point)));
+
+        let selectors = domain.selectors_on_coset(coset);
+        for (i, point) in coset.points().enumerate() {
+            let at_point = domain.selectors_at_point(point.to_projective_line().unwrap());
+            assert_eq!(selectors.is_first_row[i], at_point.is_first_row);
+            assert_eq!(selectors.is_last_row[i], at_point.is_last_row);
+            assert_eq!(selectors.is_transition[i], at_point.is_transition);
+            assert_eq!(selectors.inv_vanishing[i], at_point.inv_vanishing);
+        }
     }
 
     #[test]

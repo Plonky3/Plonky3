@@ -266,20 +266,37 @@ pub struct GrindingStep {
 /// | `p3-fri-pcs`     | `batch_pow`  | batch-combination | elided              |
 /// | `p3-fri`         | `commit_pow` | ldt-commit-phase  | elided              |
 /// | `p3-fri`         | `query_pow`  | ldt-query-phase   | elided              |
+/// | `p3-circle-pcs`  | `batch_pow`  | batch-combination | elided              |
+/// | `p3-circle-pcs`  | `commit_pow` | ldt-commit-phase  | elided              |
+/// | `p3-circle-pcs`  | `query_pow`  | ldt-query-phase   | elided              |
+/// | `p3-stir-pcs-batch` | `batch_pow` | batch-combination | elided           |
 ///
-/// Protocols absent from this table grind without a security model that reads the same numbers back.
-///
-/// | protocol                     | steps it grinds                                              |
-/// | ---------------------------- | ------------------------------------------------------------ |
-/// | `p3-circle-pcs`              | `commit_pow`, `query_pow`                                    |
-/// | `p3-whir`                    | `sumcheck_pow`, `query_pow`, `final_query_pow`               |
-/// | `p3-whir-hvzk`               | `zk_sumcheck_pow`, `base_pow`                                |
-/// | `p3-stir`                    | `folding_pow`, `query_pow`, `final_folding_pow`, `final_pow` |
-/// | `p3-sumcheck-quadratic`      | `round_pow`                                                  |
-/// | `p3-sumcheck-generic-degree` | `round_pow`                                                  |
-///
-/// None of them declares its sites in bits, so no check can read the credited difficulty back out.
-pub const GRINDING_VOCABULARY: [GrindingStep; 6] = [
+/// Sites outside this vocabulary are named by the unpriced table below.
+pub const GRINDING_VOCABULARY: [GrindingStep; 10] = [
+    GrindingStep {
+        protocol: "p3-circle-pcs",
+        label: "batch_pow",
+        site: GrindingSite::BatchCombination,
+        zero_bits: ZeroBitConvention::Elided,
+    },
+    GrindingStep {
+        protocol: "p3-circle-pcs",
+        label: "commit_pow",
+        site: GrindingSite::LdtCommitPhase,
+        zero_bits: ZeroBitConvention::Elided,
+    },
+    GrindingStep {
+        protocol: "p3-circle-pcs",
+        label: "query_pow",
+        site: GrindingSite::LdtQueryPhase,
+        zero_bits: ZeroBitConvention::Elided,
+    },
+    GrindingStep {
+        protocol: "p3-stir-pcs-batch",
+        label: "batch_pow",
+        site: GrindingSite::BatchCombination,
+        zero_bits: ZeroBitConvention::Elided,
+    },
     GrindingStep {
         protocol: "p3-uni-stark",
         label: "ood_pow",
@@ -317,6 +334,46 @@ pub const GRINDING_VOCABULARY: [GrindingStep; 6] = [
         zero_bits: ZeroBitConvention::Elided,
     },
 ];
+
+/// Every grinding step this crate does not price, named once.
+///
+/// # Overview
+///
+/// A protocol here credits the step inside its own security report.
+///
+/// The shared budget skips it, so the comparison never sees it.
+///
+/// # Soundness
+///
+/// A step in neither table is a difficulty nobody compares.
+///
+/// That is how a budget and a transcript drift apart unseen.
+///
+/// The transcript suites walk every described step and assert one table names it.
+///
+/// A step listed here is therefore a decision, not an omission.
+pub const UNPRICED_GRINDING_SITES: [(&str, &str); 12] = [
+    ("p3-binary-pcs", "query_pow"),
+    ("p3-whir", "query_pow"),
+    ("p3-whir", "final_query_pow"),
+    ("p3-whir-hvzk", "query_pow"),
+    ("p3-whir-hvzk-base", "base_pow"),
+    ("p3-stir", "folding_pow"),
+    ("p3-stir", "query_pow"),
+    ("p3-stir", "final_folding_pow"),
+    ("p3-stir", "final_pow"),
+    ("p3-sumcheck-quadratic", "round_pow"),
+    ("p3-sumcheck-hvzk", "round_pow"),
+    ("p3-sumcheck-generic-degree", "round_pow"),
+];
+
+/// Whether a protocol's step label is priced by its own report rather than the budget.
+#[must_use]
+pub fn is_unpriced_grinding_site(protocol: &str, label: &str) -> bool {
+    UNPRICED_GRINDING_SITES
+        .iter()
+        .any(|&(p, l)| p == protocol && l == label)
+}
 
 /// The vocabulary row for one protocol's step label, or `None` when the pair
 /// names no site this crate models.
@@ -655,6 +712,36 @@ mod tests {
 
     /// The full FRI-backed uni-STARK stack, in transcript nesting order.
     const UNI_STARK_STACK: [&str; 3] = ["p3-uni-stark", "p3-fri-pcs", "p3-fri"];
+
+    #[test]
+    fn circle_and_stir_batch_grinding_matches_credited_sites() {
+        let sites = GrindingSites {
+            batch_combination: 5,
+            ..GrindingSites::NONE
+        };
+        let circle = GrindingBudget::from_sites(&sites).with_fri(&regime(3, 7));
+        let recorded = [
+            RecordedGrind::new("p3-circle-pcs", "batch_pow", 5),
+            RecordedGrind::new("p3-circle-pcs", "commit_pow", 3),
+            RecordedGrind::new("p3-circle-pcs", "query_pow", 7),
+        ];
+        circle.check(&["p3-circle-pcs"], &recorded).unwrap();
+        for index in 0..recorded.len() {
+            let mut mismatched = recorded;
+            mismatched[index].bits += 1;
+            assert!(circle.check(&["p3-circle-pcs"], &mismatched).is_err());
+        }
+        let stir = GrindingBudget::from_sites(&sites);
+        stir.check(
+            &["p3-stir-pcs-batch"],
+            &[RecordedGrind::new("p3-stir-pcs-batch", "batch_pow", 5)],
+        )
+        .unwrap();
+        assert!(stir.check(&["p3-stir-pcs-batch"], &[]).is_err());
+        for protocol in ["p3-circle-pcs", "p3-stir-pcs-batch"] {
+            GrindingBudget::NONE.check(&[protocol], &[]).unwrap();
+        }
+    }
 
     #[test]
     fn every_site_appears_in_the_vocabulary_exactly_as_often_as_a_protocol_names_it() {

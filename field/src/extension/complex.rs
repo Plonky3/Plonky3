@@ -30,6 +30,10 @@ impl<F: ComplexExtendable> ExtensionAlgebra<F, 2, Binomial<F>> for F {
 }
 
 impl<F: ComplexExtendable> BinomiallyExtendable<2> for F {
+    fn binomial_algebra_id() -> alloc::vec::Vec<u8> {
+        b"p3-power-basis-v1:X^2+1".to_vec()
+    }
+
     const W: Self = F::NEG_ONE;
 
     // since `p = 3 (mod 4)`, `(p-1)/2` is always odd,
@@ -101,6 +105,9 @@ impl<R: PrimeCharacteristicRing> Complex<R> {
 /// This exists if the polynomial ring `F[i][X]` has an irreducible polynomial `X^d-W`
 /// allowing us to define the binomial extension field `F[i][X]/(X^d-W)`.
 pub trait HasComplexBinomialExtension<const D: usize>: ComplexExtendable {
+    /// Stable identity of the power basis modulo `X^D - W` over `Self[i]`.
+    fn complex_binomial_algebra_id() -> alloc::vec::Vec<u8>;
+
     const W: Complex<Self>;
 
     // DTH_ROOT = W^((n - 1)/D).
@@ -154,6 +161,10 @@ impl<F, const D: usize> BinomiallyExtendable<D> for Complex<F>
 where
     F: HasComplexBinomialExtension<D>,
 {
+    fn binomial_algebra_id() -> alloc::vec::Vec<u8> {
+        F::complex_binomial_algebra_id()
+    }
+
     const W: Self = <F as HasComplexBinomialExtension<D>>::W;
 
     const DTH_ROOT: Self = <F as HasComplexBinomialExtension<D>>::DTH_ROOT;

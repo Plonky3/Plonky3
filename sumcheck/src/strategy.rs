@@ -92,6 +92,24 @@ where
     (acc0 + w0 * e0, acc_inf + (w1 - w0) * (e1 - e0))
 }
 
+/// Splits a `2K`-wide chunk into the two faces of the suffix round variable.
+///
+/// The suffix variable is the low index bit.
+///
+/// So the two faces of a point are adjacent entries:
+///
+/// ```text
+///     chunk : [ t0, t1, t2, t3, ... ]
+///     lo    : [ t0, t2, ... ]           the variable at 0
+///     hi    : [ t1, t3, ... ]           the variable at 1
+/// ```
+#[inline(always)]
+fn gather_pairs<T: Copy>(chunk: &[T]) -> ([T; K], [T; K]) {
+    let lo: [T; K] = core::array::from_fn(|i| chunk[2 * i]);
+    let hi: [T; K] = core::array::from_fn(|i| chunk[2 * i + 1]);
+    (lo, hi)
+}
+
 /// Component-wise sum of two `(constant, leading)` accumulator pairs.
 #[inline(always)]
 fn round_reduce<A: Copy + PrimeCharacteristicRing>(a: (A, A), b: (A, A)) -> (A, A) {
@@ -484,8 +502,9 @@ where
 {
     // Precondition: paired tables, with a variable left over for the message.
     //
-    // Zero is a multiple of four, so an empty pair would otherwise pass here and
-    // return a zero message instead of panicking.
+    // Zero is a multiple of four.
+    //
+    // So an empty pair would otherwise pass and return a zero message instead of panicking.
     assert_eq!(evals.len(), weights.len());
     assert!(evals.len() >= 4 && evals.len().is_multiple_of(4));
     let evals_len = evals.len();
@@ -560,6 +579,263 @@ where
     RoundMessage { c_a, c_inf }
 }
 
+/// Round message of an interleaved pair, serial.
+///
+/// The suffix counterpart of the split-face scaffold.
+///
+/// The two faces of the round variable are adjacent entries, not separate slices.
+///
+/// So each tile gathers them itself.
+///
+/// Parallelism is left to the caller, which owns the outer loop.
+#[inline]
+fn round_coefficients_pairs<A>(evals: &[A], weights: &[A]) -> (A, A)
+where
+    A: Algebra<A> + Copy,
+{
+    // Whole tiles first, leftovers after.
+    // A tile is `K` pairs, so `2K` consecutive entries.
+    let (e_main, e_tail) = evals.as_chunks::<{ 2 * K }>();
+    let (w_main, w_tail) = weights.as_chunks::<{ 2 * K }>();
+
+    // Main loop: K pairs per iteration through delayed-reduction dot products.
+    let main = e_main
+        .iter()
+        .zip(w_main)
+        .fold((A::ZERO, A::ZERO), |acc, (e_chunk, w_chunk)| {
+            let (e_lo, e_hi) = gather_pairs::<A>(e_chunk);
+            let (w_lo, w_hi) = gather_pairs::<A>(w_chunk);
+            round_reduce(acc, chunk_round_step(&e_lo, &e_hi, &w_lo, &w_hi))
+        });
+
+    // Tail: fewer than K pairs, so a streaming fold with eager reduction is fine.
+    let tail = e_tail
+        .chunks(2)
+        .zip(w_tail.chunks(2))
+        .fold((A::ZERO, A::ZERO), |acc, (e, w)| {
+            round_step(acc, e[0], e[1], w[0], w[1])
+        });
+
+    round_reduce(main, tail)
+}
+
+/// Binds the low index bit of a table into a half-size destination.
+///
+/// Each output entry is the line through its input pair, sampled at the challenge:
+///
+/// ```text
+///     src : [ a0, a1 | a2, a3 | a4, a5 | ... ]
+///     dst : [ b0     | b1     | b2     | ... ]
+///
+///     b_g = a_{2g} + (a_{2g+1} - a_{2g}) * r
+/// ```
+///
+/// The destination is never the source, so no entry is read after it is written.
+#[inline]
+fn bind_pairs<A, Ch>(dst: &mut [A], src: &[A], r: Ch)
+where
+    A: Algebra<Ch> + Copy,
+    Ch: Copy,
+{
+    // Every destination entry is written, so nothing it held before can be read back.
+    debug_assert_eq!(2 * dst.len(), src.len());
+
+    for (out, pair) in dst.iter_mut().zip(src.as_chunks::<2>().0) {
+        *out = pair[0] + (pair[1] - pair[0]) * r;
+    }
+}
+
+/// Binds a suffix variable and measures the bound pair's round message in one pass.
+///
+/// # Overview
+///
+/// Both tables come back bound to half their length.
+///
+/// The message is the one a separate measuring pass over the bound tables returns.
+///
+/// # Algorithm
+///
+/// The pass touches two variables at once.
+/// One is bound now.
+/// The other is the one the returned message sums over.
+///
+/// The suffix variable is the low index bit.
+///
+/// So the four points of those two variables are four consecutive entries.
+///
+/// Binding compacts each group of four into two:
+///
+/// ```text
+///     in  : [ a0, a1, a2, a3 | a4, a5, a6, a7 | ... ]
+///     out : [ b0, b1         | b2, b3         | ... ]
+///
+///     b_{2g}   = a_{4g}   + (a_{4g+1} - a_{4g})   * r
+///     b_{2g+1} = a_{4g+2} + (a_{4g+3} - a_{4g+2}) * r
+/// ```
+///
+/// Those two entries are the two faces the message sums over.
+///
+/// So a block binds its own output and measures it straight afterwards.
+///
+/// The output is still in cache when the measuring pass reads it.
+///
+/// # Why the destination is a separate buffer
+///
+/// Output index `g` reads input indices `2g` and `2g+1`, both at or above `g`.
+/// The fold is therefore a compaction.
+///
+/// Writes land at indices no higher than the reads they depend on.
+///
+/// So one serial forward sweep could safely write in place.
+///
+/// Blocked parallelism breaks that.
+///
+/// Cut the output into blocks at `G_0 = 0 < G_1 < ...`:
+///
+/// ```text
+///     block 0 : writes [ 0,   G_1 )     reads [ 0,     2 G_1 )
+///     block 1 : writes [ G_1, G_2 )     reads [ 2 G_1, 2 G_2 )
+/// ```
+///
+/// Block 1 writes from `G_1`, and block 0 reads up to `2 G_1`.
+///
+/// Any non-empty first block has `G_1 < 2 G_1`, so those ranges always overlap.
+/// One task would be overwriting entries another task has yet to read.
+///
+/// A separate half-size destination removes the overlap outright.
+/// The pass then stays single and stays parallel.
+///
+/// # Arguments
+///
+/// - `evals` - evaluation table, before this binding.
+/// - `weights` - weight table, before this binding.
+///
+/// - `r` - challenge the round variable binds to.
+///
+/// # Returns
+///
+/// - `c_a` - the bound pair's round polynomial at 0.
+/// - `c_inf` - its leading coefficient.
+///
+/// # Performance
+///
+/// O(2^n), at the same multiply count as binding and measuring separately.
+/// What it saves is one pass over the bound tables.
+///
+/// One half-length allocation per table per round, released as the round ends.
+///
+/// # Panics
+///
+/// - The two tables must have the same length.
+/// - The length must be at least four and a multiple of four.
+///   The bound table then keeps the variable the message sums over.
+pub fn fold_and_round_coefficients_suffix<A, Ch>(
+    evals: &mut Poly<A>,
+    weights: &mut Poly<A>,
+    r: Ch,
+) -> RoundMessage<A>
+where
+    A: Algebra<Ch> + Copy + Send + Sync,
+    Ch: Copy + Send + Sync,
+{
+    let (bound_evals, bound_weights, message) =
+        bind_and_measure_pairs(evals.as_slice(), weights.as_slice(), r);
+
+    // Installing the bound halves drops the sources.
+    //
+    // So what stays resident between rounds is one half-length table per side.
+    *evals = Poly::new(bound_evals);
+    *weights = Poly::new(bound_weights);
+
+    message
+}
+
+/// The pass behind the binding above, over the raw tables.
+///
+/// Returns the two bound half-length tables beside the round message.
+fn bind_and_measure_pairs<A, Ch>(
+    evals: &[A],
+    weights: &[A],
+    r: Ch,
+) -> (Vec<A>, Vec<A>, RoundMessage<A>)
+where
+    A: Algebra<Ch> + Copy + Send + Sync,
+    Ch: Copy + Send + Sync,
+{
+    // Precondition: paired tables, with a variable left over for the message.
+    //
+    // Zero is a multiple of four.
+    //
+    // So an empty pair would otherwise pass and return a zero message instead of panicking.
+    assert_eq!(evals.len(), weights.len());
+    assert!(evals.len() >= 4 && evals.len().is_multiple_of(4));
+
+    // Binding halves the length.
+    let half = evals.len() / 2;
+
+    // The pass covers the whole table, not just the bound half.
+    //
+    // So the par-vs-serial split is gated on the whole table.
+    // That puts about as much work in one task as a measuring pass does at its own gate.
+    let threaded = evals.len() > PAR_THRESHOLD;
+
+    // Destinations at the bound length, one per side.
+    //
+    // Allocating zeroed costs no userspace fill, and every entry is overwritten before a read.
+    let mut evals_out = A::zero_vec(half);
+    let mut weights_out = A::zero_vec(half);
+
+    // Bound index positions one block writes before measuring them.
+    //
+    // A block keeps one bound face of each table hot across the two steps.
+    //
+    //     prefix block : four faces, half the table apart
+    //     suffix block : one face, adjacent entries
+    //
+    // So the same byte budget buys twice as many positions.
+    //
+    // Twice a whole number of tiles is still a whole number of tiles.
+    //
+    // So no block ends mid-tile.
+    let block_len = 2 * fused_block::<A>();
+
+    // One block: bind its own slice of the destination, then measure it while hot.
+    let block = |e_in: &[A], w_in: &[A], e_out: &mut [A], w_out: &mut [A]| {
+        bind_pairs(e_out, e_in, r);
+        bind_pairs(w_out, w_in, r);
+        round_coefficients_pairs(e_out, w_out)
+    };
+
+    // Each destination block reads the twice-as-long input block at the same position.
+    //
+    // No block writes where another reads.
+    let (c_a, c_inf) = if threaded {
+        evals_out
+            .par_chunks_mut(block_len)
+            .zip(weights_out.par_chunks_mut(block_len))
+            .zip(evals.par_chunks(2 * block_len))
+            .zip(weights.par_chunks(2 * block_len))
+            .par_fold_reduce(
+                || (A::ZERO, A::ZERO),
+                |acc, (((e_out, w_out), e_in), w_in)| {
+                    round_reduce(acc, block(e_in, w_in, e_out, w_out))
+                },
+                round_reduce,
+            )
+    } else {
+        evals_out
+            .chunks_mut(block_len)
+            .zip(weights_out.chunks_mut(block_len))
+            .zip(evals.chunks(2 * block_len))
+            .zip(weights.chunks(2 * block_len))
+            .fold((A::ZERO, A::ZERO), |acc, (((e_out, w_out), e_in), w_in)| {
+                round_reduce(acc, block(e_in, w_in, e_out, w_out))
+            })
+    };
+
+    (evals_out, weights_out, RoundMessage { c_a, c_inf })
+}
+
 /// Computes the round message for a suffix-binding sumcheck round.
 ///
 /// # Inputs
@@ -593,14 +869,6 @@ where
     let body_elems = body_pairs * 2;
     let (evals_main, evals_tail) = evals.split_at(body_elems);
     let (weights_main, weights_tail) = weights.split_at(body_elems);
-
-    #[inline(always)]
-    fn gather_pairs<T: Copy>(chunk: &[T]) -> ([T; K], [T; K]) {
-        // Layout: [t0, t1, t2, t3, ...]; even indices = "0", odd indices = "1".
-        let lo: [T; K] = core::array::from_fn(|i| chunk[2 * i]);
-        let hi: [T; K] = core::array::from_fn(|i| chunk[2 * i + 1]);
-        (lo, hi)
-    }
 
     let main: (A, A) = if evals.len() > PAR_THRESHOLD {
         evals_main
@@ -871,14 +1139,43 @@ impl VariableOrder {
 ///     sum == sum_{x in {0,1}^n} f(x) * w(x)
 /// ```
 ///
-/// where `n` is the number of remaining unbound variables. It decreases by
-/// one per round as variables are bound to verifier challenges.
+/// where `n` is the number of remaining unbound variables.
+/// It decreases by one per round as variables are bound to verifier challenges.
+///
+/// # Outstanding challenge
+///
+/// A round's challenge is not applied to the tables the moment it is sampled.
+/// It is held in the prover instead, and the next measuring pass binds it on the way through.
+///
+/// ```text
+///     round i:   bind r_{i-1}  +  measure h_i     one pass
+///     round i+1: bind r_i      +  measure h_{i+1} one pass
+/// ```
+///
+/// The claim is always up to date, because it only ever needs the round message.
+/// The tables lag by one binding for as long as a challenge is outstanding.
+///
+/// Anything that reads the tables therefore applies the outstanding binding first.
+///
+/// The arity is the one exception.
+/// It is a length, so subtracting the outstanding binding answers it exactly.
+///
+/// The challenge lives here rather than in a driver's local.
+///
+/// So a caller asking for one round at a time still gets one pass per round.
+///
+/// Such a caller interleaves its own work between rounds.
+/// It cannot ask for several rounds at once.
 #[derive(Debug, Clone)]
 pub struct SumcheckProver<F: Field, EF: ExtensionField<F>> {
     /// Paired evaluation and weight polynomials for the quadratic sumcheck.
     poly: ProductPolynomial<F, EF>,
     /// Current claimed sum over the remaining unbound variables.
     sum: EF,
+    /// Challenge sampled by the last round and not yet applied to the tables.
+    ///
+    /// Empty means the tables are current with the claim.
+    outstanding: Option<EF>,
 }
 
 impl<F: Field, EF: ExtensionField<F>> SumcheckProver<F, EF> {
@@ -886,7 +1183,11 @@ impl<F: Field, EF: ExtensionField<F>> SumcheckProver<F, EF> {
     pub fn new(poly: ProductPolynomial<F, EF>, sum: EF) -> Self {
         // Sanity: the claimed sum must match the polynomial pair's dot product.
         debug_assert_eq!(poly.dot_product(), sum);
-        Self { poly, sum }
+        Self {
+            poly,
+            sum,
+            outstanding: None,
+        }
     }
 
     /// Returns the current claimed sum over the remaining unbound variables.
@@ -895,54 +1196,107 @@ impl<F: Field, EF: ExtensionField<F>> SumcheckProver<F, EF> {
     }
 
     /// Returns the number of remaining (unbound) variables.
+    ///
+    /// A held binding has already consumed a variable.
+    ///
+    /// The tables are still the length they had before it.
+    /// Subtracting it is exact, so the answer costs no pass over the data.
     pub fn num_variables(&self) -> usize {
-        self.poly.num_variables()
+        // A binding is only ever held on a pair that still has a variable to bind.
+        debug_assert!(!(self.outstanding.is_some() && self.poly.num_variables() == 0));
+
+        // Saturating, so the count of a fully bound pair stays zero rather than wrapping.
+        self.poly
+            .num_variables()
+            .saturating_sub(usize::from(self.outstanding.is_some()))
+    }
+
+    /// Applies an outstanding binding, so the tables are current with the claim.
+    ///
+    /// Every reader of the tables starts here.
+    /// A reader that skipped it would silently see the tables one round behind.
+    ///
+    /// A debug build checks the claim against the pair this binding produced.
+    /// That is the only place a binding no measuring pass absorbed is ever validated.
+    ///
+    /// Idempotent, and free when nothing is outstanding.
+    pub fn settle(&mut self) {
+        if let Some(r) = self.outstanding.take() {
+            self.poly.fold_round(r);
+
+            // Invariant: the claim is the inner product of the now-current pair.
+            debug_assert_eq!(self.sum, self.poly.dot_product());
+        }
     }
 
     /// Extracts the current evaluation polynomial as scalar extension-field elements.
     #[tracing::instrument(skip_all)]
-    pub fn evals(&self) -> Poly<EF> {
+    pub fn evals(&mut self) -> Poly<EF> {
+        self.settle();
         self.poly.evals()
     }
 
     /// Borrows the current evaluation polynomial in its live representation.
     ///
     /// No unpacking or copying takes place.
-    pub fn evals_view(&self) -> PolyMaybePackedView<'_, F, EF> {
+    pub fn evals_view(&mut self) -> PolyMaybePackedView<'_, F, EF> {
+        self.settle();
         self.poly.evals_view()
     }
 
     /// Evaluates `f` at a given multilinear point via interpolation.
-    pub fn eval(&self, point: &Point<EF>) -> EF {
+    pub fn eval(&mut self, point: &Point<EF>) -> EF {
+        self.settle();
         self.poly.eval(point)
     }
 
-    /// Measures the current round, first applying a binding held back from the last one.
+    /// Measures the current round, first applying any outstanding binding.
     ///
-    /// A held-back binding is absorbed into the measuring pass.
+    /// An outstanding binding is absorbed into the measuring pass.
     /// The round then reads its tables once instead of twice.
     ///
-    /// The slot is cleared here.
+    /// The slot is cleared once the pass has returned.
     /// The caller puts this round's own challenge back into it.
-    pub(crate) fn measure_round(&mut self, pending: &mut Option<EF>) -> (EF, EF) {
-        match pending.take() {
+    ///
+    /// Clearing it first would drop the challenge if the pass panicked.
+    /// The prover would then read as settled with tables a round stale.
+    pub(crate) fn measure_round(&mut self) -> (EF, EF) {
+        let message = match self.outstanding {
             // A challenge is waiting, so bind and measure in one pass.
             Some(r) => self.poly.fold_round_coefficients(r),
             // Nothing waiting, so this is a plain measuring pass.
             None => self.poly.round_coefficients(),
-        }
+        };
+
+        // Reached only once the binding landed, so a caught unwind still holds it.
+        self.outstanding = None;
+
+        // Invariant: the claim is the inner product of the pair this round measured.
+        //
+        // The claim describes the table this pass measured.
+        // The binding this pass absorbed is what brought the tables up to it.
+        //
+        // A stale table, or a binding that landed wrong, breaks the equality here.
+        debug_assert_eq!(self.sum, self.poly.dot_product());
+
+        message
     }
 
-    /// Applies a binding that no measuring pass absorbed.
+    /// Holds a challenge back for the next measuring pass to absorb.
     ///
-    /// The last round of a batch has no successor to fuse with.
-    /// Any later reader of the tables must still see them bound.
+    /// # Panics
     ///
-    /// The slot is cleared, so a second call binds nothing.
-    pub(crate) fn bind_pending(&mut self, pending: &mut Option<EF>) {
-        if let Some(r) = pending.take() {
-            self.poly.fold_round(r);
-        }
+    /// Panics if a challenge is already outstanding.
+    /// Two unapplied bindings cannot be fused into one pass.
+    ///
+    /// The second would overwrite the first and lose a variable.
+    pub(crate) fn hold(&mut self, r: EF) {
+        // Checked before the write, so a rejected challenge leaves the held one intact.
+        assert!(
+            self.outstanding.is_none(),
+            "a challenge is already outstanding"
+        );
+        self.outstanding = Some(r);
     }
 
     /// Advances the running claim to the round polynomial at the challenge.
@@ -953,25 +1307,21 @@ impl<F: Field, EF: ExtensionField<F>> SumcheckProver<F, EF> {
         self.sum = extrapolate_01inf(c0, self.sum - c0, c_inf, gamma);
     }
 
-    /// Asserts that the claim is the inner product of the bound pair.
-    ///
-    /// Only meaningful once every binding has been applied.
-    /// A driver that holds bindings back therefore calls this at the end, not per round.
-    pub(crate) fn debug_assert_claim(&self) {
-        debug_assert_eq!(self.sum, self.poly.dot_product());
-    }
-
     /// Applies a scalar to the weight side and the matching residual claim.
     ///
     /// Leaves the evaluation side untouched, so downstream reductions can
     /// reuse it as the honest folded message.
     pub(crate) fn scale_weights_and_claim(&mut self, scale: EF) {
+        // Scaling every entry commutes with binding, so the order does not change the result.
+        // Settling first halves the number of entries to scale.
+        self.settle();
         self.poly.scale_weights(scale);
         self.sum *= scale;
     }
 
     /// Extracts the current weight polynomial as scalar extension-field elements.
-    pub fn weights(&self) -> Poly<EF> {
+    pub fn weights(&mut self) -> Poly<EF> {
+        self.settle();
         self.poly.weights()
     }
 
@@ -982,6 +1332,10 @@ impl<F: Field, EF: ExtensionField<F>> SumcheckProver<F, EF> {
     /// The caller guarantees `sum_delta == <evals, weights_delta>`, restoring
     /// the running invariant `sum == dot_product` after the update.
     pub fn accumulate_claim(&mut self, weights_delta: &[EF], sum_delta: EF) {
+        // The increment is indexed by the current hypercube.
+        //
+        // So the tables have to be the length the caller sized it against.
+        self.settle();
         self.poly.accumulate_weights(weights_delta);
         self.sum += sum_delta;
         debug_assert_eq!(self.sum, self.poly.dot_product());
@@ -1017,16 +1371,15 @@ impl<F: Field, EF: ExtensionField<F>> SumcheckProver<F, EF> {
         Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
     {
         // Optional constraint absorption: fold into the weight polynomial and update the sum.
+        //
+        // The constraint is sized against the current hypercube.
+        //
+        // So an outstanding binding has to land before the weights grow by it.
         if let Some(constraint) = constraint {
+            self.settle();
             self.poly.combine(&mut self.sum, &constraint);
         }
 
-        // A challenge is not applied on the spot.
-        // It is handed to the next round, which binds and measures in one pass.
-        //
-        //     round i:  bind r_{i-1}  +  measure h_i     (one pass)
-        //     after:    bind r_{k-1}                     (one pass)
-        let mut pending: Option<EF> = None;
         let mut challenges = Vec::with_capacity(folding_factor);
 
         // One driver spans the whole batch, so the description is walked exactly once.
@@ -1035,7 +1388,7 @@ impl<F: Field, EF: ExtensionField<F>> SumcheckProver<F, EF> {
 
         for _ in 0..folding_factor {
             // Measure this round, absorbing whatever binding the last one left behind.
-            let (c_a, c_inf) = self.measure_round(&mut pending);
+            let (c_a, c_inf) = self.measure_round();
 
             // Commit to the transcript, do the optional grinding, take the challenge.
             let r = sumcheck_data.observe_and_sample(&mut transcript, c_a, c_inf);
@@ -1045,18 +1398,16 @@ impl<F: Field, EF: ExtensionField<F>> SumcheckProver<F, EF> {
 
             challenges.push(r);
 
-            // Hand this round's challenge to the next one.
-            pending = Some(r);
+            // Hand this round's challenge on, for the next measuring pass to absorb.
+            //
+            // The last one of this batch stays outstanding on return.
+            // A caller that comes straight back for another round fuses across the call;
+            // one that reads the tables instead settles it on the way in.
+            self.hold(r);
         }
 
         // Require that every described step was played.
         transcript.finish();
-
-        // The last challenge has no successor to fuse with, so it binds on its own.
-        self.bind_pending(&mut pending);
-
-        // Invariant: the claim is the inner product of the bound pair.
-        self.debug_assert_claim();
 
         Point::new(challenges)
     }
@@ -1064,8 +1415,8 @@ impl<F: Field, EF: ExtensionField<F>> SumcheckProver<F, EF> {
 
 #[cfg(test)]
 mod tests {
-    use alloc::vec;
     use alloc::vec::Vec;
+    use alloc::{format, vec};
 
     use p3_baby_bear::BabyBear;
     use p3_field::extension::BinomialExtensionField;
@@ -1368,6 +1719,147 @@ mod tests {
         }
     }
 
+    proptest! {
+        #[test]
+        fn prop_fold_and_round_coefficients_suffix_matches_bind_then_measure(
+            k in 2usize..=16,
+            seed in any::<u64>(),
+        ) {
+            // Invariant: the fused suffix pass is bind-then-measure, in one traversal.
+            //
+            //     two passes: bind the tables, then measure the bound pair
+            //     fused     : one pass writing a half-size destination and measuring it
+            //
+            // Both the bound tables and the message have to come out identical.
+            // A prover on the fused path would otherwise send a different transcript.
+            //
+            // Fixture state: 2^k paired random entries, one random challenge.
+            // The range straddles the 8-wide tiled body and the par-vs-serial split.
+            let mut rng = SmallRng::seed_from_u64(seed);
+            let n = 1usize << k;
+            let evals: Vec<EF> = (0..n).map(|_| rng.random()).collect();
+            let weights: Vec<EF> = (0..n).map(|_| rng.random()).collect();
+            let r: EF = rng.random();
+
+            // Reference arm: bind both tables, then measure the bound pair.
+            let mut want_evals = Poly::new(evals.clone());
+            let mut want_weights = Poly::new(weights.clone());
+            want_evals.fix_suffix_var_mut(r);
+            want_weights.fix_suffix_var_mut(r);
+            let want = super::sumcheck_coefficients_suffix(
+                want_evals.as_slice(),
+                want_weights.as_slice(),
+            );
+
+            // Fused arm: one pass binds both tables and measures the bound pair.
+            let mut got_evals = Poly::new(evals);
+            let mut got_weights = Poly::new(weights);
+            let got =
+                super::fold_and_round_coefficients_suffix(&mut got_evals, &mut got_weights, r);
+
+            // The bound tables must agree entry for entry.
+            prop_assert_eq!(got_evals.as_slice(), want_evals.as_slice());
+            prop_assert_eq!(got_weights.as_slice(), want_weights.as_slice());
+
+            // And so must the two values the round sends.
+            prop_assert_eq!(got.c_a, want.c_a);
+            prop_assert_eq!(got.c_inf, want.c_inf);
+        }
+    }
+
+    #[test]
+    fn every_suffix_round_binds_correctly_and_keeps_only_the_live_table() {
+        // Invariant: a round replaces both tables with half-length ones and frees the sources.
+        //
+        // So every round of a ladder agrees with binding and measuring separately.
+        //
+        // Fixture state: 2^15 paired entries, bound down to 4.
+        // The first rounds run the threaded branch, the last ones the serial branch.
+        //
+        //     round 1: tables 2^15 -> 2^14
+        //     round 2: tables 2^14 -> 2^13
+        //     ...
+        //     round 13: tables 4 -> 2           the shortest fusable table
+        const NUM_VARIABLES: usize = 15;
+
+        let mut rng = SmallRng::seed_from_u64(0xB0FFE7);
+        let evals = Poly::<EF>::rand(&mut rng, NUM_VARIABLES);
+        let weights = Poly::<EF>::rand(&mut rng, NUM_VARIABLES);
+
+        // Reference arm: bind on the spot, measure the bound pair separately.
+        let mut want_evals = evals.clone();
+        let mut want_weights = weights.clone();
+
+        // Arm under test: one pass per round, each allocating the half it writes.
+        let mut got_evals = evals;
+        let mut got_weights = weights;
+
+        // Stop with four entries left: below that the pass has no variable to measure.
+        for round in 0..NUM_VARIABLES - 1 {
+            let r: EF = rng.random();
+
+            want_evals.fix_suffix_var_mut(r);
+            want_weights.fix_suffix_var_mut(r);
+            let want =
+                super::sumcheck_coefficients_suffix(want_evals.as_slice(), want_weights.as_slice());
+
+            let got =
+                super::fold_and_round_coefficients_suffix(&mut got_evals, &mut got_weights, r);
+
+            assert_eq!(got_evals.as_slice(), want_evals.as_slice(), "round {round}");
+            assert_eq!(
+                got_weights.as_slice(),
+                want_weights.as_slice(),
+                "round {round}"
+            );
+            assert_eq!(got.c_a, want.c_a, "round {round}");
+            assert_eq!(got.c_inf, want.c_inf, "round {round}");
+
+            // Binding halves both tables, so the next round starts from half this length.
+            //
+            //     round 0 leaves 2^14, round 1 leaves 2^13, and so on down to 2
+            let live = 1 << (NUM_VARIABLES - 1 - round);
+            assert_eq!(got_evals.num_evals(), live, "round {round}");
+            assert_eq!(got_weights.num_evals(), live, "round {round}");
+        }
+    }
+
+    #[test]
+    fn the_fused_suffix_pass_allocates_exactly_the_bound_half() {
+        // Invariant: a round's destination is sized to the bound length and nothing more.
+        //
+        // The source is freed when the bound halves are installed, so the pair never holds
+        // a spare destination between rounds.
+        //
+        // Slack in either destination would be memory no later round reaches.
+        //
+        // Fixture state: 2^10 paired entries, so the bound half is 2^9.
+        let mut rng = SmallRng::seed_from_u64(0xA11C);
+        let evals: Vec<EF> = (0..1 << 10).map(|_| rng.random()).collect();
+        let weights: Vec<EF> = (0..1 << 10).map(|_| rng.random()).collect();
+        let r: EF = rng.random();
+
+        let (bound_evals, bound_weights, _) = super::bind_and_measure_pairs(&evals, &weights, r);
+
+        //     source 2^10  ->  destination 2^9, allocated at exactly that size
+        assert_eq!(bound_evals.len(), 1 << 9);
+        assert_eq!(bound_evals.capacity(), 1 << 9);
+        assert_eq!(bound_weights.len(), 1 << 9);
+        assert_eq!(bound_weights.capacity(), 1 << 9);
+    }
+
+    #[test]
+    #[should_panic(expected = "assertion failed")]
+    fn suffix_binding_rejects_a_pair_with_nothing_left_to_measure() {
+        // Invariant: a pair too short to leave a variable is rejected, not measured.
+        //
+        // Two entries bind down to one, and a one-entry table has nothing to sum over.
+        // Producing no tiles and reporting a zero message would look like a real round.
+        let mut evals = Poly::new(vec![EF::ONE; 2]);
+        let mut weights = Poly::new(vec![EF::ONE; 2]);
+        let _ = super::fold_and_round_coefficients_suffix(&mut evals, &mut weights, EF::ONE);
+    }
+
     #[test]
     fn a_fused_block_is_a_whole_number_of_tiles() {
         // Invariant: a block never ends mid-tile.
@@ -1486,6 +1978,335 @@ mod tests {
                 assert_eq!(prover.weights().as_slice(), want_poly.weights().as_slice());
             }
         }
+    }
+
+    #[test]
+    fn every_table_accessor_settles_an_outstanding_binding() {
+        use p3_baby_bear::Poseidon2BabyBear;
+        use p3_challenger::DuplexChallenger;
+        use p3_util::log2_strict_usize;
+
+        use crate::SumcheckData;
+        use crate::product_polynomial::ProductPolynomial;
+
+        type Perm = Poseidon2BabyBear<16>;
+        type TestChallenger = DuplexChallenger<F, Perm, 16, 8>;
+
+        let challenger = || {
+            let perm = Perm::new_from_rng_128(&mut SmallRng::seed_from_u64(11));
+            TestChallenger::new(perm)
+        };
+
+        let log_width = log2_strict_usize(<F as Field>::Packing::WIDTH);
+        let mut rng = SmallRng::seed_from_u64(0xACCE55);
+
+        // Invariant: any accessor applies the binding the last round left outstanding.
+        //
+        // A reader that skipped it would see the tables one round behind the claim.
+        //
+        // It would then silently produce the previous round's answer.
+        //
+        // Fixture state: a batch of rounds runs and returns with its last challenge held.
+        //
+        // Every accessor is then read on a fresh copy of that state.
+        //
+        //     driven : one binding outstanding, accessor settles it
+        //     settled: the same state with the binding already applied
+        //
+        // Fixture shapes:
+        //
+        //     variables : 3, 5, 9
+        //     orders    : both
+        //     batches   : stopping short of the last variable, and consuming every one
+        for (num_variables, rounds) in [(3usize, 1usize), (3, 3), (5, 2), (9, 4), (9, 9)] {
+            for order in [VariableOrder::Prefix, VariableOrder::Suffix] {
+                let evals = Poly::<EF>::rand(&mut rng, num_variables);
+                let weights = Poly::<EF>::rand(&mut rng, num_variables);
+
+                // A pair below one SIMD lane group has nothing to pack.
+                let poly = if num_variables >= log_width {
+                    ProductPolynomial::<F, EF>::new_packed(
+                        order,
+                        evals.pack::<F, EF>(),
+                        weights.pack::<F, EF>(),
+                    )
+                } else {
+                    ProductPolynomial::<F, EF>::new_unpacked(order, evals, weights)
+                };
+                let sum = poly.dot_product();
+
+                let mut driven = super::SumcheckProver::new(poly, sum);
+                let mut data = SumcheckData::<F, EF>::default();
+                driven.compute_sumcheck_polynomials(&mut data, &mut challenger(), rounds, 0, None);
+
+                // Reference arm: the same state with the outstanding binding applied.
+                let mut settled = driven.clone();
+                settled.settle();
+
+                let shape = format!("{order:?}, {num_variables} variables, {rounds} rounds");
+
+                // The arity is answered from lengths, so it never triggers a binding pass.
+                // It still has to report the variable the outstanding challenge consumed.
+                assert_eq!(driven.num_variables(), settled.num_variables(), "{shape}");
+                assert_eq!(driven.num_variables(), num_variables - rounds, "{shape}");
+
+                // The claim never lags, so it reads the same on both arms.
+                assert_eq!(driven.claimed_sum(), settled.claimed_sum(), "{shape}");
+
+                // Each accessor is read on its own copy, so it meets the binding outstanding.
+                assert_eq!(
+                    driven.clone().evals().as_slice(),
+                    settled.evals().as_slice(),
+                    "{shape}"
+                );
+                assert_eq!(
+                    driven.clone().weights().as_slice(),
+                    settled.weights().as_slice(),
+                    "{shape}"
+                );
+
+                // The live-representation borrow, unpacked so the two storages compare.
+                let mut got_view = EF::zero_vec(1 << driven.num_variables());
+                let mut want_view = EF::zero_vec(1 << driven.num_variables());
+                driven.clone().evals_view().unpack_into(&mut got_view);
+                settled.evals_view().unpack_into(&mut want_view);
+                assert_eq!(got_view, want_view, "{shape}");
+
+                // Interpolation at a point of the current arity.
+                let point = Point::<EF>::rand(&mut rng, driven.num_variables());
+                assert_eq!(driven.clone().eval(&point), settled.eval(&point), "{shape}");
+
+                // Scaling the weight side and the claim together.
+                let scale: EF = rng.random();
+                let mut got_scaled = driven.clone();
+                let mut want_scaled = settled.clone();
+                got_scaled.scale_weights_and_claim(scale);
+                want_scaled.scale_weights_and_claim(scale);
+                assert_eq!(
+                    got_scaled.weights().as_slice(),
+                    want_scaled.weights().as_slice(),
+                    "{shape}"
+                );
+                assert_eq!(
+                    got_scaled.claimed_sum(),
+                    want_scaled.claimed_sum(),
+                    "{shape}"
+                );
+
+                // A dense weight increment, indexed by the current hypercube.
+                // Its claim contribution is derived from the settled evaluation table,
+                // so an accessor that read a stale table would break the running invariant.
+                let delta: Vec<EF> = (0..1 << driven.num_variables())
+                    .map(|_| rng.random())
+                    .collect();
+                let delta_sum = dot_product::<EF, _, _>(
+                    settled.evals().as_slice().iter().copied(),
+                    delta.iter().copied(),
+                );
+                let mut got_acc = driven.clone();
+                let mut want_acc = settled.clone();
+                got_acc.accumulate_claim(&delta, delta_sum);
+                want_acc.accumulate_claim(&delta, delta_sum);
+                assert_eq!(
+                    got_acc.weights().as_slice(),
+                    want_acc.weights().as_slice(),
+                    "{shape}"
+                );
+                assert_eq!(got_acc.claimed_sum(), want_acc.claimed_sum(), "{shape}");
+
+                // Settling twice binds once.
+                let mut twice = driven.clone();
+                twice.settle();
+                twice.settle();
+                assert_eq!(
+                    twice.evals().as_slice(),
+                    settled.evals().as_slice(),
+                    "{shape}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_panicking_fused_pass_leaves_the_challenge_held() {
+        extern crate std;
+        use std::panic::{AssertUnwindSafe, catch_unwind};
+
+        use crate::product_polynomial::ProductPolynomial;
+
+        // Invariant: the slot is cleared only once the pass that consumes it has returned.
+        //
+        // Clearing first and then panicking would leave the prover reading as settled,
+        // with tables the binding never reached.
+        //
+        // Fixture state: a fully bound pair, so the fused pass has no variable to bind.
+        //
+        //     held    : ONE
+        //     measured: panics inside the fold, because the ladder is past its last variable
+        //     after   : ONE must still be held
+        let evals = Poly::new(vec![EF::ONE]);
+        let weights = Poly::new(vec![EF::TWO]);
+        let poly = ProductPolynomial::<F, EF>::new_unpacked(VariableOrder::Prefix, evals, weights);
+        let sum = poly.dot_product();
+        let mut prover = super::SumcheckProver::new(poly, sum);
+
+        // `hold` itself is arity-agnostic, so nothing rejects the challenge on the way in.
+        prover.outstanding = Some(EF::ONE);
+
+        // The pass panics, caught so the state left behind can be inspected.
+        let measured = catch_unwind(AssertUnwindSafe(|| prover.measure_round()));
+        assert!(measured.is_err());
+
+        // The challenge the failed pass never applied must still be there to apply.
+        assert_eq!(prover.outstanding, Some(EF::ONE));
+    }
+
+    #[test]
+    fn absorbing_a_constraint_settles_an_outstanding_binding() {
+        use p3_baby_bear::Poseidon2BabyBear;
+        use p3_challenger::DuplexChallenger;
+
+        use crate::SumcheckData;
+        use crate::product_polynomial::ProductPolynomial;
+
+        type Perm = Poseidon2BabyBear<16>;
+        type TestChallenger = DuplexChallenger<F, Perm, 16, 8>;
+
+        let challenger = || {
+            let perm = Perm::new_from_rng_128(&mut SmallRng::seed_from_u64(23));
+            TestChallenger::new(perm)
+        };
+
+        let mut rng = SmallRng::seed_from_u64(0xC0115E);
+
+        // Invariant: the constraint is sized against the current hypercube.
+        //
+        // So an outstanding binding has to land before the weights grow by it.
+        //
+        // Settling after `combine` instead would add a weight delta of the bound length
+        // to a table still a round long: a length panic, or silently wrong weights.
+        //
+        // Fixture state: a batch runs and returns with its last challenge held, then a
+        // constraint is absorbed without any accessor having been read in between.
+        //
+        //     driven : one binding outstanding, `combine` settles it
+        //     settled: the same state with the binding already applied
+        //
+        // Fixture shapes:
+        //
+        //     variables : 5, 9
+        //     orders    : both
+        for (num_variables, rounds) in [(5usize, 2usize), (9, 4)] {
+            for order in [VariableOrder::Prefix, VariableOrder::Suffix] {
+                let evals = Poly::<EF>::rand(&mut rng, num_variables);
+                let weights = Poly::<EF>::rand(&mut rng, num_variables);
+                let poly = ProductPolynomial::<F, EF>::new_unpacked(order, evals, weights);
+                let sum = poly.dot_product();
+
+                let mut driven = super::SumcheckProver::new(poly, sum);
+                let mut data = SumcheckData::<F, EF>::default();
+                driven.compute_sumcheck_polynomials(&mut data, &mut challenger(), rounds, 0, None);
+
+                // Reference arm: the same state with the outstanding binding applied.
+                let mut settled = driven.clone();
+                settled.settle();
+
+                // The constraint spans what is left of the hypercube.
+                let live = num_variables - rounds;
+                let shape = format!("{order:?}, {num_variables} variables, {rounds} rounds");
+
+                // An honest constraint, so the running claim invariant survives absorption.
+                //
+                // Each equality claim carries the value the settled table really takes,
+                // which is what makes `sum + delta_sum == <evals, weights + delta>` hold.
+                let mut eq_statement = EqStatement::initialize(live);
+                for _ in 0..2 {
+                    let point = Point::<EF>::rand(&mut rng, live);
+                    let value = settled.eval(&point);
+                    eq_statement.add_evaluated_constraint(point, value);
+                }
+                let constraint =
+                    Constraint::new(rng.random(), live, vec![Statements::Eq(eq_statement)]);
+
+                // One more round on each arm, the constraint absorbed on the way in.
+                //
+                // `driven` meets it with the binding outstanding; `settled` does not.
+                let mut got_data = SumcheckData::<F, EF>::default();
+                let got = driven.compute_sumcheck_polynomials(
+                    &mut got_data,
+                    &mut challenger(),
+                    1,
+                    0,
+                    Some(constraint.clone()),
+                );
+                let mut want_data = SumcheckData::<F, EF>::default();
+                let want = settled.compute_sumcheck_polynomials(
+                    &mut want_data,
+                    &mut challenger(),
+                    1,
+                    0,
+                    Some(constraint),
+                );
+
+                // The round message first, so a discrepancy is localised to the transcript.
+                assert_eq!(
+                    got_data.polynomial_evaluations(),
+                    want_data.polynomial_evaluations(),
+                    "{shape}"
+                );
+
+                // The challenges follow the messages.
+                assert_eq!(got.as_slice(), want.as_slice(), "{shape}");
+
+                // And the state left behind, tables included.
+                assert_eq!(driven.claimed_sum(), settled.claimed_sum(), "{shape}");
+                assert_eq!(
+                    driven.evals().as_slice(),
+                    settled.evals().as_slice(),
+                    "{shape}"
+                );
+                assert_eq!(
+                    driven.weights().as_slice(),
+                    settled.weights().as_slice(),
+                    "{shape}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn holding_a_second_challenge_without_settling_is_rejected() {
+        extern crate std;
+        use std::panic::{AssertUnwindSafe, catch_unwind};
+
+        use crate::product_polynomial::ProductPolynomial;
+
+        // Invariant: at most one binding is ever held.
+        //
+        // Two unapplied bindings cannot be fused into a single pass.
+        //
+        // The second would overwrite the first and lose a variable with nothing noticing.
+        //
+        // Fixture state: four paired entries, one challenge already held.
+        //
+        //     held    : ONE
+        //     offered : TWO   -> rejected, and ONE must survive the rejection
+        let evals = Poly::new(vec![EF::ONE; 4]);
+        let weights = Poly::new(vec![EF::TWO; 4]);
+        let poly = ProductPolynomial::<F, EF>::new_unpacked(VariableOrder::Prefix, evals, weights);
+        let sum = poly.dot_product();
+        let mut prover = super::SumcheckProver::new(poly, sum);
+
+        prover.hold(EF::ONE);
+
+        // The rejection is a panic, caught so the state left behind can be inspected.
+        let rejected = catch_unwind(AssertUnwindSafe(|| prover.hold(EF::TWO)));
+        assert!(rejected.is_err());
+
+        // The rejected challenge must not have displaced the held one.
+        //
+        // Writing before checking would leave the second here and lose the first.
+        assert_eq!(prover.outstanding, Some(EF::ONE));
     }
 
     #[test]

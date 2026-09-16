@@ -253,6 +253,14 @@ impl<F: QuinticTrinomialExtendable> RawDataSerializable for QuinticTrinomialExte
     }
 }
 
+impl<F: QuinticTrinomialExtendable> crate::AlgebraIdentity<F>
+    for QuinticTrinomialExtensionField<F>
+{
+    fn algebra_id() -> Vec<u8> {
+        b"p3-power-basis-v1:X^5+X^2-1".to_vec()
+    }
+}
+
 impl<F: QuinticTrinomialExtendable> Field for QuinticTrinomialExtensionField<F> {
     type Packing = Self;
 

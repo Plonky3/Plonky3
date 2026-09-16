@@ -10,12 +10,13 @@ use p3_dft::TwoAdicSubgroupDft;
 use p3_field::{ExtensionField, PrimeField64, TwoAdicField};
 use p3_matrix::dense::DenseMatrix;
 use p3_multilinear_util::point::Point;
-use p3_sumcheck::layout::{Layout, Table, Verifier, Witness};
+use p3_sumcheck::layout::{Layout, Table, Verifier, Witness, observe_commitment};
 use p3_sumcheck::{OpeningEvals, OpeningProtocol, PrescribedPointPcs};
 
 use super::prover::WhirProver;
 use super::verifier::WhirVerifier;
 use super::verifier::errors::VerifierError;
+use crate::WhirConfigError;
 use crate::pcs::proof::PcsProof;
 
 /// Prover-side handoff between the commit and open phases of the PCS.
@@ -77,6 +78,7 @@ where
     type ProverData = WhirProverData<F, EF, MT, L>;
     type Proof = PcsProof<F, EF, MT>;
     type Error = VerifierError;
+    type ProverError = WhirConfigError;
     type Witness = Witness<F>;
     type OpeningProtocol = OpeningProtocol;
 
@@ -88,24 +90,32 @@ where
         &self,
         witness: Self::Witness,
         challenger: &mut Challenger,
-    ) -> (Self::Commitment, Self::ProverData) {
+    ) -> Result<(Self::Commitment, Self::ProverData), Self::ProverError> {
         assert_eq!(witness.num_variables(), self.config.num_variables);
         let (layout, commitment, merkle_data) = L::commit(
             &self.dft,
             &self.mmcs,
-            challenger,
             witness,
             self.config.round_folding_factor(0),
             self.config.starting_log_inv_rate,
         );
-        (
+
+        // The verifier binds the same root, through the same call.
+        //
+        // It does so before replaying anything else.
+        self.observe_commitment(&commitment, challenger);
+        Ok((
             commitment,
             WhirProverData {
                 layout,
                 merkle_data,
                 _marker: PhantomData,
             },
-        )
+        ))
+    }
+
+    fn observe_commitment(&self, commitment: &Self::Commitment, challenger: &mut Challenger) {
+        observe_commitment::<F, _, _>(challenger, commitment.clone());
     }
 
     fn open(
@@ -113,7 +123,15 @@ where
         mut prover_data: Self::ProverData,
         protocol: Self::OpeningProtocol,
         challenger: &mut Challenger,
-    ) -> Self::Proof {
+    ) -> Result<Self::Proof, Self::ProverError> {
+        self.config.validate_initial_claims(
+            protocol
+                .iter_openings()
+                .try_fold(self.commitment_ood_samples, |n, (_, batch)| {
+                    n.checked_add(batch.len())
+                })
+                .ok_or(WhirConfigError::InitialClaimCountOverflow)?,
+        )?;
         let initial_ood_answers = tracing::info_span!("ood claims").in_scope(|| {
             (0..self.commitment_ood_samples)
                 .map(|_| prover_data.layout.add_virtual_eval(challenger))
@@ -133,9 +151,9 @@ where
             prover_data.layout,
             prover_data.merkle_data,
             protocol.num_openings(),
-        );
+        )?;
 
-        PcsProof { whir, evals }
+        Ok(PcsProof { whir, evals })
     }
 
     fn verify(
@@ -145,7 +163,7 @@ where
         challenger: &mut Challenger,
         protocol: Self::OpeningProtocol,
     ) -> Result<(), Self::Error> {
-        challenger.observe(commitment.clone());
+        self.observe_commitment(commitment, challenger);
 
         let mut layout_verifier = Verifier::<F, EF>::new(&protocol.table_shapes(), L::strategy());
 
@@ -203,7 +221,7 @@ where
             challenger,
             commitment,
             protocol.num_openings(),
-            |alpha| layout_verifier.constraint(alpha),
+            &layout_verifier,
         )?;
 
         Ok(())
@@ -241,7 +259,15 @@ where
         protocol: &OpeningProtocol,
         points: &[Point<EF>],
         challenger: &mut Challenger,
-    ) -> Self::Proof {
+    ) -> Result<Self::Proof, Self::ProverError> {
+        self.config.validate_initial_claims(
+            protocol
+                .iter_openings()
+                .try_fold(self.commitment_ood_samples, |n, (_, batch)| {
+                    n.checked_add(batch.len())
+                })
+                .ok_or(WhirConfigError::InitialClaimCountOverflow)?,
+        )?;
         // One prescribed point per opening batch.
         assert_eq!(protocol.num_openings(), points.len());
 
@@ -269,15 +295,18 @@ where
             prover_data.layout,
             prover_data.merkle_data,
             protocol.num_openings(),
-        );
+        )?;
 
-        PcsProof { whir, evals }
+        Ok(PcsProof { whir, evals })
     }
 
     /// Verify each batch at its supplied point.
     ///
-    /// The commitment is not absorbed here.
-    /// The caller absorbs it once before its own challenges.
+    /// The commitment is not bound here.
+    ///
+    /// The caller binds it once, through the layout's commitment phase.
+    ///
+    /// That happens before the caller draws any challenge of its own.
     fn verify_at(
         &self,
         commitment: &Self::Commitment,
@@ -339,7 +368,7 @@ where
             challenger,
             commitment,
             protocol.num_openings(),
-            |alpha| layout_verifier.constraint(alpha),
+            &layout_verifier,
         )?;
 
         // The opening verified.

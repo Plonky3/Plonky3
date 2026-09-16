@@ -14,6 +14,9 @@
 
 pub mod transcript;
 
+#[cfg(test)]
+mod test_field;
+
 use alloc::collections::BTreeMap;
 use alloc::collections::btree_map::Entry;
 use alloc::string::String;
@@ -83,6 +86,7 @@ pub(crate) struct LookupInstancePlan<F: Field> {
     /// Symbolic lookup declarations extracted from this AIR, in protocol order.
     pub(crate) lookups: Lookups<F>,
     /// Bus identifier for each declaration, in the same order.
+    /// Empty local declarations retain a dummy zero slot for AIR emission counters.
     pub(crate) bus_ids: Vec<usize>,
 }
 
@@ -125,8 +129,8 @@ impl<F: Field> LookupPlan<F> {
     ///
     /// Returns an error if the worst-case multiplicity sum reaches the field characteristic.
     /// A multiplicity could otherwise wrap around and forge a balanced bus.
-    /// Returns an error for active characteristic-two lookups: the counting argument and
-    /// fractional-GKR interpolation used here require an odd-characteristic field.
+    /// Returns an error for active characteristic-two lookups: the counting argument needs
+    /// multiplicities that do not wrap, which an odd characteristic gives.
     ///
     /// # Panics
     ///
@@ -235,6 +239,12 @@ impl<F: Field> LookupPlan<F> {
                 .iter()
                 .enumerate()
                 .map(|(lookup_index, lookup)| {
+                    // Retain the declaration slot for AIR-link emission counters, but
+                    // allocate no bus for an empty local interaction. It has no tuple
+                    // that could consume this dummy ID; active instances have a bus 0.
+                    if lookup.elements.is_empty() {
+                        return 0;
+                    }
                     let bus = match &lookup.kind {
                         Kind::Local => LookupBus::Local {
                             instance_index: instance.air_index,
@@ -271,6 +281,10 @@ impl<F: Field> LookupPlan<F> {
                     bus_id
                 })
                 .collect();
+        }
+
+        if F::PrimeSubfield::order() < bus_to_id.len().into() {
+            return Err(LookupError::BusIdentifierCapacityExceeded);
         }
 
         // The bus offset sits one beta power above every payload coordinate.
@@ -601,7 +615,10 @@ impl<EF: Field> ActiveLookupRuntime<EF> {
 /// Reasons the lookup phase rejects a proof.
 #[derive(Debug, Error)]
 pub enum LookupError {
-    /// The counting argument and fractional-GKR kernels do not support binary fields.
+    /// Distinct bus identifiers must remain distinct in the prime subfield.
+    #[error("lookup bus identifiers wrap around the characteristic")]
+    BusIdentifierCapacityExceeded,
+    /// The counting argument does not support binary fields.
     #[error("multi-STARK lookups do not support characteristic two")]
     UnsupportedCharacteristic,
     /// An AIR declares a lookup, but the proof carries no reduction for it.
@@ -777,7 +794,7 @@ mod tests {
     use alloc::borrow::Cow;
     use alloc::vec;
 
-    use p3_air::{AirBuilder, WindowAccess};
+    use p3_air::{AirBuilder, BoundaryEnd, BoundaryPublic, WindowAccess};
     use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
     use p3_challenger::DuplexChallenger;
     use p3_field::PrimeCharacteristicRing;
@@ -790,12 +807,110 @@ mod tests {
     use rand::{RngExt, SeedableRng};
 
     use super::*;
-    use crate::zerocheck::{AirZerocheck, ZerocheckError};
+    use crate::zerocheck::{AirZerocheck, ZerocheckError, get_air_degrees};
 
     type F = BabyBear;
     type EF = BinomialExtensionField<F, 4>;
     type Perm = Poseidon2BabyBear<16>;
     type Challenger = DuplexChallenger<F, Perm, 16, 8>;
+    use super::test_field::Tiny;
+
+    struct MixedEmptyBusesAir {
+        empty_at: Option<usize>,
+    }
+
+    impl BaseAir<Tiny> for MixedEmptyBusesAir {
+        fn width(&self) -> usize {
+            1
+        }
+    }
+
+    impl<AB: InteractionBuilder<F = Tiny>> Air<AB> for MixedEmptyBusesAir {
+        fn eval(&self, builder: &mut AB) {
+            let value = builder.main().current_slice()[0];
+            for i in 0..=3 {
+                if self.empty_at == Some(i) {
+                    builder.push_local_interaction(core::iter::empty::<(
+                        Vec<AB::Expr>,
+                        Count<AB::Expr>,
+                    )>());
+                }
+                if i < 3 {
+                    builder.push_local_interaction([(
+                        vec![value + AB::Expr::from_u32(i as u32)],
+                        Count::provided(AB::Expr::ONE),
+                    )]);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn mixed_empty_local_declarations_do_not_allocate_buses_or_change_shape() {
+        let num_variables = log2_strict_usize(<Tiny as Field>::Packing::WIDTH);
+        let expected = LookupPlan::<Tiny>::build::<Tiny, _>(
+            &[&MixedEmptyBusesAir { empty_at: None }],
+            &[num_variables],
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(expected.num_buses, 3);
+        assert_eq!(expected.instances[0].bus_ids, [0, 1, 2]);
+        let main = Table::new(p3_matrix::dense::RowMajorMatrix::new(
+            vec![Tiny::ONE; 1 << num_variables],
+            1 << num_variables,
+        ));
+        let materialize = |plan: &LookupPlan<Tiny>| {
+            let fraction =
+                plan.materialize_fraction(&[&main], &[None], &[&[]], Tiny::ONE, Tiny::TWO);
+            let mut denominators = Tiny::zero_vec(1 << plan.num_variables);
+            fraction.d.unpack_into(&mut denominators);
+            (fraction.n.as_slice().to_vec(), denominators)
+        };
+        let expected_fraction = materialize(&expected);
+        for empty_at in 0..=3 {
+            let actual = LookupPlan::<Tiny>::build::<Tiny, _>(
+                &[&MixedEmptyBusesAir {
+                    empty_at: Some(empty_at),
+                }],
+                &[num_variables],
+            )
+            .expect("an empty declaration must not exhaust characteristic-three bus IDs")
+            .unwrap();
+            assert_eq!(LookupShape::new(&actual), LookupShape::new(&expected));
+            let active_ids = actual.instances[0]
+                .lookups
+                .iter()
+                .zip(&actual.instances[0].bus_ids)
+                .filter_map(|(lookup, &id)| (!lookup.elements.is_empty()).then_some(id))
+                .collect::<Vec<_>>();
+            assert_eq!(active_ids, expected.instances[0].bus_ids);
+            assert_eq!(materialize(&actual), expected_fraction);
+        }
+    }
+    struct ManyBusesAir(usize);
+
+    impl BaseAir<Tiny> for ManyBusesAir {
+        fn width(&self) -> usize {
+            1
+        }
+    }
+
+    impl<AB: InteractionBuilder<F = Tiny>> Air<AB> for ManyBusesAir {
+        fn eval(&self, builder: &mut AB) {
+            let value = builder.main().current_slice()[0];
+            for _ in 0..self.0 {
+                builder
+                    .push_local_interaction([(vec![value.into()], Count::provided(AB::Expr::ONE))]);
+            }
+        }
+    }
+
+    #[test]
+    fn lookup_plan_rejects_bus_identifier_wraparound() {
+        assert!(LookupPlan::<Tiny>::build::<Tiny, _>(&[&ManyBusesAir(3)], &[0]).is_ok());
+        assert!(LookupPlan::<Tiny>::build::<Tiny, _>(&[&ManyBusesAir(4)], &[0]).is_err());
+    }
 
     struct BinaryLookupAir;
 
@@ -1012,18 +1127,13 @@ mod tests {
     }
 
     #[test]
-    fn materialization_rejects_a_trace_shorter_than_the_packing_width() {
+    fn materialization_handles_a_trace_shorter_than_the_packing_width() {
         let packing_variables = log2_strict_usize(<F as Field>::Packing::WIDTH);
         if packing_variables == 0 {
             // Scalar packing has width one, so no nonempty trace can be shorter.
             return;
         }
 
-        // Mutation: give the prover a trace one variable below its own lane group.
-        //
-        //     block rows    : 2^(packing_variables - 1)
-        //     rows per lane : 2^packing_variables
-        //     -----> zero packed entries per block, so the block would stay unwritten
         let air = BalancedLookupAir;
         let mut rng = SmallRng::seed_from_u64(0x5170_2ACE);
         let main = Table::<F>::rand(&mut rng, 1, packing_variables - 1);
@@ -1031,19 +1141,20 @@ mod tests {
             .unwrap()
             .unwrap();
 
-        let payload = std::panic::catch_unwind(|| {
-            plan.materialize_fraction(&[&main], &[None], &[&[]], EF::ONE, EF::ONE)
-        })
-        .expect_err("materialization must refuse a trace below its lane group");
-
-        // A panic payload is an owned string only when the message was formatted.
-        // A plain message arrives as a static string slice, so accept both shapes.
-        let message = payload
-            .downcast_ref::<std::string::String>()
-            .map(std::string::String::as_str)
-            .or_else(|| payload.downcast_ref::<&'static str>().copied())
-            .expect("the panic carries a message");
-        assert!(message.contains("SIMD packing width"), "{message}");
+        let fraction = plan.materialize_fraction(&[&main], &[None], &[&[]], EF::ONE, EF::ONE);
+        let height = 1 << main.num_variables();
+        assert_eq!(&fraction.n.as_slice()[..height], &vec![F::ONE; height]);
+        assert_eq!(&fraction.n.as_slice()[height..], &vec![F::NEG_ONE; height]);
+        let column = main.iter_polys().next().unwrap();
+        let mut denominators = EF::zero_vec(2 * height);
+        fraction.d.unpack_into(&mut denominators);
+        for row in 0..height {
+            // alpha = beta = 1, width = 1, bus 0: prefix = alpha + beta = 2.
+            let expected =
+                EF::TWO - EF::from(column[row].square() - column[(row + 1).min(height - 1)]);
+            assert_eq!(denominators[row], expected);
+            assert_eq!(denominators[height + row], expected);
+        }
     }
 
     #[test]
@@ -1259,6 +1370,131 @@ mod tests {
         assert_eq!(prover_final, verifier_final);
     }
 
+    /// The output cell the pinned instantiation below binds by position.
+    const PERMUTATION_SUM_OUTPUT: [BoundaryPublic; 1] =
+        [BoundaryPublic::new(0, BoundaryEnd::Last, 0)];
+
+    /// Two-column permutation lookup with a transition invariant, parameterized by its cells.
+    ///
+    /// ```text
+    ///     lookup     : column 0 requested, column 1 provided
+    ///     constraint : is_transition * (col_0 + col_1 - next.col_0 - next.col_1) = 0
+    /// ```
+    ///
+    /// Every instantiation shares its degrees and lookups.
+    /// Only the listed cells set two instantiations apart.
+    struct PermutationSumAir {
+        cells: &'static [BoundaryPublic],
+    }
+
+    impl BaseAir<F> for PermutationSumAir {
+        fn width(&self) -> usize {
+            2
+        }
+
+        fn num_public_values(&self) -> usize {
+            1
+        }
+
+        fn public_boundary_io(&self) -> &[BoundaryPublic] {
+            self.cells
+        }
+    }
+
+    impl<AB> Air<AB> for PermutationSumAir
+    where
+        AB: AirBuilder<F = F> + InteractionBuilder,
+    {
+        fn eval(&self, builder: &mut AB) {
+            let main = builder.main();
+            let local = main.current_slice();
+            let next = main.next_slice();
+
+            builder
+                .when_transition()
+                .assert_eq(local[0] + local[1], next[0] + next[1]);
+            builder.push_local_interaction([
+                (vec![local[0].into()], Count::bounded(AB::Expr::ONE, 1)),
+                (vec![local[1].into()], Count::provided(-AB::Expr::ONE)),
+            ]);
+        }
+    }
+
+    #[test]
+    fn lookup_folder_binds_boundary_io_cells_at_the_closing_check() {
+        // Invariant: an AIR with lookups still binds its listed cells.
+        //
+        // The pin rides the lookup-aware folder, which batches the same ordinary family.
+        // Without it the lookup passes on its own and the output claim goes unread.
+        //
+        // Fixture state: a reversed 64-row trace, column 0 ending at 63, output claim 64.
+        let n = 64;
+        let values = (0..n)
+            .flat_map(|row| [F::from_usize(row), F::from_usize(n - 1 - row)])
+            .collect();
+        let main = Table::new(p3_matrix::dense::RowMajorMatrix::new(values, 2).transpose());
+        let claim = [F::from_usize(n)];
+        let public_values: &[F] = &claim;
+
+        // The two instantiations describe the same transcript shape.
+        let loose = PermutationSumAir { cells: &[] };
+        let pinned = PermutationSumAir {
+            cells: &PERMUTATION_SUM_OUTPUT,
+        };
+        assert_eq!(
+            get_air_degrees::<F, EF, _>(&loose),
+            get_air_degrees::<F, EF, _>(&pinned)
+        );
+
+        // The prover folds the true trace and asserts no pin.
+        let mut prover_challenger = challenger();
+        let (lookup_proof, lookup) = prove_lookup::<F, EF, _, _>(
+            &[&loose],
+            &[&main],
+            &[None],
+            &[public_values],
+            &mut prover_challenger,
+        );
+        let lookup_proof = lookup_proof.unwrap();
+        let loose_airs = [&loose];
+        let (proof, _) = AirZerocheck::new(&loose_airs, 0).prove_with_lookup(
+            &[None],
+            &[&main],
+            &[public_values],
+            lookup,
+            &mut prover_challenger,
+        );
+
+        let check = |air: &PermutationSumAir| {
+            let mut verifier_challenger = challenger();
+            let lookup = verify_lookup::<F, EF, _, _>(
+                &[air],
+                &[main.num_variables()],
+                Some(&lookup_proof),
+                &mut verifier_challenger,
+            )
+            .unwrap()
+            .unwrap();
+            let airs = [air];
+            AirZerocheck::new(&airs, 0).verify_with_lookup(
+                &proof,
+                &[main.num_variables()],
+                &[public_values],
+                Some(&lookup),
+                &mut verifier_challenger,
+            )
+        };
+
+        // Control: the loose AIR never reads the claim, so the shifted output slips through.
+        check(&loose).expect("an unbound public value is not checked at all");
+
+        // Listing the cell adds one surviving pin to the closing check:
+        //
+        //     is_last_row * (col_0 - 64) = 63 - 64 = -1
+        let err = check(&pinned).unwrap_err();
+        assert!(matches!(err, ZerocheckError::FinalSumMismatch), "{err:?}");
+    }
+
     #[test]
     fn coupled_stage_preserves_mixed_air_degrees() {
         // Invariant: AIRs of different lookup degrees share one transmitted round polynomial,
@@ -1330,11 +1566,11 @@ mod tests {
         // Invariant: a shorter AIR's lookup claim stays dormant until the cube reaches its
         // height, and the global claim is exactly the sum of the two shares throughout.
         //
-        //     rounds : | block selectors | 64-row stage | 16-row stage |
+        //     rounds : | block selectors | 64-row stage | 2-row stage |
         let air = BalancedLookupAir;
         let mut rng = SmallRng::seed_from_u64(0xA17_57A6E);
         let tall = Table::<F>::rand(&mut rng, 1, 6);
-        let short = Table::<F>::rand(&mut rng, 1, 4);
+        let short = Table::<F>::rand(&mut rng, 1, 1);
         let public_values: &[F] = &[];
         let airs = [&air, &air];
         let publics = [public_values, public_values];

@@ -290,6 +290,11 @@ pub trait ExtensionAlgebra<F: Field, const D: usize, Shape: ExtensionShape>: Alg
 pub trait BinomiallyExtendable<const D: usize>:
     Field + ExtensionAlgebra<Self, D, Binomial<Self>>
 {
+    /// Stable identity of the power basis modulo `X^D - W`.
+    /// Must bind `D` and `W` in a compiler-independent encoding, as required by
+    /// [`crate::AlgebraIdentity`].
+    fn binomial_algebra_id() -> Vec<u8>;
+
     /// The constant coefficient `W` in the binomial `X^D - W`.
     const W: Self;
 

@@ -17,6 +17,7 @@ mod prover;
 mod security_tests;
 #[cfg(test)]
 pub(crate) mod test_util;
+pub mod transcript;
 mod verifier;
 
 pub use error::BinaryPcsError;

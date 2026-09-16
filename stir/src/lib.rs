@@ -59,6 +59,7 @@ pub mod config;
 pub mod error;
 pub mod pcs;
 mod pcs_budget;
+pub mod pcs_transcript;
 pub mod proof;
 pub mod prover;
 mod soundness;
@@ -66,6 +67,7 @@ pub mod transcript;
 pub mod utils;
 pub mod verifier;
 
+pub use batch_transcript::batch_domain_separator;
 pub use config::{
     Stage, StirConfig, StirConfigError, StirOptions, StirParameters, StirRoundConfig,
 };

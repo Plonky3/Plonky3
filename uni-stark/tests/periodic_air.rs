@@ -118,7 +118,7 @@ fn periodic_air_two_adic_prove_verify() -> Result<(), impl Debug> {
 
     let air = PeriodicAir::<Val>::new();
     let trace = air.valid_trace(1 << 6);
-    let proof = prove(&config, &air, trace, &[]);
+    let proof = prove(&config, &air, trace, &[]).unwrap();
     verify(&config, &air, &proof, &[])
 }
 
@@ -163,7 +163,7 @@ fn periodic_air_two_adic_zk_prove_verify() -> Result<(), impl Debug> {
 
     let air = PeriodicAir::<Val>::new();
     let trace = air.valid_trace(1 << 6);
-    let proof = prove(&config, &air, trace, &[]);
+    let proof = prove(&config, &air, trace, &[]).unwrap();
     verify(&config, &air, &proof, &[])
 }
 
@@ -208,6 +208,6 @@ fn periodic_air_circle_prove_verify() -> Result<(), impl Debug> {
 
     let air = PeriodicAir::<Val>::new();
     let trace = air.valid_trace(1 << 5);
-    let proof = prove(&config, &air, trace, &[]);
+    let proof = prove(&config, &air, trace, &[]).unwrap();
     verify(&config, &air, &proof, &[])
 }

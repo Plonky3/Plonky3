@@ -3,6 +3,7 @@ use alloc::vec::Vec;
 
 use p3_matrix::dense::RowMajorMatrix;
 
+use crate::boundary::BoundaryPublic;
 use crate::builder::AirBuilder;
 
 /// The underlying structure of an AIR.
@@ -168,25 +169,22 @@ pub trait BaseAir<F>: Sync {
     /// For example, a constraint `x * y * z` where x, y, z are trace
     /// variables has degree multiple 3.
     ///
-    /// Normally the prover runs a full symbolic evaluation to compute this.
-    /// Overriding this method lets both the prover and verifier skip that
-    /// pass when only the degree (not the full constraint list) is needed.
+    /// Uni-STARK and batch-STARK size the quotient using the maximum of this
+    /// hint and the symbolically inferred degree, including base and extension
+    /// constraints. Supplying a hint does not skip symbolic evaluation, and an
+    /// undersized hint does not reduce the quotient below the inferred bound.
     /// Domains with a full trace-space transition selector, such as Circle,
-    /// still infer the domain-specific degree and take the maximum of it and
-    /// this hint. The cached degree multiple used by this hint treats transition
-    /// selectors as degree zero and cannot bound their repeated products there.
+    /// include that selector in the inferred degree. The cached degree multiple
+    /// used by this hint treats transition selectors as degree zero and cannot
+    /// bound their repeated products there.
     ///
-    /// The value must be an upper bound on the degree multiple of every
-    /// constraint (base and extension). It does not need to be tight, but
-    /// overestimating wastes prover work (larger quotient domain).
+    /// Overestimating is permitted but increases prover work by selecting a
+    /// larger quotient domain.
     ///
-    /// # Correctness
+    /// The hint covers only what this AIR asserts during its own evaluation.
+    /// A backend that injects extra constraints scores their degree separately.
     ///
-    /// The returned value **must** be >= the actual max constraint degree.
-    /// A value that is too small will cause the prover to produce an
-    /// invalid proof.
-    ///
-    /// Returns `None` by default, which falls back to symbolic evaluation.
+    /// Returns `None` by default, which uses the inferred degree alone.
     fn max_constraint_degree(&self) -> Option<usize> {
         None
     }
@@ -194,6 +192,48 @@ pub trait BaseAir<F>: Sync {
     /// Return the number of expected public values.
     fn num_public_values(&self) -> usize {
         0
+    }
+
+    /// Main-trace cells whose values are public inputs, named by position.
+    ///
+    /// A public input reaches a proof through one of two routes:
+    ///
+    /// ```text
+    ///     boundary constraint : asserted by the AIR, honored by every backend
+    ///     cell listed here    : bound by the backend, honored by some backends
+    /// ```
+    ///
+    /// Listing a cell is therefore not by itself a binding.
+    /// Support across this workspace:
+    ///
+    /// ```text
+    ///     multilinear multi-STARK : binds every listed cell, needs no AIR constraint
+    ///     univariate STARKs       : reject an AIR that lists any cell
+    ///     debug constraint check  : compares each listed cell against the trace
+    /// ```
+    ///
+    /// The default is the empty slice.
+    /// An AIR that overrides nothing keeps binding its public inputs by constraint.
+    ///
+    /// A wrapper or enum AIR must forward this method along with [`Self::width`].
+    /// Forgetting to leaves every wrapped cell unbound, and nothing reports it,
+    /// because an empty list is a valid declaration.
+    ///
+    /// An AIR that embeds another lists the embedded cells itself, in its own numbering.
+    /// Forwarding the embedded list verbatim is wrong: a sub-builder narrows the main
+    /// trace to a column range but passes the parent's public values straight through,
+    /// so each `column` shifts by the range start while `public_value` does not.
+    ///
+    /// Symbolic builders run only [`Air::eval`], so they never see the injected pins.
+    /// Anything that counts or scores constraints from a symbolic pass adds them back.
+    ///
+    /// # Correctness
+    ///
+    /// - Every column index is less than the main width.
+    /// - Every public-value index is less than the declared public-value count.
+    /// - No two cells name the same column and trace end.
+    fn public_boundary_io(&self) -> &[BoundaryPublic] {
+        &[]
     }
 }
 

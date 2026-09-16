@@ -6,6 +6,20 @@ use p3_matrix::Matrix;
 use p3_security::fri::FriRegime;
 use p3_security::grinding::GrindingSites;
 
+/// A proving input cannot be folded with the configured terminal polynomial size.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum FriProverError {
+    #[error(
+        "FRI input log height {log_input_height} must exceed terminal log height {log_final_height}"
+    )]
+    InputHeightTooSmall {
+        log_input_height: usize,
+        log_final_height: usize,
+    },
+    #[error("FRI terminal log height overflows usize")]
+    FinalHeightOverflow,
+}
+
 /// A set of parameters defining a specific instance of the FRI protocol.
 #[derive(Clone, Debug)]
 pub struct FriParameters<M> {
@@ -37,6 +51,28 @@ pub struct FriParameters<M> {
 }
 
 impl<M> FriParameters<M> {
+    /// Preflight a committed LDE or reduced-opening height before changing prover state.
+    pub(crate) fn validate_input_height(
+        &self,
+        log_input_height: usize,
+    ) -> Result<(), FriProverError> {
+        // Constant terminal polynomials support the zero-fold boundary.
+        if self.log_final_poly_len == 0 {
+            return Ok(());
+        }
+        let log_final_height = self
+            .log_final_poly_len
+            .checked_add(self.log_blowup)
+            .ok_or(FriProverError::FinalHeightOverflow)?;
+        if log_input_height <= log_final_height {
+            return Err(FriProverError::InputHeightTooSmall {
+                log_input_height,
+                log_final_height,
+            });
+        }
+        Ok(())
+    }
+
     pub const fn blowup(&self) -> usize {
         1 << self.log_blowup
     }
@@ -274,11 +310,15 @@ pub fn compute_log_arity_for_round(
 /// One log-arity per commit round, in round order.
 ///
 /// Empty when nothing sits above the final height.
-/// A verifier derives this from untrusted heights, so it returns rather than panics.
+/// A verifier derives this from untrusted heights, so a height it cannot fold is a
+/// returned empty schedule, never a panic.
 ///
 /// # Panics
 ///
-/// When the input heights are not strictly decreasing.
+/// - When the input heights are not strictly decreasing.
+/// - When `max_log_arity` is zero, through `compute_log_arity_for_round`.
+///
+/// Both are configuration, never proof data: a caller reaching either has a bug.
 #[must_use]
 pub fn fold_schedule(
     input_log_heights: &[usize],
@@ -365,26 +405,71 @@ mod tests {
     }
 
     #[test]
-    fn every_schedule_lands_exactly_on_the_final_height() {
-        // Invariant: folding never overshoots or stops short.
+    fn every_derived_schedule_satisfies_the_two_invariants_the_verifier_leans_on() {
+        // Invariant: two properties of the derivation stand in for two runtime checks.
         //
-        // Overshooting loses the evaluations the query phase needs.
+        //     sum(schedule) == tallest - final   no height cross-check needed
+        //     1 <= entry <= cap                  no arity bound needed
+        //
+        // A verifier that derives its schedule has nothing left to compare against.
+        //
+        // So both properties are swept exhaustively rather than spot-checked.
+        //
+        // Fixture state: every strictly-decreasing set of heights drawn from 0..10.
+        //
+        //     bitmask 0b0000000101  ->  heights [2, 0]
+        //     bitmask 0b1000000000  ->  heights [9]
+        //
+        // Enumerating subsets by bitmask covers every input count at once.
+        //
+        // It also covers heights below the final height, which never join the fold.
         for max_log_arity in 1..=4 {
             for log_final_height in 0..4 {
-                for tall in (log_final_height + 1)..12 {
-                    // A second input somewhere strictly between the two ends.
-                    for short in (log_final_height + 1)..tall {
-                        let schedule =
-                            fold_schedule(&[tall, short], log_final_height, max_log_arity);
-                        assert_eq!(
-                            schedule.iter().sum::<usize>(),
-                            tall - log_final_height,
-                            "max_log_arity={max_log_arity} final={log_final_height} \
-                             inputs=[{tall}, {short}]",
+                for mask in 1u32..(1 << 10) {
+                    // Set bits become heights, tallest first.
+                    //
+                    // The list is therefore strictly decreasing by construction.
+                    let input_log_heights: Vec<usize> =
+                        (0..10).rev().filter(|bit| mask >> bit & 1 == 1).collect();
+
+                    let schedule =
+                        fold_schedule(&input_log_heights, log_final_height, max_log_arity);
+
+                    // A tallest input at or below the final height folds nothing.
+                    //
+                    // There is then no round to make a claim about.
+                    let tallest = input_log_heights[0];
+                    if tallest <= log_final_height {
+                        assert!(
+                            schedule.is_empty(),
+                            "nothing to fold, yet a round was scheduled: \
+                             heights={input_log_heights:?} final={log_final_height}",
                         );
-                        // No round may exceed the configured maximum.
-                        assert!(schedule.iter().all(|&a| a <= max_log_arity && a > 0));
+                        continue;
                     }
+
+                    // Property 1: the arities account for the distance travelled.
+                    //
+                    // So the global height needs only one derivation.
+                    //
+                    // A second one, plus a check that the two agree, would add nothing.
+                    assert_eq!(
+                        schedule.iter().sum::<usize>(),
+                        tallest - log_final_height,
+                        "schedule does not land on the final height: \
+                         heights={input_log_heights:?} final={log_final_height} \
+                         cap={max_log_arity}",
+                    );
+
+                    // Property 2: every round folds by one bit or more, up to the cap.
+                    //
+                    // This is what makes a per-round arity bound unnecessary.
+                    assert!(
+                        schedule
+                            .iter()
+                            .all(|&arity| (1..=max_log_arity).contains(&arity)),
+                        "schedule leaves the arity bounds: {schedule:?} cap={max_log_arity}",
+                    );
                 }
             }
         }

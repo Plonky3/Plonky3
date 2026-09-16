@@ -1,7 +1,11 @@
 //! Typed reasons an opening proof was rejected.
 
+use core::fmt::Debug;
+
 use p3_binary_field::BinaryField128;
 use thiserror::Error;
+
+use crate::transcript::TranscriptFailure;
 
 /// Why an opening proof was rejected.
 ///
@@ -113,7 +117,7 @@ pub enum BinaryPcsError<MmcsError> {
 
     /// The proof's sumcheck data carries PoW witnesses.
     ///
-    /// Every fold round runs at `pow_bits = 0` (see `prover::fold_rounds`), and the verifier
+    /// Every fold round runs at `pow_bits = 0` (see `prover::fold_rounds_with`), and the verifier
     /// replays each round with a freshly built, always-empty `pow_witnesses` vector, so
     /// whatever the proof carries here is read by nothing and bound to nothing: a third party
     /// could mutate it and keep a valid proof. `p3_sumcheck::ring_switch` rejects a non-empty
@@ -134,4 +138,21 @@ pub enum BinaryPcsError<MmcsError> {
     // Zero is the only value an honest prover emits, so zero is the only value accepted.
     #[error("the grinding witness is {actual} at zero difficulty, expected zero")]
     NonCanonicalPowWitness { actual: BinaryField128 },
+}
+
+impl<E: Debug> From<TranscriptFailure> for BinaryPcsError<E> {
+    fn from(failure: TranscriptFailure) -> Self {
+        match failure {
+            TranscriptFailure::FinalCodewordLength { expected, got } => {
+                Self::FinalCodewordLengthMismatch {
+                    expected,
+                    actual: got,
+                }
+            }
+            TranscriptFailure::PowWitness { .. } => Self::InvalidPowWitness,
+            TranscriptFailure::NonCanonicalPowWitness { actual } => {
+                Self::NonCanonicalPowWitness { actual }
+            }
+        }
+    }
 }

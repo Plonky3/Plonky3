@@ -11,7 +11,7 @@ use p3_commit::{
 };
 use p3_field::extension::ComplexExtendable;
 use p3_field::{ExtensionField, Field, PrimeField64, batch_multiplicative_inverse, dot_product};
-use p3_fri::verifier::FriError;
+use p3_fri::verifier::{FriError, PowPhase};
 use p3_fri::{BatchMultiOpening, FriFoldingStrategy, FriParameters};
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixCow};
 use p3_matrix::row_index_mapped::RowIndexMappedView;
@@ -30,7 +30,7 @@ use crate::domain::CircleDomain;
 use crate::folding::{
     CircleFriFolding, CircleFriFoldingForMmcs, fold_row_with_inv_twiddle, fold_y,
 };
-use crate::point::{Point, compute_lagrange_den_batched};
+use crate::point::{Point, compute_lagrange_den_on_domain};
 use crate::prover::prove;
 use crate::transcript::{
     CirclePcsShape, CircleProverTranscript, CircleTranscriptFailure, CircleVerifierTranscript,
@@ -243,6 +243,7 @@ where
     type ProverData = InputMmcs::ProverData<RowMajorMatrix<Val>>;
     type Proof = CirclePcsProof<Val, Challenge, InputMmcs, FriMmcs, Challenger::Witness>;
     type Error = FriError<FriMmcs::Error, InputError<InputMmcs::Error, FriMmcs::Error>>;
+    type ProverError = core::convert::Infallible;
 
     fn natural_domain_for_degree(&self, degree: usize) -> Self::Domain {
         CircleDomain::standard(log2_strict_usize(degree))
@@ -251,7 +252,7 @@ where
     fn commit(
         &self,
         evaluations: impl IntoIterator<Item = (Self::Domain, RowMajorMatrix<Val>)>,
-    ) -> (Self::Commitment, Self::ProverData) {
+    ) -> Result<(Self::Commitment, Self::ProverData), Self::ProverError> {
         let ldes = evaluations
             .into_iter()
             .map(|(domain, evals)| {
@@ -268,7 +269,7 @@ where
             })
             .collect_vec();
         let (comm, mmcs_data) = self.mmcs.commit(ldes);
-        (comm, mmcs_data)
+        Ok((comm, mmcs_data))
     }
 
     fn open(
@@ -276,7 +277,7 @@ where
         // For each round,
         rounds: Vec<OpeningRequest<'_, Self::ProverData, Challenge>>,
         challenger: &mut Challenger,
-    ) -> (OpenedValues<Challenge>, Self::Proof) {
+    ) -> Result<(OpenedValues<Challenge>, Self::Proof), Self::ProverError> {
         // Materialize the CFFT-ordered domain points once per committed height. They are shared
         // by the Lagrange denominators and the DEEP-quotient vanishing parts below, which are in
         // turn shared by every matrix opened at the same point on the same domain.
@@ -307,7 +308,7 @@ where
                      points: points_for_mats,
                  }| {
                     let mats = self.mmcs.get_matrices(data);
-                    debug_assert_eq!(
+                    assert_eq!(
                         mats.len(),
                         points_for_mats.len(),
                         "Mismatched number of matrices and points"
@@ -344,10 +345,10 @@ where
                                         .unwrap_or_else(|| {
                                             let den = info_span!("compute Lagrange denominators")
                                                 .in_scope(|| {
-                                                    compute_lagrange_den_batched(
+                                                    compute_lagrange_den_on_domain(
                                                         &permuted_points[&log_height][..sub_height],
                                                         Point::from_projective_line(zeta_uni),
-                                                        log_sub,
+                                                        sub_domain,
                                                     )
                                                 });
                                             lagrange_dens.push((key, den));
@@ -647,7 +648,7 @@ where
         // Every described step has now been played.
         transcript.finish();
 
-        (
+        Ok((
             values,
             CirclePcsProof {
                 batch_pow_witness: batch_pow_witness.unwrap_or_default(),
@@ -655,7 +656,7 @@ where
                 lambdas,
                 fri_proof,
             },
-        )
+        ))
     }
 
     fn verify(
@@ -712,6 +713,12 @@ where
         // Every length the transcript is described with is checked before it is seeded.
         let log_arities =
             validate_proof_shape(&self.fri_params, &proof.fri_proof, num_commit_rounds)?;
+
+        if self.fri_params.batch_proof_of_work_bits == 0 && proof.batch_pow_witness != Val::ZERO {
+            return Err(FriError::NonCanonicalPowWitness {
+                phase: PowPhase::Batch,
+            });
+        }
 
         // Describe the transcript from the claims, exactly as the prover described it.
         let opened_widths: Vec<Vec<Vec<usize>>> = rounds
@@ -1107,8 +1114,8 @@ where
         &self,
         evaluations: impl IntoIterator<Item = (Self::Domain, RowMajorMatrix<Val>)>,
         _num_chunks: usize,
-    ) -> Vec<RowMajorMatrix<Val>> {
-        evaluations
+    ) -> Result<Vec<RowMajorMatrix<Val>>, Self::ProverError> {
+        Ok(evaluations
             .into_iter()
             .map(|(domain, evals)| {
                 assert!(
@@ -1122,11 +1129,14 @@ where
                     ))
                     .to_cfft_order()
             })
-            .collect_vec()
+            .collect_vec())
     }
 
-    fn commit_ldes(&self, ldes: Vec<RowMajorMatrix<Val>>) -> (Self::Commitment, Self::ProverData) {
-        self.mmcs.commit(ldes)
+    fn commit_ldes(
+        &self,
+        ldes: Vec<RowMajorMatrix<Val>>,
+    ) -> Result<(Self::Commitment, Self::ProverData), Self::ProverError> {
+        Ok(self.mmcs.commit(ldes))
     }
 
     fn get_evaluations_on_domain<'a>(
@@ -1201,7 +1211,7 @@ mod tests {
         InputError<<ValMmcs as Mmcs<Val>>::Error, <ChallengeMmcs as Mmcs<Challenge>>::Error>,
     >;
 
-    /// `FriParameters::new_benchmark` must satisfy [`CirclePcs::new`]'s guard.
+    /// The benchmark parameter preset must satisfy the constructor's own guard.
     ///
     /// It reaches that constructor from `p3-examples` and from `monolith-air`'s
     /// benchmark, so a nonzero `batch_proof_of_work_bits` there turns both into
@@ -1295,22 +1305,52 @@ mod tests {
         let evals = RowMajorMatrix::rand(&mut rng, 1 << log_n, 1);
 
         // Commit to the trace and produce the Merkle root.
-        let (comm, data) = <TestPcs as Pcs<Challenge, Challenger>>::commit(&pcs, [(d, evals)]);
+        let (comm, data) =
+            <TestPcs as Pcs<Challenge, Challenger>>::commit(&pcs, [(d, evals)]).unwrap();
 
         // Random evaluation point in the extension field.
         let zeta: Challenge = rng.random();
 
         // Generate the opening proof at the chosen evaluation point.
         let mut chal = Challenger::from_hasher(vec![], byte_hash);
-        let (values, proof) = pcs.open(
-            vec![OpeningRequest {
-                prover_data: &data,
-                points: vec![vec![zeta]],
-            }],
-            &mut chal,
-        );
+        let (values, proof) = pcs
+            .open(
+                vec![OpeningRequest {
+                    prover_data: &data,
+                    points: vec![vec![zeta]],
+                }],
+                &mut chal,
+            )
+            .unwrap();
 
         (pcs, byte_hash, comm, d, zeta, values, proof)
+    }
+
+    fn open_with_mismatched_point_count(matrix_count: usize, point_count: usize) {
+        let (pcs, byte_hash, _, d, zeta, _, _) = setup_valid_proof_at(0, 0, 0);
+        let matrices =
+            (0..matrix_count).map(|_| (d, RowMajorMatrix::new(vec![Val::ONE; d.size()], 1)));
+        let (_, data) = <TestPcs as Pcs<Challenge, Challenger>>::commit(&pcs, matrices).unwrap();
+        pcs.open(
+            vec![OpeningRequest {
+                prover_data: &data,
+                points: vec![vec![zeta]; point_count],
+            }],
+            &mut Challenger::from_hasher(vec![], byte_hash),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    #[should_panic(expected = "Mismatched number of matrices and points")]
+    fn open_rejects_too_few_point_lists() {
+        open_with_mismatched_point_count(2, 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "Mismatched number of matrices and points")]
+    fn open_rejects_too_many_point_lists() {
+        open_with_mismatched_point_count(1, 2);
     }
 
     /// Run the PCS verifier with the given proof and return the result.
@@ -1426,18 +1466,21 @@ mod tests {
         let evals_0 = RowMajorMatrix::rand(&mut rng, 1 << log_n, 1);
         let evals_1 = RowMajorMatrix::rand(&mut rng, 1 << log_n, 1);
         let (comm, data) =
-            <TestPcs as Pcs<Challenge, Challenger>>::commit(&pcs, [(d, evals_0), (d, evals_1)]);
+            <TestPcs as Pcs<Challenge, Challenger>>::commit(&pcs, [(d, evals_0), (d, evals_1)])
+                .unwrap();
 
         // Prove: open matrix 0 at one point, matrix 1 at no points.
         let zeta: Challenge = rng.random();
         let mut chal = Challenger::from_hasher(vec![], byte_hash);
-        let (values, proof) = pcs.open(
-            vec![OpeningRequest {
-                prover_data: &data,
-                points: vec![vec![zeta], vec![]],
-            }],
-            &mut chal,
-        );
+        let (values, proof) = pcs
+            .open(
+                vec![OpeningRequest {
+                    prover_data: &data,
+                    points: vec![vec![zeta], vec![]],
+                }],
+                &mut chal,
+            )
+            .unwrap();
 
         // Verify with the same shape: matrix 1 carries no opening points.
         let mut chal = Challenger::from_hasher(vec![], byte_hash);
@@ -1495,7 +1538,7 @@ mod tests {
         let evals = RowMajorMatrix::<Val>::rand(&mut rng, 1 << log_n, width);
 
         let (_comm, data) =
-            <TestPcs as Pcs<Challenge, Challenger>>::commit(&pcs, [(d, evals.clone())]);
+            <TestPcs as Pcs<Challenge, Challenger>>::commit(&pcs, [(d, evals.clone())]).unwrap();
 
         // The committed LDE lives on `standard(log_n + 2)`. Walk a target domain from the
         // original degree up past the committed LDE: `log_n + 1` is the smaller-than case,
@@ -1621,18 +1664,21 @@ mod tests {
         let d =
             <TestPcs as Pcs<Challenge, Challenger>>::natural_domain_for_degree(&pcs, 1 << log_n);
         let evals = RowMajorMatrix::rand(&mut rng, 1 << log_n, 1);
-        let (_comm, data) = <TestPcs as Pcs<Challenge, Challenger>>::commit(&pcs, [(d, evals)]);
+        let (_comm, data) =
+            <TestPcs as Pcs<Challenge, Challenger>>::commit(&pcs, [(d, evals)]).unwrap();
 
         // Commit succeeds; the assert fires inside the opening (FRI prover).
         let zeta: Challenge = rng.random();
         let mut chal = Challenger::from_hasher(vec![], byte_hash);
-        let _ = pcs.open(
-            vec![OpeningRequest {
-                prover_data: &data,
-                points: vec![vec![zeta]],
-            }],
-            &mut chal,
-        );
+        let _ = pcs
+            .open(
+                vec![OpeningRequest {
+                    prover_data: &data,
+                    points: vec![vec![zeta]],
+                }],
+                &mut chal,
+            )
+            .unwrap();
     }
 
     #[test]
@@ -1687,18 +1733,21 @@ mod tests {
         let d =
             <TestPcs as Pcs<Challenge, Challenger>>::natural_domain_for_degree(&pcs, 1 << log_n);
         let evals = RowMajorMatrix::rand(&mut rng, 1 << log_n, 1);
-        let (_comm, data) = <TestPcs as Pcs<Challenge, Challenger>>::commit(&pcs, [(d, evals)]);
+        let (_comm, data) =
+            <TestPcs as Pcs<Challenge, Challenger>>::commit(&pcs, [(d, evals)]).unwrap();
 
         // Commit succeeds; the assert fires inside the opening (FRI prover).
         let zeta: Challenge = rng.random();
         let mut chal = Challenger::from_hasher(vec![], byte_hash);
-        let _ = pcs.open(
-            vec![OpeningRequest {
-                prover_data: &data,
-                points: vec![vec![zeta]],
-            }],
-            &mut chal,
-        );
+        let _ = pcs
+            .open(
+                vec![OpeningRequest {
+                    prover_data: &data,
+                    points: vec![vec![zeta]],
+                }],
+                &mut chal,
+            )
+            .unwrap();
     }
 
     #[test]
@@ -1721,39 +1770,51 @@ mod tests {
 
     #[test]
     fn reject_under_reported_commit_rounds() {
-        // Invariant: the reported commit-round count must cover the claimed matrix height.
-        //   - log_global_max_height is derived from the proof's round count
-        //   - under-reporting drives it below a matrix's log_height
-        //   - then `index >> (log_global_max_height - log_height)` would underflow
-        // The verifier must reject before that subtraction runs.
+        // Invariant: the commit-round count is fixed by the claimed matrix height.
+        //
+        //   - the height comes from the claim
+        //   - the round count follows from the height
+        //   - a proof carrying fewer rounds is a proof of a different shape
+        //   - the fold chain and the transcript are sized by the derived count
+        //
+        // The verifier must reject before either of them is walked.
         let (pcs, byte_hash, comm, d, zeta, values, mut proof) = setup_valid_proof(0);
 
-        // On an honest proof the two height derivations coincide:
+        // The round count the claim fixes.
         //
-        //     H_claim = log_n + log_blowup                            (claimed matrix)
-        //     H_proof = commit_phase_commits.len() + log_blowup + 1   (first-layer fold)
-        let log_blowup = pcs.fri_params.log_blowup;
-        let expected = d.log_n + log_blowup;
-        let original = proof.fri_proof.commit_phase_commits.len() + log_blowup + 1;
-        assert_eq!(original, expected, "fixture must start height-consistent");
+        // The bivariate layer takes one bit before FRI folds anything.
+        //
+        //     H_claim = log_n + log_blowup
+        //     rounds  = H_claim - log_blowup - 1 = log_n - 1
+        //
+        // The blowup cancels.
+        //
+        // So the claimed matrix height alone fixes the count.
+        let rounds = d.log_n - 1;
+        assert_eq!(
+            proof.fri_proof.commit_phase_commits.len(),
+            rounds,
+            "fixture must start round-consistent"
+        );
 
         // Mutation: drop one commit-phase commitment so the round count falls short.
         //
-        //     before: commit_phase_commits = [c_0, ..., c_{n-1}]   → H_proof = expected
-        //     after:  commit_phase_commits = [c_0, ..., c_{n-2}]   → H_proof = expected - 1
-        //     → H_proof < H_claim → GlobalMaxHeightMismatch (no underflow)
+        //     claim fixes:  [c_0, ..., c_{n-1}]   (n rounds)
+        //     proof holds:  [c_0, ..., c_{n-2}]   (n - 1 rounds)
+        //
+        //     n - 1 != n  ->  rejected before the fold chain runs
         proof.fri_proof.commit_phase_commits.pop();
 
         let err = try_verify(&pcs, byte_hash, &comm, d, zeta, &values, &proof)
-            .expect_err("expected GlobalMaxHeightMismatch");
+            .expect_err("expected CommitRoundCountMismatch");
 
-        let FriError::GlobalMaxHeightMismatch { expected: exp, got } = err else {
-            panic!("expected GlobalMaxHeightMismatch, got {err:?}");
+        let FriError::CommitRoundCountMismatch { expected, got } = err else {
+            panic!("expected CommitRoundCountMismatch, got {err:?}");
         };
-        // The verifier wants the height the claimed matrix demands.
-        assert_eq!(exp, expected);
+        // The verifier wants one round per bit the claimed height has to travel.
+        assert_eq!(expected, rounds);
         // The proof under-reports by exactly the one round we removed.
-        assert_eq!(got, expected - 1);
+        assert_eq!(got, rounds - 1);
     }
 
     #[test]
@@ -1791,9 +1852,12 @@ mod tests {
         // the remaining one).
         let (pcs, byte_hash, comm, d, zeta, values, mut proof) = setup_valid_proof(0);
 
-        // Capture the original sibling count and arity before mutating.
-        let log_arity = proof.fri_proof.commit_phase_openings[0].log_arity as usize;
-        let arity = 1usize << log_arity;
+        // Circle folding halves the domain, so every round folds by two.
+        //
+        // The verifier derives that arity.
+        //
+        // So the fixture states it rather than reading it back out of the proof.
+        let arity = 2usize;
         let original_sibling_count =
             proof.fri_proof.commit_phase_openings[0].sibling_values[0].len();
 
@@ -1824,20 +1888,18 @@ mod tests {
         assert_eq!(got, original_sibling_count - 1);
     }
 
-    // Two error variants cannot be triggered through the PCS verification
-    // layer because Merkle commitment checks or input-proof validation
-    // fail first for any proof mutation that would reach those code paths:
+    // Two error variants cannot be triggered through the PCS verification layer,
+    // because a cheaper check rejects first for any mutation that would reach them:
     //
-    // - Final fold height mismatch: requires the total folding to stop at
-    //   the wrong domain size, but altering round counts also invalidates
-    //   Merkle proofs.
-    // - Unconsumed reduced openings: requires leftover polynomial data
-    //   after folding completes, but input-proof checks reject the shape
-    //   before the folding loop runs.
+    // - Final fold height mismatch: requires the total folding to stop at the wrong
+    //   domain size. The round count comes from the claimed heights, so a proof
+    //   carrying a different one is rejected by `CommitRoundCountMismatch` before
+    //   any folding runs.
+    // - Unconsumed reduced openings: requires leftover polynomial data after folding
+    //   completes, but input-proof checks reject the shape before the folding loop.
     //
-    // Both are reachable by a malicious prover who crafts openings that
-    // pass Merkle checks but have wrong structure — they serve as defense
-    // in depth in the low-level verifier.
+    // Both stay reachable in the low-level verifier, where a caller supplies its own
+    // schedule, so they are defense in depth rather than dead code.
 
     #[test]
     fn reject_input_openings_query_count_mismatch() {
@@ -1845,9 +1907,8 @@ mod tests {
         // first-layer siblings carry one entry per query, so dropping one
         // leaves a query without its opened row.
         //
-        // The cross-query arity-schedule check this test used to perform is
-        // now unrepresentable: `log_arity` lives once per round, not once per
-        // query, so no two queries can disagree.
+        // A cross-query arity disagreement is unrepresentable: `log_arity` lives
+        // once per round, not once per query, so no two queries can disagree.
         let (pcs, byte_hash, comm, d, zeta, values, mut proof) = setup_valid_proof(0);
 
         // Mutation: drop the last query's first-layer siblings.
@@ -2055,10 +2116,22 @@ mod tests {
                 .all(|w| *w == Val::ZERO)
         );
         assert_eq!(proof.fri_proof.pow_witness, Val::ZERO);
+        assert_eq!(proof.batch_pow_witness, Val::ZERO);
 
         // The untouched proof still verifies, so the mutations below are the only change.
         try_verify(&pcs, byte_hash, &comm, d, zeta, &values, &proof)
             .expect("an ungrounded proof must verify");
+
+        for witness in [Val::ONE, Val::from_u32(2), Val::from_u32(12345), -Val::ONE] {
+            let mut mutated = proof.clone();
+            mutated.batch_pow_witness = witness;
+            assert!(matches!(
+                try_verify(&pcs, byte_hash, &comm, d, zeta, &values, &mutated),
+                Err(FriError::NonCanonicalPowWitness {
+                    phase: PowPhase::Batch
+                })
+            ));
+        }
 
         let mut mutated = proof.clone();
         mutated.fri_proof.commit_pow_witnesses[0] = Val::ONE;
@@ -2087,30 +2160,6 @@ mod tests {
             ),
             "expected NonCanonicalPowWitness for the query phase, got {err:?}"
         );
-    }
-
-    #[test]
-    fn reject_invalid_log_arity() {
-        // Invariant: each log_arity must be in 1..=max_log_arity.
-        let (pcs, byte_hash, comm, d, zeta, values, mut proof) = setup_valid_proof(0);
-
-        // Mutation: force an invalid zero arity in query 0, round 0.
-        proof.fri_proof.commit_phase_openings[0].log_arity = 0;
-
-        let err = try_verify(&pcs, byte_hash, &comm, d, zeta, &values, &proof)
-            .expect_err("expected InvalidLogArity");
-
-        let FriError::InvalidLogArity {
-            round,
-            log_arity,
-            max,
-        } = err
-        else {
-            panic!("expected InvalidLogArity, got {err:?}");
-        };
-        assert_eq!(round, 0);
-        assert_eq!(log_arity, 0);
-        assert_eq!(max, pcs.fri_params.max_log_arity);
     }
 
     #[test]

@@ -8,6 +8,7 @@ use core::cmp::max;
 
 use p3_air::Air;
 use p3_air::symbolic::{AirLayout, SymbolicAirBuilder};
+use p3_commit::PolynomialSpace;
 use p3_field::{BasedVectorSpace, ExtensionField, Field};
 use p3_security::fri::FriRegime;
 // Re-exported (rather than merely imported) so that declaring
@@ -18,7 +19,7 @@ use p3_security::shape::{InstanceShape, StarkAirParams as P3AirShape};
 use p3_security::stark::{
     conjectured_security_report, legacy_security_report, proven_security_report,
 };
-use p3_util::{log2_ceil_usize, log2_floor_usize};
+use p3_util::log2_floor_usize;
 
 /// What the polynomial commitment scheme commits beyond what the AIR itself
 /// determines.
@@ -152,6 +153,8 @@ pub struct StarkSecurityParams {
     /// Maximum AIR constraint degree. The Plonky3 prover requires this to be at most
     /// `blowup + 1` for the quotient to fit in the LDE.
     pub air_max_constraint_degree: usize,
+    /// Exact number of committed quotient chunks, including all ZK padding.
+    pub num_quotient_chunks: usize,
     /// Maximum number of out-of-domain points referenced per AIR column
     /// (DEEP-ALI's `max_combo`). For a uni-STARK using `local`/`next` rotations this
     /// is `2`; `1` if no transition constraint is present.
@@ -214,6 +217,7 @@ impl StarkSecurityParams {
     /// unbuildable configuration. This does not account for zk: under zk the
     /// prover's real bound is one tighter (`blowup`, not `blowup + 1`), but
     /// `StarkSecurityParams` carries no `is_zk` flag to check that here.
+    #[allow(clippy::too_many_arguments)]
     pub const fn new(
         fri: FriRegime,
         num_modulus_bits: usize,
@@ -222,6 +226,7 @@ impl StarkSecurityParams {
         air_max_constraint_degree: usize,
         max_combo: usize,
         num_batched_functions: usize,
+        num_quotient_chunks: usize,
     ) -> Self {
         debug_assert!(
             air_max_constraint_degree <= (1usize << fri.log_blowup) + 1,
@@ -240,6 +245,7 @@ impl StarkSecurityParams {
             air_max_constraint_degree,
             max_combo,
             num_batched_functions,
+            num_quotient_chunks,
             grinding: GrindingSites::NONE,
         }
     }
@@ -263,6 +269,9 @@ impl StarkSecurityParams {
     /// permutation fields at `0`, so permutation-argument constraints are not counted
     /// and security is overstated.
     ///
+    /// `trace_domain` must match the prover's original trace domain, before ZK padding.
+    /// Its selector model and size determine the constraint and quotient degrees.
+    ///
     /// `openings` supplies the PCS layout, including the random-column count for hiding FRI.
     /// The other input `num_batched_functions` needs — how
     /// wide a committed quotient chunk is — is `EF`'s own degree over `F`, already in scope here;
@@ -284,6 +293,7 @@ impl StarkSecurityParams {
         fri: FriRegime,
         air: &A,
         layout: AirLayout,
+        trace_domain: impl PolynomialSpace<Val = F>,
         num_modulus_bits: usize,
         collision_resistance: usize,
         max_combo: usize,
@@ -303,7 +313,13 @@ impl StarkSecurityParams {
              main_next={main_next}, preprocessed_next={preprocessed_next}"
         );
 
-        let shape = P3AirShape::from_air::<F, EF, A>(air, layout, max_combo);
+        let shape = P3AirShape::from_air::<F, EF, A>(
+            air,
+            layout,
+            trace_domain,
+            max_combo,
+            openings.is_zk(),
+        );
         let challenge_dimension = <EF as BasedVectorSpace<F>>::DIMENSION;
 
         // `get_log_num_quotient_chunks`'s formula for the chunk count, then the same `<< is_zk`
@@ -311,13 +327,7 @@ impl StarkSecurityParams {
         // (log_num_quotient_chunks + is_zk)`, `uni-stark/src/prover.rs`) to get what is actually
         // committed and therefore what the PCS batches.
         // The prover honors an overestimated degree hint when choosing its chunk count.
-        let committed_degree = air
-            .max_constraint_degree()
-            .unwrap_or(shape.max_constraint_degree);
-        let is_zk = openings.is_zk() as usize;
-        let constraint_degree = (committed_degree + is_zk).max(2);
-        let log_num_quotient_chunks = log2_ceil_usize(constraint_degree - 1);
-        let num_quotient_chunks = 1usize << (log_num_quotient_chunks + is_zk);
+        let num_quotient_chunks = shape.num_quotient_chunks;
 
         let num_batched_functions = num_batched_openings(
             layout.main_width,
@@ -337,6 +347,7 @@ impl StarkSecurityParams {
             shape.max_constraint_degree,
             max_combo,
             num_batched_functions,
+            num_quotient_chunks,
         )
         .with_grinding(grinding)
     }
@@ -359,6 +370,7 @@ impl StarkSecurityParams {
         P3AirShape {
             num_constraints: self.num_constraints,
             max_constraint_degree: self.air_max_constraint_degree,
+            num_quotient_chunks: self.num_quotient_chunks,
             max_combo: self.max_combo,
         }
     }
@@ -428,6 +440,7 @@ impl ConjecturedSecurity {
         let air = P3AirShape {
             num_constraints: 1,
             max_constraint_degree: 1,
+            num_quotient_chunks: 1,
             max_combo: 1,
         };
         let shape = InstanceShape {
@@ -591,6 +604,8 @@ mod tests {
     use p3_air::symbolic::SymbolicVariable;
     use p3_air::{AirBuilder, BaseAir, WindowAccess};
     use p3_baby_bear::BabyBear;
+    use p3_field::PrimeCharacteristicRing;
+    use p3_field::coset::TwoAdicMultiplicativeCoset;
     use p3_field::extension::BinomialExtensionField;
 
     use super::*;
@@ -707,6 +722,7 @@ mod tests {
             collision_resistance: 128,
             num_constraints: TEST_NUM_CONSTRAINTS,
             air_max_constraint_degree: TEST_AIR_MAX_DEG,
+            num_quotient_chunks: (TEST_AIR_MAX_DEG.max(2) - 1).next_power_of_two(),
             max_combo: TEST_MAX_COMBO,
             num_batched_functions: 1,
             grinding: GrindingSites::NONE,
@@ -757,6 +773,7 @@ mod tests {
             regime,
             &air,
             layout,
+            TwoAdicMultiplicativeCoset::new(BabyBear::ONE, 4).unwrap(),
             124,
             128,
             2,
@@ -791,6 +808,7 @@ mod tests {
             regime,
             &air,
             layout,
+            TwoAdicMultiplicativeCoset::new(BabyBear::ONE, 4).unwrap(),
             124,
             128,
             2,
@@ -801,6 +819,52 @@ mod tests {
         // Two quotient chunks (the zk doubling), each 4 columns, plus one zk randomizing
         // codeword of 4 columns, plus the trace opened at both points: 2·8 + 2·4 + 4.
         assert_eq!(params.num_batched_functions, 28);
+        // The OOD identity includes all two committed chunks, so its degree is
+        // (2 + 1) * 16 + 2 - 1 = 49, even though the AIR has degree one.
+        let bits =
+            p3_security::deep::deep_ali_error(&params.air_shape(), &params.instance_shape(4), 1.0)
+                .bits();
+        assert!((bits - (124.0 - 49.0f64.log2())).abs() < 1e-12);
+    }
+
+    #[test]
+    fn zk_ood_budget_preserves_degree_hint_chunk_boundaries() {
+        struct HintedAir(usize);
+        impl BaseAir<BabyBear> for HintedAir {
+            fn width(&self) -> usize {
+                1
+            }
+            fn max_constraint_degree(&self) -> Option<usize> {
+                Some(self.0)
+            }
+        }
+        impl<AB: AirBuilder<F = BabyBear>> Air<AB> for HintedAir {
+            fn eval(&self, builder: &mut AB) {
+                builder.assert_zero(builder.main().current_slice()[0]);
+            }
+        }
+        for (degree, chunks, identity_degree) in [(1, 2, 49), (3, 8, 145), (5, 16, 273)] {
+            let air = HintedAir(degree);
+            let params = StarkSecurityParams::from_air::<BabyBear, Ext, _>(
+                benchmark_high_arity_params(124).fri_regime(),
+                &air,
+                AirLayout::from_air(&air),
+                TwoAdicMultiplicativeCoset::new(BabyBear::ONE, 4).unwrap(),
+                124,
+                128,
+                2,
+                OpeningShape::hiding(0),
+                GrindingSites::NONE,
+            );
+            assert_eq!(params.num_quotient_chunks, chunks);
+            let bits = p3_security::deep::deep_ali_error(
+                &params.air_shape(),
+                &params.instance_shape(4),
+                1.0,
+            )
+            .bits();
+            assert!((bits - (124.0 - (identity_degree as f64).log2())).abs() < 1e-12);
+        }
     }
 
     /// An AIR that never reads the next row is opened at one point, so it
@@ -825,6 +889,7 @@ mod tests {
             regime,
             &with_next,
             layout_of(&with_next),
+            TwoAdicMultiplicativeCoset::new(BabyBear::ONE, 4).unwrap(),
             124,
             128,
             2,
@@ -835,6 +900,7 @@ mod tests {
             regime,
             &without_next,
             layout_of(&without_next),
+            TwoAdicMultiplicativeCoset::new(BabyBear::ONE, 4).unwrap(),
             124,
             128,
             1,
@@ -870,6 +936,7 @@ mod tests {
                 regime,
                 &air,
                 layout,
+                TwoAdicMultiplicativeCoset::new(BabyBear::ONE, 16).unwrap(),
                 124,
                 128,
                 2,
