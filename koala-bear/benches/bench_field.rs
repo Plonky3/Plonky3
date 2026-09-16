@@ -7,7 +7,7 @@ use p3_field_testing::bench_func::{
     benchmark_iter_sum, benchmark_mul_2exp, benchmark_mul_latency, benchmark_mul_throughput,
     benchmark_sub_latency, benchmark_sub_throughput,
 };
-use p3_field_testing::benchmark_sum_array;
+use p3_field_testing::{benchmark_dot_array, benchmark_sum_array};
 use p3_koala_bear::KoalaBear;
 use p3_util::pretty_name;
 use rand::rngs::SmallRng;
@@ -78,6 +78,14 @@ fn bench_packedfield(c: &mut Criterion) {
     benchmark_sub_throughput::<<F as Field>::Packing, REPS>(c, name);
     benchmark_mul_latency::<<F as Field>::Packing, L_REPS>(c, name);
     benchmark_mul_throughput::<<F as Field>::Packing, REPS>(c, name);
+
+    // Delayed-reduction dot products: `4` is the control, `5` to `8` each fold the modulus once.
+    benchmark_dot_array::<PF, 4>(c, name);
+    benchmark_dot_array::<PF, 5>(c, name);
+    benchmark_dot_array::<PF, 6>(c, name);
+    benchmark_dot_array::<PF, 7>(c, name);
+    benchmark_dot_array::<PF, 8>(c, name);
+    benchmark_dot_array::<PF, 64>(c, name);
 }
 
 criterion_group!(koala_bear_arithmetic, bench_field, bench_packedfield);

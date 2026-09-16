@@ -883,6 +883,76 @@ where
     }
 }
 
+/// The canonical value whose 32-bit Montgomery limb is the largest possible, `p - 1`.
+///
+/// A Montgomery field stores `x` as the limb `x R mod p`, with `R = 2^{32}` for a 31-bit prime.
+/// Asking for the limb `p - 1` is therefore asking for the element `(p - 1) R^{-1}`.
+///
+/// Delayed-reduction dot products bound their accumulators by the limbs, not the canonical values.
+/// This is the input that drives each 64-bit accumulator to its documented maximum.
+///
+/// On a field that is not Montgomery encoded this is simply some other element.
+/// The caller still gets a valid, if less pointed, test.
+fn max_limb_value<F: PrimeField32 + QuotientMap<u32>>() -> u32 {
+    // `R mod p`, lifted into the field.
+    let radix = F::from_int(((1u64 << 32) % F::ORDER_U64) as u32);
+
+    // `NEG_ONE` is the element `p - 1`, so this element has limb `(p - 1) R^{-1} R = p - 1`.
+    (F::NEG_ONE * radix.inverse()).as_canonical_u32()
+}
+
+/// Drive every accumulator of `dot_product::<N>` to its maximum and compare against the scalar.
+///
+/// With every limb equal to `p - 1`, each product is exactly `(p - 1)^2`.
+/// A group of four then reaches `4 (p - 1)^2`, within a factor of two of `2^{64}`.
+///
+/// A routine merging two such groups without first folding `2^{32} p` out of each would wrap.
+/// It would silently return a wrong field element.
+pub fn test_packed_dot_product_max_limb<PF, const N: usize>()
+where
+    PF: PackedField + Eq,
+    PF::Scalar: PrimeField32 + QuotientMap<u32>,
+{
+    let max = max_limb_value::<PF::Scalar>();
+
+    // Both sides maximal: every accumulator sits at its upper bound.
+    assert_packed_broadcast_dot_product_matches_scalar::<PF, N>([max; N], [max; N]);
+
+    // One maximal side against the edge table: a maximal limb mixed with assorted others.
+    for &other in &boundary_u32_values::<PF::Scalar>() {
+        assert_packed_broadcast_dot_product_matches_scalar::<PF, N>([max; N], [other; N]);
+        assert_packed_broadcast_dot_product_matches_scalar::<PF, N>([other; N], [max; N]);
+    }
+
+    // Alternating maximal and unit limbs: consecutive terms land in different groups.
+    let alternating: [u32; N] = core::array::from_fn(|i| if i % 2 == 0 { max } else { 1 });
+    assert_packed_broadcast_dot_product_matches_scalar::<PF, N>(alternating, [max; N]);
+    assert_packed_broadcast_dot_product_matches_scalar::<PF, N>([max; N], alternating);
+}
+
+/// Compare `dot_product::<N>` against the scalar reference on proptest-generated inputs.
+///
+/// Inputs are drawn uniformly from the canonical range `[0, p)` and broadcast across the lanes.
+///
+/// This complements [`test_packed_dot_product_lanes_random`], which is seeded and edge-biased.
+pub fn test_packed_dot_product_proptest<PF, const N: usize>()
+where
+    PF: PackedField + Eq + 'static,
+    PF::Scalar: PrimeField32 + QuotientMap<u32>,
+{
+    let prime = PF::Scalar::ORDER_U32;
+    let config = ProptestConfig::with_cases(256);
+
+    // Naming the strategy once keeps the invocation inside the line limit.
+    let draw = prop::collection::vec(0..prime, N);
+
+    proptest!(config, |(lhs in draw.clone(), rhs in draw)| {
+        let lhs: [u32; N] = lhs.try_into().unwrap();
+        let rhs: [u32; N] = rhs.try_into().unwrap();
+        assert_packed_broadcast_dot_product_matches_scalar::<PF, N>(lhs, rhs);
+    });
+}
+
 /// 50/50 draw between the eight-element edge table and uniform `[0, p)`.
 fn sample_edge_or_uniform(rng: &mut SmallRng, edges: &[u32; 8], prime: u32) -> u32 {
     if rng.random::<bool>() {
@@ -1113,6 +1183,48 @@ macro_rules! test_packed_field_dot_product_boundary {
             #[test]
             fn lanes_random_n16() {
                 $crate::test_packed_dot_product_lanes_random::<$packedfield, 16>();
+            }
+
+            // Maximal Montgomery limbs pin the accumulator bounds the routines rely on.
+
+            #[test]
+            fn max_limb_n4() {
+                $crate::test_packed_dot_product_max_limb::<$packedfield, 4>();
+            }
+            #[test]
+            fn max_limb_n5() {
+                $crate::test_packed_dot_product_max_limb::<$packedfield, 5>();
+            }
+            #[test]
+            fn max_limb_n6() {
+                $crate::test_packed_dot_product_max_limb::<$packedfield, 6>();
+            }
+            #[test]
+            fn max_limb_n7() {
+                $crate::test_packed_dot_product_max_limb::<$packedfield, 7>();
+            }
+            #[test]
+            fn max_limb_n8() {
+                $crate::test_packed_dot_product_max_limb::<$packedfield, 8>();
+            }
+
+            // Uniform canonical inputs, shrunk on failure.
+
+            #[test]
+            fn proptest_n5() {
+                $crate::test_packed_dot_product_proptest::<$packedfield, 5>();
+            }
+            #[test]
+            fn proptest_n6() {
+                $crate::test_packed_dot_product_proptest::<$packedfield, 6>();
+            }
+            #[test]
+            fn proptest_n7() {
+                $crate::test_packed_dot_product_proptest::<$packedfield, 7>();
+            }
+            #[test]
+            fn proptest_n8() {
+                $crate::test_packed_dot_product_proptest::<$packedfield, 8>();
             }
         }
     };
