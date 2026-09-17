@@ -494,9 +494,54 @@ macro_rules! binary_tower_level {
         impl RawDataSerializable for $name {
             const NUM_BYTES: usize = core::mem::size_of::<$repr>();
 
+            #[allow(refining_impl_trait)]
             #[inline]
-            fn into_bytes(self) -> impl IntoIterator<Item = u8> {
+            fn into_bytes(self) -> [u8; core::mem::size_of::<$repr>()] {
                 self.0.to_le_bytes()
+            }
+
+            #[inline]
+            fn into_parallel_byte_streams<const N: usize>(
+                input: impl IntoIterator<Item = [Self; N]>,
+            ) -> impl IntoIterator<Item = [u8; N]> {
+                input.into_iter().flat_map(|vector| {
+                    let bytes = vector.map(Self::into_bytes);
+                    (0..Self::NUM_BYTES).map(move |i| core::array::from_fn(|j| bytes[j][i]))
+                })
+            }
+
+            #[inline]
+            fn into_parallel_u64_streams<const N: usize>(
+                input: impl IntoIterator<Item = [Self; N]>,
+            ) -> impl IntoIterator<Item = [u64; N]> {
+                // An element of at least 64 bits fills one or two whole words, low word first.
+                // Narrower elements pack little-endian into one word, zero-padded at the end.
+                let mut input = input.into_iter();
+                let mut high: Option<[u64; N]> = None;
+                core::iter::from_fn(move || {
+                    if let Some(word) = high.take() {
+                        return Some(word);
+                    }
+                    let first = input.next()?;
+                    if Self::NUM_BYTES >= 8 {
+                        let wide = first.map(|elem| elem.0 as u128);
+                        if Self::NUM_BYTES == 16 {
+                            high = Some(wide.map(|value| (value >> 64) as u64));
+                        }
+                        return Some(wide.map(|value| value as u64));
+                    }
+                    let bits = 8 * Self::NUM_BYTES;
+                    let mut word = first.map(|elem| elem.0 as u64);
+                    let mut shift = bits;
+                    while shift < 64 {
+                        let Some(next) = input.next() else { break };
+                        for (lane, elem) in word.iter_mut().zip(next) {
+                            *lane |= (elem.0 as u64) << shift;
+                        }
+                        shift += bits;
+                    }
+                    Some(word)
+                })
             }
         }
 
@@ -1154,7 +1199,13 @@ mod tests {
     }
 
     #[test]
-    fn field_testing_into_stream_matches_binary_field_128() {
+    fn field_testing_into_stream_matches_every_level() {
+        p3_field_testing::test_into_stream::<BinaryField2>();
+        p3_field_testing::test_into_stream::<BinaryField4>();
+        p3_field_testing::test_into_stream::<BinaryField8>();
+        p3_field_testing::test_into_stream::<BinaryField16>();
+        p3_field_testing::test_into_stream::<BinaryField32>();
+        p3_field_testing::test_into_stream::<BinaryField64>();
         p3_field_testing::test_into_stream::<BinaryField128>();
     }
 
