@@ -777,18 +777,22 @@ fn multi_stark_cases() -> Vec<Case> {
             },
         ],
         pow_bits: 0,
+        has_indexed: false,
     };
 
     let mut wider = plain.clone();
     wider.instances[0].main_width += 1;
 
-    let mut ground = plain.clone();
-    ground.pow_bits += 1;
+    // A batch declaring an indexed read plays one more bracket.
+    //
+    // It is a different sequence rather than the same one relabelled.
+    let mut indexed = plain.clone();
+    indexed.has_indexed = true;
 
     [
         ("plain", plain),
         ("main_width", wider),
-        ("pow_bits", ground),
+        ("indexed", indexed),
     ]
     .into_iter()
     .map(|(name, shape)| case("p3-multi-stark", name, shape.domain_separator::<F>()))

@@ -11,6 +11,7 @@ use p3_sumcheck::PrescribedPointPcs;
 use crate::ProverInstances;
 use crate::config::{Commitment, MultiStarkConfig, PcsProverError, ProverData};
 use crate::folder::ProverAir;
+use crate::indexed::IndexedPlan;
 use crate::instance::{ProverParts, trace_suffix};
 use crate::lookup::prove_lookup;
 use crate::proof::MultiStarkProof;
@@ -173,6 +174,11 @@ where
         .unwrap_or_else(|error| panic!("instance {instance} boundary IO: {error}"));
     }
 
+    // Indexed lookups change the described sequence, so the plan is settled first.
+    let indexed_plan =
+        IndexedPlan::build::<C::Val, C::Challenge, A>(&airs, &instances.num_variables())
+            .expect("an indexed lookup the statement cannot plan is a caller error");
+
     // Describe the statement before binding anything into it.
     //
     // Every number comes from the AIRs, from the tables this caller holds, and from `pow_bits`.
@@ -181,7 +187,12 @@ where
     let public_values = instances.public_values();
     let mut transcript = MultiStarkProverTranscript::<C::Challenger, C::Val>::new(
         challenger,
-        MultiStarkShape::new::<C::Val, A>(&airs, &instances.num_variables(), pow_bits),
+        MultiStarkShape::new::<C::Val, A>(
+            &airs,
+            &instances.num_variables(),
+            pow_bits,
+            indexed_plan.is_some(),
+        ),
     );
 
     // 1. Bind the reusable batched preprocessed commitment before any challenge depends on it.
@@ -264,11 +275,12 @@ where
 
     // 6. Open each main trace table at its suffix of the common bound point.
     let opening = transcript.main_opening(|challenger| {
-        let schedule = instances.main_schedule(|rows| trace_suffix(&point, rows));
+        let schedule =
+            instances.main_schedule(indexed_plan.as_ref(), |_, rows| trace_suffix(&point, rows));
         config.pcs().open_at(
             prover_data,
             schedule.protocol(),
-            schedule.payloads(),
+            &schedule.against(),
             challenger,
         )
     });
@@ -287,11 +299,12 @@ where
             .preprocessed
             .as_ref()
             .expect("preprocessed proving key is missing for an AIR with preprocessed columns");
-        let schedule = instances.preprocessed_schedule(|rows| trace_suffix(&point, rows));
+        let schedule = instances
+            .preprocessed_schedule(indexed_plan.as_ref(), |_, rows| trace_suffix(&point, rows));
         config.preprocessed_pcs().open_at(
             preprocessed.prover_data.clone(),
             schedule.protocol(),
-            schedule.payloads(),
+            &schedule.against(),
             challenger,
         )
     });
@@ -311,6 +324,7 @@ where
     Ok(MultiStarkProof {
         commitment,
         lookup: lookup_proof,
+        indexed: None,
         sumcheck,
         opening,
         preprocessed_opening,

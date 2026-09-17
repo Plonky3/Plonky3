@@ -734,4 +734,73 @@ mod tests {
         // Columns 1 and 2 of the reading AIR, in the order the reader pulls them.
         assert_eq!(readers[0].claims, &[EF::from_u8(11), EF::from_u8(12)]);
     }
+
+    #[test]
+    fn the_soundness_shape_counts_rows_and_entries_rather_than_readers() {
+        // The entry challenge is charged one pole per leaf carrying a fraction.
+        //
+        // Counting readers instead of rows would understate it by orders of magnitude.
+        //
+        // The arithmetic is worth pinning on a lopsided fixture.
+        //
+        // Fixture state: one table of 2^2 entries and 2 columns, read by two AIRs.
+        //
+        //     table  "t"   2^2 = 4 entries
+        //     reader air 0 2^5 = 32 rows
+        //     reader air 2 2^3 = 8 rows
+        //                  ------------------
+        //     leaves       44, so a 2^6 padded table
+        let reader = Declaring::bare(4).reading("t", 3, vec![1, 2]);
+        let table = Declaring::bare(2).providing("t", vec![0, 1]);
+        let second = Declaring::bare(4).reading("t", 3, vec![1, 2]);
+
+        let plan = plan(&[&reader, &table, &second], &[5, 2, 3])
+            .expect("the batch describes a reduction")
+            .expect("some AIR declares an indexed lookup");
+        let params = plan.security_params();
+
+        assert_eq!(params.num_leaves, 4 + 32 + 8);
+        assert_eq!(params.num_variables, 6);
+        assert_eq!(params.max_readers_per_table, 2);
+        assert_eq!(params.max_reader_variables, 5);
+        assert_eq!(params.max_table_variables, 2);
+        assert_eq!(params.num_column_claims, 2);
+    }
+
+    #[test]
+    fn the_soundness_shape_sums_over_tables_where_it_says_it_does() {
+        // Three of these numbers add across tables and two take an extreme.
+        //
+        // One table makes every pair of those agree, so the arithmetic needs two.
+        //
+        // Fixture state:
+        //
+        //     table "a"   2^2 = 4 entries, 2 columns, read by one 2^4 AIR
+        //     table "b"   2^3 = 8 entries, 1 column,  read by two 2^3 AIRs
+        //
+        //     leaves           4 + 16 + 8 + 8 + 8 = 44      summed
+        //     column claims    2 + 1 = 3                    summed
+        //     readers/table    max(1, 2) = 2                extreme
+        //     reader variables max(4, 3, 3) = 4             extreme
+        //     table variables  max(2, 3) = 3                extreme
+        let first = Declaring::bare(4).reading("a", 3, vec![1, 2]);
+        let table_a = Declaring::bare(2).providing("a", vec![0, 1]);
+        let second = Declaring::bare(2).reading("b", 1, vec![0]);
+        let third = Declaring::bare(2).reading("b", 1, vec![0]);
+        let table_b = Declaring::bare(1).providing("b", vec![0]);
+
+        let plan = plan(
+            &[&first, &table_a, &second, &third, &table_b],
+            &[4, 2, 3, 3, 3],
+        )
+        .expect("the batch describes a reduction")
+        .expect("some AIR declares an indexed lookup");
+        let params = plan.security_params();
+
+        assert_eq!(params.num_leaves, 4 + 16 + 8 + 8 + 8);
+        assert_eq!(params.num_column_claims, 3);
+        assert_eq!(params.max_readers_per_table, 2);
+        assert_eq!(params.max_reader_variables, 4);
+        assert_eq!(params.max_table_variables, 3);
+    }
 }
