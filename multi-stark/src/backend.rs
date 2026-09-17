@@ -15,12 +15,15 @@
 //! The transcript and the proof therefore do not depend on the backend.
 
 use alloc::vec::Vec;
+use core::marker::PhantomData;
 
-use p3_field::{ExtensionField, Field};
+use p3_air::Air;
+use p3_field::{ExtensionField, Field, HasSubfield};
 use p3_multilinear_util::poly::Poly;
 
-use crate::folder::ProverAir;
+use crate::folder::{MultilinearFolder, ProverAir};
 use crate::rounds::{AirOpenings, RoundStateBase, RoundStateExt};
+use crate::subfield::{SubfieldAcc, SubfieldVar};
 
 // The trait lives in a private module, so no caller outside this crate can name or call it.
 mod private {
@@ -120,4 +123,64 @@ where
     EF: ExtensionField<F>,
     T: private::Dispatch<F, EF, A>,
 {
+}
+
+/// The backend that evaluates a stage's first round inside the small subfield `S` when it fits.
+///
+/// ```text
+///     round 0, stage fits S : expressions in S, alpha-batched over the challenge field
+///     round 0, otherwise    : as GenericBackend
+///     later rounds          : as GenericBackend
+/// ```
+///
+/// A stage fits `S` when all of these hold:
+///
+/// - no AIR in it declares a lookup;
+/// - the challenge field embeds `S` the way the trace field does;
+/// - the steps between its first-round interpolation nodes lie in `S`;
+/// - its public values lie in `S`;
+/// - its main, preprocessed, and periodic cells lie in `S`.
+///
+/// An AIR constant outside `S` shows up while the round runs, and the round is then recomputed
+/// by the generic kernel. Every fallback emits a `debug` tracing event naming its reason.
+///
+/// Every round polynomial is the one [`GenericBackend`] computes, so the proof is the same.
+#[derive(Debug)]
+pub struct SubfieldBackend<S>(PhantomData<fn() -> S>);
+
+// The sealed kernels take the crate-private round states.
+#[expect(private_interfaces)]
+impl<F, EF, A, S> private::Dispatch<F, EF, A> for SubfieldBackend<S>
+where
+    S: Field,
+    F: HasSubfield<S>,
+    EF: ExtensionField<F> + HasSubfield<S>,
+    A: ProverAir<F, EF>
+        + for<'a> Air<MultilinearFolder<'a, F, SubfieldVar<F, S>, SubfieldAcc<EF, S>>>,
+    EF::ExtensionPacking: From<EF> + From<F::Packing>,
+{
+    fn round0(state: &mut RoundStateBase<'_, '_, A, F, EF>, eq_suffix: &Poly<EF>) -> Vec<EF> {
+        state
+            .round_poly_subfield::<S>(eq_suffix)
+            .unwrap_or_else(|| state.round_poly(eq_suffix))
+    }
+
+    fn fold0<'air, 'data>(
+        state: RoundStateBase<'air, 'data, A, F, EF>,
+        r: EF,
+    ) -> RoundStateExt<'air, 'data, A, F, EF> {
+        <GenericBackend as private::Dispatch<F, EF, A>>::fold0(state, r)
+    }
+
+    fn round(state: &mut RoundStateExt<'_, '_, A, F, EF>, eq_suffix: &Poly<EF>) -> Vec<EF> {
+        <GenericBackend as private::Dispatch<F, EF, A>>::round(state, eq_suffix)
+    }
+
+    fn fold(state: &mut RoundStateExt<'_, '_, A, F, EF>, r: EF) {
+        <GenericBackend as private::Dispatch<F, EF, A>>::fold(state, r);
+    }
+
+    fn openings(state: RoundStateExt<'_, '_, A, F, EF>) -> Vec<(usize, AirOpenings<EF>)> {
+        <GenericBackend as private::Dispatch<F, EF, A>>::openings(state)
+    }
 }

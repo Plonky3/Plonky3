@@ -37,7 +37,7 @@ pub mod transcript;
 pub mod verifier;
 pub mod zerocheck;
 
-pub use backend::{GenericBackend, ZerocheckBackend};
+pub use backend::{GenericBackend, SubfieldBackend, ZerocheckBackend};
 pub use instance::{ProverInstance, ProverInstances, VerifierInstance, VerifierInstances};
 pub use keys::{ProvingKey, VerifyingKey, setup};
 pub use p3_air::BoundaryIoError;

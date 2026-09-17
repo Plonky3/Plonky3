@@ -10,6 +10,8 @@
 //! The generic-degree sumcheck proves that sum.
 //! A zerocheck always claims zero, so the verifier rejects any proof that claims a different sum.
 
+#[cfg(test)]
+pub(crate) mod backend_tests;
 pub mod transcript;
 
 use alloc::collections::{BTreeMap, BTreeSet};

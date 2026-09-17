@@ -1,0 +1,584 @@
+//! Every zerocheck backend must emit the generic backend's transcript, byte for byte.
+//!
+//! The fixtures run over `BinaryField128` with bit-valued traces, where the subfield backend
+//! evaluates the first round of a stage inside `GF(4)`. Each way a stage can fail to fit gets
+//! its own fixture.
+
+use alloc::borrow::Cow;
+use alloc::collections::BTreeMap;
+use alloc::vec;
+use alloc::vec::Vec;
+
+use p3_air::{Air, AirBuilder, BaseAir, BoundaryEnd, BoundaryPublic, WindowAccess};
+use p3_binary_field::{BinaryChallenger, BinaryField2, BinaryField128, TowerLevel};
+use p3_challenger::{
+    CanObserve, CanSample, CanSampleBits, FieldChallenger, GrindingChallenger, HashChallenger,
+};
+use p3_field::PrimeCharacteristicRing;
+use p3_keccak::Keccak256Hash;
+use p3_lookup::{Count, InteractionBuilder};
+use p3_matrix::dense::RowMajorMatrix;
+use p3_multilinear_util::point::Point;
+use p3_sumcheck::layout::Table;
+use rand::rngs::SmallRng;
+use rand::{RngExt, SeedableRng};
+
+use super::AirZerocheck;
+use crate::backend::{GenericBackend, SubfieldBackend, ZerocheckBackend};
+use crate::lookup::{
+    ActiveLookupRuntime, AirLinkClaim, AirLinkInstance, AirLinkLookup, LookupRuntime,
+};
+
+/// The trace and challenge field of every fixture.
+pub(crate) type Tower = BinaryField128;
+
+/// The subfield the subfield backend evaluates in.
+pub(crate) type Gf4 = BinaryField2;
+
+type Binary = BinaryChallenger<Tower, HashChallenger<u8, Keccak256Hash, 32>>;
+
+/// A transcript whose grinding returns the first valid witness in a fixed order.
+///
+/// A parallel search returns whichever valid witness a worker finds first.
+/// Two runs could then bind different witnesses, and their transcripts differ for that reason
+/// alone.
+#[derive(Clone)]
+struct Challenger(Binary);
+
+fn challenger() -> Challenger {
+    Challenger(Binary::from_hasher(
+        b"p3-multi-stark-backend-agreement".to_vec(),
+        Keccak256Hash,
+    ))
+}
+
+impl CanObserve<Tower> for Challenger {
+    fn observe(&mut self, value: Tower) {
+        self.0.observe(value);
+    }
+}
+
+impl CanSample<Tower> for Challenger {
+    fn sample(&mut self) -> Tower {
+        self.0.sample()
+    }
+}
+
+impl CanSampleBits<usize> for Challenger {
+    fn sample_bits(&mut self, bits: usize) -> usize {
+        self.0.sample_bits(bits)
+    }
+}
+
+impl FieldChallenger<Tower> for Challenger {}
+
+impl GrindingChallenger for Challenger {
+    type Witness = Tower;
+
+    fn grind(&mut self, bits: usize) -> Tower {
+        let witness = (0..)
+            .map(Tower::from_repr)
+            .find(|&witness| self.0.clone().check_witness(bits, witness))
+            .expect("some witness passes");
+        assert!(self.check_witness(bits, witness));
+        witness
+    }
+}
+
+/// The `GF(4)` element inside the tower whose bit pattern is the low two bits of `bits`.
+pub(crate) fn gf4(bits: usize) -> Tower {
+    Tower::from_repr((bits & 3) as u128)
+}
+
+/// The first bit pattern above `GF(4)`, the smallest element the subfield cannot hold.
+pub(crate) fn outside() -> Tower {
+    Tower::from_repr(4)
+}
+
+/// The one cell the gate AIR binds to a public value.
+const GATE_CELLS: [BoundaryPublic; 1] = [BoundaryPublic::new(0, BoundaryEnd::First, 0)];
+
+/// Period of the gate AIR's periodic column.
+const GATE_PERIOD: usize = 4;
+
+/// Small AIRs over the tower, one per shape the subfield backend treats differently.
+pub(crate) enum FixtureAir {
+    /// Bit-valued degree-three AIR reading every column group, a public value, and a constant.
+    ///
+    /// Main columns `a, b, c, e`, preprocessed column `q`, periodic column
+    /// `p = [0, 1, X_0, X_0 + 1]`:
+    ///
+    /// ```text
+    ///     always     : scale * (a^2 - a) = 0
+    ///     transition : next.c = a * q
+    ///     transition : next.q = q + 1
+    ///     always     : e = p * a * b
+    ///     last row   : c = public[1]
+    ///     pin        : first row, a = public[0]
+    /// ```
+    ///
+    /// Booleanity holds whatever `scale` is, so an honest trace satisfies every scale.
+    Gate {
+        /// Constant multiplying the booleanity constraint.
+        scale: Tower,
+    },
+    /// Bit-valued degree-two AIR reading no successor column.
+    ///
+    /// ```text
+    ///     always : s = a * b
+    /// ```
+    Pair,
+    /// Bit-valued AIR whose transition has degree four.
+    ///
+    /// ```text
+    ///     always     : a, b, c are bits
+    ///     transition : next.d = a * b * c
+    /// ```
+    ///
+    /// Its first round reaches node four, one step past the nodes inside `GF(4)`.
+    Quartic,
+    /// Bit-valued degree-three AIR scaling booleanity by a periodic column of period two.
+    ///
+    /// ```text
+    ///     always : p * (a^2 - a) = 0
+    /// ```
+    ///
+    /// Booleanity holds whatever `p` is, so the trace stays bit-valued for every period vector.
+    Periodic {
+        /// The period vector of `p`.
+        period: [Tower; 2],
+    },
+    /// Bit-valued AIR declaring one local lookup beside one ordinary constraint.
+    ///
+    /// ```text
+    ///     always : a is a bit
+    ///     lookup : a requested once, b provided once
+    /// ```
+    Link,
+}
+
+impl BaseAir<Tower> for FixtureAir {
+    fn width(&self) -> usize {
+        match self {
+            Self::Gate { .. } | Self::Quartic => 4,
+            Self::Pair => 3,
+            Self::Link => 2,
+            Self::Periodic { .. } => 1,
+        }
+    }
+
+    fn preprocessed_width(&self) -> usize {
+        match self {
+            Self::Gate { .. } => 1,
+            _ => 0,
+        }
+    }
+
+    fn num_public_values(&self) -> usize {
+        match self {
+            Self::Gate { .. } => 2,
+            _ => 0,
+        }
+    }
+
+    fn num_periodic_columns(&self) -> usize {
+        match self {
+            Self::Gate { .. } | Self::Periodic { .. } => 1,
+            _ => 0,
+        }
+    }
+
+    fn periodic_columns(&self) -> Cow<'_, [Vec<Tower>]> {
+        match self {
+            Self::Gate { .. } => Cow::Owned(vec![(0..GATE_PERIOD).map(gf4).collect()]),
+            Self::Periodic { period } => Cow::Owned(vec![period.to_vec()]),
+            _ => Cow::Owned(vec![]),
+        }
+    }
+
+    fn main_next_row_columns(&self) -> Vec<usize> {
+        match self {
+            Self::Gate { .. } => vec![2],
+            Self::Quartic => vec![3],
+            Self::Pair | Self::Link | Self::Periodic { .. } => vec![],
+        }
+    }
+
+    fn preprocessed_next_row_columns(&self) -> Vec<usize> {
+        match self {
+            Self::Gate { .. } => vec![0],
+            _ => vec![],
+        }
+    }
+
+    fn public_boundary_io(&self) -> &[BoundaryPublic] {
+        match self {
+            Self::Gate { .. } => &GATE_CELLS,
+            _ => &[],
+        }
+    }
+}
+
+impl<AB: AirBuilder<F = Tower> + InteractionBuilder> Air<AB> for FixtureAir {
+    fn eval(&self, builder: &mut AB) {
+        let main = builder.main();
+        let (local, next) = (main.current_slice(), main.next_slice());
+        match self {
+            Self::Gate { scale } => {
+                let (a, b, c, e) = (local[0], local[1], local[2], local[3]);
+                let preprocessed = builder.preprocessed();
+                let (q, next_q) = (
+                    preprocessed.current_slice()[0],
+                    preprocessed.next_slice()[0],
+                );
+                let p: AB::Expr = builder.periodic_values()[0].into();
+                let last_c = builder.public_values()[1];
+
+                let a_expr: AB::Expr = a.into();
+                builder.assert_zero(a_expr.bool_check() * *scale);
+                builder.when_transition().assert_eq(next[2], a * q);
+                builder
+                    .when_transition()
+                    .assert_eq(next_q, q + AB::Expr::ONE);
+                builder.assert_eq(e, p * a * b);
+                builder.when_last_row().assert_eq(c, last_c);
+            }
+            Self::Pair => {
+                builder.assert_eq(local[2], local[0] * local[1]);
+            }
+            Self::Quartic => {
+                let (a, b, c) = (local[0], local[1], local[2]);
+                builder.assert_bool(a);
+                builder.assert_bool(b);
+                builder.assert_bool(c);
+                builder.when_transition().assert_eq(next[3], a * b * c);
+            }
+            Self::Periodic { .. } => {
+                let p: AB::Expr = builder.periodic_values()[0].into();
+                let a: AB::Expr = local[0].into();
+                builder.assert_zero(p * a.bool_check());
+            }
+            Self::Link => {
+                let (a, b) = (local[0], local[1]);
+                builder.assert_bool(a);
+                builder.push_local_interaction([
+                    (vec![a.into()], Count::bounded(AB::Expr::ONE, 1)),
+                    (vec![b.into()], Count::provided(AB::Expr::ONE)),
+                ]);
+            }
+        }
+    }
+}
+
+/// One AIR of a batch with its trace, in row-major form so a test can overwrite a cell.
+pub(crate) struct Instance {
+    pub(crate) air: FixtureAir,
+    /// Main trace, one row per trace row.
+    pub(crate) main: RowMajorMatrix<Tower>,
+    /// Preprocessed trace, present exactly when the AIR declares preprocessed columns.
+    pub(crate) preprocessed: Option<RowMajorMatrix<Tower>>,
+    pub(crate) public_values: Vec<Tower>,
+}
+
+impl Instance {
+    /// An instance of `air` over `height` rows that satisfies every constraint.
+    pub(crate) fn honest(air: FixtureAir, height: usize, seed: u64) -> Self {
+        let mut rng = SmallRng::seed_from_u64(seed);
+        let mut bit = || Tower::from_bool(rng.random());
+        let (main, preprocessed, public_values) = match air {
+            FixtureAir::Gate { .. } => {
+                let q = (0..height)
+                    .map(|row| Tower::from_bool(row % 2 == 1))
+                    .collect::<Vec<_>>();
+                let mut values = Vec::with_capacity(4 * height);
+                let mut c = bit();
+                for (row, &q) in q.iter().enumerate() {
+                    let (a, b) = (bit(), bit());
+                    values.extend([a, b, c, gf4(row % GATE_PERIOD) * a * b]);
+                    c = a * q;
+                }
+                let public_values = vec![values[0], values[4 * height - 2]];
+                (
+                    RowMajorMatrix::new(values, 4),
+                    Some(RowMajorMatrix::new(q, 1)),
+                    public_values,
+                )
+            }
+            FixtureAir::Pair => {
+                let values = (0..height)
+                    .flat_map(|_| {
+                        let (a, b) = (bit(), bit());
+                        [a, b, a * b]
+                    })
+                    .collect();
+                (RowMajorMatrix::new(values, 3), None, vec![])
+            }
+            FixtureAir::Quartic => {
+                let mut values = Vec::with_capacity(4 * height);
+                let mut d = bit();
+                for _ in 0..height {
+                    let (a, b, c) = (bit(), bit(), bit());
+                    values.extend([a, b, c, d]);
+                    d = a * b * c;
+                }
+                (RowMajorMatrix::new(values, 4), None, vec![])
+            }
+            FixtureAir::Link => {
+                let values = (0..2 * height).map(|_| bit()).collect();
+                (RowMajorMatrix::new(values, 2), None, vec![])
+            }
+            FixtureAir::Periodic { .. } => {
+                let values = (0..height).map(|_| bit()).collect();
+                (RowMajorMatrix::new(values, 1), None, vec![])
+            }
+        };
+        Self {
+            air,
+            main,
+            preprocessed,
+            public_values,
+        }
+    }
+
+    /// The main trace laid out for the sumcheck, one polynomial per column.
+    pub(crate) fn main_table(&self) -> Table<Tower> {
+        Table::new(self.main.clone().transpose())
+    }
+
+    /// The preprocessed trace laid out for the sumcheck, if the AIR declares one.
+    pub(crate) fn preprocessed_table(&self) -> Option<Table<Tower>> {
+        self.preprocessed
+            .as_ref()
+            .map(|trace| Table::new(trace.clone().transpose()))
+    }
+}
+
+/// Lookup-reduction output for one lookup AIR, with random coefficients and claim.
+///
+/// The zerocheck prover never checks it against the trace.
+/// Backends can only be compared on it, not verified.
+pub(crate) fn link_runtime(
+    air_index: usize,
+    num_variables: usize,
+    seed: u64,
+) -> LookupRuntime<Tower> {
+    let mut rng = SmallRng::seed_from_u64(seed);
+    let claim = rng.random();
+    let link = AirLinkInstance {
+        num_local_lookups: 1,
+        lookups: vec![AirLinkLookup {
+            theta_bus_offset: rng.random(),
+            block_weights: vec![rng.random(), rng.random()],
+        }],
+    };
+    LookupRuntime::Active(ActiveLookupRuntime {
+        claims_by_air: BTreeMap::from([(air_index, claim)]),
+        air_link: AirLinkClaim {
+            point: Point::rand(&mut rng, num_variables),
+            claimed_sum: claim,
+            theta_beta_powers: vec![rng.random()],
+            links_by_air: BTreeMap::from([(air_index, link)]),
+        },
+    })
+}
+
+/// Prove the batch through backend `B` and return its transcript.
+///
+/// The transcript is the serialized sumcheck proof, openings, and point, followed by the next
+/// challenge the challenger draws.
+fn transcript<B>(
+    instances: &[Instance],
+    lookup: LookupRuntime<Tower>,
+    pow_bits: usize,
+) -> (Vec<u8>, Tower)
+where
+    B: ZerocheckBackend<Tower, Tower, FixtureAir>,
+{
+    let airs = instances
+        .iter()
+        .map(|instance| &instance.air)
+        .collect::<Vec<_>>();
+    let main = instances
+        .iter()
+        .map(Instance::main_table)
+        .collect::<Vec<_>>();
+    let preprocessed = instances
+        .iter()
+        .map(Instance::preprocessed_table)
+        .collect::<Vec<_>>();
+    let public_values = instances
+        .iter()
+        .map(|instance| instance.public_values.as_slice())
+        .collect::<Vec<_>>();
+
+    let mut challenger = challenger();
+    let (proof, point) = AirZerocheck::new(&airs, pow_bits)
+        .prove_with_lookup::<Tower, Tower, B, _>(
+            &preprocessed.iter().map(Option::as_ref).collect::<Vec<_>>(),
+            &main.iter().collect::<Vec<_>>(),
+            &public_values,
+            lookup,
+            &mut challenger,
+        );
+    let bytes = postcard::to_allocvec(&(
+        &proof.sumcheck,
+        &proof.local,
+        &proof.next,
+        &proof.preprocessed_local,
+        &proof.preprocessed_next,
+        point.as_slice(),
+    ))
+    .expect("postcard serialization must not fail");
+    (bytes, CanSample::<Tower>::sample(&mut challenger))
+}
+
+/// Require the subfield backend to emit the generic backend's transcript on this batch.
+fn assert_backends_agree(
+    instances: &[Instance],
+    lookup: impl Fn() -> LookupRuntime<Tower>,
+    pow_bits: usize,
+) {
+    let generic = transcript::<GenericBackend>(instances, lookup(), pow_bits);
+    let subfield = transcript::<SubfieldBackend<Gf4>>(instances, lookup(), pow_bits);
+    assert_eq!(subfield, generic);
+}
+
+#[test]
+fn honest_gate_fixture_verifies() {
+    // The transcripts below are compared on real round polynomials, not on a rejected statement.
+    let instance = Instance::honest(FixtureAir::Gate { scale: Tower::ONE }, 32, 1);
+    let airs = [&instance.air];
+    let zerocheck = AirZerocheck::new(&airs, 0);
+    let (main, preprocessed) = (instance.main_table(), instance.preprocessed_table());
+    let (proof, point) = zerocheck.prove::<Tower, Tower, _>(
+        &[preprocessed.as_ref()],
+        &[&main],
+        &[&instance.public_values],
+        &mut challenger(),
+    );
+    let verified = zerocheck
+        .verify::<Tower, Tower, _>(&proof, &[5], &[&instance.public_values], &mut challenger())
+        .expect("honest gate proof must verify");
+    assert_eq!(verified, point);
+}
+
+#[test]
+fn backends_agree_on_a_bit_valued_degree_three_air() {
+    for height in [4, 32] {
+        let instances = [Instance::honest(
+            FixtureAir::Gate { scale: Tower::ONE },
+            height,
+            1,
+        )];
+        assert_backends_agree(&instances, || LookupRuntime::Inactive, 0);
+    }
+}
+
+#[test]
+fn backends_agree_with_grinding() {
+    let instances = [Instance::honest(FixtureAir::Gate { scale: gf4(2) }, 16, 2)];
+    assert_backends_agree(&instances, || LookupRuntime::Inactive, 2);
+}
+
+#[test]
+fn backends_agree_across_two_stages() {
+    // Fixture state:
+    //
+    //     stage 64 rows : gate (degree 3) and pair (degree 2), activating in round 0
+    //     stage  8 rows : gate, activating three rounds later
+    let instances = [
+        Instance::honest(FixtureAir::Gate { scale: Tower::ONE }, 64, 3),
+        Instance::honest(FixtureAir::Pair, 64, 4),
+        Instance::honest(FixtureAir::Gate { scale: gf4(3) }, 8, 5),
+    ];
+    assert_backends_agree(&instances, || LookupRuntime::Inactive, 0);
+}
+
+#[test]
+fn backends_agree_when_a_lookup_stage_falls_back() {
+    // Fixture state:
+    //
+    //     stage 32 rows : gate, which fits GF(4)
+    //     stage 16 rows : pair and a lookup AIR, which falls back as a whole
+    let instances = [
+        Instance::honest(FixtureAir::Gate { scale: Tower::ONE }, 32, 6),
+        Instance::honest(FixtureAir::Pair, 16, 7),
+        Instance::honest(FixtureAir::Link, 16, 8),
+    ];
+    assert_backends_agree(&instances, || link_runtime(2, 5, 9), 0);
+}
+
+#[test]
+fn backends_agree_when_a_cell_lies_outside_the_subfield() {
+    let mut instance = Instance::honest(FixtureAir::Gate { scale: Tower::ONE }, 16, 10);
+    // Column e of row 5.
+    instance.main.values[4 * 5 + 3] = outside();
+    assert_backends_agree(&[instance], || LookupRuntime::Inactive, 0);
+}
+
+#[test]
+fn backends_agree_when_a_preprocessed_cell_lies_outside_the_subfield() {
+    let mut instance = Instance::honest(FixtureAir::Gate { scale: Tower::ONE }, 16, 14);
+    instance
+        .preprocessed
+        .as_mut()
+        .expect("the gate AIR declares a preprocessed column")
+        .values[5] = outside();
+    assert_backends_agree(&[instance], || LookupRuntime::Inactive, 0);
+}
+
+#[test]
+fn backends_agree_when_a_periodic_value_lies_outside_the_subfield() {
+    let instances = [Instance::honest(
+        FixtureAir::Periodic {
+            period: [gf4(2), outside()],
+        },
+        16,
+        15,
+    )];
+    assert_backends_agree(&instances, || LookupRuntime::Inactive, 0);
+}
+
+#[test]
+fn backends_agree_when_an_air_constant_lies_outside_the_subfield() {
+    let instances = [Instance::honest(
+        FixtureAir::Gate {
+            scale: Tower::from_repr(5),
+        },
+        16,
+        11,
+    )];
+    assert_backends_agree(&instances, || LookupRuntime::Inactive, 0);
+}
+
+#[test]
+fn backends_agree_when_a_public_value_lies_outside_the_subfield() {
+    let mut instance = Instance::honest(FixtureAir::Gate { scale: Tower::ONE }, 16, 12);
+    instance.public_values[1] = outside();
+    assert_backends_agree(&[instance], || LookupRuntime::Inactive, 0);
+}
+
+#[test]
+fn backends_agree_when_an_interpolation_step_lies_outside_the_subfield() {
+    let instances = [Instance::honest(FixtureAir::Quartic, 16, 13)];
+    assert_backends_agree(&instances, || LookupRuntime::Inactive, 0);
+}
+
+/// Degrees the symbolic pass sees, so a fixture cannot drift from the shape its test names.
+#[test]
+fn fixture_degrees_are_the_named_ones() {
+    let degree = |air: &FixtureAir| {
+        super::get_air_profile::<Tower, Tower, _>(air)
+            .degrees
+            .constraints
+    };
+    assert_eq!(degree(&FixtureAir::Gate { scale: Tower::ONE }), 3);
+    assert_eq!(degree(&FixtureAir::Pair), 2);
+    assert_eq!(degree(&FixtureAir::Quartic), 4);
+    let periodic = FixtureAir::Periodic {
+        period: [gf4(2), gf4(3)],
+    };
+    assert_eq!(degree(&periodic), 3);
+    let link = super::get_air_profile::<Tower, Tower, _>(&FixtureAir::Link).degrees;
+    assert!(link.interactions > 0);
+}
