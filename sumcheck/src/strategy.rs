@@ -5,6 +5,9 @@
 //! - `sumcheck_coefficients_{prefix,suffix}`: the two round-coefficient routines.
 //! - `VariableOrder`: tag enum carrying inherent methods that dispatch to either routine.
 //! - `SumcheckProver`: drives rounds over a paired product polynomial.
+//! - `ReprSumcheckProver`: drives the same rounds with the tables in an isomorphic field.
+
+mod repr;
 
 use alloc::vec::Vec;
 
@@ -14,6 +17,7 @@ use p3_field::{Algebra, ExtensionField, Field, PrimeCharacteristicRing, dot_prod
 use p3_maybe_rayon::prelude::*;
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::{Poly, PolyMaybePackedView};
+pub use repr::ReprSumcheckProver;
 
 use crate::constraints::{Constraint, Statements};
 use crate::product_polynomial::ProductPolynomial;

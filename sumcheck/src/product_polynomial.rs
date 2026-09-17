@@ -649,6 +649,23 @@ impl<F: Field, EF: ExtensionField<F>> ProductPolynomial<F, EF> {
         }
     }
 
+    /// Consumes the pair and returns its binding order, evaluations and weights as scalar tables.
+    ///
+    /// Scalar storage is moved out without a copy. Packed storage is unpacked.
+    pub(crate) fn into_scalar_tables(self) -> (VariableOrder, Poly<EF>, Poly<EF>) {
+        match self.inner {
+            MaybePacked::Packed { evals, weights } => {
+                // Each packed table is released once its scalar image exists.
+                let scalar_evals = evals.unpack();
+                drop(evals);
+                let scalar_weights = weights.unpack();
+                drop(weights);
+                (self.order, scalar_evals, scalar_weights)
+            }
+            MaybePacked::Unpacked { evals, weights } => (self.order, evals, weights),
+        }
+    }
+
     /// Incorporates new constraints into the weight polynomial.
     ///
     /// This is used when additional constraints need to be folded into the sumcheck

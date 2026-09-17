@@ -1,0 +1,289 @@
+//! Sumcheck rounds over tables held in a field isomorphic to the challenge field.
+
+use alloc::vec::Vec;
+use core::marker::PhantomData;
+
+use p3_challenger::fs::TranscriptField;
+use p3_challenger::{FieldChallenger, GrindingChallenger};
+use p3_field::{ExtensionField, Field};
+use p3_maybe_rayon::prelude::*;
+use p3_multilinear_util::point::Point;
+use p3_multilinear_util::poly::Poly;
+
+use super::{Basis, SumcheckProver};
+use crate::SumcheckData;
+use crate::product_polynomial::ProductPolynomial;
+use crate::transcript::{ProverTranscript, SumcheckShape};
+
+/// A [`SumcheckProver`] whose tables live in a field `R` isomorphic to its challenge field `EF`.
+///
+/// # Overview
+///
+/// Both tables, the running claim and a held challenge are all elements of `R`.
+/// Only the transcript sees `EF`:
+///
+/// ```text
+///     round message   measured in R, crosses into EF, then observed
+///     challenge       sampled in EF, crosses into R, then held
+/// ```
+///
+/// The transcript is therefore exactly the one the `EF` prover writes.
+/// What changes is the cost of each multiply inside a binding or measuring pass.
+///
+/// # Contract
+///
+/// `R::from` and `EF::from` must be mutually inverse field isomorphisms.
+/// A map that is not a ring homomorphism measures a different round message.
+///
+/// # Storage
+///
+/// Tables are held as scalars, whatever storage the source prover used.
+#[derive(Debug, Clone)]
+pub struct ReprSumcheckProver<F, EF, R: Field> {
+    /// The rounds, run entirely in `R`.
+    inner: SumcheckProver<R, R>,
+    /// The base and challenge fields the transcript is written over.
+    _transcript: PhantomData<(F, EF)>,
+}
+
+impl<F, EF, R> ReprSumcheckProver<F, EF, R>
+where
+    F: Field,
+    EF: ExtensionField<F> + From<R>,
+    R: Field + From<EF>,
+{
+    /// Moves a prover's tables, claim and held challenge into `R`.
+    ///
+    /// A held challenge crosses as it is, so the next measuring pass still absorbs it.
+    #[tracing::instrument(skip_all)]
+    pub fn new(prover: SumcheckProver<F, EF>) -> Self {
+        let SumcheckProver {
+            poly,
+            sum,
+            outstanding,
+        } = prover;
+        let (order, evals, weights) = poly.into_scalar_tables();
+
+        // One table at a time, so only one source and its image are resident together.
+        let evals = convert_table(evals);
+        let weights = convert_table(weights);
+
+        Self {
+            inner: SumcheckProver {
+                poly: ProductPolynomial::new_unpacked(order, evals, weights),
+                sum: R::from(sum),
+                outstanding: outstanding.map(R::from),
+            },
+            _transcript: PhantomData,
+        }
+    }
+
+    /// Returns the current claimed sum over the remaining unbound variables.
+    pub fn claimed_sum(&self) -> EF {
+        EF::from(self.inner.claimed_sum())
+    }
+
+    /// Returns the number of remaining (unbound) variables.
+    pub fn num_variables(&self) -> usize {
+        self.inner.num_variables()
+    }
+
+    /// Applies an outstanding binding, so the tables are current with the claim.
+    ///
+    /// See [`SumcheckProver::settle`].
+    pub fn settle(&mut self) {
+        self.inner.settle();
+    }
+
+    /// Runs `folding_factor` sumcheck rounds.
+    ///
+    /// Plays the same transcript as [`SumcheckProver::compute_sumcheck_polynomials`] without a
+    /// constraint, including the challenge left outstanding on return.
+    ///
+    /// # Returns
+    ///
+    /// The verifier challenges sampled during this batch.
+    ///
+    /// # Panics
+    ///
+    /// - Folding factor must not exceed the current number of remaining variables.
+    #[tracing::instrument(skip_all, level = "debug")]
+    pub fn compute_sumcheck_polynomials<Challenger>(
+        &mut self,
+        sumcheck_data: &mut SumcheckData<F, EF>,
+        challenger: &mut Challenger,
+        folding_factor: usize,
+        pow_bits: usize,
+    ) -> Point<EF>
+    where
+        F: TranscriptField,
+        Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
+    {
+        let mut challenges = Vec::with_capacity(folding_factor);
+
+        let shape = SumcheckShape::new(folding_factor, pow_bits, Basis::Evaluation);
+        let mut transcript = ProverTranscript::<Challenger, F, EF>::new(challenger, shape);
+
+        for _ in 0..folding_factor {
+            // Measure in R, absorbing whatever binding the last round left behind.
+            let (c_a, c_inf) = self.inner.measure_round();
+
+            // The transcript only ever sees the challenge field.
+            let r =
+                sumcheck_data.observe_and_sample(&mut transcript, EF::from(c_a), EF::from(c_inf));
+            let r_repr = R::from(r);
+            debug_assert_eq!(EF::from(r_repr), r);
+
+            // The round identity is a polynomial in its inputs, so it commutes with the isomorphism.
+            self.inner.sum = Basis::Evaluation.reduce_claim(c_a, c_inf, r_repr, self.inner.sum);
+
+            challenges.push(r);
+            self.inner.hold(r_repr);
+        }
+
+        // Require that every described step was played.
+        transcript.finish();
+
+        Point::new(challenges)
+    }
+}
+
+/// Maps every entry of a table into another field, releasing the source once the image is built.
+fn convert_table<A, B>(table: Poly<A>) -> Poly<B>
+where
+    A: Copy + Send + Sync,
+    B: From<A> + Send,
+{
+    let image = Poly::new(table.as_slice().par_iter().map(|&x| B::from(x)).collect());
+    drop(table);
+    image
+}
+
+#[cfg(test)]
+mod tests {
+    use alloc::vec::Vec;
+
+    use p3_binary_field::{BinaryChallenger, BinaryField128, Ghash128};
+    use p3_challenger::{CanSample, HashChallenger};
+    use p3_keccak::Keccak256Hash;
+    use p3_multilinear_util::poly::Poly;
+    use rand::rngs::SmallRng;
+    use rand::{RngExt, SeedableRng};
+
+    use super::ReprSumcheckProver;
+    use crate::SumcheckData;
+    use crate::product_polynomial::ProductPolynomial;
+    use crate::strategy::{SumcheckProver, VariableOrder};
+
+    type F = BinaryField128;
+    type Ch = BinaryChallenger<F, HashChallenger<u8, Keccak256Hash, 32>>;
+
+    fn fresh_challenger() -> Ch {
+        Ch::from_hasher(Vec::new(), Keccak256Hash)
+    }
+
+    /// A prover over random tables, stored packed for prefix binding and scalar for suffix.
+    fn random_prover(
+        order: VariableOrder,
+        num_variables: usize,
+        seed: u64,
+    ) -> SumcheckProver<F, F> {
+        let mut rng = SmallRng::seed_from_u64(seed);
+        let evals: Vec<F> = (0..1 << num_variables).map(|_| rng.random()).collect();
+        let weights: Vec<F> = (0..1 << num_variables).map(|_| rng.random()).collect();
+        let poly = match order {
+            VariableOrder::Prefix => {
+                ProductPolynomial::new_packed(order, Poly::new(evals), Poly::new(weights))
+            }
+            VariableOrder::Suffix => {
+                ProductPolynomial::new_unpacked(order, Poly::new(evals), Poly::new(weights))
+            }
+        };
+        let sum = poly.dot_product();
+        SumcheckProver::new(poly, sum)
+    }
+
+    #[test]
+    fn repr_rounds_play_the_challenge_field_transcript() {
+        // Batches mix single rounds, which fuse across calls, with a settle and a longer batch.
+        let batches = [1, 2, 1, 3, 1, 1];
+        let num_variables: usize = batches.iter().sum();
+
+        for order in [VariableOrder::Prefix, VariableOrder::Suffix] {
+            for pow_bits in [0, 3] {
+                // Rounds the challenge-field prover plays before handing over.
+                for split in 0..3 {
+                    let mut reference = random_prover(order, num_variables, 7);
+                    let mut reference_data = SumcheckData::default();
+                    let mut reference_challenger = fresh_challenger();
+
+                    let mut handoff = random_prover(order, num_variables, 7);
+                    let mut handoff_data = SumcheckData::default();
+                    let mut handoff_challenger = fresh_challenger();
+
+                    // The batch sizes are part of the transcript, so the head replays them.
+                    //
+                    // A handoff after any batch carries that batch's last challenge across.
+                    for &rounds in &batches[..split] {
+                        handoff.compute_sumcheck_polynomials(
+                            &mut handoff_data,
+                            &mut handoff_challenger,
+                            rounds,
+                            pow_bits,
+                            None,
+                        );
+                    }
+                    let head = batches[..split].iter().sum::<usize>();
+                    let mut repr = ReprSumcheckProver::<F, F, Ghash128>::new(handoff);
+
+                    let mut played = 0;
+                    for (batch, &rounds) in batches.iter().enumerate() {
+                        let expected = reference.compute_sumcheck_polynomials(
+                            &mut reference_data,
+                            &mut reference_challenger,
+                            rounds,
+                            pow_bits,
+                            None,
+                        );
+                        played += rounds;
+                        if batch == 3 {
+                            reference.settle();
+                        }
+                        if played <= head {
+                            continue;
+                        }
+
+                        let got = repr.compute_sumcheck_polynomials(
+                            &mut handoff_data,
+                            &mut handoff_challenger,
+                            rounds,
+                            pow_bits,
+                        );
+                        if batch == 3 {
+                            repr.settle();
+                        }
+
+                        assert_eq!(got, expected, "{order:?} pow {pow_bits} split {split}");
+                        assert_eq!(repr.claimed_sum(), reference.claimed_sum());
+                        assert_eq!(repr.num_variables(), reference.num_variables());
+                    }
+
+                    assert_eq!(
+                        handoff_data.polynomial_evaluations,
+                        reference_data.polynomial_evaluations
+                    );
+                    assert_eq!(handoff_data.pow_witnesses, reference_data.pow_witnesses);
+                    assert_eq!(
+                        CanSample::<F>::sample(&mut handoff_challenger),
+                        CanSample::<F>::sample(&mut reference_challenger)
+                    );
+
+                    // The final binding lands on the claim in both fields.
+                    reference.settle();
+                    repr.settle();
+                    assert_eq!(repr.claimed_sum(), reference.claimed_sum());
+                }
+            }
+        }
+    }
+}
