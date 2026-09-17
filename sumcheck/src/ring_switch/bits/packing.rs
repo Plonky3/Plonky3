@@ -88,6 +88,28 @@ impl<EF: TowerLevel> BitPacking<EF> {
         })
     }
 
+    /// Read an already-packed multilinear as a bit witness, sweeping no byte twice.
+    ///
+    /// The packing is a bijection, so nothing needs checking beyond the shape.
+    ///
+    /// # Errors
+    ///
+    /// - The level's elements are narrower than the byte its stride reads.
+    /// - The element count is no power of two, so the packing covers no hypercube.
+    pub fn from_packed(packed: Poly<EF>) -> Result<Self, BitPackingError> {
+        if 8 * EF::NUM_BYTES != Coefficients::<EF>::DIMENSION {
+            return Err(BitPackingError::SubByteLevel {
+                bits: Coefficients::<EF>::DIMENSION,
+            });
+        }
+        if !packed.num_evals().is_power_of_two() {
+            return Err(BitPackingError::NotAHypercube {
+                cells: packed.num_evals() * Coefficients::<EF>::DIMENSION,
+            });
+        }
+        Ok(Self { packed })
+    }
+
     /// The multilinear a commitment holds.
     pub const fn poly(&self) -> &Poly<EF> {
         &self.packed

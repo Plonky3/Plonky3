@@ -97,6 +97,14 @@ impl<F: EncodableLevel, EF, MT, MX> BinaryPcs<F, EF, MT, MX> {
             _challenge: PhantomData,
         }
     }
+
+    /// Variables of the committed stacked polynomial.
+    ///
+    /// The same number the commitment trait reports, reachable without naming a challenger.
+    #[must_use]
+    pub const fn num_variables(&self) -> usize {
+        self.config.num_variables()
+    }
 }
 
 impl<F, EF, MT, MX> BinaryPcs<F, EF, MT, MX>

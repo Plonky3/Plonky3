@@ -5,6 +5,7 @@ extern crate alloc;
 
 use p3_sumcheck::layout::SuffixProver;
 
+mod boolean;
 mod error;
 mod fold;
 mod grouped_mmcs;
@@ -20,6 +21,7 @@ pub(crate) mod test_util;
 pub mod transcript;
 mod verifier;
 
+pub use boolean::{BooleanMultilinearPcs, BooleanPcs, BooleanPcsError, BooleanProof};
 pub use error::BinaryPcsError;
 pub use fold::{FoldAlphabet, fold_codeword, fold_pair};
 pub use grouped_mmcs::GroupedCodewordMmcs;

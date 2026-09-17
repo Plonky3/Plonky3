@@ -52,3 +52,7 @@ workspace = true
 [[bench]]
 name = "packing"
 harness = false
+
+[[bench]]
+name = "boolean"
+harness = false
