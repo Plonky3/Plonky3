@@ -84,6 +84,26 @@ use crate::prover::BinaryPcsProverData;
 ///
 /// The committed object is a bit witness.
 /// An opening answers for its multilinear extension at a point of the challenge field.
+///
+/// # What a proving system needs first
+///
+/// Two things, neither of them in this crate.
+///
+/// The batched prover lends its trace back as a borrowed table of field elements.
+///
+/// A bit witness has none to lend.
+///
+/// Building one unpacks every cell, which gives back the space this scheme saves.
+///
+/// So that borrow has to carry packed blocks instead.
+///
+/// The other is that constraints run at full speed only if the base field packs bit-sliced.
+///
+/// The packing trait forbids it, casting a packed value to an array of scalars unchanged.
+///
+/// Bit-slicing is a compression, not a reinterpretation.
+///
+/// Until both are settled, an integration gives the saving back or runs one bit at a time.
 pub trait BooleanMultilinearPcs<EF, Challenger> {
     /// Succinct binding commitment sent to the verifier.
     type Commitment;
