@@ -34,6 +34,7 @@ mod lanes;
 mod lch;
 mod naive;
 mod poly;
+mod subfield;
 #[cfg(test)]
 pub(crate) mod test_util;
 mod tower;
@@ -45,4 +46,5 @@ pub use encoder::*;
 pub use lch::*;
 pub use naive::*;
 pub use poly::*;
+pub use subfield::*;
 pub use traits::*;

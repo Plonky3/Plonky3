@@ -7,9 +7,11 @@ use criterion::{
     BatchSize, BenchmarkGroup, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main,
 };
 use p3_baby_bear::BabyBear;
-use p3_binary_dft::{AdditiveNtt, AdditiveRsEncoder, ButterflyField, LchNtt, PolyBasisNtt};
+use p3_binary_dft::{
+    AdditiveNtt, AdditiveRsEncoder, ButterflyField, LchNtt, PolyBasisNtt, subfield_ntt_batch,
+};
 use p3_binary_field::{
-    BinaryField16, BinaryField32, BinaryField64, BinaryField128, Ghash128, TowerLevel,
+    BinaryField8, BinaryField16, BinaryField32, BinaryField64, BinaryField128, Ghash128, TowerLevel,
 };
 use p3_commit::Encoder;
 use p3_dft::Radix2DFTSmallBatch;
@@ -234,6 +236,57 @@ fn bench_encode(c: &mut Criterion) {
     }
 }
 
+/// The two routes from a byte-valued message to a wide codeword.
+///
+/// Either way the caller ends up with `BinaryField128` evaluations.
+///
+/// ```text
+///     wide      widen every entry, then transform at the wide element size
+///     subfield  transform the closed layers at the byte size, then widen
+/// ```
+///
+/// The wide arm carries the widening pass too, since a caller pays it in both routes.
+fn bench_subfield(c: &mut Criterion) {
+    let mut group = c.benchmark_group("subfield");
+    group.sample_size(10);
+
+    let mut rng = SmallRng::seed_from_u64(3);
+    let lch = LchNtt::<BinaryField128>::default();
+    let poly = PolyBasisNtt::default();
+
+    for log_height in LOG_HEIGHTS {
+        for width in [1, WIDTH] {
+            let message = RowMajorMatrix::<BinaryField8>::rand(&mut rng, 1 << log_height, width);
+            let parameter = format!("h{log_height}/w{width}");
+
+            // Throughput counts the matrix entries, so every arm compares directly.
+            group.throughput(Throughput::Elements((width << log_height) as u64));
+
+            let widen = |m: &RowMajorMatrix<BinaryField8>| {
+                RowMajorMatrix::new(
+                    m.values.iter().copied().map(BinaryField128::from).collect(),
+                    width,
+                )
+            };
+
+            group.bench_function(BenchmarkId::new("wide/lch", &parameter), |b| {
+                b.iter(|| lch.ntt_batch(widen(&message)));
+            });
+            group.bench_function(BenchmarkId::new("wide/poly", &parameter), |b| {
+                b.iter(|| poly.ntt_batch(widen(&message)));
+            });
+            group.bench_function(BenchmarkId::new("subfield", &parameter), |b| {
+                b.iter_batched(
+                    || message.clone(),
+                    subfield_ntt_batch::<BinaryField8, BinaryField128>,
+                    BatchSize::PerIteration,
+                );
+            });
+        }
+    }
+    group.finish();
+}
+
 /// Direct polynomial-backend workloads, including small later-round domains.
 fn bench_poly(c: &mut Criterion) {
     eprintln!(
@@ -349,6 +402,7 @@ criterion_group!(
     benches,
     bench_butterfly,
     bench_ntt,
+    bench_subfield,
     bench_encode,
     bench_poly,
     bench_commit
