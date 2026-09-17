@@ -607,19 +607,40 @@ impl<F: Field, EF: ExtensionField<F>> SuffixProver<F, EF> {
         }
 
         // Concrete claims: each column's slot is independent, so slots fill in parallel.
+        // Every contribution to a slot is summed in one pass over it.
         self.column_slots(out.as_mut_slice(), rs.num_variables())
             .into_par_iter()
             .for_each(|(slot, table_idx, poly_idx)| {
-                for &(claim_idx, is_next, scale) in &column_weights[table_idx][poly_idx] {
-                    let claim_tables = &tables[claim_idx];
-                    let table = if is_next {
-                        &claim_tables.next
-                    } else {
-                        &claim_tables.current
-                    };
-                    slot.iter_mut()
-                        .zip(table.as_ref().unwrap())
-                        .for_each(|(out, &weight)| *out += scale * weight);
+                let terms: Vec<(&[EF], EF)> = column_weights[table_idx][poly_idx]
+                    .iter()
+                    .map(|&(claim_idx, is_next, scale)| {
+                        let claim_tables = &tables[claim_idx];
+                        let table = if is_next {
+                            &claim_tables.next
+                        } else {
+                            &claim_tables.current
+                        };
+                        (table.as_deref().unwrap(), scale)
+                    })
+                    .collect();
+                match terms.as_slice() {
+                    [] => {}
+                    [(table, scale)] => slot
+                        .iter_mut()
+                        .zip(*table)
+                        .for_each(|(out, &weight)| *out += *scale * weight),
+                    [(table0, scale0), (table1, scale1)] => slot
+                        .iter_mut()
+                        .zip(table0.iter().zip(*table1))
+                        .for_each(|(out, (&weight0, &weight1))| {
+                            *out += *scale0 * weight0 + *scale1 * weight1;
+                        }),
+                    _ => slot.iter_mut().enumerate().for_each(|(row, out)| {
+                        *out += terms
+                            .iter()
+                            .map(|(table, scale)| *scale * table[row])
+                            .sum::<EF>();
+                    }),
                 }
             });
 
