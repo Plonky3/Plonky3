@@ -2,8 +2,8 @@ use alloc::vec::Vec;
 
 use p3_field::{BasedVectorSpace, TwoAdicField};
 use p3_matrix::Matrix;
-use p3_matrix::bitrev::BitReversibleMatrix;
-use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixViewMut};
+use p3_matrix::bitrev::{BitReversedMatrixView, BitReversibleMatrix};
+use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView, RowMajorMatrixViewMut};
 use p3_matrix::util::swap_rows;
 
 use crate::util::{coset_shift_cols, divide_by_height};
@@ -256,6 +256,43 @@ pub trait TwoAdicSubgroupDft<F: TwoAdicField>: Clone + Default {
         let new_len = coeffs.values.len().checked_mul(scale).unwrap();
         coeffs.values.resize(new_len, F::ZERO);
         self.coset_dft_batch(coeffs, shift)
+    }
+
+    /// Like [`coset_lde_batch_with_transform`](Self::coset_lde_batch_with_transform),
+    /// but also visit completed evaluation blocks.
+    ///
+    /// The returned view has natural row order over bit-reversed storage. `make_consumer`
+    /// runs once on the calling thread, before any block is published, with the block height:
+    /// a positive power of two dividing the output height. The returned consumer receives each
+    /// block's starting physical row and a read-only view of exactly that many rows.
+    ///
+    /// On successful return, every output row has been visited exactly once. Calls may
+    /// overlap and arrive in any order. Each view lasts only for its call, and the DFT
+    /// never writes a block after publishing it. All calls finish before this method returns.
+    ///
+    /// `transform` runs once on the calling thread before any consumer call. The default
+    /// implementation publishes the full output as one block; implementations may publish
+    /// smaller blocks as they complete.
+    fn coset_lde_batch_with_blocks<T, K, C>(
+        &self,
+        mat: RowMajorMatrix<F>,
+        added_bits: usize,
+        shift: F,
+        transform: T,
+        make_consumer: K,
+    ) -> BitReversedMatrixView<RowMajorMatrix<F>>
+    where
+        T: FnOnce(&mut RowMajorMatrixViewMut<'_, F>, Layout),
+        K: FnOnce(usize) -> C,
+        C: Fn(usize, RowMajorMatrixView<'_, F>) + Sync,
+    {
+        let output = self
+            .coset_lde_batch_with_transform(mat, added_bits, shift, transform)
+            .bit_reverse_rows()
+            .to_row_major_matrix();
+        let consume = make_consumer(output.height());
+        consume(0, output.as_view());
+        output.bit_reverse_rows()
     }
 
     /// Compute the discrete Fourier transform (DFT) of `vec`.
