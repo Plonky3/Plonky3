@@ -1487,18 +1487,21 @@ mod tests {
         BABYBEAR_POSEIDON2_HALF_FULL_ROUNDS, BABYBEAR_POSEIDON2_PARTIAL_ROUNDS_16,
         BABYBEAR_S_BOX_DEGREE, BabyBear, GenericPoseidon2LinearLayersBabyBear, Poseidon2BabyBear,
     };
+    use p3_binary_field::{BinaryChallenger, BinaryField128};
     use p3_blake3_air::Blake3Air;
-    use p3_challenger::DuplexChallenger;
+    use p3_challenger::{DuplexChallenger, HashChallenger};
     use p3_field::PrimeCharacteristicRing;
     use p3_field::extension::BinomialExtensionField;
+    use p3_keccak::Keccak256Hash;
     use p3_lookup::{Count, InteractionBuilder};
     use p3_matrix::Matrix;
     use p3_matrix::dense::RowMajorMatrix;
     use p3_multilinear_util::poly::Poly;
     use p3_poseidon2_air::{Poseidon2Air, RoundConstants};
     use p3_util::log2_strict_usize;
-    use rand::SeedableRng;
+    use rand::distr::{Distribution, StandardUniform};
     use rand::rngs::SmallRng;
+    use rand::{RngExt, SeedableRng};
 
     use super::*;
 
@@ -2153,6 +2156,268 @@ mod tests {
                 &mut verifier_challenger,
             )
             .expect("subset-next AIR must verify");
+    }
+
+    type BinaryChal = BinaryChallenger<BinaryField128, HashChallenger<u8, Keccak256Hash, 32>>;
+
+    fn binary_challenger() -> BinaryChal {
+        BinaryChal::from_hasher(b"p3-multi-stark-zerocheck-test".to_vec(), Keccak256Hash)
+    }
+
+    /// Degree-three AIR reading main columns 3 and 1 and preprocessed column 1 on the next row.
+    ///
+    /// ```text
+    ///     transition: next.main[1] = main[0] * main[2]
+    ///     transition: next.main[3] = main[3] * main[1] + main[0]
+    ///     transition: next.prep[1] = prep[0] * main[2]
+    /// ```
+    ///
+    /// With `declare_all`, the AIR keeps the default declaration of every column instead.
+    /// Both declarations describe the same constraints.
+    struct SuccessorSubsetAir {
+        declare_all: bool,
+    }
+
+    impl<X> BaseAir<X> for SuccessorSubsetAir {
+        fn width(&self) -> usize {
+            4
+        }
+        fn preprocessed_width(&self) -> usize {
+            2
+        }
+        fn main_next_row_columns(&self) -> Vec<usize> {
+            // Out of order on purpose: the declaration is a set, not a layout.
+            if self.declare_all {
+                (0..4).collect()
+            } else {
+                vec![3, 1]
+            }
+        }
+        fn preprocessed_next_row_columns(&self) -> Vec<usize> {
+            if self.declare_all {
+                (0..2).collect()
+            } else {
+                vec![1]
+            }
+        }
+    }
+
+    impl<AB: AirBuilder> Air<AB> for SuccessorSubsetAir {
+        fn eval(&self, builder: &mut AB) {
+            let main = builder.main();
+            let (local, next) = (main.current_slice(), main.next_slice());
+            let preprocessed = builder.preprocessed();
+            let prep = preprocessed.current_slice()[0];
+            let prep_next = preprocessed.next_slice()[1];
+
+            let mut transition = builder.when_transition();
+            transition.assert_eq(next[1], local[0] * local[2]);
+            transition.assert_eq(next[3], local[3] * local[1] + local[0]);
+            transition.assert_eq(prep_next, prep * local[2]);
+        }
+    }
+
+    /// Satisfying main and preprocessed traces for [`SuccessorSubsetAir`].
+    ///
+    /// Every column the AIR never reads ahead is fresh randomness on each row.
+    fn successor_subset_traces<F: Field>(n: usize) -> (RowMajorMatrix<F>, RowMajorMatrix<F>)
+    where
+        StandardUniform: Distribution<F>,
+    {
+        let mut rng = SmallRng::seed_from_u64(0x5ECC);
+        let mut main: Vec<F> = (0..4).map(|_| rng.random()).collect();
+        let mut prep: Vec<F> = (0..2).map(|_| rng.random()).collect();
+        for row in 1..n {
+            let [m0, m1, m2, m3] = main[4 * (row - 1)..4 * row] else {
+                unreachable!()
+            };
+            let p0 = prep[2 * (row - 1)];
+            main.extend([rng.random(), m0 * m2, rng.random(), m3 * m1 + m0]);
+            prep.extend([rng.random(), p0 * m2]);
+        }
+        (RowMajorMatrix::new(main, 4), RowMajorMatrix::new(prep, 2))
+    }
+
+    /// Degree-two AIR that reads no successor column at all.
+    ///
+    /// With `declare_all`, the AIR keeps the default declaration of every column instead.
+    struct SuccessorFreeAir {
+        declare_all: bool,
+    }
+
+    impl<X> BaseAir<X> for SuccessorFreeAir {
+        fn width(&self) -> usize {
+            3
+        }
+        fn main_next_row_columns(&self) -> Vec<usize> {
+            if self.declare_all {
+                (0..3).collect()
+            } else {
+                vec![]
+            }
+        }
+    }
+
+    impl<AB: AirBuilder> Air<AB> for SuccessorFreeAir {
+        fn eval(&self, builder: &mut AB) {
+            let main = builder.main();
+            let local = main.current_slice();
+            builder.assert_eq(local[2], local[0] * local[1]);
+        }
+    }
+
+    /// Satisfying trace for [`SuccessorFreeAir`].
+    fn successor_free_trace<F: Field>(n: usize) -> RowMajorMatrix<F>
+    where
+        StandardUniform: Distribution<F>,
+    {
+        let mut rng = SmallRng::seed_from_u64(0xF12EE);
+        let values = (0..n)
+            .flat_map(|_| {
+                let (a, b): (F, F) = (rng.random(), rng.random());
+                [a, b, a * b]
+            })
+            .collect();
+        RowMajorMatrix::new(values, 3)
+    }
+
+    /// Prove one AIR through the zerocheck, then verify the proof.
+    fn prove_and_verify<F, EF, A, Ch>(
+        air: &A,
+        main: &RowMajorMatrix<F>,
+        preprocessed: Option<&RowMajorMatrix<F>>,
+        challenger: impl Fn() -> Ch,
+    ) -> (ZerocheckProof<F, EF>, Point<EF>)
+    where
+        F: TranscriptField,
+        EF: ExtensionField<F>,
+        A: ProverAir<F, EF>,
+        EF::ExtensionPacking: From<EF> + From<F::Packing>,
+        Ch: FieldChallenger<F> + GrindingChallenger<Witness = F>,
+    {
+        let airs = [air];
+        let zerocheck = AirZerocheck::new(&airs, 0);
+        let table = Table::new(main.transpose());
+        let preprocessed = preprocessed.map(|trace| Table::new(trace.transpose()));
+        let proven = zerocheck.prove::<F, EF, _>(
+            &[preprocessed.as_ref()],
+            &[&table],
+            &[&[]],
+            &mut challenger(),
+        );
+        let point = zerocheck
+            .verify::<F, EF, _>(
+                &proven.0,
+                &[table.num_variables()],
+                &[&[]],
+                &mut challenger(),
+            )
+            .expect("honest proof must verify");
+        assert_eq!(point, proven.1);
+        proven
+    }
+
+    /// Prove an AIR declaring only the successor columns it reads, and its twin declaring all.
+    ///
+    /// The declaration is not bound into the zerocheck transcript.
+    /// So both proofs must carry the same round polynomials, point, and current-row openings.
+    /// The declared successor openings must match the corresponding entries of the full set.
+    fn check_declared_successors_match_all<F, EF, A, Ch>(
+        declared: &A,
+        all: &A,
+        main: &RowMajorMatrix<F>,
+        preprocessed: Option<&RowMajorMatrix<F>>,
+        challenger: impl Fn() -> Ch,
+    ) where
+        F: TranscriptField,
+        EF: ExtensionField<F>,
+        A: ProverAir<F, EF>,
+        EF::ExtensionPacking: From<EF> + From<F::Packing>,
+        Ch: FieldChallenger<F> + GrindingChallenger<Witness = F>,
+    {
+        let (declared_proof, declared_point) =
+            prove_and_verify::<F, EF, _, _>(declared, main, preprocessed, &challenger);
+        let (all_proof, all_point) =
+            prove_and_verify::<F, EF, _, _>(all, main, preprocessed, &challenger);
+
+        assert_eq!(
+            declared_proof.sumcheck.round_polys,
+            all_proof.sumcheck.round_polys
+        );
+        assert_eq!(declared_point, all_point);
+        assert_eq!(declared_proof.local, all_proof.local);
+        assert_eq!(
+            declared_proof.preprocessed_local,
+            all_proof.preprocessed_local
+        );
+
+        // Each declared successor opening is the full set's entry for that column.
+        let pick = |columns: Vec<usize>, all_values: &[EF]| {
+            columns
+                .into_iter()
+                .map(|column| all_values[column])
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            declared_proof.next[0],
+            pick(declared.main_next_row_columns(), &all_proof.next[0])
+        );
+        assert_eq!(
+            declared_proof.preprocessed_next[0],
+            pick(
+                declared.preprocessed_next_row_columns(),
+                &all_proof.preprocessed_next[0]
+            )
+        );
+    }
+
+    #[test]
+    fn successor_subset_matches_full_declaration_over_a_prime_field() {
+        // 64 rows reach both the packed and the scalar kernels on every packing width in use.
+        let (main, preprocessed) = successor_subset_traces::<F>(64);
+        check_declared_successors_match_all::<F, EF, _, _>(
+            &SuccessorSubsetAir { declare_all: false },
+            &SuccessorSubsetAir { declare_all: true },
+            &main,
+            Some(&preprocessed),
+            fresh_challenger,
+        );
+    }
+
+    #[test]
+    fn successor_free_matches_full_declaration_over_a_prime_field() {
+        let main = successor_free_trace::<F>(64);
+        check_declared_successors_match_all::<F, EF, _, _>(
+            &SuccessorFreeAir { declare_all: false },
+            &SuccessorFreeAir { declare_all: true },
+            &main,
+            None,
+            fresh_challenger,
+        );
+    }
+
+    #[test]
+    fn successor_subset_matches_full_declaration_over_a_binary_field() {
+        let (main, preprocessed) = successor_subset_traces::<BinaryField128>(32);
+        check_declared_successors_match_all::<BinaryField128, BinaryField128, _, _>(
+            &SuccessorSubsetAir { declare_all: false },
+            &SuccessorSubsetAir { declare_all: true },
+            &main,
+            Some(&preprocessed),
+            binary_challenger,
+        );
+    }
+
+    #[test]
+    fn successor_free_matches_full_declaration_over_a_binary_field() {
+        let main = successor_free_trace::<BinaryField128>(32);
+        check_declared_successors_match_all::<BinaryField128, BinaryField128, _, _>(
+            &SuccessorFreeAir { declare_all: false },
+            &SuccessorFreeAir { declare_all: true },
+            &main,
+            None,
+            binary_challenger,
+        );
     }
 
     #[test]

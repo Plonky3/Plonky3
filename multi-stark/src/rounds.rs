@@ -4,6 +4,7 @@
 
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
+use core::ops::Range;
 
 use itertools::Itertools;
 use p3_air::{Air, BaseAir};
@@ -358,7 +359,9 @@ pub(crate) struct RoundStateExt<'air, 'data, A, F: Field, EF: ExtensionField<F>>
     tau: Point<EF>,
     /// Number of already-bound prefix coordinates.
     round: usize,
-    /// Repeat-last successor values for each main column at the folded tail row.
+    /// Repeat-last successor values at the folded tail row, one entry per column.
+    ///
+    /// Zero for every column no AIR reads on the next row.
     next_tail: Vec<EF>,
     /// Lookup/AIR-link coefficients retained from this stage's base-field round.
     coupling: InteractionCoupling<EF>,
@@ -479,6 +482,8 @@ struct Scratch<F, EF> {
     /// Difference between the high and low current-row values.
     local_diff: Vec<F>,
     /// Successor-row value of each column at the active interpolation node.
+    ///
+    /// Zero for every column no AIR reads on the next row.
     next_point: Vec<F>,
     /// Difference between the high and low successor-row values.
     next_diff: Vec<F>,
@@ -498,6 +503,8 @@ struct PackedScratch<P, EF> {
     /// Difference between the high and low current-row lanes.
     local_diff: Vec<P>,
     /// Successor-row lanes of each column at the active interpolation node.
+    ///
+    /// Zero for every column no AIR reads on the next row.
     next_point: Vec<P>,
     /// Difference between the high and low successor-row lanes.
     next_diff: Vec<P>,
@@ -529,14 +536,27 @@ where
 }
 
 impl<F: Field, EF> Scratch<F, EF> {
-    fn add_diffs(&mut self) {
+    /// Step every current-row column, and the successor columns inside `next_columns`.
+    fn add_diffs(&mut self, next_columns: &[Range<usize>]) {
         F::add_slices(&mut self.local_point, &self.local_diff);
-        F::add_slices(&mut self.next_point, &self.next_diff);
+        for run in next_columns {
+            F::add_slices(
+                &mut self.next_point[run.clone()],
+                &self.next_diff[run.clone()],
+            );
+        }
     }
 
-    fn add_scaled_diffs(&mut self, step: F) {
+    /// Scaled twin of [`Self::add_diffs`].
+    fn add_scaled_diffs(&mut self, step: F, next_columns: &[Range<usize>]) {
         add_scaled_slice(&mut self.local_point, &self.local_diff, step);
-        add_scaled_slice(&mut self.next_point, &self.next_diff, step);
+        for run in next_columns {
+            add_scaled_slice(
+                &mut self.next_point[run.clone()],
+                &self.next_diff[run.clone()],
+                step,
+            );
+        }
     }
 }
 
@@ -564,28 +584,41 @@ where
         }
     }
 
-    fn add_diffs(&mut self)
+    /// Step every current-row column, and the successor columns inside `next_columns`.
+    fn add_diffs(&mut self, next_columns: &[Range<usize>])
     where
         P: Copy,
     {
-        self.local_point
-            .iter_mut()
-            .zip(self.local_diff.iter())
-            .zip(self.next_point.iter_mut())
-            .zip(self.next_diff.iter())
-            .for_each(|(((local, local_diff), next), next_diff)| {
-                *local += *local_diff;
-                *next += *next_diff;
-            });
+        add_slice(&mut self.local_point, &self.local_diff);
+        for run in next_columns {
+            add_slice(
+                &mut self.next_point[run.clone()],
+                &self.next_diff[run.clone()],
+            );
+        }
     }
 
-    fn add_scaled_diffs(&mut self, step: P)
+    /// Scaled twin of [`Self::add_diffs`].
+    fn add_scaled_diffs(&mut self, step: P, next_columns: &[Range<usize>])
     where
         P: Copy,
     {
         add_scaled_slice(&mut self.local_point, &self.local_diff, step);
-        add_scaled_slice(&mut self.next_point, &self.next_diff, step);
+        for run in next_columns {
+            add_scaled_slice(
+                &mut self.next_point[run.clone()],
+                &self.next_diff[run.clone()],
+                step,
+            );
+        }
     }
+}
+
+fn add_slice<P: PrimeCharacteristicRing + Copy>(point: &mut [P], diff: &[P]) {
+    point
+        .iter_mut()
+        .zip(diff)
+        .for_each(|(value, &diff)| *value += diff);
 }
 
 fn add_scaled_slice<P: PrimeCharacteristicRing + Copy>(point: &mut [P], diff: &[P], step: P) {
@@ -671,6 +704,50 @@ struct AirColumnWidths {
     periodic: usize,
 }
 
+/// Columns one AIR reads on the next row, as the AIR declares them.
+///
+/// The AIR reads no other successor value.
+/// The zerocheck checks this against a symbolic evaluation before any stage is built.
+struct AirSuccessorColumns {
+    /// Main columns read on the next row, in any order.
+    main: Vec<usize>,
+    /// Preprocessed columns read on the next row, in any order.
+    preprocessed: Vec<usize>,
+}
+
+/// Group one column group's declared successor columns into contiguous runs of the merged buffer.
+///
+/// ```text
+///     offset 4, width 4, declared [3, 0, 1]  ->  runs [4..6, 7..8]
+/// ```
+///
+/// # Panics
+///
+/// Panics if a column is declared twice or lies outside the group.
+fn successor_runs(offset: usize, width: usize, columns: &[usize]) -> Vec<Range<usize>> {
+    let mut columns = columns.to_vec();
+    columns.sort_unstable();
+    assert!(
+        columns.windows(2).all(|pair| pair[0] < pair[1]),
+        "duplicate successor column"
+    );
+    assert!(
+        columns.last().is_none_or(|&column| column < width),
+        "successor column is outside the trace width"
+    );
+
+    let mut runs: Vec<Range<usize>> = Vec::new();
+    for column in columns {
+        let index = offset + column;
+        match runs.last_mut() {
+            // Extend the current run while the columns stay adjacent.
+            Some(run) if run.end == index => run.end += 1,
+            _ => runs.push(index..index + 1),
+        }
+    }
+    runs
+}
+
 /// One AIR's slice of the stage's merged column buffer, plus its fold metadata.
 ///
 /// Every AIR of a stage keeps its columns in one shared buffer laid out group by group:
@@ -701,6 +778,12 @@ struct AirSlot<'air, A> {
     periodic_offset: usize,
     /// Number of periodic columns this AIR owns.
     periodic_width: usize,
+    /// Merged-buffer runs of the main columns this AIR reads on the next row.
+    main_next_columns: Vec<Range<usize>>,
+    /// Merged-buffer runs of the preprocessed columns this AIR reads on the next row.
+    ///
+    /// Periodic columns never have a successor: the folder reads only their current row.
+    preprocessed_next_columns: Vec<Range<usize>>,
     /// Native degree of the ordinary constraint family.
     constraint_degree: usize,
     /// Lookup metadata, absent when this AIR declares no interactions.
@@ -731,17 +814,20 @@ impl<'air, A> AirSlot<'air, A> {
     /// # Panics
     ///
     /// Panics if a lookup-declaring AIR has no link, or a link names an AIR outside the stage.
+    /// Panics if a successor column is declared twice or lies outside its column group.
     fn build<EF>(
         airs: &[&'air A],
         caller_indices: &[usize],
         degrees: &[AirDegrees],
         column_widths: &[AirColumnWidths],
+        successor_columns: &[AirSuccessorColumns],
         mut links: BTreeMap<usize, AirLinkInstance<EF>>,
         interaction_group_by_degree: &BTreeMap<usize, usize>,
     ) -> (Vec<Self>, Vec<AirLinkInstance<EF>>) {
         assert_eq!(airs.len(), caller_indices.len());
         assert_eq!(airs.len(), degrees.len());
         assert_eq!(airs.len(), column_widths.len());
+        assert_eq!(airs.len(), successor_columns.len());
 
         let mut column_offset = 0;
         let mut active_links = Vec::with_capacity(links.len());
@@ -779,6 +865,7 @@ impl<'air, A> AirSlot<'air, A> {
                     }
                 };
                 debug_assert_eq!(interaction.is_some(), degrees.interactions > 0);
+                let successors = &successor_columns[stage_index];
                 Self {
                     air: airs[stage_index],
                     stage_index,
@@ -789,6 +876,12 @@ impl<'air, A> AirSlot<'air, A> {
                     preprocessed_width,
                     periodic_offset,
                     periodic_width,
+                    main_next_columns: successor_runs(main_offset, main_width, &successors.main),
+                    preprocessed_next_columns: successor_runs(
+                        preprocessed_offset,
+                        preprocessed_width,
+                        &successors.preprocessed,
+                    ),
                     constraint_degree: degrees.constraints,
                     interaction,
                 }
@@ -824,6 +917,22 @@ impl<'air, A> AirSlot<'air, A> {
             interaction,
         }
     }
+}
+
+/// Every successor column run of a stage, in merged-buffer order.
+///
+/// Successor values outside these runs are never read, so the kernels neither fill nor step them.
+/// They stay zero, the same filler the verifier's folder reads for an undeclared column.
+fn next_row_runs<A>(slots: &[AirSlot<'_, A>]) -> Vec<Range<usize>> {
+    slots
+        .iter()
+        .flat_map(|slot| {
+            slot.main_next_columns
+                .iter()
+                .chain(&slot.preprocessed_next_columns)
+        })
+        .cloned()
+        .collect()
 }
 
 /// The interpolation nodes at which at least one AIR contributes an expression family.
@@ -1147,6 +1256,13 @@ where
                 periodic: periodic.as_ref().map_or(0, Table::num_polys),
             })
             .collect::<Vec<_>>();
+        let successor_columns = airs
+            .iter()
+            .map(|air| AirSuccessorColumns {
+                main: air.main_next_row_columns(),
+                preprocessed: air.preprocessed_next_row_columns(),
+            })
+            .collect::<Vec<_>>();
 
         let num_airs = airs.len();
         assert_eq!(
@@ -1185,6 +1301,7 @@ where
             &indices,
             &degrees,
             &column_widths,
+            &successor_columns,
             links,
             &interaction_group_by_degree,
         );
@@ -1276,6 +1393,7 @@ where
         let packed_half = scalar_half / packing_width;
         let degree = self.degree();
         let schedule = node_schedule::<F>(evaluated_nodes(&self.slots, degree, false));
+        let next_columns = next_row_runs(&self.slots);
         let alpha = EF::ExtensionPacking::from(self.alpha);
 
         let coupling = InteractionCoupling {
@@ -1316,16 +1434,13 @@ where
                 |mut scratch, (packed_s, eq_suffix)| {
                     let s = packed_s * packing_width;
 
-                    let fill_columns = |scratch: &mut PackedScratch<F::Packing, EF>,
-                                        offset: usize,
-                                        table: &Table<F>| {
+                    let fill_local = |scratch: &mut PackedScratch<F::Packing, EF>,
+                                      offset: usize,
+                                      table: &Table<F>| {
                         let end = offset + table.num_polys();
-                        for ((((local, local_delta), next), next_delta), column) in scratch
-                            .local_point[offset..end]
+                        for ((local, local_delta), column) in scratch.local_point[offset..end]
                             .iter_mut()
                             .zip(scratch.local_diff[offset..end].iter_mut())
-                            .zip(scratch.next_point[offset..end].iter_mut())
-                            .zip(scratch.next_diff[offset..end].iter_mut())
                             .zip(table.iter_polys())
                         {
                             let local_lo = *F::Packing::from_slice(&column[s..s + packing_width]);
@@ -1334,39 +1449,60 @@ where
                             );
                             *local = local_lo;
                             *local_delta = local_hi - local_lo;
-
-                            let next_lo =
-                                *F::Packing::from_slice(&column[s + 1..s + 1 + packing_width]);
-                            let next_hi_start = s + scalar_half + 1;
-                            let next_hi = if next_hi_start + packing_width <= height {
-                                *F::Packing::from_slice(
-                                    &column[next_hi_start..next_hi_start + packing_width],
-                                )
-                            } else {
-                                F::Packing::from_fn(|lane| {
-                                    let row = next_hi_start + lane;
-                                    if row < height {
-                                        column[row]
-                                    } else {
-                                        column[height - 1]
-                                    }
-                                })
-                            };
-                            *next = next_lo;
-                            *next_delta = next_hi - next_lo;
+                        }
+                    };
+                    let fill_next = |scratch: &mut PackedScratch<F::Packing, EF>,
+                                     offset: usize,
+                                     table: &Table<F>,
+                                     runs: &[Range<usize>]| {
+                        for run in runs {
+                            for ((next, next_delta), column) in scratch.next_point[run.clone()]
+                                .iter_mut()
+                                .zip(scratch.next_diff[run.clone()].iter_mut())
+                                .zip(table.iter_polys().skip(run.start - offset))
+                            {
+                                let next_lo =
+                                    *F::Packing::from_slice(&column[s + 1..s + 1 + packing_width]);
+                                let next_hi_start = s + scalar_half + 1;
+                                let next_hi = if next_hi_start + packing_width <= height {
+                                    *F::Packing::from_slice(
+                                        &column[next_hi_start..next_hi_start + packing_width],
+                                    )
+                                } else {
+                                    F::Packing::from_fn(|lane| {
+                                        let row = next_hi_start + lane;
+                                        if row < height {
+                                            column[row]
+                                        } else {
+                                            column[height - 1]
+                                        }
+                                    })
+                                };
+                                *next = next_lo;
+                                *next_delta = next_hi - next_lo;
+                            }
                         }
                     };
                     for slot in &self.slots {
-                        fill_columns(
+                        let main = self.tables[slot.stage_index];
+                        fill_local(&mut scratch, slot.main_offset, main);
+                        fill_next(
                             &mut scratch,
                             slot.main_offset,
-                            self.tables[slot.stage_index],
+                            main,
+                            &slot.main_next_columns,
                         );
                         if let Some(preprocessed) = self.preprocessed[slot.stage_index] {
-                            fill_columns(&mut scratch, slot.preprocessed_offset, preprocessed);
+                            fill_local(&mut scratch, slot.preprocessed_offset, preprocessed);
+                            fill_next(
+                                &mut scratch,
+                                slot.preprocessed_offset,
+                                preprocessed,
+                                &slot.preprocessed_next_columns,
+                            );
                         }
                         if let Some(periodic) = self.periodic[slot.stage_index].as_ref() {
-                            fill_columns(&mut scratch, slot.periodic_offset, periodic);
+                            fill_local(&mut scratch, slot.periodic_offset, periodic);
                         }
                     }
 
@@ -1377,13 +1513,13 @@ where
                         match step {
                             NodeStep::Unit(count) => {
                                 for _ in 0..count {
-                                    scratch.add_diffs();
+                                    scratch.add_diffs(&next_columns);
                                     boundary += boundary_diff;
                                 }
                             }
                             NodeStep::Scaled(step) => {
                                 let step = F::Packing::from(step);
-                                scratch.add_scaled_diffs(step);
+                                scratch.add_scaled_diffs(step, &next_columns);
                                 boundary.add_scaled(boundary_diff, step);
                             }
                         }
@@ -1471,6 +1607,7 @@ where
         let half = height / 2;
         let degree = self.degree();
         let schedule = node_schedule::<F>(evaluated_nodes(&self.slots, degree, false));
+        let next_columns = next_row_runs(&self.slots);
 
         let constraint_degrees = self
             .slots
@@ -1487,41 +1624,60 @@ where
         let mut scratch = Scratch::<F, EF>::new(&constraint_degrees, &interaction_degrees, width);
 
         for (s, &eq_suffix) in eq_suffix.as_slice().iter().enumerate() {
-            let fill_columns = |scratch: &mut Scratch<F, EF>, offset: usize, table: &Table<F>| {
+            let fill_local = |scratch: &mut Scratch<F, EF>, offset: usize, table: &Table<F>| {
                 let end = offset + table.num_polys();
                 scratch.local_point[offset..end]
                     .iter_mut()
                     .zip(scratch.local_diff[offset..end].iter_mut())
-                    .zip(scratch.next_point[offset..end].iter_mut())
-                    .zip(scratch.next_diff[offset..end].iter_mut())
                     .zip(table.iter_polys())
-                    .for_each(|((((local, local_delta), next), next_delta), column)| {
+                    .for_each(|((local, local_delta), column)| {
                         let local_lo = column[s];
                         let local_hi = column[s + half];
                         *local = local_lo;
                         *local_delta = local_hi - local_lo;
-
-                        let next_lo = column[s + 1];
-                        let next_hi = if s + half + 1 < height {
-                            column[s + half + 1]
-                        } else {
-                            column[height - 1]
-                        };
-                        *next = next_lo;
-                        *next_delta = next_hi - next_lo;
                     });
             };
+            let fill_next = |scratch: &mut Scratch<F, EF>,
+                             offset: usize,
+                             table: &Table<F>,
+                             runs: &[Range<usize>]| {
+                for run in runs {
+                    scratch.next_point[run.clone()]
+                        .iter_mut()
+                        .zip(scratch.next_diff[run.clone()].iter_mut())
+                        .zip(table.iter_polys().skip(run.start - offset))
+                        .for_each(|((next, next_delta), column)| {
+                            let next_lo = column[s + 1];
+                            let next_hi = if s + half + 1 < height {
+                                column[s + half + 1]
+                            } else {
+                                column[height - 1]
+                            };
+                            *next = next_lo;
+                            *next_delta = next_hi - next_lo;
+                        });
+                }
+            };
             for slot in &self.slots {
-                fill_columns(
+                let main = self.tables[slot.stage_index];
+                fill_local(&mut scratch, slot.main_offset, main);
+                fill_next(
                     &mut scratch,
                     slot.main_offset,
-                    self.tables[slot.stage_index],
+                    main,
+                    &slot.main_next_columns,
                 );
                 if let Some(preprocessed) = self.preprocessed[slot.stage_index] {
-                    fill_columns(&mut scratch, slot.preprocessed_offset, preprocessed);
+                    fill_local(&mut scratch, slot.preprocessed_offset, preprocessed);
+                    fill_next(
+                        &mut scratch,
+                        slot.preprocessed_offset,
+                        preprocessed,
+                        &slot.preprocessed_next_columns,
+                    );
                 }
                 if let Some(periodic) = self.periodic[slot.stage_index].as_ref() {
-                    fill_columns(&mut scratch, slot.periodic_offset, periodic);
+                    fill_local(&mut scratch, slot.periodic_offset, periodic);
                 }
             }
 
@@ -1531,12 +1687,12 @@ where
                 match step {
                     NodeStep::Unit(count) => {
                         for _ in 0..count {
-                            scratch.add_diffs();
+                            scratch.add_diffs(&next_columns);
                             boundary += boundary_diff;
                         }
                     }
                     NodeStep::Scaled(step) => {
-                        scratch.add_scaled_diffs(step);
+                        scratch.add_scaled_diffs(step, &next_columns);
                         boundary.add_scaled(boundary_diff, step);
                     }
                 }
@@ -1604,25 +1760,29 @@ where
         let num_evals = self.num_evals();
         let half = num_evals / 2;
         let width = self.total_width();
-        let mut next_tail = Vec::with_capacity(width);
+        // Only successor columns carry a repeat-last tail; every other entry stays zero.
+        let mut next_tail = EF::zero_vec(width);
+        let mut fold_tails = |offset: usize, table: &Table<F>, runs: &[Range<usize>]| {
+            for run in runs {
+                for (tail, col) in next_tail[run.clone()]
+                    .iter_mut()
+                    .zip(table.iter_polys().skip(run.start - offset))
+                {
+                    *tail = r * (col[num_evals - 1] - col[half]) + col[half];
+                }
+            }
+        };
         for slot in &self.slots {
-            next_tail.extend(
-                self.tables[slot.stage_index]
-                    .iter_polys()
-                    .map(|col| r * (col[num_evals - 1] - col[half]) + col[half]),
+            fold_tails(
+                slot.main_offset,
+                self.tables[slot.stage_index],
+                &slot.main_next_columns,
             );
             if let Some(preprocessed) = self.preprocessed[slot.stage_index] {
-                next_tail.extend(
-                    preprocessed
-                        .iter_polys()
-                        .map(|col| r * (col[num_evals - 1] - col[half]) + col[half]),
-                );
-            }
-            if let Some(periodic) = self.periodic[slot.stage_index].as_ref() {
-                next_tail.extend(
-                    periodic
-                        .iter_polys()
-                        .map(|col| r * (col[num_evals - 1] - col[half]) + col[half]),
+                fold_tails(
+                    slot.preprocessed_offset,
+                    preprocessed,
+                    &slot.preprocessed_next_columns,
                 );
             }
         }
@@ -1812,6 +1972,7 @@ where
         let half = num_evals / 2;
         let degree = self.degree();
         let schedule = node_schedule::<EF>(evaluated_nodes(&self.slots, degree, true));
+        let next_columns = next_row_runs(&self.slots);
         let constraint_degrees = self
             .slots
             .iter()
@@ -1826,30 +1987,37 @@ where
         let scratch = eq_suffix.as_slice().par_iter().enumerate().par_fold_reduce(
             || Scratch::<EF, EF>::new(&constraint_degrees, &interaction_degrees, width),
             |mut scratch, (s, &eq_suffix)| {
-                for (((((local, local_delta), next), next_delta), column), next_tail) in scratch
+                let columns = self.columns.as_scalar();
+                for ((local, local_delta), column) in scratch
                     .local_point
                     .iter_mut()
                     .zip(scratch.local_diff.iter_mut())
-                    .zip(scratch.next_point.iter_mut())
-                    .zip(scratch.next_diff.iter_mut())
-                    .zip(self.columns.as_scalar().iter())
-                    .zip(self.next_tail.iter())
+                    .zip(columns)
                 {
                     let column = column.as_slice();
                     let local_lo = column[s];
                     let local_hi = column[s + half];
                     *local = local_lo;
                     *local_delta = local_hi - local_lo;
-
-                    let next_lo = column[s + 1];
-                    let next_hi_row = s + half;
-                    let next_hi = if next_hi_row + 1 < num_evals {
-                        column[next_hi_row + 1]
-                    } else {
-                        *next_tail
-                    };
-                    *next = next_lo;
-                    *next_delta = next_hi - next_lo;
+                }
+                for run in &next_columns {
+                    for (((next, next_delta), column), next_tail) in scratch.next_point[run.clone()]
+                        .iter_mut()
+                        .zip(scratch.next_diff[run.clone()].iter_mut())
+                        .zip(&columns[run.clone()])
+                        .zip(&self.next_tail[run.clone()])
+                    {
+                        let column = column.as_slice();
+                        let next_lo = column[s + 1];
+                        let next_hi_row = s + half;
+                        let next_hi = if next_hi_row + 1 < num_evals {
+                            column[next_hi_row + 1]
+                        } else {
+                            *next_tail
+                        };
+                        *next = next_lo;
+                        *next_delta = next_hi - next_lo;
+                    }
                 }
 
                 let (mut boundary, boundary_diff) =
@@ -1859,12 +2027,12 @@ where
                     match step {
                         NodeStep::Unit(count) => {
                             for _ in 0..count {
-                                scratch.add_diffs();
+                                scratch.add_diffs(&next_columns);
                                 boundary += boundary_diff;
                             }
                         }
                         NodeStep::Scaled(step) => {
-                            scratch.add_scaled_diffs(step);
+                            scratch.add_scaled_diffs(step, &next_columns);
                             boundary.add_scaled(boundary_diff, step);
                         }
                     }
@@ -1969,6 +2137,7 @@ where
         let packed_half = scalar_half / packing_width;
         let degree = self.degree();
         let schedule = node_schedule::<EF>(evaluated_nodes(&self.slots, degree, true));
+        let next_columns = next_row_runs(&self.slots);
         let alpha = PackedExt::new(EF::ExtensionPacking::from(self.alpha));
         let coupling = InteractionCoupling {
             links: self
@@ -2012,35 +2181,43 @@ where
                 |mut scratch, (packed_s, eq_suffix)| {
                     let s = packed_s * packing_width;
 
-                    for (((((local, local_delta), next), next_delta), column), next_tail) in scratch
+                    let columns = self.columns.as_packed();
+                    for ((local, local_delta), column) in scratch
                         .local_point
                         .iter_mut()
                         .zip(scratch.local_diff.iter_mut())
-                        .zip(scratch.next_point.iter_mut())
-                        .zip(scratch.next_diff.iter_mut())
-                        .zip(self.columns.as_packed().iter())
-                        .zip(self.next_tail.iter())
+                        .zip(columns)
                     {
                         let column = column.as_slice();
                         let local_lo = PackedExt::new(column[packed_s]);
                         let local_hi = PackedExt::new(column[packed_s + packed_half]);
                         *local = local_lo;
                         *local_delta = local_hi - local_lo;
-
-                        let next_lo = PackedExt::new(packed_window::<F, EF>(
-                            column,
-                            s + 1,
-                            height,
-                            *next_tail,
-                        ));
-                        let next_hi = PackedExt::new(packed_window::<F, EF>(
-                            column,
-                            s + scalar_half + 1,
-                            height,
-                            *next_tail,
-                        ));
-                        *next = next_lo;
-                        *next_delta = next_hi - next_lo;
+                    }
+                    for run in &next_columns {
+                        for (((next, next_delta), column), next_tail) in scratch.next_point
+                            [run.clone()]
+                        .iter_mut()
+                        .zip(scratch.next_diff[run.clone()].iter_mut())
+                        .zip(&columns[run.clone()])
+                        .zip(&self.next_tail[run.clone()])
+                        {
+                            let column = column.as_slice();
+                            let next_lo = PackedExt::new(packed_window::<F, EF>(
+                                column,
+                                s + 1,
+                                height,
+                                *next_tail,
+                            ));
+                            let next_hi = PackedExt::new(packed_window::<F, EF>(
+                                column,
+                                s + scalar_half + 1,
+                                height,
+                                *next_tail,
+                            ));
+                            *next = next_lo;
+                            *next_delta = next_hi - next_lo;
+                        }
                     }
 
                     let (raw_boundary, raw_boundary_diff) =
@@ -2065,13 +2242,13 @@ where
                         match step {
                             NodeStep::Unit(count) => {
                                 for _ in 0..count {
-                                    scratch.add_diffs();
+                                    scratch.add_diffs(&next_columns);
                                     boundary += boundary_diff;
                                 }
                             }
                             NodeStep::Scaled(step) => {
                                 let step = PackedExt::new(EF::ExtensionPacking::from(step));
-                                scratch.add_scaled_diffs(step);
+                                scratch.add_scaled_diffs(step, &next_columns);
                                 boundary.add_scaled(boundary_diff, step);
                             }
                         }
@@ -2162,21 +2339,24 @@ where
         let num_evals = self.num_evals();
         let half = num_evals / 2;
 
-        // Fold each column's repeat-last tail in place with the value at row `half`.
+        // Fold each successor column's repeat-last tail in place with the value at row `half`.
         // Read that row straight from the current storage, no per-column temporary.
-        match &self.columns {
-            ExtColumns::Scalar(cols) => {
-                for (next_tail, col) in self.next_tail.iter_mut().zip(cols) {
-                    let lo = col.as_slice()[half];
-                    *next_tail = lo + r * (*next_tail - lo);
+        for run in next_row_runs(&self.slots) {
+            let next_tail = &mut self.next_tail[run.clone()];
+            match &self.columns {
+                ExtColumns::Scalar(cols) => {
+                    for (next_tail, col) in next_tail.iter_mut().zip(&cols[run]) {
+                        let lo = col.as_slice()[half];
+                        *next_tail = lo + r * (*next_tail - lo);
+                    }
                 }
-            }
-            ExtColumns::Packed(cols) => {
-                let packing_width = F::Packing::WIDTH;
-                let (group, lane) = (half / packing_width, half % packing_width);
-                for (next_tail, col) in self.next_tail.iter_mut().zip(cols) {
-                    let lo = col.as_slice()[group].extract(lane);
-                    *next_tail = lo + r * (*next_tail - lo);
+                ExtColumns::Packed(cols) => {
+                    let packing_width = F::Packing::WIDTH;
+                    let (group, lane) = (half / packing_width, half % packing_width);
+                    for (next_tail, col) in next_tail.iter_mut().zip(&cols[run]) {
+                        let lo = col.as_slice()[group].extract(lane);
+                        *next_tail = lo + r * (*next_tail - lo);
+                    }
                 }
             }
         }
@@ -2201,6 +2381,26 @@ mod tests {
     use super::*;
 
     type F = BinaryField128;
+
+    #[test]
+    fn successor_runs_group_adjacent_declared_columns() {
+        // Declaration order is irrelevant; adjacent columns share one run.
+        assert_eq!(successor_runs(4, 4, &[3, 0, 1]), vec![4..6, 7..8]);
+        assert_eq!(successor_runs(10, 3, &[0, 1, 2]), vec![10..13]);
+        assert!(successor_runs(10, 3, &[]).is_empty());
+    }
+
+    #[test]
+    #[should_panic = "duplicate successor column"]
+    fn successor_runs_reject_a_repeated_column() {
+        let _runs = successor_runs(0, 4, &[1, 1]);
+    }
+
+    #[test]
+    #[should_panic = "successor column is outside the trace width"]
+    fn successor_runs_reject_a_column_past_the_width() {
+        let _runs = successor_runs(0, 4, &[4]);
+    }
 
     #[test]
     fn node_schedule_walks_unit_gaps_and_jumps_other_gaps() {
