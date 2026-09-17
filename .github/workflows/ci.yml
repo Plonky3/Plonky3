@@ -105,6 +105,7 @@ jobs:
             os: ubuntu-latest
             features: "+gfni"
             compile_only: true
+            gfni: true
             target: x86_64-unknown-linux-gnu
             modes: serial parallel
           # `+avx512f` implies neither `+avx512bw` nor `+gfni`, so every other leg
@@ -113,6 +114,7 @@ jobs:
             os: ubuntu-latest
             features: "+avx512f,+avx512bw,+gfni"
             compile_only: true
+            gfni: true
             target: x86_64-unknown-linux-gnu
             modes: serial parallel
           - name: arm64, sve2, build only
@@ -150,7 +152,7 @@ jobs:
       # running binaries one at a time, so idle cores get filled by other
       # crates' tests while a single long-running test is still executing.
       - uses: taiki-e/install-action@v2
-        if: ${{ !matrix.compile_only || matrix.sha_ni }}
+        if: ${{ !matrix.compile_only || matrix.sha_ni || matrix.gfni }}
         with:
           tool: cargo-nextest
 
@@ -197,6 +199,40 @@ jobs:
           else
             echo "This runner has no SHA-NI; the build above is the coverage."
           fi
+
+      # The byte-wise field proptests pin the packed sweeps to the scalar routines, which
+      # only means something on a runner that has the instructions.
+      #
+      # `+avx512bw` is checked too, since the 512-bit form of the sweep needs it.
+      - name: Test binary-field (x86-64 GFNI)
+        if: ${{ matrix.gfni }}
+        run: |
+          if grep -qw gfni /proc/cpuinfo &&
+             { ! grep -q avx512bw <<< "${{ matrix.features }}" ||
+               grep -qw avx512bw /proc/cpuinfo; }; then
+            python3 scripts/check.py test --package p3-binary-field
+          else
+            echo "This runner has no GFNI; the interpreter below is the coverage."
+          fi
+
+      # Whatever the runner's own processor is, the interpreter has shims for the three
+      # byte-wise field instructions, so the corner differential against the scalar model
+      # runs on every host.
+      #
+      # One deterministic test rather than the module: the proptests around it take minutes
+      # under interpretation.
+      - uses: dtolnay/rust-toolchain@nightly
+        if: ${{ matrix.gfni }}
+        with:
+          components: miri
+
+      - name: Interpret binary-field (x86-64 GFNI)
+        if: ${{ matrix.gfni }}
+        env:
+          MIRIFLAGS: -Zmiri-disable-isolation
+        run: |
+          cargo +nightly miri test --package p3-binary-field --lib \
+            aes::packed::tests::every_width_agrees_with_the_scalar_routines_at_the_corners
 
   check_embedded:
     name: Build embedded

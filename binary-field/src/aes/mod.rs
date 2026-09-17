@@ -29,7 +29,7 @@ use rand::distr::{Distribution, StandardUniform};
 use serde::{Deserialize, Serialize};
 
 pub use crate::aes::engine::ByteMatrix;
-pub use crate::aes::frobenius::LinearizedPoly;
+pub use crate::aes::frobenius::LinearizedPoly8b;
 pub use crate::aes::packed::PackedRijndael8b;
 use crate::cantor::CANTOR_BASIS_128;
 use crate::tower::TowerLevel;
@@ -63,6 +63,7 @@ const fn carryless(a: u8, b: u8) -> u16 {
 /// That fold reaches degree `6 + 4`, spilling three bits back over the top.
 ///
 /// A second fold of those lands at degree `2 + 4`, below the top, so two rounds are exact.
+#[inline]
 pub(crate) const fn mul_bytes(a: u8, b: u8) -> u8 {
     let product = carryless(a, b);
 
@@ -83,11 +84,12 @@ pub(crate) const fn mul_bytes(a: u8, b: u8) -> u8 {
 ///
 /// # Algorithm
 ///
-/// An addition chain on the exponent, seven squarings and four products:
+/// An addition chain on the exponent, eleven products of which seven are squarings:
 ///
 /// ```text
-///     2, 3, 12, 15, 240, 252, 254
+///     1, 2, 3, 6, 12, 15, 30, 60, 120, 240, 252, 254
 /// ```
+#[inline]
 pub(crate) const fn invert_byte(a: u8) -> u8 {
     let x2 = mul_bytes(a, a);
     let x3 = mul_bytes(x2, a);
@@ -128,6 +130,11 @@ const XI: [u8; 3] = {
     }
     xi
 };
+
+/// The bit pattern of the multiplicative generator of the tower representation.
+///
+/// Its image here is the generator, so the change of basis carries one onto the other.
+const TOWER_GENERATOR: u8 = 0x13;
 
 /// The map out of the tower basis, column by column.
 ///
@@ -201,7 +208,7 @@ const CANTOR_BASIS: [u8; 8] = {
 ///
 /// That is what makes it worth carrying beside the tower's own byte field.
 ///
-/// Arithmetic here is constant time: no product or inverse indexes a table by an operand.
+/// Arithmetic here is table-free: nothing indexes a table by an operand.
 #[derive(Copy, Clone, Default, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(transparent)]
 #[repr(transparent)]
@@ -225,6 +232,14 @@ impl Rijndael8b {
     #[inline]
     pub const fn to_byte(self) -> u8 {
         self.0
+    }
+
+    /// The inverse of this element, with zero sent to zero.
+    ///
+    /// The chain runs whatever the operand is, so its cost says nothing about the value.
+    #[inline]
+    pub const fn invert_or_zero(self) -> Self {
+        Self(invert_byte(self.0))
     }
 
     /// Multiplication by this element, as a map ready for the byte-wise engine.
@@ -329,13 +344,15 @@ impl PrimeCharacteristicRing for Rijndael8b {
 impl Field for Rijndael8b {
     type Packing = PackedRijndael8b<{ packed::PACKING_WIDTH }>;
 
-    // The multiplicative group has order 255, and `x + 1` has exactly that order here.
-    const GENERATOR: Self = Self(0x03);
+    const GENERATOR: Self = Self(FROM_TOWER.apply(TOWER_GENERATOR));
 
     #[inline]
     fn try_inverse(&self) -> Option<Self> {
-        // Zero has no multiplicative inverse.
-        (self.0 != 0).then(|| Self(invert_byte(self.0)))
+        // The chain runs whatever the operand, so its cost says nothing about the value.
+        //
+        // Zero is outside the multiplicative group and the chain already sends it to itself.
+        let inverse = self.invert_or_zero();
+        (self.0 != 0).then_some(inverse)
     }
 
     #[inline]
@@ -552,6 +569,12 @@ mod tests {
         //
         //     s(x) = A(x^254) + 0x63,   A the map with the circulant rows of 0x1f
         let affine = ByteMatrix::from_images([0x1f, 0x3e, 0x7c, 0xf8, 0xf1, 0xe3, 0xc7, 0x8f]);
+
+        // The quadword published for the inverting affine-byte instruction's matrix operand.
+        //
+        // This pins the row layout to the hardware on every host, not only on those that run it.
+        assert_eq!(affine.to_quadword(), 0xf1e3_c78f_1f3e_7cf8);
+
         let sbox = |x: u8| affine.apply(super::invert_byte(x)) ^ 0x63;
 
         // Entries 0x00, 0x01, 0x53 and 0xff of the published table.
@@ -570,6 +593,17 @@ mod tests {
         // Zero is outside the group and the exponentiation leaves it alone.
         assert_eq!(super::invert_byte(0), 0);
         assert_eq!(Rijndael8b::ZERO.try_inverse(), None);
+    }
+
+    #[test]
+    fn the_generator_is_the_image_of_the_tower_generator() {
+        // Both representations are the same field, so one generator maps onto the other.
+        //
+        // This is what pins the transcribed bit pattern the constant is built from.
+        assert_eq!(
+            Rijndael8b::GENERATOR,
+            Rijndael8b::from(BinaryField8::GENERATOR)
+        );
     }
 
     #[test]

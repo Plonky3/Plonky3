@@ -8,6 +8,8 @@
 //!
 //! Evaluated term by term instead, each element costs a chain of squarings and products.
 
+use serde::{Deserialize, Serialize};
+
 use super::engine::ByteMatrix;
 use super::{Rijndael8b, mul_bytes};
 
@@ -39,16 +41,16 @@ const FROBENIUS: [ByteMatrix; ORBIT] = {
 };
 
 impl Rijndael8b {
-    /// The map raising every element to the power `2^k`.
+    /// The map raising every element to the power `2^k`, for `k` the argument.
     ///
     /// The orbit closes after eight steps, so the argument is taken modulo that.
-    pub const fn frobenius_map(power: usize) -> ByteMatrix {
-        FROBENIUS[power % ORBIT]
+    pub const fn frobenius_map(power_log: usize) -> ByteMatrix {
+        FROBENIUS[power_log % ORBIT]
     }
 
     /// This element raised to `2^k`, for every `k` below the field's degree.
     ///
-    /// A Galois orbit is the whole conjugate set of an element.
+    /// These are the element's conjugates with multiplicity, so a subfield element repeats.
     pub fn frobenius_orbit(self) -> [Self; ORBIT] {
         core::array::from_fn(|k| Self::from_byte(FROBENIUS[k].apply(self.to_byte())))
     }
@@ -62,11 +64,15 @@ impl Rijndael8b {
 ///
 /// Held as coefficients rather than as a matrix, because that is the form a protocol states a
 /// Frobenius-twisted weight in.
-#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
+///
+/// The width in the name is the field's, since the form is specific to it.
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+#[repr(transparent)]
 #[must_use]
-pub struct LinearizedPoly([Rijndael8b; ORBIT]);
+pub struct LinearizedPoly8b([Rijndael8b; ORBIT]);
 
-impl LinearizedPoly {
+impl LinearizedPoly8b {
     /// The map with the given coefficients, in order of increasing squaring power.
     pub const fn new(coefficients: [Rijndael8b; ORBIT]) -> Self {
         Self(coefficients)
@@ -124,7 +130,7 @@ mod tests {
     use p3_field::{Field, PackedValue, PrimeCharacteristicRing};
     use proptest::prelude::*;
 
-    use super::{FROBENIUS, LinearizedPoly, ORBIT};
+    use super::{FROBENIUS, LinearizedPoly8b, ORBIT};
     use crate::aes::mul_bytes;
     use crate::{PackedRijndael8b, Rijndael8b};
 
@@ -195,7 +201,7 @@ mod tests {
         /// The tabulated map must agree with summing the linearized terms at every point.
         #[test]
         fn the_tabulated_linearized_map_matches_its_definition(coefficients: [u8; ORBIT], x: u8) {
-            let poly = LinearizedPoly::new(coefficients.map(Rijndael8b::from_byte));
+            let poly = LinearizedPoly8b::new(coefficients.map(Rijndael8b::from_byte));
             let point = Rijndael8b::from_byte(x);
             prop_assert_eq!(poly.to_matrix().apply(x), poly.eval(point).to_byte());
         }
@@ -203,9 +209,23 @@ mod tests {
         /// A linearized polynomial is additive, which is the whole point of the form.
         #[test]
         fn a_linearized_polynomial_is_additive(coefficients: [u8; ORBIT], x: u8, y: u8) {
-            let poly = LinearizedPoly::new(coefficients.map(Rijndael8b::from_byte));
+            let poly = LinearizedPoly8b::new(coefficients.map(Rijndael8b::from_byte));
             let (a, b) = (Rijndael8b::from_byte(x), Rijndael8b::from_byte(y));
             prop_assert_eq!(poly.eval(a + b), poly.eval(a) + poly.eval(b));
+        }
+
+        /// A single constant coefficient must be scaling, which is tabulated elsewhere.
+        ///
+        /// Neither the coefficient order nor the exponent of the orbit reaches this route.
+        #[test]
+        fn one_constant_coefficient_is_scaling(c: u8) {
+            let scalar = Rijndael8b::from_byte(c);
+            let mut coefficients = [Rijndael8b::ZERO; ORBIT];
+            coefficients[0] = scalar;
+            prop_assert_eq!(
+                LinearizedPoly8b::new(coefficients).to_matrix(),
+                scalar.scaling_matrix()
+            );
         }
 
         /// The packed sweep must agree with the scalar map, position by position.
@@ -213,35 +233,97 @@ mod tests {
         fn the_packed_sweep_matches_the_scalar_map(
             coefficients: [u8; ORBIT],
             values in prop::collection::vec(any::<u8>(), 64),
-            power in 0usize..16,
+            power_log in 0usize..16,
         ) {
-            let poly = LinearizedPoly::new(coefficients.map(Rijndael8b::from_byte));
+            let poly = LinearizedPoly8b::new(coefficients.map(Rijndael8b::from_byte));
             let block: PackedRijndael8b<64> =
                 PackedValue::from_fn(|i| Rijndael8b::from_byte(values[i]));
 
-            let mut mapped = block;
-            mapped.apply(poly.to_matrix());
             let expected: PackedRijndael8b<64> =
                 PackedValue::from_fn(|i| poly.eval(Rijndael8b::from_byte(values[i])));
-            prop_assert_eq!(mapped, expected);
+            prop_assert_eq!(block.apply(poly.to_matrix()), expected);
 
-            let mut twisted = block;
-            twisted.frobenius(power);
             let expected: PackedRijndael8b<64> = PackedValue::from_fn(|i| {
-                Rijndael8b::from_byte(repeated_square(values[i], power % ORBIT))
+                Rijndael8b::from_byte(repeated_square(values[i], power_log % ORBIT))
             });
-            prop_assert_eq!(twisted, expected);
+            prop_assert_eq!(block.frobenius(power_log), expected);
+
+            // The packed override must match the scalar one it mirrors.
+            prop_assert_eq!(block.exp_power_of_2(power_log), expected);
+        }
+    }
+
+    #[test]
+    fn a_single_unit_coefficient_is_one_map_of_the_orbit() {
+        // Invariant: with `c_j = 1` and every other coefficient zero the sum is `x^(2^j)`.
+        //
+        // A reversed coefficient order would place the map at `7 - j` instead.
+        for j in 0..ORBIT {
+            let mut coefficients = [Rijndael8b::ZERO; ORBIT];
+            coefficients[j] = Rijndael8b::ONE;
+            assert_eq!(
+                LinearizedPoly8b::new(coefficients).to_matrix(),
+                Rijndael8b::frobenius_map(j),
+                "term {j}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_known_answer_with_coefficients_outside_the_prime_subfield() {
+        // A reversed coefficient order and a `c_j^(2^j)` misreading agree on `GF(2)`.
+        //
+        // So the weight below has four coefficients that are neither zero nor one.
+        //
+        // Fixture state: `0x02 x + 0x03 x^2 + 0x8d x^8 + 0x1f x^64`, evaluated elsewhere.
+        //
+        // - x = 0x01 gives 0x93, and x = 0x53 gives 0xa2,
+        // - x = 0xff gives 0x34, and x = 0x80 gives 0x30.
+        let poly = LinearizedPoly8b::new(
+            [0x02, 0x03, 0x00, 0x8d, 0x00, 0x00, 0x1f, 0x00].map(Rijndael8b::from_byte),
+        );
+        for (x, want) in [(0x01, 0x93), (0x53, 0xa2), (0xff, 0x34), (0x80, 0x30)] {
+            assert_eq!(
+                poly.eval(Rijndael8b::from_byte(x)).to_byte(),
+                want,
+                "{x:#04x}"
+            );
+            assert_eq!(poly.to_matrix().apply(x), want, "{x:#04x}");
+        }
+    }
+
+    #[test]
+    fn repeated_squaring_matches_the_reference_at_every_exponent() {
+        // Invariant: the orbit closes after eight steps, so the exponent reduces modulo eight.
+        //
+        // The bound sweeps one full turn and a little past it.
+        //
+        // The largest index a caller can pass is covered separately.
+        for byte in [0u8, 1, 2, 0x1b, 0x80, 0x53, u8::MAX] {
+            let x = Rijndael8b::from_byte(byte);
+            for power_log in 0..=(2 * ORBIT + 3) {
+                assert_eq!(
+                    x.exp_power_of_2(power_log).to_byte(),
+                    repeated_square(byte, power_log % ORBIT),
+                    "{byte:#04x} at {power_log}"
+                );
+            }
+            assert_eq!(
+                x.exp_power_of_2(usize::MAX),
+                x.exp_power_of_2(usize::MAX % ORBIT),
+                "{byte:#04x} at the largest exponent"
+            );
         }
     }
 
     /// A worked example small enough to check by hand.
     ///
-    /// The polynomial `x^2 + x` is the trace-like map whose kernel is the prime subfield.
+    /// The polynomial `x + x^2` is the Artin-Schreier map, whose kernel is the prime subfield.
     #[test]
     fn a_hand_checkable_linearized_polynomial() {
         let one = Rijndael8b::ONE;
         let zero = Rijndael8b::ZERO;
-        let poly = LinearizedPoly::new([one, one, zero, zero, zero, zero, zero, zero]);
+        let poly = LinearizedPoly8b::new([one, one, zero, zero, zero, zero, zero, zero]);
 
         // Fixture state: the map sends `x` to `x + x^2`.
         assert_eq!(poly.eval(zero), zero);
@@ -252,5 +334,19 @@ mod tests {
 
         // The tabulated form must be the same map.
         assert_eq!(poly.to_matrix().apply(2), 6);
+    }
+
+    #[test]
+    fn the_coefficients_round_trip_through_serde() {
+        // A protocol states a twisted weight in this form, so the encoding has to carry it.
+        let poly = LinearizedPoly8b::new(
+            [0x02, 0x03, 0x00, 0x8d, 0x00, 0x00, 0x1f, 0x00].map(Rijndael8b::from_byte),
+        );
+        let encoded = serde_json::to_string(&poly).unwrap();
+        assert_eq!(
+            serde_json::from_str::<LinearizedPoly8b>(&encoded).unwrap(),
+            poly
+        );
+        assert_eq!(poly.coefficients()[3].to_byte(), 0x8d);
     }
 }

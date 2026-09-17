@@ -66,13 +66,6 @@ impl<const N: usize> PackedRijndael8b<N> {
     /// The same element in every position.
     #[inline]
     const fn splat(value: Rijndael8b) -> Self {
-        // A width that is not a power of two would break the interleave below.
-        const {
-            assert!(
-                N.is_power_of_two(),
-                "the block width must be a power of two"
-            );
-        }
         Self([value; N])
     }
 
@@ -92,27 +85,32 @@ impl<const N: usize> PackedRijndael8b<N> {
         unsafe { &mut *ptr::from_mut(self).cast::<[u8; N]>() }
     }
 
-    /// Replaces every element with its image under one `F_2`-linear map.
-    pub fn apply(&mut self, map: ByteMatrix) {
+    /// Every element replaced by its image under one `F_2`-linear map.
+    #[inline]
+    pub fn apply(mut self, map: ByteMatrix) -> Self {
         map.apply_slice(self.bytes_mut());
+        self
     }
 
-    /// Raises every element to the power `2^k`.
+    /// Every element raised to the power `2^k`.
     ///
     /// One tabulated map covers any exponent.
     ///
     /// Repeated squaring would cost one product per step instead.
-    pub fn frobenius(&mut self, power: usize) {
-        self.apply(Rijndael8b::frobenius_map(power));
+    #[inline]
+    pub fn frobenius(self, power_log: usize) -> Self {
+        self.apply(Rijndael8b::frobenius_map(power_log))
     }
 
-    /// Replaces every element with its inverse, leaving zero alone.
+    /// Every element inverted, with zero sent to zero.
     ///
     /// The byte-wise hardware inverse is one instruction per register.
     ///
     /// The fallback is an addition chain of eleven products per element.
-    pub fn invert_or_zero(&mut self) {
+    #[inline]
+    pub fn invert_or_zero(mut self) -> Self {
         invert_slice(self.bytes_mut());
+        self
     }
 }
 
@@ -182,13 +180,8 @@ impl<const N: usize> Div for PackedRijndael8b<N> {
     #[inline]
     #[allow(clippy::suspicious_arithmetic_impl)]
     fn div(self, rhs: Self) -> Self {
-        let mut inverse = rhs;
-        assert!(
-            !inverse.bytes().contains(&0),
-            "tried to invert zero in a block"
-        );
-        inverse.invert_or_zero();
-        self * inverse
+        assert!(!rhs.bytes().contains(&0), "tried to invert zero in a block");
+        self * rhs.invert_or_zero()
     }
 }
 
@@ -238,11 +231,12 @@ impl<const N: usize> Sub<PackedRijndael8b<N>> for Rijndael8b {
 impl<const N: usize> Mul<Rijndael8b> for PackedRijndael8b<N> {
     type Output = Self;
 
-    /// Scaling is `F_2`-linear, so a fixed factor rides the map engine rather than a broadcast.
+    /// A broadcast plus the byte-wise product beats tabulating the factor as a map.
+    ///
+    /// Callers holding one factor across a loop should hoist its matrix and sweep with that.
     #[inline]
-    fn mul(mut self, rhs: Rijndael8b) -> Self {
-        self.apply(rhs.scaling_matrix());
-        self
+    fn mul(self, rhs: Rijndael8b) -> Self {
+        self * Self::splat(rhs)
     }
 }
 
@@ -357,6 +351,12 @@ impl<const N: usize> PrimeCharacteristicRing for PackedRijndael8b<N> {
         panic!("halve is undefined in characteristic 2")
     }
 
+    /// Raising to `2^k` is one tabulated map, whatever the exponent.
+    #[inline]
+    fn exp_power_of_2(&self, power_log: usize) -> Self {
+        self.frobenius(power_log)
+    }
+
     #[inline]
     fn xor(&self, y: &Self) -> Self {
         *self + *y
@@ -411,7 +411,16 @@ impl<const N: usize> Mul<Gf2> for PackedRijndael8b<N> {
 unsafe impl<const N: usize> PackedValue for PackedRijndael8b<N> {
     type Value = Rijndael8b;
 
-    const WIDTH: usize = N;
+    // The packed contract promises a power of two, and the interleave below indexes on it.
+    //
+    // Asserting here rejects any other width at the first use of the trait.
+    const WIDTH: usize = {
+        assert!(
+            N.is_power_of_two(),
+            "the block width must be a power of two"
+        );
+        N
+    };
 
     #[inline]
     fn from_slice(slice: &[Self::Value]) -> &Self {
@@ -456,6 +465,12 @@ unsafe impl<const N: usize> PackedFieldPow2 for PackedRijndael8b<N> {
     /// Panics if the block length does not divide the width, or is not a power of two.
     #[inline]
     fn interleave(&self, other: Self, block_len: usize) -> (Self, Self) {
+        const {
+            assert!(
+                N.is_power_of_two(),
+                "the block width must be a power of two"
+            );
+        };
         assert!(
             block_len.is_power_of_two() && block_len <= N && N.is_multiple_of(block_len),
             "unsupported block_len"
@@ -541,9 +556,10 @@ mod tests {
         let expected = pack(core::array::from_fn(|i| mul_bytes(a[i], b[0])));
         prop_assert_eq!(x * scalar, expected);
 
-        let mut inverted = x;
-        inverted.invert_or_zero();
-        prop_assert_eq!(inverted, pack(core::array::from_fn(|i| invert_byte(a[i]))));
+        prop_assert_eq!(
+            x.invert_or_zero(),
+            pack(core::array::from_fn(|i| invert_byte(a[i])))
+        );
 
         Ok(())
     }

@@ -190,8 +190,6 @@ pub(crate) fn poly_mul_128_by_64(a: u128, b: u64) -> u128 {
 
 /// Reduces a 128-bit carryless product modulo `x^64 + x^4 + x^3 + x + 1`, in one register.
 ///
-/// # Algorithm
-///
 /// Writing `T = x^4 + x^3 + x + 1` for the modulus tail, so that `x^64 = T`:
 ///
 /// ```text
@@ -199,8 +197,6 @@ pub(crate) fn poly_mul_128_by_64(a: u128, b: u64) -> u128 {
 ///     p_hi T   =  f_lo + f_hi x^64                        deg f_hi <= 2
 ///     f_hi T                                              deg <= 6, so it stops here
 /// ```
-///
-/// Two carryless products therefore finish the fold, and only the low quadword is read out.
 ///
 /// # Safety
 ///
@@ -219,13 +215,11 @@ unsafe fn fold_64(product: __m128i) -> u64 {
 
 /// Multiplication in `GF(2^64) = GF(2)[x] / (x^64 + x^4 + x^3 + x + 1)`.
 ///
-/// # Performance
-///
 /// The product and both fold steps stay in one vector register.
 ///
-/// Reducing in the general-purpose file moves both halves back across the register files.
+/// Reducing in the integer file would move both halves back across the register files.
 ///
-/// At this width that move is most of the latency of a multiply.
+/// At this width that move is most of a multiply's latency.
 #[inline]
 pub(crate) fn poly_mul_64(a: u64, b: u64) -> u64 {
     // SAFETY: this module is compiled only when `target_feature = "pclmulqdq"` is enabled.
@@ -260,5 +254,49 @@ pub(crate) fn poly_dot_64(pairs: impl Iterator<Item = (u64, u64)>) -> u64 {
             acc = _mm_xor_si128(acc, _mm_clmulepi64_si128::<LOW_BY_LOW>(x, y));
         }
         fold_64(acc)
+    }
+}
+
+/// Multiplication in the cubic extension `y^3 + y + 1` of `GF(2^64)`.
+///
+/// Karatsuba over the three limbs, recombined and folded without leaving the vector file.
+///
+/// Reduction is `F_2`-linear, so only the three output coordinates need folding:
+///
+/// ```text
+///     deferred   six products  +  three folds of two each  =  twelve
+///     immediate  six products of three each                =  eighteen
+/// ```
+#[inline]
+pub(crate) fn poly_mul_192(a: [u64; 3], b: [u64; 3]) -> [u64; 3] {
+    // SAFETY: this module is compiled only when `target_feature = "pclmulqdq"` is enabled.
+    // The remaining intrinsics are `sse2`, always available on `x86_64`.
+    unsafe {
+        let lift = |v: u64| _mm_set_epi64x(0, v as i64);
+        let [a0, a1, a2] = a.map(lift);
+        let [b0, b1, b2] = b.map(lift);
+
+        let product = |x, y| _mm_clmulepi64_si128::<LOW_BY_LOW>(x, y);
+        let sum = _mm_xor_si128;
+
+        // Three diagonal products, then one per off-diagonal pair.
+        let c0 = product(a0, b0);
+        let c1 = product(a1, b1);
+        let c2 = product(a2, b2);
+        let d01 = product(sum(a0, a1), sum(b0, b1));
+        let d02 = product(sum(a0, a2), sum(b0, b2));
+        let d12 = product(sum(a1, a2), sum(b1, b2));
+
+        // Each pair carries both of its cross terms, which the diagonals separate out.
+        let p1 = sum(d01, sum(c0, c1));
+        let p2 = sum(d02, sum(sum(c0, c1), c2));
+        let p3 = sum(d12, sum(c1, c2));
+
+        // The modulus rewrites the top two coefficients, then each output folds once.
+        [
+            fold_64(sum(c0, p3)),
+            fold_64(sum(sum(p1, p3), c2)),
+            fold_64(sum(p2, c2)),
+        ]
     }
 }

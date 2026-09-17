@@ -121,7 +121,9 @@ pub(crate) fn poly_sqrt_64(a: u64) -> u64 {
 ///     chain      1, 2, 3, 6, 12, 24, 48, 60, 63
 /// ```
 ///
-/// Nine products and sixty-three squarings, none of them indexed by the operand.
+/// Nine exponents is eight steps, so eight products and sixty-three squarings.
+///
+/// None of them is indexed by the operand.
 #[inline]
 pub(crate) fn poly_inverse_64(x: u64) -> u64 {
     let b2 = poly_mul_64(poly_square_64(x), x);

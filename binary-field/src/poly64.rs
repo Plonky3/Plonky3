@@ -31,6 +31,11 @@ const CANTOR_BASIS: [u64; 64] = {
     basis
 };
 
+/// The bit pattern of the multiplicative generator of the tower representation.
+///
+/// Its image here is the generator, so the change of basis carries one onto the other.
+const TOWER_GENERATOR: u64 = 0x1_0000_0004;
+
 /// The generator of this level over the one below, in this representation.
 ///
 /// The tower carries that element as a single basis vector, at bit 32.
@@ -44,7 +49,7 @@ const ALPHA: u64 = clmul::tower_image_64(1 << 32);
 ///
 /// A committed column here is also half the volume of a 128-bit one.
 ///
-/// Multiplication, squaring, the square root and inversion here are all constant time.
+/// Multiplication, squaring, the square root and inversion here are all table-free.
 ///
 /// The change of basis to and from the tower is table-driven, and so is not.
 #[derive(Copy, Clone, Default, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -78,6 +83,14 @@ impl Poly64 {
     #[inline]
     pub const fn from_le_bytes(bytes: [u8; 8]) -> Self {
         Self(u64::from_le_bytes(bytes))
+    }
+
+    /// The inverse of this element, with zero sent to zero.
+    ///
+    /// The chain runs whatever the operand is, so its cost says nothing about the value.
+    #[inline]
+    pub fn invert_or_zero(self) -> Self {
+        Self(clmul::poly_inverse_64(self.0))
     }
 }
 
@@ -169,13 +182,15 @@ impl PrimeCharacteristicRing for Poly64 {
 impl Field for Poly64 {
     type Packing = Self;
 
-    // The polynomial variable itself has order `2^64 - 1` under this modulus.
-    const GENERATOR: Self = Self(2);
+    const GENERATOR: Self = Self(clmul::tower_image_64(TOWER_GENERATOR));
 
     #[inline]
     fn try_inverse(&self) -> Option<Self> {
-        // Zero has no multiplicative inverse.
-        (self.0 != 0).then(|| Self(clmul::poly_inverse_64(self.0)))
+        // The chain runs whatever the operand, so its cost says nothing about the value.
+        //
+        // Zero is outside the multiplicative group and the chain already sends it to itself.
+        let inverse = self.invert_or_zero();
+        (self.0 != 0).then_some(inverse)
     }
 
     #[inline]
@@ -353,6 +368,14 @@ mod tests {
         // Any field isomorphism fixes zero and one.
         assert_eq!(Poly64::from(BinaryField64::ZERO), Poly64::ZERO);
         assert_eq!(Poly64::from(BinaryField64::ONE), Poly64::ONE);
+    }
+
+    #[test]
+    fn the_generator_is_the_image_of_the_tower_generator() {
+        // Both representations are the same field, so one generator maps onto the other.
+        //
+        // This is what pins the transcribed bit pattern the constant is built from.
+        assert_eq!(Poly64::GENERATOR, Poly64::from(BinaryField64::GENERATOR));
     }
 
     #[test]

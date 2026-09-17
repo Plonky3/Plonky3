@@ -66,7 +66,7 @@ unsafe impl ByteLanes for __m128i {
 
 /// The widest register the kernels sweep with, holding sixteen bytes.
 ///
-/// Nothing wider is available without the half-kilobit registers.
+/// A 256-bit form exists without the half-kilobit registers, but no test leg here runs it.
 #[cfg(not(all(target_feature = "avx512f", target_feature = "avx512bw")))]
 pub(super) type Wide = __m128i;
 

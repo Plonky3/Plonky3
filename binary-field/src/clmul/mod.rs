@@ -32,6 +32,8 @@ pub(crate) use sqrt::poly_sqrt_128;
 mod inverse;
 #[cfg(all(target_arch = "x86_64", target_feature = "pclmulqdq"))]
 pub(crate) use inverse::poly_inverse_128;
+#[cfg(all(target_arch = "x86_64", target_feature = "pclmulqdq"))]
+pub(crate) use x86_64::poly_mul_192;
 
 // Compiled on every target, even where a backend supersedes it.
 // Its tests then run everywhere.

@@ -11,7 +11,7 @@ use std::hint::black_box;
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use p3_binary_field::{
     BinaryField8, BinaryField16, BinaryField32, BinaryField64, BinaryField128, Ghash128,
-    LinearizedPoly, PackedRijndael8b, Poly64, Poly192, Rijndael8b, TowerLevel, poly_basis,
+    LinearizedPoly8b, PackedRijndael8b, Poly64, Poly192, Rijndael8b, TowerLevel, poly_basis,
 };
 use p3_field::{BasedVectorSpace, Field, PackedValue, PrimeCharacteristicRing};
 use rand::distr::{Distribution, StandardUniform};
@@ -855,7 +855,10 @@ fn bench_batch_kernels(c: &mut Criterion) {
 
 /// The AES field against the tower's own byte field, scalar and packed.
 ///
-/// Three arms over the same buffer of bytes, each reporting time per element:
+/// Every arm rewrites one buffer in place, so no arm pays a reduction or a copy another skips.
+///
+/// The buffer is reused across iterations rather than restored, which is sound because every
+/// routine here runs a fixed schedule: its cost does not depend on the values it reads.
 ///
 /// ```text
 ///     tower      byte table lookup, the representation already in the crate
@@ -870,11 +873,13 @@ fn bench_aes(c: &mut Criterion) {
     let left: Vec<u8> = (0..BYTES).map(|_| rng.random::<u8>() | 1).collect();
     let right: Vec<u8> = (0..BYTES).map(|_| rng.random::<u8>() | 1).collect();
 
-    let tower_left: Vec<BinaryField8> = left.iter().map(|&b| BinaryField8::from_repr(b)).collect();
     let tower_right: Vec<BinaryField8> =
         right.iter().map(|&b| BinaryField8::from_repr(b)).collect();
-    let aes_left: Vec<Rijndael8b> = left.iter().map(|&b| Rijndael8b::from_byte(b)).collect();
     let aes_right: Vec<Rijndael8b> = right.iter().map(|&b| Rijndael8b::from_byte(b)).collect();
+
+    let mut tower_values: Vec<BinaryField8> =
+        left.iter().map(|&b| BinaryField8::from_repr(b)).collect();
+    let mut aes_values: Vec<Rijndael8b> = left.iter().map(|&b| Rijndael8b::from_byte(b)).collect();
 
     let block = |from: &[Rijndael8b]| -> Vec<PackedRijndael8b<64>> {
         from.as_chunks::<64>()
@@ -883,31 +888,32 @@ fn bench_aes(c: &mut Criterion) {
             .map(|c| *PackedRijndael8b::<64>::from_slice(c))
             .collect()
     };
-    let packed_left = block(&aes_left);
-    let packed_right = block(&aes_right);
+    let packed_right = block(&aes_values);
+    let mut packed_values = block(&aes_values);
 
     {
         let mut group = c.benchmark_group("aes/mul");
         group.throughput(criterion::Throughput::Elements(BYTES as u64));
         group.bench_function("tower", |b| {
             b.iter(|| {
-                let (x, y) = (black_box(&tower_left), black_box(&tower_right));
-                x.iter().zip(y).map(|(&a, &b)| a * b).sum::<BinaryField8>()
+                for (value, &factor) in black_box(&mut tower_values).iter_mut().zip(&tower_right) {
+                    *value *= factor;
+                }
             });
         });
         group.bench_function("scalar", |b| {
             b.iter(|| {
-                let (x, y) = (black_box(&aes_left), black_box(&aes_right));
-                x.iter().zip(y).map(|(&a, &b)| a * b).sum::<Rijndael8b>()
+                for (value, &factor) in black_box(&mut aes_values).iter_mut().zip(&aes_right) {
+                    *value *= factor;
+                }
             });
         });
         group.bench_function("packed", |b| {
             b.iter(|| {
-                let (x, y) = (black_box(&packed_left), black_box(&packed_right));
-                x.iter()
-                    .zip(y)
-                    .map(|(&a, &b)| a * b)
-                    .sum::<PackedRijndael8b<64>>()
+                for (value, &factor) in black_box(&mut packed_values).iter_mut().zip(&packed_right)
+                {
+                    *value *= factor;
+                }
             });
         });
         group.finish();
@@ -917,30 +923,24 @@ fn bench_aes(c: &mut Criterion) {
     group.throughput(criterion::Throughput::Elements(BYTES as u64));
     group.bench_function("tower", |b| {
         b.iter(|| {
-            black_box(&tower_left)
-                .iter()
-                .map(|x| x.inverse())
-                .sum::<BinaryField8>()
+            for value in black_box(&mut tower_values).iter_mut() {
+                *value = value.try_inverse().unwrap_or(BinaryField8::ONE);
+            }
         });
     });
     group.bench_function("scalar", |b| {
         b.iter(|| {
-            black_box(&aes_left)
-                .iter()
-                .map(|x| x.inverse())
-                .sum::<Rijndael8b>()
+            for value in black_box(&mut aes_values).iter_mut() {
+                *value = value.invert_or_zero();
+            }
         });
     });
     group.bench_function("packed", |b| {
-        b.iter_batched_ref(
-            || packed_left.clone(),
-            |blocks| {
-                for block in blocks.iter_mut() {
-                    block.invert_or_zero();
-                }
-            },
-            BatchSize::SmallInput,
-        );
+        b.iter(|| {
+            for block in black_box(&mut packed_values).iter_mut() {
+                *block = block.invert_or_zero();
+            }
+        });
     });
     group.finish();
 }
@@ -981,6 +981,13 @@ fn bench_lean_pair(c: &mut Criterion) {
                 black_box(&cubic)
                     .iter()
                     .fold(Poly192::ONE, |acc, &y| acc * y)
+            });
+        });
+        group.bench_function("cubic/composed", |b| {
+            b.iter(|| {
+                black_box(&cubic)
+                    .iter()
+                    .fold(Poly192::ONE, |acc, &y| acc.composed_mul(y))
             });
         });
         group.bench_function("gf128", |b| {
@@ -1024,17 +1031,21 @@ fn bench_lean_pair(c: &mut Criterion) {
 
 /// Frobenius powers and linearized polynomials, tabulated against evaluated.
 ///
-/// Every arm covers the same buffer, so the times are directly comparable per element.
+/// Every arm rewrites one buffer in place, so the rows are directly comparable.
+///
+/// The twist baseline multiplies rather than squaring.
+///
+/// The scalar square is itself one tabulated map, so squaring would compare one map to three.
 fn bench_frobenius(c: &mut Criterion) {
     /// Bytes per buffer, comfortably inside the first level of cache.
     const BYTES: usize = 4096;
 
     /// The squaring power the twisted arms raise to.
-    const POWER: usize = 3;
+    const POWER_LOG: usize = 3;
 
     let mut rng = SmallRng::seed_from_u64(13);
-    let scalars: Vec<Rijndael8b> = (0..BYTES).map(|_| rng.random()).collect();
-    let blocks: Vec<PackedRijndael8b<64>> = scalars
+    let mut scalars: Vec<Rijndael8b> = (0..BYTES).map(|_| rng.random()).collect();
+    let mut blocks: Vec<PackedRijndael8b<64>> = scalars
         .as_chunks::<64>()
         .0
         .iter()
@@ -1042,39 +1053,35 @@ fn bench_frobenius(c: &mut Criterion) {
         .collect();
 
     let coefficients: [Rijndael8b; 8] = core::array::from_fn(|_| rng.random());
-    let weight = LinearizedPoly::new(coefficients);
+    let weight = LinearizedPoly8b::new(coefficients);
     let tabulated = weight.to_matrix();
+    let twist = Rijndael8b::frobenius_map(POWER_LOG);
 
     {
         let mut group = c.benchmark_group("frobenius/twist");
         group.throughput(criterion::Throughput::Elements(BYTES as u64));
-        group.bench_function("repeated-square", |b| {
+        group.bench_function("product", |b| {
             b.iter(|| {
-                black_box(&scalars)
-                    .iter()
-                    .map(|&x| (0..POWER).fold(x, |acc, _| acc.square()))
-                    .sum::<Rijndael8b>()
+                for value in black_box(&mut scalars).iter_mut() {
+                    for _ in 0..POWER_LOG {
+                        *value = *value * *value;
+                    }
+                }
             });
         });
         group.bench_function("tabulated", |b| {
             b.iter(|| {
-                let map = Rijndael8b::frobenius_map(POWER);
-                black_box(&scalars)
-                    .iter()
-                    .map(|&x| Rijndael8b::from_byte(map.apply(x.to_byte())))
-                    .sum::<Rijndael8b>()
+                for value in black_box(&mut scalars).iter_mut() {
+                    *value = Rijndael8b::from_byte(twist.apply(value.to_byte()));
+                }
             });
         });
         group.bench_function("packed", |b| {
-            b.iter_batched_ref(
-                || blocks.clone(),
-                |blocks| {
-                    for block in blocks.iter_mut() {
-                        block.frobenius(POWER);
-                    }
-                },
-                BatchSize::SmallInput,
-            );
+            b.iter(|| {
+                for block in black_box(&mut blocks).iter_mut() {
+                    *block = block.frobenius(POWER_LOG);
+                }
+            });
         });
         group.finish();
     }
@@ -1083,22 +1090,24 @@ fn bench_frobenius(c: &mut Criterion) {
     group.throughput(criterion::Throughput::Elements(BYTES as u64));
     group.bench_function("evaluated", |b| {
         b.iter(|| {
-            black_box(&scalars)
-                .iter()
-                .map(|&x| weight.eval(x))
-                .sum::<Rijndael8b>()
+            for value in black_box(&mut scalars).iter_mut() {
+                *value = weight.eval(*value);
+            }
+        });
+    });
+    group.bench_function("tabulated", |b| {
+        b.iter(|| {
+            for value in black_box(&mut scalars).iter_mut() {
+                *value = Rijndael8b::from_byte(tabulated.apply(value.to_byte()));
+            }
         });
     });
     group.bench_function("packed", |b| {
-        b.iter_batched_ref(
-            || blocks.clone(),
-            |blocks| {
-                for block in blocks.iter_mut() {
-                    block.apply(tabulated);
-                }
-            },
-            BatchSize::SmallInput,
-        );
+        b.iter(|| {
+            for block in black_box(&mut blocks).iter_mut() {
+                *block = block.apply(tabulated);
+            }
+        });
     });
     group.finish();
 }

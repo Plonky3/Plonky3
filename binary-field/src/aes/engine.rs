@@ -120,7 +120,17 @@ impl ByteMatrix {
         self.0
     }
 
+    /// The map already held in that row layout.
+    ///
+    /// Every quadword is a matrix, so this cannot fail.
+    pub const fn from_quadword(rows: u64) -> Self {
+        Self(rows)
+    }
+
     /// Replaces every byte of the slice with its image.
+    ///
+    /// Inlined so a caller with a fixed-length block sweeps it without a call.
+    #[inline]
     pub fn apply_slice(self, bytes: &mut [u8]) {
         map_slice(&Affine(self), bytes);
     }
@@ -187,9 +197,9 @@ impl ByteMap for Invert {
 ///
 /// # Safety
 ///
-/// An implementation must occupy exactly its own width in contiguous bytes.
+/// Reading or writing one value must touch exactly its own width in contiguous bytes.
 ///
-/// Every bit pattern of that many bytes must be a valid value of it.
+/// That is what lets the kernels hand a slice chunk of that length to the two accessors.
 unsafe trait ByteLanes: Copy {
     /// Bytes per register.
     const WIDTH: usize;
@@ -259,7 +269,16 @@ unsafe impl ByteLanes for u8 {
 
     #[inline(always)]
     fn inverse_then_affine(self, matrix: Self::Matrix) -> Self {
-        ByteMatrix(matrix).apply(invert_byte(self))
+        let inverse = invert_byte(self);
+
+        // Only the hardware form composes the two, and it does so for free.
+        //
+        // Here the map is a parity fold per byte, so an identity is worth skipping.
+        if matrix == ByteMatrix::IDENTITY.to_quadword() {
+            inverse
+        } else {
+            ByteMatrix(matrix).apply(inverse)
+        }
     }
 }
 
@@ -286,6 +305,13 @@ type Narrow = u8;
 #[allow(clippy::chunks_exact_to_as_chunks)]
 #[inline(always)]
 fn map_registers<'a, L: ByteLanes, M: ByteMap>(map: &M, bytes: &'a mut [u8]) -> &'a mut [u8] {
+    const {
+        assert!(
+            size_of::<L>() == L::WIDTH,
+            "a register must be its own width in bytes"
+        );
+    };
+
     let covered = (bytes.len() / L::WIDTH) * L::WIDTH;
     let (head, tail) = bytes.split_at_mut(covered);
 
@@ -322,6 +348,13 @@ fn mul_registers<'a, 'b, L: ByteLanes>(
     dst: &'a mut [u8],
     src: &'b [u8],
 ) -> (&'a mut [u8], &'b [u8]) {
+    const {
+        assert!(
+            size_of::<L>() == L::WIDTH,
+            "a register must be its own width in bytes"
+        );
+    };
+
     let covered = (dst.len() / L::WIDTH) * L::WIDTH;
     let (head, tail) = dst.split_at_mut(covered);
     let (factors, rest) = src.split_at(covered);

@@ -64,6 +64,40 @@ impl Poly192 {
     const fn embed(value: Poly64) -> Self {
         Self([value, Poly64::ZERO, Poly64::ZERO])
     }
+
+    /// The product assembled from the coefficient field's own reduced products.
+    ///
+    /// Compiled everywhere, so its tests and its benchmark run even where a backend wins.
+    #[doc(hidden)]
+    #[inline]
+    pub fn composed_mul(self, rhs: Self) -> Self {
+        let ([a0, a1, a2], [b0, b1, b2]) = (self.0, rhs.0);
+
+        // The three diagonal products.
+        let c0 = a0 * b0;
+        let c1 = a1 * b1;
+        let c2 = a2 * b2;
+
+        // One product per off-diagonal pair, each carrying both of that pair's cross terms.
+        let d01 = (a0 + a1) * (b0 + b1);
+        let d02 = (a0 + a2) * (b0 + b2);
+        let d12 = (a1 + a2) * (b1 + b2);
+
+        // The three middle coefficients of the unreduced product.
+        let p1 = d01 + c0 + c1;
+        let p2 = d02 + c0 + c1 + c2;
+        let p3 = d12 + c1 + c2;
+
+        Self([c0 + p3, p1 + p3 + c2, p2 + c2])
+    }
+
+    /// The inverse of this element, with zero sent to zero.
+    ///
+    /// Every step runs whatever the operand is, so the cost says nothing about the value.
+    #[inline]
+    pub fn invert_or_zero(self) -> Self {
+        self.try_inverse().unwrap_or(Self::ZERO)
+    }
 }
 
 impl Packable for Poly192 {}
@@ -142,24 +176,15 @@ impl Mul for Poly192 {
     /// ```
     #[inline]
     fn mul(self, rhs: Self) -> Self {
-        let ([a0, a1, a2], [b0, b1, b2]) = (self.0, rhs.0);
-
-        // The three diagonal products.
-        let c0 = a0 * b0;
-        let c1 = a1 * b1;
-        let c2 = a2 * b2;
-
-        // One product per off-diagonal pair, each carrying both of that pair's cross terms.
-        let d01 = (a0 + a1) * (b0 + b1);
-        let d02 = (a0 + a2) * (b0 + b2);
-        let d12 = (a1 + a2) * (b1 + b2);
-
-        // The five coefficients of the unreduced product.
-        let p1 = d01 + c0 + c1;
-        let p2 = d02 + c0 + c1 + c2;
-        let p3 = d12 + c1 + c2;
-
-        Self([c0 + p3, p1 + p3 + c2, p2 + c2])
+        #[cfg(all(target_arch = "x86_64", target_feature = "pclmulqdq"))]
+        {
+            let limbs = |x: Self| x.0.map(Poly64::to_bits);
+            Self(crate::clmul::poly_mul_192(limbs(self), limbs(rhs)).map(Poly64::new))
+        }
+        #[cfg(not(all(target_arch = "x86_64", target_feature = "pclmulqdq")))]
+        {
+            self.composed_mul(rhs)
+        }
     }
 }
 
@@ -244,7 +269,7 @@ impl PrimeCharacteristicRing for Poly192 {
 impl Field for Poly192 {
     type Packing = Self;
 
-    // The smallest element of the multiplicative group whose order is the whole group.
+    // An element of the multiplicative group whose order is the whole group.
     const GENERATOR: Self = Self([Poly64::new(5), Poly64::new(3), Poly64::new(1)]);
 
     /// # Algorithm
@@ -279,7 +304,9 @@ impl Field for Poly192 {
         // Expanding along that row gives the determinant.
         let norm = a0 * c0 + a2 * c1 + a1 * c2;
 
-        norm.try_inverse().map(|scale| Self([c0, c1, c2]) * scale)
+        // Every step runs whatever the operand is, so the cost says nothing about the value.
+        let candidate = Self([c0, c1, c2]) * norm.invert_or_zero();
+        (!norm.is_zero()).then_some(candidate)
     }
 
     /// Squaring is a triangular map on the coordinates, so its inverse is one too.
@@ -481,7 +508,7 @@ impl HasFrobenius<Poly64> for Poly192 {
     ///     a_0 + a_1 y + a_2 y^2    ->  a_0 + a_2 y + (a_1 + a_2) y^2
     /// ```
     ///
-    /// So one application is three additions and no products at all.
+    /// So one application is one addition and a permutation, with no products at all.
     #[inline]
     fn frobenius(&self) -> Self {
         let [a0, a1, a2] = self.0;
@@ -501,7 +528,7 @@ impl HasFrobenius<Poly64> for Poly192 {
     #[inline]
     fn pseudo_inv(&self) -> Self {
         // Inversion through the adjugate beats the exponentiation the contract is phrased in.
-        self.try_inverse().unwrap_or(Self::ZERO)
+        self.invert_or_zero()
     }
 }
 
