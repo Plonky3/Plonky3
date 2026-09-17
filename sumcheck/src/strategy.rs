@@ -13,7 +13,7 @@ use alloc::vec::Vec;
 
 use p3_challenger::fs::TranscriptField;
 use p3_challenger::{FieldChallenger, GrindingChallenger};
-use p3_field::{Algebra, ExtensionField, Field, PrimeCharacteristicRing, dot_product};
+use p3_field::{Algebra, ExtensionField, Field, PackedValue, PrimeCharacteristicRing, dot_product};
 use p3_maybe_rayon::prelude::*;
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::{Poly, PolyMaybePackedView};
@@ -123,6 +123,63 @@ fn gather_pairs<T: Copy>(chunk: &[T]) -> ([T; K], [T; K]) {
     let lo: [T; K] = core::array::from_fn(|i| chunk[2 * i]);
     let hi: [T; K] = core::array::from_fn(|i| chunk[2 * i + 1]);
     (lo, hi)
+}
+
+/// Splits a run of `2 W` adjacent entries into the two faces, one packed vector per face.
+///
+/// The gather above at the width of a SIMD register:
+///
+/// ```text
+///     run : [ t0, t1, t2, t3, ... ]
+///     lo  : < t0, t2, ... >             the variable at 0
+///     hi  : < t1, t3, ... >             the variable at 1
+/// ```
+///
+/// A width-one packing puts one entry in each vector, which is the scalar pair again.
+#[inline(always)]
+fn gather_pairs_packed<P: PackedValue>(run: &[P::Value]) -> (P, P) {
+    // Pinning the length to the step is what keeps the lane indices free of bounds checks.
+    let run = &run[..2 * P::WIDTH];
+    (
+        P::from_fn(|lane| run[2 * lane]),
+        P::from_fn(|lane| run[2 * lane + 1]),
+    )
+}
+
+/// Splits a tile of `K` packed steps into the two faces of the suffix round variable.
+#[inline(always)]
+fn gather_tile_packed<P: PackedValue>(tile: &[P::Value]) -> ([P; K], [P; K]) {
+    // One step covers `W` pairs, so `2 W` adjacent entries.
+    let stride = 2 * P::WIDTH;
+
+    // Pinning the length to the tile is what keeps the entry indices free of bounds checks.
+    let tile = &tile[..K * stride];
+    (
+        core::array::from_fn(|i| P::from_fn(|lane| tile[i * stride + 2 * lane])),
+        core::array::from_fn(|i| P::from_fn(|lane| tile[i * stride + 2 * lane + 1])),
+    )
+}
+
+/// Entries a kernel's packed sweep covers, out of the `len` it is handed.
+///
+/// A single-lane vector holds one pair, so a width-one packing leaves every entry to the
+/// scalar sweep that follows it.
+#[inline(always)]
+const fn packed_sweep<P: PackedValue>(len: usize) -> usize {
+    if P::WIDTH == 1 {
+        0
+    } else {
+        len - len % P::WIDTH
+    }
+}
+
+/// Sums the lanes of a packed `(constant, leading)` accumulator pair.
+#[inline(always)]
+fn round_reduce_lanes<A: Field>(acc: (A::Packing, A::Packing)) -> (A, A) {
+    (
+        acc.0.as_slice().iter().copied().sum(),
+        acc.1.as_slice().iter().copied().sum(),
+    )
 }
 
 /// Component-wise sum of two `(constant, leading)` accumulator pairs.
@@ -600,38 +657,57 @@ where
 ///
 /// The two faces of the round variable are adjacent entries, not separate slices.
 ///
-/// So each tile gathers them itself.
+/// So each step gathers them itself, `W` pairs into one packed vector per face.
 ///
 /// Parallelism is left to the caller, which owns the outer loop.
 #[inline]
-fn round_coefficients_pairs<A>(evals: &[A], weights: &[A]) -> (A, A)
-where
-    A: Algebra<A> + Copy,
-{
-    // Whole tiles first, leftovers after.
-    // A tile is `K` pairs, so `2K` consecutive entries.
-    let (e_main, e_tail) = evals.as_chunks::<{ 2 * K }>();
-    let (w_main, w_tail) = weights.as_chunks::<{ 2 * K }>();
+fn round_coefficients_pairs<A: Field>(evals: &[A], weights: &[A]) -> (A, A) {
+    // Entries one packed step consumes: `W` pairs, so `2 W` adjacent entries.
+    let stride = 2 * A::Packing::WIDTH;
 
-    // Main loop: K pairs per iteration through delayed-reduction dot products.
-    let main = e_main
-        .iter()
-        .zip(w_main)
-        .fold((A::ZERO, A::ZERO), |acc, (e_chunk, w_chunk)| {
-            let (e_lo, e_hi) = gather_pairs::<A>(e_chunk);
-            let (w_lo, w_hi) = gather_pairs::<A>(w_chunk);
-            round_reduce(acc, chunk_round_step(&e_lo, &e_hi, &w_lo, &w_hi))
+    // A tile is `K` packed steps, the span one delayed-reduction dot product covers.
+    let tile = K * stride;
+
+    // Whole tiles first, then whole steps, then single pairs.
+    let tiled = (evals.len() / tile) * tile;
+    let (e_tiles, e_rest) = evals.split_at(tiled);
+    let (w_tiles, w_rest) = weights.split_at(tiled);
+
+    // Main loop: `K` packed steps per iteration through delayed-reduction dot products.
+    let main = e_tiles
+        .chunks_exact(tile)
+        .zip(w_tiles.chunks_exact(tile))
+        .fold(
+            (A::Packing::ZERO, A::Packing::ZERO),
+            |acc, (e_tile, w_tile)| {
+                let (e_lo, e_hi) = gather_tile_packed::<A::Packing>(e_tile);
+                let (w_lo, w_hi) = gather_tile_packed::<A::Packing>(w_tile);
+                round_reduce(acc, chunk_round_step(&e_lo, &e_hi, &w_lo, &w_hi))
+            },
+        );
+
+    // Fewer than `K` steps left, so a streaming fold with eager reduction is fine.
+    let stepped = (e_rest.len() / stride) * stride;
+    let (e_steps, e_pairs) = e_rest.split_at(stepped);
+    let (w_steps, w_pairs) = w_rest.split_at(stepped);
+    let packed = e_steps
+        .chunks_exact(stride)
+        .zip(w_steps.chunks_exact(stride))
+        .fold(main, |acc, (e_step, w_step)| {
+            let (e_lo, e_hi) = gather_pairs_packed::<A::Packing>(e_step);
+            let (w_lo, w_hi) = gather_pairs_packed::<A::Packing>(w_step);
+            round_step::<A::Packing, A::Packing>(acc, e_lo, e_hi, w_lo, w_hi)
         });
 
-    // Tail: fewer than K pairs, so a streaming fold with eager reduction is fine.
-    let tail = e_tail
+    // Tail: fewer pairs left than one packed vector holds.
+    let tail = e_pairs
         .chunks(2)
-        .zip(w_tail.chunks(2))
+        .zip(w_pairs.chunks(2))
         .fold((A::ZERO, A::ZERO), |acc, (e, w)| {
             round_step(acc, e[0], e[1], w[0], w[1])
         });
 
-    round_reduce(main, tail)
+    round_reduce(round_reduce_lanes::<A>(packed), tail)
 }
 
 /// Binds the low index bit of a table into a half-size destination.
@@ -649,13 +725,30 @@ where
 #[inline]
 fn bind_pairs<A, Ch>(dst: &mut [A], src: &[A], r: Ch)
 where
-    A: Algebra<Ch> + Copy,
+    A: Field + Algebra<Ch>,
+    A::Packing: Algebra<Ch>,
     Ch: Copy,
 {
     // Every destination entry is written, so nothing it held before can be read back.
     debug_assert_eq!(2 * dst.len(), src.len());
 
-    for (out, pair) in dst.iter_mut().zip(src.as_chunks::<2>().0) {
+    // One packed step writes `W` entries, from the `2 W` adjacent entries they pair over.
+    let width = A::Packing::WIDTH;
+    let swept = packed_sweep::<A::Packing>(dst.len());
+    let (slots, slots_tail) = dst.split_at_mut(swept);
+    let (runs, runs_tail) = src.split_at(2 * swept);
+
+    for (slot, run) in slots
+        .chunks_exact_mut(width)
+        .zip(runs.chunks_exact(2 * width))
+    {
+        let (lo, hi) = gather_pairs_packed::<A::Packing>(run);
+        let bound = lo + (hi - lo) * r;
+        slot.copy_from_slice(bound.as_slice());
+    }
+
+    // Tail: fewer entries left than one packed vector holds.
+    for (out, pair) in slots_tail.iter_mut().zip(runs_tail.as_chunks::<2>().0) {
         *out = pair[0] + (pair[1] - pair[0]) * r;
     }
 }
@@ -673,13 +766,28 @@ where
 ///
 /// Output `g` reads inputs `2g` and `2g+1`, both at or above `g`.
 /// A forward sweep therefore reads every pair before anything writes over it.
+///
+/// A packed step keeps that property: step `g` writes `[g W, (g+1) W)` from `[2 g W, 2 (g+1) W)`,
+/// and both faces are gathered into registers before the step writes anything back.
 #[inline]
 fn bind_pairs_in_place<A, Ch>(table: &mut [A], r: Ch)
 where
-    A: Algebra<Ch> + Copy,
+    A: Field + Algebra<Ch>,
+    A::Packing: Algebra<Ch>,
     Ch: Copy,
 {
-    for g in 0..table.len() / 2 {
+    let half = table.len() / 2;
+    let width = A::Packing::WIDTH;
+    let swept = packed_sweep::<A::Packing>(half);
+
+    for start in (0..swept).step_by(width) {
+        let (lo, hi) = gather_pairs_packed::<A::Packing>(&table[2 * start..]);
+        let bound = lo + (hi - lo) * r;
+        table[start..][..width].copy_from_slice(bound.as_slice());
+    }
+
+    // Tail: fewer entries left than one packed vector holds.
+    for g in swept..half {
         let (lo, hi) = (table[2 * g], table[2 * g + 1]);
         table[g] = lo + (hi - lo) * r;
     }
@@ -784,7 +892,8 @@ pub fn fold_and_round_coefficients_suffix<A, Ch>(
     r: Ch,
 ) -> RoundMessage<A>
 where
-    A: Algebra<Ch> + Copy + Send + Sync,
+    A: Field + Algebra<Ch>,
+    A::Packing: Algebra<Ch>,
     Ch: Copy + Send + Sync,
 {
     let len = evals.num_evals();
@@ -852,7 +961,8 @@ fn bind_and_measure_blocks<A, Ch>(
     threaded: bool,
 ) -> (A, A)
 where
-    A: Algebra<Ch> + Copy + Send + Sync,
+    A: Field + Algebra<Ch>,
+    A::Packing: Algebra<Ch>,
     Ch: Copy + Send + Sync,
 {
     let block_len = suffix_block::<A>();
@@ -894,7 +1004,8 @@ where
 /// The lower half of each table is left holding the bound values.
 fn bind_and_measure_pairs<A, Ch>(evals: &mut [A], weights: &mut [A], r: Ch) -> RoundMessage<A>
 where
-    A: Algebra<Ch> + Copy + Send + Sync,
+    A: Field + Algebra<Ch>,
+    A::Packing: Algebra<Ch>,
     Ch: Copy + Send + Sync,
 {
     // Precondition: paired tables, with a variable left over for the message.
@@ -951,7 +1062,8 @@ fn bind_and_measure_pairs_into_new<A, Ch>(
     r: Ch,
 ) -> (Vec<A>, Vec<A>, RoundMessage<A>)
 where
-    A: Algebra<Ch> + Copy + Send + Sync,
+    A: Field + Algebra<Ch>,
+    A::Packing: Algebra<Ch>,
     Ch: Copy + Send + Sync,
 {
     // Precondition: paired tables, with a variable left over for the message.
@@ -1560,11 +1672,13 @@ mod tests {
     use alloc::{format, vec};
 
     use p3_baby_bear::BabyBear;
+    use p3_binary_field::Ghash128;
     use p3_field::extension::BinomialExtensionField;
     use p3_field::{Field, PackedValue, PrimeCharacteristicRing, dot_product};
     use p3_multilinear_util::point::Point;
     use p3_multilinear_util::poly::Poly;
     use proptest::prelude::*;
+    use rand::distr::{Distribution, StandardUniform};
     use rand::rngs::SmallRng;
     use rand::{RngExt, SeedableRng};
 
@@ -2035,6 +2149,91 @@ mod tests {
         assert_eq!(&got_weights[..n / 2], &want_weights[..]);
         assert_eq!(got.c_a, want.c_a);
         assert_eq!(got.c_inf, want.c_inf);
+    }
+
+    /// Binds and measures `n` paired entries both ways, and compares.
+    ///
+    /// The reference binds each pair on its own and measures the bound tables in a
+    /// separate call, so it shares no kernel with either pass under test.
+    fn assert_the_suffix_passes_match_a_fresh_binding<A>(n: usize, seed: u64)
+    where
+        A: Field,
+        StandardUniform: Distribution<A>,
+    {
+        let mut rng = SmallRng::seed_from_u64(seed);
+        let evals: Vec<A> = (0..n).map(|_| rng.random()).collect();
+        let weights: Vec<A> = (0..n).map(|_| rng.random()).collect();
+        let r: A = rng.random();
+
+        let bind = |table: &[A]| -> Vec<A> {
+            table
+                .chunks(2)
+                .map(|pair| pair[0] + (pair[1] - pair[0]) * r)
+                .collect()
+        };
+        let want_evals = bind(&evals);
+        let want_weights = bind(&weights);
+        let want = super::sumcheck_coefficients_suffix(&want_evals, &want_weights);
+
+        // The pass that binds into fresh half-length tables.
+        let (fresh_evals, fresh_weights, fresh) =
+            super::bind_and_measure_pairs_into_new(&evals, &weights, r);
+        assert_eq!(fresh_evals, want_evals, "into new, n = {n}");
+        assert_eq!(fresh_weights, want_weights, "into new, n = {n}");
+        assert_eq!(fresh.c_a, want.c_a, "into new, n = {n}");
+        assert_eq!(fresh.c_inf, want.c_inf, "into new, n = {n}");
+
+        // The pass that binds over the lower half of its own tables.
+        let mut got_evals = evals;
+        let mut got_weights = weights;
+        let got = super::bind_and_measure_pairs(&mut got_evals, &mut got_weights, r);
+        assert_eq!(&got_evals[..n / 2], &want_evals[..], "in place, n = {n}");
+        assert_eq!(
+            &got_weights[..n / 2],
+            &want_weights[..],
+            "in place, n = {n}"
+        );
+        assert_eq!(got.c_a, want.c_a, "in place, n = {n}");
+        assert_eq!(got.c_inf, want.c_inf, "in place, n = {n}");
+    }
+
+    /// Runs the comparison above at the lengths a packed gather has to get right.
+    fn assert_the_suffix_passes_match_across_gather_boundaries<A>(seed: u64)
+    where
+        A: Field,
+        StandardUniform: Distribution<A>,
+    {
+        let width = <A as Field>::Packing::WIDTH;
+        let block = super::suffix_block::<A>();
+
+        // Bound lengths that land on a level boundary of the in-place schedule.
+        //
+        // The last one is long enough for its levels to dispatch rather than sweep.
+        for half in [block, 2 * block, 16 * block] {
+            // Offsets that leave the last gather short of a whole packed vector, the last
+            // block short of a whole level, or both.
+            for delta in [0, 2, 2 * width, 2 * width + 2, block / 2 + 2] {
+                assert_the_suffix_passes_match_a_fresh_binding::<A>(2 * (half + delta), seed);
+            }
+        }
+    }
+
+    #[test]
+    fn the_suffix_passes_match_a_fresh_binding_at_every_packed_gather_boundary() {
+        // Invariant: a gather that runs short of a whole packed vector still binds and
+        // measures every pair, at every length the level schedule accepts.
+        //
+        // Fixture state: three element widths, so no target runs the whole test at one
+        // packing width.
+        //
+        //     BinomialExtensionField : one lane on every target
+        //     BabyBear               : the target's widest prime-field register
+        //     Ghash128               : the target's widest carryless-multiply register
+        for seed in [0x5A1E, 0xBEEF] {
+            assert_the_suffix_passes_match_across_gather_boundaries::<EF>(seed);
+            assert_the_suffix_passes_match_across_gather_boundaries::<F>(seed);
+            assert_the_suffix_passes_match_across_gather_boundaries::<Ghash128>(seed);
+        }
     }
 
     proptest! {
