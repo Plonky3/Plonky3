@@ -218,6 +218,18 @@ pub(crate) struct RoundStateBase<'air, 'data, A, F: Field, EF> {
     coupling: InteractionCoupling<EF>,
     /// Common scalar applied to lookup claims and evaluations after grouping.
     eta: EF,
+    /// Whether a subfield kernel found this stage to fit its subfield.
+    ///
+    /// Only that kernel's first round sets it, once all of these check out:
+    ///
+    /// - no AIR in the stage declares a lookup;
+    /// - the challenge field embeds the subfield the way the trace field does;
+    /// - every first-round interpolation step lies in the subfield;
+    /// - every public value lies in the subfield;
+    /// - every main, preprocessed, and periodic cell lies in the subfield.
+    ///
+    /// Every other kernel leaves it false.
+    fits_subfield: bool,
 }
 
 /// Extension-round column storage.
@@ -1365,6 +1377,7 @@ where
             tau,
             coupling,
             eta,
+            fits_subfield: false,
         }
     }
 
@@ -1801,9 +1814,30 @@ where
     }
 
     #[tracing::instrument(skip_all, level = "debug")]
-    pub(crate) fn fold(mut self, r: EF) -> RoundStateExt<'air, 'data, A, F, EF>
+    pub(crate) fn fold(self, r: EF) -> RoundStateExt<'air, 'data, A, F, EF>
     where
         A: for<'b> Air<MultilinearFolder<'b, F, F, EF>>,
+    {
+        self.fold_columns(
+            r,
+            |column| PolyView::new(column).fix_prefix_var_to_packed(r),
+            |column| PolyView::new(column).fix_prefix_var(r),
+        )
+    }
+
+    /// Bind the first variable at `r`, folding every column with the given kernels.
+    ///
+    /// Both kernels take a column's evaluations and return `lo + r * (hi - lo)` for each pair of
+    /// halves. `fold_packed` groups the results into SIMD lanes, `fold_scalar` does not.
+    fn fold_columns<P, U>(
+        mut self,
+        r: EF,
+        fold_packed: P,
+        fold_scalar: U,
+    ) -> RoundStateExt<'air, 'data, A, F, EF>
+    where
+        P: Fn(&[F]) -> Poly<EF::ExtensionPacking> + Sync,
+        U: Fn(&[F]) -> Poly<EF> + Sync,
     {
         let tau = self.tau.as_slice()[0];
         self.constraint_groups
@@ -1848,14 +1882,14 @@ where
                 columns.extend(
                     self.tables[slot.stage_index]
                         .par_iter_polys()
-                        .map(|col| PolyView::new(col).fix_prefix_var_to_packed(r))
+                        .map(&fold_packed)
                         .collect::<Vec<_>>(),
                 );
                 if let Some(preprocessed) = self.preprocessed[slot.stage_index] {
                     columns.extend(
                         preprocessed
                             .par_iter_polys()
-                            .map(|col| PolyView::new(col).fix_prefix_var_to_packed(r))
+                            .map(&fold_packed)
                             .collect::<Vec<_>>(),
                     );
                 }
@@ -1863,7 +1897,7 @@ where
                     columns.extend(
                         periodic
                             .par_iter_polys()
-                            .map(|col| PolyView::new(col).fix_prefix_var_to_packed(r))
+                            .map(&fold_packed)
                             .collect::<Vec<_>>(),
                     );
                 }
@@ -1875,14 +1909,14 @@ where
                 columns.extend(
                     self.tables[slot.stage_index]
                         .par_iter_polys()
-                        .map(|col| PolyView::new(col).fix_prefix_var(r))
+                        .map(&fold_scalar)
                         .collect::<Vec<_>>(),
                 );
                 if let Some(preprocessed) = self.preprocessed[slot.stage_index] {
                     columns.extend(
                         preprocessed
                             .par_iter_polys()
-                            .map(|col| PolyView::new(col).fix_prefix_var(r))
+                            .map(&fold_scalar)
                             .collect::<Vec<_>>(),
                     );
                 }
@@ -1890,7 +1924,7 @@ where
                     columns.extend(
                         periodic
                             .par_iter_polys()
-                            .map(|col| PolyView::new(col).fix_prefix_var(r))
+                            .map(&fold_scalar)
                             .collect::<Vec<_>>(),
                     );
                 }

@@ -129,7 +129,8 @@ where
 ///
 /// ```text
 ///     round 0, stage fits S : expressions in S, alpha-batched over the challenge field
-///     round 0, otherwise    : as GenericBackend
+///     fold 0,  stage fits S : lo + r * (hi - lo) with hi - lo applied as an element of S
+///     otherwise             : as GenericBackend
 ///     later rounds          : as GenericBackend
 /// ```
 ///
@@ -169,7 +170,11 @@ where
         state: RoundStateBase<'air, 'data, A, F, EF>,
         r: EF,
     ) -> RoundStateExt<'air, 'data, A, F, EF> {
-        <GenericBackend as private::Dispatch<F, EF, A>>::fold0(state, r)
+        if state.fits_subfield() {
+            state.fold_subfield::<S>(r)
+        } else {
+            state.fold(r)
+        }
     }
 
     fn round(state: &mut RoundStateExt<'_, '_, A, F, EF>, eq_suffix: &Poly<EF>) -> Vec<EF> {

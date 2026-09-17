@@ -16,14 +16,16 @@ use alloc::vec::Vec;
 use core::ops::Range;
 
 use p3_air::{Air, BaseAir};
-use p3_field::{ExtensionField, Field, HasSubfield, PrimeCharacteristicRing};
+use p3_field::{
+    ExtensionField, Field, HasSubfield, PackedFieldExtension, PackedValue, PrimeCharacteristicRing,
+};
 use p3_maybe_rayon::prelude::*;
 use p3_multilinear_util::poly::Poly;
 use p3_sumcheck::layout::Table;
 
 use super::{
-    NodeStep, RoundStateBase, add_scaled_slice, add_slice, evaluated_nodes, finish_round,
-    next_row_runs, node_schedule,
+    NodeStep, RoundStateBase, RoundStateExt, add_scaled_slice, add_slice, evaluated_nodes,
+    finish_round, next_row_runs, node_schedule,
 };
 use crate::folder::MultilinearFolder;
 use crate::selectors::BoundaryEvals;
@@ -41,6 +43,11 @@ const MAX_EMBEDDING_POWERS: usize = 1 << 8;
 ///
 /// A subfield row is cheap enough that scheduling one task per row would dominate it.
 const ROWS_PER_TASK: usize = 16;
+
+/// Cells a column needs before the subfield fold splits it across threads.
+///
+/// Below this, the split costs more than the column's own fold.
+const PARALLEL_FOLD_CELLS: usize = 1 << 12;
 
 /// What every row of one subfield pass shares.
 struct SubfieldRows<'a, S, EF> {
@@ -171,7 +178,7 @@ impl<F, S: Field, EF: Field> SubfieldScratch<F, S, EF> {
     }
 }
 
-impl<A, F, EF> RoundStateBase<'_, '_, A, F, EF>
+impl<'air, 'data, A, F, EF> RoundStateBase<'air, 'data, A, F, EF>
 where
     F: Field,
     EF: ExtensionField<F>,
@@ -183,10 +190,12 @@ where
     ///
     /// - `Some`: exactly what [`Self::round_poly`] returns.
     /// - `None`: the stage does not fit `S`, or an AIR constant outside `S` poisoned a row.
-    ///   No state has changed, so the caller runs the generic kernel instead.
+    ///   No round group has changed, so the caller runs the generic kernel instead.
     ///
     /// A poisoned row usually shows on the first row, so that row is probed alone first.
     /// The full pass still checks every row it evaluates.
+    ///
+    /// Whether the stage fits is recorded for [`Self::fits_subfield`], poison or not.
     #[tracing::instrument(skip_all, level = "debug")]
     pub(crate) fn round_poly_subfield<S>(&mut self, eq_suffix: &Poly<EF>) -> Option<Vec<EF>>
     where
@@ -195,7 +204,9 @@ where
         EF: HasSubfield<S>,
         A: for<'b> Air<MultilinearFolder<'b, F, SubfieldVar<F, S>, SubfieldAcc<EF, S>>>,
     {
-        let schedule = self.subfield_schedule::<S>()?;
+        let schedule = self.subfield_schedule::<S>();
+        self.fits_subfield = schedule.is_some();
+        let schedule = schedule?;
         let eq_suffix = eq_suffix.as_slice();
         if self.subfield_pass(&eq_suffix[..1], &schedule).poisoned {
             return fall_back("an AIR constant outside the subfield reached the first row");
@@ -215,6 +226,74 @@ where
             &[],
             self.tau.as_slice()[0],
         ))
+    }
+
+    /// Whether the first round found this stage to fit a subfield.
+    pub(crate) const fn fits_subfield(&self) -> bool {
+        self.fits_subfield
+    }
+
+    /// Bind the first variable at `r` without a general product per cell.
+    ///
+    /// In a stage that fits `S`, every pair of cells differs by an element of `S`:
+    ///
+    /// ```text
+    ///     lo + r * (hi - lo)  with hi - lo applied as an element of S
+    /// ```
+    ///
+    /// A difference outside `S` takes the general product instead.
+    ///
+    /// # Precondition
+    ///
+    /// `EF` embeds `S` the way it embeds `F`'s copy of `S`, as [`Self::fits_subfield`] implies.
+    /// Every folded value is then the one [`Self::fold`] computes.
+    #[tracing::instrument(skip_all, level = "debug")]
+    pub(crate) fn fold_subfield<S>(self, r: EF) -> RoundStateExt<'air, 'data, A, F, EF>
+    where
+        S: Field,
+        F: HasSubfield<S>,
+        EF: HasSubfield<S>,
+    {
+        debug_assert!(
+            embeddings_agree::<S, F, EF>(),
+            "the challenge field must embed the subfield as the trace field does"
+        );
+        let fold_pair = |lo: F, hi: F| {
+            let diff = hi - lo;
+            diff.as_subfield()
+                .map_or_else(|| r * diff, |small| r * small)
+                + lo
+        };
+
+        // Columns already fold in parallel, so a short column folds on its own thread.
+        let fold_packed = |column: &[F]| {
+            let (lo, hi) = column.split_at(column.len() / 2);
+            let fold_lanes = |(lo, hi): (&[F], &[F])| {
+                EF::ExtensionPacking::from_ext_fn(|lane| fold_pair(lo[lane], hi[lane]))
+            };
+            let width = F::Packing::WIDTH;
+            Poly::new(if column.len() < PARALLEL_FOLD_CELLS {
+                lo.chunks_exact(width)
+                    .zip(hi.chunks_exact(width))
+                    .map(fold_lanes)
+                    .collect()
+            } else {
+                lo.par_chunks_exact(width)
+                    .zip(hi.par_chunks_exact(width))
+                    .map(fold_lanes)
+                    .collect()
+            })
+        };
+        let fold_scalar = |column: &[F]| {
+            let (lo, hi) = column.split_at(column.len() / 2);
+            let fold_cells = |(&lo, &hi): (&F, &F)| fold_pair(lo, hi);
+            Poly::new(if column.len() < PARALLEL_FOLD_CELLS {
+                lo.iter().zip(hi).map(fold_cells).collect()
+            } else {
+                lo.par_iter().zip(hi).map(fold_cells).collect()
+            })
+        };
+        self.fold_columns(r, fold_packed, fold_scalar)
     }
 
     /// The first-round node schedule with every step inside `S`, if the stage fits `S`.
@@ -463,187 +542,4 @@ where
 }
 
 #[cfg(test)]
-mod tests {
-    use alloc::collections::BTreeMap;
-    use alloc::vec;
-    use alloc::vec::Vec;
-
-    use p3_binary_field::TowerLevel;
-    use p3_multilinear_util::point::Point;
-    use rand::rngs::SmallRng;
-    use rand::{RngExt, SeedableRng};
-
-    use super::*;
-    use crate::lookup::{AirLinkInstance, AirLinkLookup};
-    use crate::rounds::{Stage, StageCoupling};
-    use crate::zerocheck::backend_tests::{FixtureAir, Gf4, Instance, Tower, gf4, outside};
-    use crate::zerocheck::get_air_profile;
-
-    /// Activate one stage from instances of equal height and hand its first-round state to `body`.
-    ///
-    /// The challenges are fixed random elements of the tower.
-    fn with_state<R>(
-        instances: &[Instance],
-        coupling: StageCoupling<Tower>,
-        body: impl FnOnce(&mut RoundStateBase<'_, '_, FixtureAir, Tower, Tower>, &Poly<Tower>) -> R,
-    ) -> R {
-        let main = instances
-            .iter()
-            .map(Instance::main_table)
-            .collect::<Vec<_>>();
-        let preprocessed = instances
-            .iter()
-            .map(Instance::preprocessed_table)
-            .collect::<Vec<_>>();
-        let stage = Stage::new(
-            instances.iter().map(|instance| &instance.air).collect(),
-            instances
-                .iter()
-                .map(|instance| instance.public_values.as_slice())
-                .collect(),
-            (0..instances.len()).collect(),
-            preprocessed.iter().map(Option::as_ref).collect(),
-            main.iter().collect(),
-            instances
-                .iter()
-                .map(|instance| get_air_profile::<Tower, Tower, _>(&instance.air))
-                .collect(),
-            coupling,
-        );
-
-        let mut rng = SmallRng::seed_from_u64(0x5B);
-        let tau = Point::rand(&mut rng, stage.num_vars);
-        let eq_suffix = Poly::new_from_point(&tau.as_slice()[1..], Tower::ONE);
-        let betas = (0..instances.len()).map(|_| rng.random()).collect();
-        let mut state = RoundStateBase::new(stage, rng.random(), rng.random(), betas, tau);
-        body(&mut state, &eq_suffix)
-    }
-
-    fn no_lookups() -> StageCoupling<Tower> {
-        StageCoupling::new(BTreeMap::new(), BTreeMap::new(), vec![])
-    }
-
-    /// The subfield kernel's first round polynomial, beside the generic kernel's.
-    fn first_rounds(
-        instances: &[Instance],
-        coupling: StageCoupling<Tower>,
-    ) -> (Option<Vec<Tower>>, Vec<Tower>) {
-        with_state(instances, coupling, |state, eq_suffix| {
-            let subfield = state.round_poly_subfield::<Gf4>(eq_suffix);
-            (subfield, state.round_poly(eq_suffix))
-        })
-    }
-
-    #[test]
-    fn a_fitting_stage_runs_in_the_subfield_and_matches_the_generic_kernel() {
-        // Residual rows per height: one row, part of a task, one full task, several tasks.
-        //
-        // An honest two-row pair can have a zero round polynomial, so its product cell breaks it.
-        let mut pair = Instance::honest(FixtureAir::Pair, 2, 1);
-        pair.main.values[2] = gf4(3);
-        let stages = [
-            vec![pair],
-            vec![
-                Instance::honest(FixtureAir::Gate { scale: Tower::ONE }, 4, 2),
-                Instance::honest(FixtureAir::Pair, 4, 3),
-            ],
-            vec![Instance::honest(FixtureAir::Gate { scale: gf4(2) }, 32, 4)],
-            vec![
-                Instance::honest(FixtureAir::Pair, 128, 5),
-                Instance::honest(FixtureAir::Gate { scale: gf4(3) }, 128, 6),
-            ],
-        ];
-        for instances in stages {
-            let (subfield, generic) = first_rounds(&instances, no_lookups());
-            assert!(generic.iter().any(|value| *value != Tower::ZERO));
-            assert_eq!(subfield, Some(generic));
-        }
-    }
-
-    #[test]
-    fn each_misfit_falls_back() {
-        let gate = || Instance::honest(FixtureAir::Gate { scale: Tower::ONE }, 16, 7);
-        let mut cell = gate();
-        // Column e of row 5.
-        cell.main.values[4 * 5 + 3] = outside();
-        let mut public = gate();
-        public.public_values[1] = outside();
-        let constant = Instance::honest(
-            FixtureAir::Gate {
-                scale: Tower::from_repr(5),
-            },
-            16,
-            8,
-        );
-        let quartic = Instance::honest(FixtureAir::Quartic, 16, 9);
-
-        for (name, instance) in [
-            ("cell", cell),
-            ("public value", public),
-            ("constant", constant),
-            ("interpolation step", quartic),
-        ] {
-            let (subfield, _) = first_rounds(&[instance], no_lookups());
-            assert_eq!(subfield, None, "{name}");
-        }
-    }
-
-    #[test]
-    fn a_lookup_stage_falls_back() {
-        let link = AirLinkInstance {
-            num_local_lookups: 1,
-            lookups: vec![AirLinkLookup {
-                theta_bus_offset: gf4(1),
-                block_weights: vec![gf4(2), gf4(3)],
-            }],
-        };
-        let coupling = StageCoupling::new(
-            BTreeMap::from([(0, gf4(1))]),
-            BTreeMap::from([(0, link)]),
-            vec![gf4(2)],
-        );
-        let (subfield, _) = first_rounds(&[Instance::honest(FixtureAir::Link, 16, 10)], coupling);
-        assert_eq!(subfield, None);
-    }
-
-    #[test]
-    fn an_out_of_subfield_constant_passes_the_check_and_poisons_the_probe() {
-        let instance = Instance::honest(
-            FixtureAir::Gate {
-                scale: Tower::from_repr(5),
-            },
-            16,
-            11,
-        );
-        with_state(&[instance], no_lookups(), |state, eq_suffix| {
-            let schedule = state
-                .subfield_schedule::<Gf4>()
-                .expect("every cell, public value, and step fits");
-            assert!(
-                state
-                    .subfield_pass(&eq_suffix.as_slice()[..1], &schedule)
-                    .poisoned
-            );
-        });
-    }
-
-    #[test]
-    fn the_full_pass_catches_a_misfit_the_probe_does_not_read() {
-        let gate = || Instance::honest(FixtureAir::Gate { scale: Tower::ONE }, 16, 12);
-        let schedule = with_state(&[gate()], no_lookups(), |state, _| {
-            state
-                .subfield_schedule::<Gf4>()
-                .expect("an honest gate fits")
-        });
-
-        // Only row 5 reads column e of row 5, and the probe reads row 0 alone.
-        let mut dirty = gate();
-        dirty.main.values[4 * 5 + 3] = outside();
-        with_state(&[dirty], no_lookups(), |state, eq_suffix| {
-            assert!(state.subfield_schedule::<Gf4>().is_none());
-            let eq_suffix = eq_suffix.as_slice();
-            assert!(!state.subfield_pass(&eq_suffix[..1], &schedule).poisoned);
-            assert!(state.subfield_pass(eq_suffix, &schedule).poisoned);
-        });
-    }
-}
+mod tests;
