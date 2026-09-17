@@ -140,9 +140,11 @@ pub struct MultilinearFolder<'a, F, Var, Acc> {
     /// Horner. `Some(powers)` means the AIR asserts exactly `powers.len()` constraints,
     /// including the case where that is zero: unlike an empty slice, `Some(&[])` cannot be
     /// confused with "no powers attached" and still asserts the count via
-    /// [`Self::into_accumulator`]'s debug check.
+    /// [`Self::into_accumulator`].
     alpha_powers: Option<&'a [Acc]>,
-    /// Position of the next asserted constraint inside `alpha_powers`.
+    /// Number of constraints asserted so far, which is also the next position in `alpha_powers`.
+    ///
+    /// Keeps counting past the end of the powers, so a surplus is reported with a shortfall.
     constraint_index: usize,
     /// Two-row preprocessed window; zero-width when the AIR has no preprocessed columns.
     pub preprocessed_window: RowWindow<'a, Var>,
@@ -245,15 +247,35 @@ where
     ///
     /// - `C_0, ..., C_{n-1}` are the asserted constraints in declaration order.
     /// - `n` is the AIR's own constraint count plus one pin per listed boundary cell.
+    ///
+    /// # Panics
+    ///
+    /// Panics if attached alpha powers do not number one per asserted constraint.
     #[inline]
     #[must_use]
     pub fn into_accumulator(self) -> Acc {
-        debug_assert!(
+        self.assert_alpha_power_count();
+        self.accumulator
+    }
+
+    /// Check that attached alpha powers were consumed exactly, one per asserted constraint.
+    ///
+    /// A wrong count shifts every weight by a power of alpha, and nothing downstream sees it.
+    ///
+    /// ```text
+    ///     n powers, m asserted constraints, m < n:  C_i weighted by alpha^(n-1-i), not alpha^(m-1-i)
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// Panics if powers are attached and their count differs from the constraints asserted.
+    #[inline]
+    fn assert_alpha_power_count(&self) {
+        assert!(
             self.alpha_powers
                 .is_none_or(|powers| self.constraint_index == powers.len()),
             "attached alpha powers must match the number of asserted constraints"
         );
-        self.accumulator
     }
 
     /// Run the AIR through this folder and return its alpha-batched constraint value.
@@ -495,7 +517,12 @@ where
                 // The product is `Acc * Var` rather than `Acc * Acc`, which is the cheaper
                 // multiplication whenever the constraint value lives in a smaller ring than
                 // the accumulator.
-                self.accumulator += powers[self.constraint_index] * x.into();
+                //
+                // A constraint past the last power is only counted.
+                // The count check at the end of the evaluation then rejects it.
+                if let Some(&power) = powers.get(self.constraint_index) {
+                    self.accumulator += power * x.into();
+                }
                 self.constraint_index += 1;
             }
         }
@@ -582,6 +609,11 @@ where
     /// Run the AIR once and return its ordinary and lookup expressions separately.
     ///
     /// Cells the AIR lists as public inputs add one pin each to the ordinary family.
+    ///
+    /// # Panics
+    ///
+    /// Panics if constraints are enabled and attached alpha powers do not number one per
+    /// asserted constraint.
     #[inline]
     #[must_use]
     pub(crate) fn eval_air<A>(mut self, air: &A) -> FolderEvaluations<Acc>
@@ -591,14 +623,10 @@ where
     {
         air.eval(&mut self);
         eval_boundary_io(&mut self, air.public_boundary_io());
-        debug_assert!(
-            !self.constraints_enabled
-                || self
-                    .inner
-                    .alpha_powers
-                    .is_none_or(|powers| self.inner.constraint_index == powers.len()),
-            "attached alpha powers must match the number of asserted constraints"
-        );
+        // Disabled constraints never reach the inner folder, so they consume no power.
+        if self.constraints_enabled {
+            self.inner.assert_alpha_power_count();
+        }
         // Both families come out of the one pass, batched independently.
         FolderEvaluations {
             constraints: self.inner.accumulator,
@@ -1295,6 +1323,63 @@ mod tests {
             InteractionMultilinearFolder::new(folder, &link, &theta_beta_powers, true)
                 .eval_air(&LinkedIoAir);
         assert_eq!(evaluations.constraints, horner);
+    }
+
+    /// Evaluate the linked boundary-IO AIR through the lookup-aware folder with the given powers.
+    ///
+    /// The AIR asserts two constraints: its own, then one pin.
+    fn eval_linked_io_with_powers(alpha_powers: &[EF]) -> FolderEvaluations<EF> {
+        let link = AirLinkInstance {
+            num_local_lookups: 1,
+            lookups: vec![AirLinkLookup {
+                theta_bus_offset: EF::from_u64(13),
+                block_weights: vec![EF::from_u64(3), EF::from_u64(7)],
+            }],
+        };
+        let theta_beta_powers = [EF::from_u64(2)];
+        let boundary = BoundaryEvals {
+            first: EF::ONE,
+            last: EF::ZERO,
+            transition: EF::ONE,
+        };
+        let local = [EF::from_u64(5), EF::from_u64(9)];
+        let next = [EF::ZERO, EF::ZERO];
+        let pis = [F::from_u64(6)];
+        let folder = TestFolder::new(&local, &next, boundary, &pis, EF::from_u64(11))
+            .with_alpha_powers(alpha_powers);
+        InteractionMultilinearFolder::new(folder, &link, &theta_beta_powers, true)
+            .eval_air(&LinkedIoAir)
+    }
+
+    #[test]
+    #[should_panic = "attached alpha powers must match the number of asserted constraints"]
+    fn interaction_folder_rejects_too_many_alpha_powers() {
+        // Three powers for two constraints: every weight would carry one extra alpha.
+        let _evaluations =
+            eval_linked_io_with_powers(&[EF::from_u64(121), EF::from_u64(11), EF::ONE]);
+    }
+
+    #[test]
+    #[should_panic = "attached alpha powers must match the number of asserted constraints"]
+    fn interaction_folder_rejects_too_few_alpha_powers() {
+        // One power for two constraints: the pin runs past the end instead of indexing out.
+        let _evaluations = eval_linked_io_with_powers(&[EF::ONE]);
+    }
+
+    #[test]
+    #[should_panic = "attached alpha powers must match the number of asserted constraints"]
+    fn ordinary_folder_rejects_a_wrong_alpha_power_count() {
+        let boundary = BoundaryEvals {
+            first: EF::ONE,
+            last: EF::ZERO,
+            transition: EF::ONE,
+        };
+        let local = [EF::from_u64(5), EF::from_u64(9)];
+        let next = [EF::ZERO, EF::ZERO];
+        let pis = [F::from_u64(6)];
+        let _value = TestFolder::new(&local, &next, boundary, &pis, EF::from_u64(11))
+            .with_alpha_powers(&[EF::ONE])
+            .eval_air(&LinkedIoAir);
     }
 
     #[test]
