@@ -122,6 +122,37 @@ impl<F, const N: usize, Inner: CanObserve<u8>> CanObserve<MerkleCap<F, [u8; N]>>
     }
 }
 
+/// Word digests are absorbed as the little-endian bytes of each word, in order.
+impl<F, const N: usize, Inner: CanObserve<u8>> CanObserve<Hash<F, u64, N>>
+    for BinaryChallenger<F, Inner>
+{
+    fn observe(&mut self, values: Hash<F, u64, N>) {
+        for value in values {
+            self.inner.observe_slice(&value.to_le_bytes());
+        }
+    }
+}
+
+impl<F, const N: usize, Inner: CanObserve<u8>> CanObserve<&MerkleCap<F, [u64; N]>>
+    for BinaryChallenger<F, Inner>
+{
+    fn observe(&mut self, cap: &MerkleCap<F, [u64; N]>) {
+        for digest in cap.roots() {
+            for value in digest {
+                self.inner.observe_slice(&value.to_le_bytes());
+            }
+        }
+    }
+}
+
+impl<F, const N: usize, Inner: CanObserve<u8>> CanObserve<MerkleCap<F, [u64; N]>>
+    for BinaryChallenger<F, Inner>
+{
+    fn observe(&mut self, cap: MerkleCap<F, [u64; N]>) {
+        self.observe(&cap);
+    }
+}
+
 impl<F, EF, Inner> CanSample<EF> for BinaryChallenger<F, Inner>
 where
     F: TowerLevel,
@@ -431,6 +462,35 @@ mod tests {
         hash_bytes.observe_slice(&digest);
         let mut cap_bytes = mk_inner();
         cap_bytes.observe_slice(&[1, 2, 3, 4, 5, 6, 7, 8]);
+
+        for _ in 0..32 {
+            let expected: u8 = hash_bytes.sample();
+            assert_eq!(from_hash.inner.sample(), expected);
+
+            let expected: u8 = cap_bytes.sample();
+            assert_eq!(from_cap_ref.inner.sample(), expected);
+            assert_eq!(from_cap.inner.sample(), expected);
+        }
+    }
+
+    #[test]
+    fn observing_word_digests_matches_observing_their_little_endian_bytes() {
+        let digest = [0x0807_0605_0403_0201_u64, 0x100f_0e0d_0c0b_0a09];
+        let second = [0x1817_1615_1413_1211_u64, 0x201f_1e1d_1c1b_1a19];
+
+        let mut from_hash = mk::<BinaryField128>();
+        from_hash.observe(Hash::<BinaryField128, u64, 2>::from(digest));
+
+        let cap = MerkleCap::<BinaryField128, [u64; 2]>::new(vec![digest, second]);
+        let mut from_cap_ref = mk::<BinaryField128>();
+        from_cap_ref.observe(&cap);
+        let mut from_cap = mk::<BinaryField128>();
+        from_cap.observe(cap);
+
+        let mut hash_bytes = mk_inner();
+        hash_bytes.observe_slice(&core::array::from_fn::<u8, 16, _>(|i| i as u8 + 1));
+        let mut cap_bytes = mk_inner();
+        cap_bytes.observe_slice(&core::array::from_fn::<u8, 32, _>(|i| i as u8 + 1));
 
         for _ in 0..32 {
             let expected: u8 = hash_bytes.sample();
