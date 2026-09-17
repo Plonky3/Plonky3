@@ -3,7 +3,7 @@
 //!
 //! [`PcsLayout`] commits with no preprocessing depth, so `Layout::commit` produces a width-1
 //! codeword — one Reed-Solomon-encoded column, the whole committed polynomial — and
-//! `Layout::into_sumcheck` consumes zero preprocessing rounds, leaving every one of the
+//! `PcsLayout::into_sumcheck_in` consumes zero preprocessing rounds, leaving every one of the
 //! `num_variables` residual sumcheck rounds a folding round. Each round's challenge is used
 //! twice: it binds one multilinear variable, through [`PcsLayout`]'s evaluation-basis suffix
 //! binding, and it folds the codeword, through [`fold_codeword_batch`], a Reed-Solomon codeword fold
@@ -22,7 +22,6 @@ use p3_matrix::dense::{DenseMatrix, RowMajorMatrix};
 use p3_multilinear_util::point::Point;
 use p3_sumcheck::SumcheckData;
 use p3_sumcheck::layout::{Layout, Table, Witness};
-use p3_sumcheck::strategy::ReprSumcheckProver;
 
 use crate::PcsLayout;
 use crate::fold::fold_codeword_batch;
@@ -115,7 +114,7 @@ where
 /// Returns the base commitment's Merkle prover data (handed back so the caller can still open
 /// base-round queries against it), the sumcheck transcript, one [`RoundCommitment`] per fold
 /// batch except the last, the folding randomness in round order — `randomness.as_slice()[r]` is
-/// round `r`'s challenge, matching what [`Layout::into_sumcheck`] returns — and the final
+/// round `r`'s challenge, matching what `PcsLayout::into_sumcheck_in` returns — and the final
 /// folded codeword.
 ///
 /// `BIND_EACH_ROUND` picks when each round's challenge is applied to the sumcheck tables:
@@ -162,17 +161,17 @@ where
     } = prover_data;
 
     let mut sumcheck_data = SumcheckData::default();
-    let (sumcheck, mut randomness) =
-        transcript.fold_batch(|challenger| layout.into_sumcheck(&mut sumcheck_data, 0, challenger));
+
+    // The rounds multiply in the polynomial basis, which needs no change of basis per product.
+    // The transcript carries tower elements.
+    let (mut sumcheck, mut randomness) = transcript.fold_batch(|challenger| {
+        layout.into_sumcheck_in::<Ghash128, _>(&mut sumcheck_data, 0, challenger)
+    });
     assert_eq!(
         randomness.num_variables(),
         0,
         "the commit phase runs at zero preprocessing depth, so the sumcheck consumes no head rounds"
     );
-
-    // The rounds multiply in the polynomial basis, which needs no change of basis per product.
-    // The transcript carries tower elements.
-    let mut sumcheck = ReprSumcheckProver::<_, _, Ghash128>::new(sumcheck);
 
     assert_eq!(
         mmcs.get_matrices(&merkle_data)[0].width,

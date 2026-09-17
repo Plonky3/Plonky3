@@ -11,7 +11,7 @@ use p3_maybe_rayon::prelude::*;
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
 
-use super::{Basis, SumcheckProver};
+use super::{Basis, SumcheckProver, VariableOrder};
 use crate::SumcheckData;
 use crate::product_polynomial::ProductPolynomial;
 use crate::transcript::{ProverTranscript, SumcheckShape};
@@ -79,6 +79,22 @@ where
                 sum: R::from(sum),
                 outstanding: outstanding.map(R::from),
             },
+            _transcript: PhantomData,
+        }
+    }
+
+    /// Builds a prover from an evaluation table in `EF` and a weight table already in `R`.
+    ///
+    /// Only the evaluations cross into `R` here; a caller that can accumulate its weights in
+    /// `R` directly saves the second crossing.
+    #[tracing::instrument(skip_all)]
+    pub fn from_tables(order: VariableOrder, evals: Poly<EF>, weights: Poly<R>, sum: EF) -> Self {
+        let evals = Poly::new(R::from_table(evals.into_evals()));
+        let poly = ProductPolynomial::new_unpacked(order, evals, weights);
+
+        Self {
+            // Sanity: the claim and the table pair must agree, both read in `R`.
+            inner: SumcheckProver::new(poly, R::from(sum)),
             _transcript: PhantomData,
         }
     }
