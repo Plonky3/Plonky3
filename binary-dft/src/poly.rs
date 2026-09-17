@@ -240,7 +240,8 @@ const STAGED_LINE_BYTES: usize = 64;
 ///
 /// The knee is at 1024 bytes, and the rise past it is the depth the tile gives up.
 /// [`Plan::new`] reads this as a target and not as a floor, because that depth is not free: a
-/// run grows only while the shorter tile still takes as few traversals of the matrix.
+/// run grows only while the shorter tile still takes as few traversals of the matrix, and as
+/// few of them that gather.
 const STAGED_RUN_BYTES: usize = 1024;
 
 /// Workers a row below [`STAGED_LINE_BYTES`] needs before a tile is worth gathering into.
@@ -368,7 +369,12 @@ impl Plan {
     /// The staging tile has a fixed byte budget, so doubling the run halves the rows it holds:
     /// the run length and the fused depth trade one for one. A run below a cache line is never
     /// worth gathering, so that length is taken first, and from there it grows towards
-    /// [`STAGED_RUN_BYTES`] only while the shorter tile still takes as few traversals.
+    /// [`STAGED_RUN_BYTES`] while two counts stay at what the shortest run already costs.
+    ///
+    /// The first is the traversals of the matrix. The second is how many of those gather: a
+    /// leftover stage sweeps the matrix contiguously, while a staged group also gathers and
+    /// scatters. Trading the leftover for a second group holds the traversal count and still
+    /// pays for a gather, so the two counts are not the same budget.
     ///
     /// A row under [`STAGED_LINE_BYTES`] is gathered from [`STAGED_WORKERS`] workers up, and
     /// below that every stage above the contiguous tile runs as a plain pass.
@@ -381,11 +387,16 @@ impl Plan {
             |log_block: usize| log2_floor_usize((STAGING_BYTES / (row << log_block)).max(1));
         let floor = log2_ceil_usize(STAGED_LINE_BYTES.div_ceil(row));
         let target = log2_ceil_usize(STAGED_RUN_BYTES.div_ceil(row)).max(floor);
-        // The shortest admissible run sets the traversal count no longer run may exceed.
+        // The shortest admissible run sets both counts no longer run may exceed.
         let budget = Self::traversals(above, depth_at(floor));
+        let gathers = Self::groups(above, depth_at(floor)).count();
         let log_block = (floor..=target)
             .rev()
-            .find(|&log_block| Self::traversals(above, depth_at(log_block)) <= budget)
+            .find(|&log_block| {
+                let depth = depth_at(log_block);
+                Self::traversals(above, depth) <= budget
+                    && Self::groups(above, depth).count() <= gathers
+            })
             .unwrap_or(floor);
         Self {
             width,
@@ -1057,6 +1068,26 @@ mod tests {
         (1024, 7, (1, 0, 2)),
     ];
 
+    /// Width-16 heights whose plan the traversal count alone does not decide.
+    ///
+    /// At each of these, growing the run would hold the traversal count while turning a
+    /// leftover plain pass into a second gathered group, so the gather count is the only
+    /// thing that separates the two plans:
+    ///
+    /// ```text
+    ///     2^16   one group of eight and a plain pass, where growth would give (6, 3)
+    ///     2^18   two groups either way, so growth rebalances (8, 3) into (6, 5)
+    ///     2^20   two groups either way, rebalanced into (7, 6)
+    /// ```
+    ///
+    /// These sit apart from [`PRODUCTION_CUTS`] because that list is also transformed against
+    /// the per-stage schedule, and `2^20` rows of width 16 is `2^24` elements to move twice.
+    const WIDE_CUTS: [(usize, usize, (usize, usize, usize)); 3] = [
+        (16, 16, (7, 0, 8)),
+        (16, 18, (7, 2, 6)),
+        (16, 20, (7, 1, 7)),
+    ];
+
     /// Cuts whose staging groups run at a height the reference oracle can still reach:
     ///
     /// ```text
@@ -1318,7 +1349,7 @@ mod tests {
         // threshold. A run length is a choice between two plans that cost the same number of
         // passes, so no pass count can pin it: these triples are what says which one the
         // budgets pick, and a change to any of the three has to come through here.
-        for (width, log_n, cut) in PRODUCTION_CUTS {
+        for (width, log_n, cut) in PRODUCTION_CUTS.into_iter().chain(WIDE_CUTS) {
             let plan = Plan::for_workers(width, log_n, 32);
             assert_eq!((plan.local, plan.log_block, plan.depth), cut, "{plan:?}");
         }
