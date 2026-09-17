@@ -348,7 +348,8 @@ mod tests {
 
     #[test]
     fn schedule_helper_matches_generator() {
-        let input: [u64; 25] = array::from_fn(|i| (i as u64 + 1) * 0x9e37_79b9_7f4a_7c15);
+        let input: [u64; 25] =
+            array::from_fn(|i| (i as u64 + 1).wrapping_mul(0x9e37_79b9_7f4a_7c15));
         let schedule: Vec<usize> = (0..NUM_ROUNDS).collect();
         let trace = trace_for_schedule(input, &schedule, 32);
         assert_eq!(
