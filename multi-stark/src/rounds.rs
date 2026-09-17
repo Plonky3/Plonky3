@@ -2,6 +2,7 @@
 //!
 //! Builds round polynomials for `sum_x eq(tau, x) * g(x)` and folds state across challenges.
 
+mod repr;
 mod subfield;
 
 use alloc::collections::BTreeMap;
@@ -1873,6 +1874,41 @@ where
         P: Fn(&[F]) -> Poly<EF::ExtensionPacking> + Sync,
         U: Fn(&[F]) -> Poly<EF> + Sync,
     {
+        let next_tail = self.fold_claims_and_tails(r);
+
+        let half = self.num_evals() / 2;
+        let want_packed = (half / 2) >= F::Packing::WIDTH;
+        let columns = if want_packed {
+            ExtColumns::Packed(self.fold_each_column(fold_packed))
+        } else {
+            ExtColumns::Scalar(self.fold_each_column(fold_scalar))
+        };
+
+        RoundStateExt {
+            public_values: self.public_values,
+            alpha: self.alpha,
+            alpha_powers: self.alpha_powers,
+            betas: self.betas,
+            constraint_groups: self.constraint_groups,
+            interaction_groups: self.interaction_groups,
+            slots: self.slots,
+            tau: self.tau,
+            round: 1,
+            columns,
+            next_tail,
+            coupling: self.coupling,
+            lookup_scale: self.eta,
+            boundary: BoundaryEvals::new(EF::ONE - r, r, EF::ONE - r),
+        }
+    }
+
+    /// Update each group's claim for binding the first variable at `r`, and fold every tail.
+    ///
+    /// # Returns
+    ///
+    /// The repeat-last successor value of every column at the folded tail row.
+    /// Zero for every column no AIR reads on the next row.
+    fn fold_claims_and_tails(&mut self, r: EF) -> Vec<EF> {
         let tau = self.tau.as_slice()[0];
         self.constraint_groups
             .iter_mut()
@@ -1881,9 +1917,8 @@ where
 
         let num_evals = self.num_evals();
         let half = num_evals / 2;
-        let width = self.total_width();
         // Only successor columns carry a repeat-last tail; every other entry stays zero.
-        let mut next_tail = EF::zero_vec(width);
+        let mut next_tail = EF::zero_vec(self.total_width());
         let mut fold_tails = |offset: usize, table: &Table<F>, runs: &[Range<usize>]| {
             for run in runs {
                 for (tail, col) in next_tail[run.clone()]
@@ -1908,80 +1943,31 @@ where
                 );
             }
         }
+        next_tail
+    }
 
-        let want_packed = (half / 2) >= F::Packing::WIDTH;
-        let columns = if want_packed {
-            let mut columns = Vec::with_capacity(width);
-            for slot in &self.slots {
-                columns.extend(
-                    self.tables[slot.stage_index]
-                        .par_iter_polys()
-                        .map(&fold_packed)
-                        .collect::<Vec<_>>(),
-                );
-                if let Some(preprocessed) = self.preprocessed[slot.stage_index] {
-                    columns.extend(
-                        preprocessed
-                            .par_iter_polys()
-                            .map(&fold_packed)
-                            .collect::<Vec<_>>(),
-                    );
-                }
-                if let Some(periodic) = self.periodic[slot.stage_index].as_ref() {
-                    columns.extend(
-                        periodic
-                            .par_iter_polys()
-                            .map(&fold_packed)
-                            .collect::<Vec<_>>(),
-                    );
-                }
+    /// Fold every column of the stage with `fold`, in merged-buffer order.
+    fn fold_each_column<T, U>(&self, fold: U) -> Vec<Poly<T>>
+    where
+        T: Send,
+        U: Fn(&[F]) -> Poly<T> + Sync,
+    {
+        let mut columns = Vec::with_capacity(self.total_width());
+        for slot in &self.slots {
+            columns.extend(
+                self.tables[slot.stage_index]
+                    .par_iter_polys()
+                    .map(&fold)
+                    .collect::<Vec<_>>(),
+            );
+            if let Some(preprocessed) = self.preprocessed[slot.stage_index] {
+                columns.extend(preprocessed.par_iter_polys().map(&fold).collect::<Vec<_>>());
             }
-            ExtColumns::Packed(columns)
-        } else {
-            let mut columns = Vec::with_capacity(width);
-            for slot in &self.slots {
-                columns.extend(
-                    self.tables[slot.stage_index]
-                        .par_iter_polys()
-                        .map(&fold_scalar)
-                        .collect::<Vec<_>>(),
-                );
-                if let Some(preprocessed) = self.preprocessed[slot.stage_index] {
-                    columns.extend(
-                        preprocessed
-                            .par_iter_polys()
-                            .map(&fold_scalar)
-                            .collect::<Vec<_>>(),
-                    );
-                }
-                if let Some(periodic) = self.periodic[slot.stage_index].as_ref() {
-                    columns.extend(
-                        periodic
-                            .par_iter_polys()
-                            .map(&fold_scalar)
-                            .collect::<Vec<_>>(),
-                    );
-                }
+            if let Some(periodic) = self.periodic[slot.stage_index].as_ref() {
+                columns.extend(periodic.par_iter_polys().map(&fold).collect::<Vec<_>>());
             }
-            ExtColumns::Scalar(columns)
-        };
-
-        RoundStateExt {
-            public_values: self.public_values,
-            alpha: self.alpha,
-            alpha_powers: self.alpha_powers,
-            betas: self.betas,
-            constraint_groups: self.constraint_groups,
-            interaction_groups: self.interaction_groups,
-            slots: self.slots,
-            tau: self.tau,
-            round: 1,
-            columns,
-            next_tail,
-            coupling: self.coupling,
-            lookup_scale: self.eta,
-            boundary: BoundaryEvals::new(EF::ONE - r, r, EF::ONE - r),
         }
+        columns
     }
 }
 

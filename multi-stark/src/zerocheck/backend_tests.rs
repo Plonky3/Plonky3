@@ -1,8 +1,9 @@
 //! Every zerocheck backend must emit the generic backend's transcript, byte for byte.
 //!
-//! The fixtures run over `BinaryField128` with bit-valued traces, where the subfield backend
-//! evaluates the first round of a stage inside `GF(4)`. Each way a stage can fail to fit gets
-//! its own fixture.
+//! The fixtures run over `BinaryField128`, mostly with bit-valued traces, where the subfield
+//! backend evaluates the first round of a stage inside `GF(4)`. Each way a stage can fail to fit
+//! gets its own fixture. The representation backend runs every later round of every fixture in
+//! the polynomial basis.
 
 use alloc::borrow::Cow;
 use alloc::collections::BTreeMap;
@@ -10,11 +11,11 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use p3_air::{Air, AirBuilder, BaseAir, BoundaryEnd, BoundaryPublic, WindowAccess};
-use p3_binary_field::{BinaryChallenger, BinaryField2, BinaryField128, TowerLevel};
+use p3_binary_field::{BinaryChallenger, BinaryField2, BinaryField128, Ghash128, TowerLevel};
 use p3_challenger::{
     CanObserve, CanSample, CanSampleBits, FieldChallenger, GrindingChallenger, HashChallenger,
 };
-use p3_field::PrimeCharacteristicRing;
+use p3_field::{HasSubfield, PrimeCharacteristicRing};
 use p3_keccak::Keccak256Hash;
 use p3_lookup::{Count, InteractionBuilder};
 use p3_matrix::dense::RowMajorMatrix;
@@ -24,7 +25,7 @@ use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
 
 use super::AirZerocheck;
-use crate::backend::{GenericBackend, SubfieldBackend, ZerocheckBackend};
+use crate::backend::{GenericBackend, ReprBackend, SubfieldBackend, ZerocheckBackend};
 use crate::lookup::{
     ActiveLookupRuntime, AirLinkClaim, AirLinkInstance, AirLinkLookup, LookupRuntime,
 };
@@ -34,6 +35,9 @@ pub(crate) type Tower = BinaryField128;
 
 /// The subfield the subfield backend evaluates in.
 pub(crate) type Gf4 = BinaryField2;
+
+/// The representation the representation backend runs later rounds in.
+type PolyBasis = Ghash128;
 
 type Binary = BinaryChallenger<Tower, HashChallenger<u8, Keccak256Hash, 32>>;
 
@@ -155,6 +159,15 @@ pub(crate) enum FixtureAir {
     ///     lookup : a requested once, b provided once
     /// ```
     Link,
+    /// Degree-three nonlinear recurrence over full-width cells.
+    ///
+    /// ```text
+    ///     transition : next.a = b
+    ///     transition : next.b = a * b + a
+    /// ```
+    ///
+    /// Its cells are arbitrary tower elements, so a stage holding it never fits `GF(4)`.
+    Recurrence,
 }
 
 impl BaseAir<Tower> for FixtureAir {
@@ -162,7 +175,7 @@ impl BaseAir<Tower> for FixtureAir {
         match self {
             Self::Gate { .. } | Self::Quartic => 4,
             Self::Pair => 3,
-            Self::Link => 2,
+            Self::Link | Self::Recurrence => 2,
             Self::Periodic { .. } => 1,
         }
     }
@@ -200,6 +213,7 @@ impl BaseAir<Tower> for FixtureAir {
         match self {
             Self::Gate { .. } => vec![2],
             Self::Quartic => vec![3],
+            Self::Recurrence => vec![0, 1],
             Self::Pair | Self::Link | Self::Periodic { .. } => vec![],
         }
     }
@@ -266,6 +280,11 @@ impl<AB: AirBuilder<F = Tower> + InteractionBuilder> Air<AB> for FixtureAir {
                     (vec![b.into()], Count::provided(AB::Expr::ONE)),
                 ]);
             }
+            Self::Recurrence => {
+                let (a, b) = (local[0], local[1]);
+                builder.when_transition().assert_eq(next[0], b);
+                builder.when_transition().assert_eq(next[1], a * b + a);
+            }
         }
     }
 }
@@ -330,6 +349,15 @@ impl Instance {
             FixtureAir::Periodic { .. } => {
                 let values = (0..height).map(|_| bit()).collect();
                 (RowMajorMatrix::new(values, 1), None, vec![])
+            }
+            FixtureAir::Recurrence => {
+                let (mut a, mut b): (Tower, Tower) = (rng.random(), rng.random());
+                let mut values = Vec::with_capacity(2 * height);
+                for _ in 0..height {
+                    values.extend([a, b]);
+                    (a, b) = (b, a * b + a);
+                }
+                (RowMajorMatrix::new(values, 2), None, vec![])
             }
         };
         Self {
@@ -432,7 +460,7 @@ where
     (bytes, CanSample::<Tower>::sample(&mut challenger))
 }
 
-/// Require the subfield backend to emit the generic backend's transcript on this batch.
+/// Require every other backend to emit the generic backend's transcript on this batch.
 fn assert_backends_agree(
     instances: &[Instance],
     lookup: impl Fn() -> LookupRuntime<Tower>,
@@ -440,7 +468,9 @@ fn assert_backends_agree(
 ) {
     let generic = transcript::<GenericBackend>(instances, lookup(), pow_bits);
     let subfield = transcript::<SubfieldBackend<Gf4>>(instances, lookup(), pow_bits);
-    assert_eq!(subfield, generic);
+    assert_eq!(subfield, generic, "subfield backend");
+    let repr = transcript::<ReprBackend<Gf4, PolyBasis>>(instances, lookup(), pow_bits);
+    assert_eq!(repr, generic, "representation backend");
 }
 
 #[test]
@@ -564,6 +594,36 @@ fn backends_agree_when_an_interpolation_step_lies_outside_the_subfield() {
     assert_backends_agree(&instances, || LookupRuntime::Inactive, 0);
 }
 
+#[test]
+fn backends_agree_on_full_width_cells() {
+    // Fixture state:
+    //
+    //     stage 32 rows : recurrence, whose first round cannot run in GF(4)
+    //     stage  8 rows : gate, which fits GF(4)
+    let instances = [
+        Instance::honest(FixtureAir::Recurrence, 32, 16),
+        Instance::honest(FixtureAir::Gate { scale: Tower::ONE }, 8, 17),
+    ];
+    assert!(!<Tower as HasSubfield<Gf4>>::all_in_subfield(
+        &instances[0].main.values
+    ));
+    assert_backends_agree(&instances, || LookupRuntime::Inactive, 0);
+    assert_backends_agree(&instances, || LookupRuntime::Inactive, 2);
+}
+
+#[test]
+fn backends_agree_on_stages_tall_enough_to_fold_in_parallel() {
+    // Fixture state:
+    //
+    //     stage 2^14 rows : pair, which fits GF(4); its first later round lifts 2^12 eq weights
+    //     stage 2^12 rows : recurrence, whose columns fold across threads outside GF(4)
+    let instances = [
+        Instance::honest(FixtureAir::Pair, 1 << 14, 18),
+        Instance::honest(FixtureAir::Recurrence, 1 << 12, 19),
+    ];
+    assert_backends_agree(&instances, || LookupRuntime::Inactive, 0);
+}
+
 /// Degrees the symbolic pass sees, so a fixture cannot drift from the shape its test names.
 #[test]
 fn fixture_degrees_are_the_named_ones() {
@@ -579,6 +639,7 @@ fn fixture_degrees_are_the_named_ones() {
         period: [gf4(2), gf4(3)],
     };
     assert_eq!(degree(&periodic), 3);
+    assert_eq!(degree(&FixtureAir::Recurrence), 3);
     let link = super::get_air_profile::<Tower, Tower, _>(&FixtureAir::Link).degrees;
     assert!(link.interactions > 0);
 }

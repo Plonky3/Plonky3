@@ -18,10 +18,10 @@ use alloc::vec::Vec;
 use core::marker::PhantomData;
 
 use p3_air::Air;
-use p3_field::{ExtensionField, Field, HasSubfield};
+use p3_field::{Algebra, ExtensionField, Field, HasSubfield};
 use p3_multilinear_util::poly::Poly;
 
-use crate::folder::{MultilinearFolder, ProverAir};
+use crate::folder::{InteractionMultilinearFolder, MultilinearFolder, ProverAir};
 use crate::rounds::{AirOpenings, RoundStateBase, RoundStateExt};
 use crate::subfield::{SubfieldAcc, SubfieldVar};
 
@@ -41,6 +41,9 @@ mod private {
     // The kernels take the crate-private round states.
     #[expect(private_interfaces)]
     pub trait Dispatch<F: Field, EF: ExtensionField<F>, A> {
+        /// The field a folded stage computes its rounds in, isomorphic to the challenge field.
+        type Repr;
+
         /// Evaluate the first round polynomial of a newly activated stage.
         fn round0(state: &mut RoundStateBase<'_, '_, A, F, EF>, eq_suffix: &Poly<EF>) -> Vec<EF>;
 
@@ -48,16 +51,21 @@ mod private {
         fn fold0<'air, 'data>(
             state: RoundStateBase<'air, 'data, A, F, EF>,
             r: EF,
-        ) -> RoundStateExt<'air, 'data, A, F, EF>;
+        ) -> RoundStateExt<'air, 'data, A, F, EF, Self::Repr>;
 
         /// Evaluate the round polynomial of a stage whose first variable is bound.
-        fn round(state: &mut RoundStateExt<'_, '_, A, F, EF>, eq_suffix: &Poly<EF>) -> Vec<EF>;
+        fn round(
+            state: &mut RoundStateExt<'_, '_, A, F, EF, Self::Repr>,
+            eq_suffix: &Poly<EF>,
+        ) -> Vec<EF>;
 
         /// Bind the next variable of a folded stage at `r`.
-        fn fold(state: &mut RoundStateExt<'_, '_, A, F, EF>, r: EF);
+        fn fold(state: &mut RoundStateExt<'_, '_, A, F, EF, Self::Repr>, r: EF);
 
         /// Split a fully bound stage into per-AIR openings, each tagged with its caller index.
-        fn openings(state: RoundStateExt<'_, '_, A, F, EF>) -> Vec<(usize, AirOpenings<EF>)>;
+        fn openings(
+            state: RoundStateExt<'_, '_, A, F, EF, Self::Repr>,
+        ) -> Vec<(usize, AirOpenings<EF>)>;
     }
 }
 
@@ -93,6 +101,8 @@ where
     A: ProverAir<F, EF>,
     EF::ExtensionPacking: From<EF> + From<F::Packing>,
 {
+    type Repr = EF;
+
     fn round0(state: &mut RoundStateBase<'_, '_, A, F, EF>, eq_suffix: &Poly<EF>) -> Vec<EF> {
         state.round_poly(eq_suffix)
     }
@@ -160,6 +170,8 @@ where
         + for<'a> Air<MultilinearFolder<'a, F, SubfieldVar<F, S>, SubfieldAcc<EF, S>>>,
     EF::ExtensionPacking: From<EF> + From<F::Packing>,
 {
+    type Repr = EF;
+
     fn round0(state: &mut RoundStateBase<'_, '_, A, F, EF>, eq_suffix: &Poly<EF>) -> Vec<EF> {
         state
             .round_poly_subfield::<S>(eq_suffix)
@@ -187,5 +199,88 @@ where
 
     fn openings(state: RoundStateExt<'_, '_, A, F, EF>) -> Vec<(usize, AirOpenings<EF>)> {
         <GenericBackend as private::Dispatch<F, EF, A>>::openings(state)
+    }
+}
+
+/// The backend that runs a stage's rounds after the first in a field `R` isomorphic to the
+/// challenge field.
+///
+/// ```text
+///     round 0      : as SubfieldBackend<S>
+///     fold 0       : every column folds straight into R
+///     later rounds : columns, selectors, and AIR expressions in R, one residual row at a time
+/// ```
+///
+/// Two representations of one field can multiply at very different costs. In the tower basis
+/// of `GF(2^128)` a product changes basis three times around one carryless multiply. In its
+/// polynomial basis the product is that multiply alone.
+///
+/// What each round reads crosses into `R` at most once per round:
+///
+/// ```text
+///     once per stage : alpha powers, lookup coefficients, repeat-last tails, selector prefix
+///     once per round : eq weights, interpolation steps, challenge
+///     never          : zerocheck point, beta powers, lookup scale, claims, interpolators
+/// ```
+///
+/// Each round's per-node sums and the final openings cross back into the challenge field.
+///
+/// In a stage that fits `S`, every pair of cells folds into `R` through two table lookups.
+/// Any other stage converts each cell pair and folds it with a product in `R`.
+/// A stage declaring a lookup runs its later rounds in `R` like any other.
+///
+/// `R::from` and `EF::from` must be mutually inverse field isomorphisms, and `R`'s embedding of
+/// the trace field must be the challenge field's followed by `R::from`. The interpolation steps
+/// are the challenge field's own, carried into `R`, never `R`'s interpolation nodes.
+/// Every round polynomial is then the one [`GenericBackend`] computes, so the proof is the same.
+#[derive(Debug)]
+pub struct ReprBackend<S, R>(PhantomData<fn() -> (S, R)>);
+
+// The sealed kernels take the crate-private round states.
+#[expect(private_interfaces)]
+impl<F, EF, A, S, R> private::Dispatch<F, EF, A> for ReprBackend<S, R>
+where
+    S: Field,
+    F: HasSubfield<S>,
+    EF: ExtensionField<F> + HasSubfield<S> + From<R>,
+    R: Field + Algebra<F> + From<EF>,
+    A: ProverAir<F, EF>
+        + for<'a> Air<MultilinearFolder<'a, F, SubfieldVar<F, S>, SubfieldAcc<EF, S>>>
+        + for<'a> Air<MultilinearFolder<'a, F, R, R>>
+        + for<'a> Air<InteractionMultilinearFolder<'a, F, R, R>>,
+    EF::ExtensionPacking: From<EF> + From<F::Packing>,
+{
+    type Repr = R;
+
+    fn round0(state: &mut RoundStateBase<'_, '_, A, F, EF>, eq_suffix: &Poly<EF>) -> Vec<EF> {
+        <SubfieldBackend<S> as private::Dispatch<F, EF, A>>::round0(state, eq_suffix)
+    }
+
+    fn fold0<'air, 'data>(
+        state: RoundStateBase<'air, 'data, A, F, EF>,
+        r: EF,
+    ) -> RoundStateExt<'air, 'data, A, F, EF, R> {
+        debug_assert!(
+            R::from(EF::from(F::GENERATOR)) == R::from(F::GENERATOR)
+                && EF::from(R::from(EF::GENERATOR)) == EF::GENERATOR,
+            "the representation field must embed the trace field through the challenge field"
+        );
+        if state.fits_subfield() {
+            state.fold_subfield_into::<S, R>(r)
+        } else {
+            state.fold_into::<R>(r)
+        }
+    }
+
+    fn round(state: &mut RoundStateExt<'_, '_, A, F, EF, R>, eq_suffix: &Poly<EF>) -> Vec<EF> {
+        state.round_poly_repr(eq_suffix)
+    }
+
+    fn fold(state: &mut RoundStateExt<'_, '_, A, F, EF, R>, r: EF) {
+        state.fold_repr(r);
+    }
+
+    fn openings(state: RoundStateExt<'_, '_, A, F, EF, R>) -> Vec<(usize, AirOpenings<EF>)> {
+        state.into_openings()
     }
 }

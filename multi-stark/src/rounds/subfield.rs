@@ -44,10 +44,10 @@ const MAX_EMBEDDING_POWERS: usize = 1 << 8;
 /// A subfield row is cheap enough that scheduling one task per row would dominate it.
 const ROWS_PER_TASK: usize = 16;
 
-/// Cells a column needs before the subfield fold splits it across threads.
+/// Cells a column or weight table needs before its fold or basis change splits across threads.
 ///
-/// Below this, the split costs more than the column's own fold.
-const PARALLEL_FOLD_CELLS: usize = 1 << 12;
+/// Below this, the split costs more than the pass itself.
+pub(super) const PARALLEL_FOLD_CELLS: usize = 1 << 12;
 
 /// What every row of one subfield pass shares.
 struct SubfieldRows<'a, S, EF> {
