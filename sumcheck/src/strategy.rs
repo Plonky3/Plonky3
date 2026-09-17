@@ -32,6 +32,17 @@ use crate::{SumcheckData, extrapolate_01inf};
 /// - Above it, the fold-reduce amortises the splitting cost.
 const PAR_THRESHOLD: usize = 1 << 14;
 
+/// Table length from which a threaded suffix binding writes over its own tables.
+///
+/// # Why this value
+///
+/// - In place, the blocks of a binding run in levels, one parallel dispatch per level.
+/// - Below `2^23` entries those dispatches cost more than a fresh half-length table.
+/// - Above it, the fresh table's page faults and release dominate instead.
+///
+/// A table bound in place keeps its buffer, until a round below this length replaces it.
+const SUFFIX_IN_PLACE_THRESHOLD: usize = 1 << 23;
+
 /// Tile size for the chunked round-coefficient kernel.
 ///
 /// Monty-31 spells out a single-reduction dot product per tile size, and the set depends on the target:
@@ -649,6 +660,31 @@ where
     }
 }
 
+/// Binds the low index bit of a table over its own lower half.
+///
+/// The line through each input pair lands at half the pair's index:
+///
+/// ```text
+///     table : [ a0, a1 | a2, a3 | a4, a5 | ... ]
+///     after : [ b0, b1, b2, ...               ]
+///
+///     b_g = a_{2g} + (a_{2g+1} - a_{2g}) * r
+/// ```
+///
+/// Output `g` reads inputs `2g` and `2g+1`, both at or above `g`.
+/// A forward sweep therefore reads every pair before anything writes over it.
+#[inline]
+fn bind_pairs_in_place<A, Ch>(table: &mut [A], r: Ch)
+where
+    A: Algebra<Ch> + Copy,
+    Ch: Copy,
+{
+    for g in 0..table.len() / 2 {
+        let (lo, hi) = (table[2 * g], table[2 * g + 1]);
+        table[g] = lo + (hi - lo) * r;
+    }
+}
+
 /// Binds a suffix variable and measures the bound pair's round message in one pass.
 ///
 /// # Overview
@@ -683,31 +719,38 @@ where
 ///
 /// The output is still in cache when the measuring pass reads it.
 ///
-/// # Why the destination is a separate buffer
+/// # Why blocks run in levels
 ///
 /// Output index `g` reads input indices `2g` and `2g+1`, both at or above `g`.
 /// The fold is therefore a compaction.
 ///
 /// Writes land at indices no higher than the reads they depend on.
 ///
-/// So one serial forward sweep could safely write in place.
+/// So one serial forward sweep can write in place.
 ///
-/// Blocked parallelism breaks that.
-///
-/// Cut the output into blocks at `G_0 = 0 < G_1 < ...`:
+/// Blocked parallelism needs more care.
+/// Cut the output into blocks of `G` positions:
 ///
 /// ```text
-///     block 0 : writes [ 0,   G_1 )     reads [ 0,     2 G_1 )
-///     block 1 : writes [ G_1, G_2 )     reads [ 2 G_1, 2 G_2 )
+///     block b : writes [ b G, (b+1) G )     reads [ 2b G, 2(b+1) G )
 /// ```
 ///
-/// Block 1 writes from `G_1`, and block 0 reads up to `2 G_1`.
+/// Block `b` writes over the input of block `b / 2`, and over nothing else still unread.
+/// So it only has to wait for that one block.
 ///
-/// Any non-empty first block has `G_1 < 2 G_1`, so those ranges always overlap.
-/// One task would be overwriting entries another task has yet to read.
+/// Block 0 writes over its own input, so a forward sweep binds it.
+/// The rest run in levels that double in size:
 ///
-/// A separate half-size destination removes the overlap outright.
-/// The pass then stays single and stays parallel.
+/// ```text
+///     level 0 : block  1         writes [  G, 2G )     reads [ 2G,  4G )
+///     level 1 : blocks 2, 3      writes [ 2G, 4G )     reads [ 4G,  8G )
+///     level 2 : blocks 4 .. 7    writes [ 4G, 8G )     reads [ 8G, 16G )
+/// ```
+///
+/// A level writes only over input the levels before it have read.
+/// It reads only input no level has written over yet.
+///
+/// So the blocks of one level run in parallel, and the pass needs no second buffer.
 ///
 /// # Arguments
 ///
@@ -726,7 +769,9 @@ where
 /// O(2^n), at the same multiply count as binding and measuring separately.
 /// What it saves is one pass over the bound tables.
 ///
-/// One half-length allocation per table per round, released as the round ends.
+/// Serial and very long tables bind in place and allocate nothing.
+/// A threaded table below `SUFFIX_IN_PLACE_THRESHOLD` entries binds into fresh
+/// half-length tables instead, in a single parallel dispatch.
 ///
 /// # Panics
 ///
@@ -742,37 +787,118 @@ where
     A: Algebra<Ch> + Copy + Send + Sync,
     Ch: Copy + Send + Sync,
 {
-    let (bound_evals, bound_weights, message) =
-        bind_and_measure_pairs(evals.as_slice(), weights.as_slice(), r);
+    let len = evals.num_evals();
+    if len > PAR_THRESHOLD && len < SUFFIX_IN_PLACE_THRESHOLD {
+        let (bound_evals, bound_weights, message) =
+            bind_and_measure_pairs_into_new(evals.as_slice(), weights.as_slice(), r);
 
-    // Installing the bound halves drops the sources.
-    //
-    // So what stays resident between rounds is one half-length table per side.
-    *evals = Poly::new(bound_evals);
-    *weights = Poly::new(bound_weights);
+        // Installing the bound halves drops the sources.
+        *evals = Poly::new(bound_evals);
+        *weights = Poly::new(bound_weights);
+
+        return message;
+    }
+
+    let message = bind_and_measure_pairs(evals.as_mut_slice(), weights.as_mut_slice(), r);
+
+    // The bound values sit in the lower half of each table.
+    evals.truncate_to_half();
+    weights.truncate_to_half();
 
     message
 }
 
-/// The pass behind the binding above, over the raw tables.
+/// Checks the shape the suffix passes accept.
 ///
-/// Returns the two bound half-length tables beside the round message.
-fn bind_and_measure_pairs<A, Ch>(
-    evals: &[A],
-    weights: &[A],
-    r: Ch,
-) -> (Vec<A>, Vec<A>, RoundMessage<A>)
-where
-    A: Algebra<Ch> + Copy + Send + Sync,
-    Ch: Copy + Send + Sync,
-{
-    // Precondition: paired tables, with a variable left over for the message.
-    //
+/// # Panics
+///
+/// - The two tables must have the same length.
+/// - The length must be at least four and a multiple of four.
+fn assert_suffix_pair_shape<A>(evals: &[A], weights: &[A]) {
     // Zero is a multiple of four.
     //
     // So an empty pair would otherwise pass and return a zero message instead of panicking.
     assert_eq!(evals.len(), weights.len());
     assert!(evals.len() >= 4 && evals.len().is_multiple_of(4));
+}
+
+/// Bound index positions one suffix block writes before measuring them.
+///
+/// A block keeps one bound face of each table hot across the two steps.
+///
+/// ```text
+///     prefix block : four faces, half the table apart
+///     suffix block : one face, adjacent entries
+/// ```
+///
+/// So the same byte budget buys twice as many positions.
+///
+/// Twice a whole number of tiles is still a whole number of tiles.
+/// So no block ends mid-tile.
+#[inline]
+const fn suffix_block<A>() -> usize {
+    2 * fused_block::<A>()
+}
+
+/// Binds every output block from the twice-as-long input block at its position, and measures it.
+///
+/// No output entry may alias an input entry.
+fn bind_and_measure_blocks<A, Ch>(
+    e_out: &mut [A],
+    w_out: &mut [A],
+    e_in: &[A],
+    w_in: &[A],
+    r: Ch,
+    threaded: bool,
+) -> (A, A)
+where
+    A: Algebra<Ch> + Copy + Send + Sync,
+    Ch: Copy + Send + Sync,
+{
+    let block_len = suffix_block::<A>();
+
+    // One block: bind its own slice of the output, then measure it while hot.
+    let block = |e_in: &[A], w_in: &[A], e_out: &mut [A], w_out: &mut [A]| {
+        bind_pairs(e_out, e_in, r);
+        bind_pairs(w_out, w_in, r);
+        round_coefficients_pairs(e_out, w_out)
+    };
+
+    if threaded {
+        e_out
+            .par_chunks_mut(block_len)
+            .zip(w_out.par_chunks_mut(block_len))
+            .zip(e_in.par_chunks(2 * block_len))
+            .zip(w_in.par_chunks(2 * block_len))
+            .par_fold_reduce(
+                || (A::ZERO, A::ZERO),
+                |acc, (((e_out, w_out), e_in), w_in)| {
+                    round_reduce(acc, block(e_in, w_in, e_out, w_out))
+                },
+                round_reduce,
+            )
+    } else {
+        e_out
+            .chunks_mut(block_len)
+            .zip(w_out.chunks_mut(block_len))
+            .zip(e_in.chunks(2 * block_len))
+            .zip(w_in.chunks(2 * block_len))
+            .fold((A::ZERO, A::ZERO), |acc, (((e_out, w_out), e_in), w_in)| {
+                round_reduce(acc, block(e_in, w_in, e_out, w_out))
+            })
+    }
+}
+
+/// The in-place pass behind the binding above, over the raw tables.
+///
+/// The lower half of each table is left holding the bound values.
+fn bind_and_measure_pairs<A, Ch>(evals: &mut [A], weights: &mut [A], r: Ch) -> RoundMessage<A>
+where
+    A: Algebra<Ch> + Copy + Send + Sync,
+    Ch: Copy + Send + Sync,
+{
+    // Precondition: paired tables, with a variable left over for the message.
+    assert_suffix_pair_shape(evals, weights);
 
     // Binding halves the length.
     let half = evals.len() / 2;
@@ -783,59 +909,70 @@ where
     // That puts about as much work in one task as a measuring pass does at its own gate.
     let threaded = evals.len() > PAR_THRESHOLD;
 
+    // Block 0 reads the entries it writes, so it binds in one forward sweep.
+    let head = suffix_block::<A>().min(half);
+    bind_pairs_in_place(&mut evals[..2 * head], r);
+    bind_pairs_in_place(&mut weights[..2 * head], r);
+    let mut acc = round_coefficients_pairs(&evals[..head], &weights[..head]);
+
+    // Every later level writes `[start, end)` from the input at `[2 start, 2 end)`.
+    //
+    // The split at `2 start` is what keeps the two apart.
+    let mut start = head;
+    while start < half {
+        let end = (2 * start).min(half);
+        let (e_written, e_unread) = evals.split_at_mut(2 * start);
+        let (w_written, w_unread) = weights.split_at_mut(2 * start);
+
+        // A level short enough to run serially is not worth a dispatch of its own.
+        let level_threaded = threaded && 2 * (end - start) > PAR_THRESHOLD;
+        let level = bind_and_measure_blocks(
+            &mut e_written[start..end],
+            &mut w_written[start..end],
+            &e_unread[..2 * (end - start)],
+            &w_unread[..2 * (end - start)],
+            r,
+            level_threaded,
+        );
+        acc = round_reduce(acc, level);
+        start = end;
+    }
+
+    let (c_a, c_inf) = acc;
+    RoundMessage { c_a, c_inf }
+}
+
+/// The pass behind the binding above for threaded tables below the in-place threshold.
+///
+/// Returns the two bound half-length tables beside the round message.
+fn bind_and_measure_pairs_into_new<A, Ch>(
+    evals: &[A],
+    weights: &[A],
+    r: Ch,
+) -> (Vec<A>, Vec<A>, RoundMessage<A>)
+where
+    A: Algebra<Ch> + Copy + Send + Sync,
+    Ch: Copy + Send + Sync,
+{
+    // Precondition: paired tables, with a variable left over for the message.
+    assert_suffix_pair_shape(evals, weights);
+
     // Destinations at the bound length, one per side.
     //
     // Allocating zeroed costs no userspace fill, and every entry is overwritten before a read.
+    let half = evals.len() / 2;
     let mut evals_out = A::zero_vec(half);
     let mut weights_out = A::zero_vec(half);
 
-    // Bound index positions one block writes before measuring them.
-    //
-    // A block keeps one bound face of each table hot across the two steps.
-    //
-    //     prefix block : four faces, half the table apart
-    //     suffix block : one face, adjacent entries
-    //
-    // So the same byte budget buys twice as many positions.
-    //
-    // Twice a whole number of tiles is still a whole number of tiles.
-    //
-    // So no block ends mid-tile.
-    let block_len = 2 * fused_block::<A>();
-
-    // One block: bind its own slice of the destination, then measure it while hot.
-    let block = |e_in: &[A], w_in: &[A], e_out: &mut [A], w_out: &mut [A]| {
-        bind_pairs(e_out, e_in, r);
-        bind_pairs(w_out, w_in, r);
-        round_coefficients_pairs(e_out, w_out)
-    };
-
-    // Each destination block reads the twice-as-long input block at the same position.
-    //
-    // No block writes where another reads.
-    let (c_a, c_inf) = if threaded {
-        evals_out
-            .par_chunks_mut(block_len)
-            .zip(weights_out.par_chunks_mut(block_len))
-            .zip(evals.par_chunks(2 * block_len))
-            .zip(weights.par_chunks(2 * block_len))
-            .par_fold_reduce(
-                || (A::ZERO, A::ZERO),
-                |acc, (((e_out, w_out), e_in), w_in)| {
-                    round_reduce(acc, block(e_in, w_in, e_out, w_out))
-                },
-                round_reduce,
-            )
-    } else {
-        evals_out
-            .chunks_mut(block_len)
-            .zip(weights_out.chunks_mut(block_len))
-            .zip(evals.chunks(2 * block_len))
-            .zip(weights.chunks(2 * block_len))
-            .fold((A::ZERO, A::ZERO), |acc, (((e_out, w_out), e_in), w_in)| {
-                round_reduce(acc, block(e_in, w_in, e_out, w_out))
-            })
-    };
+    // A separate destination lets every block run in the one dispatch.
+    let (c_a, c_inf) = bind_and_measure_blocks(
+        &mut evals_out,
+        &mut weights_out,
+        evals,
+        weights,
+        r,
+        evals.len() > PAR_THRESHOLD,
+    );
 
     (evals_out, weights_out, RoundMessage { c_a, c_inf })
 }
@@ -1732,7 +1869,7 @@ mod tests {
             // Invariant: the fused suffix pass is bind-then-measure, in one traversal.
             //
             //     two passes: bind the tables, then measure the bound pair
-            //     fused     : one pass writing a half-size destination and measuring it
+            //     fused     : one pass binding and measuring each block
             //
             // Both the bound tables and the message have to come out identical.
             // A prover on the fused path would otherwise send a different transcript.
@@ -1772,8 +1909,8 @@ mod tests {
     }
 
     #[test]
-    fn every_suffix_round_binds_correctly_and_keeps_only_the_live_table() {
-        // Invariant: a round replaces both tables with half-length ones and frees the sources.
+    fn every_suffix_round_binds_correctly_down_to_half_length() {
+        // Invariant: a round binds both tables down to their lower half.
         //
         // So every round of a ladder agrees with binding and measuring separately.
         //
@@ -1794,7 +1931,7 @@ mod tests {
         let mut want_evals = evals.clone();
         let mut want_weights = weights.clone();
 
-        // Arm under test: one pass per round, each allocating the half it writes.
+        // Arm under test: one fused pass per round.
         let mut got_evals = evals;
         let mut got_weights = weights;
 
@@ -1829,27 +1966,114 @@ mod tests {
     }
 
     #[test]
-    fn the_fused_suffix_pass_allocates_exactly_the_bound_half() {
-        // Invariant: a round's destination is sized to the bound length and nothing more.
+    fn a_serial_suffix_pass_binds_in_place() {
+        // Invariant: a serial round binds into the tables it reads, and allocates nothing.
+        //
+        // The bound values land in the lower half of each table.
+        // Dropping the upper half keeps the buffer, so no table moves.
+        //
+        // Fixture state: 2^12 paired entries, below the threaded gate.
+        let mut rng = SmallRng::seed_from_u64(0xA11C);
+        let mut evals = Poly::<EF>::rand(&mut rng, 12);
+        let mut weights = Poly::<EF>::rand(&mut rng, 12);
+        let r: EF = rng.random();
+
+        let evals_at = evals.as_slice().as_ptr();
+        let weights_at = weights.as_slice().as_ptr();
+        let _ = super::fold_and_round_coefficients_suffix(&mut evals, &mut weights, r);
+
+        //     source 2^12  ->  bound 2^11, at the same address
+        assert_eq!(evals.num_evals(), 1 << 11);
+        assert_eq!(weights.num_evals(), 1 << 11);
+        assert_eq!(evals.as_slice().as_ptr(), evals_at);
+        assert_eq!(weights.as_slice().as_ptr(), weights_at);
+    }
+
+    #[test]
+    fn a_threaded_suffix_pass_below_the_in_place_threshold_allocates_exactly_the_bound_half() {
+        // Invariant: a fresh destination is sized to the bound length and nothing more.
         //
         // The source is freed when the bound halves are installed, so the pair never holds
         // a spare destination between rounds.
         //
-        // Slack in either destination would be memory no later round reaches.
-        //
-        // Fixture state: 2^10 paired entries, so the bound half is 2^9.
+        // Fixture state: 2^16 paired entries, threaded and below the in-place threshold.
         let mut rng = SmallRng::seed_from_u64(0xA11C);
-        let evals: Vec<EF> = (0..1 << 10).map(|_| rng.random()).collect();
-        let weights: Vec<EF> = (0..1 << 10).map(|_| rng.random()).collect();
+        let evals: Vec<EF> = (0..1 << 16).map(|_| rng.random()).collect();
+        let weights: Vec<EF> = (0..1 << 16).map(|_| rng.random()).collect();
         let r: EF = rng.random();
 
-        let (bound_evals, bound_weights, _) = super::bind_and_measure_pairs(&evals, &weights, r);
+        let (bound_evals, bound_weights, _) =
+            super::bind_and_measure_pairs_into_new(&evals, &weights, r);
 
-        //     source 2^10  ->  destination 2^9, allocated at exactly that size
-        assert_eq!(bound_evals.len(), 1 << 9);
-        assert_eq!(bound_evals.capacity(), 1 << 9);
-        assert_eq!(bound_weights.len(), 1 << 9);
-        assert_eq!(bound_weights.capacity(), 1 << 9);
+        //     source 2^16  ->  destination 2^15, allocated at exactly that size
+        assert_eq!(bound_evals.len(), 1 << 15);
+        assert_eq!(bound_evals.capacity(), 1 << 15);
+        assert_eq!(bound_weights.len(), 1 << 15);
+        assert_eq!(bound_weights.capacity(), 1 << 15);
+    }
+
+    #[test]
+    fn the_in_place_suffix_pass_matches_a_fresh_binding_with_threaded_levels() {
+        // Invariant: levels long enough to dispatch bind exactly as a fresh binding does.
+        //
+        // Fixture state: 2^17 + 4 * 4219 paired entries.
+        // The last level is partial, long enough to be threaded, and ends mid-block.
+        let mut rng = SmallRng::seed_from_u64(0x1E7E1);
+        let n = (1 << 17) + 4 * 4219;
+        let evals: Vec<EF> = (0..n).map(|_| rng.random()).collect();
+        let weights: Vec<EF> = (0..n).map(|_| rng.random()).collect();
+        let r: EF = rng.random();
+
+        let (want_evals, want_weights, want) =
+            super::bind_and_measure_pairs_into_new(&evals, &weights, r);
+
+        let mut got_evals = evals;
+        let mut got_weights = weights;
+        let got = super::bind_and_measure_pairs(&mut got_evals, &mut got_weights, r);
+
+        assert_eq!(&got_evals[..n / 2], &want_evals[..]);
+        assert_eq!(&got_weights[..n / 2], &want_weights[..]);
+        assert_eq!(got.c_a, want.c_a);
+        assert_eq!(got.c_inf, want.c_inf);
+    }
+
+    proptest! {
+        #[test]
+        fn prop_suffix_pass_binds_every_multiple_of_four(
+            quarter in 1usize..=4500,
+            seed in any::<u64>(),
+        ) {
+            // Invariant: the level schedule covers every length the pass accepts.
+            //
+            // Powers of two fill every level they reach.
+            // Other multiples of four end on a partial level, and often on a partial block.
+            //
+            // Fixture state: 4 * quarter paired random entries, one random challenge.
+            // The range reaches past the par-vs-serial split.
+            let mut rng = SmallRng::seed_from_u64(seed);
+            let n = 4 * quarter;
+            let evals: Vec<EF> = (0..n).map(|_| rng.random()).collect();
+            let weights: Vec<EF> = (0..n).map(|_| rng.random()).collect();
+            let r: EF = rng.random();
+
+            // Reference arm: bind each pair into a fresh half, then measure it.
+            let bind = |table: &[EF]| -> Vec<EF> {
+                table.chunks(2).map(|pair| pair[0] + (pair[1] - pair[0]) * r).collect()
+            };
+            let want_evals = bind(&evals);
+            let want_weights = bind(&weights);
+            let want = super::sumcheck_coefficients_suffix(&want_evals, &want_weights);
+
+            // Arm under test: the in-place pass over the raw tables.
+            let mut got_evals = evals;
+            let mut got_weights = weights;
+            let got = super::bind_and_measure_pairs(&mut got_evals, &mut got_weights, r);
+
+            prop_assert_eq!(&got_evals[..n / 2], &want_evals[..]);
+            prop_assert_eq!(&got_weights[..n / 2], &want_weights[..]);
+            prop_assert_eq!(got.c_a, want.c_a);
+            prop_assert_eq!(got.c_inf, want.c_inf);
+        }
     }
 
     #[test]
