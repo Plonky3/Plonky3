@@ -7,6 +7,7 @@ Key items:
 
 - `PrimeCharacteristicRing`, `Algebra`, `Field`, `PrimeField`, `TwoAdicField` — the core algebraic trait hierarchy
 - `ExtensionField`, `BasedVectorSpace` and the `extension` module — generic binomial extension fields
+- `HasSubfield` — membership tests for a small subfield, for kernels that compute inside it
 - `PackedField` / `PackedValue` — SIMD-packed arithmetic abstractions
 - `coset`, `exponentiation`, batch inversion and dot-product helpers
 

@@ -210,6 +210,13 @@ impl PrimeCharacteristicRing for Ghash128 {
         *self + *y
     }
 
+    /// `x·(x - 1) = x² - x = x² + x` in characteristic 2, and `poly_square_128` skips the
+    /// cross-term carryless multiplies a general product pays for.
+    #[inline]
+    fn bool_check(&self) -> Self {
+        self.square() + *self
+    }
+
     #[inline]
     fn mul_2exp_u64(&self, exp: u64) -> Self {
         if exp == 0 { *self } else { Self::ZERO }
@@ -341,6 +348,47 @@ impl From<Ghash128> for BinaryField128 {
     }
 }
 
+// The change of basis is a field isomorphism, so it makes this field an algebra over the tower.
+// A mixed operation takes the polynomial-basis operand on the left and returns this basis.
+
+impl Add<BinaryField128> for Ghash128 {
+    type Output = Self;
+
+    /// The sum, in the polynomial basis.
+    ///
+    /// The tower operand is converted first, which costs sixteen table lookups.
+    #[inline]
+    fn add(self, rhs: BinaryField128) -> Self {
+        self + Self::from(rhs)
+    }
+}
+
+impl Sub<BinaryField128> for Ghash128 {
+    type Output = Self;
+
+    /// The difference, in the polynomial basis.
+    ///
+    /// The tower operand is converted first, which costs sixteen table lookups.
+    #[inline]
+    fn sub(self, rhs: BinaryField128) -> Self {
+        self - Self::from(rhs)
+    }
+}
+
+impl Mul<BinaryField128> for Ghash128 {
+    type Output = Self;
+
+    /// The product, in the polynomial basis.
+    ///
+    /// The tower operand is converted first, which costs sixteen table lookups.
+    #[inline]
+    fn mul(self, rhs: BinaryField128) -> Self {
+        self * Self::from(rhs)
+    }
+}
+
+impl Algebra<BinaryField128> for Ghash128 {}
+
 impl Add for Ghash128 {
     type Output = Self;
 
@@ -408,7 +456,7 @@ mod tests {
 
     use std::vec::Vec;
 
-    use p3_field::{Field, PrimeCharacteristicRing, RawDataSerializable};
+    use p3_field::{Algebra, Field, PrimeCharacteristicRing, RawDataSerializable};
     use proptest::prelude::*;
 
     use super::{CANTOR_BASIS, Ghash128};
@@ -425,6 +473,21 @@ mod tests {
         // Any field isomorphism fixes zero and one.
         assert_eq!(Ghash128::from(BinaryField128::ZERO), Ghash128::ZERO);
         assert_eq!(Ghash128::from(BinaryField128::ONE), Ghash128::ONE);
+    }
+
+    #[test]
+    fn the_algebra_over_the_tower_fixes_the_prime_subfield() {
+        /// Statically require the full `Algebra<BinaryField128>` bound, not merely the operators.
+        const fn assert_algebra_over_the_tower<T: Algebra<BinaryField128>>() {}
+        assert_algebra_over_the_tower::<Ghash128>();
+
+        // Both representations embed `GF(2)` as zero and one, and the isomorphism agrees.
+        for bit in [Gf2::ZERO, Gf2::ONE] {
+            assert_eq!(
+                Ghash128::from(BinaryField128::from(bit)),
+                Ghash128::from(bit)
+            );
+        }
     }
 
     #[test]
@@ -506,6 +569,13 @@ mod tests {
     }
 
     #[test]
+    fn bool_check_matches_the_vanishing_polynomial_at_zero_and_one() {
+        for x in [Ghash128::ZERO, Ghash128::ONE] {
+            assert_eq!(x.bool_check(), x * (x - Ghash128::ONE));
+        }
+    }
+
+    #[test]
     fn scaling_by_alpha_agrees_with_the_tower() {
         // The tower scales by a basis element; here the same element is an arbitrary one.
         for bits in [0, 1, 2, 0x87, 1 << 127, u128::MAX] {
@@ -539,9 +609,42 @@ mod tests {
         }
 
         #[test]
+        fn the_tower_acts_through_the_change_of_basis(a: u128, b: u128) {
+            let (g, t) = (Ghash128::from_repr(a), tower(b));
+            let converted = Ghash128::from(t);
+
+            // Each mixed operation agrees with converting first.
+            prop_assert_eq!(g + t, g + converted);
+            prop_assert_eq!(g - t, g - converted);
+            prop_assert_eq!(g * t, g * converted);
+
+            let mut acc = g;
+            acc += t;
+            prop_assert_eq!(acc, g + converted);
+            let mut acc = g;
+            acc -= t;
+            prop_assert_eq!(acc, g - converted);
+            let mut acc = g;
+            acc *= t;
+            prop_assert_eq!(acc, g * converted);
+
+            // Carried back, each result is the tower's own arithmetic on the same elements.
+            let tower_g = BinaryField128::from(g);
+            prop_assert_eq!(BinaryField128::from(g + t), tower_g + t);
+            prop_assert_eq!(BinaryField128::from(g - t), tower_g - t);
+            prop_assert_eq!(BinaryField128::from(g * t), tower_g * t);
+        }
+
+        #[test]
         fn squaring_agrees_with_multiplying_by_self(bits: u128) {
             let x = Ghash128::from_repr(bits);
             prop_assert_eq!(x.square(), x * x);
+        }
+
+        #[test]
+        fn bool_check_agrees_with_the_vanishing_polynomial(bits: u128) {
+            let x = Ghash128::from_repr(bits);
+            prop_assert_eq!(x.bool_check(), x * (x - Ghash128::ONE));
         }
 
         #[test]

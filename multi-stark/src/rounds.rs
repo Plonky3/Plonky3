@@ -2,8 +2,12 @@
 //!
 //! Builds round polynomials for `sum_x eq(tau, x) * g(x)` and folds state across challenges.
 
+mod repr;
+mod subfield;
+
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
+use core::ops::Range;
 
 use itertools::Itertools;
 use p3_air::{Air, BaseAir};
@@ -47,6 +51,17 @@ impl AirDegrees {
     }
 }
 
+/// What one symbolic pass over an AIR fixes for its zerocheck fold.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct AirProfile {
+    /// Native per-variable degrees of the ordinary constraints and the lookup links.
+    pub(crate) degrees: AirDegrees,
+    /// Number of constraints the folder batches with alpha.
+    ///
+    /// The AIR's own constraints, plus one pin per cell it lists as a public input.
+    pub(crate) num_constraints: usize,
+}
+
 /// One batch of AIRs that share a single trace height.
 ///
 /// A stage activates when the global sumcheck cube shrinks to its height.
@@ -64,6 +79,8 @@ pub(super) struct Stage<'air, 'data, A, F: Field, EF> {
     pub(super) tables: Vec<&'data Table<F>>,
     /// Native ordinary-constraint and lookup-link degrees for each AIR.
     pub(super) degrees: Vec<AirDegrees>,
+    /// Number of constraints the folder batches for each AIR, boundary pins included.
+    pub(super) num_constraints: Vec<usize>,
     /// Shared variable count, equal to the base-two logarithm of the common height.
     pub(super) num_vars: usize,
     /// One-time lookup initialization consumed when this stage activates.
@@ -86,7 +103,7 @@ impl<'air, 'data, A, F: Field, EF: Field> Stage<'air, 'data, A, F, EF> {
         indices: Vec<usize>,
         preprocessed: Vec<Option<&'data Table<F>>>,
         tables: Vec<&'data Table<F>>,
-        degrees: Vec<AirDegrees>,
+        profiles: Vec<AirProfile>,
         coupling: StageCoupling<EF>,
     ) -> Self
     where
@@ -96,7 +113,11 @@ impl<'air, 'data, A, F: Field, EF: Field> Stage<'air, 'data, A, F, EF> {
         assert_eq!(airs.len(), tables.len());
         assert_eq!(preprocessed.len(), tables.len());
         assert_eq!(public_values.len(), tables.len());
-        assert_eq!(degrees.len(), tables.len());
+        assert_eq!(profiles.len(), tables.len());
+        let (degrees, num_constraints): (Vec<_>, Vec<_>) = profiles
+            .into_iter()
+            .map(|profile| (profile.degrees, profile.num_constraints))
+            .unzip();
         assert!(degrees.iter().all(|degrees| degrees.max() > 0));
 
         // Every table in a stage binds the same zerocheck variables, so heights must agree.
@@ -137,6 +158,7 @@ impl<'air, 'data, A, F: Field, EF: Field> Stage<'air, 'data, A, F, EF> {
             preprocessed,
             tables,
             degrees,
+            num_constraints,
             coupling,
         }
     }
@@ -170,6 +192,8 @@ pub(crate) struct RoundStateBase<'air, 'data, A, F: Field, EF> {
     public_values: Vec<&'data [F]>,
     /// Random scalar batching the AIR constraints.
     alpha: EF,
+    /// Descending alpha powers for each AIR, one per constraint the folder batches.
+    alpha_powers: Vec<Vec<EF>>,
     /// Optional preprocessed tables, one per AIR.
     preprocessed: Vec<Option<&'data Table<F>>>,
     /// Periodic tables, one per AIR, each materialized to the full trace height.
@@ -195,20 +219,35 @@ pub(crate) struct RoundStateBase<'air, 'data, A, F: Field, EF> {
     coupling: InteractionCoupling<EF>,
     /// Common scalar applied to lookup claims and evaluations after grouping.
     eta: EF,
+    /// Whether a subfield kernel found this stage to fit its subfield.
+    ///
+    /// Only that kernel's first round sets it, once all of these check out:
+    ///
+    /// - no AIR in the stage declares a lookup;
+    /// - the challenge field embeds the subfield the way the trace field does;
+    /// - every first-round interpolation step lies in the subfield;
+    /// - every public value lies in the subfield;
+    /// - every main, preprocessed, and periodic cell lies in the subfield.
+    ///
+    /// Every other kernel leaves it false.
+    fits_subfield: bool,
 }
 
 /// Extension-round column storage.
 ///
 /// Columns stay SIMD-packed as long as there are enough residual rows to fill a packed lane.
 /// Once a fold would leave fewer rows than a lane, columns unpack to scalar form.
-enum ExtColumns<F: Field, EF: ExtensionField<F>> {
+///
+/// Packed lanes hold challenge-field elements; scalar columns hold elements of the arithmetic
+/// field `R` of the round state.
+enum ExtColumns<F: Field, EF: ExtensionField<F>, R = EF> {
     /// One SIMD lane per residual row, holding several rows per stored element.
     Packed(Vec<Poly<EF::ExtensionPacking>>),
-    /// One extension element per residual row.
-    Scalar(Vec<Poly<EF>>),
+    /// One arithmetic-field element per residual row.
+    Scalar(Vec<Poly<R>>),
 }
 
-impl<F: Field, EF: ExtensionField<F>> ExtColumns<F, EF> {
+impl<F: Field, EF: ExtensionField<F>, R> ExtColumns<F, EF, R> {
     /// Number of stored columns.
     const fn len(&self) -> usize {
         match self {
@@ -253,19 +292,21 @@ impl<F: Field, EF: ExtensionField<F>> ExtColumns<F, EF> {
         }
     }
 
-    /// Borrow the columns as scalar extension elements.
+    /// Borrow the columns as scalar arithmetic-field elements.
     ///
     /// # Panics
     ///
     /// Panics if the columns are still packed.
     /// Callers gate on the same width threshold that decides the storage variant, so this never fires.
-    fn as_scalar(&self) -> &[Poly<EF>] {
+    fn as_scalar(&self) -> &[Poly<R>] {
         match self {
             Self::Scalar(cols) => cols,
             Self::Packed(_) => unreachable!("round_poly_unpacked requires scalar columns"),
         }
     }
+}
 
+impl<F: Field, EF: ExtensionField<F>> ExtColumns<F, EF> {
     /// Fold the prefix variable of every column at `r`.
     ///
     /// Stays packed when `want_packed` holds; otherwise unpacks to scalar form in the same pass.
@@ -337,15 +378,28 @@ fn packed_window<F: Field, EF: ExtensionField<F>>(
 ///
 /// Owns the folded trace columns, boundary selectors, and repeat-last next-row tail values needed
 /// by the remaining rounds.
-pub(crate) struct RoundStateExt<'air, 'data, A, F: Field, EF: ExtensionField<F>> {
+///
+/// The row loop computes in `R`, a field isomorphic to the challenge field `EF`:
+///
+/// ```text
+///     in R  : columns, tails, selector prefix, alpha and its powers, lookup coefficients
+///     in EF : zerocheck point, beta powers, lookup scale, claims, interpolators
+/// ```
+///
+/// `R::from` and `EF::from` must be mutually inverse field isomorphisms.
+/// Each round's raw sums cross back into `EF` once, before they meet the claims.
+/// With `R = EF` both conversions are the identity.
+pub(crate) struct RoundStateExt<'air, 'data, A, F: Field, EF: ExtensionField<F>, R = EF> {
     /// Public inputs forwarded to the AIR.
     public_values: Vec<&'data [F]>,
     /// Random scalar batching the AIR constraints.
-    alpha: EF,
+    alpha: R,
+    /// Descending alpha powers for each AIR, one per constraint the folder batches.
+    alpha_powers: Vec<Vec<R>>,
     /// Folded boundary-selector values at the current sumcheck prefix.
-    boundary: BoundaryEvals<EF>,
+    boundary: BoundaryEvals<R>,
     /// Main and preprocessed columns after the first base-field fold.
-    columns: ExtColumns<F, EF>,
+    columns: ExtColumns<F, EF, R>,
     /// Beta power for each AIR in canonical input order.
     betas: Vec<EF>,
     /// Ordinary AIR constraints grouped by their native round-polynomial degree.
@@ -358,10 +412,12 @@ pub(crate) struct RoundStateExt<'air, 'data, A, F: Field, EF: ExtensionField<F>>
     tau: Point<EF>,
     /// Number of already-bound prefix coordinates.
     round: usize,
-    /// Repeat-last successor values for each main column at the folded tail row.
-    next_tail: Vec<EF>,
+    /// Repeat-last successor values at the folded tail row, one entry per column.
+    ///
+    /// Zero for every column no AIR reads on the next row.
+    next_tail: Vec<R>,
     /// Lookup/AIR-link coefficients retained from this stage's base-field round.
-    coupling: InteractionCoupling<EF>,
+    coupling: InteractionCoupling<R>,
     /// Common scalar applied to lookup claims and evaluations after grouping.
     lookup_scale: EF,
 }
@@ -479,6 +535,8 @@ struct Scratch<F, EF> {
     /// Difference between the high and low current-row values.
     local_diff: Vec<F>,
     /// Successor-row value of each column at the active interpolation node.
+    ///
+    /// Zero for every column no AIR reads on the next row.
     next_point: Vec<F>,
     /// Difference between the high and low successor-row values.
     next_diff: Vec<F>,
@@ -498,6 +556,8 @@ struct PackedScratch<P, EF> {
     /// Difference between the high and low current-row lanes.
     local_diff: Vec<P>,
     /// Successor-row lanes of each column at the active interpolation node.
+    ///
+    /// Zero for every column no AIR reads on the next row.
     next_point: Vec<P>,
     /// Difference between the high and low successor-row lanes.
     next_diff: Vec<P>,
@@ -529,14 +589,27 @@ where
 }
 
 impl<F: Field, EF> Scratch<F, EF> {
-    fn add_diffs(&mut self) {
+    /// Step every current-row column, and the successor columns inside `next_columns`.
+    fn add_diffs(&mut self, next_columns: &[Range<usize>]) {
         F::add_slices(&mut self.local_point, &self.local_diff);
-        F::add_slices(&mut self.next_point, &self.next_diff);
+        for run in next_columns {
+            F::add_slices(
+                &mut self.next_point[run.clone()],
+                &self.next_diff[run.clone()],
+            );
+        }
     }
 
-    fn add_scaled_diffs(&mut self, step: F) {
+    /// Scaled twin of [`Self::add_diffs`].
+    fn add_scaled_diffs(&mut self, step: F, next_columns: &[Range<usize>]) {
         add_scaled_slice(&mut self.local_point, &self.local_diff, step);
-        add_scaled_slice(&mut self.next_point, &self.next_diff, step);
+        for run in next_columns {
+            add_scaled_slice(
+                &mut self.next_point[run.clone()],
+                &self.next_diff[run.clone()],
+                step,
+            );
+        }
     }
 }
 
@@ -564,28 +637,41 @@ where
         }
     }
 
-    fn add_diffs(&mut self)
+    /// Step every current-row column, and the successor columns inside `next_columns`.
+    fn add_diffs(&mut self, next_columns: &[Range<usize>])
     where
         P: Copy,
     {
-        self.local_point
-            .iter_mut()
-            .zip(self.local_diff.iter())
-            .zip(self.next_point.iter_mut())
-            .zip(self.next_diff.iter())
-            .for_each(|(((local, local_diff), next), next_diff)| {
-                *local += *local_diff;
-                *next += *next_diff;
-            });
+        add_slice(&mut self.local_point, &self.local_diff);
+        for run in next_columns {
+            add_slice(
+                &mut self.next_point[run.clone()],
+                &self.next_diff[run.clone()],
+            );
+        }
     }
 
-    fn add_scaled_diffs(&mut self, step: P)
+    /// Scaled twin of [`Self::add_diffs`].
+    fn add_scaled_diffs(&mut self, step: P, next_columns: &[Range<usize>])
     where
         P: Copy,
     {
         add_scaled_slice(&mut self.local_point, &self.local_diff, step);
-        add_scaled_slice(&mut self.next_point, &self.next_diff, step);
+        for run in next_columns {
+            add_scaled_slice(
+                &mut self.next_point[run.clone()],
+                &self.next_diff[run.clone()],
+                step,
+            );
+        }
     }
+}
+
+fn add_slice<P: PrimeCharacteristicRing + Copy>(point: &mut [P], diff: &[P]) {
+    point
+        .iter_mut()
+        .zip(diff)
+        .for_each(|(value, &diff)| *value += diff);
 }
 
 fn add_scaled_slice<P: PrimeCharacteristicRing + Copy>(point: &mut [P], diff: &[P], step: P) {
@@ -595,11 +681,58 @@ fn add_scaled_slice<P: PrimeCharacteristicRing + Copy>(point: &mut [P], diff: &[
         .for_each(|(value, &diff)| *value += diff * step);
 }
 
-/// Consecutive node differences, computed once outside the row loops.
+/// How the row scratch moves from one evaluated interpolation node to the next.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum NodeStep<F> {
+    /// Add the high-minus-low differences once per unit gap crossed.
+    Unit(usize),
+    /// Add the differences once, scaled by the gap between the two nodes.
+    Scaled(F),
+}
+
+impl<F> NodeStep<F> {
+    /// The same step, with the gap of a scaled step carried through `f`.
+    fn map<T>(self, f: impl FnOnce(F) -> T) -> NodeStep<T> {
+        match self {
+            Self::Unit(count) => NodeStep::Unit(count),
+            Self::Scaled(step) => NodeStep::Scaled(f(step)),
+        }
+    }
+}
+
+/// Pair each interpolation node a round evaluates with the step that reaches it.
+///
+/// The row scratch starts at node zero and visits the nodes in increasing order.
+///
+/// A stretch of unit gaps costs additions only, so it is walked node by node.
+/// Any other stretch is crossed with one scaled step, skipping the nodes in between:
+///
+/// ```text
+///     unit gaps (prime field)  : 0 -(+d)-> 1 -(+d)-> 2 -(+d)-> 3    Unit(2), Unit(1)
+///     other gaps (binary field): 0 -----(+2d)------> 2 -(+d)-> 3    Scaled(2), Unit(1)
+/// ```
+///
 /// Binary-field interpolation nodes need not differ by one.
-fn interpolation_steps<F: Field>(degree: usize) -> Vec<F> {
-    (0..degree)
-        .map(|node| F::interpolation_node(node + 1) - F::interpolation_node(node))
+fn node_schedule<F: Field>(nodes: impl IntoIterator<Item = usize>) -> Vec<(usize, NodeStep<F>)> {
+    let mut position = 0;
+    nodes
+        .into_iter()
+        .map(|node| {
+            debug_assert!(
+                node >= position,
+                "nodes must be visited in increasing order"
+            );
+            let unit_gaps = (position..node).all(|from| {
+                F::interpolation_node(from + 1) - F::interpolation_node(from) == F::ONE
+            });
+            let step = if unit_gaps {
+                NodeStep::Unit(node - position)
+            } else {
+                NodeStep::Scaled(F::interpolation_node(node) - F::interpolation_node(position))
+            };
+            position = node;
+            (node, step)
+        })
         .collect()
 }
 
@@ -634,6 +767,50 @@ struct AirColumnWidths {
     periodic: usize,
 }
 
+/// Columns one AIR reads on the next row, as the AIR declares them.
+///
+/// The AIR reads no other successor value.
+/// The zerocheck checks this against a symbolic evaluation before any stage is built.
+struct AirSuccessorColumns {
+    /// Main columns read on the next row, in any order.
+    main: Vec<usize>,
+    /// Preprocessed columns read on the next row, in any order.
+    preprocessed: Vec<usize>,
+}
+
+/// Group one column group's declared successor columns into contiguous runs of the merged buffer.
+///
+/// ```text
+///     offset 4, width 4, declared [3, 0, 1]  ->  runs [4..6, 7..8]
+/// ```
+///
+/// # Panics
+///
+/// Panics if a column is declared twice or lies outside the group.
+fn successor_runs(offset: usize, width: usize, columns: &[usize]) -> Vec<Range<usize>> {
+    let mut columns = columns.to_vec();
+    columns.sort_unstable();
+    assert!(
+        columns.windows(2).all(|pair| pair[0] < pair[1]),
+        "duplicate successor column"
+    );
+    assert!(
+        columns.last().is_none_or(|&column| column < width),
+        "successor column is outside the trace width"
+    );
+
+    let mut runs: Vec<Range<usize>> = Vec::new();
+    for column in columns {
+        let index = offset + column;
+        match runs.last_mut() {
+            // Extend the current run while the columns stay adjacent.
+            Some(run) if run.end == index => run.end += 1,
+            _ => runs.push(index..index + 1),
+        }
+    }
+    runs
+}
+
 /// One AIR's slice of the stage's merged column buffer, plus its fold metadata.
 ///
 /// Every AIR of a stage keeps its columns in one shared buffer laid out group by group:
@@ -664,6 +841,12 @@ struct AirSlot<'air, A> {
     periodic_offset: usize,
     /// Number of periodic columns this AIR owns.
     periodic_width: usize,
+    /// Merged-buffer runs of the main columns this AIR reads on the next row.
+    main_next_columns: Vec<Range<usize>>,
+    /// Merged-buffer runs of the preprocessed columns this AIR reads on the next row.
+    ///
+    /// Periodic columns never have a successor: the folder reads only their current row.
+    preprocessed_next_columns: Vec<Range<usize>>,
     /// Native degree of the ordinary constraint family.
     constraint_degree: usize,
     /// Lookup metadata, absent when this AIR declares no interactions.
@@ -694,17 +877,20 @@ impl<'air, A> AirSlot<'air, A> {
     /// # Panics
     ///
     /// Panics if a lookup-declaring AIR has no link, or a link names an AIR outside the stage.
+    /// Panics if a successor column is declared twice or lies outside its column group.
     fn build<EF>(
         airs: &[&'air A],
         caller_indices: &[usize],
         degrees: &[AirDegrees],
         column_widths: &[AirColumnWidths],
+        successor_columns: &[AirSuccessorColumns],
         mut links: BTreeMap<usize, AirLinkInstance<EF>>,
         interaction_group_by_degree: &BTreeMap<usize, usize>,
     ) -> (Vec<Self>, Vec<AirLinkInstance<EF>>) {
         assert_eq!(airs.len(), caller_indices.len());
         assert_eq!(airs.len(), degrees.len());
         assert_eq!(airs.len(), column_widths.len());
+        assert_eq!(airs.len(), successor_columns.len());
 
         let mut column_offset = 0;
         let mut active_links = Vec::with_capacity(links.len());
@@ -742,6 +928,7 @@ impl<'air, A> AirSlot<'air, A> {
                     }
                 };
                 debug_assert_eq!(interaction.is_some(), degrees.interactions > 0);
+                let successors = &successor_columns[stage_index];
                 Self {
                     air: airs[stage_index],
                     stage_index,
@@ -752,6 +939,12 @@ impl<'air, A> AirSlot<'air, A> {
                     preprocessed_width,
                     periodic_offset,
                     periodic_width,
+                    main_next_columns: successor_runs(main_offset, main_width, &successors.main),
+                    preprocessed_next_columns: successor_runs(
+                        preprocessed_offset,
+                        preprocessed_width,
+                        &successors.preprocessed,
+                    ),
                     constraint_degree: degrees.constraints,
                     interaction,
                 }
@@ -787,6 +980,39 @@ impl<'air, A> AirSlot<'air, A> {
             interaction,
         }
     }
+}
+
+/// Every successor column run of a stage, in merged-buffer order.
+///
+/// Successor values outside these runs are never read, so the kernels neither fill nor step them.
+/// They stay zero, the same filler the verifier's folder reads for an undeclared column.
+fn next_row_runs<A>(slots: &[AirSlot<'_, A>]) -> Vec<Range<usize>> {
+    slots
+        .iter()
+        .flat_map(|slot| {
+            slot.main_next_columns
+                .iter()
+                .chain(&slot.preprocessed_next_columns)
+        })
+        .cloned()
+        .collect()
+}
+
+/// The interpolation nodes at which at least one AIR contributes an expression family.
+///
+/// Node one is never evaluated: each degree group recovers it from its running claim.
+fn evaluated_nodes<'a, A>(
+    slots: &'a [AirSlot<'_, A>],
+    degree: usize,
+    include_constraint_node_zero: bool,
+) -> impl Iterator<Item = usize> + 'a {
+    (0..=degree).filter(move |&node| {
+        node != 1
+            && slots.iter().any(|slot| {
+                let enabled = slot.enabled_families(node, include_constraint_node_zero);
+                enabled.constraints || enabled.interaction.is_some()
+            })
+    })
 }
 
 /// Expression families sharing one per-variable degree and one reduced claim.
@@ -1004,6 +1230,14 @@ fn finish_round<EF: Field>(
     out
 }
 
+/// Carry per-node sums from a round state's arithmetic field back into the challenge field.
+fn lower_evals<R, EF: From<R>>(evals: Vec<Vec<R>>) -> Vec<Vec<EF>> {
+    evals
+        .into_iter()
+        .map(|evals| evals.into_iter().map(EF::from).collect())
+        .collect()
+}
+
 impl<'air, 'data, A, F, EF> RoundStateBase<'air, 'data, A, F, EF>
 where
     F: Field,
@@ -1049,6 +1283,7 @@ where
             preprocessed,
             tables,
             degrees,
+            num_constraints,
             num_vars,
             coupling,
         } = stage;
@@ -1093,6 +1328,13 @@ where
                 periodic: periodic.as_ref().map_or(0, Table::num_polys),
             })
             .collect::<Vec<_>>();
+        let successor_columns = airs
+            .iter()
+            .map(|air| AirSuccessorColumns {
+                main: air.main_next_row_columns(),
+                preprocessed: air.preprocessed_next_row_columns(),
+            })
+            .collect::<Vec<_>>();
 
         let num_airs = airs.len();
         assert_eq!(
@@ -1100,6 +1342,21 @@ where
             num_airs,
             "one beta power is required for each AIR"
         );
+
+        // The verifier folds an AIR's `n` constraints by Horner:
+        //
+        //     acc = acc * alpha + C_i    ->    sum_i alpha^(n - 1 - i) * C_i
+        //
+        // Weighting each constraint by its own power reaches the same sum.
+        // No product then waits on the previous constraint's.
+        let alpha_powers = num_constraints
+            .iter()
+            .map(|&num_constraints| {
+                let mut powers = alpha.powers().collect_n(num_constraints);
+                powers.reverse();
+                powers
+            })
+            .collect();
 
         // Ordinary constraints keep their native degrees and their post-scan beta weighting.
         let constraint_groups =
@@ -1131,6 +1388,7 @@ where
             &indices,
             &degrees,
             &column_widths,
+            &successor_columns,
             links,
             &interaction_group_by_degree,
         );
@@ -1143,6 +1401,7 @@ where
         Self {
             public_values,
             alpha,
+            alpha_powers,
             periodic,
             preprocessed,
             tables,
@@ -1153,6 +1412,7 @@ where
             tau,
             coupling,
             eta,
+            fits_subfield: false,
         }
     }
 
@@ -1221,8 +1481,20 @@ where
         let packing_width = F::Packing::WIDTH;
         let packed_half = scalar_half / packing_width;
         let degree = self.degree();
-        let node_steps = interpolation_steps::<F>(degree);
+        let schedule = node_schedule::<F>(evaluated_nodes(&self.slots, degree, false));
+        let next_columns = next_row_runs(&self.slots);
         let alpha = EF::ExtensionPacking::from(self.alpha);
+        let alpha_powers = self
+            .alpha_powers
+            .iter()
+            .map(|powers| {
+                powers
+                    .iter()
+                    .copied()
+                    .map(EF::ExtensionPacking::from)
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
 
         let coupling = InteractionCoupling {
             links: self
@@ -1262,16 +1534,13 @@ where
                 |mut scratch, (packed_s, eq_suffix)| {
                     let s = packed_s * packing_width;
 
-                    let fill_columns = |scratch: &mut PackedScratch<F::Packing, EF>,
-                                        offset: usize,
-                                        table: &Table<F>| {
+                    let fill_local = |scratch: &mut PackedScratch<F::Packing, EF>,
+                                      offset: usize,
+                                      table: &Table<F>| {
                         let end = offset + table.num_polys();
-                        for ((((local, local_delta), next), next_delta), column) in scratch
-                            .local_point[offset..end]
+                        for ((local, local_delta), column) in scratch.local_point[offset..end]
                             .iter_mut()
                             .zip(scratch.local_diff[offset..end].iter_mut())
-                            .zip(scratch.next_point[offset..end].iter_mut())
-                            .zip(scratch.next_diff[offset..end].iter_mut())
                             .zip(table.iter_polys())
                         {
                             let local_lo = *F::Packing::from_slice(&column[s..s + packing_width]);
@@ -1280,102 +1549,125 @@ where
                             );
                             *local = local_lo;
                             *local_delta = local_hi - local_lo;
-
-                            let next_lo =
-                                *F::Packing::from_slice(&column[s + 1..s + 1 + packing_width]);
-                            let next_hi_start = s + scalar_half + 1;
-                            let next_hi = if next_hi_start + packing_width <= height {
-                                *F::Packing::from_slice(
-                                    &column[next_hi_start..next_hi_start + packing_width],
-                                )
-                            } else {
-                                F::Packing::from_fn(|lane| {
-                                    let row = next_hi_start + lane;
-                                    if row < height {
-                                        column[row]
-                                    } else {
-                                        column[height - 1]
-                                    }
-                                })
-                            };
-                            *next = next_lo;
-                            *next_delta = next_hi - next_lo;
+                        }
+                    };
+                    let fill_next = |scratch: &mut PackedScratch<F::Packing, EF>,
+                                     offset: usize,
+                                     table: &Table<F>,
+                                     runs: &[Range<usize>]| {
+                        for run in runs {
+                            for ((next, next_delta), column) in scratch.next_point[run.clone()]
+                                .iter_mut()
+                                .zip(scratch.next_diff[run.clone()].iter_mut())
+                                .zip(table.iter_polys().skip(run.start - offset))
+                            {
+                                let next_lo =
+                                    *F::Packing::from_slice(&column[s + 1..s + 1 + packing_width]);
+                                let next_hi_start = s + scalar_half + 1;
+                                let next_hi = if next_hi_start + packing_width <= height {
+                                    *F::Packing::from_slice(
+                                        &column[next_hi_start..next_hi_start + packing_width],
+                                    )
+                                } else {
+                                    F::Packing::from_fn(|lane| {
+                                        let row = next_hi_start + lane;
+                                        if row < height {
+                                            column[row]
+                                        } else {
+                                            column[height - 1]
+                                        }
+                                    })
+                                };
+                                *next = next_lo;
+                                *next_delta = next_hi - next_lo;
+                            }
                         }
                     };
                     for slot in &self.slots {
-                        fill_columns(
+                        let main = self.tables[slot.stage_index];
+                        fill_local(&mut scratch, slot.main_offset, main);
+                        fill_next(
                             &mut scratch,
                             slot.main_offset,
-                            self.tables[slot.stage_index],
+                            main,
+                            &slot.main_next_columns,
                         );
                         if let Some(preprocessed) = self.preprocessed[slot.stage_index] {
-                            fill_columns(&mut scratch, slot.preprocessed_offset, preprocessed);
+                            fill_local(&mut scratch, slot.preprocessed_offset, preprocessed);
+                            fill_next(
+                                &mut scratch,
+                                slot.preprocessed_offset,
+                                preprocessed,
+                                &slot.preprocessed_next_columns,
+                            );
                         }
                         if let Some(periodic) = self.periodic[slot.stage_index].as_ref() {
-                            fill_columns(&mut scratch, slot.periodic_offset, periodic);
+                            fill_local(&mut scratch, slot.periodic_offset, periodic);
                         }
                     }
 
                     let (mut boundary, boundary_diff) =
                         BoundaryEvals::<F::Packing>::row_pair_packed(s, scalar_half, height);
 
-                    for node in 0..=degree {
-                        if node != 1 {
-                            for slot in &self.slots {
-                                let enabled = slot.enabled_families(node, false);
-                                if !enabled.constraints && enabled.interaction.is_none() {
-                                    continue;
+                    for &(node, step) in &schedule {
+                        match step {
+                            NodeStep::Unit(count) => {
+                                for _ in 0..count {
+                                    scratch.add_diffs(&next_columns);
+                                    boundary += boundary_diff;
                                 }
-                                let folder = MultilinearFolder::new(
-                                    &scratch.local_point
-                                        [slot.main_offset..slot.main_offset + slot.main_width],
-                                    &scratch.next_point
-                                        [slot.main_offset..slot.main_offset + slot.main_width],
-                                    boundary,
-                                    self.public_values[slot.stage_index],
-                                    alpha,
-                                )
-                                .with_preprocessed(
-                                    &scratch.local_point[slot.preprocessed_offset
-                                        ..slot.preprocessed_offset + slot.preprocessed_width],
-                                    &scratch.next_point[slot.preprocessed_offset
-                                        ..slot.preprocessed_offset + slot.preprocessed_width],
-                                )
-                                .with_periodic(
-                                    &scratch.local_point[slot.periodic_offset
-                                        ..slot.periodic_offset + slot.periodic_width],
-                                );
-                                let evaluations =
-                                    evaluate_air_families(folder, &coupling, enabled, slot.air);
-                                let eval_index = if node == 0 { 0 } else { node - 1 };
-                                if enabled.constraints {
-                                    scratch.constraint_evals[slot.stage_index][eval_index] +=
-                                        dot_product::<EF, _, _>(
-                                            eq_suffix.iter().copied(),
-                                            EF::ExtensionPacking::to_ext_iter([
-                                                evaluations.constraints
-                                            ]),
-                                        );
-                                }
-                                if let Some(interaction) = enabled.interaction {
-                                    scratch.interaction_evals[interaction.group_index]
-                                        [eval_index] += dot_product::<EF, _, _>(
+                            }
+                            NodeStep::Scaled(step) => {
+                                let step = F::Packing::from(step);
+                                scratch.add_scaled_diffs(step, &next_columns);
+                                boundary.add_scaled(boundary_diff, step);
+                            }
+                        }
+                        for slot in &self.slots {
+                            let enabled = slot.enabled_families(node, false);
+                            if !enabled.constraints && enabled.interaction.is_none() {
+                                continue;
+                            }
+                            let folder = MultilinearFolder::new(
+                                &scratch.local_point
+                                    [slot.main_offset..slot.main_offset + slot.main_width],
+                                &scratch.next_point
+                                    [slot.main_offset..slot.main_offset + slot.main_width],
+                                boundary,
+                                self.public_values[slot.stage_index],
+                                alpha,
+                            )
+                            .with_alpha_powers(&alpha_powers[slot.stage_index])
+                            .with_preprocessed(
+                                &scratch.local_point[slot.preprocessed_offset
+                                    ..slot.preprocessed_offset + slot.preprocessed_width],
+                                &scratch.next_point[slot.preprocessed_offset
+                                    ..slot.preprocessed_offset + slot.preprocessed_width],
+                            )
+                            .with_periodic(
+                                &scratch.local_point[slot.periodic_offset
+                                    ..slot.periodic_offset + slot.periodic_width],
+                            );
+                            let evaluations =
+                                evaluate_air_families(folder, &coupling, enabled, slot.air);
+                            let eval_index = if node == 0 { 0 } else { node - 1 };
+                            if enabled.constraints {
+                                scratch.constraint_evals[slot.stage_index][eval_index] +=
+                                    dot_product::<EF, _, _>(
+                                        eq_suffix.iter().copied(),
+                                        EF::ExtensionPacking::to_ext_iter(
+                                            [evaluations.constraints],
+                                        ),
+                                    );
+                            }
+                            if let Some(interaction) = enabled.interaction {
+                                scratch.interaction_evals[interaction.group_index][eval_index] +=
+                                    dot_product::<EF, _, _>(
                                         eq_suffix.iter().copied(),
                                         EF::ExtensionPacking::to_ext_iter([
                                             evaluations.interactions
                                         ]),
                                     );
-                                }
-                            }
-                        }
-                        if let Some(&step) = node_steps.get(node) {
-                            if step == F::ONE {
-                                scratch.add_diffs();
-                                boundary += boundary_diff;
-                            } else {
-                                let step = F::Packing::from(step);
-                                scratch.add_scaled_diffs(step);
-                                boundary.add_scaled(boundary_diff, step);
                             }
                         }
                     }
@@ -1415,7 +1707,8 @@ where
         let height = self.num_evals();
         let half = height / 2;
         let degree = self.degree();
-        let node_steps = interpolation_steps::<F>(degree);
+        let schedule = node_schedule::<F>(evaluated_nodes(&self.slots, degree, false));
+        let next_columns = next_row_runs(&self.slots);
 
         let constraint_degrees = self
             .slots
@@ -1432,94 +1725,113 @@ where
         let mut scratch = Scratch::<F, EF>::new(&constraint_degrees, &interaction_degrees, width);
 
         for (s, &eq_suffix) in eq_suffix.as_slice().iter().enumerate() {
-            let fill_columns = |scratch: &mut Scratch<F, EF>, offset: usize, table: &Table<F>| {
+            let fill_local = |scratch: &mut Scratch<F, EF>, offset: usize, table: &Table<F>| {
                 let end = offset + table.num_polys();
                 scratch.local_point[offset..end]
                     .iter_mut()
                     .zip(scratch.local_diff[offset..end].iter_mut())
-                    .zip(scratch.next_point[offset..end].iter_mut())
-                    .zip(scratch.next_diff[offset..end].iter_mut())
                     .zip(table.iter_polys())
-                    .for_each(|((((local, local_delta), next), next_delta), column)| {
+                    .for_each(|((local, local_delta), column)| {
                         let local_lo = column[s];
                         let local_hi = column[s + half];
                         *local = local_lo;
                         *local_delta = local_hi - local_lo;
-
-                        let next_lo = column[s + 1];
-                        let next_hi = if s + half + 1 < height {
-                            column[s + half + 1]
-                        } else {
-                            column[height - 1]
-                        };
-                        *next = next_lo;
-                        *next_delta = next_hi - next_lo;
                     });
             };
+            let fill_next = |scratch: &mut Scratch<F, EF>,
+                             offset: usize,
+                             table: &Table<F>,
+                             runs: &[Range<usize>]| {
+                for run in runs {
+                    scratch.next_point[run.clone()]
+                        .iter_mut()
+                        .zip(scratch.next_diff[run.clone()].iter_mut())
+                        .zip(table.iter_polys().skip(run.start - offset))
+                        .for_each(|((next, next_delta), column)| {
+                            let next_lo = column[s + 1];
+                            let next_hi = if s + half + 1 < height {
+                                column[s + half + 1]
+                            } else {
+                                column[height - 1]
+                            };
+                            *next = next_lo;
+                            *next_delta = next_hi - next_lo;
+                        });
+                }
+            };
             for slot in &self.slots {
-                fill_columns(
+                let main = self.tables[slot.stage_index];
+                fill_local(&mut scratch, slot.main_offset, main);
+                fill_next(
                     &mut scratch,
                     slot.main_offset,
-                    self.tables[slot.stage_index],
+                    main,
+                    &slot.main_next_columns,
                 );
                 if let Some(preprocessed) = self.preprocessed[slot.stage_index] {
-                    fill_columns(&mut scratch, slot.preprocessed_offset, preprocessed);
+                    fill_local(&mut scratch, slot.preprocessed_offset, preprocessed);
+                    fill_next(
+                        &mut scratch,
+                        slot.preprocessed_offset,
+                        preprocessed,
+                        &slot.preprocessed_next_columns,
+                    );
                 }
                 if let Some(periodic) = self.periodic[slot.stage_index].as_ref() {
-                    fill_columns(&mut scratch, slot.periodic_offset, periodic);
+                    fill_local(&mut scratch, slot.periodic_offset, periodic);
                 }
             }
 
             let (mut boundary, boundary_diff) = BoundaryEvals::<F>::row_pair(s, half, height);
 
-            for node in 0..=degree {
-                if node != 1 {
-                    for slot in &self.slots {
-                        let enabled = slot.enabled_families(node, false);
-                        if !enabled.constraints && enabled.interaction.is_none() {
-                            continue;
-                        }
-                        let folder = MultilinearFolder::new(
-                            &scratch.local_point
-                                [slot.main_offset..slot.main_offset + slot.main_width],
-                            &scratch.next_point
-                                [slot.main_offset..slot.main_offset + slot.main_width],
-                            boundary,
-                            self.public_values[slot.stage_index],
-                            self.alpha,
-                        )
-                        .with_preprocessed(
-                            &scratch.local_point[slot.preprocessed_offset
-                                ..slot.preprocessed_offset + slot.preprocessed_width],
-                            &scratch.next_point[slot.preprocessed_offset
-                                ..slot.preprocessed_offset + slot.preprocessed_width],
-                        )
-                        .with_periodic(
-                            &scratch.local_point
-                                [slot.periodic_offset..slot.periodic_offset + slot.periodic_width],
-                        );
-
-                        let evaluations =
-                            evaluate_air_families(folder, &self.coupling, enabled, slot.air);
-
-                        let eval_index = if node == 0 { 0 } else { node - 1 };
-                        if enabled.constraints {
-                            scratch.constraint_evals[slot.stage_index][eval_index] +=
-                                eq_suffix * evaluations.constraints;
-                        }
-                        if let Some(interaction) = enabled.interaction {
-                            scratch.interaction_evals[interaction.group_index][eval_index] +=
-                                eq_suffix * evaluations.interactions;
+            for &(node, step) in &schedule {
+                match step {
+                    NodeStep::Unit(count) => {
+                        for _ in 0..count {
+                            scratch.add_diffs(&next_columns);
+                            boundary += boundary_diff;
                         }
                     }
-                }
-                if let Some(&step) = node_steps.get(node) {
-                    if step == F::ONE {
-                        scratch.add_diffs();
-                        boundary += boundary_diff;
-                    } else {
-                        scratch.add_scaled_diffs(step);
+                    NodeStep::Scaled(step) => {
+                        scratch.add_scaled_diffs(step, &next_columns);
                         boundary.add_scaled(boundary_diff, step);
+                    }
+                }
+                for slot in &self.slots {
+                    let enabled = slot.enabled_families(node, false);
+                    if !enabled.constraints && enabled.interaction.is_none() {
+                        continue;
+                    }
+                    let folder = MultilinearFolder::new(
+                        &scratch.local_point[slot.main_offset..slot.main_offset + slot.main_width],
+                        &scratch.next_point[slot.main_offset..slot.main_offset + slot.main_width],
+                        boundary,
+                        self.public_values[slot.stage_index],
+                        self.alpha,
+                    )
+                    .with_alpha_powers(&self.alpha_powers[slot.stage_index])
+                    .with_preprocessed(
+                        &scratch.local_point[slot.preprocessed_offset
+                            ..slot.preprocessed_offset + slot.preprocessed_width],
+                        &scratch.next_point[slot.preprocessed_offset
+                            ..slot.preprocessed_offset + slot.preprocessed_width],
+                    )
+                    .with_periodic(
+                        &scratch.local_point
+                            [slot.periodic_offset..slot.periodic_offset + slot.periodic_width],
+                    );
+
+                    let evaluations =
+                        evaluate_air_families(folder, &self.coupling, enabled, slot.air);
+
+                    let eval_index = if node == 0 { 0 } else { node - 1 };
+                    if enabled.constraints {
+                        scratch.constraint_evals[slot.stage_index][eval_index] +=
+                            eq_suffix * evaluations.constraints;
+                    }
+                    if let Some(interaction) = enabled.interaction {
+                        scratch.interaction_evals[interaction.group_index][eval_index] +=
+                            eq_suffix * evaluations.interactions;
                     }
                 }
             }
@@ -1537,102 +1849,45 @@ where
     }
 
     #[tracing::instrument(skip_all, level = "debug")]
-    pub(crate) fn fold(mut self, r: EF) -> RoundStateExt<'air, 'data, A, F, EF>
+    pub(crate) fn fold(self, r: EF) -> RoundStateExt<'air, 'data, A, F, EF>
     where
         A: for<'b> Air<MultilinearFolder<'b, F, F, EF>>,
     {
-        let tau = self.tau.as_slice()[0];
-        self.constraint_groups
-            .iter_mut()
-            .chain(self.interaction_groups.iter_mut())
-            .for_each(|group| group.claim = group.eval(tau, r));
+        self.fold_columns(
+            r,
+            |column| PolyView::new(column).fix_prefix_var_to_packed(r),
+            |column| PolyView::new(column).fix_prefix_var(r),
+        )
+    }
 
-        let num_evals = self.num_evals();
-        let half = num_evals / 2;
-        let width = self.total_width();
-        let mut next_tail = Vec::with_capacity(width);
-        for slot in &self.slots {
-            next_tail.extend(
-                self.tables[slot.stage_index]
-                    .iter_polys()
-                    .map(|col| r * (col[num_evals - 1] - col[half]) + col[half]),
-            );
-            if let Some(preprocessed) = self.preprocessed[slot.stage_index] {
-                next_tail.extend(
-                    preprocessed
-                        .iter_polys()
-                        .map(|col| r * (col[num_evals - 1] - col[half]) + col[half]),
-                );
-            }
-            if let Some(periodic) = self.periodic[slot.stage_index].as_ref() {
-                next_tail.extend(
-                    periodic
-                        .iter_polys()
-                        .map(|col| r * (col[num_evals - 1] - col[half]) + col[half]),
-                );
-            }
-        }
+    /// Bind the first variable at `r`, folding every column with the given kernels.
+    ///
+    /// Both kernels take a column's evaluations and return `lo + r * (hi - lo)` for each pair of
+    /// halves. `fold_packed` groups the results into SIMD lanes, `fold_scalar` does not.
+    fn fold_columns<P, U>(
+        mut self,
+        r: EF,
+        fold_packed: P,
+        fold_scalar: U,
+    ) -> RoundStateExt<'air, 'data, A, F, EF>
+    where
+        P: Fn(&[F]) -> Poly<EF::ExtensionPacking> + Sync,
+        U: Fn(&[F]) -> Poly<EF> + Sync,
+    {
+        let next_tail = self.fold_claims_and_tails(r);
 
+        let half = self.num_evals() / 2;
         let want_packed = (half / 2) >= F::Packing::WIDTH;
         let columns = if want_packed {
-            let mut columns = Vec::with_capacity(width);
-            for slot in &self.slots {
-                columns.extend(
-                    self.tables[slot.stage_index]
-                        .par_iter_polys()
-                        .map(|col| PolyView::new(col).fix_prefix_var_to_packed(r))
-                        .collect::<Vec<_>>(),
-                );
-                if let Some(preprocessed) = self.preprocessed[slot.stage_index] {
-                    columns.extend(
-                        preprocessed
-                            .par_iter_polys()
-                            .map(|col| PolyView::new(col).fix_prefix_var_to_packed(r))
-                            .collect::<Vec<_>>(),
-                    );
-                }
-                if let Some(periodic) = self.periodic[slot.stage_index].as_ref() {
-                    columns.extend(
-                        periodic
-                            .par_iter_polys()
-                            .map(|col| PolyView::new(col).fix_prefix_var_to_packed(r))
-                            .collect::<Vec<_>>(),
-                    );
-                }
-            }
-            ExtColumns::Packed(columns)
+            ExtColumns::Packed(self.fold_each_column(fold_packed))
         } else {
-            let mut columns = Vec::with_capacity(width);
-            for slot in &self.slots {
-                columns.extend(
-                    self.tables[slot.stage_index]
-                        .par_iter_polys()
-                        .map(|col| PolyView::new(col).fix_prefix_var(r))
-                        .collect::<Vec<_>>(),
-                );
-                if let Some(preprocessed) = self.preprocessed[slot.stage_index] {
-                    columns.extend(
-                        preprocessed
-                            .par_iter_polys()
-                            .map(|col| PolyView::new(col).fix_prefix_var(r))
-                            .collect::<Vec<_>>(),
-                    );
-                }
-                if let Some(periodic) = self.periodic[slot.stage_index].as_ref() {
-                    columns.extend(
-                        periodic
-                            .par_iter_polys()
-                            .map(|col| PolyView::new(col).fix_prefix_var(r))
-                            .collect::<Vec<_>>(),
-                    );
-                }
-            }
-            ExtColumns::Scalar(columns)
+            ExtColumns::Scalar(self.fold_each_column(fold_scalar))
         };
 
         RoundStateExt {
             public_values: self.public_values,
             alpha: self.alpha,
+            alpha_powers: self.alpha_powers,
             betas: self.betas,
             constraint_groups: self.constraint_groups,
             interaction_groups: self.interaction_groups,
@@ -1646,12 +1901,81 @@ where
             boundary: BoundaryEvals::new(EF::ONE - r, r, EF::ONE - r),
         }
     }
+
+    /// Update each group's claim for binding the first variable at `r`, and fold every tail.
+    ///
+    /// # Returns
+    ///
+    /// The repeat-last successor value of every column at the folded tail row.
+    /// Zero for every column no AIR reads on the next row.
+    fn fold_claims_and_tails(&mut self, r: EF) -> Vec<EF> {
+        let tau = self.tau.as_slice()[0];
+        self.constraint_groups
+            .iter_mut()
+            .chain(self.interaction_groups.iter_mut())
+            .for_each(|group| group.claim = group.eval(tau, r));
+
+        let num_evals = self.num_evals();
+        let half = num_evals / 2;
+        // Only successor columns carry a repeat-last tail; every other entry stays zero.
+        let mut next_tail = EF::zero_vec(self.total_width());
+        let mut fold_tails = |offset: usize, table: &Table<F>, runs: &[Range<usize>]| {
+            for run in runs {
+                for (tail, col) in next_tail[run.clone()]
+                    .iter_mut()
+                    .zip(table.iter_polys().skip(run.start - offset))
+                {
+                    *tail = r * (col[num_evals - 1] - col[half]) + col[half];
+                }
+            }
+        };
+        for slot in &self.slots {
+            fold_tails(
+                slot.main_offset,
+                self.tables[slot.stage_index],
+                &slot.main_next_columns,
+            );
+            if let Some(preprocessed) = self.preprocessed[slot.stage_index] {
+                fold_tails(
+                    slot.preprocessed_offset,
+                    preprocessed,
+                    &slot.preprocessed_next_columns,
+                );
+            }
+        }
+        next_tail
+    }
+
+    /// Fold every column of the stage with `fold`, in merged-buffer order.
+    fn fold_each_column<T, U>(&self, fold: U) -> Vec<Poly<T>>
+    where
+        T: Send,
+        U: Fn(&[F]) -> Poly<T> + Sync,
+    {
+        let mut columns = Vec::with_capacity(self.total_width());
+        for slot in &self.slots {
+            columns.extend(
+                self.tables[slot.stage_index]
+                    .par_iter_polys()
+                    .map(&fold)
+                    .collect::<Vec<_>>(),
+            );
+            if let Some(preprocessed) = self.preprocessed[slot.stage_index] {
+                columns.extend(preprocessed.par_iter_polys().map(&fold).collect::<Vec<_>>());
+            }
+            if let Some(periodic) = self.periodic[slot.stage_index].as_ref() {
+                columns.extend(periodic.par_iter_polys().map(&fold).collect::<Vec<_>>());
+            }
+        }
+        columns
+    }
 }
 
-impl<'air, 'data, A, F, EF> RoundStateExt<'air, 'data, A, F, EF>
+impl<'air, 'data, A, F, EF, R> RoundStateExt<'air, 'data, A, F, EF, R>
 where
     F: Field,
-    EF: ExtensionField<F>,
+    EF: ExtensionField<F> + From<R>,
+    R: Field + From<EF>,
 {
     fn num_evals(&self) -> usize {
         self.columns.num_evals()
@@ -1679,7 +2003,7 @@ where
             .columns
             .as_scalar()
             .iter()
-            .map(|poly| poly.as_constant().unwrap())
+            .map(|poly| EF::from(poly.as_constant().unwrap()))
             .collect::<Vec<_>>();
         let all_next = self.next_tail;
 
@@ -1692,13 +2016,13 @@ where
                     .air
                     .main_next_row_columns()
                     .into_iter()
-                    .map(|column| all_next[slot.main_offset + column])
+                    .map(|column| EF::from(all_next[slot.main_offset + column]))
                     .collect();
                 let preprocessed_next = slot
                     .air
                     .preprocessed_next_row_columns()
                     .into_iter()
-                    .map(|column| all_next[slot.preprocessed_offset + column])
+                    .map(|column| EF::from(all_next[slot.preprocessed_offset + column]))
                     .collect();
 
                 (
@@ -1715,6 +2039,197 @@ where
             .collect()
     }
 
+    /// Evaluate this round's polynomial one residual row at a time, in the arithmetic field.
+    ///
+    /// `eq_suffix` holds each residual row's eq weight in `R`.
+    ///
+    /// The interpolation nodes are the challenge field's, carried into `R`.
+    /// The per-node sums cross back into the challenge field once, at the end.
+    #[tracing::instrument(skip_all, level = "debug")]
+    fn round_poly_unpacked(&mut self, eq_suffix: &Poly<R>) -> Vec<EF>
+    where
+        R: Algebra<F>,
+        A: for<'b> Air<MultilinearFolder<'b, F, R, R>>
+            + for<'b> Air<InteractionMultilinearFolder<'b, F, R, R>>,
+    {
+        let width = self.width();
+        let num_evals = self.num_evals();
+        let half = num_evals / 2;
+        let degree = self.degree();
+        let schedule = node_schedule::<EF>(evaluated_nodes(&self.slots, degree, true))
+            .into_iter()
+            .map(|(node, step)| (node, step.map(R::from)))
+            .collect::<Vec<_>>();
+        let next_columns = next_row_runs(&self.slots);
+        let constraint_degrees = self
+            .slots
+            .iter()
+            .map(|slot| slot.constraint_degree)
+            .collect::<Vec<_>>();
+        let interaction_degrees = self
+            .interaction_groups
+            .iter()
+            .map(|group| group.degree)
+            .collect::<Vec<_>>();
+
+        let scratch = eq_suffix.as_slice().par_iter().enumerate().par_fold_reduce(
+            || Scratch::<R, R>::new(&constraint_degrees, &interaction_degrees, width),
+            |mut scratch, (s, &eq_suffix)| {
+                let columns = self.columns.as_scalar();
+                for ((local, local_delta), column) in scratch
+                    .local_point
+                    .iter_mut()
+                    .zip(scratch.local_diff.iter_mut())
+                    .zip(columns)
+                {
+                    let column = column.as_slice();
+                    let local_lo = column[s];
+                    let local_hi = column[s + half];
+                    *local = local_lo;
+                    *local_delta = local_hi - local_lo;
+                }
+                for run in &next_columns {
+                    for (((next, next_delta), column), next_tail) in scratch.next_point[run.clone()]
+                        .iter_mut()
+                        .zip(scratch.next_diff[run.clone()].iter_mut())
+                        .zip(&columns[run.clone()])
+                        .zip(&self.next_tail[run.clone()])
+                    {
+                        let column = column.as_slice();
+                        let next_lo = column[s + 1];
+                        let next_hi_row = s + half;
+                        let next_hi = if next_hi_row + 1 < num_evals {
+                            column[next_hi_row + 1]
+                        } else {
+                            *next_tail
+                        };
+                        *next = next_lo;
+                        *next_delta = next_hi - next_lo;
+                    }
+                }
+
+                let (mut boundary, boundary_diff) =
+                    BoundaryEvals::row_pair_with_prefix(s, half, num_evals, self.boundary);
+
+                for &(node, step) in &schedule {
+                    match step {
+                        NodeStep::Unit(count) => {
+                            for _ in 0..count {
+                                scratch.add_diffs(&next_columns);
+                                boundary += boundary_diff;
+                            }
+                        }
+                        NodeStep::Scaled(step) => {
+                            scratch.add_scaled_diffs(step, &next_columns);
+                            boundary.add_scaled(boundary_diff, step);
+                        }
+                    }
+                    for slot in &self.slots {
+                        let enabled = slot.enabled_families(node, true);
+                        if !enabled.constraints && enabled.interaction.is_none() {
+                            continue;
+                        }
+                        let folder = MultilinearFolder::new(
+                            &scratch.local_point
+                                [slot.main_offset..slot.main_offset + slot.main_width],
+                            &scratch.next_point
+                                [slot.main_offset..slot.main_offset + slot.main_width],
+                            boundary,
+                            self.public_values[slot.stage_index],
+                            self.alpha,
+                        )
+                        .with_alpha_powers(&self.alpha_powers[slot.stage_index])
+                        .with_preprocessed(
+                            &scratch.local_point[slot.preprocessed_offset
+                                ..slot.preprocessed_offset + slot.preprocessed_width],
+                            &scratch.next_point[slot.preprocessed_offset
+                                ..slot.preprocessed_offset + slot.preprocessed_width],
+                        )
+                        .with_periodic(
+                            &scratch.local_point
+                                [slot.periodic_offset..slot.periodic_offset + slot.periodic_width],
+                        );
+                        let evaluations =
+                            evaluate_air_families(folder, &self.coupling, enabled, slot.air);
+                        let eval_index = if node == 0 { 0 } else { node - 1 };
+                        if enabled.constraints {
+                            scratch.constraint_evals[slot.stage_index][eval_index] +=
+                                eq_suffix * evaluations.constraints;
+                        }
+                        if let Some(interaction) = enabled.interaction {
+                            scratch.interaction_evals[interaction.group_index][eval_index] +=
+                                eq_suffix * evaluations.interactions;
+                        }
+                    }
+                }
+
+                scratch
+            },
+            |mut lhs, rhs| {
+                lhs.constraint_evals
+                    .iter_mut()
+                    .zip(rhs.constraint_evals)
+                    .for_each(|(lhs, rhs)| R::add_slices(lhs, &rhs));
+                lhs.interaction_evals
+                    .iter_mut()
+                    .zip(rhs.interaction_evals)
+                    .for_each(|(lhs, rhs)| R::add_slices(lhs, &rhs));
+                lhs
+            },
+        );
+        finish_round(
+            &mut self.constraint_groups,
+            &mut self.interaction_groups,
+            &self.betas,
+            self.lookup_scale,
+            &lower_evals(scratch.constraint_evals),
+            &lower_evals(scratch.interaction_evals),
+            self.tau.as_slice()[self.round],
+        )
+    }
+
+    /// Update each group's claim and every repeat-last tail for binding the next variable at `r`.
+    ///
+    /// The tails read the columns before they fold, so this runs first.
+    fn fold_claims_and_tails(&mut self, r: EF) {
+        let tau = self.tau.as_slice()[self.round];
+        self.constraint_groups
+            .iter_mut()
+            .chain(self.interaction_groups.iter_mut())
+            .for_each(|group| group.claim = group.eval(tau, r));
+
+        let half = self.num_evals() / 2;
+        let r = R::from(r);
+
+        // Fold each successor column's repeat-last tail in place with the value at row `half`.
+        // Read that row straight from the current storage, no per-column temporary.
+        for run in next_row_runs(&self.slots) {
+            let next_tail = &mut self.next_tail[run.clone()];
+            match &self.columns {
+                ExtColumns::Scalar(cols) => {
+                    for (next_tail, col) in next_tail.iter_mut().zip(&cols[run]) {
+                        let lo = col.as_slice()[half];
+                        *next_tail = lo + r * (*next_tail - lo);
+                    }
+                }
+                ExtColumns::Packed(cols) => {
+                    let packing_width = F::Packing::WIDTH;
+                    let (group, lane) = (half / packing_width, half % packing_width);
+                    for (next_tail, col) in next_tail.iter_mut().zip(&cols[run]) {
+                        let lo = R::from(col.as_slice()[group].extract(lane));
+                        *next_tail = lo + r * (*next_tail - lo);
+                    }
+                }
+            }
+        }
+    }
+}
+
+impl<'air, 'data, A, F, EF> RoundStateExt<'air, 'data, A, F, EF>
+where
+    F: Field,
+    EF: ExtensionField<F>,
+{
     /// Evaluate this round's polynomial at every interpolation node.
     ///
     /// The packed kernel runs while a fold still leaves enough residual rows to fill a lane.
@@ -1745,135 +2260,6 @@ where
         } else {
             self.round_poly_packed(eq_suffix)
         }
-    }
-
-    #[tracing::instrument(skip_all, level = "debug")]
-    fn round_poly_unpacked(&mut self, eq_suffix: &Poly<EF>) -> Vec<EF>
-    where
-        A: for<'b> Air<MultilinearFolder<'b, F, EF, EF>>
-            + for<'b> Air<InteractionMultilinearFolder<'b, F, EF, EF>>,
-    {
-        let width = self.width();
-        let num_evals = self.num_evals();
-        let half = num_evals / 2;
-        let degree = self.degree();
-        let node_steps = interpolation_steps::<EF>(degree);
-        let constraint_degrees = self
-            .slots
-            .iter()
-            .map(|slot| slot.constraint_degree)
-            .collect::<Vec<_>>();
-        let interaction_degrees = self
-            .interaction_groups
-            .iter()
-            .map(|group| group.degree)
-            .collect::<Vec<_>>();
-
-        let scratch = eq_suffix.as_slice().par_iter().enumerate().par_fold_reduce(
-            || Scratch::<EF, EF>::new(&constraint_degrees, &interaction_degrees, width),
-            |mut scratch, (s, &eq_suffix)| {
-                for (((((local, local_delta), next), next_delta), column), next_tail) in scratch
-                    .local_point
-                    .iter_mut()
-                    .zip(scratch.local_diff.iter_mut())
-                    .zip(scratch.next_point.iter_mut())
-                    .zip(scratch.next_diff.iter_mut())
-                    .zip(self.columns.as_scalar().iter())
-                    .zip(self.next_tail.iter())
-                {
-                    let column = column.as_slice();
-                    let local_lo = column[s];
-                    let local_hi = column[s + half];
-                    *local = local_lo;
-                    *local_delta = local_hi - local_lo;
-
-                    let next_lo = column[s + 1];
-                    let next_hi_row = s + half;
-                    let next_hi = if next_hi_row + 1 < num_evals {
-                        column[next_hi_row + 1]
-                    } else {
-                        *next_tail
-                    };
-                    *next = next_lo;
-                    *next_delta = next_hi - next_lo;
-                }
-
-                let (mut boundary, boundary_diff) =
-                    BoundaryEvals::row_pair_with_prefix(s, half, num_evals, self.boundary);
-
-                for node in 0..=degree {
-                    if node != 1 {
-                        for slot in &self.slots {
-                            let enabled = slot.enabled_families(node, true);
-                            if !enabled.constraints && enabled.interaction.is_none() {
-                                continue;
-                            }
-                            let folder = MultilinearFolder::new(
-                                &scratch.local_point
-                                    [slot.main_offset..slot.main_offset + slot.main_width],
-                                &scratch.next_point
-                                    [slot.main_offset..slot.main_offset + slot.main_width],
-                                boundary,
-                                self.public_values[slot.stage_index],
-                                self.alpha,
-                            )
-                            .with_preprocessed(
-                                &scratch.local_point[slot.preprocessed_offset
-                                    ..slot.preprocessed_offset + slot.preprocessed_width],
-                                &scratch.next_point[slot.preprocessed_offset
-                                    ..slot.preprocessed_offset + slot.preprocessed_width],
-                            )
-                            .with_periodic(
-                                &scratch.local_point[slot.periodic_offset
-                                    ..slot.periodic_offset + slot.periodic_width],
-                            );
-                            let evaluations =
-                                evaluate_air_families(folder, &self.coupling, enabled, slot.air);
-                            let eval_index = if node == 0 { 0 } else { node - 1 };
-                            if enabled.constraints {
-                                scratch.constraint_evals[slot.stage_index][eval_index] +=
-                                    eq_suffix * evaluations.constraints;
-                            }
-                            if let Some(interaction) = enabled.interaction {
-                                scratch.interaction_evals[interaction.group_index][eval_index] +=
-                                    eq_suffix * evaluations.interactions;
-                            }
-                        }
-                    }
-                    if let Some(&step) = node_steps.get(node) {
-                        if step == EF::ONE {
-                            scratch.add_diffs();
-                            boundary += boundary_diff;
-                        } else {
-                            scratch.add_scaled_diffs(step);
-                            boundary.add_scaled(boundary_diff, step);
-                        }
-                    }
-                }
-
-                scratch
-            },
-            |mut lhs, rhs| {
-                lhs.constraint_evals
-                    .iter_mut()
-                    .zip(rhs.constraint_evals)
-                    .for_each(|(lhs, rhs)| EF::add_slices(lhs, &rhs));
-                lhs.interaction_evals
-                    .iter_mut()
-                    .zip(rhs.interaction_evals)
-                    .for_each(|(lhs, rhs)| EF::add_slices(lhs, &rhs));
-                lhs
-            },
-        );
-        finish_round(
-            &mut self.constraint_groups,
-            &mut self.interaction_groups,
-            &self.betas,
-            self.lookup_scale,
-            &scratch.constraint_evals,
-            &scratch.interaction_evals,
-            self.tau.as_slice()[self.round],
-        )
     }
 
     /// SIMD-packed twin of the scalar kernel above.
@@ -1913,8 +2299,19 @@ where
         let packing_width = F::Packing::WIDTH;
         let packed_half = scalar_half / packing_width;
         let degree = self.degree();
-        let node_steps = interpolation_steps::<EF>(degree);
+        let schedule = node_schedule::<EF>(evaluated_nodes(&self.slots, degree, true));
+        let next_columns = next_row_runs(&self.slots);
         let alpha = PackedExt::new(EF::ExtensionPacking::from(self.alpha));
+        let alpha_powers = self
+            .alpha_powers
+            .iter()
+            .map(|powers| {
+                powers
+                    .iter()
+                    .map(|&power| PackedExt::new(EF::ExtensionPacking::from(power)))
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
         let coupling = InteractionCoupling {
             links: self
                 .coupling
@@ -1957,35 +2354,43 @@ where
                 |mut scratch, (packed_s, eq_suffix)| {
                     let s = packed_s * packing_width;
 
-                    for (((((local, local_delta), next), next_delta), column), next_tail) in scratch
+                    let columns = self.columns.as_packed();
+                    for ((local, local_delta), column) in scratch
                         .local_point
                         .iter_mut()
                         .zip(scratch.local_diff.iter_mut())
-                        .zip(scratch.next_point.iter_mut())
-                        .zip(scratch.next_diff.iter_mut())
-                        .zip(self.columns.as_packed().iter())
-                        .zip(self.next_tail.iter())
+                        .zip(columns)
                     {
                         let column = column.as_slice();
                         let local_lo = PackedExt::new(column[packed_s]);
                         let local_hi = PackedExt::new(column[packed_s + packed_half]);
                         *local = local_lo;
                         *local_delta = local_hi - local_lo;
-
-                        let next_lo = PackedExt::new(packed_window::<F, EF>(
-                            column,
-                            s + 1,
-                            height,
-                            *next_tail,
-                        ));
-                        let next_hi = PackedExt::new(packed_window::<F, EF>(
-                            column,
-                            s + scalar_half + 1,
-                            height,
-                            *next_tail,
-                        ));
-                        *next = next_lo;
-                        *next_delta = next_hi - next_lo;
+                    }
+                    for run in &next_columns {
+                        for (((next, next_delta), column), next_tail) in scratch.next_point
+                            [run.clone()]
+                        .iter_mut()
+                        .zip(scratch.next_diff[run.clone()].iter_mut())
+                        .zip(&columns[run.clone()])
+                        .zip(&self.next_tail[run.clone()])
+                        {
+                            let column = column.as_slice();
+                            let next_lo = PackedExt::new(packed_window::<F, EF>(
+                                column,
+                                s + 1,
+                                height,
+                                *next_tail,
+                            ));
+                            let next_hi = PackedExt::new(packed_window::<F, EF>(
+                                column,
+                                s + scalar_half + 1,
+                                height,
+                                *next_tail,
+                            ));
+                            *next = next_lo;
+                            *next_delta = next_hi - next_lo;
+                        }
                     }
 
                     let (raw_boundary, raw_boundary_diff) =
@@ -2006,63 +2411,65 @@ where
                         PackedExt::new(raw_boundary_diff.transition),
                     );
 
-                    for node in 0..=degree {
-                        if node != 1 {
-                            for slot in &self.slots {
-                                let enabled = slot.enabled_families(node, true);
-                                if !enabled.constraints && enabled.interaction.is_none() {
-                                    continue;
+                    for &(node, step) in &schedule {
+                        match step {
+                            NodeStep::Unit(count) => {
+                                for _ in 0..count {
+                                    scratch.add_diffs(&next_columns);
+                                    boundary += boundary_diff;
                                 }
-                                let folder = MultilinearFolder::new(
-                                    &scratch.local_point
-                                        [slot.main_offset..slot.main_offset + slot.main_width],
-                                    &scratch.next_point
-                                        [slot.main_offset..slot.main_offset + slot.main_width],
-                                    boundary,
-                                    self.public_values[slot.stage_index],
-                                    alpha,
-                                )
-                                .with_preprocessed(
-                                    &scratch.local_point[slot.preprocessed_offset
-                                        ..slot.preprocessed_offset + slot.preprocessed_width],
-                                    &scratch.next_point[slot.preprocessed_offset
-                                        ..slot.preprocessed_offset + slot.preprocessed_width],
-                                )
-                                .with_periodic(
-                                    &scratch.local_point[slot.periodic_offset
-                                        ..slot.periodic_offset + slot.periodic_width],
-                                );
-                                let evaluations =
-                                    evaluate_air_families(folder, &coupling, enabled, slot.air);
-                                let eval_index = if node == 0 { 0 } else { node - 1 };
-                                if enabled.constraints {
-                                    scratch.constraint_evals[slot.stage_index][eval_index] +=
-                                        dot_product::<EF, _, _>(
-                                            eq_suffix.iter().copied(),
-                                            EF::ExtensionPacking::to_ext_iter([evaluations
-                                                .constraints
-                                                .0]),
-                                        );
-                                }
-                                if let Some(interaction) = enabled.interaction {
-                                    scratch.interaction_evals[interaction.group_index]
-                                        [eval_index] += dot_product::<EF, _, _>(
+                            }
+                            NodeStep::Scaled(step) => {
+                                let step = PackedExt::new(EF::ExtensionPacking::from(step));
+                                scratch.add_scaled_diffs(step, &next_columns);
+                                boundary.add_scaled(boundary_diff, step);
+                            }
+                        }
+                        for slot in &self.slots {
+                            let enabled = slot.enabled_families(node, true);
+                            if !enabled.constraints && enabled.interaction.is_none() {
+                                continue;
+                            }
+                            let folder = MultilinearFolder::new(
+                                &scratch.local_point
+                                    [slot.main_offset..slot.main_offset + slot.main_width],
+                                &scratch.next_point
+                                    [slot.main_offset..slot.main_offset + slot.main_width],
+                                boundary,
+                                self.public_values[slot.stage_index],
+                                alpha,
+                            )
+                            .with_alpha_powers(&alpha_powers[slot.stage_index])
+                            .with_preprocessed(
+                                &scratch.local_point[slot.preprocessed_offset
+                                    ..slot.preprocessed_offset + slot.preprocessed_width],
+                                &scratch.next_point[slot.preprocessed_offset
+                                    ..slot.preprocessed_offset + slot.preprocessed_width],
+                            )
+                            .with_periodic(
+                                &scratch.local_point[slot.periodic_offset
+                                    ..slot.periodic_offset + slot.periodic_width],
+                            );
+                            let evaluations =
+                                evaluate_air_families(folder, &coupling, enabled, slot.air);
+                            let eval_index = if node == 0 { 0 } else { node - 1 };
+                            if enabled.constraints {
+                                scratch.constraint_evals[slot.stage_index][eval_index] +=
+                                    dot_product::<EF, _, _>(
+                                        eq_suffix.iter().copied(),
+                                        EF::ExtensionPacking::to_ext_iter([evaluations
+                                            .constraints
+                                            .0]),
+                                    );
+                            }
+                            if let Some(interaction) = enabled.interaction {
+                                scratch.interaction_evals[interaction.group_index][eval_index] +=
+                                    dot_product::<EF, _, _>(
                                         eq_suffix.iter().copied(),
                                         EF::ExtensionPacking::to_ext_iter([evaluations
                                             .interactions
                                             .0]),
                                     );
-                                }
-                            }
-                        }
-                        if let Some(&step) = node_steps.get(node) {
-                            if step == EF::ONE {
-                                scratch.add_diffs();
-                                boundary += boundary_diff;
-                            } else {
-                                let step = PackedExt::new(EF::ExtensionPacking::from(step));
-                                scratch.add_scaled_diffs(step);
-                                boundary.add_scaled(boundary_diff, step);
                             }
                         }
                     }
@@ -2097,34 +2504,9 @@ where
     where
         A: for<'b> Air<MultilinearFolder<'b, F, EF, EF>>,
     {
-        let tau = self.tau.as_slice()[self.round];
-        self.constraint_groups
-            .iter_mut()
-            .chain(self.interaction_groups.iter_mut())
-            .for_each(|group| group.claim = group.eval(tau, r));
+        self.fold_claims_and_tails(r);
 
-        let num_evals = self.num_evals();
-        let half = num_evals / 2;
-
-        // Fold each column's repeat-last tail in place with the value at row `half`.
-        // Read that row straight from the current storage, no per-column temporary.
-        match &self.columns {
-            ExtColumns::Scalar(cols) => {
-                for (next_tail, col) in self.next_tail.iter_mut().zip(cols) {
-                    let lo = col.as_slice()[half];
-                    *next_tail = lo + r * (*next_tail - lo);
-                }
-            }
-            ExtColumns::Packed(cols) => {
-                let packing_width = F::Packing::WIDTH;
-                let (group, lane) = (half / packing_width, half % packing_width);
-                for (next_tail, col) in self.next_tail.iter_mut().zip(cols) {
-                    let lo = col.as_slice()[group].extract(lane);
-                    *next_tail = lo + r * (*next_tail - lo);
-                }
-            }
-        }
-
+        let half = self.num_evals() / 2;
         let want_packed = (half / 2) >= F::Packing::WIDTH;
         self.columns = core::mem::replace(&mut self.columns, ExtColumns::Scalar(Vec::new()))
             .fold(r, want_packed);
@@ -2139,11 +2521,70 @@ mod tests {
     use alloc::vec;
 
     use p3_air::{AirBuilder, WindowAccess};
+    use p3_baby_bear::BabyBear;
     use p3_binary_field::BinaryField128;
+    use rand::SeedableRng;
+    use rand::rngs::SmallRng;
 
     use super::*;
 
     type F = BinaryField128;
+
+    #[test]
+    fn successor_runs_group_adjacent_declared_columns() {
+        // Declaration order is irrelevant; adjacent columns share one run.
+        assert_eq!(successor_runs(4, 4, &[3, 0, 1]), vec![4..6, 7..8]);
+        assert_eq!(successor_runs(10, 3, &[0, 1, 2]), vec![10..13]);
+        assert!(successor_runs(10, 3, &[]).is_empty());
+    }
+
+    #[test]
+    #[should_panic = "duplicate successor column"]
+    fn successor_runs_reject_a_repeated_column() {
+        let _runs = successor_runs(0, 4, &[1, 1]);
+    }
+
+    #[test]
+    #[should_panic = "successor column is outside the trace width"]
+    fn successor_runs_reject_a_column_past_the_width() {
+        let _runs = successor_runs(0, 4, &[4]);
+    }
+
+    #[test]
+    fn node_schedule_walks_unit_gaps_and_jumps_other_gaps() {
+        // Prime-field nodes are consecutive integers: every stretch costs additions only.
+        assert_eq!(
+            node_schedule::<BabyBear>([0, 2, 3]),
+            vec![
+                (0, NodeStep::Unit(0)),
+                (2, NodeStep::Unit(2)),
+                (3, NodeStep::Unit(1)),
+            ]
+        );
+
+        // Binary-field node two sits a non-unit gap past node one.
+        // The scratch jumps there from node zero with one scaled step instead of two.
+        //
+        //     node : 0    1    2    3    4
+        //     repr : 0    1    2    3    4
+        //     gap  :   1    3    1    7
+        let node = F::interpolation_node;
+        assert_eq!(
+            node_schedule::<F>([0, 2, 3, 4]),
+            vec![
+                (0, NodeStep::Unit(0)),
+                (2, NodeStep::Scaled(node(2))),
+                (3, NodeStep::Unit(1)),
+                (4, NodeStep::Scaled(node(4) - node(3))),
+            ]
+        );
+
+        // The first base-field round skips node zero, so the jump starts from the fill.
+        assert_eq!(
+            node_schedule::<F>([2, 3]),
+            vec![(2, NodeStep::Scaled(node(2))), (3, NodeStep::Unit(1))]
+        );
+    }
 
     struct BooleanAir;
 
@@ -2176,9 +2617,12 @@ mod tests {
             vec![0],
             vec![None],
             vec![&table],
-            vec![AirDegrees {
-                constraints: 3,
-                interactions: 0,
+            vec![AirProfile {
+                degrees: AirDegrees {
+                    constraints: 3,
+                    interactions: 0,
+                },
+                num_constraints: 3,
             }],
             StageCoupling::new(BTreeMap::new(), BTreeMap::new(), vec![]),
         );
@@ -2259,5 +2703,209 @@ mod tests {
     #[test]
     fn binary_extension_packed_uses_distinct_interpolation_nodes() {
         check_binary_round_nodes(true, true);
+    }
+
+    /// A slot carrying only the fold metadata `evaluated_nodes` reads.
+    fn degree_slot(
+        constraint_degree: usize,
+        interaction_degree: Option<usize>,
+    ) -> AirSlot<'static, BooleanAir> {
+        AirSlot {
+            air: &BooleanAir,
+            stage_index: 0,
+            caller_index: 0,
+            main_offset: 0,
+            main_width: 0,
+            preprocessed_offset: 0,
+            preprocessed_width: 0,
+            periodic_offset: 0,
+            periodic_width: 0,
+            main_next_columns: vec![],
+            preprocessed_next_columns: vec![],
+            constraint_degree,
+            interaction: interaction_degree.map(|degree| AirInteractionSlot {
+                degree,
+                group_index: 0,
+                link_index: 0,
+            }),
+        }
+    }
+
+    fn nodes_of(
+        slots: &[AirSlot<'_, BooleanAir>],
+        degree: usize,
+        include_zero: bool,
+    ) -> Vec<usize> {
+        evaluated_nodes(slots, degree, include_zero).collect()
+    }
+
+    #[test]
+    fn evaluated_nodes_follow_each_family_degree() {
+        // Constraints only, at degrees 2 and 3.
+        // The first round skips node zero, later rounds need it.
+        let constraints = [degree_slot(2, None), degree_slot(3, None)];
+        assert_eq!(nodes_of(&constraints, 3, false), vec![2, 3]);
+        assert_eq!(nodes_of(&constraints, 3, true), vec![0, 2, 3]);
+
+        // A degree-one lookup brings node zero back into the first round, and reaches no further.
+        let with_lookup = [degree_slot(3, None), degree_slot(0, Some(1))];
+        assert_eq!(nodes_of(&with_lookup, 3, false), vec![0, 2, 3]);
+        assert_eq!(nodes_of(&with_lookup, 3, true), vec![0, 2, 3]);
+
+        // A lookup above its AIR's own constraint degree sets the top node alone.
+        let lookup_on_top = [degree_slot(1, Some(2))];
+        assert_eq!(nodes_of(&lookup_on_top, 2, false), vec![0, 2]);
+
+        // Node one is never evaluated, even when it is the top node.
+        let lookup_only = [degree_slot(0, Some(1))];
+        assert_eq!(nodes_of(&lookup_only, 1, false), vec![0]);
+    }
+
+    /// Degree-three AIR reading scattered main and preprocessed successor columns.
+    ///
+    /// ```text
+    ///     main next         : columns 1, 2, 4    -> runs 1..3, 4..5
+    ///     preprocessed next : columns 0, 2       -> runs 0..1, 2..3
+    /// ```
+    ///
+    /// With `declare_all`, the AIR keeps the default declaration of every column instead.
+    struct ScatteredSuccessorAir {
+        declare_all: bool,
+    }
+
+    impl BaseAir<F> for ScatteredSuccessorAir {
+        fn width(&self) -> usize {
+            5
+        }
+        fn preprocessed_width(&self) -> usize {
+            3
+        }
+        fn main_next_row_columns(&self) -> Vec<usize> {
+            if self.declare_all {
+                (0..5).collect()
+            } else {
+                vec![4, 1, 2]
+            }
+        }
+        fn preprocessed_next_row_columns(&self) -> Vec<usize> {
+            if self.declare_all {
+                (0..3).collect()
+            } else {
+                vec![2, 0]
+            }
+        }
+    }
+
+    impl<AB: AirBuilder<F = F>> Air<AB> for ScatteredSuccessorAir {
+        fn eval(&self, builder: &mut AB) {
+            let main = builder.main();
+            let (local, next) = (main.current_slice(), main.next_slice());
+            let preprocessed = builder.preprocessed();
+            let (prep_local, prep_next) = (
+                preprocessed.current_slice()[1],
+                [preprocessed.next_slice()[0], preprocessed.next_slice()[2]],
+            );
+            builder
+                .when_transition()
+                .assert_eq(next[1] * local[0], local[3] * next[4]);
+            builder
+                .when_transition()
+                .assert_eq(next[2], prep_local * prep_next[0]);
+            builder.assert_zero(prep_next[1] * local[0] * local[4]);
+        }
+    }
+
+    /// Evaluate an extension round through the scalar kernel, leaving the columns packed.
+    fn scalar_extension_round_poly(
+        state: &mut RoundStateExt<'_, '_, ScatteredSuccessorAir, F, F>,
+        eq_suffix: &Poly<F>,
+    ) -> Vec<F> {
+        let ExtColumns::Packed(packed) =
+            core::mem::replace(&mut state.columns, ExtColumns::Scalar(Vec::new()))
+        else {
+            unreachable!("binary packing has width one");
+        };
+        state.columns = ExtColumns::Scalar(packed.iter().map(|col| col.unpack::<F, F>()).collect());
+        let evals = state.round_poly_unpacked(eq_suffix);
+        state.columns = ExtColumns::Packed(packed);
+        evals
+    }
+
+    #[test]
+    fn binary_scalar_kernels_read_scattered_successor_columns() {
+        // Invariant: every round polynomial of the scattered declaration equals the one
+        // computed with every successor column filled, through both kernels.
+        //
+        // The binary packing has width one, so dispatch never picks the scalar kernels.
+        // Each round therefore calls them directly.
+        let num_vars = 4;
+        let mut rng = SmallRng::seed_from_u64(0x5CA7);
+        let main = Table::<F>::rand(&mut rng, 5, num_vars);
+        let preprocessed = Table::<F>::rand(&mut rng, 3, num_vars);
+        let scattered_air = ScatteredSuccessorAir { declare_all: false };
+        let full_air = ScatteredSuccessorAir { declare_all: true };
+        let alpha = F::interpolation_node(11);
+        let tau = (0..num_vars)
+            .map(|i| F::interpolation_node(5 + i))
+            .collect::<Vec<_>>();
+        let state = |air| {
+            let stage = Stage::new(
+                vec![air],
+                vec![&[]],
+                vec![0],
+                vec![Some(&preprocessed)],
+                vec![&main],
+                vec![AirProfile {
+                    degrees: AirDegrees {
+                        constraints: 3,
+                        interactions: 0,
+                    },
+                    num_constraints: 3,
+                }],
+                StageCoupling::new(BTreeMap::new(), BTreeMap::new(), vec![]),
+            );
+            RoundStateBase::new(stage, alpha, F::ONE, vec![F::ONE], Point::new(tau.clone()))
+        };
+        let mut scattered = state(&scattered_air);
+        let mut full = state(&full_air);
+
+        let eq_suffix = Poly::new_from_point(&tau[1..], F::ONE);
+        let expected = full.round_poly_packed(&eq_suffix);
+        assert_eq!(scattered.round_poly_unpacked(&eq_suffix), expected);
+        assert_eq!(scattered.round_poly_packed(&eq_suffix), expected);
+
+        let r = F::interpolation_node(9);
+        let mut scattered = scattered.fold(r);
+        let mut full = full.fold(r);
+        for round in 1..num_vars {
+            let eq_suffix = Poly::new_from_point(&tau[round + 1..], F::ONE);
+            let expected = full.round_poly_packed(&eq_suffix);
+            assert_eq!(
+                scalar_extension_round_poly(&mut scattered, &eq_suffix),
+                expected
+            );
+            assert_eq!(scattered.round_poly_packed(&eq_suffix), expected);
+
+            let r = F::interpolation_node(9 + round);
+            scattered.fold(r);
+            full.fold(r);
+        }
+
+        // Each declared successor opens, in declaration order, to the full set's value.
+        let [(_, scattered_openings)] = scattered.into_openings().try_into().ok().unwrap();
+        let [(_, full_openings)] = full.into_openings().try_into().ok().unwrap();
+        assert_eq!(scattered_openings.local, full_openings.local);
+        assert_eq!(
+            scattered_openings.preprocessed_local,
+            full_openings.preprocessed_local
+        );
+        assert_eq!(
+            scattered_openings.next,
+            [4, 1, 2].map(|column| full_openings.next[column])
+        );
+        assert_eq!(
+            scattered_openings.preprocessed_next,
+            [2, 0].map(|column| full_openings.preprocessed_next[column])
+        );
     }
 }

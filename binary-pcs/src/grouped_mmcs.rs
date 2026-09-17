@@ -6,6 +6,7 @@ use alloc::vec::Vec;
 
 use p3_binary_field::BinaryField128 as F;
 use p3_commit::{BatchOpening, BatchOpeningRef, Mmcs};
+use p3_field::PackedValue;
 use p3_matrix::{Dimensions, Matrix};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -83,6 +84,38 @@ impl<M: Matrix<F>> Matrix<F> for GroupedCodeword<M> {
             // SAFETY: the constructor admits only width-1 matrices whose height is divisible
             // by group_size. The caller guarantees r < height() and lane < group_size.
             unsafe { self.matrix.get_unchecked(r * self.group_size + lane, 0) }
+        })
+    }
+
+    #[inline]
+    fn vertically_packed_row<P>(&self, r: usize) -> impl Iterator<Item = P>
+    where
+        F: Copy,
+        P: PackedValue<Value = F>,
+    {
+        let matrix = &self.matrix;
+        let group_size = self.group_size;
+        let height = self.height();
+        let row = r % height;
+        let no_wrap = P::WIDTH != 1 && r + P::WIDTH <= height;
+
+        // Every read below is in bounds: the constructor admits only width-1 matrices whose
+        // height is `height() * group_size`, each row index is below `height()`, and each
+        // lane is below `group_size`.
+        (0..group_size).map(move |lane| {
+            if P::WIDTH == 1 {
+                // SAFETY: `row < height()` and `lane < group_size`.
+                unsafe { P::broadcast(matrix.get_unchecked(row * group_size + lane, 0)) }
+            } else if no_wrap {
+                // SAFETY: `r + i < height()` for every `i < P::WIDTH`, and `lane < group_size`.
+                P::from_fn(|i| unsafe { matrix.get_unchecked((r + i) * group_size + lane, 0) })
+            } else {
+                P::from_fn(|i| {
+                    let row = (r + i) % height;
+                    // SAFETY: `row < height()` and `lane < group_size`.
+                    unsafe { matrix.get_unchecked(row * group_size + lane, 0) }
+                })
+            }
         })
     }
 }
@@ -292,12 +325,44 @@ mod tests {
 
     use p3_binary_field::{BinaryField128 as F, TowerLevel};
     use p3_commit::{BatchOpeningRef, Mmcs};
-    use p3_field::PrimeCharacteristicRing;
-    use p3_matrix::Dimensions;
+    use p3_field::{FieldArray, PrimeCharacteristicRing};
     use p3_matrix::dense::RowMajorMatrix;
+    use p3_matrix::{Dimensions, Matrix};
 
-    use super::GroupedCodewordMmcs;
+    use super::{GroupedCodeword, GroupedCodewordMmcs};
     use crate::test_util::mmcs;
+
+    /// A width-3 packing, wide enough to reach both the no-wrap and the wrap-around reads.
+    type Packed = FieldArray<F, 3>;
+
+    /// Reuses `GroupedCodeword`'s indexing but leaves `vertically_packed_row` at the
+    /// trait's default implementation, for comparison against the overridden version.
+    struct DefaultPackedGroupedCodeword<M> {
+        matrix: M,
+        group_size: usize,
+    }
+
+    impl<M: Matrix<F>> Matrix<F> for DefaultPackedGroupedCodeword<M> {
+        fn width(&self) -> usize {
+            self.group_size
+        }
+
+        fn height(&self) -> usize {
+            self.matrix.height() / self.group_size
+        }
+
+        unsafe fn row_subseq_unchecked(
+            &self,
+            r: usize,
+            start: usize,
+            end: usize,
+        ) -> impl IntoIterator<Item = F, IntoIter = impl Iterator<Item = F> + Send + Sync> {
+            (start..end).map(move |lane| {
+                // SAFETY: same invariants as `GroupedCodeword::row_subseq_unchecked`.
+                unsafe { self.matrix.get_unchecked(r * self.group_size + lane, 0) }
+            })
+        }
+    }
 
     #[test]
     fn groups_match_an_explicitly_reshaped_commitment() {
@@ -496,6 +561,44 @@ mod tests {
                     postcard::from_bytes(&bytes).unwrap();
                 pcs.verify(&commitment, &decoded, &mut challenger(), protocol)
                     .unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn vertically_packed_row_matches_the_default_trait_implementation_on_wrap_around() {
+        // Odd group sizes and lengths that don't divide the packing width, so both the
+        // fast path and the wrap-around fallback get exercised.
+        for (len, group_size) in [(24usize, 3usize), (30, 5), (14, 7), (2, 1), (9, 9)] {
+            let values: Vec<_> = (0..len as u128).map(F::from_repr).collect();
+            let grouped = GroupedCodeword {
+                matrix: RowMajorMatrix::new(values.clone(), 1),
+                group_size,
+            };
+            let reference = DefaultPackedGroupedCodeword {
+                matrix: RowMajorMatrix::new(values, 1),
+                group_size,
+            };
+            let height = grouped.height();
+            assert_eq!(height, reference.height());
+
+            for r in 0..height {
+                // Width-1 packing exercises the scalar broadcast branch.
+                let actual: Vec<F> = grouped.vertically_packed_row::<F>(r).collect();
+                let expected: Vec<F> = reference.vertically_packed_row::<F>(r).collect();
+                assert_eq!(
+                    actual, expected,
+                    "width 1, len {len}, group {group_size}, r {r}"
+                );
+
+                // Width-3 packing exercises both the no-wrap fast path and, once `r` gets
+                // close to `height`, the modulo wrap-around path.
+                let actual: Vec<Packed> = grouped.vertically_packed_row::<Packed>(r).collect();
+                let expected: Vec<Packed> = reference.vertically_packed_row::<Packed>(r).collect();
+                assert_eq!(
+                    actual, expected,
+                    "width 3, len {len}, group {group_size}, r {r}"
+                );
             }
         }
     }

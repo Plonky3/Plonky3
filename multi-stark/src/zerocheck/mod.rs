@@ -10,6 +10,10 @@
 //! The generic-degree sumcheck proves that sum.
 //! A zerocheck always claims zero, so the verifier rejects any proof that claims a different sum.
 
+#[cfg(test)]
+pub(crate) mod backend_tests;
+#[cfg(test)]
+mod prime_transcript_tests;
 pub mod transcript;
 
 use alloc::collections::{BTreeMap, BTreeSet};
@@ -32,12 +36,13 @@ use p3_sumcheck::generic_degree::{
 use p3_sumcheck::layout::Table;
 use thiserror::Error;
 
+use crate::backend::{GenericBackend, ZerocheckBackend};
 use crate::folder::{
     InteractionMultilinearFolder, MultilinearFolder, ProverAir, VerifierAir, boundary_io_pins,
 };
 use crate::lookup::{ActiveLookupRuntime, AirLinkClaim, LookupRuntime};
 use crate::opening::{OpeningClaims, TableOpening};
-use crate::rounds::{AirDegrees, AirOpenings, RoundStateBase, RoundStateExt, Stage, StageCoupling};
+use crate::rounds::{AirDegrees, AirOpenings, AirProfile, RoundStateBase, Stage, StageCoupling};
 use crate::selectors::{BoundaryEvals, PeriodicError, periodic_evals_at, periodic_num_variables};
 use crate::zerocheck::transcript::{
     ZerocheckChallenges, ZerocheckProverTranscript, ZerocheckShape, ZerocheckVerifierTranscript,
@@ -140,6 +145,19 @@ pub struct AirZerocheck<'a, A> {
 
 /// Native per-variable degrees of one AIR's ordinary constraints and lookup links.
 ///
+/// See [`get_air_profile`], which also counts the batched constraints.
+pub(crate) fn get_air_degrees<F, EF, A>(air: &A) -> AirDegrees
+where
+    F: Field,
+    EF: ExtensionField<F>,
+    A: Air<SymbolicAirBuilder<F, EF>>,
+{
+    get_air_profile::<F, EF, A>(air).degrees
+}
+
+/// Native per-variable degrees of one AIR's ordinary constraints and lookup links,
+/// and the number of constraints the folder batches.
+///
 /// Both families come from one symbolic pass and are measured with the eq weight stripped.
 /// A degree of zero means the AIR declares nothing in that family.
 ///
@@ -172,7 +190,7 @@ pub struct AirZerocheck<'a, A> {
 /// Panics if a declared family is constant and no listed cell lifts it,
 /// since a constant has no round polynomial of its own.
 /// Panics if the AIR declares neither constraints nor interactions.
-pub(crate) fn get_air_degrees<F, EF, A>(air: &A) -> AirDegrees
+pub(crate) fn get_air_profile<F, EF, A>(air: &A) -> AirProfile
 where
     F: Field,
     EF: ExtensionField<F>,
@@ -262,9 +280,13 @@ where
         "zerocheck requires every AIR to contribute constraints or interactions"
     );
 
-    AirDegrees {
-        constraints: constraint_degree,
-        interactions: interaction_degree,
+    AirProfile {
+        degrees: AirDegrees {
+            constraints: constraint_degree,
+            interactions: interaction_degree,
+        },
+        // The folder batches every asserted constraint, then one pin per listed cell.
+        num_constraints: base_constraints.len() + extension_constraints.len() + pins.count,
     }
 }
 
@@ -492,7 +514,7 @@ impl<'a, A> AirZerocheck<'a, A> {
         <EF as ExtensionField<F>>::ExtensionPacking: From<EF> + From<<F as Field>::Packing>,
         Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
     {
-        self.prove_with_lookup(
+        self.prove_with_lookup::<F, EF, GenericBackend, Challenger>(
             preprocessed,
             tables,
             public_values,
@@ -507,6 +529,8 @@ impl<'a, A> AirZerocheck<'a, A> {
     /// This sumcheck therefore starts from that claim instead of from zero, and each AIR
     /// stage takes over its own share when the cube reaches that AIR's trace height.
     ///
+    /// Backend `B` computes each stage's round polynomials, folds, and openings.
+    ///
     /// # Panics
     ///
     /// Panics if the input lengths disagree with the number of AIRs.
@@ -514,7 +538,7 @@ impl<'a, A> AirZerocheck<'a, A> {
     /// Panics if a periodic column's period is not a power of two dividing the trace height.
     /// Panics if any trace height is less than two.
     #[tracing::instrument(skip_all)]
-    pub(crate) fn prove_with_lookup<F, EF, Challenger>(
+    pub(crate) fn prove_with_lookup<F, EF, B, Challenger>(
         &self,
         preprocessed: &[Option<&Table<F>>],
         tables: &[&Table<F>],
@@ -525,8 +549,8 @@ impl<'a, A> AirZerocheck<'a, A> {
     where
         F: TranscriptField,
         EF: ExtensionField<F>,
-        A: ProverAir<F, EF>,
-        <EF as ExtensionField<F>>::ExtensionPacking: From<EF> + From<<F as Field>::Packing>,
+        A: BaseAir<F> + Air<SymbolicAirBuilder<F, EF>>,
+        B: ZerocheckBackend<F, EF, A>,
         Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
     {
         self.validate_inputs(tables, preprocessed, public_values);
@@ -569,10 +593,14 @@ impl<'a, A> AirZerocheck<'a, A> {
         // Ordinary constraints and lookup links keep their native symbolic degrees.
         // The round state evaluates an AIR up to the larger of the two degrees.
         // It stops accumulating the lower-degree family at that family's own final node.
-        let degrees = self
+        let profiles = self
             .airs
             .iter()
-            .map(|&air| get_air_degrees::<F, EF, A>(air))
+            .map(|&air| get_air_profile::<F, EF, A>(air))
+            .collect::<Vec<_>>();
+        let degrees = profiles
+            .iter()
+            .map(|profile| profile.degrees)
             .collect::<Vec<_>>();
 
         // Mirror the verifier's rule: every AIR that declares lookups must carry a link.
@@ -662,14 +690,14 @@ impl<'a, A> AirZerocheck<'a, A> {
                     .iter()
                     .map(|&i| public_values[i])
                     .collect::<Vec<_>>();
-                let degrees = indices.iter().map(|&i| degrees[i]).collect::<Vec<_>>();
+                let profiles = indices.iter().map(|&i| profiles[i]).collect::<Vec<_>>();
                 Stage::new(
                     airs,
                     public_values,
                     indices,
                     preprocessed,
                     tables,
-                    degrees,
+                    profiles,
                     coupling,
                 )
             })
@@ -696,9 +724,9 @@ impl<'a, A> AirZerocheck<'a, A> {
             };
 
             let mut challenges = Vec::with_capacity(log_height);
-            // Active stages live as folded extension states.
+            // Active stages live as the backend's folded states.
             // claims[i] is the current reduced claim for states[i].
-            let mut states = Vec::<RoundStateExt<'_, '_, A, F, EF>>::new();
+            let mut states = Vec::new();
             let mut claims = Vec::<EF>::new();
 
             // Before any height activates, the full lookup claim is dormant.
@@ -739,7 +767,7 @@ impl<'a, A> AirZerocheck<'a, A> {
                 // Existing stages already live over the extension field.
                 // Extend each stage's internal round polynomial to the global degree and accumulate it.
                 for (state, &claim) in states.iter_mut().zip(claims.iter()) {
-                    let round_poly = state.round_poly(&eq_suffix);
+                    let round_poly = B::round(state, &eq_suffix);
                     let q1 = (claim - (EF::ONE - tau_round) * round_poly[0]) * tau_round_inv;
                     let unweighted_claim = round_poly[0] + q1;
                     let round_poly = interpolators[round_poly.len()].extend_evals(
@@ -763,7 +791,7 @@ impl<'a, A> AirZerocheck<'a, A> {
                         .map(|&air_index| beta_powers[air_index])
                         .collect::<Vec<_>>();
                     let mut state = RoundStateBase::new(stage, alpha, eta, betas, tau);
-                    let round_poly = state.round_poly(&eq_suffix);
+                    let round_poly = B::round0(&mut state, &eq_suffix);
                     let q1 =
                         (activating_claim - (EF::ONE - tau_round) * round_poly[0]) * tau_round_inv;
                     let unweighted_claim = round_poly[0] + q1;
@@ -805,7 +833,7 @@ impl<'a, A> AirZerocheck<'a, A> {
                     let q1 = (*claim - (EF::ONE - tau_round) * round_poly[0]) * tau_round_inv;
                     let unweighted_claim = round_poly[0] + q1;
                     *claim = interpolator.eval(round_poly, unweighted_claim, r);
-                    state.fold(r);
+                    B::fold(state, r);
                 }
 
                 // The newly activated stage joins the active list only after this round.
@@ -816,7 +844,7 @@ impl<'a, A> AirZerocheck<'a, A> {
                         (activating_claim - (EF::ONE - tau_round) * round_poly[0]) * tau_round_inv;
                     let unweighted_claim = round_poly[0] + q1;
                     claims.push(interpolator.eval(&round_poly, unweighted_claim, r));
-                    states.push(state.fold(r));
+                    states.push(B::fold0(state, r));
                 }
 
                 // Advance the shared equality factors to the next round.
@@ -852,7 +880,7 @@ impl<'a, A> AirZerocheck<'a, A> {
             .take(self.airs.len())
             .collect::<Vec<Option<AirOpenings<EF>>>>();
         for state in states {
-            for (air_index, opening) in state.into_openings() {
+            for (air_index, opening) in B::openings(state) {
                 openings[air_index] = Some(opening);
             }
         }
@@ -1487,18 +1515,21 @@ mod tests {
         BABYBEAR_POSEIDON2_HALF_FULL_ROUNDS, BABYBEAR_POSEIDON2_PARTIAL_ROUNDS_16,
         BABYBEAR_S_BOX_DEGREE, BabyBear, GenericPoseidon2LinearLayersBabyBear, Poseidon2BabyBear,
     };
+    use p3_binary_field::{BinaryChallenger, BinaryField128};
     use p3_blake3_air::Blake3Air;
-    use p3_challenger::DuplexChallenger;
+    use p3_challenger::{DuplexChallenger, HashChallenger};
     use p3_field::PrimeCharacteristicRing;
     use p3_field::extension::BinomialExtensionField;
+    use p3_keccak::Keccak256Hash;
     use p3_lookup::{Count, InteractionBuilder};
     use p3_matrix::Matrix;
     use p3_matrix::dense::RowMajorMatrix;
     use p3_multilinear_util::poly::Poly;
     use p3_poseidon2_air::{Poseidon2Air, RoundConstants};
     use p3_util::log2_strict_usize;
-    use rand::SeedableRng;
+    use rand::distr::{Distribution, StandardUniform};
     use rand::rngs::SmallRng;
+    use rand::{RngExt, SeedableRng};
 
     use super::*;
 
@@ -2155,6 +2186,281 @@ mod tests {
             .expect("subset-next AIR must verify");
     }
 
+    type BinaryChal = BinaryChallenger<BinaryField128, HashChallenger<u8, Keccak256Hash, 32>>;
+
+    fn binary_challenger() -> BinaryChal {
+        BinaryChal::from_hasher(b"p3-multi-stark-zerocheck-test".to_vec(), Keccak256Hash)
+    }
+
+    /// Degree-three AIR reading main columns 3 and 1 and preprocessed column 1 on the next row.
+    ///
+    /// ```text
+    ///     transition: next.main[1] = main[0] * main[2]
+    ///     transition: next.main[3] = main[3] * main[1] + main[0]
+    ///     transition: next.prep[1] = prep[0] * main[2]
+    /// ```
+    ///
+    /// With `declare_all`, the AIR keeps the default declaration of every column instead.
+    /// Both declarations describe the same constraints.
+    struct SuccessorSubsetAir {
+        declare_all: bool,
+    }
+
+    impl<X> BaseAir<X> for SuccessorSubsetAir {
+        fn width(&self) -> usize {
+            4
+        }
+        fn preprocessed_width(&self) -> usize {
+            2
+        }
+        fn main_next_row_columns(&self) -> Vec<usize> {
+            // Out of order on purpose: the declaration is a set, not a layout.
+            if self.declare_all {
+                (0..4).collect()
+            } else {
+                vec![3, 1]
+            }
+        }
+        fn preprocessed_next_row_columns(&self) -> Vec<usize> {
+            if self.declare_all {
+                (0..2).collect()
+            } else {
+                vec![1]
+            }
+        }
+    }
+
+    impl<AB: AirBuilder> Air<AB> for SuccessorSubsetAir {
+        fn eval(&self, builder: &mut AB) {
+            let main = builder.main();
+            let (local, next) = (main.current_slice(), main.next_slice());
+            let preprocessed = builder.preprocessed();
+            let prep = preprocessed.current_slice()[0];
+            let prep_next = preprocessed.next_slice()[1];
+
+            let mut transition = builder.when_transition();
+            transition.assert_eq(next[1], local[0] * local[2]);
+            transition.assert_eq(next[3], local[3] * local[1] + local[0]);
+            transition.assert_eq(prep_next, prep * local[2]);
+        }
+    }
+
+    /// Satisfying main and preprocessed traces for [`SuccessorSubsetAir`].
+    ///
+    /// Every column the AIR never reads ahead is fresh randomness on each row.
+    fn successor_subset_traces<F: Field>(n: usize) -> (RowMajorMatrix<F>, RowMajorMatrix<F>)
+    where
+        StandardUniform: Distribution<F>,
+    {
+        let mut rng = SmallRng::seed_from_u64(0x5ECC);
+        let mut main: Vec<F> = (0..4).map(|_| rng.random()).collect();
+        let mut prep: Vec<F> = (0..2).map(|_| rng.random()).collect();
+        for row in 1..n {
+            let [m0, m1, m2, m3] = main[4 * (row - 1)..4 * row] else {
+                unreachable!()
+            };
+            let p0 = prep[2 * (row - 1)];
+            main.extend([rng.random(), m0 * m2, rng.random(), m3 * m1 + m0]);
+            prep.extend([rng.random(), p0 * m2]);
+        }
+        (RowMajorMatrix::new(main, 4), RowMajorMatrix::new(prep, 2))
+    }
+
+    /// Degree-two AIR that reads no successor column at all.
+    ///
+    /// With `declare_all`, the AIR keeps the default declaration of every column instead.
+    struct SuccessorFreeAir {
+        declare_all: bool,
+    }
+
+    impl<X> BaseAir<X> for SuccessorFreeAir {
+        fn width(&self) -> usize {
+            3
+        }
+        fn main_next_row_columns(&self) -> Vec<usize> {
+            if self.declare_all {
+                (0..3).collect()
+            } else {
+                vec![]
+            }
+        }
+    }
+
+    impl<AB: AirBuilder> Air<AB> for SuccessorFreeAir {
+        fn eval(&self, builder: &mut AB) {
+            let main = builder.main();
+            let local = main.current_slice();
+            builder.assert_eq(local[2], local[0] * local[1]);
+        }
+    }
+
+    /// Satisfying trace for [`SuccessorFreeAir`].
+    fn successor_free_trace<F: Field>(n: usize) -> RowMajorMatrix<F>
+    where
+        StandardUniform: Distribution<F>,
+    {
+        let mut rng = SmallRng::seed_from_u64(0xF12EE);
+        let values = (0..n)
+            .flat_map(|_| {
+                let (a, b): (F, F) = (rng.random(), rng.random());
+                [a, b, a * b]
+            })
+            .collect();
+        RowMajorMatrix::new(values, 3)
+    }
+
+    /// Prove one AIR through the zerocheck, then verify the proof.
+    fn prove_and_verify<F, EF, A, Ch>(
+        air: &A,
+        main: &RowMajorMatrix<F>,
+        preprocessed: Option<&RowMajorMatrix<F>>,
+        challenger: impl Fn() -> Ch,
+    ) -> (ZerocheckProof<F, EF>, Point<EF>)
+    where
+        F: TranscriptField,
+        EF: ExtensionField<F>,
+        A: ProverAir<F, EF>,
+        EF::ExtensionPacking: From<EF> + From<F::Packing>,
+        Ch: FieldChallenger<F> + GrindingChallenger<Witness = F>,
+    {
+        let airs = [air];
+        let zerocheck = AirZerocheck::new(&airs, 0);
+        let table = Table::new(main.transpose());
+        let preprocessed = preprocessed.map(|trace| Table::new(trace.transpose()));
+        let proven = zerocheck.prove::<F, EF, _>(
+            &[preprocessed.as_ref()],
+            &[&table],
+            &[&[]],
+            &mut challenger(),
+        );
+        let point = zerocheck
+            .verify::<F, EF, _>(
+                &proven.0,
+                &[table.num_variables()],
+                &[&[]],
+                &mut challenger(),
+            )
+            .expect("honest proof must verify");
+        assert_eq!(point, proven.1);
+        proven
+    }
+
+    /// Prove an AIR declaring only the successor columns it reads, and its twin declaring all.
+    ///
+    /// The declaration is not bound into the zerocheck transcript.
+    /// So both proofs must carry the same round polynomials, point, and current-row openings.
+    /// The declared successor openings must match the corresponding entries of the full set.
+    fn check_declared_successors_match_all<F, EF, A, Ch>(
+        declared: &A,
+        all: &A,
+        main: &RowMajorMatrix<F>,
+        preprocessed: Option<&RowMajorMatrix<F>>,
+        challenger: impl Fn() -> Ch,
+    ) where
+        F: TranscriptField,
+        EF: ExtensionField<F>,
+        A: ProverAir<F, EF>,
+        EF::ExtensionPacking: From<EF> + From<F::Packing>,
+        Ch: FieldChallenger<F> + GrindingChallenger<Witness = F>,
+    {
+        let (declared_proof, declared_point) =
+            prove_and_verify::<F, EF, _, _>(declared, main, preprocessed, &challenger);
+        let (all_proof, all_point) =
+            prove_and_verify::<F, EF, _, _>(all, main, preprocessed, &challenger);
+
+        assert_eq!(
+            declared_proof.sumcheck.round_polys,
+            all_proof.sumcheck.round_polys
+        );
+        assert_eq!(declared_point, all_point);
+        assert_eq!(declared_proof.local, all_proof.local);
+        assert_eq!(
+            declared_proof.preprocessed_local,
+            all_proof.preprocessed_local
+        );
+
+        // Each declared successor opening is the full set's entry for that column.
+        let pick = |columns: Vec<usize>, all_values: &[EF]| {
+            columns
+                .into_iter()
+                .map(|column| all_values[column])
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            declared_proof.next[0],
+            pick(declared.main_next_row_columns(), &all_proof.next[0])
+        );
+        assert_eq!(
+            declared_proof.preprocessed_next[0],
+            pick(
+                declared.preprocessed_next_row_columns(),
+                &all_proof.preprocessed_next[0]
+            )
+        );
+    }
+
+    /// Trace heights for the prime-field successor twins.
+    ///
+    /// A round runs the packed kernel only while half its rows fill a SIMD lane group.
+    ///
+    /// ```text
+    ///     64 rows : packed first rounds, then scalar once the residual rows run short
+    ///     4, 2    : below a lane group of every SIMD packing, so scalar from the first round
+    /// ```
+    const PRIME_SUCCESSOR_HEIGHTS: [usize; 3] = [64, 4, 2];
+
+    #[test]
+    fn successor_subset_matches_full_declaration_over_a_prime_field() {
+        for height in PRIME_SUCCESSOR_HEIGHTS {
+            let (main, preprocessed) = successor_subset_traces::<F>(height);
+            check_declared_successors_match_all::<F, EF, _, _>(
+                &SuccessorSubsetAir { declare_all: false },
+                &SuccessorSubsetAir { declare_all: true },
+                &main,
+                Some(&preprocessed),
+                fresh_challenger,
+            );
+        }
+    }
+
+    #[test]
+    fn successor_free_matches_full_declaration_over_a_prime_field() {
+        for height in PRIME_SUCCESSOR_HEIGHTS {
+            let main = successor_free_trace::<F>(height);
+            check_declared_successors_match_all::<F, EF, _, _>(
+                &SuccessorFreeAir { declare_all: false },
+                &SuccessorFreeAir { declare_all: true },
+                &main,
+                None,
+                fresh_challenger,
+            );
+        }
+    }
+
+    #[test]
+    fn successor_subset_matches_full_declaration_over_a_binary_field() {
+        let (main, preprocessed) = successor_subset_traces::<BinaryField128>(32);
+        check_declared_successors_match_all::<BinaryField128, BinaryField128, _, _>(
+            &SuccessorSubsetAir { declare_all: false },
+            &SuccessorSubsetAir { declare_all: true },
+            &main,
+            Some(&preprocessed),
+            binary_challenger,
+        );
+    }
+
+    #[test]
+    fn successor_free_matches_full_declaration_over_a_binary_field() {
+        let main = successor_free_trace::<BinaryField128>(32);
+        check_declared_successors_match_all::<BinaryField128, BinaryField128, _, _>(
+            &SuccessorFreeAir { declare_all: false },
+            &SuccessorFreeAir { declare_all: true },
+            &main,
+            None,
+            binary_challenger,
+        );
+    }
+
     #[test]
     fn zerocheck_poseidon2() {
         // Invariant on the Poseidon2 permutation AIR:
@@ -2762,6 +3068,20 @@ mod tests {
             trans.assert_eq(local.right, next.left);
             trans.assert_eq(local.left + local.right, next.right);
         }
+    }
+
+    #[test]
+    fn constraint_count_includes_the_boundary_io_pins() {
+        // The folder batches the AIR's own constraints, then one pin per listed cell.
+        //
+        //     no cell     : 2 transitions            -> 2
+        //     three cells : 2 transitions + 3 pins   -> 5
+        let loose = get_air_profile::<F, EF, _>(&FibRecurrenceAir { cells: &[] });
+        assert_eq!(loose.num_constraints, 2);
+        let pinned = get_air_profile::<F, EF, _>(&FibRecurrenceAir {
+            cells: &FIB_IO_CELLS,
+        });
+        assert_eq!(pinned.num_constraints, 5);
     }
 
     #[test]
