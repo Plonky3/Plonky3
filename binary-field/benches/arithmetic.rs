@@ -11,7 +11,7 @@ use std::hint::black_box;
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use p3_binary_field::{
     BinaryField8, BinaryField16, BinaryField32, BinaryField64, BinaryField128, Ghash128,
-    PackedRijndael8b, Rijndael8b, TowerLevel, poly_basis,
+    PackedRijndael8b, Poly64, Poly192, Rijndael8b, TowerLevel, poly_basis,
 };
 use p3_field::{BasedVectorSpace, Field, PackedValue, PrimeCharacteristicRing};
 use rand::distr::{Distribution, StandardUniform};
@@ -945,6 +945,83 @@ fn bench_aes(c: &mut Criterion) {
     group.finish();
 }
 
+/// The 64-bit polynomial-basis field and its cubic extension, against the 128-bit one.
+///
+/// There is no earlier implementation of either, so the comparison is against the field the
+/// crate already had at the same operation.
+///
+/// Every arm folds a dependent chain, so each product waits on the one before it.
+fn bench_lean_pair(c: &mut Criterion) {
+    let mut rng = SmallRng::seed_from_u64(11);
+
+    let narrow: Vec<Poly64> = (0..REPS).map(|_| rng.random()).collect();
+    let cubic: Vec<Poly192> = (0..REPS).map(|_| rng.random()).collect();
+    let wide: Vec<Ghash128> = (0..REPS).map(|_| rng.random()).collect();
+    let tower: Vec<BinaryField64> = (0..REPS).map(|_| rng.random()).collect();
+
+    {
+        let mut group = c.benchmark_group("lean/mul");
+        group.throughput(criterion::Throughput::Elements(REPS as u64));
+        group.bench_function("gf64", |b| {
+            b.iter(|| {
+                black_box(&narrow)
+                    .iter()
+                    .fold(Poly64::ONE, |acc, &y| acc * y)
+            });
+        });
+        group.bench_function("gf64/tower", |b| {
+            b.iter(|| {
+                black_box(&tower)
+                    .iter()
+                    .fold(BinaryField64::ONE, |acc, &y| acc * y)
+            });
+        });
+        group.bench_function("cubic", |b| {
+            b.iter(|| {
+                black_box(&cubic)
+                    .iter()
+                    .fold(Poly192::ONE, |acc, &y| acc * y)
+            });
+        });
+        group.bench_function("gf128", |b| {
+            b.iter(|| {
+                black_box(&wide)
+                    .iter()
+                    .fold(Ghash128::ONE, |acc, &y| acc * y)
+            });
+        });
+        group.finish();
+    }
+
+    let mut group = c.benchmark_group("lean/inverse");
+    group.throughput(criterion::Throughput::Elements(REPS as u64));
+    group.bench_function("gf64", |b| {
+        b.iter(|| {
+            black_box(&narrow)
+                .iter()
+                .map(|x| x.inverse())
+                .fold(Poly64::ZERO, |acc, y| acc + y)
+        });
+    });
+    group.bench_function("cubic", |b| {
+        b.iter(|| {
+            black_box(&cubic)
+                .iter()
+                .map(|x| x.inverse())
+                .fold(Poly192::ZERO, |acc, y| acc + y)
+        });
+    });
+    group.bench_function("gf128", |b| {
+        b.iter(|| {
+            black_box(&wide)
+                .iter()
+                .map(|x| x.inverse())
+                .fold(Ghash128::ZERO, |acc, y| acc + y)
+        });
+    });
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_mul,
@@ -966,6 +1043,7 @@ criterion_group!(
     bench_grind,
     bench_bulk,
     bench_batch_kernels,
-    bench_aes
+    bench_aes,
+    bench_lean_pair
 );
 criterion_main!(benches);

@@ -14,9 +14,11 @@
 //! registers; every backend is checked against portable arithmetic.
 
 mod basis;
+mod gf64;
 mod powers;
 mod sqrt;
 
+pub(crate) use gf64::{poly_dot_64, poly_inverse_64, poly_mul_64, poly_sqrt_64, poly_square_64};
 pub(crate) use powers::poly_dot_powers_128;
 pub(crate) use sqrt::poly_sqrt_128;
 
@@ -56,8 +58,8 @@ mod portable;
 ))]
 pub(crate) use basis::TAIL_128;
 pub(crate) use basis::{
-    poly_to_tower_128, poly_to_tower_128_slice, tower_image_128, tower_to_poly_128,
-    tower_to_poly_128_slice,
+    poly_to_tower_64, poly_to_tower_128, poly_to_tower_128_slice, tower_image_64, tower_image_128,
+    tower_to_poly_64, tower_to_poly_128, tower_to_poly_128_slice,
 };
 
 use crate::BinaryField64;

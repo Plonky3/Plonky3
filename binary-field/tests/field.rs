@@ -365,6 +365,88 @@ mod rijndael_8b {
     );
 }
 
+mod poly_64 {
+    use num_bigint::BigUint;
+    use p3_field::PrimeCharacteristicRing;
+    use p3_field_testing::test_binary_field;
+
+    type F = p3_binary_field::Poly64;
+
+    const ZEROS: [F; 1] = [F::ZERO];
+    const ONES: [F; 1] = [F::ONE];
+
+    /// Prime factorization of `2^64 - 1`.
+    fn multiplicative_group_prime_factorization() -> [(BigUint, u32); 7] {
+        [
+            (BigUint::from(3u32), 1),
+            (BigUint::from(5u32), 1),
+            (BigUint::from(17u32), 1),
+            (BigUint::from(257u32), 1),
+            (BigUint::from(641u32), 1),
+            (BigUint::from(65537u32), 1),
+            (BigUint::from(6700417u32), 1),
+        ]
+    }
+
+    test_binary_field!(
+        super::F,
+        &super::ZEROS,
+        &super::ONES,
+        &super::multiplicative_group_prime_factorization()
+    );
+}
+
+mod poly_192 {
+    use num_bigint::BigUint;
+    use p3_field::PrimeCharacteristicRing;
+    use p3_field_testing::test_binary_field;
+
+    type F = p3_binary_field::Poly192;
+
+    const ZEROS: [F; 1] = [F::ZERO];
+    const ONES: [F; 1] = [F::ONE];
+
+    /// Prime factorization of `2^192 - 1`.
+    ///
+    /// The largest factor is `2^64 - 2^32 + 1`.
+    fn multiplicative_group_prime_factorization() -> [(BigUint, u32); 15] {
+        [
+            (BigUint::from(3u32), 2),
+            (BigUint::from(5u32), 1),
+            (BigUint::from(7u32), 1),
+            (BigUint::from(13u32), 1),
+            (BigUint::from(17u32), 1),
+            (BigUint::from(97u32), 1),
+            (BigUint::from(193u32), 1),
+            (BigUint::from(241u32), 1),
+            (BigUint::from(257u32), 1),
+            (BigUint::from(641u32), 1),
+            (BigUint::from(673u32), 1),
+            (BigUint::from(65537u32), 1),
+            (BigUint::from(6700417u32), 1),
+            (BigUint::from(22253377u32), 1),
+            (BigUint::from(18446744069414584321u64), 1),
+        ]
+    }
+
+    test_binary_field!(
+        super::F,
+        &super::ZEROS,
+        &super::ONES,
+        &super::multiplicative_group_prime_factorization()
+    );
+}
+
+mod poly_192_over_poly_64 {
+    use p3_field_testing::{test_extension_field, test_frobenius};
+
+    type F = p3_binary_field::Poly64;
+    type EF = p3_binary_field::Poly192;
+
+    test_extension_field!(super::F, super::EF);
+    test_frobenius!(super::F, super::EF);
+}
+
 mod gf2_128_over_gf2_16 {
     use p3_field_testing::{test_extension_field, test_frobenius};
 

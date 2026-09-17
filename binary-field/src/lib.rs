@@ -13,6 +13,8 @@ mod gf2;
 mod ghash;
 mod linear;
 mod packed;
+mod poly192;
+mod poly64;
 pub mod poly_basis;
 mod poly_slice;
 mod tables;
@@ -33,6 +35,8 @@ pub use ghash::Ghash128;
     any(target_feature = "avx2", target_feature = "avx512f")
 ))]
 pub use packed::*;
+pub use poly64::Poly64;
+pub use poly192::Poly192;
 pub use tower::{
     BinaryField2, BinaryField4, BinaryField8, BinaryField16, BinaryField32, BinaryField64,
     BinaryField128, TowerLevel,
