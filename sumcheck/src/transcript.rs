@@ -443,6 +443,7 @@ mod tests {
     use alloc::vec::Vec;
 
     use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
+    use p3_challenger::testing::pow_difficulties;
     use p3_challenger::{CanSample, DuplexChallenger};
     use p3_field::PrimeCharacteristicRing;
     use p3_field::extension::BinomialExtensionField;
@@ -667,5 +668,35 @@ mod tests {
             CanSample::<F>::sample(&mut prover_challenger),
             CanSample::<F>::sample(&mut verifier_challenger)
         );
+    }
+
+    #[test]
+    fn the_described_grinding_matches_the_configured_difficulty() {
+        // Invariant: a grinding difficulty lives in two places.
+        //
+        //     transcript  ->  the bits the pattern describes
+        //     model       ->  the bits this protocol's own report credits
+        //
+        // Both read the same configuration field, so they must agree round for round.
+        //
+        // This protocol prices its own grinding, so the shared budget never compares it.
+        //
+        // Fixture state: four rounds, ground and unground.
+        for bits in [0, 4] {
+            let shape = SumcheckShape::new(4, bits, Basis::Evaluation);
+            let described = pow_difficulties(&shape.pattern::<F, EF>());
+
+            // A zero difficulty describes no step.
+            //
+            // The ground case is therefore the only one that records anything.
+            let expected = if bits == 0 { 0 } else { shape.num_rounds };
+            assert_eq!(described.len(), expected);
+
+            assert!(
+                described
+                    .iter()
+                    .all(|&(label, got)| label == ROUND_POW && got == bits)
+            );
+        }
     }
 }
