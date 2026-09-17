@@ -42,14 +42,14 @@ type Challenger = BinaryChallenger<F, HashChallenger<u8, Keccak256Hash, 32>>;
 
 /// Multi-STARK configuration proving AIRs over `BinaryField128` with the binary PCS.
 pub struct BinaryStarkConfig {
-    pcs: BinaryPcs<Mmcs>,
+    pcs: BinaryPcs<F, F, Mmcs, Mmcs>,
 }
 
 impl MultiStarkConfig for BinaryStarkConfig {
     type Val = F;
     type Challenge = F;
     type Challenger = Challenger;
-    type Pcs = BinaryPcs<Mmcs>;
+    type Pcs = BinaryPcs<F, F, Mmcs, Mmcs>;
 
     fn pcs(&self) -> &Self::Pcs {
         &self.pcs
@@ -71,7 +71,7 @@ impl MultiStarkConfig for BinaryStarkConfig {
 
     fn committed_table<'a>(
         &self,
-        prover_data: &'a BinaryPcsProverData<Mmcs>,
+        prover_data: &'a BinaryPcsProverData<F, F, Mmcs>,
         table_index: usize,
     ) -> &'a Table<F> {
         prover_data.table(table_index)
@@ -87,11 +87,13 @@ pub fn binary_config(
     params: BinaryPcsParams,
     folding: usize,
 ) -> Result<BinaryStarkConfig, BinaryPcsConfigError> {
-    let pcs_config = BinaryPcsConfig::try_new_with_folding(arity, params, folding.min(arity))?;
+    let pcs_config =
+        BinaryPcsConfig::try_new_with_folding::<F, F>(arity, params, folding.min(arity))?;
     let merkle = MerkleMmcs::new(Hash::new(Keccak256Hash), Compress::new(Keccak256Hash), 0);
-    let mmcs = Mmcs::for_folding(merkle, &pcs_config);
+    let mmcs = Mmcs::for_folding(merkle.clone(), &pcs_config);
+    let round_mmcs = Mmcs::for_folding(merkle, &pcs_config);
     Ok(BinaryStarkConfig {
-        pcs: BinaryPcs::new(pcs_config, mmcs),
+        pcs: BinaryPcs::new(pcs_config, mmcs, round_mmcs),
     })
 }
 

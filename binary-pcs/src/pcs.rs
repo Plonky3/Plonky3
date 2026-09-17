@@ -29,7 +29,7 @@ use alloc::vec::Vec;
 use core::marker::PhantomData;
 
 use p3_binary_dft::EncodableLevel;
-use p3_binary_field::TowerLevel;
+use p3_binary_field::{Ghash128, TowerLevel};
 use p3_challenger::fs::TranscriptField;
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
 use p3_commit::{Mmcs, MultilinearPcs};
@@ -37,7 +37,7 @@ use p3_field::ExtensionField;
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
 use p3_sumcheck::layout::{Layout, Verifier, Witness, observe_commitment};
-use p3_sumcheck::strategy::Basis;
+use p3_sumcheck::strategy::{Basis, FromTable};
 use p3_sumcheck::{
     OpeningEvals, OpeningProtocol, PrescribedOpeningSecurity, PrescribedPointPcs, SumcheckData,
     SumcheckError,
@@ -110,9 +110,10 @@ impl<F: EncodableLevel, EF, MT, MX> BinaryPcs<F, EF, MT, MX> {
 impl<F, EF, MT, MX> BinaryPcs<F, EF, MT, MX>
 where
     F: EncodableLevel + TranscriptField + FoldAlphabet<EF>,
-    EF: ExtensionField<F> + TowerLevel + FoldAlphabet<EF>,
+    EF: ExtensionField<F> + TowerLevel + FoldAlphabet<EF> + From<Ghash128>,
     MT: Mmcs<F>,
     MX: Mmcs<EF, Error = MT::Error>,
+    Ghash128: FromTable<EF>,
 {
     /// Check table dimensions and scalar claim capacity before committing or opening.
     ///
@@ -521,7 +522,7 @@ where
 impl<F, EF, MT, MX, Challenger> MultilinearPcs<EF, Challenger> for BinaryPcs<F, EF, MT, MX>
 where
     F: EncodableLevel + TranscriptField + FoldAlphabet<EF>,
-    EF: ExtensionField<F> + TowerLevel + FoldAlphabet<EF>,
+    EF: ExtensionField<F> + TowerLevel + FoldAlphabet<EF> + From<Ghash128>,
     MT: Mmcs<F>,
     MX: Mmcs<EF, Error = MT::Error>,
     Challenger: FieldChallenger<F>
@@ -529,6 +530,7 @@ where
         + CanSampleUniformBits<F>
         + CanObserve<MT::Commitment>
         + CanObserve<MX::Commitment>,
+    Ghash128: FromTable<EF>,
 {
     type Val = F;
     type Commitment = MT::Commitment;
@@ -588,7 +590,7 @@ where
 impl<F, EF, MT, MX, Challenger> PrescribedPointPcs<EF, Challenger> for BinaryPcs<F, EF, MT, MX>
 where
     F: EncodableLevel + TranscriptField + FoldAlphabet<EF>,
-    EF: ExtensionField<F> + TowerLevel + FoldAlphabet<EF>,
+    EF: ExtensionField<F> + TowerLevel + FoldAlphabet<EF> + From<Ghash128>,
     MT: Mmcs<F>,
     MX: Mmcs<EF, Error = MT::Error>,
     Challenger: FieldChallenger<F>
@@ -596,6 +598,7 @@ where
         + CanSampleUniformBits<F>
         + CanObserve<MT::Commitment>
         + CanObserve<MX::Commitment>,
+    Ghash128: FromTable<EF>,
 {
     fn prescribed_security(&self, protocol: &OpeningProtocol) -> Option<PrescribedOpeningSecurity> {
         self.validate_opening_protocol(protocol).ok()?;

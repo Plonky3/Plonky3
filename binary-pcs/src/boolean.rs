@@ -53,7 +53,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use p3_binary_dft::EncodableLevel;
-use p3_binary_field::{PackedGf2, TowerLevel, Underlier};
+use p3_binary_field::{Ghash128, PackedGf2, TowerLevel, Underlier};
 use p3_challenger::fs::TranscriptField;
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
 use p3_commit::{Mmcs, MultilinearPcs};
@@ -65,6 +65,7 @@ use p3_sumcheck::layout::{Layout, SuffixProver};
 use p3_sumcheck::ring_switch::bits::{
     BitPacking, BitRingSwitch, BitRingSwitchProof, BitRingSwitchProofError,
 };
+use p3_sumcheck::strategy::FromTable;
 use p3_sumcheck::{
     ClaimPool, ClaimPoolError, OpeningBatch, OpeningProtocol, PrescribedPointPcs, TableShape,
     TableSpec,
@@ -154,9 +155,15 @@ pub struct BooleanPcs<EF: EncodableLevel, MT, MX> {
 
 impl<EF, MT, MX> BooleanPcs<EF, MT, MX>
 where
-    EF: EncodableLevel + TranscriptField + TowerLevel + FoldAlphabet<EF> + Coordinates,
+    EF: EncodableLevel
+        + TranscriptField
+        + TowerLevel
+        + FoldAlphabet<EF>
+        + Coordinates
+        + From<Ghash128>,
     MT: Mmcs<EF>,
     MX: Mmcs<EF, Error = MT::Error>,
+    Ghash128: FromTable<EF>,
 {
     /// Build a Boolean commitment over a bit witness of `num_variables` variables.
     ///
@@ -253,7 +260,12 @@ where
 
 impl<EF, MT, MX, Challenger> BooleanMultilinearPcs<EF, Challenger> for BooleanPcs<EF, MT, MX>
 where
-    EF: EncodableLevel + TranscriptField + TowerLevel + FoldAlphabet<EF> + Coordinates,
+    EF: EncodableLevel
+        + TranscriptField
+        + TowerLevel
+        + FoldAlphabet<EF>
+        + Coordinates
+        + From<Ghash128>,
     MT: Mmcs<EF>,
     MX: Mmcs<EF, Error = MT::Error>,
     Challenger: FieldChallenger<EF>
@@ -261,6 +273,7 @@ where
         + CanSampleUniformBits<EF>
         + CanObserve<MT::Commitment>
         + CanObserve<MX::Commitment>,
+    Ghash128: FromTable<EF>,
 {
     type Commitment = MT::Commitment;
     type ProverData = BinaryPcsProverData<EF, EF, MT>;
