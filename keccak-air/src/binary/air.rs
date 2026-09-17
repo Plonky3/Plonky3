@@ -110,17 +110,15 @@ impl<AB: AirBuilder> Air<AB> for KeccakBinaryAir {
 
         // Theta:
         //     C[x][z]     = sum_y A[y][x][z]
-        //     A'[y][x][z] = A[y][x][z] + C[x - 1][z] + C[x + 1][z - 1]
+        //     D[x][z]     = C[x - 1][z] + C[x + 1][z - 1]
+        //     A'[y][x][z] = A[y][x][z] + D[x][z]
         let c: [[AB::Expr; 64]; 5] =
             array::from_fn(|x| array::from_fn(|z| (0..5).map(|y| local.a[y][x][z].into()).sum()));
+        let d: [[AB::Expr; 64]; 5] = array::from_fn(|x| {
+            array::from_fn(|z| c[(x + 4) % 5][z].clone() + c[(x + 1) % 5][(z + 63) % 64].clone())
+        });
         let a_prime: [[[AB::Expr; 64]; 5]; 5] = array::from_fn(|y| {
-            array::from_fn(|x| {
-                array::from_fn(|z| {
-                    c[(x + 4) % 5][z].clone()
-                        + c[(x + 1) % 5][(z + 63) % 64].clone()
-                        + local.a[y][x][z]
-                })
-            })
+            array::from_fn(|x| array::from_fn(|z| d[x][z].clone() + local.a[y][x][z]))
         });
 
         // Rho and pi: B[x][y][z] is a bit of A'.
