@@ -296,11 +296,21 @@ static POLY_TO_TOWER_128: [[u128; 256]; 16] = byte_tables(&invert(&COLUMNS_128, 
 /// The table-driven route sums a byte at a time, which constant evaluation cannot index into.
 /// This walks the bits instead.
 pub(crate) const fn tower_image_128(v: u128) -> u128 {
+    image(v, 128, &COLUMNS_128)
+}
+
+/// The polynomial-basis coordinates of a 64-bit tower-basis bit pattern, at compile time.
+pub(crate) const fn tower_image_64(v: u64) -> u64 {
+    image(v as u128, 64, &COLUMNS_64) as u64
+}
+
+/// The image of a bit pattern under the change of basis with the given columns.
+const fn image(v: u128, bits: usize, columns: &[u128; 128]) -> u128 {
     let mut acc = 0;
     let mut i = 0;
-    while i < 128 {
+    while i < bits {
         if (v >> i) & 1 == 1 {
-            acc ^= COLUMNS_128[i];
+            acc ^= columns[i];
         }
         i += 1;
     }
@@ -611,13 +621,13 @@ mod blocked {
 
 /// `GF(2^64)` from the tower basis to the polynomial basis.
 #[inline]
-pub(super) fn tower_to_poly_64(v: u64) -> u64 {
+pub(crate) fn tower_to_poly_64(v: u64) -> u64 {
     apply_64(&TOWER_TO_POLY_64, v)
 }
 
 /// `GF(2^64)` from the polynomial basis back to the tower basis.
 #[inline]
-pub(super) fn poly_to_tower_64(v: u64) -> u64 {
+pub(crate) fn poly_to_tower_64(v: u64) -> u64 {
     apply_64(&POLY_TO_TOWER_64, v)
 }
 

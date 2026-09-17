@@ -11,7 +11,7 @@ use std::hint::black_box;
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use p3_binary_field::{
     BinaryField8, BinaryField16, BinaryField32, BinaryField64, BinaryField128, Ghash128,
-    TowerLevel, poly_basis,
+    LinearizedPoly8b, PackedRijndael8b, Poly64, Poly192, Rijndael8b, TowerLevel, poly_basis,
 };
 use p3_field::{BasedVectorSpace, Field, PackedValue, PrimeCharacteristicRing};
 use rand::distr::{Distribution, StandardUniform};
@@ -853,6 +853,265 @@ fn bench_batch_kernels(c: &mut Criterion) {
     group.finish();
 }
 
+/// The AES field against the tower's own byte field, scalar and packed.
+///
+/// Every arm rewrites one buffer in place, so no arm pays a reduction or a copy another skips.
+///
+/// The buffer is reused across iterations rather than restored, which is sound because every
+/// routine here runs a fixed schedule: its cost does not depend on the values it reads.
+///
+/// ```text
+///     tower      byte table lookup, the representation already in the crate
+///     scalar     shift-and-fold, the portable route here
+///     packed     one instruction per register, where the target has it
+/// ```
+fn bench_aes(c: &mut Criterion) {
+    /// Bytes per buffer, comfortably inside the first level of cache.
+    const BYTES: usize = 4096;
+
+    let mut rng = SmallRng::seed_from_u64(7);
+    let left: Vec<u8> = (0..BYTES).map(|_| rng.random::<u8>() | 1).collect();
+    let right: Vec<u8> = (0..BYTES).map(|_| rng.random::<u8>() | 1).collect();
+
+    let tower_right: Vec<BinaryField8> =
+        right.iter().map(|&b| BinaryField8::from_repr(b)).collect();
+    let aes_right: Vec<Rijndael8b> = right.iter().map(|&b| Rijndael8b::from_byte(b)).collect();
+
+    let mut tower_values: Vec<BinaryField8> =
+        left.iter().map(|&b| BinaryField8::from_repr(b)).collect();
+    let mut aes_values: Vec<Rijndael8b> = left.iter().map(|&b| Rijndael8b::from_byte(b)).collect();
+
+    let block = |from: &[Rijndael8b]| -> Vec<PackedRijndael8b<64>> {
+        from.as_chunks::<64>()
+            .0
+            .iter()
+            .map(|c| *PackedRijndael8b::<64>::from_slice(c))
+            .collect()
+    };
+    let packed_right = block(&aes_values);
+    let mut packed_values = block(&aes_values);
+
+    {
+        let mut group = c.benchmark_group("aes/mul");
+        group.throughput(criterion::Throughput::Elements(BYTES as u64));
+        group.bench_function("tower", |b| {
+            b.iter(|| {
+                for (value, &factor) in black_box(&mut tower_values).iter_mut().zip(&tower_right) {
+                    *value *= factor;
+                }
+            });
+        });
+        group.bench_function("scalar", |b| {
+            b.iter(|| {
+                for (value, &factor) in black_box(&mut aes_values).iter_mut().zip(&aes_right) {
+                    *value *= factor;
+                }
+            });
+        });
+        group.bench_function("packed", |b| {
+            b.iter(|| {
+                for (value, &factor) in black_box(&mut packed_values).iter_mut().zip(&packed_right)
+                {
+                    *value *= factor;
+                }
+            });
+        });
+        group.finish();
+    }
+
+    let mut group = c.benchmark_group("aes/inverse");
+    group.throughput(criterion::Throughput::Elements(BYTES as u64));
+    group.bench_function("tower", |b| {
+        b.iter(|| {
+            for value in black_box(&mut tower_values).iter_mut() {
+                *value = value.try_inverse().unwrap_or(BinaryField8::ONE);
+            }
+        });
+    });
+    group.bench_function("scalar", |b| {
+        b.iter(|| {
+            for value in black_box(&mut aes_values).iter_mut() {
+                *value = value.invert_or_zero();
+            }
+        });
+    });
+    group.bench_function("packed", |b| {
+        b.iter(|| {
+            for block in black_box(&mut packed_values).iter_mut() {
+                *block = block.invert_or_zero();
+            }
+        });
+    });
+    group.finish();
+}
+
+/// The 64-bit polynomial-basis field and its cubic extension, against the 128-bit one.
+///
+/// There is no earlier implementation of either, so the comparison is against the field the
+/// crate already had at the same operation.
+///
+/// Every arm folds a dependent chain, so each product waits on the one before it.
+fn bench_lean_pair(c: &mut Criterion) {
+    let mut rng = SmallRng::seed_from_u64(11);
+
+    let narrow: Vec<Poly64> = (0..REPS).map(|_| rng.random()).collect();
+    let cubic: Vec<Poly192> = (0..REPS).map(|_| rng.random()).collect();
+    let wide: Vec<Ghash128> = (0..REPS).map(|_| rng.random()).collect();
+    let tower: Vec<BinaryField64> = (0..REPS).map(|_| rng.random()).collect();
+
+    {
+        let mut group = c.benchmark_group("lean/mul");
+        group.throughput(criterion::Throughput::Elements(REPS as u64));
+        group.bench_function("gf64", |b| {
+            b.iter(|| {
+                black_box(&narrow)
+                    .iter()
+                    .fold(Poly64::ONE, |acc, &y| acc * y)
+            });
+        });
+        group.bench_function("gf64/tower", |b| {
+            b.iter(|| {
+                black_box(&tower)
+                    .iter()
+                    .fold(BinaryField64::ONE, |acc, &y| acc * y)
+            });
+        });
+        group.bench_function("cubic", |b| {
+            b.iter(|| {
+                black_box(&cubic)
+                    .iter()
+                    .fold(Poly192::ONE, |acc, &y| acc * y)
+            });
+        });
+        group.bench_function("cubic/composed", |b| {
+            b.iter(|| {
+                black_box(&cubic)
+                    .iter()
+                    .fold(Poly192::ONE, |acc, &y| acc.composed_mul(y))
+            });
+        });
+        group.bench_function("gf128", |b| {
+            b.iter(|| {
+                black_box(&wide)
+                    .iter()
+                    .fold(Ghash128::ONE, |acc, &y| acc * y)
+            });
+        });
+        group.finish();
+    }
+
+    let mut group = c.benchmark_group("lean/inverse");
+    group.throughput(criterion::Throughput::Elements(REPS as u64));
+    group.bench_function("gf64", |b| {
+        b.iter(|| {
+            black_box(&narrow)
+                .iter()
+                .map(|x| x.inverse())
+                .fold(Poly64::ZERO, |acc, y| acc + y)
+        });
+    });
+    group.bench_function("cubic", |b| {
+        b.iter(|| {
+            black_box(&cubic)
+                .iter()
+                .map(|x| x.inverse())
+                .fold(Poly192::ZERO, |acc, y| acc + y)
+        });
+    });
+    group.bench_function("gf128", |b| {
+        b.iter(|| {
+            black_box(&wide)
+                .iter()
+                .map(|x| x.inverse())
+                .fold(Ghash128::ZERO, |acc, y| acc + y)
+        });
+    });
+    group.finish();
+}
+
+/// Frobenius powers and linearized polynomials, tabulated against evaluated.
+///
+/// Every arm rewrites one buffer in place, so the rows are directly comparable.
+///
+/// The twist baseline multiplies rather than squaring.
+///
+/// The scalar square is itself one tabulated map, so squaring would compare one map to three.
+fn bench_frobenius(c: &mut Criterion) {
+    /// Bytes per buffer, comfortably inside the first level of cache.
+    const BYTES: usize = 4096;
+
+    /// The squaring power the twisted arms raise to.
+    const POWER_LOG: usize = 3;
+
+    let mut rng = SmallRng::seed_from_u64(13);
+    let mut scalars: Vec<Rijndael8b> = (0..BYTES).map(|_| rng.random()).collect();
+    let mut blocks: Vec<PackedRijndael8b<64>> = scalars
+        .as_chunks::<64>()
+        .0
+        .iter()
+        .map(|c| *PackedRijndael8b::<64>::from_slice(c))
+        .collect();
+
+    let coefficients: [Rijndael8b; 8] = core::array::from_fn(|_| rng.random());
+    let weight = LinearizedPoly8b::new(coefficients);
+    let tabulated = weight.to_matrix();
+    let twist = Rijndael8b::frobenius_map(POWER_LOG);
+
+    {
+        let mut group = c.benchmark_group("frobenius/twist");
+        group.throughput(criterion::Throughput::Elements(BYTES as u64));
+        group.bench_function("product", |b| {
+            b.iter(|| {
+                for value in black_box(&mut scalars).iter_mut() {
+                    for _ in 0..POWER_LOG {
+                        *value = *value * *value;
+                    }
+                }
+            });
+        });
+        group.bench_function("tabulated", |b| {
+            b.iter(|| {
+                for value in black_box(&mut scalars).iter_mut() {
+                    *value = Rijndael8b::from_byte(twist.apply(value.to_byte()));
+                }
+            });
+        });
+        group.bench_function("packed", |b| {
+            b.iter(|| {
+                for block in black_box(&mut blocks).iter_mut() {
+                    *block = block.frobenius(POWER_LOG);
+                }
+            });
+        });
+        group.finish();
+    }
+
+    let mut group = c.benchmark_group("frobenius/linearized");
+    group.throughput(criterion::Throughput::Elements(BYTES as u64));
+    group.bench_function("evaluated", |b| {
+        b.iter(|| {
+            for value in black_box(&mut scalars).iter_mut() {
+                *value = weight.eval(*value);
+            }
+        });
+    });
+    group.bench_function("tabulated", |b| {
+        b.iter(|| {
+            for value in black_box(&mut scalars).iter_mut() {
+                *value = Rijndael8b::from_byte(tabulated.apply(value.to_byte()));
+            }
+        });
+    });
+    group.bench_function("packed", |b| {
+        b.iter(|| {
+            for block in black_box(&mut blocks).iter_mut() {
+                *block = block.apply(tabulated);
+            }
+        });
+    });
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_mul,
@@ -873,6 +1132,9 @@ criterion_group!(
     bench_maps,
     bench_grind,
     bench_bulk,
-    bench_batch_kernels
+    bench_batch_kernels,
+    bench_aes,
+    bench_lean_pair,
+    bench_frobenius
 );
 criterion_main!(benches);

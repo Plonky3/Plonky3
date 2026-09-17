@@ -597,7 +597,18 @@ where
     PF: PackedField + Eq,
     StandardUniform: Distribution<PF::Scalar>,
 {
-    let vec: PF = packed_from_random(0xb0c7a5153103c5a8);
+    let sampled: PF = packed_from_random(0xb0c7a5153103c5a8);
+
+    // Zero is the one element with no inverse, and over a small field a random lane hits it
+    // often enough to matter, so those lanes are pinned to the identity instead.
+    let vec = PF::from_fn(|i| {
+        let lane = sampled.as_slice()[i];
+        if lane.is_zero() {
+            PF::Scalar::ONE
+        } else {
+            lane
+        }
+    });
     let arr = vec.as_slice();
     let vec_inv = PF::from_fn(|i| arr[i].inverse());
     let res = vec * vec_inv;
