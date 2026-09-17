@@ -591,6 +591,14 @@ where
     {
         air.eval(&mut self);
         eval_boundary_io(&mut self, air.public_boundary_io());
+        debug_assert!(
+            !self.constraints_enabled
+                || self
+                    .inner
+                    .alpha_powers
+                    .is_none_or(|powers| self.inner.constraint_index == powers.len()),
+            "attached alpha powers must match the number of asserted constraints"
+        );
         // Both families come out of the one pass, batched independently.
         FolderEvaluations {
             constraints: self.inner.accumulator,
@@ -1239,6 +1247,54 @@ mod tests {
             InteractionMultilinearFolder::new(folder, &link, &theta_beta_powers, false)
                 .eval_air(&LinkedIoAir);
         assert_eq!(evaluations.constraints, EF::ZERO);
+    }
+
+    #[test]
+    fn alpha_powers_batch_the_boundary_io_pins_like_horner() {
+        // Invariant: both folders reach the Horner value from precomputed powers, pins included.
+        //
+        // Fixture state: the first row, columns 5 and 9, the public value 6.
+        //
+        //     C_0 : a - b                  = -4    (own constraint)
+        //     C_1 : is_first_row * (a - 6) = -1    (injected pin)
+        //
+        // Two batched constraints take the powers `alpha^1, alpha^0`.
+        let link = AirLinkInstance {
+            num_local_lookups: 1,
+            lookups: vec![AirLinkLookup {
+                theta_bus_offset: EF::from_u64(13),
+                block_weights: vec![EF::from_u64(3), EF::from_u64(7)],
+            }],
+        };
+        let theta_beta_powers = [EF::from_u64(2)];
+        let boundary = BoundaryEvals {
+            first: EF::ONE,
+            last: EF::ZERO,
+            transition: EF::ONE,
+        };
+        let alpha = EF::from_u64(11);
+        let alpha_powers = [alpha, EF::ONE];
+        let local = [EF::from_u64(5), EF::from_u64(9)];
+        let next = [EF::ZERO, EF::ZERO];
+        let pis = [F::from_u64(6)];
+
+        let horner = TestFolder::new(&local, &next, boundary, &pis, alpha).eval_air(&LinkedIoAir);
+        assert_eq!(
+            horner,
+            alpha * (local[0] - local[1]) + (local[0] - EF::from_u64(6))
+        );
+
+        let ordinary = TestFolder::new(&local, &next, boundary, &pis, alpha)
+            .with_alpha_powers(&alpha_powers)
+            .eval_air(&LinkedIoAir);
+        assert_eq!(ordinary, horner);
+
+        let folder =
+            TestFolder::new(&local, &next, boundary, &pis, alpha).with_alpha_powers(&alpha_powers);
+        let evaluations =
+            InteractionMultilinearFolder::new(folder, &link, &theta_beta_powers, true)
+                .eval_air(&LinkedIoAir);
+        assert_eq!(evaluations.constraints, horner);
     }
 
     #[test]

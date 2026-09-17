@@ -37,7 +37,9 @@ use crate::folder::{
 };
 use crate::lookup::{ActiveLookupRuntime, AirLinkClaim, LookupRuntime};
 use crate::opening::{OpeningClaims, TableOpening};
-use crate::rounds::{AirDegrees, AirOpenings, RoundStateBase, RoundStateExt, Stage, StageCoupling};
+use crate::rounds::{
+    AirDegrees, AirOpenings, AirProfile, RoundStateBase, RoundStateExt, Stage, StageCoupling,
+};
 use crate::selectors::{BoundaryEvals, PeriodicError, periodic_evals_at, periodic_num_variables};
 use crate::zerocheck::transcript::{
     ZerocheckChallenges, ZerocheckProverTranscript, ZerocheckShape, ZerocheckVerifierTranscript,
@@ -140,6 +142,19 @@ pub struct AirZerocheck<'a, A> {
 
 /// Native per-variable degrees of one AIR's ordinary constraints and lookup links.
 ///
+/// See [`get_air_profile`], which also counts the batched constraints.
+pub(crate) fn get_air_degrees<F, EF, A>(air: &A) -> AirDegrees
+where
+    F: Field,
+    EF: ExtensionField<F>,
+    A: Air<SymbolicAirBuilder<F, EF>>,
+{
+    get_air_profile::<F, EF, A>(air).degrees
+}
+
+/// Native per-variable degrees of one AIR's ordinary constraints and lookup links,
+/// and the number of constraints the folder batches.
+///
 /// Both families come from one symbolic pass and are measured with the eq weight stripped.
 /// A degree of zero means the AIR declares nothing in that family.
 ///
@@ -172,7 +187,7 @@ pub struct AirZerocheck<'a, A> {
 /// Panics if a declared family is constant and no listed cell lifts it,
 /// since a constant has no round polynomial of its own.
 /// Panics if the AIR declares neither constraints nor interactions.
-pub(crate) fn get_air_degrees<F, EF, A>(air: &A) -> AirDegrees
+pub(crate) fn get_air_profile<F, EF, A>(air: &A) -> AirProfile
 where
     F: Field,
     EF: ExtensionField<F>,
@@ -262,9 +277,13 @@ where
         "zerocheck requires every AIR to contribute constraints or interactions"
     );
 
-    AirDegrees {
-        constraints: constraint_degree,
-        interactions: interaction_degree,
+    AirProfile {
+        degrees: AirDegrees {
+            constraints: constraint_degree,
+            interactions: interaction_degree,
+        },
+        // The folder batches every asserted constraint, then one pin per listed cell.
+        num_constraints: base_constraints.len() + extension_constraints.len() + pins.count,
     }
 }
 
@@ -569,10 +588,14 @@ impl<'a, A> AirZerocheck<'a, A> {
         // Ordinary constraints and lookup links keep their native symbolic degrees.
         // The round state evaluates an AIR up to the larger of the two degrees.
         // It stops accumulating the lower-degree family at that family's own final node.
-        let degrees = self
+        let profiles = self
             .airs
             .iter()
-            .map(|&air| get_air_degrees::<F, EF, A>(air))
+            .map(|&air| get_air_profile::<F, EF, A>(air))
+            .collect::<Vec<_>>();
+        let degrees = profiles
+            .iter()
+            .map(|profile| profile.degrees)
             .collect::<Vec<_>>();
 
         // Mirror the verifier's rule: every AIR that declares lookups must carry a link.
@@ -662,14 +685,14 @@ impl<'a, A> AirZerocheck<'a, A> {
                     .iter()
                     .map(|&i| public_values[i])
                     .collect::<Vec<_>>();
-                let degrees = indices.iter().map(|&i| degrees[i]).collect::<Vec<_>>();
+                let profiles = indices.iter().map(|&i| profiles[i]).collect::<Vec<_>>();
                 Stage::new(
                     airs,
                     public_values,
                     indices,
                     preprocessed,
                     tables,
-                    degrees,
+                    profiles,
                     coupling,
                 )
             })
@@ -3027,6 +3050,20 @@ mod tests {
             trans.assert_eq(local.right, next.left);
             trans.assert_eq(local.left + local.right, next.right);
         }
+    }
+
+    #[test]
+    fn constraint_count_includes_the_boundary_io_pins() {
+        // The folder batches the AIR's own constraints, then one pin per listed cell.
+        //
+        //     no cell     : 2 transitions            -> 2
+        //     three cells : 2 transitions + 3 pins   -> 5
+        let loose = get_air_profile::<F, EF, _>(&FibRecurrenceAir { cells: &[] });
+        assert_eq!(loose.num_constraints, 2);
+        let pinned = get_air_profile::<F, EF, _>(&FibRecurrenceAir {
+            cells: &FIB_IO_CELLS,
+        });
+        assert_eq!(pinned.num_constraints, 5);
     }
 
     #[test]

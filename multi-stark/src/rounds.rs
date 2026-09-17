@@ -48,6 +48,17 @@ impl AirDegrees {
     }
 }
 
+/// What one symbolic pass over an AIR fixes for its zerocheck fold.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct AirProfile {
+    /// Native per-variable degrees of the ordinary constraints and the lookup links.
+    pub(crate) degrees: AirDegrees,
+    /// Number of constraints the folder batches with alpha.
+    ///
+    /// The AIR's own constraints, plus one pin per cell it lists as a public input.
+    pub(crate) num_constraints: usize,
+}
+
 /// One batch of AIRs that share a single trace height.
 ///
 /// A stage activates when the global sumcheck cube shrinks to its height.
@@ -65,6 +76,8 @@ pub(super) struct Stage<'air, 'data, A, F: Field, EF> {
     pub(super) tables: Vec<&'data Table<F>>,
     /// Native ordinary-constraint and lookup-link degrees for each AIR.
     pub(super) degrees: Vec<AirDegrees>,
+    /// Number of constraints the folder batches for each AIR, boundary pins included.
+    pub(super) num_constraints: Vec<usize>,
     /// Shared variable count, equal to the base-two logarithm of the common height.
     pub(super) num_vars: usize,
     /// One-time lookup initialization consumed when this stage activates.
@@ -87,7 +100,7 @@ impl<'air, 'data, A, F: Field, EF: Field> Stage<'air, 'data, A, F, EF> {
         indices: Vec<usize>,
         preprocessed: Vec<Option<&'data Table<F>>>,
         tables: Vec<&'data Table<F>>,
-        degrees: Vec<AirDegrees>,
+        profiles: Vec<AirProfile>,
         coupling: StageCoupling<EF>,
     ) -> Self
     where
@@ -97,7 +110,11 @@ impl<'air, 'data, A, F: Field, EF: Field> Stage<'air, 'data, A, F, EF> {
         assert_eq!(airs.len(), tables.len());
         assert_eq!(preprocessed.len(), tables.len());
         assert_eq!(public_values.len(), tables.len());
-        assert_eq!(degrees.len(), tables.len());
+        assert_eq!(profiles.len(), tables.len());
+        let (degrees, num_constraints): (Vec<_>, Vec<_>) = profiles
+            .into_iter()
+            .map(|profile| (profile.degrees, profile.num_constraints))
+            .unzip();
         assert!(degrees.iter().all(|degrees| degrees.max() > 0));
 
         // Every table in a stage binds the same zerocheck variables, so heights must agree.
@@ -138,6 +155,7 @@ impl<'air, 'data, A, F: Field, EF: Field> Stage<'air, 'data, A, F, EF> {
             preprocessed,
             tables,
             degrees,
+            num_constraints,
             coupling,
         }
     }
@@ -171,6 +189,8 @@ pub(crate) struct RoundStateBase<'air, 'data, A, F: Field, EF> {
     public_values: Vec<&'data [F]>,
     /// Random scalar batching the AIR constraints.
     alpha: EF,
+    /// Descending alpha powers for each AIR, one per constraint the folder batches.
+    alpha_powers: Vec<Vec<EF>>,
     /// Optional preprocessed tables, one per AIR.
     preprocessed: Vec<Option<&'data Table<F>>>,
     /// Periodic tables, one per AIR, each materialized to the full trace height.
@@ -343,6 +363,8 @@ pub(crate) struct RoundStateExt<'air, 'data, A, F: Field, EF: ExtensionField<F>>
     public_values: Vec<&'data [F]>,
     /// Random scalar batching the AIR constraints.
     alpha: EF,
+    /// Descending alpha powers for each AIR, one per constraint the folder batches.
+    alpha_powers: Vec<Vec<EF>>,
     /// Folded boundary-selector values at the current sumcheck prefix.
     boundary: BoundaryEvals<EF>,
     /// Main and preprocessed columns after the first base-field fold.
@@ -1212,6 +1234,7 @@ where
             preprocessed,
             tables,
             degrees,
+            num_constraints,
             num_vars,
             coupling,
         } = stage;
@@ -1271,6 +1294,21 @@ where
             "one beta power is required for each AIR"
         );
 
+        // The verifier folds an AIR's `n` constraints by Horner:
+        //
+        //     acc = acc * alpha + C_i    ->    sum_i alpha^(n - 1 - i) * C_i
+        //
+        // Weighting each constraint by its own power reaches the same sum.
+        // No product then waits on the previous constraint's.
+        let alpha_powers = num_constraints
+            .iter()
+            .map(|&num_constraints| {
+                let mut powers = alpha.powers().collect_n(num_constraints);
+                powers.reverse();
+                powers
+            })
+            .collect();
+
         // Ordinary constraints keep their native degrees and their post-scan beta weighting.
         let constraint_groups =
             DegreeGroup::build(degrees.iter().map(|degrees| degrees.constraints));
@@ -1314,6 +1352,7 @@ where
         Self {
             public_values,
             alpha,
+            alpha_powers,
             periodic,
             preprocessed,
             tables,
@@ -1395,6 +1434,17 @@ where
         let schedule = node_schedule::<F>(evaluated_nodes(&self.slots, degree, false));
         let next_columns = next_row_runs(&self.slots);
         let alpha = EF::ExtensionPacking::from(self.alpha);
+        let alpha_powers = self
+            .alpha_powers
+            .iter()
+            .map(|powers| {
+                powers
+                    .iter()
+                    .copied()
+                    .map(EF::ExtensionPacking::from)
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
 
         let coupling = InteractionCoupling {
             links: self
@@ -1537,6 +1587,7 @@ where
                                 self.public_values[slot.stage_index],
                                 alpha,
                             )
+                            .with_alpha_powers(&alpha_powers[slot.stage_index])
                             .with_preprocessed(
                                 &scratch.local_point[slot.preprocessed_offset
                                     ..slot.preprocessed_offset + slot.preprocessed_width],
@@ -1708,6 +1759,7 @@ where
                         self.public_values[slot.stage_index],
                         self.alpha,
                     )
+                    .with_alpha_powers(&self.alpha_powers[slot.stage_index])
                     .with_preprocessed(
                         &scratch.local_point[slot.preprocessed_offset
                             ..slot.preprocessed_offset + slot.preprocessed_width],
@@ -1847,6 +1899,7 @@ where
         RoundStateExt {
             public_values: self.public_values,
             alpha: self.alpha,
+            alpha_powers: self.alpha_powers,
             betas: self.betas,
             constraint_groups: self.constraint_groups,
             interaction_groups: self.interaction_groups,
@@ -2050,6 +2103,7 @@ where
                             self.public_values[slot.stage_index],
                             self.alpha,
                         )
+                        .with_alpha_powers(&self.alpha_powers[slot.stage_index])
                         .with_preprocessed(
                             &scratch.local_point[slot.preprocessed_offset
                                 ..slot.preprocessed_offset + slot.preprocessed_width],
@@ -2139,6 +2193,16 @@ where
         let schedule = node_schedule::<EF>(evaluated_nodes(&self.slots, degree, true));
         let next_columns = next_row_runs(&self.slots);
         let alpha = PackedExt::new(EF::ExtensionPacking::from(self.alpha));
+        let alpha_powers = self
+            .alpha_powers
+            .iter()
+            .map(|powers| {
+                powers
+                    .iter()
+                    .map(|&power| PackedExt::new(EF::ExtensionPacking::from(power)))
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
         let coupling = InteractionCoupling {
             links: self
                 .coupling
@@ -2266,6 +2330,7 @@ where
                                 self.public_values[slot.stage_index],
                                 alpha,
                             )
+                            .with_alpha_powers(&alpha_powers[slot.stage_index])
                             .with_preprocessed(
                                 &scratch.local_point[slot.preprocessed_offset
                                     ..slot.preprocessed_offset + slot.preprocessed_width],
@@ -2469,9 +2534,12 @@ mod tests {
             vec![0],
             vec![None],
             vec![&table],
-            vec![AirDegrees {
-                constraints: 3,
-                interactions: 0,
+            vec![AirProfile {
+                degrees: AirDegrees {
+                    constraints: 3,
+                    interactions: 0,
+                },
+                num_constraints: 3,
             }],
             StageCoupling::new(BTreeMap::new(), BTreeMap::new(), vec![]),
         );
