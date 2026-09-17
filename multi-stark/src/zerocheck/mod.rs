@@ -12,6 +12,8 @@
 
 #[cfg(test)]
 pub(crate) mod backend_tests;
+#[cfg(test)]
+mod prime_transcript_tests;
 pub mod transcript;
 
 use alloc::collections::{BTreeMap, BTreeSet};
