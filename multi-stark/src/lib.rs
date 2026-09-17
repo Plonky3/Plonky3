@@ -19,6 +19,7 @@ extern crate alloc;
 pub mod config;
 pub mod folder;
 pub mod fractional_gkr;
+pub mod indexed;
 pub mod instance;
 pub mod keys;
 pub mod logup_star;
