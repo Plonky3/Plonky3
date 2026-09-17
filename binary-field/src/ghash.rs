@@ -1,7 +1,9 @@
 //! `GF(2^128)` in the polynomial basis of `x^128 + x^7 + x^2 + x + 1`.
 
+use alloc::vec::Vec;
 use core::fmt::{self, Debug, Display, Formatter};
 use core::iter::{Product, Sum};
+use core::mem::ManuallyDrop;
 use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 
 use num_bigint::BigUint;
@@ -160,6 +162,14 @@ impl Distribution<Ghash128> for StandardUniform {
 }
 
 impl PrimeCharacteristicRing for Ghash128 {
+    #[inline]
+    fn zero_vec(len: usize) -> Vec<Self> {
+        let mut values = ManuallyDrop::new(alloc::vec![0u128; len]);
+        // SAFETY: the transparent wrapper has exactly the integer's layout, and zero is
+        // canonical. The allocation retains its original size and alignment.
+        unsafe { Vec::from_raw_parts(values.as_mut_ptr().cast(), values.len(), values.capacity()) }
+    }
+
     type PrimeSubfield = Gf2;
 
     const ZERO: Self = Self(0);
@@ -585,6 +595,18 @@ mod tests {
                 Ghash128::from(x.mul_alpha()),
                 "{bits:#x}"
             );
+        }
+    }
+
+    #[test]
+    fn zero_vectors_preserve_layout_and_support_growth() {
+        for len in [0, 1, 33, 1024] {
+            let mut values = Ghash128::zero_vec(len);
+            assert_eq!(values.len(), len);
+            assert!(values.iter().all(|x| *x == Ghash128::ZERO));
+            values.push(Ghash128::from_repr(7));
+            values.reserve(100);
+            assert_eq!(values.pop(), Some(Ghash128::from_repr(7)));
         }
     }
 
