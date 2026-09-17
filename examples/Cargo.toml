@@ -46,6 +46,9 @@ clap.workspace = true
 postcard = { workspace = true, features = ["alloc"] }
 rand.workspace = true
 
+[target.'cfg(target_os = "linux")'.dependencies]
+tikv-jemallocator.workspace = true
+
 [dev-dependencies]
 p3-baby-bear = { path = "../baby-bear" }
 p3-batch-stark = { path = "../batch-stark" }
