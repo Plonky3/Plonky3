@@ -2624,6 +2624,62 @@ mod tests {
         check_binary_round_nodes(true, true);
     }
 
+    /// A slot carrying only the fold metadata `evaluated_nodes` reads.
+    fn degree_slot(
+        constraint_degree: usize,
+        interaction_degree: Option<usize>,
+    ) -> AirSlot<'static, BooleanAir> {
+        AirSlot {
+            air: &BooleanAir,
+            stage_index: 0,
+            caller_index: 0,
+            main_offset: 0,
+            main_width: 0,
+            preprocessed_offset: 0,
+            preprocessed_width: 0,
+            periodic_offset: 0,
+            periodic_width: 0,
+            main_next_columns: vec![],
+            preprocessed_next_columns: vec![],
+            constraint_degree,
+            interaction: interaction_degree.map(|degree| AirInteractionSlot {
+                degree,
+                group_index: 0,
+                link_index: 0,
+            }),
+        }
+    }
+
+    fn nodes_of(
+        slots: &[AirSlot<'_, BooleanAir>],
+        degree: usize,
+        include_zero: bool,
+    ) -> Vec<usize> {
+        evaluated_nodes(slots, degree, include_zero).collect()
+    }
+
+    #[test]
+    fn evaluated_nodes_follow_each_family_degree() {
+        // Constraints only, at degrees 2 and 3.
+        // The first round skips node zero, later rounds need it.
+        let constraints = [degree_slot(2, None), degree_slot(3, None)];
+        assert_eq!(nodes_of(&constraints, 3, false), vec![2, 3]);
+        assert_eq!(nodes_of(&constraints, 3, true), vec![0, 2, 3]);
+
+        // A degree-one lookup brings node zero back into the first round, and reaches no further.
+        let with_lookup = [degree_slot(3, None), degree_slot(0, Some(1))];
+        assert_eq!(nodes_of(&with_lookup, 3, false), vec![0, 2, 3]);
+        assert_eq!(nodes_of(&with_lookup, 3, true), vec![0, 2, 3]);
+
+        // A lookup above its AIR's own constraint degree sets the top node alone.
+        let lookup_on_top = [degree_slot(1, Some(2))];
+        assert_eq!(nodes_of(&lookup_on_top, 2, false), vec![0, 2]);
+
+        // Node one is never evaluated, even when it is the top node.
+        let lookup_only = [degree_slot(0, Some(1))];
+        assert_eq!(nodes_of(&lookup_only, 1, false), vec![0]);
+    }
+
     /// Degree-three AIR reading scattered main and preprocessed successor columns.
     ///
     /// ```text
