@@ -28,6 +28,9 @@ const NUM_CONSTRAINTS: usize = NUM_FLAG_CONSTRAINTS + 2 * NUM_STATE_BITS;
 /// A round row constrains the next row's state to the round map of its own state.
 /// An output row leaves the next row's state free.
 ///
+/// A round-23 row may also be followed directly by round 0, chaining two permutations
+/// without an output row between them: the round-0 input is then the previous output.
+///
 /// The constraints read the next row but use no transition selector.
 /// The last row of a valid trace is an output row, so both successor conventions hold:
 ///
@@ -44,6 +47,11 @@ impl KeccakBinaryAir {
     /// This is for benches/examples only — it does not let callers supply the actual
     /// inputs being hashed. Use the free [`generate_binary_trace_rows`] function directly
     /// to prove specific inputs.
+    ///
+    /// # Panics
+    ///
+    /// - The field does not have characteristic 2.
+    /// - `num_hashes` is 0.
     pub fn generate_random_trace_rows<F: Field>(
         &self,
         num_hashes: usize,
@@ -335,6 +343,7 @@ mod tests {
         let failures = repeat_last_failures(&trace);
         assert!(!failures.is_empty());
         assert!(failures.iter().all(|&(r, _)| r == NUM_ROUNDS_MIN_1));
+        assert!(failures.iter().any(|(_, c)| FLAG_CONSTRAINTS.contains(c)));
     }
 
     #[test]
@@ -428,6 +437,54 @@ mod tests {
                 .any(|f| FLAG_CONSTRAINTS.contains(&f.constraint))
         );
         assert!(!repeat_last_failures(&trace).is_empty());
+    }
+
+    #[test]
+    fn non_bit_round_flags_are_rejected_only_by_exclusivity() {
+        // Scale the second permutation's round flags by a non-bit u, with output flag 1 + u.
+        // Every round row's map is scaled by u, so the honest states still satisfy it,
+        // and the flag steps into and out of the permutation still balance:
+        //
+        //     output row -> round 0 : u + (1 + u) + 0 + 1 = 0
+        //     round 23 -> output    : 0 + 1 + u + (1 + u) = 0
+        //
+        // Only the round-0 row's product u * (1 + u) is nonzero.
+        let u = F::GENERATOR;
+        assert!(u != F::ZERO && u != F::ONE);
+        let mut trace = KeccakBinaryAir {}.generate_random_trace_rows::<F>(2, 0);
+        for round in 0..NUM_ROUNDS {
+            let flags = &mut row_mut(&mut trace, KECCAK_BINARY_ROWS_PER_PERM + round).round_flags;
+            flags[round] = u;
+            flags[NUM_ROUNDS] = F::ONE + u;
+        }
+
+        let exclusivity = NUM_FLAG_CONSTRAINTS - 1;
+        let expected = vec![(KECCAK_BINARY_ROWS_PER_PERM, exclusivity)];
+        let report = check_all_constraints(&KeccakBinaryAir {}, &trace, &[], None);
+        let failures: Vec<(usize, usize)> = report
+            .failures
+            .iter()
+            .map(|f| (f.row, f.constraint))
+            .collect();
+        assert_eq!(failures, expected);
+        assert_eq!(repeat_last_failures(&trace), expected);
+    }
+
+    #[test]
+    fn vanishing_round_flags_are_rejected_only_by_the_wrap() {
+        // Clear every flag after the output row.
+        // A flagless row applies the round map without a round constant, which fixes the
+        // all-zero padding state, and its flags step to zero.
+        // Only the output row's step into the first flagless row fails:
+        //
+        //     next.f[0] + next.f[24] + f[23] + f[24] = 0 + 0 + 0 + 1
+        let mut trace = KeccakBinaryAir {}.generate_random_trace_rows::<F>(1, 0);
+        for r in KECCAK_BINARY_ROWS_PER_PERM..trace.height() {
+            row_mut(&mut trace, r).round_flags[NUM_ROUNDS] = F::ZERO;
+        }
+
+        let wrap = NUM_FLAG_CONSTRAINTS - 2;
+        assert_eq!(repeat_last_failures(&trace), vec![(NUM_ROUNDS, wrap)]);
     }
 
     #[test]
