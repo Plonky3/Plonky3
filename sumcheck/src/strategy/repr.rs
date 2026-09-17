@@ -3,6 +3,7 @@
 use alloc::vec::Vec;
 use core::marker::PhantomData;
 
+use p3_binary_field::{BinaryField128, Ghash128};
 use p3_challenger::fs::TranscriptField;
 use p3_challenger::{FieldChallenger, GrindingChallenger};
 use p3_field::{ExtensionField, Field};
@@ -38,6 +39,10 @@ use crate::transcript::{ProverTranscript, SumcheckShape};
 /// # Storage
 ///
 /// Tables are held as scalars, whatever storage the source prover used.
+///
+/// That costs nothing where the tables were scalar already: suffix binding always is, and
+/// so is a field whose packing is itself, like `BinaryField128`. A packed prefix pair over
+/// any other field loses its SIMD lanes for every remaining round.
 #[derive(Debug, Clone)]
 pub struct ReprSumcheckProver<F, EF, R: Field> {
     /// The rounds, run entirely in `R`.
@@ -50,7 +55,7 @@ impl<F, EF, R> ReprSumcheckProver<F, EF, R>
 where
     F: Field,
     EF: ExtensionField<F> + From<R>,
-    R: Field + From<EF>,
+    R: Field + FromTable<EF>,
 {
     /// Moves a prover's tables, claim and held challenge into `R`.
     ///
@@ -65,8 +70,8 @@ where
         let (order, evals, weights) = poly.into_scalar_tables();
 
         // One table at a time, so only one source and its image are resident together.
-        let evals = convert_table(evals);
-        let weights = convert_table(weights);
+        let evals = Poly::new(R::from_table(evals.into_evals()));
+        let weights = Poly::new(R::from_table(weights.into_evals()));
 
         Self {
             inner: SumcheckProver {
@@ -148,15 +153,26 @@ where
     }
 }
 
-/// Maps every entry of a table into another field, releasing the source once the image is built.
-fn convert_table<A, B>(table: Poly<A>) -> Poly<B>
-where
-    A: Copy + Send + Sync,
-    B: From<A> + Send,
-{
-    let image = Poly::new(table.as_slice().par_iter().map(|&x| B::from(x)).collect());
-    drop(table);
-    image
+/// A field that takes a whole table of another field's elements at once.
+///
+/// The table's image is [`From`] applied to every entry.
+///
+/// The default builds it entry by entry into a new buffer and then releases the source.
+/// A field with a bulk kernel for the same map overrides it.
+pub trait FromTable<EF: Copy + Send + Sync>: From<EF> + Send {
+    /// Every entry of `table`, mapped into this field.
+    fn from_table(table: Vec<EF>) -> Vec<Self> {
+        let image = table.par_iter().map(|&x| Self::from(x)).collect();
+        drop(table);
+        image
+    }
+}
+
+impl FromTable<BinaryField128> for Ghash128 {
+    /// Converts in the table's own buffer, a block at a time where the build has the kernel.
+    fn from_table(table: Vec<BinaryField128>) -> Vec<Self> {
+        Self::from_tower_vec(table)
+    }
 }
 
 #[cfg(test)]
@@ -165,12 +181,13 @@ mod tests {
 
     use p3_binary_field::{BinaryChallenger, BinaryField128, Ghash128};
     use p3_challenger::{CanSample, HashChallenger};
+    use p3_field::Field;
     use p3_keccak::Keccak256Hash;
     use p3_multilinear_util::poly::Poly;
     use rand::rngs::SmallRng;
     use rand::{RngExt, SeedableRng};
 
-    use super::ReprSumcheckProver;
+    use super::{FromTable, ReprSumcheckProver};
     use crate::SumcheckData;
     use crate::product_polynomial::ProductPolynomial;
     use crate::strategy::{SumcheckProver, VariableOrder};
@@ -203,8 +220,15 @@ mod tests {
         SumcheckProver::new(poly, sum)
     }
 
-    #[test]
-    fn repr_rounds_play_the_challenge_field_transcript() {
+    /// The field as its own representation, taking tables through the default map.
+    impl FromTable<Self> for F {}
+
+    /// Plays the challenge-field transcript through a prover represented in `R`.
+    fn assert_repr_rounds_play_the_challenge_field_transcript<R>()
+    where
+        R: Field + FromTable<F>,
+        F: From<R>,
+    {
         // Batches mix single rounds, which fuse across calls, with a settle and a longer batch.
         let batches = [1, 2, 1, 3, 1, 1];
 
@@ -237,7 +261,7 @@ mod tests {
                     );
                 }
                 let head = batches[..split].iter().sum::<usize>();
-                let mut repr = ReprSumcheckProver::<F, F, Ghash128>::new(handoff);
+                let mut repr = ReprSumcheckProver::<F, F, R>::new(handoff);
 
                 let mut played = 0;
                 for (batch, &rounds) in batches.iter().enumerate() {
@@ -287,5 +311,14 @@ mod tests {
                 assert_eq!(repr.claimed_sum(), reference.claimed_sum());
             }
         }
+    }
+
+    #[test]
+    fn repr_rounds_play_the_challenge_field_transcript() {
+        // The polynomial basis takes tables through its own kernel.
+        assert_repr_rounds_play_the_challenge_field_transcript::<Ghash128>();
+
+        // The field itself takes them through the default map.
+        assert_repr_rounds_play_the_challenge_field_transcript::<F>();
     }
 }
