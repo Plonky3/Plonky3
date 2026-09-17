@@ -12,7 +12,7 @@ use p3_multilinear_util::poly::Poly;
 use p3_multilinear_util::split_eq::SplitEq;
 
 use crate::lagrange::lagrange_weights_01inf_multi;
-use crate::layout::opening::{Opening, ProverMultiClaim};
+use crate::layout::opening::{EqSvoPartials, NextSvoPartials, Opening, ProverMultiClaim};
 use crate::layout::prover::{Layout, StackedClaims};
 use crate::layout::witness::Table;
 use crate::layout::{LayoutStrategy, Witness};
@@ -22,6 +22,16 @@ use crate::svo::{SvoPoint, calculate_accumulators_batch};
 use crate::table::{OpeningBatch, OpeningEvals, OpeningRequest};
 use crate::transcript::{ProverTranscript, SumcheckShape};
 use crate::{Claim, SumcheckData, extrapolate_01inf};
+
+/// Largest table arity whose openings share one dense weight table per batch.
+///
+/// A dense table holds one extension element per row, so it is capped here.
+const SHARED_WEIGHTS_MAX_VARIABLES: usize = 20;
+
+/// Rows per chunk of a weighted column sum.
+///
+/// A column up to this length is summed serially; a longer one sums its chunks in parallel.
+const WEIGHTED_SUM_CHUNK: usize = 1 << 12;
 
 /// One claim's residual weight tables at unit scale, over a single column slot.
 struct ClaimWeightTables<EF> {
@@ -89,6 +99,9 @@ impl<F: Field, EF: ExtensionField<F>> Layout<F, EF> for SuffixProver<F, EF> {
     ///
     /// - The point is factorised once and reused by every selected column.
     /// - Each column is an independent linear pass, so columns run in parallel.
+    /// - Without SVO rounds, and for a table of at most `2^SHARED_WEIGHTS_MAX_VARIABLES` rows,
+    ///   the equality and successor weight tables are built once per call. Each column is then
+    ///   one weighted sum against them, free of products on bit-valued rows.
     #[tracing::instrument(skip_all)]
     fn record_opening(
         &mut self,
@@ -103,6 +116,46 @@ impl<F: Field, EF: ExtensionField<F>> Layout<F, EF> for SuffixProver<F, EF> {
         let table = &self.claims.tables[table_idx];
         // The opening point lives in the table's local frame, one coordinate per variable.
         debug_assert_eq!(point.num_variables(), table.num_variables());
+
+        // Without SVO rounds an opening carries no per-round residuals.
+        // Each column then reduces to one weighted sum against a table shared by the whole batch.
+        // Taller tables keep the factored evaluation, whose weights stay at the square root size.
+        if self.claims.folding == 0 && table.num_variables() <= SHARED_WEIGHTS_MAX_VARIABLES {
+            // Equality weights of the point over every row of the table.
+            let eq = Poly::new_from_point(point.as_slice(), EF::ONE);
+            // Repeat-last successor weights, derived from the equality weights when needed.
+            let next_weights = (!next.is_empty()).then(|| successor_weights(eq.as_slice()));
+
+            let (current_openings, current_evals): (Vec<_>, Vec<EF>) = current
+                .into_par_iter()
+                .copied()
+                .map(|poly_idx| {
+                    let eval = weighted_sum(eq.as_slice(), table.poly(poly_idx).as_slice());
+                    let partial_evals = EqSvoPartials::new(Vec::new());
+                    (Opening::new_with_data(poly_idx, eval, partial_evals), eval)
+                })
+                .unzip();
+
+            let (next_openings, next_evals): (Vec<_>, Vec<EF>) = next
+                .into_par_iter()
+                .copied()
+                .map(|poly_idx| {
+                    let weights = next_weights.as_deref().unwrap();
+                    let eval = weighted_sum(weights, table.poly(poly_idx).as_slice());
+                    let partial_evals = NextSvoPartials::new(Vec::new());
+                    (Opening::new_with_data(poly_idx, eval, partial_evals), eval)
+                })
+                .unzip();
+
+            // Record the claim at the zero-round factorisation of the point.
+            self.claims.claim_map[table_idx].push(ProverMultiClaim::new(
+                SvoPoint::new_unpacked(0, point, VariableOrder::Suffix),
+                current_openings,
+                next_openings,
+            ));
+
+            return OpeningBatch::new(current_evals, next_evals);
+        }
 
         // Factorise the point with the suffix split; every selected column reuses it.
         let point = SvoPoint::new_unpacked(self.claims.folding, point, VariableOrder::Suffix);
@@ -660,5 +713,328 @@ impl<F: Field, EF: ExtensionField<F>> SuffixProver<F, EF> {
         }
 
         out
+    }
+}
+
+/// Sums `weights[i] * values[i]` over every row.
+///
+/// # Performance
+///
+/// - A zero row is skipped and a one row adds its weight, so a column of bits costs no product.
+/// - From the first row holding any other value, the rest of its chunk pays one product per row.
+/// - A column longer than one chunk sums its chunks in parallel.
+///
+/// # Panics
+///
+/// - The two slices differ in length.
+fn weighted_sum<F: Field, EF: ExtensionField<F>>(weights: &[EF], values: &[F]) -> EF {
+    assert_eq!(weights.len(), values.len());
+    if values.len() <= WEIGHTED_SUM_CHUNK {
+        return weighted_sum_chunk(weights, values);
+    }
+    weights
+        .par_chunks(WEIGHTED_SUM_CHUNK)
+        .zip(values.par_chunks(WEIGHTED_SUM_CHUNK))
+        .map(|(weights, values)| weighted_sum_chunk(weights, values))
+        .sum()
+}
+
+/// Sums `weights[i] * values[i]` over one chunk, adding weights directly while every row is a bit.
+fn weighted_sum_chunk<F: Field, EF: ExtensionField<F>>(weights: &[EF], values: &[F]) -> EF {
+    let mut sum = EF::ZERO;
+    for (row, (&weight, &value)) in weights.iter().zip(values).enumerate() {
+        if value == F::ONE {
+            sum += weight;
+        } else if value != F::ZERO {
+            // Rows before this one are all bits; every row from here pays one product.
+            return sum
+                + dot_product::<EF, _, _>(
+                    weights[row..].iter().copied(),
+                    values[row..].iter().copied(),
+                );
+        }
+    }
+    sum
+}
+
+/// Builds the repeat-last successor weights from the equality weights of the same point.
+///
+/// Row `x` of the successor view reads the column at `x + 1`, and the last row reads itself.
+/// Each column row therefore collects its predecessor's weight, and the last row keeps its own:
+///
+/// ```text
+///     next = [0, eq[0], eq[1], ..., eq[last - 2], eq[last - 1] + eq[last]]
+/// ```
+fn successor_weights<EF: Field>(eq: &[EF]) -> Vec<EF> {
+    let last = eq.len() - 1;
+    let mut next = EF::zero_vec(eq.len());
+    next[1..].copy_from_slice(&eq[..last]);
+    next[last] += eq[last];
+    next
+}
+
+#[cfg(test)]
+mod tests {
+    use alloc::vec::Vec;
+
+    use itertools::Itertools;
+    use p3_baby_bear::BabyBear;
+    use p3_binary_field::BinaryField128;
+    use p3_field::extension::BinomialExtensionField;
+    use p3_field::{ExtensionField, Field, PrimeCharacteristicRing, dot_product};
+    use p3_matrix::dense::RowMajorMatrix;
+    use p3_multilinear_util::point::Point;
+    use p3_multilinear_util::poly::Poly;
+    use rand::distr::{Distribution, StandardUniform};
+    use rand::rngs::SmallRng;
+    use rand::{RngExt, SeedableRng};
+
+    use super::*;
+
+    /// Degree-4 binomial extension of BabyBear.
+    type BabyBearExt4 = BinomialExtensionField<BabyBear, 4>;
+
+    /// Number of column value patterns produced by `column`.
+    const NUM_COLUMN_KINDS: usize = 7;
+
+    /// Table arities opened together in one witness: empty, tiny, small, and multi-chunk tables.
+    const ARITIES: [usize; 5] = [0, 1, 2, 5, 13];
+
+    /// Draws a field element that is neither zero nor one.
+    fn non_bit<F: Field>(rng: &mut SmallRng) -> F
+    where
+        StandardUniform: Distribution<F>,
+    {
+        loop {
+            let value: F = rng.random();
+            if value != F::ZERO && value != F::ONE {
+                return value;
+            }
+        }
+    }
+
+    /// Builds one column of `len` rows whose value pattern is selected by `kind`.
+    ///
+    /// - 0: uniformly random values.
+    /// - 1: random bits.
+    /// - 2: all zeros.
+    /// - 3: all ones.
+    /// - 4: random bits with a non-bit at the first row.
+    /// - 5: random bits with a non-bit just past the midpoint.
+    /// - 6: random bits with a non-bit at the last row.
+    fn column<F: Field>(rng: &mut SmallRng, kind: usize, len: usize) -> Vec<F>
+    where
+        StandardUniform: Distribution<F>,
+    {
+        let kind = kind % NUM_COLUMN_KINDS;
+        if kind == 0 {
+            return (0..len).map(|_| rng.random()).collect();
+        }
+        let mut values: Vec<F> = (0..len)
+            .map(|_| F::from_bool(rng.random_bool(0.5)))
+            .collect();
+        match kind {
+            2 => values.fill(F::ZERO),
+            3 => values.fill(F::ONE),
+            4 => values[0] = non_bit(rng),
+            5 => values[(len / 2 + 1).min(len - 1)] = non_bit(rng),
+            6 => values[len - 1] = non_bit(rng),
+            _ => {}
+        }
+        values
+    }
+
+    /// Builds a table whose columns cycle through every value pattern.
+    fn table<F: Field>(rng: &mut SmallRng, num_variables: usize, num_polys: usize) -> Table<F>
+    where
+        StandardUniform: Distribution<F>,
+    {
+        let len = 1 << num_variables;
+        let values = (0..num_polys)
+            .flat_map(|kind| column::<F>(rng, kind, len))
+            .collect();
+        Table::new(RowMajorMatrix::new(values, len))
+    }
+
+    /// Builds one table per arity, each holding every column pattern.
+    fn tables<F: Field>(seed: u64) -> Vec<Table<F>>
+    where
+        StandardUniform: Distribution<F>,
+    {
+        let mut rng = SmallRng::seed_from_u64(seed);
+        ARITIES
+            .iter()
+            .map(|&num_variables| table(&mut rng, num_variables, NUM_COLUMN_KINDS))
+            .collect()
+    }
+
+    /// Records openings at zero folding and checks them against the zero-round SVO routines.
+    ///
+    /// # Schedule
+    ///
+    /// Every table is opened four times, each at a fresh random point:
+    ///
+    /// - every column directly and through the successor view,
+    /// - every column directly, in reverse order,
+    /// - every column through the successor view, in reverse order,
+    /// - the odd columns directly and every column through the successor view.
+    ///
+    /// # Checks
+    ///
+    /// - Each returned and stored evaluation equals the `SvoPoint` evaluation of its view.
+    /// - Each stored opening names its column and carries no per-round residuals.
+    /// - The batched claimed sum equals the stacked columns dotted with the combined weights.
+    fn assert_unfolded_openings_match_svo<F, EF>(tables: Vec<Table<F>>, seed: u64)
+    where
+        F: Field,
+        EF: ExtensionField<F>,
+        StandardUniform: Distribution<EF>,
+    {
+        let mut rng = SmallRng::seed_from_u64(seed);
+        let mut prover =
+            SuffixProver::<F, EF>::from_witness(SuffixProver::<F, EF>::new_witness(tables, 0));
+
+        for table_idx in 0..prover.claims.tables.len() {
+            let num_polys = prover.claims.tables[table_idx].num_polys();
+            let num_variables = prover.claims.tables[table_idx].num_variables();
+            let columns = (0..num_polys).collect::<Vec<_>>();
+            let reversed = columns.iter().rev().copied().collect::<Vec<_>>();
+            let odd = columns
+                .iter()
+                .copied()
+                .filter(|poly_idx| poly_idx % 2 == 1)
+                .collect::<Vec<_>>();
+            let requests = [
+                OpeningBatch::new(columns.clone(), columns.clone()),
+                OpeningBatch::new(reversed.clone(), Vec::new()),
+                OpeningBatch::new(Vec::new(), reversed),
+                OpeningBatch::new(odd, columns),
+            ];
+
+            for request in &requests {
+                let point = Point::<EF>::rand(&mut rng, num_variables);
+                let evals = prover.record_opening(table_idx, request, &point);
+
+                // Reference: the zero-round SVO evaluation of each requested view.
+                let table = &prover.claims.tables[table_idx];
+                let svo_point = SvoPoint::<F, EF>::new_unpacked(0, &point, VariableOrder::Suffix);
+                let expected_current = request
+                    .current()
+                    .iter()
+                    .map(|&poly_idx| {
+                        let (eval, partial_evals) = svo_point.eval(table.poly(poly_idx));
+                        assert!(partial_evals.rounds().is_empty());
+                        eval
+                    })
+                    .collect::<Vec<_>>();
+                let expected_next = request
+                    .next()
+                    .iter()
+                    .map(|&poly_idx| {
+                        let (eval, partial_evals) =
+                            svo_point.eval_next_suffix(table.poly(poly_idx), None);
+                        assert!(partial_evals.rounds().is_empty());
+                        eval
+                    })
+                    .collect::<Vec<_>>();
+                assert_eq!(evals.current(), expected_current.as_slice());
+                assert_eq!(evals.next(), expected_next.as_slice());
+
+                // The stored claim holds the same point and the same openings, without residuals.
+                let claim = prover.claims.claim_map[table_idx].last().unwrap();
+                assert_eq!(claim.point().z_svo(), svo_point.z_svo());
+                assert_eq!(
+                    claim.point().z_split().materialize(),
+                    svo_point.z_split().materialize()
+                );
+                for ((opening, &poly_idx), &eval) in claim
+                    .current_openings()
+                    .iter()
+                    .zip_eq(request.current())
+                    .zip_eq(&expected_current)
+                {
+                    assert_eq!(opening.poly_idx(), Some(poly_idx));
+                    assert_eq!(opening.eval(), eval);
+                    assert!(opening.data().rounds().is_empty());
+                }
+                for ((opening, &poly_idx), &eval) in claim
+                    .next_openings()
+                    .iter()
+                    .zip_eq(request.next())
+                    .zip_eq(&expected_next)
+                {
+                    assert_eq!(opening.poly_idx(), Some(poly_idx));
+                    assert_eq!(opening.eval(), eval);
+                    assert!(opening.data().rounds().is_empty());
+                }
+            }
+        }
+
+        // The residual factors built from the stored claims reproduce the batched claimed sum.
+        let alpha: EF = rng.random();
+        let rs = Point::default();
+        let stacked = prover.compress_stacked(&rs);
+        let weights = prover.combine_weights(&rs, alpha);
+        assert_eq!(
+            prover.claims.sum(alpha),
+            dot_product::<EF, _, _>(stacked.iter().copied(), weights.iter().copied())
+        );
+    }
+
+    #[test]
+    fn unfolded_openings_match_svo_over_binary_field() {
+        assert_unfolded_openings_match_svo::<BinaryField128, BinaryField128>(tables(1), 2);
+    }
+
+    #[test]
+    fn unfolded_openings_match_svo_over_extension_of_prime_field() {
+        assert_unfolded_openings_match_svo::<BabyBear, BabyBearExt4>(tables(3), 4);
+    }
+
+    #[test]
+    fn weighted_sum_matches_dot_product() {
+        fn check<F: Field, EF: ExtensionField<F>>(rng: &mut SmallRng)
+        where
+            StandardUniform: Distribution<F> + Distribution<EF>,
+        {
+            // Lengths straddle the chunk size, including partial trailing chunks.
+            for len in [
+                1,
+                2,
+                WEIGHTED_SUM_CHUNK - 1,
+                WEIGHTED_SUM_CHUNK,
+                WEIGHTED_SUM_CHUNK + 1,
+                3 * WEIGHTED_SUM_CHUNK + 5,
+            ] {
+                let weights = (0..len).map(|_| rng.random()).collect::<Vec<EF>>();
+                for kind in 0..NUM_COLUMN_KINDS {
+                    let values = column::<F>(rng, kind, len);
+                    let expected =
+                        dot_product::<EF, _, _>(weights.iter().copied(), values.iter().copied());
+                    assert_eq!(
+                        weighted_sum(&weights, &values),
+                        expected,
+                        "len={len}, kind={kind}"
+                    );
+                }
+            }
+        }
+
+        let mut rng = SmallRng::seed_from_u64(5);
+        check::<BinaryField128, BinaryField128>(&mut rng);
+        check::<BabyBear, BabyBearExt4>(&mut rng);
+    }
+
+    #[test]
+    fn successor_weights_match_dense_successor_table() {
+        let mut rng = SmallRng::seed_from_u64(6);
+        for num_variables in 0..=8 {
+            let point = Point::<BabyBearExt4>::rand(&mut rng, num_variables);
+            let eq = Poly::new_from_point(point.as_slice(), BabyBearExt4::ONE);
+            assert_eq!(
+                successor_weights(eq.as_slice()),
+                Poly::new_next_from_point(point.as_slice()).as_slice()
+            );
+        }
     }
 }
