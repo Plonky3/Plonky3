@@ -46,30 +46,6 @@ pub(super) const fn block_mask(block: usize) -> u64 {
     BLOCK_MASKS[block.trailing_zeros() as usize]
 }
 
-/// Spread blocks of `block` bits so that block `t` of the input lands at block `2t`.
-///
-/// The input holds `word_bits / 2` meaningful low bits and the output fills `word_bits`:
-///
-/// ```text
-///     block:  b0 b1 b2 b3          input, half a word
-///          -> b0 __ b1 __ b2 __ b3 __
-/// ```
-///
-/// Each rung doubles the gap: fold in a shifted copy, mask out the half it duplicated.
-///
-/// The ladder runs from one rung below the half word down to the block size.
-/// A block as wide as half the input is already in place, so no rung runs.
-#[inline]
-const fn spread(mut bits: u64, block: usize, word_bits: usize) -> u64 {
-    // Gap doubling, from the coarsest split of the half word down to single blocks.
-    let mut step = word_bits / 4;
-    while step >= block {
-        bits = (bits | (bits << step)) & block_mask(step);
-        step >>= 1;
-    }
-    bits
-}
-
 /// Several independent elements of `GF(2)`, one per bit of a block of storage.
 ///
 /// Lane `i` is bit `i mod B` of word `i / B`, counting from the least significant bit.
@@ -268,8 +244,15 @@ impl<U: Underlier> PackedGf2<U> {
     #[must_use]
     pub const fn as_bytes(slice: &[Self]) -> &[u8] {
         // A packing is exactly its words, so the byte count is the lane count over eight.
+        //
+        // A lane is a bit of a word value, and a byte index is a memory offset.
+        // The two orders agree only on a little-endian target.
         const {
             assert!(size_of::<Self>() * 8 == U::BITS);
+            assert!(
+                cfg!(target_endian = "little"),
+                "the byte view of a packing needs a little-endian target"
+            );
         }
         let len = slice.len() * (U::BITS / 8);
 
@@ -280,7 +263,7 @@ impl<U: Underlier> PackedGf2<U> {
 
     /// Cut both operands into chunks of `block_len` lanes and interleave the chunks.
     ///
-    /// The two inputs stack into `2 * WIDTH` lanes, cut into chunks, dealt out alternately:
+    /// Cut the stack of the two into two-by-two matrices of chunks, and transpose each:
     ///
     /// ```text
     ///     A = [x0, y0, x1, y1]
@@ -289,57 +272,56 @@ impl<U: Underlier> PackedGf2<U> {
     ///     block_len = 1  ->  ([x0, x2, x1, x3], [y0, y2, y1, y3])
     /// ```
     ///
-    /// Equivalently: cut the stack into two-by-two matrices of chunks, and transpose each.
+    /// A chunk as wide as the value leaves both operands untouched.
     ///
-    /// A block as wide as the value leaves both operands untouched.
+    /// This is the convention the packed-field trait fixes.
+    /// So a caller can swap a bit-sliced packing for any other and see one permutation.
     ///
     /// # Panics
-    /// Panics unless the block length is a power of two no larger than the width.
+    /// Panics unless the chunk length is a power of two no larger than the width.
     pub fn interleave(&self, other: Self, block_len: usize) -> (Self, Self) {
         assert!(
             block_len.is_power_of_two() && block_len <= Self::WIDTH,
             "block length must be a power of two dividing the width"
         );
 
-        // The first output covers stacked lanes `0 .. WIDTH`, the second the rest.
+        // One chunk each means there is nothing to pair up.
+        if block_len == Self::WIDTH {
+            return (*self, other);
+        }
         (
-            Self(self.interleave_from(other, block_len, 0)),
-            Self(self.interleave_from(other, block_len, Self::WIDTH)),
+            self.interleave_from(other, block_len, 0),
+            self.interleave_from(other, block_len, 1),
         )
     }
 
-    /// One output value of the interleave, starting at stacked lane `base`.
+    /// One output value of the interleave: the first when `take` is zero, the second when one.
     ///
-    /// Stacked lane `l` comes from block `q = l / block_len`, left when `q` is even.
-    fn interleave_from(&self, other: Self, block_len: usize, base: usize) -> U {
+    /// Output chunk `c` comes from chunk `2 * (c / 2) + take`.
+    /// Of the left operand when `c` is even, and of the right operand when it is odd.
+    fn interleave_from(&self, other: Self, block_len: usize, take: usize) -> Self {
         let bits = Self::WORD_BITS;
         let (left, right) = (self.0.words(), other.0.words());
 
-        U::from_words_fn(|w| {
-            // The first stacked output lane this word carries.
-            let first = base + w * bits;
+        Self(U::from_words_fn(|w| {
+            // The first output lane this word carries.
+            let first = w * bits;
 
             if block_len >= bits {
-                // A block spans whole words, so the word is copied, not rearranged.
+                // A chunk spans whole words, so the word is copied, not rearranged.
                 let chunk = first / block_len;
-                let source_lane = (chunk / 2) * block_len + first % block_len;
+                let source_lane = (2 * (chunk / 2) + take) * block_len + first % block_len;
                 let source = if chunk.is_multiple_of(2) { left } else { right };
                 source[source_lane / bits]
             } else {
-                // A block sits inside a word, so this word zips half a word of each operand:
-                // lanes `first / 2 .. first / 2 + bits / 2`.
-                let source_lane = first / 2;
-                let shift = source_lane % bits;
-                let half = (1u64 << (bits / 2)) - 1;
-                let x = (left[source_lane / bits].to_u64() >> shift) & half;
-                let y = (right[source_lane / bits].to_u64() >> shift) & half;
-
-                // The left operand takes the even blocks, the right the odd ones.
-                U::Word::from_u64(
-                    spread(x, block_len, bits) | (spread(y, block_len, bits) << block_len),
-                )
+                // Chunks sit inside a word.
+                // This word takes every other chunk of each operand, starting at `take`.
+                let mask = U::Word::from_u64(block_mask(block_len));
+                let x = (left[w] >> (take * block_len)) & mask;
+                let y = (right[w] >> (take * block_len)) & mask;
+                x | (y << block_len)
             }
-        })
+        }))
     }
 }
 
@@ -632,23 +614,26 @@ mod tests {
 
                 /// The interleave written straight from its definition.
                 ///
-                /// Stack, cut into chunks, and deal out alternately left then right.
+                /// Chunk `2s` of each operand pairs with chunk `2s + 1`, transposed.
+                /// The first output takes both chunks `2s`, the second both `2s + 1`.
                 fn reference_interleave(a: $alias, b: $alias, block: usize) -> ($alias, $alias) {
-                    let chunks = 2 * $width / block;
-                    let mut stacked = vec![Gf2::ZERO; 2 * $width];
+                    if block == $width {
+                        return (a, b);
+                    }
+                    let mut first = vec![Gf2::ZERO; $width];
+                    let mut second = vec![Gf2::ZERO; $width];
 
-                    // An even output chunk `q` is chunk `q / 2` of the left operand.
-                    // An odd one is chunk `q / 2` of the right operand.
-                    for q in 0..chunks {
-                        let source = if q % 2 == 0 { a } else { b };
+                    for s in 0..($width / block / 2) {
                         for t in 0..block {
-                            stacked[q * block + t] = source.get((q / 2) * block + t);
+                            first[(2 * s) * block + t] = a.get((2 * s) * block + t);
+                            first[(2 * s + 1) * block + t] = b.get((2 * s) * block + t);
+                            second[(2 * s) * block + t] = a.get((2 * s + 1) * block + t);
+                            second[(2 * s + 1) * block + t] = b.get((2 * s + 1) * block + t);
                         }
                     }
-
                     (
-                        $alias::from_fn(|i| stacked[i]),
-                        $alias::from_fn(|i| stacked[$width + i]),
+                        $alias::from_fn(|i| first[i]),
+                        $alias::from_fn(|i| second[i]),
                     )
                 }
 
@@ -895,6 +880,50 @@ mod tests {
     packing_tests!(x512, PackedGf2x512, crate::M512, u64, 8, 512);
 
     #[test]
+    fn interleave_follows_the_packed_field_convention() {
+        // Invariant: the permutation the packed-field trait fixes for every packing.
+        //
+        // Output chunk `c` is chunk `2 * (c / 2)` of the left operand when `c` is even.
+        // Of the right operand when `c` is odd.
+        //
+        // The second output takes the odd source chunks the same way.
+        //
+        // The expectations below are worked out by hand from those sentences.
+        // So they share no model with the implementation.
+        //
+        //     | a = 0xd3 = lanes 0 1 . . 4 . 6 7
+        //     | b = 0x2c = lanes . . 2 3 . 5 . .
+        let a = PackedGf2x8::new(0xd3);
+        let b = PackedGf2x8::new(0x2c);
+
+        // Chunks of one lane:
+        //
+        //     | first  = a0 b0 a2 b2 a4 b4 a6 b6 = 1 0 0 1 1 0 1 0 = 0x59
+        //     | second = a1 b1 a3 b3 a5 b5 a7 b7 = 1 0 0 1 0 1 1 0 = 0x69
+        assert_eq!(pair(a.interleave(b, 1)), (0x59, 0x69));
+
+        // Chunks of two lanes, so whole pairs move:
+        //
+        //     | first  = a[0..2] b[0..2] a[4..6] b[4..6] = 11 00 10 01 = 0x93
+        //     | second = a[2..4] b[2..4] a[6..8] b[6..8] = 00 11 11 00 = 0x3c
+        assert_eq!(pair(a.interleave(b, 2)), (0x93, 0x3c));
+
+        // Chunks of four lanes: one half of each operand into each output.
+        //
+        //     | first  = a[0..4] b[0..4] = 1100 0011 = 0xc3
+        //     | second = a[4..8] b[4..8] = 1011 0100 = 0x2d
+        assert_eq!(pair(a.interleave(b, 4)), (0xc3, 0x2d));
+
+        // One chunk each leaves both operands alone.
+        assert_eq!(pair(a.interleave(b, 8)), (0xd3, 0x2c));
+    }
+
+    /// The backing bytes of an interleaved pair, for comparison against literals.
+    fn pair(values: (PackedGf2x8, PackedGf2x8)) -> (u8, u8) {
+        (values.0.words()[0], values.1.words()[0])
+    }
+
+    #[test]
     fn widths_are_the_advertised_sizes() {
         // One bit per lane and nothing else, aligned to the register that holds it:
         //
@@ -986,22 +1015,6 @@ mod tests {
             alloc::format!("{value:?}"),
             "PackedGf2x128(0x0000000000000001, 0x0000000000000001)"
         );
-    }
-
-    #[test]
-    fn spreading_widens_the_gap_between_blocks() {
-        // A block as wide as half the word needs no gap, so no rung runs.
-        assert_eq!(spread(0b1010, 4, 8), 0b1010);
-
-        // Single bits of a nibble spread to every second bit of a byte.
-        //
-        //     0b1011  ->  0b0100_0101
-        assert_eq!(spread(0b1011, 1, 8), 0b0100_0101);
-
-        // Pairs of a nibble spread to every second pair of a byte.
-        //
-        //     0b1011  ->  0b0010_0011
-        assert_eq!(spread(0b1011, 2, 8), 0b0010_0011);
     }
 
     #[test]

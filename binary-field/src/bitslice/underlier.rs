@@ -30,11 +30,27 @@ use core::slice;
 
 use rand::{Rng, RngExt};
 
+/// Keeps the storage traits closed to this crate.
+///
+/// Their safety rests on the exact layout of the few types below.
+/// No outside implementation could be held to it.
+pub(crate) mod private {
+    pub trait Sealed {}
+}
+
+use private::Sealed;
+
+impl Sealed for u8 {}
+impl Sealed for u16 {}
+impl Sealed for u32 {}
+impl Sealed for u64 {}
+
 /// The machine integer a bit kernel shifts and masks.
 ///
 /// Every operation inside a word goes through this, so a kernel is written once per shape.
 pub trait Word:
-    Copy
+    Sealed
+    + Copy
     + Default
     + Eq
     + Ord
@@ -198,6 +214,8 @@ macro_rules! wide_underlier {
         #[repr(C, align($align))]
         pub struct $name([u64; $words]);
 
+        impl Sealed for $name {}
+
         impl $name {
             /// A block from its words, lowest bits first.
             #[inline]
@@ -252,11 +270,12 @@ wide_underlier!(M512, 8, 64, "A 512-bit block of bits.");
 /// A block that is exactly several narrower blocks laid end to end, part `0` lowest.
 ///
 /// # Safety
-/// An implementation asserts, at compile time:
-/// - that the wide size is the ratio times the narrow size,
-/// - that the wide alignment is at least the narrow alignment.
+/// The trait is sealed, and every implementation is checked below at compile time:
+/// - the wide size is the ratio times the narrow size,
+/// - the wide alignment is at least the narrow alignment,
+/// - the target is little-endian whenever the narrow word is the shorter one.
 ///
-/// Both are what make the reinterpretations below sound.
+/// The three together are what make the reinterpretations sound.
 pub unsafe trait Divisible<Narrow: Underlier>: Underlier {
     /// How many narrow blocks fit in one wide block.
     const RATIO: usize = Self::BITS / Narrow::BITS;
@@ -264,13 +283,18 @@ pub unsafe trait Divisible<Narrow: Underlier>: Underlier {
     /// The narrow blocks this one is made of, lowest bits first.
     #[inline]
     fn parts(&self) -> &[Narrow] {
-        // SAFETY: the ratio exists only when the layout assertions hold, so the parts fit.
+        const { Self::CHECK_LAYOUT };
+
+        // SAFETY: the check pins one wide block at exactly `RATIO` narrow ones.
+        // They are suitably aligned, and in the order the lane map promises.
         unsafe { slice::from_raw_parts(core::ptr::from_ref(self).cast(), Self::RATIO) }
     }
 
     /// The narrow blocks this one is made of, lowest bits first.
     #[inline]
     fn parts_mut(&mut self) -> &mut [Narrow] {
+        const { Self::CHECK_LAYOUT };
+
         // SAFETY: as above, and the exclusive borrow is not duplicated.
         unsafe { slice::from_raw_parts_mut(core::ptr::from_mut(self).cast(), Self::RATIO) }
     }
@@ -278,6 +302,8 @@ pub unsafe trait Divisible<Narrow: Underlier>: Underlier {
     /// A run of wide blocks read as one run of narrow ones, lowest bits first.
     #[inline]
     fn split_slice(slice: &[Self]) -> &[Narrow] {
+        const { Self::CHECK_LAYOUT };
+
         // SAFETY: wide blocks are contiguous and each covers exactly `RATIO` narrow ones.
         unsafe { slice::from_raw_parts(slice.as_ptr().cast(), slice.len() * Self::RATIO) }
     }
@@ -285,23 +311,37 @@ pub unsafe trait Divisible<Narrow: Underlier>: Underlier {
     /// A run of wide blocks read as one run of narrow ones, lowest bits first.
     #[inline]
     fn split_slice_mut(slice: &mut [Self]) -> &mut [Narrow] {
+        const { Self::CHECK_LAYOUT };
+
         // SAFETY: as above, and the exclusive borrow is not duplicated.
         let len = slice.len() * Self::RATIO;
         unsafe { slice::from_raw_parts_mut(slice.as_mut_ptr().cast(), len) }
     }
+
+    /// What every reinterpretation above rests on, rejected at compile time if it fails.
+    ///
+    /// Reading a block at a narrower word is a memory-order view.
+    /// A lane is defined on word values, so the two agree only on a little-endian target.
+    ///
+    /// Views that keep the word width are pure reindexing, and hold either way.
+    const CHECK_LAYOUT: () = {
+        assert!(size_of::<Self>() == Self::RATIO * size_of::<Narrow>());
+        assert!(align_of::<Self>() >= align_of::<Narrow>());
+        assert!(
+            cfg!(target_endian = "little") || size_of::<Narrow::Word>() == size_of::<Self::Word>(),
+            "reading a block at a narrower word needs a little-endian target"
+        );
+    };
 }
 
-/// Declare that one block is an array of another, with the layout checked at compile time.
+/// Declare that one block is an array of another.
+///
+/// The layout is checked by the trait itself, at every reinterpretation.
 macro_rules! divisible {
     ($wide:ty, $narrow:ty) => {
-        // SAFETY: the ratio below does not compile unless the layout assertions hold.
+        // SAFETY: the trait's own layout check rejects a pair that does not line up.
         unsafe impl Divisible<$narrow> for $wide {
-            const RATIO: usize = {
-                let ratio = <$wide as Underlier>::BITS / <$narrow as Underlier>::BITS;
-                assert!(size_of::<$wide>() == ratio * size_of::<$narrow>());
-                assert!(align_of::<$wide>() >= align_of::<$narrow>());
-                ratio
-            };
+            const RATIO: usize = <$wide as Underlier>::BITS / <$narrow as Underlier>::BITS;
         }
     };
 }
