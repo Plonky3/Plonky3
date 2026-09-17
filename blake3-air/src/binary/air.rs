@@ -32,6 +32,8 @@ const NUM_CONSTRAINTS: usize = NUM_INPUT_BITS + NUM_ROUNDS * G_PER_ROUND * CONST
 ///
 /// The input bits are constrained to be boolean. Every other column is then forced to a
 /// bit by the addition constraints, since the majority of three bits is a bit.
+///
+/// The constraints describe Blake-3 only over a field of characteristic 2.
 #[derive(Debug)]
 pub struct Blake3BinaryAir {}
 

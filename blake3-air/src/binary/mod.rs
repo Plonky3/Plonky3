@@ -22,7 +22,7 @@ const NUM_ROUNDS: usize = 7;
 /// Number of G steps in one round.
 const G_PER_ROUND: usize = 8;
 
-/// Row indices `[a, b, c, d]` of the words mixed by each G step of a round.
+/// Indices of the `a`, `b`, `c`, `d` words within their state rows, for each G step of a round.
 ///
 /// Step `g` mixes `v[a]`, `v[4 + b]`, `v[8 + c]`, `v[12 + d]` with the message words
 /// `m[2g]` and `m[2g + 1]`: four column steps followed by four diagonal steps.

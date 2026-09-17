@@ -281,9 +281,38 @@ fn rejects_flipped_output_bits_in_last_round() {
 #[test]
 fn rejects_non_boolean_input() {
     assert!(F::GENERATOR != F::ZERO && F::GENERATOR != F::ONE);
-    let failures = failures_after_edit(1, |row| row.chaining_value[1][3] = F::GENERATOR);
-    // Inputs are checked first, so bit 3 of the second chaining value word is constraint 35.
-    assert!(failures.iter().any(|failure| failure.constraint == 35));
+    // Inputs are checked first in the order chaining value, block, counter low, counter
+    // high, block length, flags, so bit `b` of input word `w` is constraint `32 * w + b`.
+    for word in 0..28 {
+        let bit = (7 * word) % 32;
+        let failures = failures_after_edit(1, |row| {
+            let input_word = match word {
+                0..8 => &mut row.chaining_value[word],
+                8..24 => &mut row.block[word - 8],
+                24 => &mut row.counter_low,
+                25 => &mut row.counter_high,
+                26 => &mut row.block_len,
+                _ => &mut row.flags,
+            };
+            input_word[bit] = F::GENERATOR;
+        });
+        assert!(
+            failures
+                .iter()
+                .any(|failure| failure.constraint == 32 * word + bit),
+            "bit {bit} of input word {word}"
+        );
+    }
+}
+
+#[test]
+fn rejects_non_boolean_witness_at_the_top_bit() {
+    // The carry into bit 31 of a 3-operand addition.
+    let failures = failures_after_edit(2, |row| row.rounds[2][6].add1_carries[30] = F::GENERATOR);
+    assert!(!failures.is_empty());
+    // Bit 23 of `d2` feeds bit 31 of `a2 = d1 ^ (d2 <<< 8)`.
+    let failures = failures_after_edit(3, |row| row.rounds[4][1].d2[23] = F::GENERATOR);
+    assert!(!failures.is_empty());
 }
 
 #[test]
