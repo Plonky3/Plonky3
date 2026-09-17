@@ -50,7 +50,7 @@ pub use lde::{CHUNK_BITS, CompressedLde, CompressedLdeError};
 pub use opening::{
     OPENING_DEGREE, SkipOpening, SkipOpeningClaim, SkipOpeningError, SkipOpeningProver,
 };
-pub use pinned::{PinnedEqError, PinnedEqWeights, SubfieldFoldTable};
+pub use pinned::{GeometricEqWeights, PinnedEqError, PinnedEqWeights, SubfieldFoldTable};
 pub use round::{MessageLenMismatch, RowSelector, SkipRound, SkipRoundError};
 pub use transcript::{
     SkipOpeningProverTranscript, SkipOpeningShape, SkipOpeningTranscriptError,

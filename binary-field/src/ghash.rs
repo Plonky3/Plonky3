@@ -89,6 +89,51 @@ impl Ghash128 {
     pub const fn from_le_bytes(bytes: [u8; 16]) -> Self {
         Self(u128::from_le_bytes(bytes))
     }
+
+    /// Combine values against the successive powers of the indeterminate.
+    ///
+    /// ```text
+    ///     sum_k values_k * x^k
+    /// ```
+    ///
+    /// In this representation a power of the indeterminate shifts the coefficients up.
+    ///
+    /// So the combination can be shifts and exclusive ors, with no multiplication at all.
+    ///
+    /// Either way the modulus is folded in once at the end, not once per term.
+    ///
+    /// Which route is faster depends on the target.
+    ///
+    /// A hardware carryless multiply turns each term into one cheap product, and beats the
+    /// shifts.
+    ///
+    /// Without one a product costs sixteen integer multiplies, and the shifts win by an
+    /// order of magnitude.
+    ///
+    /// The choice is made at compile time from the same flag the rest of the crate reads.
+    ///
+    /// # Panics
+    ///
+    /// Panics on more values than the field has bits.
+    ///
+    /// That ceiling is where the last shift would leave the word.
+    #[inline]
+    pub fn dot_powers_of_x(values: &[Self]) -> Self {
+        if clmul::HAS_HARDWARE_CLMUL {
+            // The powers are bare bit patterns, so the deferred dot product needs no table.
+            //
+            // Each one is the previous shifted up, which is cheaper than shifting by the index.
+            let mut power = 1u128;
+            let terms = values.iter().map(|v| {
+                let term = (v.0, power);
+                power <<= 1;
+                term
+            });
+            Self(clmul::poly_dot_128(terms))
+        } else {
+            Self(clmul::poly_dot_powers_128(values.iter().map(|v| v.0)))
+        }
+    }
 }
 
 impl Packable for Ghash128 {}
