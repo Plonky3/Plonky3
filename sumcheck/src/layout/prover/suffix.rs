@@ -23,6 +23,14 @@ use crate::table::{OpeningBatch, OpeningEvals, OpeningRequest};
 use crate::transcript::{ProverTranscript, SumcheckShape};
 use crate::{Claim, SumcheckData, extrapolate_01inf};
 
+/// One claim's residual weight tables at unit scale, over a single column slot.
+struct ClaimWeightTables<EF> {
+    /// Equality weights, present when the claim opens a column directly.
+    current: Option<Vec<EF>>,
+    /// Repeat-last successor weights, present when the claim opens a successor view.
+    next: Option<Vec<EF>>,
+}
+
 /// Stacked-sumcheck prover with suffix-first variable binding.
 ///
 /// # Flow
@@ -454,25 +462,83 @@ impl<F: Field, EF: ExtensionField<F>> SuffixProver<F, EF> {
         // Output spans the residual stacked space.
         // Size is 2^(num_variables - |rs|).
         let mut out = Poly::<EF>::zero(self.claims.num_variables - rs.num_variables());
+        let num_folded = rs.num_variables();
         // Bake the scalar into the prefix-half equality table.
         // Each slot compression then returns scale * eq(r, y) * col(...) in one pass.
         let rs = SplitEq::new_unpacked(rs, scale);
 
-        for placement in &self.claims.placements {
-            for (poly_idx, selector) in placement.selectors().iter().enumerate() {
-                let poly = self.claims.tables[placement.idx()].poly(poly_idx);
-                assert!(rs.num_variables() <= poly.num_variables());
-                // Slot start in the compressed output.
-                let off = selector.index() << (poly.num_variables() - rs.num_variables());
-                // Write this column's compression into its own slot.
-                rs.compress_suffix_into(
-                    &mut out.as_mut_slice()
-                        [off..off + (1 << (poly.num_variables() - rs.num_variables()))],
-                    poly.as_view(),
-                );
-            }
-        }
+        // Slots are disjoint, so columns compress independently.
+        // A column is usually too short to parallelize inside, so the parallelism is across columns.
+        self.column_slots(out.as_mut_slice(), num_folded)
+            .into_par_iter()
+            .for_each(|(slot, table_idx, poly_idx)| {
+                let poly = self.claims.tables[table_idx].poly(poly_idx);
+                if num_folded == 0 {
+                    // Nothing to fold: the slot is the column itself, times the scale.
+                    if scale == EF::ONE {
+                        slot.iter_mut()
+                            .zip(poly.as_slice())
+                            .for_each(|(out, &value)| *out = value.into());
+                    } else {
+                        slot.iter_mut()
+                            .zip(poly.as_slice())
+                            .for_each(|(out, &value)| *out = scale * value);
+                    }
+                } else {
+                    rs.compress_suffix_into(slot, poly.as_view());
+                }
+            });
         out
+    }
+
+    /// Splits `out` into one disjoint slot per column, after `num_folded` suffix variables.
+    ///
+    /// Column `(table, poly)` owns the slot starting at `selector.index() << (n - num_folded)`,
+    /// of length `2^(n - num_folded)`, where `n` is the table's arity.
+    ///
+    /// # Returns
+    ///
+    /// One `(slot, table index, column index)` triple per column, in increasing slot order.
+    fn column_slots<'a>(
+        &self,
+        out: &'a mut [EF],
+        num_folded: usize,
+    ) -> Vec<(&'a mut [EF], usize, usize)> {
+        let mut ranges: Vec<(usize, usize, usize, usize)> = self
+            .claims
+            .placements
+            .iter()
+            .flat_map(|placement| {
+                let num_variables_table = self.claims.num_variables_table(placement.idx());
+                assert!(num_folded <= num_variables_table);
+                let log_len = num_variables_table - num_folded;
+                placement
+                    .selectors()
+                    .iter()
+                    .enumerate()
+                    .map(move |(poly_idx, selector)| {
+                        (
+                            selector.index() << log_len,
+                            1 << log_len,
+                            placement.idx(),
+                            poly_idx,
+                        )
+                    })
+            })
+            .collect();
+        ranges.sort_unstable_by_key(|&(offset, ..)| offset);
+
+        let mut slots = Vec::with_capacity(ranges.len());
+        let mut rest = out;
+        let mut consumed = 0;
+        for (offset, len, table_idx, poly_idx) in ranges {
+            let (_, tail) = core::mem::take(&mut rest).split_at_mut(offset - consumed);
+            let (slot, tail) = tail.split_at_mut(len);
+            slots.push((slot, table_idx, poly_idx));
+            rest = tail;
+            consumed = offset + len;
+        }
+        slots
     }
 
     /// Builds the residual weight polynomial after the SVO rounds.
@@ -489,42 +555,73 @@ impl<F: Field, EF: ExtensionField<F>> SuffixProver<F, EF> {
         // Output arity: stacked arity minus the folded challenges.
         let mut out = Poly::<EF>::zero(self.claims.num_variables - rs.num_variables());
 
+        // Every opening of a claim shares that claim's point, so its residual weight table is
+        // the same for every column it opens. Build each claim's current and successor tables
+        // once, at unit scale; both accumulations are linear in the scale.
+        //
+        // Walk order matches the batched claim, so alpha powers stay aligned:
+        // placements, then claims, then current openings, then successor openings.
         let mut alphas = alpha.powers();
-
-        // Concrete claims: write each into the slot its column's selector addresses.
-        // Walk order matches the batched claim, so alpha powers stay aligned.
+        let mut tables: Vec<ClaimWeightTables<EF>> = Vec::new();
+        // Per column: `(table index into tables, is successor, alpha power)`.
+        let mut column_weights: Vec<Vec<Vec<(usize, bool, EF)>>> = self
+            .claims
+            .tables
+            .iter()
+            .map(|table| vec![Vec::new(); table.num_polys()])
+            .collect();
         for placement in &self.claims.placements {
-            let num_variables_table = self.num_variables_table(placement.idx());
-            let slot_size = 1usize << num_variables_table;
+            let len = 1usize << (self.num_variables_table(placement.idx()) - rs.num_variables());
             for claim in &self.claims.claim_map[placement.idx()] {
-                // Current group: equality weight of the column at the claim point.
-                for opening in claim.current_openings() {
-                    // The opening's column tells us which selector picks the slot.
-                    let col = opening.poly_idx().unwrap();
-                    let off = placement.selectors()[col].index() << num_variables_table;
-                    // Fold the scalar slot range down by the SVO depth.
-                    let folded_range =
-                        (off >> self.claims.folding)..((off + slot_size) >> self.claims.folding);
-                    let scale = alphas.next().unwrap();
+                let claim_idx = tables.len();
+                let current = (!claim.current_openings().is_empty()).then(|| {
+                    let mut table = EF::zero_vec(len);
+                    claim.point().accumulate_into(&mut table, rs, EF::ONE);
+                    table
+                });
+                let next = (!claim.next_openings().is_empty()).then(|| {
+                    let mut table = EF::zero_vec(len);
                     claim
                         .point()
-                        .accumulate_into(&mut out.as_mut_slice()[folded_range], rs, scale);
+                        .accumulate_next_suffix_into(&mut table, rs, EF::ONE);
+                    table
+                });
+                tables.push(ClaimWeightTables { current, next });
+
+                let weights = &mut column_weights[placement.idx()];
+                for opening in claim.current_openings() {
+                    weights[opening.poly_idx().unwrap()].push((
+                        claim_idx,
+                        false,
+                        alphas.next().unwrap(),
+                    ));
                 }
-                // Next group: same slot, but the repeat-last successor weight.
                 for opening in claim.next_openings() {
-                    let col = opening.poly_idx().unwrap();
-                    let off = placement.selectors()[col].index() << num_variables_table;
-                    let folded_range =
-                        (off >> self.claims.folding)..((off + slot_size) >> self.claims.folding);
-                    let scale = alphas.next().unwrap();
-                    claim.point().accumulate_next_suffix_into(
-                        &mut out.as_mut_slice()[folded_range],
-                        rs,
-                        scale,
-                    );
+                    weights[opening.poly_idx().unwrap()].push((
+                        claim_idx,
+                        true,
+                        alphas.next().unwrap(),
+                    ));
                 }
             }
         }
+
+        // Concrete claims: each column's slot is independent, so slots fill in parallel.
+        self.column_slots(out.as_mut_slice(), rs.num_variables())
+            .into_par_iter()
+            .for_each(|(slot, table_idx, poly_idx)| {
+                for &(claim_idx, is_next, scale) in &column_weights[table_idx][poly_idx] {
+                    let claim_tables = &tables[claim_idx];
+                    let table = if is_next {
+                        &claim_tables.next
+                    } else {
+                        &claim_tables.current
+                    };
+                    slot.iter_mut()
+                        .zip(table.as_ref().unwrap())
+                        .for_each(|(out, &weight)| *out += scale * weight);
+                }
+            });
 
         // Virtual claims: span the full output; alpha continues after concrete ones.
         let mut alpha_i = alpha.exp_u64(self.num_claims() as u64);
