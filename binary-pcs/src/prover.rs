@@ -15,13 +15,14 @@
 
 use alloc::vec::Vec;
 
-use p3_binary_field::BinaryField128;
+use p3_binary_field::{BinaryField128, Ghash128};
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
 use p3_commit::{Encoder, Mmcs};
 use p3_matrix::dense::{DenseMatrix, RowMajorMatrix};
 use p3_multilinear_util::point::Point;
 use p3_sumcheck::SumcheckData;
 use p3_sumcheck::layout::{Layout, Table, Witness};
+use p3_sumcheck::strategy::ReprSumcheckProver;
 
 use crate::PcsLayout;
 use crate::fold::fold_codeword_batch;
@@ -161,13 +162,17 @@ where
     } = prover_data;
 
     let mut sumcheck_data = SumcheckData::default();
-    let (mut sumcheck, mut randomness) =
+    let (sumcheck, mut randomness) =
         transcript.fold_batch(|challenger| layout.into_sumcheck(&mut sumcheck_data, 0, challenger));
     assert_eq!(
         randomness.num_variables(),
         0,
         "the commit phase runs at zero preprocessing depth, so the sumcheck consumes no head rounds"
     );
+
+    // The rounds multiply in the polynomial basis, which needs no change of basis per product.
+    // The transcript carries tower elements.
+    let mut sumcheck = ReprSumcheckProver::<_, _, Ghash128>::new(sumcheck);
 
     assert_eq!(
         mmcs.get_matrices(&merkle_data)[0].width,
@@ -187,13 +192,7 @@ where
             let challenge = tracing::info_span!("sumcheck round", round).in_scope(|| {
                 // A sumcheck round seeds a sub-transcript of its own.
                 transcript.fold_batch(|challenger| {
-                    sumcheck.compute_sumcheck_polynomials(
-                        &mut sumcheck_data,
-                        challenger,
-                        1,
-                        0,
-                        None,
-                    )
+                    sumcheck.compute_sumcheck_polynomials(&mut sumcheck_data, challenger, 1, 0)
                 })
             });
             challenges.push(challenge.as_slice()[0]);
