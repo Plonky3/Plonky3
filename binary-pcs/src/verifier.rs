@@ -5,14 +5,18 @@
 //! folds all its symbols, then checks the coordinate `index >> (start + arity)` in the next
 //! committed word (or the final word sent in full). Only base cosets are sampled distinctly;
 //! repeated projected cosets in later rounds remain the same base-query paths.
+//!
+//! The base word's symbols come from the committed alphabet.
+//! Every folded word's come from the challenge field, so the first batch is what widens.
 
 use alloc::vec;
 use alloc::vec::Vec;
 
-use p3_binary_field::BinaryField128;
+use p3_binary_field::TowerLevel;
+use p3_challenger::fs::TranscriptField;
 use p3_challenger::{CanSampleUniformBits, FieldChallenger, GrindingChallenger};
 use p3_commit::Mmcs;
-use p3_field::PrimeCharacteristicRing;
+use p3_field::{ExtensionField, Field};
 use p3_matrix::Dimensions;
 
 use crate::error::BinaryPcsError;
@@ -50,11 +54,11 @@ pub(crate) fn flat_coset_indices(indices: &[usize], start: usize, arity: usize) 
 ///
 /// Runs before any index arithmetic on the round's contents, so a wrong row count or a
 /// mis-sized row is rejected here rather than read out of bounds.
-fn check_round_shape<E>(
+fn check_round_shape<A, F, E>(
     round: usize,
-    opened_values: &[Vec<BinaryField128>],
+    opened_values: &[Vec<A>],
     expected_opens: usize,
-) -> Result<(), BinaryPcsError<E>> {
+) -> Result<(), BinaryPcsError<F, E>> {
     if opened_values.len() != expected_opens {
         return Err(BinaryPcsError::OpeningCountMismatch {
             round,
@@ -75,26 +79,31 @@ fn check_round_shape<E>(
     Ok(())
 }
 
-/// Wraps opened rows for [`Mmcs::verify_multi_batch`], which expects a `[query][matrix]`
-/// shape; every round here commits exactly one matrix, so each row gets a one-element outer
-/// slice.
-fn wrap_rows(opened_values: &[Vec<BinaryField128>]) -> Vec<Vec<&[BinaryField128]>> {
+/// Wraps opened rows in the shape the batched-verification entry point expects.
+/// That shape is indexed by query and then by matrix.
+///
+/// Every round here commits exactly one matrix, so each row gets a one-element slice.
+fn wrap_rows<A>(opened_values: &[Vec<A>]) -> Vec<Vec<&[A]>> {
     opened_values
         .iter()
         .map(|row| vec![row.as_slice()])
         .collect()
 }
 
-/// Checks the proof's declared intermediate round count and final-codeword length against
-/// what `config` derives, before any transcript operation: `BinaryPcs::verify_opening` and
-/// [`verify_query_paths`] both need this pair of structural checks, ahead of everything each
-/// one does on its own.
-pub(crate) fn check_round_and_final_lengths<MT>(
+/// Checks the proof's declared round count and final-codeword length against the schedule.
+/// Both run before any transcript operation.
+///
+/// The opening verifier and the query path check each need this pair first.
+/// Neither one's own work is reached until both have passed.
+pub(crate) fn check_round_and_final_lengths<F, EF, MT, MX>(
     config: &BinaryPcsConfig,
-    proof: &BinaryPcsProof<MT>,
-) -> Result<(), BinaryPcsError<MT::Error>>
+    proof: &BinaryPcsProof<F, EF, MT, MX>,
+) -> Result<(), BinaryPcsError<F, MT::Error>>
 where
-    MT: Mmcs<BinaryField128>,
+    F: Field,
+    EF: Field,
+    MT: Mmcs<F>,
+    MX: Mmcs<EF>,
 {
     let expected_intermediate_rounds = config.num_fold_batches() - 1;
     if proof.rounds.len() != expected_intermediate_rounds {
@@ -121,8 +130,8 @@ where
 /// A positive budget needs no check here: the witness is absorbed and its sampled bits are
 /// compared, so the difficulty itself pins the field.
 //
-// Why: `GrindingChallenger::check_witness` returns `true` at `bits == 0` without absorbing,
-// which leaves `proof.pow_witness` compared against nothing and free to be any value.
+// Why: a zero-bit witness check returns true without absorbing anything.
+// The proof's witness is then compared against nothing, and any value rides along.
 //
 //     pow_bits = 0 -> prover emits zero, verifier reads nothing -> pin the field here
 //     pow_bits > 0 -> prover grinds,     verifier resamples     -> the grind pins it
@@ -130,14 +139,17 @@ where
 // Assumption: the honest prover's grind at zero bits is pinned to the zero witness.
 // A grinding path that leaves the zero-bit witness unconstrained needs this check revisited.
 // The pin is asserted by `zero_difficulty_grinding_is_pinned_to_the_zero_witness` below.
-pub(crate) fn check_canonical_pow_witness<MT>(
+pub(crate) fn check_canonical_pow_witness<F, EF, MT, MX>(
     config: &BinaryPcsConfig,
-    proof: &BinaryPcsProof<MT>,
-) -> Result<(), BinaryPcsError<MT::Error>>
+    proof: &BinaryPcsProof<F, EF, MT, MX>,
+) -> Result<(), BinaryPcsError<F, MT::Error>>
 where
-    MT: Mmcs<BinaryField128>,
+    F: TowerLevel,
+    EF: Field,
+    MT: Mmcs<F>,
+    MX: Mmcs<EF>,
 {
-    if config.pow_bits() == 0 && proof.pow_witness != BinaryField128::ZERO {
+    if config.pow_bits() == 0 && proof.pow_witness != F::ZERO {
         return Err(BinaryPcsError::NonCanonicalPowWitness {
             actual: proof.pow_witness,
         });
@@ -146,14 +158,51 @@ where
     Ok(())
 }
 
+/// Folds one query's coset of a single batch, out of the rows the proof opened for it.
+///
+/// A single-challenge batch is one pair, so it needs neither a gather nor a scratch pass.
+///
+/// `gather` and `scratch` are working space the caller reuses across queries.
+fn fold_query_coset<A, EF>(
+    rows: &[Vec<A>],
+    query: usize,
+    next_position: usize,
+    betas: &[EF],
+    gather: &mut Vec<A>,
+    scratch: &mut Vec<EF>,
+) -> EF
+where
+    A: TowerLevel,
+    EF: ExtensionField<A> + TowerLevel,
+{
+    if let [beta] = betas {
+        return fold_pair(
+            next_position,
+            *beta,
+            rows[2 * query][0],
+            rows[2 * query + 1][0],
+        );
+    }
+
+    // The coset's symbols are consecutive rows, one symbol each.
+    let size = 1usize << betas.len();
+    gather.clear();
+    gather.extend(
+        rows[query * size..(query + 1) * size]
+            .iter()
+            .map(|row| row[0]),
+    );
+    fold_coset(next_position, gather, betas, scratch)
+}
+
 /// Verifies the query phase of an opening proof: the single grind, the sampled query
 /// indices, every round's Merkle multiproof, and the fold-consistency chain tying each round
 /// to the next.
 ///
-/// `betas` is the fold challenge used at each round, `betas[r]` for round `r`, in the order
-/// `fold_rounds_with` samples them; the caller derives it by replaying the sumcheck transcript
-/// (this function does not touch the sumcheck rounds or the commitments' own transcript
-/// order).
+/// `betas` holds one fold challenge per round, in the order the fold phase sampled them.
+/// The caller derives it by replaying the sumcheck transcript.
+///
+/// This function touches neither the sumcheck rounds nor the commitments' own order.
 ///
 /// All proof-shape checks run before the transcript is touched.
 ///
@@ -161,22 +210,25 @@ where
 ///
 /// # Panics
 ///
-/// Panics if `betas.len() != config.num_fold_rounds()`: `betas` is the caller's own
-/// transcript-replay output, never proof-supplied data, so a length mismatch here is a caller
-/// bug rather than a malformed proof.
-pub(crate) fn verify_query_paths<MT, Ch>(
+/// Panics unless `betas` holds one challenge per fold round.
+/// It is the caller's own transcript-replay output, never proof-supplied data.
+///
+/// A length mismatch is therefore a caller bug, not a malformed proof.
+pub(crate) fn verify_query_paths<F, EF, MT, MX, Ch>(
     config: &BinaryPcsConfig,
     mmcs: &MT,
+    round_mmcs: &MX,
     base_commitment: &MT::Commitment,
-    betas: &[BinaryField128],
-    proof: &BinaryPcsProof<MT>,
-    transcript: &mut BinaryPcsVerifierTranscript<'_, Ch>,
-) -> Result<(), BinaryPcsError<MT::Error>>
+    betas: &[EF],
+    proof: &BinaryPcsProof<F, EF, MT, MX>,
+    transcript: &mut BinaryPcsVerifierTranscript<'_, F, EF, Ch>,
+) -> Result<(), BinaryPcsError<F, MT::Error>>
 where
-    MT: Mmcs<BinaryField128>,
-    Ch: FieldChallenger<BinaryField128>
-        + GrindingChallenger<Witness = BinaryField128>
-        + CanSampleUniformBits<BinaryField128>,
+    F: TranscriptField + TowerLevel,
+    EF: ExtensionField<F> + TowerLevel,
+    MT: Mmcs<F>,
+    MX: Mmcs<EF, Error = MT::Error>,
+    Ch: FieldChallenger<F> + GrindingChallenger<Witness = F> + CanSampleUniformBits<F>,
 {
     let num_fold_rounds = config.num_fold_rounds();
     assert_eq!(betas.len(), num_fold_rounds, "one fold challenge per round");
@@ -191,19 +243,19 @@ where
         .num_queries()
         .min(domain_size >> config.log_folding_factor());
     let batches: Vec<_> = config.fold_batches().collect();
-    let round_values = |batch: usize| -> &[Vec<BinaryField128>] {
-        if batch == 0 {
-            &proof.base_opened_values
-        } else {
-            &proof.rounds[batch - 1].opened_values
-        }
-    };
-    for (batch, &(_, arity)) in batches.iter().enumerate() {
-        check_round_shape(batch, round_values(batch), target_queries << arity)?;
+
+    // The base batch reads the committed alphabet, every later one the challenge field.
+    check_round_shape(0, &proof.base_opened_values, target_queries << batches[0].1)?;
+    for (batch, &(_, arity)) in batches.iter().enumerate().skip(1) {
+        check_round_shape(
+            batch,
+            &proof.rounds[batch - 1].opened_values,
+            target_queries << arity,
+        )?;
     }
 
-    // Match `open_queries`: this uncommitted word must precede both query grinding
-    // and sampling, even when there are no evaluation claims to constrain its value.
+    // Match the prover: this uncommitted word precedes both grinding and sampling.
+    // That holds even with no evaluation claim to constrain its value.
     transcript.final_codeword(proof.final_codeword.as_slice())?;
     transcript.query_pow(proof.pow_witness)?;
 
@@ -216,59 +268,81 @@ where
         .collect();
     debug_assert_eq!(indices.len(), target_queries);
 
-    for (batch, &(start, arity)) in batches.iter().enumerate() {
-        let (commitment, multi_proof) = if batch == 0 {
-            (base_commitment, &proof.base_multi_proof)
-        } else {
-            (
-                &proof.rounds[batch - 1].commitment,
-                &proof.rounds[batch - 1].multi_proof,
-            )
-        };
+    // Authenticate the base batch's rows against the base commitment.
+    let base_dims = [Dimensions {
+        width: 1,
+        height: domain_size,
+    }];
+    let base_indices = flat_coset_indices(&indices, 0, batches[0].1);
+    mmcs.verify_multi_batch(
+        base_commitment,
+        &base_dims,
+        &base_indices,
+        &wrap_rows(&proof.base_opened_values),
+        &proof.base_multi_proof,
+    )
+    .map_err(|source| BinaryPcsError::MerkleFailed { round: 0, source })?;
+
+    // Then every committed folded batch against its own root.
+    for (batch, &(start, arity)) in batches.iter().enumerate().skip(1) {
+        let round = &proof.rounds[batch - 1];
         let dims = [Dimensions {
             width: 1,
             height: domain_size >> start,
         }];
         let coset_indices = flat_coset_indices(&indices, start, arity);
-        mmcs.verify_multi_batch(
-            commitment,
-            &dims,
-            &coset_indices,
-            &wrap_rows(round_values(batch)),
-            multi_proof,
-        )
-        .map_err(|source| BinaryPcsError::MerkleFailed {
-            round: batch,
-            source,
-        })?;
+        round_mmcs
+            .verify_multi_batch(
+                &round.commitment,
+                &dims,
+                &coset_indices,
+                &wrap_rows(&round.opened_values),
+                &round.multi_proof,
+            )
+            .map_err(|source| BinaryPcsError::MerkleFailed {
+                round: batch,
+                source,
+            })?;
     }
 
-    let mut coset = Vec::new();
+    // The fold chain: each batch's coset must reproduce the symbol the next word carries.
+    let mut base_gather: Vec<F> = Vec::new();
+    let mut round_gather: Vec<EF> = Vec::new();
+    let mut scratch: Vec<EF> = Vec::new();
     for (q, &index) in indices.iter().enumerate() {
         for (batch, &(start, arity)) in batches.iter().enumerate() {
-            let size = 1 << arity;
             let next_position = index >> (start + arity);
-            let folded = if arity == 1 {
-                fold_pair(
+            let betas = &betas[start..start + arity];
+
+            // Only the base batch reads the narrow alphabet.
+            let folded = if batch == 0 {
+                fold_query_coset(
+                    &proof.base_opened_values,
+                    q,
                     next_position,
-                    betas[start],
-                    round_values(batch)[2 * q][0],
-                    round_values(batch)[2 * q + 1][0],
+                    betas,
+                    &mut base_gather,
+                    &mut scratch,
                 )
             } else {
-                coset.clear();
-                coset.extend(
-                    round_values(batch)[q * size..(q + 1) * size]
-                        .iter()
-                        .map(|row| row[0]),
-                );
-                fold_coset(next_position, &mut coset, &betas[start..start + arity])
+                fold_query_coset(
+                    &proof.rounds[batch - 1].opened_values,
+                    q,
+                    next_position,
+                    betas,
+                    &mut round_gather,
+                    &mut scratch,
+                )
             };
-            let expected = if let Some(&(_, next_arity)) = batches.get(batch + 1) {
-                let next_size = 1 << next_arity;
-                round_values(batch + 1)[q * next_size + (next_position & (next_size - 1))][0]
-            } else {
-                proof.final_codeword.as_slice()[next_position]
+
+            // The next word is a committed round, or the final word sent in the clear.
+            let expected = match batches.get(batch + 1) {
+                Some(&(_, next_arity)) => {
+                    let next_size = 1 << next_arity;
+                    proof.rounds[batch].opened_values
+                        [q * next_size + (next_position & (next_size - 1))][0]
+                }
+                None => proof.final_codeword.as_slice()[next_position],
             };
             if folded != expected {
                 return Err(BinaryPcsError::FoldMismatch {
@@ -393,7 +467,7 @@ mod tests {
         // Invariant: a query names a fold pair, so positions are distinct and pair-aligned.
         //
         // Fixture state: a 2^10 domain folded by one, so pairs index 2^9 slots.
-        let config = BinaryPcsConfig::try_new(10, params())
+        let config = BinaryPcsConfig::try_new::<F, F>(10, params())
             .unwrap()
             .try_with_folding(1)
             .unwrap();
@@ -420,7 +494,7 @@ mod tests {
         //     pairs:   |0| |2| |4| |6|
         //
         // Asking for 100 therefore yields the 4 low positions, not 8 indices.
-        let config = BinaryPcsConfig::try_new(3, params())
+        let config = BinaryPcsConfig::try_new::<F, F>(3, params())
             .unwrap()
             .try_with_folding(1)
             .unwrap();
@@ -432,7 +506,7 @@ mod tests {
     #[test]
     fn batched_queries_sample_distinct_full_cosets_and_cap_at_the_coset_count() {
         for (num_variables, arity) in [(8, 3), (3, 3)] {
-            let config = BinaryPcsConfig::try_new(num_variables, params())
+            let config = BinaryPcsConfig::try_new::<F, F>(num_variables, params())
                 .unwrap()
                 .try_with_folding(arity)
                 .unwrap();
@@ -471,7 +545,7 @@ mod tests {
             pow_bits: 0,
             ..params()
         };
-        let config = BinaryPcsConfig::try_new(10, unground)
+        let config = BinaryPcsConfig::try_new::<F, F>(10, unground)
             .unwrap()
             .try_with_folding(1)
             .unwrap();
@@ -497,7 +571,7 @@ mod tests {
     fn round_count_mismatch_is_typed_not_a_panic() {
         // A proof claiming fewer rounds than the config must be rejected before any
         // indexing, so a malformed proof is a rejection rather than an abort.
-        let err: BinaryPcsError<()> = BinaryPcsError::RoundCountMismatch {
+        let err: BinaryPcsError<F, ()> = BinaryPcsError::RoundCountMismatch {
             expected: 8,
             actual: 3,
         };
@@ -514,20 +588,28 @@ mod tests {
         let table = Table::new(RowMajorMatrix::new(poly.into_evals(), 1 << NUM_VARIABLES));
         let witness = SuffixProver::<F, F>::new_witness(vec![table], 0);
 
-        let config = BinaryPcsConfig::try_new(NUM_VARIABLES, params()).unwrap();
+        let config = BinaryPcsConfig::try_new::<F, F>(NUM_VARIABLES, params()).unwrap();
         let encoder = AdditiveRsEncoder::<F, NaiveAdditiveNtt<F>>::default();
         let mmcs_instance = mmcs();
 
         // Prover route: bind the root, then run the whole description.
         let mut prover_ch = challenger();
-        let (base_commitment, prover_data) = commit(&config, &encoder, &mmcs_instance, witness);
+        let (base_commitment, prover_data) =
+            commit::<F, F, _, _>(&config, &encoder, &mmcs_instance, witness);
         prover_ch.observe(base_commitment.clone());
         let mut prover_t =
             BinaryPcsProverTranscript::new(&mut prover_ch, BinaryPcsShape::new(&config));
         let (base_merkle_data, sumcheck_data, rounds, randomness, final_codeword) =
-            fold_rounds_with::<false, _, _>(prover_data, &config, &mmcs_instance, &mut prover_t);
+            fold_rounds_with::<false, F, F, _, _, _>(
+                prover_data,
+                &config,
+                &mmcs_instance,
+                &mmcs_instance,
+                &mut prover_t,
+            );
         let query_proofs = open_queries(
             &config,
+            &mmcs_instance,
             &mmcs_instance,
             &mut prover_t,
             &base_merkle_data,
@@ -556,6 +638,7 @@ mod tests {
         let result = verify_query_paths(
             &config,
             &mmcs_instance,
+            &mmcs_instance,
             &base_commitment,
             randomness.as_slice(),
             &proof,
@@ -577,7 +660,7 @@ mod tests {
         challenger: &'a mut MyChallenger,
         sumcheck_data: &SumcheckData<F, F>,
         oracles: &[<MyMmcs as Mmcs<F>>::Commitment],
-    ) -> BinaryPcsVerifierTranscript<'a, MyChallenger> {
+    ) -> BinaryPcsVerifierTranscript<'a, F, F, MyChallenger> {
         let mut transcript =
             BinaryPcsVerifierTranscript::new(challenger, BinaryPcsShape::new(config));
 
@@ -632,7 +715,7 @@ mod tests {
         let table = Table::new(RowMajorMatrix::new(poly.into_evals(), 1 << NUM_VARIABLES));
         let witness = SuffixProver::<F, F>::new_witness(vec![table], 0);
 
-        let config = BinaryPcsConfig::try_new(NUM_VARIABLES, params()).unwrap();
+        let config = BinaryPcsConfig::try_new::<F, F>(NUM_VARIABLES, params()).unwrap();
         let encoder = AdditiveRsEncoder::<F, NaiveAdditiveNtt<F>>::default();
         let mmcs_instance = mmcs();
         let shape = BinaryPcsShape::new(&config);
@@ -640,11 +723,18 @@ mod tests {
 
         // Prover route: commit, bind the root, then run the whole description.
         let mut prover_ch = challenger();
-        let (base_commitment, prover_data) = commit(&config, &encoder, &mmcs_instance, witness);
+        let (base_commitment, prover_data) =
+            commit::<F, F, _, _>(&config, &encoder, &mmcs_instance, witness);
         prover_ch.observe(base_commitment.clone());
         let mut prover_t = BinaryPcsProverTranscript::new(&mut prover_ch, shape);
         let (_base_merkle_data, sumcheck_data, rounds, _randomness, final_codeword) =
-            fold_rounds_with::<false, _, _>(prover_data, &config, &mmcs_instance, &mut prover_t);
+            fold_rounds_with::<false, F, F, _, _, _>(
+                prover_data,
+                &config,
+                &mmcs_instance,
+                &mmcs_instance,
+                &mut prover_t,
+            );
         prover_t.final_codeword(&final_codeword);
         let pow_witness = prover_t.query_pow();
         let prover_positions: Vec<usize> = prover_t
@@ -689,19 +779,26 @@ mod tests {
         let table = Table::new(RowMajorMatrix::new(poly.into_evals(), 1 << NUM_VARIABLES));
         let witness = SuffixProver::<F, F>::new_witness(vec![table], 0);
 
-        let config = BinaryPcsConfig::try_new(NUM_VARIABLES, params()).unwrap();
+        let config = BinaryPcsConfig::try_new::<F, F>(NUM_VARIABLES, params()).unwrap();
         let encoder = AdditiveRsEncoder::<F, NaiveAdditiveNtt<F>>::default();
         let mmcs_instance = mmcs();
 
         let mut prover_ch = challenger();
-        let (base_commitment, prover_data) = commit(&config, &encoder, &mmcs_instance, witness);
+        let (base_commitment, prover_data) =
+            commit::<F, F, _, _>(&config, &encoder, &mmcs_instance, witness);
         // Mirror what the scheme's commit phase binds, so this replay walks the
         // same sponge stream production does.
         prover_ch.observe(base_commitment.clone());
         let mut prover_t =
             BinaryPcsProverTranscript::new(&mut prover_ch, BinaryPcsShape::new(&config));
         let (base_merkle_data, sumcheck_data, mut rounds, randomness, final_codeword) =
-            fold_rounds_with::<false, _, _>(prover_data, &config, &mmcs_instance, &mut prover_t);
+            fold_rounds_with::<false, F, F, _, _, _>(
+                prover_data,
+                &config,
+                &mmcs_instance,
+                &mmcs_instance,
+                &mut prover_t,
+            );
 
         // The prover bound this oracle before the tamper below replaces it.
         //
@@ -728,6 +825,7 @@ mod tests {
         let query_proofs = open_queries(
             &config,
             &mmcs_instance,
+            &mmcs_instance,
             &mut prover_t,
             &base_merkle_data,
             &rounds,
@@ -752,6 +850,7 @@ mod tests {
 
         let err = verify_query_paths(
             &config,
+            &mmcs_instance,
             &mmcs_instance,
             &base_commitment,
             randomness.as_slice(),

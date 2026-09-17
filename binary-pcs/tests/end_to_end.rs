@@ -9,7 +9,7 @@
 //! so it can never disagree with a proof that desyncs the transcript from what the prover
 //! actually produced.
 
-use p3_binary_field::{BinaryChallenger, BinaryField128};
+use p3_binary_field::{BinaryChallenger, BinaryField64, BinaryField128};
 use p3_binary_pcs::{
     BinaryPcs, BinaryPcsConfig, BinaryPcsError, BinaryPcsParams, BinaryPcsProof,
     GroupedCodewordMmcs,
@@ -34,7 +34,8 @@ type MyHash = SerializingHasher<Keccak256Hash>;
 type MyCompress = CompressionFunctionFromHasher<Keccak256Hash, 2, 32>;
 type MyMmcs = MerkleTreeMmcs<F, u8, MyHash, MyCompress, 2, 32>;
 type MyChallenger = BinaryChallenger<F, HashChallenger<u8, Keccak256Hash, 32>>;
-type MyPcs = BinaryPcs<MyMmcs>;
+type MyPcs = BinaryPcs<F, F, MyMmcs, MyMmcs>;
+type MyProof = BinaryPcsProof<F, F, MyMmcs, MyMmcs>;
 
 #[test]
 fn opening_claims_must_fit_the_security_budget() {
@@ -46,11 +47,13 @@ fn opening_claims_must_fit_the_security_budget() {
     )]);
     // Both configurations query every pair. Only the claim budget distinguishes them.
     let prover = BinaryPcs::new(
-        BinaryPcsConfig::try_new(1, params(2, 0, 40)).unwrap(),
+        BinaryPcsConfig::try_new::<F, F>(1, params(2, 0, 40)).unwrap(),
+        mmcs(),
         mmcs(),
     );
     let verifier = BinaryPcs::new(
-        BinaryPcsConfig::try_new(1, params(2, 0, 124)).unwrap(),
+        BinaryPcsConfig::try_new::<F, F>(1, params(2, 0, 124)).unwrap(),
+        mmcs(),
         mmcs(),
     );
     let mut ch = challenger();
@@ -67,13 +70,14 @@ fn opening_claims_must_fit_the_security_budget() {
 fn single_folds_must_compose_all_rounds_and_query_error() {
     // Sum_r (2^(22-r) + 1) + 2*20 = 8_388_660 field-error units.
     // Its rounded bound is 104 bits; reserving half the error for queries leaves 103.
-    assert!(BinaryPcsConfig::try_new(20, params(2, 0, 104)).is_err());
+    assert!(BinaryPcsConfig::try_new::<F, F>(20, params(2, 0, 104)).is_err());
 }
 
 #[test]
 fn binary_pcs_supplies_composed_prescribed_security() {
     let pcs = BinaryPcs::new(
-        BinaryPcsConfig::try_new(4, params(2, 0, 100)).unwrap(),
+        BinaryPcsConfig::try_new::<F, F>(4, params(2, 0, 100)).unwrap(),
+        mmcs(),
         mmcs(),
     );
     let protocol = OpeningProtocol::new(vec![TableSpec::new(
@@ -90,11 +94,11 @@ fn binary_pcs_supplies_composed_prescribed_security() {
 #[test]
 fn claim_boundaries_cover_successors_and_both_opening_modes() {
     for (nv, security, folding, cap) in [(1, 124, 1, 6), (4, 119, 2, 381)] {
-        let low = BinaryPcsConfig::try_new(nv, params(2, 0, 40))
+        let low = BinaryPcsConfig::try_new::<F, F>(nv, params(2, 0, 40))
             .unwrap()
             .try_with_folding(folding)
             .unwrap();
-        let high = BinaryPcsConfig::try_new(nv, params(2, 0, security))
+        let high = BinaryPcsConfig::try_new::<F, F>(nv, params(2, 0, security))
             .unwrap()
             .try_with_folding(folding)
             .unwrap();
@@ -111,8 +115,8 @@ fn claim_boundaries_cover_successors_and_both_opening_modes() {
                         .chain((count % 2 == 1).then(|| OpeningBatch::new(vec![0], vec![])))
                         .collect(),
                 )]);
-                let prover = BinaryPcs::new(low, mmcs());
-                let verifier = BinaryPcs::new(high, mmcs());
+                let prover = BinaryPcs::new(low, mmcs(), mmcs());
+                let verifier = BinaryPcs::new(high, mmcs(), mmcs());
                 let mut pc = challenger();
                 let (root, data) = prover.commit(witness, &mut pc).unwrap();
                 let mut vc = challenger();
@@ -176,7 +180,7 @@ fn claim_boundaries_cover_successors_and_both_opening_modes() {
 }
 
 fn assert_claim_budget_error(
-    error: &BinaryPcsError<<MyMmcs as Mmcs<F>>::Error>,
+    error: &BinaryPcsError<F, <MyMmcs as Mmcs<F>>::Error>,
     count: usize,
     cap: usize,
     security: usize,
@@ -193,7 +197,8 @@ fn invalid_protocols_and_points_fail_before_transcript_changes() {
     let mut rng = SmallRng::seed_from_u64(32);
     let witness = SuffixProver::<F, F>::new_witness(vec![Table::rand(&mut rng, 1, 4)], 0);
     let pcs = BinaryPcs::new(
-        BinaryPcsConfig::try_new(4, params(2, 0, 100)).unwrap(),
+        BinaryPcsConfig::try_new::<F, F>(4, params(2, 0, 100)).unwrap(),
+        mmcs(),
         mmcs(),
     );
     let mut ch = challenger();
@@ -253,11 +258,15 @@ fn invalid_protocols_and_points_fail_before_transcript_changes() {
 #[test]
 fn batched_folding_commits_only_batch_boundaries_and_verifies() {
     for (num_variables, arity, expected_roots) in [(8, 3, 2), (7, 2, 3), (4, 4, 0)] {
-        let config = BinaryPcsConfig::try_new(num_variables, params(2, 0, 100))
+        let config = BinaryPcsConfig::try_new::<F, F>(num_variables, params(2, 0, 100))
             .unwrap()
             .try_with_folding(arity)
             .unwrap();
-        let pcs = BinaryPcs::new(config, GroupedCodewordMmcs::for_folding(mmcs(), &config));
+        let pcs = BinaryPcs::new(
+            config,
+            GroupedCodewordMmcs::for_folding(mmcs(), &config),
+            GroupedCodewordMmcs::for_folding(mmcs(), &config),
+        );
         let mut rng = SmallRng::seed_from_u64(0xBA7C);
         let table = Table::rand(&mut rng, 1, num_variables);
         let witness = SuffixProver::<F, F>::new_witness(vec![table], 0);
@@ -271,8 +280,12 @@ fn batched_folding_commits_only_batch_boundaries_and_verifies() {
         assert_eq!(proof.rounds.len(), expected_roots);
         assert_eq!(proof.sumcheck.num_rounds(), num_variables);
         let bytes = postcard::to_allocvec(&proof).unwrap();
-        let decoded: BinaryPcsProof<GroupedCodewordMmcs<MyMmcs>> =
-            postcard::from_bytes(&bytes).unwrap();
+        let decoded: BinaryPcsProof<
+            F,
+            F,
+            GroupedCodewordMmcs<MyMmcs>,
+            GroupedCodewordMmcs<MyMmcs>,
+        > = postcard::from_bytes(&bytes).unwrap();
         pcs.verify(&root, &decoded, &mut challenger(), protocol.clone())
             .unwrap();
 
@@ -323,6 +336,96 @@ const fn challenger() -> MyChallenger {
     MyChallenger::from_hasher(Vec::new(), Keccak256Hash)
 }
 
+/// The same scheme with columns committed over a 64-bit alphabet.
+type NarrowMmcs = MerkleTreeMmcs<BinaryField64, u8, MyHash, MyCompress, 2, 32>;
+type NarrowChallenger = BinaryChallenger<BinaryField64, HashChallenger<u8, Keccak256Hash, 32>>;
+type NarrowPcs = BinaryPcs<BinaryField64, F, NarrowMmcs, MyMmcs>;
+
+const fn narrow_mmcs() -> NarrowMmcs {
+    NarrowMmcs::new(
+        MyHash::new(Keccak256Hash),
+        MyCompress::new(Keccak256Hash),
+        0,
+    )
+}
+
+const fn narrow_challenger() -> NarrowChallenger {
+    NarrowChallenger::from_hasher(Vec::new(), Keccak256Hash)
+}
+
+#[test]
+fn a_narrow_committed_alphabet_round_trips_with_wide_challenges() {
+    // Invariant: the committed alphabet and the challenge field are separate choices.
+    //
+    //     columns, base codeword   GF(2^64),  so half the bytes per Merkle leaf
+    //     challenges, folded words GF(2^128), so the security model is unchanged
+    //
+    // Fixture state: one random two-column table at arity 6, stacked to arity 7.
+    //
+    //     opened at   : a transcript-sampled point, through the public surface
+    //     verified at : an independently seeded challenger
+    //
+    // A desync between the two sides shows up as a rejection.
+    // Sharing challenger state would let it pass instead.
+    const TABLE_ARITY: usize = 6;
+    const STACKED_ARITY: usize = 7;
+
+    let mut rng = SmallRng::seed_from_u64(0x64B1);
+    let table = Table::<BinaryField64>::rand(&mut rng, 2, TABLE_ARITY);
+    let witness = SuffixProver::<BinaryField64, F>::new_witness(vec![table], 0);
+
+    let protocol = OpeningProtocol::new(vec![TableSpec::new(
+        TableShape::new(TABLE_ARITY, 2),
+        vec![OpeningBatch::new(vec![0, 1], Vec::new())],
+    )]);
+
+    let config =
+        BinaryPcsConfig::try_new::<BinaryField64, F>(STACKED_ARITY, params(2, 0, 40)).unwrap();
+
+    // The schedule is priced against the challenge field, not the committed one.
+    assert_eq!(config.challenge_field_bits(), 128);
+
+    let pcs: NarrowPcs = BinaryPcs::new(config, narrow_mmcs(), mmcs());
+
+    let mut prover_ch = narrow_challenger();
+    let (root, data) = pcs.commit(witness, &mut prover_ch).unwrap();
+    let proof = pcs.open(data, protocol.clone(), &mut prover_ch).unwrap();
+
+    // The base openings carry narrow symbols and every folded one carries wide symbols.
+    assert!(proof.base_opened_values.iter().all(|row| row.len() == 1));
+
+    pcs.verify(&root, &proof, &mut narrow_challenger(), protocol.clone())
+        .unwrap();
+
+    // A tampered narrow symbol must break the fold chain, not slip through the widening.
+    let mut tampered = proof;
+    tampered.base_opened_values[0][0] += BinaryField64::ONE;
+    assert!(
+        pcs.verify(&root, &tampered, &mut narrow_challenger(), protocol)
+            .is_err()
+    );
+}
+
+/// The committed alphabet caps two things the challenge field does not.
+///
+/// The grinding witness is one of its elements, so its width caps the difficulty.
+/// The base codeword lives on its additive domain, so its width caps the codeword.
+#[test]
+fn the_committed_alphabet_caps_the_grind_and_the_domain() {
+    use p3_binary_field::BinaryField8;
+
+    // A 64-bit witness leaves 56 bits under the counter's 8-bit header.
+    assert!(BinaryPcsConfig::try_new::<BinaryField64, F>(8, params(2, 56, 100)).is_ok());
+    assert!(BinaryPcsConfig::try_new::<BinaryField64, F>(8, params(2, 57, 100)).is_err());
+
+    // An 8-bit witness leaves none, so that alphabet admits no work at all.
+    assert!(BinaryPcsConfig::try_new::<BinaryField8, F>(6, params(2, 0, 40)).is_ok());
+    assert!(BinaryPcsConfig::try_new::<BinaryField8, F>(6, params(2, 1, 40)).is_err());
+
+    // An 8-bit level spans 256 domain points, so a 2^9 codeword names one it does not hold.
+    assert!(BinaryPcsConfig::try_new::<BinaryField8, F>(7, params(2, 0, 40)).is_err());
+}
+
 const fn params(log_inv_rate: usize, pow_bits: usize, security_level: usize) -> BinaryPcsParams {
     BinaryPcsParams {
         log_inv_rate,
@@ -344,7 +447,7 @@ fn run_lifecycle(
 ) -> (
     MyPcs,
     <MyMmcs as Mmcs<F>>::Commitment,
-    BinaryPcsProof<MyMmcs>,
+    MyProof,
     OpeningProtocol,
 ) {
     let mut rng = SmallRng::seed_from_u64(seed);
@@ -356,12 +459,12 @@ fn run_lifecycle(
         vec![OpeningBatch::new(vec![0], Vec::new())],
     )]);
 
-    let config = BinaryPcsConfig::try_new(
+    let config = BinaryPcsConfig::try_new::<F, F>(
         num_variables,
         params(log_inv_rate, pow_bits, security_level),
     )
     .unwrap();
-    let pcs = BinaryPcs::new(config, mmcs());
+    let pcs = BinaryPcs::new(config, mmcs(), mmcs());
 
     let mut prover_challenger = challenger();
     let (commitment, prover_data) = pcs.commit(witness, &mut prover_challenger).unwrap();
@@ -566,12 +669,12 @@ fn a_proof_checked_against_a_different_protocol_is_rejected() {
     let protocol_a = opens_column(0);
     let protocol_b = opens_column(1);
 
-    let config = BinaryPcsConfig::try_new(
+    let config = BinaryPcsConfig::try_new::<F, F>(
         NUM_VARIABLES,
         params(LOG_INV_RATE, POW_BITS, SECURITY_LEVEL),
     )
     .unwrap();
-    let pcs: MyPcs = BinaryPcs::new(config, mmcs());
+    let pcs: MyPcs = BinaryPcs::new(config, mmcs(), mmcs());
 
     let mut prover_challenger = challenger();
     let (commitment, prover_data) = pcs.commit(witness, &mut prover_challenger).unwrap();
@@ -746,7 +849,7 @@ fn zero_claim_lifecycle(
 ) -> (
     MyPcs,
     <MyMmcs as Mmcs<F>>::Commitment,
-    BinaryPcsProof<MyMmcs>,
+    MyProof,
     OpeningProtocol,
 ) {
     let mut rng = SmallRng::seed_from_u64(seed);
@@ -758,14 +861,14 @@ fn zero_claim_lifecycle(
         Vec::new(),
     )]);
 
-    let config = BinaryPcsConfig::try_new(
+    let config = BinaryPcsConfig::try_new::<F, F>(
         num_variables,
         params(LOG_INV_RATE, POW_BITS, SECURITY_LEVEL),
     )
     .unwrap()
     .try_with_folding(log_folding_factor)
     .unwrap();
-    let pcs = BinaryPcs::new(config, mmcs());
+    let pcs = BinaryPcs::new(config, mmcs(), mmcs());
 
     let mut prover_challenger = challenger();
     let (commitment, prover_data) = pcs.commit(witness, &mut prover_challenger).unwrap();

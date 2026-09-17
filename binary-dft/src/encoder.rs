@@ -2,13 +2,15 @@
 
 use core::marker::PhantomData;
 
-use p3_binary_field::BinaryField128;
+use p3_binary_field::{
+    BinaryField8, BinaryField16, BinaryField32, BinaryField64, BinaryField128, TowerLevel,
+};
 use p3_commit::Encoder;
-use p3_field::PrimeCharacteristicRing;
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_util::log2_strict_usize;
 
+use crate::lch::LchNtt;
 use crate::poly::PolyBasisNtt;
 use crate::traits::AdditiveNtt;
 
@@ -17,43 +19,93 @@ use crate::traits::AdditiveNtt;
 /// The message holds the low-index novel-basis coefficients of each column, so the codeword is
 /// the evaluation of `f̂(Ŵ_0(x), …, Ŵ_{k−1}(x))` on `S_{k + log_inv_rate}`.
 ///
-/// The alphabet is `BinaryField128`, where [`PolyBasisNtt`] is the faster transform and falls
-/// back to the portable tower transform on a target without a carryless multiply, so it is the default.
-///
-/// `F` is phantom: [`Encoder`] is only implemented below for `F = BinaryField128`, and stays
-/// that way as long as the alphabet is fixed (D9), so the parameter carries no other instance.
+/// The transform is a type parameter, because the fastest one differs by alphabet.
+/// The default is the one the widest tower level uses.
 #[derive(Clone, Debug, Default)]
 pub struct AdditiveRsEncoder<F, Ntt = PolyBasisNtt> {
     ntt: Ntt,
     _marker: PhantomData<F>,
 }
 
-/// The alphabet is fixed at `BinaryField128` (D9), as [`Encoder`] requires of every impl outside
-/// `p3-commit`'s blanket one.
+/// A tower level this crate encodes over, together with the encoder it picks for that level.
+///
+/// A caller naming a level rather than a transform reaches the right pair through this.
+/// Nothing but the implementations below decides which transform an alphabet gets.
+pub trait EncodableLevel: TowerLevel {
+    /// The Reed-Solomon encoder this crate uses for this level.
+    type Encoder: Encoder<Self> + Default + Sync;
+}
+
+/// The widest level has a polynomial-basis transform.
+/// It falls back to the portable tower transform where the target has no carryless multiply.
+impl EncodableLevel for BinaryField128 {
+    type Encoder = AdditiveRsEncoder<Self, PolyBasisNtt>;
+}
+
+impl EncodableLevel for BinaryField64 {
+    type Encoder = AdditiveRsEncoder<Self, LchNtt<Self>>;
+}
+
+impl EncodableLevel for BinaryField32 {
+    type Encoder = AdditiveRsEncoder<Self, LchNtt<Self>>;
+}
+
+impl EncodableLevel for BinaryField16 {
+    type Encoder = AdditiveRsEncoder<Self, LchNtt<Self>>;
+}
+
+impl EncodableLevel for BinaryField8 {
+    type Encoder = AdditiveRsEncoder<Self, LchNtt<Self>>;
+}
+
+/// Zero-extend each column's coefficient vector to the codeword length, then transform.
+///
+/// The rate is passed through, so a transform may skip the work the zero tail would do.
+///
+/// # Panics
+///
+/// Panics if the message height is not a power of two, or if the codeword length overflows.
+fn encode_by_padding<F, Ntt>(
+    ntt: &Ntt,
+    mut message: RowMajorMatrix<F>,
+    log_inv_rate: usize,
+) -> RowMajorMatrix<F>
+where
+    F: TowerLevel,
+    Ntt: AdditiveNtt<F> + Sync,
+{
+    if log_inv_rate == 0 {
+        return ntt.ntt_batch(message);
+    }
+
+    let len = message.values.len();
+    let padded_len = u32::try_from(log_inv_rate)
+        .ok()
+        .and_then(|rate| len.checked_shl(rate))
+        // `checked_shl` only rejects a shift amount that is too wide; it does not detect
+        // the value itself overflowing, so recovering `len` from the shifted result is
+        // what actually proves no bits were lost.
+        .filter(|&padded| padded >> log_inv_rate == len)
+        .expect("codeword length overflows usize");
+    let _ = log2_strict_usize(message.height());
+    message.values.resize(padded_len, F::ZERO);
+    ntt.ntt_batch_padded(message, log_inv_rate)
+}
+
+// One implementation per alphabet, each forwarding to the shared body above.
+//
+// A blanket implementation over every level would overlap the two-adic one in `p3-commit`.
+// No downstream crate may resolve that overlap, so the alphabets are named instead.
+
 impl<Ntt: AdditiveNtt<BinaryField128> + Sync> Encoder<BinaryField128>
     for AdditiveRsEncoder<BinaryField128, Ntt>
 {
     fn encode_batch(
         &self,
-        mut message: RowMajorMatrix<BinaryField128>,
+        message: RowMajorMatrix<BinaryField128>,
         log_inv_rate: usize,
     ) -> RowMajorMatrix<BinaryField128> {
-        if log_inv_rate == 0 {
-            return self.ntt.ntt_batch(message);
-        }
-
-        let len = message.values.len();
-        let padded_len = u32::try_from(log_inv_rate)
-            .ok()
-            .and_then(|rate| len.checked_shl(rate))
-            // `checked_shl` only rejects a shift amount that is too wide; it does not detect
-            // the value itself overflowing, so recovering `len` from the shifted result is
-            // what actually proves no bits were lost.
-            .filter(|&padded| padded >> log_inv_rate == len)
-            .expect("codeword length overflows usize");
-        let _ = log2_strict_usize(message.height());
-        message.values.resize(padded_len, BinaryField128::ZERO);
-        self.ntt.ntt_batch_padded(message, log_inv_rate)
+        encode_by_padding(&self.ntt, message, log_inv_rate)
     }
 
     fn encode_batch_padded(
@@ -61,6 +113,86 @@ impl<Ntt: AdditiveNtt<BinaryField128> + Sync> Encoder<BinaryField128>
         message: RowMajorMatrix<BinaryField128>,
         log_inv_rate: usize,
     ) -> RowMajorMatrix<BinaryField128> {
+        self.ntt.ntt_batch_padded(message, log_inv_rate)
+    }
+}
+
+impl<Ntt: AdditiveNtt<BinaryField64> + Sync> Encoder<BinaryField64>
+    for AdditiveRsEncoder<BinaryField64, Ntt>
+{
+    fn encode_batch(
+        &self,
+        message: RowMajorMatrix<BinaryField64>,
+        log_inv_rate: usize,
+    ) -> RowMajorMatrix<BinaryField64> {
+        encode_by_padding(&self.ntt, message, log_inv_rate)
+    }
+
+    fn encode_batch_padded(
+        &self,
+        message: RowMajorMatrix<BinaryField64>,
+        log_inv_rate: usize,
+    ) -> RowMajorMatrix<BinaryField64> {
+        self.ntt.ntt_batch_padded(message, log_inv_rate)
+    }
+}
+
+impl<Ntt: AdditiveNtt<BinaryField32> + Sync> Encoder<BinaryField32>
+    for AdditiveRsEncoder<BinaryField32, Ntt>
+{
+    fn encode_batch(
+        &self,
+        message: RowMajorMatrix<BinaryField32>,
+        log_inv_rate: usize,
+    ) -> RowMajorMatrix<BinaryField32> {
+        encode_by_padding(&self.ntt, message, log_inv_rate)
+    }
+
+    fn encode_batch_padded(
+        &self,
+        message: RowMajorMatrix<BinaryField32>,
+        log_inv_rate: usize,
+    ) -> RowMajorMatrix<BinaryField32> {
+        self.ntt.ntt_batch_padded(message, log_inv_rate)
+    }
+}
+
+impl<Ntt: AdditiveNtt<BinaryField16> + Sync> Encoder<BinaryField16>
+    for AdditiveRsEncoder<BinaryField16, Ntt>
+{
+    fn encode_batch(
+        &self,
+        message: RowMajorMatrix<BinaryField16>,
+        log_inv_rate: usize,
+    ) -> RowMajorMatrix<BinaryField16> {
+        encode_by_padding(&self.ntt, message, log_inv_rate)
+    }
+
+    fn encode_batch_padded(
+        &self,
+        message: RowMajorMatrix<BinaryField16>,
+        log_inv_rate: usize,
+    ) -> RowMajorMatrix<BinaryField16> {
+        self.ntt.ntt_batch_padded(message, log_inv_rate)
+    }
+}
+
+impl<Ntt: AdditiveNtt<BinaryField8> + Sync> Encoder<BinaryField8>
+    for AdditiveRsEncoder<BinaryField8, Ntt>
+{
+    fn encode_batch(
+        &self,
+        message: RowMajorMatrix<BinaryField8>,
+        log_inv_rate: usize,
+    ) -> RowMajorMatrix<BinaryField8> {
+        encode_by_padding(&self.ntt, message, log_inv_rate)
+    }
+
+    fn encode_batch_padded(
+        &self,
+        message: RowMajorMatrix<BinaryField8>,
+        log_inv_rate: usize,
+    ) -> RowMajorMatrix<BinaryField8> {
         self.ntt.ntt_batch_padded(message, log_inv_rate)
     }
 }

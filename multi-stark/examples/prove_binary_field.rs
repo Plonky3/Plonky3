@@ -32,14 +32,14 @@ type Mmcs = GroupedCodewordMmcs<MerkleMmcs>;
 type Challenger = BinaryChallenger<F, HashChallenger<u8, Keccak256Hash, 32>>;
 
 struct Config {
-    pcs: BinaryPcs<Mmcs>,
+    pcs: BinaryPcs<F, F, Mmcs, Mmcs>,
 }
 
 impl MultiStarkConfig for Config {
     type Val = F;
     type Challenge = F;
     type Challenger = Challenger;
-    type Pcs = BinaryPcs<Mmcs>;
+    type Pcs = BinaryPcs<F, F, Mmcs, Mmcs>;
 
     fn pcs(&self) -> &Self::Pcs {
         &self.pcs
@@ -61,7 +61,7 @@ impl MultiStarkConfig for Config {
 
     fn committed_table<'a>(
         &self,
-        prover_data: &'a BinaryPcsProverData<Mmcs>,
+        prover_data: &'a BinaryPcsProverData<F, F, Mmcs>,
         table_index: usize,
     ) -> &'a Table<F> {
         prover_data.table(table_index)
@@ -77,14 +77,14 @@ fn config(log_height: usize) -> Config {
     };
     // Commit after up to three variable folds, with one coset per leaf.
     // The final batch and its leaves shrink to the number of remaining variables.
-    let pcs_config = BinaryPcsConfig::try_new(log_height + 1, params)
+    let pcs_config = BinaryPcsConfig::try_new::<F, F>(log_height + 1, params)
         .unwrap()
         .try_with_folding(3.min(log_height + 1))
         .unwrap();
     let merkle = MerkleMmcs::new(Hash::new(Keccak256Hash), Compress::new(Keccak256Hash), 0);
     let mmcs = Mmcs::for_folding(merkle, &pcs_config);
     Config {
-        pcs: BinaryPcs::new(pcs_config, mmcs),
+        pcs: BinaryPcs::new(pcs_config, mmcs.clone(), mmcs),
     }
 }
 
@@ -397,7 +397,7 @@ mod tests {
             for (actual, expected) in cloned.table(0).iter_polys().zip(expected.iter_polys()) {
                 assert_eq!(actual, expected);
             }
-            let proof: BinaryPcsProof<Mmcs> = config
+            let proof: BinaryPcsProof<F, F, Mmcs, Mmcs> = config
                 .pcs
                 .open(cloned, protocol.clone(), &mut prover)
                 .unwrap();
@@ -451,7 +451,7 @@ mod tests {
         type Val = F;
         type Challenge = F;
         type Challenger = Challenger;
-        type Pcs = BinaryPcs<Mmcs>;
+        type Pcs = BinaryPcs<F, F, Mmcs, Mmcs>;
 
         fn pcs(&self) -> &Self::Pcs {
             self.0.pcs()
@@ -467,7 +467,7 @@ mod tests {
         }
         fn committed_table<'a>(
             &self,
-            data: &'a BinaryPcsProverData<Mmcs>,
+            data: &'a BinaryPcsProverData<F, F, Mmcs>,
             index: usize,
         ) -> &'a Table<F> {
             self.0.committed_table(data, index)

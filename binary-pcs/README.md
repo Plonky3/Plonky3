@@ -1,6 +1,6 @@
 # p3-binary-pcs
 
-A multilinear polynomial commitment scheme over `BinaryField128`, committing via an
+A multilinear polynomial commitment scheme over the binary tower, committing via an
 additive-domain Reed–Solomon code (the Cantor domain from `p3-binary-dft`) and proving
 proximity BaseFold-style, folding the codeword in lockstep with a multilinear sumcheck. See
 Diamond, Posen, *Succinct Arguments over Towers of Binary Fields* (Binius),
@@ -11,6 +11,14 @@ The capacity bound is refuted over characteristic 2 with `F_2`-subspace domains,
 domain is one. The Johnson bound is not refuted — it is an unconditional theorem whose radius
 those same counterexamples show to be tight — but `p3-security` documents it as resting on a
 correlated-agreement conjecture, and it is excluded here by choice, not by mathematics.
+
+The committed alphabet and the challenge field are separate choices. Columns and the base
+codeword live in the alphabet; every challenge, every folded codeword and every claimed value
+live in the challenge field. A narrower alphabet halves the bytes of the largest Merkle tree in
+the proof without moving a single soundness term, because every error is charged against the
+challenge field's width. Two constraints follow from the alphabet alone: the grinding witness is
+one of its elements, so its width caps the difficulty, and the base codeword lives on its
+additive domain, so `num_variables + log_inv_rate` must not exceed its bit width.
 
 Two obligations the types do not carry:
 

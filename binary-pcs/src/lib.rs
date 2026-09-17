@@ -3,7 +3,6 @@
 
 extern crate alloc;
 
-use p3_binary_field::BinaryField128;
 use p3_sumcheck::layout::SuffixProver;
 
 mod error;
@@ -21,7 +20,7 @@ pub mod transcript;
 mod verifier;
 
 pub use error::BinaryPcsError;
-pub use fold::{fold_codeword, fold_pair};
+pub use fold::{FoldAlphabet, fold_codeword, fold_pair};
 pub use grouped_mmcs::GroupedCodewordMmcs;
 pub use params::{BinaryPcsConfig, BinaryPcsConfigError, BinaryPcsParams};
 pub use pcs::BinaryPcs;
@@ -30,9 +29,9 @@ pub use prover::BinaryPcsProverData;
 
 /// The stacked-layout binding mode this scheme commits in.
 ///
-/// Fixed rather than chosen by the caller: the codeword fold merges *adjacent pairs*, which
-/// only suffix-order binding matches. Prefix binding merges halves, and driving it through the
-/// same fold does not stay in lockstep — see `prover.rs`'s
-/// `prefix_layout_does_not_stay_in_lockstep`, which pins that as a property of the two binding
-/// orders rather than a tuning detail.
-pub(crate) type PcsLayout = SuffixProver<BinaryField128, BinaryField128>;
+/// Fixed rather than chosen by the caller.
+/// The codeword fold merges adjacent pairs, which only suffix-order binding matches.
+///
+/// Prefix binding merges halves, and driving it through the same fold falls out of lockstep.
+/// The prover's own tests pin that as a property of the two orders, not a tuning detail.
+pub(crate) type PcsLayout<F, EF> = SuffixProver<F, EF>;

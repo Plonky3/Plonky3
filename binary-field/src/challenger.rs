@@ -96,28 +96,28 @@ impl<F: TowerLevel, Inner: CanObserve<u8>> CanObserve<F> for BinaryChallenger<F,
     }
 }
 
-impl<F, const N: usize, Inner: CanObserve<u8>> CanObserve<Hash<F, u8, N>>
+impl<F, G, const N: usize, Inner: CanObserve<u8>> CanObserve<Hash<G, u8, N>>
     for BinaryChallenger<F, Inner>
 {
-    fn observe(&mut self, values: Hash<F, u8, N>) {
+    fn observe(&mut self, values: Hash<G, u8, N>) {
         self.inner.observe_slice(values.as_ref());
     }
 }
 
-impl<F, const N: usize, Inner: CanObserve<u8>> CanObserve<&MerkleCap<F, [u8; N]>>
+impl<F, G, const N: usize, Inner: CanObserve<u8>> CanObserve<&MerkleCap<G, [u8; N]>>
     for BinaryChallenger<F, Inner>
 {
-    fn observe(&mut self, cap: &MerkleCap<F, [u8; N]>) {
+    fn observe(&mut self, cap: &MerkleCap<G, [u8; N]>) {
         for digest in cap.roots() {
             self.inner.observe_slice(digest);
         }
     }
 }
 
-impl<F, const N: usize, Inner: CanObserve<u8>> CanObserve<MerkleCap<F, [u8; N]>>
+impl<F, G, const N: usize, Inner: CanObserve<u8>> CanObserve<MerkleCap<G, [u8; N]>>
     for BinaryChallenger<F, Inner>
 {
-    fn observe(&mut self, cap: MerkleCap<F, [u8; N]>) {
+    fn observe(&mut self, cap: MerkleCap<G, [u8; N]>) {
         self.observe(&cap);
     }
 }
