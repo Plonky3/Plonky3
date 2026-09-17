@@ -123,11 +123,13 @@ impl<AB: AirBuilder> Air<AB> for Blake3BinaryAir {
         };
         let mut m = local.block;
 
-        for round in &local.rounds {
+        for (round_idx, round) in local.rounds.iter().enumerate() {
+            if round_idx > 0 {
+                permute(&mut m);
+            }
             for (g, (cols, slots)) in round.iter().zip(G_SCHEDULE).enumerate() {
                 eval_g(builder, &mut state, slots, &m[2 * g], &m[2 * g + 1], cols);
             }
-            permute(&mut m);
         }
     }
 }

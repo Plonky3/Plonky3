@@ -89,11 +89,13 @@ fn generate_trace_row<F: Field>(row: &mut Blake3BinaryCols<F>, input: &Blake3Com
     ];
     let mut m = input.block;
 
-    for round in &mut row.rounds {
+    for (round_idx, round) in row.rounds.iter_mut().enumerate() {
+        if round_idx > 0 {
+            permute(&mut m);
+        }
         for (g, (cols, slots)) in round.iter_mut().zip(G_SCHEDULE).enumerate() {
             generate_g(cols, &mut state, slots, m[2 * g], m[2 * g + 1]);
         }
-        permute(&mut m);
     }
 }
 
