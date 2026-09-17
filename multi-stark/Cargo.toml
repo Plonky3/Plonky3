@@ -17,6 +17,7 @@ parallel = [
 ]
 
 [dependencies]
+hashbrown.workspace = true
 itertools.workspace = true
 p3-air.workspace = true
 p3-challenger.workspace = true

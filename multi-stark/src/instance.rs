@@ -17,6 +17,7 @@ use p3_sumcheck::{OpeningBatch, OpeningProtocol, TableShape, TableSpec};
 use crate::config::MultiStarkConfig;
 use crate::indexed::IndexedPlan;
 pub use crate::keys::{ProvingKey, VerifyingKey, setup};
+use crate::logup_star::LogupStarOutput;
 pub use crate::proof::MultiStarkProof;
 pub use crate::prover::prove;
 pub use crate::verifier::{VerificationError, verify};
@@ -30,6 +31,45 @@ pub use crate::verifier::{VerificationError, verify};
 /// Only the trailing coordinates addressing this table's rows are opened.
 pub(super) fn trace_suffix<EF: Field>(point: &Point<EF>, num_variables: usize) -> Point<EF> {
     point.split_at(point.num_variables() - num_variables).1
+}
+
+/// The points one run reached.
+///
+/// A batch is opened at the point its role names.
+///
+/// Both sides read that from here, so neither can choose a point the other did not.
+pub(super) struct RunPoints<'a, EF> {
+    /// Where the zerocheck landed.
+    bound: &'a Point<EF>,
+    /// What the indexed reduction closed on, when the batch declared one.
+    indexed: Option<&'a LogupStarOutput<EF>>,
+}
+
+impl<'a, EF> RunPoints<'a, EF> {
+    /// Record what this run reached.
+    pub(super) const fn new(
+        bound: &'a Point<EF>,
+        indexed: Option<&'a LogupStarOutput<EF>>,
+    ) -> Self {
+        Self { bound, indexed }
+    }
+
+    /// The point a batch of this role is opened at.
+    ///
+    /// # Panics
+    ///
+    /// Panics if an indexed role appears in a run that reached no reduction.
+    pub(super) fn at(&self, role: BatchRole) -> &'a Point<EF> {
+        let indexed = || {
+            self.indexed
+                .expect("an indexed batch needs the reduction that produced it")
+        };
+        match role {
+            BatchRole::Air => self.bound,
+            BatchRole::Position { .. } => &indexed().position_point,
+            BatchRole::TableColumns { .. } => &indexed().table_point,
+        }
+    }
 }
 
 /// What one opening batch answers.
@@ -53,6 +93,18 @@ pub(super) enum BatchRole {
         /// Position of the table in plan order.
         table: usize,
     },
+}
+
+/// A payload that remembers what its batch answers.
+pub(super) trait HasRole {
+    /// What the batch carrying this payload answers.
+    fn role(&self) -> BatchRole;
+}
+
+impl<P> HasRole for Opening<P> {
+    fn role(&self) -> BatchRole {
+        self.role
+    }
 }
 
 /// One batch's role, and what it is opened against.
@@ -146,6 +198,16 @@ impl<P> OpeningSchedule<P> {
     #[cfg(test)]
     pub(super) fn payloads(&self) -> &[P] {
         &self.payloads
+    }
+
+    /// Where the batch answering one claim lands among the per-batch results.
+    ///
+    /// A claim found this way does not depend on the order the batches were pushed.
+    pub(super) fn batch_answering(&self, role: BatchRole) -> Option<usize>
+    where
+        P: HasRole,
+    {
+        self.payloads.iter().position(|p| p.role() == role)
     }
 
     /// The shape agreement alone, for a caller that never resolves the payloads.
