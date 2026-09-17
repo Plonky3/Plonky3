@@ -1,18 +1,31 @@
 //! Additive NTT and Reed–Solomon encoder benchmarks.
 
-use criterion::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_main};
+use std::hint::black_box;
+
+use criterion::measurement::Measurement;
+use criterion::{
+    BatchSize, BenchmarkGroup, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main,
+};
 use p3_baby_bear::BabyBear;
-use p3_binary_dft::{AdditiveNtt, AdditiveRsEncoder, LchNtt, PolyBasisNtt};
-use p3_binary_field::{BinaryField32, BinaryField64, BinaryField128, Ghash128, TowerLevel};
+use p3_binary_dft::{AdditiveNtt, AdditiveRsEncoder, ButterflyField, LchNtt, PolyBasisNtt};
+use p3_binary_field::{
+    BinaryField16, BinaryField32, BinaryField64, BinaryField128, Ghash128, TowerLevel,
+};
 use p3_commit::Encoder;
 use p3_dft::Radix2DFTSmallBatch;
 use p3_matrix::dense::RowMajorMatrix;
-use rand::SeedableRng;
 use rand::distr::{Distribution, StandardUniform};
 use rand::rngs::SmallRng;
+use rand::{RngExt, SeedableRng};
 
 /// WHIR's folding-block width.
 const WIDTH: usize = 16;
+
+/// A single-column matrix, the narrowest shape the transform runs on.
+///
+/// Half of the stages are then far below one SIMD register.
+/// Those stages measure what the kernel costs when it can pack nothing at all.
+const NARROW_WIDTH: usize = 1;
 
 /// The base-two logarithms of the transform heights the sweep covers.
 const LOG_HEIGHTS: [usize; 4] = [14, 16, 18, 20];
@@ -20,27 +33,70 @@ const LOG_HEIGHTS: [usize; 4] = [14, 16, 18, 20];
 /// One added bit of domain, so the codewords have rate `1/2`.
 const LOG_INV_RATE: usize = 1;
 
-/// A `BinaryField128` symbol is 16 bytes and a `BabyBear` symbol 4, so equal byte volume is
-/// four times as many rows.
+/// A `BinaryField128` symbol is 16 bytes and a `BabyBear` symbol 4.
+/// So equal byte volume is four times as many rows.
 const BABY_BEAR_ROW_RATIO: usize = 4;
 
+/// The transform over the subspace itself, and over a coset of it.
+///
+/// The sweep starts at the four-byte level, because `S_ℓ` needs `ℓ` Cantor basis vectors.
+///
+/// A two-byte level has only sixteen of them, short of the heights measured here.
 fn bench_ntt(c: &mut Criterion) {
-    ntt(c, "32", &LchNtt::<BinaryField32>::default());
-    ntt(c, "64", &LchNtt::<BinaryField64>::default());
+    ntt(c, "32", WIDTH, &LchNtt::<BinaryField32>::default(), None);
+    ntt(c, "64", WIDTH, &LchNtt::<BinaryField64>::default(), None);
 
-    // The three routes to a `GF(2^128)` transform, in the order they cost.
+    // The three routes to a `GF(2^128)` transform.
     //
-    //     128/tower  every twiddle multiply changes basis twice and back
-    //     128/hybrid the matrix changes basis once on the way in and once on the way out
-    //     128/ghash  the data is already in the basis the multiply wants
-    ntt(c, "128/tower", &LchNtt::<BinaryField128>::default());
-    ntt(c, "128/hybrid", &PolyBasisNtt::default());
-    ntt(c, "128/ghash", &LchNtt::<Ghash128>::default());
+    // ```text
+    //     128/tower   the data stays in the tower basis the field is defined in
+    //     128/hybrid  the matrix changes basis once on the way in and once on the way out
+    //     128/ghash   the data is already in the basis the carryless multiply wants
+    // ```
+    let tower = LchNtt::<BinaryField128>::default();
+    ntt(c, "128/tower", WIDTH, &tower, None);
+    ntt(c, "128/hybrid", WIDTH, &PolyBasisNtt::default(), None);
+    ntt(c, "128/ghash", WIDTH, &LchNtt::<Ghash128>::default(), None);
+
+    // A coset shift puts every twiddle outside the small subfields.
+    //
+    // So this arm measures the transform with no subfield structure left to exploit.
+    let shift = BinaryField128::from_repr(0x5555_1234_9abc_def0_0f1e_2d3c_4b5a_6978);
+    ntt(c, "128/tower/shifted", WIDTH, &tower, Some(shift));
+
+    // The same levels on a single column.
+    //
+    // A stage pairing rows less than a register apart cannot pack anything.
+    // So these arms are where work done before that is discovered shows up.
+    ntt(
+        c,
+        "32/narrow",
+        NARROW_WIDTH,
+        &LchNtt::<BinaryField32>::default(),
+        None,
+    );
+    ntt(
+        c,
+        "64/narrow",
+        NARROW_WIDTH,
+        &LchNtt::<BinaryField64>::default(),
+        None,
+    );
+    ntt(c, "128/tower/narrow", NARROW_WIDTH, &tower, None);
 }
 
-/// The forward transform of a width-[`WIDTH`] matrix over `S_ℓ`, across [`LOG_HEIGHTS`].
-fn ntt<F: TowerLevel, N: AdditiveNtt<F>>(c: &mut Criterion, name: &str, ntt: &N)
-where
+/// The forward transform of one matrix, at each height of the sweep.
+///
+/// A shift selects a coset of `S_ℓ`.
+///
+/// Without one the transform runs over the subspace itself.
+fn ntt<F: TowerLevel, N: AdditiveNtt<F>>(
+    c: &mut Criterion,
+    name: &str,
+    width: usize,
+    ntt: &N,
+    shift: Option<F>,
+) where
     StandardUniform: Distribution<F>,
 {
     let mut group = c.benchmark_group(format!("ntt/{name}"));
@@ -48,20 +104,98 @@ where
 
     let mut rng = SmallRng::seed_from_u64(1);
     for log_height in LOG_HEIGHTS {
-        let coeffs = RowMajorMatrix::<F>::rand(&mut rng, 1 << log_height, WIDTH);
+        let coeffs = RowMajorMatrix::<F>::rand(&mut rng, 1 << log_height, width);
+
+        // Throughput counts the matrix entries, so arms at different element sizes compare.
+        group.throughput(Throughput::Elements((width << log_height) as u64));
         group.bench_with_input(BenchmarkId::from_parameter(log_height), ntt, |b, ntt| {
             b.iter_batched(
                 || coeffs.clone(),
-                |m| ntt.ntt_batch(m),
+                |m| match shift {
+                    Some(shift) => ntt.shifted_ntt_batch(m, shift),
+                    None => ntt.ntt_batch(m),
+                },
                 BatchSize::PerIteration,
             );
         });
     }
 }
 
-/// Reed–Solomon encoding at equal byte volume: both arms carry `2^log_height · WIDTH · 16`
-/// bytes of message, so the parameter of each pair of entries is the `BinaryField128` height
-/// and the `BabyBear` matrix is [`BABY_BEAR_ROW_RATIO`] times taller.
+/// Elements on each side of one butterfly measurement, small enough to stay in cache.
+const BUTTERFLY_RUN: usize = 1 << 10;
+
+/// Elements on each side of a run too short for one SIMD register, at every level.
+///
+/// The widest level is sixteen bytes, so three of them still fall below a register.
+///
+/// A narrow matrix presents this shape at its lowest stages.
+/// The kernel has to rule packing out before doing any work towards it.
+const BUTTERFLY_SHORT: usize = 3;
+
+/// One twiddle per subfield the butterfly splits on, labelled by its bit width.
+const TWIDDLES: [(&str, u128); 4] = [
+    ("t8", 0xa5),
+    ("t16", 0xa5b3),
+    ("t32", 0xa5b3_c7d1),
+    ("t128", 0xa5b3_c7d1_e9f2_0b47_5c8e_1d39_6a24_f80b),
+];
+
+/// The butterfly kernel alone, on runs small enough to stay in the first-level cache.
+///
+/// A transform's twiddle at stage `j` and block `b` is `W_j(shift) + domain_point(2b)`.
+///
+/// Over the subspace itself the stages near the top land in a small tower subfield.
+///
+/// The ones near the bottom do not.
+///
+/// This group measures each of those regimes on its own, by the width of the twiddle.
+fn bench_butterfly(c: &mut Criterion) {
+    let mut group = c.benchmark_group("butterfly");
+
+    // One level's four twiddle widths, at one run length.
+    fn arm<F: ButterflyField, M: Measurement>(
+        group: &mut BenchmarkGroup<'_, M>,
+        name: &str,
+        run: usize,
+    ) where
+        StandardUniform: Distribution<F>,
+    {
+        let mut rng = SmallRng::seed_from_u64(5);
+        let mut lo: Vec<F> = (0..run).map(|_| rng.random()).collect();
+        let mut hi: Vec<F> = (0..run).map(|_| rng.random()).collect();
+
+        // Throughput counts both sides, since a butterfly writes each of them once.
+        group.throughput(Throughput::Elements(2 * run as u64));
+
+        for (label, bits) in TWIDDLES {
+            // A twiddle wider than the level keeps only the coordinates the level has.
+            let t = F::from_le_byte_iter(bits.to_le_bytes().into_iter());
+            group.bench_function(BenchmarkId::new(name, label), |b| {
+                b.iter(|| {
+                    F::butterfly::<false>(black_box(&mut lo), black_box(&mut hi), black_box(t));
+                });
+            });
+        }
+    }
+
+    arm::<BinaryField16, _>(&mut group, "16", BUTTERFLY_RUN);
+    arm::<BinaryField32, _>(&mut group, "32", BUTTERFLY_RUN);
+    arm::<BinaryField64, _>(&mut group, "64", BUTTERFLY_RUN);
+    arm::<BinaryField128, _>(&mut group, "128/tower", BUTTERFLY_RUN);
+    arm::<Ghash128, _>(&mut group, "128/ghash", BUTTERFLY_RUN);
+
+    // The same levels on a run no register covers.
+    // A kernel that prepares before it checks pays there for work it throws away.
+    arm::<BinaryField32, _>(&mut group, "32/short", BUTTERFLY_SHORT);
+    arm::<BinaryField64, _>(&mut group, "64/short", BUTTERFLY_SHORT);
+    arm::<BinaryField128, _>(&mut group, "128/tower/short", BUTTERFLY_SHORT);
+    group.finish();
+}
+
+/// Reed–Solomon encoding at equal byte volume, so both arms carry the same message bytes.
+///
+/// Each pair of entries is parameterised by the binary-field height.
+/// The prime-field matrix is taller by the ratio of the two symbol sizes.
 fn bench_encode(c: &mut Criterion) {
     let mut group = c.benchmark_group("encode");
     group.sample_size(10);
@@ -211,5 +345,12 @@ fn bench_commit(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_ntt, bench_encode, bench_poly, bench_commit);
+criterion_group!(
+    benches,
+    bench_butterfly,
+    bench_ntt,
+    bench_encode,
+    bench_poly,
+    bench_commit
+);
 criterion_main!(benches);
