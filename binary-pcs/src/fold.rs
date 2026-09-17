@@ -806,6 +806,35 @@ mod tests {
         check_width::<8>();
     }
 
+    proptest! {
+        // Each case folds up to 2^14 symbols through the tower reference, the slow side here,
+        // so a few dozen cases keep the unoptimized run short.
+        #![proptest_config(ProptestConfig::with_cases(32))]
+
+        /// Every batch shape up to 2^14 symbols, at every packing width.
+        ///
+        /// The coset count crosses the grain at a different arity for each length, so this
+        /// reaches shapes the enumerated sweep steps over, such as exactly one full task.
+        #[test]
+        fn every_batch_shape_matches_the_tower_reference(
+            (log_len, arity) in (1usize..=14)
+                .prop_flat_map(|log_len| (Just(log_len), 1..=log_len)),
+            seed: u64,
+        ) {
+            let mut rng = SmallRng::seed_from_u64(seed);
+            let codeword: Vec<BinaryField128> = (0..1 << log_len).map(|_| rng.random()).collect();
+            let challenges: Vec<BinaryField128> = (0..arity).map(|_| rng.random()).collect();
+
+            let expected = challenges.iter().fold(codeword.clone(), |word, &beta| {
+                fold_codeword_tower_reference(&word, beta)
+            });
+            prop_assert_eq!(&fold_rounds_model::<1>(&codeword, &challenges), &expected);
+            prop_assert_eq!(&fold_rounds_model::<2>(&codeword, &challenges), &expected);
+            prop_assert_eq!(&fold_rounds_model::<4>(&codeword, &challenges), &expected);
+            prop_assert_eq!(&fold_rounds_model::<8>(&codeword, &challenges), &expected);
+        }
+    }
+
     #[test]
     fn the_packed_fold_matches_the_tower_reference() {
         let mut rng = SmallRng::seed_from_u64(0xF01D_0BA5_15C0_DE00);
