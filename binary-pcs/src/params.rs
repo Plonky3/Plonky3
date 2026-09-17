@@ -8,14 +8,18 @@
 //! [`BinaryPcsConfigError`] and is returned rather than asserted, since the parameters come
 //! from the caller.
 
+use p3_binary_field::TowerLevel;
 use p3_security::binary::BinaryPcsRegime;
 use thiserror::Error;
 
-/// Largest grinding request `BinaryChallenger<BinaryField128, _>::grind` accepts.
+/// Header room the challenger's grinding site reserves above the difficulty.
 ///
-/// The challenger asserts `bits + 8 <= min(F::bits(), 64)`, so the counter width, not the
-/// field width, is what binds at this level.
-const MAX_POW_BITS: usize = 56;
+/// The challenger asserts `bits + 8 <= min(F::bits(), 64)`.
+/// The counter is what binds at every level this crate reaches, not the field width.
+const POW_HEADER_BITS: usize = 8;
+
+/// Widest grinding counter the challenger samples from.
+const POW_COUNTER_BITS: usize = 64;
 
 /// Parameters chosen by the caller.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -38,6 +42,7 @@ pub struct BinaryPcsParams {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BinaryPcsConfig {
     params: BinaryPcsParams,
+    challenge_field_bits: usize,
     num_variables: usize,
     num_queries: usize,
     log_folding_factor: usize,
@@ -53,6 +58,21 @@ pub enum BinaryPcsConfigError {
         requested: usize,
         num_variables: usize,
     },
+
+    /// The challenge field is not one the security model prices.
+    ///
+    /// Every algebraic error is charged against this width.
+    /// A width the model does not recognise would be reported against nothing.
+    #[error("a {bits}-bit challenge field is not a priced binary tower level")]
+    UnpricedChallengeField { bits: usize },
+
+    /// The base codeword is longer than the committed alphabet's additive domain.
+    ///
+    /// A level of `bits` bits spans that many Cantor basis vectors.
+    /// Its domain therefore holds `2^bits` points, and no evaluation exists past them.
+    #[error("codeword length 2^{log_len} exceeds the 2^{bits} points a {bits}-bit level spans")]
+    CodewordExceedsAlphabetDomain { log_len: usize, bits: usize },
+
     /// The codeword length does not fit in a `usize`.
     ///
     /// A codeword is indexed by `usize`, so `log_len` must stay below `max_bits`
@@ -105,11 +125,11 @@ impl BinaryPcsConfig {
     /// if the polynomial has no variables, if grinding exceeds what the challenger can witness
     /// or the security budget, if the target exceeds what the field can deliver, or if the
     /// derived query count is zero.
-    pub fn try_new(
+    pub fn try_new<F: TowerLevel, EF: TowerLevel>(
         num_variables: usize,
         params: BinaryPcsParams,
     ) -> Result<Self, BinaryPcsConfigError> {
-        Self::try_new_with_folding(num_variables, params, 1)
+        Self::try_new_with_folding::<F, EF>(num_variables, params, 1)
     }
 
     /// Derive a schedule with batching selected before validating its security target.
@@ -117,7 +137,7 @@ impl BinaryPcsConfig {
     /// Unlike starting with `try_new` and then changing the folding factor, this admits
     /// targets that need exhaustive batched queries to release the query-error reserve.
     /// Returns the same configuration errors as [`Self::try_new`], or an invalid fold factor.
-    pub fn try_new_with_folding(
+    pub fn try_new_with_folding<F: TowerLevel, EF: TowerLevel>(
         num_variables: usize,
         params: BinaryPcsParams,
         log_folding_factor: usize,
@@ -147,10 +167,24 @@ impl BinaryPcsConfig {
             });
         }
 
-        if params.pow_bits > MAX_POW_BITS {
+        // The base codeword is evaluated over the committed alphabet's own additive domain.
+        //
+        // That domain has one point per subset of the level's Cantor basis.
+        //
+        // A longer codeword names a point the level does not hold.
+        if log_len > F::bits() {
+            return Err(BinaryPcsConfigError::CodewordExceedsAlphabetDomain {
+                log_len,
+                bits: F::bits(),
+            });
+        }
+
+        // The witness is an element of the committed alphabet, so its width caps the counter.
+        let max_pow_bits = F::bits().min(POW_COUNTER_BITS) - POW_HEADER_BITS;
+        if params.pow_bits > max_pow_bits {
             return Err(BinaryPcsConfigError::PowBitsExceedWitnessCapacity {
                 requested: params.pow_bits,
-                max: MAX_POW_BITS,
+                max: max_pow_bits,
             });
         }
 
@@ -171,10 +205,14 @@ impl BinaryPcsConfig {
         }
         let config = Self {
             params,
+            challenge_field_bits: EF::bits(),
             num_variables,
             num_queries,
             log_folding_factor,
         };
+
+        // A width the model does not price is rejected here, before anything reads a bound.
+        config.try_security_regime()?;
         config.validate_security()?;
         Ok(config)
     }
@@ -294,18 +332,40 @@ impl BinaryPcsConfig {
         self.params.pow_bits
     }
 
+    /// Bit width of the field this schedule draws its challenges from.
+    #[must_use]
+    pub const fn challenge_field_bits(&self) -> usize {
+        self.challenge_field_bits
+    }
+
     /// Validated security model for this exact fold and query schedule.
+    ///
+    /// # Panics
+    ///
+    /// Never for a configuration this type built.
+    /// Its constructor rejects every shape the model declines to price.
     #[must_use]
     pub const fn security_regime(&self) -> BinaryPcsRegime {
+        match self.try_security_regime() {
+            Ok(regime) => regime,
+            Err(_) => panic!("configuration invariants must describe a binary PCS regime"),
+        }
+    }
+
+    /// The security model, or the reason this schedule has none.
+    const fn try_security_regime(&self) -> Result<BinaryPcsRegime, BinaryPcsConfigError> {
         match BinaryPcsRegime::new(
+            self.challenge_field_bits,
             self.num_variables,
             self.params.log_inv_rate,
             self.log_folding_factor,
             self.num_queries,
             self.params.pow_bits,
         ) {
-            Some(regime) => regime,
-            None => panic!("configuration invariants must describe a binary PCS regime"),
+            Some(regime) => Ok(regime),
+            None => Err(BinaryPcsConfigError::UnpricedChallengeField {
+                bits: self.challenge_field_bits,
+            }),
         }
     }
 
@@ -363,7 +423,8 @@ mod tests {
 
     #[test]
     fn derives_the_fold_schedule_and_query_count() {
-        let config = BinaryPcsConfig::try_new(10, params()).unwrap();
+        let config =
+            BinaryPcsConfig::try_new::<BinaryField128, BinaryField128>(10, params()).unwrap();
         assert_eq!(config.num_variables(), 10);
         // Every variable folds the codeword.
         assert_eq!(config.num_fold_rounds(), 10);
@@ -374,7 +435,7 @@ mod tests {
 
     #[test]
     fn batched_schedule_keeps_all_variables_and_a_short_final_batch() {
-        let config = BinaryPcsConfig::try_new(7, params())
+        let config = BinaryPcsConfig::try_new::<BinaryField128, BinaryField128>(7, params())
             .unwrap()
             .try_with_folding(3)
             .unwrap();
@@ -387,13 +448,13 @@ mod tests {
         assert_eq!(config.log_final_len(), 2);
         assert!(config.query_security_bits() >= 85.0);
         assert!(
-            BinaryPcsConfig::try_new(7, params())
+            BinaryPcsConfig::try_new::<BinaryField128, BinaryField128>(7, params())
                 .unwrap()
                 .try_with_folding(0)
                 .is_err()
         );
         assert!(
-            BinaryPcsConfig::try_new(7, params())
+            BinaryPcsConfig::try_new::<BinaryField128, BinaryField128>(7, params())
                 .unwrap()
                 .try_with_folding(8)
                 .is_err()
@@ -402,7 +463,7 @@ mod tests {
 
     #[test]
     fn batching_prices_every_virtual_fold_and_reserves_error_budget() {
-        let config = BinaryPcsConfig::try_new(19, params())
+        let config = BinaryPcsConfig::try_new::<BinaryField128, BinaryField128>(19, params())
             .unwrap()
             .try_with_folding(3)
             .unwrap();
@@ -410,10 +471,10 @@ mod tests {
         assert_eq!(config.field_security_bits(), 105);
         let mut p = params();
         p.security_level = 105;
-        assert!(BinaryPcsConfig::try_new(19, p).is_err());
+        assert!(BinaryPcsConfig::try_new::<BinaryField128, BinaryField128>(19, p).is_err());
         p.security_level = 104;
         assert!(
-            BinaryPcsConfig::try_new(19, p)
+            BinaryPcsConfig::try_new::<BinaryField128, BinaryField128>(19, p)
                 .unwrap()
                 .try_with_folding(3)
                 .is_ok()
@@ -427,8 +488,10 @@ mod tests {
             pow_bits: 0,
             security_level: 117,
         };
-        assert!(BinaryPcsConfig::try_new(7, params).is_err());
-        let batched = BinaryPcsConfig::try_new_with_folding(7, params, 2).unwrap();
+        assert!(BinaryPcsConfig::try_new::<BinaryField128, BinaryField128>(7, params).is_err());
+        let batched =
+            BinaryPcsConfig::try_new_with_folding::<BinaryField128, BinaryField128>(7, params, 2)
+                .unwrap();
         assert_eq!(batched.max_opening_claims(), 1012);
         assert!(batched.try_with_folding(1).is_err());
     }
@@ -442,7 +505,8 @@ mod tests {
             pow_bits: 8,
             security_level: 100,
         };
-        let config = BinaryPcsConfig::try_new(16, params).unwrap();
+        let config =
+            BinaryPcsConfig::try_new::<BinaryField128, BinaryField128>(16, params).unwrap();
         let protocol_target = (params.security_level - params.pow_bits) as f64;
         assert!(
             config.query_security_bits() >= protocol_target,
@@ -457,8 +521,12 @@ mod tests {
         low.log_inv_rate = 1;
         let mut high = params();
         high.log_inv_rate = 4;
-        let few = BinaryPcsConfig::try_new(10, high).unwrap().num_queries();
-        let many = BinaryPcsConfig::try_new(10, low).unwrap().num_queries();
+        let few = BinaryPcsConfig::try_new::<BinaryField128, BinaryField128>(10, high)
+            .unwrap()
+            .num_queries();
+        let many = BinaryPcsConfig::try_new::<BinaryField128, BinaryField128>(10, low)
+            .unwrap()
+            .num_queries();
         assert!(
             many > few,
             "a worse rate must demand more queries: {many} vs {few}"
@@ -470,7 +538,7 @@ mod tests {
     #[test]
     fn the_field_security_agrees_with_p3_security() {
         for num_variables in [10, 16, 20, 24] {
-            let config = BinaryPcsConfig::try_new(
+            let config = BinaryPcsConfig::try_new::<BinaryField128, BinaryField128>(
                 num_variables,
                 BinaryPcsParams {
                     security_level: 90,
@@ -512,7 +580,7 @@ mod tests {
     #[test]
     fn rejects_a_polynomial_with_no_variables() {
         assert_eq!(
-            BinaryPcsConfig::try_new(0, params()),
+            BinaryPcsConfig::try_new::<BinaryField128, BinaryField128>(0, params()),
             Err(BinaryPcsConfigError::NoVariablesToFold)
         );
     }
@@ -522,7 +590,7 @@ mod tests {
         let mut p = params();
         p.pow_bits = 57;
         assert_eq!(
-            BinaryPcsConfig::try_new(10, p),
+            BinaryPcsConfig::try_new::<BinaryField128, BinaryField128>(10, p),
             Err(BinaryPcsConfigError::PowBitsExceedWitnessCapacity {
                 requested: 57,
                 max: 56,
@@ -537,7 +605,7 @@ mod tests {
         // for which `1usize << log_len` is already invalid.
         let num_variables = max_bits - params().log_inv_rate;
         assert_eq!(
-            BinaryPcsConfig::try_new(num_variables, params()),
+            BinaryPcsConfig::try_new::<BinaryField128, BinaryField128>(num_variables, params()),
             Err(BinaryPcsConfigError::CodewordLengthExceedsUsize {
                 log_len: max_bits,
                 max_bits,
@@ -552,7 +620,7 @@ mod tests {
         let mut p = params();
         p.log_inv_rate = 0;
         assert_eq!(
-            BinaryPcsConfig::try_new(10, p),
+            BinaryPcsConfig::try_new::<BinaryField128, BinaryField128>(10, p),
             Err(BinaryPcsConfigError::ZeroQueries)
         );
     }
@@ -562,7 +630,7 @@ mod tests {
         let mut p = params();
         p.security_level = 16;
         assert_eq!(
-            BinaryPcsConfig::try_new(10, p),
+            BinaryPcsConfig::try_new::<BinaryField128, BinaryField128>(10, p),
             Err(BinaryPcsConfigError::SecurityLevelBelowPowBits {
                 security_level: 16,
                 pow_bits: 16,
@@ -578,7 +646,7 @@ mod tests {
         let mut p = params();
         p.security_level = 120;
         assert_eq!(
-            BinaryPcsConfig::try_new(20, p),
+            BinaryPcsConfig::try_new::<BinaryField128, BinaryField128>(20, p),
             Err(BinaryPcsConfigError::SecurityLevelExceedsFieldCapacity {
                 security_level: 120,
                 max: 103,
@@ -587,17 +655,17 @@ mod tests {
 
         // The stated cap is accepted.
         p.security_level = 103;
-        assert!(BinaryPcsConfig::try_new(20, p).is_ok());
+        assert!(BinaryPcsConfig::try_new::<BinaryField128, BinaryField128>(20, p).is_ok());
     }
 
     /// The cap tightens as the committed polynomial grows: a longer codeword spends more of
     /// the field's width on the fold's proximity term.
     #[test]
     fn the_field_capacity_shrinks_as_the_domain_grows() {
-        let small = BinaryPcsConfig::try_new(10, params())
+        let small = BinaryPcsConfig::try_new::<BinaryField128, BinaryField128>(10, params())
             .unwrap()
             .field_security_bits();
-        let large = BinaryPcsConfig::try_new(20, params())
+        let large = BinaryPcsConfig::try_new::<BinaryField128, BinaryField128>(20, params())
             .unwrap()
             .field_security_bits();
         assert!(

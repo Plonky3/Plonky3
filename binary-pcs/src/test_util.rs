@@ -1,11 +1,14 @@
-//! Shared fixtures for `p3-binary-pcs` tests: a Merkle tree MMCS over `BinaryField128` with a
-//! Keccak byte hasher, the matching binary Fiat-Shamir challenger, and a full commit/open
-//! lifecycle for tests that check `verify` against a (possibly mutated) genuine proof.
+//! Shared fixtures for this crate's tests.
+//!
+//! A Merkle tree scheme at each of the two tower levels the tests commit over.
+//! The matching binary Fiat-Shamir challenger for each.
+//!
+//! A full commit and open lifecycle, for tests that mutate a genuine proof.
 
 use alloc::vec;
 use alloc::vec::Vec;
 
-use p3_binary_field::{BinaryChallenger, BinaryField128};
+use p3_binary_field::{BinaryChallenger, BinaryField64, BinaryField128};
 use p3_challenger::HashChallenger;
 use p3_commit::{Mmcs, MultilinearPcs};
 use p3_keccak::Keccak256Hash;
@@ -24,10 +27,22 @@ type F = BinaryField128;
 type MyHash = SerializingHasher<Keccak256Hash>;
 type MyCompress = CompressionFunctionFromHasher<Keccak256Hash, 2, 32>;
 pub(crate) type MyMmcs = MerkleTreeMmcs<F, u8, MyHash, MyCompress, 2, 32>;
+pub(crate) type NarrowMmcs = MerkleTreeMmcs<BinaryField64, u8, MyHash, MyCompress, 2, 32>;
 pub(crate) type MyChallenger = BinaryChallenger<F, HashChallenger<u8, Keccak256Hash, 32>>;
+pub(crate) type NarrowChallenger =
+    BinaryChallenger<BinaryField64, HashChallenger<u8, Keccak256Hash, 32>>;
 
 pub(crate) const fn mmcs() -> MyMmcs {
     MyMmcs::new(
+        MyHash::new(Keccak256Hash),
+        MyCompress::new(Keccak256Hash),
+        0,
+    )
+}
+
+/// The same scheme over the narrower tower level a small-alphabet commitment uses.
+pub(crate) const fn narrow_mmcs() -> NarrowMmcs {
+    NarrowMmcs::new(
         MyHash::new(Keccak256Hash),
         MyCompress::new(Keccak256Hash),
         0,
@@ -38,7 +53,12 @@ pub(crate) const fn challenger() -> MyChallenger {
     MyChallenger::from_hasher(Vec::new(), Keccak256Hash)
 }
 
-/// Fixed parameters `run_lifecycle` derives its config from.
+/// The sponge a narrow-alphabet run speaks, whose grinding witness is a narrow element.
+pub(crate) const fn narrow_challenger() -> NarrowChallenger {
+    NarrowChallenger::from_hasher(Vec::new(), Keccak256Hash)
+}
+
+/// Fixed parameters the lifecycle fixture derives its config from.
 const fn params() -> BinaryPcsParams {
     BinaryPcsParams {
         log_inv_rate: 2,
@@ -55,9 +75,9 @@ const fn params() -> BinaryPcsParams {
 pub(crate) fn run_lifecycle(
     num_variables: usize,
 ) -> (
-    BinaryPcs<MyMmcs>,
+    BinaryPcs<F, F, MyMmcs, MyMmcs>,
     <MyMmcs as Mmcs<F>>::Commitment,
-    BinaryPcsProof<MyMmcs>,
+    BinaryPcsProof<F, F, MyMmcs, MyMmcs>,
     OpeningProtocol,
 ) {
     let mut rng = SmallRng::seed_from_u64(0xB1DA_u64);
@@ -69,8 +89,8 @@ pub(crate) fn run_lifecycle(
         vec![OpeningBatch::new(vec![0], Vec::new())],
     )]);
 
-    let config = BinaryPcsConfig::try_new(num_variables, params()).unwrap();
-    let pcs = BinaryPcs::new(config, mmcs());
+    let config = BinaryPcsConfig::try_new::<F, F>(num_variables, params()).unwrap();
+    let pcs = BinaryPcs::new(config, mmcs(), mmcs());
 
     let mut prover_challenger = challenger();
     let (commitment, prover_data) = pcs.commit(witness, &mut prover_challenger).unwrap();
@@ -114,8 +134,8 @@ mod conformance {
         let table = Table::rand(&mut rng, 1, NUM_VARIABLES);
         let witness = SuffixProver::<F, F>::new_witness(vec![table], 0);
 
-        let config = BinaryPcsConfig::try_new(NUM_VARIABLES, params()).unwrap();
-        let pcs = BinaryPcs::new(config, mmcs());
+        let config = BinaryPcsConfig::try_new::<F, F>(NUM_VARIABLES, params()).unwrap();
+        let pcs = BinaryPcs::new(config, mmcs(), mmcs());
 
         let mut committed = challenger();
         let (commitment, _) = pcs.commit(witness, &mut committed).unwrap();
