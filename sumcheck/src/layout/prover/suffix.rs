@@ -99,9 +99,10 @@ impl<F: Field, EF: ExtensionField<F>> Layout<F, EF> for SuffixProver<F, EF> {
     ///
     /// - The point is factorised once and reused by every selected column.
     /// - Each column is an independent linear pass, so columns run in parallel.
-    /// - Without SVO rounds, and for a table of at most `2^SHARED_WEIGHTS_MAX_VARIABLES` rows,
-    ///   the equality and successor weight tables are built once per call. Each column is then
-    ///   one weighted sum against them, free of products on bit-valued rows.
+    /// - Without SVO rounds, for a table of at most `2^SHARED_WEIGHTS_MAX_VARIABLES` rows and a
+    ///   batch opening more than one column, the equality and successor weight tables are built
+    ///   once per call. Each column is then one weighted sum against them, free of products on
+    ///   bit-valued rows.
     #[tracing::instrument(skip_all)]
     fn record_opening(
         &mut self,
@@ -120,7 +121,11 @@ impl<F: Field, EF: ExtensionField<F>> Layout<F, EF> for SuffixProver<F, EF> {
         // Without SVO rounds an opening carries no per-round residuals.
         // Each column then reduces to one weighted sum against a table shared by the whole batch.
         // Taller tables keep the factored evaluation, whose weights stay at the square root size.
-        if self.claims.folding == 0 && table.num_variables() <= SHARED_WEIGHTS_MAX_VARIABLES {
+        // So does a single-column batch, which cannot amortize a dense table.
+        if self.claims.folding == 0
+            && table.num_variables() <= SHARED_WEIGHTS_MAX_VARIABLES
+            && current.len() + next.len() >= 2
+        {
             // Equality weights of the point over every row of the table.
             let eq = Poly::new_from_point(point.as_slice(), EF::ONE);
             // Repeat-last successor weights, derived from the equality weights when needed.
@@ -832,12 +837,16 @@ mod tests {
     ///
     /// # Schedule
     ///
-    /// Every table is opened four times, each at a fresh random point:
+    /// Every table is opened six times, each at a fresh random point:
     ///
     /// - every column directly and through the successor view,
     /// - every column directly, in reverse order,
     /// - every column through the successor view, in reverse order,
-    /// - the odd columns directly and every column through the successor view.
+    /// - the odd columns directly and every column through the successor view,
+    /// - the first column directly,
+    /// - the last column through the successor view.
+    ///
+    /// The last two batches open a single column, so they skip the shared weight tables.
     ///
     /// # Checks
     ///
@@ -869,6 +878,8 @@ mod tests {
                 OpeningBatch::new(reversed.clone(), Vec::new()),
                 OpeningBatch::new(Vec::new(), reversed),
                 OpeningBatch::new(odd, columns),
+                OpeningBatch::new(vec![0], Vec::new()),
+                OpeningBatch::new(Vec::new(), vec![num_polys - 1]),
             ];
 
             for request in &requests {
