@@ -8,14 +8,16 @@ use criterion::{
 };
 use p3_baby_bear::BabyBear;
 use p3_binary_dft::{
-    AdditiveNtt, AdditiveRsEncoder, ButterflyField, LchNtt, PolyBasisNtt, subfield_ntt_batch,
+    AdditiveNtt, AdditiveRsEncoder, ButterflyField, LchNtt, PolyBasisNtt, interleaved_encode_batch,
+    subfield_ntt_batch,
 };
 use p3_binary_field::{
     BinaryField8, BinaryField16, BinaryField32, BinaryField64, BinaryField128, Ghash128, TowerLevel,
 };
 use p3_commit::Encoder;
 use p3_dft::Radix2DFTSmallBatch;
-use p3_matrix::dense::RowMajorMatrix;
+use p3_field::PrimeCharacteristicRing;
+use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView, RowMajorMatrixViewMut};
 use rand::distr::{Distribution, StandardUniform};
 use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
@@ -287,6 +289,65 @@ fn bench_subfield(c: &mut Criterion) {
     group.finish();
 }
 
+/// The two routes from a column-major message to an interleaved codeword.
+///
+/// ```text
+///     two-pass  interleave in a pass of its own, then encode the padded matrix
+///     fused     interleave into the first coset, then transform each coset
+/// ```
+fn bench_interleaved(c: &mut Criterion) {
+    let mut group = c.benchmark_group("interleaved");
+    group.sample_size(10);
+
+    let mut rng = SmallRng::seed_from_u64(13);
+    let encoder = AdditiveRsEncoder::<BinaryField128>::default();
+
+    for log_message in LOG_HEIGHTS {
+        for log_inv_rate in [1usize, 2, 3] {
+            let columns = (0..WIDTH << log_message)
+                .map(|_| rng.random::<BinaryField128>())
+                .collect::<Vec<_>>();
+            let parameter = format!("h{log_message}/r{log_inv_rate}");
+
+            // Throughput counts the codeword entries, so the rates compare.
+            group.throughput(Throughput::Elements(
+                ((WIDTH << log_message) << log_inv_rate) as u64,
+            ));
+
+            group.bench_function(BenchmarkId::new("two_pass", &parameter), |b| {
+                b.iter(|| {
+                    // The layout `commit_base` builds before it hands the encoder a matrix.
+                    let mut values = BinaryField128::zero_vec(columns.len() << log_inv_rate);
+                    let source = RowMajorMatrixView::new(&columns, 1 << log_message);
+                    let mut target =
+                        RowMajorMatrixViewMut::new(&mut values[..columns.len()], WIDTH);
+                    source.transpose_into(&mut target);
+                    encoder.encode_batch_padded(RowMajorMatrix::new(values, WIDTH), log_inv_rate)
+                });
+            });
+
+            // The same two passes over the transform the fused path itself runs on.
+            // The pair therefore isolates the fusion from the choice of backend.
+            let lch = LchNtt::<BinaryField128>::default();
+            group.bench_function(BenchmarkId::new("two_pass/lch", &parameter), |b| {
+                b.iter(|| {
+                    let mut values = BinaryField128::zero_vec(columns.len() << log_inv_rate);
+                    let source = RowMajorMatrixView::new(&columns, 1 << log_message);
+                    let mut target =
+                        RowMajorMatrixViewMut::new(&mut values[..columns.len()], WIDTH);
+                    source.transpose_into(&mut target);
+                    lch.ntt_batch(RowMajorMatrix::new(values, WIDTH))
+                });
+            });
+
+            group.bench_function(BenchmarkId::new("fused", &parameter), |b| {
+                b.iter(|| interleaved_encode_batch(&columns, log_message, log_inv_rate));
+            });
+        }
+    }
+    group.finish();
+}
+
 /// Direct polynomial-backend workloads, including small later-round domains.
 fn bench_poly(c: &mut Criterion) {
     eprintln!(
@@ -403,6 +464,7 @@ criterion_group!(
     bench_butterfly,
     bench_ntt,
     bench_subfield,
+    bench_interleaved,
     bench_encode,
     bench_poly,
     bench_commit

@@ -21,6 +21,7 @@ mod affine;
 mod butterfly;
 mod domain;
 mod encoder;
+mod interleaved;
 #[cfg(any(
     test,
     all(
@@ -43,6 +44,7 @@ mod traits;
 pub use butterfly::ButterflyField;
 pub use domain::*;
 pub use encoder::*;
+pub use interleaved::*;
 pub use lch::*;
 pub use naive::*;
 pub use poly::*;
