@@ -12,19 +12,31 @@
 //! machinery and checks it, and `prefix_layout_does_not_stay_in_lockstep`, which checks that
 //! prefix-first binding does not share the property — the reason [`PcsLayout`] is fixed rather
 //! than chosen by the caller.
+//!
+//! # Two fields, one schedule
+//!
+//! ```text
+//!     base word       the committed alphabet, committed through the base scheme
+//!     folded words    the challenge field, committed through the folded scheme
+//! ```
+//!
+//! The first fold of the first batch is the only one that crosses between them.
 
 use alloc::vec::Vec;
 
-use p3_binary_field::{BinaryField128, Ghash128};
+use p3_binary_field::Ghash128;
+use p3_challenger::fs::TranscriptField;
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
 use p3_commit::{Encoder, Mmcs};
+use p3_field::{ExtensionField, Field};
 use p3_matrix::dense::{DenseMatrix, RowMajorMatrix};
 use p3_multilinear_util::point::Point;
 use p3_sumcheck::SumcheckData;
 use p3_sumcheck::layout::{Layout, Table, Witness};
+use p3_sumcheck::strategy::FromTable;
 
 use crate::PcsLayout;
-use crate::fold::fold_codeword_batch;
+use crate::fold::{FoldAlphabet, fold_codeword_batch};
 use crate::params::BinaryPcsConfig;
 use crate::proof::RoundProof;
 use crate::transcript::BinaryPcsProverTranscript;
@@ -40,31 +52,36 @@ const FOLDING: usize = 0;
 /// Data produced by committing the base codeword: the layout used to build the residual
 /// sumcheck, and the base commitment's Merkle prover data.
 ///
-/// Retains the source tables for AIR evaluation between `commit` and `open`.
+/// Retains the source tables for AIR evaluation between commitment and opening.
 /// Cloning reuses the encoding and Merkle tree for another opening of the commitment.
 #[derive(Clone)]
-pub struct BinaryPcsProverData<MT: Mmcs<BinaryField128>> {
+pub struct BinaryPcsProverData<F: Field, EF: ExtensionField<F>, MT: Mmcs<F>> {
     /// The layout that ran the commit phase, carried forward to build the residual sumcheck
     /// and, later, to evaluate opening claims against the committed polynomial.
-    pub(crate) layout: PcsLayout,
+    pub(crate) layout: PcsLayout<F, EF>,
     /// The base codeword's Merkle prover data, needed to open base-round queries once the
     /// query phase samples its indices.
-    pub(crate) merkle_data: MT::ProverData<DenseMatrix<BinaryField128>>,
+    pub(crate) merkle_data: MT::ProverData<DenseMatrix<F>>,
 }
 
-impl<MT: Mmcs<BinaryField128>> BinaryPcsProverData<MT> {
+impl<F, EF, MT> BinaryPcsProverData<F, EF, MT>
+where
+    F: TranscriptField,
+    EF: ExtensionField<F>,
+    MT: Mmcs<F>,
+{
     /// Returns source table `id` retained by the committed layout.
-    pub fn table(&self, id: usize) -> &Table<BinaryField128> {
+    pub fn table(&self, id: usize) -> &Table<F> {
         self.layout.table(id)
     }
 }
 
 /// One folding round's prover-side output.
-pub(crate) struct RoundCommitment<MT: Mmcs<BinaryField128>> {
+pub(crate) struct RoundCommitment<EF: Field, MX: Mmcs<EF>> {
     /// Merkle root of this round's folded codeword.
-    pub commitment: MT::Commitment,
+    pub commitment: MX::Commitment,
     /// Merkle prover data for this round's folded codeword, needed to open its queries.
-    pub merkle_data: MT::ProverData<DenseMatrix<BinaryField128>>,
+    pub merkle_data: MX::ProverData<DenseMatrix<EF>>,
 }
 
 /// Commits `witness`'s stacked polynomial and returns the base commitment alongside the data
@@ -74,17 +91,19 @@ pub(crate) struct RoundCommitment<MT: Mmcs<BinaryField128>> {
 ///
 /// The root is returned instead, and the caller binds it.
 ///
-/// `witness` must have `config.num_variables()` variables and be built at [`FOLDING`].
+/// `witness` must have the configured number of variables, at zero preprocessing depth.
 #[tracing::instrument(name = "binary pcs commit", skip_all)]
-pub(crate) fn commit<E, MT>(
+pub(crate) fn commit<F, EF, E, MT>(
     config: &BinaryPcsConfig,
     encoder: &E,
     mmcs: &MT,
-    witness: Witness<BinaryField128>,
-) -> (MT::Commitment, BinaryPcsProverData<MT>)
+    witness: Witness<F>,
+) -> (MT::Commitment, BinaryPcsProverData<F, EF, MT>)
 where
-    E: Encoder<BinaryField128>,
-    MT: Mmcs<BinaryField128>,
+    F: TranscriptField,
+    EF: ExtensionField<F>,
+    E: Encoder<F>,
+    MT: Mmcs<F>,
 {
     assert_eq!(
         witness.num_variables(),
@@ -93,7 +112,7 @@ where
     );
 
     let (layout, commitment, merkle_data) =
-        PcsLayout::commit(encoder, mmcs, witness, FOLDING, config.log_inv_rate());
+        PcsLayout::<F, EF>::commit(encoder, mmcs, witness, FOLDING, config.log_inv_rate());
 
     (
         commitment,
@@ -108,8 +127,8 @@ where
 /// Consecutive folds are fused into configured batches, with one commitment per batch except
 /// the last, whose entire codeword travels in the clear.
 ///
-/// The single grinding budget is spent once before the query phase, not here, so every round
-/// runs with `pow_bits = 0`.
+/// The single grinding budget is spent once before the query phase, not here.
+/// Every round below therefore runs at zero difficulty.
 ///
 /// Returns the base commitment's Merkle prover data (handed back so the caller can still open
 /// base-round queries against it), the sumcheck transcript, one [`RoundCommitment`] per fold
@@ -132,28 +151,32 @@ where
 /// never compiles one.
 ///
 /// This is the only seam between the two routes.
-/// `BinaryPcs::finish_open_with` carries the same parameter one level up.
 #[must_use]
 #[allow(clippy::type_complexity)]
 #[tracing::instrument(name = "binary pcs fold rounds", skip_all)]
-pub(crate) fn fold_rounds_with<const BIND_EACH_ROUND: bool, MT, Ch>(
-    prover_data: BinaryPcsProverData<MT>,
+pub(crate) fn fold_rounds_with<const BIND_EACH_ROUND: bool, F, EF, MT, MX, Ch>(
+    prover_data: BinaryPcsProverData<F, EF, MT>,
     config: &BinaryPcsConfig,
     mmcs: &MT,
-    transcript: &mut BinaryPcsProverTranscript<'_, Ch>,
+    round_mmcs: &MX,
+    transcript: &mut BinaryPcsProverTranscript<'_, F, EF, Ch>,
 ) -> (
-    MT::ProverData<DenseMatrix<BinaryField128>>,
-    SumcheckData<BinaryField128, BinaryField128>,
-    Vec<RoundCommitment<MT>>,
-    Point<BinaryField128>,
-    Vec<BinaryField128>,
+    MT::ProverData<DenseMatrix<F>>,
+    SumcheckData<F, EF>,
+    Vec<RoundCommitment<EF, MX>>,
+    Point<EF>,
+    Vec<EF>,
 )
 where
-    MT: Mmcs<BinaryField128>,
-    Ch: FieldChallenger<BinaryField128>
-        + GrindingChallenger<Witness = BinaryField128>
-        + CanSampleUniformBits<BinaryField128>
-        + CanObserve<MT::Commitment>,
+    F: TranscriptField + FoldAlphabet<EF>,
+    EF: ExtensionField<F> + FoldAlphabet<EF> + From<Ghash128>,
+    MT: Mmcs<F>,
+    MX: Mmcs<EF>,
+    Ch: FieldChallenger<F>
+        + GrindingChallenger<Witness = F>
+        + CanSampleUniformBits<F>
+        + CanObserve<MX::Commitment>,
+    Ghash128: FromTable<EF>,
 {
     let BinaryPcsProverData {
         layout,
@@ -182,7 +205,7 @@ where
     // Sumcheck messages/challenges remain sequential. Only batch boundaries materialize
     // codewords and observe roots; the final batch is returned in the clear.
     let num_batches = config.num_fold_batches();
-    let mut rounds: Vec<RoundCommitment<MT>> = Vec::with_capacity(num_batches - 1);
+    let mut rounds: Vec<RoundCommitment<EF, MX>> = Vec::with_capacity(num_batches - 1);
     let mut final_codeword = Vec::new();
     for (batch, (start, arity)) in config.fold_batches().enumerate() {
         let _batch_span = tracing::info_span!("fold batch", batch, start, arity).entered();
@@ -207,17 +230,20 @@ where
 
         // Fold out of the previous batch's Merkle leaves, never out of a copy of them.
         // The commitment scheme already owns every codeword it committed.
-        // The fold allocates its own output, so this borrow ends before the push below.
-        let source = if batch == 0 {
-            &merkle_data
-        } else {
-            &rounds[batch - 1].merkle_data
-        };
-        let folded = tracing::info_span!("fold codeword")
-            .in_scope(|| fold_codeword_batch(&mmcs.get_matrices(source)[0].values, &challenges));
+        //
+        // The first batch reads the committed alphabet, every later one the challenge field.
+        // The two arms therefore differ in the type of the codeword they load.
+        let folded = tracing::info_span!("fold codeword").in_scope(|| {
+            if batch == 0 {
+                fold_codeword_batch(&mmcs.get_matrices(&merkle_data)[0].values, &challenges)
+            } else {
+                let source = &rounds[batch - 1].merkle_data;
+                fold_codeword_batch(&round_mmcs.get_matrices(source)[0].values, &challenges)
+            }
+        });
         if batch + 1 < num_batches {
             let (commitment, round_data) = tracing::info_span!("commit folded codeword")
-                .in_scope(|| mmcs.commit_matrix(RowMajorMatrix::new(folded, 1)));
+                .in_scope(|| round_mmcs.commit_matrix(RowMajorMatrix::new(folded, 1)));
             transcript.oracle_commitment(commitment.clone());
             rounds.push(RoundCommitment {
                 commitment,
@@ -248,47 +274,50 @@ where
     )
 }
 
-/// The query phase's prover-side output: every opening `verifier::verify_query_paths` needs,
-/// plus the grinding witness.
-pub(crate) struct QueryProofs<MT: Mmcs<BinaryField128>> {
+/// The query phase's prover-side output.
+/// Every opening the verifier's path check needs, plus the grinding witness.
+pub(crate) struct QueryProofs<F: Field, EF: Field, MT: Mmcs<F>, MX: Mmcs<EF>> {
     /// Every symbol of each queried base coset, one width-1 row per symbol.
     /// Cosets follow sampled query order; symbols inside a coset are ascending.
-    pub base_opened_values: Vec<Vec<BinaryField128>>,
+    pub base_opened_values: Vec<Vec<F>>,
     /// Multiproof for the base commitment's queried rows.
     pub base_multi_proof: MT::MultiProof,
-    /// One [`RoundProof`] per intermediate fold batch, excluding the final batch.
-    pub rounds: Vec<RoundProof<MT>>,
+    /// One entry per intermediate fold batch, excluding the final batch.
+    pub rounds: Vec<RoundProof<EF, MX>>,
     /// Witness for the single grind before the query phase.
-    pub pow_witness: BinaryField128,
+    pub pow_witness: F,
 }
 
 /// Runs the query phase: binds the full final codeword, grinds the single proof-of-work
 /// witness, samples query indices from the base codeword's domain, then opens the base
 /// commitment and every intermediate fold-batch commitment at all coset indices each query needs.
 ///
-/// `rounds` is every [`RoundCommitment`] `fold_rounds_with` produced: one per fold batch except the
-/// last, whose codeword is never committed — it travels in the clear as the proof's
-/// `final_codeword` instead, so a Merkle path for it would only repeat what the verifier can
-/// already read directly.
+/// `rounds` is every round commitment the fold phase produced.
+/// That is one per fold batch except the last, whose codeword is never committed.
+///
+/// The last batch travels in the clear as the proof's final codeword.
+/// A Merkle path for it would only repeat what the verifier can already read.
 #[tracing::instrument(name = "binary pcs open queries", skip_all)]
-pub(crate) fn open_queries<MT, Ch>(
+pub(crate) fn open_queries<F, EF, MT, MX, Ch>(
     config: &BinaryPcsConfig,
     mmcs: &MT,
-    transcript: &mut BinaryPcsProverTranscript<'_, Ch>,
-    base_merkle_data: &MT::ProverData<DenseMatrix<BinaryField128>>,
-    rounds: &[RoundCommitment<MT>],
-    final_codeword: &[BinaryField128],
-) -> QueryProofs<MT>
+    round_mmcs: &MX,
+    transcript: &mut BinaryPcsProverTranscript<'_, F, EF, Ch>,
+    base_merkle_data: &MT::ProverData<DenseMatrix<F>>,
+    rounds: &[RoundCommitment<EF, MX>],
+    final_codeword: &[EF],
+) -> QueryProofs<F, EF, MT, MX>
 where
-    MT: Mmcs<BinaryField128>,
-    Ch: FieldChallenger<BinaryField128>
-        + GrindingChallenger<Witness = BinaryField128>
-        + CanSampleUniformBits<BinaryField128>,
+    F: TranscriptField,
+    EF: ExtensionField<F>,
+    MT: Mmcs<F>,
+    MX: Mmcs<EF>,
+    Ch: FieldChallenger<F> + GrindingChallenger<Witness = F> + CanSampleUniformBits<F>,
 {
     assert_eq!(
         rounds.len(),
         config.num_fold_batches() - 1,
-        "rounds is the caller's own fold_rounds_with output, never proof-supplied data"
+        "rounds is the caller's own fold-phase output, never proof-supplied data"
     );
 
     // The last word is sent in the clear, not committed by a Merkle root. Bind every
@@ -312,7 +341,8 @@ where
         .zip(config.fold_batches().skip(1))
         .map(|(round, (start, arity))| {
             let round_indices = flat_coset_indices(&indices, start, arity);
-            let (values, multi_proof) = mmcs.open_multi_batch(&round_indices, &round.merkle_data);
+            let (values, multi_proof) =
+                round_mmcs.open_multi_batch(&round_indices, &round.merkle_data);
             RoundProof {
                 commitment: round.commitment.clone(),
                 opened_values: single_matrix_rows(values),
@@ -329,9 +359,9 @@ where
     }
 }
 
-/// Strips the always-one-matrix middle index from an [`Mmcs::open_multi_batch`] result,
-/// asserting the count instead of assuming it.
-fn single_matrix_rows(values: Vec<Vec<Vec<BinaryField128>>>) -> Vec<Vec<BinaryField128>> {
+/// Strips the always-one-matrix middle index from a batched-opening result.
+/// The count is asserted rather than assumed.
+fn single_matrix_rows<T>(values: Vec<Vec<Vec<T>>>) -> Vec<Vec<T>> {
     values
         .into_iter()
         .map(|mut per_matrix| {
@@ -345,8 +375,8 @@ fn single_matrix_rows(values: Vec<Vec<Vec<BinaryField128>>>) -> Vec<Vec<BinaryFi
 mod tests {
     use alloc::{format, vec};
 
-    use p3_binary_dft::{AdditiveRsEncoder, NaiveAdditiveNtt};
-    use p3_binary_field::BinaryField128;
+    use p3_binary_dft::{AdditiveRsEncoder, EncodableLevel, NaiveAdditiveNtt};
+    use p3_binary_field::{BinaryField64, BinaryField128};
     use p3_challenger::FieldChallenger;
     use p3_commit::Mmcs;
     use p3_matrix::dense::RowMajorMatrix;
@@ -359,7 +389,7 @@ mod tests {
     use super::{commit, fold_rounds_with};
     use crate::fold::fold_codeword;
     use crate::params::{BinaryPcsConfig, BinaryPcsParams};
-    use crate::test_util::{challenger, mmcs};
+    use crate::test_util::{challenger, mmcs, narrow_challenger, narrow_mmcs};
     use crate::transcript::{BinaryPcsProverTranscript, BinaryPcsShape};
 
     type F = BinaryField128;
@@ -402,13 +432,15 @@ mod tests {
         assert!(codeword.iter().all(|&v| v == final_value));
     }
 
-    /// The lockstep property is specific to suffix binding's evaluation-basis order: driving
-    /// the identical procedure through `PrefixProver` does not leave every symbol of the final
-    /// codeword equal to the constant the sumcheck folds to.
+    /// The lockstep property is specific to suffix binding's evaluation-basis order.
+    /// Driving the identical procedure through prefix binding breaks it.
     ///
-    /// This is why `PcsLayout` is a fixed type rather than a caller-supplied parameter: the
-    /// two orders are not interchangeable, and the difference is a property of the fold's
-    /// pair-merging arithmetic, not a tuning choice.
+    /// The final codeword's symbols no longer all equal the constant the sumcheck reaches.
+    ///
+    /// This is why the layout is a fixed type rather than a caller-supplied parameter.
+    /// The two orders are not interchangeable.
+    ///
+    /// The difference is a property of the fold's pair-merging arithmetic, not a tuning knob.
     #[test]
     fn prefix_layout_does_not_stay_in_lockstep() {
         let mut rng = SmallRng::seed_from_u64(21);
@@ -441,11 +473,12 @@ mod tests {
         assert!(!codeword.iter().all(|&v| v == final_value));
     }
 
-    /// Drives the crate's own [`commit`] and [`fold_rounds_with`] end to end and checks their
-    /// output against an independent oracle: folding the original message variable by
-    /// variable, via [`Poly::fix_suffix_var_mut`], over the randomness `fold_rounds_with` returns,
-    /// in the order returned, must produce the constant every symbol of the final codeword
-    /// equals.
+    /// Drives the crate's own commit and fold phases end to end, against an independent oracle.
+    ///
+    /// The oracle folds the original message variable by variable.
+    /// It consumes the randomness the fold phase returns, in the order returned.
+    ///
+    /// The constant it reaches must be the value every final codeword symbol carries.
     #[test]
     fn commit_and_fold_rounds_match_an_independent_message_fold() {
         let mut rng = SmallRng::seed_from_u64(0xC0FFEE);
@@ -459,15 +492,22 @@ mod tests {
             pow_bits: 4,
             security_level: 40,
         };
-        let config = BinaryPcsConfig::try_new(NUM_VARIABLES, params).unwrap();
+        let config = BinaryPcsConfig::try_new::<F, F>(NUM_VARIABLES, params).unwrap();
         let encoder = AdditiveRsEncoder::<F, NaiveAdditiveNtt<F>>::default();
         let mmcs_instance = mmcs();
 
         let mut ch = challenger();
-        let (_commitment, prover_data) = commit(&config, &encoder, &mmcs_instance, witness);
+        let (_commitment, prover_data) =
+            commit::<F, F, _, _>(&config, &encoder, &mmcs_instance, witness);
         let mut transcript = BinaryPcsProverTranscript::new(&mut ch, BinaryPcsShape::new(&config));
         let (_merkle_data, _sumcheck_data, rounds, randomness, final_codeword) =
-            fold_rounds_with::<false, _, _>(prover_data, &config, &mmcs_instance, &mut transcript);
+            fold_rounds_with::<false, F, F, _, _, _>(
+                prover_data,
+                &config,
+                &mmcs_instance,
+                &mmcs_instance,
+                &mut transcript,
+            );
         // Only the fold phase runs here, so the driver is released rather than closed.
         transcript.abort();
 
@@ -479,6 +519,59 @@ mod tests {
             message.fix_suffix_var_mut(beta);
         }
         let expected = message.as_constant().expect("fully folded");
+        assert!(final_codeword.iter().all(|&v| v == expected));
+    }
+
+    /// The same independent-oracle check, with the columns committed over a narrower alphabet.
+    ///
+    /// The base codeword holds 64-bit symbols and every folded codeword 128-bit ones.
+    /// The first fold of the schedule is the one that crosses between them.
+    #[test]
+    fn a_narrow_alphabet_folds_to_the_same_constant_as_its_own_message() {
+        let mut rng = SmallRng::seed_from_u64(0xC0FFEE);
+        let table = Table::rand(&mut rng, 1, NUM_VARIABLES);
+
+        // The message as a polynomial over the challenge field, cell for cell.
+        let embedded = Poly::new(
+            table
+                .poly(0)
+                .as_slice()
+                .iter()
+                .map(|&value| F::from(value))
+                .collect::<alloc::vec::Vec<_>>(),
+        );
+        let witness = SuffixProver::<BinaryField64, F>::new_witness(vec![table], 0);
+
+        let params = BinaryPcsParams {
+            log_inv_rate: LOG_INV_RATE,
+            pow_bits: 4,
+            security_level: 40,
+        };
+        let config = BinaryPcsConfig::try_new::<BinaryField64, F>(NUM_VARIABLES, params).unwrap();
+        let encoder = <BinaryField64 as EncodableLevel>::Encoder::default();
+
+        // The sponge speaks the committed alphabet, so a narrow run needs its own challenger.
+        let mut ch = narrow_challenger();
+        let (_commitment, prover_data) =
+            commit::<BinaryField64, F, _, _>(&config, &encoder, &narrow_mmcs(), witness);
+        let mut transcript = BinaryPcsProverTranscript::new(&mut ch, BinaryPcsShape::new(&config));
+        let (_merkle_data, _sumcheck_data, _rounds, randomness, final_codeword) =
+            fold_rounds_with::<false, BinaryField64, F, _, _, _>(
+                prover_data,
+                &config,
+                &narrow_mmcs(),
+                &mmcs(),
+                &mut transcript,
+            );
+        transcript.abort();
+
+        // Binding the embedded message in the same order must reach the same constant.
+        let mut message = embedded;
+        for &beta in randomness.as_slice() {
+            message.fix_suffix_var_mut(beta);
+        }
+        let expected = message.as_constant().expect("fully folded");
+        assert_eq!(final_codeword.len(), 1 << LOG_INV_RATE);
         assert!(final_codeword.iter().all(|&v| v == expected));
     }
 
@@ -509,19 +602,22 @@ mod tests {
         //
         // Both folding factors, because they exercise different held-challenge paths:
         //
-        //     1: every round is its own batch, so every held challenge crosses a batch
-        //     3: three rounds share a batch, so a held challenge also crosses a round
-        //        boundary inside one — which is where the reference route's per-round
-        //        `settle()` sits
+        //     1:  every round is its own batch    ->  every held challenge crosses a batch
+        //     3:  three rounds share a batch      ->  one also crosses a round boundary
+        //
+        // That inner boundary is where the reference route settles its binding.
         for (num_variables, log_folding_factor) in [(8usize, 1usize), (8, 3), (15, 1), (15, 3)] {
             let params = BinaryPcsParams {
                 log_inv_rate: LOG_INV_RATE,
                 pow_bits: 4,
                 security_level: 40,
             };
-            let config =
-                BinaryPcsConfig::try_new_with_folding(num_variables, params, log_folding_factor)
-                    .unwrap();
+            let config = BinaryPcsConfig::try_new_with_folding::<F, F>(
+                num_variables,
+                params,
+                log_folding_factor,
+            )
+            .unwrap();
 
             // The shipped encoder, not the naive one.
             //
@@ -535,7 +631,7 @@ mod tests {
 
             // Fused route.
             let mut got_ch = challenger();
-            let (_commitment, got_data) = commit(
+            let (_commitment, got_data) = commit::<F, F, _, _>(
                 &config,
                 &encoder,
                 &mmcs_instance,
@@ -544,14 +640,20 @@ mod tests {
             let mut got_t =
                 BinaryPcsProverTranscript::new(&mut got_ch, BinaryPcsShape::new(&config));
             let (_, got_sumcheck, got_rounds, got_randomness, got_final) =
-                fold_rounds_with::<false, _, _>(got_data, &config, &mmcs_instance, &mut got_t);
+                fold_rounds_with::<false, F, F, _, _, _>(
+                    got_data,
+                    &config,
+                    &mmcs_instance,
+                    &mmcs_instance,
+                    &mut got_t,
+                );
             // Only the fold phase runs here, so the driver is released rather than closed.
             got_t.abort();
             drop(got_t);
 
             // Reference route, from an identically seeded challenger.
             let mut want_ch = challenger();
-            let (_commitment, want_data) = commit(
+            let (_commitment, want_data) = commit::<F, F, _, _>(
                 &config,
                 &encoder,
                 &mmcs_instance,
@@ -560,7 +662,13 @@ mod tests {
             let mut want_t =
                 BinaryPcsProverTranscript::new(&mut want_ch, BinaryPcsShape::new(&config));
             let (_, want_sumcheck, want_rounds, want_randomness, want_final) =
-                fold_rounds_with::<true, _, _>(want_data, &config, &mmcs_instance, &mut want_t);
+                fold_rounds_with::<true, F, F, _, _, _>(
+                    want_data,
+                    &config,
+                    &mmcs_instance,
+                    &mmcs_instance,
+                    &mut want_t,
+                );
             want_t.abort();
             drop(want_t);
 
@@ -607,10 +715,10 @@ mod tests {
         }
     }
 
-    /// `commit` rejects a witness whose arity disagrees with the config in every build
-    /// profile, not only a debug one: falling through would surface later as a confusing
-    /// `FinalCodewordLengthMismatch`, or a panic inside `fold_codeword` on a length-1
-    /// codeword, instead of at the actual precondition.
+    /// Committing rejects an arity mismatch in every build profile, not only a debug one.
+    ///
+    /// Falling through would surface later, far from the precondition that failed.
+    /// It would read as a final-codeword length mismatch, or a panic inside the fold.
     #[test]
     #[should_panic(expected = "witness arity must match the config it is committed against")]
     fn commit_rejects_a_witness_arity_mismatch() {
@@ -619,13 +727,13 @@ mod tests {
             pow_bits: 4,
             security_level: 40,
         };
-        let config = BinaryPcsConfig::try_new(NUM_VARIABLES, params).unwrap();
+        let config = BinaryPcsConfig::try_new::<F, F>(NUM_VARIABLES, params).unwrap();
         let encoder = AdditiveRsEncoder::<F, NaiveAdditiveNtt<F>>::default();
         let mmcs_instance = mmcs();
         let mut rng = SmallRng::seed_from_u64(0);
         let table = Table::rand(&mut rng, 1, NUM_VARIABLES - 1);
         let witness = SuffixProver::<F, F>::new_witness(vec![table], 0);
 
-        let _ = commit(&config, &encoder, &mmcs_instance, witness);
+        let _ = commit::<F, F, _, _>(&config, &encoder, &mmcs_instance, witness);
     }
 }

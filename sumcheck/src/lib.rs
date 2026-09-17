@@ -26,6 +26,7 @@
 
 extern crate alloc;
 
+pub mod claim_pool;
 pub mod commit;
 pub mod constraints;
 pub mod data;
@@ -47,6 +48,7 @@ pub mod transcript;
 pub mod univariate_skip;
 pub mod zk;
 
+pub use claim_pool::{ClaimPool, ClaimPoolError, ClaimPoolShape, SealedClaims};
 pub use data::{SumcheckData, verify_final_sumcheck_rounds};
 pub use error::SumcheckError;
 pub(crate) use lagrange::extrapolate_01inf;
