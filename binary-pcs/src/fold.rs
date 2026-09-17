@@ -405,7 +405,7 @@ fn fold_rounds_packed(
 ///
 /// # Panics
 ///
-/// Panics in debug builds if there are no challenges.
+/// Panics if there are no challenges.
 fn fold_rounds<const W: usize, K>(
     codeword: &[BinaryField128],
     challenges: &[BinaryField128],
@@ -414,7 +414,9 @@ fn fold_rounds<const W: usize, K>(
 where
     K: Fn(&[u128], &mut [u128], usize, Ghash128, &[Ghash128]) + Sync,
 {
-    debug_assert!(!challenges.is_empty(), "a fold runs at least one round");
+    // With no round to run, every output slot would keep its zero and the fold would return an
+    // all-zero codeword instead of failing.
+    assert!(!challenges.is_empty(), "a fold runs at least one round");
 
     let arity = challenges.len();
     let size = 1usize << arity;
@@ -938,6 +940,14 @@ mod tests {
         // One symbol is half a pair, so there is nothing to fold and the output is empty.
         // A length of one is a power of two, so the length assertion admits it.
         assert!(fold_codeword(&[BinaryField128::ONE], BinaryField128::ONE).is_empty());
+    }
+
+    #[test]
+    #[should_panic(expected = "a fold runs at least one round")]
+    fn a_fold_with_no_challenges_is_rejected() {
+        // No round would write an output slot, so the driver refuses rather than return zeros.
+        let codeword = [BinaryField128::ONE; 4];
+        let _ = fold_rounds_model::<1>(&codeword, &[]);
     }
 
     #[test]
