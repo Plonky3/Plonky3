@@ -91,6 +91,24 @@ fn for_chunks(
     }
 }
 
+/// Chunk size for copying one coset's coefficients, chosen so each rayon task moves enough
+/// bytes to be worth dispatching, even when only a handful of cosets exist to parallelize over.
+const COSET_COPY_GRAIN: usize = 1 << 16;
+
+/// Copies `src` into `dst`, splitting a large copy across workers.
+///
+/// `for_chunks` gives every coset its own task, but a low-rate encoding has few cosets, so a
+/// large message copy is also split into chunks that idle workers can take.
+fn copy_coset(dst: &mut [u128], src: &[u128]) {
+    if dst.len() > COSET_COPY_GRAIN && use_parallel(dst.len()) {
+        dst.par_chunks_mut(COSET_COPY_GRAIN)
+            .zip(src.par_chunks(COSET_COPY_GRAIN))
+            .for_each(|(d, s)| d.copy_from_slice(s));
+    } else {
+        dst.copy_from_slice(src);
+    }
+}
+
 /// A change of basis applied to a whole run of elements at once.
 ///
 /// The kernel behind it converts several elements together where the target allows.
@@ -718,10 +736,10 @@ impl AdditiveNtt<BinaryField128> for PolyBasisNtt {
         convert(message, INTO_POLY);
         // Only the conversion back is left, and each coset's contiguous tile carries its own.
         if len >= 2 * BUTTERFLY_GRAIN * p3_maybe_rayon::prelude::current_num_threads() {
-            // Keep large coefficient copies next to evaluation so the copied data
-            // is still hot, including when only one worker is available.
+            // Copy each large coset next to its evaluation, including when only one worker
+            // is available.
             for_chunks(tail, len, log_message, |(c, chunk)| {
-                chunk.copy_from_slice(message);
+                copy_coset(chunk, message);
                 forward(
                     chunk,
                     plan,
