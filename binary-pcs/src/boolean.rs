@@ -63,8 +63,7 @@ use p3_multilinear_util::poly::Poly;
 use p3_security::{SecurityTerm, claim_pool_term};
 use p3_sumcheck::layout::{Layout, SuffixProver};
 use p3_sumcheck::ring_switch::bits::{
-    BitPacking, BitRingSwitch, BitRingSwitchProof, BitRingSwitchProofError, prove_bit_ring_switch,
-    verify_bit_ring_switch,
+    BitPacking, BitRingSwitch, BitRingSwitchProof, BitRingSwitchProofError,
 };
 use p3_sumcheck::{
     ClaimPool, ClaimPoolError, OpeningBatch, OpeningProtocol, PrescribedPointPcs, TableShape,
@@ -311,8 +310,7 @@ where
             // The element the reduction sends already holds the witness at the point.
             // Read by columns it is the claimed value, so it costs no pass of its own.
             let reduction = BitRingSwitch::new(point).map_err(BooleanPcsError::Reduction)?;
-            let (proof, surviving_point, surviving_value) =
-                prove_bit_ring_switch(&packing, point, challenger);
+            let (proof, surviving_point, surviving_value) = reduction.prove(&packing, challenger);
 
             values.push(reduction.incoming_claim(&proof.tensor));
             pool.deposit(surviving_point.clone(), surviving_value)
@@ -368,10 +366,11 @@ where
         // Each reduction turns its claim about the bits into one about the packing.
         let mut pool = ClaimPool::new(self.inner.num_variables());
         let mut surviving_points = Vec::with_capacity(points.len());
-        for ((point, &value), reduction) in points.iter().zip(values).zip(&proof.reductions) {
-            let (surviving_point, surviving_value) =
-                verify_bit_ring_switch(reduction, point, value, challenger)
-                    .map_err(BooleanPcsError::ReductionProof)?;
+        for ((point, &value), sent) in points.iter().zip(values).zip(&proof.reductions) {
+            let reduction = BitRingSwitch::new(point).map_err(BooleanPcsError::Reduction)?;
+            let (surviving_point, surviving_value) = reduction
+                .verify(sent, value, challenger)
+                .map_err(BooleanPcsError::ReductionProof)?;
             pool.deposit(surviving_point.clone(), surviving_value)
                 .map_err(BooleanPcsError::Pool)?;
             surviving_points.push(surviving_point);

@@ -1,15 +1,31 @@
-//! One ring-switching reduction at a bit alphabet, and its five values.
+//! One ring-switching reduction at a bit alphabet, end to end.
+//!
+//! The five values the reduction is built from, the messages it sends, and the two sides that run it.
+//!
+//! Both sides are methods, because here the reduction has a type to hang them on.
+//! The sibling module's are free functions because there the reduction has none.
 
 use alloc::vec::Vec;
 
 use p3_binary_field::TowerLevel;
+use p3_challenger::fs::TranscriptField;
+use p3_challenger::{FieldChallenger, GrindingChallenger};
 use p3_maybe_rayon::prelude::*;
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
+use serde::{Deserialize, Serialize};
 
 use super::basis::Coefficients;
 use super::packing::BitPacking;
 use super::tensor::BitTensor;
+use super::transcript::{
+    BitRingSwitchProverTranscript, BitRingSwitchShape, BitRingSwitchVerifierTranscript,
+    TranscriptWidth,
+};
+use crate::data::SumcheckData;
+use crate::error::SumcheckError;
+use crate::product_polynomial::ProductPolynomial;
+use crate::strategy::{Basis, SumcheckProver, VariableOrder};
 
 /// The hypercube points one task accumulates before its partial combines.
 ///
@@ -54,14 +70,14 @@ const CHUNK: usize = 1 << 1;
 /// # What the split settles, and what it leaves
 ///
 /// It settles that `tensor` never needs the challenge.
-/// No driver is pushed into drawing one early just to obtain an element.
+/// Nothing is pushed into drawing one early just to obtain an element.
 ///
 /// It does not settle the order.
 /// `batch` borrows this stage alone, so a caller can reach it first.
 /// The forgery goes through in the order `new`, `batch`, `tensor`.
 ///
 /// Only a transcript binding `r` and the element before `r''` fixes that.
-/// The driver owning that transcript owes the ordering test.
+/// The two sides below own that transcript, so the ordering test is theirs.
 ///
 /// # What it costs a verifier
 ///
@@ -78,8 +94,10 @@ const CHUNK: usize = 1 << 1;
 /// A general alphabet needs `d` multiplications per hypercube point instead.
 #[derive(Clone, Debug)]
 pub struct BitRingSwitch<EF> {
-    /// The coordinates of the evaluation point the packing keeps.
-    high: Point<EF>,
+    /// The evaluation point of the claim, over every variable of the witness.
+    ///
+    /// Held whole because the transcript binds it whole.
+    point: Point<EF>,
     /// The equality table of the coordinates one packed element absorbs.
     eq_low: Poly<EF>,
 }
@@ -109,11 +127,11 @@ impl<EF: TowerLevel> BitRingSwitch<EF> {
         }
 
         // The packing keeps the leading coordinates and absorbs the rest.
-        let (high, low) = r.split_at(r.num_variables() - Self::ABSORBED);
+        let (_, low) = r.split_at(r.num_variables() - Self::ABSORBED);
 
         Ok(Self {
             eq_low: Poly::new_from_point(low.as_slice(), EF::ONE),
-            high,
+            point: r.clone(),
         })
     }
 
@@ -121,7 +139,14 @@ impl<EF: TowerLevel> BitRingSwitch<EF> {
     ///
     /// This is also the number of sumcheck rounds the reduction takes.
     pub const fn num_variables(&self) -> usize {
-        self.high.num_variables()
+        self.point.num_variables() - Self::ABSORBED
+    }
+
+    /// The coordinates of the evaluation point the packing keeps.
+    ///
+    /// They lead the point, so this is a borrow rather than a split.
+    fn high(&self) -> &[EF] {
+        &self.point.as_slice()[..self.num_variables()]
     }
 
     /// Move on to the stage the batching challenge opens.
@@ -149,7 +174,7 @@ impl<EF: TowerLevel> BitRingSwitch<EF> {
     ///
     /// `2^l'` entries, so only the prover's two operations build it.
     fn eq_high(&self) -> Poly<EF> {
-        Poly::new_from_point(self.high.as_slice(), EF::ONE)
+        Poly::new_from_point(self.high(), EF::ONE)
     }
 
     /// `sum_w eq(r_high, w) ⊗ t'(w)`, the element the prover sends.
@@ -259,7 +284,7 @@ impl<EF: TowerLevel> BitRingSwitch<EF> {
     fn equality_element(&self, r_prime: &Point<EF>) -> BitTensor<EF> {
         let mut element = BitTensor::one();
         for i in 0..self.num_variables() {
-            let (a, b) = (self.high[i], r_prime[i]);
+            let (a, b) = (self.high()[i], r_prime[i]);
 
             let mut agree = element.clone();
             agree.scale_columns(a);
@@ -390,10 +415,244 @@ pub enum BitRingSwitchError {
     },
 }
 
+/// The messages one bit-alphabet reduction puts on the wire.
+///
+/// The element travels by rows, one bit per matrix entry:
+///
+/// ```text
+///     by rows          d elements
+///     byte per entry   d^2 elements
+/// ```
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(bound(serialize = "EF: TowerLevel", deserialize = "EF: TowerLevel"))]
+pub struct BitRingSwitchProof<EF> {
+    /// The tensor element both checks read, by rows and by columns.
+    pub tensor: BitTensor<EF>,
+    /// The rounds of the batched degree-two sumcheck.
+    pub sumcheck: SumcheckData<EF, EF>,
+    /// The value of the surviving claim.
+    pub final_eval: EF,
+}
+
+/// Why a bit-alphabet reduction was rejected.
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum BitRingSwitchProofError {
+    /// A list crossing the wire is not the width the description fixes.
+    #[error(transparent)]
+    Width(#[from] TranscriptWidth),
+
+    /// The reduction could not be run over the point it was set up at.
+    #[error(transparent)]
+    Reduction(#[from] BitRingSwitchError),
+
+    /// The claimed evaluation is not the column reading of the element.
+    #[error("the claimed evaluation is not the column reading of the tensor element")]
+    ClaimMismatch,
+
+    /// A round of the batched sumcheck failed.
+    #[error(transparent)]
+    Sumcheck(#[from] SumcheckError),
+
+    /// The surviving claim does not close the sumcheck against the closing weight.
+    #[error("the surviving claim does not close the sumcheck")]
+    FinalCheck,
+
+    /// The sumcheck carries grinding witnesses this reduction never searches for.
+    #[error("the sumcheck carries {actual} proof-of-work witnesses, expected none")]
+    NonEmptyPowWitnesses {
+        /// Witnesses the proof supplied.
+        actual: usize,
+    },
+}
+
+/// The two sides of the reduction, each over the transcript the other replays.
+///
+/// # A reduction, not a filter
+///
+/// A false input claim is not rejected outright.
+/// It survives as a false surviving claim, except with the probability below.
+///
+/// Two cases the rounds cannot catch are left to whatever discharges the claim:
+///
+/// - a closing weight of zero, which constrains the surviving value not at all
+/// - a tampered element, with the rest of the proof adapted to the sum it implies
+///
+/// # Booleanity is free
+///
+/// The packing is a bijection between bit strings and elements of the level.
+/// Every bit pattern is an element, and every element is some bit pattern.
+///
+/// A commitment to a packed multilinear is therefore a commitment to a bit witness.
+/// No range check, no auxiliary constraint, and nothing here to verify.
+///
+/// # Soundness
+///
+/// The reduction's own error is `(d_log + 2 l') / |EF|` (eprint 2024/504, Theorem 3.5).
+/// It runs over `d_log` absorbed coordinates and `l'` rounds:
+///
+/// - `d_log / |EF|` from the batching draw that collapses the row claims into one.
+/// - `2 l' / |EF|` for the rounds of degree-two sumcheck.
+///
+/// Both terms are per-attempt, because the description holds no grinding step.
+/// A protocol needing a total bound supplies the grinding outside this run.
+impl<EF: TranscriptField + TowerLevel> BitRingSwitch<EF> {
+    /// Reduce the claim this reduction was set up over to one about the packing.
+    ///
+    /// # Returns
+    ///
+    /// The proof, the point the rounds ended at, and the surviving claim's value.
+    ///
+    /// # Panics
+    ///
+    /// Panics unless the packing has the variables the evaluation point leaves.
+    pub fn prove<Challenger>(
+        &self,
+        packing: &BitPacking<EF>,
+        challenger: &mut Challenger,
+    ) -> (BitRingSwitchProof<EF>, Point<EF>, EF)
+    where
+        EF: Send + Sync,
+        Challenger: FieldChallenger<EF> + GrindingChallenger<Witness = EF>,
+    {
+        let rounds = self.num_variables();
+        assert_eq!(
+            packing.num_variables(),
+            rounds,
+            "the packing must have the {rounds} variables the evaluation point leaves"
+        );
+
+        let tensor = self
+            .tensor(packing)
+            .expect("the packing was just checked against the reduction");
+
+        // The element is a function of the kept coordinates alone.
+        // It is therefore ready before the transcript needs it.
+        let shape = BitRingSwitchShape::new(self.point.num_variables());
+        let mut transcript =
+            BitRingSwitchProverTranscript::<Challenger, EF>::new(challenger, shape);
+        let r_batch = transcript.statement(&self.point, tensor.rows());
+
+        // The batching challenge arrived after the element, which is the order soundness needs.
+        let batch = self
+            .batch(&r_batch)
+            .expect("the draw names the absorbed coordinates by construction");
+        let poly = ProductPolynomial::new_unpacked(
+            VariableOrder::Prefix,
+            packing.poly().clone(),
+            batch.weights(),
+        );
+        let mut prover = SumcheckProver::new(poly, batch.initial_sum(&tensor));
+        let mut sumcheck = SumcheckData::default();
+
+        let r_prime = transcript.batched_sumcheck(|challenger| {
+            prover.compute_sumcheck_polynomials(&mut sumcheck, challenger, rounds, 0, None)
+        });
+
+        // After the last round the evaluation side has folded to the packing at that point.
+        // No second pass over the packing is needed to find it.
+        let final_eval = prover.evals().as_slice()[0];
+        transcript.surviving_claim(final_eval);
+        transcript.finish();
+
+        (
+            BitRingSwitchProof {
+                tensor,
+                sumcheck,
+                final_eval,
+            },
+            r_prime,
+            final_eval,
+        )
+    }
+
+    /// Replay the reduction and return the claim it leaves behind, as a point and a value.
+    ///
+    /// Discharging that pair against a commitment to the packing is the caller's business.
+    ///
+    /// # Errors
+    ///
+    /// - A malformed element.
+    /// - A non-empty grinding witness list, since this reduction never grinds.
+    /// - A claimed evaluation disagreeing with the element's columns.
+    /// - A failed sumcheck round, or a final claim that does not close it.
+    pub fn verify<Challenger>(
+        &self,
+        proof: &BitRingSwitchProof<EF>,
+        claimed_sum: EF,
+        challenger: &mut Challenger,
+    ) -> Result<(Point<EF>, EF), BitRingSwitchProofError>
+    where
+        Challenger: FieldChallenger<EF> + GrindingChallenger<Witness = EF>,
+    {
+        // Both structural rejections below run before the challenger is touched.
+        // A malformed proof therefore never leaves a half-advanced transcript.
+        if !proof.tensor.is_well_formed() {
+            return Err(TranscriptWidth::TensorRows {
+                expected: BitTensor::<EF>::DIMENSION,
+                actual: proof.tensor.rows().len(),
+            }
+            .into());
+        }
+        if !proof.sumcheck.pow_witnesses.is_empty() {
+            return Err(BitRingSwitchProofError::NonEmptyPowWitnesses {
+                actual: proof.sumcheck.pow_witnesses.len(),
+            });
+        }
+
+        let rounds = self.num_variables();
+        let shape = BitRingSwitchShape::new(self.point.num_variables());
+        let mut transcript =
+            BitRingSwitchVerifierTranscript::<Challenger, EF>::new(challenger, shape);
+        let r_batch = transcript.statement(&self.point, proof.tensor.rows())?;
+
+        // The columns are the witness's bit planes at the kept coordinates.
+        // The absorbed coordinates weigh them back together, their only use here.
+        if self.incoming_claim(&proof.tensor) != claimed_sum {
+            transcript.abort();
+            return Err(BitRingSwitchProofError::ClaimMismatch);
+        }
+
+        let batch = self
+            .batch(&r_batch)
+            .expect("the draw names the absorbed coordinates by construction");
+
+        // The initial sum is derived from the element's rows, never taken from the prover.
+        // That is what makes a dishonest element catchable at all.
+        let mut sum = batch.initial_sum(&proof.tensor);
+        let replay = transcript.batched_sumcheck(|challenger| {
+            proof
+                .sumcheck
+                .verify_rounds(challenger, &mut sum, rounds, 0, Basis::Evaluation)
+        });
+        let r_prime = match replay {
+            Ok(point) => point,
+            Err(error) => {
+                transcript.abort();
+                return Err(error.into());
+            }
+        };
+
+        transcript.surviving_claim(proof.final_eval);
+        transcript.finish();
+
+        // The rounds close on the weight multilinear at their end point, times the value.
+        // The weight comes through the equality element rather than another pass.
+        let closing = batch.closing_weight(&r_prime)?;
+        if sum != closing * proof.final_eval {
+            return Err(BitRingSwitchProofError::FinalCheck);
+        }
+
+        Ok((r_prime, proof.final_eval))
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use p3_binary_field::BinaryField16;
+    use p3_binary_field::{BinaryChallenger, BinaryField16};
+    use p3_challenger::HashChallenger;
     use p3_field::PrimeCharacteristicRing;
+    use p3_keccak::Keccak256Hash;
     use proptest::prelude::*;
     use rand::rngs::SmallRng;
     use rand::{RngExt, SeedableRng};
@@ -401,6 +660,12 @@ mod tests {
     use super::*;
 
     type EF = BinaryField16;
+    type Chal = BinaryChallenger<EF, HashChallenger<u8, Keccak256Hash, 32>>;
+
+    /// A fresh sponge, so the two sides start from the same state.
+    fn challenger() -> Chal {
+        Chal::from_hasher(Vec::new(), Keccak256Hash)
+    }
 
     /// A random bit witness of the given byte length.
     fn bits(seed: u64, bytes: usize) -> Vec<u8> {
@@ -411,7 +676,7 @@ mod tests {
     /// One reduction over a witness of the given byte length.
     ///
     /// The batching challenge comes back beside it rather than folded in.
-    /// A test then reaches the second stage the way a driver does.
+    /// A test then reaches the second stage the way the protocol does.
     fn fixture(
         seed: u64,
         bytes: usize,
@@ -714,6 +979,151 @@ mod tests {
             }
 
             prop_assert_eq!(reduction.tensor(&packing).unwrap(), expected);
+        }
+    }
+
+    #[test]
+    fn the_reduction_round_trips_and_leaves_a_true_claim() {
+        // Invariant: the surviving claim is the truth about the packed polynomial.
+        //
+        //     in    t(r) = s   at a random point over all 8 variables
+        //     out   t'(r')     over the 4 the packing keeps, 4 being absorbed
+        let witness = bits(0x81A5, 32);
+        let packing = BitPacking::<EF>::new(&witness).unwrap();
+        let r = Point::<EF>::rand(&mut SmallRng::seed_from_u64(0x81A6), 8);
+        let reduction = BitRingSwitch::new(&r).unwrap();
+        let claim = embedded(&witness).eval_base(&r);
+
+        let mut prover_chal = challenger();
+        let (proof, r_prime_p, s_prime_p) = reduction.prove(&packing, &mut prover_chal);
+
+        let mut verifier_chal = challenger();
+        let (r_prime_v, s_prime_v) = reduction.verify(&proof, claim, &mut verifier_chal).unwrap();
+
+        assert_eq!(r_prime_p, r_prime_v);
+        assert_eq!(s_prime_p, s_prime_v);
+        assert_eq!(s_prime_v, packing.poly().eval_base(&r_prime_v));
+    }
+
+    #[test]
+    fn a_claim_the_element_does_not_support_is_rejected() {
+        // The column reading is what ties the element to the incoming claim.
+        let witness = bits(0x0AD, 32);
+        let packing = BitPacking::<EF>::new(&witness).unwrap();
+        let r = Point::<EF>::rand(&mut SmallRng::seed_from_u64(0x0AE), 8);
+        let reduction = BitRingSwitch::new(&r).unwrap();
+        let claim = embedded(&witness).eval_base(&r);
+
+        let (proof, _, _) = reduction.prove(&packing, &mut challenger());
+
+        let err = reduction
+            .verify(&proof, claim + EF::ONE, &mut challenger())
+            .unwrap_err();
+        assert_eq!(err, BitRingSwitchProofError::ClaimMismatch);
+    }
+
+    #[test]
+    fn a_tampered_element_breaks_the_reduction() {
+        // Invariant: both readings are of the same coefficients.
+        //
+        //     rows    -> the sum the rounds start from
+        //     columns -> the claim they are checked against
+        //
+        // Mutation: add one to a row, which moves the sum but not the claim.
+        let witness = bits(0x7A17, 32);
+        let packing = BitPacking::<EF>::new(&witness).unwrap();
+        let r = Point::<EF>::rand(&mut SmallRng::seed_from_u64(0x7A18), 8);
+        let reduction = BitRingSwitch::new(&r).unwrap();
+        let claim = embedded(&witness).eval_base(&r);
+
+        let (mut proof, _, _) = reduction.prove(&packing, &mut challenger());
+        let mut rows = proof.tensor.rows().to_vec();
+        rows[3] += EF::ONE;
+        proof.tensor = BitTensor::try_from(rows).unwrap();
+
+        assert!(reduction.verify(&proof, claim, &mut challenger()).is_err());
+    }
+
+    #[test]
+    fn a_stray_grinding_witness_is_refused_before_the_transcript() {
+        // Invariant: this reduction never grinds, so a witness rides along unbound.
+        //
+        // The rejection is structural, so it may not advance the sponge.
+        //
+        // A short element cannot be built at all.
+        // Every route into one checks the row count, deserialization included.
+        //
+        // The verifier's shape check is therefore defence in depth, not a reachable path.
+        let witness = bits(0x5407, 32);
+        let packing = BitPacking::<EF>::new(&witness).unwrap();
+        let r = Point::<EF>::rand(&mut SmallRng::seed_from_u64(0x5408), 8);
+        let reduction = BitRingSwitch::new(&r).unwrap();
+        let claim = embedded(&witness).eval_base(&r);
+
+        let (mut proof, _, _) = reduction.prove(&packing, &mut challenger());
+        proof.sumcheck.pow_witnesses.push(EF::ONE);
+
+        assert_eq!(
+            reduction
+                .verify(&proof, claim, &mut challenger())
+                .unwrap_err(),
+            BitRingSwitchProofError::NonEmptyPowWitnesses { actual: 1 }
+        );
+
+        // A row count the level does not admit has no constructor.
+        assert!(BitTensor::<EF>::try_from(alloc::vec![EF::ONE; 4]).is_err());
+    }
+
+    #[test]
+    fn a_point_the_prover_did_not_run_over_is_rejected() {
+        // Invariant: the two sides must run over the same point, not merely the same width.
+        //
+        // The other point keeps the absorbed coordinates and moves one kept coordinate.
+        // The column reading is then unchanged, so the claim check passes and the rest must catch it.
+        //
+        // That is the discriminating case.
+        // Moving an absorbed coordinate would stop at the claim check instead.
+        let witness = bits(0x9107, 32);
+        let packing = BitPacking::<EF>::new(&witness).unwrap();
+        let r = Point::<EF>::rand(&mut SmallRng::seed_from_u64(0x9108), 8);
+        let claim = embedded(&witness).eval_base(&r);
+        let reduction = BitRingSwitch::new(&r).unwrap();
+        let (proof, _, _) = reduction.prove(&packing, &mut challenger());
+
+        let mut moved = r.as_slice().to_vec();
+        moved[0] += EF::ONE;
+        let elsewhere = BitRingSwitch::new(&Point::new(moved)).unwrap();
+
+        let err = elsewhere
+            .verify(&proof, claim, &mut challenger())
+            .unwrap_err();
+        assert_ne!(err, BitRingSwitchProofError::ClaimMismatch, "{err:?}");
+    }
+
+    proptest! {
+        // Each case runs a full reduction on both sides, so a few dozen keep the suite fast.
+        #![proptest_config(ProptestConfig { cases: 24, ..ProptestConfig::default() })]
+
+        /// Every witness length the level admits, at a random point each time.
+        #[test]
+        fn the_reduction_round_trips_over_random_inputs(
+            log_bytes in 1usize..=6,
+            witness_seed: u64,
+            point_seed: u64,
+        ) {
+            let witness = bits(witness_seed, 1 << log_bytes);
+            let packing = BitPacking::<EF>::new(&witness).unwrap();
+            let variables = log_bytes + 3;
+            let r = Point::<EF>::rand(&mut SmallRng::seed_from_u64(point_seed), variables);
+            let reduction = BitRingSwitch::new(&r).unwrap();
+            let claim = embedded(&witness).eval_base(&r);
+
+            let (proof, _, s_prime_p) = reduction.prove(&packing, &mut challenger());
+            let (r_prime, s_prime) =
+                reduction.verify(&proof, claim, &mut challenger()).unwrap();
+
+            prop_assert_eq!(s_prime, s_prime_p);
+            prop_assert_eq!(s_prime, packing.poly().eval_base(&r_prime));
         }
     }
 }
