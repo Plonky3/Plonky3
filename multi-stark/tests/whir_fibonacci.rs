@@ -393,7 +393,7 @@ fn security_checked_whir_roundtrip_and_target_rejection() {
     let pcs_bits = report
         .terms()
         .iter()
-        .find(|term| term.label == "main-pcs")
+        .find(|term| term.label == "whir-opening")
         .unwrap()
         .bits
         .bits();

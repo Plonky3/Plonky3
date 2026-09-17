@@ -622,10 +622,11 @@ where
     fn prescribed_security(&self, protocol: &OpeningProtocol) -> Option<PrescribedOpeningSecurity> {
         self.validate_opening_protocol(protocol).ok()?;
         Some(PrescribedOpeningSecurity {
-            error: self
-                .config
-                .security_regime()
-                .opening_error(Self::opening_claim_count(protocol)?),
+            terms: vec![
+                self.config
+                    .security_regime()
+                    .opening_term(Self::opening_claim_count(protocol)?),
+            ],
             log2_max_candidates: 0.0,
         })
     }

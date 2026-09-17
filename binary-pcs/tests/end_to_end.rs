@@ -87,7 +87,7 @@ fn binary_pcs_supplies_composed_prescribed_security() {
     let evidence =
         <MyPcs as PrescribedPointPcs<F, MyChallenger>>::prescribed_security(&pcs, &protocol)
             .expect("binary PCS must supply its opening bound");
-    assert!(evidence.error.bits() >= 100.0);
+    assert!(evidence.error().bits() >= 100.0);
     assert_eq!(evidence.log2_max_candidates, 0.0);
 }
 

@@ -12,6 +12,7 @@ use alloc::vec::Vec;
 use p3_util::log2_ceil_usize;
 
 use crate::layout::witness::{Selector, TablePlacement};
+use crate::table::TableShape;
 
 /// Per-table shape input to the layout planner.
 ///
@@ -83,11 +84,66 @@ pub(crate) fn plan_layout(shapes: &[LayoutShape]) -> (usize, Vec<TablePlacement>
     (k, placements)
 }
 
+/// Plan the stacked layout of a set of committed table shapes.
+///
+/// A caller that packs a witness itself needs the same slot assignment the schemes use.
+///
+/// Reading it from here is what keeps the two from drifting apart.
+///
+/// # Returns
+///
+/// - Stacked arity, the log of the padded cell count across every table.
+/// - One placement per source table, largest arity first, carrying its slot selectors.
+#[must_use]
+pub fn plan_stacked_layout(shapes: &[TableShape]) -> (usize, Vec<TablePlacement>) {
+    // The planner reads arity and width only, so the shapes translate one for one.
+    let shapes = shapes
+        .iter()
+        .map(|shape| LayoutShape {
+            arity: shape.num_variables(),
+            width: shape.width(),
+        })
+        .collect::<Vec<_>>();
+    plan_layout(&shapes)
+}
+
 #[cfg(test)]
 mod tests {
     use alloc::vec;
 
     use super::*;
+
+    #[test]
+    fn the_public_planner_lays_out_what_the_private_one_does() {
+        // Invariant: a caller packing its own witness must land on the very same slots.
+        //
+        // Fixture state: two tables, of two columns each.
+        //
+        //     table 0   arity 3, width 2   ->  16 cells
+        //     table 1   arity 5, width 2   ->  64 cells
+        //     stacked   log2_ceil(80) = 7
+        let shapes = vec![TableShape::new(3, 2), TableShape::new(5, 2)];
+        let private = plan_layout(&[
+            LayoutShape { arity: 3, width: 2 },
+            LayoutShape { arity: 5, width: 2 },
+        ]);
+        let public = plan_stacked_layout(&shapes);
+
+        assert_eq!(public.0, private.0);
+        assert_eq!(public.0, 7);
+        // Table order and slot addresses agree entry by entry.
+        for (public, private) in public.1.iter().zip(&private.1) {
+            assert_eq!(public.idx(), private.idx());
+            let addresses = |placement: &TablePlacement| {
+                placement
+                    .selectors()
+                    .iter()
+                    .map(|selector| (selector.num_variables(), selector.index()))
+                    .collect::<Vec<_>>()
+            };
+            assert_eq!(addresses(public), addresses(private));
+        }
+    }
 
     #[test]
     fn plan_layout_empty_returns_zero_arity() {

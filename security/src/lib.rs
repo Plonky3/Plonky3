@@ -62,6 +62,9 @@ pub use assumption::SecurityAssumption;
 pub use error::ErrorBits;
 pub use grinding::GrindingSites;
 pub use ldt::LowDegreeTest;
-pub use multilinear::{CLAIM_POOL_LABEL, claim_pool_error, claim_pool_term};
+pub use multilinear::{
+    BIT_RING_SWITCH_LABEL, CLAIM_POOL_LABEL, bit_ring_switch_error, bit_ring_switch_term,
+    claim_pool_error, claim_pool_term,
+};
 pub use report::{Regime, RegimeReport, SecurityReport, SecurityTerm};
 pub use shape::{InstanceShape, StarkAirParams};

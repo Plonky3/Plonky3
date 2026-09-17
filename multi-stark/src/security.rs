@@ -119,20 +119,35 @@ impl MultiStarkSecurityReport {
         }
     }
 
-    /// Add one PCS's error and return its contribution to the joint candidate count.
+    /// Add one PCS's labelled errors and return its contribution to the candidate count.
+    ///
+    /// A scheme stacking a reduction on a commitment charges one term per source.
+    ///
+    /// Each keeps the label its own crate gave it, so the report says which one is short.
+    ///
+    /// The supplied label names the component only when there is nothing to charge.
+    ///
+    /// A configuration using one scheme for both commitments therefore contributes
+    /// two terms under that scheme's label, one per commitment.
     fn add_opening_evidence(
         &mut self,
         label: &'static str,
         evidence: Option<PrescribedOpeningSecurity>,
     ) -> f64 {
+        // Evidence is usable only if every term is a finite non-negative bound.
+        // One unusable term makes the whole component unassessed, rather than shrinking it.
+        let usable = |evidence: &PrescribedOpeningSecurity| {
+            !evidence.terms.is_empty()
+                && evidence
+                    .terms
+                    .iter()
+                    .all(|term| term.bits.bits().is_finite() && term.bits.bits() >= 0.0)
+                && evidence.log2_max_candidates.is_finite()
+                && evidence.log2_max_candidates >= 0.0
+        };
         match evidence {
-            Some(evidence)
-                if evidence.error.bits().is_finite()
-                    && evidence.error.bits() >= 0.0
-                    && evidence.log2_max_candidates.is_finite()
-                    && evidence.log2_max_candidates >= 0.0 =>
-            {
-                self.terms.push(SecurityTerm::new(label, evidence.error));
+            Some(evidence) if usable(&evidence) => {
+                self.terms.extend(evidence.terms);
                 evidence.log2_max_candidates
             }
             _ => {
@@ -449,33 +464,23 @@ mod tests {
 
     #[test]
     fn missing_or_malformed_opening_evidence_cannot_certify_a_target() {
-        for evidence in [
-            None,
-            Some(PrescribedOpeningSecurity {
-                error: ErrorBits::from_log2(100.0),
-                log2_max_candidates: f64::NAN,
-            }),
-            Some(PrescribedOpeningSecurity {
-                error: ErrorBits::from_log2(100.0),
-                log2_max_candidates: f64::INFINITY,
-            }),
-            Some(PrescribedOpeningSecurity {
-                error: ErrorBits::from_log2(100.0),
-                log2_max_candidates: -1.0,
-            }),
-            Some(PrescribedOpeningSecurity {
-                error: ErrorBits::from_log2(f64::NAN),
-                log2_max_candidates: 0.0,
-            }),
-            Some(PrescribedOpeningSecurity {
-                error: ErrorBits::from_log2(f64::INFINITY),
-                log2_max_candidates: 0.0,
-            }),
-            Some(PrescribedOpeningSecurity {
-                error: ErrorBits::from_log2(-1.0),
-                log2_max_candidates: 0.0,
-            }),
-        ] {
+        // A usable error paired with a candidate count that is not a bound.
+        let bad_candidates = [f64::NAN, f64::INFINITY, -1.0].map(|candidates| {
+            PrescribedOpeningSecurity::single("t", ErrorBits::from_log2(100.0), candidates)
+        });
+        // A usable candidate count paired with an error that is not a bound.
+        let bad_error = [f64::NAN, f64::INFINITY, -1.0]
+            .map(|bits| PrescribedOpeningSecurity::single("t", ErrorBits::from_log2(bits), 0.0));
+        // No evidence at all, and evidence carrying no term to charge.
+        let empty = PrescribedOpeningSecurity {
+            terms: Vec::new(),
+            log2_max_candidates: 0.0,
+        };
+        for evidence in core::iter::once(None)
+            .chain(core::iter::once(Some(empty)))
+            .chain(bad_candidates.into_iter().map(Some))
+            .chain(bad_error.into_iter().map(Some))
+        {
             let mut report = MultiStarkSecurityReport {
                 terms: Vec::new(),
                 unassessed: Vec::new(),

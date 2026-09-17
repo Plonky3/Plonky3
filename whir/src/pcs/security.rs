@@ -4,6 +4,7 @@ use alloc::vec::Vec;
 
 use p3_challenger::{FieldChallenger, GrindingChallenger};
 use p3_field::{ExtensionField, TwoAdicField};
+use p3_security::whir::WHIR_OPENING_LABEL;
 use p3_security::{ErrorBits, SecurityAssumption};
 use p3_sumcheck::{OpeningProtocol, PrescribedOpeningSecurity};
 use p3_util::log2_ceil_usize;
@@ -153,12 +154,14 @@ where
         ));
     }
     let bits = ErrorBits::sum(&errors).bits();
-    bits.is_finite().then_some(PrescribedOpeningSecurity {
-        error: ErrorBits::from_log2(bits.max(0.0)),
-        // Initial OOD samples are drawn only in open_at, after outer AIR/GKR
-        // challenges. They cannot shrink the candidate set for those reductions.
-        log2_max_candidates: assumption
-            .list_size_bits(config.num_variables, config.starting_log_inv_rate),
+    bits.is_finite().then(|| {
+        PrescribedOpeningSecurity::single(
+            WHIR_OPENING_LABEL,
+            ErrorBits::from_log2(bits.max(0.0)),
+            // Initial OOD samples are drawn only in open_at, after outer AIR/GKR
+            // challenges. They cannot shrink the candidate set for those reductions.
+            assumption.list_size_bits(config.num_variables, config.starting_log_inv_rate),
+        )
     })
 }
 
@@ -225,7 +228,7 @@ mod tests {
         let bits = pcs()
             .prescribed_security(&protocol(12))
             .expect("WHIR supplies shape-checked algebraic security")
-            .error
+            .error()
             .bits();
         // Each proximity phase targets 32 bits. Union-composing the phases must
         // lose bits, while remaining useful for a lower security target.

@@ -19,7 +19,10 @@
 //! The committed columns may live in a narrower subfield than K.
 //! Choosing one moves no term here, because a challenge is always an element of K.
 
-use crate::{ErrorBits, SecurityAssumption};
+use crate::{ErrorBits, SecurityAssumption, SecurityTerm};
+
+/// Label the additive-domain opening error is reported under.
+pub const BINARY_PCS_OPENING_LABEL: &str = "binary-pcs-opening";
 
 /// Widest challenge alphabet the binary tower offers.
 ///
@@ -171,6 +174,12 @@ impl BinaryPcsRegime {
         let field = ErrorBits::from_log2(self.challenge_field_bits as f64 - libm::log2(rounded));
         let queries = ErrorBits::from_log2(self.query_security_bits() + self.query_pow_bits as f64);
         ErrorBits::sum(&[field, queries])
+    }
+
+    /// The opening error, labelled for a report.
+    #[must_use]
+    pub fn opening_term(&self, num_claims: usize) -> SecurityTerm {
+        SecurityTerm::new(BINARY_PCS_OPENING_LABEL, self.opening_error(num_claims))
     }
 }
 

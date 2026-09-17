@@ -425,11 +425,14 @@ fn security_requires_the_actual_preprocessed_opening_shape() {
         .bits
         .bits();
     assert!((sumcheck_bits - (123.0 - 12f64.log2() - (2560f64 * 1280f64).log2())).abs() < 1e-10);
-    assert!(
+    // Both commitments are charged, so the opening label appears once for each of them.
+    assert_eq!(
         report
             .terms()
             .iter()
-            .any(|term| term.label == "preprocessed-pcs")
+            .filter(|term| term.label == "whir-opening")
+            .count(),
+        2
     );
     report.require_security(20).unwrap();
     config.preprocessed_pcs = pcs_for(5, PREPROCESSED_WIDTH);
