@@ -7,7 +7,7 @@ use p3_field::PrimeCharacteristicRing;
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_maybe_rayon::prelude::*;
-use p3_util::{log2_floor_usize, log2_strict_usize};
+use p3_util::{log2_ceil_usize, log2_floor_usize, log2_strict_usize};
 
 use crate::domain::domain_point;
 use crate::lch::BUTTERFLY_GRAIN;
@@ -214,30 +214,94 @@ const TILE_BYTES: usize = 32 * 1024;
 /// The tile is streamed rather than randomly addressed, so it need not fit in L1.
 /// What it must not do is spill out of the private cache level below the shared one.
 ///
-/// A sweep of the fusion depth at width 16 puts the optimum at 64 KiB, which fuses 8 stages.
-/// That is exactly the per-core private cache size of the machine the sweep ran on.
+/// A sweep of the fusion depth at width 16 puts the optimum at 64 KiB, which is exactly the
+/// per-core private cache size of the machine the sweep ran on. How many stages that fuses is
+/// the run length divided into it, so it moves with the height rather than being fixed: six
+/// stages at `2^16` rows, seven at `2^20`, eight at `2^22`.
 ///
-/// A 1 MiB tile fuses 12 stages and runs a third slower.
+/// A 1 MiB tile fuses four stages more and takes half as long again.
 const STAGING_BYTES: usize = 64 * 1024;
 
-/// Bytes a row must carry before a staging tile is worth gathering it into.
+/// Bytes a gathered run of adjacent rows must cover for the staging to be worth running.
 ///
-/// A gather and a scatter address one row at a time, and the rows they address are a power of
-/// two apart, so each one pulls and pushes at least a whole cache line.
-///
-/// A row shorter than a line therefore moves a line's worth of traffic to move a fraction of
-/// a line's worth of data:
+/// A gather and a scatter address runs a power of two apart, so each address pulls and pushes
+/// whole cache lines whatever the run length. A run shorter than a line therefore moves a
+/// line's worth of traffic to carry a fraction of one:
 ///
 /// ```text
-///     16 bytes per row    one quarter of a 64-byte line is useful
-///     64 bytes per row    a whole line is useful
+///     16 bytes per run   one quarter of a 64-byte line is useful
+///     64 bytes per run   a whole line is useful
 /// ```
 ///
-/// At one element per row that waste outweighs the full passes the fusion removes, so such a
-/// shape keeps the plain per-stage passes instead.
-/// This is the smallest line size the supported targets have, so it is the point past which no
-/// target wastes more than half of a line.
-const STAGED_ROW_BYTES: usize = 64;
+/// This is the smallest line size the supported targets have, so it is the point past which
+/// no target wastes more than half of a line.
+const STAGED_LINE_BYTES: usize = 64;
+
+/// Bytes a gathered run covers where lengthening it is free.
+///
+/// A line is enough for the gather to use every byte it moves, but a stride that jumps every
+/// line still leaves the prefetcher nothing to follow.
+///
+/// A sweep over runs of 16 to 4096 bytes, at equal element volume on 32 threads:
+///
+/// ```text
+///     run bytes      16     64    256   1024   2048   4096
+///     width 1      7.28   6.32   5.93   5.21   5.76   5.62   ms at 2^22 rows
+///     width 4      5.71   5.74   5.23   4.40   4.88   4.94   ms at 2^20 rows
+///     width 16     4.91   4.73   4.96   4.04   4.72   4.82   ms at 2^18 rows
+/// ```
+///
+/// A run cannot be shorter than one row, so every cell left of a width's own row length holds
+/// the same plan measured again: width 16's leading three are one plan three times, and their
+/// spread of 4.73 to 4.96 puts the noise floor near 5%, which is what the rest of the table
+/// has to be read against.
+///
+/// The knee is at 1024 bytes, and the rise past it is the depth the tile gives up.
+/// [`Plan::new`] reads this as a target and not as a floor, because that depth is not free: a
+/// run grows only while the shorter tile still takes as few traversals of the matrix, and as
+/// few of them that gather.
+const STAGED_RUN_BYTES: usize = 1024;
+
+/// Workers a row below [`STAGED_LINE_BYTES`] needs before a tile is worth gathering into.
+///
+/// Staging trades traversals of the matrix for a strided gather and scatter.
+/// One worker issues its traversals far below what memory can serve, so they cost little and
+/// the copy has nothing to pay for it.
+/// Several workers traverse at once against a supply that does not grow, so the traversals
+/// become what the schedule waits on.
+///
+/// Whether a traversal reaches memory at all depends on the last-level cache, which a `no_std`
+/// crate cannot read. The worker count is the available signal, and it is what multiplies
+/// demand against that cache.
+///
+/// Width-1 transforms, as a ratio to the same transform with staging off:
+///
+/// ```text
+///     matrix        4 MiB   8 MiB   16 MiB   32 MiB   64 MiB   128 MiB
+///      1 worker      1.03    1.06     1.13     1.26     1.08      0.99
+///      2 workers     0.97    1.02     1.07     1.16     0.76      0.90
+///      4 workers     0.99    0.90     0.89     0.96     0.81      0.65
+///      8 workers     0.88    0.87     0.79     0.79     0.78      0.49
+///     32 workers     0.49    0.53     0.58     0.65     0.59      0.37
+/// ```
+///
+/// One and two workers share a band from 8 to 32 MiB where the copy costs more than the
+/// traversals it removes, and at two workers that band reaches 16%. Four is the first count
+/// with no such band, and every count above it only wins by more.
+///
+/// # Scope
+///
+/// The count gates only rows too narrow for a run of one row to have reached:
+///
+/// ```text
+///     row >= STAGED_LINE_BYTES   gathered at any worker count
+///     row <  STAGED_LINE_BYTES   gathered from STAGED_WORKERS workers up
+/// ```
+///
+/// Two workers on a 64 MiB matrix give up a quarter here, and a lone worker whose narrow
+/// matrix does outgrow its cache gives up a win of its own. Those are wins forgone rather than
+/// costs added, which is the safe direction for a signal this coarse.
+const STAGED_WORKERS: usize = 4;
 
 /// The shape of one transform, and the two places its stage sequence is cut.
 ///
@@ -253,7 +317,7 @@ const STAGED_ROW_BYTES: usize = 64;
 /// ```
 ///
 /// The middle band holds the stages a staging tile would not pay for.
-/// It is one stage wide at most, unless the staging tile cannot hold two rows.
+/// It is one stage wide at most, unless the staging tile cannot hold two runs.
 ///
 /// The count of contiguous-tile stages never exceeds the count of stages there are.
 #[derive(Copy, Clone, Debug)]
@@ -264,48 +328,115 @@ struct Plan {
     log_n: usize,
     /// Bottom stages that run to completion inside one contiguous tile of rows.
     local: usize,
-    /// Long-stride stages that one staging tile fuses into a single pass over the matrix.
+    /// Base-two logarithm of the adjacent rows one staging gather moves per strided address.
     ///
-    /// Zero when a row is too narrow for a gather to move whole cache lines.
+    /// At least [`STAGED_LINE_BYTES`] of run, and up to [`STAGED_RUN_BYTES`] of it where the
+    /// depth that costs is free.
+    log_block: usize,
+    /// Long-stride stages that one staging tile fuses into a single pass over the matrix.
     depth: usize,
 }
 
 impl Plan {
-    /// The cut points a matrix of this shape gets, from the two cache budgets.
+    /// Stages above the contiguous tile that run as plain full passes, for a cut of `above`
+    /// stages into groups of `depth`.
+    ///
+    /// Fusing a single stage would move the same bytes the stage moves on its own, plus the
+    /// copy in and out of the staging tile, so one stage is left over rather than fused.
+    /// A staging tile too narrow to hold two runs leaves every stage over.
+    const fn leftover_stages(above: usize, depth: usize) -> usize {
+        if depth < 2 {
+            above
+        } else if above % depth == 1 {
+            1
+        } else {
+            0
+        }
+    }
+
+    /// The stages each staging group fuses, listed from the top stage downwards.
+    ///
+    /// The walk stops where the leftover stages begin, so a short group lands at the bottom
+    /// of the staged band rather than the top. Both directions and the traversal budget read
+    /// the cut from here, so none of the three can drift from the others.
+    fn groups(above: usize, depth: usize) -> impl Iterator<Item = usize> {
+        let leftover = Self::leftover_stages(above, depth);
+        let mut remaining = above;
+        core::iter::from_fn(move || {
+            (remaining > leftover).then(|| {
+                let take = depth.min(remaining - leftover);
+                remaining -= take;
+                take
+            })
+        })
+    }
+
+    /// Full traversals of the matrix the stages above the contiguous tile take.
+    /// Each fused group is one traversal, and each leftover stage is one of its own.
+    fn traversals(above: usize, depth: usize) -> usize {
+        Self::groups(above, depth).count() + Self::leftover_stages(above, depth)
+    }
+
+    /// The cut points a matrix of this shape gets, as the schedule that will run it sees them.
     fn new(width: usize, log_n: usize) -> Self {
-        let element = core::mem::size_of::<u128>();
-        let tile_rows = (TILE_BYTES / element / width).max(1);
-        let staging_rows = (STAGING_BYTES / element / width).max(1);
-        // A gather moves whole cache lines whatever the row length, so a row below the line
-        // size wastes more traffic than the fused passes save.
-        let row_fills_a_line = element * width >= STAGED_ROW_BYTES;
+        Self::for_workers(width, log_n, current_num_threads())
+    }
+
+    /// The cut points a matrix of this shape gets, from the three memory budgets.
+    ///
+    /// The staging tile has a fixed byte budget, so doubling the run halves the rows it holds:
+    /// the run length and the fused depth trade one for one. A run below a cache line is never
+    /// worth gathering, so that length is taken first, and from there it grows towards
+    /// [`STAGED_RUN_BYTES`] while two counts stay at what the shortest run already costs.
+    ///
+    /// The first is the traversals of the matrix. The second is how many of those gather: a
+    /// leftover stage sweeps the matrix contiguously, while a staged group also gathers and
+    /// scatters. Trading the leftover for a second group holds the traversal count and still
+    /// pays for a gather, so the two counts are not the same budget.
+    ///
+    /// A row under [`STAGED_LINE_BYTES`] is gathered from [`STAGED_WORKERS`] workers up, and
+    /// below that every stage above the contiguous tile runs as a plain pass.
+    fn for_workers(width: usize, log_n: usize, workers: usize) -> Self {
+        let row = core::mem::size_of::<u128>() * width;
+        let local = log2_floor_usize((TILE_BYTES / row).max(1)).min(log_n);
+        let above = log_n - local;
+        // Stages one tile fuses, with a run of `2^log_block` adjacent rows as its row.
+        let depth_at =
+            |log_block: usize| log2_floor_usize((STAGING_BYTES / (row << log_block)).max(1));
+        let floor = log2_ceil_usize(STAGED_LINE_BYTES.div_ceil(row));
+        let target = log2_ceil_usize(STAGED_RUN_BYTES.div_ceil(row)).max(floor);
+        // The shortest admissible run sets both counts no longer run may exceed.
+        let budget = Self::traversals(above, depth_at(floor));
+        let gathers = Self::groups(above, depth_at(floor)).count();
+        let log_block = (floor..=target)
+            .rev()
+            .find(|&log_block| {
+                let depth = depth_at(log_block);
+                Self::traversals(above, depth) <= budget
+                    && Self::groups(above, depth).count() <= gathers
+            })
+            .unwrap_or(floor);
         Self {
             width,
             log_n,
-            local: log2_floor_usize(tile_rows).min(log_n),
-            depth: if row_fills_a_line {
-                log2_floor_usize(staging_rows)
+            local,
+            log_block,
+            depth: if row >= STAGED_LINE_BYTES || workers >= STAGED_WORKERS {
+                depth_at(log_block)
             } else {
                 0
             },
         }
     }
 
-    /// Stages above the contiguous tile that run as plain full passes.
-    ///
-    /// Fusing a single stage would move the same bytes the stage moves on its own, plus the
-    /// copy in and out of the staging tile, so one stage is left over rather than fused.
-    ///
-    /// A staging tile too narrow to hold two rows leaves every stage over.
+    /// Stages above the contiguous tile this plan runs as plain full passes.
     const fn leftover(&self) -> usize {
-        let above = self.log_n - self.local;
-        if self.depth < 2 {
-            above
-        } else if above % self.depth == 1 {
-            1
-        } else {
-            0
-        }
+        Self::leftover_stages(self.log_n - self.local, self.depth)
+    }
+
+    /// The stages each of this plan's staging groups fuses, from the top stage downwards.
+    fn group_sizes(&self) -> impl Iterator<Item = usize> {
+        Self::groups(self.log_n - self.local, self.depth)
     }
 }
 
@@ -330,7 +461,7 @@ fn local_stage(
     }
 }
 
-/// Run the `depth` stages that a tile of `2^depth` consecutive rows holds.
+/// Run the `depth` stages that a tile of `2^depth` consecutive rows of `row` elements holds.
 ///
 /// The tile is a radix-2 network on its rows.
 ///
@@ -339,9 +470,12 @@ fn local_stage(
 ///
 /// Globally those blocks are the blocks `block * 2^s + g`, `g = 0 .. 2^s`, of stage
 /// `top - 1 - s`, so the twiddle walk starts at `block << s`.
+///
+/// A row of the tile is a row of the matrix for the contiguous phase and a run of adjacent
+/// matrix rows for the staging phase, which is why the row length is a parameter.
 fn tile_stages(
     tile: &mut [u128],
-    width: usize,
+    row: usize,
     depth: usize,
     top: usize,
     twiddles: &Twiddles,
@@ -353,7 +487,7 @@ fn tile_stages(
         let s = if inverse { depth - 1 - k } else { k };
         local_stage(
             tile,
-            (1 << (depth - 1 - s)) * width,
+            (1 << (depth - 1 - s)) * row,
             top - 1 - s,
             twiddles,
             inverse,
@@ -379,56 +513,57 @@ fn local_stages(values: &mut [u128], plan: Plan, twiddles: &Twiddles, inverse: b
     });
 }
 
-/// A raw handle to the matrix, so tasks that own rows spaced apart can run side by side.
+/// A raw handle to the matrix, so tasks owning runs spaced apart can run side by side.
 ///
-/// Slice splitters cut a slice into contiguous pieces only, and the rows one staging tile
-/// gathers are a power of two apart, so the tasks share this handle and address their own
-/// rows through it.
+/// A run is the `2^log_block` adjacent matrix rows one strided address moves, which is one row
+/// of the reshaped matrix the staging reads. Slice splitters cut a slice into contiguous pieces
+/// only, and the runs one staging tile gathers are a power of two apart, so the tasks share
+/// this handle and address their own runs through it.
 ///
 /// # Safety
-/// The row sets two live tasks address must be disjoint, and the exclusive borrow the base
+/// The run sets two live tasks address must be disjoint, and the exclusive borrow the base
 /// pointer comes from must outlive every task.
 #[derive(Copy, Clone)]
 struct Rows {
     /// First element of the matrix.
     base: *mut u128,
-    /// Elements per row.
-    width: usize,
-    /// Rows in the matrix.
+    /// Elements in one run.
+    run: usize,
+    /// Runs in the matrix.
     count: usize,
 }
 
 // SAFETY: the handle is a pointer and two lengths, with no interior mutability and no `Drop`,
 // so sending or sharing it moves no data.
 //
-// The only caller derives the row index of every task from a bijection onto the row range,
-// which is what makes concurrent use race-free.
+// The only caller derives the run index of every task from a bijection onto the run range,
+// which is what makes concurrent use race-free. A run is a block of adjacent rows of one fixed
+// length, so disjoint run sets are disjoint element ranges.
 unsafe impl Send for Rows {}
 // SAFETY: see the `Send` implementation.
 unsafe impl Sync for Rows {}
 
 impl Rows {
-    /// Check that a walk of `rows` rows from `first` in steps of `stride` stays inside the
-    /// matrix.
+    /// Check that a walk of `runs` runs from `first` in steps of `stride` stays in the matrix.
     ///
-    /// The walk is increasing, so bounding its last row bounds all of them.
-    /// This runs once per tile rather than once per row, which is why it is a hard check and
+    /// The walk is increasing, so bounding its last run bounds all of them.
+    /// This runs once per tile rather than once per run, which is why it is a hard check and
     /// not a debug one.
     ///
-    /// A row index past the end would otherwise be a write past the end of the matrix.
+    /// A run index past the end would otherwise be a write past the end of the matrix.
     ///
     /// # Panics
-    /// Panics if the last row of the walk is at or beyond the row count.
-    fn check(&self, first: usize, stride: usize, rows: usize) {
+    /// Panics if the last run of the walk is at or beyond the run count.
+    fn check(&self, first: usize, stride: usize, runs: usize) {
         assert!(
-            rows == 0 || first + (rows - 1) * stride < self.count,
+            runs == 0 || first + (runs - 1) * stride < self.count,
             "staged row walk leaves the matrix"
         );
     }
 
-    /// Copy the rows `first`, `first + stride`, ... into consecutive rows of the tile.
+    /// Copy the runs `first`, `first + stride`, ... into consecutive rows of the tile.
     ///
-    /// The tile is emptied first and then grown one row at a time.
+    /// The tile is emptied first and then grown one run at a time.
     /// So it holds no element the walk did not write.
     ///
     /// And a worker never has to zero a tile it is about to overwrite in full.
@@ -436,39 +571,39 @@ impl Rows {
     /// A tile whose capacity already covers the walk grows without reallocating.
     ///
     /// # Safety
-    /// No other live task may address any of the rows the walk names.
-    unsafe fn gather(&self, first: usize, stride: usize, rows: usize, tile: &mut Vec<u128>) {
-        self.check(first, stride, rows);
+    /// No other live task may address any of the runs the walk names.
+    unsafe fn gather(&self, first: usize, stride: usize, runs: usize, tile: &mut Vec<u128>) {
+        self.check(first, stride, runs);
         tile.clear();
-        for k in 0..rows {
-            // SAFETY: the bound above puts every row of the walk inside the matrix, and the
+        for k in 0..runs {
+            // SAFETY: the bound above puts every run of the walk inside the matrix, and the
             // exclusive borrow the base pointer came from outlives the task.
             //
-            // No other live task addresses this row, so nothing can write it during the read.
-            let row = unsafe {
+            // No other live task addresses this run, so nothing can write it during the read.
+            let run = unsafe {
                 core::slice::from_raw_parts(
-                    self.base.add((first + k * stride) * self.width),
-                    self.width,
+                    self.base.add((first + k * stride) * self.run),
+                    self.run,
                 )
             };
-            tile.extend_from_slice(row);
+            tile.extend_from_slice(run);
         }
     }
 
-    /// Write consecutive rows of the tile back over the rows they were gathered from.
+    /// Write consecutive rows of the tile back over the runs they were gathered from.
     ///
     /// # Safety
-    /// No other live task may address any of the rows the walk names.
+    /// No other live task may address any of the runs the walk names.
     unsafe fn scatter(&self, first: usize, stride: usize, tile: &[u128]) {
-        let rows = tile.chunks_exact(self.width);
-        self.check(first, stride, rows.len());
-        for (k, row) in rows.enumerate() {
+        let runs = tile.chunks_exact(self.run);
+        self.check(first, stride, runs.len());
+        for (k, run) in runs.enumerate() {
             // SAFETY: as in the gather, with the direction of the copy reversed.
             unsafe {
                 core::ptr::copy_nonoverlapping(
-                    row.as_ptr(),
-                    self.base.add((first + k * stride) * self.width),
-                    self.width,
+                    run.as_ptr(),
+                    self.base.add((first + k * stride) * self.run),
+                    self.run,
                 );
             }
         }
@@ -486,30 +621,47 @@ impl Rows {
 ///
 /// # Algorithm
 ///
-/// With `S = 2^(top-depth)` and `offset < S`, one such set is the `2^depth` rows
+/// A gather addresses runs of `L = 2^log_block` adjacent rows, so one strided address moves a
+/// contiguous stretch rather than a fragment of one row.
+/// That is exactly the matrix reread as rows of `L * width` elements:
 ///
 /// ```text
-///     row(k) = block * 2^top + offset + k * S ,     k = 0 .. 2^depth
+///     width * 2^log_n  =  (L * width) * 2^(log_n - log_block)
 /// ```
 ///
-/// Stage `top-1-s` pairs rows `2^(top-1-s) = 2^(depth-1-s) * S` apart.
-/// That is a distance of `2^(depth-1-s)` in `k`, which stays inside the set for every
-/// `s < depth`, so the set is closed.
+/// Stage `j` pairs rows `2^j` apart, which is `2^(j - log_block)` reshaped rows apart.
+/// So for `j >= log_block` it is stage `j - log_block` of the reshaped matrix.
+///
+/// A run must fit the stride the walk takes, hence `log_block <= top - depth`.
+///
+/// Writing `S = 2^(top - log_block - depth)` with `offset < S`, one closed set is:
+///
+/// ```text
+///     row(k) = block * 2^(top-log_block) + offset + k * S ,     k = 0 .. 2^depth
+/// ```
+///
+/// Stage `top-1-s` pairs those `2^(depth-1-s)` apart in `k`.
+/// That stays inside the set for every `s < depth`, so the set is closed.
 ///
 /// # Twiddles
 ///
-/// A sub-layer needs the twiddle of the global block its pair lies in.
-///
-/// For sub-layer `s` that block index is
+/// A sub-layer needs the twiddle of the global block its pair lies in, and the two readings
+/// name the same block:
 ///
 /// ```text
-///     row(k) >> (top - s) = block * 2^s + (k >> (depth - s))
+///     matrix row    r                lies in block  r >> (top - s)
+///     reshaped row  r >> log_block   lies in block  r >> log_block >> (top - log_block - s)
 /// ```
 ///
-/// Writing `k = q * 2^(depth-s) + r` gives `offset + r * S < 2^(top-s)`, so only
-/// `q = k >> (depth-s)` survives the shift.
-/// That is precisely the block index a contiguous run of `2^(depth-s)` staged rows carries.
+/// A shift by `log_block` then by `top - log_block - s` is a shift by `top - s`.
+/// So the `L` matrix rows of one run share one twiddle at every sub-layer, which is what
+/// makes the reshape exact.
 ///
+/// Sub-layer `s` then sees block index `block * 2^s + (k >> (depth - s))`.
+/// Writing `k = q * 2^(depth-s) + r` leaves `offset + r * S < 2^(top-log_block-s)` below the
+/// shift, so only `q` survives it.
+///
+/// That is what a contiguous run of `2^(depth-s)` staged rows carries.
 /// So the tile runs as an ordinary radix-2 network whose twiddle walk starts at `block << s`.
 fn fused_stages(
     values: &mut [u128],
@@ -520,34 +672,43 @@ fn fused_stages(
     inverse: bool,
     convert_basis: bool,
 ) {
-    let width = plan.width;
+    // A group whose stride is shorter than the planned run shortens the run to match.
+    let log_block = plan.log_block.min(top - depth);
+    // One row of the reshaped matrix, in elements.
+    let run = plan.width << log_block;
     let len = values.len();
-    // Rows between two consecutive staged rows, and elements in one staging tile.
-    let stride = 1 << (top - depth);
-    let tile_len = width << depth;
-    // One tile per `(block, offset)` pair, which is one tile per `2^depth` rows.
+    // Reshaped rows between two consecutive staged runs, and elements in one staging tile.
+    let stride = 1 << (top - log_block - depth);
+    let tile_len = run << depth;
+    // One tile per `(block, offset)` pair, which is one tile per `2^depth` reshaped rows.
     let tiles = len / tile_len;
-    debug_assert_eq!(stride << depth, 1 << top, "staged rows do not span a block");
+    debug_assert_eq!(
+        stride << depth,
+        1 << (top - log_block),
+        "staged rows do not span a block"
+    );
     debug_assert_eq!(tiles * tile_len, len, "tiles do not partition the matrix");
 
     let rows = Rows {
         base: values.as_mut_ptr(),
-        width,
-        count: len / width,
+        run,
+        count: len / run,
     };
     let task = |tile: &mut Vec<u128>, index: usize| {
-        // A tile index splits into the stage-`top` block it lies in and its offset inside
-        // the stride, which together with `k` name a row:
+        // A tile index splits into the stage-`top` block it lies in and its offset in the
+        // stride, and those two together with `k` name a reshaped row:
         //
         //     index  = block * S + offset
-        //     row(k) = block * 2^top + offset + k * S
-        let block = index >> (top - depth);
-        let first = (block << top) + (index & (stride - 1));
-        // SAFETY: `index` runs over `0..tiles` and `k` over `0..2^depth`, so
-        // `(block, offset, k) -> row(k)` is a mixed-radix decomposition of `0..2^log_n`.
+        //     row(k) = block * 2^(top-log_block) + offset + k * S
+        let block = index >> (top - log_block - depth);
+        let first = (block << (top - log_block)) + (index & (stride - 1));
+        // SAFETY: `index` runs over `0..tiles` and `k` over `0..2^depth`, so the map
+        // `(block, offset, k) -> row(k)` decomposes `0..2^(log_n-log_block)` in mixed radix.
+        // Every reshaped row is therefore inside the matrix, and every one belongs to exactly
+        // one tile index, hence to exactly one task.
         //
-        // Every row is inside the matrix and belongs to exactly one tile index, hence to
-        // exactly one task.
+        // A reshaped row is a fixed-length block of adjacent matrix rows, so the matrix rows
+        // partition across the tasks too.
         //
         // The exclusive borrow of the matrix outlives the whole region.
         unsafe { rows.gather(first, stride, 1 << depth, tile) };
@@ -559,7 +720,7 @@ fn fused_stages(
         if convert_basis && !inverse {
             convert_tile(tile, INTO_POLY);
         }
-        tile_stages(tile, width, depth, top, twiddles, inverse, block);
+        tile_stages(tile, run, depth, top, twiddles, inverse, block);
         // The scatter is the last write of every element when this is the last group of an
         // inverse transform.
         if convert_basis && inverse {
@@ -593,10 +754,9 @@ fn forward(values: &mut [u128], plan: Plan, shift: BinaryField128, fold: Fold) {
         width,
         log_n,
         local,
-        depth,
+        ..
     } = plan;
     let twiddles = Twiddles::new(log_n, shift);
-    let leftover = plan.leftover();
 
     // Peel fused groups from the top stage downwards, each replacing `take` full passes.
     //
@@ -604,8 +764,7 @@ fn forward(values: &mut [u128], plan: Plan, shift: BinaryField128, fold: Fold) {
     // conversion.
     let mut entry = fold.entry;
     let mut top = log_n;
-    while top - local > leftover {
-        let take = depth.min(top - local - leftover);
+    for take in plan.group_sizes() {
         fused_stages(values, plan, top, take, &twiddles, false, entry);
         entry = false;
         top -= take;
@@ -641,7 +800,7 @@ fn inverse(values: &mut [u128], plan: Plan, shift: BinaryField128, fold: Fold) {
         width,
         log_n,
         local,
-        depth,
+        ..
     } = plan;
     let twiddles = Twiddles::new(log_n, shift);
     let leftover = plan.leftover();
@@ -666,12 +825,20 @@ fn inverse(values: &mut [u128], plan: Plan, shift: BinaryField128, fold: Fold) {
     for j in local..local + leftover {
         stage(values, (1 << j) * width, j, &twiddles, true);
     }
+
+    // The groups come off the top downwards, so running them bottom up walks the same list
+    // backwards. Its length is the group count, which never exceeds the stage count.
+    let mut sizes = [0; usize::BITS as usize];
+    let mut count = 0;
+    for take in plan.group_sizes() {
+        sizes[count] = take;
+        count += 1;
+    }
     let mut base = local + leftover;
-    while base < log_n {
-        let take = depth.min(log_n - base);
+    for (index, take) in sizes[..count].iter().rev().enumerate() {
         base += take;
-        let last = base == log_n;
-        fused_stages(values, plan, base, take, &twiddles, true, exit && last);
+        let last = index + 1 == count;
+        fused_stages(values, plan, base, *take, &twiddles, true, exit && last);
         exit &= !last;
     }
 
@@ -837,41 +1004,152 @@ mod tests {
     use alloc::vec::Vec;
 
     use p3_binary_field::{BinaryField128, TowerLevel, poly_basis};
+    use p3_field::PrimeCharacteristicRing;
     use p3_matrix::dense::RowMajorMatrix;
+    use p3_util::log2_floor_usize;
     use proptest::prelude::*;
 
-    use super::{Fold, Plan, PolyBasisNtt};
+    use super::{Fold, Plan, PolyBasisNtt, STAGED_RUN_BYTES, STAGED_WORKERS, STAGING_BYTES};
+    use crate::domain::{domain_point, subspace_polynomial};
     use crate::lch::LchNtt;
     use crate::naive::NaiveAdditiveNtt;
     use crate::traits::AdditiveNtt;
 
-    /// Cut points small enough to keep the test matrices tiny, one pair per branch of the
-    /// schedule:
+    /// Cut points small enough to keep the test matrices tiny.
+    ///
+    /// One `(local, log_block, depth)` triple per branch of the schedule:
     ///
     /// ```text
-    ///     (2, 3)  full groups, plus a one-stage leftover at local + depth + 1
-    ///     (2, 0)  a staging tile too narrow for two rows, so no group runs at all
-    ///     (0, 3)  no contiguous tile, so every stage is fused
-    ///     (1, 1)  a depth of one, which never pays for a tile
+    ///     (2, 0, 3)  full groups, plus a one-stage leftover at local + depth + 1
+    ///     (2, 2, 3)  the same cut with runs of four rows per strided address
+    ///     (2, 0, 0)  a staging tile too narrow for two runs, so no group runs at all
+    ///     (0, 0, 3)  no contiguous tile, so every stage is fused
+    ///     (0, 3, 3)  runs as long as a whole group's stride, which the group has to shorten
+    ///     (1, 1, 1)  a depth of one, which never pays for a tile
     /// ```
-    const CUTS: [(usize, usize); 4] = [(2, 3), (2, 0), (0, 3), (1, 1)];
+    const CUTS: [(usize, usize, usize); 6] = [
+        (2, 0, 3),
+        (2, 2, 3),
+        (2, 0, 0),
+        (0, 0, 3),
+        (0, 3, 3),
+        (1, 1, 1),
+    ];
 
     /// Cuts and heights whose staging groups number three or more, with the group depths
     /// each one produces:
     ///
     /// ```text
-    ///     (0, 3, 8)   3 + 3 + 2       a short last group, no contiguous tile
-    ///     (0, 3, 9)   3 + 3 + 3       three groups of full depth
-    ///     (1, 2, 8)   2 + 2 + 2       three groups and a one-stage leftover
-    ///     (0, 2, 8)   2 + 2 + 2 + 2   four groups of full depth
+    ///     (0, 0, 3, 8)   3 + 3 + 2       a short last group, no contiguous tile
+    ///     (0, 1, 3, 9)   3 + 3 + 3       three groups of full depth, runs of two rows
+    ///     (1, 2, 2, 8)   2 + 2 + 2       three groups and a one-stage leftover
+    ///     (0, 0, 2, 8)   2 + 2 + 2 + 2   four groups of full depth
     /// ```
     ///
     /// The staging loop reseeds its twiddle walk and its conversion flag on every turn, so
     /// only a third turn shows that the reseeding is not accidentally right for two.
-    const DEEP_CUTS: [(usize, usize, usize); 4] = [(0, 3, 8), (0, 3, 9), (1, 2, 8), (0, 2, 8)];
+    const DEEP_CUTS: [(usize, usize, usize, usize); 4] =
+        [(0, 0, 3, 8), (0, 1, 3, 9), (1, 2, 2, 8), (0, 0, 2, 8)];
 
     /// Widths that cover a single element per row, an odd row, and rows of several elements.
-    const WIDTHS: [usize; 4] = [1, 3, 16, 64];
+    const WIDTHS: [usize; 5] = [1, 2, 3, 16, 64];
+
+    /// Production shapes and the cut each one gets, as `width, log_n, (local, log_block,
+    /// depth)`, at a worker count past [`STAGED_WORKERS`].
+    ///
+    /// The heights put the branch that is interesting for that width on it:
+    ///
+    /// ```text
+    ///     width    1 @ 2^10   the tile is the whole transform
+    ///     width    1 @ 2^14   one group of six stages, runs of 64 rows
+    ///     width    1 @ 2^20   the production commit shape, one group of nine
+    ///     width    2 @ 2^13   one group of six stages, runs of 32 rows
+    ///     width    3 @ 2^12   an odd width, whose 32-row run overshoots
+    ///     width    4 @ 2^14   the widest row a run still spans several of
+    ///     width   16 @ 2^10   a short group, above a tile of 128 rows
+    ///     width   16 @ 2^14   one full group, at a height that moves the cut
+    ///     width   64 @ 2^10   one group of six stages, a run of one row
+    ///     width  512 @ 2^8    two groups of three stages
+    ///     width 1024 @ 2^7    three groups of two stages
+    /// ```
+    const PRODUCTION_CUTS: [(usize, usize, (usize, usize, usize)); 11] = [
+        (1, 10, (10, 6, 6)),
+        (1, 14, (11, 6, 6)),
+        (1, 20, (11, 3, 9)),
+        (2, 13, (10, 5, 6)),
+        (3, 12, (9, 5, 5)),
+        (4, 14, (9, 4, 6)),
+        (16, 10, (7, 2, 6)),
+        (16, 14, (7, 1, 7)),
+        (64, 10, (5, 0, 6)),
+        (512, 8, (2, 0, 3)),
+        (1024, 7, (1, 0, 2)),
+    ];
+
+    /// Width-16 heights whose plan the traversal count alone does not decide.
+    ///
+    /// At each of these, growing the run would hold the traversal count while turning a
+    /// leftover plain pass into a second gathered group, so the gather count is the only
+    /// thing that separates the two plans:
+    ///
+    /// ```text
+    ///     2^16   one group of eight and a plain pass, where growth would give (6, 3)
+    ///     2^18   two groups either way, so growth rebalances (8, 3) into (6, 5)
+    ///     2^20   two groups either way, rebalanced into (7, 6)
+    /// ```
+    ///
+    /// These sit apart from [`PRODUCTION_CUTS`] because that list is also transformed against
+    /// the per-stage schedule, and `2^20` rows of width 16 is `2^24` elements to move twice.
+    const WIDE_CUTS: [(usize, usize, (usize, usize, usize)); 3] = [
+        (16, 16, (7, 0, 8)),
+        (16, 18, (7, 2, 6)),
+        (16, 20, (7, 1, 7)),
+    ];
+
+    /// Cuts whose staging groups run at a height the reference oracle can still reach:
+    ///
+    /// ```text
+    ///     (2, 0, 3, 6)   one group of three stages, plus a one-stage leftover
+    ///     (2, 2, 3, 6)   the same cut with runs of four rows per strided address
+    ///     (1, 1, 2, 5)   two groups of two stages, runs of two rows
+    ///     (0, 0, 3, 6)   no contiguous tile, so every stage is fused
+    /// ```
+    const ORACLE_CUTS: [(usize, usize, usize, usize); 4] =
+        [(2, 0, 3, 6), (2, 2, 3, 6), (1, 1, 2, 5), (0, 0, 3, 6)];
+
+    /// Widths from one element per row up to a row that spans a gathered run on its own.
+    ///
+    /// A run covers several rows at every width below `64`, and one row from there up.
+    /// So this covers both regimes and the boundary between them.
+    const ORACLE_WIDTHS: [usize; 10] = [1, 2, 3, 4, 5, 6, 7, 8, 16, 64];
+
+    /// The tallest matrix the width sweeps transform.
+    ///
+    /// The production plan of a width-1 matrix fuses its first group at `2^13`.
+    /// So a sweep has to reach past that before it exercises a staged gather at all.
+    const MAX_LOG_N: usize = 14;
+
+    /// The tallest matrix one width is swept to.
+    ///
+    /// A row of [`STAGED_RUN_BYTES`] or more gathers one row per strided address at every
+    /// height, so once its first group has appeared the sweep only repeats a plan the cut
+    /// tests already run — at over half the cost of the whole sweep, since these are the
+    /// widest matrices in it.
+    fn max_log_n(width: usize) -> usize {
+        if core::mem::size_of::<u128>() * width >= STAGED_RUN_BYTES {
+            10
+        } else {
+            MAX_LOG_N
+        }
+    }
+
+    /// The tallest matrix the reference transform is asked for.
+    ///
+    /// The oracle costs `O(n^2 log n)` per column, so `2^7` rows is already seconds of an
+    /// unoptimised test run. No production plan gathers a tile that low, which is why the
+    /// staged path reaches the oracle through the synthetic cuts of [`ORACLE_CUTS`] rather
+    /// than by making this sweep taller.
+    const REFERENCE_LOG_N: usize = 6;
 
     /// Neither basis conversion rides along, so only the stage schedule is under test.
     const NONE: Fold = Fold {
@@ -964,7 +1242,7 @@ mod tests {
     /// The deep cuts then carry the heights that need three or more groups.
     fn cut_plans() -> Vec<Plan> {
         let mut plans = Vec::new();
-        for (local, depth) in CUTS {
+        for (local, log_block, depth) in CUTS {
             for log_n in [
                 local,
                 local + 1,
@@ -977,17 +1255,19 @@ mod tests {
                         width,
                         log_n,
                         local: local.min(log_n),
+                        log_block,
                         depth,
                     });
                 }
             }
         }
-        for (local, depth, log_n) in DEEP_CUTS {
+        for (local, log_block, depth, log_n) in DEEP_CUTS {
             for width in WIDTHS {
                 plans.push(Plan {
                     width,
                     log_n,
                     local,
+                    log_block,
                     depth,
                 });
             }
@@ -998,10 +1278,8 @@ mod tests {
     #[test]
     fn every_cut_of_the_stage_sequence_matches_the_per_stage_schedule() {
         // Invariant: cutting the stage sequence into staging groups and a contiguous tile is
-        // a pure reordering of memory traffic.
-        //
-        // Every element must come out bit for bit what one full pass per stage produces, in
-        // both directions.
+        // a pure reordering of memory traffic, so every element must come out bit for bit
+        // what one full pass per stage produces, in both directions.
         for plan in cut_plans() {
             let Plan { width, log_n, .. } = plan;
             for inverse in [false, true] {
@@ -1013,24 +1291,233 @@ mod tests {
             }
         }
 
-        // The production cut points, at heights that put the interesting branch on each width.
-        //
-        // Fixture state, from the two cache budgets:
-        //
-        //     width    1 @ 2^10   local 10, depth 0   the tile is the whole transform
-        //     width    3 @ 2^10   local  9, depth 0   rows under a line, so nothing fuses
-        //     width   16 @ 2^10   local  7, depth 8   one group of three stages
-        //     width   64 @ 2^10   local  5, depth 6   one group of five stages
-        //     width  512 @ 2^8    local  2, depth 3   two groups of three stages
-        //     width 1024 @ 2^7    local  1, depth 2   three groups of two stages
-        for (width, log_n) in [(1, 10), (3, 10), (16, 10), (64, 10), (512, 8), (1024, 7)] {
-            let plan = Plan::new(width, log_n);
+        // The production cut points, at a worker count past the threshold, so the same cut
+        // runs here on a serial build and a parallel one. What each cut is, rather than what
+        // it does, is pinned where the budgets are tested.
+        for (width, log_n, _) in PRODUCTION_CUTS {
+            let plan = Plan::for_workers(width, log_n, 32);
             for inverse in [false, true] {
                 let mut expected = coefficients(log_n, width);
                 let mut actual = expected.clone();
                 per_stage_schedule(&mut expected, width, log_n, test_shift(), inverse);
                 scheduled(&mut actual, plan, inverse, NONE);
                 assert_eq!(actual, expected, "{plan:?} inverse={inverse}");
+            }
+        }
+    }
+
+    #[test]
+    fn every_width_and_height_matches_the_per_stage_schedule() {
+        // Invariant: the rows a gather moves per strided address regroup the matrix, they
+        // do not change the transform. The run length a plan picks varies over the narrow
+        // widths and the cut points move with the height, so the two are swept together
+        // against the per-stage schedule.
+        for width in ORACLE_WIDTHS {
+            for log_n in 0..=max_log_n(width) {
+                // One worker gathers no tile where many do, so both readings of one shape
+                // are swept, not just this build's own.
+                for workers in [1, 32] {
+                    let plan = Plan::for_workers(width, log_n, workers);
+                    for shift in [BinaryField128::ZERO, test_shift()] {
+                        for inverse in [false, true] {
+                            let mut expected = coefficients(log_n, width);
+                            let mut actual = expected.clone();
+                            per_stage_schedule(&mut expected, width, log_n, shift, inverse);
+                            if inverse {
+                                super::inverse(&mut actual, plan, shift, NONE);
+                            } else {
+                                super::forward(&mut actual, plan, shift, NONE);
+                            }
+                            assert_eq!(
+                                actual, expected,
+                                "{plan:?} shift={shift:?} inverse={inverse}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Full passes over the matrix a cut of `above` stages into groups of `depth` takes,
+    /// counted by walking the loop [`super::forward`] walks rather than by asking the plan.
+    ///
+    /// Each turn of the staging loop reads and writes the matrix once, and each stage the
+    /// loop stops short of is a plain pass of its own. Nothing here calls into `Plan`, so a
+    /// plan that quietly buys its run length with an extra pass comes out with a larger
+    /// count than the run it is measured against.
+    fn passes_above_the_tile(above: usize, depth: usize) -> usize {
+        let leftover = if depth < 2 {
+            above
+        } else {
+            usize::from(above % depth == 1)
+        };
+        let mut passes = 0;
+        let mut remaining = above;
+        while remaining > leftover {
+            remaining -= depth.min(remaining - leftover);
+            passes += 1;
+        }
+        passes + remaining
+    }
+
+    #[test]
+    fn the_plan_gathers_the_longest_run_its_pass_budget_allows() {
+        // The production cut points, as `local, log_block, depth`, at a worker count past the
+        // threshold. A run length is a choice between two plans that cost the same number of
+        // passes, so no pass count can pin it: these triples are what says which one the
+        // budgets pick, and a change to any of the three has to come through here.
+        for (width, log_n, cut) in PRODUCTION_CUTS.into_iter().chain(WIDE_CUTS) {
+            let plan = Plan::for_workers(width, log_n, 32);
+            assert_eq!((plan.local, plan.log_block, plan.depth), cut, "{plan:?}");
+        }
+
+        // Invariant: growing the run never costs a pass. Gathering one row per strided
+        // address is the shortest run there is, so its pass count is the ceiling, and both
+        // sides are counted by walking the staging loop rather than by the rule that picked
+        // the run.
+        for width in [4usize, 5, 8, 16, 64, 512, 1024] {
+            for log_n in 0..=24 {
+                let plan = Plan::for_workers(width, log_n, 32);
+                let row = core::mem::size_of::<u128>() * width;
+                let one_row = log2_floor_usize((STAGING_BYTES / row).max(1));
+                let above = log_n - plan.local;
+                assert!(
+                    passes_above_the_tile(above, plan.depth)
+                        <= passes_above_the_tile(above, one_row),
+                    "{plan:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_staged_cut_matches_the_reference_transform() {
+        // The oracle depends on none of the identities the fast transform is built from, but
+        // it costs `O(n^2 log n)` per column, so a production plan's first staging group sits
+        // far above the heights it can reach. These cuts put a gather and a scatter inside
+        // its range instead, which is what pins the staged path to the map rather than to the
+        // stage schedule alone.
+        let naive = NaiveAdditiveNtt::<BinaryField128>::default();
+        for (local, log_block, depth, log_n) in ORACLE_CUTS {
+            for width in [1usize, 3, 16] {
+                let plan = Plan {
+                    width,
+                    log_n,
+                    local,
+                    log_block,
+                    depth,
+                };
+                assert!(
+                    plan.group_sizes().next().is_some(),
+                    "{plan:?} gathers no tile"
+                );
+                for shift in [BinaryField128::ZERO, test_shift()] {
+                    let coeffs = matrix(log_n, width, 3);
+                    let evals = naive.shifted_ntt_batch(coeffs.clone(), shift);
+                    let reprs = |mat: &RowMajorMatrix<BinaryField128>| -> Vec<u128> {
+                        mat.values
+                            .iter()
+                            .copied()
+                            .map(BinaryField128::to_repr)
+                            .collect()
+                    };
+
+                    // Both conversions ride along, so this is what `shifted_ntt_batch` runs.
+                    let mut actual = reprs(&coeffs);
+                    super::forward(&mut actual, plan, shift, Fold::BOTH);
+                    assert_eq!(actual, reprs(&evals), "ntt {plan:?} shift={shift:?}");
+
+                    let mut actual = reprs(&evals);
+                    super::inverse(&mut actual, plan, shift, Fold::BOTH);
+                    assert_eq!(actual, reprs(&coeffs), "intt {plan:?} shift={shift:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_row_that_covers_a_line_is_gathered_whatever_the_worker_count() {
+        // Invariant: the worker count may only switch off a staging that one row per
+        // address never reached, so a row of a line or more keeps its tile at every count.
+        for width in [4usize, 16, 64, 512] {
+            for log_n in [10, 14, 20] {
+                let alone = Plan::for_workers(width, log_n, 1);
+                let shared = Plan::for_workers(width, log_n, 32);
+                assert_eq!(alone.depth, shared.depth, "{alone:?}");
+                assert_eq!(alone.log_block, shared.log_block, "{alone:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_worker_count_decides_whether_a_narrow_row_is_gathered() {
+        // The production width-1 shape, at the height whose stages a tile would fuse. One
+        // worker leaves every stage above the contiguous tile as a plain pass, and the run
+        // length it would have used does not matter, because no tile is gathered.
+        let alone = Plan::for_workers(1, 20, 1);
+        assert_eq!(alone.depth, 0, "{alone:?}");
+        assert_eq!(alone.leftover(), alone.log_n - alone.local, "{alone:?}");
+
+        // At the threshold the tile appears, and the stages above the contiguous tile fuse.
+        let shared = Plan::for_workers(1, 20, STAGED_WORKERS);
+        assert!(shared.depth >= 2, "{shared:?}");
+        assert_eq!(shared.leftover(), 0, "{shared:?}");
+
+        // Only the staging depth turns on the worker count; the rest of the cut does not.
+        assert_eq!(alone.local, shared.local);
+        assert_eq!(alone.log_block, shared.log_block);
+    }
+
+    #[test]
+    fn every_width_matches_the_reference_transform() {
+        // The oracle depends on none of the identities the fast transform is built from, so
+        // it pins the map itself rather than the schedule. A zero shift makes the first stage
+        // twiddle of every block the domain point alone, which is the one case an off-by-one
+        // in the shift table survives.
+        let poly = PolyBasisNtt::default();
+        let naive = NaiveAdditiveNtt::<BinaryField128>::default();
+        for width in ORACLE_WIDTHS {
+            for log_n in 0..=REFERENCE_LOG_N {
+                for shift in [BinaryField128::ZERO, test_shift()] {
+                    let coeffs = matrix(log_n, width, 3);
+                    let evals = naive.shifted_ntt_batch(coeffs.clone(), shift);
+                    assert_eq!(
+                        poly.shifted_ntt_batch(coeffs.clone(), shift),
+                        evals,
+                        "ntt width={width} log_n={log_n} shift={shift:?}"
+                    );
+                    assert_eq!(
+                        poly.shifted_intt_batch(evals, shift),
+                        coeffs,
+                        "intt width={width} log_n={log_n} shift={shift:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn padded_transform_matches_the_tower_at_every_width() {
+        // The padded entry point plans one coset and reuses that plan for all of them, so a
+        // run length suiting the full height but not the message height shows up here. The
+        // tower transform stands in for the oracle, which these message heights are past, and
+        // `crate::lch`'s `check_matches_naive` is what pins it to the oracle.
+        let poly = PolyBasisNtt::default();
+        let tower = LchNtt::<BinaryField128>::default();
+        for width in ORACLE_WIDTHS {
+            for log_message in [0, 1, 5, 9] {
+                for log_inv_rate in 0..=3 {
+                    let mut mat = matrix(log_message, width, 23);
+                    mat.values
+                        .resize(mat.values.len() << log_inv_rate, BinaryField128::ZERO);
+                    let expected = tower.ntt_batch(mat.clone());
+                    assert_eq!(
+                        poly.ntt_batch_padded(mat, log_inv_rate),
+                        expected,
+                        "width={width} log_message={log_message} rate={log_inv_rate}"
+                    );
+                }
             }
         }
     }
@@ -1079,7 +1566,6 @@ mod tests {
 
     #[test]
     fn padded_transform_matches_naive_at_wide_widths() {
-        use p3_field::PrimeCharacteristicRing;
         for width in [1, 4, 16, 64] {
             for added in [0, 1, 2, 3] {
                 let mut mat = matrix(4, width, 13);
@@ -1117,9 +1603,6 @@ mod tests {
 
     #[test]
     fn incremental_twiddles_match_independent_domain_points() {
-        use p3_binary_field::poly_basis;
-
-        use crate::domain::{domain_point, subspace_polynomial};
         let shift = BinaryField128::from_repr((1 << 127) | 123);
         let twiddles = super::Twiddles::new(usize::BITS as usize - 1, shift);
         for stage in [0, 1, 7, 15, 31]
@@ -1160,7 +1643,7 @@ mod tests {
         #[test]
         fn poly_basis_matches_naive(
             log_n in 0usize..=8,
-            width in 1usize..=5,
+            width in 1usize..=8,
             seed in any::<u64>(),
             shift in any::<u64>(),
         ) {
@@ -1178,7 +1661,7 @@ mod tests {
         #[test]
         fn poly_basis_round_trips(
             log_n in 0usize..=8,
-            width in 1usize..=3,
+            width in 1usize..=8,
             seed in any::<u64>(),
             shift in any::<u64>(),
         ) {
@@ -1214,32 +1697,46 @@ mod tests {
         }
     }
 
-    /// A height whose stages take more than one butterfly task, so a task seeds its twiddle at
-    /// a block index of its own rather than at zero. The oracle tests all sit below that
-    /// height, so `LchNtt` stands in for the oracle here, itself held to an independent
-    /// twiddle walk at this same height by `lch_matches_a_twiddle_walk_across_several_tasks`.
     #[test]
     fn poly_basis_matches_the_tower_across_several_tasks() {
-        const LOG_N: usize = 12;
+        // These heights take more than one butterfly task per stage, so a task seeds its
+        // twiddle at a block index of its own rather than at zero. Every oracle test sits
+        // below them, so `LchNtt` stands in for the oracle here.
+        //
+        // An independent twiddle walk holds `LchNtt` itself at these heights, and it keeps its
+        // data in the tower basis and derives its twiddles separately, so it shares no
+        // arithmetic with the transform under test.
         let poly = PolyBasisNtt::default();
         let tower = LchNtt::<BinaryField128>::default();
-        for width in [1usize, 3] {
-            for shift_bits in [0u64, 0x1234_5678_9abc_def0] {
-                let coeffs = matrix(LOG_N, width, 5);
-                let shift =
-                    BinaryField128::from_le_byte_iter(shift_bits.to_le_bytes().into_iter().cycle());
+        for width in ORACLE_WIDTHS {
+            // The tall height is where the plan cuts deepest, and a tower transform of a
+            // tall wide matrix is the most expensive thing here, so the narrow widths carry
+            // it, where a run spans the most rows. The per-stage schedule covers every width
+            // at every height regardless.
+            let heights: &[usize] = if width <= 4 {
+                &[7, 10, MAX_LOG_N]
+            } else {
+                &[7, 10]
+            };
+            for &log_n in heights {
+                for shift_bits in [0u64, 0x1234_5678_9abc_def0] {
+                    let coeffs = matrix(log_n, width, 5);
+                    let shift = BinaryField128::from_le_byte_iter(
+                        shift_bits.to_le_bytes().into_iter().cycle(),
+                    );
 
-                let evals = tower.shifted_ntt_batch(coeffs.clone(), shift);
-                assert_eq!(
-                    poly.shifted_ntt_batch(coeffs.clone(), shift),
-                    evals,
-                    "ntt width={width} shift={shift_bits:#x}"
-                );
-                assert_eq!(
-                    poly.shifted_intt_batch(evals, shift),
-                    coeffs,
-                    "intt width={width} shift={shift_bits:#x}"
-                );
+                    let evals = tower.shifted_ntt_batch(coeffs.clone(), shift);
+                    assert_eq!(
+                        poly.shifted_ntt_batch(coeffs.clone(), shift),
+                        evals,
+                        "ntt width={width} log_n={log_n} shift={shift_bits:#x}"
+                    );
+                    assert_eq!(
+                        poly.shifted_intt_batch(evals, shift),
+                        coeffs,
+                        "intt width={width} log_n={log_n} shift={shift_bits:#x}"
+                    );
+                }
             }
         }
     }

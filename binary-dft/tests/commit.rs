@@ -47,26 +47,51 @@ fn commit_base_matches_hand_encoding() {
     let values: Vec<F> = (0..1 << NUM_VARIABLES).map(|_| rng.random()).collect();
     let mmcs = mmcs();
 
-    let (root, _data) = commit_base(
-        VariableOrder::Prefix,
-        &AdditiveRsEncoder::<F, LchNtt<F>>::default(),
-        &mmcs,
-        &Poly::new(values.clone()),
-        FOLDING,
-        LOG_INV_RATE,
-    );
+    // The default folding depth, and a depth of zero, which leaves the width-1 message
+    // `p3-binary-pcs` commits. The reference encoding costs `O(n^2)` per column, so the
+    // width-1 shape is pinned at a height of its own rather than at `NUM_VARIABLES`.
+    //
+    // Neither height reaches a staging tile: at width 1 a contiguous tile already holds `2^11`
+    // rows, so the whole transform runs inside one. What a gathered run does to the transform
+    // is pinned against the reference oracle in `p3-binary-dft`'s own tests, where the cut
+    // points are set directly rather than bought with a taller matrix.
+    for (num_variables, folding) in [(NUM_VARIABLES, FOLDING), (5, 0)] {
+        let values = &values[..1 << num_variables];
 
-    // Prefix order transposes the folding blocks; the reference transform does the encoding.
-    let message = RowMajorMatrixView::new(&values, 1 << (NUM_VARIABLES - FOLDING)).transpose();
-    let codeword =
-        AdditiveRsEncoder::<F, NaiveAdditiveNtt<F>>::default().encode_batch(message, LOG_INV_RATE);
-    assert_eq!(
-        codeword.height(),
-        1 << (NUM_VARIABLES - FOLDING + LOG_INV_RATE)
-    );
-    let (expected_root, _) = mmcs.commit_matrix(codeword);
+        // Prefix order transposes the folding blocks, and the reference transform does the
+        // encoding.
+        let message = RowMajorMatrixView::new(values, 1 << (num_variables - folding)).transpose();
+        let codeword = AdditiveRsEncoder::<F, NaiveAdditiveNtt<F>>::default()
+            .encode_batch(message, LOG_INV_RATE);
+        assert_eq!(
+            codeword.height(),
+            1 << (num_variables - folding + LOG_INV_RATE)
+        );
+        let (expected_root, _) = mmcs.commit_matrix(codeword);
 
-    assert_eq!(root, expected_root);
+        // The portable tower transform, and the one the PCS commits through by default, which
+        // routes to `PolyBasisNtt` only on a target that has a carryless multiply.
+        let poly = Poly::new(values.to_vec());
+        let tower = commit_base(
+            VariableOrder::Prefix,
+            &AdditiveRsEncoder::<F, LchNtt<F>>::default(),
+            &mmcs,
+            &poly,
+            folding,
+            LOG_INV_RATE,
+        );
+        let default = commit_base(
+            VariableOrder::Prefix,
+            &AdditiveRsEncoder::<F>::default(),
+            &mmcs,
+            &poly,
+            folding,
+            LOG_INV_RATE,
+        );
+        for (name, root) in [("tower", tower.0), ("default", default.0)] {
+            assert_eq!(root, expected_root, "{name} folding={folding}");
+        }
+    }
 }
 
 /// `PrefixProver::commit` runs end to end over a binary field: the same witness committed
