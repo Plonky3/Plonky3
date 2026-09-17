@@ -658,6 +658,127 @@ fn dot_product_4<PMP: PackedMontyParameters, LHS: IntoM256<PMP>, RHS: IntoM256<P
         let dot_evn = x86_64::_mm256_add_epi64(dot_evn01, dot_evn23);
         let dot_odd = x86_64::_mm256_add_epi64(dot_odd01, dot_odd23);
 
+        // The tail is shared with the longer dot products, see `monty_red_wide_to_canonical`.
+        monty_red_wide_to_canonical::<PMP>(dot_evn, dot_odd)
+    }
+}
+/// Accumulate the 64-bit products of `K` pairs of inputs in canonical form.
+///
+/// The returned pair `(evn, odd)` holds one running sum per parity of field-element index.
+/// Each sum is left unreduced in its 64-bit lane.
+///
+/// Every product is bounded by `(P - 1)^2 < 2^{62}`, so a sum of `K` of them is below `K 2^{62}`.
+/// Four is therefore the largest `K` that stays under `2^{64}`, so `K` must lie in `1..=4`.
+///
+/// If the inputs are not in canonical form, the result is undefined.
+#[inline(always)]
+#[must_use]
+fn wide_dot<PMP: PackedMontyParameters, LHS: IntoM256<PMP>, RHS: IntoM256<PMP>, const K: usize>(
+    lhs: &[LHS],
+    rhs: &[RHS],
+) -> (__m256i, __m256i) {
+    debug_assert_eq!(lhs.len(), K);
+    debug_assert_eq!(rhs.len(), K);
+    debug_assert!((1..=4).contains(&K));
+
+    // Safety: the module is cfg-gated on `target_feature = "avx2"`.
+    // Every intrinsic below is an AVX2 integer operation available under that gate.
+    unsafe {
+        // `vpmuludq` reads the low 32 bits of each 64-bit lane.
+        // `as_m256i` leaves the even-indexed field elements sitting there.
+        //
+        // `as_shifted_m256i` moves the odd-indexed ones down into the same position.
+        let evn0 = x86_64::_mm256_mul_epu32(lhs[0].as_m256i(), rhs[0].as_m256i());
+        let odd0 = x86_64::_mm256_mul_epu32(lhs[0].as_shifted_m256i(), rhs[0].as_shifted_m256i());
+
+        if K == 1 {
+            return (evn0, odd0);
+        }
+
+        let evn1 = x86_64::_mm256_mul_epu32(lhs[1].as_m256i(), rhs[1].as_m256i());
+        let odd1 = x86_64::_mm256_mul_epu32(lhs[1].as_shifted_m256i(), rhs[1].as_shifted_m256i());
+
+        let evn01 = x86_64::_mm256_add_epi64(evn0, evn1);
+        let odd01 = x86_64::_mm256_add_epi64(odd0, odd1);
+
+        if K == 2 {
+            return (evn01, odd01);
+        }
+
+        let evn2 = x86_64::_mm256_mul_epu32(lhs[2].as_m256i(), rhs[2].as_m256i());
+        let odd2 = x86_64::_mm256_mul_epu32(lhs[2].as_shifted_m256i(), rhs[2].as_shifted_m256i());
+
+        if K == 3 {
+            return (
+                x86_64::_mm256_add_epi64(evn01, evn2),
+                x86_64::_mm256_add_epi64(odd01, odd2),
+            );
+        }
+
+        let evn3 = x86_64::_mm256_mul_epu32(lhs[3].as_m256i(), rhs[3].as_m256i());
+        let odd3 = x86_64::_mm256_mul_epu32(lhs[3].as_shifted_m256i(), rhs[3].as_shifted_m256i());
+
+        // Summing as a balanced tree keeps the dependency chain two adds deep instead of three.
+        let evn23 = x86_64::_mm256_add_epi64(evn2, evn3);
+        let odd23 = x86_64::_mm256_add_epi64(odd2, odd3);
+
+        (
+            x86_64::_mm256_add_epi64(evn01, evn23),
+            x86_64::_mm256_add_epi64(odd01, odd23),
+        )
+    }
+}
+
+/// Fold `2^{32} P` out of every 64-bit lane of a wide accumulator.
+///
+/// Write a lane as `C = c_hi 2^{32} + c_lo`.
+/// The caller must guarantee `C < 2 * 2^{32} P`, equivalently `c_hi < 2P`.
+///
+/// That holds for any sum of at most four products, since `4P^2 < 2 * 2^{32} P`.
+/// The output is `C` when `c_hi < P` and `C - 2^{32} P` otherwise, so it is below `2^{32} P`.
+///
+/// This is the `C'` adjustment of [`dot_product_4`], applied to the wide accumulator in place.
+/// It changes the Montgomery result by a multiple of `P` only.
+///
+/// The low half is untouched, so the quotient `Q = mu c_lo mod 2^{32}` is unaffected.
+/// Folding both groups before merging them is what keeps the merged sum inside `2^{64}`.
+#[inline(always)]
+#[must_use]
+fn fold_wide<MPAVX2: MontyParametersAVX2>(acc: __m256i) -> __m256i {
+    // Safety: the module is cfg-gated on `target_feature = "avx2"`.
+    // Every intrinsic below is an AVX2 integer operation available under that gate.
+    unsafe {
+        // `P << 32` has a zero low half, so this 64-bit subtraction never borrows out of `c_lo`.
+        // Both operands therefore agree on their low 32 bits.
+        //
+        // `vpminud` returns that shared value untouched in the low lanes.
+        let shifted_p = x86_64::_mm256_slli_epi64::<32>(MPAVX2::PACKED_P);
+        let sub = x86_64::_mm256_sub_epi64(acc, shifted_p);
+
+        // In the high lanes this evaluates `min(c_hi, (c_hi - P) mod 2^{32})`.
+        //
+        // If `c_hi >= P` the subtraction gives `c_hi - P < P`, which is the smaller of the two.
+        // Otherwise it wraps to `c_hi - P + 2^{32} > 2^{32} - P > 2^{31} > c_hi`, so `c_hi` wins.
+        x86_64::_mm256_min_epu32(acc, sub)
+    }
+}
+
+/// Montgomery-reduce a pair of wide accumulators into canonical field elements.
+///
+/// `dot_evn` carries the sums for the even-indexed field elements, `dot_odd` those for the odd.
+/// Every lane must be below `2 * 2^{32} P`.
+///
+/// Write a lane as `C = c_hi 2^{32} + c_lo` and set `Q = mu c_lo mod 2^{32}`.
+/// The result is `(c_hi mod P) - ((QP) >> 32)` corrected into `[0, P)`, i.e. `C 2^{-32} mod P`.
+#[inline(always)]
+#[must_use]
+fn monty_red_wide_to_canonical<PMP: PackedMontyParameters>(
+    dot_evn: __m256i,
+    dot_odd: __m256i,
+) -> __m256i {
+    // Safety: the module is cfg-gated on `target_feature = "avx2"`.
+    // Every intrinsic below is an AVX2 integer operation available under that gate.
+    unsafe {
         // We only care about the top 32 bits of dot_evn/odd.
         // They currently lie in [0, 2P] so we reduce them to [0, P)
         let dot = blend_evn_odd(dot_evn, dot_odd);
@@ -677,11 +798,138 @@ fn dot_product_4<PMP: PackedMontyParameters, LHS: IntoM256<PMP>, RHS: IntoM256<P
     }
 }
 
+/// Compute the elementary function `l0*r0 + ... + l4*r4` given ten inputs in canonical form.
+///
+/// If the inputs are not in canonical form, the result is undefined.
+#[inline]
+#[must_use]
+fn dot_product_5<PMP: PackedMontyParameters, LHS: IntoM256<PMP>, RHS: IntoM256<PMP>>(
+    lhs: [LHS; 5],
+    rhs: [RHS; 5],
+) -> __m256i {
+    // A fifth product does not fit beside four others: `5(P - 1)^2 > 2^{64}` for both primes.
+    // So we accumulate two independent groups and merge them before reducing once.
+    //
+    // Group A takes terms 0 to 3 and is bounded by `4P^2 < 2 * 2^{32} P`.
+    // [`fold_wide`] therefore applies to it and brings it below `2^{32} P`.
+    //
+    // Group B is the single term 4, already bounded by `P^2 < 2^{32} P`, so it needs no fold.
+    // The merged sum is then below `2 * 2^{32} P < 2^{64}`, using `P < 2^{31}`.
+    //
+    // A plain 64-bit add carries out of the low halves for free.
+    // The merged high half stays below `2P`, as [`monty_red_wide_to_canonical`] requires.
+    //
+    // This costs one Montgomery reduction; `dot_product_4` plus a separate multiply costs two.
+
+    // Safety: the module is cfg-gated on `target_feature = "avx2"`.
+    // Every intrinsic below is an AVX2 integer operation available under that gate.
+    unsafe {
+        let (a_evn, a_odd) = wide_dot::<PMP, _, _, 4>(&lhs[..4], &rhs[..4]);
+        let (b_evn, b_odd) = wide_dot::<PMP, _, _, 1>(&lhs[4..], &rhs[4..]);
+
+        let dot_evn = x86_64::_mm256_add_epi64(fold_wide::<PMP>(a_evn), b_evn);
+        let dot_odd = x86_64::_mm256_add_epi64(fold_wide::<PMP>(a_odd), b_odd);
+
+        monty_red_wide_to_canonical::<PMP>(dot_evn, dot_odd)
+    }
+}
+
+/// Compute the elementary function `l0*r0 + ... + l5*r5` given twelve inputs in canonical form.
+///
+/// If the inputs are not in canonical form, the result is undefined.
+#[inline]
+#[must_use]
+fn dot_product_6<PMP: PackedMontyParameters, LHS: IntoM256<PMP>, RHS: IntoM256<PMP>>(
+    lhs: [LHS; 6],
+    rhs: [RHS; 6],
+) -> __m256i {
+    // Group A takes terms 0 to 3 and is bounded by `4P^2 < 2 * 2^{32} P`.
+    // [`fold_wide`] brings it below `2^{32} P`.
+    //
+    // Group B takes terms 4 and 5, bounded by `2P^2 < 2^{32} P` because `2P < 2^{32}`.
+    // So group B needs no fold, and the merged sum stays below `2 * 2^{32} P < 2^{64}`.
+
+    // Safety: the module is cfg-gated on `target_feature = "avx2"`.
+    // Every intrinsic below is an AVX2 integer operation available under that gate.
+    unsafe {
+        let (a_evn, a_odd) = wide_dot::<PMP, _, _, 4>(&lhs[..4], &rhs[..4]);
+        let (b_evn, b_odd) = wide_dot::<PMP, _, _, 2>(&lhs[4..], &rhs[4..]);
+
+        let dot_evn = x86_64::_mm256_add_epi64(fold_wide::<PMP>(a_evn), b_evn);
+        let dot_odd = x86_64::_mm256_add_epi64(fold_wide::<PMP>(a_odd), b_odd);
+
+        monty_red_wide_to_canonical::<PMP>(dot_evn, dot_odd)
+    }
+}
+
+/// Compute the elementary function `l0*r0 + ... + l6*r6` given fourteen inputs in canonical form.
+///
+/// If the inputs are not in canonical form, the result is undefined.
+#[inline]
+#[must_use]
+fn dot_product_7<PMP: PackedMontyParameters, LHS: IntoM256<PMP>, RHS: IntoM256<PMP>>(
+    lhs: [LHS; 7],
+    rhs: [RHS; 7],
+) -> __m256i {
+    // Group A takes terms 0 to 3 and group B takes terms 4 to 6.
+    // Group B is bounded by `3P^2 < 1.5 * 2^{32} P`, which already exceeds `2^{32} P`.
+    //
+    // So unlike the length 5 and 6 cases, group B has to be folded as well.
+    // Leaving it unfolded would allow `2.5 * 2^{32} P`, which is past `2^{64}`.
+    //
+    // With both groups folded below `2^{32} P`, the merged sum is below `2 * 2^{32} P < 2^{64}`.
+
+    // Safety: the module is cfg-gated on `target_feature = "avx2"`.
+    // Every intrinsic below is an AVX2 integer operation available under that gate.
+    unsafe {
+        let (a_evn, a_odd) = wide_dot::<PMP, _, _, 4>(&lhs[..4], &rhs[..4]);
+        let (b_evn, b_odd) = wide_dot::<PMP, _, _, 3>(&lhs[4..], &rhs[4..]);
+
+        let dot_evn = x86_64::_mm256_add_epi64(fold_wide::<PMP>(a_evn), fold_wide::<PMP>(b_evn));
+        let dot_odd = x86_64::_mm256_add_epi64(fold_wide::<PMP>(a_odd), fold_wide::<PMP>(b_odd));
+
+        monty_red_wide_to_canonical::<PMP>(dot_evn, dot_odd)
+    }
+}
+
+/// Compute the elementary function `l0*r0 + ... + l7*r7` given sixteen inputs in canonical form.
+///
+/// If the inputs are not in canonical form, the result is undefined.
+#[inline]
+#[must_use]
+fn dot_product_8<PMP: PackedMontyParameters, LHS: IntoM256<PMP>, RHS: IntoM256<PMP>>(
+    lhs: [LHS; 8],
+    rhs: [RHS; 8],
+) -> __m256i {
+    // Both groups take four terms, so both are bounded by `4P^2 < 2 * 2^{32} P`.
+    // [`fold_wide`] brings each of them below `2^{32} P`.
+    //
+    // The merged sum is then below `2 * 2^{32} P < 2^{64}`, using `P < 2^{31}`.
+    // The merged high half stays below `2P`, as [`monty_red_wide_to_canonical`] requires.
+    //
+    // This is the length `sumcheck` uses for its round tile.
+    // It costs one Montgomery reduction where two `dot_product_4` calls plus an add cost two.
+
+    // Safety: the module is cfg-gated on `target_feature = "avx2"`.
+    // Every intrinsic below is an AVX2 integer operation available under that gate.
+    unsafe {
+        let (a_evn, a_odd) = wide_dot::<PMP, _, _, 4>(&lhs[..4], &rhs[..4]);
+        let (b_evn, b_odd) = wide_dot::<PMP, _, _, 4>(&lhs[4..], &rhs[4..]);
+
+        let dot_evn = x86_64::_mm256_add_epi64(fold_wide::<PMP>(a_evn), fold_wide::<PMP>(b_evn));
+        let dot_odd = x86_64::_mm256_add_epi64(fold_wide::<PMP>(a_odd), fold_wide::<PMP>(b_odd));
+
+        monty_red_wide_to_canonical::<PMP>(dot_evn, dot_odd)
+    }
+}
+
 /// A general fast dot product implementation.
 ///
-/// Maximises the number of calls to `dot_product_4` for dot products involving vectors of length
-/// more than 4. The length 64 occurs commonly enough it's useful to have a custom implementation
-/// which lets it use a slightly better summation algorithm with lower latency.
+/// Lengths `2` to `8` each get a dedicated routine that pays a single Montgomery reduction.
+/// Beyond that, the implementation maximises the number of calls to [`dot_product_4`].
+///
+/// The length 64 occurs commonly enough that it gets a custom implementation.
+/// That lets it use a slightly better summation algorithm with lower latency.
 #[inline(always)]
 fn general_dot_product<
     FP: FieldParameters,
@@ -720,6 +968,50 @@ fn general_dot_product<
             );
             unsafe {
                 // Safety: `dot_product_4` returns values in canonical form when given values in canonical form.
+                PackedMontyField31AVX2::<FP>::from_vector(res)
+            }
+        }
+        5 => {
+            let res = dot_product_5(
+                [lhs[0], lhs[1], lhs[2], lhs[3], lhs[4]],
+                [rhs[0], rhs[1], rhs[2], rhs[3], rhs[4]],
+            );
+            unsafe {
+                // Safety: `dot_product_5` returns values in canonical form when given values in canonical form.
+                PackedMontyField31AVX2::<FP>::from_vector(res)
+            }
+        }
+        6 => {
+            let res = dot_product_6(
+                [lhs[0], lhs[1], lhs[2], lhs[3], lhs[4], lhs[5]],
+                [rhs[0], rhs[1], rhs[2], rhs[3], rhs[4], rhs[5]],
+            );
+            unsafe {
+                // Safety: `dot_product_6` returns values in canonical form when given values in canonical form.
+                PackedMontyField31AVX2::<FP>::from_vector(res)
+            }
+        }
+        7 => {
+            let res = dot_product_7(
+                [lhs[0], lhs[1], lhs[2], lhs[3], lhs[4], lhs[5], lhs[6]],
+                [rhs[0], rhs[1], rhs[2], rhs[3], rhs[4], rhs[5], rhs[6]],
+            );
+            unsafe {
+                // Safety: `dot_product_7` returns values in canonical form when given values in canonical form.
+                PackedMontyField31AVX2::<FP>::from_vector(res)
+            }
+        }
+        8 => {
+            let res = dot_product_8(
+                [
+                    lhs[0], lhs[1], lhs[2], lhs[3], lhs[4], lhs[5], lhs[6], lhs[7],
+                ],
+                [
+                    rhs[0], rhs[1], rhs[2], rhs[3], rhs[4], rhs[5], rhs[6], rhs[7],
+                ],
+            );
+            unsafe {
+                // Safety: `dot_product_8` returns values in canonical form when given values in canonical form.
                 PackedMontyField31AVX2::<FP>::from_vector(res)
             }
         }
