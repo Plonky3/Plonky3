@@ -1,0 +1,709 @@
+//! A complete AIR proof over a Boolean trace, committed as bits.
+//!
+//! Run with `cargo run --release -p p3-multi-stark --example prove_boolean_trace`.
+//! The commitment is binding but not hiding; this example does not provide zero knowledge.
+//!
+//! # The two arms
+//!
+//! ```text
+//!     embedded   one field element per trace bit, committed as elements
+//!     packed     one field element per 128 trace bits, committed as bits
+//! ```
+//!
+//! Both arms prove and verify the same statement over the same trace.
+//!
+//! They differ only in the commitment scheme the configuration selects.
+//!
+//! The run prints the peak heap and the wall time of each, so the saving is measured.
+//!
+//! # What the trace costs either way
+//!
+//! The batched prover lends its trace back as a borrowed table of base-field cells.
+//!
+//! The base field must be one the challenge field extends.
+//!
+//! The narrowest such field in the binary tower is `GF(2^8)`.
+//!
+//! A Boolean commitment also draws its challenges from the field its own elements live in.
+//!
+//! So a configuration pairing this commitment with this prover holds one cell per bit.
+//!
+//! That cell is the full challenge width, and the saving is the commitment's alone.
+
+use std::alloc::{GlobalAlloc, Layout as AllocLayout, System};
+use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicUsize, Ordering};
+use std::time::{Duration, Instant};
+
+use p3_air::{Air, AirBuilder, BaseAir, WindowAccess};
+use p3_binary_field::{BinaryChallenger, BinaryField128};
+use p3_binary_pcs::{
+    BinaryPcs, BinaryPcsConfig, BinaryPcsParams, BinaryPcsProverData, BooleanTraceData,
+    BooleanTracePcs, GroupedCodewordMmcs,
+};
+use p3_challenger::{CanObserve, HashChallenger};
+use p3_field::PrimeCharacteristicRing;
+use p3_keccak::Keccak256Hash;
+use p3_matrix::dense::RowMajorMatrix;
+use p3_multi_stark::config::{Commitment, MultiStarkConfig, ProverData};
+use p3_multi_stark::{
+    ProverInstance, ProverInstances, VerifierInstance, VerifierInstances, prove_with_security,
+    setup, verify_with_security,
+};
+use p3_sumcheck::layout::{Layout, SuffixProver, Table, Witness, plan_stacked_layout};
+use p3_sumcheck::{PrescribedPointPcs, TableShape};
+use p3_symmetric::{CompressionFunctionFromHasher, SerializingHasher};
+use rand::rngs::SmallRng;
+use rand::{RngExt, SeedableRng};
+
+type F = BinaryField128;
+type Hash = SerializingHasher<Keccak256Hash>;
+type Compress = CompressionFunctionFromHasher<Keccak256Hash, 2, 32>;
+type MerkleMmcs = p3_merkle_tree::MerkleTreeMmcs<F, u8, Hash, Compress, 2, 32>;
+type Mmcs = GroupedCodewordMmcs<MerkleMmcs>;
+type Challenger = BinaryChallenger<F, HashChallenger<u8, Keccak256Hash, 32>>;
+
+/// Coordinates one committed element absorbs, so the packing keeps the rest.
+const ABSORBED: usize = 7;
+
+/// Columns the gate table holds: three inputs and two outputs.
+const WIDTH: usize = 5;
+
+/// Security target both arms are proved and verified against.
+const SECURITY_BITS: usize = 100;
+
+/// Trace heights measured, each one instance of the gate table.
+const LOG_HEIGHTS: [usize; 3] = [14, 16, 18];
+
+/// A tracking allocator counting live bytes while armed, keeping the high-water mark.
+///
+/// The lookup benchmark in the batch prover accounts for its memory the same way.
+struct TrackingAlloc;
+
+/// Live bytes since the last arm, signed so a pre-arm free cannot underflow.
+static LIVE: AtomicIsize = AtomicIsize::new(0);
+/// High-water mark of the live count while armed.
+static PEAK: AtomicUsize = AtomicUsize::new(0);
+/// Whether allocations are currently being counted.
+static ARMED: AtomicBool = AtomicBool::new(false);
+
+unsafe impl GlobalAlloc for TrackingAlloc {
+    unsafe fn alloc(&self, layout: AllocLayout) -> *mut u8 {
+        let ptr = unsafe { System.alloc(layout) };
+        if !ptr.is_null() && ARMED.load(Ordering::Relaxed) {
+            let live =
+                LIVE.fetch_add(layout.size() as isize, Ordering::Relaxed) + layout.size() as isize;
+            if live > 0 {
+                PEAK.fetch_max(live as usize, Ordering::Relaxed);
+            }
+        }
+        ptr
+    }
+
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: AllocLayout) {
+        if ARMED.load(Ordering::Relaxed) {
+            LIVE.fetch_sub(layout.size() as isize, Ordering::Relaxed);
+        }
+        unsafe { System.dealloc(ptr, layout) };
+    }
+}
+
+#[global_allocator]
+static GLOBAL: TrackingAlloc = TrackingAlloc;
+
+/// Begin counting allocations from a zero baseline.
+fn arm() {
+    LIVE.store(0, Ordering::Relaxed);
+    PEAK.store(0, Ordering::Relaxed);
+    ARMED.store(true, Ordering::Relaxed);
+}
+
+/// Stop counting and return the peak live bytes seen while armed.
+fn disarm() -> usize {
+    ARMED.store(false, Ordering::Relaxed);
+    PEAK.load(Ordering::Relaxed)
+}
+
+/// A bit-sliced full-adder gate table.
+///
+/// Every row is one independent adder over `GF(2)`:
+///
+/// ```text
+///     sum  = a + b + cin              exclusive or of the three inputs
+///     cout = a*b + cin*a + cin*b      majority of the three inputs
+/// ```
+///
+/// Addition is exclusive or and multiplication is conjunction, but only on Boolean cells.
+///
+/// Nothing here constrains a cell to be Boolean, and nothing needs to.
+///
+/// The commitment holds bits, so an accepted proof's trace is Boolean.
+///
+/// A trace that is not disagrees with the values the opening certifies.
+///
+/// Every constraint reads the current row only, so no batch asks for a successor view.
+struct GateTableAir;
+
+impl<T> BaseAir<T> for GateTableAir {
+    fn width(&self) -> usize {
+        WIDTH
+    }
+
+    fn num_public_values(&self) -> usize {
+        // The three inputs of the first row, pinned as the public boundary.
+        3
+    }
+
+    fn main_next_row_columns(&self) -> Vec<usize> {
+        // No constraint reads a row ahead, so no column is opened through that view.
+        // The default names every column, which would ask for an opening none of them needs.
+        Vec::new()
+    }
+}
+
+impl<AB: AirBuilder<F = F>> Air<AB> for GateTableAir {
+    fn eval(&self, builder: &mut AB) {
+        let main = builder.main();
+        let local = main.current_slice();
+        let (a, b, cin) = (local[0], local[1], local[2]);
+        let (sum, cout) = (local[3], local[4]);
+        let public = builder.public_values();
+        let (first_a, first_b, first_cin) = (public[0], public[1], public[2]);
+
+        // Exclusive or of the three inputs, degree one.
+        builder.assert_eq(sum, a + b + cin);
+        // Majority of the three inputs, degree two.
+        builder.assert_eq(cout, a * b + cin * a + cin * b);
+
+        // The statement's public boundary: the first row's inputs.
+        builder.when_first_row().assert_eq(a, first_a);
+        builder.when_first_row().assert_eq(b, first_b);
+        builder.when_first_row().assert_eq(cin, first_cin);
+    }
+}
+
+/// A satisfying gate table of `2^log_height` rows, and its public boundary.
+fn trace(seed: u64, log_height: usize) -> (Table<F>, [F; 3]) {
+    let rows = 1usize << log_height;
+    let mut rng = SmallRng::seed_from_u64(seed);
+
+    // Draw the three input columns, then derive the two output columns from them.
+    let inputs: Vec<[F; 3]> = (0..rows)
+        .map(|_| [(); 3].map(|()| F::from_bool(rng.random::<bool>())))
+        .collect();
+
+    // Columns are laid out one after another, which is the orientation a table row is.
+    let mut columns = Vec::with_capacity(WIDTH * rows);
+    for index in 0..3 {
+        columns.extend(inputs.iter().map(|row| row[index]));
+    }
+    columns.extend(inputs.iter().map(|[a, b, c]| *a + *b + *c));
+    columns.extend(inputs.iter().map(|[a, b, c]| *a * *b + *c * *a + *c * *b));
+
+    let public = inputs[0];
+    (Table::new(RowMajorMatrix::new(columns, rows)), public)
+}
+
+/// The shapes one batch of gate tables commits.
+fn shapes(log_heights: &[usize]) -> Vec<TableShape> {
+    log_heights
+        .iter()
+        .map(|&log_height| TableShape::new(log_height, WIDTH))
+        .collect()
+}
+
+/// The commitment schedule for a codeword of `num_variables` committed elements.
+fn schedule(num_variables: usize) -> (BinaryPcsConfig, Mmcs) {
+    let params = BinaryPcsParams {
+        log_inv_rate: 2,
+        pow_bits: 0,
+        security_level: SECURITY_BITS,
+    };
+    // Commit after up to three variable folds, with one coset per leaf.
+    let config = BinaryPcsConfig::try_new::<F, F>(num_variables, params)
+        .unwrap()
+        .try_with_folding(3.min(num_variables))
+        .unwrap();
+    let merkle = MerkleMmcs::new(Hash::new(Keccak256Hash), Compress::new(Keccak256Hash), 0);
+    let mmcs = Mmcs::for_folding(merkle, &config);
+    (config, mmcs)
+}
+
+fn challenger() -> Challenger {
+    Challenger::from_hasher(b"p3-multi-stark-boolean-gate-v1".to_vec(), Keccak256Hash)
+}
+
+/// The Boolean arm: the trace is committed as bits, packed into the challenge field.
+struct PackedConfig {
+    /// The bit commitment every column claim is discharged against.
+    pcs: BooleanTracePcs<F, Mmcs, Mmcs>,
+}
+
+impl PackedConfig {
+    /// Wire a configuration for the batch these shapes describe.
+    fn new(shapes: &[TableShape]) -> Self {
+        // The stacked bit arity is the planner's, so the commitment covers every column.
+        let (arity, _) = plan_stacked_layout(shapes);
+        let (config, mmcs) = schedule(arity - ABSORBED);
+        Self {
+            pcs: BooleanTracePcs::new(config, mmcs.clone(), mmcs, arity).unwrap(),
+        }
+    }
+}
+
+impl MultiStarkConfig for PackedConfig {
+    type Val = F;
+    type Challenge = F;
+    type Challenger = Challenger;
+    type Pcs = BooleanTracePcs<F, Mmcs, Mmcs>;
+
+    fn pcs(&self) -> &Self::Pcs {
+        &self.pcs
+    }
+
+    fn collision_resistance_bits(&self) -> Option<usize> {
+        // Keccak-256 is shared by the transcript and the Merkle tree.
+        Some(128)
+    }
+
+    fn min_num_variables(&self) -> usize {
+        // Every column keeps its own exact run, so no table is zero-extended.
+        1
+    }
+
+    fn build_witness(&self, tables: Vec<Table<F>>) -> Vec<Table<F>> {
+        // The scheme packs the bits itself at commit time, so nothing is built here.
+        tables
+    }
+
+    fn committed_table<'a>(
+        &self,
+        prover_data: &'a BooleanTraceData<F, Mmcs>,
+        table_index: usize,
+    ) -> &'a Table<F> {
+        prover_data.table(table_index)
+    }
+}
+
+/// The reference arm: one committed field element per trace bit.
+struct EmbeddedConfig {
+    /// The element commitment the stacked trace is discharged against.
+    pcs: BinaryPcs<F, F, Mmcs, Mmcs>,
+}
+
+impl EmbeddedConfig {
+    /// Wire a configuration for the batch these shapes describe.
+    fn new(shapes: &[TableShape]) -> Self {
+        // The same planner lays out the same slots, one element wide instead of one bit.
+        let (arity, _) = plan_stacked_layout(shapes);
+        let (config, mmcs) = schedule(arity);
+        Self {
+            pcs: BinaryPcs::new(config, mmcs.clone(), mmcs),
+        }
+    }
+}
+
+impl MultiStarkConfig for EmbeddedConfig {
+    type Val = F;
+    type Challenge = F;
+    type Challenger = Challenger;
+    type Pcs = BinaryPcs<F, F, Mmcs, Mmcs>;
+
+    fn pcs(&self) -> &Self::Pcs {
+        &self.pcs
+    }
+
+    fn collision_resistance_bits(&self) -> Option<usize> {
+        Some(128)
+    }
+
+    fn min_num_variables(&self) -> usize {
+        1
+    }
+
+    fn build_witness(&self, tables: Vec<Table<F>>) -> Witness<F> {
+        SuffixProver::<F, F>::new_witness(tables, 0)
+    }
+
+    fn committed_table<'a>(
+        &self,
+        prover_data: &'a BinaryPcsProverData<F, F, Mmcs>,
+        table_index: usize,
+    ) -> &'a Table<F> {
+        prover_data.table(table_index)
+    }
+}
+
+/// Prove and verify one batch under one configuration, returning the proof size.
+///
+/// The macro-free way to run both arms is one generic function over the configuration.
+fn run<C>(config: &C, tables: Vec<Table<F>>, publics: &[[F; 3]]) -> usize
+where
+    C: MultiStarkConfig<Val = F, Challenge = F, Challenger = Challenger>,
+    C::Pcs: PrescribedPointPcs<F, Challenger>,
+    Challenger: CanObserve<Commitment<C>>,
+    Commitment<C>: Clone,
+    ProverData<C>: Clone,
+{
+    let airs = vec![&GateTableAir; tables.len()];
+    let log_heights: Vec<usize> = tables.iter().map(Table::num_variables).collect();
+    let (pk, vk) = setup(config, &airs, &mut challenger()).unwrap();
+
+    // One prover instance per table, in the order the tables are committed.
+    let prover = ProverInstances::new(
+        tables
+            .into_iter()
+            .zip(publics)
+            .map(|(table, public)| ProverInstance::new(&GateTableAir, table, &pk, public))
+            .collect(),
+    );
+    let proof = prove_with_security(config, prover, 0, SECURITY_BITS, &mut challenger())
+        .expect("a Boolean gate table must meet the composed target");
+    let bytes = postcard::to_allocvec(&proof).unwrap();
+
+    // The verifier reads the heights from the statement, never from the proof.
+    let verifier = VerifierInstances::new(
+        log_heights
+            .iter()
+            .zip(publics)
+            .map(|(&log_height, public)| {
+                VerifierInstance::new(&GateTableAir, &vk, log_height, public)
+            })
+            .collect(),
+    );
+    verify_with_security(
+        config,
+        verifier,
+        &proof,
+        0,
+        SECURITY_BITS,
+        &mut challenger(),
+    )
+    .expect("an honest Boolean gate table proof must verify");
+    bytes.len()
+}
+
+/// The wall time of one run, measured with the allocator counter disarmed.
+fn timed<C>(config: &C, tables: Vec<Table<F>>, publics: &[[F; 3]]) -> (Duration, usize)
+where
+    C: MultiStarkConfig<Val = F, Challenge = F, Challenger = Challenger>,
+    C::Pcs: PrescribedPointPcs<F, Challenger>,
+    Challenger: CanObserve<Commitment<C>>,
+    Commitment<C>: Clone,
+    ProverData<C>: Clone,
+{
+    let start = Instant::now();
+    let bytes = run(config, tables, publics);
+    (start.elapsed(), bytes)
+}
+
+/// The peak heap of one run, the trace it proves included.
+///
+/// The trace is built inside the armed region, so the figure covers it too.
+///
+/// Both arms hold one, so leaving it out would flatter the shorter commitment.
+fn measured<C>(config: &C, log_heights: &[usize]) -> usize
+where
+    C: MultiStarkConfig<Val = F, Challenge = F, Challenger = Challenger>,
+    C::Pcs: PrescribedPointPcs<F, Challenger>,
+    Challenger: CanObserve<Commitment<C>>,
+    Commitment<C>: Clone,
+    ProverData<C>: Clone,
+{
+    arm();
+    let (tables, publics) = batch(log_heights);
+    let _ = run(config, tables, &publics);
+    disarm()
+}
+
+/// One gate table per height, all from the same seed so both arms prove one statement.
+fn batch(log_heights: &[usize]) -> (Vec<Table<F>>, Vec<[F; 3]>) {
+    log_heights
+        .iter()
+        .enumerate()
+        .map(|(index, &log_height)| trace(0xB001 + index as u64, log_height))
+        .unzip()
+}
+
+fn main() {
+    println!("one prove and one verify of a Boolean gate table, both arms\n");
+    println!(
+        "{:<10} {:>6} {:>12} {:>12} {:>8} {:>10} {:>10} {:>8}",
+        "size", "cells", "heap MiB", "heap MiB", "gain", "time ms", "time ms", "gain"
+    );
+    println!(
+        "{:<10} {:>6} {:>12} {:>12} {:>8} {:>10} {:>10} {:>8}\n",
+        "", "", "embedded", "packed", "", "embedded", "packed", ""
+    );
+
+    for &log_height in &LOG_HEIGHTS {
+        let heights = [log_height];
+        let shapes = shapes(&heights);
+        let packed = PackedConfig::new(&shapes);
+        let embedded = EmbeddedConfig::new(&shapes);
+
+        // Peak heap first, then wall time on a fresh trace with the counter disarmed.
+        let heap_embedded = measured(&embedded, &heights);
+        let heap_packed = measured(&packed, &heights);
+
+        let (tables, publics) = batch(&heights);
+        let (time_embedded, _) = timed(&embedded, tables, &publics);
+        let (tables, publics) = batch(&heights);
+        let (time_packed, size_packed) = timed(&packed, tables, &publics);
+
+        let mib = |bytes: usize| bytes as f64 / (1024.0 * 1024.0);
+        println!(
+            "2^{log_height:<8} {:>6} {:>12.2} {:>12.2} {:>7.1}x {:>10.0} {:>10.0} {:>7.1}x",
+            WIDTH << log_height,
+            mib(heap_embedded),
+            mib(heap_packed),
+            heap_embedded as f64 / heap_packed as f64,
+            time_embedded.as_secs_f64() * 1e3,
+            time_packed.as_secs_f64() * 1e3,
+            time_embedded.as_secs_f64() / time_packed.as_secs_f64(),
+        );
+        if log_height == *LOG_HEIGHTS.last().unwrap() {
+            let cells = (WIDTH << log_height) * size_of::<F>();
+            println!(
+                "\ntrace held by both arms at 2^{log_height}: {:.2} MiB",
+                cells as f64 / (1024.0 * 1024.0)
+            );
+            println!("packed proof size: {size_packed} bytes");
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use p3_binary_field::TowerLevel;
+    use p3_binary_pcs::BooleanTraceError;
+    use p3_commit::MultilinearPcs;
+    use p3_multi_stark::config::PcsError;
+    use p3_multi_stark::{VerificationError, security_report};
+    use p3_multilinear_util::point::Point;
+    use p3_sumcheck::{OpeningBatch, OpeningProtocol, PrescribedPointPcs, TableSpec};
+
+    use super::*;
+
+    /// Both arms accept an honest proof, at every height the fixture admits.
+    #[test]
+    fn a_boolean_gate_table_round_trips_on_both_arms() {
+        // Fixture state: one table per height, five columns each.
+        //
+        //     2^9 rows  ->  5 * 512  = 2560 cells  ->  arity 12
+        //     2^10 rows ->  5 * 1024 = 5120 cells  ->  arity 13
+        for log_height in [9, 10] {
+            let shapes = shapes(&[log_height]);
+            let (table, public) = trace(0x9001, log_height);
+            run(&PackedConfig::new(&shapes), vec![table], &[public]);
+            let (table, public) = trace(0x9001, log_height);
+            run(&EmbeddedConfig::new(&shapes), vec![table], &[public]);
+        }
+    }
+
+    /// Two instances of different heights share one commitment and one proof.
+    #[test]
+    fn a_batch_of_two_heights_shares_one_bit_commitment() {
+        // Fixture state: 5 * 512 + 5 * 128 = 3200 cells, so the stack pads to arity 12.
+        let heights = [9, 7];
+        let shapes = shapes(&heights);
+        let mut tables = Vec::new();
+        let mut publics = Vec::new();
+        for (index, &log_height) in heights.iter().enumerate() {
+            let (table, public) = trace(0x9100 + index as u64, log_height);
+            tables.push(table);
+            publics.push(public);
+        }
+        run(&PackedConfig::new(&shapes), tables, &publics);
+    }
+
+    /// A public boundary the trace does not meet is rejected.
+    #[test]
+    fn rejects_changed_public_values() {
+        let log_height = 9;
+        let shapes = shapes(&[log_height]);
+        let config = PackedConfig::new(&shapes);
+        let (table, public) = trace(0x9200, log_height);
+        let (pk, vk) = setup(&config, &[&GateTableAir], &mut challenger()).unwrap();
+        let proof = prove_with_security(
+            &config,
+            ProverInstances::new(vec![ProverInstance::new(
+                &GateTableAir,
+                table,
+                &pk,
+                &public,
+            )]),
+            0,
+            SECURITY_BITS,
+            &mut challenger(),
+        )
+        .unwrap();
+
+        // Mutation: flip each pinned input in turn; each one breaks a boundary constraint.
+        for index in 0..3 {
+            let mut tampered = public;
+            tampered[index] += F::ONE;
+            let result: Result<(), VerificationError<PcsError<PackedConfig>>> =
+                verify_with_security(
+                    &config,
+                    VerifierInstances::new(vec![VerifierInstance::new(
+                        &GateTableAir,
+                        &vk,
+                        log_height,
+                        &tampered,
+                    )]),
+                    &proof,
+                    0,
+                    SECURITY_BITS,
+                    &mut challenger(),
+                );
+            assert!(result.is_err(), "public value {index}");
+        }
+    }
+
+    /// A trace whose carry column is wrong is rejected.
+    #[test]
+    fn rejects_an_invalid_gate_table() {
+        // Fixture state: row 3's majority output is flipped, the boundary row untouched.
+        //
+        //     column 4 (cout), cell 3  ->  cout + 1
+        //
+        // The zerocheck's degree-two constraint fails at that row.
+        let log_height = 9;
+        let rows = 1usize << log_height;
+        let shapes = shapes(&[log_height]);
+        let config = PackedConfig::new(&shapes);
+        let (table, public) = trace(0x9300, log_height);
+
+        let mut cells = table.iter_polys().flatten().copied().collect::<Vec<_>>();
+        cells[4 * rows + 3] += F::ONE;
+        let table = Table::new(RowMajorMatrix::new(cells, rows));
+
+        let (pk, vk) = setup(&config, &[&GateTableAir], &mut challenger()).unwrap();
+        let proof = prove_with_security(
+            &config,
+            ProverInstances::new(vec![ProverInstance::new(
+                &GateTableAir,
+                table,
+                &pk,
+                &public,
+            )]),
+            0,
+            SECURITY_BITS,
+            &mut challenger(),
+        )
+        .unwrap();
+        assert!(
+            verify_with_security(
+                &config,
+                VerifierInstances::new(vec![VerifierInstance::new(
+                    &GateTableAir,
+                    &vk,
+                    log_height,
+                    &public,
+                )]),
+                &proof,
+                0,
+                SECURITY_BITS,
+                &mut challenger(),
+            )
+            .is_err()
+        );
+    }
+
+    /// The report charges the commitment, the reduction and the pool, each under its label.
+    #[test]
+    fn the_report_charges_every_part_of_the_boolean_path() {
+        let log_height = 9;
+        let shapes = shapes(&[log_height]);
+        let config = PackedConfig::new(&shapes);
+        let (_, vk) = setup(&config, &[&GateTableAir], &mut challenger()).unwrap();
+        let public = [F::ZERO; 3];
+        let instances = VerifierInstances::new(vec![VerifierInstance::new(
+            &GateTableAir,
+            &vk,
+            log_height,
+            &public,
+        )]);
+
+        let report = security_report(&config, &instances).unwrap();
+        assert!(report.unassessed_components().is_empty());
+
+        // Every part of the Boolean path reaches the report under its own label.
+        for label in [
+            "binary-pcs-opening",
+            "bit-ring-switch",
+            "claim-pool-batching",
+        ] {
+            assert!(
+                report.terms().iter().any(|term| term.label == label),
+                "missing {label}"
+            );
+        }
+        report.require_security(SECURITY_BITS).unwrap();
+        assert!(report.require_security(128).is_err());
+    }
+
+    /// A cell outside the two Boolean values is refused at commitment.
+    #[test]
+    fn a_non_boolean_cell_is_refused() {
+        // Fixture state: one otherwise valid table with a single cell set to a tower element.
+        let log_height = 9;
+        let rows = 1usize << log_height;
+        let shapes = shapes(&[log_height]);
+        let config = PackedConfig::new(&shapes);
+        let (table, _) = trace(0x9400, log_height);
+
+        let mut cells = table.iter_polys().flatten().copied().collect::<Vec<_>>();
+        cells[7] = F::from_repr(0x1234);
+        let table = Table::new(RowMajorMatrix::new(cells, rows));
+
+        let Err(error) = config.pcs.commit(vec![table], &mut challenger()) else {
+            panic!("a non-Boolean cell addresses no bit")
+        };
+        assert!(matches!(
+            error,
+            BooleanTraceError::NonBooleanCell {
+                table: 0,
+                column: 0
+            }
+        ));
+    }
+
+    /// A batch asking to read one row ahead is refused rather than answered.
+    #[test]
+    fn a_successor_view_is_refused() {
+        // Fixture state: one table, one batch naming column 0 on both sides.
+        //
+        //     current [0]   an evaluation at the point
+        //     next    [0]   the same column weighted by a shifted equality table
+        //
+        // The reduction underneath answers the first and not the second.
+        let log_height = 9;
+        let shapes = shapes(&[log_height]);
+        let config = PackedConfig::new(&shapes);
+        let protocol = OpeningProtocol::new(vec![TableSpec::new(
+            shapes[0],
+            vec![OpeningBatch::new(vec![0], vec![0])],
+        )]);
+
+        // No assessment exists for a protocol the scheme would refuse, so a caller fails closed.
+        assert!(
+            PrescribedPointPcs::<F, Challenger>::prescribed_security(&config.pcs, &protocol)
+                .is_none()
+        );
+
+        let (table, _) = trace(0x9500, log_height);
+        let (_, data) = config.pcs.commit(vec![table], &mut challenger()).unwrap();
+        let point = Point::<F>::rand(&mut SmallRng::seed_from_u64(0x9501), log_height);
+        let Err(error) = config
+            .pcs
+            .open_at(data, &protocol, &[point], &mut challenger())
+        else {
+            panic!("a successor view is no evaluation at a point")
+        };
+        assert!(matches!(
+            error,
+            BooleanTraceError::SuccessorView { table: 0 }
+        ));
+    }
+}

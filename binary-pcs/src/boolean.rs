@@ -33,8 +33,11 @@
 //!
 //! # What binds what
 //!
-//! Committing binds the root, and verifying replays that binding.
+//! Committing binds the root, and the verifying side replays that binding itself.
 //! The two sides therefore start from one sponge state.
+//!
+//! A protocol holding several commitments binds each of them once, in its own order.
+//! So the binding is a call of its own rather than a step inside verification.
 //!
 //! The reduction then binds the opening point itself, before it sends anything.
 //! A caller therefore owes no binding of its own, unlike a bare prescribed-point opening.
@@ -43,11 +46,17 @@
 //!
 //! # Soundness
 //!
-//! Two errors compose by a union bound.
-//! The reduction charges `(d_log + 2 l') / |EF|`, and the commitment charges its own budget.
+//! Three errors compose by a union bound.
 //!
-//! Neither is subtracted from the other, and the reduction's term reaches no estimator here.
-//! A protocol composing this accounts for both in its own budget.
+//! ```text
+//!     commitment   the packed multilinear's own opening budget
+//!     reduction    (d_log + 2 l') / |EF| per point
+//!     pool         (k - 1) / |EF| for k claims folded under one challenge
+//! ```
+//!
+//! None of them is subtracted from another.
+//!
+//! All three come back labelled, so a report says which one is short.
 
 use alloc::vec;
 use alloc::vec::Vec;
@@ -60,14 +69,15 @@ use p3_commit::{Mmcs, MultilinearPcs};
 use p3_field::Field;
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
-use p3_security::{SecurityTerm, claim_pool_term};
+use p3_security::SecurityTerm;
+use p3_security::multilinear::{bit_ring_switch_term, claim_pool_term};
 use p3_sumcheck::layout::{Layout, SuffixProver};
 use p3_sumcheck::ring_switch::bits::{
     BitPacking, BitRingSwitch, BitRingSwitchProof, BitRingSwitchProofError,
 };
 use p3_sumcheck::{
-    ClaimPool, ClaimPoolError, OpeningBatch, OpeningProtocol, PrescribedPointPcs, TableShape,
-    TableSpec,
+    ClaimPool, ClaimPoolError, OpeningBatch, OpeningProtocol, PrescribedOpeningSecurity,
+    PrescribedPointPcs, TableShape, TableSpec,
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -85,25 +95,25 @@ use crate::prover::BinaryPcsProverData;
 /// The committed object is a bit witness.
 /// An opening answers for its multilinear extension at a point of the challenge field.
 ///
-/// # What a proving system needs first
+/// # What a proving system pays on top
 ///
-/// Two things, neither of them in this crate.
+/// A batched prover lends its trace back as a borrowed table of base-field cells.
 ///
-/// The batched prover lends its trace back as a borrowed table of field elements.
+/// A bit witness has none to lend, so an integration holds the table and packs at commit time.
 ///
-/// A bit witness has none to lend.
+/// The base field then has to be one the challenge field extends.
 ///
-/// Building one unpacks every cell, which gives back the space this scheme saves.
+/// The narrowest such level of the tower is `GF(2^8)`.
 ///
-/// So that borrow has to carry packed blocks instead.
+/// This scheme also draws its challenges from the field its own elements live in.
 ///
-/// The other is that constraints run at full speed only if the base field packs bit-sliced.
+/// So one cell per bit at the full challenge width is what the borrow costs today.
+///
+/// Constraints would also run wider if the base field packed bit-sliced.
 ///
 /// The packing trait forbids it, casting a packed value to an array of scalars unchanged.
 ///
 /// Bit-slicing is a compression, not a reinterpretation.
-///
-/// Until both are settled, an integration gives the saving back or runs one bit at a time.
 pub trait BooleanMultilinearPcs<EF, Challenger> {
     /// Succinct binding commitment sent to the verifier.
     type Commitment;
@@ -116,6 +126,13 @@ pub trait BooleanMultilinearPcs<EF, Challenger> {
 
     /// Variables the committed function has, so `2^n` bits in all.
     fn num_variables(&self) -> usize;
+
+    /// Bind a commitment into the transcript, as committing to one does.
+    ///
+    /// A prover binds while producing its commitment, and a verifier never produces one.
+    ///
+    /// Routing both sides through this call is what keeps the two sponges in step.
+    fn observe_commitment(&self, commitment: &Self::Commitment, challenger: &mut Challenger);
 
     /// Commit to a bit witness supplied bit-sliced, lane `j` of block `b` being bit `d*b + j`.
     ///
@@ -148,6 +165,8 @@ pub trait BooleanMultilinearPcs<EF, Challenger> {
 
     /// Check one proof against the values it claims at every point.
     ///
+    /// The commitment's binding is the caller's, replayed before this is reached.
+    ///
     /// # Errors
     ///
     /// Returns an error if a claim, a reduction, the commitment or the fold fails.
@@ -168,6 +187,8 @@ pub trait BooleanMultilinearPcs<EF, Challenger> {
 pub struct BooleanPcs<EF: EncodableLevel, MT, MX> {
     /// The commitment the packed multilinear is discharged against.
     inner: BinaryPcs<EF, EF, MT, MX>,
+    /// Schedule the commitment was built from, which prices its own openings.
+    config: BinaryPcsConfig,
     /// Variables the bit witness has, which is the packing's plus the absorbed ones.
     num_variables: usize,
 }
@@ -198,6 +219,7 @@ where
         }
         Ok(Self {
             inner: BinaryPcs::new(config, mmcs, round_mmcs),
+            config,
             num_variables,
         })
     }
@@ -241,6 +263,43 @@ where
     #[must_use]
     pub fn batching_security(num_claims: usize) -> SecurityTerm {
         claim_pool_term(num_claims, EF::bits())
+    }
+
+    /// Soundness cost of reducing this many bit claims to claims about the packing.
+    ///
+    /// One reduction per claim, none of them sharing a challenge with another.
+    #[must_use]
+    pub fn reduction_security(&self, num_claims: usize) -> SecurityTerm {
+        bit_ring_switch_term(
+            num_claims,
+            BitRingSwitch::<EF>::ABSORBED,
+            self.inner.num_variables(),
+            EF::bits(),
+        )
+    }
+
+    /// Every labelled algebraic error one opening of this many points charges.
+    ///
+    /// ```text
+    ///     commitment   the packed multilinear's own opening budget
+    ///     reduction    one bit ring switch per point
+    ///     pool         one fold closing every surviving claim at once
+    /// ```
+    ///
+    /// The three are independent draws, so a caller composes them by a union bound.
+    ///
+    /// Nothing here covers hash or transcript collisions, which the caller supplies.
+    #[must_use]
+    pub fn opening_security(&self, num_claims: usize) -> PrescribedOpeningSecurity {
+        PrescribedOpeningSecurity {
+            terms: vec![
+                self.config.security_regime().opening_term(num_claims),
+                self.reduction_security(num_claims),
+                Self::batching_security(num_claims),
+            ],
+            // Unique decoding fixes one candidate polynomial at commitment time.
+            log2_max_candidates: 0.0,
+        }
     }
 
     /// Check that every point names the committed function's variables.
@@ -289,6 +348,10 @@ where
 
     fn num_variables(&self) -> usize {
         Self::num_variables(self)
+    }
+
+    fn observe_commitment(&self, commitment: &Self::Commitment, challenger: &mut Challenger) {
+        self.inner.observe_commitment(commitment, challenger);
     }
 
     fn commit_bits<U: Underlier>(
@@ -379,9 +442,6 @@ where
                 reductions: proof.reductions.len(),
             });
         }
-
-        // Committing bound the root, so this side replays that binding before anything else.
-        self.inner.observe_commitment(commitment, challenger);
 
         // Each reduction turns its claim about the bits into one about the packing.
         let mut pool = ClaimPool::new(self.inner.num_variables());
@@ -528,7 +588,18 @@ mod tests {
 
     use super::*;
     use crate::params::BinaryPcsParams;
-    use crate::test_util::{MyMmcs, challenger, mmcs};
+    use crate::test_util::{MyChallenger, MyMmcs, challenger, mmcs};
+
+    /// A verifying transcript with the commitment's binding already replayed.
+    fn replayed(
+        pcs: &BooleanPcs<EF, MyMmcs, MyMmcs>,
+        commitment: &<MyMmcs as Mmcs<EF>>::Commitment,
+    ) -> MyChallenger {
+        // The surrounding protocol owns this binding, so a test plays its part.
+        let mut challenger = challenger();
+        pcs.observe_commitment(commitment, &mut challenger);
+        challenger
+    }
 
     type EF = BinaryField128;
 
@@ -602,9 +673,14 @@ mod tests {
 
         assert_eq!(values, alloc::vec![embedded(&bits).eval_base(&point)]);
 
-        let mut verifier_chal = challenger();
-        pcs.verify_at_points(&commitment, &points, &values, &proof, &mut verifier_chal)
-            .unwrap();
+        pcs.verify_at_points(
+            &commitment,
+            &points,
+            &values,
+            &proof,
+            &mut replayed(&pcs, &commitment),
+        )
+        .unwrap();
     }
 
     #[test]
@@ -639,16 +715,28 @@ mod tests {
             assert_eq!(value, reference.eval_base(point));
         }
 
-        pcs.verify_at_points(&commitment, &points, &values, &proof, &mut challenger())
-            .unwrap();
+        pcs.verify_at_points(
+            &commitment,
+            &points,
+            &values,
+            &proof,
+            &mut replayed(&pcs, &commitment),
+        )
+        .unwrap();
 
         // One wrong value among four is rejected, wherever it sits.
         for index in 0..NUM_POINTS {
             let mut tampered = values.clone();
             tampered[index] += EF::ONE;
             assert!(
-                pcs.verify_at_points(&commitment, &points, &tampered, &proof, &mut challenger())
-                    .is_err(),
+                pcs.verify_at_points(
+                    &commitment,
+                    &points,
+                    &tampered,
+                    &proof,
+                    &mut replayed(&pcs, &commitment)
+                )
+                .is_err(),
                 "value {index}"
             );
         }
@@ -817,8 +905,14 @@ mod tests {
                 prop_assert_eq!(value, reference.eval_base(point));
             }
             prop_assert!(
-                pcs.verify_at_points(&commitment, &points, &values, &proof, &mut challenger())
-                    .is_ok()
+                pcs.verify_at_points(
+                    &commitment,
+                    &points,
+                    &values,
+                    &proof,
+                    &mut replayed(&pcs, &commitment)
+                )
+                .is_ok()
             );
         }
     }

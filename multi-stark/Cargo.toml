@@ -57,6 +57,10 @@ tracing-subscriber = { workspace = true, features = ["std", "env-filter"] }
 name = "prove_binary_field"
 test = true
 
+[[example]]
+name = "prove_boolean_trace"
+test = true
+
 [[bench]]
 name = "poseidon2"
 harness = false

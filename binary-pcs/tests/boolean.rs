@@ -127,7 +127,9 @@ fn a_boolean_opening_round_trips_at_every_cap_height() {
             assert_eq!(value, reference.eval_base(point), "cap {cap_height}");
         }
 
-        pcs.verify_at_points(&commitment, &points, &values, &proof, &mut challenger())
+        let mut verifier_chal = challenger();
+        pcs.observe_commitment(&commitment, &mut verifier_chal);
+        pcs.verify_at_points(&commitment, &points, &values, &proof, &mut verifier_chal)
             .unwrap_or_else(|error| panic!("cap {cap_height}: {error:?}"));
     }
 }
@@ -167,7 +169,9 @@ fn a_boolean_opening_round_trips_over_grouped_leaves() {
             );
         }
 
-        pcs.verify_at_points(&commitment, &points, &values, &proof, &mut challenger())
+        let mut verifier_chal = challenger();
+        pcs.observe_commitment(&commitment, &mut verifier_chal);
+        pcs.verify_at_points(&commitment, &points, &values, &proof, &mut verifier_chal)
             .unwrap_or_else(|error| panic!("arity {log_folding_factor}: {error:?}"));
     }
 }
@@ -194,7 +198,9 @@ where
     for (point, &value) in points.iter().zip(&values) {
         assert_eq!(value, reference.eval_base(point), "{label}");
     }
-    pcs.verify_at_points(&commitment, &points, &values, &proof, &mut challenger())
+    let mut verifier_chal = challenger();
+    pcs.observe_commitment(&commitment, &mut verifier_chal);
+    pcs.verify_at_points(&commitment, &points, &values, &proof, &mut verifier_chal)
         .unwrap_or_else(|error| panic!("{label}: {error:?}"));
 
     postcard::to_allocvec(&proof).unwrap().len()
