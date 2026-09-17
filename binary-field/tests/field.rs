@@ -338,6 +338,33 @@ mod gf2_64_over_gf2_16 {
     test_frobenius!(super::F, super::EF);
 }
 
+mod rijndael_8b {
+    use num_bigint::BigUint;
+    use p3_field::PrimeCharacteristicRing;
+    use p3_field_testing::test_binary_field;
+
+    type F = p3_binary_field::Rijndael8b;
+
+    const ZEROS: [F; 1] = [F::ZERO];
+    const ONES: [F; 1] = [F::ONE];
+
+    /// Prime factorization of `2^8 - 1 = 255`.
+    fn multiplicative_group_prime_factorization() -> [(BigUint, u32); 3] {
+        [
+            (BigUint::from(3u32), 1),
+            (BigUint::from(5u32), 1),
+            (BigUint::from(17u32), 1),
+        ]
+    }
+
+    test_binary_field!(
+        super::F,
+        &super::ZEROS,
+        &super::ONES,
+        &super::multiplicative_group_prime_factorization()
+    );
+}
+
 mod gf2_128_over_gf2_16 {
     use p3_field_testing::{test_extension_field, test_frobenius};
 

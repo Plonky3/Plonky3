@@ -11,7 +11,7 @@ use std::hint::black_box;
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use p3_binary_field::{
     BinaryField8, BinaryField16, BinaryField32, BinaryField64, BinaryField128, Ghash128,
-    TowerLevel, poly_basis,
+    PackedRijndael8b, Rijndael8b, TowerLevel, poly_basis,
 };
 use p3_field::{BasedVectorSpace, Field, PackedValue, PrimeCharacteristicRing};
 use rand::distr::{Distribution, StandardUniform};
@@ -853,6 +853,98 @@ fn bench_batch_kernels(c: &mut Criterion) {
     group.finish();
 }
 
+/// The AES field against the tower's own byte field, scalar and packed.
+///
+/// Three arms over the same buffer of bytes, each reporting time per element:
+///
+/// ```text
+///     tower      byte table lookup, the representation already in the crate
+///     scalar     shift-and-fold, the portable route here
+///     packed     one instruction per register, where the target has it
+/// ```
+fn bench_aes(c: &mut Criterion) {
+    /// Bytes per buffer, comfortably inside the first level of cache.
+    const BYTES: usize = 4096;
+
+    let mut rng = SmallRng::seed_from_u64(7);
+    let left: Vec<u8> = (0..BYTES).map(|_| rng.random::<u8>() | 1).collect();
+    let right: Vec<u8> = (0..BYTES).map(|_| rng.random::<u8>() | 1).collect();
+
+    let tower_left: Vec<BinaryField8> = left.iter().map(|&b| BinaryField8::from_repr(b)).collect();
+    let tower_right: Vec<BinaryField8> =
+        right.iter().map(|&b| BinaryField8::from_repr(b)).collect();
+    let aes_left: Vec<Rijndael8b> = left.iter().map(|&b| Rijndael8b::from_byte(b)).collect();
+    let aes_right: Vec<Rijndael8b> = right.iter().map(|&b| Rijndael8b::from_byte(b)).collect();
+
+    let block = |from: &[Rijndael8b]| -> Vec<PackedRijndael8b<64>> {
+        from.as_chunks::<64>()
+            .0
+            .iter()
+            .map(|c| *PackedRijndael8b::<64>::from_slice(c))
+            .collect()
+    };
+    let packed_left = block(&aes_left);
+    let packed_right = block(&aes_right);
+
+    {
+        let mut group = c.benchmark_group("aes/mul");
+        group.throughput(criterion::Throughput::Elements(BYTES as u64));
+        group.bench_function("tower", |b| {
+            b.iter(|| {
+                let (x, y) = (black_box(&tower_left), black_box(&tower_right));
+                x.iter().zip(y).map(|(&a, &b)| a * b).sum::<BinaryField8>()
+            });
+        });
+        group.bench_function("scalar", |b| {
+            b.iter(|| {
+                let (x, y) = (black_box(&aes_left), black_box(&aes_right));
+                x.iter().zip(y).map(|(&a, &b)| a * b).sum::<Rijndael8b>()
+            });
+        });
+        group.bench_function("packed", |b| {
+            b.iter(|| {
+                let (x, y) = (black_box(&packed_left), black_box(&packed_right));
+                x.iter()
+                    .zip(y)
+                    .map(|(&a, &b)| a * b)
+                    .sum::<PackedRijndael8b<64>>()
+            });
+        });
+        group.finish();
+    }
+
+    let mut group = c.benchmark_group("aes/inverse");
+    group.throughput(criterion::Throughput::Elements(BYTES as u64));
+    group.bench_function("tower", |b| {
+        b.iter(|| {
+            black_box(&tower_left)
+                .iter()
+                .map(|x| x.inverse())
+                .sum::<BinaryField8>()
+        });
+    });
+    group.bench_function("scalar", |b| {
+        b.iter(|| {
+            black_box(&aes_left)
+                .iter()
+                .map(|x| x.inverse())
+                .sum::<Rijndael8b>()
+        });
+    });
+    group.bench_function("packed", |b| {
+        b.iter_batched_ref(
+            || packed_left.clone(),
+            |blocks| {
+                for block in blocks.iter_mut() {
+                    block.invert_or_zero();
+                }
+            },
+            BatchSize::SmallInput,
+        );
+    });
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_mul,
@@ -873,6 +965,7 @@ criterion_group!(
     bench_maps,
     bench_grind,
     bench_bulk,
-    bench_batch_kernels
+    bench_batch_kernels,
+    bench_aes
 );
 criterion_main!(benches);

@@ -3,6 +3,7 @@
 
 extern crate alloc;
 
+mod aes;
 mod bitslice;
 mod cantor;
 mod challenger;
@@ -18,6 +19,7 @@ mod tables;
 mod tower;
 mod transcript;
 
+pub use aes::{ByteMatrix, PackedRijndael8b, Rijndael8b};
 pub use bitslice::{
     Divisible, M128, M256, M512, PackedGf2, PackedGf2x8, PackedGf2x16, PackedGf2x32, PackedGf2x64,
     PackedGf2x128, PackedGf2x256, PackedGf2x512, Underlier, Word,

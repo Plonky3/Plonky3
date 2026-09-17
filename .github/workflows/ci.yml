@@ -99,6 +99,14 @@ jobs:
             sha_ni: true
             target: x86_64-unknown-linux-gnu
             modes: serial parallel
+          # The byte-wise Galois-field instructions have a 128-bit form that needs no wide
+          # register, and that form is the one no other leg compiles.
+          - name: linux, gfni, build only
+            os: ubuntu-latest
+            features: "+gfni"
+            compile_only: true
+            target: x86_64-unknown-linux-gnu
+            modes: serial parallel
           # `+avx512f` implies neither `+avx512bw` nor `+gfni`, so every other leg
           # compiles the scalar stub in place of the blocked change-of-basis kernel.
           - name: linux, avx512f+avx512bw+gfni, build only
