@@ -110,14 +110,17 @@ Currently the options for the command line arguments are:
 compressions over `BinaryField128` with the multilinear STARK prover and `BinaryPcs`, instead of
 a prime field and FRI:
 ```bash
-RUSTFLAGS="-Ctarget-cpu=native" cargo run --example prove_keccak_binary --release --features parallel -- --log-trace-length 15
-RUSTFLAGS="-Ctarget-cpu=native" cargo run --example prove_blake3_binary --release --features parallel -- --log-trace-length 10
+RUSTFLAGS="-Ctarget-cpu=native" cargo run --example prove_keccak_binary --release --features parallel -- --log-trace-length 14 --security-bits 96
+RUSTFLAGS="-Ctarget-cpu=native" cargo run --example prove_blake3_binary --release --features parallel -- --log-trace-length 10 --security-bits 96
 ```
-Both accept `--log-inv-rate`, `--pcs-pow-bits`, `--security-bits`, and `--folding` to tune the
-binary PCS, on top of the required `--log-trace-length` (`-l`). The binary Keccak-f AIR uses 25
-rows per permutation (one per round, plus the output row), so `prove_keccak_binary` proves
+Both accept `--log-inv-rate`, `--pcs-pow-bits`, `--security-bits` (default 100), and `--folding` to
+tune the binary PCS, on top of the required `--log-trace-length` (`-l`). The binary Keccak-f AIR
+uses 25 rows per permutation (one per round, plus the output row), so `prove_keccak_binary` proves
 `2^log-trace-length / 25` permutations; `prove_blake3_binary` proves `2^log-trace-length`
-compressions, one row per compression.
+compressions, one row per compression. Every trace cell is committed as a `BinaryField128`
+element, so the proven security the binary PCS can reach drops by one bit per committed variable:
+roughly `128 - (log-trace-length + ceil(log2(width)) + log-inv-rate + 3)`, with width 1625 for
+Keccak-f and 11536 for BLAKE3. Lower `--security-bits` for larger traces.
 
 Extra speedups may be possible with some configuration changes:
 - `JEMALLOC_SYS_WITH_MALLOC_CONF=retain:true,dirty_decay_ms:-1,muzzy_decay_ms:-1` will cause jemalloc to hang on to virtual memory. This may not affect the very first proof much, but can help significantly with subsequent proofs as fewer pages (if any) will need to be newly assigned by the OS. These settings might not be suitable for all production environments, e.g. if the process' virtual memory is limited by `ulimit` or `max_map_count`.
