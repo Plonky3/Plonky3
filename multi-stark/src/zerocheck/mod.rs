@@ -32,14 +32,13 @@ use p3_sumcheck::generic_degree::{
 use p3_sumcheck::layout::Table;
 use thiserror::Error;
 
+use crate::backend::{GenericBackend, ZerocheckBackend};
 use crate::folder::{
     InteractionMultilinearFolder, MultilinearFolder, ProverAir, VerifierAir, boundary_io_pins,
 };
 use crate::lookup::{ActiveLookupRuntime, AirLinkClaim, LookupRuntime};
 use crate::opening::{OpeningClaims, TableOpening};
-use crate::rounds::{
-    AirDegrees, AirOpenings, AirProfile, RoundStateBase, RoundStateExt, Stage, StageCoupling,
-};
+use crate::rounds::{AirDegrees, AirOpenings, AirProfile, RoundStateBase, Stage, StageCoupling};
 use crate::selectors::{BoundaryEvals, PeriodicError, periodic_evals_at, periodic_num_variables};
 use crate::zerocheck::transcript::{
     ZerocheckChallenges, ZerocheckProverTranscript, ZerocheckShape, ZerocheckVerifierTranscript,
@@ -511,7 +510,7 @@ impl<'a, A> AirZerocheck<'a, A> {
         <EF as ExtensionField<F>>::ExtensionPacking: From<EF> + From<<F as Field>::Packing>,
         Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
     {
-        self.prove_with_lookup(
+        self.prove_with_lookup::<F, EF, GenericBackend, Challenger>(
             preprocessed,
             tables,
             public_values,
@@ -526,6 +525,8 @@ impl<'a, A> AirZerocheck<'a, A> {
     /// This sumcheck therefore starts from that claim instead of from zero, and each AIR
     /// stage takes over its own share when the cube reaches that AIR's trace height.
     ///
+    /// Backend `B` computes each stage's round polynomials, folds, and openings.
+    ///
     /// # Panics
     ///
     /// Panics if the input lengths disagree with the number of AIRs.
@@ -533,7 +534,7 @@ impl<'a, A> AirZerocheck<'a, A> {
     /// Panics if a periodic column's period is not a power of two dividing the trace height.
     /// Panics if any trace height is less than two.
     #[tracing::instrument(skip_all)]
-    pub(crate) fn prove_with_lookup<F, EF, Challenger>(
+    pub(crate) fn prove_with_lookup<F, EF, B, Challenger>(
         &self,
         preprocessed: &[Option<&Table<F>>],
         tables: &[&Table<F>],
@@ -544,8 +545,8 @@ impl<'a, A> AirZerocheck<'a, A> {
     where
         F: TranscriptField,
         EF: ExtensionField<F>,
-        A: ProverAir<F, EF>,
-        <EF as ExtensionField<F>>::ExtensionPacking: From<EF> + From<<F as Field>::Packing>,
+        A: BaseAir<F> + Air<SymbolicAirBuilder<F, EF>>,
+        B: ZerocheckBackend<F, EF, A>,
         Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
     {
         self.validate_inputs(tables, preprocessed, public_values);
@@ -719,9 +720,9 @@ impl<'a, A> AirZerocheck<'a, A> {
             };
 
             let mut challenges = Vec::with_capacity(log_height);
-            // Active stages live as folded extension states.
+            // Active stages live as the backend's folded states.
             // claims[i] is the current reduced claim for states[i].
-            let mut states = Vec::<RoundStateExt<'_, '_, A, F, EF>>::new();
+            let mut states = Vec::new();
             let mut claims = Vec::<EF>::new();
 
             // Before any height activates, the full lookup claim is dormant.
@@ -762,7 +763,7 @@ impl<'a, A> AirZerocheck<'a, A> {
                 // Existing stages already live over the extension field.
                 // Extend each stage's internal round polynomial to the global degree and accumulate it.
                 for (state, &claim) in states.iter_mut().zip(claims.iter()) {
-                    let round_poly = state.round_poly(&eq_suffix);
+                    let round_poly = B::round(state, &eq_suffix);
                     let q1 = (claim - (EF::ONE - tau_round) * round_poly[0]) * tau_round_inv;
                     let unweighted_claim = round_poly[0] + q1;
                     let round_poly = interpolators[round_poly.len()].extend_evals(
@@ -786,7 +787,7 @@ impl<'a, A> AirZerocheck<'a, A> {
                         .map(|&air_index| beta_powers[air_index])
                         .collect::<Vec<_>>();
                     let mut state = RoundStateBase::new(stage, alpha, eta, betas, tau);
-                    let round_poly = state.round_poly(&eq_suffix);
+                    let round_poly = B::round0(&mut state, &eq_suffix);
                     let q1 =
                         (activating_claim - (EF::ONE - tau_round) * round_poly[0]) * tau_round_inv;
                     let unweighted_claim = round_poly[0] + q1;
@@ -828,7 +829,7 @@ impl<'a, A> AirZerocheck<'a, A> {
                     let q1 = (*claim - (EF::ONE - tau_round) * round_poly[0]) * tau_round_inv;
                     let unweighted_claim = round_poly[0] + q1;
                     *claim = interpolator.eval(round_poly, unweighted_claim, r);
-                    state.fold(r);
+                    B::fold(state, r);
                 }
 
                 // The newly activated stage joins the active list only after this round.
@@ -839,7 +840,7 @@ impl<'a, A> AirZerocheck<'a, A> {
                         (activating_claim - (EF::ONE - tau_round) * round_poly[0]) * tau_round_inv;
                     let unweighted_claim = round_poly[0] + q1;
                     claims.push(interpolator.eval(&round_poly, unweighted_claim, r));
-                    states.push(state.fold(r));
+                    states.push(B::fold0(state, r));
                 }
 
                 // Advance the shared equality factors to the next round.
@@ -875,7 +876,7 @@ impl<'a, A> AirZerocheck<'a, A> {
             .take(self.airs.len())
             .collect::<Vec<Option<AirOpenings<EF>>>>();
         for state in states {
-            for (air_index, opening) in state.into_openings() {
+            for (air_index, opening) in B::openings(state) {
                 openings[air_index] = Some(opening);
             }
         }
