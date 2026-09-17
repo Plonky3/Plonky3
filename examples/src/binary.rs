@@ -10,7 +10,7 @@ use core::fmt;
 use std::time::Instant;
 
 use p3_air::{Air, BaseAir};
-use p3_binary_field::{BinaryChallenger, BinaryField2, BinaryField128};
+use p3_binary_field::{BinaryChallenger, BinaryField2, BinaryField128, Ghash128, poly_basis};
 use p3_binary_pcs::{
     BinaryPcs, BinaryPcsConfig, BinaryPcsConfigError, BinaryPcsParams, BinaryPcsProverData,
     GroupedCodewordMmcs,
@@ -25,9 +25,9 @@ use p3_multi_stark::folder::{InteractionMultilinearFolder, MultilinearFolder};
 use p3_multi_stark::packed_ext::PackedExt;
 use p3_multi_stark::subfield::{SubfieldAcc, SubfieldVar};
 use p3_multi_stark::{
-    MultiStarkProof, ProverInstance, ProverInstances, ProvingError, SecurityError, SubfieldBackend,
-    VerificationError, VerifierInstance, VerifierInstances, prove_with_backend, security_report,
-    setup, verify,
+    MultiStarkProof, ProverInstance, ProverInstances, ProvingError, ReprBackend, SecurityError,
+    SubfieldBackend, VerificationError, VerifierInstance, VerifierInstances, prove_with_backend,
+    security_report, setup, verify,
 };
 use p3_sumcheck::layout::{Layout, SuffixProver, Table, Witness};
 use p3_symmetric::{CompressionFunctionFromHasher, SerializingHasher};
@@ -202,8 +202,9 @@ impl From<VerificationError<PcsError<BinaryStarkConfig>>> for BinaryProofError {
 /// choose among the resulting duplicate supertrait obligations; this trait states each distinct
 /// one exactly once, so its blanket impl below is what callers actually need to satisfy.
 ///
-/// The last bound is the folder [`SubfieldBackend`] evaluates the first zerocheck round with,
-/// inside `GF(4)`.
+/// The subfield bound is the folder [`SubfieldBackend`] evaluates the first zerocheck round with,
+/// inside `GF(4)`. The last two are the folders [`ReprBackend`] evaluates the later rounds with,
+/// in the polynomial basis.
 pub trait BinaryAir:
     BaseAir<F>
     + Air<InteractionSymbolicBuilder<F, F>>
@@ -213,7 +214,8 @@ pub trait BinaryAir:
     + for<'a> Air<InteractionMultilinearFolder<'a, F, PackedExt<F, F>, PackedExt<F, F>>>
     + for<'a> Air<
         MultilinearFolder<'a, F, SubfieldVar<F, BinaryField2>, SubfieldAcc<F, BinaryField2>>,
-    >
+    > + for<'a> Air<MultilinearFolder<'a, F, Ghash128, Ghash128>>
+    + for<'a> Air<InteractionMultilinearFolder<'a, F, Ghash128, Ghash128>>
 {
 }
 
@@ -226,8 +228,52 @@ impl<A> BinaryAir for A where
         + for<'a> Air<InteractionMultilinearFolder<'a, F, PackedExt<F, F>, PackedExt<F, F>>>
         + for<'a> Air<
             MultilinearFolder<'a, F, SubfieldVar<F, BinaryField2>, SubfieldAcc<F, BinaryField2>>,
-        >
+        > + for<'a> Air<MultilinearFolder<'a, F, Ghash128, Ghash128>>
+        + for<'a> Air<InteractionMultilinearFolder<'a, F, Ghash128, Ghash128>>
 {
+}
+
+/// A zerocheck backend the harness can prove with.
+#[derive(Clone, Copy, Debug)]
+enum Backend {
+    /// [`SubfieldBackend`] over `GF(4)`.
+    Subfield,
+    /// [`ReprBackend`] over `GF(4)`, with later rounds in [`Ghash128`].
+    PolyBasis,
+}
+
+impl Backend {
+    /// The backend this build proves with.
+    ///
+    /// With a hardware carryless multiply, later rounds run in the polynomial basis, where a
+    /// product is that multiply alone and a tower product adds three changes of basis around it.
+    /// Without one, later rounds stay in the tower basis.
+    const fn preferred() -> Self {
+        if poly_basis::HAS_HARDWARE_CLMUL {
+            Self::PolyBasis
+        } else {
+            Self::Subfield
+        }
+    }
+
+    /// Prove through this backend, whose proof and transcript are those of every other.
+    fn prove<A: BinaryAir>(
+        self,
+        config: &BinaryStarkConfig,
+        instances: ProverInstances<'_, BinaryStarkConfig, A>,
+        pow_bits: usize,
+        challenger: &mut Challenger,
+    ) -> Result<MultiStarkProof<BinaryStarkConfig>, ProvingError<PcsProverError<BinaryStarkConfig>>>
+    {
+        match self {
+            Self::Subfield => prove_with_backend::<_, _, SubfieldBackend<BinaryField2>>(
+                config, instances, pow_bits, challenger,
+            ),
+            Self::PolyBasis => prove_with_backend::<_, _, ReprBackend<BinaryField2, Ghash128>>(
+                config, instances, pow_bits, challenger,
+            ),
+        }
+    }
 }
 
 /// Proves and verifies `air` against `trace`, reporting size and timing measurements.
@@ -239,8 +285,9 @@ impl<A> BinaryAir for A where
 /// The statement's security is assessed once against `options.security_bits` before proving,
 /// so the timed phases are the plain prover and verifier.
 ///
-/// The prover runs its zerocheck through [`SubfieldBackend`] over `GF(4)`, whose proof is
-/// identical to the one [`p3_multi_stark::prove`] emits.
+/// The prover runs its zerocheck through [`ReprBackend`] over `GF(4)` and [`Ghash128`] when the
+/// build has a hardware carryless multiply, and through [`SubfieldBackend`] over `GF(4)`
+/// otherwise. Either proof is identical to the one [`p3_multi_stark::prove`] emits.
 ///
 /// # Panics
 ///
@@ -305,7 +352,7 @@ where
     drop(trace);
     let prover_instances =
         ProverInstances::new(vec![ProverInstance::new(air, table, &pk, &public_values)]);
-    let proof = prove_with_backend::<_, _, SubfieldBackend<BinaryField2>>(
+    let proof = Backend::preferred().prove(
         &config,
         prover_instances,
         options.sumcheck_pow_bits,
@@ -400,11 +447,11 @@ mod tests {
 
     /// The serialized proof of `air` on `trace`, then the next challenge its transcript draws.
     ///
-    /// With `subfield` the zerocheck runs through [`SubfieldBackend`], otherwise through [`prove`].
+    /// With a backend the zerocheck runs through it, otherwise through [`prove`].
     fn proof_transcript<A: BinaryAir>(
         air: &A,
         trace: &RowMajorMatrix<F>,
-        subfield: bool,
+        backend: Option<Backend>,
     ) -> (Vec<u8>, F) {
         let arity = log2_strict_usize(trace.height()) + log2_ceil_usize(trace.width());
         let params = BinaryPcsParams {
@@ -423,15 +470,9 @@ mod tests {
             &public_values,
         )]);
         let mut challenger = binary_challenger();
-        let proof = if subfield {
-            prove_with_backend::<_, _, SubfieldBackend<BinaryField2>>(
-                &config,
-                instances,
-                0,
-                &mut challenger,
-            )
-        } else {
-            prove(&config, instances, 0, &mut challenger)
+        let proof = match backend {
+            Some(backend) => backend.prove(&config, instances, 0, &mut challenger),
+            None => prove(&config, instances, 0, &mut challenger),
         }
         .expect("an honest trace proves");
         let bytes = postcard::to_allocvec(&proof).expect("postcard serialization must not fail");
@@ -443,40 +484,43 @@ mod tests {
         <F as HasSubfield<BinaryField2>>::all_in_subfield(&trace.values)
     }
 
+    /// Require every harness backend to emit the proof and transcript of [`prove`].
+    fn assert_backends_prove_byte_for_byte<A: BinaryAir>(air: &A, trace: &RowMajorMatrix<F>) {
+        let generic = proof_transcript(air, trace, None);
+        for backend in [Backend::Subfield, Backend::PolyBasis] {
+            assert_eq!(
+                proof_transcript(air, trace, Some(backend)),
+                generic,
+                "{backend:?}"
+            );
+        }
+    }
+
     #[test]
-    fn subfield_backend_proves_the_keccak_air_byte_for_byte() {
+    fn backends_prove_the_keccak_air_byte_for_byte() {
         // One permutation pads to 32 bit-valued rows of a degree-three AIR with successor columns.
         let air = KeccakBinaryAir {};
         let trace = air.generate_random_trace_rows::<F>(1, 0);
         assert_eq!(trace.height(), 32);
         assert!(cells_fit_gf4(&trace));
-        assert_eq!(
-            proof_transcript(&air, &trace, true),
-            proof_transcript(&air, &trace, false)
-        );
+        assert_backends_prove_byte_for_byte(&air, &trace);
     }
 
     #[test]
-    fn subfield_backend_proves_the_blake3_air_byte_for_byte() {
+    fn backends_prove_the_blake3_air_byte_for_byte() {
         // Four compressions, one bit-valued row each, of a degree-two AIR.
         let air = Blake3BinaryAir {};
         let trace = air.generate_random_trace_rows::<F>(4, 0);
         assert!(cells_fit_gf4(&trace));
-        assert_eq!(
-            proof_transcript(&air, &trace, true),
-            proof_transcript(&air, &trace, false)
-        );
+        assert_backends_prove_byte_for_byte(&air, &trace);
     }
 
     #[test]
-    fn subfield_backend_proves_a_full_width_trace_byte_for_byte() {
-        // The recurrence starts from full-width cells, so its stage cannot fit `GF(4)` and the
-        // subfield backend runs the generic kernels.
+    fn backends_prove_a_full_width_trace_byte_for_byte() {
+        // The recurrence starts from full-width cells, so its stage cannot fit `GF(4)`: its first
+        // round runs the generic kernel, and its later rounds run in each backend's field.
         let trace = recurrence_trace(4);
         assert!(!cells_fit_gf4(&trace));
-        assert_eq!(
-            proof_transcript(&RecurrenceAir, &trace, true),
-            proof_transcript(&RecurrenceAir, &trace, false)
-        );
+        assert_backends_prove_byte_for_byte(&RecurrenceAir, &trace);
     }
 }
