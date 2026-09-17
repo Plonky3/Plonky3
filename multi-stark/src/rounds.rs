@@ -236,14 +236,17 @@ pub(crate) struct RoundStateBase<'air, 'data, A, F: Field, EF> {
 ///
 /// Columns stay SIMD-packed as long as there are enough residual rows to fill a packed lane.
 /// Once a fold would leave fewer rows than a lane, columns unpack to scalar form.
-enum ExtColumns<F: Field, EF: ExtensionField<F>> {
+///
+/// Packed lanes hold challenge-field elements; scalar columns hold elements of the arithmetic
+/// field `R` of the round state.
+enum ExtColumns<F: Field, EF: ExtensionField<F>, R = EF> {
     /// One SIMD lane per residual row, holding several rows per stored element.
     Packed(Vec<Poly<EF::ExtensionPacking>>),
-    /// One extension element per residual row.
-    Scalar(Vec<Poly<EF>>),
+    /// One arithmetic-field element per residual row.
+    Scalar(Vec<Poly<R>>),
 }
 
-impl<F: Field, EF: ExtensionField<F>> ExtColumns<F, EF> {
+impl<F: Field, EF: ExtensionField<F>, R> ExtColumns<F, EF, R> {
     /// Number of stored columns.
     const fn len(&self) -> usize {
         match self {
@@ -288,19 +291,21 @@ impl<F: Field, EF: ExtensionField<F>> ExtColumns<F, EF> {
         }
     }
 
-    /// Borrow the columns as scalar extension elements.
+    /// Borrow the columns as scalar arithmetic-field elements.
     ///
     /// # Panics
     ///
     /// Panics if the columns are still packed.
     /// Callers gate on the same width threshold that decides the storage variant, so this never fires.
-    fn as_scalar(&self) -> &[Poly<EF>] {
+    fn as_scalar(&self) -> &[Poly<R>] {
         match self {
             Self::Scalar(cols) => cols,
             Self::Packed(_) => unreachable!("round_poly_unpacked requires scalar columns"),
         }
     }
+}
 
+impl<F: Field, EF: ExtensionField<F>> ExtColumns<F, EF> {
     /// Fold the prefix variable of every column at `r`.
     ///
     /// Stays packed when `want_packed` holds; otherwise unpacks to scalar form in the same pass.
@@ -372,17 +377,28 @@ fn packed_window<F: Field, EF: ExtensionField<F>>(
 ///
 /// Owns the folded trace columns, boundary selectors, and repeat-last next-row tail values needed
 /// by the remaining rounds.
-pub(crate) struct RoundStateExt<'air, 'data, A, F: Field, EF: ExtensionField<F>> {
+///
+/// The row loop computes in `R`, a field isomorphic to the challenge field `EF`:
+///
+/// ```text
+///     in R  : columns, tails, selector prefix, alpha and its powers, lookup coefficients
+///     in EF : zerocheck point, beta powers, lookup scale, claims, interpolators
+/// ```
+///
+/// `R::from` and `EF::from` must be mutually inverse field isomorphisms.
+/// Each round's raw sums cross back into `EF` once, before they meet the claims.
+/// With `R = EF` both conversions are the identity.
+pub(crate) struct RoundStateExt<'air, 'data, A, F: Field, EF: ExtensionField<F>, R = EF> {
     /// Public inputs forwarded to the AIR.
     public_values: Vec<&'data [F]>,
     /// Random scalar batching the AIR constraints.
-    alpha: EF,
+    alpha: R,
     /// Descending alpha powers for each AIR, one per constraint the folder batches.
-    alpha_powers: Vec<Vec<EF>>,
+    alpha_powers: Vec<Vec<R>>,
     /// Folded boundary-selector values at the current sumcheck prefix.
-    boundary: BoundaryEvals<EF>,
+    boundary: BoundaryEvals<R>,
     /// Main and preprocessed columns after the first base-field fold.
-    columns: ExtColumns<F, EF>,
+    columns: ExtColumns<F, EF, R>,
     /// Beta power for each AIR in canonical input order.
     betas: Vec<EF>,
     /// Ordinary AIR constraints grouped by their native round-polynomial degree.
@@ -398,9 +414,9 @@ pub(crate) struct RoundStateExt<'air, 'data, A, F: Field, EF: ExtensionField<F>>
     /// Repeat-last successor values at the folded tail row, one entry per column.
     ///
     /// Zero for every column no AIR reads on the next row.
-    next_tail: Vec<EF>,
+    next_tail: Vec<R>,
     /// Lookup/AIR-link coefficients retained from this stage's base-field round.
-    coupling: InteractionCoupling<EF>,
+    coupling: InteractionCoupling<R>,
     /// Common scalar applied to lookup claims and evaluations after grouping.
     lookup_scale: EF,
 }
@@ -671,6 +687,16 @@ enum NodeStep<F> {
     Unit(usize),
     /// Add the differences once, scaled by the gap between the two nodes.
     Scaled(F),
+}
+
+impl<F> NodeStep<F> {
+    /// The same step, with the gap of a scaled step carried through `f`.
+    fn map<T>(self, f: impl FnOnce(F) -> T) -> NodeStep<T> {
+        match self {
+            Self::Unit(count) => NodeStep::Unit(count),
+            Self::Scaled(step) => NodeStep::Scaled(f(step)),
+        }
+    }
 }
 
 /// Pair each interpolation node a round evaluates with the step that reaches it.
@@ -1201,6 +1227,14 @@ fn finish_round<EF: Field>(
         .chain(interaction_groups.iter())
         .for_each(|group| group.combine_evals(&mut out, tau));
     out
+}
+
+/// Carry per-node sums from a round state's arithmetic field back into the challenge field.
+fn lower_evals<R, EF: From<R>>(evals: Vec<Vec<R>>) -> Vec<Vec<EF>> {
+    evals
+        .into_iter()
+        .map(|evals| evals.into_iter().map(EF::from).collect())
+        .collect()
 }
 
 impl<'air, 'data, A, F, EF> RoundStateBase<'air, 'data, A, F, EF>
@@ -1951,10 +1985,11 @@ where
     }
 }
 
-impl<'air, 'data, A, F, EF> RoundStateExt<'air, 'data, A, F, EF>
+impl<'air, 'data, A, F, EF, R> RoundStateExt<'air, 'data, A, F, EF, R>
 where
     F: Field,
-    EF: ExtensionField<F>,
+    EF: ExtensionField<F> + From<R>,
+    R: Field + From<EF>,
 {
     fn num_evals(&self) -> usize {
         self.columns.num_evals()
@@ -1982,7 +2017,7 @@ where
             .columns
             .as_scalar()
             .iter()
-            .map(|poly| poly.as_constant().unwrap())
+            .map(|poly| EF::from(poly.as_constant().unwrap()))
             .collect::<Vec<_>>();
         let all_next = self.next_tail;
 
@@ -1995,13 +2030,13 @@ where
                     .air
                     .main_next_row_columns()
                     .into_iter()
-                    .map(|column| all_next[slot.main_offset + column])
+                    .map(|column| EF::from(all_next[slot.main_offset + column]))
                     .collect();
                 let preprocessed_next = slot
                     .air
                     .preprocessed_next_row_columns()
                     .into_iter()
-                    .map(|column| all_next[slot.preprocessed_offset + column])
+                    .map(|column| EF::from(all_next[slot.preprocessed_offset + column]))
                     .collect();
 
                 (
@@ -2018,49 +2053,27 @@ where
             .collect()
     }
 
-    /// Evaluate this round's polynomial at every interpolation node.
+    /// Evaluate this round's polynomial one residual row at a time, in the arithmetic field.
     ///
-    /// The packed kernel runs while a fold still leaves enough residual rows to fill a lane.
+    /// `eq_suffix` holds each residual row's eq weight in `R`.
+    ///
+    /// The interpolation nodes are the challenge field's, carried into `R`.
+    /// The per-node sums cross back into the challenge field once, at the end.
     #[tracing::instrument(skip_all, level = "debug")]
-    pub(crate) fn round_poly(&mut self, eq_suffix: &Poly<EF>) -> Vec<EF>
+    fn round_poly_unpacked(&mut self, eq_suffix: &Poly<R>) -> Vec<EF>
     where
-        A: for<'b> Air<MultilinearFolder<'b, F, EF, EF>>
-            + for<'b> Air<
-                MultilinearFolder<
-                    'b,
-                    F,
-                    PackedExt<F, EF::ExtensionPacking>,
-                    PackedExt<F, EF::ExtensionPacking>,
-                >,
-            > + for<'b> Air<InteractionMultilinearFolder<'b, F, EF, EF>>
-            + for<'b> Air<
-                InteractionMultilinearFolder<
-                    'b,
-                    F,
-                    PackedExt<F, EF::ExtensionPacking>,
-                    PackedExt<F, EF::ExtensionPacking>,
-                >,
-            >,
-        EF::ExtensionPacking: From<EF> + From<F::Packing>,
-    {
-        if self.num_evals() / 2 < F::Packing::WIDTH {
-            self.round_poly_unpacked(eq_suffix)
-        } else {
-            self.round_poly_packed(eq_suffix)
-        }
-    }
-
-    #[tracing::instrument(skip_all, level = "debug")]
-    fn round_poly_unpacked(&mut self, eq_suffix: &Poly<EF>) -> Vec<EF>
-    where
-        A: for<'b> Air<MultilinearFolder<'b, F, EF, EF>>
-            + for<'b> Air<InteractionMultilinearFolder<'b, F, EF, EF>>,
+        R: Algebra<F>,
+        A: for<'b> Air<MultilinearFolder<'b, F, R, R>>
+            + for<'b> Air<InteractionMultilinearFolder<'b, F, R, R>>,
     {
         let width = self.width();
         let num_evals = self.num_evals();
         let half = num_evals / 2;
         let degree = self.degree();
-        let schedule = node_schedule::<EF>(evaluated_nodes(&self.slots, degree, true));
+        let schedule = node_schedule::<EF>(evaluated_nodes(&self.slots, degree, true))
+            .into_iter()
+            .map(|(node, step)| (node, step.map(R::from)))
+            .collect::<Vec<_>>();
         let next_columns = next_row_runs(&self.slots);
         let constraint_degrees = self
             .slots
@@ -2074,7 +2087,7 @@ where
             .collect::<Vec<_>>();
 
         let scratch = eq_suffix.as_slice().par_iter().enumerate().par_fold_reduce(
-            || Scratch::<EF, EF>::new(&constraint_degrees, &interaction_degrees, width),
+            || Scratch::<R, R>::new(&constraint_degrees, &interaction_degrees, width),
             |mut scratch, (s, &eq_suffix)| {
                 let columns = self.columns.as_scalar();
                 for ((local, local_delta), column) in scratch
@@ -2170,11 +2183,11 @@ where
                 lhs.constraint_evals
                     .iter_mut()
                     .zip(rhs.constraint_evals)
-                    .for_each(|(lhs, rhs)| EF::add_slices(lhs, &rhs));
+                    .for_each(|(lhs, rhs)| R::add_slices(lhs, &rhs));
                 lhs.interaction_evals
                     .iter_mut()
                     .zip(rhs.interaction_evals)
-                    .for_each(|(lhs, rhs)| EF::add_slices(lhs, &rhs));
+                    .for_each(|(lhs, rhs)| R::add_slices(lhs, &rhs));
                 lhs
             },
         );
@@ -2183,10 +2196,84 @@ where
             &mut self.interaction_groups,
             &self.betas,
             self.lookup_scale,
-            &scratch.constraint_evals,
-            &scratch.interaction_evals,
+            &lower_evals(scratch.constraint_evals),
+            &lower_evals(scratch.interaction_evals),
             self.tau.as_slice()[self.round],
         )
+    }
+
+    /// Update each group's claim and every repeat-last tail for binding the next variable at `r`.
+    ///
+    /// The tails read the columns before they fold, so this runs first.
+    fn fold_claims_and_tails(&mut self, r: EF) {
+        let tau = self.tau.as_slice()[self.round];
+        self.constraint_groups
+            .iter_mut()
+            .chain(self.interaction_groups.iter_mut())
+            .for_each(|group| group.claim = group.eval(tau, r));
+
+        let half = self.num_evals() / 2;
+        let r = R::from(r);
+
+        // Fold each successor column's repeat-last tail in place with the value at row `half`.
+        // Read that row straight from the current storage, no per-column temporary.
+        for run in next_row_runs(&self.slots) {
+            let next_tail = &mut self.next_tail[run.clone()];
+            match &self.columns {
+                ExtColumns::Scalar(cols) => {
+                    for (next_tail, col) in next_tail.iter_mut().zip(&cols[run]) {
+                        let lo = col.as_slice()[half];
+                        *next_tail = lo + r * (*next_tail - lo);
+                    }
+                }
+                ExtColumns::Packed(cols) => {
+                    let packing_width = F::Packing::WIDTH;
+                    let (group, lane) = (half / packing_width, half % packing_width);
+                    for (next_tail, col) in next_tail.iter_mut().zip(&cols[run]) {
+                        let lo = R::from(col.as_slice()[group].extract(lane));
+                        *next_tail = lo + r * (*next_tail - lo);
+                    }
+                }
+            }
+        }
+    }
+}
+
+impl<'air, 'data, A, F, EF> RoundStateExt<'air, 'data, A, F, EF>
+where
+    F: Field,
+    EF: ExtensionField<F>,
+{
+    /// Evaluate this round's polynomial at every interpolation node.
+    ///
+    /// The packed kernel runs while a fold still leaves enough residual rows to fill a lane.
+    #[tracing::instrument(skip_all, level = "debug")]
+    pub(crate) fn round_poly(&mut self, eq_suffix: &Poly<EF>) -> Vec<EF>
+    where
+        A: for<'b> Air<MultilinearFolder<'b, F, EF, EF>>
+            + for<'b> Air<
+                MultilinearFolder<
+                    'b,
+                    F,
+                    PackedExt<F, EF::ExtensionPacking>,
+                    PackedExt<F, EF::ExtensionPacking>,
+                >,
+            > + for<'b> Air<InteractionMultilinearFolder<'b, F, EF, EF>>
+            + for<'b> Air<
+                InteractionMultilinearFolder<
+                    'b,
+                    F,
+                    PackedExt<F, EF::ExtensionPacking>,
+                    PackedExt<F, EF::ExtensionPacking>,
+                >,
+            >,
+        EF::ExtensionPacking: From<EF> + From<F::Packing>,
+    {
+        if self.num_evals() / 2 < F::Packing::WIDTH {
+            self.round_poly_unpacked(eq_suffix)
+        } else {
+            self.round_poly_packed(eq_suffix)
+        }
     }
 
     /// SIMD-packed twin of the scalar kernel above.
@@ -2431,37 +2518,9 @@ where
     where
         A: for<'b> Air<MultilinearFolder<'b, F, EF, EF>>,
     {
-        let tau = self.tau.as_slice()[self.round];
-        self.constraint_groups
-            .iter_mut()
-            .chain(self.interaction_groups.iter_mut())
-            .for_each(|group| group.claim = group.eval(tau, r));
+        self.fold_claims_and_tails(r);
 
-        let num_evals = self.num_evals();
-        let half = num_evals / 2;
-
-        // Fold each successor column's repeat-last tail in place with the value at row `half`.
-        // Read that row straight from the current storage, no per-column temporary.
-        for run in next_row_runs(&self.slots) {
-            let next_tail = &mut self.next_tail[run.clone()];
-            match &self.columns {
-                ExtColumns::Scalar(cols) => {
-                    for (next_tail, col) in next_tail.iter_mut().zip(&cols[run]) {
-                        let lo = col.as_slice()[half];
-                        *next_tail = lo + r * (*next_tail - lo);
-                    }
-                }
-                ExtColumns::Packed(cols) => {
-                    let packing_width = F::Packing::WIDTH;
-                    let (group, lane) = (half / packing_width, half % packing_width);
-                    for (next_tail, col) in next_tail.iter_mut().zip(&cols[run]) {
-                        let lo = col.as_slice()[group].extract(lane);
-                        *next_tail = lo + r * (*next_tail - lo);
-                    }
-                }
-            }
-        }
-
+        let half = self.num_evals() / 2;
         let want_packed = (half / 2) >= F::Packing::WIDTH;
         self.columns = core::mem::replace(&mut self.columns, ExtColumns::Scalar(Vec::new()))
             .fold(r, want_packed);
