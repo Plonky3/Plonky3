@@ -152,34 +152,42 @@ fn stage_pass<F: ButterflyField, const INVERSE: bool>(
 ) {
     let half = (1 << j) * width;
     let per_task = (BUTTERFLY_GRAIN / half).max(1);
-    values
-        .par_chunks_mut(per_task * (half << 1))
-        .enumerate()
-        .for_each(|(task, group)| {
-            let first = task * per_task;
-            let mut t = twiddles.at(j, first);
-            // Invariant: blocks are visited in ascending index order.
-            // Carrying the twiddle from one block to the next relies on it.
-            for (i, block) in group.chunks_mut(half << 1).enumerate() {
-                if i != 0 {
-                    t += twiddles.step(first + i);
-                }
-                let (lo, hi) = block.split_at_mut(half);
-                let butterfly = |lo: &mut [F], hi: &mut [F]| {
-                    F::butterfly::<INVERSE>(lo, hi, t);
-                };
-                // Pairs are independent across the block.
-                //
-                // So a block wider than the grain is split further, not run on one thread.
-                if half <= BUTTERFLY_GRAIN {
-                    butterfly(lo, hi);
-                } else {
-                    lo.par_chunks_mut(BUTTERFLY_GRAIN)
-                        .zip(hi.par_chunks_mut(BUTTERFLY_GRAIN))
-                        .for_each(|(lo, hi)| butterfly(lo, hi));
-                }
+    let task_len = per_task * (half << 1);
+    let task = |(task, group): (usize, &mut [F])| {
+        let first = task * per_task;
+        let mut t = twiddles.at(j, first);
+        // Invariant: blocks are visited in ascending index order.
+        // Carrying the twiddle from one block to the next relies on it.
+        for (i, block) in group.chunks_mut(half << 1).enumerate() {
+            if i != 0 {
+                t += twiddles.step(first + i);
             }
-        });
+            let (lo, hi) = block.split_at_mut(half);
+            let butterfly = |lo: &mut [F], hi: &mut [F]| {
+                F::butterfly::<INVERSE>(lo, hi, t);
+            };
+            // Pairs are independent across the block.
+            //
+            // So a block wider than the grain is split further, not run on one thread.
+            if half <= BUTTERFLY_GRAIN {
+                butterfly(lo, hi);
+            } else {
+                lo.par_chunks_mut(BUTTERFLY_GRAIN)
+                    .zip(hi.par_chunks_mut(BUTTERFLY_GRAIN))
+                    .for_each(|(lo, hi)| butterfly(lo, hi));
+            }
+        }
+    };
+
+    // A pass covering one task has nothing to spread over the machine.
+    //
+    // Dispatching it anyway costs a thread handoff per stage.
+    // The narrow stages of a short transform pay that once each and get nothing back.
+    if values.len() > task_len {
+        values.par_chunks_mut(task_len).enumerate().for_each(task);
+    } else {
+        values.chunks_mut(task_len).enumerate().for_each(task);
+    }
 }
 
 /// Run the `log_rows` adjacent stages a tile of `2^log_rows` rows is closed under.
@@ -465,7 +473,7 @@ fn group_pass<F: ButterflyField, const INVERSE: bool>(
     }
 }
 
-/// Run every stage of the transform under one tile shape.
+/// Run the `top` narrowest stages of the transform under one tile shape.
 ///
 /// # Algorithm
 ///
@@ -473,8 +481,8 @@ fn group_pass<F: ButterflyField, const INVERSE: bool>(
 /// adjacent stages, each short enough that the rows it is closed under fit one staging tile:
 ///
 /// ```text
-///     stage   ℓ-1 ................ t+2f  t+2f-1 ..... t+f  t+f-1 ..... t  t-1 ... 0
-///             \_____ staged group _____/  \_ staged group _/  \_ group _/  \_ tile _/
+///     stage   top-1 .............. t+2f  t+2f-1 ..... t+f  t+f-1 ..... t  t-1 ... 0
+///             \____ staged group ____/  \_ staged group _/  \_ group _/  \_ tile _/
 /// ```
 ///
 /// The boundaries are counted up from the tile, so a short remainder falls to the top group.
@@ -484,23 +492,26 @@ fn run<F: ButterflyField, const INVERSE: bool>(
     values: &mut [F],
     width: usize,
     log_n: usize,
+    top: usize,
     twiddles: &Twiddles<F>,
     schedule: &Schedule,
 ) {
-    // The schedule is the caller's, so bring it inside what this matrix can hold: a tile is at
-    // most the whole height, and a staged row is a run of matrix rows that must not straddle a
-    // butterfly of the narrowest stage above the tile, which pairs rows `2^tile` apart.
-    let tile = schedule.log_tile_rows.min(log_n);
+    // The schedule is the caller's, so bring it inside what this call can use.
+    //
+    // - A tile is at most the range of stages asked for.
+    // - A staged row is a run of matrix rows.
+    // - That run must not straddle a butterfly of the narrowest stage above the tile.
+    let tile = schedule.log_tile_rows.min(top);
     let slab = schedule.log_slab_rows.min(tile);
     let group = if schedule.log_staged_rows >= MIN_FUSED_STAGES {
         schedule.log_staged_rows
     } else {
         1
     };
-    let groups = (log_n - tile).div_ceil(group);
+    let groups = (top - tile).div_ceil(group);
     let bounds = |g: usize| {
         let low = tile + g * group;
-        (low, (low + group).min(log_n))
+        (low, (low + group).min(top))
     };
 
     if INVERSE {
@@ -522,6 +533,43 @@ fn run<F: ButterflyField, const INVERSE: bool>(
     }
 }
 
+/// Run the `top` narrowest stages over a row-major buffer of `width` columns, in place.
+///
+/// Stages are numbered by the distance they pair rows across, so stage zero is the narrowest.
+/// The whole transform is every stage the row count allows.
+///
+/// A caller that stops short is left holding the matrix part-way through the network.
+/// What remains of it is the stages from `top` upwards.
+///
+/// # Panics
+/// Panics if the row count is not a power of two.
+/// Panics if the subspace dimension it calls for exceeds the bit width of the level.
+/// Panics if the stage count exceeds that dimension.
+pub(crate) fn transform_stages<F: ButterflyField, const INVERSE: bool>(
+    values: &mut [F],
+    width: usize,
+    top: usize,
+    shift: F,
+) {
+    let log_n = log2_strict_usize(values.len() / width);
+    assert!(log_n <= 1 << F::LOG_BITS, "domain exceeds field dimension");
+    assert!(top <= log_n, "stage count exceeds the domain dimension");
+    let twiddles = Twiddles::new(log_n, shift);
+
+    // A matrix no larger than a tile is cache-resident for the whole transform, so blocking it
+    // would only add bookkeeping to stages already free of memory traffic.
+    if core::mem::size_of_val(values) <= DEEP_TILE_BYTES {
+        for step in 0..top {
+            let j = if INVERSE { step } else { top - 1 - step };
+            stage_pass::<F, INVERSE>(values, width, j, &twiddles);
+        }
+        return;
+    }
+
+    let schedule = Schedule::new::<F>(width, log_n);
+    run::<F, INVERSE>(values, width, log_n, top, &twiddles, &schedule);
+}
+
 /// Transform a matrix in place, in whichever direction the flag selects.
 fn transform<F: ButterflyField, const INVERSE: bool>(
     mut mat: RowMajorMatrix<F>,
@@ -529,20 +577,7 @@ fn transform<F: ButterflyField, const INVERSE: bool>(
 ) -> RowMajorMatrix<F> {
     let width = mat.width();
     let log_n = log2_strict_usize(mat.height());
-    let twiddles = Twiddles::new(log_n, shift);
-
-    // A matrix no larger than a tile is cache-resident for the whole transform, so blocking it
-    // would only add bookkeeping to stages already free of memory traffic.
-    if core::mem::size_of_val(mat.values.as_slice()) <= DEEP_TILE_BYTES {
-        for step in 0..log_n {
-            let j = if INVERSE { step } else { log_n - 1 - step };
-            stage_pass::<F, INVERSE>(&mut mat.values, width, j, &twiddles);
-        }
-        return mat;
-    }
-
-    let schedule = Schedule::new::<F>(width, log_n);
-    run::<F, INVERSE>(&mut mat.values, width, log_n, &twiddles, &schedule);
+    transform_stages::<F, INVERSE>(&mut mat.values, width, log_n, shift);
     mat
 }
 
@@ -700,7 +735,14 @@ mod tests {
             stage_by_stage::<F, false>(&mut expected, &twiddles);
 
             let mut blocked = coeffs.clone();
-            run::<F, false>(&mut blocked.values, width, log_n, &twiddles, schedule);
+            run::<F, false>(
+                &mut blocked.values,
+                width,
+                log_n,
+                log_n,
+                &twiddles,
+                schedule,
+            );
             assert_eq!(blocked, expected, "forward {label}");
 
             // Inverse: same comparison with the stage order reversed.
@@ -708,7 +750,14 @@ mod tests {
             stage_by_stage::<F, true>(&mut expected, &twiddles);
 
             let mut blocked = coeffs.clone();
-            run::<F, true>(&mut blocked.values, width, log_n, &twiddles, schedule);
+            run::<F, true>(
+                &mut blocked.values,
+                width,
+                log_n,
+                log_n,
+                &twiddles,
+                schedule,
+            );
             assert_eq!(blocked, expected, "inverse {label}");
         }
     }
@@ -805,12 +854,26 @@ mod tests {
                 format!("log_n={log_n} width={width} shift={shift_bits:#x} workers={workers}");
 
             let mut blocked = coeffs.clone();
-            run::<F, false>(&mut blocked.values, width, log_n, &twiddles, &schedule);
+            run::<F, false>(
+                &mut blocked.values,
+                width,
+                log_n,
+                log_n,
+                &twiddles,
+                &schedule,
+            );
             assert_eq!(blocked, walked, "ntt {label}");
 
             // Undoing the walk's own codeword holds the inverse schedule to the same twiddles.
             let mut blocked = walked.clone();
-            run::<F, true>(&mut blocked.values, width, log_n, &twiddles, &schedule);
+            run::<F, true>(
+                &mut blocked.values,
+                width,
+                log_n,
+                log_n,
+                &twiddles,
+                &schedule,
+            );
             assert_eq!(blocked, coeffs, "intt {label}");
         }
     }
