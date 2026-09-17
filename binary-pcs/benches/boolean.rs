@@ -141,8 +141,9 @@ fn bench_open(c: &mut Criterion) {
         let packed = boolean_pcs(log_bits);
         let mut chal = challenger();
         let (_, data) = packed.commit_bits(&bits, &mut chal).unwrap();
+        let points = vec![point.clone()];
         let (_, proof) = packed
-            .open_at_point(data.clone(), &point, &mut chal.clone())
+            .open_at_points(data.clone(), &points, &mut chal.clone())
             .unwrap();
         eprintln!(
             "boolean/proof_size_packed/{log_bits}: {} bytes",
@@ -151,7 +152,11 @@ fn bench_open(c: &mut Criterion) {
         group.bench_with_input(BenchmarkId::new("packed", log_bits), &point, |b, point| {
             b.iter_batched(
                 || (data.clone(), chal.clone()),
-                |(data, mut chal)| packed.open_at_point(data, point, &mut chal).unwrap(),
+                |(data, mut chal)| {
+                    packed
+                        .open_at_points(data, core::slice::from_ref(point), &mut chal)
+                        .unwrap()
+                },
                 criterion::BatchSize::PerIteration,
             );
         });
@@ -199,5 +204,81 @@ fn bench_open(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_commit, bench_open);
+/// Several points through one claim pool, against one proof per point.
+///
+/// Both arms answer for the same four claims, so the times and the sizes compare directly.
+fn bench_pooled(c: &mut Criterion) {
+    const NUM_POINTS: usize = 4;
+
+    let mut group = c.benchmark_group("boolean_pooled");
+    group.sample_size(10);
+    for &log_bits in &LOG_BITS {
+        let bits = witness(log_bits);
+        let pcs = boolean_pcs(log_bits);
+        let mut rng = SmallRng::seed_from_u64(0xB003);
+        let points: Vec<Point<EF>> = (0..NUM_POINTS)
+            .map(|_| Point::<EF>::rand(&mut rng, log_bits))
+            .collect();
+
+        let mut chal = challenger();
+        let (_, data) = pcs.commit_bits(&bits, &mut chal).unwrap();
+
+        let (_, pooled) = pcs
+            .open_at_points(data.clone(), &points, &mut chal.clone())
+            .unwrap();
+        let separate: usize = points
+            .iter()
+            .map(|point| {
+                let (_, proof) = pcs
+                    .open_at_points(
+                        data.clone(),
+                        core::slice::from_ref(point),
+                        &mut chal.clone(),
+                    )
+                    .unwrap();
+                postcard::to_allocvec(&proof).unwrap().len()
+            })
+            .sum();
+        eprintln!(
+            "boolean/pooled_size/{log_bits}: {} bytes vs {separate} separate",
+            postcard::to_allocvec(&pooled).unwrap().len(),
+        );
+
+        group.bench_with_input(
+            BenchmarkId::new("pooled", log_bits),
+            &points,
+            |b, points| {
+                b.iter_batched(
+                    || (data.clone(), chal.clone()),
+                    |(data, mut chal)| pcs.open_at_points(data, points, &mut chal).unwrap(),
+                    criterion::BatchSize::PerIteration,
+                );
+            },
+        );
+        group.bench_with_input(
+            BenchmarkId::new("separate", log_bits),
+            &points,
+            |b, points| {
+                b.iter_batched(
+                    || (data.clone(), chal.clone()),
+                    |(data, chal)| {
+                        for point in points {
+                            let _ = pcs
+                                .open_at_points(
+                                    data.clone(),
+                                    core::slice::from_ref(point),
+                                    &mut chal.clone(),
+                                )
+                                .unwrap();
+                        }
+                    },
+                    criterion::BatchSize::PerIteration,
+                );
+            },
+        );
+    }
+    group.finish();
+}
+
+criterion_group!(benches, bench_commit, bench_open, bench_pooled);
 criterion_main!(benches);

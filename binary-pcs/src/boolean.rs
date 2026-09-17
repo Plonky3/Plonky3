@@ -23,6 +23,14 @@
 //!
 //! There is no range check here because there is nothing one could rule out.
 //!
+//! # One opening, not one per claim
+//!
+//! Several points reduce into one shared claim pool.
+//! The pool seals with a single draw, once every surviving claim is bound.
+//!
+//! The commitment then answers for all of them in one call.
+//! The pool's fold closes them with one equality rather than `k`.
+//!
 //! # What binds what
 //!
 //! Committing binds the root, and verifying replays that binding.
@@ -52,12 +60,16 @@ use p3_commit::{Mmcs, MultilinearPcs};
 use p3_field::Field;
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
+use p3_security::{SecurityTerm, claim_pool_term};
 use p3_sumcheck::layout::{Layout, SuffixProver};
 use p3_sumcheck::ring_switch::bits::{
     BitPacking, BitRingSwitch, BitRingSwitchProof, BitRingSwitchProofError, prove_bit_ring_switch,
     verify_bit_ring_switch,
 };
-use p3_sumcheck::{OpeningBatch, OpeningProtocol, PrescribedPointPcs, TableShape, TableSpec};
+use p3_sumcheck::{
+    ClaimPool, ClaimPoolError, OpeningBatch, OpeningProtocol, PrescribedPointPcs, TableShape,
+    TableSpec,
+};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -97,30 +109,34 @@ pub trait BooleanMultilinearPcs<EF, Challenger> {
         challenger: &mut Challenger,
     ) -> Result<(Self::Commitment, Self::ProverData), Self::Error>;
 
-    /// Open the multilinear extension at one point, returning the value and the proof.
+    /// Open the multilinear extension at every point, in one proof.
     ///
-    /// The point needs no prior transcript binding: the reduction binds it.
+    /// No point needs prior transcript binding: each reduction binds its own.
+    ///
+    /// # Returns
+    ///
+    /// One value per point, in the order the points were supplied.
     ///
     /// # Errors
     ///
-    /// Returns an error unless the point names the committed function's variables.
-    fn open_at_point(
+    /// Returns an error unless every point names the committed function's variables.
+    fn open_at_points(
         &self,
         prover_data: Self::ProverData,
-        point: &Point<EF>,
+        points: &[Point<EF>],
         challenger: &mut Challenger,
-    ) -> Result<(EF, Self::Proof), Self::Error>;
+    ) -> Result<(Vec<EF>, Self::Proof), Self::Error>;
 
-    /// Check one opening against the value it claims.
+    /// Check one proof against the values it claims at every point.
     ///
     /// # Errors
     ///
-    /// Returns an error if the claim, the reduction or the commitment opening fails.
-    fn verify_at_point(
+    /// Returns an error if a claim, a reduction, the commitment or the fold fails.
+    fn verify_at_points(
         &self,
         commitment: &Self::Commitment,
-        point: &Point<EF>,
-        value: EF,
+        points: &[Point<EF>],
+        values: &[EF],
         proof: &Self::Proof,
         challenger: &mut Challenger,
     ) -> Result<(), Self::Error>;
@@ -187,14 +203,41 @@ where
         self.num_variables
     }
 
-    /// The opening schedule the surviving claim is discharged through.
+    /// The opening schedule a pool of this many claims is discharged through.
     ///
-    /// One table of one column, opened directly at one point, which is the whole stack.
-    fn protocol(&self) -> OpeningProtocol {
+    /// One table of one column, opened directly at one point per claim.
+    fn protocol(&self, num_claims: usize) -> OpeningProtocol {
         OpeningProtocol::new(vec![TableSpec::new(
             TableShape::new(self.inner.num_variables(), 1),
-            vec![OpeningBatch::new(vec![0], Vec::new())],
+            (0..num_claims)
+                .map(|_| OpeningBatch::new(vec![0], Vec::new()))
+                .collect(),
         )])
+    }
+
+    /// Soundness cost of folding a pool of this many claims under one challenge.
+    ///
+    /// The commitment charges its own budget separately.
+    /// The two compose by a union bound in whatever protocol holds both.
+    #[must_use]
+    pub fn batching_security(num_claims: usize) -> SecurityTerm {
+        claim_pool_term(num_claims, EF::bits())
+    }
+
+    /// Check that every point names the committed function's variables.
+    fn check_points(&self, points: &[Point<EF>]) -> Result<(), BooleanPcsError<EF, MT::Error>> {
+        if points.is_empty() {
+            return Err(BooleanPcsError::NoPoints);
+        }
+        for point in points {
+            if point.num_variables() != self.num_variables {
+                return Err(BooleanPcsError::PointArity {
+                    expected: self.num_variables,
+                    actual: point.num_variables(),
+                });
+            }
+        }
+        Ok(())
     }
 
     /// The packed multilinear the commitment holds, read back out of the retained table.
@@ -249,88 +292,111 @@ where
             .map_err(BooleanPcsError::Commitment)
     }
 
-    fn open_at_point(
+    fn open_at_points(
         &self,
         prover_data: Self::ProverData,
-        point: &Point<EF>,
+        points: &[Point<EF>],
         challenger: &mut Challenger,
-    ) -> Result<(EF, Self::Proof), Self::Error> {
-        if point.num_variables() != self.num_variables {
-            return Err(BooleanPcsError::PointArity {
-                expected: self.num_variables,
-                actual: point.num_variables(),
-            });
-        }
+    ) -> Result<(Vec<EF>, Self::Proof), Self::Error> {
+        self.check_points(points)?;
         let packing = Self::packing(&prover_data)?;
 
-        // The element the reduction sends already holds the witness at the point.
-        // Read by columns it is the claimed value, which therefore costs no pass of its own.
-        let reduction = BitRingSwitch::new(point).map_err(BooleanPcsError::Reduction)?;
-        let (reduction_proof, surviving_point, _) =
-            prove_bit_ring_switch(&packing, point, challenger);
-        let value = reduction.incoming_claim(&reduction_proof.tensor);
+        // One reduction per point, each leaving its surviving claim in the shared pool.
+        let mut pool = ClaimPool::new(self.inner.num_variables());
+        let mut reductions = Vec::with_capacity(points.len());
+        let mut values = Vec::with_capacity(points.len());
+        let mut surviving_points = Vec::with_capacity(points.len());
 
-        // The surviving point came out of the rounds, so it is transcript-bound already.
+        for point in points {
+            // The element the reduction sends already holds the witness at the point.
+            // Read by columns it is the claimed value, so it costs no pass of its own.
+            let reduction = BitRingSwitch::new(point).map_err(BooleanPcsError::Reduction)?;
+            let (proof, surviving_point, surviving_value) =
+                prove_bit_ring_switch(&packing, point, challenger);
+
+            values.push(reduction.incoming_claim(&proof.tensor));
+            pool.deposit(surviving_point.clone(), surviving_value)
+                .map_err(BooleanPcsError::Pool)?;
+            surviving_points.push(surviving_point);
+            reductions.push(proof);
+        }
+
+        // Sealing binds every surviving claim, then draws the one challenge.
+        // The verifier seals the same pool, so the draw need not cross the wire.
+        let _sealed = pool.seal(challenger);
+
+        // Every surviving point came out of a reduction's rounds, so all are bound already.
         let opening = self
             .inner
             .try_open_at(
                 prover_data,
-                &self.protocol(),
-                core::slice::from_ref(&surviving_point),
+                &self.protocol(points.len()),
+                &surviving_points,
                 challenger,
             )
             .map_err(BooleanPcsError::Commitment)?;
 
         Ok((
-            value,
+            values,
             BooleanProof {
-                reduction: reduction_proof,
+                reductions,
                 opening,
             },
         ))
     }
 
-    fn verify_at_point(
+    fn verify_at_points(
         &self,
         commitment: &Self::Commitment,
-        point: &Point<EF>,
-        value: EF,
+        points: &[Point<EF>],
+        values: &[EF],
         proof: &Self::Proof,
         challenger: &mut Challenger,
     ) -> Result<(), Self::Error> {
-        if point.num_variables() != self.num_variables {
-            return Err(BooleanPcsError::PointArity {
-                expected: self.num_variables,
-                actual: point.num_variables(),
+        self.check_points(points)?;
+        if values.len() != points.len() || proof.reductions.len() != points.len() {
+            return Err(BooleanPcsError::ClaimCount {
+                expected: points.len(),
+                values: values.len(),
+                reductions: proof.reductions.len(),
             });
         }
 
         // Committing bound the root, so this side replays that binding before anything else.
         self.inner.observe_commitment(commitment, challenger);
 
-        // The reduction turns the claim about the bits into one about the packing.
-        let (surviving_point, surviving_value) =
-            verify_bit_ring_switch(&proof.reduction, point, value, challenger)
-                .map_err(BooleanPcsError::ReductionProof)?;
+        // Each reduction turns its claim about the bits into one about the packing.
+        let mut pool = ClaimPool::new(self.inner.num_variables());
+        let mut surviving_points = Vec::with_capacity(points.len());
+        for ((point, &value), reduction) in points.iter().zip(values).zip(&proof.reductions) {
+            let (surviving_point, surviving_value) =
+                verify_bit_ring_switch(reduction, point, value, challenger)
+                    .map_err(BooleanPcsError::ReductionProof)?;
+            pool.deposit(surviving_point.clone(), surviving_value)
+                .map_err(BooleanPcsError::Pool)?;
+            surviving_points.push(surviving_point);
+        }
+        let sealed = pool.seal(challenger);
 
-        // The commitment answers for the packing at the point the rounds ended at.
+        // One commitment opening answers for every surviving point at once.
         let evals = self
             .inner
             .verify_at(
                 commitment,
                 &proof.opening,
-                &self.protocol(),
-                core::slice::from_ref(&surviving_point),
+                &self.protocol(points.len()),
+                &surviving_points,
                 challenger,
             )
             .map_err(BooleanPcsError::Commitment)?;
 
-        // Both halves must name the same value, or the reduction proved nothing.
-        let opened = evals
-            .first()
-            .and_then(|batch| batch.current().first().copied())
-            .ok_or(BooleanPcsError::SurvivingClaim)?;
-        if opened != surviving_value {
+        // One fold closes the whole pool, rather than one equality per claim.
+        let opened: Option<Vec<EF>> = evals
+            .iter()
+            .map(|batch| batch.current().first().copied())
+            .collect();
+        let opened = opened.ok_or(BooleanPcsError::SurvivingClaim)?;
+        if opened.len() != points.len() || sealed.fold(opened) != sealed.folded_value() {
             return Err(BooleanPcsError::SurvivingClaim);
         }
 
@@ -338,16 +404,16 @@ where
     }
 }
 
-/// One Boolean opening: the reduction, and the commitment opening that discharges it.
+/// One Boolean opening: the reductions, and the commitment opening that discharges them.
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(bound(
     serialize = "EF: TowerLevel, MT::Commitment: Serialize, MT::MultiProof: Serialize, MX::Commitment: Serialize, MX::MultiProof: Serialize",
     deserialize = "EF: TowerLevel, MT::Commitment: Deserialize<'de>, MT::MultiProof: Deserialize<'de>, MX::Commitment: Deserialize<'de>, MX::MultiProof: Deserialize<'de>"
 ))]
 pub struct BooleanProof<EF: Field, MT: Mmcs<EF>, MX: Mmcs<EF>> {
-    /// The bit-alphabet ring switch, reducing the bit claim to a packed one.
-    pub reduction: BitRingSwitchProof<EF>,
-    /// The commitment opening that discharges the packed claim.
+    /// One bit-alphabet ring switch per opening point, in the order the points came in.
+    pub reductions: Vec<BitRingSwitchProof<EF>>,
+    /// The single commitment opening that discharges every packed claim.
     pub opening: BinaryPcsProof<EF, EF, MT, MX>,
 }
 
@@ -381,6 +447,25 @@ pub enum BooleanPcsError<EF, MmcsError> {
         /// Variables the witness packs to.
         actual: usize,
     },
+
+    /// No opening point was supplied, so there is nothing to prove.
+    #[error("an opening needs at least one point")]
+    NoPoints,
+
+    /// The claim counts on the two sides of an opening disagree.
+    #[error("{expected} points against {values} values and {reductions} reductions")]
+    ClaimCount {
+        /// Points supplied.
+        expected: usize,
+        /// Values supplied.
+        values: usize,
+        /// Reductions the proof carries.
+        reductions: usize,
+    },
+
+    /// A surviving claim could not join the pool.
+    #[error(transparent)]
+    Pool(ClaimPoolError),
 
     /// The opening point does not name the committed function's variables.
     #[error("the opening point names {actual} variables, expected {expected}")]
@@ -493,13 +578,70 @@ mod tests {
         let (commitment, data) = pcs.commit_bits(&bits, &mut prover_chal).unwrap();
 
         let point = Point::<EF>::rand(&mut SmallRng::seed_from_u64(0xB002), LOG_BITS);
-        let (value, proof) = pcs.open_at_point(data, &point, &mut prover_chal).unwrap();
+        let points = alloc::vec![point.clone()];
+        let (values, proof) = pcs.open_at_points(data, &points, &mut prover_chal).unwrap();
 
-        assert_eq!(value, embedded(&bits).eval_base(&point));
+        assert_eq!(values, alloc::vec![embedded(&bits).eval_base(&point)]);
 
         let mut verifier_chal = challenger();
-        pcs.verify_at_point(&commitment, &point, value, &proof, &mut verifier_chal)
+        pcs.verify_at_points(&commitment, &points, &values, &proof, &mut verifier_chal)
             .unwrap();
+    }
+
+    #[test]
+    fn several_points_cost_one_commitment_opening() {
+        // Invariant: every surviving claim is discharged by one opening.
+        //
+        //     - reductions   one per point, each binding its own point
+        //     - pool         every surviving claim, sealed by one draw
+        //     - opening      one, answering for all of them
+        //
+        // The fold is what ties them: one equality over the opened values, not four.
+        const LOG_BITS: usize = 13;
+        const NUM_POINTS: usize = 4;
+
+        let bits = witness(0xB00F, LOG_BITS);
+        let pcs = boolean_pcs(LOG_BITS);
+        let mut rng = SmallRng::seed_from_u64(0xB010);
+        let points: Vec<Point<EF>> = (0..NUM_POINTS)
+            .map(|_| Point::<EF>::rand(&mut rng, LOG_BITS))
+            .collect();
+
+        let mut prover_chal = challenger();
+        let (commitment, data) = pcs.commit_bits(&bits, &mut prover_chal).unwrap();
+        let (values, proof) = pcs.open_at_points(data, &points, &mut prover_chal).unwrap();
+
+        // One reduction per point, and exactly one commitment opening for all of them.
+        assert_eq!(proof.reductions.len(), NUM_POINTS);
+
+        // Each value is the bit witness at its own point.
+        let reference = embedded(&bits);
+        for (point, &value) in points.iter().zip(&values) {
+            assert_eq!(value, reference.eval_base(point));
+        }
+
+        pcs.verify_at_points(&commitment, &points, &values, &proof, &mut challenger())
+            .unwrap();
+
+        // One wrong value among four is rejected, wherever it sits.
+        for index in 0..NUM_POINTS {
+            let mut tampered = values.clone();
+            tampered[index] += EF::ONE;
+            assert!(
+                pcs.verify_at_points(&commitment, &points, &tampered, &proof, &mut challenger())
+                    .is_err(),
+                "value {index}"
+            );
+        }
+
+        // A pool of four claims is charged its own labelled term.
+        let term = BooleanPcs::<EF, MyMmcs, MyMmcs>::batching_security(NUM_POINTS);
+        // Three is the degree of the difference polynomial four claims give.
+        assert_eq!(
+            term.bits.bits(),
+            p3_security::claim_pool_error(NUM_POINTS, 128).bits()
+        );
+        assert!(term.bits.bits() > 126.0 && term.bits.bits() < 127.0);
     }
 
     #[test]
@@ -512,14 +654,18 @@ mod tests {
         let mut prover_chal = challenger();
         let (commitment, data) = pcs.commit_bits(&bits, &mut prover_chal).unwrap();
 
-        let point = Point::<EF>::rand(&mut SmallRng::seed_from_u64(0xFA16), LOG_BITS);
-        let (value, proof) = pcs.open_at_point(data, &point, &mut prover_chal).unwrap();
+        let points = alloc::vec![Point::<EF>::rand(
+            &mut SmallRng::seed_from_u64(0xFA16),
+            LOG_BITS
+        )];
+        let (values, proof) = pcs.open_at_points(data, &points, &mut prover_chal).unwrap();
 
+        let false_values = alloc::vec![values[0] + EF::ONE];
         let err = pcs
-            .verify_at_point(
+            .verify_at_points(
                 &commitment,
-                &point,
-                value + EF::ONE,
+                &points,
+                &false_values,
                 &proof,
                 &mut challenger(),
             )
@@ -542,18 +688,19 @@ mod tests {
         let pcs = boolean_pcs(LOG_BITS);
         let point = Point::<EF>::rand(&mut SmallRng::seed_from_u64(0x0A11), LOG_BITS);
 
+        let points = alloc::vec![point];
         let mut chal = challenger();
         let (_, data) = pcs
             .commit_bits(&witness(0xAAAA, LOG_BITS), &mut chal)
             .unwrap();
-        let (value, proof) = pcs.open_at_point(data, &point, &mut chal).unwrap();
+        let (values, proof) = pcs.open_at_points(data, &points, &mut chal).unwrap();
 
         let (other, _) = pcs
             .commit_bits(&witness(0xBBBB, LOG_BITS), &mut challenger())
             .unwrap();
 
         assert!(
-            pcs.verify_at_point(&other, &point, value, &proof, &mut challenger())
+            pcs.verify_at_points(&other, &points, &values, &proof, &mut challenger())
                 .is_err()
         );
     }
@@ -592,17 +739,24 @@ mod tests {
         let pcs = boolean_pcs(13);
         let mut chal = challenger();
         let (commitment, data) = pcs.commit_bits(&witness(0x5417, 13), &mut chal).unwrap();
-        let narrow = Point::<EF>::rand(&mut SmallRng::seed_from_u64(0x5418), 12);
+        let narrow = alloc::vec![Point::<EF>::rand(&mut SmallRng::seed_from_u64(0x5418), 12)];
         assert!(matches!(
-            pcs.open_at_point(data, &narrow, &mut chal).err(),
+            pcs.open_at_points(data, &narrow, &mut chal).err(),
             Some(BooleanPcsError::PointArity {
                 expected: 13,
                 actual: 12
             })
         ));
         assert!(matches!(
-            pcs.verify_at_point(&commitment, &narrow, EF::ZERO, &proof_stub(), &mut chal),
+            pcs.verify_at_points(&commitment, &narrow, &[EF::ZERO], &proof_stub(), &mut chal),
             Err(BooleanPcsError::PointArity { .. })
+        ));
+
+        // No point at all describes nothing to prove.
+        let (_, data) = pcs.commit_bits(&witness(0x5419, 13), &mut chal).unwrap();
+        assert!(matches!(
+            pcs.open_at_points(data, &[], &mut chal).err(),
+            Some(BooleanPcsError::NoPoints)
         ));
     }
 
@@ -612,18 +766,19 @@ mod tests {
         let pcs = boolean_pcs(13);
         let mut chal = challenger();
         let (_, data) = pcs.commit_bits(&bits, &mut chal).unwrap();
-        let point = Point::<EF>::rand(&mut SmallRng::seed_from_u64(0x57AC), 13);
-        pcs.open_at_point(data, &point, &mut chal).unwrap().1
+        let points = alloc::vec![Point::<EF>::rand(&mut SmallRng::seed_from_u64(0x57AC), 13)];
+        pcs.open_at_points(data, &points, &mut chal).unwrap().1
     }
 
     proptest! {
         // Each case runs a whole commitment and opening on both sides.
         #![proptest_config(ProptestConfig { cases: 8, ..ProptestConfig::default() })]
 
-        /// Every witness height the fixture admits, at a random point each time.
+        /// Every witness height the fixture admits, at random points each time.
         #[test]
         fn a_boolean_opening_round_trips_over_random_inputs(
             log_bits in 13usize..=15,
+            num_points in 1usize..=3,
             witness_seed: u64,
             point_seed: u64,
         ) {
@@ -632,12 +787,18 @@ mod tests {
 
             let mut prover_chal = challenger();
             let (commitment, data) = pcs.commit_bits(&bits, &mut prover_chal).unwrap();
-            let point = Point::<EF>::rand(&mut SmallRng::seed_from_u64(point_seed), log_bits);
-            let (value, proof) = pcs.open_at_point(data, &point, &mut prover_chal).unwrap();
+            let mut rng = SmallRng::seed_from_u64(point_seed);
+            let points: Vec<Point<EF>> = (0..num_points)
+                .map(|_| Point::<EF>::rand(&mut rng, log_bits))
+                .collect();
+            let (values, proof) = pcs.open_at_points(data, &points, &mut prover_chal).unwrap();
 
-            prop_assert_eq!(value, embedded(&bits).eval_base(&point));
+            let reference = embedded(&bits);
+            for (point, &value) in points.iter().zip(&values) {
+                prop_assert_eq!(value, reference.eval_base(point));
+            }
             prop_assert!(
-                pcs.verify_at_point(&commitment, &point, value, &proof, &mut challenger())
+                pcs.verify_at_points(&commitment, &points, &values, &proof, &mut challenger())
                     .is_ok()
             );
         }
