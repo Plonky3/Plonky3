@@ -815,6 +815,7 @@ mod tests {
     use rand::{RngExt, SeedableRng};
 
     use super::*;
+    use crate::backend::GenericBackend;
     use crate::zerocheck::{AirZerocheck, ZerocheckError, get_air_degrees};
 
     type F = BabyBear;
@@ -1345,7 +1346,7 @@ mod tests {
         let lookup_proof = lookup_proof.unwrap();
         let airs = [&air];
         let sumcheck = AirZerocheck::new(&airs, 0);
-        let (proof, prover_point) = sumcheck.prove_with_lookup(
+        let (proof, prover_point) = sumcheck.prove_with_lookup::<F, EF, GenericBackend, _>(
             &[None],
             &[&main],
             &[public_values],
@@ -1465,13 +1466,14 @@ mod tests {
         );
         let lookup_proof = lookup_proof.unwrap();
         let loose_airs = [&loose];
-        let (proof, _) = AirZerocheck::new(&loose_airs, 0).prove_with_lookup(
-            &[None],
-            &[&main],
-            &[public_values],
-            lookup,
-            &mut prover_challenger,
-        );
+        let (proof, _) = AirZerocheck::new(&loose_airs, 0)
+            .prove_with_lookup::<F, EF, GenericBackend, _>(
+                &[None],
+                &[&main],
+                &[public_values],
+                lookup,
+                &mut prover_challenger,
+            );
 
         let check = |air: &PermutationSumAir| {
             let mut verifier_challenger = challenger();
@@ -1534,7 +1536,7 @@ mod tests {
         );
         let lookup_proof = lookup_proof.unwrap();
         let sumcheck = AirZerocheck::new(&air_refs, 0);
-        let (proof, prover_point) = sumcheck.prove_with_lookup(
+        let (proof, prover_point) = sumcheck.prove_with_lookup::<F, EF, GenericBackend, _>(
             &preprocessed,
             &table_refs,
             &public_values,
@@ -1593,7 +1595,7 @@ mod tests {
         );
         let lookup_proof = lookup_proof.unwrap();
         let sumcheck = AirZerocheck::new(&airs, 0);
-        let (proof, prover_point) = sumcheck.prove_with_lookup(
+        let (proof, prover_point) = sumcheck.prove_with_lookup::<F, EF, GenericBackend, _>(
             &[None, None],
             &[&tall, &short],
             &publics,

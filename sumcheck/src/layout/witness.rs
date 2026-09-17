@@ -176,6 +176,59 @@ impl<F: Field> Table<F> {
     }
 }
 
+/// Splits `out` into one disjoint slot per placed column, after `num_folded` suffix variables.
+///
+/// Column `(table, poly)` owns the slot starting at `selector.index() << (n - num_folded)`, of
+/// length `2^(n - num_folded)`, where `n` is the table's number of variables.
+///
+/// # Returns
+///
+/// One `(slot, table index, column index)` triple per column, in increasing slot order.
+///
+/// # Panics
+///
+/// - `num_folded` exceeds a placed table's number of variables.
+pub(crate) fn column_slots<'a, T, F: Field>(
+    placements: &[TablePlacement],
+    tables: &[Table<F>],
+    num_folded: usize,
+    out: &'a mut [T],
+) -> Vec<(&'a mut [T], usize, usize)> {
+    let mut ranges: Vec<(usize, usize, usize, usize)> = placements
+        .iter()
+        .flat_map(|placement| {
+            let num_variables_table = tables[placement.idx()].num_variables();
+            assert!(num_folded <= num_variables_table);
+            let log_len = num_variables_table - num_folded;
+            placement
+                .selectors()
+                .iter()
+                .enumerate()
+                .map(move |(poly_idx, selector)| {
+                    (
+                        selector.index() << log_len,
+                        1 << log_len,
+                        placement.idx(),
+                        poly_idx,
+                    )
+                })
+        })
+        .collect();
+    ranges.sort_unstable_by_key(|&(offset, ..)| offset);
+
+    let mut slots = Vec::with_capacity(ranges.len());
+    let mut rest = out;
+    let mut consumed = 0;
+    for (offset, len, table_idx, poly_idx) in ranges {
+        let (_, tail) = core::mem::take(&mut rest).split_at_mut(offset - consumed);
+        let (slot, tail) = tail.split_at_mut(len);
+        slots.push((slot, table_idx, poly_idx));
+        rest = tail;
+        consumed = offset + len;
+    }
+    slots
+}
+
 /// Placement metadata for one table inside the stacked polynomial.
 #[derive(Debug, Clone)]
 pub struct TablePlacement {
@@ -265,16 +318,13 @@ impl<F: Field> Witness<F> {
         // Stacked buffer starts zero; unused tail entries stay zero.
         let mut stacked = Poly::<F>::zero(num_variables);
 
-        // Copy each source column into its planner-assigned slot.
-        for placement in &placements {
-            let table = &tables[placement.idx()];
-            for (poly_idx, selector) in placement.selectors().iter().enumerate() {
-                let poly = table.poly(poly_idx);
-                let dst = selector.index << poly.num_variables();
-                stacked.as_mut_slice()[dst..dst + poly.num_evals()]
-                    .copy_from_slice(poly.as_slice());
-            }
-        }
+        // Copy each source column into its planner-assigned slot. Slots are disjoint,
+        // so columns copy independently in parallel.
+        column_slots(&placements, &tables, 0, stacked.as_mut_slice())
+            .into_par_iter()
+            .for_each(|(slot, table_idx, poly_idx)| {
+                slot.copy_from_slice(tables[table_idx].poly(poly_idx).as_slice());
+            });
 
         Self {
             tables,

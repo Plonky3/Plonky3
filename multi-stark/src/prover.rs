@@ -2,13 +2,15 @@
 
 use alloc::vec::Vec;
 
-use p3_air::boundary;
+use p3_air::{Air, BaseAir, boundary};
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
 use p3_commit::MultilinearPcs;
 use p3_field::{ExtensionField, Field};
+use p3_lookup::InteractionSymbolicBuilder;
 use p3_sumcheck::PrescribedPointPcs;
 
 use crate::ProverInstances;
+use crate::backend::{GenericBackend, ZerocheckBackend};
 use crate::config::{Commitment, MultiStarkConfig, PcsProverError, ProverData};
 use crate::folder::ProverAir;
 use crate::indexed::{IndexedPlan, IndexedWitness};
@@ -145,7 +147,6 @@ where
 /// - A periodic column's period must be a power of two dividing the trace height.
 /// - A lookup-active trace must meet the prover's SIMD packing width.
 /// - An AIR's public boundary declaration must name only cells and values it has.
-#[tracing::instrument(skip_all)]
 pub fn prove<'a, C, A>(
     config: &C,
     instances: ProverInstances<'a, C, A>,
@@ -166,13 +167,48 @@ where
     <C::Challenge as ExtensionField<C::Val>>::ExtensionPacking:
         From<C::Challenge> + From<<C::Val as Field>::Packing>,
 {
-    prove_forged(config, instances, pow_bits, caller_challenger, None)
+    prove_with_backend::<C, A, GenericBackend>(config, instances, pow_bits, caller_challenger)
+}
+
+/// Prove as [`prove`] does, with the zerocheck rounds computed by backend `B`.
+///
+/// The backend chooses how each round polynomial, fold, and opening is computed.
+/// Transcript, proof, errors, and panics are those of [`prove`] for every backend.
+/// [`GenericBackend`] is the backend [`prove`] uses.
+///
+/// # Arguments
+///
+/// - `config`: proof configuration selecting the commitment schemes.
+/// - `instances`: AIRs, transposed main trace tables, shared proving key, and public inputs.
+/// - `pow_bits`: grinding difficulty per sumcheck round.
+/// - `caller_challenger`: Fiat-Shamir transcript.
+#[tracing::instrument(name = "prove", skip_all)]
+pub fn prove_with_backend<'a, C, A, B>(
+    config: &C,
+    instances: ProverInstances<'a, C, A>,
+    pow_bits: usize,
+    caller_challenger: &mut C::Challenger,
+) -> Result<MultiStarkProof<C>, ProvingError<PcsProverError<C>>>
+where
+    C: MultiStarkConfig,
+    C::Pcs: PrescribedPointPcs<C::Challenge, C::Challenger>,
+    C::Challenger: Clone
+        + FieldChallenger<C::Val>
+        + GrindingChallenger<Witness = C::Val>
+        + CanSampleUniformBits<C::Val>
+        + CanObserve<Commitment<C>>,
+    Commitment<C>: Clone,
+    ProverData<C>: Clone,
+    A: BaseAir<C::Val> + Air<InteractionSymbolicBuilder<C::Val, C::Challenge>>,
+    B: ZerocheckBackend<C::Val, C::Challenge, A>,
+{
+    prove_forged::<C, A, B>(config, instances, pow_bits, caller_challenger, None)
 }
 
 /// The proving flow, with what the indexed reduction reads open to substitution.
 ///
-/// Callers reach this through the entry point above, which substitutes nothing.
-pub(crate) fn prove_forged<'a, C, A>(
+/// Callers reach this through the entry points above, which substitute nothing.
+pub(crate) fn prove_forged<'a, C, A, B>(
     config: &C,
     instances: ProverInstances<'a, C, A>,
     pow_bits: usize,
@@ -190,9 +226,8 @@ where
         + CanObserve<Commitment<C>>,
     Commitment<C>: Clone,
     ProverData<C>: Clone,
-    A: ProverAir<C::Val, C::Challenge>,
-    <C::Challenge as ExtensionField<C::Val>>::ExtensionPacking:
-        From<C::Challenge> + From<<C::Val as Field>::Packing>,
+    A: BaseAir<C::Val> + Air<InteractionSymbolicBuilder<C::Val, C::Challenge>>,
+    B: ZerocheckBackend<C::Val, C::Challenge, A>,
 {
     let mut candidate = caller_challenger.clone();
     let challenger = &mut candidate;
@@ -315,7 +350,7 @@ where
     // the zerocheck's own opened values are not used as the final proof openings.
     let zerocheck = AirZerocheck::new(&airs, pow_bits);
     let (zerocheck_proof, point) = transcript.zerocheck(|challenger| {
-        zerocheck.prove_with_lookup::<C::Val, C::Challenge, _>(
+        zerocheck.prove_with_lookup::<C::Val, C::Challenge, B, _>(
             &preprocessed_tables,
             &tables,
             &public_values,
@@ -777,7 +812,7 @@ mod tests {
             )
             .collect();
 
-        let proof = prove_forged(
+        let proof = prove_forged::<_, _, GenericBackend>(
             &config,
             ProverInstances::new(proving),
             0,

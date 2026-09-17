@@ -10,6 +10,7 @@ pub mod dft_testing;
 pub mod extension_testing;
 pub mod from_integer_tests;
 pub mod packedfield_testing;
+pub mod subfield_testing;
 
 use alloc::vec::Vec;
 use core::array;
@@ -33,6 +34,7 @@ use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
+pub use subfield_testing::*;
 
 /// Generate a random field element from a u64 seed, for use in proptest strategies.
 fn arb_field<F>() -> impl Strategy<Value = F>
