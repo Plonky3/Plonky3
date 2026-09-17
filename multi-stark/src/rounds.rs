@@ -595,11 +595,48 @@ fn add_scaled_slice<P: PrimeCharacteristicRing + Copy>(point: &mut [P], diff: &[
         .for_each(|(value, &diff)| *value += diff * step);
 }
 
-/// Consecutive node differences, computed once outside the row loops.
+/// How the row scratch moves from one evaluated interpolation node to the next.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum NodeStep<F> {
+    /// Add the high-minus-low differences once per unit gap crossed.
+    Unit(usize),
+    /// Add the differences once, scaled by the gap between the two nodes.
+    Scaled(F),
+}
+
+/// Pair each interpolation node a round evaluates with the step that reaches it.
+///
+/// The row scratch starts at node zero and visits the nodes in increasing order.
+///
+/// A stretch of unit gaps costs additions only, so it is walked node by node.
+/// Any other stretch is crossed with one scaled step, skipping the nodes in between:
+///
+/// ```text
+///     unit gaps (prime field)  : 0 -(+d)-> 1 -(+d)-> 2 -(+d)-> 3    Unit(2), Unit(1)
+///     other gaps (binary field): 0 -----(+2d)------> 2 -(+d)-> 3    Scaled(2), Unit(1)
+/// ```
+///
 /// Binary-field interpolation nodes need not differ by one.
-fn interpolation_steps<F: Field>(degree: usize) -> Vec<F> {
-    (0..degree)
-        .map(|node| F::interpolation_node(node + 1) - F::interpolation_node(node))
+fn node_schedule<F: Field>(nodes: impl IntoIterator<Item = usize>) -> Vec<(usize, NodeStep<F>)> {
+    let mut position = 0;
+    nodes
+        .into_iter()
+        .map(|node| {
+            debug_assert!(
+                node >= position,
+                "nodes must be visited in increasing order"
+            );
+            let unit_gaps = (position..node).all(|from| {
+                F::interpolation_node(from + 1) - F::interpolation_node(from) == F::ONE
+            });
+            let step = if unit_gaps {
+                NodeStep::Unit(node - position)
+            } else {
+                NodeStep::Scaled(F::interpolation_node(node) - F::interpolation_node(position))
+            };
+            position = node;
+            (node, step)
+        })
         .collect()
 }
 
@@ -787,6 +824,23 @@ impl<'air, A> AirSlot<'air, A> {
             interaction,
         }
     }
+}
+
+/// The interpolation nodes at which at least one AIR contributes an expression family.
+///
+/// Node one is never evaluated: each degree group recovers it from its running claim.
+fn evaluated_nodes<'a, A>(
+    slots: &'a [AirSlot<'_, A>],
+    degree: usize,
+    include_constraint_node_zero: bool,
+) -> impl Iterator<Item = usize> + 'a {
+    (0..=degree).filter(move |&node| {
+        node != 1
+            && slots.iter().any(|slot| {
+                let enabled = slot.enabled_families(node, include_constraint_node_zero);
+                enabled.constraints || enabled.interaction.is_some()
+            })
+    })
 }
 
 /// Expression families sharing one per-variable degree and one reduced claim.
@@ -1221,7 +1275,7 @@ where
         let packing_width = F::Packing::WIDTH;
         let packed_half = scalar_half / packing_width;
         let degree = self.degree();
-        let node_steps = interpolation_steps::<F>(degree);
+        let schedule = node_schedule::<F>(evaluated_nodes(&self.slots, degree, false));
         let alpha = EF::ExtensionPacking::from(self.alpha);
 
         let coupling = InteractionCoupling {
@@ -1319,63 +1373,64 @@ where
                     let (mut boundary, boundary_diff) =
                         BoundaryEvals::<F::Packing>::row_pair_packed(s, scalar_half, height);
 
-                    for node in 0..=degree {
-                        if node != 1 {
-                            for slot in &self.slots {
-                                let enabled = slot.enabled_families(node, false);
-                                if !enabled.constraints && enabled.interaction.is_none() {
-                                    continue;
+                    for &(node, step) in &schedule {
+                        match step {
+                            NodeStep::Unit(count) => {
+                                for _ in 0..count {
+                                    scratch.add_diffs();
+                                    boundary += boundary_diff;
                                 }
-                                let folder = MultilinearFolder::new(
-                                    &scratch.local_point
-                                        [slot.main_offset..slot.main_offset + slot.main_width],
-                                    &scratch.next_point
-                                        [slot.main_offset..slot.main_offset + slot.main_width],
-                                    boundary,
-                                    self.public_values[slot.stage_index],
-                                    alpha,
-                                )
-                                .with_preprocessed(
-                                    &scratch.local_point[slot.preprocessed_offset
-                                        ..slot.preprocessed_offset + slot.preprocessed_width],
-                                    &scratch.next_point[slot.preprocessed_offset
-                                        ..slot.preprocessed_offset + slot.preprocessed_width],
-                                )
-                                .with_periodic(
-                                    &scratch.local_point[slot.periodic_offset
-                                        ..slot.periodic_offset + slot.periodic_width],
-                                );
-                                let evaluations =
-                                    evaluate_air_families(folder, &coupling, enabled, slot.air);
-                                let eval_index = if node == 0 { 0 } else { node - 1 };
-                                if enabled.constraints {
-                                    scratch.constraint_evals[slot.stage_index][eval_index] +=
-                                        dot_product::<EF, _, _>(
-                                            eq_suffix.iter().copied(),
-                                            EF::ExtensionPacking::to_ext_iter([
-                                                evaluations.constraints
-                                            ]),
-                                        );
-                                }
-                                if let Some(interaction) = enabled.interaction {
-                                    scratch.interaction_evals[interaction.group_index]
-                                        [eval_index] += dot_product::<EF, _, _>(
+                            }
+                            NodeStep::Scaled(step) => {
+                                let step = F::Packing::from(step);
+                                scratch.add_scaled_diffs(step);
+                                boundary.add_scaled(boundary_diff, step);
+                            }
+                        }
+                        for slot in &self.slots {
+                            let enabled = slot.enabled_families(node, false);
+                            if !enabled.constraints && enabled.interaction.is_none() {
+                                continue;
+                            }
+                            let folder = MultilinearFolder::new(
+                                &scratch.local_point
+                                    [slot.main_offset..slot.main_offset + slot.main_width],
+                                &scratch.next_point
+                                    [slot.main_offset..slot.main_offset + slot.main_width],
+                                boundary,
+                                self.public_values[slot.stage_index],
+                                alpha,
+                            )
+                            .with_preprocessed(
+                                &scratch.local_point[slot.preprocessed_offset
+                                    ..slot.preprocessed_offset + slot.preprocessed_width],
+                                &scratch.next_point[slot.preprocessed_offset
+                                    ..slot.preprocessed_offset + slot.preprocessed_width],
+                            )
+                            .with_periodic(
+                                &scratch.local_point[slot.periodic_offset
+                                    ..slot.periodic_offset + slot.periodic_width],
+                            );
+                            let evaluations =
+                                evaluate_air_families(folder, &coupling, enabled, slot.air);
+                            let eval_index = if node == 0 { 0 } else { node - 1 };
+                            if enabled.constraints {
+                                scratch.constraint_evals[slot.stage_index][eval_index] +=
+                                    dot_product::<EF, _, _>(
+                                        eq_suffix.iter().copied(),
+                                        EF::ExtensionPacking::to_ext_iter(
+                                            [evaluations.constraints],
+                                        ),
+                                    );
+                            }
+                            if let Some(interaction) = enabled.interaction {
+                                scratch.interaction_evals[interaction.group_index][eval_index] +=
+                                    dot_product::<EF, _, _>(
                                         eq_suffix.iter().copied(),
                                         EF::ExtensionPacking::to_ext_iter([
                                             evaluations.interactions
                                         ]),
                                     );
-                                }
-                            }
-                        }
-                        if let Some(&step) = node_steps.get(node) {
-                            if step == F::ONE {
-                                scratch.add_diffs();
-                                boundary += boundary_diff;
-                            } else {
-                                let step = F::Packing::from(step);
-                                scratch.add_scaled_diffs(step);
-                                boundary.add_scaled(boundary_diff, step);
                             }
                         }
                     }
@@ -1415,7 +1470,7 @@ where
         let height = self.num_evals();
         let half = height / 2;
         let degree = self.degree();
-        let node_steps = interpolation_steps::<F>(degree);
+        let schedule = node_schedule::<F>(evaluated_nodes(&self.slots, degree, false));
 
         let constraint_degrees = self
             .slots
@@ -1472,54 +1527,53 @@ where
 
             let (mut boundary, boundary_diff) = BoundaryEvals::<F>::row_pair(s, half, height);
 
-            for node in 0..=degree {
-                if node != 1 {
-                    for slot in &self.slots {
-                        let enabled = slot.enabled_families(node, false);
-                        if !enabled.constraints && enabled.interaction.is_none() {
-                            continue;
-                        }
-                        let folder = MultilinearFolder::new(
-                            &scratch.local_point
-                                [slot.main_offset..slot.main_offset + slot.main_width],
-                            &scratch.next_point
-                                [slot.main_offset..slot.main_offset + slot.main_width],
-                            boundary,
-                            self.public_values[slot.stage_index],
-                            self.alpha,
-                        )
-                        .with_preprocessed(
-                            &scratch.local_point[slot.preprocessed_offset
-                                ..slot.preprocessed_offset + slot.preprocessed_width],
-                            &scratch.next_point[slot.preprocessed_offset
-                                ..slot.preprocessed_offset + slot.preprocessed_width],
-                        )
-                        .with_periodic(
-                            &scratch.local_point
-                                [slot.periodic_offset..slot.periodic_offset + slot.periodic_width],
-                        );
-
-                        let evaluations =
-                            evaluate_air_families(folder, &self.coupling, enabled, slot.air);
-
-                        let eval_index = if node == 0 { 0 } else { node - 1 };
-                        if enabled.constraints {
-                            scratch.constraint_evals[slot.stage_index][eval_index] +=
-                                eq_suffix * evaluations.constraints;
-                        }
-                        if let Some(interaction) = enabled.interaction {
-                            scratch.interaction_evals[interaction.group_index][eval_index] +=
-                                eq_suffix * evaluations.interactions;
+            for &(node, step) in &schedule {
+                match step {
+                    NodeStep::Unit(count) => {
+                        for _ in 0..count {
+                            scratch.add_diffs();
+                            boundary += boundary_diff;
                         }
                     }
-                }
-                if let Some(&step) = node_steps.get(node) {
-                    if step == F::ONE {
-                        scratch.add_diffs();
-                        boundary += boundary_diff;
-                    } else {
+                    NodeStep::Scaled(step) => {
                         scratch.add_scaled_diffs(step);
                         boundary.add_scaled(boundary_diff, step);
+                    }
+                }
+                for slot in &self.slots {
+                    let enabled = slot.enabled_families(node, false);
+                    if !enabled.constraints && enabled.interaction.is_none() {
+                        continue;
+                    }
+                    let folder = MultilinearFolder::new(
+                        &scratch.local_point[slot.main_offset..slot.main_offset + slot.main_width],
+                        &scratch.next_point[slot.main_offset..slot.main_offset + slot.main_width],
+                        boundary,
+                        self.public_values[slot.stage_index],
+                        self.alpha,
+                    )
+                    .with_preprocessed(
+                        &scratch.local_point[slot.preprocessed_offset
+                            ..slot.preprocessed_offset + slot.preprocessed_width],
+                        &scratch.next_point[slot.preprocessed_offset
+                            ..slot.preprocessed_offset + slot.preprocessed_width],
+                    )
+                    .with_periodic(
+                        &scratch.local_point
+                            [slot.periodic_offset..slot.periodic_offset + slot.periodic_width],
+                    );
+
+                    let evaluations =
+                        evaluate_air_families(folder, &self.coupling, enabled, slot.air);
+
+                    let eval_index = if node == 0 { 0 } else { node - 1 };
+                    if enabled.constraints {
+                        scratch.constraint_evals[slot.stage_index][eval_index] +=
+                            eq_suffix * evaluations.constraints;
+                    }
+                    if let Some(interaction) = enabled.interaction {
+                        scratch.interaction_evals[interaction.group_index][eval_index] +=
+                            eq_suffix * evaluations.interactions;
                     }
                 }
             }
@@ -1757,7 +1811,7 @@ where
         let num_evals = self.num_evals();
         let half = num_evals / 2;
         let degree = self.degree();
-        let node_steps = interpolation_steps::<EF>(degree);
+        let schedule = node_schedule::<EF>(evaluated_nodes(&self.slots, degree, true));
         let constraint_degrees = self
             .slots
             .iter()
@@ -1801,52 +1855,53 @@ where
                 let (mut boundary, boundary_diff) =
                     BoundaryEvals::row_pair_with_prefix(s, half, num_evals, self.boundary);
 
-                for node in 0..=degree {
-                    if node != 1 {
-                        for slot in &self.slots {
-                            let enabled = slot.enabled_families(node, true);
-                            if !enabled.constraints && enabled.interaction.is_none() {
-                                continue;
-                            }
-                            let folder = MultilinearFolder::new(
-                                &scratch.local_point
-                                    [slot.main_offset..slot.main_offset + slot.main_width],
-                                &scratch.next_point
-                                    [slot.main_offset..slot.main_offset + slot.main_width],
-                                boundary,
-                                self.public_values[slot.stage_index],
-                                self.alpha,
-                            )
-                            .with_preprocessed(
-                                &scratch.local_point[slot.preprocessed_offset
-                                    ..slot.preprocessed_offset + slot.preprocessed_width],
-                                &scratch.next_point[slot.preprocessed_offset
-                                    ..slot.preprocessed_offset + slot.preprocessed_width],
-                            )
-                            .with_periodic(
-                                &scratch.local_point[slot.periodic_offset
-                                    ..slot.periodic_offset + slot.periodic_width],
-                            );
-                            let evaluations =
-                                evaluate_air_families(folder, &self.coupling, enabled, slot.air);
-                            let eval_index = if node == 0 { 0 } else { node - 1 };
-                            if enabled.constraints {
-                                scratch.constraint_evals[slot.stage_index][eval_index] +=
-                                    eq_suffix * evaluations.constraints;
-                            }
-                            if let Some(interaction) = enabled.interaction {
-                                scratch.interaction_evals[interaction.group_index][eval_index] +=
-                                    eq_suffix * evaluations.interactions;
+                for &(node, step) in &schedule {
+                    match step {
+                        NodeStep::Unit(count) => {
+                            for _ in 0..count {
+                                scratch.add_diffs();
+                                boundary += boundary_diff;
                             }
                         }
-                    }
-                    if let Some(&step) = node_steps.get(node) {
-                        if step == EF::ONE {
-                            scratch.add_diffs();
-                            boundary += boundary_diff;
-                        } else {
+                        NodeStep::Scaled(step) => {
                             scratch.add_scaled_diffs(step);
                             boundary.add_scaled(boundary_diff, step);
+                        }
+                    }
+                    for slot in &self.slots {
+                        let enabled = slot.enabled_families(node, true);
+                        if !enabled.constraints && enabled.interaction.is_none() {
+                            continue;
+                        }
+                        let folder = MultilinearFolder::new(
+                            &scratch.local_point
+                                [slot.main_offset..slot.main_offset + slot.main_width],
+                            &scratch.next_point
+                                [slot.main_offset..slot.main_offset + slot.main_width],
+                            boundary,
+                            self.public_values[slot.stage_index],
+                            self.alpha,
+                        )
+                        .with_preprocessed(
+                            &scratch.local_point[slot.preprocessed_offset
+                                ..slot.preprocessed_offset + slot.preprocessed_width],
+                            &scratch.next_point[slot.preprocessed_offset
+                                ..slot.preprocessed_offset + slot.preprocessed_width],
+                        )
+                        .with_periodic(
+                            &scratch.local_point
+                                [slot.periodic_offset..slot.periodic_offset + slot.periodic_width],
+                        );
+                        let evaluations =
+                            evaluate_air_families(folder, &self.coupling, enabled, slot.air);
+                        let eval_index = if node == 0 { 0 } else { node - 1 };
+                        if enabled.constraints {
+                            scratch.constraint_evals[slot.stage_index][eval_index] +=
+                                eq_suffix * evaluations.constraints;
+                        }
+                        if let Some(interaction) = enabled.interaction {
+                            scratch.interaction_evals[interaction.group_index][eval_index] +=
+                                eq_suffix * evaluations.interactions;
                         }
                     }
                 }
@@ -1913,7 +1968,7 @@ where
         let packing_width = F::Packing::WIDTH;
         let packed_half = scalar_half / packing_width;
         let degree = self.degree();
-        let node_steps = interpolation_steps::<EF>(degree);
+        let schedule = node_schedule::<EF>(evaluated_nodes(&self.slots, degree, true));
         let alpha = PackedExt::new(EF::ExtensionPacking::from(self.alpha));
         let coupling = InteractionCoupling {
             links: self
@@ -2006,63 +2061,64 @@ where
                         PackedExt::new(raw_boundary_diff.transition),
                     );
 
-                    for node in 0..=degree {
-                        if node != 1 {
-                            for slot in &self.slots {
-                                let enabled = slot.enabled_families(node, true);
-                                if !enabled.constraints && enabled.interaction.is_none() {
-                                    continue;
+                    for &(node, step) in &schedule {
+                        match step {
+                            NodeStep::Unit(count) => {
+                                for _ in 0..count {
+                                    scratch.add_diffs();
+                                    boundary += boundary_diff;
                                 }
-                                let folder = MultilinearFolder::new(
-                                    &scratch.local_point
-                                        [slot.main_offset..slot.main_offset + slot.main_width],
-                                    &scratch.next_point
-                                        [slot.main_offset..slot.main_offset + slot.main_width],
-                                    boundary,
-                                    self.public_values[slot.stage_index],
-                                    alpha,
-                                )
-                                .with_preprocessed(
-                                    &scratch.local_point[slot.preprocessed_offset
-                                        ..slot.preprocessed_offset + slot.preprocessed_width],
-                                    &scratch.next_point[slot.preprocessed_offset
-                                        ..slot.preprocessed_offset + slot.preprocessed_width],
-                                )
-                                .with_periodic(
-                                    &scratch.local_point[slot.periodic_offset
-                                        ..slot.periodic_offset + slot.periodic_width],
-                                );
-                                let evaluations =
-                                    evaluate_air_families(folder, &coupling, enabled, slot.air);
-                                let eval_index = if node == 0 { 0 } else { node - 1 };
-                                if enabled.constraints {
-                                    scratch.constraint_evals[slot.stage_index][eval_index] +=
-                                        dot_product::<EF, _, _>(
-                                            eq_suffix.iter().copied(),
-                                            EF::ExtensionPacking::to_ext_iter([evaluations
-                                                .constraints
-                                                .0]),
-                                        );
-                                }
-                                if let Some(interaction) = enabled.interaction {
-                                    scratch.interaction_evals[interaction.group_index]
-                                        [eval_index] += dot_product::<EF, _, _>(
+                            }
+                            NodeStep::Scaled(step) => {
+                                let step = PackedExt::new(EF::ExtensionPacking::from(step));
+                                scratch.add_scaled_diffs(step);
+                                boundary.add_scaled(boundary_diff, step);
+                            }
+                        }
+                        for slot in &self.slots {
+                            let enabled = slot.enabled_families(node, true);
+                            if !enabled.constraints && enabled.interaction.is_none() {
+                                continue;
+                            }
+                            let folder = MultilinearFolder::new(
+                                &scratch.local_point
+                                    [slot.main_offset..slot.main_offset + slot.main_width],
+                                &scratch.next_point
+                                    [slot.main_offset..slot.main_offset + slot.main_width],
+                                boundary,
+                                self.public_values[slot.stage_index],
+                                alpha,
+                            )
+                            .with_preprocessed(
+                                &scratch.local_point[slot.preprocessed_offset
+                                    ..slot.preprocessed_offset + slot.preprocessed_width],
+                                &scratch.next_point[slot.preprocessed_offset
+                                    ..slot.preprocessed_offset + slot.preprocessed_width],
+                            )
+                            .with_periodic(
+                                &scratch.local_point[slot.periodic_offset
+                                    ..slot.periodic_offset + slot.periodic_width],
+                            );
+                            let evaluations =
+                                evaluate_air_families(folder, &coupling, enabled, slot.air);
+                            let eval_index = if node == 0 { 0 } else { node - 1 };
+                            if enabled.constraints {
+                                scratch.constraint_evals[slot.stage_index][eval_index] +=
+                                    dot_product::<EF, _, _>(
+                                        eq_suffix.iter().copied(),
+                                        EF::ExtensionPacking::to_ext_iter([evaluations
+                                            .constraints
+                                            .0]),
+                                    );
+                            }
+                            if let Some(interaction) = enabled.interaction {
+                                scratch.interaction_evals[interaction.group_index][eval_index] +=
+                                    dot_product::<EF, _, _>(
                                         eq_suffix.iter().copied(),
                                         EF::ExtensionPacking::to_ext_iter([evaluations
                                             .interactions
                                             .0]),
                                     );
-                                }
-                            }
-                        }
-                        if let Some(&step) = node_steps.get(node) {
-                            if step == EF::ONE {
-                                scratch.add_diffs();
-                                boundary += boundary_diff;
-                            } else {
-                                let step = PackedExt::new(EF::ExtensionPacking::from(step));
-                                scratch.add_scaled_diffs(step);
-                                boundary.add_scaled(boundary_diff, step);
                             }
                         }
                     }
@@ -2139,11 +2195,48 @@ mod tests {
     use alloc::vec;
 
     use p3_air::{AirBuilder, WindowAccess};
+    use p3_baby_bear::BabyBear;
     use p3_binary_field::BinaryField128;
 
     use super::*;
 
     type F = BinaryField128;
+
+    #[test]
+    fn node_schedule_walks_unit_gaps_and_jumps_other_gaps() {
+        // Prime-field nodes are consecutive integers: every stretch costs additions only.
+        assert_eq!(
+            node_schedule::<BabyBear>([0, 2, 3]),
+            vec![
+                (0, NodeStep::Unit(0)),
+                (2, NodeStep::Unit(2)),
+                (3, NodeStep::Unit(1)),
+            ]
+        );
+
+        // Binary-field node two sits a non-unit gap past node one.
+        // The scratch jumps there from node zero with one scaled step instead of two.
+        //
+        //     node : 0    1    2    3    4
+        //     repr : 0    1    2    3    4
+        //     gap  :   1    3    1    7
+        let node = F::interpolation_node;
+        assert_eq!(
+            node_schedule::<F>([0, 2, 3, 4]),
+            vec![
+                (0, NodeStep::Unit(0)),
+                (2, NodeStep::Scaled(node(2))),
+                (3, NodeStep::Unit(1)),
+                (4, NodeStep::Scaled(node(4) - node(3))),
+            ]
+        );
+
+        // The first base-field round skips node zero, so the jump starts from the fill.
+        assert_eq!(
+            node_schedule::<F>([2, 3]),
+            vec![(2, NodeStep::Scaled(node(2))), (3, NodeStep::Unit(1))]
+        );
+    }
 
     struct BooleanAir;
 
