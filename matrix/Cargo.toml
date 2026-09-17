@@ -55,5 +55,9 @@ name = "bitrev_vertical_packing"
 path = "benches/bitrev_vertical_packing.rs"
 harness = false
 
+[[bench]]
+name = "bit_reverse"
+harness = false
+
 [lints]
 workspace = true
