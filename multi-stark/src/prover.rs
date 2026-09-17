@@ -11,7 +11,7 @@ use p3_sumcheck::PrescribedPointPcs;
 use crate::ProverInstances;
 use crate::config::{Commitment, MultiStarkConfig, PcsProverError, ProverData};
 use crate::folder::ProverAir;
-use crate::instance::ProverParts;
+use crate::instance::{ProverParts, trace_suffix};
 use crate::lookup::prove_lookup;
 use crate::proof::MultiStarkProof;
 use crate::security::{SecurityError, assess_statement};
@@ -264,10 +264,11 @@ where
 
     // 6. Open each main trace table at its suffix of the common bound point.
     let opening = transcript.main_opening(|challenger| {
+        let schedule = instances.main_schedule(|rows| trace_suffix(&point, rows));
         config.pcs().open_at(
             prover_data,
-            &instances.opening_protocol(),
-            &instances.main_points(&point),
+            schedule.protocol(),
+            schedule.payloads(),
             challenger,
         )
     });
@@ -286,10 +287,11 @@ where
             .preprocessed
             .as_ref()
             .expect("preprocessed proving key is missing for an AIR with preprocessed columns");
+        let schedule = instances.preprocessed_schedule(|rows| trace_suffix(&point, rows));
         config.preprocessed_pcs().open_at(
             preprocessed.prover_data.clone(),
-            &instances.preprocessed_opening_protocol(),
-            &instances.preprocessed_points(&point),
+            schedule.protocol(),
+            schedule.payloads(),
             challenger,
         )
     });
