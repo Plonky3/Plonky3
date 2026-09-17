@@ -3,7 +3,7 @@
 //!
 //! [`PcsLayout`] commits with no preprocessing depth, so `Layout::commit` produces a width-1
 //! codeword — one Reed-Solomon-encoded column, the whole committed polynomial — and
-//! `Layout::into_sumcheck` consumes zero preprocessing rounds, leaving every one of the
+//! `PcsLayout::into_sumcheck_in` consumes zero preprocessing rounds, leaving every one of the
 //! `num_variables` residual sumcheck rounds a folding round. Each round's challenge is used
 //! twice: it binds one multilinear variable, through [`PcsLayout`]'s evaluation-basis suffix
 //! binding, and it folds the codeword, through [`fold_codeword_batch`], a Reed-Solomon codeword fold
@@ -15,7 +15,7 @@
 
 use alloc::vec::Vec;
 
-use p3_binary_field::BinaryField128;
+use p3_binary_field::{BinaryField128, Ghash128};
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
 use p3_commit::{Encoder, Mmcs};
 use p3_matrix::dense::{DenseMatrix, RowMajorMatrix};
@@ -114,7 +114,7 @@ where
 /// Returns the base commitment's Merkle prover data (handed back so the caller can still open
 /// base-round queries against it), the sumcheck transcript, one [`RoundCommitment`] per fold
 /// batch except the last, the folding randomness in round order — `randomness.as_slice()[r]` is
-/// round `r`'s challenge, matching what [`Layout::into_sumcheck`] returns — and the final
+/// round `r`'s challenge, matching what `PcsLayout::into_sumcheck_in` returns — and the final
 /// folded codeword.
 ///
 /// `BIND_EACH_ROUND` picks when each round's challenge is applied to the sumcheck tables:
@@ -161,8 +161,12 @@ where
     } = prover_data;
 
     let mut sumcheck_data = SumcheckData::default();
-    let (mut sumcheck, mut randomness) =
-        transcript.fold_batch(|challenger| layout.into_sumcheck(&mut sumcheck_data, 0, challenger));
+
+    // The rounds multiply in the polynomial basis, which needs no change of basis per product.
+    // The transcript carries tower elements.
+    let (mut sumcheck, mut randomness) = transcript.fold_batch(|challenger| {
+        layout.into_sumcheck_in::<Ghash128, _>(&mut sumcheck_data, 0, challenger)
+    });
     assert_eq!(
         randomness.num_variables(),
         0,
@@ -187,13 +191,7 @@ where
             let challenge = tracing::info_span!("sumcheck round", round).in_scope(|| {
                 // A sumcheck round seeds a sub-transcript of its own.
                 transcript.fold_batch(|challenger| {
-                    sumcheck.compute_sumcheck_polynomials(
-                        &mut sumcheck_data,
-                        challenger,
-                        1,
-                        0,
-                        None,
-                    )
+                    sumcheck.compute_sumcheck_polynomials(&mut sumcheck_data, challenger, 1, 0)
                 })
             });
             challenges.push(challenge.as_slice()[0]);
