@@ -207,82 +207,84 @@ mod tests {
     fn repr_rounds_play_the_challenge_field_transcript() {
         // Batches mix single rounds, which fuse across calls, with a settle and a longer batch.
         let batches = [1, 2, 1, 3, 1, 1];
+
+        // Grinding stays off: a parallel grinder may return any valid witness,
+        // so two provers could part ways at the first grinding step.
+        let pow_bits = 0;
         let num_variables: usize = batches.iter().sum();
 
         for order in [VariableOrder::Prefix, VariableOrder::Suffix] {
-            for pow_bits in [0, 3] {
-                // Rounds the challenge-field prover plays before handing over.
-                for split in 0..3 {
-                    let mut reference = random_prover(order, num_variables, 7);
-                    let mut reference_data = SumcheckData::default();
-                    let mut reference_challenger = fresh_challenger();
+            // Rounds the challenge-field prover plays before handing over.
+            for split in 0..3 {
+                let mut reference = random_prover(order, num_variables, 7);
+                let mut reference_data = SumcheckData::default();
+                let mut reference_challenger = fresh_challenger();
 
-                    let mut handoff = random_prover(order, num_variables, 7);
-                    let mut handoff_data = SumcheckData::default();
-                    let mut handoff_challenger = fresh_challenger();
+                let mut handoff = random_prover(order, num_variables, 7);
+                let mut handoff_data = SumcheckData::default();
+                let mut handoff_challenger = fresh_challenger();
 
-                    // The batch sizes are part of the transcript, so the head replays them.
-                    //
-                    // A handoff after any batch carries that batch's last challenge across.
-                    for &rounds in &batches[..split] {
-                        handoff.compute_sumcheck_polynomials(
-                            &mut handoff_data,
-                            &mut handoff_challenger,
-                            rounds,
-                            pow_bits,
-                            None,
-                        );
-                    }
-                    let head = batches[..split].iter().sum::<usize>();
-                    let mut repr = ReprSumcheckProver::<F, F, Ghash128>::new(handoff);
-
-                    let mut played = 0;
-                    for (batch, &rounds) in batches.iter().enumerate() {
-                        let expected = reference.compute_sumcheck_polynomials(
-                            &mut reference_data,
-                            &mut reference_challenger,
-                            rounds,
-                            pow_bits,
-                            None,
-                        );
-                        played += rounds;
-                        if batch == 3 {
-                            reference.settle();
-                        }
-                        if played <= head {
-                            continue;
-                        }
-
-                        let got = repr.compute_sumcheck_polynomials(
-                            &mut handoff_data,
-                            &mut handoff_challenger,
-                            rounds,
-                            pow_bits,
-                        );
-                        if batch == 3 {
-                            repr.settle();
-                        }
-
-                        assert_eq!(got, expected, "{order:?} pow {pow_bits} split {split}");
-                        assert_eq!(repr.claimed_sum(), reference.claimed_sum());
-                        assert_eq!(repr.num_variables(), reference.num_variables());
-                    }
-
-                    assert_eq!(
-                        handoff_data.polynomial_evaluations,
-                        reference_data.polynomial_evaluations
+                // The batch sizes are part of the transcript, so the head replays them.
+                //
+                // A handoff after any batch carries that batch's last challenge across.
+                for &rounds in &batches[..split] {
+                    handoff.compute_sumcheck_polynomials(
+                        &mut handoff_data,
+                        &mut handoff_challenger,
+                        rounds,
+                        pow_bits,
+                        None,
                     );
-                    assert_eq!(handoff_data.pow_witnesses, reference_data.pow_witnesses);
-                    assert_eq!(
-                        CanSample::<F>::sample(&mut handoff_challenger),
-                        CanSample::<F>::sample(&mut reference_challenger)
-                    );
-
-                    // The final binding lands on the claim in both fields.
-                    reference.settle();
-                    repr.settle();
-                    assert_eq!(repr.claimed_sum(), reference.claimed_sum());
                 }
+                let head = batches[..split].iter().sum::<usize>();
+                let mut repr = ReprSumcheckProver::<F, F, Ghash128>::new(handoff);
+
+                let mut played = 0;
+                for (batch, &rounds) in batches.iter().enumerate() {
+                    let expected = reference.compute_sumcheck_polynomials(
+                        &mut reference_data,
+                        &mut reference_challenger,
+                        rounds,
+                        pow_bits,
+                        None,
+                    );
+                    played += rounds;
+                    if batch == 3 {
+                        reference.settle();
+                    }
+                    if played <= head {
+                        continue;
+                    }
+
+                    let got = repr.compute_sumcheck_polynomials(
+                        &mut handoff_data,
+                        &mut handoff_challenger,
+                        rounds,
+                        pow_bits,
+                    );
+                    if batch == 3 {
+                        repr.settle();
+                    }
+
+                    assert_eq!(got, expected, "{order:?} split {split}");
+                    assert_eq!(repr.claimed_sum(), reference.claimed_sum());
+                    assert_eq!(repr.num_variables(), reference.num_variables());
+                }
+
+                assert_eq!(
+                    handoff_data.polynomial_evaluations,
+                    reference_data.polynomial_evaluations
+                );
+                assert_eq!(handoff_data.pow_witnesses, reference_data.pow_witnesses);
+                assert_eq!(
+                    CanSample::<F>::sample(&mut handoff_challenger),
+                    CanSample::<F>::sample(&mut reference_challenger)
+                );
+
+                // The final binding lands on the claim in both fields.
+                reference.settle();
+                repr.settle();
+                assert_eq!(repr.claimed_sum(), reference.claimed_sum());
             }
         }
     }
