@@ -59,10 +59,15 @@ const WIDTH: usize = Packed::WIDTH;
 /// Small enough to leave real parallelism at every codeword length this crate exercises.
 const FOLD_GRAIN: usize = 1 << 10;
 
-/// Input symbols one block of cosets holds, where the batch is small enough to fit several.
+/// Input symbols one block of cosets holds, up to the arity where one packed group of cosets
+/// needs more.
 ///
-/// A block crosses into the polynomial basis in one pass and then runs every round of the batch
-/// while it is still in cache.
+/// A block this size crosses into the polynomial basis in one pass and then runs every round of
+/// the batch while it is still in cache.
+///
+/// A block never holds fewer cosets than a packed group of width `W`, so at arity `a` it holds
+/// `max(BLOCK_SYMBOLS, W << a)` symbols, which grows with the arity once `2^a` passes
+/// `BLOCK_SYMBOLS / W`.
 ///
 /// One grain of pairs, so a single-round fold takes a whole task as one block.
 const BLOCK_SYMBOLS: usize = 2 * FOLD_GRAIN;
@@ -395,6 +400,14 @@ fn fold_rounds_packed(
 ///
 /// So every call starts on a group boundary, and even a block's last round fills whole groups
 /// unless the whole round is shorter than one.
+///
+/// Each worker's scratch holds one block in, plus half a block for the rounds before the last:
+///
+/// ```text
+///     symbols in    max(BLOCK_SYMBOLS, W << a)
+///     W = 8, a <= 8      2048 symbols     32 KiB   + 16 KiB
+///     W = 8, a = 12     32768 symbols    512 KiB   + 256 KiB
+/// ```
 ///
 /// Each parallel task owns a contiguous run of output symbols and the cosets feeding them, so no
 /// two tasks touch the same symbol on either side.
