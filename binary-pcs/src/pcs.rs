@@ -28,11 +28,11 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::marker::PhantomData;
 
-use p3_binary_dft::EncodableLevel;
+use p3_binary_dft::{AdditiveNtt, AdditiveRsEncoder, EncodableLevel};
 use p3_binary_field::TowerLevel;
 use p3_challenger::fs::TranscriptField;
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
-use p3_commit::{Mmcs, MultilinearPcs};
+use p3_commit::{Encoder, Mmcs, MultilinearPcs};
 use p3_field::ExtensionField;
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
@@ -72,11 +72,11 @@ type Opening<F, EF, MT, MX> = Result<BinaryPcsProof<F, EF, MT, MX>, Failure<F, M
 ///
 /// The two schemes must report the same failure type.
 /// One commitment family instantiated at two levels does.
-pub struct BinaryPcs<F: EncodableLevel, EF, MT, MX> {
+pub struct BinaryPcs<F: EncodableLevel, EF, MT, MX, E = <F as EncodableLevel>::Encoder> {
     config: BinaryPcsConfig,
     mmcs: MT,
     round_mmcs: MX,
-    encoder: F::Encoder,
+    encoder: E,
     _challenge: PhantomData<EF>,
 }
 
@@ -107,12 +107,30 @@ impl<F: EncodableLevel, EF, MT, MX> BinaryPcs<F, EF, MT, MX> {
     }
 }
 
-impl<F, EF, MT, MX> BinaryPcs<F, EF, MT, MX>
+impl<F, EF, MT, MX, Ntt> BinaryPcs<F, EF, MT, MX, AdditiveRsEncoder<F, Ntt>>
+where
+    F: EncodableLevel,
+    Ntt: AdditiveNtt<F> + Sync,
+{
+    /// Builds an instance around an explicitly selected additive transform.
+    pub const fn with_ntt(config: BinaryPcsConfig, mmcs: MT, round_mmcs: MX, ntt: Ntt) -> Self {
+        Self {
+            config,
+            mmcs,
+            round_mmcs,
+            encoder: AdditiveRsEncoder::new(ntt),
+            _challenge: PhantomData,
+        }
+    }
+}
+
+impl<F, EF, MT, MX, E> BinaryPcs<F, EF, MT, MX, E>
 where
     F: EncodableLevel + TranscriptField + FoldAlphabet<EF>,
     EF: ExtensionField<F> + TowerLevel + FoldAlphabet<EF>,
     MT: Mmcs<F>,
     MX: Mmcs<EF, Error = MT::Error>,
+    E: Encoder<F> + Sync,
 {
     /// Check table dimensions and scalar claim capacity before committing or opening.
     ///
@@ -518,12 +536,14 @@ where
     }
 }
 
-impl<F, EF, MT, MX, Challenger> MultilinearPcs<EF, Challenger> for BinaryPcs<F, EF, MT, MX>
+impl<F, EF, MT, MX, E, Challenger> MultilinearPcs<EF, Challenger>
+    for BinaryPcs<F, EF, MT, MX, E>
 where
     F: EncodableLevel + TranscriptField + FoldAlphabet<EF>,
     EF: ExtensionField<F> + TowerLevel + FoldAlphabet<EF>,
     MT: Mmcs<F>,
     MX: Mmcs<EF, Error = MT::Error>,
+    E: Encoder<F> + Sync,
     Challenger: FieldChallenger<F>
         + GrindingChallenger<Witness = F>
         + CanSampleUniformBits<F>
@@ -585,12 +605,14 @@ where
     }
 }
 
-impl<F, EF, MT, MX, Challenger> PrescribedPointPcs<EF, Challenger> for BinaryPcs<F, EF, MT, MX>
+impl<F, EF, MT, MX, E, Challenger> PrescribedPointPcs<EF, Challenger>
+    for BinaryPcs<F, EF, MT, MX, E>
 where
     F: EncodableLevel + TranscriptField + FoldAlphabet<EF>,
     EF: ExtensionField<F> + TowerLevel + FoldAlphabet<EF>,
     MT: Mmcs<F>,
     MX: Mmcs<EF, Error = MT::Error>,
+    E: Encoder<F> + Sync,
     Challenger: FieldChallenger<F>
         + GrindingChallenger<Witness = F>
         + CanSampleUniformBits<F>
