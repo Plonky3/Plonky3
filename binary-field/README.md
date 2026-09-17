@@ -14,7 +14,7 @@ Key items:
 - `Gf2` — the base field `GF(2)`
 - `BinaryField2`, `BinaryField4`, `BinaryField8`, `BinaryField16`, `BinaryField32`, `BinaryField64`, `BinaryField128` — the tower levels, each a quadratic extension of the one below
 - `HasSubfield<BinaryField2>` for `BinaryField128` — `GF(4)` as a subfield of `GF(2^128)`, with a slice membership test and `GF(4)` scalars applied without a product
-- `Ghash128` — `GF(2^128)` in the GHASH polynomial basis, with `From` conversions to and from the widest tower level
+- `Ghash128` — `GF(2^128)` in the GHASH polynomial basis, with `From` conversions to and from the widest tower level, and an `Algebra<BinaryField128>` action whose results stay in the polynomial basis
 - `PackedGhash128` — the SIMD packing, two elements per register on `avx2` and four on `avx512f`,
   in both cases only when `vpclmulqdq` is also enabled, so it is absent from the rendered docs
 - `BasedVectorSpace` / `ExtensionField` between every pair of byte-aligned tower levels, in the tower basis
