@@ -3,10 +3,15 @@
 use p3_commit::{Encoder, Mmcs};
 use p3_field::Field;
 use p3_matrix::dense::{DenseMatrix, RowMajorMatrix, RowMajorMatrixView, RowMajorMatrixViewMut};
+use p3_maybe_rayon::prelude::*;
 use p3_multilinear_util::poly::Poly;
 use tracing::info_span;
 
 use crate::strategy::VariableOrder;
+
+/// Chunk size for the parallel copy of the suffix-order message, chosen so each
+/// rayon task copies enough elements to outweigh the fork-join overhead.
+const COPY_CHUNK: usize = 1 << 16;
 
 /// Encodes and Merkle-commits the initial base-field polynomial.
 ///
@@ -59,7 +64,13 @@ where
             view.transpose_into(&mut prefix);
         }),
         // Folding blocks are already contiguous, so the row width alone selects them.
-        VariableOrder::Suffix => values[..poly.as_slice().len()].copy_from_slice(poly.as_slice()),
+        VariableOrder::Suffix => {
+            let poly_values = poly.as_slice();
+            values[..poly_values.len()]
+                .par_chunks_mut(COPY_CHUNK)
+                .zip(poly_values.par_chunks(COPY_CHUNK))
+                .for_each(|(dst, src)| dst.copy_from_slice(src));
+        }
     };
     let message = RowMajorMatrix::new(values, width);
 

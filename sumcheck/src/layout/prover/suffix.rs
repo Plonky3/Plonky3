@@ -14,7 +14,7 @@ use p3_multilinear_util::split_eq::SplitEq;
 use crate::lagrange::lagrange_weights_01inf_multi;
 use crate::layout::opening::{EqSvoPartials, NextSvoPartials, Opening, ProverMultiClaim};
 use crate::layout::prover::{Layout, StackedClaims};
-use crate::layout::witness::Table;
+use crate::layout::witness::{Table, column_slots};
 use crate::layout::{LayoutStrategy, Witness};
 use crate::product_polynomial::ProductPolynomial;
 use crate::strategy::{Basis, SumcheckProver, VariableOrder};
@@ -522,76 +522,31 @@ impl<F: Field, EF: ExtensionField<F>> SuffixProver<F, EF> {
 
         // Slots are disjoint, so columns compress independently.
         // A column is usually too short to parallelize inside, so the parallelism is across columns.
-        self.column_slots(out.as_mut_slice(), num_folded)
-            .into_par_iter()
-            .for_each(|(slot, table_idx, poly_idx)| {
-                let poly = self.claims.tables[table_idx].poly(poly_idx);
-                if num_folded == 0 {
-                    // Nothing to fold: the slot is the column itself, times the scale.
-                    if scale == EF::ONE {
-                        slot.iter_mut()
-                            .zip(poly.as_slice())
-                            .for_each(|(out, &value)| *out = value.into());
-                    } else {
-                        slot.iter_mut()
-                            .zip(poly.as_slice())
-                            .for_each(|(out, &value)| *out = scale * value);
-                    }
+        column_slots(
+            &self.claims.placements,
+            &self.claims.tables,
+            num_folded,
+            out.as_mut_slice(),
+        )
+        .into_par_iter()
+        .for_each(|(slot, table_idx, poly_idx)| {
+            let poly = self.claims.tables[table_idx].poly(poly_idx);
+            if num_folded == 0 {
+                // Nothing to fold: the slot is the column itself, times the scale.
+                if scale == EF::ONE {
+                    slot.iter_mut()
+                        .zip(poly.as_slice())
+                        .for_each(|(out, &value)| *out = value.into());
                 } else {
-                    rs.compress_suffix_into(slot, poly.as_view());
+                    slot.iter_mut()
+                        .zip(poly.as_slice())
+                        .for_each(|(out, &value)| *out = scale * value);
                 }
-            });
+            } else {
+                rs.compress_suffix_into(slot, poly.as_view());
+            }
+        });
         out
-    }
-
-    /// Splits `out` into one disjoint slot per column, after `num_folded` suffix variables.
-    ///
-    /// Column `(table, poly)` owns the slot starting at `selector.index() << (n - num_folded)`,
-    /// of length `2^(n - num_folded)`, where `n` is the table's arity.
-    ///
-    /// # Returns
-    ///
-    /// One `(slot, table index, column index)` triple per column, in increasing slot order.
-    fn column_slots<'a>(
-        &self,
-        out: &'a mut [EF],
-        num_folded: usize,
-    ) -> Vec<(&'a mut [EF], usize, usize)> {
-        let mut ranges: Vec<(usize, usize, usize, usize)> = self
-            .claims
-            .placements
-            .iter()
-            .flat_map(|placement| {
-                let num_variables_table = self.claims.num_variables_table(placement.idx());
-                assert!(num_folded <= num_variables_table);
-                let log_len = num_variables_table - num_folded;
-                placement
-                    .selectors()
-                    .iter()
-                    .enumerate()
-                    .map(move |(poly_idx, selector)| {
-                        (
-                            selector.index() << log_len,
-                            1 << log_len,
-                            placement.idx(),
-                            poly_idx,
-                        )
-                    })
-            })
-            .collect();
-        ranges.sort_unstable_by_key(|&(offset, ..)| offset);
-
-        let mut slots = Vec::with_capacity(ranges.len());
-        let mut rest = out;
-        let mut consumed = 0;
-        for (offset, len, table_idx, poly_idx) in ranges {
-            let (_, tail) = core::mem::take(&mut rest).split_at_mut(offset - consumed);
-            let (slot, tail) = tail.split_at_mut(len);
-            slots.push((slot, table_idx, poly_idx));
-            rest = tail;
-            consumed = offset + len;
-        }
-        slots
     }
 
     /// Builds the residual weight polynomial after the SVO rounds.
@@ -661,41 +616,46 @@ impl<F: Field, EF: ExtensionField<F>> SuffixProver<F, EF> {
 
         // Concrete claims: each column's slot is independent, so slots fill in parallel.
         // Every contribution to a slot is summed in one pass over it.
-        self.column_slots(out.as_mut_slice(), rs.num_variables())
-            .into_par_iter()
-            .for_each(|(slot, table_idx, poly_idx)| {
-                let terms: Vec<(&[EF], EF)> = column_weights[table_idx][poly_idx]
-                    .iter()
-                    .map(|&(claim_idx, is_next, scale)| {
-                        let claim_tables = &tables[claim_idx];
-                        let table = if is_next {
-                            &claim_tables.next
-                        } else {
-                            &claim_tables.current
-                        };
-                        (table.as_deref().unwrap(), scale)
-                    })
-                    .collect();
-                match terms.as_slice() {
-                    [] => {}
-                    [(table, scale)] => slot
-                        .iter_mut()
-                        .zip(*table)
-                        .for_each(|(out, &weight)| *out += *scale * weight),
-                    [(table0, scale0), (table1, scale1)] => slot
-                        .iter_mut()
-                        .zip(table0.iter().zip(*table1))
-                        .for_each(|(out, (&weight0, &weight1))| {
-                            *out += *scale0 * weight0 + *scale1 * weight1;
-                        }),
-                    _ => slot.iter_mut().enumerate().for_each(|(row, out)| {
-                        *out += terms
-                            .iter()
-                            .map(|(table, scale)| *scale * table[row])
-                            .sum::<EF>();
+        column_slots(
+            &self.claims.placements,
+            &self.claims.tables,
+            rs.num_variables(),
+            out.as_mut_slice(),
+        )
+        .into_par_iter()
+        .for_each(|(slot, table_idx, poly_idx)| {
+            let terms: Vec<(&[EF], EF)> = column_weights[table_idx][poly_idx]
+                .iter()
+                .map(|&(claim_idx, is_next, scale)| {
+                    let claim_tables = &tables[claim_idx];
+                    let table = if is_next {
+                        &claim_tables.next
+                    } else {
+                        &claim_tables.current
+                    };
+                    (table.as_deref().unwrap(), scale)
+                })
+                .collect();
+            match terms.as_slice() {
+                [] => {}
+                [(table, scale)] => slot
+                    .iter_mut()
+                    .zip(*table)
+                    .for_each(|(out, &weight)| *out += *scale * weight),
+                [(table0, scale0), (table1, scale1)] => slot
+                    .iter_mut()
+                    .zip(table0.iter().zip(*table1))
+                    .for_each(|(out, (&weight0, &weight1))| {
+                        *out += *scale0 * weight0 + *scale1 * weight1;
                     }),
-                }
-            });
+                _ => slot.iter_mut().enumerate().for_each(|(row, out)| {
+                    *out += terms
+                        .iter()
+                        .map(|(table, scale)| *scale * table[row])
+                        .sum::<EF>();
+                }),
+            }
+        });
 
         // Virtual claims: span the full output; alpha continues after concrete ones.
         let mut alpha_i = alpha.exp_u64(self.num_claims() as u64);
