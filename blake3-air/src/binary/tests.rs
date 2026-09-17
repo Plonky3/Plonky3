@@ -14,7 +14,7 @@ use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
 
 use super::{
-    Blake3BinaryAir, Blake3BinaryCols, Blake3CompressionInput, G_SCHEDULE, NUM_BLAKE3_BINARY_COLS,
+    Blake3BinaryAir, Blake3BinaryCols, Blake3CompressionInput, NUM_BLAKE3_BINARY_COLS,
     generate_binary_trace_rows, iv_word,
 };
 use crate::constants::permute;
@@ -86,43 +86,6 @@ fn reference_compress(input: &Blake3CompressionInput) -> [u32; 16] {
     })
 }
 
-/// Read a word stored as 32 boolean cells.
-fn read_word(bits: &[F; 32]) -> u32 {
-    bits.iter().enumerate().fold(0, |word, (i, &bit)| {
-        assert!(bit == F::ZERO || bit == F::ONE, "cell is not a bit");
-        word | (u32::from(bit == F::ONE) << i)
-    })
-}
-
-/// Recompute the compression output of a trace row from its witness columns.
-///
-/// The final state words are `a = d1 ^ (d2 <<< 8)`, `b = b2`, `c = b1 ^ (b2 <<< 7)` and
-/// `d = d2` of the last G step that wrote them, and the output is
-/// `v[i] ^ v[i + 8]` followed by `v[i + 8] ^ cv[i]`.
-fn compression_output(row: &Blake3BinaryCols<F>) -> [u32; 16] {
-    let mut v = [0u32; 16];
-    for (cols, [ia, ib, ic, id]) in row.rounds[6].iter().zip(G_SCHEDULE) {
-        let (d1, b1, d2, b2) = (
-            read_word(&cols.d1),
-            read_word(&cols.b1),
-            read_word(&cols.d2),
-            read_word(&cols.b2),
-        );
-        v[ia] = d1 ^ d2.rotate_left(8);
-        v[4 + ib] = b2;
-        v[8 + ic] = b1 ^ b2.rotate_left(7);
-        v[12 + id] = d2;
-    }
-    let cv = row.chaining_value.map(|word| read_word(&word));
-    array::from_fn(|i| {
-        if i < 8 {
-            v[i] ^ v[i + 8]
-        } else {
-            v[i] ^ cv[i - 8]
-        }
-    })
-}
-
 /// A single-block hash input for a message of at most 64 bytes.
 fn single_block_input(message: &[u8]) -> Blake3CompressionInput {
     let mut bytes = [0u8; 64];
@@ -147,7 +110,11 @@ fn trace_outputs(inputs: &[Blake3CompressionInput]) -> Vec<[u32; 16]> {
     let trace = generate_binary_trace_rows::<F>(inputs.to_vec(), 0);
     check_constraints(&air, &trace, &[]);
     (0..trace.height())
-        .map(|r| compression_output((*trace.row_slice(r).unwrap()).borrow()))
+        .map(|r| {
+            let row = trace.row_slice(r).unwrap();
+            let row: &Blake3BinaryCols<F> = (*row).borrow();
+            row.compression_output()
+        })
         .collect()
 }
 

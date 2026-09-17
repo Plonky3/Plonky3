@@ -30,6 +30,10 @@ const NUM_CONSTRAINTS: usize = NUM_INPUT_BITS + NUM_ROUNDS * G_PER_ROUND * CONST
 /// Each row proves one compression. The AIR reads no next row and every constraint has
 /// degree at most 2.
 ///
+/// The compression output is neither stored nor constrained. It is linear in the chaining
+/// value and the last round's `b1`, `d1`, `b2`, `d2` words, and
+/// [`Blake3BinaryCols::compression_output`] recovers it from a row.
+///
 /// The input bits are constrained to be boolean. Every other column is then forced to a
 /// bit by the addition constraints, since the majority of three bits is a bit.
 ///

@@ -8,7 +8,7 @@ use p3_maybe_rayon::prelude::*;
 use tracing::instrument;
 
 use super::columns::{Blake3BinaryCols, Blake3BinaryGCols, NUM_BLAKE3_BINARY_COLS};
-use super::{G_SCHEDULE, iv_word};
+use super::{G_SCHEDULE, NUM_ROUNDS, iv_word};
 use crate::constants::permute;
 
 /// The inputs to one Blake-3 compression.
@@ -97,6 +97,53 @@ fn generate_trace_row<F: Field>(row: &mut Blake3BinaryCols<F>, input: &Blake3Com
             generate_g(cols, &mut state, slots, m[2 * g], m[2 * g + 1]);
         }
     }
+}
+
+impl<F: Field> Blake3BinaryCols<F> {
+    /// Recover the compression output of this row from its witness columns.
+    ///
+    /// The final state words are `a = d1 ^ (d2 <<< 8)`, `b = b2`, `c = b1 ^ (b2 <<< 7)` and
+    /// `d = d2` of the last G step that wrote them, and the output is `v[i] ^ v[i + 8]`
+    /// followed by `v[i + 8] ^ cv[i]`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a cell read is not a bit.
+    pub fn compression_output(&self) -> [u32; 16] {
+        let mut v = [0u32; 16];
+        for (cols, [ia, ib, ic, id]) in self.rounds[NUM_ROUNDS - 1].iter().zip(G_SCHEDULE) {
+            let (d1, b1, d2, b2) = (
+                read_word(&cols.d1),
+                read_word(&cols.b1),
+                read_word(&cols.d2),
+                read_word(&cols.b2),
+            );
+            v[ia] = d1 ^ d2.rotate_left(8);
+            v[4 + ib] = b2;
+            v[8 + ic] = b1 ^ b2.rotate_left(7);
+            v[12 + id] = d2;
+        }
+        let cv = self.chaining_value.map(|word| read_word(&word));
+        array::from_fn(|i| {
+            if i < 8 {
+                v[i] ^ v[i + 8]
+            } else {
+                v[i] ^ cv[i - 8]
+            }
+        })
+    }
+}
+
+/// Read a word stored as 32 boolean cells, least significant bit first.
+///
+/// # Panics
+///
+/// Panics if a cell is not a bit.
+fn read_word<F: Field>(bits: &[F; 32]) -> u32 {
+    bits.iter().enumerate().fold(0, |word, (i, &bit)| {
+        assert!(bit == F::ZERO || bit == F::ONE, "cell is not a bit");
+        word | (u32::from(bit == F::ONE) << i)
+    })
 }
 
 /// Apply one G step to `state`, writing its witness to `cols`.
