@@ -2394,29 +2394,42 @@ mod tests {
         );
     }
 
+    /// Trace heights for the prime-field successor twins.
+    ///
+    /// A round runs the packed kernel only while half its rows fill a SIMD lane group.
+    ///
+    /// ```text
+    ///     64 rows : packed first rounds, then scalar once the residual rows run short
+    ///     4, 2    : below a lane group of every SIMD packing, so scalar from the first round
+    /// ```
+    const PRIME_SUCCESSOR_HEIGHTS: [usize; 3] = [64, 4, 2];
+
     #[test]
     fn successor_subset_matches_full_declaration_over_a_prime_field() {
-        // 64 rows reach both the packed and the scalar kernels on every packing width in use.
-        let (main, preprocessed) = successor_subset_traces::<F>(64);
-        check_declared_successors_match_all::<F, EF, _, _>(
-            &SuccessorSubsetAir { declare_all: false },
-            &SuccessorSubsetAir { declare_all: true },
-            &main,
-            Some(&preprocessed),
-            fresh_challenger,
-        );
+        for height in PRIME_SUCCESSOR_HEIGHTS {
+            let (main, preprocessed) = successor_subset_traces::<F>(height);
+            check_declared_successors_match_all::<F, EF, _, _>(
+                &SuccessorSubsetAir { declare_all: false },
+                &SuccessorSubsetAir { declare_all: true },
+                &main,
+                Some(&preprocessed),
+                fresh_challenger,
+            );
+        }
     }
 
     #[test]
     fn successor_free_matches_full_declaration_over_a_prime_field() {
-        let main = successor_free_trace::<F>(64);
-        check_declared_successors_match_all::<F, EF, _, _>(
-            &SuccessorFreeAir { declare_all: false },
-            &SuccessorFreeAir { declare_all: true },
-            &main,
-            None,
-            fresh_challenger,
-        );
+        for height in PRIME_SUCCESSOR_HEIGHTS {
+            let main = successor_free_trace::<F>(height);
+            check_declared_successors_match_all::<F, EF, _, _>(
+                &SuccessorFreeAir { declare_all: false },
+                &SuccessorFreeAir { declare_all: true },
+                &main,
+                None,
+                fresh_challenger,
+            );
+        }
     }
 
     #[test]

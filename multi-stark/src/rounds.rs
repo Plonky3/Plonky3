@@ -2442,6 +2442,8 @@ mod tests {
     use p3_air::{AirBuilder, WindowAccess};
     use p3_baby_bear::BabyBear;
     use p3_binary_field::BinaryField128;
+    use rand::SeedableRng;
+    use rand::rngs::SmallRng;
 
     use super::*;
 
@@ -2620,5 +2622,153 @@ mod tests {
     #[test]
     fn binary_extension_packed_uses_distinct_interpolation_nodes() {
         check_binary_round_nodes(true, true);
+    }
+
+    /// Degree-three AIR reading scattered main and preprocessed successor columns.
+    ///
+    /// ```text
+    ///     main next         : columns 1, 2, 4    -> runs 1..3, 4..5
+    ///     preprocessed next : columns 0, 2       -> runs 0..1, 2..3
+    /// ```
+    ///
+    /// With `declare_all`, the AIR keeps the default declaration of every column instead.
+    struct ScatteredSuccessorAir {
+        declare_all: bool,
+    }
+
+    impl BaseAir<F> for ScatteredSuccessorAir {
+        fn width(&self) -> usize {
+            5
+        }
+        fn preprocessed_width(&self) -> usize {
+            3
+        }
+        fn main_next_row_columns(&self) -> Vec<usize> {
+            if self.declare_all {
+                (0..5).collect()
+            } else {
+                vec![4, 1, 2]
+            }
+        }
+        fn preprocessed_next_row_columns(&self) -> Vec<usize> {
+            if self.declare_all {
+                (0..3).collect()
+            } else {
+                vec![2, 0]
+            }
+        }
+    }
+
+    impl<AB: AirBuilder<F = F>> Air<AB> for ScatteredSuccessorAir {
+        fn eval(&self, builder: &mut AB) {
+            let main = builder.main();
+            let (local, next) = (main.current_slice(), main.next_slice());
+            let preprocessed = builder.preprocessed();
+            let (prep_local, prep_next) = (
+                preprocessed.current_slice()[1],
+                [preprocessed.next_slice()[0], preprocessed.next_slice()[2]],
+            );
+            builder
+                .when_transition()
+                .assert_eq(next[1] * local[0], local[3] * next[4]);
+            builder
+                .when_transition()
+                .assert_eq(next[2], prep_local * prep_next[0]);
+            builder.assert_zero(prep_next[1] * local[0] * local[4]);
+        }
+    }
+
+    /// Evaluate an extension round through the scalar kernel, leaving the columns packed.
+    fn scalar_extension_round_poly(
+        state: &mut RoundStateExt<'_, '_, ScatteredSuccessorAir, F, F>,
+        eq_suffix: &Poly<F>,
+    ) -> Vec<F> {
+        let ExtColumns::Packed(packed) =
+            core::mem::replace(&mut state.columns, ExtColumns::Scalar(Vec::new()))
+        else {
+            unreachable!("binary packing has width one");
+        };
+        state.columns = ExtColumns::Scalar(packed.iter().map(|col| col.unpack::<F, F>()).collect());
+        let evals = state.round_poly_unpacked(eq_suffix);
+        state.columns = ExtColumns::Packed(packed);
+        evals
+    }
+
+    #[test]
+    fn binary_scalar_kernels_read_scattered_successor_columns() {
+        // Invariant: every round polynomial of the scattered declaration equals the one
+        // computed with every successor column filled, through both kernels.
+        //
+        // The binary packing has width one, so dispatch never picks the scalar kernels.
+        // Each round therefore calls them directly.
+        let num_vars = 4;
+        let mut rng = SmallRng::seed_from_u64(0x5CA7);
+        let main = Table::<F>::rand(&mut rng, 5, num_vars);
+        let preprocessed = Table::<F>::rand(&mut rng, 3, num_vars);
+        let scattered_air = ScatteredSuccessorAir { declare_all: false };
+        let full_air = ScatteredSuccessorAir { declare_all: true };
+        let alpha = F::interpolation_node(11);
+        let tau = (0..num_vars)
+            .map(|i| F::interpolation_node(5 + i))
+            .collect::<Vec<_>>();
+        let state = |air| {
+            let stage = Stage::new(
+                vec![air],
+                vec![&[]],
+                vec![0],
+                vec![Some(&preprocessed)],
+                vec![&main],
+                vec![AirProfile {
+                    degrees: AirDegrees {
+                        constraints: 3,
+                        interactions: 0,
+                    },
+                    num_constraints: 3,
+                }],
+                StageCoupling::new(BTreeMap::new(), BTreeMap::new(), vec![]),
+            );
+            RoundStateBase::new(stage, alpha, F::ONE, vec![F::ONE], Point::new(tau.clone()))
+        };
+        let mut scattered = state(&scattered_air);
+        let mut full = state(&full_air);
+
+        let eq_suffix = Poly::new_from_point(&tau[1..], F::ONE);
+        let expected = full.round_poly_packed(&eq_suffix);
+        assert_eq!(scattered.round_poly_unpacked(&eq_suffix), expected);
+        assert_eq!(scattered.round_poly_packed(&eq_suffix), expected);
+
+        let r = F::interpolation_node(9);
+        let mut scattered = scattered.fold(r);
+        let mut full = full.fold(r);
+        for round in 1..num_vars {
+            let eq_suffix = Poly::new_from_point(&tau[round + 1..], F::ONE);
+            let expected = full.round_poly_packed(&eq_suffix);
+            assert_eq!(
+                scalar_extension_round_poly(&mut scattered, &eq_suffix),
+                expected
+            );
+            assert_eq!(scattered.round_poly_packed(&eq_suffix), expected);
+
+            let r = F::interpolation_node(9 + round);
+            scattered.fold(r);
+            full.fold(r);
+        }
+
+        // Each declared successor opens, in declaration order, to the full set's value.
+        let [(_, scattered_openings)] = scattered.into_openings().try_into().ok().unwrap();
+        let [(_, full_openings)] = full.into_openings().try_into().ok().unwrap();
+        assert_eq!(scattered_openings.local, full_openings.local);
+        assert_eq!(
+            scattered_openings.preprocessed_local,
+            full_openings.preprocessed_local
+        );
+        assert_eq!(
+            scattered_openings.next,
+            [4, 1, 2].map(|column| full_openings.next[column])
+        );
+        assert_eq!(
+            scattered_openings.preprocessed_next,
+            [2, 0].map(|column| full_openings.preprocessed_next[column])
+        );
     }
 }
