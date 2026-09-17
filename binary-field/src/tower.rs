@@ -511,11 +511,19 @@ macro_rules! binary_tower_level {
             }
 
             #[inline]
+            fn into_u64_stream(input: impl IntoIterator<Item = Self>) -> impl IntoIterator<Item = u64> {
+                Self::into_parallel_u64_streams(input.into_iter().map(|elem| [elem]))
+                    .into_iter()
+                    .map(|[word]| word)
+            }
+
+            #[inline]
             fn into_parallel_u64_streams<const N: usize>(
                 input: impl IntoIterator<Item = [Self; N]>,
             ) -> impl IntoIterator<Item = [u64; N]> {
-                // An element of at least 64 bits fills one or two whole words, low word first.
-                // Narrower elements pack little-endian into one word, zero-padded at the end.
+                // A backing integer of at least 64 bits fills one or two whole words, low word
+                // first. Narrower backing integers pack little-endian into one word, zero-padded
+                // at the end.
                 let mut input = input.into_iter();
                 let mut high: Option<[u64; N]> = None;
                 core::iter::from_fn(move || {
@@ -1207,6 +1215,78 @@ mod tests {
         p3_field_testing::test_into_stream::<BinaryField32>();
         p3_field_testing::test_into_stream::<BinaryField64>();
         p3_field_testing::test_into_stream::<BinaryField128>();
+    }
+
+    #[test]
+    fn word_streams_zero_pad_a_partial_final_word_at_every_level() {
+        // Reference: the little-endian byte stream, cut into words and zero-padded.
+        fn words_of(bytes: &[u8]) -> Vec<u64> {
+            bytes
+                .chunks(8)
+                .map(|chunk| {
+                    let mut word = [0u8; 8];
+                    word[..chunk.len()].copy_from_slice(chunk);
+                    u64::from_le_bytes(word)
+                })
+                .collect()
+        }
+
+        macro_rules! check {
+            ($field:ty) => {
+                for len in 0..=17 {
+                    let lanes: Vec<[$field; 3]> = (0..len)
+                        .map(|i| {
+                            core::array::from_fn(|lane| {
+                                <$field>::from_le_bytes(core::array::from_fn(|byte| {
+                                    (i * 31 + lane * 7 + byte * 13 + 1) as u8
+                                }))
+                            })
+                        })
+                        .collect();
+
+                    let lane_words: [Vec<u64>; 3] = core::array::from_fn(|lane| {
+                        let bytes: Vec<u8> = lanes
+                            .iter()
+                            .flat_map(|vector| vector[lane].into_bytes())
+                            .collect();
+                        words_of(&bytes)
+                    });
+
+                    let scalar: Vec<u64> =
+                        <$field>::into_u64_stream(lanes.iter().map(|vector| vector[0]))
+                            .into_iter()
+                            .collect();
+                    assert_eq!(
+                        scalar,
+                        lane_words[0],
+                        "{} scalar, len {len}",
+                        stringify!($field)
+                    );
+
+                    let parallel: Vec<[u64; 3]> =
+                        <$field>::into_parallel_u64_streams(lanes.iter().copied())
+                            .into_iter()
+                            .collect();
+                    let expected: Vec<[u64; 3]> = (0..lane_words[0].len())
+                        .map(|word| core::array::from_fn(|lane| lane_words[lane][word]))
+                        .collect();
+                    assert_eq!(
+                        parallel,
+                        expected,
+                        "{} parallel, len {len}",
+                        stringify!($field)
+                    );
+                }
+            };
+        }
+
+        check!(BinaryField2);
+        check!(BinaryField4);
+        check!(BinaryField8);
+        check!(BinaryField16);
+        check!(BinaryField32);
+        check!(BinaryField64);
+        check!(BinaryField128);
     }
 
     #[test]
