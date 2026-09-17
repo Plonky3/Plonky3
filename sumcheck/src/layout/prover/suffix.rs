@@ -41,25 +41,20 @@ struct ClaimWeightTables<EF> {
     next: Option<Vec<EF>>,
 }
 
-/// One source table's per-column contributions to the residual weight polynomial.
+/// One source table's contributions to the residual weight polynomial, indexed by column.
 ///
 /// Each contribution is `(claim index, is successor, alpha power)`.
-type TableWeights<EF> = Vec<Vec<(usize, bool, EF)>>;
+type ColumnWeights<EF> = Vec<Vec<(usize, bool, EF)>>;
 
-/// Every source table's contributions, indexed by source table.
-type ColumnWeights<EF> = Vec<TableWeights<EF>>;
+/// Every source table's [`ColumnWeights`], indexed by source table.
+type WeightPlan<EF> = Vec<ColumnWeights<EF>>;
 
-impl<EF: Copy> ClaimWeightTables<EF> {
-    /// Both tables, entry by entry, in another field.
-    fn image<R: From<EF>>(&self) -> ClaimWeightTables<R> {
-        let image = |table: &Option<Vec<EF>>| {
-            table
-                .as_ref()
-                .map(|table| table.iter().copied().map(R::from).collect())
-        };
+impl<EF: Copy + Send + Sync> ClaimWeightTables<EF> {
+    /// Both tables, moved into another field a whole table at a time.
+    fn into_image<R: FromTable<EF>>(self) -> ClaimWeightTables<R> {
         ClaimWeightTables {
-            current: image(&self.current),
-            next: image(&self.next),
+            current: self.current.map(R::from_table),
+            next: self.next.map(R::from_table),
         }
     }
 }
@@ -654,27 +649,28 @@ impl<F: Field, EF: ExtensionField<F>> SuffixProver<F, EF> {
     /// Each entry is the `R` image of the same entry [`Self::combine_weights`] builds, since
     /// `R::from` is a field isomorphism and every entry is a polynomial in the converted inputs.
     ///
-    /// The per-claim tables span one column slot each, so converting them is cheap next to the
-    /// products they then feed across the whole output.
+    /// Each per-claim table spans a single column slot, so the crossing costs one pass over a
+    /// slot per claim, against the whole output the products it feeds then cover.
     #[tracing::instrument(skip_all)]
     pub(crate) fn combine_weights_in<R>(&self, rs: &Point<EF>, alpha: EF) -> Poly<R>
     where
-        R: Field + From<EF>,
+        R: Field + FromTable<EF>,
     {
         let (tables, column_weights) = self.weight_plan(rs, alpha);
-        let tables: Vec<ClaimWeightTables<R>> =
-            tables.iter().map(ClaimWeightTables::image).collect();
-        let column_weights: ColumnWeights<R> = column_weights
-            .iter()
+        // Each source table is released as its image appears.
+        let tables: Vec<ClaimWeightTables<R>> = tables
+            .into_iter()
+            .map(ClaimWeightTables::into_image)
+            .collect();
+        let column_weights: WeightPlan<R> = column_weights
+            .into_iter()
             .map(|table| {
                 table
-                    .iter()
+                    .into_iter()
                     .map(|column| {
                         column
-                            .iter()
-                            .map(|&(claim_idx, is_next, scale)| {
-                                (claim_idx, is_next, R::from(scale))
-                            })
+                            .into_iter()
+                            .map(|(claim_idx, is_next, scale)| (claim_idx, is_next, R::from(scale)))
                             .collect()
                     })
                     .collect()
@@ -693,7 +689,7 @@ impl<F: Field, EF: ExtensionField<F>> SuffixProver<F, EF> {
         &self,
         rs: &Point<EF>,
         alpha: EF,
-    ) -> (Vec<ClaimWeightTables<EF>>, ColumnWeights<EF>) {
+    ) -> (Vec<ClaimWeightTables<EF>>, WeightPlan<EF>) {
         // Preconditions: challenge count matches the folding depth.
         assert_eq!(rs.num_variables(), self.claims.folding);
 
@@ -706,7 +702,7 @@ impl<F: Field, EF: ExtensionField<F>> SuffixProver<F, EF> {
         let mut alphas = alpha.powers();
         let mut tables: Vec<ClaimWeightTables<EF>> = Vec::new();
         // Per column: `(table index into tables, is successor, alpha power)`.
-        let mut column_weights: ColumnWeights<EF> = self
+        let mut column_weights: WeightPlan<EF> = self
             .claims
             .tables
             .iter()
@@ -765,7 +761,7 @@ impl<F: Field, EF: ExtensionField<F>> SuffixProver<F, EF> {
         rs: &Point<EF>,
         alpha: EF,
         tables: &[ClaimWeightTables<R>],
-        column_weights: &[TableWeights<R>],
+        column_weights: &[ColumnWeights<R>],
     ) -> Poly<R>
     where
         B: Field,
@@ -821,9 +817,10 @@ impl<F: Field, EF: ExtensionField<F>> SuffixProver<F, EF> {
             // Split the claim point into (rest-of-space, svo-sub-point).
             let (rest, svo) = claim
                 .point
+                .as_slice()
                 .split_at(claim.point.num_variables() - rs.num_variables());
             // Scalar weight: alpha^i times the equality between svo part and rs.
-            let scale = alpha_i * Point::eval_eq(svo.as_slice(), rs.as_slice());
+            let scale = alpha_i * Point::eval_eq(svo, rs.as_slice());
             // The equality table is a polynomial in the point, so it commutes with `R::from`.
             let rest = Point::new(rest.iter().copied().map(R::from).collect());
             // Contribute the scaled equality table across the whole output.
@@ -1108,6 +1105,9 @@ mod tests {
         );
     }
 
+    /// The challenge field as its own representation, taking tables through the default map.
+    impl FromTable<Self> for BabyBearExt4 {}
+
     /// Records a claim set that exercises every column arity of the weight combiner, then checks
     /// that combining in `R` lands on the image of combining in `EF`.
     ///
@@ -1119,19 +1119,20 @@ mod tests {
     ///
     /// Columns therefore carry one, two and three contributions, and the second table's unopened
     /// columns carry none.
-    fn assert_combine_weights_in_matches_image<F, EF, R>(seed: u64)
+    ///
+    /// At `folding == 0`, the depth the binary PCS runs at, the challenges are empty and the
+    /// virtual claim's SVO half is too.
+    fn assert_combine_weights_in_matches_image<F, EF, R>(folding: usize, seed: u64)
     where
         F: Field,
         EF: ExtensionField<F>,
-        R: Field + From<EF>,
+        R: Field + FromTable<EF>,
         StandardUniform: Distribution<F> + Distribution<EF>,
     {
-        const FOLDING: usize = 2;
-
         let mut rng = SmallRng::seed_from_u64(seed);
         let tables = vec![table::<F>(&mut rng, 4, 4), table::<F>(&mut rng, 3, 3)];
         let mut prover = SuffixProver::<F, EF>::from_witness(SuffixProver::<F, EF>::new_witness(
-            tables, FOLDING,
+            tables, folding,
         ));
 
         let requests = [
@@ -1148,12 +1149,14 @@ mod tests {
         let virtual_point = Point::<EF>::rand(&mut rng, prover.claims.num_variables);
         prover.record_virtual(&virtual_point);
 
-        let rs = Point::<EF>::rand(&mut rng, FOLDING);
+        let rs = Point::<EF>::rand(&mut rng, folding);
         let alpha: EF = rng.random();
         let expected = prover.combine_weights(&rs, alpha);
         let combined = prover.combine_weights_in::<R>(&rs, alpha);
 
         assert_eq!(combined.num_variables(), expected.num_variables());
+        // Guard against a vacuous comparison of two zero tables.
+        assert!(expected.iter().any(|&weight| weight != EF::ZERO));
         for (&combined, &expected) in combined.iter().zip_eq(expected.iter()) {
             assert_eq!(combined, R::from(expected));
         }
@@ -1161,15 +1164,20 @@ mod tests {
 
     #[test]
     fn combine_weights_in_the_field_itself_matches_the_challenge_field() {
-        assert_combine_weights_in_matches_image::<BabyBear, BabyBearExt4, BabyBearExt4>(5);
-        assert_combine_weights_in_matches_image::<BinaryField128, BinaryField128, BinaryField128>(
-            6,
-        );
+        for folding in [0, 2] {
+            assert_combine_weights_in_matches_image::<BabyBear, BabyBearExt4, BabyBearExt4>(
+                folding, 5,
+            );
+        }
     }
 
     #[test]
     fn combine_weights_in_the_polynomial_basis_matches_the_tower() {
-        assert_combine_weights_in_matches_image::<BinaryField128, BinaryField128, Ghash128>(7);
+        for folding in [0, 2] {
+            assert_combine_weights_in_matches_image::<BinaryField128, BinaryField128, Ghash128>(
+                folding, 7,
+            );
+        }
     }
 
     #[test]

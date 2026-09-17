@@ -38,7 +38,8 @@ use crate::transcript::{ProverTranscript, SumcheckShape};
 ///
 /// # Storage
 ///
-/// Tables are held as scalars, whatever storage the source prover used.
+/// Tables are held as scalars. [`Self::from_tables`] takes scalar tables to begin with;
+/// [`Self::new`] unpacks whatever storage the source prover used.
 ///
 /// That costs nothing where the tables were scalar already: suffix binding always is, and
 /// so is a field whose packing is itself, like `BinaryField128`. A packed prefix pair over
@@ -60,6 +61,9 @@ where
     /// Moves a prover's tables, claim and held challenge into `R`.
     ///
     /// A held challenge crosses as it is, so the next measuring pass still absorbs it.
+    ///
+    /// This is the only entry that takes a prover mid-fold: it carries an outstanding challenge
+    /// across, and it accepts a packed prefix pair, which it unpacks.
     #[tracing::instrument(skip_all)]
     pub fn new(prover: SumcheckProver<F, EF>) -> Self {
         let SumcheckProver {
@@ -92,8 +96,8 @@ where
         let evals = Poly::new(R::from_table(evals.into_evals()));
         let poly = ProductPolynomial::new_unpacked(order, evals, weights);
 
+        // `SumcheckProver::new` checks, in debug builds, that the claim and this pair agree in `R`.
         Self {
-            // Sanity: the claim and the table pair must agree, both read in `R`.
             inner: SumcheckProver::new(poly, R::from(sum)),
             _transcript: PhantomData,
         }

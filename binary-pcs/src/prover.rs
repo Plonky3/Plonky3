@@ -3,8 +3,8 @@
 //!
 //! [`PcsLayout`] commits with no preprocessing depth, so `Layout::commit` produces a width-1
 //! codeword — one Reed-Solomon-encoded column, the whole committed polynomial — and
-//! `PcsLayout::into_sumcheck_in` consumes zero preprocessing rounds, leaving every one of the
-//! `num_variables` residual sumcheck rounds a folding round. Each round's challenge is used
+//! [`PcsLayout`]'s `into_sumcheck_in` consumes zero preprocessing rounds, leaving every one of
+//! the `num_variables` residual sumcheck rounds a folding round. Each round's challenge is used
 //! twice: it binds one multilinear variable, through [`PcsLayout`]'s evaluation-basis suffix
 //! binding, and it folds the codeword, through [`fold_codeword_batch`], a Reed-Solomon codeword fold
 //! in the same basis (see `fold.rs`). The two stay in correspondence throughout: see
@@ -114,8 +114,8 @@ where
 /// Returns the base commitment's Merkle prover data (handed back so the caller can still open
 /// base-round queries against it), the sumcheck transcript, one [`RoundCommitment`] per fold
 /// batch except the last, the folding randomness in round order — `randomness.as_slice()[r]` is
-/// round `r`'s challenge, matching what `PcsLayout::into_sumcheck_in` returns — and the final
-/// folded codeword.
+/// round `r`'s challenge, matching what [`PcsLayout`]'s `into_sumcheck_in` returns — and the
+/// final folded codeword.
 ///
 /// `BIND_EACH_ROUND` picks when each round's challenge is applied to the sumcheck tables:
 ///
