@@ -19,10 +19,11 @@ use p3_field::{Algebra, Field, PrimeCharacteristicRing};
 /// are disjoint. This type is local to this crate, so implementing
 /// `Algebra<F>` for it here is not subject to that conflict.
 ///
-/// Only the trait items required to satisfy `p3_air::AirBuilder`'s bounds
-/// are overridden; every other [`PrimeCharacteristicRing`] method falls
-/// back to its default (mathematically correct, not necessarily as fast as
-/// `P`'s own overrides for that operation).
+/// The trait items required to satisfy `p3_air::AirBuilder`'s bounds are
+/// forwarded to `P`, as is `bool_check`, which AIRs call on every booleanity
+/// constraint. Every other [`PrimeCharacteristicRing`] method falls back to
+/// its default (mathematically correct, not necessarily as fast as `P`'s own
+/// overrides for that operation).
 #[repr(transparent)]
 pub struct PackedExt<F, P>(pub P, PhantomData<fn() -> F>);
 
@@ -151,6 +152,11 @@ impl<F, P: PrimeCharacteristicRing + Copy> PrimeCharacteristicRing for PackedExt
     #[inline]
     fn cube(&self) -> Self {
         Self::new(self.0.cube())
+    }
+
+    #[inline]
+    fn bool_check(&self) -> Self {
+        Self::new(self.0.bool_check())
     }
 
     #[inline]
