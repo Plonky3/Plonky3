@@ -210,6 +210,13 @@ impl PrimeCharacteristicRing for Ghash128 {
         *self + *y
     }
 
+    /// `x·(x - 1) = x² - x = x² + x` in characteristic 2, and `poly_square_128` skips the
+    /// cross-term carryless multiplies a general product pays for.
+    #[inline]
+    fn bool_check(&self) -> Self {
+        self.square() + *self
+    }
+
     #[inline]
     fn mul_2exp_u64(&self, exp: u64) -> Self {
         if exp == 0 { *self } else { Self::ZERO }
@@ -506,6 +513,13 @@ mod tests {
     }
 
     #[test]
+    fn bool_check_matches_the_vanishing_polynomial_at_zero_and_one() {
+        for x in [Ghash128::ZERO, Ghash128::ONE] {
+            assert_eq!(x.bool_check(), x * (x - Ghash128::ONE));
+        }
+    }
+
+    #[test]
     fn scaling_by_alpha_agrees_with_the_tower() {
         // The tower scales by a basis element; here the same element is an arbitrary one.
         for bits in [0, 1, 2, 0x87, 1 << 127, u128::MAX] {
@@ -542,6 +556,12 @@ mod tests {
         fn squaring_agrees_with_multiplying_by_self(bits: u128) {
             let x = Ghash128::from_repr(bits);
             prop_assert_eq!(x.square(), x * x);
+        }
+
+        #[test]
+        fn bool_check_agrees_with_the_vanishing_polynomial(bits: u128) {
+            let x = Ghash128::from_repr(bits);
+            prop_assert_eq!(x.bool_check(), x * (x - Ghash128::ONE));
         }
 
         #[test]

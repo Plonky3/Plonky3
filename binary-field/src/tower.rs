@@ -424,6 +424,14 @@ macro_rules! binary_tower_level {
                 *self + *y
             }
 
+            /// `x·(x - 1) = x² - x = x² + x` in characteristic 2, and squaring is a linear
+            /// map here, so this avoids the tower/polynomial basis changes a general product
+            /// pays for.
+            #[inline]
+            fn bool_check(&self) -> Self {
+                self.square() + *self
+            }
+
             #[inline]
             fn mul_2exp_u64(&self, exp: u64) -> Self {
                 if exp == 0 { *self } else { Self::ZERO }
@@ -1448,6 +1456,36 @@ mod tests {
         any::<u16>().prop_map(BinaryField16::from_repr)
     }
 
+    fn bf8() -> impl Strategy<Value = BinaryField8> {
+        any::<u8>().prop_map(BinaryField8::from_repr)
+    }
+
+    fn bf4() -> impl Strategy<Value = BinaryField4> {
+        any::<u8>().prop_map(BinaryField4::from_repr)
+    }
+
+    fn bf2() -> impl Strategy<Value = BinaryField2> {
+        any::<u8>().prop_map(BinaryField2::from_repr)
+    }
+
+    #[test]
+    fn bool_check_matches_the_vanishing_polynomial_at_zero_and_one() {
+        macro_rules! check {
+            ($field:ty) => {
+                for x in [<$field>::ZERO, <$field>::ONE] {
+                    assert_eq!(x.bool_check(), x * (x - <$field>::ONE));
+                }
+            };
+        }
+        check!(BinaryField2);
+        check!(BinaryField4);
+        check!(BinaryField8);
+        check!(BinaryField16);
+        check!(BinaryField32);
+        check!(BinaryField64);
+        check!(BinaryField128);
+    }
+
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(1000))]
 
@@ -1514,6 +1552,28 @@ mod tests {
             prop_assert_eq!(c.karatsuba_mul(d), c.reference_mul(d));
             prop_assert_eq!(e.karatsuba_mul(f), e.reference_mul(f));
             prop_assert_eq!(g.karatsuba_mul(h), g.reference_mul(h));
+        }
+
+        /// `bool_check` must agree with the vanishing polynomial `x * (x - 1)` at every level,
+        /// computed here through the ordinary `Mul` and `Sub` operators rather than the
+        /// squaring shortcut `bool_check` itself takes.
+        #[test]
+        fn bool_check_agrees_with_the_vanishing_polynomial(
+            a2 in bf2(),
+            a4 in bf4(),
+            a8 in bf8(),
+            a16 in bf16(),
+            a32 in bf32(),
+            a64 in bf64(),
+            a128 in bf128(),
+        ) {
+            prop_assert_eq!(a2.bool_check(), a2 * (a2 - BinaryField2::ONE));
+            prop_assert_eq!(a4.bool_check(), a4 * (a4 - BinaryField4::ONE));
+            prop_assert_eq!(a8.bool_check(), a8 * (a8 - BinaryField8::ONE));
+            prop_assert_eq!(a16.bool_check(), a16 * (a16 - BinaryField16::ONE));
+            prop_assert_eq!(a32.bool_check(), a32 * (a32 - BinaryField32::ONE));
+            prop_assert_eq!(a64.bool_check(), a64 * (a64 - BinaryField64::ONE));
+            prop_assert_eq!(a128.bool_check(), a128 * (a128 - BinaryField128::ONE));
         }
     }
 }
