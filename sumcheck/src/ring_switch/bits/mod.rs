@@ -33,8 +33,10 @@
 //!     BitTensor       an element of EF (x) EF, as a bit matrix
 //!     BitRingSwitch   one reduction, before the batching draw
 //!     BitRingSwitchBatch  the same reduction, after it
-//!     the driver      one reduction run end to end, over its own transcript
 //! ```
+//!
+//! The reduction owns the two sides that run it, as methods over its own transcript.
+//! The module beside this one exposes free functions because it has no such type.
 //!
 //! Booleanity comes from the packing itself, not from the wrapper.
 //! At a byte-aligned level a packed multilinear unpacks to one bit witness.
@@ -53,18 +55,17 @@
 //! The payoff is that packing becomes a reinterpretation, not a computation.
 
 pub mod basis;
-pub mod driver;
 pub mod packing;
 pub mod reduction;
 pub mod tensor;
 pub mod transcript;
 
 pub use basis::Coefficients;
-pub use driver::{
-    BitRingSwitchProof, BitRingSwitchProofError, prove_bit_ring_switch, verify_bit_ring_switch,
-};
 pub use packing::{BitPacking, BitPackingError};
-pub use reduction::{BitRingSwitch, BitRingSwitchBatch, BitRingSwitchError};
+pub use reduction::{
+    BitRingSwitch, BitRingSwitchBatch, BitRingSwitchError, BitRingSwitchProof,
+    BitRingSwitchProofError,
+};
 pub use tensor::{BitTensor, MalformedBitTensor};
 pub use transcript::{
     BitRingSwitchProverTranscript, BitRingSwitchShape, BitRingSwitchVerifierTranscript,
