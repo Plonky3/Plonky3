@@ -24,7 +24,11 @@ struct Args {
     #[arg(long, default_value_t = 0)]
     pcs_pow_bits: usize,
 
-    /// Target for the union of every reduction and opening error, in bits.
+    /// Composed security target of the whole proof, in bits.
+    ///
+    /// Committing every cell as a `BinaryField128` element caps it at roughly
+    /// 128 - (log-trace-length + ceil(log2(width)) + log-inv-rate + 3); PCS grinding does not
+    /// raise that cap.
     #[arg(long, default_value_t = 100)]
     security_bits: usize,
 

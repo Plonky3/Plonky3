@@ -25,8 +25,7 @@ use p3_multi_stark::folder::{InteractionMultilinearFolder, MultilinearFolder};
 use p3_multi_stark::packed_ext::PackedExt;
 use p3_multi_stark::{
     MultiStarkProof, ProverInstance, ProverInstances, ProvingError, SecurityError,
-    VerificationError, VerifierInstance, VerifierInstances, prove_with_security, security_report,
-    setup, verify_with_security,
+    VerificationError, VerifierInstance, VerifierInstances, prove, security_report, setup, verify,
 };
 use p3_sumcheck::layout::{Layout, SuffixProver, Table, Witness};
 use p3_symmetric::{CompressionFunctionFromHasher, SerializingHasher};
@@ -86,8 +85,7 @@ pub fn binary_config(
     params: BinaryPcsParams,
     folding: usize,
 ) -> Result<BinaryStarkConfig, BinaryPcsConfigError> {
-    let pcs_config =
-        BinaryPcsConfig::try_new(arity, params)?.try_with_folding(folding.min(arity))?;
+    let pcs_config = BinaryPcsConfig::try_new_with_folding(arity, params, folding.min(arity))?;
     let merkle = MerkleMmcs::new(Hash::new(Keccak256Hash), Compress::new(Keccak256Hash), 0);
     let mmcs = Mmcs::for_folding(merkle, &pcs_config);
     Ok(BinaryStarkConfig {
@@ -109,7 +107,9 @@ pub struct BinaryProofOptions {
     pub log_inv_rate: usize,
     /// Grinding bits the binary PCS demands once, before its query phase.
     pub pcs_pow_bits: usize,
-    /// Target for the union of every reduction and opening error, in bits.
+    /// Composed security target of the whole proof, in bits.
+    ///
+    /// The binary PCS caps it at `125 - arity - log_inv_rate` once its queries are sampled.
     pub security_bits: usize,
     /// Sequential variable folds batched between binary-PCS commitments.
     pub folding: usize,
@@ -140,9 +140,9 @@ pub struct BinaryProofReport {
     pub stacked_variables: usize,
     /// Serialized proof size, in bytes.
     pub proof_bytes: usize,
-    /// Wall-clock time spent in `prove_with_security`.
+    /// Wall-clock time to lay the trace out as a table and run `prove`.
     pub prove_seconds: f64,
-    /// Wall-clock time spent in `verify_with_security`.
+    /// Wall-clock time spent in `verify`.
     pub verify_seconds: f64,
     /// Composed security bits reported by `p3_multi_stark::security_report`.
     pub security_bits: f64,
@@ -195,10 +195,10 @@ impl From<VerificationError<PcsError<BinaryStarkConfig>>> for BinaryProofError {
 ///
 /// `BinaryField128` is its own packing and its own extension packing (`F::Packing = F` and
 /// `EF::ExtensionPacking = F`), so in [`p3_multi_stark::folder::ProverAir`]'s bound list the
-/// base, packed-base, and packed-extension folder instantiations collapse onto the same two
-/// types. Naming that trait directly as `ProverAir<F, F>` leaves the compiler unable to choose
-/// among the resulting duplicate supertrait obligations; this trait states each distinct one
-/// exactly once, so its blanket impl below is what callers actually need to satisfy.
+/// scalar-base, packed-base, and verifier instantiations of each folder all become
+/// `<'a, F, F, F>`. Naming that trait directly as `ProverAir<F, F>` leaves the compiler unable to
+/// choose among the resulting duplicate supertrait obligations; this trait states each distinct
+/// one exactly once, so its blanket impl below is what callers actually need to satisfy.
 pub trait BinaryAir:
     BaseAir<F>
     + Air<InteractionSymbolicBuilder<F, F>>
@@ -223,8 +223,15 @@ impl<A> BinaryAir for A where
 ///
 /// The commitment arity is the trace's log-height plus the ceiling of the log of its width:
 /// one extra variable per doubling of the column count, since every column is stacked into a
-/// single committed polynomial. `air` carries no public values; pass a trace whose constraints
-/// are self-contained.
+/// single committed polynomial.
+///
+/// The statement's security is assessed once against `options.security_bits` before proving,
+/// so the timed phases are the plain prover and verifier.
+///
+/// # Panics
+///
+/// - The trace height is not a power of two.
+/// - `air` declares public values or preprocessed columns.
 pub fn prove_binary_air<A>(
     air: &A,
     trace: RowMajorMatrix<F>,
@@ -233,6 +240,17 @@ pub fn prove_binary_air<A>(
 where
     A: BinaryAir,
 {
+    assert_eq!(
+        BaseAir::<F>::num_public_values(air),
+        0,
+        "the harness proves AIRs without public values"
+    );
+    assert_eq!(
+        BaseAir::<F>::preprocessed_width(air),
+        0,
+        "the harness proves AIRs without preprocessed columns"
+    );
+
     let rows = trace.height();
     let width = trace.width();
     let log_height = log2_strict_usize(rows);
@@ -247,30 +265,7 @@ where
 
     let (pk, vk) = setup(&config, &[air], &mut binary_challenger())?;
 
-    // Transpose into the sumcheck layout (one polynomial per row), then drop the row-major
-    // trace so proving does not hold a second copy.
-    let table = Table::new(trace.transpose());
-    drop(trace);
-
     let public_values: [F; 0] = [];
-    let prover_instances =
-        ProverInstances::new(vec![ProverInstance::new(air, table, &pk, &public_values)]);
-
-    let prove_start = Instant::now();
-    let proof = prove_with_security(
-        &config,
-        prover_instances,
-        options.sumcheck_pow_bits,
-        options.security_bits,
-        &mut binary_challenger(),
-    )?;
-    let prove_seconds = prove_start.elapsed().as_secs_f64();
-
-    let bytes = postcard::to_allocvec(&proof).expect("postcard serialization must not fail");
-    let proof_bytes = bytes.len();
-    let proof: MultiStarkProof<BinaryStarkConfig> =
-        postcard::from_bytes(&bytes).expect("postcard round trip must not fail");
-
     let verifier_instances = || {
         VerifierInstances::new(vec![VerifierInstance::new(
             air,
@@ -280,17 +275,6 @@ where
         )])
     };
 
-    let verify_start = Instant::now();
-    verify_with_security(
-        &config,
-        verifier_instances(),
-        &proof,
-        options.sumcheck_pow_bits,
-        options.security_bits,
-        &mut binary_challenger(),
-    )?;
-    let verify_seconds = verify_start.elapsed().as_secs_f64();
-
     let report =
         security_report(&config, &verifier_instances()).map_err(BinaryProofError::Security)?;
     report
@@ -299,6 +283,36 @@ where
     let security_bits = report
         .security_bits()
         .expect("require_security succeeded, so every component is assessed");
+
+    let prove_start = Instant::now();
+    // Transpose into the sumcheck layout (one polynomial per row), then drop the row-major
+    // trace so proving does not hold a second copy.
+    let table = Table::new(trace.transpose());
+    drop(trace);
+    let prover_instances =
+        ProverInstances::new(vec![ProverInstance::new(air, table, &pk, &public_values)]);
+    let proof = prove(
+        &config,
+        prover_instances,
+        options.sumcheck_pow_bits,
+        &mut binary_challenger(),
+    )?;
+    let prove_seconds = prove_start.elapsed().as_secs_f64();
+
+    let bytes = postcard::to_allocvec(&proof).expect("postcard serialization must not fail");
+    let proof_bytes = bytes.len();
+    let proof: MultiStarkProof<BinaryStarkConfig> =
+        postcard::from_bytes(&bytes).expect("postcard round trip must not fail");
+
+    let verify_start = Instant::now();
+    verify(
+        &config,
+        verifier_instances(),
+        &proof,
+        options.sumcheck_pow_bits,
+        &mut binary_challenger(),
+    )?;
+    let verify_seconds = verify_start.elapsed().as_secs_f64();
 
     Ok(BinaryProofReport {
         rows,
