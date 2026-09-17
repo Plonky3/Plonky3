@@ -17,6 +17,7 @@ mod poly192;
 mod poly64;
 pub mod poly_basis;
 mod poly_slice;
+mod subfield;
 mod tables;
 mod tower;
 mod transcript;
