@@ -3,6 +3,7 @@
 
 extern crate alloc;
 
+mod bitslice;
 mod cantor;
 mod challenger;
 mod clmul;
@@ -17,6 +18,10 @@ mod tables;
 mod tower;
 mod transcript;
 
+pub use bitslice::{
+    Divisible, M128, M256, M512, PackedGf2, PackedGf2x8, PackedGf2x16, PackedGf2x32, PackedGf2x64,
+    PackedGf2x128, PackedGf2x256, PackedGf2x512, Underlier, Word,
+};
 pub use challenger::BinaryChallenger;
 pub use gf2::Gf2;
 pub use ghash::Ghash128;
