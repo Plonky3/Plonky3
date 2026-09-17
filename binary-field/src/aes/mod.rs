@@ -11,6 +11,7 @@
 //! The tower's byte field takes a table lookup per element instead.
 
 mod engine;
+mod frobenius;
 mod packed;
 
 use core::fmt::{self, Debug, Display, Formatter};
@@ -28,6 +29,7 @@ use rand::distr::{Distribution, StandardUniform};
 use serde::{Deserialize, Serialize};
 
 pub use crate::aes::engine::ByteMatrix;
+pub use crate::aes::frobenius::LinearizedPoly;
 pub use crate::aes::packed::PackedRijndael8b;
 use crate::cantor::CANTOR_BASIS_128;
 use crate::tower::TowerLevel;
@@ -297,7 +299,13 @@ impl PrimeCharacteristicRing for Rijndael8b {
 
     #[inline]
     fn square(&self) -> Self {
-        Self(mul_bytes(self.0, self.0))
+        Self(Self::frobenius_map(1).apply(self.0))
+    }
+
+    /// Raising to `2^k` is one tabulated map, whatever the exponent.
+    #[inline]
+    fn exp_power_of_2(&self, power_log: usize) -> Self {
+        Self(Self::frobenius_map(power_log).apply(self.0))
     }
 
     #[inline]

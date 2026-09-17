@@ -97,6 +97,15 @@ impl<const N: usize> PackedRijndael8b<N> {
         map.apply_slice(self.bytes_mut());
     }
 
+    /// Raises every element to the power `2^k`.
+    ///
+    /// One tabulated map covers any exponent.
+    ///
+    /// Repeated squaring would cost one product per step instead.
+    pub fn frobenius(&mut self, power: usize) {
+        self.apply(Rijndael8b::frobenius_map(power));
+    }
+
     /// Replaces every element with its inverse, leaving zero alone.
     ///
     /// The byte-wise hardware inverse is one instruction per register.

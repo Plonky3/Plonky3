@@ -11,7 +11,7 @@ use std::hint::black_box;
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use p3_binary_field::{
     BinaryField8, BinaryField16, BinaryField32, BinaryField64, BinaryField128, Ghash128,
-    PackedRijndael8b, Poly64, Poly192, Rijndael8b, TowerLevel, poly_basis,
+    LinearizedPoly, PackedRijndael8b, Poly64, Poly192, Rijndael8b, TowerLevel, poly_basis,
 };
 use p3_field::{BasedVectorSpace, Field, PackedValue, PrimeCharacteristicRing};
 use rand::distr::{Distribution, StandardUniform};
@@ -1022,6 +1022,87 @@ fn bench_lean_pair(c: &mut Criterion) {
     group.finish();
 }
 
+/// Frobenius powers and linearized polynomials, tabulated against evaluated.
+///
+/// Every arm covers the same buffer, so the times are directly comparable per element.
+fn bench_frobenius(c: &mut Criterion) {
+    /// Bytes per buffer, comfortably inside the first level of cache.
+    const BYTES: usize = 4096;
+
+    /// The squaring power the twisted arms raise to.
+    const POWER: usize = 3;
+
+    let mut rng = SmallRng::seed_from_u64(13);
+    let scalars: Vec<Rijndael8b> = (0..BYTES).map(|_| rng.random()).collect();
+    let blocks: Vec<PackedRijndael8b<64>> = scalars
+        .as_chunks::<64>()
+        .0
+        .iter()
+        .map(|c| *PackedRijndael8b::<64>::from_slice(c))
+        .collect();
+
+    let coefficients: [Rijndael8b; 8] = core::array::from_fn(|_| rng.random());
+    let weight = LinearizedPoly::new(coefficients);
+    let tabulated = weight.to_matrix();
+
+    {
+        let mut group = c.benchmark_group("frobenius/twist");
+        group.throughput(criterion::Throughput::Elements(BYTES as u64));
+        group.bench_function("repeated-square", |b| {
+            b.iter(|| {
+                black_box(&scalars)
+                    .iter()
+                    .map(|&x| (0..POWER).fold(x, |acc, _| acc.square()))
+                    .sum::<Rijndael8b>()
+            });
+        });
+        group.bench_function("tabulated", |b| {
+            b.iter(|| {
+                let map = Rijndael8b::frobenius_map(POWER);
+                black_box(&scalars)
+                    .iter()
+                    .map(|&x| Rijndael8b::from_byte(map.apply(x.to_byte())))
+                    .sum::<Rijndael8b>()
+            });
+        });
+        group.bench_function("packed", |b| {
+            b.iter_batched_ref(
+                || blocks.clone(),
+                |blocks| {
+                    for block in blocks.iter_mut() {
+                        block.frobenius(POWER);
+                    }
+                },
+                BatchSize::SmallInput,
+            );
+        });
+        group.finish();
+    }
+
+    let mut group = c.benchmark_group("frobenius/linearized");
+    group.throughput(criterion::Throughput::Elements(BYTES as u64));
+    group.bench_function("evaluated", |b| {
+        b.iter(|| {
+            black_box(&scalars)
+                .iter()
+                .map(|&x| weight.eval(x))
+                .sum::<Rijndael8b>()
+        });
+    });
+    group.bench_function("packed", |b| {
+        b.iter_batched_ref(
+            || blocks.clone(),
+            |blocks| {
+                for block in blocks.iter_mut() {
+                    block.apply(tabulated);
+                }
+            },
+            BatchSize::SmallInput,
+        );
+    });
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_mul,
@@ -1044,6 +1125,7 @@ criterion_group!(
     bench_bulk,
     bench_batch_kernels,
     bench_aes,
-    bench_lean_pair
+    bench_lean_pair,
+    bench_frobenius
 );
 criterion_main!(benches);
