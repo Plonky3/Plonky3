@@ -26,15 +26,20 @@
 //! of basis on the operands and one back on the result.
 //! Each change of basis is sixteen dependent byte-table lookups, so the wrapper dominates.
 //!
-//! The fold therefore crosses into the polynomial basis once per loaded symbol and back once per
-//! produced symbol, multiplying in between with the widest carryless-multiply register available.
+//! The fold therefore runs in the polynomial basis, multiplying with the widest carryless-multiply
+//! register available.
+//!
+//! Symbols cross into that basis a block at a time and back a task at a time, so a target that
+//! changes the basis of many elements in one pass does so for every symbol the fold loads or
+//! produces.
 //!
 //! Input and output stay in the tower basis, so the folded codeword is unchanged bit for bit.
 
+use alloc::vec;
 use alloc::vec::Vec;
 
 use p3_binary_dft::domain_point;
-use p3_binary_field::{BinaryField128, Ghash128, TowerLevel};
+use p3_binary_field::{BinaryField128, Ghash128, TowerLevel, poly_basis};
 use p3_field::{Field, PackedValue, PrimeCharacteristicRing};
 use p3_maybe_rayon::prelude::*;
 
@@ -49,10 +54,23 @@ const WIDTH: usize = Packed::WIDTH;
 
 /// Output symbols one parallel task owns.
 ///
-/// Large enough that the task-opening domain evaluation is amortised over many folds.
+/// Large enough that dispatching a task is amortised over many folds.
 ///
 /// Small enough to leave real parallelism at every codeword length this crate exercises.
 const FOLD_GRAIN: usize = 1 << 10;
+
+/// Input symbols one block of cosets holds, up to the arity where one packed group of cosets
+/// needs more.
+///
+/// A block this size crosses into the polynomial basis in one pass and then runs every round of
+/// the batch while it is still in cache.
+///
+/// A block never holds fewer cosets than a packed group of width `W`, so at arity `a` it holds
+/// `max(BLOCK_SYMBOLS, W << a)` symbols, which grows with the arity once `2^a` passes
+/// `BLOCK_SYMBOLS / W`.
+///
+/// One grain of pairs, so a single-round fold takes a whole task as one block.
+const BLOCK_SYMBOLS: usize = 2 * FOLD_GRAIN;
 
 // A task's first output index is a multiple of the grain.
 //
@@ -177,34 +195,34 @@ fn group_steps<const W: usize>(num_pairs: usize) -> Vec<Ghash128> {
         .collect()
 }
 
-/// Fold the pairs one parallel task owns.
+/// Fold the pairs of `src` into `dst`, both held in polynomial coordinates.
 ///
-/// `start` is the output index the task's first pair produces.
+/// `src[2 * j]` and `src[2 * j + 1]` fold into `dst[j]`, the symbol at output index `start + j`.
 ///
-/// It is a multiple of the grain, hence of the packing width.
+/// `start` is a multiple of the packing width.
 ///
 /// That alignment is what lets a group share one domain point across its lanes.
 ///
-/// `group_steps` walks the group bases, so the task evaluates the domain exactly once.
+/// `group_steps` walks the group bases, so the call evaluates the domain exactly once.
 ///
 /// # Panics
 ///
-/// Panics unless the task holds exactly two input symbols per output slot.
+/// Panics unless `src` holds exactly two symbols per slot of `dst`.
 ///
 /// Panics in debug builds unless `start` is a multiple of the packing width.
-fn fold_task(
+fn fold_pairs(
+    src: &[u128],
+    dst: &mut [u128],
     start: usize,
-    pairs: &[BinaryField128],
-    out: &mut [BinaryField128],
     beta: Ghash128,
     lane_offsets: Packed,
     group_steps: &[Ghash128],
 ) {
-    // Every output slot consumes one pair, so the task's two slices are locked together.
+    // Every output slot consumes one pair, so the two slices are locked together.
     assert_eq!(
-        pairs.len(),
-        2 * out.len(),
-        "a fold task must hold one pair per output symbol"
+        src.len(),
+        2 * dst.len(),
+        "a fold must read one pair per output symbol"
     );
 
     // Invariant: `start` is a multiple of the packing width.
@@ -216,24 +234,24 @@ fn fold_task(
     // Group starts are `start + group * WIDTH`, so they inherit that from `start` alone.
     debug_assert!(
         start.is_multiple_of(WIDTH),
-        "a fold task must start on a packed group boundary"
+        "a fold must start on a packed group boundary"
     );
 
-    // The challenge is the same in every lane, so it broadcasts once for the whole task.
+    // The challenge is the same in every lane, so it broadcasts once for the whole call.
     let beta_packed = Packed::broadcast(beta);
 
     // Split both sides into whole packed groups plus a shorter remainder.
     // The two remainders match because one output slot always consumes two input symbols.
-    let (slot_groups, tail) = out.as_chunks_mut::<WIDTH>();
-    let (symbol_blocks, tail_pairs) = pairs.as_chunks::<{ 2 * WIDTH }>();
+    let (slot_groups, tail) = dst.as_chunks_mut::<WIDTH>();
+    let (symbol_blocks, tail_pairs) = src.as_chunks::<{ 2 * WIDTH }>();
 
-    // Output index the remainder starts at, relative to the task.
+    // Output index the remainder starts at, relative to `start`.
     let tail_offset = slot_groups.len() * WIDTH;
 
-    // Where the task's first group sits among all the codeword's groups.
+    // Where the first group sits among all the round's groups.
     let first_group = start / WIDTH;
 
-    // The task's only domain evaluation, opening the walk over its groups.
+    // The call's only domain evaluation, opening the walk over its groups.
     let mut base: Ghash128 = domain_point(start << 1);
 
     // Phase 1: whole packed groups.
@@ -249,10 +267,9 @@ fn fold_task(
         // That base is lane 0's domain point, and the offsets carry the rest of the lanes.
         let x = Packed::broadcast(base) + lane_offsets;
 
-        // Cross into the polynomial basis while gathering the lanes.
-        // The change of basis is additive, so the sums formed below are the same either side.
-        let lo = Packed::from_fn(|lane| Ghash128::from(block[2 * lane]));
-        let hi = Packed::from_fn(|lane| Ghash128::from(block[2 * lane + 1]));
+        // Gather the lanes.
+        let lo = Packed::from_fn(|lane| Ghash128::from_repr(block[2 * lane]));
+        let hi = Packed::from_fn(|lane| Ghash128::from_repr(block[2 * lane + 1]));
 
         // The novel-basis halves of each pair.
         let f1 = lo + hi;
@@ -261,18 +278,18 @@ fn fold_task(
         // The evaluation-basis combination at the challenge.
         let folded = f0 + beta_packed * (f0 + f1);
 
-        // Cross back so the caller sees a tower-basis codeword.
         for (slot, &value) in slots.iter_mut().zip(folded.as_slice()) {
-            *slot = BinaryField128::from(value);
+            *slot = value.to_repr();
         }
     }
 
     // Phase 2: fewer output slots left than one packed group holds.
     //
-    // A task's slot count is either a whole grain or the whole codeword's pair count.
+    // A call's slot count is either a whole block's share of the round or the round's whole
+    // pair count.
     //
-    // The grain covers whole groups, and a power-of-two pair count is a multiple of the width
-    // unless it is below it, so this runs only for a codeword with fewer pairs than the width.
+    // A block covers whole groups, and a power-of-two pair count is a multiple of the width
+    // unless it is below it, so this runs only for a round with fewer pairs than the width.
     //
     // Each leftover evaluates its own domain point, so it rests on no group alignment at all.
     //
@@ -281,20 +298,18 @@ fn fold_task(
     let (tail_blocks, _) = tail_pairs.as_chunks::<2>();
     for (offset, (slot, pair)) in tail.iter_mut().zip(tail_blocks).enumerate() {
         let x: Ghash128 = domain_point((start + tail_offset + offset) << 1);
-        let lo = Ghash128::from(pair[0]);
-        let hi = Ghash128::from(pair[1]);
+        let lo = Ghash128::from_repr(pair[0]);
+        let hi = Ghash128::from_repr(pair[1]);
         let f1 = lo + hi;
         let f0 = lo + x * f1;
-        *slot = BinaryField128::from(f0 + beta * (f0 + f1));
+        *slot = (f0 + beta * (f0 + f1)).to_repr();
     }
 }
 
 /// Fold a whole codeword, halving its length.
 ///
-/// Each parallel task owns a contiguous run of output symbols and the pairs feeding them, so no
-/// two tasks touch the same symbol on either side.
-///
-/// A task evaluates the domain once, then advances it by one exclusive-or per packed group.
+/// Each block of symbols evaluates the domain once, then advances it by one exclusive-or per
+/// packed group.
 ///
 /// Evaluating per symbol instead is the right shape for a single query.
 ///
@@ -313,31 +328,7 @@ pub fn fold_codeword(codeword: &[BinaryField128], beta: BinaryField128) -> Vec<B
         codeword.is_empty() || codeword.len().is_power_of_two(),
         "codeword length must be a power of two"
     );
-
-    // Two input symbols make one output symbol.
-    let num_pairs = codeword.len() / 2;
-
-    // The challenge crosses into the polynomial basis once for the whole codeword.
-    let beta_poly = Ghash128::from(beta);
-    let offsets = lane_offsets::<Packed>();
-    let steps = group_steps::<WIDTH>(num_pairs);
-
-    // Zeroed here and fully overwritten below, so the allocation is handed out already blank
-    // rather than assembled from one vector per task.
-    let mut folded = BinaryField128::zero_vec(num_pairs);
-
-    // Task `t` owns outputs `[t * GRAIN, (t + 1) * GRAIN)` and inputs `[2 * t * GRAIN, ...)`.
-    // Output `j` reads inputs `2 * j` and `2 * j + 1`, both inside its own task's input chunk,
-    // so the two chunk streams stay index-aligned and every task is disjoint from every other.
-    folded
-        .par_chunks_mut(FOLD_GRAIN)
-        .zip(codeword.par_chunks(2 * FOLD_GRAIN))
-        .enumerate()
-        .for_each(|(task, (out, pairs))| {
-            fold_task(task * FOLD_GRAIN, pairs, out, beta_poly, offsets, &steps);
-        });
-
-    folded
+    fold_rounds_packed(codeword, &[beta])
 }
 
 /// Fold one aligned coset, including its global offset in every virtual layer.
@@ -364,9 +355,7 @@ pub(crate) fn fold_coset(
 
 /// Fold several sequential challenges without materializing full intermediate codewords.
 ///
-/// Each task reuses one coset-sized scratch buffer in the polynomial basis. Symbols cross
-/// bases only when loaded from the source or stored into the final output. The Cantor domain
-/// bases advance by XOR, just as in the single-fold path. `challenges` stays in sumcheck order.
+/// `challenges` stays in sumcheck order.
 pub(crate) fn fold_codeword_batch(
     codeword: &[BinaryField128],
     challenges: &[BinaryField128],
@@ -374,72 +363,143 @@ pub(crate) fn fold_codeword_batch(
     assert!(!challenges.is_empty());
     assert!(codeword.len().is_power_of_two());
     assert!(challenges.len() <= codeword.len().ilog2() as usize);
-    if challenges.len() == 1 {
-        return fold_codeword(codeword, challenges[0]);
-    }
+    fold_rounds_packed(codeword, challenges)
+}
+
+/// [`fold_rounds`] over this target's packing.
+fn fold_rounds_packed(
+    codeword: &[BinaryField128],
+    challenges: &[BinaryField128],
+) -> Vec<BinaryField128> {
+    let offsets = lane_offsets::<Packed>();
+    fold_rounds::<WIDTH, _>(codeword, challenges, &|src, dst, start, beta, steps| {
+        fold_pairs(src, dst, start, beta, offsets, steps);
+    })
+}
+
+/// Fold one round per challenge, materializing only the last round's codeword.
+///
+/// `kernel` has the contract of [`fold_pairs`] at packing width `W`.
+///
+/// # Algorithm
+///
+/// A batch of `a` rounds maps each coset of `2^a` adjacent symbols to one output symbol.
+///
+/// Round `r` pairs symbols exactly as a single fold of the round-`r` codeword does, so the `n`
+/// adjacent cosets starting at coset `first` stay a run of adjacent symbols in every round:
+///
+/// ```text
+///     before round 0    2^a * n symbols          starting at index first * 2^a
+///     after round r     2^(a-1-r) * n symbols    starting at index first * 2^(a-1-r)
+/// ```
+///
+/// A block of cosets therefore runs each round as one kernel call with no seam at a coset
+/// boundary, and the last rounds keep whole packed groups.
+///
+/// A block holds `BLOCK_SYMBOLS / 2^a` cosets, but never fewer than a packed group's worth.
+///
+/// So every call starts on a group boundary, and even a block's last round fills whole groups
+/// unless the whole round is shorter than one.
+///
+/// Each worker's scratch holds one block in, plus half a block for the rounds before the last:
+///
+/// ```text
+///     symbols in    max(BLOCK_SYMBOLS, W << a)
+///     W = 8, a <= 8      2048 symbols     32 KiB   + 16 KiB
+///     W = 8, a = 12     32768 symbols    512 KiB   + 256 KiB
+/// ```
+///
+/// Each parallel task owns a contiguous run of output symbols and the cosets feeding them, so no
+/// two tasks touch the same symbol on either side.
+///
+/// A task copies each block into scratch and changes its basis in one pass, alternates the
+/// rounds between two scratch buffers, and writes the last round straight into its output, whose
+/// basis it changes back in one pass once every block has run.
+///
+/// # Panics
+///
+/// Panics if there are no challenges.
+fn fold_rounds<const W: usize, K>(
+    codeword: &[BinaryField128],
+    challenges: &[BinaryField128],
+    kernel: &K,
+) -> Vec<BinaryField128>
+where
+    K: Fn(&[u128], &mut [u128], usize, Ghash128, &[Ghash128]) + Sync,
+{
+    // With no round to run, every output slot would keep its zero and the fold would return an
+    // all-zero codeword instead of failing.
+    assert!(!challenges.is_empty(), "a fold runs at least one round");
+
     let arity = challenges.len();
-    let size = 1 << arity;
-    let num_cosets = codeword.len() / size;
-    let betas: Vec<_> = challenges.iter().copied().map(Ghash128::from).collect();
-    let offsets: Vec<Ghash128> = (0..size / 2).map(|i| domain_point(i << 1)).collect();
+    let size = 1usize << arity;
+    let num_cosets = codeword.len() >> arity;
+
+    // A trailing partial coset produces no output symbol, so it is never read.
+    let codeword = &codeword[..num_cosets << arity];
+
+    // The challenges cross into the polynomial basis once for the whole fold.
+    let betas: Vec<Ghash128> = challenges.iter().copied().map(Ghash128::from).collect();
+
+    // Round `r` produces `codeword.len() >> (r + 1)` symbols, which sizes its group walk.
     let steps: Vec<Vec<Ghash128>> = (0..arity)
-        .map(|round| {
-            let mut step = Ghash128::ZERO;
-            (0..num_cosets.ilog2() as usize)
-                .map(|bit| {
-                    step += Ghash128::cantor_basis(arity - round + bit);
-                    step
-                })
-                .collect()
-        })
+        .map(|round| group_steps::<W>(codeword.len() >> (round + 1)))
         .collect();
-    let mut output = BinaryField128::zero_vec(num_cosets);
-    output
+
+    // Cosets per block, a power of two no larger than the grain, so every task starts a block.
+    let block = (BLOCK_SYMBOLS >> arity).max(W);
+    debug_assert!(
+        FOLD_GRAIN.is_multiple_of(block),
+        "a task must hold whole blocks"
+    );
+
+    let mut folded = vec![0u128; num_cosets];
+
+    // Task `t` owns outputs `[t * GRAIN, (t + 1) * GRAIN)` and inputs `[t * GRAIN * 2^a, ...)`.
+    // Output `j` reads only its own coset, inside its own task's input chunk, so the two chunk
+    // streams stay index-aligned and every task is disjoint from every other.
+    folded
         .par_chunks_mut(FOLD_GRAIN)
         .zip(codeword.par_chunks(FOLD_GRAIN.saturating_mul(size)))
         .enumerate()
-        .for_each(|(task, (out, input))| {
-            let start = task * FOLD_GRAIN;
-            let mut bases: Vec<Ghash128> = (0..arity)
-                .map(|r| domain_point(start << (arity - r)))
-                .collect();
-            let mut scratch = Ghash128::zero_vec(size);
-            for (offset, (slot, coset)) in out.iter_mut().zip(input.chunks_exact(size)).enumerate()
-            {
-                let index = start + offset;
-                if offset != 0 {
-                    for (base, steps) in bases.iter_mut().zip(&steps) {
-                        *base += steps[index.trailing_zeros() as usize];
+        .for_each_init(
+            || (Vec::new(), Vec::new()),
+            |(even, odd), (task, (out, input))| {
+                for (index, (slots, symbols)) in out
+                    .chunks_mut(block)
+                    .zip(input.chunks(block * size))
+                    .enumerate()
+                {
+                    let first = task * FOLD_GRAIN + index * block;
+
+                    even.clear();
+                    even.extend(symbols.iter().map(|&symbol| symbol.to_repr()));
+                    poly_basis::from_tower_slice(even);
+
+                    // Only a round before the last writes here.
+                    odd.resize(if arity > 1 { symbols.len() / 2 } else { 0 }, 0);
+
+                    // Round `r` reads the buffer round `r - 1` wrote and writes the other one.
+                    for (round, (&beta, steps)) in betas.iter().zip(&steps).enumerate() {
+                        let len = symbols.len() >> round;
+                        let (src, spare) = if round % 2 == 0 {
+                            (&even[..len], &mut odd[..])
+                        } else {
+                            (&odd[..len], &mut even[..])
+                        };
+                        let dst = if round + 1 == arity {
+                            &mut *slots
+                        } else {
+                            &mut spare[..len / 2]
+                        };
+                        kernel(src, dst, first * (size >> (round + 1)), beta, steps);
                     }
                 }
-                for (dst, &src) in scratch.iter_mut().zip(coset) {
-                    *dst = Ghash128::from(src);
-                }
-                let mut len = size;
-                for (r, &beta) in betas.iter().enumerate() {
-                    len /= 2;
-                    let packed_end = len / WIDTH * WIDTH;
-                    let beta_packed = Packed::broadcast(beta);
-                    for i in (0..packed_end).step_by(WIDTH) {
-                        let lo = Packed::from_fn(|lane| scratch[2 * (i + lane)]);
-                        let hi = Packed::from_fn(|lane| scratch[2 * (i + lane) + 1]);
-                        let x = Packed::from_fn(|lane| bases[r] + offsets[i + lane]);
-                        let f1 = lo + hi;
-                        let f0 = lo + x * f1;
-                        let folded = f0 + beta_packed * (f0 + f1);
-                        scratch[i..i + WIDTH].copy_from_slice(folded.as_slice());
-                    }
-                    for i in packed_end..len {
-                        let lo = scratch[2 * i];
-                        let f1 = lo + scratch[2 * i + 1];
-                        let f0 = lo + (bases[r] + offsets[i]) * f1;
-                        scratch[i] = f0 + beta * (f0 + f1);
-                    }
-                }
-                *slot = BinaryField128::from(scratch[0]);
-            }
-        });
-    output
+                poly_basis::to_tower_slice(out);
+            },
+        );
+
+    folded.into_iter().map(BinaryField128::from_repr).collect()
 }
 
 #[cfg(test)]
@@ -456,14 +516,22 @@ mod tests {
     use rand::rngs::SmallRng;
     use rand::{RngExt, SeedableRng};
 
-    use super::{FOLD_GRAIN, WIDTH, fold_codeword, fold_pair, group_steps, lane_offsets};
+    use super::{FOLD_GRAIN, WIDTH, fold_codeword, fold_pair, fold_rounds, lane_offsets};
+
+    /// Batch arities that reach every clamp of the per-block coset count.
+    ///
+    /// A block holds `2 * FOLD_GRAIN / 2^arity` cosets but never fewer than the packing width.
+    ///
+    ///     1 .. 5      many cosets per block, blocks of whole packed groups
+    ///     9 .. 12     the width floor takes over at widths 8, 4, 2 and 1 in turn
+    const ARITIES: [usize; 9] = [1, 2, 3, 4, 5, 9, 10, 11, 12];
 
     #[test]
     fn batched_folds_match_sequential_folds_at_every_coset_offset() {
         let mut rng = SmallRng::seed_from_u64(0xBA7C);
         for log_len in [4, 7, 12, 14] {
             let word: Vec<BinaryField128> = (0..1 << log_len).map(|_| rng.random()).collect();
-            for arity in 1..=4.min(log_len) {
+            for arity in ARITIES.into_iter().filter(|&arity| arity <= log_len) {
                 let challenges: Vec<BinaryField128> = (0..arity).map(|_| rng.random()).collect();
                 let mut expected = word.clone();
                 for &beta in &challenges {
@@ -594,26 +662,30 @@ mod tests {
         }
     }
 
-    /// The task loop with `[Ghash128; W]` standing in for the packing.
+    /// The pair kernel with `[Ghash128; W]` standing in for the packing.
     ///
-    /// Every lane index, gather offset and step lookup is the one `fold_task` uses, and the two
-    /// helpers it calls are the production ones.
+    /// Every lane index, gather offset and step lookup is the one `fold_pairs` uses.
     ///
     /// A build compiles exactly one packing width, so this is what reaches the others.
-    fn fold_task_model<const W: usize>(
+    fn fold_pairs_model<const W: usize>(
+        src: &[u128],
+        dst: &mut [u128],
         start: usize,
-        pairs: &[BinaryField128],
-        out: &mut [BinaryField128],
         beta: Ghash128,
         lane_offsets: [Ghash128; W],
         group_steps: &[Ghash128],
     ) {
+        debug_assert!(
+            start.is_multiple_of(W),
+            "a fold must start on a packed group boundary"
+        );
+
         // Whole groups, then the leftover slots, split where the packed form splits them.
-        let (slot_groups, tail) = out.as_chunks_mut::<W>();
+        let (slot_groups, tail) = dst.as_chunks_mut::<W>();
         let tail_offset = slot_groups.len() * W;
 
         // A block of `2 * W` symbols per group, so the remainder starts at twice that offset.
-        let (symbol_blocks, tail_pairs) = pairs.split_at(2 * tail_offset);
+        let (symbol_blocks, tail_pairs) = src.split_at(2 * tail_offset);
 
         let first_group = start / W;
         let mut base: Ghash128 = domain_point(start << 1);
@@ -630,46 +702,36 @@ mod tests {
             let x: [Ghash128; W] = array::from_fn(|lane| base + lane_offsets[lane]);
 
             // The gather a packed block performs: even symbols low, odd symbols high.
-            let lo: [Ghash128; W] = array::from_fn(|lane| Ghash128::from(block[2 * lane]));
-            let hi: [Ghash128; W] = array::from_fn(|lane| Ghash128::from(block[2 * lane + 1]));
+            let lo: [Ghash128; W] = array::from_fn(|lane| Ghash128::from_repr(block[2 * lane]));
+            let hi: [Ghash128; W] = array::from_fn(|lane| Ghash128::from_repr(block[2 * lane + 1]));
 
             for (lane, slot) in slots.iter_mut().enumerate() {
                 let f1 = lo[lane] + hi[lane];
                 let f0 = lo[lane] + x[lane] * f1;
-                *slot = BinaryField128::from(f0 + beta * (f0 + f1));
+                *slot = (f0 + beta * (f0 + f1)).to_repr();
             }
         }
 
         let (tail_blocks, _) = tail_pairs.as_chunks::<2>();
         for (offset, (slot, pair)) in tail.iter_mut().zip(tail_blocks).enumerate() {
             let x: Ghash128 = domain_point((start + tail_offset + offset) << 1);
-            let lo = Ghash128::from(pair[0]);
-            let hi = Ghash128::from(pair[1]);
+            let lo = Ghash128::from_repr(pair[0]);
+            let hi = Ghash128::from_repr(pair[1]);
             let f1 = lo + hi;
             let f0 = lo + x * f1;
-            *slot = BinaryField128::from(f0 + beta * (f0 + f1));
+            *slot = (f0 + beta * (f0 + f1)).to_repr();
         }
     }
 
-    /// `fold_codeword` driving the width-generic task loop, serially.
-    fn fold_codeword_model<const W: usize>(
+    /// The production round driver, running the width-generic kernel.
+    fn fold_rounds_model<const W: usize>(
         codeword: &[BinaryField128],
-        beta: BinaryField128,
+        challenges: &[BinaryField128],
     ) -> Vec<BinaryField128> {
-        let num_pairs = codeword.len() / 2;
-        let beta_poly = Ghash128::from(beta);
         let offsets = lane_offsets::<[Ghash128; W]>();
-        let steps = group_steps::<W>(num_pairs);
-
-        let mut folded = BinaryField128::zero_vec(num_pairs);
-        for (task, (out, pairs)) in folded
-            .chunks_mut(FOLD_GRAIN)
-            .zip(codeword.chunks(2 * FOLD_GRAIN))
-            .enumerate()
-        {
-            fold_task_model::<W>(task * FOLD_GRAIN, pairs, out, beta_poly, offsets, &steps);
-        }
-        folded
+        fold_rounds::<W, _>(codeword, challenges, &|src, dst, start, beta, steps| {
+            fold_pairs_model::<W>(src, dst, start, beta, offsets, steps);
+        })
     }
 
     /// Fold every shape at one packing width and compare against the tower reference.
@@ -688,9 +750,37 @@ mod tests {
             let beta: BinaryField128 = rng.random();
 
             assert_eq!(
-                fold_codeword_model::<W>(&codeword, beta),
+                fold_rounds_model::<W>(&codeword, &[beta]),
                 fold_codeword_tower_reference(&codeword, beta),
                 "W={W} len={len}"
+            );
+        }
+
+        // Batches, where every round after the first runs on symbols the previous round wrote:
+        //
+        //     2^1, 2^3, 2^6   fewer cosets than a packed group holds at the wider widths
+        //     2^12            two tasks at arity 1, several blocks at arity 5, one coset at 12
+        //     2^14, arity 2   several tasks of several blocks each
+        let shapes = [1, 3, 6, 12]
+            .into_iter()
+            .flat_map(|log_len| {
+                ARITIES
+                    .into_iter()
+                    .filter(move |&arity| arity <= log_len)
+                    .map(move |arity| (log_len, arity))
+            })
+            .chain([(14, 2)]);
+        for (log_len, arity) in shapes {
+            let codeword: Vec<BinaryField128> = (0..1 << log_len).map(|_| rng.random()).collect();
+            let challenges: Vec<BinaryField128> = (0..arity).map(|_| rng.random()).collect();
+
+            let expected = challenges.iter().fold(codeword.clone(), |word, &beta| {
+                fold_codeword_tower_reference(&word, beta)
+            });
+            assert_eq!(
+                fold_rounds_model::<W>(&codeword, &challenges),
+                expected,
+                "W={W} log_len={log_len} arity={arity}"
             );
         }
     }
@@ -714,6 +804,35 @@ mod tests {
         check_width::<2>();
         check_width::<4>();
         check_width::<8>();
+    }
+
+    proptest! {
+        // Each case folds up to 2^14 symbols through the tower reference, the slow side here,
+        // so a few dozen cases keep the unoptimized run short.
+        #![proptest_config(ProptestConfig::with_cases(32))]
+
+        /// Every batch shape up to 2^14 symbols, at every packing width.
+        ///
+        /// The coset count crosses the grain at a different arity for each length, so this
+        /// reaches shapes the enumerated sweep steps over, such as exactly one full task.
+        #[test]
+        fn every_batch_shape_matches_the_tower_reference(
+            (log_len, arity) in (1usize..=14)
+                .prop_flat_map(|log_len| (Just(log_len), 1..=log_len)),
+            seed: u64,
+        ) {
+            let mut rng = SmallRng::seed_from_u64(seed);
+            let codeword: Vec<BinaryField128> = (0..1 << log_len).map(|_| rng.random()).collect();
+            let challenges: Vec<BinaryField128> = (0..arity).map(|_| rng.random()).collect();
+
+            let expected = challenges.iter().fold(codeword.clone(), |word, &beta| {
+                fold_codeword_tower_reference(&word, beta)
+            });
+            prop_assert_eq!(&fold_rounds_model::<1>(&codeword, &challenges), &expected);
+            prop_assert_eq!(&fold_rounds_model::<2>(&codeword, &challenges), &expected);
+            prop_assert_eq!(&fold_rounds_model::<4>(&codeword, &challenges), &expected);
+            prop_assert_eq!(&fold_rounds_model::<8>(&codeword, &challenges), &expected);
+        }
     }
 
     #[test]
@@ -863,6 +982,14 @@ mod tests {
         // One symbol is half a pair, so there is nothing to fold and the output is empty.
         // A length of one is a power of two, so the length assertion admits it.
         assert!(fold_codeword(&[BinaryField128::ONE], BinaryField128::ONE).is_empty());
+    }
+
+    #[test]
+    #[should_panic(expected = "a fold runs at least one round")]
+    fn a_fold_with_no_challenges_is_rejected() {
+        // No round would write an output slot, so the driver refuses rather than return zeros.
+        let codeword = [BinaryField128::ONE; 4];
+        let _ = fold_rounds_model::<1>(&codeword, &[]);
     }
 
     #[test]
