@@ -425,12 +425,16 @@ fn security_requires_the_actual_preprocessed_opening_shape() {
         .bits
         .bits();
     assert!((sumcheck_bits - (123.0 - 12f64.log2() - (2560f64 * 1280f64).log2())).abs() < 1e-10);
-    assert!(
-        report
-            .terms()
-            .iter()
-            .any(|term| term.label == "preprocessed-pcs")
-    );
+    // Both commitments are charged, so the opening label appears once for each of them.
+    //
+    // The label alone cannot say which is which, so each term names its own commitment.
+    let openings: Vec<Option<&str>> = report
+        .terms()
+        .iter()
+        .filter(|term| term.label == "whir-opening")
+        .map(|term| term.component)
+        .collect();
+    assert_eq!(openings, [Some("main-pcs"), Some("preprocessed-pcs")]);
     report.require_security(20).unwrap();
     config.preprocessed_pcs = pcs_for(5, PREPROCESSED_WIDTH);
     let report = p3_multi_stark::security_report(&config, &instances).unwrap();

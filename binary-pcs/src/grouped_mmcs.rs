@@ -4,9 +4,8 @@ use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::vec;
 use alloc::vec::Vec;
 
-use p3_binary_field::BinaryField128 as F;
 use p3_commit::{BatchOpening, BatchOpeningRef, Mmcs};
-use p3_field::PackedValue;
+use p3_field::{Field, PackedValue};
 use p3_matrix::{Dimensions, Matrix};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -65,7 +64,7 @@ pub struct GroupedCodeword<M> {
     group_size: usize,
 }
 
-impl<M: Matrix<F>> Matrix<F> for GroupedCodeword<M> {
+impl<F: Field, M: Matrix<F>> Matrix<F> for GroupedCodeword<M> {
     fn width(&self) -> usize {
         self.group_size
     }
@@ -122,7 +121,11 @@ impl<M: Matrix<F>> Matrix<F> for GroupedCodeword<M> {
 
 /// Authentication of the grouped leaves plus symbols not already in the requested rows.
 #[derive(Clone, Serialize, Deserialize)]
-pub struct GroupedCodewordProof<P> {
+#[serde(bound(
+    serialize = "F: Serialize, P: Serialize",
+    deserialize = "F: Deserialize<'de>, P: Deserialize<'de>"
+))]
+pub struct GroupedCodewordProof<F, P> {
     inner: P,
     /// In ascending symbol-index order across the distinct opened groups.
     missing_symbols: Vec<F>,
@@ -152,11 +155,11 @@ fn group_indices(indices: &[usize], group_size: usize) -> Vec<usize> {
     groups
 }
 
-impl<Inner: Mmcs<F>> Mmcs<F> for GroupedCodewordMmcs<Inner> {
+impl<F: Field, Inner: Mmcs<F>> Mmcs<F> for GroupedCodewordMmcs<Inner> {
     type ProverData<M> = Inner::ProverData<GroupedCodeword<M>>;
     type Commitment = Inner::Commitment;
-    type Proof = GroupedCodewordProof<Inner::MultiProof>;
-    type MultiProof = GroupedCodewordProof<Inner::MultiProof>;
+    type Proof = GroupedCodewordProof<F, Inner::MultiProof>;
+    type MultiProof = GroupedCodewordProof<F, Inner::MultiProof>;
     type Error = GroupedCodewordError<Inner::Error>;
 
     fn commit<M: Matrix<F>>(&self, mut inputs: Vec<M>) -> (Self::Commitment, Self::ProverData<M>) {
@@ -414,7 +417,7 @@ mod tests {
     #[test]
     fn folding_schedule_sizes_leaves_for_the_next_actual_batch() {
         use crate::{BinaryPcsConfig, BinaryPcsParams};
-        let config = BinaryPcsConfig::try_new(
+        let config = BinaryPcsConfig::try_new::<F, F>(
             6,
             BinaryPcsParams {
                 log_inv_rate: 2,
@@ -534,7 +537,7 @@ mod tests {
 
         for num_variables in [1, 6, 10] {
             for group_size in [1, 2, 4, 8, 16] {
-                let config = BinaryPcsConfig::try_new(
+                let config = BinaryPcsConfig::try_new::<F, F>(
                     num_variables,
                     BinaryPcsParams {
                         log_inv_rate: 2,
@@ -543,7 +546,12 @@ mod tests {
                     },
                 )
                 .unwrap();
-                let pcs = BinaryPcs::new(config, GroupedCodewordMmcs::new(mmcs(), group_size));
+                let pcs = BinaryPcs::new(
+                    config,
+                    GroupedCodewordMmcs::new(mmcs(), group_size),
+                    GroupedCodewordMmcs::new(mmcs(), group_size),
+                )
+                .unwrap();
                 let mut rng = SmallRng::seed_from_u64(0x6710);
                 let table = Table::rand(&mut rng, 1, num_variables);
                 let witness = SuffixProver::<F, F>::new_witness(vec![table], 0);
@@ -557,8 +565,12 @@ mod tests {
                     .open(data, protocol.clone(), &mut prover_challenger)
                     .unwrap();
                 let bytes = postcard::to_allocvec(&proof).unwrap();
-                let decoded: BinaryPcsProof<GroupedCodewordMmcs<MyMmcs>> =
-                    postcard::from_bytes(&bytes).unwrap();
+                let decoded: BinaryPcsProof<
+                    F,
+                    F,
+                    GroupedCodewordMmcs<MyMmcs>,
+                    GroupedCodewordMmcs<MyMmcs>,
+                > = postcard::from_bytes(&bytes).unwrap();
                 pcs.verify(&commitment, &decoded, &mut challenger(), protocol)
                     .unwrap();
             }

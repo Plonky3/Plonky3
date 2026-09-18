@@ -2,7 +2,6 @@
 
 use core::fmt::Debug;
 
-use p3_binary_field::BinaryField128;
 use thiserror::Error;
 
 use crate::transcript::TranscriptFailure;
@@ -14,7 +13,7 @@ use crate::transcript::TranscriptFailure;
 /// cannot apply here.
 #[derive(Debug, Error)]
 #[non_exhaustive]
-pub enum BinaryPcsError<MmcsError> {
+pub enum BinaryPcsError<F, MmcsError> {
     /// The proof carries a different number of intermediate folding rounds than the config
     /// derives.
     ///
@@ -137,11 +136,11 @@ pub enum BinaryPcsError<MmcsError> {
     // `pow_witness` is then bound to nothing: any value rides along and still verifies.
     // Zero is the only value an honest prover emits, so zero is the only value accepted.
     #[error("the grinding witness is {actual} at zero difficulty, expected zero")]
-    NonCanonicalPowWitness { actual: BinaryField128 },
+    NonCanonicalPowWitness { actual: F },
 }
 
-impl<E: Debug> From<TranscriptFailure> for BinaryPcsError<E> {
-    fn from(failure: TranscriptFailure) -> Self {
+impl<F: Debug, E: Debug> From<TranscriptFailure<F>> for BinaryPcsError<F, E> {
+    fn from(failure: TranscriptFailure<F>) -> Self {
         match failure {
             TranscriptFailure::FinalCodewordLength { expected, got } => {
                 Self::FinalCodewordLengthMismatch {

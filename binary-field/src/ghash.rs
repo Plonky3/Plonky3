@@ -20,7 +20,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::cantor::CANTOR_BASIS_128;
 use crate::tower::TowerLevel;
-use crate::{BinaryField128, Gf2, clmul};
+use crate::{
+    BinaryField8, BinaryField16, BinaryField32, BinaryField64, BinaryField128, Gf2, clmul,
+};
 
 /// The bit pattern of the multiplicative generator of the tower representation.
 ///
@@ -448,6 +450,25 @@ impl Mul<BinaryField128> for Ghash128 {
 
 impl Algebra<BinaryField128> for Ghash128 {}
 
+macro_rules! impl_narrow_algebra {
+    ($($field:ty),* $(,)?) => {$(
+        impl From<$field> for Ghash128 {
+            #[inline]
+            fn from(x: $field) -> Self {
+                Self::from(BinaryField128::from(x))
+            }
+        }
+
+        impl_add_base_field!(Ghash128, $field);
+        impl_sub_base_field!(Ghash128, $field);
+        impl_mul_base_field!(Ghash128, $field);
+
+        impl Algebra<$field> for Ghash128 {}
+    )*};
+}
+
+impl_narrow_algebra!(BinaryField8, BinaryField16, BinaryField32, BinaryField64);
+
 impl Add for Ghash128 {
     type Output = Self;
 
@@ -520,7 +541,27 @@ mod tests {
 
     use super::{CANTOR_BASIS, Ghash128};
     use crate::tower::TowerLevel;
-    use crate::{BinaryField128, Gf2};
+    use crate::{BinaryField8, BinaryField16, BinaryField32, BinaryField64, BinaryField128, Gf2};
+
+    #[test]
+    fn narrow_algebras_match_multiplication_in_the_tower() {
+        // The static checks cover every committed alphabet admitted under 128-bit challenges.
+        const fn assert_algebra<F: PrimeCharacteristicRing, A: Algebra<F>>() {}
+        assert_algebra::<BinaryField8, Ghash128>();
+        assert_algebra::<BinaryField16, Ghash128>();
+        assert_algebra::<BinaryField32, Ghash128>();
+        assert_algebra::<BinaryField64, Ghash128>();
+        assert_algebra::<BinaryField128, Ghash128>();
+
+        // A nontrivial 32-bit scalar pins the embedding against the tower-field reference.
+        let x = BinaryField128::from_repr(0x3141_5926_5358_9793_2384_6264_3383_2795);
+        let x_poly = Ghash128::from(x);
+        let scalar = BinaryField32::from_repr(0xa5c3_19e7);
+        assert_eq!(
+            BinaryField128::from(x_poly * scalar),
+            x * BinaryField128::from(scalar)
+        );
+    }
 
     /// The tower element with the given bit pattern.
     fn tower(bits: u128) -> BinaryField128 {

@@ -10,7 +10,7 @@ use core::fmt;
 use std::time::Instant;
 
 use p3_air::{Air, BaseAir};
-use p3_binary_dft::{AdditiveNtt, LchNtt, NaiveAdditiveNtt, PolyBasisNtt};
+use p3_binary_dft::{AdditiveNtt, AdditiveRsEncoder, LchNtt, NaiveAdditiveNtt, PolyBasisNtt};
 use p3_binary_field::{BinaryChallenger, BinaryField2, BinaryField128, Ghash128, poly_basis};
 use p3_binary_pcs::{
     BinaryPcs, BinaryPcsConfig, BinaryPcsConfigError, BinaryPcsParams, BinaryPcsProverData,
@@ -44,10 +44,10 @@ type Challenger = BinaryChallenger<F, HashChallenger<u8, Keccak256Hash, 32>>;
 
 /// Multi-STARK configuration proving AIRs over `BinaryField128` with the binary PCS.
 ///
-/// `N` is the Merkle tree's child arity: 2 for a binary tree, 4 for a quaternary one. `Ntt` is
-/// the additive NTT the PCS encodes its codeword through.
+/// `N` is the Merkle tree's child arity.
+/// `Ntt` selects the additive transform used to encode the base codeword.
 pub struct BinaryStarkConfig<const N: usize, Ntt = PolyBasisNtt> {
-    pcs: BinaryPcs<Mmcs<N>, Ntt>,
+    pcs: BinaryPcs<F, F, Mmcs<N>, Mmcs<N>, AdditiveRsEncoder<F, Ntt>>,
 }
 
 impl<const N: usize, Ntt> MultiStarkConfig for BinaryStarkConfig<N, Ntt>
@@ -57,7 +57,7 @@ where
     type Val = F;
     type Challenge = F;
     type Challenger = Challenger;
-    type Pcs = BinaryPcs<Mmcs<N>, Ntt>;
+    type Pcs = BinaryPcs<F, F, Mmcs<N>, Mmcs<N>, AdditiveRsEncoder<F, Ntt>>;
 
     fn pcs(&self) -> &Self::Pcs {
         &self.pcs
@@ -79,7 +79,7 @@ where
 
     fn committed_table<'a>(
         &self,
-        prover_data: &'a BinaryPcsProverData<Mmcs<N>>,
+        prover_data: &'a BinaryPcsProverData<F, F, Mmcs<N>>,
         table_index: usize,
     ) -> &'a Table<F> {
         prover_data.table(table_index)
@@ -96,8 +96,12 @@ pub fn binary_config<const N: usize, Ntt>(
     params: BinaryPcsParams,
     folding: usize,
     ntt: Ntt,
-) -> Result<BinaryStarkConfig<N, Ntt>, BinaryPcsConfigError> {
-    let pcs_config = BinaryPcsConfig::try_new_with_folding(arity, params, folding.min(arity))?;
+) -> Result<BinaryStarkConfig<N, Ntt>, BinaryPcsConfigError>
+where
+    Ntt: AdditiveNtt<F> + Sync,
+{
+    let pcs_config =
+        BinaryPcsConfig::try_new_with_folding::<F, F>(arity, params, folding.min(arity))?;
     let merkle = MerkleMmcs::<N>::new(
         Hash::new(Keccak256Hash),
         Compress::<N>::new(Keccak256Hash),
@@ -105,7 +109,7 @@ pub fn binary_config<const N: usize, Ntt>(
     );
     let mmcs = Mmcs::<N>::for_folding(merkle, &pcs_config);
     Ok(BinaryStarkConfig {
-        pcs: BinaryPcs::with_ntt(pcs_config, mmcs, ntt),
+        pcs: BinaryPcs::with_ntt(pcs_config, mmcs.clone(), mmcs, ntt)?,
     })
 }
 

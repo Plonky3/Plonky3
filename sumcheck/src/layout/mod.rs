@@ -82,6 +82,7 @@ pub use opening::{
     ProverMultiClaim, ProverVirtualClaim, VerifierMultiClaim, VerifierOpening,
     VerifierVirtualClaim,
 };
+pub use plan::plan_stacked_layout;
 pub use prover::{Layout, PrefixProver, StackedClaims, SuffixProver, SuffixResidualProver};
 pub use transcript::{commitment_domain_separator, observe_commitment};
 pub use verifier::Verifier;

@@ -47,7 +47,7 @@ type MyHash = SerializingHasher<Keccak256Hash>;
 type MyCompress = CompressionFunctionFromHasher<Keccak256Hash, 2, 32>;
 type MyMmcs = MerkleTreeMmcs<F, u8, MyHash, MyCompress, 2, 32>;
 type MyChallenger = BinaryChallenger<F, HashChallenger<u8, Keccak256Hash, 32>>;
-type MyPcs = BinaryPcs<MyMmcs>;
+type MyPcs = BinaryPcs<F, F, MyMmcs, MyMmcs>;
 
 /// Variables the skip round binds in one go.
 const LOG_SKIP: usize = 6;
@@ -106,7 +106,7 @@ const fn challenger() -> MyChallenger {
 /// A modest security level keeps it quick, and the shape is what is tested.
 fn pcs() -> MyPcs {
     BinaryPcs::new(
-        BinaryPcsConfig::try_new(
+        BinaryPcsConfig::try_new::<F, F>(
             LOG_STACKED,
             BinaryPcsParams {
                 log_inv_rate: 2,
@@ -116,7 +116,9 @@ fn pcs() -> MyPcs {
         )
         .unwrap(),
         mmcs(),
+        mmcs(),
     )
+    .unwrap()
 }
 
 /// One batch naming every operand column, opened at one prescribed point.

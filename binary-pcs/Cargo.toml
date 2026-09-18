@@ -46,5 +46,13 @@ rand.workspace = true
 name = "pcs"
 harness = false
 
+[[bench]]
+name = "packing"
+harness = false
+
+[[bench]]
+name = "boolean"
+harness = false
+
 [lints]
 workspace = true
