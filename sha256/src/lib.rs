@@ -448,6 +448,28 @@ mod tests {
         out
     }
 
+    // SHA-256 of a whole message as the specification defines it: FIPS 180-4 §5.1.1 padding, then
+    // `spec_compress` over every block from the IV. Shares no code with the backends or `sha2`.
+    fn spec_hash(message: &[u8]) -> [u8; 32] {
+        let mut padded = message.to_vec();
+        padded.push(0x80);
+        while padded.len() % 64 != 56 {
+            padded.push(0);
+        }
+        padded.extend_from_slice(&((message.len() as u64) * 8).to_be_bytes());
+
+        let mut state = crate::H256_256;
+        for block in padded.as_chunks::<64>().0 {
+            spec_compress(&mut state, block);
+        }
+
+        let mut out = [0u8; 32];
+        for (bytes, word) in out.as_chunks_mut::<4>().0.iter_mut().zip(state) {
+            *bytes = word.to_be_bytes();
+        }
+        out
+    }
+
     // Reinterpret a flat byte run as the 64-byte pairs `compress_many` consumes.
     fn compression_inputs(bytes: &[u8]) -> Vec<[[u8; 32]; 2]> {
         bytes
@@ -666,6 +688,23 @@ mod tests {
     }
 
     proptest! {
+        #[test]
+        fn hash_many_matches_specification_on_random_batches(
+            len in 0usize..=400,
+            count in 1usize..=17,
+            seed in any::<u64>(),
+        ) {
+            let messages = random_bytes(len * count, seed | 1);
+
+            let mut batched = vec![[0u8; 32]; count];
+            Sha256.hash_many(&messages, &mut batched);
+
+            let expected: Vec<[u8; 32]> = (0..count)
+                .map(|k| spec_hash(&messages[k * len..(k + 1) * len]))
+                .collect();
+            prop_assert_eq!(batched, expected);
+        }
+
         #[test]
         fn hash_many_matches_scalar_on_random_batches(
             len in 0usize..=400,
