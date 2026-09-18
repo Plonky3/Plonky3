@@ -6,6 +6,10 @@ use p3_field::PackedValue;
 use crate::Matrix;
 use crate::dense::RowMajorMatrix;
 
+/// Largest packing width for which `RowIndexMappedView::vertically_packed_row` resolves the
+/// inner row of every lane before walking the columns.
+const MAX_RESOLVED_LANES: usize = 8;
+
 /// A trait for remapping row indices of a matrix.
 ///
 /// Implementations can change the number of visible rows (`height`)
@@ -162,11 +166,32 @@ impl<T: Send + Sync + Clone, IndexMap: RowIndexMap, Inner: Matrix<T>> Matrix<T>
         let width = self.width();
         // The row permutation generally scatters `r..r + P::WIDTH` across non-contiguous
         // inner rows, so unlike `DenseMatrix` we cannot take a contiguous-slice fast path.
-        // Reading elements directly still avoids the `Vec` of row-slice guards that the
-        // default implementation allocates via `wrapping_row_slices`.
+        // Up to `MAX_RESOLVED_LANES` lanes, each lane's inner row slice is resolved once and
+        // captured by value, so the column loop reads through those slices instead of mapping
+        // and loading every element through `self`, and no `Vec` of row-slice guards is
+        // allocated. Wider packings read each element through `get_unchecked`.
         let no_wrap = P::WIDTH != 1 && r + P::WIDTH <= height;
+        let lane_rows: [Option<_>; MAX_RESOLVED_LANES] = core::array::from_fn(|i| {
+            (P::WIDTH <= MAX_RESOLVED_LANES && i < P::WIDTH && width != 0).then(|| {
+                let lane_row = if no_wrap { r + i } else { (r + i) % height };
+                // Safety: lane_row < height.
+                let row = unsafe { self.row_slice_unchecked(lane_row) };
+                debug_assert_eq!(row.len(), width);
+                row
+            })
+        });
         (0..width).map(move |c| {
-            if no_wrap {
+            if P::WIDTH <= MAX_RESOLVED_LANES {
+                // Safety: width != 0 here, so every lane below P::WIDTH is `Some` and holds a
+                // row of length width, and c < width (loop bound).
+                P::from_fn(|i| unsafe {
+                    *lane_rows
+                        .get_unchecked(i)
+                        .as_deref()
+                        .unwrap_unchecked()
+                        .get_unchecked(c)
+                })
+            } else if no_wrap {
                 // Safety: r + i < height (fast-path guard), and c < width (loop bound).
                 P::from_fn(|i| unsafe { self.get_unchecked(r + i, c) })
             } else {
@@ -182,30 +207,8 @@ impl<T: Send + Sync + Clone, IndexMap: RowIndexMap, Inner: Matrix<T>> Matrix<T>
         T: Copy,
         P: PackedValue<Value = T>,
     {
-        let height = self.height();
-        let width = self.width();
-        let no_wrap = P::WIDTH != 1 && r + P::WIDTH <= height;
-        let next_no_wrap = P::WIDTH != 1 && r + step + P::WIDTH <= height;
-
-        (0..width)
-            .map(move |c| {
-                if no_wrap {
-                    // Safety: r + i < height (fast-path guard), and c < width (loop bound).
-                    P::from_fn(|i| unsafe { self.get_unchecked(r + i, c) })
-                } else {
-                    // Safety: (r + i) % height < height, and c < width (loop bound).
-                    P::from_fn(|i| unsafe { self.get_unchecked((r + i) % height, c) })
-                }
-            })
-            .chain((0..width).map(move |c| {
-                if next_no_wrap {
-                    // Safety: r + step + i < height (fast-path guard), and c < width (loop bound).
-                    P::from_fn(|i| unsafe { self.get_unchecked(r + step + i, c) })
-                } else {
-                    // Safety: (r + step + i) % height < height, and c < width (loop bound).
-                    P::from_fn(|i| unsafe { self.get_unchecked((r + step + i) % height, c) })
-                }
-            }))
+        self.vertically_packed_row::<P>(r)
+            .chain(self.vertically_packed_row::<P>(r + step))
             .collect()
     }
 }
@@ -214,12 +217,18 @@ impl<T: Send + Sync + Clone, IndexMap: RowIndexMap, Inner: Matrix<T>> Matrix<T>
 mod tests {
     use alloc::vec;
     use alloc::vec::Vec;
+    use core::fmt::Debug;
 
     use itertools::Itertools;
     use p3_baby_bear::BabyBear;
-    use p3_field::FieldArray;
+    use p3_field::{Field, FieldArray, Vectorized};
+    use p3_goldilocks::Goldilocks;
+    use rand::SeedableRng;
+    use rand::distr::{Distribution, StandardUniform};
+    use rand::rngs::SmallRng;
 
     use super::*;
+    use crate::bitrev::BitReversibleMatrix;
     use crate::dense::RowMajorMatrix;
 
     /// Mock implementation of RowIndexMap
@@ -509,6 +518,91 @@ mod tests {
                 Packed::from([BabyBear::new(6), BabyBear::new(4)]),
             ]
         );
+    }
+
+    /// Lane `i` of column `c` is the element at view row `(r + i) % height`, column `c`.
+    fn scalar_packed_row<T, P, M>(m: &M, r: usize) -> Vec<Vec<T>>
+    where
+        T: Copy + Send + Sync,
+        P: PackedValue<Value = T>,
+        M: Matrix<T>,
+    {
+        let height = m.height();
+        (0..m.width())
+            .map(|c| {
+                (0..P::WIDTH)
+                    .map(|i| m.get((r + i) % height, c).unwrap())
+                    .collect()
+            })
+            .collect()
+    }
+
+    fn lanes<P: PackedValue>(packed: &[P]) -> Vec<Vec<P::Value>> {
+        packed.iter().map(|p| p.as_slice().to_vec()).collect()
+    }
+
+    /// Checks both packing methods against the scalar gather at every start row up to
+    /// `2 * height + P::WIDTH`, so every wrap-around offset is covered.
+    fn assert_packing_matches_scalar_gather<T, P, M>(m: &M)
+    where
+        T: Copy + Send + Sync + PartialEq + Debug,
+        P: PackedValue<Value = T>,
+        M: Matrix<T>,
+    {
+        let height = m.height();
+        for r in 0..2 * height + P::WIDTH {
+            let expected = scalar_packed_row::<T, P, M>(m, r);
+            let packed: Vec<P> = m.vertically_packed_row::<P>(r).collect();
+            assert_eq!(lanes(&packed), expected, "r = {r}, height = {height}");
+
+            for step in [0, 1, 2, height] {
+                let mut expected_pair = expected.clone();
+                expected_pair.extend(scalar_packed_row::<T, P, M>(m, r + step));
+                let pair = m.vertically_packed_row_pair::<P>(r, step);
+                assert_eq!(lanes(&pair), expected_pair, "r = {r}, step = {step}");
+            }
+        }
+    }
+
+    /// Runs the check on reversed and bit-reversed views of random matrices whose widths
+    /// include values below, equal to and not divisible by common packing widths.
+    fn check_packings_for<F>()
+    where
+        F: Field,
+        StandardUniform: Distribution<F>,
+    {
+        let mut rng = SmallRng::seed_from_u64(1);
+        for width in [1, 2, 3, 5, 8, 13] {
+            for height in [1, 2, 3, 4, 5, 7, 8, 9, 15, 16, 17] {
+                let view = RowIndexMappedView {
+                    index_map: ReverseMap(height),
+                    inner: RowMajorMatrix::<F>::rand(&mut rng, height, width),
+                };
+                assert_packing_matches_scalar_gather::<F, F::Packing, _>(&view);
+                assert_packing_matches_scalar_gather::<F, F, _>(&view);
+                assert_packing_matches_scalar_gather::<F, Vectorized<F, 2>, _>(&view);
+                assert_packing_matches_scalar_gather::<F, FieldArray<F, 3>, _>(&view);
+                assert_packing_matches_scalar_gather::<F, FieldArray<F, 16>, _>(&view);
+            }
+            for log_height in 0..6 {
+                let view =
+                    RowMajorMatrix::<F>::rand(&mut rng, 1 << log_height, width).bit_reverse_rows();
+                assert_packing_matches_scalar_gather::<F, F::Packing, _>(&view);
+                assert_packing_matches_scalar_gather::<F, F, _>(&view);
+                assert_packing_matches_scalar_gather::<F, Vectorized<F, 2>, _>(&view);
+                assert_packing_matches_scalar_gather::<F, FieldArray<F, 16>, _>(&view);
+            }
+        }
+    }
+
+    #[test]
+    fn vertically_packed_row_matches_scalar_gather_babybear() {
+        check_packings_for::<BabyBear>();
+    }
+
+    #[test]
+    fn vertically_packed_row_matches_scalar_gather_goldilocks() {
+        check_packings_for::<Goldilocks>();
     }
 
     #[test]
