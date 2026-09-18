@@ -266,8 +266,8 @@ impl<W: Word> ConstraintSystem<W> {
         let zero = self
             .zero_constraints
             .iter()
-            .enumerate()
-            .flat_map(|(constraint, relation)| {
+            .zip(0_u32..)
+            .flat_map(|(relation, constraint)| {
                 relation
                     .value()
                     .terms()
@@ -275,7 +275,7 @@ impl<W: Word> ConstraintSystem<W> {
                     .map(move |term| ConstraintTerm {
                         kind: ConstraintKind::Zero,
                         role: OperandRole::Value,
-                        constraint: constraint as u32,
+                        constraint,
                         term,
                     })
             });
@@ -286,8 +286,8 @@ impl<W: Word> ConstraintSystem<W> {
             .flat_map(move |role| {
                 self.and_constraints
                     .iter()
-                    .enumerate()
-                    .flat_map(move |(constraint, relation)| {
+                    .zip(0_u32..)
+                    .flat_map(move |(relation, constraint)| {
                         let operand = match role {
                             OperandRole::Left => relation.left(),
                             OperandRole::Right => relation.right(),
@@ -297,7 +297,7 @@ impl<W: Word> ConstraintSystem<W> {
                         operand.terms().iter().map(move |term| ConstraintTerm {
                             kind: ConstraintKind::And,
                             role,
-                            constraint: constraint as u32,
+                            constraint,
                             term,
                         })
                     })
@@ -312,8 +312,8 @@ impl<W: Word> ConstraintSystem<W> {
         ]
         .into_iter()
         .flat_map(move |role| {
-            self.integer_mul_constraints.iter().enumerate().flat_map(
-                move |(constraint, relation)| {
+            self.integer_mul_constraints.iter().zip(0_u32..).flat_map(
+                move |(relation, constraint)| {
                     let operand = match role {
                         OperandRole::Left => relation.left(),
                         OperandRole::Right => relation.right(),
@@ -326,7 +326,7 @@ impl<W: Word> ConstraintSystem<W> {
                     operand.terms().iter().map(move |term| ConstraintTerm {
                         kind: ConstraintKind::IntegerMul,
                         role,
-                        constraint: constraint as u32,
+                        constraint,
                         term,
                     })
                 },
