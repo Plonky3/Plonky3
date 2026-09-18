@@ -43,9 +43,6 @@ const SLICED_ROUNDS: usize = 3;
 /// Row variables one word's lanes span.
 const LANE_VARIABLES: usize = SLICED_LANES.trailing_zeros() as usize;
 
-/// Words of every column one parallel task of the repacking fills.
-const WORDS_PER_TASK: usize = 4;
-
 /// A stage's cells as bit planes, laid out word by word.
 pub(super) struct SlicedTrace {
     /// Number of variables of the stage.
@@ -552,45 +549,54 @@ where
             is_successor[column] = true;
         }
 
-        // Each task packs a run of words of every column, reading each column contiguously.
+        // Pack each column on its own, successor planes included, reading it contiguously.
+        let packed = columns
+            .par_iter()
+            .zip(&is_successor)
+            .map(|(column, &is_successor)| {
+                let column = column.as_chunks::<SLICED_LANES>().0;
+                let planes = column
+                    .iter()
+                    .map(pack_word::<F, S>)
+                    .collect::<Option<Vec<_>>>()?;
+                let successors = if is_successor {
+                    // The last row repeats itself; every other row reads the next one.
+                    let last = planes[planes.len() - 1];
+                    let last_carry = (last[0] >> 63 == 1, last[1] >> 63 == 1);
+                    let carries = column[1..]
+                        .iter()
+                        .map(|next| next[0].as_subfield().and_then(gf4_coordinates))
+                        .chain([Some(last_carry)]);
+                    planes
+                        .iter()
+                        .zip(carries)
+                        .map(|(&planes, carry)| Some(successor_word(planes, carry?)))
+                        .collect::<Option<Vec<_>>>()?
+                } else {
+                    Vec::new()
+                };
+                Some((planes, successors))
+            })
+            .collect::<Option<Vec<_>>>()?;
+
+        // Lay the words out word by word, every column of a word side by side.
         let words = 1 << (num_vars - LANE_VARIABLES);
-        let task_cells = width * WORDS_PER_TASK.min(words);
         let mut cells = vec![[0; 2]; words * width];
         let mut successors = vec![[0; 2]; words * width];
-        let fits = cells
-            .par_chunks_mut(task_cells)
-            .zip(successors.par_chunks_mut(task_cells))
+        cells
+            .par_chunks_mut(width)
+            .zip(successors.par_chunks_mut(width))
             .enumerate()
-            .all(|(task, (cells, successors))| {
-                let first_word = task * WORDS_PER_TASK;
-                for (index, (column, &is_successor)) in
-                    columns.iter().zip(&is_successor).enumerate()
+            .for_each(|(word, (cells, successors))| {
+                for ((cell, successor), (planes, next)) in
+                    cells.iter_mut().zip(successors.iter_mut()).zip(&packed)
                 {
-                    let column = column.as_chunks::<SLICED_LANES>().0;
-                    for (offset, word) in (first_word..first_word + cells.len() / width).enumerate()
-                    {
-                        let Some(planes) = pack_word::<F, S>(&column[word]) else {
-                            return false;
-                        };
-                        cells[offset * width + index] = planes;
-                        if is_successor {
-                            // The last row repeats itself; every other row reads the next one.
-                            let carry = column.get(word + 1).map_or_else(
-                                || Some((planes[0] >> 63 == 1, planes[1] >> 63 == 1)),
-                                |next| next[0].as_subfield().and_then(gf4_coordinates),
-                            );
-                            let Some(carry) = carry else {
-                                return false;
-                            };
-                            successors[offset * width + index] = successor_word(planes, carry);
-                        }
+                    *cell = planes[word];
+                    if let Some(&next) = next.get(word) {
+                        *successor = next;
                     }
                 }
-                true
             });
-        if !fits {
-            return None;
-        }
 
         let last = SLICED_LANES - 1;
         let boundary = (0..words)
