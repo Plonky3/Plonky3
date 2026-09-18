@@ -43,6 +43,16 @@ pub struct AdditiveRsEncoder<F, Ntt = PolyBasisNtt> {
     _marker: PhantomData<F>,
 }
 
+impl<F, Ntt> AdditiveRsEncoder<F, Ntt> {
+    /// Builds an encoder around the given additive NTT.
+    pub const fn new(ntt: Ntt) -> Self {
+        Self {
+            ntt,
+            _marker: PhantomData,
+        }
+    }
+}
+
 /// The alphabet is fixed at `BinaryField128` (D9), as [`Encoder`] requires of every impl outside
 /// `p3-commit`'s blanket one.
 impl<Ntt: AdditiveNtt<BinaryField128> + Sync> Encoder<BinaryField128>

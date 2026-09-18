@@ -10,6 +10,7 @@ use core::fmt;
 use std::time::Instant;
 
 use p3_air::{Air, BaseAir};
+use p3_binary_dft::{AdditiveNtt, LchNtt, NaiveAdditiveNtt, PolyBasisNtt};
 use p3_binary_field::{BinaryChallenger, BinaryField2, BinaryField128, Ghash128, poly_basis};
 use p3_binary_pcs::{
     BinaryPcs, BinaryPcsConfig, BinaryPcsConfigError, BinaryPcsParams, BinaryPcsProverData,
@@ -43,16 +44,20 @@ type Challenger = BinaryChallenger<F, HashChallenger<u8, Keccak256Hash, 32>>;
 
 /// Multi-STARK configuration proving AIRs over `BinaryField128` with the binary PCS.
 ///
-/// `N` is the Merkle tree's child arity: 2 for a binary tree, 4 for a quaternary one.
-pub struct BinaryStarkConfig<const N: usize> {
-    pcs: BinaryPcs<Mmcs<N>>,
+/// `N` is the Merkle tree's child arity: 2 for a binary tree, 4 for a quaternary one. `Ntt` is
+/// the additive NTT the PCS encodes its codeword through.
+pub struct BinaryStarkConfig<const N: usize, Ntt = PolyBasisNtt> {
+    pcs: BinaryPcs<Mmcs<N>, Ntt>,
 }
 
-impl<const N: usize> MultiStarkConfig for BinaryStarkConfig<N> {
+impl<const N: usize, Ntt> MultiStarkConfig for BinaryStarkConfig<N, Ntt>
+where
+    Ntt: AdditiveNtt<F> + Sync,
+{
     type Val = F;
     type Challenge = F;
     type Challenger = Challenger;
-    type Pcs = BinaryPcs<Mmcs<N>>;
+    type Pcs = BinaryPcs<Mmcs<N>, Ntt>;
 
     fn pcs(&self) -> &Self::Pcs {
         &self.pcs
@@ -82,15 +87,16 @@ impl<const N: usize> MultiStarkConfig for BinaryStarkConfig<N> {
 }
 
 /// Derives a [`BinaryStarkConfig`] for a stacked polynomial of `arity` variables, committing
-/// through an `N`-ary Merkle tree.
+/// through an `N`-ary Merkle tree and encoding its codeword through `ntt`.
 ///
 /// `folding` batches up to that many sequential variable folds between PCS commitments; it is
 /// clamped to `arity`, since a batch cannot fold more variables than the polynomial has.
-pub fn binary_config<const N: usize>(
+pub fn binary_config<const N: usize, Ntt>(
     arity: usize,
     params: BinaryPcsParams,
     folding: usize,
-) -> Result<BinaryStarkConfig<N>, BinaryPcsConfigError> {
+    ntt: Ntt,
+) -> Result<BinaryStarkConfig<N, Ntt>, BinaryPcsConfigError> {
     let pcs_config = BinaryPcsConfig::try_new_with_folding(arity, params, folding.min(arity))?;
     let merkle = MerkleMmcs::<N>::new(
         Hash::new(Keccak256Hash),
@@ -99,8 +105,93 @@ pub fn binary_config<const N: usize>(
     );
     let mmcs = Mmcs::<N>::for_folding(merkle, &pcs_config);
     Ok(BinaryStarkConfig {
-        pcs: BinaryPcs::new(pcs_config, mmcs),
+        pcs: BinaryPcs::with_ntt(pcs_config, mmcs, ntt),
     })
+}
+
+/// An enum over the additive NTTs the binary PCS can encode its codeword through.
+///
+/// This implements [`AdditiveNtt`] by dispatching to whichever engine is selected, so callers
+/// generic over an additive NTT can use [`AdditiveNttChoice`] as a single concrete type standing
+/// in for a runtime choice among them.
+#[derive(Clone, Debug)]
+pub enum AdditiveNttChoice {
+    /// The polynomial-basis transform: fast with a hardware carryless multiply, and the
+    /// portable fallback otherwise.
+    PolyBasis(PolyBasisNtt),
+    /// The Lin–Chung–Han transform.
+    Lch(LchNtt<F>),
+    /// The reference transform, evaluating the novel-basis definition directly.
+    Naive(NaiveAdditiveNtt<F>),
+}
+
+impl Default for AdditiveNttChoice {
+    fn default() -> Self {
+        Self::PolyBasis(PolyBasisNtt::default())
+    }
+}
+
+impl AdditiveNtt<F> for AdditiveNttChoice {
+    fn shifted_ntt_batch(&self, mat: RowMajorMatrix<F>, shift: F) -> RowMajorMatrix<F> {
+        match self {
+            Self::PolyBasis(ntt) => ntt.shifted_ntt_batch(mat, shift),
+            Self::Lch(ntt) => ntt.shifted_ntt_batch(mat, shift),
+            Self::Naive(ntt) => ntt.shifted_ntt_batch(mat, shift),
+        }
+    }
+
+    fn shifted_intt_batch(&self, mat: RowMajorMatrix<F>, shift: F) -> RowMajorMatrix<F> {
+        match self {
+            Self::PolyBasis(ntt) => ntt.shifted_intt_batch(mat, shift),
+            Self::Lch(ntt) => ntt.shifted_intt_batch(mat, shift),
+            Self::Naive(ntt) => ntt.shifted_intt_batch(mat, shift),
+        }
+    }
+
+    fn ntt_batch(&self, mat: RowMajorMatrix<F>) -> RowMajorMatrix<F> {
+        match self {
+            Self::PolyBasis(ntt) => ntt.ntt_batch(mat),
+            Self::Lch(ntt) => ntt.ntt_batch(mat),
+            Self::Naive(ntt) => ntt.ntt_batch(mat),
+        }
+    }
+
+    fn ntt_batch_padded(&self, mat: RowMajorMatrix<F>, log_inv_rate: usize) -> RowMajorMatrix<F> {
+        match self {
+            Self::PolyBasis(ntt) => ntt.ntt_batch_padded(mat, log_inv_rate),
+            Self::Lch(ntt) => ntt.ntt_batch_padded(mat, log_inv_rate),
+            Self::Naive(ntt) => ntt.ntt_batch_padded(mat, log_inv_rate),
+        }
+    }
+
+    fn intt_batch(&self, mat: RowMajorMatrix<F>) -> RowMajorMatrix<F> {
+        match self {
+            Self::PolyBasis(ntt) => ntt.intt_batch(mat),
+            Self::Lch(ntt) => ntt.intt_batch(mat),
+            Self::Naive(ntt) => ntt.intt_batch(mat),
+        }
+    }
+
+    fn lde_batch(&self, mat: RowMajorMatrix<F>, added_bits: usize) -> RowMajorMatrix<F> {
+        match self {
+            Self::PolyBasis(ntt) => ntt.lde_batch(mat, added_bits),
+            Self::Lch(ntt) => ntt.lde_batch(mat, added_bits),
+            Self::Naive(ntt) => ntt.lde_batch(mat, added_bits),
+        }
+    }
+
+    fn shifted_lde_batch(
+        &self,
+        mat: RowMajorMatrix<F>,
+        added_bits: usize,
+        shift: F,
+    ) -> RowMajorMatrix<F> {
+        match self {
+            Self::PolyBasis(ntt) => ntt.shifted_lde_batch(mat, added_bits, shift),
+            Self::Lch(ntt) => ntt.shifted_lde_batch(mat, added_bits, shift),
+            Self::Naive(ntt) => ntt.shifted_lde_batch(mat, added_bits, shift),
+        }
+    }
 }
 
 /// A fresh transcript seeded for one commit, prove, or verify call.
@@ -254,8 +345,11 @@ impl<A> BinaryAir for A where
 }
 
 /// A zerocheck backend the harness can prove with.
+///
+/// Every variant proves and verifies the same statement and emits a byte-identical proof; the
+/// choice is a field-representation performance tradeoff, not a correctness one.
 #[derive(Clone, Copy, Debug)]
-enum Backend {
+pub enum Backend {
     /// [`SubfieldBackend`] over `GF(4)`.
     Subfield,
     /// [`ReprBackend`] over `GF(4)`, with later rounds in [`Ghash128`].
@@ -268,7 +362,7 @@ impl Backend {
     /// With a hardware carryless multiply, later rounds run in the polynomial basis, where a
     /// product is that multiply alone and a tower product adds three changes of basis around it.
     /// Without one, later rounds stay in the tower basis.
-    const fn preferred() -> Self {
+    pub const fn preferred() -> Self {
         if poly_basis::HAS_HARDWARE_CLMUL {
             Self::PolyBasis
         } else {
@@ -277,16 +371,19 @@ impl Backend {
     }
 
     /// Prove through this backend, whose proof and transcript are those of every other.
-    fn prove<A: BinaryAir, const N: usize>(
+    fn prove<A: BinaryAir, const N: usize, Ntt>(
         self,
-        config: &BinaryStarkConfig<N>,
-        instances: ProverInstances<'_, BinaryStarkConfig<N>, A>,
+        config: &BinaryStarkConfig<N, Ntt>,
+        instances: ProverInstances<'_, BinaryStarkConfig<N, Ntt>, A>,
         pow_bits: usize,
         challenger: &mut Challenger,
     ) -> Result<
-        MultiStarkProof<BinaryStarkConfig<N>>,
-        ProvingError<PcsProverError<BinaryStarkConfig<N>>>,
-    > {
+        MultiStarkProof<BinaryStarkConfig<N, Ntt>>,
+        ProvingError<PcsProverError<BinaryStarkConfig<N, Ntt>>>,
+    >
+    where
+        Ntt: AdditiveNtt<F> + Sync,
+    {
         match self {
             Self::Subfield => prove_with_backend::<_, _, SubfieldBackend<BinaryField2>>(
                 config, instances, pow_bits, challenger,
@@ -300,11 +397,8 @@ impl Backend {
 
 /// Proves and verifies `air` against `trace`, reporting size and timing measurements.
 ///
-/// Dispatches on `options.merkle_arity` to build a Merkle tree of that child count.
-///
-/// The prover runs its zerocheck through [`ReprBackend`] over `GF(4)` and [`Ghash128`] when the
-/// build has a hardware carryless multiply, and through [`SubfieldBackend`] over `GF(4)`
-/// otherwise. Either proof is identical to the one [`p3_multi_stark::prove`] emits.
+/// Encodes the binary-PCS codeword through the default additive NTT ([`PolyBasisNtt`]); see
+/// [`prove_binary_air_with_ntt`] to choose a different one.
 ///
 /// # Panics
 ///
@@ -318,9 +412,58 @@ pub fn prove_binary_air<A>(
 where
     A: BinaryAir,
 {
+    prove_binary_air_with_ntt(air, trace, options, PolyBasisNtt::default())
+}
+
+/// Proves and verifies `air` against `trace`, reporting size and timing measurements.
+///
+/// Dispatches on `options.merkle_arity` to build a Merkle tree of that child count, encodes the
+/// binary-PCS codeword through `ntt`, and runs its zerocheck through [`Backend::preferred`]; see
+/// [`prove_binary_air_with_ntt_and_backend`] to choose a different backend.
+///
+/// # Panics
+///
+/// - The trace height is not a power of two.
+/// - `air` declares public values or preprocessed columns.
+pub fn prove_binary_air_with_ntt<A, Ntt>(
+    air: &A,
+    trace: RowMajorMatrix<F>,
+    options: BinaryProofOptions,
+    ntt: Ntt,
+) -> Result<BinaryProofReport, BinaryProofError>
+where
+    A: BinaryAir,
+    Ntt: AdditiveNtt<F> + Sync,
+{
+    prove_binary_air_with_ntt_and_backend(air, trace, options, ntt, Backend::preferred())
+}
+
+/// Proves and verifies `air` against `trace`, reporting size and timing measurements.
+///
+/// Dispatches on `options.merkle_arity` to build a Merkle tree of that child count, encodes the
+/// binary-PCS codeword through `ntt`, and runs its zerocheck through `backend`: [`ReprBackend`]
+/// over `GF(4)` and [`Ghash128`] for [`Backend::PolyBasis`], [`SubfieldBackend`] over `GF(4)` for
+/// [`Backend::Subfield`]. Every backend emits a proof identical to the one
+/// [`p3_multi_stark::prove`] does.
+///
+/// # Panics
+///
+/// - The trace height is not a power of two.
+/// - `air` declares public values or preprocessed columns.
+pub fn prove_binary_air_with_ntt_and_backend<A, Ntt>(
+    air: &A,
+    trace: RowMajorMatrix<F>,
+    options: BinaryProofOptions,
+    ntt: Ntt,
+    backend: Backend,
+) -> Result<BinaryProofReport, BinaryProofError>
+where
+    A: BinaryAir,
+    Ntt: AdditiveNtt<F> + Sync,
+{
     match options.merkle_arity {
-        2 => prove_binary_air_with::<A, 2>(air, trace, options),
-        4 => prove_binary_air_with::<A, 4>(air, trace, options),
+        2 => prove_binary_air_with::<A, 2, Ntt>(air, trace, options, ntt, backend),
+        4 => prove_binary_air_with::<A, 4, Ntt>(air, trace, options, ntt, backend),
         other => Err(BinaryProofError::UnsupportedMerkleArity(other)),
     }
 }
@@ -334,13 +477,16 @@ where
 ///
 /// The statement's security is assessed once against `options.security_bits` before proving,
 /// so the timed phases are the plain prover and verifier.
-fn prove_binary_air_with<A, const N: usize>(
+fn prove_binary_air_with<A, const N: usize, Ntt>(
     air: &A,
     trace: RowMajorMatrix<F>,
     options: BinaryProofOptions,
+    ntt: Ntt,
+    backend: Backend,
 ) -> Result<BinaryProofReport, BinaryProofError>
 where
     A: BinaryAir,
+    Ntt: AdditiveNtt<F> + Sync,
 {
     assert_eq!(
         BaseAir::<F>::num_public_values(air),
@@ -363,7 +509,7 @@ where
         pow_bits: options.pcs_pow_bits,
         security_level: options.security_bits,
     };
-    let config = binary_config::<N>(arity, params, options.folding)?;
+    let config = binary_config::<N, Ntt>(arity, params, options.folding, ntt)?;
 
     let (pk, vk) = setup(&config, &[air], &mut binary_challenger())?;
 
@@ -393,7 +539,7 @@ where
     drop(trace);
     let prover_instances =
         ProverInstances::new(vec![ProverInstance::new(air, table, &pk, &public_values)]);
-    let proof = Backend::preferred().prove(
+    let proof = backend.prove(
         &config,
         prover_instances,
         options.sumcheck_pow_bits,
@@ -403,7 +549,7 @@ where
 
     let bytes = postcard::to_allocvec(&proof).expect("postcard serialization must not fail");
     let proof_bytes = bytes.len();
-    let proof: MultiStarkProof<BinaryStarkConfig<N>> =
+    let proof: MultiStarkProof<BinaryStarkConfig<N, Ntt>> =
         postcard::from_bytes(&bytes).expect("postcard round trip must not fail");
 
     let verify_start = Instant::now();
@@ -500,8 +646,8 @@ mod tests {
             pow_bits: 0,
             security_level: 100,
         };
-        let config =
-            binary_config::<2>(arity, params, 3).expect("the test shape configures the PCS");
+        let config = binary_config::<2, PolyBasisNtt>(arity, params, 3, PolyBasisNtt::default())
+            .expect("the test shape configures the PCS");
         let (pk, _) = setup(&config, &[air], &mut binary_challenger()).expect("setup succeeds");
 
         let public_values: [F; 0] = [];

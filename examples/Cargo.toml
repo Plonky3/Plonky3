@@ -19,6 +19,7 @@ embedded = false
 
 [dependencies]
 p3-air.workspace = true
+p3-binary-dft.workspace = true
 p3-binary-field.workspace = true
 p3-binary-pcs.workspace = true
 p3-blake3-air.workspace = true
