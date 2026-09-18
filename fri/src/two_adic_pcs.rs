@@ -270,6 +270,7 @@ where
     let width = F::Packing::WIDTH;
     let height = m.height();
     let pairs_per_row = 1 << (log_arity - 1);
+    debug_assert!(height >= width && height.is_multiple_of(width));
     debug_assert_eq!(m.width(), 2 * pairs_per_row);
 
     // Row `t = b * width + l` of block `b` has the factor
@@ -650,10 +651,11 @@ where
         // A zero difficulty still occupies a slot in the proof, keeping its shape fixed.
         let batch_pow_witness = batch_pow_witness.unwrap_or(Val::ZERO);
 
-        // We precompute the packed powers of alpha as we need the same powers for each matrix.
-        // The hot per-matrix reduction (`rowwise_packed_dot_product`) consumes these directly; the
-        // per-opening combination below unpacks `alpha`'s powers lazily via `alpha.powers()`, so we
-        // never materialize a full unpacked copy.
+        // We precompute the packed powers of alpha once, up to the widest matrix. Each matrix
+        // compresses its rows (`rowwise_packed_dot_product`) against a prefix of these powers,
+        // scaled by the alpha offset of the first point it is opened at (see
+        // `offset_alpha_powers`); the per-opening combination below unpacks `alpha`'s powers
+        // lazily via `alpha.powers()`, so we never materialize a full unpacked copy.
         let packed_alpha_powers =
             Challenge::ExtensionPacking::packed_ext_powers_capped(alpha, global_max_width)
                 .collect_vec();
@@ -1441,81 +1443,18 @@ mod tests {
         }
     }
 
-    /// `fold_matrix` folds row `i` of its input exactly as `fold_row` folds that row on its own.
+    /// `fold_matrix` folds row `i` of its input exactly as `fold_row` folds that row on its own,
+    /// below, at and above the packing width, both for fields that take the packed path and for
+    /// fields that keep the scalar one.
     #[test]
     fn fold_matrix_matches_fold_row() {
-        let mut rng = SmallRng::seed_from_u64(1);
-        let folding = TwoAdicFriFolding::<(), ()>(PhantomData);
-
-        for log_arity in 1..=4 {
-            for log_height in 0..5 {
-                let beta: EF = rng.random();
-                let m = RowMajorMatrix::<EF>::rand(&mut rng, 1 << log_height, 1 << log_arity);
-
-                let folded = FriFoldingStrategy::<F, EF>::fold_matrix(
-                    &folding,
-                    beta,
-                    log_arity,
-                    m.as_view(),
-                );
-                assert_eq!(folded.len(), m.height());
-
-                for (index, &expected) in folded.iter().enumerate() {
-                    let row = m.row(index).unwrap().into_iter();
-                    let folded_row = FriFoldingStrategy::<F, EF>::fold_row(
-                        &folding, index, log_height, log_arity, beta, row,
-                    );
-                    assert_eq!(folded_row, expected);
-                }
-            }
-        }
-    }
-
-    /// Check that `fold` folds each row of random matrices exactly as `fold_row` folds that
-    /// row on its own, for arities 2 to 16 and heights from `2^min_log_height` up to eight
-    /// packing widths.
-    fn check_fold_against_fold_row<F, EF>(
-        min_log_height: usize,
-        fold: impl Fn(EF, usize, RowMajorMatrixView<'_, EF>) -> Vec<EF>,
-    ) where
-        F: TwoAdicField,
-        EF: ExtensionField<F>,
-        StandardUniform: Distribution<EF>,
-    {
-        let mut rng = SmallRng::seed_from_u64(2);
-        let folding = TwoAdicFriFolding::<(), ()>(PhantomData);
-        let log_width = log2_strict_usize(F::Packing::WIDTH);
-
-        for log_arity in 1..=4 {
-            for log_height in min_log_height..=log_width + 3 {
-                let beta: EF = rng.random();
-                let m = RowMajorMatrix::<EF>::rand(&mut rng, 1 << log_height, 1 << log_arity);
-
-                let folded = fold(beta, log_arity, m.as_view());
-                assert_eq!(folded.len(), m.height());
-
-                for (index, &expected) in folded.iter().enumerate() {
-                    let row = m.row(index).unwrap().into_iter();
-                    let folded_row = FriFoldingStrategy::<F, EF>::fold_row(
-                        &folding, index, log_height, log_arity, beta, row,
-                    );
-                    assert_eq!(folded_row, expected);
-                }
-            }
-        }
-    }
-
-    /// `fold_matrix` matches `fold_row` below, at and above the packing width, both for
-    /// fields that take the packed path and for fields that keep the scalar one.
-    #[test]
-    fn fold_matrix_matches_fold_row_around_packing_width() {
-        fn check<F: TwoAdicField, EF: ExtensionField<F>>()
+        fn check<Base: TwoAdicField, Ext: ExtensionField<Base>>()
         where
-            StandardUniform: Distribution<EF>,
+            StandardUniform: Distribution<Ext>,
         {
             let folding = TwoAdicFriFolding::<(), ()>(PhantomData);
-            check_fold_against_fold_row::<F, EF>(0, |beta, log_arity, m| {
-                FriFoldingStrategy::<F, EF>::fold_matrix(&folding, beta, log_arity, m)
+            check_fold_against_fold_row::<Base, Ext>(0, |beta, log_arity, m| {
+                FriFoldingStrategy::<Base, Ext>::fold_matrix(&folding, beta, log_arity, m)
             });
         }
 
@@ -1524,16 +1463,50 @@ mod tests {
         check::<Goldilocks, BinomialExtensionField<Goldilocks, 2>>();
     }
 
+    /// Check that `fold` folds each row of random matrices exactly as `fold_row` folds that
+    /// row on its own, for arities 2 to 16 and heights from `2^min_log_height` up to eight
+    /// packing widths.
+    fn check_fold_against_fold_row<Base, Ext>(
+        min_log_height: usize,
+        fold: impl Fn(Ext, usize, RowMajorMatrixView<'_, Ext>) -> Vec<Ext>,
+    ) where
+        Base: TwoAdicField,
+        Ext: ExtensionField<Base>,
+        StandardUniform: Distribution<Ext>,
+    {
+        let mut rng = SmallRng::seed_from_u64(2);
+        let folding = TwoAdicFriFolding::<(), ()>(PhantomData);
+        let log_width = log2_strict_usize(Base::Packing::WIDTH);
+
+        for log_arity in 1..=4 {
+            for log_height in min_log_height..=log_width + 3 {
+                let beta: Ext = rng.random();
+                let m = RowMajorMatrix::<Ext>::rand(&mut rng, 1 << log_height, 1 << log_arity);
+
+                let folded = fold(beta, log_arity, m.as_view());
+                assert_eq!(folded.len(), m.height());
+
+                for (index, &expected) in folded.iter().enumerate() {
+                    let row = m.row(index).unwrap().into_iter();
+                    let folded_row = FriFoldingStrategy::<Base, Ext>::fold_row(
+                        &folding, index, log_height, log_arity, beta, row,
+                    );
+                    assert_eq!(folded_row, expected);
+                }
+            }
+        }
+    }
+
     /// The packed kernel on its own matches `fold_row`, including for fields that
     /// `fold_matrix` keeps on the scalar path.
     #[test]
     fn fold_matrix_packed_matches_fold_row() {
-        fn check<F: TwoAdicField, EF: ExtensionField<F>>()
+        fn check<Base: TwoAdicField, Ext: ExtensionField<Base>>()
         where
-            StandardUniform: Distribution<EF>,
+            StandardUniform: Distribution<Ext>,
         {
-            let log_width = log2_strict_usize(F::Packing::WIDTH);
-            check_fold_against_fold_row::<F, EF>(log_width, |beta, log_arity, m| {
+            let log_width = log2_strict_usize(Base::Packing::WIDTH);
+            check_fold_against_fold_row::<Base, Ext>(log_width, |beta, log_arity, m| {
                 fold_matrix_packed(beta, log_arity, &m)
             });
         }

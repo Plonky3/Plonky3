@@ -291,8 +291,14 @@ mod babybear_fri_pcs {
     mod blowup_1 {
         make_tests_for_pcs!(super::get_pcs(1));
     }
+    mod blowup_2 {
+        make_tests_for_pcs!(super::get_pcs(2));
+    }
+    mod high_arity_blowup_1 {
+        make_tests_for_pcs!(super::get_pcs_high_arity(1));
+    }
 
-    /// Matrices of one height opened at three, one and two points, next to a matrix of
+    /// Three matrices of one height opened at three, one and two points, plus a matrix of
     /// another height, so each opening point weights its matrix by a different power of alpha.
     #[test]
     fn matrices_opened_at_up_to_three_points() {
@@ -352,12 +358,6 @@ mod babybear_fri_pcs {
             )
             .unwrap();
         }
-    }
-    mod blowup_2 {
-        make_tests_for_pcs!(super::get_pcs(2));
-    }
-    mod high_arity_blowup_1 {
-        make_tests_for_pcs!(super::get_pcs_high_arity(1));
     }
 
     #[test]
