@@ -768,20 +768,24 @@ where
         pcs.build_periodic_lde_table(&periodic_cols, trace_domain, quotient_domain);
 
     let pack_width = Pack::<SC, A, Strat>::WIDTH;
-    let periodic_packed: Vec<Vec<Pack<SC, A, Strat>>> = if periodic_table.is_empty() {
+    // `PeriodicLdeTable::get` indexes modulo `periodic_table.height()`, so a packed row
+    // group at `i_start` only depends on `i_start % periodic_table.height()`. Since
+    // `i_start` is always a multiple of `pack_width` and both are powers of two, the
+    // distinct row groups repeat with period `groups_in_period`; store only those.
+    let ncols = periodic_table.width();
+    let groups_in_period = (periodic_table.height() / pack_width).max(1);
+    let periodic_packed: Vec<Pack<SC, A, Strat>> = if periodic_table.is_empty() {
         Vec::new()
     } else {
-        let ncols = periodic_table.width();
-        (0..quotient_size)
-            .step_by(pack_width)
-            .map(|i_start| {
-                (0..ncols)
-                    .map(|col_idx| {
-                        Pack::<SC, A, Strat>::from_fn(|offset| {
-                            *periodic_table.get(i_start + offset, col_idx)
-                        })
+        let periodic_table_ref = &periodic_table;
+        (0..groups_in_period)
+            .flat_map(move |group| {
+                let i_start = group * pack_width;
+                (0..ncols).map(move |col_idx| {
+                    Pack::<SC, A, Strat>::from_fn(|offset| {
+                        *periodic_table_ref.get(i_start + offset, col_idx)
                     })
-                    .collect()
+                })
             })
             .collect()
     };
@@ -850,7 +854,8 @@ where
                 let periodic_values: &[Pack<SC, A, Strat>] = if periodic_packed.is_empty() {
                     &[]
                 } else {
-                    &periodic_packed[i_start / pack_width]
+                    let group = (i_start / pack_width) % groups_in_period;
+                    &periodic_packed[group * ncols..group * ncols + ncols]
                 };
 
                 let (quotient, base_constraints, ext_constraints) = Strat::eval_row_group(

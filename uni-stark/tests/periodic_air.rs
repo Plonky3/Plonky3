@@ -211,3 +211,100 @@ fn periodic_air_circle_prove_verify() -> Result<(), impl Debug> {
     let proof = prove(&config, &air, trace, &[]).unwrap();
     verify(&config, &air, &proof, &[])
 }
+
+#[test]
+fn periodic_air_two_adic_wide_period_range_prove_verify() -> Result<(), impl Debug> {
+    type Val = BabyBear;
+    type Challenge = BinomialExtensionField<Val, 4>;
+    type Perm = Poseidon2BabyBear<16>;
+    type Hash = PaddingFreeSponge<Perm, 16, 8, 8>;
+    type Compress = TruncatedPermutation<Perm, 2, 8, 16>;
+    type ValMmcs =
+        MerkleTreeMmcs<<Val as Field>::Packing, <Val as Field>::Packing, Hash, Compress, 2, 8>;
+    type ChallengeMmcs = ExtensionMmcs<Val, Challenge, ValMmcs>;
+    type Dft = Radix2DitParallel<Val>;
+    type Pcs = TwoAdicFriPcs<Val, Dft, ValMmcs, ChallengeMmcs>;
+    type Challenger = DuplexChallenger<Val, Perm, 16, 8>;
+    type Config = StarkConfig<Pcs, Challenge, Challenger>;
+
+    let mut rng = SmallRng::seed_from_u64(2);
+    let perm = Perm::new_from_rng_128(&mut rng);
+    let hash = Hash::new(perm.clone());
+    let compress = Compress::new(perm.clone());
+    let val_mmcs = ValMmcs::new(hash, compress, 0);
+    let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
+    let dft = Dft::default();
+    let fri_params = FriParameters {
+        log_blowup: 2,
+        log_final_poly_len: 3,
+        max_log_arity: 2,
+        num_queries: 40,
+        batch_proof_of_work_bits: 0,
+        commit_proof_of_work_bits: 0,
+        query_proof_of_work_bits: 8,
+        mmcs: challenge_mmcs,
+    };
+    let pcs = Pcs::new(dft, val_mmcs, fri_params);
+    let challenger = Challenger::new(perm);
+    let config = Config::new(pcs, challenger);
+
+    // A constant period-1 column alongside a period-32 column over a 64-row trace:
+    // one period is smaller than every packed field width used in practice, the
+    // other spans several packed row groups on all of them.
+    let air = PeriodicAir::<Val> {
+        periodic: vec![vec![Val::from_u64(7)], (0..32).map(Val::from_u64).collect()],
+    };
+    let trace = air.valid_trace(1 << 6);
+    let proof = prove(&config, &air, trace, &[]).unwrap();
+    verify(&config, &air, &proof, &[])
+}
+
+#[test]
+fn periodic_air_two_adic_tiny_quotient_prove_verify() -> Result<(), impl Debug> {
+    type Val = BabyBear;
+    type Challenge = BinomialExtensionField<Val, 4>;
+    type Perm = Poseidon2BabyBear<16>;
+    type Hash = PaddingFreeSponge<Perm, 16, 8, 8>;
+    type Compress = TruncatedPermutation<Perm, 2, 8, 16>;
+    type ValMmcs =
+        MerkleTreeMmcs<<Val as Field>::Packing, <Val as Field>::Packing, Hash, Compress, 2, 8>;
+    type ChallengeMmcs = ExtensionMmcs<Val, Challenge, ValMmcs>;
+    type Dft = Radix2DitParallel<Val>;
+    type Pcs = TwoAdicFriPcs<Val, Dft, ValMmcs, ChallengeMmcs>;
+    type Challenger = DuplexChallenger<Val, Perm, 16, 8>;
+    type Config = StarkConfig<Pcs, Challenge, Challenger>;
+
+    let mut rng = SmallRng::seed_from_u64(3);
+    let perm = Perm::new_from_rng_128(&mut rng);
+    let hash = Hash::new(perm.clone());
+    let compress = Compress::new(perm.clone());
+    let val_mmcs = ValMmcs::new(hash, compress, 0);
+    let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
+    let dft = Dft::default();
+    let fri_params = FriParameters {
+        log_blowup: 1,
+        log_final_poly_len: 0,
+        max_log_arity: 1,
+        num_queries: 40,
+        batch_proof_of_work_bits: 0,
+        commit_proof_of_work_bits: 0,
+        query_proof_of_work_bits: 8,
+        mmcs: challenge_mmcs,
+    };
+    let pcs = Pcs::new(dft, val_mmcs, fri_params);
+    let challenger = Challenger::new(perm);
+    let config = Config::new(pcs, challenger);
+
+    // A 2-row trace with period-1 and period-2 columns. The constraint degree is
+    // padded to 2, so the quotient domain has size 2 here: smaller than every
+    // packed field width used in practice.
+    let air = PeriodicAir::<Val> {
+        periodic: vec![
+            vec![Val::from_u64(9)],
+            vec![Val::from_u64(1), Val::from_u64(2)],
+        ],
+    };
+    let trace = air.valid_trace(2);
+    let proof = prove(&config, &air, trace, &[]).unwrap();
+    verify(&config, &air, &proof, &[])
+}

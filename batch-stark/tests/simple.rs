@@ -849,6 +849,53 @@ fn periodic_column_non_power_of_two_is_rejected() {
 }
 
 #[test]
+fn test_periodic_air_wide_period_range() -> Result<(), impl Debug> {
+    let config = make_config(42);
+
+    // A constant period-1 column alongside a period-32 column over a 64-row
+    // trace: one period is smaller than every packed field width used in
+    // practice, the other spans several packed row groups on all of them.
+    let air = PeriodicAir::<Val> {
+        periodic: vec![vec![Val::from_u64(7)], (0..32).map(Val::from_u64).collect()],
+    };
+    let trace = air.valid_trace(1 << 6);
+    let instances = vec![StarkInstance {
+        air: &air,
+        trace: &trace,
+        public_values: vec![],
+    }];
+    let prover_data = ProverData::from_instances(&config, &instances).unwrap();
+    let common = &prover_data.common;
+    let proof = prove_batch(&config, &instances, &prover_data).unwrap();
+    verify_batch(&config, &[air], &proof, &[vec![]], common)
+}
+
+#[test]
+fn test_periodic_air_tiny_quotient() -> Result<(), impl Debug> {
+    let config = make_config_allow_tiny_trace(77_008);
+
+    // A 2-row trace with period-1 and period-2 columns. The constraint degree is
+    // padded to 2, so the quotient domain has size 2 here: smaller than every
+    // packed field width used in practice.
+    let air = PeriodicAir::<Val> {
+        periodic: vec![
+            vec![Val::from_u64(9)],
+            vec![Val::from_u64(1), Val::from_u64(2)],
+        ],
+    };
+    let trace = air.valid_trace(2);
+    let instances = vec![StarkInstance {
+        air: &air,
+        trace: &trace,
+        public_values: vec![],
+    }];
+    let prover_data = ProverData::from_instances(&config, &instances).unwrap();
+    let common = &prover_data.common;
+    let proof = prove_batch(&config, &instances, &prover_data).unwrap();
+    verify_batch(&config, &[air], &proof, &[vec![]], common)
+}
+
+#[test]
 fn hiding_budget_failure_aborts_batch_transcript() {
     let config = make_config_zk(1234);
     let air = PeriodicAir::<Val>::new();
