@@ -475,6 +475,9 @@ where
               a^0 x0 + a^1 x1 + a^2 x2 + a^3 x3 + ...
             = ( a^0 x0 + a^1 x1 ) + a^2 ( a^0 x2 + a^1 x3 ) + ...
             (see `alpha_pows`, `alpha_pow_offset`, `num_reduced`)
+        For the first point a matrix is opened at, the offset is multiplied into the powers of
+        alpha the matrix is compressed with, so those rows need no separate multiplication.
+            (see `offset_alpha_powers`)
 
         - For each unique point z, we precompute 1/(X-z) for the largest subgroup opened at this point.
         Since we compute it in bit-reversed order, smaller subgroups can simply truncate the vector.
@@ -693,15 +696,28 @@ where
                     .get_or_insert_with(|| Challenge::zero_vec(mat.height()));
                 debug_assert_eq!(reduced_opening_for_log_height.len(), mat.height());
 
+                // The first point this matrix is opened at weights it by
+                // `alpha^num_reduced[log_height]` (see below). Scaling the powers of alpha by
+                // that offset folds the weight into the compression.
+                let first_alpha_pow_offset = alpha.exp_u64(num_reduced[log_height] as u64);
+                let offset_alpha_powers = packed_alpha_powers
+                    [..mat.width().div_ceil(Val::Packing::WIDTH)]
+                    .iter()
+                    .map(|&power| power * first_alpha_pow_offset)
+                    .collect_vec();
+
                 // Treating our matrix M as the evaluations of functions f_0, f_1, ...
-                // Compute the evaluations of `Mred(x) = f_0(x) + alpha*f_1(x) + ...`
+                // Compute the evaluations of `first_alpha_pow_offset * Mred(x)` where
+                // `Mred(x) = f_0(x) + alpha*f_1(x) + ...`
                 let mat_compressed = debug_span!("compress mat").in_scope(|| {
                     // This will be reused for all points z which M is opened at so we collect into a vector.
-                    mat.rowwise_packed_dot_product::<Challenge>(&packed_alpha_powers)
+                    mat.rowwise_packed_dot_product::<Challenge>(&offset_alpha_powers)
                         .collect::<Vec<_>>()
                 });
 
-                for (&point, openings) in points_for_mat.iter().zip(openings_for_mat) {
+                for (point_index, (&point, openings)) in
+                    points_for_mat.iter().zip(openings_for_mat).enumerate()
+                {
                     // If we have multiple matrices at the same height, we need to scale alpha to combine them.
                     // This means that reduced_openings will contain:
                     // Mred_0(x) + alpha^{M_0.width()}Mred_1(x) + alpha^{M_0.width() + M_1.width()}Mred_2(x) + ...
@@ -712,8 +728,9 @@ where
                     // in an identical way to before to compute `Mred(z)`.
                     let reduced_openings: Challenge =
                         dot_product(alpha.powers(), openings.iter().copied());
+                    let weighted_openings = alpha_pow_offset * reduced_openings;
 
-                    mat_compressed
+                    let rows = mat_compressed
                         .par_iter()
                         .zip(reduced_opening_for_log_height.par_iter_mut())
                         // inv_denoms contains `1/(z - x)` for `x` in a coset `gK`.
@@ -722,13 +739,23 @@ where
                         // As inv_denoms is bit reversed, the evaluations over `gH` are exactly
                         // the evaluations over `gK` at the indices `0..mat.height()`.
                         // So zip will truncate to the desired smaller length.
-                        .zip(inv_denoms.get(&point).unwrap().par_iter())
-                        // Map the function `Mred(x) -> (Mred(z) - Mred(x))/(z - x)`
-                        // across the evaluation vector of `Mred(x)`. Adjust by alpha_pow_offset
-                        // as needed.
-                        .for_each(|((&reduced_row, ro), &inv_denom)| {
-                            *ro += alpha_pow_offset * (reduced_openings - reduced_row) * inv_denom;
+                        .zip(inv_denoms.get(&point).unwrap().par_iter());
+
+                    // Map the function `Mred(x) -> (Mred(z) - Mred(x))/(z - x)`
+                    // across the evaluation vector of `Mred(x)`, weighted by `alpha_pow_offset`.
+                    // The first point needs no rescale, saving an extension multiplication per row.
+                    if point_index == 0 {
+                        rows.for_each(|((&reduced_row, ro), &inv_denom)| {
+                            *ro += (weighted_openings - reduced_row) * inv_denom;
                         });
+                    } else {
+                        // `alpha_pow_offset = first_alpha_pow_offset * rescale`, since every
+                        // earlier point of this matrix advanced the offset by `mat.width()`.
+                        let rescale = alpha.exp_u64((point_index * mat.width()) as u64);
+                        rows.for_each(|((&reduced_row, ro), &inv_denom)| {
+                            *ro += (weighted_openings - rescale * reduced_row) * inv_denom;
+                        });
+                    }
                     num_reduced[log_height] += mat.width();
                 }
             }

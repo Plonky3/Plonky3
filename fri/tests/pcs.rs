@@ -291,6 +291,68 @@ mod babybear_fri_pcs {
     mod blowup_1 {
         make_tests_for_pcs!(super::get_pcs(1));
     }
+
+    /// Matrices of one height opened at three, one and two points, next to a matrix of
+    /// another height, so each opening point weights its matrix by a different power of alpha.
+    #[test]
+    fn matrices_opened_at_up_to_three_points() {
+        for (pcs, challenger) in [get_pcs(1), get_pcs_high_arity(1)] {
+            let mut rng = seeded_rng();
+            let domains_and_mats = [(4, 5), (4, 3), (3, 2), (4, 1)]
+                .map(|(log_degree, width)| {
+                    let degree = 1 << log_degree;
+                    (
+                        <MyPcs as Pcs<Challenge, Challenger>>::natural_domain_for_degree(
+                            &pcs, degree,
+                        ),
+                        RowMajorMatrix::<Val>::rand(&mut rng, degree, width),
+                    )
+                })
+                .to_vec();
+            let (commit, data) =
+                <MyPcs as Pcs<Challenge, Challenger>>::commit(&pcs, domains_and_mats.clone())
+                    .unwrap();
+
+            let mut p_challenger = challenger.clone();
+            p_challenger.observe(commit.clone());
+            let zs: [Challenge; 3] =
+                core::array::from_fn(|_| p_challenger.sample_algebra_element());
+            let points = vec![
+                vec![zs[0], zs[1], zs[2]],
+                vec![zs[1]],
+                vec![zs[2], zs[0]],
+                vec![zs[2], zs[1]],
+            ];
+            let (opened, proof) = <MyPcs as Pcs<Challenge, Challenger>>::open(
+                &pcs,
+                vec![(&data, points.clone()).into()],
+                &mut p_challenger,
+            )
+            .unwrap();
+
+            let mut v_challenger = challenger.clone();
+            v_challenger.observe(commit.clone());
+            let v_zs: [Challenge; 3] =
+                core::array::from_fn(|_| v_challenger.sample_algebra_element());
+            assert_eq!(v_zs, zs);
+
+            let claims = izip!(&domains_and_mats, &points, &opened[0])
+                .map(|((domain, _), points, values)| {
+                    (
+                        *domain,
+                        points.iter().copied().zip(values.clone()).collect_vec(),
+                    )
+                })
+                .collect_vec();
+            <MyPcs as Pcs<Challenge, Challenger>>::verify(
+                &pcs,
+                vec![(commit, claims).into()],
+                &proof,
+                &mut v_challenger,
+            )
+            .unwrap();
+        }
+    }
     mod blowup_2 {
         make_tests_for_pcs!(super::get_pcs(2));
     }
