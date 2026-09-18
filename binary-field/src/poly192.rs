@@ -11,6 +11,7 @@
 use alloc::vec::Vec;
 use core::fmt::{self, Debug, Display, Formatter};
 use core::iter::{Product, Sum};
+use core::mem::ManuallyDrop;
 use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 
 use num_bigint::BigUint;
@@ -208,6 +209,14 @@ impl Mul<Poly192> for Poly64 {
 }
 
 impl PrimeCharacteristicRing for Poly192 {
+    #[inline]
+    fn zero_vec(len: usize) -> Vec<Self> {
+        let mut values = ManuallyDrop::new(alloc::vec![[0u64; DEGREE]; len]);
+        // SAFETY: the transparent wrapper has exactly the integer's layout, and zero is
+        // canonical. The allocation retains its original size and alignment.
+        unsafe { Vec::from_raw_parts(values.as_mut_ptr().cast(), values.len(), values.capacity()) }
+    }
+
     type PrimeSubfield = Gf2;
 
     const ZERO: Self = Self::embed(Poly64::ZERO);
@@ -664,6 +673,18 @@ mod tests {
         assert_ne!(y.frobenius(), y);
         assert_eq!(y.frobenius(), element([0, 0, 1]));
         assert_eq!(y.frobenius().frobenius().frobenius(), y);
+    }
+
+    #[test]
+    fn zero_vectors_preserve_layout_and_support_growth() {
+        for len in [0, 1, 33, 1024] {
+            let mut values = Poly192::zero_vec(len);
+            assert_eq!(values.len(), len);
+            assert!(values.iter().all(|x| *x == Poly192::ZERO));
+            values.push(Poly192::ONE);
+            values.reserve(100);
+            assert_eq!(values.pop(), Some(Poly192::ONE));
+        }
     }
 
     proptest! {
