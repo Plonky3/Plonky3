@@ -45,16 +45,16 @@ const SUFFIX_IN_PLACE_THRESHOLD: usize = 1 << 23;
 
 /// Tile size for the chunked round-coefficient kernel.
 ///
-/// Monty-31 spells out a single-reduction dot product per tile size, and the set depends on the target:
+/// Monty-31 spells out a single-reduction dot product per tile size.
+/// The set of sizes that get one depends on the target:
 ///
 /// ```text
-///     scalar          2, 3, 4, 5, 6, 7, 8
-///     AVX2, AVX-512   2, 3, 4, 64
-///     NEON            2, 3, 4, 5, 8, 64
+///     scalar          every length
+///     AVX2, AVX-512   2, 4, 5, 6, 7, 8
+///     NEON            2, 3, 4, 5, 8
 /// ```
 ///
-/// So `8` is a single-reduction tile on scalar and on NEON.
-/// On AVX2 and AVX-512 it falls back to two length-4 tiles plus a packed add, hence two reductions.
+/// So `8` is a single-reduction tile on every target.
 /// Binary fields fold the modulus once at any tile size, so the choice is free there.
 ///
 /// - Larger overruns the integer-multiply pipeline depth;
@@ -76,7 +76,7 @@ const K: usize = 8;
 ///
 /// Each sum is one dot product over `K` pairs, reduced as late as the target permits.
 /// A binary field folds the modulus once for the whole sum.
-/// A Monty-31 packing reduces once on NEON, and twice on AVX2 or AVX-512 (see `K`).
+/// A Monty-31 packing pays one Montgomery reduction at this tile size on every target.
 #[inline(always)]
 fn chunk_round_step<B, A>(e_lo: &[B; K], e_hi: &[B; K], w_lo: &[A; K], w_hi: &[A; K]) -> (A, A)
 where

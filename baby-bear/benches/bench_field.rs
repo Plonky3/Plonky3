@@ -88,6 +88,15 @@ fn bench_packedfield(c: &mut Criterion) {
 
     type PF = <F as Field>::Packing;
     benchmark_chunked_linear_combination::<F, PF, 100>(c, &name);
+
+    // Delayed-reduction dot products, with `4` as the control.
+    // Lengths `5` to `8` each pay one Montgomery reduction.
+    benchmark_dot_array::<PF, 4>(c, &name);
+    benchmark_dot_array::<PF, 5>(c, &name);
+    benchmark_dot_array::<PF, 6>(c, &name);
+    benchmark_dot_array::<PF, 7>(c, &name);
+    benchmark_dot_array::<PF, 8>(c, &name);
+    benchmark_dot_array::<PF, 64>(c, &name);
 }
 
 criterion_group!(baby_bear_arithmetic, bench_field, bench_packedfield);
