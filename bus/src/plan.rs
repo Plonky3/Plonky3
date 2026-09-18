@@ -451,9 +451,13 @@ pub enum BusPlanError {
 
 #[derive(Clone, Copy, Debug)]
 struct PendingBlock {
+    /// Named-bus position in lexicographic name order.
     bus: usize,
+    /// Side of the multiset equality receiving the block.
     direction: BusDirection,
+    /// AIR and declaration that own the block.
     owner: BusBlockOwner,
+    /// Base-two logarithm of the block height.
     log_height: usize,
 }
 
