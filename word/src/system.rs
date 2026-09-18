@@ -99,10 +99,15 @@ pub enum VerificationError {
 /// A checked collection of word-level relations.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ConstraintSystem<W: Word> {
+    /// The declared number of public words.
     public_len: u32,
+    /// The declared number of committed words.
     witness_len: u32,
+    /// The expressions required to vanish.
     zero_constraints: Vec<ZeroConstraint<W>>,
+    /// The bitwise product relations.
     and_constraints: Vec<AndConstraint<W>>,
+    /// The full-width unsigned product relations.
     integer_mul_constraints: Vec<IntegerMulConstraint<W>>,
 }
 

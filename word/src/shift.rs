@@ -60,8 +60,11 @@ pub enum ShiftError {
 /// One canonical bit movement.
 #[derive(Debug, Eq, Hash, PartialEq)]
 pub struct Shift<W: Word> {
+    /// The bit movement to apply.
     kind: ShiftKind,
+    /// The movement distance in bits.
     amount: u8,
+    /// The word width fixed at the type level.
     word: PhantomData<fn() -> W>,
 }
 
@@ -167,7 +170,9 @@ pub enum ShiftSequenceError {
 /// One indexed word after zero, one, or two canonical shifts.
 #[derive(Debug, Eq, Hash, PartialEq)]
 pub struct ShiftedValue<W: Word> {
+    /// The source word position.
     index: ValueIndex,
+    /// The inner and outer movements in evaluation order.
     shifts: [Shift<W>; 2],
 }
 
@@ -240,8 +245,11 @@ impl<W: Word> ShiftedValue<W> {
 }
 
 enum Composition {
+    /// The composition has an equivalent single movement.
     Single,
+    /// The composition clears every input bit.
     Zero,
+    /// The composition irreducibly requires both movements.
     Pair,
 }
 

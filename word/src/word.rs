@@ -35,7 +35,10 @@ pub trait Word: sealed::Sealed + Copy + Debug + Eq + Hash + Send + Sync + 'stati
 /// A 32-bit word.
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[repr(transparent)]
-pub struct Word32(u32);
+pub struct Word32(
+    /// The underlying 32-bit pattern.
+    u32,
+);
 
 impl Word32 {
     /// Creates a word from its bit pattern.
@@ -122,7 +125,10 @@ impl sealed::Sealed for Word32 {
 /// A 64-bit word.
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[repr(transparent)]
-pub struct Word64(u64);
+pub struct Word64(
+    /// The underlying 64-bit pattern.
+    u64,
+);
 
 impl Word64 {
     /// Creates a word from its bit pattern.

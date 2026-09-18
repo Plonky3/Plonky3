@@ -23,7 +23,9 @@ pub enum IndexError {
 /// An opaque position in either the public or committed word segment.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct ValueIndex {
+    /// The visibility class containing the word.
     segment: Segment,
+    /// The word offset within its visibility class.
     position: u32,
 }
 

@@ -21,6 +21,7 @@ pub struct EvaluationError {
 /// An XOR sum of shifted words.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Operand<W: Word> {
+    /// The shifted words combined by bitwise XOR.
     terms: Vec<ShiftedValue<W>>,
 }
 
@@ -81,6 +82,7 @@ impl<W: Word> Operand<W> {
 /// A relation requiring an XOR operand to equal zero.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ZeroConstraint<W: Word> {
+    /// The XOR expression required to vanish.
     value: Operand<W>,
 }
 
@@ -106,8 +108,11 @@ impl<W: Word> ZeroConstraint<W> {
 /// A relation requiring the bitwise AND of two operands to equal a third.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AndConstraint<W: Word> {
+    /// The left bitwise factor.
     left: Operand<W>,
+    /// The right bitwise factor.
     right: Operand<W>,
+    /// The expected bitwise result.
     output: Operand<W>,
 }
 
@@ -158,9 +163,13 @@ impl<W: Word> AndConstraint<W> {
 /// A relation requiring a full-width unsigned integer product.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct IntegerMulConstraint<W: Word> {
+    /// The left unsigned factor.
     left: Operand<W>,
+    /// The right unsigned factor.
     right: Operand<W>,
+    /// The low word of the expected product.
     low: Operand<W>,
+    /// The high word of the expected product.
     high: Operand<W>,
 }
 
