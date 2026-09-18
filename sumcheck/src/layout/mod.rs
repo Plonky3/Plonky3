@@ -82,7 +82,7 @@ pub use opening::{
     ProverMultiClaim, ProverVirtualClaim, VerifierMultiClaim, VerifierOpening,
     VerifierVirtualClaim,
 };
-pub use prover::{Layout, PrefixProver, StackedClaims, SuffixProver};
+pub use prover::{Layout, PrefixProver, StackedClaims, SuffixProver, SuffixResidualProver};
 pub use transcript::{commitment_domain_separator, observe_commitment};
 pub use verifier::Verifier;
 pub use witness::{Selector, Table, TablePlacement, Witness};
