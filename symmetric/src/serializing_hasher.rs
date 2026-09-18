@@ -75,16 +75,6 @@ where
             return;
         }
 
-        // One row past the target is where grouping stops paying: a lane group of rows that
-        // wide is more buffer than the saved calls are worth. Hash it straight from the
-        // serializing iterator instead, with no buffer at all.
-        if row_bytes > ROW_BYTES_SCRATCH {
-            for (digest, row) in out.iter_mut().zip(input.chunks_exact(row_len)) {
-                *digest = self.hash_iter(row.iter().copied());
-            }
-            return;
-        }
-
         // Serialize as many whole rows at a time as the budget holds.
         // The inner hasher then sees a long run of equal-length byte messages:
         //
@@ -382,8 +372,8 @@ mod tests {
         let hasher = SerializingHasher::new(MockHasher);
 
         // Row widths around the group boundaries: one element, a lane group, the widest row the
-        // 8 KiB budget still groups, and one element past it.
-        for row_len in [1, 3, 7, 100, 2048, 2049, 2100] {
+        // 8 KiB budget still groups, one element past it, and a row several times that width.
+        for row_len in [1, 3, 7, 100, 2048, 2049, 2100, 5000] {
             for rows in [1, 2, 3, 4, 7] {
                 let input = rows_of(rows, row_len);
                 let mut batched = vec![[0u8; 4]; rows];
@@ -431,18 +421,33 @@ mod tests {
     }
 
     #[test]
-    fn hash_many_hashes_a_row_wider_than_the_budget_on_its_own() {
+    fn hash_many_still_groups_by_one_lane_group_past_the_row_budget() {
         let (inner, calls) = LaneRecorder::new();
         let hasher = SerializingHasher::new(inner);
 
-        // 2049 elements are 8196 bytes, past the 8 KiB budget, so grouping is skipped entirely
-        // and every row is serialized straight into the sponge.
+        // 2049 elements are 8196 bytes, past the 8 KiB budget, so a group is one lane group
+        // of rows rather than the whole batch, and the final group is whatever remains.
         let input = rows_of(4, 2049);
         let mut out = vec![[0u8; 4]; 4];
         hasher.hash_many(&input, &mut out);
 
-        assert!(calls.borrow().is_empty());
+        assert_eq!(*calls.borrow(), vec![3, 1]);
         assert_eq!(out, digests_one_by_one(&hasher, &input, 2049));
+    }
+
+    #[test]
+    fn hash_many_still_groups_by_one_lane_group_far_above_the_row_budget() {
+        let (inner, calls) = LaneRecorder::new();
+        let hasher = SerializingHasher::new(inner);
+
+        // 5000 elements are 20000 bytes, several times the 8 KiB budget, and seven rows is
+        // not a whole number of the three-lane group, so the last group is short.
+        let input = rows_of(7, 5000);
+        let mut out = vec![[0u8; 4]; 7];
+        hasher.hash_many(&input, &mut out);
+
+        assert_eq!(*calls.borrow(), vec![3, 3, 1]);
+        assert_eq!(out, digests_one_by_one(&hasher, &input, 5000));
     }
 
     #[test]

@@ -345,18 +345,14 @@ const TASK_NODES: usize = 1024;
 ///     row bytes   staged           the batching consumer
 ///        2 KiB     16 KiB   (1x)   groups rows, every lane busy
 ///        8 KiB     64 KiB   (4x)   groups rows, every lane busy
-///       64 KiB    512 KiB  (32x)   one message at a time, every lane idle
+///       64 KiB    512 KiB  (32x)   groups rows, every lane busy
 /// ```
 ///
-/// The only consumer that groups rows abandons grouping past its own 8 KiB row budget.
+/// The one consumer that groups rows keeps every row in a whole lane group too, at its own
+/// 8 KiB row budget, so the group handed down from here always lands in a single batched call.
 ///
-/// Under that budget the overshoot buys occupancy.
-/// An idle lane costs a whole permutation, far more than the cache level given up.
-///
-/// Past it the rows are hashed one at a time whatever this layer staged.
-/// The overshoot then buys nothing and is pure copy cost.
-///
-/// Telling the two apart here would mean coupling this layer to a budget it cannot see.
+/// An idle lane costs a whole permutation, far more than the cache level given up, so the
+/// overshoot buys occupancy at every row width.
 ///
 /// The bound above is per call.
 ///
