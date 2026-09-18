@@ -15,6 +15,7 @@ p3-util.workspace = true
 
 itertools.workspace = true
 serde = { workspace = true, features = ["alloc"] }
+thiserror.workspace = true
 
 [dev-dependencies]
 p3-goldilocks = { path = "../goldilocks" }

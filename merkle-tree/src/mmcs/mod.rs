@@ -523,7 +523,10 @@ impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
         // Phase 2: Length gate. One opened row set per query.
         let n_originals = indices.len();
         if opened_values.len() != n_originals {
-            return Err(WrongBatchSize);
+            return Err(WrongBatchSize {
+                expected: n_originals,
+                got: opened_values.len(),
+            });
         }
 
         // Empty query set: there is nothing to authenticate.

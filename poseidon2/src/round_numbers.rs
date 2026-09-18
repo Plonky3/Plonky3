@@ -26,6 +26,40 @@
 
 use p3_field::PrimeField64;
 use p3_util::relatively_prime_u64;
+use thiserror::Error;
+
+/// Reasons the precomputed 128-bit Poseidon2 round table cannot serve a parameter set.
+#[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
+pub enum Poseidon2RoundNumbersError {
+    /// The S-box exponent does not define a permutation of the field.
+    #[error(
+        "Poseidon2 S-box exponent {exponent} is not coprime to the field order minus one ({field_order_minus_one})"
+    )]
+    InvalidSboxExponent {
+        /// Requested S-box exponent.
+        exponent: u64,
+        /// Multiplicative-group order the exponent must be coprime to.
+        field_order_minus_one: u64,
+    },
+    /// No audited round count exists for this width and exponent.
+    #[error(
+        "no audited Poseidon2 round count for a {field_bits}-bit field with width {width} and S-box exponent {exponent}"
+    )]
+    UnsupportedWidthAndExponent {
+        /// Bit length of the field order.
+        field_bits: u32,
+        /// Requested permutation width.
+        width: usize,
+        /// Requested S-box exponent.
+        exponent: u64,
+    },
+    /// The table has not been computed for this field size.
+    #[error("no audited Poseidon2 round counts for a {field_bits}-bit field")]
+    UnsupportedFieldSize {
+        /// Bit length of the field order.
+        field_bits: u32,
+    },
+}
 
 /// Total number of full rounds for 128-bit security.
 ///
@@ -34,17 +68,24 @@ use p3_util::relatively_prime_u64;
 /// This value is the same for all field sizes and widths at the 128-bit security level.
 const FULL_ROUNDS_128: usize = 8;
 
-/// Given a field, a width and an D return the number of full and partial rounds needed to achieve 128 bit security.
+/// Return the full and partial round counts needed for 128-bit security.
 ///
-/// If d is not a valid permutation of the given field or the optimal parameters for that size of prime
-/// have not been computed, an error is returned.
+/// # Errors
+///
+/// Returns an error when `d` does not define a permutation over `F`.
+///
+/// Returns an error when the audited table has no entry for the field size, `width`, and `d`.
 pub const fn poseidon2_round_numbers_128<F: PrimeField64>(
     width: usize,
     d: u64,
-) -> Result<(usize, usize), &'static str> {
+) -> Result<(usize, usize), Poseidon2RoundNumbersError> {
     // Start by checking that d is a valid permutation.
-    if !relatively_prime_u64(d, F::ORDER_U64 - 1) {
-        return Err("Invalid permutation: gcd(d, F::ORDER_U64 - 1) must be 1");
+    let field_order_minus_one = F::ORDER_U64 - 1;
+    if !relatively_prime_u64(d, field_order_minus_one) {
+        return Err(Poseidon2RoundNumbersError::InvalidSboxExponent {
+            exponent: d,
+            field_order_minus_one,
+        });
     }
 
     // Next compute the number of bits in p.
@@ -67,7 +108,11 @@ pub const fn poseidon2_round_numbers_128<F: PrimeField64>(
             (32, 7) => Ok((FULL_ROUNDS_128, 30)),
             (32, 9) => Ok((FULL_ROUNDS_128, 30)),
             (32, 11) => Ok((FULL_ROUNDS_128, 30)),
-            _ => Err("The given pair of width and D has not been checked for these fields"),
+            _ => Err(Poseidon2RoundNumbersError::UnsupportedWidthAndExponent {
+                field_bits: prime_bit_number,
+                width,
+                exponent: d,
+            }),
         },
         64 => match (width, d) {
             (8, 3) => Ok((FULL_ROUNDS_128, 41)),
@@ -85,8 +130,70 @@ pub const fn poseidon2_round_numbers_128<F: PrimeField64>(
             (16, 7) => Ok((FULL_ROUNDS_128, 22)),
             (16, 9) => Ok((FULL_ROUNDS_128, 20)),
             (16, 11) => Ok((FULL_ROUNDS_128, 18)),
-            _ => Err("The given pair of width and D has not been checked for these fields"),
+            _ => Err(Poseidon2RoundNumbersError::UnsupportedWidthAndExponent {
+                field_bits: prime_bit_number,
+                width,
+                exponent: d,
+            }),
         },
-        _ => Err("The optimal parameters for that size of prime have not been computed."),
+        _ => Err(Poseidon2RoundNumbersError::UnsupportedFieldSize {
+            field_bits: prime_bit_number,
+        }),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use alloc::format;
+    use alloc::string::ToString;
+
+    use p3_baby_bear::BabyBear;
+    use p3_field::PrimeField64;
+
+    use super::{Poseidon2RoundNumbersError, poseidon2_round_numbers_128};
+
+    #[test]
+    fn invalid_sbox_exponent_reports_the_exponent_and_group_order() {
+        let error = poseidon2_round_numbers_128::<BabyBear>(16, 2).unwrap_err();
+        assert_eq!(
+            error,
+            Poseidon2RoundNumbersError::InvalidSboxExponent {
+                exponent: 2,
+                field_order_minus_one: BabyBear::ORDER_U64 - 1,
+            }
+        );
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "Poseidon2 S-box exponent 2 is not coprime to the field order minus one ({})",
+                BabyBear::ORDER_U64 - 1
+            )
+        );
+    }
+
+    #[test]
+    fn unsupported_parameters_report_every_table_key() {
+        let error = poseidon2_round_numbers_128::<BabyBear>(15, 7).unwrap_err();
+        assert_eq!(
+            error,
+            Poseidon2RoundNumbersError::UnsupportedWidthAndExponent {
+                field_bits: 31,
+                width: 15,
+                exponent: 7,
+            }
+        );
+        assert_eq!(
+            error.to_string(),
+            "no audited Poseidon2 round count for a 31-bit field with width 15 and S-box exponent 7"
+        );
+    }
+
+    #[test]
+    fn unsupported_field_size_message_reports_the_table_key() {
+        let error = Poseidon2RoundNumbersError::UnsupportedFieldSize { field_bits: 48 };
+        assert_eq!(
+            error.to_string(),
+            "no audited Poseidon2 round counts for a 48-bit field"
+        );
     }
 }

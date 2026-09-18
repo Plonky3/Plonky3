@@ -182,9 +182,18 @@ where
         // Without this, an over-long row could be masked by an under-long salt.
         check_widths(dimensions, opened_values)?;
 
-        let opened_salted_values = zip_eq(opened_values, salts, MerkleTreeError::WrongBatchSize)?
-            .map(|(opened, salt)| opened.iter().chain(salt.iter()).copied().collect_vec())
-            .collect_vec();
+        let expected_salts = opened_values.len();
+        let got_salts = salts.len();
+        let opened_salted_values = zip_eq(
+            opened_values,
+            salts,
+            MerkleTreeError::WrongBatchSize {
+                expected: expected_salts,
+                got: got_salts,
+            },
+        )?
+        .map(|(opened, salt)| opened.iter().chain(salt.iter()).copied().collect_vec())
+        .collect_vec();
 
         // The inner tree commits to rows widened by the salt columns,
         // so the widths must be widened the same way.
@@ -241,23 +250,40 @@ where
 
         // Re-attach salts query by query, mirroring the single-opening path.
         let mut salted_values = Vec::with_capacity(opened_values.len());
-        for (rows, salts_at_index) in zip_eq(opened_values, salts, MerkleTreeError::WrongBatchSize)?
-        {
+        let expected_salt_batches = opened_values.len();
+        let got_salt_batches = salts.len();
+        for (rows, salts_at_index) in zip_eq(
+            opened_values,
+            salts,
+            MerkleTreeError::WrongBatchSize {
+                expected: expected_salt_batches,
+                got: got_salt_batches,
+            },
+        )? {
             // Pin each unsalted row to its matrix width before salting.
             // The inner tree only sees salted widths.
             // An over-long row could otherwise hide behind an under-long salt.
             check_widths(dimensions, rows)?;
 
-            let salted_rows = zip_eq(rows, salts_at_index, MerkleTreeError::WrongBatchSize)?
-                .map(|(opened, salt)| {
-                    opened
-                        .as_ref()
-                        .iter()
-                        .chain(salt.iter())
-                        .copied()
-                        .collect_vec()
-                })
-                .collect_vec();
+            let expected_salts = rows.len();
+            let got_salts = salts_at_index.len();
+            let salted_rows = zip_eq(
+                rows,
+                salts_at_index,
+                MerkleTreeError::WrongBatchSize {
+                    expected: expected_salts,
+                    got: got_salts,
+                },
+            )?
+            .map(|(opened, salt)| {
+                opened
+                    .as_ref()
+                    .iter()
+                    .chain(salt.iter())
+                    .copied()
+                    .collect_vec()
+            })
+            .collect_vec();
             salted_values.push(salted_rows);
         }
 
@@ -277,6 +303,7 @@ where
 
 #[cfg(test)]
 mod tests {
+    use alloc::string::ToString;
     use alloc::vec;
 
     use itertools::Itertools;
@@ -407,6 +434,28 @@ mod tests {
     }
 
     #[test]
+    fn verify_reports_the_opening_and_salt_counts() {
+        let mut rng = SmallRng::seed_from_u64(5);
+        let perm = Perm::new_from_rng_128(&mut rng);
+        let hash = MyHash::new(perm.clone());
+        let compress = MyCompress::new(perm);
+        let mat = RowMajorMatrix::<F>::rand(&mut rng, 8, 4);
+        let dims = vec![mat.dimensions()];
+        let mmcs = MyMmcs::new(hash, compress, 0, StdRng::seed_from_u64(0));
+        let (commit, prover_data) = mmcs.commit(vec![mat]);
+        let mut opening = mmcs.open_batch(3, &prover_data);
+        opening.opening_proof.0.clear();
+
+        let error = mmcs
+            .verify_batch(&commit, &dims, 3, (&opening).into())
+            .expect_err("an opening without its salt row must be rejected");
+        assert_eq!(
+            error.to_string(),
+            "batch size mismatch: expected 1 entries, got 0"
+        );
+    }
+
+    #[test]
     fn hiding_mmcs_is_sync() {
         assert_sync::<MyMmcs>();
     }
@@ -482,5 +531,38 @@ mod tests {
                 got: 5,
             }
         ));
+    }
+
+    #[test]
+    fn verify_multi_reports_the_query_and_salt_counts() {
+        let mut rng = SmallRng::seed_from_u64(6);
+        let perm = Perm::new_from_rng_128(&mut rng);
+        let hash = MyHash::new(perm.clone());
+        let compress = MyCompress::new(perm);
+        let mat = RowMajorMatrix::<F>::rand(&mut rng, 8, 4);
+        let dims = vec![mat.dimensions()];
+        let mmcs = MyMmcs::new(hash, compress, 0, StdRng::seed_from_u64(0));
+        let (commit, prover_data) = mmcs.commit(vec![mat]);
+        let indices = vec![2usize, 5];
+        let (opened, mut proof) = mmcs.open_multi_batch(&indices, &prover_data);
+
+        proof.0.pop();
+        let error = mmcs
+            .verify_multi_batch(&commit, &dims, &indices, &opened, &proof)
+            .expect_err("each query must carry one salt batch");
+        assert_eq!(
+            error.to_string(),
+            "batch size mismatch: expected 2 entries, got 1"
+        );
+
+        let (_, mut proof) = mmcs.open_multi_batch(&indices, &prover_data);
+        proof.0[0].clear();
+        let error = mmcs
+            .verify_multi_batch(&commit, &dims, &indices, &opened, &proof)
+            .expect_err("each opened matrix row must carry one salt row");
+        assert_eq!(
+            error.to_string(),
+            "batch size mismatch: expected 1 entries, got 0"
+        );
     }
 }

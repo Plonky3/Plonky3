@@ -276,36 +276,23 @@ impl fmt::Display for BinaryProofReport {
 /// The wrapped PCS errors project through `BinaryStarkConfig<2>`, but neither the PCS's
 /// commitment nor its error type depends on the Merkle arity, so the same variant covers every
 /// supported arity.
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum BinaryProofError {
     /// The requested PCS parameters do not describe a usable binary-PCS schedule.
-    Config(BinaryPcsConfigError),
+    #[error("binary PCS configuration failed: {0}")]
+    Config(#[from] BinaryPcsConfigError),
     /// Proving (including `setup`) rejected its configuration, budget, or security target.
-    Prove(ProvingError<PcsProverError<BinaryStarkConfig<2>>>),
+    #[error("binary proof generation failed: {0}")]
+    Prove(#[from] ProvingError<PcsProverError<BinaryStarkConfig<2>>>),
     /// The generated proof failed verification.
-    Verify(VerificationError<PcsError<BinaryStarkConfig<2>>>),
+    #[error("binary proof verification failed: {0}")]
+    Verify(#[from] VerificationError<PcsError<BinaryStarkConfig<2>>>),
     /// The statement's security assessment left a component unassessed or below target.
-    Security(SecurityError),
+    #[error("binary proof security check failed: {0}")]
+    Security(#[source] SecurityError),
     /// `options.merkle_arity` is not one of the arities the binary-field harness builds.
+    #[error("unsupported Merkle arity {0}; expected 2 or 4")]
     UnsupportedMerkleArity(usize),
-}
-
-impl From<BinaryPcsConfigError> for BinaryProofError {
-    fn from(error: BinaryPcsConfigError) -> Self {
-        Self::Config(error)
-    }
-}
-
-impl From<ProvingError<PcsProverError<BinaryStarkConfig<2>>>> for BinaryProofError {
-    fn from(error: ProvingError<PcsProverError<BinaryStarkConfig<2>>>) -> Self {
-        Self::Prove(error)
-    }
-}
-
-impl From<VerificationError<PcsError<BinaryStarkConfig<2>>>> for BinaryProofError {
-    fn from(error: VerificationError<PcsError<BinaryStarkConfig<2>>>) -> Self {
-        Self::Verify(error)
-    }
 }
 
 /// AIR obligations the binary-field harness needs, stated once each.
@@ -579,6 +566,8 @@ where
 
 #[cfg(test)]
 mod tests {
+    use core::error::Error;
+
     use p3_air::{Air, AirBuilder, BaseAir, WindowAccess};
     use p3_binary_field::TowerLevel;
     use p3_blake3_air::Blake3BinaryAir;
@@ -749,8 +738,30 @@ mod tests {
             },
         );
         assert!(matches!(
-            result,
+            &result,
             Err(BinaryProofError::UnsupportedMerkleArity(3))
         ));
+        let error = result.unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "unsupported Merkle arity 3; expected 2 or 4"
+        );
+        assert!(error.source().is_none());
+    }
+
+    #[test]
+    fn configuration_error_reports_context_and_preserves_the_source() {
+        let error = BinaryProofError::from(BinaryPcsConfigError::InvalidFoldingFactor {
+            requested: 0,
+            num_variables: 8,
+        });
+        assert_eq!(
+            error.to_string(),
+            "binary PCS configuration failed: folding factor log 0 must be in 1..=8"
+        );
+        assert_eq!(
+            error.source().map(ToString::to_string).as_deref(),
+            Some("folding factor log 0 must be in 1..=8")
+        );
     }
 }

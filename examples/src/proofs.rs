@@ -1,5 +1,3 @@
-use core::fmt::Debug;
-
 use p3_air::Air;
 use p3_air::symbolic::SymbolicAirBuilder;
 use p3_challenger::{DuplexChallenger, SerializingChallenger32};
@@ -81,12 +79,18 @@ fn example_circle_parameters<EF: Field, M>(mmcs: M) -> FriParameters<M> {
 }
 
 /// Distinguishes a rejected proving budget from a rejected proof.
-#[derive(Debug)]
-pub enum ProofRunError<P: Debug, V: Debug> {
+#[derive(Debug, thiserror::Error)]
+pub enum ProofRunError<P, V>
+where
+    P: core::error::Error + 'static,
+    V: core::error::Error + 'static,
+{
     /// Proof generation rejected its configuration or opening budget.
-    Prove(P),
+    #[error("proof generation failed: {0}")]
+    Prove(#[source] P),
     /// The generated proof failed verification.
-    Verify(V),
+    #[error("proof verification failed: {0}")]
+    Verify(#[source] V),
 }
 
 type ProofRunResult<SC> = Result<
@@ -479,9 +483,9 @@ where
 ///
 /// Either print that the proof was successful or panic and return the error.
 #[inline]
-pub fn report_result(result: Result<(), impl Debug>) {
+pub fn report_result(result: Result<(), impl core::fmt::Display>) {
     if let Err(e) = result {
-        panic!("{e:?}");
+        panic!("{e}");
     } else {
         println!("Proof Verified Successfully");
     }
@@ -549,11 +553,46 @@ pub fn report_stir_security_level(security_level: usize, max_pow_bits: usize) {
 
 #[cfg(test)]
 mod tests {
+    use core::error::Error;
+
     use p3_baby_bear::BabyBear;
     use p3_field::extension::BinomialExtensionField;
     use p3_koala_bear::KoalaBear;
 
     use super::*;
+
+    #[derive(Debug, thiserror::Error)]
+    #[error("opening budget exceeded")]
+    struct TestProvingError;
+
+    #[derive(Debug, thiserror::Error)]
+    #[error("constraint mismatch")]
+    struct TestVerificationError;
+
+    #[test]
+    fn proof_run_error_reports_the_phase_and_preserves_the_source() {
+        let proving =
+            ProofRunError::<TestProvingError, TestVerificationError>::Prove(TestProvingError);
+        assert_eq!(
+            proving.to_string(),
+            "proof generation failed: opening budget exceeded"
+        );
+        assert_eq!(
+            proving.source().map(ToString::to_string).as_deref(),
+            Some("opening budget exceeded")
+        );
+
+        let verification =
+            ProofRunError::<TestProvingError, TestVerificationError>::Verify(TestVerificationError);
+        assert_eq!(
+            verification.to_string(),
+            "proof verification failed: constraint mismatch"
+        );
+        assert_eq!(
+            verification.source().map(ToString::to_string).as_deref(),
+            Some("constraint mismatch")
+        );
+    }
 
     fn check_fri_target<EF: Field>() {
         for params in [

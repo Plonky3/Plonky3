@@ -43,6 +43,7 @@
 use core::fmt::{Display, Formatter, Result as FmtResult};
 
 use serde::Serialize;
+use thiserror::Error;
 
 use crate::error::ErrorBits;
 use crate::fri::FriRegime;
@@ -567,9 +568,12 @@ impl GrindingBudget {
 /// A way the recorded difficulties and the credited ones can disagree.
 ///
 /// Every variant names the site, and both numbers wherever there are two.
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, Error, PartialEq, Eq)]
 pub enum GrindingMismatch {
     /// A step is described at a difficulty the model does not credit.
+    #[error(
+        "{site} grinding disagrees: the security model credits {credited} bits, `{protocol}`'s `{label}` step demands {recorded}"
+    )]
     Difficulty {
         /// Protocol whose transcript describes the step.
         protocol: &'static str,
@@ -587,6 +591,9 @@ pub enum GrindingMismatch {
     /// This is the overstating direction.
     ///
     /// The reported level then includes work no prover pays and no verifier checks.
+    #[error(
+        "{site} grinding disagrees: the security model credits {credited} bits, `{protocol}` describes no `{label}` step, so 0 are demanded"
+    )]
     Missing {
         /// Protocol whose transcript omits the step.
         protocol: &'static str,
@@ -598,6 +605,9 @@ pub enum GrindingMismatch {
         credited: usize,
     },
     /// A zero-bit step is described where the protocol's convention elides it.
+    #[error(
+        "{site} grinding disagrees: the security model credits 0 bits, and `{protocol}` describes a zero-bit `{label}` step it should elide"
+    )]
     Unexpected {
         /// Protocol whose transcript describes the step.
         protocol: &'static str,
@@ -607,6 +617,9 @@ pub enum GrindingMismatch {
         site: GrindingSite,
     },
     /// A described step whose `(protocol, label)` pair names no modeled site.
+    #[error(
+        "`{protocol}`'s `{label}` step demands {recorded} bits at a site `GRINDING_VOCABULARY` does not map"
+    )]
     UnknownStep {
         /// Protocol whose transcript describes the step.
         protocol: &'static str,
@@ -616,6 +629,9 @@ pub enum GrindingMismatch {
         recorded: usize,
     },
     /// A described step from a protocol the caller did not list.
+    #[error(
+        "`{protocol}`'s `{label}` step demands {recorded} bits, and `{protocol}` is not among the protocols checked"
+    )]
     UnlistedProtocol {
         /// Protocol whose transcript describes the step.
         protocol: &'static str,
@@ -626,65 +642,29 @@ pub enum GrindingMismatch {
     },
 }
 
-impl Display for GrindingMismatch {
-    /// Name the site, the step it was read from, and both numbers.
-    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
-        match self {
-            Self::Difficulty {
-                protocol,
-                label,
-                site,
-                credited,
-                recorded,
-            } => write!(
-                f,
-                "{site} grinding disagrees: the security model credits {credited} bits, \
-                 `{protocol}`'s `{label}` step demands {recorded}",
-            ),
-            Self::Missing {
-                protocol,
-                label,
-                site,
-                credited,
-            } => write!(
-                f,
-                "{site} grinding disagrees: the security model credits {credited} bits, \
-                 `{protocol}` describes no `{label}` step, so 0 are demanded",
-            ),
-            Self::Unexpected {
-                protocol,
-                label,
-                site,
-            } => write!(
-                f,
-                "{site} grinding disagrees: the security model credits 0 bits, \
-                 and `{protocol}` describes a zero-bit `{label}` step it should elide",
-            ),
-            Self::UnknownStep {
-                protocol,
-                label,
-                recorded,
-            } => write!(
-                f,
-                "`{protocol}`'s `{label}` step demands {recorded} bits at a site \
-                 `GRINDING_VOCABULARY` does not map",
-            ),
-            Self::UnlistedProtocol {
-                protocol,
-                label,
-                recorded,
-            } => write!(
-                f,
-                "`{protocol}`'s `{label}` step demands {recorded} bits, \
-                 and `{protocol}` is not among the protocols checked",
-            ),
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
+    use alloc::string::ToString;
+
     use super::*;
+
+    #[test]
+    fn grinding_mismatch_is_an_error_without_changing_its_message() {
+        fn assert_error<E: core::error::Error>() {}
+        assert_error::<GrindingMismatch>();
+
+        let mismatch = GrindingMismatch::Difficulty {
+            protocol: "p3-fri",
+            label: "query_pow",
+            site: GrindingSite::LdtQueryPhase,
+            credited: 8,
+            recorded: 12,
+        };
+        assert_eq!(
+            mismatch.to_string(),
+            "ldt-query-phase grinding disagrees: the security model credits 8 bits, `p3-fri`'s `query_pow` step demands 12"
+        );
+    }
 
     #[test]
     fn boost_adds_pow_bits_and_zero_is_neutral() {

@@ -146,6 +146,6 @@ fn main() {
             println!("{report}");
             println!("Proof Verified Successfully");
         }
-        Err(error) => panic!("{error:?}"),
+        Err(error) => panic!("{error}"),
     }
 }

@@ -22,7 +22,7 @@ use p3_field::{Algebra, InjectiveMonomial, PrimeField, PrimeField64};
 use p3_symmetric::{CryptographicPermutation, Permutation};
 use rand::distr::{Distribution, StandardUniform};
 use rand::{Rng, RngExt};
-pub use round_numbers::poseidon2_round_numbers_128;
+pub use round_numbers::{Poseidon2RoundNumbersError, poseidon2_round_numbers_128};
 
 const SUPPORTED_WIDTHS: [usize; 9] = [2, 3, 4, 8, 12, 16, 20, 24, 32];
 

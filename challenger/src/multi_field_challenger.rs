@@ -1,6 +1,6 @@
-use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
+use core::any::type_name;
 use core::array;
 
 use p3_field::{
@@ -8,6 +8,7 @@ use p3_field::{
     reduce_packed, split_pf_to_field_order_limbs, squeeze_field_order_num_limbs,
 };
 use p3_symmetric::{CryptographicPermutation, Hash, MerkleCap};
+use thiserror::Error;
 
 use crate::{
     CanFinalizeDigest, CanObserve, CanSample, CanSampleBits, DuplexChallenger, FieldChallenger,
@@ -43,6 +44,39 @@ where
     f_buffer: Vec<F>,
     /// Expanded `F` limbs from `inner.output_buffer` (same pop order as the pre-wrapper design).
     f_squeeze_buffer: Vec<F>,
+}
+
+/// Why a multi-field challenger cannot be constructed.
+#[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
+pub enum MultiField32ChallengerError {
+    /// The transcript field cannot injectively encode values from the sampled field.
+    #[error(
+        "sampled field `{input_field}` must have smaller order than transcript field `{sponge_field}`"
+    )]
+    FieldOrderNotIncreasing {
+        /// Field whose elements the challenger samples.
+        input_field: &'static str,
+        /// Field that holds the duplex sponge state.
+        sponge_field: &'static str,
+    },
+    /// The rate leaves no capacity element in the duplex state.
+    #[error("challenger rate {rate} must be smaller than state width {width}")]
+    RateNotSmallerThanWidth {
+        /// Number of elements exposed for absorption and squeezing.
+        rate: usize,
+        /// Total number of elements in the duplex state.
+        width: usize,
+    },
+    /// One absorb batch cannot encode its scalar count in the one-byte length tag.
+    #[error(
+        "a full absorb batch contains {batch_len} sampled-field elements, exceeding the u8 length-tag limit of {max}"
+    )]
+    AbsorbLengthTagOverflow {
+        /// Maximum number of sampled-field elements absorbed in one batch.
+        batch_len: usize,
+        /// Largest count representable by the transcript tag.
+        max: usize,
+    },
 }
 
 impl<F, PF, P, const WIDTH: usize, const RATE: usize> MultiField32Challenger<F, PF, P, WIDTH, RATE>
@@ -85,19 +119,33 @@ where
         self.f_squeeze_buffer.len()
     }
 
-    pub fn new(permutation: P) -> Result<Self, String> {
+    /// Constructs a challenger around `permutation`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the transcript field cannot injectively encode the sampled field, the
+    /// duplex rate leaves no capacity element, or a full absorb batch cannot be represented by
+    /// the transcript's one-byte length tag.
+    pub fn new(permutation: P) -> Result<Self, MultiField32ChallengerError> {
         if F::order() >= PF::order() {
-            return Err(String::from("F::order() must be less than PF::order()"));
+            return Err(MultiField32ChallengerError::FieldOrderNotIncreasing {
+                input_field: type_name::<F>(),
+                sponge_field: type_name::<PF>(),
+            });
         }
         if RATE >= WIDTH {
-            return Err(String::from("RATE must be less than WIDTH"));
+            return Err(MultiField32ChallengerError::RateNotSmallerThanWidth {
+                rate: RATE,
+                width: WIDTH,
+            });
         }
         // A full flush stamps up to limbs-per-slot * RATE scalars into a byte-sized length tag.
         // Past 255, lengths differing by 256 would share a tag and collide in the transcript.
         if max_absorb_injective_limbs::<F, PF>() * RATE > u8::MAX as usize {
-            return Err(String::from(
-                "absorb length tag must fit in a u8: max_absorb_injective_limbs * RATE must be at most 255",
-            ));
+            return Err(MultiField32ChallengerError::AbsorbLengthTagOverflow {
+                batch_len: max_absorb_injective_limbs::<F, PF>() * RATE,
+                max: u8::MAX as usize,
+            });
         }
 
         Ok(Self {
@@ -399,6 +447,8 @@ where
 
 #[cfg(test)]
 mod tests {
+    use alloc::string::ToString;
+
     use p3_baby_bear::BabyBear;
     use p3_field::{
         Field, PrimeCharacteristicRing, PrimeField, injective_pack_bits, split_pf_to_packed_limbs,
@@ -451,11 +501,45 @@ mod tests {
     #[derive(Clone)]
     struct WideIdentityPermutation;
 
-    impl<const W: usize> Permutation<[PF; W]> for WideIdentityPermutation {
-        fn permute_mut(&self, _input: &mut [PF; W]) {}
+    impl<T: Clone, const W: usize> Permutation<[T; W]> for WideIdentityPermutation {
+        fn permute_mut(&self, _input: &mut [T; W]) {}
     }
 
-    impl<const W: usize> CryptographicPermutation<[PF; W]> for WideIdentityPermutation {}
+    impl<T: Clone, const W: usize> CryptographicPermutation<[T; W]> for WideIdentityPermutation {}
+
+    #[test]
+    fn test_new_reports_invalid_field_order_and_rate() {
+        let field_order = MultiField32Challenger::<F, F, _, 8, 4>::new(WideIdentityPermutation)
+            .err()
+            .expect("equal field orders must fail");
+        assert_eq!(
+            field_order,
+            MultiField32ChallengerError::FieldOrderNotIncreasing {
+                input_field: type_name::<F>(),
+                sponge_field: type_name::<F>(),
+            }
+        );
+        assert_eq!(
+            field_order.to_string(),
+            alloc::format!(
+                "sampled field `{}` must have smaller order than transcript field `{}`",
+                type_name::<F>(),
+                type_name::<F>()
+            )
+        );
+
+        // The inner duplex constructor enforces this const-generic invariant at compile time.
+        // Construct the public diagnostic directly to pin its developer-facing message.
+        let rate = MultiField32ChallengerError::RateNotSmallerThanWidth { rate: 8, width: 8 };
+        assert_eq!(
+            rate,
+            MultiField32ChallengerError::RateNotSmallerThanWidth { rate: 8, width: 8 }
+        );
+        assert_eq!(
+            rate.to_string(),
+            "challenger rate 8 must be smaller than state width 8"
+        );
+    }
 
     #[test]
     fn test_new_rejects_length_tag_overflow() {
@@ -470,11 +554,17 @@ mod tests {
         //     RATE = 128 → 2 * 128 = 256 > 255 → reject
         //     RATE = 127 → 2 * 127 = 254 ≤ 255 → accept
         let too_wide = MultiField32Challenger::<F, PF, _, 129, 128>::new(WideIdentityPermutation);
+        let error = too_wide.err().expect("an oversized absorb batch must fail");
         assert_eq!(
-            too_wide.err().as_deref(),
-            Some(
-                "absorb length tag must fit in a u8: max_absorb_injective_limbs * RATE must be at most 255"
-            )
+            error,
+            MultiField32ChallengerError::AbsorbLengthTagOverflow {
+                batch_len: 256,
+                max: 255,
+            }
+        );
+        assert_eq!(
+            error.to_string(),
+            "a full absorb batch contains 256 sampled-field elements, exceeding the u8 length-tag limit of 255"
         );
 
         let in_range = MultiField32Challenger::<F, PF, _, 128, 127>::new(WideIdentityPermutation);

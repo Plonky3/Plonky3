@@ -284,7 +284,7 @@ pub enum StirError<MmcsError, InputError = ()> {
     },
 
     /// A Merkle multi-opening proof failed for a round's queries.
-    #[error("{round}: invalid MMCS opening proof")]
+    #[error("{round}: invalid MMCS opening proof: {source:?}")]
     InvalidMmcsProof {
         round: RoundLabel,
         #[source]
@@ -362,7 +362,7 @@ pub enum StirError<MmcsError, InputError = ()> {
     Config(#[source] StirConfigError),
 
     /// An error propagated from the input polynomial commitment scheme.
-    #[error("input error")]
+    #[error("input error: {0:?}")]
     InputError(InputError),
 }
 
@@ -424,5 +424,41 @@ impl<E, IE> StirError<E, IE> {
             Self::Config(e) => StirError::Config(e),
             Self::InputError(e) => StirError::InputError(f(e)),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use alloc::string::ToString;
+    use core::fmt::{Debug, Formatter, Result as FmtResult};
+
+    use super::{RoundLabel, StirError};
+
+    struct Diagnostic(&'static str);
+
+    impl Debug for Diagnostic {
+        fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
+            f.write_str(self.0)
+        }
+    }
+
+    #[test]
+    fn wrapped_error_messages_preserve_source_diagnostics() {
+        let mmcs = StirError::<Diagnostic, Diagnostic>::InvalidMmcsProof {
+            round: RoundLabel::Round(2),
+            source: Diagnostic("authentication path has the wrong height"),
+        };
+        assert_eq!(
+            mmcs.to_string(),
+            "round 2: invalid MMCS opening proof: authentication path has the wrong height"
+        );
+
+        let input = StirError::<Diagnostic, Diagnostic>::InputError(Diagnostic(
+            "commitment opening count mismatch",
+        ));
+        assert_eq!(
+            input.to_string(),
+            "input error: commitment opening count mismatch"
+        );
     }
 }
