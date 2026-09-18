@@ -85,7 +85,7 @@ pub trait ByteGrindingChallenger: CanObserve<u8> + CanSample<u8> + Clone + Send 
     /// # Returns
     ///
     /// Any passing candidate, or `None` when none passes.
-    /// Without the `parallel` feature it is the smallest passing candidate.
+    /// When `p3_maybe_rayon::PARALLEL_ENABLED` is false it is the smallest passing candidate.
     fn find_witness<const W: usize, const S: usize>(
         &self,
         num_candidates: u64,

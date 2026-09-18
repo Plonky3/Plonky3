@@ -779,6 +779,9 @@ mod tests {
                 None
             );
         }
+
+        // An empty range has no candidate to pass, however permissive the check.
+        assert_eq!(challenger.find_witness(0, encode, |_: [u8; S]| true), None);
     }
 
     fn assert_find_witness_matches_clones_for<H>(hasher: &H)
@@ -789,8 +792,11 @@ mod tests {
             // The encodings and sample widths of the 32- and 64-bit serializing challengers.
             assert_find_witness_matches_clones::<H, 4, 4>(&challenger);
             assert_find_witness_matches_clones::<H, 8, 8>(&challenger);
-            // Shapes the single-flush layout cannot express fall back to cloning.
+            // A sample as wide as the digest still comes from a single flush.
+            assert_find_witness_matches_clones::<H, 4, 32>(&challenger);
+            // Shapes the single-flush layout cannot express fall back to the default search.
             assert_find_witness_matches_clones::<H, 0, 4>(&challenger);
+            assert_find_witness_matches_clones::<H, 4, 33>(&challenger);
             assert_find_witness_matches_clones::<H, 4, 40>(&challenger);
         }
     }

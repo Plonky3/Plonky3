@@ -459,6 +459,7 @@ where
 
     #[instrument(name = "grind for proof-of-work witness", skip_all, level = "debug")]
     fn grind(&mut self, bits: usize) -> Self::Witness {
+        assert!(bits < (usize::BITS as usize));
         assert!(bits < 64);
         assert!((1u64 << bits) < F::ORDER_U64);
 
