@@ -47,7 +47,7 @@ use p3_util::log2_ceil_usize;
 use crate::PcsLayout;
 use crate::error::BinaryPcsError;
 use crate::fold::FoldAlphabet;
-use crate::params::BinaryPcsConfig;
+use crate::params::{BinaryPcsConfig, BinaryPcsConfigError};
 use crate::proof::BinaryPcsProof;
 use crate::prover::{BinaryPcsProverData, commit, fold_rounds_with, open_queries};
 use crate::transcript::{BinaryPcsProverTranscript, BinaryPcsShape, BinaryPcsVerifierTranscript};
@@ -80,22 +80,42 @@ pub struct BinaryPcs<F: EncodableLevel, EF, MT, MX, E = <F as EncodableLevel>::E
     _challenge: PhantomData<EF>,
 }
 
-impl<F: EncodableLevel, EF, MT, MX> BinaryPcs<F, EF, MT, MX> {
+impl<F: EncodableLevel, EF: TowerLevel, MT, MX> BinaryPcs<F, EF, MT, MX> {
     /// Builds a PCS instance from a derived configuration and its two commitment schemes.
+    ///
+    /// The schedule carries the two widths it was derived for, and both are checked here.
+    ///
+    /// Every cap the derivation applied belongs to one of those two levels:
+    ///
+    /// ```text
+    ///     committed alphabet   the additive domain the codeword lives in, and the grind
+    ///     challenge field      the width every algebraic error is charged against
+    /// ```
+    ///
+    /// A schedule derived elsewhere would otherwise report a bound it cannot deliver.
     ///
     /// # Arguments
     ///
     /// - `config`: the validated fold and query schedule both sides read.
     /// - `mmcs`: commits the base codeword over the committed alphabet.
     /// - `round_mmcs`: commits every folded codeword over the challenge field.
-    pub fn new(config: BinaryPcsConfig, mmcs: MT, round_mmcs: MX) -> Self {
-        Self {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error unless the schedule was derived for these two levels.
+    pub fn new(
+        config: BinaryPcsConfig,
+        mmcs: MT,
+        round_mmcs: MX,
+    ) -> Result<Self, BinaryPcsConfigError> {
+        config.check_alphabets::<F, EF>()?;
+        Ok(Self {
             config,
             mmcs,
             round_mmcs,
             encoder: F::Encoder::default(),
             _challenge: PhantomData,
-        }
+        })
     }
 
     /// Variables of the committed stacked polynomial.
@@ -110,17 +130,28 @@ impl<F: EncodableLevel, EF, MT, MX> BinaryPcs<F, EF, MT, MX> {
 impl<F, EF, MT, MX, Ntt> BinaryPcs<F, EF, MT, MX, AdditiveRsEncoder<F, Ntt>>
 where
     F: EncodableLevel,
+    EF: TowerLevel,
     Ntt: AdditiveNtt<F> + Sync,
 {
     /// Builds an instance around an explicitly selected additive transform.
-    pub const fn with_ntt(config: BinaryPcsConfig, mmcs: MT, round_mmcs: MX, ntt: Ntt) -> Self {
-        Self {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error unless the schedule was derived for these two tower levels.
+    pub fn with_ntt(
+        config: BinaryPcsConfig,
+        mmcs: MT,
+        round_mmcs: MX,
+        ntt: Ntt,
+    ) -> Result<Self, BinaryPcsConfigError> {
+        config.check_alphabets::<F, EF>()?;
+        Ok(Self {
             config,
             mmcs,
             round_mmcs,
             encoder: AdditiveRsEncoder::new(ntt),
             _challenge: PhantomData,
-        }
+        })
     }
 }
 
@@ -791,7 +822,7 @@ mod tests {
                 log_folding_factor,
             )
             .unwrap();
-            let pcs = BinaryPcs::new(config, mmcs(), mmcs());
+            let pcs = BinaryPcs::new(config, mmcs(), mmcs()).unwrap();
 
             // Shipped route.
             let mut got_challenger = challenger();
@@ -893,7 +924,7 @@ mod tests {
             .unwrap()
             .try_with_folding(log_folding_factor)
             .unwrap();
-        let pcs = BinaryPcs::new(config, mmcs(), mmcs());
+        let pcs = BinaryPcs::new(config, mmcs(), mmcs()).unwrap();
 
         let mut prover_challenger = challenger();
         let (commitment, prover_data) = pcs.commit(witness, &mut prover_challenger).unwrap();
@@ -1023,7 +1054,7 @@ mod tests {
         ]);
 
         let config = BinaryPcsConfig::try_new::<F, F>(stacked_arity, params()).unwrap();
-        let pcs: BinaryPcs<F, F, MyMmcs, MyMmcs> = BinaryPcs::new(config, mmcs(), mmcs());
+        let pcs: BinaryPcs<F, F, MyMmcs, MyMmcs> = BinaryPcs::new(config, mmcs(), mmcs()).unwrap();
 
         let mut prover_challenger = challenger();
         let (commitment, prover_data) = pcs.commit(witness, &mut prover_challenger).unwrap();

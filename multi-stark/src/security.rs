@@ -125,33 +125,50 @@ impl MultiStarkSecurityReport {
     ///
     /// Each keeps the label its own crate gave it, so the report says which one is short.
     ///
-    /// The supplied label names the component only when there is nothing to charge.
+    /// Every term is also attributed to the commitment it was charged for.
     ///
-    /// A configuration using one scheme for both commitments therefore contributes
-    /// two terms under that scheme's label, one per commitment.
+    /// ```text
+    ///     one scheme, both commitments  ->  the same label twice
+    ///     component                     ->  which of the two the term belongs to
+    /// ```
+    ///
+    /// A component with nothing to charge is recorded as unassessed under the same name.
     fn add_opening_evidence(
         &mut self,
-        label: &'static str,
+        component: &'static str,
         evidence: Option<PrescribedOpeningSecurity>,
     ) -> f64 {
-        // Evidence is usable only if every term is a finite non-negative bound.
+        // A term is usable when it names a probability in `[0, 1]`, so its bits are `>= 0`.
+        //
+        // Infinite bits are a zero error, which a reduction that never runs reports:
+        //
+        //     one claim folded under one weight  ->  nothing to separate  ->  zero error
+        //
+        // Rejecting that would leave a component unassessed for having nothing to charge.
+        //
+        // The union of the terms is what has to be a real bound, and it is checked below.
+        let charged = |term: &SecurityTerm| !term.bits.bits().is_nan() && term.bits.bits() >= 0.0;
+
         // One unusable term makes the whole component unassessed, rather than shrinking it.
         let usable = |evidence: &PrescribedOpeningSecurity| {
             !evidence.terms.is_empty()
-                && evidence
-                    .terms
-                    .iter()
-                    .all(|term| term.bits.bits().is_finite() && term.bits.bits() >= 0.0)
+                && evidence.terms.iter().all(charged)
+                && evidence.error().bits().is_finite()
                 && evidence.log2_max_candidates.is_finite()
                 && evidence.log2_max_candidates >= 0.0
         };
         match evidence {
             Some(evidence) if usable(&evidence) => {
-                self.terms.extend(evidence.terms);
+                self.terms.extend(
+                    evidence
+                        .terms
+                        .iter()
+                        .map(|term| term.in_component(component)),
+                );
                 evidence.log2_max_candidates
             }
             _ => {
-                self.unassessed.push(label);
+                self.unassessed.push(component);
                 0.0
             }
         }
@@ -461,6 +478,61 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_reduction_with_nothing_to_charge_is_still_assessed() {
+        // A reduction that never runs reports a zero error, which is infinitely many bits.
+        //
+        //     one claim under one weight   ->  nothing to separate  ->  error 0
+        //     zero reductions              ->  no challenge at all  ->  error 0
+        //
+        // Fixture state: one finite term at 100 bits, one term carrying no error.
+        //
+        //     union  ->  2^-100 + 0  ->  100 bits
+        //
+        // Rejecting the zero term would leave the component unassessed on a sound
+        // statement, and the proving path fails closed on an unassessed component.
+        let mut report = MultiStarkSecurityReport {
+            terms: Vec::new(),
+            unassessed: Vec::new(),
+        };
+        let evidence = PrescribedOpeningSecurity {
+            terms: alloc::vec![
+                SecurityTerm::new("commitment", ErrorBits::from_log2(100.0)),
+                SecurityTerm::new("reduction", ErrorBits::from_log2(f64::INFINITY)),
+            ],
+            log2_max_candidates: 0.0,
+        };
+
+        assert_eq!(report.add_opening_evidence("main-pcs", Some(evidence)), 0.0);
+        assert!(report.unassessed_components().is_empty());
+
+        // Both terms are kept, each attributed to the commitment it was charged for.
+        assert_eq!(report.terms().len(), 2);
+        assert!(
+            report
+                .terms()
+                .iter()
+                .all(|term| term.component == Some("main-pcs"))
+        );
+
+        // The zero-error term contributes nothing to the union, so the bound is the other.
+        assert_eq!(report.security_bits(), Some(100.0));
+
+        // A component whose every term is a zero error has no bound at all, so it is
+        // unassessed rather than certified at infinite security.
+        let mut empty = MultiStarkSecurityReport {
+            terms: Vec::new(),
+            unassessed: Vec::new(),
+        };
+        let nothing = PrescribedOpeningSecurity::single(
+            "reduction",
+            ErrorBits::from_log2(f64::INFINITY),
+            0.0,
+        );
+        empty.add_opening_evidence("main-pcs", Some(nothing));
+        assert_eq!(empty.unassessed_components(), ["main-pcs"]);
+    }
 
     #[test]
     fn missing_or_malformed_opening_evidence_cannot_certify_a_target() {

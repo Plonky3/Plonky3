@@ -2,16 +2,16 @@
 //!
 //! # Overview
 //!
-//! Twenty-four protocols in this workspace seed their transcript from a domain separator.
+//! Twenty-six protocols in this workspace seed their transcript from a domain separator.
 //!
 //! The version byte is a format version each protocol owns, so names carry the separation.
 //!
 //! ```text
-//!     protocol_id = [ 1 | NAME | 0 .. 0 | NAME.len() ]
-//!                     ^     ^                 ^
-//!                     |     |                 disambiguates zero-padded prefixes
-//!                     |     the only field that differs between protocols
-//!                     the same byte for all twenty-four
+//!     protocol_id = [ 1 | NAME  | 0 .. 0 | NAME.len() ]
+//!                       ^     ^                  ^
+//!                       |     |                  disambiguates padded prefixes
+//!                       |     the only field that differs between protocols
+//!                       the same byte for all twenty-six
 //! ```
 //!
 //! Separation therefore rests entirely on the name.
@@ -24,7 +24,7 @@
 //!
 //! `p3-examples` is a leaf: nothing depends on it.
 //!
-//! It also already pulls in most of the twenty-four.
+//! It also already pulls in most of the twenty-six.
 
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_batch_stark::BatchShape;
@@ -51,6 +51,7 @@ use p3_stir::pcs_transcript::{
     StirPcsBucketShape, StirPcsClaimShape, StirPcsCommitmentShape, StirPcsOpeningShape,
 };
 use p3_stir::{SecurityAssumption, StirInstanceShape, StirRoundShape, StirShape};
+use p3_sumcheck::ClaimPoolShape;
 use p3_sumcheck::generic_degree::GenericDegreeShape;
 use p3_sumcheck::ring_switch::RingSwitchShape;
 use p3_sumcheck::strategy::Basis;
@@ -64,7 +65,7 @@ use p3_whir::{
 
 /// Base field every separator below is derived over.
 ///
-/// One field for all twenty-four, so nothing is separated by the field choice.
+/// One field for all twenty-six, so nothing is separated by the field choice.
 type F = BabyBear;
 
 /// Extension field every separator below draws its challenges from.
@@ -87,7 +88,7 @@ type Case = (String, DomainSeparator<Alphabet>);
 /// Number of protocols on the typed transcript layer.
 ///
 /// A protocol added without an entry below leaves its name unchecked against the others.
-const NUM_PROTOCOLS: usize = 25;
+const NUM_PROTOCOLS: usize = 26;
 
 /// Configurations swept per protocol: one default, then two single-field moves of it.
 ///
@@ -626,6 +627,29 @@ fn ring_switch_cases() -> Vec<Case> {
         .collect()
 }
 
+/// The claim-pool cases: two claims about a four-variable polynomial, then two moves.
+///
+/// Both knobs widen a message step, and nothing else the description declares moves with them.
+///
+/// The pool is generic over the field its claims live in.
+/// It is taken over the base field here, the alphabet every other case is compared on.
+fn claim_pool_cases() -> Vec<Case> {
+    [
+        ("plain", ClaimPoolShape::new(4, 2)),
+        ("num_variables", ClaimPoolShape::new(5, 2)),
+        ("num_claims", ClaimPoolShape::new(4, 3)),
+    ]
+    .into_iter()
+    .map(|(name, shape)| {
+        case(
+            "p3-sumcheck-claim-pool",
+            name,
+            shape.domain_separator::<F>(),
+        )
+    })
+    .collect()
+}
+
 /// The STIR PCS commitment cases: one root, then two other group counts.
 fn stir_pcs_commitment_cases() -> Vec<Case> {
     [1, 2, 3]
@@ -899,6 +923,7 @@ fn protocols() -> Vec<Vec<Case>> {
         multi_stark_cases(),
         zk_sumcheck_cases(),
         ring_switch_cases(),
+        claim_pool_cases(),
     ]
 }
 
@@ -932,9 +957,9 @@ fn digested(cases: Vec<Case>) -> Vec<(String, SeedDigest)> {
 fn every_protocol_is_listed_here() {
     // This compares two hand-maintained numbers against each other, and nothing wider.
     //
-    //     builder added, count not bumped  ->  caught here
-    //     count bumped, builder missing    ->  caught here
-    //     new protocol, neither touched    ->  not caught
+    //     - builder added, count not bumped  ->  caught here
+    //     - count bumped, builder missing    ->  caught here
+    //     - new protocol, neither touched    ->  not caught
     //
     // A protocol on the typed layer that never joins the list is never compared at all.
     //
@@ -942,21 +967,25 @@ fn every_protocol_is_listed_here() {
     //
     // So the list is a convention this test keeps consistent, not one it discovers.
     //
-    // Three names cannot join: `p3-sumcheck-layout-{opening,ood,batching}` describe
-    // shapes that are `pub(crate)` to `p3-sumcheck`, and publishing them to reach
-    // this file would widen that crate's API for a test. They are compared against
-    // the crate's other four names in `p3_sumcheck`'s own suite instead, by
-    // `no_two_protocols_in_this_crate_share_a_name`.
+    // Three names cannot join, because their shapes are crate-private to `p3-sumcheck`.
     //
-    // A fourth cannot join for a different reason.
+    // - `p3-sumcheck-layout-opening`
+    // - `p3-sumcheck-layout-ood`
+    // - `p3-sumcheck-layout-batching`
     //
-    // `p3-binary-pcs` seeds over a binary tower field.
+    // Publishing them to reach this file would widen that crate's API for a test.
     //
-    // Its separator therefore has a different sponge alphabet, and a different type.
+    // They are compared against the crate's other names in its own suite instead.
+    //
+    // Two more cannot join for a different reason.
+    //
+    // `p3-binary-pcs` and `p3-sumcheck-bit-ring-switch` seed over a binary tower field.
+    //
+    // Their separators therefore have a different sponge alphabet, and a different type.
     //
     // Two protocols over different alphabets cannot collide on a sponge state anyway.
     //
-    // Its own knobs are swept inside `p3-binary-pcs`.
+    // Their own knobs are swept inside their own crates.
     assert_eq!(default_cases().len(), NUM_PROTOCOLS);
 }
 
@@ -964,9 +993,9 @@ fn every_protocol_is_listed_here() {
 fn the_protocol_name_is_the_only_field_that_separates_two_protocols() {
     // The version byte is a format version, owned by one protocol and bumped by it alone.
     //
-    //     [version | name | 0 .. 0 | name_len]
-    //                ^^^^            ^^^^^^^^
-    //                the only fields that may part two protocols
+    //     [ version | name  | 0 .. 0 | name_len ]
+    //                  ^^^^              ^^^^^^^^
+    //                  the only fields that may part two protocols
     //
     // So two protocols must stay apart with every version byte forced to agree.
     // A pair that only differs in that byte would collide the day either one bumps.
@@ -996,17 +1025,17 @@ fn a_shared_name_prefix_is_separated_by_the_name_length_byte() {
     //     [1 | p3-fri                  | 0 .. 0 |  6]
     //     [1 | p3-fri-pcs              | 0 .. 0 | 10]
     //
-    //     [1 | p3-whir                 | 0 .. 0 |  7]
-    //     [1 | p3-whir-hvzk            | 0 .. 0 | 12]
-    //     [1 | p3-whir-hvzk-base       | 0 .. 0 | 17]
-    //     [1 | p3-whir-hvzk-claims     | 0 .. 0 | 19]
-    //     [1 | p3-whir-hvzk-commitment | 0 .. 0 | 23]
+    //     - [1 | p3-whir                 | 0 .. 0 |  7]
+    //     - [1 | p3-whir-hvzk            | 0 .. 0 | 12]
+    //     - [1 | p3-whir-hvzk-base       | 0 .. 0 | 17]
+    //     - [1 | p3-whir-hvzk-claims     | 0 .. 0 | 19]
+    //     - [1 | p3-whir-hvzk-commitment | 0 .. 0 | 23]
     //
-    //     [1 | p3-stir                 | 0 .. 0 |  7]
-    //     [1 | p3-stir-pcs-batch       | 0 .. 0 | 17]
-    //     [1 | p3-stir-pcs-claims      | 0 .. 0 | 18]
-    //     [1 | p3-stir-pcs-opening     | 0 .. 0 | 19]
-    //     [1 | p3-stir-pcs-commitment  | 0 .. 0 | 22]
+    //     - [1 | p3-stir                 | 0 .. 0 |  7]
+    //     - [1 | p3-stir-pcs-batch       | 0 .. 0 | 17]
+    //     - [1 | p3-stir-pcs-claims      | 0 .. 0 | 18]
+    //     - [1 | p3-stir-pcs-opening     | 0 .. 0 | 19]
+    //     - [1 | p3-stir-pcs-commitment  | 0 .. 0 | 22]
     //
     // Zero padding alone cannot tell a short name from a longer one starting with it.
     //
@@ -1055,11 +1084,11 @@ fn no_two_configurations_of_any_two_protocols_share_a_seed() {
 
     // Every protocol sweeps the full budget, except the two that have nothing to sweep.
     //
-    // A configuration-free phase has exactly one seed to offer, and a fixed
-    // product would demand two duplicates of it.
+    // A configuration-free phase has exactly one seed to offer.
+    // A fixed product would demand two duplicates of it.
     //
-    // Pinning the count per protocol is what stops a sweep from quietly
-    // shrinking and taking its per-knob coverage with it.
+    // Pinning the count per protocol is what stops a sweep from quietly shrinking.
+    // A shrunk sweep takes its per-knob coverage with it.
     let groups = protocols();
     assert_eq!(groups.len(), NUM_PROTOCOLS);
     for group in &groups {
@@ -1087,11 +1116,11 @@ fn no_two_configurations_of_any_two_protocols_share_a_seed() {
 
 /// One configuration per grinding protocol, every difficulty positive.
 ///
-/// The sweep above picks configurations that separate seeds, and most of them
-/// grind at zero bits.
+/// The sweep above picks configurations that separate seeds.
+/// Most of them grind at zero bits.
 ///
-/// A zero-bit step is elided from the pattern, so that sweep cannot see the
-/// sites it never describes.
+/// A zero-bit step is elided from the pattern.
+/// That sweep therefore cannot see the sites it never describes.
 ///
 /// This one exists to make every grinding step visible at least once.
 fn grinding_sweep() -> Vec<(String, DomainSeparator<Alphabet>)> {
@@ -1129,8 +1158,8 @@ fn grinding_sweep() -> Vec<(String, DomainSeparator<Alphabet>)> {
         }],
     };
 
-    // Each WHIR pipeline grinds inside its own rounds, and the hiding one also
-    // grinds in its base case.
+    // Each WHIR pipeline grinds inside its own rounds.
+    // The hiding one also grinds in its base case.
     let whir_config = WhirConfig::<EF, F, Ch>::new(WHIR_NUM_VARIABLES, whir_params())
         .expect("the fixture parameters are valid");
     let zk_config = ZkWhirConfig::<EF, F, Ch>::new(
@@ -1181,8 +1210,8 @@ fn every_grinding_site_is_either_budgeted_or_priced_elsewhere() {
     //
     // That is how a grinding budget and a transcript drift apart unnoticed.
     //
-    // Both vocabularies live in `p3-security`, so this walk compares the
-    // described steps against them rather than against a list kept here.
+    // Both vocabularies live in `p3-security`.
+    // This walk compares the described steps against them, not against a local list.
     for group in protocols() {
         for (name, separator) in group {
             // Case labels are "protocol/configuration", and the name leads.
@@ -1217,11 +1246,11 @@ fn every_grinding_site_is_either_budgeted_or_priced_elsewhere() {
 fn every_unpriced_grinding_site_is_described_by_the_protocol_that_owns_it() {
     // Invariant: the unpriced table names real steps.
     //
-    // A stale row would exempt a site that no longer exists, and would hide a
-    // renamed one behind a classification that can never fire.
+    // A stale row would exempt a site that no longer exists.
+    // It would also hide a renamed one behind a classification that can never fire.
     //
-    // Fixture state: every protocol below is swept at a positive difficulty, so
-    // each of its grinding steps reaches a pattern.
+    // Fixture state: every protocol below is swept at a positive difficulty.
+    // Each of its grinding steps therefore reaches a pattern.
     let described: Vec<(String, String)> = grinding_sweep()
         .into_iter()
         .flat_map(|(protocol, separator)| {

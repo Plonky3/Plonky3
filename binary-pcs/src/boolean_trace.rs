@@ -465,6 +465,13 @@ where
         challenger: &mut Challenger,
         protocol: Self::OpeningProtocol,
     ) -> Result<(), Self::Error> {
+        // Committing bound the root on the prover's sponge, so this binds it here.
+        //
+        // The points are then sampled from that sponge, as the prover sampled them.
+        //
+        // The prescribed-point entry point is the one that leaves the binding to its caller.
+        self.observe_commitment(commitment, challenger);
+
         // The same draws the prover made, in the same order, before anything is checked.
         let points = sample_points(&protocol, challenger);
         self.verify_at(commitment, proof, &protocol, &points, challenger)
@@ -608,20 +615,29 @@ mod tests {
     fn an_opened_column_is_the_column_the_table_holds() {
         // Invariant: lifting a row point by a slot address reads that column and no other.
         //
-        // Fixture state: two tables, so the slots are neither all one arity nor all aligned.
+        // Fixture state: three tables, so the slots are neither all one arity nor all aligned.
         //
-        //     table 0   2^10 rows, 2 columns
-        //     table 1   2^8  rows, 2 columns
+        //     - table 0   2^10 rows, 2 columns
+        //     - table 1   2^8  rows, 2 columns
+        //     - table 2   2^4  rows, 2 columns
         //
-        // The stack is log2_ceil(2048 + 512) = 12 variables wide.
+        // The stack is log2_ceil(2048 + 512 + 32) = 12 variables wide.
+        //
+        // The third table is what puts a column shorter than one staging word in the batch.
+        //
+        //     - 2^10 and 2^8 rows  ->  whole words, written by the aligned run
+        //     - 2^4 rows           ->  sixteen bits inside one word, set in place
+        //
+        // A wrong shift on that second path would place the column somewhere else.
         //
         // Every opened value is checked against the column's own multilinear.
         // That reference shares nothing with the packing or with the reduction.
         let shapes = [
             TableShape::new(10, FIXTURE_WIDTH),
             TableShape::new(8, FIXTURE_WIDTH),
+            TableShape::new(4, FIXTURE_WIDTH),
         ];
-        let tables = alloc::vec![table(0xB100, 10), table(0xB101, 8)];
+        let tables = alloc::vec![table(0xB100, 10), table(0xB101, 8), table(0xB103, 4)];
         let scheme = pcs(&shapes);
         let protocol = protocol(&shapes);
         assert_eq!(scheme.num_variables(), 12);
@@ -630,6 +646,7 @@ mod tests {
         let points = alloc::vec![
             Point::<EF>::rand(&mut rng, 10),
             Point::<EF>::rand(&mut rng, 8),
+            Point::<EF>::rand(&mut rng, 4),
         ];
 
         let mut prover_chal = challenger();
@@ -662,6 +679,13 @@ mod tests {
     #[test]
     fn the_sampled_path_draws_the_same_points_on_both_sides() {
         // Invariant: the sampled convention needs no point to cross the wire.
+        // Each side binds the commitment itself.
+        //
+        //     commit  ->  binds the root, then the caller draws nothing of its own
+        //     verify  ->  binds the root, then samples the points the prover sampled
+        //
+        // A caller that bound the root by hand would bind it twice and sample elsewhere.
+        // Both sides therefore run on a fresh sponge, as every other scheme here expects.
         //
         // Fixture state: one table of 2^10 rows and two columns, so the stack has arity 11.
         let shapes = [TableShape::new(10, FIXTURE_WIDTH)];
@@ -677,10 +701,18 @@ mod tests {
             .unwrap();
 
         let mut verifier_chal = challenger();
-        scheme.observe_commitment(&commitment, &mut verifier_chal);
         scheme
-            .verify(&commitment, &proof, &mut verifier_chal, protocol)
+            .verify(&commitment, &proof, &mut verifier_chal, protocol.clone())
             .unwrap();
+
+        // Binding it a second time moves every later draw, so the two sides split.
+        let mut double_bound = challenger();
+        scheme.observe_commitment(&commitment, &mut double_bound);
+        assert!(
+            scheme
+                .verify(&commitment, &proof, &mut double_bound, protocol)
+                .is_err()
+        );
     }
 
     #[test]

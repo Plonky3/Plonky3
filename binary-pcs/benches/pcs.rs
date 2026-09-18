@@ -83,12 +83,12 @@ const fn params() -> BinaryPcsParams {
 
 fn make_pcs(num_variables: usize) -> MyPcs {
     let config = BinaryPcsConfig::try_new::<F, F>(num_variables, params()).unwrap();
-    BinaryPcs::new(config, mmcs(), mmcs())
+    BinaryPcs::new(config, mmcs(), mmcs()).unwrap()
 }
 
 fn make_narrow_pcs(num_variables: usize) -> NarrowPcs {
     let config = BinaryPcsConfig::try_new::<Narrow, F>(num_variables, params()).unwrap();
-    BinaryPcs::new(config, narrow_mmcs(), mmcs())
+    BinaryPcs::new(config, narrow_mmcs(), mmcs()).unwrap()
 }
 
 fn make_narrow_witness(num_variables: usize, seed: u64) -> Witness<Narrow> {

@@ -4,12 +4,27 @@
 //!
 //! So the space one prove takes is the figure that says whether it worked.
 //!
-//! A tracking allocator counts live bytes while armed and keeps their high-water mark.
+//! A tracking allocator counts every live byte of the process, not a delta from some mark.
+//!
+//! ```text
+//!     live   bytes allocated and not yet freed, counted from the first allocation
+//!     peak   the highest that count has reached since the region opened
+//! ```
+//!
+//! Counting a delta instead would leave out what a region merely holds.
+//!
+//! An opening holds the codeword and the tree the commitment built, for its whole run.
+//!
+//! A delta would also go negative when such a buffer is freed, hiding the next allocation.
+//!
+//! Each region therefore opens before its own inputs exist and closes before the next opens.
+//!
+//! The figures are taken with one worker thread, since a pool makes the peak depend on it.
 //!
 //! The lookup benchmark in the batch prover accounts for its memory the same way.
 
 use std::alloc::{GlobalAlloc, Layout, System};
-use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use p3_binary_field::{BinaryChallenger, BinaryField128, Gf2, PackedGf2x64};
 use p3_binary_pcs::{
@@ -40,33 +55,27 @@ const LOG_BITS: [usize; 3] = [16, 18, 20];
 /// Coordinates the packing absorbs, so the committed polynomial keeps the rest.
 const ABSORBED: usize = 7;
 
-/// System allocator that tracks live and high-water bytes while armed.
+/// System allocator that tracks the live byte count and its high-water mark.
 struct TrackingAlloc;
 
-/// Live bytes since the last arm, signed so a pre-arm free cannot underflow.
-static LIVE: AtomicIsize = AtomicIsize::new(0);
-/// High-water mark of the live count while armed.
+/// Bytes allocated and not yet freed, counted from the program's first allocation.
+static LIVE: AtomicUsize = AtomicUsize::new(0);
+/// Highest the live count has reached since the current region opened.
 static PEAK: AtomicUsize = AtomicUsize::new(0);
-/// Whether allocations are currently being counted.
-static ARMED: AtomicBool = AtomicBool::new(false);
 
 unsafe impl GlobalAlloc for TrackingAlloc {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         let ptr = unsafe { System.alloc(layout) };
-        if !ptr.is_null() && ARMED.load(Ordering::Relaxed) {
-            let live =
-                LIVE.fetch_add(layout.size() as isize, Ordering::Relaxed) + layout.size() as isize;
-            if live > 0 {
-                PEAK.fetch_max(live as usize, Ordering::Relaxed);
-            }
+        if !ptr.is_null() {
+            // Every deallocation below pairs an allocation here, so the count never wraps.
+            let live = LIVE.fetch_add(layout.size(), Ordering::Relaxed) + layout.size();
+            PEAK.fetch_max(live, Ordering::Relaxed);
         }
         ptr
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        if ARMED.load(Ordering::Relaxed) {
-            LIVE.fetch_sub(layout.size() as isize, Ordering::Relaxed);
-        }
+        LIVE.fetch_sub(layout.size(), Ordering::Relaxed);
         unsafe { System.dealloc(ptr, layout) };
     }
 }
@@ -74,16 +83,15 @@ unsafe impl GlobalAlloc for TrackingAlloc {
 #[global_allocator]
 static GLOBAL: TrackingAlloc = TrackingAlloc;
 
-/// Begin counting allocations from a zero baseline.
-fn arm() {
-    LIVE.store(0, Ordering::Relaxed);
-    PEAK.store(0, Ordering::Relaxed);
-    ARMED.store(true, Ordering::Relaxed);
+/// Open a region: the high-water mark restarts from what is live right now.
+///
+/// Whatever the previous region left behind is therefore charged to this one too.
+fn open_region() {
+    PEAK.store(LIVE.load(Ordering::Relaxed), Ordering::Relaxed);
 }
 
-/// Stop counting and return the peak live bytes seen while armed.
-fn disarm() -> usize {
-    ARMED.store(false, Ordering::Relaxed);
+/// The highest live byte count reached since the region opened.
+fn peak() -> usize {
     PEAK.load(Ordering::Relaxed)
 }
 
@@ -137,7 +145,7 @@ fn boolean_pcs(log_bits: usize) -> BooleanPcs<EF, MyMmcs, MyMmcs> {
 
 fn embedded_pcs(log_bits: usize) -> BinaryPcs<EF, EF, MyMmcs, MyMmcs> {
     let config = BinaryPcsConfig::try_new::<EF, EF>(log_bits, params()).unwrap();
-    BinaryPcs::new(config, mmcs(), mmcs())
+    BinaryPcs::new(config, mmcs(), mmcs()).unwrap()
 }
 
 fn embedded_protocol(log_bits: usize) -> OpeningProtocol {
@@ -147,7 +155,7 @@ fn embedded_protocol(log_bits: usize) -> OpeningProtocol {
     )])
 }
 
-/// One row of the table: the two arms of one operation at one size.
+/// One row of the table: the two arms of one stage at one size.
 fn row(what: &str, log_bits: usize, before: usize, after: usize) {
     let mib = |b: usize| b as f64 / (1024.0 * 1024.0);
     println!(
@@ -158,60 +166,80 @@ fn row(what: &str, log_bits: usize, before: usize, after: usize) {
     );
 }
 
+/// Commit a bit witness and open it at one point, reporting the peak at two stages.
+///
+/// The region opens before the witness exists, so nothing the run holds is left out.
+///
+/// ```text
+///     after commit   the codeword and the tree, plus the witness they came from
+///     after open     the same, plus everything the ring switch and the opening add
+/// ```
+fn prove_packed(log_bits: usize, point: &Point<EF>) -> (usize, usize) {
+    open_region();
+    let bits = witness(log_bits);
+    let pcs = boolean_pcs(log_bits);
+    let (_, data) = pcs.commit_bits(&bits, &mut challenger()).unwrap();
+    let after_commit = peak();
+
+    let points = vec![point.clone()];
+    let _ = pcs
+        .open_at_points(data, &points, &mut challenger())
+        .unwrap();
+    (after_commit, peak())
+}
+
+/// The same two stages with one field element per bit, which is what no packing commits.
+fn prove_embedded(log_bits: usize, point: &Point<EF>) -> (usize, usize) {
+    open_region();
+    let bits = witness(log_bits);
+    let cells = embedded(&bits);
+    drop(bits);
+
+    let pcs = embedded_pcs(log_bits);
+    let protocol = embedded_protocol(log_bits);
+    // One column of every cell, which is the shape the stacked layout commits.
+    let column_len = cells.len();
+    let table = Table::new(RowMajorMatrix::new(cells, column_len));
+    let plain_witness = SuffixProver::<EF, EF>::new_witness(vec![table], 0);
+    let (_, data) = pcs.commit(plain_witness, &mut challenger()).unwrap();
+    let after_commit = peak();
+
+    let _ = pcs
+        .open_at(
+            data,
+            &protocol,
+            core::slice::from_ref(point),
+            &mut challenger(),
+        )
+        .unwrap();
+    (after_commit, peak())
+}
+
 fn main() {
-    println!("peak heap during one operation, MiB, single-threaded\n");
+    println!("peak heap while proving, MiB, one worker thread\n");
     println!(
         "{:<22} {:<5} {:>12} {:>12} {:>9}",
-        "operation", "size", "embedded", "packed", "gain"
+        "stage", "size", "embedded", "packed", "gain"
     );
 
     for &log_bits in &LOG_BITS {
-        let bits = witness(log_bits);
-        let cells = embedded(&bits);
         let point = Point::<EF>::rand(&mut SmallRng::seed_from_u64(0xB002), log_bits);
 
-        // Commit, packed: the witness stays one bit per cell.
-        let packed = boolean_pcs(log_bits);
-        arm();
-        let (_, data) = packed.commit_bits(&bits, &mut challenger()).unwrap();
-        let commit_packed = disarm();
-
-        // Commit, embedded: the same bits as one field element each.
-        let plain = embedded_pcs(log_bits);
-        let protocol = embedded_protocol(log_bits);
-        arm();
-        let table = Table::new(RowMajorMatrix::new(cells.clone(), cells.len()));
-        let plain_witness = SuffixProver::<EF, EF>::new_witness(vec![table], 0);
-        let (_, plain_data) = plain.commit(plain_witness, &mut challenger()).unwrap();
-        let commit_embedded = disarm();
+        // Each arm runs in a call of its own, so the next region opens after this one frees.
+        let (commit_packed, prove_packed_peak) = prove_packed(log_bits, &point);
+        let (commit_embedded, prove_embedded_peak) = prove_embedded(log_bits, &point);
 
         row("commit", log_bits, commit_embedded, commit_packed);
-
-        // Open, packed: a ring switch, then one opening of the packed commitment.
-        let points = vec![point.clone()];
-        arm();
-        let _ = packed
-            .open_at_points(data, &points, &mut challenger())
-            .unwrap();
-        let open_packed = disarm();
-
-        // Open, embedded: one opening of a commitment a hundred and twenty-eight times longer.
-        arm();
-        let _ = plain
-            .open_at(
-                plain_data,
-                &protocol,
-                core::slice::from_ref(&point),
-                &mut challenger(),
-            )
-            .unwrap();
-        let open_embedded = disarm();
-
-        row("open", log_bits, open_embedded, open_packed);
+        row(
+            "commit and open",
+            log_bits,
+            prove_embedded_peak,
+            prove_packed_peak,
+        );
 
         // The witness itself, for context: this is the part the packing shrinks by construction.
-        let held_packed = core::mem::size_of_val(bits.as_slice());
-        let held_embedded = core::mem::size_of_val(cells.as_slice());
+        let held_packed = (1usize << log_bits) / 8;
+        let held_embedded = (1usize << log_bits) * size_of::<EF>();
         row("witness held", log_bits, held_embedded, held_packed);
         println!();
     }

@@ -297,7 +297,7 @@ impl EmbeddedConfig {
         let (arity, _) = plan_stacked_layout(shapes);
         let (config, mmcs) = schedule(arity);
         Self {
-            pcs: BinaryPcs::new(config, mmcs.clone(), mmcs),
+            pcs: BinaryPcs::new(config, mmcs.clone(), mmcs).unwrap(),
         }
     }
 }
@@ -478,6 +478,7 @@ mod tests {
     use p3_binary_pcs::BooleanTraceError;
     use p3_commit::MultilinearPcs;
     use p3_multi_stark::config::PcsError;
+    use p3_multi_stark::zerocheck::ZerocheckError;
     use p3_multi_stark::{VerificationError, security_report};
     use p3_multilinear_util::point::Point;
     use p3_sumcheck::{OpeningBatch, OpeningProtocol, PrescribedPointPcs, TableSpec};
@@ -519,29 +520,43 @@ mod tests {
     /// A public boundary the trace does not meet is rejected.
     #[test]
     fn rejects_changed_public_values() {
+        // Invariant: the three first-row constraints are what tie the trace to the statement.
+        //
+        // The public values are absorbed before the zerocheck draws anything, so:
+        //
+        //     prove with p, verify with p'   every later challenge moves, so any proof fails
+        //     prove with p', verify with p'  the two sponges agree, so only the AIR can reject
+        //
+        // The second is the one that reaches the boundary check, so it is the one run here.
+        // The first would pass with the boundary constraints deleted, which pins nothing.
         let log_height = 9;
         let shapes = shapes(&[log_height]);
         let config = PackedConfig::new(&shapes);
         let (table, public) = trace(0x9200, log_height);
         let (pk, vk) = setup(&config, &[&GateTableAir], &mut challenger()).unwrap();
-        let proof = prove_with_security(
-            &config,
-            ProverInstances::new(vec![ProverInstance::new(
-                &GateTableAir,
-                table,
-                &pk,
-                &public,
-            )]),
-            0,
-            SECURITY_BITS,
-            &mut challenger(),
-        )
-        .unwrap();
 
-        // Mutation: flip each pinned input in turn; each one breaks a boundary constraint.
+        // Mutation: flip each pinned input in turn, on both sides at once.
+        //
+        //     trace row 0   a, b, cin, exactly as the table holds them
+        //     statement     one of the three moved by one
+        //
+        // The trace never changes, so exactly one first-row equality is false.
         for index in 0..3 {
             let mut tampered = public;
             tampered[index] += F::ONE;
+            let proof = prove_with_security(
+                &config,
+                ProverInstances::new(vec![ProverInstance::new(
+                    &GateTableAir,
+                    table.clone(),
+                    &pk,
+                    &tampered,
+                )]),
+                0,
+                SECURITY_BITS,
+                &mut challenger(),
+            )
+            .unwrap();
             let result: Result<(), VerificationError<PcsError<PackedConfig>>> =
                 verify_with_security(
                     &config,
@@ -556,8 +571,48 @@ mod tests {
                     SECURITY_BITS,
                     &mut challenger(),
                 );
-            assert!(result.is_err(), "public value {index}");
+
+            // The batched constraint is nonzero at the first row, so the closing check fails.
+            // An opening-side rejection would mean the transcripts split instead.
+            assert!(
+                matches!(
+                    result,
+                    Err(VerificationError::Zerocheck(
+                        ZerocheckError::FinalSumMismatch
+                    ))
+                ),
+                "public value {index}: {result:?}"
+            );
         }
+
+        // The untampered statement is accepted, so the rejections are the boundary alone.
+        let proof = prove_with_security(
+            &config,
+            ProverInstances::new(vec![ProverInstance::new(
+                &GateTableAir,
+                table,
+                &pk,
+                &public,
+            )]),
+            0,
+            SECURITY_BITS,
+            &mut challenger(),
+        )
+        .unwrap();
+        verify_with_security(
+            &config,
+            VerifierInstances::new(vec![VerifierInstance::new(
+                &GateTableAir,
+                &vk,
+                log_height,
+                &public,
+            )]),
+            &proof,
+            0,
+            SECURITY_BITS,
+            &mut challenger(),
+        )
+        .unwrap();
     }
 
     /// A trace whose carry column is wrong is rejected.
@@ -592,25 +647,34 @@ mod tests {
             &mut challenger(),
         )
         .unwrap();
+        let result: Result<(), VerificationError<PcsError<PackedConfig>>> = verify_with_security(
+            &config,
+            VerifierInstances::new(vec![VerifierInstance::new(
+                &GateTableAir,
+                &vk,
+                log_height,
+                &public,
+            )]),
+            &proof,
+            0,
+            SECURITY_BITS,
+            &mut challenger(),
+        );
+
+        // The majority constraint is nonzero at row 3, so the closing check is what fails.
+        // Accepting any rejection would let an opening-side failure pass this test.
         assert!(
-            verify_with_security(
-                &config,
-                VerifierInstances::new(vec![VerifierInstance::new(
-                    &GateTableAir,
-                    &vk,
-                    log_height,
-                    &public,
-                )]),
-                &proof,
-                0,
-                SECURITY_BITS,
-                &mut challenger(),
-            )
-            .is_err()
+            matches!(
+                result,
+                Err(VerificationError::Zerocheck(
+                    ZerocheckError::FinalSumMismatch
+                ))
+            ),
+            "{result:?}"
         );
     }
 
-    /// The report charges the commitment, the reduction and the pool, each under its label.
+    /// The report charges the commitment and the reduction, each under its own label.
     #[test]
     fn the_report_charges_every_part_of_the_boolean_path() {
         let log_height = 9;
@@ -629,18 +693,112 @@ mod tests {
         assert!(report.unassessed_components().is_empty());
 
         // Every part of the Boolean path reaches the report under its own label.
-        for label in [
-            "binary-pcs-opening",
-            "bit-ring-switch",
-            "claim-pool-batching",
-        ] {
+        //
+        //     binary-pcs-opening   the commitment, its own claim batching included
+        //     bit-ring-switch      one reduction per opened column
+        //
+        // Both are attributed to the commitment they were charged for.
+        // A report holding two openings then still says which of the two is short.
+        for label in ["binary-pcs-opening", "bit-ring-switch"] {
             assert!(
-                report.terms().iter().any(|term| term.label == label),
+                report
+                    .terms()
+                    .iter()
+                    .any(|term| term.label == label && term.component == Some("main-pcs")),
                 "missing {label}"
             );
         }
+
+        // The surviving claims are closed by an equality, so nothing is batched twice.
+        assert!(
+            !report
+                .terms()
+                .iter()
+                .any(|term| term.label == "claim-pool-batching")
+        );
+
         report.require_security(SECURITY_BITS).unwrap();
         assert!(report.require_security(128).is_err());
+    }
+
+    /// A table whose transition constraint reads the row after the current one.
+    ///
+    /// The declaration is a field, so the same constraints can be run both ways.
+    ///
+    /// ```text
+    ///     complete     the column the constraint reads a row ahead is named
+    ///     incomplete   nothing is named, which no AIR is allowed to do
+    /// ```
+    struct SuccessorAir {
+        /// Whether the declaration names the column the constraint reads a row ahead.
+        complete: bool,
+    }
+
+    impl<T> BaseAir<T> for SuccessorAir {
+        fn width(&self) -> usize {
+            WIDTH
+        }
+
+        fn num_public_values(&self) -> usize {
+            // This table pins no boundary, so the statement carries nothing.
+            0
+        }
+
+        fn main_next_row_columns(&self) -> Vec<usize> {
+            // Column 3 is the one the transition constraint reads a row ahead.
+            if self.complete { vec![3] } else { Vec::new() }
+        }
+    }
+
+    impl<AB: AirBuilder<F = F>> Air<AB> for SuccessorAir {
+        fn eval(&self, builder: &mut AB) {
+            let main = builder.main();
+            let local = main.current_slice();
+            let next = main.next_slice();
+
+            // The next row's sum column is the exclusive or of this row's three inputs.
+            builder
+                .when_transition()
+                .assert_eq(next[3], local[0] + local[1] + local[2]);
+        }
+    }
+
+    /// The same statement, assessed against whichever declaration the flag selects.
+    fn assess_successor_air(complete: bool) {
+        let log_height = 9;
+        let shapes = shapes(&[log_height]);
+        let config = PackedConfig::new(&shapes);
+        let air = SuccessorAir { complete };
+        let (_, vk) = setup(&config, &[&air], &mut challenger()).unwrap();
+        let instances =
+            VerifierInstances::new(vec![VerifierInstance::new(&air, &vk, log_height, &[])]);
+        security_report(&config, &instances).unwrap();
+    }
+
+    #[test]
+    fn a_declared_successor_read_is_assessed() {
+        // Naming the column the constraint reads a row ahead is all that is asked.
+        //
+        // This is the control for the refusal below.
+        // Same constraints and same shapes, with only the declaration moving.
+        assess_successor_air(true);
+    }
+
+    #[test]
+    #[should_panic = "AIR reads an undeclared successor column"]
+    fn an_undeclared_successor_read_is_refused() {
+        // Invariant: the declaration must name every column a constraint reads ahead.
+        //
+        // Undeclared next-row values are folded as zero by both sides:
+        //
+        //     declares nothing, reads the next row of column 3  ->  that read is a zero
+        //
+        // Proving the weaker statement instead would be silent.
+        // So the pass fixing the round degree compares the two and refuses a mismatch.
+        //
+        // That pass runs on the proving and the verifying path alike.
+        // An incomplete declaration reaches neither a commitment nor a transcript.
+        assess_successor_air(false);
     }
 
     /// A cell outside the two Boolean values is refused at commitment.

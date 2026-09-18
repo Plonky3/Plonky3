@@ -5,8 +5,6 @@
 //! Both sides are methods, because here the reduction has a type to hang them on.
 //! The sibling module's are free functions because there the reduction has none.
 
-use alloc::vec::Vec;
-
 use p3_binary_field::TowerLevel;
 use p3_challenger::fs::TranscriptField;
 use p3_challenger::{FieldChallenger, GrindingChallenger};
@@ -59,11 +57,12 @@ const CHUNK: usize = 1 << 1;
 ///
 /// ```text
 ///     new(r)          tensor, incoming_claim
-///     bind r, bind s_hat, draw r''
+///     bind            r, then the element, then draw r''
 ///     batch(r'')      initial_sum, closing_weight, weights
 /// ```
 ///
 /// Drawing `r''` first is unsound.
+///
 /// A bit matrix solving two `F_2`-linear systems moves the claim, sum held.
 /// The rounds and the closing check then accept a true surviving claim.
 ///
@@ -73,8 +72,9 @@ const CHUNK: usize = 1 << 1;
 /// Nothing is pushed into drawing one early just to obtain an element.
 ///
 /// It does not settle the order.
-/// `batch` borrows this stage alone, so a caller can reach it first.
-/// The forgery goes through in the order `new`, `batch`, `tensor`.
+///
+/// The second stage borrows this one alone, so a caller can reach it first.
+/// The forgery goes through with the element formed last.
 ///
 /// Only a transcript binding `r` and the element before `r''` fixes that.
 /// The two sides below own that transcript, so the ordering test is theirs.
@@ -90,6 +90,7 @@ const CHUNK: usize = 1 << 1;
 /// # Why a bit alphabet is different
 ///
 /// A coordinate is one bit, so a product by a coordinate is a conditional add.
+///
 /// Both the tensor accumulation and the weight multilinear are subset sums.
 /// A general alphabet needs `d` multiplications per hypercube point instead.
 #[derive(Clone, Debug)]
@@ -170,11 +171,51 @@ impl<EF: TowerLevel> BitRingSwitch<EF> {
         })
     }
 
-    /// The equality table over the kept coordinates.
+    /// Where the equality table over the kept coordinates is nonzero, and its values there.
     ///
-    /// `2^l'` entries, so only the prover's two operations build it.
-    fn eq_high(&self) -> Poly<EF> {
-        Poly::new_from_point(self.high(), EF::ONE)
+    /// # Algorithm
+    ///
+    /// The equality table factors over the variables.
+    /// A coordinate that is already zero or one turns its factor into an indicator.
+    ///
+    /// ```text
+    ///     high = (b_0 .. b_{p-1}, z_p .. z_{l'-1})   every b in {0, 1}
+    ///     eq(high, w) = 0  unless the top p bits of w spell b
+    /// ```
+    ///
+    /// The table is therefore supported on one run of `2^(l' - p)` consecutive elements,
+    /// and on that run it is the equality table of the remaining coordinates alone.
+    ///
+    /// A claim about one column of a stacked trace arrives exactly this way, its slot
+    /// address leading the row point.
+    ///
+    /// A point drawn from a transcript has no Boolean coordinate, so the run is the whole
+    /// hypercube and this is the dense table.
+    ///
+    /// # Returns
+    ///
+    /// The first element of the run, and the table over it.
+    fn support(&self) -> (usize, Poly<EF>) {
+        // Read the leading Boolean coordinates as the address of the run, highest bit first.
+        //
+        // The equality table is indexed with the first coordinate as the highest bit, so
+        // those coordinates select a run rather than a scattered set.
+        let mut prefix = 0;
+        let mut address = 0usize;
+        for &coordinate in self.high() {
+            if coordinate == EF::ZERO {
+                address <<= 1;
+            } else if coordinate == EF::ONE {
+                address = (address << 1) | 1;
+            } else {
+                break;
+            }
+            prefix += 1;
+        }
+
+        // One element of the run per assignment of the coordinates that are left.
+        let table = Poly::new_from_point(&self.high()[prefix..], EF::ONE);
+        (address * table.num_evals(), table)
     }
 
     /// `sum_w eq(r_high, w) ⊗ t'(w)`, the element the prover sends.
@@ -183,6 +224,7 @@ impl<EF: TowerLevel> BitRingSwitch<EF> {
     ///
     /// Read by columns it gives the bit planes at the kept coordinates.
     /// That is the reading which tests the incoming claim.
+    ///
     /// Read by rows it gives the sumcheck its starting sum.
     ///
     /// The two readings are of the same coefficients.
@@ -193,9 +235,13 @@ impl<EF: TowerLevel> BitRingSwitch<EF> {
     /// Accumulated in place, one partial element per task.
     /// Forming each term separately would allocate `d` elements per point.
     ///
-    /// The `2^l'` equality table is built here rather than held.
+    /// The equality table is built here rather than held.
     /// That is strictly below the accumulation it feeds.
+    ///
     /// It also keeps a verifier from paying for a table it never reads.
+    ///
+    /// Only the run the table is nonzero on is swept.
+    /// A claim about one column of a stacked trace reaches `2^(l' - p)` of its `2^l'` elements.
     ///
     /// # Errors
     ///
@@ -206,11 +252,14 @@ impl<EF: TowerLevel> BitRingSwitch<EF> {
     {
         self.check_width(packing.num_variables())?;
 
-        Ok(self
-            .eq_high()
+        // Elements outside the run weigh zero, so leaving them out changes no sum.
+        let (offset, weights) = self.support();
+        let values = &packing.poly().as_slice()[offset..offset + weights.num_evals()];
+
+        Ok(weights
             .as_slice()
             .par_chunks(CHUNK)
-            .zip(packing.poly().as_slice().par_chunks(CHUNK))
+            .zip(values.par_chunks(CHUNK))
             .par_fold_reduce(
                 BitTensor::zero,
                 |mut accumulator, (weights, values)| {
@@ -326,24 +375,28 @@ impl<EF: TowerLevel> BitRingSwitchBatch<'_, EF> {
     ///
     /// # Performance
     ///
-    /// Prover-side, and the only other place the `2^l'` table is built.
+    /// Prover-side, and the only other place the equality table is built.
+    ///
+    /// The sumcheck reads this dense, so every slot exists.
+    /// Only the run the equality table is nonzero on is written, the rest staying zero.
     pub fn weights(&self) -> Poly<EF>
     where
         EF: Send + Sync,
     {
-        Poly::new(
-            self.reduction
-                .eq_high()
-                .as_slice()
-                .par_iter()
-                .map(|&value| {
-                    Coefficients::of(value)
-                        .iter_set()
-                        .map(|u| self.eq_batch.as_slice()[u])
-                        .sum()
-                })
-                .collect::<Vec<_>>(),
-        )
+        let (offset, equality) = self.reduction.support();
+        let mut table = Poly::zero(self.reduction.num_variables());
+
+        // A zero weight has no set coordinate, so its slot would be written zero anyway.
+        table.as_mut_slice()[offset..offset + equality.num_evals()]
+            .par_iter_mut()
+            .zip(equality.as_slice().par_iter())
+            .for_each(|(slot, &value)| {
+                *slot = Coefficients::of(value)
+                    .iter_set()
+                    .map(|u| self.eq_batch.as_slice()[u])
+                    .sum();
+            });
+        table
     }
 
     /// The sum the reduction's sumcheck starts from.
@@ -649,9 +702,11 @@ impl<EF: TranscriptField + TowerLevel> BitRingSwitch<EF> {
 
 #[cfg(test)]
 mod tests {
+    use alloc::vec::Vec;
+
     use p3_binary_field::{BinaryChallenger, BinaryField16};
     use p3_challenger::HashChallenger;
-    use p3_field::PrimeCharacteristicRing;
+    use p3_field::{Field, PrimeCharacteristicRing};
     use p3_keccak::Keccak256Hash;
     use proptest::prelude::*;
     use rand::rngs::SmallRng;
@@ -720,6 +775,17 @@ mod tests {
         assert_eq!(packing.num_variables(), 3);
     }
 
+    /// The equality table over the kept coordinates, dense over the whole hypercube.
+    ///
+    /// The production path computes the same table without the run of zeros a Boolean
+    /// coordinate puts in it, so this is what every case below checks it against.
+    fn dense_eq_high(reduction: &BitRingSwitch<EF>) -> Poly<EF> {
+        Poly::new_from_point(
+            &reduction.point.as_slice()[..reduction.num_variables()],
+            EF::ONE,
+        )
+    }
+
     #[test]
     fn the_incoming_claim_is_the_witness_at_the_point() {
         // Invariant: what the reduction demands of the claim is the witness's.
@@ -746,7 +812,7 @@ mod tests {
         // Invariant: column `v` is cells `d*w + v` read at `r_high`.
         // Checked column by column, so a failure localises.
         let (reduction, packing, _, _) = fixture(0xB1A, 16);
-        let eq = reduction.eq_high();
+        let eq = dense_eq_high(&reduction);
 
         for (v, &column) in reduction
             .tensor(&packing)
@@ -769,7 +835,7 @@ mod tests {
         //
         //     row u  =  sum_w A_{w,u} * t'(w)
         let (reduction, packing, _, _) = fixture(0x0A5, 16);
-        let eq = reduction.eq_high();
+        let eq = dense_eq_high(&reduction);
 
         for (u, &row) in reduction
             .tensor(&packing)
@@ -796,7 +862,7 @@ mod tests {
         // Built from the challenge here, not read off the stage under test.
         let eq_batch = Poly::<EF>::new_from_point(r_batch.as_slice(), EF::ONE);
 
-        for (w, &value) in reduction.eq_high().as_slice().iter().enumerate() {
+        for (w, &value) in dense_eq_high(&reduction).as_slice().iter().enumerate() {
             let expected: EF = Coefficients::of(value)
                 .iter()
                 .zip(eq_batch.as_slice())
@@ -838,6 +904,7 @@ mod tests {
         //
         // Every other batch-stage test reads the table this stage holds.
         // A stage ignoring the challenge would pass all of them.
+        //
         // That is the forgery with a challenge every prover knows.
         //
         // So the reference here is built from the challenge itself.
@@ -888,7 +955,7 @@ mod tests {
 
             let eq_prime = Poly::<EF>::new_from_point(r_prime.as_slice(), EF::ONE);
             let mut expected = BitTensor::zero();
-            let eq_high = reduction.eq_high();
+            let eq_high = dense_eq_high(&reduction);
             for (&a, &b) in eq_high.as_slice().iter().zip(eq_prime.as_slice()) {
                 expected.add_exterior_product(a, b);
             }
@@ -961,6 +1028,79 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_boolean_prefix_leaves_the_element_and_the_weights_unchanged() {
+        // Invariant: skipping the zeros of the equality table changes no sum.
+        //
+        // A claim about one column of a stacked trace arrives with a Boolean slot address
+        // leading its row point, and that prefix makes the table an indicator:
+        //
+        //     high = (1, 0, z)   ->  eq(high, w) = 0 unless w is 100 or 101
+        //
+        // Fixture state: 2^7 cells, 4 absorbed, so 3 kept variables and 8 elements.
+        //
+        //     prefix 0   ->  the run is all 8, which is the dense case
+        //     prefix 1   ->  4 of 8
+        //     prefix 2   ->  2 of 8
+        //     prefix 3   ->  1 of 8, the whole table an indicator
+        //
+        // The dense reference forms every term, zeros included, and must agree with each.
+        let witness = bits(0xB0015, 16);
+        let packing = BitPacking::<EF>::new(&witness).unwrap();
+        let mut rng = SmallRng::seed_from_u64(0xB0016);
+
+        for prefix in 0..=3usize {
+            for address in 0..1usize << prefix {
+                // Leading coordinates spell the address, highest bit first.
+                let mut coordinates: Vec<EF> = (0..prefix)
+                    .map(|bit| {
+                        if (address >> (prefix - 1 - bit)) & 1 == 1 {
+                            EF::ONE
+                        } else {
+                            EF::ZERO
+                        }
+                    })
+                    .collect();
+                // The rest of the point is ordinary field randomness.
+                coordinates.extend((prefix..7).map(|_| rng.random::<EF>()));
+                let r = Point::new(coordinates);
+
+                let reduction = BitRingSwitch::new(&r).unwrap();
+                let r_batch = Point::<EF>::rand(&mut rng, BitRingSwitch::<EF>::ABSORBED);
+                let batch = reduction.batch(&r_batch).unwrap();
+
+                // The element, against the term-by-term sum over the whole hypercube.
+                let mut expected = BitTensor::zero();
+                for (&weight, &value) in dense_eq_high(&reduction)
+                    .as_slice()
+                    .iter()
+                    .zip(packing.poly().as_slice())
+                {
+                    expected.add_exterior_product(weight, value);
+                }
+                assert_eq!(
+                    reduction.tensor(&packing).unwrap(),
+                    expected,
+                    "prefix {prefix} address {address}"
+                );
+
+                // The weight multilinear, against the same table read subset sum by subset sum.
+                let eq_batch = Poly::<EF>::new_from_point(r_batch.as_slice(), EF::ONE);
+                let weights = batch.weights();
+                assert_eq!(weights.num_variables(), reduction.num_variables());
+                for (w, &value) in dense_eq_high(&reduction).as_slice().iter().enumerate() {
+                    let want: EF = Coefficients::of(value)
+                        .iter()
+                        .zip(eq_batch.as_slice())
+                        .filter(|&(bit, _)| bit)
+                        .map(|(_, &weight)| weight)
+                        .sum();
+                    assert_eq!(weights.as_slice()[w], want, "prefix {prefix} point {w}");
+                }
+            }
+        }
+    }
+
     proptest! {
         #[test]
         fn the_chunked_accumulation_matches_the_term_by_term_sum(seed: u64, log_n in 1usize..6) {
@@ -969,8 +1109,7 @@ mod tests {
             let (reduction, packing, _, _) = fixture(seed, (1 << log_n) * 2);
 
             let mut expected = BitTensor::zero();
-            for (&weight, &value) in reduction
-                .eq_high()
+            for (&weight, &value) in dense_eq_high(&reduction)
                 .as_slice()
                 .iter()
                 .zip(packing.poly().as_slice())
@@ -1023,25 +1162,102 @@ mod tests {
     }
 
     #[test]
-    fn a_tampered_element_breaks_the_reduction() {
+    fn a_tampered_element_is_caught_by_whichever_reading_it_moves() {
         // Invariant: both readings are of the same coefficients.
         //
         //     rows    -> the sum the rounds start from
         //     columns -> the claim they are checked against
         //
-        // Mutation: add one to a row, which moves the sum but not the claim.
+        // A tamper has to survive the column reading before the rounds ever run.
+        // The two cases below are therefore checked separately.
         let witness = bits(0x7A17, 32);
         let packing = BitPacking::<EF>::new(&witness).unwrap();
         let r = Point::<EF>::rand(&mut SmallRng::seed_from_u64(0x7A18), 8);
         let reduction = BitRingSwitch::new(&r).unwrap();
         let claim = embedded(&witness).eval_base(&r);
+        let (honest, _, _) = reduction.prove(&packing, &mut challenger());
 
-        let (mut proof, _, _) = reduction.prove(&packing, &mut challenger());
-        let mut rows = proof.tensor.rows().to_vec();
+        // Case 1: add one to a row.
+        //
+        // One is the first basis coordinate, so this flips entry (3, 0) of the matrix.
+        // That moves column 0 as well, so the column reading moves with it.
+        //
+        // The run stops at the claim check without reaching a single round.
+        let mut flipped = honest.clone();
+        let mut rows = flipped.tensor.rows().to_vec();
         rows[3] += EF::ONE;
-        proof.tensor = BitTensor::try_from(rows).unwrap();
+        flipped.tensor = BitTensor::try_from(rows).unwrap();
 
-        assert!(reduction.verify(&proof, claim, &mut challenger()).is_err());
+        assert_eq!(
+            reduction
+                .verify(&flipped, claim, &mut challenger())
+                .unwrap_err(),
+            BitRingSwitchProofError::ClaimMismatch,
+        );
+
+        // Case 2: a delta the column reading cannot see.
+        //
+        // The claim check weighs the columns by the absorbed coordinates:
+        //
+        //     claim   = sum_v column_v * eq_low[v]
+        //     hidden  when  d_0 * eq_low[0] + d_1 * eq_low[1] = 0
+        //
+        // Over characteristic two that is d_1 = d_0 * eq_low[0] / eq_low[1].
+        // Nothing constrains d_0, so any nonzero value does.
+        //
+        // It comes from a byte pattern, since an integer would reduce modulo two.
+        let eq_low = reduction.eq_low.as_slice();
+        assert_ne!(
+            eq_low[1],
+            EF::ZERO,
+            "the construction divides by this entry"
+        );
+
+        let d_0 = EF::from_le_byte_iter([0x2C, 0x9B].into_iter());
+        let d_1 = d_0 * eq_low[0] * eq_low[1].inverse();
+        assert_ne!(d_0, EF::ZERO);
+
+        // A row list read as columns is the transpose, which is its own inverse.
+        let mut delta_columns = alloc::vec![EF::ZERO; BitTensor::<EF>::DIMENSION];
+        delta_columns[0] = d_0;
+        delta_columns[1] = d_1;
+        let delta = BitTensor::try_from(delta_columns).unwrap().columns();
+
+        let mut hidden = honest.clone();
+        let rows = hidden
+            .tensor
+            .rows()
+            .iter()
+            .zip(&delta)
+            .map(|(&row, &shift)| row + shift)
+            .collect::<Vec<_>>();
+        hidden.tensor = BitTensor::try_from(rows).unwrap();
+
+        // The element genuinely changed, yet its column reading did not.
+        assert_ne!(hidden.tensor, honest.tensor);
+        assert_eq!(
+            reduction.incoming_claim(&hidden.tensor),
+            reduction.incoming_claim(&honest.tensor),
+        );
+
+        // The row reading is what the rounds start from, and that one moved.
+        //
+        // No round rejects on its own.
+        //
+        //     sent      one value of the round polynomial, and its leading coefficient
+        //     derived   the other value, from the running claim, never checked
+        //
+        //     wrong starting sum  ->  survives every round
+        //     closing check       ->  the first place the two sides disagree
+        assert_eq!(
+            reduction
+                .verify(&hidden, claim, &mut challenger())
+                .unwrap_err(),
+            BitRingSwitchProofError::FinalCheck,
+        );
+
+        // The honest element passes the same path, so the rejection is the delta.
+        assert!(reduction.verify(&honest, claim, &mut challenger()).is_ok());
     }
 
     #[test]

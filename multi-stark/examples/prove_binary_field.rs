@@ -84,7 +84,7 @@ fn config(log_height: usize) -> Config {
     let merkle = MerkleMmcs::new(Hash::new(Keccak256Hash), Compress::new(Keccak256Hash), 0);
     let mmcs = Mmcs::for_folding(merkle, &pcs_config);
     Config {
-        pcs: BinaryPcs::new(pcs_config, mmcs.clone(), mmcs),
+        pcs: BinaryPcs::new(pcs_config, mmcs.clone(), mmcs).unwrap(),
     }
 }
 

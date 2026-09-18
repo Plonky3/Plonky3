@@ -8,6 +8,7 @@
 //! [`BinaryPcsConfigError`] and is returned rather than asserted, since the parameters come
 //! from the caller.
 
+use p3_binary_dft::EncodableLevel;
 use p3_binary_field::TowerLevel;
 use p3_security::binary::BinaryPcsRegime;
 use thiserror::Error;
@@ -15,7 +16,15 @@ use thiserror::Error;
 /// Header room the challenger's grinding site reserves above the difficulty.
 ///
 /// The challenger asserts `bits + 8 <= min(F::bits(), 64)`.
-/// The counter is what binds at every level this crate reaches, not the field width.
+///
+/// Which side of that minimum binds depends on the committed alphabet:
+///
+/// ```text
+///     8, 16, 32 bits   ->  the field width binds, so the room is most of it
+///     64, 128 bits     ->  the counter binds, leaving 56 bits of difficulty
+/// ```
+///
+/// At the narrowest encodable level the room is the whole width, so nothing can be ground.
 const POW_HEADER_BITS: usize = 8;
 
 /// Widest grinding counter the challenger samples from.
@@ -42,6 +51,7 @@ pub struct BinaryPcsParams {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BinaryPcsConfig {
     params: BinaryPcsParams,
+    committed_field_bits: usize,
     challenge_field_bits: usize,
     num_variables: usize,
     num_queries: usize,
@@ -110,6 +120,39 @@ pub enum BinaryPcsConfigError {
     /// The derived query count was zero, which would accept any codeword.
     #[error("derived a query count of zero")]
     ZeroQueries,
+
+    /// The schedule was derived for a committed alphabet of a different width.
+    ///
+    /// Every cap the derivation applied is a property of that alphabet.
+    ///
+    /// ```text
+    ///     domain cap    the arity and the rate must fit the alphabet's bit width
+    ///     grind cap     the witness is one element, so its width caps the counter
+    ///     encoding      an encoder exists only at the levels the transform covers
+    /// ```
+    ///
+    /// Reusing the schedule at another width would skip all three.
+    #[error(
+        "the schedule was derived for a {derived}-bit committed alphabet, not a {actual}-bit one"
+    )]
+    CommittedFieldMismatch {
+        /// Width the schedule was derived for.
+        derived: usize,
+        /// Width it is being used at.
+        actual: usize,
+    },
+
+    /// The schedule was derived for a challenge field of a different width.
+    ///
+    /// Every algebraic error is charged against that width.
+    /// A wider schedule reused at a narrower field would report bits it cannot deliver.
+    #[error("the schedule was derived for a {derived}-bit challenge field, not a {actual}-bit one")]
+    ChallengeFieldMismatch {
+        /// Width the schedule was derived for.
+        derived: usize,
+        /// Width it is being used at.
+        actual: usize,
+    },
 }
 
 impl BinaryPcsConfig {
@@ -121,11 +164,20 @@ impl BinaryPcsConfig {
     ///
     /// # Errors
     ///
-    /// Returns a [`BinaryPcsConfigError`] if the codeword length does not fit in a `usize`,
-    /// if the polynomial has no variables, if grinding exceeds what the challenger can witness
-    /// or the security budget, if the target exceeds what the field can deliver, or if the
-    /// derived query count is zero.
-    pub fn try_new<F: TowerLevel, EF: TowerLevel>(
+    /// Returns a [`BinaryPcsConfigError`] in each of these cases.
+    ///
+    /// - The codeword length does not fit in a `usize`.
+    /// - The polynomial has no variables.
+    /// - The codeword is longer than the committed alphabet's additive domain.
+    /// - Grinding exceeds what the challenger can witness.
+    /// - Grinding exceeds the security budget.
+    /// - The target exceeds what the field can deliver.
+    /// - The derived query count is zero.
+    /// - The challenge field is not a width the security model prices.
+    ///
+    /// The domain cap is the one a caller at a narrow alphabet meets first.
+    /// The arity and the rate expansion together must stay within the alphabet's bit width.
+    pub fn try_new<F: EncodableLevel, EF: TowerLevel>(
         num_variables: usize,
         params: BinaryPcsParams,
     ) -> Result<Self, BinaryPcsConfigError> {
@@ -137,7 +189,7 @@ impl BinaryPcsConfig {
     /// Unlike starting with `try_new` and then changing the folding factor, this admits
     /// targets that need exhaustive batched queries to release the query-error reserve.
     /// Returns the same configuration errors as [`Self::try_new`], or an invalid fold factor.
-    pub fn try_new_with_folding<F: TowerLevel, EF: TowerLevel>(
+    pub fn try_new_with_folding<F: EncodableLevel, EF: TowerLevel>(
         num_variables: usize,
         params: BinaryPcsParams,
         log_folding_factor: usize,
@@ -180,6 +232,10 @@ impl BinaryPcsConfig {
         }
 
         // The witness is an element of the committed alphabet, so its width caps the counter.
+        //
+        // The narrowest alphabet a codeword can be encoded over is a byte wide.
+        //
+        // So the width is never below the header room and the difference never underflows.
         let max_pow_bits = F::bits().min(POW_COUNTER_BITS) - POW_HEADER_BITS;
         if params.pow_bits > max_pow_bits {
             return Err(BinaryPcsConfigError::PowBitsExceedWitnessCapacity {
@@ -205,6 +261,7 @@ impl BinaryPcsConfig {
         }
         let config = Self {
             params,
+            committed_field_bits: F::bits(),
             challenge_field_bits: EF::bits(),
             num_variables,
             num_queries,
@@ -336,6 +393,39 @@ impl BinaryPcsConfig {
     #[must_use]
     pub const fn challenge_field_bits(&self) -> usize {
         self.challenge_field_bits
+    }
+
+    /// Bit width of the alphabet this schedule commits its base codeword over.
+    #[must_use]
+    pub const fn committed_field_bits(&self) -> usize {
+        self.committed_field_bits
+    }
+
+    /// Check that this schedule was derived for exactly this pair of levels.
+    ///
+    /// A level is determined by its width, so comparing the two widths identifies the pair.
+    ///
+    /// Passing means every cap the derivation applied was applied to these two levels.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if either width differs from the one the schedule was derived for.
+    pub fn check_alphabets<F: EncodableLevel, EF: TowerLevel>(
+        &self,
+    ) -> Result<(), BinaryPcsConfigError> {
+        if self.committed_field_bits != F::bits() {
+            return Err(BinaryPcsConfigError::CommittedFieldMismatch {
+                derived: self.committed_field_bits,
+                actual: F::bits(),
+            });
+        }
+        if self.challenge_field_bits != EF::bits() {
+            return Err(BinaryPcsConfigError::ChallengeFieldMismatch {
+                derived: self.challenge_field_bits,
+                actual: EF::bits(),
+            });
+        }
+        Ok(())
     }
 
     /// Validated security model for this exact fold and query schedule.

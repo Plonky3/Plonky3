@@ -87,7 +87,8 @@ fn config<M: Clone>(log_height: usize, mmcs: M, log_folding_factor: usize) -> Co
             pcs_config(log_height, log_folding_factor),
             mmcs.clone(),
             mmcs,
-        ),
+        )
+        .unwrap(),
     }
 }
 

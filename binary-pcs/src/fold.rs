@@ -30,11 +30,14 @@
 //!     folded words    one symbol per challenge element,  the wide field
 //! ```
 //!
-//! The first fold of a batch therefore lifts, and every later fold stays wide.
+//! Only the first fold of a batch reads the narrow alphabet, and every later one stays wide.
 //! A narrow alphabet halves the leaves of the largest Merkle tree in the proof.
 //!
 //! The Cantor basis of a level is the leading part of every wider level's own.
-//! So a domain point means the same thing on both sides of that lift.
+//! So a domain point means the same thing at both widths.
+//!
+//! A narrow level also sits in the leading bits of a wider one's representation.
+//! So widening a symbol is a zero-extension, which costs nothing and moves no bit.
 //!
 //! # Two routes
 //!
@@ -52,13 +55,16 @@
 //!
 //! Input and output stay in the tower basis, so the folded codeword is unchanged bit for bit.
 //!
+//! A narrow alphabet widens on the way into that block, so its first fold takes the same route.
+//! No lifted copy of the codeword is ever materialised.
+//!
 //! The other route multiplies in the tower basis, one symbol at a time.
-//! It carries the widths the packed route has no register for, and every lifting fold.
+//! It carries the widths the packed route has no register for.
 
 use alloc::vec;
 use alloc::vec::Vec;
 
-use p3_binary_dft::domain_point;
+use p3_binary_dft::{domain_point, domain_point_steps};
 use p3_binary_field::{
     BinaryField8, BinaryField16, BinaryField32, BinaryField64, BinaryField128, Ghash128,
     TowerLevel, poly_basis,
@@ -123,39 +129,6 @@ where
     beta * (f0 + f1) + f0
 }
 
-/// The exclusive-or step from one output symbol's domain point to the next.
-///
-/// # Algorithm
-///
-/// Output symbol `j` sits at `domain_point(2 * j)`.
-/// That map is `F_2`-linear in the bits of `j`, hence additive over exclusive-or.
-///
-/// Stepping from `j - 1` to `j` flips exactly bits `0 ..= k`, for `k = j.trailing_zeros()`:
-///
-/// ```text
-///     (j - 1) XOR j = 2^(k + 1) - 1
-/// ```
-///
-/// Entry `k` is the sum of the basis vectors those bits select, one place up for the doubling:
-///
-/// ```text
-///     steps[k] = sum_{r <= k} v_{r + 1}
-/// ```
-///
-/// A walk over the symbols therefore evaluates the domain once and adds one entry per step.
-fn pair_steps<F: TowerLevel>(num_pairs: usize) -> Vec<F> {
-    // Symbol indices run below `num_pairs`, so one entry per bit of that count is enough.
-    let levels = num_pairs.next_power_of_two().trailing_zeros() as usize;
-
-    let mut step = F::ZERO;
-    (0..levels)
-        .map(|level| {
-            step += F::cantor_basis(level + 1);
-            step
-        })
-        .collect()
-}
-
 /// Fold one round in the tower basis, widening the codeword into the challenge's field.
 ///
 /// Each task owns a contiguous run of output symbols and the pairs feeding them.
@@ -169,7 +142,12 @@ where
 {
     // A trailing unpaired symbol produces no output, so it is never read.
     let num_pairs = codeword.len() / 2;
-    let steps = pair_steps::<F>(num_pairs);
+
+    // Output symbol `j` sits at `domain_point(2 * j)`.
+    // The walk over those points is the one the transform already owns.
+    // Symbol indices run below the pair count.
+    // So one entry per bit of that count covers every step.
+    let steps = domain_point_steps::<F>(num_pairs.next_power_of_two().trailing_zeros() as usize);
 
     let mut folded = EF::zero_vec(num_pairs);
     folded
@@ -236,8 +214,8 @@ where
 /// One implementation names one route, and the set of them is this crate's route table:
 ///
 /// ```text
-///     alphabet == challenge field   ->  the field's own fastest route
-///     alphabet narrower             ->  one lifting fold, then the field's own route
+///     challenge field has a packed route   ->  that route, symbols widened on the way in
+///     challenge field has none             ->  one widening fold, then that field's route
 /// ```
 ///
 /// Adding a challenge level is one implementation per alphabet it admits.
@@ -268,13 +246,13 @@ impl FoldAlphabet<Self> for BinaryField64 {
 
 impl FoldAlphabet<BinaryField128> for BinaryField64 {
     fn fold_rounds(codeword: &[Self], challenges: &[BinaryField128]) -> Vec<BinaryField128> {
-        fold_rounds_lifting(codeword, challenges)
+        fold_rounds_packed(codeword, challenges)
     }
 }
 
 impl FoldAlphabet<BinaryField128> for BinaryField32 {
     fn fold_rounds(codeword: &[Self], challenges: &[BinaryField128]) -> Vec<BinaryField128> {
-        fold_rounds_lifting(codeword, challenges)
+        fold_rounds_packed(codeword, challenges)
     }
 }
 
@@ -286,7 +264,7 @@ impl FoldAlphabet<BinaryField64> for BinaryField32 {
 
 impl FoldAlphabet<BinaryField128> for BinaryField16 {
     fn fold_rounds(codeword: &[Self], challenges: &[BinaryField128]) -> Vec<BinaryField128> {
-        fold_rounds_lifting(codeword, challenges)
+        fold_rounds_packed(codeword, challenges)
     }
 }
 
@@ -298,7 +276,7 @@ impl FoldAlphabet<BinaryField64> for BinaryField16 {
 
 impl FoldAlphabet<BinaryField128> for BinaryField8 {
     fn fold_rounds(codeword: &[Self], challenges: &[BinaryField128]) -> Vec<BinaryField128> {
-        fold_rounds_lifting(codeword, challenges)
+        fold_rounds_packed(codeword, challenges)
     }
 }
 
@@ -606,12 +584,13 @@ where
 }
 
 /// [`fold_rounds`] over this target's packing.
-fn fold_rounds_packed(
-    codeword: &[BinaryField128],
-    challenges: &[BinaryField128],
-) -> Vec<BinaryField128> {
+fn fold_rounds_packed<F>(codeword: &[F], challenges: &[BinaryField128]) -> Vec<BinaryField128>
+where
+    F: TowerLevel + Sync,
+    F::Repr: Into<u128>,
+{
     let offsets = lane_offsets::<Packed>();
-    fold_rounds::<WIDTH, _>(codeword, challenges, &|src, dst, start, beta, steps| {
+    fold_rounds::<WIDTH, F, _>(codeword, challenges, &|src, dst, start, beta, steps| {
         fold_pairs(src, dst, start, beta, offsets, steps);
     })
 }
@@ -658,12 +637,14 @@ fn fold_rounds_packed(
 /// # Panics
 ///
 /// Panics if there are no challenges.
-fn fold_rounds<const W: usize, K>(
-    codeword: &[BinaryField128],
+fn fold_rounds<const W: usize, F, K>(
+    codeword: &[F],
     challenges: &[BinaryField128],
     kernel: &K,
 ) -> Vec<BinaryField128>
 where
+    F: TowerLevel + Sync,
+    F::Repr: Into<u128>,
     K: Fn(&[u128], &mut [u128], usize, Ghash128, &[Ghash128]) + Sync,
 {
     // With no round to run, every output slot would keep its zero and the fold would return an
@@ -711,8 +692,10 @@ where
                 {
                     let first = task * FOLD_GRAIN + index * block;
 
+                    // A narrower level occupies the leading bits of the wider one.
+                    // So a symbol widens by zero-extending its representation.
                     even.clear();
-                    even.extend(symbols.iter().map(|&symbol| symbol.to_repr()));
+                    even.extend(symbols.iter().map(|&symbol| symbol.to_repr().into()));
                     poly_basis::from_tower_slice(even);
 
                     // Only a round before the last writes here.
@@ -747,16 +730,21 @@ mod tests {
     use core::array;
 
     use p3_binary_dft::{AdditiveNtt, NaiveAdditiveNtt, domain_point};
-    use p3_binary_field::{BinaryField8, BinaryField64, BinaryField128, Ghash128, TowerLevel};
+    use p3_binary_field::{
+        BinaryField8, BinaryField16, BinaryField32, BinaryField64, BinaryField128, Ghash128,
+        TowerLevel,
+    };
     use p3_field::PrimeCharacteristicRing;
     use p3_matrix::dense::RowMajorMatrix;
     use p3_multilinear_util::poly::Poly;
     use proptest::prelude::*;
+    use rand::distr::{Distribution, StandardUniform};
     use rand::rngs::SmallRng;
     use rand::{RngExt, SeedableRng};
 
     use super::{
-        FOLD_GRAIN, WIDTH, fold_codeword, fold_pair, fold_rounds, fold_rounds_scalar, lane_offsets,
+        FOLD_GRAIN, FoldAlphabet, WIDTH, fold_codeword, fold_pair, fold_rounds, fold_rounds_scalar,
+        lane_offsets,
     };
 
     /// Batch arities that reach every clamp of the per-block coset count.
@@ -940,21 +928,31 @@ mod tests {
         }
     }
 
-    /// A narrow codeword folds to what its own embedding into the wide field folds to.
+    /// Fold a narrow codeword and its own embedding, and require the two to agree.
     ///
     /// The reference embeds first and then runs the independent tower reference.
-    /// It shares neither the loop shape nor the alphabet of the route under test.
-    #[test]
-    fn the_lifting_route_matches_the_embedded_wide_fold() {
-        let mut rng = SmallRng::seed_from_u64(0x11F7_1467);
+    /// It shares neither the loop shape nor the arithmetic width of the route under test.
+    ///
+    /// Lengths are capped at the alphabet's own domain, which is what a schedule allows.
+    fn check_folds_like_its_embedding<F>(seed: u64)
+    where
+        F: TowerLevel + Sync + FoldAlphabet<BinaryField128>,
+        BinaryField128: p3_field::ExtensionField<F>,
+        StandardUniform: Distribution<F>,
+    {
+        let mut rng = SmallRng::seed_from_u64(seed);
 
-        for log_len in [1usize, 4, 11, 12] {
-            let narrow: Vec<BinaryField64> = (0..1 << log_len).map(|_| rng.random()).collect();
+        for log_len in [1usize, 4, 8, 11, 12]
+            .into_iter()
+            .filter(|&log_len| log_len <= F::bits())
+        {
+            let narrow: Vec<F> = (0..1 << log_len).map(|_| rng.random::<F>()).collect();
             let embedded: Vec<BinaryField128> =
                 narrow.iter().copied().map(BinaryField128::from).collect();
 
             for arity in ARITIES.into_iter().filter(|&arity| arity <= log_len) {
-                let challenges: Vec<BinaryField128> = (0..arity).map(|_| rng.random()).collect();
+                let challenges: Vec<BinaryField128> =
+                    (0..arity).map(|_| rng.random::<BinaryField128>()).collect();
 
                 let expected = challenges.iter().fold(embedded.clone(), |word, &beta| {
                     fold_codeword_tower_reference(&word, beta)
@@ -962,10 +960,26 @@ mod tests {
                 assert_eq!(
                     super::fold_codeword_batch(&narrow, &challenges),
                     expected,
-                    "log_len={log_len} arity={arity}"
+                    "bits={} log_len={log_len} arity={arity}",
+                    F::bits()
                 );
             }
         }
+    }
+
+    /// Every alphabet the wide challenge field admits takes the packed route.
+    ///
+    /// Widening a symbol is a zero-extension of its representation.
+    /// The packed driver does that on the way into its block, not over a lifted copy.
+    ///
+    /// A level whose leading bits were not the narrower one's would fold elsewhere.
+    /// That is the property each case below pins.
+    #[test]
+    fn every_narrow_alphabet_folds_like_its_embedding() {
+        check_folds_like_its_embedding::<BinaryField8>(0x11F7_1408);
+        check_folds_like_its_embedding::<BinaryField16>(0x11F7_1416);
+        check_folds_like_its_embedding::<BinaryField32>(0x11F7_1432);
+        check_folds_like_its_embedding::<BinaryField64>(0x11F7_1467);
     }
 
     /// One coset's fold agrees with the whole codeword's, at every coset offset.
@@ -999,7 +1013,7 @@ mod tests {
 
         /// Every batch shape, over a narrow alphabet, against the embedded wide reference.
         #[test]
-        fn every_lifting_shape_matches_the_embedded_wide_fold(
+        fn every_narrow_shape_matches_the_embedded_wide_fold(
             (log_len, arity) in (1usize..=12)
                 .prop_flat_map(|log_len| (Just(log_len), 1..=log_len)),
             seed: u64,
@@ -1153,9 +1167,13 @@ mod tests {
         challenges: &[BinaryField128],
     ) -> Vec<BinaryField128> {
         let offsets = lane_offsets::<[Ghash128; W]>();
-        fold_rounds::<W, _>(codeword, challenges, &|src, dst, start, beta, steps| {
-            fold_pairs_model::<W>(src, dst, start, beta, offsets, steps);
-        })
+        fold_rounds::<W, BinaryField128, _>(
+            codeword,
+            challenges,
+            &|src, dst, start, beta, steps| {
+                fold_pairs_model::<W>(src, dst, start, beta, offsets, steps);
+            },
+        )
     }
 
     /// Fold every shape at one packing width and compare against the tower reference.

@@ -550,7 +550,8 @@ mod tests {
                     config,
                     GroupedCodewordMmcs::new(mmcs(), group_size),
                     GroupedCodewordMmcs::new(mmcs(), group_size),
-                );
+                )
+                .unwrap();
                 let mut rng = SmallRng::seed_from_u64(0x6710);
                 let table = Table::rand(&mut rng, 1, num_variables);
                 let witness = SuffixProver::<F, F>::new_witness(vec![table], 0);

@@ -55,10 +55,32 @@ use thiserror::Error;
 /// An implementor is a transparent wrapper over an unsigned integer, or over a block of them.
 /// Every bit pattern of its bytes is a value, so a run has no padding and no invalid state.
 ///
+/// The coordinate count is the size in bits, with nothing left over:
+///
+/// ```text
+///     COORDINATES == 8 * size_of::<Self>()
+/// ```
+///
+/// A value carrying more bytes than that would read past the source of a copy.
 /// On a little-endian target coordinate `j` of a run is bit `j % 8` of its byte `j / 8`.
 pub unsafe trait Coordinates: Copy + Send + Sync + 'static {
     /// Coordinates one value of this type holds.
     const COORDINATES: usize;
+}
+
+// A byte index is a memory offset and a coordinate is a bit of a value.
+// The two orders agree only on a little-endian target, which every copy below rests on.
+const _: () = assert!(
+    cfg!(target_endian = "little"),
+    "a coordinate run's byte view needs a little-endian target"
+);
+
+/// Pin the part of one implementor's contract a constant can state: its two counts agree.
+const fn check_coordinates<A: Coordinates>() {
+    assert!(
+        A::COORDINATES == 8 * size_of::<A>(),
+        "a coordinate run must be exactly the bits of its bytes"
+    );
 }
 
 // SAFETY: each level below wraps an integer it fills, whose bits are its own coordinates.
@@ -106,6 +128,10 @@ where
     A: Coordinates,
     EF: Coordinates,
 {
+    const {
+        check_coordinates::<A>();
+        check_coordinates::<EF>();
+    }
     let coordinates = cells.len() * A::COORDINATES;
     assert_eq!(
         coordinates % EF::COORDINATES,
@@ -115,7 +141,9 @@ where
     let len = coordinates / EF::COORDINATES;
     let mut packed = Vec::<EF>::with_capacity(len);
 
-    // SAFETY: by both contracts each side is a padding-free run of its own coordinates.
+    // SAFETY: each side is a padding-free run of its own coordinates, by both contracts.
+    // The constant block above pins each one's count at exactly the bits of its bytes.
+    //
     // The two cover the same coordinate count, hence the same byte count.
     //
     // Every bit pattern of the destination is a value, so nothing stays uninitialised.
@@ -140,6 +168,10 @@ where
     A: Coordinates,
     EF: Coordinates,
 {
+    const {
+        check_coordinates::<A>();
+        check_coordinates::<EF>();
+    }
     let coordinates = elements.len() * EF::COORDINATES;
     assert_eq!(
         coordinates % A::COORDINATES,
@@ -164,6 +196,8 @@ where
 /// The byte view of a run of cells, which is the same bytes the packing holds.
 #[must_use]
 pub const fn coordinate_bytes<A: Coordinates>(cells: &[A]) -> &[u8] {
+    const { check_coordinates::<A>() }
+
     // SAFETY: by the trait contract the run is exactly this many initialised bytes.
     // It has no padding and no invalid pattern, and every bit pattern of a byte is valid.
     //

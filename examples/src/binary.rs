@@ -108,7 +108,7 @@ pub fn binary_config<const N: usize, Ntt>(
     );
     let mmcs = Mmcs::<N>::for_folding(merkle, &pcs_config);
     Ok(BinaryStarkConfig {
-        pcs: BinaryPcs::with_ntt(pcs_config, mmcs.clone(), mmcs, ntt),
+        pcs: BinaryPcs::with_ntt(pcs_config, mmcs.clone(), mmcs, ntt)?,
     })
 }
 

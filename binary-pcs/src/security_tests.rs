@@ -116,7 +116,7 @@ fn zero_claim_final_codeword_is_bound_before_query_grinding_and_sampling() {
                 .try_with_folding(folding)
                 .unwrap();
                 assert!(config.num_queries() < config.domain_size() >> folding);
-                let pcs = BinaryPcs::new(config, mmcs(), mmcs());
+                let pcs = BinaryPcs::new(config, mmcs(), mmcs()).unwrap();
                 let mut rng = SmallRng::seed_from_u64(935);
                 let witness =
                     SuffixProver::<F, F>::new_witness(vec![Table::rand(&mut rng, 1, 8)], 0);
@@ -224,7 +224,7 @@ fn actual_grinding_matches_the_model_and_follows_alpha_and_every_fold() {
             .unwrap()
             .try_with_folding(folding)
             .unwrap();
-            let pcs = BinaryPcs::new(config, mmcs(), mmcs());
+            let pcs = BinaryPcs::new(config, mmcs(), mmcs()).unwrap();
             let mut rng = SmallRng::seed_from_u64(934);
             let witness = SuffixProver::<F, F>::new_witness(vec![Table::rand(&mut rng, 1, 8)], 0);
             let protocol = OpeningProtocol::new(vec![TableSpec::new(

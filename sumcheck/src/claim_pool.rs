@@ -13,10 +13,11 @@
 //!
 //! One linear equation in the claim values is then always solvable.
 //!
-//! Two things make that order unforgeable here:
+//! Three things make that order unforgeable here:
 //!
 //! - the challenge lives only on the sealed pool, which sealing alone produces
 //! - sealing consumes the open pool, so no claim can be added once it exists
+//! - an open pool cannot be duplicated, so sealing a copy cannot reveal the draw early
 //!
 //! The described transcript says the same thing a second way.
 //! The draw is the last step, after both message steps.
@@ -126,7 +127,9 @@ impl ClaimPoolShape {
 }
 
 /// Claims about one committed polynomial, waiting for the draw that batches them.
-#[derive(Clone, Debug, PartialEq, Eq)]
+///
+/// Deliberately not duplicable: a copy could be sealed to learn the draw early.
+#[derive(Debug, PartialEq, Eq)]
 pub struct ClaimPool<EF> {
     /// Variables the committed polynomial has.
     num_variables: usize,
@@ -375,6 +378,15 @@ mod tests {
         pool
     }
 
+    /// The same claims in the same order, in a pool of their own.
+    fn rebuilt(claims: &[(Point<EF>, EF)], num_variables: usize) -> ClaimPool<EF> {
+        let mut pool = ClaimPool::new(num_variables);
+        for (point, value) in claims {
+            pool.deposit(point.clone(), *value).unwrap();
+        }
+        pool
+    }
+
     #[test]
     fn the_weights_are_the_distinct_powers_of_one_challenge() {
         // Invariant: weight `i` is `alpha^i`, and no two of them coincide.
@@ -429,23 +441,25 @@ mod tests {
         //     perturbed -> another
         //
         // A draw that ignored the values would let a prover choose them afterwards.
-        let base = pool(0xD1FF, 3, 4);
-        let baseline = base.clone().seal(&mut challenger()).challenge();
+        let claims = pool(0xD1FF, 3, 4).claims().to_vec();
+        let baseline = rebuilt(&claims, 3).seal(&mut challenger()).challenge();
 
-        let mut moved = base.clone();
-        moved.claims[2].1 += EF::ONE;
-        assert_ne!(moved.seal(&mut challenger()).challenge(), baseline);
+        let mut moved = claims.clone();
+        moved[2].1 += EF::ONE;
+        assert_ne!(
+            rebuilt(&moved, 3).seal(&mut challenger()).challenge(),
+            baseline
+        );
 
         // A moved point moves it too.
-        let mut shifted = ClaimPool::<EF>::new(3);
-        for (index, (point, value)) in base.claims().iter().enumerate() {
-            let mut coords = point.as_slice().to_vec();
-            if index == 1 {
-                coords[0] += EF::ONE;
-            }
-            shifted.deposit(Point::new(coords), *value).unwrap();
-        }
-        assert_ne!(shifted.seal(&mut challenger()).challenge(), baseline);
+        let mut shifted = claims;
+        let mut coords = shifted[1].0.as_slice().to_vec();
+        coords[0] += EF::ONE;
+        shifted[1].0 = Point::new(coords);
+        assert_ne!(
+            rebuilt(&shifted, 3).seal(&mut challenger()).challenge(),
+            baseline
+        );
     }
 
     #[test]

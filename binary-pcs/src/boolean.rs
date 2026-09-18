@@ -25,11 +25,13 @@
 //!
 //! # One opening, not one per claim
 //!
-//! Several points reduce into one shared claim pool.
-//! The pool seals with a single draw, once every surviving claim is bound.
+//! Every point reduces to a claim about the same packing, at a point of its own.
+//! The commitment answers for all of them in one call, one batch per point.
 //!
-//! The commitment then answers for all of them in one call.
-//! The pool's fold closes them with one equality rather than `k`.
+//! Batching those `k` claims under powers of one challenge is the commitment's own step.
+//! It draws that challenge after all `k` values are bound, and charges it as its own term.
+//!
+//! Each reduction then closes by comparing its surviving value to the one opened.
 //!
 //! # What binds what
 //!
@@ -46,17 +48,16 @@
 //!
 //! # Soundness
 //!
-//! Three errors compose by a union bound.
+//! Two errors compose by a union bound.
 //!
 //! ```text
-//!     commitment   the packed multilinear's own opening budget
+//!     commitment   the packed multilinear's own budget, its k-claim batching included
 //!     reduction    (d_log + 2 l') / |EF| per point
-//!     pool         (k - 1) / |EF| for k claims folded under one challenge
 //! ```
 //!
-//! None of them is subtracted from another.
+//! Neither is subtracted from the other.
 //!
-//! All three come back labelled, so a report says which one is short.
+//! Both come back labelled, so a report says which one is short.
 
 use alloc::vec;
 use alloc::vec::Vec;
@@ -70,14 +71,14 @@ use p3_field::Field;
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
 use p3_security::SecurityTerm;
-use p3_security::multilinear::{bit_ring_switch_term, claim_pool_term};
+use p3_security::multilinear::bit_ring_switch_term;
 use p3_sumcheck::layout::{Layout, SuffixProver};
 use p3_sumcheck::ring_switch::bits::{
     BitPacking, BitRingSwitch, BitRingSwitchProof, BitRingSwitchProofError,
 };
 use p3_sumcheck::{
-    ClaimPool, ClaimPoolError, OpeningBatch, OpeningProtocol, PrescribedOpeningSecurity,
-    PrescribedPointPcs, TableShape, TableSpec,
+    OpeningBatch, OpeningProtocol, PrescribedOpeningSecurity, PrescribedPointPcs, TableShape,
+    TableSpec,
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -85,7 +86,7 @@ use thiserror::Error;
 use crate::error::BinaryPcsError;
 use crate::fold::FoldAlphabet;
 use crate::packing::{Coordinates, PackError, PackedStack};
-use crate::params::BinaryPcsConfig;
+use crate::params::{BinaryPcsConfig, BinaryPcsConfigError};
 use crate::pcs::BinaryPcs;
 use crate::proof::BinaryPcsProof;
 use crate::prover::BinaryPcsProverData;
@@ -218,7 +219,7 @@ where
             });
         }
         Ok(Self {
-            inner: BinaryPcs::new(config, mmcs, round_mmcs),
+            inner: BinaryPcs::new(config, mmcs, round_mmcs).map_err(BooleanPcsError::Config)?,
             config,
             num_variables,
         })
@@ -229,7 +230,6 @@ where
         let absorbed = BitRingSwitch::<EF>::ABSORBED;
         num_variables
             .checked_sub(absorbed)
-            .filter(|_| num_variables >= absorbed)
             .ok_or(BooleanPcsError::WitnessTooNarrow {
                 needed: absorbed,
                 actual: num_variables,
@@ -244,7 +244,7 @@ where
         self.num_variables
     }
 
-    /// The opening schedule a pool of this many claims is discharged through.
+    /// The opening schedule this many surviving claims are discharged through.
     ///
     /// One table of one column, opened directly at one point per claim.
     fn protocol(&self, num_claims: usize) -> OpeningProtocol {
@@ -254,15 +254,6 @@ where
                 .map(|_| OpeningBatch::new(vec![0], Vec::new()))
                 .collect(),
         )])
-    }
-
-    /// Soundness cost of folding a pool of this many claims under one challenge.
-    ///
-    /// The commitment charges its own budget separately.
-    /// The two compose by a union bound in whatever protocol holds both.
-    #[must_use]
-    pub fn batching_security(num_claims: usize) -> SecurityTerm {
-        claim_pool_term(num_claims, EF::bits())
     }
 
     /// Soundness cost of reducing this many bit claims to claims about the packing.
@@ -281,13 +272,14 @@ where
     /// Every labelled algebraic error one opening of this many points charges.
     ///
     /// ```text
-    ///     commitment   the packed multilinear's own opening budget
+    ///     commitment   the packed multilinear's own budget, its k-claim batching included
     ///     reduction    one bit ring switch per point
-    ///     pool         one fold closing every surviving claim at once
     /// ```
     ///
-    /// The three are independent draws, so a caller composes them by a union bound.
+    /// The commitment prices batching its own `k` claims under powers of one challenge.
+    /// Each surviving claim is then closed by an equality, which carries no error.
     ///
+    /// The two are independent draws, so a caller composes them by a union bound.
     /// Nothing here covers hash or transcript collisions, which the caller supplies.
     #[must_use]
     pub fn opening_security(&self, num_claims: usize) -> PrescribedOpeningSecurity {
@@ -295,7 +287,6 @@ where
             terms: vec![
                 self.config.security_regime().opening_term(num_claims),
                 self.reduction_security(num_claims),
-                Self::batching_security(num_claims),
             ],
             // Unique decoding fixes one candidate polynomial at commitment time.
             log2_max_candidates: 0.0,
@@ -319,14 +310,19 @@ where
     }
 
     /// The packed multilinear the commitment holds, read back out of the retained table.
-    fn packing(
-        prover_data: &BinaryPcsProverData<EF, EF, MT>,
-    ) -> Result<BitPacking<EF>, BooleanPcsError<EF, MT::Error>> {
+    ///
+    /// # Panics
+    ///
+    /// Never for a table this scheme committed, since the read-back refuses only these:
+    ///
+    /// ```text
+    ///     sub-byte level   excluded by the encodable bound, which starts at a byte
+    ///     no hypercube     excluded by the layout, whose tables are power-of-two
+    /// ```
+    fn packing(prover_data: &BinaryPcsProverData<EF, EF, MT>) -> BitPacking<EF> {
         let packed = Poly::new(prover_data.table(0).poly(0).as_slice().to_vec());
-        BitPacking::from_packed(packed).map_err(|_| BooleanPcsError::WitnessTooNarrow {
-            needed: BitRingSwitch::<EF>::ABSORBED,
-            actual: 0,
-        })
+        BitPacking::from_packed(packed)
+            .expect("a committed table is a hypercube over a byte-aligned level")
     }
 }
 
@@ -381,10 +377,9 @@ where
         challenger: &mut Challenger,
     ) -> Result<(Vec<EF>, Self::Proof), Self::Error> {
         self.check_points(points)?;
-        let packing = Self::packing(&prover_data)?;
+        let packing = Self::packing(&prover_data);
 
-        // One reduction per point, each leaving its surviving claim in the shared pool.
-        let mut pool = ClaimPool::new(self.inner.num_variables());
+        // One reduction per point, each leaving one claim about the same packing.
         let mut reductions = Vec::with_capacity(points.len());
         let mut values = Vec::with_capacity(points.len());
         let mut surviving_points = Vec::with_capacity(points.len());
@@ -393,19 +388,14 @@ where
             // The element the reduction sends already holds the witness at the point.
             // Read by columns it is the claimed value, so it costs no pass of its own.
             let reduction = BitRingSwitch::new(point).map_err(BooleanPcsError::Reduction)?;
-            let (proof, surviving_point, surviving_value) = reduction.prove(&packing, challenger);
+            let (proof, surviving_point, _) = reduction.prove(&packing, challenger);
 
             values.push(reduction.incoming_claim(&proof.tensor));
-            pool.deposit(surviving_point.clone(), surviving_value)
-                .map_err(BooleanPcsError::Pool)?;
             surviving_points.push(surviving_point);
             reductions.push(proof);
         }
 
-        // Sealing binds every surviving claim, then draws the one challenge.
-        // The verifier seals the same pool, so the draw need not cross the wire.
-        let _sealed = pool.seal(challenger);
-
+        // The surviving values never cross the wire: a verifier recomputes its own.
         // Every surviving point came out of a reduction's rounds, so all are bound already.
         let opening = self
             .inner
@@ -444,20 +434,19 @@ where
         }
 
         // Each reduction turns its claim about the bits into one about the packing.
-        let mut pool = ClaimPool::new(self.inner.num_variables());
         let mut surviving_points = Vec::with_capacity(points.len());
+        let mut surviving_values = Vec::with_capacity(points.len());
         for ((point, &value), sent) in points.iter().zip(values).zip(&proof.reductions) {
             let reduction = BitRingSwitch::new(point).map_err(BooleanPcsError::Reduction)?;
             let (surviving_point, surviving_value) = reduction
                 .verify(sent, value, challenger)
                 .map_err(BooleanPcsError::ReductionProof)?;
-            pool.deposit(surviving_point.clone(), surviving_value)
-                .map_err(BooleanPcsError::Pool)?;
             surviving_points.push(surviving_point);
+            surviving_values.push(surviving_value);
         }
-        let sealed = pool.seal(challenger);
 
         // One commitment opening answers for every surviving point at once.
+        // It pins each opened value to the committed polynomial at that point.
         let evals = self
             .inner
             .verify_at(
@@ -469,14 +458,19 @@ where
             )
             .map_err(BooleanPcsError::Commitment)?;
 
-        // One fold closes the whole pool, rather than one equality per claim.
-        let opened: Option<Vec<EF>> = evals
-            .iter()
-            .map(|batch| batch.current().first().copied())
-            .collect();
-        let opened = opened.ok_or(BooleanPcsError::SurvivingClaim)?;
-        if opened.len() != points.len() || sealed.fold(opened) != sealed.folded_value() {
+        // Each reduction closes against its own opened value.
+        //
+        //     reduction i  ->  t'(r'_i) = s'_i, the claim it left behind
+        //     opening      ->  the value the committed polynomial takes at r'_i
+        //
+        // Folding them under a second challenge would add (k - 1) / |EF| for the same k.
+        if evals.len() != surviving_values.len() {
             return Err(BooleanPcsError::SurvivingClaim);
+        }
+        for (batch, &surviving) in evals.iter().zip(&surviving_values) {
+            if batch.current().first() != Some(&surviving) {
+                return Err(BooleanPcsError::SurvivingClaim);
+            }
         }
 
         Ok(())
@@ -508,6 +502,10 @@ pub enum BooleanPcsError<EF, MmcsError> {
         /// Variables the witness has.
         actual: usize,
     },
+
+    /// The schedule was not derived for the level this commitment runs over.
+    #[error(transparent)]
+    Config(BinaryPcsConfigError),
 
     /// The commitment schedule does not commit the elements the packing holds.
     #[error("the schedule commits {actual} variables, the packing holds {expected}")]
@@ -541,10 +539,6 @@ pub enum BooleanPcsError<EF, MmcsError> {
         /// Reductions the proof carries.
         reductions: usize,
     },
-
-    /// A surviving claim could not join the pool.
-    #[error(transparent)]
-    Pool(ClaimPoolError),
 
     /// The opening point does not name the committed function's variables.
     #[error("the opening point names {actual} variables, expected {expected}")]
@@ -688,10 +682,10 @@ mod tests {
         // Invariant: every surviving claim is discharged by one opening.
         //
         //     - reductions   one per point, each binding its own point
-        //     - pool         every surviving claim, sealed by one draw
-        //     - opening      one, answering for all of them
+        //     - opening      one, carrying one opened value per surviving point
+        //     - closing      one equality per reduction, against its own opened value
         //
-        // The fold is what ties them: one equality over the opened values, not four.
+        // Batching the four claims is the commitment's own step, charged in its own term.
         const LOG_BITS: usize = 13;
         const NUM_POINTS: usize = 4;
 
@@ -741,14 +735,22 @@ mod tests {
             );
         }
 
-        // A pool of four claims is charged its own labelled term.
-        let term = BooleanPcs::<EF, MyMmcs, MyMmcs>::batching_security(NUM_POINTS);
-        // Three is the degree of the difference polynomial four claims give.
+        // Two labelled terms, and no third for a second round of batching.
+        let evidence = pcs.opening_security(NUM_POINTS);
+        let labels: Vec<&str> = evidence.terms.iter().map(|term| term.label).collect();
         assert_eq!(
-            term.bits.bits(),
-            p3_security::claim_pool_error(NUM_POINTS, 128).bits()
+            labels,
+            alloc::vec![
+                p3_security::binary::BINARY_PCS_OPENING_LABEL,
+                p3_security::BIT_RING_SWITCH_LABEL
+            ]
         );
-        assert!(term.bits.bits() > 126.0 && term.bits.bits() < 127.0);
+
+        // Four reductions of seven draws and six rounds each.
+        assert_eq!(
+            evidence.terms[1].bits.bits(),
+            p3_security::bit_ring_switch_error(NUM_POINTS, 7, 6, 128).bits()
+        );
     }
 
     #[test]
@@ -774,42 +776,89 @@ mod tests {
                 &points,
                 &false_values,
                 &proof,
-                &mut challenger(),
+                &mut replayed(&pcs, &commitment),
             )
             .unwrap_err();
         assert!(matches!(err, BooleanPcsError::ReductionProof(_)), "{err:?}");
     }
 
     #[test]
-    fn an_opening_of_another_commitment_is_rejected() {
-        // Invariant: the reduction alone proves nothing about what was committed.
+    fn a_reduction_over_another_witness_leaves_a_claim_the_commitment_does_not_open() {
+        // Invariant: the closing comparison is what ties the reductions to the commitment.
         //
-        // Mutation: keep the reduction, swap the commitment for another witness's.
+        // Mutation: reduce over witness A, open witness B, keep everything else honest.
         //
-        //     reduction  -> a true claim about witness A's packing
-        //     commitment -> witness B's root
+        //     - transcript  A's reduction runs on the sponge that absorbed B's root
+        //     - reduction   replays and accepts, being a true proof about A
+        //     - commitment  accepts, being a true opening of B
+        //     - closing     t'_A(r') != t'_B(r')  ->  the claim does not survive
         //
-        // The surviving claim then answers for the wrong polynomial.
+        // A fresh sponge would split the transcripts at the first draw and pin nothing.
         const LOG_BITS: usize = 13;
 
         let pcs = boolean_pcs(LOG_BITS);
         let point = Point::<EF>::rand(&mut SmallRng::seed_from_u64(0x0A11), LOG_BITS);
+        let points = alloc::vec![point.clone()];
 
-        let points = alloc::vec![point];
+        // Witness A supplies the packing the reduction runs over, B the root and the opening.
+        let (_, data_a) = pcs
+            .commit_bits(&witness(0xAAAA, LOG_BITS), &mut challenger())
+            .unwrap();
+
         let mut chal = challenger();
-        let (_, data) = pcs
-            .commit_bits(&witness(0xAAAA, LOG_BITS), &mut chal)
-            .unwrap();
-        let (values, proof) = pcs.open_at_points(data, &points, &mut chal).unwrap();
-
-        let (other, _) = pcs
-            .commit_bits(&witness(0xBBBB, LOG_BITS), &mut challenger())
+        let (root_b, data_b) = pcs
+            .commit_bits(&witness(0xBBBB, LOG_BITS), &mut chal)
             .unwrap();
 
-        assert!(
-            pcs.verify_at_points(&other, &points, &values, &proof, &mut challenger())
-                .is_err()
-        );
+        // The reduction is a true proof about A, played on B's sponge.
+        let packing_a = BooleanPcs::<EF, MyMmcs, MyMmcs>::packing(&data_a);
+        let reduction = BitRingSwitch::new(&point).unwrap();
+        let (sent, surviving_point, surviving_value) = reduction.prove(&packing_a, &mut chal);
+        let values = alloc::vec![reduction.incoming_claim(&sent.tensor)];
+
+        // The commitment then opens B at the point A's reduction ended on.
+        let opening = pcs
+            .inner
+            .try_open_at(
+                data_b,
+                &pcs.protocol(1),
+                core::slice::from_ref(&surviving_point),
+                &mut chal,
+            )
+            .unwrap();
+
+        // The two claims about the same point disagree, which is what is caught below.
+        assert_ne!(opening.evals[0].current()[0], surviving_value);
+
+        let proof = BooleanProof {
+            reductions: alloc::vec![sent],
+            opening,
+        };
+        let err = pcs
+            .verify_at_points(
+                &root_b,
+                &points,
+                &values,
+                &proof,
+                &mut replayed(&pcs, &root_b),
+            )
+            .unwrap_err();
+        assert!(matches!(err, BooleanPcsError::SurvivingClaim), "{err:?}");
+
+        // B's own reduction at the same point is accepted, so the rejection is the mismatch.
+        let mut honest = challenger();
+        let (root, data) = pcs
+            .commit_bits(&witness(0xBBBB, LOG_BITS), &mut honest)
+            .unwrap();
+        let (honest_values, honest_proof) = pcs.open_at_points(data, &points, &mut honest).unwrap();
+        pcs.verify_at_points(
+            &root,
+            &points,
+            &honest_values,
+            &honest_proof,
+            &mut replayed(&pcs, &root),
+        )
+        .unwrap();
     }
 
     #[test]

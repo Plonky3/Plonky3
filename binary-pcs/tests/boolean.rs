@@ -203,7 +203,10 @@ where
     pcs.verify_at_points(&commitment, &points, &values, &proof, &mut verifier_chal)
         .unwrap_or_else(|error| panic!("{label}: {error:?}"));
 
-    postcard::to_allocvec(&proof).unwrap().len()
+    // Each cell's size, so the grid can be read off a run rather than reconstructed.
+    let bytes = postcard::to_allocvec(&proof).unwrap().len();
+    eprintln!("boolean/merkle_layout/{label}: {bytes} bytes");
+    bytes
 }
 
 #[test]
@@ -223,29 +226,38 @@ fn every_merkle_layout_opens_the_same_committed_bits() {
     //     - a grouped leaf mostly replaces paths the frontier had already merged
     //
     // Neither moves this proof by much, in either direction.
+    //
+    // The plain layout at cap zero is the reference itself, so it is not run twice.
+    // Grouping is run at both caps, because it is the one that meets the frontier.
+    //
+    //     - reference   plain, cap 0
+    //     - plain       cap 4
+    //     - grouped     cap 0 and cap 4
     for log_folding_factor in [1usize, 3] {
         let config = config(LOG_TALL_BITS, log_folding_factor);
         let baseline = tall_opening(config, mmcs(0), mmcs(0), "baseline");
 
+        // A fifth of the baseline is far wider than any measured spread.
+        let bound = baseline / 5;
+
+        let label = format!("arity {log_folding_factor}, cap 4");
+        let plain = tall_opening(config, mmcs(4), mmcs(4), &label);
+        assert!(
+            plain.abs_diff(baseline) < bound,
+            "{label}: {plain} vs {baseline}"
+        );
+
         for cap_height in [0usize, 4] {
-            let label = format!("arity {log_folding_factor}, cap {cap_height}");
-            let plain = tall_opening(config, mmcs(cap_height), mmcs(cap_height), &label);
+            let label = format!("arity {log_folding_factor}, grouped, cap {cap_height}");
             let grouped = tall_opening(
                 config,
                 Grouped::for_folding(mmcs(cap_height), &config),
                 Grouped::for_folding(mmcs(cap_height), &config),
                 &label,
             );
-
-            // A fifth of the baseline is far wider than any measured spread.
-            let bound = baseline / 5;
-            assert!(
-                plain.abs_diff(baseline) < bound,
-                "{label}: {plain} vs {baseline}"
-            );
             assert!(
                 grouped.abs_diff(baseline) < bound,
-                "{label} grouped: {grouped} vs {baseline}"
+                "{label}: {grouped} vs {baseline}"
             );
         }
     }

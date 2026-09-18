@@ -118,6 +118,7 @@ fn pcs() -> MyPcs {
         mmcs(),
         mmcs(),
     )
+    .unwrap()
 }
 
 /// One batch naming every operand column, opened at one prescribed point.

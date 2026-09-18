@@ -90,7 +90,7 @@ pub(crate) fn run_lifecycle(
     )]);
 
     let config = BinaryPcsConfig::try_new::<F, F>(num_variables, params()).unwrap();
-    let pcs = BinaryPcs::new(config, mmcs(), mmcs());
+    let pcs = BinaryPcs::new(config, mmcs(), mmcs()).unwrap();
 
     let mut prover_challenger = challenger();
     let (commitment, prover_data) = pcs.commit(witness, &mut prover_challenger).unwrap();
@@ -135,7 +135,7 @@ mod conformance {
         let witness = SuffixProver::<F, F>::new_witness(vec![table], 0);
 
         let config = BinaryPcsConfig::try_new::<F, F>(NUM_VARIABLES, params()).unwrap();
-        let pcs = BinaryPcs::new(config, mmcs(), mmcs());
+        let pcs = BinaryPcs::new(config, mmcs(), mmcs()).unwrap();
 
         let mut committed = challenger();
         let (commitment, _) = pcs.commit(witness, &mut committed).unwrap();

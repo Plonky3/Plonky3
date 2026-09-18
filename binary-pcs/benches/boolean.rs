@@ -92,7 +92,7 @@ fn boolean_pcs(log_bits: usize) -> BooleanPcs<EF, MyMmcs, MyMmcs> {
 /// The same bits committed with no packing at all.
 fn embedded_pcs(log_bits: usize) -> BinaryPcs<EF, EF, MyMmcs, MyMmcs> {
     let config = BinaryPcsConfig::try_new::<EF, EF>(log_bits, params()).unwrap();
-    BinaryPcs::new(config, mmcs(), mmcs())
+    BinaryPcs::new(config, mmcs(), mmcs()).unwrap()
 }
 
 /// The opening schedule the embedded arm uses: one column, one point.
@@ -204,13 +204,13 @@ fn bench_open(c: &mut Criterion) {
     group.finish();
 }
 
-/// Several points through one claim pool, against one proof per point.
+/// Several points through one commitment opening, against one opening per point.
 ///
 /// Both arms answer for the same four claims, so the times and the sizes compare directly.
-fn bench_pooled(c: &mut Criterion) {
+fn bench_batched(c: &mut Criterion) {
     const NUM_POINTS: usize = 4;
 
-    let mut group = c.benchmark_group("boolean_pooled");
+    let mut group = c.benchmark_group("boolean_batched");
     group.sample_size(10);
     for &log_bits in &LOG_BITS {
         let bits = witness(log_bits);
@@ -223,7 +223,7 @@ fn bench_pooled(c: &mut Criterion) {
         let mut chal = challenger();
         let (_, data) = pcs.commit_bits(&bits, &mut chal).unwrap();
 
-        let (_, pooled) = pcs
+        let (_, batched) = pcs
             .open_at_points(data.clone(), &points, &mut chal.clone())
             .unwrap();
         let separate: usize = points
@@ -240,12 +240,12 @@ fn bench_pooled(c: &mut Criterion) {
             })
             .sum();
         eprintln!(
-            "boolean/pooled_size/{log_bits}: {} bytes vs {separate} separate",
-            postcard::to_allocvec(&pooled).unwrap().len(),
+            "boolean/batched_size/{log_bits}: {} bytes vs {separate} separate",
+            postcard::to_allocvec(&batched).unwrap().len(),
         );
 
         group.bench_with_input(
-            BenchmarkId::new("pooled", log_bits),
+            BenchmarkId::new("batched", log_bits),
             &points,
             |b, points| {
                 b.iter_batched(
@@ -280,5 +280,5 @@ fn bench_pooled(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_commit, bench_open, bench_pooled);
+criterion_group!(benches, bench_commit, bench_open, bench_batched);
 criterion_main!(benches);

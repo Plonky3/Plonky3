@@ -44,15 +44,38 @@ pub const BATCH_LABEL: &str = "batch-combination";
 pub const COLLISION_LABEL: &str = "commitment-collision";
 
 /// A single named soundness contribution, in `−log2(error)` bits.
+///
+/// The label names the error source, which the crate charging it chooses.
+///
+/// A protocol composing two instances of one scheme sees that label twice.
+/// Naming the instance is what the component is for.
 #[derive(Copy, Clone, Debug, PartialEq, Serialize)]
 pub struct SecurityTerm {
+    /// Error source this term charges.
     pub label: &'static str,
+    /// Which of the composing protocol's parts charged it, when there is a choice.
+    pub component: Option<&'static str>,
+    /// The bound itself, in `−log2(error)` bits.
     pub bits: ErrorBits,
 }
 
 impl SecurityTerm {
+    /// A term charged by whatever crate owns the error source.
+    ///
+    /// The composing protocol is the only side that can name a component, so this leaves none.
     pub const fn new(label: &'static str, bits: ErrorBits) -> Self {
-        Self { label, bits }
+        Self {
+            label,
+            component: None,
+            bits,
+        }
+    }
+
+    /// The same term, attributed to one part of the composing protocol.
+    #[must_use]
+    pub const fn in_component(mut self, component: &'static str) -> Self {
+        self.component = Some(component);
+        self
     }
 }
 
