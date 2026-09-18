@@ -217,6 +217,10 @@ macro_rules! make_tests_for_pcs {
 }
 
 mod babybear_fri_pcs {
+    use p3_dft::TwoAdicSubgroupDft;
+    use p3_field::coset::TwoAdicMultiplicativeCoset;
+    use p3_matrix::Matrix;
+
     use super::*;
 
     type Val = BabyBear;
@@ -344,9 +348,6 @@ mod babybear_fri_pcs {
 
     #[test]
     fn extrapolation() {
-        use p3_dft::TwoAdicSubgroupDft;
-        use p3_matrix::Matrix;
-
         let (pcs, _) = get_pcs(1);
         let mut rng = seeded_rng();
 
@@ -375,6 +376,54 @@ mod babybear_fri_pcs {
             .to_row_major_matrix();
 
         assert_eq!(evals, expected);
+    }
+
+    #[test]
+    fn extrapolation_fallback_to_larger_domain_with_different_shift() {
+        let mut rng = seeded_rng();
+
+        let log_degree = 4;
+        let degree = 1 << log_degree;
+        let width = 3;
+
+        for log_blowup in [1, 2, 3] {
+            let (pcs, _) = get_pcs(log_blowup);
+            let trace = RowMajorMatrix::<Val>::rand(&mut rng, degree, width);
+
+            let domain =
+                <MyPcs as Pcs<Challenge, Challenger>>::natural_domain_for_degree(&pcs, degree);
+            let (_, data) =
+                <MyPcs as Pcs<Challenge, Challenger>>::commit(&pcs, [(domain, trace.clone())])
+                    .unwrap();
+
+            // A target domain strictly larger than the committed LDE, with a shift
+            // other than `Val::GENERATOR`, forces the fallback path regardless of
+            // whether it is the domain size or the shift mismatch that trips it.
+            let target_shift = Val::GENERATOR.square();
+            let target_domain =
+                TwoAdicMultiplicativeCoset::new(target_shift, log_degree + log_blowup + 1).unwrap();
+            assert!(target_domain.size() > degree << log_blowup);
+
+            let evals =
+                <MyPcs as UnivariateStarkPcs<Challenge, Challenger>>::get_evaluations_on_domain(
+                    &pcs,
+                    &data,
+                    0,
+                    target_domain,
+                );
+            let evals = evals.to_row_major_matrix();
+
+            let dft = Dft::default();
+            let mut coeffs = dft.idft_batch(trace);
+            coeffs
+                .values
+                .resize(target_domain.size() * width, Val::ZERO);
+            let expected = dft
+                .coset_dft_batch(coeffs, target_shift)
+                .to_row_major_matrix();
+
+            assert_eq!(evals, expected);
+        }
     }
 }
 

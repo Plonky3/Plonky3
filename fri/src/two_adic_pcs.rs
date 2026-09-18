@@ -823,14 +823,21 @@ where
             return lde.split_rows(domain.size()).0.as_cow().bit_reverse_rows();
         }
 
-        // The committed LDE contains bit-reversed evaluations over `gH`.
-        // Un-bit-reverse, coset iDFT to recover coefficients, truncate to
-        // the original polynomial degree, then coset DFT onto the target domain.
+        // The committed LDE contains bit-reversed evaluations over `gH`. Its first
+        // `poly_height` rows are exactly the bit-reversed evaluations over the
+        // order-`poly_height` subgroup `gK` (bit-reversing an index below `poly_height`
+        // within the larger domain equals bit-reversing it within the smaller one and
+        // shifting the result up by `log_blowup` zero bits). Un-bit-reversing that prefix
+        // and taking a `poly_height`-sized coset iDFT therefore recovers the polynomial's
+        // coefficients directly, without touching the rest of the LDE.
         let poly_height = lde.height() >> self.fri.log_blowup;
-        let lde_mat = lde.as_view().bit_reverse_rows().to_row_major_matrix();
+        let lde_mat = lde
+            .split_rows(poly_height)
+            .0
+            .bit_reverse_rows()
+            .to_row_major_matrix();
         let mut coeffs = self.dft.coset_idft_batch(lde_mat, Val::GENERATOR);
         let width = coeffs.width();
-        coeffs.values.truncate(poly_height * width);
         coeffs.values.resize(domain.size() * width, Val::ZERO);
         let result = self
             .dft
