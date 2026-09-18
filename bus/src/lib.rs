@@ -7,6 +7,7 @@ mod builder;
 mod leaf;
 mod plan;
 mod product;
+mod security;
 mod transcript;
 
 pub use builder::{
@@ -22,3 +23,4 @@ pub use product::{
     ProductGkrError, ProductGkrLayerProof, ProductGkrOutput, ProductGkrProof, ProductGkrRootShape,
     ProductGkrShape, ProductGkrShapeError,
 };
+pub use security::bus_security_terms;
