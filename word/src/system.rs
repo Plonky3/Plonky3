@@ -314,3 +314,219 @@ impl<W: Word> ConstraintSystem<W> {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use alloc::vec;
+
+    use super::*;
+    use crate::{ShiftedValue, ValueIndex, Word32, Word64};
+
+    fn public(position: usize) -> ValueIndex {
+        // Test positions remain inside the compact address space.
+        ValueIndex::public(position).expect("test position must fit")
+    }
+
+    fn witness(position: usize) -> ValueIndex {
+        // Test positions remain inside the compact address space.
+        ValueIndex::witness(position).expect("test position must fit")
+    }
+
+    fn word32_operand(position: usize) -> Operand<Word32> {
+        // One committed word forms the complete XOR operand.
+        Operand::single(ShiftedValue::plain(witness(position)))
+    }
+
+    fn word64_operand(position: usize) -> Operand<Word64> {
+        // One committed word forms the complete XOR operand.
+        Operand::single(ShiftedValue::plain(witness(position)))
+    }
+
+    #[test]
+    fn checked_system_accepts_all_relation_families() {
+        // A public word cancels with itself in the zero relation.
+        let public_term = ShiftedValue::plain(public(0));
+        let zero = ZeroConstraint::new(Operand::new(vec![public_term, public_term]));
+
+        // Witness layout: [left, right, and, product_low, product_high].
+        let left = 0xfedc_ba98_7654_3210_u64;
+        let right = 0x1234_5678_9abc_def0_u64;
+        let product = u128::from(left) * u128::from(right);
+        let words = [
+            Word64::new(left),
+            Word64::new(right),
+            Word64::new(left & right),
+            Word64::new(product as u64),
+            Word64::new((product >> 64) as u64),
+        ];
+        let and = AndConstraint::new(word64_operand(0), word64_operand(1), word64_operand(2));
+        let mul = IntegerMulConstraint::new(
+            word64_operand(0),
+            word64_operand(1),
+            word64_operand(3),
+            word64_operand(4),
+        );
+        let system = ConstraintSystem::new(1, 5, vec![zero], vec![and], vec![mul])
+            .expect("every term is in range");
+
+        assert_eq!(system.verify(&[Word64::new(7)], &words), Ok(()));
+    }
+
+    #[test]
+    fn checked_system_rejects_out_of_bounds_terms() {
+        // The only term selects the second word of a one-word witness.
+        let zero = ZeroConstraint::new(word32_operand(1));
+        let error = ConstraintSystem::new(0, 1, vec![zero], vec![], vec![])
+            .expect_err("term exceeds the declared witness");
+
+        assert_eq!(
+            error,
+            SystemError::IndexOutOfBounds {
+                kind: ConstraintKind::Zero,
+                constraint: 0,
+                role: OperandRole::Value,
+                term: 0,
+                segment: Segment::Witness,
+                position: 1,
+                len: 1,
+            }
+        );
+    }
+
+    #[test]
+    fn verifier_rejects_wrong_shape_and_corrupted_output() {
+        // Witness layout: [left, right, and].
+        let relation = AndConstraint::new(word32_operand(0), word32_operand(1), word32_operand(2));
+        let system = ConstraintSystem::new(0, 3, vec![], vec![relation], vec![])
+            .expect("every term is in range");
+
+        // Missing a committed word fails before any relation is read.
+        assert_eq!(
+            system.verify(&[], &[Word32::new(1), Word32::new(1)]),
+            Err(VerificationError::WitnessLength {
+                expected: 3,
+                actual: 2,
+            })
+        );
+
+        // Mutation: claim zero for one AND one.
+        let corrupt = [Word32::new(1), Word32::new(1), Word32::new(0)];
+        assert_eq!(
+            system.verify(&[], &corrupt),
+            Err(VerificationError::Unsatisfied {
+                kind: ConstraintKind::And,
+                constraint: 0,
+            })
+        );
+    }
+
+    #[test]
+    fn verifier_rejects_a_nonzero_zero_operand() {
+        // A direct witness read must vanish to satisfy the relation.
+        let zero = ZeroConstraint::new(word32_operand(0));
+        let system = ConstraintSystem::new(0, 1, vec![zero], vec![], vec![])
+            .expect("the witness term is in range");
+
+        assert_eq!(
+            system.verify(&[], &[Word32::new(1)]),
+            Err(VerificationError::Unsatisfied {
+                kind: ConstraintKind::Zero,
+                constraint: 0,
+            })
+        );
+    }
+
+    #[test]
+    fn validation_reports_public_and_nonlinear_operand_roles() {
+        // Each relation family reports the exact malformed role and segment.
+        let cases = [
+            (
+                vec![ZeroConstraint::new(Operand::single(ShiftedValue::plain(
+                    public(0),
+                )))],
+                vec![],
+                vec![],
+                ConstraintKind::Zero,
+                OperandRole::Value,
+                Segment::Public,
+                0,
+            ),
+            (
+                vec![],
+                vec![AndConstraint::new(
+                    Operand::default(),
+                    word32_operand(1),
+                    Operand::default(),
+                )],
+                vec![],
+                ConstraintKind::And,
+                OperandRole::Right,
+                Segment::Witness,
+                1,
+            ),
+            (
+                vec![],
+                vec![],
+                vec![IntegerMulConstraint::new(
+                    word32_operand(0),
+                    Operand::default(),
+                    Operand::default(),
+                    Operand::default(),
+                )],
+                ConstraintKind::IntegerMul,
+                OperandRole::Left,
+                Segment::Witness,
+                0,
+            ),
+        ];
+
+        for (zero, and, mul, kind, role, segment, position) in cases {
+            let error = ConstraintSystem::<Word32>::new(0, 0, zero, and, mul)
+                .expect_err("the selected segment is empty");
+            assert_eq!(
+                error,
+                SystemError::IndexOutOfBounds {
+                    kind,
+                    constraint: 0,
+                    role,
+                    term: 0,
+                    segment,
+                    position,
+                    len: 0,
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn verifier_rejects_wrong_public_length() {
+        // Exact public shape is checked before relation evaluation.
+        let system = ConstraintSystem::<Word32>::new(1, 0, vec![], vec![], vec![])
+            .expect("the empty relation set is valid");
+
+        assert_eq!(
+            system.verify(&[], &[]),
+            Err(VerificationError::PublicLength {
+                expected: 1,
+                actual: 0,
+            })
+        );
+    }
+
+    #[cfg(target_pointer_width = "64")]
+    #[test]
+    fn segment_lengths_above_u32_are_rejected() {
+        // Length validation precedes allocation and relation traversal.
+        let len = u32::MAX as usize + 1;
+        let error = ConstraintSystem::<Word32>::new(len, 0, vec![], vec![], vec![])
+            .expect_err("the public segment exceeds the compact address space");
+
+        assert_eq!(
+            error,
+            SystemError::SegmentTooLong {
+                segment: Segment::Public,
+                len,
+            }
+        );
+    }
+}

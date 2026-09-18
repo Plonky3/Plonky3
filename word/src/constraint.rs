@@ -236,3 +236,50 @@ impl<W: Word> IntegerMulConstraint<W> {
         sealed::Sealed::wide_mul(left, right) == (low, high)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use alloc::vec;
+
+    use super::*;
+    use crate::{ValueIndex, Word32};
+
+    #[test]
+    fn operand_is_an_xor_sum() {
+        // Repeating one term twice cancels every bit over F_2.
+        let index = ValueIndex::public(0).unwrap();
+        let term = ShiftedValue::plain(index);
+        let operand = Operand::new(vec![term, term]);
+
+        assert_eq!(
+            operand.evaluate(&[Word32::new(u32::MAX)], &[]),
+            Ok(Word32::new(0))
+        );
+    }
+
+    #[test]
+    fn multiplication_checks_both_result_limbs() {
+        // Four committed words represent two factors and two result limbs.
+        let operand =
+            |position| Operand::single(ShiftedValue::plain(ValueIndex::witness(position).unwrap()));
+        let relation = IntegerMulConstraint::new(operand(0), operand(1), operand(2), operand(3));
+
+        // Mutation: preserve the low limb of 2^31 * 2 while corrupting the high limb.
+        let bad_high = [
+            Word32::new(1 << 31),
+            Word32::new(2),
+            Word32::new(0),
+            Word32::new(0),
+        ];
+        assert!(!relation.is_satisfied(&[], &bad_high));
+
+        // Mutation: preserve the high limb of 3 * 5 while corrupting the low limb.
+        let bad_low = [
+            Word32::new(3),
+            Word32::new(5),
+            Word32::new(14),
+            Word32::new(0),
+        ];
+        assert!(!relation.is_satisfied(&[], &bad_low));
+    }
+}

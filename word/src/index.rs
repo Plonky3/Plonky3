@@ -59,3 +59,17 @@ impl ValueIndex {
         self.position
     }
 }
+
+#[cfg(all(test, target_pointer_width = "64"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn positions_above_u32_are_rejected() {
+        // Compact relation addresses are bounded independently of host pointer width.
+        let position = u32::MAX as usize + 1;
+        let error = ValueIndex::public(position).expect_err("position exceeds representation");
+
+        assert_eq!(error, IndexError::PositionTooLarge { position });
+    }
+}

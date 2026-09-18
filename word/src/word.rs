@@ -219,3 +219,42 @@ impl sealed::Sealed for Word64 {
         (Self(product as u64), Self((product >> 64) as u64))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use proptest::prelude::*;
+
+    use super::*;
+
+    proptest! {
+        #[test]
+        fn word32_integer_product_matches_u64(left in any::<u32>(), right in any::<u32>()) {
+            // A 64-bit product contains both 32-bit result limbs.
+            let product = u64::from(left) * u64::from(right);
+            let actual = sealed::Sealed::wide_mul(Word32::new(left), Word32::new(right));
+
+            prop_assert_eq!(
+                actual,
+                (
+                    Word32::new(product as u32),
+                    Word32::new((product >> 32) as u32),
+                )
+            );
+        }
+
+        #[test]
+        fn word64_integer_product_matches_u128(left in any::<u64>(), right in any::<u64>()) {
+            // A 128-bit product contains both 64-bit result limbs.
+            let product = u128::from(left) * u128::from(right);
+            let actual = sealed::Sealed::wide_mul(Word64::new(left), Word64::new(right));
+
+            prop_assert_eq!(
+                actual,
+                (
+                    Word64::new(product as u64),
+                    Word64::new((product >> 64) as u64),
+                )
+            );
+        }
+    }
+}
