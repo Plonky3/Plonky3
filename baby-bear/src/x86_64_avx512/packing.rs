@@ -42,14 +42,15 @@ mod tests {
     #[test]
     fn dot_product_5_carry_cascade_regression() {
         // Group A holds terms 0 to 3, group B holds term 4 alone.
-        // `hi_A` sits above `P`, so the `2^{32} P` fold has to fire before the merge.
+        // Only group A can reach `2^{32} P`, so only group A is folded.
         //
-        // The low halves of the two folded groups sum past `2^{32}`.
-        // Dropping that carry would leave the merged high half one short.
-        //
-        // The merged high half also exceeds `P`, so the final conditional subtract fires too.
-        let lhs = [0x2e279ce6, 0x247900aa, 0x60ce65d9, 0x10da3c26, 0x29a91318];
-        let rhs = [0x01859688, 0x61411115, 0x3a299723, 0x0395a3f0, 0x5deae270];
+        // Every step of the merge is load-bearing here:
+        // - `hi_A = 1.748 P`, so the fold fires,
+        // - unfolded, the merge reaches `1.001 * 2^{64}`, so dropping the fold wraps the lane,
+        // - the low halves sum to `1.535 * 2^{32}`, so the merge carries into the high half,
+        // - the merged high half is `1.135 P`, so the final conditional subtract fires.
+        let lhs = [0x5290bab8, 0x0c0b1e10, 0x4bd2a313, 0x5f6ff18f, 0x55135da6];
+        let rhs = [0x3d4989d9, 0x592aa670, 0x294dad70, 0x34bf6b81, 0x21f21c97];
 
         assert_packed_broadcast_dot_product_matches_scalar::<crate::PackedBabyBearAVX512, 5>(
             lhs, rhs,
@@ -59,17 +60,18 @@ mod tests {
     #[test]
     fn dot_product_6_carry_cascade_regression() {
         // Group A holds terms 0 to 3, group B holds terms 4 and 5.
-        // `hi_A` sits above `P`, so the `2^{32} P` fold has to fire before the merge.
+        // Only group A can reach `2^{32} P`, so only group A is folded.
         //
-        // The low halves of the two folded groups sum past `2^{32}`.
-        // Dropping that carry would leave the merged high half one short.
-        //
-        // The merged high half also exceeds `P`, so the final conditional subtract fires too.
+        // Every step of the merge is load-bearing here:
+        // - `hi_A = 1.545 P`, so the fold fires,
+        // - unfolded, the merge reaches `1.047 * 2^{64}`, so dropping the fold wraps the lane,
+        // - the low halves sum to `1.190 * 2^{32}`, so the merge carries into the high half,
+        // - the merged high half is `1.234 P`, so the final conditional subtract fires.
         let lhs = [
-            0x2acd899d, 0x031fd1a2, 0x564451e5, 0x08ed60e6, 0x66934215, 0x2fd4abce,
+            0x5eb4ed38, 0x68b818ff, 0x1837703b, 0x0b42801d, 0x01714971, 0x581065e2,
         ];
         let rhs = [
-            0x2a37a9a7, 0x0deb7540, 0x40509b8e, 0x07fc1dfd, 0x50fbaf07, 0x335070bf,
+            0x08874da3, 0x18f1da78, 0x58caebf4, 0x2bbbc954, 0x76c55f53, 0x11521b47,
         ];
 
         assert_packed_broadcast_dot_product_matches_scalar::<crate::PackedBabyBearAVX512, 6>(
@@ -80,17 +82,18 @@ mod tests {
     #[test]
     fn dot_product_7_carry_cascade_regression() {
         // Group A holds terms 0 to 3, group B holds terms 4 to 6.
-        // Both `hi_A` and `hi_B` sit above `P`, so both groups have to be folded before the merge.
+        // Both groups can reach `2^{32} P`, so both are folded.
         //
-        // The low halves of the two folded groups sum past `2^{32}`.
-        // Dropping that carry would leave the merged high half one short.
-        //
-        // The merged high half also exceeds `P`, so the final conditional subtract fires too.
+        // Every step of the merge is load-bearing here:
+        // - `hi_A = 1.852 P` and `hi_B = 1.381 P`, so both folds fire,
+        // - dropping either fold alone lets the merge reach `1.047 * 2^{64}`, which wraps,
+        // - the low halves sum to `1.072 * 2^{32}`, so the merge carries into the high half,
+        // - the merged high half is `1.233 P`, so the final conditional subtract fires.
         let lhs = [
-            0x53d4d828, 0x3b9701fe, 0x71060fb5, 0x6701b79a, 0x1e50de98, 0x4f1661d2, 0x28d351c6,
+            0x4f8b34e4, 0x12d0cf75, 0x4b52d2f3, 0x220c1a2d, 0x47e26545, 0x74b2a7b1, 0x5a3b4b76,
         ];
         let rhs = [
-            0x44133c84, 0x38780a45, 0x5fd5ae2e, 0x4b5d10d8, 0x74d80051, 0x4ee1a8a2, 0x6df86de7,
+            0x0b4d55a6, 0x61f3d5c3, 0x0bb5b0f1, 0x61dc79be, 0x1ac4e4ec, 0x3c59bb5c, 0x625fd872,
         ];
 
         assert_packed_broadcast_dot_product_matches_scalar::<crate::PackedBabyBearAVX512, 7>(
@@ -101,19 +104,20 @@ mod tests {
     #[test]
     fn dot_product_8_carry_cascade_regression() {
         // Group A holds terms 0 to 3, group B holds terms 4 to 7.
-        // Both `hi_A` and `hi_B` sit above `P`, so both groups have to be folded before the merge.
+        // Both groups can reach `2^{32} P`, so both are folded.
         //
-        // The low halves of the two folded groups sum past `2^{32}`.
-        // Dropping that carry would leave the merged high half one short.
-        //
-        // The merged high half also exceeds `P`, so the final conditional subtract fires too.
+        // Every step of the merge is load-bearing here:
+        // - `hi_A = 1.509 P` and `hi_B = 1.741 P`, so both folds fire,
+        // - dropping either fold alone lets the merge reach `1.055 * 2^{64}`, which wraps,
+        // - the low halves sum to `1.621 * 2^{32}`, so the merge carries into the high half,
+        // - the merged high half is `1.250 P`, so the final conditional subtract fires.
         let lhs = [
-            0x5f5edeef, 0x01c04ca6, 0x716aabff, 0x05b01a30, 0x3632a95e, 0x1c8ad89a, 0x5aa6c176,
-            0x00e1c21e,
+            0x6e0253e0, 0x1f5c1ba8, 0x2fc501e9, 0x124ece0f, 0x500cdbca, 0x744bbe5c, 0x4dddd284,
+            0x09d3db39,
         ];
         let rhs = [
-            0x150daf83, 0x6d158d9c, 0x5dd86497, 0x00222f3d, 0x6529eaed, 0x26848a0c, 0x2da2806b,
-            0x53e4d5cf,
+            0x1c33716f, 0x597a181f, 0x5123af6d, 0x70c41283, 0x0b58234d, 0x6dc86d54, 0x16afc27a,
+            0x17803123,
         ];
 
         assert_packed_broadcast_dot_product_matches_scalar::<crate::PackedBabyBearAVX512, 8>(

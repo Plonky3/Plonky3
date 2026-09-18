@@ -662,24 +662,25 @@ fn dot_product_4<PMP: PackedMontyParameters, LHS: IntoM256<PMP>, RHS: IntoM256<P
         monty_red_wide_to_canonical::<PMP>(dot_evn, dot_odd)
     }
 }
+
 /// Accumulate the 64-bit products of `K` pairs of inputs in canonical form.
 ///
 /// The returned pair `(evn, odd)` holds one running sum per parity of field-element index.
 /// Each sum is left unreduced in its 64-bit lane.
 ///
 /// Every product is bounded by `(P - 1)^2 < 2^{62}`, so a sum of `K` of them is below `K 2^{62}`.
-/// Four is therefore the largest `K` that stays under `2^{64}`, so `K` must lie in `1..=4`.
+/// Four is therefore the largest `K` that stays under `2^{64}`.
+///
+/// That `1..=4` bound is a compile-time assertion, so any other length fails to build.
 ///
 /// If the inputs are not in canonical form, the result is undefined.
 #[inline(always)]
 #[must_use]
 fn wide_dot<PMP: PackedMontyParameters, LHS: IntoM256<PMP>, RHS: IntoM256<PMP>, const K: usize>(
-    lhs: &[LHS],
-    rhs: &[RHS],
+    lhs: &[LHS; K],
+    rhs: &[RHS; K],
 ) -> (__m256i, __m256i) {
-    debug_assert_eq!(lhs.len(), K);
-    debug_assert_eq!(rhs.len(), K);
-    debug_assert!((1..=4).contains(&K));
+    const { assert!(K >= 1 && K <= 4) }
 
     // Safety: the module is cfg-gated on `target_feature = "avx2"`.
     // Every intrinsic below is an AVX2 integer operation available under that gate.
@@ -737,8 +738,8 @@ fn wide_dot<PMP: PackedMontyParameters, LHS: IntoM256<PMP>, RHS: IntoM256<PMP>, 
 /// That holds for any sum of at most four products, since `4P^2 < 2 * 2^{32} P`.
 /// The output is `C` when `c_hi < P` and `C - 2^{32} P` otherwise, so it is below `2^{32} P`.
 ///
-/// This is the `C'` adjustment of [`dot_product_4`], applied to the wide accumulator in place.
-/// It changes the Montgomery result by a multiple of `P` only.
+/// Removing a multiple of `2^{32} P` shifts the Montgomery result by a multiple of `P`.
+/// So the reduced field element is unchanged.
 ///
 /// The low half is untouched, so the quotient `Q = mu c_lo mod 2^{32}` is unaffected.
 /// Folding both groups before merging them is what keeps the merged sum inside `2^{64}`.
@@ -811,21 +812,24 @@ fn dot_product_5<PMP: PackedMontyParameters, LHS: IntoM256<PMP>, RHS: IntoM256<P
     // So we accumulate two independent groups and merge them before reducing once.
     //
     // Group A takes terms 0 to 3 and is bounded by `4P^2 < 2 * 2^{32} P`.
-    // [`fold_wide`] therefore applies to it and brings it below `2^{32} P`.
+    // The fold therefore applies to it and brings it below `2^{32} P`.
     //
     // Group B is the single term 4, already bounded by `P^2 < 2^{32} P`, so it needs no fold.
     // The merged sum is then below `2 * 2^{32} P < 2^{64}`, using `P < 2^{31}`.
     //
     // A plain 64-bit add carries out of the low halves for free.
-    // The merged high half stays below `2P`, as [`monty_red_wide_to_canonical`] requires.
+    // The merged high half stays below `2P`, which is what the shared tail requires.
     //
     // This costs one Montgomery reduction; `dot_product_4` plus a separate multiply costs two.
 
     // Safety: the module is cfg-gated on `target_feature = "avx2"`.
     // Every intrinsic below is an AVX2 integer operation available under that gate.
     unsafe {
-        let (a_evn, a_odd) = wide_dot::<PMP, _, _, 4>(&lhs[..4], &rhs[..4]);
-        let (b_evn, b_odd) = wide_dot::<PMP, _, _, 1>(&lhs[4..], &rhs[4..]);
+        let (a_evn, a_odd) = wide_dot::<PMP, _, _, 4>(
+            &[lhs[0], lhs[1], lhs[2], lhs[3]],
+            &[rhs[0], rhs[1], rhs[2], rhs[3]],
+        );
+        let (b_evn, b_odd) = wide_dot::<PMP, _, _, 1>(&[lhs[4]], &[rhs[4]]);
 
         let dot_evn = x86_64::_mm256_add_epi64(fold_wide::<PMP>(a_evn), b_evn);
         let dot_odd = x86_64::_mm256_add_epi64(fold_wide::<PMP>(a_odd), b_odd);
@@ -844,7 +848,7 @@ fn dot_product_6<PMP: PackedMontyParameters, LHS: IntoM256<PMP>, RHS: IntoM256<P
     rhs: [RHS; 6],
 ) -> __m256i {
     // Group A takes terms 0 to 3 and is bounded by `4P^2 < 2 * 2^{32} P`.
-    // [`fold_wide`] brings it below `2^{32} P`.
+    // The fold brings it below `2^{32} P`.
     //
     // Group B takes terms 4 and 5, bounded by `2P^2 < 2^{32} P` because `2P < 2^{32}`.
     // So group B needs no fold, and the merged sum stays below `2 * 2^{32} P < 2^{64}`.
@@ -852,8 +856,11 @@ fn dot_product_6<PMP: PackedMontyParameters, LHS: IntoM256<PMP>, RHS: IntoM256<P
     // Safety: the module is cfg-gated on `target_feature = "avx2"`.
     // Every intrinsic below is an AVX2 integer operation available under that gate.
     unsafe {
-        let (a_evn, a_odd) = wide_dot::<PMP, _, _, 4>(&lhs[..4], &rhs[..4]);
-        let (b_evn, b_odd) = wide_dot::<PMP, _, _, 2>(&lhs[4..], &rhs[4..]);
+        let (a_evn, a_odd) = wide_dot::<PMP, _, _, 4>(
+            &[lhs[0], lhs[1], lhs[2], lhs[3]],
+            &[rhs[0], rhs[1], rhs[2], rhs[3]],
+        );
+        let (b_evn, b_odd) = wide_dot::<PMP, _, _, 2>(&[lhs[4], lhs[5]], &[rhs[4], rhs[5]]);
 
         let dot_evn = x86_64::_mm256_add_epi64(fold_wide::<PMP>(a_evn), b_evn);
         let dot_odd = x86_64::_mm256_add_epi64(fold_wide::<PMP>(a_odd), b_odd);
@@ -882,8 +889,12 @@ fn dot_product_7<PMP: PackedMontyParameters, LHS: IntoM256<PMP>, RHS: IntoM256<P
     // Safety: the module is cfg-gated on `target_feature = "avx2"`.
     // Every intrinsic below is an AVX2 integer operation available under that gate.
     unsafe {
-        let (a_evn, a_odd) = wide_dot::<PMP, _, _, 4>(&lhs[..4], &rhs[..4]);
-        let (b_evn, b_odd) = wide_dot::<PMP, _, _, 3>(&lhs[4..], &rhs[4..]);
+        let (a_evn, a_odd) = wide_dot::<PMP, _, _, 4>(
+            &[lhs[0], lhs[1], lhs[2], lhs[3]],
+            &[rhs[0], rhs[1], rhs[2], rhs[3]],
+        );
+        let (b_evn, b_odd) =
+            wide_dot::<PMP, _, _, 3>(&[lhs[4], lhs[5], lhs[6]], &[rhs[4], rhs[5], rhs[6]]);
 
         let dot_evn = x86_64::_mm256_add_epi64(fold_wide::<PMP>(a_evn), fold_wide::<PMP>(b_evn));
         let dot_odd = x86_64::_mm256_add_epi64(fold_wide::<PMP>(a_odd), fold_wide::<PMP>(b_odd));
@@ -902,10 +913,10 @@ fn dot_product_8<PMP: PackedMontyParameters, LHS: IntoM256<PMP>, RHS: IntoM256<P
     rhs: [RHS; 8],
 ) -> __m256i {
     // Both groups take four terms, so both are bounded by `4P^2 < 2 * 2^{32} P`.
-    // [`fold_wide`] brings each of them below `2^{32} P`.
+    // The fold brings each of them below `2^{32} P`.
     //
     // The merged sum is then below `2 * 2^{32} P < 2^{64}`, using `P < 2^{31}`.
-    // The merged high half stays below `2P`, as [`monty_red_wide_to_canonical`] requires.
+    // The merged high half stays below `2P`, which is what the shared tail requires.
     //
     // This is the length `sumcheck` uses for its round tile.
     // It costs one Montgomery reduction where two `dot_product_4` calls plus an add cost two.
@@ -913,8 +924,14 @@ fn dot_product_8<PMP: PackedMontyParameters, LHS: IntoM256<PMP>, RHS: IntoM256<P
     // Safety: the module is cfg-gated on `target_feature = "avx2"`.
     // Every intrinsic below is an AVX2 integer operation available under that gate.
     unsafe {
-        let (a_evn, a_odd) = wide_dot::<PMP, _, _, 4>(&lhs[..4], &rhs[..4]);
-        let (b_evn, b_odd) = wide_dot::<PMP, _, _, 4>(&lhs[4..], &rhs[4..]);
+        let (a_evn, a_odd) = wide_dot::<PMP, _, _, 4>(
+            &[lhs[0], lhs[1], lhs[2], lhs[3]],
+            &[rhs[0], rhs[1], rhs[2], rhs[3]],
+        );
+        let (b_evn, b_odd) = wide_dot::<PMP, _, _, 4>(
+            &[lhs[4], lhs[5], lhs[6], lhs[7]],
+            &[rhs[4], rhs[5], rhs[6], rhs[7]],
+        );
 
         let dot_evn = x86_64::_mm256_add_epi64(fold_wide::<PMP>(a_evn), fold_wide::<PMP>(b_evn));
         let dot_odd = x86_64::_mm256_add_epi64(fold_wide::<PMP>(a_odd), fold_wide::<PMP>(b_odd));
@@ -925,10 +942,12 @@ fn dot_product_8<PMP: PackedMontyParameters, LHS: IntoM256<PMP>, RHS: IntoM256<P
 
 /// A general fast dot product implementation.
 ///
-/// Lengths `2` to `8` each get a dedicated routine that pays a single Montgomery reduction.
-/// Beyond that, the implementation maximises the number of calls to [`dot_product_4`].
+/// Lengths `2`, `4` and `5` to `8` each get a dedicated routine with one Montgomery reduction.
+/// Length `3` adds one product on top of the length two routine, so it pays two.
 ///
+/// Every longer length is cut into as many length four blocks as possible, one reduction each.
 /// The length 64 occurs commonly enough that it gets a custom implementation.
+///
 /// That lets it use a slightly better summation algorithm with lower latency.
 #[inline(always)]
 fn general_dot_product<

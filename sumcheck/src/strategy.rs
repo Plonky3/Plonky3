@@ -30,12 +30,13 @@ const PAR_THRESHOLD: usize = 1 << 14;
 
 /// Tile size for the chunked round-coefficient kernel.
 ///
-/// Monty-31 spells out a single-reduction dot product per tile size, and the set depends on the target:
+/// Monty-31 spells out a single-reduction dot product per tile size.
+/// The set of sizes that get one depends on the target:
 ///
 /// ```text
-///     scalar          2, 3, 4, 5, 6, 7, 8
-///     AVX2, AVX-512   2, 3, 4, 5, 6, 7, 8, 64
-///     NEON            2, 3, 4, 5, 8, 64
+///     scalar          every length
+///     AVX2, AVX-512   2, 4, 5, 6, 7, 8
+///     NEON            2, 3, 4, 5, 8
 /// ```
 ///
 /// So `8` is a single-reduction tile on every target.
@@ -60,7 +61,7 @@ const K: usize = 8;
 ///
 /// Each sum is one dot product over `K` pairs, reduced as late as the target permits.
 /// A binary field folds the modulus once for the whole sum.
-/// A Monty-31 packing folds the modulus once at this tile size on every target (see `K`).
+/// A Monty-31 packing pays one Montgomery reduction at this tile size on every target.
 #[inline(always)]
 fn chunk_round_step<B, A>(e_lo: &[B; K], e_hi: &[B; K], w_lo: &[A; K], w_hi: &[A; K]) -> (A, A)
 where

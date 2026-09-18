@@ -79,7 +79,8 @@ fn bench_packedfield(c: &mut Criterion) {
     benchmark_mul_latency::<<F as Field>::Packing, L_REPS>(c, name);
     benchmark_mul_throughput::<<F as Field>::Packing, REPS>(c, name);
 
-    // Delayed-reduction dot products: `4` is the control, `5` to `8` each fold the modulus once.
+    // Delayed-reduction dot products, with `4` as the control.
+    // Lengths `5` to `8` each pay one Montgomery reduction.
     benchmark_dot_array::<PF, 4>(c, name);
     benchmark_dot_array::<PF, 5>(c, name);
     benchmark_dot_array::<PF, 6>(c, name);

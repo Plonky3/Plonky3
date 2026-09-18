@@ -42,12 +42,13 @@ mod tests {
     #[test]
     fn dot_product_5_carry_cascade_regression() {
         // Group A holds terms 0 to 3, group B holds term 4 alone.
-        // `hi_A` sits above `P`, so the `2^{32} P` fold has to fire before the merge.
+        // Only group A can reach `2^{32} P`, so only group A is folded.
         //
-        // The low halves of the two folded groups sum past `2^{32}`.
-        // Dropping that carry would leave the merged high half one short.
-        //
-        // The merged high half also exceeds `P`, so the final conditional subtract fires too.
+        // Every step of the merge is load-bearing here:
+        // - `hi_A = 1.839 P`, so the fold fires,
+        // - unfolded, the merge reaches `1.137 * 2^{64}`, so dropping the fold wraps the lane,
+        // - the low halves sum to `1.371 * 2^{32}`, so the merge carries into the high half,
+        // - the merged high half is `1.291 P`, so the final conditional subtract fires.
         let lhs = [0x22d2c6b2, 0x7a259561, 0x55cf8e46, 0x4122e41e, 0x594d4489];
         let rhs = [0x46eae60f, 0x6f4e6f17, 0x53368b43, 0x1a46a028, 0x6301613c];
 
@@ -59,12 +60,13 @@ mod tests {
     #[test]
     fn dot_product_6_carry_cascade_regression() {
         // Group A holds terms 0 to 3, group B holds terms 4 and 5.
-        // `hi_A` sits above `P`, so the `2^{32} P` fold has to fire before the merge.
+        // Only group A can reach `2^{32} P`, so only group A is folded.
         //
-        // The low halves of the two folded groups sum past `2^{32}`.
-        // Dropping that carry would leave the merged high half one short.
-        //
-        // The merged high half also exceeds `P`, so the final conditional subtract fires too.
+        // Every step of the merge is load-bearing here:
+        // - `hi_A = 1.467 P`, so the fold fires,
+        // - unfolded, the merge reaches `1.182 * 2^{64}`, so dropping the fold wraps the lane,
+        // - the low halves sum to `1.076 * 2^{32}`, so the merge carries into the high half,
+        // - the merged high half is `1.383 P`, so the final conditional subtract fires.
         let lhs = [
             0x6c77e213, 0x3f84985f, 0x0e56970f, 0x1ed6d461, 0x4056625a, 0x6bb6a75c,
         ];
@@ -80,12 +82,13 @@ mod tests {
     #[test]
     fn dot_product_7_carry_cascade_regression() {
         // Group A holds terms 0 to 3, group B holds terms 4 to 6.
-        // Both `hi_A` and `hi_B` sit above `P`, so both groups have to be folded before the merge.
+        // Both groups can reach `2^{32} P`, so both are folded.
         //
-        // The low halves of the two folded groups sum past `2^{32}`.
-        // Dropping that carry would leave the merged high half one short.
-        //
-        // The merged high half also exceeds `P`, so the final conditional subtract fires too.
+        // Every step of the merge is load-bearing here:
+        // - `hi_A = 1.836 P` and `hi_B = 1.386 P`, so both folds fire,
+        // - dropping either fold alone lets the merge reach `1.102 * 2^{64}`, which wraps,
+        // - the low halves sum to `1.551 * 2^{32}`, so the merge carries into the high half,
+        // - the merged high half is `1.221 P`, so the final conditional subtract fires.
         let lhs = [
             0x70300e0c, 0x2f09af6c, 0x29349e8a, 0x228eb5e4, 0x24ff7987, 0x3d755ac3, 0x14e9a931,
         ];
@@ -101,12 +104,13 @@ mod tests {
     #[test]
     fn dot_product_8_carry_cascade_regression() {
         // Group A holds terms 0 to 3, group B holds terms 4 to 7.
-        // Both `hi_A` and `hi_B` sit above `P`, so both groups have to be folded before the merge.
+        // Both groups can reach `2^{32} P`, so both are folded.
         //
-        // The low halves of the two folded groups sum past `2^{32}`.
-        // Dropping that carry would leave the merged high half one short.
-        //
-        // The merged high half also exceeds `P`, so the final conditional subtract fires too.
+        // Every step of the merge is load-bearing here:
+        // - `hi_A = 1.400 P` and `hi_B = 1.852 P`, so both folds fire,
+        // - dropping either fold alone lets the merge reach `1.117 * 2^{64}`, which wraps,
+        // - the low halves sum to `1.151 * 2^{32}`, so the merge carries into the high half,
+        // - the merged high half is `1.252 P`, so the final conditional subtract fires.
         let lhs = [
             0x1e0bdfbc, 0x43f199e3, 0x6b4e9cd4, 0x380a48bd, 0x6d50f392, 0x2ae9e263, 0x36511dff,
             0x294fd76b,
