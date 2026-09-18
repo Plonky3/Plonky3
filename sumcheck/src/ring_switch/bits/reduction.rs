@@ -46,7 +46,7 @@ const CHUNK: usize = 1 << 1;
 ///
 /// ```text
 ///     t(r) = s        a claim about the bits
-///       ->  one degree-two sumcheck of l' rounds
+///       ->  one degree-two sumcheck of at most l' rounds
 ///     t'(r') = s'     a claim about the packing, which a commitment answers
 /// ```
 ///
@@ -138,7 +138,8 @@ impl<EF: TowerLevel> BitRingSwitch<EF> {
 
     /// Variables the packed polynomial this reduction runs against must have.
     ///
-    /// This is also the number of sumcheck rounds the reduction takes.
+    /// This is the maximum number of sumcheck rounds the reduction takes.
+    /// Each leading Boolean coordinate selects a slot and removes one round.
     pub const fn num_variables(&self) -> usize {
         self.point.num_variables() - Self::ABSORBED
     }
@@ -171,6 +172,29 @@ impl<EF: TowerLevel> BitRingSwitch<EF> {
         })
     }
 
+    /// The leading Boolean coordinates and the address they spell.
+    fn fixed_prefix(&self) -> (usize, usize) {
+        // Read the address from most significant bit to least significant bit.
+        let mut prefix = 0;
+        let mut address = 0usize;
+        for &coordinate in self.high() {
+            // Zero selects the lower half of the remaining evaluation table.
+            if coordinate == EF::ZERO {
+                address <<= 1;
+            // One selects its upper half.
+            } else if coordinate == EF::ONE {
+                address = (address << 1) | 1;
+            // A field challenge needs an ordinary sumcheck round.
+            } else {
+                break;
+            }
+            // Count only coordinates whose values select a half exactly.
+            prefix += 1;
+        }
+        // The pair identifies the selected slot without allocating its equality table.
+        (prefix, address)
+    }
+
     /// Where the equality table over the kept coordinates is nonzero, and its values there.
     ///
     /// # Algorithm
@@ -194,28 +218,43 @@ impl<EF: TowerLevel> BitRingSwitch<EF> {
     ///
     /// # Returns
     ///
-    /// The first element of the run, and the table over it.
-    fn support(&self) -> (usize, Poly<EF>) {
-        // Read the leading Boolean coordinates as the address of the run, highest bit first.
-        //
-        // The equality table is indexed with the first coordinate as the highest bit, so
-        // those coordinates select a run rather than a scattered set.
-        let mut prefix = 0;
-        let mut address = 0usize;
-        for &coordinate in self.high() {
-            if coordinate == EF::ZERO {
-                address <<= 1;
-            } else if coordinate == EF::ONE {
-                address = (address << 1) | 1;
-            } else {
-                break;
-            }
-            prefix += 1;
-        }
+    /// - The number of leading coordinates fixed to bits.
+    /// - The first element of the supported run.
+    /// - The equality table over that run.
+    fn support(&self) -> (usize, usize, Poly<EF>) {
+        // The equality table uses the first coordinate as the most significant index bit.
+        // A Boolean prefix therefore selects one contiguous run.
+        let (prefix, address) = self.fixed_prefix();
 
         // One element of the run per assignment of the coordinates that are left.
         let table = Poly::new_from_point(&self.high()[prefix..], EF::ONE);
-        (address * table.num_evals(), table)
+        (prefix, address * table.num_evals(), table)
+    }
+
+    /// The committed polynomial restricted to the Boolean prefix of the claim.
+    ///
+    /// A leading bit coordinate selects one half without a sumcheck round.
+    /// Repeating that selection leaves exactly the slot the claim addresses.
+    fn restricted_packing(&self, packing: &BitPacking<EF>) -> Poly<EF> {
+        // The support identifies the same contiguous slot in both equality and witness order.
+        let (prefix, address) = self.fixed_prefix();
+        let len = 1usize << (self.num_variables() - prefix);
+        let offset = address * len;
+
+        // Only the selected slot feeds the sumcheck.
+        // This avoids cloning and folding unrelated columns of a stacked trace.
+        Poly::new(packing.poly().as_slice()[offset..offset + len].to_vec())
+    }
+
+    /// Restore the Boolean slot address in front of a point inside that slot.
+    fn restore_prefix(&self, point: Point<EF>) -> Point<EF> {
+        // The prefix is public and fixed by the incoming evaluation point.
+        let (prefix, _) = self.fixed_prefix();
+        let mut coordinates = self.high()[..prefix].to_vec();
+
+        // The random coordinates name the selected slot's remaining variables.
+        coordinates.extend_from_slice(point.as_slice());
+        Point::new(coordinates)
     }
 
     /// `sum_w eq(r_high, w) ⊗ t'(w)`, the element the prover sends.
@@ -253,7 +292,7 @@ impl<EF: TowerLevel> BitRingSwitch<EF> {
         self.check_width(packing.num_variables())?;
 
         // Elements outside the run weigh zero, so leaving them out changes no sum.
-        let (offset, weights) = self.support();
+        let (_, offset, weights) = self.support();
         let values = &packing.poly().as_slice()[offset..offset + weights.num_evals()];
 
         Ok(weights
@@ -331,10 +370,11 @@ impl<EF: TowerLevel> BitRingSwitch<EF> {
     /// The two scalings commute, so either order gives the term.
     /// The alternative sums the element over the hypercube, exponentially.
     fn equality_element(&self, r_prime: &Point<EF>) -> BitTensor<EF> {
+        // Boolean leading coordinates select a committed slot directly.
+        // The equality element therefore spans only the coordinates left inside that slot.
+        let (prefix, _) = self.fixed_prefix();
         let mut element = BitTensor::one();
-        for i in 0..self.num_variables() {
-            let (a, b) = (self.high()[i], r_prime[i]);
-
+        for (&a, &b) in self.high()[prefix..].iter().zip(r_prime.as_slice()) {
             let mut agree = element.clone();
             agree.scale_columns(a);
             agree.scale_rows(b);
@@ -377,17 +417,19 @@ impl<EF: TowerLevel> BitRingSwitchBatch<'_, EF> {
     ///
     /// Prover-side, and the only other place the equality table is built.
     ///
-    /// The sumcheck reads this dense, so every slot exists.
-    /// Only the run the equality table is nonzero on is written, the rest staying zero.
+    /// The Boolean prefix selects one slot before the sumcheck starts.
+    /// The table therefore contains that slot alone, with no zero runs around it.
     pub fn weights(&self) -> Poly<EF>
     where
         EF: Send + Sync,
     {
-        let (offset, equality) = self.reduction.support();
-        let mut table = Poly::zero(self.reduction.num_variables());
+        let (_, _, equality) = self.reduction.support();
+        let mut table = Poly::zero(equality.num_variables());
 
-        // A zero weight has no set coordinate, so its slot would be written zero anyway.
-        table.as_mut_slice()[offset..offset + equality.num_evals()]
+        // Every entry now belongs to the selected slot.
+        // No zero run for another slot is allocated or folded.
+        table
+            .as_mut_slice()
             .par_iter_mut()
             .zip(equality.as_slice().par_iter())
             .for_each(|(slot, &value)| {
@@ -419,7 +461,10 @@ impl<EF: TowerLevel> BitRingSwitchBatch<'_, EF> {
     ///
     /// Returns an error unless the point names the reduction's variables.
     pub fn closing_weight(&self, r_prime: &Point<EF>) -> Result<EF, BitRingSwitchError> {
-        self.reduction.check_width(r_prime.num_variables())?;
+        // The rounds run only over coordinates not fixed by the Boolean slot address.
+        let (prefix, _) = self.reduction.fixed_prefix();
+        self.reduction
+            .check_width(prefix + r_prime.num_variables())?;
         Ok(self.batch_rows(&self.reduction.equality_element(r_prime)))
     }
 
@@ -481,7 +526,7 @@ pub enum BitRingSwitchError {
 pub struct BitRingSwitchProof<EF> {
     /// The tensor element both checks read, by rows and by columns.
     pub tensor: BitTensor<EF>,
-    /// The rounds of the batched degree-two sumcheck.
+    /// The batched degree-two rounds left after any Boolean slot prefix is fixed.
     pub sumcheck: SumcheckData<EF, EF>,
     /// The value of the surviving claim.
     pub final_eval: EF,
@@ -542,7 +587,10 @@ pub enum BitRingSwitchProofError {
 /// # Soundness
 ///
 /// The reduction's own error is `(d_log + 2 l') / |EF|` (eprint 2024/504, Theorem 3.5).
-/// It runs over `d_log` absorbed coordinates and `l'` rounds:
+/// Here `l'` is the number of rounds that actually run after a Boolean prefix is fixed.
+/// Charging the full packed arity is a conservative upper bound.
+///
+/// The two sources are:
 ///
 /// - `d_log / |EF|` from the batching draw that collapses the row claims into one.
 /// - `2 l' / |EF|` for the rounds of degree-two sumcheck.
@@ -555,6 +603,7 @@ impl<EF: TranscriptField + TowerLevel> BitRingSwitch<EF> {
     /// # Returns
     ///
     /// The proof, the point the rounds ended at, and the surviving claim's value.
+    /// Any Boolean slot prefix is restored in front of the random coordinates.
     ///
     /// # Panics
     ///
@@ -568,11 +617,11 @@ impl<EF: TranscriptField + TowerLevel> BitRingSwitch<EF> {
         EF: Send + Sync,
         Challenger: FieldChallenger<EF> + GrindingChallenger<Witness = EF>,
     {
-        let rounds = self.num_variables();
+        let max_rounds = self.num_variables();
         assert_eq!(
             packing.num_variables(),
-            rounds,
-            "the packing must have the {rounds} variables the evaluation point leaves"
+            max_rounds,
+            "the packing must have the {max_rounds} variables the evaluation point leaves"
         );
 
         let tensor = self
@@ -590,11 +639,12 @@ impl<EF: TranscriptField + TowerLevel> BitRingSwitch<EF> {
         let batch = self
             .batch(&r_batch)
             .expect("the draw names the absorbed coordinates by construction");
-        let poly = ProductPolynomial::new_unpacked(
-            VariableOrder::Prefix,
-            packing.poly().clone(),
-            batch.weights(),
-        );
+        // A Boolean prefix is a public slot address.
+        // Restricting to that slot removes one sumcheck round per address bit.
+        let restricted = self.restricted_packing(packing);
+        let rounds = restricted.num_variables();
+        let poly =
+            ProductPolynomial::new_unpacked(VariableOrder::Prefix, restricted, batch.weights());
         let mut prover = SumcheckProver::new(poly, batch.initial_sum(&tensor));
         let mut sumcheck = SumcheckData::default();
 
@@ -614,7 +664,7 @@ impl<EF: TranscriptField + TowerLevel> BitRingSwitch<EF> {
                 sumcheck,
                 final_eval,
             },
-            r_prime,
+            self.restore_prefix(r_prime),
             final_eval,
         )
     }
@@ -653,7 +703,10 @@ impl<EF: TranscriptField + TowerLevel> BitRingSwitch<EF> {
             });
         }
 
-        let rounds = self.num_variables();
+        // The verifier derives the slot restriction from the public incoming point.
+        // Proof data cannot choose how many rounds are expected.
+        let (prefix, _) = self.fixed_prefix();
+        let rounds = self.num_variables() - prefix;
         let shape = BitRingSwitchShape::new(self.point.num_variables());
         let mut transcript =
             BitRingSwitchVerifierTranscript::<Challenger, EF>::new(challenger, shape);
@@ -696,7 +749,7 @@ impl<EF: TranscriptField + TowerLevel> BitRingSwitch<EF> {
             return Err(BitRingSwitchProofError::FinalCheck);
         }
 
-        Ok((r_prime, proof.final_eval))
+        Ok((self.restore_prefix(r_prime), proof.final_eval))
     }
 }
 
@@ -1029,7 +1082,7 @@ mod tests {
     }
 
     #[test]
-    fn a_boolean_prefix_leaves_the_element_and_the_weights_unchanged() {
+    fn a_boolean_prefix_restricts_the_sumcheck_without_changing_the_claim() {
         // Invariant: skipping the zeros of the equality table changes no sum.
         //
         // A claim about one column of a stacked trace arrives with a Boolean slot address
@@ -1061,8 +1114,16 @@ mod tests {
                         }
                     })
                     .collect();
-                // The rest of the point is ordinary field randomness.
-                coordinates.extend((prefix..7).map(|_| rng.random::<EF>()));
+                // The rest of the point uses non-Boolean challenges.
+                // This keeps the intended prefix length exact in every fixture.
+                coordinates.extend((prefix..7).map(|_| {
+                    loop {
+                        let coordinate = rng.random::<EF>();
+                        if coordinate != EF::ZERO && coordinate != EF::ONE {
+                            break coordinate;
+                        }
+                    }
+                }));
                 let r = Point::new(coordinates);
 
                 let reduction = BitRingSwitch::new(&r).unwrap();
@@ -1087,8 +1148,13 @@ mod tests {
                 // The weight multilinear, against the same table read subset sum by subset sum.
                 let eq_batch = Poly::<EF>::new_from_point(r_batch.as_slice(), EF::ONE);
                 let weights = batch.weights();
-                assert_eq!(weights.num_variables(), reduction.num_variables());
-                for (w, &value) in dense_eq_high(&reduction).as_slice().iter().enumerate() {
+                assert_eq!(weights.num_variables(), reduction.num_variables() - prefix);
+
+                // The compact table is the selected run of the dense reference.
+                let len = 1usize << (reduction.num_variables() - prefix);
+                let offset = address * len;
+                let dense = dense_eq_high(&reduction);
+                for (w, &value) in dense.as_slice()[offset..offset + len].iter().enumerate() {
                     let want: EF = Coefficients::of(value)
                         .iter()
                         .zip(eq_batch.as_slice())
@@ -1097,6 +1163,27 @@ mod tests {
                         .sum();
                     assert_eq!(weights.as_slice()[w], want, "prefix {prefix} point {w}");
                 }
+
+                // The full protocol runs only inside the selected slot.
+                // It restores the address before handing the point to the commitment.
+                let claim = embedded(&witness).eval_base(&r);
+                let (proof, surviving_point, surviving_value) =
+                    reduction.prove(&packing, &mut challenger());
+                assert_eq!(
+                    proof.sumcheck.num_rounds(),
+                    reduction.num_variables() - prefix
+                );
+                assert_eq!(
+                    &surviving_point.as_slice()[..prefix],
+                    &r.as_slice()[..prefix]
+                );
+                assert_eq!(surviving_value, packing.poly().eval_base(&surviving_point));
+
+                // The replay derives the same restriction from the incoming point.
+                let (verified_point, verified_value) =
+                    reduction.verify(&proof, claim, &mut challenger()).unwrap();
+                assert_eq!(verified_point, surviving_point);
+                assert_eq!(verified_value, surviving_value);
             }
         }
     }

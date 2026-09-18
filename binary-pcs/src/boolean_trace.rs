@@ -20,6 +20,15 @@
 //!
 //! The planner that assigns the slots is the one the commitment schemes use.
 //!
+//! # Work stays inside the column
+//!
+//! The slot prefix is fixed before the ring-switch sumcheck starts.
+//!
+//! If one element holds `2^d_log` bits, a column folds `2^max(a - d_log, 0)` elements.
+//!
+//! Opening `W` equal-height columns costs `W * 2^max(a - d_log, 0)` field work.
+//! It does not scan the `W`-column stack once per column.
+//!
 //! # Booleanity is still free
 //!
 //! The packing is a bijection between bit strings and the elements a commitment holds.
