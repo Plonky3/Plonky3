@@ -19,7 +19,7 @@ pub(in crate::rounds) type BaseState<'air, 'data> =
     RoundStateBase<'air, 'data, FixtureAir, Tower, Tower>;
 
 /// The challenge every test binds the first variable at.
-fn first_challenge() -> Tower {
+pub(in crate::rounds) fn first_challenge() -> Tower {
     Tower::from_repr(0xF01D_0000_0000_0000_0000_0000_0000_0007)
 }
 
@@ -120,7 +120,7 @@ fn first_rounds(
 }
 
 /// Every later round polynomial of a folded stage, then its openings.
-fn later_rounds(
+pub(in crate::rounds) fn later_rounds(
     mut state: RoundStateExt<'_, '_, FixtureAir, Tower, Tower>,
 ) -> (Vec<Vec<Tower>>, Vec<[Vec<Tower>; 4]>) {
     let tau = state.tau.as_slice().to_vec();

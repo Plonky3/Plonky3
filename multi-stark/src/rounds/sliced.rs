@@ -25,17 +25,20 @@ use alloc::vec::Vec;
 use core::ops::Range;
 
 use p3_air::{Air, BaseAir};
-use p3_field::{ExtensionField, Field, HasSubfield};
+use p3_field::{ExtensionField, Field, HasSubfield, PackedFieldExtension, PackedValue};
 use p3_maybe_rayon::prelude::*;
 use p3_multilinear_util::poly::Poly;
 use p3_sumcheck::layout::Table;
 
-use super::{AirSlot, NodeStep, RoundStateBase, evaluated_nodes, next_row_runs, node_schedule};
+use super::{
+    AirSlot, ExtColumns, InteractionCoupling, NodeStep, RoundStateBase, RoundStateExt,
+    evaluated_nodes, finish_round, next_row_runs, node_schedule,
+};
 use crate::selectors::BoundaryEvals;
 use crate::sliced::{LaneSums, SLICED_LANES, SlicedFolder, SlicedGf4, gf4_coordinates, is_gf4};
 
 /// Rounds a stage evaluates on its planes.
-const SLICED_ROUNDS: usize = 1;
+const SLICED_ROUNDS: usize = 3;
 
 /// Row variables one word's lanes span.
 const LANE_VARIABLES: usize = SLICED_LANES.trailing_zeros() as usize;
@@ -621,9 +624,10 @@ where
             &[],
             self.degree(),
         )?;
+        self.sliced = Some(trace);
 
         // A sliced stage declares no lookup, so it has no lookup group to fill.
-        Some(super::finish_round(
+        Some(finish_round(
             &mut self.constraint_groups,
             &mut self.interaction_groups,
             &self.betas,
@@ -632,6 +636,314 @@ where
             &[],
             self.tau.as_slice()[0],
         ))
+    }
+
+    /// Whether the first round ran on the stage's planes.
+    pub(crate) const fn is_sliced(&self) -> bool {
+        self.sliced.is_some()
+    }
+
+    /// Bind the first variable at `r`, keeping every column on the stage's planes.
+    ///
+    /// The alpha powers, the lookup coefficients, and the selector prefix cross into `R` here.
+    /// The repeat-last tails are computed when the stage leaves its planes.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the first round did not run on the planes, as [`Self::is_sliced`] reports.
+    #[tracing::instrument(skip_all, level = "debug")]
+    pub(crate) fn fold_sliced<R>(mut self, r: EF) -> RoundStateExt<'air, 'data, A, F, EF, R>
+    where
+        R: Field + From<EF>,
+    {
+        let trace = self
+            .sliced
+            .take()
+            .expect("the first round ran on the planes");
+        self.fold_claims(r);
+        let lift = |values: &[EF]| values.iter().map(|&value| R::from(value)).collect();
+        RoundStateExt {
+            public_values: self.public_values,
+            alpha: R::from(self.alpha),
+            alpha_powers: self
+                .alpha_powers
+                .iter()
+                .map(|powers| lift(powers))
+                .collect(),
+            betas: self.betas,
+            constraint_groups: self.constraint_groups,
+            interaction_groups: self.interaction_groups,
+            slots: self.slots,
+            tau: self.tau,
+            round: 1,
+            next_tail: R::zero_vec(trace.width),
+            columns: ExtColumns::Sliced(SlicedColumns {
+                trace,
+                challenges: vec![r],
+            }),
+            coupling: InteractionCoupling {
+                links: self
+                    .coupling
+                    .links
+                    .iter()
+                    .map(|link| link.map(R::from))
+                    .collect(),
+                theta_beta_powers: lift(&self.coupling.theta_beta_powers),
+            },
+            lookup_scale: self.eta,
+            boundary: BoundaryEvals::new(R::from(EF::ONE - r), R::from(r), R::from(EF::ONE - r)),
+        }
+    }
+}
+
+/// A sliced stage's planes and the challenges bound so far.
+pub(super) struct SlicedColumns<EF> {
+    /// The stage's planes, none of whose columns has folded yet.
+    trace: SlicedTrace,
+    /// Every challenge bound so far, first variable first.
+    challenges: Vec<EF>,
+}
+
+impl<EF> SlicedColumns<EF> {
+    /// Number of columns.
+    pub(super) const fn width(&self) -> usize {
+        self.trace.width
+    }
+
+    /// Number of residual rows, one per assignment of the unbound variables.
+    pub(super) const fn num_evals(&self) -> usize {
+        1 << (self.trace.num_vars - self.challenges.len())
+    }
+}
+
+/// Transpose an 8 x 8 bit matrix held one row per byte.
+///
+/// Bit `j` of byte `i` becomes bit `i` of byte `j`.
+#[inline]
+const fn transpose_bytes(mut x: u64) -> u64 {
+    let t = (x ^ (x >> 7)) & 0x00AA_00AA_00AA_00AA;
+    x ^= t ^ (t << 7);
+    let t = (x ^ (x >> 14)) & 0x0000_CCCC_0000_CCCC;
+    x ^= t ^ (t << 14);
+    let t = (x ^ (x >> 28)) & 0x0000_0000_F0F0_F0F0;
+    x ^ t ^ (t << 28)
+}
+
+/// For each lane, the byte whose bit `i` is that lane's bit in `words[i]`, for up to eight words.
+#[inline]
+fn lane_masks(words: &[u64]) -> [u8; SLICED_LANES] {
+    debug_assert!(words.len() <= 8);
+    let mut masks = [0; SLICED_LANES];
+    for (byte, masks) in masks.as_chunks_mut::<8>().0.iter_mut().enumerate() {
+        let rows = words.iter().enumerate().fold(0_u64, |rows, (i, &word)| {
+            rows | (((word >> (8 * byte)) & 0xff) << (8 * i))
+        });
+        masks.copy_from_slice(&transpose_bytes(rows).to_le_bytes());
+    }
+    masks
+}
+
+/// Subset sums of up to eight weights, indexed by the byte of the weights they include.
+fn subset_sums<R: Field>(weights: &[R]) -> Vec<R> {
+    let mut sums = R::zero_vec(1 << weights.len());
+    for mask in 1..sums.len() {
+        sums[mask] = sums[mask & (mask - 1)] + weights[mask.trailing_zeros() as usize];
+    }
+    sums
+}
+
+impl<'air, 'data, A, F, EF, R> RoundStateExt<'air, 'data, A, F, EF, R>
+where
+    F: Field,
+    EF: ExtensionField<F> + From<R>,
+    R: Field + From<EF>,
+{
+    /// Evaluate this round's polynomial on the stage's planes, while they have rounds left.
+    ///
+    /// # Returns
+    ///
+    /// - `Some`: exactly what the scalar and packed kernels return.
+    /// - `None`: the stage is not on its planes, its sliced rounds are spent, or an AIR constant
+    ///   outside `S` poisoned a value. No round group has changed; see [`Self::unslice`].
+    #[tracing::instrument(skip_all, level = "debug")]
+    pub(crate) fn round_poly_sliced<S>(&mut self, eq_suffix: &Poly<EF>) -> Option<Vec<EF>>
+    where
+        S: Field,
+        F: HasSubfield<S>,
+        EF: HasSubfield<S>,
+        A: for<'b> Air<SlicedFolder<'b, F, S, R>>,
+    {
+        let ExtColumns::Sliced(columns) = &self.columns else {
+            return None;
+        };
+        if columns.challenges.len() == columns.trace.rounds {
+            return None;
+        }
+        debug_assert_eq!(columns.challenges.len(), self.round);
+        debug_assert_eq!(eq_suffix.num_evals(), self.num_evals() / 2);
+        let evals = sliced_round::<A, F, EF, S, R>(
+            &columns.trace,
+            &self.slots,
+            &self.public_values,
+            &self.alpha_powers,
+            self.tau.as_slice(),
+            &columns.challenges,
+            self.degree(),
+        )?;
+
+        // A sliced stage declares no lookup, so it has no lookup group to fill.
+        Some(finish_round(
+            &mut self.constraint_groups,
+            &mut self.interaction_groups,
+            &self.betas,
+            self.lookup_scale,
+            &evals,
+            &[],
+            self.tau.as_slice()[self.round],
+        ))
+    }
+
+    /// Bind the next variable at `r` while the stage is on its planes.
+    ///
+    /// # Returns
+    ///
+    /// Whether the stage is on its planes; when it is not, nothing has changed.
+    pub(crate) fn fold_sliced(&mut self, r: EF) -> bool {
+        if !matches!(self.columns, ExtColumns::Sliced(_)) {
+            return false;
+        }
+        self.fold_claims(r);
+        if let ExtColumns::Sliced(columns) = &mut self.columns {
+            columns.challenges.push(r);
+        }
+        self.boundary.apply(R::from(r));
+        self.round += 1;
+        true
+    }
+
+    /// Fold a stage off its planes into scalar columns in `R`, at every challenge bound so far.
+    ///
+    /// Each residual row of a column combines the cells the bound variables range over:
+    ///
+    /// ```text
+    ///     column(x) = sum_b eq(r, b) * cell(b, x)       b in {0, 1}^k
+    /// ```
+    ///
+    /// A cell is `low + high * g`, so each row takes byte-indexed subset sums of `eq(r, .)`,
+    /// one lookup per plane per group of eight `b`. The repeat-last tails read the successor
+    /// planes at the last residual row the same way.
+    ///
+    /// Does nothing when the stage is not on its planes.
+    #[tracing::instrument(skip_all, level = "debug")]
+    pub(crate) fn unslice<S>(&mut self)
+    where
+        S: Field,
+        EF: HasSubfield<S>,
+    {
+        if !matches!(self.columns, ExtColumns::Sliced(_)) {
+            return;
+        }
+        let ExtColumns::Sliced(SlicedColumns { trace, challenges }) =
+            core::mem::replace(&mut self.columns, ExtColumns::Scalar(Vec::new()))
+        else {
+            unreachable!("the columns were just found on their planes")
+        };
+        let generator = R::from(EF::from(S::GENERATOR));
+        let weights = Poly::new_from_point(&challenges, EF::ONE)
+            .as_slice()
+            .iter()
+            .map(|&weight| R::from(weight))
+            .collect::<Vec<_>>();
+        let low_sums = weights.chunks(8).map(subset_sums).collect::<Vec<_>>();
+        let high_sums = low_sums
+            .iter()
+            .map(|sums| sums.iter().map(|&sum| generator * sum).collect::<Vec<_>>())
+            .collect::<Vec<_>>();
+        let corners = weights.len();
+        let words = (trace.cells.len() / trace.width) / corners;
+        let width = trace.width;
+
+        // The value at every residual row of one word, from the corner words of both planes.
+        let fold_word = |planes: &[[u64; 2]], column: usize, word: usize, out: &mut [R]| {
+            let corner_words = |plane: usize| {
+                (0..corners)
+                    .map(|corner| planes[(corner * words + word) * width + column][plane])
+                    .collect::<Vec<_>>()
+            };
+            let (low, high) = (corner_words(0), corner_words(1));
+            out.fill(R::ZERO);
+            for (group, (low, high)) in low.chunks(8).zip(high.chunks(8)).enumerate() {
+                let (low, high) = (lane_masks(low), lane_masks(high));
+                for (value, (&low, &high)) in out.iter_mut().zip(low.iter().zip(&high)) {
+                    *value +=
+                        low_sums[group][usize::from(low)] + high_sums[group][usize::from(high)];
+                }
+            }
+        };
+
+        let scalar = (0..width)
+            .into_par_iter()
+            .map(|column| {
+                let mut values = R::zero_vec(words * SLICED_LANES);
+                for (word, out) in values
+                    .as_chunks_mut::<SLICED_LANES>()
+                    .0
+                    .iter_mut()
+                    .enumerate()
+                {
+                    fold_word(&trace.cells, column, word, out);
+                }
+                Poly::new(values)
+            })
+            .collect();
+
+        // Each tail is the successor column at the last residual row.
+        let mut last = [R::ZERO; SLICED_LANES];
+        for run in next_row_runs(&self.slots) {
+            for column in run {
+                fold_word(&trace.successors, column, words - 1, &mut last);
+                self.next_tail[column] = last[SLICED_LANES - 1];
+            }
+        }
+        self.columns = ExtColumns::Scalar(scalar);
+    }
+}
+
+impl<'air, 'data, A, F, EF> RoundStateExt<'air, 'data, A, F, EF>
+where
+    F: Field,
+    EF: ExtensionField<F>,
+{
+    /// Fold a stage off its planes into the storage the challenge-field kernels read.
+    ///
+    /// The columns pack into lanes while half the residual rows still fill one, as a fold does.
+    pub(crate) fn unslice_packed<S>(&mut self)
+    where
+        S: Field,
+        EF: HasSubfield<S>,
+    {
+        if !matches!(self.columns, ExtColumns::Sliced(_)) {
+            return;
+        }
+        let want_packed = self.num_evals() / 2 >= F::Packing::WIDTH;
+        self.unslice::<S>();
+        if want_packed && let ExtColumns::Scalar(columns) = &self.columns {
+            let width = F::Packing::WIDTH;
+            let packed = columns
+                .par_iter()
+                .map(|column| {
+                    let rows = column.as_slice();
+                    Poly::new(
+                        (0..rows.len() / width)
+                            .map(|group| {
+                                EF::ExtensionPacking::from_ext_fn(|lane| rows[group * width + lane])
+                            })
+                            .collect(),
+                    )
+                })
+                .collect();
+            self.columns = ExtColumns::Packed(packed);
+        }
     }
 }
 

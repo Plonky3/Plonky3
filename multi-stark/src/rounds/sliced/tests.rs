@@ -3,10 +3,14 @@ use alloc::vec::Vec;
 
 use p3_binary_field::{Ghash128, TowerLevel};
 use p3_field::PrimeCharacteristicRing;
+use rand::rngs::SmallRng;
+use rand::{RngExt, SeedableRng};
 
 use super::*;
 use crate::rounds::StageCoupling;
-use crate::rounds::subfield::tests::{link_coupling, no_lookups, with_state};
+use crate::rounds::subfield::tests::{
+    first_challenge, later_rounds, link_coupling, no_lookups, with_state,
+};
 use crate::zerocheck::backend_tests::{FixtureAir, Gf4, Instance, Tower, gf4, outside};
 
 /// The smallest height whose residual half fills a word.
@@ -144,5 +148,111 @@ fn successor_planes_shift_by_one_row_and_repeat_the_last() {
         let bit =
             |planes: &[[u64; 2]], row: usize| (planes[row / SLICED_LANES][0] >> (row % 64)) & 1;
         assert_eq!(bit(&successors, row), bit(&planes, successor), "row {row}");
+    }
+}
+
+/// Every round polynomial of a stage, then its openings.
+type Rounds = (Vec<Vec<Tower>>, Vec<[Vec<Tower>; 4]>);
+
+/// The challenge bound at `round`, the one [`later_rounds`] binds.
+fn challenge(round: usize) -> Tower {
+    if round == 0 {
+        first_challenge()
+    } else {
+        first_challenge() + Tower::from_repr(round as u128)
+    }
+}
+
+/// Every round polynomial and the openings, with the sliced rounds accumulated in `R`.
+///
+/// Also returns how many rounds ran on the planes.
+fn sliced_rounds<R>(instances: &[Instance]) -> (Rounds, usize)
+where
+    R: Field + From<Tower> + p3_field::Algebra<Tower>,
+    Tower: From<R>,
+    FixtureAir: for<'b> Air<SlicedFolder<'b, Tower, Gf4, R>>
+        + for<'b> Air<crate::folder::MultilinearFolder<'b, Tower, R, R>>
+        + for<'b> Air<crate::folder::InteractionMultilinearFolder<'b, Tower, R, R>>,
+{
+    with_state(instances, no_lookups(), |mut state, eq_suffix| {
+        let first = state
+            .round_poly_sliced::<Gf4, R>(eq_suffix)
+            .expect("the stage is sliced");
+        let mut state = state.fold_sliced::<R>(challenge(0));
+        let tau = state.tau.as_slice().to_vec();
+        let mut on_planes = 1;
+        let mut round_polys = vec![first];
+        for round in 1..tau.len() {
+            let eq_suffix = Poly::new_from_point(&tau[round + 1..], Tower::ONE);
+            let round_poly = state.round_poly_sliced::<Gf4>(&eq_suffix).map_or_else(
+                || {
+                    state.unslice::<Gf4>();
+                    state.round_poly_repr(&eq_suffix)
+                },
+                |round_poly| {
+                    on_planes += 1;
+                    round_poly
+                },
+            );
+            round_polys.push(round_poly);
+            if !state.fold_sliced(challenge(round)) {
+                state.fold_repr(challenge(round));
+            }
+        }
+        let openings = state
+            .into_openings()
+            .into_iter()
+            .map(|(_, opening)| {
+                [
+                    opening.local,
+                    opening.next,
+                    opening.preprocessed_local,
+                    opening.preprocessed_next,
+                ]
+            })
+            .collect();
+        ((round_polys, openings), on_planes)
+    })
+}
+
+/// Every round polynomial and the openings through the generic kernels.
+fn generic_rounds(instances: &[Instance]) -> Rounds {
+    with_state(instances, no_lookups(), |mut state, eq_suffix| {
+        let first = state.round_poly(eq_suffix);
+        let (mut round_polys, openings) = later_rounds(state.fold(challenge(0)));
+        round_polys.insert(0, first);
+        (round_polys, openings)
+    })
+}
+
+#[test]
+fn every_round_on_and_off_the_planes_matches_the_generic_kernel() {
+    for (height, expected_on_planes) in [(SHORTEST, 1), (4 * SHORTEST, 3), (64 * SHORTEST, 3)] {
+        let instances = [
+            Instance::honest(FixtureAir::Gate { scale: gf4(3) }, height, 20),
+            Instance::honest(FixtureAir::Pair, height, 21),
+        ];
+        let generic = generic_rounds(&instances);
+        let (tower, tower_on_planes) = sliced_rounds::<Tower>(&instances);
+        assert_eq!(tower_on_planes, expected_on_planes, "{height} rows");
+        assert_eq!(tower, generic, "{height} rows, tower");
+        let (poly_basis, on_planes) = sliced_rounds::<Ghash128>(&instances);
+        assert_eq!(on_planes, expected_on_planes, "{height} rows");
+        assert_eq!(poly_basis, generic, "{height} rows, polynomial basis");
+    }
+}
+
+#[test]
+fn lane_masks_transpose_the_corner_words() {
+    let mut rng = SmallRng::seed_from_u64(22);
+    for corners in 1..=8 {
+        let words = (0..corners).map(|_| rng.random()).collect::<Vec<u64>>();
+        let masks = lane_masks(&words);
+        for (lane, &mask) in masks.iter().enumerate() {
+            let expected = words.iter().enumerate().fold(0_u8, |mask, (i, &word)| {
+                mask | ((((word >> lane) & 1) as u8) << i)
+            });
+            assert_eq!(mask, expected, "lane {lane} of {corners} corners");
+        }
     }
 }

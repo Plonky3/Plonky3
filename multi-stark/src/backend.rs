@@ -145,8 +145,9 @@ where
 ///     later rounds          : as GenericBackend
 /// ```
 ///
-/// When `S` is `GF(4)` and each half of the stage holds at least sixty-four rows, the first round
-/// evaluates the AIR sixty-four rows at a time on bit planes of the trace, see [`crate::sliced`].
+/// When `S` is `GF(4)` and each half of the stage holds at least sixty-four rows, the stage's
+/// first rounds evaluate the AIR sixty-four rows at a time on bit planes of the trace, and its
+/// columns fold into the challenge field only once those rounds are done, see [`crate::sliced`].
 ///
 /// A stage fits `S` when all of these hold:
 ///
@@ -188,7 +189,9 @@ where
         state: RoundStateBase<'air, 'data, A, F, EF>,
         r: EF,
     ) -> RoundStateExt<'air, 'data, A, F, EF> {
-        if state.fits_subfield() {
+        if state.is_sliced() {
+            state.fold_sliced(r)
+        } else if state.fits_subfield() {
             state.fold_subfield::<S>(r)
         } else {
             state.fold(r)
@@ -196,11 +199,16 @@ where
     }
 
     fn round(state: &mut RoundStateExt<'_, '_, A, F, EF>, eq_suffix: &Poly<EF>) -> Vec<EF> {
-        <GenericBackend as private::Dispatch<F, EF, A>>::round(state, eq_suffix)
+        state.round_poly_sliced::<S>(eq_suffix).unwrap_or_else(|| {
+            state.unslice_packed::<S>();
+            <GenericBackend as private::Dispatch<F, EF, A>>::round(state, eq_suffix)
+        })
     }
 
     fn fold(state: &mut RoundStateExt<'_, '_, A, F, EF>, r: EF) {
-        <GenericBackend as private::Dispatch<F, EF, A>>::fold(state, r);
+        if !state.fold_sliced(r) {
+            <GenericBackend as private::Dispatch<F, EF, A>>::fold(state, r);
+        }
     }
 
     fn openings(state: RoundStateExt<'_, '_, A, F, EF>) -> Vec<(usize, AirOpenings<EF>)> {
@@ -212,7 +220,8 @@ where
 /// challenge field.
 ///
 /// ```text
-///     round 0      : as SubfieldBackend<S>, its sixty-four-row sums accumulated in R
+///     round 0      : as SubfieldBackend<S>
+///     sliced rounds: as SubfieldBackend<S>, their sixty-four-row sums accumulated in R
 ///     fold 0       : every column folds straight into R
 ///     later rounds : columns, selectors, and AIR expressions in R, one residual row at a time
 /// ```
@@ -275,7 +284,9 @@ where
                 && EF::from(R::from(EF::GENERATOR)) == EF::GENERATOR,
             "the representation field must embed the trace field through the challenge field"
         );
-        if state.fits_subfield() {
+        if state.is_sliced() {
+            state.fold_sliced::<R>(r)
+        } else if state.fits_subfield() {
             state.fold_subfield_into::<S, R>(r)
         } else {
             state.fold_into::<R>(r)
@@ -283,11 +294,16 @@ where
     }
 
     fn round(state: &mut RoundStateExt<'_, '_, A, F, EF, R>, eq_suffix: &Poly<EF>) -> Vec<EF> {
-        state.round_poly_repr(eq_suffix)
+        state.round_poly_sliced::<S>(eq_suffix).unwrap_or_else(|| {
+            state.unslice::<S>();
+            state.round_poly_repr(eq_suffix)
+        })
     }
 
     fn fold(state: &mut RoundStateExt<'_, '_, A, F, EF, R>, r: EF) {
-        state.fold_repr(r);
+        if !state.fold_sliced(r) {
+            state.fold_repr(r);
+        }
     }
 
     fn openings(state: RoundStateExt<'_, '_, A, F, EF, R>) -> Vec<(usize, AirOpenings<EF>)> {
