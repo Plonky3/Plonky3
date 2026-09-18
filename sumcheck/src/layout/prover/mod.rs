@@ -1025,6 +1025,53 @@ mod tests {
     }
 
     #[test]
+    fn prefix_handoff_narrower_than_one_packed_element() {
+        // Two columns leave one selector variable after preprocessing.
+        let witness =
+            PrefixProver::<F, EF>::new_witness(tables_from_shape(&[(FOLDING, 2)]), FOLDING);
+        let stacked_num_variables = witness.num_variables();
+        assert_eq!(stacked_num_variables, FOLDING + 1);
+
+        // Keep the original polynomial for an independent evaluation.
+        let stacked_poly = witness.poly().clone();
+
+        // Exercise both concrete and virtual claims.
+        let mut prover_challenger = challenger();
+        let mut prover_state = PrefixProver::<F, EF>::from_witness(witness);
+        let batch = OpeningBatch::new(vec![0, 1], Vec::new());
+        let _ = prover_state.eval(0, &batch, &mut prover_challenger);
+        let _ = prover_state.add_virtual_eval(&mut prover_challenger);
+
+        // Fold until only the selector variable remains.
+        let mut preprocessing_data = SumcheckData::<F, EF>::default();
+        let (mut prover, mut prover_randomness) =
+            prover_state.into_sumcheck(&mut preprocessing_data, 0, &mut prover_challenger);
+        let residual = stacked_num_variables - FOLDING;
+        assert_eq!(prover.num_variables(), residual);
+
+        // Bind the scalar residual.
+        let mut residual_data = SumcheckData::<F, EF>::default();
+        prover_randomness.extend(&prover.compute_sumcheck_polynomials(
+            &mut residual_data,
+            &mut prover_challenger,
+            residual,
+            0,
+            None,
+        ));
+
+        // The folded constant must equal direct evaluation at the sampled point.
+        let folded = prover
+            .evals()
+            .as_constant()
+            .expect("all variables were bound");
+        let expected = stacked_poly.eval_base(&prover_randomness);
+        assert_eq!(
+            folded, expected,
+            "the scalar handoff must preserve the original evaluation"
+        );
+    }
+
+    #[test]
     fn roundtrip_non_ascending_polys() {
         run_roundtrip_test::<PrefixProver<F, EF>>(
             PrefixProver::<F, EF>::new_witness(build_tables(), FOLDING),
