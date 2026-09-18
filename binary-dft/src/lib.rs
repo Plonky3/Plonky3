@@ -21,6 +21,7 @@ mod affine;
 mod butterfly;
 mod domain;
 mod encoder;
+mod interleaved;
 #[cfg(any(
     test,
     all(
@@ -34,6 +35,7 @@ mod lanes;
 mod lch;
 mod naive;
 mod poly;
+mod subfield;
 #[cfg(test)]
 pub(crate) mod test_util;
 mod tower;
@@ -42,7 +44,9 @@ mod traits;
 pub use butterfly::ButterflyField;
 pub use domain::*;
 pub use encoder::*;
+pub use interleaved::*;
 pub use lch::*;
 pub use naive::*;
 pub use poly::*;
+pub use subfield::*;
 pub use traits::*;

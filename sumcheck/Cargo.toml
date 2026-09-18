@@ -54,5 +54,9 @@ harness = false
 name = "ring_switch"
 harness = false
 
+[[bench]]
+name = "univariate_skip"
+harness = false
+
 [lints]
 workspace = true

@@ -12,6 +12,21 @@ use p3_util::log2_strict_usize;
 use crate::poly::PolyBasisNtt;
 use crate::traits::AdditiveNtt;
 
+/// The length a message grows to once its coefficients are zero-padded to the target rate.
+///
+/// # Panics
+///
+/// Panics if that length does not fit the address space.
+pub(crate) fn padded_message_len(len: usize, log_inv_rate: usize) -> usize {
+    // A shift amount below the word size still leaves the value itself free to overflow.
+    // Recovering the original length from the shifted one is what proves no bits were lost.
+    u32::try_from(log_inv_rate)
+        .ok()
+        .and_then(|rate| len.checked_shl(rate))
+        .filter(|&padded| padded >> log_inv_rate == len)
+        .expect("codeword length overflows usize")
+}
+
 /// Reed–Solomon over the additive NTT domain.
 ///
 /// The message holds the low-index novel-basis coefficients of each column, so the codeword is
@@ -42,15 +57,8 @@ impl<Ntt: AdditiveNtt<BinaryField128> + Sync> Encoder<BinaryField128>
             return self.ntt.ntt_batch(message);
         }
 
-        let len = message.values.len();
-        let padded_len = u32::try_from(log_inv_rate)
-            .ok()
-            .and_then(|rate| len.checked_shl(rate))
-            // `checked_shl` only rejects a shift amount that is too wide; it does not detect
-            // the value itself overflowing, so recovering `len` from the shifted result is
-            // what actually proves no bits were lost.
-            .filter(|&padded| padded >> log_inv_rate == len)
-            .expect("codeword length overflows usize");
+        // Zero-padding the novel-basis coefficients is what extends the domain.
+        let padded_len = padded_message_len(message.values.len(), log_inv_rate);
         let _ = log2_strict_usize(message.height());
         message.values.resize(padded_len, BinaryField128::ZERO);
         self.ntt.ntt_batch_padded(message, log_inv_rate)
@@ -78,7 +86,7 @@ mod tests {
     use rand::SeedableRng;
     use rand::rngs::SmallRng;
 
-    use super::AdditiveRsEncoder;
+    use super::{AdditiveRsEncoder, padded_message_len};
     use crate::naive::NaiveAdditiveNtt;
     use crate::traits::AdditiveNtt;
 
@@ -159,6 +167,34 @@ mod tests {
     fn padded_encoding_rejects_non_power_of_two_height() {
         let mat = RowMajorMatrix::new(vec![F::ZERO; 12], 4);
         let _ = AdditiveRsEncoder::<F>::default().encode_batch_padded(mat, 1);
+    }
+
+    #[test]
+    fn the_padded_length_is_the_message_length_shifted() {
+        // Fixture state: a rate of 1/8 multiplies the coefficient count by eight.
+        assert_eq!(padded_message_len(48, 3), 384);
+
+        // No added dimension leaves the message length alone.
+        assert_eq!(padded_message_len(48, 0), 48);
+
+        // An empty message stays empty at every rate.
+        assert_eq!(padded_message_len(0, 60), 0);
+    }
+
+    #[test]
+    #[should_panic = "codeword length overflows usize"]
+    fn the_padded_length_refuses_a_shift_past_the_word_size() {
+        // A shift of the whole word width has no result `usize` can hold.
+        let _ = padded_message_len(2, usize::BITS as usize);
+    }
+
+    #[test]
+    #[should_panic = "codeword length overflows usize"]
+    fn the_padded_length_refuses_a_value_that_overflows() {
+        // The shift amount fits the word, and the shifted value does not.
+        //
+        //     1 << (BITS - 1)  shifted once more drops its only set bit
+        let _ = padded_message_len(1 << (usize::BITS - 1), 1);
     }
 
     proptest! {

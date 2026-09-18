@@ -2,6 +2,7 @@
 
 use core::ops::Mul;
 
+use p3_binary_field::poly_basis::HAS_HARDWARE_CLMUL;
 use p3_binary_field::{
     BinaryField2, BinaryField4, BinaryField8, BinaryField16, BinaryField32, BinaryField64,
     BinaryField128, Gf2, Ghash128, TowerLevel,
@@ -149,6 +150,155 @@ where
     }
 }
 
+/// Scale by a one-byte twiddle, or fall through to the full-width kernel.
+///
+/// This is the end of the chain: no byte-aligned subfield is narrower than one byte.
+#[inline]
+fn scale_by_byte<F, const INVERSE: bool>(lo: &mut [F], hi: &mut [F], t: F, width: TwiddleWidth)
+where
+    F: TowerLevel + Mul<BinaryField8, Output = F>,
+{
+    if let TwiddleWidth::Byte(s) = width {
+        typed_butterfly::<F, BinaryField8, INVERSE>(lo, hi, BinaryField8::from_repr(s));
+    } else {
+        packed_butterfly::<F, INVERSE>(lo, hi, t);
+    }
+}
+
+/// Scale by a two-byte twiddle, or hand a narrower one down the chain.
+#[inline]
+fn scale_by_word<F, const INVERSE: bool>(lo: &mut [F], hi: &mut [F], t: F, width: TwiddleWidth)
+where
+    F: TowerLevel + Mul<BinaryField8, Output = F> + Mul<BinaryField16, Output = F>,
+{
+    if let TwiddleWidth::Word(s) = width {
+        typed_butterfly::<F, BinaryField16, INVERSE>(lo, hi, BinaryField16::from_repr(s));
+    } else {
+        scale_by_byte::<F, INVERSE>(lo, hi, t, width);
+    }
+}
+
+/// Scale by a four-byte twiddle, or hand a narrower one down the chain.
+#[inline]
+fn scale_by_dword<F, const INVERSE: bool>(lo: &mut [F], hi: &mut [F], t: F, width: TwiddleWidth)
+where
+    F: TowerLevel
+        + Mul<BinaryField8, Output = F>
+        + Mul<BinaryField16, Output = F>
+        + Mul<BinaryField32, Output = F>,
+{
+    if let TwiddleWidth::DoubleWord(s) = width {
+        typed_butterfly::<F, BinaryField32, INVERSE>(lo, hi, BinaryField32::from_repr(s));
+    } else {
+        scale_by_word::<F, INVERSE>(lo, hi, t, width);
+    }
+}
+
+/// Whether a typed product beats the full-width product at the two widest levels.
+///
+/// - Scaling by a `D`-byte subfield costs one subfield product per coordinate.
+/// - Recursive multiplication triples in cost per doubling of the width.
+/// - The coordinate count only halves, so the narrower subfield always wins.
+///
+/// A carryless-multiply instruction breaks that at the widest two levels.
+/// Only the one-byte coordinates stay ahead of it, being single table lookups.
+///
+/// The field crate makes the same call for the product alone, and this is not the same call.
+/// A typed run walks one element at a time, and the full-width run packs a register of them.
+///
+/// The whole chain is inlined into one kernel.
+/// So carrying the wide levels through it costs the full-width route its own codegen.
+const WIDE_TYPED_PRODUCTS_PAY: bool = !HAS_HARDWARE_CLMUL;
+
+/// A tower level together with the typed subfield products its own width admits.
+///
+/// A typed product needs the subfield to be strictly narrower than the level.
+/// So the narrow levels route more of the twiddle widths to the full-width kernel.
+///
+/// The chain above holds the shared logic, and an implementation only names its entry point.
+trait SubfieldScaled: ByteCoordinates {
+    /// Apply the butterfly through the narrowest typed product that covers the twiddle.
+    fn scale_butterfly<const INVERSE: bool>(
+        lo: &mut [Self],
+        hi: &mut [Self],
+        t: Self,
+        width: TwiddleWidth,
+    );
+}
+
+impl SubfieldScaled for BinaryField8 {
+    /// One byte wide, so every twiddle is the whole element and no subfield is left.
+    #[inline]
+    fn scale_butterfly<const INVERSE: bool>(
+        lo: &mut [Self],
+        hi: &mut [Self],
+        t: Self,
+        width: TwiddleWidth,
+    ) {
+        scale_by_byte::<Self, INVERSE>(lo, hi, t, width);
+    }
+}
+
+impl SubfieldScaled for BinaryField16 {
+    /// A two-byte twiddle is the whole element here, so the one-byte product is the only gain.
+    #[inline]
+    fn scale_butterfly<const INVERSE: bool>(
+        lo: &mut [Self],
+        hi: &mut [Self],
+        t: Self,
+        width: TwiddleWidth,
+    ) {
+        scale_by_byte::<Self, INVERSE>(lo, hi, t, width);
+    }
+}
+
+impl SubfieldScaled for BinaryField32 {
+    /// A four-byte twiddle is the whole element here, so the chain stops at two bytes.
+    #[inline]
+    fn scale_butterfly<const INVERSE: bool>(
+        lo: &mut [Self],
+        hi: &mut [Self],
+        t: Self,
+        width: TwiddleWidth,
+    ) {
+        scale_by_word::<Self, INVERSE>(lo, hi, t, width);
+    }
+}
+
+impl SubfieldScaled for BinaryField64 {
+    /// Wide enough for every typed product, where the level's own product is recursive.
+    #[inline]
+    fn scale_butterfly<const INVERSE: bool>(
+        lo: &mut [Self],
+        hi: &mut [Self],
+        t: Self,
+        width: TwiddleWidth,
+    ) {
+        if WIDE_TYPED_PRODUCTS_PAY {
+            scale_by_dword::<Self, INVERSE>(lo, hi, t, width);
+        } else {
+            scale_by_byte::<Self, INVERSE>(lo, hi, t, width);
+        }
+    }
+}
+
+impl SubfieldScaled for BinaryField128 {
+    /// Wide enough for every typed product, where the level's own product is recursive.
+    #[inline]
+    fn scale_butterfly<const INVERSE: bool>(
+        lo: &mut [Self],
+        hi: &mut [Self],
+        t: Self,
+        width: TwiddleWidth,
+    ) {
+        if WIDE_TYPED_PRODUCTS_PAY {
+            scale_by_dword::<Self, INVERSE>(lo, hi, t, width);
+        } else {
+            scale_by_byte::<Self, INVERSE>(lo, hi, t, width);
+        }
+    }
+}
+
 /// Run the leading whole registers through the byte map the twiddle's width allows.
 ///
 /// Returns the number of elements covered, which the caller finishes from.
@@ -236,14 +386,14 @@ const fn subfield_prefix<F: ByteCoordinates, const INVERSE: bool>(
 ///
 /// A twiddle narrow enough to sit in a byte-aligned subfield drives a byte map.
 ///
-/// Anything wider falls through to the packed kernel.
+/// Whatever the byte map leaves over falls to a typed product of the same subfield.
 ///
 /// # Panics
 /// Panics if the two runs have different lengths.
 #[inline]
 fn coordinate_butterfly<F, const INVERSE: bool>(lo: &mut [F], hi: &mut [F], t: F)
 where
-    F: ByteCoordinates + Mul<BinaryField8, Output = F>,
+    F: SubfieldScaled,
     F::Repr: Into<u128>,
 {
     // Invariant: the two sides are paired element for element.
@@ -260,16 +410,10 @@ where
     let covered = subfield_prefix::<F, INVERSE>(lo, hi, width);
 
     // Whatever the register loop left over, down to one element.
-    let (lo, hi) = (&mut lo[covered..], &mut hi[covered..]);
-
-    if let TwiddleWidth::Byte(t) = width {
-        // A one-coordinate twiddle scales each coordinate on its own.
-        //
-        // That beats a full-width product even with no byte map to run it through.
-        typed_butterfly::<F, BinaryField8, INVERSE>(lo, hi, BinaryField8::from_repr(t));
-    } else {
-        packed_butterfly::<F, INVERSE>(lo, hi, t);
-    }
+    //
+    // A subfield twiddle scales each coordinate on its own.
+    // That beats a full-width product even with no byte map to run it through.
+    F::scale_butterfly::<INVERSE>(&mut lo[covered..], &mut hi[covered..], t, width);
 }
 
 /// The butterfly of a level with no subfield structure to exploit.
@@ -368,23 +512,31 @@ mod tests {
     /// ```text
     ///     0               the butterfly collapses to a single addition
     ///     1               the identity multiplier
+    ///     0x80            the highest-degree basis element of the one-byte subfield
     ///     0xff            the widest twiddle the one-byte map still covers
     ///     0x100           the narrowest that needs the two-byte map
+    ///     0x8000          the highest-degree basis element of the two-byte subfield
     ///     0xffff          the widest the two-byte map covers
     ///     0x1_0000        the narrowest that needs the four-byte map
+    ///     0x8000_0000     the highest-degree basis element of the four-byte subfield
     ///     0xffff_ffff     the widest the four-byte map covers
     ///     0x1_0000_0000   the narrowest that falls through to the packed kernel
+    ///     1 << 127        the highest-degree basis element of the widest level
     ///     0x87            the tail of the GHASH modulus, for the level that uses it
     /// ```
-    const CORNERS: [u128; 9] = [
+    const CORNERS: [u128; 13] = [
         0,
         1,
+        0x80,
         0xff,
         0x100,
+        0x8000,
         0xffff,
         0x1_0000,
+        0x8000_0000,
         0xffff_ffff,
         0x1_0000_0000,
+        1 << 127,
         0x87,
     ];
 
