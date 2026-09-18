@@ -108,7 +108,7 @@ impl<F, S> SlicedGf4<F, S> {
     /// The value with the given coordinate planes, reached by no out-of-subfield input.
     #[inline]
     #[must_use]
-    pub const fn from_planes(low: u64, high: u64) -> Self {
+    pub(crate) const fn from_planes(low: u64, high: u64) -> Self {
         Self {
             low,
             high,
@@ -120,7 +120,7 @@ impl<F, S> SlicedGf4<F, S> {
     /// The same element of `S`, given by its coordinates, in every lane.
     #[inline]
     #[must_use]
-    pub const fn broadcast(low: bool, high: bool) -> Self {
+    pub(crate) const fn broadcast(low: bool, high: bool) -> Self {
         Self::from_planes(broadcast_bit(low), broadcast_bit(high))
     }
 
@@ -141,15 +141,6 @@ impl<F, S> SlicedGf4<F, S> {
             poisoned: lhs | rhs,
             _fields: PhantomData,
         }
-    }
-
-    /// The coordinate planes `(low, high)`.
-    ///
-    /// They are the intended values only while [`Self::is_poisoned`] is false.
-    #[inline]
-    #[must_use]
-    pub const fn planes(self) -> (u64, u64) {
-        (self.low, self.high)
     }
 
     /// Whether an `F` value outside the subfield has reached this value.
@@ -199,6 +190,7 @@ impl<F: HasSubfield<S>, S: Field> SlicedGf4<F, S> {
     #[inline]
     #[must_use]
     pub fn narrow(x: F) -> Self {
+        debug_assert!(is_gf4::<S>(), "sliced values hold GF(4)");
         x.as_subfield()
             .and_then(gf4_coordinates)
             .map_or(Self::POISONED, |(low, high)| Self::broadcast(low, high))
@@ -641,7 +633,10 @@ where
         let x = x.into();
         self.poisoned |= x.poisoned;
         // A constraint past the last power is only counted; the count check rejects it.
-        if let Some(&power) = self.alpha_powers.get(self.constraint_index) {
+        // A value that vanishes on every lane adds nothing, as a selector-gated one mostly does.
+        if let Some(&power) = self.alpha_powers.get(self.constraint_index)
+            && (x.low | x.high) != 0
+        {
             self.accumulator += power * self.lanes.sum(x.low, x.high);
         }
         self.constraint_index += 1;

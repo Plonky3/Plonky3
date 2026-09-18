@@ -90,7 +90,7 @@ proptest! {
         let weights = (0..SLICED_LANES).map(|_| rng.random()).collect::<Vec<Ghash128>>();
         let generator = Ghash128::from(F::from(S::GENERATOR));
         let sums = LaneSums::new(&weights, generator);
-        let (low, high) = value.planes();
+        let (low, high) = (value.low, value.high);
         let expected = weights
             .iter()
             .enumerate()

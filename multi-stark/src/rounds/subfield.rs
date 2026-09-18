@@ -381,7 +381,7 @@ where
                 .par_chunks(SCAN_CHUNK_CELLS)
                 .all(|chunk| F::all_in_subfield(chunk))
         }) {
-            let _: Option<()> = fall_back("a main or preprocessed cell lies outside the subfield");
+            log_fall_back("a main or preprocessed cell lies outside the subfield");
             return false;
         }
         true
@@ -526,8 +526,13 @@ where
 
 /// Decline the subfield kernel for a stage's first round, recording why.
 fn fall_back<T>(reason: &'static str) -> Option<T> {
-    tracing::debug!(reason, "the first round falls back to the generic kernel");
+    log_fall_back(reason);
     None
+}
+
+/// Record why the subfield kernel declines a stage's first round.
+fn log_fall_back(reason: &'static str) {
+    tracing::debug!(reason, "the first round falls back to the generic kernel");
 }
 
 /// Whether `EF` embeds `S` the way it embeds `F`'s copy of `S`.

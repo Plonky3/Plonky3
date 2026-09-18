@@ -2,7 +2,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use p3_binary_field::{Ghash128, TowerLevel};
-use p3_field::PrimeCharacteristicRing;
+use p3_field::{Field, PrimeCharacteristicRing};
 use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
 
@@ -136,19 +136,71 @@ fn a_lookup_stage_is_not_sliced() {
 }
 
 #[test]
-fn successor_planes_shift_by_one_row_and_repeat_the_last() {
-    // Two words: every third row is set, and so is the last row.
-    let column = (0..2 * SLICED_LANES)
-        .map(|row| gf4(usize::from(row % 3 == 0 || row + 1 == 2 * SLICED_LANES)))
-        .collect::<Vec<_>>();
-    let planes = pack_column::<Tower, Gf4>(&column).expect("bit cells fit");
-    let successors = successor_planes(&planes);
-    for row in 0..2 * SLICED_LANES {
-        let successor = (row + 1).min(2 * SLICED_LANES - 1);
-        let bit =
-            |planes: &[[u64; 2]], row: usize| (planes[row / SLICED_LANES][0] >> (row % 64)) & 1;
-        assert_eq!(bit(&successors, row), bit(&planes, successor), "row {row}");
+fn the_planes_hold_every_cell_and_its_repeat_last_successor() {
+    let height = 4 * SHORTEST;
+    let mut rng = SmallRng::seed_from_u64(23);
+    let mut instance = Instance::honest(FixtureAir::Gate { scale: Tower::ONE }, height, 23);
+    // Every element of GF(4), so both planes of both kinds of word carry data.
+    for value in &mut instance.main.values {
+        *value = gf4(rng.random_range(0..4));
     }
+    with_state(&[instance], no_lookups(), |state, _| {
+        let trace = state
+            .sliced_trace::<Gf4>()
+            .expect("every cell lies in GF(4)");
+        let columns = state.tables[0]
+            .iter_polys()
+            .chain(
+                state.preprocessed[0]
+                    .into_iter()
+                    .flat_map(Table::iter_polys),
+            )
+            .chain(state.periodic[0].iter().flat_map(Table::iter_polys))
+            .collect::<Vec<_>>();
+        assert_eq!(trace.width, columns.len());
+        let successor_columns = next_row_runs(&state.slots)
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>();
+        let cell = |planes: &[[u64; 2]], column: usize, row: usize| {
+            let [low, high] = planes[(row / SLICED_LANES) * trace.width + column];
+            let bit = |plane: u64| (plane >> (row % SLICED_LANES)) & 1 == 1;
+            Tower::from(Gf4::from_bool(bit(low)) + Gf4::from_bool(bit(high)) * Gf4::GENERATOR)
+        };
+        for (index, column) in columns.iter().enumerate() {
+            for row in 0..height {
+                assert_eq!(
+                    cell(&trace.cells, index, row),
+                    column[row],
+                    "column {index}"
+                );
+                let successor = if successor_columns.contains(&index) {
+                    column[(row + 1).min(height - 1)]
+                } else {
+                    Tower::ZERO
+                };
+                assert_eq!(
+                    cell(&trace.successors, index, row),
+                    successor,
+                    "column {index}"
+                );
+            }
+        }
+    });
+}
+
+#[test]
+fn a_sliced_first_round_records_the_fit_for_the_fold() {
+    let instances = [Instance::honest(
+        FixtureAir::Gate { scale: Tower::ONE },
+        SHORTEST,
+        24,
+    )];
+    with_state(&instances, no_lookups(), |mut state, eq_suffix| {
+        assert!(state.round_poly_sliced::<Gf4, Tower>(eq_suffix).is_some());
+        assert!(state.fits_subfield());
+        assert!(state.is_sliced());
+    });
 }
 
 /// Every round polynomial of a stage, then its openings.

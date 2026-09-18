@@ -10,7 +10,7 @@
 //!
 //! Round `j` evaluates the columns at points whose first `j` coordinates are interpolation nodes
 //! rather than the challenges already drawn. Every column value there is a `GF(4)` combination
-//! of `2^(j+1)` corner bits, and the round polynomial follows by interpolating over those nodes:
+//! of `2^(j+1)` corner cells, and the round polynomial follows by interpolating over those nodes:
 //!
 //! ```text
 //!     q_j(t) = sum_x eq(x) * C(r_0, .., r_(j-1), t, x)
@@ -43,6 +43,9 @@ const SLICED_ROUNDS: usize = 3;
 /// Row variables one word's lanes span.
 const LANE_VARIABLES: usize = SLICED_LANES.trailing_zeros() as usize;
 
+/// Words of every column one parallel task of the repacking fills.
+const WORDS_PER_TASK: usize = 4;
+
 /// A stage's cells as bit planes, laid out word by word.
 pub(super) struct SlicedTrace {
     /// Number of variables of the stage.
@@ -62,54 +65,43 @@ pub(super) struct SlicedTrace {
     rounds: usize,
 }
 
-/// Pack one column into bit planes, sixty-four cells a word.
+/// Pack sixty-four cells into their two coordinate planes.
 ///
 /// # Returns
 ///
 /// `None` when a cell lies outside `S`.
-fn pack_column<F, S>(column: &[F]) -> Option<Vec<[u64; 2]>>
+#[inline]
+fn pack_word<F, S>(cells: &[F; SLICED_LANES]) -> Option<[u64; 2]>
 where
     S: Field,
     F: HasSubfield<S>,
 {
-    column
-        .as_chunks::<SLICED_LANES>()
-        .0
-        .iter()
-        .map(|cells| {
-            let mut planes = [0_u64; 2];
-            for (lane, cell) in cells.iter().enumerate() {
-                let (low, high) = cell.as_subfield().and_then(gf4_coordinates)?;
-                planes[0] |= u64::from(low) << lane;
-                planes[1] |= u64::from(high) << lane;
-            }
-            Some(planes)
-        })
-        .collect()
+    let mut planes = [0_u64; 2];
+    for (lane, cell) in cells.iter().enumerate() {
+        let (low, high) = cell.as_subfield().and_then(gf4_coordinates)?;
+        planes[0] |= u64::from(low) << lane;
+        planes[1] |= u64::from(high) << lane;
+    }
+    Some(planes)
 }
 
-/// The successor planes of a packed column: every row reads the next, and the last row itself.
-fn successor_planes(planes: &[[u64; 2]]) -> Vec<[u64; 2]> {
-    let last = SLICED_LANES - 1;
-    (0..planes.len())
-        .map(|word| {
-            // The top lane reads the lowest lane of the next word, or repeats itself at the end.
-            let carry = planes.get(word + 1).map_or_else(
-                || planes[word].map(|plane| plane & (1 << last)),
-                |next| next.map(|plane| (plane & 1) << last),
-            );
-            [
-                (planes[word][0] >> 1) | carry[0],
-                (planes[word][1] >> 1) | carry[1],
-            ]
-        })
-        .collect()
+/// The successor planes of one word: every lane reads the next row.
+///
+/// The top lane reads `carry`, the coordinates of the cell after the word.
+#[inline]
+fn successor_word(planes: [u64; 2], carry: (bool, bool)) -> [u64; 2] {
+    let top = SLICED_LANES - 1;
+    [
+        (planes[0] >> 1) | (u64::from(carry.0) << top),
+        (planes[1] >> 1) | (u64::from(carry.1) << top),
+    ]
 }
 
 /// The multilinear value of one column at `(v, t)` for `t = 0` and `t = 1`, over one word of rows.
 ///
-/// `corner(c)` reads corner `c`, whose bits are the prefix bits, first variable highest, then `t`.
-/// Each prefix variable folds as `lo + v * (hi - lo)` with `v` a node of `GF(4)`.
+/// `corners[c]` holds corner `c`, whose bits are the prefix bits, first variable highest, then
+/// `t`. Each prefix variable folds as `lo + v * (hi - lo)` with `v` a node of `GF(4)`, which
+/// leaves the values at `t = 0` and `t = 1` in the first two entries.
 #[inline]
 fn fold_corners<F, S>(
     corners: &mut [SlicedGf4<F, S>],
@@ -396,6 +388,7 @@ where
 /// `None` when an interpolation node lies outside `S` or an AIR constant poisoned a value.
 #[allow(clippy::too_many_arguments)]
 fn sliced_round<A, F, EF, S, R>(
+    eq_suffix: &Poly<EF>,
     trace: &SlicedTrace,
     slots: &[AirSlot<'_, A>],
     public_values: &[&[F]],
@@ -427,6 +420,20 @@ where
     // Row variables split three ways: prefix and t, the words of a corner block, and the lanes.
     let lane_point = &tau[num_vars - LANE_VARIABLES..];
     let word_point = &tau[round + 1..num_vars - LANE_VARIABLES];
+    let lane_weights = Poly::new_from_point(lane_point, EF::ONE);
+    let word_weights = Poly::new_from_point(word_point, EF::ONE);
+    // The row weights factor as word weight times lane weight, the table the caller holds.
+    debug_assert!(
+        eq_suffix
+            .as_slice()
+            .iter()
+            .enumerate()
+            .all(|(row, &weight)| {
+                weight
+                    == word_weights.as_slice()[row / SLICED_LANES]
+                        * lane_weights.as_slice()[row % SLICED_LANES]
+            })
+    );
     let lift = |values: &[EF]| {
         values
             .iter()
@@ -434,11 +441,8 @@ where
             .collect::<Vec<_>>()
     };
     let generator = R::from(EF::from(S::GENERATOR));
-    let lanes = LaneSums::new(
-        &lift(Poly::new_from_point(lane_point, EF::ONE).as_slice()),
-        generator,
-    );
-    let word_weights = lift(Poly::new_from_point(word_point, EF::ONE).as_slice());
+    let lanes = LaneSums::new(&lift(lane_weights.as_slice()), generator);
+    let word_weights = lift(word_weights.as_slice());
 
     let context = SlicedRound {
         trace,
@@ -544,28 +548,49 @@ where
             .flat_map(|table| table.iter_polys())
             .collect::<Vec<_>>();
         let width = columns.len();
-        let packed = columns
-            .par_iter()
-            .map(|column| pack_column::<F, S>(column))
-            .collect::<Option<Vec<_>>>()?;
+        let mut is_successor = vec![false; width];
+        for column in next_row_runs(&self.slots).into_iter().flatten() {
+            is_successor[column] = true;
+        }
 
+        // Each task packs a run of words of every column, reading each column contiguously.
         let words = 1 << (num_vars - LANE_VARIABLES);
+        let task_cells = width * WORDS_PER_TASK.min(words);
         let mut cells = vec![[0; 2]; words * width];
         let mut successors = vec![[0; 2]; words * width];
-        cells
-            .par_chunks_mut(width)
+        let fits = cells
+            .par_chunks_mut(task_cells)
+            .zip(successors.par_chunks_mut(task_cells))
             .enumerate()
-            .for_each(|(word, row)| {
-                for (cell, column) in row.iter_mut().zip(&packed) {
-                    *cell = column[word];
+            .all(|(task, (cells, successors))| {
+                let first_word = task * WORDS_PER_TASK;
+                for (index, (column, &is_successor)) in
+                    columns.iter().zip(&is_successor).enumerate()
+                {
+                    let column = column.as_chunks::<SLICED_LANES>().0;
+                    for (offset, word) in (first_word..first_word + cells.len() / width).enumerate()
+                    {
+                        let Some(planes) = pack_word::<F, S>(&column[word]) else {
+                            return false;
+                        };
+                        cells[offset * width + index] = planes;
+                        if is_successor {
+                            // The last row repeats itself; every other row reads the next one.
+                            let carry = column.get(word + 1).map_or_else(
+                                || Some((planes[0] >> 63 == 1, planes[1] >> 63 == 1)),
+                                |next| next[0].as_subfield().and_then(gf4_coordinates),
+                            );
+                            let Some(carry) = carry else {
+                                return false;
+                            };
+                            successors[offset * width + index] = successor_word(planes, carry);
+                        }
+                    }
                 }
+                true
             });
-        for run in next_row_runs(&self.slots) {
-            for column in run {
-                for (word, planes) in successor_planes(&packed[column]).into_iter().enumerate() {
-                    successors[word * width + column] = planes;
-                }
-            }
+        if !fits {
+            return None;
         }
 
         let last = SLICED_LANES - 1;
@@ -608,14 +633,13 @@ where
         self.subfield_schedule::<S>()?;
         let trace = self.sliced_trace::<S>()?;
         self.fits_subfield = true;
-        debug_assert_eq!(eq_suffix.num_evals(), self.num_evals() / 2);
-
         let alpha_powers = self
             .alpha_powers
             .iter()
             .map(|powers| powers.iter().map(|&power| R::from(power)).collect())
             .collect::<Vec<Vec<R>>>();
         let evals = sliced_round::<A, F, EF, S, R>(
+            eq_suffix,
             &trace,
             &self.slots,
             &self.public_values,
@@ -780,8 +804,8 @@ where
             return None;
         }
         debug_assert_eq!(columns.challenges.len(), self.round);
-        debug_assert_eq!(eq_suffix.num_evals(), self.num_evals() / 2);
         let evals = sliced_round::<A, F, EF, S, R>(
+            eq_suffix,
             &columns.trace,
             &self.slots,
             &self.public_values,

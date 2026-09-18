@@ -639,6 +639,35 @@ fn backends_agree_on_stages_tall_enough_to_slice() {
     assert_backends_agree(&instances, || LookupRuntime::Inactive, 2);
 }
 
+#[test]
+fn backends_agree_when_a_tall_stage_does_not_fit() {
+    // Each stage is tall enough to slice, so every misfit reaches the sliced kernel first.
+    let height = 1 << 8;
+    let gate = |seed| Instance::honest(FixtureAir::Gate { scale: Tower::ONE }, height, seed);
+    let mut cell = gate(23);
+    cell.main.values[4 * (height - 1) + 3] = outside();
+    let mut public = gate(24);
+    public.public_values[1] = outside();
+    let constant = Instance::honest(
+        FixtureAir::Gate {
+            scale: Tower::from_repr(5),
+        },
+        height,
+        25,
+    );
+    let periodic = Instance::honest(
+        FixtureAir::Periodic {
+            period: [gf4(2), outside()],
+        },
+        height,
+        26,
+    );
+    let quartic = Instance::honest(FixtureAir::Quartic, height, 27);
+    for instance in [cell, public, constant, periodic, quartic] {
+        assert_backends_agree(&[instance], || LookupRuntime::Inactive, 0);
+    }
+}
+
 /// Degrees the symbolic pass sees, so a fixture cannot drift from the shape its test names.
 #[test]
 fn fixture_degrees_are_the_named_ones() {
