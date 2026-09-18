@@ -27,8 +27,8 @@ use p3_commit::{
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::coset::TwoAdicMultiplicativeCoset;
 use p3_field::{
-    ExtensionField, PackedFieldExtension, PrimeField64, TwoAdicField, batch_multiplicative_inverse,
-    dot_product,
+    ExtensionField, PackedFieldExtension, PackedValue, PrimeCharacteristicRing, PrimeField64,
+    TwoAdicField, batch_multiplicative_inverse, dot_product,
 };
 use p3_matrix::Matrix;
 use p3_matrix::bitrev::{BitReversedMatrixView, BitReversibleMatrix};
@@ -144,6 +144,16 @@ impl<F: TwoAdicField, InputProof: Sync, InputError: Debug + Sync, EF: ExtensionF
 
     #[instrument(skip_all, level = "debug")]
     fn fold_matrix<M: Matrix<EF>>(&self, beta: EF, log_arity: usize, m: M) -> Vec<EF> {
+        // Packed arithmetic pays off where SIMD lanes multiply field elements natively,
+        // which holds for fields of at most 32 bits. Wider fields emulate the lane product
+        // on common targets, so they keep the scalar paths, as do width-1 packings and
+        // heights below one packing width. Heights are powers of two, so any larger height
+        // splits into whole packed blocks.
+        let width = F::Packing::WIDTH;
+        if width > 1 && m.height() >= width && F::bits() <= 32 {
+            return fold_matrix_packed(beta, log_arity, &m);
+        }
+
         if log_arity == 1 {
             // Optimized path for arity 2
             // We use the fact that
@@ -233,6 +243,102 @@ impl<F: TwoAdicField, InputProof: Sync, InputError: Debug + Sync, EF: ExtensionF
             data
         }
     }
+}
+
+/// Fold `F::Packing::WIDTH` rows of `m` at a time, one row per SIMD lane.
+///
+/// Each row goes through the `log_arity` arity-2 rounds of `fold_matrix` without leaving
+/// packed form. Round `s` halves pair `k` of row `t` by the base-field factor
+///
+/// ```text
+///     g_inv^(2^s * rev(t)) * w_inv^(2^s * rev(k)) / 2
+/// ```
+///
+/// where `g` generates the subgroup of order `height * arity`, `w = g^height` generates the
+/// subgroup of order `arity`, and `rev` reverses the bits of a row or pair index. This is
+/// the entry at `t * (arity >> (s + 1)) + k` of the bit-reversed `g_inv^i / 2` table the
+/// other paths use, split into a packed per-row factor, squared once per round, and a
+/// per-pair scalar that is merged with `beta^(2^s)`.
+///
+/// `m.height()` must be a nonzero multiple of `F::Packing::WIDTH`.
+fn fold_matrix_packed<F, EF, M>(beta: EF, log_arity: usize, m: &M) -> Vec<EF>
+where
+    F: TwoAdicField,
+    EF: ExtensionField<F>,
+    M: Matrix<EF>,
+{
+    let width = F::Packing::WIDTH;
+    let height = m.height();
+    let pairs_per_row = 1 << (log_arity - 1);
+    debug_assert_eq!(m.width(), 2 * pairs_per_row);
+
+    // Row `t = b * width + l` of block `b` has the factor
+    //     g_inv^rev(t) = g_inv^rev(b) * (g_inv^num_blocks)^rev(l)
+    // with `rev(b)` over the block index bits and `rev(l)` over the lane bits.
+    let g_inv = F::two_adic_generator(log2_strict_usize(height) + log_arity).inverse();
+    let num_blocks = height / width;
+    let mut block_factors = g_inv.powers().collect_n(num_blocks);
+    reverse_slice_index_bits(&mut block_factors);
+    let lane_root = g_inv.exp_u64(num_blocks as u64);
+    let log_width = log2_strict_usize(width);
+    let lane_factors =
+        F::Packing::from_fn(|lane| lane_root.exp_u64(reverse_bits_len(lane, log_width) as u64));
+
+    // Pair factors `w_inv^rev(k)`, in bit-reversed order. Round `s` reads the prefix of
+    // length `pairs_per_row >> s`, which holds `w_inv^(2^s * rev(k))` with `rev` taken over
+    // that prefix's index bits.
+    let w_inv = F::two_adic_generator(log_arity).inverse();
+    let mut pair_factors = w_inv.powers().collect_n(pairs_per_row);
+    reverse_slice_index_bits(&mut pair_factors);
+
+    // Round `s` multiplies pair `k` by `beta^(2^s) * w_inv^(2^s * rev(k)) / 2`.
+    let mut round_beta = beta;
+    let round_scalars: Vec<Vec<EF>> = (0..log_arity)
+        .map(|round| {
+            let half_beta = round_beta.halve();
+            round_beta = round_beta.square();
+            pair_factors[..pairs_per_row >> round]
+                .iter()
+                .map(|&w| half_beta * w)
+                .collect()
+        })
+        .collect();
+
+    let fold =
+        |lo: EF::ExtensionPacking, hi: EF::ExtensionPacking, scalar: EF, row_factor: F::Packing| {
+            (lo + hi).halve() + (lo - hi) * scalar * row_factor
+        };
+
+    let mut folded = EF::zero_vec(height);
+    folded
+        .par_chunks_exact_mut(width)
+        .zip(block_factors.par_iter())
+        .enumerate()
+        .for_each_init(
+            || EF::ExtensionPacking::zero_vec(pairs_per_row),
+            |pairs, (block, (out, &block_factor))| {
+                let first_row = block * width;
+                let column = |c| {
+                    EF::ExtensionPacking::from_ext_fn(|lane| m.get(first_row + lane, c).unwrap())
+                };
+
+                let mut row_factor = lane_factors * block_factor;
+                for (k, (pair, &scalar)) in pairs.iter_mut().zip(&round_scalars[0]).enumerate() {
+                    *pair = fold(column(2 * k), column(2 * k + 1), scalar, row_factor);
+                }
+
+                // Later rounds fold adjacent packed pairs in place.
+                for scalars in &round_scalars[1..] {
+                    row_factor = row_factor.square();
+                    for (k, &scalar) in scalars.iter().enumerate() {
+                        pairs[k] = fold(pairs[2 * k], pairs[2 * k + 1], scalar, row_factor);
+                    }
+                }
+
+                pairs[0].to_ext_slice(out);
+            },
+        );
+    folded
 }
 
 /// Lagrange interpolation: given points `(xs[i], ys[i])`, evaluate at z.
@@ -930,8 +1036,11 @@ mod tests {
     use p3_dft::Radix2Dit;
     use p3_field::extension::BinomialExtensionField;
     use p3_field::{Field, PrimeCharacteristicRing};
+    use p3_goldilocks::Goldilocks;
+    use p3_matrix::dense::RowMajorMatrixView;
     use p3_merkle_tree::MerkleTreeMmcs;
     use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
+    use rand::distr::{Distribution, StandardUniform};
     use rand::rngs::SmallRng;
     use rand::{RngExt, SeedableRng};
 
@@ -1333,5 +1442,77 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// Check that `fold` folds each row of random matrices exactly as `fold_row` folds that
+    /// row on its own, for arities 2 to 16 and heights from `2^min_log_height` up to eight
+    /// packing widths.
+    fn check_fold_against_fold_row<F, EF>(
+        min_log_height: usize,
+        fold: impl Fn(EF, usize, RowMajorMatrixView<'_, EF>) -> Vec<EF>,
+    ) where
+        F: TwoAdicField,
+        EF: ExtensionField<F>,
+        StandardUniform: Distribution<EF>,
+    {
+        let mut rng = SmallRng::seed_from_u64(2);
+        let folding = TwoAdicFriFolding::<(), ()>(PhantomData);
+        let log_width = log2_strict_usize(F::Packing::WIDTH);
+
+        for log_arity in 1..=4 {
+            for log_height in min_log_height..=log_width + 3 {
+                let beta: EF = rng.random();
+                let m = RowMajorMatrix::<EF>::rand(&mut rng, 1 << log_height, 1 << log_arity);
+
+                let folded = fold(beta, log_arity, m.as_view());
+                assert_eq!(folded.len(), m.height());
+
+                for (index, &expected) in folded.iter().enumerate() {
+                    let row = m.row(index).unwrap().into_iter();
+                    let folded_row = FriFoldingStrategy::<F, EF>::fold_row(
+                        &folding, index, log_height, log_arity, beta, row,
+                    );
+                    assert_eq!(folded_row, expected);
+                }
+            }
+        }
+    }
+
+    /// `fold_matrix` matches `fold_row` below, at and above the packing width, both for
+    /// fields that take the packed path and for fields that keep the scalar one.
+    #[test]
+    fn fold_matrix_matches_fold_row_around_packing_width() {
+        fn check<F: TwoAdicField, EF: ExtensionField<F>>()
+        where
+            StandardUniform: Distribution<EF>,
+        {
+            let folding = TwoAdicFriFolding::<(), ()>(PhantomData);
+            check_fold_against_fold_row::<F, EF>(0, |beta, log_arity, m| {
+                FriFoldingStrategy::<F, EF>::fold_matrix(&folding, beta, log_arity, m)
+            });
+        }
+
+        check::<F, EF>();
+        check::<F, F>();
+        check::<Goldilocks, BinomialExtensionField<Goldilocks, 2>>();
+    }
+
+    /// The packed kernel on its own matches `fold_row`, including for fields that
+    /// `fold_matrix` keeps on the scalar path.
+    #[test]
+    fn fold_matrix_packed_matches_fold_row() {
+        fn check<F: TwoAdicField, EF: ExtensionField<F>>()
+        where
+            StandardUniform: Distribution<EF>,
+        {
+            let log_width = log2_strict_usize(F::Packing::WIDTH);
+            check_fold_against_fold_row::<F, EF>(log_width, |beta, log_arity, m| {
+                fold_matrix_packed(beta, log_arity, &m)
+            });
+        }
+
+        check::<F, EF>();
+        check::<F, F>();
+        check::<Goldilocks, BinomialExtensionField<Goldilocks, 2>>();
     }
 }
