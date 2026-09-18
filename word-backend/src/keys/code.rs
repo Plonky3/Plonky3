@@ -73,16 +73,7 @@ impl ShiftCode {
     #[inline]
     fn new<W: Word>(shift: Shift<W>) -> Self {
         // Eight movement kinds fit in the upper three bits.
-        let kind = match shift.kind() {
-            ShiftKind::LogicalLeft => 0,
-            ShiftKind::LogicalRight => 1,
-            ShiftKind::ArithmeticRight => 2,
-            ShiftKind::RotateRight => 3,
-            ShiftKind::Lane32LogicalLeft => 4,
-            ShiftKind::Lane32LogicalRight => 5,
-            ShiftKind::Lane32ArithmeticRight => 6,
-            ShiftKind::Lane32RotateRight => 7,
-        };
+        let kind = u16::from(shift.kind().code());
         Self((kind << 6) | u16::from(shift.amount()))
     }
 
@@ -91,17 +82,8 @@ impl ShiftCode {
     fn shift<W: Word>(self) -> Shift<W> {
         // Ignore neighboring slots when decoding from a wider sequence word.
         let code = self.0 & ((1 << SHIFT_BITS) - 1) as u16;
-        let kind = match code >> 6 {
-            0 => ShiftKind::LogicalLeft,
-            1 => ShiftKind::LogicalRight,
-            2 => ShiftKind::ArithmeticRight,
-            3 => ShiftKind::RotateRight,
-            4 => ShiftKind::Lane32LogicalLeft,
-            5 => ShiftKind::Lane32LogicalRight,
-            6 => ShiftKind::Lane32ArithmeticRight,
-            7 => ShiftKind::Lane32RotateRight,
-            _ => unreachable!(),
-        };
+        let kind = ShiftKind::from_code((code >> 6) as u8)
+            .expect("three-bit shift tags always name a supported operation");
 
         // Every encoded amount originated from the checked shift constructor.
         Shift::new(kind, usize::from(code & 0x3f))
