@@ -7,26 +7,57 @@ use crate::word::{Word, sealed};
 
 /// A bit movement supported by a shifted word term.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[repr(u8)]
 pub enum ShiftKind {
     /// Moves bits left and fills with zero.
-    LogicalLeft,
+    LogicalLeft = 0,
     /// Moves bits right and fills with zero.
-    LogicalRight,
+    LogicalRight = 1,
     /// Moves bits right and replicates the sign bit.
-    ArithmeticRight,
+    ArithmeticRight = 2,
     /// Rotates bits right across the full word.
-    RotateRight,
+    RotateRight = 3,
     /// Moves both 32-bit lanes left independently.
-    Lane32LogicalLeft,
+    Lane32LogicalLeft = 4,
     /// Moves both 32-bit lanes right independently.
-    Lane32LogicalRight,
+    Lane32LogicalRight = 5,
     /// Moves both 32-bit lanes right with independent sign extension.
-    Lane32ArithmeticRight,
+    Lane32ArithmeticRight = 6,
     /// Rotates both 32-bit lanes right independently.
-    Lane32RotateRight,
+    Lane32RotateRight = 7,
 }
 
 impl ShiftKind {
+    /// Every movement in compact-code order.
+    const ALL: [Self; 8] = [
+        Self::LogicalLeft,
+        Self::LogicalRight,
+        Self::ArithmeticRight,
+        Self::RotateRight,
+        Self::Lane32LogicalLeft,
+        Self::Lane32LogicalRight,
+        Self::Lane32ArithmeticRight,
+        Self::Lane32RotateRight,
+    ];
+
+    /// Returns the stable three-bit operation code.
+    #[inline]
+    pub const fn code(self) -> u8 {
+        // Explicit discriminants define the compact protocol representation.
+        self as u8
+    }
+
+    /// Recovers a movement from its three-bit operation code.
+    #[inline]
+    pub const fn from_code(code: u8) -> Option<Self> {
+        // The dense table rejects values outside the assigned discriminants.
+        if code < Self::ALL.len() as u8 {
+            Some(Self::ALL[code as usize])
+        } else {
+            None
+        }
+    }
+
     /// Returns whether the operation acts on two independent 32-bit lanes.
     #[inline]
     pub const fn is_lane32(self) -> bool {
@@ -518,6 +549,18 @@ mod tests {
         assert_eq!(shift.kind(), ShiftKind::LogicalLeft);
         assert_eq!(shift.amount(), 0);
         assert!(shift.is_identity());
+    }
+
+    #[test]
+    fn operation_codes_round_trip_and_reject_out_of_range_values() {
+        // Every assigned three-bit tag recovers its exact movement semantics.
+        for kind in ShiftKind::ALL {
+            assert_eq!(ShiftKind::from_code(kind.code()), Some(kind));
+        }
+
+        // Eight is the first value outside the assigned operation space.
+        assert_eq!(ShiftKind::from_code(8), None);
+        assert_eq!(ShiftKind::from_code(u8::MAX), None);
     }
 
     #[test]
