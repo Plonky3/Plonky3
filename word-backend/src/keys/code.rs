@@ -86,8 +86,9 @@ impl ShiftCode {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use p3_word::Word64;
+
+    use super::*;
 
     #[test]
     fn key_codes_round_trip_every_operation_and_shift_slot() {
