@@ -651,6 +651,12 @@ impl<F: Field, EF: ExtensionField<F>> SuffixProver<F, EF> {
     ///
     /// Each per-claim table spans a single column slot, so the crossing costs one pass over a
     /// slot per claim, against the whole output the products it feeds then cover.
+    ///
+    /// Packs the virtual-claim equality tables over `R` itself. That is only the wide-SIMD
+    /// choice where `R::Packing` already is: a binary field crossing into its own
+    /// polynomial-basis representation, for instance. A caller crossing into a prime-field
+    /// extension instead, where `R::Packing` collapses to `R`, should pack over `R`'s base field
+    /// the way [`Self::combine_weights`] packs over `F`.
     #[tracing::instrument(skip_all)]
     pub(crate) fn combine_weights_in<R>(&self, rs: &Point<EF>, alpha: EF) -> Poly<R>
     where
@@ -749,7 +755,9 @@ impl<F: Field, EF: ExtensionField<F>> SuffixProver<F, EF> {
 
     /// Accumulates a weight plan into the residual weight polynomial over `R`.
     ///
-    /// `B` is the base field the virtual claims' factored equality tables are packed over.
+    /// `B` is the base field the virtual claims' factored equality tables are packed over. Pass
+    /// the narrowest field `R` extends whose packing is wide, not `R` itself, unless
+    /// `R::Packing` already is `R` and there is no narrower field to gain from.
     ///
     /// # Contributions
     ///
