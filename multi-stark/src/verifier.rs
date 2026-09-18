@@ -277,8 +277,7 @@ where
 
     // 5. Verify the batched zerocheck sumcheck, inside the delegation bracket.
     // It yields the common bound point and the reduced sum, which both openings need.
-    let zerocheck =
-        AirZerocheck::with_profiles(&airs, &verifying_key.air_profiles, pow_bits);
+    let zerocheck = AirZerocheck::with_profiles(&airs, &verifying_key.air_profiles, pow_bits);
     let reduction = match transcript.zerocheck(|challenger| {
         zerocheck.verify_reduction_with_lookup::<C::Val, C::Challenge, _>(
             &proof.sumcheck,
