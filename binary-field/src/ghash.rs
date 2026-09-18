@@ -32,21 +32,27 @@ const TOWER_GENERATOR: u128 = 0x1_0000_0000_0000_0005;
 /// The tower carries that element as a single basis vector, at bit 64.
 const ALPHA: u128 = clmul::tower_image_128(1 << 64);
 
-/// The inverse of an element known to be nonzero, by the addition chain over Frobenius maps.
+/// The inverse of an element, with zero sent to zero, by the addition chain over Frobenius maps.
+///
+/// The chain runs whatever the operand is, so its cost says nothing about the value.
 #[cfg(all(target_arch = "x86_64", target_feature = "pclmulqdq"))]
 #[inline]
-fn invert_nonzero(x: Ghash128) -> Ghash128 {
+fn invert_or_zero(x: Ghash128) -> Ghash128 {
     Ghash128(clmul::poly_inverse_128(x.0))
 }
 
-/// The inverse of an element known to be nonzero, through the tower norm.
+/// The inverse of an element, with zero sent to zero, through the tower norm.
 ///
 /// The tower recurses through the norm down to a `GF(2^8)` lookup table.
 /// Everywhere the addition chain is not faster, that beats it for no table at all.
+/// That recursion returns early on a zero operand at every level, so this route is not
+/// branch-free.
 #[cfg(not(all(target_arch = "x86_64", target_feature = "pclmulqdq")))]
 #[inline]
-fn invert_nonzero(x: Ghash128) -> Ghash128 {
-    Ghash128::from(BinaryField128::from(x).inverse())
+fn invert_or_zero(x: Ghash128) -> Ghash128 {
+    BinaryField128::from(x)
+        .try_inverse()
+        .map_or(Ghash128::ZERO, Ghash128::from)
 }
 
 /// The Cantor basis in this representation.
@@ -165,6 +171,16 @@ impl Ghash128 {
             Self(clmul::poly_dot_powers_128(values.iter().map(|v| v.0)))
         }
     }
+
+    /// The inverse of this element, with zero sent to zero.
+    ///
+    /// On a carryless-multiply target the addition chain runs whatever the operand is, so its
+    /// cost says nothing about the value. The operand-indexed tables it uses still make it
+    /// variable-time.
+    #[inline]
+    pub fn invert_or_zero(self) -> Self {
+        invert_or_zero(self)
+    }
 }
 
 impl Packable for Ghash128 {}
@@ -277,8 +293,9 @@ impl Field for Ghash128 {
     /// The operand-indexed tables make this operation variable-time.
     #[inline]
     fn try_inverse(&self) -> Option<Self> {
-        // Zero has no multiplicative inverse.
-        (self.0 != 0).then(|| invert_nonzero(*self))
+        // The chain runs first; only the answer depends on whether the operand was zero.
+        let inverse = self.invert_or_zero();
+        (self.0 != 0).then_some(inverse)
     }
 
     #[inline]
@@ -641,6 +658,13 @@ mod tests {
         }
     }
 
+    #[test]
+    fn zero_inverts_to_zero() {
+        assert_eq!(Ghash128::ZERO.invert_or_zero(), Ghash128::ZERO);
+        assert_eq!(Ghash128::ZERO.try_inverse(), None);
+        assert_eq!(Ghash128::ONE.invert_or_zero(), Ghash128::ONE);
+    }
+
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(2000))]
 
@@ -707,6 +731,15 @@ mod tests {
                 Some(inverse) => prop_assert_eq!(x * inverse, Ghash128::ONE),
                 None => prop_assert_eq!(x, Ghash128::ZERO),
             }
+        }
+
+        #[test]
+        fn invert_or_zero_agrees_with_try_inverse(bits: u128) {
+            let x = Ghash128::from_repr(bits);
+            prop_assert_eq!(
+                x.invert_or_zero(),
+                x.try_inverse().unwrap_or(Ghash128::ZERO)
+            );
         }
 
         #[test]
