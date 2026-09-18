@@ -28,7 +28,8 @@ use crate::{Claim, SumcheckData, extrapolate_01inf};
 /// # Flow
 ///
 /// - Every folding round is driven from precomputed SVO accumulators.
-/// - The handoff to the residual product polynomial is packed.
+/// - The residual product polynomial stays packed while it fills a packed element.
+/// - A narrower residual uses scalar storage.
 #[derive(Debug, Clone)]
 pub struct PrefixProver<F: Field, EF: ExtensionField<F>> {
     /// Recorded opening claims and the layout context that batches them.
@@ -223,7 +224,7 @@ impl<F: Field, EF: ExtensionField<F>> Layout<F, EF> for PrefixProver<F, EF> {
     ///
     /// # Returns
     ///
-    /// - Residual sumcheck prover over the packed product polynomial.
+    /// - Residual sumcheck prover using packed or scalar polynomial storage.
     /// - Folding challenges sampled during preprocessing.
     ///
     /// # Algorithm
@@ -235,7 +236,7 @@ impl<F: Field, EF: ExtensionField<F>> Layout<F, EF> for PrefixProver<F, EF> {
     ///       2   | running sum  = sum_{i}  a^i * eval_i.
     ///       3   | weight poly  = sum_{i}  a^i * eq(z_i, X).
     ///       4   | Fold rounds 1..folding from precomputed SVO accumulators.
-    ///       5   | Hand off to the residual product polynomial, packed.
+    ///       5   | Choose packed or scalar handoff from the residual width.
     /// ```
     ///
     /// # Precondition
@@ -328,12 +329,26 @@ impl<F: Field, EF: ExtensionField<F>> Layout<F, EF> for PrefixProver<F, EF> {
         transcript.finish();
 
         let rs = Point::new(rs);
-        let compressed = tracing::info_span!("compress_prefix_to_packed")
-            .in_scope(|| self.poly.compress_prefix_to_packed(&rs, EF::ONE));
 
-        let weights = self.residual_weights_packed(&rs, alpha);
-        let prod_poly =
-            ProductPolynomial::<F, EF>::new_packed(VariableOrder::Prefix, compressed, weights);
+        // The packed compression writes whole packed elements.
+        // The residual must therefore span at least one of them.
+        //
+        //     packed route  <=>  num_variables - folding >= log2(Packing::WIDTH)
+        //
+        // A shorter residual is at most one packed element of scalars, so it hands off unpacked.
+        let k_pack = log2_strict_usize(<F as Field>::Packing::WIDTH);
+        let residual_variables = self.num_variables() - rs.num_variables();
+        let prod_poly = if residual_variables >= k_pack {
+            let compressed = tracing::info_span!("compress_prefix_to_packed")
+                .in_scope(|| self.poly.compress_prefix_to_packed(&rs, EF::ONE));
+            let weights = self.residual_weights_packed(&rs, alpha);
+            ProductPolynomial::<F, EF>::new_packed(VariableOrder::Prefix, compressed, weights)
+        } else {
+            let compressed = tracing::info_span!("compress_prefix")
+                .in_scope(|| self.poly.compress_prefix(&rs, EF::ONE));
+            let weights = self.combine_weights(&rs, alpha);
+            ProductPolynomial::<F, EF>::new_unpacked(VariableOrder::Prefix, compressed, weights)
+        };
         debug_assert_eq!(prod_poly.dot_product(), sum);
 
         (SumcheckProver::new(prod_poly, sum), rs)
