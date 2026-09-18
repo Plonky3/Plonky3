@@ -453,9 +453,17 @@ where
 
         // Precompute adjusted barycentric weights once per opening point.
         // adjusted[i] = 1/(z - x_i) - 1/z, reused across all matrices opened at z.
+        // Every matrix opened at `z` interpolates over a prefix of at most
+        // `denoms.len() >> log_blowup` weights (see `h` below), so that is all we compute.
         let adjusted_weights: LinearMap<Challenge, Vec<Challenge>> = inv_denoms
             .iter()
-            .map(|(point, denoms)| (*point, compute_adjusted_weights(*point, denoms)))
+            .map(|(point, denoms)| {
+                let prefix_len = denoms.len() >> self.fri.log_blowup;
+                (
+                    *point,
+                    compute_adjusted_weights(*point, &denoms[..prefix_len]),
+                )
+            })
             .collect();
 
         // Evaluate coset representations and write openings to the challenger
