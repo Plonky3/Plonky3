@@ -46,7 +46,7 @@ use p3_util::log2_ceil_usize;
 
 use crate::PcsLayout;
 use crate::error::BinaryPcsError;
-use crate::fold::FoldAlphabet;
+use crate::fold::{ChallengeField, FoldAlphabet};
 use crate::params::{BinaryPcsConfig, BinaryPcsConfigError};
 use crate::proof::BinaryPcsProof;
 use crate::prover::{BinaryPcsProverData, commit, fold_rounds_with, open_queries};
@@ -77,7 +77,7 @@ pub struct BinaryPcs<F: EncodableLevel, EF, MT, MX, E = <F as EncodableLevel>::E
     mmcs: MT,
     round_mmcs: MX,
     encoder: E,
-    _challenge: PhantomData<EF>,
+    _fields: PhantomData<(F, EF)>,
 }
 
 impl<F: EncodableLevel, EF: TowerLevel, MT, MX> BinaryPcs<F, EF, MT, MX> {
@@ -114,7 +114,7 @@ impl<F: EncodableLevel, EF: TowerLevel, MT, MX> BinaryPcs<F, EF, MT, MX> {
             mmcs,
             round_mmcs,
             encoder: F::Encoder::default(),
-            _challenge: PhantomData,
+            _fields: PhantomData,
         })
     }
 
@@ -150,7 +150,7 @@ where
             mmcs,
             round_mmcs,
             encoder: AdditiveRsEncoder::new(ntt),
-            _challenge: PhantomData,
+            _fields: PhantomData,
         })
     }
 }
@@ -158,7 +158,7 @@ where
 impl<F, EF, MT, MX, E> BinaryPcs<F, EF, MT, MX, E>
 where
     F: EncodableLevel + TranscriptField + FoldAlphabet<EF>,
-    EF: ExtensionField<F> + TowerLevel + FoldAlphabet<EF>,
+    EF: ChallengeField<F> + ExtensionField<F> + TowerLevel + FoldAlphabet<EF>,
     MT: Mmcs<F>,
     MX: Mmcs<EF, Error = MT::Error>,
     E: Encoder<F> + Sync,
@@ -567,11 +567,10 @@ where
     }
 }
 
-impl<F, EF, MT, MX, E, Challenger> MultilinearPcs<EF, Challenger>
-    for BinaryPcs<F, EF, MT, MX, E>
+impl<F, EF, MT, MX, E, Challenger> MultilinearPcs<EF, Challenger> for BinaryPcs<F, EF, MT, MX, E>
 where
     F: EncodableLevel + TranscriptField + FoldAlphabet<EF>,
-    EF: ExtensionField<F> + TowerLevel + FoldAlphabet<EF>,
+    EF: ChallengeField<F> + ExtensionField<F> + TowerLevel + FoldAlphabet<EF>,
     MT: Mmcs<F>,
     MX: Mmcs<EF, Error = MT::Error>,
     E: Encoder<F> + Sync,
@@ -640,7 +639,7 @@ impl<F, EF, MT, MX, E, Challenger> PrescribedPointPcs<EF, Challenger>
     for BinaryPcs<F, EF, MT, MX, E>
 where
     F: EncodableLevel + TranscriptField + FoldAlphabet<EF>,
-    EF: ExtensionField<F> + TowerLevel + FoldAlphabet<EF>,
+    EF: ChallengeField<F> + ExtensionField<F> + TowerLevel + FoldAlphabet<EF>,
     MT: Mmcs<F>,
     MX: Mmcs<EF, Error = MT::Error>,
     E: Encoder<F> + Sync,
@@ -703,7 +702,7 @@ mod tests {
     use alloc::vec::Vec;
     use alloc::{format, vec};
 
-    use p3_binary_field::BinaryField128;
+    use p3_binary_field::{BinaryField8, BinaryField16, BinaryField64, BinaryField128};
     use p3_challenger::FieldChallenger;
     use p3_commit::{Mmcs, MultilinearPcs};
     use p3_multilinear_util::point::Point;
@@ -714,7 +713,7 @@ mod tests {
 
     use super::BinaryPcs;
     use crate::error::BinaryPcsError;
-    use crate::params::{BinaryPcsConfig, BinaryPcsParams};
+    use crate::params::{BinaryPcsConfig, BinaryPcsConfigError, BinaryPcsParams};
     use crate::proof::BinaryPcsProof;
     use crate::prover::BinaryPcsProverData;
     use crate::test_util::{MyChallenger, MyMmcs, challenger, mmcs, run_lifecycle};
@@ -722,6 +721,62 @@ mod tests {
     type F = BinaryField128;
 
     const NUM_VARIABLES: usize = 8;
+
+    #[test]
+    fn constructor_rejects_schedules_derived_for_other_tower_levels() {
+        // Invariant: the schedule's security bounds belong to both derivation fields.
+        //
+        // A wider alphabet can admit a larger domain and a wider grinding witness.
+        // A wider challenge field can also report smaller algebraic errors.
+        // Reusing either bound at a narrower level would overstate security.
+        let high_security = BinaryPcsParams {
+            log_inv_rate: 2,
+            pow_bits: 0,
+            security_level: 100,
+        };
+
+        // Fixture state: derive at (128, 128), then request (64, 64).
+        // The alphabet mismatch is checked first and returned through the constructor.
+        let wide =
+            BinaryPcsConfig::try_new::<BinaryField128, BinaryField128>(20, high_security).unwrap();
+        let committed = BinaryPcs::<BinaryField64, BinaryField64, (), ()>::new(wide, (), ()).err();
+        assert_eq!(
+            committed,
+            Some(BinaryPcsConfigError::CommittedFieldMismatch {
+                derived: 128,
+                actual: 64,
+            })
+        );
+
+        // Fixture state: derive at (16, 128), then narrow only the committed alphabet.
+        let mixed = BinaryPcsConfig::try_new::<BinaryField16, BinaryField128>(
+            8,
+            BinaryPcsParams {
+                log_inv_rate: 2,
+                pow_bits: 0,
+                security_level: 40,
+            },
+        )
+        .unwrap();
+        let committed = BinaryPcs::<BinaryField8, BinaryField128, (), ()>::new(mixed, (), ()).err();
+        assert_eq!(
+            committed,
+            Some(BinaryPcsConfigError::CommittedFieldMismatch {
+                derived: 16,
+                actual: 8,
+            })
+        );
+
+        // Fixture state: keep the 16-bit alphabet and narrow only the challenge field.
+        let challenge = BinaryPcs::<BinaryField16, BinaryField64, (), ()>::new(mixed, (), ()).err();
+        assert_eq!(
+            challenge,
+            Some(BinaryPcsConfigError::ChallengeFieldMismatch {
+                derived: 128,
+                actual: 64,
+            })
+        );
+    }
 
     /// Commit, open at a transcript-sampled point, verify. The prover and verifier run on
     /// independent challengers seeded identically, which is what makes a transcript desync

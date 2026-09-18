@@ -15,8 +15,8 @@ use p3_binary_field::{
     TowerLevel,
 };
 use p3_binary_pcs::{
-    BinaryPcs, BinaryPcsConfig, BinaryPcsError, BinaryPcsParams, BinaryPcsProof, FoldAlphabet,
-    GroupedCodewordMmcs,
+    BinaryPcs, BinaryPcsConfig, BinaryPcsError, BinaryPcsParams, BinaryPcsProof, ChallengeField,
+    FoldAlphabet, GroupedCodewordMmcs,
 };
 use p3_challenger::fs::TranscriptField;
 use p3_challenger::{
@@ -381,7 +381,7 @@ fn a_narrow_alphabet_round_trip<A, C>(
     seed: u64,
 ) where
     A: EncodableLevel + TranscriptField + FoldAlphabet<C> + PrimeCharacteristicRing,
-    C: ExtensionField<A> + TowerLevel + FoldAlphabet<C>,
+    C: ChallengeField<A> + ExtensionField<A> + TowerLevel + FoldAlphabet<C>,
     StandardUniform: Distribution<A>,
     LevelMmcs<A>: Mmcs<A>,
     LevelMmcs<C>: Mmcs<C, Error = <LevelMmcs<A> as Mmcs<A>>::Error>,
@@ -470,8 +470,8 @@ fn every_committed_alphabet_round_trips_under_every_fold_schedule() {
     // The pairs below are exactly the ones the fold route table admits.
     // A challenge field must fold into itself, which only the two widest levels do.
     //
-    //     - 8, 16, 32   ->  64 and 128, each by lifting on the batch's first fold
-    //     - 64          ->  64 by its own route, and 128 by lifting
+    //     - 8, 16, 32   ->  64 by lifting, and 128 through the packed route
+    //     - 64          ->  64 by its own route, and 128 through the packed route
     //     - 128         ->  128 by the packed route
     //
     // Fixture state: arity 6, so a 2^8 base codeword, which is the whole 8-bit domain.

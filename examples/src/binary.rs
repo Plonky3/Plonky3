@@ -10,9 +10,7 @@ use core::fmt;
 use std::time::Instant;
 
 use p3_air::{Air, BaseAir};
-use p3_binary_dft::{
-    AdditiveNtt, AdditiveRsEncoder, LchNtt, NaiveAdditiveNtt, PolyBasisNtt,
-};
+use p3_binary_dft::{AdditiveNtt, AdditiveRsEncoder, LchNtt, NaiveAdditiveNtt, PolyBasisNtt};
 use p3_binary_field::{BinaryChallenger, BinaryField2, BinaryField128, Ghash128, poly_basis};
 use p3_binary_pcs::{
     BinaryPcs, BinaryPcsConfig, BinaryPcsConfigError, BinaryPcsParams, BinaryPcsProverData,
@@ -98,7 +96,10 @@ pub fn binary_config<const N: usize, Ntt>(
     params: BinaryPcsParams,
     folding: usize,
     ntt: Ntt,
-) -> Result<BinaryStarkConfig<N, Ntt>, BinaryPcsConfigError> {
+) -> Result<BinaryStarkConfig<N, Ntt>, BinaryPcsConfigError>
+where
+    Ntt: AdditiveNtt<F> + Sync,
+{
     let pcs_config =
         BinaryPcsConfig::try_new_with_folding::<F, F>(arity, params, folding.min(arity))?;
     let merkle = MerkleMmcs::<N>::new(

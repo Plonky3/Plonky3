@@ -25,7 +25,7 @@ mod verifier;
 pub use boolean::{BooleanMultilinearPcs, BooleanPcs, BooleanPcsError, BooleanProof};
 pub use boolean_trace::{BooleanTraceData, BooleanTraceError, BooleanTracePcs, BooleanTraceProof};
 pub use error::BinaryPcsError;
-pub use fold::{FoldAlphabet, fold_codeword, fold_pair};
+pub use fold::{ChallengeField, FoldAlphabet, fold_codeword, fold_pair};
 pub use grouped_mmcs::GroupedCodewordMmcs;
 pub use packing::{Coordinates, PackError, PackedStack, coordinate_bytes, pack, unpack};
 pub use params::{BinaryPcsConfig, BinaryPcsConfigError, BinaryPcsParams};

@@ -5,6 +5,7 @@ use core::fmt::{self, Debug, Display, Formatter};
 use core::iter::{Product, Sum};
 use core::mem::ManuallyDrop;
 use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
+use core::slice;
 
 use num_bigint::BigUint;
 use p3_field::op_assign_macros::{
@@ -12,13 +13,17 @@ use p3_field::op_assign_macros::{
     impl_sub_assign, impl_sub_base_field, ring_sum,
 };
 use p3_field::{Algebra, Field, Packable, PrimeCharacteristicRing, RawDataSerializable};
+use p3_maybe_rayon::prelude::*;
 use rand::Rng;
 use rand::distr::{Distribution, StandardUniform};
 use serde::{Deserialize, Serialize};
 
 use crate::cantor::CANTOR_BASIS_128;
 use crate::tower::TowerLevel;
-use crate::{BinaryField64, Gf2, clmul};
+use crate::{BinaryField8, BinaryField16, BinaryField32, BinaryField64, Gf2, clmul};
+
+/// Elements one parallel task converts between the two 64-bit bases.
+const TABLE_CHUNK: usize = 1 << 16;
 
 /// The Cantor basis in this representation, carried over from the tower's own.
 ///
@@ -63,6 +68,27 @@ pub struct Poly64(u64);
 impl Poly64 {
     /// The number of bits of an element.
     pub(crate) const BITS: usize = 64;
+
+    /// Converts a whole tower-basis table in its existing allocation.
+    ///
+    /// Every entry is the image of the corresponding tower element under the field isomorphism.
+    pub fn from_tower_vec(values: Vec<BinaryField64>) -> Vec<Self> {
+        let mut values = ManuallyDrop::new(values);
+        let (ptr, len, capacity) = (values.as_mut_ptr(), values.len(), values.capacity());
+
+        // Both fields are transparent over a 64-bit word.
+        // Reusing the allocation avoids copying the residual tables before sumcheck.
+        let words = unsafe { slice::from_raw_parts_mut(ptr.cast::<u64>(), len) };
+        words.par_chunks_mut(TABLE_CHUNK).for_each(|chunk| {
+            chunk
+                .iter_mut()
+                .for_each(|word| *word = clmul::tower_to_poly_64(*word));
+        });
+
+        // SAFETY: both element types have the size and alignment of `u64`.
+        // Every 64-bit pattern is canonical in both fields.
+        unsafe { Vec::from_raw_parts(ptr.cast::<Self>(), len, capacity) }
+    }
 
     /// The element with the given polynomial-basis coordinates.
     ///
@@ -303,6 +329,54 @@ impl From<Poly64> for BinaryField64 {
     }
 }
 
+impl Add<BinaryField64> for Poly64 {
+    type Output = Self;
+
+    #[inline]
+    fn add(self, rhs: BinaryField64) -> Self {
+        self + Self::from(rhs)
+    }
+}
+
+impl Sub<BinaryField64> for Poly64 {
+    type Output = Self;
+
+    #[inline]
+    fn sub(self, rhs: BinaryField64) -> Self {
+        self - Self::from(rhs)
+    }
+}
+
+impl Mul<BinaryField64> for Poly64 {
+    type Output = Self;
+
+    #[inline]
+    fn mul(self, rhs: BinaryField64) -> Self {
+        self * Self::from(rhs)
+    }
+}
+
+impl Algebra<BinaryField64> for Poly64 {}
+
+macro_rules! impl_narrow_algebra {
+    ($($field:ty),* $(,)?) => {$(
+        impl From<$field> for Poly64 {
+            #[inline]
+            fn from(x: $field) -> Self {
+                Self::from(BinaryField64::from(x))
+            }
+        }
+
+        impl_add_base_field!(Poly64, $field);
+        impl_sub_base_field!(Poly64, $field);
+        impl_mul_base_field!(Poly64, $field);
+
+        impl Algebra<$field> for Poly64 {}
+    )*};
+}
+
+impl_narrow_algebra!(BinaryField8, BinaryField16, BinaryField32);
+
 impl Add for Poly64 {
     type Output = Self;
 
@@ -366,12 +440,42 @@ impl Algebra<Gf2> for Poly64 {}
 
 #[cfg(test)]
 mod tests {
-    use p3_field::{Field, PrimeCharacteristicRing};
+    use alloc::vec::Vec;
+
+    use p3_field::{Algebra, Field, PrimeCharacteristicRing};
     use proptest::prelude::*;
 
     use super::Poly64;
     use crate::tower::TowerLevel;
-    use crate::{BinaryField64, Gf2};
+    use crate::{BinaryField8, BinaryField16, BinaryField32, BinaryField64, Gf2};
+
+    #[test]
+    fn tower_table_conversion_and_narrow_algebras_match_the_tower() {
+        // The bulk conversion must be the scalar field isomorphism without another allocation.
+        let table: Vec<BinaryField64> = (0..257)
+            .map(|i| BinaryField64::from_repr(i * 0x9e37_79b9))
+            .collect();
+        let expected: Vec<Poly64> = table.iter().copied().map(Poly64::from).collect();
+        let allocation = table.as_ptr();
+        let converted = Poly64::from_tower_vec(table);
+        assert_eq!(converted, expected);
+        assert_eq!(converted.as_ptr().cast::<BinaryField64>(), allocation);
+
+        // Each supported subfield must use the same embedding as tower multiplication.
+        const fn assert_algebra<F: PrimeCharacteristicRing, A: Algebra<F>>() {}
+        assert_algebra::<BinaryField8, Poly64>();
+        assert_algebra::<BinaryField16, Poly64>();
+        assert_algebra::<BinaryField32, Poly64>();
+        assert_algebra::<BinaryField64, Poly64>();
+
+        let x = BinaryField64::from_repr(0xd6e8_feb8_6659_fd93);
+        let x_poly = Poly64::from(x);
+        let scalar = BinaryField32::from_repr(0xa5c3_19e7);
+        assert_eq!(
+            BinaryField64::from(x_poly * scalar),
+            x * BinaryField64::from(scalar)
+        );
+    }
 
     #[test]
     fn the_change_of_basis_fixes_the_constants() {

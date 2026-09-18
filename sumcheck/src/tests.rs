@@ -675,31 +675,12 @@ const CRATE_PROTOCOL_NAMES: [(&str, &[u8]); 9] = [
     ("layout batching", crate::layout::transcript::BATCHING_NAME),
 ];
 
-/// The claim pool's name, read back out of the identifier its own shape builds.
-///
-/// Its constant is private to its module, so the separator is the way in.
-///
-/// Reading it here rather than repeating the bytes keeps a rename from slipping past.
-///
-/// The pool is generic over the field its claims live in.
-/// The name is the same whichever one it is taken over.
-fn claim_pool_name() -> Vec<u8> {
-    let separator = crate::ClaimPoolShape::new(1, 1).domain_separator::<F>();
-    let id = separator.protocol_id();
-
-    // The identifier is `[version | name | zero padding | name_len]`.
-    let len = usize::from(id[p3_challenger::fs::PROTOCOL_ID_LEN - 1]);
-    id[1..1 + len].to_vec()
-}
-
 /// Every name this crate seeds with, whether or not its constant is reachable.
 fn crate_protocol_names() -> Vec<(&'static str, Vec<u8>)> {
-    let mut names: Vec<(&'static str, Vec<u8>)> = CRATE_PROTOCOL_NAMES
+    CRATE_PROTOCOL_NAMES
         .iter()
         .map(|&(label, name)| (label, name.to_vec()))
-        .collect();
-    names.push(("claim pool", claim_pool_name()));
-    names
+        .collect()
 }
 
 #[test]

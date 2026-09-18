@@ -66,10 +66,10 @@ use alloc::vec::Vec;
 
 use p3_binary_dft::{domain_point, domain_point_steps};
 use p3_binary_field::{
-    BinaryField8, BinaryField16, BinaryField32, BinaryField64, BinaryField128, Ghash128,
+    BinaryField8, BinaryField16, BinaryField32, BinaryField64, BinaryField128, Ghash128, Poly64,
     TowerLevel, poly_basis,
 };
-use p3_field::{ExtensionField, Field, PackedValue, PrimeCharacteristicRing};
+use p3_field::{Algebra, ExtensionField, Field, PackedValue, PrimeCharacteristicRing};
 use p3_maybe_rayon::prelude::*;
 use p3_sumcheck::strategy::IntoTranscriptField;
 
@@ -227,12 +227,6 @@ where
 /// Every implementation panics unless there is at least one challenge.
 /// A fold with no round would leave every output slot at zero rather than fail.
 pub trait FoldAlphabet<EF: TowerLevel>: TowerLevel {
-    /// The arithmetic representation used by the residual sumcheck.
-    ///
-    /// This belongs to the `(alphabet, challenge field)` route: 128-bit challenges use the
-    /// carryless-multiply representation, while 64-bit challenges stay in their native field.
-    type SumcheckRepr: IntoTranscriptField<EF>;
-
     /// Fold one round per challenge, halving the codeword each time.
     ///
     /// `challenges` stays in the order the sumcheck drew it.
@@ -240,75 +234,81 @@ pub trait FoldAlphabet<EF: TowerLevel>: TowerLevel {
 }
 
 impl FoldAlphabet<Self> for BinaryField128 {
-    type SumcheckRepr = Ghash128;
-
     fn fold_rounds(codeword: &[Self], challenges: &[Self]) -> Vec<Self> {
         fold_rounds_packed(codeword, challenges)
     }
 }
 
 impl FoldAlphabet<Self> for BinaryField64 {
-    type SumcheckRepr = Self;
-
     fn fold_rounds(codeword: &[Self], challenges: &[Self]) -> Vec<Self> {
         fold_rounds_scalar(codeword, challenges)
     }
 }
 
 impl FoldAlphabet<BinaryField128> for BinaryField64 {
-    type SumcheckRepr = Ghash128;
-
     fn fold_rounds(codeword: &[Self], challenges: &[BinaryField128]) -> Vec<BinaryField128> {
         fold_rounds_packed(codeword, challenges)
     }
 }
 
 impl FoldAlphabet<BinaryField128> for BinaryField32 {
-    type SumcheckRepr = Ghash128;
-
     fn fold_rounds(codeword: &[Self], challenges: &[BinaryField128]) -> Vec<BinaryField128> {
         fold_rounds_packed(codeword, challenges)
     }
 }
 
 impl FoldAlphabet<BinaryField64> for BinaryField32 {
-    type SumcheckRepr = BinaryField64;
-
     fn fold_rounds(codeword: &[Self], challenges: &[BinaryField64]) -> Vec<BinaryField64> {
         fold_rounds_lifting(codeword, challenges)
     }
 }
 
 impl FoldAlphabet<BinaryField128> for BinaryField16 {
-    type SumcheckRepr = Ghash128;
-
     fn fold_rounds(codeword: &[Self], challenges: &[BinaryField128]) -> Vec<BinaryField128> {
         fold_rounds_packed(codeword, challenges)
     }
 }
 
 impl FoldAlphabet<BinaryField64> for BinaryField16 {
-    type SumcheckRepr = BinaryField64;
-
     fn fold_rounds(codeword: &[Self], challenges: &[BinaryField64]) -> Vec<BinaryField64> {
         fold_rounds_lifting(codeword, challenges)
     }
 }
 
 impl FoldAlphabet<BinaryField128> for BinaryField8 {
-    type SumcheckRepr = Ghash128;
-
     fn fold_rounds(codeword: &[Self], challenges: &[BinaryField128]) -> Vec<BinaryField128> {
         fold_rounds_packed(codeword, challenges)
     }
 }
 
 impl FoldAlphabet<BinaryField64> for BinaryField8 {
-    type SumcheckRepr = BinaryField64;
-
     fn fold_rounds(codeword: &[Self], challenges: &[BinaryField64]) -> Vec<BinaryField64> {
         fold_rounds_lifting(codeword, challenges)
     }
+}
+
+/// A challenge field and the arithmetic representation used by its residual sumcheck.
+///
+/// The representation depends on the challenge field alone.
+/// A 128-bit challenge uses the carryless-multiply representation.
+/// A 64-bit challenge uses its polynomial-basis carryless-multiply representation.
+pub trait ChallengeField<F: Field>: TowerLevel {
+    /// Isomorphic field used for residual sumcheck arithmetic.
+    type SumcheckRepr: IntoTranscriptField<Self> + Algebra<F>;
+}
+
+impl<F: Field> ChallengeField<F> for BinaryField128
+where
+    Ghash128: Algebra<F>,
+{
+    type SumcheckRepr = Ghash128;
+}
+
+impl<F: Field> ChallengeField<F> for BinaryField64
+where
+    Poly64: Algebra<F>,
+{
+    type SumcheckRepr = Poly64;
 }
 
 /// The domain point each lane adds on top of the one evaluated at its group's first index.

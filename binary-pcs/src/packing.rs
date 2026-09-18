@@ -68,13 +68,6 @@ pub unsafe trait Coordinates: Copy + Send + Sync + 'static {
     const COORDINATES: usize;
 }
 
-// A byte index is a memory offset and a coordinate is a bit of a value.
-// The two orders agree only on a little-endian target, which every copy below rests on.
-const _: () = assert!(
-    cfg!(target_endian = "little"),
-    "a coordinate run's byte view needs a little-endian target"
-);
-
 /// Pin the part of one implementor's contract a constant can state: its two counts agree.
 const fn check_coordinates<A: Coordinates>() {
     assert!(
@@ -131,6 +124,10 @@ where
     const {
         check_coordinates::<A>();
         check_coordinates::<EF>();
+        assert!(
+            cfg!(target_endian = "little"),
+            "packing a coordinate run needs a little-endian target"
+        );
     }
     let coordinates = cells.len() * A::COORDINATES;
     assert_eq!(
@@ -171,6 +168,10 @@ where
     const {
         check_coordinates::<A>();
         check_coordinates::<EF>();
+        assert!(
+            cfg!(target_endian = "little"),
+            "unpacking a coordinate run needs a little-endian target"
+        );
     }
     let coordinates = elements.len() * EF::COORDINATES;
     assert_eq!(
@@ -196,7 +197,13 @@ where
 /// The byte view of a run of cells, which is the same bytes the packing holds.
 #[must_use]
 pub const fn coordinate_bytes<A: Coordinates>(cells: &[A]) -> &[u8] {
-    const { check_coordinates::<A>() }
+    const {
+        check_coordinates::<A>();
+        assert!(
+            cfg!(target_endian = "little"),
+            "viewing coordinate bytes needs a little-endian target"
+        );
+    }
 
     // SAFETY: by the trait contract the run is exactly this many initialised bytes.
     // It has no padding and no invalid pattern, and every bit pattern of a byte is valid.

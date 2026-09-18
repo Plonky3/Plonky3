@@ -2,7 +2,7 @@
 //!
 //! # Overview
 //!
-//! Twenty-six protocols in this workspace seed their transcript from a domain separator.
+//! Twenty-five protocols in this workspace seed their transcript from a domain separator.
 //!
 //! The version byte is a format version each protocol owns, so names carry the separation.
 //!
@@ -11,7 +11,7 @@
 //!                       ^     ^                  ^
 //!                       |     |                  disambiguates padded prefixes
 //!                       |     the only field that differs between protocols
-//!                       the same byte for all twenty-six
+//!                       the same byte for all twenty-five
 //! ```
 //!
 //! Separation therefore rests entirely on the name.
@@ -24,7 +24,7 @@
 //!
 //! `p3-examples` is a leaf: nothing depends on it.
 //!
-//! It also already pulls in most of the twenty-six.
+//! It also already pulls in most of the twenty-five.
 
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_batch_stark::BatchShape;
@@ -51,7 +51,6 @@ use p3_stir::pcs_transcript::{
     StirPcsBucketShape, StirPcsClaimShape, StirPcsCommitmentShape, StirPcsOpeningShape,
 };
 use p3_stir::{SecurityAssumption, StirInstanceShape, StirRoundShape, StirShape};
-use p3_sumcheck::ClaimPoolShape;
 use p3_sumcheck::generic_degree::GenericDegreeShape;
 use p3_sumcheck::ring_switch::RingSwitchShape;
 use p3_sumcheck::strategy::Basis;
@@ -65,7 +64,7 @@ use p3_whir::{
 
 /// Base field every separator below is derived over.
 ///
-/// One field for all twenty-six, so nothing is separated by the field choice.
+/// One field for all twenty-five, so nothing is separated by the field choice.
 type F = BabyBear;
 
 /// Extension field every separator below draws its challenges from.
@@ -88,7 +87,7 @@ type Case = (String, DomainSeparator<Alphabet>);
 /// Number of protocols on the typed transcript layer.
 ///
 /// A protocol added without an entry below leaves its name unchecked against the others.
-const NUM_PROTOCOLS: usize = 26;
+const NUM_PROTOCOLS: usize = 25;
 
 /// Configurations swept per protocol: one default, then two single-field moves of it.
 ///
@@ -627,29 +626,6 @@ fn ring_switch_cases() -> Vec<Case> {
         .collect()
 }
 
-/// The claim-pool cases: two claims about a four-variable polynomial, then two moves.
-///
-/// Both knobs widen a message step, and nothing else the description declares moves with them.
-///
-/// The pool is generic over the field its claims live in.
-/// It is taken over the base field here, the alphabet every other case is compared on.
-fn claim_pool_cases() -> Vec<Case> {
-    [
-        ("plain", ClaimPoolShape::new(4, 2)),
-        ("num_variables", ClaimPoolShape::new(5, 2)),
-        ("num_claims", ClaimPoolShape::new(4, 3)),
-    ]
-    .into_iter()
-    .map(|(name, shape)| {
-        case(
-            "p3-sumcheck-claim-pool",
-            name,
-            shape.domain_separator::<F>(),
-        )
-    })
-    .collect()
-}
-
 /// The STIR PCS commitment cases: one root, then two other group counts.
 fn stir_pcs_commitment_cases() -> Vec<Case> {
     [1, 2, 3]
@@ -923,7 +899,6 @@ fn protocols() -> Vec<Vec<Case>> {
         multi_stark_cases(),
         zk_sumcheck_cases(),
         ring_switch_cases(),
-        claim_pool_cases(),
     ]
 }
 

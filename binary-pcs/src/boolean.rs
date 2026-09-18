@@ -84,7 +84,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::error::BinaryPcsError;
-use crate::fold::FoldAlphabet;
+use crate::fold::{ChallengeField, FoldAlphabet};
 use crate::packing::{Coordinates, PackError, PackedStack};
 use crate::params::{BinaryPcsConfig, BinaryPcsConfigError};
 use crate::pcs::BinaryPcs;
@@ -196,7 +196,12 @@ pub struct BooleanPcs<EF: EncodableLevel, MT, MX> {
 
 impl<EF, MT, MX> BooleanPcs<EF, MT, MX>
 where
-    EF: EncodableLevel + TranscriptField + TowerLevel + FoldAlphabet<EF> + Coordinates,
+    EF: ChallengeField<EF>
+        + EncodableLevel
+        + TranscriptField
+        + TowerLevel
+        + FoldAlphabet<EF>
+        + Coordinates,
     MT: Mmcs<EF>,
     MX: Mmcs<EF, Error = MT::Error>,
 {
@@ -204,6 +209,7 @@ where
     ///
     /// # Errors
     ///
+    /// Returns an error unless the schedule was derived for `(EF, EF)`.
     /// Returns an error unless the schedule commits exactly the elements the packing holds.
     pub fn new(
         config: BinaryPcsConfig,
@@ -328,7 +334,12 @@ where
 
 impl<EF, MT, MX, Challenger> BooleanMultilinearPcs<EF, Challenger> for BooleanPcs<EF, MT, MX>
 where
-    EF: EncodableLevel + TranscriptField + TowerLevel + FoldAlphabet<EF> + Coordinates,
+    EF: ChallengeField<EF>
+        + EncodableLevel
+        + TranscriptField
+        + TowerLevel
+        + FoldAlphabet<EF>
+        + Coordinates,
     MT: Mmcs<EF>,
     MX: Mmcs<EF, Error = MT::Error>,
     Challenger: FieldChallenger<EF>
@@ -574,7 +585,7 @@ pub enum BooleanPcsError<EF, MmcsError> {
 
 #[cfg(test)]
 mod tests {
-    use p3_binary_field::{BinaryField128, Gf2, PackedGf2x64};
+    use p3_binary_field::{BinaryField64, BinaryField128, Gf2, PackedGf2x64};
     use p3_field::PrimeCharacteristicRing;
     use proptest::prelude::*;
     use rand::rngs::SmallRng;
@@ -783,10 +794,10 @@ mod tests {
     }
 
     #[test]
-    fn a_reduction_over_another_witness_leaves_a_claim_the_commitment_does_not_open() {
+    fn a_non_first_reduction_over_another_witness_leaves_a_claim_the_commitment_does_not_open() {
         // Invariant: the closing comparison is what ties the reductions to the commitment.
         //
-        // Mutation: reduce over witness A, open witness B, keep everything else honest.
+        // Mutation: reduce the middle claim over witness A and open witness B.
         //
         //     - transcript  A's reduction runs on the sponge that absorbed B's root
         //     - reduction   replays and accepts, being a true proof about A
@@ -797,8 +808,11 @@ mod tests {
         const LOG_BITS: usize = 13;
 
         let pcs = boolean_pcs(LOG_BITS);
-        let point = Point::<EF>::rand(&mut SmallRng::seed_from_u64(0x0A11), LOG_BITS);
-        let points = alloc::vec![point.clone()];
+        const FORGED: usize = 1;
+        let mut rng = SmallRng::seed_from_u64(0x0A11);
+        let points = (0..3)
+            .map(|_| Point::<EF>::rand(&mut rng, LOG_BITS))
+            .collect::<Vec<_>>();
 
         // Witness A supplies the packing the reduction runs over, B the root and the opening.
         let (_, data_a) = pcs
@@ -810,28 +824,48 @@ mod tests {
             .commit_bits(&witness(0xBBBB, LOG_BITS), &mut chal)
             .unwrap();
 
-        // The reduction is a true proof about A, played on B's sponge.
+        // Reductions zero and two honestly use B.
+        // The middle reduction is a true proof about A, played on B's sponge.
         let packing_a = BooleanPcs::<EF, MyMmcs, MyMmcs>::packing(&data_a);
-        let reduction = BitRingSwitch::new(&point).unwrap();
-        let (sent, surviving_point, surviving_value) = reduction.prove(&packing_a, &mut chal);
-        let values = alloc::vec![reduction.incoming_claim(&sent.tensor)];
+        let packing_b = BooleanPcs::<EF, MyMmcs, MyMmcs>::packing(&data_b);
+        let mut reductions = Vec::with_capacity(points.len());
+        let mut values = Vec::with_capacity(points.len());
+        let mut surviving_points = Vec::with_capacity(points.len());
+        let mut surviving_values = Vec::with_capacity(points.len());
+        for (index, point) in points.iter().enumerate() {
+            let packing = if index == FORGED {
+                &packing_a
+            } else {
+                &packing_b
+            };
+            let reduction = BitRingSwitch::new(point).unwrap();
+            let (sent, surviving_point, surviving_value) = reduction.prove(packing, &mut chal);
+            values.push(reduction.incoming_claim(&sent.tensor));
+            reductions.push(sent);
+            surviving_points.push(surviving_point);
+            surviving_values.push(surviving_value);
+        }
 
-        // The commitment then opens B at the point A's reduction ended on.
+        // The commitment then opens B at all three surviving points.
         let opening = pcs
             .inner
             .try_open_at(
                 data_b,
-                &pcs.protocol(1),
-                core::slice::from_ref(&surviving_point),
+                &pcs.protocol(points.len()),
+                &surviving_points,
                 &mut chal,
             )
             .unwrap();
 
-        // The two claims about the same point disagree, which is what is caught below.
-        assert_ne!(opening.evals[0].current()[0], surviving_value);
+        // The first claim agrees, so checking only the first pair would accept this forgery.
+        assert_eq!(opening.evals[0].current()[0], surviving_values[0]);
+        // The middle claims about the same point disagree, which is what is caught below.
+        assert_ne!(opening.evals[FORGED].current()[0], surviving_values[FORGED]);
+        // The final claim also agrees, isolating the forged non-first index.
+        assert_eq!(opening.evals[2].current()[0], surviving_values[2]);
 
         let proof = BooleanProof {
-            reductions: alloc::vec![sent],
+            reductions,
             opening,
         };
         let err = pcs
@@ -845,7 +879,7 @@ mod tests {
             .unwrap_err();
         assert!(matches!(err, BooleanPcsError::SurvivingClaim), "{err:?}");
 
-        // B's own reduction at the same point is accepted, so the rejection is the mismatch.
+        // B's own reductions at the same points are accepted, so the rejection is the mismatch.
         let mut honest = challenger();
         let (root, data) = pcs
             .commit_bits(&witness(0xBBBB, LOG_BITS), &mut honest)
@@ -881,7 +915,21 @@ mod tests {
             })
         ));
 
+        // A schedule for another committed field reaches the nested configuration error.
+        let config = BinaryPcsConfig::try_new::<BinaryField64, EF>(6, params).unwrap();
+        let wrong_field = BooleanPcs::<EF, MyMmcs, MyMmcs>::new(config, mmcs(), mmcs(), 13).err();
+        assert!(matches!(
+            wrong_field,
+            Some(BooleanPcsError::Config(
+                BinaryPcsConfigError::CommittedFieldMismatch {
+                    derived: 64,
+                    actual: 128,
+                }
+            ))
+        ));
+
         // A schedule committing a different arity than the packing holds is refused.
+        let config = BinaryPcsConfig::try_new::<EF, EF>(6, params).unwrap();
         let wrong_arity = BooleanPcs::<EF, MyMmcs, MyMmcs>::new(config, mmcs(), mmcs(), 14).err();
         assert!(matches!(
             wrong_arity,

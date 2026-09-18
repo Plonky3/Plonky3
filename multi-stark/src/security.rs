@@ -140,9 +140,7 @@ impl MultiStarkSecurityReport {
     ) -> f64 {
         // A term is usable when it names a probability in `[0, 1]`, so its bits are `>= 0`.
         //
-        // Infinite bits are a zero error, which a reduction that never runs reports:
-        //
-        //     one claim folded under one weight  ->  nothing to separate  ->  zero error
+        // Infinite bits are a zero error, which a reduction that never runs reports.
         //
         // Rejecting that would leave a component unassessed for having nothing to charge.
         //
@@ -483,8 +481,7 @@ mod tests {
     fn a_reduction_with_nothing_to_charge_is_still_assessed() {
         // A reduction that never runs reports a zero error, which is infinitely many bits.
         //
-        //     one claim under one weight   ->  nothing to separate  ->  error 0
-        //     zero reductions              ->  no challenge at all  ->  error 0
+        //     zero reductions  ->  no challenge at all  ->  error 0
         //
         // Fixture state: one finite term at 100 bits, one term carrying no error.
         //

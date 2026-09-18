@@ -34,7 +34,7 @@ use p3_sumcheck::SumcheckData;
 use p3_sumcheck::layout::{Layout, Table, Witness};
 
 use crate::PcsLayout;
-use crate::fold::{FoldAlphabet, fold_codeword_batch};
+use crate::fold::{ChallengeField, FoldAlphabet, fold_codeword_batch};
 use crate::params::BinaryPcsConfig;
 use crate::proof::RoundProof;
 use crate::transcript::BinaryPcsProverTranscript;
@@ -169,7 +169,7 @@ pub(crate) fn fold_rounds_with<const BIND_EACH_ROUND: bool, F, EF, MT, MX, Ch>(
 )
 where
     F: TranscriptField + FoldAlphabet<EF>,
-    EF: ExtensionField<F> + FoldAlphabet<EF>,
+    EF: ChallengeField<F> + ExtensionField<F> + FoldAlphabet<EF>,
     MT: Mmcs<F>,
     MX: Mmcs<EF>,
     Ch: FieldChallenger<F>
@@ -184,10 +184,10 @@ where
 
     let mut sumcheck_data = SumcheckData::default();
 
-    // The rounds multiply in the polynomial basis, which needs no change of basis per product.
-    // The transcript carries tower elements.
+    // Each challenge width uses its carryless-multiply representation for round arithmetic.
+    // The transcript carries tower elements in both cases.
     let (mut sumcheck, mut randomness) = transcript.fold_batch(|challenger| {
-        layout.into_sumcheck_in::<<F as FoldAlphabet<EF>>::SumcheckRepr, _>(
+        layout.into_sumcheck_in::<<EF as ChallengeField<F>>::SumcheckRepr, _>(
             &mut sumcheck_data,
             0,
             challenger,

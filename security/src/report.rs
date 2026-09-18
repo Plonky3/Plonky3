@@ -54,6 +54,7 @@ pub struct SecurityTerm {
     /// Error source this term charges.
     pub label: &'static str,
     /// Which of the composing protocol's parts charged it, when there is a choice.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub component: Option<&'static str>,
     /// The bound itself, in `−log2(error)` bits.
     pub bits: ErrorBits,

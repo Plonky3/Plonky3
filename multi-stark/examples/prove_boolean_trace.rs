@@ -709,14 +709,6 @@ mod tests {
             );
         }
 
-        // The surviving claims are closed by an equality, so nothing is batched twice.
-        assert!(
-            !report
-                .terms()
-                .iter()
-                .any(|term| term.label == "claim-pool-batching")
-        );
-
         report.require_security(SECURITY_BITS).unwrap();
         assert!(report.require_security(128).is_err());
     }

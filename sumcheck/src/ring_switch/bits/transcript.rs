@@ -80,7 +80,13 @@ impl BitRingSwitchShape {
         Self { num_variables }
     }
 
-    /// Rounds the delegated sumcheck runs, panicking on a point narrower than one element.
+    /// Maximum delegated rounds for this point width.
+    ///
+    /// A Boolean prefix of length `p` leaves `l' - p` rounds from this maximum `l'`.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the point is narrower than one element.
     #[must_use]
     pub fn sumcheck_rounds<EF: TowerLevel>(&self) -> usize {
         let absorbed = BitRingSwitch::<EF>::ABSORBED;
@@ -625,6 +631,10 @@ mod tests {
             .map(Interaction::label)
             .collect();
 
+        let point_at = labels
+            .iter()
+            .position(|&label| label == EVALUATION_POINT)
+            .expect("the description binds the evaluation point");
         let rows_at = labels
             .iter()
             .position(|&label| label == TENSOR_ROWS)
@@ -636,6 +646,11 @@ mod tests {
             .expect("the description draws a challenge");
 
         assert_eq!(labels[first_challenge], BATCHING_POINT);
+        assert!(
+            point_at < first_challenge,
+            "the evaluation point is bound at step {point_at}, the first challenge is step \
+             {first_challenge}",
+        );
         assert!(
             rows_at < first_challenge,
             "the rows are bound at step {rows_at}, the first challenge is step \

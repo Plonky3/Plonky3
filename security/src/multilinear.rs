@@ -18,44 +18,6 @@ use libm::log2;
 
 use crate::{ErrorBits, SecurityTerm};
 
-/// Label for the claim-pool batching term.
-pub const CLAIM_POOL_LABEL: &str = "claim-pool-batching";
-
-/// Error of folding `num_claims` claims about one polynomial under powers of one challenge.
-///
-/// A prover wanting a false claim accepted needs its fold to match the true one's.
-/// Their difference is a nonzero polynomial in the challenge of degree at most `k - 1`:
-///
-/// ```text
-///     error = (k - 1) / |F|
-/// ```
-///
-/// The bound holds only because the challenge is drawn after every claim value is bound.
-/// A challenge drawn first carries none: one linear equation in the values always solves.
-///
-/// It is a per-attempt probability, since a prover may resample a Fiat-Shamir challenge.
-/// Charging the total cost needs a grinding site at the draw, which this does not price.
-///
-/// # Arguments
-///
-/// - `num_claims`: claims folded under the one challenge.
-/// - `field_bits`: bit width of the field the challenge is drawn from.
-#[must_use]
-pub fn claim_pool_error(num_claims: usize, field_bits: usize) -> ErrorBits {
-    // Zero claims and one claim both carry no error: there is nothing to separate.
-    let degree = num_claims.saturating_sub(1);
-    if degree == 0 {
-        return ErrorBits::from_log2(f64::INFINITY);
-    }
-    ErrorBits::from_log2(field_bits as f64 - log2(degree as f64))
-}
-
-/// The claim-pool term, labelled for a report.
-#[must_use]
-pub fn claim_pool_term(num_claims: usize, field_bits: usize) -> SecurityTerm {
-    SecurityTerm::new(CLAIM_POOL_LABEL, claim_pool_error(num_claims, field_bits))
-}
-
 /// Label for the bit-alphabet ring-switch term.
 pub const BIT_RING_SWITCH_LABEL: &str = "bit-ring-switch";
 
@@ -830,34 +792,6 @@ mod tests {
                 .iter()
                 .any(|term| term.label.starts_with("logup-star-"))
         );
-    }
-
-    #[test]
-    fn a_claim_pool_costs_the_degree_of_its_difference_polynomial() {
-        // Nothing separates a single claim from itself, so the fold is unconditional.
-        assert!(claim_pool_error(0, 128).bits().is_infinite());
-        assert!(claim_pool_error(1, 128).bits().is_infinite());
-
-        // Invariant: k claims give a degree k-1 difference in the challenge.
-        //
-        //     - k = 2     ->  degree 1     ->  128 - 0  = 128 bits
-        //     - k = 129   ->  degree 128   ->  128 - 7  = 121 bits
-        //     - k = 1025  ->  degree 1024  ->  128 - 10 = 118 bits
-        //
-        // Every anchor is hand-computed, and each one discriminates.
-        // Charging the claim count instead of the degree would report no whole bit.
-        assert_eq!(claim_pool_error(2, 128).bits(), 128.0);
-        assert_eq!(claim_pool_error(129, 128).bits(), 121.0);
-        assert_eq!(claim_pool_error(1025, 128).bits(), 118.0);
-
-        // The width enters additively, so the gap between two fields is the width gap.
-        let gap = claim_pool_error(1000, 128).bits() - claim_pool_error(1000, 64).bits();
-        assert!((gap - 64.0).abs() < 1e-9, "{gap}");
-
-        // The term carries the same number under its own label.
-        let term = claim_pool_term(129, 128);
-        assert_eq!(term.label, CLAIM_POOL_LABEL);
-        assert_eq!(term.bits.bits(), 121.0);
     }
 
     #[test]

@@ -3,7 +3,7 @@
 use alloc::vec::Vec;
 use core::marker::PhantomData;
 
-use p3_binary_field::{BinaryField64, BinaryField128, Ghash128};
+use p3_binary_field::{BinaryField64, BinaryField128, Ghash128, Poly64};
 use p3_challenger::fs::TranscriptField;
 use p3_challenger::{FieldChallenger, GrindingChallenger};
 use p3_field::{ExtensionField, Field};
@@ -242,6 +242,13 @@ where
 }
 
 impl FromTable<Self> for BinaryField64 {}
+
+impl FromTable<BinaryField64> for Poly64 {
+    /// Converts the table in its existing allocation.
+    fn from_table(table: Vec<BinaryField64>) -> Vec<Self> {
+        Self::from_tower_vec(table)
+    }
+}
 
 impl FromTable<BinaryField128> for Ghash128 {
     /// Converts in the table's own buffer, a block at a time where the build has the kernel.

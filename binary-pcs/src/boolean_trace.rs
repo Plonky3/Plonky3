@@ -70,7 +70,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::boolean::{BooleanMultilinearPcs, BooleanPcs, BooleanPcsError, BooleanProof};
-use crate::fold::FoldAlphabet;
+use crate::fold::{ChallengeField, FoldAlphabet};
 use crate::packing::Coordinates;
 use crate::params::BinaryPcsConfig;
 use crate::prover::BinaryPcsProverData;
@@ -90,7 +90,12 @@ pub struct BooleanTracePcs<EF: EncodableLevel, MT, MX> {
 
 impl<EF, MT, MX> BooleanTracePcs<EF, MT, MX>
 where
-    EF: EncodableLevel + TranscriptField + TowerLevel + FoldAlphabet<EF> + Coordinates,
+    EF: ChallengeField<EF>
+        + EncodableLevel
+        + TranscriptField
+        + TowerLevel
+        + FoldAlphabet<EF>
+        + Coordinates,
     MT: Mmcs<EF>,
     MX: Mmcs<EF, Error = MT::Error>,
 {
@@ -100,6 +105,7 @@ where
     ///
     /// # Errors
     ///
+    /// Returns an error unless the schedule was derived for `(EF, EF)`.
     /// Returns an error unless the schedule commits exactly the elements the packing holds.
     pub fn new(
         config: BinaryPcsConfig,
@@ -410,7 +416,12 @@ pub enum BooleanTraceError<EF, MmcsError> {
 
 impl<EF, MT, MX, Challenger> MultilinearPcs<EF, Challenger> for BooleanTracePcs<EF, MT, MX>
 where
-    EF: EncodableLevel + TranscriptField + TowerLevel + FoldAlphabet<EF> + Coordinates,
+    EF: ChallengeField<EF>
+        + EncodableLevel
+        + TranscriptField
+        + TowerLevel
+        + FoldAlphabet<EF>
+        + Coordinates,
     MT: Mmcs<EF>,
     MX: Mmcs<EF, Error = MT::Error>,
     Challenger: FieldChallenger<EF>
@@ -490,7 +501,12 @@ where
 
 impl<EF, MT, MX, Challenger> PrescribedPointPcs<EF, Challenger> for BooleanTracePcs<EF, MT, MX>
 where
-    EF: EncodableLevel + TranscriptField + TowerLevel + FoldAlphabet<EF> + Coordinates,
+    EF: ChallengeField<EF>
+        + EncodableLevel
+        + TranscriptField
+        + TowerLevel
+        + FoldAlphabet<EF>
+        + Coordinates,
     MT: Mmcs<EF>,
     MX: Mmcs<EF, Error = MT::Error>,
     Challenger: FieldChallenger<EF>
