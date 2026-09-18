@@ -139,6 +139,8 @@ pub struct ZerocheckProof<F, EF> {
 pub struct AirZerocheck<'a, A> {
     /// AIRs whose alpha-batched constraints are checked.
     airs: &'a [&'a A],
+    /// Setup-time AIR metadata, absent for standalone reductions.
+    profiles: Option<&'a [AirProfile]>,
     /// Grinding difficulty per sumcheck round, or `0` to skip.
     pow_bits: usize,
 }
@@ -438,7 +440,25 @@ impl<'a, A> AirZerocheck<'a, A> {
     ///
     /// AIRs are batched in the order supplied here; proof opening claims use the same order.
     pub const fn new(airs: &'a [&'a A], pow_bits: usize) -> Self {
-        Self { airs, pow_bits }
+        Self {
+            airs,
+            profiles: None,
+            pow_bits,
+        }
+    }
+
+    /// Reuse the symbolic AIR pass performed by multi-STARK setup.
+    pub(crate) fn with_profiles(
+        airs: &'a [&'a A],
+        profiles: &'a [AirProfile],
+        pow_bits: usize,
+    ) -> Self {
+        assert_eq!(airs.len(), profiles.len());
+        Self {
+            airs,
+            profiles: Some(profiles),
+            pow_bits,
+        }
     }
 
     /// Check that prover inputs are aligned with the AIR batch and its declared layouts.
@@ -593,11 +613,18 @@ impl<'a, A> AirZerocheck<'a, A> {
         // Ordinary constraints and lookup links keep their native symbolic degrees.
         // The round state evaluates an AIR up to the larger of the two degrees.
         // It stops accumulating the lower-degree family at that family's own final node.
-        let profiles = self
-            .airs
-            .iter()
-            .map(|&air| get_air_profile::<F, EF, A>(air))
-            .collect::<Vec<_>>();
+        let owned_profiles;
+        let profiles = match self.profiles {
+            Some(profiles) => profiles,
+            None => {
+                owned_profiles = self
+                    .airs
+                    .iter()
+                    .map(|&air| get_air_profile::<F, EF, A>(air))
+                    .collect::<Vec<_>>();
+                &owned_profiles
+            }
+        };
         let degrees = profiles
             .iter()
             .map(|profile| profile.degrees)
@@ -1150,11 +1177,15 @@ impl<'a, A> AirZerocheck<'a, A> {
         });
 
         // The same symbolic pass fixes the round degree and says which AIRs declare lookups.
-        let degrees = self
-            .airs
-            .iter()
-            .map(|&air| get_air_degrees::<F, EF, A>(air))
-            .collect::<Vec<_>>();
+        let degrees = self.profiles.map_or_else(
+            || {
+                self.airs
+                    .iter()
+                    .map(|&air| get_air_degrees::<F, EF, A>(air))
+                    .collect::<Vec<_>>()
+            },
+            |profiles| profiles.iter().map(|profile| profile.degrees).collect(),
+        );
         validate_lookup_links(&degrees, lookup)?;
 
         // One extra degree for the eq weight the sumcheck carries.
