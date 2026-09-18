@@ -33,21 +33,24 @@ use p3_util::{log2_ceil_usize, log2_strict_usize};
 
 type F = BinaryField128;
 type Hash = SerializingHasher<Keccak256Hash>;
-type Compress = CompressionFunctionFromHasher<Keccak256Hash, 2, 32>;
-type MerkleMmcs = p3_merkle_tree::MerkleTreeMmcs<F, u8, Hash, Compress, 2, 32>;
-type Mmcs = GroupedCodewordMmcs<MerkleMmcs>;
+/// `N` is the number of children each Merkle-tree node compresses.
+type Compress<const N: usize> = CompressionFunctionFromHasher<Keccak256Hash, N, 32>;
+type MerkleMmcs<const N: usize> = p3_merkle_tree::MerkleTreeMmcs<F, u8, Hash, Compress<N>, N, 32>;
+type Mmcs<const N: usize> = GroupedCodewordMmcs<MerkleMmcs<N>>;
 type Challenger = BinaryChallenger<F, HashChallenger<u8, Keccak256Hash, 32>>;
 
 /// Multi-STARK configuration proving AIRs over `BinaryField128` with the binary PCS.
-pub struct BinaryStarkConfig {
-    pcs: BinaryPcs<Mmcs>,
+///
+/// `N` is the Merkle tree's child arity: 2 for a binary tree, 4 for a quaternary one.
+pub struct BinaryStarkConfig<const N: usize> {
+    pcs: BinaryPcs<Mmcs<N>>,
 }
 
-impl MultiStarkConfig for BinaryStarkConfig {
+impl<const N: usize> MultiStarkConfig for BinaryStarkConfig<N> {
     type Val = F;
     type Challenge = F;
     type Challenger = Challenger;
-    type Pcs = BinaryPcs<Mmcs>;
+    type Pcs = BinaryPcs<Mmcs<N>>;
 
     fn pcs(&self) -> &Self::Pcs {
         &self.pcs
@@ -69,25 +72,30 @@ impl MultiStarkConfig for BinaryStarkConfig {
 
     fn committed_table<'a>(
         &self,
-        prover_data: &'a BinaryPcsProverData<Mmcs>,
+        prover_data: &'a BinaryPcsProverData<Mmcs<N>>,
         table_index: usize,
     ) -> &'a Table<F> {
         prover_data.table(table_index)
     }
 }
 
-/// Derives a [`BinaryStarkConfig`] for a stacked polynomial of `arity` variables.
+/// Derives a [`BinaryStarkConfig`] for a stacked polynomial of `arity` variables, committing
+/// through an `N`-ary Merkle tree.
 ///
 /// `folding` batches up to that many sequential variable folds between PCS commitments; it is
 /// clamped to `arity`, since a batch cannot fold more variables than the polynomial has.
-pub fn binary_config(
+pub fn binary_config<const N: usize>(
     arity: usize,
     params: BinaryPcsParams,
     folding: usize,
-) -> Result<BinaryStarkConfig, BinaryPcsConfigError> {
+) -> Result<BinaryStarkConfig<N>, BinaryPcsConfigError> {
     let pcs_config = BinaryPcsConfig::try_new_with_folding(arity, params, folding.min(arity))?;
-    let merkle = MerkleMmcs::new(Hash::new(Keccak256Hash), Compress::new(Keccak256Hash), 0);
-    let mmcs = Mmcs::for_folding(merkle, &pcs_config);
+    let merkle = MerkleMmcs::<N>::new(
+        Hash::new(Keccak256Hash),
+        Compress::<N>::new(Keccak256Hash),
+        0,
+    );
+    let mmcs = Mmcs::<N>::for_folding(merkle, &pcs_config);
     Ok(BinaryStarkConfig {
         pcs: BinaryPcs::new(pcs_config, mmcs),
     })
@@ -115,6 +123,11 @@ pub struct BinaryProofOptions {
     pub folding: usize,
     /// Grinding bits demanded per sumcheck round.
     pub sumcheck_pow_bits: usize,
+    /// Number of children each Merkle-tree node compresses: 2 or 4.
+    ///
+    /// 4 cuts the tree's compression count to a third, since a 4-ary node's 128 bytes of children still
+    /// fit one Keccak-256 block, at the cost of larger authentication paths in the proof.
+    pub merkle_arity: usize,
 }
 
 impl Default for BinaryProofOptions {
@@ -125,6 +138,7 @@ impl Default for BinaryProofOptions {
             security_bits: 100,
             folding: 3,
             sumcheck_pow_bits: 0,
+            merkle_arity: 2,
         }
     }
 }
@@ -161,16 +175,22 @@ impl fmt::Display for BinaryProofReport {
 }
 
 /// Failure constructing the config, setting up keys, proving, or verifying a binary AIR.
+///
+/// The wrapped PCS errors project through `BinaryStarkConfig<2>`, but neither the PCS's
+/// commitment nor its error type depends on the Merkle arity, so the same variant covers every
+/// supported arity.
 #[derive(Debug)]
 pub enum BinaryProofError {
     /// The requested PCS parameters do not describe a usable binary-PCS schedule.
     Config(BinaryPcsConfigError),
     /// Proving (including `setup`) rejected its configuration, budget, or security target.
-    Prove(ProvingError<PcsProverError<BinaryStarkConfig>>),
+    Prove(ProvingError<PcsProverError<BinaryStarkConfig<2>>>),
     /// The generated proof failed verification.
-    Verify(VerificationError<PcsError<BinaryStarkConfig>>),
+    Verify(VerificationError<PcsError<BinaryStarkConfig<2>>>),
     /// The statement's security assessment left a component unassessed or below target.
     Security(SecurityError),
+    /// `options.merkle_arity` is not one of the arities the binary-field harness builds.
+    UnsupportedMerkleArity(usize),
 }
 
 impl From<BinaryPcsConfigError> for BinaryProofError {
@@ -179,14 +199,14 @@ impl From<BinaryPcsConfigError> for BinaryProofError {
     }
 }
 
-impl From<ProvingError<PcsProverError<BinaryStarkConfig>>> for BinaryProofError {
-    fn from(error: ProvingError<PcsProverError<BinaryStarkConfig>>) -> Self {
+impl From<ProvingError<PcsProverError<BinaryStarkConfig<2>>>> for BinaryProofError {
+    fn from(error: ProvingError<PcsProverError<BinaryStarkConfig<2>>>) -> Self {
         Self::Prove(error)
     }
 }
 
-impl From<VerificationError<PcsError<BinaryStarkConfig>>> for BinaryProofError {
-    fn from(error: VerificationError<PcsError<BinaryStarkConfig>>) -> Self {
+impl From<VerificationError<PcsError<BinaryStarkConfig<2>>>> for BinaryProofError {
+    fn from(error: VerificationError<PcsError<BinaryStarkConfig<2>>>) -> Self {
         Self::Verify(error)
     }
 }
@@ -221,18 +241,37 @@ impl<A> BinaryAir for A where
 
 /// Proves and verifies `air` against `trace`, reporting size and timing measurements.
 ///
-/// The commitment arity is the trace's log-height plus the ceiling of the log of its width:
-/// one extra variable per doubling of the column count, since every column is stacked into a
-/// single committed polynomial.
-///
-/// The statement's security is assessed once against `options.security_bits` before proving,
-/// so the timed phases are the plain prover and verifier.
+/// Dispatches on `options.merkle_arity` to build a Merkle tree of that child count.
 ///
 /// # Panics
 ///
 /// - The trace height is not a power of two.
 /// - `air` declares public values or preprocessed columns.
 pub fn prove_binary_air<A>(
+    air: &A,
+    trace: RowMajorMatrix<F>,
+    options: BinaryProofOptions,
+) -> Result<BinaryProofReport, BinaryProofError>
+where
+    A: BinaryAir,
+{
+    match options.merkle_arity {
+        2 => prove_binary_air_with::<A, 2>(air, trace, options),
+        4 => prove_binary_air_with::<A, 4>(air, trace, options),
+        other => Err(BinaryProofError::UnsupportedMerkleArity(other)),
+    }
+}
+
+/// Proves and verifies `air` against `trace` through an `N`-ary Merkle tree, reporting size and
+/// timing measurements.
+///
+/// The commitment arity is the trace's log-height plus the ceiling of the log of its width:
+/// one extra variable per doubling of the column count, since every column is stacked into a
+/// single committed polynomial.
+///
+/// The statement's security is assessed once against `options.security_bits` before proving,
+/// so the timed phases are the plain prover and verifier.
+fn prove_binary_air_with<A, const N: usize>(
     air: &A,
     trace: RowMajorMatrix<F>,
     options: BinaryProofOptions,
@@ -261,7 +300,7 @@ where
         pow_bits: options.pcs_pow_bits,
         security_level: options.security_bits,
     };
-    let config = binary_config(arity, params, options.folding)?;
+    let config = binary_config::<N>(arity, params, options.folding)?;
 
     let (pk, vk) = setup(&config, &[air], &mut binary_challenger())?;
 
@@ -301,7 +340,7 @@ where
 
     let bytes = postcard::to_allocvec(&proof).expect("postcard serialization must not fail");
     let proof_bytes = bytes.len();
-    let proof: MultiStarkProof<BinaryStarkConfig> =
+    let proof: MultiStarkProof<BinaryStarkConfig<N>> =
         postcard::from_bytes(&bytes).expect("postcard round trip must not fail");
 
     let verify_start = Instant::now();
@@ -377,5 +416,43 @@ mod tests {
         assert_eq!(report.width, 2);
         assert_eq!(report.stacked_variables, log_height + 1);
         assert!(report.security_bits >= 100.0);
+    }
+
+    #[test]
+    fn proof_size_differs_between_merkle_arities() {
+        let log_height = 4;
+        let report2 = prove_binary_air(
+            &RecurrenceAir,
+            recurrence_trace(log_height),
+            BinaryProofOptions::default(),
+        )
+        .expect("a tiny binary AIR proof must verify at arity 2");
+        let report4 = prove_binary_air(
+            &RecurrenceAir,
+            recurrence_trace(log_height),
+            BinaryProofOptions {
+                merkle_arity: 4,
+                ..BinaryProofOptions::default()
+            },
+        )
+        .expect("a tiny binary AIR proof must verify at arity 4");
+        assert_ne!(report2.proof_bytes, report4.proof_bytes);
+    }
+
+    #[test]
+    fn rejects_an_unsupported_merkle_arity() {
+        let log_height = 4;
+        let result = prove_binary_air(
+            &RecurrenceAir,
+            recurrence_trace(log_height),
+            BinaryProofOptions {
+                merkle_arity: 3,
+                ..BinaryProofOptions::default()
+            },
+        );
+        assert!(matches!(
+            result,
+            Err(BinaryProofError::UnsupportedMerkleArity(3))
+        ));
     }
 }
