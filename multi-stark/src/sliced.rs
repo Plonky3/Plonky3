@@ -93,6 +93,8 @@ const fn broadcast_bit(bit: bool) -> u64 {
 ///
 /// While unpoisoned, lane `i` lifted into `F` is what the same expression computes over `F` on
 /// the lane's row.
+///
+/// `S` must have four elements: the product and the coordinates assume `GF(4)`.
 pub struct SlicedGf4<F, S> {
     /// The coordinate on `1` of every lane.
     low: u64,
@@ -190,7 +192,6 @@ impl<F: HasSubfield<S>, S: Field> SlicedGf4<F, S> {
     #[inline]
     #[must_use]
     pub fn narrow(x: F) -> Self {
-        debug_assert!(is_gf4::<S>(), "sliced values hold GF(4)");
         x.as_subfield()
             .and_then(gf4_coordinates)
             .map_or(Self::POISONED, |(low, high)| Self::broadcast(low, high))

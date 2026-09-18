@@ -393,6 +393,7 @@ where
     let round = challenges.len();
     let num_vars = trace.num_vars;
     debug_assert!(round < trace.rounds && tau.len() == num_vars);
+    debug_assert!(is_gf4::<S>(), "sliced values hold GF(4)");
 
     let nodes = (0..=degree)
         .map(|node| gf4_coordinates(EF::interpolation_node(node).as_subfield()?))
@@ -410,15 +411,16 @@ where
     let word_weights = Poly::new_from_point(word_point, EF::ONE);
     // The row weights factor as word weight times lane weight, the table the caller holds.
     debug_assert!(
-        eq_suffix
-            .as_slice()
-            .iter()
-            .enumerate()
-            .all(|(row, &weight)| {
-                weight
-                    == word_weights.as_slice()[row / SLICED_LANES]
-                        * lane_weights.as_slice()[row % SLICED_LANES]
-            })
+        eq_suffix.num_evals() == word_weights.num_evals() * SLICED_LANES
+            && eq_suffix
+                .as_slice()
+                .iter()
+                .enumerate()
+                .all(|(row, &weight)| {
+                    weight
+                        == word_weights.as_slice()[row / SLICED_LANES]
+                            * lane_weights.as_slice()[row % SLICED_LANES]
+                })
     );
     let lift = |values: &[EF]| {
         values
@@ -550,32 +552,37 @@ where
         }
 
         // Pack each column on its own, successor planes included, reading it contiguously.
+        let top = SLICED_LANES - 1;
         let packed = columns
             .par_iter()
             .zip(&is_successor)
             .map(|(column, &is_successor)| {
-                let column = column.as_chunks::<SLICED_LANES>().0;
-                let planes = column
+                let column_planes = column
+                    .as_chunks::<SLICED_LANES>()
+                    .0
                     .iter()
                     .map(pack_word::<F, S>)
                     .collect::<Option<Vec<_>>>()?;
-                let successors = if is_successor {
-                    // The last row repeats itself; every other row reads the next one.
-                    let last = planes[planes.len() - 1];
-                    let last_carry = (last[0] >> 63 == 1, last[1] >> 63 == 1);
-                    let carries = column[1..]
+                let successor_planes = if is_successor {
+                    // Each word's top lane reads the lowest lane of the next word, and the last
+                    // word's top lane repeats itself.
+                    let lane = |planes: [u64; 2], lane: usize| {
+                        ((planes[0] >> lane) & 1 == 1, (planes[1] >> lane) & 1 == 1)
+                    };
+                    let last = column_planes[column_planes.len() - 1];
+                    let carries = column_planes[1..]
                         .iter()
-                        .map(|next| next[0].as_subfield().and_then(gf4_coordinates))
-                        .chain([Some(last_carry)]);
-                    planes
+                        .map(|&next| lane(next, 0))
+                        .chain([lane(last, top)]);
+                    column_planes
                         .iter()
                         .zip(carries)
-                        .map(|(&planes, carry)| Some(successor_word(planes, carry?)))
-                        .collect::<Option<Vec<_>>>()?
+                        .map(|(&planes, carry)| successor_word(planes, carry))
+                        .collect()
                 } else {
                     Vec::new()
                 };
-                Some((planes, successors))
+                Some((column_planes, successor_planes))
             })
             .collect::<Option<Vec<_>>>()?;
 
@@ -587,13 +594,15 @@ where
             .par_chunks_mut(width)
             .zip(successors.par_chunks_mut(width))
             .enumerate()
-            .for_each(|(word, (cells, successors))| {
-                for ((cell, successor), (planes, next)) in
-                    cells.iter_mut().zip(successors.iter_mut()).zip(&packed)
+            .for_each(|(word, (word_cells, word_successors))| {
+                for ((cell, successor), (column_planes, successor_planes)) in word_cells
+                    .iter_mut()
+                    .zip(word_successors.iter_mut())
+                    .zip(&packed)
                 {
-                    *cell = planes[word];
-                    if let Some(&next) = next.get(word) {
-                        *successor = next;
+                    *cell = column_planes[word];
+                    if let Some(&planes) = successor_planes.get(word) {
+                        *successor = planes;
                     }
                 }
             });
@@ -840,6 +849,10 @@ where
         let ExtColumns::Sliced(columns) = &mut self.columns else {
             return false;
         };
+        debug_assert!(
+            columns.challenges.len() < columns.trace.rounds,
+            "a stage leaves its planes before binding past its sliced rounds"
+        );
         columns.challenges.push(r);
         self.fold_claims(r);
         self.boundary.apply(R::from(r));
