@@ -3,6 +3,7 @@
 //! Builds round polynomials for `sum_x eq(tau, x) * g(x)` and folds state across challenges.
 
 mod repr;
+mod sliced;
 mod subfield;
 
 use alloc::collections::BTreeMap;
@@ -231,6 +232,8 @@ pub(crate) struct RoundStateBase<'air, 'data, A, F: Field, EF> {
     ///
     /// Every other kernel leaves it false.
     fits_subfield: bool,
+    /// The stage's bit planes, once its first round ran on them.
+    sliced: Option<sliced::SlicedTrace>,
 }
 
 /// Extension-round column storage.
@@ -245,6 +248,8 @@ enum ExtColumns<F: Field, EF: ExtensionField<F>, R = EF> {
     Packed(Vec<Poly<EF::ExtensionPacking>>),
     /// One arithmetic-field element per residual row.
     Scalar(Vec<Poly<R>>),
+    /// The stage's bit planes and the challenges bound so far, with no column folded yet.
+    Sliced(sliced::SlicedColumns<EF>),
 }
 
 impl<F: Field, EF: ExtensionField<F>, R> ExtColumns<F, EF, R> {
@@ -253,6 +258,7 @@ impl<F: Field, EF: ExtensionField<F>, R> ExtColumns<F, EF, R> {
         match self {
             Self::Packed(cols) => cols.len(),
             Self::Scalar(cols) => cols.len(),
+            Self::Sliced(sliced) => sliced.width(),
         }
     }
 
@@ -276,6 +282,7 @@ impl<F: Field, EF: ExtensionField<F>, R> ExtColumns<F, EF, R> {
                 .first()
                 .expect("round state requires at least one column")
                 .num_evals(),
+            Self::Sliced(sliced) => sliced.num_evals(),
         }
     }
 
@@ -288,7 +295,9 @@ impl<F: Field, EF: ExtensionField<F>, R> ExtColumns<F, EF, R> {
     fn as_packed(&self) -> &[Poly<EF::ExtensionPacking>] {
         match self {
             Self::Packed(cols) => cols,
-            Self::Scalar(_) => unreachable!("round_poly_packed requires packed columns"),
+            Self::Scalar(_) | Self::Sliced(_) => {
+                unreachable!("round_poly_packed requires packed columns")
+            }
         }
     }
 
@@ -301,7 +310,9 @@ impl<F: Field, EF: ExtensionField<F>, R> ExtColumns<F, EF, R> {
     fn as_scalar(&self) -> &[Poly<R>] {
         match self {
             Self::Scalar(cols) => cols,
-            Self::Packed(_) => unreachable!("round_poly_unpacked requires scalar columns"),
+            Self::Packed(_) | Self::Sliced(_) => {
+                unreachable!("round_poly_unpacked requires scalar columns")
+            }
         }
     }
 }
@@ -342,6 +353,7 @@ impl<F: Field, EF: ExtensionField<F>> ExtColumns<F, EF> {
                     .for_each(|col| col.fix_prefix_var_mut(r));
                 Self::Scalar(cols)
             }
+            Self::Sliced(_) => unreachable!("a sliced stage binds its challenges on its planes"),
         }
     }
 }
@@ -414,7 +426,8 @@ pub(crate) struct RoundStateExt<'air, 'data, A, F: Field, EF: ExtensionField<F>,
     round: usize,
     /// Repeat-last successor values at the folded tail row, one entry per column.
     ///
-    /// Zero for every column no AIR reads on the next row.
+    /// Zero for every column no AIR reads on the next row, and for every column while the stage
+    /// is still on its planes, which fill it in when the stage leaves them.
     next_tail: Vec<R>,
     /// Lookup/AIR-link coefficients retained from this stage's base-field round.
     coupling: InteractionCoupling<R>,
@@ -1413,6 +1426,7 @@ where
             coupling,
             eta,
             fits_subfield: false,
+            sliced: None,
         }
     }
 
@@ -1902,6 +1916,15 @@ where
         }
     }
 
+    /// Update each group's claim for binding the first variable at `r`.
+    fn fold_claims(&mut self, r: EF) {
+        let tau = self.tau.as_slice()[0];
+        self.constraint_groups
+            .iter_mut()
+            .chain(self.interaction_groups.iter_mut())
+            .for_each(|group| group.claim = group.eval(tau, r));
+    }
+
     /// Update each group's claim for binding the first variable at `r`, and fold every tail.
     ///
     /// # Returns
@@ -1909,11 +1932,7 @@ where
     /// The repeat-last successor value of every column at the folded tail row.
     /// Zero for every column no AIR reads on the next row.
     fn fold_claims_and_tails(&mut self, r: EF) -> Vec<EF> {
-        let tau = self.tau.as_slice()[0];
-        self.constraint_groups
-            .iter_mut()
-            .chain(self.interaction_groups.iter_mut())
-            .for_each(|group| group.claim = group.eval(tau, r));
+        self.fold_claims(r);
 
         let num_evals = self.num_evals();
         let half = num_evals / 2;
@@ -2206,15 +2225,20 @@ where
         scratch
     }
 
-    /// Update each group's claim and every repeat-last tail for binding the next variable at `r`.
-    ///
-    /// The tails read the columns before they fold, so this runs first.
-    fn fold_claims_and_tails(&mut self, r: EF) {
+    /// Update each group's claim for binding the next variable at `r`.
+    fn fold_claims(&mut self, r: EF) {
         let tau = self.tau.as_slice()[self.round];
         self.constraint_groups
             .iter_mut()
             .chain(self.interaction_groups.iter_mut())
             .for_each(|group| group.claim = group.eval(tau, r));
+    }
+
+    /// Update each group's claim and every repeat-last tail for binding the next variable at `r`.
+    ///
+    /// The tails read the columns before they fold, so this runs first.
+    fn fold_claims_and_tails(&mut self, r: EF) {
+        self.fold_claims(r);
 
         let half = self.num_evals() / 2;
         let r = R::from(r);
@@ -2237,6 +2261,9 @@ where
                         let lo = R::from(col.as_slice()[group].extract(lane));
                         *next_tail = lo + r * (*next_tail - lo);
                     }
+                }
+                ExtColumns::Sliced(_) => {
+                    unreachable!("a sliced stage computes its tails when it leaves its planes")
                 }
             }
         }

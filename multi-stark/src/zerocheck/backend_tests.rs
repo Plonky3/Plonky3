@@ -168,6 +168,17 @@ pub(crate) enum FixtureAir {
     ///
     /// Its cells are arbitrary tower elements, so a stage holding it never fits `GF(4)`.
     Recurrence,
+    /// Bit-valued degree-one AIR over two equal columns.
+    ///
+    /// ```text
+    ///     always : scale * (a - b) = 0
+    /// ```
+    ///
+    /// Its first round evaluates no node, so a constant outside `GF(4)` shows up only later.
+    Linear {
+        /// Constant multiplying the equality.
+        scale: Tower,
+    },
 }
 
 impl BaseAir<Tower> for FixtureAir {
@@ -175,7 +186,7 @@ impl BaseAir<Tower> for FixtureAir {
         match self {
             Self::Gate { .. } | Self::Quartic => 4,
             Self::Pair => 3,
-            Self::Link | Self::Recurrence => 2,
+            Self::Link | Self::Recurrence | Self::Linear { .. } => 2,
             Self::Periodic { .. } => 1,
         }
     }
@@ -214,7 +225,7 @@ impl BaseAir<Tower> for FixtureAir {
             Self::Gate { .. } => vec![2],
             Self::Quartic => vec![3],
             Self::Recurrence => vec![0, 1],
-            Self::Pair | Self::Link | Self::Periodic { .. } => vec![],
+            Self::Pair | Self::Link | Self::Periodic { .. } | Self::Linear { .. } => vec![],
         }
     }
 
@@ -285,6 +296,9 @@ impl<AB: AirBuilder<F = Tower> + InteractionBuilder> Air<AB> for FixtureAir {
                 builder.when_transition().assert_eq(next[0], b);
                 builder.when_transition().assert_eq(next[1], a * b + a);
             }
+            Self::Linear { scale } => {
+                builder.assert_zero((local[0] - local[1]) * *scale);
+            }
         }
     }
 }
@@ -349,6 +363,15 @@ impl Instance {
             FixtureAir::Periodic { .. } => {
                 let values = (0..height).map(|_| bit()).collect();
                 (RowMajorMatrix::new(values, 1), None, vec![])
+            }
+            FixtureAir::Linear { .. } => {
+                let values = (0..height)
+                    .flat_map(|_| {
+                        let a = bit();
+                        [a, a]
+                    })
+                    .collect();
+                (RowMajorMatrix::new(values, 2), None, vec![])
             }
             FixtureAir::Recurrence => {
                 let (mut a, mut b): (Tower, Tower) = (rng.random(), rng.random());
@@ -624,6 +647,61 @@ fn backends_agree_on_stages_tall_enough_to_fold_in_parallel() {
     assert_backends_agree(&instances, || LookupRuntime::Inactive, 0);
 }
 
+#[test]
+fn backends_agree_on_stages_tall_enough_to_slice() {
+    // Fixture state:
+    //
+    //     stage 2^9 rows : gate (degree 3) and pair (degree 2), sliced from round 0
+    //     stage 2^7 rows : gate, sliced once it activates two rounds later
+    let instances = [
+        Instance::honest(FixtureAir::Gate { scale: Tower::ONE }, 1 << 9, 20),
+        Instance::honest(FixtureAir::Pair, 1 << 9, 21),
+        Instance::honest(FixtureAir::Gate { scale: gf4(3) }, 1 << 7, 22),
+    ];
+    assert_backends_agree(&instances, || LookupRuntime::Inactive, 0);
+    assert_backends_agree(&instances, || LookupRuntime::Inactive, 2);
+}
+
+#[test]
+fn backends_agree_when_a_tall_stage_does_not_fit() {
+    // Each stage is tall enough to slice, so every misfit reaches the sliced kernel first.
+    let height = 1 << 8;
+    let gate = |seed| Instance::honest(FixtureAir::Gate { scale: Tower::ONE }, height, seed);
+    let mut cell = gate(23);
+    cell.main.values[4 * (height - 1) + 3] = outside();
+    let mut public = gate(24);
+    public.public_values[1] = outside();
+    let constant = Instance::honest(
+        FixtureAir::Gate {
+            scale: Tower::from_repr(5),
+        },
+        height,
+        25,
+    );
+    let periodic = Instance::honest(
+        FixtureAir::Periodic {
+            period: [gf4(2), outside()],
+        },
+        height,
+        26,
+    );
+    let quartic = Instance::honest(FixtureAir::Quartic, height, 27);
+    for instance in [cell, public, constant, periodic, quartic] {
+        assert_backends_agree(&[instance], || LookupRuntime::Inactive, 0);
+    }
+}
+
+#[test]
+fn backends_agree_when_a_constant_first_poisons_a_later_sliced_round() {
+    // The first round of a degree-one stage evaluates no node, so the sliced kernel only meets
+    // the out-of-subfield constant in the next round, and leaves its planes there.
+    let scale = Tower::from_repr(5);
+    for height in [1 << 7, 1 << 8, 1 << 11] {
+        let instances = [Instance::honest(FixtureAir::Linear { scale }, height, 28)];
+        assert_backends_agree(&instances, || LookupRuntime::Inactive, 0);
+    }
+}
+
 /// Degrees the symbolic pass sees, so a fixture cannot drift from the shape its test names.
 #[test]
 fn fixture_degrees_are_the_named_ones() {
@@ -640,6 +718,7 @@ fn fixture_degrees_are_the_named_ones() {
     };
     assert_eq!(degree(&periodic), 3);
     assert_eq!(degree(&FixtureAir::Recurrence), 3);
+    assert_eq!(degree(&FixtureAir::Linear { scale: gf4(2) }), 1);
     let link = super::get_air_profile::<Tower, Tower, _>(&FixtureAir::Link).degrees;
     assert!(link.interactions > 0);
 }

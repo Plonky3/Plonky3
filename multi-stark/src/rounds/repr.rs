@@ -260,7 +260,9 @@ where
             ExtColumns::Scalar(cols) => cols
                 .par_iter_mut()
                 .for_each(|col| col.fix_prefix_var_mut(r)),
-            ExtColumns::Packed(_) => unreachable!("a stage folded into R keeps scalar columns"),
+            ExtColumns::Packed(_) | ExtColumns::Sliced(_) => {
+                unreachable!("a stage folded into R keeps scalar columns")
+            }
         }
 
         self.boundary.apply(r);

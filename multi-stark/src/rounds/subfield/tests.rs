@@ -15,10 +15,11 @@ use crate::zerocheck::backend_tests::{FixtureAir, Gf4, Instance, Tower, gf4, out
 use crate::zerocheck::get_air_profile;
 
 /// The fixture round state every test here drives.
-type BaseState<'air, 'data> = RoundStateBase<'air, 'data, FixtureAir, Tower, Tower>;
+pub(in crate::rounds) type BaseState<'air, 'data> =
+    RoundStateBase<'air, 'data, FixtureAir, Tower, Tower>;
 
 /// The challenge every test binds the first variable at.
-fn first_challenge() -> Tower {
+pub(in crate::rounds) fn first_challenge() -> Tower {
     Tower::from_repr(0xF01D_0000_0000_0000_0000_0000_0000_0007)
 }
 
@@ -58,7 +59,7 @@ where
 }
 
 /// Activate one stage from fixture instances of equal height, as [`with_stage_state`] does.
-fn with_state<R>(
+pub(in crate::rounds) fn with_state<R>(
     instances: &[Instance],
     coupling: StageCoupling<Tower>,
     body: impl FnOnce(BaseState<'_, '_>, &Poly<Tower>) -> R,
@@ -87,12 +88,12 @@ fn with_state<R>(
     )
 }
 
-fn no_lookups() -> StageCoupling<Tower> {
+pub(in crate::rounds) fn no_lookups() -> StageCoupling<Tower> {
     StageCoupling::new(BTreeMap::new(), BTreeMap::new(), vec![])
 }
 
 /// Lookup coefficients for a stage whose only AIR is the lookup fixture.
-fn link_coupling() -> StageCoupling<Tower> {
+pub(in crate::rounds) fn link_coupling() -> StageCoupling<Tower> {
     let link = AirLinkInstance {
         num_local_lookups: 1,
         lookups: vec![AirLinkLookup {
@@ -119,7 +120,7 @@ fn first_rounds(
 }
 
 /// Every later round polynomial of a folded stage, then its openings.
-fn later_rounds(
+pub(in crate::rounds) fn later_rounds(
     mut state: RoundStateExt<'_, '_, FixtureAir, Tower, Tower>,
 ) -> (Vec<Vec<Tower>>, Vec<[Vec<Tower>; 4]>) {
     let tau = state.tau.as_slice().to_vec();
@@ -269,7 +270,7 @@ fn the_full_pass_catches_a_misfit_the_probe_does_not_read() {
         &[gate_with_an_outside_cell(12)],
         no_lookups(),
         |state, eq_suffix| {
-            assert!(state.subfield_schedule::<Gf4>().is_none());
+            assert!(!state.cells_fit_subfield::<Gf4>());
             let eq_suffix = eq_suffix.as_slice();
             assert!(!state.subfield_pass(&eq_suffix[..1], &schedule).poisoned);
             assert!(state.subfield_pass(eq_suffix, &schedule).poisoned);

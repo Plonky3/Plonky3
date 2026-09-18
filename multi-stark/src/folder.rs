@@ -364,7 +364,7 @@ pub(crate) const fn boundary_io_pins(cells: &[BoundaryPublic]) -> BoundaryIoPins
 ///
 /// Both folders run this after the AIR's own evaluation, so every node batches the same family.
 #[inline]
-fn eval_boundary_io<AB: AirBuilder>(builder: &mut AB, cells: &[BoundaryPublic]) {
+pub(crate) fn eval_boundary_io<AB: AirBuilder>(builder: &mut AB, cells: &[BoundaryPublic]) {
     for cell in cells {
         // Read both operands out first.
         // Asserting takes a mutable borrow of the folder.
