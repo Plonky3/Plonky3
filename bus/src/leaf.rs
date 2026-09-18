@@ -102,124 +102,126 @@ pub enum BusLeafError {
     },
 }
 
-/// Materialize one fingerprint factor per active tuple.
-///
-/// The tuple fingerprint is its multilinear extension at the supplied point.
-/// A factor is `offset - fingerprint`.
-/// An inactive row contributes the multiplicative identity.
-///
-/// The tuple width is exactly `2^point.len()`.
-/// This function does not separate distinct named buses.
-/// A caller combining buses must reserve tuple slots for an injective domain separator.
-///
-/// Boolean selection is checked here for honest-prover diagnostics.
-/// The surrounding AIR must also constrain every selector to be Boolean.
-///
-/// Each direction concatenates declarations without alignment padding.
-/// The offset of one declaration is the sum of earlier row counts on that direction.
-///
-/// # Errors
-///
-/// Returns an error for inconsistent widths, heights, or non-Boolean selectors.
-pub fn materialize_bus_leaves<F, EF>(
-    declarations: &[BusLeafDeclaration<'_, F>],
-    point: &[EF],
-    offset: EF,
-) -> Result<BusLeaves<EF>, BusLeafError>
-where
-    F: Field,
-    EF: ExtensionField<F>,
-{
-    // The point fixes the only tuple width that the fingerprint polynomial accepts.
-    let shift = u32::try_from(point.len()).map_err(|_| BusLeafError::TupleWidthOverflow)?;
-    let width = 1usize
-        .checked_shl(shift)
-        .ok_or(BusLeafError::TupleWidthOverflow)?;
+impl<EF> BusLeaves<EF> {
+    /// Materialize one fingerprint factor per active tuple.
+    ///
+    /// The tuple fingerprint is its multilinear extension at the supplied point.
+    /// A factor is `offset - fingerprint`.
+    /// An inactive row contributes the multiplicative identity.
+    ///
+    /// The tuple width is exactly `2^point.len()`.
+    /// This function does not separate distinct named buses.
+    /// A caller combining buses must reserve tuple slots for an injective domain separator.
+    ///
+    /// Boolean selection is checked here for honest-prover diagnostics.
+    /// The surrounding AIR must also constrain every selector to be Boolean.
+    ///
+    /// Each direction concatenates declarations without alignment padding.
+    /// The offset of one declaration is the sum of earlier row counts on that direction.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for inconsistent widths, heights, or non-Boolean selectors.
+    pub fn materialize<F>(
+        declarations: &[BusLeafDeclaration<'_, F>],
+        point: &[EF],
+        offset: EF,
+    ) -> Result<Self, BusLeafError>
+    where
+        F: Field,
+        EF: ExtensionField<F>,
+    {
+        // The point fixes the only tuple width that the fingerprint polynomial accepts.
+        let shift = u32::try_from(point.len()).map_err(|_| BusLeafError::TupleWidthOverflow)?;
+        let width = 1usize
+            .checked_shl(shift)
+            .ok_or(BusLeafError::TupleWidthOverflow)?;
 
-    // Validate widths before allocating the challenge-sized equality table.
-    for (declaration_index, declaration) in declarations.iter().enumerate() {
-        if declaration.columns.len() != width {
-            return Err(BusLeafError::TupleWidthMismatch {
-                declaration: declaration_index,
-                expected: width,
-                actual: declaration.columns.len(),
-            });
-        }
-    }
-
-    // One equality table supplies the linear coefficient of every tuple slot.
-    let weights = equality_weights(point);
-    debug_assert_eq!(weights.len(), width);
-
-    // Direction is metadata rather than a field sign.
-    // This keeps push and pull distinct in characteristic two.
-    let mut pushes = Vec::new();
-    let mut pulls = Vec::new();
-
-    for (declaration_index, declaration) in declarations.iter().enumerate() {
-        // An empty tuple width is impossible because powers of two start at one.
-        let height = declaration.columns[0].len();
-        for (column_index, column) in declaration.columns.iter().enumerate().skip(1) {
-            if column.len() != height {
-                return Err(BusLeafError::ColumnHeightMismatch {
+        // Validate widths before allocating the challenge-sized equality table.
+        for (declaration_index, declaration) in declarations.iter().enumerate() {
+            if declaration.columns.len() != width {
+                return Err(BusLeafError::TupleWidthMismatch {
                     declaration: declaration_index,
-                    column: column_index,
-                    expected: height,
-                    actual: column.len(),
+                    expected: width,
+                    actual: declaration.columns.len(),
                 });
             }
         }
 
-        // A selector covers exactly the rows whose tuples it activates.
-        if let BusSelector::Boolean(selector) = declaration.selector
-            && selector.len() != height
-        {
-            return Err(BusLeafError::SelectorHeightMismatch {
-                declaration: declaration_index,
-                expected: height,
-                actual: selector.len(),
-            });
-        }
+        // One equality table supplies the linear coefficient of every tuple slot.
+        let weights = equality_weights(point);
+        debug_assert_eq!(weights.len(), width);
 
-        let destination = match declaration.direction {
-            BusDirection::Push => &mut pushes,
-            BusDirection::Pull => &mut pulls,
-        };
-        destination.reserve(height);
+        // Direction is metadata rather than a field sign.
+        // This keeps push and pull distinct in characteristic two.
+        let mut pushes = Vec::new();
+        let mut pulls = Vec::new();
 
-        for row in 0..height {
-            // The equality weights evaluate the tuple's multilinear extension.
-            let fingerprint = declaration
-                .columns
-                .iter()
-                .zip(&weights)
-                .map(|(column, &weight)| weight * column[row])
-                .sum::<EF>();
-            let factor = offset - fingerprint;
-
-            // Selection uses `1 + s * (factor - 1)`.
-            // Both Boolean values therefore avoid a branch in the hot loop.
-            let selected = match declaration.selector {
-                BusSelector::Always => factor,
-                BusSelector::Boolean(selector) => {
-                    let selector = selector[row];
-                    if selector * selector != selector {
-                        return Err(BusLeafError::NonBooleanSelector {
-                            declaration: declaration_index,
-                            row,
-                        });
-                    }
-                    EF::ONE + (factor - EF::ONE) * selector
+        for (declaration_index, declaration) in declarations.iter().enumerate() {
+            // An empty tuple width is impossible because powers of two start at one.
+            let height = declaration.columns[0].len();
+            for (column_index, column) in declaration.columns.iter().enumerate().skip(1) {
+                if column.len() != height {
+                    return Err(BusLeafError::ColumnHeightMismatch {
+                        declaration: declaration_index,
+                        column: column_index,
+                        expected: height,
+                        actual: column.len(),
+                    });
                 }
-            };
-            destination.push(selected);
-        }
-    }
+            }
 
-    Ok(BusLeaves { pushes, pulls })
+            // A selector covers exactly the rows whose tuples it activates.
+            if let BusSelector::Boolean(selector) = declaration.selector
+                && selector.len() != height
+            {
+                return Err(BusLeafError::SelectorHeightMismatch {
+                    declaration: declaration_index,
+                    expected: height,
+                    actual: selector.len(),
+                });
+            }
+
+            let destination = match declaration.direction {
+                BusDirection::Push => &mut pushes,
+                BusDirection::Pull => &mut pulls,
+            };
+            destination.reserve(height);
+
+            for row in 0..height {
+                // The equality weights evaluate the tuple's multilinear extension.
+                let fingerprint = declaration
+                    .columns
+                    .iter()
+                    .zip(&weights)
+                    .map(|(column, &weight)| weight * column[row])
+                    .sum::<EF>();
+                let factor = offset - fingerprint;
+
+                // Selection uses `1 + s * (factor - 1)`.
+                // Both Boolean values therefore avoid a branch in the hot loop.
+                let selected = match declaration.selector {
+                    BusSelector::Always => factor,
+                    BusSelector::Boolean(selector) => {
+                        let selector = selector[row];
+                        if selector * selector != selector {
+                            return Err(BusLeafError::NonBooleanSelector {
+                                declaration: declaration_index,
+                                row,
+                            });
+                        }
+                        EF::ONE + (factor - EF::ONE) * selector
+                    }
+                };
+                destination.push(selected);
+            }
+        }
+
+        Ok(Self { pushes, pulls })
+    }
 }
 
-/// Evaluate the Boolean-cube equality polynomial at every tuple slot.
+/// Evaluates the Boolean-cube equality polynomial at every tuple slot.
 fn equality_weights<F: Field>(point: &[F]) -> Vec<F> {
     // The empty point addresses the sole slot of a width-one tuple.
     let mut weights = vec![F::ONE];

@@ -11,12 +11,9 @@ use p3_keccak::Keccak256Hash;
 use rand::{RngExt, SeedableRng};
 use rand_xoshiro::Xoroshiro128Plus;
 
-use crate::leaf::{
-    BusDirection, BusLeafDeclaration, BusLeafError, BusSelector, materialize_bus_leaves,
-};
+use crate::leaf::{BusDirection, BusLeafDeclaration, BusLeafError, BusLeaves, BusSelector};
 use crate::product::{
     ProductGkrError, ProductGkrLayerProof, ProductGkrProof, ProductGkrRootShape, ProductGkrShape,
-    identity_padding_evaluation, prove_product_gkr, verify_product_gkr,
 };
 
 type PrimeBase = BabyBear;
@@ -92,11 +89,11 @@ fn binary_field_matches_the_scalar_reference_across_depths() {
 
         let mut prover_challenger = binary_challenger();
         let (proof, prover_output) =
-            prove_product_gkr::<Binary, Binary, _>(&borrowed, shape, &mut prover_challenger);
+            ProductGkrProof::prove::<Binary, _>(&borrowed, shape, &mut prover_challenger);
         let mut verifier_challenger = binary_challenger();
-        let verifier_output =
-            verify_product_gkr::<Binary, Binary, _>(&proof, shape, &mut verifier_challenger)
-                .unwrap();
+        let verifier_output = proof
+            .verify::<Binary, _>(shape, &mut verifier_challenger)
+            .unwrap();
 
         assert_eq!(prover_output, verifier_output);
         check_output(
@@ -126,11 +123,11 @@ fn baby_bear_extension_matches_the_scalar_reference() {
 
     let mut prover_challenger = prime_challenger();
     let (proof, prover_output) =
-        prove_product_gkr::<PrimeBase, PrimeChallenge, _>(&borrowed, shape, &mut prover_challenger);
+        ProductGkrProof::prove::<PrimeBase, _>(&borrowed, shape, &mut prover_challenger);
     let mut verifier_challenger = prime_challenger();
-    let verifier_output =
-        verify_product_gkr::<PrimeBase, PrimeChallenge, _>(&proof, shape, &mut verifier_challenger)
-            .unwrap();
+    let verifier_output = proof
+        .verify::<PrimeBase, _>(shape, &mut verifier_challenger)
+        .unwrap();
 
     assert_eq!(prover_output, verifier_output);
     check_output(
@@ -154,7 +151,7 @@ fn shared_roots_are_structural() {
 
     let mut prover_challenger = binary_challenger();
     let (proof, output) =
-        prove_product_gkr::<Binary, Binary, _>(&inputs, shape, &mut prover_challenger);
+        ProductGkrProof::prove::<Binary, _>(&inputs, shape, &mut prover_challenger);
 
     // One proof value represents both balancing roots.
     assert_eq!(proof.roots.len(), 2);
@@ -162,7 +159,9 @@ fn shared_roots_are_structural() {
 
     let mut verifier_challenger = binary_challenger();
     assert_eq!(
-        verify_product_gkr::<Binary, Binary, _>(&proof, shape, &mut verifier_challenger).unwrap(),
+        proof
+            .verify::<Binary, _>(shape, &mut verifier_challenger)
+            .unwrap(),
         output,
     );
 }
@@ -179,12 +178,14 @@ fn identity_padding_and_zero_roots_are_valid() {
 
     let mut prover_challenger = binary_challenger();
     let (proof, output) =
-        prove_product_gkr::<Binary, Binary, _>(&inputs, shape, &mut prover_challenger);
+        ProductGkrProof::prove::<Binary, _>(&inputs, shape, &mut prover_challenger);
     assert_eq!(output.roots, vec![Binary::ONE, Binary::ONE, Binary::ZERO]);
 
     let mut verifier_challenger = binary_challenger();
     assert_eq!(
-        verify_product_gkr::<Binary, Binary, _>(&proof, shape, &mut verifier_challenger).unwrap(),
+        proof
+            .verify::<Binary, _>(shape, &mut verifier_challenger)
+            .unwrap(),
         output,
     );
 }
@@ -198,15 +199,14 @@ fn tampering_each_message_family_is_rejected() {
     let borrowed = inputs.iter().map(Vec::as_slice).collect::<Vec<_>>();
     let shape = ProductGkrShape::new(4, 2, ProductGkrRootShape::Distinct).unwrap();
     let mut prover_challenger = binary_challenger();
-    let (proof, _) =
-        prove_product_gkr::<Binary, Binary, _>(&borrowed, shape, &mut prover_challenger);
+    let (proof, _) = ProductGkrProof::prove::<Binary, _>(&borrowed, shape, &mut prover_challenger);
 
     // Mutation 1: change a root before the first batching challenge.
     let mut root_tamper = proof.clone();
     root_tamper.roots[0] += Binary::ONE;
     let mut challenger = binary_challenger();
     assert!(matches!(
-        verify_product_gkr::<Binary, Binary, _>(&root_tamper, shape, &mut challenger),
+        root_tamper.verify::<Binary, _>(shape, &mut challenger),
         Err(ProductGkrError::LayerConsistency { layer: 0 })
     ));
 
@@ -218,7 +218,7 @@ fn tampering_each_message_family_is_rejected() {
     round_polys[0][0] += Binary::ONE;
     let mut challenger = binary_challenger();
     assert!(matches!(
-        verify_product_gkr::<Binary, Binary, _>(&round_tamper, shape, &mut challenger),
+        round_tamper.verify::<Binary, _>(shape, &mut challenger),
         Err(ProductGkrError::LayerConsistency { .. })
     ));
 
@@ -230,7 +230,7 @@ fn tampering_each_message_family_is_rejected() {
     children[0][0] += Binary::ONE;
     let mut challenger = binary_challenger();
     assert!(matches!(
-        verify_product_gkr::<Binary, Binary, _>(&child_tamper, shape, &mut challenger),
+        child_tamper.verify::<Binary, _>(shape, &mut challenger),
         Err(ProductGkrError::LayerConsistency { layer: 0 })
     ));
 }
@@ -242,18 +242,15 @@ fn odd_and_shared_shapes_reject_inconsistent_messages() {
     let input = (0..8).map(|_| rng.random::<Binary>()).collect::<Vec<_>>();
     let odd_shape = ProductGkrShape::new(3, 1, ProductGkrRootShape::Distinct).unwrap();
     let mut prover_challenger = binary_challenger();
-    let (mut odd_proof, _) = prove_product_gkr::<Binary, Binary, _>(
-        &[input.as_slice()],
-        odd_shape,
-        &mut prover_challenger,
-    );
+    let (mut odd_proof, _) =
+        ProductGkrProof::prove::<Binary, _>(&[input.as_slice()], odd_shape, &mut prover_challenger);
     let ProductGkrLayerProof::Binary { children } = &mut odd_proof.layers[0] else {
         panic!("height three starts with a binary layer");
     };
     children[0][0] += Binary::ONE;
     let mut challenger = binary_challenger();
     assert!(matches!(
-        verify_product_gkr::<Binary, Binary, _>(&odd_proof, odd_shape, &mut challenger),
+        odd_proof.verify::<Binary, _>(odd_shape, &mut challenger),
         Err(ProductGkrError::LayerConsistency { layer: 0 })
     ));
 
@@ -261,14 +258,14 @@ fn odd_and_shared_shapes_reject_inconsistent_messages() {
     let distinct_shape = ProductGkrShape::new(3, 2, ProductGkrRootShape::Distinct).unwrap();
     let shared_shape = ProductGkrShape::new(3, 2, ProductGkrRootShape::FirstTwoShared).unwrap();
     let mut prover_challenger = binary_challenger();
-    let (distinct_proof, _) = prove_product_gkr::<Binary, Binary, _>(
+    let (distinct_proof, _) = ProductGkrProof::prove::<Binary, _>(
         &[input.as_slice(), input.as_slice()],
         distinct_shape,
         &mut prover_challenger,
     );
     let mut challenger = binary_challenger();
     assert!(matches!(
-        verify_product_gkr::<Binary, Binary, _>(&distinct_proof, shared_shape, &mut challenger),
+        distinct_proof.verify::<Binary, _>(shared_shape, &mut challenger),
         Err(ProductGkrError::RootCountMismatch { .. })
     ));
 }
@@ -281,14 +278,14 @@ fn product_preserving_leaf_edits_require_external_authentication() {
     let shape = ProductGkrShape::new(4, 1, ProductGkrRootShape::Distinct).unwrap();
     let mut prover_challenger = binary_challenger();
     let (mut proof, honest) =
-        prove_product_gkr::<Binary, Binary, _>(&[input.as_slice()], shape, &mut prover_challenger);
+        ProductGkrProof::prove::<Binary, _>(&[input.as_slice()], shape, &mut prover_challenger);
     let ProductGkrLayerProof::RadixFour { children, .. } = &mut proof.layers[1] else {
         panic!("height four ends with a radix-four layer");
     };
     children[0].swap(0, 1);
 
     let mut challenger = binary_challenger();
-    let edited = verify_product_gkr::<Binary, Binary, _>(&proof, shape, &mut challenger).unwrap();
+    let edited = proof.verify::<Binary, _>(shape, &mut challenger).unwrap();
     assert_eq!(edited.roots, honest.roots);
     assert_ne!(edited.values, honest.values);
 }
@@ -300,14 +297,14 @@ fn malformed_proof_lengths_return_errors_without_panicking() {
     let shape = ProductGkrShape::new(4, 1, ProductGkrRootShape::Distinct).unwrap();
     let mut prover_challenger = binary_challenger();
     let (proof, _) =
-        prove_product_gkr::<Binary, Binary, _>(&[input.as_slice()], shape, &mut prover_challenger);
+        ProductGkrProof::prove::<Binary, _>(&[input.as_slice()], shape, &mut prover_challenger);
 
     // Removing one root is rejected before transcript replay.
     let mut missing_root = proof.clone();
     missing_root.roots.pop();
     let mut challenger = binary_challenger();
     assert!(matches!(
-        verify_product_gkr::<Binary, Binary, _>(&missing_root, shape, &mut challenger),
+        missing_root.verify::<Binary, _>(shape, &mut challenger),
         Err(ProductGkrError::RootCountMismatch { .. })
     ));
 
@@ -316,7 +313,7 @@ fn malformed_proof_lengths_return_errors_without_panicking() {
     truncated.layers.pop();
     let mut challenger = binary_challenger();
     assert!(matches!(
-        verify_product_gkr::<Binary, Binary, _>(&truncated, shape, &mut challenger),
+        truncated.verify::<Binary, _>(shape, &mut challenger),
         Err(ProductGkrError::LayerCountMismatch { .. })
     ));
 
@@ -328,7 +325,7 @@ fn malformed_proof_lengths_return_errors_without_panicking() {
     round_polys.pop();
     let mut challenger = binary_challenger();
     assert!(matches!(
-        verify_product_gkr::<Binary, Binary, _>(&missing_round, shape, &mut challenger),
+        missing_round.verify::<Binary, _>(shape, &mut challenger),
         Err(ProductGkrError::MalformedLayer { layer: 1 })
     ));
 
@@ -339,7 +336,7 @@ fn malformed_proof_lengths_return_errors_without_panicking() {
     };
     let mut challenger = binary_challenger();
     assert!(matches!(
-        verify_product_gkr::<Binary, Binary, _>(&wrong_arity, shape, &mut challenger),
+        wrong_arity.verify::<Binary, _>(shape, &mut challenger),
         Err(ProductGkrError::MalformedLayer { layer: 0 })
     ));
 
@@ -351,7 +348,7 @@ fn malformed_proof_lengths_return_errors_without_panicking() {
     children.clear();
     let mut challenger = binary_challenger();
     assert!(matches!(
-        verify_product_gkr::<Binary, Binary, _>(&malformed, shape, &mut challenger),
+        malformed.verify::<Binary, _>(shape, &mut challenger),
         Err(ProductGkrError::MalformedLayer { layer: 0 })
     ));
 }
@@ -390,7 +387,7 @@ fn fields_without_six_nodes_return_an_error() {
     let shape = ProductGkrShape::new(0, 1, ProductGkrRootShape::Distinct).unwrap();
     let mut challenger = BinaryChallenger::from_hasher(Vec::new(), Keccak256Hash);
     assert_eq!(
-        verify_product_gkr::<Gf2, Gf2, _>(&proof, shape, &mut challenger),
+        proof.verify::<Gf2, _>(shape, &mut challenger),
         Err(ProductGkrError::ChallengeFieldTooSmall)
     );
 }
@@ -403,11 +400,12 @@ fn identity_suffix_evaluation_matches_materialization() {
         BabyBear::from_u64(3),
         BabyBear::from_u64(5),
     ];
+    let shape = ProductGkrShape::new(3, 1, ProductGkrRootShape::Distinct).unwrap();
     for prefix_len in 0..=8 {
         let mut suffix = vec![BabyBear::ZERO; prefix_len];
         suffix.resize(8, BabyBear::ONE);
         assert_eq!(
-            identity_padding_evaluation(prefix_len, &point),
+            shape.identity_padding_evaluation(prefix_len, &point),
             naive_eval(&suffix, 3, &point)
         );
     }
@@ -432,7 +430,7 @@ fn directions_and_boolean_selection_survive_characteristic_two() {
         },
     ];
 
-    let leaves = materialize_bus_leaves(&declarations, &[], Binary::from_u64(19)).unwrap();
+    let leaves = BusLeaves::materialize(&declarations, &[], Binary::from_u64(19)).unwrap();
     assert_eq!(leaves.pushes.len(), 2);
     assert_eq!(leaves.pulls.len(), 2);
     assert_eq!(leaves.pulls[1], Binary::ONE);
@@ -459,8 +457,7 @@ fn tuple_fingerprint_matches_direct_multilinear_evaluation() {
     let point = [BabyBear::from_u64(11), BabyBear::from_u64(13)];
     let offset = BabyBear::from_u64(17);
 
-    let leaves =
-        materialize_bus_leaves::<BabyBear, BabyBear>(&declaration, &point, offset).unwrap();
+    let leaves = BusLeaves::materialize(&declaration, &point, offset).unwrap();
     let low_zero = columns[0][0] + point[0] * (columns[1][0] - columns[0][0]);
     let low_one = columns[2][0] + point[0] * (columns[3][0] - columns[2][0]);
     let fingerprint = low_zero + point[1] * (low_one - low_zero);
@@ -482,7 +479,7 @@ fn malformed_leaf_declarations_are_rejected() {
     }];
 
     assert!(matches!(
-        materialize_bus_leaves::<BabyBear, BabyBear>(&declarations, &[], BabyBear::ZERO),
+        BusLeaves::materialize(&declarations, &[], BabyBear::ZERO),
         Err(BusLeafError::NonBooleanSelector { .. })
     ));
 }
@@ -500,7 +497,7 @@ fn tuple_width_is_rejected_before_challenge_sized_allocation() {
     }];
     let point = vec![BabyBear::ZERO; 24];
     assert!(matches!(
-        materialize_bus_leaves::<BabyBear, BabyBear>(&declaration, &point, BabyBear::ZERO),
+        BusLeaves::materialize(&declaration, &point, BabyBear::ZERO),
         Err(BusLeafError::TupleWidthMismatch { .. })
     ));
 }

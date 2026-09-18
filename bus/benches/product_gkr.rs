@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use p3_binary_field::{BinaryChallenger, BinaryField128};
-use p3_bus::{ProductGkrRootShape, ProductGkrShape, prove_product_gkr};
+use p3_bus::{ProductGkrProof, ProductGkrRootShape, ProductGkrShape};
 use p3_field::{Field, PrimeCharacteristicRing};
 use p3_keccak::Keccak256Hash;
 use rand::{RngExt, SeedableRng};
@@ -183,7 +183,7 @@ fn product_gkr(criterion: &mut Criterion) {
             |bencher, inputs| {
                 bencher.iter(|| {
                     let mut challenger = BinaryChallenger::from_hasher(Vec::new(), Keccak256Hash);
-                    black_box(prove_product_gkr::<F, F, _>(
+                    black_box(ProductGkrProof::prove::<F, _>(
                         black_box(inputs),
                         shape,
                         &mut challenger,

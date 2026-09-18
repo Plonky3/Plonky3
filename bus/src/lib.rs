@@ -7,13 +7,10 @@ mod leaf;
 mod product;
 mod transcript;
 
-pub use leaf::{
-    BusDirection, BusLeafDeclaration, BusLeafError, BusLeaves, BusSelector, materialize_bus_leaves,
-};
+pub use leaf::{BusDirection, BusLeafDeclaration, BusLeafError, BusLeaves, BusSelector};
 pub use product::{
     ProductGkrError, ProductGkrLayerProof, ProductGkrOutput, ProductGkrProof, ProductGkrRootShape,
-    ProductGkrShape, ProductGkrShapeError, identity_padding_evaluation, prove_product_gkr,
-    verify_product_gkr,
+    ProductGkrShape, ProductGkrShapeError,
 };
 
 #[cfg(test)]

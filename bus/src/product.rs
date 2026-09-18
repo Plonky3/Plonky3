@@ -29,6 +29,13 @@ use thiserror::Error;
 
 use crate::transcript::{ProductGkrProverTranscript, ProductGkrVerifierTranscript};
 
+mod math;
+
+use math::{
+    combine, equality_evaluation, equality_weights, fold_dense, has_distinct_round_nodes,
+    interpolate_pair, interpolate_quad,
+};
+
 /// Number of transmitted evaluations for a degree-five round polynomial.
 pub(crate) const ROUND_POLY_LEN: usize = 5;
 
@@ -39,6 +46,39 @@ pub enum ProductGkrRootShape {
     Distinct,
     /// The first two trees use one shared root value.
     FirstTwoShared,
+}
+
+impl ProductGkrRootShape {
+    /// Encodes roots according to the verifier-derived statement shape.
+    fn encode<F: Field>(self, roots: &[F]) -> Result<Vec<F>, ProductGkrError> {
+        match self {
+            Self::Distinct => Ok(roots.to_vec()),
+            Self::FirstTwoShared => {
+                // Structural sharing is valid only when both represented roots agree.
+                if roots[0] != roots[1] {
+                    return Err(ProductGkrError::SharedRootMismatch);
+                }
+                let mut encoded = Vec::with_capacity(roots.len() - 1);
+                encoded.push(roots[0]);
+                encoded.extend_from_slice(&roots[2..]);
+                Ok(encoded)
+            }
+        }
+    }
+
+    /// Expands roots encoded according to the verifier-derived statement shape.
+    fn decode<F: Copy>(self, encoded: &[F]) -> Vec<F> {
+        match self {
+            Self::Distinct => encoded.to_vec(),
+            Self::FirstTwoShared => {
+                // The first message represents both structurally equal roots.
+                let mut roots = Vec::with_capacity(encoded.len() + 1);
+                roots.extend([encoded[0], encoded[0]]);
+                roots.extend_from_slice(&encoded[1..]);
+                roots
+            }
+        }
+    }
 }
 
 /// Verifier-derived dimensions of one batched product reduction.
@@ -56,17 +96,37 @@ pub struct ProductGkrShape {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub enum ProductGkrShapeError {
     /// A batch without trees has no statement.
-    #[error("product GKR requires at least one tree")]
-    NoTrees,
+    #[error("product GKR received {num_trees} trees, minimum is {minimum}")]
+    NoTrees {
+        /// The rejected tree count.
+        num_trees: usize,
+        /// The smallest nonempty batch.
+        minimum: usize,
+    },
     /// A shared-root shape needs two roots to share.
-    #[error("a shared-root product GKR requires at least two trees")]
-    SharedRootNeedsTwoTrees,
+    #[error("shared-root product GKR received {num_trees} trees, minimum is {minimum}")]
+    SharedRootNeedsTwoTrees {
+        /// The rejected tree count.
+        num_trees: usize,
+        /// The smallest batch containing two roots.
+        minimum: usize,
+    },
     /// Per-layer child messages would overflow their machine-word length.
-    #[error("product GKR tree count overflows a radix-four child message")]
-    TreeCountOverflow,
+    #[error("product GKR received {num_trees} trees, maximum is {maximum}")]
+    TreeCountOverflow {
+        /// The rejected tree count.
+        num_trees: usize,
+        /// The largest count whose four-child message fits in memory.
+        maximum: usize,
+    },
     /// The logical tree size cannot be represented by the target architecture.
-    #[error("product GKR logical height overflows usize")]
-    HeightOverflow,
+    #[error("product GKR log height {log_height} exceeds maximum {maximum}")]
+    HeightOverflow {
+        /// The rejected base-two tree height.
+        log_height: usize,
+        /// The largest height whose capacity fits in one machine word.
+        maximum: usize,
+    },
 }
 
 impl ProductGkrShape {
@@ -82,16 +142,28 @@ impl ProductGkrShape {
     ) -> Result<Self, ProductGkrShapeError> {
         // Product inputs use one machine word as their address space.
         if log_height >= usize::BITS as usize {
-            return Err(ProductGkrShapeError::HeightOverflow);
+            return Err(ProductGkrShapeError::HeightOverflow {
+                log_height,
+                maximum: usize::BITS as usize - 1,
+            });
         }
         if num_trees == 0 {
-            return Err(ProductGkrShapeError::NoTrees);
+            return Err(ProductGkrShapeError::NoTrees {
+                num_trees,
+                minimum: 1,
+            });
         }
         if num_trees > usize::MAX / 4 {
-            return Err(ProductGkrShapeError::TreeCountOverflow);
+            return Err(ProductGkrShapeError::TreeCountOverflow {
+                num_trees,
+                maximum: usize::MAX / 4,
+            });
         }
         if root_shape == ProductGkrRootShape::FirstTwoShared && num_trees < 2 {
-            return Err(ProductGkrShapeError::SharedRootNeedsTwoTrees);
+            return Err(ProductGkrShapeError::SharedRootNeedsTwoTrees {
+                num_trees,
+                minimum: 2,
+            });
         }
 
         Ok(Self {
@@ -149,6 +221,45 @@ impl ProductGkrShape {
         }
 
         layers
+    }
+
+    /// Evaluates the constant-one suffix after an explicit prefix.
+    ///
+    /// Coordinates run from the most significant address bit to the least significant bit.
+    /// The result is `sum_(i >= prefix_len) eq(point, i)` over the logical Boolean cube.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the point length differs from the statement height.
+    /// Panics when the prefix is longer than the logical table.
+    #[must_use]
+    pub fn identity_padding_evaluation<F: Field>(&self, prefix_len: usize, point: &[F]) -> F {
+        // The statement fixes both the logical capacity and the point dimension.
+        assert_eq!(
+            point.len(),
+            self.log_height,
+            "point dimension must match the product GKR height"
+        );
+        let capacity = 1usize << self.log_height;
+        assert!(prefix_len <= capacity, "prefix exceeds the logical table");
+        if prefix_len == capacity {
+            return F::ZERO;
+        }
+
+        // Sum the address weights strictly below the binary threshold.
+        let mut below = F::ZERO;
+        let mut equal_prefix = F::ONE;
+        for (bit_index, &coordinate) in point.iter().enumerate() {
+            let shift = point.len() - 1 - bit_index;
+            if (prefix_len >> shift) & 1 == 1 {
+                below += equal_prefix * (F::ONE - coordinate);
+                equal_prefix *= coordinate;
+            } else {
+                equal_prefix *= F::ONE - coordinate;
+            }
+        }
+
+        F::ONE - below
     }
 }
 
@@ -247,570 +358,541 @@ pub enum ProductGkrError {
     },
 }
 
-/// Prove several product trees in one transcript.
-///
-/// Each slice is an arbitrary leaf prefix.
-/// Every omitted suffix value is the multiplicative identity.
-///
-/// An output value for a prefix of length `n` is
-/// `sum_(i < n) eq(point, i) * input[i] + sum_(i >= n) eq(point, i)`.
-/// A caller must authenticate them against committed leaf polynomials.
-///
-/// # Panics
-///
-/// Panics when the input count or a prefix length disagrees with the supplied statement shape.
-/// Panics when a shared-root statement is false.
-pub fn prove_product_gkr<F, EF, Challenger>(
-    inputs: &[&[EF]],
-    shape: ProductGkrShape,
-    challenger: &mut Challenger,
-) -> (ProductGkrProof<EF>, ProductGkrOutput<EF>)
-where
-    F: TranscriptField,
-    EF: ExtensionField<F>,
-    Challenger: FieldChallenger<F>,
-{
-    // Prover input errors are programming errors.
-    // The verifier handles the corresponding proof errors without panicking.
-    assert!(
-        has_distinct_round_nodes::<EF>(),
-        "product GKR requires six distinct challenge-field interpolation nodes"
-    );
-    assert_eq!(
-        inputs.len(),
-        shape.num_trees,
-        "product GKR tree count mismatch"
-    );
-    let capacity = 1usize << shape.log_height;
-    for input in inputs {
+impl<EF> ProductGkrProof<EF> {
+    /// Proves several product trees in one transcript.
+    ///
+    /// Each slice is an arbitrary leaf prefix.
+    /// Every omitted suffix value is the multiplicative identity.
+    ///
+    /// An output value for a prefix of length `n` is
+    /// `sum_(i < n) eq(point, i) * input[i] + sum_(i >= n) eq(point, i)`.
+    /// A caller must authenticate them against committed leaf polynomials.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the input count or a prefix length disagrees with the supplied statement shape.
+    /// Panics when a shared-root statement is false.
+    pub fn prove<F, Challenger>(
+        inputs: &[&[EF]],
+        shape: ProductGkrShape,
+        challenger: &mut Challenger,
+    ) -> (Self, ProductGkrOutput<EF>)
+    where
+        F: TranscriptField,
+        EF: ExtensionField<F>,
+        Challenger: FieldChallenger<F>,
+    {
+        // Prover input errors are programming errors.
+        // The verifier handles the corresponding proof errors without panicking.
         assert!(
-            input.len() <= capacity,
-            "product GKR input exceeds its logical tree"
+            has_distinct_round_nodes::<EF>(),
+            "product GKR requires six distinct challenge-field interpolation nodes"
         );
-    }
-
-    // Keep only explicit prefixes at every product level.
-    let mut all_layers = inputs
-        .iter()
-        .map(|input| build_product_layers(input, shape.log_height))
-        .collect::<Vec<_>>();
-    let roots = all_layers
-        .iter()
-        .map(|layers| layers[shape.log_height].first().copied().unwrap_or(EF::ONE))
-        .collect::<Vec<_>>();
-    let root_messages = encode_roots(&roots, shape.root_shape)
-        .expect("a shared-root statement requires equal roots");
-
-    // The typed transcript binds both the dimensions and every prover message.
-    let mut transcript =
-        ProductGkrProverTranscript::<Challenger, F, EF>::new(challenger, shape, &root_messages);
-    let mut point = Vec::with_capacity(shape.log_height);
-    let mut values = roots.clone();
-    let mut layer_proofs = Vec::with_capacity(shape.layers().len());
-    let mut product_depth = shape.log_height;
-
-    for (arity, round_count) in shape.layers() {
-        let batching = transcript.begin_layer();
-        debug_assert_eq!(round_count, point.len());
-        let child_depth = product_depth - arity.trailing_zeros() as usize;
-
-        if arity == 2 {
-            // The root-most binary layer has no parent variables to sum over.
-            let children = all_layers
-                .iter_mut()
-                .map(|layers| binary_children(&layers[child_depth]))
-                .collect::<Vec<_>>();
-            let branches = transcript.end_binary_layer(&children);
-            values = children
-                .iter()
-                .map(|children| interpolate_pair(*children, branches[0]))
-                .collect();
-            point = vec![branches[0]];
-            layer_proofs.push(ProductGkrLayerProof::Binary { children });
-        } else {
-            // Four child tables share one eq-weighted degree-five sumcheck.
-            let mut states = all_layers
-                .iter_mut()
-                .map(|layers| RadixFourState::new(&layers[child_depth], 1usize << round_count))
-                .collect::<Vec<_>>();
-            let mut equality = equality_weights(&point);
-            let mut logical_len = 1usize << round_count;
-            let mut round_point = Vec::with_capacity(round_count);
-            let mut round_polys = Vec::with_capacity(round_count);
-
-            for _ in 0..round_count {
-                let round_poly = radix_four_round(&states, &equality, logical_len, batching);
-                let challenge = transcript.round(&round_poly);
-                for state in &mut states {
-                    state.fold(challenge, logical_len);
-                }
-                fold_dense(&mut equality, challenge);
-                logical_len /= 2;
-                round_point.push(challenge);
-                round_polys.push(round_poly);
-            }
-
-            let children = states
-                .iter()
-                .map(RadixFourState::children)
-                .collect::<Vec<_>>();
-            let branches = transcript.end_radix_four_layer(&children);
-            values = children
-                .iter()
-                .map(|children| interpolate_quad(*children, branches))
-                .collect();
-            point = vec![branches[0], branches[1]];
-            point.extend(round_point);
-            layer_proofs.push(ProductGkrLayerProof::RadixFour {
-                round_polys,
-                children,
-            });
+        assert_eq!(
+            inputs.len(),
+            shape.num_trees,
+            "product GKR tree count mismatch"
+        );
+        let capacity = 1usize << shape.log_height;
+        for input in inputs {
+            assert!(
+                input.len() <= capacity,
+                "product GKR input exceeds its logical tree"
+            );
         }
 
-        product_depth = child_depth;
-    }
+        // Keep only explicit prefixes at every product level.
+        let all_layers = inputs
+            .iter()
+            .map(|input| ProductLayers::new(input, shape.log_height))
+            .collect::<Vec<_>>();
+        let roots = all_layers
+            .iter()
+            .map(ProductLayers::root)
+            .collect::<Vec<_>>();
+        let root_messages = shape
+            .root_shape
+            .encode(&roots)
+            .expect("a shared-root statement requires equal roots");
 
-    transcript.finish();
+        // The typed transcript binds both the dimensions and every prover message.
+        let mut transcript =
+            ProductGkrProverTranscript::<Challenger, F, EF>::new(challenger, shape, &root_messages);
+        let mut point = Vec::with_capacity(shape.log_height);
+        let mut values = roots.clone();
+        let mut layer_proofs = Vec::with_capacity(shape.layers().len());
+        let mut product_depth = shape.log_height;
 
-    // Internal folds bind low-order address bits first.
-    // The public convention addresses subcubes with leading coordinates.
-    point.reverse();
+        for (arity, round_count) in shape.layers() {
+            let batching = transcript.begin_layer();
+            debug_assert_eq!(round_count, point.len());
+            let child_depth = product_depth - arity.trailing_zeros() as usize;
 
-    (
-        ProductGkrProof {
-            roots: root_messages,
-            layers: layer_proofs,
-        },
-        ProductGkrOutput {
-            roots,
-            point,
-            values,
-        },
-    )
-}
-
-/// Verify the internal consistency of several product trees.
-///
-/// All counts come from the supplied statement shape.
-/// Attacker-controlled proof lengths are checked before transcript replay.
-///
-/// The returned leaf evaluations remain unauthenticated.
-/// The surrounding protocol must tie them to committed polynomials.
-/// A distinct-root statement checks no relation between different roots.
-///
-/// Product soundness is statistical rather than a fixed property of this primitive.
-/// The caller must choose enough challenge-field bits for every documented error term.
-///
-/// # Errors
-///
-/// Returns an error for malformed proofs or a failed product relation.
-pub fn verify_product_gkr<F, EF, Challenger>(
-    proof: &ProductGkrProof<EF>,
-    shape: ProductGkrShape,
-    challenger: &mut Challenger,
-) -> Result<ProductGkrOutput<EF>, ProductGkrError>
-where
-    F: TranscriptField,
-    EF: ExtensionField<F>,
-    Challenger: FieldChallenger<F>,
-{
-    // Reject every attacker-controlled length before building a strict transcript driver.
-    if !has_distinct_round_nodes::<EF>() {
-        return Err(ProductGkrError::ChallengeFieldTooSmall);
-    }
-    validate_proof_shape(proof, shape)?;
-    let roots = decode_roots(&proof.roots, shape.root_shape);
-    let mut transcript =
-        ProductGkrVerifierTranscript::<Challenger, F, EF>::new(challenger, shape, &proof.roots);
-    let mut values = roots.clone();
-    let mut point = Vec::with_capacity(shape.log_height);
-    let mut inconsistent_layer = None;
-    let interpolator = RoundPolyInterpolator::new(5);
-
-    for (layer_index, ((arity, _), layer)) in
-        shape.layers().into_iter().zip(&proof.layers).enumerate()
-    {
-        let batching = transcript.begin_layer();
-        let mut running_sum = combine(&values, batching);
-
-        match layer {
-            ProductGkrLayerProof::Binary { children } => {
-                debug_assert_eq!(arity, 2);
-                let branches = transcript.end_binary_layer(children);
-                let expected = combine(
-                    &children
-                        .iter()
-                        .map(|children| children[0] * children[1])
-                        .collect::<Vec<_>>(),
-                    batching,
-                );
-                if running_sum != expected {
-                    inconsistent_layer.get_or_insert(layer_index);
-                }
+            if arity == 2 {
+                // The root-most binary layer has no parent variables to sum over.
+                let children = all_layers
+                    .iter()
+                    .map(|layers| layers.binary_children(child_depth))
+                    .collect::<Vec<_>>();
+                let branches = transcript.end_binary_layer(&children);
                 values = children
                     .iter()
                     .map(|children| interpolate_pair(*children, branches[0]))
                     .collect();
                 point = vec![branches[0]];
-            }
-            ProductGkrLayerProof::RadixFour {
-                round_polys,
-                children,
-            } => {
-                debug_assert_eq!(arity, 4);
-                let mut round_point = Vec::with_capacity(round_polys.len());
-                for round_poly in round_polys {
-                    let challenge = transcript.round(round_poly);
-                    running_sum = interpolator.eval(round_poly, running_sum, challenge);
+                layer_proofs.push(ProductGkrLayerProof::Binary { children });
+            } else {
+                // Four child tables share one eq-weighted degree-five sumcheck.
+                let mut batch =
+                    RadixFourBatch::new(&all_layers, child_depth, 1usize << round_count);
+                let mut equality = equality_weights(&point);
+                let mut logical_len = 1usize << round_count;
+                let mut round_point = Vec::with_capacity(round_count);
+                let mut round_polys = Vec::with_capacity(round_count);
+
+                for _ in 0..round_count {
+                    let round_poly = batch.round(&equality, logical_len, batching);
+                    let challenge = transcript.round(&round_poly);
+                    batch.fold(challenge, logical_len);
+                    fold_dense(&mut equality, challenge);
+                    logical_len /= 2;
                     round_point.push(challenge);
+                    round_polys.push(round_poly);
                 }
-                let expected = equality_evaluation(&point, &round_point)
-                    * combine(
-                        &children
-                            .iter()
-                            .map(|children| children.iter().copied().product())
-                            .collect::<Vec<_>>(),
-                        batching,
-                    );
-                if running_sum != expected {
-                    inconsistent_layer.get_or_insert(layer_index);
-                }
-                let branches = transcript.end_radix_four_layer(children);
+
+                let children = batch.children();
+                let branches = transcript.end_radix_four_layer(&children);
                 values = children
                     .iter()
                     .map(|children| interpolate_quad(*children, branches))
                     .collect();
                 point = vec![branches[0], branches[1]];
                 point.extend(round_point);
+                layer_proofs.push(ProductGkrLayerProof::RadixFour {
+                    round_polys,
+                    children,
+                });
             }
+
+            product_depth = child_depth;
         }
+
+        transcript.finish();
+
+        // Internal folds bind low-order address bits first.
+        // The public convention addresses subcubes with leading coordinates.
+        point.reverse();
+
+        (
+            Self {
+                roots: root_messages,
+                layers: layer_proofs,
+            },
+            ProductGkrOutput {
+                roots,
+                point,
+                values,
+            },
+        )
     }
 
-    transcript.finish();
+    /// Verifies the internal consistency of several product trees.
+    ///
+    /// All counts come from the supplied statement shape.
+    /// Attacker-controlled proof lengths are checked before transcript replay.
+    ///
+    /// The returned leaf evaluations remain unauthenticated.
+    /// The surrounding protocol must tie them to committed polynomials.
+    /// A distinct-root statement checks no relation between different roots.
+    ///
+    /// Product soundness is statistical rather than a fixed property of this primitive.
+    /// The caller must choose enough challenge-field bits for every documented error term.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for malformed proofs or a failed product relation.
+    pub fn verify<F, Challenger>(
+        &self,
+        shape: ProductGkrShape,
+        challenger: &mut Challenger,
+    ) -> Result<ProductGkrOutput<EF>, ProductGkrError>
+    where
+        F: TranscriptField,
+        EF: ExtensionField<F>,
+        Challenger: FieldChallenger<F>,
+    {
+        // Reject every attacker-controlled length before building a strict transcript driver.
+        if !has_distinct_round_nodes::<EF>() {
+            return Err(ProductGkrError::ChallengeFieldTooSmall);
+        }
+        self.validate_shape(shape)?;
+        let roots = shape.root_shape.decode(&self.roots);
+        let mut transcript =
+            ProductGkrVerifierTranscript::<Challenger, F, EF>::new(challenger, shape, &self.roots);
+        let mut values = roots.clone();
+        let mut point = Vec::with_capacity(shape.log_height);
+        let mut inconsistent_layer = None;
+        let interpolator = RoundPolyInterpolator::new(5);
 
-    if let Some(layer) = inconsistent_layer {
-        return Err(ProductGkrError::LayerConsistency { layer });
-    }
+        for (layer_index, ((arity, _), layer)) in
+            shape.layers().into_iter().zip(&self.layers).enumerate()
+        {
+            let batching = transcript.begin_layer();
+            let mut running_sum = combine(&values, batching);
 
-    // Match the repository-wide most-significant-variable-first point convention.
-    point.reverse();
-
-    Ok(ProductGkrOutput {
-        roots,
-        point,
-        values,
-    })
-}
-
-/// Check the canonical proof layout before transcript replay.
-fn validate_proof_shape<EF>(
-    proof: &ProductGkrProof<EF>,
-    shape: ProductGkrShape,
-) -> Result<(), ProductGkrError> {
-    if proof.roots.len() != shape.root_message_len() {
-        return Err(ProductGkrError::RootCountMismatch {
-            expected: shape.root_message_len(),
-            actual: proof.roots.len(),
-        });
-    }
-
-    let layers = shape.layers();
-    if proof.layers.len() != layers.len() {
-        return Err(ProductGkrError::LayerCountMismatch {
-            expected: layers.len(),
-            actual: proof.layers.len(),
-        });
-    }
-
-    for (layer_index, ((arity, rounds), layer)) in layers.iter().zip(&proof.layers).enumerate() {
-        let valid = match (arity, layer) {
-            (2, ProductGkrLayerProof::Binary { children }) => children.len() == shape.num_trees,
-            (
-                4,
+            match layer {
+                ProductGkrLayerProof::Binary { children } => {
+                    debug_assert_eq!(arity, 2);
+                    let branches = transcript.end_binary_layer(children);
+                    let expected = combine(
+                        &children
+                            .iter()
+                            .map(|children| children[0] * children[1])
+                            .collect::<Vec<_>>(),
+                        batching,
+                    );
+                    if running_sum != expected {
+                        inconsistent_layer.get_or_insert(layer_index);
+                    }
+                    values = children
+                        .iter()
+                        .map(|children| interpolate_pair(*children, branches[0]))
+                        .collect();
+                    point = vec![branches[0]];
+                }
                 ProductGkrLayerProof::RadixFour {
                     round_polys,
                     children,
-                },
-            ) => round_polys.len() == *rounds && children.len() == shape.num_trees,
-            _ => false,
-        };
-        if !valid {
-            return Err(ProductGkrError::MalformedLayer { layer: layer_index });
-        }
-    }
-
-    Ok(())
-}
-
-/// Build every product level needed by the radix-four descent.
-fn build_product_layers<F: Field>(leaves: &[F], log_height: usize) -> Vec<Vec<F>> {
-    // Trailing identities remain implicit from the first level onward.
-    let mut layers = vec![Vec::new(); log_height + 1];
-    layers[0] = leaves.to_vec();
-    trim_identities(&mut layers[0]);
-
-    let mut depth = 0;
-    while depth + 2 <= log_height {
-        layers[depth + 2] = reduce_prefix(&layers[depth], 4);
-        depth += 2;
-    }
-    if depth < log_height {
-        layers[log_height] = reduce_prefix(&layers[depth], 2);
-    }
-
-    layers
-}
-
-/// Multiply fixed-size groups while leaving the all-one suffix absent.
-fn reduce_prefix<F: Field>(values: &[F], arity: usize) -> Vec<F> {
-    let mut reduced = values
-        .chunks(arity)
-        .map(|chunk| chunk.iter().copied().product())
-        .collect::<Vec<_>>();
-    trim_identities(&mut reduced);
-    reduced
-}
-
-/// Remove values represented by implicit identity padding.
-fn trim_identities<F: Field>(values: &mut Vec<F>) {
-    while values.last() == Some(&F::ONE) {
-        values.pop();
-    }
-}
-
-/// Encode roots according to the statement rather than prover-controlled metadata.
-fn encode_roots<F: Field>(
-    roots: &[F],
-    shape: ProductGkrRootShape,
-) -> Result<Vec<F>, ProductGkrError> {
-    match shape {
-        ProductGkrRootShape::Distinct => Ok(roots.to_vec()),
-        ProductGkrRootShape::FirstTwoShared => {
-            if roots[0] != roots[1] {
-                return Err(ProductGkrError::SharedRootMismatch);
+                } => {
+                    debug_assert_eq!(arity, 4);
+                    let mut round_point = Vec::with_capacity(round_polys.len());
+                    for round_poly in round_polys {
+                        let challenge = transcript.round(round_poly);
+                        running_sum = interpolator.eval(round_poly, running_sum, challenge);
+                        round_point.push(challenge);
+                    }
+                    let expected = equality_evaluation(&point, &round_point)
+                        * combine(
+                            &children
+                                .iter()
+                                .map(|children| children.iter().copied().product())
+                                .collect::<Vec<_>>(),
+                            batching,
+                        );
+                    if running_sum != expected {
+                        inconsistent_layer.get_or_insert(layer_index);
+                    }
+                    let branches = transcript.end_radix_four_layer(children);
+                    values = children
+                        .iter()
+                        .map(|children| interpolate_quad(*children, branches))
+                        .collect();
+                    point = vec![branches[0], branches[1]];
+                    point.extend(round_point);
+                }
             }
-            let mut encoded = Vec::with_capacity(roots.len() - 1);
-            encoded.push(roots[0]);
-            encoded.extend_from_slice(&roots[2..]);
-            Ok(encoded)
+        }
+
+        transcript.finish();
+
+        if let Some(layer) = inconsistent_layer {
+            return Err(ProductGkrError::LayerConsistency { layer });
+        }
+
+        // Match the repository-wide most-significant-variable-first point convention.
+        point.reverse();
+
+        Ok(ProductGkrOutput {
+            roots,
+            point,
+            values,
+        })
+    }
+
+    /// Check the canonical proof layout before transcript replay.
+    fn validate_shape(&self, shape: ProductGkrShape) -> Result<(), ProductGkrError> {
+        if self.roots.len() != shape.root_message_len() {
+            return Err(ProductGkrError::RootCountMismatch {
+                expected: shape.root_message_len(),
+                actual: self.roots.len(),
+            });
+        }
+
+        let layers = shape.layers();
+        if self.layers.len() != layers.len() {
+            return Err(ProductGkrError::LayerCountMismatch {
+                expected: layers.len(),
+                actual: self.layers.len(),
+            });
+        }
+
+        for (layer_index, ((arity, rounds), layer)) in layers.iter().zip(&self.layers).enumerate() {
+            let valid = match (arity, layer) {
+                (2, ProductGkrLayerProof::Binary { children }) => children.len() == shape.num_trees,
+                (
+                    4,
+                    ProductGkrLayerProof::RadixFour {
+                        round_polys,
+                        children,
+                    },
+                ) => round_polys.len() == *rounds && children.len() == shape.num_trees,
+                _ => false,
+            };
+            if !valid {
+                return Err(ProductGkrError::MalformedLayer { layer: layer_index });
+            }
+        }
+
+        Ok(())
+    }
+}
+
+/// An arbitrary table prefix whose omitted suffix is the multiplicative identity.
+struct IdentityPrefix<F> {
+    /// Explicit values after removing trailing identities.
+    values: Vec<F>,
+}
+
+impl<F: Field> IdentityPrefix<F> {
+    /// Creates a canonical explicit prefix from a complete or partial table.
+    fn new(mut values: Vec<F>) -> Self {
+        // Trailing identities have the same semantics when left implicit.
+        while values.last() == Some(&F::ONE) {
+            values.pop();
+        }
+        Self { values }
+    }
+
+    /// Reads one logical value through implicit identity padding.
+    #[inline]
+    fn get(&self, index: usize) -> F {
+        self.values.get(index).copied().unwrap_or(F::ONE)
+    }
+
+    /// Multiplies fixed-size groups into the next retained product layer.
+    fn reduce(&self, arity: usize) -> Self {
+        // A partial final group is completed by implicit identity factors.
+        let values = self
+            .values
+            .chunks(arity)
+            .map(|chunk| chunk.iter().copied().product())
+            .collect();
+        Self::new(values)
+    }
+
+    /// Binds the lowest remaining variable in place.
+    fn fold(&mut self, logical_len: usize, challenge: F) {
+        debug_assert!(self.values.len() <= logical_len);
+        debug_assert!(logical_len >= 2);
+        let output_len = self.values.len().div_ceil(2);
+
+        // Missing entries retain the constant-one suffix during interpolation.
+        for row in 0..output_len {
+            let zero = self.get(2 * row);
+            let one = self.get(2 * row + 1);
+            self.values[row] = interpolate_pair([zero, one], challenge);
+        }
+        self.values.truncate(output_len);
+
+        // Restore the canonical shortest representation after folding.
+        while self.values.last() == Some(&F::ONE) {
+            self.values.pop();
         }
     }
 }
 
-/// Expand the structural shared-root encoding.
-fn decode_roots<F: Copy>(encoded: &[F], shape: ProductGkrRootShape) -> Vec<F> {
-    match shape {
-        ProductGkrRootShape::Distinct => encoded.to_vec(),
-        ProductGkrRootShape::FirstTwoShared => {
-            let mut roots = Vec::with_capacity(encoded.len() + 1);
-            roots.extend([encoded[0], encoded[0]]);
-            roots.extend_from_slice(&encoded[1..]);
-            roots
-        }
-    }
+/// Product levels retained for one identity-padded input prefix.
+struct ProductLayers<F> {
+    /// Explicit prefixes indexed by their base-two depth above the leaves.
+    layers: Vec<IdentityPrefix<F>>,
 }
 
-/// Read the root-most binary children from an explicit prefix.
-fn binary_children<F: Field>(values: &[F]) -> [F; 2] {
-    [
-        values.first().copied().unwrap_or(F::ONE),
-        values.get(1).copied().unwrap_or(F::ONE),
-    ]
+impl<F: Field> ProductLayers<F> {
+    /// Builds every product level needed by the radix-four descent.
+    fn new(leaves: &[F], log_height: usize) -> Self {
+        // Unvisited depths remain empty constant-one prefixes.
+        let mut layers = (0..=log_height)
+            .map(|_| IdentityPrefix::new(Vec::new()))
+            .collect::<Vec<_>>();
+        layers[0] = IdentityPrefix::new(leaves.to_vec());
+
+        // Two multiplication levels are retained per radix-four layer.
+        let mut depth = 0;
+        while depth + 2 <= log_height {
+            layers[depth + 2] = layers[depth].reduce(4);
+            depth += 2;
+        }
+        if depth < log_height {
+            layers[log_height] = layers[depth].reduce(2);
+        }
+
+        Self { layers }
+    }
+
+    /// Returns the fully reduced product root.
+    #[inline]
+    fn root(&self) -> F {
+        self.layers
+            .last()
+            .expect("every product tree retains its root layer")
+            .get(0)
+    }
+
+    /// Reads the two children of a root-most binary layer.
+    #[inline]
+    fn binary_children(&self, depth: usize) -> [F; 2] {
+        [self.layers[depth].get(0), self.layers[depth].get(1)]
+    }
+
+    /// Splits one retained level into four low-bit child prefixes.
+    fn radix_four_state(&self, depth: usize, logical_len: usize) -> RadixFourState<F> {
+        RadixFourState::new(&self.layers[depth], logical_len)
+    }
 }
 
 /// Four child multilinears represented as arbitrary prefixes of constant-one tables.
 struct RadixFourState<F> {
     /// One prefix per low-bit child slot.
-    children: [Vec<F>; 4],
+    children: [IdentityPrefix<F>; 4],
 }
 
 impl<F: Field> RadixFourState<F> {
     /// Split an interleaved product level into four child tables.
-    fn new(values: &[F], logical_len: usize) -> Self {
+    fn new(values: &IdentityPrefix<F>, logical_len: usize) -> Self {
         let mut children: [Vec<F>; 4] = core::array::from_fn(|_| Vec::new());
-        for (index, &value) in values.iter().enumerate() {
+        for (index, &value) in values.values.iter().enumerate() {
             let slot = index % 4;
             let row = index / 4;
             debug_assert!(row < logical_len);
             children[slot].push(value);
         }
-        for child in &mut children {
-            trim_identities(child);
-        }
+        let children = children.map(IdentityPrefix::new);
         Self { children }
     }
 
     /// Bind one parent variable in every child multilinear.
     fn fold(&mut self, challenge: F, logical_len: usize) {
         for child in &mut self.children {
-            fold_prefix(child, logical_len, challenge);
+            child.fold(logical_len, challenge);
         }
     }
 
     /// Read the four terminal child claims after every parent variable is bound.
     fn children(&self) -> [F; 4] {
-        core::array::from_fn(|slot| self.children[slot].first().copied().unwrap_or(F::ONE))
+        core::array::from_fn(|slot| self.children[slot].get(0))
     }
 }
 
-/// Compute one degree-five batched sumcheck message.
-fn radix_four_round<F: Field>(
-    states: &[RadixFourState<F>],
-    equality: &[F],
-    logical_len: usize,
-    batching: F,
-) -> [F; ROUND_POLY_LEN] {
-    debug_assert!(logical_len >= 2);
-    debug_assert_eq!(equality.len(), logical_len);
+/// Per-tree states reduced by one shared radix-four sumcheck.
+struct RadixFourBatch<F> {
+    /// One folding state for each product tree.
+    states: Vec<RadixFourState<F>>,
+}
 
-    // Node one is omitted because the running sum reconstructs it.
-    let nodes = [0, 2, 3, 4, 5].map(F::interpolation_node);
-    let mut evaluations = [F::ZERO; ROUND_POLY_LEN];
+impl<F: Field> RadixFourBatch<F> {
+    /// Creates the batched states from one retained level per tree.
+    fn new(layers: &[ProductLayers<F>], depth: usize, logical_len: usize) -> Self {
+        let states = layers
+            .iter()
+            .map(|layers| layers.radix_four_state(depth, logical_len))
+            .collect();
+        Self { states }
+    }
 
-    for row in 0..logical_len / 2 {
-        let eq_zero = equality[2 * row];
-        let eq_one = equality[2 * row + 1];
+    /// Computes one degree-five batched sumcheck message.
+    fn round(&self, equality: &[F], logical_len: usize, batching: F) -> [F; ROUND_POLY_LEN] {
+        debug_assert!(logical_len >= 2);
+        debug_assert_eq!(equality.len(), logical_len);
 
-        for (node_index, node) in nodes.into_iter().enumerate() {
-            let eq_value = interpolate_pair([eq_zero, eq_one], node);
-            let mut power = F::ONE;
-            let mut batched_product = F::ZERO;
+        // Node one is omitted because the running sum reconstructs it.
+        let nodes = [0, 2, 3, 4, 5].map(F::interpolation_node);
+        let mut evaluations = [F::ZERO; ROUND_POLY_LEN];
 
-            for state in states {
-                let product = state
-                    .children
-                    .iter()
-                    .map(|child| {
-                        let zero = child.get(2 * row).copied().unwrap_or(F::ONE);
-                        let one = child.get(2 * row + 1).copied().unwrap_or(F::ONE);
-                        interpolate_pair([zero, one], node)
-                    })
-                    .product::<F>();
-                batched_product += power * product;
-                power *= batching;
+        for row in 0..logical_len / 2 {
+            let eq_zero = equality[2 * row];
+            let eq_one = equality[2 * row + 1];
+
+            for (node_index, node) in nodes.into_iter().enumerate() {
+                let eq_value = interpolate_pair([eq_zero, eq_one], node);
+                let mut power = F::ONE;
+                let mut batched_product = F::ZERO;
+
+                for state in &self.states {
+                    let product = state
+                        .children
+                        .iter()
+                        .map(|child| {
+                            let zero = child.get(2 * row);
+                            let one = child.get(2 * row + 1);
+                            interpolate_pair([zero, one], node)
+                        })
+                        .product::<F>();
+                    batched_product += power * product;
+                    power *= batching;
+                }
+
+                evaluations[node_index] += eq_value * batched_product;
             }
+        }
 
-            evaluations[node_index] += eq_value * batched_product;
+        evaluations
+    }
+
+    /// Binds one parent variable across every tree in the batch.
+    fn fold(&mut self, challenge: F, logical_len: usize) {
+        for state in &mut self.states {
+            state.fold(challenge, logical_len);
         }
     }
 
-    evaluations
-}
-
-/// Fold a constant-one prefix along its lowest remaining variable.
-fn fold_prefix<F: Field>(values: &mut Vec<F>, logical_len: usize, challenge: F) {
-    debug_assert!(values.len() <= logical_len);
-    debug_assert!(logical_len >= 2);
-    let output_len = values.len().div_ceil(2);
-
-    for row in 0..output_len {
-        let zero = values.get(2 * row).copied().unwrap_or(F::ONE);
-        let one = values.get(2 * row + 1).copied().unwrap_or(F::ONE);
-        values[row] = interpolate_pair([zero, one], challenge);
+    /// Collects the terminal child claims in tree order.
+    fn children(&self) -> Vec<[F; 4]> {
+        self.states.iter().map(RadixFourState::children).collect()
     }
-    values.truncate(output_len);
-    trim_identities(values);
 }
 
-/// Fold a fully materialized multilinear table in place.
-fn fold_dense<F: Field>(values: &mut Vec<F>, challenge: F) {
-    let output_len = values.len() / 2;
-    for row in 0..output_len {
-        values[row] = interpolate_pair([values[2 * row], values[2 * row + 1]], challenge);
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shape_errors_report_rejected_values_and_bounds() {
+        // An empty batch reports both the supplied count and its minimum.
+        assert_eq!(
+            ProductGkrShape::new(0, 0, ProductGkrRootShape::Distinct),
+            Err(ProductGkrShapeError::NoTrees {
+                num_trees: 0,
+                minimum: 1,
+            })
+        );
+
+        // Structural root sharing requires two concrete trees.
+        assert_eq!(
+            ProductGkrShape::new(0, 1, ProductGkrRootShape::FirstTwoShared),
+            Err(ProductGkrShapeError::SharedRootNeedsTwoTrees {
+                num_trees: 1,
+                minimum: 2,
+            })
+        );
+
+        // Four children per tree determine the largest addressable batch.
+        let num_trees = usize::MAX / 4 + 1;
+        assert_eq!(
+            ProductGkrShape::new(0, num_trees, ProductGkrRootShape::Distinct),
+            Err(ProductGkrShapeError::TreeCountOverflow {
+                num_trees,
+                maximum: usize::MAX / 4,
+            })
+        );
+
+        // A machine word cannot address a table with its own bit width as log height.
+        let log_height = usize::BITS as usize;
+        assert_eq!(
+            ProductGkrShape::new(log_height, 1, ProductGkrRootShape::Distinct),
+            Err(ProductGkrShapeError::HeightOverflow {
+                log_height,
+                maximum: log_height - 1,
+            })
+        );
     }
-    values.truncate(output_len);
-}
-
-/// Equality weights over a low-variable-first Boolean cube.
-fn equality_weights<F: Field>(point: &[F]) -> Vec<F> {
-    let mut weights = vec![F::ONE];
-    for &coordinate in point {
-        let old_len = weights.len();
-        weights.resize(old_len * 2, F::ZERO);
-        for index in 0..old_len {
-            let weight = weights[index];
-            weights[index] = weight * (F::ONE - coordinate);
-            weights[old_len + index] = weight * coordinate;
-        }
-    }
-    weights
-}
-
-/// Evaluate the multilinear equality polynomial at two points.
-fn equality_evaluation<F: Field>(left: &[F], right: &[F]) -> F {
-    debug_assert_eq!(left.len(), right.len());
-    left.iter()
-        .zip(right)
-        .map(|(&left, &right)| (F::ONE - left) * (F::ONE - right) + left * right)
-        .product()
-}
-
-/// Combine one claim per tree with consecutive powers of one challenge.
-fn combine<F: Field>(values: &[F], challenge: F) -> F {
-    values
-        .iter()
-        .zip(challenge.powers())
-        .map(|(&value, power)| value * power)
-        .sum()
-}
-
-/// Interpolate a line whose endpoints are indexed by one Boolean variable.
-fn interpolate_pair<F: Field>(values: [F; 2], point: F) -> F {
-    values[0] + point * (values[1] - values[0])
-}
-
-/// Interpolate a four-entry table at two low-order coordinates.
-fn interpolate_quad<F: Field>(values: [F; 4], point: [F; 2]) -> F {
-    let low_zero = interpolate_pair([values[0], values[1]], point[0]);
-    let low_one = interpolate_pair([values[2], values[3]], point[0]);
-    interpolate_pair([low_zero, low_one], point[1])
-}
-
-/// Check that degree-five interpolation has a valid six-point domain.
-fn has_distinct_round_nodes<F: Field>() -> bool {
-    // Six distinct nodes cannot exist in a field with fewer than eight elements.
-    // This guard also avoids calling interpolation-node constructors outside their domain.
-    if F::bits() < 3 {
-        return false;
-    }
-    // Pairwise comparison avoids allocating at the proof boundary.
-    let nodes = core::array::from_fn::<_, 6, _>(F::interpolation_node);
-    nodes
-        .iter()
-        .enumerate()
-        .all(|(index, node)| !nodes[index + 1..].contains(node))
-}
-
-/// Evaluate the constant-one suffix after an explicit prefix.
-///
-/// Coordinates are ordered from the most significant address bit to the least significant bit.
-/// The result is `sum_(i >= prefix_len) eq(point, i)` over the logical Boolean cube.
-///
-/// # Panics
-///
-/// Panics when the prefix is longer than the logical table.
-#[must_use]
-pub fn identity_padding_evaluation<F: Field>(prefix_len: usize, point: &[F]) -> F {
-    let capacity = 1usize
-        .checked_shl(point.len() as u32)
-        .expect("multilinear point must fit in usize");
-    assert!(prefix_len <= capacity, "prefix exceeds the logical table");
-    if prefix_len == capacity {
-        return F::ZERO;
-    }
-
-    // Sum the address weights strictly below the binary threshold.
-    let mut below = F::ZERO;
-    let mut equal_prefix = F::ONE;
-    for (bit_index, &coordinate) in point.iter().enumerate() {
-        let shift = point.len() - 1 - bit_index;
-        if (prefix_len >> shift) & 1 == 1 {
-            below += equal_prefix * (F::ONE - coordinate);
-            equal_prefix *= coordinate;
-        } else {
-            equal_prefix *= F::ONE - coordinate;
-        }
-    }
-
-    F::ONE - below
 }
