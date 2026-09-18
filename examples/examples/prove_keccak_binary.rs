@@ -35,6 +35,21 @@ struct Args {
     /// Sequential variable folds batched between binary-PCS commitments.
     #[arg(long, default_value_t = 3)]
     folding: usize,
+
+    /// Number of children each Merkle-tree node compresses: 2 or 4.
+    ///
+    /// 4 trades larger authentication paths in the proof for fewer compressions per tree.
+    #[arg(long, default_value_t = 2, value_parser = parse_merkle_arity)]
+    merkle_arity: usize,
+}
+
+/// Parses a `--merkle-arity` value, rejecting anything but 2 or 4.
+fn parse_merkle_arity(arg: &str) -> Result<usize, String> {
+    match arg.parse::<usize>() {
+        Ok(arity @ (2 | 4)) => Ok(arity),
+        Ok(arity) => Err(format!("merkle arity must be 2 or 4, got {arity}")),
+        Err(_) => Err(format!("invalid merkle arity: {arg}")),
+    }
 }
 
 fn main() {
@@ -72,6 +87,7 @@ fn main() {
         pcs_pow_bits: args.pcs_pow_bits,
         security_bits: args.security_bits,
         folding: args.folding,
+        merkle_arity: args.merkle_arity,
         ..BinaryProofOptions::default()
     };
 
