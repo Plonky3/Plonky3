@@ -954,7 +954,9 @@ fn layout(c: &mut Criterion) {
 }
 
 struct BitColumns<'a> {
+    /// Logical dimensions exposed to the placement plan.
     shape: TableShape,
+    /// Packed source words stored column by column.
     columns: &'a [Vec<u64>],
 }
 

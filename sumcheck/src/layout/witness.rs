@@ -205,7 +205,9 @@ impl<F: Field> SuffixTableSource<F> for Table<F> {
 ///
 /// The backing allocation is initialized; coverage is tracked per column.
 pub struct ColumnOut<'a, F> {
+    /// Logical rows assigned to one source column.
     values: &'a mut [F],
+    /// Whether the producer completed the column write.
     written: bool,
 }
 
@@ -244,10 +246,15 @@ impl<'a, F> ColumnOut<'a, F> {
 /// A reusable immutable placement plan for directly filled suffix-layout witnesses.
 #[derive(Debug, Clone)]
 pub struct SuffixLayoutPlan {
+    /// Logical dimensions expected from each source.
     source_shapes: Vec<TableShape>,
+    /// Dimensions after extending short columns with zeroes.
     committed_shapes: Vec<TableShape>,
+    /// Column locations inside the final stacked polynomial.
     placements: Vec<TablePlacement>,
+    /// Arity of the final stacked polynomial.
     num_variables: usize,
+    /// Number of suffix variables reserved for preprocessing.
     folding: usize,
 }
 
@@ -302,7 +309,9 @@ pub enum SuffixFillError {
 /// A directly filled suffix-layout polynomial and its verifier-reconstructible metadata.
 #[derive(Debug, Clone)]
 pub struct FilledSuffixWitness<'a, F: Field> {
+    /// Placement metadata used to build the polynomial.
     plan: &'a SuffixLayoutPlan,
+    /// Final stacked polynomial filled in place.
     poly: Poly<F>,
 }
 
@@ -808,7 +817,9 @@ mod tests {
     type EF = BinomialExtensionField<F, 4>;
 
     struct ChunkedSource {
+        /// Logical dimensions exposed to the placement plan.
         shape: TableShape,
+        /// Fragmented values stored by column and then by chunk.
         columns: Vec<Vec<Vec<F>>>,
     }
 
@@ -833,7 +844,9 @@ mod tests {
     }
 
     struct BitPackedSource {
+        /// Logical dimensions exposed to the placement plan.
         shape: TableShape,
+        /// Packed source words stored column by column.
         columns: Vec<Vec<u64>>,
     }
 
@@ -855,7 +868,9 @@ mod tests {
     }
 
     struct ShortSource {
+        /// Logical dimensions exposed to the placement plan.
         shape: TableShape,
+        /// Logical destination length observed by the producer.
         observed_len: AtomicUsize,
     }
 
@@ -871,6 +886,7 @@ mod tests {
     }
 
     struct IncompleteSource {
+        /// Logical dimensions exposed to the placement plan.
         shape: TableShape,
     }
 
