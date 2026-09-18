@@ -426,7 +426,8 @@ pub(crate) struct RoundStateExt<'air, 'data, A, F: Field, EF: ExtensionField<F>,
     round: usize,
     /// Repeat-last successor values at the folded tail row, one entry per column.
     ///
-    /// Zero for every column no AIR reads on the next row.
+    /// Zero for every column no AIR reads on the next row, and for every column while the stage
+    /// is still on its planes, which fill it in when the stage leaves them.
     next_tail: Vec<R>,
     /// Lookup/AIR-link coefficients retained from this stage's base-field round.
     coupling: InteractionCoupling<R>,

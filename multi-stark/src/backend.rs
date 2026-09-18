@@ -139,15 +139,16 @@ where
 /// The backend that evaluates a stage's first round inside the small subfield `S` when it fits.
 ///
 /// ```text
-///     round 0, stage fits S : expressions in S, alpha-batched over the challenge field
-///     fold 0,  stage fits S : lo + r * (hi - lo) with hi - lo applied as an element of S
-///     otherwise             : as GenericBackend
-///     later rounds          : as GenericBackend
+///     stage sliced   : its first rounds sixty-four rows at a time on bit planes of GF(4),
+///                      and every column folds from the planes once those rounds are done
+///     round 0, fits S: expressions in S, alpha-batched over the challenge field
+///     fold 0,  fits S: lo + r * (hi - lo) with hi - lo applied as an element of S
+///     otherwise      : as GenericBackend
+///     later rounds   : as GenericBackend
 /// ```
 ///
-/// When `S` is `GF(4)` and each half of the stage holds at least sixty-four rows, the stage's
-/// first rounds evaluate the AIR sixty-four rows at a time on bit planes of the trace, and its
-/// columns fold into the challenge field only once those rounds are done, see [`crate::sliced`].
+/// A stage is sliced when `S` is `GF(4)`, the stage fits it, and each half of the stage holds at
+/// least sixty-four rows; see [`crate::sliced`].
 ///
 /// A stage fits `S` when all of these hold:
 ///
@@ -220,8 +221,9 @@ where
 /// challenge field.
 ///
 /// ```text
+///     stage sliced : as SubfieldBackend<S>, its sums accumulated in R, and every column
+///                    folding from the planes into R once its sliced rounds are done
 ///     round 0      : as SubfieldBackend<S>
-///     sliced rounds: as SubfieldBackend<S>, their sixty-four-row sums accumulated in R
 ///     fold 0       : every column folds straight into R
 ///     later rounds : columns, selectors, and AIR expressions in R, one residual row at a time
 /// ```

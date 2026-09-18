@@ -279,7 +279,12 @@ fn generic_rounds(instances: &[Instance]) -> Rounds {
 
 #[test]
 fn every_round_on_and_off_the_planes_matches_the_generic_kernel() {
-    for (height, expected_on_planes) in [(SHORTEST, 1), (4 * SHORTEST, 3), (64 * SHORTEST, 3)] {
+    for (height, expected_on_planes) in [
+        (SHORTEST, 1),
+        (2 * SHORTEST, 2),
+        (4 * SHORTEST, 3),
+        (64 * SHORTEST, 3),
+    ] {
         let instances = [
             Instance::honest(FixtureAir::Gate { scale: gf4(3) }, height, 20),
             Instance::honest(FixtureAir::Pair, height, 21),

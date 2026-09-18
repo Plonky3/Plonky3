@@ -128,14 +128,12 @@ struct SlicedRound<'a, 'air, A, F, S, R> {
     public_values: &'a [&'a [F]],
     /// Descending alpha powers of each AIR, in the accumulation field.
     alpha_powers: &'a [Vec<R>],
-    /// Coordinates of every prefix node, `0 ..= degree`.
-    nodes: Vec<(bool, bool)>,
+    /// Every prefix of this round: node coordinates of each bound variable, first variable first.
+    prefixes: Vec<Vec<(bool, bool)>>,
     /// Nodes this round evaluates, each with the step that reaches it.
     schedule: Vec<(usize, NodeStep<(bool, bool)>)>,
     /// Every successor column run of the stage.
     next_columns: Vec<Range<usize>>,
-    /// Index of this round, which is also the number of prefix variables.
-    round: usize,
     /// Words each corner block spans.
     words: usize,
     /// The lane weights: the eq factor of the variables inside a word.
@@ -201,16 +199,6 @@ where
     R: Field,
     A: for<'b> Air<SlicedFolder<'b, F, S, R>>,
 {
-    /// The prefix node coordinates of prefix index `prefix`, first variable most significant.
-    fn prefix_nodes(&self, mut prefix: usize) -> Vec<(bool, bool)> {
-        let mut coordinates = vec![(false, false); self.round];
-        for coordinate in coordinates.iter_mut().rev() {
-            *coordinate = self.nodes[prefix % self.nodes.len()];
-            prefix /= self.nodes.len();
-        }
-        coordinates
-    }
-
     /// Fold one column's corners at the prefix, over word `word` of each corner block.
     #[inline]
     fn fold_column(
@@ -231,7 +219,7 @@ where
 
     /// Add one word of residual rows at one prefix to the scratch sums.
     fn accumulate(&self, scratch: &mut SlicedScratch<F, S, R>, word: usize, prefix_index: usize) {
-        let prefix = self.prefix_nodes(prefix_index);
+        let prefix = &self.prefixes[prefix_index];
         let trace = self.trace;
         let SlicedScratch {
             sums,
@@ -244,13 +232,13 @@ where
         } = scratch;
 
         for column in 0..trace.width {
-            let (lo, hi) = self.fold_column(&trace.cells, column, word, &prefix, corners);
+            let (lo, hi) = self.fold_column(&trace.cells, column, word, prefix, corners);
             local[column] = lo;
             local_diff[column] = lo + hi;
         }
         for run in &self.next_columns {
             for column in run.clone() {
-                let (lo, hi) = self.fold_column(&trace.successors, column, word, &prefix, corners);
+                let (lo, hi) = self.fold_column(&trace.successors, column, word, prefix, corners);
                 next[column] = lo;
                 next_diff[column] = lo + hi;
             }
@@ -260,7 +248,7 @@ where
                 let plane = trace.boundary[corner * self.words + word][index];
                 *value = SlicedGf4::from_planes(plane, 0);
             }
-            let (lo, hi) = fold_corners(corners, &prefix);
+            let (lo, hi) = fold_corners(corners, prefix);
             (lo, lo + hi)
         };
         let (first, first_diff) = selector(0);
@@ -387,6 +375,7 @@ where
 /// Each AIR's eq-weighted, alpha-batched constraint sums at its native nodes `0, 2, 3, ...`, or
 /// `None` when an interpolation node lies outside `S` or an AIR constant poisoned a value.
 #[allow(clippy::too_many_arguments)]
+#[tracing::instrument(skip_all, level = "debug", fields(round = challenges.len()))]
 fn sliced_round<A, F, EF, S, R>(
     eq_suffix: &Poly<EF>,
     trace: &SlicedTrace,
@@ -444,15 +433,25 @@ where
     let lanes = LaneSums::new(&lift(lane_weights.as_slice()), generator);
     let word_weights = lift(word_weights.as_slice());
 
+    // The prefixes in index order, the last variable varying fastest.
+    let prefixes = (0..nodes.len().pow(round as u32))
+        .map(|mut index| {
+            let mut prefix = vec![(false, false); round];
+            for coordinate in prefix.iter_mut().rev() {
+                *coordinate = nodes[index % nodes.len()];
+                index /= nodes.len();
+            }
+            prefix
+        })
+        .collect::<Vec<_>>();
     let context = SlicedRound {
         trace,
         slots,
         public_values,
         alpha_powers,
-        nodes,
+        prefixes,
         schedule,
         next_columns: next_row_runs(slots),
-        round,
         words: word_weights.len(),
         lanes,
         word_weights,
@@ -464,7 +463,7 @@ where
         .iter()
         .map(|slot| slot.constraint_degree)
         .collect::<Vec<_>>();
-    let prefixes = context.nodes.len().pow(round as u32);
+    let prefixes = context.prefixes.len();
     let corners = 2 << round;
     let scratch = (0..context.words * prefixes)
         .into_par_iter()
@@ -789,7 +788,6 @@ where
     /// - `Some`: exactly what the scalar and packed kernels return.
     /// - `None`: the stage is not on its planes, its sliced rounds are spent, or an AIR constant
     ///   outside `S` poisoned a value. No round group has changed; see [`Self::unslice`].
-    #[tracing::instrument(skip_all, level = "debug")]
     pub(crate) fn round_poly_sliced<S>(&mut self, eq_suffix: &Poly<EF>) -> Option<Vec<EF>>
     where
         S: Field,
@@ -833,13 +831,11 @@ where
     ///
     /// Whether the stage is on its planes; when it is not, nothing has changed.
     pub(crate) fn fold_sliced(&mut self, r: EF) -> bool {
-        if !matches!(self.columns, ExtColumns::Sliced(_)) {
+        let ExtColumns::Sliced(columns) = &mut self.columns else {
             return false;
-        }
+        };
+        columns.challenges.push(r);
         self.fold_claims(r);
-        if let ExtColumns::Sliced(columns) = &mut self.columns {
-            columns.challenges.push(r);
-        }
         self.boundary.apply(R::from(r));
         self.round += 1;
         true
@@ -858,20 +854,20 @@ where
     /// planes at the last residual row the same way.
     ///
     /// Does nothing when the stage is not on its planes.
-    #[tracing::instrument(skip_all, level = "debug")]
     pub(crate) fn unslice<S>(&mut self)
     where
         S: Field,
         EF: HasSubfield<S>,
     {
-        if !matches!(self.columns, ExtColumns::Sliced(_)) {
-            return;
-        }
-        let ExtColumns::Sliced(SlicedColumns { trace, challenges }) =
-            core::mem::replace(&mut self.columns, ExtColumns::Scalar(Vec::new()))
-        else {
-            unreachable!("the columns were just found on their planes")
-        };
+        let (trace, challenges) =
+            match core::mem::replace(&mut self.columns, ExtColumns::Scalar(Vec::new())) {
+                ExtColumns::Sliced(SlicedColumns { trace, challenges }) => (trace, challenges),
+                columns => {
+                    self.columns = columns;
+                    return;
+                }
+            };
+        let _span = tracing::debug_span!("unslice").entered();
         let generator = R::from(EF::from(S::GENERATOR));
         let weights = Poly::new_from_point(&challenges, EF::ONE)
             .as_slice()
@@ -890,13 +886,19 @@ where
         // The value at every residual row of one word, from the corner words of both planes.
         let fold_word = |planes: &[[u64; 2]], column: usize, word: usize, out: &mut [R]| {
             let corner_words = |plane: usize| {
-                (0..corners)
-                    .map(|corner| planes[(corner * words + word) * width + column][plane])
-                    .collect::<Vec<_>>()
+                let mut words_of_plane = [0; 1 << SLICED_ROUNDS];
+                for (corner, value) in words_of_plane[..corners].iter_mut().enumerate() {
+                    *value = planes[(corner * words + word) * width + column][plane];
+                }
+                words_of_plane
             };
             let (low, high) = (corner_words(0), corner_words(1));
             out.fill(R::ZERO);
-            for (group, (low, high)) in low.chunks(8).zip(high.chunks(8)).enumerate() {
+            for (group, (low, high)) in low[..corners]
+                .chunks(8)
+                .zip(high[..corners].chunks(8))
+                .enumerate()
+            {
                 let (low, high) = (lane_masks(low), lane_masks(high));
                 for (value, (&low, &high)) in out.iter_mut().zip(low.iter().zip(&high)) {
                     *value +=
