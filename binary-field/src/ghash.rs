@@ -109,7 +109,10 @@ impl Ghash128 {
         });
 
         // SAFETY: `Ghash128` is transparent over `u128` as well, so the allocation has its size
-        // and alignment, and every `u128` is a valid element.
+        // and alignment, and every `u128` is a valid element. This also relies on taking
+        // `BinaryField128` specifically: its `MASK` is `u128::MAX`, so every bit pattern left in
+        // `words` is already canonical. A smaller tower field's mask clears high bits, so its
+        // buffer could hold non-canonical entries and this reinterpretation would not be sound.
         unsafe { Vec::from_raw_parts(ptr.cast::<Self>(), len, capacity) }
     }
 
