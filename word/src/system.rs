@@ -76,6 +76,18 @@ pub enum SystemError {
     },
 }
 
+/// A pair of word segments that does not match a checked statement shape.
+#[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
+#[error("expected {expected} {segment:?} words, received {actual}")]
+pub struct ShapeError {
+    /// The segment with the wrong length.
+    pub segment: Segment,
+    /// The checked length.
+    pub expected: usize,
+    /// The supplied length.
+    pub actual: usize,
+}
+
 /// One shifted word together with its position in a relation family.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ConstraintTerm<'a, W: Word> {
@@ -321,6 +333,30 @@ impl<W: Word> ConstraintSystem<W> {
 
         // Chaining fixes one canonical order for every backend consumer.
         zero.chain(and).chain(integer_mul)
+    }
+
+    /// Checks the public and committed segment lengths against the statement shape.
+    pub const fn check_shape(
+        &self,
+        public_len: usize,
+        witness_len: usize,
+    ) -> Result<(), ShapeError> {
+        // Public values and committed values occupy independent index spaces.
+        if public_len != self.public_len() {
+            return Err(ShapeError {
+                segment: Segment::Public,
+                expected: self.public_len(),
+                actual: public_len,
+            });
+        }
+        if witness_len != self.witness_len() {
+            return Err(ShapeError {
+                segment: Segment::Witness,
+                expected: self.witness_len(),
+                actual: witness_len,
+            });
+        }
+        Ok(())
     }
 
     /// Checks all relations with the scalar reference implementation.
@@ -659,6 +695,32 @@ mod tests {
                 actual: 0,
             })
         );
+    }
+
+    #[test]
+    fn shape_check_identifies_the_mismatched_segment() {
+        // The statement declares two public words and three committed words.
+        let system = ConstraintSystem::<Word32>::new(2, 3, vec![], vec![], vec![])
+            .expect("the empty relation set is valid");
+
+        // Public shape is checked before the committed segment.
+        assert_eq!(
+            system.check_shape(1, 3),
+            Err(ShapeError {
+                segment: Segment::Public,
+                expected: 2,
+                actual: 1,
+            })
+        );
+        assert_eq!(
+            system.check_shape(2, 4),
+            Err(ShapeError {
+                segment: Segment::Witness,
+                expected: 3,
+                actual: 4,
+            })
+        );
+        assert_eq!(system.check_shape(2, 3), Ok(()));
     }
 
     #[cfg(target_pointer_width = "64")]

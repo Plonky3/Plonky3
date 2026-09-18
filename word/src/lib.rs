@@ -16,6 +16,7 @@ pub use constraint::{
 pub use index::{IndexError, Segment, ValueIndex};
 pub use shift::{Shift, ShiftError, ShiftKind, ShiftSequenceError, ShiftedValue};
 pub use system::{
-    ConstraintKind, ConstraintSystem, ConstraintTerm, OperandRole, SystemError, VerificationError,
+    ConstraintKind, ConstraintSystem, ConstraintTerm, OperandRole, ShapeError, SystemError,
+    VerificationError,
 };
 pub use word::{Word, Word32, Word64};
