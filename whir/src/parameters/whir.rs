@@ -259,7 +259,6 @@ where
     /// - A requested rate would grow the Reed-Solomon domain.
     /// - The field is too small to reach the requested security level.
     /// - A derived proof-of-work difficulty exceeds the grinding budget.
-    #[allow(clippy::too_many_lines)]
     pub fn new(
         num_variables: usize,
         whir_parameters: ProtocolParameters,
