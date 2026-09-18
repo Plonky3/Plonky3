@@ -7,11 +7,13 @@ extern crate alloc;
 #[cfg(all(test, panic = "unwind"))]
 extern crate std;
 
+pub mod domain;
 pub mod parameters;
 pub mod pcs;
 pub mod transcript;
 pub(crate) mod utils;
 
+pub use domain::{WhirDomain, WhirQueryPoint};
 pub use parameters::{
     DEFAULT_MAX_POW, FoldingFactor, FoldingFactorError, ProtocolParameters, RoundConfig,
     SecurityAssumption, WhirConfig, WhirConfigError,

@@ -1,3 +1,4 @@
+use alloc::vec;
 use alloc::vec::Vec;
 
 use itertools::Itertools;
@@ -188,6 +189,9 @@ pub struct SelectStatement<F, EF> {
     /// `pow(z_i) = (z_i, z_i^2, z_i^4, ..., z_i^{2^{k-1}})` for the select function.
     pub(crate) vars: Vec<F>,
 
+    /// Direct selector coordinates for non-monomial evaluation domains.
+    points: Vec<Point<F>>,
+
     /// Expected evaluation values `[s_1, s_2, ..., s_n]` corresponding to each constraint.
     ///
     /// Each `s_i ∈ EF` is an extension field element representing the claimed evaluation
@@ -210,6 +214,7 @@ impl<F: Field, EF: ExtensionField<F>> SelectStatement<F, EF> {
         Self {
             num_variables,
             vars: Vec::new(),
+            points: Vec::new(),
             evaluations: Vec::new(),
         }
     }
@@ -231,6 +236,7 @@ impl<F: Field, EF: ExtensionField<F>> SelectStatement<F, EF> {
         Self {
             num_variables,
             vars,
+            points: Vec::new(),
             evaluations,
         }
     }
@@ -247,8 +253,8 @@ impl<F: Field, EF: ExtensionField<F>> SelectStatement<F, EF> {
     /// Returns `true` if no constraints have been added to this statement.
     #[must_use]
     pub const fn is_empty(&self) -> bool {
-        debug_assert!(self.vars.is_empty() == self.evaluations.is_empty());
-        self.vars.is_empty()
+        debug_assert!(self.vars.is_empty() || self.points.is_empty());
+        self.evaluations.is_empty()
     }
 
     /// Returns an iterator over constraint pairs `(z_i, s_i)`.
@@ -261,8 +267,8 @@ impl<F: Field, EF: ExtensionField<F>> SelectStatement<F, EF> {
     /// Returns the number of evaluation constraints `n` in this statement.
     #[must_use]
     pub const fn len(&self) -> usize {
-        debug_assert!(self.vars.len() == self.evaluations.len());
-        self.vars.len()
+        debug_assert!(self.vars.is_empty() || self.points.is_empty());
+        self.evaluations.len()
     }
 
     /// Streams one weight per stored constraint, each evaluated at a single point.
@@ -279,15 +285,21 @@ impl<F: Field, EF: ExtensionField<F>> SelectStatement<F, EF> {
         // Walk the stored univariate selection points in order.
         self.vars
             .iter()
-            // Expand each one through the power map and read off its value at the query point.
             .map(|&var| Point::eval_select(var, row.as_slice()))
+            .chain(self.points.iter().map(|point| {
+                point
+                    .iter()
+                    .zip(row.iter())
+                    .map(|(&coordinate, &row)| row * (coordinate - F::ONE) + EF::ONE)
+                    .product()
+            }))
     }
 
     /// Verifies that a given polynomial satisfies all constraints in the statement.
     ///
-    /// For each constraint `(z_i, s_i)`, this method interprets the evaluation table as
-    /// coefficients of a univariate polynomial, evaluates it at `z_i` using Horner's method,
-    /// and checks if the result equals the expected value `s_i`.
+    /// Univariate constraints interpret the table as monomial coefficients and
+    /// use Horner evaluation. Direct-point constraints fold the multilinear
+    /// coefficient table at the supplied coordinates.
     ///
     /// For a polynomial represented by evaluations `[c_0, c_1, ..., c_{2^k-1}]`:
     ///
@@ -311,11 +323,30 @@ impl<F: Field, EF: ExtensionField<F>> SelectStatement<F, EF> {
     /// `true` if all constraints are satisfied, `false` otherwise.
     #[must_use]
     pub fn verify(&self, poly: &Poly<EF>) -> bool {
-        self.iter().all(|(&var, &expected_eval)| {
+        let univariate = self.iter().all(|(&var, &expected_eval)| {
             // Evaluate the polynomial at `var` using Horner's method.
             // This computes: p(var) = c_0 + var(c_1 + var(c_2 + ...))
             poly.iter().copied().horner::<EF, _>(var) == expected_eval
-        })
+        });
+        if !univariate {
+            return false;
+        }
+
+        let mut scratch = poly.as_slice().to_vec();
+        self.points
+            .iter()
+            .zip(&self.evaluations)
+            .all(|(point, &expected)| {
+                scratch.copy_from_slice(poly.as_slice());
+                let mut len = scratch.len();
+                for &coordinate in point.iter().rev() {
+                    for index in 0..len / 2 {
+                        scratch[index] = scratch[2 * index] + scratch[2 * index + 1] * coordinate;
+                    }
+                    len /= 2;
+                }
+                scratch[0] == expected
+            })
     }
 
     /// Adds a single evaluation constraint `p(z) = s` to the statement.
@@ -325,7 +356,24 @@ impl<F: Field, EF: ExtensionField<F>> SelectStatement<F, EF> {
     /// - `var`: Evaluation point `z ∈ F`
     /// - `eval`: Expected evaluation value `s ∈ EF`
     pub fn add_constraint(&mut self, var: F, eval: EF) {
+        assert!(
+            self.points.is_empty(),
+            "cannot mix selector representations"
+        );
         self.vars.push(var);
+        self.evaluations.push(eval);
+    }
+
+    /// Adds a constraint in direct multilinear coordinates.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a univariate constraint was already added or the point has the
+    /// wrong dimension. A statement uses exactly one selector representation.
+    pub fn add_point_constraint(&mut self, point: Point<F>, eval: EF) {
+        assert!(self.vars.is_empty(), "cannot mix selector representations");
+        assert_eq!(point.num_variables(), self.num_variables);
+        self.points.push(point);
         self.evaluations.push(eval);
     }
 
@@ -383,7 +431,7 @@ impl<F: Field, EF: ExtensionField<F>> SelectStatement<F, EF> {
         // Early return for empty statement:
         //
         // No constraints means no contribution to the batched claim.
-        if self.vars.is_empty() {
+        if self.evaluations.is_empty() {
             return;
         }
 
@@ -404,12 +452,19 @@ impl<F: Field, EF: ExtensionField<F>> SelectStatement<F, EF> {
         // Row i contains [z_1^{2^i}, z_2^{2^i}, ..., z_n^{2^i}].
         // Stored as a flat Vec<F> of size k * n in row-major order.
         let mut pow_matrix = F::zero_vec(k * n);
-        for (j, &var) in self.vars.iter().enumerate() {
-            let mut v = var;
-            for i in 0..k {
-                // pow_matrix[i * n + j] = z_j^{2^i}
-                pow_matrix[i * n + j] = v;
-                v = v.square();
+        if self.points.is_empty() {
+            for (j, &var) in self.vars.iter().enumerate() {
+                let mut v = var;
+                for i in 0..k {
+                    pow_matrix[i * n + j] = v;
+                    v = v.square();
+                }
+            }
+        } else {
+            for (j, point) in self.points.iter().enumerate() {
+                for (i, &coordinate) in point.iter().rev().enumerate() {
+                    pow_matrix[i * n + j] = coordinate;
+                }
             }
         }
 
@@ -497,7 +552,7 @@ impl<F: Field, EF: ExtensionField<F>> SelectStatement<F, EF> {
         challenge: EF,
         shift: usize,
     ) {
-        if self.vars.is_empty() {
+        if self.evaluations.is_empty() {
             return;
         }
 
@@ -513,30 +568,55 @@ impl<F: Field, EF: ExtensionField<F>> SelectStatement<F, EF> {
         // Naive fallback: when there aren't enough variables for the
         // split approach, compute shifted powers directly per constraint.
         if k_pack * 2 > k {
-            self.vars
-                .iter()
-                .zip(challenge.shifted_powers(challenge.exp_u64(shift as u64)))
-                .for_each(|(&var, challenge)| {
-                    // gamma^{shift+i} * [1, z, z^2, ..., z^{2^k - 1}]
-                    let pow = EF::from(var).shifted_powers(challenge).collect_n(1 << k);
-                    weights
-                        .as_mut_slice()
-                        .iter_mut()
-                        .zip_eq(pow.chunks(F::Packing::WIDTH))
-                        .for_each(|(out, chunk)| {
-                            *out += EF::ExtensionPacking::from_ext_slice(chunk);
-                        });
-                });
+            if self.points.is_empty() {
+                self.vars
+                    .iter()
+                    .zip(challenge.shifted_powers(challenge.exp_u64(shift as u64)))
+                    .for_each(|(&var, challenge)| {
+                        // gamma^{shift+i} * [1, z, z^2, ..., z^{2^k - 1}]
+                        let pow = EF::from(var).shifted_powers(challenge).collect_n(1 << k);
+                        weights
+                            .as_mut_slice()
+                            .iter_mut()
+                            .zip_eq(pow.chunks(F::Packing::WIDTH))
+                            .for_each(|(out, chunk)| {
+                                *out += EF::ExtensionPacking::from_ext_slice(chunk);
+                            });
+                    });
+            } else {
+                self.points
+                    .iter()
+                    .zip(challenge.shifted_powers(challenge.exp_u64(shift as u64)))
+                    .for_each(|(point, challenge)| {
+                        let mut monomials = vec![EF::ONE];
+                        for &coordinate in point.iter() {
+                            let old_len = monomials.len();
+                            for i in 0..old_len {
+                                monomials.push(monomials[i] * coordinate);
+                            }
+                        }
+                        weights
+                            .as_mut_slice()
+                            .iter_mut()
+                            .zip_eq(monomials.chunks(F::Packing::WIDTH))
+                            .for_each(|(out, chunk)| {
+                                *out += EF::ExtensionPacking::from_ext_slice(chunk) * challenge;
+                            });
+                    });
+            }
             return;
         }
 
         // Split approach: expand each var into its power-map form,
         // transpose, and split into left (packed) and right (scalar) halves.
-        let points = self
-            .vars
-            .iter()
-            .map(|&var| Point::expand_from_univariate(var, k))
-            .collect::<Vec<_>>();
+        let points = if self.points.is_empty() {
+            self.vars
+                .iter()
+                .map(|&var| Point::expand_from_univariate(var, k))
+                .collect::<Vec<_>>()
+        } else {
+            self.points.clone()
+        };
         let points = Point::transpose(&points, true);
         let (left, right) = points.split_rows(k / 2);
 
@@ -624,6 +704,38 @@ mod tests {
 
     type F = BabyBear;
     type EF = BinomialExtensionField<F, 4>;
+
+    #[test]
+    fn direct_multilinear_selector_combines_and_verifies() {
+        let point = Point::new(vec![F::from_u32(3), F::from_u32(5), F::from_u32(7)]);
+        let poly = Poly::new((1..=8).map(F::from_u32).collect());
+        let fold = |values: Vec<F>, coordinate: F| {
+            values
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|pair| pair[0] + pair[1] * coordinate)
+                .collect::<Vec<_>>()
+        };
+        let expected = fold(
+            fold(
+                fold(poly.as_slice().to_vec(), F::from_u32(7)),
+                F::from_u32(5),
+            ),
+            F::from_u32(3),
+        )[0];
+        let mut statement = SelectStatement::initialize(3);
+        statement.add_point_constraint(point, expected);
+        assert!(statement.verify(&poly));
+
+        let mut weights = Poly::new(F::zero_vec(8));
+        let mut sum = F::ZERO;
+        statement.combine(&mut weights, &mut sum, F::from_u32(11), 0);
+        assert_eq!(
+            dot_product::<F, _, _>(poly.iter().copied(), weights.iter().copied()),
+            sum
+        );
+    }
 
     #[test]
     fn test_select_statement_initialize() {

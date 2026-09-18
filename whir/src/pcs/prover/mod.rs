@@ -7,8 +7,7 @@ use core::ops::Deref;
 use p3_challenger::fs::TranscriptField;
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
 use p3_commit::{ExtensionMmcs, Mmcs};
-use p3_dft::TwoAdicSubgroupDft;
-use p3_field::{ExtensionField, Field, TwoAdicField};
+use p3_field::{ExtensionField, Field};
 use p3_matrix::dense::DenseMatrix;
 use p3_matrix::extension::FlatMatrixView;
 use p3_multilinear_util::point::Point;
@@ -20,6 +19,7 @@ use p3_sumcheck::strategy::{SumcheckProver, VariableOrder};
 use tracing::instrument;
 
 use crate::WhirConfigError;
+use crate::domain::{WhirDomain, WhirQueryPoint};
 use crate::parameters::WhirConfig;
 use crate::pcs::committer::writer::commit_extension;
 use crate::pcs::proof::{
@@ -58,8 +58,8 @@ enum RoundData<BaseData, ExtData> {
 #[derive(Debug)]
 struct RoundState<EF, F, BaseData, ExtData>
 where
-    F: TwoAdicField,
-    EF: ExtensionField<F> + TwoAdicField,
+    F: Field,
+    EF: ExtensionField<F>,
 {
     /// Sumcheck prover managing constraint batching and polynomial folding.
     sumcheck_prover: SumcheckProver<F, EF>,
@@ -102,9 +102,9 @@ where
 
 impl<EF, F, Dft, MT, Challenger, L> WhirProver<EF, F, Dft, MT, Challenger, L>
 where
-    F: TwoAdicField + TranscriptField + Ord,
-    EF: ExtensionField<F> + TwoAdicField,
-    Dft: TwoAdicSubgroupDft<F>,
+    F: Field + TranscriptField + Ord,
+    EF: ExtensionField<F>,
+    Dft: WhirDomain<F, EF>,
     Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F> + CanSampleUniformBits<F>,
     MT: Mmcs<F>,
     L: Layout<F, EF>,
@@ -113,7 +113,26 @@ where
     ///
     /// The extension-field MMCS is constructed by wrapping the base-field one,
     /// so callers never have to thread it through manually.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `config` was derived for a different domain.
     pub fn new(config: WhirConfig<EF, F, Challenger>, dft: Dft, mmcs: MT) -> Self {
+        assert_eq!(
+            config.max_log_domain_size,
+            dft.max_log_domain_size(),
+            "WHIR configuration and domain have different capacities"
+        );
+        assert_eq!(
+            config.domain_id,
+            dft.protocol_id(),
+            "WHIR configuration and domain have different protocol identities"
+        );
+        assert_eq!(
+            config.stratified_queries,
+            dft.stratified_queries(),
+            "WHIR configuration and domain disagree on query stratification"
+        );
         let extension_mmcs = ExtensionMmcs::new(mmcs.clone());
         Self {
             config,
@@ -146,7 +165,6 @@ where
         num_opening_claims: usize,
     ) -> Result<WhirProof<F, EF, MT>, WhirConfigError>
     where
-        Dft: TwoAdicSubgroupDft<F>,
         Challenger: CanObserve<MT::Commitment>,
     {
         assert_eq!(self.round_folding_factor(0), layout.folding());
@@ -225,7 +243,7 @@ where
 
         let round_params = &self.round_parameters[round_index];
         let folding_factor_next = self.round_folding_factor(round_index + 1);
-        let inv_rate = self.inv_rate(round_index);
+        let log_inv_rate = round_params.log_inv_rate;
 
         // Commit straight from the live sumcheck buffer; no scalar copy is materialized.
         let (root, prover_data) = commit_extension(
@@ -234,7 +252,7 @@ where
             &self.extension_mmcs,
             round_state.sumcheck_prover.evals_view(),
             folding_factor_next,
-            inv_rate,
+            log_inv_rate,
         );
 
         // Observe the round commitment.
@@ -274,8 +292,18 @@ where
                 for (row, &challenge) in opening.rows.iter_mut().zip(&stir_challenges_indexes) {
                     let poly = Poly::new(mem::take(row));
                     let eval = poly.eval_base(&query_randomness);
-                    let var = round_params.folded_domain_gen.exp_u64(challenge as u64);
-                    stir_statement.add_constraint(var, eval);
+                    match self.dft.query_point(
+                        round_params.log_folded_domain_size,
+                        round_params.num_variables,
+                        challenge,
+                    ) {
+                        WhirQueryPoint::Univariate(var) => {
+                            stir_statement.add_constraint(var, eval);
+                        }
+                        WhirQueryPoint::Multilinear(point) => {
+                            stir_statement.add_point_constraint(point, eval);
+                        }
+                    }
                     *row = poly.into_evals();
                 }
                 QueryOpenings::Base(opening)
@@ -286,8 +314,18 @@ where
                 for (row, &challenge) in opening.rows.iter_mut().zip(&stir_challenges_indexes) {
                     let poly = Poly::new(mem::take(row));
                     let eval = poly.eval_ext::<F>(&query_randomness);
-                    let var = round_params.folded_domain_gen.exp_u64(challenge as u64);
-                    stir_statement.add_constraint(var, eval);
+                    match self.dft.query_point(
+                        round_params.log_folded_domain_size,
+                        round_params.num_variables,
+                        challenge,
+                    ) {
+                        WhirQueryPoint::Univariate(var) => {
+                            stir_statement.add_constraint(var, eval);
+                        }
+                        WhirQueryPoint::Multilinear(point) => {
+                            stir_statement.add_point_constraint(point, eval);
+                        }
+                    }
                     *row = poly.into_evals();
                 }
                 QueryOpenings::Extension(opening)

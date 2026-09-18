@@ -15,4 +15,8 @@ References:
 - <https://eprint.iacr.org/2024/1586> (WHIR)
 - <https://eprint.iacr.org/2026/391> (HVZK-WHIR)
 
+The non-hiding prover accepts a statically dispatched `WhirDomain`. The
+default remains the two-adic monomial code; additive domains provide their
+encoder and selector coordinates through the same interface.
+
 Part of [Plonky3](https://github.com/Plonky3/Plonky3), dual-licensed under MIT and Apache 2.0.

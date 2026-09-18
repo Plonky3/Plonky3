@@ -9,6 +9,7 @@ use p3_field::{ExtensionField, Field, TwoAdicField};
 use thiserror::Error;
 
 use super::{FoldingFactor, FoldingFactorError, ProtocolParameters};
+use crate::domain::WhirDomain;
 
 /// Reasons a set of user-facing parameters cannot form a valid WHIR configuration.
 #[derive(Debug, Error)]
@@ -29,12 +30,15 @@ pub enum WhirConfigError {
     #[error(transparent)]
     FoldingFactor(#[from] FoldingFactorError),
 
-    /// The domain after the first fold exceeds the base field two-adicity.
+    /// The domain after the first fold exceeds the encoder's capacity.
+    ///
+    /// The variant name is retained for API compatibility with the original
+    /// two-adic-only implementation.
     ///
     /// - Twiddles and query equality polynomials must stay in the base field.
     /// - A larger first-round folding factor shrinks this domain.
     #[error(
-        "folded domain 2^{log_folded_domain_size} exceeds base-field two-adicity 2^{two_adicity}; increase the first-round folding factor"
+        "folded domain 2^{log_folded_domain_size} exceeds encoder capacity 2^{two_adicity}; increase the first-round folding factor"
     )]
     FoldedDomainExceedsTwoAdicity {
         log_folded_domain_size: usize,
@@ -141,8 +145,10 @@ pub struct RoundConfig<F> {
     pub log_inv_rate: usize,
     /// Size of the evaluation domain before folding in this round.
     pub domain_size: usize,
-    /// Generator of the folded evaluation domain after this round's fold.
-    pub folded_domain_gen: F,
+    /// Base-two logarithm of the folded evaluation domain size.
+    pub log_folded_domain_size: usize,
+    /// Marker retaining the base-field type in the public configuration.
+    pub _field: PhantomData<F>,
 }
 
 /// Fully derived WHIR protocol configuration.
@@ -158,6 +164,12 @@ where
 {
     /// Number of variables in the original multilinear polynomial.
     pub num_variables: usize,
+    /// Largest base-two domain dimension supported by the encoder.
+    pub(crate) max_log_domain_size: usize,
+    /// Stable evaluation-domain identity committed by the transcript.
+    pub(crate) domain_id: Vec<u8>,
+    /// Whether proximity queries are allocated to protocol-fixed strata.
+    pub(crate) stratified_queries: bool,
     /// Protocol parameters.
     pub params: ProtocolParameters,
     /// Per-round derived configuration for each intermediate STIR round.
@@ -232,39 +244,12 @@ where
         Ok(config)
     }
 
-    /// Bits retained by the initial alpha combination, without later PoW credit.
-    /// `num_claims` includes concrete openings and commitment-phase OOD claims.
-    pub fn initial_claims_error(&self, num_claims: usize) -> f64 {
-        // Field::bits rounds up; subtracting one gives a conservative lower bound
-        // on log2(|EF|), including fields whose order is far below a power of two.
-        self.soundness_type.initial_claims_error(
-            EF::bits() - 1,
-            self.num_variables,
-            self.starting_log_inv_rate,
-            num_claims,
-        )
-    }
-
-    /// Reject an initial claim batch whose algebraic bound misses the target.
-    /// Alpha is sampled before the first folding grind, so grinding cannot rescue it.
-    pub fn validate_initial_claims(&self, num_claims: usize) -> Result<(), WhirConfigError> {
-        let bits = self.initial_claims_error(num_claims);
-        if bits < self.security_level as f64 {
-            return Err(WhirConfigError::InitialClaimsBelowTarget {
-                num_claims,
-                bits,
-                security_level: self.security_level,
-            });
-        }
-        Ok(())
-    }
-
     /// Derive a full protocol configuration from user-facing parameters.
     ///
     /// When the opening count is known, prefer [`Self::new_with_initial_claims`];
     /// otherwise the PCS validates the full batch at opening and verification time.
-    /// The target applies per error
-    /// term, so full PCS security requires composing their probabilities.
+    /// The target applies per error term. Full PCS security composes their
+    /// probabilities.
     ///
     /// # Errors
     ///
@@ -278,6 +263,70 @@ where
     pub fn new(
         num_variables: usize,
         whir_parameters: ProtocolParameters,
+    ) -> Result<Self, WhirConfigError> {
+        Self::new_with_max_domain_log(num_variables, whir_parameters, F::TWO_ADICITY)
+    }
+}
+
+impl<EF, F, Challenger> WhirConfig<EF, F, Challenger>
+where
+    F: Field,
+    EF: ExtensionField<F>,
+    Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
+{
+    /// Derives a configuration for a concrete evaluation domain.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WhirConfigError`] when the domain cannot support the derived
+    /// schedule or the requested security target is infeasible.
+    pub fn new_with_domain<D>(
+        num_variables: usize,
+        whir_parameters: ProtocolParameters,
+        domain: &D,
+    ) -> Result<Self, WhirConfigError>
+    where
+        D: WhirDomain<F, EF>,
+    {
+        let mut config = Self::new_with_max_domain_log(
+            num_variables,
+            whir_parameters,
+            domain.max_log_domain_size(),
+        )?;
+        config.domain_id = domain.protocol_id().to_vec();
+        config.stratified_queries = domain.stratified_queries();
+        Ok(config)
+    }
+
+    /// Bits retained by the initial alpha combination, without later PoW credit.
+    pub fn initial_claims_error(&self, num_claims: usize) -> f64 {
+        self.soundness_type.initial_claims_error(
+            EF::bits() - 1,
+            self.num_variables,
+            self.starting_log_inv_rate,
+            num_claims,
+        )
+    }
+
+    /// Reject an initial claim batch whose algebraic bound misses the target.
+    pub fn validate_initial_claims(&self, num_claims: usize) -> Result<(), WhirConfigError> {
+        let bits = self.initial_claims_error(num_claims);
+        if bits < self.security_level as f64 {
+            return Err(WhirConfigError::InitialClaimsBelowTarget {
+                num_claims,
+                bits,
+                security_level: self.security_level,
+            });
+        }
+        Ok(())
+    }
+
+    /// Derive a configuration for a domain with the supplied maximum dimension.
+    #[allow(clippy::too_many_lines)]
+    pub(crate) fn new_with_max_domain_log(
+        num_variables: usize,
+        whir_parameters: ProtocolParameters,
+        max_log_domain_size: usize,
     ) -> Result<Self, WhirConfigError> {
         // ---------------------------------------------------------------
         // Phase 1: Validate inputs and set up global constants.
@@ -330,21 +379,21 @@ where
         let mut domain_size: usize = 1 << log_domain_size;
 
         // ---------------------------------------------------------------
-        // Phase 2: Two-adicity guard.
+        // Phase 2: Encoder-capacity guard.
         // ---------------------------------------------------------------
         //
         // After the first fold the domain has size 2^log_folded_domain_size.
-        // We restrict this to F::TWO_ADICITY so that:
-        //   - FFT twiddle factors stay in the base field (faster).
+        // We restrict this to the domain's advertised maximum so that:
+        //   - transform twiddle factors stay in the base field (faster).
         //   - WHIR query equality polynomials stay in the base field.
         //
         // A larger folding_factor_0 pushes the folded domain below the limit.
         // This does NOT restrict how much data can be committed.
         let log_folded_domain_size = log_domain_size - folding_schedule[0];
-        if log_folded_domain_size > F::TWO_ADICITY {
+        if log_folded_domain_size > max_log_domain_size {
             return Err(WhirConfigError::FoldedDomainExceedsTwoAdicity {
                 log_folded_domain_size,
-                two_adicity: F::TWO_ADICITY,
+                two_adicity: max_log_domain_size,
             });
         }
 
@@ -493,9 +542,7 @@ where
 
             let next_folding_factor = folding_schedule[round + 1];
 
-            // Generator of the two-adic subgroup for the folded domain.
-            let folded_domain_gen =
-                F::two_adic_generator(domain_size.ilog2() as usize - folding_factor);
+            let log_folded_domain_size = domain_size.ilog2() as usize - folding_factor;
 
             round_parameters.push(RoundConfig {
                 pow_bits: ceil_pow_bits(pow_bits),
@@ -506,7 +553,8 @@ where
                 folding_factor,
                 log_inv_rate: next_rate,
                 domain_size,
-                folded_domain_gen,
+                log_folded_domain_size,
+                _field: PhantomData,
             });
 
             // Advance mutable state for the next iteration.
@@ -546,6 +594,9 @@ where
 
         let config = Self {
             params: whir_parameters,
+            max_log_domain_size,
+            domain_id: Vec::new(),
+            stratified_queries: false,
             commitment_ood_samples,
             num_variables: initial_num_variables,
             starting_folding_pow_bits: ceil_pow_bits(starting_folding_pow_bits),
@@ -694,9 +745,9 @@ where
                 pow_bits: self.final_pow_bits,
                 log_inv_rate: self.params.starting_log_inv_rate,
                 domain_size: self.starting_domain_size(),
-                folded_domain_gen: F::two_adic_generator(
-                    self.starting_domain_size().ilog2() as usize - self.round_folding_factor(0),
-                ),
+                log_folded_domain_size: self.starting_domain_size().ilog2() as usize
+                    - self.round_folding_factor(0),
+                _field: PhantomData,
                 ood_samples: 0,
                 folding_pow_bits: self.final_folding_pow_bits,
             }
@@ -711,10 +762,8 @@ where
             // The domain shrinks by the RS reduction factor from the last round.
             let domain_size = last.domain_size >> rs_reduction_factor;
 
-            // Generator for the final folded domain.
-            let folded_domain_gen = F::two_adic_generator(
-                domain_size.ilog2() as usize - self.round_folding_factor(self.n_rounds()),
-            );
+            let log_folded_domain_size =
+                domain_size.ilog2() as usize - self.round_folding_factor(self.n_rounds());
 
             RoundConfig {
                 // Variables remaining after this final fold.
@@ -724,7 +773,8 @@ where
                 pow_bits: self.final_pow_bits,
                 log_inv_rate: last.log_inv_rate,
                 domain_size,
-                folded_domain_gen,
+                log_folded_domain_size,
+                _field: PhantomData,
                 // The final phase has no OOD step; this field is unused here.
                 ood_samples: 0,
                 folding_pow_bits: self.final_folding_pow_bits,
@@ -745,7 +795,6 @@ mod tests {
 
     use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
     use p3_challenger::DuplexChallenger;
-    use p3_field::PrimeCharacteristicRing;
     use p3_field::extension::BinomialExtensionField;
 
     use super::*;
@@ -939,7 +988,8 @@ mod tests {
             folding_factor: 2,
             log_inv_rate: 1,
             domain_size: 10,
-            folded_domain_gen: F::from_u64(2),
+            log_folded_domain_size: 1,
+            _field: PhantomData,
         }];
 
         assert_eq!(config.max_pow_bits(), 31);
@@ -1274,7 +1324,8 @@ mod tests {
                 folding_factor: 2,
                 log_inv_rate: 1,
                 domain_size: 10,
-                folded_domain_gen: F::from_u64(2),
+                log_folded_domain_size: 1,
+                _field: PhantomData,
             },
             RoundConfig {
                 pow_bits: 18,
@@ -1285,7 +1336,8 @@ mod tests {
                 folding_factor: 2,
                 log_inv_rate: 1,
                 domain_size: 10,
-                folded_domain_gen: F::from_u64(2),
+                log_folded_domain_size: 1,
+                _field: PhantomData,
             },
         ];
 
@@ -1347,7 +1399,8 @@ mod tests {
             folding_factor: 2,
             log_inv_rate: 1,
             domain_size: 10,
-            folded_domain_gen: F::from_u64(2),
+            log_folded_domain_size: 1,
+            _field: PhantomData,
         }];
 
         assert!(
@@ -1376,7 +1429,8 @@ mod tests {
             folding_factor: 2,
             log_inv_rate: 1,
             domain_size: 10,
-            folded_domain_gen: F::from_u64(2),
+            log_folded_domain_size: 1,
+            _field: PhantomData,
         }];
 
         assert!(
@@ -1404,7 +1458,8 @@ mod tests {
             folding_factor: 2,
             log_inv_rate: 1,
             domain_size: 10,
-            folded_domain_gen: F::from_u64(2),
+            log_folded_domain_size: 1,
+            _field: PhantomData,
         }];
 
         assert!(
@@ -1432,7 +1487,8 @@ mod tests {
             folding_factor: 2,
             log_inv_rate: 1,
             domain_size: 10,
-            folded_domain_gen: F::from_u64(2),
+            log_folded_domain_size: 1,
+            _field: PhantomData,
         }];
 
         assert!(

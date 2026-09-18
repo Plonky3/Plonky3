@@ -44,7 +44,7 @@ use p3_challenger::CanObserve;
 use p3_challenger::fs::{TranscriptError, TranscriptField, TypeTag};
 
 use crate::{
-    BinaryField8, BinaryField16, BinaryField32, BinaryField64, BinaryField128, TowerLevel,
+    BinaryField8, BinaryField16, BinaryField32, BinaryField64, BinaryField128, Poly64, TowerLevel,
 };
 
 /// Implement the typed-transcript hooks for one byte-aligned level of the tower.
@@ -119,6 +119,45 @@ impl_transcript_field!(BinaryField16, u16, 16);
 impl_transcript_field!(BinaryField32, u32, 32);
 impl_transcript_field!(BinaryField64, u64, 64);
 impl_transcript_field!(BinaryField128, u128, 128);
+
+impl TranscriptField for Poly64 {
+    fn algebra_tag(degree: usize, basis: [u8; 32]) -> TypeTag {
+        TypeTag::BinaryPolynomial {
+            bits: 64,
+            modulus: 0x1b,
+            degree,
+            basis,
+        }
+    }
+
+    fn observe_seed<C: CanObserve<Self>>(challenger: &mut C, bytes: &[u8]) {
+        for chunk in (bytes.len() as u64).to_le_bytes().chunks(8) {
+            let mut word = [0; 8];
+            word[..chunk.len()].copy_from_slice(chunk);
+            challenger.observe(Self::new(u64::from_le_bytes(word)));
+        }
+        for chunk in bytes.chunks(8) {
+            let mut word = [0; 8];
+            word[..chunk.len()].copy_from_slice(chunk);
+            challenger.observe(Self::new(u64::from_le_bytes(word)));
+        }
+    }
+
+    fn wire_len() -> usize {
+        8
+    }
+
+    fn encode(value: &Self, out: &mut Vec<u8>) {
+        out.extend_from_slice(&value.to_repr().to_be_bytes());
+    }
+
+    fn decode(bytes: &[u8]) -> Result<Self, TranscriptError> {
+        let prefix = bytes.get(..8).ok_or(TranscriptError::BadProofShape {
+            reason: "not enough bytes for a canonical polynomial-basis field encoding",
+        })?;
+        Ok(Self::new(u64::from_be_bytes(prefix.try_into().unwrap())))
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -248,6 +287,13 @@ mod tests {
             BinaryField64::decode(&out).unwrap(),
             BinaryField64::from_repr(0x0123_4567_89AB_CDEF)
         );
+
+        let mut out = Vec::new();
+        Poly64::encode(&Poly64::new(0xFEDC_BA98_7654_3210), &mut out);
+        assert_eq!(
+            Poly64::decode(&out).unwrap(),
+            Poly64::new(0xFEDC_BA98_7654_3210)
+        );
     }
 
     #[test]
@@ -257,6 +303,7 @@ mod tests {
         assert!(BinaryField32::decode(&[0; 3]).is_err());
         assert!(BinaryField16::decode(&[0; 1]).is_err());
         assert!(BinaryField8::decode(&[]).is_err());
+        assert!(Poly64::decode(&[0; 7]).is_err());
     }
 
     #[test]
@@ -281,6 +328,10 @@ mod tests {
         assert_ne!(
             BinaryField64::algebra_tag(1, [0; 32]),
             BinaryField128::algebra_tag(1, [0; 32])
+        );
+        assert_ne!(
+            BinaryField64::algebra_tag(1, [0; 32]),
+            Poly64::algebra_tag(1, [0; 32])
         );
     }
 }
