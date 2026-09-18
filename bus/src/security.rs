@@ -8,50 +8,52 @@ use p3_security::bus::{BusSecurityModel, ProductGkrSecurityProfile};
 
 use crate::BusPlan;
 
-/// Build the union-bound term consumed by a protocol security report.
-///
-/// The result excludes commitment binding and authentication of terminal leaf claims.
-#[must_use]
-pub fn bus_security_term(plan: &BusPlan, field_bits: NonZeroUsize) -> SecurityTerm {
-    model(plan, field_bits).combined_term()
-}
+impl BusPlan {
+    /// Builds the union-bound term consumed by a protocol security report.
+    ///
+    /// The result excludes commitment binding and authentication of terminal leaf claims.
+    #[must_use]
+    pub fn security_term(&self, field_bits: NonZeroUsize) -> SecurityTerm {
+        self.security_model(field_bits).combined_term()
+    }
 
-/// Build separately labelled terms for diagnostic reporting.
-///
-/// These components must not be passed separately as protocol extras.
-/// Their probability sum is represented by the single composable term.
-#[must_use]
-pub fn bus_security_components(plan: &BusPlan, field_bits: NonZeroUsize) -> Vec<SecurityTerm> {
-    model(plan, field_bits).components()
-}
+    /// Builds separately labelled terms for diagnostic reporting.
+    ///
+    /// These components must not be passed separately as protocol extras.
+    /// Their probability sum is represented by the single composable term.
+    #[must_use]
+    pub fn security_components(&self, field_bits: NonZeroUsize) -> Vec<SecurityTerm> {
+        self.security_model(field_bits).components()
+    }
 
-/// Derive exact soundness dimensions from the concrete product schedule.
-fn model(plan: &BusPlan, field_bits: NonZeroUsize) -> BusSecurityModel {
-    let shape = plan.product_shape();
-    let layers = shape.layers();
-    let sumcheck_rounds = layers.iter().map(|(_, rounds)| rounds).sum();
-    let collapse_challenges = layers
-        .iter()
-        .map(|(arity, _)| arity.trailing_zeros() as usize)
-        .sum();
-    let geometry = plan.security_geometry();
-    let profile = ProductGkrSecurityProfile::new(
-        shape.log_height(),
-        shape.num_trees(),
-        sumcheck_rounds,
-        layers.len(),
-        collapse_challenges,
-    )
-    .expect("a checked product shape has valid security dimensions");
+    /// Derives exact soundness dimensions from the concrete product schedule.
+    fn security_model(&self, field_bits: NonZeroUsize) -> BusSecurityModel {
+        let shape = self.product_shape();
+        let layers = shape.layers();
+        let sumcheck_rounds = layers.iter().map(|(_, rounds)| rounds).sum();
+        let collapse_challenges = layers
+            .iter()
+            .map(|(arity, _)| arity.trailing_zeros() as usize)
+            .sum();
+        let geometry = self.security_geometry();
+        let profile = ProductGkrSecurityProfile::new(
+            shape.log_height(),
+            shape.num_trees(),
+            sumcheck_rounds,
+            layers.len(),
+            collapse_challenges,
+        )
+        .expect("a checked product shape has valid security dimensions");
 
-    // A checked plan supplies dimensions accepted by the numeric security model.
-    BusSecurityModel::new(
-        field_bits.get(),
-        geometry.tuple_variables(),
-        geometry.non_padding_leaf_counts(),
-        profile,
-    )
-    .expect("a checked bus plan has valid security dimensions")
+        // A checked plan supplies dimensions accepted by the numeric security model.
+        BusSecurityModel::new(
+            field_bits.get(),
+            geometry.tuple_variables(),
+            geometry.non_padding_leaf_counts(),
+            profile,
+        )
+        .expect("a checked bus plan has valid security dimensions")
+    }
 }
 
 #[cfg(test)]
@@ -100,7 +102,7 @@ mod tests {
         // Height four has two radix-four layers with zero and two rounds.
         let plan = plan(4, 5);
         let field_bits = NonZeroUsize::new(128).unwrap();
-        let components = bus_security_components(&plan, field_bits);
+        let components = plan.security_components(field_bits);
         let labels = components
             .iter()
             .map(|component| component.label)
@@ -122,7 +124,7 @@ mod tests {
                 .map(|component| component.bits)
                 .collect::<Vec<_>>(),
         );
-        let combined = bus_security_term(&plan, field_bits);
+        let combined = plan.security_term(field_bits);
         assert_eq!(combined.label, BINARY_BUS_LABEL);
         assert_eq!(combined.bits, expected);
     }
@@ -137,7 +139,7 @@ mod tests {
             let layers = shape.layers();
             assert_eq!(plan.product_shape(), shape);
 
-            let components = bus_security_components(&plan, NonZeroUsize::new(128).unwrap());
+            let components = plan.security_components(NonZeroUsize::new(128).unwrap());
             let sumcheck_rounds = layers.iter().map(|(_, rounds)| rounds).sum::<usize>();
             let collapse_challenges = layers
                 .iter()
