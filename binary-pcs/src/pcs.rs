@@ -13,7 +13,7 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use p3_binary_dft::AdditiveRsEncoder;
+use p3_binary_dft::{AdditiveNtt, AdditiveRsEncoder, PolyBasisNtt};
 use p3_binary_field::BinaryField128;
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
 use p3_commit::{Mmcs, MultilinearPcs};
@@ -44,24 +44,33 @@ use crate::verifier::{
 /// The stacked-layout binding mode is fixed rather than chosen: the codeword fold merges
 /// adjacent pairs, which only the suffix-order binding of
 /// [`SuffixProver`](p3_sumcheck::layout::SuffixProver) matches.
-pub struct BinaryPcs<MT> {
+pub struct BinaryPcs<MT, Ntt = PolyBasisNtt> {
     config: BinaryPcsConfig,
     mmcs: MT,
-    encoder: AdditiveRsEncoder<BinaryField128>,
+    encoder: AdditiveRsEncoder<BinaryField128, Ntt>,
 }
 
-impl<MT> BinaryPcs<MT> {
-    /// Builds a PCS instance from a derived configuration and a base-field MMCS.
-    pub fn new(config: BinaryPcsConfig, mmcs: MT) -> Self {
+impl<MT, Ntt> BinaryPcs<MT, Ntt> {
+    /// Builds a PCS instance from a derived configuration, a base-field MMCS, and the additive
+    /// NTT to encode its codeword through.
+    pub const fn with_ntt(config: BinaryPcsConfig, mmcs: MT, ntt: Ntt) -> Self {
         Self {
             config,
             mmcs,
-            encoder: AdditiveRsEncoder::default(),
+            encoder: AdditiveRsEncoder::new(ntt),
         }
     }
 }
 
-impl<MT> BinaryPcs<MT>
+impl<MT> BinaryPcs<MT, PolyBasisNtt> {
+    /// Builds a PCS instance from a derived configuration and a base-field MMCS, encoding its
+    /// codeword through the default additive NTT ([`PolyBasisNtt`]).
+    pub fn new(config: BinaryPcsConfig, mmcs: MT) -> Self {
+        Self::with_ntt(config, mmcs, PolyBasisNtt::default())
+    }
+}
+
+impl<MT, Ntt> BinaryPcs<MT, Ntt>
 where
     MT: Mmcs<BinaryField128>,
 {
@@ -442,9 +451,10 @@ where
     }
 }
 
-impl<MT, Challenger> MultilinearPcs<BinaryField128, Challenger> for BinaryPcs<MT>
+impl<MT, Ntt, Challenger> MultilinearPcs<BinaryField128, Challenger> for BinaryPcs<MT, Ntt>
 where
     MT: Mmcs<BinaryField128>,
+    Ntt: AdditiveNtt<BinaryField128> + Sync,
     Challenger: FieldChallenger<BinaryField128>
         + GrindingChallenger<Witness = BinaryField128>
         + CanSampleUniformBits<BinaryField128>
@@ -504,9 +514,10 @@ where
     }
 }
 
-impl<MT, Challenger> PrescribedPointPcs<BinaryField128, Challenger> for BinaryPcs<MT>
+impl<MT, Ntt, Challenger> PrescribedPointPcs<BinaryField128, Challenger> for BinaryPcs<MT, Ntt>
 where
     MT: Mmcs<BinaryField128>,
+    Ntt: AdditiveNtt<BinaryField128> + Sync,
     Challenger: FieldChallenger<BinaryField128>
         + GrindingChallenger<Witness = BinaryField128>
         + CanSampleUniformBits<BinaryField128>
