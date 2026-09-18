@@ -4,6 +4,7 @@ use thiserror::Error;
 
 use crate::constraint::{AndConstraint, IntegerMulConstraint, Operand, ZeroConstraint};
 use crate::index::Segment;
+use crate::shift::ShiftedValue;
 use crate::word::Word;
 
 /// A homogeneous relation family.
@@ -45,6 +46,14 @@ pub enum SystemError {
         /// The rejected length.
         len: usize,
     },
+    /// A relation family exceeds the compact constraint address space.
+    #[error("{kind:?} relation count {len} exceeds u32::MAX")]
+    TooManyConstraints {
+        /// The oversized relation family.
+        kind: ConstraintKind,
+        /// The rejected relation count.
+        len: usize,
+    },
     /// A term addresses a word outside its declared segment.
     #[error(
         "{kind:?} constraint {constraint} {role:?} term {term} addresses {segment:?}[{position}], but the segment length is {len}"
@@ -65,6 +74,45 @@ pub enum SystemError {
         /// The declared segment length.
         len: usize,
     },
+}
+
+/// One shifted word together with its position in a relation family.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ConstraintTerm<'a, W: Word> {
+    /// The relation family containing the term.
+    kind: ConstraintKind,
+    /// The term's semantic role within its relation.
+    role: OperandRole,
+    /// The position within the homogeneous relation family.
+    constraint: u32,
+    /// The shifted word consumed by the relation.
+    term: &'a ShiftedValue<W>,
+}
+
+impl<'a, W: Word> ConstraintTerm<'a, W> {
+    /// Returns the relation family containing the term.
+    #[inline]
+    pub const fn kind(self) -> ConstraintKind {
+        self.kind
+    }
+
+    /// Returns the term's semantic role within its relation.
+    #[inline]
+    pub const fn role(self) -> OperandRole {
+        self.role
+    }
+
+    /// Returns the position within the homogeneous relation family.
+    #[inline]
+    pub const fn constraint(self) -> u32 {
+        self.constraint
+    }
+
+    /// Returns the shifted word consumed by the relation.
+    #[inline]
+    pub const fn term(self) -> &'a ShiftedValue<W> {
+        self.term
+    }
 }
 
 /// A failed scalar reference verification.
@@ -130,6 +178,15 @@ impl<W: Word> ConstraintSystem<W> {
             len: witness_len,
         })?;
 
+        // Every relation position is carried as a 32-bit protocol index.
+        for (kind, len) in [
+            (ConstraintKind::Zero, zero_constraints.len()),
+            (ConstraintKind::And, and_constraints.len()),
+            (ConstraintKind::IntegerMul, integer_mul_constraints.len()),
+        ] {
+            Self::validate_constraint_count(kind, len)?;
+        }
+
         let system = Self {
             public_len,
             witness_len,
@@ -181,6 +238,89 @@ impl<W: Word> ConstraintSystem<W> {
     #[inline]
     pub fn integer_mul_constraints(&self) -> &[IntegerMulConstraint<W>] {
         &self.integer_mul_constraints
+    }
+
+    /// Iterates over shifted words in deterministic reduction order.
+    ///
+    /// - Families use zero, AND, then integer-multiplication order.
+    /// - AND roles use left, right, then output order.
+    /// - Multiplication roles use left, right, low, then high order.
+    /// - Relation positions ascend within each role.
+    /// - Terms retain their supplied order and multiplicity.
+    pub fn terms(&self) -> impl Iterator<Item = ConstraintTerm<'_, W>> + Clone + '_ {
+        // Zero relations contain one semantic operand.
+        let zero = self
+            .zero_constraints
+            .iter()
+            .enumerate()
+            .flat_map(|(constraint, relation)| {
+                relation
+                    .value()
+                    .terms()
+                    .iter()
+                    .map(move |term| ConstraintTerm {
+                        kind: ConstraintKind::Zero,
+                        role: OperandRole::Value,
+                        constraint: constraint as u32,
+                        term,
+                    })
+            });
+
+        // Role-major order groups every use made by one AND reduction column.
+        let and = [OperandRole::Left, OperandRole::Right, OperandRole::Output]
+            .into_iter()
+            .flat_map(move |role| {
+                self.and_constraints
+                    .iter()
+                    .enumerate()
+                    .flat_map(move |(constraint, relation)| {
+                        let operand = match role {
+                            OperandRole::Left => relation.left(),
+                            OperandRole::Right => relation.right(),
+                            OperandRole::Output => relation.output(),
+                            _ => unreachable!("AND relations expose only three operand roles"),
+                        };
+                        operand.terms().iter().map(move |term| ConstraintTerm {
+                            kind: ConstraintKind::And,
+                            role,
+                            constraint: constraint as u32,
+                            term,
+                        })
+                    })
+            });
+
+        // Role-major order matches the four columns of the integer product reduction.
+        let integer_mul = [
+            OperandRole::Left,
+            OperandRole::Right,
+            OperandRole::Low,
+            OperandRole::High,
+        ]
+        .into_iter()
+        .flat_map(move |role| {
+            self.integer_mul_constraints.iter().enumerate().flat_map(
+                move |(constraint, relation)| {
+                    let operand = match role {
+                        OperandRole::Left => relation.left(),
+                        OperandRole::Right => relation.right(),
+                        OperandRole::Low => relation.low(),
+                        OperandRole::High => relation.high(),
+                        _ => unreachable!(
+                            "integer multiplication relations expose only four operand roles"
+                        ),
+                    };
+                    operand.terms().iter().map(move |term| ConstraintTerm {
+                        kind: ConstraintKind::IntegerMul,
+                        role,
+                        constraint: constraint as u32,
+                        term,
+                    })
+                },
+            )
+        });
+
+        // Chaining fixes one canonical order for every backend consumer.
+        zero.chain(and).chain(integer_mul)
     }
 
     /// Checks all relations with the scalar reference implementation.
@@ -282,6 +422,14 @@ impl<W: Word> ConstraintSystem<W> {
                 OperandRole::High,
                 relation.high(),
             )?;
+        }
+        Ok(())
+    }
+
+    fn validate_constraint_count(kind: ConstraintKind, len: usize) -> Result<(), SystemError> {
+        // Compact protocol references must represent every relation position.
+        if u32::try_from(len).is_err() {
+            return Err(SystemError::TooManyConstraints { kind, len });
         }
         Ok(())
     }
@@ -527,6 +675,60 @@ mod tests {
                 segment: Segment::Public,
                 len,
             }
+        );
+    }
+
+    #[cfg(target_pointer_width = "64")]
+    #[test]
+    fn relation_counts_above_u32_are_rejected() {
+        // Relation positions use the same compact address width as word positions.
+        let len = u32::MAX as usize + 1;
+
+        assert_eq!(
+            ConstraintSystem::<Word32>::validate_constraint_count(ConstraintKind::And, len),
+            Err(SystemError::TooManyConstraints {
+                kind: ConstraintKind::And,
+                len,
+            })
+        );
+    }
+
+    #[test]
+    fn term_iteration_preserves_reduction_order_and_provenance() {
+        // Three distinct word positions make every role visible in the result.
+        let operand = |position| Operand::single(ShiftedValue::<Word32>::plain(witness(position)));
+        let system = ConstraintSystem::new(
+            0,
+            3,
+            vec![ZeroConstraint::new(operand(0))],
+            vec![AndConstraint::new(operand(0), operand(1), operand(2))],
+            vec![],
+        )
+        .expect("every term is inside the committed segment");
+
+        // The canonical walk is family-major and then role-major.
+        let terms = system.terms().collect::<Vec<_>>();
+        let provenance = terms
+            .iter()
+            .copied()
+            .map(|term| {
+                (
+                    term.kind(),
+                    term.role(),
+                    term.constraint(),
+                    term.term().index().position(),
+                )
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            provenance,
+            [
+                (ConstraintKind::Zero, OperandRole::Value, 0, 0),
+                (ConstraintKind::And, OperandRole::Left, 0, 0),
+                (ConstraintKind::And, OperandRole::Right, 0, 1),
+                (ConstraintKind::And, OperandRole::Output, 0, 2),
+            ]
         );
     }
 }
