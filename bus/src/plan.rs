@@ -92,17 +92,66 @@ pub struct BusTerminalShare {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BusSecurityGeometry {
     /// Variables in the power-of-two tuple fingerprint table.
-    pub tuple_variables: usize,
+    tuple_variables: usize,
     /// Non-padding push and pull leaf positions.
-    pub non_padding_leaf_counts: [usize; 2],
+    non_padding_leaf_counts: [usize; 2],
     /// Power-of-two capacity shared by both product trees.
-    pub logical_leaf_count: usize,
+    logical_leaf_count: usize,
     /// Variables in each product tree.
-    pub log_logical_leaf_count: usize,
+    log_logical_leaf_count: usize,
     /// Product trees reduced in lockstep.
-    pub tree_count: usize,
+    tree_count: usize,
     /// Root-to-leaf product-reduction layers.
-    pub layer_count: usize,
+    layer_count: usize,
+}
+
+impl BusSecurityGeometry {
+    /// Variables in the power-of-two tuple fingerprint table.
+    #[must_use]
+    pub const fn tuple_variables(&self) -> usize {
+        self.tuple_variables
+    }
+
+    /// Non-padding push and pull leaf positions.
+    #[must_use]
+    pub const fn non_padding_leaf_counts(&self) -> [usize; 2] {
+        self.non_padding_leaf_counts
+    }
+
+    /// Power-of-two capacity shared by both product trees.
+    #[must_use]
+    pub const fn logical_leaf_count(&self) -> usize {
+        self.logical_leaf_count
+    }
+
+    /// Variables in each product tree.
+    #[must_use]
+    pub const fn log_logical_leaf_count(&self) -> usize {
+        self.log_logical_leaf_count
+    }
+
+    /// Product trees reduced in lockstep.
+    #[must_use]
+    pub const fn tree_count(&self) -> usize {
+        self.tree_count
+    }
+
+    /// Root-to-leaf product-reduction layers.
+    #[must_use]
+    pub const fn layer_count(&self) -> usize {
+        self.layer_count
+    }
+}
+
+/// Meaning of one slot in a padded fingerprint tuple.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BusTupleSlot {
+    /// Payload expression at the enclosed bus-local position.
+    Payload(usize),
+    /// Fixed bit of the named-bus domain identity.
+    DomainBit(bool),
+    /// Constant zero used for width equalization or power-of-two padding.
+    Zero,
 }
 
 /// A verifier-derived layout for every named binary-native bus.
@@ -124,6 +173,8 @@ pub struct BusPlan {
     pulls: Vec<BusBlock>,
     /// Dimensions consumed by security accounting.
     geometry: BusSecurityGeometry,
+    /// Product-reduction shape checked while the plan is built.
+    product_shape: ProductGkrShape,
 }
 
 impl BusPlan {
@@ -289,6 +340,7 @@ impl BusPlan {
             pushes,
             pulls,
             geometry,
+            product_shape,
         }))
     }
 
@@ -331,11 +383,35 @@ impl BusPlan {
         }
     }
 
+    /// Meaning of one fingerprint slot for one named bus.
+    ///
+    /// Returns no value when either index lies outside this plan.
+    #[must_use]
+    pub fn tuple_slot(&self, bus: usize, slot: usize) -> Option<BusTupleSlot> {
+        let domain = self.domains.get(bus)?;
+        if slot >= self.fingerprint_width {
+            return None;
+        }
+        if slot < domain.payload_width {
+            return Some(BusTupleSlot::Payload(slot));
+        }
+        if slot < self.payload_slots {
+            return Some(BusTupleSlot::Zero);
+        }
+        if slot < self.logical_tuple_width {
+            return Some(BusTupleSlot::DomainBit(
+                domain.identity_bit(slot - self.payload_slots),
+            ));
+        }
+        Some(BusTupleSlot::Zero)
+    }
+
     /// Terminal shares in the product tree's physical block order.
     ///
     /// The leading point coordinates select one aligned block.
     /// The trailing coordinates evaluate the owning AIR expression over its rows.
     /// Each owning expression contributes its leaf factor minus one.
+    /// Materialized declarations must follow this exact order on each direction.
     pub fn terminal_shares(
         &self,
         direction: BusDirection,
@@ -358,13 +434,8 @@ impl BusPlan {
 
     /// Checked product-reduction shape fixed by this layout.
     #[must_use]
-    pub fn product_shape(&self) -> ProductGkrShape {
-        ProductGkrShape::new(
-            self.geometry.log_logical_leaf_count,
-            self.geometry.tree_count,
-            ProductGkrRootShape::FirstTwoShared,
-        )
-        .expect("a checked bus plan retains a valid product shape")
+    pub const fn product_shape(&self) -> ProductGkrShape {
+        self.product_shape
     }
 }
 
@@ -544,13 +615,18 @@ mod tests {
     use alloc::vec;
 
     use p3_air::symbolic::{BaseEntry, SymbolicVariable};
-    use p3_baby_bear::BabyBear;
-    use p3_field::PrimeCharacteristicRing;
+    use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
+    use p3_challenger::DuplexChallenger;
+    use p3_field::extension::BinomialExtensionField;
+    use p3_field::{Field, PrimeCharacteristicRing};
+    use rand::SeedableRng;
+    use rand_xoshiro::Xoroshiro128Plus;
 
     use super::*;
     use crate::BusActivation;
 
     type F = BabyBear;
+    type EF = BinomialExtensionField<F, 4>;
 
     fn variable(entry: BaseEntry, index: usize) -> SymbolicExpression<F> {
         SymbolicVariable::new(entry, index).into()
@@ -578,7 +654,7 @@ mod tests {
             .collect()
     }
 
-    fn evaluate(values: &[F], point: &[F]) -> F {
+    fn evaluate<T: Field>(values: &[T], point: &[T]) -> T {
         assert_eq!(values.len(), 1usize << point.len());
         values
             .iter()
@@ -590,15 +666,22 @@ mod tests {
                     .map(|(coordinate, &challenge)| {
                         let bit = (vertex >> (point.len() - 1 - coordinate)) & 1;
                         if bit == 0 {
-                            F::ONE - challenge
+                            T::ONE - challenge
                         } else {
                             challenge
                         }
                     })
-                    .product::<F>()
+                    .product::<T>()
                     * value
             })
             .sum()
+    }
+
+    /// Build a deterministic prime-field transcript for the protocol integration test.
+    fn challenger() -> DuplexChallenger<F, Poseidon2BabyBear<16>, 16, 8> {
+        // Matching seeds keep the prover and verifier transcript streams identical.
+        let mut rng = Xoroshiro128Plus::seed_from_u64(0xB055_700D);
+        DuplexChallenger::new(Poseidon2BabyBear::new_from_rng_128(&mut rng))
     }
 
     #[test]
@@ -632,6 +715,12 @@ mod tests {
         assert_eq!(plan.domain_slots(), 2);
         assert_eq!(plan.logical_tuple_width(), 5);
         assert_eq!(plan.fingerprint_width(), 8);
+        assert_eq!(plan.tuple_slot(0, 0), Some(BusTupleSlot::Payload(0)));
+        assert_eq!(plan.tuple_slot(0, 1), Some(BusTupleSlot::Zero));
+        assert_eq!(plan.tuple_slot(0, 3), Some(BusTupleSlot::DomainBit(true)));
+        assert_eq!(plan.tuple_slot(0, 7), Some(BusTupleSlot::Zero));
+        assert_eq!(plan.tuple_slot(0, 8), None);
+        assert_eq!(plan.tuple_slot(2, 0), None);
 
         assert_eq!(
             layout_signature(&plan),
@@ -795,6 +884,107 @@ mod tests {
             .sum::<F>();
 
         assert_eq!(reconstructed, evaluate(&dense, &point) - F::ONE);
+    }
+
+    #[test]
+    fn planned_block_order_closes_on_the_real_product_reduction() {
+        // Two mixed-height owners each emit matching push and pull declarations.
+        let tall = vec![
+            interaction("bus", BusDirection::Push, 1),
+            interaction("bus", BusDirection::Pull, 1),
+        ];
+        let short = tall.clone();
+        let inputs = [
+            BusPlanInput {
+                log_height: 2,
+                interactions: &tall,
+            },
+            BusPlanInput {
+                log_height: 1,
+                interactions: &short,
+            },
+        ];
+        let plan = BusPlan::build(&inputs).unwrap().unwrap();
+        let fingerprint_point = [EF::from_u8(7)];
+        let offset = EF::from_u8(11);
+
+        // Materialize declarations in the plan's physical order on each direction.
+        let materialize_direction = |direction| {
+            let mut leaves = Vec::new();
+            for block in plan.blocks(direction) {
+                let height = 1usize << block.log_height;
+                let payload = (0..height)
+                    .map(|row| F::from_usize(block.owner.air * 16 + row + 2))
+                    .collect::<Vec<_>>();
+                let identity = vec![F::ONE; height];
+                let columns = [&payload[..], &identity[..]];
+                let declaration = [crate::BusLeafDeclaration {
+                    direction,
+                    columns: &columns,
+                    selector: crate::BusSelector::Always,
+                }];
+                let materialized =
+                    crate::BusLeaves::materialize(&declaration, &fingerprint_point, offset)
+                        .unwrap();
+                match direction {
+                    BusDirection::Push => leaves.extend(materialized.pushes),
+                    BusDirection::Pull => leaves.extend(materialized.pulls),
+                }
+            }
+            leaves
+        };
+        let pushes = materialize_direction(BusDirection::Push);
+        let pulls = materialize_direction(BusDirection::Pull);
+        assert_eq!(pushes, pulls);
+
+        // The real prover returns the repository-wide leading-prefix point order.
+        let mut prover_challenger = challenger();
+        let (proof, prover_output) = crate::ProductGkrProof::prove::<F, _>(
+            &[pushes.as_slice(), pulls.as_slice()],
+            plan.product_shape(),
+            &mut prover_challenger,
+        );
+        let mut verifier_challenger = challenger();
+        let verifier_output = proof
+            .verify::<F, _>(plan.product_shape(), &mut verifier_challenger)
+            .unwrap();
+        assert_eq!(verifier_output, prover_output);
+
+        // Terminal shares reconstruct the ones-padded leaf evaluation block by block.
+        let mut dense = pushes.clone();
+        dense.resize(plan.security_geometry().logical_leaf_count(), EF::ONE);
+        let reconstructed = plan
+            .terminal_shares(BusDirection::Push)
+            .zip(plan.blocks(BusDirection::Push))
+            .map(|(share, block)| {
+                assert_eq!(share.owner, block.owner);
+                let rows = 1usize << block.log_height;
+                let values = &pushes[block.offset..block.offset + rows];
+                let prefix_point = &prover_output.point[..share.prefix_variables];
+                let row_point = &prover_output.point[share.prefix_variables..];
+                let prefix_bits = (0..share.prefix_variables)
+                    .map(|coordinate| {
+                        (share.prefix_index >> (share.prefix_variables - 1 - coordinate)) & 1
+                    })
+                    .collect::<Vec<_>>();
+                let prefix_weight = prefix_point
+                    .iter()
+                    .zip(prefix_bits)
+                    .map(|(&challenge, bit)| {
+                        if bit == 0 {
+                            EF::ONE - challenge
+                        } else {
+                            challenge
+                        }
+                    })
+                    .product::<EF>();
+                prefix_weight * (evaluate(values, row_point) - EF::ONE)
+            })
+            .sum::<EF>();
+        assert_eq!(
+            reconstructed,
+            evaluate(&dense, &prover_output.point) - EF::ONE
+        );
     }
 
     #[test]

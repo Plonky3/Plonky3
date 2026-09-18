@@ -16,12 +16,9 @@ pub use builder::{
 pub use leaf::{BusDirection, BusLeafDeclaration, BusLeafError, BusLeaves, BusSelector};
 pub use plan::{
     BusBlock, BusBlockOwner, BusDomain, BusExpressionLocation, BusPlan, BusPlanError, BusPlanInput,
-    BusSecurityGeometry, BusTerminalShare, UnsupportedBusAccess,
+    BusSecurityGeometry, BusTerminalShare, BusTupleSlot, UnsupportedBusAccess,
 };
 pub use product::{
     ProductGkrError, ProductGkrLayerProof, ProductGkrOutput, ProductGkrProof, ProductGkrRootShape,
     ProductGkrShape, ProductGkrShapeError,
 };
-
-#[cfg(test)]
-mod tests;

@@ -240,3 +240,7 @@ fn equality_weights<F: Field>(point: &[F]) -> Vec<F> {
 
     weights
 }
+
+#[cfg(test)]
+#[path = "leaf_tests.rs"]
+mod tests;
