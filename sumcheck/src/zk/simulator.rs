@@ -346,7 +346,7 @@ where
 mod tests {
     use alloc::vec::Vec;
 
-    use p3_field::{BasedVectorSpace, Field, PackedValue, PrimeCharacteristicRing, dot_product};
+    use p3_field::{BasedVectorSpace, PrimeCharacteristicRing, dot_product};
     use p3_multilinear_util::poly::Poly;
     use p3_zk_codes::ZkEncoding;
     use proptest::prelude::*;
@@ -555,11 +555,8 @@ mod tests {
             // Why ell_zk >= 4: lengths 2 and 3 both give a 2-coordinate wire, on which the driver's check 3 reads nothing.
             // The shortest legal mask is covered by a test of its own instead.
 
-            // Compression step requires the folded polynomial to retain at
-            // least one full packed lane. Packing width depends on the ISA.
-            let k_pack = p3_util::log2_strict_usize(<F as Field>::Packing::WIDTH);
-            prop_assume!(n_vars > k_pack);
-            let folding_factor = 1 + (seed as usize % (n_vars - k_pack));
+            // Cover every legal prefix folding depth.
+            let folding_factor = 1 + (seed as usize % n_vars);
 
             prop_assert!(
                 run_acceptance_and_mask_prelude_coupling(
@@ -580,9 +577,7 @@ mod tests {
             num_eqs in 1usize..=3,
             seed in 0u64..1024,
         ) {
-            // Same invariant on the suffix path. Suffix mode never packs
-            // the residual factor, so the parameter window is wider:
-            // folding can go up to `n_vars - 1` instead of `n_vars - k_pack`.
+            // Suffix mode keeps one residual variable.
             //
             // The mask length starts at 4 for the same reason as the prefix draw above.
             let folding_factor = 1 + (seed as usize % (n_vars - 1).max(1));

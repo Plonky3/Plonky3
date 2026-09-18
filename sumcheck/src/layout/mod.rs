@@ -57,8 +57,7 @@
 //! Lagrange weights; the modes differ only in the handoff to the residual
 //! product polynomial once folding completes:
 //!
-//! - Prefix-first binding: the handoff stays packed while the residual fills a packed element.
-//! - Narrower prefix residuals use scalar storage.
+//! - Prefix-first binding chooses packed or scalar compression from the residual width.
 //! - Suffix-first binding: the handoff is unpacked (`compress_stacked`).
 //!
 //! Both modes end at the same residual product polynomial; the binding order

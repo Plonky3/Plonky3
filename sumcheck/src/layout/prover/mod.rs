@@ -1024,39 +1024,30 @@ mod tests {
 
     #[test]
     fn prefix_handoff_narrower_than_one_packed_element() {
-        // Invariant: a residual shorter than one packed element still hands off correctly.
-        // Folding that residual must recover the stacked polynomial at the full challenge point.
-        //
-        //     one table of 2^FOLDING rows and two columns  ->  stacked arity FOLDING + 1
-        //     residual after the folding rounds            ->  one variable
-        //
-        // A vectorized target needs at least two residual variables for one packed element.
-        // The one-variable fixture therefore reaches the scalar fallback on every such target.
-        // Build exactly two columns over a table whose arity equals the preprocessing depth.
+        // Two columns leave one selector variable after preprocessing.
         let witness =
             PrefixProver::<F, EF>::new_witness(tables_from_shape(&[(FOLDING, 2)]), FOLDING);
-        // Stacking two columns adds one selector variable to the table arity.
         let stacked_num_variables = witness.num_variables();
         assert_eq!(stacked_num_variables, FOLDING + 1);
-        // Preserve the original polynomial as an independent final-evaluation oracle.
+
+        // Keep the original polynomial for an independent evaluation.
         let stacked_poly = witness.poly().clone();
 
-        // Record both concrete columns and one virtual opening in the same transcript.
+        // Exercise both concrete and virtual claims.
         let mut prover_challenger = challenger();
         let mut prover_state = PrefixProver::<F, EF>::from_witness(witness);
         let batch = OpeningBatch::new(vec![0, 1], Vec::new());
         let _ = prover_state.eval(0, &batch, &mut prover_challenger);
         let _ = prover_state.add_virtual_eval(&mut prover_challenger);
 
-        // Run the preprocessing rounds and collect their challenge prefix.
+        // Fold until only the selector variable remains.
         let mut preprocessing_data = SumcheckData::<F, EF>::default();
         let (mut prover, mut prover_randomness) =
             prover_state.into_sumcheck(&mut preprocessing_data, 0, &mut prover_challenger);
-        // Exactly the selector variable remains after preprocessing.
         let residual = stacked_num_variables - FOLDING;
         assert_eq!(prover.num_variables(), residual);
 
-        // Fold the scalar residual to a constant and append its challenge suffix.
+        // Bind the scalar residual.
         let mut residual_data = SumcheckData::<F, EF>::default();
         prover_randomness.extend(&prover.compute_sumcheck_polynomials(
             &mut residual_data,
@@ -1065,7 +1056,8 @@ mod tests {
             0,
             None,
         ));
-        // The two phases together bind every variable of the original stacked polynomial.
+
+        // The folded constant must equal direct evaluation at the sampled point.
         let folded = prover
             .evals()
             .as_constant()
