@@ -1,8 +1,11 @@
 //! `GF(2^128)` in the polynomial basis of `x^128 + x^7 + x^2 + x + 1`.
 
+use alloc::vec::Vec;
 use core::fmt::{self, Debug, Display, Formatter};
 use core::iter::{Product, Sum};
+use core::mem::ManuallyDrop;
 use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
+use core::slice;
 
 use num_bigint::BigUint;
 use p3_field::op_assign_macros::{
@@ -10,6 +13,7 @@ use p3_field::op_assign_macros::{
     impl_sub_assign, impl_sub_base_field, ring_sum,
 };
 use p3_field::{Algebra, Field, Packable, PrimeCharacteristicRing, RawDataSerializable};
+use p3_maybe_rayon::prelude::*;
 use rand::Rng;
 use rand::distr::{Distribution, StandardUniform};
 use serde::{Deserialize, Serialize};
@@ -84,9 +88,39 @@ const CANTOR_BASIS: [u128; 128] = {
 #[must_use]
 pub struct Ghash128(u128);
 
+/// Elements one parallel task converts in [`Ghash128::from_tower_vec`].
+///
+/// A power of two, so a whole number of blocks of the blocked basis-change kernel.
+const TABLE_CHUNK: usize = 1 << 16;
+
 impl Ghash128 {
     /// The number of bits of an element.
     pub(crate) const BITS: usize = 128;
+
+    /// A whole table of tower elements, seen in the polynomial basis, in the table's own buffer.
+    ///
+    /// Each entry becomes what [`From`] makes of it.
+    ///
+    /// Chunks of the table convert in parallel, a block at a time where the build has the
+    /// blocked kernel [`crate::poly_basis::from_tower_slice`] describes.
+    pub fn from_tower_vec(values: Vec<BinaryField128>) -> Vec<Self> {
+        let mut values = ManuallyDrop::new(values);
+        let (ptr, len, capacity) = (values.as_mut_ptr(), values.len(), values.capacity());
+
+        // SAFETY: `BinaryField128` is transparent over `u128`, so the initialized entries are
+        // `len` valid `u128`s. The vector is never used again, so this is the only reference.
+        let words = unsafe { slice::from_raw_parts_mut(ptr.cast::<u128>(), len) };
+        words.par_chunks_mut(TABLE_CHUNK).for_each(|chunk| {
+            clmul::tower_to_poly_128_slice(chunk);
+        });
+
+        // SAFETY: `Ghash128` is transparent over `u128` as well, so the allocation has its size
+        // and alignment, and every `u128` is a valid element. This also relies on taking
+        // `BinaryField128` specifically: its `MASK` is `u128::MAX`, so every bit pattern left in
+        // `words` is already canonical. A smaller tower field's mask clears high bits, so its
+        // buffer could hold non-canonical entries and this reinterpretation would not be sound.
+        unsafe { Vec::from_raw_parts(ptr.cast::<Self>(), len, capacity) }
+    }
 
     /// Construct a field element from its little-endian byte representation.
     ///
@@ -483,6 +517,28 @@ mod tests {
     /// The tower element with the given bit pattern.
     fn tower(bits: u128) -> BinaryField128 {
         BinaryField128::from_repr(bits)
+    }
+
+    #[test]
+    fn a_tower_table_converts_entry_by_entry_in_its_own_buffer() {
+        // Invariant: the table map is the element map, and the buffer is reused.
+        //
+        // Fixture state: lengths around one block of the blocked kernel and across several
+        // parallel chunks, with a partial last chunk and a partial last block.
+        for len in [0, 1, 63, 64, 65, 1000, 2 * super::TABLE_CHUNK + 67] {
+            let table: Vec<BinaryField128> = (0..len as u128)
+                .map(|i| tower(i.wrapping_mul(0x9e37_79b9_7f4a_7c15_f39c_c060_5ced_c835) ^ i))
+                .collect();
+            let want: Vec<Ghash128> = table.iter().map(|&x| Ghash128::from(x)).collect();
+
+            let at = table.as_ptr() as usize;
+            let got = Ghash128::from_tower_vec(table);
+
+            assert_eq!(got, want, "length {len}");
+            if len > 0 {
+                assert_eq!(got.as_ptr() as usize, at, "length {len}");
+            }
+        }
     }
 
     #[test]
