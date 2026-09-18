@@ -1,79 +1,106 @@
 //! Security accounting derived from a checked bus layout.
 
 use alloc::vec::Vec;
+use core::num::NonZeroUsize;
 
 use p3_security::SecurityTerm;
 use p3_security::bus::BusSecurityModel;
 
-use crate::{BusSecurityGeometry, ProductGkrRootShape, ProductGkrShape};
+use crate::BusPlan;
 
-/// Build separately labelled soundness terms from verifier-owned dimensions.
+/// Build the union-bound term consumed by a protocol security report.
 ///
-/// Returns no terms if the dimensions are inconsistent or the field width is zero.
 /// The result excludes commitment binding and authentication of terminal leaf claims.
 #[must_use]
-pub fn bus_security_terms(
-    geometry: BusSecurityGeometry,
-    field_bits: usize,
-) -> Option<Vec<SecurityTerm>> {
-    // The redundant capacity fields make accidental geometry drift detectable here.
-    let shift = u32::try_from(geometry.log_logical_leaf_count).ok()?;
-    let logical_leaf_count = 1usize.checked_shl(shift)?;
-    let product_shape = ProductGkrShape::new(
-        geometry.log_logical_leaf_count,
-        geometry.tree_count,
-        ProductGkrRootShape::FirstTwoShared,
-    )
-    .ok()?;
-    if geometry.logical_leaf_count != logical_leaf_count
-        || geometry.layer_count != product_shape.layers().len()
-    {
-        return None;
-    }
+pub fn bus_security_term(plan: &BusPlan, field_bits: NonZeroUsize) -> SecurityTerm {
+    model(plan, field_bits).combined_term()
+}
 
-    // The generic model validates factor counts and the product-message dimensions.
+/// Build separately labelled terms for diagnostic reporting.
+///
+/// These components must not be passed separately as protocol extras.
+/// Their probability sum is represented by the single composable term.
+#[must_use]
+pub fn bus_security_components(plan: &BusPlan, field_bits: NonZeroUsize) -> Vec<SecurityTerm> {
+    model(plan, field_bits).components()
+}
+
+/// Derive exact soundness dimensions from the concrete product schedule.
+fn model(plan: &BusPlan, field_bits: NonZeroUsize) -> BusSecurityModel {
+    let shape = plan.product_shape();
+    let layers = shape.layers();
+    let sumcheck_rounds = layers.iter().map(|(_, rounds)| rounds).sum();
+    let collapse_challenges = layers
+        .iter()
+        .map(|(arity, _)| arity.trailing_zeros() as usize)
+        .sum();
+    let geometry = plan.security_geometry();
+
+    // A checked plan supplies dimensions accepted by the numeric security model.
     BusSecurityModel::new(
-        field_bits,
-        geometry.tuple_variables,
-        geometry.non_padding_leaf_counts,
-        geometry.log_logical_leaf_count,
-        geometry.tree_count,
+        field_bits.get(),
+        geometry.tuple_variables(),
+        geometry.non_padding_leaf_counts(),
+        shape.log_height(),
+        shape.num_trees(),
+        sumcheck_rounds,
+        layers.len(),
+        collapse_challenges,
     )
-    .map(|model| model.terms())
+    .expect("a checked bus plan has valid security dimensions")
 }
 
 #[cfg(test)]
 mod tests {
+    use alloc::string::ToString;
     use alloc::vec;
 
+    use p3_air::symbolic::{BaseEntry, SymbolicVariable};
+    use p3_baby_bear::BabyBear;
+    use p3_security::ErrorBits;
     use p3_security::bus::{
-        BUS_FINGERPRINT_LABEL, PRODUCT_GKR_BATCHING_LABEL, PRODUCT_GKR_COLLAPSE_LABEL,
-        PRODUCT_GKR_SUMCHECK_LABEL,
+        BINARY_BUS_LABEL, BUS_FINGERPRINT_LABEL, PRODUCT_GKR_BATCHING_LABEL,
+        PRODUCT_GKR_COLLAPSE_LABEL, PRODUCT_GKR_SUMCHECK_LABEL,
     };
 
     use super::*;
-
-    // A small checked layout has two radix-four reduction layers.
-    const GEOMETRY: BusSecurityGeometry = BusSecurityGeometry {
-        tuple_variables: 3,
-        non_padding_leaf_counts: [16, 8],
-        logical_leaf_count: 16,
-        log_logical_leaf_count: 4,
-        tree_count: 2,
-        layer_count: 2,
+    use crate::{
+        BusActivation, BusDirection, BusPlanInput, ProductGkrRootShape, ProductGkrShape,
+        SymbolicBusInteraction,
     };
 
-    #[test]
-    fn adapter_preserves_every_separate_error_source() {
-        // Fixture state:
-        //
-        //     fingerprint      3 * 16 roots
-        //     sumcheck         5 * 2 roots
-        //     tree batching    2 * (2 - 1) roots
-        //     child collapse   4 roots
-        let terms = bus_security_terms(GEOMETRY, 128).expect("the checked geometry is valid");
-        let labels = terms.iter().map(|term| term.label).collect::<Vec<_>>();
+    /// Build one balanced bus at a chosen trace height and tuple width.
+    fn plan(log_height: usize, width: usize) -> BusPlan {
+        let fields = (0..width)
+            .map(|index| SymbolicVariable::new(BaseEntry::Main { offset: 0 }, index).into())
+            .collect::<Vec<_>>();
+        let interactions =
+            [BusDirection::Push, BusDirection::Pull].map(|direction| SymbolicBusInteraction::<
+                BabyBear,
+            > {
+                bus_name: "bus".to_string(),
+                direction,
+                fields: fields.clone(),
+                activation: BusActivation::Always,
+            });
+        BusPlan::build(&[BusPlanInput {
+            log_height,
+            interactions: &interactions,
+        }])
+        .unwrap()
+        .unwrap()
+    }
 
+    #[test]
+    fn adapter_preserves_components_and_returns_their_union() {
+        // Height four has two radix-four layers with zero and two rounds.
+        let plan = plan(4, 5);
+        let field_bits = NonZeroUsize::new(128).unwrap();
+        let components = bus_security_components(&plan, field_bits);
+        let labels = components
+            .iter()
+            .map(|component| component.label)
+            .collect::<Vec<_>>();
         assert_eq!(
             labels,
             vec![
@@ -83,48 +110,64 @@ mod tests {
                 PRODUCT_GKR_COLLAPSE_LABEL,
             ]
         );
-        assert_eq!(terms[0].bits.bits(), 128.0 - 48f64.log2());
-        assert_eq!(terms[1].bits.bits(), 128.0 - 10f64.log2());
-        assert_eq!(terms[2].bits.bits(), 127.0);
-        assert_eq!(terms[3].bits.bits(), 126.0);
+
+        // The composable term charges the probability sum rather than its largest component.
+        let expected = ErrorBits::sum(
+            &components
+                .iter()
+                .map(|component| component.bits)
+                .collect::<Vec<_>>(),
+        );
+        let combined = bus_security_term(&plan, field_bits);
+        assert_eq!(combined.label, BINARY_BUS_LABEL);
+        assert_eq!(combined.bits, expected);
     }
 
     #[test]
-    fn adapter_rejects_forged_redundant_geometry() {
-        // A caller cannot lower the reported layer count while retaining a height-four tree.
-        let wrong_layers = BusSecurityGeometry {
-            layer_count: 1,
-            ..GEOMETRY
-        };
-        assert!(bus_security_terms(wrong_layers, 128).is_none());
+    fn every_supported_height_uses_the_concrete_product_schedule() {
+        // Compare the adapter against the schedule executed by product GKR.
+        for log_height in 0..=40 {
+            let plan = plan(log_height, 1);
+            let shape =
+                ProductGkrShape::new(log_height, 2, ProductGkrRootShape::FirstTwoShared).unwrap();
+            let layers = shape.layers();
+            assert_eq!(plan.product_shape(), shape);
 
-        // A caller cannot claim an eight-leaf capacity for a height-four tree.
-        let wrong_capacity = BusSecurityGeometry {
-            logical_leaf_count: 8,
-            ..GEOMETRY
-        };
-        assert!(bus_security_terms(wrong_capacity, 128).is_none());
+            let components = bus_security_components(&plan, NonZeroUsize::new(128).unwrap());
+            let sumcheck_rounds = layers.iter().map(|(_, rounds)| rounds).sum::<usize>();
+            let collapse_challenges = layers
+                .iter()
+                .map(|(arity, _)| arity.trailing_zeros() as usize)
+                .sum::<usize>();
+            let component = |label| components.iter().find(|term| term.label == label);
 
-        // A shared push/pull root requires both direction-specific product trees.
-        let one_tree = BusSecurityGeometry {
-            tree_count: 1,
-            ..GEOMETRY
-        };
-        assert!(bus_security_terms(one_tree, 128).is_none());
-
-        // A zero-width challenge space cannot support algebraic soundness.
-        assert!(bus_security_terms(GEOMETRY, 0).is_none());
-    }
-
-    #[test]
-    fn adapter_rejects_shift_overflow_without_panicking() {
-        // The untrusted copy of the geometry requests an impossible machine-word shift.
-        let oversized = BusSecurityGeometry {
-            logical_leaf_count: 1,
-            log_logical_leaf_count: usize::BITS as usize,
-            layer_count: (usize::BITS as usize).div_ceil(2),
-            ..GEOMETRY
-        };
-        assert!(bus_security_terms(oversized, 128).is_none());
+            if sumcheck_rounds == 0 {
+                assert!(component(PRODUCT_GKR_SUMCHECK_LABEL).is_none());
+            } else {
+                let expected = 128.0 - ((5 * sumcheck_rounds) as f64).log2();
+                assert_eq!(
+                    component(PRODUCT_GKR_SUMCHECK_LABEL).unwrap().bits.bits(),
+                    expected
+                );
+            }
+            if layers.is_empty() {
+                assert!(component(PRODUCT_GKR_BATCHING_LABEL).is_none());
+            } else {
+                let expected = 128.0 - (layers.len() as f64).log2();
+                assert_eq!(
+                    component(PRODUCT_GKR_BATCHING_LABEL).unwrap().bits.bits(),
+                    expected
+                );
+            }
+            if collapse_challenges == 0 {
+                assert!(component(PRODUCT_GKR_COLLAPSE_LABEL).is_none());
+            } else {
+                let expected = 128.0 - (collapse_challenges as f64).log2();
+                assert_eq!(
+                    component(PRODUCT_GKR_COLLAPSE_LABEL).unwrap().bits.bits(),
+                    expected
+                );
+            }
+        }
     }
 }

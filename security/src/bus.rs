@@ -12,6 +12,9 @@ use alloc::vec::Vec;
 
 use crate::{ErrorBits, SecurityTerm};
 
+/// Label for the union of every binary-bus algebraic error event.
+pub const BINARY_BUS_LABEL: &str = "binary-bus";
+
 /// Label for collisions in tuple compression and the product offset.
 pub const BUS_FINGERPRINT_LABEL: &str = "bus-tuple-fingerprint";
 
@@ -37,6 +40,12 @@ pub struct BusSecurityModel {
     product_log_height: usize,
     /// Product trees reduced under one batching challenge per layer.
     product_tree_count: usize,
+    /// Degree-five sumcheck rounds in the concrete product schedule.
+    product_sumcheck_rounds: usize,
+    /// Root-to-leaf layers in the concrete product schedule.
+    product_layer_count: usize,
+    /// Random coordinates used to collapse children in the concrete schedule.
+    product_collapse_challenges: usize,
 }
 
 impl BusSecurityModel {
@@ -51,6 +60,9 @@ impl BusSecurityModel {
         non_padding_leaf_counts: [usize; 2],
         product_log_height: usize,
         product_tree_count: usize,
+        product_sumcheck_rounds: usize,
+        product_layer_count: usize,
+        product_collapse_challenges: usize,
     ) -> Option<Self> {
         // The implementation addresses a logical tree with one machine word.
         if field_bits == 0
@@ -58,6 +70,7 @@ impl BusSecurityModel {
             || product_log_height >= usize::BITS as usize
             || product_tree_count == 0
             || product_tree_count > usize::MAX / 4
+            || product_collapse_challenges != product_log_height
         {
             return None;
         }
@@ -77,14 +90,18 @@ impl BusSecurityModel {
             non_padding_leaf_counts,
             product_log_height,
             product_tree_count,
+            product_sumcheck_rounds,
+            product_layer_count,
+            product_collapse_challenges,
         })
     }
 
-    /// Return each algebraic error source as a separate report term.
+    /// Return each algebraic error source for diagnostic reporting.
     ///
     /// The result excludes commitment binding and authentication of terminal leaf claims.
+    /// These components must not be passed separately as protocol extras.
     #[must_use]
-    pub fn terms(&self) -> Vec<SecurityTerm> {
+    pub fn components(&self) -> Vec<SecurityTerm> {
         // A product difference has total degree at most max(1, s) * N.
         // Here s is the tuple dimension and N is the larger multiset capacity in use.
         let factors = self.non_padding_leaf_counts[0].max(self.non_padding_leaf_counts[1]);
@@ -94,45 +111,38 @@ impl BusSecurityModel {
             error_from_numerator(self.field_bits, fingerprint_numerator),
         )];
 
-        // Radix four contracts two multiplication levels after any leading binary layer.
-        // A layer at point length r runs r degree-five sumcheck rounds.
-        let mut remaining = self.product_log_height;
-        let mut point_len = 0usize;
-        let mut layer_count = 0u128;
-        let mut radix_four_rounds = 0u128;
-        while remaining > 0 {
-            let branch_count = if remaining == self.product_log_height && remaining % 2 == 1 {
-                1
-            } else {
-                radix_four_rounds += point_len as u128;
-                2
-            };
-            point_len += branch_count;
-            remaining -= branch_count;
-            layer_count += 1;
-        }
-
-        // A zero-height product has no reduction transcript and contributes no GKR term.
+        // The protocol adapter supplies counts from the concrete product schedule.
         push_nonzero_term(
             &mut terms,
             PRODUCT_GKR_SUMCHECK_LABEL,
             self.field_bits,
-            5 * radix_four_rounds,
+            5 * self.product_sumcheck_rounds as u128,
         );
         push_nonzero_term(
             &mut terms,
             PRODUCT_GKR_BATCHING_LABEL,
             self.field_bits,
-            layer_count * self.product_tree_count.saturating_sub(1) as u128,
+            self.product_layer_count as u128 * self.product_tree_count.saturating_sub(1) as u128,
         );
         push_nonzero_term(
             &mut terms,
             PRODUCT_GKR_COLLAPSE_LABEL,
             self.field_bits,
-            self.product_log_height as u128,
+            self.product_collapse_challenges as u128,
         );
 
         terms
+    }
+
+    /// Return the union bound that composes as one protocol extra.
+    #[must_use]
+    pub fn combined_term(&self) -> SecurityTerm {
+        let components = self.components();
+        let errors = components
+            .iter()
+            .map(|component| component.bits)
+            .collect::<Vec<_>>();
+        SecurityTerm::new(BINARY_BUS_LABEL, ErrorBits::sum(&errors))
     }
 }
 
@@ -155,7 +165,7 @@ fn push_nonzero_term(
 /// Convert an exact numerator over the challenge-field order into bits.
 fn error_from_numerator(field_bits: usize, numerator: u128) -> ErrorBits {
     // Round upward before taking the logarithm.
-    // This keeps the reported error at least as large as the exact rational bound.
+    // This keeps the reported error at least as large up to f64 rounding.
     let mut rounded = numerator as f64;
     if (rounded as u128) < numerator {
         rounded = rounded.next_up();
@@ -183,9 +193,9 @@ mod tests {
         //     radix-four rounds  0 + 2 + ... + 18 = 90
         //     tree batching      10 layers * (2 - 1) roots
         //     child collapse     20 coordinates
-        let model = BusSecurityModel::new(128, 4, [1 << 20, 1 << 18], 20, 2)
+        let model = BusSecurityModel::new(128, 4, [1 << 20, 1 << 18], 20, 2, 90, 10, 20)
             .expect("the dimensions fit the product tree");
-        let terms = model.terms();
+        let terms = model.components();
 
         assert_eq!(
             bits(&terms, BUS_FINGERPRINT_LABEL),
@@ -209,9 +219,9 @@ mod tests {
     fn zero_height_omits_every_product_reduction_term() {
         // A one-leaf tree compares its roots directly.
         // Only tuple compression can hide an unequal multiset.
-        let terms = BusSecurityModel::new(128, 0, [1, 1], 0, 2)
+        let terms = BusSecurityModel::new(128, 0, [1, 1], 0, 2, 0, 0, 0)
             .expect("one factor fits a zero-height tree")
-            .terms();
+            .components();
 
         assert_eq!(terms.len(), 1);
         assert_eq!(terms[0].label, BUS_FINGERPRINT_LABEL);
@@ -222,9 +232,9 @@ mod tests {
     fn odd_height_charges_the_leading_binary_collapse() {
         // A height-three tree starts with one binary level.
         // Its remaining radix-four layer runs one degree-five round.
-        let terms = BusSecurityModel::new(128, 1, [8, 8], 3, 2)
+        let terms = BusSecurityModel::new(128, 1, [8, 8], 3, 2, 1, 2, 3)
             .expect("eight factors fit a height-three tree")
-            .terms();
+            .components();
 
         assert_eq!(
             bits(&terms, PRODUCT_GKR_SUMCHECK_LABEL),
@@ -247,30 +257,105 @@ mod tests {
         //     oversized height       logical capacity cannot be shifted
         //     two leaves at height 0 factor lies outside the tree
         //     no factors             no bus statement
-        assert!(BusSecurityModel::new(0, 1, [1, 1], 0, 2).is_none());
-        assert!(BusSecurityModel::new(128, 1, [1, 1], 0, 0).is_none());
-        assert!(BusSecurityModel::new(128, 1, [1, 1], 0, usize::MAX).is_none());
-        assert!(BusSecurityModel::new(128, usize::BITS as usize, [1, 1], 0, 2).is_none());
-        assert!(BusSecurityModel::new(128, 1, [1, 1], usize::BITS as usize, 2).is_none());
-        assert!(BusSecurityModel::new(128, 1, [2, 1], 0, 2).is_none());
-        assert!(BusSecurityModel::new(128, 1, [0, 0], 0, 2).is_none());
+        assert!(BusSecurityModel::new(0, 1, [1, 1], 0, 2, 0, 0, 0).is_none());
+        assert!(BusSecurityModel::new(128, 1, [1, 1], 0, 0, 0, 0, 0).is_none());
+        assert!(BusSecurityModel::new(128, 1, [1, 1], 0, usize::MAX, 0, 0, 0).is_none());
+        assert!(BusSecurityModel::new(128, usize::BITS as usize, [1, 1], 0, 2, 0, 0, 0).is_none());
+        assert!(BusSecurityModel::new(128, 1, [1, 1], usize::BITS as usize, 2, 0, 0, 0).is_none());
+        assert!(BusSecurityModel::new(128, 1, [2, 1], 0, 2, 0, 0, 0).is_none());
+        assert!(BusSecurityModel::new(128, 1, [0, 0], 0, 2, 0, 0, 0).is_none());
+        assert!(BusSecurityModel::new(128, 1, [1, 1], 1, 2, 0, 0, 0).is_none());
     }
 
     #[test]
     fn a_192_bit_field_adds_sixty_four_bits_to_every_term() {
         // Both models have identical algebraic numerators.
         // Only the challenge-field denominator differs.
-        let narrow = BusSecurityModel::new(128, 4, [1 << 20, 1 << 18], 20, 2)
+        let narrow = BusSecurityModel::new(128, 4, [1 << 20, 1 << 18], 20, 2, 90, 10, 20)
             .expect("the 128-bit model is valid")
-            .terms();
-        let wide = BusSecurityModel::new(192, 4, [1 << 20, 1 << 18], 20, 2)
+            .components();
+        let wide = BusSecurityModel::new(192, 4, [1 << 20, 1 << 18], 20, 2, 90, 10, 20)
             .expect("the 192-bit model is valid")
-            .terms();
+            .components();
 
         assert_eq!(narrow.len(), wide.len());
         for (narrow_term, wide_term) in narrow.iter().zip(wide) {
             assert_eq!(narrow_term.label, wide_term.label);
             assert!((wide_term.bits.bits() - narrow_term.bits.bits() - 64.0).abs() < 1e-12);
         }
+    }
+
+    #[test]
+    fn combined_term_sums_all_component_probabilities() {
+        // Height three has four nonzero error sources with numerators 8, 5, 2, and 3.
+        let model = BusSecurityModel::new(128, 1, [8, 8], 3, 2, 1, 2, 3).unwrap();
+        let components = model.components();
+        let expected = ErrorBits::sum(
+            &components
+                .iter()
+                .map(|component| component.bits)
+                .collect::<Vec<_>>(),
+        );
+        assert_eq!(model.combined_term().bits, expected);
+        assert_eq!(model.combined_term().label, BINARY_BUS_LABEL);
+    }
+
+    #[test]
+    fn combined_term_composes_as_one_protocol_extra() {
+        use crate::fri::FriRegime;
+        use crate::grinding::GrindingSites;
+        use crate::shape::{InstanceShape, StarkAirParams};
+        use crate::stark::proven_security_report;
+
+        // Use a small field so the bus union bound is visible in the final report.
+        let regime = FriRegime {
+            log_blowup: 1,
+            num_queries: 100,
+            log_final_poly_len: 0,
+            max_log_arity: 3,
+            commit_pow_bits: 0,
+            query_pow_bits: 16,
+        };
+        let air = StarkAirParams {
+            num_constraints: 1,
+            max_constraint_degree: 2,
+            num_quotient_chunks: 1,
+            max_combo: 2,
+        };
+        let shape = InstanceShape {
+            log_trace_length: 20,
+            modulus_bits: 64,
+            collision_resistance: 128,
+            num_batched_functions: 1,
+        };
+        let model = BusSecurityModel::new(64, 4, [1 << 20, 1 << 18], 20, 2, 90, 10, 20).unwrap();
+        let term = model.combined_term();
+
+        // The report contains one composed event rather than four independent minima.
+        let report = proven_security_report(&regime, &air, &shape, &[term], &GrindingSites::NONE);
+        assert!(
+            report
+                .udr
+                .terms()
+                .iter()
+                .any(|candidate| candidate.label == BINARY_BUS_LABEL)
+        );
+        assert!(!report.udr.terms().iter().any(|candidate| {
+            [
+                BUS_FINGERPRINT_LABEL,
+                PRODUCT_GKR_SUMCHECK_LABEL,
+                PRODUCT_GKR_BATCHING_LABEL,
+                PRODUCT_GKR_COLLAPSE_LABEL,
+            ]
+            .contains(&candidate.label)
+        }));
+    }
+
+    #[test]
+    fn large_numerator_rounding_branch_is_exercised() {
+        // The fingerprint numerator exceeds the exact integer range of f64.
+        let model =
+            BusSecurityModel::new(128, 3, [(1usize << 62) + 1, 1], 63, 2, 961, 32, 63).unwrap();
+        assert!(model.components()[0].bits.bits().is_finite());
     }
 }

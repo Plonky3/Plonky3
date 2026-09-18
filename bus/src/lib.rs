@@ -23,4 +23,4 @@ pub use product::{
     ProductGkrError, ProductGkrLayerProof, ProductGkrOutput, ProductGkrProof, ProductGkrRootShape,
     ProductGkrShape, ProductGkrShapeError,
 };
-pub use security::bus_security_terms;
+pub use security::{bus_security_components, bus_security_term};
