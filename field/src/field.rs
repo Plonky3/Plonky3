@@ -1431,7 +1431,7 @@ impl<F: Field> BoundedPowers<F> {
     #[must_use]
     pub fn collect(self) -> Vec<F> {
         // Below this many scalars, a parallel dispatch costs more than the packed fill itself.
-        const PARALLEL_THRESHOLD: usize = 1 << 10;
+        const PARALLEL_THRESHOLD: usize = 1 << 16;
 
         let num_powers = self.n;
 
