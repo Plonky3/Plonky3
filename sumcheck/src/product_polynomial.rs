@@ -491,18 +491,7 @@ impl<F: Field, EF: ExtensionField<F>> ProductPolynomial<F, EF> {
     ///
     /// ```text
     ///     prefix: the high index bit, faces half the table apart, bound in place
-    ///     suffix: the low index bit, faces adjacent, bound into a half-size buffer
-    /// ```
-    ///
-    /// The suffix half-size buffer is pure cost below `PARALLEL_THRESHOLD` entries,
-    /// where `Poly::fix_suffix_var_mut` folds in place and allocates nothing.
-    ///
-    /// No size gate routes those rounds back to two passes, because the tail of a
-    /// ladder cannot move its total:
-    ///
-    /// ```text
-    ///     a 2^20 ladder reads ~2^21 entries in all
-    ///     its rounds below the threshold hold ~2^13 of them, or ~0.4%
+    ///     suffix: the low index bit, faces adjacent, bound in place unless threaded and mid-size
     /// ```
     pub(crate) fn fold_round_coefficients(&mut self, r: EF) -> (EF, EF) {
         // The fused pass needs the bound table to keep a variable for the message.
@@ -646,6 +635,23 @@ impl<F: Field, EF: ExtensionField<F>> ProductPolynomial<F, EF> {
         match &self.inner {
             MaybePacked::Packed { weights, .. } => weights.unpack(),
             MaybePacked::Unpacked { weights, .. } => weights.clone(),
+        }
+    }
+
+    /// Consumes the pair and returns its binding order, evaluations and weights as scalar tables.
+    ///
+    /// Scalar storage is moved out without a copy. Packed storage is unpacked.
+    pub(crate) fn into_scalar_tables(self) -> (VariableOrder, Poly<EF>, Poly<EF>) {
+        match self.inner {
+            MaybePacked::Packed { evals, weights } => {
+                // Each packed table is released once its scalar image exists.
+                let scalar_evals = evals.unpack();
+                drop(evals);
+                let scalar_weights = weights.unpack();
+                drop(weights);
+                (self.order, scalar_evals, scalar_weights)
+            }
+            MaybePacked::Unpacked { evals, weights } => (self.order, evals, weights),
         }
     }
 
