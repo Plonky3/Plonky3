@@ -190,8 +190,6 @@ impl<F: TwoAdicField, InputProof: Sync, InputError: Debug + Sync, EF: ExtensionF
                 .collect_n(initial_height);
             reverse_slice_index_bits(&mut halve_inv_powers);
 
-            let two = F::ONE + F::ONE;
-
             // The first fold reads the borrowed matrix row by row, so `m` is never copied.
             let mut data = EF::zero_vec(initial_height);
             data.par_chunks_exact_mut(pairs_per_row)
@@ -210,10 +208,10 @@ impl<F: TwoAdicField, InputProof: Sync, InputError: Debug + Sync, EF: ExtensionF
 
             for _ in 1..log_arity {
                 let height = data.len() / 2;
-                // Since j << 1 is always >= j, we never overwrite data we haven't read yet.
-                for j in 0..height {
-                    halve_inv_powers[j] = two * halve_inv_powers[j << 1].square();
-                }
+                // For a bit-reversed table of `g_inv^i / 2` over `n` elements, the first `n/2`
+                // entries already equal the bit-reversed table of `(g_inv^2)^i / 2` over `n/2`
+                // elements, i.e. the table this round's halving factors need. So each round
+                // reuses a shrinking prefix of the same table.
                 next_data[..height]
                     .par_iter_mut()
                     .zip(data.par_chunks_exact(2))
@@ -1306,7 +1304,7 @@ mod tests {
         let mut rng = SmallRng::seed_from_u64(1);
         let folding = TwoAdicFriFolding::<(), ()>(PhantomData);
 
-        for log_arity in 1..4 {
+        for log_arity in 1..=4 {
             for log_height in 0..5 {
                 let beta: EF = rng.random();
                 let m = RowMajorMatrix::<EF>::rand(&mut rng, 1 << log_height, 1 << log_arity);
