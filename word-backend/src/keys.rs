@@ -2,7 +2,9 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::ops::Range;
 
-use p3_word::{ConstraintKind, ConstraintSystem, Operand, Segment, Shift, ShiftKind, Word};
+use p3_word::{
+    ConstraintKind, ConstraintSystem, Operand, OperandRole, Segment, Shift, ShiftKind, Word,
+};
 use thiserror::Error;
 
 const SHIFT_BITS: u32 = 9;
@@ -10,18 +12,18 @@ const SEQUENCE_BITS: u32 = 2 * SHIFT_BITS;
 const SEQUENCE_MASK: u32 = (1 << SEQUENCE_BITS) - 1;
 
 /// A compact index into one operation family.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ConstraintReference {
-    /// The operand position within its relation.
-    operand: u8,
+    /// The operand's semantic role within its relation.
+    operand: OperandRole,
     /// The position within its homogeneous relation family.
     constraint: u32,
 }
 
 impl ConstraintReference {
-    /// Returns the operand position within the operation.
+    /// Returns the operand's semantic role within the relation.
     #[inline]
-    pub const fn operand(self) -> u8 {
+    pub const fn operand(self) -> OperandRole {
         self.operand
     }
 
@@ -32,32 +34,62 @@ impl ConstraintReference {
     }
 }
 
-/// One word's references under a fixed operation and shift sequence.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct CompiledKey {
+/// One word's resolved references under a fixed operation and shift sequence.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CompiledKey<'a, W: Word> {
     /// The relation family consuming the word.
     operation: ConstraintKind,
-    /// The compact index of the canonical shift sequence.
-    shift: u16,
-    /// The contiguous span of relation references.
-    references: Range<u32>,
+    /// The dense index of the shift sequence.
+    shift_index: u32,
+    /// The inner and outer movements in evaluation order.
+    shifts: [Shift<W>; 2],
+    /// The relation occurrences consuming the shifted word.
+    references: &'a [ConstraintReference],
 }
 
-impl CompiledKey {
+impl<W: Word> CompiledKey<'_, W> {
     /// Returns the relation family using the word.
     #[inline]
     pub const fn operation(&self) -> ConstraintKind {
         self.operation
     }
+
+    /// Returns the dense shift-sequence index.
+    #[inline]
+    pub const fn shift_index(&self) -> u32 {
+        self.shift_index
+    }
+
+    /// Returns the inner and outer movements in evaluation order.
+    #[inline]
+    pub const fn shifts(&self) -> [Shift<W>; 2] {
+        self.shifts
+    }
+
+    /// Returns every relation occurrence in reduction order.
+    #[inline]
+    pub const fn references(&self) -> &'_ [ConstraintReference] {
+        self.references
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct StoredKey {
+    /// The relation family consuming the word.
+    operation: ConstraintKind,
+    /// The dense index of the shift sequence.
+    shift: u32,
+    /// The contiguous span of relation references.
+    references: Range<u32>,
 }
 
 /// Metadata compiled independently for one visibility segment.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CompiledSegment<W: Word> {
-    /// The distinct canonical shift sequences.
+    /// The distinct shift-sequence spellings.
     shifts: Vec<[Shift<W>; 2]>,
     /// The operation and shift groups across all words.
-    keys: Vec<CompiledKey>,
+    keys: Vec<StoredKey>,
     /// The contiguous key span assigned to each word.
     word_keys: Vec<Range<u32>>,
     /// The relation consumers grouped by key.
@@ -77,21 +109,32 @@ impl<W: Word> CompiledSegment<W> {
         self.word_keys.is_empty()
     }
 
-    /// Returns the keys attached to a word.
-    pub fn keys(&self, word: usize) -> Option<&[CompiledKey]> {
+    /// Returns the resolved keys attached to one word.
+    pub fn keys(
+        &self,
+        word: usize,
+    ) -> Option<impl ExactSizeIterator<Item = CompiledKey<'_, W>> + Clone + '_> {
+        // Keep storage-local indices inside this segment.
         let range = self.word_keys.get(word)?;
-        self.keys.get(range.start as usize..range.end as usize)
+        let keys = self.keys.get(range.start as usize..range.end as usize)?;
+        Some(keys.iter().map(|key| self.resolve(key)))
     }
 
-    /// Returns a key's canonical inner and outer shifts.
-    pub fn shifts(&self, key: &CompiledKey) -> Option<[Shift<W>; 2]> {
-        self.shifts.get(key.shift as usize).copied()
+    /// Returns the dense shift-sequence table.
+    #[inline]
+    pub fn shift_sequences(&self) -> &[[Shift<W>; 2]] {
+        &self.shifts
     }
 
-    /// Returns a key's references in operand-major order.
-    pub fn references(&self, key: &CompiledKey) -> Option<&[ConstraintReference]> {
-        self.references
-            .get(key.references.start as usize..key.references.end as usize)
+    fn resolve(&self, key: &StoredKey) -> CompiledKey<'_, W> {
+        // Construction bounds every dense index and contiguous reference span.
+        CompiledKey {
+            operation: key.operation,
+            shift_index: key.shift,
+            shifts: self.shifts[key.shift as usize],
+            references: &self.references
+                [key.references.start as usize..key.references.end as usize],
+        }
     }
 }
 
@@ -106,6 +149,13 @@ pub struct CompiledKeyLayout<W: Word> {
 
 impl<W: Word> CompiledKeyLayout<W> {
     /// Compiles every shifted reference in deterministic reduction order.
+    ///
+    /// - Families use zero, AND, then integer-multiplication order.
+    /// - AND roles use left, right, then output order.
+    /// - Multiplication roles use left, right, low, then high order.
+    /// - Constraint positions ascend within each role.
+    /// - Terms retain their supplied order and multiplicity.
+    /// - Each word's keys retain the first occurrence of each group.
     pub fn new(system: &ConstraintSystem<W>) -> Result<Self, KeyCompileError> {
         check_constraint_counts(system)?;
 
@@ -190,8 +240,6 @@ pub enum LayoutComponent {
     References,
     /// Per-word keys.
     Keys,
-    /// Distinct shift sequences.
-    Shifts,
     /// Word-offset table entries.
     WordOffsets,
 }
@@ -219,12 +267,25 @@ pub enum KeyCompileError {
     },
 }
 
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy)]
 struct PackedReference {
     /// The encoded operation and shift sequence.
     key_code: u32,
     /// The relation consumer of the shifted word.
     constraint: ConstraintReference,
+}
+
+impl Default for PackedReference {
+    fn default() -> Self {
+        // Every placeholder is overwritten before compilation reads it.
+        Self {
+            key_code: 0,
+            constraint: ConstraintReference {
+                operand: OperandRole::Value,
+                constraint: 0,
+            },
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -271,18 +332,19 @@ fn for_each_reference<W: Word>(
     for (constraint, relation) in system.zero_constraints().iter().enumerate() {
         visit_operand(
             ConstraintKind::Zero,
-            0,
+            OperandRole::Value,
             u32::try_from(constraint).expect("constraint counts were bounded before compilation"),
             relation.value(),
             &mut visit,
         )?;
     }
-    for operand in 0..3 {
+    for operand in [OperandRole::Left, OperandRole::Right, OperandRole::Output] {
         for (constraint, relation) in system.and_constraints().iter().enumerate() {
             let value = match operand {
-                0 => relation.left(),
-                1 => relation.right(),
-                _ => relation.output(),
+                OperandRole::Left => relation.left(),
+                OperandRole::Right => relation.right(),
+                OperandRole::Output => relation.output(),
+                _ => unreachable!("AND relations expose only three operand roles"),
             };
             visit_operand(
                 ConstraintKind::And,
@@ -294,13 +356,19 @@ fn for_each_reference<W: Word>(
             )?;
         }
     }
-    for operand in 0..4 {
+    for operand in [
+        OperandRole::Left,
+        OperandRole::Right,
+        OperandRole::Low,
+        OperandRole::High,
+    ] {
         for (constraint, relation) in system.integer_mul_constraints().iter().enumerate() {
             let value = match operand {
-                0 => relation.left(),
-                1 => relation.right(),
-                2 => relation.low(),
-                _ => relation.high(),
+                OperandRole::Left => relation.left(),
+                OperandRole::Right => relation.right(),
+                OperandRole::Low => relation.low(),
+                OperandRole::High => relation.high(),
+                _ => unreachable!("multiplication relations expose only four operand roles"),
             };
             visit_operand(
                 ConstraintKind::IntegerMul,
@@ -317,7 +385,7 @@ fn for_each_reference<W: Word>(
 
 fn visit_operand<W: Word>(
     operation: ConstraintKind,
-    operand: u8,
+    operand: OperandRole,
     constraint: u32,
     value: &Operand<W>,
     visit: &mut impl FnMut(Reference) -> Result<(), KeyCompileError>,
@@ -372,13 +440,6 @@ fn build_segment<W: Word>(
         .collect::<Vec<_>>();
     sequence_codes.sort_unstable();
     sequence_codes.dedup();
-    if sequence_codes.len() > u16::MAX as usize + 1 {
-        return Err(KeyCompileError::LayoutTooLarge {
-            segment,
-            component: LayoutComponent::Shifts,
-            len: sequence_codes.len(),
-        });
-    }
     let shifts = sequence_codes
         .iter()
         .copied()
@@ -432,9 +493,9 @@ fn build_segment<W: Word>(
             let shift = sequence_codes
                 .binary_search(&sequence)
                 .expect("the dense shift list covers every key");
-            let shift = u16::try_from(shift)
-                .expect("the dense shift count was bounded before key construction");
-            keys.push(CompiledKey {
+            let shift =
+                u32::try_from(shift).expect("two 9-bit shift codes fit in a 32-bit dense index");
+            keys.push(StoredKey {
                 operation: decode_operation(code),
                 shift,
                 references: reference_start..reference_end,
@@ -553,38 +614,35 @@ mod tests {
         .unwrap();
 
         let layout = CompiledKeyLayout::new(&system).unwrap();
-        let public_keys = layout.public().keys(0).unwrap();
+        let public_keys = layout.public().keys(0).unwrap().collect::<Vec<_>>();
         assert_eq!(public_keys.len(), 2);
+        assert_eq!(public_keys[0].shifts(), [rotate, Shift::identity()]);
         assert_eq!(
-            layout.public().shifts(&public_keys[0]),
-            Some([rotate, Shift::identity()])
-        );
-        assert_eq!(
-            layout.public().references(&public_keys[1]).unwrap(),
+            public_keys[1].references(),
             &[
                 ConstraintReference {
-                    operand: 0,
+                    operand: OperandRole::Left,
                     constraint: 0,
                 },
                 ConstraintReference {
-                    operand: 1,
+                    operand: OperandRole::Right,
                     constraint: 0,
                 },
             ]
         );
 
-        assert!(layout.witness().keys(0).unwrap().is_empty());
-        let witness_keys = layout.witness().keys(1).unwrap();
+        assert_eq!(layout.witness().keys(0).unwrap().len(), 0);
+        let witness_keys = layout.witness().keys(1).unwrap().collect::<Vec<_>>();
         assert_eq!(witness_keys.len(), 2);
         assert_eq!(
-            layout.witness().references(&witness_keys[0]).unwrap(),
+            witness_keys[0].references(),
             &[
                 ConstraintReference {
-                    operand: 0,
+                    operand: OperandRole::Value,
                     constraint: 0,
                 },
                 ConstraintReference {
-                    operand: 0,
+                    operand: OperandRole::Value,
                     constraint: 0,
                 },
             ]
@@ -615,9 +673,9 @@ mod tests {
         .unwrap();
 
         let layout = CompiledKeyLayout::new(&system).unwrap();
-        let keys = layout.witness().keys(0).unwrap();
+        let keys = layout.witness().keys(0).unwrap().collect::<Vec<_>>();
         assert_eq!(
-            keys.iter().map(CompiledKey::operation).collect::<Vec<_>>(),
+            keys.iter().map(|key| key.operation()).collect::<Vec<_>>(),
             [
                 ConstraintKind::Zero,
                 ConstraintKind::And,
@@ -625,18 +683,18 @@ mod tests {
             ]
         );
         assert_eq!(
-            layout.witness().references(&keys[1]).unwrap(),
+            keys[1].references(),
             &[
                 ConstraintReference {
-                    operand: 0,
+                    operand: OperandRole::Left,
                     constraint: 0,
                 },
                 ConstraintReference {
-                    operand: 1,
+                    operand: OperandRole::Right,
                     constraint: 0,
                 },
                 ConstraintReference {
-                    operand: 2,
+                    operand: OperandRole::Output,
                     constraint: 0,
                 },
             ]
@@ -661,12 +719,10 @@ mod tests {
         .unwrap();
 
         let layout = CompiledKeyLayout::new(&system).unwrap();
-        let keys = layout.witness().keys(0).unwrap();
+        let keys = layout.witness().keys(0).unwrap().collect::<Vec<_>>();
         assert_eq!(keys.len(), 2);
-        assert_ne!(
-            layout.witness().shifts(&keys[0]),
-            layout.witness().shifts(&keys[1])
-        );
+        assert_ne!(keys[0].shifts(), keys[1].shifts());
+        assert_ne!(keys[0].shift_index(), keys[1].shift_index());
     }
 
     #[test]
@@ -685,8 +741,104 @@ mod tests {
         .unwrap();
 
         let layout = CompiledKeyLayout::new(&system).unwrap();
-        let key = &layout.witness().keys(0).unwrap()[0];
-        assert_eq!(layout.witness().shifts(key), Some([inner, outer]));
+        let key = layout.witness().keys(0).unwrap().next().unwrap();
+        assert_eq!(key.shifts(), [inner, outer]);
+        assert_eq!(
+            layout.witness().shift_sequences()[key.shift_index() as usize],
+            [inner, outer]
+        );
+    }
+
+    #[test]
+    fn resolved_keys_cannot_cross_segment_boundaries() {
+        // Public and committed words deliberately use different movements at the same position.
+        let public = ValueIndex::public(0).unwrap();
+        let witness = ValueIndex::witness(0).unwrap();
+        let rotate = Shift::new(ShiftKind::RotateRight, 3).unwrap();
+        let left = Shift::new(ShiftKind::LogicalLeft, 5).unwrap();
+        let system = ConstraintSystem::new(
+            1,
+            1,
+            vec![ZeroConstraint::new(Operand::new(vec![
+                ShiftedValue::<Word64>::single(public, rotate),
+                ShiftedValue::<Word64>::single(witness, left),
+            ]))],
+            vec![],
+            vec![],
+        )
+        .unwrap();
+
+        // Each iterator resolves indices only through the segment that owns them.
+        let public_key = layout_key(&system, Segment::Public);
+        let witness_key = layout_key(&system, Segment::Witness);
+        assert_eq!(public_key, [rotate, Shift::identity()]);
+        assert_eq!(witness_key, [left, Shift::identity()]);
+    }
+
+    fn layout_key(system: &ConstraintSystem<Word64>, segment: Segment) -> [Shift<Word64>; 2] {
+        // Select the independent table whose key must be resolved.
+        let layout = CompiledKeyLayout::new(system).unwrap();
+        let compiled = match segment {
+            Segment::Public => layout.public(),
+            Segment::Witness => layout.witness(),
+        };
+        compiled.keys(0).unwrap().next().unwrap().shifts()
+    }
+
+    #[test]
+    fn more_than_u16_shift_sequences_compile() {
+        // Enumerate every checked movement once before forming irreducible pairs.
+        let index = ValueIndex::witness(0).unwrap();
+        let mut shifts = vec![Shift::<Word64>::identity()];
+        for kind in [
+            ShiftKind::LogicalLeft,
+            ShiftKind::LogicalRight,
+            ShiftKind::ArithmeticRight,
+            ShiftKind::RotateRight,
+            ShiftKind::Lane32LogicalLeft,
+            ShiftKind::Lane32LogicalRight,
+            ShiftKind::Lane32ArithmeticRight,
+            ShiftKind::Lane32RotateRight,
+        ] {
+            let width = if kind.is_lane32() { 32 } else { 64 };
+            for amount in 1..width {
+                shifts.push(Shift::new(kind, amount).unwrap());
+            }
+        }
+
+        // Fixture state: 65,537 distinct spellings exceed the former 16-bit index space.
+        let target = u16::MAX as usize + 2;
+        let mut terms = shifts
+            .iter()
+            .copied()
+            .map(|shift| ShiftedValue::single(index, shift))
+            .collect::<Vec<_>>();
+        'outer: for &inner in &shifts {
+            for &outer in &shifts {
+                if let Ok(term) = ShiftedValue::pair(index, inner, outer) {
+                    terms.push(term);
+                    if terms.len() == target {
+                        break 'outer;
+                    }
+                }
+            }
+        }
+        assert_eq!(terms.len(), target);
+
+        // A 32-bit dense index preserves every valid shift spelling.
+        let system = ConstraintSystem::new(
+            0,
+            1,
+            vec![ZeroConstraint::new(Operand::new(terms))],
+            vec![],
+            vec![],
+        )
+        .unwrap();
+        let layout = CompiledKeyLayout::new(&system).unwrap();
+        let keys = layout.witness().keys(0).unwrap();
+        assert_eq!(keys.len(), target);
+        assert_eq!(layout.witness().shift_sequences().len(), target);
+        assert!(keys.map(|key| key.shift_index()).max().unwrap() > u32::from(u16::MAX));
     }
 
     #[test]

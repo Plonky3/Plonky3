@@ -189,5 +189,9 @@ name = "p3-word"
 version_group = "plonky3"
 
 [[package]]
+name = "p3-word-backend"
+version_group = "plonky3"
+
+[[package]]
 name = "p3-zk-codes"
 version_group = "plonky3"

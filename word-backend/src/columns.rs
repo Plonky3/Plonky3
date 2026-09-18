@@ -28,7 +28,7 @@ impl<W: PackedWord> OperationColumns<W> {
                 let word = values
                     .get(term.index())
                     .expect("the checked system only contains in-bounds indices");
-                result += W::pack(term.outer().apply(term.inner().apply(word)));
+                result += W::pack(term.apply(word));
             }
             result
         };
