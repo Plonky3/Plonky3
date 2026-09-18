@@ -3,10 +3,14 @@
 
 extern crate alloc;
 
+mod builder;
 mod leaf;
 mod product;
 mod transcript;
 
+pub use builder::{
+    BusActivation, BusInteractionBuilder, BusSymbolicBuilder, SymbolicBusInteraction,
+};
 pub use leaf::{BusDirection, BusLeafDeclaration, BusLeafError, BusLeaves, BusSelector};
 pub use product::{
     ProductGkrError, ProductGkrLayerProof, ProductGkrOutput, ProductGkrProof, ProductGkrRootShape,
