@@ -624,6 +624,21 @@ fn backends_agree_on_stages_tall_enough_to_fold_in_parallel() {
     assert_backends_agree(&instances, || LookupRuntime::Inactive, 0);
 }
 
+#[test]
+fn backends_agree_on_stages_tall_enough_to_slice() {
+    // Fixture state:
+    //
+    //     stage 2^9 rows : gate (degree 3) and pair (degree 2), sliced from round 0
+    //     stage 2^7 rows : gate, sliced once it activates two rounds later
+    let instances = [
+        Instance::honest(FixtureAir::Gate { scale: Tower::ONE }, 1 << 9, 20),
+        Instance::honest(FixtureAir::Pair, 1 << 9, 21),
+        Instance::honest(FixtureAir::Gate { scale: gf4(3) }, 1 << 7, 22),
+    ];
+    assert_backends_agree(&instances, || LookupRuntime::Inactive, 0);
+    assert_backends_agree(&instances, || LookupRuntime::Inactive, 2);
+}
+
 /// Degrees the symbolic pass sees, so a fixture cannot drift from the shape its test names.
 #[test]
 fn fixture_degrees_are_the_named_ones() {

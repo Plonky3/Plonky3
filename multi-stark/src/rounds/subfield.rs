@@ -204,7 +204,9 @@ where
         EF: HasSubfield<S>,
         A: for<'b> Air<MultilinearFolder<'b, F, SubfieldVar<F, S>, SubfieldAcc<EF, S>>>,
     {
-        let schedule = self.subfield_schedule::<S>();
+        let schedule = self
+            .subfield_schedule::<S>()
+            .filter(|_| self.cells_fit_subfield::<S>());
         self.fits_subfield = schedule.is_some();
         let schedule = schedule?;
         let eq_suffix = eq_suffix.as_slice();
@@ -305,12 +307,12 @@ where
     /// - every interpolation step of the first round lies in `S`;
     /// - every public value lies in `S`;
     /// - every periodic value lies in `S`, read from the AIR's period vectors;
-    /// - every main and preprocessed cell lies in `S`.
+    /// - every main and preprocessed cell lies in `S`, which [`Self::cells_fit_subfield`] checks.
     ///
     /// AIR constants are not checked here: they reach the rows as poison instead.
     /// Each failed condition emits a `debug` event naming it.
     #[tracing::instrument(skip_all, level = "debug")]
-    fn subfield_schedule<S>(&self) -> Option<Vec<(usize, NodeStep<S>)>>
+    pub(super) fn subfield_schedule<S>(&self) -> Option<Vec<(usize, NodeStep<S>)>>
     where
         S: Field,
         F: HasSubfield<S>,
@@ -356,7 +358,17 @@ where
         }) {
             return fall_back("a periodic value lies outside the subfield");
         }
+        Some(schedule)
+    }
 
+    /// Whether every main and preprocessed cell of the stage lies in `S`.
+    ///
+    /// The last condition of fitting `S`, and the only one that reads every cell.
+    fn cells_fit_subfield<S>(&self) -> bool
+    where
+        S: Field,
+        F: HasSubfield<S>,
+    {
         let columns = self
             .tables
             .iter()
@@ -369,9 +381,10 @@ where
                 .par_chunks(SCAN_CHUNK_CELLS)
                 .all(|chunk| F::all_in_subfield(chunk))
         }) {
-            return fall_back("a main or preprocessed cell lies outside the subfield");
+            let _: Option<()> = fall_back("a main or preprocessed cell lies outside the subfield");
+            return false;
         }
-        Some(schedule)
+        true
     }
 
     /// Sum the eq-weighted constraint values of the leading residual rows inside `S`.
@@ -542,4 +555,4 @@ where
 }
 
 #[cfg(test)]
-mod tests;
+pub(super) mod tests;

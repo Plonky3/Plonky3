@@ -24,6 +24,7 @@ use p3_matrix::dense::RowMajorMatrix;
 use p3_multi_stark::config::{MultiStarkConfig, PcsError, PcsProverError};
 use p3_multi_stark::folder::{InteractionMultilinearFolder, MultilinearFolder};
 use p3_multi_stark::packed_ext::PackedExt;
+use p3_multi_stark::sliced::SlicedFolder;
 use p3_multi_stark::subfield::{SubfieldAcc, SubfieldVar};
 use p3_multi_stark::{
     MultiStarkProof, ProverInstance, ProverInstances, ProvingError, ReprBackend, SecurityError,
@@ -318,8 +319,9 @@ impl From<VerificationError<PcsError<BinaryStarkConfig<2>>>> for BinaryProofErro
 /// one exactly once, so its blanket impl below is what callers actually need to satisfy.
 ///
 /// The subfield bound is the folder [`SubfieldBackend`] evaluates the first zerocheck round with,
-/// inside `GF(4)`. The last two are the folders [`ReprBackend`] evaluates the later rounds with,
-/// in the polynomial basis.
+/// inside `GF(4)`, and the two sliced bounds are the folders it and [`ReprBackend`] evaluate it
+/// with sixty-four rows at a time. The last two are the folders [`ReprBackend`] evaluates the
+/// later rounds with, in the polynomial basis.
 pub trait BinaryAir:
     BaseAir<F>
     + Air<InteractionSymbolicBuilder<F, F>>
@@ -329,7 +331,9 @@ pub trait BinaryAir:
     + for<'a> Air<InteractionMultilinearFolder<'a, F, PackedExt<F, F>, PackedExt<F, F>>>
     + for<'a> Air<
         MultilinearFolder<'a, F, SubfieldVar<F, BinaryField2>, SubfieldAcc<F, BinaryField2>>,
-    > + for<'a> Air<MultilinearFolder<'a, F, Ghash128, Ghash128>>
+    > + for<'a> Air<SlicedFolder<'a, F, BinaryField2, F>>
+    + for<'a> Air<SlicedFolder<'a, F, BinaryField2, Ghash128>>
+    + for<'a> Air<MultilinearFolder<'a, F, Ghash128, Ghash128>>
     + for<'a> Air<InteractionMultilinearFolder<'a, F, Ghash128, Ghash128>>
 {
 }
@@ -343,7 +347,9 @@ impl<A> BinaryAir for A where
         + for<'a> Air<InteractionMultilinearFolder<'a, F, PackedExt<F, F>, PackedExt<F, F>>>
         + for<'a> Air<
             MultilinearFolder<'a, F, SubfieldVar<F, BinaryField2>, SubfieldAcc<F, BinaryField2>>,
-        > + for<'a> Air<MultilinearFolder<'a, F, Ghash128, Ghash128>>
+        > + for<'a> Air<SlicedFolder<'a, F, BinaryField2, F>>
+        + for<'a> Air<SlicedFolder<'a, F, BinaryField2, Ghash128>>
+        + for<'a> Air<MultilinearFolder<'a, F, Ghash128, Ghash128>>
         + for<'a> Air<InteractionMultilinearFolder<'a, F, Ghash128, Ghash128>>
 {
 }

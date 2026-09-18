@@ -23,6 +23,7 @@ use p3_multilinear_util::poly::Poly;
 
 use crate::folder::{InteractionMultilinearFolder, MultilinearFolder, ProverAir};
 use crate::rounds::{AirOpenings, RoundStateBase, RoundStateExt};
+use crate::sliced::SlicedFolder;
 use crate::subfield::{SubfieldAcc, SubfieldVar};
 
 // The trait lives in a private module, so no caller outside this crate can name or call it.
@@ -144,6 +145,9 @@ where
 ///     later rounds          : as GenericBackend
 /// ```
 ///
+/// When `S` is `GF(4)` and each half of the stage holds at least sixty-four rows, the first round
+/// evaluates the AIR sixty-four rows at a time on bit planes of the trace, see [`crate::sliced`].
+///
 /// A stage fits `S` when all of these hold:
 ///
 /// - no AIR in it declares a lookup;
@@ -167,14 +171,16 @@ where
     F: HasSubfield<S>,
     EF: ExtensionField<F> + HasSubfield<S>,
     A: ProverAir<F, EF>
-        + for<'a> Air<MultilinearFolder<'a, F, SubfieldVar<F, S>, SubfieldAcc<EF, S>>>,
+        + for<'a> Air<MultilinearFolder<'a, F, SubfieldVar<F, S>, SubfieldAcc<EF, S>>>
+        + for<'a> Air<SlicedFolder<'a, F, S, EF>>,
     EF::ExtensionPacking: From<EF> + From<F::Packing>,
 {
     type Repr = EF;
 
     fn round0(state: &mut RoundStateBase<'_, '_, A, F, EF>, eq_suffix: &Poly<EF>) -> Vec<EF> {
         state
-            .round_poly_subfield::<S>(eq_suffix)
+            .round_poly_sliced::<S, EF>(eq_suffix)
+            .or_else(|| state.round_poly_subfield::<S>(eq_suffix))
             .unwrap_or_else(|| state.round_poly(eq_suffix))
     }
 
@@ -206,7 +212,7 @@ where
 /// challenge field.
 ///
 /// ```text
-///     round 0      : as SubfieldBackend<S>
+///     round 0      : as SubfieldBackend<S>, its sixty-four-row sums accumulated in R
 ///     fold 0       : every column folds straight into R
 ///     later rounds : columns, selectors, and AIR expressions in R, one residual row at a time
 /// ```
@@ -246,6 +252,7 @@ where
     R: Field + Algebra<F> + From<EF>,
     A: ProverAir<F, EF>
         + for<'a> Air<MultilinearFolder<'a, F, SubfieldVar<F, S>, SubfieldAcc<EF, S>>>
+        + for<'a> Air<SlicedFolder<'a, F, S, R>>
         + for<'a> Air<MultilinearFolder<'a, F, R, R>>
         + for<'a> Air<InteractionMultilinearFolder<'a, F, R, R>>,
     EF::ExtensionPacking: From<EF> + From<F::Packing>,
@@ -253,7 +260,10 @@ where
     type Repr = R;
 
     fn round0(state: &mut RoundStateBase<'_, '_, A, F, EF>, eq_suffix: &Poly<EF>) -> Vec<EF> {
-        <SubfieldBackend<S> as private::Dispatch<F, EF, A>>::round0(state, eq_suffix)
+        state
+            .round_poly_sliced::<S, R>(eq_suffix)
+            .or_else(|| state.round_poly_subfield::<S>(eq_suffix))
+            .unwrap_or_else(|| state.round_poly(eq_suffix))
     }
 
     fn fold0<'air, 'data>(

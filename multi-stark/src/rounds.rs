@@ -3,6 +3,7 @@
 //! Builds round polynomials for `sum_x eq(tau, x) * g(x)` and folds state across challenges.
 
 mod repr;
+mod sliced;
 mod subfield;
 
 use alloc::collections::BTreeMap;

@@ -32,6 +32,7 @@ pub mod prover;
 pub mod rounds;
 pub mod security;
 pub mod selectors;
+pub mod sliced;
 pub mod subfield;
 pub mod transcript;
 pub mod verifier;
