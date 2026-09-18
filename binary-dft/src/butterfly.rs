@@ -202,6 +202,12 @@ where
 ///
 /// A carryless-multiply instruction breaks that at the widest two levels.
 /// Only the one-byte coordinates stay ahead of it, being single table lookups.
+///
+/// The field crate makes the same call for the product alone, and this is not the same call.
+/// A typed run walks one element at a time, and the full-width run packs a register of them.
+///
+/// The whole chain is inlined into one kernel.
+/// So carrying the wide levels through it costs the full-width route its own codegen.
 const WIDE_TYPED_PRODUCTS_PAY: bool = !HAS_HARDWARE_CLMUL;
 
 /// A tower level together with the typed subfield products its own width admits.

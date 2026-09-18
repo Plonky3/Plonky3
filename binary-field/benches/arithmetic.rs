@@ -7,8 +7,12 @@
 //! same code with the fast path turned off.
 
 use std::hint::black_box;
+use std::ops::Mul;
 
-use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
+use criterion::measurement::Measurement;
+use criterion::{
+    BatchSize, BenchmarkGroup, BenchmarkId, Criterion, criterion_group, criterion_main,
+};
 use p3_binary_field::{
     BinaryField8, BinaryField16, BinaryField32, BinaryField64, BinaryField128, Ghash128,
     LinearizedPoly8b, PackedRijndael8b, Poly64, Poly192, Rijndael8b, TowerLevel, poly_basis,
@@ -205,6 +209,54 @@ fn bench_mul_alpha(c: &mut Criterion) {
                 .fold(BinaryField128::ZERO, |acc, &y| acc + y.mul_alpha())
         });
     });
+    group.finish();
+}
+
+/// Products of a wide element by a narrow one, at one pair of byte-aligned levels.
+///
+/// The narrow operand is fixed and the wide ones vary, which is the shape a twiddle takes.
+/// The accumulator is a bitwise exclusive-or, so the products are free to overlap.
+fn subfield_mul_arm<U, L, M: Measurement>(
+    group: &mut BenchmarkGroup<'_, M>,
+    upper: &str,
+    lower: &str,
+) where
+    U: TowerLevel + Mul<L, Output = U>,
+    L: TowerLevel,
+    StandardUniform: Distribution<U> + Distribution<L>,
+{
+    let mut rng = SmallRng::seed_from_u64(1);
+    let wide: Vec<U> = (0..REPS).map(|_| rng.random()).collect();
+    let narrow: L = rng.random();
+
+    group.bench_function(BenchmarkId::new(upper, lower), |b| {
+        b.iter(|| {
+            black_box(&wide)
+                .iter()
+                .fold(U::ZERO, |acc, &y| acc + y * black_box(narrow))
+        });
+    });
+}
+
+/// A product of a wide element by an element of a level below it, at every such pair.
+///
+/// One route expands the wide operand into coordinates over the narrow level.
+/// The other embeds the narrow operand and takes the wide level's own product.
+///
+/// Coordinate count falls as the narrow level widens, and each coordinate product costs more.
+/// These arms are what fixes where the two routes cross on a given host.
+fn bench_subfield_mul(c: &mut Criterion) {
+    let mut group = c.benchmark_group("subfield_mul");
+
+    subfield_mul_arm::<BinaryField64, BinaryField8, _>(&mut group, "64", "8");
+    subfield_mul_arm::<BinaryField64, BinaryField16, _>(&mut group, "64", "16");
+    subfield_mul_arm::<BinaryField64, BinaryField32, _>(&mut group, "64", "32");
+
+    subfield_mul_arm::<BinaryField128, BinaryField8, _>(&mut group, "128", "8");
+    subfield_mul_arm::<BinaryField128, BinaryField16, _>(&mut group, "128", "16");
+    subfield_mul_arm::<BinaryField128, BinaryField32, _>(&mut group, "128", "32");
+    subfield_mul_arm::<BinaryField128, BinaryField64, _>(&mut group, "128", "64");
+
     group.finish();
 }
 
@@ -1118,6 +1170,7 @@ criterion_group!(
     bench_square,
     bench_inverse,
     bench_mul_alpha,
+    bench_subfield_mul,
     bench_flatten_to_base,
     bench_representation_mul_latency,
     bench_representation_mul_throughput,

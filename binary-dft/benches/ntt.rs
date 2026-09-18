@@ -9,7 +9,7 @@ use criterion::{
 use p3_baby_bear::BabyBear;
 use p3_binary_dft::{
     AdditiveNtt, AdditiveRsEncoder, ButterflyField, LchNtt, PolyBasisNtt, interleaved_encode_batch,
-    subfield_ntt_batch,
+    subfield_encode_batch, subfield_ntt_batch,
 };
 use p3_binary_field::{
     BinaryField8, BinaryField16, BinaryField32, BinaryField64, BinaryField128, Ghash128, TowerLevel,
@@ -18,6 +18,7 @@ use p3_commit::Encoder;
 use p3_dft::Radix2DFTSmallBatch;
 use p3_field::PrimeCharacteristicRing;
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView, RowMajorMatrixViewMut};
+use p3_maybe_rayon::prelude::*;
 use rand::distr::{Distribution, StandardUniform};
 use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
@@ -264,9 +265,15 @@ fn bench_subfield(c: &mut Criterion) {
             // Throughput counts the matrix entries, so every arm compares directly.
             group.throughput(Throughput::Elements((width << log_height) as u64));
 
+            // The specialised route widens across the machine above a few mebibytes.
+            // A serial widen here would charge the wide arms its page faults as well.
             let widen = |m: &RowMajorMatrix<BinaryField8>| {
                 RowMajorMatrix::new(
-                    m.values.iter().copied().map(BinaryField128::from).collect(),
+                    m.values
+                        .par_iter()
+                        .copied()
+                        .map(BinaryField128::from)
+                        .collect(),
                     width,
                 )
             };
@@ -281,6 +288,16 @@ fn bench_subfield(c: &mut Criterion) {
                 b.iter_batched(
                     || message.clone(),
                     subfield_ntt_batch::<BinaryField8, BinaryField128>,
+                    BatchSize::PerIteration,
+                );
+            });
+
+            // The encoder over the same message, where the zero padding is byte-sized too.
+            // Throughput still counts the message entries, so it compares with the arms above.
+            group.bench_function(BenchmarkId::new("subfield/encode", &parameter), |b| {
+                b.iter_batched(
+                    || message.clone(),
+                    |m| subfield_encode_batch::<BinaryField8, BinaryField128>(m, LOG_INV_RATE),
                     BatchSize::PerIteration,
                 );
             });
@@ -326,8 +343,8 @@ fn bench_interleaved(c: &mut Criterion) {
                 });
             });
 
-            // The same two passes over the transform the fused path itself runs on.
-            // The pair therefore isolates the fusion from the choice of backend.
+            // The same backend as the fused path, and the same padded entry point.
+            // So the pair differs in the transpose alone, not in the layers it skips.
             let lch = LchNtt::<BinaryField128>::default();
             group.bench_function(BenchmarkId::new("two_pass/lch", &parameter), |b| {
                 b.iter(|| {
@@ -336,7 +353,7 @@ fn bench_interleaved(c: &mut Criterion) {
                     let mut target =
                         RowMajorMatrixViewMut::new(&mut values[..columns.len()], WIDTH);
                     source.transpose_into(&mut target);
-                    lch.ntt_batch(RowMajorMatrix::new(values, WIDTH))
+                    lch.ntt_batch_padded(RowMajorMatrix::new(values, WIDTH), log_inv_rate)
                 });
             });
 

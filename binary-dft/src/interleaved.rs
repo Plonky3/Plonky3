@@ -1,17 +1,16 @@
 //! The interleaved Reed–Solomon codeword a multi-rate commitment's levels read.
 
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView, RowMajorMatrixViewMut};
-use p3_maybe_rayon::prelude::*;
 
 use crate::butterfly::ButterflyField;
-use crate::domain::domain_point;
-use crate::lch::transform_stages;
+use crate::encoder::padded_message_len;
+use crate::lch::transform_cosets;
 
 /// Reed–Solomon encode a message held one folding column at a time.
 ///
 /// # Overview
 ///
-/// A commitment that folds `2^f` variables at a time opens whole folding blocks at once.
+/// A commitment that folds `f` variables at a time opens whole folding blocks at once.
 /// Its codeword is therefore a matrix of `2^f` columns, one row per domain point.
 ///
 /// A prover holds the opposite layout, with each column's coefficients contiguous.
@@ -19,24 +18,8 @@ use crate::lch::transform_stages;
 ///
 /// Bringing the two layouts together as a pass of its own writes the message once more.
 ///
-/// # Algorithm
-///
-/// Zero-padding the coefficients is what extends the domain.
-/// The layers that cross the padding therefore read only zeros:
-///
-/// ```text
-///     (u, 0)  ->  (u + t*0, u + t*0 + 0)  =  (u, u)
-/// ```
-///
-/// Those layers copy the message into each coset of its own subspace and compute nothing.
-/// What is left is one shifted transform per coset, over the coset's own rows.
-///
-/// So the interleaving rides along with a copy that has to happen anyway:
-///
-/// ```text
-///     coset 0    columns interleaved into place
-///     coset c    a contiguous copy of coset 0, then its own shifted transform
-/// ```
+/// The transform this hands the result to skips the layers that cross the padding.
+/// So the interleaving rides along with a copy that has to happen anyway.
 ///
 /// # Arguments
 ///
@@ -50,42 +33,42 @@ use crate::lch::transform_stages;
 ///
 /// # Panics
 ///
-/// Panics if the values do not divide into whole columns.
+/// Panics if there is no column, or if the values do not divide into whole columns.
 /// Panics if the extended domain exceeds the bit width of the level.
+///
+/// Panics if the codeword length overflows the address space.
 #[must_use]
 pub fn interleaved_encode_batch<F: ButterflyField>(
     columns: &[F],
     log_message: usize,
     log_inv_rate: usize,
 ) -> RowMajorMatrix<F> {
-    let rows = 1usize << log_message;
-    assert_eq!(columns.len() % rows, 0, "whole message columns");
+    // A codeword of no columns has neither a width to interleave into nor a height to read.
+    assert!(!columns.is_empty(), "at least one message column");
     assert!(
         log_message + log_inv_rate <= 1 << F::LOG_BITS,
         "domain exceeds field dimension"
     );
 
+    // The widest level admits 128 dimensions, which is past what a length can address.
+    // So the row count is what bounds the dimension, not the level.
+    let rows = u32::try_from(log_message)
+        .ok()
+        .and_then(|bits| 1usize.checked_shl(bits))
+        .expect("message dimension overflows usize");
+    assert_eq!(columns.len() % rows, 0, "whole message columns");
+
     let width = columns.len() / rows;
     let len = columns.len();
-    let mut values = F::zero_vec(len << log_inv_rate);
+    let mut values = F::zero_vec(padded_message_len(len, log_inv_rate));
 
     // The first coset is the message with its columns interleaved, blocked by the transpose.
-    let (first, rest) = values.split_at_mut(len);
-    if width != 0 {
-        let source = RowMajorMatrixView::new(columns, rows);
-        let mut target = RowMajorMatrixViewMut::new(first, width);
-        source.transpose_into(&mut target);
-    }
+    let source = RowMajorMatrixView::new(columns, rows);
+    let mut target = RowMajorMatrixViewMut::new(&mut values[..len], width);
+    source.transpose_into(&mut target);
 
-    // Every other coset is a copy of it, transformed where the copy leaves it in cache.
-    rest.par_chunks_mut(len).enumerate().for_each(|(c, coset)| {
-        coset.copy_from_slice(first);
-        let shift = domain_point::<F>((c + 1) << log_message);
-        transform_stages::<F, false>(coset, width, log_message, shift);
-    });
-
-    // The subspace itself is the coset with no shift.
-    transform_stages::<F, false>(first, width, log_message, F::ZERO);
+    // Every coset above it is a copy of that one, then its own shifted transform.
+    transform_cosets::<F>(&mut values, width, log_message);
 
     RowMajorMatrix::new(values, width)
 }
@@ -237,6 +220,23 @@ mod tests {
                 assert_eq!(codeword.values[i * WIDTH + j], *value, "column={j} row={i}");
             }
         }
+    }
+
+    #[test]
+    #[should_panic = "at least one message column"]
+    fn a_message_with_no_column_is_refused() {
+        // A codeword of no columns has no width to interleave into and no height to read off.
+        // Every later step divides by one of the two, so the shape has to be rejected here.
+        let _ = interleaved_encode_batch::<BinaryField32>(&[], 3, 1);
+    }
+
+    #[test]
+    #[should_panic = "message dimension overflows usize"]
+    fn a_message_dimension_past_the_address_space_is_refused() {
+        // The widest level admits 128 domain dimensions, and a length addresses at most 64.
+        // So a dimension the level allows can still have no row count to describe it.
+        let values = columns::<BinaryField128>(1, 1, 0);
+        let _ = interleaved_encode_batch::<BinaryField128>(&values, 100, 1);
     }
 
     #[test]

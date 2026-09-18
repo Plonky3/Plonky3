@@ -9,6 +9,7 @@ use p3_maybe_rayon::prelude::*;
 use p3_util::log2_strict_usize;
 
 use crate::butterfly::ButterflyField;
+use crate::encoder::padded_message_len;
 use crate::lch::transform_stages;
 
 /// Number of widest butterfly layers a subfield of `2^log_bits` bits is closed under.
@@ -104,7 +105,7 @@ where
 /// # Panics
 ///
 /// Panics if the height is not a power of two.
-/// Panics if the domain dimension exceeds the bit width of either level.
+/// Panics if the domain dimension exceeds the bit width of the wider level.
 #[must_use]
 pub fn subfield_ntt_batch<S, F>(mat: RowMajorMatrix<S>) -> RowMajorMatrix<F>
 where
@@ -144,16 +145,8 @@ where
     S: ButterflyField,
     F: ButterflyField + From<S>,
 {
-    let len = message.values.len();
+    let padded_len = padded_message_len(message.values.len(), log_inv_rate);
     let _ = log2_strict_usize(message.height());
-
-    // A shift amount below the word size still leaves the value itself free to overflow.
-    // Recovering the original length from the shifted one is what proves no bits were lost.
-    let padded_len = u32::try_from(log_inv_rate)
-        .ok()
-        .and_then(|rate| len.checked_shl(rate))
-        .filter(|&padded| padded >> log_inv_rate == len)
-        .expect("codeword length overflows usize");
 
     message.values.resize(padded_len, S::ZERO);
     subfield_ntt_batch(message)
@@ -283,24 +276,41 @@ mod tests {
         );
     }
 
+    /// The deepest split of one shape, against the novel basis read from its product definition.
+    fn check_against_the_oracle(log_n: usize, width: usize) {
+        let message = matrix::<BinaryField8>(log_n, width, 31);
+        let wide = RowMajorMatrix::new(widen::<_, BinaryField128>(&message.values), width);
+        let expected = NaiveAdditiveNtt::default().ntt_batch(wide);
+
+        // The deepest split the height allows, which is where phase 1 does the most.
+        let head = closed_layers(BinaryField8::LOG_BITS).min(log_n);
+        assert_eq!(
+            split_ntt_batch::<_, BinaryField128>(message, head),
+            expected,
+            "log_n={log_n} width={width}"
+        );
+    }
+
     #[test]
     fn a_byte_message_matches_the_reference_oracle() {
         // The oracle evaluates the novel basis straight from its product definition.
         // So it pins the split to that basis, not to another split of the same network.
         for width in [1usize, 3] {
             for log_n in 0..=6 {
-                let message = matrix::<BinaryField8>(log_n, width, 31);
-                let wide = RowMajorMatrix::new(widen::<_, BinaryField128>(&message.values), width);
-                let expected = NaiveAdditiveNtt::default().ntt_batch(wide);
-
-                // The deepest split the height allows, which is where phase 1 does the most.
-                let head = closed_layers(BinaryField8::LOG_BITS).min(log_n);
-                assert_eq!(
-                    split_ntt_batch::<_, BinaryField128>(message, head),
-                    expected,
-                    "log_n={log_n} width={width}"
-                );
+                check_against_the_oracle(log_n, width);
             }
+        }
+    }
+
+    #[test]
+    fn a_byte_message_past_the_closed_layers_matches_the_reference_oracle() {
+        // Invariant: both phases are pinned to the definition, not the narrow phase alone.
+        // A byte subfield is closed under eight layers, so phase 2 is empty below 2^9.
+        //
+        //     log_n = 9   head = 8, phase 2 runs one layer at the wide width
+        //     log_n = 10  head = 8, phase 2 runs two of them
+        for log_n in [9usize, 10] {
+            check_against_the_oracle(log_n, 1);
         }
     }
 
