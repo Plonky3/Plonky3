@@ -12,7 +12,8 @@ pub use leaf::{
 };
 pub use product::{
     ProductGkrError, ProductGkrLayerProof, ProductGkrOutput, ProductGkrProof, ProductGkrRootShape,
-    ProductGkrShape, ProductGkrShapeError, prove_product_gkr, verify_product_gkr,
+    ProductGkrShape, ProductGkrShapeError, identity_padding_evaluation, prove_product_gkr,
+    verify_product_gkr,
 };
 
 #[cfg(test)]

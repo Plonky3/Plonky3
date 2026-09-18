@@ -179,13 +179,14 @@ pub struct ProductGkrProof<EF> {
 }
 
 /// Unauthenticated leaf evaluations produced by a product reduction.
+#[must_use = "leaf evaluations are unauthenticated until bound to committed polynomials"]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProductGkrOutput<EF> {
     /// One expanded root value per product tree.
     pub roots: Vec<EF>,
-    /// Shared multilinear point on the logical leaf domain.
+    /// Shared multilinear point in most-significant-variable-first order.
     pub point: Vec<EF>,
-    /// One claimed leaf-table evaluation per product tree.
+    /// Evaluations of the logical tables after their explicit prefixes are padded with ones.
     pub values: Vec<EF>,
 }
 
@@ -251,7 +252,8 @@ pub enum ProductGkrError {
 /// Each slice is an arbitrary leaf prefix.
 /// Every omitted suffix value is the multiplicative identity.
 ///
-/// The output values are claims about the input prefixes.
+/// An output value for a prefix of length `n` is
+/// `sum_(i < n) eq(point, i) * input[i] + sum_(i >= n) eq(point, i)`.
 /// A caller must authenticate them against committed leaf polynomials.
 ///
 /// # Panics
@@ -370,6 +372,10 @@ where
 
     transcript.finish();
 
+    // Internal folds bind low-order address bits first.
+    // The public convention addresses subcubes with leading coordinates.
+    point.reverse();
+
     (
         ProductGkrProof {
             roots: root_messages,
@@ -390,6 +396,10 @@ where
 ///
 /// The returned leaf evaluations remain unauthenticated.
 /// The surrounding protocol must tie them to committed polynomials.
+/// A distinct-root statement checks no relation between different roots.
+///
+/// Product soundness is statistical rather than a fixed property of this primitive.
+/// The caller must choose enough challenge-field bits for every documented error term.
 ///
 /// # Errors
 ///
@@ -481,6 +491,9 @@ where
     if let Some(layer) = inconsistent_layer {
         return Err(ProductGkrError::LayerConsistency { layer });
     }
+
+    // Match the repository-wide most-significant-variable-first point convention.
+    point.reverse();
 
     Ok(ProductGkrOutput {
         roots,
@@ -755,10 +768,49 @@ fn interpolate_quad<F: Field>(values: [F; 4], point: [F; 2]) -> F {
 
 /// Check that degree-five interpolation has a valid six-point domain.
 fn has_distinct_round_nodes<F: Field>() -> bool {
+    // Six distinct nodes cannot exist in a field with fewer than eight elements.
+    // This guard also avoids calling interpolation-node constructors outside their domain.
+    if F::bits() < 3 {
+        return false;
+    }
     // Pairwise comparison avoids allocating at the proof boundary.
     let nodes = core::array::from_fn::<_, 6, _>(F::interpolation_node);
     nodes
         .iter()
         .enumerate()
         .all(|(index, node)| !nodes[index + 1..].contains(node))
+}
+
+/// Evaluate the constant-one suffix after an explicit prefix.
+///
+/// Coordinates are ordered from the most significant address bit to the least significant bit.
+/// The result is `sum_(i >= prefix_len) eq(point, i)` over the logical Boolean cube.
+///
+/// # Panics
+///
+/// Panics when the prefix is longer than the logical table.
+#[must_use]
+pub fn identity_padding_evaluation<F: Field>(prefix_len: usize, point: &[F]) -> F {
+    let capacity = 1usize
+        .checked_shl(point.len() as u32)
+        .expect("multilinear point must fit in usize");
+    assert!(prefix_len <= capacity, "prefix exceeds the logical table");
+    if prefix_len == capacity {
+        return F::ZERO;
+    }
+
+    // Sum the address weights strictly below the binary threshold.
+    let mut below = F::ZERO;
+    let mut equal_prefix = F::ONE;
+    for (bit_index, &coordinate) in point.iter().enumerate() {
+        let shift = point.len() - 1 - bit_index;
+        if (prefix_len >> shift) & 1 == 1 {
+            below += equal_prefix * (F::ONE - coordinate);
+            equal_prefix *= coordinate;
+        } else {
+            equal_prefix *= F::ONE - coordinate;
+        }
+    }
+
+    F::ONE - below
 }

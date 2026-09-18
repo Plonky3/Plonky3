@@ -122,7 +122,16 @@ impl ProductGkrShape {
         F: TranscriptField,
         EF: ExtensionField<F>,
     {
-        DomainSeparator::new(VERSION, NAME, self.pattern::<F, EF>())
+        // The pattern alone can alias distinct zero-round statements.
+        // Bind every shape component independently of its message schedule.
+        let mut separator = DomainSeparator::new(VERSION, NAME, self.pattern::<F, EF>());
+        separator.instance(&(self.log_height() as u64).to_le_bytes());
+        separator.instance(&(self.num_trees() as u64).to_le_bytes());
+        separator.instance(&[match self.root_shape() {
+            crate::product::ProductGkrRootShape::Distinct => 0,
+            crate::product::ProductGkrRootShape::FirstTwoShared => 1,
+        }]);
+        separator
     }
 }
 

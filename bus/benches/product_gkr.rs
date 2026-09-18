@@ -4,8 +4,12 @@ use std::hint::black_box;
 use std::time::Duration;
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-use p3_binary_field::BinaryField128;
+use p3_binary_field::{BinaryChallenger, BinaryField128};
+use p3_bus::{ProductGkrRootShape, ProductGkrShape, prove_product_gkr};
 use p3_field::{Field, PrimeCharacteristicRing};
+use p3_keccak::Keccak256Hash;
+use rand::{RngExt, SeedableRng};
+use rand_xoshiro::Xoroshiro128Plus;
 
 type F = BinaryField128;
 
@@ -63,6 +67,8 @@ fn fold_prefix(values: &mut Vec<F>, logical_len: usize, challenge: F) {
 
 /// Exercise all product-tree and sumcheck arithmetic for one schedule.
 fn arity_workload(inputs: &[Vec<F>; 3], log_height: usize, radix_four: bool) -> F {
+    // The comparator models only schedules made entirely of two-level contractions.
+    assert!(!radix_four || log_height.is_multiple_of(2));
     // All layers are retained because GKR descends from root to leaves.
     let layers = inputs
         .each_ref()
@@ -94,8 +100,8 @@ fn arity_workload(inputs: &[Vec<F>; 3], log_height: usize, radix_four: bool) -> 
             let degree = arity + 1;
             for node_index in 0..degree {
                 let node = F::interpolation_node(if node_index == 0 { 0 } else { node_index + 1 });
-                let mut message = F::ZERO;
                 for row in 0..remaining / 2 {
+                    let mut message = F::ZERO;
                     let eq = equality[2 * row] + node * (equality[2 * row + 1] - equality[2 * row]);
                     let mut power = F::ONE;
                     for tree in &states {
@@ -148,25 +154,43 @@ fn product_gkr(criterion: &mut Criterion) {
     // Three unequal prefixes model push, pull, and an auxiliary product tree.
     for log_height in [14, 18] {
         let capacity = 1usize << log_height;
-        let inputs = [capacity, 3 * capacity / 4, capacity / 2].map(|length| {
-            (0..length)
-                .map(|index| F::from_u64((index as u64).wrapping_mul(0x9E37_79B9) + 1))
-                .collect::<Vec<_>>()
-        });
-        let mut group = criterion.benchmark_group(format!("product_gkr_arity/{log_height}"));
+        let mut rng = Xoroshiro128Plus::seed_from_u64(0xB055_600D + log_height as u64);
+        let inputs = [capacity, 3 * capacity / 4, capacity / 2]
+            .map(|length| (0..length).map(|_| rng.random::<F>()).collect::<Vec<_>>());
+        {
+            let mut group = criterion.benchmark_group(format!("product_gkr_arity/{log_height}"));
 
-        for (name, radix_four) in [("radix_2", false), ("radix_4", true)] {
-            group.bench_with_input(
-                BenchmarkId::new(name, log_height),
-                &inputs,
-                |bencher, inputs| {
-                    bencher.iter(|| {
-                        black_box(arity_workload(black_box(inputs), log_height, radix_four))
-                    });
-                },
-            );
+            for (name, radix_four) in [("radix_2", false), ("radix_4", true)] {
+                group.bench_with_input(
+                    BenchmarkId::new(name, log_height),
+                    &inputs,
+                    |bencher, inputs| {
+                        bencher.iter(|| {
+                            black_box(arity_workload(black_box(inputs), log_height, radix_four))
+                        });
+                    },
+                );
+            }
+            group.finish();
         }
-        group.finish();
+
+        // Time the production prover separately from the arithmetic-only comparator.
+        let borrowed = inputs.each_ref().map(Vec::as_slice);
+        let shape = ProductGkrShape::new(log_height, 3, ProductGkrRootShape::Distinct).unwrap();
+        criterion.bench_with_input(
+            BenchmarkId::new("prove_product_gkr", log_height),
+            &borrowed,
+            |bencher, inputs| {
+                bencher.iter(|| {
+                    let mut challenger = BinaryChallenger::from_hasher(Vec::new(), Keccak256Hash);
+                    black_box(prove_product_gkr::<F, F, _>(
+                        black_box(inputs),
+                        shape,
+                        &mut challenger,
+                    ))
+                });
+            },
+        );
     }
 }
 

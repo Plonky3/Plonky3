@@ -3,12 +3,11 @@
 //! A width-`2^s` tuple is interpreted as a Boolean-cube evaluation table.
 //! Its fingerprint is the table's multilinear extension at a random point in `F^s`.
 //!
-//! Distinct tuples define distinct multilinear polynomials.
-//! Their difference has degree at most one in each of the `s` coordinates.
-//! A random point therefore collides with probability at most `s / |F|`.
-//!
-//! Products of `N` factors are monic polynomials in the random offset.
-//! Unequal multisets collide with probability at most `max(1, s) * N / |F|`.
+//! For unequal multisets, subtract the push and pull products as a polynomial in both challenges.
+//! Unique factorization makes this a nonzero polynomial.
+//! Its total degree is at most `max(1, s) * N`.
+//! Here `N` is the larger active multiset size.
+//! Schwartz--Zippel gives collision probability at most `max(1, s) * N / |F|`.
 //! Both challenges must be sampled after the tuple columns are committed.
 
 use alloc::vec;
@@ -31,7 +30,7 @@ pub enum BusDirection {
 pub enum BusSelector<'a, F> {
     /// Every row contributes one factor.
     Always,
-    /// A Boolean column selects the rows that contribute factors.
+    /// A Boolean-constrained column selects the rows that contribute factors.
     Boolean(&'a [F]),
 }
 
@@ -49,9 +48,9 @@ pub struct BusLeafDeclaration<'a, F> {
 /// Materialized product leaves, kept separate by direction.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BusLeaves<EF> {
-    /// Factors contributed by produced entries.
+    /// Produced factors in declaration order and then row order.
     pub pushes: Vec<EF>,
-    /// Factors contributed by consumed entries.
+    /// Consumed factors in declaration order and then row order.
     pub pulls: Vec<EF>,
 }
 
@@ -110,7 +109,14 @@ pub enum BusLeafError {
 /// An inactive row contributes the multiplicative identity.
 ///
 /// The tuple width is exactly `2^point.len()`.
-/// Callers should reserve one tuple slot for a domain separator.
+/// This function does not separate distinct named buses.
+/// A caller combining buses must reserve tuple slots for an injective domain separator.
+///
+/// Boolean selection is checked here for honest-prover diagnostics.
+/// The surrounding AIR must also constrain every selector to be Boolean.
+///
+/// Each direction concatenates declarations without alignment padding.
+/// The offset of one declaration is the sum of earlier row counts on that direction.
 ///
 /// # Errors
 ///
@@ -130,6 +136,17 @@ where
         .checked_shl(shift)
         .ok_or(BusLeafError::TupleWidthOverflow)?;
 
+    // Validate widths before allocating the challenge-sized equality table.
+    for (declaration_index, declaration) in declarations.iter().enumerate() {
+        if declaration.columns.len() != width {
+            return Err(BusLeafError::TupleWidthMismatch {
+                declaration: declaration_index,
+                expected: width,
+                actual: declaration.columns.len(),
+            });
+        }
+    }
+
     // One equality table supplies the linear coefficient of every tuple slot.
     let weights = equality_weights(point);
     debug_assert_eq!(weights.len(), width);
@@ -140,15 +157,6 @@ where
     let mut pulls = Vec::new();
 
     for (declaration_index, declaration) in declarations.iter().enumerate() {
-        // Every declaration uses the challenge-derived tuple arity.
-        if declaration.columns.len() != width {
-            return Err(BusLeafError::TupleWidthMismatch {
-                declaration: declaration_index,
-                expected: width,
-                actual: declaration.columns.len(),
-            });
-        }
-
         // An empty tuple width is impossible because powers of two start at one.
         let height = declaration.columns[0].len();
         for (column_index, column) in declaration.columns.iter().enumerate().skip(1) {
