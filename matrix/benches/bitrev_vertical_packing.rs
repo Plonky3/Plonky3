@@ -45,8 +45,9 @@ fn bitrev_vertically_packed_row(c: &mut Criterion) {
     }
 }
 
-/// Packs every row group of a bit-reversed matrix, together with the group `NEXT_STEP` rows
-/// below it, into one reused buffer.
+/// Packs every row group of a bit-reversed matrix together with the group `NEXT_STEP` rows
+/// below it. `row` extends one reused buffer, as the quotient loops do; `row_pair` calls
+/// `vertically_packed_row_pair`, which returns a new `Vec` per row group.
 fn sweep_rows<V, P>(c: &mut Criterion, name: &str)
 where
     V: Field,

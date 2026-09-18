@@ -8,6 +8,8 @@ use crate::dense::RowMajorMatrix;
 
 /// Largest packing width for which `RowIndexMappedView::vertically_packed_row` resolves the
 /// inner row of every lane before walking the columns.
+///
+/// That path expects the inner matrix's `row_slice_unchecked` to borrow the row cheaply.
 const MAX_RESOLVED_LANES: usize = 8;
 
 /// A trait for remapping row indices of a matrix.
@@ -167,23 +169,29 @@ impl<T: Send + Sync + Clone, IndexMap: RowIndexMap, Inner: Matrix<T>> Matrix<T>
         // The row permutation generally scatters `r..r + P::WIDTH` across non-contiguous
         // inner rows, so unlike `DenseMatrix` we cannot take a contiguous-slice fast path.
         // Up to `MAX_RESOLVED_LANES` lanes, each lane's inner row slice is resolved once and
-        // captured by value, so the column loop reads through those slices instead of mapping
-        // and loading every element through `self`, and no `Vec` of row-slice guards is
-        // allocated. Wider packings read each element through `get_unchecked`.
+        // captured by value, so the column loop only reads through those slices and no `Vec`
+        // of row-slice guards is allocated. Wider packings read each element through
+        // `get_unchecked`.
         let no_wrap = P::WIDTH != 1 && r + P::WIDTH <= height;
         let lane_rows: [Option<_>; MAX_RESOLVED_LANES] = core::array::from_fn(|i| {
             (P::WIDTH <= MAX_RESOLVED_LANES && i < P::WIDTH && width != 0).then(|| {
                 let lane_row = if no_wrap { r + i } else { (r + i) % height };
                 // Safety: lane_row < height.
                 let row = unsafe { self.row_slice_unchecked(lane_row) };
-                debug_assert_eq!(row.len(), width);
+                assert_eq!(
+                    row.len(),
+                    width,
+                    "inner row length differs from the matrix width"
+                );
                 row
             })
         });
         (0..width).map(move |c| {
             if P::WIDTH <= MAX_RESOLVED_LANES {
-                // Safety: width != 0 here, so every lane below P::WIDTH is `Some` and holds a
-                // row of length width, and c < width (loop bound).
+                // Safety: `from_fn` calls this with i < P::WIDTH <= MAX_RESOLVED_LANES, so the
+                // array index is in bounds. width != 0 here, so every lane below P::WIDTH is
+                // `Some` and holds a row whose length was asserted to be width, and c < width
+                // (loop bound).
                 P::from_fn(|i| unsafe {
                     *lane_rows
                         .get_unchecked(i)
@@ -230,6 +238,7 @@ mod tests {
     use super::*;
     use crate::bitrev::BitReversibleMatrix;
     use crate::dense::RowMajorMatrix;
+    use crate::stack::HorizontalPair;
 
     /// Mock implementation of RowIndexMap
     struct IdentityMap(usize);
@@ -564,8 +573,24 @@ mod tests {
         }
     }
 
-    /// Runs the check on reversed and bit-reversed views of random matrices whose widths
-    /// include values below, equal to and not divisible by common packing widths.
+    /// Runs the check for every packing type exercised below: the field's packing, width 1,
+    /// the lockstep packing, and array packings of 3 and 16 lanes.
+    fn assert_packings_match_scalar_gather<F, M>(m: &M)
+    where
+        F: Field,
+        M: Matrix<F>,
+    {
+        assert_packing_matches_scalar_gather::<F, F::Packing, _>(m);
+        assert_packing_matches_scalar_gather::<F, F, _>(m);
+        assert_packing_matches_scalar_gather::<F, Vectorized<F, 2>, _>(m);
+        assert_packing_matches_scalar_gather::<F, FieldArray<F, 3>, _>(m);
+        assert_packing_matches_scalar_gather::<F, FieldArray<F, 16>, _>(m);
+    }
+
+    /// Runs the check on reversed, bit-reversed and vertically strided views of random
+    /// matrices, and on a reversed view of a horizontal pair, whose rows are not contiguous in
+    /// memory. The widths include values below, equal to and not divisible by common packing
+    /// widths.
     fn check_packings_for<F>()
     where
         F: Field,
@@ -578,31 +603,83 @@ mod tests {
                     index_map: ReverseMap(height),
                     inner: RowMajorMatrix::<F>::rand(&mut rng, height, width),
                 };
-                assert_packing_matches_scalar_gather::<F, F::Packing, _>(&view);
-                assert_packing_matches_scalar_gather::<F, F, _>(&view);
-                assert_packing_matches_scalar_gather::<F, Vectorized<F, 2>, _>(&view);
-                assert_packing_matches_scalar_gather::<F, FieldArray<F, 3>, _>(&view);
-                assert_packing_matches_scalar_gather::<F, FieldArray<F, 16>, _>(&view);
+                assert_packings_match_scalar_gather(&view);
             }
             for log_height in 0..6 {
                 let view =
                     RowMajorMatrix::<F>::rand(&mut rng, 1 << log_height, width).bit_reverse_rows();
-                assert_packing_matches_scalar_gather::<F, F::Packing, _>(&view);
-                assert_packing_matches_scalar_gather::<F, F, _>(&view);
-                assert_packing_matches_scalar_gather::<F, Vectorized<F, 2>, _>(&view);
-                assert_packing_matches_scalar_gather::<F, FieldArray<F, 16>, _>(&view);
+                assert_packings_match_scalar_gather(&view);
+            }
+            for (inner_height, stride, offset) in [(5, 1, 2), (9, 2, 1), (17, 3, 0), (17, 4, 3)] {
+                let view = RowMajorMatrix::<F>::rand(&mut rng, inner_height, width)
+                    .vertically_strided(stride, offset);
+                assert_packings_match_scalar_gather(&view);
+            }
+            for height in [1, 5, 9] {
+                let view = RowIndexMappedView {
+                    index_map: ReverseMap(height),
+                    inner: HorizontalPair::new(
+                        RowMajorMatrix::<F>::rand(&mut rng, height, width),
+                        RowMajorMatrix::<F>::rand(&mut rng, height, 2),
+                    ),
+                };
+                assert_packings_match_scalar_gather(&view);
             }
         }
     }
 
     #[test]
-    fn vertically_packed_row_matches_scalar_gather_babybear() {
+    fn test_vertically_packed_row_matches_scalar_gather_babybear() {
         check_packings_for::<BabyBear>();
     }
 
     #[test]
-    fn vertically_packed_row_matches_scalar_gather_goldilocks() {
+    fn test_vertically_packed_row_matches_scalar_gather_goldilocks() {
         check_packings_for::<Goldilocks>();
+    }
+
+    /// A matrix whose rows hold one element fewer than its declared width.
+    struct ShortRows(RowMajorMatrix<BabyBear>);
+
+    impl Matrix<BabyBear> for ShortRows {
+        fn width(&self) -> usize {
+            self.0.width()
+        }
+
+        fn height(&self) -> usize {
+            self.0.height()
+        }
+
+        unsafe fn row_subseq_unchecked(
+            &self,
+            r: usize,
+            start: usize,
+            end: usize,
+        ) -> impl IntoIterator<Item = BabyBear, IntoIter = impl Iterator<Item = BabyBear> + Send + Sync>
+        {
+            // Safety: the caller upholds r < height and start <= end <= width, and the
+            // shortened end stays within start..=end.
+            unsafe {
+                self.0
+                    .row_subseq_unchecked(r, start, start.max(end.saturating_sub(1)))
+            }
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "inner row length differs from the matrix width")]
+    fn test_vertically_packed_row_rejects_short_inner_rows() {
+        let height = 4;
+        let view = RowIndexMappedView {
+            index_map: ReverseMap(height),
+            inner: ShortRows(RowMajorMatrix::new(
+                (0..height as u32 * 3).map(BabyBear::new).collect(),
+                3,
+            )),
+        };
+        let _ = view
+            .vertically_packed_row::<FieldArray<BabyBear, 4>>(0)
+            .collect::<Vec<_>>();
     }
 
     #[test]
