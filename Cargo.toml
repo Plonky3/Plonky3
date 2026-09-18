@@ -95,6 +95,7 @@ sha2 = { version = "0.11.0", default-features = false }
 shake = { version = "0.1.0", default-features = false }
 spin = "0.12.0"
 thiserror = { version = "2.0", default-features = false }
+tikv-jemallocator = "0.7.0"
 tiny-keccak = "2.0.2"
 tracing = { version = "0.1.44", default-features = false, features = [
     "attributes",

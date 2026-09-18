@@ -113,7 +113,31 @@ const RATE: usize = (1600 - 2 * 256) / 8;
 /// Digest length of Keccak-256 in bytes.
 const DIGEST_BYTES: usize = 32;
 
-/// Absorb up to one rate block of a single message into one lane of a vectorized state.
+/// Index of the state word holding the last byte of the rate.
+const LAST_RATE_WORD: usize = (RATE - 1) / 8;
+
+/// Closing padding mark, placed at the last byte of the rate.
+const CLOSING_MARK: u64 = 0x80u64 << (8 * ((RATE - 1) % 8));
+
+/// Exclusive-or one whole state word, every lane at once.
+///
+/// The permutation loads a state word as a single `VECTOR_LEN`-wide vector, and a partially
+/// written word cannot be store-to-load forwarded into that load, so every write here covers
+/// the word in full.
+#[inline]
+fn xor_state_word(word: &mut [u64; VECTOR_LEN], value: [u64; VECTOR_LEN]) {
+    *word = core::array::from_fn(|lane| word[lane] ^ value[lane]);
+}
+
+/// Read the eight message bytes at `offset` in every lane into one state word value.
+///
+/// Bytes enter the state little-endian, eight to a state word, matching the Keccak convention.
+#[inline]
+fn gather_word(lanes: &[&[u8]; VECTOR_LEN], offset: usize) -> [u64; VECTOR_LEN] {
+    core::array::from_fn(|lane| u64::from_le_bytes(lanes[lane][offset..][..8].try_into().unwrap()))
+}
+
+/// Absorb a run of whole state words, one message per lane, starting at `offset` in each.
 ///
 /// A vectorized state keeps one independent sponge per lane, side by side.
 /// The lane count is whatever the target's permutation is wide.
@@ -126,47 +150,70 @@ const DIGEST_BYTES: usize = 32;
 ///     ...
 /// ```
 ///
-/// Absorbing writes only the given lane's column, so the messages never need transposing.
-/// Bytes enter the state little-endian, eight to a state word, matching the Keccak convention.
+/// Each row is assembled across all lanes first and then stored once, so no state word is
+/// built out of partial writes. The transpose happens in registers; the messages themselves
+/// are never copied or reordered.
 #[inline]
-fn absorb_into_lane(state: &mut [[u64; VECTOR_LEN]; 25], lane: usize, block: &[u8]) {
-    debug_assert!(block.len() <= RATE);
+fn absorb_words(
+    state: &mut [[u64; VECTOR_LEN]; 25],
+    lanes: &[&[u8]; VECTOR_LEN],
+    offset: usize,
+    words: usize,
+) {
+    debug_assert!(words <= RATE / 8);
 
-    // Whole state words come straight from eight consecutive message bytes.
-    let (words, tail) = block.as_chunks::<8>();
-    for (word_index, word) in words.iter().enumerate() {
-        state[word_index][lane] ^= u64::from_le_bytes(*word);
-    }
-
-    // A short final run occupies the low bytes of the next state word, the rest staying zero.
-    if !tail.is_empty() {
-        let mut last = [0u8; 8];
-        last[..tail.len()].copy_from_slice(tail);
-        state[words.len()][lane] ^= u64::from_le_bytes(last);
+    for (word_index, word) in state[..words].iter_mut().enumerate() {
+        xor_state_word(word, gather_word(lanes, offset + 8 * word_index));
     }
 }
 
-/// Apply the Keccak padding to one lane after its final partial block was absorbed.
+/// Absorb the final, shorter block of every lane and close it with the Keccak padding.
 ///
 /// The rule is `pad10*1` with the original Keccak domain byte, so the block becomes
 ///
 /// ```text
 ///     [ message bytes | 0x01 | 0x00 ... 0x00 | 0x80 ]
 ///                        ^                      ^
-///                     offset                 rate - 1
+///                   block_len               rate - 1
 /// ```
 ///
-/// A message ending one byte short of the rate puts both marks in the same byte.
+/// A block ending one byte short of the rate puts both marks in the same byte.
 /// Exclusive-or makes that byte `0x81`, exactly what the rule requires.
+///
+/// The leftover bytes and the marks meet in the word value before it reaches the state,
+/// so the closing word is stored once like every other one.
 #[inline]
-fn pad_lane(state: &mut [[u64; VECTOR_LEN]; 25], lane: usize, offset: usize) {
-    debug_assert!(offset < RATE);
+fn absorb_final_block(
+    state: &mut [[u64; VECTOR_LEN]; 25],
+    lanes: &[&[u8]; VECTOR_LEN],
+    offset: usize,
+    block_len: usize,
+) {
+    debug_assert!(block_len < RATE);
 
-    // First mark sits immediately after the last absorbed byte of the final block.
-    state[offset / 8][lane] ^= 0x01u64 << (8 * (offset % 8));
+    let words = block_len / 8;
+    let tail = block_len % 8;
+    absorb_words(state, lanes, offset, words);
 
-    // Second mark closes the block at its very last byte.
-    state[(RATE - 1) / 8][lane] ^= 0x80u64 << (8 * ((RATE - 1) % 8));
+    // The first mark sits immediately after the last message byte, in the same word as any
+    // leftover bytes. The second mark joins it when that word is already the closing word of
+    // the rate.
+    let mut marks = 0x01u64 << (8 * tail);
+    if words == LAST_RATE_WORD {
+        marks ^= CLOSING_MARK;
+    }
+    let value = core::array::from_fn(|lane| {
+        let mut bytes = [0u8; 8];
+        bytes[..tail].copy_from_slice(&lanes[lane][offset + 8 * words..][..tail]);
+        u64::from_le_bytes(bytes) ^ marks
+    });
+    xor_state_word(&mut state[words], value);
+
+    // The closing word is otherwise untouched by the message and the first mark, so it takes
+    // the second mark alone.
+    if words != LAST_RATE_WORD {
+        xor_state_word(&mut state[LAST_RATE_WORD], [CLOSING_MARK; VECTOR_LEN]);
+    }
 }
 
 /// Read the digest of one lane out of a permuted vectorized state.
@@ -246,26 +293,29 @@ impl CryptographicHasher<u8, [u8; 32]> for Keccak256Hash {
         let final_block = len % RATE;
 
         // One message per lane per permutation.
-        // A short last group leaves the unused lanes at their initial state, never read.
         for (messages, digests) in input
             .chunks(len * VECTOR_LEN)
             .zip(out.chunks_mut(VECTOR_LEN))
         {
             let mut state = [[0u64; VECTOR_LEN]; 25];
 
+            // A short last group repeats its first message in the spare lanes, which keeps the
+            // lane count fixed at compile time. Those lanes are hashed alongside the requested
+            // ones and never squeezed.
+            let present = digests.len();
+            let lanes: [&[u8]; VECTOR_LEN] = core::array::from_fn(|lane| {
+                let index = if lane < present { lane } else { 0 };
+                &messages[index * len..][..len]
+            });
+
             // Every lane contributes its block, then one permutation advances all the sponges.
             for block in 0..full_blocks {
-                for (lane, message) in messages.chunks_exact(len).enumerate() {
-                    absorb_into_lane(&mut state, lane, &message[block * RATE..][..RATE]);
-                }
+                absorb_words(&mut state, &lanes, block * RATE, RATE / 8);
                 KeccakF.permute_mut(&mut state);
             }
 
-            // Absorb each final partial block and mark it, still without permuting in between.
-            for (lane, message) in messages.chunks_exact(len).enumerate() {
-                absorb_into_lane(&mut state, lane, &message[full_blocks * RATE..]);
-                pad_lane(&mut state, lane, final_block);
-            }
+            // The final partial block carries the padding and permutes once more.
+            absorb_final_block(&mut state, &lanes, full_blocks * RATE, final_block);
             KeccakF.permute_mut(&mut state);
 
             // Squeeze one digest per requested message.
@@ -291,12 +341,15 @@ mod tests {
     ///
     /// - A length one short of the rate folds both padding marks into a single byte.
     /// - A length that is an exact multiple of the rate pads a block carrying no message bytes.
-    const SHAPE_LENGTHS: [usize; 14] = [
+    /// - A length whose leftover bytes already sit in the closing word of the rate puts both
+    ///   marks in that word, in different bytes.
+    const SHAPE_LENGTHS: [usize; 16] = [
         0,
         1,
         7,
         8,
         9,
+        RATE - 3,
         RATE - 1,
         RATE,
         RATE + 1,
@@ -304,6 +357,7 @@ mod tests {
         2 * RATE,
         2 * RATE + 1,
         3 * RATE,
+        8 * LAST_RATE_WORD,
         400,
         1000,
     ];
