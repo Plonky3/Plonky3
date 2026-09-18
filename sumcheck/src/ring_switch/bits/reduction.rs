@@ -247,7 +247,7 @@ impl<EF: TowerLevel> BitRingSwitch<EF> {
     }
 
     /// Restore the Boolean slot address in front of a point inside that slot.
-    fn restore_prefix(&self, point: Point<EF>) -> Point<EF> {
+    fn restore_prefix(&self, point: &Point<EF>) -> Point<EF> {
         // The prefix is public and fixed by the incoming evaluation point.
         let (prefix, _) = self.fixed_prefix();
         let mut coordinates = self.high()[..prefix].to_vec();
@@ -664,7 +664,7 @@ impl<EF: TranscriptField + TowerLevel> BitRingSwitch<EF> {
                 sumcheck,
                 final_eval,
             },
-            self.restore_prefix(r_prime),
+            self.restore_prefix(&r_prime),
             final_eval,
         )
     }
@@ -749,7 +749,7 @@ impl<EF: TranscriptField + TowerLevel> BitRingSwitch<EF> {
             return Err(BitRingSwitchProofError::FinalCheck);
         }
 
-        Ok((self.restore_prefix(r_prime), proof.final_eval))
+        Ok((self.restore_prefix(&r_prime), proof.final_eval))
     }
 }
 

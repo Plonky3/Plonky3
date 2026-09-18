@@ -24,7 +24,6 @@
 
 use alloc::vec::Vec;
 
-use p3_binary_field::Ghash128;
 use p3_challenger::fs::TranscriptField;
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
 use p3_commit::{Encoder, Mmcs};
@@ -188,7 +187,11 @@ where
     // The rounds multiply in the polynomial basis, which needs no change of basis per product.
     // The transcript carries tower elements.
     let (mut sumcheck, mut randomness) = transcript.fold_batch(|challenger| {
-        layout.into_sumcheck_in::<Ghash128, _>(&mut sumcheck_data, 0, challenger)
+        layout.into_sumcheck_in::<<F as FoldAlphabet<EF>>::SumcheckRepr, _>(
+            &mut sumcheck_data,
+            0,
+            challenger,
+        )
     });
     assert_eq!(
         randomness.num_variables(),

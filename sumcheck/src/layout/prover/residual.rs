@@ -12,7 +12,7 @@ use p3_multilinear_util::poly::Poly;
 use super::suffix::weighted_sum;
 use crate::SumcheckData;
 use crate::layout::witness::{Table, TablePlacement, column_slots};
-use crate::strategy::{Basis, FromTable, ReprSumcheckProver, VariableOrder};
+use crate::strategy::{Basis, IntoTranscriptField, ReprSumcheckProver, VariableOrder};
 use crate::transcript::{ProverTranscript, SumcheckShape};
 
 /// Rows per block of the column aggregate.
@@ -65,8 +65,8 @@ struct ColumnHandoff<F: Field, EF, R> {
 impl<F, EF, R> SuffixResidualProver<F, EF, R>
 where
     F: Field,
-    EF: ExtensionField<F> + From<R>,
-    R: Field + FromTable<EF> + Algebra<F>,
+    EF: ExtensionField<F>,
+    R: IntoTranscriptField<EF> + Algebra<F>,
 {
     /// Wraps a prover over the whole stacked space.
     pub(crate) const fn dense(prover: ReprSumcheckProver<F, EF, R>) -> Self {
@@ -211,8 +211,7 @@ impl<F: Field, EF: ExtensionField<F>, R> ColumnHandoff<F, EF, R> {
     #[tracing::instrument(skip_all)]
     fn into_prover(self, rows: &mut ReprSumcheckProver<F, EF, R>) -> ReprSumcheckProver<F, EF, R>
     where
-        EF: From<R>,
-        R: Field + FromTable<EF> + Algebra<F>,
+        R: IntoTranscriptField<EF> + Algebra<F>,
     {
         let row_variables = self.tables[0].num_variables();
         let num_slot_variables = self.num_slot_variables();

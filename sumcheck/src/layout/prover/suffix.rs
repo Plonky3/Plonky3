@@ -17,7 +17,9 @@ use crate::layout::prover::{Layout, StackedClaims, SuffixResidualProver};
 use crate::layout::witness::{Table, column_slots};
 use crate::layout::{LayoutStrategy, Witness};
 use crate::product_polynomial::ProductPolynomial;
-use crate::strategy::{Basis, FromTable, ReprSumcheckProver, SumcheckProver, VariableOrder};
+use crate::strategy::{
+    Basis, FromTable, IntoTranscriptField, ReprSumcheckProver, SumcheckProver, VariableOrder,
+};
 use crate::svo::{SvoPoint, calculate_accumulators_batch};
 use crate::table::{OpeningBatch, OpeningEvals, OpeningRequest};
 use crate::transcript::{ProverTranscript, SumcheckShape};
@@ -545,8 +547,7 @@ impl<F: Field, EF: ExtensionField<F>> SuffixProver<F, EF> {
     ) -> (SuffixResidualProver<F, EF, R>, Point<EF>)
     where
         F: TranscriptField,
-        EF: From<R>,
-        R: Field + FromTable<EF> + Algebra<F>,
+        R: IntoTranscriptField<EF> + Algebra<F>,
         Ch: FieldChallenger<F> + GrindingChallenger<Witness = F>,
     {
         let (alpha, sum, rs) = self.preprocess(sumcheck_data, pow_bits, challenger);
@@ -607,8 +608,7 @@ impl<F: Field, EF: ExtensionField<F>> SuffixProver<F, EF> {
         column_weights: WeightPlan<EF>,
     ) -> ReprSumcheckProver<F, EF, R>
     where
-        EF: From<R>,
-        R: Field + FromTable<EF>,
+        R: IntoTranscriptField<EF>,
     {
         // Factor 1 of the product: the compressed stacked poly at rs.
         // No external scaling here; the plain path keeps the running sum unchanged.

@@ -71,6 +71,7 @@ use p3_binary_field::{
 };
 use p3_field::{ExtensionField, Field, PackedValue, PrimeCharacteristicRing};
 use p3_maybe_rayon::prelude::*;
+use p3_sumcheck::strategy::IntoTranscriptField;
 
 /// The polynomial-basis type the fold multiplies with.
 ///
@@ -226,6 +227,12 @@ where
 /// Every implementation panics unless there is at least one challenge.
 /// A fold with no round would leave every output slot at zero rather than fail.
 pub trait FoldAlphabet<EF: TowerLevel>: TowerLevel {
+    /// The arithmetic representation used by the residual sumcheck.
+    ///
+    /// This belongs to the `(alphabet, challenge field)` route: 128-bit challenges use the
+    /// carryless-multiply representation, while 64-bit challenges stay in their native field.
+    type SumcheckRepr: IntoTranscriptField<EF>;
+
     /// Fold one round per challenge, halving the codeword each time.
     ///
     /// `challenges` stays in the order the sumcheck drew it.
@@ -233,54 +240,72 @@ pub trait FoldAlphabet<EF: TowerLevel>: TowerLevel {
 }
 
 impl FoldAlphabet<Self> for BinaryField128 {
+    type SumcheckRepr = Ghash128;
+
     fn fold_rounds(codeword: &[Self], challenges: &[Self]) -> Vec<Self> {
         fold_rounds_packed(codeword, challenges)
     }
 }
 
 impl FoldAlphabet<Self> for BinaryField64 {
+    type SumcheckRepr = Self;
+
     fn fold_rounds(codeword: &[Self], challenges: &[Self]) -> Vec<Self> {
         fold_rounds_scalar(codeword, challenges)
     }
 }
 
 impl FoldAlphabet<BinaryField128> for BinaryField64 {
+    type SumcheckRepr = Ghash128;
+
     fn fold_rounds(codeword: &[Self], challenges: &[BinaryField128]) -> Vec<BinaryField128> {
         fold_rounds_packed(codeword, challenges)
     }
 }
 
 impl FoldAlphabet<BinaryField128> for BinaryField32 {
+    type SumcheckRepr = Ghash128;
+
     fn fold_rounds(codeword: &[Self], challenges: &[BinaryField128]) -> Vec<BinaryField128> {
         fold_rounds_packed(codeword, challenges)
     }
 }
 
 impl FoldAlphabet<BinaryField64> for BinaryField32 {
+    type SumcheckRepr = BinaryField64;
+
     fn fold_rounds(codeword: &[Self], challenges: &[BinaryField64]) -> Vec<BinaryField64> {
         fold_rounds_lifting(codeword, challenges)
     }
 }
 
 impl FoldAlphabet<BinaryField128> for BinaryField16 {
+    type SumcheckRepr = Ghash128;
+
     fn fold_rounds(codeword: &[Self], challenges: &[BinaryField128]) -> Vec<BinaryField128> {
         fold_rounds_packed(codeword, challenges)
     }
 }
 
 impl FoldAlphabet<BinaryField64> for BinaryField16 {
+    type SumcheckRepr = BinaryField64;
+
     fn fold_rounds(codeword: &[Self], challenges: &[BinaryField64]) -> Vec<BinaryField64> {
         fold_rounds_lifting(codeword, challenges)
     }
 }
 
 impl FoldAlphabet<BinaryField128> for BinaryField8 {
+    type SumcheckRepr = Ghash128;
+
     fn fold_rounds(codeword: &[Self], challenges: &[BinaryField128]) -> Vec<BinaryField128> {
         fold_rounds_packed(codeword, challenges)
     }
 }
 
 impl FoldAlphabet<BinaryField64> for BinaryField8 {
+    type SumcheckRepr = BinaryField64;
+
     fn fold_rounds(codeword: &[Self], challenges: &[BinaryField64]) -> Vec<BinaryField64> {
         fold_rounds_lifting(codeword, challenges)
     }

@@ -3,7 +3,7 @@
 use alloc::vec::Vec;
 use core::marker::PhantomData;
 
-use p3_binary_field::{BinaryField128, Ghash128};
+use p3_binary_field::{BinaryField64, BinaryField128, Ghash128};
 use p3_challenger::fs::TranscriptField;
 use p3_challenger::{FieldChallenger, GrindingChallenger};
 use p3_field::{ExtensionField, Field};
@@ -33,7 +33,8 @@ use crate::transcript::{ProverTranscript, SumcheckShape};
 ///
 /// # Contract
 ///
-/// `R::from` and `EF::from` must be mutually inverse field isomorphisms.
+/// `R::from` and [`IntoTranscriptField::into_transcript`] must be mutually inverse field
+/// isomorphisms.
 /// A map that is not a ring homomorphism measures a different round message.
 ///
 /// # Storage
@@ -55,8 +56,8 @@ pub struct ReprSumcheckProver<F, EF, R: Field> {
 impl<F, EF, R> ReprSumcheckProver<F, EF, R>
 where
     F: Field,
-    EF: ExtensionField<F> + From<R>,
-    R: Field + FromTable<EF>,
+    EF: ExtensionField<F>,
+    R: IntoTranscriptField<EF>,
 {
     /// Moves a prover's tables, claim and held challenge into `R`.
     ///
@@ -115,7 +116,7 @@ where
 
     /// Returns the current claimed sum over the remaining unbound variables.
     pub fn claimed_sum(&self) -> EF {
-        EF::from(self.inner.claimed_sum())
+        self.inner.claimed_sum().into_transcript()
     }
 
     /// Returns the number of remaining (unbound) variables.
@@ -185,9 +186,13 @@ where
         let (c_a, c_inf) = self.inner.measure_round();
 
         // The transcript only ever sees the challenge field.
-        let r = sumcheck_data.observe_and_sample(transcript, EF::from(c_a), EF::from(c_inf));
+        let r = sumcheck_data.observe_and_sample(
+            transcript,
+            c_a.into_transcript(),
+            c_inf.into_transcript(),
+        );
         let r_repr = R::from(r);
-        debug_assert_eq!(EF::from(r_repr), r);
+        debug_assert_eq!(r_repr.into_transcript(), r);
 
         // The round identity is a polynomial in its inputs, so it commutes with the isomorphism.
         self.inner.sum = Basis::Evaluation.reduce_claim(c_a, c_inf, r_repr, self.inner.sum);
@@ -216,6 +221,27 @@ pub trait FromTable<EF: Copy + Send + Sync>: From<EF> + Send {
         image
     }
 }
+
+/// An arithmetic representation that maps back into the transcript field.
+///
+/// Keeping this conversion on the representation lets generic callers select `R` without
+/// separately repeating the reverse-conversion bound at every layer of their API.
+pub trait IntoTranscriptField<EF: Copy + Send + Sync>: Field + FromTable<EF> {
+    /// Maps one arithmetic value back into the field observed by the transcript.
+    fn into_transcript(self) -> EF;
+}
+
+impl<EF, R> IntoTranscriptField<EF> for R
+where
+    EF: Copy + Send + Sync + From<R>,
+    R: Field + FromTable<EF>,
+{
+    fn into_transcript(self) -> EF {
+        EF::from(self)
+    }
+}
+
+impl FromTable<Self> for BinaryField64 {}
 
 impl FromTable<BinaryField128> for Ghash128 {
     /// Converts in the table's own buffer, a block at a time where the build has the kernel.
