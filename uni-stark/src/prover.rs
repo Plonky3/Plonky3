@@ -768,12 +768,10 @@ where
         pcs.build_periodic_lde_table(&periodic_cols, trace_domain, quotient_domain);
 
     let pack_width = Pack::<SC, A, Strat>::WIDTH;
-    // `PeriodicLdeTable::get` indexes modulo `periodic_table.height()`, so a packed row
-    // group at `i_start` only depends on `i_start % periodic_table.height()`. Since
-    // `i_start` is always a multiple of `pack_width` and both are powers of two, the
-    // distinct row groups repeat with period `groups_in_period`; store only those.
+    // The packed row groups of the periodic table repeat every `groups_in_period`
+    // groups, so only those are materialized and group `g` reads `g % groups_in_period`.
     let ncols = periodic_table.width();
-    let groups_in_period = (periodic_table.height() / pack_width).max(1);
+    let groups_in_period = periodic_table.packed_group_period(pack_width);
     let periodic_packed: Vec<Pack<SC, A, Strat>> = if periodic_table.is_empty() {
         Vec::new()
     } else {
