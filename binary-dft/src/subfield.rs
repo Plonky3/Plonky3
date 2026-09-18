@@ -65,8 +65,7 @@ fn widen<S: TowerLevel, F: TowerLevel + From<S>>(values: &[S]) -> Vec<F> {
 ///     phase 2   the remaining l - h layers of the transform the buffer really is
 /// ```
 ///
-/// Both phases are unshifted, and phase 1 reuses the block indices it stands in for.
-/// So the two agree twiddle for twiddle.
+/// Both phases are unshifted and share block indices, so they agree twiddle for twiddle.
 ///
 /// # Panics
 ///
@@ -102,6 +101,8 @@ where
 /// Widening the message first pays the wide element size at every layer.
 /// The widest layers do not need it: their twiddles map the subfield into itself.
 ///
+/// The layers left over run the tower transform, not whichever backend is fastest wide.
+///
 /// # Panics
 ///
 /// Panics if the height is not a power of two.
@@ -129,8 +130,7 @@ where
 /// The message holds the low-index novel-basis coefficients of each column.
 /// The codeword is their evaluation on the subspace `log_inv_rate` dimensions above.
 ///
-/// Zero-padding those coefficients is what extends the domain.
-/// Zero lies in the subfield, so the padding is paid at the narrow element size too.
+/// Zero lies in the subfield, so the padding that extends the domain is paid narrow too.
 ///
 /// # Panics
 ///
