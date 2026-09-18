@@ -2053,8 +2053,6 @@ where
             + for<'b> Air<InteractionMultilinearFolder<'b, F, R, R>>,
     {
         let width = self.width();
-        let num_evals = self.num_evals();
-        let half = num_evals / 2;
         let degree = self.degree();
         let schedule = node_schedule::<EF>(evaluated_nodes(&self.slots, degree, true))
             .into_iter()
@@ -2074,96 +2072,8 @@ where
 
         let scratch = eq_suffix.as_slice().par_iter().enumerate().par_fold_reduce(
             || Scratch::<R, R>::new(&constraint_degrees, &interaction_degrees, width),
-            |mut scratch, (s, &eq_suffix)| {
-                let columns = self.columns.as_scalar();
-                for ((local, local_delta), column) in scratch
-                    .local_point
-                    .iter_mut()
-                    .zip(scratch.local_diff.iter_mut())
-                    .zip(columns)
-                {
-                    let column = column.as_slice();
-                    let local_lo = column[s];
-                    let local_hi = column[s + half];
-                    *local = local_lo;
-                    *local_delta = local_hi - local_lo;
-                }
-                for run in &next_columns {
-                    for (((next, next_delta), column), next_tail) in scratch.next_point[run.clone()]
-                        .iter_mut()
-                        .zip(scratch.next_diff[run.clone()].iter_mut())
-                        .zip(&columns[run.clone()])
-                        .zip(&self.next_tail[run.clone()])
-                    {
-                        let column = column.as_slice();
-                        let next_lo = column[s + 1];
-                        let next_hi_row = s + half;
-                        let next_hi = if next_hi_row + 1 < num_evals {
-                            column[next_hi_row + 1]
-                        } else {
-                            *next_tail
-                        };
-                        *next = next_lo;
-                        *next_delta = next_hi - next_lo;
-                    }
-                }
-
-                let (mut boundary, boundary_diff) =
-                    BoundaryEvals::row_pair_with_prefix(s, half, num_evals, self.boundary);
-
-                for &(node, step) in &schedule {
-                    match step {
-                        NodeStep::Unit(count) => {
-                            for _ in 0..count {
-                                scratch.add_diffs(&next_columns);
-                                boundary += boundary_diff;
-                            }
-                        }
-                        NodeStep::Scaled(step) => {
-                            scratch.add_scaled_diffs(step, &next_columns);
-                            boundary.add_scaled(boundary_diff, step);
-                        }
-                    }
-                    for slot in &self.slots {
-                        let enabled = slot.enabled_families(node, true);
-                        if !enabled.constraints && enabled.interaction.is_none() {
-                            continue;
-                        }
-                        let folder = MultilinearFolder::new(
-                            &scratch.local_point
-                                [slot.main_offset..slot.main_offset + slot.main_width],
-                            &scratch.next_point
-                                [slot.main_offset..slot.main_offset + slot.main_width],
-                            boundary,
-                            self.public_values[slot.stage_index],
-                            self.alpha,
-                        )
-                        .with_alpha_powers(&self.alpha_powers[slot.stage_index])
-                        .with_preprocessed(
-                            &scratch.local_point[slot.preprocessed_offset
-                                ..slot.preprocessed_offset + slot.preprocessed_width],
-                            &scratch.next_point[slot.preprocessed_offset
-                                ..slot.preprocessed_offset + slot.preprocessed_width],
-                        )
-                        .with_periodic(
-                            &scratch.local_point
-                                [slot.periodic_offset..slot.periodic_offset + slot.periodic_width],
-                        );
-                        let evaluations =
-                            evaluate_air_families(folder, &self.coupling, enabled, slot.air);
-                        let eval_index = if node == 0 { 0 } else { node - 1 };
-                        if enabled.constraints {
-                            scratch.constraint_evals[slot.stage_index][eval_index] +=
-                                eq_suffix * evaluations.constraints;
-                        }
-                        if let Some(interaction) = enabled.interaction {
-                            scratch.interaction_evals[interaction.group_index][eval_index] +=
-                                eq_suffix * evaluations.interactions;
-                        }
-                    }
-                }
-
-                scratch
+            |scratch, (s, &eq_suffix)| {
+                self.accumulate_row(scratch, s, eq_suffix, &schedule, &next_columns)
             },
             |mut lhs, rhs| {
                 lhs.constraint_evals
@@ -2186,6 +2096,114 @@ where
             &lower_evals(scratch.interaction_evals),
             self.tau.as_slice()[self.round],
         )
+    }
+
+    /// Add one residual row's eq-weighted evaluations at every node of `schedule` to `scratch`.
+    ///
+    /// Never inlined: the AIR evaluation needs a large stack frame, which inside the parallel
+    /// fold would be reserved again at every level of Rayon's recursive split.
+    #[inline(never)]
+    fn accumulate_row(
+        &self,
+        mut scratch: Scratch<R, R>,
+        s: usize,
+        eq_suffix: R,
+        schedule: &[(usize, NodeStep<R>)],
+        next_columns: &[Range<usize>],
+    ) -> Scratch<R, R>
+    where
+        R: Algebra<F>,
+        A: for<'b> Air<MultilinearFolder<'b, F, R, R>>
+            + for<'b> Air<InteractionMultilinearFolder<'b, F, R, R>>,
+    {
+        let num_evals = self.num_evals();
+        let half = num_evals / 2;
+        let columns = self.columns.as_scalar();
+        for ((local, local_delta), column) in scratch
+            .local_point
+            .iter_mut()
+            .zip(scratch.local_diff.iter_mut())
+            .zip(columns)
+        {
+            let column = column.as_slice();
+            let local_lo = column[s];
+            let local_hi = column[s + half];
+            *local = local_lo;
+            *local_delta = local_hi - local_lo;
+        }
+        for run in next_columns {
+            for (((next, next_delta), column), next_tail) in scratch.next_point[run.clone()]
+                .iter_mut()
+                .zip(scratch.next_diff[run.clone()].iter_mut())
+                .zip(&columns[run.clone()])
+                .zip(&self.next_tail[run.clone()])
+            {
+                let column = column.as_slice();
+                let next_lo = column[s + 1];
+                let next_hi_row = s + half;
+                let next_hi = if next_hi_row + 1 < num_evals {
+                    column[next_hi_row + 1]
+                } else {
+                    *next_tail
+                };
+                *next = next_lo;
+                *next_delta = next_hi - next_lo;
+            }
+        }
+
+        let (mut boundary, boundary_diff) =
+            BoundaryEvals::row_pair_with_prefix(s, half, num_evals, self.boundary);
+
+        for &(node, step) in schedule {
+            match step {
+                NodeStep::Unit(count) => {
+                    for _ in 0..count {
+                        scratch.add_diffs(next_columns);
+                        boundary += boundary_diff;
+                    }
+                }
+                NodeStep::Scaled(step) => {
+                    scratch.add_scaled_diffs(step, next_columns);
+                    boundary.add_scaled(boundary_diff, step);
+                }
+            }
+            for slot in &self.slots {
+                let enabled = slot.enabled_families(node, true);
+                if !enabled.constraints && enabled.interaction.is_none() {
+                    continue;
+                }
+                let folder = MultilinearFolder::new(
+                    &scratch.local_point[slot.main_offset..slot.main_offset + slot.main_width],
+                    &scratch.next_point[slot.main_offset..slot.main_offset + slot.main_width],
+                    boundary,
+                    self.public_values[slot.stage_index],
+                    self.alpha,
+                )
+                .with_alpha_powers(&self.alpha_powers[slot.stage_index])
+                .with_preprocessed(
+                    &scratch.local_point[slot.preprocessed_offset
+                        ..slot.preprocessed_offset + slot.preprocessed_width],
+                    &scratch.next_point[slot.preprocessed_offset
+                        ..slot.preprocessed_offset + slot.preprocessed_width],
+                )
+                .with_periodic(
+                    &scratch.local_point
+                        [slot.periodic_offset..slot.periodic_offset + slot.periodic_width],
+                );
+                let evaluations = evaluate_air_families(folder, &self.coupling, enabled, slot.air);
+                let eval_index = if node == 0 { 0 } else { node - 1 };
+                if enabled.constraints {
+                    scratch.constraint_evals[slot.stage_index][eval_index] +=
+                        eq_suffix * evaluations.constraints;
+                }
+                if let Some(interaction) = enabled.interaction {
+                    scratch.interaction_evals[interaction.group_index][eval_index] +=
+                        eq_suffix * evaluations.interactions;
+                }
+            }
+        }
+
+        scratch
     }
 
     /// Update each group's claim and every repeat-last tail for binding the next variable at `r`.
