@@ -9,7 +9,8 @@ mod product;
 mod transcript;
 
 pub use builder::{
-    BusActivation, BusInteractionBuilder, BusSymbolicBuilder, SymbolicBusInteraction,
+    BusActivation, BusInteractionBuilder, BusInteractionRecorder, BusSymbolicBuilder, RecordToken,
+    SymbolicBusInteraction,
 };
 pub use leaf::{BusDirection, BusLeafDeclaration, BusLeafError, BusLeaves, BusSelector};
 pub use product::{

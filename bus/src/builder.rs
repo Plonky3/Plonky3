@@ -3,8 +3,10 @@
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
-use p3_air::symbolic::{AirLayout, SymbolicAirBuilder, SymbolicExpression, SymbolicExpressionExt};
-use p3_air::{Air, AirBuilder, BaseAir, ExtensionBuilder, PermutationAirBuilder};
+use p3_air::symbolic::{
+    AirLayout, ConstraintLayout, SymbolicAirBuilder, SymbolicExpression, SymbolicExpressionExt,
+};
+use p3_air::{Air, AirBuilder, DebugConstraintBuilder, ExtensionBuilder, PermutationAirBuilder};
 use p3_field::{Algebra, ExtensionField, Field, PrimeCharacteristicRing};
 
 use crate::BusDirection;
@@ -18,11 +20,52 @@ pub enum BusActivation<E> {
     Boolean(E),
 }
 
-/// Opt-in AIR interface for binary-native bus declarations.
+/// Capability for recording a binary-native bus declaration.
+///
+/// Implementations receive only declarations whose activation constraint was emitted.
+#[doc(hidden)]
+pub trait BusInteractionRecorder: AirBuilder {
+    /// Store one checked declaration.
+    fn record_bus_interaction<E: Into<Self::Expr>>(
+        &mut self,
+        token: RecordToken,
+        bus_name: &str,
+        direction: BusDirection,
+        fields: impl IntoIterator<Item = E>,
+        activation: BusActivation<Self::Expr>,
+    );
+}
+
+/// Proof that the public declaration path emitted its activation constraint.
+#[doc(hidden)]
+pub struct RecordToken(());
+
+/// AIR interface for binary-native bus declarations.
 ///
 /// Direction is metadata rather than the sign of a field expression.
 /// It therefore remains meaningful in characteristic two.
-pub trait BusInteractionBuilder: AirBuilder {
+///
+/// A conditional declaration adds a constraint of twice the selector's degree.
+/// Backend row selectors are not valid activations unless they are independently Boolean.
+///
+/// Filtering a declaration is intentionally unsupported.
+/// A filtered builder would constrain an activation only on filtered rows while recording it globally.
+///
+/// ```compile_fail
+/// use p3_air::AirBuilder;
+/// use p3_bus::{BusActivation, BusDirection, BusInteractionBuilder};
+///
+/// fn filtered_declaration<AB: BusInteractionBuilder>(builder: &mut AB) {
+///     let condition = builder.is_first_row();
+///     builder.when(condition).push_bus_interaction(
+///         "bus",
+///         BusDirection::Push,
+///         core::iter::empty::<AB::Expr>(),
+///         BusActivation::Always,
+///     );
+/// }
+/// ```
+pub trait BusInteractionBuilder: BusInteractionRecorder {
     /// Declare one tuple contribution on a named bus.
     ///
     /// A conditional activation is constrained to zero or one before it is recorded.
@@ -44,21 +87,11 @@ pub trait BusInteractionBuilder: AirBuilder {
             self.assert_zero(selector.clone().bool_check());
         }
 
-        self.record_bus_interaction_unchecked(bus_name, direction, fields, activation);
+        self.record_bus_interaction(RecordToken(()), bus_name, direction, fields, activation);
     }
-
-    /// Record a declaration whose activation constraints are already enforced.
-    ///
-    /// This is the implementation hook beneath the checked public declaration path.
-    #[doc(hidden)]
-    fn record_bus_interaction_unchecked<E: Into<Self::Expr>>(
-        &mut self,
-        bus_name: &str,
-        direction: BusDirection,
-        fields: impl IntoIterator<Item = E>,
-        activation: BusActivation<Self::Expr>,
-    );
 }
+
+impl<T: BusInteractionRecorder> BusInteractionBuilder for T {}
 
 /// One symbolic tuple contribution emitted by an AIR.
 #[derive(Clone, Debug)]
@@ -101,7 +134,7 @@ impl<F: Field, EF: ExtensionField<F>> BusSymbolicBuilder<F, EF> {
     #[must_use]
     pub fn from_air<A>(air: &A, layout: AirLayout) -> Self
     where
-        A: BaseAir<F> + Air<Self>,
+        A: Air<Self>,
     {
         // A mismatched layout would assign expressions to the wrong columns.
         layout.validate_against_air(air);
@@ -128,6 +161,12 @@ impl<F: Field, EF: ExtensionField<F>> BusSymbolicBuilder<F, EF> {
     #[must_use]
     pub fn extension_constraints(&self) -> Vec<SymbolicExpressionExt<F, EF>> {
         self.inner.extension_constraints()
+    }
+
+    /// Global emission order of base-field and extension-field constraints.
+    #[must_use]
+    pub fn constraint_layout(&self) -> ConstraintLayout {
+        self.inner.constraint_layout()
     }
 }
 
@@ -207,9 +246,10 @@ where
     }
 }
 
-impl<F: Field, EF: ExtensionField<F>> BusInteractionBuilder for BusSymbolicBuilder<F, EF> {
-    fn record_bus_interaction_unchecked<E: Into<Self::Expr>>(
+impl<F: Field, EF: ExtensionField<F>> BusInteractionRecorder for BusSymbolicBuilder<F, EF> {
+    fn record_bus_interaction<E: Into<Self::Expr>>(
         &mut self,
+        _token: RecordToken,
         bus_name: &str,
         direction: BusDirection,
         fields: impl IntoIterator<Item = E>,
@@ -225,17 +265,36 @@ impl<F: Field, EF: ExtensionField<F>> BusInteractionBuilder for BusSymbolicBuild
     }
 }
 
+impl<F: Field, EF: ExtensionField<F>> BusInteractionRecorder for DebugConstraintBuilder<'_, F, EF> {
+    fn record_bus_interaction<E: Into<Self::Expr>>(
+        &mut self,
+        _token: RecordToken,
+        _bus_name: &str,
+        _direction: BusDirection,
+        fields: impl IntoIterator<Item = E>,
+        _activation: BusActivation<Self::Expr>,
+    ) {
+        // Resolve every field conversion while leaving concrete debugging to AIR constraints.
+        fields.into_iter().for_each(|field| {
+            let _ = field.into();
+        });
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use alloc::borrow::Cow;
     use alloc::vec;
 
     use p3_air::symbolic::{AirLayout, BaseEntry, BaseLeaf, SymbolicExpr};
     use p3_air::{Air, BaseAir, WindowAccess};
     use p3_binary_field::BinaryField128;
+    use rand::{RngExt, SeedableRng};
+    use rand_xoshiro::Xoroshiro128Plus;
 
     use super::*;
 
-    /// One-column AIR used to inspect symbolic bus declarations.
+    /// Two-column AIR used to inspect symbolic bus declarations.
     struct DirectionAir {
         /// Direction of the second declaration.
         second: BusDirection,
@@ -245,8 +304,8 @@ mod tests {
 
     impl BaseAir<BinaryField128> for DirectionAir {
         fn width(&self) -> usize {
-            // One trace column supplies both identical payload expressions.
-            1
+            // One column carries payloads and one carries row activation.
+            2
         }
     }
 
@@ -255,8 +314,9 @@ mod tests {
         AB: BusInteractionBuilder<F = BinaryField128>,
     {
         fn eval(&self, builder: &mut AB) {
-            // Read one arbitrary AIR expression rather than a materialized column index.
+            // Keep the payload and selector expressions independent.
             let value: AB::Expr = builder.main().current_slice()[0].into();
+            let selector: AB::Expr = builder.main().current_slice()[1].into();
 
             // Emit the first copy on the push side.
             builder.push_bus_interaction(
@@ -267,7 +327,7 @@ mod tests {
             );
 
             let activation = if self.conditional {
-                BusActivation::Boolean(value.clone())
+                BusActivation::Boolean(selector)
             } else {
                 BusActivation::Always
             };
@@ -279,7 +339,7 @@ mod tests {
 
     /// Build the symbolic declaration profile for one direction choice.
     fn profile(second: BusDirection, conditional: bool) -> BusSymbolicBuilder<BinaryField128> {
-        // The fixture has one main column and no auxiliary inputs.
+        // The fixture has independent payload and selector columns.
         let air = DirectionAir {
             second,
             conditional,
@@ -290,7 +350,7 @@ mod tests {
     #[test]
     fn identical_pushes_do_not_cancel_in_characteristic_two() {
         // Fixture state: two identical payload expressions are both pushes.
-        let profile = profile(BusDirection::Push, true);
+        let profile = profile(BusDirection::Push, false);
 
         // Structural records remain two entries even though `-x == x` in this field.
         assert_eq!(profile.interactions().len(), 2);
@@ -324,23 +384,133 @@ mod tests {
             ));
         }
 
-        // Conditional activation retains its trace expression for later reconstruction.
+        // Conditional activation retains its independent selector expression.
         assert!(matches!(
             interactions[1].activation,
             BusActivation::Boolean(SymbolicExpr::Leaf(BaseLeaf::Variable(variable)))
                 if variable.entry == BaseEntry::Main { offset: 0 }
-                    && variable.index == 0
+                    && variable.index == 1
         ));
     }
 
     #[test]
     fn boolean_activation_adds_its_own_constraint() {
-        // One conditional declaration contributes one Booleanity constraint.
+        // One conditional declaration contributes the polynomial s * (s - 1).
         let conditional = profile(BusDirection::Pull, true);
         assert_eq!(conditional.base_constraints().len(), 1);
+        let constraint = &conditional.base_constraints()[0];
+
+        // Both Boolean values satisfy the constraint.
+        assert_eq!(
+            evaluate(constraint, [BinaryField128::ZERO, BinaryField128::ZERO]),
+            BinaryField128::ZERO
+        );
+        assert_eq!(
+            evaluate(constraint, [BinaryField128::ZERO, BinaryField128::ONE]),
+            BinaryField128::ZERO
+        );
+
+        // A non-Boolean field element does not satisfy the constraint.
+        let mut rng = Xoroshiro128Plus::seed_from_u64(0xB055_B001);
+        let non_boolean = loop {
+            let candidate = rng.random::<BinaryField128>();
+            if candidate != BinaryField128::ZERO && candidate != BinaryField128::ONE {
+                break candidate;
+            }
+        };
+        assert_ne!(
+            evaluate(constraint, [BinaryField128::ZERO, non_boolean]),
+            BinaryField128::ZERO
+        );
 
         // Unconditional declarations add no constraint to the AIR.
         let unconditional = profile(BusDirection::Pull, false);
         assert!(unconditional.base_constraints().is_empty());
+    }
+
+    /// Evaluate the symbolic arithmetic used by the selector fixture.
+    fn evaluate(
+        expression: &SymbolicExpression<BinaryField128>,
+        current: [BinaryField128; 2],
+    ) -> BinaryField128 {
+        match expression {
+            SymbolicExpr::Leaf(BaseLeaf::Variable(variable)) => match variable.entry {
+                BaseEntry::Main { offset: 0 } => current[variable.index],
+                _ => panic!("the selector fixture uses only current main columns"),
+            },
+            SymbolicExpr::Leaf(BaseLeaf::Constant(value)) => *value,
+            SymbolicExpr::Leaf(_) => panic!("the selector fixture uses no row selectors"),
+            SymbolicExpr::Add { x, y, .. } => evaluate(x, current) + evaluate(y, current),
+            SymbolicExpr::Sub { x, y, .. } => evaluate(x, current) - evaluate(y, current),
+            SymbolicExpr::Neg { x, .. } => -evaluate(x, current),
+            SymbolicExpr::Mul { x, y, .. } => evaluate(x, current) * evaluate(y, current),
+        }
+    }
+
+    /// AIR covering compound expressions and mixed constraint kinds.
+    struct RichAir;
+
+    impl BaseAir<BinaryField128> for RichAir {
+        fn width(&self) -> usize {
+            // Payload and activation occupy separate trace columns.
+            2
+        }
+
+        fn num_public_values(&self) -> usize {
+            // One public value participates in the declared tuple.
+            1
+        }
+
+        fn num_periodic_columns(&self) -> usize {
+            // One periodic value participates in the declared tuple.
+            1
+        }
+
+        fn periodic_columns(&self) -> Cow<'_, [Vec<BinaryField128>]> {
+            // A two-row public cycle is enough to allocate the symbolic entry.
+            Cow::Owned(vec![vec![BinaryField128::ZERO, BinaryField128::ONE]])
+        }
+    }
+
+    impl<AB> Air<AB> for RichAir
+    where
+        AB: BusInteractionBuilder<F = BinaryField128> + ExtensionBuilder<EF = BinaryField128>,
+        AB::ExprEF: From<BinaryField128>,
+    {
+        fn eval(&self, builder: &mut AB) {
+            // Emit a base constraint before the extension constraint.
+            let value: AB::Expr = builder.main().current_slice()[0].into();
+            builder.assert_zero(value.clone() - value.clone());
+            builder.assert_zero_ext(BinaryField128::ZERO);
+
+            // Mix current, next, public, and periodic expressions in one tuple field.
+            let selector: AB::Expr = builder.main().current_slice()[1].into();
+            let next: AB::Expr = builder.main().next_slice()[0].into();
+            let public: AB::Expr = builder.public_values()[0].into();
+            let periodic: AB::Expr = builder.periodic_values()[0].into();
+            let compound = value * selector.clone() + next + public + periodic;
+            builder.push_bus_interaction(
+                "rich",
+                BusDirection::Push,
+                [compound],
+                BusActivation::Boolean(selector),
+            );
+        }
+    }
+
+    #[test]
+    fn compound_fields_preserve_global_constraint_order() {
+        // The AIR emits base, extension, then automatic Booleanity constraints.
+        let air = RichAir;
+        let profile = BusSymbolicBuilder::from_air(&air, AirLayout::from_air(&air));
+        assert_eq!(profile.interactions().len(), 1);
+        assert!(profile.interactions()[0].fields[0].degree_multiple() >= 2);
+        assert_eq!(profile.base_constraints().len(), 2);
+        assert_eq!(profile.extension_constraints().len(), 1);
+
+        // Global positions retain the interleaving required by alpha decomposition.
+        let layout = profile.constraint_layout();
+        assert_eq!(layout.base_indices, vec![0, 2]);
+        assert_eq!(layout.ext_indices, vec![1]);
     }
 }
