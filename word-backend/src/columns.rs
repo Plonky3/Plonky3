@@ -1,4 +1,7 @@
+//! Packed nonlinear-relation columns derived from a checked witness.
+
 use alloc::vec::Vec;
+use core::array;
 
 use p3_word::{ConstraintSystem, Operand};
 
@@ -33,40 +36,23 @@ impl<W: PackedWord> OperationColumns<W> {
             result
         };
 
-        let bitwise_and = [
-            system
-                .and_constraints()
-                .iter()
-                .map(|constraint| evaluate(constraint.left()))
-                .collect(),
-            system
-                .and_constraints()
-                .iter()
-                .map(|constraint| evaluate(constraint.right()))
-                .collect(),
-        ];
-        let integer_mul = [
-            system
-                .integer_mul_constraints()
-                .iter()
-                .map(|constraint| evaluate(constraint.left()))
-                .collect(),
-            system
-                .integer_mul_constraints()
-                .iter()
-                .map(|constraint| evaluate(constraint.right()))
-                .collect(),
-            system
-                .integer_mul_constraints()
-                .iter()
-                .map(|constraint| evaluate(constraint.low()))
-                .collect(),
-            system
-                .integer_mul_constraints()
-                .iter()
-                .map(|constraint| evaluate(constraint.high()))
-                .collect(),
-        ];
+        // One constraint-major pass fills both bitwise reduction columns.
+        let and_constraints = system.and_constraints();
+        let mut bitwise_and = array::from_fn(|_| Vec::with_capacity(and_constraints.len()));
+        for constraint in and_constraints {
+            bitwise_and[0].push(evaluate(constraint.left()));
+            bitwise_and[1].push(evaluate(constraint.right()));
+        }
+
+        // One constraint-major pass fills all four integer-product columns.
+        let integer_mul_constraints = system.integer_mul_constraints();
+        let mut integer_mul = array::from_fn(|_| Vec::with_capacity(integer_mul_constraints.len()));
+        for constraint in integer_mul_constraints {
+            integer_mul[0].push(evaluate(constraint.left()));
+            integer_mul[1].push(evaluate(constraint.right()));
+            integer_mul[2].push(evaluate(constraint.low()));
+            integer_mul[3].push(evaluate(constraint.high()));
+        }
 
         Ok(Self {
             bitwise_and,
