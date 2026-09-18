@@ -207,7 +207,7 @@ impl<F: Field> SuffixTableSource<F> for Table<F> {
 pub struct ColumnOut<'a, F> {
     /// Logical rows assigned to one source column.
     values: &'a mut [F],
-    /// Whether the producer completed the column write.
+    /// Whether the producer called the checked writer for this column.
     written: bool,
 }
 
@@ -260,6 +260,7 @@ pub struct SuffixLayoutPlan {
 
 /// Dimensions that cannot form a suffix-layout witness.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[non_exhaustive]
 pub enum SuffixLayoutPlanError {
     /// No source tables were provided.
     #[error("a suffix-layout witness requires at least one table")]
@@ -277,6 +278,7 @@ pub enum SuffixLayoutPlanError {
 
 /// A source batch that disagrees with its immutable placement plan.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[non_exhaustive]
 pub enum SuffixFillError {
     /// The source list and planned table list have different lengths.
     #[error("suffix-layout fill received {actual} tables, expected {expected}")]
@@ -296,8 +298,8 @@ pub enum SuffixFillError {
         /// Supplied shape.
         actual: TableShape,
     },
-    /// A producer returned without completing one of its columns.
-    #[error("suffix-layout table {table} left column {column} unwritten")]
+    /// A producer returned without calling the checked writer for one column.
+    #[error("suffix-layout table {table} did not write column {column}")]
     UnwrittenColumn {
         /// Table index.
         table: usize,
@@ -481,40 +483,47 @@ impl<F: Field> FilledSuffixWitness<'_, F> {
         self.poly
     }
 
-    /// Attaches owned dense tables for compatibility with the established layout prover.
+    /// Builds the dense table view required by the suffix-layout prover.
     ///
-    /// The polynomial is retained without another stacking copy.
-    pub fn into_witness_with_tables(
-        self,
-        mut tables: Vec<Table<F>>,
-    ) -> Result<Witness<F>, SuffixFillError> {
-        if tables.len() != self.plan.source_shapes.len() {
-            return Err(SuffixFillError::TableCount {
-                expected: self.plan.source_shapes.len(),
-                actual: tables.len(),
-            });
-        }
-        for (table, (source, expected)) in tables.iter().zip(&self.plan.source_shapes).enumerate() {
-            let actual = source.shape();
-            if actual != *expected {
-                return Err(SuffixFillError::ShapeMismatch {
-                    table,
-                    expected: *expected,
-                    actual,
-                });
+    /// The table values are copied from the committed polynomial.
+    /// Callers cannot supply a second representation that disagrees with the commitment.
+    pub fn into_witness(self) -> Witness<F> {
+        // Suffix rounds need one dense table per logical source.
+        // Reconstructing them from the stack keeps the committed polynomial authoritative.
+        let mut values_by_table = self
+            .plan
+            .committed_shapes
+            .iter()
+            .map(|shape| Vec::with_capacity((1usize << shape.num_variables()) * shape.width()))
+            .collect::<Vec<_>>();
+
+        // Each selector addresses one complete committed column slot.
+        for placement in &self.plan.placements {
+            let shape = self.plan.committed_shapes[placement.idx()];
+            let rows = 1usize << shape.num_variables();
+            for selector in placement.selectors() {
+                let offset = selector.index() << shape.num_variables();
+                values_by_table[placement.idx()]
+                    .extend_from_slice(&self.poly.as_slice()[offset..offset + rows]);
             }
         }
 
-        tables
-            .iter_mut()
-            .for_each(|table| table.pad_zeros(self.plan.folding));
-        Ok(Witness {
+        // Source order is restored after the largest-first placement walk.
+        let tables = values_by_table
+            .into_iter()
+            .zip(&self.plan.committed_shapes)
+            .map(|(values, shape)| {
+                Table::new(RowMajorMatrix::new(values, 1usize << shape.num_variables()))
+            })
+            .collect();
+
+        Witness {
             tables,
             placements: self.plan.placements.clone(),
             num_variables: self.plan.num_variables,
             folding: self.plan.folding,
             poly: self.poly,
-        })
+        }
     }
 }
 
@@ -561,6 +570,7 @@ fn column_slots_for_shapes<'a, T>(
 }
 
 /// Splits `out` into one disjoint slot per placed column, after `num_folded` suffix variables.
+///
 /// Column `(table, poly)` owns the slot starting at `selector.index() << (n - num_folded)`, of
 /// length `2^(n - num_folded)`, where `n` is the table's number of variables.
 ///
@@ -932,9 +942,7 @@ mod tests {
             placement_addresses(direct.placements()),
             placement_addresses(&legacy.placements)
         );
-        let compatible = direct
-            .into_witness_with_tables(tables.to_vec())
-            .expect("the attached tables have the planned logical shapes");
+        let compatible = direct.into_witness();
         assert_eq!(compatible.poly().as_slice(), legacy.poly().as_slice());
         assert_eq!(compatible.table_shapes(), legacy.table_shapes());
     }
@@ -1463,6 +1471,48 @@ mod tests {
     }
 
     #[test]
+    fn heterogeneous_sources_share_one_checked_fill() {
+        // One batch covers the three producer layouts expected at the ingestion boundary.
+        // The folding depth also places logical arities on both sides of normalization.
+        let dense = Table::new(RowMajorMatrix::new((0..4).map(F::from_usize).collect(), 2));
+        let chunked_values = (20..52).map(F::from_usize).collect::<Vec<_>>();
+        let chunked = ChunkedSource {
+            shape: TableShape::new(5, 1),
+            columns: vec![vec![
+                chunked_values[..7].to_vec(),
+                chunked_values[7..].to_vec(),
+            ]],
+        };
+        let packed_words = vec![vec![0xA5], vec![0x3C], vec![0x81]];
+        let packed = BitPackedSource {
+            shape: TableShape::new(3, 3),
+            columns: packed_words.clone(),
+        };
+
+        // Dense references define the exact polynomial expected from each custom source.
+        let chunked_table = Table::new(RowMajorMatrix::new(chunked_values, 32));
+        let packed_table = Table::new(RowMajorMatrix::new(
+            packed_words
+                .iter()
+                .flat_map(|words| {
+                    (0..8).map(|row| F::from_u64((words[row / 64] >> (row % 64)) & 1))
+                })
+                .collect(),
+            8,
+        ));
+        let tables = vec![dense.clone(), chunked_table, packed_table];
+        let plan = SuffixLayoutPlan::new(tables.iter().map(Table::shape).collect(), 3).unwrap();
+
+        // The direct stack must equal the established dense path for the whole mixed batch.
+        let direct = plan.fill(&[&dense, &chunked, &packed]).unwrap();
+        let legacy = Witness::new(tables, 3);
+        assert_eq!(direct.poly().as_slice(), legacy.poly().as_slice());
+        let compatible = direct.into_witness();
+        assert_eq!(compatible.poly().as_slice(), legacy.poly().as_slice());
+        assert_eq!(compatible.table_shapes(), legacy.table_shapes());
+    }
+
+    #[test]
     fn preprocessing_padding_is_zero_and_hidden_from_the_producer() {
         let source = ShortSource {
             shape: TableShape::new(2, 1),
@@ -1617,6 +1667,22 @@ mod tests {
                 // cursor value. That matches the "unused tail stays zero" rule.
                 assert_eq!(v, F::ZERO);
             }
+        }
+
+        #[test]
+        fn direct_fill_matches_dense_with_normalization(
+            shapes in arb_table_shapes(),
+            folding in 0usize..=6,
+        ) {
+            // Randomized dimensions exercise placement changes caused by preprocessing padding.
+            let mut rng = SmallRng::seed_from_u64(0xD1EC7);
+            let tables = shapes
+                .iter()
+                .map(|&(arity, width)| Table::rand(&mut rng, width, arity))
+                .collect::<Vec<_>>();
+
+            // Both paths must commit the same cells and derive the same placement metadata.
+            assert_direct_fill_matches_dense(&tables, folding);
         }
     }
 }

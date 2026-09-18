@@ -978,12 +978,10 @@ impl SuffixTableSource<BabyBear> for BitColumns<'_> {
 
 fn materialize_bit_table(columns: &[Vec<u64>], k: usize) -> Table<BabyBear> {
     let rows = 1 << k;
-    let values = columns
-        .iter()
-        .flat_map(|words| {
-            (0..rows).map(move |row| BabyBear::from_u64((words[row / 64] >> (row % 64)) & 1))
-        })
-        .collect();
+    let mut values = Vec::with_capacity(columns.len() * rows);
+    for words in columns {
+        values.extend((0..rows).map(|row| BabyBear::from_u64((words[row / 64] >> (row % 64)) & 1)));
+    }
     Table::new(RowMajorMatrix::new(values, rows))
 }
 
