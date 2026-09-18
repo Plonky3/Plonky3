@@ -3,6 +3,7 @@ use alloc::vec::Vec;
 use core::fmt::{Debug, Display};
 use core::hash::Hash;
 use core::iter::{Product, Sum, zip};
+use core::mem::MaybeUninit;
 use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 use core::{array, slice};
 
@@ -1441,15 +1442,17 @@ impl<F: Field> BoundedPowers<F> {
         }
 
         // Allocate buffer storing packed powers, containing at least `num_powers` scalars.
+        // The fill below writes every slot, so the buffer starts uninitialized.
         let width = F::Packing::WIDTH;
         let num_packed = num_powers.div_ceil(width);
-        let mut points_packed = F::Packing::zero_vec(num_packed);
+        let mut points_packed = Vec::<F::Packing>::with_capacity(num_packed);
+        let slots = &mut points_packed.spare_capacity_mut()[..num_packed];
 
         let base = self.iter.base;
         let shift = self.iter.current;
 
         if num_powers < PARALLEL_THRESHOLD {
-            fill_packed_shifted_powers(base, shift, &mut points_packed);
+            fill_packed_shifted_powers(base, shift, slots);
         } else {
             // Split computation evenly among threads
             let num_threads = current_num_threads().max(1);
@@ -1458,7 +1461,7 @@ impl<F: Field> BoundedPowers<F> {
             // Precompute base for each chunk.
             let chunk_base = base.exp_u64((chunk_size * width) as u64);
 
-            points_packed
+            slots
                 .par_chunks_mut(chunk_size)
                 .enumerate()
                 .for_each(|(chunk_idx, chunk_slice)| {
@@ -1469,6 +1472,10 @@ impl<F: Field> BoundedPowers<F> {
                     fill_packed_shifted_powers(base, chunk_start, chunk_slice);
                 });
         }
+
+        // SAFETY: `slots` covers the first `num_packed` slots, and each branch above wrote
+        // every one of them.
+        unsafe { points_packed.set_len(num_packed) };
 
         // return the number of requested points, discarding the unused packed powers
         // SAFETY: size_of::<F::Packing> always divides size_of::<F::Packing>.
@@ -1487,10 +1494,16 @@ const NUM_POWER_CHAINS: usize = 8;
 /// `base^(NUM_POWER_CHAINS * P::WIDTH)`. The chains are independent of each other, so
 /// their multiplications can overlap in the pipeline. Outputs shorter than two rounds
 /// are filled by a single chain, as setting up the others would cost more than it saves.
-fn fill_packed_shifted_powers<P: PackedField>(base: P::Scalar, start: P::Scalar, out: &mut [P]) {
+fn fill_packed_shifted_powers<P: PackedField>(
+    base: P::Scalar,
+    start: P::Scalar,
+    out: &mut [MaybeUninit<P>],
+) {
     let mut powers = P::packed_shifted_powers(base, start);
     if out.len() < 2 * NUM_POWER_CHAINS {
-        powers.fill(out);
+        for (slot, power) in out.iter_mut().zip(powers) {
+            slot.write(power);
+        }
         return;
     }
 
@@ -1499,12 +1512,16 @@ fn fill_packed_shifted_powers<P: PackedField>(base: P::Scalar, start: P::Scalar,
 
     let (rounds, tail) = out.as_chunks_mut::<NUM_POWER_CHAINS>();
     for round in rounds {
-        *round = chains;
+        for (slot, &chain) in round.iter_mut().zip(&chains) {
+            slot.write(chain);
+        }
         for chain in &mut chains {
             *chain *= step;
         }
     }
-    tail.copy_from_slice(&chains[..tail.len()]);
+    for (slot, chain) in tail.iter_mut().zip(chains) {
+        slot.write(chain);
+    }
 }
 
 /// Same as [`Powers`], but returns a bounded number of powers.
