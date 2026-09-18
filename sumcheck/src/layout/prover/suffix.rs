@@ -17,7 +17,7 @@ use crate::layout::prover::{Layout, StackedClaims};
 use crate::layout::witness::{Table, column_slots};
 use crate::layout::{LayoutStrategy, Witness};
 use crate::product_polynomial::ProductPolynomial;
-use crate::strategy::{Basis, SumcheckProver, VariableOrder};
+use crate::strategy::{Basis, FromTable, ReprSumcheckProver, SumcheckProver, VariableOrder};
 use crate::svo::{SvoPoint, calculate_accumulators_batch};
 use crate::table::{OpeningBatch, OpeningEvals, OpeningRequest};
 use crate::transcript::{ProverTranscript, SumcheckShape};
@@ -39,6 +39,24 @@ struct ClaimWeightTables<EF> {
     current: Option<Vec<EF>>,
     /// Repeat-last successor weights, present when the claim opens a successor view.
     next: Option<Vec<EF>>,
+}
+
+/// One source table's contributions to the residual weight polynomial, indexed by column.
+///
+/// Each contribution is `(claim index, is successor, alpha power)`.
+type ColumnWeights<EF> = Vec<Vec<(usize, bool, EF)>>;
+
+/// Every source table's [`ColumnWeights`], indexed by source table.
+type WeightPlan<EF> = Vec<ColumnWeights<EF>>;
+
+impl<EF: Copy + Send + Sync> ClaimWeightTables<EF> {
+    /// Both tables, moved into another field a whole table at a time.
+    fn into_image<R: FromTable<EF>>(self) -> ClaimWeightTables<R> {
+        ClaimWeightTables {
+            current: self.current.map(R::from_table),
+            next: self.next.map(R::from_table),
+        }
+    }
 }
 
 /// Stacked-sumcheck prover with suffix-first variable binding.
@@ -364,6 +382,50 @@ impl<F: Field, EF: ExtensionField<F>> Layout<F, EF> for SuffixProver<F, EF> {
         F: TranscriptField,
         Ch: FieldChallenger<F> + GrindingChallenger<Witness = F>,
     {
+        let (alpha, sum, rs) = self.preprocess(sumcheck_data, pow_bits, challenger);
+
+        // Stage D: materialise the residual product polynomial.
+        //
+        // - Suffix binding folds variables in reverse.
+        // - The residual poly therefore lives in the reversed-challenges frame.
+        let reversed = rs.reversed();
+        // Factor 1 of the product: the compressed stacked poly at rs.
+        // No external scaling here; the plain path keeps the running sum unchanged.
+        let compressed = self.compress_stacked(&reversed);
+        // Factor 2 of the product: the batched equality-weight poly.
+        let weights = self.combine_weights(&reversed, alpha);
+        // Pair them; the product polynomial drives the remaining rounds.
+        let poly = ProductPolynomial::new_unpacked(VariableOrder::Suffix, compressed, weights);
+        // Cross-check: the dot product of the two factors must equal the
+        // running sum accumulated across the preprocessing rounds.
+        debug_assert_eq!(poly.dot_product(), sum);
+
+        (SumcheckProver::new(poly, sum), rs)
+    }
+
+    fn strategy() -> LayoutStrategy {
+        LayoutStrategy::new(false, VariableOrder::Suffix)
+    }
+}
+
+impl<F: Field, EF: ExtensionField<F>> SuffixProver<F, EF> {
+    /// Runs the SVO preprocessing rounds.
+    ///
+    /// # Returns
+    ///
+    /// - Batching challenge that weights the recorded openings.
+    /// - Running claimed sum after the preprocessing rounds.
+    /// - Folding challenges, in sampling order.
+    fn preprocess<Ch>(
+        &self,
+        sumcheck_data: &mut SumcheckData<F, EF>,
+        pow_bits: usize,
+        challenger: &mut Ch,
+    ) -> (EF, EF, Point<EF>)
+    where
+        F: TranscriptField,
+        Ch: FieldChallenger<F> + GrindingChallenger<Witness = F>,
+    {
         // Sanity: preprocessing cannot consume more rounds than the stacked arity.
         assert!(self.claims.folding <= self.claims.num_variables);
 
@@ -457,33 +519,48 @@ impl<F: Field, EF: ExtensionField<F>> Layout<F, EF> for SuffixProver<F, EF> {
         // Require that every described step was played.
         transcript.finish();
 
-        // Stage D: materialise the residual product polynomial.
-        //
-        // - Suffix binding folds variables in reverse.
-        // - The residual poly therefore lives in the reversed-challenges frame.
-        let rs = Point::new(rs);
-        // Reverse the challenges before handing them to the compressors.
+        (alpha, sum, Point::new(rs))
+    }
+
+    /// Finalises SVO preprocessing and returns the residual prover over tables in `R`.
+    ///
+    /// Plays exactly the transcript [`Layout::into_sumcheck`] plays; only the field
+    /// the residual tables are held in differs.
+    ///
+    /// # Returns
+    ///
+    /// - Residual sumcheck prover whose tables live in `R`.
+    /// - Folding challenges sampled during preprocessing.
+    #[tracing::instrument(skip_all)]
+    pub fn into_sumcheck_in<R, Ch>(
+        self,
+        sumcheck_data: &mut SumcheckData<F, EF>,
+        pow_bits: usize,
+        challenger: &mut Ch,
+    ) -> (ReprSumcheckProver<F, EF, R>, Point<EF>)
+    where
+        F: TranscriptField,
+        EF: From<R>,
+        R: Field + FromTable<EF>,
+        Ch: FieldChallenger<F> + GrindingChallenger<Witness = F>,
+    {
+        let (alpha, sum, rs) = self.preprocess(sumcheck_data, pow_bits, challenger);
+
+        // Suffix binding folds variables in reverse, so the residual factors live in the
+        // reversed-challenges frame.
         let reversed = rs.reversed();
         // Factor 1 of the product: the compressed stacked poly at rs.
         // No external scaling here; the plain path keeps the running sum unchanged.
         let compressed = self.compress_stacked(&reversed);
-        // Factor 2 of the product: the batched equality-weight poly.
-        let weights = self.combine_weights(&reversed, alpha);
-        // Pair them; the product polynomial drives the remaining rounds.
-        let poly = ProductPolynomial::new_unpacked(VariableOrder::Suffix, compressed, weights);
-        // Cross-check: the dot product of the two factors must equal the
-        // running sum accumulated across the preprocessing rounds.
-        debug_assert_eq!(poly.dot_product(), sum);
+        // Factor 2 of the product: the batched equality-weight poly, accumulated in `R`.
+        let weights = self.combine_weights_in::<R>(&reversed, alpha);
 
-        (SumcheckProver::new(poly, sum), rs)
+        (
+            ReprSumcheckProver::from_tables(VariableOrder::Suffix, compressed, weights, sum),
+            rs,
+        )
     }
 
-    fn strategy() -> LayoutStrategy {
-        LayoutStrategy::new(false, VariableOrder::Suffix)
-    }
-}
-
-impl<F: Field, EF: ExtensionField<F>> SuffixProver<F, EF> {
     /// Compress every stacked-table slot by fixing the suffix challenges.
     #[tracing::instrument(skip_all)]
     pub(crate) fn compress_stacked(&self, rs: &Point<EF>) -> Poly<EF> {
@@ -563,10 +640,64 @@ impl<F: Field, EF: ExtensionField<F>> SuffixProver<F, EF> {
     /// - Virtual claim: scaled equality table written across the full output.
     #[tracing::instrument(skip_all)]
     pub(crate) fn combine_weights(&self, rs: &Point<EF>, alpha: EF) -> Poly<EF> {
+        let (tables, column_weights) = self.weight_plan(rs, alpha);
+        self.combine_weights_from_plan::<F, EF>(rs, alpha, &tables, &column_weights)
+    }
+
+    /// Builds the residual weight polynomial with every accumulation carried out in `R`.
+    ///
+    /// Each entry is the `R` image of the same entry [`Self::combine_weights`] builds, since
+    /// `R::from` is a field isomorphism and every entry is a polynomial in the converted inputs.
+    ///
+    /// Each per-claim table spans a single column slot, so the crossing costs one pass over a
+    /// slot per claim, against the whole output the products it feeds then cover.
+    ///
+    /// Packs the virtual-claim equality tables over `R` itself. That is only the wide-SIMD
+    /// choice where `R::Packing` already is: a binary field crossing into its own
+    /// polynomial-basis representation, for instance. A caller crossing into a prime-field
+    /// extension instead, where `R::Packing` collapses to `R`, should pack over `R`'s base field
+    /// the way [`Self::combine_weights`] packs over `F`.
+    #[tracing::instrument(skip_all)]
+    pub(crate) fn combine_weights_in<R>(&self, rs: &Point<EF>, alpha: EF) -> Poly<R>
+    where
+        R: Field + FromTable<EF>,
+    {
+        let (tables, column_weights) = self.weight_plan(rs, alpha);
+        // Each source table is released as its image appears.
+        let tables: Vec<ClaimWeightTables<R>> = tables
+            .into_iter()
+            .map(ClaimWeightTables::into_image)
+            .collect();
+        let column_weights: WeightPlan<R> = column_weights
+            .into_iter()
+            .map(|table| {
+                table
+                    .into_iter()
+                    .map(|column| {
+                        column
+                            .into_iter()
+                            .map(|(claim_idx, is_next, scale)| (claim_idx, is_next, R::from(scale)))
+                            .collect()
+                    })
+                    .collect()
+            })
+            .collect();
+        self.combine_weights_from_plan::<R, R>(rs, alpha, &tables, &column_weights)
+    }
+
+    /// Builds each claim's residual weight tables and the per-column batching coefficients.
+    ///
+    /// # Returns
+    ///
+    /// - One [`ClaimWeightTables`] per concrete claim, in the batching walk order.
+    /// - Per source table and column: `(claim index, is successor, alpha power)` per contribution.
+    fn weight_plan(
+        &self,
+        rs: &Point<EF>,
+        alpha: EF,
+    ) -> (Vec<ClaimWeightTables<EF>>, WeightPlan<EF>) {
         // Preconditions: challenge count matches the folding depth.
         assert_eq!(rs.num_variables(), self.claims.folding);
-        // Output arity: stacked arity minus the folded challenges.
-        let mut out = Poly::<EF>::zero(self.claims.num_variables - rs.num_variables());
 
         // Every opening of a claim shares that claim's point, so its residual weight table is
         // the same for every column it opens. Build each claim's current and successor tables
@@ -577,7 +708,7 @@ impl<F: Field, EF: ExtensionField<F>> SuffixProver<F, EF> {
         let mut alphas = alpha.powers();
         let mut tables: Vec<ClaimWeightTables<EF>> = Vec::new();
         // Per column: `(table index into tables, is successor, alpha power)`.
-        let mut column_weights: Vec<Vec<Vec<(usize, bool, EF)>>> = self
+        let mut column_weights: WeightPlan<EF> = self
             .claims
             .tables
             .iter()
@@ -619,8 +750,36 @@ impl<F: Field, EF: ExtensionField<F>> SuffixProver<F, EF> {
             }
         }
 
+        (tables, column_weights)
+    }
+
+    /// Accumulates a weight plan into the residual weight polynomial over `R`.
+    ///
+    /// `B` is the base field the virtual claims' factored equality tables are packed over. Pass
+    /// the narrowest field `R` extends whose packing is wide, not `R` itself, unless
+    /// `R::Packing` already is `R` and there is no narrower field to gain from.
+    ///
+    /// # Contributions
+    ///
+    /// - Concrete claim: its residual table scaled by the column's coefficient, into that
+    ///   column's slot only.
+    /// - Virtual claim: scaled equality table written across the full output.
+    fn combine_weights_from_plan<B, R>(
+        &self,
+        rs: &Point<EF>,
+        alpha: EF,
+        tables: &[ClaimWeightTables<R>],
+        column_weights: &[ColumnWeights<R>],
+    ) -> Poly<R>
+    where
+        B: Field,
+        R: ExtensionField<B> + From<EF>,
+    {
+        // Output arity: stacked arity minus the folded challenges.
+        let mut out = Poly::<R>::zero(self.claims.num_variables - rs.num_variables());
+
         // A column's weight entry resolves to its claim's table and alpha power.
-        let resolve = |&(claim_idx, is_next, scale): &(usize, bool, EF)| {
+        let resolve = |&(claim_idx, is_next, scale): &(usize, bool, R)| {
             let claim_tables = &tables[claim_idx];
             let table = if is_next {
                 &claim_tables.next
@@ -666,11 +825,15 @@ impl<F: Field, EF: ExtensionField<F>> SuffixProver<F, EF> {
             // Split the claim point into (rest-of-space, svo-sub-point).
             let (rest, svo) = claim
                 .point
+                .as_slice()
                 .split_at(claim.point.num_variables() - rs.num_variables());
             // Scalar weight: alpha^i times the equality between svo part and rs.
-            let scale = alpha_i * Point::eval_eq(svo.as_slice(), rs.as_slice());
+            let scale = alpha_i * Point::eval_eq(svo, rs.as_slice());
+            // The equality table is a polynomial in the point, so it commutes with `R::from`.
+            let rest = Point::new(rest.iter().copied().map(R::from).collect());
             // Contribute the scaled equality table across the whole output.
-            SplitEq::new_packed(&rest, scale).accumulate_into(out.as_mut_slice(), None);
+            SplitEq::<B, R>::new_packed(&rest, R::from(scale))
+                .accumulate_into(out.as_mut_slice(), None);
             // Advance alpha for the next virtual claim.
             alpha_i *= alpha;
         }
@@ -742,7 +905,7 @@ mod tests {
 
     use itertools::Itertools;
     use p3_baby_bear::BabyBear;
-    use p3_binary_field::BinaryField128;
+    use p3_binary_field::{BinaryField128, Ghash128};
     use p3_field::extension::BinomialExtensionField;
     use p3_field::{ExtensionField, Field, PrimeCharacteristicRing, dot_product};
     use p3_matrix::dense::RowMajorMatrix;
@@ -948,6 +1111,81 @@ mod tests {
             prover.claims.sum(alpha),
             dot_product::<EF, _, _>(stacked.iter().copied(), weights.iter().copied())
         );
+    }
+
+    /// The challenge field as its own representation, taking tables through the default map.
+    impl FromTable<Self> for BabyBearExt4 {}
+
+    /// Records a claim set that exercises every column arity of the weight combiner, then checks
+    /// that combining in `R` lands on the image of combining in `EF`.
+    ///
+    /// # Claims
+    ///
+    /// Two claims on the first table, both opening columns directly and through the successor
+    /// view, plus a third naming one column; the second table takes a claim with a single
+    /// opening, and the stacked polynomial takes one virtual claim.
+    ///
+    /// Columns therefore carry one, two and three contributions, and the second table's unopened
+    /// columns carry none.
+    ///
+    /// At `folding == 0`, the depth the binary PCS runs at, the challenges are empty and the
+    /// virtual claim's SVO half is too.
+    fn assert_combine_weights_in_matches_image<F, EF, R>(folding: usize, seed: u64)
+    where
+        F: Field,
+        EF: ExtensionField<F>,
+        R: Field + FromTable<EF>,
+        StandardUniform: Distribution<F> + Distribution<EF>,
+    {
+        let mut rng = SmallRng::seed_from_u64(seed);
+        let tables = vec![table::<F>(&mut rng, 4, 4), table::<F>(&mut rng, 3, 3)];
+        let mut prover = SuffixProver::<F, EF>::from_witness(SuffixProver::<F, EF>::new_witness(
+            tables, folding,
+        ));
+
+        let requests = [
+            (0, OpeningBatch::new(vec![0, 1], vec![1, 2])),
+            (0, OpeningBatch::new(vec![2], vec![0])),
+            (0, OpeningBatch::new(vec![0], Vec::new())),
+            (1, OpeningBatch::new(vec![0], Vec::new())),
+        ];
+        for (table_idx, request) in &requests {
+            let num_variables = prover.claims.tables[*table_idx].num_variables();
+            let point = Point::<EF>::rand(&mut rng, num_variables);
+            prover.record_opening(*table_idx, request, &point);
+        }
+        let virtual_point = Point::<EF>::rand(&mut rng, prover.claims.num_variables);
+        prover.record_virtual(&virtual_point);
+
+        let rs = Point::<EF>::rand(&mut rng, folding);
+        let alpha: EF = rng.random();
+        let expected = prover.combine_weights(&rs, alpha);
+        let combined = prover.combine_weights_in::<R>(&rs, alpha);
+
+        assert_eq!(combined.num_variables(), expected.num_variables());
+        // Guard against a vacuous comparison of two zero tables.
+        assert!(expected.iter().any(|&weight| weight != EF::ZERO));
+        for (&combined, &expected) in combined.iter().zip_eq(expected.iter()) {
+            assert_eq!(combined, R::from(expected));
+        }
+    }
+
+    #[test]
+    fn combine_weights_in_the_field_itself_matches_the_challenge_field() {
+        for folding in [0, 2] {
+            assert_combine_weights_in_matches_image::<BabyBear, BabyBearExt4, BabyBearExt4>(
+                folding, 5,
+            );
+        }
+    }
+
+    #[test]
+    fn combine_weights_in_the_polynomial_basis_matches_the_tower() {
+        for folding in [0, 2] {
+            assert_combine_weights_in_matches_image::<BinaryField128, BinaryField128, Ghash128>(
+                folding, 7,
+            );
+        }
     }
 
     #[test]

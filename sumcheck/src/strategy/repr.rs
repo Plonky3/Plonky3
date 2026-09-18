@@ -11,7 +11,7 @@ use p3_maybe_rayon::prelude::*;
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
 
-use super::{Basis, SumcheckProver};
+use super::{Basis, SumcheckProver, VariableOrder};
 use crate::SumcheckData;
 use crate::product_polynomial::ProductPolynomial;
 use crate::transcript::{ProverTranscript, SumcheckShape};
@@ -38,7 +38,8 @@ use crate::transcript::{ProverTranscript, SumcheckShape};
 ///
 /// # Storage
 ///
-/// Tables are held as scalars, whatever storage the source prover used.
+/// Tables are held as scalars. [`Self::from_tables`] takes scalar tables to begin with;
+/// [`Self::new`] unpacks whatever storage the source prover used.
 ///
 /// That costs nothing where the tables were scalar already: suffix binding always is, and
 /// so is a field whose packing is itself, like `BinaryField128`. A packed prefix pair over
@@ -60,6 +61,9 @@ where
     /// Moves a prover's tables, claim and held challenge into `R`.
     ///
     /// A held challenge crosses as it is, so the next measuring pass still absorbs it.
+    ///
+    /// This is the only entry that takes a prover mid-fold: it carries an outstanding challenge
+    /// across, and it accepts a packed prefix pair, which it unpacks.
     #[tracing::instrument(skip_all)]
     pub fn new(prover: SumcheckProver<F, EF>) -> Self {
         let SumcheckProver {
@@ -79,6 +83,22 @@ where
                 sum: R::from(sum),
                 outstanding: outstanding.map(R::from),
             },
+            _transcript: PhantomData,
+        }
+    }
+
+    /// Builds a prover from an evaluation table in `EF` and a weight table already in `R`.
+    ///
+    /// Only the evaluations cross into `R` here; a caller that can accumulate its weights in
+    /// `R` directly saves the second crossing.
+    #[tracing::instrument(skip_all)]
+    pub fn from_tables(order: VariableOrder, evals: Poly<EF>, weights: Poly<R>, sum: EF) -> Self {
+        let evals = Poly::new(R::from_table(evals.into_evals()));
+        let poly = ProductPolynomial::new_unpacked(order, evals, weights);
+
+        // `SumcheckProver::new` checks, in debug builds, that the claim and this pair agree in `R`.
+        Self {
+            inner: SumcheckProver::new(poly, R::from(sum)),
             _transcript: PhantomData,
         }
     }
