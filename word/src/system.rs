@@ -11,13 +11,37 @@ use crate::word::Word;
 
 /// A homogeneous relation family.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u8)]
 pub enum ConstraintKind {
     /// An XOR operand must vanish.
-    Zero,
+    Zero = 0,
     /// Two operands are combined bit by bit.
-    And,
+    And = 1,
     /// Two words produce a two-word unsigned product.
-    IntegerMul,
+    IntegerMul = 2,
+}
+
+impl ConstraintKind {
+    /// Every relation family in compact-code order.
+    const ALL: [Self; 3] = [Self::Zero, Self::And, Self::IntegerMul];
+
+    /// Returns the stable compact relation-family code.
+    #[inline]
+    pub const fn code(self) -> u8 {
+        // Explicit discriminants define the backend-independent representation.
+        self as u8
+    }
+
+    /// Recovers a relation family from its compact code.
+    #[inline]
+    pub const fn from_code(code: u8) -> Option<Self> {
+        // The dense table rejects unassigned discriminants.
+        if code < Self::ALL.len() as u8 {
+            Some(Self::ALL[code as usize])
+        } else {
+            None
+        }
+    }
 }
 
 /// An operand's role within a relation.
@@ -556,6 +580,18 @@ mod tests {
             .expect("every term is in range");
 
         assert_eq!(system.verify(&[Word64::new(7)], &words), Ok(()));
+    }
+
+    #[test]
+    fn relation_family_codes_round_trip_and_reject_unassigned_values() {
+        // Every assigned compact tag recovers its exact relation semantics.
+        for kind in ConstraintKind::ALL {
+            assert_eq!(ConstraintKind::from_code(kind.code()), Some(kind));
+        }
+
+        // Three is the first unassigned compact tag.
+        assert_eq!(ConstraintKind::from_code(3), None);
+        assert_eq!(ConstraintKind::from_code(u8::MAX), None);
     }
 
     #[test]
