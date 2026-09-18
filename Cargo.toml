@@ -47,6 +47,7 @@ members = [
     "uni-stark",
     "util",
     "whir",
+    "word",
     "zk-codes",
 ]
 
@@ -151,6 +152,7 @@ p3-symmetric = { path = "symmetric", version = "0.7.0" }
 p3-uni-stark = { path = "uni-stark", version = "0.7.0" }
 p3-util = { path = "util", version = "0.7.0" }
 p3-whir = { path = "whir", version = "0.7.0" }
+p3-word = { path = "word", version = "0.7.0" }
 p3-zk-codes = { path = "zk-codes", version = "0.7.0" }
 
 [workspace.package]
