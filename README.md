@@ -106,17 +106,18 @@ Currently the options for the command line arguments are:
 - `--discrete-fourier-transform` (`-d`): `radix-2-dit-parallel, recursive-dft` or `small-batch-dft`. This option should be omitted if the field choice is `mersenne-31` as the circle stark currently only supports a single discrete fourier transform.
 - `--merkle-hash` (`-m`): `poseidon-2, keccak-f`.
 
-`prove_hash_binary` proves Keccak-f permutations or BLAKE3 compressions over `BinaryField128`
+`prove_hash_binary` proves Keccak-f permutations, BLAKE3 compressions or SHA-256 compressions over `BinaryField128`
 with the multilinear STARK prover and `BinaryPcs`, instead of a prime field and FRI:
 ```bash
 RUSTFLAGS="-Ctarget-cpu=native" cargo run --example prove_hash_binary --release --features parallel -- --objective keccak-f-permutations --log-trace-length 14 --security-bits 96
 RUSTFLAGS="-Ctarget-cpu=native" cargo run --example prove_hash_binary --release --features parallel -- --objective blake-3-compressions --log-trace-length 10 --security-bits 96
+RUSTFLAGS="-Ctarget-cpu=native" cargo run --example prove_hash_binary --release --features parallel -- --objective sha-256-compressions --log-trace-length 10 --security-bits 96
 ```
-- `--objective` (`-o`): `keccak-f-permutations` or `blake-3-compressions`.
+- `--objective` (`-o`): `keccak-f-permutations`, `blake-3-compressions` or `sha-256-compressions`.
 - `--log-trace-length` (`-l`): required. The binary Keccak-f AIR uses 25 rows per permutation
   (one per round, plus the output row), so `keccak-f-permutations` proves
-  `2^log-trace-length / 25` permutations; `blake-3-compressions` proves `2^log-trace-length`
-  compressions, one row per compression.
+  `2^log-trace-length / 25` permutations; `blake-3-compressions` and `sha-256-compressions` each
+  prove `2^log-trace-length` compressions, one row per compression.
 - `--ntt` (`-n`): the additive NTT encoding the binary-PCS codeword: `poly-basis` (default; fast
   with a hardware carryless multiply, and the portable fallback otherwise), `lch`
   (Lin–Chung–Han), or `naive` (the reference transform).
