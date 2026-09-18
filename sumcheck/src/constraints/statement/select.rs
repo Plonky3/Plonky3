@@ -589,7 +589,7 @@ impl<F: Field, EF: ExtensionField<F>> SelectStatement<F, EF> {
                     .zip(challenge.shifted_powers(challenge.exp_u64(shift as u64)))
                     .for_each(|(point, challenge)| {
                         let mut monomials = vec![EF::ONE];
-                        for &coordinate in point.iter() {
+                        for &coordinate in point.iter().rev() {
                             let old_len = monomials.len();
                             for i in 0..old_len {
                                 monomials.push(monomials[i] * coordinate);
@@ -1318,6 +1318,44 @@ mod tests {
             prop_assert_eq!(scalar_weights.as_slice(), &unpacked[..]);
 
             // The scalar sums must match exactly.
+            prop_assert_eq!(scalar_sum, packed_sum);
+        }
+
+        #[test]
+        fn prop_direct_point_packed_combine_roundtrip(
+            k in 4usize..10,
+            n in 1usize..12,
+            shift in 0usize..5,
+            seed in 0u64..100,
+        ) {
+            type PackedExt = <EF as ExtensionField<F>>::ExtensionPacking;
+
+            let k_pack = log2_strict_usize(<F as Field>::Packing::WIDTH);
+            if k < k_pack {
+                return Ok(());
+            }
+
+            let mut rng = SmallRng::seed_from_u64(seed);
+            let challenge: EF = rng.random();
+            let mut statement = SelectStatement::<F, EF>::initialize(k);
+            for _ in 0..n {
+                let point = Point::new((0..k).map(|_| rng.random()).collect());
+                statement.add_point_constraint(point, rng.random());
+            }
+
+            let mut scalar_weights = Poly::<EF>::zero(k);
+            let mut scalar_sum = EF::ZERO;
+            statement.combine(&mut scalar_weights, &mut scalar_sum, challenge, shift);
+
+            let mut packed_weights = Poly::<PackedExt>::zero(k - k_pack);
+            let mut packed_sum = EF::ZERO;
+            statement.combine_packed(&mut packed_weights, &mut packed_sum, challenge, shift);
+
+            let unpacked = <PackedExt as PackedFieldExtension<F, EF>>::to_ext_iter(
+                packed_weights.as_slice().iter().copied(),
+            )
+            .collect::<Vec<_>>();
+            prop_assert_eq!(scalar_weights.as_slice(), &unpacked[..]);
             prop_assert_eq!(scalar_sum, packed_sum);
         }
 
