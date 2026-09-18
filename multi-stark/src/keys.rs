@@ -30,7 +30,10 @@ pub(crate) struct PreprocessedProverData<C: MultiStarkConfig> {
     pub(crate) prover_data: ProverData<C>,
 }
 
-/// The prover's key for a fixed AIR and trace height.
+/// The prover's key for an ordered AIR batch and its fixed trace heights.
+///
+/// The proof must use the same AIRs in the same order as setup.
+/// This remains required when no AIR has preprocessed columns.
 pub struct ProvingKey<C: MultiStarkConfig> {
     /// Batched preprocessed data, present only when at least one AIR declares it.
     pub(crate) preprocessed: Option<PreprocessedProverData<C>>,
@@ -38,7 +41,10 @@ pub struct ProvingKey<C: MultiStarkConfig> {
     pub(crate) air_profiles: Vec<AirProfile>,
 }
 
-/// The verifier's key for a fixed AIR and trace height.
+/// The verifier's key for an ordered AIR batch and its fixed trace heights.
+///
+/// Verification must use the same AIRs in the same order as setup.
+/// This remains required when no AIR has preprocessed columns.
 pub struct VerifyingKey<C: MultiStarkConfig> {
     /// Batched preprocessed commitment, present only when at least one AIR declares it.
     pub(crate) preprocessed: Option<Commitment<C>>,
