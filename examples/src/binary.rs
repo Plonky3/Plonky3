@@ -189,6 +189,8 @@ pub enum BinaryProofError {
     Verify(VerificationError<PcsError<BinaryStarkConfig<2>>>),
     /// The statement's security assessment left a component unassessed or below target.
     Security(SecurityError),
+    /// `options.merkle_arity` is not one of the arities the binary-field harness builds.
+    UnsupportedMerkleArity(usize),
 }
 
 impl From<BinaryPcsConfigError> for BinaryProofError {
@@ -243,7 +245,6 @@ impl<A> BinaryAir for A where
 ///
 /// # Panics
 ///
-/// - `options.merkle_arity` is neither 2 nor 4.
 /// - The trace height is not a power of two.
 /// - `air` declares public values or preprocessed columns.
 pub fn prove_binary_air<A>(
@@ -257,10 +258,7 @@ where
     match options.merkle_arity {
         2 => prove_binary_air_with::<A, 2>(air, trace, options),
         4 => prove_binary_air_with::<A, 4>(air, trace, options),
-        other => panic!(
-            "unsupported Merkle arity {other}: the binary-field harness only builds 2-ary and \
-             4-ary trees"
-        ),
+        other => Err(BinaryProofError::UnsupportedMerkleArity(other)),
     }
 }
 
@@ -439,5 +437,22 @@ mod tests {
         )
         .expect("a tiny binary AIR proof must verify at arity 4");
         assert_ne!(report2.proof_bytes, report4.proof_bytes);
+    }
+
+    #[test]
+    fn rejects_an_unsupported_merkle_arity() {
+        let log_height = 4;
+        let result = prove_binary_air(
+            &RecurrenceAir,
+            recurrence_trace(log_height),
+            BinaryProofOptions {
+                merkle_arity: 3,
+                ..BinaryProofOptions::default()
+            },
+        );
+        assert!(matches!(
+            result,
+            Err(BinaryProofError::UnsupportedMerkleArity(3))
+        ));
     }
 }
