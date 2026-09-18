@@ -86,7 +86,10 @@ pub use plan::plan_stacked_layout;
 pub use prover::{Layout, PrefixProver, StackedClaims, SuffixProver, SuffixResidualProver};
 pub use transcript::{commitment_domain_separator, observe_commitment};
 pub use verifier::Verifier;
-pub use witness::{Selector, Table, TablePlacement, Witness};
+pub use witness::{
+    ColumnOut, FilledSuffixWitness, Selector, SuffixFillError, SuffixLayoutPlan,
+    SuffixLayoutPlanError, SuffixTableSource, Table, TablePlacement, Witness,
+};
 
 use crate::strategy::VariableOrder;
 pub use crate::table::TableShape;

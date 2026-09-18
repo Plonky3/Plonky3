@@ -28,12 +28,16 @@ use p3_field::{
     Algebra, ExtensionField, Field, PackedValue, PrimeCharacteristicRing, TwoAdicField,
 };
 use p3_koala_bear::{KoalaBear, Poseidon2KoalaBear};
+use p3_matrix::dense::RowMajorMatrix;
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
 use p3_sumcheck::constraints::statement::{EqStatement, SelectStatement};
 use p3_sumcheck::constraints::{Constraint, Statements};
-use p3_sumcheck::layout::{Layout, PrefixProver, SuffixProver, Table};
+use p3_sumcheck::layout::{
+    ColumnOut, Layout, PrefixProver, SuffixLayoutPlan, SuffixProver, SuffixTableSource, Table,
+    TableShape, Witness,
+};
 use p3_sumcheck::product_polynomial::ProductPolynomial;
 use p3_sumcheck::strategy::{
     Basis, RoundMessage, SumcheckProver, VariableOrder, sumcheck_coefficients_prefix,
@@ -949,6 +953,83 @@ fn layout(c: &mut Criterion) {
     bench_layout::<KoalaBear4>(c);
 }
 
+struct BitColumns<'a> {
+    shape: TableShape,
+    columns: &'a [Vec<u64>],
+}
+
+impl SuffixTableSource<BabyBear> for BitColumns<'_> {
+    fn shape(&self) -> TableShape {
+        self.shape
+    }
+
+    fn fill(&self, columns: &mut [ColumnOut<'_, BabyBear>]) {
+        for (output, words) in columns.iter_mut().zip(self.columns) {
+            output.write_with(|values| {
+                for (row, value) in values.iter_mut().enumerate() {
+                    *value = BabyBear::from_u64((words[row / 64] >> (row % 64)) & 1);
+                }
+            });
+        }
+    }
+}
+
+fn materialize_bit_table(columns: &[Vec<u64>], k: usize) -> Table<BabyBear> {
+    let rows = 1 << k;
+    let values = columns
+        .iter()
+        .flat_map(|words| {
+            (0..rows).map(move |row| BabyBear::from_u64((words[row / 64] >> (row % 64)) & 1))
+        })
+        .collect();
+    Table::new(RowMajorMatrix::new(values, rows))
+}
+
+/// Compares packed-bit direct fill with scalar materialization followed by stacking.
+fn witness_fill(c: &mut Criterion) {
+    let mut group = c.benchmark_group("sumcheck/babybear/witness_fill");
+    group.sample_size(10);
+
+    for &k in LAYOUT_SIZES {
+        let mut rng = rng_for(0xF111, k);
+        let columns = (0..4)
+            .map(|_| (0..(1 << (k - 6))).map(|_| rng.random()).collect())
+            .collect::<Vec<Vec<u64>>>();
+        let shape = TableShape::new(k, columns.len());
+        let plan = SuffixLayoutPlan::new(vec![shape], 0)
+            .expect("benchmark dimensions fit the suffix layout");
+        let label = format!("k{k}");
+        group.throughput(Throughput::Elements(4 << k));
+
+        group.bench_with_input(
+            BenchmarkId::new("materialize_then_stack", &label),
+            &columns,
+            |b, columns| {
+                b.iter(|| {
+                    let table = materialize_bit_table(black_box(columns), k);
+                    black_box(Witness::new(vec![table], 0))
+                });
+            },
+        );
+
+        group.bench_with_input(
+            BenchmarkId::new("direct_packed_fill", &label),
+            &columns,
+            |b, columns| {
+                let source = BitColumns { shape, columns };
+                b.iter(|| {
+                    black_box(
+                        plan.fill(&[black_box(&source)])
+                            .expect("packed source covers every column"),
+                    )
+                });
+            },
+        );
+    }
+
+    group.finish();
+}
+
 fn single_round_drive(c: &mut Criterion) {
     bench_single_round_drive::<BabyBear4>(c);
     bench_single_round_drive::<KoalaBear4>(c);
@@ -964,6 +1045,7 @@ criterion_group!(
     single_round_drive,
     combine,
     layout,
+    witness_fill,
     bench_zk_residual,
 );
 criterion_main!(benches);
