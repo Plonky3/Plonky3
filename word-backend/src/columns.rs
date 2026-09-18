@@ -9,7 +9,9 @@ use crate::{PackedWitness, PackedWord, WitnessError};
 /// The AND output is absent because that reduction derives it from its two inputs.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct OperationColumns<W: PackedWord> {
+    /// The left and right inputs to each bitwise product.
     bitwise_and: [Vec<W::Packing>; 2],
+    /// The factors and result limbs of each unsigned product.
     integer_mul: [Vec<W::Packing>; 4],
 }
 

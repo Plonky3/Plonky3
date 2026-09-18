@@ -57,7 +57,9 @@ impl PackedWord for Word64 {
 /// A witness whose words retain the bit order consumed by the Boolean PCS.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PackedWitness<W: PackedWord> {
+    /// The verifier-known words in least-significant-bit-first packing.
     public: Vec<W::Packing>,
+    /// The committed words in least-significant-bit-first packing.
     witness: Vec<W::Packing>,
 }
 

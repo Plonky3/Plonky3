@@ -12,7 +12,9 @@ const SEQUENCE_MASK: u32 = (1 << SEQUENCE_BITS) - 1;
 /// A compact index into one operation family.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct ConstraintReference {
+    /// The operand position within its relation.
     operand: u8,
+    /// The position within its homogeneous relation family.
     constraint: u32,
 }
 
@@ -33,8 +35,11 @@ impl ConstraintReference {
 /// One word's references under a fixed operation and shift sequence.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CompiledKey {
+    /// The relation family consuming the word.
     operation: ConstraintKind,
+    /// The compact index of the canonical shift sequence.
     shift: u16,
+    /// The contiguous span of relation references.
     references: Range<u32>,
 }
 
@@ -49,9 +54,13 @@ impl CompiledKey {
 /// Metadata compiled independently for one visibility segment.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CompiledSegment<W: Word> {
+    /// The distinct canonical shift sequences.
     shifts: Vec<[Shift<W>; 2]>,
+    /// The operation and shift groups across all words.
     keys: Vec<CompiledKey>,
+    /// The contiguous key span assigned to each word.
     word_keys: Vec<Range<u32>>,
+    /// The relation consumers grouped by key.
     references: Vec<ConstraintReference>,
 }
 
@@ -89,7 +98,9 @@ impl<W: Word> CompiledSegment<W> {
 /// Public and committed shift metadata, kept in separate index spaces.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CompiledKeyLayout<W: Word> {
+    /// The metadata for verifier-known words.
     public: CompiledSegment<W>,
+    /// The metadata for prover-committed words.
     witness: CompiledSegment<W>,
 }
 
@@ -210,15 +221,21 @@ pub enum KeyCompileError {
 
 #[derive(Clone, Copy, Default)]
 struct PackedReference {
+    /// The encoded operation and shift sequence.
     key_code: u32,
+    /// The relation consumer of the shifted word.
     constraint: ConstraintReference,
 }
 
 #[derive(Clone, Copy)]
 struct Reference {
+    /// The visibility class containing the source word.
     segment: Segment,
+    /// The source offset within its visibility class.
     word: usize,
+    /// The encoded operation and shift sequence.
     key_code: u32,
+    /// The relation consumer of the shifted word.
     constraint: ConstraintReference,
 }
 
