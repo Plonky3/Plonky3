@@ -1,3 +1,5 @@
+//! Checked statement shapes and canonical relation traversal.
+
 use alloc::vec::Vec;
 
 use thiserror::Error;
