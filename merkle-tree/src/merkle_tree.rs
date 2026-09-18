@@ -349,10 +349,13 @@ const TASK_NODES: usize = 1024;
 /// ```
 ///
 /// The one consumer that groups rows keeps every row in a whole lane group too, at its own
-/// 8 KiB row budget, so the group handed down from here always lands in a single batched call.
+/// 8 KiB row budget: the group handed down from here can still split into more than one
+/// batched call there, but never in the middle of a lane group.
 ///
 /// An idle lane costs a whole permutation, far more than the cache level given up, so the
-/// overshoot buys occupancy at every row width.
+/// overshoot buys occupancy for a hasher that keeps batching independent messages side by
+/// side at any length. One that falls back to hashing a message alone past its own internal
+/// limit gets a bigger contiguous buffer to hash from instead.
 ///
 /// The bound above is per call.
 ///
@@ -1011,8 +1014,8 @@ mod tests {
     /// - Levels wide enough to fan out across threads instead of staying serial.
     /// - Rows long enough to make the sponge absorb more than one block.
     ///
-    /// - A row too wide to group, which the serializing hasher must hash one row at a time.
-    ///   2100 `BabyBear` columns are 8400 bytes, past that hasher's 8 KiB group budget.
+    /// - A row past the serializing hasher's 8 KiB group budget, which it hashes one lane
+    ///   group at a time. 2100 `BabyBear` columns are 8400 bytes, past that budget.
     const SHAPES: &[(&[usize], usize)] = &[
         (&[1], 1),
         (&[3], 4),

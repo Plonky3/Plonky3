@@ -85,7 +85,8 @@ where
         // lanes. A row wide enough that not even one lane group fits the target still gets a
         // full one: splitting it would push the remainder onto the inner scalar path, which is
         // the cost the grouping exists to avoid. This mirrors `p3-merkle-tree`'s `rows_per_call`,
-        // whose groups arrive here and must not be re-split.
+        // whose groups arrive here already sized in whole lane groups, so splitting one further
+        // still lands on a lane-group boundary.
         let lanes = Inner::LANES.max(1);
         let rows_per_group = (ROW_BYTES_SCRATCH / row_bytes / lanes).max(1) * lanes;
 
@@ -371,8 +372,8 @@ mod tests {
     fn hash_many_matches_the_unbatched_digests() {
         let hasher = SerializingHasher::new(MockHasher);
 
-        // Row widths around the group boundaries: one element, a lane group, the widest row the
-        // 8 KiB budget still groups, one element past it, and a row several times that width.
+        // Row widths around the group boundaries: one element, a lane group, the widest row
+        // that fits the 8 KiB budget, one element past it, and a row several times that width.
         for row_len in [1, 3, 7, 100, 2048, 2049, 2100, 5000] {
             for rows in [1, 2, 3, 4, 7] {
                 let input = rows_of(rows, row_len);
