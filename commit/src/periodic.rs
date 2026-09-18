@@ -118,6 +118,27 @@ impl<F: Clone + Send + Sync> PeriodicLdeTable<F> {
         self.height
     }
 
+    /// Number of distinct packed row groups when the LDE domain is read in groups of
+    /// `pack_width` consecutive indices, group `g` starting at `g * pack_width`.
+    ///
+    /// [`get`](Self::get) reduces indices modulo `height`, and the group starts
+    /// `g * pack_width mod height` repeat with period `height / gcd(height, pack_width)`.
+    /// Group `g` therefore reads the same values as group `g % packed_group_period(pack_width)`.
+    ///
+    /// `pack_width` need not be a power of two or divide `height`. Returns `0` for an
+    /// empty table.
+    pub const fn packed_group_period(&self, pack_width: usize) -> usize {
+        debug_assert!(pack_width > 0, "pack_width must be nonzero");
+        // `height` is a power of two, so `gcd(height, pack_width)` is the largest power
+        // of two dividing `pack_width`, capped at `height`.
+        let log_gcd = if self.height.trailing_zeros() < pack_width.trailing_zeros() {
+            self.height.trailing_zeros()
+        } else {
+            pack_width.trailing_zeros()
+        };
+        self.height >> log_gcd
+    }
+
     /// Get a specific periodic column value for a given LDE index.
     #[inline]
     pub fn get(&self, lde_idx: usize, col_idx: usize) -> &F {
@@ -222,6 +243,42 @@ impl<F: Field, D: PolynomialSpace<Val = F>> PeriodicEvaluator<F, D> for () {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    #[test]
+    fn packed_group_period_matches_modular_indexing() {
+        // (height, pack_width, expected period): widths that are not powers of two, or
+        // that do not divide the height, visit every residue class before repeating.
+        let cases = [
+            (8, 3, 8),
+            (8, 6, 4),
+            (8, 1, 8),
+            (8, 4, 2),
+            (8, 8, 1),
+            (4, 8, 1),
+            (1, 3, 1),
+        ];
+        for (height, pack_width, expected) in cases {
+            let values: Vec<u32> = (0..height).map(|i| i as u32).collect();
+            let table = PeriodicLdeTable::new(RowMajorMatrix::new(values, 1));
+            let period = table.packed_group_period(pack_width);
+            assert_eq!(period, expected, "height {height}, pack_width {pack_width}");
+
+            for group in 0..4 * height {
+                let cached = group % period;
+                for offset in 0..pack_width {
+                    assert_eq!(
+                        table.get(group * pack_width + offset, 0),
+                        table.get(cached * pack_width + offset, 0),
+                        "height {height}, pack_width {pack_width}, group {group}, offset {offset}"
+                    );
+                }
+            }
+        }
+
+        assert_eq!(PeriodicLdeTable::<u32>::empty().packed_group_period(3), 0);
+    }
+
     #[cfg(debug_assertions)]
     #[test]
     #[should_panic(expected = "PeriodicLdeTable height must be a power of two")]
