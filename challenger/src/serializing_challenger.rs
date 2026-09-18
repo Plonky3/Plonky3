@@ -2,14 +2,13 @@ use alloc::vec::Vec;
 use core::marker::PhantomData;
 
 use p3_field::{BasedVectorSpace, PrimeField32, PrimeField64};
-use p3_maybe_rayon::prelude::*;
 use p3_symmetric::{CryptographicHasher, Hash, MerkleCap};
 use p3_util::log2_ceil_u64;
 use tracing::instrument;
 
 use crate::{
-    CanFinalizeDigest, CanObserve, CanSample, CanSampleBits, CanSampleUniformBits, FieldChallenger,
-    GrindingChallenger, HashChallenger, ResamplingError,
+    ByteGrindingChallenger, CanFinalizeDigest, CanObserve, CanSample, CanSampleBits,
+    CanSampleUniformBits, FieldChallenger, GrindingChallenger, HashChallenger, ResamplingError,
 };
 
 /// Given a challenger that can observe and sample bytes, produces a challenger that is able to
@@ -222,7 +221,7 @@ where
 impl<F, Inner> GrindingChallenger for SerializingChallenger32<F, Inner>
 where
     F: PrimeField32,
-    Inner: CanSample<u8> + CanObserve<u8> + Clone + Send + Sync,
+    Inner: ByteGrindingChallenger,
 {
     type Witness = F;
 
@@ -243,14 +242,19 @@ where
 
         let mut squeezed = self.clone();
         squeezed.squeeze();
-        let witness = (0..F::ORDER_U32)
-            .into_par_iter()
-            .map(|i| unsafe {
-                // i < F::ORDER_U32 by construction so this is safe.
-                F::from_canonical_unchecked(i)
-            })
-            .find_any(|witness| squeezed.clone().witness_passes(bits, *witness))
+        // Candidate `i` is the field element `i`.
+        let mask = (1usize << bits) - 1;
+        let index = squeezed
+            .inner
+            .find_witness(
+                u64::from(F::ORDER_U32),
+                // The bytes `observe` absorbs for the candidate.
+                |i| F::from_u64(i).to_unique_u32().to_le_bytes(),
+                // The test `witness_passes` applies to the word `sample_bits` reads.
+                |bytes| (u32::from_le_bytes(bytes) as usize & mask) == 0,
+            )
             .expect("failed to find witness");
+        let witness = F::from_u64(index);
         assert!(self.check_witness(bits, witness));
         witness
     }
@@ -449,12 +453,13 @@ where
 impl<F, Inner> GrindingChallenger for SerializingChallenger64<F, Inner>
 where
     F: PrimeField64,
-    Inner: CanSample<u8> + CanObserve<u8> + Clone + Send + Sync,
+    Inner: ByteGrindingChallenger,
 {
     type Witness = F;
 
     #[instrument(name = "grind for proof-of-work witness", skip_all, level = "debug")]
     fn grind(&mut self, bits: usize) -> Self::Witness {
+        assert!(bits < (usize::BITS as usize));
         assert!(bits < 64);
         assert!((1u64 << bits) < F::ORDER_U64);
 
@@ -465,14 +470,19 @@ where
 
         let mut squeezed = self.clone();
         squeezed.squeeze();
-        let witness = (0..F::ORDER_U64)
-            .into_par_iter()
-            .map(|i| unsafe {
-                // i < F::ORDER_U64 by construction so this is safe.
-                F::from_canonical_unchecked(i)
-            })
-            .find_any(|witness| squeezed.clone().witness_passes(bits, *witness))
+        // Candidate `i` is the field element `i`.
+        let mask = (1u64 << bits) - 1;
+        let index = squeezed
+            .inner
+            .find_witness(
+                F::ORDER_U64,
+                // The bytes `observe` absorbs for the candidate.
+                |i| F::from_u64(i).to_unique_u64().to_le_bytes(),
+                // The test `witness_passes` applies to the word `sample_bits` reads.
+                |bytes| (u64::from_le_bytes(bytes) & mask) as usize == 0,
+            )
             .expect("failed to find witness");
+        let witness = F::from_u64(index);
         assert!(self.check_witness(bits, witness));
         witness
     }
@@ -524,8 +534,12 @@ mod tests {
     use core::sync::atomic::{AtomicUsize, Ordering};
 
     use p3_baby_bear::BabyBear;
+    use p3_blake3::Blake3;
     use p3_field::PrimeCharacteristicRing;
     use p3_goldilocks::Goldilocks;
+    use p3_keccak::Keccak256Hash;
+    use p3_maybe_rayon::PARALLEL_ENABLED;
+    use p3_sha256::Sha256;
     use p3_symmetric::CryptographicHasher;
 
     use super::*;
@@ -684,5 +698,100 @@ mod tests {
         let inner = Inner::new(vec![0, 1, 2, 3], ByteCountHasher);
         let mut challenger = SerializingChallenger32::<F, Inner>::new(inner);
         let _ = challenger.grind(32);
+    }
+
+    /// A byte challenger that keeps the default search, one clone per candidate.
+    #[derive(Clone)]
+    struct Unbatched(HashChallenger<u8, Keccak256Hash, 32>);
+
+    impl CanObserve<u8> for Unbatched {
+        fn observe(&mut self, value: u8) {
+            self.0.observe(value);
+        }
+
+        fn observe_slice(&mut self, values: &[u8]) {
+            self.0.observe_slice(values);
+        }
+    }
+
+    impl CanSample<u8> for Unbatched {
+        fn sample(&mut self) -> u8 {
+            self.0.sample()
+        }
+    }
+
+    impl ByteGrindingChallenger for Unbatched {}
+
+    /// A byte transcript whose pending input length and buffered output vary with `seed`.
+    fn transcript<H>(hasher: H, seed: u64) -> HashChallenger<u8, H, 32>
+    where
+        H: CryptographicHasher<u8, [u8; 32]>,
+    {
+        let mut challenger = HashChallenger::new(seed.to_le_bytes().to_vec(), hasher);
+        // A partly consumed digest, with its chaining value pending.
+        let _: [u8; 3] = challenger.sample_array();
+        // Then between 0 and 149 more pending bytes.
+        let observed: Vec<u8> = (0..(seed * 29 % 150) as u8)
+            .map(|i| i ^ seed as u8)
+            .collect();
+        challenger.observe_slice(&observed);
+        challenger
+    }
+
+    /// Grind `challenger` and compare against `check_witness` on the transcript before the grind.
+    fn assert_grind_agrees_with_check_witness<C>(challenger: &C, bits: usize)
+    where
+        C: GrindingChallenger + CanSample<C::Witness> + Clone,
+    {
+        let mut ground = challenger.clone();
+        let witness = ground.grind(bits);
+
+        let mut checked = challenger.clone();
+        assert!(checked.check_witness(bits, witness));
+
+        // Serially the search returns the smallest candidate `check_witness` accepts.
+        // Every candidate below it is then rejected by both, and the witness accepted by both.
+        if !PARALLEL_ENABLED {
+            let smallest = (0..)
+                .map(C::Witness::from_u64)
+                .find(|&candidate| challenger.clone().check_witness(bits, candidate));
+            assert_eq!(smallest, Some(witness));
+        }
+
+        // Grinding leaves the transcript where checking the same witness does.
+        let after_grind: [C::Witness; 12] = ground.sample_array();
+        let after_check: [C::Witness; 12] = checked.sample_array();
+        assert_eq!(after_grind, after_check);
+    }
+
+    fn assert_grind_agrees_for<Inner: ByteGrindingChallenger>(make: impl Fn(u64) -> Inner) {
+        for seed in 0..6 {
+            for bits in [1, 2, 4, 8, 12] {
+                let narrow = SerializingChallenger32::<BabyBear, _>::new(make(seed));
+                assert_grind_agrees_with_check_witness(&narrow, bits);
+                let wide = SerializingChallenger64::<Goldilocks, _>::new(make(seed));
+                assert_grind_agrees_with_check_witness(&wide, bits);
+            }
+        }
+    }
+
+    #[test]
+    fn test_grind_agrees_with_check_witness_keccak() {
+        assert_grind_agrees_for(|seed| transcript(Keccak256Hash, seed));
+    }
+
+    #[test]
+    fn test_grind_agrees_with_check_witness_sha256() {
+        assert_grind_agrees_for(|seed| transcript(Sha256, seed));
+    }
+
+    #[test]
+    fn test_grind_agrees_with_check_witness_blake3() {
+        assert_grind_agrees_for(|seed| transcript(Blake3, seed));
+    }
+
+    #[test]
+    fn test_grind_agrees_with_check_witness_unbatched() {
+        assert_grind_agrees_for(|seed| Unbatched(transcript(Keccak256Hash, seed)));
     }
 }
