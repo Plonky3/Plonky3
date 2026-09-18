@@ -348,7 +348,7 @@ where
     // 5. Reduce all AIR constraints to one batched sumcheck and one bound point.
     // The committed prover opens columns through the commitment schemes below, so
     // the zerocheck's own opened values are not used as the final proof openings.
-    let zerocheck = AirZerocheck::new(&airs, pow_bits);
+    let zerocheck = AirZerocheck::with_profiles(&airs, &proving_key.air_profiles, pow_bits);
     let (zerocheck_proof, point) = transcript.zerocheck(|challenger| {
         zerocheck.prove_with_lookup::<C::Val, C::Challenge, B, _>(
             &preprocessed_tables,
