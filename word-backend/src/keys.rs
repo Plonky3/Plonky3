@@ -395,7 +395,7 @@ fn visit_operand<W: Word>(
         visit(Reference {
             segment: index.segment(),
             word: index.position() as usize,
-            key_code: key_code(operation, [term.inner(), term.outer()]),
+            key_code: key_code(operation, term.shifts()),
             constraint: ConstraintReference {
                 operand,
                 constraint,
