@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use p3_word::{
     AndConstraint, ConstraintKind, ConstraintSystem, IntegerMulConstraint, Operand, OperandRole,
     Segment, Shift, ShiftError, ShiftKind, ShiftSequenceError, ShiftedValue, SystemError,
@@ -98,12 +100,18 @@ fn shifts64() -> Vec<Shift<Word64>> {
 
 fn signature32(inner: Shift<Word32>, outer: Shift<Word32>) -> [u32; 32] {
     // Shifts are F_2-linear maps and are determined by the images of basis bits.
-    core::array::from_fn(|bit| outer.apply(inner.apply(Word32::new(1 << bit))).get())
+    core::array::from_fn(|bit| {
+        let inner_image = reference_shift32(inner.kind(), 1 << bit, inner.amount().into());
+        reference_shift32(outer.kind(), inner_image, outer.amount().into())
+    })
 }
 
 fn signature64(inner: Shift<Word64>, outer: Shift<Word64>) -> [u64; 64] {
     // Shifts are F_2-linear maps and are determined by the images of basis bits.
-    core::array::from_fn(|bit| outer.apply(inner.apply(Word64::new(1 << bit))).get())
+    core::array::from_fn(|bit| {
+        let inner_image = reference_shift64(inner.kind(), 1 << bit, inner.amount().into());
+        reference_shift64(outer.kind(), inner_image, outer.amount().into())
+    })
 }
 
 proptest! {
@@ -467,6 +475,95 @@ fn verifier_rejects_zero_and_integer_product_corruption() {
             constraint: 0,
         })
     );
+
+    // Mutation: lower the low limb of 3 * 5 while preserving its zero high limb.
+    let corrupt = [
+        Word32::new(3),
+        Word32::new(5),
+        Word32::new(14),
+        Word32::new(0),
+    ];
+    assert_eq!(
+        mul_system.verify(&[], &corrupt),
+        Err(VerificationError::Unsatisfied {
+            kind: ConstraintKind::IntegerMul,
+            constraint: 0,
+        })
+    );
+}
+
+#[test]
+fn checked_system_rejects_public_and_nonlinear_out_of_bounds_terms() {
+    // Each relation family and operand role reports its own malformed address.
+    let cases = [
+        (
+            vec![ZeroConstraint::new(Operand::single(ShiftedValue::plain(
+                public(0),
+            )))],
+            vec![],
+            vec![],
+            ConstraintKind::Zero,
+            OperandRole::Value,
+            Segment::Public,
+        ),
+        (
+            vec![],
+            vec![AndConstraint::new(
+                Operand::default(),
+                word32_operand(1),
+                Operand::default(),
+            )],
+            vec![],
+            ConstraintKind::And,
+            OperandRole::Right,
+            Segment::Witness,
+        ),
+        (
+            vec![],
+            vec![],
+            vec![IntegerMulConstraint::new(
+                word32_operand(0),
+                Operand::default(),
+                Operand::default(),
+                Operand::default(),
+            )],
+            ConstraintKind::IntegerMul,
+            OperandRole::Left,
+            Segment::Witness,
+        ),
+    ];
+
+    for (zero, and, mul, kind, role, segment) in cases {
+        let error = ConstraintSystem::<Word32>::new(0, 0, zero, and, mul)
+            .expect_err("the selected segment is empty");
+        assert_eq!(
+            error,
+            SystemError::IndexOutOfBounds {
+                kind,
+                constraint: 0,
+                role,
+                term: 0,
+                segment,
+                position: usize::from(role == OperandRole::Right) as u32,
+                len: 0,
+            }
+        );
+    }
+}
+
+#[test]
+fn verifier_rejects_wrong_public_length() {
+    // Exact public shape is checked before relation evaluation.
+    let system = ConstraintSystem::<Word32>::new(1, 0, vec![], vec![], vec![])
+        .expect("the empty relation set is valid");
+
+    assert_eq!(
+        system.verify(&[], &[]),
+        Err(VerificationError::PublicLength {
+            expected: 1,
+            actual: 0,
+        })
+    );
 }
 
 #[cfg(target_pointer_width = "64")]
@@ -483,4 +580,20 @@ fn indices_reject_positions_above_u32() {
         }
     );
 }
-use std::collections::HashSet;
+
+#[cfg(target_pointer_width = "64")]
+#[test]
+fn systems_reject_segment_lengths_above_u32() {
+    // Length validation precedes allocation and relation traversal.
+    let len = u32::MAX as usize + 1;
+    let error = ConstraintSystem::<Word32>::new(len, 0, vec![], vec![], vec![])
+        .expect_err("the public segment exceeds the compact address space");
+
+    assert_eq!(
+        error,
+        SystemError::SegmentTooLong {
+            segment: Segment::Public,
+            len,
+        }
+    );
+}

@@ -30,7 +30,7 @@ impl ShiftKind {
     /// Returns whether the operation acts on two independent 32-bit lanes.
     #[inline]
     pub const fn is_lane32(self) -> bool {
-        // The lane family is deliberately unavailable to 32-bit words.
+        // Group every operation whose semantics are confined to 32-bit lanes.
         matches!(
             self,
             Self::Lane32LogicalLeft
@@ -81,7 +81,7 @@ impl<W: Word> Shift<W> {
     ///
     /// A zero distance is normalized to the unique identity spelling.
     pub fn new(kind: ShiftKind, amount: usize) -> Result<Self, ShiftError> {
-        // Lane operations have fixed 64-bit container semantics.
+        // Two independent lanes require a 64-bit container.
         if kind.is_lane32() && W::BITS != 64 {
             return Err(ShiftError::Lane32RequiresWord64);
         }
@@ -204,6 +204,8 @@ impl<W: Word> ShiftedValue<W> {
     }
 
     /// Creates a word term whose two shifts cannot be represented more simply.
+    ///
+    /// Accepted pairs are irreducible but need not have a unique spelling.
     pub fn pair(
         index: ValueIndex,
         inner: Shift<W>,
@@ -238,7 +240,9 @@ impl<W: Word> ShiftedValue<W> {
         self.shifts[1]
     }
 
-    pub(crate) fn evaluate(self, word: W) -> W {
+    /// Applies the inner movement before the outer movement.
+    #[inline]
+    pub fn apply(self, word: W) -> W {
         // Apply the two slots in their protocol order.
         self.outer().apply(self.inner().apply(word))
     }

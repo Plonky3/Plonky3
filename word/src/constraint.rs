@@ -18,7 +18,11 @@ pub struct EvaluationError {
     pub len: usize,
 }
 
-/// An XOR sum of shifted words.
+/// An unnormalized XOR sum of shifted words.
+///
+/// Terms retain their supplied order and multiplicity.
+/// Repeated terms therefore cancel in pairs.
+/// An empty operand evaluates to zero.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Operand<W: Word> {
     /// The shifted words combined by bitwise XOR.
@@ -65,7 +69,7 @@ impl<W: Word> Operand<W> {
                     len: words.len(),
                 })?;
             // Addition in the binary relation is bitwise XOR.
-            value = sealed::Sealed::xor(value, term.evaluate(word));
+            value = sealed::Sealed::xor(value, term.apply(word));
         }
         Ok(value)
     }
