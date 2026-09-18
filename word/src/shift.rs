@@ -212,7 +212,7 @@ impl<W: Word> ShiftedValue<W> {
         outer: Shift<W>,
     ) -> Result<Self, ShiftSequenceError> {
         // Two slots are reserved only for maps that genuinely need both.
-        match compose(inner, outer) {
+        match Composition::classify(inner, outer) {
             Composition::Pair => Ok(Self {
                 index,
                 shifts: [inner, outer],
@@ -228,23 +228,17 @@ impl<W: Word> ShiftedValue<W> {
         self.index
     }
 
-    /// Returns the first shift.
+    /// Returns both movements in evaluation order.
     #[inline]
-    pub const fn inner(self) -> Shift<W> {
-        self.shifts[0]
-    }
-
-    /// Returns the second shift.
-    #[inline]
-    pub const fn outer(self) -> Shift<W> {
-        self.shifts[1]
+    pub const fn shifts(self) -> [Shift<W>; 2] {
+        self.shifts
     }
 
     /// Applies the inner movement before the outer movement.
     #[inline]
     pub fn apply(self, word: W) -> W {
         // Apply the two slots in their protocol order.
-        self.outer().apply(self.inner().apply(word))
+        self.shifts[1].apply(self.shifts[0].apply(word))
     }
 }
 
@@ -257,105 +251,115 @@ enum Composition {
     Pair,
 }
 
-fn compose<W: Word>(inner: Shift<W>, outer: Shift<W>) -> Composition {
-    // An identity leaves the other movement as a single shift.
-    if inner.is_identity() || outer.is_identity() {
-        return Composition::Single;
-    }
+impl Composition {
+    fn classify<W: Word>(inner: Shift<W>, outer: Shift<W>) -> Self {
+        // An identity leaves the other movement as a single shift.
+        if inner.is_identity() || outer.is_identity() {
+            return Self::Single;
+        }
 
-    // A saturated arithmetic shift is unchanged by a compatible rotation.
-    if is_degenerate(inner, outer) {
-        return Composition::Single;
-    }
+        // A saturated arithmetic shift is unchanged by a compatible rotation.
+        if Self::is_degenerate(inner, outer) {
+            return Self::Single;
+        }
 
-    // Movements in one direction combine by adding their distances.
-    let Some(kind) = chained_kind(inner, outer) else {
-        return Composition::Pair;
-    };
-    let distance = usize::from(inner.amount) + usize::from(outer.amount);
+        // Movements in one direction combine by adding their distances.
+        let Some(kind) = Self::chained_kind(inner, outer) else {
+            return Self::Pair;
+        };
+        let distance = usize::from(inner.amount) + usize::from(outer.amount);
 
-    // Logical shifts discard every bit once they cross the operation width.
-    if matches!(
-        kind,
-        ShiftKind::LogicalLeft
-            | ShiftKind::LogicalRight
-            | ShiftKind::Lane32LogicalLeft
-            | ShiftKind::Lane32LogicalRight
-    ) && distance
-        >= if kind.is_lane32() {
-            32
-        } else {
-            W::BITS as usize
-        }
-    {
-        return Composition::Zero;
-    }
-
-    // Arithmetic shifts saturate and rotations wrap.
-    // Both cases still have a single-shift representation.
-    Composition::Single
-}
-
-fn chained_kind<W: Word>(inner: Shift<W>, outer: Shift<W>) -> Option<ShiftKind> {
-    // Equal operations always continue in the same direction.
-    if inner.kind == outer.kind {
-        return Some(inner.kind);
-    }
-
-    // A logical right shift clears the sign before arithmetic extension.
-    match (inner.kind, outer.kind) {
-        (ShiftKind::LogicalRight, ShiftKind::ArithmeticRight) => Some(ShiftKind::LogicalRight),
-        (ShiftKind::Lane32LogicalRight, ShiftKind::Lane32ArithmeticRight) => {
-            Some(ShiftKind::Lane32LogicalRight)
-        }
-        // Crossing 32 bits leaves each lane with bits from only one original half.
-        (ShiftKind::LogicalLeft, ShiftKind::Lane32LogicalLeft) if inner.amount >= 32 => {
-            Some(ShiftKind::LogicalLeft)
-        }
-        (ShiftKind::Lane32LogicalLeft, ShiftKind::LogicalLeft) if outer.amount >= 32 => {
-            Some(ShiftKind::LogicalLeft)
-        }
-        (ShiftKind::LogicalRight, ShiftKind::Lane32LogicalRight) if inner.amount >= 32 => {
-            Some(ShiftKind::LogicalRight)
-        }
-        (ShiftKind::Lane32LogicalRight, ShiftKind::LogicalRight) if outer.amount >= 32 => {
-            Some(ShiftKind::LogicalRight)
-        }
-        (ShiftKind::ArithmeticRight, ShiftKind::Lane32ArithmeticRight) if inner.amount >= 32 => {
-            Some(ShiftKind::ArithmeticRight)
-        }
-        (ShiftKind::Lane32ArithmeticRight, ShiftKind::ArithmeticRight) if outer.amount >= 32 => {
-            Some(ShiftKind::ArithmeticRight)
-        }
-        (ShiftKind::LogicalRight, ShiftKind::Lane32ArithmeticRight) if inner.amount >= 33 => {
-            Some(ShiftKind::LogicalRight)
-        }
-        (ShiftKind::Lane32LogicalRight, ShiftKind::ArithmeticRight) if outer.amount >= 32 => {
-            Some(ShiftKind::LogicalRight)
-        }
-        _ => None,
-    }
-}
-
-const fn is_degenerate<W: Word>(inner: Shift<W>, outer: Shift<W>) -> bool {
-    // A full-width arithmetic shift can collapse a word to one repeated sign bit.
-    let full_last = W::BITS as u8 - 1;
-    match (inner.kind, outer.kind) {
-        (ShiftKind::ArithmeticRight, ShiftKind::RotateRight | ShiftKind::Lane32RotateRight)
-            if inner.amount == full_last =>
+        // Logical shifts erase every bit after crossing their operation width.
+        if matches!(
+            kind,
+            ShiftKind::LogicalLeft
+                | ShiftKind::LogicalRight
+                | ShiftKind::Lane32LogicalLeft
+                | ShiftKind::Lane32LogicalRight
+        ) && distance
+            >= if kind.is_lane32() {
+                32
+            } else {
+                W::BITS as usize
+            }
         {
-            true
+            return Self::Zero;
         }
-        (ShiftKind::Lane32ArithmeticRight, ShiftKind::Lane32RotateRight) if inner.amount == 31 => {
-            true
+
+        // Arithmetic shifts saturate while rotations wrap.
+        // Both cases still have a single-shift representation.
+        Self::Single
+    }
+
+    fn chained_kind<W: Word>(inner: Shift<W>, outer: Shift<W>) -> Option<ShiftKind> {
+        // Equal operations always continue in the same direction.
+        if inner.kind == outer.kind {
+            return Some(inner.kind);
         }
-        (
-            ShiftKind::ArithmeticRight | ShiftKind::Lane32ArithmeticRight,
-            ShiftKind::LogicalRight,
-        ) if outer.amount == full_last => true,
-        (ShiftKind::Lane32ArithmeticRight, ShiftKind::Lane32LogicalRight) if outer.amount == 31 => {
-            true
+
+        // A logical right shift clears the sign before arithmetic extension.
+        match (inner.kind, outer.kind) {
+            (ShiftKind::LogicalRight, ShiftKind::ArithmeticRight) => Some(ShiftKind::LogicalRight),
+            (ShiftKind::Lane32LogicalRight, ShiftKind::Lane32ArithmeticRight) => {
+                Some(ShiftKind::Lane32LogicalRight)
+            }
+            // Crossing 32 bits leaves each lane with bits from only one original half.
+            (ShiftKind::LogicalLeft, ShiftKind::Lane32LogicalLeft) if inner.amount >= 32 => {
+                Some(ShiftKind::LogicalLeft)
+            }
+            (ShiftKind::Lane32LogicalLeft, ShiftKind::LogicalLeft) if outer.amount >= 32 => {
+                Some(ShiftKind::LogicalLeft)
+            }
+            (ShiftKind::LogicalRight, ShiftKind::Lane32LogicalRight) if inner.amount >= 32 => {
+                Some(ShiftKind::LogicalRight)
+            }
+            (ShiftKind::Lane32LogicalRight, ShiftKind::LogicalRight) if outer.amount >= 32 => {
+                Some(ShiftKind::LogicalRight)
+            }
+            (ShiftKind::ArithmeticRight, ShiftKind::Lane32ArithmeticRight)
+                if inner.amount >= 32 =>
+            {
+                Some(ShiftKind::ArithmeticRight)
+            }
+            (ShiftKind::Lane32ArithmeticRight, ShiftKind::ArithmeticRight)
+                if outer.amount >= 32 =>
+            {
+                Some(ShiftKind::ArithmeticRight)
+            }
+            (ShiftKind::LogicalRight, ShiftKind::Lane32ArithmeticRight) if inner.amount >= 33 => {
+                Some(ShiftKind::LogicalRight)
+            }
+            (ShiftKind::Lane32LogicalRight, ShiftKind::ArithmeticRight) if outer.amount >= 32 => {
+                Some(ShiftKind::LogicalRight)
+            }
+            _ => None,
         }
-        _ => false,
+    }
+
+    const fn is_degenerate<W: Word>(inner: Shift<W>, outer: Shift<W>) -> bool {
+        // A full-width arithmetic shift can collapse a word to one repeated sign bit.
+        let full_last = W::BITS as u8 - 1;
+        match (inner.kind, outer.kind) {
+            (ShiftKind::ArithmeticRight, ShiftKind::RotateRight | ShiftKind::Lane32RotateRight)
+                if inner.amount == full_last =>
+            {
+                true
+            }
+            (ShiftKind::Lane32ArithmeticRight, ShiftKind::Lane32RotateRight)
+                if inner.amount == 31 =>
+            {
+                true
+            }
+            (
+                ShiftKind::ArithmeticRight | ShiftKind::Lane32ArithmeticRight,
+                ShiftKind::LogicalRight,
+            ) if outer.amount == full_last => true,
+            (ShiftKind::Lane32ArithmeticRight, ShiftKind::Lane32LogicalRight)
+                if outer.amount == 31 =>
+            {
+                true
+            }
+            _ => false,
+        }
     }
 }
