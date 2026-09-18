@@ -3,11 +3,13 @@
 //! [`Sha256::hash_many`] and [`Sha256Compress::compress_many`] hash four messages at a time on
 //! the targets that have a four-lane backend: wasm32 with `simd128`, x86-64 with `sha` and
 //! `sse4.1`, and AArch64 with `neon` and `sha2`. The choice is made at compile time, so an x86-64
-//! build needs `-C target-feature=+sha` or `-C target-cpu=native` to get it; no microarchitecture
-//! level turns `sha` on by itself. The Apple silicon targets enable `sha2` by default.
+//! build needs `-C target-feature=+sha` and an AArch64 Linux build needs `-C target-feature=+sha2`
+//! (or `-C target-cpu=native`) to get it; no x86-64 microarchitecture level turns `sha` on by
+//! itself. The Apple silicon targets enable `sha2` by default.
 //!
-//! A build without one hashes a message at a time through `sha2`, which detects SHA-NI at runtime
-//! on its own. What the four-lane backends add is the interleaving of four independent streams.
+//! A build without one hashes a message at a time through `sha2`, which detects the hardware SHA
+//! extension (SHA-NI or the ARMv8 SHA-2 extension) at runtime on its own. What the four-lane
+//! backends add is the interleaving of four independent streams.
 
 #![no_std]
 
@@ -34,16 +36,16 @@ mod x86_64_sha_ni;
 ))]
 mod aarch64_sha2;
 
+/// The four-lane backend this target compiles, if it has one.
+///
+/// Every batched entry point below goes through this one name, so the target tests appear once
+/// per backend rather than once per method.
 #[cfg(all(
     target_arch = "aarch64",
     target_feature = "neon",
     target_feature = "sha2"
 ))]
 use aarch64_sha2::ArmSha2 as Backend;
-/// The four-lane backend this target compiles, if it has one.
-///
-/// Every batched entry point below goes through this one name, so the target tests appear once
-/// per backend rather than once per method.
 #[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
 use wasm32_simd128::Simd128 as Backend;
 #[cfg(all(
@@ -87,6 +89,7 @@ impl CryptographicHasher<u8, [u8; 32]> for Sha256 {
         hasher.finalize().into()
     }
 
+    #[inline]
     fn hash_iter_slices<'a, I>(&self, input: I) -> [u8; 32]
     where
         I: IntoIterator<Item = &'a [u8]>,
@@ -174,7 +177,7 @@ impl CompressionFunction<[u8; 32], 2> for Sha256Compress {}
 ///
 /// A backend supplies only the vector core, through [`FourLane`](four_lane::FourLane). Everything
 /// that turns a batch of messages into blocks lives here, so a padding fix cannot reach one
-/// backend and miss the other.
+/// backend and miss the others.
 #[cfg(any(
     all(target_arch = "wasm32", target_feature = "simd128"),
     all(
@@ -553,8 +556,8 @@ mod tests {
 
     #[test]
     fn hash_many_matches_fips_180_vectors_in_every_lane() {
-        // FIPS 180-4 examples: the empty message, one block, and the two messages whose padding
-        // spills into a second block.
+        // FIPS 180-4 examples: the empty message, one block, one message whose padding spills
+        // into a second block, and a two-block message.
         let vectors: [(&[u8], [u8; 32]); 4] = [
             (
                 b"",
