@@ -233,16 +233,43 @@ const STAGED_LINE_BYTES: usize = 64;
 ///     width 16     4.91   4.73   4.96   4.04   4.72   4.82   ms at 2^18 rows
 /// ```
 ///
-/// A run cannot be shorter than one row, so every cell left of a width's own row length holds
-/// the same plan measured again: width 16's leading three are one plan three times, and their
-/// spread of 4.73 to 4.96 puts the noise floor near 5%, which is what the rest of the table
-/// has to be read against.
+/// A run cannot be shorter than one row.
+/// So every cell left of a width's own row length repeats that width's shortest plan.
+///
+/// Width 16's leading three are one plan measured three times.
+/// Their spread of 4.73 to 4.96 puts the noise floor near 5%, which the rest is read against.
 ///
 /// The knee is at 1024 bytes, and the rise past it is the depth the tile gives up.
-/// [`Plan::new`] reads this as a target and not as a floor, because that depth is not free: a
-/// run grows only while the shorter tile still takes as few traversals of the matrix, and as
-/// few of them that gather.
+/// That depth is not free, so this is a target a plan grows towards and not a floor.
+///
+/// A run grows while the shortest run's traversal count still covers it.
+/// It adds a gather the shortest run did not need only once its length has paid for one.
 const STAGED_RUN_BYTES: usize = 1024;
+
+/// Doublings of the run that have to be on offer before a plan buys an added gather.
+///
+/// A leftover stage sweeps the matrix contiguously.
+/// A staged group sweeps it too, and gathers and scatters on top of that.
+///
+/// So trading the leftover for another group holds the traversal count and adds a gather.
+/// The longer run has to cover that gather out of what its own length saves.
+///
+/// What length saves is the stride a prefetcher gets to follow, which grows by doublings.
+/// Forward transforms, as the ratio of the grown plan to the plan that refuses to grow:
+///
+/// ```text
+///     growth    ratios           shapes
+///      2x       1.02 .. 1.13         9
+///      4x       0.96 .. 1.08         9
+///      8x       0.87 .. 0.98        10
+///     16x       0.78 .. 0.85         7
+/// ```
+///
+/// Below 1.00 the longer run wins, swept over 32 workers and over one pinned worker.
+/// A plan measured against itself spans 3% at 32 workers and 1.3% at one.
+///
+/// So one doubling loses and two are a wash, while three already pay on every shape.
+const STAGED_GATHER_DOUBLINGS: usize = 3;
 
 /// Workers a row below [`STAGED_LINE_BYTES`] needs before a tile is worth gathering into.
 ///
@@ -312,8 +339,7 @@ struct Plan {
     local: usize,
     /// Base-two logarithm of the adjacent rows one staging gather moves per strided address.
     ///
-    /// At least [`STAGED_LINE_BYTES`] of run, and up to [`STAGED_RUN_BYTES`] of it where the
-    /// depth that costs is free.
+    /// A cache line of run at least, and up to the target wherever its cost is covered.
     log_block: usize,
     /// Long-stride stages that one staging tile fuses into a single pass over the matrix.
     depth: usize,
@@ -364,20 +390,19 @@ impl Plan {
         Self::for_workers(width, log_n, current_num_threads())
     }
 
-    /// The cut points a matrix of this shape gets, from the three memory budgets.
+    /// The cut points a matrix of this shape gets, from its memory budgets and its workers.
     ///
-    /// The staging tile has a fixed byte budget, so doubling the run halves the rows it holds:
-    /// the run length and the fused depth trade one for one. A run below a cache line is never
-    /// worth gathering, so that length is taken first, and from there it grows towards
-    /// [`STAGED_RUN_BYTES`] while two counts stay at what the shortest run already costs.
+    /// The staging tile has a fixed byte budget, so doubling the run halves the rows it holds.
+    /// Run length and fused depth therefore trade one for one.
     ///
-    /// The first is the traversals of the matrix. The second is how many of those gather: a
-    /// leftover stage sweeps the matrix contiguously, while a staged group also gathers and
-    /// scatters. Trading the leftover for a second group holds the traversal count and still
-    /// pays for a gather, so the two counts are not the same budget.
+    /// A run below a cache line is never worth gathering, so that length is taken first.
+    /// From there the run grows towards its target against two counts the shortest run sets:
     ///
-    /// A row under [`STAGED_LINE_BYTES`] is gathered from [`STAGED_WORKERS`] workers up, and
-    /// below that every stage above the contiguous tile runs as a plain pass.
+    /// - Traversals of the matrix, which a longer run may never add to.
+    /// - Traversals that gather, which it may add to only once its length has paid for one.
+    ///
+    /// A row under a cache line is gathered from a threshold worker count up.
+    /// Below that count every stage above the contiguous tile runs as a plain pass.
     fn for_workers(width: usize, log_n: usize, workers: usize) -> Self {
         let row = core::mem::size_of::<u128>() * width;
         let local = log2_floor_usize((TILE_BYTES / row).max(1)).min(log_n);
@@ -394,8 +419,12 @@ impl Plan {
             .rev()
             .find(|&log_block| {
                 let depth = depth_at(log_block);
+                // Enough doublings of the run to cover the gather an added group costs.
+                let paid = log_block >= floor + STAGED_GATHER_DOUBLINGS;
+                // The traversal budget admits at most one added group.
+                // So a run that has paid buys exactly the one gather.
                 Self::traversals(above, depth) <= budget
-                    && Self::groups(above, depth).count() <= gathers
+                    && (paid || Self::groups(above, depth).count() <= gathers)
             })
             .unwrap_or(floor);
         Self {
@@ -1068,22 +1097,28 @@ mod tests {
         (1024, 7, (1, 0, 2)),
     ];
 
-    /// Width-16 heights whose plan the traversal count alone does not decide.
+    /// Shapes whose cut is pinned as a triple alone, since transforming them costs too much.
     ///
-    /// At each of these, growing the run would hold the traversal count while turning a
-    /// leftover plain pass into a second gathered group, so the gather count is the only
-    /// thing that separates the two plans:
+    /// Each row is a run-length decision, and what decides it:
     ///
     /// ```text
-    ///     2^16   one group of eight and a plain pass, where growth would give (6, 3)
-    ///     2^18   two groups either way, so growth rebalances (8, 3) into (6, 5)
-    ///     2^20   two groups either way, rebalanced into (7, 6)
+    ///     width 48 @ 2^18   one doubling on offer, the least a growing run can have
+    ///     width 16 @ 2^16   two doublings, so the added gather stays unpaid
+    ///     width  8 @ 2^18   three doublings, which is exactly what a gather costs
+    ///     width  4 @ 2^20   four doublings, the widest row a run still spans several of
+    ///     width  1 @ 2^22   four doublings again, from a run floor above one row
+    ///     width 16 @ 2^18   no leftover pass, so growth rebalances (8, 3) into (6, 5)
+    ///     width 16 @ 2^20   no leftover pass either, rebalanced into (7, 6)
     /// ```
     ///
-    /// These sit apart from [`PRODUCTION_CUTS`] because that list is also transformed against
-    /// the per-stage schedule, and `2^20` rows of width 16 is `2^24` elements to move twice.
-    const WIDE_CUTS: [(usize, usize, (usize, usize, usize)); 3] = [
+    /// The last two offer no leftover to trade, so the traversal count alone picks their run.
+    /// Width 16 at `2^20` rows is `2^24` elements, which is why none of these is transformed.
+    const PLAN_ONLY_CUTS: [(usize, usize, (usize, usize, usize)); 7] = [
+        (48, 18, (5, 0, 6)),
         (16, 16, (7, 0, 8)),
+        (8, 18, (8, 3, 6)),
+        (4, 20, (9, 4, 6)),
+        (1, 22, (11, 6, 6)),
         (16, 18, (7, 2, 6)),
         (16, 20, (7, 1, 7)),
     ];
@@ -1344,12 +1379,12 @@ mod tests {
     }
 
     #[test]
-    fn the_plan_gathers_the_longest_run_its_pass_budget_allows() {
-        // The production cut points, as `local, log_block, depth`, at a worker count past the
-        // threshold. A run length is a choice between two plans that cost the same number of
-        // passes, so no pass count can pin it: these triples are what says which one the
-        // budgets pick, and a change to any of the three has to come through here.
-        for (width, log_n, cut) in PRODUCTION_CUTS.into_iter().chain(WIDE_CUTS) {
+    fn the_plan_gathers_the_longest_run_its_budgets_allow() {
+        // The production cut points, as `local, log_block, depth`, past the worker threshold.
+        //
+        // A run length is a choice between two plans that take the same number of passes.
+        // So no pass count can pin it, and these triples are what says which one is picked.
+        for (width, log_n, cut) in PRODUCTION_CUTS.into_iter().chain(PLAN_ONLY_CUTS) {
             let plan = Plan::for_workers(width, log_n, 32);
             assert_eq!((plan.local, plan.log_block, plan.depth), cut, "{plan:?}");
         }
