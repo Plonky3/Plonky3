@@ -1,15 +1,18 @@
-use alloc::vec;
+//! Compiled word-to-relation metadata for backend reductions.
+
 use alloc::vec::Vec;
 use core::ops::Range;
 
 use p3_word::{
-    ConstraintKind, ConstraintSystem, Operand, OperandRole, Segment, Shift, ShiftKind, Word,
+    ConstraintKind, ConstraintSystem, ConstraintTerm, OperandRole, Segment, Shift, Word,
 };
 use thiserror::Error;
 
-const SHIFT_BITS: u32 = 9;
-const SEQUENCE_BITS: u32 = 2 * SHIFT_BITS;
-const SEQUENCE_MASK: u32 = (1 << SEQUENCE_BITS) - 1;
+mod builder;
+mod code;
+
+use builder::CountingSegment;
+use code::KeyCode;
 
 /// A compact index into one operation family.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -73,6 +76,7 @@ impl<W: Word> CompiledKey<'_, W> {
     }
 }
 
+/// One stored key before its references are resolved to borrowed slices.
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct StoredKey {
     /// The relation family consuming the word.
@@ -157,66 +161,33 @@ impl<W: Word> CompiledKeyLayout<W> {
     /// - Terms retain their supplied order and multiplicity.
     /// - Each word's keys retain the first occurrence of each group.
     pub fn new(system: &ConstraintSystem<W>) -> Result<Self, KeyCompileError> {
-        check_constraint_counts(system)?;
+        // The first pass counts exact per-word storage without nested allocations.
+        let mut public = CountingSegment::new(system.public_len(), Segment::Public)?;
+        let mut witness = CountingSegment::new(system.witness_len(), Segment::Witness)?;
+        for term in system.terms() {
+            let reference = Reference::from(term);
+            match reference.segment {
+                Segment::Public => public.count(reference)?,
+                Segment::Witness => witness.count(reference)?,
+            }
+        }
 
-        let mut public_counts = word_offsets(system.public_len(), Segment::Public)?;
-        let mut witness_counts = word_offsets(system.witness_len(), Segment::Witness)?;
-        let mut public_codes = Vec::new();
-        let mut witness_codes = Vec::new();
+        // Prefix sums allocate one contiguous reference table per segment.
+        let mut public = public.prepare()?;
+        let mut witness = witness.prepare()?;
 
-        for_each_reference(system, |reference| {
-            let (counts, codes) = match reference.segment {
-                Segment::Public => (&mut public_counts, &mut public_codes),
-                Segment::Witness => (&mut witness_counts, &mut witness_codes),
-            };
-            counts[reference.word + 1] = counts[reference.word + 1].checked_add(1).ok_or(
-                KeyCompileError::LayoutTooLarge {
-                    segment: reference.segment,
-                    component: LayoutComponent::References,
-                    len: usize::MAX,
-                },
-            )?;
-            codes.push(reference.key_code);
-            Ok(())
-        })?;
-
-        prefix_sum(&mut public_counts, Segment::Public)?;
-        prefix_sum(&mut witness_counts, Segment::Witness)?;
-
-        let mut public_references =
-            vec![PackedReference::default(); public_counts.last().copied().unwrap_or(0)];
-        let mut witness_references =
-            vec![PackedReference::default(); witness_counts.last().copied().unwrap_or(0)];
-        let mut public_cursors = public_counts[..system.public_len()].to_vec();
-        let mut witness_cursors = witness_counts[..system.witness_len()].to_vec();
-
-        for_each_reference(system, |reference| {
-            let (references, cursors) = match reference.segment {
-                Segment::Public => (&mut public_references, &mut public_cursors),
-                Segment::Witness => (&mut witness_references, &mut witness_cursors),
-            };
-            let cursor = &mut cursors[reference.word];
-            references[*cursor] = PackedReference {
-                key_code: reference.key_code,
-                constraint: reference.constraint,
-            };
-            *cursor += 1;
-            Ok(())
-        })?;
+        // The second pass places every reference into its reserved word span.
+        for term in system.terms() {
+            let reference = Reference::from(term);
+            match reference.segment {
+                Segment::Public => public.insert(reference),
+                Segment::Witness => witness.insert(reference),
+            }
+        }
 
         Ok(Self {
-            public: CompiledSegment::compile(
-                Segment::Public,
-                &public_counts,
-                &public_references,
-                public_codes,
-            )?,
-            witness: CompiledSegment::compile(
-                Segment::Witness,
-                &witness_counts,
-                &witness_references,
-                witness_codes,
-            )?,
+            public: public.compile()?,
+            witness: witness.compile()?,
         })
     }
 
@@ -247,14 +218,6 @@ pub enum LayoutComponent {
 /// A constraint system too large for the compact key representation.
 #[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
 pub enum KeyCompileError {
-    /// A family cannot be addressed by a 32-bit constraint index.
-    #[error("{kind:?} has {len} constraints, exceeding u32::MAX")]
-    TooManyConstraints {
-        /// The oversized family.
-        kind: ConstraintKind,
-        /// The rejected length.
-        len: usize,
-    },
     /// A segment component cannot be addressed by its compact index.
     #[error("{segment:?} {component:?} has unsupported length {len}")]
     LayoutTooLarge {
@@ -267,27 +230,7 @@ pub enum KeyCompileError {
     },
 }
 
-#[derive(Clone, Copy)]
-struct PackedReference {
-    /// The encoded operation and shift sequence.
-    key_code: u32,
-    /// The relation consumer of the shifted word.
-    constraint: ConstraintReference,
-}
-
-impl Default for PackedReference {
-    fn default() -> Self {
-        // Every placeholder is overwritten before compilation reads it.
-        Self {
-            key_code: 0,
-            constraint: ConstraintReference {
-                operand: OperandRole::Value,
-                constraint: 0,
-            },
-        }
-    }
-}
-
+/// One semantic term translated into backend storage coordinates.
 #[derive(Clone, Copy)]
 struct Reference {
     /// The visibility class containing the source word.
@@ -295,294 +238,26 @@ struct Reference {
     /// The source offset within its visibility class.
     word: usize,
     /// The encoded operation and shift sequence.
-    key_code: u32,
+    key_code: KeyCode,
     /// The relation consumer of the shifted word.
     constraint: ConstraintReference,
 }
 
-fn check_constraint_counts<W: Word>(system: &ConstraintSystem<W>) -> Result<(), KeyCompileError> {
-    for (kind, len) in [
-        (ConstraintKind::Zero, system.zero_constraints().len()),
-        (ConstraintKind::And, system.and_constraints().len()),
-        (
-            ConstraintKind::IntegerMul,
-            system.integer_mul_constraints().len(),
-        ),
-    ] {
-        if u32::try_from(len).is_err() {
-            return Err(KeyCompileError::TooManyConstraints { kind, len });
-        }
-    }
-    Ok(())
-}
-
-fn word_offsets(len: usize, segment: Segment) -> Result<Vec<usize>, KeyCompileError> {
-    let len = len.checked_add(1).ok_or(KeyCompileError::LayoutTooLarge {
-        segment,
-        component: LayoutComponent::WordOffsets,
-        len,
-    })?;
-    Ok(vec![0; len])
-}
-
-fn for_each_reference<W: Word>(
-    system: &ConstraintSystem<W>,
-    mut visit: impl FnMut(Reference) -> Result<(), KeyCompileError>,
-) -> Result<(), KeyCompileError> {
-    for (constraint, relation) in system.zero_constraints().iter().enumerate() {
-        visit_operand(
-            ConstraintKind::Zero,
-            OperandRole::Value,
-            u32::try_from(constraint).expect("constraint counts were bounded before compilation"),
-            relation.value(),
-            &mut visit,
-        )?;
-    }
-    for operand in [OperandRole::Left, OperandRole::Right, OperandRole::Output] {
-        for (constraint, relation) in system.and_constraints().iter().enumerate() {
-            let value = match operand {
-                OperandRole::Left => relation.left(),
-                OperandRole::Right => relation.right(),
-                OperandRole::Output => relation.output(),
-                _ => unreachable!("AND relations expose only three operand roles"),
-            };
-            visit_operand(
-                ConstraintKind::And,
-                operand,
-                u32::try_from(constraint)
-                    .expect("constraint counts were bounded before compilation"),
-                value,
-                &mut visit,
-            )?;
-        }
-    }
-    for operand in [
-        OperandRole::Left,
-        OperandRole::Right,
-        OperandRole::Low,
-        OperandRole::High,
-    ] {
-        for (constraint, relation) in system.integer_mul_constraints().iter().enumerate() {
-            let value = match operand {
-                OperandRole::Left => relation.left(),
-                OperandRole::Right => relation.right(),
-                OperandRole::Low => relation.low(),
-                OperandRole::High => relation.high(),
-                _ => unreachable!("multiplication relations expose only four operand roles"),
-            };
-            visit_operand(
-                ConstraintKind::IntegerMul,
-                operand,
-                u32::try_from(constraint)
-                    .expect("constraint counts were bounded before compilation"),
-                value,
-                &mut visit,
-            )?;
-        }
-    }
-    Ok(())
-}
-
-fn visit_operand<W: Word>(
-    operation: ConstraintKind,
-    operand: OperandRole,
-    constraint: u32,
-    value: &Operand<W>,
-    visit: &mut impl FnMut(Reference) -> Result<(), KeyCompileError>,
-) -> Result<(), KeyCompileError> {
-    for term in value.terms() {
+impl<W: Word> From<ConstraintTerm<'_, W>> for Reference {
+    fn from(value: ConstraintTerm<'_, W>) -> Self {
+        // The checked semantic term already carries its family provenance.
+        let term = value.term();
         let index = term.index();
-        visit(Reference {
+        Self {
             segment: index.segment(),
             word: index.position() as usize,
-            key_code: key_code(operation, term.shifts()),
+            key_code: KeyCode::new(value.kind(), term.shifts()),
             constraint: ConstraintReference {
-                operand,
-                constraint,
+                operand: value.role(),
+                constraint: value.constraint(),
             },
-        })?;
-    }
-    Ok(())
-}
-
-fn prefix_sum(offsets: &mut [usize], segment: Segment) -> Result<(), KeyCompileError> {
-    for word in 0..offsets.len().saturating_sub(1) {
-        offsets[word + 1] = offsets[word + 1].checked_add(offsets[word]).ok_or(
-            KeyCompileError::LayoutTooLarge {
-                segment,
-                component: LayoutComponent::References,
-                len: usize::MAX,
-            },
-        )?;
-    }
-    let len = offsets.last().copied().unwrap_or(0);
-    if u32::try_from(len).is_err() {
-        return Err(KeyCompileError::LayoutTooLarge {
-            segment,
-            component: LayoutComponent::References,
-            len,
-        });
-    }
-    Ok(())
-}
-
-impl<W: Word> CompiledSegment<W> {
-    fn compile(
-        segment: Segment,
-        offsets: &[usize],
-        references: &[PackedReference],
-        mut key_codes: Vec<u32>,
-    ) -> Result<Self, KeyCompileError> {
-        key_codes.sort_unstable();
-        key_codes.dedup();
-        let mut sequence_codes = key_codes
-            .iter()
-            .map(|code| code & SEQUENCE_MASK)
-            .collect::<Vec<_>>();
-        sequence_codes.sort_unstable();
-        sequence_codes.dedup();
-        let shifts = sequence_codes
-            .iter()
-            .copied()
-            .map(decode_sequence)
-            .collect::<Vec<_>>();
-
-        let mut keys = Vec::new();
-        let mut word_keys = Vec::with_capacity(offsets.len().saturating_sub(1));
-        let mut flat_references = Vec::with_capacity(references.len());
-        let mut slot_of = vec![usize::MAX; key_codes.len()];
-
-        for word in 0..offsets.len().saturating_sub(1) {
-            let start = u32::try_from(keys.len()).map_err(|_| KeyCompileError::LayoutTooLarge {
-                segment,
-                component: LayoutComponent::Keys,
-                len: keys.len(),
-            })?;
-            let mut groups: Vec<(usize, Vec<ConstraintReference>)> = Vec::new();
-            for reference in &references[offsets[word]..offsets[word + 1]] {
-                let id = key_codes
-                    .binary_search(&reference.key_code)
-                    .expect("the dense key list covers every reference");
-                let slot = slot_of[id];
-                if slot == usize::MAX {
-                    slot_of[id] = groups.len();
-                    groups.push((id, vec![reference.constraint]));
-                } else {
-                    groups[slot].1.push(reference.constraint);
-                }
-            }
-
-            for (id, constraints) in groups {
-                slot_of[id] = usize::MAX;
-                let code = key_codes[id];
-                let reference_start = u32::try_from(flat_references.len()).map_err(|_| {
-                    KeyCompileError::LayoutTooLarge {
-                        segment,
-                        component: LayoutComponent::References,
-                        len: flat_references.len(),
-                    }
-                })?;
-                flat_references.extend(constraints);
-                let reference_end = u32::try_from(flat_references.len()).map_err(|_| {
-                    KeyCompileError::LayoutTooLarge {
-                        segment,
-                        component: LayoutComponent::References,
-                        len: flat_references.len(),
-                    }
-                })?;
-                let sequence = code & SEQUENCE_MASK;
-                let shift = sequence_codes
-                    .binary_search(&sequence)
-                    .expect("the dense shift list covers every key");
-                let shift = u32::try_from(shift)
-                    .expect("two 9-bit shift codes fit in a 32-bit dense index");
-                keys.push(StoredKey {
-                    operation: decode_operation(code),
-                    shift,
-                    references: reference_start..reference_end,
-                });
-            }
-
-            let end = u32::try_from(keys.len()).map_err(|_| KeyCompileError::LayoutTooLarge {
-                segment,
-                component: LayoutComponent::Keys,
-                len: keys.len(),
-            })?;
-            word_keys.push(start..end);
         }
-
-        Ok(Self {
-            shifts,
-            keys,
-            word_keys,
-            references: flat_references,
-        })
     }
-}
-
-#[inline]
-fn key_code<W: Word>(operation: ConstraintKind, shifts: [Shift<W>; 2]) -> u32 {
-    operation_code(operation) << SEQUENCE_BITS
-        | u32::from(shift_code(shifts[1])) << SHIFT_BITS
-        | u32::from(shift_code(shifts[0]))
-}
-
-#[inline]
-const fn operation_code(operation: ConstraintKind) -> u32 {
-    match operation {
-        ConstraintKind::Zero => 0,
-        ConstraintKind::And => 1,
-        ConstraintKind::IntegerMul => 2,
-    }
-}
-
-#[inline]
-const fn decode_operation(code: u32) -> ConstraintKind {
-    match code >> SEQUENCE_BITS {
-        0 => ConstraintKind::Zero,
-        1 => ConstraintKind::And,
-        2 => ConstraintKind::IntegerMul,
-        _ => unreachable!(),
-    }
-}
-
-#[inline]
-fn shift_code<W: Word>(shift: Shift<W>) -> u16 {
-    (kind_code(shift.kind()) << 6) | u16::from(shift.amount())
-}
-
-#[inline]
-const fn kind_code(kind: ShiftKind) -> u16 {
-    match kind {
-        ShiftKind::LogicalLeft => 0,
-        ShiftKind::LogicalRight => 1,
-        ShiftKind::ArithmeticRight => 2,
-        ShiftKind::RotateRight => 3,
-        ShiftKind::Lane32LogicalLeft => 4,
-        ShiftKind::Lane32LogicalRight => 5,
-        ShiftKind::Lane32ArithmeticRight => 6,
-        ShiftKind::Lane32RotateRight => 7,
-    }
-}
-
-fn decode_sequence<W: Word>(code: u32) -> [Shift<W>; 2] {
-    [decode_shift(code), decode_shift(code >> SHIFT_BITS)]
-}
-
-fn decode_shift<W: Word>(code: u32) -> Shift<W> {
-    let code = code & ((1 << SHIFT_BITS) - 1);
-    let kind = match code >> 6 {
-        0 => ShiftKind::LogicalLeft,
-        1 => ShiftKind::LogicalRight,
-        2 => ShiftKind::ArithmeticRight,
-        3 => ShiftKind::RotateRight,
-        4 => ShiftKind::Lane32LogicalLeft,
-        5 => ShiftKind::Lane32LogicalRight,
-        6 => ShiftKind::Lane32ArithmeticRight,
-        7 => ShiftKind::Lane32RotateRight,
-        _ => unreachable!(),
-    };
-    Shift::new(kind, (code & 0x3f) as usize).expect("compiled shifts originated in checked terms")
 }
 
 #[cfg(test)]
@@ -590,8 +265,8 @@ mod tests {
     use alloc::vec;
 
     use p3_word::{
-        AndConstraint, IntegerMulConstraint, Operand, ShiftedValue, ValueIndex, Word32, Word64,
-        ZeroConstraint,
+        AndConstraint, IntegerMulConstraint, Operand, ShiftKind, ShiftedValue, ValueIndex, Word32,
+        Word64, ZeroConstraint,
     };
 
     use super::*;
@@ -845,13 +520,13 @@ mod tests {
 
     #[test]
     fn word_offset_length_overflow_is_rejected() {
-        assert_eq!(
-            word_offsets(usize::MAX, Segment::Witness),
+        assert!(matches!(
+            CountingSegment::new(usize::MAX, Segment::Witness),
             Err(KeyCompileError::LayoutTooLarge {
                 segment: Segment::Witness,
                 component: LayoutComponent::WordOffsets,
                 len: usize::MAX,
             })
-        );
+        ));
     }
 }

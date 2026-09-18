@@ -1,17 +1,14 @@
+//! Packed statement words in the bit order consumed by the Boolean PCS.
+
 use alloc::vec::Vec;
 use core::fmt::Debug;
 use core::ops::AddAssign;
 
 use p3_binary_field::{PackedGf2x32, PackedGf2x64};
-use p3_word::{ConstraintSystem, Segment, ValueIndex, Word, Word32, Word64};
-use thiserror::Error;
-
-mod sealed {
-    pub trait Sealed {}
-}
+use p3_word::{ConstraintSystem, Segment, ShapeError, ValueIndex, Word, Word32, Word64};
 
 /// A word whose bits occupy one binary-field packing.
-pub trait PackedWord: Word + sealed::Sealed {
+pub trait PackedWord: Word {
     /// One field lane per bit, from least to most significant.
     type Packing: AddAssign + Copy + Debug + Eq;
 
@@ -21,8 +18,6 @@ pub trait PackedWord: Word + sealed::Sealed {
     /// Recovers the word from its bit lanes.
     fn unpack(value: Self::Packing) -> Self;
 }
-
-impl sealed::Sealed for Word32 {}
 
 impl PackedWord for Word32 {
     type Packing = PackedGf2x32;
@@ -37,8 +32,6 @@ impl PackedWord for Word32 {
         Self::new(value.to_bits())
     }
 }
-
-impl sealed::Sealed for Word64 {}
 
 impl PackedWord for Word64 {
     type Packing = PackedGf2x64;
@@ -67,17 +60,8 @@ pub struct PackedWitness<W: PackedWord> {
     witness: Vec<W::Packing>,
 }
 
-/// A witness that does not match its checked constraint system.
-#[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
-#[error("expected {expected} {segment:?} words, received {actual}")]
-pub struct WitnessError {
-    /// The segment with the wrong length.
-    pub segment: Segment,
-    /// The checked length.
-    pub expected: usize,
-    /// The supplied length.
-    pub actual: usize,
-}
+/// A witness that does not match its checked statement shape.
+pub type WitnessError = ShapeError;
 
 impl<W: PackedWord> PackedWitness<W> {
     /// Packs an exactly shaped public and committed word vector.
@@ -86,7 +70,8 @@ impl<W: PackedWord> PackedWitness<W> {
         public: &[W],
         witness: &[W],
     ) -> Result<Self, WitnessError> {
-        Self::check_lengths(system, public.len(), witness.len())?;
+        // Packing preserves the statement's two independent segment lengths.
+        system.check_shape(public.len(), witness.len())?;
 
         Ok(Self {
             public: public.iter().copied().map(W::pack).collect(),
@@ -100,7 +85,8 @@ impl<W: PackedWord> PackedWitness<W> {
         public: Vec<W::Packing>,
         witness: Vec<W::Packing>,
     ) -> Result<Self, WitnessError> {
-        Self::check_lengths(system, public.len(), witness.len())?;
+        // Prepacked buffers obey the same checked statement shape.
+        system.check_shape(public.len(), witness.len())?;
         Ok(Self { public, witness })
     }
 
@@ -108,29 +94,8 @@ impl<W: PackedWord> PackedWitness<W> {
         &self,
         system: &ConstraintSystem<W>,
     ) -> Result<(), WitnessError> {
-        Self::check_lengths(system, self.public.len(), self.witness.len())
-    }
-
-    const fn check_lengths(
-        system: &ConstraintSystem<W>,
-        public_len: usize,
-        witness_len: usize,
-    ) -> Result<(), WitnessError> {
-        if public_len != system.public_len() {
-            return Err(WitnessError {
-                segment: Segment::Public,
-                expected: system.public_len(),
-                actual: public_len,
-            });
-        }
-        if witness_len != system.witness_len() {
-            return Err(WitnessError {
-                segment: Segment::Witness,
-                expected: system.witness_len(),
-                actual: witness_len,
-            });
-        }
-        Ok(())
+        // Revalidation protects backend entry points that receive stored witnesses.
+        system.check_shape(self.public.len(), self.witness.len())
     }
 
     /// Returns the packed public words.
