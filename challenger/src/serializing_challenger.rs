@@ -199,6 +199,26 @@ where
     }
 }
 
+impl<F, Inner> SerializingChallenger32<F, Inner>
+where
+    F: PrimeField32,
+    Inner: CanSample<u8> + CanObserve<u8>,
+{
+    /// Hash everything observed since the last sample into the inner state.
+    ///
+    /// Discards one sampled byte. A proof-of-work step starts here, so each candidate
+    /// witness is hashed against a digest of the transcript rather than its pending input.
+    fn squeeze(&mut self) {
+        let _: u8 = self.inner.sample();
+    }
+
+    /// Absorb `witness` and report whether the next `bits` sampled bits are all zero.
+    fn witness_passes(&mut self, bits: usize, witness: F) -> bool {
+        self.observe(witness);
+        self.sample_bits(bits) == 0
+    }
+}
+
 impl<F, Inner> GrindingChallenger for SerializingChallenger32<F, Inner>
 where
     F: PrimeField32,
@@ -221,16 +241,28 @@ where
             return F::ZERO;
         }
 
+        let mut squeezed = self.clone();
+        squeezed.squeeze();
         let witness = (0..F::ORDER_U32)
             .into_par_iter()
             .map(|i| unsafe {
                 // i < F::ORDER_U32 by construction so this is safe.
                 F::from_canonical_unchecked(i)
             })
-            .find_any(|witness| self.clone().check_witness(bits, *witness))
+            .find_any(|witness| squeezed.clone().witness_passes(bits, *witness))
             .expect("failed to find witness");
         assert!(self.check_witness(bits, witness));
         witness
+    }
+
+    /// Squeeze the transcript, absorb `witness`, and check that the next `bits` sampled bits
+    /// are all zero. Zero difficulty accepts any witness without touching the transcript.
+    fn check_witness(&mut self, bits: usize, witness: Self::Witness) -> bool {
+        if bits == 0 {
+            return true;
+        }
+        self.squeeze();
+        self.witness_passes(bits, witness)
     }
 }
 
@@ -394,6 +426,26 @@ where
     }
 }
 
+impl<F, Inner> SerializingChallenger64<F, Inner>
+where
+    F: PrimeField64,
+    Inner: CanSample<u8> + CanObserve<u8>,
+{
+    /// Hash everything observed since the last sample into the inner state.
+    ///
+    /// Discards one sampled byte. A proof-of-work step starts here, so each candidate
+    /// witness is hashed against a digest of the transcript rather than its pending input.
+    fn squeeze(&mut self) {
+        let _: u8 = self.inner.sample();
+    }
+
+    /// Absorb `witness` and report whether the next `bits` sampled bits are all zero.
+    fn witness_passes(&mut self, bits: usize, witness: F) -> bool {
+        self.observe(witness);
+        self.sample_bits(bits) == 0
+    }
+}
+
 impl<F, Inner> GrindingChallenger for SerializingChallenger64<F, Inner>
 where
     F: PrimeField64,
@@ -411,16 +463,28 @@ where
             return F::ZERO;
         }
 
+        let mut squeezed = self.clone();
+        squeezed.squeeze();
         let witness = (0..F::ORDER_U64)
             .into_par_iter()
             .map(|i| unsafe {
                 // i < F::ORDER_U64 by construction so this is safe.
                 F::from_canonical_unchecked(i)
             })
-            .find_any(|witness| self.clone().check_witness(bits, *witness))
+            .find_any(|witness| squeezed.clone().witness_passes(bits, *witness))
             .expect("failed to find witness");
         assert!(self.check_witness(bits, witness));
         witness
+    }
+
+    /// Squeeze the transcript, absorb `witness`, and check that the next `bits` sampled bits
+    /// are all zero. Zero difficulty accepts any witness without touching the transcript.
+    fn check_witness(&mut self, bits: usize, witness: Self::Witness) -> bool {
+        if bits == 0 {
+            return true;
+        }
+        self.squeeze();
+        self.witness_passes(bits, witness)
     }
 }
 
@@ -455,7 +519,9 @@ where
 
 #[cfg(test)]
 mod tests {
+    use alloc::sync::Arc;
     use alloc::vec;
+    use core::sync::atomic::{AtomicUsize, Ordering};
 
     use p3_baby_bear::BabyBear;
     use p3_field::PrimeCharacteristicRing;
@@ -490,6 +556,78 @@ mod tests {
     }
 
     type Inner = HashChallenger<u8, ByteCountHasher, 32>;
+
+    /// Size of the transcript left pending before a grind in the rehash tests.
+    const PENDING_LEN: usize = 1 << 12;
+
+    /// Toy byte hasher that counts the calls whose input spans the pending transcript.
+    ///
+    /// FNV-1a folded through a SplitMix64 finalizer: input-sensitive enough to grind against.
+    #[derive(Clone)]
+    struct LongInputCounter(Arc<AtomicUsize>);
+
+    impl CryptographicHasher<u8, [u8; 32]> for LongInputCounter {
+        fn hash_iter<I>(&self, input: I) -> [u8; 32]
+        where
+            I: IntoIterator<Item = u8>,
+        {
+            let mut len = 0;
+            let mut state = 0xcbf2_9ce4_8422_2325_u64;
+            for byte in input {
+                state = (state ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01b3);
+                len += 1;
+            }
+            if len >= PENDING_LEN {
+                self.0.fetch_add(1, Ordering::Relaxed);
+            }
+            let mut out = [0; 32];
+            for (i, chunk) in out.as_chunks_mut::<8>().0.iter_mut().enumerate() {
+                let mut z = state.wrapping_add((i as u64 + 1).wrapping_mul(0x9e37_79b9_7f4a_7c15));
+                z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+                z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+                *chunk = (z ^ (z >> 31)).to_le_bytes();
+            }
+            out
+        }
+    }
+
+    /// Grind over a long pending transcript and count how often it gets rehashed.
+    ///
+    /// The search starts from a squeezed copy, and the final check squeezes the real
+    /// transcript, so the pending input is hashed at most twice however many candidates
+    /// are tried. The verifier must accept the witness and stay in sync with the prover.
+    fn assert_grind_rehashes_pending_input_at_most_twice<C>(
+        wrap: impl FnOnce(HashChallenger<u8, LongInputCounter, 32>) -> C,
+    ) where
+        C: GrindingChallenger + CanSampleBits<usize> + Clone,
+    {
+        const BITS: usize = 8;
+        let long_hashes = Arc::new(AtomicUsize::new(0));
+        let inner =
+            HashChallenger::new(vec![7; PENDING_LEN], LongInputCounter(long_hashes.clone()));
+        let mut prover = wrap(inner);
+        let mut verifier = prover.clone();
+
+        let witness = prover.grind(BITS);
+        assert!(long_hashes.load(Ordering::Relaxed) <= 2);
+
+        assert!(verifier.check_witness(BITS, witness));
+        assert_eq!(prover.sample_bits(20), verifier.sample_bits(20));
+    }
+
+    #[test]
+    fn test_serializing_challenger32_grind_rehashes_pending_input_at_most_twice() {
+        assert_grind_rehashes_pending_input_at_most_twice(
+            SerializingChallenger32::<BabyBear, _>::new,
+        );
+    }
+
+    #[test]
+    fn test_serializing_challenger64_grind_rehashes_pending_input_at_most_twice() {
+        assert_grind_rehashes_pending_input_at_most_twice(
+            SerializingChallenger64::<Goldilocks, _>::new,
+        );
+    }
 
     #[test]
     fn test_serializing_challenger32_grind_zero_bits_returns_zero() {
