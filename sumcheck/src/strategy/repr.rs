@@ -94,6 +94,16 @@ where
     #[tracing::instrument(skip_all)]
     pub fn from_tables(order: VariableOrder, evals: Poly<EF>, weights: Poly<R>, sum: EF) -> Self {
         let evals = Poly::new(R::from_table(evals.into_evals()));
+        Self::from_repr_tables(order, evals, weights, sum)
+    }
+
+    /// Builds a prover from an evaluation table and a weight table both already in `R`.
+    pub(crate) fn from_repr_tables(
+        order: VariableOrder,
+        evals: Poly<R>,
+        weights: Poly<R>,
+        sum: EF,
+    ) -> Self {
         let poly = ProductPolynomial::new_unpacked(order, evals, weights);
 
         // `SumcheckProver::new` checks, in debug builds, that the claim and this pair agree in `R`.
@@ -144,32 +154,51 @@ where
         F: TranscriptField,
         Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
     {
-        let mut challenges = Vec::with_capacity(folding_factor);
-
         let shape = SumcheckShape::new(folding_factor, pow_bits, Basis::Evaluation);
         let mut transcript = ProverTranscript::<Challenger, F, EF>::new(challenger, shape);
 
-        for _ in 0..folding_factor {
-            // Measure in R, absorbing whatever binding the last round left behind.
-            let (c_a, c_inf) = self.inner.measure_round();
-
-            // The transcript only ever sees the challenge field.
-            let r =
-                sumcheck_data.observe_and_sample(&mut transcript, EF::from(c_a), EF::from(c_inf));
-            let r_repr = R::from(r);
-            debug_assert_eq!(EF::from(r_repr), r);
-
-            // The round identity is a polynomial in its inputs, so it commutes with the isomorphism.
-            self.inner.sum = Basis::Evaluation.reduce_claim(c_a, c_inf, r_repr, self.inner.sum);
-
-            challenges.push(r);
-            self.inner.hold(r_repr);
-        }
+        let challenges = (0..folding_factor)
+            .map(|_| self.round(sumcheck_data, &mut transcript))
+            .collect();
 
         // Require that every described step was played.
         transcript.finish();
 
         Point::new(challenges)
+    }
+
+    /// Plays one round inside a transcript the caller owns, holding its challenge back.
+    ///
+    /// # Returns
+    ///
+    /// The verifier challenge sampled for this round.
+    pub(crate) fn round<Challenger>(
+        &mut self,
+        sumcheck_data: &mut SumcheckData<F, EF>,
+        transcript: &mut ProverTranscript<'_, Challenger, F, EF>,
+    ) -> EF
+    where
+        F: TranscriptField,
+        Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
+    {
+        // Measure in R, absorbing whatever binding the last round left behind.
+        let (c_a, c_inf) = self.inner.measure_round();
+
+        // The transcript only ever sees the challenge field.
+        let r = sumcheck_data.observe_and_sample(transcript, EF::from(c_a), EF::from(c_inf));
+        let r_repr = R::from(r);
+        debug_assert_eq!(EF::from(r_repr), r);
+
+        // The round identity is a polynomial in its inputs, so it commutes with the isomorphism.
+        self.inner.sum = Basis::Evaluation.reduce_claim(c_a, c_inf, r_repr, self.inner.sum);
+
+        self.inner.hold(r_repr);
+        r
+    }
+
+    /// Returns the current weight table, applying any outstanding binding first.
+    pub(crate) fn weights(&mut self) -> Poly<R> {
+        self.inner.weights()
     }
 }
 

@@ -5,7 +5,7 @@ use alloc::vec::Vec;
 
 use p3_challenger::fs::TranscriptField;
 use p3_challenger::{FieldChallenger, GrindingChallenger};
-use p3_field::{ExtensionField, Field, dot_product};
+use p3_field::{Algebra, ExtensionField, Field, dot_product};
 use p3_maybe_rayon::prelude::*;
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
@@ -13,7 +13,7 @@ use p3_multilinear_util::split_eq::SplitEq;
 
 use crate::lagrange::lagrange_weights_01inf_multi;
 use crate::layout::opening::{EqSvoPartials, NextSvoPartials, Opening, ProverMultiClaim};
-use crate::layout::prover::{Layout, StackedClaims};
+use crate::layout::prover::{Layout, StackedClaims, SuffixResidualProver};
 use crate::layout::witness::{Table, column_slots};
 use crate::layout::{LayoutStrategy, Witness};
 use crate::product_polynomial::ProductPolynomial;
@@ -527,6 +527,11 @@ impl<F: Field, EF: ExtensionField<F>> SuffixProver<F, EF> {
     /// Plays exactly the transcript [`Layout::into_sumcheck`] plays; only the field
     /// the residual tables are held in differs.
     ///
+    /// Takes the row-first route of [`SuffixResidualProver`] when there is more than one column,
+    /// no preprocessing round, no virtual claim, every table has the same height, and every
+    /// column's weights are one shared row table times a scale of its own. Takes the dense route
+    /// otherwise.
+    ///
     /// # Returns
     ///
     /// - Residual sumcheck prover whose tables live in `R`.
@@ -537,11 +542,11 @@ impl<F: Field, EF: ExtensionField<F>> SuffixProver<F, EF> {
         sumcheck_data: &mut SumcheckData<F, EF>,
         pow_bits: usize,
         challenger: &mut Ch,
-    ) -> (ReprSumcheckProver<F, EF, R>, Point<EF>)
+    ) -> (SuffixResidualProver<F, EF, R>, Point<EF>)
     where
         F: TranscriptField,
         EF: From<R>,
-        R: Field + FromTable<EF>,
+        R: Field + FromTable<EF> + Algebra<F>,
         Ch: FieldChallenger<F> + GrindingChallenger<Witness = F>,
     {
         let (alpha, sum, rs) = self.preprocess(sumcheck_data, pow_bits, challenger);
@@ -549,16 +554,162 @@ impl<F: Field, EF: ExtensionField<F>> SuffixProver<F, EF> {
         // Suffix binding folds variables in reverse, so the residual factors live in the
         // reversed-challenges frame.
         let reversed = rs.reversed();
+        let (claim_tables, column_weights) = self.weight_plan(&reversed, alpha);
+
+        // A single column gains nothing from the row-first route: its rows are the whole stacked
+        // space, so both routes play every round over tables of the same size.
+        let row_first = self
+            .claims
+            .tables
+            .iter()
+            .map(Table::num_polys)
+            .sum::<usize>()
+            > 1;
+        if let Some((row_weights, scales)) = row_first
+            .then(|| self.shared_row_weights(&claim_tables, &column_weights))
+            .flatten()
+        {
+            let StackedClaims {
+                tables,
+                placements,
+                num_variables,
+                ..
+            } = self.claims;
+            let prover = SuffixResidualProver::row_first(
+                tables,
+                placements,
+                scales,
+                row_weights,
+                sum,
+                num_variables,
+            );
+            return (prover, rs);
+        }
+
+        let prover = self.dense_residual(&reversed, alpha, sum, claim_tables, column_weights);
+        (SuffixResidualProver::dense(prover), rs)
+    }
+
+    /// Builds the residual prover over the whole stacked space from a weight plan.
+    ///
+    /// # Arguments
+    ///
+    /// - `rs` — suffix challenges already sampled, in the reversed frame.
+    /// - `alpha` — the batching challenge.
+    /// - `sum` — the running claim after preprocessing.
+    /// - `claim_tables`, `column_weights` — the [`Self::weight_plan`] at `rs` and `alpha`.
+    fn dense_residual<R>(
+        &self,
+        rs: &Point<EF>,
+        alpha: EF,
+        sum: EF,
+        claim_tables: Vec<ClaimWeightTables<EF>>,
+        column_weights: WeightPlan<EF>,
+    ) -> ReprSumcheckProver<F, EF, R>
+    where
+        EF: From<R>,
+        R: Field + FromTable<EF>,
+    {
         // Factor 1 of the product: the compressed stacked poly at rs.
         // No external scaling here; the plain path keeps the running sum unchanged.
-        let compressed = self.compress_stacked(&reversed);
+        let compressed = self.compress_stacked(rs);
         // Factor 2 of the product: the batched equality-weight poly, accumulated in `R`.
-        let weights = self.combine_weights_in::<R>(&reversed, alpha);
+        let weights = self.combine_weights_in::<R>(rs, alpha, claim_tables, column_weights);
 
-        (
-            ReprSumcheckProver::from_tables(VariableOrder::Suffix, compressed, weights, sum),
-            rs,
-        )
+        ReprSumcheckProver::from_tables(VariableOrder::Suffix, compressed, weights, sum)
+    }
+
+    /// Splits the residual weights into one row table every column shares and a scale per column.
+    ///
+    /// ```text
+    ///     W(c, x) = s_c * T(x)
+    /// ```
+    ///
+    /// The reference is the first opened column. Every other opened column must list the same
+    /// claim tables in the same order, with coefficients proportional to the reference's.
+    ///
+    /// # Returns
+    ///
+    /// - The row table `T`, normalised so the reference's first coefficient is one.
+    /// - Per source table and column, the scale `s_c`; zero for a column never opened.
+    ///
+    /// `None` when any of these fails, since the row-first route needs all of them:
+    ///
+    /// - no preprocessing rounds and no virtual claims,
+    /// - every source table has the same height,
+    /// - at least one opening, and the reference's first coefficient is nonzero,
+    /// - every opened column's coefficients are proportional to the reference's.
+    fn shared_row_weights(
+        &self,
+        claim_tables: &[ClaimWeightTables<EF>],
+        column_weights: &WeightPlan<EF>,
+    ) -> Option<(Vec<EF>, Vec<Vec<EF>>)> {
+        if self.claims.folding != 0 || !self.claims.virtual_claims.is_empty() {
+            return None;
+        }
+        let row_variables = self.claims.tables.first()?.num_variables();
+        if self
+            .claims
+            .tables
+            .iter()
+            .any(|table| table.num_variables() != row_variables)
+        {
+            return None;
+        }
+
+        let reference = column_weights
+            .iter()
+            .flatten()
+            .find(|terms| !terms.is_empty())?;
+        let lead = reference[0].2;
+        let lead_inv = lead.try_inverse()?;
+
+        // Proportionality is checked by cross-multiplying, so only the reference needs an inverse.
+        //
+        //     terms[j] / terms[0] == reference[j] / reference[0]
+        let proportional = |terms: &[(usize, bool, EF)], scale: EF| {
+            terms.len() == reference.len()
+                && terms.iter().zip(reference).all(|(term, reference_term)| {
+                    term.0 == reference_term.0
+                        && term.1 == reference_term.1
+                        && term.2 * lead == reference_term.2 * scale
+                })
+        };
+        let scales = column_weights
+            .iter()
+            .map(|columns| {
+                columns
+                    .iter()
+                    .map(|terms| match terms.first() {
+                        None => Some(EF::ZERO),
+                        Some(&(_, _, scale)) => proportional(terms, scale).then_some(scale),
+                    })
+                    .collect::<Option<Vec<EF>>>()
+            })
+            .collect::<Option<Vec<Vec<EF>>>>()?;
+
+        // The shared row table: the reference's own tables, over its first coefficient.
+        //
+        //     T = table_0 + sum_{j > 0}  (reference[j] / reference[0]) * table_j
+        let table = |&(claim_idx, is_next, _): &(usize, bool, EF)| {
+            let claim_tables = &claim_tables[claim_idx];
+            let table = if is_next {
+                &claim_tables.next
+            } else {
+                &claim_tables.current
+            };
+            table.as_deref().unwrap()
+        };
+        let mut row_weights = table(&reference[0]).to_vec();
+        for term in &reference[1..] {
+            let ratio = term.2 * lead_inv;
+            row_weights
+                .par_iter_mut()
+                .zip(table(term))
+                .for_each(|(out, &weight)| *out += ratio * weight);
+        }
+
+        Some((row_weights, scales))
     }
 
     /// Compress every stacked-table slot by fixing the suffix challenges.
@@ -644,7 +795,7 @@ impl<F: Field, EF: ExtensionField<F>> SuffixProver<F, EF> {
         self.combine_weights_from_plan::<F, EF>(rs, alpha, &tables, &column_weights)
     }
 
-    /// Builds the residual weight polynomial with every accumulation carried out in `R`.
+    /// Builds the residual weight polynomial from a weight plan, every accumulation in `R`.
     ///
     /// Each entry is the `R` image of the same entry [`Self::combine_weights`] builds, since
     /// `R::from` is a field isomorphism and every entry is a polynomial in the converted inputs.
@@ -657,12 +808,23 @@ impl<F: Field, EF: ExtensionField<F>> SuffixProver<F, EF> {
     /// polynomial-basis representation, for instance. A caller crossing into a prime-field
     /// extension instead, where `R::Packing` collapses to `R`, should pack over `R`'s base field
     /// the way [`Self::combine_weights`] packs over `F`.
+    ///
+    /// # Arguments
+    ///
+    /// - `rs` — suffix challenges already sampled.
+    /// - `alpha` — the batching challenge.
+    /// - `tables`, `column_weights` — the [`Self::weight_plan`] at `rs` and `alpha`.
     #[tracing::instrument(skip_all)]
-    pub(crate) fn combine_weights_in<R>(&self, rs: &Point<EF>, alpha: EF) -> Poly<R>
+    fn combine_weights_in<R>(
+        &self,
+        rs: &Point<EF>,
+        alpha: EF,
+        tables: Vec<ClaimWeightTables<EF>>,
+        column_weights: WeightPlan<EF>,
+    ) -> Poly<R>
     where
         R: Field + FromTable<EF>,
     {
-        let (tables, column_weights) = self.weight_plan(rs, alpha);
         // Each source table is released as its image appears.
         let tables: Vec<ClaimWeightTables<R>> = tables
             .into_iter()
@@ -853,7 +1015,7 @@ impl<F: Field, EF: ExtensionField<F>> SuffixProver<F, EF> {
 /// # Panics
 ///
 /// - The two slices differ in length.
-fn weighted_sum<F: Field, EF: ExtensionField<F>>(weights: &[EF], values: &[F]) -> EF {
+pub(super) fn weighted_sum<F: Field, EF: Field + Algebra<F>>(weights: &[EF], values: &[F]) -> EF {
     assert_eq!(weights.len(), values.len());
     if values.len() <= WEIGHTED_SUM_CHUNK {
         return weighted_sum_chunk(weights, values);
@@ -866,7 +1028,7 @@ fn weighted_sum<F: Field, EF: ExtensionField<F>>(weights: &[EF], values: &[F]) -
 }
 
 /// Sums `weights[i] * values[i]` over one chunk, adding weights directly while every row is a bit.
-fn weighted_sum_chunk<F: Field, EF: ExtensionField<F>>(weights: &[EF], values: &[F]) -> EF {
+fn weighted_sum_chunk<F: Field, EF: Field + Algebra<F>>(weights: &[EF], values: &[F]) -> EF {
     let mut sum = EF::ZERO;
     for (row, (&weight, &value)) in weights.iter().zip(values).enumerate() {
         if value == F::ONE {
@@ -905,9 +1067,11 @@ mod tests {
 
     use itertools::Itertools;
     use p3_baby_bear::BabyBear;
-    use p3_binary_field::{BinaryField128, Ghash128};
+    use p3_binary_field::{BinaryChallenger, BinaryField128, Ghash128};
+    use p3_challenger::HashChallenger;
     use p3_field::extension::BinomialExtensionField;
     use p3_field::{ExtensionField, Field, PrimeCharacteristicRing, dot_product};
+    use p3_keccak::Keccak256Hash;
     use p3_matrix::dense::RowMajorMatrix;
     use p3_multilinear_util::point::Point;
     use p3_multilinear_util::poly::Poly;
@@ -1160,7 +1324,8 @@ mod tests {
         let rs = Point::<EF>::rand(&mut rng, folding);
         let alpha: EF = rng.random();
         let expected = prover.combine_weights(&rs, alpha);
-        let combined = prover.combine_weights_in::<R>(&rs, alpha);
+        let (tables, column_weights) = prover.weight_plan(&rs, alpha);
+        let combined = prover.combine_weights_in::<R>(&rs, alpha, tables, column_weights);
 
         assert_eq!(combined.num_variables(), expected.num_variables());
         // Guard against a vacuous comparison of two zero tables.
@@ -1230,6 +1395,267 @@ mod tests {
         let mut rng = SmallRng::seed_from_u64(5);
         check::<BinaryField128, BinaryField128>(&mut rng);
         check::<BabyBear, BabyBearExt4>(&mut rng);
+    }
+
+    /// One opening batch: `(table index, request)`, taken at a fresh random point.
+    type Batch = (usize, OpeningRequest);
+
+    /// The Fiat-Shamir transcript the binary-field cases are driven with.
+    type BinaryTranscript = BinaryChallenger<BinaryField128, HashChallenger<u8, Keccak256Hash, 32>>;
+
+    /// Records every batch of `schedule` at zero folding, each at a fresh random point.
+    fn recorded<F, EF>(tables: Vec<Table<F>>, schedule: &[Batch], seed: u64) -> SuffixProver<F, EF>
+    where
+        F: Field,
+        EF: ExtensionField<F>,
+        StandardUniform: Distribution<EF>,
+    {
+        let mut rng = SmallRng::seed_from_u64(seed);
+        let mut prover =
+            SuffixProver::<F, EF>::from_witness(SuffixProver::<F, EF>::new_witness(tables, 0));
+        for (table_idx, request) in schedule {
+            let num_variables = prover.claims.tables[*table_idx].num_variables();
+            let point = Point::<EF>::rand(&mut rng, num_variables);
+            prover.record_opening(*table_idx, request, &point);
+        }
+        prover
+    }
+
+    /// Witnesses and schedules whose weights all split into one shared row table.
+    ///
+    /// - Every column directly and through the successor view, in one order.
+    /// - Every column directly only.
+    /// - Two claims at distinct points, each opening every column in the same order.
+    /// - A subset of the columns; the rest are never opened.
+    /// - A second table of the same height, never opened, so its slots carry zero scales.
+    /// - A table past one aggregate block and one weighted-sum chunk.
+    /// - One row per column, so no row round precedes the column rounds.
+    ///
+    /// Columns cycle through every value pattern, so bit-valued and arbitrary rows both occur.
+    fn row_first_cases<F: Field>(seed: u64) -> Vec<(Vec<Table<F>>, Vec<Batch>)>
+    where
+        StandardUniform: Distribution<F>,
+    {
+        let mut rng = SmallRng::seed_from_u64(seed);
+        let every = |width: usize| (0..width).collect::<Vec<_>>();
+        vec![
+            (
+                vec![table(&mut rng, 4, 5)],
+                vec![(0, OpeningBatch::new(every(5), every(5)))],
+            ),
+            (
+                vec![table(&mut rng, 4, 5)],
+                vec![(0, OpeningBatch::new(every(5), Vec::new()))],
+            ),
+            (
+                vec![table(&mut rng, 3, 3)],
+                vec![
+                    (0, OpeningBatch::new(every(3), every(3))),
+                    (0, OpeningBatch::new(every(3), every(3))),
+                ],
+            ),
+            (
+                vec![table(&mut rng, 4, 5)],
+                vec![(0, OpeningBatch::new(vec![0, 2, 3], vec![0, 2, 3]))],
+            ),
+            (
+                vec![table(&mut rng, 4, 3), table(&mut rng, 4, 2)],
+                vec![(0, OpeningBatch::new(every(3), every(3)))],
+            ),
+            (
+                vec![table(&mut rng, 13, 3)],
+                vec![(0, OpeningBatch::new(every(3), every(3)))],
+            ),
+            (
+                vec![table(&mut rng, 0, 5)],
+                vec![(0, OpeningBatch::new(every(5), Vec::new()))],
+            ),
+        ]
+    }
+
+    /// Plays every residual round of both routes from one recorded prover and equal transcripts.
+    ///
+    /// The row-first route must be the one [`SuffixProver::into_sumcheck_in`] takes. The dense
+    /// reference runs through the same preprocessing, then both play `rounds_per_call` rounds
+    /// per call, settling after each call when `settle` is set.
+    ///
+    /// # Checks
+    ///
+    /// - Equal arities, challenges and running claims after every call.
+    /// - Equal round messages over the whole run.
+    /// - Equal sponge states once every round is played.
+    fn assert_row_first_matches_dense<F, EF, R, Ch>(
+        prover: SuffixProver<F, EF>,
+        challenger: Ch,
+        rounds_per_call: usize,
+        settle: bool,
+    ) where
+        F: TranscriptField,
+        EF: ExtensionField<F> + From<R>,
+        R: Field + FromTable<EF> + Algebra<F>,
+        Ch: FieldChallenger<F> + GrindingChallenger<Witness = F> + Clone,
+    {
+        let mut dense_challenger = challenger.clone();
+        let mut dense_data = SumcheckData::default();
+        let (alpha, sum, rs) = prover.preprocess(&mut dense_data, 0, &mut dense_challenger);
+        let (claim_tables, column_weights) = prover.weight_plan(&rs, alpha);
+        assert!(
+            prover
+                .shared_row_weights(&claim_tables, &column_weights)
+                .is_some()
+        );
+        let dense = prover.dense_residual::<R>(&rs, alpha, sum, claim_tables, column_weights);
+        let mut dense = SuffixResidualProver::dense(dense);
+
+        let mut row_first_challenger = challenger;
+        let mut row_first_data = SumcheckData::default();
+        let (mut row_first, row_first_rs) =
+            prover.into_sumcheck_in::<R, _>(&mut row_first_data, 0, &mut row_first_challenger);
+        assert!(row_first.is_row_first());
+        assert_eq!(row_first_rs, rs);
+
+        while dense.num_variables() > 0 {
+            assert_eq!(row_first.num_variables(), dense.num_variables());
+            let rounds = rounds_per_call.min(dense.num_variables());
+            let expected = dense.compute_sumcheck_polynomials(
+                &mut dense_data,
+                &mut dense_challenger,
+                rounds,
+                0,
+            );
+            let challenges = row_first.compute_sumcheck_polynomials(
+                &mut row_first_data,
+                &mut row_first_challenger,
+                rounds,
+                0,
+            );
+            assert_eq!(challenges, expected);
+            assert_eq!(row_first.claimed_sum(), dense.claimed_sum());
+            if settle {
+                dense.settle();
+                row_first.settle();
+            }
+        }
+        assert_eq!(row_first.num_variables(), 0);
+        assert_eq!(
+            row_first_data.polynomial_evaluations,
+            dense_data.polynomial_evaluations
+        );
+        assert_eq!(
+            row_first_challenger.sample_algebra_element::<EF>(),
+            dense_challenger.sample_algebra_element::<EF>()
+        );
+
+        // A debug build checks the last held binding against the pair it lands on.
+        row_first.settle();
+    }
+
+    #[test]
+    fn row_first_route_plays_the_dense_transcript_over_binary_field() {
+        for (seed, (tables, schedule)) in (0..).zip(row_first_cases::<BinaryField128>(11)) {
+            for (rounds_per_call, settle) in [(1, false), (1, true), (3, false)] {
+                let prover =
+                    recorded::<BinaryField128, BinaryField128>(tables.clone(), &schedule, seed);
+                let challenger = BinaryTranscript::from_hasher(Vec::new(), Keccak256Hash);
+                assert_row_first_matches_dense::<_, _, Ghash128, _>(
+                    prover,
+                    challenger,
+                    rounds_per_call,
+                    settle,
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn row_first_route_plays_the_dense_transcript_over_extension_of_prime_field() {
+        for (seed, (tables, schedule)) in (0..).zip(row_first_cases::<BabyBear>(12)) {
+            for (rounds_per_call, settle) in [(1, false), (1, true), (3, false)] {
+                let prover = recorded::<BabyBear, BabyBearExt4>(tables.clone(), &schedule, seed);
+                assert_row_first_matches_dense::<_, _, BabyBearExt4, _>(
+                    prover,
+                    crate::tests::challenger(),
+                    rounds_per_call,
+                    settle,
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_single_column_takes_the_dense_route() {
+        type F = BinaryField128;
+
+        // The weights split, yet the one column already spans the whole stacked space.
+        let schedule = vec![(0, OpeningBatch::new(vec![0], vec![0]))];
+        let tables = vec![table::<F>(&mut SmallRng::seed_from_u64(14), 5, 1)];
+        let prover = recorded::<F, F>(tables, &schedule, 15);
+
+        let mut challenger = BinaryTranscript::from_hasher(Vec::new(), Keccak256Hash);
+        let (residual, _) = prover.into_sumcheck_in::<Ghash128, _>(
+            &mut SumcheckData::default(),
+            0,
+            &mut challenger,
+        );
+        assert!(!residual.is_row_first());
+    }
+
+    #[test]
+    fn shared_row_weights_refuses_weights_it_cannot_split() {
+        type F = BinaryField128;
+
+        // Whether the weight plan of a recorded prover splits, at fresh challenges.
+        fn splits(prover: &SuffixProver<F, F>, rng: &mut SmallRng) -> bool {
+            let rs = Point::<F>::rand(rng, prover.claims.folding);
+            let alpha: F = rng.random();
+            let (claim_tables, column_weights) = prover.weight_plan(&rs, alpha);
+            prover
+                .shared_row_weights(&claim_tables, &column_weights)
+                .is_some()
+        }
+
+        let mut rng = SmallRng::seed_from_u64(13);
+        let every = |width: usize| (0..width).collect::<Vec<_>>();
+
+        // Positive control: the shape every refusal below departs from.
+        let keccak_shape = vec![(0, OpeningBatch::new(every(5), every(5)))];
+        let tables = vec![table::<F>(&mut rng, 4, 5)];
+        assert!(splits(
+            &recorded::<F, F>(tables.clone(), &keccak_shape, 1),
+            &mut rng
+        ));
+
+        // Only some columns open through the successor view: two row tables, no common one.
+        let partial = vec![(0, OpeningBatch::new(every(5), vec![1, 3]))];
+        assert!(!splits(
+            &recorded::<F, F>(tables.clone(), &partial, 2),
+            &mut rng
+        ));
+
+        // A virtual claim weighs the stacked space by a table no column shares.
+        let mut prover = recorded::<F, F>(tables.clone(), &keccak_shape, 3);
+        let point = Point::<F>::rand(&mut rng, prover.claims.num_variables);
+        let _ = prover.record_virtual(&point);
+        assert!(!splits(&prover, &mut rng));
+
+        // Tables of different heights have no row variables in common.
+        let uneven = vec![table::<F>(&mut rng, 4, 3), table::<F>(&mut rng, 3, 2)];
+        let schedule = vec![
+            (0, OpeningBatch::new(every(3), Vec::new())),
+            (1, OpeningBatch::new(every(2), Vec::new())),
+        ];
+        assert!(!splits(&recorded::<F, F>(uneven, &schedule, 4), &mut rng));
+
+        // Equal heights, but each table's columns reference a claim of their own.
+        let even = vec![table::<F>(&mut rng, 3, 3), table::<F>(&mut rng, 3, 2)];
+        assert!(!splits(&recorded::<F, F>(even, &schedule, 5), &mut rng));
+
+        // Preprocessing rounds leave nothing for the row-first route to start from.
+        let mut prover =
+            SuffixProver::<F, F>::from_witness(SuffixProver::<F, F>::new_witness(tables, 2));
+        let point = Point::<F>::rand(&mut rng, 4);
+        prover.record_opening(0, &keccak_shape[0].1, &point);
+        assert!(!splits(&prover, &mut rng));
     }
 
     #[test]

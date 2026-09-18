@@ -7,6 +7,7 @@
 
 mod claims;
 mod prefix;
+mod residual;
 mod suffix;
 
 use alloc::vec::Vec;
@@ -19,6 +20,7 @@ use p3_field::{ExtensionField, Field};
 use p3_matrix::dense::DenseMatrix;
 use p3_multilinear_util::point::Point;
 pub use prefix::PrefixProver;
+pub use residual::SuffixResidualProver;
 pub use suffix::SuffixProver;
 
 use crate::SumcheckData;
