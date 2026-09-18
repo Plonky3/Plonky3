@@ -205,13 +205,13 @@ impl<W: Word> CompiledKeyLayout<W> {
         })?;
 
         Ok(Self {
-            public: build_segment(
+            public: CompiledSegment::compile(
                 Segment::Public,
                 &public_counts,
                 &public_references,
                 public_codes,
             )?,
-            witness: build_segment(
+            witness: CompiledSegment::compile(
                 Segment::Witness,
                 &witness_counts,
                 &witness_references,
@@ -426,96 +426,98 @@ fn prefix_sum(offsets: &mut [usize], segment: Segment) -> Result<(), KeyCompileE
     Ok(())
 }
 
-fn build_segment<W: Word>(
-    segment: Segment,
-    offsets: &[usize],
-    references: &[PackedReference],
-    mut key_codes: Vec<u32>,
-) -> Result<CompiledSegment<W>, KeyCompileError> {
-    key_codes.sort_unstable();
-    key_codes.dedup();
-    let mut sequence_codes = key_codes
-        .iter()
-        .map(|code| code & SEQUENCE_MASK)
-        .collect::<Vec<_>>();
-    sequence_codes.sort_unstable();
-    sequence_codes.dedup();
-    let shifts = sequence_codes
-        .iter()
-        .copied()
-        .map(decode_sequence)
-        .collect::<Vec<_>>();
+impl<W: Word> CompiledSegment<W> {
+    fn compile(
+        segment: Segment,
+        offsets: &[usize],
+        references: &[PackedReference],
+        mut key_codes: Vec<u32>,
+    ) -> Result<Self, KeyCompileError> {
+        key_codes.sort_unstable();
+        key_codes.dedup();
+        let mut sequence_codes = key_codes
+            .iter()
+            .map(|code| code & SEQUENCE_MASK)
+            .collect::<Vec<_>>();
+        sequence_codes.sort_unstable();
+        sequence_codes.dedup();
+        let shifts = sequence_codes
+            .iter()
+            .copied()
+            .map(decode_sequence)
+            .collect::<Vec<_>>();
 
-    let mut keys = Vec::new();
-    let mut word_keys = Vec::with_capacity(offsets.len().saturating_sub(1));
-    let mut flat_references = Vec::with_capacity(references.len());
-    let mut slot_of = vec![usize::MAX; key_codes.len()];
+        let mut keys = Vec::new();
+        let mut word_keys = Vec::with_capacity(offsets.len().saturating_sub(1));
+        let mut flat_references = Vec::with_capacity(references.len());
+        let mut slot_of = vec![usize::MAX; key_codes.len()];
 
-    for word in 0..offsets.len().saturating_sub(1) {
-        let start = u32::try_from(keys.len()).map_err(|_| KeyCompileError::LayoutTooLarge {
-            segment,
-            component: LayoutComponent::Keys,
-            len: keys.len(),
-        })?;
-        let mut groups: Vec<(usize, Vec<ConstraintReference>)> = Vec::new();
-        for reference in &references[offsets[word]..offsets[word + 1]] {
-            let id = key_codes
-                .binary_search(&reference.key_code)
-                .expect("the dense key list covers every reference");
-            let slot = slot_of[id];
-            if slot == usize::MAX {
-                slot_of[id] = groups.len();
-                groups.push((id, vec![reference.constraint]));
-            } else {
-                groups[slot].1.push(reference.constraint);
+        for word in 0..offsets.len().saturating_sub(1) {
+            let start = u32::try_from(keys.len()).map_err(|_| KeyCompileError::LayoutTooLarge {
+                segment,
+                component: LayoutComponent::Keys,
+                len: keys.len(),
+            })?;
+            let mut groups: Vec<(usize, Vec<ConstraintReference>)> = Vec::new();
+            for reference in &references[offsets[word]..offsets[word + 1]] {
+                let id = key_codes
+                    .binary_search(&reference.key_code)
+                    .expect("the dense key list covers every reference");
+                let slot = slot_of[id];
+                if slot == usize::MAX {
+                    slot_of[id] = groups.len();
+                    groups.push((id, vec![reference.constraint]));
+                } else {
+                    groups[slot].1.push(reference.constraint);
+                }
             }
+
+            for (id, constraints) in groups {
+                slot_of[id] = usize::MAX;
+                let code = key_codes[id];
+                let reference_start = u32::try_from(flat_references.len()).map_err(|_| {
+                    KeyCompileError::LayoutTooLarge {
+                        segment,
+                        component: LayoutComponent::References,
+                        len: flat_references.len(),
+                    }
+                })?;
+                flat_references.extend(constraints);
+                let reference_end = u32::try_from(flat_references.len()).map_err(|_| {
+                    KeyCompileError::LayoutTooLarge {
+                        segment,
+                        component: LayoutComponent::References,
+                        len: flat_references.len(),
+                    }
+                })?;
+                let sequence = code & SEQUENCE_MASK;
+                let shift = sequence_codes
+                    .binary_search(&sequence)
+                    .expect("the dense shift list covers every key");
+                let shift = u32::try_from(shift)
+                    .expect("two 9-bit shift codes fit in a 32-bit dense index");
+                keys.push(StoredKey {
+                    operation: decode_operation(code),
+                    shift,
+                    references: reference_start..reference_end,
+                });
+            }
+
+            let end = u32::try_from(keys.len()).map_err(|_| KeyCompileError::LayoutTooLarge {
+                segment,
+                component: LayoutComponent::Keys,
+                len: keys.len(),
+            })?;
+            word_keys.push(start..end);
         }
 
-        for (id, constraints) in groups {
-            slot_of[id] = usize::MAX;
-            let code = key_codes[id];
-            let reference_start = u32::try_from(flat_references.len()).map_err(|_| {
-                KeyCompileError::LayoutTooLarge {
-                    segment,
-                    component: LayoutComponent::References,
-                    len: flat_references.len(),
-                }
-            })?;
-            flat_references.extend(constraints);
-            let reference_end = u32::try_from(flat_references.len()).map_err(|_| {
-                KeyCompileError::LayoutTooLarge {
-                    segment,
-                    component: LayoutComponent::References,
-                    len: flat_references.len(),
-                }
-            })?;
-            let sequence = code & SEQUENCE_MASK;
-            let shift = sequence_codes
-                .binary_search(&sequence)
-                .expect("the dense shift list covers every key");
-            let shift =
-                u32::try_from(shift).expect("two 9-bit shift codes fit in a 32-bit dense index");
-            keys.push(StoredKey {
-                operation: decode_operation(code),
-                shift,
-                references: reference_start..reference_end,
-            });
-        }
-
-        let end = u32::try_from(keys.len()).map_err(|_| KeyCompileError::LayoutTooLarge {
-            segment,
-            component: LayoutComponent::Keys,
-            len: keys.len(),
-        })?;
-        word_keys.push(start..end);
+        Ok(Self {
+            shifts,
+            keys,
+            word_keys,
+            references: flat_references,
+        })
     }
-
-    Ok(CompiledSegment {
-        shifts,
-        keys,
-        word_keys,
-        references: flat_references,
-    })
 }
 
 #[inline]
