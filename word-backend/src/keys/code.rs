@@ -15,11 +15,7 @@ impl KeyCode {
     #[inline]
     pub(super) fn new<W: Word>(operation: ConstraintKind, shifts: [Shift<W>; 2]) -> Self {
         // The upper bits select the reduction family.
-        let operation = match operation {
-            ConstraintKind::Zero => 0,
-            ConstraintKind::And => 1,
-            ConstraintKind::IntegerMul => 2,
-        };
+        let operation = u32::from(operation.code());
 
         // Each movement occupies nine bits below the operation tag.
         Self(
@@ -33,12 +29,9 @@ impl KeyCode {
     #[inline]
     pub(super) const fn operation(self) -> ConstraintKind {
         // Construction admits exactly the three supported operation tags.
-        match self.0 >> SEQUENCE_BITS {
-            0 => ConstraintKind::Zero,
-            1 => ConstraintKind::And,
-            2 => ConstraintKind::IntegerMul,
-            _ => unreachable!(),
-        }
+        let code = (self.0 >> SEQUENCE_BITS) as u8;
+        ConstraintKind::from_code(code)
+            .expect("compact keys contain only assigned relation-family tags")
     }
 
     /// Returns the operation-independent shift encoding.
