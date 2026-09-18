@@ -10,6 +10,7 @@ use p3_field::{
     Algebra, ExtensionField, Field, PackedFieldExtension, PackedValue, PrimeCharacteristicRing,
 };
 use p3_matrix::dense::RowMajorMatrixView;
+use p3_maybe_rayon::PARALLEL_ENABLED;
 use p3_maybe_rayon::prelude::*;
 use p3_util::log2_strict_usize;
 use rand::RngExt;
@@ -580,6 +581,9 @@ impl<A: Copy + Send + Sync + PrimeCharacteristicRing> Poly<A> {
     /// path folds in place; the parallel path collects the folded pairs into a
     /// half-size buffer that replaces the backing storage.
     ///
+    /// A build without the `parallel` feature has no parallel path to gain from,
+    /// so it always folds in place.
+    ///
     /// # Panics
     ///
     /// Panics if the polynomial is constant (zero free variables).
@@ -589,7 +593,7 @@ impl<A: Copy + Send + Sync + PrimeCharacteristicRing> Poly<A> {
     {
         assert!(self.as_constant().is_none(), "no free variables");
         let mid = self.num_evals() / 2;
-        if self.num_evals() < PARALLEL_THRESHOLD {
+        if !PARALLEL_ENABLED || self.num_evals() < PARALLEL_THRESHOLD {
             // Output index `i` reads inputs `2i` and `2i + 1`, both at or ahead
             // of the write position, so no slot is overwritten before it is read.
             for i in 0..mid {
@@ -2120,6 +2124,28 @@ pub(crate) mod test {
                 compressed.fix_suffix_var_mut(zi);
             }
             assert_eq!(compressed.as_constant().unwrap(), poly.eval_base(&point));
+        }
+    }
+
+    #[test]
+    fn fix_suffix_var_mut_allocates_a_fresh_buffer_only_when_parallel_is_enabled() {
+        // Invariant: at or above `PARALLEL_THRESHOLD`, the suffix-variable fix only
+        // replaces its backing storage with a fresh half-length buffer when there is a
+        // parallel dispatch to gain from doing so. A build without the `parallel`
+        // feature folds in place at every length.
+        let num_evals = PARALLEL_THRESHOLD;
+        let evals: Vec<F> = (0..num_evals).map(|i| F::from_usize(i + 1)).collect();
+        let mut poly = Poly::new(evals);
+        let r = F::from_u64(3);
+
+        let before = poly.as_slice().as_ptr();
+        poly.fix_suffix_var_mut(r);
+
+        assert_eq!(poly.num_evals(), num_evals / 2);
+        if super::PARALLEL_ENABLED {
+            assert_ne!(poly.as_slice().as_ptr(), before);
+        } else {
+            assert_eq!(poly.as_slice().as_ptr(), before);
         }
     }
 

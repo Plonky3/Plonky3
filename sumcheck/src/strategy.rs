@@ -14,6 +14,7 @@ use alloc::vec::Vec;
 use p3_challenger::fs::TranscriptField;
 use p3_challenger::{FieldChallenger, GrindingChallenger};
 use p3_field::{Algebra, ExtensionField, Field, PrimeCharacteristicRing, dot_product};
+use p3_maybe_rayon::PARALLEL_ENABLED;
 use p3_maybe_rayon::prelude::*;
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::{Poly, PolyMaybePackedView};
@@ -41,6 +42,9 @@ const PAR_THRESHOLD: usize = 1 << 14;
 /// - Above it, the fresh table's page faults and release dominate instead.
 ///
 /// A table bound in place keeps its buffer, until a round below this length replaces it.
+///
+/// Without the `parallel` feature there is no dispatch to amortise, so every length
+/// binds in place regardless of this threshold.
 const SUFFIX_IN_PLACE_THRESHOLD: usize = 1 << 23;
 
 /// Tile size for the chunked round-coefficient kernel.
@@ -769,9 +773,10 @@ where
 /// O(2^n), at the same multiply count as binding and measuring separately.
 /// What it saves is one pass over the bound tables.
 ///
-/// Serial and very long tables bind in place and allocate nothing.
-/// A threaded table below `SUFFIX_IN_PLACE_THRESHOLD` entries binds into fresh
-/// half-length tables instead, in a single parallel dispatch.
+/// Short tables, very long tables, and any table in a build without the `parallel`
+/// feature bind in place and allocate nothing. A threaded table below
+/// `SUFFIX_IN_PLACE_THRESHOLD` entries binds into fresh half-length tables instead,
+/// in a single parallel dispatch.
 ///
 /// # Panics
 ///
@@ -788,7 +793,7 @@ where
     Ch: Copy + Send + Sync,
 {
     let len = evals.num_evals();
-    if len > PAR_THRESHOLD && len < SUFFIX_IN_PLACE_THRESHOLD {
+    if PARALLEL_ENABLED && len > PAR_THRESHOLD && len < SUFFIX_IN_PLACE_THRESHOLD {
         let (bound_evals, bound_weights, message) =
             bind_and_measure_pairs_into_new(evals.as_slice(), weights.as_slice(), r);
 
@@ -1987,6 +1992,33 @@ mod tests {
         assert_eq!(weights.num_evals(), 1 << 11);
         assert_eq!(evals.as_slice().as_ptr(), evals_at);
         assert_eq!(weights.as_slice().as_ptr(), weights_at);
+    }
+
+    #[test]
+    fn a_suffix_pass_in_the_threaded_window_allocates_only_when_parallel_is_enabled() {
+        // Invariant: inside the threaded-but-below-the-in-place-threshold window, the
+        // fresh-buffer path only runs when there is a parallel dispatch to amortise it
+        // against. A build without the `parallel` feature binds in place there too.
+        //
+        // Fixture state: 2^16 paired entries, inside that window.
+        let mut rng = SmallRng::seed_from_u64(0xA11C);
+        let mut evals = Poly::<EF>::rand(&mut rng, 16);
+        let mut weights = Poly::<EF>::rand(&mut rng, 16);
+        let r: EF = rng.random();
+
+        let evals_at = evals.as_slice().as_ptr();
+        let weights_at = weights.as_slice().as_ptr();
+        let _ = super::fold_and_round_coefficients_suffix(&mut evals, &mut weights, r);
+
+        assert_eq!(evals.num_evals(), 1 << 15);
+        assert_eq!(weights.num_evals(), 1 << 15);
+        if super::PARALLEL_ENABLED {
+            assert_ne!(evals.as_slice().as_ptr(), evals_at);
+            assert_ne!(weights.as_slice().as_ptr(), weights_at);
+        } else {
+            assert_eq!(evals.as_slice().as_ptr(), evals_at);
+            assert_eq!(weights.as_slice().as_ptr(), weights_at);
+        }
     }
 
     #[test]
