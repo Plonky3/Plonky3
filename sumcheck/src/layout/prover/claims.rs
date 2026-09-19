@@ -10,9 +10,11 @@ use alloc::vec::Vec;
 use p3_field::{ExtensionField, Field, dot_product};
 
 use crate::Claim;
+use crate::layout::opening::{EqSvoPartials, NextSvoPartials, Opening};
 use crate::layout::witness::{Table, TablePlacement};
 use crate::layout::{ProverMultiClaim, ProverVirtualClaim};
-use crate::table::TableShape;
+use crate::svo::SvoPoint;
+use crate::table::{OpeningEvals, OpeningRequest, TableShape};
 
 /// Opening claims recorded against one stacked polynomial, shared by both binding modes.
 ///
@@ -104,6 +106,55 @@ impl<F: Field, EF: ExtensionField<F>> StackedClaims<F, EF> {
     /// Returns the number of out-of-domain claims recorded on the stacked polynomial.
     pub(crate) const fn num_virtual_claims(&self) -> usize {
         self.virtual_claims.len()
+    }
+
+    /// Appends one batch's claims from evaluations the caller already holds.
+    ///
+    /// The caller factorises the point in its own binding mode and passes it in.
+    ///
+    /// # Arguments
+    ///
+    /// - `table_idx` — source table the request names.
+    /// - `batch` — columns opened directly and through the successor view.
+    /// - `point` — the batch's opening point, already factorised.
+    /// - `evals` — one evaluation per opened column, direct entries first.
+    ///
+    /// # Panics
+    ///
+    /// When preprocessing rounds are configured. Each such round reads a residual of the
+    /// column, which an evaluation on its own does not carry.
+    pub(crate) fn record_known(
+        &mut self,
+        table_idx: usize,
+        batch: &OpeningRequest,
+        point: SvoPoint<F, EF>,
+        evals: &OpeningEvals<EF>,
+    ) {
+        assert_eq!(
+            self.folding, 0,
+            "a supplied evaluation carries no preprocessing residual for a round to read"
+        );
+        debug_assert!(batch.has_same_shape(evals));
+
+        // No preprocessing round runs, so every opening's residual list is empty.
+        let current = batch
+            .current()
+            .iter()
+            .zip(evals.current())
+            .map(|(&poly_idx, &eval)| {
+                Opening::new_with_data(poly_idx, eval, EqSvoPartials::new(Vec::new()))
+            })
+            .collect();
+        let next = batch
+            .next()
+            .iter()
+            .zip(evals.next())
+            .map(|(&poly_idx, &eval)| {
+                Opening::new_with_data(poly_idx, eval, NextSvoPartials::new(Vec::new()))
+            })
+            .collect();
+
+        self.claim_map[table_idx].push(ProverMultiClaim::new(point, current, next));
     }
 
     /// Walks concrete claims in placement order.
