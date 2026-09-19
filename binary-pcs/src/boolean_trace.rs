@@ -674,22 +674,25 @@ where
         if plan_stacked_layout(&shapes).0 != self.num_variables() {
             return None;
         }
-        if let Some(width) = self.batched_width(protocol) {
-            let batches = protocol.num_openings();
-            let k = width.next_power_of_two().trailing_zeros() as usize;
-            let mut security = self.inner.opening_security(batches);
-            security
-                .terms
-                .push(p3_security::multilinear::column_batch_term(
-                    batches,
-                    k,
-                    EF::bits(),
-                ));
-            Some(security)
-        } else {
-            self.opening_claim_count(protocol)
-                .map(|claims| self.inner.opening_security(claims))
-        }
+        self.batched_width(protocol).map_or_else(
+            || {
+                self.opening_claim_count(protocol)
+                    .map(|claims| self.inner.opening_security(claims))
+            },
+            |width| {
+                let batches = protocol.num_openings();
+                let k = width.next_power_of_two().trailing_zeros() as usize;
+                let mut security = self.inner.opening_security(batches);
+                security
+                    .terms
+                    .push(p3_security::multilinear::column_batch_term(
+                        batches,
+                        k,
+                        EF::bits(),
+                    ));
+                Some(security)
+            },
+        )
     }
 
     fn open_at(
@@ -1005,50 +1008,57 @@ mod tests {
 
     #[test]
     fn packed_table_round_trip_matches_dense_openings() {
-        let shapes = [TableShape::new(10, FIXTURE_WIDTH)];
-        let dense = table(0xB10A, 10);
-        let packed = packed_table(&dense);
-        let scheme = pcs(&shapes);
-        let protocol = protocol(&shapes);
-        let point = Point::<EF>::rand(&mut SmallRng::seed_from_u64(0xB10B), 10);
+        for (log_height, width, seed) in [(5, 8, 0xB10A), (10, FIXTURE_WIDTH, 0xB10C)] {
+            let shapes = [TableShape::new(log_height, width)];
+            let dense = table_with_width(seed, log_height, width);
+            let packed = packed_table(&dense);
+            let scheme = pcs(&shapes);
+            let protocol = protocol(&shapes);
+            let point = Point::<EF>::rand(&mut SmallRng::seed_from_u64(seed + 1), log_height);
 
-        let mut dense_challenger = challenger();
-        let (dense_commitment, dense_data) = scheme
-            .commit(vec![dense.clone()], &mut dense_challenger)
-            .unwrap();
-        let dense_proof = scheme
-            .open_at(
-                dense_data,
-                &protocol,
-                core::slice::from_ref(&point),
-                &mut dense_challenger,
-            )
-            .unwrap();
-        let mut packed_challenger = challenger();
-        let (packed_commitment, packed_data) =
-            scheme.commit(vec![packed], &mut packed_challenger).unwrap();
-        let packed_proof = scheme
-            .open_at(
-                packed_data,
-                &protocol,
-                core::slice::from_ref(&point),
-                &mut packed_challenger,
-            )
-            .unwrap();
+            let mut dense_challenger = challenger();
+            let (dense_commitment, dense_data) =
+                scheme.commit(vec![dense], &mut dense_challenger).unwrap();
+            let dense_proof = scheme
+                .open_at(
+                    dense_data,
+                    &protocol,
+                    core::slice::from_ref(&point),
+                    &mut dense_challenger,
+                )
+                .unwrap();
+            let dense_after_open = p3_challenger::CanSample::<EF>::sample(&mut dense_challenger);
+            let mut packed_challenger = challenger();
+            let (packed_commitment, packed_data) =
+                scheme.commit(vec![packed], &mut packed_challenger).unwrap();
+            let packed_proof = scheme
+                .open_at(
+                    packed_data,
+                    &protocol,
+                    core::slice::from_ref(&point),
+                    &mut packed_challenger,
+                )
+                .unwrap();
+            let packed_after_open = p3_challenger::CanSample::<EF>::sample(&mut packed_challenger);
 
-        assert_eq!(dense_commitment, packed_commitment);
-        assert_eq!(dense_proof.values, packed_proof.values);
-        let mut verifier = challenger();
-        scheme.observe_commitment(&packed_commitment, &mut verifier);
-        scheme
-            .verify_at(
-                &packed_commitment,
-                &packed_proof,
-                &protocol,
-                core::slice::from_ref(&point),
-                &mut verifier,
-            )
-            .unwrap();
+            assert_eq!(dense_commitment, packed_commitment);
+            assert_eq!(
+                postcard::to_allocvec(&dense_proof).unwrap(),
+                postcard::to_allocvec(&packed_proof).unwrap()
+            );
+            assert_eq!(dense_after_open, packed_after_open);
+            let mut verifier = challenger();
+            scheme.observe_commitment(&packed_commitment, &mut verifier);
+            scheme
+                .verify_at(
+                    &packed_commitment,
+                    &packed_proof,
+                    &protocol,
+                    core::slice::from_ref(&point),
+                    &mut verifier,
+                )
+                .unwrap();
+        }
     }
 
     #[test]
@@ -1259,7 +1269,12 @@ mod tests {
         let mut prover_chal = challenger();
         let (commitment, data) = scheme.commit(vec![table], &mut prover_chal).unwrap();
         let mut proof = scheme
-            .open_at(data, &protocol, &[point.clone()], &mut prover_chal)
+            .open_at(
+                data,
+                &protocol,
+                core::slice::from_ref(&point),
+                &mut prover_chal,
+            )
             .unwrap();
         proof.values[0] += EF::ONE;
 
@@ -1665,7 +1680,12 @@ mod tests {
             .commit(vec![table.clone()], &mut prover_chal)
             .unwrap();
         let proof = scheme
-            .open_at(data, &protocol, &[point.clone()], &mut prover_chal)
+            .open_at(
+                data,
+                &protocol,
+                core::slice::from_ref(&point),
+                &mut prover_chal,
+            )
             .unwrap();
         assert_eq!(proof.values.len(), 2);
         assert_eq!(proof.opening.reductions.len(), 2);
@@ -1677,7 +1697,7 @@ mod tests {
                 &commitment,
                 &proof,
                 &protocol,
-                &[point.clone()],
+                core::slice::from_ref(&point),
                 &mut verifier_chal,
             )
             .unwrap();

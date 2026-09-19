@@ -181,7 +181,7 @@ impl<'a, F: Field> ColumnView<'a, F> {
 
     /// Iterates over logical field cells without materializing a column.
     #[inline]
-    pub fn values(self) -> ColumnValues<'a, F> {
+    pub const fn values(self) -> ColumnValues<'a, F> {
         ColumnValues {
             view: self,
             range: 0..self.len(),
@@ -336,16 +336,37 @@ impl<F: Field> Table<F> {
     }
 
     /// Iterates over the table rows, one polynomial evaluation slice per row.
+    ///
+    /// This accessor is for dense storage. Packed Boolean tables must use [`Self::columns`] or
+    /// [`Self::column`] to avoid materializing a field-cell trace.
+    ///
+    /// # Panics
+    ///
+    /// Panics when called on packed Boolean storage.
     pub fn iter_polys(&self) -> impl DoubleEndedIterator<Item = &[F]> {
         self.dense_matrix().row_slices()
     }
 
     /// Iterates over the table rows in parallel, one polynomial evaluation slice per row.
+    ///
+    /// This accessor is for dense storage. Packed Boolean tables must use [`Self::par_columns`]
+    /// or [`Self::columns`] to avoid materializing a field-cell trace.
+    ///
+    /// # Panics
+    ///
+    /// Panics when called on packed Boolean storage.
     pub fn par_iter_polys(&self) -> impl IndexedParallelIterator<Item = &[F]> {
         self.dense_matrix().par_row_slices()
     }
 
     /// Returns the polynomial at column `id`.
+    ///
+    /// This accessor is for dense storage. Packed Boolean tables must use [`Self::column`] to
+    /// read a borrowed representation-independent view.
+    ///
+    /// # Panics
+    ///
+    /// Panics when called on packed Boolean storage.
     pub fn poly(&self, id: usize) -> PolyView<'_, F> {
         let dense = self.dense_matrix();
         let start = id * dense.width;
@@ -384,7 +405,7 @@ impl<F: Field> Table<F> {
     }
 
     /// Returns the packed backing matrix, if this table is Boolean-packed.
-    pub fn packed_bits(&self) -> Option<&RowMajorMatrix<u64>> {
+    pub const fn packed_bits(&self) -> Option<&RowMajorMatrix<u64>> {
         match &self.storage {
             TableStorage::Dense(_) => None,
             TableStorage::Boolean { words, .. } => Some(words),
@@ -434,7 +455,7 @@ impl<F: Field> Table<F> {
     }
 
     /// Returns the shared number of variables.
-    pub fn num_variables(&self) -> usize {
+    pub const fn num_variables(&self) -> usize {
         match &self.storage {
             TableStorage::Dense(columns) => columns.width.ilog2() as usize,
             TableStorage::Boolean { num_variables, .. } => *num_variables,
@@ -1462,6 +1483,36 @@ mod tests {
     }
 
     #[test]
+    fn packed_table_geometry_and_suffix_fill_cover_word_boundaries() {
+        for num_variables in [0, 1, 5, 6, 7] {
+            let height = 1usize << num_variables;
+            let width = 3;
+            let words = (0..height.div_ceil(64))
+                .flat_map(|block| {
+                    (0..width).map(move |column| {
+                        (0..64).fold(0u64, |word, lane| {
+                            let row = block * 64 + lane;
+                            if row < height && (row + column * 3) % 5 < 2 {
+                                word | (1u64 << lane)
+                            } else {
+                                word
+                            }
+                        })
+                    })
+                })
+                .collect::<Vec<_>>();
+            let packed =
+                Table::<F>::from_packed_bits(RowMajorMatrix::new(words, width), num_variables);
+            let dense = packed.clone().into_dense();
+            let plan = SuffixLayoutPlan::new(vec![packed.shape()], 0).unwrap();
+            let direct = plan.fill(&[&packed]).unwrap();
+            let legacy = Witness::new(vec![dense], 0);
+            assert_eq!(direct.poly().as_slice(), legacy.poly().as_slice());
+            assert_eq!(direct.table_shapes(), legacy.table_shapes());
+        }
+    }
+
+    #[test]
     #[should_panic(expected = "padding bits")]
     fn packed_table_rejects_nonzero_padding_bits() {
         let _ = Table::<F>::from_packed_bits(RowMajorMatrix::new(vec![0b1000_0001u64], 1), 2);
@@ -1471,6 +1522,19 @@ mod tests {
     #[should_panic(expected = "exactly")]
     fn packed_table_rejects_wrong_physical_matrix_size() {
         let _ = Table::<F>::from_packed_bits(RowMajorMatrix::new(vec![0u64], 1), 7);
+    }
+
+    #[test]
+    #[should_panic(expected = "at least one column")]
+    fn packed_table_rejects_zero_columns() {
+        let _ = Table::<F>::from_packed_bits(RowMajorMatrix::new(Vec::new(), 0), 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "height overflows")]
+    fn packed_table_rejects_height_overflow() {
+        let _ =
+            Table::<F>::from_packed_bits(RowMajorMatrix::new(vec![0u64], 1), usize::BITS as usize);
     }
 
     #[test]

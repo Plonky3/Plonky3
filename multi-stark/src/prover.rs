@@ -535,11 +535,14 @@ where
 
 #[cfg(test)]
 mod tests {
+    extern crate std;
+
+    use alloc::string::String;
     use alloc::vec;
 
     use p3_air::{Air, AirBuilder, BaseAir, WindowAccess};
     use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
-    use p3_challenger::DuplexChallenger;
+    use p3_challenger::{CanSample, DuplexChallenger};
     use p3_dft::Radix2DFTSmallBatch;
     use p3_field::extension::BinomialExtensionField;
     use p3_field::{PackedValue, PrimeCharacteristicRing};
@@ -552,6 +555,7 @@ mod tests {
     use p3_whir::{FoldingFactor, ProtocolParameters, SecurityAssumption, WhirConfig, WhirProver};
     use rand::SeedableRng;
     use rand::rngs::SmallRng;
+    use std::panic::{AssertUnwindSafe, catch_unwind};
 
     use super::*;
     use crate::config::PcsError;
@@ -905,6 +909,51 @@ mod tests {
             verdict,
             Err(VerificationError::IndexedClaimsUnopened)
         ));
+    }
+
+    #[test]
+    fn packed_indexed_sources_are_rejected_before_commitment_and_transcript() {
+        let table_air = Squares::Table("t");
+        let reader_air = Squares::Reader("t");
+        let config = config(FOLDING + 2, FOLDING);
+        let (proving_key, _) =
+            setup(&config, &[&table_air, &reader_air], &mut challenger()).unwrap();
+        let packed_table = Table::from_packed_bits(RowMajorMatrix::new(vec![0u64], 1), FOLDING);
+        let reader_table = Table::zero(2, FOLDING);
+        let proving_instances = ProverInstances::new(vec![
+            ProverInstance::new(&table_air, packed_table, &proving_key, &[]),
+            ProverInstance::new(&reader_air, reader_table, &proving_key, &[]),
+        ]);
+        let mut challenger = challenger();
+        let mut expected = challenger.clone();
+        let panic = match catch_unwind(AssertUnwindSafe(|| {
+            prove_forged::<_, _, GenericBackend>(
+                &config,
+                proving_instances,
+                0,
+                &mut challenger,
+                None,
+            )
+        })) {
+            Ok(_) => panic!("packed indexed input must be rejected"),
+            Err(panic) => panic,
+        };
+        let message = panic
+            .downcast_ref::<&str>()
+            .copied()
+            .or_else(|| panic.downcast_ref::<String>().map(String::as_str))
+            .unwrap_or_default();
+        assert!(
+            message.contains("packed Boolean source tables"),
+            "{message}"
+        );
+        for _ in 0..4 {
+            assert_eq!(
+                CanSample::<F>::sample(&mut challenger),
+                CanSample::<F>::sample(&mut expected),
+                "caller challenger changed before packed indexed rejection"
+            );
+        }
     }
 
     #[test]

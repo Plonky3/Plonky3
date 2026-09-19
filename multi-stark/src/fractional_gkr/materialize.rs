@@ -16,11 +16,10 @@ use crate::selectors::BoundaryEvals;
 
 #[inline]
 fn packed_column_at<F: Field>(column: ColumnView<'_, F>, row: usize) -> F::Packing {
-    if let Some(values) = column.as_dense() {
-        *F::Packing::from_slice(&values[row..row + F::Packing::WIDTH])
-    } else {
-        column.packed_at(row)
-    }
+    column.as_dense().map_or_else(
+        || column.packed_at(row),
+        |values| *F::Packing::from_slice(&values[row..row + F::Packing::WIDTH]),
+    )
 }
 
 /// Base-field context used to resolve only the symbolic expressions retained

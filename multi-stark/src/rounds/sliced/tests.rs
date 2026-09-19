@@ -271,7 +271,7 @@ fn challenge(round: usize) -> Tower {
 /// Every round polynomial and the openings, with the sliced rounds accumulated in `R`.
 ///
 /// Also returns how many rounds ran on the planes.
-fn sliced_rounds<R>(instances: &[Instance]) -> (Rounds, usize)
+fn sliced_rounds<R>(instances: &[Instance]) -> (Rounds, usize, Option<usize>)
 where
     R: Field + From<Tower> + p3_field::Algebra<Tower>,
     Tower: From<R>,
@@ -286,12 +286,17 @@ where
         let mut state = state.fold_sliced::<R>(challenge(0));
         let tau = state.tau.as_slice().to_vec();
         let mut on_planes = 1;
+        let mut residual_rows = None;
         let mut round_polys = vec![first];
         for round in 1..tau.len() {
             let eq_suffix = Poly::new_from_point(&tau[round + 1..], Tower::ONE);
             let round_poly = state.round_poly_sliced::<Gf4>(&eq_suffix).map_or_else(
                 || {
                     state.unslice::<Gf4>();
+                    residual_rows = match &state.columns {
+                        ExtColumns::Scalar(columns) => Some(columns[0].as_slice().len()),
+                        _ => None,
+                    };
                     state.round_poly_repr(&eq_suffix)
                 },
                 |round_poly| {
@@ -316,7 +321,7 @@ where
                 ]
             })
             .collect();
-        ((round_polys, openings), on_planes)
+        ((round_polys, openings), on_planes, residual_rows)
     })
 }
 
@@ -343,11 +348,23 @@ fn every_round_on_and_off_the_planes_matches_the_generic_kernel() {
             Instance::honest(FixtureAir::Pair, height, 21),
         ];
         let generic = generic_rounds(&instances);
-        let (tower, tower_on_planes) = sliced_rounds::<Tower>(&instances);
+        let (tower, tower_on_planes, tower_residual_rows) = sliced_rounds::<Tower>(&instances);
         assert_eq!(tower_on_planes, expected_on_planes, "{height} rows");
+        // The fixture's sliced transition always leaves the two rows in one packed word pair;
+        // the later generic folds account for the additional height-dependent rounds.
+        assert_eq!(
+            tower_residual_rows,
+            Some(SHORTEST / SLICED_LANES),
+            "{height} rows"
+        );
         assert_eq!(tower, generic, "{height} rows, tower");
-        let (poly_basis, on_planes) = sliced_rounds::<Ghash128>(&instances);
+        let (poly_basis, on_planes, poly_residual_rows) = sliced_rounds::<Ghash128>(&instances);
         assert_eq!(on_planes, expected_on_planes, "{height} rows");
+        assert_eq!(
+            poly_residual_rows,
+            Some(SHORTEST / SLICED_LANES),
+            "{height} rows"
+        );
         assert_eq!(poly_basis, generic, "{height} rows, polynomial basis");
     }
 }

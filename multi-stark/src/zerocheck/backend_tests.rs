@@ -496,17 +496,23 @@ where
         .iter()
         .map(Instance::preprocessed_table)
         .collect::<Vec<_>>();
-    let packed_main = dense_main.iter().map(packed_table).collect::<Vec<_>>();
-    let packed_preprocessed = dense_preprocessed
+    let needs_packed = instances
         .iter()
-        .map(|table| table.as_ref().map(packed_table))
-        .collect::<Vec<_>>();
+        .enumerate()
+        .any(|(index, instance)| is_packed(index, instance));
+    let packed_main = needs_packed.then(|| dense_main.iter().map(packed_table).collect::<Vec<_>>());
+    let packed_preprocessed = needs_packed.then(|| {
+        dense_preprocessed
+            .iter()
+            .map(|table| table.as_ref().map(packed_table))
+            .collect::<Vec<_>>()
+    });
     let main = instances
         .iter()
         .enumerate()
         .map(|(index, instance)| {
             if is_packed(index, instance) {
-                &packed_main[index]
+                &packed_main.as_ref().expect("packed fixture was requested")[index]
             } else {
                 &dense_main[index]
             }
@@ -517,7 +523,10 @@ where
         .enumerate()
         .map(|(index, instance)| {
             if is_packed(index, instance) {
-                packed_preprocessed[index].as_ref()
+                packed_preprocessed
+                    .as_ref()
+                    .expect("packed fixture was requested")[index]
+                    .as_ref()
             } else {
                 dense_preprocessed[index].as_ref()
             }
@@ -615,11 +624,37 @@ fn assert_packed_matches_dense(
     }
 
     if instances.len() > 1 {
-        let mixed =
-            transcript_with_storage::<GenericBackend>(instances, lookup(), pow_bits, |index, _| {
-                index % 2 == 0
-            });
-        assert_eq!(mixed, dense, "mixed dense/packed generic backend");
+        for (name, mixed) in [
+            (
+                "generic",
+                transcript_with_storage::<GenericBackend>(
+                    instances,
+                    lookup(),
+                    pow_bits,
+                    |index, _| index % 2 == 0,
+                ),
+            ),
+            (
+                "subfield",
+                transcript_with_storage::<SubfieldBackend<Gf4>>(
+                    instances,
+                    lookup(),
+                    pow_bits,
+                    |index, _| index % 2 == 0,
+                ),
+            ),
+            (
+                "representation",
+                transcript_with_storage::<ReprBackend<Gf4, PolyBasis>>(
+                    instances,
+                    lookup(),
+                    pow_bits,
+                    |index, _| index % 2 == 0,
+                ),
+            ),
+        ] {
+            assert_eq!(mixed, dense, "mixed dense/packed {name} backend");
+        }
     }
 }
 
@@ -672,6 +707,13 @@ fn packed_backends_match_dense_across_round_boundaries_and_fallback() {
         )];
         assert_packed_matches_dense(&fallback, || LookupRuntime::Inactive, 0);
     }
+
+    let mixed_heights = [
+        Instance::honest(FixtureAir::Quartic, 32, 0xB601),
+        Instance::honest(FixtureAir::Pair, 64, 0xB602),
+        Instance::honest(FixtureAir::Linear { scale: outside() }, 128, 0xB603),
+    ];
+    assert_packed_matches_dense(&mixed_heights, || LookupRuntime::Inactive, 0);
 }
 
 #[test]

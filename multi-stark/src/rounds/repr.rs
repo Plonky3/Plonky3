@@ -161,6 +161,7 @@ where
     }
 
     /// Bind the first variable at `r`, folding each pair of cells into `R` with `fold_pair`.
+    #[allow(clippy::option_if_let_else)]
     fn fold_pairs_into<R, U>(
         mut self,
         r: EF,

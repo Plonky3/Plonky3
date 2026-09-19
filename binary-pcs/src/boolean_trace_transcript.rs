@@ -27,7 +27,7 @@ pub(crate) struct ColumnBatchShape {
 }
 
 impl ColumnBatchShape {
-    fn column_variables(self) -> usize {
+    const fn column_variables(self) -> usize {
         self.width.next_power_of_two().trailing_zeros() as usize
     }
 

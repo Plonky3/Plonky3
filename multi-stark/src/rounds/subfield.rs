@@ -250,6 +250,7 @@ where
     /// `EF` embeds `S` the way it embeds `F`'s copy of `S`, as [`Self::fits_subfield`] implies.
     /// Every folded value is then the one [`Self::fold`] computes.
     #[tracing::instrument(skip_all, level = "debug")]
+    #[allow(clippy::option_if_let_else)]
     pub(crate) fn fold_subfield<S>(self, r: EF) -> RoundStateExt<'air, 'data, A, F, EF>
     where
         S: Field,
@@ -403,7 +404,7 @@ where
             .flat_map(Table::columns)
             .collect::<Vec<_>>();
         if !columns.par_iter().all(|column| {
-            column.as_dense().map_or(true, |values| {
+            column.as_dense().is_none_or(|values| {
                 values
                     .par_chunks(SCAN_CHUNK_CELLS)
                     .all(|chunk| F::all_in_subfield(chunk))

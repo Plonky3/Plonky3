@@ -30,11 +30,10 @@ use crate::selectors::{BoundaryEvals, periodic_num_variables};
 
 #[inline]
 fn packed_column_at<F: Field>(column: ColumnView<'_, F>, row: usize) -> F::Packing {
-    if let Some(values) = column.as_dense() {
-        *F::Packing::from_slice(&values[row..row + F::Packing::WIDTH])
-    } else {
-        column.packed_at(row)
-    }
+    column.as_dense().map_or_else(
+        || column.packed_at(row),
+        |values| *F::Packing::from_slice(&values[row..row + F::Packing::WIDTH]),
+    )
 }
 
 /// Native per-variable degrees of one AIR's two zerocheck expression families.
@@ -1867,6 +1866,7 @@ where
     }
 
     #[tracing::instrument(skip_all, level = "debug")]
+    #[allow(clippy::option_if_let_else)]
     pub(crate) fn fold(self, r: EF) -> RoundStateExt<'air, 'data, A, F, EF>
     where
         A: for<'b> Air<MultilinearFolder<'b, F, F, EF>>,
