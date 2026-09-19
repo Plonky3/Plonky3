@@ -1,7 +1,6 @@
 use alloc::vec;
 use alloc::vec::Vec;
 use core::array;
-use core::borrow::BorrowMut;
 
 use p3_air::utils::u32_to_bits_le;
 use p3_field::Field;
@@ -10,7 +9,7 @@ use p3_maybe_rayon::prelude::*;
 use tracing::instrument;
 
 use super::columns::{Blake3BinaryCols, Blake3BinaryGCols, NUM_BLAKE3_BINARY_COLS};
-use super::{G_SCHEDULE, NUM_ROUNDS, iv_word};
+use super::{G_PER_ROUND, G_SCHEDULE, NUM_ROUNDS, iv_word};
 use crate::constants::permute;
 
 /// The inputs to one Blake-3 compression.
@@ -74,9 +73,9 @@ pub fn generate_binary_trace_rows<F: Field>(
 /// Generate a binary Blake-3 trace packed into one `u64` per 64 trace rows.
 ///
 /// The returned matrix keeps the AIR columns as its width. Physical row `w` stores logical
-/// rows `64 * w..64 * w + 63`, with bit zero holding the first logical row. The generic field
-/// parameter controls only the reusable temporary row used while generating the witness; the
-/// resulting bits are independent of that field.
+/// rows `64 * w..64 * w + 63`, with bit zero holding the first logical row. The witness is
+/// built as the words its cells are the bits of, so the generic field parameter names only the
+/// characteristic the cells are read in; no cell is ever held in it.
 ///
 /// # Panics
 ///
@@ -106,23 +105,91 @@ pub fn generate_binary_trace_packed<F: Field>(
         .par_chunks(64)
         .zip(words.par_chunks_exact_mut(NUM_BLAKE3_BINARY_COLS))
         .for_each_init(
-            || F::zero_vec(NUM_BLAKE3_BINARY_COLS),
+            || [0u32; NUM_ROW_WORDS],
             |row, (input_block, block)| {
-                // One reusable field row per worker keeps temporary storage bounded by the AIR
-                // width, independently of the number of trace rows and blocks.
+                // The witness is already words, so a row is generated as words and its bits are
+                // read out of registers. One reusable row per worker keeps temporary storage at
+                // one word per column group, whatever the trace height.
                 for (lane, input) in input_block.iter().enumerate() {
-                    let row_cols: &mut Blake3BinaryCols<F> = row.as_mut_slice().borrow_mut();
-                    generate_trace_row(row_cols, input);
-                    for (column, &bit) in row.iter().enumerate() {
-                        if bit == F::ONE {
-                            block[column] |= 1u64 << lane;
+                    generate_row_words(row, input);
+
+                    // Transpose the row into the block: bit `i` of group `g` is the cell of
+                    // this lane in the column that group's bit `i` occupies.
+                    let mut column = 0;
+                    for (&word, &bits) in row.iter().zip(&ROW_WORD_BITS) {
+                        let columns = &mut block[column..column + usize::from(bits)];
+                        for (index, cell) in columns.iter_mut().enumerate() {
+                            *cell |= u64::from((word >> index) & 1) << lane;
                         }
+                        column += usize::from(bits);
                     }
                 }
             },
         );
 
     RowMajorMatrix::new(words, NUM_BLAKE3_BINARY_COLS)
+}
+
+/// Column groups one row of the binary Blake-3 witness is built from.
+///
+/// One per stored word: the chaining value, the message block, the four remaining state words,
+/// and the six a G step writes.
+const NUM_ROW_WORDS: usize = 28 + NUM_ROUNDS * G_PER_ROUND * 6;
+
+/// Cells each column group contributes, in column order.
+///
+/// Every group is a whole word except the two carry groups of a G step, which have no carry
+/// into bit zero.
+const ROW_WORD_BITS: [u8; NUM_ROW_WORDS] = {
+    let mut bits = [32u8; NUM_ROW_WORDS];
+    let mut group = 28;
+    while group < NUM_ROW_WORDS {
+        bits[group] = 31;
+        bits[group + 3] = 31;
+        group += 6;
+    }
+    bits
+};
+
+/// Fill one row's witness words, in column order, from a single compression.
+///
+/// Writes exactly what [`generate_trace_row`] writes, as the words the cells are read from.
+fn generate_row_words(row: &mut [u32; NUM_ROW_WORDS], input: &Blake3CompressionInput) {
+    let counter_low = input.counter as u32;
+    let counter_high = (input.counter >> 32) as u32;
+
+    row[..8].copy_from_slice(&input.chaining_value);
+    row[8..24].copy_from_slice(&input.block);
+    row[24] = counter_low;
+    row[25] = counter_high;
+    row[26] = input.block_len;
+    row[27] = input.flags;
+
+    let cv = input.chaining_value;
+    let mut state = [
+        [cv[0], cv[1], cv[2], cv[3]],
+        [cv[4], cv[5], cv[6], cv[7]],
+        array::from_fn(iv_word),
+        [counter_low, counter_high, input.block_len, input.flags],
+    ];
+    let mut m = input.block;
+
+    let mut group = 28;
+    for round_idx in 0..NUM_ROUNDS {
+        if round_idx > 0 {
+            permute(&mut m);
+        }
+        for (g, slots) in G_SCHEDULE.into_iter().enumerate() {
+            let words = g_words(&mut state, slots, m[2 * g], m[2 * g + 1]);
+            row[group] = words.add1_carries;
+            row[group + 1] = words.d1;
+            row[group + 2] = words.b1;
+            row[group + 3] = words.add2_carries;
+            row[group + 4] = words.d2;
+            row[group + 5] = words.b2;
+            group += 6;
+        }
+    }
 }
 
 /// Fill one row with the witness of a single compression.
@@ -203,16 +270,36 @@ fn read_word<F: Field>(bits: &[F; 32]) -> u32 {
     })
 }
 
-/// Apply one G step to `state`, writing its witness to `cols`.
+/// The witness words one G step contributes, in column order.
+///
+/// Each is a word whose low bits are the cells of one column group, lowest bit first.
+struct GWords {
+    /// Carries into bits `1..32` of `a + b`, shifted down to start at bit zero.
+    add1_carries: u32,
+    /// The word `d1`.
+    d1: u32,
+    /// The word `b1`.
+    b1: u32,
+    /// Carries into bits `1..32` of `a1 + b1`, shifted down to start at bit zero.
+    add2_carries: u32,
+    /// The output word `d2`.
+    d2: u32,
+    /// The output word `b2`.
+    b2: u32,
+}
+
+/// Apply one G step to `state` and return the witness words it contributes.
 ///
 /// `slots` holds the indices of the `a`, `b`, `c`, `d` words within their state rows.
-fn generate_g<F: Field>(
-    cols: &mut Blake3BinaryGCols<F>,
+///
+/// This is the whole arithmetic of a G step. Both the field rows and the packed words are
+/// written from what it returns, so neither can drift from the other.
+const fn g_words(
     state: &mut [[u32; 4]; 4],
     [ia, ib, ic, id]: [usize; 4],
     mx: u32,
     my: u32,
-) {
+) -> GWords {
     let (a, b, c, d) = (state[0][ia], state[1][ib], state[2][ic], state[3][id]);
 
     let a_plus_b = a.wrapping_add(b);
@@ -227,21 +314,49 @@ fn generate_g<F: Field>(
     let c2 = c1.wrapping_add(d2);
     let b2 = (b1 ^ c2).rotate_right(7);
 
-    cols.add1_carries = carry_bits(a, b, a_plus_b);
-    cols.d1 = u32_to_bits_le(d1);
-    cols.b1 = u32_to_bits_le(b1);
-    cols.add2_carries = carry_bits(a1, b1, a1_plus_b1);
-    cols.d2 = u32_to_bits_le(d2);
-    cols.b2 = u32_to_bits_le(b2);
-
     state[0][ia] = a2;
     state[1][ib] = b2;
     state[2][ic] = c2;
     state[3][id] = d2;
+
+    GWords {
+        add1_carries: carries_word(a, b, a_plus_b),
+        d1,
+        b1,
+        add2_carries: carries_word(a1, b1, a1_plus_b1),
+        d2,
+        b2,
+    }
+}
+
+/// Apply one G step to `state`, writing its witness to `cols`.
+///
+/// `slots` holds the indices of the `a`, `b`, `c`, `d` words within their state rows.
+fn generate_g<F: Field>(
+    cols: &mut Blake3BinaryGCols<F>,
+    state: &mut [[u32; 4]; 4],
+    slots: [usize; 4],
+    mx: u32,
+    my: u32,
+) {
+    let words = g_words(state, slots, mx, my);
+
+    cols.add1_carries = word_to_bits_le(words.add1_carries);
+    cols.d1 = u32_to_bits_le(words.d1);
+    cols.b1 = u32_to_bits_le(words.b1);
+    cols.add2_carries = word_to_bits_le(words.add2_carries);
+    cols.d2 = u32_to_bits_le(words.d2);
+    cols.b2 = u32_to_bits_le(words.b2);
 }
 
 /// The carries into bits `1..32` of `x + y`, given `sum = x + y mod 2^32`.
-fn carry_bits<F: Field>(x: u32, y: u32, sum: u32) -> [F; 31] {
-    let carries = sum ^ x ^ y;
-    array::from_fn(|i| F::from_bool((carries >> (i + 1)) & 1 == 1))
+///
+/// The carry into bit zero is always zero and is not a column, so the word starts at bit one.
+const fn carries_word(x: u32, y: u32, sum: u32) -> u32 {
+    (sum ^ x ^ y) >> 1
+}
+
+/// The low `N` bits of a word, lowest bit first.
+fn word_to_bits_le<F: Field, const N: usize>(word: u32) -> [F; N] {
+    array::from_fn(|i| F::from_bool((word >> i) & 1 == 1))
 }
