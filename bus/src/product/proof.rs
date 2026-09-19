@@ -9,14 +9,13 @@ use p3_field::ExtensionField;
 use p3_sumcheck::generic_degree::RoundPolyInterpolator;
 use serde::{Deserialize, Serialize};
 
-use crate::transcript::{ProductGkrProverTranscript, ProductGkrVerifierTranscript};
-
 use super::math::{
     combine, equality_evaluation, equality_weights, fold_dense, has_distinct_round_nodes,
     interpolate_pair, interpolate_quad,
 };
 use super::prover::{ProductLayers, RadixFourBatch};
 use super::{ProductGkrError, ProductGkrShape};
+use crate::transcript::{ProductGkrProverTranscript, ProductGkrVerifierTranscript};
 
 /// Number of transmitted evaluations for a degree-five round polynomial.
 pub(crate) const ROUND_POLY_LEN: usize = 5;
