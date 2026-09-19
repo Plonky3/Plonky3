@@ -77,6 +77,7 @@ use p3_challenger::fs::TranscriptField;
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
 use p3_commit::{Mmcs, MultilinearPcs};
 use p3_field::Field;
+use p3_matrix::dense::RowMajorMatrix;
 use p3_maybe_rayon::prelude::*;
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
@@ -109,6 +110,15 @@ const WORD_BITS: usize = 64;
 ///
 /// Small enough to leave real parallelism at the trace heights this crate commits.
 const ROW_GRAIN: usize = 1 << 12;
+
+/// Bytes one packed word holds, each indexing one subset-sum table.
+const BYTES_PER_WORD: usize = WORD_BITS / 8;
+
+/// Row blocks of 64 rows one task sums with one set of subset-sum tables.
+///
+/// Large enough that allocating the task's tables is amortised.
+/// Small enough to keep every core fed at the heights a wide trace reaches.
+const BLOCKS_PER_TASK: usize = 16;
 
 /// A commitment to a batch of Boolean trace tables, packed into one bit witness.
 ///
@@ -327,34 +337,27 @@ where
     /// Sum every column of a table against one weight per row.
     fn weighted_columns(table: &Table<EF>, weights: &Poly<EF>) -> Vec<EF> {
         let rows = weights.as_slice();
+        // A packed table is summed word by word, so no cell is decoded.
+        if let Some(words) = table.packed_bits() {
+            return packed_column_sums(words, rows);
+        }
         table
             .par_columns()
             .map(|column| Self::weighted_column(column, rows))
             .collect()
     }
 
-    /// Sum one column against one weight per row.
+    /// Sum one dense column against one weight per row.
     ///
     /// A cell is zero or one, so a value adds up the weights of the rows holding a one.
+    ///
+    /// # Panics
+    ///
+    /// Panics on a packed column, which [`packed_column_sums`] sums a whole table at a time.
     fn weighted_column(column: ColumnView<'_, EF>, rows: &[EF]) -> EF {
-        let Some(cells) = column.as_dense() else {
-            // A packed column is walked word by word, so no cell is decoded.
-            //
-            // The walk is serial, so a packed table is split over its columns and no
-            // further: a narrow one takes one task per column at any height.
-            let mut result = EF::ZERO;
-            for word in 0..column.len().div_ceil(WORD_BITS) {
-                let mut bits = column
-                    .boolean_word(word)
-                    .expect("packed column must expose every source word");
-                while bits != 0 {
-                    let bit = bits.trailing_zeros() as usize;
-                    result += rows[word * WORD_BITS + bit];
-                    bits &= bits - 1;
-                }
-            }
-            return result;
-        };
+        let cells = column
+            .as_dense()
+            .expect("a packed table is summed word by word");
 
         // A dense column splits into runs of rows, each task summing the weights it selects.
         // Addition is order independent, so the split the pool chooses does not reach the sum.
@@ -447,6 +450,75 @@ where
         // Lane `j` of a block is bit `j` of its word, which is the packing's own convention.
         Ok(words.into_iter().map(PackedGf2::new).collect())
     }
+}
+
+/// Sum each packed column's row weights over the rows where it holds one.
+///
+/// # Algorithm
+///
+/// Row `64 * b + j` of column `c` is bit `j` of `words[b][c]`.
+///
+/// A row block's 64 weights fall into eight bytes of eight rows each.
+///
+/// Every subset of one byte's rows gets its sum tabulated once per block:
+///
+/// ```text
+///     table[g][s] = sum of weight(64 * b + 8 * g + j) over the set bits j of s
+///     column c   += table[0][byte 0 of the word] + ... + table[7][byte 7 of the word]
+/// ```
+///
+/// So a word costs eight table reads, however many of its bits are set.
+///
+/// The tables are shared by every column of the block, whose words are contiguous.
+///
+/// # Arguments
+///
+/// - `words`: one row per block of 64 rows, one entry per column.
+/// - `row_weights`: one weight per row, at least as many as the column's rows.
+fn packed_column_sums<EF: Field>(words: &RowMajorMatrix<u64>, row_weights: &[EF]) -> Vec<EF> {
+    let width = words.width;
+    words
+        .values
+        .par_chunks(width * BLOCKS_PER_TASK)
+        .enumerate()
+        .par_fold_reduce(
+            || EF::zero_vec(width),
+            |mut sums, (task, blocks)| {
+                let mut tables = EF::zero_vec(BYTES_PER_WORD << 8);
+                let (tables, _) = tables.as_chunks_mut::<256>();
+                for (offset, block) in blocks.chunks_exact(width).enumerate() {
+                    let first_row = (task * BLOCKS_PER_TASK + offset) * WORD_BITS;
+                    for (group, table) in tables.iter_mut().enumerate() {
+                        // Rows past the column's end carry no weight; their bits are zero.
+                        let weight = |row: usize| {
+                            row_weights
+                                .get(first_row + 8 * group + row)
+                                .copied()
+                                .unwrap_or(EF::ZERO)
+                        };
+                        // Each subset extends the one without its lowest row by that row.
+                        for subset in 1..256usize {
+                            table[subset] = table[subset & (subset - 1)]
+                                + weight(subset.trailing_zeros() as usize);
+                        }
+                    }
+                    for (sum, &word) in sums.iter_mut().zip(block) {
+                        *sum += tables
+                            .iter()
+                            .zip(word.to_le_bytes())
+                            .map(|(table, byte)| table[usize::from(byte)])
+                            .sum::<EF>();
+                    }
+                }
+                sums
+            },
+            |mut left, right| {
+                left.iter_mut()
+                    .zip(right)
+                    .for_each(|(left, right)| *left += right);
+                left
+            },
+        )
 }
 
 /// The bit of a cell holding zero or one, and nothing for any other value.
@@ -1111,6 +1183,42 @@ mod tests {
             RowMajorMatrix::new(words, table.num_polys()),
             table.num_variables(),
         )
+    }
+
+    #[test]
+    fn packed_column_sums_match_a_per_bit_sum() {
+        // Below one block, one block, and enough blocks for several tasks with a partial last one.
+        let blocks_past_tasks = (3 * BLOCKS_PER_TASK + 1) * WORD_BITS;
+        for (height, width, seed) in [(32, 5, 1), (64, 3, 2), (blocks_past_tasks, 7, 3)] {
+            let mut rng = SmallRng::seed_from_u64(seed);
+            let used = if height < WORD_BITS {
+                (1u64 << height) - 1
+            } else {
+                u64::MAX
+            };
+            let words = (0..height.div_ceil(WORD_BITS) * width)
+                .map(|_| rng.random::<u64>() & used)
+                .collect::<Vec<_>>();
+            let row_weights = (0..height).map(|_| rng.random()).collect::<Vec<EF>>();
+
+            let expected = (0..width)
+                .map(|column| {
+                    (0..height)
+                        .filter(|&row| {
+                            (words[(row / WORD_BITS) * width + column] >> (row % WORD_BITS)) & 1
+                                == 1
+                        })
+                        .map(|row| row_weights[row])
+                        .sum::<EF>()
+                })
+                .collect::<Vec<_>>();
+            let words = RowMajorMatrix::new(words, width);
+            assert_eq!(
+                packed_column_sums(&words, &row_weights),
+                expected,
+                "{height}x{width}"
+            );
+        }
     }
 
     /// A commitment over the batch these shapes describe.
