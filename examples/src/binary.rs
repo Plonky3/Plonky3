@@ -756,7 +756,7 @@ mod tests {
     use p3_blake3_air::{Blake3BinaryAir, NUM_BLAKE3_BINARY_COLS};
     use p3_challenger::CanSample;
     use p3_field::{HasSubfield, PrimeCharacteristicRing};
-    use p3_keccak_air::KeccakBinaryAir;
+    use p3_keccak_air::{KeccakBinaryAir, NUM_KECCAK_BINARY_COLS};
     use p3_multi_stark::prove;
     use p3_util::log2_ceil_usize;
 
@@ -924,6 +924,22 @@ mod tests {
     }
 
     #[test]
+    fn dense_and_packed_keccak_tables_have_identical_boolean_proofs() {
+        // Three permutations fill 75 of 128 rows: the packed blocks hold permutations that
+        // straddle block boundaries and padding rows.
+        let air = KeccakBinaryAir {};
+        let dense = Table::new(air.generate_random_trace_rows::<F>(3, 0).transpose());
+        let packed = Table::from_packed_bits(air.generate_random_trace_packed::<Gf2>(3), 7);
+        for backend in [Backend::Subfield, Backend::PolyBasis] {
+            assert_eq!(
+                boolean_proof_transcript(&air, dense.clone(), backend),
+                boolean_proof_transcript(&air, packed.clone(), backend),
+                "{backend:?}"
+            );
+        }
+    }
+
+    #[test]
     fn backends_prove_a_full_width_trace_byte_for_byte() {
         // The recurrence starts from full-width cells, so its stage cannot fit `GF(4)`: its first
         // round runs the generic kernel, and its later rounds run in each backend's field.
@@ -1045,6 +1061,17 @@ mod tests {
         assert_eq!(report.rows, 32);
         assert_eq!(report.stacked_variables, 5 + log2_ceil_usize(width));
         assert!(report.security_bits >= 100.0);
+    }
+
+    #[test]
+    fn proves_and_verifies_a_packed_keccak_trace() {
+        let air = KeccakBinaryAir {};
+        let words = air.generate_random_trace_packed::<Gf2>(1);
+        let table = Table::<F>::from_packed_bits(words, 5);
+        let report = prove_boolean_air(&air, table, BinaryProofOptions::default())
+            .expect("a packed Keccak-f trace must prove and verify");
+        assert_eq!(report.rows, 32);
+        assert_eq!(report.width, NUM_KECCAK_BINARY_COLS);
     }
 
     #[test]

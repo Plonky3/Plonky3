@@ -107,16 +107,16 @@ fn main() {
             println!("Proving {num_hashes} Keccak-f permutations");
 
             let air = KeccakBinaryAir {};
-            let trace = air.generate_random_trace_rows::<BinaryField128>(num_hashes, 0);
+            let words = air.generate_random_trace_packed::<Gf2>(num_hashes);
             assert_eq!(
-                trace.height(),
-                trace_height,
-                "generated trace height must match the requested log-trace-length"
+                words.height(),
+                trace_height.div_ceil(64),
+                "generated trace height must match the requested log-trace-length {}",
+                args.log_trace_length
             );
-
-            // Every cell is a bit, so the trace commits as bits.
-            let table = Table::new(trace.transpose());
-            prove_boolean_air_with_backend(&air, table, options, backend)
+            let trace =
+                Table::<BinaryField128>::from_packed_bits(words, args.log_trace_length as usize);
+            prove_boolean_air_with_backend(&air, trace, options, backend)
         }
         BinaryHashOptions::Blake3Compressions => {
             println!("Proving {trace_height} Blake-3 compressions");

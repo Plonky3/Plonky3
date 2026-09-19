@@ -108,8 +108,8 @@ Currently the options for the command line arguments are:
 
 `prove_hash_binary` proves Keccak-f permutations or BLAKE3 compressions over `BinaryField128`
 with the multilinear STARK prover. Both commit their bit-valued traces through the
-`BooleanTracePcs`, which opens the current and the next row of every column. BLAKE3 generates its
-trace already packed into bits, and Keccak-f generates dense field cells:
+`BooleanTracePcs`, which opens the current and the next row of every column. Both objectives
+generate their traces already packed into bits:
 ```bash
 RUSTFLAGS="-Ctarget-cpu=native" cargo run --example prove_hash_binary --release --features parallel -- --objective keccak-f-permutations --log-trace-length 14 --security-bits 96
 RUSTFLAGS="-Ctarget-cpu=native" cargo run --example prove_hash_binary --release --features parallel -- --objective blake-3-compressions --log-trace-length 10 --security-bits 96
