@@ -30,6 +30,12 @@ LINT_COMMANDS = {
     "scripts": [sys.executable, "-m", "unittest", "scripts/test_check.py", "-v"],
 }
 
+DOC_ONLY_NAMES = {"CHANGELOG.md", "LICENSE-APACHE", "LICENSE-MIT"}
+DOC_ONLY_PATHS = {"CONTRIBUTING.md", "README.md", "RELEASING.md"}
+DOC_ONLY_PREFIXES = ("audits/", "docs/", ".github/ISSUE_TEMPLATE/")
+FULL_CI_PATHS = {"Cargo.lock", "Cargo.toml", "rust-toolchain.toml", "rustfmt.toml"}
+FULL_CI_PREFIXES = (".cargo/", ".github/workflows/", "scripts/")
+
 
 def cargo_metadata(workspace_root: Path) -> dict[str, Any]:
     command = ["cargo", "metadata", "--no-deps", "--format-version", "1"]
@@ -53,27 +59,182 @@ def workspace_packages(metadata: dict[str, Any]) -> list[dict[str, Any]]:
     )
 
 
+def changed_paths(workspace_root: Path, base: str, head: str) -> list[str]:
+    """Return both sides of each changed or renamed path."""
+    # Three-dot comparison matches the pull request's merge-base semantics.
+    command = ["git", "diff", "--name-status", "-z", "--find-renames", f"{base}...{head}"]
+    completed = subprocess.run(
+        command,
+        cwd=workspace_root,
+        stdout=subprocess.PIPE,
+        check=False,
+    )
+    if completed.returncode:
+        raise subprocess.CalledProcessError(completed.returncode, command)
+
+    # Rename and copy records carry an old and a new path.
+    fields = completed.stdout.decode("utf-8").split("\0")
+    paths = []
+    index = 0
+    while index < len(fields) and fields[index]:
+        status = fields[index]
+        path_count = 2 if status[0] in {"R", "C"} else 1
+        paths.extend(fields[index + 1 : index + 1 + path_count])
+        index += 1 + path_count
+    return sorted(set(paths))
+
+
+def ci_plan(
+    metadata: dict[str, Any], paths: Sequence[str], force_full: bool = False
+) -> dict[str, Any]:
+    """Select workspace packages whose tests can observe the changed files."""
+    packages = workspace_packages(metadata)
+    all_names = {package["name"] for package in packages}
+    workspace_root = Path(metadata["workspace_root"]).resolve()
+
+    # Package roots are the stable bridge from Git paths to Cargo's graph.
+    roots = {
+        Path(package["manifest_path"]).resolve().parent: package["name"]
+        for package in packages
+    }
+    ordered_roots = sorted(roots, key=lambda root: len(root.parts), reverse=True)
+
+    # Global build inputs may affect every package.
+    full = force_full
+    changed_packages = set()
+    for raw_path in paths:
+        path = Path(raw_path)
+        if raw_path in FULL_CI_PATHS or raw_path.startswith(FULL_CI_PREFIXES):
+            full = True
+            continue
+
+        absolute = (workspace_root / path).resolve()
+        owner = next(
+            (
+                roots[root]
+                for root in ordered_roots
+                if absolute == root or root in absolute.parents
+            ),
+            None,
+        )
+        doc_only = (
+            path.name in DOC_ONLY_NAMES
+            or raw_path in DOC_ONLY_PATHS
+            or raw_path.startswith(DOC_ONLY_PREFIXES)
+        )
+        if doc_only:
+            continue
+        if owner is None:
+            # Unknown shared inputs fail closed to full CI.
+            full = True
+        else:
+            changed_packages.add(owner)
+
+    if full:
+        affected = all_names
+    else:
+        # Production and build dependencies propagate through dependent libraries.
+        reverse_production = {name: set() for name in all_names}
+        reverse_dev = {name: set() for name in all_names}
+        root_names = {root: name for root, name in roots.items()}
+        for package in packages:
+            for dependency in package["dependencies"]:
+                dependency_path = dependency.get("path")
+                if dependency_path is None:
+                    continue
+                dependency_name = root_names.get(Path(dependency_path).resolve())
+                if dependency_name is None:
+                    continue
+                reverse = reverse_dev if dependency.get("kind") == "dev" else reverse_production
+                reverse[dependency_name].add(package["name"])
+
+        # Walk only production edges to avoid dev-dependency cycles.
+        production_affected = set(changed_packages)
+        pending = list(changed_packages)
+        while pending:
+            dependency = pending.pop()
+            for dependent in reverse_production[dependency]:
+                if dependent not in production_affected:
+                    production_affected.add(dependent)
+                    pending.append(dependent)
+
+        # Direct dev consumers own integration tests for the affected libraries.
+        affected = set(production_affected)
+        for dependency in production_affected:
+            affected.update(reverse_dev[dependency])
+
+    selected = sorted(affected)
+    selected_metadata = [package for package in packages if package["name"] in affected]
+    embedded = set(embedded_packages(metadata, set(selected)))
+    any_toml = any(Path(path).suffix == ".toml" for path in paths)
+    any_manifest = any(Path(path).name == "Cargo.toml" for path in paths)
+    scripts = force_full or any(path.startswith("scripts/") for path in paths)
+
+    # Scalar outputs are easy to consume from every GitHub Actions shell.
+    return {
+        "packages": selected,
+        "full": full,
+        "rust": bool(selected),
+        "parallel": any(
+            "parallel" in package.get("features", {}) for package in selected_metadata
+        ),
+        "embedded": bool(embedded),
+        "wasm": "p3-goldilocks" in affected,
+        "keccak": "p3-keccak" in affected,
+        "sha_ni": "p3-sha256" in affected,
+        "gfni": "p3-binary-field" in affected,
+        "toml": full or any_toml,
+        "manifests": full or any_manifest,
+        "scripts": full or scripts,
+        "lint": bool(selected) or full or any_toml or scripts,
+    }
+
+
+def emit_ci_plan(plan: dict[str, Any], github_output: Path | None) -> None:
+    """Print a readable plan and optional GitHub Actions outputs."""
+    # The JSON summary makes local planning reproducible.
+    print(json.dumps(plan, indent=2, sort_keys=True))
+    if github_output is None:
+        return
+
+    # Every output is a single line and contains no shell syntax.
+    outputs = []
+    for name, value in plan.items():
+        if isinstance(value, list):
+            value = ",".join(value)
+        elif isinstance(value, bool):
+            value = str(value).lower()
+        outputs.append(f"{name}={value}")
+    with github_output.open("a", encoding="utf-8") as output:
+        output.write("\n".join(outputs) + "\n")
+
+
 def plonky3_metadata(package: dict[str, Any]) -> dict[str, Any]:
     metadata = package.get("metadata") or {}
     value = metadata.get("plonky3", {})
     return value if isinstance(value, dict) else {}
 
 
-def embedded_packages(metadata: dict[str, Any]) -> list[str]:
+def embedded_packages(
+    metadata: dict[str, Any], selected: set[str] | None = None
+) -> list[str]:
+    # Host-only crates opt out in their package metadata.
     return [
         package["name"]
         for package in workspace_packages(metadata)
+        if selected is None or package["name"] in selected
         if any("lib" in target["kind"] for target in package["targets"])
         and plonky3_metadata(package).get("embedded", True) is not False
     ]
 
 
 def package_test_features(
-    metadata: dict[str, Any], package_name: str | None, parallel: bool
+    metadata: dict[str, Any], selected: set[str] | None, parallel: bool
 ) -> list[tuple[str, str]]:
+    # Feature-only suites remain separate from each package's baseline tests.
     runs = []
     for package in workspace_packages(metadata):
-        if package_name is not None and package["name"] != package_name:
+        if selected is not None and package["name"] not in selected:
             continue
         ci = plonky3_metadata(package).get("ci", {})
         if not isinstance(ci, dict):
@@ -92,24 +253,51 @@ def package_test_features(
     return runs
 
 
-def package_args(package: str | None) -> list[str]:
-    return ["-p", package] if package else []
+def selected_packages(args: argparse.Namespace) -> list[str] | None:
+    # The comma-separated form keeps a generated CI value portable across shells.
+    packages = list(args.package or [])
+    if args.packages:
+        packages.extend(name for name in args.packages.split(",") if name)
+    return sorted(set(packages)) or None
 
 
-def feature_args(parallel: bool) -> list[str]:
-    return ["--features", "parallel"] if parallel else []
+def package_args(packages: Sequence[str] | None) -> list[str]:
+    # Cargo accepts one package selector per workspace member.
+    return [item for package in packages or [] for item in ("-p", package)]
+
+
+def feature_args(
+    parallel: bool,
+    metadata: dict[str, Any] | None = None,
+    packages: Sequence[str] | None = None,
+) -> list[str]:
+    if not parallel:
+        return []
+    if packages is None:
+        return ["--features", "parallel"]
+
+    # Qualified features enable only supported configurations of selected packages.
+    selected = set(packages)
+    features = [
+        f"{package['name']}/parallel"
+        for package in workspace_packages(metadata)
+        if package["name"] in selected and "parallel" in package.get("features", {})
+    ]
+    return ["--features", ",".join(features)] if features else []
 
 
 def test_commands(
-    metadata: dict[str, Any], package: str | None, parallel: bool, doctest: bool
+    metadata: dict[str, Any], packages: Sequence[str] | None, parallel: bool, doctest: bool
 ) -> list[list[str]]:
+    # Doctests use Cargo because nextest only runs binary test targets.
     if doctest:
         base = ["cargo", "test", "--doc"]
     else:
         base = ["cargo", "nextest", "run"]
-    feature_runs = package_test_features(metadata, package, parallel)
-    baseline = base + package_args(package) + feature_args(parallel)
-    if package and feature_runs and not doctest:
+    selected = set(packages) if packages is not None else None
+    feature_runs = package_test_features(metadata, selected, parallel)
+    baseline = base + package_args(packages) + feature_args(parallel, metadata, packages)
+    if packages and feature_runs and not doctest:
         baseline += ["--no-tests", "warn"]
     commands = [baseline]
     for name, features in feature_runs:
@@ -117,10 +305,35 @@ def test_commands(
     return commands
 
 
-def lint_commands(check: str | None) -> list[list[str]]:
+def lint_commands(
+    check: str | None, packages: Sequence[str] | None = None
+) -> list[list[str]]:
+    # Repository-wide checks ignore package selection.
+    commands = dict(LINT_COMMANDS)
+    scope = package_args(packages)
+    if packages:
+        commands["clippy"] = [
+            "cargo",
+            "+stable",
+            "clippy",
+            *scope,
+            "--all-targets",
+            "--",
+            "-D",
+            "warnings",
+        ]
+        commands["docs"] = [
+            "cargo",
+            "+stable",
+            "doc",
+            "--no-deps",
+            *scope,
+            "--document-private-items",
+        ]
+        commands["fmt"] = ["cargo", "+nightly", "fmt", *scope, "--", "--check"]
     if check:
-        return [LINT_COMMANDS[check]]
-    return list(LINT_COMMANDS.values())
+        return [commands[check]]
+    return list(commands.values())
 
 
 def wasm_commands(step: str, build_target: str, run_target: str) -> list[list[str]]:
@@ -184,19 +397,28 @@ def wasm_commands(step: str, build_target: str, run_target: str) -> list[list[st
 
 def commands_for(args: argparse.Namespace) -> list[list[str]]:
     command = args.command
+    packages = selected_packages(args) if hasattr(args, "package") else None
     metadata = None
-    if command in {"full", "test", "doctest", "embedded"}:
+    if command in {"full", "fast", "test", "doctest", "architecture", "embedded"}:
         metadata = cargo_metadata(args.workspace_root)
 
     if command == "fast":
-        scope = package_args(args.package) if args.package else ["--workspace"]
-        return [["cargo", "check", *scope, "--all-targets", *feature_args(args.parallel)]]
+        scope = package_args(packages) if packages else ["--workspace"]
+        return [
+            [
+                "cargo",
+                "check",
+                *scope,
+                "--all-targets",
+                *feature_args(args.parallel, metadata, packages),
+            ]
+        ]
     if command == "test":
-        return test_commands(metadata, args.package, args.parallel, False)
+        return test_commands(metadata, packages, args.parallel, False)
     if command == "doctest":
-        return test_commands(metadata, args.package, args.parallel, True)
+        return test_commands(metadata, packages, args.parallel, True)
     if command == "lint":
-        return lint_commands(args.check)
+        return lint_commands(args.check, packages)
     if command == "full":
         return [
             ["cargo", "check", "--workspace", "--all-targets"],
@@ -207,7 +429,13 @@ def commands_for(args: argparse.Namespace) -> list[list[str]]:
             *lint_commands(None),
         ]
     if command == "architecture":
-        target = ["--target", args.target, "--all-targets", *feature_args(args.parallel)]
+        target = [
+            "--target",
+            args.target,
+            *package_args(packages),
+            "--all-targets",
+            *feature_args(args.parallel, metadata, packages),
+        ]
         # The baseline lint job cannot reach code behind a target-feature gate,
         # so each leg lints the configuration only it compiles.
         return [
@@ -215,6 +443,7 @@ def commands_for(args: argparse.Namespace) -> list[list[str]]:
             ["cargo", "clippy", *target, "--", "-D", "warnings"],
         ]
     if command == "embedded":
+        selected = set(packages) if packages is not None else None
         return [
             [
                 "cargo",
@@ -226,7 +455,7 @@ def commands_for(args: argparse.Namespace) -> list[list[str]]:
                 package,
                 "--lib",
             ]
-            for package in embedded_packages(metadata)
+            for package in embedded_packages(metadata, selected)
         ]
     if command == "bench":
         return [
@@ -423,7 +652,16 @@ def commands_for(args: argparse.Namespace) -> list[list[str]]:
 
 
 def add_package_and_parallel(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--package", metavar="NAME", help="limit the command to one package")
+    parser.add_argument(
+        "--package",
+        action="append",
+        metavar="NAME",
+        help="limit the command to a package; repeat for more packages",
+    )
+    parser.add_argument(
+        "--packages",
+        help="limit the command to a comma-separated package list",
+    )
     parser.add_argument("--parallel", action="store_true", help="enable the parallel feature")
 
 
@@ -471,6 +709,11 @@ def parser() -> argparse.ArgumentParser:
     )
     subparsers = result.add_subparsers(dest="command", required=True)
 
+    plan = subparsers.add_parser("plan", help="select packages affected by a Git change")
+    plan.add_argument("--base", help="base Git revision")
+    plan.add_argument("--head", default="HEAD", help="head Git revision")
+    plan.add_argument("--full", action="store_true", help="select the full workspace")
+    plan.add_argument("--github-output", type=Path, help=argparse.SUPPRESS)
     fast = subparsers.add_parser("fast", help="check host targets without running tests")
     add_package_and_parallel(fast)
     subparsers.add_parser("full", help="run all host checks used by CI")
@@ -482,16 +725,20 @@ def parser() -> argparse.ArgumentParser:
     add_target_feature(doctest)
     lint = subparsers.add_parser("lint", help="run formatting, lint, dependency and doc checks")
     lint.add_argument("--check", choices=LINT_COMMANDS, help="run one lint check")
+    lint.add_argument("--package", action="append", metavar="NAME")
+    lint.add_argument("--packages")
     architecture = subparsers.add_parser(
         "architecture", help="compile all targets for a non-runnable architecture"
     )
     architecture.add_argument("--target", required=True)
-    architecture.add_argument("--parallel", action="store_true")
+    add_package_and_parallel(architecture)
     add_target_feature(architecture)
     embedded = subparsers.add_parser(
         "embedded", help="build metadata-selected libraries for an embedded target"
     )
     embedded.add_argument("--target", default="thumbv7em-none-eabi")
+    embedded.add_argument("--package", action="append", metavar="NAME")
+    embedded.add_argument("--packages")
     subparsers.add_parser("bench", help="run each benchmark body once")
     wasm = subparsers.add_parser("wasm", help="build or run wasm SIMD smoke coverage")
     wasm.add_argument(
@@ -595,6 +842,21 @@ def main(argv: Sequence[str] | None = None) -> int:
         attach_leading_minus_values(sys.argv[1:] if argv is None else argv)
     )
     args.workspace_root = args.workspace_root.resolve()
+
+    if args.command == "plan":
+        if not args.full and not args.base:
+            print("error: --base is required unless --full is set", file=sys.stderr)
+            return 2
+        try:
+            # Full runs do not need a comparison revision.
+            paths = [] if args.full else changed_paths(args.workspace_root, args.base, args.head)
+            metadata = cargo_metadata(args.workspace_root)
+            emit_ci_plan(ci_plan(metadata, paths, args.full), args.github_output)
+        except (subprocess.CalledProcessError, json.JSONDecodeError, ValueError) as error:
+            print(f"error: {error}", file=sys.stderr)
+            return error.returncode if isinstance(error, subprocess.CalledProcessError) else 1
+        return 0
+
     try:
         commands = commands_for(args)
     except (subprocess.CalledProcessError, json.JSONDecodeError, ValueError) as error:
