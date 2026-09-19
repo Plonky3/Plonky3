@@ -127,9 +127,9 @@ RUSTFLAGS="-Ctarget-cpu=native" cargo run --example prove_hash_binary --release 
   basis otherwise), `subfield`, or `poly-basis`. Every choice proves and verifies the same
   statement and emits a byte-identical proof; this is a performance tradeoff only.
 - `--log-inv-rate`, `--pcs-pow-bits`, `--security-bits` (default 100), `--folding`, and
-  `--merkle-arity` (`2` or `4`) tune the PCS. The CLI defaults are inverse rate 1, folding 4,
-  and Merkle arity 4 for the packed BLAKE3 path; the library harness retains its general defaults
-  of inverse rate 2, folding 3, and Merkle arity 2.
+  `--merkle-arity` (`2` or `4`, default `2`) tune the PCS. The general defaults are inverse rate
+  2, folding 3, and Merkle arity 2. Benchmark comparisons can select inverse rate 1, folding 4,
+  and Merkle arity 4 explicitly.
 
 For Keccak-f, every trace cell is committed as a `BinaryField128` element, so the dense binary PCS
 reaches roughly `128 - (log-trace-length + ceil(log2(width)) + log-inv-rate + 3)` bits, with width
