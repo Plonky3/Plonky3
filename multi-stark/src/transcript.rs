@@ -85,6 +85,9 @@ const MAIN_COMMITMENT: &str = "main_commitment";
 /// Step label of one instance's public values.
 const PUBLIC_VALUES: &str = "public_values";
 
+/// Step label of the bracket around the binary-native bus argument.
+const BUS_ARGUMENT: &str = "bus_argument";
+
 /// Step label of the bracket around the delegated lookup argument.
 const LOOKUP_ARGUMENT: &str = "lookup_argument";
 
@@ -108,6 +111,9 @@ type Alphabet<F> = FieldUnit<F>;
 /// Recorded on the bracket markers as a local diagnostic.
 /// It does not reach the pattern fingerprint.
 struct MainCommitment;
+
+/// Type-level name of the binary-native bus argument.
+struct BusArgument;
 
 /// Type-level name of the sub-protocol the statement delegates its lookups to.
 struct LookupArgument;
@@ -175,6 +181,8 @@ pub struct MultiStarkShape {
     ///
     /// Its transcript is then the one it had before indexed lookups existed.
     pub has_indexed: bool,
+    /// Whether any AIR declares a binary-native bus interaction.
+    pub has_bus: bool,
 }
 
 impl MultiStarkShape {
@@ -204,6 +212,7 @@ impl MultiStarkShape {
         num_variables: &[usize],
         pow_bits: usize,
         has_indexed: bool,
+        has_bus: bool,
     ) -> Self
     where
         A: BaseAir<F> + ?Sized,
@@ -229,6 +238,7 @@ impl MultiStarkShape {
                 .collect(),
             pow_bits,
             has_indexed,
+            has_bus,
         }
     }
 
@@ -295,7 +305,12 @@ impl MultiStarkShape {
             ));
         }
 
-        // Four delegations follow, in the order the run performs them.
+        // Bus challenges must follow every commitment and public statement value.
+        if self.has_bus {
+            steps.extend(delegation::<BusArgument>(BUS_ARGUMENT));
+        }
+
+        // The remaining delegations follow in the order the run performs them.
         //
         // Each one's steps live in the callee's own pattern, under the callee's own seed.
         // What this pattern states is that the delegation happens, and where.
@@ -463,6 +478,16 @@ where
             self.state
                 .add_public_scalars::<F, FieldToFieldCodec<F>>(PUBLIC_VALUES, slice);
         }
+    }
+
+    /// Lend the sponge to the binary-native bus argument when declared.
+    pub fn bus_argument<R>(&mut self, run: impl FnOnce(&mut C) -> R) -> Option<R> {
+        self.shape.has_bus.then(|| {
+            self.state.begin_protocol::<BusArgument>(BUS_ARGUMENT);
+            let output = run(self.state.challenger_mut());
+            self.state.end_protocol::<BusArgument>(BUS_ARGUMENT);
+            output
+        })
     }
 
     /// Lend the sponge to the lookup argument, bracketed as a sub-protocol.
@@ -668,6 +693,16 @@ where
         Ok(())
     }
 
+    /// Replay the binary-native bus argument when the statement declares one.
+    pub fn bus_argument<R>(&mut self, run: impl FnOnce(&mut C) -> R) -> Option<R> {
+        self.shape.has_bus.then(|| {
+            self.state.begin_protocol::<BusArgument>(BUS_ARGUMENT);
+            let output = run(self.state.challenger_mut());
+            self.state.end_protocol::<BusArgument>(BUS_ARGUMENT);
+            output
+        })
+    }
+
     /// Lend the sponge to the lookup argument, bracketed as a sub-protocol.
     ///
     /// The bracket closes whatever the delegated run returned.
@@ -844,6 +879,7 @@ mod tests {
             ],
             pow_bits: 4,
             has_indexed: false,
+            has_bus: false,
         }
     }
 
@@ -876,15 +912,20 @@ mod tests {
                 self.1.clone()
             }
         }
-        let baseline =
-            MultiStarkShape::new::<F, _>(&[&ColumnsAir(vec![0, 1], vec![0, 1])], &[4], 0, false);
+        let baseline = MultiStarkShape::new::<F, _>(
+            &[&ColumnsAir(vec![0, 1], vec![0, 1])],
+            &[4],
+            0,
+            false,
+            false,
+        );
         for air in [
             ColumnsAir(vec![1, 0], vec![0, 1]),
             ColumnsAir(vec![0, 2], vec![0, 1]),
             ColumnsAir(vec![0, 1], vec![1, 0]),
             ColumnsAir(vec![0, 1], vec![0, 2]),
         ] {
-            let changed = MultiStarkShape::new::<F, _>(&[&air], &[4], 0, false);
+            let changed = MultiStarkShape::new::<F, _>(&[&air], &[4], 0, false, false);
             assert!(!seeds_agree(&baseline, &changed));
         }
     }
@@ -910,6 +951,7 @@ mod tests {
             instances,
             pow_bits,
             has_indexed,
+            has_bus,
         } = base_shape();
         let num_instances = instances.len();
         let MultiStarkInstanceShape {
@@ -933,6 +975,10 @@ mod tests {
         let mut shape = base_shape();
         shape.has_indexed = !has_indexed;
         mutations.push(("has_indexed", shape));
+
+        let mut shape = base_shape();
+        shape.has_bus = !has_bus;
+        mutations.push(("has_bus", shape));
 
         let mut shape = base_shape();
         shape.instances.truncate(num_instances - 1);
@@ -1003,6 +1049,7 @@ mod tests {
         transcript.preprocessed_commitment(preprocessed);
         transcript.main_commitment(|challenger| challenger.observe(main));
         transcript.public_values(public_values);
+        transcript.bus_argument(|_| ());
         transcript.lookup_argument(|_| ());
         transcript.zerocheck(|_| ());
         transcript.main_opening(|_| ());
@@ -1030,6 +1077,7 @@ mod tests {
         transcript
             .public_values(public_values)
             .expect("the public values match the described counts");
+        transcript.bus_argument(|_| ());
         transcript.lookup_argument(|_| ());
         transcript.zerocheck(|_| ());
         transcript.main_opening(|_| ());
@@ -1115,7 +1163,7 @@ mod tests {
         };
 
         // The arities and the difficulty come from the caller's own configuration.
-        let shape = MultiStarkShape::new::<F, _>(&[&first, &second], &[9, 4], 6, false);
+        let shape = MultiStarkShape::new::<F, _>(&[&first, &second], &[9, 4], 6, false, false);
 
         assert_eq!(
             shape,
@@ -1140,6 +1188,7 @@ mod tests {
                 ],
                 pow_bits: 6,
                 has_indexed: false,
+                has_bus: false,
             }
         );
         assert_eq!(shape.num_preprocessed_tables(), 1);
@@ -1444,6 +1493,7 @@ mod tests {
                 instances,
                 pow_bits,
                 has_indexed: false,
+                has_bus: false,
             },
         )
     }

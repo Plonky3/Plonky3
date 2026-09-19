@@ -8,9 +8,13 @@ use p3_commit::MultilinearPcs;
 use p3_field::{ExtensionField, Field};
 use p3_lookup::InteractionSymbolicBuilder;
 use p3_sumcheck::PrescribedPointPcs;
+use p3_sumcheck::generic_degree::RoundProver;
 
 use crate::ProverInstances;
 use crate::backend::{GenericBackend, ZerocheckBackend};
+use crate::bus::{BusBindingError, BusContext};
+use crate::bus_composition::BusCompositionProver;
+use crate::bus_transcript::BusCompositionProverTranscript;
 use crate::config::{Commitment, MultiStarkConfig, PcsProverError, ProverData};
 use crate::folder::ProverAir;
 use crate::indexed::{IndexedPlan, IndexedWitness};
@@ -18,7 +22,7 @@ use crate::instance::{ProverParts, RunPoints, trace_suffix};
 use crate::logup_star::LogupStarProof;
 use crate::lookup::prove_lookup;
 use crate::opening::TableOpening;
-use crate::proof::{IndexedLookupProof, MultiStarkProof};
+use crate::proof::{BusProof, IndexedLookupProof, MultiStarkProof};
 use crate::security::{SecurityError, assess_statement};
 use crate::transcript::{MultiStarkProverTranscript, MultiStarkShape};
 use crate::zerocheck::AirZerocheck;
@@ -52,6 +56,15 @@ pub enum ProvingError<E> {
     /// The requested complete-statement security target was not met.
     #[error(transparent)]
     Security(#[from] SecurityError),
+    /// Binary-native bus declarations do not define a supported statement.
+    #[error("binary-bus planning failed: {0}")]
+    BusPlan(#[from] p3_bus::BusPlanError),
+    /// The product-tree bus reduction rejected the committed witness.
+    #[error("binary-bus product reduction failed: {0}")]
+    BusArgument(#[from] p3_bus::BusArgumentError),
+    /// The bus composition statement could not be derived.
+    #[error("binary-bus commitment binding failed: {0}")]
+    BusBinding(#[from] BusBindingError),
 }
 
 /// Prove only when the complete statement's security assessment meets `target_bits`.
@@ -96,11 +109,12 @@ where
 ///     1. bind batched preprocessed commitment (if any)
 ///     2. commit(main trace tables)  -> the scheme absorbs the main commitment
 ///     3. bind public values, one step per instance
-///     4. lookup reduction (if any)  -> delegated
-///     5. zerocheck reduction        -> delegated, yields bound point r
-///     6. indexed reduction (if any) -> delegated, leaves claims at two further points
-///     7. open main tables           -> delegated, openings bound to the main commitment
-///     8. open preprocessed tables (if any)
+///     4. binary bus (if any)        -> delegated, leaves one composition point
+///     5. lookup reduction (if any)  -> delegated
+///     6. zerocheck reduction        -> delegated, yields bound point r
+///     7. indexed reduction (if any) -> delegated, leaves claims at two further points
+///     8. open main tables           -> delegated, openings bind every terminal claim
+///     9. open preprocessed tables (if any)
 ///                                   -> delegated, bound to the preprocessed commitment
 /// ```
 ///
@@ -199,7 +213,9 @@ where
         + CanObserve<Commitment<C>>,
     Commitment<C>: Clone,
     ProverData<C>: Clone,
-    A: BaseAir<C::Val> + Air<InteractionSymbolicBuilder<C::Val, C::Challenge>>,
+    A: BaseAir<C::Val>
+        + Air<InteractionSymbolicBuilder<C::Val, C::Challenge>>
+        + Air<p3_bus::BusSymbolicBuilder<C::Val, C::Challenge>>,
     B: ZerocheckBackend<C::Val, C::Challenge, A>,
 {
     prove_forged::<C, A, B>(config, instances, pow_bits, caller_challenger, None)
@@ -226,7 +242,9 @@ where
         + CanObserve<Commitment<C>>,
     Commitment<C>: Clone,
     ProverData<C>: Clone,
-    A: BaseAir<C::Val> + Air<InteractionSymbolicBuilder<C::Val, C::Challenge>>,
+    A: BaseAir<C::Val>
+        + Air<InteractionSymbolicBuilder<C::Val, C::Challenge>>
+        + Air<p3_bus::BusSymbolicBuilder<C::Val, C::Challenge>>,
     B: ZerocheckBackend<C::Val, C::Challenge, A>,
 {
     let mut candidate = caller_challenger.clone();
@@ -268,6 +286,7 @@ where
     let indexed_plan =
         IndexedPlan::build::<C::Val, C::Challenge, A>(&airs, &instances.num_variables())
             .expect("an indexed lookup the statement cannot plan is a caller error");
+    let bus = BusContext::<C::Val, C::Challenge>::build(&airs, &instances.num_variables())?;
 
     // IndexedWitness currently borrows dense field slices for both payload and position columns.
     // Reject a packed source before the statement transcript or commitment can mutate the caller's
@@ -310,6 +329,7 @@ where
             &instances.num_variables(),
             pow_bits,
             indexed_plan.is_some(),
+            bus.is_some(),
         ),
     );
 
@@ -361,7 +381,61 @@ where
     // They belong to the whole statement, so they land before either phase samples anything.
     transcript.public_values(&public_values);
 
-    // 4. Materialize the lookup fractions and reduce them, inside the delegation bracket.
+    // 4. Reduce each planned bus product and bind its terminal claims by composition sumcheck.
+    let bus_round = transcript
+        .bus_argument(|challenger| {
+            let context = bus
+                .as_ref()
+                .expect("the transcript describes a bus argument");
+            let (product, output) = context.plan().prove::<C::Val, C::Challenge, _>(
+                |challenges| {
+                    context.materialize(&tables, &preprocessed_tables, &public_values, challenges)
+                },
+                challenger,
+            )?;
+            let degree = BusCompositionProver::degree(context);
+            let num_variables = context.max_num_variables();
+            let mut composition_transcript = BusCompositionProverTranscript::<
+                _,
+                C::Val,
+                C::Challenge,
+            >::new(
+                challenger, num_variables, degree, pow_bits
+            );
+            let direction = composition_transcript.direction_challenge();
+            let claimed_sum = context.composition_claim(&output, direction)?;
+            let mut prover = BusCompositionProver::new(
+                context,
+                &output,
+                &tables,
+                &preprocessed_tables,
+                &public_values,
+                direction,
+            );
+            let (composition, point) = composition_transcript.sumcheck(|challenger| {
+                prover.prove::<C::Val, _>(challenger, num_variables, degree, pow_bits, claimed_sum)
+            });
+            composition_transcript.finish();
+            Ok::<_, ProvingError<PcsProverError<C>>>((
+                BusProof {
+                    product,
+                    composition,
+                },
+                output,
+                point,
+            ))
+        })
+        .transpose();
+    let (bus_proof, bus_point) = match bus_round {
+        Ok(Some((proof, _output, point))) => (Some(proof), Some(point)),
+        Ok(None) => (None, None),
+        Err(error) => {
+            transcript.abort();
+            return Err(error);
+        }
+    };
+
+    // 5. Materialize the lookup fractions and reduce them, inside the delegation bracket.
     // The resulting claim feeds the coupled AIR sumcheck below.
     let (lookup_proof, lookup_data) = transcript.lookup_argument(|challenger| {
         prove_lookup::<C::Val, C::Challenge, A, _>(
@@ -373,7 +447,7 @@ where
         )
     });
 
-    // 5. Reduce all AIR constraints to one batched sumcheck and one bound point.
+    // 6. Reduce all AIR constraints to one batched sumcheck and one bound point.
     // The committed prover opens columns through the commitment schemes below, so
     // the zerocheck's own opened values are not used as the final proof openings.
     let zerocheck = AirZerocheck::with_profiles(&airs, &proving_key.air_profiles, pow_bits);
@@ -387,7 +461,7 @@ where
             challenger,
         )
     });
-    // 6. Reduce every indexed lookup against the point the zerocheck bound.
+    // 7. Reduce every indexed lookup against the point the zerocheck bound.
     //
     // The reduction needs what each reader pulled there.
     //
@@ -473,12 +547,13 @@ where
     drop(tables);
     drop(preprocessed_tables);
 
-    // 7. Open each main trace table at every point a claim was left at.
-    let points = RunPoints::new(&point, indexed_output.as_ref());
+    // 8. Open each main trace table at every point a claim was left at.
+    let points = RunPoints::new(&point, indexed_output.as_ref(), bus_point.as_ref());
     let opening = transcript.main_opening(|challenger| {
-        let schedule = instances.main_schedule(indexed_plan.as_ref(), |role, rows| {
-            trace_suffix(points.at(role), rows)
-        });
+        let schedule =
+            instances.main_schedule(indexed_plan.as_ref(), bus.as_ref(), |role, rows| {
+                trace_suffix(points.at(role), rows)
+            });
         config.pcs().open_at(
             prover_data,
             schedule.protocol(),
@@ -494,16 +569,17 @@ where
             source,
         })?;
 
-    // 8. Open each non-empty preprocessed table at every point a claim was left at.
+    // 9. Open each non-empty preprocessed table at every point a claim was left at.
     // The setup commitment data is reused rather than rebuilt.
     let preprocessed_opening = transcript.preprocessed_opening(|challenger| {
         let preprocessed = proving_key
             .preprocessed
             .as_ref()
             .expect("preprocessed proving key is missing for an AIR with preprocessed columns");
-        let schedule = instances.preprocessed_schedule(indexed_plan.as_ref(), |role, rows| {
-            trace_suffix(points.at(role), rows)
-        });
+        let schedule =
+            instances.preprocessed_schedule(indexed_plan.as_ref(), bus.as_ref(), |role, rows| {
+                trace_suffix(points.at(role), rows)
+            });
         config.preprocessed_pcs().open_at(
             preprocessed.prover_data.clone(),
             schedule.protocol(),
@@ -528,6 +604,7 @@ where
         commitment,
         lookup: lookup_proof,
         indexed: indexed_round,
+        bus: bus_proof,
         sumcheck,
         opening,
         preprocessed_opening,
@@ -546,6 +623,7 @@ mod tests {
 
     use p3_air::{Air, AirBuilder, BaseAir, WindowAccess};
     use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
+    use p3_bus::{BusActivation, BusDirection, BusInteractionBuilder};
     use p3_challenger::{CanSample, DuplexChallenger};
     use p3_dft::Radix2DFTSmallBatch;
     use p3_field::extension::BinomialExtensionField;
@@ -674,6 +752,85 @@ mod tests {
             committed_table_override: None,
             main_pcs_uses: Cell::new(0),
         }
+    }
+
+    /// AIR with a nonlinear payload and a nonconstant Boolean bus activation.
+    #[derive(Clone, Copy)]
+    struct ConditionalBusAir {
+        /// Multiset side receiving this table's selected rows.
+        direction: BusDirection,
+        /// Whether the second column selects active rows.
+        conditional: bool,
+    }
+
+    impl BaseAir<F> for ConditionalBusAir {
+        fn width(&self) -> usize {
+            2
+        }
+    }
+
+    impl<AB> Air<AB> for ConditionalBusAir
+    where
+        AB: BusInteractionBuilder<F = F>,
+    {
+        fn eval(&self, builder: &mut AB) {
+            let value: AB::Expr = builder.main().current_slice()[0].into();
+            let selector: AB::Expr = builder.main().current_slice()[1].into();
+            let activation = if self.conditional {
+                BusActivation::Boolean(selector)
+            } else {
+                BusActivation::Always
+            };
+            builder.push_bus_interaction(
+                "conditional-square",
+                self.direction,
+                [value.clone() * value],
+                activation,
+            );
+        }
+    }
+
+    /// Prove one balanced conditional bus and return everything mutation tests reuse.
+    fn conditional_bus_fixture() -> (
+        TestConfig,
+        ConditionalBusAir,
+        ConditionalBusAir,
+        crate::ProvingKey<TestConfig>,
+        crate::VerifyingKey<TestConfig>,
+        MultiStarkProof<TestConfig>,
+    ) {
+        let push = ConditionalBusAir {
+            direction: BusDirection::Push,
+            conditional: true,
+        };
+        let pull = ConditionalBusAir {
+            direction: BusDirection::Pull,
+            conditional: true,
+        };
+        let config = config(4, FOLDING);
+        let (pk, vk) = setup(&config, &[&push, &pull], &mut challenger()).unwrap();
+        let columns = vec![
+            F::from_u64(1),
+            F::from_u64(2),
+            F::from_u64(3),
+            F::from_u64(4),
+            F::ZERO,
+            F::ONE,
+            F::ONE,
+            F::ZERO,
+        ];
+        let table = || Table::new(RowMajorMatrix::new(columns.clone(), 4));
+        let proof = prove(
+            &config,
+            ProverInstances::new(vec![
+                ProverInstance::new(&push, table(), &pk, &[]),
+                ProverInstance::new(&pull, table(), &pk, &[]),
+            ]),
+            0,
+            &mut challenger(),
+        )
+        .unwrap();
+        (config, push, pull, pk, vk, proof)
     }
 
     /// One AIR provides a named table, one reads it.
@@ -1154,5 +1311,139 @@ mod tests {
             None,
         )
         .expect("a reader pulling what the key holds must verify");
+    }
+
+    #[test]
+    fn conditional_nonlinear_bus_is_bound_to_committed_openings() {
+        let (config, push, pull, _pk, vk, mut proof) = conditional_bus_fixture();
+        let verify_with = |proof: &MultiStarkProof<TestConfig>, push, pull, height| {
+            verify(
+                &config,
+                VerifierInstances::new(vec![
+                    VerifierInstance::new(push, &vk, height, &[]),
+                    VerifierInstance::new(pull, &vk, height, &[]),
+                ]),
+                proof,
+                0,
+                &mut challenger(),
+            )
+        };
+
+        // The new composition sumcheck accepts a balanced bus with both nonlinear payload
+        // and nonconstant activation.
+        verify_with(&proof, &push, &pull, 2).unwrap();
+
+        // Directly composing separately opened MLEs is not the MLE of the rowwise product.
+        let r = EF::from_u64(3);
+        let value_at_r = EF::from_u64(1) + (EF::from_u64(2) - EF::from_u64(1)) * r;
+        let selector_at_r = r;
+        let old_shortcut = selector_at_r * value_at_r.square();
+        let true_factor_mle = EF::from_u64(4) * r;
+        assert_ne!(old_shortcut, true_factor_mle);
+
+        // Every proof-controlled layer message is bound by ProductGKR or composition sumcheck.
+        proof.bus.as_mut().unwrap().product.product.roots[0] += EF::ONE;
+        assert!(verify_with(&proof, &push, &pull, 2).is_err());
+        proof.bus.as_mut().unwrap().product.product.roots[0] -= EF::ONE;
+
+        proof.bus.as_mut().unwrap().composition.claimed_sum += EF::ONE;
+        assert!(verify_with(&proof, &push, &pull, 2).is_err());
+        proof.bus.as_mut().unwrap().composition.claimed_sum -= EF::ONE;
+
+        proof.bus.as_mut().unwrap().composition.round_polys[0][0] += EF::ONE;
+        assert!(verify_with(&proof, &push, &pull, 2).is_err());
+        proof.bus.as_mut().unwrap().composition.round_polys[0][0] -= EF::ONE;
+
+        // Direction, activation, and block geometry are verifier statement metadata.
+        let wrong_direction = ConditionalBusAir {
+            direction: BusDirection::Push,
+            conditional: true,
+        };
+        assert!(verify_with(&proof, &push, &wrong_direction, 2).is_err());
+        let wrong_activation = ConditionalBusAir {
+            direction: BusDirection::Pull,
+            conditional: false,
+        };
+        assert!(verify_with(&proof, &push, &wrong_activation, 2).is_err());
+
+        // A height change moves the block prefix while retaining the same AIR declarations.
+        assert!(matches!(
+            verify_with(&proof, &push, &pull, 3),
+            Err(VerificationError::BusArgument(_))
+        ));
+
+        // Alter only the prescribed bus-opening answer while retaining its proof shape.
+        let batch = proof.opening.evals.last_mut().unwrap();
+        let original = batch.clone();
+        let mut current = batch.current().to_vec();
+        current[0] += EF::ONE;
+        *batch = p3_sumcheck::OpeningBatch::new(current, batch.next().to_vec());
+        assert!(verify_with(&proof, &push, &pull, 2).is_err());
+        *proof.opening.evals.last_mut().unwrap() = original;
+    }
+
+    #[test]
+    fn mixed_height_bus_uses_the_fixed_all_one_vertex_selector() {
+        let push = ConditionalBusAir {
+            direction: BusDirection::Push,
+            conditional: true,
+        };
+        let pull = ConditionalBusAir {
+            direction: BusDirection::Pull,
+            conditional: true,
+        };
+        let config = config(5, FOLDING);
+        let (pk, vk) = setup(&config, &[&push, &pull], &mut challenger()).unwrap();
+        let push_values = vec![1, 2, 3, 4, 9, 10, 11, 12]
+            .into_iter()
+            .map(F::from_u64)
+            .chain([
+                F::ONE,
+                F::ONE,
+                F::ONE,
+                F::ONE,
+                F::ZERO,
+                F::ZERO,
+                F::ZERO,
+                F::ZERO,
+            ])
+            .collect();
+        let pull_values = vec![1, 2, 3, 4]
+            .into_iter()
+            .map(F::from_u64)
+            .chain([F::ONE; 4])
+            .collect();
+        let proof = prove(
+            &config,
+            ProverInstances::new(vec![
+                ProverInstance::new(
+                    &push,
+                    Table::new(RowMajorMatrix::new(push_values, 8)),
+                    &pk,
+                    &[],
+                ),
+                ProverInstance::new(
+                    &pull,
+                    Table::new(RowMajorMatrix::new(pull_values, 4)),
+                    &pk,
+                    &[],
+                ),
+            ]),
+            0,
+            &mut challenger(),
+        )
+        .unwrap();
+
+        verify(
+            &config,
+            VerifierInstances::new(vec![
+                VerifierInstance::new(&push, &vk, 3, &[]),
+                VerifierInstance::new(&pull, &vk, 2, &[]),
+            ]),
+            &proof,
+            0,
+            &mut challenger(),
+        )
+        .unwrap();
     }
 }

@@ -8,6 +8,9 @@
 use alloc::vec::Vec;
 
 use p3_air::{Air, AirBuilder, BaseAir, BoundaryEnd, BoundaryPublic, RowWindow, WindowAccess};
+use p3_bus::{
+    BusActivation, BusDirection, BusInteractionRecorder, BusSymbolicBuilder, RecordToken,
+};
 use p3_field::{Algebra, ExtensionField, Field, PrimeCharacteristicRing, dot_product};
 use p3_lookup::{
     Count, IndexedLookupBuilder, InteractionBuilder, InteractionSymbolicBuilder, TraceWindow,
@@ -25,6 +28,7 @@ use crate::selectors::BoundaryEvals;
 pub trait VerifierAir<F, EF>:
     BaseAir<F>
     + Air<InteractionSymbolicBuilder<F, EF>>
+    + Air<BusSymbolicBuilder<F, EF>>
     + for<'a> Air<MultilinearFolder<'a, F, EF, EF>>
     + for<'a> Air<InteractionMultilinearFolder<'a, F, EF, EF>>
 where
@@ -39,9 +43,31 @@ where
     EF: ExtensionField<F>,
     A: BaseAir<F>
         + Air<InteractionSymbolicBuilder<F, EF>>
+        + Air<BusSymbolicBuilder<F, EF>>
         + for<'a> Air<MultilinearFolder<'a, F, EF, EF>>
         + for<'a> Air<InteractionMultilinearFolder<'a, F, EF, EF>>,
 {
+}
+
+impl<'a, F, Var, Acc> BusInteractionRecorder for MultilinearFolder<'a, F, Var, Acc>
+where
+    F: PrimeCharacteristicRing + Copy + Sync,
+    Var: Algebra<F> + Copy + Send + Sync,
+    Acc: Algebra<Var> + Copy,
+{
+    fn record_bus_interaction<E: Into<Self::Expr>>(
+        &mut self,
+        _token: RecordToken,
+        _bus_name: &str,
+        _direction: BusDirection,
+        fields: impl IntoIterator<Item = E>,
+        _activation: BusActivation<Self::Expr>,
+    ) {
+        // The bus protocol evaluates its retained symbolic profile after commitment.
+        fields.into_iter().for_each(|field| {
+            let _ = field.into();
+        });
+    }
 }
 
 /// An AIR the multilinear prover can evaluate.
@@ -858,6 +884,27 @@ where
 
     fn num_local_interactions(&self) -> usize {
         self.local_seen
+    }
+}
+
+impl<'a, F, Var, Acc> BusInteractionRecorder for InteractionMultilinearFolder<'a, F, Var, Acc>
+where
+    F: PrimeCharacteristicRing + Copy + Sync,
+    Var: Algebra<F> + Copy + Send + Sync,
+    Acc: Algebra<Var> + Copy,
+{
+    fn record_bus_interaction<E: Into<Self::Expr>>(
+        &mut self,
+        _token: RecordToken,
+        _bus_name: &str,
+        _direction: BusDirection,
+        fields: impl IntoIterator<Item = E>,
+        _activation: BusActivation<Self::Expr>,
+    ) {
+        // Bus expressions are reduced independently from this legacy lookup accumulator.
+        fields.into_iter().for_each(|field| {
+            let _ = field.into();
+        });
     }
 }
 
