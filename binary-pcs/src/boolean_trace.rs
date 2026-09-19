@@ -114,6 +114,9 @@ const ROW_GRAIN: usize = 1 << 12;
 /// Bytes one packed word holds, each indexing one subset-sum table.
 const BYTES_PER_WORD: usize = WORD_BITS / 8;
 
+/// Adjacent packed columns one gather task copies, one source line's worth of words.
+const GATHER_GROUP: usize = 8;
+
 /// Row blocks of 64 rows one task sums with one set of subset-sum tables.
 ///
 /// Large enough that allocating the task's tables is amortised.
@@ -400,51 +403,89 @@ where
         // One word per sixty-four bits of the padded witness, the tail left at zero.
         let mut words = alloc::vec![0u64; 1 << (self.num_variables() - 6)];
 
-        for placement in &placements {
-            let table = &tables[placement.idx()];
-            let column_len = 1usize << table.num_variables();
+        // A column of at least one word owns a run of whole words; a shorter one shares a word.
+        //
+        // Each entry is `(first word or cell, position in placement order, column)`.
+        let mut runs = Vec::new();
+        let mut short = Vec::new();
+        for (position, placement) in placements.iter().enumerate() {
+            let column_len = 1usize << tables[placement.idx()].num_variables();
             for (column, selector) in placement.selectors().iter().enumerate() {
                 // A slot starts at a multiple of its own length, counted in cells.
                 let offset = selector.index() * column_len;
-                let refuse = || BooleanTraceError::NonBooleanCell {
-                    table: placement.idx(),
-                    column,
-                };
-
-                let view = table.column(column);
-                if let Some(cells) = view.as_dense() {
-                    if column_len >= WORD_BITS {
-                        // The slot is word aligned and fills whole words, so none is read back.
-                        let (runs, rest) = cells.as_chunks::<WORD_BITS>();
-                        debug_assert!(rest.is_empty(), "a power-of-two column fills whole words");
-                        for (word, run) in words[offset / WORD_BITS..].iter_mut().zip(runs) {
-                            *word = pack_word(run).ok_or_else(refuse)?;
-                        }
-                    } else {
-                        // A shorter column sits inside one word, so its bits are set in place.
-                        for (cell, &value) in cells.iter().enumerate() {
-                            let bit = bit_of(value).ok_or_else(refuse)?;
-                            let index = offset + cell;
-                            words[index / WORD_BITS] |= bit << (index % WORD_BITS);
-                        }
-                    }
-                } else if column_len >= WORD_BITS {
-                    let source_words = column_len / WORD_BITS;
-                    for word in 0..source_words {
-                        words[offset / WORD_BITS + word] = view
-                            .boolean_word(word)
-                            .expect("packed column must expose every source word");
-                    }
+                if column_len >= WORD_BITS {
+                    runs.push((offset / WORD_BITS, position, column));
                 } else {
-                    let bits = view
-                        .boolean_word(0)
-                        .expect("packed short column must expose its source word");
-                    for cell in 0..column_len {
-                        let index = offset + cell;
-                        words[index / WORD_BITS] |= ((bits >> cell) & 1) << (index % WORD_BITS);
-                    }
+                    short.push((offset, position, column));
                 }
             }
+        }
+
+        // The runs are disjoint, so they are carved out of the witness and filled in parallel.
+        //
+        // Packed columns of one table go in groups of adjacent columns: one block row holds
+        // their words side by side, so a group reads each source line once.
+        runs.sort_unstable_by_key(|&(offset, ..)| offset);
+        let mut rest = words.as_mut_slice();
+        let mut consumed = 0;
+        let mut carved = Vec::with_capacity(runs.len());
+        for (offset, position, column) in runs {
+            let len = (1usize << tables[placements[position].idx()].num_variables()) / WORD_BITS;
+            let (_, tail) = core::mem::take(&mut rest).split_at_mut(offset - consumed);
+            let (run, tail) = tail.split_at_mut(len);
+            carved.push((position, column, run));
+            rest = tail;
+            consumed = offset + len;
+        }
+        carved.sort_unstable_by_key(|&(position, column, _)| (position, column));
+        let mut groups: Vec<Vec<(usize, usize, &mut [u64])>> = Vec::new();
+        for entry in carved {
+            let packed = tables[placements[entry.0].idx()].packed_bits().is_some();
+            match groups.last_mut() {
+                Some(group)
+                    if packed
+                        && group.len() < GATHER_GROUP
+                        && group[0].0 == entry.0
+                        && group[0].1 / GATHER_GROUP == entry.1 / GATHER_GROUP =>
+                {
+                    group.push(entry);
+                }
+                _ => groups.push(alloc::vec![entry]),
+            }
+        }
+
+        // A refusal names the first offending column in placement order, as a serial walk would.
+        let long_refusal = groups
+            .into_par_iter()
+            .filter_map(|group| gather_runs(tables, &placements, group))
+            .min();
+
+        // A short column's bits are set in place, inside a word other columns may share.
+        let mut short_refusal = None;
+        for (offset, position, column) in short {
+            let table = &tables[placements[position].idx()];
+            let view = table.column(column);
+            let bits = if let Some(cells) = view.as_dense() {
+                let Some(bits) = pack_word(cells) else {
+                    short_refusal = Some((position, column));
+                    break;
+                };
+                bits
+            } else {
+                view.boolean_word(0)
+                    .expect("packed short column must expose its source word")
+            };
+            for cell in 0..view.len() {
+                let index = offset + cell;
+                words[index / WORD_BITS] |= ((bits >> cell) & 1) << (index % WORD_BITS);
+            }
+        }
+
+        if let Some((position, column)) = long_refusal.into_iter().chain(short_refusal).min() {
+            return Err(BooleanTraceError::NonBooleanCell {
+                table: placements[position].idx(),
+                column,
+            });
         }
 
         // Lane `j` of a block is bit `j` of its word, which is the packing's own convention.
@@ -523,6 +564,43 @@ fn packed_column_sums<EF: Field>(words: &RowMajorMatrix<u64>, row_weights: &[EF]
                 left
             },
         )
+}
+
+/// Fill the word runs of one group of columns, returning the first column refused.
+///
+/// A group is one dense column, or up to [`GATHER_GROUP`] adjacent packed columns of one table.
+///
+/// Each entry is `(position in placement order, column, the column's word run)`.
+fn gather_runs<EF: Field>(
+    tables: &[Table<EF>],
+    placements: &[TablePlacement],
+    mut group: Vec<(usize, usize, &mut [u64])>,
+) -> Option<(usize, usize)> {
+    let table = &tables[placements[group[0].0].idx()];
+    if let Some(source) = table.packed_bits() {
+        // Block row `b` holds word `b` of every column, so one row serves the whole group.
+        for (block, row) in source.values.chunks_exact(source.width).enumerate() {
+            for (_, column, run) in &mut group {
+                run[block] = row[*column];
+            }
+        }
+        return None;
+    }
+    let (position, column, run) = &mut group[0];
+    let cells = table
+        .column(*column)
+        .as_dense()
+        .expect("an unpacked table holds dense columns");
+    // The slot is word aligned and fills whole words, so none is read back.
+    let (chunks, rest) = cells.as_chunks::<WORD_BITS>();
+    debug_assert!(rest.is_empty(), "a power-of-two column fills whole words");
+    for (word, chunk) in run.iter_mut().zip(chunks) {
+        let Some(bits) = pack_word(chunk) else {
+            return Some((*position, *column));
+        };
+        *word = bits;
+    }
+    None
 }
 
 /// The bit of a cell holding zero or one, and nothing for any other value.
@@ -1233,6 +1311,82 @@ mod tests {
                 "{height}x{width}"
             );
         }
+    }
+
+    #[test]
+    fn gathered_bits_place_every_cell_at_its_slot() {
+        // Packed and dense, long and short, and packed tables spanning several column groups.
+        let shapes = [
+            TableShape::new(7, 2 * GATHER_GROUP + 3),
+            TableShape::new(6, 5),
+            TableShape::new(4, GATHER_GROUP + 1),
+            TableShape::new(3, 3),
+        ];
+        let dense = shapes
+            .iter()
+            .enumerate()
+            .map(|(seed, shape)| {
+                table_with_width(seed as u64, shape.num_variables(), shape.width())
+            })
+            .collect::<Vec<_>>();
+        let tables = alloc::vec![
+            packed_table(&dense[0]),
+            dense[1].clone(),
+            packed_table(&dense[2]),
+            dense[3].clone(),
+        ];
+        let scheme = pcs(&shapes);
+
+        let mut expected = alloc::vec![0u64; 1 << (scheme.num_variables() - 6)];
+        for placement in scheme.placements(&shapes).unwrap() {
+            let table = &dense[placement.idx()];
+            let column_len = 1usize << table.num_variables();
+            for (column, selector) in placement.selectors().iter().enumerate() {
+                for row in 0..column_len {
+                    if table.column(column).value(row) == EF::ONE {
+                        let index = selector.index() * column_len + row;
+                        expected[index / WORD_BITS] |= 1 << (index % WORD_BITS);
+                    }
+                }
+            }
+        }
+
+        let gathered = scheme.gather_bits(&tables).unwrap();
+        let gathered = gathered
+            .iter()
+            .map(|word| word.to_bits())
+            .collect::<Vec<_>>();
+        assert_eq!(gathered, expected);
+    }
+
+    #[test]
+    fn a_gather_refuses_the_first_non_boolean_column_in_placement_order() {
+        // The taller table is placed first, so its columns are reached before the short table's.
+        let shapes = [TableShape::new(3, 2), TableShape::new(7, 4)];
+        let scheme = pcs(&shapes);
+        let refused = |bad: &[(usize, usize)]| {
+            let tables = shapes
+                .iter()
+                .enumerate()
+                .map(|(index, shape)| {
+                    let rows = 1 << shape.num_variables();
+                    let table =
+                        table_with_width(index as u64, shape.num_variables(), shape.width());
+                    let mut cells = table.iter_polys().flatten().copied().collect::<Vec<_>>();
+                    for &(_, column) in bad.iter().filter(|&&(table, _)| table == index) {
+                        cells[column * rows + rows / 2] = EF::GENERATOR;
+                    }
+                    Table::new(RowMajorMatrix::new(cells, rows))
+                })
+                .collect::<Vec<_>>();
+            match scheme.gather_bits(&tables) {
+                Err(BooleanTraceError::NonBooleanCell { table, column }) => (table, column),
+                _ => panic!("a non-Boolean cell must be refused"),
+            }
+        };
+        assert_eq!(refused(&[(0, 1), (1, 3)]), (1, 3));
+        assert_eq!(refused(&[(1, 3), (1, 1)]), (1, 1));
+        assert_eq!(refused(&[(0, 1), (0, 0)]), (0, 0));
     }
 
     /// A commitment over the batch these shapes describe.
