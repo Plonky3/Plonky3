@@ -31,11 +31,13 @@ pub const COLUMN_BATCH_LABEL: &str = "column-batching";
 /// at most `num_batches * k / |F|`.
 #[must_use]
 pub fn column_batch_error(num_batches: usize, k: usize, field_bits: usize) -> ErrorBits {
-    let challenges = num_batches.checked_mul(k).unwrap_or(usize::MAX);
-    if challenges == 0 {
+    if num_batches == 0 || k == 0 {
         return ErrorBits::from_log2(f64::INFINITY);
     }
-    ErrorBits::from_log2(field_bits as f64 - log2(challenges as f64))
+    // Keep the product in the logarithm's domain: usize multiplication can overflow even
+    // though the union-bound degree is representable as a floating-point number.
+    let log_challenges = log2(num_batches as f64) + log2(k as f64);
+    ErrorBits::from_log2(field_bits as f64 - log_challenges)
 }
 
 /// The labelled column-batching soundness term.
@@ -862,5 +864,14 @@ mod tests {
         let term = column_batch_term(4, 3, 128);
         assert_eq!(term.label, COLUMN_BATCH_LABEL);
         assert_eq!(term.bits.bits(), four);
+    }
+
+    #[test]
+    fn column_batching_does_not_cap_an_overflowing_count() {
+        let batches = usize::MAX;
+        let coordinates = usize::MAX;
+        let expected = 128.0 - log2(batches as f64) - log2(coordinates as f64);
+        let actual = column_batch_error(batches, coordinates, 128).bits();
+        assert!((actual - expected).abs() < 1e-9, "{actual} vs {expected}");
     }
 }

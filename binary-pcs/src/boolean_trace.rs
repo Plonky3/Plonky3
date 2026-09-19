@@ -586,6 +586,10 @@ where
 {
     fn prescribed_security(&self, protocol: &OpeningProtocol) -> Option<PrescribedOpeningSecurity> {
         // A protocol this scheme would refuse gets no assessment, so a caller fails closed.
+        let shapes = protocol.table_shapes();
+        if plan_stacked_layout(&shapes).0 != self.num_variables() {
+            return None;
+        }
         if let Some(width) = self.batched_width(protocol) {
             let batches = protocol.num_openings();
             let k = width.next_power_of_two().trailing_zeros() as usize;
@@ -652,6 +656,11 @@ where
             .inner
             .open_at_points(inner, &batched_points, challenger)
             .map_err(BooleanTraceError::Boolean)?;
+        if actual.len() != expected.len() {
+            return Err(BooleanTraceError::ColumnBatchValueMismatch {
+                batch: expected.len(),
+            });
+        }
         for (batch, (&actual, &expected)) in actual.iter().zip(&expected).enumerate() {
             if actual != expected {
                 return Err(BooleanTraceError::ColumnBatchValueMismatch { batch });
@@ -1127,5 +1136,259 @@ mod tests {
             .find(|term| term.label == "bit-ring-switch")
             .unwrap();
         assert!(ring_switch.bits.bits().is_finite());
+    }
+
+    #[test]
+    fn optimized_security_rejects_a_protocol_with_the_wrong_stacked_arity() {
+        let committed_shape = TableShape::new(8, 3);
+        let scheme = pcs(&[committed_shape]);
+        let protocol_shape = TableShape::new(8, 2);
+        let protocol = OpeningProtocol::new(vec![TableSpec::new(
+            protocol_shape,
+            vec![OpeningBatch::new(vec![0, 1], Vec::new())],
+        )]);
+
+        let security = <BooleanTracePcs<EF, MyMmcs, MyMmcs> as PrescribedPointPcs<
+            EF,
+            MyChallenger,
+        >>::prescribed_security(&scheme, &protocol);
+        assert!(security.is_none());
+    }
+
+    #[test]
+    fn non_power_two_complete_batches_round_trip_below_and_above_packing_width() {
+        // Widths three and five exercise zero padding, while heights below and above 128
+        // rows cover the short-column-in-word and whole-word packing layouts.
+        for (width, log_height, num_batches, seed) in [
+            (3, 6, 2, 0xB506),
+            (3, 8, 2, 0xB507),
+            (5, 6, 1, 0xB508),
+            (5, 8, 1, 0xB509),
+        ] {
+            let shape = TableShape::new(log_height, width);
+            let scheme = pcs(&[shape]);
+            let protocol = OpeningProtocol::new(vec![TableSpec::new(
+                shape,
+                (0..num_batches)
+                    .map(|_| OpeningBatch::new((0..width).collect(), Vec::new()))
+                    .collect(),
+            )]);
+            let table = table_with_width(seed, log_height, width);
+            let mut rng = SmallRng::seed_from_u64(seed + 1);
+            let points = (0..num_batches)
+                .map(|_| Point::<EF>::rand(&mut rng, log_height))
+                .collect::<Vec<_>>();
+
+            let mut prover_chal = challenger();
+            let (commitment, data) = scheme
+                .commit(vec![table.clone()], &mut prover_chal)
+                .unwrap();
+            let proof = scheme
+                .open_at(data, &protocol, &points, &mut prover_chal)
+                .unwrap();
+            assert_eq!(proof.opening.reductions.len(), num_batches);
+
+            let mut verifier_chal = challenger();
+            scheme.observe_commitment(&commitment, &mut verifier_chal);
+            let evals = scheme
+                .verify_at(&commitment, &proof, &protocol, &points, &mut verifier_chal)
+                .unwrap();
+            for (batch, point) in points.iter().enumerate() {
+                for column in 0..width {
+                    let reference = Poly::new(table.poly(column).as_slice().to_vec());
+                    assert_eq!(evals[batch].current()[column], reference.eval_base(point));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn optimized_proofs_reject_each_column_tampering_reduction_tampering_and_point_reordering() {
+        let shape = TableShape::new(8, 3);
+        let scheme = pcs(&[shape]);
+        let protocol = OpeningProtocol::new(vec![TableSpec::new(
+            shape,
+            vec![
+                OpeningBatch::new(vec![0, 1, 2], Vec::new()),
+                OpeningBatch::new(vec![0, 1, 2], Vec::new()),
+            ],
+        )]);
+        let table = table_with_width(0xB50A, 8, 3);
+        let mut rng = SmallRng::seed_from_u64(0xB50B);
+        let points = vec![Point::<EF>::rand(&mut rng, 8), Point::rand(&mut rng, 8)];
+        let mut prover_chal = challenger();
+        let (commitment, data) = scheme.commit(vec![table], &mut prover_chal).unwrap();
+        let proof = scheme
+            .open_at(data, &protocol, &points, &mut prover_chal)
+            .unwrap();
+
+        // Untampered control.
+        let mut verifier_chal = challenger();
+        scheme.observe_commitment(&commitment, &mut verifier_chal);
+        scheme
+            .verify_at(&commitment, &proof, &protocol, &points, &mut verifier_chal)
+            .unwrap();
+
+        for index in 0..proof.values.len() {
+            let mut tampered = proof.clone();
+            tampered.values[index] += EF::ONE;
+            let mut verifier_chal = challenger();
+            scheme.observe_commitment(&commitment, &mut verifier_chal);
+            assert!(
+                scheme
+                    .verify_at(
+                        &commitment,
+                        &tampered,
+                        &protocol,
+                        &points,
+                        &mut verifier_chal
+                    )
+                    .is_err()
+            );
+        }
+
+        let mut tampered = proof.clone();
+        tampered.opening.reductions.pop();
+        let mut verifier_chal = challenger();
+        scheme.observe_commitment(&commitment, &mut verifier_chal);
+        assert!(
+            scheme
+                .verify_at(
+                    &commitment,
+                    &tampered,
+                    &protocol,
+                    &points,
+                    &mut verifier_chal
+                )
+                .is_err()
+        );
+
+        let mut verifier_chal = challenger();
+        scheme.observe_commitment(&commitment, &mut verifier_chal);
+        let reordered = vec![points[1].clone(), points[0].clone()];
+        assert!(
+            scheme
+                .verify_at(
+                    &commitment,
+                    &proof,
+                    &protocol,
+                    &reordered,
+                    &mut verifier_chal
+                )
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn optimized_shape_errors_leave_the_prover_transcript_untouched() {
+        let shape = TableShape::new(8, 3);
+        let scheme = pcs(&[shape]);
+        let protocol = OpeningProtocol::new(vec![TableSpec::new(
+            shape,
+            vec![OpeningBatch::new(vec![0, 1, 2], vec![0])],
+        )]);
+        let mut prover_chal = challenger();
+        let (_, data) = scheme
+            .commit(vec![table_with_width(0xB50C, 8, 3)], &mut prover_chal)
+            .unwrap();
+        let mut expected = prover_chal.clone();
+        let point = Point::<EF>::rand(&mut SmallRng::seed_from_u64(0xB50D), 8);
+        let error = match scheme.open_at(data, &protocol, &[point], &mut prover_chal) {
+            Ok(_) => panic!("successor views must be rejected"),
+            Err(error) => error,
+        };
+        assert!(matches!(
+            error,
+            BooleanTraceError::SuccessorView { table: 0 }
+        ));
+        assert_eq!(
+            p3_challenger::CanSample::<EF>::sample(&mut prover_chal),
+            p3_challenger::CanSample::<EF>::sample(&mut expected),
+        );
+
+        let valid_protocol = OpeningProtocol::new(vec![TableSpec::new(
+            shape,
+            vec![OpeningBatch::new(vec![0, 1, 2], Vec::new())],
+        )]);
+        let mut prover_chal = challenger();
+        let (_, data) = scheme
+            .commit(vec![table_with_width(0xB510, 8, 3)], &mut prover_chal)
+            .unwrap();
+        let mut expected = prover_chal.clone();
+        let bad_point = Point::<EF>::rand(&mut SmallRng::seed_from_u64(0xB511), 7);
+        let error = match scheme.open_at(data, &valid_protocol, &[bad_point], &mut prover_chal) {
+            Ok(_) => panic!("a point with the wrong arity must be rejected"),
+            Err(error) => error,
+        };
+        assert!(matches!(
+            error,
+            BooleanTraceError::PointArity { table: 0, .. }
+        ));
+        assert_eq!(
+            p3_challenger::CanSample::<EF>::sample(&mut prover_chal),
+            p3_challenger::CanSample::<EF>::sample(&mut expected),
+        );
+
+        let narrow_shape = TableShape::new(8, 2);
+        let narrow_protocol = OpeningProtocol::new(vec![TableSpec::new(
+            narrow_shape,
+            vec![OpeningBatch::new(vec![0, 1], Vec::new())],
+        )]);
+        let mut prover_chal = challenger();
+        let (_, data) = scheme
+            .commit(vec![table_with_width(0xB512, 8, 3)], &mut prover_chal)
+            .unwrap();
+        let mut expected = prover_chal.clone();
+        let point = Point::<EF>::rand(&mut SmallRng::seed_from_u64(0xB513), 8);
+        let error = match scheme.open_at(data, &narrow_protocol, &[point], &mut prover_chal) {
+            Ok(_) => panic!("a protocol with the wrong stacked arity must be rejected"),
+            Err(error) => error,
+        };
+        assert!(matches!(error, BooleanTraceError::StackedArity { .. }));
+        assert_eq!(
+            p3_challenger::CanSample::<EF>::sample(&mut prover_chal),
+            p3_challenger::CanSample::<EF>::sample(&mut expected),
+        );
+    }
+
+    #[test]
+    fn reordered_subset_batches_use_the_fallback_column_route() {
+        let shape = TableShape::new(8, 3);
+        let scheme = pcs(&[shape]);
+        let protocol = OpeningProtocol::new(vec![TableSpec::new(
+            shape,
+            vec![OpeningBatch::new(vec![2, 0], Vec::new())],
+        )]);
+        let table = table_with_width(0xB50E, 8, 3);
+        let point = Point::<EF>::rand(&mut SmallRng::seed_from_u64(0xB50F), 8);
+
+        let mut prover_chal = challenger();
+        let (commitment, data) = scheme
+            .commit(vec![table.clone()], &mut prover_chal)
+            .unwrap();
+        let proof = scheme
+            .open_at(data, &protocol, &[point.clone()], &mut prover_chal)
+            .unwrap();
+        assert_eq!(proof.values.len(), 2);
+        assert_eq!(proof.opening.reductions.len(), 2);
+
+        let mut verifier_chal = challenger();
+        scheme.observe_commitment(&commitment, &mut verifier_chal);
+        let evals = scheme
+            .verify_at(
+                &commitment,
+                &proof,
+                &protocol,
+                &[point.clone()],
+                &mut verifier_chal,
+            )
+            .unwrap();
+        assert_eq!(
+            evals[0].current(),
+            &[
+                Poly::new(table.poly(2).as_slice().to_vec()).eval_base(&point),
+                Poly::new(table.poly(0).as_slice().to_vec()).eval_base(&point),
+            ]
+        );
     }
 }
