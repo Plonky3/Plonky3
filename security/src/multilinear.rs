@@ -21,6 +21,32 @@ use crate::{ErrorBits, SecurityTerm};
 /// Label for the bit-alphabet ring-switch term.
 pub const BIT_RING_SWITCH_LABEL: &str = "bit-ring-switch";
 
+/// Label for the independent column-point challenge in a batched opening.
+pub const COLUMN_BATCH_LABEL: &str = "column-batching";
+
+/// Error of batching `num_batches` column openings with `k` fresh coordinates each.
+///
+/// Every coordinate is sampled independently from the transcript after the claimed
+/// column values are bound. A nonzero discrepancy therefore survives with probability
+/// at most `num_batches * k / |F|`.
+#[must_use]
+pub fn column_batch_error(num_batches: usize, k: usize, field_bits: usize) -> ErrorBits {
+    let challenges = num_batches.checked_mul(k).unwrap_or(usize::MAX);
+    if challenges == 0 {
+        return ErrorBits::from_log2(f64::INFINITY);
+    }
+    ErrorBits::from_log2(field_bits as f64 - log2(challenges as f64))
+}
+
+/// The labelled column-batching soundness term.
+#[must_use]
+pub fn column_batch_term(num_batches: usize, k: usize, field_bits: usize) -> SecurityTerm {
+    SecurityTerm::new(
+        COLUMN_BATCH_LABEL,
+        column_batch_error(num_batches, k, field_bits),
+    )
+}
+
 /// Error of reducing claims about a bit witness to claims about the elements packing it.
 ///
 /// One element holds `2^absorbed_log` bits, so a point of `n` variables splits in two:
@@ -821,6 +847,20 @@ mod tests {
         // The term carries the same number under its own label.
         let term = bit_ring_switch_term(4, 7, 4, 128);
         assert_eq!(term.label, BIT_RING_SWITCH_LABEL);
+        assert_eq!(term.bits.bits(), four);
+    }
+
+    #[test]
+    fn column_batching_charges_one_coordinate_per_batch() {
+        let one = column_batch_error(1, 3, 128).bits();
+        let four = column_batch_error(4, 3, 128).bits();
+        assert!((one - (128.0 - log2(3.0))).abs() < 1e-9, "{one}");
+        assert!((one - four - 2.0).abs() < 1e-9, "{one} {four}");
+        assert!(column_batch_error(0, 3, 128).bits().is_infinite());
+        assert!(column_batch_error(4, 0, 128).bits().is_infinite());
+
+        let term = column_batch_term(4, 3, 128);
+        assert_eq!(term.label, COLUMN_BATCH_LABEL);
         assert_eq!(term.bits.bits(), four);
     }
 }

@@ -22,12 +22,17 @@
 //!
 //! # Work stays inside the column
 //!
-//! The slot prefix is fixed before the ring-switch sumcheck starts.
+//! The slot prefix is fixed before the ring-switch sumcheck starts. For a complete
+//! current-row opening of one table, all its columns are combined at one fresh random
+//! column point after their claimed values are bound, so the batch uses one ring switch.
+//! Other valid protocols retain one reduction per selected column.
 //!
 //! If one element holds `2^d_log` bits, a column folds `2^max(a - d_log, 0)` elements.
 //!
-//! Opening `W` equal-height columns costs `W * 2^max(a - d_log, 0)` field work.
-//! It does not scan the `W`-column stack once per column.
+//! Opening `W` equal-height columns shares the row equality weights across columns. The
+//! optimized complete-table route scans those weights once per batch and opens one padded
+//! stacked point; subset, reordered, mixed-height, and successor-free fallback protocols
+//! continue to use their existing per-column route.
 //!
 //! # Booleanity is still free
 //!
@@ -62,6 +67,8 @@ use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingC
 use p3_commit::{Mmcs, MultilinearPcs};
 use p3_field::Field;
 use p3_multilinear_util::point::Point;
+use p3_multilinear_util::poly::Poly;
+use p3_multilinear_util::split_eq::SplitEq;
 use p3_sumcheck::layout::{Table, TablePlacement, plan_stacked_layout};
 use p3_sumcheck::{
     OpeningEvals, OpeningProtocol, PrescribedOpeningSecurity, PrescribedPointPcs, TableShape,
@@ -70,6 +77,9 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::boolean::{BooleanMultilinearPcs, BooleanPcs, BooleanPcsError, BooleanProof};
+use crate::boolean_trace_transcript::{
+    ColumnBatchProverTranscript, ColumnBatchShape, ColumnBatchVerifierTranscript,
+};
 use crate::fold::{ChallengeField, FoldAlphabet};
 use crate::packing::Coordinates;
 use crate::params::BinaryPcsConfig;
@@ -159,13 +169,7 @@ where
         points: &[Point<EF>],
     ) -> Result<Vec<Point<EF>>, BooleanTraceError<EF, MT::Error>> {
         let shapes = protocol.table_shapes();
-        let placements = self.placements(&shapes)?;
-        if points.len() != protocol.num_openings() {
-            return Err(BooleanTraceError::PointCount {
-                expected: protocol.num_openings(),
-                actual: points.len(),
-            });
-        }
+        let placements = self.validate_opening(protocol, points)?;
 
         // Placements arrive largest table first, so index them by the table each one owns.
         let mut by_table = alloc::vec![None; shapes.len()];
@@ -174,6 +178,32 @@ where
         }
 
         let mut lifted = Vec::with_capacity(points.len());
+        for ((table, batch), point) in protocol.iter_openings().zip(points) {
+            let placement = by_table[table].expect("the planner places every supplied shape");
+
+            // Slot address as the leading coordinates, the row point as the trailing ones.
+            for &column in batch.current() {
+                lifted.push(placement.selectors()[column].lift_prefix(point));
+            }
+        }
+        Ok(lifted)
+    }
+
+    /// Validate all public opening metadata without constructing per-column points.
+    fn validate_opening(
+        &self,
+        protocol: &OpeningProtocol,
+        points: &[Point<EF>],
+    ) -> Result<Vec<TablePlacement>, BooleanTraceError<EF, MT::Error>> {
+        let shapes = protocol.table_shapes();
+        let placements = self.placements(&shapes)?;
+        if points.len() != protocol.num_openings() {
+            return Err(BooleanTraceError::PointCount {
+                expected: protocol.num_openings(),
+                actual: points.len(),
+            });
+        }
+
         for ((table, batch), point) in protocol.iter_openings().zip(points) {
             if !batch.next().is_empty() {
                 return Err(BooleanTraceError::SuccessorView { table });
@@ -185,14 +215,8 @@ where
                     actual: point.num_variables(),
                 });
             }
-            let placement = by_table[table].expect("the planner places every supplied shape");
-
-            // Slot address as the leading coordinates, the row point as the trailing ones.
-            for &column in batch.current() {
-                lifted.push(placement.selectors()[column].lift_prefix(point));
-            }
         }
-        Ok(lifted)
+        Ok(placements)
     }
 
     /// Bit claims one protocol raises, or nothing for a protocol this scheme refuses.
@@ -207,6 +231,40 @@ where
             .iter_openings()
             .map(|(_, batch)| batch.next().is_empty().then(|| batch.current().len()))
             .sum()
+    }
+
+    /// Whether this protocol is the complete single-table shape the optimized route handles.
+    fn batched_width(&self, protocol: &OpeningProtocol) -> Option<usize> {
+        let shapes = protocol.table_shapes();
+        if shapes.len() != 1 || protocol.num_openings() == 0 {
+            return None;
+        }
+        let width = shapes[0].width();
+        let columns = (0..width).collect::<Vec<_>>();
+        if protocol.iter_openings().all(|(table, batch)| {
+            table == 0 && batch.next().is_empty() && batch.current() == columns.as_slice()
+        }) {
+            Some(width)
+        } else {
+            None
+        }
+    }
+
+    /// Evaluate every column at one row point while sharing the equality weights.
+    fn evaluate_columns(table: &Table<EF>, point: &Point<EF>) -> Vec<EF> {
+        let weights = SplitEq::<EF, EF>::new_packed(point, EF::ONE);
+        (0..table.shape().width())
+            .map(|column| weights.eval_base(table.poly(column)))
+            .collect()
+    }
+
+    /// Evaluate the zero-padded column-value vector at its sampled column point.
+    fn combine_columns(values: &[EF], column_point: &Point<EF>) -> EF {
+        let padded_len = 1usize << column_point.num_variables();
+        let mut padded = Vec::with_capacity(padded_len);
+        padded.extend_from_slice(values);
+        padded.resize(padded_len, EF::ZERO);
+        SplitEq::<EF, EF>::new_packed(column_point, EF::ONE).eval_ext(Poly::new(padded).as_view())
     }
 
     /// Gather the Boolean cells of every table into one bit witness.
@@ -412,6 +470,17 @@ pub enum BooleanTraceError<EF, MmcsError> {
         /// Values the proof carries.
         actual: usize,
     },
+
+    /// A typed column-batching transcript could not replay its proof shape.
+    #[error(transparent)]
+    ColumnBatchTranscript(#[from] p3_challenger::fs::TranscriptError),
+
+    /// The inner opening disagreed with the prover's independently computed batch value.
+    #[error("column batch {batch} returned an aggregate value different from its claimed columns")]
+    ColumnBatchValueMismatch {
+        /// Batch whose aggregate value disagreed.
+        batch: usize,
+    },
 }
 
 impl<EF, MT, MX, Challenger> MultilinearPcs<EF, Challenger> for BooleanTracePcs<EF, MT, MX>
@@ -517,8 +586,22 @@ where
 {
     fn prescribed_security(&self, protocol: &OpeningProtocol) -> Option<PrescribedOpeningSecurity> {
         // A protocol this scheme would refuse gets no assessment, so a caller fails closed.
-        self.opening_claim_count(protocol)
-            .map(|claims| self.inner.opening_security(claims))
+        if let Some(width) = self.batched_width(protocol) {
+            let batches = protocol.num_openings();
+            let k = width.next_power_of_two().trailing_zeros() as usize;
+            let mut security = self.inner.opening_security(batches);
+            security
+                .terms
+                .push(p3_security::multilinear::column_batch_term(
+                    batches,
+                    k,
+                    EF::bits(),
+                ));
+            Some(security)
+        } else {
+            self.opening_claim_count(protocol)
+                .map(|claims| self.inner.opening_security(claims))
+        }
     }
 
     fn open_at(
@@ -529,11 +612,51 @@ where
         challenger: &mut Challenger,
     ) -> Result<Self::Proof, Self::ProverError> {
         // Every shape and every point is checked before the transcript moves.
-        let lifted = self.opening_points(protocol, points)?;
-        let (values, opening) = self
+        self.validate_opening(protocol, points)?;
+        let Some(width) = self.batched_width(protocol) else {
+            let lifted = self.opening_points(protocol, points)?;
+            let (values, opening) = self
+                .inner
+                .open_at_points(prover_data.inner, &lifted, challenger)
+                .map_err(BooleanTraceError::Boolean)?;
+            return Ok(BooleanTraceProof { values, opening });
+        };
+
+        let BooleanTraceData { inner, tables } = prover_data;
+        let shape = ColumnBatchShape {
+            table_variables: protocol.table_shapes()[0].num_variables(),
+            width,
+            num_batches: protocol.num_openings(),
+        };
+        let mut values = Vec::with_capacity(width * shape.num_batches);
+        for point in points {
+            values.extend(Self::evaluate_columns(&tables[0], point));
+        }
+
+        let mut transcript = ColumnBatchProverTranscript::new(challenger, shape);
+        let mut batched_points = Vec::with_capacity(shape.num_batches);
+        let mut expected = Vec::with_capacity(shape.num_batches);
+        for (batch, (point, batch_values)) in
+            points.iter().zip(values.chunks_exact(width)).enumerate()
+        {
+            let column_point = transcript.batch(point, batch_values);
+            expected.push(Self::combine_columns(batch_values, &column_point));
+            let mut lifted_point = column_point;
+            lifted_point.extend(point);
+            batched_points.push(lifted_point);
+            debug_assert_eq!(batch, batched_points.len() - 1);
+        }
+        transcript.finish();
+
+        let (actual, opening) = self
             .inner
-            .open_at_points(prover_data.inner, &lifted, challenger)
+            .open_at_points(inner, &batched_points, challenger)
             .map_err(BooleanTraceError::Boolean)?;
+        for (batch, (&actual, &expected)) in actual.iter().zip(&expected).enumerate() {
+            if actual != expected {
+                return Err(BooleanTraceError::ColumnBatchValueMismatch { batch });
+            }
+        }
         Ok(BooleanTraceProof { values, opening })
     }
 
@@ -545,20 +668,72 @@ where
         points: &[Point<EF>],
         challenger: &mut Challenger,
     ) -> Result<Vec<OpeningEvals<EF>>, Self::Error> {
-        let lifted = self.opening_points(protocol, points)?;
-        if proof.values.len() != lifted.len() {
+        self.validate_opening(protocol, points)?;
+        let Some(width) = self.batched_width(protocol) else {
+            let lifted = self.opening_points(protocol, points)?;
+            if proof.values.len() != lifted.len() {
+                return Err(BooleanTraceError::ValueCount {
+                    expected: lifted.len(),
+                    actual: proof.values.len(),
+                });
+            }
+
+            // One bit proof answers for every column of every batch at once.
+            self.inner
+                .verify_at_points(
+                    commitment,
+                    &lifted,
+                    &proof.values,
+                    &proof.opening,
+                    challenger,
+                )
+                .map_err(BooleanTraceError::Boolean)?;
+
+            // Split the flat value run back into one batch of current-row values per opening.
+            let mut evals = Vec::with_capacity(protocol.num_openings());
+            let mut cursor = 0;
+            for (_, batch) in protocol.iter_openings() {
+                let width = batch.current().len();
+                evals.push(OpeningEvals::new(
+                    proof.values[cursor..cursor + width].to_vec(),
+                    Vec::new(),
+                ));
+                cursor += width;
+            }
+            return Ok(evals);
+        };
+
+        let expected_values = width * protocol.num_openings();
+        if proof.values.len() != expected_values {
             return Err(BooleanTraceError::ValueCount {
-                expected: lifted.len(),
+                expected: expected_values,
                 actual: proof.values.len(),
             });
         }
 
-        // One bit proof answers for every column of every batch at once.
+        let shape = ColumnBatchShape {
+            table_variables: protocol.table_shapes()[0].num_variables(),
+            width,
+            num_batches: protocol.num_openings(),
+        };
+        let mut transcript = ColumnBatchVerifierTranscript::new(challenger, shape);
+        let mut batched_points = Vec::with_capacity(shape.num_batches);
+        let mut combined_values = Vec::with_capacity(shape.num_batches);
+        for (point, batch_values) in points.iter().zip(proof.values.chunks_exact(width)) {
+            let column_point = transcript.batch(point, batch_values)?;
+            combined_values.push(Self::combine_columns(batch_values, &column_point));
+            let mut lifted_point = column_point;
+            lifted_point.extend(point);
+            batched_points.push(lifted_point);
+        }
+        transcript.finish();
+
+        // One bit proof answers for every batched point at once.
         self.inner
             .verify_at_points(
                 commitment,
-                &lifted,
-                &proof.values,
+                &batched_points,
+                &combined_values,
                 &proof.opening,
                 challenger,
             )
@@ -581,17 +756,18 @@ where
 
 #[cfg(test)]
 mod tests {
+    use alloc::vec;
     use p3_binary_field::BinaryField128;
     use p3_field::PrimeCharacteristicRing;
     use p3_matrix::dense::RowMajorMatrix;
     use p3_multilinear_util::poly::Poly;
-    use p3_sumcheck::{OpeningBatch, TableSpec};
+    use p3_sumcheck::{OpeningBatch, PrescribedPointPcs, TableSpec};
     use rand::rngs::SmallRng;
     use rand::{RngExt, SeedableRng};
 
     use super::*;
     use crate::params::BinaryPcsParams;
-    use crate::test_util::{MyMmcs, challenger, mmcs};
+    use crate::test_util::{MyChallenger, MyMmcs, challenger, mmcs};
 
     type EF = BinaryField128;
 
@@ -603,6 +779,16 @@ mod tests {
         let rows = 1usize << log_height;
         let mut rng = SmallRng::seed_from_u64(seed);
         let cells = (0..FIXTURE_WIDTH * rows)
+            .map(|_| EF::from_bool(rng.random::<bool>()))
+            .collect();
+        Table::new(RowMajorMatrix::new(cells, rows))
+    }
+
+    /// A Boolean table with an explicitly chosen width.
+    fn table_with_width(seed: u64, log_height: usize, width: usize) -> Table<EF> {
+        let rows = 1usize << log_height;
+        let mut rng = SmallRng::seed_from_u64(seed);
+        let cells = (0..width * rows)
             .map(|_| EF::from_bool(rng.random::<bool>()))
             .collect();
         Table::new(RowMajorMatrix::new(cells, rows))
@@ -820,5 +1006,126 @@ mod tests {
                 actual: 1
             }
         ));
+    }
+
+    #[test]
+    fn a_single_table_batch_uses_one_reduction_for_all_columns() {
+        // Invariant: one complete current-row batch for one table is discharged by one
+        // column-point ring switch, regardless of the table width.
+        let shape = TableShape::new(8, 3);
+        let scheme = pcs(&[shape]);
+        let protocol = OpeningProtocol::new(vec![TableSpec::new(
+            shape,
+            vec![OpeningBatch::new(vec![0, 1, 2], Vec::new())],
+        )]);
+        let table = table_with_width(0xB500, 8, 3);
+        let point = Point::<EF>::rand(&mut SmallRng::seed_from_u64(0xB501), 8);
+
+        let mut prover_chal = challenger();
+        let (_, data) = scheme.commit(vec![table], &mut prover_chal).unwrap();
+        let proof = scheme
+            .open_at(data, &protocol, &[point], &mut prover_chal)
+            .unwrap();
+
+        assert_eq!(proof.values.len(), 3);
+        assert_eq!(proof.opening.reductions.len(), 1);
+    }
+
+    #[test]
+    fn batched_values_are_bound_before_the_column_point() {
+        // Changing a claimed column value changes the verifier's column point and therefore
+        // cannot be repaired by reusing the original one-reduction proof.
+        let shape = TableShape::new(8, 3);
+        let scheme = pcs(&[shape]);
+        let protocol = OpeningProtocol::new(vec![TableSpec::new(
+            shape,
+            vec![OpeningBatch::new(vec![0, 1, 2], Vec::new())],
+        )]);
+        let table = table_with_width(0xB502, 8, 3);
+        let point = Point::<EF>::rand(&mut SmallRng::seed_from_u64(0xB503), 8);
+
+        let mut prover_chal = challenger();
+        let (commitment, data) = scheme.commit(vec![table], &mut prover_chal).unwrap();
+        let mut proof = scheme
+            .open_at(data, &protocol, &[point.clone()], &mut prover_chal)
+            .unwrap();
+        proof.values[0] += EF::ONE;
+
+        let mut verifier_chal = challenger();
+        scheme.observe_commitment(&commitment, &mut verifier_chal);
+        assert!(
+            scheme
+                .verify_at(&commitment, &proof, &protocol, &[point], &mut verifier_chal)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn complete_batches_support_multiple_points_and_width_one() {
+        // Width one has no column-point coordinates; two opening batches still use two
+        // independent inner reductions and preserve the ordinary value return format.
+        let shape = TableShape::new(8, 1);
+        let scheme = pcs(&[shape]);
+        let protocol = OpeningProtocol::new(vec![TableSpec::new(
+            shape,
+            vec![
+                OpeningBatch::new(vec![0], Vec::new()),
+                OpeningBatch::new(vec![0], Vec::new()),
+            ],
+        )]);
+        let table = table_with_width(0xB504, 8, 1);
+        let mut rng = SmallRng::seed_from_u64(0xB505);
+        let points = vec![Point::<EF>::rand(&mut rng, 8), Point::rand(&mut rng, 8)];
+
+        let mut prover_chal = challenger();
+        let (commitment, data) = scheme
+            .commit(vec![table.clone()], &mut prover_chal)
+            .unwrap();
+        let proof = scheme
+            .open_at(data, &protocol, &points, &mut prover_chal)
+            .unwrap();
+        assert_eq!(proof.values.len(), 2);
+        assert_eq!(proof.opening.reductions.len(), 2);
+
+        let mut verifier_chal = challenger();
+        scheme.observe_commitment(&commitment, &mut verifier_chal);
+        let evals = scheme
+            .verify_at(&commitment, &proof, &protocol, &points, &mut verifier_chal)
+            .unwrap();
+        for (point, eval) in points.iter().zip(evals) {
+            let reference = Poly::new(table.poly(0).as_slice().to_vec());
+            assert_eq!(eval.current()[0], reference.eval_base(point));
+        }
+    }
+
+    #[test]
+    fn optimized_security_charges_batches_and_column_coordinates() {
+        let shape = TableShape::new(8, 3);
+        let scheme = pcs(&[shape]);
+        let protocol = OpeningProtocol::new(vec![TableSpec::new(
+            shape,
+            vec![
+                OpeningBatch::new(vec![0, 1, 2], Vec::new()),
+                OpeningBatch::new(vec![0, 1, 2], Vec::new()),
+            ],
+        )]);
+
+        let security = <BooleanTracePcs<EF, MyMmcs, MyMmcs> as PrescribedPointPcs<
+            EF,
+            MyChallenger,
+        >>::prescribed_security(&scheme, &protocol)
+        .unwrap();
+        let batching = security
+            .terms
+            .iter()
+            .find(|term| term.label == "column-batching")
+            .unwrap();
+        assert!((batching.bits.bits() - 126.0).abs() < 1e-9);
+        let ring_switch = security
+            .terms
+            .iter()
+            .find(|term| term.label == "bit-ring-switch")
+            .unwrap();
+        assert!(ring_switch.bits.bits().is_finite());
     }
 }
