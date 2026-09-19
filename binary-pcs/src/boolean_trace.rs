@@ -454,7 +454,7 @@ where
             }
         }
 
-        // A refusal names the first offending column in placement order, as a serial walk would.
+        // The smallest (position, column) over all refusals is the first in placement order.
         let long_refusal = groups
             .into_par_iter()
             .filter_map(|group| gather_runs(tables, &placements, group))
@@ -616,7 +616,7 @@ fn bit_of<EF: Field>(value: EF) -> Option<u64> {
     }
 }
 
-/// Sixty-four Boolean cells as one word, the lowest cell in the lowest bit.
+/// Up to sixty-four Boolean cells as one word, the lowest cell in the lowest bit.
 #[inline]
 fn pack_word<EF: Field>(cells: &[EF]) -> Option<u64> {
     // Fold the run into a word; one non-Boolean cell leaves the whole word undefined.
