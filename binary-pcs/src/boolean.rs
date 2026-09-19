@@ -476,7 +476,8 @@ where
             .iter()
             .map(Self::reduction)
             .collect::<Result<Vec<_>, _>>()?;
-        let packing = Self::packing(&prover_data);
+        let packing =
+            tracing::info_span!("read committed packing").in_scope(|| Self::packing(&prover_data));
 
         // One reduction per opening, each leaving one claim about the same packing.
         let mut readings = Vec::with_capacity(openings.len());
