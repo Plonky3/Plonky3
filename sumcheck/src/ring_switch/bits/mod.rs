@@ -33,6 +33,7 @@
 //!     BitTensor       an element of EF (x) EF, as a bit matrix
 //!     BitRingSwitch   one reduction, before the batching draw
 //!     BitRingSwitchBatch  the same reduction, after it
+//!     SuccessorTensors    the two elements a successor view adds past one element's rows
 //! ```
 //!
 //! The reduction owns the two sides that run it, as methods over its own transcript.
@@ -64,7 +65,7 @@ pub use basis::Coefficients;
 pub use packing::{BitPacking, BitPackingError};
 pub use reduction::{
     BitRingSwitch, BitRingSwitchBatch, BitRingSwitchError, BitRingSwitchProof,
-    BitRingSwitchProofError,
+    BitRingSwitchProofError, SuccessorTensors,
 };
 pub use tensor::{BitTensor, MalformedBitTensor};
 pub use transcript::{

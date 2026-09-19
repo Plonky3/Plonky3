@@ -5,6 +5,8 @@
 //! Both sides are methods, because here the reduction has a type to hang them on.
 //! The sibling module's are free functions because there the reduction has none.
 
+use alloc::vec::Vec;
+
 use p3_binary_field::TowerLevel;
 use p3_challenger::fs::TranscriptField;
 use p3_challenger::{FieldChallenger, GrindingChallenger};
@@ -56,9 +58,11 @@ const CHUNK: usize = 1 << 1;
 /// So it cannot be a constructor argument.
 ///
 /// ```text
-///     new(r)          tensor, incoming_claim
-///     bind            r, then the element, then draw r''
-///     batch(r'')      initial_sum, closing_weight, weights
+///     new(r)                              tensor, incoming_claim
+///     with_successor(r, a)                also successor_tensors, successor_claim
+///     bind                                r, then every element, then draw r'' [and alpha]
+///     batch(r'')                          initial_sum, closing_weight, weights
+///     batch_with_successor(r'', alpha)    the same, when successor elements are sent
 /// ```
 ///
 /// Drawing `r''` first is unsound.
@@ -84,8 +88,8 @@ const CHUNK: usize = 1 << 1;
 /// Nothing witness-sized.
 /// This stage holds the kept coordinates and one `d`-entry table.
 ///
-/// Only `tensor` and `weights` touch the `2^l'` equality table.
-/// Both are prover-side, so each builds it rather than every caller paying.
+/// Only `tensor`, `successor_tensors` and `weights` touch the `2^l'` equality table.
+/// All three are prover-side, so each builds it rather than every caller paying.
 ///
 /// # Why a bit alphabet is different
 ///
@@ -93,6 +97,28 @@ const CHUNK: usize = 1 << 1;
 ///
 /// Both the tensor accumulation and the weight multilinear are subset sums.
 /// A general alphabet needs `d` multiplications per hypercube point instead.
+///
+/// # The successor view
+///
+/// The same reduction can also answer the witness one row on, the last row repeating.
+/// The rows are the trailing `a` coordinates of the point; the selector leads it.
+///
+/// The successor weight splits at the packing boundary into three kept-side weights.
+/// With `x(w)` the kept row bits of `w`:
+///
+/// ```text
+///     eq      eq(r_high, w)                        the +1 settles inside the element
+///     carry   eq(r_high, w - 1)  where x(w) != 0   the +1 ripples out of the element
+///     last    eq(r_high, w)      where x(w) = max  the last row repeats
+/// ```
+///
+/// The first is the tensor above, so the view adds two elements and no sumcheck.
+/// Rows that fit in one element keep no row bits, and the view is a column reading alone.
+///
+/// ```text
+///     s_next = sum_{v >= 1} eq_low[v - 1] * col_v(tensor)
+///            + eq_low[d - 1] * ( col_0(carry) + col_{d-1}(last) )
+/// ```
 #[derive(Clone, Debug)]
 pub struct BitRingSwitch<EF> {
     /// The evaluation point of the claim, over every variable of the witness.
@@ -101,6 +127,8 @@ pub struct BitRingSwitch<EF> {
     point: Point<EF>,
     /// The equality table of the coordinates one packed element absorbs.
     eq_low: Poly<EF>,
+    /// The trailing coordinates the successor view steps within, when there is one.
+    successor: Option<usize>,
 }
 
 impl<EF: TowerLevel> BitRingSwitch<EF> {
@@ -133,13 +161,37 @@ impl<EF: TowerLevel> BitRingSwitch<EF> {
         Ok(Self {
             eq_low: Poly::new_from_point(low.as_slice(), EF::ONE),
             point: r.clone(),
+            successor: None,
+        })
+    }
+
+    /// Set up the reduction of a claim at one point, also answering its successor view.
+    ///
+    /// The successor view reads the witness one row on, the last row repeating.
+    /// It steps within the trailing `row_variables` coordinates of the point.
+    /// The coordinates before them select a column and never move.
+    ///
+    /// # Errors
+    ///
+    /// - The row count exceeds the coordinates the point names.
+    /// - The point is narrower than one element absorbs.
+    pub fn with_successor(r: &Point<EF>, row_variables: usize) -> Result<Self, BitRingSwitchError> {
+        if row_variables > r.num_variables() {
+            return Err(BitRingSwitchError::RowVariables {
+                row_variables,
+                num_variables: r.num_variables(),
+            });
+        }
+        Ok(Self {
+            successor: Some(row_variables),
+            ..Self::new(r)?
         })
     }
 
     /// Variables the packed polynomial this reduction runs against must have.
     ///
     /// This is the maximum number of sumcheck rounds the reduction takes.
-    /// Each leading Boolean coordinate selects a slot and removes one round.
+    /// Each leading Boolean selector coordinate selects a slot and removes one round.
     pub const fn num_variables(&self) -> usize {
         self.point.num_variables() - Self::ABSORBED
     }
@@ -151,15 +203,91 @@ impl<EF: TowerLevel> BitRingSwitch<EF> {
         &self.point.as_slice()[..self.num_variables()]
     }
 
+    /// Row coordinates of the successor view the packing keeps, when there are any.
+    ///
+    /// Rows that fit in one element keep none, and the view is a column reading.
+    fn kept_row_variables(&self) -> Option<usize> {
+        self.successor
+            .filter(|&rows| rows > Self::ABSORBED)
+            .map(|rows| rows - Self::ABSORBED)
+    }
+
+    /// Whether the reduction sends the carry and last elements beside the tensor.
+    ///
+    /// True exactly for a successor view whose rows outrun one element.
+    #[must_use]
+    pub fn sends_successor_tensors(&self) -> bool {
+        self.kept_row_variables().is_some()
+    }
+
+    /// The transcript description this reduction plays.
+    fn shape(&self) -> BitRingSwitchShape {
+        let num_variables = self.point.num_variables();
+        match self.successor {
+            Some(rows) if self.sends_successor_tensors() => {
+                BitRingSwitchShape::with_successor_rows(num_variables, rows)
+            }
+            _ => BitRingSwitchShape::new(num_variables),
+        }
+    }
+
     /// Move on to the stage the batching challenge opens.
     ///
     /// # Errors
     ///
-    /// Returns an error unless the challenge names the absorbed coordinates.
+    /// - The reduction sends successor elements, which [`Self::batch_with_successor`] batches.
+    /// - The challenge does not name the absorbed coordinates.
     pub fn batch<'a>(
         &'a self,
         r_batch: &Point<EF>,
     ) -> Result<BitRingSwitchBatch<'a, EF>, BitRingSwitchError> {
+        if self.sends_successor_tensors() {
+            return Err(BitRingSwitchError::SuccessorBatching { expected: true });
+        }
+        self.batch_stage(r_batch, None)
+    }
+
+    /// Move on to the stage the batching challenges open, successor elements included.
+    ///
+    /// `alpha` weighs the three elements' batched rows into one sum:
+    ///
+    /// ```text
+    ///     rows(tensor) + alpha * rows(carry) + alpha^2 * rows(last)
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// - The reduction sends no successor elements, which [`Self::batch`] batches.
+    /// - The challenge does not name the absorbed coordinates.
+    pub fn batch_with_successor<'a>(
+        &'a self,
+        r_batch: &Point<EF>,
+        alpha: EF,
+    ) -> Result<BitRingSwitchBatch<'a, EF>, BitRingSwitchError> {
+        if !self.sends_successor_tensors() {
+            return Err(BitRingSwitchError::SuccessorBatching { expected: false });
+        }
+        self.batch_stage(r_batch, Some(alpha))
+    }
+
+    /// The second stage over whatever the transcript drew, `alpha` present or not.
+    fn batch_drawn(
+        &self,
+        r_batch: &Point<EF>,
+        alpha: Option<EF>,
+    ) -> Result<BitRingSwitchBatch<'_, EF>, BitRingSwitchError> {
+        alpha.map_or_else(
+            || self.batch(r_batch),
+            |alpha| self.batch_with_successor(r_batch, alpha),
+        )
+    }
+
+    /// The second stage over either kind of reduction, once its kind is checked.
+    fn batch_stage(
+        &self,
+        r_batch: &Point<EF>,
+        alpha: Option<EF>,
+    ) -> Result<BitRingSwitchBatch<'_, EF>, BitRingSwitchError> {
         if r_batch.num_variables() != Self::ABSORBED {
             return Err(BitRingSwitchError::BatchWidthMismatch {
                 expected: Self::ABSORBED,
@@ -169,15 +297,29 @@ impl<EF: TowerLevel> BitRingSwitch<EF> {
         Ok(BitRingSwitchBatch {
             reduction: self,
             eq_batch: Poly::new_from_point(r_batch.as_slice(), EF::ONE),
+            alpha,
         })
     }
 
+    /// How many leading kept coordinates a Boolean prefix may fix.
+    ///
+    /// A successor view caps it at the selector.
+    /// The equality factor of a Boolean row coordinate is an indicator too.
+    /// Yet the carry reads the element one before, which that indicator would cut away.
+    fn prefix_limit(&self) -> usize {
+        let limit = self.num_variables();
+        self.successor
+            .map_or(limit, |rows| limit.min(self.point.num_variables() - rows))
+    }
+
     /// The leading Boolean coordinates and the address they spell.
+    ///
+    /// Only the first [`Self::prefix_limit`] coordinates are scanned.
     fn fixed_prefix(&self) -> (usize, usize) {
         // Read the address from most significant bit to least significant bit.
         let mut prefix = 0;
         let mut address = 0usize;
-        for &coordinate in self.high() {
+        for &coordinate in &self.high()[..self.prefix_limit()] {
             // Zero selects the lower half of the remaining evaluation table.
             if coordinate == EF::ZERO {
                 address <<= 1;
@@ -337,6 +479,150 @@ impl<EF: TowerLevel> BitRingSwitch<EF> {
             .sum()
     }
 
+    /// The carry and last elements the successor view adds, when its rows outrun one element.
+    ///
+    /// # Algorithm
+    ///
+    /// Over the run the equality table `E` is supported on, with `x(w)` the kept row bits:
+    ///
+    /// ```text
+    ///     carry  =  sum_{x(w) != 0}   E[w - 1] ⊗ t'(w)    the element before, same column
+    ///     last   =  sum_{x(w) = max}  E[w]     ⊗ t'(w)    the last element of each column
+    /// ```
+    ///
+    /// The prefix never fixes a row coordinate, so `w - 1` stays inside the run.
+    ///
+    /// # Returns
+    ///
+    /// `None` unless the reduction sends successor elements.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error unless the packing has the reduction's variables.
+    pub fn successor_tensors(
+        &self,
+        packing: &BitPacking<EF>,
+    ) -> Result<Option<SuccessorTensors<EF>>, BitRingSwitchError>
+    where
+        EF: Send + Sync,
+    {
+        self.check_width(packing.num_variables())?;
+        let Some(kept) = self.kept_row_variables() else {
+            return Ok(None);
+        };
+
+        // Elements outside the run weigh zero in all three elements.
+        let (_, offset, equality) = self.support();
+        let table = equality.as_slice();
+        let values = &packing.poly().as_slice()[offset..offset + table.len()];
+        // The run holds whole columns, so the kept row bits are the low bits of `w`.
+        let max = (1usize << kept) - 1;
+
+        let (carry, last) = values.par_chunks(CHUNK).enumerate().par_fold_reduce(
+            || (BitTensor::zero(), BitTensor::zero()),
+            |(mut carry, mut last), (chunk, values)| {
+                for (w, &value) in (chunk * CHUNK..).zip(values) {
+                    let row = w & max;
+                    // The +1 ripples out of the element before, inside the same column.
+                    if row != 0 {
+                        carry.add_exterior_product(table[w - 1], value);
+                    }
+                    // The last element of a column reads itself again.
+                    if row == max {
+                        last.add_exterior_product(table[w], value);
+                    }
+                }
+                (carry, last)
+            },
+            |(mut carry, mut last), (other_carry, other_last)| {
+                // Addition is associative, so regrouping cannot change it.
+                carry += other_carry;
+                last += other_last;
+                (carry, last)
+            },
+        );
+        Ok(Some(SuccessorTensors { carry, last }))
+    }
+
+    /// The weights the successor claim puts on the tensor's columns.
+    ///
+    /// # Algorithm
+    ///
+    /// With kept row coordinates, a column is read one bit on, and none reads bit 0:
+    ///
+    /// ```text
+    ///     n[v] = eq_low[v - 1]   for v >= 1,   n[0] = 0
+    /// ```
+    ///
+    /// The +1 out of bit `d - 1` goes to the carry element instead.
+    ///
+    /// With none, the `2^a` rows sit inside the element, `x = v mod 2^a`:
+    ///
+    /// ```text
+    ///     n[v] = (x != 0 ? eq_low[v - 1] : 0) + (x = 2^a - 1 ? eq_low[v] : 0)
+    /// ```
+    fn successor_low_weights(&self, row_variables: usize) -> Vec<EF> {
+        let eq_low = self.eq_low.as_slice();
+        if self.sends_successor_tensors() {
+            return (0..eq_low.len())
+                .map(|v| if v == 0 { EF::ZERO } else { eq_low[v - 1] })
+                .collect();
+        }
+
+        let last = (1usize << row_variables) - 1;
+        (0..eq_low.len())
+            .map(|v| {
+                let row = v & last;
+                let settled = if row == 0 { EF::ZERO } else { eq_low[v - 1] };
+                let repeated = if row == last { eq_low[v] } else { EF::ZERO };
+                settled + repeated
+            })
+            .collect()
+    }
+
+    /// What the successor claim must equal, given the elements sent.
+    ///
+    /// # Algorithm
+    ///
+    /// ```text
+    ///     s_next = sum_v n[v] * col_v(tensor)
+    ///            + eq_low[d - 1] * ( col_0(carry) + col_{d-1}(last) )   with successor elements
+    /// ```
+    ///
+    /// `eq_low[d - 1]` is the product of the absorbed coordinates, the weight of the last bit.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the reduction was set up without a successor view.
+    ///
+    /// # Panics
+    ///
+    /// Panics unless the successor elements are supplied exactly when the reduction sends them.
+    pub fn successor_claim(
+        &self,
+        tensor: &BitTensor<EF>,
+        successor: Option<&SuccessorTensors<EF>>,
+    ) -> Result<EF, BitRingSwitchError> {
+        let rows = self.successor.ok_or(BitRingSwitchError::NoSuccessorView)?;
+        assert_eq!(
+            successor.is_some(),
+            self.sends_successor_tensors(),
+            "the successor elements are supplied exactly when the reduction sends them"
+        );
+
+        let settled: EF = tensor
+            .columns()
+            .iter()
+            .zip(self.successor_low_weights(rows))
+            .map(|(&column, weight)| column * weight)
+            .sum();
+        Ok(successor.map_or(settled, |elements| {
+            let d = BitTensor::<EF>::DIMENSION;
+            let ripple = elements.carry.column(0) + elements.last.column(d - 1);
+            settled + self.eq_low.as_slice()[d - 1] * ripple
+        }))
+    }
+
     /// Check that something names the variables this reduction runs over.
     const fn check_width(&self, actual: usize) -> Result<(), BitRingSwitchError> {
         if actual == self.num_variables() {
@@ -385,6 +671,48 @@ impl<EF: TowerLevel> BitRingSwitch<EF> {
         }
         element
     }
+
+    /// The carry and last weights lifted into the algebra at one other point.
+    ///
+    /// # Algorithm
+    ///
+    /// Split the coordinates past the prefix, and the point, into selector and kept rows:
+    ///
+    /// ```text
+    ///     high[p..] = (selector, rho_h)       r' = (r'_sel, r'_rows)       |rho_h| = kept
+    /// ```
+    ///
+    /// Both weights factor into a selector part, an equality factor per coordinate,
+    /// and a row part:
+    ///
+    /// ```text
+    ///     carry  =  successor_element(rho_h, r'_rows)   * prod_i (1 + sel_i ⊗ 1 + 1 ⊗ r'_sel,i)
+    ///     last   =  prod(rho_h) ⊗ prod(r'_rows)         * prod_i (1 + sel_i ⊗ 1 + 1 ⊗ r'_sel,i)
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// Panics unless the reduction sends successor elements.
+    fn successor_elements(&self, r_prime: &Point<EF>) -> (BitTensor<EF>, BitTensor<EF>) {
+        let kept = self
+            .kept_row_variables()
+            .expect("only a reduction sending successor elements closes on them");
+        let (prefix, _) = self.fixed_prefix();
+        let rest = &self.high()[prefix..];
+        let (selector, rho) = rest.split_at(rest.len() - kept);
+        let (r_selector, r_rows) = r_prime.as_slice().split_at(r_prime.num_variables() - kept);
+
+        let mut carry = BitTensor::successor_element(rho, r_rows);
+        let mut last = BitTensor::exterior_product(
+            rho.iter().copied().product(),
+            r_rows.iter().copied().product(),
+        );
+        for (&a, &b) in selector.iter().zip(r_selector) {
+            carry.mul_equality_factor(a, b);
+            last.mul_equality_factor(a, b);
+        }
+        (carry, last)
+    }
 }
 
 /// The same reduction, once the batching challenge has been drawn.
@@ -397,6 +725,8 @@ pub struct BitRingSwitchBatch<'a, EF> {
     reduction: &'a BitRingSwitch<EF>,
     /// The equality table of the batching challenge.
     eq_batch: Poly<EF>,
+    /// The challenge weighing the carry and last elements, when the reduction sends them.
+    alpha: Option<EF>,
 }
 
 impl<EF: TowerLevel> BitRingSwitchBatch<'_, EF> {
@@ -413,9 +743,17 @@ impl<EF: TowerLevel> BitRingSwitchBatch<'_, EF> {
     ///
     /// The coordinates are bits, so each entry is a subset sum.
     ///
+    /// With successor elements the carry and last weights are the same table, moved:
+    ///
+    /// ```text
+    ///     weights(w) = A(w)
+    ///                + alpha   * (x(w) != 0  ? A(w - 1) : 0)
+    ///                + alpha^2 * (x(w) = max ? A(w)     : 0)
+    /// ```
+    ///
     /// # Performance
     ///
-    /// Prover-side, and the only other place the equality table is built.
+    /// Prover-side, like the element passes, the other places the equality table is built.
     ///
     /// The Boolean prefix selects one slot before the sumcheck starts.
     /// The table therefore contains that slot alone, with no zero runs around it.
@@ -438,16 +776,64 @@ impl<EF: TowerLevel> BitRingSwitchBatch<'_, EF> {
                     .map(|u| self.eq_batch.as_slice()[u])
                     .sum();
             });
-        table
+
+        let Some(alpha) = self.alpha else {
+            return table;
+        };
+        let kept = self
+            .reduction
+            .kept_row_variables()
+            .expect("a batch carries alpha only for a reduction sending successor elements");
+        let max = (1usize << kept) - 1;
+        let alpha_squared = alpha.square();
+
+        // The shift reads the entry before, so the combined table is a second one.
+        let base = table.as_slice();
+        let mut combined = Poly::zero(table.num_variables());
+        combined
+            .as_mut_slice()
+            .par_iter_mut()
+            .enumerate()
+            .for_each(|(w, slot)| {
+                let row = w & max;
+                let mut value = base[w];
+                if row != 0 {
+                    value += alpha * base[w - 1];
+                }
+                if row == max {
+                    value += alpha_squared * base[w];
+                }
+                *slot = value;
+            });
+        combined
     }
 
     /// The sum the reduction's sumcheck starts from.
     ///
-    /// Derived from the element's rows rather than taken from the prover.
-    /// That ties the sumcheck to the coefficients the claim was checked on.
+    /// Derived from the elements' rows rather than taken from the prover.
+    /// That ties the sumcheck to the coefficients the claims were checked on.
+    ///
+    /// ```text
+    ///     rows(tensor) [+ alpha * rows(carry) + alpha^2 * rows(last)]
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// Panics unless the successor elements are supplied exactly when the batch carries `alpha`.
     #[must_use]
-    pub fn initial_sum(&self, tensor: &BitTensor<EF>) -> EF {
-        self.batch_rows(tensor)
+    pub fn initial_sum(
+        &self,
+        tensor: &BitTensor<EF>,
+        successor: Option<&SuccessorTensors<EF>>,
+    ) -> EF {
+        let sum = self.batch_rows(tensor);
+        match (self.alpha, successor) {
+            (None, None) => sum,
+            (Some(alpha), Some(elements)) => {
+                sum + self.successor_rows(alpha, &elements.carry, &elements.last)
+            }
+            _ => panic!("the successor elements are supplied exactly when the batch carries alpha"),
+        }
     }
 
     /// The weight the surviving claim is scaled by, where the rounds ended.
@@ -465,7 +851,11 @@ impl<EF: TowerLevel> BitRingSwitchBatch<'_, EF> {
         let (prefix, _) = self.reduction.fixed_prefix();
         self.reduction
             .check_width(prefix + r_prime.num_variables())?;
-        Ok(self.batch_rows(&self.reduction.equality_element(r_prime)))
+        let equality = self.batch_rows(&self.reduction.equality_element(r_prime));
+        Ok(self.alpha.map_or(equality, |alpha| {
+            let (carry, last) = self.reduction.successor_elements(r_prime);
+            equality + self.successor_rows(alpha, &carry, &last)
+        }))
     }
 
     /// The rows of an element, batched against the batching challenge.
@@ -478,6 +868,11 @@ impl<EF: TowerLevel> BitRingSwitchBatch<'_, EF> {
             .zip(self.eq_batch.as_slice())
             .map(|(&row, &weight)| row * weight)
             .sum()
+    }
+
+    /// `alpha * rows(carry) + alpha^2 * rows(last)`, the successor share of either end.
+    fn successor_rows(&self, alpha: EF, carry: &BitTensor<EF>, last: &BitTensor<EF>) -> EF {
+        alpha * (self.batch_rows(carry) + alpha * self.batch_rows(last))
     }
 }
 
@@ -511,6 +906,44 @@ pub enum BitRingSwitchError {
         /// Variables the argument names.
         actual: usize,
     },
+    /// The successor view steps within more coordinates than the point names.
+    #[error("the successor view names {row_variables} row variables, the point {num_variables}")]
+    RowVariables {
+        /// Row coordinates the successor view was set up with.
+        row_variables: usize,
+        /// Coordinates the evaluation point names.
+        num_variables: usize,
+    },
+    /// A batching stage for the other kind of reduction was asked for.
+    #[error(
+        "the batching stage does not fit the reduction, successor challenge expected: {expected}"
+    )]
+    SuccessorBatching {
+        /// Whether the reduction sends successor elements, so its stage takes `alpha`.
+        expected: bool,
+    },
+    /// A successor claim was asked of a reduction set up without a successor view.
+    #[error("the reduction was set up without a successor view")]
+    NoSuccessorView,
+}
+
+/// The two elements a successor view adds when its rows outrun one packed element.
+///
+/// With `E` the equality table over the kept coordinates and `x(w)` the kept row bits:
+///
+/// ```text
+///     carry  =  sum_{x(w) != 0}   E[w - 1] ⊗ t'(w)
+///     last   =  sum_{x(w) = max}  E[w]     ⊗ t'(w)
+/// ```
+///
+/// The claim reads one column of each, the rounds read all their rows.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(bound(serialize = "EF: TowerLevel", deserialize = "EF: TowerLevel"))]
+pub struct SuccessorTensors<EF> {
+    /// The +1 rippling out of an element into the next one of its column.
+    pub carry: BitTensor<EF>,
+    /// The last element of each column, whose last row repeats.
+    pub last: BitTensor<EF>,
 }
 
 /// The messages one bit-alphabet reduction puts on the wire.
@@ -521,11 +954,17 @@ pub enum BitRingSwitchError {
 ///     by rows          d elements
 ///     byte per entry   d^2 elements
 /// ```
+///
+/// A successor view whose rows outrun one element sends two more, the same way.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(bound(serialize = "EF: TowerLevel", deserialize = "EF: TowerLevel"))]
 pub struct BitRingSwitchProof<EF> {
     /// The tensor element both checks read, by rows and by columns.
     pub tensor: BitTensor<EF>,
+    /// The carry and last elements, present exactly when the setup sends them.
+    ///
+    /// The verifier derives whether they belong from its own setup, never from this field.
+    pub successor: Option<SuccessorTensors<EF>>,
     /// The batched degree-two rounds left after any Boolean slot prefix is fixed.
     pub sumcheck: SumcheckData<EF, EF>,
     /// The value of the surviving claim.
@@ -547,6 +986,18 @@ pub enum BitRingSwitchProofError {
     /// The claimed evaluation is not the column reading of the element.
     #[error("the claimed evaluation is not the column reading of the tensor element")]
     ClaimMismatch,
+
+    /// The claimed successor evaluation is not the column reading of the elements.
+    #[error("the claimed successor evaluation is not the column reading of the elements")]
+    SuccessorClaimMismatch,
+
+    /// Neither a current nor a successor evaluation was supplied, so nothing is checked.
+    #[error("no claimed evaluation was supplied")]
+    NoReading,
+
+    /// A successor evaluation was supplied to a reduction without a successor view.
+    #[error("a successor evaluation was supplied to a reduction without a successor view")]
+    NoSuccessorView,
 
     /// A round of the batched sumcheck failed.
     #[error(transparent)]
@@ -586,19 +1037,29 @@ pub enum BitRingSwitchProofError {
 ///
 /// # Soundness
 ///
-/// The reduction's own error is `(d_log + 2 l') / |EF|` (eprint 2024/504, Theorem 3.5).
+/// The reduction's own error is `(d_log + K - 1 + 2 l') / |EF|` (eprint 2024/504, Theorem 3.5).
 /// Here `l'` is the number of rounds that actually run after a Boolean prefix is fixed.
 /// Charging the full packed arity is a conservative upper bound.
 ///
-/// The two sources are:
+/// `K` is the number of elements sent: three with successor elements, one otherwise.
 ///
-/// - `d_log / |EF|` from the batching draw that collapses the row claims into one.
+/// The three sources are:
+///
+/// - `d_log / |EF|` from the batching point that collapses each element's row claims.
+/// - `(K - 1) / |EF|` from `alpha`, which collapses the `K` batched row claims into one.
 /// - `2 l' / |EF|` for the rounds of degree-two sumcheck.
 ///
-/// Both terms are per-attempt, because the description holds no grinding step.
+/// A wrong element leaves a nonzero batched row claim.
+/// It is multilinear in `r''` and of degree `K - 1` in `alpha`.
+///
+/// That bound needs `r''` and `alpha` drawn after every element is bound.
+/// The transcript fixes that order.
+/// It also needs `K` taken from the public setup, never read from the proof.
+///
+/// Every term is per-attempt, because the description holds no grinding step.
 /// A protocol needing a total bound supplies the grinding outside this run.
 impl<EF: TranscriptField + TowerLevel> BitRingSwitch<EF> {
-    /// Reduce the claim this reduction was set up over to one about the packing.
+    /// Reduce the claims this reduction was set up over to one about the packing.
     ///
     /// # Returns
     ///
@@ -627,25 +1088,33 @@ impl<EF: TranscriptField + TowerLevel> BitRingSwitch<EF> {
         let tensor = self
             .tensor(packing)
             .expect("the packing was just checked against the reduction");
+        let successor = self
+            .successor_tensors(packing)
+            .expect("the packing was just checked against the reduction");
 
-        // The element is a function of the kept coordinates alone.
-        // It is therefore ready before the transcript needs it.
-        let shape = BitRingSwitchShape::new(self.point.num_variables());
+        // The elements are functions of the kept coordinates alone.
+        // They are therefore ready before the transcript needs them.
         let mut transcript =
-            BitRingSwitchProverTranscript::<Challenger, EF>::new(challenger, shape);
-        let r_batch = transcript.statement(&self.point, tensor.rows());
+            BitRingSwitchProverTranscript::<Challenger, EF>::new(challenger, self.shape());
+        let (r_batch, alpha) = transcript.statement(
+            &self.point,
+            tensor.rows(),
+            successor
+                .as_ref()
+                .map(|elements| (elements.carry.rows(), elements.last.rows())),
+        );
 
-        // The batching challenge arrived after the element, which is the order soundness needs.
+        // The batching challenges arrived after the elements, which is the order soundness needs.
         let batch = self
-            .batch(&r_batch)
-            .expect("the draw names the absorbed coordinates by construction");
+            .batch_drawn(&r_batch, alpha)
+            .expect("the transcript draws what the reduction's kind batches with");
         // A Boolean prefix is a public slot address.
         // Restricting to that slot removes one sumcheck round per address bit.
         let restricted = self.restricted_packing(packing);
         let rounds = restricted.num_variables();
         let poly =
             ProductPolynomial::new_unpacked(VariableOrder::Prefix, restricted, batch.weights());
-        let mut prover = SumcheckProver::new(poly, batch.initial_sum(&tensor));
+        let mut prover = SumcheckProver::new(poly, batch.initial_sum(&tensor, successor.as_ref()));
         let mut sumcheck = SumcheckData::default();
 
         let r_prime = transcript.batched_sumcheck(|challenger| {
@@ -661,6 +1130,7 @@ impl<EF: TranscriptField + TowerLevel> BitRingSwitch<EF> {
         (
             BitRingSwitchProof {
                 tensor,
+                successor,
                 sumcheck,
                 final_eval,
             },
@@ -669,16 +1139,13 @@ impl<EF: TranscriptField + TowerLevel> BitRingSwitch<EF> {
         )
     }
 
-    /// Replay the reduction and return the claim it leaves behind, as a point and a value.
+    /// Replay the reduction against the current claim and return the claim it leaves behind.
     ///
-    /// Discharging that pair against a commitment to the packing is the caller's business.
+    /// The same as [`Self::verify_readings`] with the current reading alone.
     ///
     /// # Errors
     ///
-    /// - A malformed element.
-    /// - A non-empty grinding witness list, since this reduction never grinds.
-    /// - A claimed evaluation disagreeing with the element's columns.
-    /// - A failed sumcheck round, or a final claim that does not close it.
+    /// As [`Self::verify_readings`].
     pub fn verify<Challenger>(
         &self,
         proof: &BitRingSwitchProof<EF>,
@@ -688,44 +1155,74 @@ impl<EF: TranscriptField + TowerLevel> BitRingSwitch<EF> {
     where
         Challenger: FieldChallenger<EF> + GrindingChallenger<Witness = EF>,
     {
-        // Both structural rejections below run before the challenger is touched.
+        self.verify_readings(proof, Some(claimed_sum), None, challenger)
+    }
+
+    /// Replay the reduction and return the claim it leaves behind, as a point and a value.
+    ///
+    /// Discharging that pair against a commitment to the packing is the caller's business.
+    ///
+    /// # Arguments
+    ///
+    /// - The proof.
+    /// - The claimed evaluation of the witness at the point, when it is to be checked.
+    /// - The claimed evaluation of its successor view there, when it is to be checked.
+    /// - The challenger, advanced only once every structural check passes.
+    ///
+    /// # Errors
+    ///
+    /// Before the challenger is touched:
+    ///
+    /// - A malformed element.
+    /// - Successor elements whose presence disagrees with the setup.
+    /// - A non-empty grinding witness list, since this reduction never grinds.
+    /// - No reading supplied, or a successor reading the setup does not answer.
+    ///
+    /// After it:
+    ///
+    /// - A claimed evaluation disagreeing with the elements' columns.
+    /// - A failed sumcheck round, or a final claim that does not close it.
+    pub fn verify_readings<Challenger>(
+        &self,
+        proof: &BitRingSwitchProof<EF>,
+        current: Option<EF>,
+        next: Option<EF>,
+        challenger: &mut Challenger,
+    ) -> Result<(Point<EF>, EF), BitRingSwitchProofError>
+    where
+        Challenger: FieldChallenger<EF> + GrindingChallenger<Witness = EF>,
+    {
+        // Every structural rejection runs before the challenger is touched.
         // A malformed proof therefore never leaves a half-advanced transcript.
-        if !proof.tensor.is_well_formed() {
-            return Err(TranscriptWidth::TensorRows {
-                expected: BitTensor::<EF>::DIMENSION,
-                actual: proof.tensor.rows().len(),
-            }
-            .into());
-        }
-        if !proof.sumcheck.pow_witnesses.is_empty() {
-            return Err(BitRingSwitchProofError::NonEmptyPowWitnesses {
-                actual: proof.sumcheck.pow_witnesses.len(),
-            });
-        }
+        self.check_structure(proof, current, next)?;
 
         // The verifier derives the slot restriction from the public incoming point.
         // Proof data cannot choose how many rounds are expected.
         let (prefix, _) = self.fixed_prefix();
         let rounds = self.num_variables() - prefix;
-        let shape = BitRingSwitchShape::new(self.point.num_variables());
         let mut transcript =
-            BitRingSwitchVerifierTranscript::<Challenger, EF>::new(challenger, shape);
-        let r_batch = transcript.statement(&self.point, proof.tensor.rows())?;
+            BitRingSwitchVerifierTranscript::<Challenger, EF>::new(challenger, self.shape());
+        let (r_batch, alpha) = transcript.statement(
+            &self.point,
+            proof.tensor.rows(),
+            proof
+                .successor
+                .as_ref()
+                .map(|elements| (elements.carry.rows(), elements.last.rows())),
+        )?;
 
-        // The columns are the witness's bit planes at the kept coordinates.
-        // The absorbed coordinates weigh them back together, their only use here.
-        if self.incoming_claim(&proof.tensor) != claimed_sum {
+        if let Err(error) = self.check_readings(proof, current, next) {
             transcript.abort();
-            return Err(BitRingSwitchProofError::ClaimMismatch);
+            return Err(error);
         }
 
         let batch = self
-            .batch(&r_batch)
-            .expect("the draw names the absorbed coordinates by construction");
+            .batch_drawn(&r_batch, alpha)
+            .expect("the transcript draws what the reduction's kind batches with");
 
-        // The initial sum is derived from the element's rows, never taken from the prover.
+        // The initial sum is derived from the elements' rows, never taken from the prover.
         // That is what makes a dishonest element catchable at all.
-        let mut sum = batch.initial_sum(&proof.tensor);
+        let mut sum = batch.initial_sum(&proof.tensor, proof.successor.as_ref());
         let replay = transcript.batched_sumcheck(|challenger| {
             proof
                 .sumcheck
@@ -743,13 +1240,77 @@ impl<EF: TranscriptField + TowerLevel> BitRingSwitch<EF> {
         transcript.finish();
 
         // The rounds close on the weight multilinear at their end point, times the value.
-        // The weight comes through the equality element rather than another pass.
+        // The weight comes through the lifted elements rather than another pass.
         let closing = batch.closing_weight(&r_prime)?;
         if sum != closing * proof.final_eval {
             return Err(BitRingSwitchProofError::FinalCheck);
         }
 
         Ok((self.restore_prefix(&r_prime), proof.final_eval))
+    }
+
+    /// Every rejection that needs neither the transcript nor a claim check.
+    fn check_structure(
+        &self,
+        proof: &BitRingSwitchProof<EF>,
+        current: Option<EF>,
+        next: Option<EF>,
+    ) -> Result<(), BitRingSwitchProofError> {
+        // Every element is a square bit matrix, whichever of them the proof carries.
+        let successor = proof
+            .successor
+            .iter()
+            .flat_map(|elements| [&elements.carry, &elements.last]);
+        if let Some(malformed) = core::iter::once(&proof.tensor)
+            .chain(successor)
+            .find(|element| !element.is_well_formed())
+        {
+            return Err(TranscriptWidth::TensorRows {
+                expected: BitTensor::<EF>::DIMENSION,
+                actual: malformed.rows().len(),
+            }
+            .into());
+        }
+        // The element count is the setup's, never the proof's.
+        let expected = self.sends_successor_tensors();
+        if proof.successor.is_some() != expected {
+            return Err(
+                TranscriptWidth::successor_elements(expected, proof.successor.is_some()).into(),
+            );
+        }
+        if !proof.sumcheck.pow_witnesses.is_empty() {
+            return Err(BitRingSwitchProofError::NonEmptyPowWitnesses {
+                actual: proof.sumcheck.pow_witnesses.len(),
+            });
+        }
+        if current.is_none() && next.is_none() {
+            return Err(BitRingSwitchProofError::NoReading);
+        }
+        if next.is_some() && self.successor.is_none() {
+            return Err(BitRingSwitchProofError::NoSuccessorView);
+        }
+        Ok(())
+    }
+
+    /// Check each supplied reading against the elements' columns, current before next.
+    fn check_readings(
+        &self,
+        proof: &BitRingSwitchProof<EF>,
+        current: Option<EF>,
+        next: Option<EF>,
+    ) -> Result<(), BitRingSwitchProofError> {
+        // The columns are the witness's bit planes at the kept coordinates.
+        // The absorbed coordinates weigh them back together, their only use here.
+        if current.is_some_and(|claim| self.incoming_claim(&proof.tensor) != claim) {
+            return Err(BitRingSwitchProofError::ClaimMismatch);
+        }
+        // The successor reads the same planes one bit on, and the successor elements' edges.
+        if let Some(claim) = next
+            && self.successor_claim(&proof.tensor, proof.successor.as_ref())? != claim
+        {
+            return Err(BitRingSwitchProofError::SuccessorClaimMismatch);
+        }
+        Ok(())
     }
 }
 
@@ -758,7 +1319,7 @@ mod tests {
     use alloc::vec::Vec;
 
     use p3_binary_field::{BinaryChallenger, BinaryField16};
-    use p3_challenger::HashChallenger;
+    use p3_challenger::{CanSample, HashChallenger};
     use p3_field::{Field, PrimeCharacteristicRing};
     use p3_keccak::Keccak256Hash;
     use proptest::prelude::*;
@@ -946,7 +1507,7 @@ mod tests {
             .map(|(&weight, &value)| weight * value)
             .sum();
 
-        assert_eq!(dot, batch.initial_sum(&tensor));
+        assert_eq!(dot, batch.initial_sum(&tensor, None));
     }
 
     #[test]
@@ -976,7 +1537,7 @@ mod tests {
             })
             .sum();
 
-        assert_eq!(batch.initial_sum(&tensor), expected);
+        assert_eq!(batch.initial_sum(&tensor, None), expected);
     }
 
     #[test]
@@ -1428,5 +1989,507 @@ mod tests {
             prop_assert_eq!(s_prime, s_prime_p);
             prop_assert_eq!(s_prime, packing.poly().eval_base(&r_prime));
         }
+
+        /// Every witness length and every row count it admits, both readings each time.
+        #[test]
+        fn a_successor_view_round_trips_over_random_inputs(
+            (log_bytes, row_variables) in (1usize..=6)
+                .prop_flat_map(|log_bytes| (Just(log_bytes), 0..=log_bytes + 3)),
+            witness_seed: u64,
+            point_seed: u64,
+        ) {
+            let witness = bits(witness_seed, 1 << log_bytes);
+            let packing = BitPacking::<EF>::new(&witness).unwrap();
+            let variables = log_bytes + 3;
+            let r = Point::<EF>::rand(&mut SmallRng::seed_from_u64(point_seed), variables);
+            let reduction = BitRingSwitch::with_successor(&r, row_variables).unwrap();
+            let current = embedded(&witness).eval_base(&r);
+            let next = dense_successor_claim(&witness, &r, row_variables);
+
+            let (proof, r_prime_p, s_prime_p) = reduction.prove(&packing, &mut challenger());
+            let (r_prime, s_prime) = reduction
+                .verify_readings(&proof, Some(current), Some(next), &mut challenger())
+                .unwrap();
+
+            prop_assert_eq!(&r_prime, &r_prime_p);
+            prop_assert_eq!(s_prime, s_prime_p);
+            prop_assert_eq!(s_prime, packing.poly().eval_base(&r_prime));
+        }
+    }
+
+    /// The witness one row further on, repeat-last, batched over the selector: the definition.
+    ///
+    ///     sum_{c, x} eq(selector, c) * t(c, min(z + 1, max)) * eq(rho, z)   summed over z
+    ///
+    /// The selector leads the point and the rows trail it, `row_variables` of them.
+    fn dense_successor_claim(witness: &[u8], point: &Point<EF>, row_variables: usize) -> EF {
+        let cells = embedded(witness);
+        let (selector, rho) = point.split_at(point.num_variables() - row_variables);
+        let eq_selector = Poly::<EF>::new_from_point(selector.as_slice(), EF::ONE);
+        let eq_rho = Poly::<EF>::new_from_point(rho.as_slice(), EF::ONE);
+        let rows = 1usize << row_variables;
+        let mut claim = EF::ZERO;
+        for (c, &gate) in eq_selector.as_slice().iter().enumerate() {
+            for (z, &weight) in eq_rho.as_slice().iter().enumerate() {
+                let x = (z + 1).min(rows - 1);
+                claim += gate * weight * cells.as_slice()[c * rows + x];
+            }
+        }
+        claim
+    }
+
+    /// A field challenge that is neither zero nor one.
+    ///
+    /// A Boolean coordinate would move the prefix a fixture means to fix.
+    fn non_boolean(rng: &mut SmallRng) -> EF {
+        loop {
+            let coordinate = rng.random::<EF>();
+            if coordinate != EF::ZERO && coordinate != EF::ONE {
+                return coordinate;
+            }
+        }
+    }
+
+    /// How the selector coordinates, which lead the point, are chosen.
+    #[derive(Clone, Copy, Debug)]
+    enum Selector {
+        /// Field challenges throughout, as a transcript draws them.
+        Random,
+        /// Bits throughout, spelling a slot address.
+        Boolean,
+        /// Two bits and a field challenge, repeating.
+        Mixed,
+    }
+
+    impl Selector {
+        /// Every kind, in the order the tests sweep them.
+        const ALL: [Self; 3] = [Self::Random, Self::Boolean, Self::Mixed];
+    }
+
+    /// A point whose leading `num_variables - row_variables` coordinates are the selector.
+    ///
+    /// The row coordinates are always field challenges.
+    fn successor_point(
+        seed: u64,
+        num_variables: usize,
+        row_variables: usize,
+        selector: Selector,
+    ) -> Point<EF> {
+        let mut rng = SmallRng::seed_from_u64(seed);
+        let selector_variables = num_variables - row_variables;
+        Point::new(
+            (0..num_variables)
+                .map(|i| {
+                    let bit = if i % 2 == 0 { EF::ONE } else { EF::ZERO };
+                    match selector {
+                        _ if i >= selector_variables => non_boolean(&mut rng),
+                        Selector::Random => non_boolean(&mut rng),
+                        Selector::Boolean => bit,
+                        Selector::Mixed if i % 3 == 2 => non_boolean(&mut rng),
+                        Selector::Mixed => bit,
+                    }
+                })
+                .collect(),
+        )
+    }
+
+    /// Row counts covering every case the successor view splits into, over 9 variables.
+    ///
+    /// ```text
+    ///     0, 2, 4   ->  the rows fit in one element, no successor element is sent
+    ///     6         ->  a 3-coordinate selector and 2 kept row coordinates
+    ///     9         ->  no selector, every kept coordinate a row coordinate
+    /// ```
+    const ROW_VARIABLES: [usize; 5] = [0, 2, 4, 6, 9];
+
+    #[test]
+    fn the_successor_claim_is_the_witness_one_row_on() {
+        // Invariant: the column reading of the elements is the repeat-last successor claim.
+        //
+        //     sum_z eq(rho, z) * t(c, min(z + 1, max))   batched over the selector c
+        //
+        // Fixture state: 512 cells is 9 variables, 16 bits absorb 4, so 5 are kept.
+        //
+        // Every row count runs under a random, a Boolean and a mixed selector.
+        // A Boolean selector moves the run the elements are accumulated over.
+        let witness = bits(0x5CC1, 64);
+        let packing = BitPacking::<EF>::new(&witness).unwrap();
+
+        for selector in Selector::ALL {
+            for (seed, &row_variables) in (0x5CC2..).zip(&ROW_VARIABLES) {
+                let r = successor_point(seed, 9, row_variables, selector);
+                let reduction = BitRingSwitch::with_successor(&r, row_variables).unwrap();
+                let tensor = reduction.tensor(&packing).unwrap();
+                let successor = reduction.successor_tensors(&packing).unwrap();
+
+                assert_eq!(
+                    successor.is_some(),
+                    row_variables > BitRingSwitch::<EF>::ABSORBED,
+                    "{selector:?} selector, {row_variables} row variables"
+                );
+                assert_eq!(
+                    reduction
+                        .successor_claim(&tensor, successor.as_ref())
+                        .unwrap(),
+                    dense_successor_claim(&witness, &r, row_variables),
+                    "{selector:?} selector, {row_variables} row variables"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_successor_weights_close_the_batched_sum() {
+        // Invariant: the weights are what both ends of the sumcheck read.
+        //
+        //     sum_w weights(w) * t'(w)  ==  initial_sum          rows of the three elements
+        //     weights(r')               ==  closing_weight(r')   through the lifted elements
+        //
+        // Fixture state: 9 variables, 6 of them rows, so 2 kept row coordinates.
+        let witness = bits(0xC105, 64);
+        let packing = BitPacking::<EF>::new(&witness).unwrap();
+        let mut rng = SmallRng::seed_from_u64(0xC106);
+        let r = successor_point(0xC107, 9, 6, Selector::Random);
+        let reduction = BitRingSwitch::with_successor(&r, 6).unwrap();
+        let tensor = reduction.tensor(&packing).unwrap();
+        let successor = reduction.successor_tensors(&packing).unwrap().unwrap();
+
+        let r_batch = Point::<EF>::rand(&mut rng, BitRingSwitch::<EF>::ABSORBED);
+        let alpha = non_boolean(&mut rng);
+        let batch = reduction.batch_with_successor(&r_batch, alpha).unwrap();
+        let weights = batch.weights();
+
+        let dot: EF = weights
+            .as_slice()
+            .iter()
+            .zip(packing.poly().as_slice())
+            .map(|(&weight, &value)| weight * value)
+            .sum();
+        assert_eq!(batch.initial_sum(&tensor, Some(&successor)), dot);
+
+        let r_prime = Point::<EF>::rand(&mut rng, reduction.num_variables());
+        assert_eq!(
+            batch.closing_weight(&r_prime).unwrap(),
+            weights.eval_base(&r_prime)
+        );
+    }
+
+    #[test]
+    fn a_successor_view_round_trips() {
+        // Invariant: both readings verify, and the surviving claim is the truth about the packing.
+        //
+        //     in    t(r) = current,  t one row on at r = next
+        //     out   t'(r') = e       one claim, whatever the row count
+        let witness = bits(0x7219, 64);
+        let packing = BitPacking::<EF>::new(&witness).unwrap();
+        let cells = embedded(&witness);
+
+        for selector in Selector::ALL {
+            for (seed, &row_variables) in (0x721A..).zip(&ROW_VARIABLES) {
+                let r = successor_point(seed, 9, row_variables, selector);
+                let reduction = BitRingSwitch::with_successor(&r, row_variables).unwrap();
+                let current = cells.eval_base(&r);
+                let next = dense_successor_claim(&witness, &r, row_variables);
+
+                let (proof, r_prime, value) = reduction.prove(&packing, &mut challenger());
+                let verified = reduction
+                    .verify_readings(&proof, Some(current), Some(next), &mut challenger())
+                    .unwrap();
+
+                let case = alloc::format!("{selector:?} selector, {row_variables} row variables");
+                assert_eq!(verified, (r_prime.clone(), value), "{case}");
+                assert_eq!(value, packing.poly().eval_base(&r_prime), "{case}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_successor_view_inside_one_element_plays_the_plain_transcript() {
+        // Invariant: rows that fit in one element send nothing extra.
+        //
+        // The successor is then a column reading alone, which the verifier makes offline.
+        // The prover's side of the run is the one a plain reduction at the point plays.
+        let witness = bits(0x1D3, 64);
+        let packing = BitPacking::<EF>::new(&witness).unwrap();
+
+        for row_variables in 0..=BitRingSwitch::<EF>::ABSORBED {
+            let r = successor_point(0x1D4, 9, row_variables, Selector::Random);
+            let plain = BitRingSwitch::new(&r).unwrap();
+            let successor = BitRingSwitch::with_successor(&r, row_variables).unwrap();
+            assert!(!successor.sends_successor_tensors());
+
+            let mut plain_challenger = challenger();
+            let (plain_proof, plain_point, plain_value) =
+                plain.prove(&packing, &mut plain_challenger);
+            let mut successor_challenger = challenger();
+            let (successor_proof, successor_point, successor_value) =
+                successor.prove(&packing, &mut successor_challenger);
+
+            assert_eq!(successor_proof.tensor, plain_proof.tensor);
+            assert!(successor_proof.successor.is_none());
+            assert_eq!(
+                successor_point, plain_point,
+                "{row_variables} row variables"
+            );
+            assert_eq!(
+                successor_value, plain_value,
+                "{row_variables} row variables"
+            );
+            assert_eq!(
+                CanSample::<EF>::sample(&mut successor_challenger),
+                CanSample::<EF>::sample(&mut plain_challenger),
+                "{row_variables} row variables"
+            );
+        }
+    }
+
+    #[test]
+    fn the_prefix_stops_before_the_row_coordinates() {
+        // Invariant: the Boolean prefix fixes selector coordinates only.
+        //
+        // A row coordinate fixed to a bit is no slot address.
+        // The carry reads the element before, which may sit outside a run it would select.
+        //
+        // Fixture state: 9 variables, 6 of them rows.
+        //
+        //     point     (1, 0, 1 | 0, z | z, z, z, z)
+        //                selector  kept   absorbed
+        //     prefix    3, though the first row coordinate is a bit as well
+        //     rounds    5 - 3 = 2, where a plain reduction at the point runs 1
+        let witness = bits(0x9EF1, 64);
+        let packing = BitPacking::<EF>::new(&witness).unwrap();
+        let mut rng = SmallRng::seed_from_u64(0x9EF2);
+        let mut coordinates = alloc::vec![EF::ONE, EF::ZERO, EF::ONE, EF::ZERO];
+        coordinates.extend((4..9).map(|_| non_boolean(&mut rng)));
+        let r = Point::new(coordinates);
+
+        let reduction = BitRingSwitch::with_successor(&r, 6).unwrap();
+        let current = embedded(&witness).eval_base(&r);
+        let next = dense_successor_claim(&witness, &r, 6);
+
+        let tensor = reduction.tensor(&packing).unwrap();
+        let successor = reduction.successor_tensors(&packing).unwrap();
+        assert_eq!(
+            reduction
+                .successor_claim(&tensor, successor.as_ref())
+                .unwrap(),
+            next
+        );
+
+        let (proof, r_prime, value) = reduction.prove(&packing, &mut challenger());
+        assert_eq!(proof.sumcheck.num_rounds(), 2);
+        assert_eq!(
+            reduction
+                .verify_readings(&proof, Some(current), Some(next), &mut challenger())
+                .unwrap(),
+            (r_prime, value)
+        );
+
+        // The plain reduction eats the Boolean row coordinate too, which the cap is for.
+        let (plain, _, _) = BitRingSwitch::new(&r)
+            .unwrap()
+            .prove(&packing, &mut challenger());
+        assert_eq!(plain.sumcheck.num_rounds(), 1);
+    }
+
+    #[test]
+    fn a_false_successor_claim_is_rejected() {
+        // The column reading is what ties the elements to the successor claim.
+        //
+        // Checked with successor elements sent, and with the rows inside one element.
+        let witness = bits(0xFA15, 64);
+        let packing = BitPacking::<EF>::new(&witness).unwrap();
+
+        for row_variables in [2, 6] {
+            let r = successor_point(0xFA16, 9, row_variables, Selector::Random);
+            let reduction = BitRingSwitch::with_successor(&r, row_variables).unwrap();
+            let current = embedded(&witness).eval_base(&r);
+            let next = dense_successor_claim(&witness, &r, row_variables);
+            let (proof, _, _) = reduction.prove(&packing, &mut challenger());
+
+            assert_eq!(
+                reduction
+                    .verify_readings(
+                        &proof,
+                        Some(current),
+                        Some(next + EF::ONE),
+                        &mut challenger()
+                    )
+                    .unwrap_err(),
+                BitRingSwitchProofError::SuccessorClaimMismatch,
+                "{row_variables} row variables"
+            );
+        }
+    }
+
+    #[test]
+    fn a_tampered_carry_element_is_caught_by_the_closing_check() {
+        // Invariant: the successor elements enter the rows the sumcheck starts from.
+        //
+        // The claim reads one column of each:
+        //
+        //     carry  ->  column 0
+        //     last   ->  column d - 1
+        //
+        // A tamper in any other column passes the claim check.
+        // Only the closing check is then left to catch it.
+        //
+        // Mutation: entry (3, 5) of carry, then entry (5, 0) of last.
+        let witness = bits(0x7A3, 64);
+        let packing = BitPacking::<EF>::new(&witness).unwrap();
+        let r = successor_point(0x7A4, 9, 6, Selector::Random);
+        let reduction = BitRingSwitch::with_successor(&r, 6).unwrap();
+        let current = embedded(&witness).eval_base(&r);
+        let next = dense_successor_claim(&witness, &r, 6);
+        let (honest, _, _) = reduction.prove(&packing, &mut challenger());
+        let elements = honest.successor.clone().unwrap();
+
+        let flipped = |element: &BitTensor<EF>, row: usize, bit: EF| {
+            let mut rows = element.rows().to_vec();
+            rows[row] += bit;
+            BitTensor::try_from(rows).unwrap()
+        };
+        let mut carry = honest.clone();
+        carry.successor = Some(SuccessorTensors {
+            carry: flipped(&elements.carry, 3, EF::from_repr(1 << 5)),
+            last: elements.last.clone(),
+        });
+        let mut last = honest.clone();
+        last.successor = Some(SuccessorTensors {
+            carry: elements.carry.clone(),
+            last: flipped(&elements.last, 5, EF::ONE),
+        });
+
+        for (element, tampered) in [("carry", carry), ("last", last)] {
+            // The element genuinely changed, yet the successor claim did not.
+            assert_ne!(tampered.successor, honest.successor, "{element}");
+            assert_eq!(
+                reduction
+                    .successor_claim(&tampered.tensor, tampered.successor.as_ref())
+                    .unwrap(),
+                next,
+                "{element}"
+            );
+            assert_eq!(
+                reduction
+                    .verify_readings(&tampered, Some(current), Some(next), &mut challenger())
+                    .unwrap_err(),
+                BitRingSwitchProofError::FinalCheck,
+                "{element}"
+            );
+        }
+
+        // The honest elements pass the same path, so the rejection is the tamper.
+        assert!(
+            reduction
+                .verify_readings(&honest, Some(current), Some(next), &mut challenger())
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn a_successor_element_count_disagreeing_with_the_setup_is_refused() {
+        // Invariant: the element count comes from the public setup, never from the proof.
+        //
+        //     6 row variables  ->  two elements expected, a proof without them
+        //     2 row variables  ->  none expected, a proof carrying two
+        //
+        // The rejection is structural, so it may not advance the sponge.
+        let witness = bits(0xC0DE, 64);
+        let packing = BitPacking::<EF>::new(&witness).unwrap();
+
+        let r_sending = successor_point(0xC0DF, 9, 6, Selector::Random);
+        let sending = BitRingSwitch::with_successor(&r_sending, 6).unwrap();
+        let (mut missing, _, _) = sending.prove(&packing, &mut challenger());
+        let spare = missing.successor.take();
+
+        let r_fitting = successor_point(0xC0E0, 9, 2, Selector::Random);
+        let fitting = BitRingSwitch::with_successor(&r_fitting, 2).unwrap();
+        let (mut spurious, _, _) = fitting.prove(&packing, &mut challenger());
+        spurious.successor = spare;
+
+        for (reduction, proof, r, expected, actual) in [
+            (&sending, &missing, &r_sending, 2, 0),
+            (&fitting, &spurious, &r_fitting, 0, 2),
+        ] {
+            let current = embedded(&witness).eval_base(r);
+            let mut used = challenger();
+            let err = reduction
+                .verify_readings(proof, Some(current), None, &mut used)
+                .unwrap_err();
+
+            assert_eq!(
+                err,
+                BitRingSwitchProofError::Width(TranscriptWidth::SuccessorElements {
+                    expected,
+                    actual
+                })
+            );
+            assert_eq!(
+                CanSample::<EF>::sample(&mut used),
+                CanSample::<EF>::sample(&mut challenger()),
+                "the rejection advanced the sponge"
+            );
+        }
+    }
+
+    #[test]
+    fn a_reading_the_setup_does_not_answer_is_refused() {
+        // A plain reduction has no successor view to check a next claim against.
+        // A call supplying neither reading would check nothing at all.
+        let (reduction, packing, _, _) = fixture(0x2EAD, 32);
+        let (proof, _, _) = reduction.prove(&packing, &mut challenger());
+
+        assert_eq!(
+            reduction
+                .verify_readings(&proof, None, Some(EF::ONE), &mut challenger())
+                .unwrap_err(),
+            BitRingSwitchProofError::NoSuccessorView
+        );
+        assert_eq!(
+            reduction
+                .verify_readings(&proof, None, None, &mut challenger())
+                .unwrap_err(),
+            BitRingSwitchProofError::NoReading
+        );
+    }
+
+    #[test]
+    fn a_successor_setup_of_the_wrong_kind_is_refused() {
+        // A row count wider than the point names no rows at all.
+        // Each batching stage belongs to one kind of reduction.
+        // A plain reduction has no successor claim to read.
+        let mut rng = SmallRng::seed_from_u64(0x5E7C);
+        let r = Point::<EF>::rand(&mut rng, 9);
+        let r_batch = Point::<EF>::rand(&mut rng, BitRingSwitch::<EF>::ABSORBED);
+
+        assert_eq!(
+            BitRingSwitch::with_successor(&r, 10).unwrap_err(),
+            BitRingSwitchError::RowVariables {
+                row_variables: 10,
+                num_variables: 9
+            }
+        );
+        assert_eq!(
+            BitRingSwitch::with_successor(&r, 6)
+                .unwrap()
+                .batch(&r_batch)
+                .unwrap_err(),
+            BitRingSwitchError::SuccessorBatching { expected: true }
+        );
+        assert_eq!(
+            BitRingSwitch::with_successor(&r, 4)
+                .unwrap()
+                .batch_with_successor(&r_batch, EF::ONE)
+                .unwrap_err(),
+            BitRingSwitchError::SuccessorBatching { expected: false }
+        );
+        assert_eq!(
+            BitRingSwitch::new(&r)
+                .unwrap()
+                .successor_claim(&BitTensor::zero(), None)
+                .unwrap_err(),
+            BitRingSwitchError::NoSuccessorView
+        );
     }
 }
