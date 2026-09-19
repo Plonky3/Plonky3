@@ -854,6 +854,7 @@ where
 #[cfg(test)]
 mod tests {
     use alloc::vec;
+
     use p3_binary_field::BinaryField128;
     use p3_field::PrimeCharacteristicRing;
     use p3_matrix::dense::RowMajorMatrix;

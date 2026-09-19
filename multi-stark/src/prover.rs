@@ -540,6 +540,8 @@ mod tests {
     use alloc::string::String;
     use alloc::vec;
     use core::cell::Cell;
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+    use std::sync::OnceLock;
 
     use p3_air::{Air, AirBuilder, BaseAir, WindowAccess};
     use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
@@ -556,8 +558,6 @@ mod tests {
     use p3_whir::{FoldingFactor, ProtocolParameters, SecurityAssumption, WhirConfig, WhirProver};
     use rand::SeedableRng;
     use rand::rngs::SmallRng;
-    use std::panic::{AssertUnwindSafe, catch_unwind};
-    use std::sync::OnceLock;
 
     use super::*;
     use crate::config::PcsError;
