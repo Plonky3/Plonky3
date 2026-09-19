@@ -482,9 +482,10 @@ where
         let mut readings = Vec::with_capacity(openings.len());
         let mut sent = Vec::with_capacity(openings.len());
         let mut surviving_points = Vec::with_capacity(openings.len());
+        let mut surviving_values = Vec::with_capacity(openings.len());
 
         for (opening, reduction) in openings.iter().zip(&reductions) {
-            let (proof, surviving_point, _) = tracing::info_span!("bit ring switch")
+            let (proof, surviving_point, surviving_value) = tracing::info_span!("bit ring switch")
                 .in_scope(|| reduction.prove(&packing, challenger));
 
             // The elements the reduction sends already hold the witness's readings.
@@ -500,6 +501,9 @@ where
 
             readings.push(BitReadings { current, next });
             surviving_points.push(surviving_point);
+            // The rounds folded the packing down to this value, so the commitment is spared
+            // a pass over its single column to find the same one again.
+            surviving_values.push(OpeningBatch::new(vec![surviving_value], Vec::new()));
             sent.push(proof);
         }
 
@@ -507,10 +511,11 @@ where
         // Every surviving point came out of a reduction's rounds, so all are bound already.
         let opening = self
             .inner
-            .try_open_at(
+            .try_open_at_known(
                 prover_data,
                 &self.protocol(openings.len()),
                 &surviving_points,
+                &surviving_values,
                 challenger,
             )
             .map_err(BooleanPcsError::Commitment)?;

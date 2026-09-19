@@ -33,6 +33,29 @@ use crate::layout::{LayoutStrategy, Table, Witness};
 use crate::strategy::{SumcheckProver, VariableOrder};
 use crate::table::{OpeningEvals, OpeningRequest, TableShape};
 
+/// The description an opening of one batch at a caller-fixed point plays.
+///
+/// A caller-fixed point contributes no step, so the description holds no challenge.
+fn given_opening_shape<F, EF, L>(
+    layout: &L,
+    table_idx: usize,
+    batch: &OpeningRequest,
+) -> OpeningShape
+where
+    F: Field,
+    EF: ExtensionField<F>,
+    L: Layout<F, EF>,
+{
+    OpeningShape::new(
+        LayoutBinding::new(layout.num_variables(), L::strategy(), layout.table_shapes()),
+        table_idx,
+        layout.num_variables_table(table_idx),
+        batch.current(),
+        batch.next(),
+        PointSource::Given,
+    )
+}
+
 /// Stacked-sumcheck prover layout
 pub trait Layout<F: Field, EF: ExtensionField<F>>: Sized {
     /// Builds this layout from a committed witness.
@@ -258,17 +281,7 @@ pub trait Layout<F: Field, EF: ExtensionField<F>>: Sized {
             "opening schedule must name at least one column"
         );
 
-        // A caller-fixed point contributes no step.
-        //
-        // This description therefore holds no challenge.
-        let shape = OpeningShape::new(
-            LayoutBinding::new(self.num_variables(), Self::strategy(), self.table_shapes()),
-            table_idx,
-            self.num_variables_table(table_idx),
-            batch.current(),
-            batch.next(),
-            PointSource::Given,
-        );
+        let shape = given_opening_shape(self, table_idx, batch);
         let mut transcript = OpeningProverTranscript::<Ch, F, EF>::new(challenger, shape);
 
         // Evaluate at the supplied point, then bind what was found.
@@ -279,6 +292,60 @@ pub trait Layout<F: Field, EF: ExtensionField<F>>: Sized {
         transcript.finish();
 
         evals
+    }
+
+    /// Records opening claims at a given point from evaluations the caller already holds.
+    ///
+    /// Plays exactly the transcript [`Self::eval_at`] plays. Only the source of the
+    /// evaluations differs: they are supplied rather than read off the columns.
+    ///
+    /// # Soundness
+    ///
+    /// A supplied evaluation is bound like any other, and the verifier recomputes its own.
+    /// A wrong one therefore yields a proof that does not verify, never one that does.
+    ///
+    /// # Arguments
+    ///
+    /// - Index of the table whose columns are opened.
+    /// - Column indices opened directly and through the successor view.
+    /// - Local-frame opening point.
+    /// - Evaluations, in the order [`Self::record_opening`] returns them.
+    /// - Sponge of the surrounding protocol, borrowed for this call.
+    ///
+    /// # Panics
+    ///
+    /// When the request names no column at all, or the evaluations do not match its shape.
+    fn eval_at_known<Ch>(
+        &mut self,
+        table_idx: usize,
+        batch: &OpeningRequest,
+        point: &Point<EF>,
+        evals: &OpeningEvals<EF>,
+        challenger: &mut Ch,
+    ) where
+        F: TranscriptField,
+        Ch: FieldChallenger<F> + GrindingChallenger<Witness = F>,
+    {
+        // Opening nothing would silently record an empty claim.
+        assert!(
+            !batch.is_empty(),
+            "opening schedule must name at least one column"
+        );
+        // One evaluation per column the request names, in the same two groups.
+        assert!(
+            batch.has_same_shape(evals),
+            "one evaluation per opened column, direct and successor alike"
+        );
+
+        let shape = given_opening_shape(self, table_idx, batch);
+        let mut transcript = OpeningProverTranscript::<Ch, F, EF>::new(challenger, shape);
+
+        // Record the supplied evaluations against the point, then bind them.
+        self.record_opening_known(table_idx, batch, point, evals);
+        transcript.evaluations(evals);
+
+        // Require that every described step was played.
+        transcript.finish();
     }
 
     /// Evaluates the selected columns of one table and records the resulting claim.
@@ -306,6 +373,35 @@ pub trait Layout<F: Field, EF: ExtensionField<F>>: Sized {
         batch: &OpeningRequest,
         point: &Point<EF>,
     ) -> OpeningEvals<EF>;
+
+    /// Records opening claims for the selected columns of one table from known evaluations.
+    ///
+    /// The arithmetic half of [`Self::eval_at_known`], with no transcript of its own.
+    ///
+    /// # Overview
+    ///
+    /// - Each evaluation is taken as the claim its column's pass would have produced.
+    /// - The claim is appended to this table's list in insertion order, as
+    ///   [`Self::record_opening`] appends it.
+    ///
+    /// # Arguments
+    ///
+    /// - Index of the table whose columns are opened.
+    /// - Column indices opened directly and through the successor view.
+    /// - Local-frame opening point, one coordinate per table variable.
+    /// - Evaluations, in the order [`Self::record_opening`] returns them.
+    ///
+    /// # Panics
+    ///
+    /// When the layout runs preprocessing rounds: those rounds read per-round residuals
+    /// of the column, which an evaluation alone does not carry.
+    fn record_opening_known(
+        &mut self,
+        table_idx: usize,
+        batch: &OpeningRequest,
+        point: &Point<EF>,
+        evals: &OpeningEvals<EF>,
+    );
 
     /// Records an out-of-domain evaluation of the full stacked polynomial.
     ///

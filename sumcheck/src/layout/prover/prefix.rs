@@ -132,6 +132,25 @@ impl<F: Field, EF: ExtensionField<F>> Layout<F, EF> for PrefixProver<F, EF> {
         OpeningBatch::new(current_evals, next_evals)
     }
 
+    fn record_opening_known(
+        &mut self,
+        table_idx: usize,
+        batch: &OpeningRequest,
+        point: &Point<EF>,
+        evals: &OpeningEvals<EF>,
+    ) {
+        // The opening point lives in the table's local frame, one coordinate per variable.
+        debug_assert_eq!(
+            point.num_variables(),
+            self.claims.tables[table_idx].num_variables()
+        );
+        debug_assert!(self.known_evals_agree(table_idx, batch, point, evals));
+
+        // The point is factorised as the evaluating route factorises it; only the pass is skipped.
+        let point = SvoPoint::new_packed(self.claims.folding, point);
+        self.claims.record_known(table_idx, batch, point, evals);
+    }
+
     /// Evaluates the full stacked polynomial at a point and records the claim.
     ///
     /// # Overview
@@ -341,6 +360,33 @@ impl<F: Field, EF: ExtensionField<F>> Layout<F, EF> for PrefixProver<F, EF> {
 }
 
 impl<F: Field, EF: ExtensionField<F>> PrefixProver<F, EF> {
+    /// Whether supplied evaluations are the ones the opened columns hold at the point.
+    ///
+    /// This runs exactly the passes a supplied evaluation exists to avoid, so it is only
+    /// ever reached from a debug assertion.
+    fn known_evals_agree(
+        &self,
+        table_idx: usize,
+        batch: &OpeningRequest,
+        point: &Point<EF>,
+        evals: &OpeningEvals<EF>,
+    ) -> bool {
+        let table = &self.claims.tables[table_idx];
+        let point = SvoPoint::new_packed(self.claims.folding, point);
+
+        batch.has_same_shape(evals)
+            && batch
+                .current()
+                .iter()
+                .zip(evals.current())
+                .all(|(&poly_idx, &eval)| point.eval(table.poly(poly_idx)).0 == eval)
+            && batch
+                .next()
+                .iter()
+                .zip(evals.next())
+                .all(|(&poly_idx, &eval)| point.eval_next_prefix(table.poly(poly_idx)).0 == eval)
+    }
+
     /// Builds the residual product polynomial with packed or scalar compression.
     pub(crate) fn residual_product(
         &self,
