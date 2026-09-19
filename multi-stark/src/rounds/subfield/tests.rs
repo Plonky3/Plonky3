@@ -27,7 +27,7 @@ pub(in crate::rounds) fn first_challenge() -> Tower {
 ///
 /// The tables and public values are given per AIR, in the order of `airs`.
 /// The challenges are fixed random elements of the tower.
-fn with_stage_state<A, R>(
+pub(in crate::rounds) fn with_stage_state<A, R>(
     airs: &[&A],
     public_values: &[&[Tower]],
     preprocessed: &[Option<&Table<Tower>>],

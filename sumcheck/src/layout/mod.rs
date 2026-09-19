@@ -87,7 +87,7 @@ pub use prover::{Layout, PrefixProver, StackedClaims, SuffixProver, SuffixResidu
 pub use transcript::{commitment_domain_separator, observe_commitment};
 pub use verifier::Verifier;
 pub use witness::{
-    ColumnOut, FilledSuffixWitness, Selector, SuffixFillError, SuffixLayoutPlan,
+    ColumnOut, ColumnView, FilledSuffixWitness, Selector, SuffixFillError, SuffixLayoutPlan,
     SuffixLayoutPlanError, SuffixTableSource, Table, TablePlacement, Witness,
 };
 

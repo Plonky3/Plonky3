@@ -7,6 +7,7 @@ use p3_sumcheck::layout::SuffixProver;
 
 mod boolean;
 mod boolean_trace;
+mod boolean_trace_transcript;
 mod error;
 mod fold;
 mod grouped_mmcs;

@@ -269,6 +269,34 @@ where
         IndexedPlan::build::<C::Val, C::Challenge, A>(&airs, &instances.num_variables())
             .expect("an indexed lookup the statement cannot plan is a caller error");
 
+    // IndexedWitness currently borrows dense field slices for both payload and position columns.
+    // Reject a packed source before the statement transcript or commitment can mutate the caller's
+    // challenger; silently decoding here would expand the complete indexed payload.
+    if indexed_plan.is_some() {
+        assert!(
+            tables.iter().all(|table| table.packed_bits().is_none()),
+            "packed Boolean source tables are unsupported for active indexed lookups"
+        );
+        let preprocessed_data = proving_key
+            .preprocessed
+            .as_ref()
+            .map(|preprocessed| &preprocessed.prover_data);
+        let mut next_preprocessed = 0;
+        for instance in instances.iter() {
+            if instance.air.preprocessed_width() != 0 {
+                let data = preprocessed_data.expect(
+                    "preprocessed proving key is missing for an AIR with preprocessed columns",
+                );
+                let table = config.committed_table(data, next_preprocessed);
+                next_preprocessed += 1;
+                assert!(
+                    table.packed_bits().is_none(),
+                    "packed Boolean preprocessed tables are unsupported for active indexed lookups"
+                );
+            }
+        }
+    }
+
     // Describe the statement before binding anything into it.
     //
     // Every number comes from the AIRs, from the tables this caller holds, and from `pow_bits`.
@@ -507,11 +535,17 @@ where
 
 #[cfg(test)]
 mod tests {
+    extern crate std;
+
+    use alloc::string::String;
     use alloc::vec;
+    use core::cell::Cell;
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+    use std::sync::OnceLock;
 
     use p3_air::{Air, AirBuilder, BaseAir, WindowAccess};
     use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
-    use p3_challenger::DuplexChallenger;
+    use p3_challenger::{CanSample, DuplexChallenger};
     use p3_dft::Radix2DFTSmallBatch;
     use p3_field::extension::BinomialExtensionField;
     use p3_field::{PackedValue, PrimeCharacteristicRing};
@@ -550,6 +584,10 @@ mod tests {
         pcs: TestPcs,
         /// Scheme sized for the stacked preprocessed traces.
         preprocessed_pcs: TestPcs,
+        /// Test-only hook for exposing a packed retained table to indexed proving.
+        committed_table_override: Option<&'static Table<F>>,
+        /// Number of main PCS accesses, used to prove early rejection.
+        main_pcs_uses: Cell<usize>,
     }
 
     impl MultiStarkConfig for TestConfig {
@@ -559,6 +597,7 @@ mod tests {
         type Pcs = TestPcs;
 
         fn pcs(&self) -> &TestPcs {
+            self.main_pcs_uses.set(self.main_pcs_uses.get() + 1);
             &self.pcs
         }
 
@@ -583,7 +622,8 @@ mod tests {
             prover_data: &'a p3_whir::WhirProverData<F, EF, MyMmcs, L>,
             table_index: usize,
         ) -> &'a Table<F> {
-            prover_data.table(table_index)
+            self.committed_table_override
+                .map_or_else(|| prover_data.table(table_index), |table| table)
         }
     }
 
@@ -630,6 +670,8 @@ mod tests {
         TestConfig {
             pcs: pcs(main),
             preprocessed_pcs: pcs(preprocessed),
+            committed_table_override: None,
+            main_pcs_uses: Cell::new(0),
         }
     }
 
@@ -877,6 +919,118 @@ mod tests {
             verdict,
             Err(VerificationError::IndexedClaimsUnopened)
         ));
+    }
+
+    #[test]
+    fn packed_indexed_sources_are_rejected_before_commitment_and_transcript() {
+        let table_air = Squares::Table("t");
+        let reader_air = Squares::Reader("t");
+        let config = config(FOLDING + 2, FOLDING);
+        let (proving_key, _) =
+            setup(&config, &[&table_air, &reader_air], &mut challenger()).unwrap();
+        let packed_table = Table::from_packed_bits(RowMajorMatrix::new(vec![0u64], 1), FOLDING);
+        let reader_table = Table::zero(2, FOLDING);
+        let proving_instances = ProverInstances::new(vec![
+            ProverInstance::new(&table_air, packed_table, &proving_key, &[]),
+            ProverInstance::new(&reader_air, reader_table, &proving_key, &[]),
+        ]);
+        let mut challenger = challenger();
+        let mut expected = challenger.clone();
+        let panic = match catch_unwind(AssertUnwindSafe(|| {
+            prove_forged::<_, _, GenericBackend>(
+                &config,
+                proving_instances,
+                0,
+                &mut challenger,
+                None,
+            )
+        })) {
+            Ok(_) => panic!("packed indexed input must be rejected"),
+            Err(panic) => panic,
+        };
+        let message = panic
+            .downcast_ref::<&str>()
+            .copied()
+            .or_else(|| panic.downcast_ref::<String>().map(String::as_str))
+            .unwrap_or_default();
+        assert!(
+            message.contains("packed Boolean source tables"),
+            "{message}"
+        );
+        assert_eq!(
+            config.main_pcs_uses.get(),
+            0,
+            "packed indexed rejection must precede the main PCS commitment"
+        );
+        for _ in 0..4 {
+            assert_eq!(
+                CanSample::<F>::sample(&mut challenger),
+                CanSample::<F>::sample(&mut expected),
+                "caller challenger changed before packed indexed rejection"
+            );
+        }
+    }
+
+    #[test]
+    fn packed_indexed_preprocessed_sources_are_rejected_before_pcs_and_transcript() {
+        let height = packed_floor();
+        let log_height = log2_strict_usize(height);
+        let fixed_air = Squares::Fixed("t", vec![0; height]);
+        let reader_air = Squares::Reader("t");
+        let airs = [&fixed_air, &reader_air];
+        let mut config = config(log_height + 2, log_height);
+        let (proving_key, _) = setup(&config, &airs, &mut challenger()).unwrap();
+        static PACKED_PREPROCESSED: OnceLock<Table<F>> = OnceLock::new();
+        let packed_preprocessed = PACKED_PREPROCESSED.get_or_init(|| {
+            let height = packed_floor();
+            Table::from_packed_bits(
+                RowMajorMatrix::new(vec![0u64; height.div_ceil(64)], 1),
+                log_height,
+            )
+        });
+        config.committed_table_override = Some(packed_preprocessed);
+
+        let fixed_table = Table::zero(1, log_height);
+        let reader_table = Table::zero(2, log_height);
+        let proving_instances = ProverInstances::new(vec![
+            ProverInstance::new(&fixed_air, fixed_table, &proving_key, &[]),
+            ProverInstance::new(&reader_air, reader_table, &proving_key, &[]),
+        ]);
+        let mut challenger = challenger();
+        let mut expected = challenger.clone();
+        let panic = match catch_unwind(AssertUnwindSafe(|| {
+            prove_forged::<_, _, GenericBackend>(
+                &config,
+                proving_instances,
+                0,
+                &mut challenger,
+                None,
+            )
+        })) {
+            Ok(_) => panic!("packed indexed preprocessed input must be rejected"),
+            Err(panic) => panic,
+        };
+        let message = panic
+            .downcast_ref::<&str>()
+            .copied()
+            .or_else(|| panic.downcast_ref::<String>().map(String::as_str))
+            .unwrap_or_default();
+        assert!(
+            message.contains("packed Boolean preprocessed tables"),
+            "{message}"
+        );
+        assert_eq!(
+            config.main_pcs_uses.get(),
+            0,
+            "packed preprocessed rejection must precede the main PCS commitment"
+        );
+        for _ in 0..4 {
+            assert_eq!(
+                CanSample::<F>::sample(&mut challenger),
+                CanSample::<F>::sample(&mut expected),
+                "caller challenger changed before packed preprocessed rejection"
+            );
+        }
     }
 
     #[test]
