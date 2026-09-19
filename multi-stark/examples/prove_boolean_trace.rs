@@ -481,6 +481,7 @@ mod tests {
     use p3_multi_stark::zerocheck::ZerocheckError;
     use p3_multi_stark::{VerificationError, security_report};
     use p3_multilinear_util::point::Point;
+    use p3_multilinear_util::poly::Poly;
     use p3_sumcheck::{OpeningBatch, OpeningProtocol, PrescribedPointPcs, TableSpec};
 
     use super::*;
@@ -695,11 +696,12 @@ mod tests {
         // Every part of the Boolean path reaches the report under its own label.
         //
         //     binary-pcs-opening   the commitment, its own claim batching included
-        //     bit-ring-switch      one reduction per opened column
+        //     bit-ring-switch      one reduction per batch
+        //     column-batching      the column point folding a batch's claimed values
         //
-        // Both are attributed to the commitment they were charged for.
-        // A report holding two openings then still says which of the two is short.
-        for label in ["binary-pcs-opening", "bit-ring-switch"] {
+        // All three are attributed to the commitment they were charged for.
+        // A report holding two openings then still says which of the three is short.
+        for label in ["binary-pcs-opening", "bit-ring-switch", "column-batching"] {
             assert!(
                 report
                     .terms()
@@ -819,15 +821,15 @@ mod tests {
         ));
     }
 
-    /// A batch asking to read one row ahead is refused rather than answered.
+    /// A batch reading one row ahead is answered alongside the current row.
     #[test]
-    fn a_successor_view_is_refused() {
+    fn a_successor_view_round_trips() {
         // Fixture state: one table, one batch naming column 0 on both sides.
         //
         //     current [0]   an evaluation at the point
         //     next    [0]   the same column weighted by a shifted equality table
         //
-        // The reduction underneath answers the first and not the second.
+        // One reduction answers both, and the verifier returns the successor reading.
         let log_height = 9;
         let shapes = shapes(&[log_height]);
         let config = PackedConfig::new(&shapes);
@@ -836,24 +838,103 @@ mod tests {
             vec![OpeningBatch::new(vec![0], vec![0])],
         )]);
 
-        // No assessment exists for a protocol the scheme would refuse, so a caller fails closed.
+        // The protocol is assessed, so a security-checked caller can run it.
         assert!(
             PrescribedPointPcs::<F, Challenger>::prescribed_security(&config.pcs, &protocol)
-                .is_none()
+                .is_some()
         );
 
         let (table, _) = trace(0x9500, log_height);
-        let (_, data) = config.pcs.commit(vec![table], &mut challenger()).unwrap();
+        let column = Poly::new(table.poly(0).as_slice().to_vec());
         let point = Point::<F>::rand(&mut SmallRng::seed_from_u64(0x9501), log_height);
-        let Err(error) = config
+
+        let mut prover_chal = challenger();
+        let (commitment, data) = config.pcs.commit(vec![table], &mut prover_chal).unwrap();
+        let proof = config
             .pcs
-            .open_at(data, &protocol, &[point], &mut challenger())
-        else {
-            panic!("a successor view is no evaluation at a point")
-        };
-        assert!(matches!(
-            error,
-            BooleanTraceError::SuccessorView { table: 0 }
-        ));
+            .open_at(
+                data,
+                &protocol,
+                core::slice::from_ref(&point),
+                &mut prover_chal,
+            )
+            .unwrap();
+
+        let mut verifier_chal = challenger();
+        config
+            .pcs
+            .observe_commitment(&commitment, &mut verifier_chal);
+        let evals = config
+            .pcs
+            .verify_at(
+                &commitment,
+                &proof,
+                &protocol,
+                core::slice::from_ref(&point),
+                &mut verifier_chal,
+            )
+            .unwrap();
+
+        // Row x reads row x + 1 and the last row reads itself, weighted at the point.
+        assert_eq!(evals[0].next()[0], column.eval_next_base(&point));
+    }
+
+    /// A Boolean trace whose sum column is set by the row before, as `SuccessorAir` asks.
+    ///
+    /// ```text
+    ///     columns 0, 1, 2, 4   random bits
+    ///     column 3, row 0      a random bit
+    ///     column 3, row x + 1  column 0 + column 1 + column 2 at row x
+    /// ```
+    fn successor_trace(seed: u64, log_height: usize) -> Table<F> {
+        let rows = 1usize << log_height;
+        let mut rng = SmallRng::seed_from_u64(seed);
+        let mut columns: Vec<Vec<F>> = (0..WIDTH)
+            .map(|_| {
+                (0..rows)
+                    .map(|_| F::from_bool(rng.random::<bool>()))
+                    .collect()
+            })
+            .collect();
+        for row in 1..rows {
+            columns[3][row] = columns[0][row - 1] + columns[1][row - 1] + columns[2][row - 1];
+        }
+        Table::new(RowMajorMatrix::new(columns.concat(), rows))
+    }
+
+    /// An AIR linking each row to the next proves on the bit commitment.
+    #[test]
+    fn a_transition_air_proves_on_the_boolean_commitment() {
+        // Fixture state: one table of 2^9 rows, column 3 opened now and one row ahead.
+        //
+        // The transition constraint reads column 3 at the next row, so the batch asks for both.
+        let log_height = 9;
+        let shapes = shapes(&[log_height]);
+        let config = PackedConfig::new(&shapes);
+        let air = SuccessorAir { complete: true };
+        let (pk, vk) = setup(&config, &[&air], &mut challenger()).unwrap();
+
+        let proof = prove_with_security(
+            &config,
+            ProverInstances::new(vec![ProverInstance::new(
+                &air,
+                successor_trace(0x9600, log_height),
+                &pk,
+                &[],
+            )]),
+            0,
+            SECURITY_BITS,
+            &mut challenger(),
+        )
+        .unwrap();
+        verify_with_security(
+            &config,
+            VerifierInstances::new(vec![VerifierInstance::new(&air, &vk, log_height, &[])]),
+            &proof,
+            0,
+            SECURITY_BITS,
+            &mut challenger(),
+        )
+        .unwrap();
     }
 }
