@@ -38,7 +38,7 @@ struct Args {
     representation: RepresentationOptions,
 
     /// Log of the inverse code rate for the binary PCS.
-    #[arg(long, default_value_t = 2)]
+    #[arg(long, default_value_t = 1)]
     log_inv_rate: usize,
 
     /// Grinding bits the binary PCS demands once, before its query phase.
@@ -54,13 +54,13 @@ struct Args {
     security_bits: usize,
 
     /// Sequential variable folds batched between binary-PCS commitments.
-    #[arg(long, default_value_t = 3)]
+    #[arg(long, default_value_t = 4)]
     folding: usize,
 
     /// Number of children each Merkle-tree node compresses: 2 or 4.
     ///
     /// 4 trades larger authentication paths in the proof for fewer compressions per tree.
-    #[arg(long, default_value_t = 2, value_parser = parse_merkle_arity)]
+    #[arg(long, default_value_t = 4, value_parser = parse_merkle_arity)]
     merkle_arity: usize,
 }
 
