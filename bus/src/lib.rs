@@ -6,6 +6,7 @@ extern crate alloc;
 mod argument;
 mod builder;
 mod debug;
+mod direction;
 mod evaluation;
 mod leaf;
 mod memory;
@@ -23,8 +24,9 @@ pub use debug::{
     BusDebugError, BusDebugInstance, BusDebugLimits, BusDebugLocation, BusDebugOccurrence,
     BusDebugReport, BusImbalance, BusUnmatched,
 };
+pub use direction::BusDirection;
 pub use evaluation::{BusEvaluation, BusEvaluationError};
-pub use leaf::{BusDirection, BusLeafDeclaration, BusLeafError, BusLeaves, BusSelector};
+pub use leaf::{BusLeafDeclaration, BusLeafError, BusLeaves, BusSelector};
 pub use memory::{
     MemoryFinalCounts, MemoryReadAddresses, MemoryReadCounts, MemoryReadValues, MemoryTableValues,
     ReadOnlyMemoryBus, ReadOnlyMemoryChallenges, ReadOnlyMemoryClaims, ReadOnlyMemoryColumns,

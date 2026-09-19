@@ -5,7 +5,8 @@ use p3_baby_bear::BabyBear;
 use p3_binary_field::BinaryField128;
 use p3_field::PrimeCharacteristicRing;
 
-use crate::leaf::{BusDirection, BusLeafDeclaration, BusLeafError, BusLeaves, BusSelector};
+use crate::BusDirection;
+use crate::leaf::{BusLeafDeclaration, BusLeafError, BusLeaves, BusSelector};
 
 #[test]
 fn directions_and_boolean_selection_survive_characteristic_two() {
