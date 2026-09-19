@@ -9,6 +9,7 @@ use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
 
 use super::*;
+use crate::config::DEFAULT_SLICED_ROUNDS;
 use crate::lookup::{AirLinkInstance, AirLinkLookup};
 use crate::rounds::{Stage, StageCoupling};
 use crate::zerocheck::backend_tests::{FixtureAir, Gf4, Instance, Tower, gf4, outside};
@@ -54,7 +55,14 @@ where
     let tau = Point::rand(&mut rng, stage.num_vars);
     let eq_suffix = Poly::new_from_point(&tau.as_slice()[1..], Tower::ONE);
     let betas = (0..airs.len()).map(|_| rng.random()).collect();
-    let state = RoundStateBase::new(stage, rng.random(), rng.random(), betas, tau);
+    let state = RoundStateBase::new(
+        stage,
+        rng.random(),
+        rng.random(),
+        betas,
+        tau,
+        DEFAULT_SLICED_ROUNDS,
+    );
     body(state, &eq_suffix)
 }
 

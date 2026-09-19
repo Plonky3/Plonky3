@@ -37,8 +37,10 @@ use super::{
 use crate::selectors::BoundaryEvals;
 use crate::sliced::{LaneSums, SLICED_LANES, SlicedFolder, SlicedGf4, gf4_coordinates, is_gf4};
 
-/// Rounds a stage evaluates on its planes.
-const SLICED_ROUNDS: usize = 3;
+/// Most rounds a stage may evaluate on its planes.
+///
+/// One corner word per bound variable is held on the stack, so the count has a ceiling.
+pub(crate) const MAX_SLICED_ROUNDS: usize = 4;
 
 /// Row variables one word's lanes span.
 const LANE_VARIABLES: usize = SLICED_LANES.trailing_zeros() as usize;
@@ -561,7 +563,15 @@ where
         if !is_gf4::<S>() || num_vars <= LANE_VARIABLES {
             return None;
         }
-        let rounds = SLICED_ROUNDS.min(num_vars - LANE_VARIABLES);
+        let rounds = self
+            .sliced_rounds
+            .min(MAX_SLICED_ROUNDS)
+            .min(num_vars - LANE_VARIABLES);
+        // A stage with no round to run on its planes is not repacked at all, so the caller
+        // reaches for another kernel as it does for a stage that does not fit.
+        if rounds == 0 {
+            return None;
+        }
 
         // Every column in merged-buffer order: main, preprocessed, periodic, AIR by AIR.
         let mut tables: Vec<&Table<F>> = Vec::new();
@@ -940,7 +950,7 @@ where
         // The value at every residual row of one word, from the corner words of both planes.
         let fold_word = |planes: &[[u64; 2]], column: usize, word: usize, out: &mut [R]| {
             let corner_words = |plane: usize| {
-                let mut words_of_plane = [0; 1 << SLICED_ROUNDS];
+                let mut words_of_plane = [0; 1 << MAX_SLICED_ROUNDS];
                 for (corner, value) in words_of_plane[..corners].iter_mut().enumerate() {
                     *value = planes[(corner * words + word) * width + column][plane];
                 }
