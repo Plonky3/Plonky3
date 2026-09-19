@@ -190,7 +190,7 @@ fn bus_composition_terms(
     let events = num_variables.saturating_mul(degree);
     let composition = SecurityTerm::new(
         "binary-bus-composition-sumcheck",
-        ErrorBits::from_log2((field_bits.get() as f64 - (events as f64).log2()).max(0.0)),
+        ErrorBits::from_log2((field_bits.get() as f64 - libm::log2(events as f64)).max(0.0)),
     );
     [direction, composition]
 }
