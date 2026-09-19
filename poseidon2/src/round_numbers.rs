@@ -41,9 +41,9 @@ pub enum Poseidon2RoundNumbersError {
         /// Multiplicative-group order the exponent must be coprime to.
         field_order_minus_one: u64,
     },
-    /// No audited round count exists for this width and exponent.
+    /// No precomputed round count exists for this width and exponent.
     #[error(
-        "no audited Poseidon2 round count for a {field_bits}-bit field with width {width} and S-box exponent {exponent}"
+        "no precomputed Poseidon2 round count for a {field_bits}-bit field with width {width} and S-box exponent {exponent}"
     )]
     UnsupportedWidthAndExponent {
         /// Bit length of the field order.
@@ -54,7 +54,7 @@ pub enum Poseidon2RoundNumbersError {
         exponent: u64,
     },
     /// The table has not been computed for this field size.
-    #[error("no audited Poseidon2 round counts for a {field_bits}-bit field")]
+    #[error("no precomputed Poseidon2 round counts for a {field_bits}-bit field")]
     UnsupportedFieldSize {
         /// Bit length of the field order.
         field_bits: u32,
@@ -74,7 +74,7 @@ const FULL_ROUNDS_128: usize = 8;
 ///
 /// Returns an error when `d` does not define a permutation over `F`.
 ///
-/// Returns an error when the audited table has no entry for the field size, `width`, and `d`.
+/// Returns an error when the precomputed table has no matching parameter set.
 pub const fn poseidon2_round_numbers_128<F: PrimeField64>(
     width: usize,
     d: u64,
@@ -184,7 +184,7 @@ mod tests {
         );
         assert_eq!(
             error.to_string(),
-            "no audited Poseidon2 round count for a 31-bit field with width 15 and S-box exponent 7"
+            "no precomputed Poseidon2 round count for a 31-bit field with width 15 and S-box exponent 7"
         );
     }
 
@@ -193,7 +193,7 @@ mod tests {
         let error = Poseidon2RoundNumbersError::UnsupportedFieldSize { field_bits: 48 };
         assert_eq!(
             error.to_string(),
-            "no audited Poseidon2 round counts for a 48-bit field"
+            "no precomputed Poseidon2 round counts for a 48-bit field"
         );
     }
 }

@@ -280,19 +280,37 @@ impl fmt::Display for BinaryProofReport {
 pub enum BinaryProofError {
     /// The requested PCS parameters do not describe a usable binary-PCS schedule.
     #[error("binary PCS configuration failed: {0}")]
-    Config(#[from] BinaryPcsConfigError),
+    Config(BinaryPcsConfigError),
     /// Proving (including `setup`) rejected its configuration, budget, or security target.
     #[error("binary proof generation failed: {0}")]
-    Prove(#[from] ProvingError<PcsProverError<BinaryStarkConfig<2>>>),
+    Prove(ProvingError<PcsProverError<BinaryStarkConfig<2>>>),
     /// The generated proof failed verification.
     #[error("binary proof verification failed: {0}")]
-    Verify(#[from] VerificationError<PcsError<BinaryStarkConfig<2>>>),
+    Verify(VerificationError<PcsError<BinaryStarkConfig<2>>>),
     /// The statement's security assessment left a component unassessed or below target.
     #[error("binary proof security check failed: {0}")]
-    Security(#[source] SecurityError),
+    Security(SecurityError),
     /// `options.merkle_arity` is not one of the arities the binary-field harness builds.
     #[error("unsupported Merkle arity {0}; expected 2 or 4")]
     UnsupportedMerkleArity(usize),
+}
+
+impl From<BinaryPcsConfigError> for BinaryProofError {
+    fn from(error: BinaryPcsConfigError) -> Self {
+        Self::Config(error)
+    }
+}
+
+impl From<ProvingError<PcsProverError<BinaryStarkConfig<2>>>> for BinaryProofError {
+    fn from(error: ProvingError<PcsProverError<BinaryStarkConfig<2>>>) -> Self {
+        Self::Prove(error)
+    }
+}
+
+impl From<VerificationError<PcsError<BinaryStarkConfig<2>>>> for BinaryProofError {
+    fn from(error: VerificationError<PcsError<BinaryStarkConfig<2>>>) -> Self {
+        Self::Verify(error)
+    }
 }
 
 /// AIR obligations the binary-field harness needs, stated once each.
@@ -750,7 +768,7 @@ mod tests {
     }
 
     #[test]
-    fn configuration_error_reports_context_and_preserves_the_source() {
+    fn configuration_error_reports_context_and_inner_message_once() {
         let error = BinaryProofError::from(BinaryPcsConfigError::InvalidFoldingFactor {
             requested: 0,
             num_variables: 8,
@@ -759,9 +777,6 @@ mod tests {
             error.to_string(),
             "binary PCS configuration failed: folding factor log 0 must be in 1..=8"
         );
-        assert_eq!(
-            error.source().map(ToString::to_string).as_deref(),
-            Some("folding factor log 0 must be in 1..=8")
-        );
+        assert!(error.source().is_none());
     }
 }

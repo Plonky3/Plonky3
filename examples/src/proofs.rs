@@ -80,17 +80,13 @@ fn example_circle_parameters<EF: Field, M>(mmcs: M) -> FriParameters<M> {
 
 /// Distinguishes a rejected proving budget from a rejected proof.
 #[derive(Debug, thiserror::Error)]
-pub enum ProofRunError<P, V>
-where
-    P: core::error::Error + 'static,
-    V: core::error::Error + 'static,
-{
+pub enum ProofRunError<P, V> {
     /// Proof generation rejected its configuration or opening budget.
     #[error("proof generation failed: {0}")]
-    Prove(#[source] P),
+    Prove(P),
     /// The generated proof failed verification.
     #[error("proof verification failed: {0}")]
-    Verify(#[source] V),
+    Verify(V),
 }
 
 type ProofRunResult<SC> = Result<
@@ -553,8 +549,6 @@ pub fn report_stir_security_level(security_level: usize, max_pow_bits: usize) {
 
 #[cfg(test)]
 mod tests {
-    use core::error::Error;
-
     use p3_baby_bear::BabyBear;
     use p3_field::extension::BinomialExtensionField;
     use p3_koala_bear::KoalaBear;
@@ -570,17 +564,14 @@ mod tests {
     struct TestVerificationError;
 
     #[test]
-    fn proof_run_error_reports_the_phase_and_preserves_the_source() {
+    fn proof_run_error_reports_the_phase_and_inner_message_once() {
         let proving =
             ProofRunError::<TestProvingError, TestVerificationError>::Prove(TestProvingError);
         assert_eq!(
             proving.to_string(),
             "proof generation failed: opening budget exceeded"
         );
-        assert_eq!(
-            proving.source().map(ToString::to_string).as_deref(),
-            Some("opening budget exceeded")
-        );
+        assert!(core::error::Error::source(&proving).is_none());
 
         let verification =
             ProofRunError::<TestProvingError, TestVerificationError>::Verify(TestVerificationError);
@@ -588,10 +579,7 @@ mod tests {
             verification.to_string(),
             "proof verification failed: constraint mismatch"
         );
-        assert_eq!(
-            verification.source().map(ToString::to_string).as_deref(),
-            Some("constraint mismatch")
-        );
+        assert!(core::error::Error::source(&verification).is_none());
     }
 
     fn check_fri_target<EF: Field>() {

@@ -649,7 +649,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn grinding_mismatch_is_an_error_without_changing_its_message() {
+    fn grinding_mismatch_is_an_error_naming_site_and_counts() {
         fn assert_error<E: core::error::Error>() {}
         assert_error::<GrindingMismatch>();
 

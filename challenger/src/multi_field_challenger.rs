@@ -59,14 +59,6 @@ pub enum MultiField32ChallengerError {
         /// Field that holds the duplex sponge state.
         sponge_field: &'static str,
     },
-    /// The rate leaves no capacity element in the duplex state.
-    #[error("challenger rate {rate} must be smaller than state width {width}")]
-    RateNotSmallerThanWidth {
-        /// Number of elements exposed for absorption and squeezing.
-        rate: usize,
-        /// Total number of elements in the duplex state.
-        width: usize,
-    },
     /// One absorb batch cannot encode its scalar count in the one-byte length tag.
     #[error(
         "a full absorb batch contains {batch_len} sampled-field elements, exceeding the u8 length-tag limit of {max}"
@@ -123,20 +115,14 @@ where
     ///
     /// # Errors
     ///
-    /// Returns an error if the transcript field cannot injectively encode the sampled field, the
-    /// duplex rate leaves no capacity element, or a full absorb batch cannot be represented by
-    /// the transcript's one-byte length tag.
+    /// Returns an error if the transcript field cannot injectively encode the sampled field.
+    ///
+    /// Returns an error if a full absorb batch cannot fit in the one-byte length tag.
     pub fn new(permutation: P) -> Result<Self, MultiField32ChallengerError> {
         if F::order() >= PF::order() {
             return Err(MultiField32ChallengerError::FieldOrderNotIncreasing {
                 input_field: type_name::<F>(),
                 sponge_field: type_name::<PF>(),
-            });
-        }
-        if RATE >= WIDTH {
-            return Err(MultiField32ChallengerError::RateNotSmallerThanWidth {
-                rate: RATE,
-                width: WIDTH,
             });
         }
         // A full flush stamps up to limbs-per-slot * RATE scalars into a byte-sized length tag.
@@ -508,7 +494,7 @@ mod tests {
     impl<T: Clone, const W: usize> CryptographicPermutation<[T; W]> for WideIdentityPermutation {}
 
     #[test]
-    fn test_new_reports_invalid_field_order_and_rate() {
+    fn test_new_reports_invalid_field_order() {
         let field_order = MultiField32Challenger::<F, F, _, 8, 4>::new(WideIdentityPermutation)
             .err()
             .expect("equal field orders must fail");
@@ -526,18 +512,6 @@ mod tests {
                 type_name::<F>(),
                 type_name::<F>()
             )
-        );
-
-        // The inner duplex constructor enforces this const-generic invariant at compile time.
-        // Construct the public diagnostic directly to pin its developer-facing message.
-        let rate = MultiField32ChallengerError::RateNotSmallerThanWidth { rate: 8, width: 8 };
-        assert_eq!(
-            rate,
-            MultiField32ChallengerError::RateNotSmallerThanWidth { rate: 8, width: 8 }
-        );
-        assert_eq!(
-            rate.to_string(),
-            "challenger rate 8 must be smaller than state width 8"
         );
     }
 
