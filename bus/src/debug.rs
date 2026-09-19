@@ -208,136 +208,133 @@ pub enum BusDebugError {
     },
 }
 
-/// Replays every declaration and reports unmatched tuples with their sources.
-///
-/// Named buses are checked independently.
-///
-/// Direction remains metadata rather than a field sign.
-///
-/// # Errors
-///
-/// Returns an error when the declaration layout or concrete inputs are malformed.
-///
-/// # Performance
-///
-/// - Memory is linear in the number of distinct active tuples.
-/// - Output is linear in the number of unmatched tuples.
-/// - The routine is intended for trusted development traces.
-pub fn check_bus_balance<F>(
-    instances: &[BusDebugInstance<'_, F>],
-) -> Result<BusDebugReport<F>, BusDebugError>
-where
-    F: Field,
-{
-    // Build the same deterministic named-bus layout used by the proof protocol.
-    let inputs = instances
-        .iter()
-        .map(|instance| BusPlanInput {
-            log_height: instance.main.num_variables(),
-            interactions: instance.interactions,
-        })
-        .collect::<Vec<_>>();
-    let Some(plan) = BusPlan::build(&inputs)? else {
-        return Ok(BusDebugReport {
-            imbalances: Vec::new(),
-        });
-    };
-
-    // Fixed and committed columns must describe the same row domain.
-    for (air, instance) in instances.iter().enumerate() {
-        if let Some(preprocessed) = instance.preprocessed
-            && preprocessed.num_variables() != instance.main.num_variables()
-        {
-            return Err(BusDebugError::PreprocessedHeightMismatch {
-                air,
-                expected: instance.main.num_variables(),
-                actual: preprocessed.num_variables(),
+impl<F: Field> BusDebugReport<F> {
+    /// Replays every declaration and reports unmatched tuples with their sources.
+    ///
+    /// Named buses are checked independently.
+    ///
+    /// Direction remains metadata rather than a field sign.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the declaration layout or concrete inputs are malformed.
+    ///
+    /// # Performance
+    ///
+    /// - Memory is linear in the number of distinct active tuples.
+    /// - Output is linear in the number of unmatched tuples.
+    /// - The routine is intended for trusted development traces.
+    pub fn check(instances: &[BusDebugInstance<'_, F>]) -> Result<Self, BusDebugError> {
+        // Build the same deterministic named-bus layout used by the proof protocol.
+        let inputs = instances
+            .iter()
+            .map(|instance| BusPlanInput {
+                log_height: instance.main.num_variables(),
+                interactions: instance.interactions,
+            })
+            .collect::<Vec<_>>();
+        let Some(plan) = BusPlan::build(&inputs)? else {
+            return Ok(Self {
+                imbalances: Vec::new(),
             });
-        }
-    }
+        };
 
-    // Domain names are already sorted and assigned stable identities by the plan.
-    let domain_indices = plan
-        .domains()
-        .iter()
-        .enumerate()
-        .map(|(index, domain)| (domain.name.as_str(), index))
-        .collect::<HashMap<_, _>>();
-
-    // A hash index provides constant-time grouping.
-    // The parallel vector preserves deterministic first-occurrence order for diagnostics.
-    let mut entry_indices = HashMap::<(usize, Vec<F>), usize>::new();
-    let mut entries = Vec::<Entry<F>>::new();
-
-    for (air, instance) in instances.iter().enumerate() {
-        let height = 1usize << instance.main.num_variables();
-
-        for row in 0..height {
-            let evaluator = RowEvaluator {
-                air,
-                declaration: 0,
-                row,
-                height,
-                main: instance.main,
-                preprocessed: instance.preprocessed,
-                public_values: instance.public_values,
-            };
-
-            for (declaration, interaction) in instance.interactions.iter().enumerate() {
-                let evaluator = RowEvaluator {
-                    declaration,
-                    ..evaluator
-                };
-
-                // Inactive rows contribute the product identity and no multiset occurrence.
-                if !activation_is_set(&interaction.activation, &evaluator)? {
-                    continue;
-                }
-
-                // Resolve the exact payload tuple recorded by the symbolic AIR pass.
-                let tuple = interaction
-                    .fields
-                    .iter()
-                    .map(|field| evaluator.evaluate(field))
-                    .collect::<Result<Vec<_>, _>>()?;
-                let bus = domain_indices[interaction.bus_name.as_str()];
-                let key = (bus, tuple.clone());
-
-                // Reuse an existing tuple accumulator or append one deterministic entry.
-                let entry = if let Some(&index) = entry_indices.get(&key) {
-                    &mut entries[index]
-                } else {
-                    let index = entries.len();
-                    entry_indices.insert(key, index);
-                    entries.push(Entry::new(bus, tuple));
-                    &mut entries[index]
-                };
-
-                entry.record(
-                    interaction.direction,
-                    BusDebugLocation {
-                        air,
-                        declaration,
-                        row,
-                    },
-                )?;
+        // Fixed and committed columns must describe the same row domain.
+        for (air, instance) in instances.iter().enumerate() {
+            if let Some(preprocessed) = instance.preprocessed
+                && preprocessed.num_variables() != instance.main.num_variables()
+            {
+                return Err(BusDebugError::PreprocessedHeightMismatch {
+                    air,
+                    expected: instance.main.num_variables(),
+                    actual: preprocessed.num_variables(),
+                });
             }
         }
+
+        // Domain names are already sorted and assigned stable identities by the plan.
+        let domain_indices = plan
+            .domains()
+            .iter()
+            .enumerate()
+            .map(|(index, domain)| (domain.name.as_str(), index))
+            .collect::<HashMap<_, _>>();
+
+        // A hash index provides constant-time grouping.
+        // The parallel vector preserves deterministic first-occurrence order for diagnostics.
+        let mut entry_indices = HashMap::<(usize, Vec<F>), usize>::new();
+        let mut entries = Vec::<Entry<F>>::new();
+
+        for (air, instance) in instances.iter().enumerate() {
+            let height = 1usize << instance.main.num_variables();
+
+            for row in 0..height {
+                let evaluator = RowEvaluator {
+                    air,
+                    declaration: 0,
+                    row,
+                    height,
+                    main: instance.main,
+                    preprocessed: instance.preprocessed,
+                    public_values: instance.public_values,
+                };
+
+                for (declaration, interaction) in instance.interactions.iter().enumerate() {
+                    let evaluator = RowEvaluator {
+                        declaration,
+                        ..evaluator
+                    };
+
+                    // Inactive rows contribute the product identity and no multiset occurrence.
+                    if !activation_is_set(&interaction.activation, &evaluator)? {
+                        continue;
+                    }
+
+                    // Resolve the exact payload tuple recorded by the symbolic AIR pass.
+                    let tuple = interaction
+                        .fields
+                        .iter()
+                        .map(|field| evaluator.evaluate(field))
+                        .collect::<Result<Vec<_>, _>>()?;
+                    let bus = domain_indices[interaction.bus_name.as_str()];
+                    let key = (bus, tuple.clone());
+
+                    // Reuse an existing tuple accumulator or append one deterministic entry.
+                    let entry = if let Some(&index) = entry_indices.get(&key) {
+                        &mut entries[index]
+                    } else {
+                        let index = entries.len();
+                        entry_indices.insert(key, index);
+                        entries.push(Entry::new(bus, tuple));
+                        &mut entries[index]
+                    };
+
+                    entry.record(
+                        interaction.direction,
+                        BusDebugLocation {
+                            air,
+                            declaration,
+                            row,
+                        },
+                    )?;
+                }
+            }
+        }
+
+        // Equal multiplicities cancel as integers rather than as field elements.
+        let imbalances = entries
+            .into_iter()
+            .filter(|entry| entry.pushes.count != entry.pulls.count)
+            .map(|entry| BusImbalance {
+                bus_name: plan.domains()[entry.bus].name.clone(),
+                tuple: entry.tuple,
+                pushes: entry.pushes,
+                pulls: entry.pulls,
+            })
+            .collect();
+
+        Ok(Self { imbalances })
     }
-
-    // Equal multiplicities cancel as integers rather than as field elements.
-    let imbalances = entries
-        .into_iter()
-        .filter(|entry| entry.pushes.count != entry.pulls.count)
-        .map(|entry| BusImbalance {
-            bus_name: plan.domains()[entry.bus].name.clone(),
-            tuple: entry.tuple,
-            pushes: entry.pushes,
-            pulls: entry.pulls,
-        })
-        .collect();
-
-    Ok(BusDebugReport { imbalances })
 }
 
 /// Integer multiplicities accumulated for one named tuple.
@@ -603,7 +600,7 @@ mod tests {
         ];
 
         // Every produced tuple has one matching consumed occurrence.
-        let report = check_bus_balance(&instances).unwrap();
+        let report = BusDebugReport::check(&instances).unwrap();
         assert!(report.is_balanced());
     }
 
@@ -640,7 +637,7 @@ mod tests {
         ];
 
         // The report names the bus, tuple, exact multiplicities, and emitting rows.
-        let report = check_bus_balance(&instances).unwrap();
+        let report = BusDebugReport::check(&instances).unwrap();
         assert_eq!(report.imbalances.len(), 1);
         let mismatch = &report.imbalances[0];
         assert_eq!(mismatch.bus_name, "dispatch");
@@ -678,7 +675,7 @@ mod tests {
         }];
 
         // Characteristic two cannot erase either structural direction or bus identity.
-        let report = check_bus_balance(&instances).unwrap();
+        let report = BusDebugReport::check(&instances).unwrap();
         assert_eq!(report.imbalances.len(), 2);
         assert_eq!(report.imbalances[0].bus_name, "a");
         assert_eq!(report.imbalances[1].bus_name, "b");
@@ -703,7 +700,7 @@ mod tests {
 
         // Honest-prover diagnostics fail before constructing a misleading balance report.
         assert_eq!(
-            check_bus_balance(&instances),
+            BusDebugReport::check(&instances),
             Err(BusDebugError::NonBooleanActivation {
                 air: 0,
                 declaration: 0,
