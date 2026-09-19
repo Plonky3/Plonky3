@@ -17,6 +17,18 @@ tikv-jemallocator.workspace = true
 # This package contains host executables rather than an embedded library.
 embedded = false
 
+[features]
+parallel = [
+    "p3-binary-dft/parallel",
+    "p3-binary-field/parallel",
+    "p3-binary-pcs/parallel",
+    "p3-blake3-air/parallel",
+    "p3-keccak-air/parallel",
+    "p3-merkle-tree/parallel",
+    "p3-multi-stark/parallel",
+    "p3-sumcheck/parallel",
+]
+
 [dependencies]
 p3-air.workspace = true
 p3-binary-dft.workspace = true
@@ -49,6 +61,7 @@ p3-util.workspace = true
 clap.workspace = true
 postcard = { workspace = true, features = ["alloc"] }
 rand.workspace = true
+serde.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
