@@ -77,6 +77,7 @@ use p3_challenger::fs::TranscriptField;
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
 use p3_commit::{Mmcs, MultilinearPcs};
 use p3_field::Field;
+use p3_matrix::dense::RowMajorMatrix;
 use p3_maybe_rayon::prelude::*;
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
@@ -109,6 +110,18 @@ const WORD_BITS: usize = 64;
 ///
 /// Small enough to leave real parallelism at the trace heights this crate commits.
 const ROW_GRAIN: usize = 1 << 12;
+
+/// Bytes one packed word holds, each indexing one subset-sum table.
+const BYTES_PER_WORD: usize = WORD_BITS / 8;
+
+/// Adjacent packed columns one gather task copies, one source line's worth of words.
+const GATHER_GROUP: usize = 8;
+
+/// Row blocks of 64 rows one task sums with one set of subset-sum tables.
+///
+/// Large enough that allocating the task's tables is amortised.
+/// Small enough to keep every core fed at the heights a wide trace reaches.
+const BLOCKS_PER_TASK: usize = 16;
 
 /// A commitment to a batch of Boolean trace tables, packed into one bit witness.
 ///
@@ -327,34 +340,27 @@ where
     /// Sum every column of a table against one weight per row.
     fn weighted_columns(table: &Table<EF>, weights: &Poly<EF>) -> Vec<EF> {
         let rows = weights.as_slice();
+        // A packed table is summed word by word, so no cell is decoded.
+        if let Some(words) = table.packed_bits() {
+            return packed_column_sums(words, rows);
+        }
         table
             .par_columns()
             .map(|column| Self::weighted_column(column, rows))
             .collect()
     }
 
-    /// Sum one column against one weight per row.
+    /// Sum one dense column against one weight per row.
     ///
     /// A cell is zero or one, so a value adds up the weights of the rows holding a one.
+    ///
+    /// # Panics
+    ///
+    /// Panics on a packed column, which [`packed_column_sums`] sums a whole table at a time.
     fn weighted_column(column: ColumnView<'_, EF>, rows: &[EF]) -> EF {
-        let Some(cells) = column.as_dense() else {
-            // A packed column is walked word by word, so no cell is decoded.
-            //
-            // The walk is serial, so a packed table is split over its columns and no
-            // further: a narrow one takes one task per column at any height.
-            let mut result = EF::ZERO;
-            for word in 0..column.len().div_ceil(WORD_BITS) {
-                let mut bits = column
-                    .boolean_word(word)
-                    .expect("packed column must expose every source word");
-                while bits != 0 {
-                    let bit = bits.trailing_zeros() as usize;
-                    result += rows[word * WORD_BITS + bit];
-                    bits &= bits - 1;
-                }
-            }
-            return result;
-        };
+        let cells = column
+            .as_dense()
+            .expect("a packed table is summed word by word");
 
         // A dense column splits into runs of rows, each task summing the weights it selects.
         // Addition is order independent, so the split the pool chooses does not reach the sum.
@@ -397,56 +403,204 @@ where
         // One word per sixty-four bits of the padded witness, the tail left at zero.
         let mut words = alloc::vec![0u64; 1 << (self.num_variables() - 6)];
 
-        for placement in &placements {
-            let table = &tables[placement.idx()];
-            let column_len = 1usize << table.num_variables();
+        // A column of at least one word owns a run of whole words; a shorter one shares a word.
+        //
+        // Each entry is `(first word or cell, position in placement order, column)`.
+        let mut runs = Vec::new();
+        let mut short = Vec::new();
+        for (position, placement) in placements.iter().enumerate() {
+            let column_len = 1usize << tables[placement.idx()].num_variables();
             for (column, selector) in placement.selectors().iter().enumerate() {
                 // A slot starts at a multiple of its own length, counted in cells.
                 let offset = selector.index() * column_len;
-                let refuse = || BooleanTraceError::NonBooleanCell {
-                    table: placement.idx(),
-                    column,
-                };
-
-                let view = table.column(column);
-                if let Some(cells) = view.as_dense() {
-                    if column_len >= WORD_BITS {
-                        // The slot is word aligned and fills whole words, so none is read back.
-                        let (runs, rest) = cells.as_chunks::<WORD_BITS>();
-                        debug_assert!(rest.is_empty(), "a power-of-two column fills whole words");
-                        for (word, run) in words[offset / WORD_BITS..].iter_mut().zip(runs) {
-                            *word = pack_word(run).ok_or_else(refuse)?;
-                        }
-                    } else {
-                        // A shorter column sits inside one word, so its bits are set in place.
-                        for (cell, &value) in cells.iter().enumerate() {
-                            let bit = bit_of(value).ok_or_else(refuse)?;
-                            let index = offset + cell;
-                            words[index / WORD_BITS] |= bit << (index % WORD_BITS);
-                        }
-                    }
-                } else if column_len >= WORD_BITS {
-                    let source_words = column_len / WORD_BITS;
-                    for word in 0..source_words {
-                        words[offset / WORD_BITS + word] = view
-                            .boolean_word(word)
-                            .expect("packed column must expose every source word");
-                    }
+                if column_len >= WORD_BITS {
+                    runs.push((offset / WORD_BITS, position, column));
                 } else {
-                    let bits = view
-                        .boolean_word(0)
-                        .expect("packed short column must expose its source word");
-                    for cell in 0..column_len {
-                        let index = offset + cell;
-                        words[index / WORD_BITS] |= ((bits >> cell) & 1) << (index % WORD_BITS);
-                    }
+                    short.push((offset, position, column));
                 }
             }
+        }
+
+        // The runs are disjoint, so they are carved out of the witness and filled in parallel.
+        //
+        // Packed columns of one table go in groups of adjacent columns: one block row holds
+        // their words side by side, so a group reads each source line once.
+        runs.sort_unstable_by_key(|&(offset, ..)| offset);
+        let mut rest = words.as_mut_slice();
+        let mut consumed = 0;
+        let mut carved = Vec::with_capacity(runs.len());
+        for (offset, position, column) in runs {
+            let len = (1usize << tables[placements[position].idx()].num_variables()) / WORD_BITS;
+            let (_, tail) = core::mem::take(&mut rest).split_at_mut(offset - consumed);
+            let (run, tail) = tail.split_at_mut(len);
+            carved.push((position, column, run));
+            rest = tail;
+            consumed = offset + len;
+        }
+        carved.sort_unstable_by_key(|&(position, column, _)| (position, column));
+        let mut groups: Vec<Vec<(usize, usize, &mut [u64])>> = Vec::new();
+        for entry in carved {
+            let packed = tables[placements[entry.0].idx()].packed_bits().is_some();
+            match groups.last_mut() {
+                Some(group)
+                    if packed
+                        && group.len() < GATHER_GROUP
+                        && group[0].0 == entry.0
+                        && group[0].1 / GATHER_GROUP == entry.1 / GATHER_GROUP =>
+                {
+                    group.push(entry);
+                }
+                _ => groups.push(alloc::vec![entry]),
+            }
+        }
+
+        // The smallest (position, column) over all refusals is the first in placement order.
+        let long_refusal = groups
+            .into_par_iter()
+            .filter_map(|group| gather_runs(tables, &placements, group))
+            .min();
+
+        // A short column's bits are set in place, inside a word other columns may share.
+        let mut short_refusal = None;
+        for (offset, position, column) in short {
+            let table = &tables[placements[position].idx()];
+            let view = table.column(column);
+            let bits = if let Some(cells) = view.as_dense() {
+                let Some(bits) = pack_word(cells) else {
+                    short_refusal = Some((position, column));
+                    break;
+                };
+                bits
+            } else {
+                view.boolean_word(0)
+                    .expect("packed short column must expose its source word")
+            };
+            for cell in 0..view.len() {
+                let index = offset + cell;
+                words[index / WORD_BITS] |= ((bits >> cell) & 1) << (index % WORD_BITS);
+            }
+        }
+
+        if let Some((position, column)) = long_refusal.into_iter().chain(short_refusal).min() {
+            return Err(BooleanTraceError::NonBooleanCell {
+                table: placements[position].idx(),
+                column,
+            });
         }
 
         // Lane `j` of a block is bit `j` of its word, which is the packing's own convention.
         Ok(words.into_iter().map(PackedGf2::new).collect())
     }
+}
+
+/// Sum each packed column's row weights over the rows where it holds one.
+///
+/// # Algorithm
+///
+/// Row `64 * b + j` of column `c` is bit `j` of `words[b][c]`.
+///
+/// A row block's 64 weights fall into eight bytes of eight rows each.
+///
+/// Every subset of one byte's rows gets its sum tabulated once per block:
+///
+/// ```text
+///     table[g][s] = sum of weight(64 * b + 8 * g + j) over the set bits j of s
+///     column c   += table[0][byte 0 of the word] + ... + table[7][byte 7 of the word]
+/// ```
+///
+/// So a word costs eight table reads, however many of its bits are set.
+///
+/// The tables are shared by every column of the block, whose words are contiguous.
+///
+/// # Arguments
+///
+/// - `words`: one row per block of 64 rows, one entry per column.
+/// - `row_weights`: one weight per row, at least as many as the column's rows.
+fn packed_column_sums<EF: Field>(words: &RowMajorMatrix<u64>, row_weights: &[EF]) -> Vec<EF> {
+    let width = words.width;
+    debug_assert!(
+        row_weights.len() > (words.values.len() / width).saturating_sub(1) * WORD_BITS,
+        "every row block needs at least one weight"
+    );
+    words
+        .values
+        .par_chunks(width * BLOCKS_PER_TASK)
+        .enumerate()
+        .par_fold_reduce(
+            || EF::zero_vec(width),
+            |mut sums, (task, blocks)| {
+                let mut tables = EF::zero_vec(BYTES_PER_WORD << 8);
+                let (tables, _) = tables.as_chunks_mut::<256>();
+                for (offset, block) in blocks.chunks_exact(width).enumerate() {
+                    let first_row = (task * BLOCKS_PER_TASK + offset) * WORD_BITS;
+                    for (group, table) in tables.iter_mut().enumerate() {
+                        // Rows past the column's end carry no weight; their bits are zero.
+                        let weight = |row: usize| {
+                            row_weights
+                                .get(first_row + 8 * group + row)
+                                .copied()
+                                .unwrap_or(EF::ZERO)
+                        };
+                        // Each subset extends the one without its lowest row by that row.
+                        for subset in 1..256usize {
+                            table[subset] = table[subset & (subset - 1)]
+                                + weight(subset.trailing_zeros() as usize);
+                        }
+                    }
+                    for (sum, &word) in sums.iter_mut().zip(block) {
+                        *sum += tables
+                            .iter()
+                            .zip(word.to_le_bytes())
+                            .map(|(table, byte)| table[usize::from(byte)])
+                            .sum::<EF>();
+                    }
+                }
+                sums
+            },
+            |mut left, right| {
+                left.iter_mut()
+                    .zip(right)
+                    .for_each(|(left, right)| *left += right);
+                left
+            },
+        )
+}
+
+/// Fill the word runs of one group of columns, returning the first column refused.
+///
+/// A group is one dense column, or up to [`GATHER_GROUP`] adjacent packed columns of one table.
+///
+/// Each entry is `(position in placement order, column, the column's word run)`.
+fn gather_runs<EF: Field>(
+    tables: &[Table<EF>],
+    placements: &[TablePlacement],
+    mut group: Vec<(usize, usize, &mut [u64])>,
+) -> Option<(usize, usize)> {
+    let table = &tables[placements[group[0].0].idx()];
+    if let Some(source) = table.packed_bits() {
+        // Block row `b` holds word `b` of every column, so one row serves the whole group.
+        for (block, row) in source.values.chunks_exact(source.width).enumerate() {
+            for (_, column, run) in &mut group {
+                run[block] = row[*column];
+            }
+        }
+        return None;
+    }
+    let (position, column, run) = &mut group[0];
+    let cells = table
+        .column(*column)
+        .as_dense()
+        .expect("an unpacked table holds dense columns");
+    // The slot is word aligned and fills whole words, so none is read back.
+    let (chunks, rest) = cells.as_chunks::<WORD_BITS>();
+    debug_assert!(rest.is_empty(), "a power-of-two column fills whole words");
+    for (word, chunk) in run.iter_mut().zip(chunks) {
+        let Some(bits) = pack_word(chunk) else {
+            return Some((*position, *column));
+        };
+        *word = bits;
+    }
+    None
 }
 
 /// The bit of a cell holding zero or one, and nothing for any other value.
@@ -462,7 +616,7 @@ fn bit_of<EF: Field>(value: EF) -> Option<u64> {
     }
 }
 
-/// Sixty-four Boolean cells as one word, the lowest cell in the lowest bit.
+/// Up to sixty-four Boolean cells as one word, the lowest cell in the lowest bit.
 #[inline]
 fn pack_word<EF: Field>(cells: &[EF]) -> Option<u64> {
     // Fold the run into a word; one non-Boolean cell leaves the whole word undefined.
@@ -799,7 +953,8 @@ where
         challenger: &mut Challenger,
     ) -> Result<(Self::Commitment, Self::ProverData), Self::ProverError> {
         // Gathering runs before the transcript is touched, so a refusal leaves it alone.
-        let bits = self.gather_bits(&witness)?;
+        let bits =
+            tracing::info_span!("gather boolean bits").in_scope(|| self.gather_bits(&witness))?;
         let (commitment, inner) = self
             .inner
             .commit_bits(&bits, challenger)
@@ -933,11 +1088,13 @@ where
         };
         let run = width * (1 + usize::from(next));
         let mut values = Vec::with_capacity(run * shape.num_batches);
-        for point in points {
-            let (current, successor) = Self::evaluate_views(&tables[0], point, next);
-            values.extend(current);
-            values.extend(successor);
-        }
+        tracing::info_span!("evaluate boolean columns", width, next).in_scope(|| {
+            for point in points {
+                let (current, successor) = Self::evaluate_views(&tables[0], point, next);
+                values.extend(current);
+                values.extend(successor);
+            }
+        });
 
         let mut transcript = ColumnBatchProverTranscript::new(challenger, shape);
         let mut openings = Vec::with_capacity(shape.num_batches);
@@ -1111,6 +1268,125 @@ mod tests {
             RowMajorMatrix::new(words, table.num_polys()),
             table.num_variables(),
         )
+    }
+
+    #[test]
+    fn packed_column_sums_match_a_per_bit_sum() {
+        // Part of one word, one block, one partial task, and several tasks with a partial last one.
+        let blocks_past_tasks = (3 * BLOCKS_PER_TASK + 1) * WORD_BITS;
+        for (height, width, seed) in [
+            (1, 1, 1),
+            (4, 1, 2),
+            (32, 5, 3),
+            (64, 3, 4),
+            (5 * WORD_BITS, 1, 5),
+            (blocks_past_tasks, 7, 6),
+        ] {
+            let mut rng = SmallRng::seed_from_u64(seed);
+            let used = if height < WORD_BITS {
+                (1u64 << height) - 1
+            } else {
+                u64::MAX
+            };
+            let words = (0..height.div_ceil(WORD_BITS) * width)
+                .map(|_| rng.random::<u64>() & used)
+                .collect::<Vec<_>>();
+            let row_weights = (0..height).map(|_| rng.random()).collect::<Vec<EF>>();
+
+            let expected = (0..width)
+                .map(|column| {
+                    (0..height)
+                        .filter(|&row| {
+                            (words[(row / WORD_BITS) * width + column] >> (row % WORD_BITS)) & 1
+                                == 1
+                        })
+                        .map(|row| row_weights[row])
+                        .sum::<EF>()
+                })
+                .collect::<Vec<_>>();
+            let words = RowMajorMatrix::new(words, width);
+            assert_eq!(
+                packed_column_sums(&words, &row_weights),
+                expected,
+                "{height}x{width}"
+            );
+        }
+    }
+
+    #[test]
+    fn gathered_bits_place_every_cell_at_its_slot() {
+        // Packed and dense, long and short, and packed tables spanning several column groups.
+        let shapes = [
+            TableShape::new(7, 2 * GATHER_GROUP + 3),
+            TableShape::new(6, 5),
+            TableShape::new(4, GATHER_GROUP + 1),
+            TableShape::new(3, 3),
+        ];
+        let dense = shapes
+            .iter()
+            .enumerate()
+            .map(|(seed, shape)| {
+                table_with_width(seed as u64, shape.num_variables(), shape.width())
+            })
+            .collect::<Vec<_>>();
+        let tables = alloc::vec![
+            packed_table(&dense[0]),
+            dense[1].clone(),
+            packed_table(&dense[2]),
+            dense[3].clone(),
+        ];
+        let scheme = pcs(&shapes);
+
+        let mut expected = alloc::vec![0u64; 1 << (scheme.num_variables() - 6)];
+        for placement in scheme.placements(&shapes).unwrap() {
+            let table = &dense[placement.idx()];
+            let column_len = 1usize << table.num_variables();
+            for (column, selector) in placement.selectors().iter().enumerate() {
+                for row in 0..column_len {
+                    if table.column(column).value(row) == EF::ONE {
+                        let index = selector.index() * column_len + row;
+                        expected[index / WORD_BITS] |= 1 << (index % WORD_BITS);
+                    }
+                }
+            }
+        }
+
+        let gathered = scheme.gather_bits(&tables).unwrap();
+        let gathered = gathered
+            .iter()
+            .map(|word| word.to_bits())
+            .collect::<Vec<_>>();
+        assert_eq!(gathered, expected);
+    }
+
+    #[test]
+    fn a_gather_refuses_the_first_non_boolean_column_in_placement_order() {
+        // The taller table is placed first, so its columns are reached before the short table's.
+        let shapes = [TableShape::new(3, 2), TableShape::new(7, 4)];
+        let scheme = pcs(&shapes);
+        let refused = |bad: &[(usize, usize)]| {
+            let tables = shapes
+                .iter()
+                .enumerate()
+                .map(|(index, shape)| {
+                    let rows = 1 << shape.num_variables();
+                    let table =
+                        table_with_width(index as u64, shape.num_variables(), shape.width());
+                    let mut cells = table.iter_polys().flatten().copied().collect::<Vec<_>>();
+                    for &(_, column) in bad.iter().filter(|&&(table, _)| table == index) {
+                        cells[column * rows + rows / 2] = EF::GENERATOR;
+                    }
+                    Table::new(RowMajorMatrix::new(cells, rows))
+                })
+                .collect::<Vec<_>>();
+            match scheme.gather_bits(&tables) {
+                Err(BooleanTraceError::NonBooleanCell { table, column }) => (table, column),
+                _ => panic!("a non-Boolean cell must be refused"),
+            }
+        };
+        assert_eq!(refused(&[(0, 1), (1, 3)]), (1, 3));
+        assert_eq!(refused(&[(1, 3), (1, 1)]), (1, 1));
+        assert_eq!(refused(&[(0, 1), (0, 0)]), (0, 0));
     }
 
     /// A commitment over the batch these shapes describe.

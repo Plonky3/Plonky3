@@ -81,6 +81,7 @@ use p3_challenger::fs::TranscriptField;
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
 use p3_commit::{Mmcs, MultilinearPcs};
 use p3_field::Field;
+use p3_maybe_rayon::prelude::*;
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
 use p3_security::SecurityTerm;
@@ -369,7 +370,15 @@ where
     ///     no hypercube     excluded by the layout, whose tables are power-of-two
     /// ```
     fn packing(prover_data: &BinaryPcsProverData<EF, EF, MT>) -> BitPacking<EF> {
-        let packed = Poly::new(prover_data.table(0).poly(0).as_slice().to_vec());
+        let packed = Poly::new(
+            prover_data
+                .table(0)
+                .poly(0)
+                .as_slice()
+                .par_iter()
+                .copied()
+                .collect(),
+        );
         BitPacking::from_packed(packed)
             .expect("a committed table is a hypercube over a byte-aligned level")
     }
@@ -475,7 +484,8 @@ where
         let mut surviving_points = Vec::with_capacity(openings.len());
 
         for (opening, reduction) in openings.iter().zip(&reductions) {
-            let (proof, surviving_point, _) = reduction.prove(&packing, challenger);
+            let (proof, surviving_point, _) = tracing::info_span!("bit ring switch")
+                .in_scope(|| reduction.prove(&packing, challenger));
 
             // The elements the reduction sends already hold the witness's readings.
             // Read by columns they are the claimed values, so neither costs a pass of its own.

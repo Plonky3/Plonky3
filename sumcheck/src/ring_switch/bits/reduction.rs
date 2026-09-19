@@ -15,9 +15,9 @@ use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
 use serde::{Deserialize, Serialize};
 
-use super::basis::Coefficients;
+use super::basis::{Coefficients, CoordinateSums};
 use super::packing::BitPacking;
-use super::tensor::BitTensor;
+use super::tensor::{BitTensor, BitTensorBuckets};
 use super::transcript::{
     BitRingSwitchProverTranscript, BitRingSwitchShape, BitRingSwitchVerifierTranscript,
     TranscriptWidth,
@@ -385,7 +385,12 @@ impl<EF: TowerLevel> BitRingSwitch<EF> {
 
         // Only the selected slot feeds the sumcheck.
         // This avoids cloning and folding unrelated columns of a stacked trace.
-        Poly::new(packing.poly().as_slice()[offset..offset + len].to_vec())
+        Poly::new(
+            packing.poly().as_slice()[offset..offset + len]
+                .par_iter()
+                .copied()
+                .collect(),
+        )
     }
 
     /// Restore the Boolean slot address in front of a point inside that slot.
@@ -432,17 +437,25 @@ impl<EF: TowerLevel> BitRingSwitch<EF> {
         EF: Send + Sync,
     {
         self.check_width(packing.num_variables())?;
+        let (_, offset, equality) = self.support();
+        Ok(Self::tensor_over(packing, offset, &equality))
+    }
 
-        // Elements outside the run weigh zero, so leaving them out changes no sum.
-        let (_, offset, weights) = self.support();
-        let values = &packing.poly().as_slice()[offset..offset + weights.num_evals()];
+    /// The element sent, accumulated against the equality table of the supported run.
+    ///
+    /// Elements outside the run weigh zero, so leaving them out changes no sum.
+    fn tensor_over(packing: &BitPacking<EF>, offset: usize, equality: &Poly<EF>) -> BitTensor<EF>
+    where
+        EF: Send + Sync,
+    {
+        let values = &packing.poly().as_slice()[offset..offset + equality.num_evals()];
 
-        Ok(weights
+        equality
             .as_slice()
             .par_chunks(CHUNK)
             .zip(values.par_chunks(CHUNK))
             .par_fold_reduce(
-                BitTensor::zero,
+                BitTensorBuckets::zero,
                 |mut accumulator, (weights, values)| {
                     for (&weight, &value) in weights.iter().zip(values) {
                         accumulator.add_exterior_product(weight, value);
@@ -451,10 +464,11 @@ impl<EF: TowerLevel> BitRingSwitch<EF> {
                 },
                 |mut accumulator, partial| {
                     // Addition is associative, so regrouping cannot change it.
-                    accumulator += partial;
+                    accumulator.merge(&partial);
                     accumulator
                 },
-            ))
+            )
+            .into_tensor()
     }
 
     /// What the claim being reduced must equal, given the element sent.
@@ -507,19 +521,35 @@ impl<EF: TowerLevel> BitRingSwitch<EF> {
         EF: Send + Sync,
     {
         self.check_width(packing.num_variables())?;
-        let Some(kept) = self.kept_row_variables() else {
+        if self.kept_row_variables().is_none() {
             return Ok(None);
-        };
+        }
+        let (_, offset, equality) = self.support();
+        Ok(self.successor_tensors_over(packing, offset, &equality))
+    }
+
+    /// The successor elements, accumulated against the equality table of the supported run.
+    ///
+    /// `None` unless the reduction sends successor elements.
+    fn successor_tensors_over(
+        &self,
+        packing: &BitPacking<EF>,
+        offset: usize,
+        equality: &Poly<EF>,
+    ) -> Option<SuccessorTensors<EF>>
+    where
+        EF: Send + Sync,
+    {
+        let kept = self.kept_row_variables()?;
 
         // Elements outside the run weigh zero in all three elements.
-        let (_, offset, equality) = self.support();
         let table = equality.as_slice();
         let values = &packing.poly().as_slice()[offset..offset + table.len()];
         // The run holds whole columns, so the kept row bits are the low bits of `w`.
         let max = (1usize << kept) - 1;
 
         let (carry, last) = values.par_chunks(CHUNK).enumerate().par_fold_reduce(
-            || (BitTensor::zero(), BitTensor::zero()),
+            || (BitTensorBuckets::zero(), BitTensor::zero()),
             |(mut carry, mut last), (chunk, values)| {
                 for (w, &value) in (chunk * CHUNK..).zip(values) {
                     let row = w & max;
@@ -536,12 +566,15 @@ impl<EF: TowerLevel> BitRingSwitch<EF> {
             },
             |(mut carry, mut last), (other_carry, other_last)| {
                 // Addition is associative, so regrouping cannot change it.
-                carry += other_carry;
+                carry.merge(&other_carry);
                 last += other_last;
                 (carry, last)
             },
         );
-        Ok(Some(SuccessorTensors { carry, last }))
+        Some(SuccessorTensors {
+            carry: carry.into_tensor(),
+            last,
+        })
     }
 
     /// The weights the successor claim puts on the tensor's columns.
@@ -762,20 +795,24 @@ impl<EF: TowerLevel> BitRingSwitchBatch<'_, EF> {
         EF: Send + Sync,
     {
         let (_, _, equality) = self.reduction.support();
-        let mut table = Poly::zero(equality.num_variables());
+        self.weights_over(&equality)
+    }
 
-        // Every entry now belongs to the selected slot.
+    /// The weight multilinear, read off the equality table of the supported run.
+    fn weights_over(&self, equality: &Poly<EF>) -> Poly<EF>
+    where
+        EF: Send + Sync,
+    {
+        let mut table = Poly::zero(equality.num_variables());
+        let sums = CoordinateSums::new(self.eq_batch.as_slice());
+
+        // Every entry belongs to the selected slot.
         // No zero run for another slot is allocated or folded.
         table
             .as_mut_slice()
             .par_iter_mut()
             .zip(equality.as_slice().par_iter())
-            .for_each(|(slot, &value)| {
-                *slot = Coefficients::of(value)
-                    .iter_set()
-                    .map(|u| self.eq_batch.as_slice()[u])
-                    .sum();
-            });
+            .for_each(|(slot, &value)| *slot = sums.sum(value));
 
         let Some(alpha) = self.alpha else {
             return table;
@@ -1085,12 +1122,10 @@ impl<EF: TranscriptField + TowerLevel> BitRingSwitch<EF> {
             "the packing must have the {max_rounds} variables the evaluation point leaves"
         );
 
-        let tensor = self
-            .tensor(packing)
-            .expect("the packing was just checked against the reduction");
-        let successor = self
-            .successor_tensors(packing)
-            .expect("the packing was just checked against the reduction");
+        // One equality table over the supported run feeds every element and the weights.
+        let (_, offset, equality) = self.support();
+        let tensor = Self::tensor_over(packing, offset, &equality);
+        let successor = self.successor_tensors_over(packing, offset, &equality);
 
         // The elements are functions of the kept coordinates alone.
         // They are therefore ready before the transcript needs them.
@@ -1112,8 +1147,9 @@ impl<EF: TranscriptField + TowerLevel> BitRingSwitch<EF> {
         // Restricting to that slot removes one sumcheck round per address bit.
         let restricted = self.restricted_packing(packing);
         let rounds = restricted.num_variables();
-        let poly =
-            ProductPolynomial::new_unpacked(VariableOrder::Prefix, restricted, batch.weights());
+        let weights = batch.weights_over(&equality);
+        drop(equality);
+        let poly = ProductPolynomial::new_unpacked(VariableOrder::Prefix, restricted, weights);
         let mut prover = SumcheckProver::new(poly, batch.initial_sum(&tensor, successor.as_ref()));
         let mut sumcheck = SumcheckData::default();
 

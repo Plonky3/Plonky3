@@ -28,7 +28,7 @@ use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_multi_stark::config::{Commitment, MultiStarkConfig, PcsError, PcsProverError, ProverData};
 use p3_multi_stark::folder::{InteractionMultilinearFolder, MultilinearFolder};
-use p3_multi_stark::packed_ext::PackedExt;
+use p3_multi_stark::packed_ext::{PackedExt, PackedRepr};
 use p3_multi_stark::sliced::SlicedFolder;
 use p3_multi_stark::subfield::{SubfieldAcc, SubfieldVar};
 use p3_multi_stark::{
@@ -388,8 +388,8 @@ impl<const N: usize> HarnessErrors for BooleanStarkConfig<N> {
 ///
 /// The subfield bound is the folder [`SubfieldBackend`] evaluates the first zerocheck round with,
 /// inside `GF(4)`, and the two sliced bounds are the folders it and [`ReprBackend`] evaluate it
-/// with sixty-four rows at a time. The last two are the folders [`ReprBackend`] evaluates the
-/// later rounds with, in the polynomial basis.
+/// with sixty-four rows at a time. The last four are the folders [`ReprBackend`] evaluates the
+/// later rounds with, in the polynomial basis, one row or one lane group of rows at a time.
 pub trait BinaryAir:
     BaseAir<F>
     + Air<InteractionSymbolicBuilder<F, F>>
@@ -403,6 +403,10 @@ pub trait BinaryAir:
     + for<'a> Air<SlicedFolder<'a, F, BinaryField2, Ghash128>>
     + for<'a> Air<MultilinearFolder<'a, F, Ghash128, Ghash128>>
     + for<'a> Air<InteractionMultilinearFolder<'a, F, Ghash128, Ghash128>>
+    + for<'a> Air<MultilinearFolder<'a, F, PackedRepr<F, Ghash128>, PackedRepr<F, Ghash128>>>
+    + for<'a> Air<
+        InteractionMultilinearFolder<'a, F, PackedRepr<F, Ghash128>, PackedRepr<F, Ghash128>>,
+    >
 {
 }
 
@@ -419,6 +423,10 @@ impl<A> BinaryAir for A where
         + for<'a> Air<SlicedFolder<'a, F, BinaryField2, Ghash128>>
         + for<'a> Air<MultilinearFolder<'a, F, Ghash128, Ghash128>>
         + for<'a> Air<InteractionMultilinearFolder<'a, F, Ghash128, Ghash128>>
+        + for<'a> Air<MultilinearFolder<'a, F, PackedRepr<F, Ghash128>, PackedRepr<F, Ghash128>>>
+        + for<'a> Air<
+            InteractionMultilinearFolder<'a, F, PackedRepr<F, Ghash128>, PackedRepr<F, Ghash128>>,
+        >
 {
 }
 

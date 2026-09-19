@@ -24,7 +24,7 @@ use rand::distr::{Distribution, StandardUniform};
 use rand::{Rng, RngExt};
 
 use super::split::{HIGH_BY_HIGH, LOW_BY_LOW, Lanes, fold_shifted};
-use crate::{Gf2, Ghash128};
+use crate::{BinaryField128, Gf2, Ghash128};
 
 /// Swaps the two quadwords of every lane, so `x ^ swap(x)` holds `x_lo ^ x_hi` in both halves.
 const SWAP_QUADWORDS: i32 = 0x4e;
@@ -480,6 +480,23 @@ impl_sub_base_field!(PackedGhash128, Gf2);
 impl_mul_base_field!(PackedGhash128, Gf2);
 
 impl Algebra<Gf2> for PackedGhash128 {}
+
+impl From<BinaryField128> for PackedGhash128 {
+    /// The same field element, seen in the polynomial basis, in every lane.
+    ///
+    /// The change of basis is a field isomorphism, so it makes this packing an algebra over
+    /// the tower, exactly as it does for one lane's [`Ghash128`].
+    #[inline]
+    fn from(x: BinaryField128) -> Self {
+        Self::broadcast(Ghash128::from(x))
+    }
+}
+
+impl_add_base_field!(PackedGhash128, BinaryField128);
+impl_sub_base_field!(PackedGhash128, BinaryField128);
+impl_mul_base_field!(PackedGhash128, BinaryField128);
+
+impl Algebra<BinaryField128> for PackedGhash128 {}
 
 impl_packed_value!(PackedGhash128, Ghash128, WIDTH);
 

@@ -1,5 +1,6 @@
 //! The `F_2`-coordinates of one tower-level element.
 
+use alloc::vec::Vec;
 use core::marker::PhantomData;
 
 use p3_binary_field::TowerLevel;
@@ -117,6 +118,66 @@ impl<EF: TowerLevel> Coefficients<EF> {
     }
 }
 
+/// Sums of one weight per coordinate, taken over the coordinates an element has set.
+///
+/// # Algorithm
+///
+/// Each byte of an element selects one subset of eight coordinates.
+/// The sums over all 256 subsets of each byte position are tabulated once:
+///
+/// ```text
+///     table[k][s] = sum of weights[8k + j] over the set bits j of s
+///     sum(x)      = table[0][byte 0 of x] + ... + table[n - 1][byte n - 1 of x]
+/// ```
+///
+/// So a sum costs one table read per byte, however many coordinates are set.
+#[derive(Clone, Debug)]
+pub(crate) struct CoordinateSums<EF> {
+    /// Per byte position, the weight sum over every subset of its eight coordinates.
+    tables: Vec<[EF; 256]>,
+}
+
+impl<EF: TowerLevel> CoordinateSums<EF> {
+    /// Tabulate the subset sums of one weight per coordinate.
+    ///
+    /// # Panics
+    ///
+    /// Panics unless there is exactly one weight per coordinate.
+    #[must_use]
+    pub(crate) fn new(weights: &[EF]) -> Self {
+        assert_eq!(
+            weights.len(),
+            Coefficients::<EF>::DIMENSION,
+            "one weight per coordinate"
+        );
+        let tables = (0..EF::NUM_BYTES)
+            .map(|position| {
+                let mut table = [EF::ZERO; 256];
+                // Each subset extends the one without its lowest coordinate by that coordinate.
+                // A coordinate past a sub-byte level's width is never set, so it weighs nothing.
+                for subset in 1..256usize {
+                    let lowest = position * 8 + subset.trailing_zeros() as usize;
+                    table[subset] = table[subset & (subset - 1)]
+                        + weights.get(lowest).copied().unwrap_or(EF::ZERO);
+                }
+                table
+            })
+            .collect();
+        Self { tables }
+    }
+
+    /// The sum of the weights over the coordinates `value` has set.
+    #[inline]
+    #[must_use]
+    pub(crate) fn sum(&self, value: EF) -> EF {
+        self.tables
+            .iter()
+            .zip(value.into_bytes())
+            .map(|(table, byte)| table[usize::from(byte)])
+            .sum()
+    }
+}
+
 /// The set bit positions of one byte, lowest first.
 struct SetBits {
     /// Bits not yet yielded.
@@ -149,6 +210,34 @@ mod tests {
     use rand::{RngExt, SeedableRng};
 
     use super::*;
+
+    /// The per-coordinate walk the tabulated sums must agree with.
+    fn walked_sum<EF: TowerLevel>(weights: &[EF], value: EF) -> EF {
+        Coefficients::of(value).iter_set().map(|u| weights[u]).sum()
+    }
+
+    fn coordinate_sums_match_the_walk<EF: TowerLevel>(seed: u64)
+    where
+        rand::distr::StandardUniform: rand::distr::Distribution<EF>,
+    {
+        let mut rng = SmallRng::seed_from_u64(seed);
+        let weights = (0..Coefficients::<EF>::DIMENSION)
+            .map(|_| rng.random())
+            .collect::<Vec<EF>>();
+        let sums = CoordinateSums::new(&weights);
+        for value in [EF::ZERO, EF::ONE]
+            .into_iter()
+            .chain((0..64).map(|_| rng.random()))
+        {
+            assert_eq!(sums.sum(value), walked_sum(&weights, value));
+        }
+    }
+
+    #[test]
+    fn coordinate_sums_are_the_weights_over_the_set_coordinates() {
+        coordinate_sums_match_the_walk::<BinaryField128>(1);
+        coordinate_sums_match_the_walk::<BinaryField16>(2);
+    }
 
     #[test]
     fn a_level_has_one_coordinate_per_bit() {

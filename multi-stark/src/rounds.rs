@@ -543,6 +543,17 @@ where
     }
 }
 
+/// Tasks per worker a round's fold splits its rows into.
+///
+/// Each task sets up a scratch holding every column, so splitting further spends more on
+/// scratch than on the rows it evaluates, and splitting less leaves workers idle.
+const TASKS_PER_WORKER: usize = 2;
+
+/// Rows one task of a round evaluates, given how many the round has to spread.
+pub(crate) fn rows_per_task(rows: usize) -> usize {
+    (rows / (current_num_threads() * TASKS_PER_WORKER)).max(1)
+}
+
 /// Scratch for scalar round-polynomial folds.
 ///
 /// The base path uses one instance; the extension path allocates one per worker.
@@ -2126,23 +2137,28 @@ where
             .map(|group| group.degree)
             .collect::<Vec<_>>();
 
-        let scratch = eq_suffix.as_slice().par_iter().enumerate().par_fold_reduce(
-            || Scratch::<R, R>::new(&constraint_degrees, &interaction_degrees, width),
-            |scratch, (s, &eq_suffix)| {
-                self.accumulate_row(scratch, s, eq_suffix, &schedule, &next_columns)
-            },
-            |mut lhs, rhs| {
-                lhs.constraint_evals
-                    .iter_mut()
-                    .zip(rhs.constraint_evals)
-                    .for_each(|(lhs, rhs)| R::add_slices(lhs, &rhs));
-                lhs.interaction_evals
-                    .iter_mut()
-                    .zip(rhs.interaction_evals)
-                    .for_each(|(lhs, rhs)| R::add_slices(lhs, &rhs));
-                lhs
-            },
-        );
+        let scratch = eq_suffix
+            .as_slice()
+            .par_iter()
+            .with_min_len(rows_per_task(eq_suffix.num_evals()))
+            .enumerate()
+            .par_fold_reduce(
+                || Scratch::<R, R>::new(&constraint_degrees, &interaction_degrees, width),
+                |scratch, (s, &eq_suffix)| {
+                    self.accumulate_row(scratch, s, eq_suffix, &schedule, &next_columns)
+                },
+                |mut lhs, rhs| {
+                    lhs.constraint_evals
+                        .iter_mut()
+                        .zip(rhs.constraint_evals)
+                        .for_each(|(lhs, rhs)| R::add_slices(lhs, &rhs));
+                    lhs.interaction_evals
+                        .iter_mut()
+                        .zip(rhs.interaction_evals)
+                        .for_each(|(lhs, rhs)| R::add_slices(lhs, &rhs));
+                    lhs
+                },
+            );
         finish_round(
             &mut self.constraint_groups,
             &mut self.interaction_groups,

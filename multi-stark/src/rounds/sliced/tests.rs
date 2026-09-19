@@ -8,6 +8,7 @@ use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
 
 use super::*;
+use crate::packed_ext::PackedRepr;
 use crate::rounds::StageCoupling;
 use crate::rounds::subfield::tests::{
     first_challenge, later_rounds, link_coupling, no_lookups, with_stage_state, with_state,
@@ -275,9 +276,20 @@ fn sliced_rounds<R>(instances: &[Instance]) -> (Rounds, usize, Option<usize>)
 where
     R: Field + From<Tower> + p3_field::Algebra<Tower>,
     Tower: From<R>,
+    R::Packing: p3_field::Algebra<Tower>,
     FixtureAir: for<'b> Air<SlicedFolder<'b, Tower, Gf4, R>>
         + for<'b> Air<crate::folder::MultilinearFolder<'b, Tower, R, R>>
-        + for<'b> Air<crate::folder::InteractionMultilinearFolder<'b, Tower, R, R>>,
+        + for<'b> Air<crate::folder::InteractionMultilinearFolder<'b, Tower, R, R>>
+        + for<'b> Air<
+            crate::folder::MultilinearFolder<'b, Tower, PackedRepr<Tower, R>, PackedRepr<Tower, R>>,
+        > + for<'b> Air<
+            crate::folder::InteractionMultilinearFolder<
+                'b,
+                Tower,
+                PackedRepr<Tower, R>,
+                PackedRepr<Tower, R>,
+            >,
+        >,
 {
     with_state(instances, no_lookups(), |mut state, eq_suffix| {
         let first = state
