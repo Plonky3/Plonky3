@@ -385,19 +385,11 @@ where
             .map(|group| group.degree)
             .collect::<Vec<_>>();
 
-        // The eq weights cross into `R` one lane group at a time, as the rows they weigh do.
+        // A lane group's eq weights cross into `R` where its rows are read, one group at a time.
         let weights = eq_suffix.as_slice();
-        let lift = |group: usize| lane_group(|lane| R::from(weights[group * lanes + lane]));
-        let eq_suffix: Vec<_> = if weights.len() < PARALLEL_FOLD_CELLS {
-            (0..groups).map(lift).collect()
-        } else {
-            (0..groups).into_par_iter().map(lift).collect()
-        };
-
-        let scratch = eq_suffix
-            .par_iter()
+        let scratch = (0..groups)
+            .into_par_iter()
             .with_min_len(rows_per_task(groups))
-            .enumerate()
             .par_fold_reduce(
                 || {
                     PackedScratch::<PackedRepr<F, R>, PackedRepr<F, R>>::new(
@@ -406,7 +398,8 @@ where
                         width,
                     )
                 },
-                |scratch, (group, &eq_suffix)| {
+                |scratch, group| {
+                    let eq_suffix = lane_group(|lane| R::from(weights[group * lanes + lane]));
                     self.accumulate_lanes(scratch, group * lanes, eq_suffix, &round)
                 },
                 |mut lhs, rhs| {
