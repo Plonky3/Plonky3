@@ -22,6 +22,7 @@ use p3_field::{Algebra, ExtensionField, Field, HasSubfield};
 use p3_multilinear_util::poly::Poly;
 
 use crate::folder::{InteractionMultilinearFolder, MultilinearFolder, ProverAir};
+use crate::packed_ext::PackedRepr;
 use crate::rounds::{AirOpenings, RoundStateBase, RoundStateExt};
 use crate::sliced::SlicedFolder;
 use crate::subfield::{SubfieldAcc, SubfieldVar};
@@ -225,7 +226,8 @@ where
 ///                    folding from the planes into R once its sliced rounds are done
 ///     round 0      : as SubfieldBackend<S>
 ///     fold 0       : every column folds straight into R
-///     later rounds : columns, selectors, and AIR expressions in R, one residual row at a time
+///     later rounds : columns, selectors, and AIR expressions in R, one lane group of rows
+///                    at a time, one row at a time once the rows no longer fill a group
 /// ```
 ///
 /// Two representations of one field can multiply at very different costs. In the tower basis
@@ -261,11 +263,14 @@ where
     F: HasSubfield<S>,
     EF: ExtensionField<F> + HasSubfield<S> + From<R>,
     R: Field + Algebra<F> + From<EF>,
+    R::Packing: Algebra<F::Packing>,
     A: ProverAir<F, EF>
         + for<'a> Air<MultilinearFolder<'a, F, SubfieldVar<F, S>, SubfieldAcc<EF, S>>>
         + for<'a> Air<SlicedFolder<'a, F, S, R>>
         + for<'a> Air<MultilinearFolder<'a, F, R, R>>
-        + for<'a> Air<InteractionMultilinearFolder<'a, F, R, R>>,
+        + for<'a> Air<InteractionMultilinearFolder<'a, F, R, R>>
+        + for<'a> Air<MultilinearFolder<'a, F, PackedRepr<F, R>, PackedRepr<F, R>>>
+        + for<'a> Air<InteractionMultilinearFolder<'a, F, PackedRepr<F, R>, PackedRepr<F, R>>>,
     EF::ExtensionPacking: From<EF> + From<F::Packing>,
 {
     type Repr = R;

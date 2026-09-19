@@ -3,7 +3,9 @@
 use alloc::vec::Vec;
 use core::ops::{AddAssign, Sub};
 
-use p3_field::{ExtensionField, Field, PackedFieldExtension, PackedValue, PrimeCharacteristicRing};
+use p3_field::{
+    ExtensionField, Field, PackedField, PackedFieldExtension, PackedValue, PrimeCharacteristicRing,
+};
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::PolyView;
 use p3_util::log2_strict_usize;
@@ -309,6 +311,55 @@ impl<EF: Field> BoundaryEvals<EF> {
     {
         let boundary = Self::from_ext_packed_row_with_prefix::<F>(row, height, prefix);
         let hi_boundary = Self::from_ext_packed_row_with_prefix::<F>(row + half, height, prefix);
+        (
+            boundary,
+            BoundaryEvals::new(
+                hi_boundary.first - boundary.first,
+                hi_boundary.last - boundary.last,
+                hi_boundary.transition - boundary.transition,
+            ),
+        )
+    }
+
+    /// The full selector values at a residual-cube row, combined with the bound-coordinate
+    /// prefix, spread across the lanes of `P`: one lane per consecutive residual row from `row`.
+    ///
+    /// Same construction as [`Self::from_row_with_prefix`], evaluated once per lane.
+    fn from_lane_group_with_prefix<P>(row: usize, height: usize, prefix: Self) -> BoundaryEvals<P>
+    where
+        P: PackedField<Scalar = EF>,
+    {
+        BoundaryEvals::new(
+            P::from_fn(|lane| prefix.first * EF::from_bool(row + lane == 0)),
+            P::from_fn(|lane| prefix.last * EF::from_bool(row + lane + 1 == height)),
+            P::from_fn(|lane| {
+                let suffix_last = EF::from_bool(row + lane + 1 == height);
+                EF::from_bool(row + lane + 1 < height) + suffix_last * prefix.transition
+            }),
+        )
+    }
+
+    /// Packed `(value, per-step difference)` pair for folding one variable, with a
+    /// bound-coordinate prefix: the twin of [`Self::row_pair_with_prefix`] over a packing of
+    /// the same field.
+    ///
+    /// # Arguments
+    ///
+    /// - `row`: index of the first low-half row in this lane group.
+    /// - `half`: distance from a low row to its matching high row.
+    /// - `height`: number of rows in the residual cube.
+    /// - `prefix`: partial products over the coordinates bound so far.
+    pub(super) fn row_pair_with_prefix_lanes<P>(
+        row: usize,
+        half: usize,
+        height: usize,
+        prefix: Self,
+    ) -> (BoundaryEvals<P>, BoundaryEvals<P>)
+    where
+        P: PackedField<Scalar = EF>,
+    {
+        let boundary = Self::from_lane_group_with_prefix::<P>(row, height, prefix);
+        let hi_boundary = Self::from_lane_group_with_prefix::<P>(row + half, height, prefix);
         (
             boundary,
             BoundaryEvals::new(
