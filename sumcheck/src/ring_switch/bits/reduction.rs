@@ -1124,12 +1124,8 @@ impl<EF: TranscriptField + TowerLevel> BitRingSwitch<EF> {
 
         // One equality table over the supported run feeds every element and the weights.
         let (_, offset, equality) = self.support();
-        let (tensor, successor) = tracing::info_span!("ring switch tensors").in_scope(|| {
-            (
-                Self::tensor_over(packing, offset, &equality),
-                self.successor_tensors_over(packing, offset, &equality),
-            )
-        });
+        let tensor = Self::tensor_over(packing, offset, &equality);
+        let successor = self.successor_tensors_over(packing, offset, &equality);
 
         // The elements are functions of the kept coordinates alone.
         // They are therefore ready before the transcript needs them.
@@ -1149,11 +1145,9 @@ impl<EF: TranscriptField + TowerLevel> BitRingSwitch<EF> {
             .expect("the transcript draws what the reduction's kind batches with");
         // A Boolean prefix is a public slot address.
         // Restricting to that slot removes one sumcheck round per address bit.
-        let restricted =
-            tracing::info_span!("restrict packing").in_scope(|| self.restricted_packing(packing));
+        let restricted = self.restricted_packing(packing);
         let rounds = restricted.num_variables();
-        let weights =
-            tracing::info_span!("ring switch weights").in_scope(|| batch.weights_over(&equality));
+        let weights = batch.weights_over(&equality);
         drop(equality);
         let poly = ProductPolynomial::new_unpacked(VariableOrder::Prefix, restricted, weights);
         let mut prover = SumcheckProver::new(poly, batch.initial_sum(&tensor, successor.as_ref()));
