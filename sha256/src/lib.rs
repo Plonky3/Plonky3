@@ -1,12 +1,15 @@
 //! The SHA2-256 hash function.
 //!
 //! [`Sha256::hash_many`] and [`Sha256Compress::compress_many`] hash four messages at a time on
-//! the targets that have a four-lane backend: wasm32 with `simd128`, and x86-64 with `sha` and
-//! `sse4.1`. The choice is made at compile time, so an x86-64 build needs `-C target-feature=+sha`
-//! or `-C target-cpu=native` to get it; no microarchitecture level turns `sha` on by itself.
+//! the targets that have a four-lane backend: wasm32 with `simd128`, x86-64 with `sha` and
+//! `sse4.1`, and AArch64 with `neon` and `sha2`. The choice is made at compile time, so an x86-64
+//! build needs `-C target-feature=+sha` and an AArch64 Linux build needs `-C target-feature=+sha2`
+//! (or `-C target-cpu=native`) to get it; no x86-64 microarchitecture level turns `sha` on by
+//! itself. The Apple silicon targets enable `sha2` by default.
 //!
-//! A build without one hashes a message at a time through `sha2`, which detects SHA-NI at runtime
-//! on its own. What the four-lane backends add is the interleaving of four independent streams.
+//! A build without one hashes a message at a time through `sha2`, which detects the hardware SHA
+//! extension (SHA-NI or the ARMv8 SHA-2 extension) at runtime on its own. What the four-lane
+//! backends add is the interleaving of four independent streams.
 
 #![no_std]
 
@@ -26,10 +29,23 @@ mod wasm32_simd128;
 ))]
 mod x86_64_sha_ni;
 
+#[cfg(all(
+    target_arch = "aarch64",
+    target_feature = "neon",
+    target_feature = "sha2"
+))]
+mod aarch64_sha2;
+
 /// The four-lane backend this target compiles, if it has one.
 ///
 /// Every batched entry point below goes through this one name, so the target tests appear once
 /// per backend rather than once per method.
+#[cfg(all(
+    target_arch = "aarch64",
+    target_feature = "neon",
+    target_feature = "sha2"
+))]
+use aarch64_sha2::ArmSha2 as Backend;
 #[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
 use wasm32_simd128::Simd128 as Backend;
 #[cfg(all(
@@ -54,6 +70,11 @@ impl CryptographicHasher<u8, [u8; 32]> for Sha256 {
             target_arch = "x86_64",
             target_feature = "sha",
             target_feature = "sse4.1"
+        ),
+        all(
+            target_arch = "aarch64",
+            target_feature = "neon",
+            target_feature = "sha2"
         )
     ))]
     const LANES: usize = four_lane::LANES;
@@ -68,6 +89,7 @@ impl CryptographicHasher<u8, [u8; 32]> for Sha256 {
         hasher.finalize().into()
     }
 
+    #[inline]
     fn hash_iter_slices<'a, I>(&self, input: I) -> [u8; 32]
     where
         I: IntoIterator<Item = &'a [u8]>,
@@ -85,6 +107,11 @@ impl CryptographicHasher<u8, [u8; 32]> for Sha256 {
             target_arch = "x86_64",
             target_feature = "sha",
             target_feature = "sse4.1"
+        ),
+        all(
+            target_arch = "aarch64",
+            target_feature = "neon",
+            target_feature = "sha2"
         )
     ))]
     fn hash_many(&self, input: &[u8], out: &mut [[u8; 32]]) {
@@ -104,6 +131,11 @@ impl PseudoCompressionFunction<[u8; 32], 2> for Sha256Compress {
             target_arch = "x86_64",
             target_feature = "sha",
             target_feature = "sse4.1"
+        ),
+        all(
+            target_arch = "aarch64",
+            target_feature = "neon",
+            target_feature = "sha2"
         )
     ))]
     const LANES: usize = four_lane::LANES;
@@ -127,6 +159,11 @@ impl PseudoCompressionFunction<[u8; 32], 2> for Sha256Compress {
             target_arch = "x86_64",
             target_feature = "sha",
             target_feature = "sse4.1"
+        ),
+        all(
+            target_arch = "aarch64",
+            target_feature = "neon",
+            target_feature = "sha2"
         )
     ))]
     fn compress_many(&self, inputs: &[[[u8; 32]; 2]], out: &mut [[u8; 32]]) {
@@ -140,13 +177,18 @@ impl CompressionFunction<[u8; 32], 2> for Sha256Compress {}
 ///
 /// A backend supplies only the vector core, through [`FourLane`](four_lane::FourLane). Everything
 /// that turns a batch of messages into blocks lives here, so a padding fix cannot reach one
-/// backend and miss the other.
+/// backend and miss the others.
 #[cfg(any(
     all(target_arch = "wasm32", target_feature = "simd128"),
     all(
         target_arch = "x86_64",
         target_feature = "sha",
         target_feature = "sse4.1"
+    ),
+    all(
+        target_arch = "aarch64",
+        target_feature = "neon",
+        target_feature = "sha2"
     )
 ))]
 mod four_lane {
@@ -344,6 +386,93 @@ mod tests {
             .collect()
     }
 
+    // SHA-256 compression written directly from FIPS 180-4 §6.2.2, with no intrinsics.
+    //
+    // On AArch64 `sha2` detects the SHA-2 extension at runtime, so comparing a backend against
+    // `Sha256` there compares two users of the same instructions. This is the independent oracle.
+    fn spec_compress(state: &mut [u32; 8], block: &[u8; 64]) {
+        // Transcribed from FIPS 180-4 §4.2.2 rather than shared with the backends, so a mistake
+        // in their table cannot hide by appearing on both sides of the comparison.
+        #[rustfmt::skip]
+        const K: [u32; 64] = [
+            0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+            0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+            0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+            0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+            0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+            0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+            0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+            0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+        ];
+        let mut w = [0u32; 64];
+        for (word, bytes) in w.iter_mut().zip(block.as_chunks::<4>().0) {
+            *word = u32::from_be_bytes(*bytes);
+        }
+        for t in 16..64 {
+            let s0 = w[t - 15].rotate_right(7) ^ w[t - 15].rotate_right(18) ^ (w[t - 15] >> 3);
+            let s1 = w[t - 2].rotate_right(17) ^ w[t - 2].rotate_right(19) ^ (w[t - 2] >> 10);
+            w[t] = w[t - 16]
+                .wrapping_add(s0)
+                .wrapping_add(w[t - 7])
+                .wrapping_add(s1);
+        }
+
+        let [mut a, mut b, mut c, mut d, mut e, mut f, mut g, mut h] = *state;
+        for t in 0..64 {
+            let big_s1 = e.rotate_right(6) ^ e.rotate_right(11) ^ e.rotate_right(25);
+            let ch = (e & f) ^ (!e & g);
+            let t1 = h
+                .wrapping_add(big_s1)
+                .wrapping_add(ch)
+                .wrapping_add(K[t])
+                .wrapping_add(w[t]);
+            let big_s0 = a.rotate_right(2) ^ a.rotate_right(13) ^ a.rotate_right(22);
+            let maj = (a & b) ^ (a & c) ^ (b & c);
+            let t2 = big_s0.wrapping_add(maj);
+            (h, g, f, e, d, c, b, a) = (g, f, e, d.wrapping_add(t1), c, b, a, t1.wrapping_add(t2));
+        }
+        for (word, add) in state.iter_mut().zip([a, b, c, d, e, f, g, h]) {
+            *word = word.wrapping_add(add);
+        }
+    }
+
+    // `Sha256Compress::compress` as the specification defines it: one block from the IV.
+    fn spec_compress_pair(input: [[u8; 32]; 2]) -> [u8; 32] {
+        let mut block = [0u8; 64];
+        block[..32].copy_from_slice(&input[0]);
+        block[32..].copy_from_slice(&input[1]);
+        let mut state = crate::H256_256;
+        spec_compress(&mut state, &block);
+
+        let mut out = [0u8; 32];
+        for (bytes, word) in out.as_chunks_mut::<4>().0.iter_mut().zip(state) {
+            *bytes = word.to_be_bytes();
+        }
+        out
+    }
+
+    // SHA-256 of a whole message as the specification defines it: FIPS 180-4 §5.1.1 padding, then
+    // `spec_compress` over every block from the IV. Shares no code with the backends or `sha2`.
+    fn spec_hash(message: &[u8]) -> [u8; 32] {
+        let mut padded = message.to_vec();
+        padded.push(0x80);
+        while padded.len() % 64 != 56 {
+            padded.push(0);
+        }
+        padded.extend_from_slice(&((message.len() as u64) * 8).to_be_bytes());
+
+        let mut state = crate::H256_256;
+        for block in padded.as_chunks::<64>().0 {
+            spec_compress(&mut state, block);
+        }
+
+        let mut out = [0u8; 32];
+        for (bytes, word) in out.as_chunks_mut::<4>().0.iter_mut().zip(state) {
+            *bytes = word.to_be_bytes();
+        }
+        out
+    }
+
     // Reinterpret a flat byte run as the 64-byte pairs `compress_many` consumes.
     fn compression_inputs(bytes: &[u8]) -> Vec<[[u8; 32]; 2]> {
         bytes
@@ -426,6 +555,53 @@ mod tests {
     }
 
     #[test]
+    fn hash_many_matches_fips_180_vectors_in_every_lane() {
+        // FIPS 180-4 examples: the empty message, one block, one message whose padding spills
+        // into a second block, and a two-block message.
+        let vectors: [(&[u8], [u8; 32]); 4] = [
+            (
+                b"",
+                hex!("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"),
+            ),
+            (
+                b"abc",
+                hex!("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"),
+            ),
+            (
+                b"abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq",
+                hex!("248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1"),
+            ),
+            (
+                b"abcdefghbcdefghicdefghijdefghijkefghijklfghijklmghijklmnhijklmnoijklmnopjklmnopqklmnopqrlmnopqrsmnopqrstnopqrstu",
+                hex!("cf5b16a778af8380036ce59e7b0492370b249b11e8f07a51afac45037afee9d1"),
+            ),
+        ];
+
+        for (message, expected) in vectors {
+            // Four copies fill exactly one group, so every lane of the backend is checked.
+            let input: Vec<u8> = message.repeat(4);
+            let mut out = [[0u8; 32]; 4];
+            Sha256.hash_many(&input, &mut out);
+
+            assert_eq!(out, [expected; 4], "message of {} bytes", message.len());
+        }
+    }
+
+    #[test]
+    fn compress_many_matches_specification_at_boundary_blocks() {
+        // Blocks whose words hit the carries and the rotations hardest.
+        let boundary: [[u8; 64]; 4] = [[0x00; 64], [0xff; 64], [0x80; 64], [0x7f; 64]];
+        let inputs = compression_inputs(boundary.as_flattened());
+
+        let mut batched = [[0u8; 32]; 4];
+        Sha256Compress.compress_many(&inputs, &mut batched);
+
+        for (input, digest) in inputs.iter().zip(&batched) {
+            assert_eq!(*digest, spec_compress_pair(*input));
+        }
+    }
+
+    #[test]
     fn hash_many_hashes_zero_length_messages() {
         let mut out = [[0u8; 32]; 9];
         Sha256.hash_many(&[], &mut out);
@@ -488,7 +664,7 @@ mod tests {
 
     #[test]
     fn reports_four_lanes_only_on_vectorized_targets() {
-        // Both vectorized backends run four messages at a time.
+        // Every vectorized backend runs four messages at a time.
         //
         // Every other target hashes one.
         let vectorized = cfg!(all(target_arch = "wasm32", target_feature = "simd128"))
@@ -496,6 +672,11 @@ mod tests {
                 target_arch = "x86_64",
                 target_feature = "sha",
                 target_feature = "sse4.1"
+            ))
+            || cfg!(all(
+                target_arch = "aarch64",
+                target_feature = "neon",
+                target_feature = "sha2"
             ));
         let expected = if vectorized { 4 } else { 1 };
 
@@ -511,6 +692,23 @@ mod tests {
 
     proptest! {
         #[test]
+        fn hash_many_matches_specification_on_random_batches(
+            len in 0usize..=400,
+            count in 1usize..=17,
+            seed in any::<u64>(),
+        ) {
+            let messages = random_bytes(len * count, seed | 1);
+
+            let mut batched = vec![[0u8; 32]; count];
+            Sha256.hash_many(&messages, &mut batched);
+
+            let expected: Vec<[u8; 32]> = (0..count)
+                .map(|k| spec_hash(&messages[k * len..(k + 1) * len]))
+                .collect();
+            prop_assert_eq!(batched, expected);
+        }
+
+        #[test]
         fn hash_many_matches_scalar_on_random_batches(
             len in 0usize..=400,
             count in 1usize..=17,
@@ -522,6 +720,21 @@ mod tests {
             Sha256.hash_many(&messages, &mut batched);
 
             prop_assert_eq!(batched, reference(&messages, len, count));
+        }
+
+        #[test]
+        fn compress_many_matches_specification_on_random_batches(
+            count in 0usize..=17,
+            seed in any::<u64>(),
+        ) {
+            let bytes = random_bytes(count * 64, seed | 1);
+            let inputs = compression_inputs(&bytes);
+
+            let mut batched = vec![[0u8; 32]; count];
+            Sha256Compress.compress_many(&inputs, &mut batched);
+
+            let expected: Vec<[u8; 32]> = inputs.iter().map(|input| spec_compress_pair(*input)).collect();
+            prop_assert_eq!(batched, expected);
         }
 
         #[test]
