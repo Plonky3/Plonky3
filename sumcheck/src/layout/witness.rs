@@ -1503,6 +1503,16 @@ mod tests {
                 .collect::<Vec<_>>();
             let packed =
                 Table::<F>::from_packed_bits(RowMajorMatrix::new(words, width), num_variables);
+            for column in 0..width {
+                for row in 0..height {
+                    let expected = if (row + column * 3) % 5 < 2 {
+                        F::ONE
+                    } else {
+                        F::ZERO
+                    };
+                    assert_eq!(packed.column(column).value(row), expected);
+                }
+            }
             let dense = packed.clone().into_dense();
             let plan = SuffixLayoutPlan::new(vec![packed.shape()], 0).unwrap();
             let direct = plan.fill(&[&packed]).unwrap();

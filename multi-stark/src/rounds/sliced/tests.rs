@@ -293,10 +293,12 @@ where
             let round_poly = state.round_poly_sliced::<Gf4>(&eq_suffix).map_or_else(
                 || {
                     state.unslice::<Gf4>();
-                    residual_rows = match &state.columns {
-                        ExtColumns::Scalar(columns) => Some(columns[0].as_slice().len()),
-                        _ => None,
-                    };
+                    if residual_rows.is_none() {
+                        residual_rows = match &state.columns {
+                            ExtColumns::Scalar(columns) => Some(columns[0].as_slice().len()),
+                            _ => None,
+                        };
+                    }
                     state.round_poly_repr(&eq_suffix)
                 },
                 |round_poly| {
@@ -350,11 +352,9 @@ fn every_round_on_and_off_the_planes_matches_the_generic_kernel() {
         let generic = generic_rounds(&instances);
         let (tower, tower_on_planes, tower_residual_rows) = sliced_rounds::<Tower>(&instances);
         assert_eq!(tower_on_planes, expected_on_planes, "{height} rows");
-        // The fixture's sliced transition always leaves the two rows in one packed word pair;
-        // the later generic folds account for the additional height-dependent rounds.
         assert_eq!(
             tower_residual_rows,
-            Some(SHORTEST / SLICED_LANES),
+            Some(height >> expected_on_planes),
             "{height} rows"
         );
         assert_eq!(tower, generic, "{height} rows, tower");
@@ -362,7 +362,7 @@ fn every_round_on_and_off_the_planes_matches_the_generic_kernel() {
         assert_eq!(on_planes, expected_on_planes, "{height} rows");
         assert_eq!(
             poly_residual_rows,
-            Some(SHORTEST / SLICED_LANES),
+            Some(height >> expected_on_planes),
             "{height} rows"
         );
         assert_eq!(poly_basis, generic, "{height} rows, polynomial basis");
