@@ -21,6 +21,7 @@ use p3_binary_pcs::{
     BooleanPcsError, BooleanTraceData, BooleanTraceError, BooleanTracePcs, GroupedCodewordMmcs,
 };
 use p3_blake3::Blake3;
+use p3_bus::BusSymbolicBuilder;
 use p3_challenger::{CanObserve, HashChallenger};
 use p3_commit::MultilinearPcs;
 use p3_field::RawDataSerializable;
@@ -559,9 +560,12 @@ impl<const N: usize, H: HarnessHash> HarnessConfig for BooleanStarkConfig<N, H> 
 /// inside `GF(4)`, and the two sliced bounds are the folders it and [`ReprBackend`] evaluate it
 /// with sixty-four rows at a time. The last four are the folders [`ReprBackend`] evaluates the
 /// later rounds with, in the polynomial basis, one row or one lane group of rows at a time.
+///
+/// The bus-symbolic bound lets setup discover an AIR's optional binary-bus declarations.
 pub trait BinaryAir:
     BaseAir<F>
     + Air<InteractionSymbolicBuilder<F, F>>
+    + Air<BusSymbolicBuilder<F, F>>
     + for<'a> Air<MultilinearFolder<'a, F, F, F>>
     + for<'a> Air<MultilinearFolder<'a, F, PackedExt<F, F>, PackedExt<F, F>>>
     + for<'a> Air<InteractionMultilinearFolder<'a, F, F, F>>
@@ -582,6 +586,7 @@ pub trait BinaryAir:
 impl<A> BinaryAir for A where
     A: BaseAir<F>
         + Air<InteractionSymbolicBuilder<F, F>>
+        + Air<BusSymbolicBuilder<F, F>>
         + for<'a> Air<MultilinearFolder<'a, F, F, F>>
         + for<'a> Air<MultilinearFolder<'a, F, PackedExt<F, F>, PackedExt<F, F>>>
         + for<'a> Air<InteractionMultilinearFolder<'a, F, F, F>>

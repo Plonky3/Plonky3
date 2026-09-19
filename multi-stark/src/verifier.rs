@@ -11,9 +11,8 @@ use p3_sumcheck::{OpeningEvals, PrescribedPointPcs};
 use thiserror::Error;
 
 use crate::VerifierInstances;
+use crate::bus::transcript::{BusCompositionShape, BusCompositionVerifierTranscript};
 use crate::bus::{BusBindingError, BusContext};
-use crate::bus_composition::BusCompositionProver;
-use crate::bus_transcript::BusCompositionVerifierTranscript;
 use crate::config::{Commitment, MultiStarkConfig, PcsError};
 use crate::folder::VerifierAir;
 use crate::indexed::IndexedPlan;
@@ -291,17 +290,19 @@ where
                     let output = context
                         .plan()
                         .verify::<C::Val, C::Challenge, _>(&bus_proof.product, challenger)?;
-                    let degree = BusCompositionProver::degree(context);
+                    let degree = context.composition_degree();
                     let num_variables = context.max_num_variables();
                     let mut composition =
                         BusCompositionVerifierTranscript::<_, C::Val, C::Challenge>::new(
                             challenger,
-                            num_variables,
-                            degree,
-                            pow_bits,
+                            BusCompositionShape {
+                                num_variables,
+                                degree,
+                                pow_bits,
+                            },
                         );
                     let direction = composition.direction_challenge();
-                    let expected_claim = context.composition_claim(&output, direction)?;
+                    let expected_claim = output.batched_terminal_claim(direction)?;
                     let verified = composition.sumcheck(|challenger| {
                         bus_proof
                             .composition

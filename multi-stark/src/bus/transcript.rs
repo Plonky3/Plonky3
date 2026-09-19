@@ -18,6 +18,44 @@ type Alphabet<F> = FieldUnit<F>;
 
 struct CompositionSumcheck;
 
+/// Public dimensions that fix one bus-composition transcript.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct BusCompositionShape {
+    /// Number of variables reduced by the delegated sumcheck.
+    pub(crate) num_variables: usize,
+    /// Per-variable degree of the bus composition.
+    pub(crate) degree: usize,
+    /// Grinding difficulty applied to each delegated sumcheck round.
+    pub(crate) pow_bits: usize,
+}
+
+impl BusCompositionShape {
+    /// Bind the protocol identity and all statement-derived dimensions.
+    fn domain_separator<F, EF>(&self) -> DomainSeparator<Alphabet<F>>
+    where
+        F: TranscriptField,
+        EF: ExtensionField<F>,
+    {
+        let pattern = InteractionPattern::new(alloc::vec![
+            Interaction::algebra::<F, EF>(
+                Hierarchy::Atomic,
+                Kind::Challenge,
+                DIRECTION,
+                Length::Scalar,
+            ),
+            Interaction::marker::<CompositionSumcheck>(Hierarchy::Begin, Kind::Protocol, SUMCHECK,),
+            Interaction::marker::<CompositionSumcheck>(Hierarchy::End, Kind::Protocol, SUMCHECK,),
+        ])
+        .expect("one matched composition-sumcheck bracket is well formed");
+        let mut separator = DomainSeparator::new(VERSION, NAME, pattern);
+        separator
+            .instance(&(self.num_variables as u64).to_be_bytes())
+            .instance(&(self.degree as u64).to_be_bytes())
+            .instance(&(self.pow_bits as u64).to_be_bytes());
+        separator
+    }
+}
+
 /// Prover transcript that batches directions before delegating the composition sumcheck.
 pub(crate) struct BusCompositionProverTranscript<'a, C, F: TranscriptField, EF> {
     /// Typed pattern player borrowing the statement challenger.
@@ -34,35 +72,6 @@ pub(crate) struct BusCompositionVerifierTranscript<'a, C, F: TranscriptField, EF
     _ef: PhantomData<EF>,
 }
 
-fn separator<F, EF>(
-    num_variables: usize,
-    degree: usize,
-    pow_bits: usize,
-) -> DomainSeparator<Alphabet<F>>
-where
-    F: TranscriptField,
-    EF: ExtensionField<F>,
-{
-    // The outer driver records one fresh combiner and one delegated fixed-shape sumcheck.
-    let pattern = InteractionPattern::new(alloc::vec![
-        Interaction::algebra::<F, EF>(
-            Hierarchy::Atomic,
-            Kind::Challenge,
-            DIRECTION,
-            Length::Scalar,
-        ),
-        Interaction::marker::<CompositionSumcheck>(Hierarchy::Begin, Kind::Protocol, SUMCHECK),
-        Interaction::marker::<CompositionSumcheck>(Hierarchy::End, Kind::Protocol, SUMCHECK),
-    ])
-    .expect("one matched composition-sumcheck bracket is well formed");
-    let mut separator = DomainSeparator::new(VERSION, NAME, pattern);
-    separator
-        .instance(&(num_variables as u64).to_be_bytes())
-        .instance(&(degree as u64).to_be_bytes())
-        .instance(&(pow_bits as u64).to_be_bytes());
-    separator
-}
-
 impl<'a, C, F, EF> BusCompositionProverTranscript<'a, C, F, EF>
 where
     F: TranscriptField,
@@ -70,17 +79,9 @@ where
     C: FieldChallenger<F>,
 {
     /// Seed the typed composition transcript from verifier-derived dimensions.
-    pub(crate) fn new(
-        challenger: &'a mut C,
-        num_variables: usize,
-        degree: usize,
-        pow_bits: usize,
-    ) -> Self {
+    pub(crate) fn new(challenger: &'a mut C, shape: BusCompositionShape) -> Self {
         Self {
-            state: ProverState::new(
-                challenger,
-                &separator::<F, EF>(num_variables, degree, pow_bits),
-            ),
+            state: ProverState::new(challenger, &shape.domain_separator::<F, EF>()),
             _ef: PhantomData,
         }
     }
@@ -113,18 +114,9 @@ where
     C: FieldChallenger<F>,
 {
     /// Seed the verifier transcript from the same statement-derived dimensions.
-    pub(crate) fn new(
-        challenger: &'a mut C,
-        num_variables: usize,
-        degree: usize,
-        pow_bits: usize,
-    ) -> Self {
+    pub(crate) fn new(challenger: &'a mut C, shape: BusCompositionShape) -> Self {
         Self {
-            state: VerifierState::new(
-                challenger,
-                &separator::<F, EF>(num_variables, degree, pow_bits),
-                &[],
-            ),
+            state: VerifierState::new(challenger, &shape.domain_separator::<F, EF>(), &[]),
             _ef: PhantomData,
         }
     }

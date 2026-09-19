@@ -12,9 +12,9 @@ use p3_sumcheck::generic_degree::RoundProver;
 
 use crate::ProverInstances;
 use crate::backend::{GenericBackend, ZerocheckBackend};
+use crate::bus::composition::BusCompositionProver;
+use crate::bus::transcript::{BusCompositionProverTranscript, BusCompositionShape};
 use crate::bus::{BusBindingError, BusContext};
-use crate::bus_composition::BusCompositionProver;
-use crate::bus_transcript::BusCompositionProverTranscript;
 use crate::config::{Commitment, MultiStarkConfig, PcsProverError, ProverData};
 use crate::folder::ProverAir;
 use crate::indexed::{IndexedPlan, IndexedWitness};
@@ -393,17 +393,19 @@ where
                 },
                 challenger,
             )?;
-            let degree = BusCompositionProver::degree(context);
+            let degree = context.composition_degree();
             let num_variables = context.max_num_variables();
-            let mut composition_transcript = BusCompositionProverTranscript::<
-                _,
-                C::Val,
-                C::Challenge,
-            >::new(
-                challenger, num_variables, degree, pow_bits
-            );
+            let mut composition_transcript =
+                BusCompositionProverTranscript::<_, C::Val, C::Challenge>::new(
+                    challenger,
+                    BusCompositionShape {
+                        num_variables,
+                        degree,
+                        pow_bits,
+                    },
+                );
             let direction = composition_transcript.direction_challenge();
-            let claimed_sum = context.composition_claim(&output, direction)?;
+            let claimed_sum = output.batched_terminal_claim(direction)?;
             let mut prover = BusCompositionProver::new(
                 context,
                 &output,

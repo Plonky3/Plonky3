@@ -18,8 +18,6 @@ extern crate alloc;
 
 pub mod backend;
 mod bus;
-mod bus_composition;
-mod bus_transcript;
 pub mod config;
 pub mod folder;
 pub mod fractional_gkr;

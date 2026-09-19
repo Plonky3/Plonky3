@@ -3,17 +3,18 @@
 
 extern crate alloc;
 
+mod argument;
 mod builder;
 mod debug;
 mod evaluation;
 mod leaf;
 mod memory;
+mod multilinear;
 mod plan;
 mod product;
-mod protocol;
 mod security;
-mod transcript;
 
+pub use argument::{BusArgumentError, BusChallenges, BusProof, BusReductionOutput};
 pub use builder::{
     BusActivation, BusInteractionBuilder, BusInteractionRecorder, BusSymbolicBuilder, RecordToken,
     SymbolicBusInteraction,
@@ -37,4 +38,3 @@ pub use product::{
     ProductGkrError, ProductGkrLayerProof, ProductGkrOutput, ProductGkrProof, ProductGkrRootShape,
     ProductGkrShape, ProductGkrShapeError,
 };
-pub use protocol::{BusArgumentError, BusChallenges, BusProof, BusReductionOutput};

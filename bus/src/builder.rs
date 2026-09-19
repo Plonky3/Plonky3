@@ -109,6 +109,25 @@ pub struct SymbolicBusInteraction<F: Field> {
     pub activation: BusActivation<SymbolicExpression<F>>,
 }
 
+impl<F: Field> SymbolicBusInteraction<F> {
+    /// Degree of this interaction's selected factor under a transition-degree scale.
+    #[must_use]
+    pub fn factor_degree_multiple_with_transition(&self, multiple: usize) -> usize {
+        let payload = self
+            .fields
+            .iter()
+            .map(|expression| expression.degree_multiple_with_transition(multiple))
+            .max()
+            .unwrap_or(0);
+        match &self.activation {
+            BusActivation::Always => payload,
+            BusActivation::Boolean(selector) => {
+                payload + selector.degree_multiple_with_transition(multiple)
+            }
+        }
+    }
+}
+
 /// Symbolic AIR builder that retains binary-native bus declarations.
 #[derive(Debug)]
 pub struct BusSymbolicBuilder<F: Field, EF: ExtensionField<F> = F> {

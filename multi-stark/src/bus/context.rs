@@ -9,13 +9,15 @@ use alloc::vec::Vec;
 use p3_air::Air;
 use p3_air::symbolic::AirLayout;
 use p3_bus::{
-    BusBlockOwner, BusDirection, BusEvaluation, BusEvaluationError, BusPlan, BusPlanError,
-    BusPlanInput, BusSymbolicBuilder, SymbolicBusInteraction,
+    BusBlockOwner, BusDirection, BusEvaluation, BusPlan, BusPlanInput, BusSymbolicBuilder,
+    SymbolicBusInteraction,
 };
 use p3_field::{ExtensionField, Field};
 use p3_multilinear_util::point::Point;
 use p3_sumcheck::layout::Table;
-use thiserror::Error;
+
+use super::error::BusBindingError;
+use super::math::{equality_at_vertex, equality_evaluation};
 
 /// Verifier-derived bus declarations and their checked physical layout.
 pub(crate) struct BusContext<F: Field, EF: ExtensionField<F>> {
@@ -25,57 +27,23 @@ pub(crate) struct BusContext<F: Field, EF: ExtensionField<F>> {
     plan: BusPlan,
 }
 
-/// Failure to plan, evaluate, or authenticate a bus statement.
-#[derive(Clone, Debug, PartialEq, Eq, Error)]
-pub enum BusBindingError {
-    /// Symbolic declarations do not define a supported statement.
-    #[error(transparent)]
-    Plan(#[from] BusPlanError),
-    /// A symbolic declaration cannot be evaluated from its supplied values.
-    #[error(transparent)]
-    Evaluation(#[from] BusEvaluationError),
-    /// ProductGKR returned a different number of terminal values than planned.
-    #[error("binary-bus ProductGKR returned {actual} values, expected {expected}")]
-    ProductValueCount {
-        /// Count fixed by the push-and-pull statement.
-        expected: usize,
-        /// Count returned by the reduction.
-        actual: usize,
-    },
-    /// ProductGKR returned a terminal point of the wrong dimension.
-    #[error("binary-bus ProductGKR point has dimension {actual}, expected {expected}")]
-    ProductPointDimension {
-        /// Dimension fixed by the public product-tree shape.
-        expected: usize,
-        /// Dimension returned by the reduction.
-        actual: usize,
-    },
-    /// The composition sumcheck returned a terminal point of the wrong dimension.
-    #[error("binary-bus composition point has dimension {actual}, expected {expected}")]
-    CompositionPointDimension {
-        /// Dimension fixed by the tallest participating table.
-        expected: usize,
-        /// Dimension returned by the sumcheck.
-        actual: usize,
-    },
-    /// The composition proof starts from a claim other than the ProductGKR terminal identity.
-    #[error("binary-bus composition initial claim disagrees with ProductGKR")]
-    InitialClaimMismatch,
-    /// The composition sumcheck terminal claim differs from committed-column evaluation.
-    #[error("binary-bus composition terminal claim is not authenticated")]
-    TerminalMismatch,
-}
-
 impl<F, EF> BusContext<F, EF>
 where
     F: Field,
     EF: ExtensionField<F>,
 {
     /// Derive the complete bus statement from AIR metadata and public trace heights.
-    pub(crate) fn build<A>(airs: &[&A], heights: &[usize]) -> Result<Option<Self>, BusPlanError>
+    pub(crate) fn build<A>(airs: &[&A], heights: &[usize]) -> Result<Option<Self>, BusBindingError>
     where
         A: Air<BusSymbolicBuilder<F, EF>>,
     {
+        if airs.len() != heights.len() {
+            return Err(BusBindingError::InstanceCountMismatch {
+                airs: airs.len(),
+                heights: heights.len(),
+            });
+        }
+
         // Each AIR is evaluated once under the dedicated bus recorder.
         let profiles = airs
             .iter()
@@ -115,9 +83,19 @@ where
             .flat_map(BusSymbolicBuilder::interactions)
     }
 
+    /// Per-variable degree of the equality-weighted bus composition.
+    pub(crate) fn composition_degree(&self) -> usize {
+        self.interactions()
+            .map(|interaction| interaction.factor_degree_multiple_with_transition(1))
+            .max()
+            .unwrap_or(0)
+            .saturating_add(1)
+            .max(1)
+    }
+
     /// Variables in the tallest participating AIR table.
     pub(crate) fn max_num_variables(&self) -> usize {
-        [BusDirection::Push, BusDirection::Pull]
+        BusDirection::ALL
             .into_iter()
             .flat_map(|direction| self.plan.blocks(direction))
             .map(|block| block.log_height)
@@ -129,23 +107,6 @@ where
     pub(crate) fn contains_air(&self, air: usize) -> bool {
         // Only participating tables need a second prescribed-point opening.
         !self.profiles[air].interactions().is_empty()
-    }
-
-    /// Initial claim after randomly batching the push and pull terminal identities.
-    pub(crate) fn composition_claim(
-        &self,
-        output: &p3_bus::BusReductionOutput<EF>,
-        direction_challenge: EF,
-    ) -> Result<EF, BusBindingError> {
-        // ProductGKR is planned for exactly two trees in push-then-pull order.
-        if output.product.values.len() != 2 {
-            return Err(BusBindingError::ProductValueCount {
-                expected: 2,
-                actual: output.product.values.len(),
-            });
-        }
-        Ok((output.product.values[0] - EF::ONE)
-            + direction_challenge * (output.product.values[1] - EF::ONE))
     }
 
     /// Evaluate the formal bus composition at the terminal sumcheck point.
@@ -226,30 +187,45 @@ where
     ) -> [Vec<EF>; 2] {
         // Fingerprint weights are shared by every row and every declaration.
         let weights = challenges.fingerprint_weights();
-        [BusDirection::Push, BusDirection::Pull].map(|direction| {
-            let expected =
-                self.plan.security_geometry().non_padding_leaf_counts()[direction_index(direction)];
+        // Column views are shared by every declaration emitted by the same AIR.
+        let columns = tables
+            .iter()
+            .zip(preprocessed)
+            .map(|(main, preprocessed)| {
+                (
+                    main.iter_polys().collect::<Vec<_>>(),
+                    preprocessed
+                        .iter()
+                        .flat_map(|table| table.iter_polys())
+                        .collect::<Vec<_>>(),
+                )
+            })
+            .collect::<Vec<_>>();
+        BusDirection::ALL.map(|direction| {
+            let expected = self
+                .plan
+                .security_geometry()
+                .non_padding_leaf_count(direction);
             let mut leaves = Vec::with_capacity(expected);
+            let mut scratch = columns
+                .iter()
+                .map(|(main, preprocessed)| {
+                    (EF::zero_vec(main.len()), EF::zero_vec(preprocessed.len()))
+                })
+                .collect::<Vec<_>>();
             for block in self.plan.blocks(direction) {
                 let air = block.owner.air;
                 let interaction = &self.profiles[air].interactions()[block.owner.declaration];
-                let table = &tables[air];
-                let preprocessed = preprocessed[air].as_ref();
                 let height = 1usize << block.log_height;
-                let main_columns = table.iter_polys().collect::<Vec<_>>();
-                let prep_columns = preprocessed
-                    .into_iter()
-                    .flat_map(|table| table.iter_polys())
-                    .collect::<Vec<_>>();
-                let mut main = EF::zero_vec(main_columns.len());
-                let mut prep = EF::zero_vec(prep_columns.len());
+                let (main_columns, prep_columns) = &columns[air];
+                let (main, prep) = &mut scratch[air];
 
                 // Resolve every row from the exact tables committed by this proof.
                 for row in 0..height {
-                    for (value, column) in main.iter_mut().zip(&main_columns) {
+                    for (value, column) in main.iter_mut().zip(main_columns) {
                         *value = column[row].into();
                     }
-                    for (value, column) in prep.iter_mut().zip(&prep_columns) {
+                    for (value, column) in prep.iter_mut().zip(prep_columns) {
                         *value = column[row].into();
                     }
                     let factor = self
@@ -258,8 +234,8 @@ where
                             block.bus,
                             interaction,
                             BusEvaluation {
-                                main: &main,
-                                preprocessed: &prep,
+                                main,
+                                preprocessed: prep,
                                 public: public_values[air],
                                 is_first_row: EF::from_bool(row == 0),
                                 is_last_row: EF::from_bool(row + 1 == height),
@@ -277,35 +253,38 @@ where
     }
 }
 
-const fn direction_index(direction: BusDirection) -> usize {
-    // Array order is fixed as push then pull throughout planning and proving.
-    match direction {
-        BusDirection::Push => 0,
-        BusDirection::Pull => 1,
+#[cfg(test)]
+mod tests {
+    use p3_air::{Air, BaseAir};
+    use p3_baby_bear::BabyBear;
+    use p3_bus::BusSymbolicBuilder;
+
+    use super::{BusBindingError, BusContext};
+
+    struct EmptyAir;
+
+    impl BaseAir<BabyBear> for EmptyAir {
+        fn width(&self) -> usize {
+            0
+        }
     }
-}
 
-fn equality_at_vertex<T: Field>(point: &[T], vertex: usize) -> T {
-    // Evaluate the multilinear equality selector for the block's Boolean prefix.
-    point
-        .iter()
-        .enumerate()
-        .map(|(coordinate, &challenge)| {
-            let bit = (vertex >> (point.len() - 1 - coordinate)) & 1;
-            if bit == 0 {
-                T::ONE - challenge
-            } else {
-                challenge
+    impl Air<BusSymbolicBuilder<BabyBear>> for EmptyAir {
+        fn eval(&self, _builder: &mut BusSymbolicBuilder<BabyBear>) {}
+    }
+
+    #[test]
+    fn rejects_mismatched_instance_counts() {
+        let Err(error) = BusContext::<BabyBear, BabyBear>::build(&[&EmptyAir], &[]) else {
+            panic!("AIR and height counts must agree");
+        };
+
+        assert_eq!(
+            error,
+            BusBindingError::InstanceCountMismatch {
+                airs: 1,
+                heights: 0,
             }
-        })
-        .product()
-}
-
-fn equality_evaluation<T: Field>(left: &[T], right: &[T]) -> T {
-    // Multiply the one-coordinate equality extensions in tensor-product order.
-    debug_assert_eq!(left.len(), right.len());
-    left.iter()
-        .zip(right)
-        .map(|(&left, &right)| left * right + (T::ONE - left) * (T::ONE - right))
-        .product()
+        );
+    }
 }

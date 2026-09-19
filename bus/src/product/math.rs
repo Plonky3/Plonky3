@@ -74,3 +74,31 @@ pub(super) fn has_distinct_round_nodes<F: Field>() -> bool {
         .enumerate()
         .all(|(index, node)| !nodes[index + 1..].contains(node))
 }
+
+#[cfg(test)]
+mod tests {
+    use alloc::vec;
+
+    use p3_baby_bear::BabyBear;
+    use p3_field::PrimeCharacteristicRing;
+
+    use super::*;
+
+    #[test]
+    fn internal_equality_coordinates_bind_low_bits_first() {
+        // Internal folding binds adjacent entries before it binds complete halves.
+        let low = BabyBear::from_u8(2);
+        let high = BabyBear::from_u8(3);
+
+        // Vertex order is 00, 01, 10, 11 while coordinates arrive low then high.
+        assert_eq!(
+            equality_weights(&[low, high]),
+            vec![
+                (BabyBear::ONE - low) * (BabyBear::ONE - high),
+                low * (BabyBear::ONE - high),
+                (BabyBear::ONE - low) * high,
+                low * high,
+            ]
+        );
+    }
+}

@@ -30,7 +30,6 @@ use thiserror::Error;
 
 use crate::VerifierInstances;
 use crate::bus::BusContext;
-use crate::bus_composition::BusCompositionProver;
 use crate::config::{Commitment, MultiStarkConfig};
 use crate::folder::{VerifierAir, boundary_io_pins};
 use crate::indexed::IndexedPlan;
@@ -465,7 +464,7 @@ where
         report.terms.extend(bus_composition_terms(
             field_bits,
             context.max_num_variables(),
-            BusCompositionProver::degree(context),
+            context.composition_degree(),
         ));
     }
     let num_reduction_terms = report.terms.len();

@@ -16,6 +16,7 @@ mod math;
 mod proof;
 mod prover;
 mod shape;
+mod transcript;
 
 pub use error::{ProductGkrError, ProductGkrShapeError};
 pub(crate) use proof::ROUND_POLY_LEN;
@@ -24,3 +25,6 @@ pub use shape::{ProductGkrRootShape, ProductGkrShape};
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod transcript_tests;
