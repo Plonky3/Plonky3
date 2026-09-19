@@ -1,5 +1,3 @@
-use core::fmt::{self, Display, Formatter};
-
 use p3_field::PrimeCharacteristicRing;
 use p3_poseidon2::ExternalLayerConstants;
 use rand::distr::{Distribution, StandardUniform};
@@ -7,26 +5,17 @@ use rand::{Rng, RngExt};
 
 /// Error returned by [`RoundConstants::try_from_layers`] when the supplied constants
 /// don't match this AIR's `WIDTH`/`HALF_FULL_ROUNDS`/`PARTIAL_ROUNDS` shape.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum RoundConstantsShapeError {
-    /// The number of initial (or terminal) full-round constant rows didn't match
-    /// `HALF_FULL_ROUNDS`.
-    FullRounds { expected: usize, got: usize },
+    /// The number of initial full-round constant rows didn't match `HALF_FULL_ROUNDS`.
+    #[error("expected {expected} initial full-round constant rows, got {got}")]
+    InitialFullRounds { expected: usize, got: usize },
+    /// The number of terminal full-round constant rows didn't match `HALF_FULL_ROUNDS`.
+    #[error("expected {expected} terminal full-round constant rows, got {got}")]
+    TerminalFullRounds { expected: usize, got: usize },
     /// The number of partial-round constants didn't match `PARTIAL_ROUNDS`.
+    #[error("expected {expected} partial-round constants, got {got}")]
     PartialRounds { expected: usize, got: usize },
-}
-
-impl Display for RoundConstantsShapeError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::FullRounds { expected, got } => {
-                write!(f, "expected {expected} full-round constant rows, got {got}")
-            }
-            Self::PartialRounds { expected, got } => {
-                write!(f, "expected {expected} partial-round constants, got {got}")
-            }
-        }
-    }
 }
 
 /// Round constants for Poseidon2, in a format that's convenient for the AIR.
@@ -82,13 +71,13 @@ impl<
         let initial = external.get_initial_constants();
         let terminal = external.get_terminal_constants();
         if initial.len() != HALF_FULL_ROUNDS {
-            return Err(RoundConstantsShapeError::FullRounds {
+            return Err(RoundConstantsShapeError::InitialFullRounds {
                 expected: HALF_FULL_ROUNDS,
                 got: initial.len(),
             });
         }
         if terminal.len() != HALF_FULL_ROUNDS {
-            return Err(RoundConstantsShapeError::FullRounds {
+            return Err(RoundConstantsShapeError::TerminalFullRounds {
                 expected: HALF_FULL_ROUNDS,
                 got: terminal.len(),
             });
@@ -124,6 +113,7 @@ impl<
 
 #[cfg(test)]
 mod tests {
+    use alloc::string::ToString;
     use alloc::vec::Vec;
 
     use p3_baby_bear::BabyBear;
@@ -170,10 +160,26 @@ mod tests {
             .unwrap_err();
         assert_eq!(
             err,
-            RoundConstantsShapeError::FullRounds {
+            RoundConstantsShapeError::InitialFullRounds {
                 expected: HALF_FULL_ROUNDS,
                 got: HALF_FULL_ROUNDS - 1,
             }
+        );
+        assert_eq!(
+            err.to_string(),
+            "expected 4 initial full-round constant rows, got 3"
+        );
+    }
+
+    #[test]
+    fn full_round_errors_identify_the_external_layer() {
+        let terminal = RoundConstantsShapeError::TerminalFullRounds {
+            expected: HALF_FULL_ROUNDS,
+            got: HALF_FULL_ROUNDS - 1,
+        };
+        assert_eq!(
+            terminal.to_string(),
+            "expected 4 terminal full-round constant rows, got 3"
         );
     }
 
@@ -191,6 +197,10 @@ mod tests {
                 expected: PARTIAL_ROUNDS,
                 got: PARTIAL_ROUNDS - 2,
             }
+        );
+        assert_eq!(
+            err.to_string(),
+            "expected 13 partial-round constants, got 11"
         );
     }
 }

@@ -53,7 +53,7 @@ pub enum BinaryPcsError<F, MmcsError> {
     FinalCodewordLengthMismatch { expected: usize, actual: usize },
 
     /// A Merkle multiproof did not verify.
-    #[error("Merkle opening failed in round {round}")]
+    #[error("Merkle opening failed in round {round}: {source:?}")]
     MerkleFailed {
         round: usize,
         #[source]
