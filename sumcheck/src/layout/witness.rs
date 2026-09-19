@@ -16,6 +16,11 @@ use thiserror::Error;
 use crate::layout::plan::{LayoutShape, plan_layout, plan_stacked_layout};
 use crate::table::TableShape;
 
+/// Entries per task when one column is copied into its stacked slot.
+///
+/// Enough that each task outweighs the fork-join overhead, so short columns copy in one piece.
+const STACK_COPY_CHUNK: usize = 1 << 16;
+
 /// Identifies one slot inside the stacked polynomial.
 #[derive(Debug, Clone, Copy)]
 pub struct Selector {
@@ -994,11 +999,18 @@ impl<F: Field> Witness<F> {
         let mut stacked = Poly::<F>::zero(num_variables);
 
         // Copy each source column into its planner-assigned slot. Slots are disjoint,
-        // so columns copy independently in parallel.
+        // so columns copy independently in parallel, and a tall column in parallel chunks.
         column_slots(&placements, &tables, 0, stacked.as_mut_slice())
             .into_par_iter()
             .for_each(|(slot, table_idx, poly_idx)| {
-                slot.copy_from_slice(tables[table_idx].poly(poly_idx).as_slice());
+                slot.par_chunks_mut(STACK_COPY_CHUNK)
+                    .zip(
+                        tables[table_idx]
+                            .poly(poly_idx)
+                            .as_slice()
+                            .par_chunks(STACK_COPY_CHUNK),
+                    )
+                    .for_each(|(slot, column)| slot.copy_from_slice(column));
             });
 
         Self {
