@@ -34,6 +34,9 @@ mod interleaved;
 mod lanes;
 mod lch;
 mod naive;
+// One-byte butterfly kernel for AArch64.
+#[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
+mod neon;
 mod poly;
 mod subfield;
 #[cfg(test)]
