@@ -23,6 +23,7 @@ p3-baby-bear.workspace = true
 p3-binary-field.workspace = true
 p3-challenger = { workspace = true, features = ["test-utils"] }
 p3-keccak.workspace = true
+p3-matrix.workspace = true
 
 criterion.workspace = true
 rand.workspace = true

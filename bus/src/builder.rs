@@ -287,8 +287,9 @@ mod tests {
     use alloc::vec;
 
     use p3_air::symbolic::{AirLayout, BaseEntry, BaseLeaf, SymbolicExpr};
-    use p3_air::{Air, BaseAir, WindowAccess};
+    use p3_air::{Air, BaseAir, WindowAccess, check_constraints};
     use p3_binary_field::BinaryField128;
+    use p3_matrix::dense::RowMajorMatrix;
     use rand::{RngExt, SeedableRng};
     use rand_xoshiro::Xoroshiro128Plus;
 
@@ -428,6 +429,53 @@ mod tests {
         assert!(unconditional.base_constraints().is_empty());
     }
 
+    /// Builds a concrete four-row trace with one payload and one selector column.
+    fn selector_trace(selectors: [BinaryField128; 4]) -> RowMajorMatrix<BinaryField128> {
+        let values = selectors
+            .into_iter()
+            .enumerate()
+            .flat_map(|(row, selector)| [BinaryField128::from_usize(row), selector])
+            .collect();
+        RowMajorMatrix::new(values, 2)
+    }
+
+    #[test]
+    fn debug_builder_accepts_boolean_bus_activations() {
+        // Every selector is zero or one.
+        let trace = selector_trace([
+            BinaryField128::ZERO,
+            BinaryField128::ONE,
+            BinaryField128::ONE,
+            BinaryField128::ZERO,
+        ]);
+
+        // The automatic Booleanity constraint vanishes on every row.
+        let air = DirectionAir {
+            second: BusDirection::Pull,
+            conditional: true,
+        };
+        check_constraints(&air, &trace, &[]);
+    }
+
+    #[test]
+    #[should_panic]
+    fn debug_builder_rejects_non_boolean_bus_activations() {
+        // The tower generator is distinct from both Boolean values.
+        let trace = selector_trace([
+            BinaryField128::ZERO,
+            BinaryField128::ONE,
+            BinaryField128::GENERATOR,
+            BinaryField128::ZERO,
+        ]);
+
+        // Concrete constraint checking must reject the malformed selector row.
+        let air = DirectionAir {
+            second: BusDirection::Pull,
+            conditional: true,
+        };
+        check_constraints(&air, &trace, &[]);
+    }
+
     /// Evaluate the symbolic arithmetic used by the selector fixture.
     fn evaluate(
         expression: &SymbolicExpression<BinaryField128>,
@@ -504,7 +552,10 @@ mod tests {
         let air = RichAir;
         let profile = BusSymbolicBuilder::from_air(&air, AirLayout::from_air(&air));
         assert_eq!(profile.interactions().len(), 1);
-        assert!(profile.interactions()[0].fields[0].degree_multiple() >= 2);
+        let entries = variable_entries(&profile.interactions()[0].fields[0]);
+        assert!(entries.contains(&BaseEntry::Main { offset: 1 }));
+        assert!(entries.contains(&BaseEntry::Public));
+        assert!(entries.contains(&BaseEntry::Periodic));
         assert_eq!(profile.base_constraints().len(), 2);
         assert_eq!(profile.extension_constraints().len(), 1);
 
@@ -512,5 +563,25 @@ mod tests {
         let layout = profile.constraint_layout();
         assert_eq!(layout.base_indices, vec![0, 2]);
         assert_eq!(layout.ext_indices, vec![1]);
+    }
+
+    /// Collects every trace or public entry referenced by one symbolic expression.
+    fn variable_entries(expression: &SymbolicExpression<BinaryField128>) -> Vec<BaseEntry> {
+        let mut entries = Vec::new();
+        let mut pending = vec![expression];
+        while let Some(expression) = pending.pop() {
+            match expression {
+                SymbolicExpr::Leaf(BaseLeaf::Variable(variable)) => entries.push(variable.entry),
+                SymbolicExpr::Leaf(_) => {}
+                SymbolicExpr::Add { x, y, .. }
+                | SymbolicExpr::Sub { x, y, .. }
+                | SymbolicExpr::Mul { x, y, .. } => {
+                    pending.push(x);
+                    pending.push(y);
+                }
+                SymbolicExpr::Neg { x, .. } => pending.push(x),
+            }
+        }
+        entries
     }
 }
