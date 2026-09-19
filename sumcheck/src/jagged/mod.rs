@@ -149,177 +149,183 @@ impl<F, EF> JaggedProverOutput<F, EF> {
     }
 }
 
-/// Proves an evaluation of a virtual jagged table.
-///
-/// The dense witness contains only live cells in column-major order.
-///
-/// The returned dense claim must be opened against the commitment to the same witness.
-///
-/// # Soundness
-///
-/// The reduction contributes at most `2m / |EF|` error for `m` dense variables.
-///
-/// This bound does not include the binding error of the underlying PCS.
-///
-/// # Errors
-///
-/// - The sparse point does not match the public layout.
-/// - The dense witness length differs from the live trace area.
-pub fn prove_jagged<F, EF, Challenger>(
-    layout: &JaggedLayout,
-    dense_witness: &[F],
-    point: &JaggedPoint<EF>,
-    challenger: &mut Challenger,
-) -> Result<JaggedProverOutput<F, EF>, JaggedError>
-where
-    F: TranscriptField,
-    EF: ExtensionField<F>,
-    Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
-{
-    // Reject malformed public geometry before touching the transcript.
-    validate_point(layout, point)?;
-    if dense_witness.len() != layout.area() {
-        return Err(JaggedError::DenseLengthMismatch {
-            expected: layout.area(),
-            actual: dense_witness.len(),
+impl JaggedLayout {
+    /// Proves an evaluation of a virtual jagged table.
+    ///
+    /// The dense witness contains only live cells in column-major order.
+    ///
+    /// The returned dense claim must be opened against the commitment to the same witness.
+    ///
+    /// # Soundness
+    ///
+    /// The reduction contributes at most `2m / |EF|` error for `m` dense variables.
+    ///
+    /// This bound does not include the binding error of the underlying PCS.
+    ///
+    /// # Errors
+    ///
+    /// - The sparse point does not match the public layout.
+    /// - The dense witness length differs from the live trace area.
+    pub fn prove<F, EF, Challenger>(
+        &self,
+        dense_witness: &[F],
+        point: &JaggedPoint<EF>,
+        challenger: &mut Challenger,
+    ) -> Result<JaggedProverOutput<F, EF>, JaggedError>
+    where
+        F: TranscriptField,
+        EF: ExtensionField<F>,
+        Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
+    {
+        // Reject malformed public geometry before touching the transcript.
+        validate_point(self, point)?;
+        if dense_witness.len() != self.area() {
+            return Err(JaggedError::DenseLengthMismatch {
+                expected: self.area(),
+                actual: dense_witness.len(),
+            });
+        }
+
+        // The committed data occupies the live prefix.
+        // The power-of-two suffix is represented only by zeros inside this reduction.
+        let mut dense = EF::zero_vec(self.dense_capacity());
+        for (destination, &source) in dense.iter_mut().zip(dense_witness) {
+            *destination = EF::from(source);
+        }
+
+        // On Boolean dense indices this selector maps the contiguous representation back to rows.
+        let selector = selector_table(self, point);
+        let claimed_value = dense
+            .iter()
+            .zip(&selector)
+            .map(|(&value, &weight)| value * weight)
+            .sum();
+
+        // Both parties seed from the complete sparse statement before any challenge is drawn.
+        let mut transcript = JaggedProverTranscript::<Challenger, F, EF>::new(
+            challenger,
+            self,
+            point,
+            claimed_value,
+        );
+
+        // A product sumcheck reduces the sparse evaluation to one product at a random dense point.
+        let polynomial = ProductPolynomial::new_unpacked(
+            VariableOrder::Prefix,
+            Poly::new(dense),
+            Poly::new(selector),
+        );
+        let mut prover = SumcheckProver::new(polynomial, claimed_value);
+        let mut sumcheck = SumcheckData::default();
+        let dense_point = transcript.product_sumcheck(|challenger| {
+            prover.compute_sumcheck_polynomials(
+                &mut sumcheck,
+                challenger,
+                self.dense_variables(),
+                0,
+                None,
+            )
         });
+
+        // Settling the final held challenge leaves one dense evaluation.
+        let dense_evaluation = prover.evals().as_slice()[0];
+        transcript.dense_evaluation(dense_evaluation);
+        transcript.finish();
+
+        let dense_claim = JaggedDenseClaim {
+            point: dense_point,
+            value: dense_evaluation,
+        };
+        let proof = JaggedProof {
+            sumcheck,
+            dense_evaluation,
+        };
+        Ok(JaggedProverOutput {
+            proof,
+            sparse_value: claimed_value,
+            dense_claim,
+        })
     }
 
-    // The committed data occupies the live prefix.
-    // The power-of-two suffix is represented only by zeros inside this reduction.
-    let mut dense = EF::zero_vec(layout.dense_capacity());
-    for (destination, &source) in dense.iter_mut().zip(dense_witness) {
-        *destination = EF::from(source);
-    }
+    /// Verifies a sparse evaluation reduction.
+    ///
+    /// Acceptance returns the single dense claim the underlying PCS must authenticate.
+    ///
+    /// # Soundness
+    ///
+    /// The terminal selector is evaluated independently through a width-four branching program.
+    ///
+    /// A false sparse claim therefore becomes a false dense claim except with probability `2m / |EF|`.
+    ///
+    /// # Errors
+    ///
+    /// - The sparse point does not match the public layout.
+    /// - The proof has a malformed sumcheck shape.
+    /// - A sumcheck round or the terminal product relation fails.
+    pub fn verify<F, EF, Challenger>(
+        &self,
+        point: &JaggedPoint<EF>,
+        claimed_value: EF,
+        proof: &JaggedProof<F, EF>,
+        challenger: &mut Challenger,
+    ) -> Result<JaggedDenseClaim<EF>, JaggedError>
+    where
+        F: TranscriptField,
+        EF: ExtensionField<F>,
+        Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
+    {
+        // Reject caller-owned shape mismatches before advancing the sponge.
+        validate_point(self, point)?;
 
-    // On Boolean dense indices this selector maps the contiguous representation back to rows.
-    let selector = selector_table(layout, point);
-    let claimed_value = dense
-        .iter()
-        .zip(&selector)
-        .map(|(&value, &weight)| value * weight)
-        .sum();
-
-    // Both parties seed from the complete sparse statement before any challenge is drawn.
-    let mut transcript =
-        JaggedProverTranscript::<Challenger, F, EF>::new(challenger, layout, point, claimed_value);
-
-    // A product sumcheck reduces the sparse evaluation to one product at a random dense point.
-    let polynomial = ProductPolynomial::new_unpacked(
-        VariableOrder::Prefix,
-        Poly::new(dense),
-        Poly::new(selector),
-    );
-    let mut prover = SumcheckProver::new(polynomial, claimed_value);
-    let mut sumcheck = SumcheckData::default();
-    let dense_point = transcript.product_sumcheck(|challenger| {
-        prover.compute_sumcheck_polynomials(
-            &mut sumcheck,
-            challenger,
-            layout.dense_variables(),
-            0,
-            None,
-        )
-    });
-
-    // Settling the final held challenge leaves one dense evaluation.
-    let dense_evaluation = prover.evals().as_slice()[0];
-    transcript.dense_evaluation(dense_evaluation);
-    transcript.finish();
-
-    let dense_claim = JaggedDenseClaim {
-        point: dense_point,
-        value: dense_evaluation,
-    };
-    let proof = JaggedProof {
-        sumcheck,
-        dense_evaluation,
-    };
-    Ok(JaggedProverOutput {
-        proof,
-        sparse_value: claimed_value,
-        dense_claim,
-    })
-}
-
-/// Verifies a sparse evaluation reduction.
-///
-/// Acceptance returns the single dense claim the underlying PCS must authenticate.
-///
-/// # Soundness
-///
-/// The terminal selector is evaluated independently through a width-four branching program.
-///
-/// A false sparse claim therefore becomes a false dense claim except with probability `2m / |EF|`.
-///
-/// # Errors
-///
-/// - The sparse point does not match the public layout.
-/// - The proof has a malformed sumcheck shape.
-/// - A sumcheck round or the terminal product relation fails.
-pub fn verify_jagged<F, EF, Challenger>(
-    layout: &JaggedLayout,
-    point: &JaggedPoint<EF>,
-    claimed_value: EF,
-    proof: &JaggedProof<F, EF>,
-    challenger: &mut Challenger,
-) -> Result<JaggedDenseClaim<EF>, JaggedError>
-where
-    F: TranscriptField,
-    EF: ExtensionField<F>,
-    Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
-{
-    // Reject caller-owned shape mismatches before advancing the sponge.
-    validate_point(layout, point)?;
-
-    // The proof must not smuggle unused grinding witnesses into a zero-difficulty reduction.
-    if !proof.sumcheck.pow_witnesses.is_empty() {
-        return Err(SumcheckError::PowWitnessCountMismatch {
-            expected: 0,
-            actual: proof.sumcheck.pow_witnesses.len(),
+        // The proof must not smuggle unused grinding witnesses into a zero-difficulty reduction.
+        if !proof.sumcheck.pow_witnesses.is_empty() {
+            return Err(SumcheckError::PowWitnessCountMismatch {
+                expected: 0,
+                actual: proof.sumcheck.pow_witnesses.len(),
+            }
+            .into());
         }
-        .into());
-    }
 
-    // Replay against the same public statement that seeded the prover.
-    let mut transcript = JaggedVerifierTranscript::<Challenger, F, EF>::new(
-        challenger,
-        layout,
-        point,
-        claimed_value,
-    );
-    let mut terminal = claimed_value;
-    let dense_point = match transcript.product_sumcheck(|challenger| {
-        proof.sumcheck.verify_rounds(
+        // Replay against the same public statement that seeded the prover.
+        let mut transcript = JaggedVerifierTranscript::<Challenger, F, EF>::new(
             challenger,
-            &mut terminal,
-            layout.dense_variables(),
-            0,
-            Basis::Evaluation,
-        )
-    }) {
-        Ok(point) => point,
-        Err(error) => {
-            transcript.abort();
-            return Err(error.into());
+            self,
+            point,
+            claimed_value,
+        );
+        let mut terminal = claimed_value;
+        let dense_point = match transcript.product_sumcheck(|challenger| {
+            proof.sumcheck.verify_rounds(
+                challenger,
+                &mut terminal,
+                self.dense_variables(),
+                0,
+                Basis::Evaluation,
+            )
+        }) {
+            Ok(point) => point,
+            Err(error) => {
+                transcript.abort();
+                return Err(error.into());
+            }
+        };
+
+        // The surviving value is transcript-bound before any algebraic rejection is returned.
+        transcript.dense_evaluation(proof.dense_evaluation);
+        transcript.finish();
+
+        // Paper Eq. (4) holds only on Boolean dense indices.
+        // The branching program computes the correct multilinear extension at this field point.
+        let selector = selector_evaluation(self, point, &dense_point);
+        if terminal != proof.dense_evaluation * selector {
+            return Err(JaggedError::TerminalMismatch);
         }
-    };
 
-    // The surviving value is transcript-bound before any algebraic rejection is returned.
-    transcript.dense_evaluation(proof.dense_evaluation);
-    transcript.finish();
-
-    // Paper Eq. (4) holds only on Boolean dense indices.
-    // The branching program computes the correct multilinear extension at this field point.
-    let selector = selector_evaluation(layout, point, &dense_point);
-    if terminal != proof.dense_evaluation * selector {
-        return Err(JaggedError::TerminalMismatch);
+        Ok(JaggedDenseClaim {
+            point: dense_point,
+            value: proof.dense_evaluation,
+        })
     }
-
-    Ok(JaggedDenseClaim {
-        point: dense_point,
-        value: proof.dense_evaluation,
-    })
 }
 
 #[cfg(test)]
@@ -351,17 +357,14 @@ mod tests {
         // Prover and verifier begin from identical transcript states.
         let (layout, dense, point) = fixture();
         let mut prover_challenger = challenger();
-        let output = prove_jagged(&layout, &dense, &point, &mut prover_challenger).unwrap();
+        let output = layout
+            .prove(&dense, &point, &mut prover_challenger)
+            .unwrap();
         let (proof, sparse_value, prover_claim) = output.into_parts();
         let mut verifier_challenger = challenger();
-        let verifier_claim = verify_jagged(
-            &layout,
-            &point,
-            sparse_value,
-            &proof,
-            &mut verifier_challenger,
-        )
-        .unwrap();
+        let verifier_claim = layout
+            .verify(&point, sparse_value, &proof, &mut verifier_challenger)
+            .unwrap();
 
         // The surviving claim is exactly an evaluation of the zero-padded dense witness.
         let mut padded = dense.into_iter().map(EF::from).collect::<Vec<_>>();
@@ -377,21 +380,18 @@ mod tests {
         // The proof is generated for one layout, point and claimed value.
         let (layout, dense, point) = fixture();
         let mut prover_challenger = challenger();
-        let output = prove_jagged(&layout, &dense, &point, &mut prover_challenger).unwrap();
+        let output = layout
+            .prove(&dense, &point, &mut prover_challenger)
+            .unwrap();
         let (proof, sparse_value, _) = output.into_parts();
 
         // Mutation: move one live row from the first column to the second.
         let other_layout = JaggedLayout::new(3, &[2, 1, 5, 1]).unwrap();
         let mut verifier_challenger = challenger();
         assert!(
-            verify_jagged(
-                &other_layout,
-                &point,
-                sparse_value,
-                &proof,
-                &mut verifier_challenger,
-            )
-            .is_err()
+            other_layout
+                .verify(&point, sparse_value, &proof, &mut verifier_challenger,)
+                .is_err()
         );
 
         // Mutation: change one coordinate while preserving the point width.
@@ -400,27 +400,22 @@ mod tests {
         let other_point = JaggedPoint::new(Point::new(other_row), point.column().clone());
         let mut verifier_challenger = challenger();
         assert!(
-            verify_jagged(
-                &layout,
-                &other_point,
-                sparse_value,
-                &proof,
-                &mut verifier_challenger,
-            )
-            .is_err()
+            layout
+                .verify(&other_point, sparse_value, &proof, &mut verifier_challenger,)
+                .is_err()
         );
 
         // Mutation: change only the claimed sparse evaluation.
         let mut verifier_challenger = challenger();
         assert!(
-            verify_jagged(
-                &layout,
-                &point,
-                sparse_value + EF::ONE,
-                &proof,
-                &mut verifier_challenger,
-            )
-            .is_err()
+            layout
+                .verify(
+                    &point,
+                    sparse_value + EF::ONE,
+                    &proof,
+                    &mut verifier_challenger,
+                )
+                .is_err()
         );
     }
 
@@ -429,7 +424,9 @@ mod tests {
         // Start from an honest proof, then mutate one independently checked component at a time.
         let (layout, dense, point) = fixture();
         let mut prover_challenger = challenger();
-        let output = prove_jagged(&layout, &dense, &point, &mut prover_challenger).unwrap();
+        let output = layout
+            .prove(&dense, &point, &mut prover_challenger)
+            .unwrap();
         let (proof, sparse_value, _) = output.into_parts();
 
         // One missing round cannot redefine the transcript shape.
@@ -437,13 +434,7 @@ mod tests {
         short.sumcheck.polynomial_evaluations.pop();
         let mut verifier_challenger = challenger();
         assert!(matches!(
-            verify_jagged(
-                &layout,
-                &point,
-                sparse_value,
-                &short,
-                &mut verifier_challenger,
-            ),
+            layout.verify(&point, sparse_value, &short, &mut verifier_challenger,),
             Err(JaggedError::Sumcheck(
                 SumcheckError::RoundCountMismatch { .. }
             ))
@@ -454,13 +445,7 @@ mod tests {
         forged.dense_evaluation += EF::ONE;
         let mut verifier_challenger = challenger();
         assert_eq!(
-            verify_jagged(
-                &layout,
-                &point,
-                sparse_value,
-                &forged,
-                &mut verifier_challenger,
-            ),
+            layout.verify(&point, sparse_value, &forged, &mut verifier_challenger,),
             Err(JaggedError::TerminalMismatch)
         );
     }
@@ -474,13 +459,15 @@ mod tests {
             Point::new(vec![EF::from_u64(5)]),
         );
         let mut prover_challenger = challenger();
-        let output = prove_jagged(&layout, &[], &point, &mut prover_challenger).unwrap();
+        let output = layout.prove(&[], &point, &mut prover_challenger).unwrap();
         let (proof, sparse_value, _) = output.into_parts();
         assert_eq!(sparse_value, EF::ZERO);
 
         let mut verifier_challenger = challenger();
         assert!(
-            verify_jagged(&layout, &point, EF::ZERO, &proof, &mut verifier_challenger,).is_ok()
+            layout
+                .verify(&point, EF::ZERO, &proof, &mut verifier_challenger)
+                .is_ok()
         );
     }
 }
