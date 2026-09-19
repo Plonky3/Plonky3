@@ -8,61 +8,76 @@ use p3_multilinear_util::poly::Poly;
 
 use super::{JaggedError, JaggedLayout, JaggedPoint};
 
-/// Validates that a sparse evaluation point matches its public layout.
-pub(super) const fn validate_point<F: Field>(
-    layout: &JaggedLayout,
-    point: &JaggedPoint<F>,
-) -> Result<(), JaggedError> {
-    // The row coordinates address the provisioned row space.
-    if point.row().num_variables() != layout.row_variables() {
-        return Err(JaggedError::RowPointWidthMismatch {
-            expected: layout.row_variables(),
-            actual: point.row().num_variables(),
-        });
-    }
-
-    // The column coordinates address exactly the power-of-two column count.
-    if point.column().num_variables() != layout.column_variables() {
-        return Err(JaggedError::ColumnPointWidthMismatch {
-            expected: layout.column_variables(),
-            actual: point.column().num_variables(),
-        });
-    }
-
-    Ok(())
+/// Selector polynomial induced by one validated sparse layout.
+pub(super) struct JaggedSelector<'a> {
+    /// Sparse geometry that determines every dense-to-sparse mapping.
+    layout: &'a JaggedLayout,
 }
 
-/// Materializes the Boolean-cube selector for the dense witness.
-///
-/// At a live dense index the value is the equality weight of its sparse row and column.
-///
-/// Every virtual padding cell has weight zero.
-pub(super) fn selector_table<F: Field>(layout: &JaggedLayout, point: &JaggedPoint<F>) -> Vec<F> {
-    // Generate only row weights reached by a live cell.
-    // A large public row bound must not turn sparse commitment back into rectangular allocation.
-    let max_height = layout
-        .cumulative_heights()
-        .windows(2)
-        .map(|bounds| bounds[1] - bounds[0])
-        .max()
-        .unwrap_or(0);
-    let row_weights = equality_prefix(point.row().as_slice(), max_height);
-    let column_weights = Poly::new_from_point(point.column().as_slice(), F::ONE);
-    let mut selector = F::zero_vec(layout.dense_capacity());
-
-    // One segment is one column in the column-major dense representation.
-    for column in 0..layout.num_columns() {
-        let start = layout.cumulative_heights()[column];
-        let end = layout.cumulative_heights()[column + 1];
-        let column_weight = column_weights.as_slice()[column];
-
-        // The row index restarts at zero at every column boundary.
-        for (slot, &row_weight) in selector[start..end].iter_mut().zip(&row_weights) {
-            *slot = row_weight * column_weight;
-        }
+impl<'a> JaggedSelector<'a> {
+    /// Borrows the geometry shared by selector materialization and evaluation.
+    pub(super) const fn new(layout: &'a JaggedLayout) -> Self {
+        // The layout constructor already validated every boundary.
+        Self { layout }
     }
 
-    selector
+    /// Validates that a sparse evaluation point matches this layout.
+    pub(super) const fn validate_point<F: Field>(
+        &self,
+        point: &JaggedPoint<F>,
+    ) -> Result<(), JaggedError> {
+        // The row coordinates address the provisioned row space.
+        if point.row().num_variables() != self.layout.row_variables() {
+            return Err(JaggedError::RowPointWidthMismatch {
+                expected: self.layout.row_variables(),
+                actual: point.row().num_variables(),
+            });
+        }
+
+        // The column coordinates address exactly the power-of-two column count.
+        if point.column().num_variables() != self.layout.column_variables() {
+            return Err(JaggedError::ColumnPointWidthMismatch {
+                expected: self.layout.column_variables(),
+                actual: point.column().num_variables(),
+            });
+        }
+
+        Ok(())
+    }
+
+    /// Materializes the Boolean-cube selector for the dense witness.
+    ///
+    /// At a live dense index the value is the equality weight of its sparse row and column.
+    ///
+    /// Every virtual padding cell has weight zero.
+    pub(super) fn table<F: Field>(&self, point: &JaggedPoint<F>) -> Vec<F> {
+        // Generate only row weights reached by a live cell.
+        // A large public row bound must not turn sparse commitment back into rectangular allocation.
+        let max_height = self
+            .layout
+            .cumulative_heights()
+            .windows(2)
+            .map(|bounds| bounds[1] - bounds[0])
+            .max()
+            .unwrap_or(0);
+        let row_weights = equality_prefix(point.row().as_slice(), max_height);
+        let column_weights = Poly::new_from_point(point.column().as_slice(), F::ONE);
+        let mut selector = F::zero_vec(self.layout.dense_capacity());
+
+        // One segment is one column in the column-major dense representation.
+        for column in 0..self.layout.num_columns() {
+            let start = self.layout.cumulative_heights()[column];
+            let end = self.layout.cumulative_heights()[column + 1];
+            let column_weight = column_weights.as_slice()[column];
+
+            // The row index restarts at zero at every column boundary.
+            for (slot, &row_weight) in selector[start..end].iter_mut().zip(&row_weights) {
+                *slot = row_weight * column_weight;
+            }
+        }
+
+        selector
+    }
 }
 
 /// Materializes the first equality weights without allocating the full row cube.
@@ -93,28 +108,30 @@ fn equality_prefix<F: Field>(point: &[F], length: usize) -> Vec<F> {
     weights
 }
 
-/// Evaluates the selector polynomial at an arbitrary dense point.
-///
-/// The computation is the width-four read-once branching program from ePrint 2025/917.
-///
-/// It checks both `dense_index = row + column_start` and `dense_index < column_end`.
-pub(super) fn selector_evaluation<F: Field>(
-    layout: &JaggedLayout,
-    sparse_point: &JaggedPoint<F>,
-    dense_point: &Point<F>,
-) -> F {
-    // The column equality table supplies the coefficient of each boundary pair.
-    let column_weights = Poly::new_from_point(sparse_point.column().as_slice(), F::ONE);
+impl JaggedSelector<'_> {
+    /// Evaluates the selector polynomial at an arbitrary dense point.
+    ///
+    /// The computation is the width-four read-once branching program from ePrint 2025/917.
+    ///
+    /// It checks both `dense_index = row + column_start` and `dense_index < column_end`.
+    pub(super) fn evaluate<F: Field>(
+        &self,
+        sparse_point: &JaggedPoint<F>,
+        dense_point: &Point<F>,
+    ) -> F {
+        // The column equality table supplies the coefficient of each boundary pair.
+        let column_weights = Poly::new_from_point(sparse_point.column().as_slice(), F::ONE);
 
-    layout
-        .cumulative_heights()
-        .windows(2)
-        .zip(column_weights.as_slice())
-        .map(|(bounds, &weight)| {
-            // Each column asks the same automaton about its own start and end.
-            weight * boundary_evaluation(sparse_point.row(), dense_point, bounds[0], bounds[1])
-        })
-        .sum()
+        self.layout
+            .cumulative_heights()
+            .windows(2)
+            .zip(column_weights.as_slice())
+            .map(|(bounds, &weight)| {
+                // Each column asks the same automaton about its own start and end.
+                weight * boundary_evaluation(sparse_point.row(), dense_point, bounds[0], bounds[1])
+            })
+            .sum()
+    }
 }
 
 /// Evaluates one boundary pair through the branching program's multilinear extension.
@@ -241,9 +258,9 @@ mod tests {
         let sparse = JaggedPoint::new(field_point(&[2, 3, 5]), field_point(&[7, 11]));
         let dense = field_point(&[13, 17, 19, 23]);
 
-        let materialized = Poly::new(selector_table(&layout, &sparse));
+        let materialized = Poly::new(JaggedSelector::new(&layout).table(&sparse));
         assert_eq!(
-            selector_evaluation(&layout, &sparse, &dense),
+            JaggedSelector::new(&layout).evaluate(&sparse, &dense),
             materialized.eval_base(&dense)
         );
     }
@@ -267,7 +284,7 @@ mod tests {
         let layout = JaggedLayout::new(40, &[1]).unwrap();
         let row = field_point(&[2; 40]);
         let sparse = JaggedPoint::new(row.clone(), Point::new(vec![]));
-        let selector = selector_table(&layout, &sparse);
+        let selector = JaggedSelector::new(&layout).table(&sparse);
         let expected = row
             .iter()
             .fold(F::ONE, |weight, &value| weight * (F::ONE - value));
@@ -292,9 +309,9 @@ mod tests {
             BinaryField128::from_u64(13),
         ]);
 
-        let materialized = Poly::new(selector_table(&layout, &sparse));
+        let materialized = Poly::new(JaggedSelector::new(&layout).table(&sparse));
         assert_eq!(
-            selector_evaluation(&layout, &sparse, &dense),
+            JaggedSelector::new(&layout).evaluate(&sparse, &dense),
             materialized.eval_base(&dense)
         );
     }
@@ -313,10 +330,10 @@ mod tests {
 
             // The dense point is truncated to the arity derived from this random area.
             let dense = field_point(&dense[..layout.dense_variables()]);
-            let materialized = Poly::new(selector_table(&layout, &sparse));
+            let materialized = Poly::new(JaggedSelector::new(&layout).table(&sparse));
 
             prop_assert_eq!(
-                selector_evaluation(&layout, &sparse, &dense),
+                JaggedSelector::new(&layout).evaluate(&sparse, &dense),
                 materialized.eval_base(&dense)
             );
         }
