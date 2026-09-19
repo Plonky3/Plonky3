@@ -399,7 +399,7 @@ impl<F: Field> ReadOnlyMemoryPlan<F> {
     /// # Errors
     ///
     /// Returns an error for malformed dimensions or failed root obligations.
-    pub fn claims<EF: Field>(
+    pub fn claims<EF: ExtensionField<F>>(
         &self,
         output: ProductGkrOutput<EF>,
     ) -> Result<ReadOnlyMemoryClaims<EF>, ReadOnlyMemoryError> {
