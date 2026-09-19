@@ -15,6 +15,7 @@ test-util = ["dep:p3-baby-bear"]
 
 [dependencies]
 p3-baby-bear = { workspace = true, optional = true }
+p3-binary-field.workspace = true
 p3-challenger.workspace = true
 p3-commit.workspace = true
 p3-field.workspace = true
@@ -33,7 +34,6 @@ tracing.workspace = true
 
 [dev-dependencies]
 p3-baby-bear = { path = "../baby-bear" }
-p3-binary-field = { path = "../binary-field" }
 p3-challenger = { path = "../challenger", features = ["test-utils"] }
 p3-dft = { path = "../dft" }
 p3-keccak = { path = "../keccak" }
@@ -52,6 +52,10 @@ harness = false
 
 [[bench]]
 name = "ring_switch"
+harness = false
+
+[[bench]]
+name = "univariate_skip"
 harness = false
 
 [lints]

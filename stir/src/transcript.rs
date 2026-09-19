@@ -1457,18 +1457,29 @@ mod tests {
     use std::panic::{AssertUnwindSafe, catch_unwind};
 
     use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
+    use p3_challenger::testing::pow_difficulties;
     use p3_challenger::{CanSample, DuplexChallenger};
+    use p3_commit::ExtensionMmcs;
     use p3_field::extension::BinomialExtensionField;
     use p3_field::{Field, PrimeCharacteristicRing};
+    use p3_merkle_tree::MerkleTreeMmcs;
+    use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
     use rand::SeedableRng;
     use rand::rngs::SmallRng;
 
     use super::*;
+    use crate::StirParameters;
 
     type F = BabyBear;
     type EF = BinomialExtensionField<F, 4>;
     type Perm = Poseidon2BabyBear<16>;
     type Ch = DuplexChallenger<F, Perm, 16, 8>;
+    type Hash = PaddingFreeSponge<Perm, 16, 8, 8>;
+    type Compress = TruncatedPermutation<Perm, 2, 8, 16>;
+    type ValMmcs =
+        MerkleTreeMmcs<<F as Field>::Packing, <F as Field>::Packing, Hash, Compress, 2, 8>;
+    type Mmcs = ExtensionMmcs<F, EF, ValMmcs>;
+    type Config = StirConfig<F, EF, Mmcs, Ch>;
 
     /// One named mutation of an instance-wide number.
     type InstanceKnob = (&'static str, fn(&mut StirInstanceShape));
@@ -2000,5 +2011,80 @@ mod tests {
             payload.downcast_ref::<&str>().copied(),
             Some("the commitment scheme panicked")
         );
+    }
+
+    /// A schedule whose derived grinding is positive at every site.
+    ///
+    /// The numbers come out of the security report, so no test picks them.
+    fn ground_config() -> Config {
+        let mut rng = SmallRng::seed_from_u64(0x57C0);
+        let perm = Perm::new_from_rng_128(&mut rng);
+        let val_mmcs = ValMmcs::new(Hash::new(perm.clone()), Compress::new(perm), 0);
+
+        Config::new(
+            20,
+            StirParameters {
+                log_blowup: 1,
+                log_folding_factor: 4,
+                log_starting_folding_factor: 4,
+                soundness_type: SecurityAssumption::CapacityBound,
+                security_level: 80,
+                max_pow_bits: 20,
+                mmcs: Mmcs::new(val_mmcs),
+            },
+        )
+    }
+
+    #[test]
+    fn the_described_grinding_matches_the_configured_difficulty() {
+        // Invariant: a grinding difficulty lives in two places.
+        //
+        //     transcript  ->  the bits the pattern describes
+        //     report      ->  the bits the configuration derives
+        //
+        // STIR prices its own grinding, so the shared budget never compares it.
+        //
+        // Reading both sides through the shape compares it against itself.
+        // So only the described side is read there.
+
+        // A zero difficulty describes no step, so an unground run is empty.
+        assert!(pow_difficulties(&shape().pattern::<F, EF>()).is_empty());
+
+        // Fixture state: a real schedule at 80 bits over four rounds.
+        let config = ground_config();
+
+        // Every site grinds, and no site's two difficulties agree.
+        // A copied or swapped field therefore cannot satisfy the list below.
+        for round in &config.round_configs {
+            assert!(round.folding_pow_bits > 0, "an unground folding site");
+            assert!(round.pow_bits > 0, "an unground query site");
+            assert_ne!(round.folding_pow_bits, round.pow_bits, "a shared value");
+        }
+        assert!(config.final_folding_pow_bits > 0, "an unground final fold");
+        assert!(config.final_pow_bits > 0, "an unground final query");
+        assert_ne!(
+            config.final_folding_pow_bits, config.final_pow_bits,
+            "a shared closing value"
+        );
+
+        // Two sites per round, then two closing the run.
+        //
+        //     round r:  folding, then query
+        //     closing:  final folding, then final query
+        let mut expected: Vec<(&str, usize)> = Vec::new();
+        for round in &config.round_configs {
+            expected.push((FOLDING_POW, round.folding_pow_bits));
+            expected.push((QUERY_POW, round.pow_bits));
+        }
+        expected.push((FINAL_FOLDING_POW, config.final_folding_pow_bits));
+        expected.push((FINAL_POW, config.final_pow_bits));
+
+        // A single run is the batch of one, which is what the transcript sees.
+        let shape = StirShape {
+            commits_initial: true,
+            instances: vec![StirInstanceShape::new(&config)],
+        };
+
+        assert_eq!(pow_difficulties(&shape.pattern::<F, EF>()), expected);
     }
 }

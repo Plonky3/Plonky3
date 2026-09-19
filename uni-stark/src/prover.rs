@@ -103,6 +103,13 @@ where
     SC::Challenger: GrindingChallenger<Witness = Val<SC>>,
     A: QuotientAir<SC>,
 {
+    // Public inputs reach this proof only through AIR constraints.
+    // A cell listed for backend binding would go completely unbound.
+    assert!(
+        air.public_boundary_io().is_empty(),
+        "uni-stark does not support boundary-IO public values; bind them with AIR constraints"
+    );
+
     #[cfg(debug_assertions)]
     p3_air::check_constraints(air, &trace, public_values);
 
@@ -523,6 +530,13 @@ where
     A: QuotientAir<SC>,
     Mat: Matrix<Val<SC>> + Sync,
 {
+    // Public inputs reach this proof only through AIR constraints.
+    // A cell listed for backend binding would go completely unbound.
+    assert!(
+        air.public_boundary_io().is_empty(),
+        "uni-stark does not support boundary-IO public values; bind them with AIR constraints"
+    );
+
     #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
     if Val::<SC>::BENEFITS_FROM_LOCKSTEP_EVALUATION {
         return quotient_values_inner::<SC, A, Mat, VectorizedEval<QUOTIENT_ILP>>(
@@ -754,20 +768,22 @@ where
         pcs.build_periodic_lde_table(&periodic_cols, trace_domain, quotient_domain);
 
     let pack_width = Pack::<SC, A, Strat>::WIDTH;
-    let periodic_packed: Vec<Vec<Pack<SC, A, Strat>>> = if periodic_table.is_empty() {
+    // The packed row groups of the periodic table repeat every `groups_in_period`
+    // groups, so only those are materialized and group `g` reads `g % groups_in_period`.
+    let ncols = periodic_table.width();
+    let groups_in_period = periodic_table.packed_group_period(pack_width);
+    let periodic_packed: Vec<Pack<SC, A, Strat>> = if periodic_table.is_empty() {
         Vec::new()
     } else {
-        let ncols = periodic_table.width();
-        (0..quotient_size)
-            .step_by(pack_width)
-            .map(|i_start| {
-                (0..ncols)
-                    .map(|col_idx| {
-                        Pack::<SC, A, Strat>::from_fn(|offset| {
-                            *periodic_table.get(i_start + offset, col_idx)
-                        })
+        let periodic_table_ref = &periodic_table;
+        (0..groups_in_period)
+            .flat_map(move |group| {
+                let i_start = group * pack_width;
+                (0..ncols).map(move |col_idx| {
+                    Pack::<SC, A, Strat>::from_fn(|offset| {
+                        *periodic_table_ref.get(i_start + offset, col_idx)
                     })
-                    .collect()
+                })
             })
             .collect()
     };
@@ -836,7 +852,8 @@ where
                 let periodic_values: &[Pack<SC, A, Strat>] = if periodic_packed.is_empty() {
                     &[]
                 } else {
-                    &periodic_packed[i_start / pack_width]
+                    let group = (i_start / pack_width) % groups_in_period;
+                    &periodic_packed[group * ncols..group * ncols + ncols]
                 };
 
                 let (quotient, base_constraints, ext_constraints) = Strat::eval_row_group(

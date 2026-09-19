@@ -17,6 +17,7 @@ parallel = [
 ]
 
 [dependencies]
+hashbrown.workspace = true
 itertools.workspace = true
 p3-air.workspace = true
 p3-challenger.workspace = true
@@ -54,6 +55,10 @@ tracing-subscriber = { workspace = true, features = ["std", "env-filter"] }
 
 [[example]]
 name = "prove_binary_field"
+test = true
+
+[[example]]
+name = "prove_boolean_trace"
 test = true
 
 [[bench]]

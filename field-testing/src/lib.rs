@@ -10,6 +10,7 @@ pub mod dft_testing;
 pub mod extension_testing;
 pub mod from_integer_tests;
 pub mod packedfield_testing;
+pub mod subfield_testing;
 
 use alloc::vec::Vec;
 use core::array;
@@ -33,6 +34,7 @@ use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
+pub use subfield_testing::*;
 
 /// Generate a random field element from a u64 seed, for use in proptest strategies.
 fn arb_field<F>() -> impl Strategy<Value = F>
@@ -1132,24 +1134,40 @@ pub fn test_interpolation_nodes<F: Field>() {
     }
 }
 
-/// Tests the optimized implementation of `powers.take(n).collect()`
-pub fn test_powers_collect<F: Field>() {
+/// Lengths checked by [`test_powers_collect`] and [`test_powers_collect_char2`].
+fn powers_collect_lengths<F: Field>() -> Vec<usize> {
     // Small using serial implementation
     let small_powers_serial = [0, 1, 2, 3, 4, 15];
     // Small using packed implementation
     let small_powers_packed = [16, 17];
+    // Small multiples of the packing width
+    let width = F::Packing::WIDTH;
+    let packed_multiples = 1..=33;
     // Large powers of two
-    let powers_of_two = [5, 6, 7, 8, 9, 10, 13];
+    let powers_of_two = [5, 6, 7, 8, 9, 10, 13, 16];
+    // Large lengths that are not a multiple of the packing width
+    let unaligned = [(1 << 12) + 5 * width + 3, (1 << 17) + 11 * width + 7];
 
-    let num_powers_tests: Vec<usize> = small_powers_serial
+    small_powers_serial
         .into_iter()
         .chain(small_powers_packed)
+        .chain(packed_multiples.flat_map(|m| {
+            // Check boundaries at a multiple of the packing width
+            let n = m * width;
+            [n - 1, n, n + 1]
+        }))
         .chain(powers_of_two.iter().flat_map(|exp| {
             // Check boundaries at power of 2
             let n = 1 << exp;
             [n - 1, n, n + 1]
         }))
-        .collect();
+        .chain(unaligned)
+        .collect()
+}
+
+/// Tests the optimized implementation of `powers.take(n).collect()`
+pub fn test_powers_collect<F: Field>() {
+    let num_powers_tests = powers_collect_lengths::<F>();
 
     let base = F::TWO;
     let shift = F::GENERATOR;
@@ -1174,22 +1192,7 @@ pub fn test_powers_collect<F: Field>() {
 /// chain hit that same degenerate case identically, so the test would pass while exercising
 /// essentially none of the packed/serial `collect_n` machinery it exists to cover.
 pub fn test_powers_collect_char2<F: Field>() {
-    // Small using serial implementation
-    let small_powers_serial = [0, 1, 2, 3, 4, 15];
-    // Small using packed implementation
-    let small_powers_packed = [16, 17];
-    // Large powers of two
-    let powers_of_two = [5, 6, 7, 8, 9, 10, 13];
-
-    let num_powers_tests: Vec<usize> = small_powers_serial
-        .into_iter()
-        .chain(small_powers_packed)
-        .chain(powers_of_two.iter().flat_map(|exp| {
-            // Check boundaries at power of 2
-            let n = 1 << exp;
-            [n - 1, n, n + 1]
-        }))
-        .collect();
+    let num_powers_tests = powers_collect_lengths::<F>();
 
     let base = F::GENERATOR;
     let shift = F::GENERATOR;

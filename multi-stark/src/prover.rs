@@ -2,20 +2,46 @@
 
 use alloc::vec::Vec;
 
+use p3_air::{Air, BaseAir, boundary};
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
 use p3_commit::MultilinearPcs;
 use p3_field::{ExtensionField, Field};
+use p3_lookup::InteractionSymbolicBuilder;
 use p3_sumcheck::PrescribedPointPcs;
 
 use crate::ProverInstances;
+use crate::backend::{GenericBackend, ZerocheckBackend};
 use crate::config::{Commitment, MultiStarkConfig, PcsProverError, ProverData};
 use crate::folder::ProverAir;
-use crate::instance::ProverParts;
+use crate::indexed::{IndexedPlan, IndexedWitness};
+use crate::instance::{ProverParts, RunPoints, trace_suffix};
+use crate::logup_star::LogupStarProof;
 use crate::lookup::prove_lookup;
-use crate::proof::MultiStarkProof;
+use crate::opening::TableOpening;
+use crate::proof::{IndexedLookupProof, MultiStarkProof};
 use crate::security::{SecurityError, assess_statement};
 use crate::transcript::{MultiStarkProverTranscript, MultiStarkShape};
 use crate::zerocheck::AirZerocheck;
+
+/// What a test may substitute for what the indexed reduction reads.
+///
+/// A prover reached through the public API cannot reduce against one table while
+/// committing another.
+///
+/// No test written against that API can drive the verifier's discharge of the reduction's
+/// own claims.
+///
+/// This exists for those tests, and compiles only under test.
+#[cfg(test)]
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Forgery {
+    /// A table, one of its readers, and the entries that reader's rows name.
+    pub(crate) positions: Option<(usize, usize, Vec<usize>)>,
+    /// A table in plan order, and the entries its first column carries.
+    pub(crate) columns: Option<(usize, Vec<u64>)>,
+    /// A reader in plan order, and the columns its claims are read off.
+    pub(crate) claims: Option<(usize, Vec<usize>)>,
+}
 
 /// A proving-time PCS budget failure or a failed statement security assessment.
 #[derive(Debug, thiserror::Error)]
@@ -72,17 +98,22 @@ where
 ///     3. bind public values, one step per instance
 ///     4. lookup reduction (if any)  -> delegated
 ///     5. zerocheck reduction        -> delegated, yields bound point r
-///     6. open main tables at r      -> delegated, openings bound to the main commitment
-///     7. open preprocessed tables at r (if any)
+///     6. indexed reduction (if any) -> delegated, leaves claims at two further points
+///     7. open main tables           -> delegated, openings bound to the main commitment
+///     8. open preprocessed tables (if any)
 ///                                   -> delegated, bound to the preprocessed commitment
 /// ```
 ///
-/// Phases 2 and 4 through 7 run inside a recorded `Begin`/`End` bracket.
+/// Each table is opened at every point a claim was left at, not at the bound point alone.
+///
+/// Phases 2 and 4 through 8 run inside a recorded `Begin`/`End` bracket.
 /// The pattern player therefore rejects a run that skips one or reorders two.
 ///
-/// Main trace tables are committed together in input-instance order. Each table
-/// is still opened at the suffix of the common zerocheck point matching that
-/// instance's height.
+/// Main trace tables are committed together in input-instance order.
+///
+/// A table's own columns open at the suffix of the zerocheck point matching its height.
+///
+/// The batches an indexed reduction adds open at the points that reduction closes on.
 ///
 /// The preprocessed commitment lives in the proving key, committed once at setup.
 /// All non-empty preprocessed traces are stacked in AIR-instance order, skipping
@@ -115,7 +146,7 @@ where
 /// - A preprocessed key, when present, must have the same height as the main trace.
 /// - A periodic column's period must be a power of two dividing the trace height.
 /// - A lookup-active trace must meet the prover's SIMD packing width.
-#[tracing::instrument(skip_all)]
+/// - An AIR's public boundary declaration must name only cells and values it has.
 pub fn prove<'a, C, A>(
     config: &C,
     instances: ProverInstances<'a, C, A>,
@@ -135,6 +166,68 @@ where
     A: ProverAir<C::Val, C::Challenge>,
     <C::Challenge as ExtensionField<C::Val>>::ExtensionPacking:
         From<C::Challenge> + From<<C::Val as Field>::Packing>,
+{
+    prove_with_backend::<C, A, GenericBackend>(config, instances, pow_bits, caller_challenger)
+}
+
+/// Prove as [`prove`] does, with the zerocheck rounds computed by backend `B`.
+///
+/// The backend chooses how each round polynomial, fold, and opening is computed.
+/// Transcript, proof, errors, and panics are those of [`prove`] for every backend.
+/// [`GenericBackend`] is the backend [`prove`] uses.
+///
+/// # Arguments
+///
+/// - `config`: proof configuration selecting the commitment schemes.
+/// - `instances`: AIRs, transposed main trace tables, shared proving key, and public inputs.
+/// - `pow_bits`: grinding difficulty per sumcheck round.
+/// - `caller_challenger`: Fiat-Shamir transcript.
+#[tracing::instrument(name = "prove", skip_all)]
+pub fn prove_with_backend<'a, C, A, B>(
+    config: &C,
+    instances: ProverInstances<'a, C, A>,
+    pow_bits: usize,
+    caller_challenger: &mut C::Challenger,
+) -> Result<MultiStarkProof<C>, ProvingError<PcsProverError<C>>>
+where
+    C: MultiStarkConfig,
+    C::Pcs: PrescribedPointPcs<C::Challenge, C::Challenger>,
+    C::Challenger: Clone
+        + FieldChallenger<C::Val>
+        + GrindingChallenger<Witness = C::Val>
+        + CanSampleUniformBits<C::Val>
+        + CanObserve<Commitment<C>>,
+    Commitment<C>: Clone,
+    ProverData<C>: Clone,
+    A: BaseAir<C::Val> + Air<InteractionSymbolicBuilder<C::Val, C::Challenge>>,
+    B: ZerocheckBackend<C::Val, C::Challenge, A>,
+{
+    prove_forged::<C, A, B>(config, instances, pow_bits, caller_challenger, None)
+}
+
+/// The proving flow, with what the indexed reduction reads open to substitution.
+///
+/// Callers reach this through the entry points above, which substitute nothing.
+pub(crate) fn prove_forged<'a, C, A, B>(
+    config: &C,
+    instances: ProverInstances<'a, C, A>,
+    pow_bits: usize,
+    caller_challenger: &mut C::Challenger,
+    #[cfg(test)] forgery: Option<&Forgery>,
+    #[cfg(not(test))] _forgery: Option<core::convert::Infallible>,
+) -> Result<MultiStarkProof<C>, ProvingError<PcsProverError<C>>>
+where
+    C: MultiStarkConfig,
+    C::Pcs: PrescribedPointPcs<C::Challenge, C::Challenger>,
+    C::Challenger: Clone
+        + FieldChallenger<C::Val>
+        + GrindingChallenger<Witness = C::Val>
+        + CanSampleUniformBits<C::Val>
+        + CanObserve<Commitment<C>>,
+    Commitment<C>: Clone,
+    ProverData<C>: Clone,
+    A: BaseAir<C::Val> + Air<InteractionSymbolicBuilder<C::Val, C::Challenge>>,
+    B: ZerocheckBackend<C::Val, C::Challenge, A>,
 {
     let mut candidate = caller_challenger.clone();
     let challenger = &mut candidate;
@@ -159,16 +252,37 @@ where
         "every trace arity must be at least the commitment scheme's padding floor"
     );
 
+    // Reject a malformed public boundary declaration before anything indexes by it.
+    // The pins the folder injects read columns and public values by those numbers.
+    let airs = instances.airs();
+    for (instance, air) in airs.iter().enumerate() {
+        boundary::validate(
+            air.public_boundary_io(),
+            air.width(),
+            air.num_public_values(),
+        )
+        .unwrap_or_else(|error| panic!("instance {instance} boundary IO: {error}"));
+    }
+
+    // Indexed lookups change the described sequence, so the plan is settled first.
+    let indexed_plan =
+        IndexedPlan::build::<C::Val, C::Challenge, A>(&airs, &instances.num_variables())
+            .expect("an indexed lookup the statement cannot plan is a caller error");
+
     // Describe the statement before binding anything into it.
     //
     // Every number comes from the AIRs, from the tables this caller holds, and from `pow_bits`.
     // No proof exists yet, so none of them can come from one.
     let num_instances = instances.len();
-    let airs = instances.airs();
     let public_values = instances.public_values();
     let mut transcript = MultiStarkProverTranscript::<C::Challenger, C::Val>::new(
         challenger,
-        MultiStarkShape::new::<C::Val, A>(&airs, &instances.num_variables(), pow_bits),
+        MultiStarkShape::new::<C::Val, A>(
+            &airs,
+            &instances.num_variables(),
+            pow_bits,
+            indexed_plan.is_some(),
+        ),
     );
 
     // 1. Bind the reusable batched preprocessed commitment before any challenge depends on it.
@@ -234,9 +348,9 @@ where
     // 5. Reduce all AIR constraints to one batched sumcheck and one bound point.
     // The committed prover opens columns through the commitment schemes below, so
     // the zerocheck's own opened values are not used as the final proof openings.
-    let zerocheck = AirZerocheck::new(&airs, pow_bits);
+    let zerocheck = AirZerocheck::with_profiles(&airs, &proving_key.air_profiles, pow_bits);
     let (zerocheck_proof, point) = transcript.zerocheck(|challenger| {
-        zerocheck.prove_with_lookup::<C::Val, C::Challenge, _>(
+        zerocheck.prove_with_lookup::<C::Val, C::Challenge, B, _>(
             &preprocessed_tables,
             &tables,
             &public_values,
@@ -244,17 +358,102 @@ where
             challenger,
         )
     });
+    // 6. Reduce every indexed lookup against the point the zerocheck bound.
+    //
+    // The reduction needs what each reader pulled there.
+    //
+    // The zerocheck has just produced exactly those values.
+    //
+    // It leaves claims at two further points, which the opening below covers.
+    let indexed_round = indexed_plan.as_ref().map(|plan| {
+        let next_columns = instances.next_columns();
+        let openings = zerocheck_proof
+            .local
+            .iter()
+            .zip(&zerocheck_proof.next)
+            .zip(&next_columns)
+            .map(|((local, next), next_columns)| TableOpening::new(local, next_columns, next))
+            .collect::<Vec<_>>();
+        let statement = plan.statement(&point, &openings);
+
+        // Under test the claims may be read off columns the reader never declared, so a
+        // proof can carry values its payload column does not hold.
+        #[cfg(test)]
+        let statement = forgery.and_then(|forgery| forgery.claims.as_ref()).map_or(
+            statement,
+            |&(forged, ref substitute)| {
+                let claims = plan
+                    .tables()
+                    .iter()
+                    .flat_map(|table| &table.readers)
+                    .enumerate()
+                    .map(|(reader, placement)| {
+                        let opened = openings[placement.air].local;
+                        let columns = if reader == forged {
+                            substitute
+                        } else {
+                            &placement.payload
+                        };
+                        columns.iter().map(|&column| opened[column]).collect()
+                    })
+                    .collect();
+                plan.statement_from_claims(&point, claims)
+                    .expect("a substituted claim list still describes this plan's readers")
+            },
+        );
+
+        let readers = statement.readers();
+        let lookups = statement.lookups(&readers);
+        let witness = IndexedWitness::build(plan, &tables, &preprocessed_tables);
+
+        // Under test a substitution may stand in for what the commitment holds, so the
+        // verifier's discharge of these claims can be driven.
+        #[cfg(test)]
+        let witness = match forgery {
+            Some(forgery) => witness.forge(forgery.positions.clone(), forgery.columns.clone()),
+            None => witness,
+        };
+
+        let reader_views = witness.readers();
+        let table_views = witness.tables(&reader_views);
+
+        let (reduction, output) = transcript.indexed_lookup(|challenger| {
+            // A forging prover skips its own statement check, so a test can reach the
+            // verifier with a proof an honest prover would refuse to build.
+            #[cfg(test)]
+            if forgery.is_some() {
+                return LogupStarProof::prove_unchecked(&lookups, &table_views, challenger);
+            }
+            LogupStarProof::prove(&lookups, &table_views, challenger)
+        });
+        (
+            IndexedLookupProof {
+                reader_claims: statement.claims().to_vec(),
+                reduction,
+            },
+            output,
+        )
+    });
+    let (indexed_round, indexed_output) = match indexed_round {
+        Some((round, output)) => (Some(round), Some(output)),
+        None => (None, None),
+    };
+
     let sumcheck = zerocheck_proof.sumcheck;
 
     drop(tables);
     drop(preprocessed_tables);
 
-    // 6. Open each main trace table at its suffix of the common bound point.
+    // 7. Open each main trace table at every point a claim was left at.
+    let points = RunPoints::new(&point, indexed_output.as_ref());
     let opening = transcript.main_opening(|challenger| {
+        let schedule = instances.main_schedule(indexed_plan.as_ref(), |role, rows| {
+            trace_suffix(points.at(role), rows)
+        });
         config.pcs().open_at(
             prover_data,
-            &instances.opening_protocol(),
-            &instances.main_points(&point),
+            schedule.protocol(),
+            &schedule.against(),
             challenger,
         )
     });
@@ -266,17 +465,20 @@ where
             source,
         })?;
 
-    // 7. Open each non-empty preprocessed table at its suffix of the same bound point.
+    // 8. Open each non-empty preprocessed table at every point a claim was left at.
     // The setup commitment data is reused rather than rebuilt.
     let preprocessed_opening = transcript.preprocessed_opening(|challenger| {
         let preprocessed = proving_key
             .preprocessed
             .as_ref()
             .expect("preprocessed proving key is missing for an AIR with preprocessed columns");
+        let schedule = instances.preprocessed_schedule(indexed_plan.as_ref(), |role, rows| {
+            trace_suffix(points.at(role), rows)
+        });
         config.preprocessed_pcs().open_at(
             preprocessed.prover_data.clone(),
-            &instances.preprocessed_opening_protocol(),
-            &instances.preprocessed_points(&point),
+            schedule.protocol(),
+            &schedule.against(),
             challenger,
         )
     });
@@ -296,8 +498,506 @@ where
     Ok(MultiStarkProof {
         commitment,
         lookup: lookup_proof,
+        indexed: indexed_round,
         sumcheck,
         opening,
         preprocessed_opening,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use alloc::vec;
+
+    use p3_air::{Air, AirBuilder, BaseAir, WindowAccess};
+    use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
+    use p3_challenger::DuplexChallenger;
+    use p3_dft::Radix2DFTSmallBatch;
+    use p3_field::extension::BinomialExtensionField;
+    use p3_field::{PackedValue, PrimeCharacteristicRing};
+    use p3_lookup::{IndexedLookupBuilder, TraceWindow};
+    use p3_matrix::dense::RowMajorMatrix;
+    use p3_merkle_tree::MerkleTreeMmcs;
+    use p3_sumcheck::layout::{Layout, PrefixProver, Table, Witness};
+    use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
+    use p3_util::{log2_ceil_usize, log2_strict_usize};
+    use p3_whir::{FoldingFactor, ProtocolParameters, SecurityAssumption, WhirConfig, WhirProver};
+    use rand::SeedableRng;
+    use rand::rngs::SmallRng;
+
+    use super::*;
+    use crate::config::PcsError;
+    use crate::verifier::{VerificationError, verify};
+    use crate::{ProverInstance, ProverInstances, VerifierInstance, VerifierInstances, setup};
+
+    type F = BabyBear;
+    type EF = BinomialExtensionField<F, 4>;
+    type Perm = Poseidon2BabyBear<16>;
+    type MyHash = PaddingFreeSponge<Perm, 16, 8, 8>;
+    type MyCompress = TruncatedPermutation<Perm, 2, 8, 16>;
+    type MyChallenger = DuplexChallenger<F, Perm, 16, 8>;
+    type PackedF = <F as Field>::Packing;
+    type MyMmcs = MerkleTreeMmcs<PackedF, PackedF, MyHash, MyCompress, 2, 8>;
+    type MyDft = Radix2DFTSmallBatch<F>;
+    type L = PrefixProver<F, EF>;
+    type TestPcs = WhirProver<EF, F, MyDft, MyMmcs, MyChallenger, L>;
+
+    /// First-round folding factor, and the per-table padding floor.
+    const FOLDING: usize = 2;
+
+    struct TestConfig {
+        /// Scheme sized for the stacked main traces.
+        pcs: TestPcs,
+        /// Scheme sized for the stacked preprocessed traces.
+        preprocessed_pcs: TestPcs,
+    }
+
+    impl MultiStarkConfig for TestConfig {
+        type Val = F;
+        type Challenge = EF;
+        type Challenger = MyChallenger;
+        type Pcs = TestPcs;
+
+        fn pcs(&self) -> &TestPcs {
+            &self.pcs
+        }
+
+        fn collision_resistance_bits(&self) -> Option<usize> {
+            None
+        }
+
+        fn preprocessed_pcs(&self) -> &TestPcs {
+            &self.preprocessed_pcs
+        }
+
+        fn min_num_variables(&self) -> usize {
+            FOLDING
+        }
+
+        fn build_witness(&self, tables: Vec<Table<F>>) -> Witness<F> {
+            L::new_witness(tables, FOLDING)
+        }
+
+        fn committed_table<'a>(
+            &self,
+            prover_data: &'a p3_whir::WhirProverData<F, EF, MyMmcs, L>,
+            table_index: usize,
+        ) -> &'a Table<F> {
+            prover_data.table(table_index)
+        }
+    }
+
+    fn perm() -> Perm {
+        let mut rng = SmallRng::seed_from_u64(0xD15EA5E);
+        Perm::new_from_rng_128(&mut rng)
+    }
+
+    fn challenger() -> MyChallenger {
+        MyChallenger::new(perm())
+    }
+
+    fn pcs(stacked_num_variables: usize) -> TestPcs {
+        let folding_factor = FoldingFactor::Constant(FOLDING);
+        let schedule = folding_factor
+            .compute_folding_schedule(stacked_num_variables)
+            .expect("valid folding schedule");
+        let num_rounds = schedule.len().saturating_sub(1);
+        let mut rates = Vec::with_capacity(num_rounds);
+        let mut rate = 1;
+        for &folding in schedule.iter().take(num_rounds) {
+            rate += folding - 1;
+            rates.push(rate);
+        }
+
+        let params = ProtocolParameters {
+            security_level: 32,
+            pow_bits: 0,
+            round_log_inv_rates: rates,
+            folding_factor,
+            soundness_type: SecurityAssumption::CapacityBound,
+            starting_log_inv_rate: 1,
+        };
+        let whir = WhirConfig::new(stacked_num_variables, params).unwrap();
+        TestPcs::new(
+            whir,
+            MyDft::default(),
+            MyMmcs::new(MyHash::new(perm()), MyCompress::new(perm()), 0),
+        )
+    }
+
+    /// One scheme per commitment, each sized for the values stacked into it.
+    fn config(main: usize, preprocessed: usize) -> TestConfig {
+        TestConfig {
+            pcs: pcs(main),
+            preprocessed_pcs: pcs(preprocessed),
+        }
+    }
+
+    /// One AIR provides a named table, one reads it.
+    enum Squares {
+        /// Provides the named table from its main trace.
+        Table(&'static str),
+        /// Provides the named table from a preprocessed trace holding these entries.
+        Fixed(&'static str, Vec<u64>),
+        /// Names an entry of the table per row, and carries the value pulled.
+        Reader(&'static str),
+    }
+
+    impl BaseAir<F> for Squares {
+        fn width(&self) -> usize {
+            match self {
+                Self::Table(_) | Self::Fixed(..) => 1,
+                Self::Reader(_) => 2,
+            }
+        }
+
+        fn preprocessed_width(&self) -> usize {
+            match self {
+                Self::Fixed(..) => 1,
+                _ => 0,
+            }
+        }
+
+        fn preprocessed_trace(&self) -> Option<RowMajorMatrix<F>> {
+            match self {
+                Self::Fixed(_, entries) => Some(RowMajorMatrix::new(
+                    entries.iter().copied().map(F::from_u64).collect(),
+                    1,
+                )),
+                _ => None,
+            }
+        }
+
+        fn main_next_row_columns(&self) -> Vec<usize> {
+            Vec::new()
+        }
+    }
+
+    impl<AB> Air<AB> for Squares
+    where
+        AB: AirBuilder<F = F> + IndexedLookupBuilder,
+    {
+        fn eval(&self, builder: &mut AB) {
+            match self {
+                Self::Table(name) => {
+                    // The table's own first entry is pinned, so the trace is constrained.
+                    let main = builder.main();
+                    builder
+                        .when_first_row()
+                        .assert_zero(main.current_slice()[0]);
+                    builder.push_indexed_table(name, TraceWindow::Main, [0]);
+                }
+                Self::Fixed(name, _) => {
+                    // The key already fixes the entries, so the main trace carries nothing
+                    // and is pinned to zero to give this AIR a constraint of its own.
+                    let main = builder.main();
+                    builder.assert_zero(main.current_slice()[0]);
+                    builder.push_indexed_table(name, TraceWindow::Preprocessed, [0]);
+                }
+                Self::Reader(name) => {
+                    let main = builder.main();
+                    builder
+                        .when_first_row()
+                        .assert_zero(main.current_slice()[0]);
+                    builder.push_indexed_read(name, 0, [1]);
+                }
+            }
+        }
+    }
+
+    /// One table, and every reader pulling from it.
+    struct Lookup {
+        /// Name both sides resolve this table by.
+        name: &'static str,
+        /// Trace the provider commits the entries to.
+        window: TraceWindow,
+        /// The table's entries.
+        entries: Vec<u64>,
+        /// Per reader: the entry each row names, and the value it claims to have pulled.
+        readers: Vec<(Vec<u64>, Vec<u64>)>,
+    }
+
+    /// Entries a table needs before a commitment of its own opens in packed form.
+    ///
+    /// The packed opening wants a full element per prefix variable below the padding floor.
+    ///
+    /// A narrower table leaves it short of a lane, which is a panic on wide targets and
+    /// invisible on scalar ones.
+    fn packed_floor() -> usize {
+        (1 << FOLDING) * PackedF::WIDTH
+    }
+
+    /// A table of squares wide enough to carry its own commitment on every target.
+    fn squares() -> Vec<u64> {
+        (0..packed_floor() as u64)
+            .map(|entry| entry * entry)
+            .collect()
+    }
+
+    /// Prove a batch whose committed traces agree with the forged reduction inputs.
+    ///
+    /// The reduction then accepts its own statement, so the only thing left to reject the
+    /// proof is the comparison of its claims against the commitment.
+    ///
+    /// Providers come first in instance order, then every reader in table order.
+    ///
+    /// # Arguments
+    ///
+    /// - `lookups`: the tables to commit, and what each of their readers commits to.
+    /// - `forgery`: what the reduction reads in place of the committed traces, or nothing.
+    fn verdict(
+        lookups: &[Lookup],
+        forgery: Option<&Forgery>,
+    ) -> Result<(), VerificationError<PcsError<TestConfig>>> {
+        // A preprocessed provider carries its entries in the key, so its main trace is one
+        // unconstrained column of the same height.
+        let providers = lookups
+            .iter()
+            .map(|lookup| match lookup.window {
+                TraceWindow::Main => (
+                    Squares::Table(lookup.name),
+                    lookup.entries.iter().copied().map(F::from_u64).collect(),
+                ),
+                TraceWindow::Preprocessed => (
+                    Squares::Fixed(lookup.name, lookup.entries.clone()),
+                    F::zero_vec(lookup.entries.len()),
+                ),
+            })
+            .collect::<Vec<_>>();
+
+        // Each reader commits its position column beside its payload column.
+        let readers = lookups
+            .iter()
+            .flat_map(|lookup| {
+                lookup.readers.iter().map(|(named, pulled)| {
+                    let rows = named
+                        .iter()
+                        .zip(pulled)
+                        .flat_map(|(&entry, &value)| [F::from_u64(entry), F::from_u64(value)])
+                        .collect::<Vec<_>>();
+                    (Squares::Reader(lookup.name), rows, named.len())
+                })
+            })
+            .collect::<Vec<_>>();
+
+        let airs = providers
+            .iter()
+            .map(|(air, _)| air)
+            .chain(readers.iter().map(|(air, _, _)| air))
+            .collect::<Vec<_>>();
+
+        // One scheme per commitment, each sized for the values stacked into it.
+        let main_values = providers.iter().map(|(_, rows)| rows.len()).sum::<usize>()
+            + readers.iter().map(|(_, rows, _)| rows.len()).sum::<usize>();
+        let preprocessed_values = lookups
+            .iter()
+            .filter(|lookup| lookup.window == TraceWindow::Preprocessed)
+            .map(|lookup| lookup.entries.len())
+            .sum::<usize>();
+        let config = config(
+            log2_ceil_usize(main_values),
+            log2_ceil_usize(preprocessed_values).max(FOLDING),
+        );
+        let (pk, vk) = setup(&config, &airs, &mut challenger()).unwrap();
+
+        let committed =
+            |rows: &[F], width| Table::new(RowMajorMatrix::new(rows.to_vec(), width).transpose());
+        let proving = providers
+            .iter()
+            .map(|(air, rows)| ProverInstance::new(air, committed(rows, 1), &pk, &[]))
+            .chain(
+                readers
+                    .iter()
+                    .map(|(air, rows, _)| ProverInstance::new(air, committed(rows, 2), &pk, &[])),
+            )
+            .collect();
+
+        let proof = prove_forged::<_, _, GenericBackend>(
+            &config,
+            ProverInstances::new(proving),
+            0,
+            &mut challenger(),
+            forgery,
+        )
+        .expect("a forged reduction input still produces a proof");
+
+        let verifying = providers
+            .iter()
+            .zip(lookups)
+            .map(|((air, _), lookup)| {
+                VerifierInstance::new(air, &vk, log2_strict_usize(lookup.entries.len()), &[])
+            })
+            .chain(readers.iter().map(|(air, _, rows)| {
+                VerifierInstance::new(air, &vk, log2_strict_usize(*rows), &[])
+            }))
+            .collect();
+
+        verify(
+            &config,
+            VerifierInstances::new(verifying),
+            &proof,
+            0,
+            &mut challenger(),
+        )
+    }
+
+    #[test]
+    fn a_reduction_run_against_an_uncommitted_table_is_rejected() {
+        // Two tables, and the forgery moves the second one in plan order.
+        //
+        //     table "t0"   committed and reduced against, both honest
+        //     table "t1"   committed 0 1 4 9 ..., reduced against 0 1 5 9 ...
+        //
+        // Its reader commits to having pulled the forged entry, so the reduction accepts
+        // its own statement and only the comparison against the table's batch separates
+        // the two.
+        //
+        // A comparison that stopped after "t0" would take this proof.
+        let entries = squares();
+        let mut forged = entries.clone();
+        forged[2] = 5;
+
+        let honest = |name| Lookup {
+            name,
+            window: TraceWindow::Main,
+            entries: entries.clone(),
+            readers: vec![(vec![0, 1, 2, 3, 3, 2, 1, 0], vec![0, 1, 4, 9, 9, 4, 1, 0])],
+        };
+        let mut second = honest("t1");
+        second.readers = vec![(vec![0, 1, 2, 3, 3, 2, 1, 0], vec![0, 1, 5, 9, 9, 5, 1, 0])];
+
+        let verdict = verdict(
+            &[honest("t0"), second],
+            Some(&Forgery {
+                columns: Some((1, forged)),
+                ..Forgery::default()
+            }),
+        );
+        assert!(matches!(
+            verdict,
+            Err(VerificationError::IndexedClaimsUnopened)
+        ));
+    }
+
+    #[test]
+    fn a_reduction_run_against_uncommitted_positions_is_rejected() {
+        // One table with two readers, and the forgery moves the second reader.
+        //
+        //     reader 0   names 0 1 2 3 3 2 1 0, honest throughout
+        //     reader 1   names 0 1 2 3 3 2 1 0, reduced against ... 1
+        //                pulls 0 1 4 9 9 4 1 1, matching the entry it was reduced against
+        //
+        // Every pull agrees with the entry the reduction was told about, so the reduction
+        // accepts its own statement.
+        //
+        // A loop that stopped after reader 0 would take this proof.
+        let verdict = verdict(
+            &[Lookup {
+                name: "t0",
+                window: TraceWindow::Main,
+                entries: squares(),
+                readers: vec![
+                    (vec![0, 1, 2, 3, 3, 2, 1, 0], vec![0, 1, 4, 9, 9, 4, 1, 0]),
+                    (vec![0, 1, 2, 3, 3, 2, 1, 0], vec![0, 1, 4, 9, 9, 4, 1, 1]),
+                ],
+            }],
+            Some(&Forgery {
+                positions: Some((0, 1, vec![0, 1, 2, 3, 3, 2, 1, 1])),
+                ..Forgery::default()
+            }),
+        );
+        assert!(matches!(
+            verdict,
+            Err(VerificationError::IndexedClaimsUnopened)
+        ));
+    }
+
+    #[test]
+    fn claims_the_reader_never_committed_to_are_rejected() {
+        // The identity table, so what a row pulls is the entry it names.
+        //
+        //     reader 0   names 0 1 2 3 3 2 1 0, pulls the same, honest throughout
+        //     reader 1   names 0 1 2 3 3 2 1 0, but commits pulls 0 7 7 7 7 7 7 0
+        //
+        // Reader 1's claims are read off its position column instead of its payload
+        // column, so they describe an honest reduction over the committed table.
+        //
+        // A comparison that looked only at reader 0 would take this proof.
+        let identity = (0..packed_floor() as u64).collect();
+        let named = vec![0, 1, 2, 3, 3, 2, 1, 0];
+
+        let verdict = verdict(
+            &[Lookup {
+                name: "t0",
+                window: TraceWindow::Main,
+                entries: identity,
+                readers: vec![
+                    (named.clone(), named.clone()),
+                    (named, vec![0, 7, 7, 7, 7, 7, 7, 0]),
+                ],
+            }],
+            Some(&Forgery {
+                claims: Some((1, vec![0])),
+                ..Forgery::default()
+            }),
+        );
+        assert!(matches!(
+            verdict,
+            Err(VerificationError::IndexedClaimsUnopened)
+        ));
+    }
+
+    #[test]
+    fn a_reduction_run_against_an_uncommitted_preprocessed_table_is_rejected() {
+        // The same substitution as for a table in the main trace, except that the provider
+        // fixes its entries in the verifying key.
+        //
+        // The table claims are then discharged against the preprocessed commitment rather
+        // than the main one, and that is the path this pins.
+        let entries = squares();
+        let mut forged = entries.clone();
+        forged[2] = 5;
+
+        let verdict = verdict(
+            &[Lookup {
+                name: "t0",
+                window: TraceWindow::Preprocessed,
+                entries,
+                readers: vec![(vec![0, 1, 2, 3, 3, 2, 1, 0], vec![0, 1, 5, 9, 9, 5, 1, 0])],
+            }],
+            Some(&Forgery {
+                columns: Some((0, forged)),
+                ..Forgery::default()
+            }),
+        );
+        assert!(matches!(
+            verdict,
+            Err(VerificationError::IndexedClaimsUnopened)
+        ));
+    }
+
+    #[test]
+    fn an_honest_batch_reading_a_preprocessed_table_verifies() {
+        // Every rejection above is also what a verifier that never opens the preprocessed
+        // table produces, since a missing batch leaves nothing for the claims to match.
+        //
+        // This is the case that tells the two apart: the reader pulls what the key holds,
+        // and nothing is substituted.
+        let entries = squares();
+        let pulled = [0, 1, 2, 3, 3, 2, 1, 0]
+            .iter()
+            .map(|&entry: &usize| entries[entry])
+            .collect();
+
+        verdict(
+            &[Lookup {
+                name: "t0",
+                window: TraceWindow::Preprocessed,
+                entries,
+                readers: vec![(vec![0, 1, 2, 3, 3, 2, 1, 0], pulled)],
+            }],
+            None,
+        )
+        .expect("a reader pulling what the key holds must verify");
+    }
 }

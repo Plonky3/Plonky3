@@ -43,6 +43,26 @@ pub enum PcsOptions {
     Stir,
 }
 
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum BinaryHashOptions {
+    Blake3Compressions,
+    KeccakFPermutations,
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum NttOptions {
+    PolyBasis,
+    Lch,
+    Naive,
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum RepresentationOptions {
+    Auto,
+    Subfield,
+    PolyBasis,
+}
+
 /// Produce a collection of PossibleValue's for an Enum variant.
 ///
 /// We allow any prefix of the full name which uniquely determines the variant.
@@ -179,6 +199,59 @@ impl ValueEnum for PcsOptions {
         Some(match self {
             Self::Fri => get_aliases("fri", 1, None),
             Self::Stir => get_aliases("stir", 1, None),
+        })
+    }
+}
+
+impl ValueEnum for BinaryHashOptions {
+    fn value_variants<'a>() -> &'a [Self] {
+        &[Self::Blake3Compressions, Self::KeccakFPermutations]
+    }
+
+    fn to_possible_value(&self) -> Option<PossibleValue> {
+        Some(match self {
+            Self::Blake3Compressions => get_aliases(
+                "blake-3-compressions",
+                1,
+                Some(vec![("blake3-compressions", 6), ("b3", 2)]),
+            ),
+            Self::KeccakFPermutations => get_aliases(
+                "keccak-f-permutations",
+                1,
+                Some(vec![("keccakf-permutations", 7), ("kf", 2)]),
+            ),
+        })
+    }
+}
+
+impl ValueEnum for NttOptions {
+    fn value_variants<'a>() -> &'a [Self] {
+        &[Self::PolyBasis, Self::Lch, Self::Naive]
+    }
+
+    fn to_possible_value(&self) -> Option<PossibleValue> {
+        Some(match self {
+            Self::PolyBasis => {
+                get_aliases("poly-basis", 1, Some(vec![("polybasis", 4), ("pb", 2)]))
+            }
+            Self::Lch => get_aliases("lch", 1, None),
+            Self::Naive => get_aliases("naive", 1, None),
+        })
+    }
+}
+
+impl ValueEnum for RepresentationOptions {
+    fn value_variants<'a>() -> &'a [Self] {
+        &[Self::Auto, Self::Subfield, Self::PolyBasis]
+    }
+
+    fn to_possible_value(&self) -> Option<PossibleValue> {
+        Some(match self {
+            Self::Auto => get_aliases("auto", 1, None),
+            Self::Subfield => get_aliases("subfield", 1, None),
+            Self::PolyBasis => {
+                get_aliases("poly-basis", 1, Some(vec![("polybasis", 4), ("pb", 2)]))
+            }
         })
     }
 }

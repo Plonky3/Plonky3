@@ -37,6 +37,12 @@
 //! contributes no constraint on security (reported at the cap, the same convention
 //! [`shape::AirShape::lookup`] uses for "no such argument"). The out-of-domain round above is
 //! charged unconditionally either way — it is not what `None` waives.
+//!
+//! The batched quotient is a random linear combination of words handed to the low-degree test,
+//! so the round is graded like folding, over the LDE domain, rather than as a Schwartz-Zippel
+//! identity. It charges the same proximity-gap bound as the opening-batching term of
+//! [`crate::stark::conjectured_security_report`], with `k` in place of `k − 1`, and loses a bit for
+//! every doubling of the trace height.
 
 pub mod report;
 pub mod shape;
@@ -139,7 +145,11 @@ pub const fn security_report(
     );
 
     // The DEEP quotient batches every committed column and out-of-domain point by powers of two
-    // further challenges, giving a univariate whose degree is the number of batched terms.
+    // further challenges into the one word the low-degree test runs on. That is a random linear
+    // combination of words over the LDE domain, the same kind of round as folding, so it pays the
+    // proximity-gap error `(k − 1) · n / |E|` over the `k` batched terms: the conjecture removes
+    // the list-size multiplier, not the domain size. `k` stands in for `k − 1`, which keeps the
+    // coefficient nonzero and costs less than one bit.
     let deep_composition = round(
         DEEP_COMPOSITION_LABEL,
         instance,
@@ -147,7 +157,7 @@ pub const fn security_report(
             Some(n) => Some(n as u64),
             None => None,
         },
-        0,
+        instance.log_max_height.saturating_add(params.log_blowup),
         params.deep_pow_bits,
         cap,
     );
@@ -494,6 +504,33 @@ mod tests {
             };
             assert_eq!(after.bits, expected, "{} moved", before.label);
         }
+    }
+
+    /// The DEEP quotient is a random linear combination of codewords over the LDE domain, so its
+    /// round pays one bit for every doubling of that domain, whether the trace height or the
+    /// blowup doubles it.
+    #[test]
+    fn deep_composition_round_pays_the_lde_domain_size() {
+        let deep_bits = |params: &ProtocolParams, log_max_height: u32| {
+            security_report(params, &instance(log_max_height), &air())
+                .terms()
+                .iter()
+                .find(|t| t.label == DEEP_COMPOSITION_LABEL)
+                .expect("term present")
+                .bits
+        };
+        let base = deep_bits(&params(), 20);
+        assert!(
+            base < instance(20).cap(),
+            "the round must not sit at the cap"
+        );
+
+        assert_eq!(deep_bits(&params(), 21), base - fixed::ONE);
+        let wider = ProtocolParams {
+            log_blowup: params().log_blowup + 1,
+            ..params()
+        };
+        assert_eq!(deep_bits(&wider, 20), base - fixed::ONE);
     }
 
     /// No round may be reported above the transcript's own ceiling.

@@ -15,7 +15,7 @@ const _: () = assert!(poly_mul(ROOT_X, ROOT_X, 128, TAIL_128) == 2);
 ///
 /// Square roots are rare enough not to be worth that cliff, so the six shifts run everywhere.
 #[inline]
-const fn compact_even(mut x: u64) -> u64 {
+pub(super) const fn compact_even(mut x: u64) -> u64 {
     // Separate coefficients at positions 0, 2, ..., 62 from the odd coefficients.
     x &= 0x5555_5555_5555_5555;
     // Merge adjacent groups until the 32 selected bits are contiguous.

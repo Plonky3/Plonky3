@@ -62,5 +62,6 @@ pub use assumption::SecurityAssumption;
 pub use error::ErrorBits;
 pub use grinding::GrindingSites;
 pub use ldt::LowDegreeTest;
+pub use multilinear::{BIT_RING_SWITCH_LABEL, bit_ring_switch_error, bit_ring_switch_term};
 pub use report::{Regime, RegimeReport, SecurityReport, SecurityTerm};
 pub use shape::{InstanceShape, StarkAirParams};

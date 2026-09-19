@@ -2,16 +2,16 @@
 //!
 //! # Overview
 //!
-//! Twenty-one protocols in this workspace seed their transcript from a domain separator.
+//! Twenty-five protocols in this workspace seed their transcript from a domain separator.
 //!
 //! The version byte is a format version each protocol owns, so names carry the separation.
 //!
 //! ```text
-//!     protocol_id = [ 1 | NAME | 0 .. 0 | NAME.len() ]
-//!                     ^     ^                 ^
-//!                     |     |                 disambiguates zero-padded prefixes
-//!                     |     the only field that differs between protocols
-//!                     the same byte for all twenty-one
+//!     protocol_id = [ 1 | NAME  | 0 .. 0 | NAME.len() ]
+//!                       ^     ^                  ^
+//!                       |     |                  disambiguates padded prefixes
+//!                       |     the only field that differs between protocols
+//!                       the same byte for all twenty-five
 //! ```
 //!
 //! Separation therefore rests entirely on the name.
@@ -21,7 +21,10 @@
 //! # Placement
 //!
 //! Every protocol crate depends on `p3-challenger`, so the check cannot live there.
-//! `p3-examples` is a leaf: nothing depends on it, and it already pulls in most of the twenty-one.
+//!
+//! `p3-examples` is a leaf: nothing depends on it.
+//!
+//! It also already pulls in most of the twenty-five.
 
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_batch_stark::BatchShape;
@@ -34,12 +37,16 @@ use p3_circle::CirclePcsShape;
 use p3_field::extension::BinomialExtensionField;
 use p3_fri::{FriShape, PcsShape};
 use p3_multi_stark::fractional_gkr::FractionGkrShape;
+use p3_multi_stark::logup_star::transcript::{LogupStarShape, LogupStarTableShape};
 use p3_multi_stark::lookup::transcript::{LookupInstanceShape, LookupShape};
 use p3_multi_stark::rounds::AirDegrees;
 use p3_multi_stark::transcript::{MultiStarkInstanceShape, MultiStarkShape};
 use p3_multi_stark::zerocheck::transcript::ZerocheckShape;
 use p3_security::fri::FriRegime;
-use p3_security::grinding::{GrindingBudget, GrindingSites, RecordedGrind};
+use p3_security::grinding::{
+    GrindingBudget, GrindingSites, RecordedGrind, UNPRICED_GRINDING_SITES, grinding_step,
+    is_unpriced_grinding_site,
+};
 use p3_stir::pcs_transcript::{
     StirPcsBucketShape, StirPcsClaimShape, StirPcsCommitmentShape, StirPcsOpeningShape,
 };
@@ -57,7 +64,7 @@ use p3_whir::{
 
 /// Base field every separator below is derived over.
 ///
-/// One field for all twenty-one, so nothing is separated by the field choice.
+/// One field for all twenty-five, so nothing is separated by the field choice.
 type F = BabyBear;
 
 /// Extension field every separator below draws its challenges from.
@@ -80,16 +87,26 @@ type Case = (String, DomainSeparator<Alphabet>);
 /// Number of protocols on the typed transcript layer.
 ///
 /// A protocol added without an entry below leaves its name unchecked against the others.
-const NUM_PROTOCOLS: usize = 21;
+const NUM_PROTOCOLS: usize = 25;
 
 /// Configurations swept per protocol: one default, then two single-field moves of it.
 ///
 /// The pairwise check is quadratic, so the sweep is a budget rather than a maximum.
 ///
+/// A protocol with no configuration at all contributes one case instead of three.
+///
 /// ```text
-///     21 protocols x 3 configurations = 63 seeds -> 1953 pairs
+///     23 protocols x 3 + 2 protocols x 1 = 71 seeds -> 2485 pairs
 /// ```
-const CASES_PER_PROTOCOL: usize = 3;
+const MAX_CASES_PER_PROTOCOL: usize = 3;
+
+/// Phases whose description is fixed, so there is nothing to sweep.
+///
+/// A commitment is one Merkle root at every configuration.
+///
+/// These contribute one case each, and every other protocol contributes three.
+const CONFIGURATION_FREE_PHASES: [&str; 2] =
+    ["p3-sumcheck-layout-commitment", "p3-whir-hvzk-commitment"];
 
 /// Variable count both WHIR pipelines are configured at.
 const WHIR_NUM_VARIABLES: usize = 16;
@@ -499,6 +516,48 @@ fn lookup_cases() -> Vec<Case> {
     .collect()
 }
 
+/// The logUp* cases: two tables of different sizes, then two single-field moves.
+fn logup_star_cases() -> Vec<Case> {
+    let plain = LogupStarShape {
+        tables: vec![
+            LogupStarTableShape {
+                num_variables: 5,
+                width: 3,
+                readers: vec![4, 3],
+            },
+            LogupStarTableShape {
+                num_variables: 4,
+                width: 2,
+                readers: vec![3],
+            },
+        ],
+        num_variables: 7,
+    };
+
+    let mut wider = plain.clone();
+    wider.tables[0].width += 1;
+
+    // Moving one reader from the first table to the second keeps every total unchanged.
+    //
+    //     plain:  [reader, reader | reader]
+    //     split:  [reader         | reader, reader]
+    let mut split = plain.clone();
+    let moved = plain.tables[0].readers[1];
+    split.tables[0].readers.pop();
+    split.tables[1].readers.push(moved);
+
+    [("plain", plain), ("width", wider), ("readers", split)]
+        .into_iter()
+        .map(|(name, shape)| {
+            case(
+                "p3-multi-stark-logup-star",
+                name,
+                shape.domain_separator::<F, EF>(),
+            )
+        })
+        .collect()
+}
+
 /// The multi-STARK fractional-GKR cases: three layer counts.
 fn fraction_gkr_cases() -> Vec<Case> {
     [3, 4, 5]
@@ -576,6 +635,54 @@ fn stir_pcs_commitment_cases() -> Vec<Case> {
             (
                 format!("p3-stir-pcs-commitment/num_roots={num_roots}"),
                 shape.domain_separator::<F>(),
+            )
+        })
+        .collect()
+}
+
+/// The stacked-layout commitment case: the phase that binds the committed root.
+///
+/// The phase has no configuration at all.
+///
+/// It contributes one case.
+///
+/// The suite still compares its name against every other.
+fn layout_commitment_cases() -> Vec<Case> {
+    vec![case(
+        "p3-sumcheck-layout-commitment",
+        "only",
+        p3_sumcheck::layout::commitment_domain_separator::<F>(),
+    )]
+}
+
+/// The hiding WHIR commitment case: the phase that binds the committed root.
+///
+/// Like the stacked-layout one, it has no configuration.
+fn zk_whir_commitment_cases() -> Vec<Case> {
+    vec![case(
+        "p3-whir-hvzk-commitment",
+        "only",
+        p3_whir::transcript::zk::commitment_domain_separator::<F>(),
+    )]
+}
+
+/// The hiding WHIR claim cases: one statement, then two moves of its shape.
+///
+/// ```text
+///     claims  points     steps
+///     1       16 wide    point(16), eval
+///     2       16 wide    point(16), eval, point(16), eval
+///     1       15 wide    point(15), eval
+/// ```
+fn zk_whir_claim_cases() -> Vec<Case> {
+    [(1, WHIR_NUM_VARIABLES), (2, WHIR_NUM_VARIABLES), (1, 15)]
+        .into_iter()
+        .map(|(num_claims, num_variables)| {
+            case(
+                "p3-whir-hvzk-claims",
+                &format!("claims={num_claims},vars={num_variables}"),
+                p3_whir::transcript::zk::ZkClaimsShape::new(num_claims, num_variables)
+                    .domain_separator::<F, EF>(),
             )
         })
         .collect()
@@ -670,18 +777,22 @@ fn multi_stark_cases() -> Vec<Case> {
             },
         ],
         pow_bits: 0,
+        has_indexed: false,
     };
 
     let mut wider = plain.clone();
     wider.instances[0].main_width += 1;
 
-    let mut ground = plain.clone();
-    ground.pow_bits += 1;
+    // A batch declaring an indexed read plays one more bracket.
+    //
+    // It is a different sequence rather than the same one relabelled.
+    let mut indexed = plain.clone();
+    indexed.has_indexed = true;
 
     [
         ("plain", plain),
         ("main_width", wider),
-        ("pow_bits", ground),
+        ("indexed", indexed),
     ]
     .into_iter()
     .map(|(name, shape)| case("p3-multi-stark", name, shape.domain_separator::<F>()))
@@ -770,14 +881,18 @@ fn protocols() -> Vec<Vec<Case>> {
         circle_pcs_cases(),
         stir_cases(),
         stir_pcs_batch_cases(),
+        layout_commitment_cases(),
         stir_pcs_commitment_cases(),
         stir_pcs_claim_cases(),
         stir_pcs_opening_cases(),
         whir_cases(),
+        zk_whir_commitment_cases(),
+        zk_whir_claim_cases(),
         zk_whir_cases(),
         zk_whir_base_case_cases(),
         zerocheck_cases(),
         lookup_cases(),
+        logup_star_cases(),
         fraction_gkr_cases(),
         sumcheck_generic_degree_cases(),
         sumcheck_quadratic_cases(),
@@ -817,9 +932,9 @@ fn digested(cases: Vec<Case>) -> Vec<(String, SeedDigest)> {
 fn every_protocol_is_listed_here() {
     // This compares two hand-maintained numbers against each other, and nothing wider.
     //
-    //     builder added, count not bumped  ->  caught here
-    //     count bumped, builder missing    ->  caught here
-    //     new protocol, neither touched    ->  not caught
+    //     - builder added, count not bumped  ->  caught here
+    //     - count bumped, builder missing    ->  caught here
+    //     - new protocol, neither touched    ->  not caught
     //
     // A protocol on the typed layer that never joins the list is never compared at all.
     //
@@ -827,11 +942,25 @@ fn every_protocol_is_listed_here() {
     //
     // So the list is a convention this test keeps consistent, not one it discovers.
     //
-    // Three names cannot join: `p3-sumcheck-layout-{opening,ood,batching}` describe
-    // shapes that are `pub(crate)` to `p3-sumcheck`, and publishing them to reach
-    // this file would widen that crate's API for a test. They are compared against
-    // the crate's other four names in `p3_sumcheck`'s own suite instead, by
-    // `no_two_protocols_in_this_crate_share_a_name`.
+    // Three names cannot join, because their shapes are crate-private to `p3-sumcheck`.
+    //
+    // - `p3-sumcheck-layout-opening`
+    // - `p3-sumcheck-layout-ood`
+    // - `p3-sumcheck-layout-batching`
+    //
+    // Publishing them to reach this file would widen that crate's API for a test.
+    //
+    // They are compared against the crate's other names in its own suite instead.
+    //
+    // Two more cannot join for a different reason.
+    //
+    // `p3-binary-pcs` and `p3-sumcheck-bit-ring-switch` seed over a binary tower field.
+    //
+    // Their separators therefore have a different sponge alphabet, and a different type.
+    //
+    // Two protocols over different alphabets cannot collide on a sponge state anyway.
+    //
+    // Their own knobs are swept inside their own crates.
     assert_eq!(default_cases().len(), NUM_PROTOCOLS);
 }
 
@@ -839,9 +968,9 @@ fn every_protocol_is_listed_here() {
 fn the_protocol_name_is_the_only_field_that_separates_two_protocols() {
     // The version byte is a format version, owned by one protocol and bumped by it alone.
     //
-    //     [version | name | 0 .. 0 | name_len]
-    //                ^^^^            ^^^^^^^^
-    //                the only fields that may part two protocols
+    //     [ version | name  | 0 .. 0 | name_len ]
+    //                  ^^^^              ^^^^^^^^
+    //                  the only fields that may part two protocols
     //
     // So two protocols must stay apart with every version byte forced to agree.
     // A pair that only differs in that byte would collide the day either one bumps.
@@ -871,18 +1000,17 @@ fn a_shared_name_prefix_is_separated_by_the_name_length_byte() {
     //     [1 | p3-fri                  | 0 .. 0 |  6]
     //     [1 | p3-fri-pcs              | 0 .. 0 | 10]
     //
-    //     [1 | p3-whir                 | 0 .. 0 |  7]
-    //     [1 | p3-whir-hvzk            | 0 .. 0 | 12]
-    //     [1 | p3-whir-hvzk-base       | 0 .. 0 | 17]
+    //     - [1 | p3-whir                 | 0 .. 0 |  7]
+    //     - [1 | p3-whir-hvzk            | 0 .. 0 | 12]
+    //     - [1 | p3-whir-hvzk-base       | 0 .. 0 | 17]
+    //     - [1 | p3-whir-hvzk-claims     | 0 .. 0 | 19]
+    //     - [1 | p3-whir-hvzk-commitment | 0 .. 0 | 23]
     //
-    //     [1 | p3-stir                 | 0 .. 0 |  7]
-    //     [1 | p3-stir-pcs-batch       | 0 .. 0 | 17]
-    //     [1 | p3-stir-pcs-claims      | 0 .. 0 | 18]
-    //     [1 | p3-stir-pcs-opening     | 0 .. 0 | 19]
-    //     [1 | p3-stir-pcs-commitment  | 0 .. 0 | 22]
-    //
-    //     [1 | p3-whir-hvzk             | 0 .. 0 | 12]
-    //     [1 | p3-whir-hvzk-base        | 0 .. 0 | 17]
+    //     - [1 | p3-stir                 | 0 .. 0 |  7]
+    //     - [1 | p3-stir-pcs-batch       | 0 .. 0 | 17]
+    //     - [1 | p3-stir-pcs-claims      | 0 .. 0 | 18]
+    //     - [1 | p3-stir-pcs-opening     | 0 .. 0 | 19]
+    //     - [1 | p3-stir-pcs-commitment  | 0 .. 0 | 22]
     //
     // Zero padding alone cannot tell a short name from a longer one starting with it.
     //
@@ -894,6 +1022,8 @@ fn a_shared_name_prefix_is_separated_by_the_name_length_byte() {
         (whir_cases(), zk_whir_cases()),
         (stir_cases(), stir_pcs_batch_cases()),
         (zk_whir_cases(), zk_whir_base_case_cases()),
+        (zk_whir_cases(), zk_whir_claim_cases()),
+        (zk_whir_cases(), zk_whir_commitment_cases()),
         (stir_cases(), stir_pcs_commitment_cases()),
         (stir_cases(), stir_pcs_claim_cases()),
         (stir_cases(), stir_pcs_opening_cases()),
@@ -926,6 +1056,198 @@ fn no_two_configurations_of_any_two_protocols_share_a_seed() {
     //     within one protocol  ->  does each knob reach the seed, separately from the others
     //     across two protocols ->  can any configuration of one reach another's seed
     let seeds = digested(all_cases());
-    assert_eq!(seeds.len(), CASES_PER_PROTOCOL * NUM_PROTOCOLS);
+
+    // Every protocol sweeps the full budget, except the two that have nothing to sweep.
+    //
+    // A configuration-free phase has exactly one seed to offer.
+    // A fixed product would demand two duplicates of it.
+    //
+    // Pinning the count per protocol is what stops a sweep from quietly shrinking.
+    // A shrunk sweep takes its per-knob coverage with it.
+    let groups = protocols();
+    assert_eq!(groups.len(), NUM_PROTOCOLS);
+    for group in &groups {
+        let protocol = group[0]
+            .0
+            .split('/')
+            .next()
+            .expect("a case label names its protocol");
+        let expected = if CONFIGURATION_FREE_PHASES.contains(&protocol) {
+            1
+        } else {
+            MAX_CASES_PER_PROTOCOL
+        };
+        assert_eq!(
+            group.len(),
+            expected,
+            "{protocol} sweeps {} cases",
+            group.len()
+        );
+    }
+    assert_eq!(seeds.len(), groups.iter().map(Vec::len).sum::<usize>());
+
     assert_seeds_pairwise_distinct(&seeds);
+}
+
+/// One configuration per grinding protocol, every difficulty positive.
+///
+/// The sweep above picks configurations that separate seeds.
+/// Most of them grind at zero bits.
+///
+/// A zero-bit step is elided from the pattern.
+/// That sweep therefore cannot see the sites it never describes.
+///
+/// This one exists to make every grinding step visible at least once.
+fn grinding_sweep() -> Vec<(String, DomainSeparator<Alphabet>)> {
+    // STIR grinds at four sites: two per round, two in the closing phase.
+    let stir = StirShape {
+        commits_initial: true,
+        instances: vec![StirInstanceShape {
+            rounds: vec![StirRoundShape {
+                folding_pow_bits: 3,
+                num_ood_samples: 1,
+                pow_bits: 4,
+                num_queries: 3,
+                log_fold_domain_size: 6,
+                log_degree: 8,
+                log_domain_size: 9,
+                log_folding_factor: 3,
+                domain_shift: 31,
+                eta_bits: 0.25_f64.to_bits(),
+            }],
+            final_folding_pow_bits: 5,
+            final_poly_len: 2,
+            final_pow_bits: 6,
+            final_queries: 2,
+            final_log_domain_size: 5,
+            log_starting_degree: 8,
+            log_blowup: 1,
+            log_folding_factor: 3,
+            log_starting_folding_factor: 3,
+            log_final_degree: 1,
+            security_level: 100,
+            max_pow_bits: 20,
+            soundness_type: SecurityAssumption::JohnsonBound,
+            final_eta_bits: 0.125_f64.to_bits(),
+            max_log_final_poly_len: None,
+        }],
+    };
+
+    // Each WHIR pipeline grinds inside its own rounds.
+    // The hiding one also grinds in its base case.
+    let whir_config = WhirConfig::<EF, F, Ch>::new(WHIR_NUM_VARIABLES, whir_params())
+        .expect("the fixture parameters are valid");
+    let zk_config = ZkWhirConfig::<EF, F, Ch>::new(
+        WHIR_NUM_VARIABLES,
+        whir_params(),
+        zk_whir_parameters()[0].1.clone(),
+    )
+    .expect("the fixture parameters are valid");
+    let zk_shape = ZkWhirShape::new(&zk_config);
+
+    vec![
+        (String::from("p3-stir"), stir.domain_separator::<F, EF>()),
+        (
+            String::from("p3-whir"),
+            WhirShape::new(&whir_config, WHIR_NUM_OPENING_CLAIMS).domain_separator::<F, EF>(),
+        ),
+        (
+            String::from("p3-whir-hvzk"),
+            zk_shape.domain_separator::<F, EF>(),
+        ),
+        (
+            String::from("p3-whir-hvzk-base"),
+            zk_shape.base_case.domain_separator::<F, EF>(),
+        ),
+        (
+            String::from("p3-sumcheck-quadratic"),
+            SumcheckShape::new(4, 2, Basis::Evaluation).domain_separator::<F, EF>(),
+        ),
+        (
+            String::from("p3-sumcheck-hvzk"),
+            ZkSumcheckShape::new_batching(3, 4, 2).domain_separator::<F, EF>(),
+        ),
+        (
+            String::from("p3-sumcheck-generic-degree"),
+            GenericDegreeShape::new(4, 3, 2).domain_separator::<F, EF>(),
+        ),
+    ]
+}
+
+#[test]
+fn every_grinding_site_is_either_budgeted_or_priced_elsewhere() {
+    // Invariant: a proof-of-work step is a soundness parameter in two places.
+    //
+    //     transcript  ->  the difficulty the pattern describes
+    //     model       ->  the difficulty the security report credits
+    //
+    // A site in neither vocabulary is a difficulty nobody compares.
+    //
+    // That is how a grinding budget and a transcript drift apart unnoticed.
+    //
+    // Both vocabularies live in `p3-security`.
+    // This walk compares the described steps against them, not against a local list.
+    for group in protocols() {
+        for (name, separator) in group {
+            // Case labels are "protocol/configuration", and the name leads.
+            let protocol = name
+                .split('/')
+                .next()
+                .expect("a case label names its protocol");
+
+            // A step may be described at zero difficulty.
+            //
+            // That is one of the zero-bit conventions, not an anomaly.
+            //
+            // So the difficulty itself is not read here.
+            for (label, _bits) in pow_difficulties(separator.pattern()) {
+                let budgeted = grinding_step(protocol, label).is_some();
+                let priced_elsewhere = is_unpriced_grinding_site(protocol, label);
+
+                assert!(
+                    budgeted || priced_elsewhere,
+                    "{protocol}/{label} grinds, but no vocabulary classifies it",
+                );
+                assert!(
+                    !(budgeted && priced_elsewhere),
+                    "{protocol}/{label} is both compared against the model and priced elsewhere",
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn every_unpriced_grinding_site_is_described_by_the_protocol_that_owns_it() {
+    // Invariant: the unpriced table names real steps.
+    //
+    // A stale row would exempt a site that no longer exists.
+    // It would also hide a renamed one behind a classification that can never fire.
+    //
+    // Fixture state: every protocol below is swept at a positive difficulty.
+    // Each of its grinding steps therefore reaches a pattern.
+    let described: Vec<(String, String)> = grinding_sweep()
+        .into_iter()
+        .flat_map(|(protocol, separator)| {
+            pow_difficulties(separator.pattern())
+                .into_iter()
+                .map(move |(label, _)| (protocol.clone(), String::from(label)))
+        })
+        .collect();
+
+    for &(protocol, label) in &UNPRICED_GRINDING_SITES {
+        // One protocol seeds over a binary tower field.
+        //
+        // Its separator has a different sponge alphabet, so it cannot join the sweep above.
+        //
+        // Its own crate runs both directions of this check instead.
+        if protocol == "p3-binary-pcs" {
+            continue;
+        }
+
+        assert!(
+            described.contains(&(String::from(protocol), String::from(label))),
+            "{protocol}/{label} is listed as priced elsewhere, but no pattern describes it",
+        );
+    }
 }

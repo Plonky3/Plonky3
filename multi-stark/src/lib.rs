@@ -16,11 +16,14 @@
 
 extern crate alloc;
 
+pub mod backend;
 pub mod config;
 pub mod folder;
 pub mod fractional_gkr;
+pub mod indexed;
 pub mod instance;
 pub mod keys;
+pub mod logup_star;
 pub mod lookup;
 pub mod opening;
 pub mod packed_ext;
@@ -29,13 +32,17 @@ pub mod prover;
 pub mod rounds;
 pub mod security;
 pub mod selectors;
+pub mod sliced;
+pub mod subfield;
 pub mod transcript;
 pub mod verifier;
 pub mod zerocheck;
 
+pub use backend::{GenericBackend, ReprBackend, SubfieldBackend, ZerocheckBackend};
 pub use instance::{ProverInstance, ProverInstances, VerifierInstance, VerifierInstances};
 pub use keys::{ProvingKey, VerifyingKey, setup};
+pub use p3_air::BoundaryIoError;
 pub use proof::MultiStarkProof;
-pub use prover::{ProvingError, prove, prove_with_security};
+pub use prover::{ProvingError, prove, prove_with_backend, prove_with_security};
 pub use security::{MultiStarkSecurityReport, SecurityError, security_report};
 pub use verifier::{VerificationError, verify, verify_with_security};

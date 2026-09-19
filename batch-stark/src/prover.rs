@@ -131,6 +131,15 @@ where
     <SC::Pcs as p3_commit::Pcs<SC::Challenge, SC::Challenger>>::ProverData: Sync,
     <SC::Pcs as p3_commit::Pcs<SC::Challenge, SC::Challenger>>::Commitment: Sync,
 {
+    // Public inputs reach this proof only through AIR constraints.
+    // A cell listed for backend binding would go completely unbound.
+    assert!(
+        instances
+            .iter()
+            .all(|instance| instance.air.public_boundary_io().is_empty()),
+        "batch-stark does not support boundary-IO public values; bind them with AIR constraints"
+    );
+
     let common = &prover_data.common;
     // TODO: Extend if additional lookup gadgets are added.
     let lookup_gadget = LogUpGadget::new();
@@ -835,6 +844,13 @@ where
     LG: LookupProtocol + Sync,
     SymbolicExpressionExt<Val<SC>, SC::Challenge>: Algebra<SC::Challenge>,
 {
+    // Public inputs reach this proof only through AIR constraints.
+    // A cell listed for backend binding would go completely unbound.
+    assert!(
+        air.public_boundary_io().is_empty(),
+        "batch-stark does not support boundary-IO public values; bind them with AIR constraints"
+    );
+
     let quotient_size = quotient_domain.size();
     let main_width = trace_on_quotient_domain.width();
     let (perm_width, perm_height) = opt_permutation_on_quotient_domain
@@ -876,20 +892,22 @@ where
     let periodic_table =
         pcs.build_periodic_lde_table(&periodic_cols, trace_domain, quotient_domain);
 
-    let periodic_packed: Vec<Vec<PackedVal<SC>>> = if periodic_table.is_empty() {
+    // The packed row groups of the periodic table repeat every `groups_in_period`
+    // groups, so only those are materialized and group `g` reads `g % groups_in_period`.
+    let ncols = periodic_table.width();
+    let groups_in_period = periodic_table.packed_group_period(pack_width);
+    let periodic_packed: Vec<PackedVal<SC>> = if periodic_table.is_empty() {
         Vec::new()
     } else {
-        let ncols = periodic_table.width();
-        (0..quotient_size)
-            .step_by(pack_width)
-            .map(|i_start| {
-                (0..ncols)
-                    .map(|col_idx| {
-                        PackedVal::<SC>::from_fn(|offset| {
-                            *periodic_table.get(i_start + offset, col_idx)
-                        })
+        let periodic_table_ref = &periodic_table;
+        (0..groups_in_period)
+            .flat_map(move |group| {
+                let i_start = group * pack_width;
+                (0..ncols).map(move |col_idx| {
+                    PackedVal::<SC>::from_fn(|offset| {
+                        *periodic_table_ref.get(i_start + offset, col_idx)
                     })
-                    .collect()
+                })
             })
             .collect()
     };
@@ -1010,7 +1028,8 @@ where
                 let periodic_values: &[PackedVal<SC>] = if periodic_packed.is_empty() {
                     &[]
                 } else {
-                    &periodic_packed[i_start / pack_width]
+                    let group = (i_start / pack_width) % groups_in_period;
+                    &periodic_packed[group * ncols..group * ncols + ncols]
                 };
                 let inner_folder = ProverConstraintFolder {
                     main,

@@ -581,6 +581,76 @@ impl<C, U: Unit> ProverState<C, U> {
             .collect()
     }
 
+    /// Sample `count` index challenges the caller's predicate accepts, under one step.
+    ///
+    /// # Overview
+    ///
+    /// A candidate is drawn and shown to `accept` alongside the indices already kept.
+    ///
+    /// ```text
+    ///     draw -> accept? -> keep     until `count` indices are kept
+    ///                     -> discard
+    /// ```
+    ///
+    /// # When to use this
+    ///
+    /// A query schedule that opens distinct positions.
+    ///
+    /// Drawing a position twice costs a query and buys no soundness.
+    ///
+    /// # Shape
+    ///
+    /// The step records the width and the count kept, not the count drawn.
+    ///
+    /// Both sides know the kept count from their own configuration.
+    ///
+    /// # What the shape does not part
+    ///
+    /// This draw and the unconstrained one record the same step, so no seed parts them.
+    ///
+    /// The extension draws carry the same caveat, and one step type would fix both.
+    ///
+    /// # Termination
+    ///
+    /// The loop runs until `count` candidates are kept.
+    ///
+    /// So `accept` must be able to admit that many.
+    ///
+    /// A distinctness predicate needs `count <= 2^width`, which is a caller obligation.
+    ///
+    /// # Panics
+    ///
+    /// Never for a challenger that rejects internally, which is what `RESAMPLE = true` asks for.
+    pub fn challenge_uniform_bits_rejecting<W>(
+        &mut self,
+        label: Label,
+        width: usize,
+        count: usize,
+        mut accept: impl FnMut(usize, &[usize]) -> bool,
+    ) -> Vec<TranscriptBound<usize>>
+    where
+        C: CanSampleUniformBits<W>,
+    {
+        self.player.interact(Interaction::uniform_bits(
+            Hierarchy::Atomic,
+            Kind::Challenge,
+            label,
+            width,
+            Length::Fixed(count),
+        ));
+        let mut kept: Vec<usize> = Vec::with_capacity(count);
+        while kept.len() < count {
+            let candidate = self
+                .challenger
+                .sample_uniform_bits::<true>(width)
+                .expect("RESAMPLE = true: rejection loops internally, never errors");
+            if accept(candidate, &kept) {
+                kept.push(candidate);
+            }
+        }
+        kept.into_iter().map(TranscriptBound::wrap).collect()
+    }
+
     /// Sample `count` extension challenges the caller's predicate accepts, under one step.
     ///
     /// # Overview
@@ -1973,6 +2043,106 @@ mod tests {
         //
         // Separating them needs a step type of its own, the way the bit-width tags
         // separate a biased index draw from an unbiased one.
+        assert_eq!(unconstrained.len(), rejected.len());
+    }
+
+    /// One description of `count` index draws, `width` bits wide.
+    fn index_separator(width: usize, count: usize) -> DomainSeparator<FieldUnit<F>> {
+        let pattern = InteractionPattern::new(vec![Interaction::uniform_bits(
+            Hierarchy::Atomic,
+            Kind::Challenge,
+            "index",
+            width,
+            Length::Fixed(count),
+        )])
+        .unwrap();
+        DomainSeparator::new(0, b"index-draw", pattern)
+    }
+
+    #[test]
+    fn a_rejecting_index_draw_keeps_only_what_the_predicate_admits() {
+        // Invariant: the draw returns the count it was asked for, all admitted.
+        //
+        // Fixture state: four draws over three bits, rejecting odd candidates.
+        //
+        //     draw -> even? -> keep
+        //                   -> discard, draw again
+        let ds = index_separator(3, 4);
+        let mut state = ProverState::new(field_sponge(), &ds);
+
+        let kept: Vec<usize> = state
+            .challenge_uniform_bits_rejecting::<F>("index", 3, 4, |candidate, _| {
+                candidate.is_multiple_of(2)
+            })
+            .into_iter()
+            .map(TranscriptBound::into_inner)
+            .collect();
+
+        assert_eq!(kept.len(), 4);
+        assert!(kept.iter().all(|&i| i.is_multiple_of(2) && i < 8));
+        assert!(state.finalize().is_empty());
+    }
+
+    #[test]
+    fn a_distinctness_predicate_draws_until_the_kept_indices_differ() {
+        // Invariant: the count is what is kept, not what is drawn.
+        //
+        // A distinct draw is the query schedule's case, so it is the one pinned here.
+        //
+        // Fixture state: four draws over three bits, rejecting repeats.
+        let ds = index_separator(3, 4);
+        let mut state = ProverState::new(field_sponge(), &ds);
+
+        let kept: Vec<usize> = state
+            .challenge_uniform_bits_rejecting::<F>("index", 3, 4, |candidate, kept| {
+                !kept.contains(&candidate)
+            })
+            .into_iter()
+            .map(TranscriptBound::into_inner)
+            .collect();
+
+        let mut sorted = kept.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(sorted.len(), kept.len(), "every kept index differs");
+        assert!(state.finalize().is_empty());
+    }
+
+    #[test]
+    fn an_index_predicate_moves_the_stream_but_not_the_shape() {
+        // Invariant: the constrained and unconstrained index draws record one step.
+        //
+        // No seed parts them, which is the caveat both methods carry.
+        //
+        // Fixture state: one description of three draws, three bits wide.
+        let ds = index_separator(3, 3);
+
+        // The unconstrained draw takes every candidate in order.
+        let mut plain = ProverState::new(field_sponge(), &ds);
+        let unconstrained: Vec<usize> = plain
+            .challenge_uniform_bits::<F>("index", 3, 3)
+            .into_iter()
+            .map(TranscriptBound::into_inner)
+            .collect();
+        assert!(plain.finalize().is_empty());
+
+        // The rejecting draw drops the first candidate, so every value shifts by one.
+        let mut seen = 0;
+        let mut filtered = ProverState::new(field_sponge(), &ds);
+        let rejected: Vec<usize> = filtered
+            .challenge_uniform_bits_rejecting::<F>("index", 3, 3, |_, _| {
+                seen += 1;
+                seen != 1
+            })
+            .into_iter()
+            .map(TranscriptBound::into_inner)
+            .collect();
+        assert!(filtered.finalize().is_empty());
+
+        // The streams differ, which is the whole point of the predicate.
+        assert_ne!(unconstrained, rejected);
+
+        // Both drivers finalised against the SAME description, above.
         assert_eq!(unconstrained.len(), rejected.len());
     }
 }

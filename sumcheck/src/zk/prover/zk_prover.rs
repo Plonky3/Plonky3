@@ -381,8 +381,6 @@ mod tests {
     use alloc::vec;
     use alloc::vec::Vec;
 
-    use p3_field::{Field, PackedValue};
-    use p3_util::log2_strict_usize;
     use proptest::prelude::*;
     use rand::rngs::SmallRng;
     use rand::{RngExt, SeedableRng};
@@ -411,6 +409,13 @@ mod tests {
         // This catches a wrong skip count in the per-round accumulator assembly.
         run_roundtrip(VariableOrder::Prefix, 8, 3, 4, 1, 1, 0)
             .expect("honest roundtrip should accept");
+    }
+
+    #[test]
+    fn prover_verifier_roundtrip_prefix_with_no_residual_variables() {
+        // Folding all three variables exercises the scalar handoff on SIMD builds.
+        run_roundtrip(VariableOrder::Prefix, 3, 3, 4, 1, 1, 0)
+            .expect("fully folded prefix roundtrip should accept");
     }
 
     #[test]
@@ -540,13 +545,8 @@ mod tests {
             // The protocol needs at least one claim for a meaningful mu.
             prop_assume!(num_concrete + num_virtual >= 1);
 
-            // The residual compression step requires the folded polynomial to retain at least one full packed lane.
-            // Packing width varies per ISA (NEON 4, AVX2 8, AVX512 16).
-            let k_pack = log2_strict_usize(<F as Field>::Packing::WIDTH);
-            prop_assume!(n_vars > k_pack);
-
-            // Pick folding factor inside the legal window.
-            let folding_factor = 1 + (seed as usize % (n_vars - k_pack));
+            // Cover every legal prefix folding depth.
+            let folding_factor = 1 + (seed as usize % n_vars);
 
             prop_assert!(
                 run_roundtrip(VariableOrder::Prefix, n_vars, folding_factor, ell_zk, num_concrete, num_virtual, seed)

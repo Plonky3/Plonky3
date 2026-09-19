@@ -92,10 +92,13 @@ where
     }
 
     /// Commits the witness as an interleaved ZK Reed-Solomon codeword.
+    ///
+    /// Nothing is bound here.
+    ///
+    /// The root is returned instead, and the caller binds it.
     pub fn commit<R: Rng>(
         &self,
         message: Poly<F>,
-        challenger: &mut Challenger,
         rng: &mut R,
     ) -> (MT::Commitment, HidingWhirProverData<F, EF, MT>) {
         assert_eq!(message.num_variables(), self.config.num_variables);
@@ -109,7 +112,6 @@ where
         let padded = zk_padded_matrix(message.as_slice(), &randomness, folding, height);
         let encoded = self.dft.dft_batch(padded).to_row_major_matrix();
         let (commitment, merkle) = self.mmcs.commit_matrix(encoded);
-        challenger.observe(commitment.clone());
         (
             commitment,
             HidingWhirProverData {

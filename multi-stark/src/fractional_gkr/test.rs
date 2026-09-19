@@ -1,15 +1,25 @@
+use alloc::format;
+use alloc::string::String;
+use alloc::vec::Vec;
+
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
-use p3_challenger::{DuplexChallenger, FieldChallenger};
+use p3_binary_field::{BinaryChallenger, BinaryField32, BinaryField128, TowerLevel};
+use p3_challenger::fs::TranscriptField;
+use p3_challenger::{DuplexChallenger, FieldChallenger, HashChallenger};
 use p3_field::extension::BinomialExtensionField;
-use p3_field::{Field, PackedValue, PrimeCharacteristicRing};
+use p3_field::{ExtensionField, Field, PackedValue, PrimeCharacteristicRing};
+use p3_keccak::Keccak256Hash;
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::{Poly, PolyMaybePacked};
+use p3_symmetric::CryptographicHasher;
 use p3_util::log2_strict_usize;
 use rand::SeedableRng;
+use rand::distr::{Distribution, StandardUniform};
 use rand::rngs::SmallRng;
 
 use super::{
-    Fraction, FractionGkrError, SplitFraction, prove_fractional_gkr, verify_fractional_gkr,
+    Fraction, FractionGkrError, FractionGkrOutput, FractionGkrProof, LeafNumerator, SplitFraction,
+    prove_fractional_gkr, verify_fractional_gkr,
 };
 
 type F = BabyBear;
@@ -22,26 +32,53 @@ fn fresh_challenger() -> Challenger {
     Challenger::new(Perm::new_from_rng_128(&mut rng))
 }
 
-fn zero_sum_fraction(rng: &mut SmallRng, num_variables: usize) -> (Poly<F>, Poly<EF>) {
+/// Run the reduction over a base-field leaf numerator.
+///
+/// Every test here exercises this shape, apart from the extension-field ones.
+fn prove_base_leaf(
+    numer: &Poly<F>,
+    denom: &PolyMaybePacked<F, EF>,
+    challenger: &mut Challenger,
+) -> (FractionGkrProof<EF>, FractionGkrOutput<EF>) {
+    prove_fractional_gkr(
+        Fraction {
+            n: LeafNumerator::Base(numer),
+            d: denom,
+        },
+        challenger,
+    )
+}
+
+/// Draw a random fraction table whose fractions sum to zero.
+///
+/// The last leaf is solved for, so every other leaf is unconstrained.
+fn zero_sum<N, A>(rng: &mut SmallRng, num_variables: usize) -> (Poly<N>, Poly<A>)
+where
+    N: Field,
+    A: ExtensionField<N>,
+    StandardUniform: Distribution<N> + Distribution<A>,
+{
     loop {
-        let mut numer = Poly::<F>::rand(rng, num_variables);
-        let mut denom = Poly::<EF>::rand(rng, num_variables);
+        let mut numer = Poly::<N>::rand(rng, num_variables);
+        let mut denom = Poly::<A>::rand(rng, num_variables);
         let last = numer.num_evals() - 1;
 
-        if denom.as_slice()[..last].contains(&EF::ZERO) {
+        // A zero denominator anywhere would leave the table meaningless.
+        if denom.as_slice()[..last].contains(&A::ZERO) {
             continue;
         }
 
+        // Everything but the last leaf sums to this, which the last leaf has to cancel.
         let partial_sum = numer.as_slice()[..last]
             .iter()
             .zip(&denom.as_slice()[..last])
             .map(|(&numer, &denom)| denom.inverse() * numer)
-            .sum::<EF>();
-        if partial_sum == EF::ZERO {
+            .sum::<A>();
+        if partial_sum == A::ZERO {
             continue;
         }
 
-        numer.as_mut_slice()[last] = F::ONE;
+        numer.as_mut_slice()[last] = N::ONE;
         denom.as_mut_slice()[last] = -partial_sum.inverse();
         return (numer, denom);
     }
@@ -49,13 +86,11 @@ fn zero_sum_fraction(rng: &mut SmallRng, num_variables: usize) -> (Poly<F>, Poly
 
 #[test]
 fn accepts_honest_proofs() {
-    let (numer, denom) = zero_sum_fraction(&mut SmallRng::seed_from_u64(3), 6);
+    let (numer, denom) = zero_sum::<F, EF>(&mut SmallRng::seed_from_u64(3), 6);
     let mut prover_challenger = fresh_challenger();
-    let (proof, prover_output) = prove_fractional_gkr(
-        &Fraction {
-            n: numer.clone(),
-            d: PolyMaybePacked::Scalar(denom),
-        },
+    let (proof, prover_output) = prove_base_leaf(
+        &numer,
+        &PolyMaybePacked::Scalar(denom),
         &mut prover_challenger,
     );
 
@@ -69,13 +104,11 @@ fn accepts_honest_proofs() {
 
 #[test]
 fn rejects_a_tampered_round_polynomial() {
-    let (numer, denom) = zero_sum_fraction(&mut SmallRng::seed_from_u64(4), 6);
+    let (numer, denom) = zero_sum::<F, EF>(&mut SmallRng::seed_from_u64(4), 6);
     let mut prover_challenger = fresh_challenger();
-    let (mut proof, _) = prove_fractional_gkr(
-        &Fraction {
-            n: numer,
-            d: PolyMaybePacked::Scalar(denom),
-        },
+    let (mut proof, _) = prove_base_leaf(
+        &numer,
+        &PolyMaybePacked::Scalar(denom),
         &mut prover_challenger,
     );
     proof.layers[1].round_polys[0][0] += EF::ONE;
@@ -89,13 +122,11 @@ fn rejects_a_tampered_round_polynomial() {
 
 #[test]
 fn rejects_a_tampered_claim() {
-    let (numer, denom) = zero_sum_fraction(&mut SmallRng::seed_from_u64(5), 6);
+    let (numer, denom) = zero_sum::<F, EF>(&mut SmallRng::seed_from_u64(5), 6);
     let mut prover_challenger = fresh_challenger();
-    let (mut proof, _) = prove_fractional_gkr(
-        &Fraction {
-            n: numer,
-            d: PolyMaybePacked::Scalar(denom),
-        },
+    let (mut proof, _) = prove_base_leaf(
+        &numer,
+        &PolyMaybePacked::Scalar(denom),
         &mut prover_challenger,
     );
     proof.layers[0].claims.n0 += EF::ONE;
@@ -109,13 +140,11 @@ fn rejects_a_tampered_claim() {
 
 #[test]
 fn rejects_a_tampered_root_denominator() {
-    let (numer, denom) = zero_sum_fraction(&mut SmallRng::seed_from_u64(7), 6);
+    let (numer, denom) = zero_sum::<F, EF>(&mut SmallRng::seed_from_u64(7), 6);
     let mut prover_challenger = fresh_challenger();
-    let (mut proof, _) = prove_fractional_gkr(
-        &Fraction {
-            n: numer,
-            d: PolyMaybePacked::Scalar(denom),
-        },
+    let (mut proof, _) = prove_base_leaf(
+        &numer,
+        &PolyMaybePacked::Scalar(denom),
         &mut prover_challenger,
     );
     proof.root_denominator *= EF::TWO;
@@ -129,13 +158,11 @@ fn rejects_a_tampered_root_denominator() {
 
 #[test]
 fn rejects_the_wrong_layer_shape() {
-    let (numer, denom) = zero_sum_fraction(&mut SmallRng::seed_from_u64(6), 6);
+    let (numer, denom) = zero_sum::<F, EF>(&mut SmallRng::seed_from_u64(6), 6);
     let mut prover_challenger = fresh_challenger();
-    let (mut proof, _) = prove_fractional_gkr(
-        &Fraction {
-            n: numer,
-            d: PolyMaybePacked::Scalar(denom),
-        },
+    let (mut proof, _) = prove_base_leaf(
+        &numer,
+        &PolyMaybePacked::Scalar(denom),
         &mut prover_challenger,
     );
     proof.layers.pop();
@@ -159,13 +186,11 @@ fn rejects_a_layer_carrying_the_wrong_round_count() {
     //
     // The check has to happen first. The driver panics on a step it was never
     // described with, and a panic there would land on top of the drop-time check.
-    let (numer, denom) = zero_sum_fraction(&mut SmallRng::seed_from_u64(11), 6);
+    let (numer, denom) = zero_sum::<F, EF>(&mut SmallRng::seed_from_u64(11), 6);
     let mut prover_challenger = fresh_challenger();
-    let (mut proof, _) = prove_fractional_gkr(
-        &Fraction {
-            n: numer,
-            d: PolyMaybePacked::Scalar(denom),
-        },
+    let (mut proof, _) = prove_base_leaf(
+        &numer,
+        &PolyMaybePacked::Scalar(denom),
         &mut prover_challenger,
     );
     proof.layers[3].round_polys.pop();
@@ -187,13 +212,11 @@ fn rejects_a_variable_count_the_prover_never_ran() {
     //
     // A verifier holding a different one seeds a different sponge, so the two
     // never share a challenge. The layer count catches this first.
-    let (numer, denom) = zero_sum_fraction(&mut SmallRng::seed_from_u64(12), 6);
+    let (numer, denom) = zero_sum::<F, EF>(&mut SmallRng::seed_from_u64(12), 6);
     let mut prover_challenger = fresh_challenger();
-    let (proof, _) = prove_fractional_gkr(
-        &Fraction {
-            n: numer,
-            d: PolyMaybePacked::Scalar(denom),
-        },
+    let (proof, _) = prove_base_leaf(
+        &numer,
+        &PolyMaybePacked::Scalar(denom),
         &mut prover_challenger,
     );
 
@@ -213,13 +236,11 @@ fn the_reduction_leaves_both_sponges_in_the_same_state() {
     //
     // The driver seeds on construction and absorbs on every step, so a prover
     // and a verifier that agree step for step must agree here too.
-    let (numer, denom) = zero_sum_fraction(&mut SmallRng::seed_from_u64(13), 5);
+    let (numer, denom) = zero_sum::<F, EF>(&mut SmallRng::seed_from_u64(13), 5);
     let mut prover_challenger = fresh_challenger();
-    let (proof, _) = prove_fractional_gkr(
-        &Fraction {
-            n: numer,
-            d: PolyMaybePacked::Scalar(denom),
-        },
+    let (proof, _) = prove_base_leaf(
+        &numer,
+        &PolyMaybePacked::Scalar(denom),
         &mut prover_challenger,
     );
 
@@ -237,14 +258,12 @@ fn test_gkr_identities() {
     let mut rng = SmallRng::seed_from_u64(1);
 
     for num_variables in 1..=10 {
-        let (numer, denom) = zero_sum_fraction(&mut rng, num_variables);
+        let (numer, denom) = zero_sum::<F, EF>(&mut rng, num_variables);
 
         let mut prover_challenger = fresh_challenger();
-        let (proof, prover_output) = prove_fractional_gkr(
-            &Fraction {
-                n: numer.clone(),
-                d: PolyMaybePacked::Scalar(denom.clone()),
-            },
+        let (proof, prover_output) = prove_base_leaf(
+            &numer,
+            &PolyMaybePacked::Scalar(denom.clone()),
             &mut prover_challenger,
         );
 
@@ -283,24 +302,17 @@ fn packed_denominator_preserves_the_gkr_transcript() {
     let packing_variables = log2_strict_usize(<F as Field>::Packing::WIDTH);
 
     for num_variables in packing_variables.max(1)..=10 {
-        let (numer, denom) = zero_sum_fraction(&mut rng, num_variables);
+        let (numer, denom) = zero_sum::<F, EF>(&mut rng, num_variables);
         let packed_denom = PolyMaybePacked::Packed(denom.pack::<F, EF>());
         let mut scalar_challenger = fresh_challenger();
-        let (scalar_proof, scalar_output) = prove_fractional_gkr(
-            &Fraction {
-                n: numer.clone(),
-                d: PolyMaybePacked::Scalar(denom),
-            },
+        let (scalar_proof, scalar_output) = prove_base_leaf(
+            &numer,
+            &PolyMaybePacked::Scalar(denom),
             &mut scalar_challenger,
         );
         let mut packed_challenger = fresh_challenger();
-        let (packed_proof, packed_output) = prove_fractional_gkr(
-            &Fraction {
-                n: numer,
-                d: packed_denom,
-            },
-            &mut packed_challenger,
-        );
+        let (packed_proof, packed_output) =
+            prove_base_leaf(&numer, &packed_denom, &mut packed_challenger);
 
         assert_eq!(packed_proof, scalar_proof);
         assert_eq!(packed_output, scalar_output);
@@ -337,6 +349,294 @@ fn split_fraction_matches_unsplit_sum_and_evaluation() {
         assert_eq!(
             fraction.eval(&point),
             (numer.eval_ext::<F>(&point), denom.eval_ext::<F>(&point)),
+        );
+    }
+}
+
+/// Round-trip a reduction over a binary tower, in both storage modes.
+///
+/// A round polynomial is sent at the field's own first four values.
+///
+/// Over a binary tower those are bit patterns, not the integers zero through three.
+///
+/// Repeated addition, or naming a node by an integer, folds two of them onto one point.
+///
+/// The message then no longer pins the round polynomial down.
+fn binary_round_trip<F, EF>(seed: u64)
+where
+    F: TranscriptField + TowerLevel,
+    EF: ExtensionField<F>,
+    StandardUniform: Distribution<F> + Distribution<EF>,
+{
+    let challenger = || {
+        BinaryChallenger::<F, HashChallenger<u8, Keccak256Hash, 32>>::from_hasher(
+            b"p3-fraction-gkr-binary-test".to_vec(),
+            Keccak256Hash,
+        )
+    };
+
+    let mut rng = SmallRng::seed_from_u64(seed);
+    for num_variables in 1..=8 {
+        let (numer, denom) = zero_sum::<F, EF>(&mut rng, num_variables);
+
+        // Both storages describe the same table, so both must reduce to the same claims.
+        let storages = [
+            PolyMaybePacked::Scalar(denom.clone()),
+            PolyMaybePacked::Packed(denom.pack::<F, EF>()),
+        ];
+        for storage in storages {
+            let mut prover_challenger = challenger();
+            let (proof, prover_output) = prove_fractional_gkr(
+                Fraction {
+                    n: LeafNumerator::Base(&numer),
+                    d: &storage,
+                },
+                &mut prover_challenger,
+            );
+
+            let mut verifier_challenger = challenger();
+            let verifier_output =
+                verify_fractional_gkr::<F, EF, _>(&proof, num_variables, &mut verifier_challenger)
+                    .expect("an honest reduction verifies");
+            assert_eq!(verifier_output, prover_output);
+
+            // The openings have to be the tables themselves at the point reached.
+            assert_eq!(
+                prover_output.numerator,
+                numer.eval_base::<EF>(&prover_output.point)
+            );
+            assert_eq!(
+                prover_output.denominator,
+                denom.eval_ext::<F>(&prover_output.point)
+            );
+        }
+    }
+}
+
+#[test]
+fn a_fixed_base_leaf_instance_always_produces_the_same_proof() {
+    // The classical lookup path hands the reduction a base-field numerator.
+    //
+    // Every challenge in a run is derived.
+    //
+    // The proof, its openings and the sponge it leaves are functions of the two inputs.
+    //
+    // A digest of the three ties this path to a fixed reference.
+    //
+    // Comparing against a second run of the same code would tie it to nothing.
+    //
+    // Fixture state: a fixed seed, variable counts 1 through 8, scalar storage.
+    //
+    // Only the scalar runs feed the digest.
+    //
+    // The lane count is a property of the machine the test runs on:
+    //
+    //     one target:     n = 1 .. 8   ->  packed from n = 2
+    //     another:        n = 1 .. 8   ->  packed from n = 3
+    //
+    // A digest over both storages would cover a different number of runs per target.
+    //
+    // No single value could then be written down.
+    //
+    // The packed storage is pinned against the scalar run instead, where it exists.
+    //
+    // That says the same thing without leaving the field.
+    //
+    // A failure here is not automatically a bug.
+    //
+    // It means the transcript changed.
+    //
+    // The new digest is right exactly when that change was intended.
+    let mut rng = SmallRng::seed_from_u64(0x0_6014E);
+    let mut transcript = Vec::new();
+
+    // A field with one lane per element has no packed form to compare against.
+    let lanes = log2_strict_usize(<F as Field>::Packing::WIDTH);
+
+    for num_variables in 1..=8 {
+        let (numer, denom) = zero_sum::<F, EF>(&mut rng, num_variables);
+
+        let scalar = PolyMaybePacked::Scalar(denom.clone());
+        let mut challenger = fresh_challenger();
+        let (proof, output) = prove_base_leaf(&numer, &scalar, &mut challenger);
+
+        // What the surrounding protocol would draw next.
+        //
+        // A change the proof bytes cannot show still surfaces here.
+        let next = challenger.sample_algebra_element::<EF>();
+
+        transcript.extend(postcard::to_allocvec(&proof).expect("a proof serializes"));
+        transcript.extend(
+            postcard::to_allocvec(&(&output.numerator, &output.denominator))
+                .expect("an opening serializes"),
+        );
+        transcript.extend(postcard::to_allocvec(&next).expect("a challenge serializes"));
+
+        // Packing moves the trailing variables into lanes.
+        //
+        // A table has to be wide enough to address them for a packed form to exist.
+        if lanes > 0 && num_variables >= lanes {
+            let packed = PolyMaybePacked::Packed(denom.pack::<F, EF>());
+            let mut packed_challenger = fresh_challenger();
+            let (packed_proof, packed_output) =
+                prove_base_leaf(&numer, &packed, &mut packed_challenger);
+
+            assert_eq!(packed_proof, proof);
+            assert_eq!(packed_output, output);
+            assert_eq!(packed_challenger.sample_algebra_element::<EF>(), next);
+        }
+    }
+
+    let digest = Keccak256Hash.hash_iter(transcript);
+    let hex = digest
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+
+    assert_eq!(
+        hex,
+        "7beefa760db5e923dd7ebc824997919dd639a957e54a45f978b0808761bdc49e"
+    );
+}
+
+#[test]
+fn a_binary_field_reduction_round_trips() {
+    // One level, where the numerator and the denominator share a type.
+    binary_round_trip::<BinaryField128, BinaryField128>(0x0B14_A247);
+}
+
+#[test]
+fn a_mixed_binary_tower_reduction_round_trips() {
+    // Two levels, so the leaf walk runs with a narrow numerator against a wide denominator.
+    //
+    // That is the arm a single-level pair never reaches.
+    binary_round_trip::<BinaryField32, BinaryField128>(0x0B14_A248);
+}
+
+#[test]
+fn an_extension_numerator_matches_a_base_numerator() {
+    // The two numerator storages describe one table, so they must produce one proof.
+    //
+    // The wider storage changes where the values live, never what they are.
+    let mut rng = SmallRng::seed_from_u64(0x0E47_0001);
+
+    for num_variables in 1..=8 {
+        let (numer, denom) = zero_sum::<F, EF>(&mut rng, num_variables);
+        let denominator = PolyMaybePacked::Scalar(denom);
+
+        // The same numerator, once in the base field and once lifted into the extension.
+        let lifted = PolyMaybePacked::<F, EF>::Scalar(Poly::new(
+            numer.as_slice().iter().copied().map(EF::from).collect(),
+        ));
+
+        let mut base_challenger = fresh_challenger();
+        let (base_proof, base_output) = prove_fractional_gkr(
+            Fraction {
+                n: LeafNumerator::Base(&numer),
+                d: &denominator,
+            },
+            &mut base_challenger,
+        );
+
+        let mut ext_challenger = fresh_challenger();
+        let (ext_proof, ext_output) = prove_fractional_gkr(
+            Fraction {
+                n: LeafNumerator::Ext(&lifted),
+                d: &denominator,
+            },
+            &mut ext_challenger,
+        );
+
+        assert_eq!(base_proof, ext_proof);
+        assert_eq!(base_output, ext_output);
+        assert_eq!(
+            base_challenger.sample_algebra_element::<EF>(),
+            ext_challenger.sample_algebra_element::<EF>()
+        );
+    }
+}
+
+#[test]
+#[should_panic(expected = "leaf numerator and denominator must share a storage mode")]
+fn a_mixed_leaf_storage_is_rejected_before_the_size_decides() {
+    // A scalar numerator against a packed denominator has no meaning.
+    //
+    // The round kernel reads the two halves side by side.
+    //
+    // Where an unrejected pair would surface depends on the table's size.
+    //
+    //     narrow  ->  the scalar-unpack shim runs first and accepts it silently
+    //     wide    ->  it reaches an arm that cannot handle it
+    //
+    // Only the entry check can catch the narrow case.
+    //
+    // So the table here is exactly one lane wide.
+    let mut rng = SmallRng::seed_from_u64(0x0E47_0003);
+    let num_variables = log2_strict_usize(<F as Field>::Packing::WIDTH).max(1);
+    let (numer, denom) = zero_sum::<EF, EF>(&mut rng, num_variables);
+
+    let scalar_numerator = PolyMaybePacked::<F, EF>::Scalar(numer);
+    let packed_denominator = PolyMaybePacked::<F, EF>::Packed(denom.pack::<F, EF>());
+
+    let mut challenger = fresh_challenger();
+    let _ = prove_fractional_gkr(
+        Fraction {
+            n: LeafNumerator::Ext(&scalar_numerator),
+            d: &packed_denominator,
+        },
+        &mut challenger,
+    );
+}
+
+#[test]
+fn a_packed_extension_numerator_preserves_the_transcript() {
+    // Packing moves the trailing variables into SIMD lanes and changes nothing else.
+    //
+    // The two storages must therefore agree step for step.
+    let mut rng = SmallRng::seed_from_u64(0x0E47_0002);
+    let packing_variables = log2_strict_usize(<F as Field>::Packing::WIDTH);
+
+    for num_variables in packing_variables.max(1)..=8 {
+        let (numer, denom) = zero_sum::<EF, EF>(&mut rng, num_variables);
+
+        let scalar_numerator = PolyMaybePacked::<F, EF>::Scalar(numer.clone());
+        let scalar_denominator = PolyMaybePacked::<F, EF>::Scalar(denom.clone());
+        let packed_numerator = PolyMaybePacked::<F, EF>::Packed(numer.pack::<F, EF>());
+        let packed_denominator = PolyMaybePacked::<F, EF>::Packed(denom.pack::<F, EF>());
+
+        let mut scalar_challenger = fresh_challenger();
+        let (scalar_proof, scalar_output) = prove_fractional_gkr(
+            Fraction {
+                n: LeafNumerator::Ext(&scalar_numerator),
+                d: &scalar_denominator,
+            },
+            &mut scalar_challenger,
+        );
+
+        let mut packed_challenger = fresh_challenger();
+        let (packed_proof, packed_output) = prove_fractional_gkr(
+            Fraction {
+                n: LeafNumerator::Ext(&packed_numerator),
+                d: &packed_denominator,
+            },
+            &mut packed_challenger,
+        );
+
+        assert_eq!(packed_proof, scalar_proof);
+        assert_eq!(packed_output, scalar_output);
+        assert_eq!(
+            packed_challenger.sample_algebra_element::<EF>(),
+            scalar_challenger.sample_algebra_element::<EF>()
+        );
+
+        // The openings must still be the tables themselves at the reduction's point.
+        assert_eq!(
+            scalar_output.numerator,
+            numer.eval_ext::<F>(&scalar_output.point)
+        );
+        assert_eq!(
+            scalar_output.denominator,
+            denom.eval_ext::<F>(&scalar_output.point)
         );
     }
 }

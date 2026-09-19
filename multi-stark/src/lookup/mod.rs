@@ -39,8 +39,8 @@ use p3_util::log2_ceil_usize;
 use thiserror::Error;
 
 use crate::fractional_gkr::{
-    Fraction, FractionGkrError, FractionGkrOutput, FractionGkrProof, prove_fractional_gkr,
-    verify_fractional_gkr,
+    Fraction, FractionGkrError, FractionGkrOutput, FractionGkrProof, LeafNumerator,
+    prove_fractional_gkr, verify_fractional_gkr,
 };
 use crate::lookup::transcript::{LookupProverTranscript, LookupShape, LookupVerifierTranscript};
 
@@ -129,8 +129,8 @@ impl<F: Field> LookupPlan<F> {
     ///
     /// Returns an error if the worst-case multiplicity sum reaches the field characteristic.
     /// A multiplicity could otherwise wrap around and forge a balanced bus.
-    /// Returns an error for active characteristic-two lookups: the counting argument and
-    /// fractional-GKR interpolation used here require an odd-characteristic field.
+    /// Returns an error for active characteristic-two lookups: the counting argument needs
+    /// multiplicities that do not wrap, which an odd characteristic gives.
     ///
     /// # Panics
     ///
@@ -618,7 +618,7 @@ pub enum LookupError {
     /// Distinct bus identifiers must remain distinct in the prime subfield.
     #[error("lookup bus identifiers wrap around the characteristic")]
     BusIdentifierCapacityExceeded,
-    /// The counting argument and fractional-GKR kernels do not support binary fields.
+    /// The counting argument does not support binary fields.
     #[error("multi-STARK lookups do not support characteristic two")]
     UnsupportedCharacteristic,
     /// An AIR declares a lookup, but the proof carries no reduction for it.
@@ -694,8 +694,16 @@ where
     // Materialize every `multiplicity / denominator` fraction.
     // Prove their padded sum is zero and open both tables at one output point.
     let fraction = plan.materialize_fraction(main, preprocessed, public_values, alpha, beta);
-    let (fractional_gkr, output) =
-        transcript.reduction(|challenger| prove_fractional_gkr(&fraction, challenger));
+    let (fractional_gkr, output) = transcript.reduction(|challenger| {
+        // LogUp's numerators are multiplicities, so this leaf keeps them in the base field.
+        prove_fractional_gkr(
+            Fraction {
+                n: LeafNumerator::Base(&fraction.n),
+                d: &fraction.d,
+            },
+            challenger,
+        )
+    });
 
     // Theta is drawn only after the reduction has fixed its point and openings.
     // It folds the two openings into the one claim the zerocheck carries:
@@ -794,7 +802,7 @@ mod tests {
     use alloc::borrow::Cow;
     use alloc::vec;
 
-    use p3_air::{AirBuilder, WindowAccess};
+    use p3_air::{AirBuilder, BoundaryEnd, BoundaryPublic, WindowAccess};
     use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
     use p3_challenger::DuplexChallenger;
     use p3_field::PrimeCharacteristicRing;
@@ -807,7 +815,8 @@ mod tests {
     use rand::{RngExt, SeedableRng};
 
     use super::*;
-    use crate::zerocheck::{AirZerocheck, ZerocheckError};
+    use crate::backend::GenericBackend;
+    use crate::zerocheck::{AirZerocheck, ZerocheckError, get_air_degrees};
 
     type F = BabyBear;
     type EF = BinomialExtensionField<F, 4>;
@@ -1337,7 +1346,7 @@ mod tests {
         let lookup_proof = lookup_proof.unwrap();
         let airs = [&air];
         let sumcheck = AirZerocheck::new(&airs, 0);
-        let (proof, prover_point) = sumcheck.prove_with_lookup(
+        let (proof, prover_point) = sumcheck.prove_with_lookup::<F, EF, GenericBackend, _>(
             &[None],
             &[&main],
             &[public_values],
@@ -1368,6 +1377,132 @@ mod tests {
         let prover_final: EF = prover_challenger.sample_algebra_element();
         let verifier_final: EF = verifier_challenger.sample_algebra_element();
         assert_eq!(prover_final, verifier_final);
+    }
+
+    /// The output cell the pinned instantiation below binds by position.
+    const PERMUTATION_SUM_OUTPUT: [BoundaryPublic; 1] =
+        [BoundaryPublic::new(0, BoundaryEnd::Last, 0)];
+
+    /// Two-column permutation lookup with a transition invariant, parameterized by its cells.
+    ///
+    /// ```text
+    ///     lookup     : column 0 requested, column 1 provided
+    ///     constraint : is_transition * (col_0 + col_1 - next.col_0 - next.col_1) = 0
+    /// ```
+    ///
+    /// Every instantiation shares its degrees and lookups.
+    /// Only the listed cells set two instantiations apart.
+    struct PermutationSumAir {
+        cells: &'static [BoundaryPublic],
+    }
+
+    impl BaseAir<F> for PermutationSumAir {
+        fn width(&self) -> usize {
+            2
+        }
+
+        fn num_public_values(&self) -> usize {
+            1
+        }
+
+        fn public_boundary_io(&self) -> &[BoundaryPublic] {
+            self.cells
+        }
+    }
+
+    impl<AB> Air<AB> for PermutationSumAir
+    where
+        AB: AirBuilder<F = F> + InteractionBuilder,
+    {
+        fn eval(&self, builder: &mut AB) {
+            let main = builder.main();
+            let local = main.current_slice();
+            let next = main.next_slice();
+
+            builder
+                .when_transition()
+                .assert_eq(local[0] + local[1], next[0] + next[1]);
+            builder.push_local_interaction([
+                (vec![local[0].into()], Count::bounded(AB::Expr::ONE, 1)),
+                (vec![local[1].into()], Count::provided(-AB::Expr::ONE)),
+            ]);
+        }
+    }
+
+    #[test]
+    fn lookup_folder_binds_boundary_io_cells_at_the_closing_check() {
+        // Invariant: an AIR with lookups still binds its listed cells.
+        //
+        // The pin rides the lookup-aware folder, which batches the same ordinary family.
+        // Without it the lookup passes on its own and the output claim goes unread.
+        //
+        // Fixture state: a reversed 64-row trace, column 0 ending at 63, output claim 64.
+        let n = 64;
+        let values = (0..n)
+            .flat_map(|row| [F::from_usize(row), F::from_usize(n - 1 - row)])
+            .collect();
+        let main = Table::new(p3_matrix::dense::RowMajorMatrix::new(values, 2).transpose());
+        let claim = [F::from_usize(n)];
+        let public_values: &[F] = &claim;
+
+        // The two instantiations describe the same transcript shape.
+        let loose = PermutationSumAir { cells: &[] };
+        let pinned = PermutationSumAir {
+            cells: &PERMUTATION_SUM_OUTPUT,
+        };
+        assert_eq!(
+            get_air_degrees::<F, EF, _>(&loose),
+            get_air_degrees::<F, EF, _>(&pinned)
+        );
+
+        // The prover folds the true trace and asserts no pin.
+        let mut prover_challenger = challenger();
+        let (lookup_proof, lookup) = prove_lookup::<F, EF, _, _>(
+            &[&loose],
+            &[&main],
+            &[None],
+            &[public_values],
+            &mut prover_challenger,
+        );
+        let lookup_proof = lookup_proof.unwrap();
+        let loose_airs = [&loose];
+        let (proof, _) = AirZerocheck::new(&loose_airs, 0)
+            .prove_with_lookup::<F, EF, GenericBackend, _>(
+                &[None],
+                &[&main],
+                &[public_values],
+                lookup,
+                &mut prover_challenger,
+            );
+
+        let check = |air: &PermutationSumAir| {
+            let mut verifier_challenger = challenger();
+            let lookup = verify_lookup::<F, EF, _, _>(
+                &[air],
+                &[main.num_variables()],
+                Some(&lookup_proof),
+                &mut verifier_challenger,
+            )
+            .unwrap()
+            .unwrap();
+            let airs = [air];
+            AirZerocheck::new(&airs, 0).verify_with_lookup(
+                &proof,
+                &[main.num_variables()],
+                &[public_values],
+                Some(&lookup),
+                &mut verifier_challenger,
+            )
+        };
+
+        // Control: the loose AIR never reads the claim, so the shifted output slips through.
+        check(&loose).expect("an unbound public value is not checked at all");
+
+        // Listing the cell adds one surviving pin to the closing check:
+        //
+        //     is_last_row * (col_0 - 64) = 63 - 64 = -1
+        let err = check(&pinned).unwrap_err();
+        assert!(matches!(err, ZerocheckError::FinalSumMismatch), "{err:?}");
     }
 
     #[test]
@@ -1401,7 +1536,7 @@ mod tests {
         );
         let lookup_proof = lookup_proof.unwrap();
         let sumcheck = AirZerocheck::new(&air_refs, 0);
-        let (proof, prover_point) = sumcheck.prove_with_lookup(
+        let (proof, prover_point) = sumcheck.prove_with_lookup::<F, EF, GenericBackend, _>(
             &preprocessed,
             &table_refs,
             &public_values,
@@ -1460,7 +1595,7 @@ mod tests {
         );
         let lookup_proof = lookup_proof.unwrap();
         let sumcheck = AirZerocheck::new(&airs, 0);
-        let (proof, prover_point) = sumcheck.prove_with_lookup(
+        let (proof, prover_point) = sumcheck.prove_with_lookup::<F, EF, GenericBackend, _>(
             &[None, None],
             &[&tall, &short],
             &publics,

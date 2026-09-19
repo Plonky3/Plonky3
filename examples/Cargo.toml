@@ -10,12 +10,18 @@ keywords.workspace = true
 categories.workspace = true
 publish = false
 
+[target.'cfg(target_os = "linux")'.dependencies]
+tikv-jemallocator.workspace = true
+
 [package.metadata.plonky3]
 # This package contains host executables rather than an embedded library.
 embedded = false
 
 [dependencies]
 p3-air.workspace = true
+p3-binary-dft.workspace = true
+p3-binary-field.workspace = true
+p3-binary-pcs.workspace = true
 p3-blake3-air.workspace = true
 p3-challenger.workspace = true
 p3-circle.workspace = true
@@ -25,14 +31,17 @@ p3-field.workspace = true
 p3-fri.workspace = true
 p3-keccak.workspace = true
 p3-keccak-air.workspace = true
+p3-lookup.workspace = true
 p3-matrix.workspace = true
 p3-merkle-tree.workspace = true
 p3-mersenne-31.workspace = true
 p3-monty-31.workspace = true
+p3-multi-stark.workspace = true
 p3-poseidon1-air.workspace = true
 p3-poseidon2.workspace = true
 p3-poseidon2-air.workspace = true
 p3-stir.workspace = true
+p3-sumcheck.workspace = true
 p3-symmetric.workspace = true
 p3-uni-stark.workspace = true
 p3-util.workspace = true
@@ -49,10 +58,8 @@ p3-commit = { path = "../commit", features = ["test-utils"] }
 p3-dft = { path = "../dft" }
 p3-koala-bear = { path = "../koala-bear" }
 p3-matrix = { path = "../matrix" }
-p3-multi-stark = { path = "../multi-stark" }
 p3-poseidon1 = { path = "../poseidon1" }
 p3-security = { path = "../security" }
-p3-sumcheck = { path = "../sumcheck" }
 p3-whir = { path = "../whir" }
 
 tracing.workspace = true

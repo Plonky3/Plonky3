@@ -7,18 +7,20 @@
 
 mod claims;
 mod prefix;
+mod residual;
 mod suffix;
 
 use alloc::vec::Vec;
 
 pub use claims::StackedClaims;
 use p3_challenger::fs::TranscriptField;
-use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
+use p3_challenger::{FieldChallenger, GrindingChallenger};
 use p3_commit::{Encoder, Mmcs};
 use p3_field::{ExtensionField, Field};
 use p3_matrix::dense::DenseMatrix;
 use p3_multilinear_util::point::Point;
 pub use prefix::PrefixProver;
+pub use residual::SuffixResidualProver;
 pub use suffix::SuffixProver;
 
 use crate::SumcheckData;
@@ -48,23 +50,22 @@ pub trait Layout<F: Field, EF: ExtensionField<F>>: Sized {
     ///
     /// - `encoder`                — linear code used to encode the codeword.
     /// - `mmcs`                   — Merkle commitment scheme over the base field.
-    /// - `challenger`             — Fiat–Shamir transcript; absorbs the Merkle root.
     /// - `witness`                — stacked committed polynomial plus its tables.
     /// - `folding`                — folding factor consumed by the first WHIR round.
     /// - `starting_log_inv_rate`  — initial log-inverse rate of the RS code.
     ///
     /// # Transcript
     ///
-    /// The default body absorbs exactly one value, the Merkle root it returns.
+    /// Nothing is absorbed here, by this body or by any override.
     ///
-    /// An override owes the sponge that same single absorb, and no other absorb, sample or grind.
+    /// The root is returned instead, and the caller binds it.
     ///
-    /// A verifier never reaches this method, so it absorbs that one root in its place.
-    /// An absorbed table height would desync the two sides with no step out of place on either.
-    fn commit<E, MT, Challenger>(
+    /// A verifier never reaches this method.
+    ///
+    /// So both sides bind the root in one place, the caller.
+    fn commit<E, MT>(
         encoder: &E,
         mmcs: &MT,
-        challenger: &mut Challenger,
         witness: Witness<F>,
         folding: usize,
         starting_log_inv_rate: usize,
@@ -72,14 +73,12 @@ pub trait Layout<F: Field, EF: ExtensionField<F>>: Sized {
     where
         E: Encoder<F>,
         MT: Mmcs<F>,
-        Challenger: CanObserve<MT::Commitment>,
     {
         // Encode and Merkle-commit the stacked polynomial in the mode's variable order.
         let (root, prover_data) = commit_base(
             Self::variable_order(),
             encoder,
             mmcs,
-            challenger,
             &witness.poly,
             folding,
             starting_log_inv_rate,
@@ -1022,6 +1021,53 @@ mod tests {
             SuffixProver::<F, EF>::new_witness(build_tables(), FOLDING),
             &table_shapes(),
             ASCENDING_POLYS,
+        );
+    }
+
+    #[test]
+    fn prefix_handoff_narrower_than_one_packed_element() {
+        // Two columns leave one selector variable after preprocessing.
+        let witness =
+            PrefixProver::<F, EF>::new_witness(tables_from_shape(&[(FOLDING, 2)]), FOLDING);
+        let stacked_num_variables = witness.num_variables();
+        assert_eq!(stacked_num_variables, FOLDING + 1);
+
+        // Keep the original polynomial for an independent evaluation.
+        let stacked_poly = witness.poly().clone();
+
+        // Exercise both concrete and virtual claims.
+        let mut prover_challenger = challenger();
+        let mut prover_state = PrefixProver::<F, EF>::from_witness(witness);
+        let batch = OpeningBatch::new(vec![0, 1], Vec::new());
+        let _ = prover_state.eval(0, &batch, &mut prover_challenger);
+        let _ = prover_state.add_virtual_eval(&mut prover_challenger);
+
+        // Fold until only the selector variable remains.
+        let mut preprocessing_data = SumcheckData::<F, EF>::default();
+        let (mut prover, mut prover_randomness) =
+            prover_state.into_sumcheck(&mut preprocessing_data, 0, &mut prover_challenger);
+        let residual = stacked_num_variables - FOLDING;
+        assert_eq!(prover.num_variables(), residual);
+
+        // Bind the scalar residual.
+        let mut residual_data = SumcheckData::<F, EF>::default();
+        prover_randomness.extend(&prover.compute_sumcheck_polynomials(
+            &mut residual_data,
+            &mut prover_challenger,
+            residual,
+            0,
+            None,
+        ));
+
+        // The folded constant must equal direct evaluation at the sampled point.
+        let folded = prover
+            .evals()
+            .as_constant()
+            .expect("all variables were bound");
+        let expected = stacked_poly.eval_base(&prover_randomness);
+        assert_eq!(
+            folded, expected,
+            "the scalar handoff must preserve the original evaluation"
         );
     }
 

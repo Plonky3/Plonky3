@@ -83,7 +83,6 @@ pub(super) const fn poly_mul(a: u128, b: u128, bits: usize, tail: u128) -> u128 
 }
 
 /// Whether the images satisfy `ξ_k² + ξ_{k−1}·ξ_k + 1 = 0` for every `k`, with `ξ_{−1} = 1`.
-///
 /// This is what makes `N` a field isomorphism rather than merely an invertible `GF(2)`-linear
 /// map: invertibility alone says nothing about multiplicativity, and almost every invertible
 /// matrix over `GF(2)` fails to be multiplicative. Asserting it below puts the property in the
@@ -297,11 +296,21 @@ static POLY_TO_TOWER_128: [[u128; 256]; 16] = byte_tables(&invert(&COLUMNS_128, 
 /// The table-driven route sums a byte at a time, which constant evaluation cannot index into.
 /// This walks the bits instead.
 pub(crate) const fn tower_image_128(v: u128) -> u128 {
+    image(v, 128, &COLUMNS_128)
+}
+
+/// The polynomial-basis coordinates of a 64-bit tower-basis bit pattern, at compile time.
+pub(crate) const fn tower_image_64(v: u64) -> u64 {
+    image(v as u128, 64, &COLUMNS_64) as u64
+}
+
+/// The image of a bit pattern under the change of basis with the given columns.
+const fn image(v: u128, bits: usize, columns: &[u128; 128]) -> u128 {
     let mut acc = 0;
     let mut i = 0;
-    while i < 128 {
+    while i < bits {
         if (v >> i) & 1 == 1 {
-            acc ^= COLUMNS_128[i];
+            acc ^= columns[i];
         }
         i += 1;
     }
@@ -336,7 +345,30 @@ fn apply_128(tables: &[[u128; 256]; 16], v: u128) -> u128 {
             core::mem::transmute::<uint8x16_t, u128>(acc)
         }
     }
-    #[cfg(not(all(target_arch = "aarch64", target_feature = "neon")))]
+    #[cfg(all(target_arch = "x86_64", target_feature = "sse2"))]
+    {
+        use core::arch::x86_64::{__m128i, _mm_loadu_si128, _mm_setzero_si128, _mm_xor_si128};
+        // Keep each table entry and the XOR accumulator in one 128-bit register.
+        //
+        // SAFETY: `sse2` is enabled. It is in the baseline of the ordinary `x86_64` targets but
+        // not of the bare-metal ones, where the gate sends this to the scalar fold below.
+        //
+        // Every selected entry holds sixteen initialized bytes.
+        //
+        // The load is the unaligned form, and exclusive or ignores byte order.
+        unsafe {
+            let mut acc = _mm_setzero_si128();
+            for (byte, table) in tables.iter().enumerate() {
+                let entry = &table[(v >> (8 * byte)) as u8 as usize];
+                acc = _mm_xor_si128(acc, _mm_loadu_si128(core::ptr::from_ref(entry).cast()));
+            }
+            core::mem::transmute::<__m128i, u128>(acc)
+        }
+    }
+    #[cfg(not(any(
+        all(target_arch = "aarch64", target_feature = "neon"),
+        all(target_arch = "x86_64", target_feature = "sse2")
+    )))]
     {
         let mut acc = 0;
         for (byte, table) in tables.iter().enumerate() {
@@ -346,15 +378,256 @@ fn apply_128(tables: &[[u128; 256]; 16], v: u128) -> u128 {
     }
 }
 
+/// The blocked kernel, over whichever instruction set converts many elements at once.
+#[cfg(all(
+    target_arch = "x86_64",
+    target_feature = "gfni",
+    target_feature = "avx512f",
+    target_feature = "avx512bw"
+))]
+mod blocked {
+    use core::arch::x86_64::{
+        __m512i, _mm512_gf2p8affine_epi64_epi8, _mm512_loadu_si512, _mm512_set1_epi64,
+        _mm512_storeu_si512, _mm512_ternarylogic_epi64, _mm512_unpackhi_epi8,
+        _mm512_unpackhi_epi16, _mm512_unpackhi_epi32, _mm512_unpackhi_epi64, _mm512_unpacklo_epi8,
+        _mm512_unpacklo_epi16, _mm512_unpacklo_epi32, _mm512_unpacklo_epi64, _mm512_xor_si512,
+    };
+
+    use super::{COLUMNS_128, invert};
+
+    /// Elements per block: one byte of each fills the 64 bytes of a `512`-bit register.
+    ///
+    /// Sixteen such registers hold the whole block, one per byte position of an element.
+    pub(super) const BLOCK: usize = 64;
+
+    /// The immediate of a three-input exclusive-or, as a truth table of its three operands.
+    const XOR3: i32 = 0x96;
+
+    /// Where the interleaving butterfly leaves each row of the transpose.
+    ///
+    /// Four rounds of `vpunpck` transpose a `16 × 16` byte block with the row index reversed.
+    ///
+    /// ```text
+    ///     butterfly(a)[bitrev4(j)] = row j of the transpose
+    /// ```
+    ///
+    /// Reindexing by this table recovers the true transpose and costs no instruction.
+    const BITREV4: [usize; 16] = [0, 8, 4, 12, 2, 10, 6, 14, 1, 9, 5, 13, 3, 11, 7, 15];
+
+    /// The `8 × 8` blocks of a `128 × 128` map, at `blocks[k][j]` for input byte `j` to output `k`.
+    ///
+    /// # Algorithm
+    ///
+    /// `vgf2p8affineqb` reads the row for output bit `i` from byte `7 − i` of the quadword.
+    /// It pairs bit `b` of that row with bit `b` of the input byte.
+    ///
+    /// ```text
+    ///     out_byte_k[i] = XOR over b of block[k][j][8·(7−i) + b] · in_byte_j[b]
+    /// ```
+    ///
+    /// Column `8j + b` of the map holds the image of input bit `8j + b`.
+    /// Its bit `8k + i` is therefore exactly that matrix entry.
+    const fn affine_blocks(cols: &[u128; 128]) -> [[u64; 16]; 16] {
+        let mut blocks = [[0u64; 16]; 16];
+        let mut k = 0;
+        while k < 16 {
+            let mut j = 0;
+            while j < 16 {
+                let mut quadword = 0u64;
+                let mut i = 0;
+                while i < 8 {
+                    let mut row = 0u64;
+                    let mut b = 0;
+                    while b < 8 {
+                        if (cols[8 * j + b] >> (8 * k + i)) & 1 == 1 {
+                            row |= 1 << b;
+                        }
+                        b += 1;
+                    }
+                    quadword |= row << (8 * (7 - i));
+                    i += 1;
+                }
+                blocks[k][j] = quadword;
+                j += 1;
+            }
+            k += 1;
+        }
+        blocks
+    }
+
+    /// The blocks of `N`, the map out of the tower basis.
+    static TOWER_TO_POLY: [[u64; 16]; 16] = affine_blocks(&COLUMNS_128);
+
+    /// The blocks of `M = N⁻¹`, the map back into it.
+    static POLY_TO_TOWER: [[u64; 16]; 16] = affine_blocks(&invert(&COLUMNS_128, 128));
+
+    /// One butterfly round, pairing registers `STEP` apart at `8·STEP`-bit granularity.
+    ///
+    /// # Safety
+    ///
+    /// The caller must be compiled with `avx512f` and `avx512bw`.
+    #[inline(always)]
+    unsafe fn interleave<const STEP: usize>(a: &mut [__m512i; 16]) {
+        let mut i = 0;
+        while i < 16 {
+            // Each pair is visited once, from its lower member.
+            if i & STEP == 0 {
+                let (x, y) = (a[i], a[i + STEP]);
+                // SAFETY: guaranteed by the caller.
+                let (lo, hi) = unsafe {
+                    match STEP {
+                        1 => (_mm512_unpacklo_epi8(x, y), _mm512_unpackhi_epi8(x, y)),
+                        2 => (_mm512_unpacklo_epi16(x, y), _mm512_unpackhi_epi16(x, y)),
+                        4 => (_mm512_unpacklo_epi32(x, y), _mm512_unpackhi_epi32(x, y)),
+                        _ => (_mm512_unpacklo_epi64(x, y), _mm512_unpackhi_epi64(x, y)),
+                    }
+                };
+                a[i] = lo;
+                a[i + STEP] = hi;
+            }
+            i += 1;
+        }
+    }
+
+    /// Transposes a `16 × 16` byte matrix inside each 128-bit lane of sixteen registers.
+    ///
+    /// Every `vpunpck` acts within a lane, so the four lanes transpose side by side.
+    ///
+    /// Being a transpose, this is its own inverse.
+    ///
+    /// # Safety
+    ///
+    /// The caller must be compiled with `avx512f` and `avx512bw`.
+    #[inline(always)]
+    unsafe fn transpose(a: [__m512i; 16]) -> [__m512i; 16] {
+        let mut a = a;
+        // SAFETY: guaranteed by the caller.
+        unsafe {
+            interleave::<1>(&mut a);
+            interleave::<2>(&mut a);
+            interleave::<4>(&mut a);
+            interleave::<8>(&mut a);
+        }
+        core::array::from_fn(|j| a[BITREV4[j]])
+    }
+
+    /// One output byte plane: the sixteen affine images of the input planes, summed.
+    ///
+    /// # Safety
+    ///
+    /// The caller must be compiled with `gfni` and `avx512f`.
+    #[inline(always)]
+    unsafe fn plane(input: &[__m512i; 16], row: &[u64; 16]) -> __m512i {
+        // SAFETY: guaranteed by the caller.
+        unsafe {
+            // The same block applies to every element in the plane, so it broadcasts.
+            let t: [__m512i; 16] = core::array::from_fn(|j| {
+                _mm512_gf2p8affine_epi64_epi8::<0>(input[j], _mm512_set1_epi64(row[j] as i64))
+            });
+            // A three-input exclusive-or halves the depth and the instruction count of the sum.
+            let a = _mm512_ternarylogic_epi64::<XOR3>(t[0], t[1], t[2]);
+            let b = _mm512_ternarylogic_epi64::<XOR3>(t[3], t[4], t[5]);
+            let c = _mm512_ternarylogic_epi64::<XOR3>(t[6], t[7], t[8]);
+            let d = _mm512_ternarylogic_epi64::<XOR3>(t[9], t[10], t[11]);
+            let e = _mm512_ternarylogic_epi64::<XOR3>(t[12], t[13], t[14]);
+            let left = _mm512_ternarylogic_epi64::<XOR3>(a, b, c);
+            let right = _mm512_ternarylogic_epi64::<XOR3>(d, e, t[15]);
+            _mm512_xor_si512(left, right)
+        }
+    }
+
+    /// Applies one map to whole blocks of a slice, returning how many elements it covered.
+    ///
+    /// # Algorithm
+    ///
+    /// A block is transposed to byte planes, mapped, and transposed back.
+    ///
+    /// ```text
+    ///     register r  holds elements 4r … 4r+3          the layout in memory
+    ///     plane j     holds byte j of every element     what the affine map wants
+    /// ```
+    ///
+    /// Within a plane every byte needs the same `8 × 8` block.
+    /// That is the one thing `vgf2p8affineqb` does: its matrix operand is shared by a quadword.
+    ///
+    /// A whole block costs 256 affine maps and 128 exclusive-ors.
+    ///
+    /// The per-element route over the same 64 elements takes 1024 dependent table loads.
+    ///
+    /// Out of line so that the dispatch above stays small enough to inline into its callers.
+    #[inline(never)]
+    fn apply(blocks: &[[u64; 16]; 16], values: &mut [u128]) -> usize {
+        // Splitting into fixed-size blocks hands the tail back and needs no bounds check.
+        let (chunks, _) = values.as_chunks_mut::<BLOCK>();
+
+        for chunk in chunks.iter_mut() {
+            // SAFETY: a chunk holds one whole block, which is sixteen 512-bit registers.
+            //
+            // Every offset `4r` for `r < 16` therefore addresses 64 bytes inside it.
+            //
+            // Both accesses are the unaligned forms, so the alignment of the slice is free.
+            //
+            // The target features every intrinsic needs gate this module.
+            unsafe {
+                let raw: [__m512i; 16] =
+                    core::array::from_fn(|r| _mm512_loadu_si512(chunk.as_ptr().add(4 * r).cast()));
+                let input = transpose(raw);
+                let output: [__m512i; 16] = core::array::from_fn(|k| plane(&input, &blocks[k]));
+                let output = transpose(output);
+                for (r, &value) in output.iter().enumerate() {
+                    _mm512_storeu_si512(chunk.as_mut_ptr().add(4 * r).cast(), value);
+                }
+            }
+        }
+        chunks.len() * BLOCK
+    }
+
+    /// Crosses whole blocks out of the tower basis, returning how many elements it covered.
+    #[inline]
+    pub(super) fn tower_to_poly(values: &mut [u128]) -> usize {
+        apply(&TOWER_TO_POLY, values)
+    }
+
+    /// Crosses whole blocks back into the tower basis, returning how many elements it covered.
+    #[inline]
+    pub(super) fn poly_to_tower(values: &mut [u128]) -> usize {
+        apply(&POLY_TO_TOWER, values)
+    }
+}
+
+/// No instruction set here converts more than one element at a time, so no prefix is blocked.
+#[cfg(not(all(
+    target_arch = "x86_64",
+    target_feature = "gfni",
+    target_feature = "avx512f",
+    target_feature = "avx512bw"
+)))]
+mod blocked {
+    /// A block no slice can fill, so every dispatch below takes the per-element path outright.
+    pub(super) const BLOCK: usize = usize::MAX;
+
+    /// Reports that no element crossed out of the tower basis.
+    #[inline]
+    pub(super) const fn tower_to_poly(_values: &mut [u128]) -> usize {
+        0
+    }
+
+    /// Reports that no element crossed back into the tower basis.
+    #[inline]
+    pub(super) const fn poly_to_tower(_values: &mut [u128]) -> usize {
+        0
+    }
+}
+
 /// `GF(2^64)` from the tower basis to the polynomial basis.
 #[inline]
-pub(super) fn tower_to_poly_64(v: u64) -> u64 {
+pub(crate) fn tower_to_poly_64(v: u64) -> u64 {
     apply_64(&TOWER_TO_POLY_64, v)
 }
 
 /// `GF(2^64)` from the polynomial basis back to the tower basis.
 #[inline]
-pub(super) fn poly_to_tower_64(v: u64) -> u64 {
+pub(crate) fn poly_to_tower_64(v: u64) -> u64 {
     apply_64(&POLY_TO_TOWER_64, v)
 }
 
@@ -376,6 +649,54 @@ pub(crate) fn poly_to_tower_128(v: u128) -> u128 {
     apply_128(&POLY_TO_TOWER_128, v)
 }
 
+/// `GF(2^128)` from the tower basis to the polynomial basis, over a whole slice.
+///
+/// Returns how many leading elements the blocked kernel took, which is zero wherever the target
+/// has none. The whole slice is converted either way, so a caller can ignore the count; what it
+/// buys is a test that can see which of the two paths ran.
+#[inline]
+pub(crate) fn tower_to_poly_128_slice(values: &mut [u128]) -> usize {
+    // Below one block there is nothing to transpose, so the call boundary buys nothing.
+    //
+    // Otherwise the blocked kernel reports how many leading elements it covered.
+    let blocked = if values.len() < blocked::BLOCK {
+        0
+    } else {
+        blocked::tower_to_poly(values)
+    };
+
+    // Whatever is left over costs sixteen table lookups per element.
+    for value in &mut values[blocked..] {
+        *value = apply_128(&TOWER_TO_POLY_128, *value);
+    }
+
+    blocked
+}
+
+/// `GF(2^128)` from the polynomial basis back to the tower basis, over a whole slice.
+///
+/// Returns how many leading elements the blocked kernel took, which is zero wherever the target
+/// has none. The whole slice is converted either way, so a caller can ignore the count; what it
+/// buys is a test that can see which of the two paths ran.
+#[inline]
+pub(crate) fn poly_to_tower_128_slice(values: &mut [u128]) -> usize {
+    // Below one block there is nothing to transpose, so the call boundary buys nothing.
+    //
+    // Otherwise the blocked kernel reports how many leading elements it covered.
+    let blocked = if values.len() < blocked::BLOCK {
+        0
+    } else {
+        blocked::poly_to_tower(values)
+    };
+
+    // Whatever is left over costs sixteen table lookups per element.
+    for value in &mut values[blocked..] {
+        *value = apply_128(&POLY_TO_TOWER_128, *value);
+    }
+
+    blocked
+}
+
 #[cfg(test)]
 mod tests {
     use alloc::vec::Vec;
@@ -387,20 +708,201 @@ mod tests {
     use crate::tower::TowerLevel;
     use crate::{BinaryField64, BinaryField128};
 
-    /// Check the dispatched map against scalar table evaluation, including every
-    /// possible byte in each position. This also pins the NEON load byte order.
+    /// Whether this build is one the blocked kernel is compiled for.
+    ///
+    /// Stated a second time here, independently of the gate on the kernel itself.
+    ///
+    /// A gate that drifts then shows up as a failure rather than as a silent per-element pass.
+    const BLOCKED_BUILD: bool = cfg!(all(
+        target_arch = "x86_64",
+        target_feature = "gfni",
+        target_feature = "avx512f",
+        target_feature = "avx512bw"
+    ));
+
+    // The gate on the blocked kernel has to agree with the target predicate restated above.
+    //
+    // Drift in either direction leaves the sentinel width below behind.
+    //
+    // Checking the block here turns that into a build failure.
+    //
+    // Otherwise it waits for someone to run this leg.
+    const _: () = assert!(if BLOCKED_BUILD {
+        super::blocked::BLOCK == 64
+    } else {
+        super::blocked::BLOCK == usize::MAX
+    });
+
+    /// Guard elements on each side of the payload, two whole blocks of the widest kernel.
+    ///
+    /// One block wide would catch only a store that overran by exactly one block.
+    ///
+    /// Two make the next one out detectable as well, still inside the buffer's own allocation.
+    const SENTINELS: usize = 2 * 64;
+
+    /// What those elements hold, which no image of the inputs below reproduces.
+    const SENTINEL: u128 = 0x5a5a_5a5a_5a5a_5a5a_5a5a_5a5a_5a5a_5a5a;
+
+    /// The image of a bit pattern under the map whose columns these are.
+    ///
+    /// The map is `GF(2)`-linear, so the image is the sum of the columns the set bits select.
+    /// This rests on no lookup table and on no vector instruction.
+    ///
+    /// That is what makes it a reference the kernels below can be wrong against.
+    fn column_walk(cols: &[u128; 128], v: u128) -> u128 {
+        (0..128)
+            .filter(|i| (v >> i) & 1 == 1)
+            .fold(0, |acc, i| acc ^ cols[i])
+    }
+
+    /// The columns of `M = N⁻¹`, which the reverse direction is checked against.
+    fn inverse_columns() -> [u128; 128] {
+        invert(&COLUMNS_128, 128)
+    }
+
     #[test]
     fn byte_maps_match_scalar_evaluation() {
-        for tables in [&TOWER_TO_POLY_128, &POLY_TO_TOWER_128] {
+        // Invariant: the dispatched map is the matrix the columns describe, byte for byte.
+        //
+        // Every byte value in every position is swept.
+        //
+        // That is what pins the load byte order of each vector arm.
+        let inverse = inverse_columns();
+        for (tables, cols) in [
+            (&TOWER_TO_POLY_128, &COLUMNS_128),
+            (&POLY_TO_TOWER_128, &inverse),
+        ] {
             for byte in 0..16 {
                 for value in 0..256u128 {
+                    // Every other byte is all ones, so no position can be silently dropped.
                     let input = !(255u128 << (8 * byte)) | (value << (8 * byte));
-                    let expected = tables.iter().enumerate().fold(0, |acc, (i, table)| {
+
+                    // The table fold, which is what the vector arms replace.
+                    let folded = tables.iter().enumerate().fold(0, |acc, (i, table)| {
                         acc ^ table[(input >> (8 * i)) as u8 as usize]
                     });
-                    assert_eq!(apply_128(tables, input), expected);
+                    assert_eq!(apply_128(tables, input), folded);
+
+                    // And the same answer from the matrix alone.
+                    assert_eq!(apply_128(tables, input), column_walk(cols, input));
                 }
             }
+        }
+    }
+
+    /// A slice whose elements share no structure with one another.
+    fn sample(len: usize) -> Vec<u128> {
+        (0..len)
+            .map(|i| (i as u128 + 1).wrapping_mul(0x9e37_79b9_7f4a_7c15_f39c_c060_5ced_c835))
+            .collect()
+    }
+
+    /// The same values, walled off from the rest of the allocation on both sides.
+    ///
+    /// ```text
+    ///     [ guard | offset | values | guard ]
+    ///                ^ slides the payload across every alignment one block can see
+    /// ```
+    fn padded(values: &[u128], offset: usize) -> Vec<u128> {
+        let lead = SENTINELS + offset;
+
+        let mut buffer = Vec::with_capacity(lead + values.len() + SENTINELS);
+        buffer.extend(core::iter::repeat_n(SENTINEL, lead));
+        buffer.extend_from_slice(values);
+        buffer.extend(core::iter::repeat_n(SENTINEL, SENTINELS));
+        buffer
+    }
+
+    /// Both directions over one length and one offset, against the column walk.
+    fn slices_agree(values: &[u128], offset: usize) -> Result<(), TestCaseError> {
+        let (len, start) = (values.len(), SENTINELS + offset);
+        let inverse = inverse_columns();
+
+        // Every whole block of the payload belongs to the blocked kernel, and the remainder to
+        // the per-element tail. Where no kernel is compiled in, `BLOCK` is wider than any
+        // slice, so the same expression asks for nothing.
+        let covered = len - len % super::blocked::BLOCK;
+
+        // Out of the tower basis, in place, inside its walls.
+        let mut buffer = padded(values, offset);
+        prop_assert_eq!(
+            tower_to_poly_128_slice(&mut buffer[start..start + len]),
+            covered
+        );
+
+        // Nothing may have run off either end of the payload.
+        prop_assert!(buffer[..start].iter().all(|&v| v == SENTINEL));
+        prop_assert!(buffer[start + len..].iter().all(|&v| v == SENTINEL));
+
+        // Every element must be the image the matrix alone gives.
+        let forward: Vec<u128> = values
+            .iter()
+            .map(|&v| column_walk(&COLUMNS_128, v))
+            .collect();
+        prop_assert_eq!(&buffer[start..start + len], &forward[..]);
+
+        // And back again, which must restore the input.
+        prop_assert_eq!(
+            poly_to_tower_128_slice(&mut buffer[start..start + len]),
+            covered
+        );
+        prop_assert!(buffer[..start].iter().all(|&v| v == SENTINEL));
+        prop_assert!(buffer[start + len..].iter().all(|&v| v == SENTINEL));
+        prop_assert_eq!(&buffer[start..start + len], values);
+
+        // The reverse direction on its own, against its own column walk.
+        let mut buffer = padded(values, offset);
+        prop_assert_eq!(
+            poly_to_tower_128_slice(&mut buffer[start..start + len]),
+            covered
+        );
+        prop_assert!(buffer[..start].iter().all(|&v| v == SENTINEL));
+        prop_assert!(buffer[start + len..].iter().all(|&v| v == SENTINEL));
+        let backward: Vec<u128> = values.iter().map(|&v| column_walk(&inverse, v)).collect();
+        prop_assert_eq!(&buffer[start..start + len], &backward[..]);
+
+        Ok(())
+    }
+
+    #[test]
+    fn the_blocked_prefix_and_the_per_element_tail_agree_at_every_length() {
+        // An unbroken run of lengths covers every block count and every remainder.
+        //
+        //     len 0..63     below one block, so nothing is blocked
+        //     len 64        exactly one block, with no tail
+        //     len 65..127   one block plus a tail of every possible size
+        //     len 128..200  several blocks, with and without a tail
+        for len in 0..=200 {
+            let values = sample(len);
+            // Offsets 0 through 3 place the payload at every alignment one register can see.
+            for offset in 0..4 {
+                slices_agree(&values, offset)
+                    .unwrap_or_else(|e| panic!("len {len}, offset {offset}: {e}"));
+            }
+        }
+    }
+
+    #[test]
+    fn the_dispatchers_hand_every_whole_block_to_the_blocked_kernel() {
+        // Invariant: a dispatcher reports how many leading elements the kernel took.
+        //
+        // It uses that count only as a tail offset, so a dispatch that stopped reaching the
+        // kernel would still return right answers, silently and at the per-element rate.
+        // Asking for the count back through the ordinary entry point is what makes that a
+        // failure rather than a regression nobody sees.
+        //
+        // Whole blocks only: the remainder is the per-element tail's business. Where no kernel
+        // is compiled in `BLOCK` is wider than any slice, so the same expression asks for
+        // nothing, which is exactly that build's claim.
+        let block = super::blocked::BLOCK;
+
+        // Four blocks of the widest kernel, 64 elements each, and every remainder between.
+        for len in 0..=256 {
+            let want = len - len % block;
+
+            let mut values = sample(len);
+            assert_eq!(tower_to_poly_128_slice(&mut values), want, "len {len}");
+            assert_eq!(poly_to_tower_128_slice(&mut values), want, "len {len}");
         }
     }
 
@@ -592,6 +1094,31 @@ mod tests {
                 poly_mul(tower_to_poly_128(a), tower_to_poly_128(b), 128, TAIL_128),
                 tower_to_poly_128(product_128),
             );
+        }
+
+        /// The slice kernels agree with the matrix, at lengths spanning several blocks.
+        #[test]
+        fn the_slice_kernels_agree_with_the_matrix(
+            values in prop::collection::vec(any::<u128>(), 0..300),
+            offset in 0usize..4,
+        ) {
+            slices_agree(&values, offset)?;
+        }
+
+        /// A slice crosses over exactly as its elements do one at a time.
+        #[test]
+        fn the_slice_kernels_agree_with_the_per_element_maps(
+            values in prop::collection::vec(any::<u128>(), 0..300),
+        ) {
+            let mut forward = values.clone();
+            tower_to_poly_128_slice(&mut forward);
+            let want: Vec<u128> = values.iter().map(|&v| tower_to_poly_128(v)).collect();
+            prop_assert_eq!(&forward, &want);
+
+            let mut backward = values.clone();
+            poly_to_tower_128_slice(&mut backward);
+            let want: Vec<u128> = values.iter().map(|&v| poly_to_tower_128(v)).collect();
+            prop_assert_eq!(&backward, &want);
         }
 
         /// The additive half of the isomorphism.

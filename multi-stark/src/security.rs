@@ -14,18 +14,23 @@
 
 use alloc::vec::Vec;
 
+use p3_air::boundary;
 use p3_air::symbolic::AirLayout;
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
 use p3_field::Field;
-use p3_lookup::InteractionSymbolicBuilder;
-use p3_security::multilinear::{MultilinearAirParams, MultilinearLookupParams, reduction_terms};
+use p3_lookup::{IndexedLookupError, InteractionSymbolicBuilder};
+use p3_security::multilinear::{
+    MultilinearAirParams, MultilinearLogupStarParams, MultilinearLookupParams, reduction_terms,
+};
 use p3_security::{ErrorBits, SecurityTerm};
 use p3_sumcheck::{PrescribedOpeningSecurity, PrescribedPointPcs};
+use p3_util::log2_ceil_usize;
 use thiserror::Error;
 
 use crate::VerifierInstances;
 use crate::config::{Commitment, MultiStarkConfig};
-use crate::folder::VerifierAir;
+use crate::folder::{VerifierAir, boundary_io_pins};
+use crate::indexed::IndexedPlan;
 use crate::instance::Instances;
 use crate::lookup::{LookupError, LookupPlan};
 use crate::selectors::{PeriodicError, periodic_num_variables};
@@ -40,6 +45,9 @@ pub enum SecurityError {
     /// The lookup counting argument or its field is unsupported.
     #[error("lookup security: {0}")]
     Lookup(#[from] LookupError),
+    /// The indexed lookups the AIRs declare do not describe a reduction.
+    #[error("indexed lookup security: {0}")]
+    IndexedLookup(#[from] IndexedLookupError),
     /// Periodic columns do not fit the declared trace dimensions.
     #[error("periodic security: {0}")]
     Periodic(#[from] PeriodicError),
@@ -111,26 +119,122 @@ impl MultiStarkSecurityReport {
         }
     }
 
-    /// Add one PCS's error and return its contribution to the joint candidate count.
+    /// Add one PCS's labelled errors and return its contribution to the candidate count.
+    ///
+    /// A scheme stacking a reduction on a commitment charges one term per source.
+    ///
+    /// Each keeps the label its own crate gave it, so the report says which one is short.
+    ///
+    /// Every term is also attributed to the commitment it was charged for.
+    ///
+    /// ```text
+    ///     one scheme, both commitments  ->  the same label twice
+    ///     component                     ->  which of the two the term belongs to
+    /// ```
+    ///
+    /// A component with nothing to charge is recorded as unassessed under the same name.
     fn add_opening_evidence(
         &mut self,
-        label: &'static str,
+        component: &'static str,
         evidence: Option<PrescribedOpeningSecurity>,
     ) -> f64 {
+        // A term is usable when it names a probability in `[0, 1]`, so its bits are `>= 0`.
+        //
+        // Infinite bits are a zero error, which a reduction that never runs reports.
+        //
+        // Rejecting that would leave a component unassessed for having nothing to charge.
+        //
+        // The union of the terms is what has to be a real bound, and it is checked below.
+        let charged = |term: &SecurityTerm| !term.bits.bits().is_nan() && term.bits.bits() >= 0.0;
+
+        // One unusable term makes the whole component unassessed, rather than shrinking it.
+        let usable = |evidence: &PrescribedOpeningSecurity| {
+            !evidence.terms.is_empty()
+                && evidence.terms.iter().all(charged)
+                && evidence.error().bits().is_finite()
+                && evidence.log2_max_candidates.is_finite()
+                && evidence.log2_max_candidates >= 0.0
+        };
         match evidence {
-            Some(evidence)
-                if evidence.error.bits().is_finite()
-                    && evidence.error.bits() >= 0.0
-                    && evidence.log2_max_candidates.is_finite()
-                    && evidence.log2_max_candidates >= 0.0 =>
-            {
-                self.terms.push(SecurityTerm::new(label, evidence.error));
+            Some(evidence) if usable(&evidence) => {
+                self.terms.extend(
+                    evidence
+                        .terms
+                        .iter()
+                        .map(|term| term.in_component(component)),
+                );
                 evidence.log2_max_candidates
             }
             _ => {
-                self.unassessed.push(label);
+                self.unassessed.push(component);
                 0.0
             }
+        }
+    }
+}
+
+impl IndexedPlan {
+    /// Read the shape the soundness bound is charged against.
+    ///
+    /// Every number here comes from the AIRs and the trace heights.
+    ///
+    /// None of them is read off a proof, which is what lets a verifier trust the bound.
+    ///
+    /// # Panics
+    ///
+    /// Never in practice.
+    ///
+    /// A plan exists only when some AIR declares a table, and a table always has a reader.
+    pub(crate) fn security_params(&self) -> MultilinearLogupStarParams {
+        // Blocks are laid down tallest first, each at a multiple of its own height.
+        //
+        // The run of used leaves therefore has no gaps.
+        //
+        //     leaves = sum over tables of (entries + rows of every reader)
+        //
+        // The padded table is the next power of two.
+        //
+        // Its extra leaves carry a zero over a one, so they hold no pole.
+        let num_leaves = self
+            .tables()
+            .iter()
+            .map(|plan| {
+                let readers = plan
+                    .readers
+                    .iter()
+                    .map(|reader| 1usize << reader.num_variables)
+                    .sum::<usize>();
+                (1usize << plan.table.num_variables) + readers
+            })
+            .sum::<usize>();
+
+        MultilinearLogupStarParams {
+            num_variables: log2_ceil_usize(num_leaves),
+            num_leaves,
+            max_readers_per_table: self
+                .tables()
+                .iter()
+                .map(|plan| plan.readers.len())
+                .max()
+                .expect("a plan exists only when some table is declared"),
+            max_reader_variables: self
+                .tables()
+                .iter()
+                .flat_map(|plan| plan.readers.iter())
+                .map(|reader| reader.num_variables)
+                .max()
+                .expect("a table with no reader is rejected when the plan is built"),
+            max_table_variables: self
+                .tables()
+                .iter()
+                .map(|plan| plan.table.num_variables)
+                .max()
+                .expect("a plan exists only when some table is declared"),
+            num_column_claims: self
+                .tables()
+                .iter()
+                .map(|plan| plan.table.columns.len())
+                .sum(),
         }
     }
 }
@@ -209,6 +313,18 @@ where
                 .ok_or_else(|| invalid("stacked trace dimensions overflow"))?;
         }
 
+        // A malformed declaration is rejected by prove and by verify.
+        // Reporting a security level for a statement neither accepts would mislead.
+        if boundary::validate(
+            air.public_boundary_io(),
+            air.width(),
+            air.num_public_values(),
+        )
+        .is_err()
+        {
+            return Err(invalid("public boundary declaration is malformed"));
+        }
+
         let builder = InteractionSymbolicBuilder::<C::Val, C::Challenge>::from_air(
             air,
             AirLayout::from_air::<C::Val>(air),
@@ -216,10 +332,16 @@ where
         if !builder.exclusive_interactions().is_empty() {
             return Err(invalid("exclusive lookups are unsupported"));
         }
-        let constraints = builder
+        let own_constraints = builder
             .base_constraints()
             .len()
             .checked_add(builder.extension_constraints().len())
+            .ok_or_else(|| invalid("constraint count overflow"))?;
+        // The folder batches one pin per listed cell with the AIR's own constraints,
+        // and no symbolic pass sees them.
+        let pins = boundary_io_pins(air.public_boundary_io());
+        let constraints = own_constraints
+            .checked_add(pins.count)
             .ok_or_else(|| invalid("constraint count overflow"))?;
         max_num_constraints = max_num_constraints.max(constraints);
         let symbolic_degree = builder
@@ -242,7 +364,10 @@ where
                 "constraint degree hint understates the symbolic degree",
             ));
         }
-        if constraints > 0 && symbolic_degree == 0 {
+        // A constant family has no round polynomial of its own.
+        // A listed cell lifts it to the pin's degree, which is what `get_air_degrees` scores,
+        // so both entry points accept and reject the same statements.
+        if own_constraints > 0 && symbolic_degree.max(pins.degree) == 0 {
             return Err(invalid("constant constraint families are unsupported"));
         }
         let tuples = builder
@@ -275,6 +400,11 @@ where
         num_fractions,
         max_message_width: plan.max_width,
     });
+    // The same plan feeds the soundness terms and the opening shapes below.
+    //
+    // An assessment covering fewer batches than the proof opens overstates the bound.
+    let indexed = IndexedPlan::build::<C::Val, C::Challenge, A>(&instances.airs(), &heights)?;
+    let logup_star = indexed.as_ref().map(IndexedPlan::security_params);
     let num_variables = heights
         .iter()
         .copied()
@@ -292,6 +422,11 @@ where
                 num_variables,
                 constraint_degree: max_degree,
                 lookup,
+                // This prover spends one round per variable.
+                // A skip round would change the accounting, so it is declared
+                // absent rather than defaulted.
+                skip: None,
+                logup_star,
             },
             field_bits,
             nonzero_field_bits,
@@ -299,18 +434,31 @@ where
         unassessed: Vec::new(),
     };
     let num_reduction_terms = report.terms.len();
+    // The scheme is assessed against the opening protocol verification actually runs.
+    //
+    // The indexed-lookup reduction closes on two further points per table it touches.
+    //
+    // Those batches have to reach the protocol built here, not only the one opened with.
+    //
+    // A protocol missing them assesses a smaller opening than the proof performs.
+    //
+    // It also understates the candidate count subtracted from every reduction term below.
     let mut log2_candidates = report.add_opening_evidence(
         "main-pcs",
-        config
-            .pcs()
-            .prescribed_security(&instances.opening_protocol()),
+        config.pcs().prescribed_security(
+            &instances
+                .main_schedule(indexed.as_ref(), |_, _| ())
+                .into_protocol(),
+        ),
     );
     if preprocessed_cells > 0 {
         log2_candidates += report.add_opening_evidence(
             "preprocessed-pcs",
-            config
-                .preprocessed_pcs()
-                .prescribed_security(&instances.preprocessed_opening_protocol()),
+            config.preprocessed_pcs().prescribed_security(
+                &instances
+                    .preprocessed_schedule(indexed.as_ref(), |_, _| ())
+                    .into_protocol(),
+            ),
         );
     }
     for term in &mut report.terms[..num_reduction_terms] {
@@ -330,34 +478,78 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_reduction_with_nothing_to_charge_is_still_assessed() {
+        // A reduction that never runs reports a zero error, which is infinitely many bits.
+        //
+        //     zero reductions  ->  no challenge at all  ->  error 0
+        //
+        // Fixture state: one finite term at 100 bits, one term carrying no error.
+        //
+        //     union  ->  2^-100 + 0  ->  100 bits
+        //
+        // Rejecting the zero term would leave the component unassessed on a sound
+        // statement, and the proving path fails closed on an unassessed component.
+        let mut report = MultiStarkSecurityReport {
+            terms: Vec::new(),
+            unassessed: Vec::new(),
+        };
+        let evidence = PrescribedOpeningSecurity {
+            terms: alloc::vec![
+                SecurityTerm::new("commitment", ErrorBits::from_log2(100.0)),
+                SecurityTerm::new("reduction", ErrorBits::from_log2(f64::INFINITY)),
+            ],
+            log2_max_candidates: 0.0,
+        };
+
+        assert_eq!(report.add_opening_evidence("main-pcs", Some(evidence)), 0.0);
+        assert!(report.unassessed_components().is_empty());
+
+        // Both terms are kept, each attributed to the commitment it was charged for.
+        assert_eq!(report.terms().len(), 2);
+        assert!(
+            report
+                .terms()
+                .iter()
+                .all(|term| term.component == Some("main-pcs"))
+        );
+
+        // The zero-error term contributes nothing to the union, so the bound is the other.
+        assert_eq!(report.security_bits(), Some(100.0));
+
+        // A component whose every term is a zero error has no bound at all, so it is
+        // unassessed rather than certified at infinite security.
+        let mut empty = MultiStarkSecurityReport {
+            terms: Vec::new(),
+            unassessed: Vec::new(),
+        };
+        let nothing = PrescribedOpeningSecurity::single(
+            "reduction",
+            ErrorBits::from_log2(f64::INFINITY),
+            0.0,
+        );
+        empty.add_opening_evidence("main-pcs", Some(nothing));
+        assert_eq!(empty.unassessed_components(), ["main-pcs"]);
+    }
+
+    #[test]
     fn missing_or_malformed_opening_evidence_cannot_certify_a_target() {
-        for evidence in [
-            None,
-            Some(PrescribedOpeningSecurity {
-                error: ErrorBits::from_log2(100.0),
-                log2_max_candidates: f64::NAN,
-            }),
-            Some(PrescribedOpeningSecurity {
-                error: ErrorBits::from_log2(100.0),
-                log2_max_candidates: f64::INFINITY,
-            }),
-            Some(PrescribedOpeningSecurity {
-                error: ErrorBits::from_log2(100.0),
-                log2_max_candidates: -1.0,
-            }),
-            Some(PrescribedOpeningSecurity {
-                error: ErrorBits::from_log2(f64::NAN),
-                log2_max_candidates: 0.0,
-            }),
-            Some(PrescribedOpeningSecurity {
-                error: ErrorBits::from_log2(f64::INFINITY),
-                log2_max_candidates: 0.0,
-            }),
-            Some(PrescribedOpeningSecurity {
-                error: ErrorBits::from_log2(-1.0),
-                log2_max_candidates: 0.0,
-            }),
-        ] {
+        // A usable error paired with a candidate count that is not a bound.
+        let bad_candidates = [f64::NAN, f64::INFINITY, -1.0].map(|candidates| {
+            PrescribedOpeningSecurity::single("t", ErrorBits::from_log2(100.0), candidates)
+        });
+        // A usable candidate count paired with an error that is not a bound.
+        let bad_error = [f64::NAN, f64::INFINITY, -1.0]
+            .map(|bits| PrescribedOpeningSecurity::single("t", ErrorBits::from_log2(bits), 0.0));
+        // No evidence at all, and evidence carrying no term to charge.
+        let empty = PrescribedOpeningSecurity {
+            terms: Vec::new(),
+            log2_max_candidates: 0.0,
+        };
+        for evidence in core::iter::once(None)
+            .chain(core::iter::once(Some(empty)))
+            .chain(bad_candidates.into_iter().map(Some))
+            .chain(bad_error.into_iter().map(Some))
+        {
             let mut report = MultiStarkSecurityReport {
                 terms: Vec::new(),
                 unassessed: Vec::new(),

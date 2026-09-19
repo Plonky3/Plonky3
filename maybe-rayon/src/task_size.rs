@@ -57,6 +57,7 @@
 //! - `P3_MIN_PARALLEL_NS` fixes the serial time a loop must be worth, ignoring the pool size.
 //! - `P3_MAX_TASK_NS` sets the time budget one task holds once a loop does split.
 //! - Setting both to `0` drops every floor to a single item.
+//! - The default gate is calibrated separately for Linux and macOS dispatch costs.
 //!
 //! A floor of one is rayon's own unbounded splitting, which is what an A/B run of a loop wants.
 //!
@@ -139,9 +140,13 @@ const PICOS_PER_BYTE: u64 = 100;
 ///          32                  12.06 us      0.38 us
 /// ```
 ///
-/// Taken on a host shared with other work, so the constant is good to about a factor of two.
-/// Pools past 32 workers are still extrapolated.
+/// Non-macOS default, calibrated on Linux through 96 workers.
+#[cfg(not(target_os = "macos"))]
 const MIN_PARALLEL_PICOS_PER_WORKER: u64 = 625_000;
+
+/// macOS dispatch costs about 2.5 us per worker on Apple silicon.
+#[cfg(target_os = "macos")]
+const MIN_PARALLEL_PICOS_PER_WORKER: u64 = 2_500_000;
 
 /// Time one task holds once a loop does split, in picoseconds.
 ///
@@ -197,6 +202,16 @@ pub struct TaskBudget {
     pub min_parallel_ns: Option<u64>,
     /// Time one task holds once a loop splits.
     pub max_task_ns: u64,
+}
+
+#[cfg(feature = "parallel")]
+impl Default for TaskBudget {
+    fn default() -> Self {
+        Self {
+            min_parallel_ns: None,
+            max_task_ns: MAX_TASK_PICOS / 1_000,
+        }
+    }
 }
 
 /// Returned when the budgets are already fixed and can no longer be changed.
@@ -636,7 +651,7 @@ mod tests {
         // One item per task is also where an unfloored rayon loop already sits.
         // So undercharging an arithmetic-bound body can never cut it more finely than that.
         //
-        //     2 us budget / (64 KiB * 100 ps) = 0.003 -> floored to 1
+        //     2 us budget / (64 KiB * 100 ps) = 0.31 -> floored to 1
         assert_eq!(min_task_len_with(B, T, 1 << 20, 64 << 10), 1);
     }
 
@@ -718,6 +733,16 @@ mod tests {
         assert_eq!(current_num_threads(), 1);
         assert_eq!(min_task_len(1 << 19, 12), 1 << 19);
         assert!(!should_split(1 << 19, 12));
+    }
+
+    #[cfg(feature = "parallel")]
+    #[test]
+    fn the_public_default_exposes_the_compiled_in_budgets() {
+        // An absent fixed gate retains the platform-specific per-worker calibration.
+        let budget = TaskBudget::default();
+        assert_eq!(budget.min_parallel_ns, None);
+        // The public nanosecond value exactly represents the internal picosecond cap.
+        assert_eq!(budget.max_task_ns, MAX_TASK_PICOS / 1_000);
     }
 
     #[cfg(feature = "parallel")]

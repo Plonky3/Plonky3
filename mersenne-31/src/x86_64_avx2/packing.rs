@@ -160,6 +160,25 @@ impl PrimeCharacteristicRing for PackedMersenne31AVX2 {
         mul_2exp_i::<30, 1>(*self)
     }
 
+    #[inline]
+    fn mul_2exp_u64(&self, exp: u64) -> Self {
+        let res = mul_2exp(self.to_vector(), (exp % 31) as i32);
+        unsafe {
+            // Safety: `mul_2exp` returns values in canonical form when given values in canonical form.
+            Self::from_vector(res)
+        }
+    }
+
+    #[inline]
+    fn div_2exp_u64(&self, exp: u64) -> Self {
+        // `2^31 = 1`, so dividing by `2^exp` is multiplying by `2^(31 - exp)`.
+        let res = mul_2exp(self.to_vector(), ((31 - exp % 31) % 31) as i32);
+        unsafe {
+            // Safety: `mul_2exp` returns values in canonical form when given values in canonical form.
+            Self::from_vector(res)
+        }
+    }
+
     #[inline(always)]
     fn exp_const_u64<const POWER: u64>(&self) -> Self {
         // We provide specialised code for power 5 as this turns up regularly.
@@ -327,6 +346,29 @@ fn neg(val: __m256i) -> __m256i {
     unsafe {
         // Safety: If this code got compiled then AVX2 intrinsics are available.
         x86_64::_mm256_xor_si256(val, P)
+    }
+}
+
+/// Multiply a vector of Mersenne-31 field elements represented as values in {0, ..., P} by
+/// `2^exp`.
+///
+/// `exp` must lie in `0..31`. As `2^31 = 1` in the field, this rotates each 31-bit lane left
+/// by `exp` bits. If the input does not conform to this representation, the result is undefined.
+#[inline]
+#[must_use]
+fn mul_2exp(val: __m256i, exp: i32) -> __m256i {
+    debug_assert!((0..31).contains(&exp));
+    unsafe {
+        // Safety: If this code got compiled then AVX2 intrinsics are available.
+
+        // Shift the low bits up. This also shifts something unwanted into the sign bit.
+        let hi_bits_dirty = x86_64::_mm256_sll_epi32(val, x86_64::_mm_cvtsi32_si128(exp));
+
+        // Shift the high bits down.
+        let lo_bits = x86_64::_mm256_srl_epi32(val, x86_64::_mm_cvtsi32_si128(31 - exp));
+
+        // Clear the sign bit and combine the low and high bits.
+        x86_64::_mm256_or_si256(x86_64::_mm256_and_si256(hi_bits_dirty, P), lo_bits)
     }
 }
 

@@ -15,10 +15,13 @@ use p3_sumcheck::generic_degree::RoundPolyInterpolator;
 use p3_util::log2_strict_usize;
 
 use super::transcript::{FractionGkrProverTranscript, FractionGkrShape};
-use super::{Fraction, FractionGkrLayerProof, FractionGkrOutput, FractionGkrProof, SplitFraction};
+use super::{
+    Fraction, FractionGkrLayerProof, FractionGkrOutput, FractionGkrProof, LeafFraction,
+    LeafNumerator, MIXED_LEAF_STORAGE, SplitFraction,
+};
 
 struct InputLayer<'a, F: Field, EF: ExtensionField<F>> {
-    fraction: &'a Fraction<Poly<F>, PolyMaybePacked<F, EF>>,
+    fraction: LeafFraction<'a, F, EF>,
     eq_suffix: PolyMaybePacked<F, EF>,
 }
 
@@ -33,6 +36,29 @@ enum SplitFractionMaybePacked<F: Field, EF: ExtensionField<F>> {
     Scalar(SplitFraction<Poly<EF>>),
 }
 
+/// The second interpolation node, when a line has to be scaled onto it.
+///
+/// Stepping a line once evaluates it at `1 + 1`.
+///
+/// A field that enumerates its nodes as the integers is already there.
+///
+/// That is odd characteristic, extensions included, and the step stays in the narrow type.
+///
+/// A binary tower enumerates by bit pattern, where `1 + 1` is zero.
+///
+/// The node then has to be applied as a factor instead.
+fn scaled_node<A: Field>() -> Option<A> {
+    let node = A::interpolation_node(2);
+    (node != A::TWO).then_some(node)
+}
+
+/// Sum the round polynomial's two transmitted values over one layer's leaves.
+///
+/// The second value is taken at the second interpolation node, reached either by stepping
+/// each line once or by scaling its step, whichever the field allows.
+///
+/// The choice is made once here rather than per leaf: scaling widens the numerators into the
+/// extension, which turns the gate's mixed products into extension products.
 #[allow(clippy::too_many_arguments)]
 fn mixed_round_polys<N, A>(
     eq_suffix: &[A],
@@ -45,6 +71,7 @@ fn mixed_round_polys<N, A>(
     d1_lo: &[A],
     d1_hi: &[A],
     lambda: A,
+    node: Option<A>,
 ) -> [A; 2]
 where
     N: PrimeCharacteristicRing + Copy + Send + Sync,
@@ -59,13 +86,21 @@ where
     debug_assert_eq!(eq_suffix.len(), d1_lo.len());
     debug_assert_eq!(eq_suffix.len(), d1_hi.len());
 
-    eq_suffix
-        .par_iter()
-        .zip(n0_lo.par_iter().zip(n0_hi.par_iter()))
-        .zip(n1_lo.par_iter().zip(n1_hi.par_iter()))
-        .zip(d0_lo.par_iter().zip(d0_hi.par_iter()))
-        .zip(d1_lo.par_iter().zip(d1_hi.par_iter()))
-        .par_fold_reduce(
+    let leaves = || {
+        eq_suffix
+            .par_iter()
+            .zip(n0_lo.par_iter().zip(n0_hi.par_iter()))
+            .zip(n1_lo.par_iter().zip(n1_hi.par_iter()))
+            .zip(d0_lo.par_iter().zip(d0_hi.par_iter()))
+            .zip(d1_lo.par_iter().zip(d1_hi.par_iter()))
+    };
+
+    // Each arm carries its own fold body, so a combinator would have to wrap both of them.
+    #[allow(clippy::option_if_let_else)]
+    match node {
+        // Stepping once lands on the node, so numerators stay in their own type and the
+        // products stay mixed.
+        None => leaves().par_fold_reduce(
             || [A::ZERO; 2],
             |mut acc, ((((&eq_suffix, n0), n1), d0), d1)| {
                 let (&n0_lo, &n0_hi) = n0;
@@ -93,7 +128,35 @@ where
                 lhs.iter_mut().zip(rhs).for_each(|(lhs, rhs)| *lhs += rhs);
                 lhs
             },
-        )
+        ),
+        // Scaling lifts the numerators into the extension, so the second value is taken
+        // entirely there.
+        Some(node) => leaves().par_fold_reduce(
+            || [A::ZERO; 2],
+            |mut acc, ((((&eq_suffix, n0), n1), d0), d1)| {
+                let (&n0_lo, &n0_hi) = n0;
+                let (&n1_lo, &n1_hi) = n1;
+                let (&d0_lo, &d0_hi) = d0;
+                let (&d1_lo, &d1_hi) = d1;
+                let evaluate = |n0: A, n1: A, d0: A, d1: A| d1 * n0 + d0 * n1 + lambda * d0 * d1;
+
+                acc[0] += eq_suffix * (d1_lo * n0_lo + d0_lo * n1_lo + lambda * d0_lo * d1_lo);
+
+                let n0 = node * (n0_hi - n0_lo) + n0_lo;
+                let n1 = node * (n1_hi - n1_lo) + n1_lo;
+                let d0 = node * (d0_hi - d0_lo) + d0_lo;
+                let d1 = node * (d1_hi - d1_lo) + d1_lo;
+
+                acc[1] += eq_suffix * evaluate(n0, n1, d0, d1);
+
+                acc
+            },
+            |mut lhs, rhs| {
+                lhs.iter_mut().zip(rhs).for_each(|(lhs, rhs)| *lhs += rhs);
+                lhs
+            },
+        ),
+    }
 }
 
 fn reduce_fraction<N, A>(n0: &[N], n1: &[N], d0: &[A], d1: &[A]) -> SplitFraction<Poly<A>>
@@ -128,30 +191,55 @@ where
     }
 }
 
-impl<F: Field, EF: ExtensionField<F>> Fraction<Poly<F>, PolyMaybePacked<F, EF>> {
+impl<'a, F: Field, EF: ExtensionField<F>> LeafFraction<'a, F, EF> {
+    /// Fold adjacent fraction pairs into the first extension-field layer.
+    ///
+    /// The four arms are the two numerator storages crossed with the two denominator storages.
+    ///
+    /// Every arm lands in the extension field, so no layer below this one branches again.
     fn reduce(&self) -> SplitFractionMaybePacked<F, EF> {
-        match &self.d {
-            PolyMaybePacked::Packed(denom) => {
-                let numer = F::Packing::pack_slice(self.n.as_slice());
+        match (&self.n, self.d) {
+            (LeafNumerator::Base(numer), PolyMaybePacked::Packed(denom)) => {
+                // Base-field numerators are stored one scalar per evaluation.
+                // Packing them here lines them up with the packed denominator.
+                let numer = F::Packing::pack_slice(numer.as_slice());
                 let (n0, n1) = numer.split_at(numer.len() / 2);
                 let (d0, d1) = denom.as_slice().split_at(denom.num_evals() / 2);
                 SplitFractionMaybePacked::Packed(reduce_fraction(n0, n1, d0, d1))
             }
-            PolyMaybePacked::Scalar(denom) => {
-                let (n0, n1) = self.n.as_slice().split_at(self.n.num_evals() / 2);
+            (LeafNumerator::Base(numer), PolyMaybePacked::Scalar(denom)) => {
+                let (n0, n1) = numer.as_slice().split_at(numer.num_evals() / 2);
                 let (d0, d1) = denom.as_slice().split_at(denom.num_evals() / 2);
                 SplitFractionMaybePacked::Scalar(reduce_fraction(n0, n1, d0, d1))
             }
+            (
+                LeafNumerator::Ext(PolyMaybePacked::Packed(numer)),
+                PolyMaybePacked::Packed(denom),
+            ) => {
+                // Both halves already agree on storage, so the kernel runs with one type.
+                let (n0, n1) = numer.as_slice().split_at(numer.num_evals() / 2);
+                let (d0, d1) = denom.as_slice().split_at(denom.num_evals() / 2);
+                SplitFractionMaybePacked::Packed(reduce_fraction(n0, n1, d0, d1))
+            }
+            (
+                LeafNumerator::Ext(PolyMaybePacked::Scalar(numer)),
+                PolyMaybePacked::Scalar(denom),
+            ) => {
+                let (n0, n1) = numer.as_slice().split_at(numer.num_evals() / 2);
+                let (d0, d1) = denom.as_slice().split_at(denom.num_evals() / 2);
+                SplitFractionMaybePacked::Scalar(reduce_fraction(n0, n1, d0, d1))
+            }
+            _ => unreachable!("{MIXED_LEAF_STORAGE}"),
         }
     }
 }
 
 impl<'a, F: Field, EF: ExtensionField<F>> InputLayer<'a, F, EF> {
-    fn new(fraction: &'a Fraction<Poly<F>, PolyMaybePacked<F, EF>>, point: &Point<EF>) -> Self {
+    fn new(fraction: LeafFraction<'a, F, EF>, point: &Point<EF>) -> Self {
         assert_eq!(fraction.d.num_variables(), point.num_variables() + 1);
         assert_eq!(fraction.n.num_variables(), point.num_variables() + 1);
 
-        let eq_suffix = match &fraction.d {
+        let eq_suffix = match fraction.d {
             PolyMaybePacked::Packed(_) => PolyMaybePacked::Packed(Poly::new_packed_from_point(
                 &point.as_slice()[1..],
                 EF::ONE,
@@ -168,14 +256,15 @@ impl<'a, F: Field, EF: ExtensionField<F>> InputLayer<'a, F, EF> {
     }
 
     fn round_polys(&self, lambda: EF) -> [EF; 2] {
-        let (n0, n1) = self
-            .fraction
-            .n
-            .as_slice()
-            .split_at(self.fraction.n.num_evals() / 2);
-
-        match (&self.fraction.d, &self.eq_suffix) {
-            (PolyMaybePacked::Packed(denom), PolyMaybePacked::Packed(eq_suffix)) => {
+        match (&self.fraction.n, self.fraction.d, &self.eq_suffix) {
+            (
+                LeafNumerator::Base(numer),
+                PolyMaybePacked::Packed(denom),
+                PolyMaybePacked::Packed(eq_suffix),
+            ) => {
+                // Base-field numerators are stored one scalar per evaluation.
+                // Their quarters are therefore cut in scalars and packed afterwards.
+                let (n0, n1) = numer.as_slice().split_at(numer.num_evals() / 2);
                 let (d0, d1) = denom.as_slice().split_at(denom.num_evals() / 2);
                 let (n0_lo, n0_hi) = n0.split_at(n0.len() / 2);
                 let (n1_lo, n1_hi) = n1.split_at(n1.len() / 2);
@@ -193,10 +282,16 @@ impl<'a, F: Field, EF: ExtensionField<F>> InputLayer<'a, F, EF> {
                     d1_lo,
                     d1_hi,
                     EF::ExtensionPacking::from(lambda),
+                    scaled_node::<EF>().map(EF::ExtensionPacking::from),
                 )
                 .map(|value| EF::ExtensionPacking::to_ext_iter([value]).sum())
             }
-            (PolyMaybePacked::Scalar(denom), PolyMaybePacked::Scalar(eq_suffix)) => {
+            (
+                LeafNumerator::Base(numer),
+                PolyMaybePacked::Scalar(denom),
+                PolyMaybePacked::Scalar(eq_suffix),
+            ) => {
+                let (n0, n1) = numer.as_slice().split_at(numer.num_evals() / 2);
                 let (d0, d1) = denom.as_slice().split_at(denom.num_evals() / 2);
                 let half = eq_suffix.num_evals();
                 let (n0_lo, n0_hi) = n0.split_at(half);
@@ -215,22 +310,84 @@ impl<'a, F: Field, EF: ExtensionField<F>> InputLayer<'a, F, EF> {
                     d1_lo,
                     d1_hi,
                     lambda,
+                    scaled_node::<EF>(),
                 )
             }
-            _ => unreachable!("input denominator and equality table use the same representation"),
+            (
+                LeafNumerator::Ext(PolyMaybePacked::Packed(numer)),
+                PolyMaybePacked::Packed(denom),
+                PolyMaybePacked::Packed(eq_suffix),
+            ) => {
+                // Both halves are packed extension elements here.
+                // The kernel therefore runs with one type rather than two.
+                let (n0, n1) = numer.as_slice().split_at(numer.num_evals() / 2);
+                let (d0, d1) = denom.as_slice().split_at(denom.num_evals() / 2);
+                let (n0_lo, n0_hi) = n0.split_at(n0.len() / 2);
+                let (n1_lo, n1_hi) = n1.split_at(n1.len() / 2);
+                let (d0_lo, d0_hi) = d0.split_at(d0.len() / 2);
+                let (d1_lo, d1_hi) = d1.split_at(d1.len() / 2);
+
+                mixed_round_polys(
+                    eq_suffix.as_slice(),
+                    n0_lo,
+                    n0_hi,
+                    n1_lo,
+                    n1_hi,
+                    d0_lo,
+                    d0_hi,
+                    d1_lo,
+                    d1_hi,
+                    EF::ExtensionPacking::from(lambda),
+                    scaled_node::<EF>().map(EF::ExtensionPacking::from),
+                )
+                .map(|value| EF::ExtensionPacking::to_ext_iter([value]).sum())
+            }
+            (
+                LeafNumerator::Ext(PolyMaybePacked::Scalar(numer)),
+                PolyMaybePacked::Scalar(denom),
+                PolyMaybePacked::Scalar(eq_suffix),
+            ) => {
+                let (n0, n1) = numer.as_slice().split_at(numer.num_evals() / 2);
+                let (d0, d1) = denom.as_slice().split_at(denom.num_evals() / 2);
+                let half = eq_suffix.num_evals();
+                let (n0_lo, n0_hi) = n0.split_at(half);
+                let (n1_lo, n1_hi) = n1.split_at(half);
+                let (d0_lo, d0_hi) = d0.split_at(half);
+                let (d1_lo, d1_hi) = d1.split_at(half);
+
+                mixed_round_polys(
+                    eq_suffix.as_slice(),
+                    n0_lo,
+                    n0_hi,
+                    n1_lo,
+                    n1_hi,
+                    d0_lo,
+                    d0_hi,
+                    d1_lo,
+                    d1_hi,
+                    lambda,
+                    scaled_node::<EF>(),
+                )
+            }
+            _ => unreachable!("{MIXED_LEAF_STORAGE}"),
         }
     }
 
     fn fold(self, coordinate: EF, r: EF) -> Layer<F, EF> {
         let Fraction { n, d } = self.fraction;
-        let (n0, n1) = n.as_slice().split_at(n.num_evals() / 2);
 
-        let (fraction, eq_suffix) = match (d, self.eq_suffix) {
-            (PolyMaybePacked::Packed(denom), PolyMaybePacked::Packed(mut eq_suffix)) => {
+        let (fraction, eq_suffix) = match (n, d, self.eq_suffix) {
+            (
+                LeafNumerator::Base(numer),
+                PolyMaybePacked::Packed(denom),
+                PolyMaybePacked::Packed(mut eq_suffix),
+            ) => {
                 eq_suffix.sum_prefix_var_mut();
+                let (n0, n1) = numer.as_slice().split_at(numer.num_evals() / 2);
                 let (d0, d1) = denom.as_slice().split_at(denom.num_evals() / 2);
                 let r_packed = EF::ExtensionPacking::from(r);
                 (
+                    // This fold is what promotes base-field numerators into the extension field.
                     SplitFractionMaybePacked::Packed(SplitFraction {
                         n0: Poly::new(n0).fix_prefix_var_to_packed(r),
                         n1: Poly::new(n1).fix_prefix_var_to_packed(r),
@@ -240,8 +397,13 @@ impl<'a, F: Field, EF: ExtensionField<F>> InputLayer<'a, F, EF> {
                     PolyMaybePacked::Packed(eq_suffix),
                 )
             }
-            (PolyMaybePacked::Scalar(denom), PolyMaybePacked::Scalar(mut eq_suffix)) => {
+            (
+                LeafNumerator::Base(numer),
+                PolyMaybePacked::Scalar(denom),
+                PolyMaybePacked::Scalar(mut eq_suffix),
+            ) => {
                 eq_suffix.sum_prefix_var_mut();
+                let (n0, n1) = numer.as_slice().split_at(numer.num_evals() / 2);
                 let (d0, d1) = denom.as_slice().split_at(denom.num_evals() / 2);
                 (
                     SplitFractionMaybePacked::Scalar(SplitFraction {
@@ -253,7 +415,45 @@ impl<'a, F: Field, EF: ExtensionField<F>> InputLayer<'a, F, EF> {
                     PolyMaybePacked::Scalar(eq_suffix),
                 )
             }
-            _ => unreachable!("input denominator and equality table use the same representation"),
+            (
+                LeafNumerator::Ext(PolyMaybePacked::Packed(numer)),
+                PolyMaybePacked::Packed(denom),
+                PolyMaybePacked::Packed(mut eq_suffix),
+            ) => {
+                eq_suffix.sum_prefix_var_mut();
+                let (n0, n1) = numer.as_slice().split_at(numer.num_evals() / 2);
+                let (d0, d1) = denom.as_slice().split_at(denom.num_evals() / 2);
+                let r_packed = EF::ExtensionPacking::from(r);
+                (
+                    // Already in the extension field: numerator and denominator fold alike.
+                    SplitFractionMaybePacked::Packed(SplitFraction {
+                        n0: Poly::new(n0).fix_prefix_var(r_packed),
+                        n1: Poly::new(n1).fix_prefix_var(r_packed),
+                        d0: Poly::new(d0).fix_prefix_var(r_packed),
+                        d1: Poly::new(d1).fix_prefix_var(r_packed),
+                    }),
+                    PolyMaybePacked::Packed(eq_suffix),
+                )
+            }
+            (
+                LeafNumerator::Ext(PolyMaybePacked::Scalar(numer)),
+                PolyMaybePacked::Scalar(denom),
+                PolyMaybePacked::Scalar(mut eq_suffix),
+            ) => {
+                eq_suffix.sum_prefix_var_mut();
+                let (n0, n1) = numer.as_slice().split_at(numer.num_evals() / 2);
+                let (d0, d1) = denom.as_slice().split_at(denom.num_evals() / 2);
+                (
+                    SplitFractionMaybePacked::Scalar(SplitFraction {
+                        n0: Poly::new(n0).fix_prefix_var(r),
+                        n1: Poly::new(n1).fix_prefix_var(r),
+                        d0: Poly::new(d0).fix_prefix_var(r),
+                        d1: Poly::new(d1).fix_prefix_var(r),
+                    }),
+                    PolyMaybePacked::Scalar(eq_suffix),
+                )
+            }
+            _ => unreachable!("{MIXED_LEAF_STORAGE}"),
         };
 
         let mut layer = Layer {
@@ -293,10 +493,14 @@ impl<F: Field, EF: ExtensionField<F>> Layer<F, EF> {
     fn round_polys(&self, lambda: EF) -> [EF; 2] {
         match (&self.fraction, &self.eq_suffix) {
             (SplitFractionMaybePacked::Packed(fraction), PolyMaybePacked::Packed(eq)) => fraction
-                .round_polys(eq, EF::ExtensionPacking::from(lambda))
+                .round_polys(
+                    eq,
+                    EF::ExtensionPacking::from(lambda),
+                    scaled_node::<EF>().map(EF::ExtensionPacking::from),
+                )
                 .map(|value| EF::ExtensionPacking::to_ext_iter([value]).sum()),
             (SplitFractionMaybePacked::Scalar(fraction), PolyMaybePacked::Scalar(eq)) => {
-                fraction.round_polys(eq, lambda)
+                fraction.round_polys(eq, lambda, scaled_node::<EF>())
             }
             _ => unreachable!("fraction and equality tables use the same representation"),
         }
@@ -372,7 +576,7 @@ where
         )
     }
 
-    fn round_polys(&self, eq_suffix: &Poly<A>, lambda: A) -> [A; 2] {
+    fn round_polys(&self, eq_suffix: &Poly<A>, lambda: A, node: Option<A>) -> [A; 2] {
         let half = eq_suffix.num_evals();
         let (n0_lo, n0_hi) = self.n0.as_slice().split_at(half);
         let (n1_lo, n1_hi) = self.n1.as_slice().split_at(half);
@@ -390,6 +594,7 @@ where
             d1_lo,
             d1_hi,
             lambda,
+            node,
         )
     }
 
@@ -493,6 +698,18 @@ impl<F: Field, EF: ExtensionField<F>> SplitFractionMaybePacked<F, EF> {
 ///
 /// The returned message contains the cubic evaluations expected by the existing verifier.
 /// `q_sum` is the normalized quadratic sum `q(0) + q(1)` used only by the prover.
+///
+/// # Interpolation domain
+///
+/// The message carries the cubic at the four nodes the verifier interpolates over.
+///
+/// Those nodes are the field's own enumeration of the first four values, not the integers.
+///
+/// The two coincide in odd characteristic, extensions included.
+///
+/// Over a binary tower they do not.
+///
+/// There the integer three collapses onto the second node, and two onto the first.
 fn restore_equality_factor<EF: Field>(
     quadratic_evals: [EF; 2],
     normalized_sum: EF,
@@ -502,11 +719,20 @@ fn restore_equality_factor<EF: Field>(
 ) -> ([EF; 3], EF) {
     let q1 = (normalized_sum - (EF::ONE - coordinate) * quadratic_evals[0]) * coordinate.inverse();
     let q_sum = quadratic_evals[0] + q1;
-    let q3 = interpolator.eval(&quadratic_evals, q_sum, EF::from_u8(3));
+    let q3 = interpolator.eval(&quadratic_evals, q_sum, EF::interpolation_node(3));
+
+    // The equality factor in this variable is affine, so two values fix it everywhere:
+    //
+    //     eq(0)         = 1 - coordinate
+    //     eq(1) - eq(0) = 2 * coordinate - 1
+    //
+    // Each node scales the step.
+    //
+    // Stepping would reach the next node only in odd characteristic.
     let equality_0 = EF::ONE - coordinate;
     let equality_step = coordinate.double() - EF::ONE;
-    let equality_2 = equality_0 + EF::TWO * equality_step;
-    let equality_3 = equality_2 + equality_step;
+    let equality_2 = equality_0 + EF::interpolation_node(2) * equality_step;
+    let equality_3 = equality_0 + EF::interpolation_node(3) * equality_step;
     let round_poly = [
         equality_prefix * equality_0 * quadratic_evals[0],
         equality_prefix * equality_2 * quadratic_evals[1],
@@ -527,8 +753,10 @@ fn restore_equality_factor<EF: Field>(
 ///
 /// Panics if the numerator and denominator have different variable counts, if
 /// they have no variables, or if the fully reduced root denominator is zero.
+///
+/// Panics if an extension-field numerator and its denominator disagree on storage.
 pub fn prove_fractional_gkr<F, EF, Challenger>(
-    fraction: &Fraction<Poly<F>, PolyMaybePacked<F, EF>>,
+    fraction: LeafFraction<'_, F, EF>,
     challenger: &mut Challenger,
 ) -> (FractionGkrProof<EF>, FractionGkrOutput<EF>)
 where
@@ -538,6 +766,21 @@ where
 {
     let num_variables = fraction.n.num_variables();
     assert_eq!(num_variables, fraction.d.num_variables());
+
+    // The round kernel reads the two halves side by side.
+    //
+    // An extension-field numerator therefore has to be stored the way its denominator is.
+    //
+    // Nothing downstream can recover from a mixed pair.
+    //
+    // Where it would surface depends on the size, so it is rejected here instead.
+    if let LeafNumerator::Ext(numer) = fraction.n {
+        assert_eq!(
+            matches!(numer, PolyMaybePacked::Packed(_)),
+            matches!(fraction.d, PolyMaybePacked::Packed(_)),
+            "{MIXED_LEAF_STORAGE}"
+        );
+    }
     assert!(
         num_variables >= 1,
         "fraction GKR requires at least one input variable"
@@ -548,10 +791,11 @@ where
     // the input at the sampled branch coordinate.
     if num_variables == 1 {
         let denom = fraction.d.clone().unpack();
+        let [n0, n1] = fraction.n.leaf_pair();
         let root_claims = SplitFraction {
-            n0: EF::from(fraction.n.as_slice()[0]),
+            n0,
             d0: denom.as_slice()[0],
-            n1: EF::from(fraction.n.as_slice()[1]),
+            n1,
             d1: denom.as_slice()[1],
         };
         let root_denominator = root_claims.d0 * root_claims.d1;
@@ -603,20 +847,29 @@ where
     // variables live entirely inside SIMD lanes, where the backing-table folds
     // cannot address them. At this tiny boundary, unpack once and reuse the
     // scalar prover so its proof and transcript stay identical to scalar storage.
-    let scalar_fraction = if let PolyMaybePacked::Packed(denom) = &fraction.d
-        && denom.num_variables() < 3
-    {
-        Some(Fraction {
-            n: fraction.n.clone(),
-            d: PolyMaybePacked::Scalar(denom.unpack::<F, EF>()),
-        })
-    } else {
-        None
+    let scalar_denominator = match fraction.d {
+        PolyMaybePacked::Packed(denom) if denom.num_variables() < 3 => {
+            Some(PolyMaybePacked::Scalar(denom.unpack::<F, EF>()))
+        }
+        _ => None,
     };
-    let fraction = scalar_fraction.as_ref().unwrap_or(fraction);
+    // A packed extension-field numerator follows its denominator out of packed storage.
+    // The round kernel reads the two side by side, so they cannot part ways here.
+    let scalar_numerator = match (&scalar_denominator, &fraction.n) {
+        (Some(_), LeafNumerator::Ext(PolyMaybePacked::Packed(numer))) => {
+            Some(PolyMaybePacked::Scalar(numer.unpack::<F, EF>()))
+        }
+        _ => None,
+    };
+    let fraction = Fraction {
+        n: scalar_numerator
+            .as_ref()
+            .map_or(fraction.n, LeafNumerator::Ext),
+        d: scalar_denominator.as_ref().unwrap_or(fraction.d),
+    };
 
     // Build every reduced tree layer while retaining the original input for the
-    // final mixed base/extension-field layer.
+    // final leaf layer, the only one whose numerator may sit in the base field.
     let mut fractions = vec![fraction.reduce()];
     while fractions.last().unwrap().num_variables() > 1 {
         fractions.push(fractions.last().unwrap().reduce());
@@ -697,7 +950,7 @@ where
         });
     }
 
-    // The original lookup arrays are the only mixed base/extension-field layer.
+    // The leaf tables are the only layer whose numerator may sit in the base field.
     // Its first fold promotes the numerators; all later rounds use Layer.
     let lambda = transcript.begin_layer();
     let mut normalized_sum = numerator + lambda * denominator;

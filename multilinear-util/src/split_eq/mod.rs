@@ -1350,6 +1350,10 @@ mod tests {
         // Grow the inner block until this one does.
         let mut inner_vars = 12;
         while !should_split(prefix_blocks, item_bytes(inner_vars)) {
+            // A forced never-split budget must not grow the fixture without bound.
+            if split_vars + inner_vars == 24 {
+                return;
+            }
             inner_vars += 1;
         }
 

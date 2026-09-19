@@ -190,8 +190,6 @@ impl<F: TwoAdicField, InputProof: Sync, InputError: Debug + Sync, EF: ExtensionF
                 .collect_n(initial_height);
             reverse_slice_index_bits(&mut halve_inv_powers);
 
-            let two = F::ONE + F::ONE;
-
             // The first fold reads the borrowed matrix row by row, so `m` is never copied.
             let mut data = EF::zero_vec(initial_height);
             data.par_chunks_exact_mut(pairs_per_row)
@@ -210,10 +208,10 @@ impl<F: TwoAdicField, InputProof: Sync, InputError: Debug + Sync, EF: ExtensionF
 
             for _ in 1..log_arity {
                 let height = data.len() / 2;
-                // Since j << 1 is always >= j, we never overwrite data we haven't read yet.
-                for j in 0..height {
-                    halve_inv_powers[j] = two * halve_inv_powers[j << 1].square();
-                }
+                // For a bit-reversed table of `g_inv^i / 2` over `n` elements, the first `n/2`
+                // entries already equal the bit-reversed table of `(g_inv^2)^i / 2` over `n/2`
+                // elements, i.e. the table this round's halving factors need. So each round
+                // reuses a shrinking prefix of the same table.
                 next_data[..height]
                     .par_iter_mut()
                     .zip(data.par_chunks_exact(2))
@@ -453,9 +451,17 @@ where
 
         // Precompute adjusted barycentric weights once per opening point.
         // adjusted[i] = 1/(z - x_i) - 1/z, reused across all matrices opened at z.
+        // Every matrix opened at `z` interpolates over a prefix of at most
+        // `denoms.len() >> log_blowup` weights (see `h` below), so that is all we compute.
         let adjusted_weights: LinearMap<Challenge, Vec<Challenge>> = inv_denoms
             .iter()
-            .map(|(point, denoms)| (*point, compute_adjusted_weights(*point, denoms)))
+            .map(|(point, denoms)| {
+                let prefix_len = denoms.len() >> self.fri.log_blowup;
+                (
+                    *point,
+                    compute_adjusted_weights(*point, &denoms[..prefix_len]),
+                )
+            })
             .collect();
 
         // Evaluate coset representations and write openings to the challenger
@@ -823,14 +829,21 @@ where
             return lde.split_rows(domain.size()).0.as_cow().bit_reverse_rows();
         }
 
-        // The committed LDE contains bit-reversed evaluations over `gH`.
-        // Un-bit-reverse, coset iDFT to recover coefficients, truncate to
-        // the original polynomial degree, then coset DFT onto the target domain.
+        // The committed LDE contains bit-reversed evaluations over `gH`. Its first
+        // `poly_height` rows are exactly the bit-reversed evaluations over the
+        // order-`poly_height` subgroup `gK` (bit-reversing an index below `poly_height`
+        // within the larger domain equals bit-reversing it within the smaller one and
+        // shifting the result up by `log_blowup` zero bits). Un-bit-reversing that prefix
+        // and taking a `poly_height`-sized coset iDFT therefore recovers the polynomial's
+        // coefficients directly, without touching the rest of the LDE.
         let poly_height = lde.height() >> self.fri.log_blowup;
-        let lde_mat = lde.as_view().bit_reverse_rows().to_row_major_matrix();
+        let lde_mat = lde
+            .split_rows(poly_height)
+            .0
+            .bit_reverse_rows()
+            .to_row_major_matrix();
         let mut coeffs = self.dft.coset_idft_batch(lde_mat, Val::GENERATOR);
         let width = coeffs.width();
-        coeffs.values.truncate(poly_height * width);
         coeffs.values.resize(domain.size() * width, Val::ZERO);
         let result = self
             .dft
@@ -1298,7 +1311,7 @@ mod tests {
         let mut rng = SmallRng::seed_from_u64(1);
         let folding = TwoAdicFriFolding::<(), ()>(PhantomData);
 
-        for log_arity in 1..4 {
+        for log_arity in 1..=4 {
             for log_height in 0..5 {
                 let beta: EF = rng.random();
                 let m = RowMajorMatrix::<EF>::rand(&mut rng, 1 << log_height, 1 << log_arity);

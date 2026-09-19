@@ -10,6 +10,10 @@
 //! The generic-degree sumcheck proves that sum.
 //! A zerocheck always claims zero, so the verifier rejects any proof that claims a different sum.
 
+#[cfg(test)]
+pub(crate) mod backend_tests;
+#[cfg(test)]
+mod prime_transcript_tests;
 pub mod transcript;
 
 use alloc::collections::{BTreeMap, BTreeSet};
@@ -32,10 +36,13 @@ use p3_sumcheck::generic_degree::{
 use p3_sumcheck::layout::Table;
 use thiserror::Error;
 
-use crate::folder::{InteractionMultilinearFolder, MultilinearFolder, ProverAir, VerifierAir};
+use crate::backend::{GenericBackend, ZerocheckBackend};
+use crate::folder::{
+    InteractionMultilinearFolder, MultilinearFolder, ProverAir, VerifierAir, boundary_io_pins,
+};
 use crate::lookup::{ActiveLookupRuntime, AirLinkClaim, LookupRuntime};
 use crate::opening::{OpeningClaims, TableOpening};
-use crate::rounds::{AirDegrees, AirOpenings, RoundStateBase, RoundStateExt, Stage, StageCoupling};
+use crate::rounds::{AirDegrees, AirOpenings, AirProfile, RoundStateBase, Stage, StageCoupling};
 use crate::selectors::{BoundaryEvals, PeriodicError, periodic_evals_at, periodic_num_variables};
 use crate::zerocheck::transcript::{
     ZerocheckChallenges, ZerocheckProverTranscript, ZerocheckShape, ZerocheckVerifierTranscript,
@@ -132,11 +139,26 @@ pub struct ZerocheckProof<F, EF> {
 pub struct AirZerocheck<'a, A> {
     /// AIRs whose alpha-batched constraints are checked.
     airs: &'a [&'a A],
+    /// Setup-time AIR metadata, absent for standalone reductions.
+    profiles: Option<&'a [AirProfile]>,
     /// Grinding difficulty per sumcheck round, or `0` to skip.
     pow_bits: usize,
 }
 
 /// Native per-variable degrees of one AIR's ordinary constraints and lookup links.
+///
+/// See [`get_air_profile`], which also counts the batched constraints.
+pub(crate) fn get_air_degrees<F, EF, A>(air: &A) -> AirDegrees
+where
+    F: Field,
+    EF: ExtensionField<F>,
+    A: Air<SymbolicAirBuilder<F, EF>>,
+{
+    get_air_profile::<F, EF, A>(air).degrees
+}
+
+/// Native per-variable degrees of one AIR's ordinary constraints and lookup links,
+/// and the number of constraints the folder batches.
 ///
 /// Both families come from one symbolic pass and are measured with the eq weight stripped.
 /// A degree of zero means the AIR declares nothing in that family.
@@ -155,12 +177,22 @@ pub struct AirZerocheck<'a, A> {
 ///
 /// The symbolic degree is a lower bound even when the AIR supplies a smaller hint.
 ///
+/// A hint never covers the public boundary pins the folder injects:
+///
+/// ```text
+///     hint -> the AIR's own constraints
+///     pins -> one per cell the AIR lists as a public input, scored separately
+/// ```
+///
+/// A hinted degree of one therefore still yields two once an AIR lists a cell.
+///
 /// # Panics
 ///
 /// Panics if the AIR declares mutually-exclusive interactions.
-/// Panics if a declared family is constant, since a constant has no round polynomial.
+/// Panics if a declared family is constant and no listed cell lifts it,
+/// since a constant has no round polynomial of its own.
 /// Panics if the AIR declares neither constraints nor interactions.
-pub(crate) fn get_air_degrees<F, EF, A>(air: &A) -> AirDegrees
+pub(crate) fn get_air_profile<F, EF, A>(air: &A) -> AirProfile
 where
     F: Field,
     EF: ExtensionField<F>,
@@ -177,7 +209,9 @@ where
     let base_constraints = builder.base_constraints();
     let extension_constraints = builder.extension_constraints();
     validate_successor_columns(air, &builder, &base_constraints, &extension_constraints);
-    let has_constraints = !base_constraints.is_empty() || !extension_constraints.is_empty();
+    let has_own_constraints = !base_constraints.is_empty() || !extension_constraints.is_empty();
+    let pins = boundary_io_pins(air.public_boundary_io());
+    let has_constraints = has_own_constraints || pins.count > 0;
     let symbolic_constraint_degree = base_constraints
         .iter()
         .map(|expression| expression.poly_degree(2, &[]))
@@ -188,7 +222,7 @@ where
         )
         .max()
         .unwrap_or(0);
-    let constraint_degree = if has_constraints {
+    let own_constraint_degree = if has_own_constraints {
         air.max_constraint_degree()
             .map_or(symbolic_constraint_degree, |degree| {
                 degree.max(symbolic_constraint_degree)
@@ -196,6 +230,10 @@ where
     } else {
         0
     };
+
+    // Neither source above sees the pins.
+    // Score them here so the round polynomials carry enough evaluations for both groups.
+    let constraint_degree = own_constraint_degree.max(pins.degree);
 
     let has_interactions = !builder.global_interactions().is_empty()
         || builder
@@ -244,9 +282,13 @@ where
         "zerocheck requires every AIR to contribute constraints or interactions"
     );
 
-    AirDegrees {
-        constraints: constraint_degree,
-        interactions: interaction_degree,
+    AirProfile {
+        degrees: AirDegrees {
+            constraints: constraint_degree,
+            interactions: interaction_degree,
+        },
+        // The folder batches every asserted constraint, then one pin per listed cell.
+        num_constraints: base_constraints.len() + extension_constraints.len() + pins.count,
     }
 }
 
@@ -398,7 +440,29 @@ impl<'a, A> AirZerocheck<'a, A> {
     ///
     /// AIRs are batched in the order supplied here; proof opening claims use the same order.
     pub const fn new(airs: &'a [&'a A], pow_bits: usize) -> Self {
-        Self { airs, pow_bits }
+        Self {
+            airs,
+            profiles: None,
+            pow_bits,
+        }
+    }
+
+    /// Reuse the symbolic AIR pass performed by multi-STARK setup.
+    pub(crate) fn with_profiles(
+        airs: &'a [&'a A],
+        profiles: &'a [AirProfile],
+        pow_bits: usize,
+    ) -> Self {
+        assert_eq!(
+            airs.len(),
+            profiles.len(),
+            "one cached AIR profile is required for each AIR",
+        );
+        Self {
+            airs,
+            profiles: Some(profiles),
+            pow_bits,
+        }
     }
 
     /// Check that prover inputs are aligned with the AIR batch and its declared layouts.
@@ -474,7 +538,7 @@ impl<'a, A> AirZerocheck<'a, A> {
         <EF as ExtensionField<F>>::ExtensionPacking: From<EF> + From<<F as Field>::Packing>,
         Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
     {
-        self.prove_with_lookup(
+        self.prove_with_lookup::<F, EF, GenericBackend, Challenger>(
             preprocessed,
             tables,
             public_values,
@@ -489,6 +553,8 @@ impl<'a, A> AirZerocheck<'a, A> {
     /// This sumcheck therefore starts from that claim instead of from zero, and each AIR
     /// stage takes over its own share when the cube reaches that AIR's trace height.
     ///
+    /// Backend `B` computes each stage's round polynomials, folds, and openings.
+    ///
     /// # Panics
     ///
     /// Panics if the input lengths disagree with the number of AIRs.
@@ -496,7 +562,7 @@ impl<'a, A> AirZerocheck<'a, A> {
     /// Panics if a periodic column's period is not a power of two dividing the trace height.
     /// Panics if any trace height is less than two.
     #[tracing::instrument(skip_all)]
-    pub(crate) fn prove_with_lookup<F, EF, Challenger>(
+    pub(crate) fn prove_with_lookup<F, EF, B, Challenger>(
         &self,
         preprocessed: &[Option<&Table<F>>],
         tables: &[&Table<F>],
@@ -507,8 +573,8 @@ impl<'a, A> AirZerocheck<'a, A> {
     where
         F: TranscriptField,
         EF: ExtensionField<F>,
-        A: ProverAir<F, EF>,
-        <EF as ExtensionField<F>>::ExtensionPacking: From<EF> + From<<F as Field>::Packing>,
+        A: BaseAir<F> + Air<SymbolicAirBuilder<F, EF>>,
+        B: ZerocheckBackend<F, EF, A>,
         Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
     {
         self.validate_inputs(tables, preprocessed, public_values);
@@ -551,10 +617,21 @@ impl<'a, A> AirZerocheck<'a, A> {
         // Ordinary constraints and lookup links keep their native symbolic degrees.
         // The round state evaluates an AIR up to the larger of the two degrees.
         // It stops accumulating the lower-degree family at that family's own final node.
-        let degrees = self
-            .airs
+        let owned_profiles;
+        let profiles = match self.profiles {
+            Some(profiles) => profiles,
+            None => {
+                owned_profiles = self
+                    .airs
+                    .iter()
+                    .map(|&air| get_air_profile::<F, EF, A>(air))
+                    .collect::<Vec<_>>();
+                &owned_profiles
+            }
+        };
+        let degrees = profiles
             .iter()
-            .map(|&air| get_air_degrees::<F, EF, A>(air))
+            .map(|profile| profile.degrees)
             .collect::<Vec<_>>();
 
         // Mirror the verifier's rule: every AIR that declares lookups must carry a link.
@@ -644,14 +721,14 @@ impl<'a, A> AirZerocheck<'a, A> {
                     .iter()
                     .map(|&i| public_values[i])
                     .collect::<Vec<_>>();
-                let degrees = indices.iter().map(|&i| degrees[i]).collect::<Vec<_>>();
+                let profiles = indices.iter().map(|&i| profiles[i]).collect::<Vec<_>>();
                 Stage::new(
                     airs,
                     public_values,
                     indices,
                     preprocessed,
                     tables,
-                    degrees,
+                    profiles,
                     coupling,
                 )
             })
@@ -678,9 +755,9 @@ impl<'a, A> AirZerocheck<'a, A> {
             };
 
             let mut challenges = Vec::with_capacity(log_height);
-            // Active stages live as folded extension states.
+            // Active stages live as the backend's folded states.
             // claims[i] is the current reduced claim for states[i].
-            let mut states = Vec::<RoundStateExt<'_, '_, A, F, EF>>::new();
+            let mut states = Vec::new();
             let mut claims = Vec::<EF>::new();
 
             // Before any height activates, the full lookup claim is dormant.
@@ -721,7 +798,7 @@ impl<'a, A> AirZerocheck<'a, A> {
                 // Existing stages already live over the extension field.
                 // Extend each stage's internal round polynomial to the global degree and accumulate it.
                 for (state, &claim) in states.iter_mut().zip(claims.iter()) {
-                    let round_poly = state.round_poly(&eq_suffix);
+                    let round_poly = B::round(state, &eq_suffix);
                     let q1 = (claim - (EF::ONE - tau_round) * round_poly[0]) * tau_round_inv;
                     let unweighted_claim = round_poly[0] + q1;
                     let round_poly = interpolators[round_poly.len()].extend_evals(
@@ -745,7 +822,7 @@ impl<'a, A> AirZerocheck<'a, A> {
                         .map(|&air_index| beta_powers[air_index])
                         .collect::<Vec<_>>();
                     let mut state = RoundStateBase::new(stage, alpha, eta, betas, tau);
-                    let round_poly = state.round_poly(&eq_suffix);
+                    let round_poly = B::round0(&mut state, &eq_suffix);
                     let q1 =
                         (activating_claim - (EF::ONE - tau_round) * round_poly[0]) * tau_round_inv;
                     let unweighted_claim = round_poly[0] + q1;
@@ -787,7 +864,7 @@ impl<'a, A> AirZerocheck<'a, A> {
                     let q1 = (*claim - (EF::ONE - tau_round) * round_poly[0]) * tau_round_inv;
                     let unweighted_claim = round_poly[0] + q1;
                     *claim = interpolator.eval(round_poly, unweighted_claim, r);
-                    state.fold(r);
+                    B::fold(state, r);
                 }
 
                 // The newly activated stage joins the active list only after this round.
@@ -798,7 +875,7 @@ impl<'a, A> AirZerocheck<'a, A> {
                         (activating_claim - (EF::ONE - tau_round) * round_poly[0]) * tau_round_inv;
                     let unweighted_claim = round_poly[0] + q1;
                     claims.push(interpolator.eval(&round_poly, unweighted_claim, r));
-                    states.push(state.fold(r));
+                    states.push(B::fold0(state, r));
                 }
 
                 // Advance the shared equality factors to the next round.
@@ -834,7 +911,7 @@ impl<'a, A> AirZerocheck<'a, A> {
             .take(self.airs.len())
             .collect::<Vec<Option<AirOpenings<EF>>>>();
         for state in states {
-            for (air_index, opening) in state.into_openings() {
+            for (air_index, opening) in B::openings(state) {
                 openings[air_index] = Some(opening);
             }
         }
@@ -1104,11 +1181,15 @@ impl<'a, A> AirZerocheck<'a, A> {
         });
 
         // The same symbolic pass fixes the round degree and says which AIRs declare lookups.
-        let degrees = self
-            .airs
-            .iter()
-            .map(|&air| get_air_degrees::<F, EF, A>(air))
-            .collect::<Vec<_>>();
+        let degrees = self.profiles.map_or_else(
+            || {
+                self.airs
+                    .iter()
+                    .map(|&air| get_air_degrees::<F, EF, A>(air))
+                    .collect::<Vec<_>>()
+            },
+            |profiles| profiles.iter().map(|profile| profile.degrees).collect(),
+        );
         validate_lookup_links(&degrees, lookup)?;
 
         // One extra degree for the eq weight the sumcheck carries.
@@ -1464,23 +1545,26 @@ mod tests {
     use alloc::vec::Vec;
     use core::borrow::Borrow;
 
-    use p3_air::{Air, AirBuilder, BaseAir, WindowAccess};
+    use p3_air::{Air, AirBuilder, BaseAir, BoundaryEnd, BoundaryPublic, WindowAccess};
     use p3_baby_bear::{
         BABYBEAR_POSEIDON2_HALF_FULL_ROUNDS, BABYBEAR_POSEIDON2_PARTIAL_ROUNDS_16,
         BABYBEAR_S_BOX_DEGREE, BabyBear, GenericPoseidon2LinearLayersBabyBear, Poseidon2BabyBear,
     };
+    use p3_binary_field::{BinaryChallenger, BinaryField128};
     use p3_blake3_air::Blake3Air;
-    use p3_challenger::DuplexChallenger;
+    use p3_challenger::{DuplexChallenger, HashChallenger};
     use p3_field::PrimeCharacteristicRing;
     use p3_field::extension::BinomialExtensionField;
+    use p3_keccak::Keccak256Hash;
     use p3_lookup::{Count, InteractionBuilder};
     use p3_matrix::Matrix;
     use p3_matrix::dense::RowMajorMatrix;
     use p3_multilinear_util::poly::Poly;
     use p3_poseidon2_air::{Poseidon2Air, RoundConstants};
     use p3_util::log2_strict_usize;
-    use rand::SeedableRng;
+    use rand::distr::{Distribution, StandardUniform};
     use rand::rngs::SmallRng;
+    use rand::{RngExt, SeedableRng};
 
     use super::*;
 
@@ -1820,6 +1904,54 @@ mod tests {
     }
 
     #[test]
+    fn cached_profile_preserves_the_proof() {
+        // The setup-time profile must replace only symbolic analysis.
+        // Identical transcripts must therefore produce identical proof data and challenges.
+        let trace = fib_trace(8);
+        let public_values = fib_public_values(8);
+        let air = FibAir;
+        let airs = [&air];
+        let traces = [&trace];
+        let public_values = [&public_values[..]];
+
+        // The standalone path derives its metadata immediately before proving.
+        let uncached = AirZerocheck::new(&airs, 0);
+        let (uncached_proof, uncached_point) =
+            prove_traces(&uncached, &traces, &public_values, &mut fresh_challenger());
+
+        // The keyed path receives the same metadata derived during setup.
+        let profiles = [get_air_profile::<F, EF, _>(&air)];
+        let cached = AirZerocheck::with_profiles(&airs, &profiles, 0);
+        let (cached_proof, cached_point) =
+            prove_traces(&cached, &traces, &public_values, &mut fresh_challenger());
+
+        // Every transmitted field is compared because no proof serialization is defined here.
+        assert_eq!(
+            cached_proof.sumcheck.claimed_sum,
+            uncached_proof.sumcheck.claimed_sum
+        );
+        assert_eq!(
+            cached_proof.sumcheck.round_polys,
+            uncached_proof.sumcheck.round_polys
+        );
+        assert_eq!(
+            cached_proof.sumcheck.pow_witnesses,
+            uncached_proof.sumcheck.pow_witnesses
+        );
+        assert_eq!(cached_proof.local, uncached_proof.local);
+        assert_eq!(cached_proof.next, uncached_proof.next);
+        assert_eq!(
+            cached_proof.preprocessed_local,
+            uncached_proof.preprocessed_local
+        );
+        assert_eq!(
+            cached_proof.preprocessed_next,
+            uncached_proof.preprocessed_next
+        );
+        assert_eq!(cached_point, uncached_point);
+    }
+
+    #[test]
     fn zerocheck_round_polys_have_expected_shape() {
         // Degree-consistency: the proof has one round per variable, and each round
         // carries exactly `degree` transmitted evaluations.
@@ -2135,6 +2267,281 @@ mod tests {
                 &mut verifier_challenger,
             )
             .expect("subset-next AIR must verify");
+    }
+
+    type BinaryChal = BinaryChallenger<BinaryField128, HashChallenger<u8, Keccak256Hash, 32>>;
+
+    fn binary_challenger() -> BinaryChal {
+        BinaryChal::from_hasher(b"p3-multi-stark-zerocheck-test".to_vec(), Keccak256Hash)
+    }
+
+    /// Degree-three AIR reading main columns 3 and 1 and preprocessed column 1 on the next row.
+    ///
+    /// ```text
+    ///     transition: next.main[1] = main[0] * main[2]
+    ///     transition: next.main[3] = main[3] * main[1] + main[0]
+    ///     transition: next.prep[1] = prep[0] * main[2]
+    /// ```
+    ///
+    /// With `declare_all`, the AIR keeps the default declaration of every column instead.
+    /// Both declarations describe the same constraints.
+    struct SuccessorSubsetAir {
+        declare_all: bool,
+    }
+
+    impl<X> BaseAir<X> for SuccessorSubsetAir {
+        fn width(&self) -> usize {
+            4
+        }
+        fn preprocessed_width(&self) -> usize {
+            2
+        }
+        fn main_next_row_columns(&self) -> Vec<usize> {
+            // Out of order on purpose: the declaration is a set, not a layout.
+            if self.declare_all {
+                (0..4).collect()
+            } else {
+                vec![3, 1]
+            }
+        }
+        fn preprocessed_next_row_columns(&self) -> Vec<usize> {
+            if self.declare_all {
+                (0..2).collect()
+            } else {
+                vec![1]
+            }
+        }
+    }
+
+    impl<AB: AirBuilder> Air<AB> for SuccessorSubsetAir {
+        fn eval(&self, builder: &mut AB) {
+            let main = builder.main();
+            let (local, next) = (main.current_slice(), main.next_slice());
+            let preprocessed = builder.preprocessed();
+            let prep = preprocessed.current_slice()[0];
+            let prep_next = preprocessed.next_slice()[1];
+
+            let mut transition = builder.when_transition();
+            transition.assert_eq(next[1], local[0] * local[2]);
+            transition.assert_eq(next[3], local[3] * local[1] + local[0]);
+            transition.assert_eq(prep_next, prep * local[2]);
+        }
+    }
+
+    /// Satisfying main and preprocessed traces for [`SuccessorSubsetAir`].
+    ///
+    /// Every column the AIR never reads ahead is fresh randomness on each row.
+    fn successor_subset_traces<F: Field>(n: usize) -> (RowMajorMatrix<F>, RowMajorMatrix<F>)
+    where
+        StandardUniform: Distribution<F>,
+    {
+        let mut rng = SmallRng::seed_from_u64(0x5ECC);
+        let mut main: Vec<F> = (0..4).map(|_| rng.random()).collect();
+        let mut prep: Vec<F> = (0..2).map(|_| rng.random()).collect();
+        for row in 1..n {
+            let [m0, m1, m2, m3] = main[4 * (row - 1)..4 * row] else {
+                unreachable!()
+            };
+            let p0 = prep[2 * (row - 1)];
+            main.extend([rng.random(), m0 * m2, rng.random(), m3 * m1 + m0]);
+            prep.extend([rng.random(), p0 * m2]);
+        }
+        (RowMajorMatrix::new(main, 4), RowMajorMatrix::new(prep, 2))
+    }
+
+    /// Degree-two AIR that reads no successor column at all.
+    ///
+    /// With `declare_all`, the AIR keeps the default declaration of every column instead.
+    struct SuccessorFreeAir {
+        declare_all: bool,
+    }
+
+    impl<X> BaseAir<X> for SuccessorFreeAir {
+        fn width(&self) -> usize {
+            3
+        }
+        fn main_next_row_columns(&self) -> Vec<usize> {
+            if self.declare_all {
+                (0..3).collect()
+            } else {
+                vec![]
+            }
+        }
+    }
+
+    impl<AB: AirBuilder> Air<AB> for SuccessorFreeAir {
+        fn eval(&self, builder: &mut AB) {
+            let main = builder.main();
+            let local = main.current_slice();
+            builder.assert_eq(local[2], local[0] * local[1]);
+        }
+    }
+
+    /// Satisfying trace for [`SuccessorFreeAir`].
+    fn successor_free_trace<F: Field>(n: usize) -> RowMajorMatrix<F>
+    where
+        StandardUniform: Distribution<F>,
+    {
+        let mut rng = SmallRng::seed_from_u64(0xF12EE);
+        let values = (0..n)
+            .flat_map(|_| {
+                let (a, b): (F, F) = (rng.random(), rng.random());
+                [a, b, a * b]
+            })
+            .collect();
+        RowMajorMatrix::new(values, 3)
+    }
+
+    /// Prove one AIR through the zerocheck, then verify the proof.
+    fn prove_and_verify<F, EF, A, Ch>(
+        air: &A,
+        main: &RowMajorMatrix<F>,
+        preprocessed: Option<&RowMajorMatrix<F>>,
+        challenger: impl Fn() -> Ch,
+    ) -> (ZerocheckProof<F, EF>, Point<EF>)
+    where
+        F: TranscriptField,
+        EF: ExtensionField<F>,
+        A: ProverAir<F, EF>,
+        EF::ExtensionPacking: From<EF> + From<F::Packing>,
+        Ch: FieldChallenger<F> + GrindingChallenger<Witness = F>,
+    {
+        let airs = [air];
+        let zerocheck = AirZerocheck::new(&airs, 0);
+        let table = Table::new(main.transpose());
+        let preprocessed = preprocessed.map(|trace| Table::new(trace.transpose()));
+        let proven = zerocheck.prove::<F, EF, _>(
+            &[preprocessed.as_ref()],
+            &[&table],
+            &[&[]],
+            &mut challenger(),
+        );
+        let point = zerocheck
+            .verify::<F, EF, _>(
+                &proven.0,
+                &[table.num_variables()],
+                &[&[]],
+                &mut challenger(),
+            )
+            .expect("honest proof must verify");
+        assert_eq!(point, proven.1);
+        proven
+    }
+
+    /// Prove an AIR declaring only the successor columns it reads, and its twin declaring all.
+    ///
+    /// The declaration is not bound into the zerocheck transcript.
+    /// So both proofs must carry the same round polynomials, point, and current-row openings.
+    /// The declared successor openings must match the corresponding entries of the full set.
+    fn check_declared_successors_match_all<F, EF, A, Ch>(
+        declared: &A,
+        all: &A,
+        main: &RowMajorMatrix<F>,
+        preprocessed: Option<&RowMajorMatrix<F>>,
+        challenger: impl Fn() -> Ch,
+    ) where
+        F: TranscriptField,
+        EF: ExtensionField<F>,
+        A: ProverAir<F, EF>,
+        EF::ExtensionPacking: From<EF> + From<F::Packing>,
+        Ch: FieldChallenger<F> + GrindingChallenger<Witness = F>,
+    {
+        let (declared_proof, declared_point) =
+            prove_and_verify::<F, EF, _, _>(declared, main, preprocessed, &challenger);
+        let (all_proof, all_point) =
+            prove_and_verify::<F, EF, _, _>(all, main, preprocessed, &challenger);
+
+        assert_eq!(
+            declared_proof.sumcheck.round_polys,
+            all_proof.sumcheck.round_polys
+        );
+        assert_eq!(declared_point, all_point);
+        assert_eq!(declared_proof.local, all_proof.local);
+        assert_eq!(
+            declared_proof.preprocessed_local,
+            all_proof.preprocessed_local
+        );
+
+        // Each declared successor opening is the full set's entry for that column.
+        let pick = |columns: Vec<usize>, all_values: &[EF]| {
+            columns
+                .into_iter()
+                .map(|column| all_values[column])
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            declared_proof.next[0],
+            pick(declared.main_next_row_columns(), &all_proof.next[0])
+        );
+        assert_eq!(
+            declared_proof.preprocessed_next[0],
+            pick(
+                declared.preprocessed_next_row_columns(),
+                &all_proof.preprocessed_next[0]
+            )
+        );
+    }
+
+    /// Trace heights for the prime-field successor twins.
+    ///
+    /// A round runs the packed kernel only while half its rows fill a SIMD lane group.
+    ///
+    /// ```text
+    ///     64 rows : packed first rounds, then scalar once the residual rows run short
+    ///     4, 2    : below a lane group of every SIMD packing, so scalar from the first round
+    /// ```
+    const PRIME_SUCCESSOR_HEIGHTS: [usize; 3] = [64, 4, 2];
+
+    #[test]
+    fn successor_subset_matches_full_declaration_over_a_prime_field() {
+        for height in PRIME_SUCCESSOR_HEIGHTS {
+            let (main, preprocessed) = successor_subset_traces::<F>(height);
+            check_declared_successors_match_all::<F, EF, _, _>(
+                &SuccessorSubsetAir { declare_all: false },
+                &SuccessorSubsetAir { declare_all: true },
+                &main,
+                Some(&preprocessed),
+                fresh_challenger,
+            );
+        }
+    }
+
+    #[test]
+    fn successor_free_matches_full_declaration_over_a_prime_field() {
+        for height in PRIME_SUCCESSOR_HEIGHTS {
+            let main = successor_free_trace::<F>(height);
+            check_declared_successors_match_all::<F, EF, _, _>(
+                &SuccessorFreeAir { declare_all: false },
+                &SuccessorFreeAir { declare_all: true },
+                &main,
+                None,
+                fresh_challenger,
+            );
+        }
+    }
+
+    #[test]
+    fn successor_subset_matches_full_declaration_over_a_binary_field() {
+        let (main, preprocessed) = successor_subset_traces::<BinaryField128>(32);
+        check_declared_successors_match_all::<BinaryField128, BinaryField128, _, _>(
+            &SuccessorSubsetAir { declare_all: false },
+            &SuccessorSubsetAir { declare_all: true },
+            &main,
+            Some(&preprocessed),
+            binary_challenger,
+        );
+    }
+
+    #[test]
+    fn successor_free_matches_full_declaration_over_a_binary_field() {
+        let main = successor_free_trace::<BinaryField128>(32);
+        check_declared_successors_match_all::<BinaryField128, BinaryField128, _, _>(
+            &SuccessorFreeAir { declare_all: false },
+            &SuccessorFreeAir { declare_all: true },
+            &main,
+            None,
+            binary_challenger,
+        );
     }
 
     #[test]
@@ -2692,6 +3099,288 @@ mod tests {
             .verify::<F, EF, _>(&proof, &log_heights, &public_refs, &mut verifier_challenger)
             .unwrap_err();
         assert!(matches!(err, ZerocheckError::FinalSumMismatch));
+    }
+
+    /// The seed and output cells the Fibonacci AIR below can bind by position.
+    ///
+    /// ```text
+    ///     column 0, first row -> public value 0
+    ///     column 1, first row -> public value 1
+    ///     column 1, last  row -> public value 2
+    /// ```
+    const FIB_IO_CELLS: [BoundaryPublic; 3] = [
+        BoundaryPublic::new(0, BoundaryEnd::First, 0),
+        BoundaryPublic::new(1, BoundaryEnd::First, 1),
+        BoundaryPublic::new(1, BoundaryEnd::Last, 2),
+    ];
+
+    /// Fibonacci recurrence with no boundary constraint, parameterized by its listed cells.
+    ///
+    /// Every instantiation asserts the same two transition constraints.
+    /// Only the listed cells set two instantiations apart.
+    struct FibRecurrenceAir {
+        cells: &'static [BoundaryPublic],
+    }
+
+    impl<X> BaseAir<X> for FibRecurrenceAir {
+        fn width(&self) -> usize {
+            NUM_COLS
+        }
+
+        fn num_public_values(&self) -> usize {
+            3
+        }
+
+        fn public_boundary_io(&self) -> &[BoundaryPublic] {
+            self.cells
+        }
+    }
+
+    impl<AB: AirBuilder> Air<AB> for FibRecurrenceAir {
+        fn eval(&self, builder: &mut AB) {
+            // Read the current row and the row after it.
+            let main = builder.main();
+            let local: &FibRow<AB::Var> = main.current_slice().borrow();
+            let next: &FibRow<AB::Var> = main.next_slice().borrow();
+
+            // Advance the recurrence on every row but the last.
+            //
+            //     next.left  = right
+            //     next.right = left + right
+            let mut trans = builder.when_transition();
+            trans.assert_eq(local.right, next.left);
+            trans.assert_eq(local.left + local.right, next.right);
+        }
+    }
+
+    #[test]
+    fn constraint_count_includes_the_boundary_io_pins() {
+        // The folder batches the AIR's own constraints, then one pin per listed cell.
+        //
+        //     no cell     : 2 transitions            -> 2
+        //     three cells : 2 transitions + 3 pins   -> 5
+        let loose = get_air_profile::<F, EF, _>(&FibRecurrenceAir { cells: &[] });
+        assert_eq!(loose.num_constraints, 2);
+        let pinned = get_air_profile::<F, EF, _>(&FibRecurrenceAir {
+            cells: &FIB_IO_CELLS,
+        });
+        assert_eq!(pinned.num_constraints, 5);
+    }
+
+    #[test]
+    fn boundary_io_pin_binds_the_public_value_to_the_folded_trace() {
+        // Invariant: the pin ties the folded cell value to the public value.
+        //
+        // Without it nothing in this AIR reads the claim at all:
+        //
+        //     transitions : hold on the honest trace, whatever is claimed
+        //     public value: never mentioned by a constraint
+        //                   → any output claim passes
+        //
+        // Fixture state: an honest length-8 trace, output claim shifted by one.
+        //
+        //     trace last right : X
+        //     public values    : [0, 1, X + 1]
+        let n = 8;
+        let trace = fib_trace(n);
+        let mut pis = fib_public_values(n);
+        pis[2] += F::ONE;
+        let log_heights = [log2_strict_usize(n)];
+        let traces = [&trace];
+        let public_values = [&pis[..]];
+
+        // Control: the AIR that declares nothing never reads public value 2.
+        // Its fold sums to zero, and the shifted claim slips through unnoticed.
+        let loose_air = FibRecurrenceAir { cells: &[] };
+        let loose_airs = [&loose_air];
+        let loose = AirZerocheck::new(&loose_airs, 0);
+        let (loose_proof, _) =
+            prove_traces(&loose, &traces, &public_values, &mut fresh_challenger());
+        loose
+            .verify::<F, EF, _>(
+                &loose_proof,
+                &log_heights,
+                &public_values,
+                &mut fresh_challenger(),
+            )
+            .expect("an unbound public value is not checked at all");
+
+        // With the declaration one pin survives on the folded trace:
+        //
+        //     is_last_row * (right - public) = X - (X + 1) = -1
+        //
+        // The fold no longer sums to zero, and the claimed zero sum fails to close.
+        let pinned_air = FibRecurrenceAir {
+            cells: &FIB_IO_CELLS,
+        };
+        let pinned_airs = [&pinned_air];
+        let pinned = AirZerocheck::new(&pinned_airs, 0);
+        let (pinned_proof, _) =
+            prove_traces(&pinned, &traces, &public_values, &mut fresh_challenger());
+        let err = pinned
+            .verify::<F, EF, _>(
+                &pinned_proof,
+                &log_heights,
+                &public_values,
+                &mut fresh_challenger(),
+            )
+            .unwrap_err();
+        assert!(matches!(err, ZerocheckError::FinalSumMismatch));
+    }
+
+    #[test]
+    fn boundary_io_pin_raises_the_sumcheck_degree() {
+        // Invariant: a pin can set the sumcheck degree on its own.
+        //
+        //     own constraint : col_0 - col_1              -> degree 1
+        //     injected pin   : is_first_row * (col_0 - p) -> degree 2
+        //     eq weight      : + 1                        -> sumcheck degree 3
+        let air = EqualColumnsIoAir;
+        assert_eq!(
+            get_air_degrees::<F, EF, EqualColumnsIoAir>(&air).constraints,
+            2
+        );
+        assert_eq!(
+            get_air_degrees::<F, EF, EqualColumnsIoAir>(&air).max() + 1,
+            3
+        );
+
+        // Fixture state: 8 rows, both columns holding the public value 7.
+        //
+        //     col_0 - col_1              = 0
+        //     is_first_row * (7 - 7)     = 0
+        //                                  → an honest proof must verify
+        let n = 8;
+        let public = F::from_u64(7);
+        let trace = RowMajorMatrix::new(alloc::vec![public; 2 * n], 2);
+        let airs = [&air];
+        let zerocheck = AirZerocheck::new(&airs, 0);
+
+        let traces = [&trace];
+        let public_values = [&[public] as &[F]];
+        let (proof, _) = prove_traces(&zerocheck, &traces, &public_values, &mut fresh_challenger());
+
+        // Scoring the pins at degree 1 would send 2 evaluations per round instead of 3.
+        for round in &proof.sumcheck.round_polys {
+            assert_eq!(round.len(), 3);
+        }
+
+        // A truncated round polynomial would not reduce to the constraint at the point.
+        zerocheck
+            .verify::<F, EF, _>(
+                &proof,
+                &[log2_strict_usize(n)],
+                &public_values,
+                &mut fresh_challenger(),
+            )
+            .expect("a degree-one AIR with a boundary cell must still verify");
+    }
+
+    /// The one cell the degree probe AIR below binds by position.
+    const EQUAL_COLUMNS_IO_CELLS: [BoundaryPublic; 1] =
+        [BoundaryPublic::new(0, BoundaryEnd::First, 0)];
+
+    /// AIR whose own constraint scores degree one, with one cell bound by position.
+    ///
+    /// The equality is ungated.
+    /// No selector lifts its degree above one.
+    struct EqualColumnsIoAir;
+
+    impl<X> BaseAir<X> for EqualColumnsIoAir {
+        fn width(&self) -> usize {
+            2
+        }
+
+        fn num_public_values(&self) -> usize {
+            1
+        }
+
+        fn public_boundary_io(&self) -> &[BoundaryPublic] {
+            &EQUAL_COLUMNS_IO_CELLS
+        }
+    }
+
+    impl<AB: AirBuilder> Air<AB> for EqualColumnsIoAir {
+        fn eval(&self, builder: &mut AB) {
+            // Both columns agree on every row, with no selector in front.
+            let main = builder.main();
+            let row = main.current_slice();
+            builder.assert_eq(row[0], row[1]);
+        }
+    }
+
+    /// Both ends of one column, listed on the shortest trace a zerocheck accepts.
+    ///
+    /// ```text
+    ///     column 0, first row -> public value 0
+    ///     column 0, last  row -> public value 1
+    /// ```
+    const BOTH_ENDS_CELLS: [BoundaryPublic; 2] = [
+        BoundaryPublic::new(0, BoundaryEnd::First, 0),
+        BoundaryPublic::new(0, BoundaryEnd::Last, 1),
+    ];
+
+    /// Single-column AIR asserting nothing, with both of its ends listed.
+    struct BothEndsIoAir;
+
+    impl<X> BaseAir<X> for BothEndsIoAir {
+        fn width(&self) -> usize {
+            1
+        }
+
+        fn num_public_values(&self) -> usize {
+            2
+        }
+
+        fn main_next_row_columns(&self) -> Vec<usize> {
+            // Current-row only: a pin never reads the successor.
+            Vec::new()
+        }
+
+        fn public_boundary_io(&self) -> &[BoundaryPublic] {
+            &BOTH_ENDS_CELLS
+        }
+    }
+
+    impl<AB: AirBuilder> Air<AB> for BothEndsIoAir {
+        fn eval(&self, _builder: &mut AB) {
+            // Empty: both public values are bound by position, not by a constraint.
+        }
+    }
+
+    #[test]
+    fn boundary_io_pins_both_ends_of_a_two_row_trace() {
+        // Invariant: the two ends stay distinct when they are adjacent rows.
+        //
+        // Fixture state: the shortest trace a zerocheck accepts.
+        //
+        //     rows            : [5, 9]
+        //     is_first_row    : 1 on row 0
+        //     is_last_row     : 1 on row 1
+        //                       → one pin each, on neighbouring rows
+        let trace = RowMajorMatrix::new(alloc::vec![F::from_u64(5), F::from_u64(9)], 1);
+        let airs = [&BothEndsIoAir];
+        let zerocheck = AirZerocheck::new(&airs, 0);
+        let traces = [&trace];
+
+        let honest = [F::from_u64(5), F::from_u64(9)];
+        let public_values = [&honest[..]];
+        let (proof, _) = prove_traces(&zerocheck, &traces, &public_values, &mut fresh_challenger());
+        zerocheck
+            .verify::<F, EF, _>(&proof, &[1], &public_values, &mut fresh_challenger())
+            .expect("both ends of a two-row trace must verify");
+
+        // Mutation: swap the two claims, which only inverted ends would accept.
+        //
+        // Two pins sharing one selector would already fail the honest half above,
+        // since 5 - 9 is nonzero on whichever row both would read.
+        let swapped = [F::from_u64(9), F::from_u64(5)];
+        let public_values = [&swapped[..]];
+        let (proof, _) = prove_traces(&zerocheck, &traces, &public_values, &mut fresh_challenger());
+        let err = zerocheck
+            .verify::<F, EF, _>(&proof, &[1], &public_values, &mut fresh_challenger())
+            .unwrap_err();
+        assert!(matches!(err, ZerocheckError::FinalSumMismatch), "{err:?}");
     }
 
     #[test]

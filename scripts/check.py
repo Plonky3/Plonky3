@@ -207,15 +207,12 @@ def commands_for(args: argparse.Namespace) -> list[list[str]]:
             *lint_commands(None),
         ]
     if command == "architecture":
+        target = ["--target", args.target, "--all-targets", *feature_args(args.parallel)]
+        # The baseline lint job cannot reach code behind a target-feature gate,
+        # so each leg lints the configuration only it compiles.
         return [
-            [
-                "cargo",
-                "build",
-                "--target",
-                args.target,
-                "--all-targets",
-                *feature_args(args.parallel),
-            ]
+            ["cargo", "build", *target],
+            ["cargo", "clippy", *target, "--", "-D", "warnings"],
         ]
     if command == "embedded":
         return [
@@ -339,6 +336,30 @@ def commands_for(args: argparse.Namespace) -> list[list[str]]:
                 "--test",
                 "stir_fibonacci",
                 "test_short_public_values_rejected",
+                "--",
+                "--ignored",
+                "--exact",
+            ],
+            [
+                "cargo",
+                "test",
+                "-p",
+                "p3-binary-dft",
+                "lch::tests::the_schedule_matches_an_independent_walk_at_every_blocked_shape",
+                "--",
+                "--ignored",
+                "--exact",
+            ],
+            # The same sweep with threads: the worker clamp reshapes every schedule, and the
+            # tile and staging tasks run side by side rather than one after another.
+            [
+                "cargo",
+                "test",
+                "-p",
+                "p3-binary-dft",
+                "--features",
+                "parallel",
+                "lch::tests::the_schedule_matches_an_independent_walk_at_every_blocked_shape",
                 "--",
                 "--ignored",
                 "--exact",

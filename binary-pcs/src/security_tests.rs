@@ -104,7 +104,7 @@ fn zero_claim_final_codeword_is_bound_before_query_grinding_and_sampling() {
     for folding in [1, 3] {
         for prescribed in [false, true] {
             for pow_bits in [0, 4] {
-                let config = BinaryPcsConfig::try_new(
+                let config = BinaryPcsConfig::try_new::<F, F>(
                     8,
                     BinaryPcsParams {
                         log_inv_rate: 2,
@@ -116,7 +116,7 @@ fn zero_claim_final_codeword_is_bound_before_query_grinding_and_sampling() {
                 .try_with_folding(folding)
                 .unwrap();
                 assert!(config.num_queries() < config.domain_size() >> folding);
-                let pcs = BinaryPcs::new(config, mmcs());
+                let pcs = BinaryPcs::new(config, mmcs(), mmcs()).unwrap();
                 let mut rng = SmallRng::seed_from_u64(935);
                 let witness =
                     SuffixProver::<F, F>::new_witness(vec![Table::rand(&mut rng, 1, 8)], 0);
@@ -129,10 +129,10 @@ fn zero_claim_final_codeword_is_bound_before_query_grinding_and_sampling() {
                 } else {
                     pcs.try_open(data, &protocol, &mut pc).unwrap()
                 };
-                let replay = |proof: &crate::BinaryPcsProof<MyMmcs>,
+                let replay = |proof: &crate::BinaryPcsProof<F, F, MyMmcs, MyMmcs>,
                               ch: &mut RecordingChallenger| {
                     if prescribed {
-                        ch.observe(root.clone());
+                        pcs.observe_commitment(&root, ch);
                         pcs.verify_at(&root, proof, &protocol, &[], ch).map(|_| ())
                     } else {
                         pcs.verify(&root, proof, ch, protocol.clone())
@@ -162,9 +162,17 @@ fn zero_claim_final_codeword_is_bound_before_query_grinding_and_sampling() {
 
                 // Every symbol, not just the first value or a post-query observation,
                 // must be bound before the query phase's grinding call on both sides.
-                let final_word = proof.final_codeword.as_slice();
-                assert!(pc.fields_before_query_grind.ends_with(final_word));
-                assert!(vc.fields_before_query_grind.ends_with(final_word));
+                //
+                // A zero-difficulty site plays no grind.
+                //
+                // There is then no such moment to inspect.
+                //
+                // The query-divergence check above already shows it is still bound.
+                if pow_bits > 0 {
+                    let final_word = proof.final_codeword.as_slice();
+                    assert!(pc.fields_before_query_grind.ends_with(final_word));
+                    assert!(vc.fields_before_query_grind.ends_with(final_word));
+                }
             }
         }
     }
@@ -179,13 +187,24 @@ fn matches_model(
     let Some((fields, rest)) = events.split_at_checked(field_samples) else {
         return false;
     };
+    if !fields.iter().all(|&e| e == Event::FieldSample) {
+        return false;
+    }
+
+    // A zero-difficulty site describes no step, so no grind separates the two phases.
+    //
+    //     bits = 0  ->  field samples, then query samples
+    //     bits > 0  ->  field samples, one grind, then query samples
+    if regime.query_pow_bits() == 0 {
+        return !rest.is_empty() && rest.iter().all(|&e| e == Event::QuerySample);
+    }
+
     let expected = if prover {
         Event::Grind(regime.query_pow_bits())
     } else {
         Event::Check(regime.query_pow_bits())
     };
-    fields.iter().all(|&e| e == Event::FieldSample)
-        && rest.first() == Some(&expected)
+    rest.first() == Some(&expected)
         && rest.len() > 1
         && rest[1..].iter().all(|&e| e == Event::QuerySample)
 }
@@ -194,7 +213,7 @@ fn matches_model(
 fn actual_grinding_matches_the_model_and_follows_alpha_and_every_fold() {
     for pow_bits in [0, 4] {
         for folding in [1, 3] {
-            let config = BinaryPcsConfig::try_new(
+            let config = BinaryPcsConfig::try_new::<F, F>(
                 8,
                 BinaryPcsParams {
                     log_inv_rate: 2,
@@ -205,7 +224,7 @@ fn actual_grinding_matches_the_model_and_follows_alpha_and_every_fold() {
             .unwrap()
             .try_with_folding(folding)
             .unwrap();
-            let pcs = BinaryPcs::new(config, mmcs());
+            let pcs = BinaryPcs::new(config, mmcs(), mmcs()).unwrap();
             let mut rng = SmallRng::seed_from_u64(934);
             let witness = SuffixProver::<F, F>::new_witness(vec![Table::rand(&mut rng, 1, 8)], 0);
             let protocol = OpeningProtocol::new(vec![TableSpec::new(
@@ -230,7 +249,8 @@ fn actual_grinding_matches_the_model_and_follows_alpha_and_every_fold() {
             );
 
             let overcredited =
-                BinaryPcsRegime::new(8, 2, folding, config.num_queries(), pow_bits + 1).unwrap();
+                BinaryPcsRegime::new(128, 8, 2, folding, config.num_queries(), pow_bits + 1)
+                    .unwrap();
             assert!(!matches_model(&pc.events, overcredited, 10, true));
             assert!(!matches_model(&vc.events, overcredited, 10, false));
             let mut early = pc.events.clone();

@@ -27,6 +27,35 @@ pub fn to_tower(v: u128) -> BinaryField128 {
     BinaryField128::from_repr(clmul::poly_to_tower_128(v))
 }
 
+/// The polynomial-basis coordinates of a whole slice of tower-basis bit patterns.
+///
+/// # Performance
+///
+/// Whole blocks of 64 elements cross over together on an `x86_64` build with `gfni`, `avx512f`
+/// and `avx512bw`, several times faster than the sixteen table lookups per element that the
+/// remainder falls back to. Every other build takes the per-element path throughout.
+///
+/// The choice is the build's own target features, made at compile time; nothing here detects
+/// the running processor. `-C target-cpu=x86-64-v4` gives `avx512bw` but not `gfni`, so a v4
+/// build is one of the per-element ones.
+///
+/// Naming the three features and nothing else does reach the kernel, but leaves the compiler
+/// no scheduling model to hold a block in registers with. On Zen 5 it then spills every block
+/// through memory, which costs about a third of the throughput a `-C target-cpu` build gets.
+#[inline]
+pub fn from_tower_slice(values: &mut [u128]) {
+    // The count of elements the blocked kernel took is of interest only to its own tests.
+    clmul::tower_to_poly_128_slice(values);
+}
+
+/// The tower-basis bit patterns of a whole slice of polynomial-basis coordinates.
+///
+/// This undoes [`from_tower_slice`], and blocks the same way under the same target features.
+#[inline]
+pub fn to_tower_slice(values: &mut [u128]) {
+    clmul::poly_to_tower_128_slice(values);
+}
+
 /// Multiply two elements expressed in polynomial coordinates.
 // Only the software backend is `const`, so leaving this one out keeps the signature the same
 // on every target.

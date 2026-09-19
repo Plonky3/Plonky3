@@ -597,7 +597,18 @@ where
     PF: PackedField + Eq,
     StandardUniform: Distribution<PF::Scalar>,
 {
-    let vec: PF = packed_from_random(0xb0c7a5153103c5a8);
+    let sampled: PF = packed_from_random(0xb0c7a5153103c5a8);
+
+    // Zero is the one element with no inverse, and over a small field a random lane hits it
+    // often enough to matter, so those lanes are pinned to the identity instead.
+    let vec = PF::from_fn(|i| {
+        let lane = sampled.as_slice()[i];
+        if lane.is_zero() {
+            PF::Scalar::ONE
+        } else {
+            lane
+        }
+    });
     let arr = vec.as_slice();
     let vec_inv = PF::from_fn(|i| arr[i].inverse());
     let res = vec * vec_inv;
@@ -883,6 +894,95 @@ where
     }
 }
 
+/// The Montgomery radix `R mod p` as a field element, with `R = 2^{32}` for a 31-bit prime.
+///
+/// A Montgomery field stores `x` as the limb `x R mod p`.
+/// Scaling a desired limb by the inverse of this element gives the value that stores it.
+///
+/// On a field that is not Montgomery encoded this is simply some other element.
+/// The caller still gets a valid, if less pointed, test.
+fn monty_radix<F: PrimeField32 + QuotientMap<u32>>() -> F {
+    F::from_int(((1u64 << 32) % F::ORDER_U64) as u32)
+}
+
+/// The canonical value whose 32-bit Montgomery limb is the largest possible, `p - 1`.
+///
+/// Delayed-reduction dot products bound their accumulators by the limbs, not the canonical values.
+/// This is the input that drives each 64-bit accumulator to its documented maximum.
+fn max_limb_value<F: PrimeField32 + QuotientMap<u32>>() -> u32 {
+    // `NEG_ONE` is the element `p - 1`, so this element has limb `(p - 1) R^{-1} R = p - 1`.
+    (F::NEG_ONE * monty_radix::<F>().inverse()).as_canonical_u32()
+}
+
+/// The canonical value whose 32-bit Montgomery limb is exactly `1`.
+///
+/// This is the smallest nonzero limb, so a product against it barely moves an accumulator.
+/// Mixing it with maximal limbs is how a test lands an accumulator just under a fold threshold.
+fn unit_limb_value<F: PrimeField32 + QuotientMap<u32>>() -> u32 {
+    // The inverse of the radix has limb `R^{-1} R = 1`.
+    monty_radix::<F>().inverse().as_canonical_u32()
+}
+
+/// Drive every accumulator of `dot_product::<N>` to its maximum and compare against the scalar.
+///
+/// With every limb equal to `p - 1`, each product is exactly `(p - 1)^2`.
+/// A group of four then reaches `4 (p - 1)^2`, within a factor of two of `2^{64}`.
+///
+/// A routine merging two such groups without first folding `2^{32} p` out of each would wrap.
+/// It would silently return a wrong field element.
+pub fn test_packed_dot_product_max_limb<PF, const N: usize>()
+where
+    PF: PackedField + Eq,
+    PF::Scalar: PrimeField32 + QuotientMap<u32>,
+{
+    let max = max_limb_value::<PF::Scalar>();
+
+    // Both sides maximal: every accumulator sits at its upper bound.
+    assert_packed_broadcast_dot_product_matches_scalar::<PF, N>([max; N], [max; N]);
+
+    // One maximal side against the edge table: a maximal limb mixed with assorted others.
+    for &other in &boundary_u32_values::<PF::Scalar>() {
+        assert_packed_broadcast_dot_product_matches_scalar::<PF, N>([max; N], [other; N]);
+        assert_packed_broadcast_dot_product_matches_scalar::<PF, N>([other; N], [max; N]);
+    }
+
+    // Alternating maximal and unit limbs, against an all-maximal other side.
+    //
+    // A group of four then holds two maximal products and two negligible ones:
+    //
+    //     hi  =  2 (p - 1)^2 / 2^{32}  <  p       because 2p < 2^{32}
+    //
+    // So this is the case where every conditional subtraction must be a no-op.
+    // The all-maximal case above is the one where each of them must fire.
+    let unit = unit_limb_value::<PF::Scalar>();
+    let alternating: [u32; N] = core::array::from_fn(|i| if i % 2 == 0 { max } else { unit });
+    assert_packed_broadcast_dot_product_matches_scalar::<PF, N>(alternating, [max; N]);
+    assert_packed_broadcast_dot_product_matches_scalar::<PF, N>([max; N], alternating);
+}
+
+/// Compare `dot_product::<N>` against the scalar reference on proptest-generated inputs.
+///
+/// Inputs are drawn uniformly from the canonical range `[0, p)` and broadcast across the lanes.
+///
+/// It complements the seeded, edge-biased per-lane variant.
+pub fn test_packed_dot_product_proptest<PF, const N: usize>()
+where
+    PF: PackedField + Eq + 'static,
+    PF::Scalar: PrimeField32 + QuotientMap<u32>,
+{
+    let prime = PF::Scalar::ORDER_U32;
+    let config = ProptestConfig::with_cases(256);
+
+    // Naming the strategy once keeps the invocation inside the line limit.
+    let draw = prop::collection::vec(0..prime, N);
+
+    proptest!(config, |(lhs in draw.clone(), rhs in draw)| {
+        let lhs: [u32; N] = lhs.try_into().unwrap();
+        let rhs: [u32; N] = rhs.try_into().unwrap();
+        assert_packed_broadcast_dot_product_matches_scalar::<PF, N>(lhs, rhs);
+    });
+}
+
 /// 50/50 draw between the eight-element edge table and uniform `[0, p)`.
 fn sample_edge_or_uniform(rng: &mut SmallRng, edges: &[u32; 8], prime: u32) -> u32 {
     if rng.random::<bool>() {
@@ -1020,15 +1120,17 @@ macro_rules! test_packed_binary_field {
 
 /// Run the dot-product carry / boundary stress suite on a packed `PrimeField32`.
 ///
-/// Two test functions per `N`:
-/// - boundary-pair sweep over an 8-value edge table,
-/// - per-lane edge-biased random.
+/// Four kinds of test, each over its own set of lengths:
+/// - edge-pair sweep over an eight-value table, lengths `1` to `9` and `16`,
+/// - per-lane edge-biased random, lengths `2` to `9` and `16`,
+/// - maximal Montgomery limbs, lengths `4` to `8`,
+/// - uniform canonical proptest, lengths `5` to `8`.
 ///
-/// `N` covers every SIMD dispatch arm:
-/// - tiny (`1`),
-/// - specialized (`2`, `4`, `5`, `8`),
-/// - chunk-of-4 fallbacks (`3`, `6`, `7`),
-/// - longer loops (`9`, `16`).
+/// Between them those lengths hit every dispatch arm a 31-bit Monty packing offers:
+/// - a bare product (`1`),
+/// - one fused reduction (`2` and `4` to `8` on x86, `2` to `5` and `8` on NEON),
+/// - two routines summed (`3` on x86, `6` and `7` on NEON),
+/// - the chunk-of-four loop (`9`, `16`).
 #[macro_export]
 macro_rules! test_packed_field_dot_product_boundary {
     ($packedfield:ty) => {
@@ -1113,6 +1215,48 @@ macro_rules! test_packed_field_dot_product_boundary {
             #[test]
             fn lanes_random_n16() {
                 $crate::test_packed_dot_product_lanes_random::<$packedfield, 16>();
+            }
+
+            // Maximal Montgomery limbs pin the accumulator bounds the routines rely on.
+
+            #[test]
+            fn max_limb_n4() {
+                $crate::test_packed_dot_product_max_limb::<$packedfield, 4>();
+            }
+            #[test]
+            fn max_limb_n5() {
+                $crate::test_packed_dot_product_max_limb::<$packedfield, 5>();
+            }
+            #[test]
+            fn max_limb_n6() {
+                $crate::test_packed_dot_product_max_limb::<$packedfield, 6>();
+            }
+            #[test]
+            fn max_limb_n7() {
+                $crate::test_packed_dot_product_max_limb::<$packedfield, 7>();
+            }
+            #[test]
+            fn max_limb_n8() {
+                $crate::test_packed_dot_product_max_limb::<$packedfield, 8>();
+            }
+
+            // Uniform canonical inputs, shrunk on failure.
+
+            #[test]
+            fn proptest_n5() {
+                $crate::test_packed_dot_product_proptest::<$packedfield, 5>();
+            }
+            #[test]
+            fn proptest_n6() {
+                $crate::test_packed_dot_product_proptest::<$packedfield, 6>();
+            }
+            #[test]
+            fn proptest_n7() {
+                $crate::test_packed_dot_product_proptest::<$packedfield, 7>();
+            }
+            #[test]
+            fn proptest_n8() {
+                $crate::test_packed_dot_product_proptest::<$packedfield, 8>();
             }
         }
     };

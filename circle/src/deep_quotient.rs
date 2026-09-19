@@ -52,8 +52,10 @@ pub(crate) fn deep_quotient_vanishing_part<F: ComplexExtendable, EF: ExtensionFi
     // Numerator: Re(1/v_gamma) + alpha^L * Im(1/v_gamma)
     let numerator = re_v_zeta - alpha_pow_width * im_v_zeta;
 
-    // Denominator: |v_gamma|^2 = Re(v_gamma)^2 + Im(v_gamma)^2
-    let denominator = re_v_zeta.square() + im_v_zeta.square();
+    // The circle identity reduces |v_gamma|^2 = Re(v_gamma)^2 + Im(v_gamma)^2
+    // to 2 * Re(v_gamma). This is an exact equality, so even over an extension
+    // containing `i`, both forms vanish exactly when `x = zeta`.
+    let denominator = re_v_zeta.double();
 
     (numerator, denominator)
 }
@@ -113,13 +115,12 @@ pub(crate) fn deep_quotient_reduce_row<F: ComplexExtendable, EF: ExtensionField<
 
 /// The point-dependent part of the DEEP quotient on a fixed domain.
 ///
-/// Holds `v_p(zeta) = re + im * i` for every domain point, along with the inverse of the
-/// squared magnitude `|v_p(zeta)|^2`. These depend only on `(domain, zeta)`, so they are
-/// shared by every matrix opened at `zeta` on that domain.
+/// Holds `im(v_p(zeta)) / (2 * re(v_p(zeta)))` for every domain point. This is the
+/// point-dependent part of the DEEP quotient after applying the circle identity
+/// `|v_p(zeta)|^2 = 2 * re(v_p(zeta))`, so it is shared by every matrix opened at `zeta`
+/// on that domain.
 pub(crate) struct VanishingParts<EF> {
-    re: Vec<EF>,
-    im: Vec<EF>,
-    denom_inv: Vec<EF>,
+    im_over_twice_re: Vec<EF>,
 }
 
 /// Compute the [`VanishingParts`] of the DEEP quotient at `zeta` for the given domain points.
@@ -131,18 +132,19 @@ pub(crate) fn compute_vanishing_parts<F: ComplexExtendable, EF: ExtensionField<F
     zeta: Point<EF>,
 ) -> VanishingParts<EF> {
     let (re, im): (Vec<_>, Vec<_>) = points.par_iter().map(|&x| x.v_p(zeta)).unzip();
-    let denoms = re
-        .par_iter()
-        .zip(&im)
-        .map(|(&re, &im)| re.square() + im.square())
-        .collect::<Vec<_>>();
+    let denoms = re.par_iter().map(|re| re.double()).collect::<Vec<_>>();
     let denom_inv = batch_multiplicative_inverse(&denoms);
-    VanishingParts { re, im, denom_inv }
+    let im_over_twice_re = im
+        .into_par_iter()
+        .zip(denom_inv)
+        .map(|(im, denom_inv)| im * denom_inv)
+        .collect();
+    VanishingParts { im_over_twice_re }
 }
 
 /// Accumulate one matrix/point DEEP quotient into a running reduced opening:
 ///
-/// `ro[i] += alpha_offset * (re[i] - alpha^W * im[i]) / |v_p(zeta)|^2[i] * (r[i] - c)`
+/// `ro[i] += (alpha_offset / 2 - alpha_offset * alpha^W * im[i] / (2 * re[i])) * (r[i] - c)`
 ///
 /// where `r[i] = sum_j(alpha^j * p_j[x_i])` are the alpha-reduced rows of the matrix,
 /// `c = sum_j(alpha^j * p_j[zeta])` is `reduced_ps_at_zeta` and `W` is the matrix width.
@@ -155,15 +157,13 @@ pub(crate) fn accumulate_deep_quotient<EF: Field>(
     vp: &VanishingParts<EF>,
     reduced_ps_at_zeta: EF,
 ) {
+    let alpha_offset_over_two = alpha_offset.halve();
+    let alpha_offset_alpha_pow_width = alpha_offset * alpha_pow_width;
     ro.par_iter_mut()
         .zip(reduced_rows)
-        .zip(&vp.re)
-        .zip(&vp.im)
-        .zip(&vp.denom_inv)
-        .for_each(|((((ro, &reduced_ps_at_x), &re), &im), &denom_inv)| {
-            *ro += alpha_offset
-                * (re - alpha_pow_width * im)
-                * denom_inv
+        .zip(&vp.im_over_twice_re)
+        .for_each(|((ro, &reduced_ps_at_x), &im_over_twice_re)| {
+            *ro += (alpha_offset_over_two - alpha_offset_alpha_pow_width * im_over_twice_re)
                 * (reduced_ps_at_x - reduced_ps_at_zeta);
         });
 }
@@ -329,6 +329,19 @@ mod tests {
                 reduced_ps_at_zeta,
             );
             ro
+        }
+    }
+
+    #[test]
+    fn vanishing_parts_store_im_over_twice_re() {
+        let domain = CircleDomain::<F>::standard(4);
+        let points = cfft_permute_slice(&domain.points().collect_vec());
+        let zeta = Point::<EF>::from_projective_line(EF::from_u8(9));
+        let vanishing_parts = compute_vanishing_parts(&points, zeta);
+
+        for (&point, &im_over_twice_re) in points.iter().zip(&vanishing_parts.im_over_twice_re) {
+            let (re, im) = point.v_p(zeta);
+            assert_eq!(im_over_twice_re, im * re.double().inverse());
         }
     }
 

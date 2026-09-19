@@ -60,7 +60,8 @@ pub fn batch_multiplicative_inverse<F: Field>(x: &[F]) -> Vec<F> {
     //     Goldilocks quadratic 16 B   8.1 ns   5.1
     //     Ghash128            16 B   6.7 ns   4.2
     //
-    // Five reads sits inside a factor of 1.6 of every one of them.
+    // Five reads slightly overcharges Goldilocks and can split it one size early.
+    // It stays within a factor of 1.6 of the other measured rows.
     // A build without the wide carryless multiply puts the binary field at 44 reads instead,
     // so the residual error is an undercharge, which only ever leaves a loop whole.
     x.par_chunks(CHUNK_SIZE)

@@ -4,7 +4,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
-use p3_challenger::DuplexChallenger;
+use p3_challenger::{CanSample, DuplexChallenger};
 use p3_commit::MultilinearPcs;
 use p3_dft::Radix2DFTSmallBatch;
 use p3_field::extension::BinomialExtensionField;
@@ -21,10 +21,12 @@ use super::adapter::HidingWhirPcs;
 use super::base_case::BaseCaseZkError;
 use super::config::{ZkParameters, ZkWhirConfig};
 use super::proof::ZkWhirProof;
+use super::prover::HidingWhirProver;
 use super::verifier::ZkVerifierError;
 use crate::WhirConfigError;
 use crate::parameters::{FoldingFactor, ProtocolParameters, SecurityAssumption};
 use crate::pcs::proof::QueryOpenings;
+use crate::transcript::zk::observe_claims;
 
 type F = BabyBear;
 type EF = BinomialExtensionField<F, 4>;
@@ -1037,4 +1039,87 @@ proptest! {
         // Every honest run must therefore verify.
         Setup::new(seed).num_points(2).assert_round_trip();
     }
+}
+
+#[test]
+fn the_commit_phase_binds_exactly_what_the_binding_method_binds() {
+    // Invariant: a verifier never commits, so it replays the prover's binding by
+    // calling the scheme's binding method.
+    //
+    // The two are interchangeable only while they leave the sponge in one state.
+    //
+    //     prover  : commit(witness, a)          -> a
+    //     verifier: observe_commitment(root, b) -> b
+    //     a and b must sample alike
+    //
+    // A commit phase that bound something else, or bound it twice, would move
+    // only one of the two.
+    let setup = Setup::new(6);
+    let pcs = setup.pcs();
+    let mut rng = SmallRng::seed_from_u64(7);
+    let witness = Poly::<F>::rand(&mut rng, setup.num_variables);
+
+    let mut committed = fresh_challenger();
+    let (commitment, _) = pcs.commit(witness, &mut committed).unwrap();
+
+    let mut replayed = fresh_challenger();
+    pcs.observe_commitment(&commitment, &mut replayed);
+
+    assert_eq!(
+        CanSample::<F>::sample(&mut committed),
+        CanSample::<F>::sample(&mut replayed),
+    );
+}
+
+#[test]
+fn the_open_phase_binds_the_statement_and_nothing_else() {
+    // Invariant: opening binds the claims, as one phase, and then runs.
+    //
+    // Reconstructing that from the outside and landing on the same sponge state
+    // is what says the adapter binds the statement and only the statement.
+    //
+    //     adapter : open(data, points, a)              -> a
+    //     replay  : observe_claims(b, claims) + prove  -> b
+    //     a and b must sample alike
+    //
+    // Dropping the claim binding from both sides leaves the whole statement out
+    // of the transcript, and every honest proof still verifies.
+    //
+    // This is what notices: the replay still binds, so the two sponges part.
+    let setup = Setup::new(6);
+    let pcs = setup.pcs();
+    let mut rng = SmallRng::seed_from_u64(8);
+    let witness = Poly::<F>::rand(&mut rng, setup.num_variables);
+    let point = Point::<EF>::rand(&mut rng, setup.num_variables);
+    let eval = witness.eval_base(&point);
+
+    // The adapter's own route: commit, then open.
+    let mut adapter = fresh_challenger();
+    let (commitment, data) = pcs.commit(witness.clone(), &mut adapter).unwrap();
+    let _proof = pcs.open(data, vec![point.clone()], &mut adapter).unwrap();
+
+    // The same run, rebuilt from the pieces the adapter is supposed to use.
+    //
+    // Both start from one commitment, so only the statement binding is in question.
+    let mut replay = fresh_challenger();
+    pcs.observe_commitment(&commitment, &mut replay);
+    observe_claims::<F, EF, _>(&mut replay, &[(point.clone(), eval)], setup.num_variables);
+
+    // The adapter derives a fresh generator per call from the one it holds.
+    //
+    // Replaying the masking randomness means deriving the same two, in order.
+    let mut masking = StdRng::seed_from_u64(setup.seed);
+    let mut commit_rng = StdRng::from_rng(&mut masking);
+    let mut open_rng = StdRng::from_rng(&mut masking);
+
+    let inner = HidingWhirProver::new(&pcs.config, &pcs.dft, &pcs.mmcs);
+    let (_, inner_data) = inner.commit(witness, &mut commit_rng);
+    let _ = inner
+        .prove(inner_data, &[(point, eval)], &mut replay, &mut open_rng)
+        .unwrap();
+
+    assert_eq!(
+        CanSample::<F>::sample(&mut adapter),
+        CanSample::<F>::sample(&mut replay),
+    );
 }

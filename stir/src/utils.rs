@@ -46,23 +46,19 @@ pub fn eval_poly_parallel<F: Field>(poly: &[F], point: F) -> F {
     //     measured  : 2.7 ns per 4-byte coefficient -> 675 ps per byte
     //     streaming :                                    100 ps per byte
     //     -> one coefficient is charged as seven
-    let chunk_size = min_task_len(poly.len(), 7 * size_of::<F>());
+    let floor = min_task_len(poly.len(), 7 * size_of::<F>());
+    let worker_share = poly.len().div_ceil(current_num_threads());
+    let chunk_size = floor.max(worker_share);
     // A chunk spanning the whole polynomial means the split would never pay.
     //
-    // Zeroing both budget overrides pins the floor at one, so an A/B run of this site
-    // compares against the body below rather than against the knobs.
+    // Zeroing both budget overrides removes the gate.
+    // The worker share still prevents scheduling more than one chunk per worker.
     if chunk_size >= poly.len() {
         return eval_poly(poly, point);
     }
 
-    // The chunk length is a cache-sized task, so the count grows with the polynomial:
-    //
-    //     4-byte field      : about  714 coefficients per chunk
-    //     16-byte extension : about  178
-    //
-    // So a 2^22-coefficient extension polynomial makes roughly 23.5k chunks, not one per worker.
-    // The partial sums are collected into a vector of that length, then folded back serially.
-    // Both stay far below the Horner work itself, which is one multiply-add per coefficient.
+    // Horner evaluation is latency-bound, so cache-sized tasks do not improve each chain.
+    // Keep at most one chunk per worker once the gate permits a split.
 
     let point_pow_chunk = point.exp_u64(chunk_size as u64);
 

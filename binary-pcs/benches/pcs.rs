@@ -8,9 +8,16 @@
 //! `bench_verify` also prints each proof's `postcard` size to stderr, since under unique
 //! decoding the query count — not the polynomial arity — dominates proof size and is worth
 //! stating plainly.
+//!
+//! Each phase runs at two committed alphabets, over the same number of committed cells:
+//!
+//! ```text
+//!     gf128   columns and base codeword at the challenge field's own width
+//!     gf64    columns and base codeword half as wide, challenges unchanged
+//! ```
 
 use criterion::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_main};
-use p3_binary_field::{BinaryChallenger, BinaryField128};
+use p3_binary_field::{BinaryChallenger, BinaryField64, BinaryField128};
 use p3_binary_pcs::{BinaryPcs, BinaryPcsConfig, BinaryPcsParams, fold_codeword, fold_pair};
 use p3_challenger::HashChallenger;
 use p3_commit::MultilinearPcs;
@@ -27,7 +34,13 @@ type MyHash = SerializingHasher<Keccak256Hash>;
 type MyCompress = CompressionFunctionFromHasher<Keccak256Hash, 2, 32>;
 type MyMmcs = MerkleTreeMmcs<F, u8, MyHash, MyCompress, 2, 32>;
 type MyChallenger = BinaryChallenger<F, HashChallenger<u8, Keccak256Hash, 32>>;
-type MyPcs = BinaryPcs<MyMmcs>;
+type MyPcs = BinaryPcs<F, F, MyMmcs, MyMmcs>;
+
+/// The same scheme with columns and base codeword over a 64-bit alphabet.
+type Narrow = BinaryField64;
+type NarrowMmcs = MerkleTreeMmcs<Narrow, u8, MyHash, MyCompress, 2, 32>;
+type NarrowChallenger = BinaryChallenger<Narrow, HashChallenger<u8, Keccak256Hash, 32>>;
+type NarrowPcs = BinaryPcs<Narrow, F, NarrowMmcs, MyMmcs>;
 
 /// The polynomial arities under test.
 const NUMS_VARIABLES: [usize; 3] = [16, 18, 20];
@@ -48,14 +61,40 @@ const fn challenger() -> MyChallenger {
     MyChallenger::from_hasher(Vec::new(), Keccak256Hash)
 }
 
-fn make_pcs(num_variables: usize) -> MyPcs {
-    let params = BinaryPcsParams {
+const fn narrow_mmcs() -> NarrowMmcs {
+    NarrowMmcs::new(
+        MyHash::new(Keccak256Hash),
+        MyCompress::new(Keccak256Hash),
+        0,
+    )
+}
+
+const fn narrow_challenger() -> NarrowChallenger {
+    NarrowChallenger::from_hasher(Vec::new(), Keccak256Hash)
+}
+
+const fn params() -> BinaryPcsParams {
+    BinaryPcsParams {
         log_inv_rate: LOG_INV_RATE,
         pow_bits: POW_BITS,
         security_level: SECURITY_LEVEL,
-    };
-    let config = BinaryPcsConfig::try_new(num_variables, params).unwrap();
-    BinaryPcs::new(config, mmcs())
+    }
+}
+
+fn make_pcs(num_variables: usize) -> MyPcs {
+    let config = BinaryPcsConfig::try_new::<F, F>(num_variables, params()).unwrap();
+    BinaryPcs::new(config, mmcs(), mmcs()).unwrap()
+}
+
+fn make_narrow_pcs(num_variables: usize) -> NarrowPcs {
+    let config = BinaryPcsConfig::try_new::<Narrow, F>(num_variables, params()).unwrap();
+    BinaryPcs::new(config, narrow_mmcs(), mmcs()).unwrap()
+}
+
+fn make_narrow_witness(num_variables: usize, seed: u64) -> Witness<Narrow> {
+    let mut rng = SmallRng::seed_from_u64(seed);
+    let table = Table::rand(&mut rng, 1, num_variables);
+    SuffixProver::<Narrow, F>::new_witness(vec![table], 0)
 }
 
 fn make_witness(num_variables: usize, seed: u64) -> Witness<F> {
@@ -77,12 +116,65 @@ fn bench_commit(c: &mut Criterion) {
     for &num_variables in &NUMS_VARIABLES {
         let pcs = make_pcs(num_variables);
         group.bench_with_input(
-            BenchmarkId::from_parameter(num_variables),
+            BenchmarkId::new("gf128", num_variables),
             &num_variables,
             |b, &num_variables| {
                 b.iter_batched(
                     || (make_witness(num_variables, 0), challenger()),
                     |(witness, mut ch)| pcs.commit(witness, &mut ch).unwrap(),
+                    BatchSize::PerIteration,
+                );
+            },
+        );
+
+        // The same cell count, half the bytes per leaf and half the encoded width.
+        let narrow = make_narrow_pcs(num_variables);
+        group.bench_with_input(
+            BenchmarkId::new("gf64", num_variables),
+            &num_variables,
+            |b, &num_variables| {
+                b.iter_batched(
+                    || (make_narrow_witness(num_variables, 0), narrow_challenger()),
+                    |(witness, mut ch)| narrow.commit(witness, &mut ch).unwrap(),
+                    BatchSize::PerIteration,
+                );
+            },
+        );
+    }
+    group.finish();
+}
+
+/// One whole opening at each alphabet, plus the proof size each one produces.
+fn bench_open_narrow(c: &mut Criterion) {
+    let mut group = c.benchmark_group("open_narrow");
+    group.sample_size(10);
+    for &num_variables in &NUMS_VARIABLES {
+        let pcs = make_narrow_pcs(num_variables);
+        let protocol = make_protocol(num_variables);
+
+        // The proof's size at this alphabet, for the record alongside the timing.
+        let mut ch = narrow_challenger();
+        let (_commitment, data) = pcs
+            .commit(make_narrow_witness(num_variables, 2), &mut ch)
+            .unwrap();
+        let proof = pcs.open(data, protocol.clone(), &mut ch).unwrap();
+        let proof_bytes = postcard::to_allocvec(&proof).unwrap().len();
+        eprintln!("pcs/proof_size_gf64/{num_variables}: {proof_bytes} bytes");
+
+        group.bench_with_input(
+            BenchmarkId::from_parameter(num_variables),
+            &num_variables,
+            |b, &num_variables| {
+                b.iter_batched(
+                    || {
+                        let witness = make_narrow_witness(num_variables, 1);
+                        let mut ch = narrow_challenger();
+                        let (_commitment, prover_data) = pcs.commit(witness, &mut ch).unwrap();
+                        (prover_data, protocol.clone(), ch)
+                    },
+                    |(prover_data, protocol, mut ch)| {
+                        pcs.open(prover_data, protocol, &mut ch).unwrap()
+                    },
                     BatchSize::PerIteration,
                 );
             },
@@ -195,6 +287,23 @@ fn bench_fold_codeword(c: &mut Criterion) {
             &codeword,
             |b, codeword| b.iter(|| fold_codeword_per_pair(codeword, beta)),
         );
+
+        // The same symbol count over the narrower alphabet, on the two routes it reaches.
+        //
+        //     lift_gf64    narrow symbols, wide challenge, so the output widens
+        //     tower_gf64   narrow symbols and a narrow challenge, no widening at all
+        let narrow: Vec<Narrow> = (0..len).map(|_| rng.random()).collect();
+        let narrow_beta: Narrow = rng.random();
+        group.bench_with_input(
+            BenchmarkId::new("lift_gf64", num_variables),
+            &narrow,
+            |b, narrow| b.iter(|| fold_codeword::<Narrow, F>(narrow, beta)),
+        );
+        group.bench_with_input(
+            BenchmarkId::new("tower_gf64", num_variables),
+            &narrow,
+            |b, narrow| b.iter(|| fold_codeword::<Narrow, Narrow>(narrow, narrow_beta)),
+        );
     }
     group.finish();
 }
@@ -203,6 +312,7 @@ criterion_group!(
     benches,
     bench_commit,
     bench_open,
+    bench_open_narrow,
     bench_verify,
     bench_fold_codeword
 );

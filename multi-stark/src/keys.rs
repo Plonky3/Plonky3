@@ -9,12 +9,15 @@
 
 use alloc::vec::Vec;
 
-use p3_air::BaseAir;
+use p3_air::{Air, BaseAir};
 use p3_commit::MultilinearPcs;
+use p3_lookup::InteractionSymbolicBuilder;
 use p3_sumcheck::layout::Table;
 
 use crate::ProvingError;
 use crate::config::{Commitment, MultiStarkConfig, PcsProverError, ProverData};
+use crate::rounds::AirProfile;
+use crate::zerocheck::get_air_profile;
 
 /// Batched preprocessed data the prover reuses across proofs.
 ///
@@ -27,16 +30,26 @@ pub(crate) struct PreprocessedProverData<C: MultiStarkConfig> {
     pub(crate) prover_data: ProverData<C>,
 }
 
-/// The prover's key for a fixed AIR and trace height.
+/// The prover's key for an ordered AIR batch and its fixed trace heights.
+///
+/// The proof must use the same AIRs in the same order as setup.
+/// This remains required when no AIR has preprocessed columns.
 pub struct ProvingKey<C: MultiStarkConfig> {
     /// Batched preprocessed data, present only when at least one AIR declares it.
     pub(crate) preprocessed: Option<PreprocessedProverData<C>>,
+    /// Zerocheck metadata fixed by the AIRs at setup.
+    pub(crate) air_profiles: Vec<AirProfile>,
 }
 
-/// The verifier's key for a fixed AIR and trace height.
+/// The verifier's key for an ordered AIR batch and its fixed trace heights.
+///
+/// Verification must use the same AIRs in the same order as setup.
+/// This remains required when no AIR has preprocessed columns.
 pub struct VerifyingKey<C: MultiStarkConfig> {
     /// Batched preprocessed commitment, present only when at least one AIR declares it.
     pub(crate) preprocessed: Option<Commitment<C>>,
+    /// Zerocheck metadata fixed by the AIRs at setup.
+    pub(crate) air_profiles: Vec<AirProfile>,
 }
 
 /// Commit all AIR preprocessed traces once, returning matched prover and verifier keys.
@@ -70,9 +83,13 @@ pub fn setup<C, A>(
 ) -> Result<(ProvingKey<C>, VerifyingKey<C>), ProvingError<PcsProverError<C>>>
 where
     C: MultiStarkConfig,
-    A: BaseAir<C::Val>,
+    A: BaseAir<C::Val> + Air<InteractionSymbolicBuilder<C::Val, C::Challenge>>,
     Commitment<C>: Clone,
 {
+    let air_profiles = airs
+        .iter()
+        .map(|&air| get_air_profile::<C::Val, C::Challenge, A>(air))
+        .collect::<Vec<_>>();
     let mut tables = Vec::new();
 
     for air in airs.iter().filter(|air| air.preprocessed_width() != 0) {
@@ -85,8 +102,14 @@ where
 
     if tables.is_empty() {
         return Ok((
-            ProvingKey { preprocessed: None },
-            VerifyingKey { preprocessed: None },
+            ProvingKey {
+                preprocessed: None,
+                air_profiles: air_profiles.clone(),
+            },
+            VerifyingKey {
+                preprocessed: None,
+                air_profiles,
+            },
         ));
     }
 
@@ -106,10 +129,12 @@ where
             commitment: commitment.clone(),
             prover_data,
         }),
+        air_profiles: air_profiles.clone(),
     };
     // The verifier key keeps only the commitment; shape facts come from AIR metadata.
     let verifying = VerifyingKey {
         preprocessed: Some(commitment),
+        air_profiles,
     };
     Ok((proving, verifying))
 }

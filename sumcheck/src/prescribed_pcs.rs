@@ -1,26 +1,55 @@
 //! Opening committed columns at caller-prescribed points.
 
+use alloc::vec;
 use alloc::vec::Vec;
 
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
 use p3_commit::MultilinearPcs;
 use p3_field::ExtensionField;
 use p3_multilinear_util::point::Point;
+use p3_security::{ErrorBits, SecurityTerm};
 
 use crate::table::{OpeningEvals, OpeningProtocol};
 
 /// Conditional soundness evidence for a concrete prescribed-point opening.
 ///
-/// Except with probability bounded by `error`, accepted evaluations must agree
-/// with one of at most `2^log2_max_candidates` polynomials in a candidate set
-/// fixed by the commitment, before the outer protocol samples its challenges.
-/// Callers must union-bound their own reductions over this candidate set.
-#[derive(Clone, Copy, Debug)]
+/// The terms union-bound the probability that this opening accepts a wrong evaluation.
+///
+/// Except with that probability, accepted evaluations agree with one of at most
+/// `2^log2_max_candidates` polynomials of a set the commitment fixes.
+///
+/// That set is fixed before the outer protocol samples any challenge of its own.
+///
+/// Callers must union-bound their own reductions over it.
+///
+/// The error arrives broken out by source rather than pre-summed.
+///
+/// An opening that stacks a reduction on a commitment charges both.
+///
+/// A report showing one number for the pair cannot say which of them is short.
+#[derive(Clone, Debug)]
 pub struct PrescribedOpeningSecurity {
-    /// Union of all algebraic opening errors, under the PCS's stated assumptions.
-    pub error: p3_security::ErrorBits,
+    /// Every labelled algebraic error the opening charges, composed by a union bound.
+    pub terms: Vec<SecurityTerm>,
     /// Logarithm of the maximum candidate set size at commitment time.
     pub log2_max_candidates: f64,
+}
+
+impl PrescribedOpeningSecurity {
+    /// Evidence whose whole algebraic error sits under one label.
+    #[must_use]
+    pub fn single(label: &'static str, error: ErrorBits, log2_max_candidates: f64) -> Self {
+        Self {
+            terms: vec![SecurityTerm::new(label, error)],
+            log2_max_candidates,
+        }
+    }
+
+    /// Union of every term, which is the whole algebraic error of the opening.
+    #[must_use]
+    pub fn error(&self) -> ErrorBits {
+        ErrorBits::sum(&self.terms.iter().map(|term| term.bits).collect::<Vec<_>>())
+    }
 }
 
 /// A multilinear commitment scheme that opens columns at caller-chosen points.

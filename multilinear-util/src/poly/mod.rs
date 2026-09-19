@@ -68,6 +68,17 @@ pub struct Poly<F, S = Vec<F>>(pub(crate) S, PhantomData<F>);
 /// Borrowed view of a multilinear polynomial's evaluation table.
 pub type PolyView<'a, F> = Poly<F, &'a [F]>;
 
+impl<'a, F> PolyView<'a, F> {
+    /// The evaluations this view borrows, for as long as the table it came from lives.
+    ///
+    /// Taking a reference through the view instead would tie the slice to the view.
+    #[inline]
+    #[must_use]
+    pub const fn into_slice(self) -> &'a [F] {
+        self.0
+    }
+}
+
 impl<F, S> Poly<F, S>
 where
     S: Borrow<[F]>,
@@ -547,6 +558,9 @@ impl<A: Copy + Send + Sync + PrimeCharacteristicRing> Poly<A> {
     /// Folds adjacent pairs and truncates to the first half. The sequential
     /// path folds in place; the parallel path collects the folded pairs into a
     /// half-size buffer that replaces the backing storage.
+    ///
+    /// A build without the `parallel` feature has no parallel path to gain from,
+    /// so it always folds in place.
     ///
     /// # Panics
     ///
@@ -1646,6 +1660,10 @@ pub(crate) mod test {
         // A pool of one worker never splits, which is what a serial build reports.
         let mut num_evals = 1 << 16;
         while current_num_threads() > 1 && !should_split(num_evals / 2, item_bytes) {
+            // A forced never-split budget must not grow the fixture without bound.
+            if num_evals == 1 << 24 {
+                return;
+            }
             num_evals *= 2;
         }
         let mid = num_evals / 2;
@@ -2129,6 +2147,25 @@ pub(crate) mod test {
                 compressed.fix_suffix_var_mut(zi);
             }
             assert_eq!(compressed.as_constant().unwrap(), poly.eval_base(&point));
+        }
+    }
+
+    #[test]
+    fn fix_suffix_var_mut_allocates_a_fresh_buffer_only_when_split() {
+        // The backing allocation changes exactly when the cost model permits a split.
+        // A one-worker pool always keeps the original allocation.
+        let item_bytes = 3 * size_of::<F>();
+        for log_n in [1, 12, 20] {
+            let num_evals = 1 << log_n;
+            let evals: Vec<F> = (0..num_evals).map(|i| F::from_usize(i + 1)).collect();
+            let mut poly = Poly::new(evals);
+            let splits = should_split(num_evals / 2, item_bytes);
+
+            let before = poly.as_slice().as_ptr();
+            poly.fix_suffix_var_mut(F::from_u64(3));
+
+            assert_eq!(poly.num_evals(), num_evals / 2);
+            assert_eq!(poly.as_slice().as_ptr() != before, splits);
         }
     }
 

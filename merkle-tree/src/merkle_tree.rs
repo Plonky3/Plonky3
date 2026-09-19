@@ -345,18 +345,17 @@ const TASK_NODES: usize = 1024;
 ///     row bytes   staged           the batching consumer
 ///        2 KiB     16 KiB   (1x)   groups rows, every lane busy
 ///        8 KiB     64 KiB   (4x)   groups rows, every lane busy
-///       64 KiB    512 KiB  (32x)   one message at a time, every lane idle
+///       64 KiB    512 KiB  (32x)   groups rows, every lane busy
 /// ```
 ///
-/// The only consumer that groups rows abandons grouping past its own 8 KiB row budget.
+/// The one consumer that groups rows keeps every row in a whole lane group too, at its own
+/// 8 KiB row budget: the group handed down from here can still split into more than one
+/// batched call there, but never in the middle of a lane group.
 ///
-/// Under that budget the overshoot buys occupancy.
-/// An idle lane costs a whole permutation, far more than the cache level given up.
-///
-/// Past it the rows are hashed one at a time whatever this layer staged.
-/// The overshoot then buys nothing and is pure copy cost.
-///
-/// Telling the two apart here would mean coupling this layer to a budget it cannot see.
+/// An idle lane costs a whole permutation, far more than the cache level given up, so the
+/// overshoot buys occupancy for a hasher that keeps batching independent messages side by
+/// side at any length. One that falls back to hashing a message alone past its own internal
+/// limit gets a bigger contiguous buffer to hash from instead.
 ///
 /// The bound above is per call.
 ///
@@ -1015,8 +1014,8 @@ mod tests {
     /// - Levels wide enough to fan out across threads instead of staying serial.
     /// - Rows long enough to make the sponge absorb more than one block.
     ///
-    /// - A row too wide to group, which the serializing hasher must hash one row at a time.
-    ///   2100 `BabyBear` columns are 8400 bytes, past that hasher's 8 KiB group budget.
+    /// - A row past the serializing hasher's 8 KiB group budget, which it hashes one lane
+    ///   group at a time. 2100 `BabyBear` columns are 8400 bytes, past that budget.
     const SHAPES: &[(&[usize], usize)] = &[
         (&[1], 1),
         (&[3], 4),

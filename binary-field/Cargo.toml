@@ -40,5 +40,9 @@ serde_json.workspace = true
 name = "arithmetic"
 harness = false
 
+[[bench]]
+name = "bitslice"
+harness = false
+
 [lints]
 workspace = true

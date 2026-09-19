@@ -462,6 +462,45 @@ impl<'a, C, U: Unit> VerifierState<'a, C, U> {
             .collect()
     }
 
+    /// Sample `count` index challenges the caller's predicate accepts, under one step.
+    ///
+    /// The prover-side method of the same name carries what the step does and does not record.
+    ///
+    /// It also carries the obligation that makes the loop terminate.
+    ///
+    /// # Panics
+    ///
+    /// Never for a challenger that rejects internally, which is what `RESAMPLE = true` asks for.
+    pub fn challenge_uniform_bits_rejecting<W>(
+        &mut self,
+        label: Label,
+        width: usize,
+        count: usize,
+        mut accept: impl FnMut(usize, &[usize]) -> bool,
+    ) -> Vec<TranscriptBound<usize>>
+    where
+        C: CanSampleUniformBits<W>,
+    {
+        self.player.interact(Interaction::uniform_bits(
+            Hierarchy::Atomic,
+            Kind::Challenge,
+            label,
+            width,
+            Length::Fixed(count),
+        ));
+        let mut kept: Vec<usize> = Vec::with_capacity(count);
+        while kept.len() < count {
+            let candidate = self
+                .challenger
+                .sample_uniform_bits::<true>(width)
+                .expect("RESAMPLE = true: rejection loops internally, never errors");
+            if accept(candidate, &kept) {
+                kept.push(candidate);
+            }
+        }
+        kept.into_iter().map(TranscriptBound::wrap).collect()
+    }
+
     /// Sample `count` extension challenges the caller's predicate accepts, under one step.
     ///
     /// The prover-side method of the same name carries what the step does and does not record.

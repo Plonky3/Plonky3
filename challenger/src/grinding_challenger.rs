@@ -6,8 +6,8 @@ use p3_symmetric::CryptographicPermutation;
 use tracing::instrument;
 
 use crate::{
-    CanObserve, CanSampleBits, CanSampleUniformBits, DuplexChallenger, MultiField32Challenger,
-    UniformSamplingField,
+    CanObserve, CanSample, CanSampleBits, CanSampleUniformBits, DuplexChallenger,
+    MultiField32Challenger, UniformSamplingField,
 };
 
 /// Trait for challengers that support proof-of-work (PoW) grinding.
@@ -66,6 +66,51 @@ impl<C: GrindingChallenger> GrindingChallenger for &mut C {
         // Absorbing the witness must advance the original transcript, not a copy of it.
         (**self).check_witness(bits, witness)
     }
+}
+
+/// A byte challenger that can test many proof-of-work candidates against one transcript.
+///
+/// [`SerializingChallenger32`](crate::SerializingChallenger32) and
+/// [`SerializingChallenger64`](crate::SerializingChallenger64) grind through this trait.
+///
+/// The default method clones the challenger once per candidate and runs the check on the clone,
+/// so an empty `impl` serves any byte challenger. An override may share the candidate-independent
+/// work between candidates, but it must accept exactly the candidates the default accepts.
+pub trait ByteGrindingChallenger: CanObserve<u8> + CanSample<u8> + Clone + Send + Sync {
+    /// Search `0..num_candidates` for a candidate that passes.
+    ///
+    /// Candidate `c` passes when a copy of `self` that observes `encode(c)` as one slice and then
+    /// samples `S` bytes produces bytes on which `accepts` returns `true`.
+    ///
+    /// # Returns
+    ///
+    /// Any passing candidate, or `None` when none passes.
+    /// When `p3_maybe_rayon::PARALLEL_ENABLED` is false it is the smallest passing candidate.
+    fn find_witness<const W: usize, const S: usize>(
+        &self,
+        num_candidates: u64,
+        encode: impl Fn(u64) -> [u8; W] + Sync,
+        accepts: impl Fn([u8; S]) -> bool + Sync,
+    ) -> Option<u64> {
+        find_witness_by_cloning(self, num_candidates, encode, accepts)
+    }
+}
+
+/// Run the [`ByteGrindingChallenger::find_witness`] check on a fresh clone for every candidate.
+pub(crate) fn find_witness_by_cloning<C, const W: usize, const S: usize>(
+    challenger: &C,
+    num_candidates: u64,
+    encode: impl Fn(u64) -> [u8; W] + Sync,
+    accepts: impl Fn([u8; S]) -> bool + Sync,
+) -> Option<u64>
+where
+    C: CanObserve<u8> + CanSample<u8> + Clone + Sync,
+{
+    (0..num_candidates).into_par_iter().find_any(|&candidate| {
+        let mut challenger = challenger.clone();
+        challenger.observe_slice(&encode(candidate));
+        accepts(challenger.sample_array())
+    })
 }
 
 /// Trait for challengers that support proof-of-work (PoW) grinding with
