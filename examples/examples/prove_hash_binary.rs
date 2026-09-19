@@ -4,6 +4,7 @@ use p3_binary_field::BinaryField128;
 use p3_blake3_air::Blake3BinaryAir;
 use p3_examples::binary::{
     AdditiveNttChoice, Backend, BinaryProofOptions, prove_binary_air_with_ntt_and_backend,
+    prove_boolean_air_with_backend,
 };
 use p3_examples::parsers::{BinaryHashOptions, NttOptions, RepresentationOptions};
 use p3_keccak_air::{KECCAK_BINARY_ROWS_PER_PERM, KeccakBinaryAir};
@@ -26,6 +27,10 @@ struct Args {
     log_trace_length: u8,
 
     /// The additive NTT used to encode the binary-PCS codeword.
+    ///
+    /// Keccak-f commits one field element per trace cell and accepts every choice. BLAKE3 commits
+    /// its trace as bits through the Boolean commitment, which encodes through the
+    /// polynomial-basis NTT only.
     #[arg(short, long, ignore_case = true, value_enum, default_value_t = NttOptions::PolyBasis)]
     ntt: NttOptions,
 
@@ -47,7 +52,7 @@ struct Args {
 
     /// Composed security target of the whole proof, in bits.
     ///
-    /// Committing every cell as a `BinaryField128` element caps it at roughly
+    /// Keccak-f commits every cell as a `BinaryField128` element, which caps it at roughly
     /// 128 - (log-trace-length + ceil(log2(width)) + log-inv-rate + 3); PCS grinding does not
     /// raise that cap.
     #[arg(long, default_value_t = 100)]
@@ -128,8 +133,16 @@ fn main() {
             prove_binary_air_with_ntt_and_backend(&air, trace, options, ntt, backend)
         }
         BinaryHashOptions::Blake3Compressions => {
+            assert_eq!(
+                args.ntt,
+                NttOptions::PolyBasis,
+                "BLAKE3 is committed as bits, whose codeword encodes through the polynomial-basis \
+                 NTT only; drop --ntt"
+            );
             println!("Proving {trace_height} Blake-3 compressions");
 
+            // Every cell is a bit and no constraint reads the next row, so the trace commits as
+            // bits.
             let air = Blake3BinaryAir {};
             let trace = air.generate_random_trace_rows::<BinaryField128>(trace_height, 0);
             assert_eq!(
@@ -137,7 +150,7 @@ fn main() {
                 trace_height,
                 "generated trace height must match the requested log-trace-length"
             );
-            prove_binary_air_with_ntt_and_backend(&air, trace, options, ntt, backend)
+            prove_boolean_air_with_backend(&air, trace, options, backend)
         }
     };
 

@@ -5,6 +5,11 @@
 //! prove and verify phases, and reports the composed security bits from
 //! [`p3_multi_stark::security_report`]. The PCS is binding but not hiding; proofs built here
 //! carry no zero-knowledge guarantee.
+//!
+//! [`prove_boolean_air`] does the same for an AIR whose trace cells are all bits, committing the
+//! trace as bits through a [`BooleanStarkConfig`] rather than one field element per cell. That
+//! commitment opens columns at the current row only, so it refuses an AIR that reads the next
+//! row.
 
 use core::fmt;
 use std::time::Instant;
@@ -14,14 +19,15 @@ use p3_binary_dft::{AdditiveNtt, AdditiveRsEncoder, LchNtt, NaiveAdditiveNtt, Po
 use p3_binary_field::{BinaryChallenger, BinaryField2, BinaryField128, Ghash128, poly_basis};
 use p3_binary_pcs::{
     BinaryPcs, BinaryPcsConfig, BinaryPcsConfigError, BinaryPcsParams, BinaryPcsProverData,
-    GroupedCodewordMmcs,
+    BooleanPcsError, BooleanTraceData, BooleanTraceError, BooleanTracePcs, GroupedCodewordMmcs,
 };
-use p3_challenger::HashChallenger;
+use p3_challenger::{CanObserve, HashChallenger};
+use p3_commit::MultilinearPcs;
 use p3_keccak::Keccak256Hash;
 use p3_lookup::InteractionSymbolicBuilder;
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
-use p3_multi_stark::config::{MultiStarkConfig, PcsError, PcsProverError};
+use p3_multi_stark::config::{Commitment, MultiStarkConfig, PcsError, PcsProverError, ProverData};
 use p3_multi_stark::folder::{InteractionMultilinearFolder, MultilinearFolder};
 use p3_multi_stark::packed_ext::PackedExt;
 use p3_multi_stark::sliced::SlicedFolder;
@@ -31,7 +37,9 @@ use p3_multi_stark::{
     SubfieldBackend, VerificationError, VerifierInstance, VerifierInstances, prove_with_backend,
     security_report, setup, verify,
 };
-use p3_sumcheck::layout::{Layout, SuffixProver, Table, Witness};
+use p3_sumcheck::layout::{Layout, SuffixProver, Table, Witness, plan_stacked_layout};
+use p3_sumcheck::ring_switch::bits::BitRingSwitch;
+use p3_sumcheck::{PrescribedPointPcs, TableShape};
 use p3_symmetric::{CompressionFunctionFromHasher, SerializingHasher};
 use p3_util::{log2_ceil_usize, log2_strict_usize};
 
@@ -112,6 +120,91 @@ where
     Ok(BinaryStarkConfig {
         pcs: BinaryPcs::with_ntt(pcs_config, mmcs.clone(), mmcs, ntt)?,
     })
+}
+
+/// Multi-STARK configuration proving Boolean-valued AIRs over `BinaryField128` with the Boolean
+/// commitment.
+///
+/// The trace is committed as bits, one committed element per 128 of them, and its codeword is
+/// encoded through the level's own additive NTT, [`PolyBasisNtt`].
+///
+/// `N` is the Merkle tree's child arity.
+pub struct BooleanStarkConfig<const N: usize> {
+    pcs: BooleanTracePcs<F, Mmcs<N>, Mmcs<N>>,
+}
+
+impl<const N: usize> MultiStarkConfig for BooleanStarkConfig<N> {
+    type Val = F;
+    type Challenge = F;
+    type Challenger = Challenger;
+    type Pcs = BooleanTracePcs<F, Mmcs<N>, Mmcs<N>>;
+
+    fn pcs(&self) -> &Self::Pcs {
+        &self.pcs
+    }
+
+    fn collision_resistance_bits(&self) -> Option<usize> {
+        // Keccak-256 is shared by the transcript and Merkle tree.
+        Some(128)
+    }
+
+    fn min_num_variables(&self) -> usize {
+        // Every column keeps its own exact run of the bit witness, so no table is zero-extended.
+        1
+    }
+
+    fn build_witness(&self, tables: Vec<Table<F>>) -> Vec<Table<F>> {
+        // The commitment packs the bits itself at commit time.
+        tables
+    }
+
+    fn committed_table<'a>(
+        &self,
+        prover_data: &'a BooleanTraceData<F, Mmcs<N>>,
+        table_index: usize,
+    ) -> &'a Table<F> {
+        prover_data.table(table_index)
+    }
+}
+
+/// Derives a [`BooleanStarkConfig`] for one Boolean trace of `shape`, committing through an
+/// `N`-ary Merkle tree.
+///
+/// Every column of the trace stacks into one bit witness. Each committed element absorbs
+/// [`BitRingSwitch::ABSORBED`] of its variables, and the PCS schedule covers the rest. `folding`
+/// is clamped to that committed arity, as in [`binary_config`].
+///
+/// # Errors
+///
+/// - The bit witness has fewer variables than one committed element absorbs.
+/// - The PCS parameters do not describe a usable schedule for the committed arity.
+pub fn boolean_config<const N: usize>(
+    shape: TableShape,
+    params: BinaryPcsParams,
+    folding: usize,
+) -> Result<BooleanStarkConfig<N>, BinaryProofError> {
+    let (arity, _) = plan_stacked_layout(&[shape]);
+    let absorbed = BitRingSwitch::<F>::ABSORBED;
+    let committed = arity
+        .checked_sub(absorbed)
+        .ok_or(BinaryProofError::BooleanConfig(BooleanTraceError::Boolean(
+            BooleanPcsError::WitnessTooNarrow {
+                needed: absorbed,
+                actual: arity,
+            },
+        )))?;
+
+    let pcs_config =
+        BinaryPcsConfig::try_new_with_folding::<F, F>(committed, params, folding.min(committed))?;
+    let merkle = MerkleMmcs::<N>::new(
+        Hash::new(Keccak256Hash),
+        Compress::<N>::new(Keccak256Hash),
+        0,
+    );
+    let mmcs = Mmcs::<N>::for_folding(merkle, &pcs_config);
+    let pcs = BooleanTracePcs::new(pcs_config, mmcs.clone(), mmcs, arity)
+        .map_err(BinaryProofError::BooleanConfig)?;
+    Ok(BooleanStarkConfig { pcs })
 }
 
 /// An enum over the additive NTTs the binary PCS can encode its codeword through.
@@ -241,6 +334,17 @@ impl Default for BinaryProofOptions {
     }
 }
 
+impl BinaryProofOptions {
+    /// The binary-PCS parameters these options select.
+    const fn pcs_params(&self) -> BinaryPcsParams {
+        BinaryPcsParams {
+            log_inv_rate: self.log_inv_rate,
+            pow_bits: self.pcs_pow_bits,
+            security_level: self.security_bits,
+        }
+    }
+}
+
 /// Measurements from one [`prove_binary_air`] run.
 #[derive(Clone, Copy, Debug)]
 pub struct BinaryProofReport {
@@ -274,9 +378,9 @@ impl fmt::Display for BinaryProofReport {
 
 /// Failure constructing the config, setting up keys, proving, or verifying a binary AIR.
 ///
-/// The wrapped PCS errors project through `BinaryStarkConfig<2>`, but neither the PCS's
-/// commitment nor its error type depends on the Merkle arity, so the same variant covers every
-/// supported arity.
+/// The wrapped PCS errors project through `BinaryStarkConfig<2>` and `BooleanStarkConfig<2>`,
+/// but neither commitment's error type depends on the Merkle arity, so the same variant covers
+/// every supported arity.
 #[derive(Debug, thiserror::Error)]
 pub enum BinaryProofError {
     /// The requested PCS parameters do not describe a usable binary-PCS schedule.
@@ -288,6 +392,15 @@ pub enum BinaryProofError {
     /// The generated proof failed verification.
     #[error("binary proof verification failed: {0}")]
     Verify(VerificationError<PcsError<BinaryStarkConfig<2>>>),
+    /// The Boolean commitment refused the schedule or the witness width it was built for.
+    #[error("Boolean commitment configuration failed: {0}")]
+    BooleanConfig(PcsProverError<BooleanStarkConfig<2>>),
+    /// Proving through the Boolean commitment failed, including on a cell outside `{0, 1}`.
+    #[error("Boolean proof generation failed: {0}")]
+    BooleanProve(ProvingError<PcsProverError<BooleanStarkConfig<2>>>),
+    /// The generated Boolean-committed proof failed verification.
+    #[error("Boolean proof verification failed: {0}")]
+    BooleanVerify(VerificationError<PcsError<BooleanStarkConfig<2>>>),
     /// The statement's security assessment left a component unassessed or below target.
     #[error("binary proof security check failed: {0}")]
     Security(SecurityError),
@@ -311,6 +424,42 @@ impl From<ProvingError<PcsProverError<BinaryStarkConfig<2>>>> for BinaryProofErr
 impl From<VerificationError<PcsError<BinaryStarkConfig<2>>>> for BinaryProofError {
     fn from(error: VerificationError<PcsError<BinaryStarkConfig<2>>>) -> Self {
         Self::Verify(error)
+    }
+}
+
+/// How a harness configuration's proving and verification failures surface as a
+/// [`BinaryProofError`].
+///
+/// Coherence cannot tell the two configurations' error projections apart, so `From` impls for
+/// both would overlap.
+trait HarnessErrors: MultiStarkConfig {
+    /// Wrap a failure from `setup` or proving.
+    fn prove_error(error: ProvingError<PcsProverError<Self>>) -> BinaryProofError;
+
+    /// Wrap a failure from verification.
+    fn verify_error(error: VerificationError<PcsError<Self>>) -> BinaryProofError;
+}
+
+impl<const N: usize, Ntt> HarnessErrors for BinaryStarkConfig<N, Ntt>
+where
+    Ntt: AdditiveNtt<F> + Sync,
+{
+    fn prove_error(error: ProvingError<PcsProverError<Self>>) -> BinaryProofError {
+        BinaryProofError::Prove(error)
+    }
+
+    fn verify_error(error: VerificationError<PcsError<Self>>) -> BinaryProofError {
+        BinaryProofError::Verify(error)
+    }
+}
+
+impl<const N: usize> HarnessErrors for BooleanStarkConfig<N> {
+    fn prove_error(error: ProvingError<PcsProverError<Self>>) -> BinaryProofError {
+        BinaryProofError::BooleanProve(error)
+    }
+
+    fn verify_error(error: VerificationError<PcsError<Self>>) -> BinaryProofError {
+        BinaryProofError::BooleanVerify(error)
     }
 }
 
@@ -386,18 +535,19 @@ impl Backend {
     }
 
     /// Prove through this backend, whose proof and transcript are those of every other.
-    fn prove<A: BinaryAir, const N: usize, Ntt>(
+    fn prove<A: BinaryAir, C>(
         self,
-        config: &BinaryStarkConfig<N, Ntt>,
-        instances: ProverInstances<'_, BinaryStarkConfig<N, Ntt>, A>,
+        config: &C,
+        instances: ProverInstances<'_, C, A>,
         pow_bits: usize,
         challenger: &mut Challenger,
-    ) -> Result<
-        MultiStarkProof<BinaryStarkConfig<N, Ntt>>,
-        ProvingError<PcsProverError<BinaryStarkConfig<N, Ntt>>>,
-    >
+    ) -> Result<MultiStarkProof<C>, ProvingError<PcsProverError<C>>>
     where
-        Ntt: AdditiveNtt<F> + Sync,
+        C: MultiStarkConfig<Val = F, Challenge = F, Challenger = Challenger>,
+        C::Pcs: PrescribedPointPcs<F, Challenger>,
+        Challenger: CanObserve<Commitment<C>>,
+        Commitment<C>: Clone,
+        ProverData<C>: Clone,
     {
         match self {
             Self::Subfield => prove_with_backend::<_, _, SubfieldBackend<BinaryField2>>(
@@ -489,9 +639,6 @@ where
 /// The commitment arity is the trace's log-height plus the ceiling of the log of its width:
 /// one extra variable per doubling of the column count, since every column is stacked into a
 /// single committed polynomial.
-///
-/// The statement's security is assessed once against `options.security_bits` before proving,
-/// so the timed phases are the plain prover and verifier.
 fn prove_binary_air_with<A, const N: usize, Ntt>(
     air: &A,
     trace: RowMajorMatrix<F>,
@@ -502,6 +649,106 @@ fn prove_binary_air_with<A, const N: usize, Ntt>(
 where
     A: BinaryAir,
     Ntt: AdditiveNtt<F> + Sync,
+{
+    let arity = log2_strict_usize(trace.height()) + log2_ceil_usize(trace.width());
+    let config = binary_config::<N, Ntt>(arity, options.pcs_params(), options.folding, ntt)?;
+    prove_and_verify(&config, air, trace, options, backend)
+}
+
+/// Proves and verifies a Boolean-valued `air` against `trace`, committing the trace as bits, and
+/// reports size and timing measurements.
+///
+/// Runs its zerocheck through [`Backend::preferred`]; see [`prove_boolean_air_with_backend`] to
+/// choose a different backend.
+///
+/// # Errors
+///
+/// Besides the errors of [`prove_binary_air`], the Boolean commitment refuses:
+/// - an AIR that reads the next row, which it cannot open, when the statement is assessed;
+/// - a trace cell outside `{0, 1}`, when the trace is committed.
+///
+/// # Panics
+///
+/// - The trace height is not a power of two.
+/// - `air` declares public values or preprocessed columns.
+pub fn prove_boolean_air<A>(
+    air: &A,
+    trace: RowMajorMatrix<F>,
+    options: BinaryProofOptions,
+) -> Result<BinaryProofReport, BinaryProofError>
+where
+    A: BinaryAir,
+{
+    prove_boolean_air_with_backend(air, trace, options, Backend::preferred())
+}
+
+/// Proves and verifies a Boolean-valued `air` against `trace`, committing the trace as bits, and
+/// reports size and timing measurements.
+///
+/// Dispatches on `options.merkle_arity` to build a Merkle tree of that child count, and runs its
+/// zerocheck through `backend`. The codeword is encoded through [`PolyBasisNtt`], the Boolean
+/// commitment's own encoder.
+///
+/// # Errors
+///
+/// As [`prove_boolean_air`].
+///
+/// # Panics
+///
+/// - The trace height is not a power of two.
+/// - `air` declares public values or preprocessed columns.
+pub fn prove_boolean_air_with_backend<A>(
+    air: &A,
+    trace: RowMajorMatrix<F>,
+    options: BinaryProofOptions,
+    backend: Backend,
+) -> Result<BinaryProofReport, BinaryProofError>
+where
+    A: BinaryAir,
+{
+    match options.merkle_arity {
+        2 => prove_boolean_air_with::<A, 2>(air, trace, options, backend),
+        4 => prove_boolean_air_with::<A, 4>(air, trace, options, backend),
+        other => Err(BinaryProofError::UnsupportedMerkleArity(other)),
+    }
+}
+
+/// Proves and verifies a Boolean-valued `air` against `trace` through an `N`-ary Merkle tree,
+/// reporting size and timing measurements.
+fn prove_boolean_air_with<A, const N: usize>(
+    air: &A,
+    trace: RowMajorMatrix<F>,
+    options: BinaryProofOptions,
+    backend: Backend,
+) -> Result<BinaryProofReport, BinaryProofError>
+where
+    A: BinaryAir,
+{
+    let shape = TableShape::new(log2_strict_usize(trace.height()), trace.width());
+    let config = boolean_config::<N>(shape, options.pcs_params(), options.folding)?;
+    prove_and_verify(&config, air, trace, options, backend)
+}
+
+/// Proves and verifies `air` against `trace` under `config`, reporting size and timing
+/// measurements.
+///
+/// The statement's security is assessed once against `options.security_bits` before proving,
+/// so the timed phases are the plain prover and verifier.
+fn prove_and_verify<A, C>(
+    config: &C,
+    air: &A,
+    trace: RowMajorMatrix<F>,
+    options: BinaryProofOptions,
+    backend: Backend,
+) -> Result<BinaryProofReport, BinaryProofError>
+where
+    A: BinaryAir,
+    C: HarnessErrors + MultiStarkConfig<Val = F, Challenge = F, Challenger = Challenger>,
+    C::Pcs: PrescribedPointPcs<F, Challenger>,
+    Challenger: CanObserve<Commitment<C>>,
+    Commitment<C>: Clone,
+    ProverData<C>: Clone,
+    MultiStarkProof<C>: serde::Serialize + serde::de::DeserializeOwned,
 {
     assert_eq!(
         BaseAir::<F>::num_public_values(air),
@@ -517,16 +764,8 @@ where
     let rows = trace.height();
     let width = trace.width();
     let log_height = log2_strict_usize(rows);
-    let arity = log_height + log2_ceil_usize(width);
 
-    let params = BinaryPcsParams {
-        log_inv_rate: options.log_inv_rate,
-        pow_bits: options.pcs_pow_bits,
-        security_level: options.security_bits,
-    };
-    let config = binary_config::<N, Ntt>(arity, params, options.folding, ntt)?;
-
-    let (pk, vk) = setup(&config, &[air], &mut binary_challenger())?;
+    let (pk, vk) = setup(config, &[air], &mut binary_challenger()).map_err(C::prove_error)?;
 
     let public_values: [F; 0] = [];
     let verifier_instances = || {
@@ -539,7 +778,7 @@ where
     };
 
     let report =
-        security_report(&config, &verifier_instances()).map_err(BinaryProofError::Security)?;
+        security_report(config, &verifier_instances()).map_err(BinaryProofError::Security)?;
     report
         .require_security(options.security_bits)
         .map_err(BinaryProofError::Security)?;
@@ -554,33 +793,36 @@ where
     drop(trace);
     let prover_instances =
         ProverInstances::new(vec![ProverInstance::new(air, table, &pk, &public_values)]);
-    let proof = backend.prove(
-        &config,
-        prover_instances,
-        options.sumcheck_pow_bits,
-        &mut binary_challenger(),
-    )?;
+    let proof = backend
+        .prove(
+            config,
+            prover_instances,
+            options.sumcheck_pow_bits,
+            &mut binary_challenger(),
+        )
+        .map_err(C::prove_error)?;
     let prove_seconds = prove_start.elapsed().as_secs_f64();
 
     let bytes = postcard::to_allocvec(&proof).expect("postcard serialization must not fail");
     let proof_bytes = bytes.len();
-    let proof: MultiStarkProof<BinaryStarkConfig<N, Ntt>> =
+    let proof: MultiStarkProof<C> =
         postcard::from_bytes(&bytes).expect("postcard round trip must not fail");
 
     let verify_start = Instant::now();
     verify(
-        &config,
+        config,
         verifier_instances(),
         &proof,
         options.sumcheck_pow_bits,
         &mut binary_challenger(),
-    )?;
+    )
+    .map_err(C::verify_error)?;
     let verify_seconds = verify_start.elapsed().as_secs_f64();
 
     Ok(BinaryProofReport {
         rows,
         width,
-        stacked_variables: arity,
+        stacked_variables: config.pcs().num_vars(),
         proof_bytes,
         prove_seconds,
         verify_seconds,
@@ -596,7 +838,7 @@ mod tests {
     use p3_binary_field::TowerLevel;
     use p3_blake3_air::Blake3BinaryAir;
     use p3_challenger::CanSample;
-    use p3_field::HasSubfield;
+    use p3_field::{HasSubfield, PrimeCharacteristicRing};
     use p3_keccak_air::KeccakBinaryAir;
     use p3_multi_stark::prove;
 
@@ -771,6 +1013,68 @@ mod tests {
             "unsupported Merkle arity 3; expected 2 or 4"
         );
         assert!(error.source().is_none());
+    }
+
+    /// Three bit columns, the third the XOR of the first two.
+    ///
+    /// No constraint reads the next row, so the Boolean commitment can open every column.
+    struct XorAir;
+
+    impl<F> BaseAir<F> for XorAir {
+        fn width(&self) -> usize {
+            3
+        }
+
+        fn main_next_row_columns(&self) -> Vec<usize> {
+            Vec::new()
+        }
+    }
+
+    impl<AB: AirBuilder> Air<AB> for XorAir {
+        fn eval(&self, builder: &mut AB) {
+            let main = builder.main();
+            let local = main.current_slice();
+            builder.assert_bools([local[0], local[1]]);
+            // Addition is XOR in characteristic 2.
+            builder.assert_eq(local[2], local[0] + local[1]);
+        }
+    }
+
+    /// Every row's inputs are the two low bits of its index.
+    fn xor_trace(log_height: usize) -> RowMajorMatrix<F> {
+        let values = (0..1usize << log_height)
+            .flat_map(|row| {
+                let (a, b) = (row & 1 == 1, (row >> 1) & 1 == 1);
+                [F::from_bool(a), F::from_bool(b), F::from_bool(a ^ b)]
+            })
+            .collect();
+        RowMajorMatrix::new(values, 3)
+    }
+
+    #[test]
+    fn proves_and_verifies_a_trace_committed_as_bits() {
+        // 256 rows of three columns stack to ten bit variables, three past one element's seven.
+        let log_height = 8;
+        let report = prove_boolean_air(
+            &XorAir,
+            xor_trace(log_height),
+            BinaryProofOptions::default(),
+        )
+        .expect("a Boolean trace must prove and verify");
+        assert_eq!(report.rows, 1 << log_height);
+        assert_eq!(report.width, 3);
+        assert_eq!(report.stacked_variables, log_height + 2);
+        assert!(report.security_bits >= 100.0);
+    }
+
+    #[test]
+    fn boolean_commitment_refuses_an_air_reading_the_next_row() {
+        // Keccak-f links consecutive rows, which the Boolean commitment cannot open, so the
+        // statement is refused when it is assessed, before anything is proved.
+        let air = KeccakBinaryAir {};
+        let trace = air.generate_random_trace_rows::<F>(1, 0);
+        let result = prove_boolean_air(&air, trace, BinaryProofOptions::default());
+        assert!(matches!(result, Err(BinaryProofError::Security(_))));
     }
 
     #[test]
