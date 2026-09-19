@@ -3,7 +3,7 @@
 use alloc::vec::Vec;
 
 use p3_challenger::{FieldChallenger, GrindingChallenger};
-use p3_field::{ExtensionField, TwoAdicField};
+use p3_field::{ExtensionField, Field};
 use p3_security::whir::WHIR_OPENING_LABEL;
 use p3_security::{ErrorBits, SecurityAssumption};
 use p3_sumcheck::{OpeningProtocol, PrescribedOpeningSecurity};
@@ -18,14 +18,21 @@ pub(super) fn prescribed_security<EF, F, Challenger>(
     protocol: &OpeningProtocol,
 ) -> Option<PrescribedOpeningSecurity>
 where
-    F: TwoAdicField,
-    EF: ExtensionField<F> + TwoAdicField,
+    F: Field,
+    EF: ExtensionField<F>,
     Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
 {
     // Public derived fields can be changed after construction. Only certify a
     // schedule which agrees with the validated parameter derivation.
-    let canonical =
-        WhirConfig::<EF, F, Challenger>::new(config.num_variables, config.params.clone()).ok()?;
+    let canonical = WhirConfig::<EF, F, Challenger>::new_with_max_domain_log(
+        config.num_variables,
+        config.params.clone(),
+        config.max_log_domain_size,
+    )
+    .ok()?;
+    // Domain identity and query stratification affect transcript separation and
+    // sampling geometry, not the derived algebraic budget. The encoder capacity
+    // is the only domain-specific input to the schedule reconstructed here.
     if config.commitment_ood_samples != canonical.commitment_ood_samples
         || config.folding_schedule != canonical.folding_schedule
         || config.starting_folding_pow_bits != canonical.starting_folding_pow_bits
@@ -47,7 +54,7 @@ where
                     || a.folding_factor != b.folding_factor
                     || a.log_inv_rate != b.log_inv_rate
                     || a.domain_size != b.domain_size
-                    || a.folded_domain_gen != b.folded_domain_gen
+                    || a.log_folded_domain_size != b.log_folded_domain_size
             })
     {
         return None;

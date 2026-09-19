@@ -8,9 +8,9 @@ Diamond, Posen, *Succinct Arguments over Towers of Binary Fields* (Binius),
 Multilinears over Binary Towers* (FRI-Binius, ring switching),
 <https://eprint.iacr.org/2024/504>. Parameters are derived only in the unique-decoding regime.
 The capacity bound is refuted over characteristic 2 with `F_2`-subspace domains, and the Cantor
-domain is one. The Johnson bound is not refuted — it is an unconditional theorem whose radius
-those same counterexamples show to be tight — but `p3-security` documents it as resting on a
-correlated-agreement conjecture, and it is excluded here by choice, not by mathematics.
+domain is one. The classical Johnson list-decoding radius remains unconditional; using it in a
+folding argument additionally needs the proven Reed--Solomon mutual-correlated-agreement bound.
+This BaseFold implementation nevertheless stays in unique decoding by design.
 
 The committed alphabet and the challenge field are separate choices. Columns and the base
 codeword live in the alphabet; every challenge, every folded codeword and every claimed value
@@ -45,5 +45,18 @@ protocol, or `try_open` / `try_open_at` to receive typed errors without changing
 on rejection. The existing infallible `open` / `open_at` traits panic on invalid or
 over-budget protocols. Existing callers must handle this new rejection or choose a feasible
 target and protocol before opening.
+
+## WHIR over the additive domain
+
+The `whir` module connects WHIR to the Cantor additive code. Commitments use
+the 64-bit polynomial-basis field. Challenges use its 192-bit cubic extension.
+
+Queries follow a transcript-bound stratified schedule. Use
+`recommended_cap_height` to stop Merkle paths at its deepest stratum.
+
+Unique decoding and the Johnson regime use proven bounds. The capacity regime
+is unsupported because its assumption is refuted for this domain.
+
+This adapter is binding, not hiding.
 
 Part of [Plonky3](https://github.com/Plonky3/Plonky3), dual-licensed under MIT and Apache 2.0.

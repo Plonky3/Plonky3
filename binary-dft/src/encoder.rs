@@ -3,7 +3,7 @@
 use core::marker::PhantomData;
 
 use p3_binary_field::{
-    BinaryField8, BinaryField16, BinaryField32, BinaryField64, BinaryField128, TowerLevel,
+    BinaryField8, BinaryField16, BinaryField32, BinaryField64, BinaryField128, Poly64, TowerLevel,
 };
 use p3_commit::Encoder;
 use p3_matrix::Matrix;
@@ -68,6 +68,10 @@ impl EncodableLevel for BinaryField128 {
 }
 
 impl EncodableLevel for BinaryField64 {
+    type Encoder = AdditiveRsEncoder<Self, LchNtt<Self>>;
+}
+
+impl EncodableLevel for Poly64 {
     type Encoder = AdditiveRsEncoder<Self, LchNtt<Self>>;
 }
 
@@ -150,6 +154,24 @@ impl<Ntt: AdditiveNtt<BinaryField64> + Sync> Encoder<BinaryField64>
         message: RowMajorMatrix<BinaryField64>,
         log_inv_rate: usize,
     ) -> RowMajorMatrix<BinaryField64> {
+        self.ntt.ntt_batch_padded(message, log_inv_rate)
+    }
+}
+
+impl<Ntt: AdditiveNtt<Poly64> + Sync> Encoder<Poly64> for AdditiveRsEncoder<Poly64, Ntt> {
+    fn encode_batch(
+        &self,
+        message: RowMajorMatrix<Poly64>,
+        log_inv_rate: usize,
+    ) -> RowMajorMatrix<Poly64> {
+        encode_by_padding(&self.ntt, message, log_inv_rate)
+    }
+
+    fn encode_batch_padded(
+        &self,
+        message: RowMajorMatrix<Poly64>,
+        log_inv_rate: usize,
+    ) -> RowMajorMatrix<Poly64> {
         self.ntt.ntt_batch_padded(message, log_inv_rate)
     }
 }
