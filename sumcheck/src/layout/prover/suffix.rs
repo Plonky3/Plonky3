@@ -123,7 +123,7 @@ impl<F: Field, EF: ExtensionField<F>> Layout<F, EF> for SuffixProver<F, EF> {
     ///   batch opening more than one column, the equality and successor weight tables are built
     ///   once per call. Each column is then one weighted sum against them, free of products on
     ///   bit-valued rows.
-    #[tracing::instrument(skip_all)]
+    #[tracing::instrument(skip_all, level = "debug")]
     fn record_opening(
         &mut self,
         table_idx: usize,
