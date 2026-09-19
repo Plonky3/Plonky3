@@ -467,7 +467,7 @@ where
             .iter()
             .map(Self::reduction)
             .collect::<Result<Vec<_>, _>>()?;
-        let packing = Self::packing(&prover_data);
+        let packing = tracing::info_span!("copy packing").in_scope(|| Self::packing(&prover_data));
 
         // One reduction per opening, each leaving one claim about the same packing.
         let mut readings = Vec::with_capacity(openings.len());
@@ -475,7 +475,8 @@ where
         let mut surviving_points = Vec::with_capacity(openings.len());
 
         for (opening, reduction) in openings.iter().zip(&reductions) {
-            let (proof, surviving_point, _) = reduction.prove(&packing, challenger);
+            let (proof, surviving_point, _) = tracing::info_span!("bit ring switch")
+                .in_scope(|| reduction.prove(&packing, challenger));
 
             // The elements the reduction sends already hold the witness's readings.
             // Read by columns they are the claimed values, so neither costs a pass of its own.
@@ -644,7 +645,8 @@ where
         challenger: &mut Challenger,
     ) -> Result<(Self::Commitment, Self::ProverData), Self::Error> {
         // The packing is one copy of the bits, so the witness is never swept for arithmetic.
-        let stack = PackedStack::<PackedGf2<U>, EF>::from_columns(&[bits])?;
+        let stack = tracing::info_span!("pack bit witness")
+            .in_scope(|| PackedStack::<PackedGf2<U>, EF>::from_columns(&[bits]))?;
         if stack.column_num_variables() != self.inner.num_variables() {
             return Err(BooleanPcsError::WitnessArity {
                 expected: self.inner.num_variables(),

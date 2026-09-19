@@ -871,7 +871,8 @@ where
         challenger: &mut Challenger,
     ) -> Result<(Self::Commitment, Self::ProverData), Self::ProverError> {
         // Gathering runs before the transcript is touched, so a refusal leaves it alone.
-        let bits = self.gather_bits(&witness)?;
+        let bits =
+            tracing::info_span!("gather boolean bits").in_scope(|| self.gather_bits(&witness))?;
         let (commitment, inner) = self
             .inner
             .commit_bits(&bits, challenger)
@@ -1005,11 +1006,13 @@ where
         };
         let run = width * (1 + usize::from(next));
         let mut values = Vec::with_capacity(run * shape.num_batches);
-        for point in points {
-            let (current, successor) = Self::evaluate_views(&tables[0], point, next);
-            values.extend(current);
-            values.extend(successor);
-        }
+        tracing::info_span!("evaluate boolean columns", width, next).in_scope(|| {
+            for point in points {
+                let (current, successor) = Self::evaluate_views(&tables[0], point, next);
+                values.extend(current);
+                values.extend(successor);
+            }
+        });
 
         let mut transcript = ColumnBatchProverTranscript::new(challenger, shape);
         let mut openings = Vec::with_capacity(shape.num_batches);
