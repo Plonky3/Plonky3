@@ -46,17 +46,17 @@ on rejection. The existing infallible `open` / `open_at` traits panic on invalid
 over-budget protocols. Existing callers must handle this new rejection or choose a feasible
 target and protocol before opening.
 
-Part of [Plonky3](https://github.com/Plonky3/Plonky3), dual-licensed under MIT and Apache 2.0.
-
 ## WHIR over the additive domain
 
 The `whir` module connects WHIR to the Cantor additive code. Commitments use
-the 64-bit polynomial-basis field; challenges use its 192-bit cubic extension.
+the 64-bit polynomial-basis field. Challenges use its 192-bit cubic extension.
 
 Queries follow a transcript-bound stratified schedule. Use
 `recommended_cap_height` to stop Merkle paths at its deepest stratum.
 
 Unique decoding and the Johnson regime use proven bounds. The capacity regime
-remains conjectural and is labelled explicitly by `p3-security`.
+is unsupported because its assumption is refuted for this domain.
 
 This adapter is binding, not hiding.
+
+Part of [Plonky3](https://github.com/Plonky3/Plonky3), dual-licensed under MIT and Apache 2.0.

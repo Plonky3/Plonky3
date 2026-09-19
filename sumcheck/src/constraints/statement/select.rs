@@ -123,79 +123,26 @@ fn packed_batch_pows<F: Field>(points: RowMajorMatrixView<'_, F>) -> RowMajorMat
     mat
 }
 
-/// A batched system of `select`-based evaluation constraints for multilinear polynomials.
+/// Evaluation constraints batched through selector polynomials.
 ///
-/// This struct represents a collection of evaluation constraints of the form `p(z_i) = s_i`
-/// for a multilinear polynomial `p` over the Boolean hypercube `{0,1}^k`.
+/// A statement uses exactly one point representation:
 ///
-/// # The Select Function
+/// - A scalar expands to `(z, z^2, ..., z^(2^(k - 1)))`.
+/// - A direct point supplies all `k` multilinear coordinates.
 ///
-/// For vectors `X, Y ∈ F^k`, the select function is defined as:
-///
-/// ```text
-/// select(X, Y) = ∏_i (X_i · Y_i + (1 - Y_i))
-/// ```
-///
-/// **Key Property:** When `Y ∈ {0,1}^k` is a Boolean vector and `X = pow(z)`:
-///
-/// ```text
-/// select(pow(z), b) = z^{int(b)}
-/// ```
-///
-/// where `pow(z) = (z, z^2, z^4, ..., z^{2^{k-1}})` and `int(b)` interprets the Boolean
-/// vector `b` as an integer in binary.
-///
-/// **Derivation:**
-/// ```text
-/// select(pow(z), b) = ∏_i (z^{2^i} · b_i + (1 - b_i))
-///                   = ∏_{i: b_i=1} (z^{2^i})     [since b_i ∈ {0,1}]
-///                   = z^{Σ_{i: b_i=1} 2^i}
-///                   = z^{int(b)}
-/// ```
-///
-/// # Verification Claims
-///
-/// Each constraint `(z_i, s_i)` in this statement asserts:
-///
-/// ```text
-/// Σ_{b ∈ {0,1}^k} P(b) · select(pow(z_i), b) = s_i
-/// ```
-///
-/// where `P(b)` are the evaluations of the polynomial over the Boolean hypercube.
-///
-/// # Batching
-///
-/// Multiple constraints are batched using random challenge `γ` to produce:
-///
-/// - **Weight polynomial**: `W(b) = Σ_i γ^i · select(pow(z_i), b)`
-/// - **Target sum**: `S = Σ_i γ^i · s_i`
-///
-/// This reduces `n` separate verification claims to a single sumcheck:
-///
-/// ```text
-/// Σ_{b ∈ {0,1}^k} P(b) · W(b) = S
-/// ```
+/// A random challenge combines every claimed evaluation into one sumcheck.
 #[derive(Clone, Debug)]
 pub struct SelectStatement<F, EF> {
-    /// Number of variables `k` defining the Boolean hypercube `{0,1}^k`.
-    ///
-    /// This determines the dimension of the multilinear polynomial space and the size
-    /// of the evaluation domain (2^k points).
+    /// Number of variables in the multilinear polynomial.
     num_variables: usize,
 
-    /// Evaluation points `[z_1, z_2, ..., z_n]` where each constraint checks `p(z_i) = s_i`.
-    ///
-    /// Each `z_i ∈ F` is a base field element. The `pow` map will expand it to
-    /// `pow(z_i) = (z_i, z_i^2, z_i^4, ..., z_i^{2^{k-1}})` for the select function.
+    /// Scalar points expanded through successive squaring.
     pub(crate) vars: Vec<F>,
 
-    /// Direct selector coordinates for non-monomial evaluation domains.
+    /// Direct coordinates for multilinear evaluation domains.
     points: Vec<Point<F>>,
 
-    /// Expected evaluation values `[s_1, s_2, ..., s_n]` corresponding to each constraint.
-    ///
-    /// Each `s_i ∈ EF` is an extension field element representing the claimed evaluation
-    /// of the polynomial at point `z_i`.
+    /// Claimed evaluations in the selected point representation.
     evaluations: Vec<EF>,
 }
 
@@ -257,9 +204,9 @@ impl<F: Field, EF: ExtensionField<F>> SelectStatement<F, EF> {
         self.evaluations.is_empty()
     }
 
-    /// Returns an iterator over constraint pairs `(z_i, s_i)`.
+    /// Iterates over scalar-point constraints and their claimed evaluations.
     ///
-    /// Each pair represents one evaluation constraint: `p(z_i) = s_i`.
+    /// Direct-point statements yield no entries.
     pub fn iter(&self) -> impl Iterator<Item = (&F, &EF)> {
         self.vars.iter().zip(self.evaluations.iter())
     }
@@ -271,21 +218,20 @@ impl<F: Field, EF: ExtensionField<F>> SelectStatement<F, EF> {
         self.evaluations.len()
     }
 
-    /// Streams one weight per stored constraint, each evaluated at a single point.
+    /// Evaluates each stored selector at one multilinear point.
     ///
-    /// # Overview
-    ///
-    /// A selection constraint stores a univariate point whose power-map expansion is a selector polynomial.
-    /// This yields that selector's value at the supplied point, one entry per constraint, in stored order.
+    /// Scalar points use their successive-power expansion.
+    /// Direct points use their supplied coordinates.
     ///
     /// # Arguments
     ///
     /// - `row`: the point at which every constraint weight is evaluated.
     pub fn weights_at<'a>(&'a self, row: &'a Point<EF>) -> impl Iterator<Item = EF> + 'a {
-        // Walk the stored univariate selection points in order.
+        // Scalar selectors use the monomial power map.
         self.vars
             .iter()
             .map(|&var| Point::eval_select(var, row.as_slice()))
+            // Direct selectors evaluate their multilinear equality polynomial.
             .chain(self.points.iter().map(|point| {
                 point
                     .iter()
@@ -295,32 +241,10 @@ impl<F: Field, EF: ExtensionField<F>> SelectStatement<F, EF> {
             }))
     }
 
-    /// Verifies that a given polynomial satisfies all constraints in the statement.
+    /// Checks every claimed evaluation against a coefficient table.
     ///
-    /// Univariate constraints interpret the table as monomial coefficients and
-    /// use Horner evaluation. Direct-point constraints fold the multilinear
-    /// coefficient table at the supplied coordinates.
-    ///
-    /// For a polynomial represented by evaluations `[c_0, c_1, ..., c_{2^k-1}]`:
-    ///
-    /// ```text
-    /// p(z) = c_0 + z(c_1 + z(c_2 + z(...)))
-    /// ```
-    ///
-    /// This is computed right-to-left as:
-    /// ```text
-    /// acc = 0
-    /// for i = 2^k-1 down to 0:
-    ///     acc = acc * z + c_i
-    /// ```
-    ///
-    /// # Parameters
-    ///
-    /// - `poly`: Evaluation table treated as univariate polynomial coefficients
-    ///
-    /// # Returns
-    ///
-    /// `true` if all constraints are satisfied, `false` otherwise.
+    /// Scalar points use Horner evaluation.
+    /// Direct points fold the multilinear table coordinate by coordinate.
     #[must_use]
     pub fn verify(&self, poly: &Poly<EF>) -> bool {
         let univariate = self.iter().all(|(&var, &expected_eval)| {
@@ -332,6 +256,13 @@ impl<F: Field, EF: ExtensionField<F>> SelectStatement<F, EF> {
             return false;
         }
 
+        // Two-adic statements contain only scalar points.
+        // Avoid copying the polynomial when direct folding is unnecessary.
+        if self.points.is_empty() {
+            return true;
+        }
+
+        // Reuse one scratch allocation across every direct-point fold.
         let mut scratch = poly.as_slice().to_vec();
         self.points
             .iter()
@@ -377,49 +308,20 @@ impl<F: Field, EF: ExtensionField<F>> SelectStatement<F, EF> {
         self.evaluations.push(eval);
     }
 
-    /// Batches all constraints into a single weighted polynomial and target sum for sumcheck.
+    /// Batches every constraint into one weight polynomial and target sum.
     ///
-    /// Given constraints `p(z_1) = s_1, ..., p(z_n) = s_n`, this method transforms them into
-    /// a single sumcheck claim using random challenge `γ`:
+    /// Each point is first represented by `k` selector coordinates.
+    /// Scalar points use successive powers.
+    /// Direct points use their stored coordinates.
+    ///
+    /// A challenge `gamma` produces the sumcheck claim:
     ///
     /// ```text
-    /// Σ_{b ∈ {0,1}^k} P(b) · W(b) = S
+    /// sum_(b in {0,1}^k) P(b) * W(b) = S
     /// ```
     ///
-    /// where:
-    /// - **Weight polynomial**: `W(b) = Σ_i γ^{i+shift} · select(pow(z_i), b)`
-    /// - **Target sum**: `S = Σ_i γ^{i+shift} · s_i`
-    ///
-    /// The method computes `W(b)` for all `b ∈ {0,1}^k` and `S`, adding them to the
-    /// provided accumulators.
-    ///
-    /// # Parameters
-    ///
-    /// - `acc_weights`: Accumulator for the weight polynomial `W(b)`. Must have `2^k` entries.
-    ///   This method **adds** the batched weights to existing values.
-    ///
-    /// - `acc_sum`: Accumulator for the target sum `S`. This method **adds** the batched
-    ///   evaluations to the existing value.
-    ///
-    /// - `challenge`: Random challenge `γ ∈ EF` used for batching.
-    ///
-    /// - `shift`: Power offset for challenge. Constraint `i` uses weight `γ^{i+shift}`.
-    ///   Allows multiple statement types to use non-overlapping challenge powers.
-    ///
-    /// # Algorithm
-    ///
-    /// Three stages:
-    ///
-    /// 1. **Power map**: Build a `k × n` matrix where row `i`, column `j`
-    ///    holds `z_j^{2^i}`. Stored as a flat row-major buffer so each
-    ///    butterfly step reads a contiguous row (cache-friendly).
-    ///
-    /// 2. **Butterfly expansion**: Expand the power map into the full
-    ///    `2^k × n` select matrix using the same binary-tree doubling as
-    ///    the scalar power table. Entry `[b, j] = z_j^b`.
-    ///
-    /// 3. **Challenge combination**: Dot each row of the select matrix
-    ///    with the challenge power vector to produce the weight polynomial.
+    /// Here `W` is the challenge-weighted sum of selectors.
+    /// The target `S` is the same combination of claimed evaluations.
     #[instrument(skip_all, level = "debug", fields(num_constraints = self.len(), num_variables = self.num_variables()))]
     pub fn combine(
         &self,
@@ -445,12 +347,9 @@ impl<F: Field, EF: ExtensionField<F>> SelectStatement<F, EF> {
         // Dimension of Boolean hypercube
         let k = self.num_variables();
 
-        // ---------------------------------------------------------------
-        // Stage 1: Build the k × n power-of-two matrix.
-        // ---------------------------------------------------------------
-        //
-        // Row i contains [z_1^{2^i}, z_2^{2^i}, ..., z_n^{2^i}].
-        // Stored as a flat Vec<F> of size k * n in row-major order.
+        // Phase 1: Build the `k * n` selector-coordinate matrix.
+        // Scalar points contribute successive powers.
+        // Direct points contribute their coordinates in folding order.
         let mut pow_matrix = F::zero_vec(k * n);
         if self.points.is_empty() {
             for (j, &var) in self.vars.iter().enumerate() {
@@ -468,12 +367,8 @@ impl<F: Field, EF: ExtensionField<F>> SelectStatement<F, EF> {
             }
         }
 
-        // ---------------------------------------------------------------
-        // Stage 2: Butterfly expansion into the 2^k × n select matrix.
-        // ---------------------------------------------------------------
-        //
-        // After iteration i, the first 2^{i+1} rows are filled.
-        // Entry [b, j] = z_j^b.
+        // Phase 2: Expand selector coordinates over the Boolean hypercube.
+        // After coordinate `i`, the first `2^(i + 1)` rows are populated.
         let mut acc = F::zero_vec((1 << k) * n);
 
         // Base case: z_j^0 = 1 for all j.
@@ -501,9 +396,7 @@ impl<F: Field, EF: ExtensionField<F>> SelectStatement<F, EF> {
                 });
         }
 
-        // ---------------------------------------------------------------
-        // Stage 3: Combine with challenge powers.
-        // ---------------------------------------------------------------
+        // Phase 3: Combine selectors and claims with matching challenge powers.
 
         // Precompute [gamma^shift, gamma^{shift+1}, ..., gamma^{shift+n-1}].
         let challenges = challenge

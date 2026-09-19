@@ -75,14 +75,36 @@ where
     /// # Arguments
     ///
     /// - `config`         — derived per-protocol parameters and per-round configuration.
+    /// - `domain`         — code and evaluation-point map used by every query.
     /// - `mmcs`           — base-field Merkle commitment scheme used to authenticate STIR queries.
     /// - `variable_order` — binding direction the prover declared at commit time.
-    pub const fn new(
+    ///
+    /// # Panics
+    ///
+    /// Panics when the configuration was derived for another domain.
+    pub fn new(
         config: &'a WhirConfig<EF, F, Challenger>,
         domain: &'a Dft,
         mmcs: &'a MT,
         variable_order: VariableOrder,
     ) -> Self {
+        // The verifier must reconstruct the same code and query schedule as the prover.
+        assert_eq!(
+            config.max_log_domain_size,
+            domain.max_log_domain_size(),
+            "WHIR configuration and domain have different capacities"
+        );
+        assert_eq!(
+            config.domain_id,
+            domain.protocol_id(),
+            "WHIR configuration and domain have different protocol identities"
+        );
+        assert_eq!(
+            config.stratified_queries,
+            domain.stratified_queries(),
+            "WHIR configuration and domain disagree on query stratification"
+        );
+
         Self {
             config,
             domain,
@@ -384,7 +406,7 @@ where
         &self,
         proof: &WhirProof<F, EF, MT>,
         transcript: &mut WhirVerifierTranscript<'_, Challenger, F, EF>,
-        params: &RoundConfig<F>,
+        params: &RoundConfig,
         commitment: &MT::Commitment,
         folding_randomness: &Point<EF>,
         round_index: usize,

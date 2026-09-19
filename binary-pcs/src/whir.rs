@@ -6,7 +6,7 @@ use p3_commit::Encoder;
 use p3_field::BasedVectorSpace;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_multilinear_util::point::Point;
-use p3_whir::{WhirDomain, WhirQueryPoint};
+use p3_whir::{SecurityAssumption, WhirDomain, WhirQueryPoint};
 
 /// Returns the Merkle cap height of the deepest query stratum.
 ///
@@ -74,6 +74,11 @@ where
         b"p3-whir-domain:cantor-novel-basis-v1"
     }
 
+    fn supports_security_assumption(&self, assumption: SecurityAssumption) -> bool {
+        // Capacity is refuted for characteristic-two subspace domains.
+        assumption != SecurityAssumption::CapacityBound
+    }
+
     fn stratified_queries(&self) -> bool {
         true
     }
@@ -130,7 +135,10 @@ mod tests {
     use p3_binary_dft::NaiveAdditiveNtt;
     use p3_commit::Encoder;
     use p3_field::PrimeCharacteristicRing;
+    use p3_matrix::Matrix;
     use p3_matrix::dense::RowMajorMatrix;
+    use p3_multilinear_util::poly::Poly;
+    use p3_sumcheck::constraints::statement::SelectStatement;
     use p3_whir::{WhirDomain, WhirQueryPoint};
 
     use super::{BinaryWhirDomain, Poly64, Poly192};
@@ -174,20 +182,30 @@ mod tests {
             .map(|index| Poly64::new((13 * index + 7) as u64))
             .collect::<Vec<_>>();
         let domain: BinaryWhirDomain<p3_binary_dft::LchNtt<Poly64>> = BinaryWhirDomain::default();
-        let encoded = domain.encode_batch(RowMajorMatrix::new(coefficients.clone(), 1), 0);
 
-        for index in 0..8 {
-            let WhirQueryPoint::Multilinear(point) = domain.query_point(3, 3, index) else {
-                panic!("the additive domain must expose direct selector coordinates");
-            };
-            let mut values = coefficients.clone();
-            for &coordinate in point.iter().rev() {
-                for position in 0..values.len() / 2 {
-                    values[position] = values[2 * position] + values[2 * position + 1] * coordinate;
-                }
-                values.truncate(values.len() / 2);
+        // Every tested rate extends beyond the message subspace.
+        for log_inv_rate in 1..=3 {
+            let encoded =
+                domain.encode_batch(RowMajorMatrix::new(coefficients.clone(), 1), log_inv_rate);
+
+            for index in 0..encoded.height() {
+                let WhirQueryPoint::Multilinear(point) =
+                    domain.query_point(3 + log_inv_rate, 3, index)
+                else {
+                    panic!("the additive domain must expose direct selector coordinates");
+                };
+
+                // The selector must recover the encoded row at every domain index.
+                let poly = Poly::new(coefficients.clone());
+                let mut statement = SelectStatement::initialize(3);
+                statement.add_point_constraint(point.clone(), encoded.values[index]);
+                assert!(statement.verify(&poly));
+
+                // A changed codeword value must fail the same selector identity.
+                let mut tampered = SelectStatement::initialize(3);
+                tampered.add_point_constraint(point, encoded.values[index] + Poly64::ONE);
+                assert!(!tampered.verify(&poly));
             }
-            assert_eq!(values[0], encoded.values[index]);
         }
     }
 }

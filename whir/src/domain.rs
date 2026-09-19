@@ -5,6 +5,7 @@ use p3_dft::TwoAdicSubgroupDft;
 use p3_field::{ExtensionField, Field, TwoAdicField};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_multilinear_util::point::Point;
+use p3_security::SecurityAssumption;
 
 /// Selector coordinates for one queried codeword position.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -28,8 +29,15 @@ where
     ///
     /// The identifier must cover the code and query-point map.
     ///
-    /// The empty identifier is reserved for the legacy two-adic transcript.
+    /// An empty identifier selects the canonical two-adic transcript.
     fn protocol_id(&self) -> &'static [u8];
+
+    /// Whether the domain supports the requested Reed--Solomon soundness regime.
+    fn supports_security_assumption(&self, assumption: SecurityAssumption) -> bool {
+        // Capacity requires a domain-specific assumption.
+        // New domains must opt into it explicitly.
+        assumption != SecurityAssumption::CapacityBound
+    }
 
     /// Whether queries use the canonical power-of-two stratified schedule.
     fn stratified_queries(&self) -> bool {
@@ -63,6 +71,11 @@ where
 {
     fn protocol_id(&self) -> &'static [u8] {
         b""
+    }
+
+    fn supports_security_assumption(&self, _assumption: SecurityAssumption) -> bool {
+        // Preserve every regime supported by the canonical two-adic protocol.
+        true
     }
 
     fn max_log_domain_size(&self) -> usize {

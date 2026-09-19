@@ -183,12 +183,16 @@ pub const fn query_draws(folded_domain_size: usize, num_queries: usize) -> usize
 ///
 /// A summand `2^c` samples once in each of `2^c` equal subtrees.
 ///
-/// Every query remains marginally uniform. By AM--GM, stratification does not
-/// increase the probability that all queries miss a fixed disagreement set.
+/// If the strata have bad densities `delta_j` with average `delta`, then the
+/// summand misses with probability at most
+/// `prod_j (1 - delta_j) <= (1 - delta)^(2^c)` by AM--GM.
 fn query_summand_depths(draws: usize) -> Vec<usize> {
+    // Peel one power-of-two summand from the remaining query count per pass.
     let mut remaining = draws;
+    // One entry suffices for each set bit in the count.
     let mut depths = Vec::with_capacity(draws.count_ones() as usize);
     while remaining != 0 {
+        // The highest set bit gives the deepest remaining stratum partition.
         let depth = usize::BITS as usize - 1 - remaining.leading_zeros() as usize;
         depths.push(depth);
         remaining -= 1usize << depth;
