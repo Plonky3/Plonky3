@@ -26,9 +26,11 @@ use rand::{RngExt, SeedableRng};
 
 use super::AirZerocheck;
 use crate::backend::{GenericBackend, ReprBackend, SubfieldBackend, ZerocheckBackend};
+use crate::config::DEFAULT_SLICED_ROUNDS;
 use crate::lookup::{
     ActiveLookupRuntime, AirLinkClaim, AirLinkInstance, AirLinkLookup, LookupRuntime,
 };
+use crate::rounds::sliced::MAX_SLICED_ROUNDS;
 
 /// The trace and challenge field of every fixture.
 pub(crate) type Tower = BinaryField128;
@@ -472,10 +474,17 @@ fn transcript<B>(
 where
     B: ZerocheckBackend<Tower, Tower, FixtureAir>,
 {
-    transcript_with_storage::<B>(instances, lookup, pow_bits, |_, _| packed)
+    transcript_with_storage::<B>(
+        DEFAULT_SLICED_ROUNDS,
+        instances,
+        lookup,
+        pow_bits,
+        |_, _| packed,
+    )
 }
 
 fn transcript_with_storage<B>(
+    sliced_rounds: usize,
     instances: &[Instance],
     lookup: LookupRuntime<Tower>,
     pow_bits: usize,
@@ -544,6 +553,7 @@ where
             &main,
             &public_values,
             lookup,
+            sliced_rounds,
             &mut challenger,
         );
     let bytes = postcard::to_allocvec(&(
@@ -628,6 +638,7 @@ fn assert_packed_matches_dense(
             (
                 "generic",
                 transcript_with_storage::<GenericBackend>(
+                    DEFAULT_SLICED_ROUNDS,
                     instances,
                     lookup(),
                     pow_bits,
@@ -637,6 +648,7 @@ fn assert_packed_matches_dense(
             (
                 "subfield",
                 transcript_with_storage::<SubfieldBackend<Gf4>>(
+                    DEFAULT_SLICED_ROUNDS,
                     instances,
                     lookup(),
                     pow_bits,
@@ -646,6 +658,7 @@ fn assert_packed_matches_dense(
             (
                 "representation",
                 transcript_with_storage::<ReprBackend<Gf4, PolyBasis>>(
+                    DEFAULT_SLICED_ROUNDS,
                     instances,
                     lookup(),
                     pow_bits,
@@ -910,4 +923,28 @@ fn fixture_degrees_are_the_named_ones() {
     assert_eq!(degree(&FixtureAir::Linear { scale: gf4(2) }), 1);
     let link = super::get_air_profile::<Tower, Tower, _>(&FixtureAir::Link).degrees;
     assert!(link.interactions > 0);
+}
+
+/// Every sliced-round count must leave the proof the generic backend's.
+///
+/// The count only decides how many rounds run on the planes. Each of those rounds computes
+/// the polynomial the generic kernel computes, so no count may move the transcript.
+#[test]
+fn every_sliced_round_count_agrees_with_the_generic_backend() {
+    let instances = [
+        Instance::honest(FixtureAir::Gate { scale: Tower::ONE }, 1 << 9, 20),
+        Instance::honest(FixtureAir::Pair, 1 << 9, 21),
+    ];
+    let generic = transcript::<GenericBackend>(&instances, LookupRuntime::Inactive, 0, false);
+
+    for sliced_rounds in 0..=MAX_SLICED_ROUNDS + 1 {
+        let sliced = transcript_with_storage::<SubfieldBackend<Gf4>>(
+            sliced_rounds,
+            &instances,
+            LookupRuntime::Inactive,
+            0,
+            |_, _| false,
+        );
+        assert_eq!(sliced, generic, "{sliced_rounds} sliced rounds");
+    }
 }

@@ -3,7 +3,7 @@
 //! Builds round polynomials for `sum_x eq(tau, x) * g(x)` and folds state across challenges.
 
 mod repr;
-mod sliced;
+pub(crate) mod sliced;
 mod subfield;
 
 use alloc::collections::BTreeMap;
@@ -242,6 +242,8 @@ pub(crate) struct RoundStateBase<'air, 'data, A, F: Field, EF> {
     fits_subfield: bool,
     /// The stage's bit planes, once its first round ran on them.
     sliced: Option<sliced::SlicedTrace>,
+    /// Rounds this stage evaluates on its planes, when the sliced kernel takes it.
+    sliced_rounds: usize,
 }
 
 /// Extension-round column storage.
@@ -1301,6 +1303,7 @@ where
         eta: EF,
         betas: Vec<EF>,
         tau: Point<EF>,
+        sliced_rounds: usize,
     ) -> Self {
         assert_eq!(
             tau.num_variables(),
@@ -1446,6 +1449,7 @@ where
             eta,
             fits_subfield: false,
             sliced: None,
+            sliced_rounds,
         }
     }
 
@@ -2625,6 +2629,7 @@ mod tests {
     use rand::rngs::SmallRng;
 
     use super::*;
+    use crate::config::DEFAULT_SLICED_ROUNDS;
 
     type F = BinaryField128;
 
@@ -2726,8 +2731,14 @@ mod tests {
         );
         let alpha = F::interpolation_node(11);
         let tau = [5, 6, 7].map(F::interpolation_node);
-        let mut base =
-            RoundStateBase::new(stage, alpha, F::ONE, vec![F::ONE], Point::new(tau.to_vec()));
+        let mut base = RoundStateBase::new(
+            stage,
+            alpha,
+            F::ONE,
+            vec![F::ONE],
+            Point::new(tau.to_vec()),
+            DEFAULT_SLICED_ROUNDS,
+        );
         let prefix = if extension {
             vec![F::interpolation_node(9)]
         } else {
@@ -2962,7 +2973,14 @@ mod tests {
                 }],
                 StageCoupling::new(BTreeMap::new(), BTreeMap::new(), vec![]),
             );
-            RoundStateBase::new(stage, alpha, F::ONE, vec![F::ONE], Point::new(tau.clone()))
+            RoundStateBase::new(
+                stage,
+                alpha,
+                F::ONE,
+                vec![F::ONE],
+                Point::new(tau.clone()),
+                DEFAULT_SLICED_ROUNDS,
+            )
         };
         let mut scattered = state(&scattered_air);
         let mut full = state(&full_air);
