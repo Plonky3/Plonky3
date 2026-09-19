@@ -200,7 +200,10 @@ where
 
 #[cfg(test)]
 mod tests {
+    use alloc::format;
+
     use p3_binary_field::BinaryField128;
+    use p3_challenger::testing::{SeedDigest, assert_seeds_pairwise_distinct, seed_digest};
 
     use super::*;
 
@@ -216,6 +219,16 @@ mod tests {
         }
     }
 
+    /// One batch over a table of 2^9 rows and five columns, read at the chosen views.
+    const fn wider_shape(next: bool) -> ColumnBatchShape {
+        ColumnBatchShape {
+            table_variables: 9,
+            width: 5,
+            num_batches: 1,
+            next,
+        }
+    }
+
     /// The labels the batches of one shape play, in order.
     fn labels(shape: ColumnBatchShape) -> Vec<&'static str> {
         shape
@@ -225,6 +238,11 @@ mod tests {
             .iter()
             .map(Interaction::label)
             .collect()
+    }
+
+    /// The whole byte stream one shape seeds its sponge with, as a comparable digest.
+    fn seed_of(shape: ColumnBatchShape) -> SeedDigest {
+        seed_digest(&shape.separator::<EF, EF>())
     }
 
     #[test]
@@ -241,6 +259,26 @@ mod tests {
         assert_eq!(
             labels(shape(false)),
             [POINT, VALUES, COLUMN_POINT, POINT, VALUES, COLUMN_POINT]
+        );
+    }
+
+    #[test]
+    fn a_current_row_run_seeds_the_bytes_its_literals_name() {
+        // Invariant: the whole seed of a current-row run is pinned, not only the instance
+        // numbers and the step order.
+        //
+        //     2^8 rows, width 3, two batches
+        //     2^9 rows, width 5, one batch
+        //
+        // Both halves of the seed reach the digest, so a literal moves exactly when the
+        // seeded bytes move. Nothing that leaves the current-row protocol alone does that.
+        assert_eq!(
+            format!("{:?}", seed_of(shape(false))),
+            "2043da134342cdc72a65bfcdb8cd9f7eff45bbeb127fbdd4793f39c23bea23dd",
+        );
+        assert_eq!(
+            format!("{:?}", seed_of(wider_shape(false))),
+            "90b5362da1b29b2acd186db9b8ad1cdea5f61298006f88e48aec7beb4ef06ce9",
         );
     }
 
@@ -268,5 +306,13 @@ mod tests {
                 COLUMN_POINT
             ]
         );
+
+        // No two of the four runs share a seed, so none of them replays another's draws.
+        assert_seeds_pairwise_distinct(&[
+            ("current", seed_of(shape(false))),
+            ("successor", seed_of(shape(true))),
+            ("wider current", seed_of(wider_shape(false))),
+            ("wider successor", seed_of(wider_shape(true))),
+        ]);
     }
 }

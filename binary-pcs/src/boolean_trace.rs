@@ -539,12 +539,33 @@ fn value_count(protocol: &OpeningProtocol) -> usize {
     protocol.iter_openings().map(|(_, batch)| batch.len()).sum()
 }
 
+/// Whether a claim plan writes each of the `len` value positions exactly once.
+///
+/// A position two claims write is one reading the plan answers twice, and a position no
+/// claim writes is one the run leaves at whatever it was filled with.
+fn covers_every_value(claims: &[ColumnClaim], len: usize) -> bool {
+    let mut written = alloc::vec![false; len];
+    for claim in claims {
+        for at in [claim.current_at, claim.next_at].into_iter().flatten() {
+            if at >= len || core::mem::replace(&mut written[at], true) {
+                return false;
+            }
+        }
+    }
+    written.into_iter().all(|written| written)
+}
+
 /// Lay the readings every claim came back with out in the protocol's value order.
 fn claim_values<EF: Field>(
     claims: &[ColumnClaim],
     readings: &[BitReadings<EF>],
     len: usize,
 ) -> Vec<EF> {
+    // The zero fill stands only until the plan writes over it, which it does everywhere.
+    debug_assert!(
+        covers_every_value(claims, len),
+        "the claim plan writes every value position exactly once",
+    );
     let mut values = alloc::vec![EF::ZERO; len];
     for (claim, reading) in claims.iter().zip(readings) {
         if let Some(at) = claim.current_at {
@@ -720,9 +741,12 @@ pub enum BooleanTraceError<EF, MmcsError> {
     },
 
     /// The proof carries a different number of values than the protocol opens.
-    #[error("the proof carries {actual} values against {expected} opened columns")]
+    ///
+    /// A column read at both rows carries one reading per row, so the count is readings,
+    /// one per value position.
+    #[error("the proof carries {actual} values against {expected} opened readings")]
     ValueCount {
-        /// Columns the protocol opens.
+        /// Readings the protocol opens, one per value position.
         expected: usize,
         /// Values the proof carries.
         actual: usize,
@@ -1458,7 +1482,7 @@ mod tests {
         //
         // Fixture state: one table of two columns, so an honest proof carries two values.
         //
-        // Mutation: drop the last value, leaving one against two opened columns.
+        // Mutation: drop the last value, leaving one against two opened readings.
         let shapes = [TableShape::new(10, FIXTURE_WIDTH)];
         let scheme = pcs(&shapes);
         let protocol = protocol(&shapes);
@@ -1487,6 +1511,69 @@ mod tests {
                 actual: 1
             }
         ));
+    }
+
+    #[test]
+    fn the_claim_plan_writes_every_value_position_exactly_once() {
+        // Invariant: the value run is laid out by the claim plan alone, so no position is
+        // answered twice and none is left at the fill the run starts from.
+        //
+        //     current [0, 1, 2], next []        the whole width at the current row
+        //     current [2, 0, 1], next [1, 2]    both sides, out of table order
+        //     current [0, 1],    next [1, 0]    both sides, each reordering the other
+        //     current [],        next [2, 0]    a successor view read nowhere else
+        //     current [3, 1],    next [1, 3, 0] a successor side wider than the current one
+        for (width, current, next) in [
+            (3, vec![0, 1, 2], vec![]),
+            (3, vec![2, 0, 1], vec![1, 2]),
+            (2, vec![0, 1], vec![1, 0]),
+            (3, vec![], vec![2, 0]),
+            (4, vec![3, 1], vec![1, 3, 0]),
+        ] {
+            let protocol = OpeningProtocol::new(vec![TableSpec::new(
+                TableShape::new(8, width),
+                vec![OpeningBatch::new(current.clone(), next.clone())],
+            )]);
+            let len = value_count(&protocol);
+            assert_eq!(len, current.len() + next.len());
+            assert!(
+                covers_every_value(&column_claims(&protocol), len),
+                "{current:?} / {next:?}"
+            );
+        }
+
+        // Several batches over several tables share one run, so the cursor has to advance
+        // past every batch's own two sides before the next batch writes.
+        let protocol = OpeningProtocol::new(vec![
+            TableSpec::new(
+                TableShape::new(8, 3),
+                vec![
+                    OpeningBatch::new(vec![2, 0, 1], vec![1, 2]),
+                    OpeningBatch::new(vec![0], vec![2, 0]),
+                ],
+            ),
+            TableSpec::new(
+                TableShape::new(6, 2),
+                vec![OpeningBatch::new(vec![1, 0], vec![0])],
+            ),
+        ]);
+        let len = value_count(&protocol);
+        assert_eq!(len, 5 + 3 + 3);
+        assert!(covers_every_value(&column_claims(&protocol), len));
+
+        // Both ways a plan can miss are refused, so the checks above are not vacuous.
+        //
+        //     one position written twice   a claim answering both views at one position
+        //     one position never written   no claim at all against a run of one value
+        let collided = ColumnClaim {
+            table: 0,
+            column: 0,
+            opening: 0,
+            current_at: Some(0),
+            next_at: Some(0),
+        };
+        assert!(!covers_every_value(&[collided], 1));
+        assert!(!covers_every_value(&[], 1));
     }
 
     #[test]
