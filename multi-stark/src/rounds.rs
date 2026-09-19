@@ -547,7 +547,7 @@ where
 ///
 /// Each task sets up a scratch holding every column, so splitting further spends more on
 /// scratch than on the rows it evaluates, and splitting less leaves workers idle.
-const TASKS_PER_WORKER: usize = 4;
+const TASKS_PER_WORKER: usize = 2;
 
 /// Rows one task of a round evaluates, given how many the round has to spread.
 pub(crate) fn rows_per_task(rows: usize) -> usize {
