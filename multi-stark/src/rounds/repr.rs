@@ -19,6 +19,7 @@ use p3_air::{Air, BaseAir};
 use p3_field::{Algebra, ExtensionField, Field, HasSubfield};
 use p3_maybe_rayon::prelude::*;
 use p3_multilinear_util::poly::Poly;
+use p3_sumcheck::layout::ColumnView;
 
 use super::subfield::PARALLEL_FOLD_CELLS;
 use super::{ExtColumns, InteractionCoupling, RoundStateBase, RoundStateExt};
@@ -160,6 +161,7 @@ where
     }
 
     /// Bind the first variable at `r`, folding each pair of cells into `R` with `fold_pair`.
+    #[allow(clippy::option_if_let_else)]
     fn fold_pairs_into<R, U>(
         mut self,
         r: EF,
@@ -172,14 +174,23 @@ where
         let next_tail = self.fold_claims_and_tails(r);
 
         // Columns already fold in parallel, so a short column folds on its own thread.
-        let columns = self.fold_each_column(|column| {
-            let (lo, hi) = column.split_at(column.len() / 2);
-            let fold_cells = |(&lo, &hi): (&F, &F)| fold_pair(lo, hi);
-            Poly::new(if column.len() < PARALLEL_FOLD_CELLS {
-                lo.iter().zip(hi).map(fold_cells).collect()
+        let columns = self.fold_each_column(|column: ColumnView<'_, F>| {
+            let half = column.len() / 2;
+            if let Some(values) = column.as_dense() {
+                let (lo, hi) = values.split_at(half);
+                let fold_cells = |(&lo, &hi): (&F, &F)| fold_pair(lo, hi);
+                Poly::new(if values.len() < PARALLEL_FOLD_CELLS {
+                    lo.iter().zip(hi).map(fold_cells).collect()
+                } else {
+                    lo.par_iter().zip(hi).map(fold_cells).collect()
+                })
             } else {
-                lo.par_iter().zip(hi).map(fold_cells).collect()
-            })
+                Poly::new(
+                    (0..half)
+                        .map(|row| fold_pair(column.value(row), column.value(row + half)))
+                        .collect(),
+                )
+            }
         });
 
         let lift = |values: &[EF]| {

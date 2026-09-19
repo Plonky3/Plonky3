@@ -543,7 +543,7 @@ where
         }
         let columns = tables
             .iter()
-            .flat_map(|table| table.iter_polys())
+            .flat_map(|table| table.columns())
             .collect::<Vec<_>>();
         let width = columns.len();
         let mut is_successor = vec![false; width];
@@ -557,12 +557,18 @@ where
             .par_iter()
             .zip(&is_successor)
             .map(|(column, &is_successor)| {
-                let column_planes = column
-                    .as_chunks::<SLICED_LANES>()
-                    .0
-                    .iter()
-                    .map(pack_word::<F, S>)
-                    .collect::<Option<Vec<_>>>()?;
+                let column_planes = if let Some(values) = column.as_dense() {
+                    values
+                        .as_chunks::<SLICED_LANES>()
+                        .0
+                        .iter()
+                        .map(pack_word::<F, S>)
+                        .collect::<Option<Vec<_>>>()?
+                } else {
+                    (0..column.len() / SLICED_LANES)
+                        .map(|word| Some([column.boolean_word(word)?, 0]))
+                        .collect::<Option<Vec<_>>>()?
+                };
                 let successor_planes = if is_successor {
                     // Each word's top lane reads the lowest lane of the next word, and the last
                     // word's top lane repeats itself.
