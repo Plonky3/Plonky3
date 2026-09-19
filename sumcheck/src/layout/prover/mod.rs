@@ -898,7 +898,7 @@ mod tests {
     use crate::layout::prover::test_utils::{
         FOLDING, build_tables, run_roundtrip_test, table_shapes, tables_from_shape,
     };
-    use crate::layout::{Layout, Verifier};
+    use crate::layout::{Layout, SuffixLayoutPlan, SuffixTableSource, Verifier};
     use crate::strategy::Basis;
     use crate::table::{OpeningBatch, OpeningEvals};
     use crate::tests::*;
@@ -1022,6 +1022,27 @@ mod tests {
             &table_shapes(),
             ASCENDING_POLYS,
         );
+    }
+
+    #[test]
+    fn direct_fill_roundtrips_through_the_suffix_prover() {
+        // Build the commitment stack through the ingestion API rather than dense restacking.
+        let tables = build_tables();
+        let plan =
+            SuffixLayoutPlan::new(tables.iter().map(|table| table.shape()).collect(), FOLDING)
+                .expect("the fixture dimensions fit the suffix layout");
+        let sources = tables
+            .iter()
+            .map(|table| table as &dyn SuffixTableSource<F>)
+            .collect::<Vec<_>>();
+        let filled = plan
+            .fill(&sources)
+            .expect("every dense source writes each declared column");
+
+        // Dense suffix-round tables are derived from the committed stack itself.
+        let witness = filled.into_witness();
+        let shapes = witness.table_shapes();
+        run_roundtrip_test::<SuffixProver<F, EF>>(witness, &shapes, ASCENDING_POLYS);
     }
 
     #[test]

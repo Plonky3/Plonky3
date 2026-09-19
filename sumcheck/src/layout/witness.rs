@@ -11,8 +11,9 @@ use p3_multilinear_util::poly::{Poly, PolyView};
 use p3_util::reverse_bits_len;
 use rand::Rng;
 use rand::distr::{Distribution, StandardUniform};
+use thiserror::Error;
 
-use crate::layout::plan::{LayoutShape, plan_layout};
+use crate::layout::plan::{LayoutShape, plan_layout, plan_stacked_layout};
 use crate::table::TableShape;
 
 /// Identifies one slot inside the stacked polynomial.
@@ -176,6 +177,398 @@ impl<F: Field> Table<F> {
     }
 }
 
+/// A source that writes one table directly into its final contiguous suffix-layout slots.
+///
+/// Destinations are in source-column order and exclude zero-padding rows.
+pub trait SuffixTableSource<F: Field>: Sync {
+    /// Returns the source's logical shape.
+    fn shape(&self) -> TableShape;
+
+    /// Writes every logical column through its checked destination.
+    fn fill(&self, columns: &mut [ColumnOut<'_, F>]);
+}
+
+impl<F: Field> SuffixTableSource<F> for Table<F> {
+    fn shape(&self) -> TableShape {
+        self.shape()
+    }
+
+    fn fill(&self, columns: &mut [ColumnOut<'_, F>]) {
+        columns
+            .par_iter_mut()
+            .zip(self.par_iter_polys())
+            .for_each(|(out, source)| out.copy_from_slice(source));
+    }
+}
+
+/// One logical column's disjoint destination inside a suffix-layout stack.
+///
+/// The backing allocation is initialized; coverage is tracked per column.
+pub struct ColumnOut<'a, F> {
+    /// Logical rows assigned to one source column.
+    values: &'a mut [F],
+    /// Whether the producer called the checked writer for this column.
+    written: bool,
+}
+
+impl<'a, F> ColumnOut<'a, F> {
+    /// Returns the number of logical rows the producer must write.
+    pub const fn len(&self) -> usize {
+        self.values.len()
+    }
+
+    /// Returns whether this destination contains no logical rows.
+    pub const fn is_empty(&self) -> bool {
+        self.values.is_empty()
+    }
+
+    /// Gives a producer exclusive access to the complete logical column.
+    ///
+    /// Coverage is recorded after the writer returns.
+    pub fn write_with(&mut self, writer: impl FnOnce(&mut [F])) {
+        writer(self.values);
+        self.written = true;
+    }
+
+    /// Copies a dense logical column into this destination and records coverage.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the source length differs from the planned logical height.
+    pub fn copy_from_slice(&mut self, source: &[F])
+    where
+        F: Copy,
+    {
+        self.write_with(|destination| destination.copy_from_slice(source));
+    }
+}
+
+/// A reusable immutable placement plan for directly filled suffix-layout witnesses.
+#[derive(Debug, Clone)]
+pub struct SuffixLayoutPlan {
+    /// Logical dimensions expected from each source.
+    source_shapes: Vec<TableShape>,
+    /// Dimensions after extending short columns with zeroes.
+    committed_shapes: Vec<TableShape>,
+    /// Column locations inside the final stacked polynomial.
+    placements: Vec<TablePlacement>,
+    /// Arity of the final stacked polynomial.
+    num_variables: usize,
+    /// Number of suffix variables reserved for preprocessing.
+    folding: usize,
+}
+
+/// Dimensions that cannot form a suffix-layout witness.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[non_exhaustive]
+pub enum SuffixLayoutPlanError {
+    /// No source tables were provided.
+    #[error("a suffix-layout witness requires at least one table")]
+    NoTables,
+    /// The preprocessing depth cannot be represented.
+    #[error("suffix-layout preprocessing depth {folding} overflows usize")]
+    FoldingOverflow {
+        /// Rejected depth.
+        folding: usize,
+    },
+    /// The normalized cell count does not fit in `usize`.
+    #[error("suffix-layout table cells overflow usize")]
+    CellCountOverflow,
+}
+
+/// A source batch that disagrees with its immutable placement plan.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[non_exhaustive]
+pub enum SuffixFillError {
+    /// The source list and planned table list have different lengths.
+    #[error("suffix-layout fill received {actual} tables, expected {expected}")]
+    TableCount {
+        /// Planned table count.
+        expected: usize,
+        /// Supplied table count.
+        actual: usize,
+    },
+    /// One source reports dimensions different from its planned logical dimensions.
+    #[error("suffix-layout table {table} shape does not match its plan")]
+    ShapeMismatch {
+        /// Table index.
+        table: usize,
+        /// Planned shape.
+        expected: TableShape,
+        /// Supplied shape.
+        actual: TableShape,
+    },
+    /// A producer returned without calling the checked writer for one column.
+    #[error("suffix-layout table {table} did not write column {column}")]
+    UnwrittenColumn {
+        /// Table index.
+        table: usize,
+        /// Column index.
+        column: usize,
+    },
+}
+
+/// A directly filled suffix-layout polynomial and its verifier-reconstructible metadata.
+#[derive(Debug, Clone)]
+pub struct FilledSuffixWitness<'a, F: Field> {
+    /// Placement metadata used to build the polynomial.
+    plan: &'a SuffixLayoutPlan,
+    /// Final stacked polynomial filled in place.
+    poly: Poly<F>,
+}
+
+impl SuffixLayoutPlan {
+    /// Builds a checked placement plan from logical table shapes.
+    ///
+    /// Tables shorter than the preprocessing depth receive an inaccessible zero suffix.
+    pub fn new(
+        source_shapes: Vec<TableShape>,
+        folding: usize,
+    ) -> Result<Self, SuffixLayoutPlanError> {
+        if source_shapes.is_empty() {
+            return Err(SuffixLayoutPlanError::NoTables);
+        }
+        if folding >= usize::BITS as usize {
+            return Err(SuffixLayoutPlanError::FoldingOverflow { folding });
+        }
+
+        let committed_shapes = source_shapes
+            .iter()
+            .map(|shape| TableShape::new(shape.num_variables().max(folding), shape.width()))
+            .collect::<Vec<_>>();
+
+        let total_cells = committed_shapes.iter().try_fold(0usize, |total, shape| {
+            let rows = 1usize
+                .checked_shl(shape.num_variables() as u32)
+                .ok_or(SuffixLayoutPlanError::CellCountOverflow)?;
+            let cells = rows
+                .checked_mul(shape.width())
+                .ok_or(SuffixLayoutPlanError::CellCountOverflow)?;
+            total
+                .checked_add(cells)
+                .ok_or(SuffixLayoutPlanError::CellCountOverflow)
+        })?;
+        total_cells
+            .checked_next_power_of_two()
+            .ok_or(SuffixLayoutPlanError::CellCountOverflow)?;
+
+        let (num_variables, placements) = plan_stacked_layout(&committed_shapes);
+        Ok(Self {
+            source_shapes,
+            committed_shapes,
+            placements,
+            num_variables,
+            folding,
+        })
+    }
+
+    /// Returns the logical shapes producers must supply.
+    pub fn source_shapes(&self) -> &[TableShape] {
+        &self.source_shapes
+    }
+
+    /// Returns the committed shapes after explicit suffix-zero normalization.
+    pub fn committed_shapes(&self) -> &[TableShape] {
+        &self.committed_shapes
+    }
+
+    /// Returns the immutable largest-first column placements.
+    pub fn placements(&self) -> &[TablePlacement] {
+        &self.placements
+    }
+
+    /// Returns the arity of the final stacked polynomial.
+    pub const fn num_variables(&self) -> usize {
+        self.num_variables
+    }
+
+    /// Fills one initialized final allocation directly from heterogeneous sources.
+    ///
+    /// Each producer receives all of its disjoint logical column windows together.
+    /// Unused stack tail and preprocessing suffixes remain zero.
+    pub fn fill<'a, F: Field>(
+        &'a self,
+        sources: &[&dyn SuffixTableSource<F>],
+    ) -> Result<FilledSuffixWitness<'a, F>, SuffixFillError> {
+        if sources.len() != self.source_shapes.len() {
+            return Err(SuffixFillError::TableCount {
+                expected: self.source_shapes.len(),
+                actual: sources.len(),
+            });
+        }
+        for (table, (source, expected)) in sources.iter().zip(&self.source_shapes).enumerate() {
+            let actual = source.shape();
+            if actual != *expected {
+                return Err(SuffixFillError::ShapeMismatch {
+                    table,
+                    expected: *expected,
+                    actual,
+                });
+            }
+        }
+
+        // Both normalized column suffixes and the unused stack tail stay zero.
+        let mut poly = Poly::<F>::zero(self.num_variables);
+        let slots = column_slots_for_shapes(
+            &self.placements,
+            &self.committed_shapes,
+            0,
+            poly.as_mut_slice(),
+        );
+
+        let mut ordered = slots;
+        ordered.sort_unstable_by_key(|&(_, table, column)| (table, column));
+        let mut outputs = ordered
+            .into_iter()
+            .map(|(slot, table, _)| {
+                let logical_len = 1usize << self.source_shapes[table].num_variables();
+                let (logical, _) = slot.split_at_mut(logical_len);
+                ColumnOut {
+                    values: logical,
+                    written: false,
+                }
+            })
+            .collect::<Vec<_>>();
+
+        let mut rest = outputs.as_mut_slice();
+        let mut table_outputs = Vec::with_capacity(self.source_shapes.len());
+        for shape in &self.source_shapes {
+            let (columns, tail) = rest.split_at_mut(shape.width());
+            table_outputs.push(columns);
+            rest = tail;
+        }
+        debug_assert!(rest.is_empty());
+
+        table_outputs
+            .into_par_iter()
+            .zip(sources.par_iter())
+            .for_each(|(columns, source)| source.fill(columns));
+
+        let mut first_column = 0;
+        for (table, shape) in self.source_shapes.iter().enumerate() {
+            let columns = &outputs[first_column..first_column + shape.width()];
+            if let Some(column) = columns.iter().position(|column| !column.written) {
+                return Err(SuffixFillError::UnwrittenColumn { table, column });
+            }
+            first_column += shape.width();
+        }
+
+        Ok(FilledSuffixWitness { plan: self, poly })
+    }
+}
+
+impl<F: Field> FilledSuffixWitness<'_, F> {
+    /// Returns the committed table shapes in caller order.
+    pub fn table_shapes(&self) -> &[TableShape] {
+        self.plan.committed_shapes()
+    }
+
+    /// Returns the largest-first column placements.
+    pub fn placements(&self) -> &[TablePlacement] {
+        self.plan.placements()
+    }
+
+    /// Returns the arity of the final stacked polynomial.
+    pub fn num_variables(&self) -> usize {
+        self.poly.num_variables()
+    }
+
+    /// Returns the directly filled stacked polynomial.
+    pub const fn poly(&self) -> &Poly<F> {
+        &self.poly
+    }
+
+    /// Consumes the witness and returns its stacked polynomial.
+    pub fn into_poly(self) -> Poly<F> {
+        self.poly
+    }
+
+    /// Builds the dense table view required by the suffix-layout prover.
+    ///
+    /// The table values are copied from the committed polynomial.
+    /// Callers cannot supply a second representation that disagrees with the commitment.
+    pub fn into_witness(self) -> Witness<F> {
+        // Suffix rounds need one dense table per logical source.
+        // Reconstructing them from the stack keeps the committed polynomial authoritative.
+        let mut values_by_table = self
+            .plan
+            .committed_shapes
+            .iter()
+            .map(|shape| Vec::with_capacity((1usize << shape.num_variables()) * shape.width()))
+            .collect::<Vec<_>>();
+
+        // Each selector addresses one complete committed column slot.
+        for placement in &self.plan.placements {
+            let shape = self.plan.committed_shapes[placement.idx()];
+            let rows = 1usize << shape.num_variables();
+            for selector in placement.selectors() {
+                let offset = selector.index() << shape.num_variables();
+                values_by_table[placement.idx()]
+                    .extend_from_slice(&self.poly.as_slice()[offset..offset + rows]);
+            }
+        }
+
+        // Source order is restored after the largest-first placement walk.
+        let tables = values_by_table
+            .into_iter()
+            .zip(&self.plan.committed_shapes)
+            .map(|(values, shape)| {
+                Table::new(RowMajorMatrix::new(values, 1usize << shape.num_variables()))
+            })
+            .collect();
+
+        Witness {
+            tables,
+            placements: self.plan.placements.clone(),
+            num_variables: self.plan.num_variables,
+            folding: self.plan.folding,
+            poly: self.poly,
+        }
+    }
+}
+
+/// Splits one stacked buffer into column slots using shape-only metadata.
+fn column_slots_for_shapes<'a, T>(
+    placements: &[TablePlacement],
+    shapes: &[TableShape],
+    num_folded: usize,
+    out: &'a mut [T],
+) -> Vec<(&'a mut [T], usize, usize)> {
+    let mut ranges = placements
+        .iter()
+        .flat_map(|placement| {
+            let num_variables_table = shapes[placement.idx()].num_variables();
+            assert!(num_folded <= num_variables_table);
+            let log_len = num_variables_table - num_folded;
+            placement
+                .selectors()
+                .iter()
+                .enumerate()
+                .map(move |(column, selector)| {
+                    (
+                        selector.index() << log_len,
+                        1 << log_len,
+                        placement.idx(),
+                        column,
+                    )
+                })
+        })
+        .collect::<Vec<_>>();
+    ranges.sort_unstable_by_key(|&(offset, ..)| offset);
+
+    let mut slots = Vec::with_capacity(ranges.len());
+    let mut rest = out;
+    let mut consumed = 0;
+    for (offset, len, table, column) in ranges {
+        let (_, tail) = core::mem::take(&mut rest).split_at_mut(offset - consumed);
+        let (slot, tail) = tail.split_at_mut(len);
+        slots.push((slot, table, column));
+        rest = tail;
+        consumed = offset + len;
+    }
+    slots
+}
+
 /// Splits `out` into one disjoint slot per placed column, after `num_folded` suffix variables.
 ///
 /// Column `(table, poly)` owns the slot starting at `selector.index() << (n - num_folded)`, of
@@ -194,39 +587,8 @@ pub(crate) fn column_slots<'a, T, F: Field>(
     num_folded: usize,
     out: &'a mut [T],
 ) -> Vec<(&'a mut [T], usize, usize)> {
-    let mut ranges: Vec<(usize, usize, usize, usize)> = placements
-        .iter()
-        .flat_map(|placement| {
-            let num_variables_table = tables[placement.idx()].num_variables();
-            assert!(num_folded <= num_variables_table);
-            let log_len = num_variables_table - num_folded;
-            placement
-                .selectors()
-                .iter()
-                .enumerate()
-                .map(move |(poly_idx, selector)| {
-                    (
-                        selector.index() << log_len,
-                        1 << log_len,
-                        placement.idx(),
-                        poly_idx,
-                    )
-                })
-        })
-        .collect();
-    ranges.sort_unstable_by_key(|&(offset, ..)| offset);
-
-    let mut slots = Vec::with_capacity(ranges.len());
-    let mut rest = out;
-    let mut consumed = 0;
-    for (offset, len, table_idx, poly_idx) in ranges {
-        let (_, tail) = core::mem::take(&mut rest).split_at_mut(offset - consumed);
-        let (slot, tail) = tail.split_at_mut(len);
-        slots.push((slot, table_idx, poly_idx));
-        rest = tail;
-        consumed = offset + len;
-    }
-    slots
+    let shapes = tables.iter().map(Table::shape).collect::<Vec<_>>();
+    column_slots_for_shapes(placements, &shapes, num_folded, out)
 }
 
 /// Placement metadata for one table inside the stacked polynomial.
@@ -448,6 +810,7 @@ pub(super) struct WitnessParts<F: Field> {
 #[cfg(test)]
 mod tests {
     use alloc::vec;
+    use core::sync::atomic::{AtomicUsize, Ordering};
 
     use p3_baby_bear::BabyBear;
     use p3_field::PrimeCharacteristicRing;
@@ -462,6 +825,135 @@ mod tests {
 
     type F = BabyBear;
     type EF = BinomialExtensionField<F, 4>;
+
+    struct ChunkedSource {
+        /// Logical dimensions exposed to the placement plan.
+        shape: TableShape,
+        /// Fragmented values stored by column and then by chunk.
+        columns: Vec<Vec<Vec<F>>>,
+    }
+
+    impl SuffixTableSource<F> for ChunkedSource {
+        fn shape(&self) -> TableShape {
+            self.shape
+        }
+
+        fn fill(&self, columns: &mut [ColumnOut<'_, F>]) {
+            for (out, chunks) in columns.iter_mut().zip(&self.columns) {
+                out.write_with(|destination| {
+                    let mut offset = 0;
+                    for chunk in chunks {
+                        let end = offset + chunk.len();
+                        destination[offset..end].copy_from_slice(chunk);
+                        offset = end;
+                    }
+                    assert_eq!(offset, destination.len());
+                });
+            }
+        }
+    }
+
+    struct BitPackedSource {
+        /// Logical dimensions exposed to the placement plan.
+        shape: TableShape,
+        /// Packed source words stored column by column.
+        columns: Vec<Vec<u64>>,
+    }
+
+    impl SuffixTableSource<F> for BitPackedSource {
+        fn shape(&self) -> TableShape {
+            self.shape
+        }
+
+        fn fill(&self, columns: &mut [ColumnOut<'_, F>]) {
+            for (out, words) in columns.iter_mut().zip(&self.columns) {
+                out.write_with(|destination| {
+                    for (row, value) in destination.iter_mut().enumerate() {
+                        let bit = (words[row / 64] >> (row % 64)) & 1;
+                        *value = F::from_u64(bit);
+                    }
+                });
+            }
+        }
+    }
+
+    struct ShortSource {
+        /// Logical dimensions exposed to the placement plan.
+        shape: TableShape,
+        /// Logical destination length observed by the producer.
+        observed_len: AtomicUsize,
+    }
+
+    impl SuffixTableSource<F> for ShortSource {
+        fn shape(&self) -> TableShape {
+            self.shape
+        }
+
+        fn fill(&self, columns: &mut [ColumnOut<'_, F>]) {
+            self.observed_len.store(columns[0].len(), Ordering::Relaxed);
+            columns[0].write_with(|destination| destination.fill(F::ONE));
+        }
+    }
+
+    struct IncompleteSource {
+        /// Logical dimensions exposed to the placement plan.
+        shape: TableShape,
+    }
+
+    impl SuffixTableSource<F> for IncompleteSource {
+        fn shape(&self) -> TableShape {
+            self.shape
+        }
+
+        fn fill(&self, columns: &mut [ColumnOut<'_, F>]) {
+            columns[0].write_with(|destination| destination.fill(F::ONE));
+        }
+    }
+
+    fn placement_addresses(placements: &[TablePlacement]) -> Vec<(usize, Vec<(usize, usize)>)> {
+        placements
+            .iter()
+            .map(|placement| {
+                (
+                    placement.idx(),
+                    placement
+                        .selectors()
+                        .iter()
+                        .map(|selector| (selector.num_variables(), selector.index()))
+                        .collect(),
+                )
+            })
+            .collect()
+    }
+
+    fn assert_direct_fill_matches_dense(tables: &[Table<F>], folding: usize) {
+        let legacy = Witness::new(tables.to_vec(), folding);
+        let plan = SuffixLayoutPlan::new(tables.iter().map(Table::shape).collect(), folding)
+            .expect("the fixture dimensions fit a suffix layout");
+        let sources = tables
+            .iter()
+            .map(|table| table as &dyn SuffixTableSource<F>)
+            .collect::<Vec<_>>();
+        let direct = plan.fill(&sources).expect("every dense column is written");
+
+        assert_eq!(direct.poly().as_slice(), legacy.poly().as_slice());
+        assert_eq!(direct.table_shapes(), legacy.table_shapes());
+        assert_eq!(
+            placement_addresses(direct.placements()),
+            placement_addresses(&legacy.placements)
+        );
+        let compatible = direct.into_witness();
+        assert_eq!(compatible.poly().as_slice(), legacy.poly().as_slice());
+        assert_eq!(compatible.table_shapes(), legacy.table_shapes());
+        assert_eq!(compatible.tables.len(), legacy.tables.len());
+        for (compatible_table, legacy_table) in compatible.tables.iter().zip(&legacy.tables) {
+            for (compatible_poly, legacy_poly) in
+                compatible_table.iter_polys().zip(legacy_table.iter_polys())
+            {
+                assert_eq!(compatible_poly, legacy_poly);
+            }
+        }
+    }
 
     #[test]
     fn selector_new_stores_num_variables_and_index() {
@@ -916,6 +1408,209 @@ mod tests {
         assert_eq!(prover_shapes, table_shapes);
     }
 
+    #[test]
+    fn direct_dense_fill_matches_the_existing_suffix_witness() {
+        let mut rng = SmallRng::seed_from_u64(0xD3E5E);
+        let tables = vec![Table::rand(&mut rng, 3, 8), Table::rand(&mut rng, 2, 8)];
+
+        assert_direct_fill_matches_dense(&tables, 0);
+    }
+
+    #[test]
+    fn direct_jagged_fill_matches_the_existing_suffix_witness() {
+        let mut rng = SmallRng::seed_from_u64(0x1A663D);
+        let tables = vec![
+            Table::rand(&mut rng, 3, 4),
+            Table::rand(&mut rng, 1, 9),
+            Table::rand(&mut rng, 2, 6),
+        ];
+
+        assert_direct_fill_matches_dense(&tables, 0);
+    }
+
+    #[test]
+    fn fragmented_columns_fill_the_same_final_stack_as_dense_columns() {
+        let first = (0..32).map(F::from_usize).collect::<Vec<_>>();
+        let second = (100..132).map(F::from_usize).collect::<Vec<_>>();
+        let dense = Table::new(RowMajorMatrix::new(
+            first.iter().chain(&second).copied().collect(),
+            32,
+        ));
+        let source = ChunkedSource {
+            shape: TableShape::new(5, 2),
+            columns: vec![
+                vec![
+                    first[..3].to_vec(),
+                    first[3..19].to_vec(),
+                    first[19..].to_vec(),
+                ],
+                vec![second[..17].to_vec(), second[17..].to_vec()],
+            ],
+        };
+        let plan = SuffixLayoutPlan::new(vec![source.shape], 0).unwrap();
+        let direct = plan.fill(&[&source]).unwrap();
+        let legacy = Witness::new(vec![dense], 0);
+
+        assert_eq!(direct.poly().as_slice(), legacy.poly().as_slice());
+    }
+
+    #[test]
+    fn packed_bits_decode_directly_into_the_dense_reference_layout() {
+        let words = vec![
+            vec![0x0123_4567_89AB_CDEF, 0xF0F0_0F0F_AAAA_5555],
+            vec![0xDEAD_BEEF_CAFE_BABE, 0x8000_0000_0000_0001],
+        ];
+        let scalar = words
+            .iter()
+            .flat_map(|column| {
+                (0..128).map(move |row| F::from_u64((column[row / 64] >> (row % 64)) & 1))
+            })
+            .collect::<Vec<_>>();
+        let dense = Table::new(RowMajorMatrix::new(scalar, 128));
+        let source = BitPackedSource {
+            shape: TableShape::new(7, 2),
+            columns: words,
+        };
+        let plan = SuffixLayoutPlan::new(vec![source.shape], 0).unwrap();
+        let direct = plan.fill(&[&source]).unwrap();
+        let legacy = Witness::new(vec![dense], 0);
+
+        assert_eq!(direct.poly().as_slice(), legacy.poly().as_slice());
+    }
+
+    #[test]
+    fn heterogeneous_sources_share_one_checked_fill() {
+        // One batch covers the three producer layouts expected at the ingestion boundary.
+        // The folding depth also places logical arities on both sides of normalization.
+        let dense = Table::new(RowMajorMatrix::new((0..4).map(F::from_usize).collect(), 2));
+        let chunked_values = (20..52).map(F::from_usize).collect::<Vec<_>>();
+        let chunked = ChunkedSource {
+            shape: TableShape::new(5, 1),
+            columns: vec![vec![
+                chunked_values[..7].to_vec(),
+                chunked_values[7..].to_vec(),
+            ]],
+        };
+        let packed_words = vec![vec![0xA5], vec![0x3C], vec![0x81]];
+        let packed = BitPackedSource {
+            shape: TableShape::new(3, 3),
+            columns: packed_words.clone(),
+        };
+
+        // Dense references define the exact polynomial expected from each custom source.
+        let chunked_table = Table::new(RowMajorMatrix::new(chunked_values, 32));
+        let packed_table = Table::new(RowMajorMatrix::new(
+            packed_words
+                .iter()
+                .flat_map(|words| {
+                    (0..8).map(|row| F::from_u64((words[row / 64] >> (row % 64)) & 1))
+                })
+                .collect(),
+            8,
+        ));
+        let tables = vec![dense.clone(), chunked_table, packed_table];
+        let plan = SuffixLayoutPlan::new(tables.iter().map(Table::shape).collect(), 3).unwrap();
+
+        // The direct stack must equal the established dense path for the whole mixed batch.
+        let direct = plan.fill(&[&dense, &chunked, &packed]).unwrap();
+        let legacy = Witness::new(tables, 3);
+        assert_eq!(direct.poly().as_slice(), legacy.poly().as_slice());
+        let compatible = direct.into_witness();
+        assert_eq!(compatible.poly().as_slice(), legacy.poly().as_slice());
+        assert_eq!(compatible.table_shapes(), legacy.table_shapes());
+    }
+
+    #[test]
+    fn preprocessing_padding_is_zero_and_hidden_from_the_producer() {
+        let source = ShortSource {
+            shape: TableShape::new(2, 1),
+            observed_len: AtomicUsize::new(0),
+        };
+        let plan = SuffixLayoutPlan::new(vec![source.shape], 4).unwrap();
+        let direct = plan.fill(&[&source]).unwrap();
+
+        assert_eq!(source.observed_len.load(Ordering::Relaxed), 4);
+        assert_eq!(direct.table_shapes(), &[TableShape::new(4, 1)]);
+        assert_eq!(&direct.poly().as_slice()[..4], &[F::ONE; 4]);
+        assert!(
+            direct.poly().as_slice()[4..]
+                .iter()
+                .all(|&value| value == F::ZERO)
+        );
+    }
+
+    #[test]
+    fn an_unwritten_column_is_rejected_after_safe_zero_initialization() {
+        let source = IncompleteSource {
+            shape: TableShape::new(3, 2),
+        };
+        let plan = SuffixLayoutPlan::new(vec![source.shape], 0).unwrap();
+        let error = plan
+            .fill(&[&source])
+            .expect_err("the second column has no completed write");
+
+        assert_eq!(
+            error,
+            SuffixFillError::UnwrittenColumn {
+                table: 0,
+                column: 1,
+            }
+        );
+    }
+
+    #[test]
+    fn source_shape_drift_is_rejected_before_filling() {
+        let source = IncompleteSource {
+            shape: TableShape::new(3, 2),
+        };
+        let plan = SuffixLayoutPlan::new(vec![TableShape::new(3, 1)], 0).unwrap();
+        let error = plan
+            .fill(&[&source])
+            .expect_err("the source width differs from the planned width");
+
+        assert_eq!(
+            error,
+            SuffixFillError::ShapeMismatch {
+                table: 0,
+                expected: TableShape::new(3, 1),
+                actual: source.shape,
+            }
+        );
+    }
+
+    #[test]
+    fn an_empty_plan_is_rejected() {
+        let error = SuffixLayoutPlan::new(Vec::new(), 0)
+            .expect_err("an empty table batch has no committed statement");
+
+        assert_eq!(error, SuffixLayoutPlanError::NoTables);
+    }
+
+    #[test]
+    fn a_rounded_stack_larger_than_the_address_space_is_rejected() {
+        let shape = TableShape::new(usize::BITS as usize - 1, 2);
+        let error = SuffixLayoutPlan::new(vec![shape], 0)
+            .expect_err("the two column cubes overflow the address space");
+
+        assert_eq!(error, SuffixLayoutPlanError::CellCountOverflow);
+    }
+
+    #[test]
+    fn a_source_count_mismatch_is_rejected_before_allocation() {
+        let plan = SuffixLayoutPlan::new(vec![TableShape::new(3, 1)], 0).unwrap();
+        let error = plan
+            .fill::<F>(&[])
+            .expect_err("the planned table has no source");
+
+        assert_eq!(
+            error,
+            SuffixFillError::TableCount {
+                expected: 1,
+                actual: 0,
+            }
+        );
+    }
+
     // Proptest strategy: random table shapes within safe bounds.
     //
     //     1..=3 tables, each with arity in 2..=5 and 1..=3 columns.
@@ -980,6 +1675,22 @@ mod tests {
                 // cursor value. That matches the "unused tail stays zero" rule.
                 assert_eq!(v, F::ZERO);
             }
+        }
+
+        #[test]
+        fn direct_fill_matches_dense_with_normalization(
+            shapes in arb_table_shapes(),
+            folding in 0usize..=6,
+        ) {
+            // Randomized dimensions exercise placement changes caused by preprocessing padding.
+            let mut rng = SmallRng::seed_from_u64(0xD1EC7);
+            let tables = shapes
+                .iter()
+                .map(|&(arity, width)| Table::rand(&mut rng, width, arity))
+                .collect::<Vec<_>>();
+
+            // Both paths must commit the same cells and derive the same placement metadata.
+            assert_direct_fill_matches_dense(&tables, folding);
         }
     }
 }
