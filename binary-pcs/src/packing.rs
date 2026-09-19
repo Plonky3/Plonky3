@@ -43,6 +43,7 @@ use p3_binary_field::{
 };
 use p3_field::PrimeCharacteristicRing;
 use p3_matrix::dense::RowMajorMatrix;
+use p3_maybe_rayon::prelude::*;
 use p3_multilinear_util::poly::Poly;
 use p3_sumcheck::layout::Table;
 use p3_util::log2_strict_usize;
@@ -108,6 +109,11 @@ unsafe impl<U: Underlier> Coordinates for PackedGf2<U> {
     const COORDINATES: usize = U::BITS;
 }
 
+/// Bytes one task of a packing copy moves.
+///
+/// Enough that each task outweighs the fork-join overhead, so a short run copies in one piece.
+const PACK_CHUNK_BYTES: usize = 1 << 20;
+
 /// Read a run of cells as the wide elements holding the same coordinates.
 ///
 /// One copy at the wide alignment, and no arithmetic. Reusing the source buffer is unsound.
@@ -138,19 +144,34 @@ where
     let len = coordinates / EF::COORDINATES;
     let mut packed = Vec::<EF>::with_capacity(len);
 
-    // SAFETY: each side is a padding-free run of its own coordinates, by both contracts.
-    // The constant block above pins each one's count at exactly the bits of its bytes.
+    // The copy runs in chunks of whole destination elements, each chunk on its own task.
     //
-    // The two cover the same coordinate count, hence the same byte count.
-    //
-    // Every bit pattern of the destination is a value, so nothing stays uninitialised.
-    // The destination was reserved for exactly this many elements, and nothing aliases it.
+    // The source is viewed as bytes, so a chunk boundary need not fall on a whole cell.
+    // Both sides hold the same byte count, so the chunks pair up one to one.
+    let elements_per_chunk = (PACK_CHUNK_BYTES / size_of::<EF>()).max(1);
+    packed.spare_capacity_mut()[..len]
+        .par_chunks_mut(elements_per_chunk)
+        .zip(coordinate_bytes(cells).par_chunks(elements_per_chunk * size_of::<EF>()))
+        .for_each(|(destination, source)| {
+            debug_assert_eq!(source.len(), size_of_val(destination));
+            // SAFETY: each side is a padding-free run of its own coordinates, by both contracts.
+            // The constant block above pins each one's count at exactly the bits of its bytes.
+            //
+            // The two cover the same coordinate count, hence the same byte count, and every
+            // pair of chunks sits at the same byte offset into each, with the same length.
+            //
+            // Every bit pattern of the destination is a value, and the chunks are disjoint
+            // parts of reserved capacity nothing else aliases.
+            unsafe {
+                ptr::copy_nonoverlapping(
+                    source.as_ptr(),
+                    destination.as_mut_ptr().cast::<u8>(),
+                    source.len(),
+                );
+            }
+        });
+    // SAFETY: the chunks above cover all `len` reserved elements, so each one is written.
     unsafe {
-        ptr::copy_nonoverlapping(
-            cells.as_ptr().cast::<u8>(),
-            packed.as_mut_ptr().cast::<u8>(),
-            len * size_of::<EF>(),
-        );
         packed.set_len(len);
     }
     packed
@@ -283,10 +304,17 @@ where
         }
 
         // One copy per column, so the whole stack is one sweep over the source.
-        let mut elements = Vec::with_capacity(column_len * columns.len());
-        for column in columns {
-            elements.extend(pack::<A, EF>(column));
-        }
+        //
+        // A lone column's packing is already the whole stack, so it is kept as it is.
+        let elements = if let [column] = columns {
+            pack::<A, EF>(column)
+        } else {
+            let mut elements = Vec::with_capacity(column_len * columns.len());
+            for column in columns {
+                elements.extend(pack::<A, EF>(column));
+            }
+            elements
+        };
 
         Ok(Self {
             elements,
