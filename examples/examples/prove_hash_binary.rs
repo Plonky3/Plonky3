@@ -8,6 +8,7 @@ use p3_examples::binary::{
 use p3_examples::parsers::{BinaryHashOptions, NttOptions, RepresentationOptions};
 use p3_keccak_air::{KECCAK_BINARY_ROWS_PER_PERM, KeccakBinaryAir};
 use p3_matrix::Matrix;
+use p3_sha256_air::Sha256BinaryAir;
 use tracing_forest::ForestLayer;
 use tracing_forest::util::LevelFilter;
 use tracing_subscriber::layer::SubscriberExt;
@@ -131,6 +132,18 @@ fn main() {
             println!("Proving {trace_height} Blake-3 compressions");
 
             let air = Blake3BinaryAir {};
+            let trace = air.generate_random_trace_rows::<BinaryField128>(trace_height, 0);
+            assert_eq!(
+                trace.height(),
+                trace_height,
+                "generated trace height must match the requested log-trace-length"
+            );
+            prove_binary_air_with_ntt_and_backend(&air, trace, options, ntt, backend)
+        }
+        BinaryHashOptions::Sha256Compressions => {
+            println!("Proving {trace_height} SHA-256 compressions");
+
+            let air = Sha256BinaryAir {};
             let trace = air.generate_random_trace_rows::<BinaryField128>(trace_height, 0);
             assert_eq!(
                 trace.height(),
