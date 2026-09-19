@@ -38,7 +38,7 @@ pub trait BusInteractionRecorder: AirBuilder {
 
 /// Proof that the public declaration path emitted its activation constraint.
 #[doc(hidden)]
-pub struct RecordToken(());
+pub struct RecordToken(pub(crate) ());
 
 /// AIR interface for binary-native bus declarations.
 ///

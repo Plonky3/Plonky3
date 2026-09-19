@@ -5,6 +5,7 @@ extern crate alloc;
 
 mod builder;
 mod leaf;
+mod memory;
 mod plan;
 mod product;
 mod security;
@@ -15,6 +16,10 @@ pub use builder::{
     SymbolicBusInteraction,
 };
 pub use leaf::{BusDirection, BusLeafDeclaration, BusLeafError, BusLeaves, BusSelector};
+pub use memory::{
+    ReadOnlyMemoryClaims, ReadOnlyMemoryColumns, ReadOnlyMemoryError,
+    ReadOnlyMemoryInteractionBuilder, ReadOnlyMemoryLeaves, ReadOnlyMemoryPlan,
+};
 pub use plan::{
     BusBlock, BusBlockOwner, BusDomain, BusExpressionLocation, BusPlan, BusPlanError, BusPlanInput,
     BusSecurityGeometry, BusTerminalShare, BusTupleSlot, UnsupportedBusAccess,
