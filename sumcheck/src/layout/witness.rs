@@ -945,6 +945,14 @@ mod tests {
         let compatible = direct.into_witness();
         assert_eq!(compatible.poly().as_slice(), legacy.poly().as_slice());
         assert_eq!(compatible.table_shapes(), legacy.table_shapes());
+        assert_eq!(compatible.tables.len(), legacy.tables.len());
+        for (compatible_table, legacy_table) in compatible.tables.iter().zip(&legacy.tables) {
+            for (compatible_poly, legacy_poly) in
+                compatible_table.iter_polys().zip(legacy_table.iter_polys())
+            {
+                assert_eq!(compatible_poly, legacy_poly);
+            }
+        }
     }
 
     #[test]
