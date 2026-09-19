@@ -14,7 +14,7 @@ use core::fmt;
 use std::time::Instant;
 
 use p3_air::{Air, BaseAir};
-use p3_binary_dft::{AdditiveNtt, AdditiveRsEncoder, LchNtt, NaiveAdditiveNtt, PolyBasisNtt};
+use p3_binary_dft::{AdditiveNtt, AdditiveRsEncoder, PolyBasisNtt};
 use p3_binary_field::{BinaryChallenger, BinaryField2, BinaryField128, Ghash128, poly_basis};
 use p3_binary_pcs::{
     BinaryPcs, BinaryPcsConfig, BinaryPcsConfigError, BinaryPcsParams, BinaryPcsProverData,
@@ -204,91 +204,6 @@ pub fn boolean_config<const N: usize>(
     let pcs = BooleanTracePcs::new(pcs_config, mmcs.clone(), mmcs, arity)
         .map_err(BinaryProofError::BooleanConfig)?;
     Ok(BooleanStarkConfig { pcs })
-}
-
-/// An enum over the additive NTTs the binary PCS can encode its codeword through.
-///
-/// This implements [`AdditiveNtt`] by dispatching to whichever engine is selected, so callers
-/// generic over an additive NTT can use [`AdditiveNttChoice`] as a single concrete type standing
-/// in for a runtime choice among them.
-#[derive(Clone, Debug)]
-pub enum AdditiveNttChoice {
-    /// The polynomial-basis transform: fast with a hardware carryless multiply, and the
-    /// portable fallback otherwise.
-    PolyBasis(PolyBasisNtt),
-    /// The Lin–Chung–Han transform.
-    Lch(LchNtt<F>),
-    /// The reference transform, evaluating the novel-basis definition directly.
-    Naive(NaiveAdditiveNtt<F>),
-}
-
-impl Default for AdditiveNttChoice {
-    fn default() -> Self {
-        Self::PolyBasis(PolyBasisNtt::default())
-    }
-}
-
-impl AdditiveNtt<F> for AdditiveNttChoice {
-    fn shifted_ntt_batch(&self, mat: RowMajorMatrix<F>, shift: F) -> RowMajorMatrix<F> {
-        match self {
-            Self::PolyBasis(ntt) => ntt.shifted_ntt_batch(mat, shift),
-            Self::Lch(ntt) => ntt.shifted_ntt_batch(mat, shift),
-            Self::Naive(ntt) => ntt.shifted_ntt_batch(mat, shift),
-        }
-    }
-
-    fn shifted_intt_batch(&self, mat: RowMajorMatrix<F>, shift: F) -> RowMajorMatrix<F> {
-        match self {
-            Self::PolyBasis(ntt) => ntt.shifted_intt_batch(mat, shift),
-            Self::Lch(ntt) => ntt.shifted_intt_batch(mat, shift),
-            Self::Naive(ntt) => ntt.shifted_intt_batch(mat, shift),
-        }
-    }
-
-    fn ntt_batch(&self, mat: RowMajorMatrix<F>) -> RowMajorMatrix<F> {
-        match self {
-            Self::PolyBasis(ntt) => ntt.ntt_batch(mat),
-            Self::Lch(ntt) => ntt.ntt_batch(mat),
-            Self::Naive(ntt) => ntt.ntt_batch(mat),
-        }
-    }
-
-    fn ntt_batch_padded(&self, mat: RowMajorMatrix<F>, log_inv_rate: usize) -> RowMajorMatrix<F> {
-        match self {
-            Self::PolyBasis(ntt) => ntt.ntt_batch_padded(mat, log_inv_rate),
-            Self::Lch(ntt) => ntt.ntt_batch_padded(mat, log_inv_rate),
-            Self::Naive(ntt) => ntt.ntt_batch_padded(mat, log_inv_rate),
-        }
-    }
-
-    fn intt_batch(&self, mat: RowMajorMatrix<F>) -> RowMajorMatrix<F> {
-        match self {
-            Self::PolyBasis(ntt) => ntt.intt_batch(mat),
-            Self::Lch(ntt) => ntt.intt_batch(mat),
-            Self::Naive(ntt) => ntt.intt_batch(mat),
-        }
-    }
-
-    fn lde_batch(&self, mat: RowMajorMatrix<F>, added_bits: usize) -> RowMajorMatrix<F> {
-        match self {
-            Self::PolyBasis(ntt) => ntt.lde_batch(mat, added_bits),
-            Self::Lch(ntt) => ntt.lde_batch(mat, added_bits),
-            Self::Naive(ntt) => ntt.lde_batch(mat, added_bits),
-        }
-    }
-
-    fn shifted_lde_batch(
-        &self,
-        mat: RowMajorMatrix<F>,
-        added_bits: usize,
-        shift: F,
-    ) -> RowMajorMatrix<F> {
-        match self {
-            Self::PolyBasis(ntt) => ntt.shifted_lde_batch(mat, added_bits, shift),
-            Self::Lch(ntt) => ntt.shifted_lde_batch(mat, added_bits, shift),
-            Self::Naive(ntt) => ntt.shifted_lde_batch(mat, added_bits, shift),
-        }
-    }
 }
 
 /// A fresh transcript seeded for one commit, prove, or verify call.
