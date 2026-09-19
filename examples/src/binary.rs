@@ -8,8 +8,7 @@
 //!
 //! [`prove_boolean_air`] does the same for an AIR whose trace cells are all bits, committing the
 //! trace as bits through a [`BooleanStarkConfig`] rather than one field element per cell. That
-//! commitment opens columns at the current row only, so it refuses an AIR that reads the next
-//! row.
+//! commitment opens both the current row and the next row of every column.
 
 use core::fmt;
 use std::time::Instant;
@@ -667,9 +666,8 @@ where
 ///
 /// # Errors
 ///
-/// Besides the errors of [`prove_binary_air`], the Boolean commitment refuses:
-/// - an AIR that reads the next row, which it cannot open, when the statement is assessed;
-/// - a trace cell outside `{0, 1}`, when the trace is committed.
+/// Besides the errors of [`prove_binary_air`], the Boolean commitment refuses a trace cell
+/// outside `{0, 1}`, when the trace is committed.
 ///
 /// # Panics
 ///
@@ -1065,7 +1063,7 @@ mod tests {
 
     /// Three bit columns, the third the XOR of the first two.
     ///
-    /// No constraint reads the next row, so the Boolean commitment can open every column.
+    /// Every constraint reads the current row only.
     struct XorAir;
 
     impl<F> BaseAir<F> for XorAir {
@@ -1116,17 +1114,22 @@ mod tests {
     }
 
     #[test]
-    fn boolean_commitment_refuses_an_air_reading_the_next_row() {
-        // Keccak-f links consecutive rows, which the Boolean commitment cannot open, so the
-        // statement is refused when it is assessed, before anything is proved.
+    fn proves_and_verifies_keccak_committed_as_bits() {
+        // One permutation pads to 32 rows, and every constraint links a row to the next.
+        //
+        // The Boolean commitment opens both views of all 1625 columns in one reduction.
         let air = KeccakBinaryAir {};
         let trace = air.generate_random_trace_rows::<F>(1, 0);
-        let result = prove_boolean_air(
+        let width = trace.width();
+        let report = prove_boolean_air(
             &air,
             Table::new(trace.transpose()),
             BinaryProofOptions::default(),
-        );
-        assert!(matches!(result, Err(BinaryProofError::Security(_))));
+        )
+        .expect("a Keccak-f trace committed as bits must prove and verify");
+        assert_eq!(report.rows, 32);
+        assert_eq!(report.stacked_variables, 5 + log2_ceil_usize(width));
+        assert!(report.security_bits >= 100.0);
     }
 
     #[test]

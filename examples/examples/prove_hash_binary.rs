@@ -1,12 +1,8 @@
 use clap::Parser;
-use p3_binary_dft::{LchNtt, NaiveAdditiveNtt, PolyBasisNtt};
 use p3_binary_field::{BinaryField128, Gf2};
 use p3_blake3_air::Blake3BinaryAir;
-use p3_examples::binary::{
-    AdditiveNttChoice, Backend, BinaryProofOptions, prove_binary_air_with_ntt_and_backend,
-    prove_boolean_air_with_backend,
-};
-use p3_examples::parsers::{BinaryHashOptions, NttOptions, RepresentationOptions};
+use p3_examples::binary::{Backend, BinaryProofOptions, prove_boolean_air_with_backend};
+use p3_examples::parsers::{BinaryHashOptions, RepresentationOptions};
 use p3_keccak_air::{KECCAK_BINARY_ROWS_PER_PERM, KeccakBinaryAir};
 use p3_matrix::Matrix;
 use p3_sumcheck::layout::Table;
@@ -27,12 +23,6 @@ struct Args {
     #[arg(short, long)]
     log_trace_length: u8,
 
-    /// The additive NTT used to encode the binary-PCS codeword.
-    /// Keccak-f uses this choice for its dense Binary PCS path. Blake3 is committed as bits and
-    /// always uses its own polynomial-basis NTT.
-    #[arg(short, long, ignore_case = true, value_enum, default_value_t = NttOptions::PolyBasis)]
-    ntt: NttOptions,
-
     /// The field representation the zerocheck prover runs its later rounds in.
     ///
     /// Every choice proves and verifies the same statement and emits a byte-identical proof;
@@ -51,9 +41,9 @@ struct Args {
 
     /// Composed security target of the whole proof, in bits.
     ///
-    /// Keccak-f's dense commitment caps this at roughly
-    /// 128 - (log-trace-length + ceil(log2(width)) + log-inv-rate + 3). Blake3's Boolean
-    /// commitment has its own bit-ring-switch ceiling; PCS grinding does not raise either cap.
+    /// The Boolean commitment packs the trace's bits into `BinaryField128` elements, which caps
+    /// it at roughly 125 - (log-trace-length + ceil(log2(width)) - 7 + log-inv-rate) on the
+    /// binary PCS over those packed elements; PCS grinding does not raise that cap.
     #[arg(long, default_value_t = 100)]
     security_bits: usize,
 
@@ -90,12 +80,6 @@ fn main() {
     let args = Args::parse();
     let trace_height = 1usize << args.log_trace_length;
 
-    let ntt = match args.ntt {
-        NttOptions::PolyBasis => AdditiveNttChoice::PolyBasis(PolyBasisNtt::default()),
-        NttOptions::Lch => AdditiveNttChoice::Lch(LchNtt::default()),
-        NttOptions::Naive => AdditiveNttChoice::Naive(NaiveAdditiveNtt::default()),
-    };
-
     let backend = match args.representation {
         RepresentationOptions::Auto => Backend::preferred(),
         RepresentationOptions::Subfield => Backend::Subfield,
@@ -129,14 +113,12 @@ fn main() {
                 trace_height,
                 "generated trace height must match the requested log-trace-length"
             );
-            prove_binary_air_with_ntt_and_backend(&air, trace, options, ntt, backend)
+
+            // Every cell is a bit, so the trace commits as bits.
+            let table = Table::new(trace.transpose());
+            prove_boolean_air_with_backend(&air, table, options, backend)
         }
         BinaryHashOptions::Blake3Compressions => {
-            assert_eq!(
-                args.ntt,
-                NttOptions::PolyBasis,
-                "BLAKE3 is committed as bits, whose codeword encodes through the polynomial-basis NTT only; drop --ntt"
-            );
             println!("Proving {trace_height} Blake-3 compressions");
 
             let air = Blake3BinaryAir {};
