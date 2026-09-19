@@ -42,7 +42,7 @@ struct Args {
     representation: RepresentationOptions,
 
     /// Log of the inverse code rate for the binary PCS.
-    #[arg(long, default_value_t = 2)]
+    #[arg(long, default_value_t = 1)]
     log_inv_rate: usize,
 
     /// Grinding bits the binary PCS demands once, before its query phase.
@@ -58,13 +58,13 @@ struct Args {
     security_bits: usize,
 
     /// Sequential variable folds batched between binary-PCS commitments.
-    #[arg(long, default_value_t = 3)]
+    #[arg(long, default_value_t = 4)]
     folding: usize,
 
     /// Number of children each Merkle-tree node compresses: 2 or 4.
     ///
     /// 4 trades larger authentication paths in the proof for fewer compressions per tree.
-    #[arg(long, default_value_t = 2, value_parser = parse_merkle_arity)]
+    #[arg(long, default_value_t = 4, value_parser = parse_merkle_arity)]
     merkle_arity: usize,
 }
 
@@ -166,7 +166,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn cli_defaults_preserve_general_binary_pcs_parameters() {
+    fn cli_defaults_select_the_fast_binary_pcs_parameters() {
         let args = Args::try_parse_from([
             "prove_hash_binary",
             "--objective",
@@ -175,8 +175,8 @@ mod tests {
             "2",
         ])
         .expect("minimal CLI arguments parse");
-        assert_eq!(args.log_inv_rate, 2);
-        assert_eq!(args.folding, 3);
-        assert_eq!(args.merkle_arity, 2);
+        assert_eq!(args.log_inv_rate, 1);
+        assert_eq!(args.folding, 4);
+        assert_eq!(args.merkle_arity, 4);
     }
 }
