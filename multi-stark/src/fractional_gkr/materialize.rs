@@ -7,12 +7,21 @@ use p3_field::{Algebra, ExtensionField, Field, PackedValue, PrimeCharacteristicR
 use p3_lookup::Challenges;
 use p3_maybe_rayon::prelude::*;
 use p3_multilinear_util::poly::{Poly, PolyMaybePacked};
-use p3_sumcheck::layout::Table;
+use p3_sumcheck::layout::{ColumnView, Table};
 use p3_util::DisjointMutPtr;
 
 use super::Fraction;
 use crate::lookup::LookupPlan;
 use crate::selectors::BoundaryEvals;
+
+#[inline]
+fn packed_column_at<F: Field>(column: ColumnView<'_, F>, row: usize) -> F::Packing {
+    if let Some(values) = column.as_dense() {
+        *F::Packing::from_slice(&values[row..row + F::Packing::WIDTH])
+    } else {
+        column.packed_at(row)
+    }
+}
 
 /// Base-field context used to resolve only the symbolic expressions retained
 /// by [`p3_lookup::Lookups::from_air`].
@@ -213,11 +222,9 @@ impl<F: Field> LookupPlan<F> {
                 Scratch::new(main.num_polys(), preprocessed.map_or(0, Table::num_polys));
             for row in 0..height {
                 let fill = |local: &mut [F], next: &mut [F], table: &Table<F>| {
-                    for ((local, next), column) in
-                        local.iter_mut().zip(next).zip(table.iter_polys())
-                    {
-                        *local = column[row];
-                        *next = column[(row + 1).min(height - 1)];
+                    for ((local, next), column) in local.iter_mut().zip(next).zip(table.columns()) {
+                        *local = column.value(row);
+                        *next = column.value((row + 1).min(height - 1));
                     }
                 };
                 fill(&mut scratch.local, &mut scratch.next, main);
@@ -291,16 +298,16 @@ fn materialize_contributions_packed<F, EF>(
             let row = packed_row * packing_width;
             let fill_columns =
                 |local: &mut [F::Packing], next: &mut [F::Packing], table: &Table<F>| {
-                    local.iter_mut().zip(next).zip(table.iter_polys()).for_each(
+                    local.iter_mut().zip(next).zip(table.columns()).for_each(
                         |((local, next), column)| {
-                            *local = *F::Packing::from_slice(&column[row..row + packing_width]);
+                            *local = packed_column_at(column, row);
                             *next = if row + 1 + packing_width <= num_evals {
-                                *F::Packing::from_slice(&column[row + 1..row + 1 + packing_width])
+                                packed_column_at(column, row + 1)
                             } else {
                                 // Match ordinary AIR evaluation: at the final row, `next`
                                 // repeats the local row rather than wrapping to row zero.
                                 F::Packing::from_fn(|lane| {
-                                    column[core::cmp::min(row + lane + 1, num_evals - 1)]
+                                    column.value(core::cmp::min(row + lane + 1, num_evals - 1))
                                 })
                             };
                         },

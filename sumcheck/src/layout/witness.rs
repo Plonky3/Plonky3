@@ -2,7 +2,7 @@
 
 use alloc::vec::Vec;
 
-use p3_field::Field;
+use p3_field::{Field, PackedValue};
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_maybe_rayon::prelude::*;
@@ -93,7 +93,154 @@ impl Selector {
 /// - At least one column.
 /// - Every column has the same number of variables.
 #[derive(Debug, Clone)]
-pub struct Table<F: Field>(RowMajorMatrix<F>);
+enum TableStorage<F: Field> {
+    Dense(RowMajorMatrix<F>),
+    Boolean {
+        words: RowMajorMatrix<u64>,
+        num_variables: usize,
+    },
+}
+
+/// A borrowed, representation-independent view of one logical table column.
+///
+/// Dense columns borrow their field cells. Packed columns borrow the source words and decode
+/// individual Boolean cells on demand; no expanded column is cached.
+#[derive(Clone, Copy)]
+pub enum ColumnView<'a, F: Field> {
+    Dense(&'a [F]),
+    Boolean {
+        words: &'a RowMajorMatrix<u64>,
+        column: usize,
+        len: usize,
+    },
+}
+
+impl<F: Field> core::fmt::Debug for ColumnView<'_, F> {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("ColumnView")
+            .field("len", &self.len())
+            .finish()
+    }
+}
+
+/// Iterator over the logical field values of a [`ColumnView`].
+pub struct ColumnValues<'a, F: Field> {
+    view: ColumnView<'a, F>,
+    range: core::ops::Range<usize>,
+}
+
+impl<F: Field> Iterator for ColumnValues<'_, F> {
+    type Item = F;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.range.next().map(|row| self.view.value(row))
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let len = self.range.len();
+        (len, Some(len))
+    }
+}
+
+impl<F: Field> DoubleEndedIterator for ColumnValues<'_, F> {
+    fn next_back(&mut self) -> Option<Self::Item> {
+        self.range.next_back().map(|row| self.view.value(row))
+    }
+}
+
+impl<F: Field> ExactSizeIterator for ColumnValues<'_, F> {}
+
+impl<'a, F: Field> ColumnView<'a, F> {
+    /// Number of logical rows in this column.
+    #[inline]
+    pub const fn len(self) -> usize {
+        match self {
+            Self::Dense(values) => values.len(),
+            Self::Boolean { len, .. } => len,
+        }
+    }
+
+    /// Whether this column has no logical rows.
+    #[inline]
+    pub const fn is_empty(self) -> bool {
+        self.len() == 0
+    }
+
+    /// Returns one logical field cell.
+    #[inline]
+    pub fn value(self, row: usize) -> F {
+        assert!(row < self.len(), "column row out of bounds");
+        match self {
+            Self::Dense(values) => values[row],
+            Self::Boolean { words, column, .. } => F::from_bool(
+                ((words.values[(row / 64) * words.width + column] >> (row % 64)) & 1) != 0,
+            ),
+        }
+    }
+
+    /// Iterates over logical field cells without materializing a column.
+    #[inline]
+    pub fn values(self) -> ColumnValues<'a, F> {
+        ColumnValues {
+            view: self,
+            range: 0..self.len(),
+        }
+    }
+
+    /// Returns the borrowed dense slice, if this column is dense.
+    #[inline]
+    pub const fn as_dense(self) -> Option<&'a [F]> {
+        match self {
+            Self::Dense(values) => Some(values),
+            Self::Boolean { .. } => None,
+        }
+    }
+
+    /// Returns one packed field lane group, decoding bits when necessary.
+    #[inline]
+    pub fn packed_at(self, row: usize) -> F::Packing {
+        F::Packing::from_fn(|lane| self.value(row + lane))
+    }
+
+    /// Returns the packed source word for a Boolean column.
+    #[inline]
+    pub fn boolean_word(self, word: usize) -> Option<u64> {
+        match self {
+            Self::Boolean { words, column, .. } => words
+                .values
+                .get(word.checked_mul(words.width)? + column)
+                .copied(),
+            Self::Dense(_) => None,
+        }
+    }
+
+    /// Copies logical cells into an explicitly supplied dense destination.
+    pub fn copy_into(self, destination: &mut [F]) {
+        assert_eq!(
+            destination.len(),
+            self.len(),
+            "column destination has wrong length"
+        );
+        if let Some(values) = self.as_dense() {
+            destination.copy_from_slice(values);
+        } else {
+            for (destination, value) in destination.iter_mut().zip(self.values()) {
+                *destination = value;
+            }
+        }
+    }
+}
+
+/// A column-major table of multilinear polynomials sharing a common arity.
+///
+/// Dense tables retain the original field-cell layout. Boolean tables keep one `u64` word per
+/// 64 logical rows and expose [`ColumnView`] for consumers that can operate without decoding the
+/// full trace.
+#[derive(Debug, Clone)]
+pub struct Table<F: Field> {
+    storage: TableStorage<F>,
+}
 
 impl<F: Field> Table<F> {
     /// Creates a table from a row-major matrix with one polynomial per row.
@@ -108,7 +255,60 @@ impl<F: Field> Table<F> {
             "table row width must be a power of two"
         );
         assert!(columns.height() > 0, "table must have at least one column");
-        Self(columns)
+        Self {
+            storage: TableStorage::Dense(columns),
+        }
+    }
+
+    /// Creates a packed Boolean table from words in physical row-block-major order.
+    ///
+    /// The matrix width is the logical column count. Physical row `w` stores rows
+    /// `64*w..64*w+63`, with bit zero holding the first row. The logical height is `2^num_variables`.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the dimensions overflow, the matrix width is zero, the word count is wrong,
+    /// or unused high bits are set.
+    pub fn from_packed_bits(words: RowMajorMatrix<u64>, num_variables: usize) -> Self {
+        assert!(
+            num_variables < usize::BITS as usize,
+            "packed table height overflows usize"
+        );
+        let height = 1usize
+            .checked_shl(num_variables as u32)
+            .expect("packed table height overflows usize");
+        assert!(
+            words.width > 0,
+            "packed table must have at least one column"
+        );
+        let blocks = height
+            .checked_add(63)
+            .expect("packed table block count overflows usize")
+            / 64;
+        let expected = words
+            .width
+            .checked_mul(blocks)
+            .expect("packed table word count overflows usize");
+        assert_eq!(
+            words.values.len(),
+            expected,
+            "packed table must contain exactly width * ceil(height / 64) words"
+        );
+        if !height.is_multiple_of(64) {
+            let used = height % 64;
+            let high_bits = !((1u64 << used) - 1);
+            let last = &words.values[(blocks - 1) * words.width..blocks * words.width];
+            assert!(
+                last.iter().all(|word| word & high_bits == 0),
+                "packed table padding bits must be zero"
+            );
+        }
+        Self {
+            storage: TableStorage::Boolean {
+                words,
+                num_variables,
+            },
+        }
     }
 
     /// Creates a zero-filled table.
@@ -137,29 +337,108 @@ impl<F: Field> Table<F> {
 
     /// Iterates over the table rows, one polynomial evaluation slice per row.
     pub fn iter_polys(&self) -> impl DoubleEndedIterator<Item = &[F]> {
-        self.0.row_slices()
+        self.dense_matrix().row_slices()
     }
 
     /// Iterates over the table rows in parallel, one polynomial evaluation slice per row.
     pub fn par_iter_polys(&self) -> impl IndexedParallelIterator<Item = &[F]> {
-        self.0.par_row_slices()
+        self.dense_matrix().par_row_slices()
     }
 
     /// Returns the polynomial at column `id`.
     pub fn poly(&self, id: usize) -> PolyView<'_, F> {
-        let start = id * self.0.width;
-        PolyView::new(&self.0.values[start..start + self.0.width])
+        let dense = self.dense_matrix();
+        let start = id * dense.width;
+        PolyView::new(&dense.values[start..start + dense.width])
+    }
+
+    /// Returns one column without materializing packed storage.
+    pub fn column(&self, id: usize) -> ColumnView<'_, F> {
+        assert!(id < self.num_polys(), "table column out of bounds");
+        match &self.storage {
+            TableStorage::Dense(columns) => {
+                let start = id * columns.width;
+                ColumnView::Dense(&columns.values[start..start + columns.width])
+            }
+            TableStorage::Boolean {
+                words,
+                num_variables,
+            } => ColumnView::Boolean {
+                words,
+                column: id,
+                len: 1usize << num_variables,
+            },
+        }
+    }
+
+    /// Iterates over borrowed representation-independent columns.
+    pub fn columns(&self) -> impl DoubleEndedIterator<Item = ColumnView<'_, F>> {
+        (0..self.num_polys()).map(|column| self.column(column))
+    }
+
+    /// Iterates over borrowed representation-independent columns in parallel.
+    pub fn par_columns(&self) -> impl IndexedParallelIterator<Item = ColumnView<'_, F>> {
+        (0..self.num_polys())
+            .into_par_iter()
+            .map(|column| self.column(column))
+    }
+
+    /// Returns the packed backing matrix, if this table is Boolean-packed.
+    pub fn packed_bits(&self) -> Option<&RowMajorMatrix<u64>> {
+        match &self.storage {
+            TableStorage::Dense(_) => None,
+            TableStorage::Boolean { words, .. } => Some(words),
+        }
+    }
+
+    /// Converts packed storage into the dense field-cell representation explicitly.
+    ///
+    /// An already dense table is returned without copying.
+    pub fn into_dense(self) -> Self {
+        match self.storage {
+            TableStorage::Dense(_) => self,
+            TableStorage::Boolean {
+                words,
+                num_variables,
+            } => {
+                let height = 1usize << num_variables;
+                let width = words.width;
+                let mut values = F::zero_vec(width * height);
+                for column in 0..width {
+                    for row in 0..height {
+                        values[column * height + row] = F::from_bool(
+                            ((words.values[(row / 64) * width + column] >> (row % 64)) & 1) != 0,
+                        );
+                    }
+                }
+                Self::new(RowMajorMatrix::new(values, height))
+            }
+        }
+    }
+
+    fn dense_matrix(&self) -> &RowMajorMatrix<F> {
+        match &self.storage {
+            TableStorage::Dense(columns) => columns,
+            TableStorage::Boolean { .. } => {
+                panic!("dense table access is unavailable for packed Boolean storage")
+            }
+        }
     }
 
     /// Returns the number of columns.
     pub fn num_polys(&self) -> usize {
-        self.0.height()
+        match &self.storage {
+            TableStorage::Dense(columns) => columns.height(),
+            TableStorage::Boolean { words, .. } => words.width,
+        }
     }
 
     /// Returns the shared number of variables.
     pub fn num_variables(&self) -> usize {
-        // Invariant (set by the constructor): every column shares this value.
-        self.poly(0).num_variables()
+        match &self.storage {
+            TableStorage::Dense(columns) => columns.width.ilog2() as usize,
+            TableStorage::Boolean { num_variables, .. } => *num_variables,
+        }
     }
 
     /// Returns the verifier shape of this table.
@@ -171,8 +450,13 @@ impl<F: Field> Table<F> {
     fn pad_zeros(&mut self, num_variables: usize) {
         let current_num_variables = self.num_variables();
         if current_num_variables < num_variables {
-            self.0
-                .widen_right((1 << num_variables) - (1 << current_num_variables), F::ZERO);
+            match &mut self.storage {
+                TableStorage::Dense(columns) => columns
+                    .widen_right((1 << num_variables) - (1 << current_num_variables), F::ZERO),
+                TableStorage::Boolean { .. } => {
+                    panic!("packed tables must be converted to dense before padding")
+                }
+            }
         }
     }
 }
@@ -196,8 +480,8 @@ impl<F: Field> SuffixTableSource<F> for Table<F> {
     fn fill(&self, columns: &mut [ColumnOut<'_, F>]) {
         columns
             .par_iter_mut()
-            .zip(self.par_iter_polys())
-            .for_each(|(out, source)| out.copy_from_slice(source));
+            .zip(self.par_columns())
+            .for_each(|(out, source)| out.copy_from_view(source));
     }
 }
 
@@ -211,7 +495,7 @@ pub struct ColumnOut<'a, F> {
     written: bool,
 }
 
-impl<'a, F> ColumnOut<'a, F> {
+impl<'a, F: Field> ColumnOut<'a, F> {
     /// Returns the number of logical rows the producer must write.
     pub const fn len(&self) -> usize {
         self.values.len()
@@ -240,6 +524,11 @@ impl<'a, F> ColumnOut<'a, F> {
         F: Copy,
     {
         self.write_with(|destination| destination.copy_from_slice(source));
+    }
+
+    /// Copies a representation-independent source column into this destination.
+    pub fn copy_from_view(&mut self, source: ColumnView<'_, F>) {
+        self.write_with(|destination| source.copy_into(destination));
     }
 }
 
@@ -664,6 +953,9 @@ impl<F: Field> Witness<F> {
             !tables.is_empty(),
             "Witness requires at least one source table"
         );
+        // The ordinary stacked PCS stores field slices in its retained witness. Explicitly cross
+        // this dense boundary here; BooleanTracePcs source tables never construct a Witness.
+        tables = tables.into_iter().map(Table::into_dense).collect();
         // Normalize small tables to the committed arity used by the protocol.
         tables.iter_mut().for_each(|table| table.pad_zeros(folding));
 
@@ -727,6 +1019,7 @@ impl<F: Field> Witness<F> {
             !tables.is_empty(),
             "Witness requires at least one source table"
         );
+        tables = tables.into_iter().map(Table::into_dense).collect();
         tables.iter_mut().for_each(|table| table.pad_zeros(folding));
 
         let shapes: Vec<LayoutShape> = tables
@@ -1119,6 +1412,65 @@ mod tests {
         assert_eq!(table.num_variables(), 3);
         // Check: column lookup returns a ref to the i-th poly with matching arity.
         assert_eq!(table.poly(0).num_variables(), 3);
+    }
+
+    #[test]
+    fn packed_table_column_views_preserve_row_major_bit_order() {
+        let words = RowMajorMatrix::new(vec![0b1010_0101u64, 0b1100_0011u64], 2);
+        let table = Table::<F>::from_packed_bits(words, 3);
+
+        assert_eq!(table.num_polys(), 2);
+        assert_eq!(table.num_variables(), 3);
+        assert!(table.packed_bits().is_some());
+        assert_eq!(table.column(0).len(), 8);
+        assert_eq!(table.column(1).len(), 8);
+        assert_eq!(table.column(0).boolean_word(0), Some(0b1010_0101));
+        assert_eq!(table.column(1).boolean_word(0), Some(0b1100_0011));
+        assert_eq!(
+            table.column(0).values().collect::<Vec<_>>(),
+            (0..8)
+                .map(|row| F::from_bool(((0b1010_0101u64 >> row) & 1) != 0))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            table
+                .columns()
+                .map(|column| column.values().collect::<Vec<_>>())
+                .collect::<Vec<_>>(),
+            vec![
+                table.column(0).values().collect::<Vec<_>>(),
+                table.column(1).values().collect::<Vec<_>>(),
+            ]
+        );
+    }
+
+    #[test]
+    fn packed_table_explicit_dense_conversion_matches_boolean_columns() {
+        let table = Table::<F>::from_packed_bits(
+            RowMajorMatrix::new(vec![0b0000_1101u64, 0b0000_1011u64], 2),
+            3,
+        );
+        let dense = table.clone().into_dense();
+
+        assert!(dense.packed_bits().is_none());
+        for column in 0..2 {
+            assert_eq!(
+                dense.column(column).values().collect::<Vec<_>>(),
+                table.column(column).values().collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "padding bits")]
+    fn packed_table_rejects_nonzero_padding_bits() {
+        let _ = Table::<F>::from_packed_bits(RowMajorMatrix::new(vec![0b1000_0001u64], 1), 2);
+    }
+
+    #[test]
+    #[should_panic(expected = "exactly")]
+    fn packed_table_rejects_wrong_physical_matrix_size() {
+        let _ = Table::<F>::from_packed_bits(RowMajorMatrix::new(vec![0u64], 1), 7);
     }
 
     #[test]

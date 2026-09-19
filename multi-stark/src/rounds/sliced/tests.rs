@@ -3,18 +3,37 @@ use alloc::vec::Vec;
 
 use p3_binary_field::{Ghash128, TowerLevel};
 use p3_field::{Field, PrimeCharacteristicRing};
+use p3_matrix::dense::RowMajorMatrix;
 use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
 
 use super::*;
 use crate::rounds::StageCoupling;
 use crate::rounds::subfield::tests::{
-    first_challenge, later_rounds, link_coupling, no_lookups, with_state,
+    first_challenge, later_rounds, link_coupling, no_lookups, with_stage_state, with_state,
 };
 use crate::zerocheck::backend_tests::{FixtureAir, Gf4, Instance, Tower, gf4, outside};
 
 /// The smallest height whose residual half fills a word.
 const SHORTEST: usize = 2 * SLICED_LANES;
+
+fn packed_boolean_table(table: &Table<Tower>) -> Table<Tower> {
+    let height = 1usize << table.num_variables();
+    let words = (0..height / SLICED_LANES)
+        .flat_map(|block| {
+            (0..table.num_polys()).map(move |column| {
+                (0..SLICED_LANES).fold(0u64, |word, lane| {
+                    let row = block * SLICED_LANES + lane;
+                    word | u64::from(table.column(column).value(row) == Tower::ONE) << lane
+                })
+            })
+        })
+        .collect();
+    Table::from_packed_bits(
+        RowMajorMatrix::new(words, table.num_polys()),
+        table.num_variables(),
+    )
+}
 
 /// The sliced first round polynomial, accumulated in the tower and in the polynomial basis,
 /// beside the generic kernel's.
@@ -71,6 +90,40 @@ fn a_fitting_stage_is_sliced_and_matches_the_generic_kernel() {
             );
         }
     }
+}
+
+#[test]
+fn packed_boolean_columns_match_dense_sliced_first_round() {
+    let instance = Instance::honest(FixtureAir::Pair, SHORTEST, 0xBEEF);
+    let dense = instance.main_table();
+    let packed = packed_boolean_table(&dense);
+    let airs = vec![&instance.air];
+    let publics = vec![instance.public_values.as_slice()];
+
+    let dense_rounds = with_stage_state(
+        &airs,
+        &publics,
+        &[None],
+        &[&dense],
+        no_lookups(),
+        |mut state, eq_suffix| {
+            let sliced = state.round_poly_sliced::<Gf4, Tower>(eq_suffix);
+            (sliced, state.round_poly(eq_suffix))
+        },
+    );
+    let packed_rounds = with_stage_state(
+        &airs,
+        &publics,
+        &[None],
+        &[&packed],
+        no_lookups(),
+        |mut state, eq_suffix| {
+            let sliced = state.round_poly_sliced::<Gf4, Tower>(eq_suffix);
+            (sliced, state.round_poly(eq_suffix))
+        },
+    );
+
+    assert_eq!(packed_rounds, dense_rounds);
 }
 
 #[test]

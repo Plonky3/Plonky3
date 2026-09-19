@@ -269,6 +269,34 @@ where
         IndexedPlan::build::<C::Val, C::Challenge, A>(&airs, &instances.num_variables())
             .expect("an indexed lookup the statement cannot plan is a caller error");
 
+    // IndexedWitness currently borrows dense field slices for both payload and position columns.
+    // Reject a packed source before the statement transcript or commitment can mutate the caller's
+    // challenger; silently decoding here would expand the complete indexed payload.
+    if indexed_plan.is_some() {
+        assert!(
+            tables.iter().all(|table| table.packed_bits().is_none()),
+            "packed Boolean source tables are unsupported for active indexed lookups"
+        );
+        let preprocessed_data = proving_key
+            .preprocessed
+            .as_ref()
+            .map(|preprocessed| &preprocessed.prover_data);
+        let mut next_preprocessed = 0;
+        for instance in instances.iter() {
+            if instance.air.preprocessed_width() != 0 {
+                let data = preprocessed_data.expect(
+                    "preprocessed proving key is missing for an AIR with preprocessed columns",
+                );
+                let table = config.committed_table(data, next_preprocessed);
+                next_preprocessed += 1;
+                assert!(
+                    table.packed_bits().is_none(),
+                    "packed Boolean preprocessed tables are unsupported for active indexed lookups"
+                );
+            }
+        }
+    }
+
     // Describe the statement before binding anything into it.
     //
     // Every number comes from the AIRs, from the tables this caller holds, and from `pow_bits`.

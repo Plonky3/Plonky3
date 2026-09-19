@@ -21,12 +21,21 @@ use p3_maybe_rayon::prelude::*;
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::{Poly, PolyView};
 use p3_sumcheck::generic_degree::RoundPolyInterpolator;
-use p3_sumcheck::layout::Table;
+use p3_sumcheck::layout::{ColumnView, Table};
 
 use crate::folder::{FolderEvaluations, InteractionMultilinearFolder, MultilinearFolder};
 use crate::lookup::AirLinkInstance;
 use crate::packed_ext::PackedExt;
 use crate::selectors::{BoundaryEvals, periodic_num_variables};
+
+#[inline]
+fn packed_column_at<F: Field>(column: ColumnView<'_, F>, row: usize) -> F::Packing {
+    if let Some(values) = column.as_dense() {
+        *F::Packing::from_slice(&values[row..row + F::Packing::WIDTH])
+    } else {
+        column.packed_at(row)
+    }
+}
 
 /// Native per-variable degrees of one AIR's two zerocheck expression families.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Default)]
@@ -1555,12 +1564,10 @@ where
                         for ((local, local_delta), column) in scratch.local_point[offset..end]
                             .iter_mut()
                             .zip(scratch.local_diff[offset..end].iter_mut())
-                            .zip(table.iter_polys())
+                            .zip(table.columns())
                         {
-                            let local_lo = *F::Packing::from_slice(&column[s..s + packing_width]);
-                            let local_hi = *F::Packing::from_slice(
-                                &column[s + scalar_half..s + scalar_half + packing_width],
-                            );
+                            let local_lo = packed_column_at(column, s);
+                            let local_hi = packed_column_at(column, s + scalar_half);
                             *local = local_lo;
                             *local_delta = local_hi - local_lo;
                         }
@@ -1573,22 +1580,19 @@ where
                             for ((next, next_delta), column) in scratch.next_point[run.clone()]
                                 .iter_mut()
                                 .zip(scratch.next_diff[run.clone()].iter_mut())
-                                .zip(table.iter_polys().skip(run.start - offset))
+                                .zip(table.columns().skip(run.start - offset))
                             {
-                                let next_lo =
-                                    *F::Packing::from_slice(&column[s + 1..s + 1 + packing_width]);
+                                let next_lo = packed_column_at(column, s + 1);
                                 let next_hi_start = s + scalar_half + 1;
                                 let next_hi = if next_hi_start + packing_width <= height {
-                                    *F::Packing::from_slice(
-                                        &column[next_hi_start..next_hi_start + packing_width],
-                                    )
+                                    packed_column_at(column, next_hi_start)
                                 } else {
                                     F::Packing::from_fn(|lane| {
                                         let row = next_hi_start + lane;
                                         if row < height {
-                                            column[row]
+                                            column.value(row)
                                         } else {
-                                            column[height - 1]
+                                            column.value(height - 1)
                                         }
                                     })
                                 };
@@ -1744,10 +1748,10 @@ where
                 scratch.local_point[offset..end]
                     .iter_mut()
                     .zip(scratch.local_diff[offset..end].iter_mut())
-                    .zip(table.iter_polys())
+                    .zip(table.columns())
                     .for_each(|((local, local_delta), column)| {
-                        let local_lo = column[s];
-                        let local_hi = column[s + half];
+                        let local_lo = column.value(s);
+                        let local_hi = column.value(s + half);
                         *local = local_lo;
                         *local_delta = local_hi - local_lo;
                     });
@@ -1760,13 +1764,13 @@ where
                     scratch.next_point[run.clone()]
                         .iter_mut()
                         .zip(scratch.next_diff[run.clone()].iter_mut())
-                        .zip(table.iter_polys().skip(run.start - offset))
+                        .zip(table.columns().skip(run.start - offset))
                         .for_each(|((next, next_delta), column)| {
-                            let next_lo = column[s + 1];
+                            let next_lo = column.value(s + 1);
                             let next_hi = if s + half + 1 < height {
-                                column[s + half + 1]
+                                column.value(s + half + 1)
                             } else {
-                                column[height - 1]
+                                column.value(height - 1)
                             };
                             *next = next_lo;
                             *next_delta = next_hi - next_lo;
@@ -1869,8 +1873,41 @@ where
     {
         self.fold_columns(
             r,
-            |column| PolyView::new(column).fix_prefix_var_to_packed(r),
-            |column| PolyView::new(column).fix_prefix_var(r),
+            |column| {
+                if let Some(values) = column.as_dense() {
+                    PolyView::new(values).fix_prefix_var_to_packed(r)
+                } else {
+                    let half = column.len() / 2;
+                    Poly::new(
+                        (0..half)
+                            .step_by(F::Packing::WIDTH)
+                            .map(|start| {
+                                EF::ExtensionPacking::from_ext_fn(|lane| {
+                                    let lo = column.value(start + lane);
+                                    let hi = column.value(start + half + lane);
+                                    r * EF::from(hi - lo) + EF::from(lo)
+                                })
+                            })
+                            .collect(),
+                    )
+                }
+            },
+            |column| {
+                if let Some(values) = column.as_dense() {
+                    PolyView::new(values).fix_prefix_var(r)
+                } else {
+                    let half = column.len() / 2;
+                    Poly::new(
+                        (0..half)
+                            .map(|row| {
+                                let lo = column.value(row);
+                                let hi = column.value(row + half);
+                                EF::from(lo) + r * EF::from(hi - lo)
+                            })
+                            .collect(),
+                    )
+                }
+            },
         )
     }
 
@@ -1885,8 +1922,8 @@ where
         fold_scalar: U,
     ) -> RoundStateExt<'air, 'data, A, F, EF>
     where
-        P: Fn(&[F]) -> Poly<EF::ExtensionPacking> + Sync,
-        U: Fn(&[F]) -> Poly<EF> + Sync,
+        P: Fn(ColumnView<'_, F>) -> Poly<EF::ExtensionPacking> + Sync,
+        U: Fn(ColumnView<'_, F>) -> Poly<EF> + Sync,
     {
         let next_tail = self.fold_claims_and_tails(r);
 
@@ -1942,9 +1979,9 @@ where
             for run in runs {
                 for (tail, col) in next_tail[run.clone()]
                     .iter_mut()
-                    .zip(table.iter_polys().skip(run.start - offset))
+                    .zip(table.columns().skip(run.start - offset))
                 {
-                    *tail = r * (col[num_evals - 1] - col[half]) + col[half];
+                    *tail = r * (col.value(num_evals - 1) - col.value(half)) + col.value(half);
                 }
             }
         };
@@ -1969,21 +2006,21 @@ where
     fn fold_each_column<T, U>(&self, fold: U) -> Vec<Poly<T>>
     where
         T: Send,
-        U: Fn(&[F]) -> Poly<T> + Sync,
+        U: Fn(ColumnView<'_, F>) -> Poly<T> + Sync,
     {
         let mut columns = Vec::with_capacity(self.total_width());
         for slot in &self.slots {
             columns.extend(
                 self.tables[slot.stage_index]
-                    .par_iter_polys()
+                    .par_columns()
                     .map(&fold)
                     .collect::<Vec<_>>(),
             );
             if let Some(preprocessed) = self.preprocessed[slot.stage_index] {
-                columns.extend(preprocessed.par_iter_polys().map(&fold).collect::<Vec<_>>());
+                columns.extend(preprocessed.par_columns().map(&fold).collect::<Vec<_>>());
             }
             if let Some(periodic) = self.periodic[slot.stage_index].as_ref() {
-                columns.extend(periodic.par_iter_polys().map(&fold).collect::<Vec<_>>());
+                columns.extend(periodic.par_columns().map(&fold).collect::<Vec<_>>());
             }
         }
         columns

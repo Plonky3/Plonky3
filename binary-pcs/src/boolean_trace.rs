@@ -219,6 +219,31 @@ where
         Ok(placements)
     }
 
+    /// Validate retained source shapes before any sampled point or opening transcript is used.
+    fn validate_source_shapes(
+        tables: &[Table<EF>],
+        protocol: &OpeningProtocol,
+    ) -> Result<(), BooleanTraceError<EF, MT::Error>> {
+        let expected = protocol.table_shapes();
+        if tables.len() != expected.len() {
+            return Err(BooleanTraceError::TableCountMismatch {
+                expected: expected.len(),
+                actual: tables.len(),
+            });
+        }
+        for (table, expected) in expected.iter().copied().enumerate() {
+            let actual = tables[table].shape();
+            if actual != expected {
+                return Err(BooleanTraceError::TableShapeMismatch {
+                    table,
+                    expected,
+                    actual,
+                });
+            }
+        }
+        Ok(())
+    }
+
     /// Bit claims one protocol raises, or nothing for a protocol this scheme refuses.
     fn opening_claim_count(&self, protocol: &OpeningProtocol) -> Option<usize> {
         let shapes = protocol.table_shapes();
@@ -253,8 +278,30 @@ where
     /// Evaluate every column at one row point while sharing the equality weights.
     fn evaluate_columns(table: &Table<EF>, point: &Point<EF>) -> Vec<EF> {
         let weights = SplitEq::<EF, EF>::new_packed(point, EF::ONE);
+        let row_weights = table.packed_bits().map(|_| weights.materialize());
         (0..table.shape().width())
-            .map(|column| weights.eval_base(table.poly(column)))
+            .map(|column| {
+                let view = table.column(column);
+                if view.as_dense().is_some() {
+                    weights.eval_base(table.poly(column))
+                } else {
+                    let row_weights = row_weights
+                        .as_ref()
+                        .expect("packed columns require materialized row weights");
+                    let mut result = EF::ZERO;
+                    for word in 0..view.len().div_ceil(WORD_BITS) {
+                        let mut bits = view
+                            .boolean_word(word)
+                            .expect("packed column must expose every source word");
+                        while bits != 0 {
+                            let bit = bits.trailing_zeros() as usize;
+                            result += row_weights.as_slice()[word * WORD_BITS + bit];
+                            bits &= bits - 1;
+                        }
+                    }
+                    result
+                }
+            })
             .collect()
     }
 
@@ -289,26 +336,42 @@ where
             for (column, selector) in placement.selectors().iter().enumerate() {
                 // A slot starts at a multiple of its own length, counted in cells.
                 let offset = selector.index() * column_len;
-                let view = table.poly(column);
-                let cells = view.as_slice();
                 let refuse = || BooleanTraceError::NonBooleanCell {
                     table: placement.idx(),
                     column,
                 };
 
-                if column_len >= WORD_BITS {
-                    // The slot is word aligned and fills whole words, so none is read back.
-                    let (runs, rest) = cells.as_chunks::<WORD_BITS>();
-                    debug_assert!(rest.is_empty(), "a power-of-two column fills whole words");
-                    for (word, run) in words[offset / WORD_BITS..].iter_mut().zip(runs) {
-                        *word = pack_word(run).ok_or_else(refuse)?;
+                let view = table.column(column);
+                if let Some(cells) = view.as_dense() {
+                    if column_len >= WORD_BITS {
+                        // The slot is word aligned and fills whole words, so none is read back.
+                        let (runs, rest) = cells.as_chunks::<WORD_BITS>();
+                        debug_assert!(rest.is_empty(), "a power-of-two column fills whole words");
+                        for (word, run) in words[offset / WORD_BITS..].iter_mut().zip(runs) {
+                            *word = pack_word(run).ok_or_else(refuse)?;
+                        }
+                    } else {
+                        // A shorter column sits inside one word, so its bits are set in place.
+                        for (cell, &value) in cells.iter().enumerate() {
+                            let bit = bit_of(value).ok_or_else(refuse)?;
+                            let index = offset + cell;
+                            words[index / WORD_BITS] |= bit << (index % WORD_BITS);
+                        }
+                    }
+                } else if column_len >= WORD_BITS {
+                    let source_words = column_len / WORD_BITS;
+                    for word in 0..source_words {
+                        words[offset / WORD_BITS + word] = view
+                            .boolean_word(word)
+                            .expect("packed column must expose every source word");
                     }
                 } else {
-                    // A shorter column sits inside one word, so its bits are set in place.
-                    for (cell, &value) in cells.iter().enumerate() {
-                        let bit = bit_of(value).ok_or_else(refuse)?;
+                    let bits = view
+                        .boolean_word(0)
+                        .expect("packed short column must expose its source word");
+                    for cell in 0..column_len {
                         let index = offset + cell;
-                        words[index / WORD_BITS] |= bit << (index % WORD_BITS);
+                        words[index / WORD_BITS] |= ((bits >> cell) & 1) << (index % WORD_BITS);
                     }
                 }
             }
@@ -423,6 +486,26 @@ pub enum BooleanTraceError<EF, MmcsError> {
         /// Variables the commitment holds.
         expected: usize,
         /// Variables the shapes stack to.
+        actual: usize,
+    },
+
+    /// The retained source tables do not have the exact shapes promised by the opening protocol.
+    #[error("table {table} has shape {actual:?}, protocol requires {expected:?}")]
+    TableShapeMismatch {
+        /// Table whose retained shape disagreed with the protocol.
+        table: usize,
+        /// Shape the protocol describes.
+        expected: TableShape,
+        /// Shape the committed prover data retains.
+        actual: TableShape,
+    },
+
+    /// The protocol and retained source table lists have different lengths.
+    #[error("the prover retains {actual} tables, while the opening protocol describes {expected}")]
+    TableCountMismatch {
+        /// Number of tables described by the protocol.
+        expected: usize,
+        /// Number of tables retained by the prover.
         actual: usize,
     },
 
@@ -542,6 +625,7 @@ where
         protocol: Self::OpeningProtocol,
         challenger: &mut Challenger,
     ) -> Result<Self::Proof, Self::ProverError> {
+        Self::validate_source_shapes(&prover_data.tables, &protocol)?;
         // The sampled convention draws every batch's point from the transcript.
         let points = sample_points(&protocol, challenger);
         self.open_at(prover_data, &protocol, &points, challenger)
@@ -616,6 +700,7 @@ where
         challenger: &mut Challenger,
     ) -> Result<Self::Proof, Self::ProverError> {
         // Every shape and every point is checked before the transcript moves.
+        Self::validate_source_shapes(&prover_data.tables, protocol)?;
         self.validate_opening(protocol, points)?;
         let Some(width) = self.batched_width(protocol) else {
             let lifted = self.opening_points(protocol, points)?;
@@ -803,6 +888,28 @@ mod tests {
         Table::new(RowMajorMatrix::new(cells, rows))
     }
 
+    fn packed_table(table: &Table<EF>) -> Table<EF> {
+        let height = 1usize << table.num_variables();
+        let words = (0..height.div_ceil(WORD_BITS))
+            .flat_map(|block| {
+                (0..table.num_polys()).map(move |column| {
+                    (0..WORD_BITS).fold(0u64, |word, lane| {
+                        let row = block * WORD_BITS + lane;
+                        if row < height && table.column(column).value(row) == EF::ONE {
+                            word | (1u64 << lane)
+                        } else {
+                            word
+                        }
+                    })
+                })
+            })
+            .collect();
+        Table::from_packed_bits(
+            RowMajorMatrix::new(words, table.num_polys()),
+            table.num_variables(),
+        )
+    }
+
     /// A commitment over the batch these shapes describe.
     fn pcs(shapes: &[TableShape]) -> BooleanTracePcs<EF, MyMmcs, MyMmcs> {
         let params = BinaryPcsParams {
@@ -897,6 +1004,98 @@ mod tests {
     }
 
     #[test]
+    fn packed_table_round_trip_matches_dense_openings() {
+        let shapes = [TableShape::new(10, FIXTURE_WIDTH)];
+        let dense = table(0xB10A, 10);
+        let packed = packed_table(&dense);
+        let scheme = pcs(&shapes);
+        let protocol = protocol(&shapes);
+        let point = Point::<EF>::rand(&mut SmallRng::seed_from_u64(0xB10B), 10);
+
+        let mut dense_challenger = challenger();
+        let (dense_commitment, dense_data) = scheme
+            .commit(vec![dense.clone()], &mut dense_challenger)
+            .unwrap();
+        let dense_proof = scheme
+            .open_at(
+                dense_data,
+                &protocol,
+                core::slice::from_ref(&point),
+                &mut dense_challenger,
+            )
+            .unwrap();
+        let mut packed_challenger = challenger();
+        let (packed_commitment, packed_data) =
+            scheme.commit(vec![packed], &mut packed_challenger).unwrap();
+        let packed_proof = scheme
+            .open_at(
+                packed_data,
+                &protocol,
+                core::slice::from_ref(&point),
+                &mut packed_challenger,
+            )
+            .unwrap();
+
+        assert_eq!(dense_commitment, packed_commitment);
+        assert_eq!(dense_proof.values, packed_proof.values);
+        let mut verifier = challenger();
+        scheme.observe_commitment(&packed_commitment, &mut verifier);
+        scheme
+            .verify_at(
+                &packed_commitment,
+                &packed_proof,
+                &protocol,
+                core::slice::from_ref(&point),
+                &mut verifier,
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn packed_mixed_heights_and_widths_match_dense_proof_bytes() {
+        let shapes = [
+            TableShape::new(6, 3),
+            TableShape::new(4, 5),
+            TableShape::new(7, 2),
+        ];
+        let dense = vec![
+            table_with_width(0xB10C, 6, 3),
+            table_with_width(0xB10D, 4, 5),
+            table_with_width(0xB10E, 7, 2),
+        ];
+        let packed = dense.iter().map(packed_table).collect::<Vec<_>>();
+        let scheme = pcs(&shapes);
+        let protocol = protocol(&shapes);
+        let mut rng = SmallRng::seed_from_u64(0xB10F);
+        let points = shapes
+            .iter()
+            .map(|shape| Point::<EF>::rand(&mut rng, shape.num_variables()))
+            .collect::<Vec<_>>();
+
+        let mut dense_challenger = challenger();
+        let (dense_commitment, dense_data) = scheme.commit(dense, &mut dense_challenger).unwrap();
+        let dense_proof = scheme
+            .open_at(dense_data, &protocol, &points, &mut dense_challenger)
+            .unwrap();
+        let dense_after_open = p3_challenger::CanSample::<EF>::sample(&mut dense_challenger);
+
+        let mut packed_challenger = challenger();
+        let (packed_commitment, packed_data) =
+            scheme.commit(packed, &mut packed_challenger).unwrap();
+        let packed_proof = scheme
+            .open_at(packed_data, &protocol, &points, &mut packed_challenger)
+            .unwrap();
+        let packed_after_open = p3_challenger::CanSample::<EF>::sample(&mut packed_challenger);
+
+        assert_eq!(dense_commitment, packed_commitment);
+        assert_eq!(
+            postcard::to_allocvec(&dense_proof).unwrap(),
+            postcard::to_allocvec(&packed_proof).unwrap()
+        );
+        assert_eq!(dense_after_open, packed_after_open);
+    }
+
+    #[test]
     fn the_sampled_path_draws_the_same_points_on_both_sides() {
         // Invariant: the sampled convention needs no point to cross the wire.
         // Each side binds the commitment itself.
@@ -941,7 +1140,7 @@ mod tests {
         let shapes = [TableShape::new(10, FIXTURE_WIDTH)];
         let scheme = pcs(&shapes);
 
-        // Mutation: one column fewer stacks to arity 10, not the 11 committed.
+        // Mutation: one column fewer changes the retained table shape.
         let narrow = [TableShape::new(10, 1)];
         let mut chal = challenger();
         let (_, data) = scheme
@@ -956,13 +1155,17 @@ mod tests {
         ) else {
             panic!("a shape set stacking elsewhere describes another commitment")
         };
-        assert!(matches!(
-            error,
-            BooleanTraceError::StackedArity {
-                expected: 11,
-                actual: 10
-            }
-        ));
+        let BooleanTraceError::TableShapeMismatch {
+            table: table_index,
+            expected,
+            actual,
+        } = error
+        else {
+            panic!("the retained source shape must be checked before stacking")
+        };
+        assert_eq!(table_index, 0);
+        assert_eq!(expected, TableShape::new(10, 1));
+        assert_eq!(actual, TableShape::new(10, FIXTURE_WIDTH));
 
         // Mutation: no point at all, against a protocol scheduling one batch.
         let (_, data) = scheme
@@ -1344,11 +1547,106 @@ mod tests {
             Ok(_) => panic!("a protocol with the wrong stacked arity must be rejected"),
             Err(error) => error,
         };
-        assert!(matches!(error, BooleanTraceError::StackedArity { .. }));
+        assert!(matches!(
+            error,
+            BooleanTraceError::TableShapeMismatch { .. }
+        ));
         assert_eq!(
             p3_challenger::CanSample::<EF>::sample(&mut prover_chal),
             p3_challenger::CanSample::<EF>::sample(&mut expected),
         );
+    }
+
+    #[test]
+    fn source_shape_errors_precede_sampling_for_open_and_open_at() {
+        for (committed_shapes, protocol_shapes, expected) in [
+            (
+                vec![TableShape::new(8, 3)],
+                vec![TableShape::new(8, 4)],
+                "shape",
+            ),
+            (
+                vec![TableShape::new(8, 3)],
+                vec![TableShape::new(9, 2)],
+                "shape",
+            ),
+            (
+                vec![TableShape::new(8, 2), TableShape::new(8, 2)],
+                vec![TableShape::new(8, 4)],
+                "count",
+            ),
+        ] {
+            let scheme = pcs(&committed_shapes);
+            let tables = committed_shapes
+                .iter()
+                .enumerate()
+                .map(|(index, shape)| {
+                    table_with_width(0xB520 + index as u64, shape.num_variables(), shape.width())
+                })
+                .collect();
+            let sampled_protocol = protocol(&protocol_shapes);
+            let mut sampled_challenger = challenger();
+            let (_, data) = scheme.commit(tables, &mut sampled_challenger).unwrap();
+            let mut expected_challenger = sampled_challenger.clone();
+            let error = match scheme.open(data, sampled_protocol, &mut sampled_challenger) {
+                Ok(_) => panic!("a source shape mismatch must be rejected before sampling"),
+                Err(error) => error,
+            };
+            match expected {
+                "shape" => assert!(matches!(
+                    error,
+                    BooleanTraceError::TableShapeMismatch { .. }
+                )),
+                "count" => assert!(matches!(
+                    error,
+                    BooleanTraceError::TableCountMismatch { .. }
+                )),
+                _ => unreachable!(),
+            }
+            assert_eq!(
+                p3_challenger::CanSample::<EF>::sample(&mut sampled_challenger),
+                p3_challenger::CanSample::<EF>::sample(&mut expected_challenger),
+            );
+
+            let protocol = protocol(&protocol_shapes);
+            let points = protocol_shapes
+                .iter()
+                .map(|shape| {
+                    Point::<EF>::rand(&mut SmallRng::seed_from_u64(0xB530), shape.num_variables())
+                })
+                .collect::<Vec<_>>();
+            let mut challenger = challenger();
+            let (_, data) = scheme
+                .commit(
+                    committed_shapes
+                        .iter()
+                        .enumerate()
+                        .map(|(index, shape)| {
+                            table_with_width(
+                                0xB540 + index as u64,
+                                shape.num_variables(),
+                                shape.width(),
+                            )
+                        })
+                        .collect(),
+                    &mut challenger,
+                )
+                .unwrap();
+            let mut expected_challenger = challenger.clone();
+            let error = match scheme.open_at(data, &protocol, &points, &mut challenger) {
+                Ok(_) => panic!("a source shape mismatch must be rejected before opening"),
+                Err(error) => error,
+            };
+            assert!(matches!(
+                (expected, error),
+                ("shape", BooleanTraceError::TableShapeMismatch { .. })
+                    | ("count", BooleanTraceError::TableCountMismatch { .. })
+            ));
+            assert_eq!(
+                p3_challenger::CanSample::<EF>::sample(&mut challenger),
+                p3_challenger::CanSample::<EF>::sample(&mut expected_challenger),
+            );
+        }
     }
 
     #[test]

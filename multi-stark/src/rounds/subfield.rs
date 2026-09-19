@@ -21,7 +21,7 @@ use p3_field::{
 };
 use p3_maybe_rayon::prelude::*;
 use p3_multilinear_util::poly::Poly;
-use p3_sumcheck::layout::Table;
+use p3_sumcheck::layout::{ColumnView, Table};
 
 use super::{
     NodeStep, RoundStateBase, RoundStateExt, add_scaled_slice, add_slice, evaluated_nodes,
@@ -108,11 +108,11 @@ impl<F, S: Field, EF: Field> SubfieldScratch<F, S, EF> {
         for ((local, local_delta), column) in self.local_point[offset..end]
             .iter_mut()
             .zip(self.local_diff[offset..end].iter_mut())
-            .zip(table.iter_polys())
+            .zip(table.columns())
         {
-            let local_lo = SubfieldVar::narrow(column[row]);
+            let local_lo = SubfieldVar::narrow(column.value(row));
             *local = local_lo;
-            *local_delta = SubfieldVar::narrow(column[row + half]) - local_lo;
+            *local_delta = SubfieldVar::narrow(column.value(row + half)) - local_lo;
         }
     }
 
@@ -134,10 +134,10 @@ impl<F, S: Field, EF: Field> SubfieldScratch<F, S, EF> {
             for ((next, next_delta), column) in self.next_point[run.clone()]
                 .iter_mut()
                 .zip(self.next_diff[run.clone()].iter_mut())
-                .zip(table.iter_polys().skip(run.start - offset))
+                .zip(table.columns().skip(run.start - offset))
             {
-                let next_lo = SubfieldVar::narrow(column[row + 1]);
-                let next_hi = column[(row + half + 1).min(height - 1)];
+                let next_lo = SubfieldVar::narrow(column.value(row + 1));
+                let next_hi = column.value((row + half + 1).min(height - 1));
                 *next = next_lo;
                 *next_delta = SubfieldVar::narrow(next_hi) - next_lo;
             }
@@ -268,32 +268,58 @@ where
         };
 
         // Columns already fold in parallel, so a short column folds on its own thread.
-        let fold_packed = |column: &[F]| {
-            let (lo, hi) = column.split_at(column.len() / 2);
-            let fold_lanes = |(lo, hi): (&[F], &[F])| {
-                EF::ExtensionPacking::from_ext_fn(|lane| fold_pair(lo[lane], hi[lane]))
-            };
+        let fold_packed = |column: ColumnView<'_, F>| {
+            let half = column.len() / 2;
             let width = F::Packing::WIDTH;
-            Poly::new(if column.len() < PARALLEL_FOLD_CELLS {
-                lo.chunks_exact(width)
-                    .zip(hi.chunks_exact(width))
-                    .map(fold_lanes)
-                    .collect()
+            if let Some(values) = column.as_dense() {
+                let (lo, hi) = values.split_at(half);
+                let fold_lanes = |(lo, hi): (&[F], &[F])| {
+                    EF::ExtensionPacking::from_ext_fn(|lane| fold_pair(lo[lane], hi[lane]))
+                };
+                Poly::new(if values.len() < PARALLEL_FOLD_CELLS {
+                    lo.chunks_exact(width)
+                        .zip(hi.chunks_exact(width))
+                        .map(fold_lanes)
+                        .collect()
+                } else {
+                    lo.par_chunks_exact(width)
+                        .zip(hi.par_chunks_exact(width))
+                        .map(fold_lanes)
+                        .collect()
+                })
             } else {
-                lo.par_chunks_exact(width)
-                    .zip(hi.par_chunks_exact(width))
-                    .map(fold_lanes)
-                    .collect()
-            })
+                Poly::new(
+                    (0..half)
+                        .step_by(width)
+                        .map(|start| {
+                            EF::ExtensionPacking::from_ext_fn(|lane| {
+                                fold_pair(
+                                    column.value(start + lane),
+                                    column.value(start + half + lane),
+                                )
+                            })
+                        })
+                        .collect(),
+                )
+            }
         };
-        let fold_scalar = |column: &[F]| {
-            let (lo, hi) = column.split_at(column.len() / 2);
-            let fold_cells = |(&lo, &hi): (&F, &F)| fold_pair(lo, hi);
-            Poly::new(if column.len() < PARALLEL_FOLD_CELLS {
-                lo.iter().zip(hi).map(fold_cells).collect()
+        let fold_scalar = |column: ColumnView<'_, F>| {
+            let half = column.len() / 2;
+            if let Some(values) = column.as_dense() {
+                let (lo, hi) = values.split_at(half);
+                let fold_cells = |(&lo, &hi): (&F, &F)| fold_pair(lo, hi);
+                Poly::new(if values.len() < PARALLEL_FOLD_CELLS {
+                    lo.iter().zip(hi).map(fold_cells).collect()
+                } else {
+                    lo.par_iter().zip(hi).map(fold_cells).collect()
+                })
             } else {
-                lo.par_iter().zip(hi).map(fold_cells).collect()
-            })
+                Poly::new(
+                    (0..half)
+                        .map(|row| fold_pair(column.value(row), column.value(row + half)))
+                        .collect(),
+                )
+            }
         };
         self.fold_columns(r, fold_packed, fold_scalar)
     }
@@ -374,12 +400,14 @@ where
             .iter()
             .copied()
             .chain(self.preprocessed.iter().flatten().copied())
-            .flat_map(Table::iter_polys)
+            .flat_map(Table::columns)
             .collect::<Vec<_>>();
         if !columns.par_iter().all(|column| {
-            column
-                .par_chunks(SCAN_CHUNK_CELLS)
-                .all(|chunk| F::all_in_subfield(chunk))
+            column.as_dense().map_or(true, |values| {
+                values
+                    .par_chunks(SCAN_CHUNK_CELLS)
+                    .all(|chunk| F::all_in_subfield(chunk))
+            })
         }) {
             log_fall_back("a main or preprocessed cell lies outside the subfield");
             return false;
