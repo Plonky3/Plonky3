@@ -215,6 +215,10 @@ where
     }
 
     /// Add one word of residual rows at one prefix to the scratch sums.
+    ///
+    /// Never inlined: the AIR evaluation needs a large stack frame, which inside the parallel
+    /// fold would be reserved again at every level of Rayon's recursive split.
+    #[inline(never)]
     fn accumulate(&self, scratch: &mut SlicedScratch<F, S, R>, word: usize, prefix_index: usize) {
         let prefix = &self.prefixes[prefix_index];
         let trace = self.trace;
