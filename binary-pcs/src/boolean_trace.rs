@@ -77,10 +77,11 @@ use p3_challenger::fs::TranscriptField;
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
 use p3_commit::{Mmcs, MultilinearPcs};
 use p3_field::Field;
+use p3_maybe_rayon::prelude::*;
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
 use p3_multilinear_util::split_eq::SplitEq;
-use p3_sumcheck::layout::{Table, TablePlacement, plan_stacked_layout};
+use p3_sumcheck::layout::{ColumnView, Table, TablePlacement, plan_stacked_layout};
 use p3_sumcheck::ring_switch::bits::BitRingSwitch;
 use p3_sumcheck::{
     OpeningEvals, OpeningProtocol, PrescribedOpeningSecurity, PrescribedPointPcs, TableShape,
@@ -101,6 +102,13 @@ use crate::prover::BinaryPcsProverData;
 
 /// Bits one word of the staging buffer holds.
 const WORD_BITS: usize = 64;
+
+/// Rows one task sums when a dense column is weighted.
+///
+/// Large enough that dispatching a task is amortized over many rows.
+///
+/// Small enough to leave real parallelism at the trace heights this crate commits.
+const ROW_GRAIN: usize = 1 << 12;
 
 /// A commitment to a batch of Boolean trace tables, packed into one bit witness.
 ///
@@ -287,65 +295,81 @@ where
             .then_some((width, next))
     }
 
-    /// Evaluate every column at one row point while sharing the equality weights.
-    fn evaluate_columns(table: &Table<EF>, point: &Point<EF>) -> Vec<EF> {
-        Self::weighted_columns(
-            table,
-            &SplitEq::<EF, EF>::new_packed(point, EF::ONE).materialize(),
-        )
-    }
-
-    /// Evaluate every column one row ahead of the point, the last row repeating.
-    fn evaluate_next_columns(table: &Table<EF>, point: &Point<EF>) -> Vec<EF> {
+    /// Evaluate every column at one row point, and, when `next` holds, one row ahead of it.
+    ///
+    /// Both views weight the same table, so one equality table over the batch's point
+    /// serves them both: the successor weights are that table shifted up by one row.
+    ///
+    /// The successor vector is empty unless it is asked for.
+    fn evaluate_views(table: &Table<EF>, point: &Point<EF>, next: bool) -> (Vec<EF>, Vec<EF>) {
         let mut weights = SplitEq::<EF, EF>::new_packed(point, EF::ONE).materialize();
-        let rows = weights.as_slice();
-        let last = rows.len() - 1;
+        let current = Self::weighted_columns(table, &weights);
+        if !next {
+            return (current, Vec::new());
+        }
 
         // Row x reads row x + 1, so row z carries the weight of the row before it.
         //
         //     W[0] = 0, W[z] = eq[z - 1]
         //
         // The last row reads itself, so it also carries its own weight.
-        let repeated = rows[last];
         let rows = weights.as_mut_slice();
+        let last = rows.len() - 1;
+        let repeated = rows[last];
         rows.copy_within(..last, 1);
         rows[0] = EF::ZERO;
         rows[last] += repeated;
 
-        Self::weighted_columns(table, &weights)
+        let successor = Self::weighted_columns(table, &weights);
+        (current, successor)
     }
 
     /// Sum every column of a table against one weight per row.
-    ///
-    /// A cell is zero or one, so a value adds up the weights of the rows holding a one.
     fn weighted_columns(table: &Table<EF>, weights: &Poly<EF>) -> Vec<EF> {
         let rows = weights.as_slice();
-        (0..table.shape().width())
-            .map(|column| {
-                let view = table.column(column);
-                let Some(cells) = view.as_dense() else {
-                    // A packed column is walked word by word, so no cell is decoded.
-                    let mut result = EF::ZERO;
-                    for word in 0..view.len().div_ceil(WORD_BITS) {
-                        let mut bits = view
-                            .boolean_word(word)
-                            .expect("packed column must expose every source word");
-                        while bits != 0 {
-                            let bit = bits.trailing_zeros() as usize;
-                            result += rows[word * WORD_BITS + bit];
-                            bits &= bits - 1;
-                        }
-                    }
-                    return result;
-                };
+        table
+            .par_columns()
+            .map(|column| Self::weighted_column(column, rows))
+            .collect()
+    }
+
+    /// Sum one column against one weight per row.
+    ///
+    /// A cell is zero or one, so a value adds up the weights of the rows holding a one.
+    fn weighted_column(column: ColumnView<'_, EF>, rows: &[EF]) -> EF {
+        let Some(cells) = column.as_dense() else {
+            // A packed column is walked word by word, so no cell is decoded.
+            //
+            // The walk is serial, so a packed table is split over its columns and no
+            // further: a narrow one takes one task per column at any height.
+            let mut result = EF::ZERO;
+            for word in 0..column.len().div_ceil(WORD_BITS) {
+                let mut bits = column
+                    .boolean_word(word)
+                    .expect("packed column must expose every source word");
+                while bits != 0 {
+                    let bit = bits.trailing_zeros() as usize;
+                    result += rows[word * WORD_BITS + bit];
+                    bits &= bits - 1;
+                }
+            }
+            return result;
+        };
+
+        // A dense column splits into runs of rows, each task summing the weights it selects.
+        // Addition is order independent, so the split the pool chooses does not reach the sum.
+        cells
+            .par_chunks(ROW_GRAIN)
+            .zip(rows.par_chunks(ROW_GRAIN))
+            .map(|(cells, rows)| {
                 cells
                     .iter()
                     .zip(rows)
                     .filter(|&(&cell, _)| cell == EF::ONE)
                     .map(|(_, &weight)| weight)
-                    .sum()
+                    .sum::<EF>()
             })
-            .collect()
+            .sum()
     }
 
     /// Evaluate the zero-padded column-value vector at its sampled column point.
@@ -886,10 +910,9 @@ where
         let run = width * (1 + usize::from(next));
         let mut values = Vec::with_capacity(run * shape.num_batches);
         for point in points {
-            values.extend(Self::evaluate_columns(&tables[0], point));
-            if next {
-                values.extend(Self::evaluate_next_columns(&tables[0], point));
-            }
+            let (current, successor) = Self::evaluate_views(&tables[0], point, next);
+            values.extend(current);
+            values.extend(successor);
         }
 
         let mut transcript = ColumnBatchProverTranscript::new(challenger, shape);
@@ -1131,8 +1154,9 @@ mod tests {
         let width = shape.width();
         let mut values = Vec::new();
         for point in points {
-            values.extend(Scheme::evaluate_columns(&tables[0], point));
-            values.extend(Scheme::evaluate_next_columns(&tables[0], point));
+            let (current, successor) = Scheme::evaluate_views(&tables[0], point, true);
+            values.extend(current);
+            values.extend(successor);
         }
         if let Some(at) = tampered {
             values[at] += EF::ONE;
