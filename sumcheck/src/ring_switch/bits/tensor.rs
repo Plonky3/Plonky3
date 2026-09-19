@@ -222,6 +222,71 @@ impl<EF: TowerLevel> BitTensor<EF> {
     }
 }
 
+/// A sum of exterior products, accumulated one bucket per byte value of its left factor.
+///
+/// # Algorithm
+///
+/// The row reading of `sum_w a_w (x) b_w` adds `b_w` into row `u` for every coordinate `u` the
+/// left factor sets, so half the rows on average. Bucketing by whole bytes of that factor adds
+/// each term once per byte instead, and a row is the sum of the buckets whose byte sets it:
+///
+/// ```text
+///     bucket[k][s] = sum of b_w over the w whose byte k of a_w is s
+///     row 8k + j   = sum of bucket[k][s] over the s with bit j set
+/// ```
+///
+/// The closing pass over the buckets is `d/8 * 256` entries, whatever the sum was over.
+#[derive(Clone, Debug)]
+pub struct BitTensorBuckets<EF> {
+    /// Per byte position of the left factor, one sum per value that byte takes.
+    buckets: Vec<[EF; 256]>,
+}
+
+impl<EF: TowerLevel> BitTensorBuckets<EF> {
+    /// Empty buckets, which read back as the zero element.
+    #[must_use]
+    pub fn zero() -> Self {
+        Self {
+            buckets: alloc::vec![[EF::ZERO; 256]; EF::NUM_BYTES],
+        }
+    }
+
+    /// Add `a (x) b` to the sum.
+    #[inline]
+    pub fn add_exterior_product(&mut self, a: EF, b: EF) {
+        for (bucket, byte) in self.buckets.iter_mut().zip(a.into_bytes()) {
+            bucket[usize::from(byte)] += b;
+        }
+    }
+
+    /// Add another partial sum into this one.
+    pub fn merge(&mut self, other: &Self) {
+        for (bucket, other) in self.buckets.iter_mut().zip(&other.buckets) {
+            for (sum, &other) in bucket.iter_mut().zip(other.iter()) {
+                *sum += other;
+            }
+        }
+    }
+
+    /// The element the buckets hold.
+    #[must_use]
+    pub fn into_tensor(self) -> BitTensor<EF> {
+        let mut tensor = BitTensor::zero();
+        for (position, bucket) in self.buckets.iter().enumerate() {
+            for (value, &sum) in bucket.iter().enumerate() {
+                // Byte value `value` sets coordinate `8 * position + bit` for each of its bits.
+                let mut bits = value as u8;
+                while bits != 0 {
+                    let bit = bits.trailing_zeros() as usize;
+                    tensor.rows[position * 8 + bit] += sum;
+                    bits &= bits - 1;
+                }
+            }
+        }
+        tensor
+    }
+}
+
 impl<EF: TowerLevel> AddAssign<&Self> for BitTensor<EF> {
     fn add_assign(&mut self, rhs: &Self) {
         for (row, &other) in self.rows.iter_mut().zip(&rhs.rows) {

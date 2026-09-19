@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 
 use super::basis::{Coefficients, CoordinateSums};
 use super::packing::BitPacking;
-use super::tensor::BitTensor;
+use super::tensor::{BitTensor, BitTensorBuckets};
 use super::transcript::{
     BitRingSwitchProverTranscript, BitRingSwitchShape, BitRingSwitchVerifierTranscript,
     TranscriptWidth,
@@ -455,7 +455,7 @@ impl<EF: TowerLevel> BitRingSwitch<EF> {
             .par_chunks(CHUNK)
             .zip(values.par_chunks(CHUNK))
             .par_fold_reduce(
-                BitTensor::zero,
+                BitTensorBuckets::zero,
                 |mut accumulator, (weights, values)| {
                     for (&weight, &value) in weights.iter().zip(values) {
                         accumulator.add_exterior_product(weight, value);
@@ -464,10 +464,11 @@ impl<EF: TowerLevel> BitRingSwitch<EF> {
                 },
                 |mut accumulator, partial| {
                     // Addition is associative, so regrouping cannot change it.
-                    accumulator += partial;
+                    accumulator.merge(&partial);
                     accumulator
                 },
             )
+            .into_tensor()
     }
 
     /// What the claim being reduced must equal, given the element sent.
@@ -548,7 +549,7 @@ impl<EF: TowerLevel> BitRingSwitch<EF> {
         let max = (1usize << kept) - 1;
 
         let (carry, last) = values.par_chunks(CHUNK).enumerate().par_fold_reduce(
-            || (BitTensor::zero(), BitTensor::zero()),
+            || (BitTensorBuckets::zero(), BitTensor::zero()),
             |(mut carry, mut last), (chunk, values)| {
                 for (w, &value) in (chunk * CHUNK..).zip(values) {
                     let row = w & max;
@@ -565,12 +566,15 @@ impl<EF: TowerLevel> BitRingSwitch<EF> {
             },
             |(mut carry, mut last), (other_carry, other_last)| {
                 // Addition is associative, so regrouping cannot change it.
-                carry += other_carry;
+                carry.merge(&other_carry);
                 last += other_last;
                 (carry, last)
             },
         );
-        Some(SuccessorTensors { carry, last })
+        Some(SuccessorTensors {
+            carry: carry.into_tensor(),
+            last,
+        })
     }
 
     /// The weights the successor claim puts on the tensor's columns.
