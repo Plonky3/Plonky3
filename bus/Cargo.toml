@@ -1,0 +1,35 @@
+[package]
+name = "p3-bus"
+description = "Binary-native multiset bus primitives"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+p3-challenger.workspace = true
+p3-field.workspace = true
+p3-sumcheck.workspace = true
+
+serde = { workspace = true, features = ["derive", "alloc"] }
+thiserror.workspace = true
+
+[dev-dependencies]
+p3-baby-bear.workspace = true
+p3-binary-field.workspace = true
+p3-challenger = { workspace = true, features = ["test-utils"] }
+p3-keccak.workspace = true
+
+criterion.workspace = true
+rand.workspace = true
+rand_xoshiro.workspace = true
+
+[[bench]]
+name = "product_gkr"
+harness = false
+
+[lints]
+workspace = true

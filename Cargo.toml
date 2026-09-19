@@ -10,6 +10,7 @@ members = [
     "blake3",
     "blake3-air",
     "bn254",
+    "bus",
     "challenger",
     "circle",
     "commit",
@@ -116,6 +117,7 @@ p3-binary-pcs = { path = "binary-pcs", version = "0.7.0" }
 p3-blake3 = { path = "blake3", version = "0.7.0" }
 p3-blake3-air = { path = "blake3-air", version = "0.7.0" }
 p3-bn254 = { path = "bn254", version = "0.7.0" }
+p3-bus = { path = "bus", version = "0.7.0" }
 p3-challenger = { path = "challenger", version = "0.7.0" }
 p3-circle = { path = "circle", version = "0.7.0" }
 p3-commit = { path = "commit", version = "0.7.0" }
