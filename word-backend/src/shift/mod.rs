@@ -29,6 +29,8 @@ mod wiring;
 use alloc::vec::Vec;
 use core::num::NonZeroUsize;
 
+pub use claim::{ShiftClaim, ShiftOpeningClaim};
+pub use error::ShiftReductionError;
 use p3_binary_field::Gf2;
 use p3_challenger::fs::TranscriptField;
 use p3_challenger::{FieldChallenger, GrindingChallenger};
@@ -38,16 +40,13 @@ use p3_security::word::WordShiftSecurityModel;
 use p3_sumcheck::generic_degree::{GenericDegreeProof, RoundProver};
 use p3_word::{ConstraintSystem, Segment, Word};
 use serde::{Deserialize, Serialize};
-
-use crate::{CompiledKeyLayout, KeyCompileError, PackedWitness, PackedWord};
-
-pub use claim::{ShiftClaim, ShiftOpeningClaim};
-pub use error::ShiftReductionError;
 use transcript::{ShiftProverTranscript, ShiftVerifierTranscript, TranscriptShape};
 use wiring::{
     PreparedWeights, bit_prover, public_contribution, shift_evaluations, wiring_evaluation,
     word_prover,
 };
+
+use crate::{CompiledKeyLayout, KeyCompileError, PackedWitness, PackedWord};
 
 /// Transcript record for the two quadratic sumchecks.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -348,7 +347,7 @@ impl<W: Word> ShiftReductionKey<W> {
 mod tests {
     use alloc::vec;
 
-    use p3_binary_field::{BinaryChallenger, BinaryField64, BinaryField128};
+    use p3_binary_field::{BinaryChallenger, BinaryField64, BinaryField128, TowerLevel};
     use p3_challenger::HashChallenger;
     use p3_field::PrimeCharacteristicRing;
     use p3_keccak::Keccak256Hash;
@@ -427,9 +426,7 @@ mod tests {
         let witness = witness_values.map(Word64::new).to_vec();
         let packed = PackedWitness::new(key.system(), &public, &witness).unwrap();
         let constraint_point = vec![];
-        let bit_point = (0..6)
-            .map(|index| F::from_u64((index + 2) as u64))
-            .collect();
+        let bit_point = (1..=6).map(|bit| F::from_repr(1_u128 << bit)).collect();
         let claim = evaluate_claim(key.system(), &packed, constraint_point, bit_point);
         (key, packed, public, claim)
     }
@@ -573,8 +570,8 @@ mod tests {
         let claim = evaluate_claim(
             key.system(),
             &witness,
-            vec![F::from_u64(7)],
-            vec![F::from_u64(3); 6],
+            vec![F::from_repr(1 << 17)],
+            (18..24).map(|bit| F::from_repr(1 << bit)).collect(),
         );
         let mut prover = challenger();
         let (proof, _) = key.prove(&witness, &claim, &mut prover).unwrap();
@@ -636,7 +633,7 @@ mod tests {
         let witness = PackedWitness::new(key.system(), &[], &[]).unwrap();
         let claim = ShiftClaim::new(
             vec![],
-            vec![F::from_u64(2); 5],
+            (24..29).map(|bit| F::from_repr(1 << bit)).collect(),
             [F::ZERO],
             [F::ZERO; 3],
             [F::ZERO; 4],

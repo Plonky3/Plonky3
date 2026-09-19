@@ -6,16 +6,14 @@ use alloc::vec::Vec;
 use p3_binary_field::Gf2;
 use p3_field::{Algebra, Field};
 use p3_multilinear_util::poly::Poly;
-use p3_word::{ConstraintKind, OperandRole, Shift, Word};
-
 #[cfg(test)]
 use p3_word::ConstraintSystem;
-
-use crate::{CompiledKey, CompiledKeyLayout, CompiledSegment, PackedWitness, PackedWord};
+use p3_word::{ConstraintKind, OperandRole, Shift, Word};
 
 use super::ShiftClaim;
 use super::polynomial::SumOfProducts;
 use super::transcript::{BatchWeights, equality_weights};
+use crate::{CompiledKey, CompiledKeyLayout, CompiledSegment, PackedWitness, PackedWord};
 
 /// Equality and batching tables shared by both proving phases.
 pub(super) struct PreparedWeights<F> {
@@ -370,8 +368,7 @@ where
 mod tests {
     use alloc::vec::Vec;
 
-    use p3_binary_field::BinaryField128;
-    use p3_field::PrimeCharacteristicRing;
+    use p3_binary_field::{BinaryField128, TowerLevel};
     use p3_word::{ShiftKind, Word64};
 
     use super::*;
@@ -407,7 +404,7 @@ mod tests {
     fn factorized_transpose_matches_every_shift_pair() {
         // Distinct coefficients expose bit order, lane boundaries, and sign-extension fan-out.
         let output = (0..64)
-            .map(|bit| F::from_u64((bit as u64 + 1).pow(3)))
+            .map(|bit| F::from_repr(1_u128 << bit))
             .collect::<Vec<_>>();
         let shifts = shifts();
 

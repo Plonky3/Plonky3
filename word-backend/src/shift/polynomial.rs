@@ -116,7 +116,7 @@ impl<F: Field> RoundProver<F> for SumOfProducts<F> {
 
 #[cfg(test)]
 mod tests {
-    use p3_binary_field::BinaryField128;
+    use p3_binary_field::{BinaryField128, TowerLevel};
     use p3_field::PrimeCharacteristicRing;
 
     use super::*;
@@ -127,12 +127,12 @@ mod tests {
         type F = BinaryField128;
         let pairs = vec![
             [
-                Poly::new([1, 2, 3, 4].map(F::from_u64).to_vec()),
-                Poly::new([5, 6, 7, 8].map(F::from_u64).to_vec()),
+                Poly::new((0..4).map(|bit| F::from_repr(1 << bit)).collect()),
+                Poly::new((4..8).map(|bit| F::from_repr(1 << bit)).collect()),
             ],
             [
-                Poly::new([9, 10, 11, 12].map(F::from_u64).to_vec()),
-                Poly::new([13, 14, 15, 16].map(F::from_u64).to_vec()),
+                Poly::new((8..12).map(|bit| F::from_repr(1 << bit)).collect()),
+                Poly::new((12..16).map(|bit| F::from_repr(1 << bit)).collect()),
             ],
         ];
         let prover = SumOfProducts::new(pairs, 2);

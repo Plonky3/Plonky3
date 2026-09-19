@@ -393,7 +393,7 @@ where
 mod tests {
     use alloc::vec;
 
-    use p3_binary_field::{BinaryChallenger, BinaryField128};
+    use p3_binary_field::{BinaryChallenger, BinaryField128, TowerLevel};
     use p3_challenger::{CanSample, HashChallenger};
     use p3_field::PrimeCharacteristicRing;
     use p3_keccak::Keccak256Hash;
@@ -412,11 +412,20 @@ mod tests {
     fn claim() -> ShiftClaim<F> {
         // Distinct public values make any transcript reordering observable.
         ShiftClaim::new(
-            vec![F::from_u8(1), F::from_u8(2)],
-            vec![F::from_u8(3); 6],
-            [F::from_u8(4)],
-            [F::from_u8(5), F::from_u8(6), F::from_u8(7)],
-            [F::from_u8(8), F::from_u8(9), F::from_u8(10), F::from_u8(11)],
+            vec![F::from_repr(1 << 1), F::from_repr(1 << 2)],
+            (3..9).map(|bit| F::from_repr(1 << bit)).collect(),
+            [F::from_repr(1 << 9)],
+            [
+                F::from_repr(1 << 10),
+                F::from_repr(1 << 11),
+                F::from_repr(1 << 12),
+            ],
+            [
+                F::from_repr(1 << 13),
+                F::from_repr(1 << 14),
+                F::from_repr(1 << 15),
+                F::from_repr(1 << 16),
+            ],
         )
     }
 
