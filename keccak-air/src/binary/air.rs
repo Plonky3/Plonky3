@@ -8,7 +8,7 @@ use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
 
 use super::columns::{KECCAK_BINARY_ROWS_PER_PERM, KeccakBinaryCols, NUM_KECCAK_BINARY_COLS};
-use super::generation::generate_binary_trace_rows;
+use super::generation::{generate_binary_trace_packed, generate_binary_trace_rows};
 use super::rho_pi_source;
 use crate::constants::RC_BITS;
 use crate::{NUM_ROUNDS, NUM_ROUNDS_MIN_1};
@@ -60,6 +60,22 @@ impl KeccakBinaryAir {
         let mut rng = SmallRng::seed_from_u64(1);
         let inputs = (0..num_hashes).map(|_| rng.random()).collect();
         generate_binary_trace_rows(inputs, extra_capacity_bits)
+    }
+
+    /// Generate the same fixed-seed random permutation inputs as
+    /// [`Self::generate_random_trace_rows`], packed into one `u64` per 64 trace rows.
+    ///
+    /// The generic field controls the reusable temporary rows used by the generator and does not
+    /// affect the resulting bits.
+    ///
+    /// # Panics
+    ///
+    /// - The field does not have characteristic 2.
+    /// - `num_hashes` is 0.
+    pub fn generate_random_trace_packed<F: Field>(&self, num_hashes: usize) -> RowMajorMatrix<u64> {
+        let mut rng = SmallRng::seed_from_u64(1);
+        let inputs = (0..num_hashes).map(|_| rng.random()).collect();
+        generate_binary_trace_packed::<F>(inputs)
     }
 }
 
