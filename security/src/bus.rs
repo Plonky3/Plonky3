@@ -27,7 +27,7 @@ pub const PRODUCT_GKR_BATCHING_LABEL: &str = "bus-product-gkr-tree-batching";
 /// Label for random coordinates that collapse child claims.
 pub const PRODUCT_GKR_COLLAPSE_LABEL: &str = "bus-product-gkr-child-collapse";
 
-/// Security-relevant counts from one concrete product-GKR schedule.
+/// Caller-supplied security counts for one product-GKR schedule.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ProductGkrSecurityProfile {
     /// Variables in each logical product tree.
@@ -43,7 +43,11 @@ pub struct ProductGkrSecurityProfile {
 }
 
 impl ProductGkrSecurityProfile {
-    /// Validate counts derived from one concrete product-reduction schedule.
+    /// Checks representability and the relations encoded directly by these fields.
+    ///
+    /// The remaining counts are trusted inputs to the numeric model.
+    /// Protocol code should derive them from its executed schedule.
+    /// The binary bus does so through `BusPlan::security_term` in `p3-bus`.
     #[must_use]
     pub const fn new(
         log_height: usize,
@@ -84,10 +88,12 @@ pub struct BusSecurityModel {
 }
 
 impl BusSecurityModel {
-    /// Validate the challenge field and every security-relevant dimension.
+    /// Checks representability and compatibility with the supplied product profile.
     ///
     /// Each declared factor count must fit in the logical product tree.
     /// An absent bus or an unrepresentable product shape returns no model.
+    /// Other counts are trusted inputs to the numeric model.
+    /// The binary bus derives checked counts through `BusPlan::security_term` in `p3-bus`.
     #[must_use]
     pub const fn new(
         field_bits: usize,
@@ -197,6 +203,10 @@ fn error_from_numerator(field_bits: usize, numerator: u128) -> ErrorBits {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::fri::FriRegime;
+    use crate::grinding::GrindingSites;
+    use crate::shape::{InstanceShape, StarkAirParams};
+    use crate::stark::proven_security_report;
 
     fn profile(
         log_height: usize,
@@ -342,11 +352,6 @@ mod tests {
 
     #[test]
     fn combined_term_composes_as_one_protocol_extra() {
-        use crate::fri::FriRegime;
-        use crate::grinding::GrindingSites;
-        use crate::shape::{InstanceShape, StarkAirParams};
-        use crate::stark::proven_security_report;
-
         // Use a small field so the bus union bound is visible in the final report.
         let regime = FriRegime {
             log_blowup: 1,

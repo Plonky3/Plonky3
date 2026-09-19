@@ -11,6 +11,10 @@ use crate::BusPlan;
 impl BusPlan {
     /// Builds the union-bound term consumed by a protocol security report.
     ///
+    /// `field_bits` is a lower bound on `log2 |EF|`.
+    /// Every bus challenge must be sampled from that same extension field.
+    /// This includes the fingerprint, offset, and product-GKR challenges.
+    ///
     /// The result excludes commitment binding and authentication of terminal leaf claims.
     #[must_use]
     pub fn security_term(&self, field_bits: NonZeroUsize) -> SecurityTerm {
@@ -117,6 +121,13 @@ mod tests {
             ]
         );
 
+        // Three tuple variables compress eight slots across sixteen active rows per side.
+        let fingerprint = components
+            .iter()
+            .find(|component| component.label == BUS_FINGERPRINT_LABEL)
+            .unwrap();
+        assert_eq!(fingerprint.bits.bits(), 128.0 - 48.0_f64.log2());
+
         // The composable term charges the probability sum rather than its largest component.
         let expected = ErrorBits::sum(
             &components
@@ -127,6 +138,7 @@ mod tests {
         let combined = plan.security_term(field_bits);
         assert_eq!(combined.label, BINARY_BUS_LABEL);
         assert_eq!(combined.bits, expected);
+        assert_eq!(combined.bits.bits(), 122.0);
     }
 
     #[test]
