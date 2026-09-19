@@ -236,16 +236,17 @@ impl<EF: TowerLevel> BitTensor<EF> {
 /// ```
 ///
 /// The closing pass over the buckets is `d/8 * 256` entries, whatever the sum was over.
+///
+/// The buckets are an accumulation detail of the reductions here, not a wire or API type.
 #[derive(Clone, Debug)]
-pub struct BitTensorBuckets<EF> {
+pub(crate) struct BitTensorBuckets<EF> {
     /// Per byte position of the left factor, one sum per value that byte takes.
     buckets: Vec<[EF; 256]>,
 }
 
 impl<EF: TowerLevel> BitTensorBuckets<EF> {
     /// Empty buckets, which read back as the zero element.
-    #[must_use]
-    pub fn zero() -> Self {
+    pub(crate) fn zero() -> Self {
         Self {
             buckets: alloc::vec![[EF::ZERO; 256]; EF::NUM_BYTES],
         }
@@ -253,14 +254,14 @@ impl<EF: TowerLevel> BitTensorBuckets<EF> {
 
     /// Add `a (x) b` to the sum.
     #[inline]
-    pub fn add_exterior_product(&mut self, a: EF, b: EF) {
+    pub(crate) fn add_exterior_product(&mut self, a: EF, b: EF) {
         for (bucket, byte) in self.buckets.iter_mut().zip(a.into_bytes()) {
             bucket[usize::from(byte)] += b;
         }
     }
 
     /// Add another partial sum into this one.
-    pub fn merge(&mut self, other: &Self) {
+    pub(crate) fn merge(&mut self, other: &Self) {
         for (bucket, other) in self.buckets.iter_mut().zip(&other.buckets) {
             for (sum, &other) in bucket.iter_mut().zip(other.iter()) {
                 *sum += other;
@@ -269,8 +270,7 @@ impl<EF: TowerLevel> BitTensorBuckets<EF> {
     }
 
     /// The element the buckets hold.
-    #[must_use]
-    pub fn into_tensor(self) -> BitTensor<EF> {
+    pub(crate) fn into_tensor(self) -> BitTensor<EF> {
         let mut tensor = BitTensor::zero();
         for (position, bucket) in self.buckets.iter().enumerate() {
             for (value, &sum) in bucket.iter().enumerate() {
@@ -278,8 +278,13 @@ impl<EF: TowerLevel> BitTensorBuckets<EF> {
                 let mut bits = value as u8;
                 while bits != 0 {
                     let bit = bits.trailing_zeros() as usize;
-                    tensor.rows[position * 8 + bit] += sum;
                     bits &= bits - 1;
+
+                    // A level narrower than its byte has no coordinate up there.
+                    // No term can have set one either, so those sums are zero.
+                    if let Some(row) = tensor.rows.get_mut(position * 8 + bit) {
+                        *row += sum;
+                    }
                 }
             }
         }
@@ -335,7 +340,7 @@ pub struct MalformedBitTensor {
 
 #[cfg(test)]
 mod tests {
-    use p3_binary_field::{BinaryField16, BinaryField128};
+    use p3_binary_field::{BinaryField16, BinaryField128, Gf2};
     use p3_field::PrimeCharacteristicRing;
     use p3_multilinear_util::point::Point;
     use p3_multilinear_util::poly::Poly;
@@ -346,6 +351,33 @@ mod tests {
     use super::*;
 
     type EF = BinaryField16;
+
+    #[test]
+    fn the_buckets_hold_the_sum_of_the_exterior_products() {
+        let mut rng = SmallRng::seed_from_u64(0xB0C5);
+        let terms = (0..32)
+            .map(|_| (rng.random::<EF>(), rng.random::<EF>()))
+            .collect::<Vec<_>>();
+
+        let mut buckets = BitTensorBuckets::<EF>::zero();
+        let mut tensor = BitTensor::<EF>::zero();
+        for &(a, b) in &terms {
+            buckets.add_exterior_product(a, b);
+            tensor.add_exterior_product(a, b);
+        }
+        assert_eq!(buckets.into_tensor(), tensor);
+    }
+
+    #[test]
+    fn a_level_narrower_than_its_byte_reads_its_own_rows_back() {
+        // Gf2 holds one coordinate in a byte of eight, so seven bucket bits address no row.
+        let mut buckets = BitTensorBuckets::<Gf2>::zero();
+        buckets.add_exterior_product(Gf2::ONE, Gf2::ONE);
+        assert_eq!(
+            buckets.into_tensor(),
+            BitTensor::exterior_product(Gf2::ONE, Gf2::ONE)
+        );
+    }
 
     /// A tensor element built from a handful of exterior products.
     fn element(seed: u64) -> BitTensor<EF> {
