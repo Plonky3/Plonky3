@@ -215,21 +215,16 @@ where
     }
 
     /// Add one word of residual rows at one prefix to the scratch sums.
-    ///
-    /// Never inlined: the AIR evaluation needs a large stack frame, which inside the parallel
-    /// fold would be reserved again at every level of Rayon's recursive split.
-    #[inline(never)]
     fn accumulate(&self, scratch: &mut SlicedScratch<F, S, R>, word: usize, prefix_index: usize) {
         let prefix = &self.prefixes[prefix_index];
         let trace = self.trace;
         let SlicedScratch {
-            sums,
             local,
             local_diff,
             next,
             next_diff,
             corners,
-            poisoned,
+            ..
         } = scratch;
 
         for column in 0..trace.width {
@@ -255,10 +250,40 @@ where
         let (first, first_diff) = selector(0);
         let (last, last_diff) = selector(1);
         let (transition, transition_diff) = selector(2);
-        let mut boundary = BoundaryEvals::new(first, last, transition);
+        let boundary = BoundaryEvals::new(first, last, transition);
         let boundary_diff = BoundaryEvals::new(first_diff, last_diff, transition_diff);
 
-        let weight = self.word_weights[word];
+        self.evaluate_nodes(
+            scratch,
+            boundary,
+            boundary_diff,
+            self.word_weights[word],
+            prefix_index,
+        );
+    }
+
+    /// Step the folded word through every scheduled node, adding each AIR's value there.
+    ///
+    /// Never inlined: the AIR evaluation needs a large stack frame, which inside the parallel
+    /// fold would be reserved again at every level of Rayon's recursive split.
+    #[inline(never)]
+    fn evaluate_nodes(
+        &self,
+        scratch: &mut SlicedScratch<F, S, R>,
+        mut boundary: BoundaryEvals<SlicedGf4<F, S>>,
+        boundary_diff: BoundaryEvals<SlicedGf4<F, S>>,
+        weight: R,
+        prefix_index: usize,
+    ) {
+        let SlicedScratch {
+            sums,
+            local,
+            local_diff,
+            next,
+            next_diff,
+            poisoned,
+            ..
+        } = scratch;
         for &(node, step) in &self.schedule {
             match step {
                 NodeStep::Unit(count) => {
