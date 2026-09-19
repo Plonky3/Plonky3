@@ -144,13 +144,7 @@ impl<F: TwoAdicField, InputProof: Sync, InputError: Debug + Sync, EF: ExtensionF
 
     #[instrument(skip_all, level = "debug")]
     fn fold_matrix<M: Matrix<EF>>(&self, beta: EF, log_arity: usize, m: M) -> Vec<EF> {
-        // Packed arithmetic pays off where SIMD lanes multiply field elements natively,
-        // which holds for fields of at most 32 bits. Wider fields emulate the lane product
-        // on common targets, so they keep the scalar paths, as do width-1 packings and
-        // heights below one packing width. Heights are powers of two, so any larger height
-        // splits into whole packed blocks.
-        let width = F::Packing::WIDTH;
-        if width > 1 && m.height() >= width && F::bits() <= 32 {
+        if use_packed_fold(F::Packing::WIDTH, m.height(), F::bits()) {
             return fold_matrix_packed(beta, log_arity, &m);
         }
 
@@ -245,6 +239,22 @@ impl<F: TwoAdicField, InputProof: Sync, InputError: Debug + Sync, EF: ExtensionF
     }
 }
 
+/// Whether `fold_matrix` folds a matrix of `height` rows over a base field of `field_bits`
+/// bits with `fold_matrix_packed`, given a packing of `packing_width` lanes.
+///
+/// Packed arithmetic pays off where SIMD lanes multiply field elements natively, which
+/// holds for fields of at most 32 bits. Wider fields emulate the lane product on common
+/// targets, so they keep the scalar paths, as do width-1 packings. `PackedField` does not
+/// bound the packing width, and the packed kernel bit-reverses lane indices and splits the
+/// power-of-two height into whole blocks, so the width must also be a power of two no
+/// larger than the height.
+const fn use_packed_fold(packing_width: usize, height: usize, field_bits: usize) -> bool {
+    packing_width > 1
+        && packing_width.is_power_of_two()
+        && height >= packing_width
+        && field_bits <= 32
+}
+
 /// Fold `F::Packing::WIDTH` rows of `m` at a time, one row per SIMD lane.
 ///
 /// Each row goes through the `log_arity` arity-2 rounds of `fold_matrix` without leaving
@@ -260,7 +270,7 @@ impl<F: TwoAdicField, InputProof: Sync, InputError: Debug + Sync, EF: ExtensionF
 /// other paths use, split into a packed per-row factor, squared once per round, and a
 /// per-pair scalar that is merged with `beta^(2^s)`.
 ///
-/// `m.height()` must be a nonzero multiple of `F::Packing::WIDTH`.
+/// `F::Packing::WIDTH` must be a power of two, and `m.height()` a nonzero multiple of it.
 fn fold_matrix_packed<F, EF, M>(beta: EF, log_arity: usize, m: &M) -> Vec<EF>
 where
     F: TwoAdicField,
@@ -270,7 +280,7 @@ where
     let width = F::Packing::WIDTH;
     let height = m.height();
     let pairs_per_row = 1 << (log_arity - 1);
-    debug_assert!(height >= width && height.is_multiple_of(width));
+    debug_assert!(width.is_power_of_two() && height >= width && height.is_multiple_of(width));
     debug_assert_eq!(m.width(), 2 * pairs_per_row);
 
     // Row `t = b * width + l` of block `b` has the factor
@@ -1514,5 +1524,20 @@ mod tests {
         check::<F, EF>();
         check::<F, F>();
         check::<Goldilocks, BinomialExtensionField<Goldilocks, 2>>();
+    }
+
+    /// Packings of a width the packed kernel cannot split into bit-reversed lanes keep the
+    /// scalar paths, as do width-1 packings, heights below one packing width and wide fields.
+    #[test]
+    fn packed_fold_gate() {
+        assert!(use_packed_fold(4, 4, 31));
+        assert!(use_packed_fold(8, 1 << 10, 32));
+
+        assert!(!use_packed_fold(3, 4, 31));
+        assert!(!use_packed_fold(3, 8, 31));
+        assert!(!use_packed_fold(6, 8, 31));
+        assert!(!use_packed_fold(1, 8, 31));
+        assert!(!use_packed_fold(8, 4, 31));
+        assert!(!use_packed_fold(4, 8, 64));
     }
 }
