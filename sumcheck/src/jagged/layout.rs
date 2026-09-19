@@ -159,9 +159,7 @@ impl JaggedLayout {
         // The stored prefix table includes both endpoints of every column.
         &self.cumulative_heights
     }
-}
 
-impl JaggedLayout {
     /// Proves an evaluation of a virtual jagged table.
     ///
     /// The dense witness contains only live cells in column-major order.
