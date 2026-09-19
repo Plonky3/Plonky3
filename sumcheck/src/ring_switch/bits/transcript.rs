@@ -3,14 +3,17 @@
 //! ```text
 //!     evaluation point   ->  one element per coordinate
 //!     tensor rows        ->  one element per row of the bit matrix
+//!     carry rows         ->  the same, only when the shape has successor rows
+//!     last rows          ->  the same, only when the shape has successor rows
 //!     batching point     ->  one element per absorbed coordinate, drawn
+//!     tensor batching    ->  one element, drawn, only when the shape has successor rows
 //!     sumcheck           ->  a bracket around a delegated run
 //!     surviving claim    ->  one element
 //! ```
 //!
 //! # What the order settles
 //!
-//! The batching draw comes after the tensor rows, and nothing else does.
+//! The batching draws come after every element's rows, and nothing else does.
 //! That is the ordering the reduction's soundness rests on, so it lives here.
 //!
 //! A bit matrix solving two `F_2`-linear systems moves the claim with the sum held.
@@ -20,6 +23,9 @@
 //!
 //! A fingerprint of the description enters the sponge before any step runs.
 //! The coordinate count moves the first width, the level fixes the other two.
+//!
+//! The successor row count is bound as an instance label.
+//! It moves no width, yet it decides which successor the column check reads.
 //!
 //! No grinding step is described, so every challenge here is resampleable.
 
@@ -49,8 +55,20 @@ const EVALUATION_POINT: &str = "evaluation_point";
 /// Step label of the rows of the shared tensor element.
 const TENSOR_ROWS: &str = "tensor_rows";
 
+/// Step label of the rows of the element carrying the successor into the next element.
+const CARRY_ROWS: &str = "carry_rows";
+
+/// Step label of the rows of the element holding the repeating last row.
+const LAST_ROWS: &str = "last_rows";
+
 /// Step label of the challenges that collapse the row claims into one.
 const BATCHING_POINT: &str = "batching_point";
+
+/// Step label of the challenge that batches the successor elements with the tensor.
+const TENSOR_BATCHING: &str = "tensor_batching";
+
+/// Elements a successor view adds to the statement when its rows outrun one element.
+const SUCCESSOR_ELEMENTS: usize = 2;
 
 /// Step label of the bracket around the delegated sumcheck.
 const BATCHED_SUMCHECK: &str = "batched_sumcheck";
@@ -71,13 +89,33 @@ struct BatchedSumcheck;
 pub struct BitRingSwitchShape {
     /// Coordinates the incoming evaluation point names.
     pub num_variables: usize,
+    /// Row coordinates of a successor view whose rows outrun one element.
+    ///
+    /// Set only when the reduction sends the two successor elements.
+    /// A successor view inside one element is a column reading, and plays the plain run.
+    pub successor_rows: Option<usize>,
 }
 
 impl BitRingSwitchShape {
     /// Describe a reduction of a claim at a point of this width.
     #[must_use]
     pub const fn new(num_variables: usize) -> Self {
-        Self { num_variables }
+        Self {
+            num_variables,
+            successor_rows: None,
+        }
+    }
+
+    /// Describe a reduction that also sends the two successor elements.
+    ///
+    /// For a successor view stepping within the trailing `row_variables` coordinates.
+    /// Only a view with more row coordinates than one element absorbs sends them.
+    #[must_use]
+    pub const fn with_successor_rows(num_variables: usize, row_variables: usize) -> Self {
+        Self {
+            num_variables,
+            successor_rows: Some(row_variables),
+        }
     }
 
     /// Maximum delegated rounds for this point width.
@@ -100,7 +138,17 @@ impl BitRingSwitchShape {
     /// Describe every step of one reduction, which one matched bracket always validates.
     #[must_use]
     pub fn pattern<EF: TranscriptField + TowerLevel>(&self) -> InteractionPattern {
-        let steps = vec![
+        let rows = |label| {
+            Interaction::algebra::<EF, EF>(
+                Hierarchy::Atomic,
+                Kind::Message,
+                label,
+                Length::Fixed(Coefficients::<EF>::DIMENSION),
+            )
+        };
+        let successor = self.successor_rows.is_some();
+
+        let mut steps = vec![
             // The point comes first, so no later draw is chosen before the claim is placed.
             Interaction::algebra::<EF, EF>(
                 Hierarchy::Atomic,
@@ -110,19 +158,29 @@ impl BitRingSwitchShape {
             ),
             // The rows are the whole element, one bit per entry.
             // Binding them therefore binds both readings of it.
-            Interaction::algebra::<EF, EF>(
-                Hierarchy::Atomic,
-                Kind::Message,
-                TENSOR_ROWS,
-                Length::Fixed(Coefficients::<EF>::DIMENSION),
-            ),
-            // One challenge per absorbed coordinate collapses the rows into a single claim.
-            Interaction::algebra::<EF, EF>(
+            rows(TENSOR_ROWS),
+        ];
+        // The successor elements are bound beside the tensor, before any draw.
+        if successor {
+            steps.extend([rows(CARRY_ROWS), rows(LAST_ROWS)]);
+        }
+        // One challenge per absorbed coordinate collapses the rows into a single claim.
+        steps.push(Interaction::algebra::<EF, EF>(
+            Hierarchy::Atomic,
+            Kind::Challenge,
+            BATCHING_POINT,
+            Length::Fixed(BitRingSwitch::<EF>::ABSORBED),
+        ));
+        // One more challenge collapses the three elements' batched rows into one sum.
+        if successor {
+            steps.push(Interaction::algebra::<EF, EF>(
                 Hierarchy::Atomic,
                 Kind::Challenge,
-                BATCHING_POINT,
-                Length::Fixed(BitRingSwitch::<EF>::ABSORBED),
-            ),
+                TENSOR_BATCHING,
+                Length::Scalar,
+            ));
+        }
+        steps.extend([
             // The bracket records that a sub-protocol runs here, under its own seed.
             Interaction::marker::<BatchedSumcheck>(
                 Hierarchy::Begin,
@@ -142,17 +200,24 @@ impl BitRingSwitchShape {
                 SURVIVING_CLAIM,
                 Length::Scalar,
             ),
-        ];
+        ]);
 
         InteractionPattern::new(steps).expect("one matched bracket is always well formed")
     }
 
     /// Bind the protocol identity and this shape into a seed.
+    ///
+    /// The successor row count, when there is one, is an instance label.
+    /// A plain shape adds none, so its seed is the protocol's and the pattern's alone.
     #[must_use]
     pub fn domain_separator<EF: TranscriptField + TowerLevel>(
         &self,
     ) -> DomainSeparator<Alphabet<EF>> {
-        DomainSeparator::new(VERSION, NAME, self.pattern::<EF>())
+        let mut separator = DomainSeparator::new(VERSION, NAME, self.pattern::<EF>());
+        if let Some(rows) = self.successor_rows {
+            separator.instance(&(rows as u64).to_be_bytes());
+        }
+        separator
     }
 }
 
@@ -162,6 +227,8 @@ impl BitRingSwitchShape {
 pub struct BitRingSwitchProverTranscript<'a, C, EF: TranscriptField> {
     /// Driver walking the description and holding the borrowed sponge.
     state: ProverState<&'a mut C, Alphabet<EF>>,
+    /// The numbers this run was described with.
+    shape: BitRingSwitchShape,
 }
 
 impl<'a, C, EF> BitRingSwitchProverTranscript<'a, C, EF>
@@ -173,19 +240,39 @@ where
     pub fn new(challenger: &'a mut C, shape: BitRingSwitchShape) -> Self {
         Self {
             state: ProverState::new(challenger, &shape.domain_separator::<EF>()),
+            shape,
         }
     }
 
-    /// Bind the claim's point and the element's rows, then draw the batching challenges.
+    /// Bind the claim's point and every element's rows, then draw the batching challenges.
+    ///
+    /// # Arguments
+    ///
+    /// - The evaluation point of the claim.
+    /// - The rows of the tensor element.
+    /// - The rows of the carry and last elements, when the shape has successor rows.
     ///
     /// # Returns
     ///
-    /// The batching point, one challenge per absorbed coordinate.
+    /// - The batching point, one challenge per absorbed coordinate.
+    /// - The challenge batching the three elements, when the shape has successor rows.
     ///
     /// # Panics
     ///
-    /// When either list is not the width the run was described with.
-    pub fn statement(&mut self, point: &Point<EF>, rows: &[EF]) -> Point<EF> {
+    /// - When the presence of the successor rows disagrees with the shape.
+    /// - When a list is not the width the run was described with.
+    pub fn statement(
+        &mut self,
+        point: &Point<EF>,
+        rows: &[EF],
+        successor: Option<(&[EF], &[EF])>,
+    ) -> (Point<EF>, Option<EF>) {
+        assert_eq!(
+            successor.is_some(),
+            self.shape.successor_rows.is_some(),
+            "the successor elements are sent exactly when the shape describes them",
+        );
+
         // The point is bound first, so the element cannot be chosen to suit it.
         self.state
             .observe_extensions::<EF, EF, FieldToFieldCodec<EF>>(
@@ -194,9 +281,15 @@ where
             );
         self.state
             .observe_extensions::<EF, EF, FieldToFieldCodec<EF>>(TENSOR_ROWS, rows);
+        if let Some((carry, last)) = successor {
+            self.state
+                .observe_extensions::<EF, EF, FieldToFieldCodec<EF>>(CARRY_ROWS, carry);
+            self.state
+                .observe_extensions::<EF, EF, FieldToFieldCodec<EF>>(LAST_ROWS, last);
+        }
 
-        // Only now is the batching point drawn, so no message above it knew it.
-        Point::new(
+        // Only now are the batching challenges drawn, so no message above them knew them.
+        let batching_point = Point::new(
             self.state
                 .challenge_extensions::<EF, EF, FieldToFieldCodec<EF>>(
                     BATCHING_POINT,
@@ -205,7 +298,13 @@ where
                 .into_iter()
                 .map(TranscriptBound::into_inner)
                 .collect(),
-        )
+        );
+        let alpha = successor.map(|_| {
+            self.state
+                .challenge_extension::<EF, EF, FieldToFieldCodec<EF>>(TENSOR_BATCHING)
+                .into_inner()
+        });
+        (batching_point, alpha)
     }
 
     /// Hand the sponge to the delegated sumcheck rounds.
@@ -260,27 +359,23 @@ where
 
     /// Replay the statement, then redraw the batching challenges.
     ///
+    /// Takes the same arguments as the prover side and returns the same draws.
+    ///
     /// # Errors
     ///
-    /// Returns an error unless both lists are the described width, releasing the driver.
+    /// Returns an error, releasing the driver, before anything is absorbed:
+    ///
+    /// - when the point or a row list is not the described width
+    /// - when the presence of the successor rows disagrees with the shape
     pub fn statement(
         &mut self,
         point: &Point<EF>,
         rows: &[EF],
-    ) -> Result<Point<EF>, TranscriptWidth> {
-        if point.num_variables() != self.shape.num_variables {
+        successor: Option<(&[EF], &[EF])>,
+    ) -> Result<(Point<EF>, Option<EF>), TranscriptWidth> {
+        if let Err(error) = self.check_widths(point, rows, successor) {
             self.state.abort();
-            return Err(TranscriptWidth::Point {
-                expected: self.shape.num_variables,
-                actual: point.num_variables(),
-            });
-        }
-        if rows.len() != Coefficients::<EF>::DIMENSION {
-            self.state.abort();
-            return Err(TranscriptWidth::TensorRows {
-                expected: Coefficients::<EF>::DIMENSION,
-                actual: rows.len(),
-            });
+            return Err(error);
         }
 
         let _ = self
@@ -292,8 +387,16 @@ where
         let _ = self
             .state
             .observe_extensions::<EF, EF, FieldToFieldCodec<EF>>(TENSOR_ROWS, rows);
+        if let Some((carry, last)) = successor {
+            let _ = self
+                .state
+                .observe_extensions::<EF, EF, FieldToFieldCodec<EF>>(CARRY_ROWS, carry);
+            let _ = self
+                .state
+                .observe_extensions::<EF, EF, FieldToFieldCodec<EF>>(LAST_ROWS, last);
+        }
 
-        Ok(Point::new(
+        let batching_point = Point::new(
             self.state
                 .challenge_extensions::<EF, EF, FieldToFieldCodec<EF>>(
                     BATCHING_POINT,
@@ -302,7 +405,51 @@ where
                 .into_iter()
                 .map(TranscriptBound::into_inner)
                 .collect(),
-        ))
+        );
+        let alpha = successor.map(|_| {
+            self.state
+                .challenge_extension::<EF, EF, FieldToFieldCodec<EF>>(TENSOR_BATCHING)
+                .into_inner()
+        });
+        Ok((batching_point, alpha))
+    }
+
+    /// Check every list of the statement against the description, absorbing nothing.
+    fn check_widths(
+        &self,
+        point: &Point<EF>,
+        rows: &[EF],
+        successor: Option<(&[EF], &[EF])>,
+    ) -> Result<(), TranscriptWidth> {
+        if point.num_variables() != self.shape.num_variables {
+            return Err(TranscriptWidth::Point {
+                expected: self.shape.num_variables,
+                actual: point.num_variables(),
+            });
+        }
+        // Every element is a square bit matrix, so every row list has the level's dimension.
+        let successor_rows = successor
+            .into_iter()
+            .flat_map(|(carry, last)| [carry, last]);
+        if let Some(malformed) = core::iter::once(rows)
+            .chain(successor_rows)
+            .find(|rows| rows.len() != Coefficients::<EF>::DIMENSION)
+        {
+            return Err(TranscriptWidth::TensorRows {
+                expected: Coefficients::<EF>::DIMENSION,
+                actual: malformed.len(),
+            });
+        }
+
+        let expected = self.shape.successor_rows.is_some();
+        if successor.is_some() == expected {
+            Ok(())
+        } else {
+            Err(TranscriptWidth::successor_elements(
+                expected,
+                successor.is_some(),
+            ))
+        }
     }
 
     /// Hand the sponge to the delegated sumcheck replay.
@@ -345,7 +492,7 @@ pub enum TranscriptWidth {
         /// Coordinates supplied.
         actual: usize,
     },
-    /// The tensor element carries the wrong number of rows.
+    /// A tensor element carries the wrong number of rows.
     #[error("the tensor element carries {actual} rows, expected {expected}")]
     TensorRows {
         /// Rows the level's dimension fixes.
@@ -353,6 +500,30 @@ pub enum TranscriptWidth {
         /// Rows supplied.
         actual: usize,
     },
+    /// The presence of the successor elements disagrees with the description.
+    ///
+    /// The count is zero or two, one carry element and one last element.
+    #[error("the statement carries {actual} successor elements, expected {expected}")]
+    SuccessorElements {
+        /// Elements the description fixes.
+        expected: usize,
+        /// Elements supplied.
+        actual: usize,
+    },
+}
+
+impl TranscriptWidth {
+    /// The successor-element mismatch, from whether each side has the elements.
+    #[must_use]
+    pub(crate) const fn successor_elements(expected: bool, actual: bool) -> Self {
+        const fn count(present: bool) -> usize {
+            if present { SUCCESSOR_ELEMENTS } else { 0 }
+        }
+        Self::SuccessorElements {
+            expected: count(expected),
+            actual: count(actual),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -385,9 +556,17 @@ mod tests {
         Chal::from_hasher(Vec::new(), Keccak256Hash)
     }
 
+    /// Row coordinates of the successor shape, two more than one element absorbs.
+    const SUCCESSOR_ROWS: usize = 6;
+
     /// Baseline shape every mutation below is measured against.
     const fn base_shape() -> BitRingSwitchShape {
         BitRingSwitchShape::new(NUM_VARIABLES)
+    }
+
+    /// A shape whose reduction sends the two successor elements.
+    const fn successor_shape() -> BitRingSwitchShape {
+        BitRingSwitchShape::with_successor_rows(NUM_VARIABLES, SUCCESSOR_ROWS)
     }
 
     /// The digest of the byte stream a shape seeds its sponge with.
@@ -402,13 +581,25 @@ mod tests {
     /// A field added to the shape stops the destructuring below from compiling.
     fn one_step_from_base() -> Vec<(&'static str, BitRingSwitchShape)> {
         // Exhaustiveness check: every field named, none elided by a rest pattern.
-        let BitRingSwitchShape { num_variables: _ } = base_shape();
+        let BitRingSwitchShape {
+            num_variables: _,
+            successor_rows: _,
+        } = base_shape();
 
         // One more coordinate widens the step that binds the point.
         let mut wider = base_shape();
         wider.num_variables += 1;
 
-        alloc::vec![("num_variables", wider)]
+        // Two successor shapes differing only in the row count.
+        // The pattern is the same for both, so only the instance binding can part them.
+        alloc::vec![
+            ("num_variables", wider),
+            ("successor_rows", successor_shape()),
+            (
+                "successor_rows_count",
+                BitRingSwitchShape::with_successor_rows(NUM_VARIABLES, SUCCESSOR_ROWS + 1),
+            ),
+        ]
     }
 
     /// A point whose coordinates are distinct and seed-dependent.
@@ -430,7 +621,11 @@ mod tests {
     /// Everything one run produces, in the order the description fixes.
     ///
     /// The batching point comes first, so a test can read it on its own.
-    type Draws = (Point<EF>, EF);
+    /// The second draw batches the successor elements, when the shape sends them.
+    type Draws = (Point<EF>, Option<EF>, EF);
+
+    /// The carry and last rows a statement binds, when its shape has successor rows.
+    type SuccessorRows<'a> = Option<(&'a [EF], &'a [EF])>;
 
     /// Drive a full prover-side run and hand back the draws it produced.
     ///
@@ -441,14 +636,15 @@ mod tests {
         shape: BitRingSwitchShape,
         point: &Point<EF>,
         rows: &[EF],
+        successor: SuccessorRows<'_>,
         claim: EF,
     ) -> Draws {
         let mut transcript = BitRingSwitchProverTranscript::<Chal, EF>::new(challenger, shape);
-        let batching_point = transcript.statement(point, rows);
+        let (batching_point, alpha) = transcript.statement(point, rows, successor);
         let delegated = transcript.batched_sumcheck(<Chal as CanSample<EF>>::sample);
         transcript.surviving_claim(claim);
         transcript.finish();
-        (batching_point, delegated)
+        (batching_point, alpha, delegated)
     }
 
     /// Replay a full verifier-side run against recorded values.
@@ -457,14 +653,15 @@ mod tests {
         shape: BitRingSwitchShape,
         point: &Point<EF>,
         rows: &[EF],
+        successor: SuccessorRows<'_>,
         claim: EF,
     ) -> Result<Draws, TranscriptWidth> {
         let mut transcript = BitRingSwitchVerifierTranscript::<Chal, EF>::new(challenger, shape);
-        let batching_point = transcript.statement(point, rows)?;
+        let (batching_point, alpha) = transcript.statement(point, rows, successor)?;
         let delegated = transcript.batched_sumcheck(<Chal as CanSample<EF>>::sample);
         transcript.surviving_claim(claim);
         transcript.finish();
-        Ok((batching_point, delegated))
+        Ok((batching_point, alpha, delegated))
     }
 
     /// Everything a verifier redraws from one recorded run, plus the state it hands back.
@@ -472,15 +669,26 @@ mod tests {
     /// The trailing draw is taken after the run closes.
     /// It exposes a value bound with nothing left inside the description to move.
     fn replay(point: &Point<EF>, rows: &[EF], claim: EF) -> (Draws, EF) {
-        let mut challenger = fresh_challenger();
-        let draws = drive_verifier(
-            &mut challenger,
+        replay_in(
             BitRingSwitchShape::new(point.num_variables()),
             point,
             rows,
+            None,
             claim,
         )
-        .expect("a well-shaped run always replays");
+    }
+
+    /// The same replay, over a shape and successor elements of the caller's choosing.
+    fn replay_in(
+        shape: BitRingSwitchShape,
+        point: &Point<EF>,
+        rows: &[EF],
+        successor: SuccessorRows<'_>,
+        claim: EF,
+    ) -> (Draws, EF) {
+        let mut challenger = fresh_challenger();
+        let draws = drive_verifier(&mut challenger, shape, point, rows, successor, claim)
+            .expect("a well-shaped run always replays");
         (draws, CanSample::<EF>::sample(&mut challenger))
     }
 
@@ -535,7 +743,14 @@ mod tests {
         let rows = rows_of(5);
 
         let mut prover_challenger = fresh_challenger();
-        let proved = drive_prover(&mut prover_challenger, base_shape(), &point, &rows, EF::ONE);
+        let proved = drive_prover(
+            &mut prover_challenger,
+            base_shape(),
+            &point,
+            &rows,
+            None,
+            EF::ONE,
+        );
 
         let mut verifier_challenger = fresh_challenger();
         let replayed = drive_verifier(
@@ -543,6 +758,7 @@ mod tests {
             base_shape(),
             &point,
             &rows,
+            None,
             EF::ONE,
         )
         .expect("the honest run must replay");
@@ -711,7 +927,7 @@ mod tests {
             BitRingSwitchVerifierTranscript::<Chal, EF>::new(&mut challenger, base_shape());
 
         let err = transcript
-            .statement(&point_of(NUM_VARIABLES, 3), &[EF::ONE])
+            .statement(&point_of(NUM_VARIABLES, 3), &[EF::ONE], None)
             .expect_err("a tensor element outside the described width must error");
 
         assert_eq!(
@@ -738,7 +954,7 @@ mod tests {
             BitRingSwitchVerifierTranscript::<Chal, EF>::new(&mut challenger, base_shape());
 
         let err = transcript
-            .statement(&point_of(3, 3), &rows_of(5))
+            .statement(&point_of(3, 3), &rows_of(5), None)
             .expect_err("a point outside the described width must error");
 
         assert_eq!(
@@ -750,6 +966,179 @@ mod tests {
         );
 
         drop(transcript);
+    }
+
+    #[test]
+    fn a_successor_element_list_outside_the_description_is_rejected() {
+        // Described run: the shape alone fixes whether two successor elements follow the rows.
+        //
+        //     shape       proof holds        -> rejected before anything is absorbed
+        //     plain       two elements       -> 0 expected, 2 supplied
+        //     successor   none               -> 2 expected, 0 supplied
+        //     successor   a one-row carry    -> a malformed element, like a short tensor
+        let point = point_of(NUM_VARIABLES, 3);
+        let rows = rows_of(5);
+        let (carry, last) = (rows_of(7), rows_of(11));
+        let cases: [(BitRingSwitchShape, SuccessorRows<'_>, TranscriptWidth); 3] = [
+            (
+                base_shape(),
+                Some((&carry, &last)),
+                TranscriptWidth::SuccessorElements {
+                    expected: 0,
+                    actual: 2,
+                },
+            ),
+            (
+                successor_shape(),
+                None,
+                TranscriptWidth::SuccessorElements {
+                    expected: 2,
+                    actual: 0,
+                },
+            ),
+            (
+                successor_shape(),
+                Some((&[EF::ONE], &last)),
+                TranscriptWidth::TensorRows {
+                    expected: NUM_ROWS,
+                    actual: 1,
+                },
+            ),
+        ];
+
+        for (shape, successor, expected) in cases {
+            let mut challenger = fresh_challenger();
+            let mut transcript =
+                BitRingSwitchVerifierTranscript::<Chal, EF>::new(&mut challenger, shape);
+
+            let err = transcript
+                .statement(&point, &rows, successor)
+                .expect_err("a successor list outside the description must error");
+
+            assert_eq!(err, expected);
+            drop(transcript);
+        }
+    }
+
+    #[test]
+    fn both_sides_of_a_successor_run_draw_the_same_stream() {
+        // Completeness: the successor steps are walked the same way on both sides.
+        //
+        // Fixture state: the base run plus two successor elements and one scalar draw.
+        let point = point_of(NUM_VARIABLES, 3);
+        let rows = rows_of(5);
+        let (carry, last) = (rows_of(7), rows_of(11));
+        let successor = Some((carry.as_slice(), last.as_slice()));
+
+        let mut prover_challenger = fresh_challenger();
+        let proved = drive_prover(
+            &mut prover_challenger,
+            successor_shape(),
+            &point,
+            &rows,
+            successor,
+            EF::ONE,
+        );
+
+        let mut verifier_challenger = fresh_challenger();
+        let replayed = drive_verifier(
+            &mut verifier_challenger,
+            successor_shape(),
+            &point,
+            &rows,
+            successor,
+            EF::ONE,
+        )
+        .expect("the honest run must replay");
+
+        assert_eq!(proved, replayed);
+        assert!(
+            proved.1.is_some(),
+            "a successor shape draws the element batching"
+        );
+        assert_eq!(
+            CanSample::<EF>::sample(&mut prover_challenger),
+            CanSample::<EF>::sample(&mut verifier_challenger),
+        );
+    }
+
+    #[test]
+    fn the_batching_draws_answer_to_the_successor_rows() {
+        // Invariant: both batching draws come after every element is bound.
+        //
+        // A successor element formed after r'' or alpha is the tensor's forgery again.
+        //
+        // First, where the steps sit in the description:
+        //
+        //     ... tensor_rows | carry_rows | last_rows | batching_point | tensor_batching ...
+        //                                       ^             ^
+        //                                       |             the first challenge of the run
+        //                                       bound before it
+        let pattern = successor_shape().pattern::<EF>();
+        let labels: Vec<&str> = pattern
+            .interactions()
+            .iter()
+            .map(Interaction::label)
+            .collect();
+
+        let position = |wanted: &str| {
+            labels
+                .iter()
+                .position(|&label| label == wanted)
+                .expect("the successor description holds every step")
+        };
+        let first_challenge = pattern
+            .interactions()
+            .iter()
+            .position(|interaction| interaction.kind() == Kind::Challenge)
+            .expect("the description draws a challenge");
+
+        assert_eq!(labels[first_challenge], BATCHING_POINT);
+        assert!(position(TENSOR_ROWS) < position(CARRY_ROWS));
+        assert!(position(CARRY_ROWS) < position(LAST_ROWS));
+        assert!(
+            position(LAST_ROWS) < first_challenge,
+            "the last rows are bound at step {}, the first challenge is step {first_challenge}",
+            position(LAST_ROWS),
+        );
+        assert_eq!(position(TENSOR_BATCHING), first_challenge + 1);
+
+        // Second, that both draws answer to the successor rows rather than merely following them.
+        //
+        // Mutation: bump one carry row by one, then one last row.
+        let point = point_of(NUM_VARIABLES, 3);
+        let rows = rows_of(5);
+        let (carry, last) = (rows_of(7), rows_of(11));
+        let replay_with = |carry: &[EF], last: &[EF]| {
+            replay_in(
+                successor_shape(),
+                &point,
+                &rows,
+                Some((carry, last)),
+                EF::ONE,
+            )
+            .0
+        };
+        let baseline = replay_with(&carry, &last);
+
+        let mut bumped_carry = carry.clone();
+        bumped_carry[NUM_ROWS / 2] += EF::ONE;
+        let mut bumped_last = last.clone();
+        bumped_last[NUM_ROWS - 1] += EF::ONE;
+
+        for (element, moved) in [
+            ("carry", replay_with(&bumped_carry, &last)),
+            ("last", replay_with(&carry, &bumped_last)),
+        ] {
+            assert_ne!(
+                baseline.0, moved.0,
+                "a {element} row left the batching point where it was",
+            );
+            assert_ne!(
+                baseline.1, moved.1,
+                "a {element} row left the element batching where it was",
+            );
+        }
     }
 
     #[test]

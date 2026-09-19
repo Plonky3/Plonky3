@@ -1376,7 +1376,7 @@ impl<F: Field, EF: ExtensionField<F>> SumcheckProver<F, EF> {
     }
 
     /// Extracts the current evaluation polynomial as scalar extension-field elements.
-    #[tracing::instrument(skip_all)]
+    #[tracing::instrument(skip_all, level = "debug")]
     pub fn evals(&mut self) -> Poly<EF> {
         self.settle();
         self.poly.evals()

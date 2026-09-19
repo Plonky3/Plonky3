@@ -81,7 +81,7 @@ impl<F: Field, EF: ExtensionField<F>> Layout<F, EF> for PrefixProver<F, EF> {
     ///
     /// - The point is factorised once and reused by every selected column.
     /// - Each column is an independent linear pass, so columns run in parallel.
-    #[tracing::instrument(skip_all)]
+    #[tracing::instrument(skip_all, level = "debug")]
     fn record_opening(
         &mut self,
         table_idx: usize,

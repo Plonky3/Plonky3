@@ -8,14 +8,13 @@
 //!
 //! [`prove_boolean_air`] does the same for an AIR whose trace cells are all bits, committing the
 //! trace as bits through a [`BooleanStarkConfig`] rather than one field element per cell. That
-//! commitment opens columns at the current row only, so it refuses an AIR that reads the next
-//! row.
+//! commitment opens both the current row and the next row of every column.
 
 use core::fmt;
 use std::time::Instant;
 
 use p3_air::{Air, BaseAir};
-use p3_binary_dft::{AdditiveNtt, AdditiveRsEncoder, LchNtt, NaiveAdditiveNtt, PolyBasisNtt};
+use p3_binary_dft::{AdditiveNtt, AdditiveRsEncoder, PolyBasisNtt};
 use p3_binary_field::{BinaryChallenger, BinaryField2, BinaryField128, Ghash128, poly_basis};
 use p3_binary_pcs::{
     BinaryPcs, BinaryPcsConfig, BinaryPcsConfigError, BinaryPcsParams, BinaryPcsProverData,
@@ -205,91 +204,6 @@ pub fn boolean_config<const N: usize>(
     let pcs = BooleanTracePcs::new(pcs_config, mmcs.clone(), mmcs, arity)
         .map_err(BinaryProofError::BooleanConfig)?;
     Ok(BooleanStarkConfig { pcs })
-}
-
-/// An enum over the additive NTTs the binary PCS can encode its codeword through.
-///
-/// This implements [`AdditiveNtt`] by dispatching to whichever engine is selected, so callers
-/// generic over an additive NTT can use [`AdditiveNttChoice`] as a single concrete type standing
-/// in for a runtime choice among them.
-#[derive(Clone, Debug)]
-pub enum AdditiveNttChoice {
-    /// The polynomial-basis transform: fast with a hardware carryless multiply, and the
-    /// portable fallback otherwise.
-    PolyBasis(PolyBasisNtt),
-    /// The Lin–Chung–Han transform.
-    Lch(LchNtt<F>),
-    /// The reference transform, evaluating the novel-basis definition directly.
-    Naive(NaiveAdditiveNtt<F>),
-}
-
-impl Default for AdditiveNttChoice {
-    fn default() -> Self {
-        Self::PolyBasis(PolyBasisNtt::default())
-    }
-}
-
-impl AdditiveNtt<F> for AdditiveNttChoice {
-    fn shifted_ntt_batch(&self, mat: RowMajorMatrix<F>, shift: F) -> RowMajorMatrix<F> {
-        match self {
-            Self::PolyBasis(ntt) => ntt.shifted_ntt_batch(mat, shift),
-            Self::Lch(ntt) => ntt.shifted_ntt_batch(mat, shift),
-            Self::Naive(ntt) => ntt.shifted_ntt_batch(mat, shift),
-        }
-    }
-
-    fn shifted_intt_batch(&self, mat: RowMajorMatrix<F>, shift: F) -> RowMajorMatrix<F> {
-        match self {
-            Self::PolyBasis(ntt) => ntt.shifted_intt_batch(mat, shift),
-            Self::Lch(ntt) => ntt.shifted_intt_batch(mat, shift),
-            Self::Naive(ntt) => ntt.shifted_intt_batch(mat, shift),
-        }
-    }
-
-    fn ntt_batch(&self, mat: RowMajorMatrix<F>) -> RowMajorMatrix<F> {
-        match self {
-            Self::PolyBasis(ntt) => ntt.ntt_batch(mat),
-            Self::Lch(ntt) => ntt.ntt_batch(mat),
-            Self::Naive(ntt) => ntt.ntt_batch(mat),
-        }
-    }
-
-    fn ntt_batch_padded(&self, mat: RowMajorMatrix<F>, log_inv_rate: usize) -> RowMajorMatrix<F> {
-        match self {
-            Self::PolyBasis(ntt) => ntt.ntt_batch_padded(mat, log_inv_rate),
-            Self::Lch(ntt) => ntt.ntt_batch_padded(mat, log_inv_rate),
-            Self::Naive(ntt) => ntt.ntt_batch_padded(mat, log_inv_rate),
-        }
-    }
-
-    fn intt_batch(&self, mat: RowMajorMatrix<F>) -> RowMajorMatrix<F> {
-        match self {
-            Self::PolyBasis(ntt) => ntt.intt_batch(mat),
-            Self::Lch(ntt) => ntt.intt_batch(mat),
-            Self::Naive(ntt) => ntt.intt_batch(mat),
-        }
-    }
-
-    fn lde_batch(&self, mat: RowMajorMatrix<F>, added_bits: usize) -> RowMajorMatrix<F> {
-        match self {
-            Self::PolyBasis(ntt) => ntt.lde_batch(mat, added_bits),
-            Self::Lch(ntt) => ntt.lde_batch(mat, added_bits),
-            Self::Naive(ntt) => ntt.lde_batch(mat, added_bits),
-        }
-    }
-
-    fn shifted_lde_batch(
-        &self,
-        mat: RowMajorMatrix<F>,
-        added_bits: usize,
-        shift: F,
-    ) -> RowMajorMatrix<F> {
-        match self {
-            Self::PolyBasis(ntt) => ntt.shifted_lde_batch(mat, added_bits, shift),
-            Self::Lch(ntt) => ntt.shifted_lde_batch(mat, added_bits, shift),
-            Self::Naive(ntt) => ntt.shifted_lde_batch(mat, added_bits, shift),
-        }
-    }
 }
 
 /// A fresh transcript seeded for one commit, prove, or verify call.
@@ -667,9 +581,8 @@ where
 ///
 /// # Errors
 ///
-/// Besides the errors of [`prove_binary_air`], the Boolean commitment refuses:
-/// - an AIR that reads the next row, which it cannot open, when the statement is assessed;
-/// - a trace cell outside `{0, 1}`, when the trace is committed.
+/// Besides the errors of [`prove_binary_air`], the Boolean commitment refuses a trace cell
+/// outside `{0, 1}`, when the trace is committed.
 ///
 /// # Panics
 ///
@@ -843,7 +756,7 @@ mod tests {
     use p3_blake3_air::{Blake3BinaryAir, NUM_BLAKE3_BINARY_COLS};
     use p3_challenger::CanSample;
     use p3_field::{HasSubfield, PrimeCharacteristicRing};
-    use p3_keccak_air::KeccakBinaryAir;
+    use p3_keccak_air::{KeccakBinaryAir, NUM_KECCAK_BINARY_COLS};
     use p3_multi_stark::prove;
     use p3_util::log2_ceil_usize;
 
@@ -1011,6 +924,22 @@ mod tests {
     }
 
     #[test]
+    fn dense_and_packed_keccak_tables_have_identical_boolean_proofs() {
+        // Three permutations fill 75 of 128 rows: the packed blocks hold permutations that
+        // straddle block boundaries and padding rows.
+        let air = KeccakBinaryAir {};
+        let dense = Table::new(air.generate_random_trace_rows::<F>(3, 0).transpose());
+        let packed = Table::from_packed_bits(air.generate_random_trace_packed::<Gf2>(3), 7);
+        for backend in [Backend::Subfield, Backend::PolyBasis] {
+            assert_eq!(
+                boolean_proof_transcript(&air, dense.clone(), backend),
+                boolean_proof_transcript(&air, packed.clone(), backend),
+                "{backend:?}"
+            );
+        }
+    }
+
+    #[test]
     fn backends_prove_a_full_width_trace_byte_for_byte() {
         // The recurrence starts from full-width cells, so its stage cannot fit `GF(4)`: its first
         // round runs the generic kernel, and its later rounds run in each backend's field.
@@ -1065,7 +994,7 @@ mod tests {
 
     /// Three bit columns, the third the XOR of the first two.
     ///
-    /// No constraint reads the next row, so the Boolean commitment can open every column.
+    /// Every constraint reads the current row only.
     struct XorAir;
 
     impl<F> BaseAir<F> for XorAir {
@@ -1116,17 +1045,33 @@ mod tests {
     }
 
     #[test]
-    fn boolean_commitment_refuses_an_air_reading_the_next_row() {
-        // Keccak-f links consecutive rows, which the Boolean commitment cannot open, so the
-        // statement is refused when it is assessed, before anything is proved.
+    fn proves_and_verifies_keccak_committed_as_bits() {
+        // One permutation pads to 32 rows, and every constraint links a row to the next.
+        //
+        // The Boolean commitment opens both views of all 1625 columns in one reduction.
         let air = KeccakBinaryAir {};
         let trace = air.generate_random_trace_rows::<F>(1, 0);
-        let result = prove_boolean_air(
+        let width = trace.width();
+        let report = prove_boolean_air(
             &air,
             Table::new(trace.transpose()),
             BinaryProofOptions::default(),
-        );
-        assert!(matches!(result, Err(BinaryProofError::Security(_))));
+        )
+        .expect("a Keccak-f trace committed as bits must prove and verify");
+        assert_eq!(report.rows, 32);
+        assert_eq!(report.stacked_variables, 5 + log2_ceil_usize(width));
+        assert!(report.security_bits >= 100.0);
+    }
+
+    #[test]
+    fn proves_and_verifies_a_packed_keccak_trace() {
+        let air = KeccakBinaryAir {};
+        let words = air.generate_random_trace_packed::<Gf2>(1);
+        let table = Table::<F>::from_packed_bits(words, 5);
+        let report = prove_boolean_air(&air, table, BinaryProofOptions::default())
+            .expect("a packed Keccak-f trace must prove and verify");
+        assert_eq!(report.rows, 32);
+        assert_eq!(report.width, NUM_KECCAK_BINARY_COLS);
     }
 
     #[test]
