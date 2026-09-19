@@ -200,11 +200,54 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use p3_binary_pcs::{BinaryPcsError, BinaryPcsProof};
+    use p3_bus::{BusActivation, BusDirection, BusInteractionBuilder};
     use p3_field::PrimeCharacteristicRing;
     use p3_multi_stark::config::PcsError;
     use p3_multi_stark::{VerificationError, VerifyingKey, prove, verify};
 
     use super::*;
+
+    /// Binary-field AIR that contributes selected nonlinear payloads to one bus side.
+    struct BinaryBusAir {
+        /// Multiset side receiving this table's active rows.
+        direction: BusDirection,
+    }
+
+    impl BaseAir<F> for BinaryBusAir {
+        fn width(&self) -> usize {
+            2
+        }
+    }
+
+    impl<AB> Air<AB> for BinaryBusAir
+    where
+        AB: BusInteractionBuilder<F = F>,
+    {
+        fn eval(&self, builder: &mut AB) {
+            let main = builder.main();
+            let row = main.current_slice();
+            let value: AB::Expr = row[0].into();
+            let selector: AB::Expr = row[1].into();
+            builder.push_bus_interaction(
+                "binary-selected-square",
+                self.direction,
+                [value.clone() * value],
+                BusActivation::Boolean(selector),
+            );
+        }
+    }
+
+    /// Builds one two-column binary bus table in trace-row order.
+    fn binary_bus_table(log_height: usize) -> Table<F> {
+        let mut rows = Vec::with_capacity(2 << log_height);
+        for row in 0usize..1usize << log_height {
+            rows.extend([
+                F::from_repr((row + 2) as u128),
+                F::from_bool(row.is_multiple_of(2)),
+            ]);
+        }
+        Table::new(RowMajorMatrix::new(rows, 2).transpose())
+    }
 
     struct Fixture {
         config: Config,
@@ -268,6 +311,42 @@ mod tests {
                 Fixture::new(log_height, pow_bits).verify().unwrap();
             }
         }
+    }
+
+    #[test]
+    fn binary_bus_proof_round_trips() {
+        let log_height = 3;
+        // Four stacked columns need two variables above the trace height.
+        let config = config(log_height + 1);
+        let push = BinaryBusAir {
+            direction: BusDirection::Push,
+        };
+        let pull = BinaryBusAir {
+            direction: BusDirection::Pull,
+        };
+        let (pk, vk) = setup(&config, &[&push, &pull], &mut challenger()).unwrap();
+        let proof = prove(
+            &config,
+            ProverInstances::new(vec![
+                ProverInstance::new(&push, binary_bus_table(log_height), &pk, &[]),
+                ProverInstance::new(&pull, binary_bus_table(log_height), &pk, &[]),
+            ]),
+            0,
+            &mut challenger(),
+        )
+        .unwrap();
+
+        verify(
+            &config,
+            VerifierInstances::new(vec![
+                VerifierInstance::new(&push, &vk, log_height, &[]),
+                VerifierInstance::new(&pull, &vk, log_height, &[]),
+            ]),
+            &proof,
+            0,
+            &mut challenger(),
+        )
+        .unwrap();
     }
 
     #[test]

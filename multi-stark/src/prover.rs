@@ -790,6 +790,57 @@ mod tests {
         }
     }
 
+    /// AIR whose bus payload comes from either a fixed or committed column.
+    struct PreprocessedBusAir {
+        /// Multiset side receiving this table's rows.
+        direction: BusDirection,
+        /// Fixed values supplied through the verifying key.
+        fixed: Option<Vec<F>>,
+    }
+
+    impl BaseAir<F> for PreprocessedBusAir {
+        fn width(&self) -> usize {
+            1
+        }
+
+        fn preprocessed_width(&self) -> usize {
+            usize::from(self.fixed.is_some())
+        }
+
+        fn preprocessed_trace(&self) -> Option<RowMajorMatrix<F>> {
+            // Setup commits the fixed payload independently of the prover trace.
+            self.fixed
+                .as_ref()
+                .map(|values| RowMajorMatrix::new(values.clone(), 1))
+        }
+    }
+
+    impl<AB> Air<AB> for PreprocessedBusAir
+    where
+        AB: BusInteractionBuilder<F = F>,
+    {
+        fn eval(&self, builder: &mut AB) {
+            let main = builder.main().current_slice()[0];
+
+            // Both sides expose the same one-coordinate tuple through different commitments.
+            let value: AB::Expr = if self.fixed.is_some() {
+                // The otherwise unused main column keeps an ordinary zerocheck constraint.
+                builder.assert_zero(main);
+                builder.preprocessed().current_slice()[0].into()
+            } else {
+                // Pin one committed cell so this AIR also contributes an ordinary constraint.
+                builder.when_first_row().assert_one(main);
+                main.into()
+            };
+            builder.push_bus_interaction(
+                "preprocessed-payload",
+                self.direction,
+                [value],
+                BusActivation::Always,
+            );
+        }
+    }
+
     /// Prove one balanced conditional bus and return everything mutation tests reuse.
     fn conditional_bus_fixture() -> (
         TestConfig,
@@ -1439,6 +1490,60 @@ mod tests {
             VerifierInstances::new(vec![
                 VerifierInstance::new(&push, &vk, 3, &[]),
                 VerifierInstance::new(&pull, &vk, 2, &[]),
+            ]),
+            &proof,
+            0,
+            &mut challenger(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn bus_payload_from_preprocessed_column_is_opened() {
+        // The push side is fixed in the verifying key.
+        // The pull side commits the same payload in the main trace.
+        let height = packed_floor();
+        let log_height = log2_strict_usize(height);
+        let values = (1..=height as u64).map(F::from_u64).collect::<Vec<_>>();
+        let push = PreprocessedBusAir {
+            direction: BusDirection::Push,
+            fixed: Some(values.clone()),
+        };
+        let pull = PreprocessedBusAir {
+            direction: BusDirection::Pull,
+            fixed: None,
+        };
+        let config = config(log_height + 1, log_height);
+        let (pk, vk) = setup(&config, &[&push, &pull], &mut challenger()).unwrap();
+
+        // The fixed provider still has one main column because every AIR table must be nonempty.
+        let proof = prove(
+            &config,
+            ProverInstances::new(vec![
+                ProverInstance::new(
+                    &push,
+                    Table::new(RowMajorMatrix::new(F::zero_vec(height), height)),
+                    &pk,
+                    &[],
+                ),
+                ProverInstance::new(
+                    &pull,
+                    Table::new(RowMajorMatrix::new(values, height)),
+                    &pk,
+                    &[],
+                ),
+            ]),
+            0,
+            &mut challenger(),
+        )
+        .unwrap();
+
+        // Verification must consume both prescribed opening batches.
+        verify(
+            &config,
+            VerifierInstances::new(vec![
+                VerifierInstance::new(&push, &vk, log_height, &[]),
+                VerifierInstance::new(&pull, &vk, log_height, &[]),
             ]),
             &proof,
             0,
