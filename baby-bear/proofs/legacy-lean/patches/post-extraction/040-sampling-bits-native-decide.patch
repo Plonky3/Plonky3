@@ -1,0 +1,47 @@
+# Patch:     040-sampling-bits-native-decide
+# Phase:     post-extraction
+# Target:    extraction/p3_baby_bear.lean
+# Hunks:     1
+# Cost:      ADDS AXIOM Lean.ofReduceBool
+# Upstream:  hax emits a constant-zero termination measure for Rust `const while`
+#            loops, which makes the proof library's own `while_loop.spec`
+#            unusable here -- its `step` hypothesis would require `0 < 0`.
+# Drop when: a kernel-checked proof is written against
+#            `Loop.MonoLoopCombinator` with a real measure (`64 - k`), or hax
+#            emits a usable measure so `while_loop.spec` applies.
+#
+# THIS IS THE ONLY PATCH IN THIS DIRECTORY WITH A SOUNDNESS COST. Read it before
+# trusting anything downstream of `SAMPLING_BITS_M`.
+#
+# `UniformSamplingField::SAMPLING_BITS_M` is built by a Rust `const while` loop
+# that masks PRIME. hax compiles it to `Loop.MonoLoopCombinator.while_loop`, a
+# monotone fixpoint the kernel cannot reduce, so the `RustM.of_isOk` obligation
+# does not close by `rfl` -- unlike the other 45 obligations in this file, which
+# all do.
+#
+# The loop is bounded and total, and it does *evaluate*, so `native_decide`
+# discharges the goal. The cost is the `Lean.ofReduceBool` axiom: the answer is
+# computed by Lean's compiled evaluator and trusted, rather than checked by the
+# kernel. That is a different assumption from a `sorry`, and not obviously a
+# smaller one -- it trusts the compiler and runtime -- but unlike a `sorry` it
+# does establish the fact.
+#
+# Reverting to `(by sorry)` is a one-line change to this hunk if you would rather
+# keep the kernel as the only checker. The original `(by rfl)` is preserved as a
+# comment.
+#
+--- a/extraction/p3_baby_bear.lean
++++ b/extraction/p3_baby_bear.lean
+@@ -568,7 +568,11 @@
+           (pure (rust_primitives.hax.Tuple2.mk a k)) :
+           RustM (rust_primitives.hax.Tuple2 (RustArray u64 64) usize))));
+     (pure a))
+-    (by rfl)
++    (by native_decide) -- PATCHED: `SAMPLING_BITS_M` is a Rust `const while`
++    -- loop. hax compiles it to a monotone fixpoint the kernel cannot reduce,
++    -- so `rfl` fails; it does *evaluate*, so `native_decide` discharges it,
++    -- at the cost of the `Lean.ofReduceBool` axiom. See TCB.md layer 4.
++    -- (by rfl)
+ 
+ @[reducible] instance Impl_9.AssociatedTypes :
+   p3_field.field.UniformSamplingField.AssociatedTypes BabyBearParameters

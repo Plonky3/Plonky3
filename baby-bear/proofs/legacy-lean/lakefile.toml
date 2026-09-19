@@ -1,0 +1,42 @@
+name = "p3_baby_bear"
+version = "0.1.0"
+defaultTargets = ["p3_baby_bear", "p3_baby_bear_proofs"]
+
+# Mirrors the Hax proof-library's own options. `autoImplicit = false` in
+# particular changes elaboration, so the extracted file must be built with the
+# same settings the Hax library was built with.
+[leanOptions]
+autoImplicit = false
+relaxedAutoImplicit = false
+maxSynthPendingDepth = 3
+
+# The extraction itself: hax's generated `p3_baby_bear.lean` plus the
+# hand-written axiomatized interface it needs in order to typecheck. `extraction/`
+# is hax's own default output directory (`<crate>/proofs/<backend>/extraction/`),
+# so nothing else belongs in it.
+[[lean_lib]]
+name = "p3_baby_bear"
+srcDir = "extraction"
+
+# What we assert about the extraction, as opposed to what is needed to typecheck
+# it. Kept in a separate srcDir so hax's output directory stays purely hax's.
+[[lean_lib]]
+name = "p3_baby_bear_proofs"
+srcDir = "spec"
+
+# Pinned to the exact hax revision whose engine produced `p3_baby_bear.lean`.
+# Do not float this to `main`: the generated file and the proof library must
+# come from the same revision.
+[[require]]
+name = "Hax"
+git.url = "https://github.com/cryspen/hax"
+git.subDir = "hax-lib/proof-libs/legacy-lean"
+rev = "e116155418076d3ede11d7f4993e6602cdcaf2cd"
+
+# Mathematical specification of the BabyBear field (fieldSize, twoAdicity,
+# primality). The proofs in `p3_baby_bear_proofs` relate the extracted
+# constants to these. Pinned to match Plonky3Verif/koala-bear/proofs-legacy.
+[[require]]
+name = "CompPoly"
+git = "https://github.com/Verified-zkEVM/CompPoly"
+rev = "v4.30.0"
