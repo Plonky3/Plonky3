@@ -51,24 +51,11 @@ pub fn column_batch_term(num_batches: usize, k: usize, field_bits: usize) -> Sec
 
 /// Error of reducing claims about a bit witness to claims about the elements packing it.
 ///
-/// One element holds `2^absorbed_log` bits, so a point of `n` variables splits in two:
-///
-/// ```text
-///     absorbed_log         coordinates inside one element
-///     n - absorbed_log     coordinates addressing the elements
-/// ```
-///
-/// One reduction draws `absorbed_log` batching coordinates.
-///
-/// It then runs one degree-two sumcheck round per surviving variable.
+/// The single-tensor case of [`bit_ring_switch_tensors_error`], with `num_tensors = 1`.
 ///
 /// ```text
 ///     error = (absorbed_log + 2 * surviving) / |F|
 /// ```
-///
-/// Reductions at different points share no challenge, so `k` of them union to `k` times that.
-///
-/// The commitment the surviving claims are discharged against charges its own budget.
 ///
 /// # Arguments
 ///
@@ -100,14 +87,12 @@ pub fn bit_ring_switch_term(
     surviving_variables: usize,
     field_bits: usize,
 ) -> SecurityTerm {
-    SecurityTerm::new(
-        BIT_RING_SWITCH_LABEL,
-        bit_ring_switch_error(
-            num_reductions,
-            absorbed_log,
-            surviving_variables,
-            field_bits,
-        ),
+    bit_ring_switch_tensors_term(
+        num_reductions,
+        1,
+        absorbed_log,
+        surviving_variables,
+        field_bits,
     )
 }
 
@@ -121,9 +106,10 @@ pub fn bit_ring_switch_term(
 ///     n - absorbed_log     coordinates addressing the elements
 /// ```
 ///
-/// One reduction draws `absorbed_log` batching coordinates, `num_tensors - 1` powers of
-/// alpha to combine the tensors it carries, then runs one degree-two sumcheck round per
-/// surviving variable.
+/// One reduction draws `absorbed_log` batching coordinates and, when `num_tensors > 1`, one
+/// challenge alpha.
+/// The batched row claim is multilinear in the coordinates and of degree `num_tensors - 1`
+/// in alpha. It then runs one degree-two sumcheck round per surviving variable.
 ///
 /// ```text
 ///     error = (absorbed_log + (num_tensors - 1) + 2 * surviving) / |F|
@@ -152,8 +138,8 @@ pub fn bit_ring_switch_tensors_error(
     if num_reductions == 0 {
         return ErrorBits::from_log2(f64::INFINITY);
     }
-    // Rounds per reduction: one batching draw per absorbed coordinate, one per extra
-    // tensor batched under alpha, two per sumcheck round.
+    // Rounds per reduction: one batching draw per absorbed coordinate, degree
+    // num_tensors - 1 in the alpha challenge, two per sumcheck round.
     let per_reduction = absorbed_log as f64
         + num_tensors.saturating_sub(1) as f64
         + 2.0 * surviving_variables as f64;
