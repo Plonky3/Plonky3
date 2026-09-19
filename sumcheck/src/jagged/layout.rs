@@ -1,4 +1,6 @@
 //! Validated geometry for a capacity-free jagged commitment.
+//!
+//! See [ePrint 2025/917](https://eprint.iacr.org/2025/917) for the construction and equation numbering.
 
 use alloc::vec::Vec;
 
