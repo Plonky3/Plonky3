@@ -164,27 +164,28 @@ jobs:
             target: aarch64-unknown-linux-gnu
             modes: serial parallel
     runs-on: ${{ matrix.os }}
-    if: >-
-      needs.plan.outputs.rust == 'true' &&
-      !contains(toJSON(github.event.commits.*.message), '[skip-ci]')
+    if: "! contains(toJSON(github.event.commits.*.message), '[skip-ci]')"
 
     steps:
       - uses: actions/checkout@v6
+        if: ${{ needs.plan.outputs.rust == 'true' }}
 
       - uses: dtolnay/rust-toolchain@stable
+        if: ${{ needs.plan.outputs.rust == 'true' }}
         id: rs-stable
         with:
           # The minimal profile ships no clippy, and the build-only legs lint too.
           components: clippy
 
       - name: Set flags
-        if: ${{ matrix.features }}
+        if: ${{ needs.plan.outputs.rust == 'true' && matrix.features }}
         run: |
           # Append the leg's target features to existing flags so we keep -C debuginfo=0.
           echo "RUSTFLAGS=$RUSTFLAGS -C target-feature=${{ matrix.features }}" >> "$GITHUB_ENV"
 
       # Smarter cache for Rust builds; avoids overfilling the runner disk.
       - uses: Swatinem/rust-cache@v2
+        if: ${{ needs.plan.outputs.rust == 'true' }}
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
@@ -193,20 +194,27 @@ jobs:
       # crates' tests while a single long-running test is still executing.
       - uses: taiki-e/install-action@v2
         if: >-
-          !matrix.compile_only ||
-          (matrix.sha_ni && needs.plan.outputs.sha_ni == 'true') ||
-          (matrix.gfni && needs.plan.outputs.gfni == 'true')
+          needs.plan.outputs.rust == 'true' &&
+          (!matrix.compile_only ||
+           (matrix.sha_ni && needs.plan.outputs.sha_ni == 'true') ||
+           (matrix.gfni && needs.plan.outputs.gfni == 'true'))
         with:
           tool: cargo-nextest
 
       - name: Test
-        if: ${{ !matrix.compile_only && contains(matrix.modes, 'serial') }}
+        if: >-
+          needs.plan.outputs.rust == 'true' &&
+          !matrix.compile_only &&
+          contains(matrix.modes, 'serial')
         run: >-
           ${{ runner.os == 'Windows' && 'python' || 'python3' }} scripts/check.py test
           --packages "${{ needs.plan.outputs.packages }}"
 
       - name: Test doctests
-        if: ${{ !matrix.compile_only && contains(matrix.modes, 'serial') }}
+        if: >-
+          needs.plan.outputs.rust == 'true' &&
+          !matrix.compile_only &&
+          contains(matrix.modes, 'serial')
         # nextest doesn't run doctests, so cover them with plain `cargo test`.
         run: >-
           ${{ runner.os == 'Windows' && 'python' || 'python3' }} scripts/check.py doctest
@@ -215,7 +223,9 @@ jobs:
       - name: Test with parallel
         if: >-
           !matrix.compile_only &&
-          contains(matrix.modes, 'parallel')
+          contains(matrix.modes, 'parallel') &&
+          needs.plan.outputs.rust == 'true' &&
+          needs.plan.outputs.parallel == 'true'
         run: >-
           ${{ runner.os == 'Windows' && 'python' || 'python3' }} scripts/check.py test --parallel
           --packages "${{ needs.plan.outputs.packages }}"
@@ -223,7 +233,9 @@ jobs:
       - name: Test with parallel doctests
         if: >-
           !matrix.compile_only &&
-          contains(matrix.modes, 'parallel')
+          contains(matrix.modes, 'parallel') &&
+          needs.plan.outputs.rust == 'true' &&
+          needs.plan.outputs.parallel == 'true'
         run: >-
           ${{ runner.os == 'Windows' && 'python' || 'python3' }} scripts/check.py doctest --parallel
           --packages "${{ needs.plan.outputs.packages }}"
@@ -232,8 +244,7 @@ jobs:
         if: >-
           matrix.compile_only &&
           contains(matrix.modes, 'serial') &&
-          (!matrix.sha_ni || needs.plan.outputs.sha_ni == 'true') &&
-          (!matrix.gfni || needs.plan.outputs.gfni == 'true')
+          needs.plan.outputs.rust == 'true'
         # Keep target-feature RUSTFLAGS off host build scripts and proc macros.
         # Clippy runs here too, since the baseline lint job cannot reach gated code.
         run: >-
@@ -244,15 +255,17 @@ jobs:
         if: >-
           matrix.compile_only &&
           contains(matrix.modes, 'parallel') &&
-          needs.plan.outputs.parallel == 'true' &&
-          (!matrix.sha_ni || needs.plan.outputs.sha_ni == 'true') &&
-          (!matrix.gfni || needs.plan.outputs.gfni == 'true')
+          needs.plan.outputs.rust == 'true' &&
+          needs.plan.outputs.parallel == 'true'
         run: >-
           python3 scripts/check.py architecture --target ${{ matrix.target }} --parallel
           --packages "${{ needs.plan.outputs.packages }}"
 
       - name: Test keccak (aarch64, no SHA3)
-        if: ${{ matrix.os == 'macos-latest' && needs.plan.outputs.keccak == 'true' }}
+        if: >-
+          needs.plan.outputs.rust == 'true' &&
+          matrix.os == 'macos-latest' &&
+          needs.plan.outputs.keccak == 'true'
         env:
           RUSTFLAGS: -C debuginfo=0 -C target-feature=-sha3
         run: python3 scripts/check.py test --package p3-keccak
@@ -260,7 +273,10 @@ jobs:
       # `+sha` also makes `sha2` emit SHA-NI unconditionally, so every SHA-256 test here
       # needs the instructions rather than just the four-lane kernel under test.
       - name: Test sha256 (x86-64 SHA-NI)
-        if: ${{ matrix.sha_ni && needs.plan.outputs.sha_ni == 'true' }}
+        if: >-
+          needs.plan.outputs.rust == 'true' &&
+          matrix.sha_ni &&
+          needs.plan.outputs.sha_ni == 'true'
         run: |
           if grep -qw sha_ni /proc/cpuinfo; then
             python3 scripts/check.py test --package p3-sha256
@@ -273,7 +289,10 @@ jobs:
       #
       # `+avx512bw` is checked too, since the 512-bit form of the sweep needs it.
       - name: Test binary-field (x86-64 GFNI)
-        if: ${{ matrix.gfni && needs.plan.outputs.gfni == 'true' }}
+        if: >-
+          needs.plan.outputs.rust == 'true' &&
+          matrix.gfni &&
+          needs.plan.outputs.gfni == 'true'
         run: |
           if grep -qw gfni /proc/cpuinfo &&
              { ! grep -q avx512bw <<< "${{ matrix.features }}" ||
@@ -290,12 +309,18 @@ jobs:
       # One deterministic test rather than the module: the proptests around it take minutes
       # under interpretation.
       - uses: dtolnay/rust-toolchain@nightly
-        if: ${{ matrix.gfni && needs.plan.outputs.gfni == 'true' }}
+        if: >-
+          needs.plan.outputs.rust == 'true' &&
+          matrix.gfni &&
+          needs.plan.outputs.gfni == 'true'
         with:
           components: miri
 
       - name: Interpret binary-field (x86-64 GFNI)
-        if: ${{ matrix.gfni && needs.plan.outputs.gfni == 'true' }}
+        if: >-
+          needs.plan.outputs.rust == 'true' &&
+          matrix.gfni &&
+          needs.plan.outputs.gfni == 'true'
         env:
           MIRIFLAGS: -Zmiri-disable-isolation
         run: |
@@ -399,9 +424,16 @@ jobs:
           components: rustfmt
 
       - uses: taiki-e/install-action@v2
+        if: >-
+          needs.plan.outputs.rust == 'true' ||
+          needs.plan.outputs.manifests == 'true'
+        with:
+          tool: cargo-machete
+
+      - uses: taiki-e/install-action@v2
         if: ${{ needs.plan.outputs.manifests == 'true' }}
         with:
-          tool: cargo-machete,cargo-sort
+          tool: cargo-sort
 
       - uses: taiki-e/install-action@v2
         if: ${{ needs.plan.outputs.toml == 'true' }}
@@ -428,7 +460,9 @@ jobs:
       # `--with-metadata` resolves each manifest through cargo.
       # Only that resolution makes dev-dependencies visible to the scan.
       - name: Unused dependencies
-        if: ${{ needs.plan.outputs.manifests == 'true' }}
+        if: >-
+          needs.plan.outputs.rust == 'true' ||
+          needs.plan.outputs.manifests == 'true'
         run: python3 scripts/check.py lint --check deps
 
       - name: Clippy

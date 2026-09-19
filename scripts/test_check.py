@@ -494,9 +494,11 @@ class CiPlanTests(unittest.TestCase):
             metadata = self.metadata(temp)
             plan = check.ci_plan(metadata, ["README.md"])
             changelog_plan = check.ci_plan(metadata, ["alpha/CHANGELOG.md"])
+            audit_plan = check.ci_plan(metadata, ["audits/report.pdf"])
         self.assertEqual(plan["packages"], [])
         self.assertFalse(plan["rust"])
         self.assertEqual(changelog_plan["packages"], [])
+        self.assertEqual(audit_plan["packages"], [])
 
     def test_unknown_shared_inputs_fail_closed(self):
         import check  # noqa: PLC0415
@@ -507,6 +509,9 @@ class CiPlanTests(unittest.TestCase):
             markdown_plan = check.ci_plan(metadata, ["protocol.md"])
         self.assertTrue(plan["full"])
         self.assertEqual(len(plan["packages"]), 5)
+        self.assertTrue(plan["toml"])
+        self.assertTrue(plan["manifests"])
+        self.assertTrue(plan["scripts"])
         self.assertTrue(markdown_plan["full"])
 
     def test_workspace_inputs_and_forced_runs_select_every_package(self):

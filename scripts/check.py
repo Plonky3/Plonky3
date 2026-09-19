@@ -32,7 +32,7 @@ LINT_COMMANDS = {
 
 DOC_ONLY_NAMES = {"CHANGELOG.md", "LICENSE-APACHE", "LICENSE-MIT"}
 DOC_ONLY_PATHS = {"CONTRIBUTING.md", "README.md", "RELEASING.md"}
-DOC_ONLY_PREFIXES = ("docs/", ".github/ISSUE_TEMPLATE/")
+DOC_ONLY_PREFIXES = ("audits/", "docs/", ".github/ISSUE_TEMPLATE/")
 FULL_CI_PATHS = {"Cargo.lock", "Cargo.toml", "rust-toolchain.toml", "rustfmt.toml"}
 FULL_CI_PREFIXES = (".cargo/", ".github/workflows/", "scripts/")
 
@@ -183,10 +183,10 @@ def ci_plan(
         "keccak": "p3-keccak" in affected,
         "sha_ni": "p3-sha256" in affected,
         "gfni": "p3-binary-field" in affected,
-        "toml": force_full or any_toml,
-        "manifests": force_full or any_manifest,
-        "scripts": scripts,
-        "lint": bool(selected) or force_full or any_toml or scripts,
+        "toml": full or any_toml,
+        "manifests": full or any_manifest,
+        "scripts": full or scripts,
+        "lint": bool(selected) or full or any_toml or scripts,
     }
 
 
