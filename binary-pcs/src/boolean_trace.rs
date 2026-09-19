@@ -2249,6 +2249,69 @@ mod tests {
     }
 
     #[test]
+    fn reordered_successor_views_keep_each_side_in_its_own_order() {
+        // Invariant: the two sides of a batch are laid out independently, so a column named
+        // by both lands at the position its own side gives it.
+        //
+        //     current [0, 1],    next [1, 0]   each side reverses the other
+        //     current [2, 0, 1], next [1, 2]   three columns, neither side in table order
+        //
+        // Both shapes take the per-column route, one claim per column either side names.
+        //
+        // Every returned value is checked against a reference built from the table alone.
+        let shape = TableShape::new(8, 3);
+        let scheme = pcs(&[shape]);
+        let table = table_with_width(0xB618, 8, 3);
+        let point = Point::<EF>::rand(&mut SmallRng::seed_from_u64(0xB619), 8);
+
+        for (current, next, claims) in [(vec![0, 1], vec![1, 0], 2), (vec![2, 0, 1], vec![1, 2], 3)]
+        {
+            let protocol = OpeningProtocol::new(vec![TableSpec::new(
+                shape,
+                vec![OpeningBatch::new(current.clone(), next.clone())],
+            )]);
+
+            let mut prover_chal = challenger();
+            let (commitment, data) = scheme
+                .commit(vec![table.clone()], &mut prover_chal)
+                .unwrap();
+            let proof = scheme
+                .open_at(
+                    data,
+                    &protocol,
+                    core::slice::from_ref(&point),
+                    &mut prover_chal,
+                )
+                .unwrap();
+            assert_eq!(proof.values.len(), current.len() + next.len());
+            assert_eq!(proof.opening.reductions.len(), claims);
+
+            let mut verifier_chal = challenger();
+            scheme.observe_commitment(&commitment, &mut verifier_chal);
+            let evals = scheme
+                .verify_at(
+                    &commitment,
+                    &proof,
+                    &protocol,
+                    core::slice::from_ref(&point),
+                    &mut verifier_chal,
+                )
+                .unwrap();
+
+            let current_reference = current
+                .iter()
+                .map(|&column| Poly::new(table.poly(column).as_slice().to_vec()).eval_base(&point))
+                .collect::<Vec<_>>();
+            let next_reference = next
+                .iter()
+                .map(|&column| successor_reading(table.poly(column).as_slice(), &point))
+                .collect::<Vec<_>>();
+            assert_eq!(evals[0].current(), current_reference, "current {current:?}");
+            assert_eq!(evals[0].next(), next_reference, "next {next:?}");
+        }
+    }
+
+    #[test]
     fn a_second_table_is_read_one_row_ahead_at_its_own_point() {
         // Invariant: two tables in one commitment each read their own rows, so the successor
         // view of one never steps into the slot of the other.

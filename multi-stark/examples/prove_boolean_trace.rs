@@ -902,6 +902,144 @@ mod tests {
         Table::new(RowMajorMatrix::new(columns.concat(), rows))
     }
 
+    /// A register whose every column is read one row ahead.
+    ///
+    /// ```text
+    ///     next[i]         = local[i + 1]        for i below the last column
+    ///     next[WIDTH - 1] = local[0] + local[1]
+    /// ```
+    ///
+    /// Every column is read a row ahead, so the default declaration names them all and the
+    /// batch opens the whole width through both views.
+    struct ShiftRegisterAir;
+
+    impl<T> BaseAir<T> for ShiftRegisterAir {
+        fn width(&self) -> usize {
+            WIDTH
+        }
+
+        fn num_public_values(&self) -> usize {
+            // Each row follows from the one before it, so the statement pins no boundary.
+            0
+        }
+    }
+
+    impl<AB: AirBuilder<F = F>> Air<AB> for ShiftRegisterAir {
+        fn eval(&self, builder: &mut AB) {
+            let main = builder.main();
+            let local = main.current_slice();
+            let next = main.next_slice();
+
+            // The last row reads itself under the repeat-last view, so the shift is stated
+            // on the transition rows alone.
+            for column in 0..WIDTH - 1 {
+                builder
+                    .when_transition()
+                    .assert_eq(next[column], local[column + 1]);
+            }
+            builder
+                .when_transition()
+                .assert_eq(next[WIDTH - 1], local[0] + local[1]);
+        }
+    }
+
+    /// A trace the shift register satisfies, grown row by row from a random Boolean row.
+    fn shift_register_trace(seed: u64, log_height: usize) -> Table<F> {
+        let rows = 1usize << log_height;
+        let mut rng = SmallRng::seed_from_u64(seed);
+        let mut columns: Vec<Vec<F>> = (0..WIDTH)
+            .map(|_| {
+                let mut column = vec![F::ZERO; rows];
+                column[0] = F::from_bool(rng.random::<bool>());
+                column
+            })
+            .collect();
+        for row in 1..rows {
+            let previous: [F; WIDTH] = core::array::from_fn(|column| columns[column][row - 1]);
+            for column in 0..WIDTH - 1 {
+                columns[column][row] = previous[column + 1];
+            }
+            // Exclusive or of two bits is a bit, so every cell the register grows is one.
+            columns[WIDTH - 1][row] = previous[0] + previous[1];
+        }
+
+        let table = Table::new(RowMajorMatrix::new(columns.concat(), rows));
+        // An all-zero table satisfies the shift while saying nothing about it, so the
+        // successor check would pass on a trace that exercises none of it.
+        assert!(
+            table.iter_polys().flatten().any(|&cell| cell != F::ZERO),
+            "the shift register must hold a cell the constraint can move"
+        );
+        table
+    }
+
+    /// An AIR reading every column one row ahead proves through the batched successor route.
+    #[test]
+    fn a_whole_width_successor_air_proves_on_the_boolean_commitment() {
+        // Fixture state: one table of 2^9 rows, all five columns read at both rows.
+        //
+        // That is the complete-batch shape, so one reduction over one shared column point
+        // answers both views of the batch, and the report charges both parts of it.
+        let log_height = 9;
+        let shapes = shapes(&[log_height]);
+        let config = PackedConfig::new(&shapes);
+        let air = ShiftRegisterAir;
+        let (pk, vk) = setup(&config, &[&air], &mut challenger()).unwrap();
+
+        let report = security_report(
+            &config,
+            &VerifierInstances::new(vec![VerifierInstance::new(&air, &vk, log_height, &[])]),
+        )
+        .unwrap();
+        assert!(report.unassessed_components().is_empty());
+        for label in ["bit-ring-switch", "column-batching"] {
+            assert!(
+                report
+                    .terms()
+                    .iter()
+                    .any(|term| term.label == label && term.component == Some("main-pcs")),
+                "missing {label}"
+            );
+        }
+        report.require_security(SECURITY_BITS).unwrap();
+
+        // Both views of the batch are combined at the one column point they share, so the
+        // batching term charges two claims over the three coordinates a width of five needs.
+        //
+        //     128 - log2(2 * 3) = 125.415...
+        //
+        // A batch reading the current row alone would carry one claim and charge more.
+        let batching = report
+            .terms()
+            .iter()
+            .find(|term| term.label == "column-batching")
+            .expect("the optimized route charges the column point it draws");
+        assert!((batching.bits.bits() - (128.0 - 6f64.log2())).abs() < 1e-9);
+
+        let proof = prove_with_security(
+            &config,
+            ProverInstances::new(vec![ProverInstance::new(
+                &air,
+                shift_register_trace(0x9700, log_height),
+                &pk,
+                &[],
+            )]),
+            0,
+            SECURITY_BITS,
+            &mut challenger(),
+        )
+        .unwrap();
+        verify_with_security(
+            &config,
+            VerifierInstances::new(vec![VerifierInstance::new(&air, &vk, log_height, &[])]),
+            &proof,
+            0,
+            SECURITY_BITS,
+            &mut challenger(),
+        )
+        .unwrap();
+    }
+
     /// An AIR linking each row to the next proves on the bit commitment.
     #[test]
     fn a_transition_air_proves_on_the_boolean_commitment() {
