@@ -4,6 +4,7 @@
 extern crate alloc;
 
 mod builder;
+mod debug;
 mod leaf;
 mod plan;
 mod product;
@@ -13,6 +14,10 @@ mod transcript;
 pub use builder::{
     BusActivation, BusInteractionBuilder, BusInteractionRecorder, BusSymbolicBuilder, RecordToken,
     SymbolicBusInteraction,
+};
+pub use debug::{
+    BusDebugError, BusDebugInstance, BusDebugLocation, BusDebugOccurrence, BusDebugReport,
+    BusImbalance, check_bus_balance,
 };
 pub use leaf::{BusDirection, BusLeafDeclaration, BusLeafError, BusLeaves, BusSelector};
 pub use plan::{
