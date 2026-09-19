@@ -18,8 +18,10 @@ use p3_field::{Dup, ExtensionField, Field, PrimeCharacteristicRing};
 use p3_security::SecurityTerm;
 use p3_security::bus::{BusSecurityModel, ProductGkrSecurityProfile};
 
-use crate::{BusActivation, BusDirection, BusInteractionBuilder, RecordToken};
-use crate::{BusPlan, BusTupleSlot, ProductGkrOutput, ProductGkrRootShape, ProductGkrShape};
+use crate::{
+    BusActivation, BusDirection, BusInteractionBuilder, BusPlan, BusTupleSlot, ProductGkrOutput,
+    ProductGkrRootShape, ProductGkrShape, RecordToken,
+};
 
 mod error;
 

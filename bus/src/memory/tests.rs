@@ -12,8 +12,10 @@ use p3_keccak::Keccak256Hash;
 use p3_security::bus::PRODUCT_GKR_BATCHING_LABEL;
 
 use super::*;
-use crate::BusSymbolicBuilder;
-use crate::{BusActivation, BusDirection, BusPlanInput, ProductGkrProof, SymbolicBusInteraction};
+use crate::{
+    BusActivation, BusDirection, BusPlanInput, BusSymbolicBuilder, ProductGkrProof,
+    SymbolicBusInteraction,
+};
 
 type F = BinaryField128;
 type Challenger = BinaryChallenger<F, HashChallenger<u8, Keccak256Hash, 32>>;
