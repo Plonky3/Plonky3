@@ -30,6 +30,9 @@ pub trait Word: sealed::Sealed + Copy + Debug + Eq + Hash + Send + Sync + 'stati
 
     /// Returns the word as an unsigned 64-bit integer.
     fn to_u64(self) -> u64;
+
+    /// Creates a word from the low bits of an unsigned representation.
+    fn from_low_bits(value: u64) -> Self;
 }
 
 /// A 32-bit word.
@@ -61,6 +64,12 @@ impl Word for Word32 {
     #[inline]
     fn to_u64(self) -> u64 {
         self.0.into()
+    }
+
+    #[inline]
+    fn from_low_bits(value: u64) -> Self {
+        // Truncation retains exactly the low 32 bits named by the word width.
+        Self(value as u32)
     }
 }
 
@@ -152,6 +161,12 @@ impl Word for Word64 {
     fn to_u64(self) -> u64 {
         self.0
     }
+
+    #[inline]
+    fn from_low_bits(value: u64) -> Self {
+        // Every input bit fits the 64-bit representation.
+        Self(value)
+    }
 }
 
 impl sealed::Sealed for Word64 {
@@ -227,6 +242,13 @@ mod tests {
     use super::*;
 
     proptest! {
+        #[test]
+        fn low_bit_conversion_matches_each_word_width(value in any::<u64>()) {
+            // The generic constructor makes its truncation rule explicit for narrow words.
+            prop_assert_eq!(Word32::from_low_bits(value), Word32::new(value as u32));
+            prop_assert_eq!(Word64::from_low_bits(value), Word64::new(value));
+        }
+
         #[test]
         fn word32_integer_product_matches_u64(left in any::<u32>(), right in any::<u32>()) {
             // A 64-bit product contains both 32-bit result limbs.

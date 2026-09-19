@@ -11,11 +11,24 @@ categories.workspace = true
 
 [dependencies]
 p3-binary-field.workspace = true
+p3-challenger.workspace = true
+p3-field.workspace = true
+p3-multilinear-util.workspace = true
+p3-security.workspace = true
+p3-sumcheck.workspace = true
 p3-word.workspace = true
+serde.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
+p3-keccak.workspace = true
 proptest.workspace = true
+
+criterion.workspace = true
+
+[[bench]]
+name = "shift_reduction"
+harness = false
 
 [lints]
 workspace = true
