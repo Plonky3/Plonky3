@@ -7,6 +7,7 @@ mod builder;
 mod leaf;
 mod plan;
 mod product;
+mod security;
 mod transcript;
 
 pub use builder::{
