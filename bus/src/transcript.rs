@@ -299,3 +299,7 @@ where
             .expect("the product reduction reads an empty wire");
     }
 }
+
+#[cfg(test)]
+#[path = "transcript_tests.rs"]
+mod tests;

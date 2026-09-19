@@ -3,7 +3,6 @@ use alloc::vec::Vec;
 
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_binary_field::{BinaryChallenger, BinaryField128, Gf2};
-use p3_challenger::testing::{assert_seeds_pairwise_distinct, seed_digest};
 use p3_challenger::{DuplexChallenger, HashChallenger};
 use p3_field::extension::BinomialExtensionField;
 use p3_field::{Field, PrimeCharacteristicRing};
@@ -11,7 +10,6 @@ use p3_keccak::Keccak256Hash;
 use rand::{RngExt, SeedableRng};
 use rand_xoshiro::Xoroshiro128Plus;
 
-use crate::leaf::{BusDirection, BusLeafDeclaration, BusLeafError, BusLeaves, BusSelector};
 use crate::product::{
     ProductGkrError, ProductGkrLayerProof, ProductGkrProof, ProductGkrRootShape, ProductGkrShape,
 };
@@ -354,30 +352,6 @@ fn malformed_proof_lengths_return_errors_without_panicking() {
 }
 
 #[test]
-fn transcript_seed_binds_every_shape_dimension() {
-    // Each verifier-derived knob changes the interaction pattern.
-    let shapes = [
-        ProductGkrShape::new(0, 1, ProductGkrRootShape::Distinct).unwrap(),
-        ProductGkrShape::new(0, 2, ProductGkrRootShape::FirstTwoShared).unwrap(),
-        ProductGkrShape::new(4, 2, ProductGkrRootShape::Distinct).unwrap(),
-        ProductGkrShape::new(5, 2, ProductGkrRootShape::Distinct).unwrap(),
-        ProductGkrShape::new(4, 3, ProductGkrRootShape::Distinct).unwrap(),
-        ProductGkrShape::new(4, 2, ProductGkrRootShape::FirstTwoShared).unwrap(),
-    ];
-    let seeds = shapes
-        .iter()
-        .enumerate()
-        .map(|(index, shape)| {
-            (
-                index,
-                seed_digest(&shape.domain_separator::<Binary, Binary>()),
-            )
-        })
-        .collect::<Vec<_>>();
-    assert_seeds_pairwise_distinct(&seeds);
-}
-
-#[test]
 fn fields_without_six_nodes_return_an_error() {
     // A height-zero proof reaches field validation before transcript interpolation.
     let proof = ProductGkrProof {
@@ -409,95 +383,4 @@ fn identity_suffix_evaluation_matches_materialization() {
             naive_eval(&suffix, 3, &point)
         );
     }
-}
-
-#[test]
-fn directions_and_boolean_selection_survive_characteristic_two() {
-    // Two equal pushes remain two leaves rather than cancelling as signed counts would.
-    let column = [Binary::from_u64(7), Binary::from_u64(7)];
-    let selector = [Binary::ONE, Binary::ZERO];
-    let columns = [&column[..]];
-    let declarations = [
-        BusLeafDeclaration {
-            direction: BusDirection::Push,
-            columns: &columns,
-            selector: BusSelector::Always,
-        },
-        BusLeafDeclaration {
-            direction: BusDirection::Pull,
-            columns: &columns,
-            selector: BusSelector::Boolean(&selector),
-        },
-    ];
-
-    let leaves = BusLeaves::materialize(&declarations, &[], Binary::from_u64(19)).unwrap();
-    assert_eq!(leaves.pushes.len(), 2);
-    assert_eq!(leaves.pulls.len(), 2);
-    assert_eq!(leaves.pulls[1], Binary::ONE);
-}
-
-#[test]
-fn tuple_fingerprint_matches_direct_multilinear_evaluation() {
-    // Four slots use the address order 00, 01, 10, 11.
-    let columns = [
-        [BabyBear::from_u64(2)],
-        [BabyBear::from_u64(3)],
-        [BabyBear::from_u64(5)],
-        [BabyBear::from_u64(7)],
-    ];
-    let borrowed = columns
-        .iter()
-        .map(|column| column.as_slice())
-        .collect::<Vec<_>>();
-    let declaration = [BusLeafDeclaration {
-        direction: BusDirection::Push,
-        columns: &borrowed,
-        selector: BusSelector::Always,
-    }];
-    let point = [BabyBear::from_u64(11), BabyBear::from_u64(13)];
-    let offset = BabyBear::from_u64(17);
-
-    let leaves = BusLeaves::materialize(&declaration, &point, offset).unwrap();
-    let low_zero = columns[0][0] + point[0] * (columns[1][0] - columns[0][0]);
-    let low_one = columns[2][0] + point[0] * (columns[3][0] - columns[2][0]);
-    let fingerprint = low_zero + point[1] * (low_one - low_zero);
-
-    assert_eq!(leaves.pushes, vec![offset - fingerprint]);
-    assert!(leaves.pulls.is_empty());
-}
-
-#[test]
-fn malformed_leaf_declarations_are_rejected() {
-    // A non-Boolean selector must not become a fractional product multiplicity.
-    let column = [BabyBear::ONE];
-    let columns = [&column[..]];
-    let selector = [BabyBear::TWO];
-    let declarations = [BusLeafDeclaration {
-        direction: BusDirection::Push,
-        columns: &columns,
-        selector: BusSelector::Boolean(&selector),
-    }];
-
-    assert!(matches!(
-        BusLeaves::materialize(&declarations, &[], BabyBear::ZERO),
-        Err(BusLeafError::NonBooleanSelector { .. })
-    ));
-}
-
-#[test]
-fn tuple_width_is_rejected_before_challenge_sized_allocation() {
-    // A 24-coordinate point implies sixteen million slots.
-    // A one-column declaration is rejected before those weights are allocated.
-    let column = [BabyBear::ONE];
-    let columns = [&column[..]];
-    let declaration = [BusLeafDeclaration {
-        direction: BusDirection::Push,
-        columns: &columns,
-        selector: BusSelector::Always,
-    }];
-    let point = vec![BabyBear::ZERO; 24];
-    assert!(matches!(
-        BusLeaves::materialize(&declaration, &point, BabyBear::ZERO),
-        Err(BusLeafError::TupleWidthMismatch { .. })
-    ));
 }

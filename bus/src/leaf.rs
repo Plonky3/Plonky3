@@ -110,6 +110,8 @@ impl<EF> BusLeaves<EF> {
     /// An inactive row contributes the multiplicative identity.
     ///
     /// The tuple width is exactly `2^point.len()`.
+    /// Coordinate `k` binds bit `k` of the tuple-slot index.
+    /// Fingerprint coordinates therefore run from the least significant slot bit to the most.
     /// This function does not separate distinct named buses.
     /// A caller combining buses must reserve tuple slots for an injective domain separator.
     ///
@@ -240,3 +242,7 @@ fn equality_weights<F: Field>(point: &[F]) -> Vec<F> {
 
     weights
 }
+
+#[cfg(test)]
+#[path = "leaf_tests.rs"]
+mod tests;

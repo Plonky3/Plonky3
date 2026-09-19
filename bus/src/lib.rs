@@ -5,6 +5,7 @@ extern crate alloc;
 
 mod builder;
 mod leaf;
+mod plan;
 mod product;
 mod transcript;
 
@@ -13,10 +14,11 @@ pub use builder::{
     SymbolicBusInteraction,
 };
 pub use leaf::{BusDirection, BusLeafDeclaration, BusLeafError, BusLeaves, BusSelector};
+pub use plan::{
+    BusBlock, BusBlockOwner, BusDomain, BusExpressionLocation, BusPlan, BusPlanError, BusPlanInput,
+    BusSecurityGeometry, BusTerminalShare, BusTupleSlot, UnsupportedBusAccess,
+};
 pub use product::{
     ProductGkrError, ProductGkrLayerProof, ProductGkrOutput, ProductGkrProof, ProductGkrRootShape,
     ProductGkrShape, ProductGkrShapeError,
 };
-
-#[cfg(test)]
-mod tests;
