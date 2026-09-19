@@ -551,10 +551,13 @@ mod tests {
 
     use super::*;
 
-    /// Budgets used by the arithmetic tests, with the gate left to scale with the pool.
-    const B: Budget = Budget::DEFAULT;
+    /// Fixed budgets keep arithmetic fixtures independent of the host platform.
+    const B: Budget = Budget {
+        min_parallel_picos: Some(20_000_000),
+        max_task_picos: MAX_TASK_PICOS,
+    };
 
-    /// Worker count the arithmetic tests price against, so the gate lands at 20 us.
+    /// Worker count used by the arithmetic fixtures.
     const T: usize = 32;
 
     #[test]
@@ -577,15 +580,15 @@ mod tests {
     #[test]
     fn the_gate_grows_with_the_pool() {
         // Invariant: waking a wider pool costs more, so a wider pool demands a longer loop.
-        //
-        // Fixture state: a loop worth 20.0 us, which is 32 workers' worth of dispatch.
-        //
-        //     50001 items * 4 B * 100 ps = 20.0 us
-        //     gate at 32 workers = 32 * 625 ps = 20.0 us  -> splits
-        //     gate at 64 workers = 64 * 625 ps = 40.0 us  -> stays whole
-        let len = 50_001;
-        assert!(min_task_len_with(B, 32, len, 4) < len);
-        assert_eq!(min_task_len_with(B, 64, len, 4), len);
+        // Price the fixture just above the platform's 32-worker gate.
+        let budget = Budget::DEFAULT;
+        let low_workers = 32;
+        let high_workers = 64;
+        let len = MIN_PARALLEL_PICOS_PER_WORKER
+            .saturating_mul(low_workers as u64)
+            .div_ceil(item_picos(4)) as usize;
+        assert!(min_task_len_with(budget, low_workers, len, 4) < len);
+        assert_eq!(min_task_len_with(budget, high_workers, len, 4), len);
     }
 
     #[test]
@@ -765,7 +768,7 @@ mod tests {
     fn adapters_preserve_iteration() {
         // The adapters constrain only how work is divided, never what it covers.
         //
-        // Fixture state: 1000 items of 8 B, worth 0.8 us, well under the 20 us budget.
+        // Fixture state: 1000 items of 8 B, worth 0.8 us, well under the default gate.
         //     -> the loop runs as a single task, and every item is still visited once.
         let data: Vec<u64> = (0..1000).collect();
         let expected = 1000 * 999 / 2;
