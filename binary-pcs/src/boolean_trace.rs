@@ -477,6 +477,10 @@ where
 /// - `row_weights`: one weight per row, at least as many as the column's rows.
 fn packed_column_sums<EF: Field>(words: &RowMajorMatrix<u64>, row_weights: &[EF]) -> Vec<EF> {
     let width = words.width;
+    debug_assert!(
+        row_weights.len() > (words.values.len() / width).saturating_sub(1) * WORD_BITS,
+        "every row block needs at least one weight"
+    );
     words
         .values
         .par_chunks(width * BLOCKS_PER_TASK)
@@ -1190,9 +1194,16 @@ mod tests {
 
     #[test]
     fn packed_column_sums_match_a_per_bit_sum() {
-        // Below one block, one block, and enough blocks for several tasks with a partial last one.
+        // Part of one word, one block, one partial task, and several tasks with a partial last one.
         let blocks_past_tasks = (3 * BLOCKS_PER_TASK + 1) * WORD_BITS;
-        for (height, width, seed) in [(32, 5, 1), (64, 3, 2), (blocks_past_tasks, 7, 3)] {
+        for (height, width, seed) in [
+            (1, 1, 1),
+            (4, 1, 2),
+            (32, 5, 3),
+            (64, 3, 4),
+            (5 * WORD_BITS, 1, 5),
+            (blocks_past_tasks, 7, 6),
+        ] {
             let mut rng = SmallRng::seed_from_u64(seed);
             let used = if height < WORD_BITS {
                 (1u64 << height) - 1
