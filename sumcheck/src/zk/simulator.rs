@@ -25,7 +25,7 @@ use p3_matrix::Matrix;
 use p3_multilinear_util::point::Point;
 use p3_zk_codes::ZkEncodingWithRandomness;
 use rand::distr::{Distribution, StandardUniform};
-use rand::{Rng, RngExt};
+use rand::{CryptoRng, RngExt};
 
 use super::data::ZkSumcheckData;
 use super::prover::common::{mask_endpoints, sample_masks};
@@ -65,7 +65,7 @@ where
     Enc::Codeword: Matrix<EF>,
     M: Mmcs<EF>,
     Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F> + CanObserve<M::Commitment>,
-    R: Rng,
+    R: CryptoRng,
     StandardUniform: Distribution<EF>,
 {
     // The shape the driver was seeded with, so the wire width cannot drift from the description.
@@ -215,7 +215,7 @@ where
     Enc::Codeword: Matrix<EF>,
     M: Mmcs<EF>,
     Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F> + CanObserve<M::Commitment>,
-    R: Rng,
+    R: CryptoRng,
     StandardUniform: Distribution<EF>,
 {
     // The same description the layout prover builds from the same three numbers.
@@ -318,7 +318,7 @@ where
     Enc::Codeword: Matrix<EF>,
     M: Mmcs<EF>,
     Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F> + CanObserve<M::Commitment>,
-    R: Rng,
+    R: CryptoRng,
     StandardUniform: Distribution<EF>,
 {
     // The same description the residual prover builds from the same three numbers.
@@ -350,7 +350,7 @@ mod tests {
     use p3_multilinear_util::poly::Poly;
     use p3_zk_codes::ZkEncoding;
     use proptest::prelude::*;
-    use rand::rngs::SmallRng;
+    use rand::rngs::StdRng;
     use rand::{RngExt, SeedableRng};
 
     use super::*;
@@ -455,7 +455,7 @@ mod tests {
         let mut verifier_sim_ch = sim_ch.clone();
 
         // Matched seed with the real prover RNG; needed by the coupling certificate below.
-        let mut sim_rng = SmallRng::seed_from_u64(seed.wrapping_add(2));
+        let mut sim_rng = StdRng::seed_from_u64(seed.wrapping_add(2));
         let (zk_data_sim, mask_commitment_sim, _gammas_sim) =
             simulate_classic_unpacked::<F, EF, _, _, _, _>(
                 &mut sim_ch,
@@ -515,8 +515,8 @@ mod tests {
         // One distinct query set per mask, sized within the encoding's randomness budget so the RS simulator does not panic on too-many queries.
         let t_zk = encoding.randomness_len();
         let m = encoding.codeword_len();
-        let mut query_rng = SmallRng::seed_from_u64(seed.wrapping_add(5));
-        let mut sim_ans_rng = SmallRng::seed_from_u64(seed.wrapping_add(6));
+        let mut query_rng = StdRng::seed_from_u64(seed.wrapping_add(5));
+        let mut sim_ans_rng = StdRng::seed_from_u64(seed.wrapping_add(6));
         for _ in 0..folding_factor {
             let q_size = query_rng.random_range(1..=t_zk);
             let mut positions: Vec<usize> = Vec::with_capacity(q_size);
@@ -626,7 +626,7 @@ mod tests {
 
             let (perm, mmcs, encoding) = make_setup(seed, ell_zk);
 
-            let mut data_rng = SmallRng::seed_from_u64(seed.wrapping_add(1));
+            let mut data_rng = StdRng::seed_from_u64(seed.wrapping_add(1));
             let mut sim_challenger = MyChallenger::new(perm);
 
             // Phase: claim absorption.
@@ -652,7 +652,7 @@ mod tests {
 
             // Run the simulator under matched RNGs.
             let pow_bits = 0;
-            let mut sim_rng = SmallRng::seed_from_u64(seed.wrapping_add(2));
+            let mut sim_rng = StdRng::seed_from_u64(seed.wrapping_add(2));
             let (sim_zk_data, mask_commitment, gammas) =
                 simulate_classic_unpacked::<F, EF, _, _, _, _>(
                     &mut sim_challenger,
@@ -829,7 +829,7 @@ mod tests {
             verifier_sim.add_virtual_eval(eval, &mut sim_ch);
         }
         let mut sim_replay_ch = sim_ch.clone();
-        let mut sim_rng = SmallRng::seed_from_u64(seed.wrapping_add(2));
+        let mut sim_rng = StdRng::seed_from_u64(seed.wrapping_add(2));
         let (sim_zk_data, sim_commitment, sim_gammas) =
             simulate_classic_unpacked::<F, EF, _, _, _, _>(
                 &mut sim_ch,
@@ -885,7 +885,7 @@ mod tests {
         let mut verifier = ZkVerifier::<F, EF>::new_prefix(&[TableShape::new(n_vars, 1)]);
         verifier.add_virtual_eval(EF::from_u64(7), &mut simulator_challenger);
         let mut verifier_challenger = simulator_challenger.clone();
-        let mut rng = SmallRng::seed_from_u64(seed.wrapping_add(2));
+        let mut rng = StdRng::seed_from_u64(seed.wrapping_add(2));
 
         let (zk_data, mask_commitment, _) = simulate_classic_unpacked::<F, EF, _, _, _, _>(
             &mut simulator_challenger,
@@ -947,7 +947,7 @@ mod tests {
         let pow_bits = 0;
 
         // Honest arm: a product polynomial and the claim it really sums to.
-        let mut data_rng = SmallRng::seed_from_u64(seed.wrapping_add(1));
+        let mut data_rng = StdRng::seed_from_u64(seed.wrapping_add(1));
         let evals = Poly::<EF>::rand(&mut data_rng, n_vars);
         let weights = Poly::<EF>::rand(&mut data_rng, n_vars);
         let claimed_sum = dot_product::<EF, _, _>(
@@ -964,7 +964,7 @@ mod tests {
         let poly = ProductPolynomial::<F, EF>::new_unpacked(order, evals, weights);
 
         let mut real_ch = MyChallenger::new(perm.clone());
-        let mut real_rng = SmallRng::seed_from_u64(seed.wrapping_add(2));
+        let mut real_rng = StdRng::seed_from_u64(seed.wrapping_add(2));
         let mut zk_data_real = ZkSumcheckData::<F, EF>::default();
         let real_handoff = SumcheckProver::new(poly, claimed_sum).into_zk_sumcheck(
             &mut zk_data_real,
@@ -998,7 +998,7 @@ mod tests {
         //
         // Same fresh sponge state, same encoding, same commitment scheme.
         let mut sim_ch = MyChallenger::new(perm.clone());
-        let mut sim_rng = SmallRng::seed_from_u64(seed.wrapping_add(2));
+        let mut sim_rng = StdRng::seed_from_u64(seed.wrapping_add(2));
         let (zk_data_sim, commitment_sim, gammas_sim) =
             simulate_classic_unpacked_claim::<F, EF, _, _, _, _>(
                 &mut sim_ch,
@@ -1253,7 +1253,7 @@ mod tests {
 
         let shape = ZkSumcheckShape::new_inherited(folding_factor, ell_zk, pow_bits);
 
-        let mut data_rng = SmallRng::seed_from_u64(seed.wrapping_add(1));
+        let mut data_rng = StdRng::seed_from_u64(seed.wrapping_add(1));
         let evals = Poly::<EF>::rand(&mut data_rng, n_vars);
         let weights = Poly::<EF>::rand(&mut data_rng, n_vars);
         let claimed_sum = dot_product::<EF, _, _>(
@@ -1267,7 +1267,7 @@ mod tests {
 
         // Honest residual run.
         let mut real_ch = MyChallenger::new(perm.clone());
-        let mut real_rng = SmallRng::seed_from_u64(seed.wrapping_add(2));
+        let mut real_rng = StdRng::seed_from_u64(seed.wrapping_add(2));
         let mut zk_data_real = ZkSumcheckData::<F, EF>::default();
         let real_handoff = SumcheckProver::new(poly, claimed_sum).into_zk_sumcheck(
             &mut zk_data_real,
@@ -1297,7 +1297,7 @@ mod tests {
 
         // Simulator run from an identically seeded sponge.
         let mut sim_ch = MyChallenger::new(perm.clone());
-        let mut sim_rng = SmallRng::seed_from_u64(seed.wrapping_add(2));
+        let mut sim_rng = StdRng::seed_from_u64(seed.wrapping_add(2));
         let (zk_data_sim, commitment_sim, gammas_sim) =
             simulate_classic_unpacked_claim::<F, EF, _, _, _, _>(
                 &mut sim_ch,
@@ -1347,7 +1347,7 @@ mod tests {
         let (perm, mmcs, encoding) = make_setup(seed, ell_zk);
 
         let mut sim_ch = MyChallenger::new(perm.clone());
-        let mut rng = SmallRng::seed_from_u64(seed.wrapping_add(2));
+        let mut rng = StdRng::seed_from_u64(seed.wrapping_add(2));
         let (zk_data, mask_commitment, _) = simulate_classic_unpacked_claim::<F, EF, _, _, _, _>(
             &mut sim_ch,
             joint_claim,

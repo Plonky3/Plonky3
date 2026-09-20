@@ -15,7 +15,7 @@ use p3_sumcheck::zk::{ZkLayout, ZkProver, ZkSumcheckData};
 use p3_sumcheck::{OpeningBatch, SumcheckData};
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
 use p3_zk_codes::reed_solomon::ReedSolomonZkEncoding;
-use rand::rngs::SmallRng;
+use rand::rngs::{SmallRng, StdRng};
 use rand::{RngExt, SeedableRng};
 
 type F = BabyBear;
@@ -126,7 +126,7 @@ fn setup_zk<L>(
     folding: usize,
     encoding: &MaskEnc,
     mmcs: &MaskMmcs,
-) -> (ZkProver<F, EF, MaskEnc, MaskMmcs, L>, Challenger, SmallRng)
+) -> (ZkProver<F, EF, MaskEnc, MaskMmcs, L>, Challenger, StdRng)
 where
     L: ZkLayout<F, EF>,
 {
@@ -136,7 +136,7 @@ where
     let mut challenger = make_challenger();
     let evals = prover.eval(0, &OpeningBatch::new(vec![0], Vec::new()), &mut challenger);
     assert_eq!(evals.len(), 1);
-    let rng = SmallRng::seed_from_u64(0xbeef);
+    let rng = StdRng::seed_from_u64(0xbeef);
     (prover, challenger, rng)
 }
 
@@ -152,7 +152,7 @@ fn run_sumcheck<L: Layout<F, EF>>(prover: L, challenger: &mut Challenger, foldin
 fn run_zk_sumcheck<L>(
     prover: ZkProver<F, EF, MaskEnc, MaskMmcs, L>,
     challenger: &mut Challenger,
-    rng: &mut SmallRng,
+    rng: &mut StdRng,
     folding: usize,
 ) where
     L: ZkLayout<F, EF>,

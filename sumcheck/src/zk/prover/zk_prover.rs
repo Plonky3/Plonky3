@@ -10,7 +10,7 @@ use p3_field::{ExtensionField, Field, HornerIter, TwoAdicField, dot_product};
 use p3_matrix::Matrix;
 use p3_multilinear_util::point::Point;
 use p3_zk_codes::{ZkEncoding, ZkEncodingWithRandomness};
-use rand::Rng;
+use rand::CryptoRng;
 
 use super::common::{mask_endpoints, sample_masks};
 use super::layout::ZkLayout;
@@ -160,6 +160,12 @@ where
     /// - Combining challenge `eps`, made explicit for code-switch composition.
     /// - Plain mask messages and one mask oracle per round, in round order.
     ///
+    /// # Randomness
+    ///
+    /// Every mask is drawn from `rng`, and the reveals hide the witness only as long as
+    /// that stream is unpredictable. The [`CryptoRng`] bound keeps known
+    /// non-cryptographic generators out; callers still have to seed from real entropy.
+    ///
     /// # Panics
     ///
     /// - The configuration cannot describe a masked batch.
@@ -177,7 +183,7 @@ where
         F: TranscriptField,
         EF: TwoAdicField,
         Enc::Codeword: Matrix<EF>,
-        R: Rng,
+        R: CryptoRng,
         Ch: FieldChallenger<F> + GrindingChallenger<Witness = F> + CanObserve<M::Commitment>,
     {
         // Protocol shape resolved from the inner prover + mask encoding.
@@ -382,7 +388,7 @@ mod tests {
     use alloc::vec::Vec;
 
     use proptest::prelude::*;
-    use rand::rngs::SmallRng;
+    use rand::rngs::StdRng;
     use rand::{RngExt, SeedableRng};
 
     use crate::layout::PrefixProver;
@@ -465,7 +471,7 @@ mod tests {
         // Shared permutation, Merkle scheme, and encoding for both parties.
         let (perm, mmcs, encoding) = make_setup(seed, ell_zk);
         // Draw a random multilinear over the boolean cube of 2^8 = 256 points.
-        let mut data_rng = SmallRng::seed_from_u64(seed.wrapping_add(1));
+        let mut data_rng = StdRng::seed_from_u64(seed.wrapping_add(1));
         let evals: Vec<F> = (0..(1usize << n_vars)).map(|_| data_rng.random()).collect();
         let (mut prover, mut verifier, _) =
             build_prover_verifier::<PrefixProver<F, EF>>(evals, folding_factor, encoding, mmcs);
@@ -490,7 +496,7 @@ mod tests {
 
         // Prover commits to the mask and hands off the sumcheck transcript.
         let mut zk_data = ZkSumcheckData::<F, EF>::default();
-        let mut prover_rng = SmallRng::seed_from_u64(seed.wrapping_add(2));
+        let mut prover_rng = StdRng::seed_from_u64(seed.wrapping_add(2));
         let prover_handoff = prover.into_sumcheck(
             &mut zk_data,
             pow_bits,

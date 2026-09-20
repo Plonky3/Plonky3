@@ -32,7 +32,7 @@ use p3_sumcheck::zk::ZkSumcheckData;
 use p3_util::log2_strict_usize;
 use p3_zk_codes::ZkEncodingWithRandomness;
 use rand::distr::{Distribution, StandardUniform};
-use rand::{Rng, RngExt};
+use rand::{CryptoRng, RngExt};
 use tracing::instrument;
 
 use crate::WhirConfigError;
@@ -96,7 +96,7 @@ where
     /// Nothing is bound here.
     ///
     /// The root is returned instead, and the caller binds it.
-    pub fn commit<R: Rng>(
+    pub fn commit<R: CryptoRng>(
         &self,
         message: Poly<F>,
         rng: &mut R,
@@ -140,7 +140,7 @@ where
     /// The base-field bound is what lets every one of those seeds be encoded.
     #[instrument(skip_all)]
     #[allow(clippy::too_many_lines)]
-    pub fn prove<R: Rng>(
+    pub fn prove<R: CryptoRng>(
         &self,
         prover_data: HidingWhirProverData<F, EF, MT>,
         claims: &[(Point<EF>, EF)],

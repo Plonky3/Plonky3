@@ -9,7 +9,7 @@ use p3_field::{ExtensionField, Field, HornerIter};
 use p3_matrix::Matrix;
 use p3_multilinear_util::point::Point;
 use p3_zk_codes::ZkEncodingWithRandomness;
-use rand::Rng;
+use rand::CryptoRng;
 
 use super::common::{mask_endpoints, sample_masks};
 use super::round::{PlainPiece, RoundContext, RoundState, round_poly_to_wire};
@@ -79,7 +79,7 @@ where
         Enc: ZkEncodingWithRandomness<EF>,
         Enc::Codeword: Matrix<EF>,
         M: Mmcs<EF>,
-        R: Rng,
+        R: CryptoRng,
         Ch: FieldChallenger<F> + GrindingChallenger<Witness = F> + CanObserve<M::Commitment>,
     {
         let ell_zk = encoding.message_len();
@@ -201,7 +201,7 @@ mod tests {
     use p3_multilinear_util::poly::Poly;
     use p3_util::log2_strict_usize;
     use p3_zk_codes::{ZkEncoding, ZkEncodingWithRandomness};
-    use rand::rngs::SmallRng;
+    use rand::rngs::StdRng;
     use rand::{Rng, SeedableRng};
 
     use super::*;
@@ -283,7 +283,7 @@ mod tests {
         let (perm, mmcs, encoding) = make_setup(17, ell_zk);
         let mut prover_challenger = MyChallenger::new(perm.clone());
         let mut verifier_challenger = MyChallenger::new(perm);
-        let mut rng = SmallRng::seed_from_u64(19);
+        let mut rng = StdRng::seed_from_u64(19);
         let mut zk_data = ZkSumcheckData::<F, EF>::default();
 
         let prover_handoff = prover.into_zk_sumcheck(
@@ -349,7 +349,7 @@ mod tests {
         let folding_factor = 2;
         let (perm, mmcs, encoding) = make_setup(41, ell_zk);
         let mut prover_challenger = MyChallenger::new(perm.clone());
-        let mut rng = SmallRng::seed_from_u64(43);
+        let mut rng = StdRng::seed_from_u64(43);
         let mut zk_data = ZkSumcheckData::<F, EF>::default();
 
         let prover_handoff = SumcheckProver::new(poly, claimed_sum).into_zk_sumcheck(
@@ -407,7 +407,7 @@ mod tests {
 
         for (n_vars, folding_factor) in [(2usize, 1usize), (4, 4), (9, 3), (9, 9), (15, 3)] {
             for order in [VariableOrder::Prefix, VariableOrder::Suffix] {
-                let mut rng = SmallRng::seed_from_u64(0x5EED + n_vars as u64);
+                let mut rng = StdRng::seed_from_u64(0x5EED + n_vars as u64);
                 let evals = Poly::<EF>::rand(&mut rng, n_vars);
                 let weights = Poly::<EF>::rand(&mut rng, n_vars);
                 let claimed_sum = dot_product::<EF, _, _>(
@@ -439,7 +439,7 @@ mod tests {
                 let ell_zk = 4;
                 let (perm, mmcs, encoding) = make_setup(31, ell_zk);
                 let mut challenger = MyChallenger::new(perm);
-                let mut mask_rng = SmallRng::seed_from_u64(37);
+                let mut mask_rng = StdRng::seed_from_u64(37);
                 let mut zk_data = ZkSumcheckData::<F, EF>::default();
 
                 // Arm under test: the driver, which holds each binding back a round.
@@ -504,7 +504,7 @@ mod tests {
         let (perm, mmcs, _) = make_setup(23, ell_zk);
         let encoding = SentinelEncoding { ell_zk };
         let mut challenger = MyChallenger::new(perm);
-        let mut rng = SmallRng::seed_from_u64(29);
+        let mut rng = StdRng::seed_from_u64(29);
         let mut zk_data = ZkSumcheckData::<F, EF>::default();
 
         let handoff = prover.into_zk_sumcheck(

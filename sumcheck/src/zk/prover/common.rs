@@ -20,7 +20,7 @@ use p3_commit::Mmcs;
 use p3_field::Field;
 use p3_matrix::Matrix;
 use p3_zk_codes::ZkEncodingWithRandomness;
-use rand::Rng;
+use rand::CryptoRng;
 
 use crate::zk::data::MaskOracle;
 
@@ -41,7 +41,8 @@ use crate::zk::data::MaskOracle;
 /// - `encoding` — zero-knowledge encoder.
 ///   Defines the mask message space and draws a uniform sample on demand.
 /// - `mmcs` — Merkle commitment scheme over the codeword alphabet.
-/// - `rng` — driver for both the mask coefficients and the encoder's randomness budget.
+/// - `rng` — driver for both the mask coefficients and the encoder's randomness budget;
+///   a cryptographic generator, since a predictable stream unmasks every reveal.
 ///
 /// # Returns
 ///
@@ -66,7 +67,7 @@ where
     Enc: ZkEncodingWithRandomness<F>,
     Enc::Codeword: Matrix<F>,
     M: Mmcs<F>,
-    R: Rng,
+    R: CryptoRng,
 {
     // One uniform sample per round, drawn through the encoding so the message
     // space is whatever the encoding defines.
@@ -162,7 +163,7 @@ mod tests {
     use p3_field::PrimeCharacteristicRing;
     use p3_zk_codes::ZkEncoding as _;
     use rand::SeedableRng;
-    use rand::rngs::SmallRng;
+    use rand::rngs::StdRng;
 
     use super::*;
     use crate::zk::test_helpers::{EF, make_setup};
@@ -206,7 +207,7 @@ mod tests {
         let ell_zk = 4;
         let seed = 0;
         let (_perm, mmcs, encoding) = make_setup(seed, ell_zk);
-        let mut rng = SmallRng::seed_from_u64(seed);
+        let mut rng = StdRng::seed_from_u64(seed);
 
         let (masks, randomness, _oracle) =
             sample_masks::<EF, _, _, _>(k, &encoding, &mmcs, &mut rng);
@@ -232,11 +233,11 @@ mod tests {
         let seed = 42;
         let (_perm, mmcs, encoding) = make_setup(seed, ell_zk);
 
-        let mut rng1 = SmallRng::seed_from_u64(seed);
+        let mut rng1 = StdRng::seed_from_u64(seed);
         let (masks1, randomness1, oracle1) =
             sample_masks::<EF, _, _, _>(k, &encoding, &mmcs, &mut rng1);
 
-        let mut rng2 = SmallRng::seed_from_u64(seed);
+        let mut rng2 = StdRng::seed_from_u64(seed);
         let (masks2, randomness2, oracle2) =
             sample_masks::<EF, _, _, _>(k, &encoding, &mmcs, &mut rng2);
 
