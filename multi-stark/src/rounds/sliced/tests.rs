@@ -418,8 +418,15 @@ fn every_round_on_and_off_the_planes_matches_the_generic_kernel() {
 
 #[test]
 fn a_boundary_round_and_fold_on_the_planes_match_the_unsliced_kernels() {
-    // A word pair of residual rows is the shortest the planes can serve a boundary round.
-    for (height, on_planes) in [(8 * SHORTEST, true), (4 * SHORTEST, false)] {
+    // A word pair of residual rows is the shortest the planes can serve a boundary round, and
+    // several pairs reuse one tile, join the accumulators, and put the high half's successor
+    // word short of the last.
+    for (height, on_planes) in [
+        (32 * SHORTEST, true),
+        (16 * SHORTEST, true),
+        (8 * SHORTEST, true),
+        (4 * SHORTEST, false),
+    ] {
         let instances = [
             Instance::honest(FixtureAir::Gate { scale: gf4(3) }, height, 25),
             Instance::honest(FixtureAir::Pair, height, 26),
