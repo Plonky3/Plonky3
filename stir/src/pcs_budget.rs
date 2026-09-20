@@ -195,36 +195,25 @@ pub(crate) fn minimum_eta(assumption: SecurityAssumption, log_inv_rate: usize) -
 ///
 /// # Why this value
 ///
-/// - The bit length of the field order is `floor(log2(|E|)) + 1`, so it rounds `log2(|E|)`
-///   *up*.
+/// - The bit length of the field order is `floor(log2(|E|)) + 1`, rounding `log2(|E|)` up.
+/// - Proximity-gap bounds spend the field size as a denominator, so rounding up overcredits.
+/// - Subtracting one gives `floor(log2(|E|))`, a rigorous lower bound.
+/// - Johnson reserves one further bit, since its bound keeps only BCSS25's dominant term.
+/// - Twice that term upper-bounds the full expression for `m >= 3`, `rho <= 1`, `N >= 1`.
+/// - The omitted terms over the dominant one sum to at most `3 / (m + 1/2)^4 < 1`.
+/// - A factor of two in the error is one bit of field size, so one bit covers every term.
 ///
-/// - Every proximity-gap bound spends the field size as a denominator, so rounding up
-///   credits security the field does not have.
+/// Both adjustments only shrink the field size, and every bound in the schedule grows with it.
 ///
-/// - Subtracting one instead gives `floor(log2(|E|))`, a rigorous lower bound.
-///
-/// - Under the Johnson assumption one further bit is reserved, because the bound evaluated
-///   there keeps only the dominant term of BCSS25 Theorem 1.5 and drops the rest.
-///
-/// - Twice the dominant term upper-bounds the full expression for `m >= 3`, `rho <= 1` and
-///   `N >= 1`: the omitted terms divided by the dominant one sum to at most
-///   `3 / (m + 1/2)^4 < 1`, using `gamma <= 1`.
-///
-/// - A factor of two in the error is one bit of field size, so charging that bit here covers
-///   every proximity-gap term in the schedule at once.
-///
-/// Both adjustments only ever shrink the field size, and every bound in the schedule grows
-/// with it, so the result is always the conservative side: a smaller field size forces a
-/// larger safety gap, more queries or more grinding, never fewer.
+/// The result is always conservative: a smaller field size forces a larger safety gap.
 pub(crate) fn field_bits<EF: Field>(assumption: SecurityAssumption) -> usize {
-    // Bit length of the order is floor(log2(|E|)) + 1, so dropping one bit lands exactly on
-    // the integer lower bound.
+    // Bit length of the order is floor(log2(|E|)) + 1, so dropping a bit lands on the floor.
     //
     //     |E| = 2^124 - c  ->  bit length 124  ->  floor 123
     let floor = EF::order().bits() as usize - 1;
     // Johnson additionally pays the factor-of-two reserve described above.
     //
-    // Saturating so that a hypothetical one-bit field cannot wrap to a huge size.
+    // Saturating so a hypothetical one-bit field cannot wrap to a huge size.
     floor.saturating_sub(usize::from(assumption == SecurityAssumption::JohnsonBound))
 }
 

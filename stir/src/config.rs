@@ -46,8 +46,8 @@ struct CombineRequirement {
 ///
 /// The field size on the left is the rigorous integer lower bound on `log2(|E|)`.
 ///
-/// It is one bit below the bit length of the field order under the capacity assumption,
-/// and two bits below it under Johnson.
+/// - Capacity assumption: one bit below the bit length of the field order.
+/// - Johnson assumption: two bits below it.
 ///
 /// At `d* = 2^20`, `log_blowup = 1` and 100-bit security that is ~151 bits, so a 155-bit
 /// quintic extension fits with a few bits to spare and narrower challenge fields do not.
@@ -798,15 +798,15 @@ where
         if let Some(batch) = pcs_batch {
             batch.validate(log_starting_degree)?;
         }
-        // Every stage of the schedule is priced against one field size, whichever entry
-        // point built it.
+        // One field size prices every stage, whichever entry point built the schedule.
         //
-        // That size is the rigorous integer lower bound on log2(|E|), never the bit length
-        // of the field order, which rounds up and would credit security the field does not
-        // have.
+        // That size is the rigorous integer lower bound on log2(|E|).
         //
-        // Under Johnson it is one bit lower still, paying for the dominant-term-only
-        // approximation the proximity-gap bounds use in that regime.
+        // The bit length of the field order rounds up, crediting security the field lacks.
+        //
+        // Johnson drops one bit further.
+        //
+        // That bit pays for the dominant-term-only proximity-gap approximation.
         let field_size_bits = crate::pcs_budget::field_bits::<EF>(params.soundness_type);
         let log_blowup = params.log_blowup;
         let log_folding_factor = params.log_folding_factor;
@@ -2126,14 +2126,16 @@ mod tests {
         let perm = Perm::new_from_rng_128(&mut rng);
         let val_mmcs = ValMmcs::new(MyHash::new(perm.clone()), MyCompress::new(perm), 0);
 
-        // Two public entry points reach the same derivation: one for a bare STIR instance,
-        // one for a polynomial commitment scheme that also budgets its quotient batch.
+        // Two entry points reach the same derivation.
         //
-        // With an empty batch the second has nothing extra to budget, so the two must agree
-        // on every derived number.
+        //     bare STIR          :  no quotient batch
+        //     commitment scheme  :  also budgets its quotient batch
         //
-        // They can only disagree if they price the challenge field differently, which is the
-        // regression this pins.
+        // An empty batch leaves the second nothing extra to budget.
+        //
+        // The two must then agree on every derived number.
+        //
+        // They can only disagree by pricing the challenge field differently.
         let cb = SecurityAssumption::CapacityBound;
         let jb = SecurityAssumption::JohnsonBound;
         for &(log_deg, log_blowup, log_fold, log_starting_fold, sec, max_pow, soundness_type) in &[
@@ -2178,8 +2180,9 @@ mod tests {
                 );
                 continue;
             };
-            // Commitment-scheme derivation handed a batch with no classes and no merge, so
-            // it contributes no extra error term and no grinding credit.
+            // Commitment-scheme derivation, handed a batch with no classes and no merge.
+            //
+            // It adds no error term and claims no grinding credit.
             let via_pcs = StirConfig::<F, EF, MyMmcs, MyChallenger>::try_new_with_pcs_batch(
                 log_deg,
                 params(),
@@ -2207,8 +2210,9 @@ mod tests {
                 .zip(&via_pcs.round_configs)
                 .enumerate()
             {
-                // The safety gap is the number the field size feeds directly, so it moves
-                // first when the two paths disagree.
+                // The safety gap is fed by the field size directly.
+                //
+                // It is the first number to move if the two paths disagree.
                 assert_eq!(a.eta, b.eta, "{label}: round {i} eta differs");
                 assert_eq!(
                     a.num_queries, b.num_queries,
@@ -2314,24 +2318,26 @@ mod tests {
                     continue;
                 };
 
-                // Mirror the constructor's buffered target: the security level plus a union
-                // bound over every error term the schedule sums.
+                // Mirror the constructor's buffered target.
+                //
+                // That is the security level plus a union bound over every error term summed.
                 let total_folds = config.num_rounds() + 1;
                 let buffer = libm::ceil(libm::log2((6 * (total_folds - 1) + 4) as f64)) as usize;
                 let buffered = (sec + buffer) as f64;
 
-                // The safety gap the batching stage was sized against is round 0's, or the
-                // final one when there are no intermediate rounds.
+                // The batching stage is sized against round 0's safety gap.
+                //
+                // With no intermediate rounds, the final gap is the one it used.
                 let eta = config
                     .round_configs
                     .first()
                     .map_or(config.final_eta, |rc| rc.eta);
 
-                // Recompute independently against the rigorous field size, which is what the
-                // stage is actually accountable to.
+                // Recompute independently against the rigorous field size.
                 //
-                // Pricing this term against the rounded-up bit length of the field order
-                // instead would credit it one bit it has not earned under Johnson.
+                // That is the size the stage is accountable to.
+                //
+                // Pricing it off the rounded-up field order credits an unearned Johnson bit.
                 let honest = initial_batching_error(
                     soundness_type,
                     crate::pcs_budget::field_bits::<EF>(soundness_type),
@@ -2350,8 +2356,9 @@ mod tests {
                     honest >= buffered - eps,
                     "{label}: batching retains {honest:.4} bits < {buffered:.4}"
                 );
-                // The reporting accessor must quote the same number the schedule was sized
-                // against, not a more optimistic one.
+                // The reporting accessor must quote the number the schedule was sized against.
+                //
+                // A more optimistic figure would misreport the schedule.
                 assert!(
                     (config.initial_batching_error() - honest).abs() < eps,
                     "{label}: reported {:.4} but the stage delivers {honest:.4}",
