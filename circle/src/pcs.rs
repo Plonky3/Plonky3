@@ -228,6 +228,11 @@ where
     })
 }
 
+/// The smallest trace domain `CirclePcs` commits to: the bivariate layer folds one bit and
+/// circle FRI needs one more, and the domain selectors (`v_n`, `s_p`) are only defined for
+/// `log_n >= 1`.
+const LOG_MIN_TRACE_HEIGHT: usize = 2;
+
 impl<Val, InputMmcs, FriMmcs, Challenge, Challenger> Pcs<Challenge, Challenger>
     for CirclePcs<Val, InputMmcs, FriMmcs>
 where
@@ -257,7 +262,7 @@ where
             .into_iter()
             .map(|(domain, evals)| {
                 assert!(
-                    domain.log_n >= 2,
+                    domain.log_n >= LOG_MIN_TRACE_HEIGHT,
                     "CirclePcs cannot commit to a matrix with fewer than 4 rows.",
                     // (because we bivariate fold one bit, and fri needs one more bit)
                 );
@@ -1110,6 +1115,10 @@ where
         Val::CIRCLE_TWO_ADICITY - 1
     }
 
+    fn log_min_trace_height(&self) -> usize {
+        LOG_MIN_TRACE_HEIGHT
+    }
+
     fn get_quotient_ldes(
         &self,
         evaluations: impl IntoIterator<Item = (Self::Domain, RowMajorMatrix<Val>)>,
@@ -1119,7 +1128,7 @@ where
             .into_iter()
             .map(|(domain, evals)| {
                 assert!(
-                    domain.log_n >= 2,
+                    domain.log_n >= LOG_MIN_TRACE_HEIGHT,
                     "CirclePcs cannot commit to a matrix with fewer than 4 rows.",
                     // (because we bivariate fold one bit, and fri needs one more bit)
                 );

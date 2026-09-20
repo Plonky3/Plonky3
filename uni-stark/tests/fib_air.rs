@@ -594,6 +594,37 @@ fn test_degree_bits_too_small_for_zk_rejected() {
 }
 
 #[test]
+fn test_degree_bits_below_circle_pcs_minimum_rejected() {
+    // `CirclePcs` commits to at least four rows, and the circle-domain selectors are only
+    // defined from `log_n >= 1`. The proof's `degree_bits` is untrusted, so a claim below that
+    // minimum must be rejected before any domain is derived from it.
+    let config = make_circle_config();
+    let air = CirclePeriodicProductAir {
+        column: vec![CircleVal::TWO, CircleVal::from_u32(3)],
+        degree: 3,
+    };
+    let trace = RowMajorMatrix::new_col((0..16).map(|i| air.column[i % 2].exp_u64(3)).collect());
+    let mut proof = prove(&config, &air, trace, &[]).unwrap();
+    verify(&config, &air, &proof, &[]).expect("honest proof should verify");
+
+    for degree_bits in [0, 1] {
+        proof.degree_bits = degree_bits;
+        let err = verify(&config, &air, &proof, &[])
+            .expect_err("verification should reject degree_bits below the CirclePcs minimum");
+        match err {
+            p3_uni_stark::VerificationError::InvalidProofShape(
+                InvalidProofShapeError::DegreeBitsTooSmall { air, minimum, got },
+            ) => {
+                assert_eq!(air, None);
+                assert_eq!(minimum, 2);
+                assert_eq!(got, degree_bits);
+            }
+            _ => panic!("unexpected error: {err:?}"),
+        }
+    }
+}
+
+#[test]
 fn verify_two_adic_compat_fixture() -> Result<(), Box<dyn std::error::Error>> {
     let (config, air, pis, _) = two_adic_compat_case();
     let proof_bytes = read_fixture(TWO_ADIC_FIXTURE)

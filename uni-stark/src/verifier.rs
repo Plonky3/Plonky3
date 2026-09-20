@@ -65,12 +65,16 @@ pub fn validate_degree_bits(
     air: Option<usize>,
     degree_bits: usize,
     is_zk: usize,
+    min_log_degree: usize,
     max_log_degree: usize,
 ) -> Result<(usize, usize), InvalidProofShapeError> {
-    if degree_bits < is_zk {
+    // The base trace domain is `degree_bits - is_zk` bits tall and must be one the PCS can
+    // commit to; its selectors are derived from it before the opening argument runs.
+    let minimum = is_zk + min_log_degree;
+    if degree_bits < minimum {
         return Err(InvalidProofShapeError::DegreeBitsTooSmall {
             air,
-            minimum: is_zk,
+            minimum,
             got: degree_bits,
         });
     }
@@ -451,8 +455,13 @@ where
     let degree_bits = *degree_bits;
 
     let pcs = config.pcs();
-    let (base_degree_bits, degree) =
-        validate_degree_bits(None, degree_bits, config.is_zk(), pcs.log_max_lde_height())?;
+    let (base_degree_bits, degree) = validate_degree_bits(
+        None,
+        degree_bits,
+        config.is_zk(),
+        pcs.log_min_trace_height(),
+        pcs.log_max_lde_height(),
+    )?;
     let trace_domain = pcs.natural_domain_for_degree(degree);
     // TODO: allow moving preprocessed commitment to preprocess time, if known in advance
     let (preprocessed_width, preprocessed_commit) =

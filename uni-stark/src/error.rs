@@ -74,9 +74,10 @@ pub enum InvalidProofShapeError {
     /// Preprocessed values present when preprocessed width is zero.
     #[error("air {air}: unexpected preprocessed values")]
     UnexpectedPreprocessedValues { air: usize },
-    /// Proof degree bits are too small for the PCS ZK setting.
+    /// Proof degree bits are too small for the PCS: below its minimum trace height, or below
+    /// the extra bit its ZK setting adds.
     #[error(
-        "{}degree_bits too small for zk setting: expected at least {minimum}, got {got}",
+        "{}degree_bits too small for the pcs: expected at least {minimum}, got {got}",
         air.map_or_else(String::new, |air| format!("air {air}: "))
     )]
     DegreeBitsTooSmall {

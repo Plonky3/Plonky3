@@ -127,8 +127,13 @@ where
         .iter()
         .enumerate()
         .map(|(i, &ext_db)| {
-            let (_, ext_domain_size) =
-                validate_degree_bits(Some(i), ext_db, is_zk, pcs.log_max_lde_height())?;
+            let (_, ext_domain_size) = validate_degree_bits(
+                Some(i),
+                ext_db,
+                is_zk,
+                pcs.log_min_trace_height(),
+                pcs.log_max_lde_height(),
+            )?;
             Ok((
                 pcs.natural_domain_for_degree(ext_domain_size >> is_zk),
                 pcs.natural_domain_for_degree(ext_domain_size),
@@ -425,6 +430,7 @@ where
             Some(i),
             degree_bits[i],
             config.is_zk(),
+            pcs.log_min_trace_height(),
             pcs.log_max_lde_height(),
         )?;
         base_degree_bits.push(base_db);
