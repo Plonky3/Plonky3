@@ -1,4 +1,4 @@
-//! Packed witness data and shift metadata for word-level proving backends.
+//! Word-level relation proving, from a packed witness to one authenticated trace opening.
 
 #![no_std]
 

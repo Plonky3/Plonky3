@@ -1,6 +1,6 @@
 [package]
 name = "p3-word-backend"
-description = "Packed witness layout for Plonky3 word-level constraint systems."
+description = "Proving backend for Plonky3 word-level constraint systems."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
