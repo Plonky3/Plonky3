@@ -6,6 +6,7 @@
 //! The sibling module's are free functions because there the reduction has none.
 
 use alloc::vec::Vec;
+use core::borrow::Borrow;
 
 use p3_binary_field::TowerLevel;
 use p3_challenger::fs::TranscriptField;
@@ -379,7 +380,10 @@ impl<EF: TowerLevel> BitRingSwitch<EF> {
     /// Repeating that selection leaves exactly the slot the claim addresses.
     ///
     /// The slot is copied out of the packing, and the crossing into `R` runs over that copy.
-    fn restricted_packing<R: FromTable<EF>>(&self, packing: &BitPacking<EF>) -> Poly<R> {
+    fn restricted_packing<R: FromTable<EF>, S: Borrow<[EF]>>(
+        &self,
+        packing: &BitPacking<EF, S>,
+    ) -> Poly<R> {
         // The support identifies the same contiguous slot in both equality and witness order.
         let (prefix, address) = self.fixed_prefix();
         let len = 1usize << (self.num_variables() - prefix);
@@ -433,7 +437,10 @@ impl<EF: TowerLevel> BitRingSwitch<EF> {
     /// # Errors
     ///
     /// Returns an error unless the packing has the reduction's variables.
-    pub fn tensor(&self, packing: &BitPacking<EF>) -> Result<BitTensor<EF>, BitRingSwitchError>
+    pub fn tensor<S: Borrow<[EF]>>(
+        &self,
+        packing: &BitPacking<EF, S>,
+    ) -> Result<BitTensor<EF>, BitRingSwitchError>
     where
         EF: Send + Sync,
     {
@@ -445,7 +452,11 @@ impl<EF: TowerLevel> BitRingSwitch<EF> {
     /// The element sent, accumulated against the equality table of the supported run.
     ///
     /// Elements outside the run weigh zero, so leaving them out changes no sum.
-    fn tensor_over(packing: &BitPacking<EF>, offset: usize, equality: &Poly<EF>) -> BitTensor<EF>
+    fn tensor_over<S: Borrow<[EF]>>(
+        packing: &BitPacking<EF, S>,
+        offset: usize,
+        equality: &Poly<EF>,
+    ) -> BitTensor<EF>
     where
         EF: Send + Sync,
     {
@@ -514,9 +525,9 @@ impl<EF: TowerLevel> BitRingSwitch<EF> {
     /// # Errors
     ///
     /// Returns an error unless the packing has the reduction's variables.
-    pub fn successor_tensors(
+    pub fn successor_tensors<S: Borrow<[EF]>>(
         &self,
-        packing: &BitPacking<EF>,
+        packing: &BitPacking<EF, S>,
     ) -> Result<Option<SuccessorTensors<EF>>, BitRingSwitchError>
     where
         EF: Send + Sync,
@@ -532,9 +543,9 @@ impl<EF: TowerLevel> BitRingSwitch<EF> {
     /// The successor elements, accumulated against the equality table of the supported run.
     ///
     /// `None` unless the reduction sends successor elements.
-    fn successor_tensors_over(
+    fn successor_tensors_over<S: Borrow<[EF]>>(
         &self,
-        packing: &BitPacking<EF>,
+        packing: &BitPacking<EF, S>,
         offset: usize,
         equality: &Poly<EF>,
     ) -> Option<SuccessorTensors<EF>>
@@ -1133,15 +1144,16 @@ impl<EF: TranscriptField + TowerLevel> BitRingSwitch<EF> {
     /// # Panics
     ///
     /// Panics unless the packing has the variables the evaluation point leaves.
-    pub fn prove<R, Challenger>(
+    pub fn prove<R, Challenger, S>(
         &self,
-        packing: &BitPacking<EF>,
+        packing: &BitPacking<EF, S>,
         challenger: &mut Challenger,
     ) -> (BitRingSwitchProof<EF>, Point<EF>, EF)
     where
         EF: Send + Sync,
         R: IntoTranscriptField<EF>,
         Challenger: FieldChallenger<EF> + GrindingChallenger<Witness = EF>,
+        S: Borrow<[EF]>,
     {
         let max_rounds = self.num_variables();
         assert_eq!(
@@ -1173,7 +1185,7 @@ impl<EF: TranscriptField + TowerLevel> BitRingSwitch<EF> {
             .expect("the transcript draws what the reduction's kind batches with");
         // A Boolean prefix is a public slot address.
         // Restricting to that slot removes one sumcheck round per address bit.
-        let restricted = self.restricted_packing::<R>(packing);
+        let restricted = self.restricted_packing::<R, _>(packing);
         let rounds = restricted.num_variables();
         let weights = batch.weights_over::<R>(&equality);
         drop(equality);
@@ -1801,7 +1813,7 @@ mod tests {
                 // It restores the address before handing the point to the commitment.
                 let claim = embedded(&witness).eval_base(&r);
                 let (proof, surviving_point, surviving_value) =
-                    reduction.prove::<EF, _>(&packing, &mut challenger());
+                    reduction.prove::<EF, _, _>(&packing, &mut challenger());
                 assert_eq!(
                     proof.sumcheck.num_rounds(),
                     reduction.num_variables() - prefix
@@ -1854,7 +1866,7 @@ mod tests {
         let claim = embedded(&witness).eval_base(&r);
 
         let mut prover_chal = challenger();
-        let (proof, r_prime_p, s_prime_p) = reduction.prove::<EF, _>(&packing, &mut prover_chal);
+        let (proof, r_prime_p, s_prime_p) = reduction.prove::<EF, _, _>(&packing, &mut prover_chal);
 
         let mut verifier_chal = challenger();
         let (r_prime_v, s_prime_v) = reduction.verify(&proof, claim, &mut verifier_chal).unwrap();
@@ -1873,7 +1885,7 @@ mod tests {
         let reduction = BitRingSwitch::new(&r).unwrap();
         let claim = embedded(&witness).eval_base(&r);
 
-        let (proof, _, _) = reduction.prove::<EF, _>(&packing, &mut challenger());
+        let (proof, _, _) = reduction.prove::<EF, _, _>(&packing, &mut challenger());
 
         let err = reduction
             .verify(&proof, claim + EF::ONE, &mut challenger())
@@ -1895,7 +1907,7 @@ mod tests {
         let r = Point::<EF>::rand(&mut SmallRng::seed_from_u64(0x7A18), 8);
         let reduction = BitRingSwitch::new(&r).unwrap();
         let claim = embedded(&witness).eval_base(&r);
-        let (honest, _, _) = reduction.prove::<EF, _>(&packing, &mut challenger());
+        let (honest, _, _) = reduction.prove::<EF, _, _>(&packing, &mut challenger());
 
         // Case 1: add one to a row.
         //
@@ -1996,7 +2008,7 @@ mod tests {
         let reduction = BitRingSwitch::new(&r).unwrap();
         let claim = embedded(&witness).eval_base(&r);
 
-        let (mut proof, _, _) = reduction.prove::<EF, _>(&packing, &mut challenger());
+        let (mut proof, _, _) = reduction.prove::<EF, _, _>(&packing, &mut challenger());
         proof.sumcheck.pow_witnesses.push(EF::ONE);
 
         assert_eq!(
@@ -2024,7 +2036,7 @@ mod tests {
         let r = Point::<EF>::rand(&mut SmallRng::seed_from_u64(0x9108), 8);
         let claim = embedded(&witness).eval_base(&r);
         let reduction = BitRingSwitch::new(&r).unwrap();
-        let (proof, _, _) = reduction.prove::<EF, _>(&packing, &mut challenger());
+        let (proof, _, _) = reduction.prove::<EF, _, _>(&packing, &mut challenger());
 
         let mut moved = r.as_slice().to_vec();
         moved[0] += EF::ONE;
@@ -2054,7 +2066,7 @@ mod tests {
             let reduction = BitRingSwitch::new(&r).unwrap();
             let claim = embedded(&witness).eval_base(&r);
 
-            let (proof, _, s_prime_p) = reduction.prove::<EF, _>(&packing, &mut challenger());
+            let (proof, _, s_prime_p) = reduction.prove::<EF, _, _>(&packing, &mut challenger());
             let (r_prime, s_prime) =
                 reduction.verify(&proof, claim, &mut challenger()).unwrap();
 
@@ -2078,7 +2090,7 @@ mod tests {
             let current = embedded(&witness).eval_base(&r);
             let next = dense_successor_claim(&witness, &r, row_variables);
 
-            let (proof, r_prime_p, s_prime_p) = reduction.prove::<EF, _>(&packing, &mut challenger());
+            let (proof, r_prime_p, s_prime_p) = reduction.prove::<EF, _, _>(&packing, &mut challenger());
             let (r_prime, s_prime) = reduction
                 .verify_readings(&proof, Some(current), Some(next), &mut challenger())
                 .unwrap();
@@ -2263,7 +2275,8 @@ mod tests {
                 let current = cells.eval_base(&r);
                 let next = dense_successor_claim(&witness, &r, row_variables);
 
-                let (proof, r_prime, value) = reduction.prove::<EF, _>(&packing, &mut challenger());
+                let (proof, r_prime, value) =
+                    reduction.prove::<EF, _, _>(&packing, &mut challenger());
                 let verified = reduction
                     .verify_readings(&proof, Some(current), Some(next), &mut challenger())
                     .unwrap();
@@ -2292,10 +2305,10 @@ mod tests {
 
             let mut plain_challenger = challenger();
             let (plain_proof, plain_point, plain_value) =
-                plain.prove::<EF, _>(&packing, &mut plain_challenger);
+                plain.prove::<EF, _, _>(&packing, &mut plain_challenger);
             let mut successor_challenger = challenger();
             let (successor_proof, successor_point, successor_value) =
-                successor.prove::<EF, _>(&packing, &mut successor_challenger);
+                successor.prove::<EF, _, _>(&packing, &mut successor_challenger);
 
             assert_eq!(successor_proof.tensor, plain_proof.tensor);
             assert!(successor_proof.successor.is_none());
@@ -2348,7 +2361,7 @@ mod tests {
             next
         );
 
-        let (proof, r_prime, value) = reduction.prove::<EF, _>(&packing, &mut challenger());
+        let (proof, r_prime, value) = reduction.prove::<EF, _, _>(&packing, &mut challenger());
         assert_eq!(proof.sumcheck.num_rounds(), 2);
         assert_eq!(
             reduction
@@ -2360,7 +2373,7 @@ mod tests {
         // The plain reduction eats the Boolean row coordinate too, which the cap is for.
         let (plain, _, _) = BitRingSwitch::new(&r)
             .unwrap()
-            .prove::<EF, _>(&packing, &mut challenger());
+            .prove::<EF, _, _>(&packing, &mut challenger());
         assert_eq!(plain.sumcheck.num_rounds(), 1);
     }
 
@@ -2377,7 +2390,7 @@ mod tests {
             let reduction = BitRingSwitch::with_successor(&r, row_variables).unwrap();
             let current = embedded(&witness).eval_base(&r);
             let next = dense_successor_claim(&witness, &r, row_variables);
-            let (proof, _, _) = reduction.prove::<EF, _>(&packing, &mut challenger());
+            let (proof, _, _) = reduction.prove::<EF, _, _>(&packing, &mut challenger());
 
             assert_eq!(
                 reduction
@@ -2413,7 +2426,7 @@ mod tests {
         let reduction = BitRingSwitch::with_successor(&r, 6).unwrap();
         let current = embedded(&witness).eval_base(&r);
         let next = dense_successor_claim(&witness, &r, 6);
-        let (honest, _, _) = reduction.prove::<EF, _>(&packing, &mut challenger());
+        let (honest, _, _) = reduction.prove::<EF, _, _>(&packing, &mut challenger());
         let elements = honest.successor.clone().unwrap();
 
         let flipped = |element: &BitTensor<EF>, row: usize, bit: EF| {
@@ -2472,12 +2485,12 @@ mod tests {
 
         let r_sending = successor_point(0xC0DF, 9, 6, Selector::Random);
         let sending = BitRingSwitch::with_successor(&r_sending, 6).unwrap();
-        let (mut missing, _, _) = sending.prove::<EF, _>(&packing, &mut challenger());
+        let (mut missing, _, _) = sending.prove::<EF, _, _>(&packing, &mut challenger());
         let spare = missing.successor.take();
 
         let r_fitting = successor_point(0xC0E0, 9, 2, Selector::Random);
         let fitting = BitRingSwitch::with_successor(&r_fitting, 2).unwrap();
-        let (mut spurious, _, _) = fitting.prove::<EF, _>(&packing, &mut challenger());
+        let (mut spurious, _, _) = fitting.prove::<EF, _, _>(&packing, &mut challenger());
         spurious.successor = spare;
 
         for (reduction, proof, r, expected, actual) in [
@@ -2510,7 +2523,7 @@ mod tests {
         // A plain reduction has no successor view to check a next claim against.
         // A call supplying neither reading would check nothing at all.
         let (reduction, packing, _, _) = fixture(0x2EAD, 32);
-        let (proof, _, _) = reduction.prove::<EF, _>(&packing, &mut challenger());
+        let (proof, _, _) = reduction.prove::<EF, _, _>(&packing, &mut challenger());
 
         assert_eq!(
             reduction
@@ -2585,14 +2598,40 @@ mod tests {
         WideChal,
     ); 2] {
         let mut tower_sponge = WideChal::from_hasher(Vec::new(), Keccak256Hash);
-        let tower = reduction.prove::<BinaryField128, _>(packing, &mut tower_sponge);
+        let tower = reduction.prove::<BinaryField128, _, _>(packing, &mut tower_sponge);
         let mut poly_sponge = WideChal::from_hasher(Vec::new(), Keccak256Hash);
-        let poly = reduction.prove::<Ghash128, _>(packing, &mut poly_sponge);
+        let poly = reduction.prove::<Ghash128, _, _>(packing, &mut poly_sponge);
 
         [
             (tower.0, tower.1, tower.2, tower_sponge),
             (poly.0, poly.1, poly.2, poly_sponge),
         ]
+    }
+
+    #[test]
+    fn a_borrowed_packing_plays_the_owned_packing_transcript() {
+        // Invariant: the store the elements are read from reaches no wire.
+        //
+        // A commitment hands the reduction a view over the table it already holds,
+        // and that is the only route production takes.
+        let (reduction, packing, _, _) = fixture(0x5AE, 16);
+        let borrowed = BitPacking::from_packed(packing.poly().as_view()).unwrap();
+        assert_eq!(borrowed.num_variables(), packing.num_variables());
+
+        let (owned_proof, owned_point, owned_value) =
+            reduction.prove::<EF, _, _>(&packing, &mut challenger());
+        let (borrowed_proof, borrowed_point, borrowed_value) =
+            reduction.prove::<EF, _, _>(&borrowed, &mut challenger());
+
+        assert_eq!(borrowed_proof.tensor, owned_proof.tensor);
+        assert_eq!(borrowed_proof.successor, owned_proof.successor);
+        assert_eq!(
+            borrowed_proof.sumcheck.polynomial_evaluations,
+            owned_proof.sumcheck.polynomial_evaluations
+        );
+        assert_eq!(borrowed_proof.final_eval, owned_proof.final_eval);
+        assert_eq!(borrowed_point, owned_point);
+        assert_eq!(borrowed_value, owned_value);
     }
 
     #[test]
