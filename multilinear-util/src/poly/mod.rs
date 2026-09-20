@@ -687,19 +687,38 @@ where
     ///     p'(x') = (1 - r) * p(0, x') + r * p(1, x')
     /// ```
     ///
-    /// The result has one fewer variable (n - 1).
+    /// The result has one fewer variable and is stored as packed elements.
+    ///
+    /// Requires more than log_2(W) variables, where W is the SIMD lane count.
+    /// Only then does the folded half fill a whole lane group.
+    ///
+    /// Smaller polynomials take the scalar prefix-fold, which leaves the result unpacked.
     ///
     /// # Panics
     ///
-    /// Panics if the polynomial is constant (zero free variables).
+    /// Panics when the polynomial is too small to fill one lane group.
     pub fn fix_prefix_var_to_packed<Ext>(&self, r: Ext) -> Poly<Ext::ExtensionPacking>
     where
         A: Field,
         Ext: ExtensionField<A>,
     {
-        let evals = self.as_slice();
-        assert!(evals.len() > 1, "no free variables");
+        // Number of variables whose evaluations fit in a single SIMD lane group.
+        let log_w = log2_strict_usize(A::Packing::WIDTH);
 
+        // Two constraints stack:
+        //
+        //     packing the evaluations : 2^n must be a whole number of lane groups
+        //     splitting them in half  : (2^n / W) / 2 must be at least one lane group
+        //
+        // Both hold exactly when n > log_2(W).
+        assert!(
+            self.num_variables() > log_w,
+            "fix_prefix_var_to_packed needs more than log2(WIDTH) = {log_w} variables, got {}",
+            self.num_variables()
+        );
+
+        // Evaluations over the full hypercube, in the order the packing expects.
+        let evals = self.as_slice();
         let r = Ext::ExtensionPacking::from(r);
         let poly = A::Packing::pack_slice(evals);
         let (p0, p1) = poly.split_at(poly.len() / 2);
@@ -2166,6 +2185,42 @@ pub(crate) mod test {
             assert_eq!(scalar.num_variables(), packed.num_variables());
             assert_eq!(scalar, packed);
         }
+    }
+
+    #[test]
+    #[should_panic(expected = "fix_prefix_var_to_packed needs more than log2(WIDTH)")]
+    fn test_fix_prefix_var_to_packed_rejects_lane_group_sized_input() {
+        // Exactly one lane group: the folded half would hold no packed element at all.
+        let mut rng = SmallRng::seed_from_u64(0);
+        let k_pack = log2_strict_usize(PackedF::WIDTH);
+        let poly = Poly::<F>::rand(&mut rng, k_pack);
+        let _ = poly.fix_prefix_var_to_packed::<EF>(EF::ONE);
+    }
+
+    #[test]
+    #[cfg(any(
+        target_feature = "avx2",
+        target_feature = "avx512f",
+        target_feature = "neon"
+    ))]
+    #[should_panic(expected = "fix_prefix_var_to_packed needs more than log2(WIDTH)")]
+    fn test_fix_prefix_var_to_packed_rejects_partial_lane_group() {
+        // Invariant: packing needs a whole number of lane groups of evaluations.
+        //
+        // Fixture state: lane count W, polynomial with log_2(W) - 1 variables.
+        //
+        //     evaluations : 2^(log_2(W) - 1) = W / 2
+        //     lane group  : W
+        //     -> half a lane group, so no packed element exists
+        //
+        // Compiled only on SIMD targets.
+        // A scalar target has a lane count of one, which leaves no smaller size to test.
+        let mut rng = SmallRng::seed_from_u64(0);
+        // Variable count that exactly fills one lane group.
+        let k_pack = log2_strict_usize(PackedF::WIDTH);
+        // One variable below that, so the evaluations fill only half a lane group.
+        let poly = Poly::<F>::rand(&mut rng, k_pack - 1);
+        let _ = poly.fix_prefix_var_to_packed::<EF>(EF::ONE);
     }
 
     #[test]
