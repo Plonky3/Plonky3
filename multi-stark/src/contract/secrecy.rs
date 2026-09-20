@@ -54,3 +54,53 @@ impl SecrecyLevel for BindingOnly {
 impl SecrecyLevel for Hiding {
     const SECRECY: Secrecy = Secrecy::Hiding;
 }
+
+#[cfg(test)]
+mod tests {
+    use alloc::vec;
+
+    use p3_keccak::Keccak256Hash;
+
+    use super::*;
+    use crate::contract::error::DeclarationError;
+    use crate::contract::machine::MachineDeclaration;
+    use crate::contract::table::{ColumnCounts, HeightRange, LocalConstraints, TableDeclaration};
+
+    fn table() -> TableDeclaration {
+        TableDeclaration::new(
+            ColumnCounts {
+                committed: 4,
+                preprocessed: 0,
+                public: 1,
+            },
+            LocalConstraints {
+                count: 3,
+                degree: 2,
+            },
+            HeightRange::new(2, 16),
+        )
+    }
+
+    #[test]
+    fn the_two_promises_are_distinguishable() {
+        assert_eq!(BindingOnly::SECRECY, Secrecy::BindingOnly);
+        assert_eq!(Hiding::SECRECY, Secrecy::Hiding);
+        assert_ne!(BindingOnly::SECRECY.tag(), Hiding::SECRECY.tag());
+    }
+
+    #[test]
+    fn the_promise_is_bound_into_the_fingerprint() {
+        // The same tables under a different promise are a different statement.
+        let binding =
+            MachineDeclaration::<BindingOnly, _>::new(Keccak256Hash, vec![table()], 1024).unwrap();
+        let hiding =
+            MachineDeclaration::<Hiding, _>::new(Keccak256Hash, vec![table()], 1024).unwrap();
+
+        let run = binding.run(&[8], 0).unwrap();
+        assert!(binding.run_digest(&run).is_ok());
+        assert_eq!(
+            hiding.run_digest(&run).unwrap_err(),
+            DeclarationError::ForeignRun
+        );
+    }
+}

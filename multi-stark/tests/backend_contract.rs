@@ -8,15 +8,14 @@ use p3_challenger::DuplexChallenger;
 use p3_dft::Radix2DFTSmallBatch;
 use p3_field::extension::BinomialExtensionField;
 use p3_field::{Field, PrimeCharacteristicRing};
+use p3_keccak::Keccak256Hash;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_multi_stark::config::{MultiStarkConfig, PcsError};
-use p3_multi_stark::contract::declaration::{ColumnCounts, DeclarationError, HeightRange};
-use p3_multi_stark::contract::envelope::{
-    BODY_REVISION, ENVELOPE_VERSION, EnvelopeError, HEADER_LEN, SealedVerificationError,
-    verify_sealed,
+use p3_multi_stark::contract::{
+    BODY_REVISION, BindingOnly, ColumnCounts, DeclarationError, ENVELOPE_VERSION, EnvelopeError,
+    HEADER_LEN, HeightRange, Hiding, MachineDeclaration, SealedVerificationError, TableDeclaration,
 };
-use p3_multi_stark::contract::{BindingOnly, Hiding, MachineDeclaration, TableDeclaration};
 use p3_multi_stark::{
     MultiStarkProof, ProverInstance, ProverInstances, VerifierInstance, VerifierInstances, prove,
     setup,
@@ -197,12 +196,12 @@ fn public_values(n: usize) -> [F; 3] {
 }
 
 /// The declaration the machine publishes, derived from the constraint system itself.
-fn declaration() -> MachineDeclaration<BindingOnly> {
+fn declaration() -> MachineDeclaration<BindingOnly, Keccak256Hash> {
     let table = TableDeclaration::from_constraints::<F, EF, FibAir>(
         &FibAir,
         HeightRange::new(FOLDING as u32, 20),
     );
-    MachineDeclaration::new(vec![table], PROOF_BUDGET).unwrap()
+    MachineDeclaration::new(Keccak256Hash, vec![table], PROOF_BUDGET).unwrap()
 }
 
 /// Prove the fixed instance.
@@ -243,8 +242,7 @@ fn check(bytes: &[u8]) -> Result<(), SealedVerificationError<PcsError<BindingCon
 
     let declaration = declaration();
     let run = declaration.run(&[LOG_HEIGHT], 0).unwrap();
-    verify_sealed(
-        &declaration,
+    declaration.verify(
         &run,
         bytes,
         &config,
@@ -288,8 +286,12 @@ fn a_sealed_proof_verifies() {
 fn the_promise_is_part_of_the_type() {
     // The same tables under a different promise are a different statement.
     let binding = declaration();
-    let hiding =
-        MachineDeclaration::<Hiding>::new(binding.tables().to_vec(), PROOF_BUDGET).unwrap();
+    let hiding = MachineDeclaration::<Hiding, _>::new(
+        Keccak256Hash,
+        binding.tables().to_vec(),
+        PROOF_BUDGET,
+    )
+    .unwrap();
     assert_eq!(binding.tables(), hiding.tables());
 
     // A proof sealed under one promise does not open under the other.
@@ -449,20 +451,20 @@ fn the_declared_heights_must_match_the_instances() {
 
     let declaration = declaration();
     let run = declaration.run(&[LOG_HEIGHT], 0).unwrap();
-    let err = verify_sealed(
-        &declaration,
-        &run,
-        &bytes,
-        &config,
-        VerifierInstances::new(vec![VerifierInstance::new(
-            &FibAir,
-            &vk,
-            LOG_HEIGHT - 1,
-            &pis,
-        )]),
-        &mut challenger(),
-    )
-    .unwrap_err();
+    let err = declaration
+        .verify(
+            &run,
+            &bytes,
+            &config,
+            VerifierInstances::new(vec![VerifierInstance::new(
+                &FibAir,
+                &vk,
+                LOG_HEIGHT - 1,
+                &pis,
+            )]),
+            &mut challenger(),
+        )
+        .unwrap_err();
     assert!(matches!(
         err,
         SealedVerificationError::RunDisagreement { .. }
@@ -477,7 +479,9 @@ fn a_statement_declaring_a_lookup_refuses_a_proof_without_one() {
         HeightRange::new(FOLDING as u32, 20),
     )
     .with_local_lookups(1);
-    let declaration = MachineDeclaration::<BindingOnly>::new(vec![table], PROOF_BUDGET).unwrap();
+    let declaration =
+        MachineDeclaration::<BindingOnly, _>::new(Keccak256Hash, vec![table], PROOF_BUDGET)
+            .unwrap();
     let run = declaration.run(&[LOG_HEIGHT], 0).unwrap();
 
     let bytes = declaration.seal(&run, &proof()).unwrap().into_bytes();

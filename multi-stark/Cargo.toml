@@ -32,6 +32,7 @@ p3-maybe-rayon.workspace = true
 p3-multilinear-util.workspace = true
 p3-security.workspace = true
 p3-sumcheck.workspace = true
+p3-symmetric.workspace = true
 p3-util.workspace = true
 postcard = { workspace = true, features = ["alloc"] }
 serde = { workspace = true, features = ["derive", "alloc"] }
@@ -49,7 +50,6 @@ p3-keccak.workspace = true
 p3-merkle-tree.workspace = true
 p3-monty-31.workspace = true
 p3-poseidon2-air.workspace = true
-p3-symmetric.workspace = true
 p3-whir.workspace = true
 proptest.workspace = true
 rand = { workspace = true }
