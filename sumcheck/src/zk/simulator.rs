@@ -45,8 +45,8 @@ use super::verifier::ZkVerifier;
 /// - `encoding`: mask code the masks are drawn from and encoded under.
 /// - `mmcs`: commitment scheme carrying the interleaved mask oracle.
 /// - `rng`: source of the mask messages and of every wire coordinate.
-///   The cryptographic requirement only mirrors the real prover's, so one seeded generator
-///   can drive both sides of a coupling test.
+///   Its cryptographic requirement only mirrors the real prover's.
+///   One seeded generator can therefore drive both sides of a coupling test.
 ///   Simulation runs without the witness and has nothing of its own to hide.
 ///
 /// # Returns
@@ -68,8 +68,9 @@ where
     Enc::Codeword: Matrix<EF>,
     M: Mmcs<EF>,
     Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F> + CanObserve<M::Commitment>,
-    // The requirement matches the real prover's so that a single seeded generator can drive
-    // both sides of a coupling test.
+    // The requirement matches the real prover's.
+    //
+    // One seeded generator can therefore drive both sides of a coupling test.
     //
     // Simulation runs without the witness, so it has nothing of its own to hide.
     R: CryptoRng,
@@ -293,8 +294,8 @@ where
 /// - `encoding`: mask code the masks are drawn from and encoded under.
 /// - `mmcs`: commitment scheme carrying the interleaved mask oracle.
 /// - `rng`: source of the mask messages and of every wire coordinate.
-///   The cryptographic requirement only mirrors the real prover's, so one seeded generator
-///   can drive both sides of a coupling test.
+///   Its cryptographic requirement only mirrors the real prover's.
+///   One seeded generator can therefore drive both sides of a coupling test.
 ///   Simulation runs without the witness and has nothing of its own to hide.
 ///
 /// # Scope

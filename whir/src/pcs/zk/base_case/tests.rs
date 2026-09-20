@@ -351,8 +351,9 @@ fn base_case_rejects_unbound_source_reveal() {
     //
     // Which position trips first is decided by the query-index sampler.
     //
-    // That sampler is driven by the fixture seed, so the position is reproducible but carries
-    // no protocol meaning.
+    // That sampler is driven by the fixture seed.
+    //
+    // The position is reproducible but carries no protocol meaning.
     assert_eq!(err, BaseCaseZkError::SourceSpotCheckFailed { position: 9 });
 }
 

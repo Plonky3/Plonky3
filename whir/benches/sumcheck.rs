@@ -151,12 +151,13 @@ fn run_sumcheck<L: Layout<F, EF>>(prover: L, challenger: &mut Challenger, foldin
 
 /// Mask sampling happens inside the timed region.
 ///
-/// The measurement therefore includes the cost of the generator itself, which for a
-/// cryptographic stream cipher is roughly an order of magnitude per word above a plain
-/// xoshiro-style generator.
+/// The measurement therefore includes the cost of the generator itself.
 ///
-/// Swapping the generator type moves these numbers without any protocol change, so figures
-/// are only comparable across runs that use the same one.
+/// A cryptographic stream cipher costs roughly ten times a xoshiro-style one per word.
+///
+/// Swapping the generator type moves these numbers with no protocol change.
+///
+/// Figures are only comparable across runs that use the same one.
 fn run_zk_sumcheck<L>(
     prover: ZkProver<F, EF, MaskEnc, MaskMmcs, L>,
     challenger: &mut Challenger,

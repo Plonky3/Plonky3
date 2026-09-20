@@ -170,8 +170,9 @@ where
     ///
     /// Callers still have to seed from real entropy.
     ///
-    /// That bound is load-bearing, so the example below pins it: handing in a generator built
-    /// on a fast non-cryptographic algorithm must fail to compile.
+    /// That bound is load-bearing, so the example below pins it.
+    ///
+    /// A generator built on a fast non-cryptographic algorithm must fail to compile.
     ///
     /// ```compile_fail
     /// use p3_challenger::fs::TranscriptField;
@@ -193,8 +194,8 @@ where
     ///     L: ZkLayout<F, EF>,
     ///     Ch: FieldChallenger<F> + GrindingChallenger<Witness = F> + CanObserve<M::Commitment>,
     /// {
-    ///     // Xoshiro256++ is fast and well distributed, but its state is recoverable from
-    ///     // a short run of output, so it cannot be used to mask a witness.
+    ///     // Xoshiro256++ is fast and well distributed, but not a CSPRNG.
+    ///     // Its state is recoverable from a short output run, so it cannot mask a witness.
     ///     let _ = ZkProver::<F, EF, Enc, M, L>::into_sumcheck::<SmallRng, Ch>;
     /// }
     /// ```
