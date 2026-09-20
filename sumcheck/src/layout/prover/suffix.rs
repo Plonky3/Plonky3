@@ -103,6 +103,13 @@ impl<F: Field, EF: ExtensionField<F>> Layout<F, EF> for SuffixProver<F, EF> {
         Witness::new(tables, folding)
     }
 
+    fn write_message(witness: &Witness<F>, _folding: usize, message: &mut [F]) {
+        // The contiguous slot layout is the suffix layout: folding blocks are already
+        // contiguous, so each column slot lands where it belongs.
+        debug_assert_eq!(Self::variable_order(), VariableOrder::Suffix);
+        witness.write_stacked_slots(message);
+    }
+
     fn claims(&self) -> &StackedClaims<F, EF> {
         &self.claims
     }

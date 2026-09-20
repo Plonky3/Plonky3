@@ -64,6 +64,12 @@ pub trait Layout<F: Field, EF: ExtensionField<F>>: Sized {
     /// Builds a witness structure for this layout from source tables.
     fn new_witness(tables: Vec<Table<F>>, folding: usize) -> Witness<F>;
 
+    /// Lays the witness out in this layout's variable order, inside the committed message.
+    ///
+    /// The message arrives zeroed and holds one cell per stacked evaluation. Every cell an
+    /// implementation leaves untouched is committed as zero.
+    fn write_message(witness: &Witness<F>, folding: usize, message: &mut [F]);
+
     /// Returns the shared claim state recorded against the stacked polynomial.
     fn claims(&self) -> &StackedClaims<F, EF>;
 
@@ -99,12 +105,12 @@ pub trait Layout<F: Field, EF: ExtensionField<F>>: Sized {
     {
         // Encode and Merkle-commit the stacked polynomial in the mode's variable order.
         let (root, prover_data) = commit_base(
-            Self::variable_order(),
             encoder,
             mmcs,
-            &witness.poly,
+            witness.num_variables(),
             folding,
             starting_log_inv_rate,
+            |message| Self::write_message(&witness, folding, message),
         );
 
         // The witness is consumed into the layout once its codeword is committed.
@@ -810,7 +816,7 @@ pub(super) mod test_utils {
         let mut prover_challenger = challenger();
         let stacked_num_variables = witness.num_variables();
         // Snapshot the stacked polynomial before the witness is consumed.
-        let stacked_poly = witness.poly().clone();
+        let stacked_poly = witness.stacked_poly();
 
         // Prover: build the selected layout, record openings, add a virtual claim.
         let mut prover_state = L::from_witness(witness);
@@ -1150,7 +1156,7 @@ mod tests {
         assert_eq!(stacked_num_variables, FOLDING + 1);
 
         // Keep the original polynomial for an independent evaluation.
-        let stacked_poly = witness.poly().clone();
+        let stacked_poly = witness.stacked_poly();
 
         // Exercise both concrete and virtual claims.
         let mut prover_challenger = challenger();
@@ -1211,7 +1217,7 @@ mod tests {
         let shapes = table_shapes();
         let stacked_num_variables = witness.num_variables();
         // Keep a copy of the stacked polynomial to cross-check the final fold.
-        let stacked_poly = witness.poly().clone();
+        let stacked_poly = witness.stacked_poly();
         let strategy = SuffixProver::<F, EF>::strategy();
 
         // Mixed schedule: each tuple is (table, current columns, next columns).
@@ -1344,7 +1350,7 @@ mod tests {
         let witness = PrefixProver::<F, EF>::new_witness(build_tables(), FOLDING);
         let shapes = table_shapes();
         let stacked_num_variables = witness.num_variables();
-        let stacked_poly = witness.poly().clone();
+        let stacked_poly = witness.stacked_poly();
         let strategy = PrefixProver::<F, EF>::strategy();
 
         // Mixed schedule: each tuple is (table, current columns, next columns).

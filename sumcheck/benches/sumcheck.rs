@@ -1007,7 +1007,7 @@ fn witness_fill(c: &mut Criterion) {
             |b, columns| {
                 b.iter(|| {
                     let table = materialize_bit_table(black_box(columns), k);
-                    black_box(Witness::new(vec![table], 0))
+                    black_box(Witness::new(vec![table], 0).stacked_poly())
                 });
             },
         );

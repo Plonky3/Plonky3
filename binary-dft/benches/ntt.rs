@@ -430,7 +430,7 @@ fn bench_commit(c: &mut Criterion) {
     use p3_keccak::Keccak256Hash;
     use p3_merkle_tree::MerkleTreeMmcs;
     use p3_multilinear_util::poly::Poly;
-    use p3_sumcheck::commit::commit_base;
+    use p3_sumcheck::commit::{commit_base, write_stacked_message};
     use p3_sumcheck::strategy::VariableOrder;
     use p3_symmetric::{CompressionFunctionFromHasher, SerializingHasher};
 
@@ -461,13 +461,25 @@ fn bench_commit(c: &mut Criterion) {
             for added in [1, 2, 3] {
                 for order in [VariableOrder::Prefix, VariableOrder::Suffix] {
                     let parameter = format!("{order:?}/h{log_height}/w{}/r{added}", 1 << folding);
+                    let num_variables = poly.num_variables();
                     group.bench_function(format!("full/{parameter}"), |b| {
                         b.iter(|| {
-                            commit_base(order, &FullPaddedEncoder, &mmcs, &poly, folding, added)
+                            commit_base(
+                                &FullPaddedEncoder,
+                                &mmcs,
+                                num_variables,
+                                folding,
+                                added,
+                                |message| write_stacked_message(order, &poly, folding, message),
+                            )
                         });
                     });
                     group.bench_function(parameter, |b| {
-                        b.iter(|| commit_base(order, &encoder, &mmcs, &poly, folding, added));
+                        b.iter(|| {
+                            commit_base(&encoder, &mmcs, num_variables, folding, added, |message| {
+                                write_stacked_message(order, &poly, folding, message);
+                            })
+                        });
                     });
                 }
             }
