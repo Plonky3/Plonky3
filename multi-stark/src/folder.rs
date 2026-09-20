@@ -110,6 +110,14 @@ where
 {
 }
 
+/// Constraints weighted by their alpha powers in one dot product.
+///
+/// A ring whose modular reduction is linear over the accumulated representation reduces once
+/// per batch instead of once per constraint, so a wider batch spreads that reduction further.
+/// It also keeps one more constraint in the folder per unit of width, and leaves a longer
+/// tail to weight one at a time when an evaluation ends part way through a batch.
+const ALPHA_BATCH: usize = 8;
+
 /// The two independently batched expression families emitted by one AIR evaluation.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct FolderEvaluations<Acc> {
@@ -146,6 +154,11 @@ pub struct MultilinearFolder<'a, F, Var, Acc> {
     ///
     /// Keeps counting past the end of the powers, so a surplus is reported with a shortfall.
     constraint_index: usize,
+    /// Constraints asserted since the last batched product with their alpha powers.
+    ///
+    /// Position `i` holds constraint `ALPHA_BATCH * q + i` of the batch being filled.
+    /// Unused while the accumulator folds by Horner.
+    pending: [Var; ALPHA_BATCH],
     /// Two-row preprocessed window; zero-width when the AIR has no preprocessed columns.
     pub preprocessed_window: RowWindow<'a, Var>,
     /// Periodic column values at the current evaluation point, one per declared periodic column.
@@ -156,7 +169,8 @@ pub struct MultilinearFolder<'a, F, Var, Acc> {
 
 impl<'a, F, Var, Acc> MultilinearFolder<'a, F, Var, Acc>
 where
-    Acc: PrimeCharacteristicRing,
+    Var: PrimeCharacteristicRing + Copy,
+    Acc: Algebra<Var> + Copy,
 {
     /// Build a folder for a single AIR evaluation.
     ///
@@ -192,6 +206,7 @@ where
             // No precomputed powers until attached; batching folds by Horner.
             alpha_powers: None,
             constraint_index: 0,
+            pending: [Var::ZERO; ALPHA_BATCH],
         }
     }
 
@@ -253,9 +268,26 @@ where
     /// Panics if attached alpha powers do not number one per asserted constraint.
     #[inline]
     #[must_use]
-    pub fn into_accumulator(self) -> Acc {
+    pub fn into_accumulator(mut self) -> Acc {
         self.assert_alpha_power_count();
+        self.drain_pending();
         self.accumulator
+    }
+
+    /// Weight the constraints left below a whole batch and add them to the accumulator.
+    ///
+    /// Each drained slot is emptied, so a second call adds nothing.
+    #[inline]
+    fn drain_pending(&mut self) {
+        let Some(powers) = self.alpha_powers else {
+            return;
+        };
+        // Constraints past the last power were never held, so they leave nothing to drain.
+        let filled = self.constraint_index.min(powers.len());
+        let start = filled - filled % ALPHA_BATCH;
+        for (slot, &power) in powers[start..filled].iter().enumerate() {
+            self.accumulator += power * core::mem::replace(&mut self.pending[slot], Var::ZERO);
+        }
     }
 
     /// Check that attached alpha powers were consumed exactly, one per asserted constraint.
@@ -514,16 +546,27 @@ where
                 // Same sum reached term by term, weighting `C_i` by the precomputed
                 // `alpha^(n-1-i)`.
                 //
-                // The product is `Acc * Var` rather than `Acc * Acc`, which is the cheaper
-                // multiplication whenever the constraint value lives in a smaller ring than
-                // the accumulator.
+                // A whole batch of constraints is held back and weighted in one dot product,
+                // so a ring with a linear reduction pays for it once rather than once per
+                // constraint. The batch the evaluation ends inside is drained on the way out.
                 //
                 // A constraint past the last power is only counted.
                 // The count check at the end of the evaluation then rejects it.
-                if let Some(&power) = powers.get(self.constraint_index) {
-                    self.accumulator += power * x.into();
+                let index = self.constraint_index;
+                self.constraint_index = index + 1;
+                if index < powers.len() {
+                    let slot = index % ALPHA_BATCH;
+                    self.pending[slot] = x.into();
+                    if slot + 1 == ALPHA_BATCH {
+                        let window = powers[index + 1 - ALPHA_BATCH..]
+                            .first_chunk::<ALPHA_BATCH>()
+                            .expect("the powers reach the end of a batch that holds a constraint");
+                        self.accumulator += <Acc as Algebra<Var>>::mixed_dot_product::<ALPHA_BATCH>(
+                            window,
+                            &self.pending,
+                        );
+                    }
                 }
-                self.constraint_index += 1;
             }
         }
     }
@@ -578,7 +621,8 @@ pub struct InteractionMultilinearFolder<'a, F, Var, Acc> {
 
 impl<'a, F, Var, Acc> InteractionMultilinearFolder<'a, F, Var, Acc>
 where
-    Acc: PrimeCharacteristicRing,
+    Var: PrimeCharacteristicRing + Copy,
+    Acc: Algebra<Var> + Copy,
 {
     /// Wrap an ordinary folder so the same AIR evaluation also builds the lookup link.
     ///
@@ -626,6 +670,7 @@ where
         // Disabled constraints never reach the inner folder, so they consume no power.
         if self.constraints_enabled {
             self.inner.assert_alpha_power_count();
+            self.inner.drain_pending();
         }
         // Both families come out of the one pass, batched independently.
         FolderEvaluations {
@@ -1022,6 +1067,59 @@ mod tests {
             .with_alpha_powers(&alpha_powers)
             .eval_air(&FibAir);
         assert_eq!(batched, expected);
+    }
+
+    /// AIR asserting one constraint per column, enough to span more than one alpha batch.
+    ///
+    /// The count is deliberately not a multiple of [`ALPHA_BATCH`], so the evaluation ends
+    /// part way through a batch.
+    struct WideAir;
+
+    /// Columns of [`WideAir`], one per asserted constraint.
+    const WIDE_COLS: usize = 2 * ALPHA_BATCH + 3;
+
+    impl<X> BaseAir<X> for WideAir {
+        fn width(&self) -> usize {
+            WIDE_COLS
+        }
+    }
+
+    impl<AB: AirBuilder> Air<AB> for WideAir {
+        fn eval(&self, builder: &mut AB) {
+            let main = builder.main();
+            let local = main.current_slice();
+            for value in local {
+                builder.assert_zero(*value);
+            }
+        }
+    }
+
+    #[test]
+    fn alpha_batching_matches_horner_across_several_batches() {
+        // Fixture state: one distinct non-zero value per column, so no constraint vanishes
+        // and every alpha power shows up in the batched sum.
+        let local = (0..WIDE_COLS)
+            .map(|i| EF::from_u64(i as u64 + 1))
+            .collect::<Vec<_>>();
+        let next = EF::zero_vec(WIDE_COLS);
+        let pis: [F; 0] = [];
+        let alpha = EF::from_u64(11);
+        let boundary = BoundaryEvals {
+            first: EF::ZERO,
+            last: EF::ZERO,
+            transition: EF::ONE,
+        };
+
+        let horner = TestFolder::new(&local, &next, boundary, &pis, alpha).eval_air(&WideAir);
+
+        let alpha_powers = (0..WIDE_COLS)
+            .map(|i| alpha.exp_u64((WIDE_COLS - 1 - i) as u64))
+            .collect::<Vec<_>>();
+        let batched = TestFolder::new(&local, &next, boundary, &pis, alpha)
+            .with_alpha_powers(&alpha_powers)
+            .eval_air(&WideAir);
+
+        assert_eq!(batched, horner);
     }
 
     /// Single-column AIR that ties the main column to a preprocessed and a periodic column.

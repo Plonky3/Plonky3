@@ -20,10 +20,11 @@ use p3_field::{Algebra, Field, PrimeCharacteristicRing};
 /// `Algebra<F>` for it here is not subject to that conflict.
 ///
 /// The trait items required to satisfy `p3_air::AirBuilder`'s bounds are
-/// forwarded to `P`, as is `bool_check`, which AIRs call on every booleanity
-/// constraint. Every other [`PrimeCharacteristicRing`] method falls back to
-/// its default (mathematically correct, not necessarily as fast as `P`'s own
-/// overrides for that operation).
+/// forwarded to `P`, as are `bool_check`, which AIRs call on every booleanity
+/// constraint, and `dot_product`, which carries a packing's delayed reduction.
+/// Every other [`PrimeCharacteristicRing`] method falls back to its default
+/// (mathematically correct, not necessarily as fast as `P`'s own overrides for
+/// that operation).
 #[repr(transparent)]
 pub struct PackedExt<F, P>(pub P, PhantomData<fn() -> F>);
 
@@ -38,6 +39,14 @@ impl<F, P> PackedExt<F, P> {
     #[inline]
     pub const fn new(p: P) -> Self {
         Self(p, PhantomData)
+    }
+
+    /// An array of wrappers read as the array of packings it holds.
+    #[inline]
+    const fn as_packings<const N: usize>(values: &[Self; N]) -> &[P; N] {
+        // SAFETY: the wrapper is `repr(transparent)` over `P` beside a zero-sized marker, so
+        // an array of wrappers has the layout of an array of packings.
+        unsafe { &*core::ptr::from_ref(values).cast::<[P; N]>() }
     }
 }
 
@@ -180,6 +189,16 @@ impl<F, P: PrimeCharacteristicRing + Copy> PrimeCharacteristicRing for PackedExt
     fn exp_const_u64<const POWER: u64>(&self) -> Self {
         Self::new(self.0.exp_const_u64::<POWER>())
     }
+
+    #[inline]
+    fn dot_product<const N: usize>(u: &[Self; N], v: &[Self; N]) -> Self {
+        // This is where a delayed reduction lives, so the default sum of products would
+        // throw away whatever the packing does with a whole batch at once.
+        Self::new(P::dot_product::<N>(
+            Self::as_packings(u),
+            Self::as_packings(v),
+        ))
+    }
 }
 
 impl<F: Field, P: Algebra<F::Packing> + Copy> From<F> for PackedExt<F, P> {
@@ -235,3 +254,35 @@ impl<F: Field, P: Algebra<F::Packing> + Copy> MulAssign<F> for PackedExt<F, P> {
 }
 
 impl<F: Field, P: Algebra<F::Packing> + Copy> Algebra<F> for PackedExt<F, P> {}
+
+#[cfg(test)]
+mod tests {
+    use p3_binary_field::{BinaryField128, Ghash128};
+    use p3_field::PackedValue;
+    use rand::rngs::SmallRng;
+    use rand::{RngExt, SeedableRng};
+
+    use super::*;
+
+    /// Wrappers over the packing of a representation field.
+    type Packed = PackedExt<BinaryField128, <Ghash128 as Field>::Packing>;
+
+    /// Terms of the dot products below.
+    const TERMS: usize = 8;
+
+    /// Draw one wrapper with an independent value in every lane.
+    fn sample(rng: &mut SmallRng) -> Packed {
+        PackedExt::new(PackedValue::from_fn(|_| rng.random::<Ghash128>()))
+    }
+
+    #[test]
+    fn the_dot_product_matches_the_sum_of_products() {
+        let mut rng = SmallRng::seed_from_u64(1);
+        let u: [Packed; TERMS] = core::array::from_fn(|_| sample(&mut rng));
+        let v: [Packed; TERMS] = core::array::from_fn(|_| sample(&mut rng));
+
+        let want = (0..TERMS).map(|i| u[i] * v[i]).sum::<Packed>();
+
+        assert_eq!(Packed::dot_product::<TERMS>(&u, &v).0, want.0);
+    }
+}
