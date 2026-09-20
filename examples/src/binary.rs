@@ -498,12 +498,15 @@ impl From<VerificationError<PcsError<BinaryStarkConfig<2>>>> for BinaryProofErro
     }
 }
 
-/// How a harness configuration's proving and verification failures surface as a
-/// [`BinaryProofError`].
+/// What the harness needs of a configuration beyond [`MultiStarkConfig`]: the leaf geometry it
+/// resolved, and how its proving and verification failures surface as a [`BinaryProofError`].
 ///
 /// Coherence cannot tell the two configurations' error projections apart, so `From` impls for
 /// both would overlap.
-trait HarnessErrors: MultiStarkConfig {
+trait HarnessConfig: MultiStarkConfig {
+    /// Field elements each Merkle leaf of the base codeword packs.
+    fn leaf_elements(&self) -> usize;
+
     /// Wrap a failure from `setup` or proving.
     fn prove_error(error: ProvingError<PcsProverError<Self>>) -> BinaryProofError;
 
@@ -511,11 +514,15 @@ trait HarnessErrors: MultiStarkConfig {
     fn verify_error(error: VerificationError<PcsError<Self>>) -> BinaryProofError;
 }
 
-impl<const N: usize, Ntt, H> HarnessErrors for BinaryStarkConfig<N, Ntt, H>
+impl<const N: usize, Ntt, H> HarnessConfig for BinaryStarkConfig<N, Ntt, H>
 where
     Ntt: AdditiveNtt<F> + Sync,
     H: HarnessHash,
 {
+    fn leaf_elements(&self) -> usize {
+        self.leaf_elements
+    }
+
     fn prove_error(error: ProvingError<PcsProverError<Self>>) -> BinaryProofError {
         BinaryProofError::Prove(error)
     }
@@ -525,7 +532,11 @@ where
     }
 }
 
-impl<const N: usize, H: HarnessHash> HarnessErrors for BooleanStarkConfig<N, H> {
+impl<const N: usize, H: HarnessHash> HarnessConfig for BooleanStarkConfig<N, H> {
+    fn leaf_elements(&self) -> usize {
+        self.leaf_elements
+    }
+
     fn prove_error(error: ProvingError<PcsProverError<Self>>) -> BinaryProofError {
         BinaryProofError::BooleanProve(error)
     }
@@ -752,8 +763,7 @@ where
         options.leaf_elements,
         ntt,
     )?;
-    let leaf_elements = config.leaf_elements();
-    prove_and_verify(&config, air, shape, options, leaf_elements, backend, || {
+    prove_and_verify(&config, air, shape, options, backend, || {
         Table::new(trace.transpose())
     })
 }
@@ -844,32 +854,27 @@ where
         options.folding,
         options.leaf_elements,
     )?;
-    let leaf_elements = config.leaf_elements();
-    prove_and_verify(&config, air, shape, options, leaf_elements, backend, || {
-        trace
-    })
+    prove_and_verify(&config, air, shape, options, backend, || trace)
 }
 
 /// Proves and verifies `air` against `trace` under `config`, reporting size and timing
 /// measurements.
 ///
 /// The statement's security is assessed once against `options.security_bits` before proving,
-/// so the timed phases are the plain prover and verifier. `leaf_elements` is what `config`
-/// resolved its Merkle grouping to, reported alongside the measurements.
-#[allow(clippy::too_many_arguments)]
+/// so the timed phases are the plain prover and verifier. The Merkle grouping `config` resolved
+/// is reported alongside the measurements.
 fn prove_and_verify<A, C, H>(
     config: &C,
     air: &A,
     shape: TableShape,
     options: BinaryProofOptions,
-    leaf_elements: usize,
     backend: Backend,
     prepare_table: impl FnOnce() -> Table<F>,
 ) -> Result<BinaryProofReport, BinaryProofError>
 where
     A: BinaryAir,
     H: HarnessHash,
-    C: HarnessErrors + MultiStarkConfig<Val = F, Challenge = F, Challenger = Challenger<H>>,
+    C: HarnessConfig + MultiStarkConfig<Val = F, Challenge = F, Challenger = Challenger<H>>,
     C::Pcs: PrescribedPointPcs<F, Challenger<H>>,
     Challenger<H>: CanObserve<Commitment<C>>,
     Commitment<C>: Clone,
@@ -949,7 +954,7 @@ where
         width,
         stacked_variables: config.pcs().num_vars(),
         hash: options.hash,
-        leaf_elements,
+        leaf_elements: config.leaf_elements(),
         requested_leaf_elements: options.leaf_elements,
         proof_bytes,
         prove_seconds,
