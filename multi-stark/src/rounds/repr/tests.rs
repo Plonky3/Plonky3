@@ -107,3 +107,35 @@ fn a_lane_group_read_from_a_column_is_the_one_its_lanes_give() {
         assert_eq!(read.0.as_slice(), lanewise.0.as_slice(), "row {row}");
     }
 }
+
+#[test]
+fn a_lane_group_leaves_the_column_only_in_the_last_lane_of_the_last_group() {
+    for log_evals in 1..10 {
+        let num_evals = 1 << log_evals;
+        let half = num_evals / 2;
+        for lanes in [1, 2, 4, 8, 16] {
+            if half % lanes != 0 {
+                continue;
+            }
+            let groups = half / lanes;
+            for group in 0..groups {
+                let s = group * lanes;
+                let in_column = next_rows_in_column(s, half, num_evals, lanes);
+
+                // The group's last lane reads next row `s + half + lanes`.
+                assert_eq!(
+                    in_column,
+                    s + half + lanes < num_evals,
+                    "evals {num_evals}, lanes {lanes}, group {group}"
+                );
+
+                // Every group but the last stays inside the column.
+                assert_eq!(
+                    in_column,
+                    group + 1 < groups,
+                    "evals {num_evals}, lanes {lanes}, group {group}"
+                );
+            }
+        }
+    }
+}
