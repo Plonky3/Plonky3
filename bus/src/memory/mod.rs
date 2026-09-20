@@ -1,12 +1,18 @@
 //! Read-only offline memory checking over the binary-native bus.
 //!
-//! Every array entry pushes `(address, 1, value)` once.
-//! Every read pulls `(address, count, value)` and pushes `(address, g * count, value)`.
-//! Every array entry finally pulls `(address, final_count, value)` once.
+//! Every array entry is pushed once at unit count and pulled once at the count it reached.
 //!
-//! Balance proves membership when every read count is nonzero and fewer than `ord(g)` reads occur.
+//! Every read pulls its current count and pushes the next generator multiple of it.
 //!
-//! Product reduction returns leaf claims that still require commitment authentication.
+//! Balance proves membership when every read count is nonzero and fewer reads occur than the generator orbit allows.
+//!
+//! The declarations the read helper emits only fix the tuple layout and publish how many reads the statement covers.
+//!
+//! Seeds, finalization, and the nonzero-count tree exist only on the materialized path, whose three-tree reduction lives here.
+//!
+//! The two-tree reduction a whole bus plan derives has no slot for a count tree, so a bus carrying read-only memory must be left out of it.
+//!
+//! Reduction returns leaf claims that still require commitment authentication.
 
 use alloc::string::ToString;
 use alloc::vec::Vec;
@@ -14,23 +20,33 @@ use core::marker::PhantomData;
 use core::num::NonZeroUsize;
 
 use num_bigint::BigUint;
+use p3_challenger::FieldChallenger;
+use p3_challenger::fs::{DomainSeparator, FieldUnit, InteractionPattern, TranscriptField};
 use p3_field::{Dup, ExtensionField, Field};
 use p3_security::SecurityTerm;
 use p3_security::bus::{BusSecurityModel, ProductGkrSecurityProfile};
 
+use crate::leaf::equality_weights;
 use crate::{
     BusActivation, BusDirection, BusInteractionBuilder, BusPlan, BusTupleSlot, ProductGkrOutput,
-    ProductGkrRootShape, ProductGkrShape, RecordToken,
+    ProductGkrProof, ProductGkrRootShape, ProductGkrShape,
 };
 
 mod error;
 
 pub use error::ReadOnlyMemoryError;
 
+/// Version byte bound into the memory statement seed.
+const STATEMENT_VERSION: u8 = 1;
+
+/// Protocol name bound into the memory statement seed.
+const STATEMENT_NAME: &[u8] = b"p3-bus-read-only-memory";
+
 /// AIR interface for one read-only array access.
 ///
 /// A read consumes its current count and produces the next generator-orbit count.
-/// Both interactions retain structural direction metadata in characteristic two.
+///
+/// These declarations are not the leaves the reduction proves, only the tuple layout and the read count it covers.
 pub trait ReadOnlyMemoryInteractionBuilder: BusInteractionBuilder
 where
     Self::F: Field,
@@ -52,25 +68,13 @@ where
         let pull = core::iter::once(address.dup())
             .chain(core::iter::once(count.dup()))
             .chain(values.iter().map(Dup::dup));
-        self.record_bus_interaction(
-            RecordToken(()),
-            bus_name,
-            BusDirection::Pull,
-            pull,
-            BusActivation::Always,
-        );
+        self.push_bus_interaction(bus_name, BusDirection::Pull, pull, BusActivation::Always);
 
         // Multiplying by the full-order generator advances one logical count.
         let push = core::iter::once(address)
             .chain(core::iter::once(count * Self::F::GENERATOR))
             .chain(values);
-        self.record_bus_interaction(
-            RecordToken(()),
-            bus_name,
-            BusDirection::Push,
-            push,
-            BusActivation::Always,
-        );
+        self.push_bus_interaction(bus_name, BusDirection::Push, push, BusActivation::Always);
     }
 }
 
@@ -81,19 +85,43 @@ where
 {
 }
 
+/// Value components of the seeded array, one borrowed column per component.
+#[derive(Clone, Copy, Debug)]
+pub struct MemoryTableValues<'a, F>(pub &'a [&'a [F]]);
+
+/// Count reached by each array entry after all reads.
+#[derive(Clone, Copy, Debug)]
+pub struct MemoryFinalCounts<'a, F>(pub &'a [F]);
+
+/// Address returned for each read event.
+#[derive(Clone, Copy, Debug)]
+pub struct MemoryReadAddresses<'a, F>(pub &'a [F]);
+
+/// Count held by each read event before it advances.
+#[derive(Clone, Copy, Debug)]
+pub struct MemoryReadCounts<'a, F>(pub &'a [F]);
+
+/// Value components returned by the reads, one borrowed column per component.
+#[derive(Clone, Copy, Debug)]
+pub struct MemoryReadValues<'a, F>(pub &'a [&'a [F]]);
+
 /// Borrowed columns for one read-only array and all reads made from it.
+///
+/// The first two are indexed by array entry and the last three by read event.
+///
+/// Each role has its own wrapper because two columns of equal height would otherwise be interchangeable at the call site.
 #[derive(Clone, Copy, Debug)]
 pub struct ReadOnlyMemoryColumns<'a, F> {
     /// Value components of the seeded array.
-    pub table: &'a [&'a [F]],
-    /// Address returned for each read event.
-    pub read_addresses: &'a [F],
-    /// Count before each read event advances it.
-    pub read_counts: &'a [F],
-    /// Value components returned for each read event.
-    pub read_values: &'a [&'a [F]],
+    pub table: MemoryTableValues<'a, F>,
     /// Count reached by each array entry after all reads.
-    pub final_counts: &'a [F],
+    pub final_counts: MemoryFinalCounts<'a, F>,
+    /// Address returned for each read event.
+    pub read_addresses: MemoryReadAddresses<'a, F>,
+    /// Count before each read event advances it.
+    pub read_counts: MemoryReadCounts<'a, F>,
+    /// Value components returned for each read event.
+    pub read_values: MemoryReadValues<'a, F>,
 }
 
 /// Product leaves for bus balance and the read-count nonzero check.
@@ -110,9 +138,9 @@ pub struct ReadOnlyMemoryLeaves<EF> {
 impl<EF: Field> ReadOnlyMemoryLeaves<EF> {
     /// Returns the three product inputs in their protocol order.
     ///
-    /// The first two roots must be equal.
-    /// The final root must be nonzero.
-    /// Callers should check both conditions before invoking a prover that assumes shared roots.
+    /// The first two roots must be equal and the final root must be nonzero.
+    ///
+    /// Callers should check both before invoking a prover that assumes shared roots.
     #[must_use]
     pub fn product_inputs(&self) -> [&[EF]; 3] {
         // Keep the semantic order fixed for product-root sharing.
@@ -144,14 +172,13 @@ impl<EF: Field> ReadOnlyMemoryLeaves<EF> {
 
 /// Authenticated claims still owed after the product reduction.
 ///
-/// Every evaluation belongs to a distinct table padded with ones up to the shared product height.
-/// The three tables have different non-padding prefixes, so each claim must be authenticated against its own prefix.
+/// Every evaluation belongs to a distinct table padded with ones up to the shared product height, and the three prefixes differ.
 ///
 /// Read factors start at a nonzero index on both bus sides while their counts start at index zero.
+///
 /// Authenticating a count against the bus-side prefix accepts a value unrelated to the counts that appear in the bus factors.
 ///
-/// The address of every seed and finalization factor is a verifier-derived power of the field generator.
-/// A composer must never take that coordinate from a committed column.
+/// The address of every seed and finalization factor is a verifier-derived power of the field generator, never a committed column.
 ///
 /// An all-equal committed address column would make the array multiset-valued and let one read return any stored value.
 #[must_use = "leaf claims must be tied to committed columns"]
@@ -193,16 +220,17 @@ pub struct ReadOnlyMemoryPlan<F: Field> {
 impl<F: Field> ReadOnlyMemoryPlan<F> {
     /// Derives a read-only memory statement from one named bus.
     ///
-    /// Payload slots are interpreted as address, count, then value components.
-    /// Array addresses and counts use powers of the field's multiplicative generator.
+    /// Payload slots are interpreted as address, count, then value components, all over powers of the field's multiplicative generator.
     ///
-    /// The table size may fill the generator orbit exactly.
-    /// The read count must be strictly smaller than that orbit.
-    /// This strict bound prevents a forged count cycle from wrapping.
+    /// The table size may fill the generator orbit exactly, while the read count must be strictly smaller so that a forged count cycle cannot wrap.
+    ///
+    /// The read count must also equal the number of rows declared on that bus in each direction.
+    ///
+    /// That rejects a statement unrelated to the reads the AIRs declare, and a bus already carrying seed or finalization declarations of its own.
     ///
     /// # Errors
     ///
-    /// Returns an error for a missing bus, a malformed tuple, or an unsafe orbit bound.
+    /// Returns an error for a missing bus, a malformed tuple, a read count the bus does not declare, or an unsafe orbit bound.
     pub fn new(
         bus_plan: &BusPlan,
         bus_name: &str,
@@ -229,6 +257,25 @@ impl<F: Field> ReadOnlyMemoryPlan<F> {
                 actual: payload_width,
                 minimum: 2,
             });
+        }
+
+        // The helper declares one pull and one push per read, so each side must total the read count.
+        for direction in [BusDirection::Push, BusDirection::Pull] {
+            let declared = bus_plan
+                .blocks(direction)
+                .iter()
+                .filter(|block| block.bus == bus)
+                .try_fold(0usize, |total, block| {
+                    total.checked_add(1usize << block.log_height)
+                })
+                .ok_or(ReadOnlyMemoryError::FactorCountOverflow)?;
+            if declared != read_len {
+                return Err(ReadOnlyMemoryError::DeclaredReadCountMismatch {
+                    name: bus_name.to_string(),
+                    expected: read_len,
+                    actual: declared,
+                });
+            }
         }
 
         // The field contract makes its distinguished element a full-order generator.
@@ -305,11 +352,40 @@ impl<F: Field> ReadOnlyMemoryPlan<F> {
         self.product_shape
     }
 
+    /// Binds every public dimension of this statement into a transcript.
+    ///
+    /// The reduction transcript otherwise separates only on the padded tree height, so two statements whose factor counts round to the same power of two would share it.
+    ///
+    /// Both reduction entry points call this, and a composer must call it once more before sampling the fingerprint challenge that is drawn outside this crate.
+    pub fn observe_statement<Challenger>(&self, challenger: &mut Challenger)
+    where
+        F: TranscriptField,
+        Challenger: FieldChallenger<F>,
+    {
+        // An empty step sequence contributes a seed and no message schedule.
+        let mut separator = DomainSeparator::<FieldUnit<F>>::new(
+            STATEMENT_VERSION,
+            STATEMENT_NAME,
+            InteractionPattern::new(Vec::new()).expect("an empty step sequence is well formed"),
+        );
+
+        // Length-delimited bytes bind each dimension injectively even in characteristic two.
+        for dimension in [
+            self.table_len,
+            self.read_len,
+            self.value_width,
+            self.tuple_variables,
+        ] {
+            separator.instance(&(dimension as u64).to_le_bytes());
+        }
+        separator.seed(challenger);
+    }
+
     /// Materializes the two bus sides and the count-product leaves.
     ///
-    /// The named-bus identity comes from the enclosing bus plan.
-    /// Direction remains structural metadata through separate output vectors.
-    /// Both fingerprint challenges must be sampled after every source column is committed.
+    /// The named-bus identity comes from the enclosing bus plan, and direction stays structural through separate output vectors.
+    ///
+    /// Both fingerprint challenges must be sampled after every source column is committed and after this statement is bound to the transcript.
     ///
     /// # Errors
     ///
@@ -369,11 +445,11 @@ impl<F: Field> ReadOnlyMemoryPlan<F> {
         // Seed and finalize each valid pair at matching generator-derived addresses.
         let mut address = F::ONE;
         for row in 0..self.table_len {
-            pushes.push(factor(address, F::ONE, columns.table, row));
+            pushes.push(factor(address, F::ONE, columns.table.0, row));
             pulls.push(factor(
                 address,
-                columns.final_counts[row],
-                columns.table,
+                columns.final_counts.0[row],
+                columns.table.0,
                 row,
             ));
             address *= F::GENERATOR;
@@ -381,13 +457,13 @@ impl<F: Field> ReadOnlyMemoryPlan<F> {
 
         // A read consumes its current count and produces the next orbit element.
         for row in 0..self.read_len {
-            let address = columns.read_addresses[row];
-            let count = columns.read_counts[row];
-            pulls.push(factor(address, count, columns.read_values, row));
+            let address = columns.read_addresses.0[row];
+            let count = columns.read_counts.0[row];
+            pulls.push(factor(address, count, columns.read_values.0, row));
             pushes.push(factor(
                 address,
                 F::GENERATOR * count,
-                columns.read_values,
+                columns.read_values.0,
                 row,
             ));
             counts.push(EF::from(count));
@@ -400,15 +476,77 @@ impl<F: Field> ReadOnlyMemoryPlan<F> {
         })
     }
 
-    /// Converts a verified three-tree reduction into claims for commitment authentication.
-    ///
-    /// This checks bus balance and the nonzero count root.
-    /// It does not authenticate any returned leaf evaluation.
+    /// Binds this statement, reduces the three trees, and returns the claims still owed.
     ///
     /// # Errors
     ///
-    /// Returns an error for malformed dimensions or failed root obligations.
-    pub fn claims<EF: ExtensionField<F>>(
+    /// Returns an error when the leaves fail their deterministic root obligations.
+    pub fn prove<EF, Challenger>(
+        &self,
+        leaves: &ReadOnlyMemoryLeaves<EF>,
+        challenger: &mut Challenger,
+    ) -> Result<(ProductGkrProof<EF>, ReadOnlyMemoryClaims<EF>), ReadOnlyMemoryError>
+    where
+        F: TranscriptField,
+        EF: ExtensionField<F>,
+        Challenger: FieldChallenger<F>,
+    {
+        // The product prover panics on a false shared-root statement, so reject one here.
+        leaves.check_products()?;
+        self.observe_statement(challenger);
+        let (proof, output) = ProductGkrProof::prove::<F, _>(
+            &leaves.product_inputs(),
+            self.product_shape,
+            challenger,
+        );
+        Ok((proof, self.claims(output)?))
+    }
+
+    /// Binds this statement, verifies the three-tree reduction, and returns the claims still owed.
+    ///
+    /// This checks bus balance and the nonzero count root, and authenticates no leaf evaluation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for a malformed proof, a failed reduction, or a failed root obligation.
+    pub fn verify<EF, Challenger>(
+        &self,
+        proof: &ProductGkrProof<EF>,
+        challenger: &mut Challenger,
+    ) -> Result<ReadOnlyMemoryClaims<EF>, ReadOnlyMemoryError>
+    where
+        F: TranscriptField,
+        EF: ExtensionField<F>,
+        Challenger: FieldChallenger<F>,
+    {
+        // Prover and verifier bind the same dimensions before replaying the reduction.
+        self.observe_statement(challenger);
+        let output = proof.verify::<F, _>(self.product_shape, challenger)?;
+        self.claims(output)
+    }
+
+    /// Builds the union-bound term consumed by a protocol security report.
+    ///
+    /// The result covers tuple compression and the three-tree product reduction, while count-orbit safety and root checks are deterministic.
+    ///
+    /// Commitment binding, leaf-claim authentication, and fixing the memory dimensions before the fingerprint challenge remain caller obligations.
+    #[must_use]
+    pub fn security_term(&self, field_bits: NonZeroUsize) -> SecurityTerm {
+        // Compose every random experiment as one protocol extra.
+        self.security_model(field_bits).combined_term()
+    }
+
+    /// Builds separately labelled terms for diagnostic reporting.
+    ///
+    /// These terms describe one union bound and must not be charged again separately.
+    #[must_use]
+    pub fn security_components(&self, field_bits: NonZeroUsize) -> Vec<SecurityTerm> {
+        // Preserve labels so parameter reports show every error source.
+        self.security_model(field_bits).components()
+    }
+
+    /// Converts a verified three-tree reduction into claims for commitment authentication.
+    fn claims<EF: ExtensionField<F>>(
         &self,
         output: ProductGkrOutput<EF>,
     ) -> Result<ReadOnlyMemoryClaims<EF>, ReadOnlyMemoryError> {
@@ -453,47 +591,27 @@ impl<F: Field> ReadOnlyMemoryPlan<F> {
         })
     }
 
-    /// Builds the union-bound term consumed by a protocol security report.
-    ///
-    /// The result covers tuple compression and the three-tree product reduction.
-    /// Count-orbit safety and root checks are deterministic obligations.
-    /// Commitment binding and leaf-claim authentication remain caller obligations.
-    #[must_use]
-    pub fn security_term(&self, field_bits: NonZeroUsize) -> SecurityTerm {
-        // Compose every random experiment as one protocol extra.
-        self.security_model(field_bits).combined_term()
-    }
-
-    /// Builds separately labelled terms for diagnostic reporting.
-    ///
-    /// These terms describe one union bound and must not be charged again separately.
-    #[must_use]
-    pub fn security_components(&self, field_bits: NonZeroUsize) -> Vec<SecurityTerm> {
-        // Preserve labels so parameter reports show every error source.
-        self.security_model(field_bits).components()
-    }
-
     /// Checks all borrowed column dimensions before leaf generation.
     fn validate_columns(
         &self,
         columns: ReadOnlyMemoryColumns<'_, F>,
     ) -> Result<(), ReadOnlyMemoryError> {
         // Table and read values must carry the tuple's declared component count.
-        if columns.table.len() != self.value_width {
+        if columns.table.0.len() != self.value_width {
             return Err(ReadOnlyMemoryError::TableWidthMismatch {
                 expected: self.value_width,
-                actual: columns.table.len(),
+                actual: columns.table.0.len(),
             });
         }
-        if columns.read_values.len() != self.value_width {
+        if columns.read_values.0.len() != self.value_width {
             return Err(ReadOnlyMemoryError::ReadWidthMismatch {
                 expected: self.value_width,
-                actual: columns.read_values.len(),
+                actual: columns.read_values.0.len(),
             });
         }
 
         // Each value component spans its corresponding public row domain.
-        for (column, values) in columns.table.iter().enumerate() {
+        for (column, values) in columns.table.0.iter().enumerate() {
             if values.len() != self.table_len {
                 return Err(ReadOnlyMemoryError::TableHeightMismatch {
                     column,
@@ -502,7 +620,7 @@ impl<F: Field> ReadOnlyMemoryPlan<F> {
                 });
             }
         }
-        for (column, values) in columns.read_values.iter().enumerate() {
+        for (column, values) in columns.read_values.0.iter().enumerate() {
             if values.len() != self.read_len {
                 return Err(ReadOnlyMemoryError::ReadHeightMismatch {
                     column,
@@ -513,22 +631,22 @@ impl<F: Field> ReadOnlyMemoryPlan<F> {
         }
 
         // Scalar metadata columns follow the same public dimensions.
-        if columns.read_addresses.len() != self.read_len {
+        if columns.read_addresses.0.len() != self.read_len {
             return Err(ReadOnlyMemoryError::AddressHeightMismatch {
                 expected: self.read_len,
-                actual: columns.read_addresses.len(),
+                actual: columns.read_addresses.0.len(),
             });
         }
-        if columns.read_counts.len() != self.read_len {
+        if columns.read_counts.0.len() != self.read_len {
             return Err(ReadOnlyMemoryError::CountHeightMismatch {
                 expected: self.read_len,
-                actual: columns.read_counts.len(),
+                actual: columns.read_counts.0.len(),
             });
         }
-        if columns.final_counts.len() != self.table_len {
+        if columns.final_counts.0.len() != self.table_len {
             return Err(ReadOnlyMemoryError::FinalCountHeightMismatch {
                 expected: self.table_len,
-                actual: columns.final_counts.len(),
+                actual: columns.final_counts.0.len(),
             });
         }
 
@@ -563,25 +681,6 @@ impl<F: Field> ReadOnlyMemoryPlan<F> {
         )
         .expect("a checked memory plan has valid bus security dimensions")
     }
-}
-
-/// Evaluates the Boolean-cube equality polynomial at every tuple slot.
-fn equality_weights<F: Field>(point: &[F]) -> Vec<F> {
-    // An empty point addresses the sole slot of a width-one tuple.
-    let mut weights = alloc::vec![F::ONE];
-
-    for &coordinate in point {
-        // Existing coordinates remain the low-order address bits.
-        let old_len = weights.len();
-        weights.resize(old_len * 2, F::ZERO);
-        for index in 0..old_len {
-            let weight = weights[index];
-            weights[index] = weight * (F::ONE - coordinate);
-            weights[old_len + index] = weight * coordinate;
-        }
-    }
-
-    weights
 }
 
 #[cfg(test)]

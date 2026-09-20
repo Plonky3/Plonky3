@@ -22,6 +22,7 @@ pub use debug::{
 };
 pub use leaf::{BusDirection, BusLeafDeclaration, BusLeafError, BusLeaves, BusSelector};
 pub use memory::{
+    MemoryFinalCounts, MemoryReadAddresses, MemoryReadCounts, MemoryReadValues, MemoryTableValues,
     ReadOnlyMemoryClaims, ReadOnlyMemoryColumns, ReadOnlyMemoryError,
     ReadOnlyMemoryInteractionBuilder, ReadOnlyMemoryLeaves, ReadOnlyMemoryPlan,
 };

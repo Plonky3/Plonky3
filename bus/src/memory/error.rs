@@ -4,6 +4,8 @@ use alloc::string::String;
 
 use thiserror::Error;
 
+use crate::ProductGkrError;
+
 /// Invalid plans, witnesses, or reduced claims for read-only memory checking.
 #[derive(Clone, Debug, PartialEq, Eq, Error)]
 pub enum ReadOnlyMemoryError {
@@ -22,6 +24,18 @@ pub enum ReadOnlyMemoryError {
         actual: usize,
         /// Slots required before any value components.
         minimum: usize,
+    },
+    /// The statement covers a different number of reads than the bus declares.
+    #[error(
+        "read-only memory bus {name} declares {actual} reads per direction, statement covers {expected}"
+    )]
+    DeclaredReadCountMismatch {
+        /// Caller-owned name used to isolate the array.
+        name: String,
+        /// Read count supplied by the statement.
+        expected: usize,
+        /// Row count declared on one direction of that bus.
+        actual: usize,
     },
     /// A read-only array must seed at least one address.
     #[error("read-only memory requires at least one array entry")]
@@ -147,4 +161,7 @@ pub enum ReadOnlyMemoryError {
         /// Dimension supplied by the reduction.
         actual: usize,
     },
+    /// The three-tree reduction itself failed.
+    #[error("read-only memory product reduction failed: {0}")]
+    ProductReduction(#[from] ProductGkrError),
 }

@@ -110,8 +110,7 @@ impl<EF> BusLeaves<EF> {
     /// An inactive row contributes the multiplicative identity.
     ///
     /// The tuple width is exactly `2^point.len()`.
-    /// Coordinate `k` binds bit `k` of the tuple-slot index.
-    /// Fingerprint coordinates therefore run from the least significant slot bit to the most.
+    /// Coordinate `k` binds bit `k` of the tuple-slot index, so coordinates run from the least significant slot bit to the most.
     /// This function does not separate distinct named buses.
     /// A caller combining buses must reserve tuple slots for an injective domain separator.
     ///
@@ -224,7 +223,8 @@ impl<EF> BusLeaves<EF> {
 }
 
 /// Evaluates the Boolean-cube equality polynomial at every tuple slot.
-fn equality_weights<F: Field>(point: &[F]) -> Vec<F> {
+/// Coordinate `k` binds bit `k` of the slot index, and every fingerprint in this crate shares that one convention.
+pub(crate) fn equality_weights<F: Field>(point: &[F]) -> Vec<F> {
     // The empty point addresses the sole slot of a width-one tuple.
     let mut weights = vec![F::ONE];
 
