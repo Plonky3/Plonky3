@@ -162,9 +162,42 @@ where
     ///
     /// # Randomness
     ///
-    /// Every mask is drawn from `rng`, and the reveals hide the witness only as long as
-    /// that stream is unpredictable. The [`CryptoRng`] bound keeps known
-    /// non-cryptographic generators out; callers still have to seed from real entropy.
+    /// Every mask comes from the supplied generator.
+    ///
+    /// The reveals hide the witness only as long as that stream is unpredictable.
+    ///
+    /// The trait bound rejects generators that are known not to be cryptographically secure.
+    ///
+    /// Callers still have to seed from real entropy.
+    ///
+    /// That bound is load-bearing, so the example below pins it: handing in a generator built
+    /// on a fast non-cryptographic algorithm must fail to compile.
+    ///
+    /// ```compile_fail
+    /// use p3_challenger::fs::TranscriptField;
+    /// use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
+    /// use p3_commit::Mmcs;
+    /// use p3_field::{ExtensionField, TwoAdicField};
+    /// use p3_matrix::Matrix;
+    /// use p3_sumcheck::zk::{ZkLayout, ZkProver};
+    /// use p3_zk_codes::ZkEncodingWithRandomness;
+    /// use rand::rngs::SmallRng;
+    ///
+    /// fn masks_from_xoshiro<F, EF, Enc, M, L, Ch>()
+    /// where
+    ///     F: TranscriptField + TwoAdicField,
+    ///     EF: ExtensionField<F> + TwoAdicField,
+    ///     Enc: ZkEncodingWithRandomness<EF>,
+    ///     Enc::Codeword: Matrix<EF>,
+    ///     M: Mmcs<EF>,
+    ///     L: ZkLayout<F, EF>,
+    ///     Ch: FieldChallenger<F> + GrindingChallenger<Witness = F> + CanObserve<M::Commitment>,
+    /// {
+    ///     // Xoshiro256++ is fast and well distributed, but its state is recoverable from
+    ///     // a short run of output, so it cannot be used to mask a witness.
+    ///     let _ = ZkProver::<F, EF, Enc, M, L>::into_sumcheck::<SmallRng, Ch>;
+    /// }
+    /// ```
     ///
     /// # Panics
     ///

@@ -233,7 +233,7 @@ mod tests {
             0.0
         }
 
-        fn sample_message<R: Rng>(&self, _rng: &mut R) -> Vec<EF> {
+        fn sample_message<R: CryptoRng>(&self, _rng: &mut R) -> Vec<EF> {
             (0..self.ell_zk)
                 .map(|idx| EF::from_u64(100 + idx as u64))
                 .collect()
@@ -251,7 +251,7 @@ mod tests {
             RowMajorMatrix::new_col(msg.to_vec())
         }
 
-        fn sample_randomness<R: Rng>(&self, _rng: &mut R) -> Vec<EF> {
+        fn sample_randomness<R: CryptoRng>(&self, _rng: &mut R) -> Vec<EF> {
             Vec::new()
         }
 

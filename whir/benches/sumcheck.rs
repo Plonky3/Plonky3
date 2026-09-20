@@ -149,9 +149,18 @@ fn run_sumcheck<L: Layout<F, EF>>(prover: L, challenger: &mut Challenger, foldin
     black_box((data, residual, randomness));
 }
 
+/// Mask sampling happens inside the timed region.
+///
+/// The measurement therefore includes the cost of the generator itself, which for a
+/// cryptographic stream cipher is roughly an order of magnitude per word above a plain
+/// xoshiro-style generator.
+///
+/// Swapping the generator type moves these numbers without any protocol change, so figures
+/// are only comparable across runs that use the same one.
 fn run_zk_sumcheck<L>(
     prover: ZkProver<F, EF, MaskEnc, MaskMmcs, L>,
     challenger: &mut Challenger,
+    // Drawn from inside the timed region, so its cost lands in the reported figure.
     rng: &mut StdRng,
     folding: usize,
 ) where

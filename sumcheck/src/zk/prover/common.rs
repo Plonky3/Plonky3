@@ -41,8 +41,9 @@ use crate::zk::data::MaskOracle;
 /// - `encoding` — zero-knowledge encoder.
 ///   Defines the mask message space and draws a uniform sample on demand.
 /// - `mmcs` — Merkle commitment scheme over the codeword alphabet.
-/// - `rng` — driver for both the mask coefficients and the encoder's randomness budget;
-///   a cryptographic generator, since a predictable stream unmasks every reveal.
+/// - `rng` — driver for both the mask coefficients and the encoder's randomness budget.
+///   It must be cryptographically secure.
+///   A predictable stream lets an adversary recompute every mask and unmask every reveal.
 ///
 /// # Returns
 ///

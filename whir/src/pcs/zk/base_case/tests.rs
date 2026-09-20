@@ -18,7 +18,7 @@ use p3_merkle_tree::MerkleTreeMmcs;
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
 use p3_zk_codes::{ZkEncoding, ZkEncodingWithRandomness};
 use proptest::prelude::*;
-use rand::rngs::SmallRng;
+use rand::rngs::{SmallRng, StdRng};
 use rand::{RngExt, SeedableRng};
 
 use super::*;
@@ -89,7 +89,7 @@ fn honest_run(
     <MyMmcs as Mmcs<F>>::Commitment,
     MyChallenger,
 ) {
-    let mut rng = SmallRng::seed_from_u64(seed);
+    let mut rng = StdRng::seed_from_u64(seed);
     let (mut prover_challenger, verifier_challenger, extension_mmcs, dft) = setup();
 
     // Source: message 8, randomness 3, domain 16, committed directly.
@@ -347,10 +347,13 @@ fn base_case_rejects_unbound_source_reveal() {
         &config, &mmcs, &proof, &w, &u, &commits, target, &source, challenger,
     )
     .unwrap_err();
-    // The committed source genuinely differs from the reveal, so the source
-    // spot check fails. The failing position is fixed by the test seed and
-    // the query-index sampler.
-    assert_eq!(err, BaseCaseZkError::SourceSpotCheckFailed { position: 6 });
+    // The committed source genuinely differs from the reveal, so the source spot check fails.
+    //
+    // Which position trips first is decided by the query-index sampler.
+    //
+    // That sampler is driven by the fixture seed, so the position is reproducible but carries
+    // no protocol meaning.
+    assert_eq!(err, BaseCaseZkError::SourceSpotCheckFailed { position: 9 });
 }
 
 #[test]
@@ -369,13 +372,16 @@ fn base_case_rejects_unbound_mask_reveal() {
         &config, &mmcs, &proof, &w, &u, &commits, target, &source, challenger,
     )
     .unwrap_err();
-    // The committed mask genuinely differs from the reveal, so the mask
-    // spot check fails in group 0. The failing position is fixed by the seed.
+    // The committed mask genuinely differs from the reveal, so the mask spot check fails.
+    //
+    // Only one group exists in this fixture, so the failure is reported against group 0.
+    //
+    // The position is decided by the seeded query-index sampler and carries no protocol meaning.
     assert_eq!(
         err,
         BaseCaseZkError::MaskSpotCheckFailed {
             group: 0,
-            position: 9
+            position: 14
         }
     );
 }
