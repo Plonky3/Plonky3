@@ -582,20 +582,23 @@ impl<P: PrimeCharacteristicRing> NextRows<P> {
     }
 }
 
-impl<P> NextRows<P> {
+impl<P: Clone> NextRows<P> {
     /// The buffers as this worker's own, ready to fill.
     ///
-    /// # Panics
-    ///
-    /// Panics on the zeros shared with every other worker. Only a stage that reads no successor
-    /// row holds those, and every fill runs inside a walk of that stage's successor runs, which
-    /// is then empty.
+    /// Buffers shared with the other workers of the stage are copied before the first write, so
+    /// a worker only ever fills its own. Only a stage that reads no successor row shares its
+    /// buffers, and every fill runs inside a walk of that stage's successor runs, which is then
+    /// empty, so the copy is never taken.
     #[inline]
     fn fill(&mut self) -> &mut [P] {
-        match self {
-            Self::Filled(rows) => rows,
-            Self::Shared(_) => unreachable!("a stage reading no successor row fills no row"),
+        if let Self::Shared(zeros) = self {
+            let owned = zeros.to_vec();
+            *self = Self::Filled(owned);
         }
+        let Self::Filled(rows) = self else {
+            unreachable!("the shared buffers are replaced just above")
+        };
+        rows
     }
 }
 
@@ -2781,6 +2784,22 @@ mod tests {
     #[should_panic = "successor column is outside the trace width"]
     fn successor_runs_reject_a_column_past_the_width() {
         let _runs = successor_runs(0, 4, &[4]);
+    }
+
+    #[test]
+    fn filling_shared_successor_rows_copies_them_first() {
+        // Invariant: a worker writes only buffers of its own, so the zeros a stage shares stay
+        // zero and no worker observes another's rows.
+        let zeros: Arc<[F]> = Arc::from(F::zero_vec(4));
+        let mut written = NextRows::new(4, Some(&zeros));
+        let mut untouched = NextRows::new(4, Some(&zeros));
+
+        written.fill()[1] = F::ONE;
+
+        assert_eq!(&*written, &[F::ZERO, F::ONE, F::ZERO, F::ZERO][..]);
+        assert_eq!(&*untouched, &[F::ZERO; 4][..]);
+        assert_eq!(untouched.fill(), &[F::ZERO; 4][..]);
+        assert_eq!(&*zeros, &[F::ZERO; 4][..]);
     }
 
     #[test]
