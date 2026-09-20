@@ -68,9 +68,17 @@ use crate::dense::RowMajorMatrix;
 ///
 /// # Panics
 ///
-/// Panics if `point` is zero: the adjusted form factors `1/z` out of every weight, so it
-/// does not exist there. [`Interpolate::interpolate_coset`] handles that point itself.
+/// Panics when the evaluation point is zero.
+///
+/// The adjusted form factors 1/z out of every weight, so it is undefined there.
+/// Coset interpolation handles that point before ever reaching this function.
 pub fn compute_adjusted_weights<EF: Field>(point: EF, diff_invs: &[EF]) -> Vec<EF> {
+    // The adjusted form divides by the evaluation point, so zero has no representation.
+    // Reporting it here is clearer than the generic inversion failure from the field layer.
+    assert!(
+        !point.is_zero(),
+        "the adjusted form divides by the evaluation point, so zero is not representable"
+    );
     // Single inversion of z, amortised over all N weights.
     let point_inv = point.inverse();
     // Subtract z^{-1} from each 1/(z - x_i) in parallel.
@@ -119,10 +127,12 @@ pub trait Interpolate<F: TwoAdicField>: Matrix<F> {
             return self.row(i).unwrap().into_iter().map(EF::from).collect();
         }
 
-        // At z = 0 every Lagrange basis polynomial of the coset takes the value 1/N, so the
-        // evaluation is the column mean. The adjusted-weight form below factors 1/z out of
-        // each weight and cannot express this point.
+        // At z = 0 every Lagrange basis polynomial of the coset takes the value 1/N.
+        // The evaluation is therefore the mean of each column, whatever the shift.
+        // The adjusted-weight form below factors 1/z out, so it cannot express this point.
         if point.is_zero() {
+            // A Fiat-Shamir challenge lands on zero with probability 2^{-|EF|}, so this is cold.
+            // An all-ones dot product is cheaper to maintain than a dedicated column sum.
             let ones = vec![EF::ONE; self.height()];
             let mut evals = self.columnwise_dot_product(&ones);
             scale_slice_in_place_single_core(&mut evals, EF::ONE.div_2exp_u64(log_height as u64));
@@ -165,6 +175,8 @@ pub trait Interpolate<F: TwoAdicField>: Matrix<F> {
     /// # Correctness requirements
     ///
     /// - The evaluation point must not lie in the coset and must not be zero.
+    ///   At z = 0 the shared scalar z * (z^N - g^N) / (N * g^N) vanishes.
+    ///   Every column would then come back as zero, whatever the weights.
     /// - Each weight must equal 1/(z - x_i) - 1/z for the corresponding coset element.
     ///
     /// # Performance
@@ -181,6 +193,13 @@ pub trait Interpolate<F: TwoAdicField>: Matrix<F> {
         adjusted_weights: &[EF],
     ) -> Vec<EF> {
         debug_assert_eq!(adjusted_weights.len(), self.height());
+        // The global scaling factor carries a leading factor of the evaluation point.
+        // A zero point would silently return all zeros instead of failing.
+        // Checked in debug only, to leave the release path untouched.
+        debug_assert!(
+            !point.is_zero(),
+            "the global scaling factor vanishes at a zero evaluation point"
+        );
 
         let log_height = log2_strict_usize(self.height());
 
@@ -596,8 +615,12 @@ mod tests {
 
     #[test]
     fn test_interpolate_coset_at_zero() {
-        // f(x) = 3 + 2x + 5x^2 + 7x^3 over a shifted coset of size 8: f(0) is the constant
-        // term, and the point is off the coset because the shift is non-zero.
+        // Invariant: evaluating at zero returns the constant term of each column.
+        //
+        // Fixture state: f(x) = 3 + 2x + 5x^2 + 7x^3 sampled on a shifted coset of size 8.
+        //
+        //     f(0)      = 3, the constant term
+        //     shift != 0 -> zero is not a coset element, so no on-domain shortcut fires
         let coeffs = [3, 2, 5, 7].map(F::from_u32);
         let shift = F::GENERATOR;
         let evals: Vec<F> = eval_poly_on_coset(&coeffs, shift, 3);
@@ -612,6 +635,28 @@ mod tests {
         let on_subgroup: Vec<F> = eval_poly_on_coset(&coeffs, F::ONE, 3);
         let m = RowMajorMatrix::new(on_subgroup, 1);
         assert_eq!(m.interpolate_subgroup(F::ZERO), vec![coeffs[0]]);
+
+        // Fixture state: height 1, width 2, which is the degenerate end of the size range.
+        //
+        //     coset      : {shift}
+        //     1/N factor : 1/1 = 1
+        //     -> the single row comes back unchanged, column by column
+        let m = RowMajorMatrix::new(vec![F::from_u32(11), F::from_u32(22)], 2);
+        assert_eq!(
+            m.interpolate_coset(shift, EF4::ZERO),
+            vec![EF4::from_u32(11), EF4::from_u32(22)]
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "adjusted form")]
+    fn test_compute_adjusted_weights_rejects_zero_point() {
+        // Invariant: the adjusted weight form rejects a zero evaluation point itself.
+        //
+        // Fixture state: evaluation point 0, one inverse denominator.
+        //
+        // The message must name the barycentric precondition, not a generic inversion failure.
+        let _ = compute_adjusted_weights(EF4::ZERO, &[EF4::ONE]);
     }
 
     #[test]
@@ -797,6 +842,52 @@ mod tests {
             let result = evals_mat.interpolate_subgroup(point);
             let expected = eval_poly(&coeffs, point);
             prop_assert_eq!(result[0], expected);
+        }
+
+        // Correctness: evaluation at zero returns the constant term of every column
+        #[test]
+        fn prop_interpolate_coset_at_zero_is_constant_term(
+            log_n in 0usize..=5,
+            width in 1usize..=4,
+            coeffs_raw in prop::collection::vec(0u32..2013265921, 4 * 32),
+            shift_raw in 1u32..2013265921u32,
+        ) {
+            // Invariant: every Lagrange basis polynomial of the coset equals 1/N at zero.
+            //
+            // The evaluation at zero is therefore the mean of each column.
+            // That mean is the constant term of the polynomial sampled in that column.
+            //
+            // A log height of zero covers the degenerate single-row coset.
+            // A sampled shift covers the independence from the coset shift.
+
+            // Coset size, from one point up to thirty-two.
+            let n = 1usize << log_n;
+            // Non-zero shift, so the coset never contains the evaluation point zero.
+            let shift = F::from_u32(shift_raw);
+
+            // One polynomial of degree below N per column, held column by column.
+            // Each column reads its own 32-coefficient slice, so no two columns share one.
+            let coeffs: Vec<Vec<F>> = (0..width)
+                .map(|j| coeffs_raw[j * 32..j * 32 + n].iter().map(|&v| F::from_u32(v)).collect())
+                .collect();
+
+            // Sample every polynomial on the coset shift * H, one matrix row per coset point.
+            //
+            //     row i : [ f_0(shift * h^i), f_1(shift * h^i), ... ]
+            let subgroup_gen = F::two_adic_generator(log_n);
+            let mut rows = Vec::with_capacity(n * width);
+            for i in 0..n {
+                let x = shift * subgroup_gen.exp_u64(i as u64);
+                for c in &coeffs {
+                    rows.push(eval_poly::<F>(c, x));
+                }
+            }
+
+            // Column j of the result must be the constant term of the j-th polynomial.
+            let result = RowMajorMatrix::new(rows, width).interpolate_coset(shift, EF4::ZERO);
+            for (j, c) in coeffs.iter().enumerate() {
+                prop_assert_eq!(result[j], EF4::from(c[0]));
+            }
         }
 
         // Correctness: coset round-trip (shift = GENERATOR)
