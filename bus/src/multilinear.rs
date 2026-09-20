@@ -1,4 +1,4 @@
-//! Multilinear equality helpers for public most-significant-variable-first points.
+//! Multilinear equality helpers, one per coordinate-to-bit convention.
 
 use alloc::vec;
 use alloc::vec::Vec;
@@ -50,4 +50,26 @@ pub(crate) fn equality_at_msb_vertex<F: Field>(point: &[F], vertex: usize) -> Op
             })
             .product(),
     )
+}
+
+/// Materialize equality weights whose coordinate zero binds the least significant index bit.
+///
+/// The memory reduction addresses its tuple slots this way.
+pub(crate) fn equality_weights_lsb<F: Field>(point: &[F]) -> Vec<F> {
+    // The empty point addresses the sole slot of a width-one tuple.
+    let mut weights = vec![F::ONE];
+
+    for &coordinate in point {
+        // Existing coordinates remain the low-order address bits.
+        // The new coordinate selects between two complete halves.
+        let old_len = weights.len();
+        weights.resize(old_len * 2, F::ZERO);
+        for index in 0..old_len {
+            let weight = weights[index];
+            weights[index] = weight * (F::ONE - coordinate);
+            weights[old_len + index] = weight * coordinate;
+        }
+    }
+
+    weights
 }

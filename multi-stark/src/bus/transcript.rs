@@ -105,6 +105,11 @@ where
     pub(crate) fn finish(self) {
         assert!(self.state.finalize().is_empty());
     }
+
+    /// Release the typed completeness check after a checked honest-prover input error.
+    pub(crate) fn abort(&mut self) {
+        self.state.abort();
+    }
 }
 
 impl<'a, C, F, EF> BusCompositionVerifierTranscript<'a, C, F, EF>

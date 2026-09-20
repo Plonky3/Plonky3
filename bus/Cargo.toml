@@ -38,5 +38,9 @@ rand_xoshiro.workspace = true
 name = "product_gkr"
 harness = false
 
+[[bench]]
+name = "factor"
+harness = false
+
 [lints]
 workspace = true

@@ -7,6 +7,7 @@ use p3_air::{BoundaryIoError, boundary};
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
 use p3_commit::MultilinearPcs;
 use p3_lookup::TraceWindow;
+use p3_multilinear_util::point::Point;
 use p3_sumcheck::{OpeningEvals, PrescribedPointPcs};
 use thiserror::Error;
 
@@ -88,6 +89,64 @@ where
         /// What is wrong with the declaration.
         error: BoundaryIoError,
     },
+}
+
+/// Bind the reduced bus products to the composition sumcheck the proof carries.
+///
+/// Every rejection releases the typed driver first.
+///
+/// A malformed proof is therefore rejected rather than unwound through a drop-time panic.
+fn bind_bus_composition<C, Val, Challenge, E>(
+    challenger: &mut C,
+    output: &p3_bus::BusReductionOutput<Challenge>,
+    proof: &crate::proof::BusProof<Val, Challenge>,
+    shape: BusCompositionShape,
+) -> Result<(Challenge, Point<Challenge>, Challenge), VerificationError<E>>
+where
+    Val: p3_challenger::fs::TranscriptField,
+    Challenge: p3_field::ExtensionField<Val>,
+    C: FieldChallenger<Val> + GrindingChallenger<Witness = Val>,
+    E: Debug,
+{
+    let mut composition =
+        BusCompositionVerifierTranscript::<_, Val, Challenge>::new(challenger, shape);
+    let direction = composition.direction_challenge();
+
+    // The driver refuses to be dropped mid-pattern, so it is released before every return.
+    let expected_claim = match output.batched_terminal_claim(direction) {
+        Ok(claim) => claim,
+        Err(error) => {
+            composition.abort();
+            return Err(error.into());
+        }
+    };
+
+    // Comparing first costs one field equality instead of a whole sumcheck replay.
+    if proof.composition.claimed_sum != expected_claim {
+        composition.abort();
+        return Err(VerificationError::BusBinding(
+            BusBindingError::InitialClaimMismatch,
+        ));
+    }
+
+    let verified = composition.sumcheck(|challenger| {
+        proof.composition.verify(
+            challenger,
+            shape.num_variables,
+            shape.degree,
+            shape.pow_bits,
+        )
+    });
+    let (point, terminal) = match verified {
+        Ok(verified) => verified,
+        Err(error) => {
+            composition.abort();
+            return Err(VerificationError::BusSumcheck(error));
+        }
+    };
+    composition.finish();
+
+    Ok((direction, point, terminal))
 }
 
 /// Verify only when the verifier's statement meets the requested security target.
@@ -290,37 +349,15 @@ where
                     let output = context
                         .plan()
                         .verify::<C::Val, C::Challenge, _>(&bus_proof.product, challenger)?;
-                    let degree = context.composition_degree();
-                    let num_variables = context.max_num_variables();
-                    let mut composition =
-                        BusCompositionVerifierTranscript::<_, C::Val, C::Challenge>::new(
-                            challenger,
-                            BusCompositionShape {
-                                num_variables,
-                                degree,
-                                pow_bits,
-                            },
-                        );
-                    let direction = composition.direction_challenge();
-                    let expected_claim = output.batched_terminal_claim(direction)?;
-                    let verified = composition.sumcheck(|challenger| {
-                        bus_proof
-                            .composition
-                            .verify(challenger, num_variables, degree, pow_bits)
-                    });
-                    let (point, terminal) = match verified {
-                        Ok(verified) => verified,
-                        Err(error) => {
-                            composition.abort();
-                            return Err(VerificationError::BusSumcheck(error));
-                        }
+                    let shape = BusCompositionShape {
+                        num_variables: context.max_num_variables(),
+                        degree: context.composition_degree(),
+                        pow_bits,
                     };
-                    composition.finish();
-                    if bus_proof.composition.claimed_sum != expected_claim {
-                        return Err(VerificationError::BusBinding(
-                            BusBindingError::InitialClaimMismatch,
-                        ));
-                    }
+                    let (direction, point, terminal) =
+                        bind_bus_composition::<_, C::Val, C::Challenge, PcsError<C>>(
+                            challenger, &output, bus_proof, shape,
+                        )?;
                     Ok((output, direction, point, terminal))
                 })
                 .expect("the statement describes a bus delegation");
@@ -633,4 +670,108 @@ where
             lookup.as_ref(),
         )
         .map_err(VerificationError::Zerocheck)
+}
+
+#[cfg(test)]
+mod tests {
+    use alloc::vec;
+
+    use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
+    use p3_bus::{
+        BusArgumentError, BusChallenges, BusReductionOutput, ProductGkrOutput, ProductGkrProof,
+    };
+    use p3_challenger::DuplexChallenger;
+    use p3_field::PrimeCharacteristicRing;
+    use p3_field::extension::BinomialExtensionField;
+    use p3_sumcheck::generic_degree::GenericDegreeProof;
+    use rand::SeedableRng;
+    use rand::rngs::SmallRng;
+
+    use super::*;
+    use crate::proof::BusProof;
+
+    type F = BabyBear;
+    type EF = BinomialExtensionField<F, 4>;
+    type Perm = Poseidon2BabyBear<16>;
+    type Chal = DuplexChallenger<F, Perm, 16, 8>;
+
+    fn challenger() -> Chal {
+        let mut rng = SmallRng::seed_from_u64(0xD15EA5E);
+        Chal::new(Perm::new_from_rng_128(&mut rng))
+    }
+
+    fn reduction(values: Vec<EF>) -> BusReductionOutput<EF> {
+        BusReductionOutput {
+            challenges: BusChallenges {
+                fingerprint: Vec::new(),
+                offset: EF::ZERO,
+            },
+            product: ProductGkrOutput {
+                roots: Vec::new(),
+                point: Vec::new(),
+                values,
+            },
+        }
+    }
+
+    fn bus_proof(claimed_sum: EF) -> BusProof<F, EF> {
+        BusProof {
+            product: p3_bus::BusProof {
+                product: ProductGkrProof {
+                    roots: Vec::new(),
+                    layers: Vec::new(),
+                },
+            },
+            composition: GenericDegreeProof {
+                claimed_sum,
+                round_polys: Vec::new(),
+                pow_witnesses: Vec::new(),
+            },
+        }
+    }
+
+    #[test]
+    fn a_noncanonical_terminal_value_count_rejects_without_unwinding() {
+        // The direction challenge has been drawn, so an early return would abandon the driver.
+        let error = bind_bus_composition::<_, F, EF, core::convert::Infallible>(
+            &mut challenger(),
+            &reduction(vec![EF::ONE]),
+            &bus_proof(EF::ZERO),
+            BusCompositionShape {
+                num_variables: 2,
+                degree: 2,
+                pow_bits: 0,
+            },
+        )
+        .expect_err("one terminal value has no push-then-pull reading");
+
+        assert!(matches!(
+            error,
+            VerificationError::BusArgument(BusArgumentError::TerminalValueCount {
+                expected: 2,
+                actual: 1,
+            })
+        ));
+    }
+
+    #[test]
+    fn a_tampered_initial_claim_rejects_before_the_sumcheck_runs() {
+        // An empty round list would fail the sumcheck's own shape check if it ever ran.
+        let error = bind_bus_composition::<_, F, EF, core::convert::Infallible>(
+            &mut challenger(),
+            &reduction(vec![EF::ONE, EF::ONE]),
+            &bus_proof(EF::from_u8(7)),
+            BusCompositionShape {
+                num_variables: 2,
+                degree: 2,
+                pow_bits: 0,
+            },
+        )
+        .expect_err("the batched terminal claim of two identity roots is zero");
+
+        assert!(matches!(
+            error,
+            VerificationError::BusBinding(BusBindingError::InitialClaimMismatch)
+        ));
+    }
 }

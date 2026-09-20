@@ -5,17 +5,26 @@
 //! Short tables are lifted with `eq(prefix, 1^k)`, whose Boolean-cube sum is one.
 //!
 //! The terminal expression is checked only after its source columns open from the PCS.
+//!
+//! Round zero lifts every source column into the challenge field before any folding.
+//!
+//! A degree-four extension therefore holds four times the trace for the whole reduction.
+//!
+//! The batched zerocheck avoids that by folding packed base-field rows in its first round.
+//!
+//! Matching it here needs the same folder-generic plumbing and is deferred.
 
 use alloc::vec::Vec;
 
 use p3_bus::{BusDirection, BusEvaluation, BusReductionOutput};
 use p3_field::{ExtensionField, Field};
+use p3_maybe_rayon::prelude::*;
 use p3_multilinear_util::poly::Poly;
 use p3_sumcheck::generic_degree::{RoundPolyInterpolator, RoundProver};
 use p3_sumcheck::layout::Table;
 
 use crate::bus::BusContext;
-use crate::bus::math::{equality_at_vertex, equality_weights};
+use crate::bus::math::equality_weights;
 
 /// Prover state for the mixed-height bus composition polynomial.
 pub(crate) struct BusCompositionProver<'a, F: Field, EF: ExtensionField<F>> {
@@ -81,6 +90,23 @@ where
         let mut main = EF::zero_vec(self.main.len());
         let mut preprocessed = EF::zero_vec(self.preprocessed.len());
 
+        // Slot placement is settled once per term, outside the row loop below.
+        let factors = self
+            .terms
+            .iter()
+            .map(|term| {
+                context
+                    .plan()
+                    .compile_factor(
+                        term.bus,
+                        context.interaction(term.owner),
+                        fingerprint_weights,
+                        offset,
+                    )
+                    .expect("a checked bus plan compiles against its own declarations")
+            })
+            .collect::<Vec<_>>();
+
         for row in 0..height {
             for (value, column) in main.iter_mut().zip(&self.main) {
                 *value = column.as_slice()[row];
@@ -97,18 +123,11 @@ where
                 is_transition: self.selectors[2].as_slice()[row],
             };
             let equality = self.equality.as_slice()[row];
-            for term in &mut self.terms {
-                let factor = context
-                    .plan()
-                    .evaluate_factor(
-                        term.bus,
-                        context.interaction(term.owner),
-                        evaluation,
-                        fingerprint_weights,
-                        offset,
-                    )
+            for (term, factor) in self.terms.iter_mut().zip(&factors) {
+                let value = factor
+                    .evaluate::<EF>(evaluation)
                     .expect("a planned expression resolves against its owning table");
-                term.row_claim += equality * (factor - EF::ONE);
+                term.row_claim += equality * (value - EF::ONE);
             }
         }
     }
@@ -140,10 +159,9 @@ where
             for share in context.plan().terminal_shares(direction) {
                 let air = share.owner.air;
                 let row_point = &output.product.point[share.prefix_variables..];
-                let block_weight = equality_at_vertex(
-                    &output.product.point[..share.prefix_variables],
-                    share.prefix_index,
-                );
+                let block_weight = share
+                    .prefix_weight(&output.product.point)
+                    .expect("a planned share addresses its own product-tree point");
                 let coefficient = direction_weight * block_weight;
                 let state = airs[air].get_or_insert_with(|| {
                     let main = tables[air]
@@ -180,6 +198,12 @@ where
                         public_values: public_values[air].to_vec(),
                     }
                 });
+                // Row geometry is captured from the first share and reused by every later one.
+                debug_assert_eq!(
+                    state.unused_prefix,
+                    num_variables - share.row_variables,
+                    "every block of one AIR shares its trace height"
+                );
                 state.terms.push(CompositionTerm {
                     owner: share.owner,
                     bus: share.bus,
@@ -204,47 +228,67 @@ where
     }
 
     fn evaluate_air(&self, air: &AirState<F, EF>, node: EF) -> EF {
-        // Interpolate shared columns once, then evaluate every declaration owned by this AIR.
-        let half = air.equality.as_slice().len() / 2;
-        let mut main = EF::zero_vec(air.main.len());
-        let mut prep = EF::zero_vec(air.preprocessed.len());
-        let mut sum = EF::ZERO;
-        for row in 0..half {
-            let interpolate = |poly: &Poly<EF>| {
-                let values = poly.as_slice();
-                values[row] + (values[row + half] - values[row]) * node
-            };
-            for (value, polynomial) in main.iter_mut().zip(&air.main) {
-                *value = interpolate(polynomial);
-            }
-            for (value, polynomial) in prep.iter_mut().zip(&air.preprocessed) {
-                *value = interpolate(polynomial);
-            }
-            let evaluation = BusEvaluation {
-                main: &main,
-                preprocessed: &prep,
-                public: &air.public_values,
-                is_first_row: interpolate(&air.selectors[0]),
-                is_last_row: interpolate(&air.selectors[1]),
-                is_transition: interpolate(&air.selectors[2]),
-            };
-            let equality = interpolate(&air.equality);
-            for term in &air.terms {
-                let factor = self
-                    .context
+        // Slot placement is settled once per term, outside the row loop below.
+        let factors = air
+            .terms
+            .iter()
+            .map(|term| {
+                self.context
                     .plan()
-                    .evaluate_factor(
+                    .compile_factor(
                         term.bus,
                         self.context.interaction(term.owner),
-                        evaluation,
                         &self.fingerprint_weights,
                         self.offset,
                     )
-                    .expect("a planned expression resolves against its folded table");
-                sum += term.coefficient * equality * (factor - EF::ONE);
-            }
-        }
-        sum
+                    .expect("a checked bus plan compiles against its own declarations")
+            })
+            .collect::<Vec<_>>();
+
+        // Interpolate shared columns once, then evaluate every declaration owned by this AIR.
+        let half = air.equality.as_slice().len() / 2;
+        (0..half)
+            .into_par_iter()
+            .map_init(
+                || {
+                    (
+                        EF::zero_vec(air.main.len()),
+                        EF::zero_vec(air.preprocessed.len()),
+                    )
+                },
+                |(main, prep), row| {
+                    let interpolate = |poly: &Poly<EF>| {
+                        let values = poly.as_slice();
+                        values[row] + (values[row + half] - values[row]) * node
+                    };
+                    for (value, polynomial) in main.iter_mut().zip(&air.main) {
+                        *value = interpolate(polynomial);
+                    }
+                    for (value, polynomial) in prep.iter_mut().zip(&air.preprocessed) {
+                        *value = interpolate(polynomial);
+                    }
+                    let evaluation = BusEvaluation {
+                        main,
+                        preprocessed: prep,
+                        public: &air.public_values,
+                        is_first_row: interpolate(&air.selectors[0]),
+                        is_last_row: interpolate(&air.selectors[1]),
+                        is_transition: interpolate(&air.selectors[2]),
+                    };
+                    let equality = interpolate(&air.equality);
+                    air.terms
+                        .iter()
+                        .zip(&factors)
+                        .map(|(term, factor)| {
+                            let value = factor
+                                .evaluate::<EF>(evaluation)
+                                .expect("a planned expression resolves against its folded table");
+                            term.coefficient * equality * (value - EF::ONE)
+                        })
+                        .sum::<EF>()
+                },
+            )
+            .sum()
     }
 }
 

@@ -30,7 +30,7 @@ use p3_field::{Dup, ExtensionField, Field};
 use p3_security::SecurityTerm;
 use p3_security::bus::{BusSecurityModel, ProductGkrSecurityProfile};
 
-use crate::leaf::equality_weights;
+use crate::multilinear::equality_weights_lsb;
 use crate::{
     BusActivation, BusDirection, BusInteractionBuilder, BusPlan, BusTupleSlot, ProductGkrOutput,
     ProductGkrProof, ProductGkrRootShape, ProductGkrShape,
@@ -452,7 +452,7 @@ impl<F: Field> ReadOnlyMemoryPlan<F> {
         debug_assert_eq!(challenges.fingerprint.len(), self.tuple_variables);
 
         // One equality table supplies the coefficient of every padded tuple slot.
-        let weights = equality_weights(&challenges.fingerprint);
+        let weights = equality_weights_lsb(&challenges.fingerprint);
         debug_assert_eq!(weights.len(), self.tuple_slots.len());
 
         // Fixed domain bits contribute the same fingerprint term to every row.

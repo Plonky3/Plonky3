@@ -43,7 +43,7 @@ pub struct BusBlock {
     pub direction: BusDirection,
     /// AIR and declaration that own the block.
     pub owner: BusBlockOwner,
-    /// Base-two logarithm of the block height.
+    /// Base-two logarithm of the block height, shared by every block one AIR emits.
     pub log_height: usize,
     /// First leaf in the direction-specific tree.
     pub offset: usize,
@@ -490,7 +490,7 @@ struct PendingBlock {
     direction: BusDirection,
     /// AIR and declaration that own the block.
     owner: BusBlockOwner,
-    /// Base-two logarithm of the block height.
+    /// Base-two logarithm of the block height, taken from the table not the declaration.
     log_height: usize,
 }
 
@@ -856,26 +856,32 @@ mod tests {
         let offset = EF::from_u8(11);
 
         // Materialize declarations in the plan's physical order on each direction.
+        let weights = crate::BusChallenges {
+            fingerprint: fingerprint_point.to_vec(),
+            offset,
+        }
+        .fingerprint_weights();
         let materialize_direction = |direction| {
             let mut leaves = Vec::new();
             for block in plan.blocks(direction) {
-                let height = 1usize << block.log_height;
-                let payload = (0..height)
-                    .map(|row| F::from_usize(block.owner.air * 16 + row + 2))
-                    .collect::<Vec<_>>();
-                let identity = vec![F::ONE; height];
-                let columns = [&payload[..], &identity[..]];
-                let declaration = [crate::BusLeafDeclaration {
-                    direction,
-                    columns: &columns,
-                    selector: crate::BusSelector::Always,
-                }];
-                let materialized =
-                    crate::BusLeaves::materialize(&declaration, &fingerprint_point, offset)
-                        .unwrap();
-                match direction {
-                    BusDirection::Push => leaves.extend(materialized.pushes),
-                    BusDirection::Pull => leaves.extend(materialized.pulls),
+                let owner = if block.owner.air == 0 { &tall } else { &short };
+                let factor = plan
+                    .compile_factor(block.bus, &owner[block.owner.declaration], &weights, offset)
+                    .unwrap();
+                for row in 0..1usize << block.log_height {
+                    let payload = [F::from_usize(block.owner.air * 16 + row + 2)];
+                    leaves.push(
+                        factor
+                            .evaluate(crate::BusEvaluation {
+                                main: &payload,
+                                preprocessed: &[],
+                                public: &[],
+                                is_first_row: F::ZERO,
+                                is_last_row: F::ZERO,
+                                is_transition: F::ZERO,
+                            })
+                            .unwrap(),
+                    );
                 }
             }
             leaves

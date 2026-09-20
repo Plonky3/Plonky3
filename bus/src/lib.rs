@@ -8,7 +8,6 @@ mod builder;
 mod debug;
 mod direction;
 mod evaluation;
-mod leaf;
 mod memory;
 mod multilinear;
 mod plan;
@@ -25,8 +24,7 @@ pub use debug::{
     BusDebugReport, BusImbalance, BusUnmatched,
 };
 pub use direction::BusDirection;
-pub use evaluation::{BusEvaluation, BusEvaluationError};
-pub use leaf::{BusLeafDeclaration, BusLeafError, BusLeaves, BusSelector};
+pub use evaluation::{BusEvaluation, BusEvaluationError, BusFactorPlan};
 pub use memory::{
     MemoryFinalCounts, MemoryReadAddresses, MemoryReadCounts, MemoryReadValues, MemoryTableValues,
     ReadOnlyMemoryBus, ReadOnlyMemoryChallenges, ReadOnlyMemoryClaims, ReadOnlyMemoryColumns,

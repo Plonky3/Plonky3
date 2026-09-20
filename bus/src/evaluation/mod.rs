@@ -95,20 +95,70 @@ impl<EF: Field> BusChallenges<EF> {
     }
 }
 
-impl BusPlan {
-    /// Evaluate one planned declaration's selected leaf factor.
+/// One declaration's leaf factor reduced to the terms that read the trace.
+///
+/// Slot placement, the named-domain contribution, and every width check are settled once.
+/// What remains per row is one payload evaluation and one inner product.
+#[derive(Clone, Copy, Debug)]
+pub struct BusFactorPlan<'a, F: Field, EF> {
+    /// Declaration whose payload and activation expressions are resolved at each point.
+    interaction: &'a SymbolicBusInteraction<F>,
+    /// Tuple weight of each payload position, in declaration order.
+    payload_weights: &'a [EF],
+    /// Random shift already reduced by the fixed named-domain contribution.
+    shifted_offset: EF,
+}
+
+impl<F, EF> BusFactorPlan<'_, F, EF>
+where
+    F: Field,
+    EF: ExtensionField<F>,
+{
+    /// Evaluate the leaf factor at one resolved point.
+    ///
+    /// Boolean rows resolve in the base field and cost far less than a folded point.
     ///
     /// # Errors
     ///
     /// Returns an error when the supplied evaluation view omits a referenced value.
-    pub fn evaluate_factor<F, EF>(
+    pub fn evaluate<A>(&self, values: BusEvaluation<'_, F, A>) -> Result<EF, BusEvaluationError>
+    where
+        A: ExtensionField<F>,
+        EF: ExtensionField<A>,
+    {
+        // Padding and named-domain slots are constant, so only payload slots are summed here.
+        let mut fingerprint = EF::ZERO;
+        for (expression, &weight) in self.interaction.fields.iter().zip(self.payload_weights) {
+            fingerprint += weight * values.evaluate(expression)?;
+        }
+        let factor = self.shifted_offset - fingerprint;
+
+        // Conditional rows interpolate between identity padding and the live factor.
+        match &self.interaction.activation {
+            BusActivation::Always => Ok(factor),
+            BusActivation::Boolean(selector) => {
+                let selector = values.evaluate(selector)?;
+                Ok(EF::ONE + (factor - EF::ONE) * selector)
+            }
+        }
+    }
+}
+
+impl BusPlan {
+    /// Settle one declaration's slot placement against the sampled tuple weights.
+    ///
+    /// The result is reusable across every row of the owning table.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the bus, the payload width, or the weight count is wrong.
+    pub fn compile_factor<'a, F, EF>(
         &self,
         bus: usize,
-        interaction: &SymbolicBusInteraction<F>,
-        values: BusEvaluation<'_, F, EF>,
-        weights: &[EF],
+        interaction: &'a SymbolicBusInteraction<F>,
+        weights: &'a [EF],
         offset: EF,
-    ) -> Result<EF, BusEvaluationError>
+    ) -> Result<BusFactorPlan<'a, F, EF>, BusEvaluationError>
     where
         F: Field,
         EF: ExtensionField<F>,
@@ -135,37 +185,47 @@ impl BusPlan {
             });
         }
 
-        // Evaluate payload expressions once, then place them into the padded tuple.
-        let payload = interaction
-            .fields
-            .iter()
-            .map(|expression| values.evaluate(expression))
-            .collect::<Result<Vec<_>, _>>()?;
-        let fingerprint = weights
+        // Every slot outside the payload prefix carries a value fixed for the whole proof.
+        let domain_constant = weights
             .iter()
             .enumerate()
-            .map(|(slot, &weight)| {
-                let value = match self
-                    .tuple_slot(bus, slot)
-                    .expect("weights have the planned fingerprint width")
-                {
-                    BusTupleSlot::Payload(index) => payload[index],
-                    BusTupleSlot::DomainBit(true) => EF::ONE,
-                    BusTupleSlot::DomainBit(false) | BusTupleSlot::Zero => EF::ZERO,
-                };
-                weight * value
+            .filter(|&(slot, _)| {
+                matches!(
+                    self.tuple_slot(bus, slot),
+                    Some(BusTupleSlot::DomainBit(true))
+                )
             })
+            .map(|(_, &weight)| weight)
             .sum::<EF>();
-        let factor = offset - fingerprint;
 
-        // Conditional rows interpolate between identity padding and the live factor.
-        match &interaction.activation {
-            BusActivation::Always => Ok(factor),
-            BusActivation::Boolean(selector) => {
-                let selector = values.evaluate(selector)?;
-                Ok(EF::ONE + selector * (factor - EF::ONE))
-            }
-        }
+        Ok(BusFactorPlan {
+            interaction,
+            // Payload position and tuple slot coincide over the leading payload slots.
+            payload_weights: &weights[..domain.payload_width],
+            shifted_offset: offset - domain_constant,
+        })
+    }
+
+    /// Evaluate one planned declaration's selected leaf factor.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the supplied evaluation view omits a referenced value.
+    pub fn evaluate_factor<F, EF>(
+        &self,
+        bus: usize,
+        interaction: &SymbolicBusInteraction<F>,
+        values: BusEvaluation<'_, F, EF>,
+        weights: &[EF],
+        offset: EF,
+    ) -> Result<EF, BusEvaluationError>
+    where
+        F: Field,
+        EF: ExtensionField<F>,
+    {
+        // A single point pays for the placement it would otherwise reuse.
+        self.compile_factor(bus, interaction, weights, offset)?
+            .evaluate::<EF>(values)
     }
 }
 

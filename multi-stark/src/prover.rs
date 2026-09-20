@@ -387,6 +387,8 @@ where
             let context = bus
                 .as_ref()
                 .expect("the transcript describes a bus argument");
+            // Checking widths once per AIR keeps a caller mistake out of the row loop below.
+            context.check_tables(&tables, &preprocessed_tables, &public_values)?;
             let (product, output) = context.plan().prove::<C::Val, C::Challenge, _>(
                 |challenges| {
                     context.materialize(&tables, &preprocessed_tables, &public_values, challenges)
@@ -405,7 +407,14 @@ where
                     },
                 );
             let direction = composition_transcript.direction_challenge();
-            let claimed_sum = output.batched_terminal_claim(direction)?;
+            // The driver refuses to be dropped mid-pattern, so it is released first.
+            let claimed_sum = match output.batched_terminal_claim(direction) {
+                Ok(claimed_sum) => claimed_sum,
+                Err(error) => {
+                    composition_transcript.abort();
+                    return Err(error.into());
+                }
+            };
             let mut prover = BusCompositionProver::new(
                 context,
                 &output,

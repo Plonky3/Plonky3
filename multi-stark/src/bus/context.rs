@@ -9,15 +9,16 @@ use alloc::vec::Vec;
 use p3_air::Air;
 use p3_air::symbolic::AirLayout;
 use p3_bus::{
-    BusBlockOwner, BusDirection, BusEvaluation, BusPlan, BusPlanInput, BusSymbolicBuilder,
-    SymbolicBusInteraction,
+    BusBlock, BusBlockOwner, BusDirection, BusEvaluation, BusPlan, BusPlanInput,
+    BusSymbolicBuilder, SymbolicBusInteraction,
 };
 use p3_field::{ExtensionField, Field};
+use p3_maybe_rayon::prelude::*;
 use p3_multilinear_util::point::Point;
 use p3_sumcheck::layout::Table;
 
 use super::error::BusBindingError;
-use super::math::{equality_at_vertex, equality_evaluation};
+use super::math::equality_evaluation;
 
 /// Verifier-derived bus declarations and their checked physical layout.
 pub(crate) struct BusContext<F: Field, EF: ExtensionField<F>> {
@@ -61,6 +62,38 @@ where
             return Ok(None);
         };
         Ok(Some(Self { profiles, plan }))
+    }
+
+    /// Reject committed tables that cannot resolve the declarations their AIR owns.
+    ///
+    /// One dry evaluation per declaration keeps a caller mistake out of the prover's row loop.
+    pub(crate) fn check_tables(
+        &self,
+        tables: &[&Table<F>],
+        preprocessed: &[Option<&Table<F>>],
+        public_values: &[&[F]],
+    ) -> Result<(), BusBindingError> {
+        // Zero weights still walk every expression, which is what resolves each leaf.
+        let weights = EF::zero_vec(self.plan.fingerprint_width());
+        for block in BusDirection::ALL
+            .into_iter()
+            .flat_map(|direction| self.plan.blocks(direction))
+        {
+            let air = block.owner.air;
+            let main = F::zero_vec(tables[air].num_polys());
+            let fixed = F::zero_vec(preprocessed[air].map_or(0, Table::num_polys));
+            self.plan
+                .compile_factor(block.bus, self.interaction(block.owner), &weights, EF::ZERO)?
+                .evaluate(BusEvaluation {
+                    main: &main,
+                    preprocessed: &fixed,
+                    public: public_values[air],
+                    is_first_row: F::ZERO,
+                    is_last_row: F::ZERO,
+                    is_transition: F::ZERO,
+                })?;
+        }
+        Ok(())
     }
 
     /// Checked layout used by both the transcript and opening schedule.
@@ -146,12 +179,18 @@ where
                 let row_point = &point.as_slice()[point.num_variables() - share.row_variables..];
                 let unused = &point.as_slice()[..point.num_variables() - share.row_variables];
                 let fixed_all_one_selector = unused.iter().copied().product::<EF>();
-                let block_weight = equality_at_vertex(
-                    &output.product.point[..share.prefix_variables],
-                    share.prefix_index,
-                );
+                let block_weight = share.prefix_weight(&output.product.point).ok_or(
+                    BusBindingError::ProductPointDimension {
+                        expected: expected_product_dimension,
+                        actual: output.product.point.len(),
+                    },
+                )?;
                 let row_weight =
-                    equality_evaluation(&output.product.point[share.prefix_variables..], row_point);
+                    equality_evaluation(&output.product.point[share.prefix_variables..], row_point)
+                        .ok_or(BusBindingError::ProductPointDimension {
+                            expected: share.prefix_variables + share.row_variables,
+                            actual: output.product.point.len(),
+                        })?;
                 let boundary = crate::selectors::BoundaryEvals::at(row_point);
                 let factor = self.plan.evaluate_factor(
                     share.bus,
@@ -187,77 +226,98 @@ where
     ) -> [Vec<EF>; 2] {
         // Fingerprint weights are shared by every row and every declaration.
         let weights = challenges.fingerprint_weights();
-        // Column views are shared by every declaration emitted by the same AIR.
-        let columns = tables
-            .iter()
-            .zip(preprocessed)
-            .map(|(main, preprocessed)| {
-                (
-                    main.iter_polys().collect::<Vec<_>>(),
-                    preprocessed
-                        .iter()
-                        .flat_map(|table| table.iter_polys())
-                        .collect::<Vec<_>>(),
-                )
-            })
-            .collect::<Vec<_>>();
         BusDirection::ALL.map(|direction| {
-            let expected = self
-                .plan
-                .security_geometry()
-                .non_padding_leaf_count(direction);
-            let mut leaves = Vec::with_capacity(expected);
-            let mut scratch = columns
+            // Blocks are independent, and concatenating them restores the planned leaf order.
+            self.plan
+                .blocks(direction)
                 .iter()
-                .map(|(main, preprocessed)| {
-                    (EF::zero_vec(main.len()), EF::zero_vec(preprocessed.len()))
+                .map(|block| {
+                    self.materialize_block(
+                        block,
+                        tables,
+                        preprocessed,
+                        public_values,
+                        &weights,
+                        challenges.offset,
+                    )
                 })
-                .collect::<Vec<_>>();
-            for block in self.plan.blocks(direction) {
-                let air = block.owner.air;
-                let interaction = &self.profiles[air].interactions()[block.owner.declaration];
-                let height = 1usize << block.log_height;
-                let (main_columns, prep_columns) = &columns[air];
-                let (main, prep) = &mut scratch[air];
-
-                // Resolve every row from the exact tables committed by this proof.
-                for row in 0..height {
-                    for (value, column) in main.iter_mut().zip(main_columns) {
-                        *value = column[row].into();
-                    }
-                    for (value, column) in prep.iter_mut().zip(prep_columns) {
-                        *value = column[row].into();
-                    }
-                    let factor = self
-                        .plan
-                        .evaluate_factor(
-                            block.bus,
-                            interaction,
-                            BusEvaluation {
-                                main,
-                                preprocessed: prep,
-                                public: public_values[air],
-                                is_first_row: EF::from_bool(row == 0),
-                                is_last_row: EF::from_bool(row + 1 == height),
-                                is_transition: EF::from_bool(row + 1 < height),
-                            },
-                            &weights,
-                            challenges.offset,
-                        )
-                        .expect("a checked bus plan resolves against its committed table");
-                    leaves.push(factor);
-                }
-            }
-            leaves
+                .collect::<Vec<_>>()
+                .concat()
         })
+    }
+
+    /// Materialize one aligned block from the exact tables committed by this proof.
+    fn materialize_block(
+        &self,
+        block: &BusBlock,
+        tables: &[&Table<F>],
+        preprocessed: &[Option<&Table<F>>],
+        public_values: &[&[F]],
+        weights: &[EF],
+        offset: EF,
+    ) -> Vec<EF> {
+        let air = block.owner.air;
+        let interaction = &self.profiles[air].interactions()[block.owner.declaration];
+
+        // Slot placement and the named-domain contribution are settled once for the block.
+        let factor = self
+            .plan
+            .compile_factor(block.bus, interaction, weights, offset)
+            .expect("a checked bus plan compiles against its own declarations");
+        let main_columns = tables[air].iter_polys().collect::<Vec<_>>();
+        let fixed_columns = preprocessed[air]
+            .iter()
+            .flat_map(|table| table.iter_polys())
+            .collect::<Vec<_>>();
+        let public = public_values[air];
+        let height = 1usize << block.log_height;
+
+        // Boolean rows stay in the base field, so every tuple term is a cheap mixed product.
+        (0..height)
+            .into_par_iter()
+            .map_init(
+                || {
+                    (
+                        F::zero_vec(main_columns.len()),
+                        F::zero_vec(fixed_columns.len()),
+                    )
+                },
+                |(main, fixed), row| {
+                    for (value, column) in main.iter_mut().zip(&main_columns) {
+                        *value = column[row];
+                    }
+                    for (value, column) in fixed.iter_mut().zip(&fixed_columns) {
+                        *value = column[row];
+                    }
+                    factor
+                        .evaluate(BusEvaluation {
+                            main,
+                            preprocessed: fixed,
+                            public,
+                            is_first_row: F::from_bool(row == 0),
+                            is_last_row: F::from_bool(row + 1 == height),
+                            is_transition: F::from_bool(row + 1 < height),
+                        })
+                        // Table widths are checked against every AIR before this loop starts.
+                        .expect("a checked bus plan resolves against its committed table")
+                },
+            )
+            .collect()
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use p3_air::{Air, BaseAir};
+    use alloc::vec;
+
+    use p3_air::{Air, BaseAir, WindowAccess};
     use p3_baby_bear::BabyBear;
-    use p3_bus::BusSymbolicBuilder;
+    use p3_bus::{
+        BusActivation, BusDirection, BusEvaluationError, BusInteractionBuilder, BusSymbolicBuilder,
+    };
+    use p3_field::PrimeCharacteristicRing;
+    use p3_matrix::dense::RowMajorMatrix;
+    use p3_sumcheck::layout::Table;
 
     use super::{BusBindingError, BusContext};
 
@@ -271,6 +331,46 @@ mod tests {
 
     impl Air<BusSymbolicBuilder<BabyBear>> for EmptyAir {
         fn eval(&self, _builder: &mut BusSymbolicBuilder<BabyBear>) {}
+    }
+
+    struct TwoColumnAir;
+
+    impl BaseAir<BabyBear> for TwoColumnAir {
+        fn width(&self) -> usize {
+            2
+        }
+    }
+
+    impl<AB: BusInteractionBuilder<F = BabyBear>> Air<AB> for TwoColumnAir {
+        fn eval(&self, builder: &mut AB) {
+            let value: AB::Expr = builder.main().current_slice()[1].into();
+            builder.push_bus_interaction(
+                "memory",
+                BusDirection::Push,
+                [value],
+                BusActivation::Always,
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_a_table_narrower_than_the_air_that_owns_it() {
+        let context = BusContext::<BabyBear, BabyBear>::build(&[&TwoColumnAir], &[1])
+            .unwrap()
+            .unwrap();
+        // One committed column cannot resolve a declaration reading the second one.
+        let narrow = Table::new(RowMajorMatrix::new(vec![BabyBear::ZERO; 2], 2));
+
+        assert_eq!(
+            context.check_tables(&[&narrow], &[None], &[&[]]),
+            Err(BusBindingError::Evaluation(
+                BusEvaluationError::MainColumn { column: 1 }
+            ))
+        );
+
+        // The declared width resolves the same declaration without an error.
+        let wide = Table::new(RowMajorMatrix::new(vec![BabyBear::ZERO; 4], 2));
+        assert_eq!(context.check_tables(&[&wide], &[None], &[&[]]), Ok(()));
     }
 
     #[test]
