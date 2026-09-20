@@ -17,6 +17,7 @@ parallel = [
 ]
 
 [dependencies]
+blake3.workspace = true
 hashbrown.workspace = true
 itertools.workspace = true
 libm.workspace = true
@@ -32,6 +33,7 @@ p3-multilinear-util.workspace = true
 p3-security.workspace = true
 p3-sumcheck.workspace = true
 p3-util.workspace = true
+postcard = { workspace = true, features = ["alloc"] }
 serde = { workspace = true, features = ["derive", "alloc"] }
 thiserror.workspace = true
 tracing.workspace = true
@@ -49,7 +51,6 @@ p3-monty-31.workspace = true
 p3-poseidon2-air.workspace = true
 p3-symmetric.workspace = true
 p3-whir.workspace = true
-postcard = { workspace = true, features = ["alloc"] }
 proptest.workspace = true
 rand = { workspace = true }
 tracing-forest = { workspace = true, features = ["ansi", "smallvec"] }
