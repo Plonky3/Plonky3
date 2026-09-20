@@ -72,7 +72,15 @@ impl<Inner> GroupedCodewordMmcs<Inner> {
         }
     }
 
-    fn group_size_at(&self, height: usize) -> Option<usize> {
+    /// Field elements one leaf packs over a codeword of `height` symbols.
+    ///
+    /// A leaf never reaches past the round's message, so the configured group size is capped at
+    /// `height >> log_inv_rate`. The cap tightens round by round as the codeword folds.
+    ///
+    /// # Returns
+    ///
+    /// `None` when `height` is shorter than the inverse rate and so carries no message.
+    pub fn group_size_at(&self, height: usize) -> Option<usize> {
         let message_len = height >> self.log_inv_rate.unwrap_or(0);
         (message_len != 0).then(|| self.group_size.min(message_len))
     }
