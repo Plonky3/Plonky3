@@ -64,7 +64,7 @@ impl<F: Field, EF: ExtensionField<F>> Layout<F, EF> for PrefixProver<F, EF> {
 
     fn write_message(witness: &Witness<F>, folding: usize, message: &mut [F]) {
         write_stacked_message(
-            VariableOrder::Prefix,
+            Self::variable_order(),
             witness.retained_poly(),
             folding,
             message,
