@@ -66,17 +66,20 @@ pub trait HarnessHash:
 
     /// Collision resistance of this hash, in bits, as the security report's cap.
     ///
-    /// The digest is 32 bytes wide, so the birthday bound is half of that. An implementor whose
-    /// construction is weaker than its output width lowers this.
-    const COLLISION_RESISTANCE_BITS: usize = 128;
+    /// The digest is 32 bytes wide, so a hash whose construction is as strong as its output
+    /// states the birthday bound, half of that. One that is weaker states the lower number, so
+    /// every implementor names its own.
+    const COLLISION_RESISTANCE_BITS: usize;
 }
 
 impl HarnessHash for Keccak256Hash {
     const INSTANCE: Self = Self;
+    const COLLISION_RESISTANCE_BITS: usize = 128;
 }
 
 impl HarnessHash for Blake3 {
     const INSTANCE: Self = Self;
+    const COLLISION_RESISTANCE_BITS: usize = 128;
 }
 
 /// The byte hash one run commits and transcribes with.
