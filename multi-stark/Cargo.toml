@@ -17,7 +17,6 @@ parallel = [
 ]
 
 [dependencies]
-blake3.workspace = true
 hashbrown.workspace = true
 itertools.workspace = true
 libm.workspace = true
