@@ -53,9 +53,6 @@ pub const MAX_SLICED_ROUNDS: usize = 4;
 /// Row variables one word's lanes span.
 const LANE_VARIABLES: usize = SLICED_LANES.trailing_zeros() as usize;
 
-/// Corners one byte-indexed subset-sum table spans.
-const CORNERS_PER_TABLE: usize = u8::BITS as usize;
-
 /// A stage's cells as bit planes, laid out word by word.
 pub(super) struct SlicedTrace {
     /// Number of variables of the stage.
