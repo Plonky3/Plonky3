@@ -5,17 +5,17 @@ use core::array;
 
 use p3_word::{ConstraintSystem, Operand};
 
-use crate::{PackedWitness, PackedWord, WitnessError};
+use crate::{Packed, PackedWitness, PackedWord, WitnessError};
 
-/// Packed rows used by the AND and integer-multiplication reductions.
-///
-/// The AND output is absent because that reduction derives it from its two inputs.
+/// Packed rows used by the relation reductions.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct OperationColumns<W: PackedWord> {
-    /// The left and right inputs to each bitwise product.
-    bitwise_and: [Vec<W::Packing>; 2],
+    /// The operand each linear relation requires to vanish.
+    zero: Vec<Packed<W>>,
+    /// The left input, right input, and output of each bitwise product.
+    bitwise_and: [Vec<Packed<W>>; 3],
     /// The factors and result limbs of each unsigned product.
-    integer_mul: [Vec<W::Packing>; 4],
+    integer_mul: [Vec<Packed<W>>; 4],
 }
 
 impl<W: PackedWord> OperationColumns<W> {
@@ -36,12 +36,20 @@ impl<W: PackedWord> OperationColumns<W> {
             result
         };
 
-        // One constraint-major pass fills both bitwise reduction columns.
+        // The linear family has one semantic operand per relation.
+        let zero = system
+            .zero_constraints()
+            .iter()
+            .map(|constraint| evaluate(constraint.value()))
+            .collect();
+
+        // One constraint-major pass fills all three bitwise reduction columns.
         let and_constraints = system.and_constraints();
         let mut bitwise_and = array::from_fn(|_| Vec::with_capacity(and_constraints.len()));
         for constraint in and_constraints {
             bitwise_and[0].push(evaluate(constraint.left()));
             bitwise_and[1].push(evaluate(constraint.right()));
+            bitwise_and[2].push(evaluate(constraint.output()));
         }
 
         // One constraint-major pass fills all four integer-product columns.
@@ -55,20 +63,27 @@ impl<W: PackedWord> OperationColumns<W> {
         }
 
         Ok(Self {
+            zero,
             bitwise_and,
             integer_mul,
         })
     }
 
-    /// Returns the left and right AND operands.
+    /// Returns the operand of each linear relation.
     #[inline]
-    pub const fn bitwise_and(&self) -> &[Vec<W::Packing>; 2] {
+    pub fn zero(&self) -> &[Packed<W>] {
+        &self.zero
+    }
+
+    /// Returns the left, right, and output AND operands.
+    #[inline]
+    pub const fn bitwise_and(&self) -> &[Vec<Packed<W>>; 3] {
         &self.bitwise_and
     }
 
     /// Returns the factors followed by the low and high product limbs.
     #[inline]
-    pub const fn integer_mul(&self) -> &[Vec<W::Packing>; 4] {
+    pub const fn integer_mul(&self) -> &[Vec<Packed<W>>; 4] {
         &self.integer_mul
     }
 }

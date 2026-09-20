@@ -25,7 +25,7 @@
 mod claim;
 mod error;
 mod polynomial;
-mod transcript;
+pub(crate) mod transcript;
 mod wiring;
 
 use alloc::vec::Vec;
@@ -368,8 +368,15 @@ impl<W: Word> ShiftReductionKey<W> {
         self.system.witness_len().max(1).next_power_of_two().ilog2() as usize
     }
 
+    /// Returns the number of variables spanning the widest padded relation family.
+    #[must_use]
+    pub const fn constraint_variables(&self) -> usize {
+        // Every family is zero-padded to this shared constraint cube.
+        self.constraint_variables
+    }
+
     /// Builds the numeric soundness model from the executed schedule.
-    fn security_model(&self, field_bits: NonZeroUsize) -> WordShiftSecurityModel {
+    pub(crate) fn security_model(&self, field_bits: NonZeroUsize) -> WordShiftSecurityModel {
         // Two two-variable batching axes and both quadratic round counts are exact.
         WordShiftSecurityModel::new(
             field_bits.get(),

@@ -388,7 +388,7 @@ where
 }
 
 /// Expands a point into its Boolean equality table in lexicographic order.
-pub(super) fn equality_weights<F: Field>(point: &[F]) -> Vec<F> {
+pub(crate) fn equality_weights<F: Field>(point: &[F]) -> Vec<F> {
     // Start with the empty product over a zero-variable cube.
     let mut weights = vec![F::ONE];
     for &coordinate in point {

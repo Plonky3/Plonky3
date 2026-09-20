@@ -1,48 +1,49 @@
 //! Packed statement words in the bit order consumed by the Boolean PCS.
 
 use alloc::vec::Vec;
-use core::fmt::Debug;
-use core::ops::AddAssign;
 
-use p3_binary_field::{PackedGf2x32, PackedGf2x64};
+use p3_binary_field::{PackedGf2, Underlier};
 use p3_word::{ConstraintSystem, Segment, ShapeError, ValueIndex, Word, Word32, Word64};
+
+/// One field lane per bit of a word, from least to most significant.
+pub type Packed<W> = PackedGf2<<W as PackedWord>::Lane>;
 
 /// A word whose bits occupy one binary-field packing.
 pub trait PackedWord: Word {
-    /// One field lane per bit, from least to most significant.
-    type Packing: AddAssign + Copy + Debug + Eq;
+    /// The machine word whose lanes carry one packed value.
+    type Lane: Underlier;
 
     /// Packs the word without changing its bit order.
-    fn pack(self) -> Self::Packing;
+    fn pack(self) -> Packed<Self>;
 
     /// Recovers the word from its bit lanes.
-    fn unpack(value: Self::Packing) -> Self;
+    fn unpack(value: Packed<Self>) -> Self;
 }
 
 impl PackedWord for Word32 {
-    type Packing = PackedGf2x32;
+    type Lane = u32;
 
     #[inline]
-    fn pack(self) -> Self::Packing {
-        PackedGf2x32::new(self.get())
+    fn pack(self) -> Packed<Self> {
+        Packed::<Self>::new(self.get())
     }
 
     #[inline]
-    fn unpack(value: Self::Packing) -> Self {
+    fn unpack(value: Packed<Self>) -> Self {
         Self::new(value.to_bits())
     }
 }
 
 impl PackedWord for Word64 {
-    type Packing = PackedGf2x64;
+    type Lane = u64;
 
     #[inline]
-    fn pack(self) -> Self::Packing {
-        PackedGf2x64::new(self.get())
+    fn pack(self) -> Packed<Self> {
+        Packed::<Self>::new(self.get())
     }
 
     #[inline]
-    fn unpack(value: Self::Packing) -> Self {
+    fn unpack(value: Packed<Self>) -> Self {
         Self::new(value.to_bits())
     }
 }
@@ -55,9 +56,9 @@ impl PackedWord for Word64 {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PackedWitness<W: PackedWord> {
     /// The verifier-known words in least-significant-bit-first packing.
-    public: Vec<W::Packing>,
+    public: Vec<Packed<W>>,
     /// The committed words in least-significant-bit-first packing.
-    witness: Vec<W::Packing>,
+    witness: Vec<Packed<W>>,
 }
 
 /// A witness that does not match its checked statement shape.
@@ -82,8 +83,8 @@ impl<W: PackedWord> PackedWitness<W> {
     /// Takes ownership of exactly shaped buffers that are already bit-packed.
     pub fn from_packed(
         system: &ConstraintSystem<W>,
-        public: Vec<W::Packing>,
-        witness: Vec<W::Packing>,
+        public: Vec<Packed<W>>,
+        witness: Vec<Packed<W>>,
     ) -> Result<Self, WitnessError> {
         // Prepacked buffers obey the same checked statement shape.
         system.check_shape(public.len(), witness.len())?;
@@ -100,13 +101,13 @@ impl<W: PackedWord> PackedWitness<W> {
 
     /// Returns the packed public words.
     #[inline]
-    pub fn public(&self) -> &[W::Packing] {
+    pub fn public(&self) -> &[Packed<W>] {
         &self.public
     }
 
     /// Returns the packed committed words.
     #[inline]
-    pub fn witness(&self) -> &[W::Packing] {
+    pub fn witness(&self) -> &[Packed<W>] {
         &self.witness
     }
 
@@ -128,6 +129,7 @@ impl<W: PackedWord> PackedWitness<W> {
 mod tests {
     use alloc::vec;
 
+    use p3_binary_field::PackedGf2x64;
     use p3_word::ConstraintSystem;
     use proptest::prelude::*;
 

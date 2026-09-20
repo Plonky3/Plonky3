@@ -1,7 +1,9 @@
-//! Soundness terms for the word shift reduction.
+//! Soundness terms for the word-level relation proof.
 
 use alloc::vec::Vec;
 
+use crate::binary::BinaryPcsRegime;
+use crate::multilinear::bit_ring_switch_term;
 use crate::{ErrorBits, SecurityTerm};
 
 /// Label for the complete word shift reduction error.
@@ -80,6 +82,132 @@ impl WordShiftSecurityModel {
     }
 }
 
+/// Label for the complete word-level relation proof error.
+pub const WORD_PROOF_LABEL: &str = "word-proof";
+
+/// Label for separating the relation families of one statement.
+pub const WORD_RELATION_BATCHING_LABEL: &str = "word-relation-batching";
+
+/// Label for the point the batched relations are required to vanish at.
+pub const WORD_ZEROCHECK_POINT_LABEL: &str = "word-relation-zerocheck-point";
+
+/// Label for the rounds of the batched relation vanishing check.
+pub const WORD_ZEROCHECK_ROUNDS_LABEL: &str = "word-relation-zerocheck-rounds";
+
+/// Checked dimensions of one complete word-level relation proof.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct WordProofSecurityModel {
+    /// Lower bound on the base-two logarithm of the challenge-field order.
+    field_bits: usize,
+    /// Relation families combined under one batching coefficient.
+    relation_families: usize,
+    /// Constraint and within-word variables the vanishing check binds.
+    zerocheck_variables: usize,
+    /// Per-variable degree of the batched relation polynomial.
+    zerocheck_degree: usize,
+    /// Dimensions of the shift reduction that follows.
+    shift: WordShiftSecurityModel,
+    /// Base-two logarithm of the bits one committed element holds.
+    absorbed_log: usize,
+    /// Variables the committed bit trace spans.
+    trace_variables: usize,
+    /// Dimensions of the commitment the final claim is discharged through.
+    pcs: BinaryPcsRegime,
+}
+
+impl WordProofSecurityModel {
+    /// Creates a model when every sampled experiment has a well-formed shape.
+    ///
+    /// The width argument is a lower bound on the base-two logarithm of the challenge-field order.
+    ///
+    /// Every batching, vanishing, and reduction challenge must be drawn from that same field.
+    #[must_use]
+    pub const fn new(
+        field_bits: usize,
+        relation_families: usize,
+        zerocheck_variables: usize,
+        zerocheck_degree: usize,
+        shift: WordShiftSecurityModel,
+        absorbed_log: usize,
+        trace_variables: usize,
+        pcs: BinaryPcsRegime,
+    ) -> Option<Self> {
+        // A degree-zero composition carries no round polynomial to separate against.
+        if field_bits == 0 || zerocheck_degree == 0 || trace_variables < absorbed_log {
+            return None;
+        }
+
+        Some(Self {
+            field_bits,
+            relation_families,
+            zerocheck_variables,
+            zerocheck_degree,
+            shift,
+            absorbed_log,
+            trace_variables,
+            pcs,
+        })
+    }
+
+    /// Returns each algebraic error source for diagnostic reporting.
+    #[must_use]
+    pub fn components(self) -> Vec<SecurityTerm> {
+        let mut terms = Vec::new();
+
+        // One coefficient separates the families, so its degree is one below their count.
+        let separated = self.relation_families.saturating_sub(1);
+        if separated != 0 {
+            terms.push(SecurityTerm::new(
+                WORD_RELATION_BATCHING_LABEL,
+                error_from_numerator(self.field_bits, separated as u128),
+            ));
+        }
+
+        // A relation that fails somewhere on the cube survives only at a root of its extension.
+        if self.zerocheck_variables != 0 {
+            terms.push(SecurityTerm::new(
+                WORD_ZEROCHECK_POINT_LABEL,
+                error_from_numerator(self.field_bits, self.zerocheck_variables as u128),
+            ));
+            terms.push(SecurityTerm::new(
+                WORD_ZEROCHECK_ROUNDS_LABEL,
+                error_from_numerator(
+                    self.field_bits,
+                    self.zerocheck_degree as u128 * self.zerocheck_variables as u128,
+                ),
+            ));
+        }
+
+        // The shift reduction publishes its own separately labelled experiments.
+        terms.extend(self.shift.components());
+
+        // Recovering the packed commitment from the bit claim is one more reduction.
+        terms.push(bit_ring_switch_term(
+            1,
+            self.absorbed_log,
+            self.trace_variables - self.absorbed_log,
+            self.field_bits,
+        ));
+
+        // The reduction leaves exactly one claim for the commitment to discharge.
+        terms.push(self.pcs.opening_term(1));
+
+        terms
+    }
+
+    /// Returns the union bound over every experiment the proof runs.
+    #[must_use]
+    pub fn combined_term(self) -> SecurityTerm {
+        // Compose the independently labelled failure events by probability addition.
+        let errors = self
+            .components()
+            .iter()
+            .map(|component| component.bits)
+            .collect::<Vec<_>>();
+        SecurityTerm::new(WORD_PROOF_LABEL, ErrorBits::sum(&errors))
+    }
+}
+
 /// Converts an exact numerator over the challenge-field order into bits.
 fn error_from_numerator(field_bits: usize, numerator: u128) -> ErrorBits {
     // Round upward so floating-point conversion cannot understate the error.
@@ -115,6 +243,57 @@ mod tests {
         // The composable term is the union of both events.
         let expected = ErrorBits::sum(&[components[0].bits, components[1].bits]);
         assert_eq!(model.combined_term().bits, expected);
+    }
+
+    #[test]
+    fn the_complete_proof_charges_every_stage_once() {
+        // Fixture state:
+        //
+        // - two relation families, so one separating coefficient;
+        // - nine vanishing variables bound at per-variable degree three;
+        // - four shift batching variables and twenty-six quadratic rounds;
+        // - thirteen trace variables, seven of them absorbed by one element.
+        let shift = WordShiftSecurityModel::new(128, 4, 26).unwrap();
+        let pcs = BinaryPcsRegime::new(128, 6, 2, 1, 40, 0).unwrap();
+        let model = WordProofSecurityModel::new(128, 2, 9, 3, shift, 7, 13, pcs).unwrap();
+        let components = model.components();
+
+        // One coefficient separates two families, so its numerator is one.
+        assert_eq!(components[0].label, WORD_RELATION_BATCHING_LABEL);
+        assert_eq!(components[0].bits.bits(), 128.0);
+
+        // Nine variables give the vanishing point the numerator nine.
+        assert_eq!(components[1].label, WORD_ZEROCHECK_POINT_LABEL);
+        assert_eq!(components[1].bits.bits(), 128.0 - libm::log2(9.0));
+
+        // Nine cubic rounds give the numerator twenty-seven.
+        assert_eq!(components[2].label, WORD_ZEROCHECK_ROUNDS_LABEL);
+        assert_eq!(components[2].bits.bits(), 128.0 - libm::log2(27.0));
+
+        // The shift, ring-switch, and commitment stages each add their own label.
+        assert_eq!(components.len(), 3 + shift.components().len() + 2);
+
+        // The composable term is the union of every event.
+        let errors = components
+            .iter()
+            .map(|component| component.bits)
+            .collect::<Vec<_>>();
+        assert_eq!(model.combined_term().bits, ErrorBits::sum(&errors));
+    }
+
+    #[test]
+    fn a_proof_model_rejects_a_shape_it_cannot_charge_honestly() {
+        let shift = WordShiftSecurityModel::new(128, 4, 26).unwrap();
+        let pcs = BinaryPcsRegime::new(128, 6, 2, 1, 40, 0).unwrap();
+
+        // A challenge field must expose at least one bit of entropy.
+        assert!(WordProofSecurityModel::new(0, 2, 9, 3, shift, 7, 13, pcs).is_none());
+
+        // A degree-zero composition carries no round polynomial to separate against.
+        assert!(WordProofSecurityModel::new(128, 2, 9, 0, shift, 7, 13, pcs).is_none());
+
+        // A trace narrower than one committed element leaves the ring switch nothing to do.
+        assert!(WordProofSecurityModel::new(128, 2, 9, 3, shift, 7, 6, pcs).is_none());
     }
 
     #[test]
