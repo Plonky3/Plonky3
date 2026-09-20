@@ -1,6 +1,15 @@
 //! The register of bytes the subfield kernels run on, and the backend behind it.
 
 /// The byte positions congruent to `offset` modulo `group`, as a per-byte mask.
+#[cfg(any(
+    test,
+    all(
+        target_arch = "x86_64",
+        target_feature = "gfni",
+        target_feature = "avx512f",
+        target_feature = "avx512bw"
+    )
+))]
 pub(crate) const fn group_mask(group: usize, offset: usize) -> u64 {
     let mut mask = 0u64;
     let mut position = offset;
@@ -11,11 +20,10 @@ pub(crate) const fn group_mask(group: usize, offset: usize) -> u64 {
     mask
 }
 
-/// The byte-register operations the subfield kernels are written against.
+/// The little a butterfly asks of a register: read it, exclusive or it, write it back.
 ///
-/// A matrix argument is one `8 x 8` block over `GF(2)`.
-/// Byte `7 - i` of its quadword is the row producing output bit `i`.
-pub(crate) trait ByteLanes: Copy {
+/// Every byte backend offers these three, so the butterfly loop is written once.
+pub(crate) trait ByteRegister: Copy {
     /// Bytes one register holds.
     const BYTES: usize;
 
@@ -33,7 +41,22 @@ pub(crate) trait ByteLanes: Copy {
 
     /// Bitwise exclusive or.
     fn xor(self, other: Self) -> Self;
+}
 
+/// The byte-map operations the wider subfield kernels are written against.
+///
+/// A matrix argument is one `8 x 8` block over `GF(2)`.
+/// Byte `7 - i` of its quadword is the row producing output bit `i`.
+#[cfg(any(
+    test,
+    all(
+        target_arch = "x86_64",
+        target_feature = "gfni",
+        target_feature = "avx512f",
+        target_feature = "avx512bw"
+    )
+))]
+pub(crate) trait ByteLanes: ByteRegister {
     /// Rotate every group of `GROUP` bytes, so a position takes the byte `shift` above it.
     ///
     /// # Panics
@@ -56,7 +79,7 @@ pub(crate) trait ByteLanes: Copy {
 // A register width is an associated constant, which a const-generic chunk size cannot take.
 #[allow(clippy::chunks_exact_to_as_chunks)]
 #[inline]
-pub(crate) fn butterfly_run<L: ByteLanes, const INVERSE: bool>(
+pub(crate) fn butterfly_run<L: ByteRegister, const INVERSE: bool>(
     lo: &mut [u8],
     hi: &mut [u8],
     map: impl Fn(L) -> L,
@@ -107,7 +130,7 @@ mod x86_64 {
         _mm512_shuffle_epi8, _mm512_storeu_si512, _mm512_xor_si512,
     };
 
-    use super::ByteLanes;
+    use super::{ByteLanes, ByteRegister};
 
     /// The byte each position takes when the two bytes of every pair are exchanged.
     static SWAP_PAIRS: [u8; 64] = {
@@ -121,7 +144,7 @@ mod x86_64 {
     };
 
     // SAFETY: this module compiles only where the crate enables the needed target features.
-    impl ByteLanes for __m512i {
+    impl ByteRegister for __m512i {
         const BYTES: usize = 64;
 
         #[inline(always)]
@@ -140,7 +163,10 @@ mod x86_64 {
         fn xor(self, other: Self) -> Self {
             unsafe { _mm512_xor_si512(self, other) }
         }
+    }
 
+    // SAFETY: this module compiles only where the crate enables the needed target features.
+    impl ByteLanes for __m512i {
         #[inline(always)]
         fn rotate_group<const GROUP: usize>(self, shift: usize) -> Self {
             unsafe {
@@ -176,6 +202,43 @@ mod x86_64 {
                     _mm512_set1_epi64(matrix as i64),
                 )
             }
+        }
+    }
+}
+
+/// The 128-bit register, over `NEON`.
+///
+/// It has no byte-map instruction, so it carries only what a butterfly needs.
+/// Scaling by one element of GF(2^8) uses a pair of nibble lookups instead.
+#[cfg(all(
+    target_arch = "aarch64",
+    target_feature = "neon",
+    target_endian = "little"
+))]
+mod aarch64 {
+    use core::arch::aarch64::{uint8x16_t, veorq_u8, vld1q_u8, vst1q_u8};
+
+    use super::ByteRegister;
+
+    // SAFETY: this module compiles only where the crate enables the needed target features.
+    impl ByteRegister for uint8x16_t {
+        const BYTES: usize = 16;
+
+        #[inline(always)]
+        unsafe fn load(from: *const u8) -> Self {
+            // SAFETY: the readability of the address is the caller's obligation.
+            unsafe { vld1q_u8(from) }
+        }
+
+        #[inline(always)]
+        unsafe fn store(to: *mut u8, value: Self) {
+            // SAFETY: the writability of the address is the caller's obligation.
+            unsafe { vst1q_u8(to, value) }
+        }
+
+        #[inline(always)]
+        fn xor(self, other: Self) -> Self {
+            unsafe { veorq_u8(self, other) }
         }
     }
 }

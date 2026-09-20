@@ -736,7 +736,7 @@ mod tests {
     use p3_field::PrimeCharacteristicRing;
     use p3_field::extension::BinomialExtensionField;
     use rand::SeedableRng;
-    use rand::rngs::SmallRng;
+    use rand::rngs::StdRng;
 
     use super::*;
 
@@ -750,7 +750,7 @@ mod tests {
 
     fn fresh_challenger() -> Ch {
         // Fixed seed so two runs differ only where the transcript makes them differ.
-        let mut rng = SmallRng::seed_from_u64(0xDEADBEEF);
+        let mut rng = StdRng::seed_from_u64(0xDEADBEEF);
         Ch::new(Perm::new_from_rng_128(&mut rng))
     }
 

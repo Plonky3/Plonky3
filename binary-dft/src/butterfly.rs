@@ -317,7 +317,7 @@ fn subfield_prefix<F: ByteCoordinates, const INVERSE: bool>(
     use core::arch::x86_64::__m512i;
 
     use crate::affine;
-    use crate::lanes::ByteLanes;
+    use crate::lanes::ByteRegister;
 
     const {
         // The layout contract holds only where the bytes run from the low coordinate up.
@@ -334,13 +334,15 @@ fn subfield_prefix<F: ByteCoordinates, const INVERSE: bool>(
 
     // A run below one register covers nothing, so its blocks would be built and thrown away.
     // The narrow stages of a narrow matrix are almost all of the butterflies, and all short.
-    if bytes < <__m512i as ByteLanes>::BYTES {
+    if bytes < <__m512i as ByteRegister>::BYTES {
         return 0;
     }
 
     // SAFETY: the marker trait's contract makes each run exactly that many initialised bytes.
     //
     // It rules out padding, and any byte pattern a write could turn into an invalid element.
+    // The two runs are halves of one split slice, so no byte belongs to both.
+    // The runs have equal length, so one byte count is in bounds for both.
     let (lo, hi) = unsafe {
         (
             core::slice::from_raw_parts_mut(lo.as_mut_ptr().cast::<u8>(), bytes),
@@ -366,12 +368,80 @@ fn subfield_prefix<F: ByteCoordinates, const INVERSE: bool>(
     covered / size_of::<F>()
 }
 
+/// The one-byte subfield butterfly on NEON.
+///
+/// # Returns
+///
+/// - The number of elements covered, which the caller finishes from.
+#[cfg(all(
+    target_arch = "aarch64",
+    target_feature = "neon",
+    target_endian = "little"
+))]
+#[inline]
+fn subfield_prefix<F: ByteCoordinates, const INVERSE: bool>(
+    lo: &mut [F],
+    hi: &mut [F],
+    width: TwiddleWidth,
+) -> usize {
+    use core::arch::aarch64::uint8x16_t;
+
+    use crate::lanes::ByteRegister;
+    use crate::neon;
+
+    // The byte layout only holds where the bytes run from the low coordinate up.
+    //
+    // That is a little-endian target, which the gate on this function already requires.
+    const {
+        // One element is its whole backing integer, so its size is its coordinate count.
+        assert!(size_of::<F>() == 1 << (F::LOG_BITS - 3));
+
+        // A register is sixteen bytes, so a whole number of them is a whole number of elements.
+        assert!(<uint8x16_t as ByteRegister>::BYTES.is_multiple_of(size_of::<F>()));
+    }
+
+    let TwiddleWidth::Byte(t) = width else {
+        return 0;
+    };
+
+    let bytes = size_of_val(lo);
+    if bytes < neon::MIN_BYTES {
+        return 0;
+    }
+
+    // SAFETY: the marker trait's contract makes each run exactly that many initialised bytes.
+    //
+    // It rules out padding, and any byte pattern a write could turn into an invalid element.
+    // The two runs are halves of one split slice, so no byte belongs to both.
+    // The runs have equal length, so one byte count is in bounds for both.
+    let (lo, hi) = unsafe {
+        (
+            core::slice::from_raw_parts_mut(lo.as_mut_ptr().cast::<u8>(), bytes),
+            core::slice::from_raw_parts_mut(hi.as_mut_ptr().cast::<u8>(), bytes),
+        )
+    };
+
+    // The map is linear, so its products with the basis elements determine it.
+    let t = BinaryField8::from_repr(t);
+    let columns: [u8; 8] =
+        core::array::from_fn(|b| (t * BinaryField8::from_repr(1 << b)).to_repr());
+
+    neon::byte_butterfly::<INVERSE>(lo, hi, &columns) / size_of::<F>()
+}
+
 /// Without the byte map there is no prefix to take, so the whole run falls to the caller.
-#[cfg(not(all(
-    target_arch = "x86_64",
-    target_feature = "gfni",
-    target_feature = "avx512f",
-    target_feature = "avx512bw"
+#[cfg(not(any(
+    all(
+        target_arch = "x86_64",
+        target_feature = "gfni",
+        target_feature = "avx512f",
+        target_feature = "avx512bw"
+    ),
+    all(
+        target_arch = "aarch64",
+        target_feature = "neon",
+        target_endian = "little"
+    )
 )))]
 #[inline]
 const fn subfield_prefix<F: ByteCoordinates, const INVERSE: bool>(
@@ -642,6 +712,21 @@ mod tests {
     }
 
     #[test]
+    fn one_byte_twiddles_agree_around_every_register_boundary() {
+        // Lengths around the register and threshold boundaries.
+        const LENS: [usize; 14] = [0, 1, 15, 16, 17, 31, 32, 33, 255, 256, 257, 511, 512, 513];
+        for t in [0x01u8, 0x02, 0x03, 0x80, 0xa5, 0xff] {
+            for len in LENS {
+                agrees::<BinaryField8>(len, BinaryField8::from_repr(t)).unwrap();
+                agrees::<BinaryField16>(len, BinaryField16::from_repr(t as u16)).unwrap();
+                agrees::<BinaryField32>(len, BinaryField32::from_repr(t as u32)).unwrap();
+                agrees::<BinaryField64>(len, BinaryField64::from_repr(t as u64)).unwrap();
+                agrees::<BinaryField128>(len, BinaryField128::from_repr(t as u128)).unwrap();
+            }
+        }
+    }
+
+    #[test]
     fn the_classification_follows_the_twiddle_magnitude() {
         // Fixture: both ends of each subfield band, plus the first value past the widest.
         //
@@ -688,6 +773,19 @@ mod tests {
         /// The same, with the twiddle drawn from the one-byte subfield the byte map covers.
         #[test]
         fn byte_twiddles_agree_with_the_element_loop(t in any::<u8>(), len in 0usize..70) {
+            agrees::<BinaryField8>(len, BinaryField8::from_repr(t))?;
+            agrees::<BinaryField16>(len, BinaryField16::from_repr(t as u16))?;
+            agrees::<BinaryField32>(len, BinaryField32::from_repr(t as u32))?;
+            agrees::<BinaryField64>(len, BinaryField64::from_repr(t as u64))?;
+            agrees::<BinaryField128>(len, BinaryField128::from_repr(t as u128))?;
+        }
+
+        /// The same at lengths that reach the register kernels.
+        #[test]
+        fn byte_twiddles_agree_on_runs_past_the_register_threshold(
+            t in any::<u8>(),
+            len in 0usize..600,
+        ) {
             agrees::<BinaryField8>(len, BinaryField8::from_repr(t))?;
             agrees::<BinaryField16>(len, BinaryField16::from_repr(t as u16))?;
             agrees::<BinaryField32>(len, BinaryField32::from_repr(t as u32))?;
