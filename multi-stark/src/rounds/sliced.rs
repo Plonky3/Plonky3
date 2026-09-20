@@ -25,7 +25,10 @@ use alloc::vec::Vec;
 use core::ops::Range;
 
 use p3_air::{Air, BaseAir};
-use p3_field::{Algebra, ExtensionField, Field, HasSubfield, PackedFieldExtension, PackedValue};
+use p3_field::{
+    Algebra, ExtensionField, Field, HasSubfield, PackedFieldExtension, PackedValue,
+    PrimeCharacteristicRing,
+};
 use p3_maybe_rayon::prelude::*;
 use p3_multilinear_util::poly::Poly;
 use p3_sumcheck::layout::Table;
@@ -37,7 +40,7 @@ use super::{
     node_schedule, rows_per_task,
 };
 use crate::folder::{InteractionMultilinearFolder, MultilinearFolder};
-use crate::packed_ext::PackedRepr;
+use crate::packed_ext::{PackedExt, PackedRepr};
 use crate::selectors::BoundaryEvals;
 use crate::sliced::{LaneSums, SLICED_LANES, SlicedFolder, SlicedGf4, gf4_coordinates, is_gf4};
 
@@ -1163,6 +1166,26 @@ impl RowTile {
         }
     }
 
+    /// One lane group of one column's residual row pairs, low halves then high halves.
+    #[inline]
+    fn lane_pair<F, R: Field>(
+        &self,
+        fold: &PlaneFold<'_, R>,
+        lane: usize,
+        column: usize,
+    ) -> (PackedRepr<F, R>, PackedRepr<F, R>) {
+        let (mut low, mut high) = (R::Packing::ZERO, R::Packing::ZERO);
+        for (step, (l, h)) in low
+            .as_slice_mut()
+            .iter_mut()
+            .zip(high.as_slice_mut())
+            .enumerate()
+        {
+            (*l, *h) = fold.row_pair(self.cell(lane + step, column));
+        }
+        (PackedExt::new(low), PackedExt::new(high))
+    }
+
     /// Read one lane group of residual row pairs of every column into a packed node walk's buffers.
     fn read_lane_group<F, R: Field>(
         &self,
@@ -1171,7 +1194,6 @@ impl RowTile {
         next_columns: &[Range<usize>],
         scratch: &mut PackedScratch<PackedRepr<F, R>, PackedRepr<F, R>>,
     ) {
-        let half = fold.groups * PLANE_BYTES;
         let PackedScratch {
             local_point,
             local_diff,
@@ -1184,8 +1206,7 @@ impl RowTile {
             .zip(local_diff.iter_mut())
             .enumerate()
         {
-            let lo = lane_group(|step| fold.row_value(&self.cell(lane + step, column)[..half]));
-            let hi = lane_group(|step| fold.row_value(&self.cell(lane + step, column)[half..]));
+            let (lo, hi) = self.lane_pair(fold, lane, column);
             *local = lo;
             *local_delta = hi - lo;
         }
@@ -1195,10 +1216,7 @@ impl RowTile {
                 .zip(next_point[run.clone()].iter_mut())
                 .zip(next_diff[run.clone()].iter_mut())
             {
-                let lo =
-                    lane_group(|step| fold.row_value(&self.cell(lane + step + 1, column)[..half]));
-                let hi =
-                    lane_group(|step| fold.row_value(&self.cell(lane + step + 1, column)[half..]));
+                let (lo, hi) = self.lane_pair(fold, lane + 1, column);
                 *next = lo;
                 *next_delta = hi - lo;
             }
