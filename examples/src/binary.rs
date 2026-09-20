@@ -125,12 +125,18 @@ fn grouped_mmcs<H: HarnessHash, const N: usize>(
     }
 }
 
-/// Field elements one Merkle leaf packs under `pcs_config`.
-const fn leaf_elements_of(pcs_config: &BinaryPcsConfig, leaf_elements: Option<usize>) -> usize {
-    match leaf_elements {
-        Some(elements) => elements,
-        None => 1 << pcs_config.log_folding_factor(),
-    }
+/// Field elements one Merkle leaf of the base codeword packs under `mmcs`.
+///
+/// The commitment caps a leaf at each round's message length, so a request wider than the base
+/// codeword's message is reported at the cap rather than at its face value.
+///
+/// # Panics
+///
+/// Panics if the base codeword carries no message, which a validated schedule never does.
+fn leaf_elements_of<H, const N: usize>(pcs_config: &BinaryPcsConfig, mmcs: &Mmcs<H, N>) -> usize {
+    let base_height = 1usize << (pcs_config.num_variables() + pcs_config.log_inv_rate());
+    mmcs.group_size_at(base_height)
+        .expect("a validated schedule blows its message up by the inverse rate")
 }
 
 /// Multi-STARK configuration proving AIRs over `BinaryField128` with the binary PCS.
@@ -212,9 +218,10 @@ where
     let pcs_config =
         BinaryPcsConfig::try_new_with_folding::<F, F>(arity, params, folding.min(arity))?;
     let mmcs = grouped_mmcs::<H, N>(&pcs_config, leaf_elements);
+    let leaf_elements = leaf_elements_of(&pcs_config, &mmcs);
     Ok(BinaryStarkConfig {
         pcs: BinaryPcs::with_ntt(pcs_config, mmcs.clone(), mmcs, ntt)?,
-        leaf_elements: leaf_elements_of(&pcs_config, leaf_elements),
+        leaf_elements,
     })
 }
 
@@ -307,12 +314,10 @@ pub fn boolean_config<const N: usize, H: HarnessHash>(
     let pcs_config =
         BinaryPcsConfig::try_new_with_folding::<F, F>(committed, params, folding.min(committed))?;
     let mmcs = grouped_mmcs::<H, N>(&pcs_config, leaf_elements);
+    let leaf_elements = leaf_elements_of(&pcs_config, &mmcs);
     let pcs = BooleanTracePcs::new(pcs_config, mmcs.clone(), mmcs, arity)
         .map_err(BinaryProofError::BooleanConfig)?;
-    Ok(BooleanStarkConfig {
-        pcs,
-        leaf_elements: leaf_elements_of(&pcs_config, leaf_elements),
-    })
+    Ok(BooleanStarkConfig { pcs, leaf_elements })
 }
 
 /// A fresh transcript seeded for one commit, prove, or verify call.
@@ -401,6 +406,11 @@ pub struct BinaryProofReport {
     pub hash: HashFamily,
     /// Field elements each Merkle leaf of the base codeword packed.
     pub leaf_elements: usize,
+    /// Field elements the run asked a leaf to pack, or `None` for one fold batch's coset.
+    ///
+    /// A request above the base codeword's message length is capped, and only
+    /// [`Self::leaf_elements`] describes what the commitment then packed.
+    pub requested_leaf_elements: Option<usize>,
     /// Serialized proof size, in bytes.
     pub proof_bytes: usize,
     /// Wall-clock time to lay the trace out as a table and run `prove`.
@@ -417,12 +427,22 @@ impl fmt::Display for BinaryProofReport {
         writeln!(f, "Width: {}", self.width)?;
         writeln!(f, "Stacked variables: {}", self.stacked_variables)?;
         writeln!(f, "Hash: {}", self.hash)?;
-        writeln!(
+        write!(
             f,
-            "Merkle leaf: {} field elements ({} bytes)",
+            "Merkle leaf: {} field elements ({} bytes",
             self.leaf_elements,
-            self.leaf_elements * F::NUM_BYTES
+            self.leaf_elements.saturating_mul(F::NUM_BYTES)
         )?;
+        if let Some(requested) = self
+            .requested_leaf_elements
+            .filter(|&requested| requested > self.leaf_elements)
+        {
+            write!(
+                f,
+                "; requested {requested}, capped at the base message length"
+            )?;
+        }
+        writeln!(f, ")")?;
         writeln!(f, "Proof size: {} bytes", self.proof_bytes)?;
         writeln!(f, "Prove time: {:.3}s", self.prove_seconds)?;
         writeln!(f, "Verify time: {:.3}s", self.verify_seconds)?;
@@ -938,6 +958,7 @@ where
         stacked_variables: config.pcs().num_vars(),
         hash: options.hash,
         leaf_elements,
+        requested_leaf_elements: options.leaf_elements,
         proof_bytes,
         prove_seconds,
         verify_seconds,
@@ -1253,7 +1274,10 @@ mod tests {
 
     #[test]
     fn a_boolean_trace_proves_under_either_hash() {
-        let log_height = 8;
+        // Three columns over this many rows stack into fourteen variables, seven of which one
+        // committed element absorbs, so the base message is 128 symbols: wide enough for the
+        // commitment to pack the requested leaf whole.
+        let log_height = 12;
         for hash in [HashFamily::Keccak256, HashFamily::Blake3] {
             let report = prove_boolean_air(
                 &XorAir,
@@ -1269,6 +1293,38 @@ mod tests {
             assert_eq!(report.leaf_elements, 64);
             assert!(report.security_bits >= 100.0);
         }
+    }
+
+    #[test]
+    fn a_leaf_wider_than_the_base_message_reports_the_cap() {
+        // Three columns over 256 rows stack into ten variables, seven of which one committed
+        // element absorbs, leaving a base message of eight symbols.
+        let log_height = 8;
+        let report = |leaf_elements| {
+            prove_boolean_air(
+                &XorAir,
+                Table::new(xor_trace(log_height).transpose()),
+                BinaryProofOptions {
+                    leaf_elements,
+                    ..BinaryProofOptions::default()
+                },
+            )
+            .expect("a Boolean trace must prove and verify at every leaf size")
+        };
+
+        // The commitment packs the whole message into one leaf and cannot pack more, so a
+        // wider request and the message itself describe the same tree.
+        let capped = report(Some(1 << 20));
+        let exact = report(Some(8));
+        assert_eq!(capped.leaf_elements, 8);
+        assert_eq!(capped.requested_leaf_elements, Some(1 << 20));
+        assert_eq!(capped.leaf_elements, exact.leaf_elements);
+        assert_eq!(capped.proof_bytes, exact.proof_bytes);
+        assert!(
+            capped
+                .to_string()
+                .contains("Merkle leaf: 8 field elements (128 bytes; requested 1048576, capped")
+        );
     }
 
     #[test]
