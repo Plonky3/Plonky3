@@ -222,6 +222,44 @@ const TILE_BYTES: usize = 32 * 1024;
 /// A 1 MiB tile fuses four stages more and takes half as long again.
 const STAGING_BYTES: usize = 64 * 1024;
 
+/// Bytes both tiles may occupy for a matrix the shared cache cannot hold.
+///
+/// Every stage a tile fuses is a traversal of the matrix the transform does not take. Inside
+/// the shared cache those traversals are served from it, and a tile deep enough to remove one
+/// buys a level of cache for a traversal that was cheap. Past it every traversal reaches
+/// memory, and the deeper tile is what keeps the transform off it.
+///
+/// A tile this deep runs a level further out than the budgets above, so it is what the
+/// private cache holds rather than what the level under it holds: one hardware thread's
+/// share, which is half of its core's where two threads sit on one core.
+///
+/// A sweep of the budget, as a ratio to the pair above, on a core holding 2 MiB of private
+/// cache for its two threads and 105 MiB of shared cache for its eight:
+///
+/// ```text
+///     matrix      4 MiB   16 MiB   64 MiB   128 MiB   256 MiB   512 MiB
+///     ratio        1.48     0.95     1.01      1.04      0.98      0.89
+/// ```
+///
+/// The four smallest are width 16 and the two widest a single column, so the curve is one in
+/// the matrix size rather than two in the height.
+///
+/// The 4 MiB entry is a second reason the deep budget is not for a matrix the cache holds: a
+/// tile that large leaves a matrix that small fewer tiles than there are workers to take
+/// them.
+const DEEP_TILE_BYTES: usize = 512 * 1024;
+
+/// Bytes of shared cache a matrix is taken to be inside.
+///
+/// Which level a traversal is served from is what decides whether [`DEEP_TILE_BYTES`] pays,
+/// and a `no_std` crate cannot read that level's size. The matrix size against a fixed figure
+/// is the signal left.
+///
+/// A target whose shared cache is smaller keeps the shallower tiles on matrices that would
+/// have paid for the deeper one, which is a win forgone rather than a cost added, and that is
+/// the safe direction for a signal this coarse.
+const SHARED_CACHE_BYTES: usize = 128 * 1024 * 1024;
+
 /// Bytes a gathered run of adjacent rows must cover for the staging to be worth running.
 ///
 /// A gather and a scatter address runs a power of two apart, so each address pulls and pushes
@@ -403,6 +441,20 @@ impl Plan {
         Self::groups(above, depth).count() + Self::leftover_stages(above, depth)
     }
 
+    /// The byte budgets a matrix of this shape gives its tiles, contiguous one first.
+    ///
+    /// A matrix no cache holds takes both tiles to [`DEEP_TILE_BYTES`], since the traversals
+    /// the added depth removes are the ones that would have reached memory.
+    ///
+    /// The comparison is in rows, so no height can overflow the byte count it names.
+    fn budgets(row: usize, log_n: usize) -> (usize, usize) {
+        if log_n > log2_floor_usize((SHARED_CACHE_BYTES / row).max(1)) {
+            (DEEP_TILE_BYTES, DEEP_TILE_BYTES)
+        } else {
+            (TILE_BYTES, STAGING_BYTES)
+        }
+    }
+
     /// The cut points a matrix of this shape gets, as the schedule that will run it sees them.
     fn new(width: usize, log_n: usize) -> Self {
         Self::for_workers(width, log_n, current_num_threads())
@@ -423,11 +475,11 @@ impl Plan {
     /// Below that count every stage above the contiguous tile runs as a plain pass.
     fn for_workers(width: usize, log_n: usize, workers: usize) -> Self {
         let row = core::mem::size_of::<u128>() * width;
-        let local = log2_floor_usize((TILE_BYTES / row).max(1)).min(log_n);
+        let (tile, staging) = Self::budgets(row, log_n);
+        let local = log2_floor_usize((tile / row).max(1)).min(log_n);
         let above = log_n - local;
         // Stages one tile fuses, with a run of `2^log_block` adjacent rows as its row.
-        let depth_at =
-            |log_block: usize| log2_floor_usize((STAGING_BYTES / (row << log_block)).max(1));
+        let depth_at = |log_block: usize| log2_floor_usize((staging / (row << log_block)).max(1));
         let floor = log2_ceil_usize(STAGED_LINE_BYTES.div_ceil(row));
         let target = log2_ceil_usize(STAGED_RUN_BYTES.div_ceil(row)).max(floor);
         // The shortest admissible run sets both counts no longer run may exceed.
@@ -1038,7 +1090,7 @@ mod tests {
     use p3_util::log2_floor_usize;
     use proptest::prelude::*;
 
-    use super::{Fold, Plan, PolyBasisNtt, STAGED_RUN_BYTES, STAGED_WORKERS, STAGING_BYTES};
+    use super::{Fold, Plan, PolyBasisNtt, STAGED_RUN_BYTES, STAGED_WORKERS};
     use crate::domain::{domain_point, subspace_polynomial};
     use crate::lch::LchNtt;
     use crate::naive::NaiveAdditiveNtt;
@@ -1126,19 +1178,22 @@ mod tests {
     ///     width  4 @ 2^20   four doublings, the widest row a run still spans several of
     ///     width  1 @ 2^22   four doublings again, from a run floor above one row
     ///     width 16 @ 2^18   no leftover pass, so growth rebalances (8, 3) into (6, 5)
-    ///     width 16 @ 2^20   no leftover pass either, rebalanced into (7, 6)
+    ///     width 16 @ 2^20   a deep tile, whose one group leaves the target run affordable
+    ///     width  1 @ 2^25   a deep tile whose run gives a doubling up to stay one group
     /// ```
     ///
-    /// The last two offer no leftover to trade, so the traversal count alone picks their run.
-    /// Width 16 at `2^20` rows is `2^24` elements, which is why none of these is transformed.
-    const PLAN_ONLY_CUTS: [(usize, usize, (usize, usize, usize)); 7] = [
-        (48, 18, (5, 0, 6)),
+    /// The first and the last two are past [`SHARED_CACHE_BYTES`], so they are the rows that
+    /// read the deep budget. Width 16 at `2^20` rows is `2^24` elements, which is why none of
+    /// these is transformed.
+    const PLAN_ONLY_CUTS: [(usize, usize, (usize, usize, usize)); 8] = [
+        (48, 18, (9, 0, 9)),
         (16, 16, (7, 0, 8)),
         (8, 18, (8, 3, 6)),
         (4, 20, (9, 4, 6)),
         (1, 22, (11, 6, 6)),
         (16, 18, (7, 2, 6)),
-        (16, 20, (7, 1, 7)),
+        (16, 20, (11, 2, 9)),
+        (1, 25, (15, 5, 10)),
     ];
 
     /// Cuts whose staging groups run at a height the reference oracle can still reach:
@@ -1415,7 +1470,7 @@ mod tests {
             for log_n in 0..=24 {
                 let plan = Plan::for_workers(width, log_n, 32);
                 let row = core::mem::size_of::<u128>() * width;
-                let one_row = log2_floor_usize((STAGING_BYTES / row).max(1));
+                let one_row = log2_floor_usize((Plan::budgets(row, log_n).1 / row).max(1));
                 let above = log_n - plan.local;
                 assert!(
                     passes_above_the_tile(above, plan.depth)
