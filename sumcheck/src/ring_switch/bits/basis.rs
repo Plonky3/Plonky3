@@ -174,7 +174,7 @@ impl<EF: TowerLevel, A: Field> CoordinateSums<EF, A> {
     /// The tables already allocated are written through, so a caller sweeping one weight
     /// vector after another pays no allocation per sweep.
     pub(crate) fn overwrite(&mut self, mut weight: impl FnMut(usize) -> A) {
-        for (position, table) in self.tables.iter_mut().enumerate() {
+        for (position, slot) in self.tables.iter_mut().enumerate() {
             // A coordinate past a sub-byte level's width is never set, so it weighs nothing.
             let coordinates: [A; 8] = core::array::from_fn(|bit| {
                 let coordinate = position * 8 + bit;
@@ -186,11 +186,13 @@ impl<EF: TowerLevel, A: Field> CoordinateSums<EF, A> {
             });
 
             // Each subset extends the one without its lowest coordinate by that coordinate.
-            table[0] = A::ZERO;
+            // The recurrence reads back what it wrote, so it runs in one array and lands once.
+            let mut table = [A::ZERO; 256];
             for subset in 1..256usize {
                 let lowest = subset.trailing_zeros() as usize;
                 table[subset] = table[subset & (subset - 1)] + coordinates[lowest];
             }
+            *slot = table;
         }
     }
 
