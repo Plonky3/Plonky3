@@ -789,12 +789,13 @@ where
             });
         }
 
-        let field_size_bits = if let Some(batch) = pcs_batch {
+        if let Some(batch) = pcs_batch {
             batch.validate(log_starting_degree)?;
-            crate::pcs_budget::field_bits::<EF>(params.soundness_type)
-        } else {
-            EF::bits()
-        };
+        }
+        // Both paths account for the same field: `Field::bits()` is the ceiling of
+        // `log2(|E|)`, one above the integer lower bound the proximity-gap bounds need,
+        // and Johnson reserves one more (see `pcs_budget::field_bits`).
+        let field_size_bits = crate::pcs_budget::field_bits::<EF>(params.soundness_type);
         let log_blowup = params.log_blowup;
         let log_folding_factor = params.log_folding_factor;
         let log_starting_folding_factor = params.log_starting_folding_factor;
@@ -1843,7 +1844,6 @@ mod tests {
         let mut rng = rand::rngs::SmallRng::seed_from_u64(99);
         let perm = Perm::new_from_rng_128(&mut rng);
         let val_mmcs = ValMmcs::new(MyHash::new(perm.clone()), MyCompress::new(perm), 0);
-        let field_size_bits = EF::bits();
 
         // (log_starting_degree, log_blowup, log_folding_factor, log_starting_folding_factor,
         // security_level, max_pow_bits, soundness_type).
@@ -1882,6 +1882,9 @@ mod tests {
                         ..Default::default()
                     },
                 );
+
+                // Recompute with the rigorous field size the schedule is accountable to.
+                let field_size_bits = crate::pcs_budget::field_bits::<EF>(soundness_type);
 
                 // Mirror `StirConfig::new`'s buffered target.
                 let total_folds = config.num_rounds() + 1;
