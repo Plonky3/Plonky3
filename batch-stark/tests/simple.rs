@@ -7,12 +7,13 @@ use core::slice::from_ref;
 use std::borrow::Cow;
 
 use config::{
-    Challenge, CircleConfig, CircleVal, MyConfig, MyConfigWide, MyHidingConfig, Val,
-    make_circle_config, make_config, make_config_allow_tiny_trace, make_config_wide,
+    Challenge, CircleChallenge, CircleConfig, CircleVal, MyConfig, MyConfigWide, MyHidingConfig,
+    Val, make_circle_config, make_config, make_config_allow_tiny_trace, make_config_wide,
     make_config_zk, make_two_adic_compat_config,
 };
 use p3_air::{Air, AirBuilder, BaseAir, PermutationAirBuilder, WindowAccess};
 use p3_batch_stark::proof::{BatchProof, OpenedValuesWithLookups};
+use p3_batch_stark::verifier::commitments_with_opening_points;
 use p3_batch_stark::{
     BatchShape, BatchTranscriptFailure, BatchVerificationError, ProverData, StarkGenericConfig,
     StarkInstance, VerificationError, prove_batch, verify_batch,
@@ -1701,6 +1702,113 @@ fn test_circle_stark_batch() -> Result<(), impl Debug> {
     let common = &prover_data.common;
     verify_batch(&config, &airs, &proof, &public_values, common)
         .map_err(|e| format!("Verification failed: {:?}", e))
+}
+
+#[test]
+fn test_batch_degree_bits_below_circle_pcs_minimum_rejected() {
+    // Invariant: a claimed trace height is proof data, and the circle scheme needs four rows.
+    //
+    // The verifier builds each trace domain from that claim before the opening argument runs.
+    // A claim that is too small therefore has to be rejected up front.
+    let config = make_circle_config();
+
+    // Fixture state: two instances without preprocessed columns.
+    //
+    //     instance 0: 8 rows -> claimed height of 3 bits
+    //     instance 1: 4 rows -> claimed height of 2 bits, exactly the minimum
+    let airs = vec![
+        FibonacciAir {
+            log_height: 0,
+            tamper_index: None,
+        },
+        FibonacciAir {
+            log_height: 0,
+            tamper_index: None,
+        },
+    ];
+    let pis0 = vec![
+        CircleVal::from_u64(0),
+        CircleVal::from_u64(1),
+        CircleVal::from_u64(fib_n(8)),
+    ];
+    let pis1 = vec![
+        CircleVal::from_u64(0),
+        CircleVal::from_u64(1),
+        CircleVal::from_u64(fib_n(4)),
+    ];
+    let trace0 = fib_trace::<CircleVal>(0, 1, 8);
+    let trace1 = fib_trace::<CircleVal>(0, 1, 4);
+    let instances = vec![
+        StarkInstance {
+            air: &airs[0],
+            trace: &trace0,
+            public_values: pis0.clone(),
+        },
+        StarkInstance {
+            air: &airs[1],
+            trace: &trace1,
+            public_values: pis1.clone(),
+        },
+    ];
+
+    let prover_data = ProverData::empty(airs.len());
+    let common = &prover_data.common;
+    let mut proof = prove_batch(&config, &instances, &prover_data).unwrap();
+    let public_values = vec![pis0, pis1];
+    assert_eq!(proof.degree_bits, vec![3, 2]);
+
+    // The smaller instance sits exactly on the boundary, so an honest batch there verifies.
+    // The rejection below is therefore strictly less than, not less than or equal.
+    verify_batch(&config, &airs, &proof, &public_values, common)
+        .expect("a claim exactly at the minimum must verify");
+
+    // Mutation: shrink the second instance's claimed height below the minimum.
+    //
+    //     honest:   degree_bits = [3, 2]
+    //     tampered: degree_bits = [3, 1]
+    proof.degree_bits[1] = 1;
+
+    let err = verify_batch(&config, &airs, &proof, &public_values, common)
+        .expect_err("a claim below the minimum trace height must be rejected");
+
+    // The rejection names the offending instance and the backend's own minimum.
+    match err {
+        BatchVerificationError::Verification(VerificationError::InvalidProofShape(
+            InvalidProofShapeError::DegreeBitsTooSmall { air, minimum, got },
+        )) => {
+            assert_eq!(air, Some(1));
+            assert_eq!(minimum, 2);
+            assert_eq!(got, 1);
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+
+    // Recursive verifiers reach this public builder directly, never the whole-proof entry point.
+    //
+    // It re-derives every trace domain from the claimed heights, so it applies the same bound.
+    // The heights are rejected before any of the later arguments are read.
+    let err = commitments_with_opening_points::<CircleConfig, _>(
+        &config,
+        &airs,
+        CircleChallenge::ZERO,
+        &proof.commitments,
+        &proof.opened_values,
+        common,
+        &proof.degree_bits,
+        &[0, 0],
+        &[0, 0],
+    )
+    .expect_err("the opening-claim builder must apply the same bound");
+    match err {
+        BatchVerificationError::Verification(VerificationError::InvalidProofShape(
+            InvalidProofShapeError::DegreeBitsTooSmall { air, minimum, got },
+        )) => {
+            assert_eq!(air, Some(1));
+            assert_eq!(minimum, 2);
+            assert_eq!(got, 1);
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
 }
 
 #[derive(Clone)]

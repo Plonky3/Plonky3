@@ -93,9 +93,9 @@ pub enum InvalidProofShapeError {
         air.map_or_else(String::new, |air| format!("air {air}: "))
     )]
     UnexpectedPreprocessedValues { air: Option<usize> },
-    /// Proof degree bits are too small for the PCS ZK setting.
+    /// Proof degree bits fall below the smallest trace height the commitment scheme accepts.
     #[error(
-        "{}degree_bits too small for zk setting: expected at least {minimum}, got {got}",
+        "{}degree_bits too small for the pcs: expected at least {minimum}, got {got}",
         air.map_or_else(String::new, |air| format!("air {air}: "))
     )]
     DegreeBitsTooSmall {

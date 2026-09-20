@@ -178,6 +178,11 @@ where
         Val::TWO_ADICITY
     }
 
+    fn log_min_trace_height(&self) -> usize {
+        // Multiplicative coset selectors are defined at every height, down to a single row.
+        0
+    }
+
     fn commit_quotient(
         &self,
         quotient_domain: Self::Domain,

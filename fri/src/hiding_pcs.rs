@@ -419,6 +419,12 @@ where
             &self.inner)
     }
 
+    fn log_min_trace_height(&self) -> usize {
+        // Hiding only adds randomness rows, so the bound is the wrapped scheme's.
+        <TwoAdicFriPcs<Val, Dft, InputMmcs, FriMmcs> as UnivariateStarkPcs<Challenge, Challenger>>::log_min_trace_height(
+            &self.inner)
+    }
+
     fn commit_preprocessing(
         &self,
         evaluations: impl IntoIterator<Item = (Self::Domain, RowMajorMatrix<Val>)>,

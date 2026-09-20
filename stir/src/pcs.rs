@@ -2099,6 +2099,11 @@ where
         Val::TWO_ADICITY.saturating_sub(self.stir.log_blowup)
     }
 
+    fn log_min_trace_height(&self) -> usize {
+        // Multiplicative coset selectors are defined at every height, down to a single row.
+        0
+    }
+
     fn get_evaluations_on_domain<'a>(
         &self,
         prover_data: &'a Self::ProverData,

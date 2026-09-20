@@ -65,12 +65,23 @@ pub fn validate_degree_bits(
     air: Option<usize>,
     degree_bits: usize,
     is_zk: usize,
+    min_log_degree: usize,
     max_log_degree: usize,
 ) -> Result<(usize, usize), InvalidProofShapeError> {
-    if degree_bits < is_zk {
+    // A claimed degree is the height of the extended trace domain, in bits.
+    // Removing the zero-knowledge blowup bit leaves the base trace domain.
+    // That is the domain the selectors and the periodic columns are evaluated over.
+    //
+    //     extended domain : degree_bits
+    //     base domain     : degree_bits - is_zk
+    //
+    // Why: the base domain is built from this proof-supplied height before the opening runs.
+    // A height the backend's domain arithmetic cannot handle has to be caught here.
+    let minimum = is_zk + min_log_degree;
+    if degree_bits < minimum {
         return Err(InvalidProofShapeError::DegreeBitsTooSmall {
             air,
-            minimum: is_zk,
+            minimum,
             got: degree_bits,
         });
     }
@@ -492,8 +503,13 @@ where
     let degree_bits = *degree_bits;
 
     let pcs = config.pcs();
-    let (base_degree_bits, degree) =
-        validate_degree_bits(None, degree_bits, config.is_zk(), pcs.log_max_lde_height())?;
+    let (base_degree_bits, degree) = validate_degree_bits(
+        None,
+        degree_bits,
+        config.is_zk(),
+        pcs.log_min_trace_height(),
+        pcs.log_max_lde_height(),
+    )?;
     let trace_domain = pcs.natural_domain_for_degree(degree);
     // TODO: allow moving preprocessed commitment to preprocess time, if known in advance
     let (preprocessed_width, preprocessed_commit) =

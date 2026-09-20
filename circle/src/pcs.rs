@@ -228,6 +228,17 @@ where
     })
 }
 
+/// Base-2 logarithm of the smallest trace domain this scheme commits to.
+///
+/// # Why this value
+///
+/// - The bivariate fold consumes one bit of the domain height.
+/// - Circle FRI consumes one more.
+/// - The vanishing polynomial and the single-point selector need one bit of height.
+///
+/// The largest of those requirements is two bits, that is four rows.
+const LOG_MIN_TRACE_HEIGHT: usize = 2;
+
 impl<Val, InputMmcs, FriMmcs, Challenge, Challenger> Pcs<Challenge, Challenger>
     for CirclePcs<Val, InputMmcs, FriMmcs>
 where
@@ -257,7 +268,7 @@ where
             .into_iter()
             .map(|(domain, evals)| {
                 assert!(
-                    domain.log_n >= 2,
+                    domain.log_n >= LOG_MIN_TRACE_HEIGHT,
                     "CirclePcs cannot commit to a matrix with fewer than 4 rows.",
                     // (because we bivariate fold one bit, and fri needs one more bit)
                 );
@@ -1110,6 +1121,10 @@ where
         Val::CIRCLE_TWO_ADICITY - 1
     }
 
+    fn log_min_trace_height(&self) -> usize {
+        LOG_MIN_TRACE_HEIGHT
+    }
+
     fn get_quotient_ldes(
         &self,
         evaluations: impl IntoIterator<Item = (Self::Domain, RowMajorMatrix<Val>)>,
@@ -1119,7 +1134,7 @@ where
             .into_iter()
             .map(|(domain, evals)| {
                 assert!(
-                    domain.log_n >= 2,
+                    domain.log_n >= LOG_MIN_TRACE_HEIGHT,
                     "CirclePcs cannot commit to a matrix with fewer than 4 rows.",
                     // (because we bivariate fold one bit, and fri needs one more bit)
                 );

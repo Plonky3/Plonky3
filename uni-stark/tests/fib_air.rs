@@ -594,6 +594,51 @@ fn test_degree_bits_too_small_for_zk_rejected() {
 }
 
 #[test]
+fn test_degree_bits_below_circle_pcs_minimum_rejected() {
+    // Invariant: the claimed trace height is proof data, and the circle scheme needs four rows.
+    //
+    // The verifier builds the domain and its selectors from that claim before the opening runs.
+    // A claim that is too small therefore has to be rejected up front.
+    let config = make_circle_config();
+    let air = CirclePeriodicProductAir {
+        column: vec![CircleVal::TWO, CircleVal::from_u32(3)],
+        degree: 3,
+    };
+
+    // Fixture state: four rows, the smallest trace the circle scheme commits to.
+    //
+    //     4 rows -> claimed height of 2 bits -> exactly the minimum
+    let trace = RowMajorMatrix::new_col((0..4).map(|i| air.column[i % 2].exp_u64(3)).collect());
+    let mut proof = prove(&config, &air, trace, &[]).unwrap();
+    assert_eq!(proof.degree_bits, 2);
+
+    // The boundary itself is legal, so the rejection is strictly less than, not less or equal.
+    verify(&config, &air, &proof, &[]).expect("a claim exactly at the minimum must verify");
+
+    // Mutation: claim a height below the minimum, leaving the rest of the proof untouched.
+    //
+    //     honest:   degree_bits = 2
+    //     tampered: degree_bits = 0, then 1
+    for degree_bits in [0, 1] {
+        proof.degree_bits = degree_bits;
+        let err = verify(&config, &air, &proof, &[])
+            .expect_err("a claim below the minimum trace height must be rejected");
+
+        // The reported minimum is the backend's, not the zero-knowledge bit alone.
+        match err {
+            p3_uni_stark::VerificationError::InvalidProofShape(
+                InvalidProofShapeError::DegreeBitsTooSmall { air, minimum, got },
+            ) => {
+                assert_eq!(air, None);
+                assert_eq!(minimum, 2);
+                assert_eq!(got, degree_bits);
+            }
+            _ => panic!("unexpected error: {err:?}"),
+        }
+    }
+}
+
+#[test]
 fn verify_two_adic_compat_fixture() -> Result<(), Box<dyn std::error::Error>> {
     let (config, air, pis, _) = two_adic_compat_case();
     let proof_bytes = read_fixture(TWO_ADIC_FIXTURE)
