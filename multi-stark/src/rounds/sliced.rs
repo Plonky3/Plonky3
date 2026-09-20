@@ -41,7 +41,7 @@ use crate::sliced::{LaneSums, SLICED_LANES, SlicedFolder, SlicedGf4, gf4_coordin
 ///
 /// Each round doubles both the plane work and the corner words a residual row folds, so the
 /// count has a ceiling. A stage is also capped by the row variables its words leave unbound.
-pub(crate) const MAX_SLICED_ROUNDS: usize = 4;
+pub const MAX_SLICED_ROUNDS: usize = 4;
 
 /// Row variables one word's lanes span.
 const LANE_VARIABLES: usize = SLICED_LANES.trailing_zeros() as usize;

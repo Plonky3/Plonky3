@@ -7,6 +7,8 @@ use p3_commit::MultilinearPcs;
 use p3_field::ExtensionField;
 use p3_sumcheck::layout::Table;
 
+pub use crate::rounds::sliced::MAX_SLICED_ROUNDS;
+
 /// Zerocheck rounds a stage evaluates on its bit-sliced planes by default.
 ///
 /// A sliced round evaluates the AIR once per sixty-four residual rows instead of once per row,
@@ -65,7 +67,9 @@ pub trait MultiStarkConfig {
     /// and the Keccak-f zerocheck from 423 ms to 657 ms: the wider trace amortizes the AIR
     /// evaluation over its sixty-four rows, the narrower one does not.
     ///
-    /// Counts above the kernel's ceiling are capped by it.
+    /// A count above [`MAX_SLICED_ROUNDS`] is capped by it, as is one above the row variables
+    /// a stage keeps once a word's lanes are spent. Both caps are silent: the proof is the
+    /// same either way, so only the timing of a stage tells them apart.
     fn sliced_rounds(&self) -> usize {
         DEFAULT_SLICED_ROUNDS
     }
