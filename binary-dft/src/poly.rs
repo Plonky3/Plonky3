@@ -271,6 +271,10 @@ const DEEP_TILE_BYTES: usize = 256 * 1024;
 /// the safe direction for a signal this coarse.
 const SHARED_CACHE_BYTES: usize = 128 * 1024 * 1024;
 
+// The tile count the deep budget leaves the smallest matrix that reads it, which is what has
+// to stay far above any worker count a target runs.
+const _: () = assert!(SHARED_CACHE_BYTES / DEEP_TILE_BYTES >= 256);
+
 /// Bytes a gathered run of adjacent rows must cover for the staging to be worth running.
 ///
 /// A gather and a scatter address runs a power of two apart, so each address pulls and pushes
@@ -1207,6 +1211,29 @@ mod tests {
         (1, 25, (14, 3, 11)),
     ];
 
+    /// Staging groups the deep budget produces, as `width, log_block, depth`.
+    ///
+    /// These are the group depths and run lengths of the deep rows of [`PLAN_ONLY_CUTS`],
+    /// which are magnitudes no cut small enough to transform ever reaches:
+    ///
+    /// ```text
+    ///     width 48   seven stages per group, a run of two rows
+    ///     width 16   ten stages per group, a run of one row
+    ///     width  1   eleven stages per group, a run of eight rows
+    /// ```
+    const DEEP_BUDGET_GROUPS: [(usize, usize, usize); 3] = [(48, 1, 7), (16, 0, 10), (1, 3, 11)];
+
+    /// Contiguous tiles the deep budget produces, as `width, local`.
+    ///
+    /// A tile of [`DEEP_TILE_BYTES`] is `2^local` rows of the width beside it:
+    ///
+    /// ```text
+    ///     width  1   a tile of 2^14 rows
+    ///     width 16   a tile of 2^10 rows
+    ///     width 48   a tile of 2^8 rows
+    /// ```
+    const DEEP_BUDGET_TILES: [(usize, usize); 3] = [(1, 14), (16, 10), (48, 8)];
+
     /// Cuts whose staging groups run at a height the reference oracle can still reach:
     ///
     /// ```text
@@ -1403,6 +1430,55 @@ mod tests {
                 per_stage_schedule(&mut expected, width, log_n, test_shift(), inverse);
                 scheduled(&mut actual, plan, inverse, NONE);
                 assert_eq!(actual, expected, "{plan:?} inverse={inverse}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_deep_budget_cut_matches_the_per_stage_schedule() {
+        // Invariant: the depths and run lengths the deep budget produces reorder the memory
+        // traffic like any other cut, so they too have to come out bit for bit what one full
+        // pass per stage produces. A matrix whose shape reads that budget is far past the
+        // height a test can transform, so the two regimes are carried onto short matrices
+        // instead: the group depths over a contiguous tile small enough to leave them room,
+        // and the tile depths under a shallow group.
+        let matches_per_stage = |plan: Plan| {
+            let Plan { width, log_n, .. } = plan;
+            for inverse in [false, true] {
+                let mut expected = coefficients(log_n, width);
+                let mut actual = expected.clone();
+                per_stage_schedule(&mut expected, width, log_n, test_shift(), inverse);
+                scheduled(&mut actual, plan, inverse, NONE);
+                assert_eq!(actual, expected, "{plan:?} inverse={inverse}");
+            }
+        };
+
+        // A group whose stride is shorter than the run shortens the run, so the tile sits one
+        // stage above the run length to leave the planned run standing.
+        for (width, log_block, depth) in DEEP_BUDGET_GROUPS {
+            let local = log_block + 1;
+            // One full group, a group and a leftover pass, then a short group under a full one.
+            for extra in [0usize, 1, 2] {
+                matches_per_stage(Plan {
+                    width,
+                    log_n: local + depth + extra,
+                    local,
+                    log_block,
+                    depth,
+                });
+            }
+        }
+
+        // A tile this deep carries most of the transform, so the group above it is shallow.
+        for (width, local) in DEEP_BUDGET_TILES {
+            for extra in [1usize, 2, 3] {
+                matches_per_stage(Plan {
+                    width,
+                    log_n: local + extra,
+                    local,
+                    log_block: 0,
+                    depth: 2,
+                });
             }
         }
     }
