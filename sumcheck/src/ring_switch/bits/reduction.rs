@@ -1128,10 +1128,14 @@ impl<EF: TranscriptField + TowerLevel> BitRingSwitch<EF> {
     /// `R` is the representation those two tables and the rounds over them are held in.
     ///
     /// ```text
-    ///     once per reduction   the restricted packing, the weight multilinear
+    ///     once per reduction   the restricted packing, the batching table, alpha,
+    ///                          the initial claim, and the surviving claim on its way back
     ///     once per round       the challenge, and the round message on its way back
-    ///     never                the elements, the claims, the batching challenges
+    ///     never                the tensor elements, the equality table, the point
     /// ```
+    ///
+    /// The weight multilinear is accumulated in `R` from the batching table, so it is
+    /// built there rather than carried across.
     ///
     /// The map is a field isomorphism, so each round message is the one the challenge
     /// field's own tables measure and the transcript is unchanged.
