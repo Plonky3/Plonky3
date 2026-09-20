@@ -6,6 +6,7 @@
 
 use alloc::string::String;
 use alloc::vec::Vec;
+use core::fmt;
 
 use hashbrown::HashMap;
 use p3_air::symbolic::{BaseEntry, BaseLeaf, SymbolicExpr, SymbolicExpression};
@@ -14,17 +15,12 @@ use p3_sumcheck::layout::Table;
 use thiserror::Error;
 
 use crate::{
-    BusActivation, BusDirection, BusPlan, BusPlanError, BusPlanInput, BusSymbolicBuilder,
-    SymbolicBusInteraction,
+    BusActivation, BusDirection, BusExpressionLocation, BusPlan, BusPlanError, BusPlanInput,
+    BusSymbolicBuilder, SymbolicBusInteraction, UnsupportedBusAccess,
 };
 
-/// Maximum source locations retained for one tuple and direction.
-///
-/// The count remains exact after this diagnostic sample is full.
-const LOCATION_LIMIT: usize = 4;
-
 /// Concrete data required to replay one AIR's bus declarations.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy)]
 pub struct BusDebugInstance<'a, F: Field> {
     /// Committed trace columns in polynomial-major order.
     main: &'a Table<F>,
@@ -34,6 +30,25 @@ pub struct BusDebugInstance<'a, F: Field> {
     public_values: &'a [F],
     /// Symbolic tuple declarations in AIR emission order.
     interactions: &'a [SymbolicBusInteraction<F>],
+}
+
+impl<F: Field> fmt::Debug for BusDebugInstance<'_, F> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Rendering the traces themselves would dump every committed value.
+        f.debug_struct("BusDebugInstance")
+            .field(
+                "main",
+                &format_args!(
+                    "2^{} x {}",
+                    self.main.num_variables(),
+                    self.main.num_polys()
+                ),
+            )
+            .field("preprocessed", &self.preprocessed.map(Table::num_polys))
+            .field("public_values", &self.public_values.len())
+            .field("declarations", &self.interactions.len())
+            .finish()
+    }
 }
 
 impl<'a, F: Field> BusDebugInstance<'a, F> {
@@ -84,8 +99,38 @@ impl<'a, F: Field> BusDebugInstance<'a, F> {
     }
 }
 
+/// Bounds a diagnostic run applies to the text it retains.
+///
+/// Both bounds shrink the report only, never the exact multiplicities it carries.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BusDebugLimits {
+    /// Maximum source rows retained for one tuple and one direction.
+    pub locations: usize,
+    /// Maximum unmatched tuples retained in the report.
+    pub imbalances: usize,
+}
+
+impl BusDebugLimits {
+    /// Source rows retained per tuple and direction unless the caller asks for more.
+    pub const DEFAULT_LOCATIONS: usize = 4;
+
+    /// Unmatched tuples retained unless the caller asks for more.
+    pub const DEFAULT_IMBALANCES: usize = 64;
+}
+
+impl Default for BusDebugLimits {
+    fn default() -> Self {
+        // Both defaults keep a printed report readable on a terminal.
+        Self {
+            locations: Self::DEFAULT_LOCATIONS,
+            imbalances: Self::DEFAULT_IMBALANCES,
+        }
+    }
+}
+
 /// Source of one tuple occurrence.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct BusDebugLocation {
     /// AIR position in statement order.
     pub air: usize,
@@ -95,42 +140,137 @@ pub struct BusDebugLocation {
     pub row: usize,
 }
 
-/// Exact occurrence count with a bounded source sample.
+/// Exact occurrence count with a bounded sample of excess sources.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct BusDebugOccurrence {
     /// Number of active rows carrying the tuple.
     pub count: usize,
-    /// First source locations in deterministic traversal order.
+    /// Sources of the occurrences this side holds in excess of the other side.
+    ///
+    /// The two sides are paired in traversal order, so this sample starts at the first unpaired occurrence.
+    ///
+    /// The smaller side is fully paired and therefore carries no sample at all.
+    ///
+    /// Removing the sampled rows restores balance for this tuple, but when both sides are non-empty no single row is the unique culprit.
     pub locations: Vec<BusDebugLocation>,
 }
 
 /// One tuple whose push and pull multiplicities differ.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct BusImbalance<F> {
     /// Name of the independently balanced multiset.
     pub bus_name: String,
     /// Payload field elements in declaration order.
     pub tuple: Vec<F>,
-    /// Produced occurrences and their first source locations.
+    /// Produced occurrences and the sources of any excess.
     pub pushes: BusDebugOccurrence,
-    /// Consumed occurrences and their first source locations.
+    /// Consumed occurrences and the sources of any excess.
     pub pulls: BusDebugOccurrence,
 }
 
 /// Deterministic list of unmatched bus tuples.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct BusDebugReport<F> {
-    /// Unmatched tuples in first-occurrence order.
+    /// Retained unmatched tuples in first-occurrence order.
     pub imbalances: Vec<BusImbalance<F>>,
+    /// Unmatched tuples dropped because the retained list was already full.
+    pub unreported: usize,
 }
 
 impl<F> BusDebugReport<F> {
     /// Returns whether every named multiset balances exactly.
     #[must_use]
     pub const fn is_balanced(&self) -> bool {
-        // An empty mismatch list is the exact balance condition.
-        self.imbalances.is_empty()
+        // A dropped tuple is still an imbalance, so both fields decide the verdict.
+        self.imbalances.is_empty() && self.unreported == 0
     }
+
+    /// Returns whether unmatched tuples were dropped from the retained list.
+    #[must_use]
+    pub const fn is_truncated(&self) -> bool {
+        self.unreported != 0
+    }
+}
+
+impl<F: fmt::Display> fmt::Display for BusDebugReport<F> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.is_balanced() {
+            return write!(f, "every named bus balances");
+        }
+
+        // Entries keep first-occurrence order, so grouping walks the distinct names in that order.
+        let mut printed = Vec::<&str>::new();
+        for imbalance in &self.imbalances {
+            if printed.contains(&imbalance.bus_name.as_str()) {
+                continue;
+            }
+            printed.push(imbalance.bus_name.as_str());
+            let group = self
+                .imbalances
+                .iter()
+                .filter(|other| other.bus_name == imbalance.bus_name);
+            writeln!(
+                f,
+                "bus {:?}: {} unmatched tuples",
+                imbalance.bus_name,
+                group.clone().count()
+            )?;
+            for entry in group {
+                write_imbalance(f, entry)?;
+            }
+        }
+
+        if self.unreported != 0 {
+            writeln!(f, "... and {} more unmatched tuples", self.unreported)?;
+        }
+        Ok(())
+    }
+}
+
+fn write_imbalance<F: fmt::Display>(
+    f: &mut fmt::Formatter<'_>,
+    imbalance: &BusImbalance<F>,
+) -> fmt::Result {
+    write!(f, "  (")?;
+    for (slot, value) in imbalance.tuple.iter().enumerate() {
+        if slot != 0 {
+            write!(f, ", ")?;
+        }
+        write!(f, "{value}")?;
+    }
+    write!(
+        f,
+        ")  push {}  pull {}",
+        imbalance.pushes.count, imbalance.pulls.count
+    )?;
+
+    // Exactly one side carries the excess, and only that side holds a sample.
+    let (label, occurrence) = if imbalance.pushes.count > imbalance.pulls.count {
+        ("push", &imbalance.pushes)
+    } else {
+        ("pull", &imbalance.pulls)
+    };
+    let excess = imbalance.pushes.count.abs_diff(imbalance.pulls.count);
+    if !occurrence.locations.is_empty() {
+        write!(f, "  excess {label} at ")?;
+        for (index, location) in occurrence.locations.iter().enumerate() {
+            if index != 0 {
+                write!(f, ", ")?;
+            }
+            write!(
+                f,
+                "air {} decl {} row {}",
+                location.air, location.declaration, location.row
+            )?;
+        }
+        if occurrence.locations.len() < excess {
+            write!(f, ", ...")?;
+        }
+    }
+    writeln!(f)
 }
 
 /// Invalid concrete data encountered during diagnostic replay.
@@ -178,15 +318,13 @@ pub enum BusDebugError {
     },
     /// An expression reads a missing committed column.
     #[error(
-        "binary-bus AIR {air} declaration {declaration} row {row} reads main column {column}, but the trace has width {width}"
+        "binary-bus AIR {air} declaration {declaration} reads main column {column}, but the trace has width {width}"
     )]
     MainColumnOutOfRange {
         /// AIR position in statement order.
         air: usize,
         /// Declaration position within the AIR.
         declaration: usize,
-        /// Row position within the trace.
-        row: usize,
         /// Missing column position.
         column: usize,
         /// Available column count.
@@ -194,29 +332,25 @@ pub enum BusDebugError {
     },
     /// An expression reads fixed data that was not supplied.
     #[error(
-        "binary-bus AIR {air} declaration {declaration} row {row} requires preprocessed column {column}, but no preprocessed trace was supplied"
+        "binary-bus AIR {air} declaration {declaration} requires preprocessed column {column}, but no preprocessed trace was supplied"
     )]
     MissingPreprocessedTrace {
         /// AIR position in statement order.
         air: usize,
         /// Declaration position within the AIR.
         declaration: usize,
-        /// Row position within the trace.
-        row: usize,
         /// Requested column position.
         column: usize,
     },
     /// An expression reads a missing fixed column.
     #[error(
-        "binary-bus AIR {air} declaration {declaration} row {row} reads preprocessed column {column}, but the trace has width {width}"
+        "binary-bus AIR {air} declaration {declaration} reads preprocessed column {column}, but the trace has width {width}"
     )]
     PreprocessedColumnOutOfRange {
         /// AIR position in statement order.
         air: usize,
         /// Declaration position within the AIR.
         declaration: usize,
-        /// Row position within the trace.
-        row: usize,
         /// Missing column position.
         column: usize,
         /// Available column count.
@@ -224,15 +358,13 @@ pub enum BusDebugError {
     },
     /// An expression reads a missing public input.
     #[error(
-        "binary-bus AIR {air} declaration {declaration} row {row} reads public value {index}, but only {len} values were supplied"
+        "binary-bus AIR {air} declaration {declaration} reads public value {index}, but only {len} values were supplied"
     )]
     PublicValueOutOfRange {
         /// AIR position in statement order.
         air: usize,
         /// Declaration position within the AIR.
         declaration: usize,
-        /// Row position within the trace.
-        row: usize,
         /// Missing public-input position.
         index: usize,
         /// Available public-input count.
@@ -271,6 +403,10 @@ impl<F: Field> BusDebugReport<F> {
     ///
     /// Direction remains metadata rather than a field sign.
     ///
+    /// A padded trace whose declarations are unconditional records its padding tuple on every padding row.
+    ///
+    /// That contribution is real rather than an artefact, so an AIR has to gate its declarations off the padding.
+    ///
     /// # Errors
     ///
     /// Returns an error when the declaration layout or concrete inputs are malformed.
@@ -278,10 +414,25 @@ impl<F: Field> BusDebugReport<F> {
     /// # Performance
     ///
     /// - Memory is linear in the number of distinct active tuples.
-    /// - Output is linear in the number of unmatched tuples.
+    /// - Output is bounded by the default limits.
     /// - Time is linear in rows times distinct expression nodes, never in expression paths.
+    /// - Rows are scanned a second time only when something is unmatched.
     /// - The routine is intended for trusted development traces.
     pub fn check(instances: &[BusDebugInstance<'_, F>]) -> Result<Self, BusDebugError> {
+        Self::check_with_limits(instances, BusDebugLimits::default())
+    }
+
+    /// Replays every declaration under caller-chosen retention bounds.
+    ///
+    /// Raising a bound widens the report without changing any reported count.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the declaration layout or concrete inputs are malformed.
+    pub fn check_with_limits(
+        instances: &[BusDebugInstance<'_, F>],
+        limits: BusDebugLimits,
+    ) -> Result<Self, BusDebugError> {
         // Build the same deterministic named-bus layout used by the proof protocol.
         let inputs = instances
             .iter()
@@ -293,6 +444,7 @@ impl<F: Field> BusDebugReport<F> {
         let Some(plan) = BusPlan::build(&inputs)? else {
             return Ok(Self {
                 imbalances: Vec::new(),
+                unreported: 0,
             });
         };
 
@@ -310,7 +462,7 @@ impl<F: Field> BusDebugReport<F> {
         }
 
         // Domain names are already sorted and assigned stable identities by the plan.
-        let domain_indices = plan
+        let domains = plan
             .domains()
             .iter()
             .enumerate()
@@ -319,312 +471,489 @@ impl<F: Field> BusDebugReport<F> {
 
         // One hash index per named multiset provides constant-time grouping.
         // Keying per bus lets the probe borrow the tuple instead of cloning it on every occurrence.
-        // The parallel vector preserves deterministic first-occurrence order for diagnostics.
-        let mut entry_indices = alloc::vec![HashMap::<Vec<F>, usize>::new(); plan.domains().len()];
-        let mut entries = Vec::<Entry<F>>::new();
+        let mut tuple_indices = alloc::vec![HashMap::<Vec<F>, usize>::new(); plan.domains().len()];
+        let mut counts = Vec::<TupleCounts>::new();
 
-        for (air, instance) in instances.iter().enumerate() {
-            let height = 1usize << instance.main.num_variables();
-
-            for row in 0..height {
-                let evaluator = RowEvaluator {
-                    air,
-                    declaration: 0,
-                    row,
-                    height,
-                    main: instance.main,
-                    preprocessed: instance.preprocessed,
-                    public_values: instance.public_values,
-                };
-
-                for (declaration, interaction) in instance.interactions.iter().enumerate() {
-                    let evaluator = RowEvaluator {
-                        declaration,
-                        ..evaluator
-                    };
-
-                    // Inactive rows contribute the product identity and no multiset occurrence.
-                    if !activation_is_set(&interaction.activation, &evaluator)? {
-                        continue;
+        // The first scan retains no source rows, because which rows are unmatched is unknown until the totals are in.
+        replay(
+            instances,
+            &domains,
+            &mut |bus, tuple, direction, location| {
+                let index = match tuple_indices[bus].get(tuple) {
+                    Some(&index) => index,
+                    None => {
+                        let index = counts.len();
+                        tuple_indices[bus].insert(tuple.to_vec(), index);
+                        counts.push(TupleCounts {
+                            bus,
+                            pushes: 0,
+                            pulls: 0,
+                        });
+                        index
                     }
-
-                    // Resolve the exact payload tuple recorded by the symbolic AIR pass.
-                    let tuple = interaction
-                        .fields
-                        .iter()
-                        .map(|field| evaluator.evaluate(field))
-                        .collect::<Result<Vec<_>, _>>()?;
-                    let bus = domain_indices[interaction.bus_name.as_str()];
-
-                    // Reuse an existing tuple accumulator or append one deterministic entry.
-                    let entry = if let Some(&index) = entry_indices[bus].get(&tuple) {
-                        &mut entries[index]
-                    } else {
-                        let index = entries.len();
-                        entry_indices[bus].insert(tuple.clone(), index);
-                        entries.push(Entry::new(bus, tuple));
-                        &mut entries[index]
-                    };
-
-                    entry.record(
-                        interaction.direction,
-                        BusDebugLocation {
-                            air,
-                            declaration,
-                            row,
-                        },
-                    )?;
-                }
-            }
-        }
+                };
+                let count = counts[index].side(direction);
+                *count = count
+                    .checked_add(1)
+                    .ok_or(BusDebugError::OccurrenceCountOverflow {
+                        air: location.air,
+                        declaration: location.declaration,
+                        row: location.row,
+                    })?;
+                Ok(())
+            },
+        )?;
 
         // Equal multiplicities cancel as integers rather than as field elements.
-        let imbalances = entries
-            .into_iter()
-            .filter(|entry| entry.pushes.count != entry.pulls.count)
-            .map(|entry| BusImbalance {
+        let mut positions = HashMap::<usize, usize>::new();
+        let mut imbalances = Vec::new();
+        let mut unreported = 0;
+        for (index, entry) in counts.iter().enumerate() {
+            if entry.pushes == entry.pulls {
+                continue;
+            }
+            if imbalances.len() == limits.imbalances {
+                unreported += 1;
+                continue;
+            }
+            positions.insert(index, imbalances.len());
+            imbalances.push(BusImbalance {
                 bus_name: plan.domains()[entry.bus].name.clone(),
-                tuple: entry.tuple,
-                pushes: entry.pushes,
-                pulls: entry.pulls,
-            })
-            .collect();
+                tuple: Vec::new(),
+                pushes: BusDebugOccurrence {
+                    count: entry.pushes,
+                    locations: Vec::new(),
+                },
+                pulls: BusDebugOccurrence {
+                    count: entry.pulls,
+                    locations: Vec::new(),
+                },
+            });
+        }
+        drop(counts);
+        if positions.is_empty() {
+            return Ok(Self {
+                imbalances,
+                unreported,
+            });
+        }
 
-        Ok(Self { imbalances })
+        // The second scan samples only the occurrences a side holds beyond the pairing with the other side.
+        let mut ordinals = alloc::vec![[0usize; 2]; imbalances.len()];
+        replay(
+            instances,
+            &domains,
+            &mut |bus, tuple, direction, location| {
+                let Some(&index) = tuple_indices[bus].get(tuple) else {
+                    return Ok(());
+                };
+                let Some(&position) = positions.get(&index) else {
+                    return Ok(());
+                };
+                let imbalance = &mut imbalances[position];
+                if imbalance.tuple.is_empty() {
+                    imbalance.tuple = tuple.to_vec();
+                }
+                let matched = imbalance.pushes.count.min(imbalance.pulls.count);
+                let side = side_index(direction);
+                let ordinal = ordinals[position][side];
+                ordinals[position][side] += 1;
+                let occurrence = match direction {
+                    BusDirection::Push => &mut imbalance.pushes,
+                    BusDirection::Pull => &mut imbalance.pulls,
+                };
+                if ordinal >= matched && occurrence.locations.len() < limits.locations {
+                    occurrence.locations.push(location);
+                }
+                Ok(())
+            },
+        )?;
+
+        Ok(Self {
+            imbalances,
+            unreported,
+        })
     }
 }
 
 /// Integer multiplicities accumulated for one named tuple.
-#[derive(Clone, Debug)]
-struct Entry<F> {
+struct TupleCounts {
     /// Stable position of the named multiset.
     bus: usize,
-    /// Payload field elements in declaration order.
-    tuple: Vec<F>,
-    /// Produced multiplicity and source sample.
-    pushes: BusDebugOccurrence,
-    /// Consumed multiplicity and source sample.
-    pulls: BusDebugOccurrence,
+    /// Produced multiplicity.
+    pushes: usize,
+    /// Consumed multiplicity.
+    pulls: usize,
 }
 
-impl<F> Entry<F> {
-    const fn new(bus: usize, tuple: Vec<F>) -> Self {
-        // New tuples have not appeared on either side.
-        Self {
-            bus,
-            tuple,
-            pushes: BusDebugOccurrence {
-                count: 0,
-                locations: Vec::new(),
-            },
-            pulls: BusDebugOccurrence {
-                count: 0,
-                locations: Vec::new(),
-            },
-        }
-    }
-
-    fn record(
-        &mut self,
-        direction: BusDirection,
-        location: BusDebugLocation,
-    ) -> Result<(), BusDebugError> {
+impl TupleCounts {
+    const fn side(&mut self, direction: BusDirection) -> &mut usize {
         // Direction selects an integer counter rather than a field sign.
-        let occurrence = match direction {
+        match direction {
             BusDirection::Push => &mut self.pushes,
             BusDirection::Pull => &mut self.pulls,
-        };
-        occurrence.count =
-            occurrence
-                .count
-                .checked_add(1)
-                .ok_or(BusDebugError::OccurrenceCountOverflow {
-                    air: location.air,
-                    declaration: location.declaration,
-                    row: location.row,
-                })?;
-
-        // A bounded sample keeps diagnostics useful without retaining every repeated row.
-        if occurrence.locations.len() < LOCATION_LIMIT {
-            occurrence.locations.push(location);
         }
-        Ok(())
     }
 }
 
-/// Concrete row context used to replay one symbolic expression.
-#[derive(Clone, Copy)]
-struct RowEvaluator<'a, F: Field> {
+const fn side_index(direction: BusDirection) -> usize {
+    match direction {
+        BusDirection::Push => 0,
+        BusDirection::Pull => 1,
+    }
+}
+
+/// Walks every active declaration of every instance in deterministic order.
+fn replay<F: Field>(
+    instances: &[BusDebugInstance<'_, F>],
+    domains: &HashMap<&str, usize>,
+    visit: &mut impl FnMut(usize, &[F], BusDirection, BusDebugLocation) -> Result<(), BusDebugError>,
+) -> Result<(), BusDebugError> {
+    let mut slots = Vec::new();
+    let mut tuple = Vec::new();
+
+    for (air, instance) in instances.iter().enumerate() {
+        // An AIR that declares nothing cannot contribute, so its rows are never visited.
+        if instance.interactions.is_empty() {
+            continue;
+        }
+
+        // Expression shape does not vary by row, so every declaration is flattened once per instance.
+        let declarations = compile_instance(air, instance, domains)?;
+        let height = 1usize << instance.main.num_variables();
+
+        for row in 0..height {
+            for (declaration, compiled) in declarations.iter().enumerate() {
+                // Inactive rows contribute the product identity and no multiset occurrence.
+                if let Some(activation) = &compiled.activation {
+                    let value = activation.run(row, height, &mut slots);
+                    if value == F::ZERO {
+                        continue;
+                    }
+                    if value != F::ONE {
+                        return Err(BusDebugError::NonBooleanActivation {
+                            air,
+                            declaration,
+                            row,
+                        });
+                    }
+                }
+
+                tuple.clear();
+                tuple.extend(
+                    compiled
+                        .fields
+                        .iter()
+                        .map(|field| field.run(row, height, &mut slots)),
+                );
+                visit(
+                    compiled.bus,
+                    &tuple,
+                    compiled.direction,
+                    BusDebugLocation {
+                        air,
+                        declaration,
+                        row,
+                    },
+                )?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// One declaration whose expressions are resolved against concrete columns.
+struct CompiledDeclaration<'a, F> {
+    /// Stable position of the named multiset.
+    bus: usize,
+    /// Side of the multiset equality receiving the tuple.
+    direction: BusDirection,
+    /// Row activation program, when the declaration is conditional.
+    activation: Option<Program<'a, F>>,
+    /// Payload programs in slot order.
+    fields: Vec<Program<'a, F>>,
+}
+
+/// One resolved node of a flattened expression.
+enum Op<'a, F> {
+    /// A whole trace column, indexed by row at evaluation time.
+    Column(&'a [F]),
+    /// A value shared by every row.
+    Constant(F),
+    /// Indicator of the first row.
+    FirstRow,
+    /// Indicator of the last row.
+    LastRow,
+    /// Indicator of every row but the last.
+    Transition,
+    /// Additive inverse of an earlier node.
+    Neg(usize),
+    /// Sum of two earlier nodes.
+    Add(usize, usize),
+    /// Difference of two earlier nodes.
+    Sub(usize, usize),
+    /// Product of two earlier nodes.
+    Mul(usize, usize),
+}
+
+/// An expression flattened into an order where every operand precedes its use.
+struct Program<'a, F>(Vec<Op<'a, F>>);
+
+impl<F: Field> Program<'_, F> {
+    fn run(&self, row: usize, height: usize, slots: &mut Vec<F>) -> F {
+        // A linear scan over shared storage replaces a per-row hash table.
+        slots.clear();
+        for op in &self.0 {
+            let value = match *op {
+                Op::Column(column) => column[row],
+                Op::Constant(value) => value,
+                Op::FirstRow => F::from_bool(row == 0),
+                Op::LastRow => F::from_bool(row + 1 == height),
+                Op::Transition => F::from_bool(row + 1 < height),
+                Op::Neg(x) => -slots[x],
+                Op::Add(x, y) => slots[x] + slots[y],
+                Op::Sub(x, y) => slots[x] - slots[y],
+                Op::Mul(x, y) => slots[x] * slots[y],
+            };
+            slots.push(value);
+        }
+        *slots.last().expect("a flattened expression holds one node")
+    }
+}
+
+/// Operator whose operand values are already on the stack.
+enum Combine {
+    /// Additive inverse of one operand.
+    Neg,
+    /// Sum of two operands.
+    Add,
+    /// Difference of two operands.
+    Sub,
+    /// Product of two operands.
+    Mul,
+}
+
+/// One step of the iterative walk over a shared expression graph.
+enum Step<'a, F: Field> {
+    /// Schedule a node, after a lookup in the completed-node index.
+    Enter(&'a SymbolicExpression<F>),
+    /// Combine the operands a scheduled node's children already produced.
+    Leave(Combine, &'a SymbolicExpression<F>),
+}
+
+fn compile_instance<'a, F: Field>(
+    air: usize,
+    instance: &BusDebugInstance<'a, F>,
+    domains: &HashMap<&str, usize>,
+) -> Result<Vec<CompiledDeclaration<'a, F>>, BusDebugError> {
+    let main = instance.main.iter_polys().collect::<Vec<_>>();
+    let preprocessed = instance
+        .preprocessed
+        .map(|table| table.iter_polys().collect::<Vec<_>>());
+
+    instance
+        .interactions
+        .iter()
+        .enumerate()
+        .map(|(declaration, interaction)| {
+            let compiler = Compiler {
+                air,
+                declaration,
+                main: &main,
+                preprocessed: preprocessed.as_deref(),
+                public_values: instance.public_values,
+            };
+            let fields = interaction
+                .fields
+                .iter()
+                .enumerate()
+                .map(|(slot, field)| compiler.compile(BusExpressionLocation::Field(slot), field))
+                .collect::<Result<Vec<_>, _>>()?;
+            let activation = match &interaction.activation {
+                BusActivation::Always => None,
+                BusActivation::Boolean(expression) => {
+                    Some(compiler.compile(BusExpressionLocation::Activation, expression)?)
+                }
+            };
+            Ok(CompiledDeclaration {
+                bus: domains[interaction.bus_name.as_str()],
+                direction: interaction.direction,
+                activation,
+                fields,
+            })
+        })
+        .collect()
+}
+
+/// Resolves symbolic leaves of one declaration against concrete data.
+struct Compiler<'a, 'b, F: Field> {
     /// AIR position in statement order.
     air: usize,
     /// Declaration position within the AIR.
     declaration: usize,
-    /// Row position within the trace.
-    row: usize,
-    /// Number of rows in the trace.
-    height: usize,
     /// Committed trace columns.
-    main: &'a Table<F>,
+    main: &'b [&'a [F]],
     /// Optional fixed trace columns.
-    preprocessed: Option<&'a Table<F>>,
+    preprocessed: Option<&'b [&'a [F]]>,
     /// Public inputs supplied to the AIR.
     public_values: &'a [F],
 }
 
-/// One step of the iterative traversal over a shared expression graph.
-enum Step<'a, F: Field> {
-    /// Schedule a node, after a lookup in the completed-value index.
-    Enter(&'a SymbolicExpression<F>),
-    /// Combine the operand values a scheduled node's children already produced.
-    Leave(&'a SymbolicExpression<F>),
-}
-
-impl<F: Field> RowEvaluator<'_, F> {
-    fn evaluate(&self, expression: &SymbolicExpression<F>) -> Result<F, BusDebugError> {
+impl<'a, F: Field> Compiler<'a, '_, F> {
+    fn compile(
+        &self,
+        location: BusExpressionLocation,
+        expression: &SymbolicExpression<F>,
+    ) -> Result<Program<'a, F>, BusDebugError> {
         // Arithmetic nodes share their operands, so the expression is a graph rather than a tree.
         // Walking it per path costs time exponential in the depth, which a bit recomposition reaches immediately.
-        // An explicit stack keyed on node identity evaluates each distinct node once and bounds the recursion depth.
-        if let SymbolicExpr::Leaf(leaf) = expression {
-            return self.evaluate_leaf(leaf);
-        }
-
-        let mut done = HashMap::<*const SymbolicExpression<F>, F>::new();
+        let mut ops = Vec::new();
+        let mut done = HashMap::<*const SymbolicExpression<F>, usize>::new();
         let mut steps = alloc::vec![Step::Enter(expression)];
-        let mut operands = Vec::<F>::new();
+        let mut operands = Vec::<usize>::new();
 
         while let Some(step) = steps.pop() {
             match step {
                 Step::Enter(node) => {
-                    if let Some(&value) = done.get(&core::ptr::from_ref(node)) {
-                        operands.push(value);
+                    if let Some(&slot) = done.get(&core::ptr::from_ref(node)) {
+                        operands.push(slot);
                         continue;
                     }
                     match node {
                         SymbolicExpr::Leaf(leaf) => {
-                            let value = self.evaluate_leaf(leaf)?;
-                            done.insert(core::ptr::from_ref(node), value);
-                            operands.push(value);
+                            let op = self.compile_leaf(location, leaf)?;
+                            ops.push(op);
+                            done.insert(core::ptr::from_ref(node), ops.len() - 1);
+                            operands.push(ops.len() - 1);
                         }
                         SymbolicExpr::Neg { x, .. } => {
-                            steps.push(Step::Leave(node));
+                            steps.push(Step::Leave(Combine::Neg, node));
                             steps.push(Step::Enter(x));
                         }
-                        SymbolicExpr::Add { x, y, .. }
-                        | SymbolicExpr::Sub { x, y, .. }
-                        | SymbolicExpr::Mul { x, y, .. } => {
-                            steps.push(Step::Leave(node));
+                        SymbolicExpr::Add { x, y, .. } => {
+                            steps.push(Step::Leave(Combine::Add, node));
+                            steps.push(Step::Enter(y));
+                            steps.push(Step::Enter(x));
+                        }
+                        SymbolicExpr::Sub { x, y, .. } => {
+                            steps.push(Step::Leave(Combine::Sub, node));
+                            steps.push(Step::Enter(y));
+                            steps.push(Step::Enter(x));
+                        }
+                        SymbolicExpr::Mul { x, y, .. } => {
+                            steps.push(Step::Leave(Combine::Mul, node));
                             steps.push(Step::Enter(y));
                             steps.push(Step::Enter(x));
                         }
                     }
                 }
-                Step::Leave(node) => {
+                Step::Leave(combine, node) => {
                     // Operands were pushed left before right, so the stack returns them in reverse.
                     let mut pop = || operands.pop().expect("a scheduled node left its operands");
                     let right = pop();
-                    let value = match node {
-                        SymbolicExpr::Neg { .. } => -right,
-                        SymbolicExpr::Add { .. } => pop() + right,
-                        SymbolicExpr::Sub { .. } => pop() - right,
-                        SymbolicExpr::Mul { .. } => pop() * right,
-                        SymbolicExpr::Leaf(_) => {
-                            unreachable!("a leaf is completed when it is first entered")
-                        }
+                    let op = match combine {
+                        Combine::Neg => Op::Neg(right),
+                        Combine::Add => Op::Add(pop(), right),
+                        Combine::Sub => Op::Sub(pop(), right),
+                        Combine::Mul => Op::Mul(pop(), right),
                     };
-                    done.insert(core::ptr::from_ref(node), value);
-                    operands.push(value);
+                    ops.push(op);
+                    done.insert(core::ptr::from_ref(node), ops.len() - 1);
+                    operands.push(ops.len() - 1);
                 }
             }
         }
 
-        Ok(operands.pop().expect("the root node produced its value"))
+        Ok(Program(ops))
     }
 
-    fn evaluate_leaf(&self, leaf: &BaseLeaf<F>) -> Result<F, BusDebugError> {
-        // Symbolic planning rejects next-row and periodic accesses before replay.
+    fn compile_leaf(
+        &self,
+        location: BusExpressionLocation,
+        leaf: &BaseLeaf<F>,
+    ) -> Result<Op<'a, F>, BusDebugError> {
+        // Shape faults do not vary by row, so they are named once rather than once per row.
         match leaf {
-            BaseLeaf::Variable(variable) => match variable.entry {
-                BaseEntry::Main { offset: 0 } => {
-                    if variable.index >= self.main.num_polys() {
-                        return Err(BusDebugError::MainColumnOutOfRange {
+            BaseLeaf::Variable(variable) => {
+                match variable.entry {
+                    BaseEntry::Main { offset: 0 } => self
+                        .main
+                        .get(variable.index)
+                        .copied()
+                        .map(Op::Column)
+                        .ok_or(BusDebugError::MainColumnOutOfRange {
                             air: self.air,
                             declaration: self.declaration,
-                            row: self.row,
                             column: variable.index,
-                            width: self.main.num_polys(),
-                        });
+                            width: self.main.len(),
+                        }),
+                    BaseEntry::Preprocessed { offset: 0 } => {
+                        let Some(preprocessed) = self.preprocessed else {
+                            return Err(BusDebugError::MissingPreprocessedTrace {
+                                air: self.air,
+                                declaration: self.declaration,
+                                column: variable.index,
+                            });
+                        };
+                        preprocessed
+                            .get(variable.index)
+                            .copied()
+                            .map(Op::Column)
+                            .ok_or(BusDebugError::PreprocessedColumnOutOfRange {
+                                air: self.air,
+                                declaration: self.declaration,
+                                column: variable.index,
+                                width: preprocessed.len(),
+                            })
                     }
-                    Ok(self.main.poly(variable.index).as_slice()[self.row])
-                }
-                BaseEntry::Preprocessed { offset: 0 } => {
-                    let Some(preprocessed) = self.preprocessed else {
-                        return Err(BusDebugError::MissingPreprocessedTrace {
+                    BaseEntry::Public => self
+                        .public_values
+                        .get(variable.index)
+                        .copied()
+                        .map(Op::Constant)
+                        .ok_or(BusDebugError::PublicValueOutOfRange {
                             air: self.air,
                             declaration: self.declaration,
-                            row: self.row,
-                            column: variable.index,
-                        });
-                    };
-                    if variable.index >= preprocessed.num_polys() {
-                        return Err(BusDebugError::PreprocessedColumnOutOfRange {
-                            air: self.air,
-                            declaration: self.declaration,
-                            row: self.row,
-                            column: variable.index,
-                            width: preprocessed.num_polys(),
-                        });
+                            index: variable.index,
+                            len: self.public_values.len(),
+                        }),
+                    BaseEntry::Main { offset } => {
+                        Err(self.unsupported(location, UnsupportedBusAccess::MainOffset(offset)))
                     }
-                    Ok(preprocessed.poly(variable.index).as_slice()[self.row])
+                    BaseEntry::Preprocessed { offset } => Err(self
+                        .unsupported(location, UnsupportedBusAccess::PreprocessedOffset(offset))),
+                    BaseEntry::Periodic => {
+                        Err(self.unsupported(location, UnsupportedBusAccess::Periodic))
+                    }
                 }
-                BaseEntry::Public => self.public_values.get(variable.index).copied().ok_or(
-                    BusDebugError::PublicValueOutOfRange {
-                        air: self.air,
-                        declaration: self.declaration,
-                        row: self.row,
-                        index: variable.index,
-                        len: self.public_values.len(),
-                    },
-                ),
-                BaseEntry::Main { .. } | BaseEntry::Preprocessed { .. } | BaseEntry::Periodic => {
-                    unreachable!("bus planning rejected an unsupported expression access")
-                }
-            },
-            BaseLeaf::IsFirstRow => Ok(F::from_bool(self.row == 0)),
-            BaseLeaf::IsLastRow => Ok(F::from_bool(self.row + 1 == self.height)),
-            BaseLeaf::IsTransition => Ok(F::from_bool(self.row + 1 < self.height)),
-            BaseLeaf::Constant(value) => Ok(*value),
+            }
+            BaseLeaf::IsFirstRow => Ok(Op::FirstRow),
+            BaseLeaf::IsLastRow => Ok(Op::LastRow),
+            BaseLeaf::IsTransition => Ok(Op::Transition),
+            BaseLeaf::Constant(value) => Ok(Op::Constant(*value)),
         }
     }
-}
 
-fn activation_is_set<F: Field>(
-    activation: &BusActivation<SymbolicExpression<F>>,
-    evaluator: &RowEvaluator<'_, F>,
-) -> Result<bool, BusDebugError> {
-    // Unconditional declarations contribute on every row.
-    let BusActivation::Boolean(expression) = activation else {
-        return Ok(true);
-    };
-
-    // AIR semantics require a conditional activation to be exactly zero or one.
-    let value = evaluator.evaluate(expression)?;
-    if value == F::ZERO {
-        Ok(false)
-    } else if value == F::ONE {
-        Ok(true)
-    } else {
-        Err(BusDebugError::NonBooleanActivation {
-            air: evaluator.air,
-            declaration: evaluator.declaration,
-            row: evaluator.row,
-        })
+    fn unsupported(
+        &self,
+        location: BusExpressionLocation,
+        access: UnsupportedBusAccess,
+    ) -> BusDebugError {
+        // Planning rejects these accesses first, so a report names them instead of panicking.
+        BusPlanError::UnsupportedExpression {
+            air: self.air,
+            declaration: self.declaration,
+            location,
+            access,
+        }
+        .into()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use alloc::string::ToString;
-    use alloc::vec;
+    use alloc::{format, vec};
 
     use p3_air::symbolic::{AirLayout, BaseEntry, SymbolicVariable};
     use p3_air::{Air, BaseAir, WindowAccess};
@@ -632,6 +961,7 @@ mod tests {
     use p3_binary_field::BinaryField128;
     use p3_field::PrimeCharacteristicRing;
     use p3_matrix::dense::RowMajorMatrix;
+    use proptest::prelude::*;
 
     use super::*;
     use crate::BusInteractionBuilder;
@@ -733,7 +1063,7 @@ mod tests {
     }
 
     #[test]
-    fn mismatch_reports_exact_counts_and_first_sources() {
+    fn mismatch_reports_exact_counts_and_unmatched_sources() {
         // Fixture state: tuple 9 is pushed twice and pulled once.
         let push = table::<F>(&[&[9, 9]]);
         let pull = table(&[&[9]]);
@@ -764,7 +1094,7 @@ mod tests {
             },
         ];
 
-        // The report names the bus, tuple, exact multiplicities, and emitting rows.
+        // The report names the bus, tuple and exact multiplicities.
         let report = BusDebugReport::check(&instances).unwrap();
         assert_eq!(report.imbalances.len(), 1);
         let mismatch = &report.imbalances[0];
@@ -772,9 +1102,78 @@ mod tests {
         assert_eq!(mismatch.tuple, vec![F::from_u64(9)]);
         assert_eq!(mismatch.pushes.count, 2);
         assert_eq!(mismatch.pulls.count, 1);
-        assert_eq!(mismatch.pushes.locations[0].row, 0);
-        assert_eq!(mismatch.pushes.locations[1].row, 1);
-        assert_eq!(mismatch.pulls.locations[0].air, 1);
+
+        // The first push pairs with the only pull, so the sample starts at the second push.
+        assert_eq!(
+            mismatch.pushes.locations,
+            vec![BusDebugLocation {
+                air: 0,
+                declaration: 0,
+                row: 1,
+            }],
+        );
+        assert!(mismatch.pulls.locations.is_empty());
+    }
+
+    #[test]
+    fn the_sample_skips_the_occurrences_that_cancel_against_the_other_side() {
+        // Fixture state: tuple 9 is pushed eight times and pulled seven times.
+        let push = table::<F>(&[&[9, 9, 9, 9, 9, 9, 9, 9]]);
+        let pull_four = table::<F>(&[&[9, 9, 9, 9]]);
+        let pull_two = table::<F>(&[&[9, 9]]);
+        let pull_one = table::<F>(&[&[9]]);
+        let pushes = [interaction(
+            "dense",
+            BusDirection::Push,
+            vec![current(0)],
+            BusActivation::Always,
+        )];
+        let pulls = [interaction(
+            "dense",
+            BusDirection::Pull,
+            vec![current(0)],
+            BusActivation::Always,
+        )];
+        let instances = [
+            BusDebugInstance {
+                main: &push,
+                preprocessed: None,
+                public_values: &[],
+                interactions: &pushes,
+            },
+            BusDebugInstance {
+                main: &pull_four,
+                preprocessed: None,
+                public_values: &[],
+                interactions: &pulls,
+            },
+            BusDebugInstance {
+                main: &pull_two,
+                preprocessed: None,
+                public_values: &[],
+                interactions: &pulls,
+            },
+            BusDebugInstance {
+                main: &pull_one,
+                preprocessed: None,
+                public_values: &[],
+                interactions: &pulls,
+            },
+        ];
+
+        // Seven of the eight pushes cancel, so only the eighth is named.
+        let report = BusDebugReport::check(&instances).unwrap();
+        let mismatch = &report.imbalances[0];
+        assert_eq!((mismatch.pushes.count, mismatch.pulls.count), (8, 7));
+        assert_eq!(
+            mismatch.pushes.locations,
+            vec![BusDebugLocation {
+                air: 0,
+                declaration: 0,
+                row: 7,
+            }],
+        );
+        assert!(mismatch.pulls.locations.is_empty());
     }
 
     #[test]
@@ -960,7 +1359,7 @@ mod tests {
         let report = BusDebugReport::check(&instances).unwrap();
         let pushes = &report.imbalances[0].pushes;
         assert_eq!(pushes.count, 8);
-        assert_eq!(pushes.locations.len(), LOCATION_LIMIT);
+        assert_eq!(pushes.locations.len(), BusDebugLimits::DEFAULT_LOCATIONS);
         assert_eq!(
             pushes
                 .locations
@@ -1097,7 +1496,6 @@ mod tests {
             Err(BusDebugError::MissingPreprocessedTrace {
                 air: 0,
                 declaration: 0,
-                row: 0,
                 column: 0,
             })
         );
@@ -1120,7 +1518,6 @@ mod tests {
             Err(BusDebugError::PreprocessedColumnOutOfRange {
                 air: 0,
                 declaration: 0,
-                row: 0,
                 column: 2,
                 width: 1,
             })
@@ -1148,7 +1545,6 @@ mod tests {
             Err(BusDebugError::MainColumnOutOfRange {
                 air: 0,
                 declaration: 0,
-                row: 0,
                 column: 3,
                 width: 1,
             })
@@ -1171,7 +1567,6 @@ mod tests {
             Err(BusDebugError::PublicValueOutOfRange {
                 air: 0,
                 declaration: 0,
-                row: 0,
                 index: 1,
                 len: 1,
             })
@@ -1204,5 +1599,371 @@ mod tests {
                 row: 1,
             })
         );
+    }
+
+    #[test]
+    fn padding_rows_contribute_like_any_other_row() {
+        // Fixture state: two real payloads pulled from a trace padded to four rows with zeros.
+        let push = table::<F>(&[&[5, 6]]);
+        let pull = table::<F>(&[&[5, 6, 0, 0]]);
+        let pushes = [interaction(
+            "padded",
+            BusDirection::Push,
+            vec![current(0)],
+            BusActivation::Always,
+        )];
+        let pulls = [interaction(
+            "padded",
+            BusDirection::Pull,
+            vec![current(0)],
+            BusActivation::Always,
+        )];
+        let instances = [
+            BusDebugInstance {
+                main: &push,
+                preprocessed: None,
+                public_values: &[],
+                interactions: &pushes,
+            },
+            BusDebugInstance {
+                main: &pull,
+                preprocessed: None,
+                public_values: &[],
+                interactions: &pulls,
+            },
+        ];
+
+        // The in-circuit argument consumes the padding too, so the debugger reports it rather than hiding it.
+        let report = BusDebugReport::check(&instances).unwrap();
+        assert_eq!(report.imbalances.len(), 1);
+        let padding = &report.imbalances[0];
+        assert_eq!(padding.tuple, vec![F::ZERO]);
+        assert_eq!((padding.pushes.count, padding.pulls.count), (0, 2));
+        assert_eq!(
+            padding
+                .pulls
+                .locations
+                .iter()
+                .map(|location| location.row)
+                .collect::<Vec<_>>(),
+            vec![2, 3],
+        );
+    }
+
+    #[test]
+    fn an_instance_without_declarations_contributes_nothing() {
+        // Fixture state: a tall AIR declaring no tuple beside a balanced pair of short AIRs.
+        let idle = table::<F>(&[&[1, 2, 3, 4]]);
+        let push = table::<F>(&[&[7]]);
+        let pull = table::<F>(&[&[7]]);
+        let none: [SymbolicBusInteraction<F>; 0] = [];
+        let pushes = [interaction(
+            "quiet",
+            BusDirection::Push,
+            vec![current(0)],
+            BusActivation::Always,
+        )];
+        let pulls = [interaction(
+            "quiet",
+            BusDirection::Pull,
+            vec![current(0)],
+            BusActivation::Always,
+        )];
+        let instances = [
+            BusDebugInstance {
+                main: &idle,
+                preprocessed: None,
+                public_values: &[],
+                interactions: &none,
+            },
+            BusDebugInstance {
+                main: &push,
+                preprocessed: None,
+                public_values: &[],
+                interactions: &pushes,
+            },
+            BusDebugInstance {
+                main: &pull,
+                preprocessed: None,
+                public_values: &[],
+                interactions: &pulls,
+            },
+        ];
+
+        // The silent AIR neither contributes a tuple nor disturbs the positions of the others.
+        assert!(BusDebugReport::check(&instances).unwrap().is_balanced());
+    }
+
+    #[test]
+    fn the_retained_list_is_capped_and_reports_what_it_dropped() {
+        // Fixture state: eight distinct payloads pushed with no pull side at all.
+        let trace = table::<F>(&[&[1, 2, 3, 4, 5, 6, 7, 8]]);
+        let interactions = [interaction(
+            "order",
+            BusDirection::Push,
+            vec![current(0)],
+            BusActivation::Always,
+        )];
+        let instances = [BusDebugInstance {
+            main: &trace,
+            preprocessed: None,
+            public_values: &[],
+            interactions: &interactions,
+        }];
+        let limits = BusDebugLimits {
+            locations: 1,
+            imbalances: 3,
+        };
+
+        // Three tuples survive the cap and the remaining five are counted rather than dropped silently.
+        let report = BusDebugReport::check_with_limits(&instances, limits).unwrap();
+        assert_eq!(report.imbalances.len(), 3);
+        assert_eq!(report.unreported, 5);
+        assert!(report.is_truncated());
+        assert!(!report.is_balanced());
+
+        // The rendering is one line per tuple plus a header and a truncation notice.
+        assert_eq!(
+            format!("{report}"),
+            "bus \"order\": 3 unmatched tuples\n\
+             \x20 (1)  push 1  pull 0  excess push at air 0 decl 0 row 0\n\
+             \x20 (2)  push 1  pull 0  excess push at air 0 decl 0 row 1\n\
+             \x20 (3)  push 1  pull 0  excess push at air 0 decl 0 row 2\n\
+             ... and 5 more unmatched tuples\n",
+        );
+    }
+
+    #[test]
+    fn a_balanced_statement_renders_as_one_line() {
+        // Fixture state: one payload pushed and pulled once.
+        let trace = table::<F>(&[&[3]]);
+        let interactions = [
+            interaction(
+                "even",
+                BusDirection::Push,
+                vec![current(0)],
+                BusActivation::Always,
+            ),
+            interaction(
+                "even",
+                BusDirection::Pull,
+                vec![current(0)],
+                BusActivation::Always,
+            ),
+        ];
+        let instances = [BusDebugInstance {
+            main: &trace,
+            preprocessed: None,
+            public_values: &[],
+            interactions: &interactions,
+        }];
+
+        let report = BusDebugReport::check(&instances).unwrap();
+        assert_eq!(format!("{report}"), "every named bus balances");
+    }
+
+    #[test]
+    fn a_fault_in_the_middle_instance_is_attributed_to_that_instance() {
+        // Fixture state: four payloads pushed, split across two pulling AIRs, with the middle one wrong.
+        let push = table::<F>(&[&[1, 2, 3, 4]]);
+        let middle = table::<F>(&[&[1, 9]]);
+        let last = table::<F>(&[&[3, 4]]);
+        let pushes = [interaction(
+            "split",
+            BusDirection::Push,
+            vec![current(0)],
+            BusActivation::Always,
+        )];
+        let pulls = [interaction(
+            "split",
+            BusDirection::Pull,
+            vec![current(0)],
+            BusActivation::Always,
+        )];
+        let instances = [
+            BusDebugInstance {
+                main: &push,
+                preprocessed: None,
+                public_values: &[],
+                interactions: &pushes,
+            },
+            BusDebugInstance {
+                main: &middle,
+                preprocessed: None,
+                public_values: &[],
+                interactions: &pulls,
+            },
+            BusDebugInstance {
+                main: &last,
+                preprocessed: None,
+                public_values: &[],
+                interactions: &pulls,
+            },
+        ];
+
+        // The lost payload names the pushing AIR and the surplus one names the middle AIR.
+        let report = BusDebugReport::check(&instances).unwrap();
+        assert_eq!(report.imbalances.len(), 2);
+        assert_eq!(report.imbalances[0].tuple, vec![F::from_u64(2)]);
+        assert_eq!(
+            report.imbalances[0].pushes.locations,
+            vec![BusDebugLocation {
+                air: 0,
+                declaration: 0,
+                row: 1,
+            }],
+        );
+        assert_eq!(report.imbalances[1].tuple, vec![F::from_u64(9)]);
+        assert_eq!(
+            report.imbalances[1].pulls.locations,
+            vec![BusDebugLocation {
+                air: 1,
+                declaration: 0,
+                row: 1,
+            }],
+        );
+    }
+
+    #[test]
+    fn two_declarations_producing_one_tuple_are_told_apart() {
+        // Fixture state: a single row whose two columns hold the same payload, pushed once from each.
+        let trace = table::<F>(&[&[7], &[7]]);
+        let interactions = [
+            interaction(
+                "twin",
+                BusDirection::Push,
+                vec![current(0)],
+                BusActivation::Always,
+            ),
+            interaction(
+                "twin",
+                BusDirection::Push,
+                vec![current(1)],
+                BusActivation::Always,
+            ),
+        ];
+        let instances = [BusDebugInstance {
+            main: &trace,
+            preprocessed: None,
+            public_values: &[],
+            interactions: &interactions,
+        }];
+
+        // Both occurrences land on row zero, so only the declaration position separates them.
+        let report = BusDebugReport::check(&instances).unwrap();
+        assert_eq!(report.imbalances.len(), 1);
+        assert_eq!(
+            report.imbalances[0]
+                .pushes
+                .locations
+                .iter()
+                .map(|location| (location.declaration, location.row))
+                .collect::<Vec<_>>(),
+            vec![(0, 0), (1, 0)],
+        );
+    }
+
+    #[test]
+    fn an_unsupported_leaf_is_named_rather_than_panicked_on() {
+        // Fixture state: a next-row access and a periodic access, both rejected by planning first.
+        let column = [F::ZERO];
+        let main = [column.as_slice()];
+        let compiler = Compiler {
+            air: 2,
+            declaration: 1,
+            main: &main,
+            preprocessed: None,
+            public_values: &[],
+        };
+
+        let next_row = BaseLeaf::Variable(SymbolicVariable::new(BaseEntry::Main { offset: 1 }, 0));
+        assert_eq!(
+            compiler
+                .compile_leaf(BusExpressionLocation::Field(0), &next_row)
+                .err()
+                .unwrap(),
+            BusDebugError::Plan(BusPlanError::UnsupportedExpression {
+                air: 2,
+                declaration: 1,
+                location: BusExpressionLocation::Field(0),
+                access: UnsupportedBusAccess::MainOffset(1),
+            }),
+        );
+
+        let periodic = BaseLeaf::Variable(SymbolicVariable::new(BaseEntry::Periodic, 0));
+        assert_eq!(
+            compiler
+                .compile_leaf(BusExpressionLocation::Activation, &periodic)
+                .err()
+                .unwrap(),
+            BusDebugError::Plan(BusPlanError::UnsupportedExpression {
+                air: 2,
+                declaration: 1,
+                location: BusExpressionLocation::Activation,
+                access: UnsupportedBusAccess::Periodic,
+            }),
+        );
+    }
+
+    proptest! {
+        #[test]
+        fn a_single_mutated_row_is_named_by_the_report(
+            log_height in 1usize..8,
+            offset in 0usize..256,
+            delta in 1u64..1000,
+        ) {
+            // Distinct payloads give every tuple multiplicity one, so the excess is attributable to one row.
+            let height = 1usize << log_height;
+            let row = offset % height;
+            let values = (0..height as u64).map(|i| i * 4096 + 1).collect::<Vec<_>>();
+            let push = table::<F>(&[&values]);
+
+            let mut mutated = values.clone();
+            mutated[row] += delta;
+            let pull = table::<F>(&[&mutated]);
+
+            let pushes = [interaction(
+                "mutation",
+                BusDirection::Push,
+                vec![current(0)],
+                BusActivation::Always,
+            )];
+            let pulls = [interaction(
+                "mutation",
+                BusDirection::Pull,
+                vec![current(0)],
+                BusActivation::Always,
+            )];
+            let instances = [
+                BusDebugInstance {
+                    main: &push,
+                    preprocessed: None,
+                    public_values: &[],
+                    interactions: &pushes,
+                },
+                BusDebugInstance {
+                    main: &pull,
+                    preprocessed: None,
+                    public_values: &[],
+                    interactions: &pulls,
+                },
+            ];
+
+            // One payload lost its consumer and one gained a consumer that produces nothing.
+            let report = BusDebugReport::check(&instances).unwrap();
+            prop_assert_eq!(report.imbalances.len(), 2);
+
+            let lost = &report.imbalances[0];
+            prop_assert_eq!(&lost.tuple, &vec![F::from_u64(values[row])]);
+            prop_assert_eq!((lost.pushes.count, lost.pulls.count), (1, 0));
+            prop_assert_eq!(lost.pushes.locations[0].row, row);
+            prop_assert_eq!(lost.pushes.locations[0].air, 0);
+
+            let gained = &report.imbalances[1];
+            prop_assert_eq!(&gained.tuple, &vec![F::from_u64(mutated[row])]);
+            prop_assert_eq!((gained.pushes.count, gained.pulls.count), (0, 1));
+            prop_assert_eq!(gained.pulls.locations[0].row, row);
+            prop_assert_eq!(gained.pulls.locations[0].air, 1);
+        }
     }
 }

@@ -16,8 +16,8 @@ pub use builder::{
     SymbolicBusInteraction,
 };
 pub use debug::{
-    BusDebugError, BusDebugInstance, BusDebugLocation, BusDebugOccurrence, BusDebugReport,
-    BusImbalance,
+    BusDebugError, BusDebugInstance, BusDebugLimits, BusDebugLocation, BusDebugOccurrence,
+    BusDebugReport, BusImbalance,
 };
 pub use leaf::{BusDirection, BusLeafDeclaration, BusLeafError, BusLeaves, BusSelector};
 pub use plan::{

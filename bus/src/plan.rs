@@ -1070,4 +1070,46 @@ mod tests {
             Err(BusPlanError::HeightOverflow { air: 0 })
         ));
     }
+
+    #[test]
+    fn a_shared_operand_graph_is_walked_once_per_node_rather_than_once_per_path() {
+        // Fixture state: forty doublings share their operand, giving eighty nodes and 2^40 root-to-leaf paths.
+        const DEPTH: usize = 40;
+        let deep = |entry: BaseEntry| {
+            let mut field = variable(entry, 0);
+            for _ in 0..DEPTH {
+                field = field.clone() + field;
+            }
+            vec![SymbolicBusInteraction {
+                bus_name: "deep".to_string(),
+                direction: BusDirection::Push,
+                fields: vec![field],
+                activation: BusActivation::Always,
+            }]
+        };
+
+        // A path-wise walk would not finish, so reaching the assertion at all is the property under test.
+        let accepted = deep(BaseEntry::Main { offset: 0 });
+        assert!(
+            BusPlan::build(&[BusPlanInput {
+                log_height: 1,
+                interactions: &accepted,
+            }])
+            .unwrap()
+            .is_some()
+        );
+
+        // Skipping repeated nodes must not skip the rejection buried under the same sharing.
+        let rejected = deep(BaseEntry::Main { offset: 1 });
+        assert!(matches!(
+            BusPlan::build(&[BusPlanInput {
+                log_height: 1,
+                interactions: &rejected,
+            }]),
+            Err(BusPlanError::UnsupportedExpression {
+                access: UnsupportedBusAccess::MainOffset(1),
+                ..
+            })
+        ));
+    }
 }
