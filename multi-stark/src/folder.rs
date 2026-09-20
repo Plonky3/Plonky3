@@ -869,6 +869,7 @@ mod tests {
 
     use p3_air::{Air, AirBuilder, BaseAir, WindowAccess};
     use p3_baby_bear::BabyBear;
+    use p3_binary_field::{BinaryField128, Ghash128, TowerLevel};
     use p3_field::PrimeCharacteristicRing;
     use p3_field::extension::BinomialExtensionField;
     use p3_lookup::Count;
@@ -1098,7 +1099,10 @@ mod tests {
     struct WideAir;
 
     /// Columns of [`WideAir`], one per asserted constraint.
-    const WIDE_COLS: usize = 2 * ALPHA_BATCH + 3;
+    ///
+    /// An odd number of whole batches keeps a constant error repeated once per batch from
+    /// cancelling itself in characteristic two, and the remainder leaves a tail to drain.
+    const WIDE_COLS: usize = 3 * ALPHA_BATCH + 3;
 
     impl<X> BaseAir<X> for WideAir {
         fn width(&self) -> usize {
@@ -1116,6 +1120,52 @@ mod tests {
         }
     }
 
+    /// Check both exits from [`WideAir`]'s batched fold against its Horner fold over one ring.
+    ///
+    /// The caller supplies one column value per constraint, so it can pick a fixture the ring
+    /// cannot degenerate: over a binary field the small integers are only `0` and `1`.
+    ///
+    /// # Arguments
+    ///
+    /// - `local`: one value per column, none of them zero.
+    /// - `alpha`: the scalar both folds batch with.
+    fn check_wide_air_batching<BF, R>(local: &[R], alpha: R)
+    where
+        BF: Field,
+        R: Field + Algebra<BF>,
+    {
+        let next = R::zero_vec(WIDE_COLS);
+        let pis: [BF; 0] = [];
+        let boundary = BoundaryEvals {
+            first: R::ZERO,
+            last: R::ZERO,
+            transition: R::ONE,
+        };
+
+        let horner = MultilinearFolder::<BF, R, R>::new(local, &next, boundary, &pis, alpha)
+            .eval_air(&WideAir);
+
+        let alpha_powers = (0..WIDE_COLS)
+            .map(|i| alpha.exp_u64((WIDE_COLS - 1 - i) as u64))
+            .collect::<Vec<_>>();
+        let batched = MultilinearFolder::<BF, R, R>::new(local, &next, boundary, &pis, alpha)
+            .with_alpha_powers(&alpha_powers)
+            .eval_air(&WideAir);
+        assert_eq!(batched, horner);
+
+        // The lookup-aware folder is the second exit, and it has to weight the trailing
+        // partial batch too. The AIR declares no lookup, so the link carries none.
+        let link = AirLinkInstance {
+            num_local_lookups: 0,
+            lookups: Vec::new(),
+        };
+        let folder = MultilinearFolder::<BF, R, R>::new(local, &next, boundary, &pis, alpha)
+            .with_alpha_powers(&alpha_powers);
+        let evaluations =
+            InteractionMultilinearFolder::new(folder, &link, &[] as &[R], true).eval_air(&WideAir);
+        assert_eq!(evaluations.constraints, horner);
+    }
+
     #[test]
     fn alpha_batching_matches_horner_across_several_batches() {
         // Fixture state: one distinct non-zero value per column, so no constraint vanishes
@@ -1123,25 +1173,23 @@ mod tests {
         let local = (0..WIDE_COLS)
             .map(|i| EF::from_u64(i as u64 + 1))
             .collect::<Vec<_>>();
-        let next = EF::zero_vec(WIDE_COLS);
-        let pis: [F; 0] = [];
-        let alpha = EF::from_u64(11);
-        let boundary = BoundaryEvals {
-            first: EF::ZERO,
-            last: EF::ZERO,
-            transition: EF::ONE,
-        };
+        check_wide_air_batching::<F, EF>(&local, EF::from_u64(11));
+    }
 
-        let horner = TestFolder::new(&local, &next, boundary, &pis, alpha).eval_air(&WideAir);
-
-        let alpha_powers = (0..WIDE_COLS)
-            .map(|i| alpha.exp_u64((WIDE_COLS - 1 - i) as u64))
+    #[test]
+    fn alpha_batching_matches_horner_over_a_deferred_reduction_ring() {
+        // `Ghash128` answers a dot product by accumulating every product unreduced and
+        // reducing the sum once, which is the kernel a batch is held back for. The two folds
+        // must still agree term for term.
+        //
+        // Fixture state: an odd multiplier walked over the representation, so the columns are
+        // distinct and non-zero where the small integers would collapse onto `0` and `1`.
+        const STRIDE: u128 = 0x9E37_79B9_7F4A_7C15_F39C_C060_5CED_C835;
+        let local = (0..WIDE_COLS)
+            .map(|i| Ghash128::from_repr(STRIDE.wrapping_mul(i as u128 + 1)))
             .collect::<Vec<_>>();
-        let batched = TestFolder::new(&local, &next, boundary, &pis, alpha)
-            .with_alpha_powers(&alpha_powers)
-            .eval_air(&WideAir);
-
-        assert_eq!(batched, horner);
+        let alpha = Ghash128::from_repr(0x0123_4567_89AB_CDEF_FEDC_BA98_7654_3210);
+        check_wide_air_batching::<BinaryField128, Ghash128>(&local, alpha);
     }
 
     /// Single-column AIR that ties the main column to a preprocessed and a periodic column.
