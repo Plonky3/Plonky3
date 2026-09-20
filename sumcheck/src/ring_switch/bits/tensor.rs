@@ -142,14 +142,33 @@ impl<EF: TowerLevel> BitTensor<EF> {
     /// Scales the column reading: column `v` becomes `a * column v`.
     ///
     /// This is multiplication by `a ⊗ 1`, acting on the first tensor leg.
-    /// The stored rows are the wrong reading for it.
-    /// So the matrix is transposed, scaled, and transposed back.
     pub fn scale_columns(&mut self, a: EF) {
-        let mut columns = self.columns();
-        for column in &mut columns {
-            *column *= a;
+        let mut scaled = Self::zero();
+        scaled.add_scaled_columns(self, a);
+        *self = scaled;
+    }
+
+    /// Adds `(a ⊗ 1) * other` into this element.
+    ///
+    /// # Algorithm
+    ///
+    /// The row reading is `other = sum_u beta_u ⊗ row_u`, and the first leg carries the
+    /// basis vectors alone. Scaling it therefore leaves the rows where they are:
+    ///
+    /// ```text
+    ///     (a ⊗ 1) * other  =  sum_u (a * beta_u) ⊗ row_u
+    /// ```
+    ///
+    /// That is one multiplication per coordinate, whatever the element was accumulated from.
+    /// A zero row scales to nothing, so its multiplication is never formed.
+    pub fn add_scaled_columns(&mut self, other: &Self, a: EF) {
+        for (u, &row) in other.rows.iter().enumerate() {
+            if row != EF::ZERO {
+                let mut basis = Coefficients::<EF>::zero();
+                basis.set(u);
+                self.add_exterior_product(a * basis.element(), row);
+            }
         }
-        self.rows = Self { rows: columns }.columns();
     }
 
     /// Multiplies by `1 + a ⊗ 1 + 1 ⊗ b`, the equality polynomial lifted into the algebra.
@@ -260,17 +279,17 @@ impl<EF: TowerLevel> BitTensorBuckets<EF> {
         }
     }
 
-    /// Add another partial sum into this one.
-    pub(crate) fn merge(&mut self, other: &Self) {
-        for (bucket, other) in self.buckets.iter_mut().zip(&other.buckets) {
-            for (sum, &other) in bucket.iter_mut().zip(other.iter()) {
-                *sum += other;
-            }
+    /// Forget every term added so far, keeping the allocation.
+    ///
+    /// A sweep that reads back one partial sum per block accumulates them in turn.
+    pub(crate) fn clear(&mut self) {
+        for bucket in &mut self.buckets {
+            bucket.fill(EF::ZERO);
         }
     }
 
     /// The element the buckets hold.
-    pub(crate) fn into_tensor(self) -> BitTensor<EF> {
+    pub(crate) fn tensor(&self) -> BitTensor<EF> {
         let mut tensor = BitTensor::zero();
         for (position, bucket) in self.buckets.iter().enumerate() {
             for (value, &sum) in bucket.iter().enumerate() {
@@ -365,7 +384,7 @@ mod tests {
             buckets.add_exterior_product(a, b);
             tensor.add_exterior_product(a, b);
         }
-        assert_eq!(buckets.into_tensor(), tensor);
+        assert_eq!(buckets.tensor(), tensor);
     }
 
     #[test]
@@ -374,7 +393,7 @@ mod tests {
         let mut buckets = BitTensorBuckets::<Gf2>::zero();
         buckets.add_exterior_product(Gf2::ONE, Gf2::ONE);
         assert_eq!(
-            buckets.into_tensor(),
+            buckets.tensor(),
             BitTensor::exterior_product(Gf2::ONE, Gf2::ONE)
         );
     }
@@ -486,6 +505,27 @@ mod tests {
         for (after, &original) in scaled.columns().iter().zip(&before) {
             assert_eq!(*after, original * a);
         }
+    }
+
+    #[test]
+    fn adding_a_scaled_element_scales_its_column_reading() {
+        // Invariant: the accumulating form is the standalone scaling, added.
+        //
+        //     out += (a ⊗ 1) * other
+        //
+        // A sum accumulated under one scale therefore need not be scaled term by term.
+        let mut rng = SmallRng::seed_from_u64(0x5CA7);
+        let a = rng.random::<EF>();
+
+        let mut expected = element(0x5CA8);
+        let mut scaled = element(0x5CA9);
+        scaled.scale_columns(a);
+        expected += scaled;
+
+        let mut accumulated = element(0x5CA8);
+        accumulated.add_scaled_columns(&element(0x5CA9), a);
+
+        assert_eq!(accumulated, expected);
     }
 
     #[test]
