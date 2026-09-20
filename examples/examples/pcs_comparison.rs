@@ -428,6 +428,11 @@ fn main() {
         args.log_message_size >= 3,
         "log-message-size must be at least 3 for the multi-table run (heights n, n + 1, n + 3)"
     );
+    // The FRI query count divides by the rate; STIR and WHIR reject a rate of one themselves.
+    assert!(
+        args.rate >= 1,
+        "rate must be at least 1 (log_2 of the inverse rate of a code with rate below one)"
+    );
     let log_height = args.log_message_size - args.log_width;
     let width = 1usize << args.log_width;
 
