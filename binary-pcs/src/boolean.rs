@@ -487,7 +487,10 @@ where
 
         for (opening, reduction) in openings.iter().zip(&reductions) {
             let (proof, surviving_point, surviving_value) = tracing::info_span!("bit ring switch")
-                .in_scope(|| reduction.prove(&packing, challenger));
+                .in_scope(|| {
+                    reduction
+                        .prove::<<EF as ChallengeField<EF>>::SumcheckRepr, _>(&packing, challenger)
+                });
 
             // The elements the reduction sends already hold the witness's readings.
             // Read by columns they are the claimed values, so neither costs a pass of its own.
@@ -840,7 +843,7 @@ pub enum BooleanPcsError<EF, MmcsError> {
 
 #[cfg(test)]
 mod tests {
-    use p3_binary_field::{BinaryField64, BinaryField128, Gf2, PackedGf2x64};
+    use p3_binary_field::{BinaryField64, BinaryField128, Gf2, Ghash128, PackedGf2x64};
     use p3_field::PrimeCharacteristicRing;
     use proptest::prelude::*;
     use rand::rngs::SmallRng;
@@ -1094,7 +1097,8 @@ mod tests {
                 &packing_b
             };
             let reduction = BitRingSwitch::new(point).unwrap();
-            let (sent, surviving_point, surviving_value) = reduction.prove(packing, &mut chal);
+            let (sent, surviving_point, surviving_value) =
+                reduction.prove::<Ghash128, _>(packing, &mut chal);
             values.push(reduction.incoming_claim(&sent.tensor));
             reductions.push(sent);
             surviving_points.push(surviving_point);
