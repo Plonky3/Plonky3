@@ -13,11 +13,12 @@
 //!
 //! The conversions are field isomorphisms, so every round polynomial is the challenge field's.
 
+use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::ops::Range;
 
 use p3_air::{Air, BaseAir};
-use p3_field::{Algebra, ExtensionField, Field, HasSubfield, PackedValue};
+use p3_field::{Algebra, ExtensionField, Field, HasSubfield, PackedValue, PrimeCharacteristicRing};
 use p3_maybe_rayon::prelude::*;
 use p3_multilinear_util::poly::Poly;
 use p3_sumcheck::layout::ColumnView;
@@ -391,6 +392,12 @@ where
             .map(|group| group.degree)
             .collect::<Vec<_>>();
 
+        // Every worker of a stage that reads no successor row reads the same zeros.
+        let next_zeros = round
+            .next_columns
+            .is_empty()
+            .then(|| Arc::from(PackedRepr::<F, R>::zero_vec(width)));
+
         // A lane group's eq weights cross into `R` where its rows are read, one group at a time.
         let weights = eq_suffix.as_slice();
         let scratch = (0..groups)
@@ -402,6 +409,7 @@ where
                         &constraint_degrees,
                         &interaction_degrees,
                         width,
+                        next_zeros.as_ref(),
                     )
                 },
                 |scratch, group| {
@@ -501,9 +509,9 @@ where
         }
         let next_hi_in_column = next_rows_in_column(s, half, num_evals, R::Packing::WIDTH);
         for run in &round.next_columns {
-            for (((next, next_delta), column), next_tail) in scratch.next_point[run.clone()]
+            for (((next, next_delta), column), next_tail) in scratch.next_point.fill()[run.clone()]
                 .iter_mut()
-                .zip(scratch.next_diff[run.clone()].iter_mut())
+                .zip(scratch.next_diff.fill()[run.clone()].iter_mut())
                 .zip(&columns[run.clone()])
                 .zip(&self.next_tail[run.clone()])
             {
