@@ -39,11 +39,15 @@ use crate::sliced::{LaneSums, SLICED_LANES, SlicedFolder, SlicedGf4, gf4_coordin
 
 /// Most rounds a stage may evaluate on its planes.
 ///
-/// One corner word per bound variable is held on the stack, so the count has a ceiling.
+/// Each round doubles both the plane work and the corner words a residual row folds, so the
+/// count has a ceiling. A stage is also capped by the row variables its words leave unbound.
 pub(crate) const MAX_SLICED_ROUNDS: usize = 4;
 
 /// Row variables one word's lanes span.
 const LANE_VARIABLES: usize = SLICED_LANES.trailing_zeros() as usize;
+
+/// Corners one byte-indexed subset-sum table spans.
+const CORNERS_PER_TABLE: usize = u8::BITS as usize;
 
 /// A stage's cells as bit planes, laid out word by word.
 pub(super) struct SlicedTrace {
@@ -938,7 +942,10 @@ where
             .iter()
             .map(|&weight| R::from(weight))
             .collect::<Vec<_>>();
-        let low_sums = weights.chunks(8).map(subset_sums).collect::<Vec<_>>();
+        let low_sums = weights
+            .chunks(CORNERS_PER_TABLE)
+            .map(subset_sums)
+            .collect::<Vec<_>>();
         let high_sums = low_sums
             .iter()
             .map(|sums| sums.iter().map(|&sum| generator * sum).collect::<Vec<_>>())
@@ -948,25 +955,24 @@ where
         let width = trace.width;
 
         // The value at every residual row of one word, from the corner words of both planes.
+        //
+        // One table's corners are gathered at a time, so the buffers hold a table's worth
+        // whatever the round count is.
         let fold_word = |planes: &[[u64; 2]], column: usize, word: usize, out: &mut [R]| {
-            let corner_words = |plane: usize| {
-                let mut words_of_plane = [0; 1 << MAX_SLICED_ROUNDS];
-                for (corner, value) in words_of_plane[..corners].iter_mut().enumerate() {
-                    *value = planes[(corner * words + word) * width + column][plane];
-                }
-                words_of_plane
-            };
-            let (low, high) = (corner_words(0), corner_words(1));
             out.fill(R::ZERO);
-            for (group, (low, high)) in low[..corners]
-                .chunks(8)
-                .zip(high[..corners].chunks(8))
-                .enumerate()
-            {
-                let (low, high) = (lane_masks(low), lane_masks(high));
+            for (table, (low_sums, high_sums)) in low_sums.iter().zip(&high_sums).enumerate() {
+                let first = table * CORNERS_PER_TABLE;
+                let spanned = (corners - first).min(CORNERS_PER_TABLE);
+                let mut low = [0; CORNERS_PER_TABLE];
+                let mut high = [0; CORNERS_PER_TABLE];
+                for (corner, (low, high)) in low.iter_mut().zip(&mut high).take(spanned).enumerate()
+                {
+                    let cell = planes[((first + corner) * words + word) * width + column];
+                    (*low, *high) = (cell[0], cell[1]);
+                }
+                let (low, high) = (lane_masks(&low[..spanned]), lane_masks(&high[..spanned]));
                 for (value, (&low, &high)) in out.iter_mut().zip(low.iter().zip(&high)) {
-                    *value +=
-                        low_sums[group][usize::from(low)] + high_sums[group][usize::from(high)];
+                    *value += low_sums[usize::from(low)] + high_sums[usize::from(high)];
                 }
             }
         };
