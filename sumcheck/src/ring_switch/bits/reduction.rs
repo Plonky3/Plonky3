@@ -894,8 +894,9 @@ impl<EF: TowerLevel> BitRingSwitchBatch<'_, EF> {
         let alpha_squared = alpha.square();
 
         // The shift reads the entry before, which a column taken from its last row down still
-        // finds unmoved. So the combination lands in the table it reads.
-        let stride = CHUNK.max(column).min(table.num_evals());
+        // finds unmoved. So the combination lands in the table it reads, in chunks of whole
+        // columns.
+        let stride = equality.block_len().max(column).min(table.num_evals());
         table
             .as_mut_slice()
             .par_chunks_mut(stride)
@@ -2363,6 +2364,65 @@ mod tests {
 
         let batch = reduction.batch_with_successor(&r_batch, alpha).unwrap();
         assert_eq!(batch.weights().as_slice(), expected.as_slice());
+    }
+
+    #[test]
+    fn the_sweeps_read_the_same_table_at_every_block_size() {
+        // Invariant: the block is an amortisation unit, not part of what a sweep computes.
+        //
+        //     table[i * block + j]  ==  outer[i] * inner[j]   for every split of the point
+        //
+        // The size the reduction ships is far above the one these tests run at, and it is
+        // what decides how much of each sweep is boundary and how much is interior: the
+        // carry's first entry, the weights' stride against a column, and the count of blocks
+        // a fold combines. Sweeping the split covers all three shapes at one place.
+        let mut rng = SmallRng::seed_from_u64(0xB10C5);
+        let packing = BitPacking::<EF>::new(&bits(0xB10C6, 64)).unwrap();
+        let r_batch = Point::<EF>::rand(&mut rng, BitRingSwitch::<EF>::ABSORBED);
+        let alpha = non_boolean(&mut rng);
+
+        for &row_variables in &ROW_VARIABLES {
+            for selector in Selector::ALL {
+                let r = successor_point(0xB10C7, 9, row_variables, selector);
+                let reduction = BitRingSwitch::with_successor(&r, row_variables).unwrap();
+                let (prefix, offset, _) = reduction.support();
+                let run = &reduction.high()[prefix..];
+                let batch = reduction
+                    .batch_drawn(
+                        &r_batch,
+                        reduction.sends_successor_tensors().then_some(alpha),
+                    )
+                    .unwrap();
+
+                // One entry per block leaves the outer factor the dense table itself.
+                let dense = FactoredEquality::new(run, 0);
+                let tensor = BitRingSwitch::tensor_over(&packing, offset, &dense);
+                let successor = reduction.successor_tensors_over(&packing, offset, &dense);
+                let weights = batch.weights_over::<EF>(&dense);
+
+                for log_block in 0..=run.len() + 2 {
+                    let equality = FactoredEquality::new(run, log_block);
+                    let case =
+                        alloc::format!("{selector:?}, {row_variables} rows, 2^{log_block} block");
+
+                    assert_eq!(
+                        BitRingSwitch::tensor_over(&packing, offset, &equality),
+                        tensor,
+                        "{case}"
+                    );
+                    assert_eq!(
+                        reduction.successor_tensors_over(&packing, offset, &equality),
+                        successor,
+                        "{case}"
+                    );
+                    assert_eq!(
+                        batch.weights_over::<EF>(&equality).as_slice(),
+                        weights.as_slice(),
+                        "{case}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]
