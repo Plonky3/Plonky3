@@ -49,7 +49,7 @@ use p3_sumcheck::{OpeningBatch, SumcheckData};
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
 use p3_zk_codes::reed_solomon::ReedSolomonZkEncoding;
 use rand::distr::{Distribution, StandardUniform};
-use rand::rngs::SmallRng;
+use rand::rngs::{SmallRng, StdRng};
 use rand::{RngExt, SeedableRng};
 
 /// Variable counts for the single-pass packed kernels.
@@ -885,7 +885,7 @@ fn bench_zk_residual(c: &mut Criterion) {
                     (
                         SumcheckProver::new(poly.clone(), sum),
                         Challenger::new(perm.clone()),
-                        SmallRng::seed_from_u64(7),
+                        StdRng::seed_from_u64(7),
                     )
                 },
                 // Routine (timed): one batch of rounds, grinding disabled.
