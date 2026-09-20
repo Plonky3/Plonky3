@@ -293,7 +293,7 @@ where
     let mut all_constraint_evals: Vec<Vec<EF>> = Vec::new();
 
     // Snapshot the stacked polynomial before the witness is consumed.
-    let stacked_poly = witness.poly().clone();
+    let stacked_poly = witness.stacked_poly();
     let mut layout = L::from_witness(witness);
     let strategy = L::strategy();
 

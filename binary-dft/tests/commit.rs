@@ -8,7 +8,7 @@ use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrixView;
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_multilinear_util::poly::Poly;
-use p3_sumcheck::commit::commit_base;
+use p3_sumcheck::commit::{commit_base, write_stacked_message};
 use p3_sumcheck::layout::{Layout, PrefixProver, Table};
 use p3_sumcheck::strategy::VariableOrder;
 use p3_symmetric::{CompressionFunctionFromHasher, SerializingHasher};
@@ -73,20 +73,20 @@ fn commit_base_matches_hand_encoding() {
         // routes to `PolyBasisNtt` only on a target that has a carryless multiply.
         let poly = Poly::new(values.to_vec());
         let tower = commit_base(
-            VariableOrder::Prefix,
             &AdditiveRsEncoder::<F, LchNtt<F>>::default(),
             &mmcs,
-            &poly,
+            num_variables,
             folding,
             LOG_INV_RATE,
+            |message| write_stacked_message(VariableOrder::Prefix, &poly, folding, message),
         );
         let default = commit_base(
-            VariableOrder::Prefix,
             &AdditiveRsEncoder::<F>::default(),
             &mmcs,
-            &poly,
+            num_variables,
             folding,
             LOG_INV_RATE,
+            |message| write_stacked_message(VariableOrder::Prefix, &poly, folding, message),
         );
         for (name, root) in [("tower", tower.0), ("default", default.0)] {
             assert_eq!(root, expected_root, "{name} folding={folding}");
@@ -150,13 +150,14 @@ fn polynomial_commit_matches_naive_for_both_orders() {
                 } else {
                     reference_root()
                 };
+                let poly = Poly::new(values.clone());
                 let (root, _) = commit_base(
-                    order,
                     &AdditiveRsEncoder::<F>::default(),
                     &mmcs,
-                    &Poly::new(values.clone()),
+                    poly.num_variables(),
                     folding,
                     rate,
+                    |message| write_stacked_message(order, &poly, folding, message),
                 );
                 assert_eq!(root, expected_root);
             }

@@ -12,6 +12,7 @@ use p3_util::reverse_bits_len;
 use rand::Rng;
 use rand::distr::{Distribution, StandardUniform};
 use thiserror::Error;
+use tracing::info_span;
 
 use crate::layout::plan::{LayoutShape, plan_layout, plan_stacked_layout};
 use crate::table::TableShape;
@@ -837,7 +838,7 @@ impl<F: Field> FilledSuffixWitness<'_, F> {
             placements: self.plan.placements.clone(),
             num_variables: self.plan.num_variables,
             folding: self.plan.folding,
-            poly: self.poly,
+            poly: None,
         }
     }
 }
@@ -942,7 +943,7 @@ impl TablePlacement {
     }
 }
 
-/// Owns the source tables together with the stacked committed polynomial.
+/// Owns the source tables together with their placement in the stacked polynomial.
 #[derive(Debug, Clone)]
 pub struct Witness<F: Field> {
     /// Source tables behind the stacked polynomial.
@@ -953,12 +954,12 @@ pub struct Witness<F: Field> {
     pub(super) num_variables: usize,
     /// Preprocessing depth (number of rounds the protocol folds upfront).
     pub(super) folding: usize,
-    /// Stacked committed polynomial.
-    pub(super) poly: Poly<F>,
+    /// Stacked committed polynomial, retained only by layouts whose prover reads it back.
+    pub(super) poly: Option<Poly<F>>,
 }
 
 impl<F: Field> Witness<F> {
-    /// Stacks the given tables into a single committed polynomial.
+    /// Plans the stacked layout of the given tables, one contiguous slot per column.
     ///
     /// # Algorithm
     ///
@@ -966,7 +967,9 @@ impl<F: Field> Witness<F> {
     /// - Each column occupies one slot of size `2^arity`.
     /// - Selector bit-width equals the stacked arity minus the table arity.
     /// - Total stacked size is rounded up to the next power of two.
-    /// - Unused tail entries stay zero.
+    ///
+    /// The stacked polynomial is written on demand by [`Self::write_stacked_slots`], straight
+    /// into whatever buffer consumes it.
     ///
     /// # Panics
     ///
@@ -995,30 +998,12 @@ impl<F: Field> Witness<F> {
             .collect();
         let (num_variables, placements) = plan_layout(&shapes);
 
-        // Stacked buffer starts zero; unused tail entries stay zero.
-        let mut stacked = Poly::<F>::zero(num_variables);
-
-        // Copy each source column into its planner-assigned slot. Slots are disjoint,
-        // so columns copy independently in parallel, and a tall column in parallel chunks.
-        column_slots(&placements, &tables, 0, stacked.as_mut_slice())
-            .into_par_iter()
-            .for_each(|(slot, table_idx, poly_idx)| {
-                slot.par_chunks_mut(STACK_COPY_CHUNK)
-                    .zip(
-                        tables[table_idx]
-                            .poly(poly_idx)
-                            .as_slice()
-                            .par_chunks(STACK_COPY_CHUNK),
-                    )
-                    .for_each(|(slot, column)| slot.copy_from_slice(column));
-            });
-
         Self {
             tables,
             placements,
             num_variables,
             folding,
-            poly: stacked,
+            poly: None,
         }
     }
 
@@ -1086,8 +1071,62 @@ impl<F: Field> Witness<F> {
             placements,
             num_variables,
             folding,
-            poly: stacked,
+            poly: Some(stacked),
         }
+    }
+
+    /// Writes the contiguous stacked layout into a zeroed buffer over the whole hypercube.
+    ///
+    /// Each source column is copied into its planner-assigned slot. Slots are disjoint, so
+    /// columns copy independently in parallel, and a tall column in parallel chunks. Cells
+    /// outside every slot are left untouched, so the unused tail keeps the caller's zeros.
+    ///
+    /// # Panics
+    ///
+    /// - `out` must hold one cell per evaluation of the stacked polynomial.
+    pub(super) fn write_stacked_slots(&self, out: &mut [F]) {
+        assert_eq!(
+            out.len(),
+            1 << self.num_variables,
+            "stacked destination must cover the whole hypercube"
+        );
+        info_span!("stack").in_scope(|| {
+            column_slots(&self.placements, &self.tables, 0, out)
+                .into_par_iter()
+                .for_each(|(slot, table_idx, poly_idx)| {
+                    slot.par_chunks_mut(STACK_COPY_CHUNK)
+                        .zip(
+                            self.tables[table_idx]
+                                .poly(poly_idx)
+                                .as_slice()
+                                .par_chunks(STACK_COPY_CHUNK),
+                        )
+                        .for_each(|(slot, column)| slot.copy_from_slice(column));
+                });
+        });
+    }
+
+    /// Returns the retained stacked polynomial.
+    ///
+    /// # Panics
+    ///
+    /// - The layout behind this witness does not retain a stacked polynomial.
+    pub(super) const fn retained_poly(&self) -> &Poly<F> {
+        self.poly
+            .as_ref()
+            .expect("this layout retains its stacked polynomial")
+    }
+
+    /// Materializes the stacked committed polynomial into a fresh allocation.
+    ///
+    /// Layouts that retain the stack clone it; the others rebuild it from the source tables
+    /// and their placements.
+    pub fn stacked_poly(&self) -> Poly<F> {
+        self.poly.clone().unwrap_or_else(|| {
+            let mut stacked = Poly::<F>::zero(self.num_variables);
+            self.write_stacked_slots(stacked.as_mut_slice());
+            stacked
+        })
     }
 
     /// Returns the number of variables of the stacked polynomial.
@@ -1098,11 +1137,6 @@ impl<F: Field> Witness<F> {
     /// Returns verifier table shapes after witness normalization/padding.
     pub fn table_shapes(&self) -> Vec<TableShape> {
         self.tables.iter().map(Table::shape).collect()
-    }
-
-    /// Returns the stacked committed polynomial.
-    pub const fn poly(&self) -> &Poly<F> {
-        &self.poly
     }
 
     /// Splits the witness into its owned components for downstream use.
@@ -1129,8 +1163,8 @@ pub(super) struct WitnessParts<F: Field> {
     pub(super) num_variables: usize,
     /// Number of preprocessing rounds folded upfront.
     pub(super) folding: usize,
-    /// Stacked committed polynomial.
-    pub(super) poly: Poly<F>,
+    /// Stacked committed polynomial, when the layout retains one.
+    pub(super) poly: Option<Poly<F>>,
 }
 
 #[cfg(test)]
@@ -1262,14 +1296,17 @@ mod tests {
             .collect::<Vec<_>>();
         let direct = plan.fill(&sources).expect("every dense column is written");
 
-        assert_eq!(direct.poly().as_slice(), legacy.poly().as_slice());
+        assert_eq!(direct.poly().as_slice(), legacy.stacked_poly().as_slice());
         assert_eq!(direct.table_shapes(), legacy.table_shapes());
         assert_eq!(
             placement_addresses(direct.placements()),
             placement_addresses(&legacy.placements)
         );
         let compatible = direct.into_witness();
-        assert_eq!(compatible.poly().as_slice(), legacy.poly().as_slice());
+        assert_eq!(
+            compatible.stacked_poly().as_slice(),
+            legacy.stacked_poly().as_slice()
+        );
         assert_eq!(compatible.table_shapes(), legacy.table_shapes());
         assert_eq!(compatible.tables.len(), legacy.tables.len());
         for (compatible_table, legacy_table) in compatible.tables.iter().zip(&legacy.tables) {
@@ -1529,7 +1566,7 @@ mod tests {
             let plan = SuffixLayoutPlan::new(vec![packed.shape()], 0).unwrap();
             let direct = plan.fill(&[&packed]).unwrap();
             let legacy = Witness::new(vec![dense], 0);
-            assert_eq!(direct.poly().as_slice(), legacy.poly().as_slice());
+            assert_eq!(direct.poly().as_slice(), legacy.stacked_poly().as_slice());
             assert_eq!(direct.table_shapes(), legacy.table_shapes());
         }
     }
@@ -1634,6 +1671,15 @@ mod tests {
         Witness::new(vec![t0, t1], 1)
     }
 
+    fn fixture_interleaved_witness() -> Witness<F> {
+        let mut rng = SmallRng::seed_from_u64(1);
+        // Table 0: arity 3, two columns.
+        let t0 = Table::rand(&mut rng, 2, 3);
+        // Table 1: arity 4, two columns.
+        let t1 = Table::rand(&mut rng, 2, 4);
+        Witness::new_interleaved(vec![t0, t1], 1)
+    }
+
     #[test]
     fn witness_new_places_largest_table_first() {
         // Invariant:
@@ -1662,7 +1708,7 @@ mod tests {
     }
 
     #[test]
-    fn witness_new_copies_column_evals_into_slots() {
+    fn witness_stacks_column_evals_into_slots() {
         // Invariant:
         //     Every column's evaluations appear in the stacked polynomial
         //     at the offset computed by its selector.
@@ -1671,6 +1717,7 @@ mod tests {
         //     two columns per table, two tables; each column occupies its
         //     own slot; destination = selector.index << arity.
         let w = fixture_witness();
+        let stacked = w.stacked_poly();
 
         // Walk every placement; for each column, compare the slot slice to the source column.
         for placement in &w.placements {
@@ -1678,7 +1725,7 @@ mod tests {
             for (poly_idx, selector) in placement.selectors().iter().enumerate() {
                 let col = table.poly(poly_idx);
                 let dst = selector.index() << col.num_variables();
-                let slot = &w.poly.as_slice()[dst..dst + col.num_evals()];
+                let slot = &stacked.as_slice()[dst..dst + col.num_evals()];
                 // Check: slot contents match the source column evaluations.
                 assert_eq!(slot, col.as_slice());
             }
@@ -1708,7 +1755,7 @@ mod tests {
 
         assert_eq!(witness.num_variables(), 3);
         assert_eq!(
-            witness.poly.as_slice(),
+            witness.stacked_poly().as_slice(),
             &[a0, b0, a1, F::ZERO, a2, b1, a3, F::ZERO],
         );
     }
@@ -1731,7 +1778,7 @@ mod tests {
             &[a0, a1, F::ZERO, F::ZERO, F::ZERO, F::ZERO, F::ZERO, F::ZERO],
         );
         assert_eq!(
-            witness.poly.as_slice(),
+            witness.stacked_poly().as_slice(),
             &[a0, a1, F::ZERO, F::ZERO, F::ZERO, F::ZERO, F::ZERO, F::ZERO],
         );
     }
@@ -1754,20 +1801,20 @@ mod tests {
     }
 
     #[test]
-    fn witness_poly_returns_the_stacked_polynomial() {
+    fn witness_stacked_poly_returns_the_stacked_polynomial() {
         // Invariant:
-        //     poly() returns a borrow of the stacked committed polynomial.
-        //     Its arity equals num_variables() and its contents match the
-        //     internal field used by every consumer.
+        //     stacked_poly() returns the stacked committed polynomial. Its arity equals
+        //     num_variables(), and it covers that hypercube with the unused tail zeroed.
         //
         // Fixture state:
-        //     two-table fixture; expected stacked arity = 6.
+        //     two-table fixture; expected stacked arity = 6; occupied size = 48.
         let w = fixture_witness();
 
-        let stacked = w.poly();
+        let stacked = w.stacked_poly();
 
         assert_eq!(stacked.num_variables(), w.num_variables());
-        assert_eq!(stacked.as_slice(), w.poly.as_slice());
+        assert_eq!(stacked.as_slice().len(), 1 << w.num_variables());
+        assert!(stacked.as_slice()[48..].iter().all(|&v| v == F::ZERO));
     }
 
     #[test]
@@ -1800,8 +1847,11 @@ mod tests {
         let actual_placement_idx: Vec<usize> =
             parts.placements.iter().map(TablePlacement::idx).collect();
         assert_eq!(actual_placement_idx, expected_placement_idx);
-        // Check: the stacked polynomial is bit-for-bit identical.
-        assert_eq!(parts.poly.as_slice(), expected_poly.as_slice());
+        // Check: the retained stacked polynomial survives the move verbatim.
+        assert_eq!(
+            parts.poly.map(|poly| poly.as_slice().to_vec()),
+            expected_poly.map(|poly| poly.as_slice().to_vec())
+        );
     }
 
     #[test]
@@ -1809,8 +1859,8 @@ mod tests {
         // Invariant:
         //     Handing the witness to the prefix prover preserves the
         //     stacked polynomial and the per-table shapes.
-        let w = fixture_witness();
-        let stacked_copy = w.poly.clone();
+        let w = fixture_interleaved_witness();
+        let stacked_copy = w.stacked_poly();
         let num_variables = w.num_variables();
 
         // Build a prefix-mode prover from the witness.
@@ -1889,7 +1939,7 @@ mod tests {
         let direct = plan.fill(&[&source]).unwrap();
         let legacy = Witness::new(vec![dense], 0);
 
-        assert_eq!(direct.poly().as_slice(), legacy.poly().as_slice());
+        assert_eq!(direct.poly().as_slice(), legacy.stacked_poly().as_slice());
     }
 
     #[test]
@@ -1913,7 +1963,7 @@ mod tests {
         let direct = plan.fill(&[&source]).unwrap();
         let legacy = Witness::new(vec![dense], 0);
 
-        assert_eq!(direct.poly().as_slice(), legacy.poly().as_slice());
+        assert_eq!(direct.poly().as_slice(), legacy.stacked_poly().as_slice());
     }
 
     #[test]
@@ -1952,9 +2002,12 @@ mod tests {
         // The direct stack must equal the established dense path for the whole mixed batch.
         let direct = plan.fill(&[&dense, &chunked, &packed]).unwrap();
         let legacy = Witness::new(tables, 3);
-        assert_eq!(direct.poly().as_slice(), legacy.poly().as_slice());
+        assert_eq!(direct.poly().as_slice(), legacy.stacked_poly().as_slice());
         let compatible = direct.into_witness();
-        assert_eq!(compatible.poly().as_slice(), legacy.poly().as_slice());
+        assert_eq!(
+            compatible.stacked_poly().as_slice(),
+            legacy.stacked_poly().as_slice()
+        );
         assert_eq!(compatible.table_shapes(), legacy.table_shapes());
     }
 
@@ -2088,6 +2141,7 @@ mod tests {
 
             // Check: stacked arity equals log2_ceil of total occupied size.
             assert_eq!(witness.num_variables(), log2_ceil_usize(total_used));
+            let stacked = witness.stacked_poly();
 
             // Check: each column's evaluations land at the predicted slot.
             let mut used = 0usize;
@@ -2096,7 +2150,7 @@ mod tests {
                 for (poly_idx, selector) in placement.selectors().iter().enumerate() {
                     let col = table.poly(poly_idx);
                     let dst = selector.index() << col.num_variables();
-                    let slot = &witness.poly.as_slice()[dst..dst + col.num_evals()];
+                    let slot = &stacked.as_slice()[dst..dst + col.num_evals()];
                     assert_eq!(slot, col.as_slice());
                     used += col.num_evals();
                 }
@@ -2107,7 +2161,7 @@ mod tests {
 
             // Check: every entry past the concatenation is the zero element.
             let stacked_len = 1usize << witness.num_variables();
-            for &v in &witness.poly.as_slice()[used..stacked_len] {
+            for &v in &stacked.as_slice()[used..stacked_len] {
                 // The specific region of "used" is contiguous here only because
                 // placements are emitted largest-first and slot offsets are the
                 // cursor value. That matches the "unused tail stays zero" rule.

@@ -11,6 +11,7 @@ use p3_multilinear_util::poly::Poly;
 use p3_multilinear_util::split_eq::SplitEq;
 use p3_util::log2_strict_usize;
 
+use crate::commit::write_stacked_message;
 use crate::lagrange::lagrange_weights_01inf_multi;
 use crate::layout::opening::Opening;
 use crate::layout::prover::{Layout, StackedClaims};
@@ -51,12 +52,23 @@ impl<F: Field, EF: ExtensionField<F>> Layout<F, EF> for PrefixProver<F, EF> {
                 parts.num_variables,
                 parts.folding,
             ),
-            poly: parts.poly,
+            poly: parts
+                .poly
+                .expect("this layout retains its stacked polynomial"),
         }
     }
 
     fn new_witness(tables: Vec<Table<F>>, folding: usize) -> Witness<F> {
         Witness::new_interleaved(tables, folding)
+    }
+
+    fn write_message(witness: &Witness<F>, folding: usize, message: &mut [F]) {
+        write_stacked_message(
+            VariableOrder::Prefix,
+            witness.retained_poly(),
+            folding,
+            message,
+        );
     }
 
     fn claims(&self) -> &StackedClaims<F, EF> {
