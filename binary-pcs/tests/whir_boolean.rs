@@ -253,12 +253,23 @@ fn the_budget_grades_the_schedule_and_the_proof() {
     // The schedule's own estimate must not be a fiction the real proof exceeds.
     //
     //     840*16 + (0 + 92)*16 + 840*32 = 13440 + 1472 + 26880
-    assert_eq!(
-        shape.max_bytes(ELEMENT_BYTES, ELEMENT_BYTES, DIGEST_BYTES),
-        41_792
+    let estimate = shape.max_bytes(ELEMENT_BYTES, ELEMENT_BYTES, DIGEST_BYTES);
+    assert_eq!(estimate, 41_792);
+
+    // The proof-of-work search runs in parallel and keeps whichever witness a worker reaches first.
+    //
+    // A different witness moves every later challenge, so the encoded length varies with the host.
+    //
+    // What must hold everywhere is that the estimate bounds the real proof without being fiction.
+    assert!(
+        bytes <= estimate,
+        "the estimate understates the proof: {bytes}"
     );
-    assert_eq!(bytes, 26_819);
-    budget.check_bytes(26_819).unwrap();
+    assert!(
+        bytes * 2 > estimate,
+        "the estimate is far too loose: {bytes}"
+    );
+    budget.check_bytes(bytes).unwrap();
 
     // A ceiling below what the schedule needs must refuse it rather than warn.
     assert_eq!(
