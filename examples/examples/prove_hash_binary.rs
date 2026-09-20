@@ -5,6 +5,7 @@ use p3_examples::binary::{Backend, BinaryProofOptions, prove_boolean_air_with_ba
 use p3_examples::parsers::{BinaryHashOptions, RepresentationOptions};
 use p3_keccak_air::{KECCAK_BINARY_ROWS_PER_PERM, KeccakBinaryAir};
 use p3_matrix::Matrix;
+use p3_sha256_air::Sha256BinaryAir;
 use p3_sumcheck::layout::Table;
 use tracing_forest::ForestLayer;
 use tracing_forest::util::LevelFilter;
@@ -122,6 +123,20 @@ fn main() {
             println!("Proving {trace_height} Blake-3 compressions");
 
             let air = Blake3BinaryAir {};
+            let words = air.generate_random_trace_packed::<Gf2>(trace_height);
+            let trace =
+                Table::<BinaryField128>::from_packed_bits(words, args.log_trace_length as usize);
+            assert_eq!(
+                trace.num_variables(),
+                args.log_trace_length as usize,
+                "generated trace height must match the requested log-trace-length"
+            );
+            prove_boolean_air_with_backend(&air, trace, options, backend)
+        }
+        BinaryHashOptions::Sha256Compressions => {
+            println!("Proving {trace_height} SHA-256 compressions");
+
+            let air = Sha256BinaryAir {};
             let words = air.generate_random_trace_packed::<Gf2>(trace_height);
             let trace =
                 Table::<BinaryField128>::from_packed_bits(words, args.log_trace_length as usize);

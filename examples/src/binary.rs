@@ -766,6 +766,7 @@ mod tests {
     use p3_field::{HasSubfield, PrimeCharacteristicRing};
     use p3_keccak_air::{KeccakBinaryAir, NUM_KECCAK_BINARY_COLS};
     use p3_multi_stark::prove;
+    use p3_sha256_air::Sha256BinaryAir;
     use p3_util::log2_ceil_usize;
 
     use super::*;
@@ -915,6 +916,29 @@ mod tests {
         let trace = air.generate_random_trace_rows::<F>(4, 0);
         assert!(cells_fit_gf4(&trace));
         assert_backends_prove_byte_for_byte(&air, &trace);
+    }
+
+    #[test]
+    fn backends_prove_the_sha256_air_byte_for_byte() {
+        // Four compressions, one bit-valued row each, of a degree-two AIR twice Blake3's width.
+        let air = Sha256BinaryAir {};
+        let trace = air.generate_random_trace_rows::<F>(4, 0);
+        assert!(cells_fit_gf4(&trace));
+        assert_backends_prove_byte_for_byte(&air, &trace);
+    }
+
+    #[test]
+    fn dense_and_packed_sha256_tables_have_identical_boolean_proofs() {
+        let air = Sha256BinaryAir {};
+        let dense = Table::new(air.generate_random_trace_rows::<F>(4, 0).transpose());
+        let packed = Table::from_packed_bits(air.generate_random_trace_packed::<Gf2>(4), 2);
+        for backend in [Backend::Subfield, Backend::PolyBasis] {
+            assert_eq!(
+                boolean_proof_transcript(&air, dense.clone(), backend),
+                boolean_proof_transcript(&air, packed.clone(), backend),
+                "{backend:?}"
+            );
+        }
     }
 
     #[test]

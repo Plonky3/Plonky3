@@ -47,6 +47,7 @@ pub enum PcsOptions {
 pub enum BinaryHashOptions {
     Blake3Compressions,
     KeccakFPermutations,
+    Sha256Compressions,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -198,7 +199,11 @@ impl ValueEnum for PcsOptions {
 
 impl ValueEnum for BinaryHashOptions {
     fn value_variants<'a>() -> &'a [Self] {
-        &[Self::Blake3Compressions, Self::KeccakFPermutations]
+        &[
+            Self::Blake3Compressions,
+            Self::KeccakFPermutations,
+            Self::Sha256Compressions,
+        ]
     }
 
     fn to_possible_value(&self) -> Option<PossibleValue> {
@@ -212,6 +217,11 @@ impl ValueEnum for BinaryHashOptions {
                 "keccak-f-permutations",
                 1,
                 Some(vec![("keccakf-permutations", 7), ("kf", 2)]),
+            ),
+            Self::Sha256Compressions => get_aliases(
+                "sha-256-compressions",
+                1,
+                Some(vec![("sha256-compressions", 4)]),
             ),
         })
     }

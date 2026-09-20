@@ -40,6 +40,7 @@ p3-multi-stark.workspace = true
 p3-poseidon1-air.workspace = true
 p3-poseidon2.workspace = true
 p3-poseidon2-air.workspace = true
+p3-sha256-air.workspace = true
 p3-stir.workspace = true
 p3-sumcheck.workspace = true
 p3-symmetric.workspace = true

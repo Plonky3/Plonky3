@@ -1,4 +1,8 @@
-//! AIR for the SHA-256 compression function.
+//! AIRs for the SHA-256 compression function.
+//!
+//! [`Sha256Air`] works over prime fields. [`Sha256BinaryAir`] works over fields of
+//! characteristic 2, where every word is 32 bits and a round writes only its new `a` and `e`;
+//! [`Sha256BinaryCols`] describes that layout. The prime-field AIR is described below.
 //!
 //! # Overview
 //!
@@ -57,11 +61,13 @@
 extern crate alloc;
 
 mod air;
+mod binary;
 mod columns;
 mod constants;
 mod generation;
 
 pub use air::*;
+pub use binary::*;
 pub use columns::*;
 pub use constants::*;
 pub use generation::*;

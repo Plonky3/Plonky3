@@ -106,19 +106,20 @@ Currently the options for the command line arguments are:
 - `--discrete-fourier-transform` (`-d`): `radix-2-dit-parallel, recursive-dft` or `small-batch-dft`. This option should be omitted if the field choice is `mersenne-31` as the circle stark currently only supports a single discrete fourier transform.
 - `--merkle-hash` (`-m`): `poseidon-2, keccak-f`.
 
-`prove_hash_binary` proves Keccak-f permutations or BLAKE3 compressions over `BinaryField128`
-with the multilinear STARK prover. Both commit their bit-valued traces through the
-`BooleanTracePcs`, which opens the current and the next row of every column. Both objectives
-generate their traces already packed into bits:
+`prove_hash_binary` proves Keccak-f permutations, BLAKE3 compressions or SHA-256 compressions
+over `BinaryField128` with the multilinear STARK prover. They commit their bit-valued traces
+through the `BooleanTracePcs`, which opens the current and the next row of every column. Every
+objective generates its trace already packed into bits:
 ```bash
 RUSTFLAGS="-Ctarget-cpu=native" cargo run --example prove_hash_binary --release --features parallel -- --objective keccak-f-permutations --log-trace-length 14 --security-bits 96
 RUSTFLAGS="-Ctarget-cpu=native" cargo run --example prove_hash_binary --release --features parallel -- --objective blake-3-compressions --log-trace-length 10 --security-bits 96
+RUSTFLAGS="-Ctarget-cpu=native" cargo run --example prove_hash_binary --release --features parallel -- --objective sha-256-compressions --log-trace-length 10 --security-bits 96
 ```
-- `--objective` (`-o`): `keccak-f-permutations` or `blake-3-compressions`.
+- `--objective` (`-o`): `keccak-f-permutations`, `blake-3-compressions` or `sha-256-compressions`.
 - `--log-trace-length` (`-l`): required. The binary Keccak-f AIR uses 25 rows per permutation
   (one per round, plus the output row), so `keccak-f-permutations` proves
-  `2^log-trace-length / 25` permutations; `blake-3-compressions` proves `2^log-trace-length`
-  compressions, one row per compression.
+  `2^log-trace-length / 25` permutations; `blake-3-compressions` and `sha-256-compressions` each
+  prove `2^log-trace-length` compressions, one row per compression.
 - `--representation` (`-r`): the field representation the zerocheck prover runs its later
   rounds in: `auto` (default; polynomial basis with a hardware carryless multiply, subfield-tower
   basis otherwise), `subfield`, or `poly-basis`. Every choice proves and verifies the same
