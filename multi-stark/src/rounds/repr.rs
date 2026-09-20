@@ -41,6 +41,38 @@ pub(super) fn lane_group<F, R: Field>(value: impl FnMut(usize) -> R) -> PackedRe
     PackedExt::new(R::Packing::from_fn(value))
 }
 
+/// One lane group of the representation field, read from as many consecutive rows of a column.
+///
+/// The rows a lane group covers sit next to each other, so the whole group is one load of the
+/// column rather than one load per lane.
+///
+/// # Panics
+///
+/// Panics if the column holds fewer rows past `row` than the group has lanes.
+#[inline]
+fn lane_rows<F, R: Field>(column: &[R], row: usize) -> PackedRepr<F, R> {
+    PackedExt::new(*R::Packing::from_slice(
+        &column[row..row + R::Packing::WIDTH],
+    ))
+}
+
+/// Whether the next rows of the lane group at residual row `s` all lie inside a column.
+///
+/// Lane `lane` of the group reads next row `s + half + lane + 1`, so the group stays inside a
+/// column of `num_evals` rows exactly when its last lane does:
+///
+/// ```text
+///     rows    : ... s + half ... s + half + lanes ... num_evals - 1 |
+///     group   :     |---- one lane group's next rows ----|
+/// ```
+///
+/// Residual rows fill a whole number of lane groups, so the last group is the only one whose
+/// last lane lands on `num_evals`.
+#[inline]
+const fn next_rows_in_column(s: usize, half: usize, num_evals: usize, lanes: usize) -> bool {
+    s + half + 1 + lanes <= num_evals
+}
+
 /// Carry per-node sums from lane groups back into the challenge field.
 ///
 /// Each lane of a sum covers residual rows of its own, so a node's value is the sum of its lanes.
@@ -462,11 +494,12 @@ where
             .zip(columns)
         {
             let column = column.as_slice();
-            let local_lo = lane_group(|lane| column[s + lane]);
-            let local_hi = lane_group(|lane| column[s + half + lane]);
+            let local_lo = lane_rows(column, s);
+            let local_hi = lane_rows(column, s + half);
             *local = local_lo;
             *local_delta = local_hi - local_lo;
         }
+        let next_hi_in_column = next_rows_in_column(s, half, num_evals, R::Packing::WIDTH);
         for run in &round.next_columns {
             for (((next, next_delta), column), next_tail) in scratch.next_point[run.clone()]
                 .iter_mut()
@@ -475,16 +508,20 @@ where
                 .zip(&self.next_tail[run.clone()])
             {
                 let column = column.as_slice();
-                let next_lo = lane_group(|lane| column[s + lane + 1]);
-                let next_hi = lane_group(|lane| {
-                    // Past the last residual row, the repeat-last tail stands in.
-                    let row = s + half + lane + 1;
-                    if row < num_evals {
-                        column[row]
-                    } else {
-                        *next_tail
-                    }
-                });
+                let next_lo = lane_rows(column, s + 1);
+                let next_hi = if next_hi_in_column {
+                    lane_rows(column, s + half + 1)
+                } else {
+                    lane_group(|lane| {
+                        // Past the last residual row, the repeat-last tail stands in.
+                        let row = s + half + lane + 1;
+                        if row < num_evals {
+                            column[row]
+                        } else {
+                            *next_tail
+                        }
+                    })
+                };
                 *next = next_lo;
                 *next_delta = next_hi - next_lo;
             }
