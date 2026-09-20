@@ -26,6 +26,7 @@ use rand::{RngExt, SeedableRng};
 
 use super::AirZerocheck;
 use crate::backend::GenericBackend;
+use crate::config::DEFAULT_SLICED_ROUNDS;
 use crate::lookup::{
     ActiveLookupRuntime, AirLinkClaim, AirLinkInstance, AirLinkLookup, LookupRuntime,
 };
@@ -223,6 +224,7 @@ fn generic_backend_prime_field_transcript_is_pinned() {
             .map(|instance| instance.public_values.as_slice())
             .collect::<Vec<_>>(),
         lookup,
+        DEFAULT_SLICED_ROUNDS,
         &mut challenger,
     );
     let next_challenge: EF = challenger.sample_algebra_element();

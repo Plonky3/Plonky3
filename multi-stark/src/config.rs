@@ -7,6 +7,18 @@ use p3_commit::MultilinearPcs;
 use p3_field::ExtensionField;
 use p3_sumcheck::layout::Table;
 
+pub use crate::rounds::sliced::MAX_SLICED_ROUNDS;
+
+/// Zerocheck rounds a stage evaluates on its bit-sliced planes by default.
+///
+/// A sliced round evaluates the AIR once per sixty-four residual rows instead of once per row,
+/// so each extra round doubles the plane work while halving the dense tail that follows it.
+/// Where the crossover falls depends on how much constraint work the AIR does per column, not
+/// on the trace height, so no single count suits every AIR.
+///
+/// Three is the count that does not lose on either of the two hash AIRs measured.
+pub const DEFAULT_SLICED_ROUNDS: usize = 3;
+
 /// The wiring a multilinear AIR proof depends on.
 ///
 /// One implementation fixes a commitment scheme, a challenge field, and a transcript type.
@@ -43,6 +55,23 @@ pub trait MultiStarkConfig {
     /// default supplies no evidence, so security-checked entry points fail closed.
     fn collision_resistance_bits(&self) -> Option<usize> {
         None
+    }
+
+    /// Zerocheck rounds a stage may evaluate on its bit-sliced planes.
+    ///
+    /// Only the sliced kernel reads this, and only for a stage whose cells all fit its
+    /// subfield. Every other stage ignores it, and every count produces the same proof.
+    ///
+    /// Raising it trades the dense rounds that follow for more plane work. On a c8a.16xlarge
+    /// at 2^20 rows, moving from three to four took the Blake3 zerocheck from 1.30 s to 1.22 s
+    /// and the Keccak-f zerocheck from 423 ms to 657 ms: the wider trace amortizes the AIR
+    /// evaluation over its sixty-four rows, the narrower one does not.
+    ///
+    /// A count above [`MAX_SLICED_ROUNDS`] is capped by it, as is one above the row variables
+    /// a stage keeps once a word's lanes are spent. Both caps are silent: the proof is the
+    /// same either way, so only the timing of a stage tells them apart.
+    fn sliced_rounds(&self) -> usize {
+        DEFAULT_SLICED_ROUNDS
     }
 
     /// Borrow the commitment scheme for the preprocessed trace.

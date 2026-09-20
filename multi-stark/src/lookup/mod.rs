@@ -816,6 +816,7 @@ mod tests {
 
     use super::*;
     use crate::backend::GenericBackend;
+    use crate::config::DEFAULT_SLICED_ROUNDS;
     use crate::zerocheck::{AirZerocheck, ZerocheckError, get_air_degrees};
 
     type F = BabyBear;
@@ -1351,6 +1352,7 @@ mod tests {
             &[&main],
             &[public_values],
             lookup,
+            DEFAULT_SLICED_ROUNDS,
             &mut prover_challenger,
         );
 
@@ -1472,6 +1474,7 @@ mod tests {
                 &[&main],
                 &[public_values],
                 lookup,
+                DEFAULT_SLICED_ROUNDS,
                 &mut prover_challenger,
             );
 
@@ -1541,6 +1544,7 @@ mod tests {
             &table_refs,
             &public_values,
             lookup,
+            DEFAULT_SLICED_ROUNDS,
             &mut prover_challenger,
         );
 
@@ -1600,6 +1604,7 @@ mod tests {
             &[&tall, &short],
             &publics,
             lookup,
+            DEFAULT_SLICED_ROUNDS,
             &mut prover_challenger,
         );
 

@@ -37,6 +37,7 @@ use p3_sumcheck::layout::Table;
 use thiserror::Error;
 
 use crate::backend::{GenericBackend, ZerocheckBackend};
+use crate::config::DEFAULT_SLICED_ROUNDS;
 use crate::folder::{
     InteractionMultilinearFolder, MultilinearFolder, ProverAir, VerifierAir, boundary_io_pins,
 };
@@ -543,6 +544,7 @@ impl<'a, A> AirZerocheck<'a, A> {
             tables,
             public_values,
             LookupRuntime::Inactive,
+            DEFAULT_SLICED_ROUNDS,
             challenger,
         )
     }
@@ -568,6 +570,7 @@ impl<'a, A> AirZerocheck<'a, A> {
         tables: &[&Table<F>],
         public_values: &[&[F]],
         lookup: LookupRuntime<EF>,
+        sliced_rounds: usize,
         challenger: &mut Challenger,
     ) -> (ZerocheckProof<F, EF>, Point<EF>)
     where
@@ -821,7 +824,8 @@ impl<'a, A> AirZerocheck<'a, A> {
                         .iter()
                         .map(|&air_index| beta_powers[air_index])
                         .collect::<Vec<_>>();
-                    let mut state = RoundStateBase::new(stage, alpha, eta, betas, tau);
+                    let mut state =
+                        RoundStateBase::new(stage, alpha, eta, betas, tau, sliced_rounds);
                     let round_poly = B::round0(&mut state, &eq_suffix);
                     let q1 =
                         (activating_claim - (EF::ONE - tau_round) * round_poly[0]) * tau_round_inv;

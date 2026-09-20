@@ -410,6 +410,13 @@ impl PrimeCharacteristicRing for PackedGhash128 {
         Self::from_vector(fold_shifted(low, fold_shifted(lanes::zero(), high)))
     }
 
+    /// `x·(x - 1) = x² - x = x² + x` in characteristic 2, and [`Self::square`] skips the
+    /// cross-term carryless multiplies a general product pays for.
+    #[inline]
+    fn bool_check(&self) -> Self {
+        self.square() + *self
+    }
+
     #[inline]
     fn dot_product<const N: usize>(u: &[Self; N], v: &[Self; N]) -> Self {
         let (mut low, mut high, mut middle) = (lanes::zero(), lanes::zero(), lanes::zero());
@@ -519,7 +526,7 @@ unsafe impl PackedFieldPow2 for PackedGhash128 {
 
 #[cfg(test)]
 mod tests {
-    use p3_field::PackedValue;
+    use p3_field::{PackedValue, PrimeCharacteristicRing};
     use p3_field_testing::test_packed_binary_field;
     use proptest::prelude::*;
 
@@ -669,6 +676,49 @@ mod tests {
             //
             // Each intrinsic must be the one the algebra was written against, lane by lane.
             lanes_conform(a, b, scalar)?;
+        }
+    }
+
+    /// The squaring shortcut must answer what the general product answers, lane by lane.
+    ///
+    /// `bool_check` is taken on every booleanity constraint an AIR states, so the register
+    /// takes the shortcut the scalar already does. The corners cover the two roots the check
+    /// exists to accept, and the patterns whose reduction is extreme.
+    #[test]
+    fn bool_check_matches_the_general_product_in_every_lane() {
+        for (index, &value) in SPECIAL.iter().enumerate() {
+            // Lane 0 carries the value under test; the rest rotate through the corners, so a
+            // result that crossed a lane boundary lands on a different extreme.
+            let lanes: [Ghash128; WIDTH] = core::array::from_fn(|lane| {
+                let pattern = if lane == 0 {
+                    value
+                } else {
+                    SPECIAL[(index + lane) % SPECIAL.len()]
+                };
+                Ghash128::from_le_bytes(pattern.to_le_bytes())
+            });
+            let packed: PackedGhash128 = PackedValue::from_fn(|lane| lanes[lane]);
+
+            for (lane, &scalar) in lanes.iter().enumerate() {
+                assert_eq!(
+                    packed.bool_check().as_slice()[lane],
+                    scalar * (scalar - Ghash128::ONE),
+                    "lane {lane} of corner {value:#x}"
+                );
+                assert_eq!(packed.bool_check().as_slice()[lane], scalar.bool_check());
+            }
+        }
+
+        // Zero and one are the roots the check accepts, so both must vanish in every lane.
+        for root in [Ghash128::ZERO, Ghash128::ONE] {
+            let packed: PackedGhash128 = PackedValue::from_fn(|_| root);
+            assert!(
+                packed
+                    .bool_check()
+                    .as_slice()
+                    .iter()
+                    .all(|&value| value == Ghash128::ZERO)
+            );
         }
     }
 
