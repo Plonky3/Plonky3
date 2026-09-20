@@ -491,20 +491,35 @@ mod tests {
         }
     }
 
-    #[test]
-    fn scaling_the_columns_scales_every_column_reading() {
-        // Multiplying by `a ⊗ 1` acts on the first leg, the column reading.
-        //
-        // The stored rows are the other reading, so this is the transpose path.
-        let mut scaled = element(0xC015);
+    /// The column scaling at one level, read back through the columns it acts on.
+    fn the_columns_scale_at<F: TowerLevel>(seed: u64)
+    where
+        rand::distr::StandardUniform: rand::distr::Distribution<F>,
+    {
+        let mut rng = SmallRng::seed_from_u64(seed);
+        let mut scaled = BitTensor::<F>::zero();
+        for _ in 0..8 {
+            scaled.add_exterior_product(rng.random(), rng.random());
+        }
         let before = scaled.columns();
 
-        let a = SmallRng::seed_from_u64(0xC016).random::<EF>();
+        let a = rng.random::<F>();
         scaled.scale_columns(a);
 
         for (after, &original) in scaled.columns().iter().zip(&before) {
             assert_eq!(*after, original * a);
         }
+    }
+
+    #[test]
+    fn scaling_the_columns_scales_every_column_reading() {
+        // Multiplying by `a ⊗ 1` acts on the first leg, the column reading.
+        //
+        // The level fixes how many coordinates index the matrix and which basis vector each
+        // one names, so the scaling is checked at both the narrow level and the wide one the
+        // reduction runs at.
+        the_columns_scale_at::<BinaryField16>(0xC015);
+        the_columns_scale_at::<BinaryField128>(0xC017);
     }
 
     #[test]
