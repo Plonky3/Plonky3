@@ -50,7 +50,7 @@ pub(super) fn lane_group<F, R: Field>(value: impl FnMut(usize) -> R) -> PackedRe
 ///
 /// Panics if the column holds fewer rows past `row` than the group has lanes.
 #[inline]
-pub(super) fn lane_rows<F, R: Field>(column: &[R], row: usize) -> PackedRepr<F, R> {
+fn lane_rows<F, R: Field>(column: &[R], row: usize) -> PackedRepr<F, R> {
     PackedExt::new(*R::Packing::from_slice(
         &column[row..row + R::Packing::WIDTH],
     ))
