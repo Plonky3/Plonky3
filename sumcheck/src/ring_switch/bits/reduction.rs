@@ -1416,9 +1416,6 @@ mod tests {
     type Chal = BinaryChallenger<EF, HashChallenger<u8, Keccak256Hash, 32>>;
     type WideChal = BinaryChallenger<BinaryField128, HashChallenger<u8, Keccak256Hash, 32>>;
 
-    /// The level as its own representation, taking tables through the default map.
-    impl FromTable<Self> for BinaryField16 {}
-
     /// A fresh sponge, so the two sides start from the same state.
     fn challenger() -> Chal {
         Chal::from_hasher(Vec::new(), Keccak256Hash)

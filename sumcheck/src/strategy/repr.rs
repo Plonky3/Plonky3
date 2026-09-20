@@ -246,9 +246,12 @@ where
     }
 }
 
-impl FromTable<Self> for BinaryField64 {}
-
-impl FromTable<Self> for BinaryField128 {}
+/// The identity map, which hands back the table it was given.
+impl<T: Field> FromTable<T> for T {
+    fn from_table(table: Vec<Self>) -> Vec<Self> {
+        table
+    }
+}
 
 impl FromTable<BinaryField64> for Poly64 {
     /// Converts the table in its existing allocation.
