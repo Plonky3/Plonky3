@@ -896,7 +896,13 @@ impl<EF: TowerLevel> BitRingSwitchBatch<'_, EF> {
         // The shift reads the entry before, which a column taken from its last row down still
         // finds unmoved. So the combination lands in the table it reads, in chunks of whole
         // columns.
+        //
+        // A column fits inside the run: `prefix_limit` lets no Boolean prefix fix a row
+        // coordinate, so the table keeps at least the kept rows. Every chunk below is
+        // therefore exactly `stride` long and splits into whole columns.
         let stride = equality.block_len().max(column).min(table.num_evals());
+        debug_assert!(column.is_power_of_two() && stride.is_multiple_of(column));
+        debug_assert!(table.num_evals().is_multiple_of(stride));
         table
             .as_mut_slice()
             .par_chunks_mut(stride)
