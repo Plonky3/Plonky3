@@ -266,6 +266,26 @@ const DEEP_TILE_BYTES: usize = 256 * 1024;
 /// and a `no_std` crate cannot read that level's size. The matrix size against a fixed figure
 /// is the signal left.
 ///
+/// A sweep of the deep budget against the pair above, over the matrix size, on a core holding
+/// 105 MiB of shared cache for its eight:
+///
+/// ```text
+///     matrix      4 MiB   16 MiB   64 MiB   128 MiB   256 MiB   512 MiB
+///     ratio        1.48     0.95     1.01      1.04      0.98      0.89
+/// ```
+///
+/// The four smallest are width 16 and the two widest a single column, so the curve is one in
+/// the matrix size rather than two in the height.
+///
+/// Only the two ends of it carry: against a noise floor of a few percent the deep budget
+/// loses half again at 4 MiB and wins a tenth at 512 MiB, while the middle is flat inside the
+/// noise and not monotone. So this figure is a bracket between the last matrix that does not
+/// pay for the deeper tile and the first that does, and not a reading of where the shared
+/// cache ends.
+///
+/// The 4 MiB end has a cause of its own that is not the cache level at all: a tile that large
+/// leaves a matrix that small fewer tiles than there are workers to take them.
+///
 /// A target whose shared cache is smaller keeps the shallower tiles on matrices that would
 /// have paid for the deeper one, which is a win forgone rather than a cost added, and that is
 /// the safe direction for a signal this coarse.
@@ -460,6 +480,18 @@ impl Plan {
     ///
     /// A matrix no cache holds takes both tiles to [`DEEP_TILE_BYTES`], since the traversals
     /// the added depth removes are the ones that would have reached memory.
+    ///
+    /// The depth the wider budget buys is paid for twice over, and neither cost is in the
+    /// byte count:
+    ///
+    /// - A tile of a fixed size trades depth against run length one for one, so the deeper
+    ///   tile can leave the search no height at which the run still grows and drop it back to
+    ///   the [`STAGED_LINE_BYTES`] floor. The search prices that trade rather than ignoring
+    ///   it: a traversal saved outranks a doubling of the run.
+    /// - A gather addresses `2^depth` runs a stride apart, and at this budget a stride is far
+    ///   wider than a page, so the pages one tile touches number `2^depth` rather than the
+    ///   tile's own size in pages. That, and not the private cache, is what bounds the depth
+    ///   on a target whose second-level translation buffer holds a few thousand entries.
     ///
     /// The comparison is in rows, so no height can overflow the byte count it names.
     fn budgets(row: usize, log_n: usize) -> (usize, usize) {
