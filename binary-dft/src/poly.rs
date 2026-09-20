@@ -230,24 +230,35 @@ const STAGING_BYTES: usize = 64 * 1024;
 /// memory, and the deeper tile is what keeps the transform off it.
 ///
 /// A tile this deep runs a level further out than the budgets above, so it is what the
-/// private cache holds rather than what the level under it holds: one hardware thread's
-/// share, which is half of its core's where two threads sit on one core.
+/// private cache holds rather than what the level under it holds. The figure is therefore
+/// what one hardware thread has of that cache — its core's share divided by the threads on
+/// the core — halved again. The half is not a second tile, since the two tiles run in
+/// different phases; it is the gather and the scatter, which stream the matrix through the
+/// same cache for as long as the tile is live.
 ///
-/// A sweep of the budget, as a ratio to the pair above, on a core holding 2 MiB of private
-/// cache for its two threads and 105 MiB of shared cache for its eight:
+/// Halving lands on this figure for a core holding 1 MiB of private cache for two threads.
+/// Where a target holds less, the budget is the whole of a thread's share rather than half of
+/// it, and that is the edge the sweep below sits at:
 ///
 /// ```text
-///     matrix      4 MiB   16 MiB   64 MiB   128 MiB   256 MiB   512 MiB
-///     ratio        1.48     0.95     1.01      1.04      0.98      0.89
+///     private cache per core   threads   per thread   this budget is
+///        512 KiB                  2        256 KiB    the whole share
+///          1 MiB                  2        512 KiB    half the share
+///          2 MiB                  2          1 MiB    a quarter of it
 /// ```
 ///
-/// The four smallest are width 16 and the two widest a single column, so the curve is one in
-/// the matrix size rather than two in the height.
+/// A sweep of the budget on the first of those rows, at the one shape past
+/// [`SHARED_CACHE_BYTES`] a transform sweep reaches, as a ratio to the pair above:
 ///
-/// The 4 MiB entry is a second reason the deep budget is not for a matrix the cache holds: a
-/// tile that large leaves a matrix that small fewer tiles than there are workers to take
-/// them.
-const DEEP_TILE_BYTES: usize = 512 * 1024;
+/// ```text
+///     budget      256 KiB   512 KiB   1 MiB
+///     ratio          0.99      1.01    1.02
+/// ```
+///
+/// Arms repeated across that sweep land within 0.2% of each other, so its span is the budget
+/// and not the noise. Past a thread's share the tile costs more than the traversal its own
+/// depth removes, which is what puts the figure at the edge rather than beyond it.
+const DEEP_TILE_BYTES: usize = 256 * 1024;
 
 /// Bytes of shared cache a matrix is taken to be inside.
 ///
@@ -1178,22 +1189,22 @@ mod tests {
     ///     width  4 @ 2^20   four doublings, the widest row a run still spans several of
     ///     width  1 @ 2^22   four doublings again, from a run floor above one row
     ///     width 16 @ 2^18   no leftover pass, so growth rebalances (8, 3) into (6, 5)
-    ///     width 16 @ 2^20   a deep tile, whose one group leaves the target run affordable
-    ///     width  1 @ 2^25   a deep tile whose run gives a doubling up to stay one group
+    ///     width 16 @ 2^20   a deep tile whose one group takes every stage above it
+    ///     width  1 @ 2^25   a deep tile whose run gives doublings up to stay one group
     /// ```
     ///
     /// The first and the last two are past [`SHARED_CACHE_BYTES`], so they are the rows that
     /// read the deep budget. Width 16 at `2^20` rows is `2^24` elements, which is why none of
     /// these is transformed.
     const PLAN_ONLY_CUTS: [(usize, usize, (usize, usize, usize)); 8] = [
-        (48, 18, (9, 0, 9)),
+        (48, 18, (8, 1, 7)),
         (16, 16, (7, 0, 8)),
         (8, 18, (8, 3, 6)),
         (4, 20, (9, 4, 6)),
         (1, 22, (11, 6, 6)),
         (16, 18, (7, 2, 6)),
-        (16, 20, (11, 2, 9)),
-        (1, 25, (15, 5, 10)),
+        (16, 20, (10, 0, 10)),
+        (1, 25, (14, 3, 11)),
     ];
 
     /// Cuts whose staging groups run at a height the reference oracle can still reach:
