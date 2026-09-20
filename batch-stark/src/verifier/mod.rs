@@ -503,10 +503,10 @@ where
                 .as_ref()
                 .is_none_or(|v| v.len() != air_width)
             {
-                return Err(InvalidProofShapeError::TraceNextMismatch { air: i }.into());
+                return Err(InvalidProofShapeError::TraceNextMismatch { air: Some(i) }.into());
             }
         } else if inst_base_opened_vals.trace_next.is_some() {
-            return Err(InvalidProofShapeError::UnexpectedTraceNext { air: i }.into());
+            return Err(InvalidProofShapeError::UnexpectedTraceNext { air: Some(i) }.into());
         }
 
         // Validate quotient chunks structure
@@ -549,15 +549,61 @@ where
             .as_ref()
             .map_or(0, |v| v.len());
         if pre_w == 0 {
-            if pre_local_len != 0 || pre_next_len != 0 {
-                return Err(InvalidProofShapeError::UnexpectedPreprocessedValues { air: i }.into());
+            // An AIR with no preprocessed columns carries no preprocessed opening at all.
+            // Presence is tested rather than width, since an empty vector is zero columns wide.
+            if inst_base_opened_vals.preprocessed_local.is_some()
+                || inst_base_opened_vals.preprocessed_next.is_some()
+            {
+                return Err(
+                    InvalidProofShapeError::UnexpectedPreprocessedValues { air: Some(i) }.into(),
+                );
             }
         } else if !airs[i].preprocessed_next_row_columns().is_empty() {
             if pre_local_len != pre_w || pre_next_len != pre_w {
                 return Err(InvalidProofShapeError::PreprocessedWidthMismatch { air: i }.into());
             }
-        } else if pre_local_len != pre_w || pre_next_len != 0 {
-            return Err(InvalidProofShapeError::PreprocessedWidthMismatch { air: i }.into());
+        } else {
+            // This AIR reads the preprocessed trace on the current row only.
+            //
+            //     current row -> opening as wide as the preprocessed trace
+            //     next row    -> no opening
+            if pre_local_len != pre_w || pre_next_len != 0 {
+                return Err(InvalidProofShapeError::PreprocessedWidthMismatch { air: i }.into());
+            }
+            // An empty next-row opening is zero columns wide, yet it is still present.
+            //
+            // Why: nothing in the opening argument covers it, so its value is unbound.
+            // It would then be stacked under a full-width current row.
+            if inst_base_opened_vals.preprocessed_next.is_some() {
+                return Err(
+                    InvalidProofShapeError::UnexpectedPreprocessedNext { air: Some(i) }.into(),
+                );
+            }
+        }
+
+        // Width of the two lookup permutation rows, under the single-terminal layout:
+        //
+        //     no lookups -> no permutation columns at all
+        //     k lookups  -> one shared accumulator column plus one fraction column per lookup
+        //
+        // Each column holds extension-field elements, flattened into base-field coefficients.
+        // The opened row is therefore that column count times the extension degree.
+        let expected_perm_len = if all_lookups[i].is_empty() {
+            0
+        } else {
+            (all_lookups[i].len() + 1) * Challenge::<SC>::DIMENSION
+        };
+
+        // Checked alongside every other proof-carried width.
+        // A malformed shape is then rejected before any transcript work begins.
+        if inst_opened_vals.permutation_local.len() != expected_perm_len
+            || inst_opened_vals.permutation_next.len() != expected_perm_len
+        {
+            return Err(LookupError::PermutationWidthMismatch {
+                air: i,
+                expected: expected_perm_len,
+            }
+            .into());
         }
 
         // One terminal per AIR with lookups; none otherwise.
@@ -708,17 +754,8 @@ where
             all_lookups[i].len() + 1
         };
 
+        // Number of base-field coefficients one extension-field element flattens into.
         let ext_degree = Challenge::<SC>::DIMENSION;
-        let expected_perm_len = aux_width * ext_degree;
-        if opened_values.instances[i].permutation_local.len() != expected_perm_len
-            || opened_values.instances[i].permutation_next.len() != expected_perm_len
-        {
-            return Err(LookupError::PermutationWidthMismatch {
-                air: i,
-                expected: expected_perm_len,
-            }
-            .into());
-        }
 
         let recompose = |flat: &[Challenge<SC>]| -> Vec<Challenge<SC>> {
             if aux_width == 0 {
