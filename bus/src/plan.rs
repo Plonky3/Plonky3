@@ -5,6 +5,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use core::cmp::Reverse;
 
+use hashbrown::HashSet;
 use p3_air::symbolic::{BaseEntry, BaseLeaf, SymbolicExpr, SymbolicExpression};
 use p3_field::Field;
 use thiserror::Error;
@@ -573,8 +574,14 @@ fn validate_expression<F: Field>(
     location: BusExpressionLocation,
     expression: &SymbolicExpression<F>,
 ) -> Result<(), BusPlanError> {
+    // Arithmetic nodes share their operands, so the expression is a graph rather than a tree.
+    // Walking it per path costs time exponential in the depth, which a bit recomposition reaches immediately.
+    let mut seen = HashSet::<*const SymbolicExpression<F>>::new();
     let mut pending = alloc::vec![expression];
     while let Some(expression) = pending.pop() {
+        if !seen.insert(core::ptr::from_ref(expression)) {
+            continue;
+        }
         match expression {
             SymbolicExpr::Leaf(BaseLeaf::Variable(variable)) => {
                 let access = match variable.entry {

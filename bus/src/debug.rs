@@ -1,4 +1,8 @@
 //! Out-of-circuit diagnostics for binary-native bus declarations.
+//!
+//! Replay reads declarations from a symbolic profile rather than from a concrete per-row builder.
+//!
+//! This lets a caller that holds a profile and its committed traces, but no longer the AIR itself, still be diagnosed.
 
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -35,22 +39,48 @@ pub struct BusDebugInstance<'a, F: Field> {
 impl<'a, F: Field> BusDebugInstance<'a, F> {
     /// Pairs concrete AIR data with declarations from its symbolic profile.
     ///
-    /// The profile must come from the same AIR and layout as the concrete data.
-    #[must_use]
+    /// Both traces hold one polynomial per trace column, not one per trace row.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a trace or the public inputs disagree with the profile's declared shape.
     pub fn new<EF: ExtensionField<F>>(
         main: &'a Table<F>,
         preprocessed: Option<&'a Table<F>>,
         public_values: &'a [F],
         profile: &'a BusSymbolicBuilder<F, EF>,
-    ) -> Self {
+    ) -> Result<Self, BusDebugError> {
+        // A transposed trace satisfies every table invariant, so the declared shape is the only guard.
+        // Without it the replay would read trace rows as columns and report a fabricated imbalance.
+        let layout = profile.layout();
+        if main.num_polys() != layout.main_width {
+            return Err(BusDebugError::MainWidthMismatch {
+                expected: layout.main_width,
+                actual: main.num_polys(),
+            });
+        }
+        let preprocessed_polys = preprocessed.map_or(0, Table::num_polys);
+        if preprocessed_polys != layout.preprocessed_width {
+            return Err(BusDebugError::PreprocessedWidthMismatch {
+                expected: layout.preprocessed_width,
+                actual: preprocessed_polys,
+            });
+        }
+        if public_values.len() != layout.num_public_values {
+            return Err(BusDebugError::PublicValueCountMismatch {
+                expected: layout.num_public_values,
+                actual: public_values.len(),
+            });
+        }
+
         // The profile remains the sole source of symbolic declarations.
         // This prevents a caller from passing an unrelated raw interaction slice.
-        Self {
+        Ok(Self {
             main,
             preprocessed,
             public_values,
             interactions: profile.interactions(),
-        }
+        })
     }
 }
 
@@ -110,6 +140,32 @@ pub enum BusDebugError {
     /// The verifier-derived declaration layout is malformed.
     #[error(transparent)]
     Plan(#[from] BusPlanError),
+    /// The committed trace holds a different number of columns than the AIR declares.
+    #[error("binary-bus main trace holds {actual} columns, but the AIR declares {expected}")]
+    MainWidthMismatch {
+        /// Column count declared by the AIR.
+        expected: usize,
+        /// Column count found in the supplied trace.
+        actual: usize,
+    },
+    /// The fixed trace holds a different number of columns than the AIR declares.
+    #[error(
+        "binary-bus preprocessed trace holds {actual} columns, but the AIR declares {expected}"
+    )]
+    PreprocessedWidthMismatch {
+        /// Column count declared by the AIR.
+        expected: usize,
+        /// Column count found in the supplied trace.
+        actual: usize,
+    },
+    /// A different number of public inputs was supplied than the AIR declares.
+    #[error("binary-bus instance supplies {actual} public values, but the AIR declares {expected}")]
+    PublicValueCountMismatch {
+        /// Public-input count declared by the AIR.
+        expected: usize,
+        /// Public-input count supplied by the caller.
+        actual: usize,
+    },
     /// Fixed columns use a different height from committed columns.
     #[error("binary-bus AIR {air} preprocessed trace has height 2^{actual}, expected 2^{expected}")]
     PreprocessedHeightMismatch {
@@ -223,6 +279,7 @@ impl<F: Field> BusDebugReport<F> {
     ///
     /// - Memory is linear in the number of distinct active tuples.
     /// - Output is linear in the number of unmatched tuples.
+    /// - Time is linear in rows times distinct expression nodes, never in expression paths.
     /// - The routine is intended for trusted development traces.
     pub fn check(instances: &[BusDebugInstance<'_, F>]) -> Result<Self, BusDebugError> {
         // Build the same deterministic named-bus layout used by the proof protocol.
@@ -260,9 +317,10 @@ impl<F: Field> BusDebugReport<F> {
             .map(|(index, domain)| (domain.name.as_str(), index))
             .collect::<HashMap<_, _>>();
 
-        // A hash index provides constant-time grouping.
+        // One hash index per named multiset provides constant-time grouping.
+        // Keying per bus lets the probe borrow the tuple instead of cloning it on every occurrence.
         // The parallel vector preserves deterministic first-occurrence order for diagnostics.
-        let mut entry_indices = HashMap::<(usize, Vec<F>), usize>::new();
+        let mut entry_indices = alloc::vec![HashMap::<Vec<F>, usize>::new(); plan.domains().len()];
         let mut entries = Vec::<Entry<F>>::new();
 
         for (air, instance) in instances.iter().enumerate() {
@@ -297,14 +355,13 @@ impl<F: Field> BusDebugReport<F> {
                         .map(|field| evaluator.evaluate(field))
                         .collect::<Result<Vec<_>, _>>()?;
                     let bus = domain_indices[interaction.bus_name.as_str()];
-                    let key = (bus, tuple.clone());
 
                     // Reuse an existing tuple accumulator or append one deterministic entry.
-                    let entry = if let Some(&index) = entry_indices.get(&key) {
+                    let entry = if let Some(&index) = entry_indices[bus].get(&tuple) {
                         &mut entries[index]
                     } else {
                         let index = entries.len();
-                        entry_indices.insert(key, index);
+                        entry_indices[bus].insert(tuple.clone(), index);
                         entries.push(Entry::new(bus, tuple));
                         &mut entries[index]
                     };
@@ -414,16 +471,73 @@ struct RowEvaluator<'a, F: Field> {
     public_values: &'a [F],
 }
 
+/// One step of the iterative traversal over a shared expression graph.
+enum Step<'a, F: Field> {
+    /// Schedule a node, after a lookup in the completed-value index.
+    Enter(&'a SymbolicExpression<F>),
+    /// Combine the operand values a scheduled node's children already produced.
+    Leave(&'a SymbolicExpression<F>),
+}
+
 impl<F: Field> RowEvaluator<'_, F> {
     fn evaluate(&self, expression: &SymbolicExpression<F>) -> Result<F, BusDebugError> {
-        // Arithmetic nodes are replayed over the concrete row values.
-        match expression {
-            SymbolicExpr::Leaf(leaf) => self.evaluate_leaf(leaf),
-            SymbolicExpr::Add { x, y, .. } => Ok(self.evaluate(x)? + self.evaluate(y)?),
-            SymbolicExpr::Sub { x, y, .. } => Ok(self.evaluate(x)? - self.evaluate(y)?),
-            SymbolicExpr::Neg { x, .. } => Ok(-self.evaluate(x)?),
-            SymbolicExpr::Mul { x, y, .. } => Ok(self.evaluate(x)? * self.evaluate(y)?),
+        // Arithmetic nodes share their operands, so the expression is a graph rather than a tree.
+        // Walking it per path costs time exponential in the depth, which a bit recomposition reaches immediately.
+        // An explicit stack keyed on node identity evaluates each distinct node once and bounds the recursion depth.
+        if let SymbolicExpr::Leaf(leaf) = expression {
+            return self.evaluate_leaf(leaf);
         }
+
+        let mut done = HashMap::<*const SymbolicExpression<F>, F>::new();
+        let mut steps = alloc::vec![Step::Enter(expression)];
+        let mut operands = Vec::<F>::new();
+
+        while let Some(step) = steps.pop() {
+            match step {
+                Step::Enter(node) => {
+                    if let Some(&value) = done.get(&core::ptr::from_ref(node)) {
+                        operands.push(value);
+                        continue;
+                    }
+                    match node {
+                        SymbolicExpr::Leaf(leaf) => {
+                            let value = self.evaluate_leaf(leaf)?;
+                            done.insert(core::ptr::from_ref(node), value);
+                            operands.push(value);
+                        }
+                        SymbolicExpr::Neg { x, .. } => {
+                            steps.push(Step::Leave(node));
+                            steps.push(Step::Enter(x));
+                        }
+                        SymbolicExpr::Add { x, y, .. }
+                        | SymbolicExpr::Sub { x, y, .. }
+                        | SymbolicExpr::Mul { x, y, .. } => {
+                            steps.push(Step::Leave(node));
+                            steps.push(Step::Enter(y));
+                            steps.push(Step::Enter(x));
+                        }
+                    }
+                }
+                Step::Leave(node) => {
+                    // Operands were pushed left before right, so the stack returns them in reverse.
+                    let mut pop = || operands.pop().expect("a scheduled node left its operands");
+                    let right = pop();
+                    let value = match node {
+                        SymbolicExpr::Neg { .. } => -right,
+                        SymbolicExpr::Add { .. } => pop() + right,
+                        SymbolicExpr::Sub { .. } => pop() - right,
+                        SymbolicExpr::Mul { .. } => pop() * right,
+                        SymbolicExpr::Leaf(_) => {
+                            unreachable!("a leaf is completed when it is first entered")
+                        }
+                    };
+                    done.insert(core::ptr::from_ref(node), value);
+                    operands.push(value);
+                }
+            }
+        }
+
+        Ok(operands.pop().expect("the root node produced its value"))
     }
 
     fn evaluate_leaf(&self, leaf: &BaseLeaf<F>) -> Result<F, BusDebugError> {
@@ -512,36 +626,50 @@ mod tests {
     use alloc::string::ToString;
     use alloc::vec;
 
-    use p3_air::symbolic::{BaseEntry, SymbolicVariable};
+    use p3_air::symbolic::{AirLayout, BaseEntry, SymbolicVariable};
+    use p3_air::{Air, BaseAir, WindowAccess};
     use p3_baby_bear::BabyBear;
+    use p3_binary_field::BinaryField128;
     use p3_field::PrimeCharacteristicRing;
     use p3_matrix::dense::RowMajorMatrix;
 
     use super::*;
+    use crate::BusInteractionBuilder;
 
     type F = BabyBear;
+    type B = BinaryField128;
 
-    fn table(columns: &[&[u64]]) -> Table<F> {
+    fn table<K: Field>(columns: &[&[u64]]) -> Table<K> {
         // Polynomial-major storage places each complete trace column contiguously.
         let width = columns[0].len();
         let values = columns
             .iter()
-            .flat_map(|column| column.iter().copied().map(F::from_u64))
+            .flat_map(|column| column.iter().copied().map(K::from_u64))
             .collect();
         Table::new(RowMajorMatrix::new(values, width))
     }
 
-    fn current(index: usize) -> SymbolicExpression<F> {
+    fn current<K: Field>(index: usize) -> SymbolicExpression<K> {
         // Current-row references are the only trace access accepted by bus planning.
         SymbolicVariable::new(BaseEntry::Main { offset: 0 }, index).into()
     }
 
-    fn interaction(
+    fn fixed(index: usize) -> SymbolicExpression<F> {
+        // Fixed columns are read through the same current-row access.
+        SymbolicVariable::new(BaseEntry::Preprocessed { offset: 0 }, index).into()
+    }
+
+    fn public(index: usize) -> SymbolicExpression<F> {
+        // Public inputs are shared by every row of the trace.
+        SymbolicVariable::new(BaseEntry::Public, index).into()
+    }
+
+    fn interaction<K: Field>(
         name: &str,
         direction: BusDirection,
-        fields: Vec<SymbolicExpression<F>>,
-        activation: BusActivation<SymbolicExpression<F>>,
-    ) -> SymbolicBusInteraction<F> {
+        fields: Vec<SymbolicExpression<K>>,
+        activation: BusActivation<SymbolicExpression<K>>,
+    ) -> SymbolicBusInteraction<K> {
         // Tests construct the same symbolic records an AIR emits through its builder.
         SymbolicBusInteraction {
             bus_name: name.to_string(),
@@ -557,7 +685,7 @@ mod tests {
         //     tall push rows : [3, 5, 7, 11]
         //     short pulls    : [3, 5]
         //     tall pulls     : [7, 11]
-        let tall_push = table(&[&[3, 5, 7, 11]]);
+        let tall_push = table::<F>(&[&[3, 5, 7, 11]]);
         let short_pull = table(&[&[3, 5]]);
         let tall_pull = table(&[&[7, 11, 0, 0], &[1, 1, 0, 0]]);
         let pushes = [interaction(
@@ -607,7 +735,7 @@ mod tests {
     #[test]
     fn mismatch_reports_exact_counts_and_first_sources() {
         // Fixture state: tuple 9 is pushed twice and pulled once.
-        let push = table(&[&[9, 9]]);
+        let push = table::<F>(&[&[9, 9]]);
         let pull = table(&[&[9]]);
         let pushes = [interaction(
             "dispatch",
@@ -651,8 +779,9 @@ mod tests {
 
     #[test]
     fn named_buses_and_directions_never_cancel_in_the_field() {
-        // Fixture state: the same tuple is pushed on two independently named buses.
-        let trace = table(&[&[7]]);
+        // Fixture state: one tuple is pushed on two named buses, and a third bus sees a push and a pull.
+        // The field has characteristic two, so a signed encoding would cancel all four records.
+        let trace = table::<B>(&[&[7]]);
         let interactions = [
             interaction(
                 "a",
@@ -666,6 +795,18 @@ mod tests {
                 vec![current(0)],
                 BusActivation::Always,
             ),
+            interaction(
+                "c",
+                BusDirection::Push,
+                vec![current(0)],
+                BusActivation::Always,
+            ),
+            interaction(
+                "c",
+                BusDirection::Pull,
+                vec![current(0)],
+                BusActivation::Always,
+            ),
         ];
         let instances = [BusDebugInstance {
             main: &trace,
@@ -674,17 +815,373 @@ mod tests {
             interactions: &interactions,
         }];
 
-        // Characteristic two cannot erase either structural direction or bus identity.
+        // Bus identity survives: the two single-sided buses are reported separately.
         let report = BusDebugReport::check(&instances).unwrap();
         assert_eq!(report.imbalances.len(), 2);
         assert_eq!(report.imbalances[0].bus_name, "a");
         assert_eq!(report.imbalances[1].bus_name, "b");
+        assert_eq!(report.imbalances[0].tuple, vec![B::from_u64(7)]);
+
+        // Direction survives: the matched pair on the third bus cancels as integers, not as field elements.
+        assert!(report.imbalances.iter().all(|entry| entry.bus_name != "c"));
+    }
+
+    // Two-column AIR whose payload column is pulled back on selected rows.
+    struct PairAir;
+
+    impl BaseAir<F> for PairAir {
+        fn width(&self) -> usize {
+            // One column carries payloads and one carries row activation.
+            2
+        }
+    }
+
+    impl<AB: BusInteractionBuilder<F = F>> Air<AB> for PairAir {
+        fn eval(&self, builder: &mut AB) {
+            let main = builder.main();
+            let row = main.current_slice();
+            let value: AB::Expr = row[0].into();
+            let selector: AB::Expr = row[1].into();
+            builder.push_bus_interaction(
+                "pairs",
+                BusDirection::Push,
+                [value.clone()],
+                BusActivation::Always,
+            );
+            builder.push_bus_interaction(
+                "pairs",
+                BusDirection::Pull,
+                [value],
+                BusActivation::Boolean(selector),
+            );
+        }
+    }
+
+    #[test]
+    fn a_real_air_reaches_the_checker_through_its_symbolic_profile() {
+        // Fixture state: payloads 1, 2, 3, 4 with the last row's pull switched off.
+        let profile = BusSymbolicBuilder::<F>::from_air(&PairAir, AirLayout::from_air(&PairAir));
+        let main = table::<F>(&[&[1, 2, 3, 4], &[1, 1, 1, 0]]);
+        let instance = BusDebugInstance::new(&main, None, &[], &profile).unwrap();
+
+        // The declaration order and the column mapping both come from the AIR, not from the test.
+        let report = BusDebugReport::check(&[instance]).unwrap();
+        assert_eq!(report.imbalances.len(), 1);
+        assert_eq!(report.imbalances[0].tuple, vec![F::from_u64(4)]);
+        assert_eq!(report.imbalances[0].pushes.count, 1);
+        assert_eq!(report.imbalances[0].pulls.count, 0);
+        assert_eq!(report.imbalances[0].pushes.locations[0].row, 3);
+    }
+
+    #[test]
+    fn concrete_data_must_match_the_shape_the_profile_was_built_for() {
+        // Fixture state: the same eight payload values laid out as four rows of two columns.
+        let profile = BusSymbolicBuilder::<F>::from_air(&PairAir, AirLayout::from_air(&PairAir));
+        let transposed = table::<F>(&[&[1, 1], &[2, 1], &[3, 1], &[4, 0]]);
+
+        // Row-major data satisfies every table invariant, so only the declared width catches it.
+        assert_eq!(
+            BusDebugInstance::new(&transposed, None, &[], &profile).unwrap_err(),
+            BusDebugError::MainWidthMismatch {
+                expected: 2,
+                actual: 4,
+            }
+        );
+
+        // Fixed columns the AIR never declared are rejected for the same reason.
+        let main = table::<F>(&[&[1, 2, 3, 4], &[1, 1, 1, 0]]);
+        let extra = table::<F>(&[&[0, 0, 0, 0]]);
+        assert_eq!(
+            BusDebugInstance::new(&main, Some(&extra), &[], &profile).unwrap_err(),
+            BusDebugError::PreprocessedWidthMismatch {
+                expected: 0,
+                actual: 1,
+            }
+        );
+
+        // Public inputs the AIR never declared are rejected for the same reason.
+        assert_eq!(
+            BusDebugInstance::new(&main, None, &[F::ONE], &profile).unwrap_err(),
+            BusDebugError::PublicValueCountMismatch {
+                expected: 0,
+                actual: 1,
+            }
+        );
+    }
+
+    #[test]
+    fn shared_operands_are_replayed_once_per_node_rather_than_once_per_path() {
+        // Fixture state: forty doublings share their operand, giving eighty nodes and 2^40 paths.
+        const DEPTH: usize = 40;
+        let mut field = current::<F>(0);
+        let mut expected = F::ONE;
+        for _ in 0..DEPTH {
+            field = field.clone() + field;
+            expected += expected;
+        }
+
+        let trace = table::<F>(&[&[1]]);
+        let interactions = [interaction(
+            "deep",
+            BusDirection::Push,
+            vec![field],
+            BusActivation::Always,
+        )];
+        let instances = [BusDebugInstance {
+            main: &trace,
+            preprocessed: None,
+            public_values: &[],
+            interactions: &interactions,
+        }];
+
+        // A path-wise traversal would not finish; the reported payload is one doubled forty times.
+        let report = BusDebugReport::check(&instances).unwrap();
+        assert_eq!(report.imbalances[0].tuple, vec![expected]);
+    }
+
+    #[test]
+    fn the_source_sample_is_bounded_while_the_count_stays_exact() {
+        // Fixture state: eight rows all carrying the same payload, pushed and never pulled.
+        let trace = table::<F>(&[&[6, 6, 6, 6, 6, 6, 6, 6]]);
+        let interactions = [interaction(
+            "repeat",
+            BusDirection::Push,
+            vec![current(0)],
+            BusActivation::Always,
+        )];
+        let instances = [BusDebugInstance {
+            main: &trace,
+            preprocessed: None,
+            public_values: &[],
+            interactions: &interactions,
+        }];
+
+        // The count keeps rising after the sample fills, and the sample holds the first rows.
+        let report = BusDebugReport::check(&instances).unwrap();
+        let pushes = &report.imbalances[0].pushes;
+        assert_eq!(pushes.count, 8);
+        assert_eq!(pushes.locations.len(), LOCATION_LIMIT);
+        assert_eq!(
+            pushes
+                .locations
+                .iter()
+                .map(|location| location.row)
+                .collect::<Vec<_>>(),
+            vec![0, 1, 2, 3],
+        );
+    }
+
+    #[test]
+    fn distinct_tuples_are_reported_in_first_occurrence_order() {
+        // Fixture state: payload 9 appears before payload 4, and neither is alphabetically first.
+        let trace = table::<F>(&[&[9, 4, 9, 4]]);
+        let interactions = [interaction(
+            "order",
+            BusDirection::Push,
+            vec![current(0)],
+            BusActivation::Always,
+        )];
+        let instances = [BusDebugInstance {
+            main: &trace,
+            preprocessed: None,
+            public_values: &[],
+            interactions: &interactions,
+        }];
+
+        // Grouping is by hash, but the report follows the order the rows were scanned in.
+        let report = BusDebugReport::check(&instances).unwrap();
+        let tuples = report
+            .imbalances
+            .iter()
+            .map(|entry| entry.tuple.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(tuples, vec![vec![F::from_u64(9)], vec![F::from_u64(4)]]);
+        assert_eq!(report.imbalances[0].pushes.count, 2);
+    }
+
+    #[test]
+    fn row_selectors_follow_the_position_of_the_row_in_its_trace() {
+        // Fixture state: four payload rows, each selector picking a different subset of them.
+        let trace = table::<F>(&[&[10, 20, 30, 40]]);
+        let selected = |leaf: BaseLeaf<F>| {
+            let interactions = [interaction(
+                "rows",
+                BusDirection::Push,
+                vec![current(0)],
+                BusActivation::Boolean(SymbolicExpr::Leaf(leaf)),
+            )];
+            let instances = [BusDebugInstance {
+                main: &trace,
+                preprocessed: None,
+                public_values: &[],
+                interactions: &interactions,
+            }];
+            BusDebugReport::check(&instances)
+                .unwrap()
+                .imbalances
+                .iter()
+                .map(|entry| entry.tuple[0])
+                .collect::<Vec<_>>()
+        };
+
+        // Each selector picks exactly the rows its name describes.
+        assert_eq!(selected(BaseLeaf::IsFirstRow), vec![F::from_u64(10)]);
+        assert_eq!(selected(BaseLeaf::IsLastRow), vec![F::from_u64(40)]);
+        assert_eq!(
+            selected(BaseLeaf::IsTransition),
+            vec![F::from_u64(10), F::from_u64(20), F::from_u64(30)],
+        );
+    }
+
+    #[test]
+    fn fixed_columns_share_the_committed_row_domain() {
+        // Fixture state: payloads pushed from the committed trace and pulled from the fixed one.
+        let main = table::<F>(&[&[2, 3]]);
+        let fixed_trace = table::<F>(&[&[2, 3]]);
+        let pushes = [interaction(
+            "fixed",
+            BusDirection::Push,
+            vec![current(0)],
+            BusActivation::Always,
+        )];
+        let pulls = [interaction(
+            "fixed",
+            BusDirection::Pull,
+            vec![fixed(0)],
+            BusActivation::Always,
+        )];
+        let balanced = [
+            BusDebugInstance {
+                main: &main,
+                preprocessed: None,
+                public_values: &[],
+                interactions: &pushes,
+            },
+            BusDebugInstance {
+                main: &main,
+                preprocessed: Some(&fixed_trace),
+                public_values: &[],
+                interactions: &pulls,
+            },
+        ];
+
+        // Reading a fixed column yields the same values as the committed column it mirrors.
+        assert!(BusDebugReport::check(&balanced).unwrap().is_balanced());
+
+        // A fixed trace over a different row domain cannot be paired with the committed one.
+        let short = table::<F>(&[&[2]]);
+        let mismatched = [BusDebugInstance {
+            main: &main,
+            preprocessed: Some(&short),
+            public_values: &[],
+            interactions: &pulls,
+        }];
+        assert_eq!(
+            BusDebugReport::check(&mismatched),
+            Err(BusDebugError::PreprocessedHeightMismatch {
+                air: 0,
+                expected: 1,
+                actual: 0,
+            })
+        );
+
+        // A fixed column the caller never supplied is named rather than silently skipped.
+        let absent = [BusDebugInstance {
+            main: &main,
+            preprocessed: None,
+            public_values: &[],
+            interactions: &pulls,
+        }];
+        assert_eq!(
+            BusDebugReport::check(&absent),
+            Err(BusDebugError::MissingPreprocessedTrace {
+                air: 0,
+                declaration: 0,
+                row: 0,
+                column: 0,
+            })
+        );
+
+        // A fixed column past the end of the supplied trace is named the same way.
+        let beyond = [interaction(
+            "fixed",
+            BusDirection::Pull,
+            vec![fixed(2)],
+            BusActivation::Always,
+        )];
+        let out_of_range = [BusDebugInstance {
+            main: &main,
+            preprocessed: Some(&fixed_trace),
+            public_values: &[],
+            interactions: &beyond,
+        }];
+        assert_eq!(
+            BusDebugReport::check(&out_of_range),
+            Err(BusDebugError::PreprocessedColumnOutOfRange {
+                air: 0,
+                declaration: 0,
+                row: 0,
+                column: 2,
+                width: 1,
+            })
+        );
+    }
+
+    #[test]
+    fn reads_past_the_supplied_data_are_named_rather_than_wrapped() {
+        // Fixture state: a one-column trace and no public inputs at all.
+        let trace = table::<F>(&[&[5]]);
+        let beyond_main = [interaction(
+            "range",
+            BusDirection::Push,
+            vec![current(3)],
+            BusActivation::Always,
+        )];
+        let main_instances = [BusDebugInstance {
+            main: &trace,
+            preprocessed: None,
+            public_values: &[],
+            interactions: &beyond_main,
+        }];
+        assert_eq!(
+            BusDebugReport::check(&main_instances),
+            Err(BusDebugError::MainColumnOutOfRange {
+                air: 0,
+                declaration: 0,
+                row: 0,
+                column: 3,
+                width: 1,
+            })
+        );
+
+        let beyond_public = [interaction(
+            "range",
+            BusDirection::Push,
+            vec![public(1)],
+            BusActivation::Always,
+        )];
+        let public_instances = [BusDebugInstance {
+            main: &trace,
+            preprocessed: None,
+            public_values: &[F::ONE],
+            interactions: &beyond_public,
+        }];
+        assert_eq!(
+            BusDebugReport::check(&public_instances),
+            Err(BusDebugError::PublicValueOutOfRange {
+                air: 0,
+                declaration: 0,
+                row: 0,
+                index: 1,
+                len: 1,
+            })
+        );
     }
 
     #[test]
     fn non_boolean_activation_is_rejected_at_its_source_row() {
         // Fixture state: the second row carries activation 2 instead of 0 or 1.
-        let trace = table(&[&[4, 5], &[1, 2]]);
+        let trace = table::<F>(&[&[4, 5], &[1, 2]]);
         let interactions = [interaction(
             "memory",
             BusDirection::Push,

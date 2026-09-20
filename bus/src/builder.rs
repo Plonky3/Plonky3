@@ -111,6 +111,8 @@ pub struct SymbolicBusInteraction<F: Field> {
 pub struct BusSymbolicBuilder<F: Field, EF: ExtensionField<F> = F> {
     /// Constraint recorder supplying symbolic trace variables.
     inner: SymbolicAirBuilder<F, EF>,
+    /// Shape the symbolic trace variables were allocated against.
+    layout: AirLayout,
     /// Bus declarations in AIR emission order.
     interactions: Vec<SymbolicBusInteraction<F>>,
 }
@@ -122,6 +124,7 @@ impl<F: Field, EF: ExtensionField<F>> BusSymbolicBuilder<F, EF> {
         // Keep ordinary constraints and bus metadata in one symbolic evaluation.
         Self {
             inner: SymbolicAirBuilder::new(layout),
+            layout,
             interactions: Vec::new(),
         }
     }
@@ -143,6 +146,12 @@ impl<F: Field, EF: ExtensionField<F>> BusSymbolicBuilder<F, EF> {
         let mut builder = Self::new(layout);
         air.eval(&mut builder);
         builder
+    }
+
+    /// Shape the symbolic trace variables were allocated against.
+    #[must_use]
+    pub const fn layout(&self) -> AirLayout {
+        self.layout
     }
 
     /// Symbolic declarations in AIR emission order.
