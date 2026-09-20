@@ -338,3 +338,233 @@ fn eval_sbox<AB, const DEGREE: u64, const REGISTERS: usize>(
         ),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use alloc::vec::Vec;
+    use core::borrow::BorrowMut;
+
+    use p3_air::{check_all_constraints, check_constraints};
+    use p3_baby_bear::{
+        BABYBEAR_POSEIDON2_HALF_FULL_ROUNDS, BABYBEAR_POSEIDON2_PARTIAL_ROUNDS_16,
+        BABYBEAR_POSEIDON2_RC_16_EXTERNAL_FINAL, BABYBEAR_POSEIDON2_RC_16_EXTERNAL_INITIAL,
+        BABYBEAR_POSEIDON2_RC_16_INTERNAL, BABYBEAR_S_BOX_DEGREE, BabyBear,
+        GenericPoseidon2LinearLayersBabyBear, default_babybear_poseidon2_16,
+    };
+    use p3_field::PrimeCharacteristicRing;
+    use p3_matrix::Matrix;
+    use p3_symmetric::Permutation;
+
+    use super::*;
+    use crate::RoundConstants;
+
+    type F = BabyBear;
+    const WIDTH: usize = 16;
+    const SBOX_DEGREE: u64 = BABYBEAR_S_BOX_DEGREE;
+    const HALF_FULL_ROUNDS: usize = BABYBEAR_POSEIDON2_HALF_FULL_ROUNDS;
+    const PARTIAL_ROUNDS: usize = BABYBEAR_POSEIDON2_PARTIAL_ROUNDS_16;
+    const NUM_HASHES: usize = 8;
+
+    type Air<const REGISTERS: usize> = Poseidon2Air<
+        F,
+        GenericPoseidon2LinearLayersBabyBear,
+        WIDTH,
+        SBOX_DEGREE,
+        REGISTERS,
+        HALF_FULL_ROUNDS,
+        PARTIAL_ROUNDS,
+    >;
+    type Cols<const REGISTERS: usize> =
+        Poseidon2Cols<F, WIDTH, SBOX_DEGREE, REGISTERS, HALF_FULL_ROUNDS, PARTIAL_ROUNDS>;
+
+    /// The AIR over the canonical BabyBear constants, so the trace can be checked against
+    /// [`default_babybear_poseidon2_16`] rather than only against itself.
+    fn canonical_air<const REGISTERS: usize>() -> Air<REGISTERS> {
+        Poseidon2Air::new(RoundConstants::new(
+            BABYBEAR_POSEIDON2_RC_16_EXTERNAL_INITIAL,
+            BABYBEAR_POSEIDON2_RC_16_INTERNAL,
+            BABYBEAR_POSEIDON2_RC_16_EXTERNAL_FINAL,
+        ))
+    }
+
+    fn inputs() -> Vec<[F; WIDTH]> {
+        (0..NUM_HASHES)
+            .map(|i| core::array::from_fn(|j| F::from_usize(i * WIDTH + j)))
+            .collect()
+    }
+
+    fn trace<const REGISTERS: usize>(air: &Air<REGISTERS>) -> RowMajorMatrix<F> {
+        generate_trace_rows::<
+            _,
+            GenericPoseidon2LinearLayersBabyBear,
+            WIDTH,
+            SBOX_DEGREE,
+            REGISTERS,
+            HALF_FULL_ROUNDS,
+            PARTIAL_ROUNDS,
+        >(inputs(), &air.constants, 0)
+    }
+
+    fn row_mut<const REGISTERS: usize>(
+        trace: &mut RowMajorMatrix<F>,
+        row: usize,
+    ) -> &mut Cols<REGISTERS> {
+        let width = trace.width;
+        trace.values[row * width..(row + 1) * width].borrow_mut()
+    }
+
+    fn known_answer<const REGISTERS: usize>() {
+        let air = canonical_air::<REGISTERS>();
+        let mut trace = trace(&air);
+        let reference = default_babybear_poseidon2_16();
+        for (row, input) in inputs().into_iter().enumerate() {
+            let cols = row_mut::<REGISTERS>(&mut trace, row);
+            assert_eq!(cols.inputs, input);
+            let expected = reference.permute(input);
+            assert_eq!(cols.ending_full_rounds[HALF_FULL_ROUNDS - 1].post, expected);
+        }
+    }
+
+    #[test]
+    fn test_known_answer_babybear_16() {
+        known_answer::<0>();
+        known_answer::<1>();
+    }
+
+    #[test]
+    fn test_constraint_satisfaction_babybear_16() {
+        let air = canonical_air::<0>();
+        check_constraints(&air, &trace(&air), &[]);
+        let air = canonical_air::<1>();
+        check_constraints(&air, &trace(&air), &[]);
+    }
+
+    /// Apply `mutate` to row 1 of an honest trace and require at least one violated constraint.
+    fn assert_mutation_detected<const REGISTERS: usize>(
+        what: &str,
+        mutate: impl FnOnce(&mut Cols<REGISTERS>),
+    ) {
+        let air = canonical_air::<REGISTERS>();
+        let mut trace = trace(&air);
+        mutate(row_mut::<REGISTERS>(&mut trace, 1));
+        let report = check_all_constraints(&air, &trace, &[], Some(1));
+        assert!(
+            !report.is_ok(),
+            "{what}: corrupted trace passed every constraint"
+        );
+    }
+
+    #[test]
+    fn test_corrupted_input_detected() {
+        // An input feeds the first full round through the linear layer, so every post cell of
+        // that round disagrees with it.
+        assert_mutation_detected::<1>("input", |cols| cols.inputs[3] += F::ONE);
+        assert_mutation_detected::<0>("input", |cols| cols.inputs[3] += F::ONE);
+    }
+
+    #[test]
+    fn test_corrupted_full_round_post_detected() {
+        assert_mutation_detected::<1>("beginning full-round post", |cols| {
+            cols.beginning_full_rounds[1].post[5] += F::ONE;
+        });
+        assert_mutation_detected::<0>("ending full-round post", |cols| {
+            cols.ending_full_rounds[2].post[0] += F::ONE;
+        });
+    }
+
+    #[test]
+    fn test_corrupted_partial_round_post_detected() {
+        assert_mutation_detected::<1>("partial-round post_sbox", |cols| {
+            cols.partial_rounds[6].post_sbox += F::ONE;
+        });
+        assert_mutation_detected::<0>("partial-round post_sbox", |cols| {
+            cols.partial_rounds[0].post_sbox += F::ONE;
+        });
+    }
+
+    #[test]
+    fn test_corrupted_sbox_register_detected() {
+        // With one register the S-box is split as x^3 · x^3 · x, so a wrong intermediate must
+        // be caught by its own constraint rather than absorbed downstream.
+        assert_mutation_detected::<1>("full-round sbox register", |cols| {
+            cols.beginning_full_rounds[0].sbox[2].0[0] += F::ONE;
+        });
+        assert_mutation_detected::<1>("partial-round sbox register", |cols| {
+            cols.partial_rounds[12].sbox.0[0] += F::ONE;
+        });
+    }
+
+    #[test]
+    fn test_corrupted_output_detected() {
+        assert_mutation_detected::<1>("final output", |cols| {
+            cols.ending_full_rounds[HALF_FULL_ROUNDS - 1].post[15] += F::ONE;
+        });
+    }
+
+    /// A forged S-box register with every later cell recomputed from it.
+    ///
+    /// Single-cell corruption is always caught by the *next* constraint in the chain, so it
+    /// cannot tell whether the register's own constraint exists. This trace satisfies every
+    /// other constraint of the last full round by construction, so it passes if and only if
+    /// the `committed_x3 == x^3` check is missing.
+    #[test]
+    fn test_forged_sbox_register_detected() {
+        let air = canonical_air::<1>();
+        let mut trace = trace(&air);
+        let last = HALF_FULL_ROUNDS - 1;
+        let constants = air.constants.ending_full_round_constants()[last];
+        let cols = row_mut::<1>(&mut trace, 1);
+
+        // Input to the last full round is the previous round's post.
+        let mut state = cols.ending_full_rounds[last - 1].post;
+        let forged_x3 = cols.ending_full_rounds[last].sbox[0].0[0] + F::ONE;
+        for (i, s) in state.iter_mut().enumerate() {
+            *s += constants[i];
+            *s = if i == 0 {
+                forged_x3.square() * *s
+            } else {
+                s.exp_const_u64::<7>()
+            };
+        }
+        GenericPoseidon2LinearLayersBabyBear::external_linear_layer(&mut state);
+        cols.ending_full_rounds[last].sbox[0].0[0] = forged_x3;
+        cols.ending_full_rounds[last].post = state;
+
+        let honest_output = default_babybear_poseidon2_16().permute(cols.inputs);
+        assert_ne!(
+            state, honest_output,
+            "the forgery must change the permutation output"
+        );
+        let report = check_all_constraints(&air, &trace, &[], Some(1));
+        assert!(
+            !report.is_ok(),
+            "a forged S-box register with a consistent post row passed every constraint"
+        );
+    }
+
+    /// Every column of the layout is load-bearing: bumping any single cell of an honest row
+    /// violates at least one constraint, so no cell is left unconstrained by `eval`.
+    fn every_column_is_constrained<const REGISTERS: usize>() {
+        let air = canonical_air::<REGISTERS>();
+        let honest = trace(&air);
+        let width = honest.width();
+        let mut unconstrained = Vec::new();
+        for col in 0..width {
+            let mut trace = honest.clone();
+            trace.values[width + col] += F::ONE;
+            if check_all_constraints(&air, &trace, &[], Some(1)).is_ok() {
+                unconstrained.push(col);
+            }
+        }
+        assert!(
+            unconstrained.is_empty(),
+            "columns accept an arbitrary change without any constraint failing: {unconstrained:?}"
+        );
+    }
+
+    #[test]
+    fn test_every_column_is_constrained() {
+        every_column_is_constrained::<0>();
+        every_column_is_constrained::<1>();
+    }
+}
