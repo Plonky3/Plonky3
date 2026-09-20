@@ -31,78 +31,46 @@ type Alphabet<F> = FieldUnit<F>;
 /// Type-level name of the delegated quadratic sumcheck.
 struct ProductSumcheck;
 
-/// Public dimensions fixing the transcript shape of one jagged reduction.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct JaggedShape {
-    /// Number of coordinates in the sparse row point.
-    row_variables: usize,
-    /// Number of coordinates in the sparse column point.
-    column_variables: usize,
-    /// Number of rounds reducing the dense witness claim.
-    dense_variables: usize,
+/// Describes the outer protocol steps.
+fn pattern<F, EF>() -> InteractionPattern
+where
+    F: TranscriptField,
+    EF: ExtensionField<F>,
+{
+    // The inner rounds own their transcript description.
+    // The outer description records their position and binds the surviving value.
+    let steps = vec![
+        Interaction::marker::<ProductSumcheck>(Hierarchy::Begin, Kind::Protocol, PRODUCT_SUMCHECK),
+        Interaction::marker::<ProductSumcheck>(Hierarchy::End, Kind::Protocol, PRODUCT_SUMCHECK),
+        Interaction::algebra::<F, EF>(
+            Hierarchy::Atomic,
+            Kind::Message,
+            DENSE_EVALUATION,
+            Length::Scalar,
+        ),
+    ];
+
+    InteractionPattern::new(steps).expect("one matched bracket is structurally valid")
 }
 
-impl JaggedShape {
-    /// Derives every protocol dimension from a validated public layout.
-    pub(super) const fn new(layout: &JaggedLayout) -> Self {
-        // Every dimension is already fixed by validated public geometry.
-        Self {
-            row_variables: layout.row_variables(),
-            column_variables: layout.column_variables(),
-            dense_variables: layout.dense_variables(),
-        }
-    }
+/// Binds the public sparse statement into the protocol seed.
+fn domain_separator<F, EF>(
+    layout: &JaggedLayout,
+    point: &JaggedPoint<EF>,
+    claimed_value: EF,
+) -> DomainSeparator<Alphabet<F>>
+where
+    F: TranscriptField,
+    EF: ExtensionField<F>,
+{
+    // The step description distinguishes field identities and protocol shape.
+    let mut separator = DomainSeparator::new(VERSION, NAME, pattern::<F, EF>());
 
-    /// Describes the outer protocol steps.
-    fn pattern<F, EF>(&self) -> InteractionPattern
-    where
-        F: TranscriptField,
-        EF: ExtensionField<F>,
-    {
-        // The inner rounds own their transcript description.
-        // The outer description records their position and binds the surviving value.
-        let steps = vec![
-            Interaction::marker::<ProductSumcheck>(
-                Hierarchy::Begin,
-                Kind::Protocol,
-                PRODUCT_SUMCHECK,
-            ),
-            Interaction::marker::<ProductSumcheck>(
-                Hierarchy::End,
-                Kind::Protocol,
-                PRODUCT_SUMCHECK,
-            ),
-            Interaction::algebra::<F, EF>(
-                Hierarchy::Atomic,
-                Kind::Message,
-                DENSE_EVALUATION,
-                Length::Scalar,
-            ),
-        ];
-
-        InteractionPattern::new(steps).expect("one matched bracket is structurally valid")
-    }
-
-    /// Binds the public sparse statement into the protocol seed.
-    fn domain_separator<F, EF>(
-        &self,
-        layout: &JaggedLayout,
-        point: &JaggedPoint<EF>,
-        claimed_value: EF,
-    ) -> DomainSeparator<Alphabet<F>>
-    where
-        F: TranscriptField,
-        EF: ExtensionField<F>,
-    {
-        // The shape fingerprint distinguishes field identities and protocol steps.
-        let mut separator = DomainSeparator::new(VERSION, NAME, self.pattern::<F, EF>());
-
-        // The instance binds geometry, every cumulative height, the point and its value.
-        // A prover cannot choose another sparse statement after seeing a round challenge.
-        let statement = encode_statement::<F, EF>(layout, point, claimed_value);
-        separator.instance(&statement);
-        separator
-    }
+    // The instance binds geometry, every cumulative height, the point and its value.
+    // A prover cannot choose another sparse statement after seeing a round challenge.
+    let statement = encode_statement::<F, EF>(layout, point, claimed_value);
+    separator.instance(&statement);
+    separator
 }
 
 /// Prover-side driver for one jagged reduction.
@@ -126,9 +94,8 @@ where
         point: &JaggedPoint<EF>,
         claimed_value: EF,
     ) -> Self {
-        // Both sides derive the same shape and statement bytes locally.
-        let shape = JaggedShape::new(layout);
-        let separator = shape.domain_separator::<F, EF>(layout, point, claimed_value);
+        // Both sides derive the same statement bytes locally.
+        let separator = domain_separator::<F, EF>(layout, point, claimed_value);
         Self {
             state: ProverState::new(challenger, &separator),
             _ef: PhantomData,
@@ -184,8 +151,7 @@ where
         claimed_value: EF,
     ) -> Self {
         // No statement component is accepted from the proof.
-        let shape = JaggedShape::new(layout);
-        let separator = shape.domain_separator::<F, EF>(layout, point, claimed_value);
+        let separator = domain_separator::<F, EF>(layout, point, claimed_value);
         Self {
             state: VerifierState::new(challenger, &separator, &[]),
             _ef: PhantomData,

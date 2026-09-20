@@ -146,12 +146,14 @@ mod tests {
     use alloc::vec;
     use alloc::vec::Vec;
 
+    use p3_challenger::FieldChallenger;
     use p3_field::PrimeCharacteristicRing;
     use p3_multilinear_util::poly::Poly;
 
+    use super::transcript::JaggedProverTranscript;
     use super::*;
     use crate::SumcheckError;
-    use crate::tests::{EF, F, challenger};
+    use crate::tests::{EF, F, MyChallenger, challenger};
 
     fn fixture() -> (JaggedLayout, Vec<F>, JaggedPoint<EF>) {
         // Four unequal columns concatenate to nine live dense cells.
@@ -164,6 +166,42 @@ mod tests {
             Point::new(vec![EF::from_u64(7), EF::from_u64(11)]),
         );
         (layout, dense, point)
+    }
+
+    fn seeded_challenge(layout: &JaggedLayout, point: &JaggedPoint<EF>, value: EF) -> EF {
+        // Draw from the lent sponge exactly where the delegated sumcheck draws its first challenge.
+        let mut challenger = challenger();
+        let mut transcript = JaggedProverTranscript::<MyChallenger, F, EF>::new(
+            &mut challenger,
+            layout,
+            point,
+            value,
+        );
+        let challenge = transcript.product_sumcheck(FieldChallenger::sample_algebra_element::<EF>);
+
+        // Every described step must be played before the transcript may be dropped.
+        transcript.dense_evaluation(EF::ZERO);
+        transcript.finish();
+        challenge
+    }
+
+    #[test]
+    fn the_column_geometry_separates_two_transcript_seeds() {
+        // Moving one live row between columns keeps the point widths and the round count.
+        // Only the seed can tell the two statements apart, so the challenge must move with it.
+        let (layout, _, point) = fixture();
+        let moved = JaggedLayout::new(3, &[2, 1, 5, 1]).unwrap();
+        let value = EF::from_u64(42);
+        assert_eq!(moved.dense_variables(), layout.dense_variables());
+
+        assert_eq!(
+            seeded_challenge(&layout, &point, value),
+            seeded_challenge(&layout, &point, value)
+        );
+        assert_ne!(
+            seeded_challenge(&layout, &point, value),
+            seeded_challenge(&moved, &point, value)
+        );
     }
 
     #[test]

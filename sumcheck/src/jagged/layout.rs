@@ -172,6 +172,8 @@ impl JaggedLayout {
     ///
     /// The reduction contributes at most `2m / |EF|` error for `m` dense variables.
     ///
+    /// The bound is meaningful only when the extension is large enough for the target security level.
+    ///
     /// This bound does not include the binding error of the underlying PCS.
     ///
     /// # Errors
@@ -269,6 +271,8 @@ impl JaggedLayout {
     /// The terminal selector is evaluated independently through a width-four branching program.
     ///
     /// A false sparse claim therefore becomes a false dense claim except with probability `2m / |EF|`.
+    ///
+    /// The bound is meaningful only when the extension is large enough for the target security level.
     ///
     /// # Errors
     ///

@@ -234,7 +234,7 @@ mod tests {
     use alloc::vec;
 
     use p3_baby_bear::BabyBear;
-    use p3_binary_field::BinaryField128;
+    use p3_binary_field::{BinaryField128, TowerLevel};
     use p3_field::PrimeCharacteristicRing;
     use proptest::prelude::*;
 
@@ -245,6 +245,24 @@ mod tests {
     fn field_point(values: &[u32]) -> Point<F> {
         // Small canonical values make failures easy to reproduce.
         Point::new(values.iter().copied().map(F::from_u32).collect())
+    }
+
+    fn binary_point(values: &[u128]) -> Point<BinaryField128> {
+        // The raw tower representation is the only constructor that escapes the prime subfield.
+        // An integer constructor would reduce every coordinate modulo two.
+        let point = Point::new(
+            values
+                .iter()
+                .copied()
+                .map(BinaryField128::from_repr)
+                .collect(),
+        );
+        assert!(
+            point
+                .iter()
+                .all(|c| *c != BinaryField128::ZERO && *c != BinaryField128::ONE)
+        );
+        point
     }
 
     #[test]
@@ -296,23 +314,32 @@ mod tests {
     fn the_selector_identity_holds_in_characteristic_two() {
         // A binary-field point exercises subtraction as addition.
         // The automaton must remain an algebraic MLE rather than use prime-field signs.
-        let layout = JaggedLayout::new(2, &[1, 3]).unwrap();
+        let layout = JaggedLayout::new(3, &[3, 0, 5, 1]).unwrap();
         let sparse = JaggedPoint::new(
-            Point::new(vec![
-                BinaryField128::from_u64(5),
-                BinaryField128::from_u64(9),
+            binary_point(&[
+                0x2545_f491_4f6c_dd1d_853c_49e6_748f_ea9b,
+                0x0139_408d_cbbf_7a44_0ca4_5b0f_286a_dd56,
+                0x1234_5678_9abc_def0_0fed_cba9_8765_4321,
             ]),
-            Point::new(vec![BinaryField128::from_u64(7)]),
+            binary_point(&[
+                0x8000_0000_0000_0000_0000_0000_0000_0001,
+                0x0123_4567_89ab_cdef_fedc_ba98_7654_3210,
+            ]),
         );
-        let dense = Point::new(vec![
-            BinaryField128::from_u64(11),
-            BinaryField128::from_u64(13),
+        let dense = binary_point(&[
+            0x9e37_79b9_7f4a_7c15_f39c_c060_5ceb_c860,
+            0xa076_1d64_78bd_642f_e703_7ed1_a0b4_28db,
+            0x8ebc_6af0_9c88_c6e3_5899_65cc_7537_4cc3,
+            0xc2b2_ae3d_27d4_eb4f_1656_67b1_9c3f_2ee7,
         ]);
 
-        let materialized = Poly::new(JaggedSelector::new(&layout).table(&sparse));
+        // Both sides would agree vacuously at a point where the selector vanishes.
+        let selector = JaggedSelector::new(&layout);
+        let evaluation = selector.evaluate(&sparse, &dense);
+        assert_ne!(evaluation, BinaryField128::ZERO);
         assert_eq!(
-            JaggedSelector::new(&layout).evaluate(&sparse, &dense),
-            materialized.eval_base(&dense)
+            evaluation,
+            Poly::new(selector.table(&sparse)).eval_base(&dense)
         );
     }
 
