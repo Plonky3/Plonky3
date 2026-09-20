@@ -44,23 +44,21 @@ use p3_challenger::CanObserve;
 use p3_challenger::fs::{TranscriptError, TranscriptField, TypeTag};
 
 use crate::{
-    BinaryField8, BinaryField16, BinaryField32, BinaryField64, BinaryField128, TowerLevel,
+    BinaryField8, BinaryField16, BinaryField32, BinaryField64, BinaryField128, Poly64, TowerLevel,
 };
 
 /// Implement the typed-transcript hooks for one byte-aligned level of the tower.
 ///
 /// The level is named by its Rust type, its backing integer, and its bit width.
 ///
+/// The last argument names the algebra, which is the only part a level chooses.
+///
 /// Every level shares one seeding rule, so every level is generated from here.
 macro_rules! impl_transcript_field {
-    ($name:ty, $repr:ty, $bits:literal) => {
+    ($name:ty, $repr:ty, $bits:literal, |$degree:ident, $basis:ident| $tag:expr) => {
         impl TranscriptField for $name {
-            fn algebra_tag(degree: usize, basis: [u8; 32]) -> TypeTag {
-                TypeTag::BinaryTower {
-                    bits: $bits,
-                    degree,
-                    basis,
-                }
+            fn algebra_tag($degree: usize, $basis: [u8; 32]) -> TypeTag {
+                $tag
             }
 
             fn observe_seed<C: CanObserve<Self>>(challenger: &mut C, bytes: &[u8]) {
@@ -114,11 +112,45 @@ macro_rules! impl_transcript_field {
     };
 }
 
-impl_transcript_field!(BinaryField8, u8, 8);
-impl_transcript_field!(BinaryField16, u16, 16);
-impl_transcript_field!(BinaryField32, u32, 32);
-impl_transcript_field!(BinaryField64, u64, 64);
-impl_transcript_field!(BinaryField128, u128, 128);
+impl_transcript_field!(BinaryField8, u8, 8, |degree, basis| TypeTag::BinaryTower {
+    bits: 8,
+    degree,
+    basis,
+});
+impl_transcript_field!(BinaryField16, u16, 16, |degree, basis| {
+    TypeTag::BinaryTower {
+        bits: 16,
+        degree,
+        basis,
+    }
+});
+impl_transcript_field!(BinaryField32, u32, 32, |degree, basis| {
+    TypeTag::BinaryTower {
+        bits: 32,
+        degree,
+        basis,
+    }
+});
+impl_transcript_field!(BinaryField64, u64, 64, |degree, basis| {
+    TypeTag::BinaryTower {
+        bits: 64,
+        degree,
+        basis,
+    }
+});
+impl_transcript_field!(BinaryField128, u128, 128, |degree, basis| {
+    TypeTag::BinaryTower {
+        bits: 128,
+        degree,
+        basis,
+    }
+});
+impl_transcript_field!(Poly64, u64, 64, |degree, basis| TypeTag::BinaryPolynomial {
+    bits: 64,
+    modulus: 0x1b,
+    degree,
+    basis,
+});
 
 #[cfg(test)]
 mod tests {
@@ -248,6 +280,13 @@ mod tests {
             BinaryField64::decode(&out).unwrap(),
             BinaryField64::from_repr(0x0123_4567_89AB_CDEF)
         );
+
+        let mut out = Vec::new();
+        Poly64::encode(&Poly64::new(0xFEDC_BA98_7654_3210), &mut out);
+        assert_eq!(
+            Poly64::decode(&out).unwrap(),
+            Poly64::new(0xFEDC_BA98_7654_3210)
+        );
     }
 
     #[test]
@@ -257,6 +296,7 @@ mod tests {
         assert!(BinaryField32::decode(&[0; 3]).is_err());
         assert!(BinaryField16::decode(&[0; 1]).is_err());
         assert!(BinaryField8::decode(&[]).is_err());
+        assert!(Poly64::decode(&[0; 7]).is_err());
     }
 
     #[test]
@@ -281,6 +321,10 @@ mod tests {
         assert_ne!(
             BinaryField64::algebra_tag(1, [0; 32]),
             BinaryField128::algebra_tag(1, [0; 32])
+        );
+        assert_ne!(
+            BinaryField64::algebra_tag(1, [0; 32]),
+            Poly64::algebra_tag(1, [0; 32])
         );
     }
 }
