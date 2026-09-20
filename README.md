@@ -120,6 +120,8 @@ RUSTFLAGS="-Ctarget-cpu=native" cargo run --example prove_hash_binary --release 
   (one per round, plus the output row), so `keccak-f-permutations` proves
   `2^log-trace-length / 25` permutations; `blake-3-compressions` and `sha-256-compressions` each
   prove `2^log-trace-length` compressions, one row per compression.
+- `--format`: `human` (default) or `json`. With `json`, standard output is one JSON object per
+  run carrying the same measurements, and progress lines and tracing spans go to standard error.
 - `--representation` (`-r`): the field representation the zerocheck prover runs its later
   rounds in: `auto` (default; `poly-basis-late` with a hardware carryless multiply,
   subfield-tower basis otherwise), `subfield`, `poly-basis`, or `poly-basis-late` (polynomial

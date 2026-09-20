@@ -17,6 +17,9 @@ tikv-jemallocator.workspace = true
 # This package contains host executables rather than an embedded library.
 embedded = false
 
+[features]
+parallel = ["p3-maybe-rayon/parallel"]
+
 [dependencies]
 p3-air.workspace = true
 p3-binary-dft.workspace = true
@@ -35,6 +38,7 @@ p3-keccak.workspace = true
 p3-keccak-air.workspace = true
 p3-lookup.workspace = true
 p3-matrix.workspace = true
+p3-maybe-rayon.workspace = true
 p3-merkle-tree.workspace = true
 p3-mersenne-31.workspace = true
 p3-monty-31.workspace = true
@@ -53,6 +57,7 @@ clap.workspace = true
 postcard = { workspace = true, features = ["alloc"] }
 rand.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 
