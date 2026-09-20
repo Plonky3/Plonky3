@@ -241,7 +241,8 @@ where
         .preprocessed_next
         .as_ref()
         .map_or(0, |v| v.len());
-    let expected_next_len = if !air.preprocessed_next_row_columns().is_empty() {
+    let preprocessed_next_used = !air.preprocessed_next_row_columns().is_empty();
+    let expected_next_len = if preprocessed_next_used {
         preprocessed_width
     } else {
         0
@@ -254,6 +255,13 @@ where
             got_next: preprocessed_next_len,
         }
         .into());
+    }
+    // When the AIR doesn't read the next preprocessed row, the honest opening is `None`. A
+    // present-but-empty vector has the expected length but not the expected shape: it is not
+    // bound by the opening argument and would later be paired with the width-`preprocessed_width`
+    // local row, so reject it here like `trace_next`.
+    if !preprocessed_next_used && opened_values.preprocessed_next.is_some() {
+        return Err(InvalidProofShapeError::UnexpectedPreprocessedNext { air: None }.into());
     }
 
     // Validate consistency between width, verifier key, and zk settings.

@@ -34,6 +34,12 @@ pub enum InvalidProofShapeError {
     /// Trace next values present when AIR doesn't use next row.
     #[error("air {air}: unexpected trace next values")]
     UnexpectedTraceNext { air: usize },
+    /// Preprocessed next values present when the AIR doesn't read the next preprocessed row.
+    #[error(
+        "{}unexpected preprocessed next values",
+        air.map_or_else(String::new, |air| format!("air {air}: "))
+    )]
+    UnexpectedPreprocessedNext { air: Option<usize> },
     /// Quotient chunks count doesn't match expected.
     #[error("air {air}: quotient chunks count mismatch: expected {expected}, got {got}")]
     QuotientChunksCountMismatch {

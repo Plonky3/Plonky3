@@ -1258,6 +1258,48 @@ fn test_preprocessed_tampered_fails() -> Result<(), Box<dyn std::error::Error>> 
 }
 
 #[test]
+fn test_preprocessed_rejects_present_preprocessed_next() {
+    let config = make_config(1337);
+
+    // `PreprocessedMulAir` reads the preprocessed trace on the current row only.
+    let (air, trace, pis) = create_preprocessed_mul_instance(4, 2);
+    let instances = vec![StarkInstance {
+        air: &air,
+        trace: &trace,
+        public_values: pis.clone(),
+    }];
+
+    let prover_data = ProverData::from_instances(&config, &instances).unwrap();
+    let common = &prover_data.common;
+    let mut proof = prove_batch(&config, &instances, &prover_data).unwrap();
+    assert!(
+        proof.opened_values.instances[0]
+            .base_opened_values
+            .preprocessed_next
+            .is_none()
+    );
+
+    // Tamper: an empty `preprocessed_next` has the length the shape check expects (0) but is
+    // not the `None` the prover emits, and it is not covered by the opening argument.
+    proof.opened_values.instances[0]
+        .base_opened_values
+        .preprocessed_next = Some(vec![]);
+
+    let airs = vec![air];
+    let err = verify_batch(&config, &airs, &proof, from_ref(&pis), common)
+        .expect_err("verification should reject a present preprocessed_next");
+    assert!(
+        matches!(
+            err,
+            BatchVerificationError::Verification(VerificationError::InvalidProofShape(
+                InvalidProofShapeError::UnexpectedPreprocessedNext { air: Some(0) },
+            ))
+        ),
+        "unexpected error: {err:?}"
+    );
+}
+
+#[test]
 fn test_preprocessed_reuse_common_multi_proofs() -> Result<(), Box<dyn std::error::Error>> {
     let config = make_config(2026);
 

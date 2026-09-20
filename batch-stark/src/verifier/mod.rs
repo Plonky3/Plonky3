@@ -556,8 +556,18 @@ where
             if pre_local_len != pre_w || pre_next_len != pre_w {
                 return Err(InvalidProofShapeError::PreprocessedWidthMismatch { air: i }.into());
             }
-        } else if pre_local_len != pre_w || pre_next_len != 0 {
-            return Err(InvalidProofShapeError::PreprocessedWidthMismatch { air: i }.into());
+        } else {
+            if pre_local_len != pre_w {
+                return Err(InvalidProofShapeError::PreprocessedWidthMismatch { air: i }.into());
+            }
+            // The honest opening is `None` here; a present-but-empty vector passes the length
+            // check but is later paired with the width-`pre_w` local row, so reject it like
+            // `trace_next` above.
+            if inst_base_opened_vals.preprocessed_next.is_some() {
+                return Err(
+                    InvalidProofShapeError::UnexpectedPreprocessedNext { air: Some(i) }.into(),
+                );
+            }
         }
 
         // One terminal per AIR with lookups; none otherwise.
