@@ -17,7 +17,7 @@ use p3_multilinear_util::poly::Poly;
 use serde::{Deserialize, Serialize};
 
 use super::basis::{Coefficients, CoordinateSums};
-use super::equality::{FactoredEquality, scaled_sums};
+use super::equality::{FactoredEquality, scaled_sums_into};
 use super::packing::BitPacking;
 use super::tensor::{BitTensor, BitTensorBuckets};
 use super::transcript::{
@@ -870,12 +870,16 @@ impl<EF: TowerLevel> BitRingSwitchBatch<'_, EF> {
             .as_mut_slice()
             .par_chunks_mut(equality.block_len())
             .zip(equality.outer().par_iter())
-            .for_each(|(block, &weight)| {
-                let scaled = scaled_sums(&sums, weight);
-                for (slot, &inner) in block.iter_mut().zip(equality.inner()) {
-                    *slot = scaled.sum(inner);
-                }
-            });
+            .for_each_init(
+                // Scratch of the right shape, overwritten before each block reads it.
+                || sums.clone(),
+                |scaled, (block, &weight)| {
+                    scaled_sums_into(scaled, &sums, weight);
+                    for (slot, &inner) in block.iter_mut().zip(equality.inner()) {
+                        *slot = scaled.sum(inner);
+                    }
+                },
+            );
 
         let Some(alpha) = self.alpha else {
             return table;

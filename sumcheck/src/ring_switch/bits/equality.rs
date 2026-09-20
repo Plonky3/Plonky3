@@ -1,7 +1,5 @@
 //! The equality table of one run, held as the two factors it is a product of.
 
-use alloc::vec::Vec;
-
 use p3_binary_field::TowerLevel;
 use p3_field::Field;
 use p3_multilinear_util::poly::Poly;
@@ -111,7 +109,7 @@ impl<F: Field> FactoredEquality<F> {
     }
 }
 
-/// The coordinate sums `sums` takes once the value it reads is scaled.
+/// Write into `out` the coordinate sums `sums` takes once the value it reads is scaled.
 ///
 /// # Algorithm
 ///
@@ -125,7 +123,7 @@ impl<F: Field> FactoredEquality<F> {
 /// being what the original reads on the scaled basis vector:
 ///
 /// ```text
-///     scaled(sums, scale).sum(x)  ==  sums.sum(scale * x)   for every x
+///     out.sum(x)  ==  sums.sum(scale * x)   for every x
 /// ```
 ///
 /// So a sweep whose values all carry the same scale multiplies once per coordinate, however
@@ -133,23 +131,27 @@ impl<F: Field> FactoredEquality<F> {
 ///
 /// The scale is a level element, and the weights are whatever the sums hold, so a sweep
 /// whose sums already live in another representation stays there.
-#[must_use]
-pub(crate) fn scaled_sums<EF: TowerLevel, A: Field>(
+///
+/// # Performance
+///
+/// The table the caller already holds is written through, so a sweep rescaling once per
+/// block allocates its `d/8 * 256` entries once rather than at every block.
+pub(crate) fn scaled_sums_into<EF: TowerLevel, A: Field>(
+    out: &mut CoordinateSums<EF, A>,
     sums: &CoordinateSums<EF, A>,
     scale: EF,
-) -> CoordinateSums<EF, A> {
-    let weights = (0..Coefficients::<EF>::DIMENSION)
-        .map(|coordinate| {
-            let mut basis = Coefficients::<EF>::zero();
-            basis.set(coordinate);
-            sums.sum(scale * basis.element())
-        })
-        .collect::<Vec<_>>();
-    CoordinateSums::new(&weights)
+) {
+    out.overwrite(|coordinate| {
+        let mut basis = Coefficients::<EF>::zero();
+        basis.set(coordinate);
+        sums.sum(scale * basis.element())
+    });
 }
 
 #[cfg(test)]
 mod tests {
+    use alloc::vec::Vec;
+
     use p3_binary_field::BinaryField128;
     use p3_field::PrimeCharacteristicRing;
     use p3_multilinear_util::point::Point;
@@ -220,17 +222,19 @@ mod tests {
     fn scaled_sums_read_the_scaled_value() {
         // Invariant: the scaled sums answer what the original answers on the scaled value.
         //
-        //     scaled(sums, scale).sum(x)  ==  sums.sum(scale * x)
+        //     out.sum(x)  ==  sums.sum(scale * x)
         //
         // That is what lets a block under one weight multiply per coordinate, not per entry.
+        // One table serves every scale here, so a rescale must leave nothing of the one before.
         let mut rng = SmallRng::seed_from_u64(0x5CA1);
         let weights = (0..Coefficients::<F>::DIMENSION)
             .map(|_| rng.random())
             .collect::<Vec<F>>();
         let sums = CoordinateSums::new(&weights);
 
+        let mut scaled = CoordinateSums::<F, F>::new(&weights);
         for scale in [F::ZERO, F::ONE, rng.random(), rng.random()] {
-            let scaled = scaled_sums(&sums, scale);
+            scaled_sums_into(&mut scaled, &sums, scale);
             for value in [F::ZERO, F::ONE]
                 .into_iter()
                 .chain((0..32).map(|_| rng.random()))
