@@ -114,11 +114,52 @@ impl JaggedSelector<'_> {
     /// The computation is the width-four read-once branching program from ePrint 2025/917.
     ///
     /// It checks both `dense_index = row + column_start` and `dense_index < column_end`.
+    ///
+    /// The automaton reads one layer per variable, least-significant first:
+    ///
+    /// ```text
+    ///   layer:      0      1      2     ...    top
+    ///   row  y:    y_0    y_1    y_2          zero above the row bound
+    ///   dense z:   z_0    z_1    z_2          zero above the dense arity
+    ///   start  :   s_0    s_1    s_2          public bit
+    ///   end    :   e_0    e_1    e_2          public bit
+    ///
+    ///   carry:     z_k must equal (y_k + s_k + carry) & 1,  carry' = sum >> 1
+    ///   less :     less' = if z_k == e_k { less } else { e_k }
+    ///
+    ///   INITIAL = (carry 0, less 0)          ACCEPT = (carry 0, less 1)
+    /// ```
+    ///
+    /// Accepting only on a set comparison bit gives a strict inequality, and the lower bound is free because the row index is non-negative.
+    ///
+    /// The extra top layer gives each point one zero variable, which absorbs the overflow bit of an endpoint at the dense capacity and forces the last carry to vanish.
+    ///
+    /// The two conditions together say exactly that the row index is below the column height.
     pub(super) fn evaluate<F: Field>(
         &self,
         sparse_point: &JaggedPoint<F>,
         dense_point: &Point<F>,
     ) -> F {
+        let row_point = sparse_point.row();
+
+        // One extra zero layer checks the final carry and the endpoint's overflow bit.
+        let top = row_point.num_variables().max(dense_point.num_variables());
+
+        // Only the two secret coordinates carry a nonzero equality factor, and both are shared by every column.
+        // Hoisting their four products out of the column loop is the whole difference from a per-column automaton.
+        let layer_weights = (0..=top)
+            .map(|layer| {
+                let row = point_coordinate_from_low(row_point, layer);
+                let dense = point_coordinate_from_low(dense_point, layer);
+                [
+                    (F::ONE - row) * (F::ONE - dense),
+                    row * (F::ONE - dense),
+                    (F::ONE - row) * dense,
+                    row * dense,
+                ]
+            })
+            .collect::<Vec<_>>();
+
         // The column equality table supplies the coefficient of each boundary pair.
         let column_weights = Poly::new_from_point(sparse_point.column().as_slice(), F::ONE);
 
@@ -128,19 +169,14 @@ impl JaggedSelector<'_> {
             .zip(column_weights.as_slice())
             .map(|(bounds, &weight)| {
                 // Each column asks the same automaton about its own start and end.
-                weight * boundary_evaluation(sparse_point.row(), dense_point, bounds[0], bounds[1])
+                weight * boundary_evaluation(&layer_weights, bounds[0], bounds[1])
             })
             .sum()
     }
 }
 
 /// Evaluates one boundary pair through the branching program's multilinear extension.
-fn boundary_evaluation<F: Field>(
-    row_point: &Point<F>,
-    dense_point: &Point<F>,
-    start: usize,
-    end: usize,
-) -> F {
+fn boundary_evaluation<F: Field>(layer_weights: &[[F; 4]], start: usize, end: usize) -> F {
     // States encode `(carry, less_than)` in the low and high bits.
     // The accepting state has no remaining carry and a proven strict inequality.
     const INITIAL: usize = 0;
@@ -149,22 +185,16 @@ fn boundary_evaluation<F: Field>(
     let mut suffix = [F::ZERO; 4];
     suffix[ACCEPT] = F::ONE;
 
-    // One extra zero layer checks the final carry and the endpoint's overflow bit.
-    let top = row_point.num_variables().max(dense_point.num_variables());
-    for layer in (0..=top).rev() {
-        let coordinates = [
-            point_coordinate_from_low(row_point, layer),
-            point_coordinate_from_low(dense_point, layer),
-            integer_bit(start, layer),
-            integer_bit(end, layer),
-        ];
+    for (layer, weights) in layer_weights.iter().enumerate().rev() {
+        // Both endpoints are public, so twelve of the sixteen symbols have an identically zero factor.
+        let public = (integer_bit(start, layer) << 2) | (integer_bit(end, layer) << 3);
         let mut prefix = [F::ZERO; 4];
 
         // Multilinear extension of one automaton layer.
         for (state, next_weight) in prefix.iter_mut().enumerate() {
-            for symbol in 0usize..16 {
-                if let Some(next_state) = transition(symbol, state) {
-                    *next_weight += cube_weight(&coordinates, symbol) * suffix[next_state];
+            for (secret, &weight) in weights.iter().enumerate() {
+                if let Some(next_state) = transition(public | secret, state) {
+                    *next_weight += weight * suffix[next_state];
                 }
             }
         }
@@ -184,27 +214,14 @@ fn point_coordinate_from_low<F: Field>(point: &Point<F>, layer: usize) -> F {
         .map_or(F::ZERO, |coordinate| point[coordinate])
 }
 
-/// Embeds one bit of a public machine integer into the field.
-fn integer_bit<F: Field>(value: usize, layer: usize) -> F {
+/// Extracts one bit of a public machine integer.
+const fn integer_bit(value: usize, layer: usize) -> usize {
     // Shifts at or above the machine width represent leading zero bits.
-    let bit = (layer < usize::BITS as usize) && ((value >> layer) & 1 == 1);
-    F::from_bool(bit)
-}
-
-/// Evaluates the equality basis weight of one four-bit symbol.
-fn cube_weight<F: Field>(point: &[F; 4], symbol: usize) -> F {
-    // Each factor selects the coordinate or its Boolean complement.
-    point
-        .iter()
-        .enumerate()
-        .map(|(coordinate, &value)| {
-            if (symbol >> coordinate) & 1 == 1 {
-                value
-            } else {
-                F::ONE - value
-            }
-        })
-        .product()
+    if layer < usize::BITS as usize {
+        (value >> layer) & 1
+    } else {
+        0
+    }
 }
 
 /// Advances the integer addition and strict-comparison automaton.
@@ -241,6 +258,63 @@ mod tests {
     use super::*;
 
     type F = BabyBear;
+
+    // Reference automaton: the unpruned layer evaluation, enumerating all sixteen symbols.
+    // The shipped loop must agree with it while skipping the symbols whose factor is zero.
+    fn reference_cube_weight(coordinates: &[F; 4], symbol: usize) -> F {
+        coordinates
+            .iter()
+            .enumerate()
+            .map(|(index, &value)| {
+                if (symbol >> index) & 1 == 1 {
+                    value
+                } else {
+                    F::ONE - value
+                }
+            })
+            .product()
+    }
+
+    fn reference_boundary(row: &Point<F>, dense: &Point<F>, start: usize, end: usize) -> F {
+        // Index two is the accepting state and index zero the initial one.
+        let mut suffix = [F::ZERO; 4];
+        suffix[2] = F::ONE;
+        let top = row.num_variables().max(dense.num_variables());
+        for layer in (0..=top).rev() {
+            let bit = |value: usize| {
+                F::from_bool((layer < usize::BITS as usize) && (value >> layer) & 1 == 1)
+            };
+            let coordinates = [
+                point_coordinate_from_low(row, layer),
+                point_coordinate_from_low(dense, layer),
+                bit(start),
+                bit(end),
+            ];
+            let mut prefix = [F::ZERO; 4];
+            for (state, next_weight) in prefix.iter_mut().enumerate() {
+                for symbol in 0usize..16 {
+                    if let Some(next_state) = transition(symbol, state) {
+                        *next_weight +=
+                            reference_cube_weight(&coordinates, symbol) * suffix[next_state];
+                    }
+                }
+            }
+            suffix = prefix;
+        }
+        suffix[0]
+    }
+
+    fn reference_evaluate(layout: &JaggedLayout, sparse: &JaggedPoint<F>, dense: &Point<F>) -> F {
+        let column_weights = Poly::new_from_point(sparse.column().as_slice(), F::ONE);
+        layout
+            .cumulative_heights()
+            .windows(2)
+            .zip(column_weights.as_slice())
+            .map(|(bounds, &weight)| {
+                weight * reference_boundary(sparse.row(), dense, bounds[0], bounds[1])
+            })
+            .sum()
+    }
 
     fn field_point(values: &[u32]) -> Point<F> {
         // Small canonical values make failures easy to reproduce.
@@ -362,6 +436,25 @@ mod tests {
             prop_assert_eq!(
                 JaggedSelector::new(&layout).evaluate(&sparse, &dense),
                 materialized.eval_base(&dense)
+            );
+        }
+
+        #[test]
+        fn pruning_the_zero_symbols_changes_no_value(
+            row_variables in 3usize..=9,
+            heights in prop::collection::vec(0usize..=8, 4),
+            row in prop::collection::vec(any::<u32>(), 9),
+            column in prop::collection::vec(any::<u32>(), 2),
+            dense in prop::collection::vec(any::<u32>(), 5),
+        ) {
+            // A row bound above the dense arity is the shape the shipped loop hoists the most work out of.
+            let layout = JaggedLayout::new(row_variables, &heights).unwrap();
+            let sparse = JaggedPoint::new(field_point(&row[..row_variables]), field_point(&column));
+            let dense = field_point(&dense[..layout.dense_variables()]);
+
+            prop_assert_eq!(
+                JaggedSelector::new(&layout).evaluate(&sparse, &dense),
+                reference_evaluate(&layout, &sparse, &dense)
             );
         }
     }

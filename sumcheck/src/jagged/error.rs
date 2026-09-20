@@ -73,6 +73,9 @@ pub enum JaggedError {
         /// Number of cells supplied by the prover.
         actual: usize,
     },
+    /// The witness does not take the value the caller asked to have proved.
+    #[error("the dense witness does not evaluate to the claimed sparse value")]
+    ClaimMismatch,
     /// The delegated quadratic sumcheck rejected.
     #[error(transparent)]
     Sumcheck(#[from] SumcheckError),

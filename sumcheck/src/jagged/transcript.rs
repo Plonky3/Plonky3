@@ -122,6 +122,7 @@ where
     /// Closes the transcript after every described step has been played.
     pub(super) fn finish(self) {
         // Every value lives in the proof's typed fields rather than an auxiliary byte wire.
+        // No step writes to it, so a nonempty wire would mean the description above had drifted.
         assert!(
             self.state.finalize().is_empty(),
             "the jagged reduction carries every value in its proof"
@@ -184,6 +185,7 @@ where
     /// Closes the transcript after every described step has been replayed.
     pub(super) fn finish(self) {
         // The replay reads values from the typed proof rather than a byte wire.
+        // No step can advance the cursor over that empty wire, so this failure is unreachable.
         self.state
             .finalize()
             .expect("the jagged reduction reads an empty wire");

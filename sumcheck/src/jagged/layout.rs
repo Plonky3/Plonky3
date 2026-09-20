@@ -15,9 +15,9 @@ use super::transcript::{JaggedProverTranscript, JaggedVerifierTranscript};
 use super::{
     JaggedDenseClaim, JaggedError, JaggedLayoutError, JaggedPoint, JaggedProof, JaggedProverOutput,
 };
+use crate::SumcheckData;
 use crate::product_polynomial::ProductPolynomial;
 use crate::strategy::{Basis, SumcheckProver, VariableOrder};
-use crate::{SumcheckData, SumcheckError};
 
 /// A sparse column layout and its contiguous dense representation.
 ///
@@ -55,7 +55,6 @@ impl JaggedLayout {
             });
         }
 
-        // The row bound is used for checked height validation and allocation.
         let row_shift =
             u32::try_from(row_variables).map_err(|_| JaggedLayoutError::RowVariablesOverflow {
                 variables: row_variables,
@@ -105,7 +104,6 @@ impl JaggedLayout {
     /// Returns the number of variables addressing a sparse row.
     #[must_use]
     pub const fn row_variables(&self) -> usize {
-        // The value was validated when the layout was built.
         self.row_variables
     }
 
@@ -119,7 +117,6 @@ impl JaggedLayout {
     /// Returns the number of variables addressing the dense witness.
     #[must_use]
     pub const fn dense_variables(&self) -> usize {
-        // The value was derived from the checked dense capacity.
         self.dense_variables
     }
 
@@ -133,7 +130,6 @@ impl JaggedLayout {
     /// Returns the number of live witness cells.
     #[must_use]
     pub fn area(&self) -> usize {
-        // Construction always stores one terminal prefix sum.
         self.cumulative_heights[self.num_columns()]
     }
 
@@ -158,11 +154,10 @@ impl JaggedLayout {
     /// Returns every column boundary followed by the total live area.
     #[must_use]
     pub fn cumulative_heights(&self) -> &[usize] {
-        // The stored prefix table includes both endpoints of every column.
         &self.cumulative_heights
     }
 
-    /// Proves an evaluation of a virtual jagged table.
+    /// Proves that a virtual jagged table takes a caller-supplied value at a sparse point.
     ///
     /// The dense witness contains only live cells in column-major order.
     ///
@@ -170,7 +165,7 @@ impl JaggedLayout {
     ///
     /// # Soundness
     ///
-    /// The reduction contributes at most `2m / |EF|` error for `m` dense variables.
+    /// The reduction contributes at most `2m / |EF|` error, where `m` is the base-two logarithm of the padded live area rather than the row bound, which may be far larger.
     ///
     /// The bound is meaningful only when the extension is large enough for the target security level.
     ///
@@ -180,10 +175,12 @@ impl JaggedLayout {
     ///
     /// - The sparse point does not match the public layout.
     /// - The dense witness length differs from the live trace area.
+    /// - The witness does not take the supplied value at the supplied point.
     pub fn prove<F, EF, Challenger>(
         &self,
         dense_witness: &[F],
         point: &JaggedPoint<EF>,
+        claimed_value: EF,
         challenger: &mut Challenger,
     ) -> Result<JaggedProverOutput<F, EF>, JaggedError>
     where
@@ -201,20 +198,26 @@ impl JaggedLayout {
             });
         }
 
+        // On Boolean dense indices this selector maps the contiguous representation back to rows.
+        // Only the live prefix contributes, and a base-field cell scales a weight without a full extension product.
+        let selector = selector.table(point);
+        let witness_value = dense_witness
+            .iter()
+            .zip(&selector)
+            .map(|(&cell, &weight)| weight * cell)
+            .sum::<EF>();
+
+        // A reduction that invented its own statement could not be composed with the claim it was called to discharge.
+        if witness_value != claimed_value {
+            return Err(JaggedError::ClaimMismatch);
+        }
+
         // The committed data occupies the live prefix.
         // The power-of-two suffix is represented only by zeros inside this reduction.
         let mut dense = EF::zero_vec(self.dense_capacity());
         for (destination, &source) in dense.iter_mut().zip(dense_witness) {
             *destination = EF::from(source);
         }
-
-        // On Boolean dense indices this selector maps the contiguous representation back to rows.
-        let selector = selector.table(point);
-        let claimed_value = dense
-            .iter()
-            .zip(&selector)
-            .map(|(&value, &weight)| value * weight)
-            .sum();
 
         // Both parties seed from the complete sparse statement before any challenge is drawn.
         let mut transcript = JaggedProverTranscript::<Challenger, F, EF>::new(
@@ -255,22 +258,26 @@ impl JaggedLayout {
             sumcheck,
             dense_evaluation,
         };
-        Ok(JaggedProverOutput {
-            proof,
-            sparse_value: claimed_value,
-            dense_claim,
-        })
+        Ok(JaggedProverOutput { proof, dense_claim })
     }
 
     /// Verifies a sparse evaluation reduction.
     ///
     /// Acceptance returns the single dense claim the underlying PCS must authenticate.
     ///
+    /// # Security
+    ///
+    /// The terminal relation is one equation in the surviving sumcheck value and the claimed dense evaluation, and dividing the first by the publicly computable selector weight satisfies it for any claimed sparse value, over any witness or none.
+    ///
+    /// What rules that out is the caller opening its commitment at the returned point and finding exactly the returned value, so discarding the returned claim is not a weakened check but unconditional acceptance.
+    ///
+    /// The commitment must name as many variables as the dense arity and hold this layout's live cells in column-major order, while evaluations past the live area are unconstrained because the selector vanishes there.
+    ///
     /// # Soundness
     ///
     /// The terminal selector is evaluated independently through a width-four branching program.
     ///
-    /// A false sparse claim therefore becomes a false dense claim except with probability `2m / |EF|`.
+    /// A false sparse claim therefore becomes a false dense claim except with probability `2m / |EF|`, for the same dense arity `m` as on the proving side.
     ///
     /// The bound is meaningful only when the extension is large enough for the target security level.
     ///
@@ -295,15 +302,6 @@ impl JaggedLayout {
         let selector = JaggedSelector::new(self);
         selector.validate_point(point)?;
 
-        // The proof must not smuggle unused grinding witnesses into a zero-difficulty reduction.
-        if !proof.sumcheck.pow_witnesses.is_empty() {
-            return Err(SumcheckError::PowWitnessCountMismatch {
-                expected: 0,
-                actual: proof.sumcheck.pow_witnesses.len(),
-            }
-            .into());
-        }
-
         // Replay against the same public statement that seeded the prover.
         let mut transcript = JaggedVerifierTranscript::<Challenger, F, EF>::new(
             challenger,
@@ -312,6 +310,8 @@ impl JaggedLayout {
             claimed_value,
         );
         let mut terminal = claimed_value;
+
+        // The delegated round verifier binds both proof counts before it folds anything.
         let dense_point = match transcript.product_sumcheck(|challenger| {
             proof.sumcheck.verify_rounds(
                 challenger,
@@ -397,5 +397,29 @@ mod tests {
 
         // Keep the allocation alive until every assertion has read it.
         drop(vec![empty]);
+    }
+
+    #[test]
+    fn unrepresentable_geometry_is_rejected_at_construction() {
+        // These guards are what keep the shift behind the dense capacity in range.
+        assert_eq!(
+            JaggedLayout::new(usize::BITS as usize, &[1]),
+            Err(JaggedLayoutError::RowVariablesOverflow {
+                variables: usize::BITS as usize
+            })
+        );
+
+        // Two columns at half the index space each overflow the running prefix sum.
+        let half = usize::MAX / 2 + 1;
+        assert_eq!(
+            JaggedLayout::new(usize::BITS as usize - 1, &[half, half]),
+            Err(JaggedLayoutError::AreaOverflow { column: 1 })
+        );
+
+        // An area above the largest representable power of two has no envelope to round up to.
+        assert_eq!(
+            JaggedLayout::new(usize::BITS as usize - 1, &[half, 1]),
+            Err(JaggedLayoutError::DenseAreaOverflow { area: half + 1 })
+        );
     }
 }
