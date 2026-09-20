@@ -25,15 +25,22 @@ use alloc::vec::Vec;
 use core::ops::Range;
 
 use p3_air::{Air, BaseAir};
-use p3_field::{ExtensionField, Field, HasSubfield, PackedFieldExtension, PackedValue};
+use p3_field::{
+    Algebra, ExtensionField, Field, HasSubfield, PackedFieldExtension, PackedValue,
+    PrimeCharacteristicRing,
+};
 use p3_maybe_rayon::prelude::*;
 use p3_multilinear_util::poly::Poly;
 use p3_sumcheck::layout::Table;
 
+use super::repr::{lane_group, sum_lanes};
 use super::{
-    AirSlot, ExtColumns, InteractionCoupling, NodeStep, RoundStateBase, RoundStateExt,
-    evaluated_nodes, finish_round, next_row_runs, node_schedule,
+    AirSlot, ExtColumns, InteractionCoupling, NodeStep, PackedScratch, RoundStateBase,
+    RoundStateExt, Scratch, add_slice, evaluated_nodes, finish_round, lower_evals, next_row_runs,
+    node_schedule, rows_per_task,
 };
+use crate::folder::{InteractionMultilinearFolder, MultilinearFolder};
+use crate::packed_ext::{PackedExt, PackedRepr};
 use crate::selectors::BoundaryEvals;
 use crate::sliced::{LaneSums, SLICED_LANES, SlicedFolder, SlicedGf4, gf4_coordinates, is_gf4};
 
@@ -45,9 +52,6 @@ pub const MAX_SLICED_ROUNDS: usize = 4;
 
 /// Row variables one word's lanes span.
 const LANE_VARIABLES: usize = SLICED_LANES.trailing_zeros() as usize;
-
-/// Corners one byte-indexed subset-sum table spans.
-const CORNERS_PER_TABLE: usize = u8::BITS as usize;
 
 /// A stage's cells as bit planes, laid out word by word.
 pub(super) struct SlicedTrace {
@@ -801,6 +805,13 @@ impl<EF> SlicedColumns<EF> {
     pub(super) const fn num_evals(&self) -> usize {
         1 << (self.trace.num_vars - self.challenges.len())
     }
+
+    /// Whether the stage's sliced rounds are spent and its planes can still serve a round.
+    ///
+    /// A word pair is the shortest run of residual rows that holds both halves of a row pair.
+    const fn at_boundary(&self) -> bool {
+        self.challenges.len() == self.trace.rounds && self.num_evals() >= ROW_HALVES * SLICED_LANES
+    }
 }
 
 /// Transpose an 8 x 8 bit matrix held one row per byte.
@@ -830,6 +841,17 @@ fn lane_masks(words: &[u64]) -> [u8; SLICED_LANES] {
     masks
 }
 
+/// For each lane, the byte whose bit `i` is that lane's bit in `words[i]`, for up to eight words.
+///
+/// This is [`lane_masks`] restricted to the top lane, which no transpose is needed to read.
+#[inline]
+fn top_lane_mask(words: &[u64]) -> u8 {
+    debug_assert!(words.len() <= GROUP_CORNERS);
+    words.iter().enumerate().fold(0, |mask, (index, &word)| {
+        mask | (((word >> (SLICED_LANES - 1)) as u8) << index)
+    })
+}
+
 /// Subset sums of up to eight weights, indexed by the byte of the weights they include.
 fn subset_sums<R: Field>(weights: &[R]) -> Vec<R> {
     let mut sums = R::zero_vec(1 << weights.len());
@@ -837,6 +859,379 @@ fn subset_sums<R: Field>(weights: &[R]) -> Vec<R> {
         sums[mask] = sums[mask & (mask - 1)] + weights[mask.trailing_zeros() as usize];
     }
     sums
+}
+
+/// Corners one subset-sum table covers, one bit of a mask byte each.
+const GROUP_CORNERS: usize = 8;
+
+/// Entries of one corner group's subset-sum table, one per value of a mask byte.
+const GROUP_ENTRIES: usize = 1 << u8::BITS;
+
+/// Corners the bound variables of a sliced stage can range over.
+const MAX_CORNERS: usize = 1 << MAX_SLICED_ROUNDS;
+
+/// Mask bytes one corner group of one residual row reads, one per plane.
+const PLANE_BYTES: usize = 2;
+
+/// Halves of the residual rows a round reads side by side: the low one and the high one.
+const ROW_HALVES: usize = 2;
+
+/// The byte-indexed tables that carry a stage's planes into residual rows of `R`.
+///
+/// Each residual row of a column combines the cells the bound variables range over:
+///
+/// ```text
+///     column(x) = sum_b eq(r, b) * cell(b, x)       b in {0, 1}^k
+/// ```
+///
+/// A cell is `low + high * g`, so each row takes byte-indexed subset sums of `eq(r, .)`, one
+/// lookup per plane per group of eight `b`. The tables do not depend on the column or the row,
+/// so one set serves a whole round.
+struct PlaneFold<'a, R> {
+    /// The stage's planes.
+    trace: &'a SlicedTrace,
+    /// Subset sums of the eq weights, one table per corner group.
+    low_sums: Vec<[R; GROUP_ENTRIES]>,
+    /// The same sums scaled by the generator of `S`, indexed the same way.
+    high_sums: Vec<[R; GROUP_ENTRIES]>,
+    /// Corners the bound variables range over.
+    corners: usize,
+    /// Corner groups one residual row reads.
+    groups: usize,
+    /// Words one corner block spans.
+    words: usize,
+}
+
+impl<'a, R: Field> PlaneFold<'a, R> {
+    /// Tabulate the fold of `trace` at every challenge bound so far.
+    fn new<S, EF>(trace: &'a SlicedTrace, challenges: &[EF]) -> Self
+    where
+        S: Field,
+        EF: Field + HasSubfield<S>,
+        R: From<EF>,
+    {
+        let generator = R::from(EF::from(S::GENERATOR));
+        let weights = Poly::new_from_point(challenges, EF::ONE)
+            .as_slice()
+            .iter()
+            .map(|&weight| R::from(weight))
+            .collect::<Vec<_>>();
+        let corners = weights.len();
+        let groups = corners.div_ceil(GROUP_CORNERS);
+        let mut low_sums = vec![[R::ZERO; GROUP_ENTRIES]; groups];
+        let mut high_sums = vec![[R::ZERO; GROUP_ENTRIES]; groups];
+        for ((low, high), weights) in low_sums
+            .iter_mut()
+            .zip(&mut high_sums)
+            .zip(weights.chunks(GROUP_CORNERS))
+        {
+            for ((low, high), &sum) in low.iter_mut().zip(high).zip(&subset_sums(weights)) {
+                (*low, *high) = (sum, generator * sum);
+            }
+        }
+        Self {
+            trace,
+            low_sums,
+            high_sums,
+            corners,
+            groups,
+            words: (trace.cells.len() / trace.width) / corners,
+        }
+    }
+
+    /// The corner words of one `(column, word)`, one array per plane.
+    #[inline]
+    fn corner_words(
+        &self,
+        planes: &[[u64; 2]],
+        column: usize,
+        word: usize,
+    ) -> ([u64; MAX_CORNERS], [u64; MAX_CORNERS]) {
+        let mut low = [0; MAX_CORNERS];
+        let mut high = [0; MAX_CORNERS];
+        let base = word * self.trace.width + column;
+        let stride = self.words * self.trace.width;
+        for (corner, (low, high)) in low[..self.corners]
+            .iter_mut()
+            .zip(&mut high[..self.corners])
+            .enumerate()
+        {
+            let planes = planes[base + corner * stride];
+            *low = planes[0];
+            *high = planes[1];
+        }
+        (low, high)
+    }
+
+    /// The corners of one group, one array per plane.
+    #[inline]
+    fn group_words<'b>(
+        &self,
+        low: &'b [u64; MAX_CORNERS],
+        high: &'b [u64; MAX_CORNERS],
+        group: usize,
+    ) -> (&'b [u64], &'b [u64]) {
+        let start = group * GROUP_CORNERS;
+        let end = (start + GROUP_CORNERS).min(self.corners);
+        (&low[start..end], &high[start..end])
+    }
+
+    /// The value at every residual row of one word.
+    fn fold_word(&self, planes: &[[u64; 2]], column: usize, word: usize, out: &mut [R]) {
+        let (low, high) = self.corner_words(planes, column, word);
+        out.fill(R::ZERO);
+        for group in 0..self.groups {
+            let (low_table, high_table) = (&self.low_sums[group], &self.high_sums[group]);
+            let (low, high) = self.group_words(&low, &high, group);
+            let (low, high) = (lane_masks(low), lane_masks(high));
+            for (value, (&low, &high)) in out.iter_mut().zip(low.iter().zip(&high)) {
+                *value += low_table[usize::from(low)] + high_table[usize::from(high)];
+            }
+        }
+    }
+
+    /// The value one half of one residual row's mask bytes stands for.
+    ///
+    /// # Panics
+    ///
+    /// Debug builds panic unless `bytes` holds one plane pair per corner group.
+    #[inline]
+    fn row_value(&self, bytes: &[u8]) -> R {
+        debug_assert_eq!(bytes.len(), self.groups * PLANE_BYTES);
+        let mut value = R::ZERO;
+        for ((low_table, high_table), masks) in self
+            .low_sums
+            .iter()
+            .zip(&self.high_sums)
+            .zip(bytes.as_chunks::<PLANE_BYTES>().0)
+        {
+            value += low_table[usize::from(masks[0])] + high_table[usize::from(masks[1])];
+        }
+        value
+    }
+
+    /// The low-half and high-half values one residual row's mask bytes stand for.
+    #[inline]
+    fn row_pair(&self, bytes: &[u8]) -> (R, R) {
+        let half = self.groups * PLANE_BYTES;
+        (
+            self.row_value(&bytes[..half]),
+            self.row_value(&bytes[half..]),
+        )
+    }
+
+    /// Write one `(column, word)`'s mask bytes lane by lane, `stride` bytes apart.
+    fn write_lane_masks(
+        &self,
+        planes: &[[u64; 2]],
+        column: usize,
+        word: usize,
+        stride: usize,
+        out: &mut [u8],
+    ) {
+        let (low, high) = self.corner_words(planes, column, word);
+        for group in 0..self.groups {
+            let (low, high) = self.group_words(&low, &high, group);
+            let (low, high) = (lane_masks(low), lane_masks(high));
+            for (lane, (&low, &high)) in low.iter().zip(&high).enumerate() {
+                let at = lane * stride + group * PLANE_BYTES;
+                out[at] = low;
+                out[at + 1] = high;
+            }
+        }
+    }
+
+    /// Write one `(column, word)`'s top-lane mask bytes.
+    fn write_top_lane_mask(&self, planes: &[[u64; 2]], column: usize, word: usize, out: &mut [u8]) {
+        let (low, high) = self.corner_words(planes, column, word);
+        for group in 0..self.groups {
+            let (low, high) = self.group_words(&low, &high, group);
+            out[group * PLANE_BYTES] = top_lane_mask(low);
+            out[group * PLANE_BYTES + 1] = top_lane_mask(high);
+        }
+    }
+}
+
+/// One word pair's mask bytes, transposed so each residual row reads its columns in order.
+///
+/// ```text
+///     lane l : | column 0 | column 1 | ... |    residual rows 64 p + l and 64 p + l + half
+///     column : the low half's mask bytes, group by group, then the high half's
+/// ```
+///
+/// The lane past the last holds the successor planes, whose lane `l` is the cell of lane `l + 1`.
+/// A row's next-row values are therefore the following lane's bytes, inside the word or not.
+struct RowTile {
+    /// The mask bytes, lane by lane.
+    bytes: Vec<u8>,
+    /// Bytes one column spans inside a lane.
+    column_stride: usize,
+    /// Bytes one lane spans.
+    lane_stride: usize,
+}
+
+impl RowTile {
+    /// An empty tile for a stage of `width` columns whose rows read `groups` corner groups.
+    fn new(groups: usize, width: usize) -> Self {
+        let column_stride = ROW_HALVES * groups * PLANE_BYTES;
+        let lane_stride = column_stride * width;
+        Self {
+            bytes: vec![0; (SLICED_LANES + 1) * lane_stride],
+            column_stride,
+            lane_stride,
+        }
+    }
+
+    /// One lane's mask bytes, column by column.
+    #[inline]
+    fn lane(&self, lane: usize) -> &[u8] {
+        &self.bytes[lane * self.lane_stride..][..self.lane_stride]
+    }
+
+    /// One column's mask bytes inside one lane.
+    #[inline]
+    fn cell(&self, lane: usize, column: usize) -> &[u8] {
+        &self.lane(lane)[column * self.column_stride..][..self.column_stride]
+    }
+
+    /// Lay out the mask bytes of word pair `pair`.
+    ///
+    /// # Panics
+    ///
+    /// Debug builds panic unless the tile was laid out for `fold`'s corner groups and width.
+    fn fill<R: Field>(
+        &mut self,
+        fold: &PlaneFold<'_, R>,
+        pair: usize,
+        next_columns: &[Range<usize>],
+    ) {
+        debug_assert_eq!(self.column_stride, ROW_HALVES * fold.groups * PLANE_BYTES);
+        debug_assert_eq!(self.lane_stride, self.column_stride * fold.trace.width);
+        let words = [pair, pair + fold.words / ROW_HALVES];
+        let half_bytes = fold.groups * PLANE_BYTES;
+        for column in 0..fold.trace.width {
+            for (half, &word) in words.iter().enumerate() {
+                let at = column * self.column_stride + half * half_bytes;
+                fold.write_lane_masks(
+                    &fold.trace.cells,
+                    column,
+                    word,
+                    self.lane_stride,
+                    &mut self.bytes[at..],
+                );
+            }
+        }
+
+        // Only a successor column is ever read one row on, so only it needs the extra lane.
+        let extra = SLICED_LANES * self.lane_stride;
+        for run in next_columns {
+            for column in run.clone() {
+                for (half, &word) in words.iter().enumerate() {
+                    let at = extra + column * self.column_stride + half * half_bytes;
+                    fold.write_top_lane_mask(
+                        &fold.trace.successors,
+                        column,
+                        word,
+                        &mut self.bytes[at..],
+                    );
+                }
+            }
+        }
+    }
+
+    /// Read one residual row pair of every column into the buffers a node walk steps.
+    fn read_row<R: Field>(
+        &self,
+        fold: &PlaneFold<'_, R>,
+        lane: usize,
+        next_columns: &[Range<usize>],
+        scratch: &mut Scratch<R, R>,
+    ) {
+        let Scratch {
+            local_point,
+            local_diff,
+            next_point,
+            next_diff,
+            ..
+        } = scratch;
+        for ((local, local_delta), bytes) in local_point
+            .iter_mut()
+            .zip(local_diff.iter_mut())
+            .zip(self.lane(lane).chunks_exact(self.column_stride))
+        {
+            let (lo, hi) = fold.row_pair(bytes);
+            *local = lo;
+            *local_delta = hi - lo;
+        }
+        for run in next_columns {
+            for ((column, next), next_delta) in run
+                .clone()
+                .zip(next_point[run.clone()].iter_mut())
+                .zip(next_diff[run.clone()].iter_mut())
+            {
+                let (lo, hi) = fold.row_pair(self.cell(lane + 1, column));
+                *next = lo;
+                *next_delta = hi - lo;
+            }
+        }
+    }
+
+    /// One lane group of one column's residual row pairs, low halves then high halves.
+    #[inline]
+    fn lane_pair<F, R: Field>(
+        &self,
+        fold: &PlaneFold<'_, R>,
+        lane: usize,
+        column: usize,
+    ) -> (PackedRepr<F, R>, PackedRepr<F, R>) {
+        let (mut low, mut high) = (R::Packing::ZERO, R::Packing::ZERO);
+        for (step, (l, h)) in low
+            .as_slice_mut()
+            .iter_mut()
+            .zip(high.as_slice_mut())
+            .enumerate()
+        {
+            (*l, *h) = fold.row_pair(self.cell(lane + step, column));
+        }
+        (PackedExt::new(low), PackedExt::new(high))
+    }
+
+    /// Read one lane group of residual row pairs of every column into a packed node walk's buffers.
+    fn read_lane_group<F, R: Field>(
+        &self,
+        fold: &PlaneFold<'_, R>,
+        lane: usize,
+        next_columns: &[Range<usize>],
+        scratch: &mut PackedScratch<PackedRepr<F, R>, PackedRepr<F, R>>,
+    ) {
+        let PackedScratch {
+            local_point,
+            local_diff,
+            next_point,
+            next_diff,
+            ..
+        } = scratch;
+        for (column, (local, local_delta)) in local_point
+            .iter_mut()
+            .zip(local_diff.iter_mut())
+            .enumerate()
+        {
+            let (lo, hi) = self.lane_pair(fold, lane, column);
+            *local = lo;
+            *local_delta = hi - lo;
+        }
+        for run in next_columns {
+            for ((column, next), next_delta) in run
+                .clone()
+                .zip(next_point[run.clone()].iter_mut())
+                .zip(next_diff[run.clone()].iter_mut())
+            {
+                let (lo, hi) = self.lane_pair(fold, lane + 1, column);
+                *next = lo;
+                *next_delta = hi - lo;
+            }
+        }
+    }
 }
 
 impl<'air, 'data, A, F, EF, R> RoundStateExt<'air, 'data, A, F, EF, R>
@@ -909,17 +1304,36 @@ where
         true
     }
 
+    /// Take the stage's planes off the round state, leaving it with no columns.
+    ///
+    /// # Returns
+    ///
+    /// `None` when the stage is not on its planes, which then stay where they are.
+    fn take_planes(&mut self) -> Option<(SlicedTrace, Vec<EF>)> {
+        match core::mem::replace(&mut self.columns, ExtColumns::Scalar(Vec::new())) {
+            ExtColumns::Sliced(SlicedColumns { trace, challenges }) => Some((trace, challenges)),
+            columns => {
+                self.columns = columns;
+                None
+            }
+        }
+    }
+
+    /// Read each successor column at the last residual row into its repeat-last tail.
+    fn read_next_tails(&mut self, fold: &PlaneFold<'_, R>) {
+        let mut last = [R::ZERO; SLICED_LANES];
+        for run in next_row_runs(&self.slots) {
+            for column in run {
+                fold.fold_word(&fold.trace.successors, column, fold.words - 1, &mut last);
+                self.next_tail[column] = last[SLICED_LANES - 1];
+            }
+        }
+    }
+
     /// Fold a stage off its planes into scalar columns in `R`, at every challenge bound so far.
     ///
-    /// Each residual row of a column combines the cells the bound variables range over:
-    ///
-    /// ```text
-    ///     column(x) = sum_b eq(r, b) * cell(b, x)       b in {0, 1}^k
-    /// ```
-    ///
-    /// A cell is `low + high * g`, so each row takes byte-indexed subset sums of `eq(r, .)`,
-    /// one lookup per plane per group of eight `b`. The repeat-last tails read the successor
-    /// planes at the last residual row the same way.
+    /// Every residual row of every column is written out, see [`PlaneFold`]. The repeat-last
+    /// tails read the successor planes at the last residual row the same way.
     ///
     /// Does nothing when the stage is not on its planes.
     pub(crate) fn unslice<S>(&mut self)
@@ -927,81 +1341,298 @@ where
         S: Field,
         EF: HasSubfield<S>,
     {
-        let (trace, challenges) =
-            match core::mem::replace(&mut self.columns, ExtColumns::Scalar(Vec::new())) {
-                ExtColumns::Sliced(SlicedColumns { trace, challenges }) => (trace, challenges),
-                columns => {
-                    self.columns = columns;
-                    return;
-                }
-            };
-        let _span = tracing::debug_span!("unslice").entered();
-        let generator = R::from(EF::from(S::GENERATOR));
-        let weights = Poly::new_from_point(&challenges, EF::ONE)
-            .as_slice()
-            .iter()
-            .map(|&weight| R::from(weight))
-            .collect::<Vec<_>>();
-        let low_sums = weights
-            .chunks(CORNERS_PER_TABLE)
-            .map(subset_sums)
-            .collect::<Vec<_>>();
-        let high_sums = low_sums
-            .iter()
-            .map(|sums| sums.iter().map(|&sum| generator * sum).collect::<Vec<_>>())
-            .collect::<Vec<_>>();
-        let corners = weights.len();
-        let words = (trace.cells.len() / trace.width) / corners;
-        let width = trace.width;
-
-        // The value at every residual row of one word, from the corner words of both planes.
-        //
-        // One table's corners are gathered at a time, so the buffers hold a table's worth
-        // whatever the round count is.
-        let fold_word = |planes: &[[u64; 2]], column: usize, word: usize, out: &mut [R]| {
-            out.fill(R::ZERO);
-            for (table, (low_sums, high_sums)) in low_sums.iter().zip(&high_sums).enumerate() {
-                let first = table * CORNERS_PER_TABLE;
-                let spanned = (corners - first).min(CORNERS_PER_TABLE);
-                let mut low = [0; CORNERS_PER_TABLE];
-                let mut high = [0; CORNERS_PER_TABLE];
-                for (corner, (low, high)) in low.iter_mut().zip(&mut high).take(spanned).enumerate()
-                {
-                    let cell = planes[((first + corner) * words + word) * width + column];
-                    (*low, *high) = (cell[0], cell[1]);
-                }
-                let (low, high) = (lane_masks(&low[..spanned]), lane_masks(&high[..spanned]));
-                for (value, (&low, &high)) in out.iter_mut().zip(low.iter().zip(&high)) {
-                    *value += low_sums[usize::from(low)] + high_sums[usize::from(high)];
-                }
-            }
+        let Some((trace, challenges)) = self.take_planes() else {
+            return;
         };
+        let _span = tracing::debug_span!("unslice").entered();
+        let fold = PlaneFold::<R>::new::<S, EF>(&trace, &challenges);
+        let rows = fold.words * SLICED_LANES;
 
-        let scalar = (0..width)
+        let scalar = (0..trace.width)
             .into_par_iter()
             .map(|column| {
-                let mut values = R::zero_vec(words * SLICED_LANES);
+                let mut values = R::zero_vec(rows);
                 for (word, out) in values
                     .as_chunks_mut::<SLICED_LANES>()
                     .0
                     .iter_mut()
                     .enumerate()
                 {
-                    fold_word(&trace.cells, column, word, out);
+                    fold.fold_word(&trace.cells, column, word, out);
                 }
                 Poly::new(values)
             })
             .collect();
 
-        // Each tail is the successor column at the last residual row.
-        let mut last = [R::ZERO; SLICED_LANES];
+        self.read_next_tails(&fold);
+        self.columns = ExtColumns::Scalar(scalar);
+    }
+
+    /// Bind the next variable at `r`, folding the stage off its planes in the same pass.
+    ///
+    /// Each folded row reads the two residual rows the bound variable joins straight from the
+    /// planes, so only the half-size result is ever written out.
+    ///
+    /// # Returns
+    ///
+    /// Whether the stage was still on its planes with its sliced rounds spent.
+    pub(crate) fn fold_boundary<S>(&mut self, r: EF) -> bool
+    where
+        S: Field,
+        EF: HasSubfield<S>,
+    {
+        let ExtColumns::Sliced(columns) = &self.columns else {
+            return false;
+        };
+        if !columns.at_boundary() {
+            return false;
+        }
+        let _span = tracing::debug_span!("fold_boundary").entered();
+        let Some((trace, challenges)) = self.take_planes() else {
+            unreachable!("the stage holds its planes")
+        };
+        let fold = PlaneFold::<R>::new::<S, EF>(&trace, &challenges);
+        let half = fold.words * SLICED_LANES / ROW_HALVES;
+        let challenge = R::from(r);
+
+        self.fold_claims(r);
+
+        // Each tail folds with the column value at the first residual row of the high half,
+        // which is the first lane of the first word of that half.
+        let high_words = fold.words / ROW_HALVES;
+        let mut buffer = [R::ZERO; SLICED_LANES];
         for run in next_row_runs(&self.slots) {
             for column in run {
-                fold_word(&trace.successors, column, words - 1, &mut last);
-                self.next_tail[column] = last[SLICED_LANES - 1];
+                fold.fold_word(&trace.successors, column, fold.words - 1, &mut buffer);
+                let tail = buffer[SLICED_LANES - 1];
+                fold.fold_word(&trace.cells, column, high_words, &mut buffer);
+                let lo = buffer[0];
+                self.next_tail[column] = lo + (tail - lo) * challenge;
             }
         }
+
+        let scalar = (0..trace.width)
+            .into_par_iter()
+            .map(|column| {
+                let mut values = R::zero_vec(half);
+                let mut lo = [R::ZERO; SLICED_LANES];
+                let mut hi = [R::ZERO; SLICED_LANES];
+                for (word, out) in values
+                    .as_chunks_mut::<SLICED_LANES>()
+                    .0
+                    .iter_mut()
+                    .enumerate()
+                {
+                    fold.fold_word(&trace.cells, column, word, &mut lo);
+                    fold.fold_word(&trace.cells, column, word + high_words, &mut hi);
+                    for (value, (&lo, &hi)) in out.iter_mut().zip(lo.iter().zip(&hi)) {
+                        *value = lo + (hi - lo) * challenge;
+                    }
+                }
+                Poly::new(values)
+            })
+            .collect();
+
         self.columns = ExtColumns::Scalar(scalar);
+        self.boundary.apply(challenge);
+        self.round += 1;
+        true
+    }
+
+    /// Evaluate this round's polynomial straight from the stage's planes, its sliced rounds spent.
+    ///
+    /// One word pair of residual rows is expanded at a time, into the mask bytes its rows read
+    /// rather than into their values, and dropped once those rows are done. The residual columns
+    /// themselves are never written out; [`Self::fold_boundary`] reads the planes again.
+    ///
+    /// # Returns
+    ///
+    /// - `Some`: exactly what [`Self::round_poly_repr`] returns once the stage has unsliced.
+    /// - `None`: the stage is not on its planes, still has a sliced round left, or is too short
+    ///   for a word pair. Nothing has changed; see [`Self::unslice`].
+    pub(crate) fn round_poly_boundary<S>(&mut self, eq_suffix: &Poly<EF>) -> Option<Vec<EF>>
+    where
+        S: Field,
+        EF: HasSubfield<S>,
+        R: Algebra<F>,
+        R::Packing: Algebra<F::Packing>,
+        A: for<'b> Air<MultilinearFolder<'b, F, R, R>>
+            + for<'b> Air<InteractionMultilinearFolder<'b, F, R, R>>
+            + for<'b> Air<MultilinearFolder<'b, F, PackedRepr<F, R>, PackedRepr<F, R>>>
+            + for<'b> Air<InteractionMultilinearFolder<'b, F, PackedRepr<F, R>, PackedRepr<F, R>>>,
+    {
+        let ExtColumns::Sliced(columns) = &self.columns else {
+            return None;
+        };
+        let lanes = R::Packing::WIDTH;
+        // A lane group covers consecutive rows of one word, so it must not straddle two.
+        if !columns.at_boundary() || !SLICED_LANES.is_multiple_of(lanes) {
+            return None;
+        }
+        let num_evals = self.num_evals();
+
+        let _span = tracing::debug_span!("round_poly_boundary").entered();
+        let (constraints, interactions) = {
+            let fold = PlaneFold::<R>::new::<S, EF>(&columns.trace, &columns.challenges);
+            if lanes > 1 && num_evals / 2 >= lanes {
+                self.boundary_evals_lanes(eq_suffix, &fold)
+            } else {
+                self.boundary_evals_rows(eq_suffix, &fold)
+            }
+        };
+
+        Some(finish_round(
+            &mut self.constraint_groups,
+            &mut self.interaction_groups,
+            &self.betas,
+            self.lookup_scale,
+            &constraints,
+            &interactions,
+            self.tau.as_slice()[self.round],
+        ))
+    }
+
+    /// Accumulate this round's node sums one residual row at a time, straight from the planes.
+    fn boundary_evals_rows(
+        &self,
+        eq_suffix: &Poly<EF>,
+        fold: &PlaneFold<'_, R>,
+    ) -> (Vec<Vec<EF>>, Vec<Vec<EF>>)
+    where
+        R: Algebra<F>,
+        A: for<'b> Air<MultilinearFolder<'b, F, R, R>>
+            + for<'b> Air<InteractionMultilinearFolder<'b, F, R, R>>,
+    {
+        let width = self.width();
+        let pairs = fold.words / ROW_HALVES;
+        let schedule = node_schedule::<EF>(evaluated_nodes(&self.slots, self.degree(), true))
+            .into_iter()
+            .map(|(node, step)| (node, step.map(R::from)))
+            .collect::<Vec<_>>();
+        let next_columns = next_row_runs(&self.slots);
+        let constraint_degrees = self
+            .slots
+            .iter()
+            .map(|slot| slot.constraint_degree)
+            .collect::<Vec<_>>();
+        let interaction_degrees = self
+            .interaction_groups
+            .iter()
+            .map(|group| group.degree)
+            .collect::<Vec<_>>();
+        let weights = eq_suffix.as_slice();
+
+        let (scratch, _) = (0..pairs)
+            .into_par_iter()
+            .with_min_len(rows_per_task(pairs))
+            .par_fold_reduce(
+                || {
+                    (
+                        Scratch::<R, R>::new(&constraint_degrees, &interaction_degrees, width),
+                        RowTile::new(fold.groups, width),
+                    )
+                },
+                |(mut scratch, mut tile), pair| {
+                    tile.fill(fold, pair, &next_columns);
+                    for lane in 0..SLICED_LANES {
+                        let s = pair * SLICED_LANES + lane;
+                        tile.read_row(fold, lane, &next_columns, &mut scratch);
+                        self.walk_row_nodes(
+                            &mut scratch,
+                            s,
+                            R::from(weights[s]),
+                            &schedule,
+                            &next_columns,
+                        );
+                    }
+                    (scratch, tile)
+                },
+                |(mut lhs, tile), (rhs, _)| {
+                    lhs.constraint_evals
+                        .iter_mut()
+                        .zip(rhs.constraint_evals)
+                        .for_each(|(lhs, rhs)| R::add_slices(lhs, &rhs));
+                    lhs.interaction_evals
+                        .iter_mut()
+                        .zip(rhs.interaction_evals)
+                        .for_each(|(lhs, rhs)| R::add_slices(lhs, &rhs));
+                    (lhs, tile)
+                },
+            );
+        (
+            lower_evals(scratch.constraint_evals),
+            lower_evals(scratch.interaction_evals),
+        )
+    }
+
+    /// Accumulate this round's node sums one lane group at a time, straight from the planes.
+    fn boundary_evals_lanes(
+        &self,
+        eq_suffix: &Poly<EF>,
+        fold: &PlaneFold<'_, R>,
+    ) -> (Vec<Vec<EF>>, Vec<Vec<EF>>)
+    where
+        R: Algebra<F>,
+        R::Packing: Algebra<F::Packing>,
+        A: for<'b> Air<MultilinearFolder<'b, F, PackedRepr<F, R>, PackedRepr<F, R>>>
+            + for<'b> Air<InteractionMultilinearFolder<'b, F, PackedRepr<F, R>, PackedRepr<F, R>>>,
+    {
+        let lanes = R::Packing::WIDTH;
+        let width = self.width();
+        let pairs = fold.words / ROW_HALVES;
+        let round = self.lane_round();
+        let constraint_degrees = self
+            .slots
+            .iter()
+            .map(|slot| slot.constraint_degree)
+            .collect::<Vec<_>>();
+        let interaction_degrees = self
+            .interaction_groups
+            .iter()
+            .map(|group| group.degree)
+            .collect::<Vec<_>>();
+        let weights = eq_suffix.as_slice();
+
+        let (scratch, _) = (0..pairs)
+            .into_par_iter()
+            .with_min_len(rows_per_task(pairs))
+            .par_fold_reduce(
+                || {
+                    (
+                        PackedScratch::<PackedRepr<F, R>, PackedRepr<F, R>>::new(
+                            &constraint_degrees,
+                            &interaction_degrees,
+                            width,
+                        ),
+                        RowTile::new(fold.groups, width),
+                    )
+                },
+                |(mut scratch, mut tile), pair| {
+                    tile.fill(fold, pair, &round.next_columns);
+                    for lane in (0..SLICED_LANES).step_by(lanes) {
+                        let s = pair * SLICED_LANES + lane;
+                        tile.read_lane_group(fold, lane, &round.next_columns, &mut scratch);
+                        let eq_suffix = lane_group(|step| R::from(weights[s + step]));
+                        self.walk_lane_nodes(&mut scratch, s, eq_suffix, &round);
+                    }
+                    (scratch, tile)
+                },
+                |(mut lhs, tile), (rhs, _)| {
+                    lhs.constraint_evals
+                        .iter_mut()
+                        .zip(rhs.constraint_evals)
+                        .for_each(|(lhs, rhs)| add_slice(lhs, &rhs));
+                    lhs.interaction_evals
+                        .iter_mut()
+                        .zip(rhs.interaction_evals)
+                        .for_each(|(lhs, rhs)| add_slice(lhs, &rhs));
+                    (lhs, tile)
+                },
+            );
+        (
+            sum_lanes::<F, R, EF>(scratch.constraint_evals),
+            sum_lanes::<F, R, EF>(scratch.interaction_evals),
+        )
     }
 }
 

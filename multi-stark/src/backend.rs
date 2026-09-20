@@ -301,14 +301,17 @@ where
     }
 
     fn round(state: &mut RoundStateExt<'_, '_, A, F, EF, R>, eq_suffix: &Poly<EF>) -> Vec<EF> {
-        state.round_poly_sliced::<S>(eq_suffix).unwrap_or_else(|| {
-            state.unslice::<S>();
-            state.round_poly_repr(eq_suffix)
-        })
+        state
+            .round_poly_sliced::<S>(eq_suffix)
+            .or_else(|| state.round_poly_boundary::<S>(eq_suffix))
+            .unwrap_or_else(|| {
+                state.unslice::<S>();
+                state.round_poly_repr(eq_suffix)
+            })
     }
 
     fn fold(state: &mut RoundStateExt<'_, '_, A, F, EF, R>, r: EF) {
-        if !state.fold_sliced(r) {
+        if !state.fold_boundary::<S>(r) && !state.fold_sliced(r) {
             state.fold_repr(r);
         }
     }
