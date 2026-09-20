@@ -893,10 +893,10 @@ const ROW_HALVES: usize = 2;
 struct PlaneFold<'a, R> {
     /// The stage's planes.
     trace: &'a SlicedTrace,
-    /// Subset sums of the eq weights, one run of `GROUP_ENTRIES` per corner group.
-    low_sums: Vec<R>,
+    /// Subset sums of the eq weights, one table per corner group.
+    low_sums: Vec<[R; GROUP_ENTRIES]>,
     /// The same sums scaled by the generator of `S`, indexed the same way.
-    high_sums: Vec<R>,
+    high_sums: Vec<[R; GROUP_ENTRIES]>,
     /// Corners the bound variables range over.
     corners: usize,
     /// Corner groups one residual row reads.
@@ -921,14 +921,15 @@ impl<'a, R: Field> PlaneFold<'a, R> {
             .collect::<Vec<_>>();
         let corners = weights.len();
         let groups = corners.div_ceil(GROUP_CORNERS);
-        let mut low_sums = R::zero_vec(groups * GROUP_ENTRIES);
-        let mut high_sums = R::zero_vec(groups * GROUP_ENTRIES);
-        for (group, weights) in weights.chunks(GROUP_CORNERS).enumerate() {
-            let sums = subset_sums(weights);
-            let table = group * GROUP_ENTRIES;
-            for (mask, &sum) in sums.iter().enumerate() {
-                low_sums[table + mask] = sum;
-                high_sums[table + mask] = generator * sum;
+        let mut low_sums = vec![[R::ZERO; GROUP_ENTRIES]; groups];
+        let mut high_sums = vec![[R::ZERO; GROUP_ENTRIES]; groups];
+        for ((low, high), weights) in low_sums
+            .iter_mut()
+            .zip(&mut high_sums)
+            .zip(weights.chunks(GROUP_CORNERS))
+        {
+            for ((low, high), &sum) in low.iter_mut().zip(high).zip(&subset_sums(weights)) {
+                (*low, *high) = (sum, generator * sum);
             }
         }
         Self {
@@ -983,12 +984,11 @@ impl<'a, R: Field> PlaneFold<'a, R> {
         let (low, high) = self.corner_words(planes, column, word);
         out.fill(R::ZERO);
         for group in 0..self.groups {
+            let (low_table, high_table) = (&self.low_sums[group], &self.high_sums[group]);
             let (low, high) = self.group_words(&low, &high, group);
             let (low, high) = (lane_masks(low), lane_masks(high));
-            let table = group * GROUP_ENTRIES;
             for (value, (&low, &high)) in out.iter_mut().zip(low.iter().zip(&high)) {
-                *value += self.low_sums[table + usize::from(low)]
-                    + self.high_sums[table + usize::from(high)];
+                *value += low_table[usize::from(low)] + high_table[usize::from(high)];
             }
         }
     }
@@ -1002,11 +1002,13 @@ impl<'a, R: Field> PlaneFold<'a, R> {
     fn row_value(&self, bytes: &[u8]) -> R {
         debug_assert_eq!(bytes.len(), self.groups * PLANE_BYTES);
         let mut value = R::ZERO;
-        let mut table = 0;
-        for masks in bytes.as_chunks::<PLANE_BYTES>().0 {
-            value += self.low_sums[table + usize::from(masks[0])]
-                + self.high_sums[table + usize::from(masks[1])];
-            table += GROUP_ENTRIES;
+        for ((low_table, high_table), masks) in self
+            .low_sums
+            .iter()
+            .zip(&self.high_sums)
+            .zip(bytes.as_chunks::<PLANE_BYTES>().0)
+        {
+            value += low_table[usize::from(masks[0])] + high_table[usize::from(masks[1])];
         }
         value
     }
