@@ -269,6 +269,20 @@ where
     #[inline]
     #[must_use]
     pub fn into_accumulator(mut self) -> Acc {
+        self.finish()
+    }
+
+    /// Weight the trailing partial batch and return the accumulator it completes.
+    ///
+    /// The count check and the drain belong together, so every read of the accumulator goes
+    /// through here. The check on its own passes on a held batch that was never added, since
+    /// each held constraint still advanced the index.
+    ///
+    /// # Panics
+    ///
+    /// Panics if attached alpha powers do not number one per asserted constraint.
+    #[inline]
+    fn finish(&mut self) -> Acc {
         self.assert_alpha_power_count();
         self.drain_pending();
         self.accumulator
@@ -277,15 +291,19 @@ where
     /// Weight the constraints left below a whole batch and add them to the accumulator.
     ///
     /// Each drained slot is emptied, so a second call adds nothing.
+    ///
+    /// # Panics
+    ///
+    /// Panics in debug builds if the asserted constraints do not number one per attached power.
     #[inline]
     fn drain_pending(&mut self) {
         let Some(powers) = self.alpha_powers else {
             return;
         };
-        // Constraints past the last power were never held, so they leave nothing to drain.
-        let filled = self.constraint_index.min(powers.len());
-        let start = filled - filled % ALPHA_BATCH;
-        for (slot, &power) in powers[start..filled].iter().enumerate() {
+        // `Self::finish` checks the count first, so the two already agree here.
+        debug_assert_eq!(self.constraint_index, powers.len());
+        let start = powers.len() - powers.len() % ALPHA_BATCH;
+        for (slot, &power) in powers[start..].iter().enumerate() {
             self.accumulator += power * core::mem::replace(&mut self.pending[slot], Var::ZERO);
         }
     }
@@ -667,14 +685,15 @@ where
     {
         air.eval(&mut self);
         eval_boundary_io(&mut self, air.public_boundary_io());
-        // Disabled constraints never reach the inner folder, so they consume no power.
-        if self.constraints_enabled {
-            self.inner.assert_alpha_power_count();
-            self.inner.drain_pending();
-        }
         // Both families come out of the one pass, batched independently.
         FolderEvaluations {
-            constraints: self.inner.accumulator,
+            // Disabled constraints never reach the inner folder, so they consume no power
+            // and leave the accumulator untouched.
+            constraints: if self.constraints_enabled {
+                self.inner.finish()
+            } else {
+                self.inner.accumulator
+            },
             interactions: self.interaction_accumulator,
         }
     }
