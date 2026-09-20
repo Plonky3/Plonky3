@@ -47,6 +47,9 @@ const BIT_SUMCHECK: &str = "bit_sumcheck";
 /// Label around the committed-word sumcheck.
 const WORD_SUMCHECK: &str = "word_sumcheck";
 
+/// Label of the committed-trace evaluation left by the reduction.
+const TRACE_EVALUATION: &str = "trace_evaluation";
+
 /// Type-level identity of the within-word sub-protocol.
 struct BitSumcheck;
 
@@ -128,6 +131,12 @@ impl TranscriptShape {
             Interaction::marker::<BitSumcheck>(Hierarchy::End, Kind::Protocol, BIT_SUMCHECK),
             Interaction::marker::<WordSumcheck>(Hierarchy::Begin, Kind::Protocol, WORD_SUMCHECK),
             Interaction::marker::<WordSumcheck>(Hierarchy::End, Kind::Protocol, WORD_SUMCHECK),
+            Interaction::algebra::<F, F>(
+                Hierarchy::Atomic,
+                Kind::Public,
+                TRACE_EVALUATION,
+                Length::Fixed(EF::DIMENSION),
+            ),
         ];
         InteractionPattern::new(steps).expect("a flat sequence of atomic steps is well formed")
     }
@@ -251,6 +260,15 @@ where
         result
     }
 
+    /// Absorbs the evaluation the reduction hands back as an opening claim.
+    pub(super) fn trace_evaluation(&mut self, value: EF) {
+        // Later challenges drawn by the caller must depend on this value.
+        self.state.add_public_scalars::<F, FieldToFieldCodec<F>>(
+            TRACE_EVALUATION,
+            &flatten_extensions(&[value]),
+        );
+    }
+
     /// Closes the complete reduction transcript.
     pub(super) fn finish(self) {
         // Every value is public or carried by a delegated proof.
@@ -342,6 +360,16 @@ where
         let result = run(self.state.challenger_mut());
         self.state.end_protocol::<WordSumcheck>(WORD_SUMCHECK);
         result
+    }
+
+    /// Reabsorbs the evaluation carried by the proof.
+    pub(super) fn trace_evaluation(&mut self, value: EF) {
+        // The replay must reach the same sponge state as the prover.
+        self.state
+            .observe_public_scalars::<F, FieldToFieldCodec<F>>(
+                TRACE_EVALUATION,
+                &flatten_extensions(&[value]),
+            );
     }
 
     /// Closes the complete reduction transcript.
@@ -453,6 +481,8 @@ mod tests {
         prover_transcript.word_sumcheck(|_| {});
         verifier_transcript.bit_sumcheck(|_| {});
         verifier_transcript.word_sumcheck(|_| {});
+        prover_transcript.trace_evaluation(F::from_repr(1 << 17));
+        verifier_transcript.trace_evaluation(F::from_repr(1 << 17));
         prover_transcript.finish();
         verifier_transcript.finish();
 
@@ -461,6 +491,47 @@ mod tests {
             CanSample::<F>::sample(&mut prover),
             CanSample::<F>::sample(&mut verifier)
         );
+    }
+
+    #[test]
+    fn every_absorbed_statement_input_moves_the_batching_weights() {
+        // Sampling only, so nothing here depends on the arithmetic built from these inputs.
+        let sample = |shape, claim: &ShiftClaim<F>, public: &[Word64]| {
+            let mut challenger = challenger();
+            let mut transcript =
+                ShiftProverTranscript::<_, F, F>::new(&mut challenger, shape, claim, public);
+            let weights = transcript.batching();
+            transcript.bit_sumcheck(|_| {});
+            transcript.word_sumcheck(|_| {});
+            transcript.trace_evaluation(F::ZERO);
+            transcript.finish();
+            (weights.operation, weights.operand)
+        };
+        let shape = TranscriptShape::new(2, 6, 3, 8);
+        let public = [Word64::new(13), Word64::new(17), Word64::new(19)];
+        let base = sample(shape, &claim(), &public);
+
+        // Perturbing one operand claim must move both batching points.
+        let mut zero = *claim().zero();
+        zero[0] += F::ONE;
+        let perturbed = ShiftClaim::new(
+            claim().constraint_point().to_vec(),
+            claim().bit_point().to_vec(),
+            zero,
+            *claim().bitwise_and(),
+            *claim().integer_mul(),
+        );
+        assert_ne!(sample(shape, &perturbed, &public), base);
+
+        // A committed-segment length that no claim value mentions must also move them.
+        assert_ne!(
+            sample(TranscriptShape::new(2, 6, 3, 9), &claim(), &public),
+            base
+        );
+
+        // So must a public word, which never enters the sampled points arithmetically.
+        let changed = [Word64::new(13), Word64::new(17), Word64::new(23)];
+        assert_ne!(sample(shape, &claim(), &changed), base);
     }
 
     #[test]

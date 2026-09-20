@@ -375,13 +375,15 @@ mod tests {
 
     type F = BinaryField128;
 
-    /// Enumerates every canonical shift accepted by a 64-bit word.
+    /// Enumerates every distinct shift accepted by a 64-bit word.
     fn shifts() -> Vec<Shift<Word64>> {
+        // Distance zero normalizes to one identity, so the other seven spellings are dropped.
         (0..8)
             .flat_map(|code| {
                 let kind = ShiftKind::from_code(code).expect("codes below eight are assigned");
                 let width = if kind.is_lane32() { 32 } else { 64 };
-                (0..width).map(move |amount| Shift::new(kind, amount).unwrap())
+                let first = usize::from(code != 0);
+                (first..width).map(move |amount| Shift::new(kind, amount).unwrap())
             })
             .collect()
     }
@@ -400,23 +402,43 @@ mod tests {
             .collect()
     }
 
-    #[test]
-    fn factorized_transpose_matches_every_shift_pair() {
+    /// Compares both transpose paths over the supplied slot pairs.
+    fn check_pairs(pairs: impl Iterator<Item = [Shift<Word64>; 2]>) {
         // Distinct coefficients expose bit order, lane boundaries, and sign-extension fan-out.
         let output = (0..64)
             .map(|bit| F::from_repr(1_u128 << bit))
             .collect::<Vec<_>>();
-        let shifts = shifts();
+        for sequence in pairs {
+            assert_eq!(
+                shift_weights(sequence, &output),
+                direct_weights(sequence, &output)
+            );
+        }
+    }
 
-        // Exhausting both slots catches reversed composition and every legal kind and amount.
-        for &inner in &shifts {
-            for &outer in &shifts {
-                let sequence = [inner, outer];
-                assert_eq!(
-                    shift_weights(sequence, &output),
-                    direct_weights(sequence, &output)
-                );
+    #[test]
+    fn factorized_transpose_matches_a_sampled_shift_pair_grid() {
+        // Strides coprime to the count visit every shift in both slots, three pairings each.
+        let shifts = shifts();
+        let count = shifts.len();
+        let mut pairs = Vec::with_capacity(3 * count);
+        for stride in [1_usize, 31, 137] {
+            for inner in 0..count {
+                pairs.push([shifts[inner], shifts[(inner * stride + 1) % count]]);
             }
         }
+        check_pairs(pairs.into_iter());
+    }
+
+    #[test]
+    #[ignore = "the full square is 142k pairs and dominates the default test profile"]
+    fn factorized_transpose_matches_every_shift_pair() {
+        // Exhausting both slots catches reversed composition and every legal kind and amount.
+        let shifts = shifts();
+        check_pairs(
+            shifts
+                .iter()
+                .flat_map(|&inner| shifts.iter().map(move |&outer| [inner, outer])),
+        );
     }
 }

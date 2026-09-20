@@ -33,6 +33,9 @@ pub enum ShiftReductionError {
     /// The two reduction phases do not meet at the same intermediate claim.
     #[error("bit and word sumchecks disagree on their shared claim")]
     IntermediateClaim,
+    /// The public wiring vanishes at the sampled word point, so no opening is pinned.
+    #[error("shift reduction wiring vanishes and determines no trace opening")]
+    DegenerateWiring,
     /// The final sumcheck value does not equal the claimed trace and wiring evaluations.
     #[error("shift reduction does not close against the trace opening")]
     FinalClaim,

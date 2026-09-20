@@ -90,6 +90,9 @@ impl<F> ShiftClaim<F> {
 }
 
 /// One evaluation claim on the committed bit trace.
+///
+/// The leading coordinates select a padded word and the trailing ones select a bit within it.
+#[must_use = "leaf claims must be tied to committed columns"]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ShiftOpeningClaim<F> {
     /// Point over the word index followed by the within-word bit index.

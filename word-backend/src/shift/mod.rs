@@ -40,7 +40,10 @@ use p3_security::word::WordShiftSecurityModel;
 use p3_sumcheck::generic_degree::{GenericDegreeProof, RoundProver};
 use p3_word::{ConstraintSystem, Segment, Word};
 use serde::{Deserialize, Serialize};
-use transcript::{ShiftProverTranscript, ShiftVerifierTranscript, TranscriptShape};
+use transcript::{
+    OPERAND_VARIABLES, OPERATION_VARIABLES, ShiftProverTranscript, ShiftVerifierTranscript,
+    TranscriptShape,
+};
 use wiring::{
     PreparedWeights, bit_prover, public_contribution, shift_evaluations, wiring_evaluation,
     word_prover,
@@ -97,9 +100,17 @@ impl<W: Word> ShiftReductionKey<W> {
     }
 
     /// Returns the exact algebraic soundness term for this reduction.
+    ///
+    /// The width argument is a lower bound on the base-two logarithm of the challenge-field order.
+    ///
+    /// Every batching and sumcheck challenge must be sampled from that same extension field.
+    ///
+    /// The result excludes the error of whatever produced the two statement points.
+    ///
+    /// It also excludes binding and authentication of the returned trace opening.
     #[must_use]
     pub fn security_term(&self, field_bits: NonZeroUsize) -> SecurityTerm {
-        // Four batching variables precede both quadratic sumchecks.
+        // Both batching axes precede both quadratic sumchecks.
         self.security_model(field_bits).combined_term()
     }
 
@@ -112,12 +123,15 @@ impl<W: Word> ShiftReductionKey<W> {
 
     /// Proves that all supplied operand claims read the committed word trace.
     ///
-    /// The caller must bind the trace commitment before invoking this reduction.
-    /// The returned evaluation remains unauthenticated until the Boolean PCS opens it.
+    /// The caller must absorb the trace commitment into the challenger before calling this.
+    ///
+    /// Skipping that lets a prover choose the trace after seeing the sampled challenges.
+    ///
+    /// The returned evaluation stays unauthenticated until the caller opens it.
     ///
     /// # Errors
     ///
-    /// Returns an error when a statement point or witness segment has the wrong shape.
+    /// Returns an error for a misshaped statement point or segment, or a vanishing wiring.
     pub fn prove<F, EF, Challenger>(
         &self,
         values: &PackedWitness<W>,
@@ -192,7 +206,13 @@ impl<W: Word> ShiftReductionKey<W> {
             [word_point.as_slice(), bit_point.as_slice()].concat(),
             witness_evaluation,
         );
+        transcript.trace_evaluation(witness_evaluation);
         transcript.finish();
+
+        // A vanishing wiring factor leaves the opening value unpinned by the closing equation.
+        if wiring_evaluation.is_zero() {
+            return Err(ShiftReductionError::DegenerateWiring);
+        }
         Ok((
             ShiftReductionProof {
                 bit_sumcheck,
@@ -205,11 +225,15 @@ impl<W: Word> ShiftReductionKey<W> {
 
     /// Verifies a shift reduction and returns its unauthenticated trace opening.
     ///
-    /// The caller must discharge the result through the Boolean PCS.
+    /// The caller must absorb the trace commitment into the challenger before calling this.
+    ///
+    /// The caller must then discharge the returned claim through the commitment scheme.
+    ///
+    /// The reduction alone proves nothing about committed data.
     ///
     /// # Errors
     ///
-    /// Returns an error for malformed proofs, inconsistent rounds, or a failed closing equation.
+    /// Returns an error for a malformed proof, a vanishing wiring, or a failed closing check.
     pub fn verify<F, EF, Challenger>(
         &self,
         public: &[W],
@@ -279,7 +303,13 @@ impl<W: Word> ShiftReductionKey<W> {
         // The wiring factor is public and is evaluated directly from the compiled relation graph.
         let shifts = shift_evaluations(&self.layout, claim.bit_point(), bit_point.as_slice());
         let wiring = wiring_evaluation(&self.layout, &prepared, &shifts, word_point.as_slice());
+        transcript.trace_evaluation(proof.witness_evaluation);
         transcript.finish();
+
+        // Without this rejection the closing equation holds for every claimed evaluation.
+        if wiring.is_zero() {
+            return Err(ShiftReductionError::DegenerateWiring);
+        }
         if final_claim != proof.witness_evaluation * wiring {
             return Err(ShiftReductionError::FinalClaim);
         }
@@ -325,8 +355,13 @@ impl<W: Word> ShiftReductionKey<W> {
         )
     }
 
-    /// Returns the number of variables covering the committed word segment.
-    fn word_variables(&self) -> usize {
+    /// Returns the number of leading word coordinates in the returned opening point.
+    ///
+    /// The committed trace must be padded with zero words to exactly that many word slots.
+    ///
+    /// The remaining coordinates of the point are the within-word bit coordinates.
+    #[must_use]
+    pub fn word_variables(&self) -> usize {
         // An empty segment is represented by one zero padding slot.
         self.system.witness_len().max(1).next_power_of_two().ilog2() as usize
     }
@@ -336,7 +371,7 @@ impl<W: Word> ShiftReductionKey<W> {
         // Two two-variable batching axes and both quadratic round counts are exact.
         WordShiftSecurityModel::new(
             field_bits.get(),
-            4,
+            OPERATION_VARIABLES + OPERAND_VARIABLES,
             W::BITS.ilog2() as usize + self.word_variables(),
         )
         .expect("a nonzero field width gives a valid shift-reduction model")
@@ -626,8 +661,8 @@ mod tests {
     }
 
     #[test]
-    fn empty_system_reduces_to_a_zero_opening() {
-        // An empty committed segment still has one implicit zero padding word.
+    fn a_system_with_no_committed_reference_pins_no_opening() {
+        // An empty committed segment makes the public wiring identically zero.
         let system = ConstraintSystem::<Word32>::new(0, 0, vec![], vec![], vec![]).unwrap();
         let key = ShiftReductionKey::new(system).unwrap();
         let witness = PackedWitness::new(key.system(), &[], &[]).unwrap();
@@ -638,13 +673,126 @@ mod tests {
             [F::ZERO; 3],
             [F::ZERO; 4],
         );
+
+        // Proving stops rather than handing back an evaluation nothing constrains.
+        assert_eq!(
+            key.prove::<F, F, _>(&witness, &claim, &mut challenger())
+                .expect_err("a vanishing wiring factor stops the prover"),
+            ShiftReductionError::DegenerateWiring
+        );
+
+        // The closing equation reads zero equals anything times zero, so it accepts every value.
+        // Five all-zero quadratic rounds and no word round replay without complaint.
+        for value in [F::ZERO, F::ONE, F::from_repr(1 << 33)] {
+            let forged = ShiftReductionProof::<F, F> {
+                bit_sumcheck: GenericDegreeProof {
+                    claimed_sum: F::ZERO,
+                    round_polys: vec![vec![F::ZERO; 2]; 5],
+                    pow_witnesses: vec![],
+                },
+                word_sumcheck: GenericDegreeProof {
+                    claimed_sum: F::ZERO,
+                    round_polys: vec![],
+                    pow_witnesses: vec![],
+                },
+                witness_evaluation: value,
+            };
+            assert_eq!(
+                key.verify(&[], &claim, &forged, &mut challenger()),
+                Err(ShiftReductionError::DegenerateWiring)
+            );
+        }
+    }
+
+    #[test]
+    fn word32_shifts_close_the_five_round_bit_phase() {
+        // Fixture state: two committed 32-bit words under all four full-width movements.
+        let first = ValueIndex::witness(0).unwrap();
+        let second = ValueIndex::witness(1).unwrap();
+        let logical_left = Shift::new(ShiftKind::LogicalLeft, 5).unwrap();
+        let logical_right = Shift::new(ShiftKind::LogicalRight, 11).unwrap();
+        let arithmetic = Shift::new(ShiftKind::ArithmeticRight, 9).unwrap();
+        let rotate = Shift::new(ShiftKind::RotateRight, 27).unwrap();
+        let left = Operand::new(vec![
+            ShiftedValue::single(first, logical_left),
+            ShiftedValue::single(second, arithmetic),
+        ]);
+        let right = Operand::new(vec![
+            ShiftedValue::single(second, logical_right),
+            ShiftedValue::pair(first, logical_right, rotate).unwrap(),
+        ]);
+        let output = Operand::single(ShiftedValue::plain(second));
+        let system = ConstraintSystem::<Word32>::new(
+            0,
+            2,
+            vec![],
+            vec![AndConstraint::new(left, right, output)],
+            vec![],
+        )
+        .unwrap();
+        let key = ShiftReductionKey::new(system).unwrap();
+
+        // A set high bit in each word drives the sign-extending movement.
+        let words = [Word32::new(0x8765_4321), Word32::new(0xfedc_ba98)];
+        let witness = PackedWitness::new(key.system(), &[], &words).unwrap();
+        let claim = evaluate_claim(
+            key.system(),
+            &witness,
+            vec![],
+            (1..6).map(|bit| F::from_repr(1 << bit)).collect(),
+        );
         let mut prover = challenger();
         let (proof, expected) = key.prove(&witness, &claim, &mut prover).unwrap();
-        let mut verifier = challenger();
-        let actual = key.verify(&[], &claim, &proof, &mut verifier).unwrap();
+        let actual = key.verify(&[], &claim, &proof, &mut challenger()).unwrap();
 
         assert_eq!(actual, expected);
-        assert_eq!(actual.value(), F::ZERO);
+    }
+
+    #[test]
+    fn lane_local_and_full_width_logical_right_close_end_to_end() {
+        // These four movements are the ones the shared 64-bit fixture never reaches.
+        let first = ValueIndex::witness(0).unwrap();
+        let second = ValueIndex::witness(1).unwrap();
+        let lane_arithmetic = Shift::new(ShiftKind::Lane32ArithmeticRight, 9).unwrap();
+        let lane_left = Shift::new(ShiftKind::Lane32LogicalLeft, 13).unwrap();
+        let lane_right = Shift::new(ShiftKind::Lane32LogicalRight, 21).unwrap();
+        let logical_right = Shift::new(ShiftKind::LogicalRight, 35).unwrap();
+        let left = Operand::new(vec![
+            ShiftedValue::single(first, lane_arithmetic),
+            ShiftedValue::single(second, lane_left),
+        ]);
+        let right = Operand::new(vec![
+            ShiftedValue::single(second, lane_right),
+            ShiftedValue::single(first, logical_right),
+        ]);
+        let output = Operand::single(ShiftedValue::plain(first));
+        let system = ConstraintSystem::new(
+            0,
+            2,
+            vec![],
+            vec![AndConstraint::new(left, right, output)],
+            vec![],
+        )
+        .unwrap();
+        let key = ShiftReductionKey::new(system).unwrap();
+
+        // Both 32-bit lanes carry a set sign bit so per-lane fan-out is observable.
+        let words = [
+            Word64::new(0x8000_0001_8765_4321),
+            Word64::new(0x1234_5678_9abc_def0),
+        ];
+        let witness = PackedWitness::new(key.system(), &[], &words).unwrap();
+        let claim = evaluate_claim(
+            key.system(),
+            &witness,
+            vec![],
+            (7..13).map(|bit| F::from_repr(1 << bit)).collect(),
+        );
+        let mut prover = challenger();
+        let (proof, expected) = key.prove(&witness, &claim, &mut prover).unwrap();
+        let actual = key.verify(&[], &claim, &proof, &mut challenger()).unwrap();
+
+        assert_eq!(actual, expected);
     }
 
     proptest! {
