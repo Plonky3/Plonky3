@@ -994,8 +994,13 @@ impl<'a, R: Field> PlaneFold<'a, R> {
     }
 
     /// The value one half of one residual row's mask bytes stands for.
+    ///
+    /// # Panics
+    ///
+    /// Debug builds panic unless `bytes` holds one plane pair per corner group.
     #[inline]
     fn row_value(&self, bytes: &[u8]) -> R {
+        debug_assert_eq!(bytes.len(), self.groups * PLANE_BYTES);
         let mut value = R::ZERO;
         let mut table = 0;
         for masks in bytes.as_chunks::<PLANE_BYTES>().0 {
@@ -1091,12 +1096,18 @@ impl RowTile {
     }
 
     /// Lay out the mask bytes of word pair `pair`.
+    ///
+    /// # Panics
+    ///
+    /// Debug builds panic unless the tile was laid out for `fold`'s corner groups and width.
     fn fill<R: Field>(
         &mut self,
         fold: &PlaneFold<'_, R>,
         pair: usize,
         next_columns: &[Range<usize>],
     ) {
+        debug_assert_eq!(self.column_stride, ROW_HALVES * fold.groups * PLANE_BYTES);
+        debug_assert_eq!(self.lane_stride, self.column_stride * fold.trace.width);
         let words = [pair, pair + fold.words / ROW_HALVES];
         let half_bytes = fold.groups * PLANE_BYTES;
         for column in 0..fold.trace.width {
