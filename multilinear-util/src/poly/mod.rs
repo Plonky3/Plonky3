@@ -687,18 +687,26 @@ where
     ///     p'(x') = (1 - r) * p(0, x') + r * p(1, x')
     /// ```
     ///
-    /// The result has one fewer variable (n - 1).
+    /// The result has one fewer variable (n - 1), stored as 2^{n - 1 - log_2(W)} packed
+    /// elements, so it needs `n > log_2(W)`: the folded half must fill at least one lane group.
+    /// Smaller polynomials fold with [`fix_prefix_var`](Self::fix_prefix_var) and stay scalar.
     ///
     /// # Panics
     ///
-    /// Panics if the polynomial is constant (zero free variables).
+    /// Panics if the polynomial has at most log_2(W) variables.
     pub fn fix_prefix_var_to_packed<Ext>(&self, r: Ext) -> Poly<Ext::ExtensionPacking>
     where
         A: Field,
         Ext: ExtensionField<A>,
     {
         let evals = self.as_slice();
-        assert!(evals.len() > 1, "no free variables");
+        // Below this the packed halves are empty or `pack_slice` sees a partial lane group.
+        assert!(
+            self.num_variables() > log2_strict_usize(A::Packing::WIDTH),
+            "fix_prefix_var_to_packed needs more than log2(WIDTH) = {} variables, got {}",
+            log2_strict_usize(A::Packing::WIDTH),
+            self.num_variables()
+        );
 
         let r = Ext::ExtensionPacking::from(r);
         let poly = A::Packing::pack_slice(evals);
@@ -2166,6 +2174,16 @@ pub(crate) mod test {
             assert_eq!(scalar.num_variables(), packed.num_variables());
             assert_eq!(scalar, packed);
         }
+    }
+
+    #[test]
+    #[should_panic(expected = "fix_prefix_var_to_packed needs more than log2(WIDTH)")]
+    fn test_fix_prefix_var_to_packed_rejects_lane_group_sized_input() {
+        // Exactly one lane group: the folded half would hold no packed element at all.
+        let mut rng = SmallRng::seed_from_u64(0);
+        let k_pack = log2_strict_usize(PackedF::WIDTH);
+        let poly = Poly::<F>::rand(&mut rng, k_pack);
+        let _ = poly.fix_prefix_var_to_packed::<EF>(EF::ONE);
     }
 
     #[test]
