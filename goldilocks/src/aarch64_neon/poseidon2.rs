@@ -11,6 +11,7 @@
 use alloc::vec::Vec;
 use core::arch::aarch64::uint64x2_t;
 
+use p3_field::PrimeField64;
 use p3_poseidon2::{
     ExternalLayer, ExternalLayerConstants, ExternalLayerConstructor, InternalLayer,
     InternalLayerConstructor, poseidon2_round_numbers_128,
@@ -22,7 +23,7 @@ use rand::{Rng, RngExt};
 use super::packing::PackedGoldilocksNeon;
 use super::poseidon2_asm::*;
 use super::utils::{pack_lanes, unpack_lanes};
-use crate::{Goldilocks, MATRIX_DIAG_20_GOLDILOCKS, P};
+use crate::{Goldilocks, MATRIX_DIAG_20_GOLDILOCKS};
 
 /// Degree of the chosen permutation polynomial for Goldilocks.
 const GOLDILOCKS_S_BOX_DEGREE: u64 = 7;
@@ -35,12 +36,12 @@ pub struct Poseidon2InternalLayerGoldilocksAsm {
 
 impl InternalLayerConstructor<Goldilocks> for Poseidon2InternalLayerGoldilocksAsm {
     fn new_from_constants(internal_constants: Vec<Goldilocks>) -> Self {
-        // `Goldilocks::new` and `from_u64` accept any `u64`, so a constant may arrive as
-        // `value >= P`. The internal round adds it through `add_canonical_asm`, whose
-        // reduction is only correct for a canonical `b`, so reduce once here.
+        // The field constructors accept any 64-bit value, so a constant can arrive unreduced.
+        // The internal round adds it with the variant that assumes a reduced second operand.
+        // Reducing once here makes that precondition hold for every round.
         let constants_raw = internal_constants
             .iter()
-            .map(|c| to_canonical_u64(c.value))
+            .map(Goldilocks::as_canonical_u64)
             .collect();
         Self { constants_raw }
     }
@@ -104,17 +105,18 @@ impl<const WIDTH: usize> ExternalLayerConstructor<Goldilocks, WIDTH>
     for Poseidon2ExternalLayerGoldilocksAsm<WIDTH>
 {
     fn new_from_constants(external_constants: ExternalLayerConstants<Goldilocks, WIDTH>) -> Self {
-        // Same reduction as the internal layer: the external rounds add these through
-        // `add_canonical_asm` as well.
+        // Only the width-8 fused rounds add a constant with the reduced-operand variant.
+        // The other widths use the variant that reduces that operand itself.
+        // Reducing unconditionally is free here and holds for any future width.
         let initial_constants_raw = external_constants
             .get_initial_constants()
             .iter()
-            .map(|rc| core::array::from_fn(|i| to_canonical_u64(rc[i].value)))
+            .map(|rc| core::array::from_fn(|i| rc[i].as_canonical_u64()))
             .collect();
         let terminal_constants_raw = external_constants
             .get_terminal_constants()
             .iter()
-            .map(|rc| core::array::from_fn(|i| to_canonical_u64(rc[i].value)))
+            .map(|rc| core::array::from_fn(|i| rc[i].as_canonical_u64()))
             .collect();
         Self {
             initial_constants_raw,
@@ -313,13 +315,6 @@ pub struct Poseidon2GoldilocksFused<const WIDTH: usize> {
     terminal_constants_raw: Vec<[u64; WIDTH]>,
 }
 
-/// Reduce a `Goldilocks::value` to canonical form. One subtraction suffices because
-/// `u64::MAX < 2P`.
-#[inline]
-const fn to_canonical_u64(v: u64) -> u64 {
-    if v >= P { v - P } else { v }
-}
-
 impl<const WIDTH: usize> Poseidon2GoldilocksFused<WIDTH> {
     /// Unlike the generic `Poseidon2::new`, this only reads the round constants (to derive
     /// the fused ASM constant tables) rather than storing them, so it takes them by
@@ -330,17 +325,17 @@ impl<const WIDTH: usize> Poseidon2GoldilocksFused<WIDTH> {
     ) -> Self {
         let internal_constants_raw = internal_constants
             .iter()
-            .map(|c| to_canonical_u64(c.value))
+            .map(Goldilocks::as_canonical_u64)
             .collect();
         let initial_constants_raw = external_constants
             .get_initial_constants()
             .iter()
-            .map(|rc| core::array::from_fn(|i| to_canonical_u64(rc[i].value)))
+            .map(|rc| core::array::from_fn(|i| rc[i].as_canonical_u64()))
             .collect();
         let terminal_constants_raw = external_constants
             .get_terminal_constants()
             .iter()
-            .map(|rc| core::array::from_fn(|i| to_canonical_u64(rc[i].value)))
+            .map(|rc| core::array::from_fn(|i| rc[i].as_canonical_u64()))
             .collect();
         Self {
             internal_constants_raw,
@@ -485,7 +480,7 @@ mod tests {
     use super::*;
     use crate::poseidon1::GOLDILOCKS_S_BOX_DEGREE;
     use crate::{
-        GOLDILOCKS_POSEIDON2_HALF_FULL_ROUNDS, GOLDILOCKS_POSEIDON2_PARTIAL_ROUNDS_8,
+        GOLDILOCKS_POSEIDON2_HALF_FULL_ROUNDS, GOLDILOCKS_POSEIDON2_PARTIAL_ROUNDS_8, P,
         Poseidon2ExternalLayerGoldilocks, Poseidon2InternalLayerGoldilocks,
     };
 
@@ -642,10 +637,12 @@ mod tests {
         test_asm_matches_generic::<12>();
     }
 
-    /// Round constants supplied in the non-canonical `value >= P` form (which `from_u64`
-    /// produces for one in 2^32 draws) must permute exactly like their canonical twins.
     #[test]
     fn test_asm_accepts_non_canonical_round_constants() {
+        // Invariant: a constant stored above the modulus permutes like its reduced twin.
+        //
+        // The field constructors accept any 64-bit value.
+        // Roughly one sampled constant in 2^32 lands above the modulus.
         const WIDTH: usize = 8;
         let mut rng = SmallRng::seed_from_u64(7);
 
@@ -656,10 +653,18 @@ mod tests {
         let mut internal_constants: Vec<Goldilocks> = (0..GOLDILOCKS_POSEIDON2_PARTIAL_ROUNDS_8)
             .map(|_| rng.random())
             .collect();
-        // Both equal `1`, `u64::MAX` is `P + 2^32 - 2`, i.e. `2^32 - 2` as a field element.
+        // Mutation: two internal round constants get an unreduced representative.
+        //
+        //     P + 1     -> the field element 1
+        //     2^64 - 1  -> P + 2^32 - 2, i.e. the field element 2^32 - 2
         internal_constants[0] = Goldilocks::new(P + 1);
         internal_constants[5] = Goldilocks::new(u64::MAX);
         let mut initial = external_constants.get_initial_constants().to_vec();
+        // Mutation: one initial external round constant gets an unreduced representative.
+        //
+        // The light MDS permutation runs first and leaves the whole state reduced.
+        // The addition is then exact, so this constant alone changes nothing in a release build.
+        // A debug build still catches it, because the addition asserts its precondition.
         initial[0][3] = Goldilocks::new(u64::MAX);
         let non_canonical_external = ExternalLayerConstants::new(
             initial,
@@ -687,8 +692,10 @@ mod tests {
             assert_eq!(state, generic_state, "state seed {seed}");
         }
 
-        // The internal layer on its own, fed a non-canonical state: the raw `s0` add is the
-        // one place where an unreduced constant would change the field element.
+        // Fixture state: the internal layer alone, over a state whose first word is unreduced.
+        //
+        // That first word is the only place an unreduced constant changes the field element.
+        // Elsewhere the light MDS permutation runs first and leaves the state reduced.
         let asm_internal =
             Poseidon2InternalLayerGoldilocksAsm::new_from_constants(internal_constants.clone());
         let generic_internal =
@@ -705,6 +712,36 @@ mod tests {
             &mut generic_state,
         );
         assert_eq!(asm_state, generic_state);
+
+        // Fixture state: two independent lanes fed through the dual-lane packed rounds.
+        //
+        //     lane 0 : 2^64 - 1 - i      unreduced, just below the wrap point
+        //     lane 1 : P + i             unreduced, just above the modulus
+        //
+        // The dual-lane rounds are a third path into the reduced-operand addition.
+        // They share the constant tables with the scalar path, so nothing else covers them.
+        let lane_a: [F; WIDTH] = core::array::from_fn(|i| Goldilocks::new(u64::MAX - i as u64));
+        let lane_b: [F; WIDTH] = core::array::from_fn(|i| Goldilocks::new(P + i as u64));
+        // Interleave the two lanes into the packed state the SIMD permutation consumes.
+        let mut packed: [PackedGoldilocksNeon; WIDTH] =
+            core::array::from_fn(|i| PackedGoldilocksNeon([lane_a[i], lane_b[i]]));
+        asm.permute_mut(&mut packed);
+
+        // Reference: permute each lane separately through the generic implementation.
+        let (mut expected_a, mut expected_b) = (lane_a, lane_b);
+        generic.permute_mut(&mut expected_a);
+        generic.permute_mut(&mut expected_b);
+        // Both lanes must match their scalar reference word for word.
+        for i in 0..WIDTH {
+            assert_eq!(
+                packed[i].0[0], expected_a[i],
+                "packed lane0 mismatch at {i}"
+            );
+            assert_eq!(
+                packed[i].0[1], expected_b[i],
+                "packed lane1 mismatch at {i}"
+            );
+        }
     }
 
     #[test]
