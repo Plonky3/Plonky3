@@ -35,7 +35,13 @@ pub struct Poseidon2InternalLayerGoldilocksAsm {
 
 impl InternalLayerConstructor<Goldilocks> for Poseidon2InternalLayerGoldilocksAsm {
     fn new_from_constants(internal_constants: Vec<Goldilocks>) -> Self {
-        let constants_raw = internal_constants.iter().map(|c| c.value).collect();
+        // `Goldilocks::new` and `from_u64` accept any `u64`, so a constant may arrive as
+        // `value >= P`. The internal round adds it through `add_canonical_asm`, whose
+        // reduction is only correct for a canonical `b`, so reduce once here.
+        let constants_raw = internal_constants
+            .iter()
+            .map(|c| to_canonical_u64(c.value))
+            .collect();
         Self { constants_raw }
     }
 }
@@ -98,15 +104,17 @@ impl<const WIDTH: usize> ExternalLayerConstructor<Goldilocks, WIDTH>
     for Poseidon2ExternalLayerGoldilocksAsm<WIDTH>
 {
     fn new_from_constants(external_constants: ExternalLayerConstants<Goldilocks, WIDTH>) -> Self {
+        // Same reduction as the internal layer: the external rounds add these through
+        // `add_canonical_asm` as well.
         let initial_constants_raw = external_constants
             .get_initial_constants()
             .iter()
-            .map(|rc| core::array::from_fn(|i| rc[i].value))
+            .map(|rc| core::array::from_fn(|i| to_canonical_u64(rc[i].value)))
             .collect();
         let terminal_constants_raw = external_constants
             .get_terminal_constants()
             .iter()
-            .map(|rc| core::array::from_fn(|i| rc[i].value))
+            .map(|rc| core::array::from_fn(|i| to_canonical_u64(rc[i].value)))
             .collect();
         Self {
             initial_constants_raw,
@@ -632,6 +640,71 @@ mod tests {
     #[test]
     fn test_asm_matches_generic_width_12() {
         test_asm_matches_generic::<12>();
+    }
+
+    /// Round constants supplied in the non-canonical `value >= P` form (which `from_u64`
+    /// produces for one in 2^32 draws) must permute exactly like their canonical twins.
+    #[test]
+    fn test_asm_accepts_non_canonical_round_constants() {
+        const WIDTH: usize = 8;
+        let mut rng = SmallRng::seed_from_u64(7);
+
+        let external_constants = ExternalLayerConstants::<Goldilocks, WIDTH>::new_from_rng(
+            2 * GOLDILOCKS_POSEIDON2_HALF_FULL_ROUNDS,
+            &mut rng,
+        );
+        let mut internal_constants: Vec<Goldilocks> = (0..GOLDILOCKS_POSEIDON2_PARTIAL_ROUNDS_8)
+            .map(|_| rng.random())
+            .collect();
+        // Both equal `1`, `u64::MAX` is `P + 2^32 - 2`, i.e. `2^32 - 2` as a field element.
+        internal_constants[0] = Goldilocks::new(P + 1);
+        internal_constants[5] = Goldilocks::new(u64::MAX);
+        let mut initial = external_constants.get_initial_constants().to_vec();
+        initial[0][3] = Goldilocks::new(u64::MAX);
+        let non_canonical_external = ExternalLayerConstants::new(
+            initial,
+            external_constants.get_terminal_constants().to_vec(),
+        );
+
+        let generic: Poseidon2<
+            Goldilocks,
+            Poseidon2ExternalLayerGoldilocks<WIDTH>,
+            Poseidon2InternalLayerGoldilocks,
+            WIDTH,
+            GOLDILOCKS_S_BOX_DEGREE,
+        > = Poseidon2::new(non_canonical_external.clone(), internal_constants.clone());
+        let asm: Poseidon2GoldilocksAsm<WIDTH> =
+            Poseidon2::new(non_canonical_external, internal_constants.clone());
+
+        for seed in 0..32u64 {
+            let mut state = [F::ZERO; WIDTH];
+            for (i, v) in state.iter_mut().enumerate() {
+                *v = Goldilocks::new(u64::MAX - seed * 131 - i as u64);
+            }
+            let mut generic_state = state;
+            asm.permute_mut(&mut state);
+            generic.permute_mut(&mut generic_state);
+            assert_eq!(state, generic_state, "state seed {seed}");
+        }
+
+        // The internal layer on its own, fed a non-canonical state: the raw `s0` add is the
+        // one place where an unreduced constant would change the field element.
+        let asm_internal =
+            Poseidon2InternalLayerGoldilocksAsm::new_from_constants(internal_constants.clone());
+        let generic_internal =
+            Poseidon2InternalLayerGoldilocks::new_from_constants(internal_constants);
+        let mut asm_state = [F::ZERO; WIDTH];
+        asm_state[0] = Goldilocks::new(u64::MAX);
+        let mut generic_state = asm_state;
+        InternalLayer::<F, WIDTH, GOLDILOCKS_S_BOX_DEGREE>::permute_state(
+            &asm_internal,
+            &mut asm_state,
+        );
+        InternalLayer::<F, WIDTH, GOLDILOCKS_S_BOX_DEGREE>::permute_state(
+            &generic_internal,
+            &mut generic_state,
+        );
+        assert_eq!(asm_state, generic_state);
     }
 
     #[test]
