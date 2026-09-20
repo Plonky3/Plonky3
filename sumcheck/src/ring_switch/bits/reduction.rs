@@ -483,19 +483,21 @@ impl<EF: TowerLevel> BitRingSwitch<EF> {
             .par_chunks(equality.block_len())
             .zip(equality.outer().par_iter())
             .par_fold_reduce(
-                || (BitTensor::zero(), BitTensorBuckets::zero()),
-                |(mut total, mut buckets), (values, &weight)| {
+                // The scratch is what a block accumulates into, so only a fold arm holds one.
+                || (BitTensor::zero(), None),
+                |(mut total, mut scratch), (values, &weight)| {
+                    let buckets = scratch.get_or_insert_with(BitTensorBuckets::zero);
                     buckets.clear();
                     for (&inner, &value) in equality.inner().iter().zip(values) {
                         buckets.add_exterior_product(inner, value);
                     }
                     total.add_scaled_columns(&buckets.tensor(), weight);
-                    (total, buckets)
+                    (total, scratch)
                 },
-                |(mut total, buckets), (partial, _)| {
+                |(mut total, scratch), (partial, _)| {
                     // Addition is associative, so regrouping cannot change it.
                     total += partial;
-                    (total, buckets)
+                    (total, scratch)
                 },
             )
             .0
@@ -579,16 +581,12 @@ impl<EF: TowerLevel> BitRingSwitch<EF> {
         let max = (1usize << kept) - 1;
 
         let (carry, last, _) = values.par_chunks(block).enumerate().par_fold_reduce(
-            || {
-                (
-                    BitTensor::zero(),
-                    BitTensor::zero(),
-                    BitTensorBuckets::zero(),
-                )
-            },
-            |(mut carry, mut last, mut buckets), (index, values)| {
+            // The scratch is what a block accumulates into, so only a fold arm holds one.
+            || (BitTensor::zero(), BitTensor::zero(), None),
+            |(mut carry, mut last, mut scratch), (index, values)| {
                 let weight = equality.outer()[index];
                 let inner = equality.inner();
+                let buckets = scratch.get_or_insert_with(BitTensorBuckets::zero);
                 buckets.clear();
                 for (j, &value) in values.iter().enumerate() {
                     let row = (index * block + j) & max;
@@ -608,13 +606,13 @@ impl<EF: TowerLevel> BitRingSwitch<EF> {
                     }
                 }
                 carry.add_scaled_columns(&buckets.tensor(), weight);
-                (carry, last, buckets)
+                (carry, last, scratch)
             },
-            |(mut carry, mut last, buckets), (other_carry, other_last, _)| {
+            |(mut carry, mut last, scratch), (other_carry, other_last, _)| {
                 // Addition is associative, so regrouping cannot change it.
                 carry += other_carry;
                 last += other_last;
-                (carry, last, buckets)
+                (carry, last, scratch)
             },
         );
         Some(SuccessorTensors { carry, last })
