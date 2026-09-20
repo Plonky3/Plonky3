@@ -1525,7 +1525,7 @@ where
         // Every worker of a stage that reads no successor row reads the same zeros.
         let next_zeros = next_columns
             .is_empty()
-            .then(|| Arc::new(R::zero_vec(width)));
+            .then(|| Arc::from(R::zero_vec(width)));
 
         let (scratch, _) = (0..pairs)
             .into_par_iter()
@@ -1606,7 +1606,7 @@ where
         let next_zeros = round
             .next_columns
             .is_empty()
-            .then(|| Arc::new(PackedRepr::<F, R>::zero_vec(width)));
+            .then(|| Arc::from(PackedRepr::<F, R>::zero_vec(width)));
 
         let (scratch, _) = (0..pairs)
             .into_par_iter()

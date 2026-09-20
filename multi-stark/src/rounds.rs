@@ -566,7 +566,7 @@ enum NextRows<P> {
     /// Buffers this worker fills, one entry per column of the stage.
     Filled(Vec<P>),
     /// Zeros every worker of the stage reads.
-    Shared(Arc<Vec<P>>),
+    Shared(Arc<[P]>),
 }
 
 impl<P: PrimeCharacteristicRing> NextRows<P> {
@@ -574,7 +574,7 @@ impl<P: PrimeCharacteristicRing> NextRows<P> {
     ///
     /// `zeros` is the shared buffer of a stage that reads no successor row; without one the
     /// worker allocates buffers of its own.
-    fn new(width: usize, zeros: Option<&Arc<Vec<P>>>) -> Self {
+    fn new(width: usize, zeros: Option<&Arc<[P]>>) -> Self {
         zeros.map_or_else(
             || Self::Filled(P::zero_vec(width)),
             |zeros| Self::Shared(zeros.clone()),
@@ -665,7 +665,7 @@ where
         constraint_degrees: &[usize],
         interaction_degrees: &[usize],
         width: usize,
-        next_zeros: Option<&Arc<Vec<F>>>,
+        next_zeros: Option<&Arc<[F]>>,
     ) -> Self {
         Self {
             constraint_evals: constraint_degrees
@@ -724,7 +724,7 @@ where
         constraint_degrees: &[usize],
         interaction_degrees: &[usize],
         width: usize,
-        next_zeros: Option<&Arc<Vec<P>>>,
+        next_zeros: Option<&Arc<[P]>>,
     ) -> Self {
         Self {
             constraint_evals: constraint_degrees
@@ -1596,7 +1596,7 @@ where
         // Every worker of a stage that reads no successor row reads the same zeros.
         let next_zeros = next_columns
             .is_empty()
-            .then(|| Arc::new(<F::Packing>::zero_vec(width)));
+            .then(|| Arc::from(<F::Packing>::zero_vec(width)));
         let alpha = EF::ExtensionPacking::from(self.alpha);
         let alpha_powers = self
             .alpha_powers
@@ -1829,7 +1829,7 @@ where
         // Every worker of a stage that reads no successor row reads the same zeros.
         let next_zeros = next_columns
             .is_empty()
-            .then(|| Arc::new(<F>::zero_vec(width)));
+            .then(|| Arc::from(<F>::zero_vec(width)));
 
         let constraint_degrees = self
             .slots
@@ -2227,7 +2227,7 @@ where
         // Every worker of a stage that reads no successor row reads the same zeros.
         let next_zeros = next_columns
             .is_empty()
-            .then(|| Arc::new(<R>::zero_vec(width)));
+            .then(|| Arc::from(<R>::zero_vec(width)));
         let constraint_degrees = self
             .slots
             .iter()
@@ -2531,7 +2531,7 @@ where
         // Every worker of a stage that reads no successor row reads the same zeros.
         let next_zeros = next_columns
             .is_empty()
-            .then(|| Arc::new(<PackedExt<F, EF::ExtensionPacking>>::zero_vec(width)));
+            .then(|| Arc::from(<PackedExt<F, EF::ExtensionPacking>>::zero_vec(width)));
         let alpha = PackedExt::new(EF::ExtensionPacking::from(self.alpha));
         let alpha_powers = self
             .alpha_powers

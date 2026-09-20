@@ -396,7 +396,7 @@ where
         let next_zeros = round
             .next_columns
             .is_empty()
-            .then(|| Arc::new(PackedRepr::<F, R>::zero_vec(width)));
+            .then(|| Arc::from(PackedRepr::<F, R>::zero_vec(width)));
 
         // A lane group's eq weights cross into `R` where its rows are read, one group at a time.
         let weights = eq_suffix.as_slice();
