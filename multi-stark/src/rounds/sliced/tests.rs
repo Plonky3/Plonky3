@@ -269,10 +269,23 @@ fn challenge(round: usize) -> Tower {
     }
 }
 
+/// Which kernels a stage runs once its sliced rounds are spent.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Boundary {
+    /// Every residual column is written out, then read by the round and the fold.
+    Unsliced,
+    /// The round and the fold each read the planes.
+    OnPlanes,
+}
+
 /// Every round polynomial and the openings, with the sliced rounds accumulated in `R`.
 ///
-/// Also returns how many rounds ran on the planes.
-fn sliced_rounds<R>(instances: &[Instance]) -> (Rounds, usize, Option<usize>)
+/// Also returns how many rounds ran on the planes, how many residual rows the stage left them
+/// with, and whether the round that spent them read the planes.
+fn sliced_rounds<R>(
+    instances: &[Instance],
+    boundary: Boundary,
+) -> (Rounds, usize, Option<usize>, bool)
 where
     R: Field + From<Tower> + p3_field::Algebra<Tower>,
     Tower: From<R>,
@@ -299,11 +312,21 @@ where
         let tau = state.tau.as_slice().to_vec();
         let mut on_planes = 1;
         let mut residual_rows = None;
+        let mut read_planes = false;
         let mut round_polys = vec![first];
         for round in 1..tau.len() {
             let eq_suffix = Poly::new_from_point(&tau[round + 1..], Tower::ONE);
-            let round_poly = state.round_poly_sliced::<Gf4>(&eq_suffix).map_or_else(
-                || {
+            let round_poly = if let Some(round_poly) = state.round_poly_sliced::<Gf4>(&eq_suffix) {
+                on_planes += 1;
+                round_poly
+            } else {
+                let lazy = (boundary == Boundary::OnPlanes)
+                    .then(|| state.round_poly_boundary::<Gf4>(&eq_suffix))
+                    .flatten();
+                if let Some(round_poly) = lazy {
+                    read_planes = true;
+                    round_poly
+                } else {
                     state.unslice::<Gf4>();
                     if residual_rows.is_none() {
                         residual_rows = match &state.columns {
@@ -312,14 +335,19 @@ where
                         };
                     }
                     state.round_poly_repr(&eq_suffix)
-                },
-                |round_poly| {
-                    on_planes += 1;
-                    round_poly
-                },
-            );
+                }
+            };
             round_polys.push(round_poly);
-            if !state.fold_sliced(challenge(round)) {
+            let on_planes_fold =
+                boundary == Boundary::OnPlanes && state.fold_boundary::<Gf4>(challenge(round));
+            if on_planes_fold {
+                if residual_rows.is_none() {
+                    residual_rows = match &state.columns {
+                        ExtColumns::Scalar(columns) => Some(columns[0].as_slice().len() * 2),
+                        _ => None,
+                    };
+                }
+            } else if !state.fold_sliced(challenge(round)) {
                 state.fold_repr(challenge(round));
             }
         }
@@ -335,7 +363,12 @@ where
                 ]
             })
             .collect();
-        ((round_polys, openings), on_planes, residual_rows)
+        (
+            (round_polys, openings),
+            on_planes,
+            residual_rows,
+            read_planes,
+        )
     })
 }
 
@@ -362,7 +395,8 @@ fn every_round_on_and_off_the_planes_matches_the_generic_kernel() {
             Instance::honest(FixtureAir::Pair, height, 21),
         ];
         let generic = generic_rounds(&instances);
-        let (tower, tower_on_planes, tower_residual_rows) = sliced_rounds::<Tower>(&instances);
+        let (tower, tower_on_planes, tower_residual_rows, _) =
+            sliced_rounds::<Tower>(&instances, Boundary::Unsliced);
         assert_eq!(tower_on_planes, expected_on_planes, "{height} rows");
         assert_eq!(
             tower_residual_rows,
@@ -370,7 +404,8 @@ fn every_round_on_and_off_the_planes_matches_the_generic_kernel() {
             "{height} rows"
         );
         assert_eq!(tower, generic, "{height} rows, tower");
-        let (poly_basis, on_planes, poly_residual_rows) = sliced_rounds::<Ghash128>(&instances);
+        let (poly_basis, on_planes, poly_residual_rows, _) =
+            sliced_rounds::<Ghash128>(&instances, Boundary::Unsliced);
         assert_eq!(on_planes, expected_on_planes, "{height} rows");
         assert_eq!(
             poly_residual_rows,
@@ -378,6 +413,46 @@ fn every_round_on_and_off_the_planes_matches_the_generic_kernel() {
             "{height} rows"
         );
         assert_eq!(poly_basis, generic, "{height} rows, polynomial basis");
+    }
+}
+
+#[test]
+fn a_boundary_round_and_fold_on_the_planes_match_the_unsliced_kernels() {
+    // A word pair of residual rows is the shortest the planes can serve a boundary round.
+    for (height, on_planes) in [(8 * SHORTEST, true), (4 * SHORTEST, false)] {
+        let instances = [
+            Instance::honest(FixtureAir::Gate { scale: gf4(3) }, height, 25),
+            Instance::honest(FixtureAir::Pair, height, 26),
+        ];
+        for name in ["tower", "polynomial basis"] {
+            let (unsliced, planes) = if name == "tower" {
+                (
+                    sliced_rounds::<Tower>(&instances, Boundary::Unsliced),
+                    sliced_rounds::<Tower>(&instances, Boundary::OnPlanes),
+                )
+            } else {
+                (
+                    sliced_rounds::<Ghash128>(&instances, Boundary::Unsliced),
+                    sliced_rounds::<Ghash128>(&instances, Boundary::OnPlanes),
+                )
+            };
+            assert_eq!(planes.3, on_planes, "{height} rows, {name}");
+            assert_eq!(planes.0, unsliced.0, "{height} rows, {name}");
+            assert_eq!(planes.2, unsliced.2, "{height} rows, {name}");
+        }
+    }
+}
+
+#[test]
+fn the_top_lane_mask_is_the_transpose_of_the_top_lane() {
+    let mut rng = SmallRng::seed_from_u64(27);
+    for corners in 1..=8 {
+        let words = (0..corners).map(|_| rng.random()).collect::<Vec<u64>>();
+        assert_eq!(
+            top_lane_mask(&words),
+            lane_masks(&words)[SLICED_LANES - 1],
+            "{corners} corners"
+        );
     }
 }
 
