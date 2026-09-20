@@ -1,6 +1,7 @@
 //! A bit witness held as the multilinear a commitment holds (Construction 3.1).
 
 use alloc::vec::Vec;
+use core::borrow::Borrow;
 
 use p3_binary_field::TowerLevel;
 use p3_maybe_rayon::prelude::*;
@@ -33,11 +34,21 @@ use super::basis::Coefficients;
 /// Because the basis is the byte representation's own, packing moves no bits.
 ///
 /// It reads the same bytes back as a wider integer.
+///
+/// # Where the elements live
+///
+/// `S` is the backing store, owned by default and a slice in [`BitPackingView`].
+///
+/// A commitment already holds the elements, so reading them through a view spares the
+/// reduction a copy of the whole witness.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct BitPacking<EF> {
+pub struct BitPacking<EF, S = Vec<EF>> {
     /// The packed multilinear, one element per `d` cells of the witness.
-    packed: Poly<EF>,
+    packed: Poly<EF, S>,
 }
+
+/// Borrowed view of a packed bit witness.
+pub type BitPackingView<'a, EF> = BitPacking<EF, &'a [EF]>;
 
 impl<EF: TowerLevel> BitPacking<EF> {
     /// Read a packed bit witness, one element per element's worth of bytes.
@@ -88,6 +99,13 @@ impl<EF: TowerLevel> BitPacking<EF> {
         })
     }
 
+    /// Give up the packing, for a caller that commits to it.
+    pub fn into_poly(self) -> Poly<EF> {
+        self.packed
+    }
+}
+
+impl<EF: TowerLevel, S: Borrow<[EF]>> BitPacking<EF, S> {
     /// Read an already-packed multilinear as a bit witness, sweeping no byte twice.
     ///
     /// The packing is a bijection, so nothing needs checking beyond the shape.
@@ -96,7 +114,7 @@ impl<EF: TowerLevel> BitPacking<EF> {
     ///
     /// - The level's elements are narrower than the byte its stride reads.
     /// - The element count is no power of two, so the packing covers no hypercube.
-    pub fn from_packed(packed: Poly<EF>) -> Result<Self, BitPackingError> {
+    pub fn from_packed(packed: Poly<EF, S>) -> Result<Self, BitPackingError> {
         if 8 * EF::NUM_BYTES != Coefficients::<EF>::DIMENSION {
             return Err(BitPackingError::SubByteLevel {
                 bits: Coefficients::<EF>::DIMENSION,
@@ -111,7 +129,7 @@ impl<EF: TowerLevel> BitPacking<EF> {
     }
 
     /// The multilinear a commitment holds.
-    pub const fn poly(&self) -> &Poly<EF> {
+    pub const fn poly(&self) -> &Poly<EF, S> {
         &self.packed
     }
 
@@ -135,11 +153,6 @@ impl<EF: TowerLevel> BitPacking<EF> {
     /// The coordinates of one packed element.
     pub fn coefficients(&self, index: usize) -> Coefficients<EF> {
         Coefficients::of(self.packed.as_slice()[index])
-    }
-
-    /// Give up the packing, for a caller that commits to it.
-    pub fn into_poly(self) -> Poly<EF> {
-        self.packed
     }
 }
 

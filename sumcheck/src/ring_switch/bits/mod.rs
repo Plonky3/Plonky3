@@ -62,7 +62,7 @@ pub mod tensor;
 pub mod transcript;
 
 pub use basis::Coefficients;
-pub use packing::{BitPacking, BitPackingError};
+pub use packing::{BitPacking, BitPackingError, BitPackingView};
 pub use reduction::{
     BitRingSwitch, BitRingSwitchBatch, BitRingSwitchError, BitRingSwitchProof,
     BitRingSwitchProofError, SuccessorTensors,
