@@ -24,15 +24,30 @@ fn the_fold_tables_fold_every_gf4_pair() {
     }
 }
 
+/// A stage of two AIRs reading no successor column.
+fn pair_stage() -> [Instance; 2] {
+    [
+        Instance::honest(FixtureAir::Pair, 1 << 6, 0xB0),
+        Instance::honest(FixtureAir::Pair, 1 << 6, 0xB1),
+    ]
+}
+
+/// A stage of two AIRs reading a main and a preprocessed successor column.
+fn gate_stage() -> [Instance; 2] {
+    [
+        Instance::honest(FixtureAir::Gate { scale: Tower::ONE }, 1 << 6, 0xB2),
+        Instance::honest(FixtureAir::Gate { scale: Tower::ONE }, 1 << 6, 0xB3),
+    ]
+}
+
 /// One later round of a stage bound into `Ghash128`, taken by the kernel `round` runs.
 ///
 /// The fixture is rebuilt per call, so each kernel reads the same stage.
-fn later_round(round: impl Fn(&mut ReprState<'_, '_>, &Poly<Tower>) -> Vec<Tower>) -> Vec<Tower> {
-    let instances = [
-        Instance::honest(FixtureAir::Pair, 1 << 6, 0xB0),
-        Instance::honest(FixtureAir::Pair, 1 << 6, 0xB1),
-    ];
-    with_state(&instances, no_lookups(), |state, _| {
+fn later_round(
+    instances: &[Instance],
+    round: impl Fn(&mut ReprState<'_, '_>, &Poly<Tower>) -> Vec<Tower>,
+) -> Vec<Tower> {
+    with_state(instances, no_lookups(), |state, _| {
         let mut state = state.fold_into::<Ghash128>(first_challenge());
         let tau = state.tau.as_slice().to_vec();
         let eq_suffix = Poly::new_from_point(&tau[2..], Tower::ONE);
@@ -43,10 +58,12 @@ fn later_round(round: impl Fn(&mut ReprState<'_, '_>, &Poly<Tower>) -> Vec<Tower
 /// A stage of the fixture above, bound into the polynomial basis.
 type ReprState<'air, 'data> = RoundStateExt<'air, 'data, FixtureAir, Tower, Tower, Ghash128>;
 
-#[test]
-fn a_lane_group_round_is_the_round_the_rows_give() {
-    let lanes = later_round(|state, eq_suffix| state.round_poly_repr(eq_suffix));
-    let rows = later_round(|state, eq_suffix| {
+/// The round polynomial of a stage, taken by the lane-group kernel and by the row kernel.
+fn lane_and_row_rounds(instances: &[Instance]) -> (Vec<Tower>, Vec<Tower>) {
+    let lanes = later_round(instances, |state, eq_suffix| {
+        state.round_poly_repr(eq_suffix)
+    });
+    let rows = later_round(instances, |state, eq_suffix| {
         let lifted = Poly::new(
             eq_suffix
                 .as_slice()
@@ -57,6 +74,20 @@ fn a_lane_group_round_is_the_round_the_rows_give() {
         );
         state.round_poly_unpacked(&lifted)
     });
+    (lanes, rows)
+}
+
+#[test]
+fn a_lane_group_round_is_the_round_the_rows_give() {
+    let (lanes, rows) = lane_and_row_rounds(&pair_stage());
+    assert_eq!(lanes, rows);
+}
+
+/// A stage reading successor columns takes the widened next-row load in every group but the
+/// last, and the lane-by-lane path with the repeat-last tail in the last one.
+#[test]
+fn a_lane_group_round_over_successor_columns_is_the_round_the_rows_give() {
+    let (lanes, rows) = lane_and_row_rounds(&gate_stage());
     assert_eq!(lanes, rows);
 }
 

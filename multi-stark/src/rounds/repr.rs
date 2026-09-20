@@ -482,6 +482,10 @@ where
             *local = local_lo;
             *local_delta = local_hi - local_lo;
         }
+        // The group's last next-row read is `s + half + R::Packing::WIDTH`, so only the final
+        // group runs past the last residual row, and there only in its last lane. Every other
+        // group's upper next row sits wholly inside the column and reads as one load.
+        let next_hi_in_column = s + half + 1 + R::Packing::WIDTH <= num_evals;
         for run in &round.next_columns {
             for (((next, next_delta), column), next_tail) in scratch.next_point[run.clone()]
                 .iter_mut()
@@ -491,15 +495,19 @@ where
             {
                 let column = column.as_slice();
                 let next_lo = lane_rows(column, s + 1);
-                let next_hi = lane_group(|lane| {
-                    // Past the last residual row, the repeat-last tail stands in.
-                    let row = s + half + lane + 1;
-                    if row < num_evals {
-                        column[row]
-                    } else {
-                        *next_tail
-                    }
-                });
+                let next_hi = if next_hi_in_column {
+                    lane_rows(column, s + half + 1)
+                } else {
+                    lane_group(|lane| {
+                        // Past the last residual row, the repeat-last tail stands in.
+                        let row = s + half + lane + 1;
+                        if row < num_evals {
+                            column[row]
+                        } else {
+                            *next_tail
+                        }
+                    })
+                };
                 *next = next_lo;
                 *next_delta = next_hi - next_lo;
             }
