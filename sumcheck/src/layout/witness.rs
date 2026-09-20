@@ -1084,11 +1084,18 @@ impl<F: Field> Witness<F> {
     /// # Panics
     ///
     /// - `out` must hold one cell per evaluation of the stacked polynomial.
+    /// - Debug builds also require `out` to arrive zeroed: whatever this call leaves
+    ///   untouched is committed verbatim, so a dirty destination is a wrong commitment
+    ///   that no length check can see.
     pub(super) fn write_stacked_slots(&self, out: &mut [F]) {
         assert_eq!(
             out.len(),
             1 << self.num_variables,
             "stacked destination must cover the whole hypercube"
+        );
+        debug_assert!(
+            out.iter().all(|value| *value == F::ZERO),
+            "cells outside every slot are left untouched, so the destination must arrive zeroed"
         );
         info_span!("stack").in_scope(|| {
             column_slots(&self.placements, &self.tables, 0, out)
@@ -1730,6 +1737,18 @@ mod tests {
                 assert_eq!(slot, col.as_slice());
             }
         }
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic = "the destination must arrive zeroed"]
+    fn stacking_rejects_a_destination_that_is_not_zeroed() {
+        // Invariant:
+        //     Cells outside every slot are committed exactly as they arrive, so a destination
+        //     that is not already zeroed is a wrong commitment no length check can see.
+        let w = fixture_witness();
+        let mut out = vec![F::ONE; 1 << w.num_variables()];
+        w.write_stacked_slots(&mut out);
     }
 
     #[test]
