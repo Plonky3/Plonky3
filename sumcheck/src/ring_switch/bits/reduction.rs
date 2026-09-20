@@ -869,6 +869,11 @@ impl<EF: TowerLevel> BitRingSwitchBatch<'_, EF> {
         //
         // A block's entries are its own weights under one outer weight, and the coordinate
         // sums absorb that scale once per block instead of once per entry.
+        //
+        // The block is that amortisation unit and the split follows it, so a run holding
+        // fewer blocks than there are threads sweeps on fewer tasks. Splitting below the
+        // block does not recover them: a task spanning less than a block has to scale the
+        // sums for itself, and one scaling costs more than the entries such a task writes.
         table
             .as_mut_slice()
             .par_chunks_mut(equality.block_len())
