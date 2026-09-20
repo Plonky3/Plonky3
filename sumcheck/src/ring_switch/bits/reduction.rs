@@ -2672,12 +2672,13 @@ mod tests {
         let embedding = embedded_over::<BinaryField128>(&witness);
 
         for (case, (reduction, point)) in reductions.iter().enumerate() {
-            assert!(reduction.num_variables() > 0, "case {case} runs no round");
             let [
                 (tower, tower_point, tower_value, mut tower_sponge),
                 (poly, poly_point, poly_value, mut poly_sponge),
             ] = both_representations(reduction, &packing);
 
+            // A Boolean prefix drops rounds, so the kept coordinates do not count them.
+            assert!(poly.sumcheck.num_rounds() > 0, "case {case} runs no round");
             assert_eq!(poly.tensor, tower.tensor, "case {case}");
             assert_eq!(poly.successor, tower.successor, "case {case}");
             assert_eq!(
