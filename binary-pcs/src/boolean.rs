@@ -92,6 +92,7 @@ use p3_sumcheck::{
     OpeningBatch, OpeningProtocol, PrescribedOpeningSecurity, PrescribedPointPcs, TableShape,
     TableSpec,
 };
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -102,6 +103,24 @@ use crate::params::{BinaryPcsConfig, BinaryPcsConfigError};
 use crate::pcs::BinaryPcs;
 use crate::proof::BinaryPcsProof;
 use crate::prover::BinaryPcsProverData;
+
+/// What a bit commitment keeps and sends, named without reference to a transcript.
+pub trait BooleanBackend<EF> {
+    /// Succinct binding commitment sent to the verifier.
+    type Commitment: Clone + Serialize + DeserializeOwned;
+
+    /// Prover-side data retained between committing and opening.
+    type ProverData;
+
+    /// The proof one opening carries.
+    type Proof: Clone + Serialize + DeserializeOwned;
+
+    /// Why a commitment or an opening was refused.
+    type Error: core::fmt::Debug;
+
+    /// Variables the committed bit witness has, so `2^n` bits in all.
+    fn num_variables(&self) -> usize;
+}
 
 /// A commitment to a function from the hypercube to `{0, 1}`.
 ///
@@ -127,19 +146,7 @@ use crate::prover::BinaryPcsProverData;
 /// The packing trait forbids it, casting a packed value to an array of scalars unchanged.
 ///
 /// Bit-slicing is a compression, not a reinterpretation.
-pub trait BooleanMultilinearPcs<EF, Challenger> {
-    /// Succinct binding commitment sent to the verifier.
-    type Commitment;
-    /// Prover-side data retained between commitment and opening.
-    type ProverData;
-    /// Opening proof checked by the verifier.
-    type Proof;
-    /// Why a commitment or an opening was refused.
-    type Error;
-
-    /// Variables the committed function has, so `2^n` bits in all.
-    fn num_variables(&self) -> usize;
-
+pub trait BooleanMultilinearPcs<EF, Challenger>: BooleanBackend<EF> {
     /// Bind a commitment into the transcript, as committing to one does.
     ///
     /// A prover binds while producing its commitment, and a verifier never produces one.
@@ -157,6 +164,46 @@ pub trait BooleanMultilinearPcs<EF, Challenger> {
         bits: &[PackedGf2<U>],
         challenger: &mut Challenger,
     ) -> Result<(Self::Commitment, Self::ProverData), Self::Error>;
+
+    /// Open the bit witness with the readings every opening asks for, in one proof.
+    ///
+    /// A reading is the witness at the point, or the witness one row further on.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error on an opening this commitment refuses.
+    #[allow(clippy::type_complexity)]
+    fn open_readings(
+        &self,
+        prover_data: Self::ProverData,
+        openings: &[BitOpening<EF>],
+        challenger: &mut Challenger,
+    ) -> Result<(Vec<BitReadings<EF>>, Self::Proof), Self::Error>;
+
+    /// Check one proof against the readings it claims at every opening.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error on a false reading, a failed reduction, or an unclosed claim.
+    fn verify_readings(
+        &self,
+        commitment: &Self::Commitment,
+        openings: &[BitOpening<EF>],
+        readings: &[BitReadings<EF>],
+        proof: &Self::Proof,
+        challenger: &mut Challenger,
+    ) -> Result<(), Self::Error>;
+
+    /// Every labelled algebraic error one opening of this many claims charges.
+    ///
+    /// # Returns
+    ///
+    /// Nothing when the commitment declines to price the schedule.
+    fn readings_security(
+        &self,
+        num_claims: usize,
+        successor_tensors: bool,
+    ) -> Option<PrescribedOpeningSecurity>;
 
     /// Open the multilinear extension at every point, in one proof.
     ///
@@ -634,17 +681,36 @@ where
         + CanObserve<MT::Commitment>
         + CanObserve<MX::Commitment>,
 {
-    type Commitment = MT::Commitment;
-    type ProverData = BinaryPcsProverData<EF, EF, MT>;
-    type Proof = BooleanProof<EF, MT, MX>;
-    type Error = BooleanPcsError<EF, MT::Error>;
-
-    fn num_variables(&self) -> usize {
-        Self::num_variables(self)
-    }
-
     fn observe_commitment(&self, commitment: &Self::Commitment, challenger: &mut Challenger) {
         self.inner.observe_commitment(commitment, challenger);
+    }
+
+    fn open_readings(
+        &self,
+        prover_data: Self::ProverData,
+        openings: &[BitOpening<EF>],
+        challenger: &mut Challenger,
+    ) -> Result<(Vec<BitReadings<EF>>, Self::Proof), Self::Error> {
+        Self::open_readings(self, prover_data, openings, challenger)
+    }
+
+    fn verify_readings(
+        &self,
+        commitment: &Self::Commitment,
+        openings: &[BitOpening<EF>],
+        readings: &[BitReadings<EF>],
+        proof: &Self::Proof,
+        challenger: &mut Challenger,
+    ) -> Result<(), Self::Error> {
+        Self::verify_readings(self, commitment, openings, readings, proof, challenger)
+    }
+
+    fn readings_security(
+        &self,
+        num_claims: usize,
+        successor_tensors: bool,
+    ) -> Option<PrescribedOpeningSecurity> {
+        Some(Self::readings_security(self, num_claims, successor_tensors))
     }
 
     fn commit_bits<U: Underlier>(
@@ -829,6 +895,22 @@ pub enum BooleanPcsError<EF, MmcsError> {
     /// Without this the reduction would prove a claim about some other polynomial.
     #[error("the opened value is not the claim the reduction left behind")]
     SurvivingClaim,
+}
+
+impl<EF, MT, MX> BooleanBackend<EF> for BooleanPcs<EF, MT, MX>
+where
+    EF: EncodableLevel + TowerLevel,
+    MT: Mmcs<EF>,
+    MX: Mmcs<EF, Error = MT::Error>,
+{
+    type Commitment = MT::Commitment;
+    type ProverData = BinaryPcsProverData<EF, EF, MT>;
+    type Proof = BooleanProof<EF, MT, MX>;
+    type Error = BooleanPcsError<EF, MT::Error>;
+
+    fn num_variables(&self) -> usize {
+        self.num_variables
+    }
 }
 
 #[cfg(test)]
