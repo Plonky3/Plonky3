@@ -41,6 +41,21 @@ pub(super) fn lane_group<F, R: Field>(value: impl FnMut(usize) -> R) -> PackedRe
     PackedExt::new(R::Packing::from_fn(value))
 }
 
+/// One lane group of the representation field, read from as many consecutive rows of a column.
+///
+/// The rows a lane group covers sit next to each other, so the whole group is one load of the
+/// column rather than one load per lane.
+///
+/// # Panics
+///
+/// Panics if the column holds fewer rows past `row` than the group has lanes.
+#[inline]
+pub(super) fn lane_rows<F, R: Field>(column: &[R], row: usize) -> PackedRepr<F, R> {
+    PackedExt::new(*R::Packing::from_slice(
+        &column[row..row + R::Packing::WIDTH],
+    ))
+}
+
 /// Carry per-node sums from lane groups back into the challenge field.
 ///
 /// Each lane of a sum covers residual rows of its own, so a node's value is the sum of its lanes.
@@ -462,8 +477,8 @@ where
             .zip(columns)
         {
             let column = column.as_slice();
-            let local_lo = lane_group(|lane| column[s + lane]);
-            let local_hi = lane_group(|lane| column[s + half + lane]);
+            let local_lo = lane_rows(column, s);
+            let local_hi = lane_rows(column, s + half);
             *local = local_lo;
             *local_delta = local_hi - local_lo;
         }
@@ -475,7 +490,7 @@ where
                 .zip(&self.next_tail[run.clone()])
             {
                 let column = column.as_slice();
-                let next_lo = lane_group(|lane| column[s + lane + 1]);
+                let next_lo = lane_rows(column, s + 1);
                 let next_hi = lane_group(|lane| {
                     // Past the last residual row, the repeat-last tail stands in.
                     let row = s + half + lane + 1;

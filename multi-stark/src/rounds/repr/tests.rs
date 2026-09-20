@@ -59,3 +59,20 @@ fn a_lane_group_round_is_the_round_the_rows_give() {
     });
     assert_eq!(lanes, rows);
 }
+
+#[test]
+fn a_lane_group_read_from_a_column_is_the_one_its_lanes_give() {
+    let lanes = <Ghash128 as Field>::Packing::WIDTH;
+    let column = (0..3 * lanes)
+        .map(|row| {
+            let seed = 0x9E37_79B9_7F4A_7C15_F39C_C060_5CED_C835_u128;
+            Ghash128::from(Tower::from_repr(seed.wrapping_mul(row as u128 + 1)))
+        })
+        .collect::<Vec<_>>();
+
+    for row in 0..=column.len() - lanes {
+        let read = lane_rows::<Tower, Ghash128>(&column, row);
+        let lanewise = lane_group::<Tower, Ghash128>(|lane| column[row + lane]);
+        assert_eq!(read.0.as_slice(), lanewise.0.as_slice(), "row {row}");
+    }
+}
