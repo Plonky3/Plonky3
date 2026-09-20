@@ -161,22 +161,38 @@ impl<EF: TowerLevel, A: Field> CoordinateSums<EF, A> {
             Coefficients::<EF>::DIMENSION,
             "one weight per coordinate"
         );
-        let tables = (0..EF::NUM_BYTES)
-            .map(|position| {
-                let mut table = [A::ZERO; 256];
-                // Each subset extends the one without its lowest coordinate by that coordinate.
-                // A coordinate past a sub-byte level's width is never set, so it weighs nothing.
-                for subset in 1..256usize {
-                    let lowest = position * 8 + subset.trailing_zeros() as usize;
-                    table[subset] = table[subset & (subset - 1)]
-                        + weights.get(lowest).copied().unwrap_or(A::ZERO);
-                }
-                table
-            })
-            .collect();
-        Self {
-            tables,
+        let mut sums = Self {
+            tables: alloc::vec![[A::ZERO; 256]; EF::NUM_BYTES],
             _ef: PhantomData,
+        };
+        sums.overwrite(|coordinate| weights[coordinate]);
+        sums
+    }
+
+    /// Retabulate over one weight per coordinate, reading each weight once.
+    ///
+    /// The tables already allocated are written through, so a caller sweeping one weight
+    /// vector after another pays no allocation per sweep.
+    pub(crate) fn overwrite(&mut self, mut weight: impl FnMut(usize) -> A) {
+        for (position, slot) in self.tables.iter_mut().enumerate() {
+            // A coordinate past a sub-byte level's width is never set, so it weighs nothing.
+            let coordinates: [A; 8] = core::array::from_fn(|bit| {
+                let coordinate = position * 8 + bit;
+                if coordinate < Coefficients::<EF>::DIMENSION {
+                    weight(coordinate)
+                } else {
+                    A::ZERO
+                }
+            });
+
+            // Each subset extends the one without its lowest coordinate by that coordinate.
+            // The recurrence reads back what it wrote, so it runs in one array and lands once.
+            let mut table = [A::ZERO; 256];
+            for subset in 1..256usize {
+                let lowest = subset.trailing_zeros() as usize;
+                table[subset] = table[subset & (subset - 1)] + coordinates[lowest];
+            }
+            *slot = table;
         }
     }
 

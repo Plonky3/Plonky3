@@ -56,6 +56,7 @@
 //! The payoff is that packing becomes a reinterpretation, not a computation.
 
 pub mod basis;
+mod equality;
 pub mod packing;
 pub mod reduction;
 pub mod tensor;
