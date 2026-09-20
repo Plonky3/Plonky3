@@ -20,6 +20,7 @@
 //! `C` has degree at most `d` in each variable, so `d + 1` nodes interpolate it exactly.
 //! Every value is the one the generic kernel computes, so the round polynomial is the same.
 
+use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
 use core::ops::Range;
@@ -1166,8 +1167,8 @@ impl RowTile {
         for run in next_columns {
             for ((column, next), next_delta) in run
                 .clone()
-                .zip(next_point[run.clone()].iter_mut())
-                .zip(next_diff[run.clone()].iter_mut())
+                .zip(next_point.fill()[run.clone()].iter_mut())
+                .zip(next_diff.fill()[run.clone()].iter_mut())
             {
                 let (lo, hi) = fold.row_pair(self.cell(lane + 1, column));
                 *next = lo;
@@ -1223,8 +1224,8 @@ impl RowTile {
         for run in next_columns {
             for ((column, next), next_delta) in run
                 .clone()
-                .zip(next_point[run.clone()].iter_mut())
-                .zip(next_diff[run.clone()].iter_mut())
+                .zip(next_point.fill()[run.clone()].iter_mut())
+                .zip(next_diff.fill()[run.clone()].iter_mut())
             {
                 let (lo, hi) = self.lane_pair(fold, lane + 1, column);
                 *next = lo;
@@ -1521,6 +1522,10 @@ where
             .map(|group| group.degree)
             .collect::<Vec<_>>();
         let weights = eq_suffix.as_slice();
+        // Every worker of a stage that reads no successor row reads the same zeros.
+        let next_zeros = next_columns
+            .is_empty()
+            .then(|| Arc::new(R::zero_vec(width)));
 
         let (scratch, _) = (0..pairs)
             .into_par_iter()
@@ -1528,7 +1533,12 @@ where
             .par_fold_reduce(
                 || {
                     (
-                        Scratch::<R, R>::new(&constraint_degrees, &interaction_degrees, width),
+                        Scratch::<R, R>::new(
+                            &constraint_degrees,
+                            &interaction_degrees,
+                            width,
+                            next_zeros.as_ref(),
+                        ),
                         RowTile::new(fold.groups, width),
                     )
                 },
@@ -1592,6 +1602,11 @@ where
             .map(|group| group.degree)
             .collect::<Vec<_>>();
         let weights = eq_suffix.as_slice();
+        // Every worker of a stage that reads no successor row reads the same zeros.
+        let next_zeros = round
+            .next_columns
+            .is_empty()
+            .then(|| Arc::new(PackedRepr::<F, R>::zero_vec(width)));
 
         let (scratch, _) = (0..pairs)
             .into_par_iter()
@@ -1603,6 +1618,7 @@ where
                             &constraint_degrees,
                             &interaction_degrees,
                             width,
+                            next_zeros.as_ref(),
                         ),
                         RowTile::new(fold.groups, width),
                     )
