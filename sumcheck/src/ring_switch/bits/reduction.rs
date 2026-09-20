@@ -1453,13 +1453,18 @@ mod tests {
 
     /// The witness as a multilinear over every variable, one element per bit.
     fn embedded(witness: &[u8]) -> Poly<EF> {
+        embedded_over(witness)
+    }
+
+    /// The same embedding over any level the bits are read into.
+    fn embedded_over<K: Field>(witness: &[u8]) -> Poly<K> {
         Poly::new(
             (0..witness.len() * 8)
                 .map(|cell| {
                     if (witness[cell / 8] >> (cell % 8)) & 1 == 1 {
-                        EF::ONE
+                        K::ONE
                     } else {
-                        EF::ZERO
+                        K::ZERO
                     }
                 })
                 .collect::<Vec<_>>(),
@@ -2657,12 +2662,16 @@ mod tests {
         addressed[1] = BinaryField128::ZERO;
         let addressed = Point::new(addressed);
         let reductions = [
-            BitRingSwitch::new(&random).unwrap(),
-            BitRingSwitch::new(&addressed).unwrap(),
-            BitRingSwitch::with_successor(&random, absorbed + 1).unwrap(),
+            (BitRingSwitch::new(&random).unwrap(), &random),
+            (BitRingSwitch::new(&addressed).unwrap(), &addressed),
+            (
+                BitRingSwitch::with_successor(&random, absorbed + 1).unwrap(),
+                &random,
+            ),
         ];
+        let embedding = embedded_over::<BinaryField128>(&witness);
 
-        for (case, reduction) in reductions.iter().enumerate() {
+        for (case, (reduction, point)) in reductions.iter().enumerate() {
             assert!(reduction.num_variables() > 0, "case {case} runs no round");
             let [
                 (tower, tower_point, tower_value, mut tower_sponge),
@@ -2685,6 +2694,15 @@ mod tests {
             assert_eq!(
                 CanSample::<BinaryField128>::sample(&mut poly_sponge),
                 CanSample::<BinaryField128>::sample(&mut tower_sponge),
+                "case {case}"
+            );
+
+            // Agreeing legs would still agree if both were wrong in the same way.
+            // The claim is read off the witness, so the replay has to close on it.
+            let claim = embedding.eval_base(*point);
+            let mut verifier_sponge = WideChal::from_hasher(Vec::new(), Keccak256Hash);
+            assert!(
+                reduction.verify(&poly, claim, &mut verifier_sponge).is_ok(),
                 "case {case}"
             );
         }
