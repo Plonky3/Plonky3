@@ -68,8 +68,15 @@ pub fn validate_degree_bits(
     min_log_degree: usize,
     max_log_degree: usize,
 ) -> Result<(usize, usize), InvalidProofShapeError> {
-    // The base trace domain is `degree_bits - is_zk` bits tall and must be one the PCS can
-    // commit to; its selectors are derived from it before the opening argument runs.
+    // A claimed degree is the height of the extended trace domain, in bits.
+    // Removing the zero-knowledge blowup bit leaves the base trace domain.
+    // That is the domain the selectors and the periodic columns are evaluated over.
+    //
+    //     extended domain : degree_bits
+    //     base domain     : degree_bits - is_zk
+    //
+    // Why: the base domain is built from this proof-supplied height before the opening runs.
+    // A height the backend's domain arithmetic cannot handle has to be caught here.
     let minimum = is_zk + min_log_degree;
     if degree_bits < minimum {
         return Err(InvalidProofShapeError::DegreeBitsTooSmall {

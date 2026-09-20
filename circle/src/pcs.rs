@@ -228,9 +228,15 @@ where
     })
 }
 
-/// The smallest trace domain `CirclePcs` commits to: the bivariate layer folds one bit and
-/// circle FRI needs one more, and the domain selectors (`v_n`, `s_p`) are only defined for
-/// `log_n >= 1`.
+/// Base-2 logarithm of the smallest trace domain this scheme commits to.
+///
+/// # Why this value
+///
+/// - The bivariate fold consumes one bit of the domain height.
+/// - Circle FRI consumes one more.
+/// - The vanishing polynomial and the single-point selector need one bit of height.
+///
+/// The largest of those requirements is two bits, that is four rows.
 const LOG_MIN_TRACE_HEIGHT: usize = 2;
 
 impl<Val, InputMmcs, FriMmcs, Challenge, Challenger> Pcs<Challenge, Challenger>

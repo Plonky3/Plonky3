@@ -910,6 +910,11 @@ where
         Val::TWO_ADICITY
     }
 
+    fn log_min_trace_height(&self) -> usize {
+        // Multiplicative coset selectors are defined at every height, down to a single row.
+        0
+    }
+
     fn get_quotient_ldes(
         &self,
         evaluations: impl IntoIterator<Item = (Self::Domain, RowMajorMatrix<Val>)>,

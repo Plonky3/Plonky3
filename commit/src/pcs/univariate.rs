@@ -108,14 +108,18 @@ where
     /// The base-2 logarithm of the largest evaluation domain this PCS can construct.
     fn log_max_lde_height(&self) -> usize;
 
-    /// The base-2 logarithm of the smallest trace domain this PCS can commit to.
+    /// The base-2 logarithm of the smallest base trace domain a proof may claim.
     ///
-    /// Verifiers reject a claimed `degree_bits` below this bound before deriving any domain
-    /// from it, so a backend whose domain arithmetic assumes a minimum size cannot be driven
-    /// below it by a malformed proof.
-    fn log_min_trace_height(&self) -> usize {
-        0
-    }
+    /// The base trace domain carries the selectors and the periodic columns.
+    /// Under zero knowledge it is one bit shorter than the committed domain.
+    ///
+    /// - A verifier builds it from a proof-supplied height before the opening argument runs.
+    /// - The height is therefore rejected here or not at all.
+    /// - A positive bound keeps a malformed proof out of domain arithmetic it would break.
+    /// - Backends defined down to a single row return zero.
+    ///
+    /// There is no default, so a backend with a minimum has to state it.
+    fn log_min_trace_height(&self) -> usize;
 
     /// Same as `commit` but without randomization. This is used for preprocessed columns
     /// which do not have to be randomized even when ZK is enabled. Note that the preprocessed columns still
