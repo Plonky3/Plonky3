@@ -171,6 +171,28 @@ where
         RowMajorMatrixView::new_row(trace_next),
     );
 
+    // The constraint window stacks two preprocessed rows, so both must have the same width.
+    //
+    //     current = [p_0, ..., p_{w-1}]   next = [p'_0, ..., p'_{w-1}]   accepted
+    //     current = [p_0, ..., p_{w-1}]   next = absent                  rejected
+    //     current = absent                next = absent                  accepted, width 0
+    //
+    // Why: stacking rows of different widths has no meaning.
+    // Treating a missing row as width zero would leave the constraints a matrix with no columns.
+    //
+    // Recursive verifiers reach this public entry point directly, so the rows are checked here.
+    let preprocessed_local_len = preprocessed_local.map_or(0, <[_]>::len);
+    let preprocessed_next_len = preprocessed_next.map_or(0, <[_]>::len);
+    if preprocessed_local_len != preprocessed_next_len {
+        return Err(InvalidProofShapeError::PreprocessedTraceWidthMismatch {
+            expected_local: preprocessed_local_len,
+            expected_next: preprocessed_local_len,
+            got_local: preprocessed_local_len,
+            got_next: preprocessed_next_len,
+        }
+        .into());
+    }
+
     let preprocessed = match (preprocessed_local, preprocessed_next) {
         (Some(local), Some(next)) => VerticalPair::new(
             RowMajorMatrixView::new_row(local),
@@ -256,12 +278,23 @@ where
         }
         .into());
     }
-    // When the AIR doesn't read the next preprocessed row, the honest opening is `None`. A
-    // present-but-empty vector has the expected length but not the expected shape: it is not
-    // bound by the opening argument and would later be paired with the width-`preprocessed_width`
-    // local row, so reject it here like `trace_next`.
+    // An AIR either reads the preprocessed trace on the next row or it does not.
+    //
+    //     reads the next row         -> opening present, as wide as the preprocessed trace
+    //     does not read the next row -> opening absent
+    //
+    // Why: an empty vector is zero columns wide, yet it is still a present opening.
+    // Nothing in the opening argument covers it, so its value is unbound.
+    // It would then be stacked under a full-width current row.
     if !preprocessed_next_used && opened_values.preprocessed_next.is_some() {
         return Err(InvalidProofShapeError::UnexpectedPreprocessedNext { air: None }.into());
+    }
+    // An AIR with no preprocessed columns carries no preprocessed opening at all.
+    // Presence is tested rather than width, since an empty vector is zero columns wide.
+    if preprocessed_width == 0
+        && (opened_values.preprocessed_local.is_some() || opened_values.preprocessed_next.is_some())
+    {
+        return Err(InvalidProofShapeError::UnexpectedPreprocessedValues { air: None }.into());
     }
 
     // Validate consistency between width, verifier key, and zk settings.
@@ -543,17 +576,28 @@ where
         .into());
     }
 
-    let main_next = !air.main_next_row_columns().is_empty();
-    let trace_next_ok = if main_next {
-        opened_values
+    // An AIR either reads the main trace on the next row or it does not.
+    //
+    //     reads the next row         -> opening present, as wide as the main trace
+    //     does not read the next row -> opening absent
+    //
+    // Why: the opening argument never covers a row the constraints do not index into.
+    // Nothing then binds its value.
+    //
+    // The two failures are reported separately, so a rejection names the rule it broke.
+    if !air.main_next_row_columns().is_empty() {
+        if opened_values
             .trace_next
             .as_ref()
-            .is_some_and(|v| v.len() == air_width)
-    } else {
-        opened_values.trace_next.is_none()
-    };
+            .is_none_or(|v| v.len() != air_width)
+        {
+            return Err(InvalidProofShapeError::TraceNextMismatch { air: None }.into());
+        }
+    } else if opened_values.trace_next.is_some() {
+        return Err(InvalidProofShapeError::UnexpectedTraceNext { air: None }.into());
+    }
+
     let valid_shape = opened_values.trace_local.len() == air_width
-        && trace_next_ok
         && opened_values.quotient_chunks.len() == num_quotient_chunks
         && opened_values
             .quotient_chunks

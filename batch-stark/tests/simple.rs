@@ -1261,38 +1261,91 @@ fn test_preprocessed_tampered_fails() -> Result<(), Box<dyn std::error::Error>> 
 fn test_preprocessed_rejects_present_preprocessed_next() {
     let config = make_config(1337);
 
-    // `PreprocessedMulAir` reads the preprocessed trace on the current row only.
-    let (air, trace, pis) = create_preprocessed_mul_instance(4, 2);
-    let instances = vec![StarkInstance {
-        air: &air,
-        trace: &trace,
-        public_values: pis.clone(),
-    }];
+    // Fixture state: two instances, each reading its preprocessed trace on the current row.
+    //
+    // Two rather than one, so a reported index of 1 cannot come from a constant or an off-by-one.
+    let (air0, trace0, pis0) = create_preprocessed_mul_instance(4, 2);
+    let (air1, trace1, pis1) = create_preprocessed_mul_instance(4, 3);
+    let instances = vec![
+        StarkInstance {
+            air: &air0,
+            trace: &trace0,
+            public_values: pis0.clone(),
+        },
+        StarkInstance {
+            air: &air1,
+            trace: &trace1,
+            public_values: pis1.clone(),
+        },
+    ];
 
     let prover_data = ProverData::from_instances(&config, &instances).unwrap();
     let common = &prover_data.common;
     let mut proof = prove_batch(&config, &instances, &prover_data).unwrap();
+
+    // Both AIRs declare one preprocessed column, opened on the current row only.
+    let pre_w = proof.opened_values.instances[1]
+        .base_opened_values
+        .preprocessed_local
+        .as_ref()
+        .expect("instance 1 declares preprocessed columns")
+        .len();
+    assert_eq!(pre_w, 1);
     assert!(
-        proof.opened_values.instances[0]
+        proof.opened_values.instances[1]
             .base_opened_values
             .preprocessed_next
             .is_none()
     );
 
-    // Tamper: an empty `preprocessed_next` has the length the shape check expects (0) but is
-    // not the `None` the prover emits, and it is not covered by the opening argument.
-    proof.opened_values.instances[0]
+    let airs = vec![air0, air1];
+    let pvs = vec![pis0, pis1];
+
+    // The untampered proof verifies, so every rejection below is caused by the mutation alone.
+    verify_batch(&config, &airs, &proof, &pvs, common).expect("untampered proof verifies");
+
+    // Invariant: a proof carries exactly the openings its AIR reads, and no others.
+    //
+    // Mutation: give instance 1 an empty next-row preprocessed opening.
+    //
+    //     honest:   instance 1 preprocessed next = absent
+    //     tampered: instance 1 preprocessed next = [] (present, zero columns)
+    //
+    // Zero columns is the width expected of an absent opening, so presence is what rejects it.
+    proof.opened_values.instances[1]
         .base_opened_values
         .preprocessed_next = Some(vec![]);
 
-    let airs = vec![air];
-    let err = verify_batch(&config, &airs, &proof, from_ref(&pis), common)
-        .expect_err("verification should reject a present preprocessed_next");
+    let err = verify_batch(&config, &airs, &proof, &pvs, common)
+        .expect_err("a present next-row preprocessed opening must be rejected");
+
+    // The reported index is 1, the instance that was tampered with.
     assert!(
         matches!(
             err,
             BatchVerificationError::Verification(VerificationError::InvalidProofShape(
-                InvalidProofShapeError::UnexpectedPreprocessedNext { air: Some(0) },
+                InvalidProofShapeError::UnexpectedPreprocessedNext { air: Some(1) },
+            ))
+        ),
+        "unexpected error: {err:?}"
+    );
+
+    // Mutation: the other half of the same rule, a next-row opening of full width.
+    //
+    //     tampered: instance 1 preprocessed next = [0] (present, one column)
+    //
+    // This one is caught by the width comparison rather than by presence.
+    proof.opened_values.instances[1]
+        .base_opened_values
+        .preprocessed_next = Some(vec![Challenge::ZERO; pre_w]);
+
+    let err = verify_batch(&config, &airs, &proof, &pvs, common)
+        .expect_err("a full-width next-row preprocessed opening must be rejected");
+    assert!(
+        matches!(
+            err,
+            BatchVerificationError::Verification(VerificationError::InvalidProofShape(
+                InvalidProofShapeError::PreprocessedWidthMismatch { air: 1 },
             ))
         ),
         "unexpected error: {err:?}"

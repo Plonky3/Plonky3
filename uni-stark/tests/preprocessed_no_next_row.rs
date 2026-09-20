@@ -120,9 +120,19 @@ fn test_preprocessed_no_next_row_air() {
 fn test_preprocessed_no_next_row_rejects_present_preprocessed_next() {
     let (config, air, proof, vk) = prove_copy_air();
 
-    // Tamper: an empty `preprocessed_next` has the length the shape check expects (0) but is not
-    // the `None` the prover emits. It is not covered by the opening argument, so nothing else in
-    // the proof needs to change.
+    // Invariant: a proof carries exactly the openings its AIR reads, and no others.
+    //
+    // Fixture state: this AIR reads the preprocessed trace on the current row only.
+    // An honest proof therefore carries no next-row preprocessed opening.
+    //
+    // Mutation: add an empty next-row preprocessed opening.
+    //
+    //     honest:   preprocessed next = absent
+    //     tampered: preprocessed next = [] (present, zero columns)
+    //
+    // Zero columns is the width expected of an absent opening, so presence is what rejects it.
+    //
+    // No other field has to change, because the opening argument does not cover this one.
     let mut tampered = proof;
     tampered.opened_values.preprocessed_next = Some(vec![]);
 
@@ -134,6 +144,38 @@ fn test_preprocessed_no_next_row_rejects_present_preprocessed_next() {
             VerificationError::InvalidProofShape(
                 InvalidProofShapeError::UnexpectedPreprocessedNext { air: None }
             )
+        ),
+        "unexpected error: {err:?}"
+    );
+}
+
+#[test]
+fn test_no_next_row_rejects_present_trace_next() {
+    let (config, air, proof, vk) = prove_copy_air();
+
+    // Invariant: the same rule applies to the main trace as to the preprocessed trace.
+    //
+    // Fixture state: this AIR reads the main trace on the current row only.
+    // An honest proof therefore carries no next-row main opening.
+    //
+    // Mutation: add an empty next-row main opening.
+    //
+    //     honest:   trace next = absent
+    //     tampered: trace next = [] (present, zero columns)
+    //
+    // The rejection names the next main row rather than reporting a generic dimension mismatch.
+    let mut tampered = proof;
+    tampered.opened_values.trace_next = Some(vec![]);
+
+    let err = verify_with_preprocessed(&config, &air, &tampered, &[], Some(&vk)).expect_err(
+        "verifier should reject a present trace_next when the AIR does not read the next row",
+    );
+    assert!(
+        matches!(
+            err,
+            VerificationError::InvalidProofShape(InvalidProofShapeError::UnexpectedTraceNext {
+                air: None
+            })
         ),
         "unexpected error: {err:?}"
     );
