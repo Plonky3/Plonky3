@@ -107,21 +107,24 @@ impl fmt::Display for HashFamily {
 /// `leaf_elements` packs that many field elements into one leaf; `None` packs exactly the coset
 /// one fold batch opens, which is the grouping the schedule itself derives.
 ///
-/// # Panics
+/// # Errors
 ///
-/// Panics if `leaf_elements` is zero or not a power of two.
+/// `leaf_elements` is zero or not a power of two, so no grouping matches it.
 fn grouped_mmcs<H: HarnessHash, const N: usize>(
     pcs_config: &BinaryPcsConfig,
     leaf_elements: Option<usize>,
-) -> Mmcs<H, N> {
+) -> Result<Mmcs<H, N>, BinaryProofError> {
     let merkle = MerkleMmcs::<H, N>::new(
         Hash::new(H::INSTANCE),
         Compress::<H, N>::new(H::INSTANCE),
         0,
     );
     match leaf_elements {
-        Some(elements) => Mmcs::with_group_size(merkle, pcs_config, elements),
-        None => Mmcs::for_folding(merkle, pcs_config),
+        Some(elements) if !elements.is_power_of_two() => {
+            Err(BinaryProofError::UnsupportedLeafElements(elements))
+        }
+        Some(elements) => Ok(Mmcs::with_group_size(merkle, pcs_config, elements)),
+        None => Ok(Mmcs::for_folding(merkle, pcs_config)),
     }
 }
 
@@ -201,23 +204,24 @@ where
 /// `leaf_elements` sizes the Merkle leaves independently of that batch; `None` sizes each leaf
 /// to exactly the coset a batch opens.
 ///
-/// # Panics
+/// # Errors
 ///
-/// Panics if `leaf_elements` is zero or not a power of two.
+/// - `leaf_elements` is zero or not a power of two.
+/// - The PCS parameters do not describe a usable schedule for `arity`.
 pub fn binary_config<const N: usize, Ntt, H>(
     arity: usize,
     params: BinaryPcsParams,
     folding: usize,
     leaf_elements: Option<usize>,
     ntt: Ntt,
-) -> Result<BinaryStarkConfig<N, Ntt, H>, BinaryPcsConfigError>
+) -> Result<BinaryStarkConfig<N, Ntt, H>, BinaryProofError>
 where
     Ntt: AdditiveNtt<F> + Sync,
     H: HarnessHash,
 {
     let pcs_config =
         BinaryPcsConfig::try_new_with_folding::<F, F>(arity, params, folding.min(arity))?;
-    let mmcs = grouped_mmcs::<H, N>(&pcs_config, leaf_elements);
+    let mmcs = grouped_mmcs::<H, N>(&pcs_config, leaf_elements)?;
     let leaf_elements = leaf_elements_of(&pcs_config, &mmcs);
     Ok(BinaryStarkConfig {
         pcs: BinaryPcs::with_ntt(pcs_config, mmcs.clone(), mmcs, ntt)?,
@@ -290,10 +294,7 @@ impl<const N: usize, H: HarnessHash> MultiStarkConfig for BooleanStarkConfig<N, 
 ///
 /// - The bit witness has fewer variables than one committed element absorbs.
 /// - The PCS parameters do not describe a usable schedule for the committed arity.
-///
-/// # Panics
-///
-/// Panics if `leaf_elements` is zero or not a power of two.
+/// - `leaf_elements` is zero or not a power of two.
 pub fn boolean_config<const N: usize, H: HarnessHash>(
     shape: TableShape,
     params: BinaryPcsParams,
@@ -313,7 +314,7 @@ pub fn boolean_config<const N: usize, H: HarnessHash>(
 
     let pcs_config =
         BinaryPcsConfig::try_new_with_folding::<F, F>(committed, params, folding.min(committed))?;
-    let mmcs = grouped_mmcs::<H, N>(&pcs_config, leaf_elements);
+    let mmcs = grouped_mmcs::<H, N>(&pcs_config, leaf_elements)?;
     let leaf_elements = leaf_elements_of(&pcs_config, &mmcs);
     let pcs = BooleanTracePcs::new(pcs_config, mmcs.clone(), mmcs, arity)
         .map_err(BinaryProofError::BooleanConfig)?;
@@ -379,16 +380,6 @@ impl BinaryProofOptions {
             log_inv_rate: self.log_inv_rate,
             pow_bits: self.pcs_pow_bits,
             security_level: self.security_bits,
-        }
-    }
-
-    /// Reject a leaf size no Merkle commitment can be grouped to.
-    const fn check_leaf_elements(&self) -> Result<(), BinaryProofError> {
-        match self.leaf_elements {
-            Some(elements) if !elements.is_power_of_two() => {
-                Err(BinaryProofError::UnsupportedLeafElements(elements))
-            }
-            _ => Ok(()),
         }
     }
 }
@@ -713,7 +704,6 @@ where
     A: BinaryAir,
     Ntt: AdditiveNtt<F> + Sync,
 {
-    options.check_leaf_elements()?;
     match (options.merkle_arity, options.hash) {
         (2, HashFamily::Keccak256) => {
             prove_binary_air_with::<A, 2, Ntt, Keccak256Hash>(air, trace, options, ntt, backend)
@@ -815,7 +805,6 @@ pub fn prove_boolean_air_with_backend<A>(
 where
     A: BinaryAir,
 {
-    options.check_leaf_elements()?;
     match (options.merkle_arity, options.hash) {
         (2, HashFamily::Keccak256) => {
             prove_boolean_air_with::<A, 2, Keccak256Hash>(air, trace, options, backend)
