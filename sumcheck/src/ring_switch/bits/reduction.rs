@@ -396,6 +396,9 @@ impl<EF: TowerLevel> BitRingSwitch<EF> {
         // Only the selected slot feeds the sumcheck.
         // This avoids cloning and folding unrelated columns of a stacked trace.
         let values = &packing.poly().as_slice()[offset..offset + len];
+        // The copy below is the only pass over the buffer, for a level handing back a zeroed
+        // allocation rather than writing one element at a time. A level taking the trait's
+        // default fills the slot serially first, at the width of the slot.
         let mut slot = EF::zero_vec(len);
         slot.par_chunks_mut(CHUNK)
             .zip(values.par_chunks(CHUNK))
