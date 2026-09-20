@@ -27,8 +27,8 @@ use p3_commit::{
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::coset::TwoAdicMultiplicativeCoset;
 use p3_field::{
-    ExtensionField, PackedFieldExtension, PrimeField64, TwoAdicField, batch_multiplicative_inverse,
-    dot_product,
+    ExtensionField, PackedFieldExtension, PackedValue, PrimeCharacteristicRing, PrimeField64,
+    TwoAdicField, batch_multiplicative_inverse, dot_product,
 };
 use p3_matrix::Matrix;
 use p3_matrix::bitrev::{BitReversedMatrixView, BitReversibleMatrix};
@@ -144,6 +144,10 @@ impl<F: TwoAdicField, InputProof: Sync, InputError: Debug + Sync, EF: ExtensionF
 
     #[instrument(skip_all, level = "debug")]
     fn fold_matrix<M: Matrix<EF>>(&self, beta: EF, log_arity: usize, m: M) -> Vec<EF> {
+        if use_packed_fold(F::Packing::WIDTH, m.height(), F::bits()) {
+            return fold_matrix_packed(beta, log_arity, &m);
+        }
+
         if log_arity == 1 {
             // Optimized path for arity 2
             // We use the fact that
@@ -233,6 +237,119 @@ impl<F: TwoAdicField, InputProof: Sync, InputError: Debug + Sync, EF: ExtensionF
             data
         }
     }
+}
+
+/// Whether `fold_matrix` folds a matrix of `height` rows over a base field of `field_bits`
+/// bits with `fold_matrix_packed`, given a packing of `packing_width` lanes.
+///
+/// Packed arithmetic pays off where SIMD lanes multiply field elements natively, which
+/// holds for fields of at most 32 bits. Wider fields emulate the lane product on common
+/// targets, so they keep the scalar paths, as do width-1 packings. `PackedField` does not
+/// bound the packing width, and the packed kernel bit-reverses lane indices and splits the
+/// power-of-two height into whole blocks, so the width must also be a power of two no
+/// larger than the height.
+const fn use_packed_fold(packing_width: usize, height: usize, field_bits: usize) -> bool {
+    packing_width > 1
+        && packing_width.is_power_of_two()
+        && height >= packing_width
+        && field_bits <= 32
+}
+
+/// Fold `F::Packing::WIDTH` rows of `m` at a time, one row per SIMD lane.
+///
+/// Each row goes through the `log_arity` arity-2 rounds of `fold_matrix` without leaving
+/// packed form. Round `s` halves pair `k` of row `t` by the base-field factor
+///
+/// ```text
+///     g_inv^(2^s * rev(t)) * w_inv^(2^s * rev(k)) / 2
+/// ```
+///
+/// where `g` generates the subgroup of order `height * arity`, `w = g^height` generates the
+/// subgroup of order `arity`, and `rev` reverses the bits of a row or pair index. This is
+/// the entry at `t * (arity >> (s + 1)) + k` of the bit-reversed `g_inv^i / 2` table the
+/// other paths use, split into a packed per-row factor, squared once per round, and a
+/// per-pair scalar that is merged with `beta^(2^s)`.
+///
+/// `F::Packing::WIDTH` must be a power of two, and `m.height()` a nonzero multiple of it.
+fn fold_matrix_packed<F, EF, M>(beta: EF, log_arity: usize, m: &M) -> Vec<EF>
+where
+    F: TwoAdicField,
+    EF: ExtensionField<F>,
+    M: Matrix<EF>,
+{
+    let width = F::Packing::WIDTH;
+    let height = m.height();
+    let pairs_per_row = 1 << (log_arity - 1);
+    debug_assert!(width.is_power_of_two() && height >= width && height.is_multiple_of(width));
+    debug_assert_eq!(m.width(), 2 * pairs_per_row);
+
+    // Row `t = b * width + l` of block `b` has the factor
+    //     g_inv^rev(t) = g_inv^rev(b) * (g_inv^num_blocks)^rev(l)
+    // with `rev(b)` over the block index bits and `rev(l)` over the lane bits.
+    let g_inv = F::two_adic_generator(log2_strict_usize(height) + log_arity).inverse();
+    let num_blocks = height / width;
+    let mut block_factors = g_inv.powers().collect_n(num_blocks);
+    reverse_slice_index_bits(&mut block_factors);
+    let lane_root = g_inv.exp_u64(num_blocks as u64);
+    let log_width = log2_strict_usize(width);
+    let lane_factors =
+        F::Packing::from_fn(|lane| lane_root.exp_u64(reverse_bits_len(lane, log_width) as u64));
+
+    // Pair factors `w_inv^rev(k)`, in bit-reversed order. Round `s` reads the prefix of
+    // length `pairs_per_row >> s`, which holds `w_inv^(2^s * rev(k))` with `rev` taken over
+    // that prefix's index bits.
+    let w_inv = F::two_adic_generator(log_arity).inverse();
+    let mut pair_factors = w_inv.powers().collect_n(pairs_per_row);
+    reverse_slice_index_bits(&mut pair_factors);
+
+    // Round `s` multiplies pair `k` by `beta^(2^s) * w_inv^(2^s * rev(k)) / 2`.
+    let mut round_beta = beta;
+    let round_scalars: Vec<Vec<EF>> = (0..log_arity)
+        .map(|round| {
+            let half_beta = round_beta.halve();
+            round_beta = round_beta.square();
+            pair_factors[..pairs_per_row >> round]
+                .iter()
+                .map(|&w| half_beta * w)
+                .collect()
+        })
+        .collect();
+
+    let fold =
+        |lo: EF::ExtensionPacking, hi: EF::ExtensionPacking, scalar: EF, row_factor: F::Packing| {
+            (lo + hi).halve() + (lo - hi) * scalar * row_factor
+        };
+
+    let mut folded = EF::zero_vec(height);
+    folded
+        .par_chunks_exact_mut(width)
+        .zip(block_factors.par_iter())
+        .enumerate()
+        .for_each_init(
+            || EF::ExtensionPacking::zero_vec(pairs_per_row),
+            |pairs, (block, (out, &block_factor))| {
+                let first_row = block * width;
+                let column = |c| {
+                    EF::ExtensionPacking::from_ext_fn(|lane| m.get(first_row + lane, c).unwrap())
+                };
+
+                let mut row_factor = lane_factors * block_factor;
+                for (k, (pair, &scalar)) in pairs.iter_mut().zip(&round_scalars[0]).enumerate() {
+                    *pair = fold(column(2 * k), column(2 * k + 1), scalar, row_factor);
+                }
+
+                // Later rounds fold adjacent packed pairs in place.
+                for scalars in &round_scalars[1..] {
+                    row_factor = row_factor.square();
+                    for (k, &scalar) in scalars.iter().enumerate() {
+                        pairs[k] = fold(pairs[2 * k], pairs[2 * k + 1], scalar, row_factor);
+                    }
+                }
+
+                pairs[0].to_ext_slice(out);
+            },
+        );
+    folded
 }
 
 /// Lagrange interpolation: given points `(xs[i], ys[i])`, evaluate at z.
@@ -369,6 +486,9 @@ where
               a^0 x0 + a^1 x1 + a^2 x2 + a^3 x3 + ...
             = ( a^0 x0 + a^1 x1 ) + a^2 ( a^0 x2 + a^1 x3 ) + ...
             (see `alpha_pows`, `alpha_pow_offset`, `num_reduced`)
+        For the first point a matrix is opened at, the offset is multiplied into the powers of
+        alpha the matrix is compressed with, so those rows need no separate multiplication.
+            (see `offset_alpha_powers`)
 
         - For each unique point z, we precompute 1/(X-z) for the largest subgroup opened at this point.
         Since we compute it in bit-reversed order, smaller subgroups can simply truncate the vector.
@@ -541,10 +661,11 @@ where
         // A zero difficulty still occupies a slot in the proof, keeping its shape fixed.
         let batch_pow_witness = batch_pow_witness.unwrap_or(Val::ZERO);
 
-        // We precompute the packed powers of alpha as we need the same powers for each matrix.
-        // The hot per-matrix reduction (`rowwise_packed_dot_product`) consumes these directly; the
-        // per-opening combination below unpacks `alpha`'s powers lazily via `alpha.powers()`, so we
-        // never materialize a full unpacked copy.
+        // We precompute the packed powers of alpha once, up to the widest matrix. Each matrix
+        // compresses its rows (`rowwise_packed_dot_product`) against a prefix of these powers,
+        // scaled by the alpha offset of the first point it is opened at (see
+        // `offset_alpha_powers`); the per-opening combination below unpacks `alpha`'s powers
+        // lazily via `alpha.powers()`, so we never materialize a full unpacked copy.
         let packed_alpha_powers =
             Challenge::ExtensionPacking::packed_ext_powers_capped(alpha, global_max_width)
                 .collect_vec();
@@ -587,15 +708,28 @@ where
                     .get_or_insert_with(|| Challenge::zero_vec(mat.height()));
                 debug_assert_eq!(reduced_opening_for_log_height.len(), mat.height());
 
+                // The first point this matrix is opened at weights it by
+                // `alpha^num_reduced[log_height]` (see below). Scaling the powers of alpha by
+                // that offset folds the weight into the compression.
+                let first_alpha_pow_offset = alpha.exp_u64(num_reduced[log_height] as u64);
+                let offset_alpha_powers = packed_alpha_powers
+                    [..mat.width().div_ceil(Val::Packing::WIDTH)]
+                    .iter()
+                    .map(|&power| power * first_alpha_pow_offset)
+                    .collect_vec();
+
                 // Treating our matrix M as the evaluations of functions f_0, f_1, ...
-                // Compute the evaluations of `Mred(x) = f_0(x) + alpha*f_1(x) + ...`
+                // Compute the evaluations of `first_alpha_pow_offset * Mred(x)` where
+                // `Mred(x) = f_0(x) + alpha*f_1(x) + ...`
                 let mat_compressed = debug_span!("compress mat").in_scope(|| {
                     // This will be reused for all points z which M is opened at so we collect into a vector.
-                    mat.rowwise_packed_dot_product::<Challenge>(&packed_alpha_powers)
+                    mat.rowwise_packed_dot_product::<Challenge>(&offset_alpha_powers)
                         .collect::<Vec<_>>()
                 });
 
-                for (&point, openings) in points_for_mat.iter().zip(openings_for_mat) {
+                for (point_index, (&point, openings)) in
+                    points_for_mat.iter().zip(openings_for_mat).enumerate()
+                {
                     // If we have multiple matrices at the same height, we need to scale alpha to combine them.
                     // This means that reduced_openings will contain:
                     // Mred_0(x) + alpha^{M_0.width()}Mred_1(x) + alpha^{M_0.width() + M_1.width()}Mred_2(x) + ...
@@ -606,8 +740,9 @@ where
                     // in an identical way to before to compute `Mred(z)`.
                     let reduced_openings: Challenge =
                         dot_product(alpha.powers(), openings.iter().copied());
+                    let weighted_openings = alpha_pow_offset * reduced_openings;
 
-                    mat_compressed
+                    let rows = mat_compressed
                         .par_iter()
                         .zip(reduced_opening_for_log_height.par_iter_mut())
                         // inv_denoms contains `1/(z - x)` for `x` in a coset `gK`.
@@ -616,13 +751,23 @@ where
                         // As inv_denoms is bit reversed, the evaluations over `gH` are exactly
                         // the evaluations over `gK` at the indices `0..mat.height()`.
                         // So zip will truncate to the desired smaller length.
-                        .zip(inv_denoms.get(&point).unwrap().par_iter())
-                        // Map the function `Mred(x) -> (Mred(z) - Mred(x))/(z - x)`
-                        // across the evaluation vector of `Mred(x)`. Adjust by alpha_pow_offset
-                        // as needed.
-                        .for_each(|((&reduced_row, ro), &inv_denom)| {
-                            *ro += alpha_pow_offset * (reduced_openings - reduced_row) * inv_denom;
+                        .zip(inv_denoms.get(&point).unwrap().par_iter());
+
+                    // Map the function `Mred(x) -> (Mred(z) - Mred(x))/(z - x)`
+                    // across the evaluation vector of `Mred(x)`, weighted by `alpha_pow_offset`.
+                    // The first point needs no rescale, saving an extension multiplication per row.
+                    if point_index == 0 {
+                        rows.for_each(|((&reduced_row, ro), &inv_denom)| {
+                            *ro += (weighted_openings - reduced_row) * inv_denom;
                         });
+                    } else {
+                        // `alpha_pow_offset = first_alpha_pow_offset * rescale`, since every
+                        // earlier point of this matrix advanced the offset by `mat.width()`.
+                        let rescale = alpha.exp_u64((point_index * mat.width()) as u64);
+                        rows.for_each(|((&reduced_row, ro), &inv_denom)| {
+                            *ro += (weighted_openings - rescale * reduced_row) * inv_denom;
+                        });
+                    }
                     num_reduced[log_height] += mat.width();
                 }
             }
@@ -930,8 +1075,11 @@ mod tests {
     use p3_dft::Radix2Dit;
     use p3_field::extension::BinomialExtensionField;
     use p3_field::{Field, PrimeCharacteristicRing};
+    use p3_goldilocks::Goldilocks;
+    use p3_matrix::dense::RowMajorMatrixView;
     use p3_merkle_tree::MerkleTreeMmcs;
     use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
+    use rand::distr::{Distribution, StandardUniform};
     use rand::rngs::SmallRng;
     use rand::{RngExt, SeedableRng};
 
@@ -1305,33 +1453,91 @@ mod tests {
         }
     }
 
-    /// `fold_matrix` folds row `i` of its input exactly as `fold_row` folds that row on its own.
+    /// `fold_matrix` folds row `i` of its input exactly as `fold_row` folds that row on its own,
+    /// below, at and above the packing width, both for fields that take the packed path and for
+    /// fields that keep the scalar one.
     #[test]
     fn fold_matrix_matches_fold_row() {
-        let mut rng = SmallRng::seed_from_u64(1);
+        fn check<Base: TwoAdicField, Ext: ExtensionField<Base>>()
+        where
+            StandardUniform: Distribution<Ext>,
+        {
+            let folding = TwoAdicFriFolding::<(), ()>(PhantomData);
+            check_fold_against_fold_row::<Base, Ext>(0, |beta, log_arity, m| {
+                FriFoldingStrategy::<Base, Ext>::fold_matrix(&folding, beta, log_arity, m)
+            });
+        }
+
+        check::<F, EF>();
+        check::<F, F>();
+        check::<Goldilocks, BinomialExtensionField<Goldilocks, 2>>();
+    }
+
+    /// Check that `fold` folds each row of random matrices exactly as `fold_row` folds that
+    /// row on its own, for arities 2 to 16 and heights from `2^min_log_height` up to eight
+    /// packing widths.
+    fn check_fold_against_fold_row<Base, Ext>(
+        min_log_height: usize,
+        fold: impl Fn(Ext, usize, RowMajorMatrixView<'_, Ext>) -> Vec<Ext>,
+    ) where
+        Base: TwoAdicField,
+        Ext: ExtensionField<Base>,
+        StandardUniform: Distribution<Ext>,
+    {
+        let mut rng = SmallRng::seed_from_u64(2);
         let folding = TwoAdicFriFolding::<(), ()>(PhantomData);
+        let log_width = log2_strict_usize(Base::Packing::WIDTH);
 
         for log_arity in 1..=4 {
-            for log_height in 0..5 {
-                let beta: EF = rng.random();
-                let m = RowMajorMatrix::<EF>::rand(&mut rng, 1 << log_height, 1 << log_arity);
+            for log_height in min_log_height..=log_width + 3 {
+                let beta: Ext = rng.random();
+                let m = RowMajorMatrix::<Ext>::rand(&mut rng, 1 << log_height, 1 << log_arity);
 
-                let folded = FriFoldingStrategy::<F, EF>::fold_matrix(
-                    &folding,
-                    beta,
-                    log_arity,
-                    m.as_view(),
-                );
+                let folded = fold(beta, log_arity, m.as_view());
                 assert_eq!(folded.len(), m.height());
 
                 for (index, &expected) in folded.iter().enumerate() {
                     let row = m.row(index).unwrap().into_iter();
-                    let folded_row = FriFoldingStrategy::<F, EF>::fold_row(
+                    let folded_row = FriFoldingStrategy::<Base, Ext>::fold_row(
                         &folding, index, log_height, log_arity, beta, row,
                     );
                     assert_eq!(folded_row, expected);
                 }
             }
         }
+    }
+
+    /// The packed kernel on its own matches `fold_row`, including for fields that
+    /// `fold_matrix` keeps on the scalar path.
+    #[test]
+    fn fold_matrix_packed_matches_fold_row() {
+        fn check<Base: TwoAdicField, Ext: ExtensionField<Base>>()
+        where
+            StandardUniform: Distribution<Ext>,
+        {
+            let log_width = log2_strict_usize(Base::Packing::WIDTH);
+            check_fold_against_fold_row::<Base, Ext>(log_width, |beta, log_arity, m| {
+                fold_matrix_packed(beta, log_arity, &m)
+            });
+        }
+
+        check::<F, EF>();
+        check::<F, F>();
+        check::<Goldilocks, BinomialExtensionField<Goldilocks, 2>>();
+    }
+
+    /// Packings of a width the packed kernel cannot split into bit-reversed lanes keep the
+    /// scalar paths, as do width-1 packings, heights below one packing width and wide fields.
+    #[test]
+    fn packed_fold_gate() {
+        assert!(use_packed_fold(4, 4, 31));
+        assert!(use_packed_fold(8, 1 << 10, 32));
+
+        assert!(!use_packed_fold(3, 4, 31));
+        assert!(!use_packed_fold(3, 8, 31));
+        assert!(!use_packed_fold(6, 8, 31));
+        assert!(!use_packed_fold(1, 8, 31));
+        assert!(!use_packed_fold(8, 4, 31));
+        assert!(!use_packed_fold(4, 8, 64));
     }
 }

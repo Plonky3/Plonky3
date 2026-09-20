@@ -151,6 +151,145 @@ impl<EF: TowerLevel> BitTensor<EF> {
         }
         self.rows = Self { rows: columns }.columns();
     }
+
+    /// Multiplies by `1 + a ⊗ 1 + 1 ⊗ b`, the equality polynomial lifted into the algebra.
+    ///
+    /// In characteristic two `eq(X, Y) = XY + (1 + X)(1 + Y) = 1 + X + Y`.
+    /// `X` lands on the first leg and `Y` on the second, so one factor is two scalings.
+    pub fn mul_equality_factor(&mut self, a: EF, b: EF) {
+        let mut first = self.clone();
+        first.scale_columns(a);
+        let mut second = self.clone();
+        second.scale_rows(b);
+        *self += first;
+        *self += second;
+    }
+
+    /// `sum_x done(point, x) ⊗ eq(x, other)`, the successor weight lifted into the algebra.
+    ///
+    /// # Overview
+    ///
+    /// `done(point, x)` is `eq(point, x - 1)` for `x >= 1` and zero at `x = 0`.
+    /// It is the successor on these coordinates with no row repeating, the settled
+    /// accumulator of `Point::eval_next`.
+    ///
+    /// # Algorithm
+    ///
+    /// The `eval_next` recurrence, with the point on the first leg and `other` on the second.
+    /// Folding from the lowest coordinate up:
+    ///
+    /// ```text
+    ///     done     <- done * (1 + a ⊗ 1 + 1 ⊗ b) + (carry_a (1 + a)) ⊗ (carry_b b)
+    ///     carry_a  <- carry_a * a
+    ///     carry_b  <- carry_b * (1 + b)
+    /// ```
+    ///
+    /// The carry stays one exterior product, so it is held as its two legs.
+    ///
+    /// # Panics
+    ///
+    /// Panics unless the two points name the same number of coordinates.
+    #[must_use]
+    pub fn successor_element(point: &[EF], other: &[EF]) -> Self {
+        assert_eq!(
+            point.len(),
+            other.len(),
+            "the successor element pairs one coordinate of each point"
+        );
+        let (mut carry_a, mut carry_b) = (EF::ONE, EF::ONE);
+        let mut done = Self::zero();
+        for (&a, &b) in point.iter().zip(other).rev() {
+            done.mul_equality_factor(a, b);
+            done.add_exterior_product(carry_a * (EF::ONE + a), carry_b * b);
+            carry_a *= a;
+            carry_b *= EF::ONE + b;
+        }
+        done
+    }
+
+    /// Column `v` alone, read as an element.
+    ///
+    /// Coordinate `u` of the column is coordinate `v` of row `u`, so this is `d` bit reads.
+    #[must_use]
+    pub fn column(&self, v: usize) -> EF {
+        let mut column = Coefficients::<EF>::zero();
+        for (u, &row) in self.rows.iter().enumerate() {
+            if Coefficients::of(row).get(v) {
+                column.set(u);
+            }
+        }
+        column.element()
+    }
+}
+
+/// A sum of exterior products, accumulated one bucket per byte value of its left factor.
+///
+/// # Algorithm
+///
+/// The row reading of `sum_w a_w (x) b_w` adds `b_w` into row `u` for every coordinate `u` the
+/// left factor sets, so half the rows on average. Bucketing by whole bytes of that factor adds
+/// each term once per byte instead, and a row is the sum of the buckets whose byte sets it:
+///
+/// ```text
+///     bucket[k][s] = sum of b_w over the w whose byte k of a_w is s
+///     row 8k + j   = sum of bucket[k][s] over the s with bit j set
+/// ```
+///
+/// The closing pass over the buckets is `d/8 * 256` entries, whatever the sum was over.
+///
+/// The buckets are an accumulation detail of the reductions here, not a wire or API type.
+#[derive(Clone, Debug)]
+pub(crate) struct BitTensorBuckets<EF> {
+    /// Per byte position of the left factor, one sum per value that byte takes.
+    buckets: Vec<[EF; 256]>,
+}
+
+impl<EF: TowerLevel> BitTensorBuckets<EF> {
+    /// Empty buckets, which read back as the zero element.
+    pub(crate) fn zero() -> Self {
+        Self {
+            buckets: alloc::vec![[EF::ZERO; 256]; EF::NUM_BYTES],
+        }
+    }
+
+    /// Add `a (x) b` to the sum.
+    #[inline]
+    pub(crate) fn add_exterior_product(&mut self, a: EF, b: EF) {
+        for (bucket, byte) in self.buckets.iter_mut().zip(a.into_bytes()) {
+            bucket[usize::from(byte)] += b;
+        }
+    }
+
+    /// Add another partial sum into this one.
+    pub(crate) fn merge(&mut self, other: &Self) {
+        for (bucket, other) in self.buckets.iter_mut().zip(&other.buckets) {
+            for (sum, &other) in bucket.iter_mut().zip(other.iter()) {
+                *sum += other;
+            }
+        }
+    }
+
+    /// The element the buckets hold.
+    pub(crate) fn into_tensor(self) -> BitTensor<EF> {
+        let mut tensor = BitTensor::zero();
+        for (position, bucket) in self.buckets.iter().enumerate() {
+            for (value, &sum) in bucket.iter().enumerate() {
+                // Byte value `value` sets coordinate `8 * position + bit` for each of its bits.
+                let mut bits = value as u8;
+                while bits != 0 {
+                    let bit = bits.trailing_zeros() as usize;
+                    bits &= bits - 1;
+
+                    // A level narrower than its byte has no coordinate up there.
+                    // No term can have set one either, so those sums are zero.
+                    if let Some(row) = tensor.rows.get_mut(position * 8 + bit) {
+                        *row += sum;
+                    }
+                }
+            }
+        }
+        tensor
+    }
 }
 
 impl<EF: TowerLevel> AddAssign<&Self> for BitTensor<EF> {
@@ -201,8 +340,10 @@ pub struct MalformedBitTensor {
 
 #[cfg(test)]
 mod tests {
-    use p3_binary_field::{BinaryField16, BinaryField128};
+    use p3_binary_field::{BinaryField16, BinaryField128, Gf2};
     use p3_field::PrimeCharacteristicRing;
+    use p3_multilinear_util::point::Point;
+    use p3_multilinear_util::poly::Poly;
     use proptest::prelude::*;
     use rand::rngs::SmallRng;
     use rand::{RngExt, SeedableRng};
@@ -210,6 +351,33 @@ mod tests {
     use super::*;
 
     type EF = BinaryField16;
+
+    #[test]
+    fn the_buckets_hold_the_sum_of_the_exterior_products() {
+        let mut rng = SmallRng::seed_from_u64(0xB0C5);
+        let terms = (0..32)
+            .map(|_| (rng.random::<EF>(), rng.random::<EF>()))
+            .collect::<Vec<_>>();
+
+        let mut buckets = BitTensorBuckets::<EF>::zero();
+        let mut tensor = BitTensor::<EF>::zero();
+        for &(a, b) in &terms {
+            buckets.add_exterior_product(a, b);
+            tensor.add_exterior_product(a, b);
+        }
+        assert_eq!(buckets.into_tensor(), tensor);
+    }
+
+    #[test]
+    fn a_level_narrower_than_its_byte_reads_its_own_rows_back() {
+        // Gf2 holds one coordinate in a byte of eight, so seven bucket bits address no row.
+        let mut buckets = BitTensorBuckets::<Gf2>::zero();
+        buckets.add_exterior_product(Gf2::ONE, Gf2::ONE);
+        assert_eq!(
+            buckets.into_tensor(),
+            BitTensor::exterior_product(Gf2::ONE, Gf2::ONE)
+        );
+    }
 
     /// A tensor element built from a handful of exterior products.
     fn element(seed: u64) -> BitTensor<EF> {
@@ -336,6 +504,78 @@ mod tests {
         columns_first.scale_rows(b);
 
         assert_eq!(rows_first, columns_first);
+    }
+
+    #[test]
+    fn the_equality_factor_is_agree_plus_disagree() {
+        // Invariant: in characteristic two, eq(a, b) = ab + (1 + a)(1 + b) = 1 + a + b.
+        //
+        //     agree     x * (a ⊗ b)
+        //     disagree  x * ((1 + a) ⊗ (1 + b))
+        let mut rng = SmallRng::seed_from_u64(0xE0F);
+        for _ in 0..8 {
+            let original = element(rng.random());
+            let (a, b) = (rng.random::<EF>(), rng.random::<EF>());
+
+            let mut agree = original.clone();
+            agree.scale_columns(a);
+            agree.scale_rows(b);
+            let mut disagree = original.clone();
+            disagree.scale_columns(EF::ONE + a);
+            disagree.scale_rows(EF::ONE + b);
+            agree += disagree;
+
+            let mut factored = original;
+            factored.mul_equality_factor(a, b);
+            assert_eq!(factored, agree);
+        }
+    }
+
+    #[test]
+    fn the_successor_element_matches_its_hypercube_definition() {
+        // Invariant: the recurrence is linear in the variables; the definition is exponential.
+        //
+        //     e = sum_x done(point, x) ⊗ eq(x, other)
+        //     done(point, x) = eq(point, x - 1) for x >= 1, and 0 at x = 0
+        //
+        // The done weight is read off `Point::eval_next`, the recurrence the zerocheck uses.
+        // Its closed form is cross-checked too, so a wrong semantics fails here, not later.
+        let mut rng = SmallRng::seed_from_u64(0x5CC);
+        for num_variables in 0..6 {
+            let point = Point::<EF>::rand(&mut rng, num_variables);
+            let other = Point::<EF>::rand(&mut rng, num_variables);
+            let eq_point = Poly::<EF>::new_from_point(point.as_slice(), EF::ONE);
+            let eq_other = Poly::<EF>::new_from_point(other.as_slice(), EF::ONE);
+
+            let mut expected = BitTensor::zero();
+            for x in 0..1usize << num_variables {
+                let row = Point::<EF>::hypercube(x, num_variables);
+                let (_, done, _) = Point::eval_next(point.as_slice(), row.as_slice());
+                let closed = if x == 0 {
+                    EF::ZERO
+                } else {
+                    eq_point.as_slice()[x - 1]
+                };
+                assert_eq!(done, closed, "{num_variables} variables, row {x}");
+                expected.add_exterior_product(done, eq_other.as_slice()[x]);
+            }
+
+            assert_eq!(
+                BitTensor::successor_element(point.as_slice(), other.as_slice()),
+                expected,
+                "{num_variables} variables"
+            );
+        }
+    }
+
+    #[test]
+    fn one_column_is_that_column_of_the_transpose() {
+        // Invariant: reading one column agrees with the full transpose, column by column.
+        let original = element(0xC07);
+        let columns = original.columns();
+        for (v, &column) in columns.iter().enumerate() {
+            assert_eq!(original.column(v), column, "column {v}");
+        }
     }
 
     #[test]

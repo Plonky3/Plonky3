@@ -35,6 +35,12 @@ const SHARED_WEIGHTS_MAX_VARIABLES: usize = 20;
 /// A column up to this length is summed serially; a longer one sums its chunks in parallel.
 const WEIGHTED_SUM_CHUNK: usize = 1 << 12;
 
+/// Entries per chunk when a residual factor fills one column slot.
+///
+/// A slot up to this length is filled serially; a longer one fills its chunks in parallel, so a
+/// single tall column is not left to one thread.
+const SLOT_CHUNK: usize = 1 << 12;
+
 /// One claim's residual weight tables at unit scale, over a single column slot.
 struct ClaimWeightTables<EF> {
     /// Equality weights, present when the claim opens a column directly.
@@ -123,7 +129,7 @@ impl<F: Field, EF: ExtensionField<F>> Layout<F, EF> for SuffixProver<F, EF> {
     ///   batch opening more than one column, the equality and successor weight tables are built
     ///   once per call. Each column is then one weighted sum against them, free of products on
     ///   bit-valued rows.
-    #[tracing::instrument(skip_all)]
+    #[tracing::instrument(skip_all, level = "debug")]
     fn record_opening(
         &mut self,
         table_idx: usize,
@@ -754,7 +760,7 @@ impl<F: Field, EF: ExtensionField<F>> SuffixProver<F, EF> {
         let rs = SplitEq::new_unpacked(rs, scale);
 
         // Slots are disjoint, so columns compress independently.
-        // A column is usually too short to parallelize inside, so the parallelism is across columns.
+        // A slot filled from its column alone is also split into chunks, so a tall column spreads.
         column_slots(
             &self.claims.placements,
             &self.claims.tables,
@@ -766,14 +772,21 @@ impl<F: Field, EF: ExtensionField<F>> SuffixProver<F, EF> {
             let poly = self.claims.tables[table_idx].poly(poly_idx);
             if num_folded == 0 {
                 // Nothing to fold: the slot is the column itself, times the scale.
+                let chunks = slot
+                    .par_chunks_mut(SLOT_CHUNK)
+                    .zip(poly.as_slice().par_chunks(SLOT_CHUNK));
                 if scale == EF::ONE {
-                    slot.iter_mut()
-                        .zip(poly.as_slice())
-                        .for_each(|(out, &value)| *out = value.into());
+                    chunks.for_each(|(slot, values)| {
+                        slot.iter_mut()
+                            .zip(values)
+                            .for_each(|(out, &value)| *out = value.into());
+                    });
                 } else {
-                    slot.iter_mut()
-                        .zip(poly.as_slice())
-                        .for_each(|(out, &value)| *out = scale * value);
+                    chunks.for_each(|(slot, values)| {
+                        slot.iter_mut()
+                            .zip(values)
+                            .for_each(|(out, &value)| *out = scale * value);
+                    });
                 }
             } else {
                 rs.compress_suffix_into(slot, poly.as_view());
@@ -952,6 +965,7 @@ impl<F: Field, EF: ExtensionField<F>> SuffixProver<F, EF> {
         };
 
         // Concrete claims: each column's slot is independent, so slots fill in parallel.
+        // Each slot is also split into chunks, so a tall column spreads across threads.
         // Two contributions share one pass over the slot; any other count takes one pass each.
         column_slots(
             &self.claims.placements,
@@ -964,18 +978,27 @@ impl<F: Field, EF: ExtensionField<F>> SuffixProver<F, EF> {
             match column_weights[table_idx][poly_idx].as_slice() {
                 [term0, term1] => {
                     let ((table0, scale0), (table1, scale1)) = (resolve(term0), resolve(term1));
-                    slot.iter_mut().zip(table0.iter().zip(table1)).for_each(
-                        |(out, (&weight0, &weight1))| {
-                            *out += scale0 * weight0 + scale1 * weight1;
-                        },
-                    );
+                    slot.par_chunks_mut(SLOT_CHUNK)
+                        .zip(table0.par_chunks(SLOT_CHUNK))
+                        .zip(table1.par_chunks(SLOT_CHUNK))
+                        .for_each(|((slot, table0), table1)| {
+                            slot.iter_mut().zip(table0.iter().zip(table1)).for_each(
+                                |(out, (&weight0, &weight1))| {
+                                    *out += scale0 * weight0 + scale1 * weight1;
+                                },
+                            );
+                        });
                 }
                 terms => {
                     for term in terms {
                         let (table, scale) = resolve(term);
-                        slot.iter_mut()
-                            .zip(table)
-                            .for_each(|(out, &weight)| *out += scale * weight);
+                        slot.par_chunks_mut(SLOT_CHUNK)
+                            .zip(table.par_chunks(SLOT_CHUNK))
+                            .for_each(|(slot, table)| {
+                                slot.iter_mut()
+                                    .zip(table)
+                                    .for_each(|(out, &weight)| *out += scale * weight);
+                            });
                     }
                 }
             }

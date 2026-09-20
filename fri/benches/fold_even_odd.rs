@@ -9,18 +9,20 @@ use p3_fri::{FriFoldingStrategy, TwoAdicFriFolding};
 use p3_goldilocks::Goldilocks;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_mersenne_31::Mersenne31;
-use p3_util::pretty_name;
 use rand::distr::{Distribution, StandardUniform};
 use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
 
 const LOG_ARITIES: [usize; 3] = [1, 2, 3];
 
-fn bench<F: TwoAdicField, EF: ExtensionField<F>>(c: &mut Criterion, log_sizes: &[usize])
-where
+fn bench<F: TwoAdicField, EF: ExtensionField<F>>(
+    c: &mut Criterion,
+    label: &str,
+    log_sizes: &[usize],
+) where
     StandardUniform: Distribution<EF>,
 {
-    let name = format!("fold_matrix::<{}>", pretty_name::<EF>(),);
+    let name = format!("fold_matrix::<{label}>");
     let mut group = c.benchmark_group(&name);
     group.sample_size(10);
     let folding = TwoAdicFriFolding::<(), ()>(PhantomData);
@@ -46,13 +48,21 @@ where
 fn bench_fold_even_odd(c: &mut Criterion) {
     let log_sizes = [12, 14, 16, 18, 20, 22];
 
-    bench::<BabyBear, BabyBear>(c, &log_sizes);
-    bench::<BabyBear, BinomialExtensionField<BabyBear, 5>>(c, &log_sizes);
+    bench::<BabyBear, BabyBear>(c, "BabyBear", &log_sizes);
+    bench::<BabyBear, BinomialExtensionField<BabyBear, 4>>(c, "BabyBear, BabyBear^4", &log_sizes);
+    bench::<BabyBear, BinomialExtensionField<BabyBear, 5>>(c, "BabyBear, BabyBear^5", &log_sizes);
     bench::<BinomialExtensionField<BabyBear, 5>, BinomialExtensionField<BabyBear, 5>>(
-        c, &log_sizes,
+        c,
+        "BabyBear^5",
+        &log_sizes,
     );
-    bench::<Goldilocks, Goldilocks>(c, &log_sizes);
-    bench::<Complex<Mersenne31>, Complex<Mersenne31>>(c, &log_sizes);
+    bench::<Goldilocks, Goldilocks>(c, "Goldilocks", &log_sizes);
+    bench::<Goldilocks, BinomialExtensionField<Goldilocks, 2>>(
+        c,
+        "Goldilocks, Goldilocks^2",
+        &log_sizes,
+    );
+    bench::<Complex<Mersenne31>, Complex<Mersenne31>>(c, "Complex<Mersenne31>", &log_sizes);
 }
 
 criterion_group!(benches, bench_fold_even_odd);

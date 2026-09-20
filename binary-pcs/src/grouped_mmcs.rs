@@ -144,7 +144,7 @@ pub enum GroupedCodewordError<E> {
     #[error("conflicting duplicate symbol openings")]
     ConflictingDuplicate,
     /// The grouped rows failed authentication.
-    #[error("grouped codeword authentication failed")]
+    #[error("grouped codeword authentication failed: {0:?}")]
     Inner(#[source] E),
 }
 

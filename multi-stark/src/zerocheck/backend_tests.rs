@@ -20,7 +20,7 @@ use p3_keccak::Keccak256Hash;
 use p3_lookup::{Count, InteractionBuilder};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_multilinear_util::point::Point;
-use p3_sumcheck::layout::Table;
+use p3_sumcheck::layout::{ColumnView, Table};
 use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
 
@@ -168,6 +168,17 @@ pub(crate) enum FixtureAir {
     ///
     /// Its cells are arbitrary tower elements, so a stage holding it never fits `GF(4)`.
     Recurrence,
+    /// Bit-valued degree-one AIR over two equal columns.
+    ///
+    /// ```text
+    ///     always : scale * (a - b) = 0
+    /// ```
+    ///
+    /// Its first round evaluates no node, so a constant outside `GF(4)` shows up only later.
+    Linear {
+        /// Constant multiplying the equality.
+        scale: Tower,
+    },
 }
 
 impl BaseAir<Tower> for FixtureAir {
@@ -175,7 +186,7 @@ impl BaseAir<Tower> for FixtureAir {
         match self {
             Self::Gate { .. } | Self::Quartic => 4,
             Self::Pair => 3,
-            Self::Link | Self::Recurrence => 2,
+            Self::Link | Self::Recurrence | Self::Linear { .. } => 2,
             Self::Periodic { .. } => 1,
         }
     }
@@ -214,7 +225,7 @@ impl BaseAir<Tower> for FixtureAir {
             Self::Gate { .. } => vec![2],
             Self::Quartic => vec![3],
             Self::Recurrence => vec![0, 1],
-            Self::Pair | Self::Link | Self::Periodic { .. } => vec![],
+            Self::Pair | Self::Link | Self::Periodic { .. } | Self::Linear { .. } => vec![],
         }
     }
 
@@ -285,6 +296,9 @@ impl<AB: AirBuilder<F = Tower> + InteractionBuilder> Air<AB> for FixtureAir {
                 builder.when_transition().assert_eq(next[0], b);
                 builder.when_transition().assert_eq(next[1], a * b + a);
             }
+            Self::Linear { scale } => {
+                builder.assert_zero((local[0] - local[1]) * *scale);
+            }
         }
     }
 }
@@ -350,6 +364,15 @@ impl Instance {
                 let values = (0..height).map(|_| bit()).collect();
                 (RowMajorMatrix::new(values, 1), None, vec![])
             }
+            FixtureAir::Linear { .. } => {
+                let values = (0..height)
+                    .flat_map(|_| {
+                        let a = bit();
+                        [a, a]
+                    })
+                    .collect();
+                (RowMajorMatrix::new(values, 2), None, vec![])
+            }
             FixtureAir::Recurrence => {
                 let (mut a, mut b): (Tower, Tower) = (rng.random(), rng.random());
                 let mut values = Vec::with_capacity(2 * height);
@@ -379,6 +402,32 @@ impl Instance {
             .as_ref()
             .map(|trace| Table::new(trace.clone().transpose()))
     }
+}
+
+/// Convert a Boolean dense table to the storage representation used by the packed prover path.
+///
+/// The fixture traces are deliberately Boolean, so this test helper exercises the packed table
+/// contract without introducing a second trace generator.
+fn packed_table(table: &Table<Tower>) -> Table<Tower> {
+    let height = 1usize << table.num_variables();
+    let words = (0..height.div_ceil(64))
+        .flat_map(|block| {
+            (0..table.num_polys()).map(move |column| {
+                (0..64).fold(0_u64, |word, lane| {
+                    let row = block * 64 + lane;
+                    if row < height && table.column(column).value(row) == Tower::ONE {
+                        word | (1_u64 << lane)
+                    } else {
+                        word
+                    }
+                })
+            })
+        })
+        .collect();
+    Table::from_packed_bits(
+        RowMajorMatrix::new(words, table.num_polys()),
+        table.num_variables(),
+    )
 }
 
 /// Lookup-reduction output for one lookup AIR, with random coefficients and claim.
@@ -418,6 +467,19 @@ fn transcript<B>(
     instances: &[Instance],
     lookup: LookupRuntime<Tower>,
     pow_bits: usize,
+    packed: bool,
+) -> (Vec<u8>, Tower)
+where
+    B: ZerocheckBackend<Tower, Tower, FixtureAir>,
+{
+    transcript_with_storage::<B>(instances, lookup, pow_bits, |_, _| packed)
+}
+
+fn transcript_with_storage<B>(
+    instances: &[Instance],
+    lookup: LookupRuntime<Tower>,
+    pow_bits: usize,
+    is_packed: impl Fn(usize, &Instance) -> bool,
 ) -> (Vec<u8>, Tower)
 where
     B: ZerocheckBackend<Tower, Tower, FixtureAir>,
@@ -426,13 +488,49 @@ where
         .iter()
         .map(|instance| &instance.air)
         .collect::<Vec<_>>();
-    let main = instances
+    let dense_main = instances
         .iter()
         .map(Instance::main_table)
         .collect::<Vec<_>>();
-    let preprocessed = instances
+    let dense_preprocessed = instances
         .iter()
         .map(Instance::preprocessed_table)
+        .collect::<Vec<_>>();
+    let needs_packed = instances
+        .iter()
+        .enumerate()
+        .any(|(index, instance)| is_packed(index, instance));
+    let packed_main = needs_packed.then(|| dense_main.iter().map(packed_table).collect::<Vec<_>>());
+    let packed_preprocessed = needs_packed.then(|| {
+        dense_preprocessed
+            .iter()
+            .map(|table| table.as_ref().map(packed_table))
+            .collect::<Vec<_>>()
+    });
+    let main = instances
+        .iter()
+        .enumerate()
+        .map(|(index, instance)| {
+            if is_packed(index, instance) {
+                &packed_main.as_ref().expect("packed fixture was requested")[index]
+            } else {
+                &dense_main[index]
+            }
+        })
+        .collect::<Vec<_>>();
+    let preprocessed = instances
+        .iter()
+        .enumerate()
+        .map(|(index, instance)| {
+            if is_packed(index, instance) {
+                packed_preprocessed
+                    .as_ref()
+                    .expect("packed fixture was requested")[index]
+                    .as_ref()
+            } else {
+                dense_preprocessed[index].as_ref()
+            }
+        })
         .collect::<Vec<_>>();
     let public_values = instances
         .iter()
@@ -442,8 +540,8 @@ where
     let mut challenger = challenger();
     let (proof, point) = AirZerocheck::new(&airs, pow_bits)
         .prove_with_lookup::<Tower, Tower, B, _>(
-            &preprocessed.iter().map(Option::as_ref).collect::<Vec<_>>(),
-            &main.iter().collect::<Vec<_>>(),
+            &preprocessed,
+            &main,
             &public_values,
             lookup,
             &mut challenger,
@@ -466,11 +564,98 @@ fn assert_backends_agree(
     lookup: impl Fn() -> LookupRuntime<Tower>,
     pow_bits: usize,
 ) {
-    let generic = transcript::<GenericBackend>(instances, lookup(), pow_bits);
-    let subfield = transcript::<SubfieldBackend<Gf4>>(instances, lookup(), pow_bits);
+    let generic = transcript::<GenericBackend>(instances, lookup(), pow_bits, false);
+    let subfield = transcript::<SubfieldBackend<Gf4>>(instances, lookup(), pow_bits, false);
     assert_eq!(subfield, generic, "subfield backend");
-    let repr = transcript::<ReprBackend<Gf4, PolyBasis>>(instances, lookup(), pow_bits);
+    let repr = transcript::<ReprBackend<Gf4, PolyBasis>>(instances, lookup(), pow_bits, false);
     assert_eq!(repr, generic, "representation backend");
+}
+
+fn assert_packed_matches_dense(
+    instances: &[Instance],
+    lookup: impl Fn() -> LookupRuntime<Tower>,
+    pow_bits: usize,
+) {
+    for instance in instances {
+        let dense = instance.main_table();
+        let packed = packed_table(&dense).into_dense();
+        assert_eq!(
+            dense
+                .columns()
+                .flat_map(ColumnView::values)
+                .collect::<Vec<_>>(),
+            packed
+                .columns()
+                .flat_map(ColumnView::values)
+                .collect::<Vec<_>>(),
+            "packed source cells"
+        );
+        if let Some(dense) = instance.preprocessed_table() {
+            let packed = packed_table(&dense).into_dense();
+            assert_eq!(
+                dense
+                    .columns()
+                    .flat_map(ColumnView::values)
+                    .collect::<Vec<_>>(),
+                packed
+                    .columns()
+                    .flat_map(ColumnView::values)
+                    .collect::<Vec<_>>(),
+                "packed preprocessed cells"
+            );
+        }
+    }
+    let dense = transcript::<GenericBackend>(instances, lookup(), pow_bits, false);
+    for (name, packed) in [
+        (
+            "generic",
+            transcript::<GenericBackend>(instances, lookup(), pow_bits, true),
+        ),
+        (
+            "subfield",
+            transcript::<SubfieldBackend<Gf4>>(instances, lookup(), pow_bits, true),
+        ),
+        (
+            "representation",
+            transcript::<ReprBackend<Gf4, PolyBasis>>(instances, lookup(), pow_bits, true),
+        ),
+    ] {
+        assert_eq!(packed, dense, "packed {name} backend");
+    }
+
+    if instances.len() > 1 {
+        for (name, mixed) in [
+            (
+                "generic",
+                transcript_with_storage::<GenericBackend>(
+                    instances,
+                    lookup(),
+                    pow_bits,
+                    |index, _| index % 2 == 0,
+                ),
+            ),
+            (
+                "subfield",
+                transcript_with_storage::<SubfieldBackend<Gf4>>(
+                    instances,
+                    lookup(),
+                    pow_bits,
+                    |index, _| index % 2 == 0,
+                ),
+            ),
+            (
+                "representation",
+                transcript_with_storage::<ReprBackend<Gf4, PolyBasis>>(
+                    instances,
+                    lookup(),
+                    pow_bits,
+                    |index, _| index % 2 == 0,
+                ),
+            ),
+        ] {
+            assert_eq!(mixed, dense, "mixed dense/packed {name} backend");
+        }
+    }
 }
 
 #[test]
@@ -502,6 +687,33 @@ fn backends_agree_on_a_bit_valued_degree_three_air() {
         )];
         assert_backends_agree(&instances, || LookupRuntime::Inactive, 0);
     }
+}
+
+#[test]
+fn packed_backends_match_dense_across_round_boundaries_and_fallback() {
+    for height in [32, 64, 128, 256, 512] {
+        // Quartic exercises current/next reads while keeping every source cell Boolean.
+        let successor = [
+            Instance::honest(FixtureAir::Quartic, height, height as u64),
+            Instance::honest(FixtureAir::Pair, height, height as u64 + 2),
+        ];
+        assert_packed_matches_dense(&successor, || LookupRuntime::Inactive, 0);
+
+        // An outside constant keeps the source Boolean while forcing the generic fallback path.
+        let fallback = [Instance::honest(
+            FixtureAir::Linear { scale: outside() },
+            height,
+            height as u64 + 1,
+        )];
+        assert_packed_matches_dense(&fallback, || LookupRuntime::Inactive, 0);
+    }
+
+    let mixed_heights = [
+        Instance::honest(FixtureAir::Quartic, 32, 0xB601),
+        Instance::honest(FixtureAir::Pair, 64, 0xB602),
+        Instance::honest(FixtureAir::Linear { scale: outside() }, 128, 0xB603),
+    ];
+    assert_packed_matches_dense(&mixed_heights, || LookupRuntime::Inactive, 0);
 }
 
 #[test]
@@ -624,6 +836,61 @@ fn backends_agree_on_stages_tall_enough_to_fold_in_parallel() {
     assert_backends_agree(&instances, || LookupRuntime::Inactive, 0);
 }
 
+#[test]
+fn backends_agree_on_stages_tall_enough_to_slice() {
+    // Fixture state:
+    //
+    //     stage 2^9 rows : gate (degree 3) and pair (degree 2), sliced from round 0
+    //     stage 2^7 rows : gate, sliced once it activates two rounds later
+    let instances = [
+        Instance::honest(FixtureAir::Gate { scale: Tower::ONE }, 1 << 9, 20),
+        Instance::honest(FixtureAir::Pair, 1 << 9, 21),
+        Instance::honest(FixtureAir::Gate { scale: gf4(3) }, 1 << 7, 22),
+    ];
+    assert_backends_agree(&instances, || LookupRuntime::Inactive, 0);
+    assert_backends_agree(&instances, || LookupRuntime::Inactive, 2);
+}
+
+#[test]
+fn backends_agree_when_a_tall_stage_does_not_fit() {
+    // Each stage is tall enough to slice, so every misfit reaches the sliced kernel first.
+    let height = 1 << 8;
+    let gate = |seed| Instance::honest(FixtureAir::Gate { scale: Tower::ONE }, height, seed);
+    let mut cell = gate(23);
+    cell.main.values[4 * (height - 1) + 3] = outside();
+    let mut public = gate(24);
+    public.public_values[1] = outside();
+    let constant = Instance::honest(
+        FixtureAir::Gate {
+            scale: Tower::from_repr(5),
+        },
+        height,
+        25,
+    );
+    let periodic = Instance::honest(
+        FixtureAir::Periodic {
+            period: [gf4(2), outside()],
+        },
+        height,
+        26,
+    );
+    let quartic = Instance::honest(FixtureAir::Quartic, height, 27);
+    for instance in [cell, public, constant, periodic, quartic] {
+        assert_backends_agree(&[instance], || LookupRuntime::Inactive, 0);
+    }
+}
+
+#[test]
+fn backends_agree_when_a_constant_first_poisons_a_later_sliced_round() {
+    // The first round of a degree-one stage evaluates no node, so the sliced kernel only meets
+    // the out-of-subfield constant in the next round, and leaves its planes there.
+    let scale = Tower::from_repr(5);
+    for height in [1 << 7, 1 << 8, 1 << 11] {
+        let instances = [Instance::honest(FixtureAir::Linear { scale }, height, 28)];
+        assert_backends_agree(&instances, || LookupRuntime::Inactive, 0);
+    }
+}
+
 /// Degrees the symbolic pass sees, so a fixture cannot drift from the shape its test names.
 #[test]
 fn fixture_degrees_are_the_named_ones() {
@@ -640,6 +907,7 @@ fn fixture_degrees_are_the_named_ones() {
     };
     assert_eq!(degree(&periodic), 3);
     assert_eq!(degree(&FixtureAir::Recurrence), 3);
+    assert_eq!(degree(&FixtureAir::Linear { scale: gf4(2) }), 1);
     let link = super::get_air_profile::<Tower, Tower, _>(&FixtureAir::Link).degrees;
     assert!(link.interactions > 0);
 }

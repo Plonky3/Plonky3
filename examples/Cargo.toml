@@ -50,6 +50,8 @@ p3-util.workspace = true
 clap.workspace = true
 postcard = { workspace = true, features = ["alloc"] }
 rand.workspace = true
+serde.workspace = true
+thiserror.workspace = true
 
 [dev-dependencies]
 p3-baby-bear = { path = "../baby-bear" }

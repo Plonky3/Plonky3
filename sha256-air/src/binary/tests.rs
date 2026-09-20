@@ -1,10 +1,11 @@
+use alloc::collections::BTreeSet;
 use alloc::vec::Vec;
 use core::array;
 use core::borrow::{Borrow, BorrowMut};
 
 use p3_air::{
-    AirLayout, BaseAir, ConstraintFailure, check_all_constraints, check_constraints,
-    get_max_constraint_degree, get_symbolic_constraints,
+    AirLayout, BaseAir, BaseEntry, BaseLeaf, ConstraintFailure, SymbolicExpr,
+    check_all_constraints, check_constraints, get_max_constraint_degree, get_symbolic_constraints,
 };
 use p3_baby_bear::BabyBear;
 use p3_binary_field::BinaryField128;
@@ -109,6 +110,119 @@ fn width_and_constraint_hints_match_symbolic_evaluation() {
         <Sha256BinaryAir as BaseAir<F>>::max_constraint_degree(&air),
         Some(degree)
     );
+}
+
+/// How a constraint depends on one column.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Form {
+    /// The column does not appear.
+    Free,
+    /// The constraint is the column plus an expression that does not contain it.
+    Linear,
+    /// Anything else, including a higher power of the column.
+    Other,
+}
+
+/// Classifies how `expr` depends on main column `col`, over a field of characteristic 2.
+fn form_in(expr: &SymbolicExpr<BaseLeaf<F>>, col: usize) -> Form {
+    match expr {
+        SymbolicExpr::Leaf(BaseLeaf::Variable(v)) => {
+            match (v.entry, v.index == col) {
+                // Only current-row main columns can fix a cell of this row.
+                (BaseEntry::Main { offset: 0 }, true) => Form::Linear,
+                _ => Form::Free,
+            }
+        }
+        SymbolicExpr::Leaf(_) => Form::Free,
+        // In characteristic 2 subtraction is addition, and `x + x` cancels.
+        SymbolicExpr::Add { x, y, .. } | SymbolicExpr::Sub { x, y, .. } => {
+            match (form_in(x, col), form_in(y, col)) {
+                (Form::Other, _) | (_, Form::Other) => Form::Other,
+                (Form::Linear, Form::Linear) | (Form::Free, Form::Free) => Form::Free,
+                _ => Form::Linear,
+            }
+        }
+        SymbolicExpr::Neg { x, .. } => form_in(x, col),
+        SymbolicExpr::Mul { x, y, .. } => match (form_in(x, col), form_in(y, col)) {
+            (Form::Free, Form::Free) => Form::Free,
+            // A linear factor survives only when multiplied by the constant one.
+            (Form::Linear, Form::Free) if is_one(y) => Form::Linear,
+            (Form::Free, Form::Linear) if is_one(x) => Form::Linear,
+            _ => Form::Other,
+        },
+    }
+}
+
+/// Whether the expression is the constant one.
+fn is_one(expr: &SymbolicExpr<BaseLeaf<F>>) -> bool {
+    matches!(expr, SymbolicExpr::Leaf(BaseLeaf::Constant(c)) if *c == F::ONE)
+}
+
+/// Every current-row main column the expression reads.
+fn columns_of(expr: &SymbolicExpr<BaseLeaf<F>>, out: &mut BTreeSet<usize>) {
+    match expr {
+        SymbolicExpr::Leaf(BaseLeaf::Variable(v)) => {
+            if v.entry == (BaseEntry::Main { offset: 0 }) {
+                out.insert(v.index);
+            }
+        }
+        SymbolicExpr::Leaf(_) => {}
+        SymbolicExpr::Add { x, y, .. } | SymbolicExpr::Sub { x, y, .. } => {
+            columns_of(x, out);
+            columns_of(y, out);
+        }
+        SymbolicExpr::Mul { x, y, .. } => {
+            columns_of(x, out);
+            columns_of(y, out);
+        }
+        SymbolicExpr::Neg { x, .. } => columns_of(x, out),
+    }
+}
+
+#[test]
+fn every_column_is_forced_to_a_bit_by_the_constraints() {
+    // The AIR only asserts booleanity on the input columns and relies on the rest being forced
+    // to bits by the constraints that define them. This walks all 23,712 constraints in order
+    // and checks that claim for the whole row.
+    //
+    // After the input booleanity constraints, each remaining constraint must introduce exactly
+    // one column no earlier constraint fixed, and must be linear in it. Then that column equals
+    // an expression in columns already known to be bits, so it is a bit too, and the row is
+    // determined by the inputs.
+    let air = Sha256BinaryAir {};
+    let layout = AirLayout {
+        main_width: NUM_SHA256_BINARY_COLS,
+        ..Default::default()
+    };
+    let constraints = get_symbolic_constraints::<F, _>(&air, layout);
+
+    let mut fixed: BTreeSet<usize> = BTreeSet::new();
+    for (i, constraint) in constraints.iter().enumerate() {
+        let mut columns = BTreeSet::new();
+        columns_of(constraint, &mut columns);
+
+        if i < NUM_INPUT_BITS {
+            // An input booleanity constraint: one column, and not linear in it.
+            assert_eq!(columns.len(), 1, "input constraint {i} reads {columns:?}");
+            let column = *columns.first().unwrap();
+            assert_eq!(form_in(constraint, column), Form::Other, "constraint {i}");
+            fixed.insert(column);
+            continue;
+        }
+
+        let new: Vec<usize> = columns.difference(&fixed).copied().collect();
+        assert_eq!(new.len(), 1, "constraint {i} introduces columns {new:?}");
+        assert_eq!(
+            form_in(constraint, new[0]),
+            Form::Linear,
+            "constraint {i} is not linear in column {}",
+            new[0]
+        );
+        fixed.insert(new[0]);
+    }
+
+    // Every column of the row ends up determined.
+    assert_eq!(fixed.len(), NUM_SHA256_BINARY_COLS);
 }
 
 #[test]

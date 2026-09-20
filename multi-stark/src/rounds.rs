@@ -3,6 +3,7 @@
 //! Builds round polynomials for `sum_x eq(tau, x) * g(x)` and folds state across challenges.
 
 mod repr;
+mod sliced;
 mod subfield;
 
 use alloc::collections::BTreeMap;
@@ -20,12 +21,20 @@ use p3_maybe_rayon::prelude::*;
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::{Poly, PolyView};
 use p3_sumcheck::generic_degree::RoundPolyInterpolator;
-use p3_sumcheck::layout::Table;
+use p3_sumcheck::layout::{ColumnView, Table};
 
 use crate::folder::{FolderEvaluations, InteractionMultilinearFolder, MultilinearFolder};
 use crate::lookup::AirLinkInstance;
 use crate::packed_ext::PackedExt;
 use crate::selectors::{BoundaryEvals, periodic_num_variables};
+
+#[inline]
+fn packed_column_at<F: Field>(column: ColumnView<'_, F>, row: usize) -> F::Packing {
+    column.as_dense().map_or_else(
+        || column.packed_at(row),
+        |values| *F::Packing::from_slice(&values[row..row + F::Packing::WIDTH]),
+    )
+}
 
 /// Native per-variable degrees of one AIR's two zerocheck expression families.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Default)]
@@ -231,6 +240,8 @@ pub(crate) struct RoundStateBase<'air, 'data, A, F: Field, EF> {
     ///
     /// Every other kernel leaves it false.
     fits_subfield: bool,
+    /// The stage's bit planes, once its first round ran on them.
+    sliced: Option<sliced::SlicedTrace>,
 }
 
 /// Extension-round column storage.
@@ -245,6 +256,8 @@ enum ExtColumns<F: Field, EF: ExtensionField<F>, R = EF> {
     Packed(Vec<Poly<EF::ExtensionPacking>>),
     /// One arithmetic-field element per residual row.
     Scalar(Vec<Poly<R>>),
+    /// The stage's bit planes and the challenges bound so far, with no column folded yet.
+    Sliced(sliced::SlicedColumns<EF>),
 }
 
 impl<F: Field, EF: ExtensionField<F>, R> ExtColumns<F, EF, R> {
@@ -253,6 +266,7 @@ impl<F: Field, EF: ExtensionField<F>, R> ExtColumns<F, EF, R> {
         match self {
             Self::Packed(cols) => cols.len(),
             Self::Scalar(cols) => cols.len(),
+            Self::Sliced(sliced) => sliced.width(),
         }
     }
 
@@ -276,6 +290,7 @@ impl<F: Field, EF: ExtensionField<F>, R> ExtColumns<F, EF, R> {
                 .first()
                 .expect("round state requires at least one column")
                 .num_evals(),
+            Self::Sliced(sliced) => sliced.num_evals(),
         }
     }
 
@@ -288,7 +303,9 @@ impl<F: Field, EF: ExtensionField<F>, R> ExtColumns<F, EF, R> {
     fn as_packed(&self) -> &[Poly<EF::ExtensionPacking>] {
         match self {
             Self::Packed(cols) => cols,
-            Self::Scalar(_) => unreachable!("round_poly_packed requires packed columns"),
+            Self::Scalar(_) | Self::Sliced(_) => {
+                unreachable!("round_poly_packed requires packed columns")
+            }
         }
     }
 
@@ -301,7 +318,9 @@ impl<F: Field, EF: ExtensionField<F>, R> ExtColumns<F, EF, R> {
     fn as_scalar(&self) -> &[Poly<R>] {
         match self {
             Self::Scalar(cols) => cols,
-            Self::Packed(_) => unreachable!("round_poly_unpacked requires scalar columns"),
+            Self::Packed(_) | Self::Sliced(_) => {
+                unreachable!("round_poly_unpacked requires scalar columns")
+            }
         }
     }
 }
@@ -342,6 +361,7 @@ impl<F: Field, EF: ExtensionField<F>> ExtColumns<F, EF> {
                     .for_each(|col| col.fix_prefix_var_mut(r));
                 Self::Scalar(cols)
             }
+            Self::Sliced(_) => unreachable!("a sliced stage binds its challenges on its planes"),
         }
     }
 }
@@ -414,7 +434,8 @@ pub(crate) struct RoundStateExt<'air, 'data, A, F: Field, EF: ExtensionField<F>,
     round: usize,
     /// Repeat-last successor values at the folded tail row, one entry per column.
     ///
-    /// Zero for every column no AIR reads on the next row.
+    /// Zero for every column no AIR reads on the next row, and for every column while the stage
+    /// is still on its planes, which fill it in when the stage leaves them.
     next_tail: Vec<R>,
     /// Lookup/AIR-link coefficients retained from this stage's base-field round.
     coupling: InteractionCoupling<R>,
@@ -520,6 +541,17 @@ where
             }
         }
     }
+}
+
+/// Tasks per worker a round's fold splits its rows into.
+///
+/// Each task sets up a scratch holding every column, so splitting further spends more on
+/// scratch than on the rows it evaluates, and splitting less leaves workers idle.
+const TASKS_PER_WORKER: usize = 2;
+
+/// Rows one task of a round evaluates, given how many the round has to spread.
+pub(crate) fn rows_per_task(rows: usize) -> usize {
+    (rows / (current_num_threads() * TASKS_PER_WORKER)).max(1)
 }
 
 /// Scratch for scalar round-polynomial folds.
@@ -1413,6 +1445,7 @@ where
             coupling,
             eta,
             fits_subfield: false,
+            sliced: None,
         }
     }
 
@@ -1541,12 +1574,10 @@ where
                         for ((local, local_delta), column) in scratch.local_point[offset..end]
                             .iter_mut()
                             .zip(scratch.local_diff[offset..end].iter_mut())
-                            .zip(table.iter_polys())
+                            .zip(table.columns())
                         {
-                            let local_lo = *F::Packing::from_slice(&column[s..s + packing_width]);
-                            let local_hi = *F::Packing::from_slice(
-                                &column[s + scalar_half..s + scalar_half + packing_width],
-                            );
+                            let local_lo = packed_column_at(column, s);
+                            let local_hi = packed_column_at(column, s + scalar_half);
                             *local = local_lo;
                             *local_delta = local_hi - local_lo;
                         }
@@ -1559,22 +1590,19 @@ where
                             for ((next, next_delta), column) in scratch.next_point[run.clone()]
                                 .iter_mut()
                                 .zip(scratch.next_diff[run.clone()].iter_mut())
-                                .zip(table.iter_polys().skip(run.start - offset))
+                                .zip(table.columns().skip(run.start - offset))
                             {
-                                let next_lo =
-                                    *F::Packing::from_slice(&column[s + 1..s + 1 + packing_width]);
+                                let next_lo = packed_column_at(column, s + 1);
                                 let next_hi_start = s + scalar_half + 1;
                                 let next_hi = if next_hi_start + packing_width <= height {
-                                    *F::Packing::from_slice(
-                                        &column[next_hi_start..next_hi_start + packing_width],
-                                    )
+                                    packed_column_at(column, next_hi_start)
                                 } else {
                                     F::Packing::from_fn(|lane| {
                                         let row = next_hi_start + lane;
                                         if row < height {
-                                            column[row]
+                                            column.value(row)
                                         } else {
-                                            column[height - 1]
+                                            column.value(height - 1)
                                         }
                                     })
                                 };
@@ -1730,10 +1758,10 @@ where
                 scratch.local_point[offset..end]
                     .iter_mut()
                     .zip(scratch.local_diff[offset..end].iter_mut())
-                    .zip(table.iter_polys())
+                    .zip(table.columns())
                     .for_each(|((local, local_delta), column)| {
-                        let local_lo = column[s];
-                        let local_hi = column[s + half];
+                        let local_lo = column.value(s);
+                        let local_hi = column.value(s + half);
                         *local = local_lo;
                         *local_delta = local_hi - local_lo;
                     });
@@ -1746,13 +1774,13 @@ where
                     scratch.next_point[run.clone()]
                         .iter_mut()
                         .zip(scratch.next_diff[run.clone()].iter_mut())
-                        .zip(table.iter_polys().skip(run.start - offset))
+                        .zip(table.columns().skip(run.start - offset))
                         .for_each(|((next, next_delta), column)| {
-                            let next_lo = column[s + 1];
+                            let next_lo = column.value(s + 1);
                             let next_hi = if s + half + 1 < height {
-                                column[s + half + 1]
+                                column.value(s + half + 1)
                             } else {
-                                column[height - 1]
+                                column.value(height - 1)
                             };
                             *next = next_lo;
                             *next_delta = next_hi - next_lo;
@@ -1849,14 +1877,48 @@ where
     }
 
     #[tracing::instrument(skip_all, level = "debug")]
+    #[allow(clippy::option_if_let_else)]
     pub(crate) fn fold(self, r: EF) -> RoundStateExt<'air, 'data, A, F, EF>
     where
         A: for<'b> Air<MultilinearFolder<'b, F, F, EF>>,
     {
         self.fold_columns(
             r,
-            |column| PolyView::new(column).fix_prefix_var_to_packed(r),
-            |column| PolyView::new(column).fix_prefix_var(r),
+            |column| {
+                if let Some(values) = column.as_dense() {
+                    PolyView::new(values).fix_prefix_var_to_packed(r)
+                } else {
+                    let half = column.len() / 2;
+                    Poly::new(
+                        (0..half)
+                            .step_by(F::Packing::WIDTH)
+                            .map(|start| {
+                                EF::ExtensionPacking::from_ext_fn(|lane| {
+                                    let lo = column.value(start + lane);
+                                    let hi = column.value(start + half + lane);
+                                    r * EF::from(hi - lo) + EF::from(lo)
+                                })
+                            })
+                            .collect(),
+                    )
+                }
+            },
+            |column| {
+                if let Some(values) = column.as_dense() {
+                    PolyView::new(values).fix_prefix_var(r)
+                } else {
+                    let half = column.len() / 2;
+                    Poly::new(
+                        (0..half)
+                            .map(|row| {
+                                let lo = column.value(row);
+                                let hi = column.value(row + half);
+                                EF::from(lo) + r * EF::from(hi - lo)
+                            })
+                            .collect(),
+                    )
+                }
+            },
         )
     }
 
@@ -1871,8 +1933,8 @@ where
         fold_scalar: U,
     ) -> RoundStateExt<'air, 'data, A, F, EF>
     where
-        P: Fn(&[F]) -> Poly<EF::ExtensionPacking> + Sync,
-        U: Fn(&[F]) -> Poly<EF> + Sync,
+        P: Fn(ColumnView<'_, F>) -> Poly<EF::ExtensionPacking> + Sync,
+        U: Fn(ColumnView<'_, F>) -> Poly<EF> + Sync,
     {
         let next_tail = self.fold_claims_and_tails(r);
 
@@ -1902,6 +1964,15 @@ where
         }
     }
 
+    /// Update each group's claim for binding the first variable at `r`.
+    fn fold_claims(&mut self, r: EF) {
+        let tau = self.tau.as_slice()[0];
+        self.constraint_groups
+            .iter_mut()
+            .chain(self.interaction_groups.iter_mut())
+            .for_each(|group| group.claim = group.eval(tau, r));
+    }
+
     /// Update each group's claim for binding the first variable at `r`, and fold every tail.
     ///
     /// # Returns
@@ -1909,11 +1980,7 @@ where
     /// The repeat-last successor value of every column at the folded tail row.
     /// Zero for every column no AIR reads on the next row.
     fn fold_claims_and_tails(&mut self, r: EF) -> Vec<EF> {
-        let tau = self.tau.as_slice()[0];
-        self.constraint_groups
-            .iter_mut()
-            .chain(self.interaction_groups.iter_mut())
-            .for_each(|group| group.claim = group.eval(tau, r));
+        self.fold_claims(r);
 
         let num_evals = self.num_evals();
         let half = num_evals / 2;
@@ -1923,9 +1990,9 @@ where
             for run in runs {
                 for (tail, col) in next_tail[run.clone()]
                     .iter_mut()
-                    .zip(table.iter_polys().skip(run.start - offset))
+                    .zip(table.columns().skip(run.start - offset))
                 {
-                    *tail = r * (col[num_evals - 1] - col[half]) + col[half];
+                    *tail = r * (col.value(num_evals - 1) - col.value(half)) + col.value(half);
                 }
             }
         };
@@ -1950,21 +2017,21 @@ where
     fn fold_each_column<T, U>(&self, fold: U) -> Vec<Poly<T>>
     where
         T: Send,
-        U: Fn(&[F]) -> Poly<T> + Sync,
+        U: Fn(ColumnView<'_, F>) -> Poly<T> + Sync,
     {
         let mut columns = Vec::with_capacity(self.total_width());
         for slot in &self.slots {
             columns.extend(
                 self.tables[slot.stage_index]
-                    .par_iter_polys()
+                    .par_columns()
                     .map(&fold)
                     .collect::<Vec<_>>(),
             );
             if let Some(preprocessed) = self.preprocessed[slot.stage_index] {
-                columns.extend(preprocessed.par_iter_polys().map(&fold).collect::<Vec<_>>());
+                columns.extend(preprocessed.par_columns().map(&fold).collect::<Vec<_>>());
             }
             if let Some(periodic) = self.periodic[slot.stage_index].as_ref() {
-                columns.extend(periodic.par_iter_polys().map(&fold).collect::<Vec<_>>());
+                columns.extend(periodic.par_columns().map(&fold).collect::<Vec<_>>());
             }
         }
         columns
@@ -2070,23 +2137,28 @@ where
             .map(|group| group.degree)
             .collect::<Vec<_>>();
 
-        let scratch = eq_suffix.as_slice().par_iter().enumerate().par_fold_reduce(
-            || Scratch::<R, R>::new(&constraint_degrees, &interaction_degrees, width),
-            |scratch, (s, &eq_suffix)| {
-                self.accumulate_row(scratch, s, eq_suffix, &schedule, &next_columns)
-            },
-            |mut lhs, rhs| {
-                lhs.constraint_evals
-                    .iter_mut()
-                    .zip(rhs.constraint_evals)
-                    .for_each(|(lhs, rhs)| R::add_slices(lhs, &rhs));
-                lhs.interaction_evals
-                    .iter_mut()
-                    .zip(rhs.interaction_evals)
-                    .for_each(|(lhs, rhs)| R::add_slices(lhs, &rhs));
-                lhs
-            },
-        );
+        let scratch = eq_suffix
+            .as_slice()
+            .par_iter()
+            .with_min_len(rows_per_task(eq_suffix.num_evals()))
+            .enumerate()
+            .par_fold_reduce(
+                || Scratch::<R, R>::new(&constraint_degrees, &interaction_degrees, width),
+                |scratch, (s, &eq_suffix)| {
+                    self.accumulate_row(scratch, s, eq_suffix, &schedule, &next_columns)
+                },
+                |mut lhs, rhs| {
+                    lhs.constraint_evals
+                        .iter_mut()
+                        .zip(rhs.constraint_evals)
+                        .for_each(|(lhs, rhs)| R::add_slices(lhs, &rhs));
+                    lhs.interaction_evals
+                        .iter_mut()
+                        .zip(rhs.interaction_evals)
+                        .for_each(|(lhs, rhs)| R::add_slices(lhs, &rhs));
+                    lhs
+                },
+            );
         finish_round(
             &mut self.constraint_groups,
             &mut self.interaction_groups,
@@ -2206,15 +2278,20 @@ where
         scratch
     }
 
-    /// Update each group's claim and every repeat-last tail for binding the next variable at `r`.
-    ///
-    /// The tails read the columns before they fold, so this runs first.
-    fn fold_claims_and_tails(&mut self, r: EF) {
+    /// Update each group's claim for binding the next variable at `r`.
+    fn fold_claims(&mut self, r: EF) {
         let tau = self.tau.as_slice()[self.round];
         self.constraint_groups
             .iter_mut()
             .chain(self.interaction_groups.iter_mut())
             .for_each(|group| group.claim = group.eval(tau, r));
+    }
+
+    /// Update each group's claim and every repeat-last tail for binding the next variable at `r`.
+    ///
+    /// The tails read the columns before they fold, so this runs first.
+    fn fold_claims_and_tails(&mut self, r: EF) {
+        self.fold_claims(r);
 
         let half = self.num_evals() / 2;
         let r = R::from(r);
@@ -2237,6 +2314,9 @@ where
                         let lo = R::from(col.as_slice()[group].extract(lane));
                         *next_tail = lo + r * (*next_tail - lo);
                     }
+                }
+                ExtColumns::Sliced(_) => {
+                    unreachable!("a sliced stage computes its tails when it leaves its planes")
                 }
             }
         }

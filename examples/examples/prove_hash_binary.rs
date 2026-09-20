@@ -1,14 +1,12 @@
 use clap::Parser;
-use p3_binary_dft::{LchNtt, NaiveAdditiveNtt, PolyBasisNtt};
-use p3_binary_field::BinaryField128;
+use p3_binary_field::{BinaryField128, Gf2};
 use p3_blake3_air::Blake3BinaryAir;
-use p3_examples::binary::{
-    AdditiveNttChoice, Backend, BinaryProofOptions, prove_binary_air_with_ntt_and_backend,
-};
-use p3_examples::parsers::{BinaryHashOptions, NttOptions, RepresentationOptions};
+use p3_examples::binary::{Backend, BinaryProofOptions, prove_boolean_air_with_backend};
+use p3_examples::parsers::{BinaryHashOptions, RepresentationOptions};
 use p3_keccak_air::{KECCAK_BINARY_ROWS_PER_PERM, KeccakBinaryAir};
 use p3_matrix::Matrix;
 use p3_sha256_air::Sha256BinaryAir;
+use p3_sumcheck::layout::Table;
 use tracing_forest::ForestLayer;
 use tracing_forest::util::LevelFilter;
 use tracing_subscriber::layer::SubscriberExt;
@@ -26,10 +24,6 @@ struct Args {
     #[arg(short, long)]
     log_trace_length: u8,
 
-    /// The additive NTT used to encode the binary-PCS codeword.
-    #[arg(short, long, ignore_case = true, value_enum, default_value_t = NttOptions::PolyBasis)]
-    ntt: NttOptions,
-
     /// The field representation the zerocheck prover runs its later rounds in.
     ///
     /// Every choice proves and verifies the same statement and emits a byte-identical proof;
@@ -39,7 +33,7 @@ struct Args {
     representation: RepresentationOptions,
 
     /// Log of the inverse code rate for the binary PCS.
-    #[arg(long, default_value_t = 2)]
+    #[arg(long, default_value_t = 1)]
     log_inv_rate: usize,
 
     /// Grinding bits the binary PCS demands once, before its query phase.
@@ -48,20 +42,20 @@ struct Args {
 
     /// Composed security target of the whole proof, in bits.
     ///
-    /// Committing every cell as a `BinaryField128` element caps it at roughly
-    /// 128 - (log-trace-length + ceil(log2(width)) + log-inv-rate + 3); PCS grinding does not
-    /// raise that cap.
+    /// The Boolean commitment packs the trace's bits into `BinaryField128` elements, which caps
+    /// it at roughly 125 - (log-trace-length + ceil(log2(width)) - 7 + log-inv-rate) on the
+    /// binary PCS over those packed elements; PCS grinding does not raise that cap.
     #[arg(long, default_value_t = 100)]
     security_bits: usize,
 
     /// Sequential variable folds batched between binary-PCS commitments.
-    #[arg(long, default_value_t = 3)]
+    #[arg(long, default_value_t = 4)]
     folding: usize,
 
     /// Number of children each Merkle-tree node compresses: 2 or 4.
     ///
     /// 4 trades larger authentication paths in the proof for fewer compressions per tree.
-    #[arg(long, default_value_t = 2, value_parser = parse_merkle_arity)]
+    #[arg(long, default_value_t = 4, value_parser = parse_merkle_arity)]
     merkle_arity: usize,
 }
 
@@ -86,12 +80,6 @@ fn main() {
 
     let args = Args::parse();
     let trace_height = 1usize << args.log_trace_length;
-
-    let ntt = match args.ntt {
-        NttOptions::PolyBasis => AdditiveNttChoice::PolyBasis(PolyBasisNtt::default()),
-        NttOptions::Lch => AdditiveNttChoice::Lch(LchNtt::default()),
-        NttOptions::Naive => AdditiveNttChoice::Naive(NaiveAdditiveNtt::default()),
-    };
 
     let backend = match args.representation {
         RepresentationOptions::Auto => Backend::preferred(),
@@ -120,37 +108,44 @@ fn main() {
             println!("Proving {num_hashes} Keccak-f permutations");
 
             let air = KeccakBinaryAir {};
-            let trace = air.generate_random_trace_rows::<BinaryField128>(num_hashes, 0);
+            let words = air.generate_random_trace_packed::<Gf2>(num_hashes);
             assert_eq!(
-                trace.height(),
-                trace_height,
-                "generated trace height must match the requested log-trace-length"
+                words.height(),
+                trace_height.div_ceil(64),
+                "generated trace height must match the requested log-trace-length {}",
+                args.log_trace_length
             );
-            prove_binary_air_with_ntt_and_backend(&air, trace, options, ntt, backend)
+            let trace =
+                Table::<BinaryField128>::from_packed_bits(words, args.log_trace_length as usize);
+            prove_boolean_air_with_backend(&air, trace, options, backend)
         }
         BinaryHashOptions::Blake3Compressions => {
             println!("Proving {trace_height} Blake-3 compressions");
 
             let air = Blake3BinaryAir {};
-            let trace = air.generate_random_trace_rows::<BinaryField128>(trace_height, 0);
+            let words = air.generate_random_trace_packed::<Gf2>(trace_height);
+            let trace =
+                Table::<BinaryField128>::from_packed_bits(words, args.log_trace_length as usize);
             assert_eq!(
-                trace.height(),
-                trace_height,
+                trace.num_variables(),
+                args.log_trace_length as usize,
                 "generated trace height must match the requested log-trace-length"
             );
-            prove_binary_air_with_ntt_and_backend(&air, trace, options, ntt, backend)
+            prove_boolean_air_with_backend(&air, trace, options, backend)
         }
         BinaryHashOptions::Sha256Compressions => {
             println!("Proving {trace_height} SHA-256 compressions");
 
             let air = Sha256BinaryAir {};
-            let trace = air.generate_random_trace_rows::<BinaryField128>(trace_height, 0);
+            let words = air.generate_random_trace_packed::<Gf2>(trace_height);
+            let trace =
+                Table::<BinaryField128>::from_packed_bits(words, args.log_trace_length as usize);
             assert_eq!(
-                trace.height(),
-                trace_height,
+                trace.num_variables(),
+                args.log_trace_length as usize,
                 "generated trace height must match the requested log-trace-length"
             );
-            prove_binary_air_with_ntt_and_backend(&air, trace, options, ntt, backend)
+            prove_boolean_air_with_backend(&air, trace, options, backend)
         }
     };
 
@@ -159,6 +154,26 @@ fn main() {
             println!("{report}");
             println!("Proof Verified Successfully");
         }
-        Err(error) => panic!("{error:?}"),
+        Err(error) => panic!("{error}"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cli_defaults_select_the_fast_binary_pcs_parameters() {
+        let args = Args::try_parse_from([
+            "prove_hash_binary",
+            "--objective",
+            "blake-3-compressions",
+            "--log-trace-length",
+            "2",
+        ])
+        .expect("minimal CLI arguments parse");
+        assert_eq!(args.log_inv_rate, 1);
+        assert_eq!(args.folding, 4);
+        assert_eq!(args.merkle_arity, 4);
     }
 }

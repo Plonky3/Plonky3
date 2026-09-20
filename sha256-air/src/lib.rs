@@ -1,7 +1,8 @@
 //! AIRs for the SHA-256 compression function.
 //!
 //! [`Sha256Air`] works over prime fields. [`Sha256BinaryAir`] works over fields of
-//! characteristic 2; see its module for how it differs from the prime-field AIR below.
+//! characteristic 2, where every word is 32 bits and a round writes only its new `a` and `e`;
+//! [`Sha256BinaryCols`] describes that layout. The prime-field AIR is described below.
 //!
 //! # Overview
 //!

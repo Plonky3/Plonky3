@@ -47,6 +47,23 @@ class CheckCliTests(unittest.TestCase):
             ["+ cargo test --doc -p p3-util"],
         )
 
+    def test_generated_package_lists_are_forwarded_without_shell_parsing(self):
+        self.assertEqual(
+            self.dry_run_lines("test", "--packages", "p3-util,p3-matrix")[0],
+            "+ cargo nextest run -p p3-matrix -p p3-util",
+        )
+        self.assertEqual(
+            self.dry_run_lines(
+                "architecture",
+                "--target",
+                "x86_64-unknown-linux-gnu",
+                "--packages",
+                "p3-util,p3-matrix",
+            )[0],
+            "+ cargo build --target x86_64-unknown-linux-gnu"
+            " -p p3-matrix -p p3-util --all-targets",
+        )
+
     def test_architecture_builds_and_lints_without_running(self):
         self.assertEqual(
             self.dry_run_lines(
@@ -334,6 +351,23 @@ class CargoMetadataTests(unittest.TestCase):
             ],
         )
 
+    def test_scoped_parallel_run_uses_a_qualified_feature(self):
+        with tempfile.TemporaryDirectory() as temp:
+            self.make_workspace(temp)
+            result = self.run_fixture(
+                temp,
+                "test",
+                "--package",
+                "p3-featured",
+                "--parallel",
+            )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            result.stdout.splitlines()[0],
+            "+ cargo nextest run -p p3-featured"
+            " --features p3-featured/parallel --no-tests warn",
+        )
+
     def test_repository_metadata_explicitly_excludes_host_only_packages(self):
         result = subprocess.run(
             [
@@ -375,6 +409,121 @@ class CargoMetadataTests(unittest.TestCase):
         self.assertIn("p3-binary-pcs", selected)
         for line in result.stdout.splitlines():
             self.assertTrue(line.endswith(" --lib"), line)
+
+
+class CiPlanTests(unittest.TestCase):
+    def metadata(self, root):
+        root = Path(root)
+
+        # A dev-only consumer runs its integration tests without tainting its consumers.
+        #     alpha -> beta -(dev)-> runner -> downstream
+        dependencies = {
+            "p3-alpha": [],
+            "p3-beta": [("p3-alpha", "alpha", None)],
+            "p3-runner": [("p3-beta", "beta", "dev")],
+            "p3-downstream": [("p3-runner", "runner", None)],
+            "p3-isolated": [],
+        }
+        packages = []
+        for name, package_dependencies in dependencies.items():
+            directory = name.removeprefix("p3-")
+            package_root = root / directory
+            packages.append(
+                {
+                    "id": name,
+                    "name": name,
+                    "manifest_path": str(package_root / "Cargo.toml"),
+                    "dependencies": [
+                        {
+                            "name": dependency_name,
+                            "path": str(root / dependency_directory),
+                            "kind": kind,
+                        }
+                        for dependency_name, dependency_directory, kind in package_dependencies
+                    ],
+                    "targets": [{"kind": ["lib"]}],
+                    "metadata": {},
+                    "features": {},
+                }
+            )
+        return {
+            "workspace_root": str(root),
+            "workspace_members": list(dependencies),
+            "packages": packages,
+        }
+
+    def test_production_dependents_and_direct_dev_consumers_are_selected(self):
+        import check  # noqa: PLC0415
+
+        with tempfile.TemporaryDirectory() as temp:
+            plan = check.ci_plan(self.metadata(temp), ["alpha/src/lib.rs"])
+        self.assertEqual(plan["packages"], ["p3-alpha", "p3-beta", "p3-runner"])
+        self.assertFalse(plan["full"])
+
+    def test_changed_paths_keep_both_sides_of_a_rename(self):
+        import check  # noqa: PLC0415
+
+        diff = b"M\0alpha/src/lib.rs\0R100\0beta/old.rs\0beta/new.rs\0"
+        completed = subprocess.CompletedProcess([], 0, stdout=diff)
+        with unittest.mock.patch("check.subprocess.run", return_value=completed):
+            paths = check.changed_paths(Path.cwd(), "base", "head")
+        self.assertEqual(
+            paths,
+            ["alpha/src/lib.rs", "beta/new.rs", "beta/old.rs"],
+        )
+
+    def test_dev_edges_do_not_spread_back_into_the_production_graph(self):
+        import check  # noqa: PLC0415
+
+        with tempfile.TemporaryDirectory() as temp:
+            plan = check.ci_plan(self.metadata(temp), ["runner/src/lib.rs"])
+        self.assertEqual(plan["packages"], ["p3-downstream", "p3-runner"])
+
+    def test_package_documentation_selects_its_crate(self):
+        import check  # noqa: PLC0415
+
+        with tempfile.TemporaryDirectory() as temp:
+            plan = check.ci_plan(self.metadata(temp), ["alpha/README.md"])
+        self.assertEqual(plan["packages"], ["p3-alpha", "p3-beta", "p3-runner"])
+        self.assertTrue(plan["rust"])
+
+    def test_repository_documentation_does_not_start_rust_jobs(self):
+        import check  # noqa: PLC0415
+
+        with tempfile.TemporaryDirectory() as temp:
+            metadata = self.metadata(temp)
+            plan = check.ci_plan(metadata, ["README.md"])
+            changelog_plan = check.ci_plan(metadata, ["alpha/CHANGELOG.md"])
+            audit_plan = check.ci_plan(metadata, ["audits/report.pdf"])
+        self.assertEqual(plan["packages"], [])
+        self.assertFalse(plan["rust"])
+        self.assertEqual(changelog_plan["packages"], [])
+        self.assertEqual(audit_plan["packages"], [])
+
+    def test_unknown_shared_inputs_fail_closed(self):
+        import check  # noqa: PLC0415
+
+        with tempfile.TemporaryDirectory() as temp:
+            metadata = self.metadata(temp)
+            plan = check.ci_plan(metadata, ["config/build.json"])
+            markdown_plan = check.ci_plan(metadata, ["protocol.md"])
+        self.assertTrue(plan["full"])
+        self.assertEqual(len(plan["packages"]), 5)
+        self.assertTrue(plan["toml"])
+        self.assertTrue(plan["manifests"])
+        self.assertTrue(plan["scripts"])
+        self.assertTrue(markdown_plan["full"])
+
+    def test_workspace_inputs_and_forced_runs_select_every_package(self):
+        import check  # noqa: PLC0415
+
+        with tempfile.TemporaryDirectory() as temp:
+            metadata = self.metadata(temp)
+            manifest_plan = check.ci_plan(metadata, ["Cargo.toml"])
+            forced_plan = check.ci_plan(metadata, [], force_full=True)
+        self.assertTrue(manifest_plan["full"])
+        self.assertTrue(manifest_plan["manifests"])
+        self.assertEqual(manifest_plan["packages"], forced_plan["packages"])
 
 
 class TargetFeatureTests(unittest.TestCase):

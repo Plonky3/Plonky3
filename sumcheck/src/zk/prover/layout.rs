@@ -3,9 +3,8 @@
 //! Captures the data the masking layer needs from any layout, and the one
 //! piece of arithmetic that genuinely branches on the binding direction.
 
-use p3_field::{ExtensionField, Field, PackedValue, TwoAdicField};
+use p3_field::{ExtensionField, TwoAdicField};
 use p3_multilinear_util::point::Point;
-use p3_util::log2_strict_usize;
 
 use crate::layout::{Layout, PrefixProver, ProverMultiClaim, ProverVirtualClaim, SuffixProver};
 use crate::product_polynomial::ProductPolynomial;
@@ -55,24 +54,9 @@ where
     where
         EF: TwoAdicField,
     {
-        // Invariant: the packed residual needs one full SIMD lane to survive the fold.
-        //
-        //     both packed routes panic unless  num_variables - folding >= k_pack
-        //     suffix mode is unpacked, so this guard is prefix-only
-        //     phrased as  k_pack <= num_variables - folding  to avoid usize underflow
-        let k_pack = log2_strict_usize(<F as Field>::Packing::WIDTH);
-        assert!(
-            rs.num_variables() + k_pack <= self.num_variables(),
-            "prefix packed residual needs num_variables - folding >= k_pack",
-        );
-
-        // Fold the stacked polynomial low-to-high.
-        // The combining challenge is baked into the compression scale.
-        let compressed = tracing::info_span!("compress_prefix_to_packed")
-            .in_scope(|| self.poly.compress_prefix_to_packed(rs, eps));
-        // Build the equality weights in packed form, fused scatter or pack as cheaper.
-        let weights = self.residual_weights_packed(rs, alpha);
-        ProductPolynomial::new_packed(VariableOrder::Prefix, compressed, weights)
+        // Scale the compression by the masking challenge.
+        // Narrow residuals use scalar storage.
+        self.residual_product(rs, alpha, eps)
     }
 }
 

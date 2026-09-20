@@ -27,6 +27,13 @@ use p3_field::{Algebra, Field, PrimeCharacteristicRing};
 #[repr(transparent)]
 pub struct PackedExt<F, P>(pub P, PhantomData<fn() -> F>);
 
+/// One SIMD lane group of a field `R` isomorphic to the challenge field, as an algebra over
+/// the trace field `F`.
+///
+/// A zerocheck round bound into `R` reads `R::Packing::WIDTH` residual rows through one of
+/// these, one row per lane.
+pub type PackedRepr<F, R> = PackedExt<F, <R as Field>::Packing>;
+
 impl<F, P> PackedExt<F, P> {
     #[inline]
     pub const fn new(p: P) -> Self {

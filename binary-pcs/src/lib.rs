@@ -7,6 +7,7 @@ use p3_sumcheck::layout::SuffixProver;
 
 mod boolean;
 mod boolean_trace;
+mod boolean_trace_transcript;
 mod error;
 mod fold;
 mod grouped_mmcs;
@@ -22,7 +23,9 @@ pub(crate) mod test_util;
 pub mod transcript;
 mod verifier;
 
-pub use boolean::{BooleanMultilinearPcs, BooleanPcs, BooleanPcsError, BooleanProof};
+pub use boolean::{
+    BitOpening, BitReadings, BooleanMultilinearPcs, BooleanPcs, BooleanPcsError, BooleanProof,
+};
 pub use boolean_trace::{BooleanTraceData, BooleanTraceError, BooleanTracePcs, BooleanTraceProof};
 pub use error::BinaryPcsError;
 pub use fold::{ChallengeField, FoldAlphabet, fold_codeword, fold_pair};

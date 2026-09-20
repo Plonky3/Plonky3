@@ -139,6 +139,8 @@ pub struct ZerocheckProof<F, EF> {
 pub struct AirZerocheck<'a, A> {
     /// AIRs whose alpha-batched constraints are checked.
     airs: &'a [&'a A],
+    /// Setup-time AIR metadata, absent for standalone reductions.
+    profiles: Option<&'a [AirProfile]>,
     /// Grinding difficulty per sumcheck round, or `0` to skip.
     pow_bits: usize,
 }
@@ -438,7 +440,29 @@ impl<'a, A> AirZerocheck<'a, A> {
     ///
     /// AIRs are batched in the order supplied here; proof opening claims use the same order.
     pub const fn new(airs: &'a [&'a A], pow_bits: usize) -> Self {
-        Self { airs, pow_bits }
+        Self {
+            airs,
+            profiles: None,
+            pow_bits,
+        }
+    }
+
+    /// Reuse the symbolic AIR pass performed by multi-STARK setup.
+    pub(crate) fn with_profiles(
+        airs: &'a [&'a A],
+        profiles: &'a [AirProfile],
+        pow_bits: usize,
+    ) -> Self {
+        assert_eq!(
+            airs.len(),
+            profiles.len(),
+            "one cached AIR profile is required for each AIR",
+        );
+        Self {
+            airs,
+            profiles: Some(profiles),
+            pow_bits,
+        }
     }
 
     /// Check that prover inputs are aligned with the AIR batch and its declared layouts.
@@ -593,11 +617,18 @@ impl<'a, A> AirZerocheck<'a, A> {
         // Ordinary constraints and lookup links keep their native symbolic degrees.
         // The round state evaluates an AIR up to the larger of the two degrees.
         // It stops accumulating the lower-degree family at that family's own final node.
-        let profiles = self
-            .airs
-            .iter()
-            .map(|&air| get_air_profile::<F, EF, A>(air))
-            .collect::<Vec<_>>();
+        let owned_profiles;
+        let profiles = match self.profiles {
+            Some(profiles) => profiles,
+            None => {
+                owned_profiles = self
+                    .airs
+                    .iter()
+                    .map(|&air| get_air_profile::<F, EF, A>(air))
+                    .collect::<Vec<_>>();
+                &owned_profiles
+            }
+        };
         let degrees = profiles
             .iter()
             .map(|profile| profile.degrees)
@@ -1150,11 +1181,15 @@ impl<'a, A> AirZerocheck<'a, A> {
         });
 
         // The same symbolic pass fixes the round degree and says which AIRs declare lookups.
-        let degrees = self
-            .airs
-            .iter()
-            .map(|&air| get_air_degrees::<F, EF, A>(air))
-            .collect::<Vec<_>>();
+        let degrees = self.profiles.map_or_else(
+            || {
+                self.airs
+                    .iter()
+                    .map(|&air| get_air_degrees::<F, EF, A>(air))
+                    .collect::<Vec<_>>()
+            },
+            |profiles| profiles.iter().map(|profile| profile.degrees).collect(),
+        );
         validate_lookup_links(&degrees, lookup)?;
 
         // One extra degree for the eq weight the sumcheck carries.
@@ -1866,6 +1901,54 @@ mod tests {
                 &mut verifier_challenger,
             )
             .expect("valid trace must verify");
+    }
+
+    #[test]
+    fn cached_profile_preserves_the_proof() {
+        // The setup-time profile must replace only symbolic analysis.
+        // Identical transcripts must therefore produce identical proof data and challenges.
+        let trace = fib_trace(8);
+        let public_values = fib_public_values(8);
+        let air = FibAir;
+        let airs = [&air];
+        let traces = [&trace];
+        let public_values = [&public_values[..]];
+
+        // The standalone path derives its metadata immediately before proving.
+        let uncached = AirZerocheck::new(&airs, 0);
+        let (uncached_proof, uncached_point) =
+            prove_traces(&uncached, &traces, &public_values, &mut fresh_challenger());
+
+        // The keyed path receives the same metadata derived during setup.
+        let profiles = [get_air_profile::<F, EF, _>(&air)];
+        let cached = AirZerocheck::with_profiles(&airs, &profiles, 0);
+        let (cached_proof, cached_point) =
+            prove_traces(&cached, &traces, &public_values, &mut fresh_challenger());
+
+        // Every transmitted field is compared because no proof serialization is defined here.
+        assert_eq!(
+            cached_proof.sumcheck.claimed_sum,
+            uncached_proof.sumcheck.claimed_sum
+        );
+        assert_eq!(
+            cached_proof.sumcheck.round_polys,
+            uncached_proof.sumcheck.round_polys
+        );
+        assert_eq!(
+            cached_proof.sumcheck.pow_witnesses,
+            uncached_proof.sumcheck.pow_witnesses
+        );
+        assert_eq!(cached_proof.local, uncached_proof.local);
+        assert_eq!(cached_proof.next, uncached_proof.next);
+        assert_eq!(
+            cached_proof.preprocessed_local,
+            uncached_proof.preprocessed_local
+        );
+        assert_eq!(
+            cached_proof.preprocessed_next,
+            uncached_proof.preprocessed_next
+        );
+        assert_eq!(cached_point, uncached_point);
     }
 
     #[test]

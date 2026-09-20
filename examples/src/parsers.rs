@@ -51,13 +51,6 @@ pub enum BinaryHashOptions {
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub enum NttOptions {
-    PolyBasis,
-    Lch,
-    Naive,
-}
-
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum RepresentationOptions {
     Auto,
     Subfield,
@@ -230,22 +223,6 @@ impl ValueEnum for BinaryHashOptions {
                 1,
                 Some(vec![("sha256-compressions", 4)]),
             ),
-        })
-    }
-}
-
-impl ValueEnum for NttOptions {
-    fn value_variants<'a>() -> &'a [Self] {
-        &[Self::PolyBasis, Self::Lch, Self::Naive]
-    }
-
-    fn to_possible_value(&self) -> Option<PossibleValue> {
-        Some(match self {
-            Self::PolyBasis => {
-                get_aliases("poly-basis", 1, Some(vec![("polybasis", 4), ("pb", 2)]))
-            }
-            Self::Lch => get_aliases("lch", 1, None),
-            Self::Naive => get_aliases("naive", 1, None),
         })
     }
 }

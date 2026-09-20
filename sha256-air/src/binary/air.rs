@@ -11,7 +11,7 @@ use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
 
 use super::columns::{NUM_SHA256_BINARY_COLS, Sha256BinaryCols};
-use super::generation::generate_binary_trace_rows;
+use super::generation::{generate_binary_trace_packed, generate_binary_trace_rows};
 use super::{SCHEDULE_CARRIES, T1_CARRIES, rotr_index};
 use crate::{
     BLOCK_WORDS, INPUT_WORDS, NUM_COMPRESSION_ROUNDS, SCHEDULE_EXTENSIONS, SHA256_K, STATE_WORDS,
@@ -70,6 +70,17 @@ impl Sha256BinaryAir {
             .map(|_| rng.random::<[u32; INPUT_WORDS]>())
             .collect();
         generate_binary_trace_rows(inputs, extra_capacity_bits)
+    }
+
+    /// Generate a packed trace over `num_hashes` fixed-seed random compression inputs.
+    ///
+    /// See [`generate_binary_trace_packed`] for the packing.
+    pub fn generate_random_trace_packed<F: Field>(&self, num_hashes: usize) -> RowMajorMatrix<u64> {
+        let mut rng = SmallRng::seed_from_u64(1);
+        let inputs = (0..num_hashes)
+            .map(|_| rng.random::<[u32; INPUT_WORDS]>())
+            .collect();
+        generate_binary_trace_packed::<F>(inputs)
     }
 }
 

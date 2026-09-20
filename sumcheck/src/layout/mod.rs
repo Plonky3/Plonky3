@@ -57,7 +57,7 @@
 //! Lagrange weights; the modes differ only in the handoff to the residual
 //! product polynomial once folding completes:
 //!
-//! - Prefix-first binding: the handoff is packed (`compress_prefix_to_packed`).
+//! - Prefix-first binding chooses packed or scalar compression from the residual width.
 //! - Suffix-first binding: the handoff is unpacked (`compress_stacked`).
 //!
 //! Both modes end at the same residual product polynomial; the binding order
@@ -86,7 +86,10 @@ pub use plan::plan_stacked_layout;
 pub use prover::{Layout, PrefixProver, StackedClaims, SuffixProver, SuffixResidualProver};
 pub use transcript::{commitment_domain_separator, observe_commitment};
 pub use verifier::Verifier;
-pub use witness::{Selector, Table, TablePlacement, Witness};
+pub use witness::{
+    ColumnOut, ColumnView, FilledSuffixWitness, Selector, SuffixFillError, SuffixLayoutPlan,
+    SuffixLayoutPlanError, SuffixTableSource, Table, TablePlacement, Witness,
+};
 
 use crate::strategy::VariableOrder;
 pub use crate::table::TableShape;

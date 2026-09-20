@@ -23,7 +23,7 @@
 # Add 'binary' label to any changes within the binary SNARK stack crates.
 'binary':
   - changed-files:
-      - any-glob-to-any-file: ['binary-dft/**', 'binary-field/**', 'binary-pcs/**']
+      - any-glob-to-any-file: ['binary-dft/**', 'binary-field/**', 'binary-pcs/**', 'word/**', 'word-backend/**']
 
 # Add 'multilinear' label to any changes within the multilinear PCS crates.
 'multilinear':

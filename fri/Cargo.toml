@@ -47,5 +47,9 @@ criterion.workspace = true
 name = "fold_even_odd"
 harness = false
 
+[[bench]]
+name = "pcs_open"
+harness = false
+
 [lints]
 workspace = true

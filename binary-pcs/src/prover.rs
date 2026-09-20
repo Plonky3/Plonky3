@@ -214,7 +214,7 @@ where
         let _batch_span = tracing::info_span!("fold batch", batch, start, arity).entered();
         let mut challenges = Vec::with_capacity(arity);
         for round in start..start + arity {
-            let challenge = tracing::info_span!("sumcheck round", round).in_scope(|| {
+            let challenge = tracing::debug_span!("sumcheck round", round).in_scope(|| {
                 // A sumcheck round seeds a sub-transcript of its own.
                 transcript.fold_batch(|challenger| {
                     sumcheck.compute_sumcheck_polynomials(&mut sumcheck_data, challenger, 1, 0)

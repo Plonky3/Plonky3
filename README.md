@@ -106,8 +106,10 @@ Currently the options for the command line arguments are:
 - `--discrete-fourier-transform` (`-d`): `radix-2-dit-parallel, recursive-dft` or `small-batch-dft`. This option should be omitted if the field choice is `mersenne-31` as the circle stark currently only supports a single discrete fourier transform.
 - `--merkle-hash` (`-m`): `poseidon-2, keccak-f`.
 
-`prove_hash_binary` proves Keccak-f permutations, BLAKE3 compressions or SHA-256 compressions over `BinaryField128`
-with the multilinear STARK prover and `BinaryPcs`, instead of a prime field and FRI:
+`prove_hash_binary` proves Keccak-f permutations, BLAKE3 compressions or SHA-256 compressions
+over `BinaryField128` with the multilinear STARK prover. They commit their bit-valued traces
+through the `BooleanTracePcs`, which opens the current and the next row of every column. Every
+objective generates its trace already packed into bits:
 ```bash
 RUSTFLAGS="-Ctarget-cpu=native" cargo run --example prove_hash_binary --release --features parallel -- --objective keccak-f-permutations --log-trace-length 14 --security-bits 96
 RUSTFLAGS="-Ctarget-cpu=native" cargo run --example prove_hash_binary --release --features parallel -- --objective blake-3-compressions --log-trace-length 10 --security-bits 96
@@ -118,20 +120,19 @@ RUSTFLAGS="-Ctarget-cpu=native" cargo run --example prove_hash_binary --release 
   (one per round, plus the output row), so `keccak-f-permutations` proves
   `2^log-trace-length / 25` permutations; `blake-3-compressions` and `sha-256-compressions` each
   prove `2^log-trace-length` compressions, one row per compression.
-- `--ntt` (`-n`): the additive NTT encoding the binary-PCS codeword: `poly-basis` (default; fast
-  with a hardware carryless multiply, and the portable fallback otherwise), `lch`
-  (Lin–Chung–Han), or `naive` (the reference transform).
 - `--representation` (`-r`): the field representation the zerocheck prover runs its later
   rounds in: `auto` (default; polynomial basis with a hardware carryless multiply, subfield-tower
   basis otherwise), `subfield`, or `poly-basis`. Every choice proves and verifies the same
   statement and emits a byte-identical proof; this is a performance tradeoff only.
 - `--log-inv-rate`, `--pcs-pow-bits`, `--security-bits` (default 100), `--folding`, and
-  `--merkle-arity` (`2` or `4`, default `2`) tune the binary PCS.
+  `--merkle-arity` (`2` or `4`, default `4`) tune the PCS. The defaults are inverse rate 1,
+  folding 4, and Merkle arity 4.
 
-Every trace cell is committed as a `BinaryField128` element, so the proven security the binary
-PCS can reach drops by one bit per committed variable: roughly
-`128 - (log-trace-length + ceil(log2(width)) + log-inv-rate + 3)`, with width 1625 for Keccak-f
-and 11536 for BLAKE3. Lower `--security-bits` for larger traces.
+The Boolean commitment packs each trace's bits into `BinaryField128` elements and reduces column
+claims through a bit-ring switch, which caps the proven security at roughly
+`125 - (log-trace-length + ceil(log2(width)) - 7 + log-inv-rate)` bits, with width 1625 for Keccak-f
+and 11536 for BLAKE3; PCS grinding does not raise that cap. Lower `--security-bits` for larger
+traces.
 
 Extra speedups may be possible with some configuration changes:
 - `JEMALLOC_SYS_WITH_MALLOC_CONF=retain:true,dirty_decay_ms:-1,muzzy_decay_ms:-1` will cause jemalloc to hang on to virtual memory. This may not affect the very first proof much, but can help significantly with subsequent proofs as fewer pages (if any) will need to be newly assigned by the OS. These settings might not be suitable for all production environments, e.g. if the process' virtual memory is limited by `ulimit` or `max_map_count`.

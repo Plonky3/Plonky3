@@ -1,5 +1,7 @@
+use alloc::vec;
 use alloc::vec::Vec;
 use core::array;
+use core::borrow::BorrowMut;
 
 use p3_air::utils::u32_to_bits_le;
 use p3_field::Field;
@@ -53,6 +55,60 @@ pub fn generate_binary_trace_rows<F: Field>(
         .for_each(|(row, input)| generate_trace_row(row, &input));
 
     trace
+}
+
+/// Generate a binary SHA-256 trace packed into one `u64` per 64 trace rows.
+///
+/// The returned matrix keeps the AIR columns as its width. Physical row `w` stores logical
+/// rows `64 * w..64 * w + 63`, with bit zero holding the first logical row. The generic field
+/// parameter controls only the reusable temporary row used while generating the witness; the
+/// resulting bits are independent of that field.
+///
+/// # Panics
+///
+/// Panics if the field does not have characteristic 2, if `inputs` is empty, or if the number of
+/// inputs is not a power of two.
+#[instrument(name = "generate packed SHA-256 binary trace", skip_all)]
+#[allow(clippy::needless_pass_by_value)]
+pub fn generate_binary_trace_packed<F: Field>(
+    inputs: Vec<[u32; INPUT_WORDS]>,
+) -> RowMajorMatrix<u64> {
+    assert_eq!(
+        F::TWO,
+        F::ZERO,
+        "the binary SHA-256 AIR requires a field of characteristic 2"
+    );
+
+    let num_rows = inputs.len();
+    assert!(num_rows > 0, "at least one input is required");
+    assert!(
+        num_rows.is_power_of_two(),
+        "Callers expected to pad inputs to a power of two"
+    );
+
+    let num_blocks = num_rows.div_ceil(64);
+    let mut words = vec![0u64; num_blocks * NUM_SHA256_BINARY_COLS];
+    inputs
+        .par_chunks(64)
+        .zip(words.par_chunks_exact_mut(NUM_SHA256_BINARY_COLS))
+        .for_each_init(
+            || F::zero_vec(NUM_SHA256_BINARY_COLS),
+            |row, (input_block, block)| {
+                // One reusable field row per worker keeps temporary storage bounded by the AIR
+                // width, independently of the number of trace rows and blocks.
+                for (lane, input) in input_block.iter().enumerate() {
+                    let row_cols: &mut Sha256BinaryCols<F> = row.as_mut_slice().borrow_mut();
+                    generate_trace_row(row_cols, input);
+                    for (column, &bit) in row.iter().enumerate() {
+                        if bit == F::ONE {
+                            block[column] |= 1u64 << lane;
+                        }
+                    }
+                }
+            },
+        );
+
+    RowMajorMatrix::new(words, NUM_SHA256_BINARY_COLS)
 }
 
 /// Fill one row with the witness of a single compression.

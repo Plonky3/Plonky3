@@ -1,3 +1,4 @@
+use alloc::vec;
 use alloc::vec::Vec;
 use core::array;
 
@@ -62,6 +63,103 @@ pub fn generate_binary_trace_rows<F: Field>(
     trace
 }
 
+/// Number of trace rows packed into one `u64`.
+const BITS_PER_WORD: usize = 64;
+
+/// Column of the output flag `round_flags[NUM_ROUNDS]`, the only set cell of a padding row.
+///
+/// The round flags lead the row.
+const OUTPUT_FLAG_COLUMN: usize = NUM_ROUNDS;
+
+/// Build the trace of [`generate_binary_trace_rows`] packed into one `u64` per 64 trace rows.
+///
+/// The returned matrix keeps the AIR columns as its width. Physical row `w` stores logical
+/// rows `64 * w..64 * w + 63`, with bit zero holding the first logical row. The bits of the
+/// last block past the trace height are zero. The generic field parameter controls only the
+/// reusable temporary permutation rows used while generating the witness; the resulting bits
+/// are independent of that field.
+///
+/// # Panics
+///
+/// - The field does not have characteristic 2.
+/// - `inputs` is empty.
+#[instrument(name = "generate packed binary Keccak trace", skip_all)]
+#[allow(clippy::needless_pass_by_value)]
+pub fn generate_binary_trace_packed<F: Field>(inputs: Vec<[u64; 25]>) -> RowMajorMatrix<u64> {
+    assert!(
+        F::TWO == F::ZERO,
+        "the binary Keccak AIR requires a field of characteristic 2"
+    );
+    assert!(!inputs.is_empty(), "at least one permutation is required");
+
+    let num_perm_rows = inputs.len() * KECCAK_BINARY_ROWS_PER_PERM;
+    let num_rows = num_perm_rows.next_power_of_two();
+    let num_blocks = num_rows.div_ceil(BITS_PER_WORD);
+
+    let mut words = vec![0u64; num_blocks * NUM_KECCAK_BINARY_COLS];
+    words
+        .par_chunks_exact_mut(NUM_KECCAK_BINARY_COLS)
+        .enumerate()
+        .for_each_init(
+            // One permutation's 25 rows per worker keep temporary storage bounded by 25 rows of
+            // the AIR width, independently of the number of trace rows and blocks.
+            || F::zero_vec(KECCAK_BINARY_ROWS_PER_PERM * NUM_KECCAK_BINARY_COLS),
+            |cells, (block_index, block)| {
+                pack_block(block, block_index, &inputs, num_rows, cells);
+            },
+        );
+
+    RowMajorMatrix::new(words, NUM_KECCAK_BINARY_COLS)
+}
+
+/// Pack the logical rows `64 * block_index..64 * block_index + 63` of the trace into `block`.
+///
+/// Each permutation overlapping the block is regenerated into `cells`, the 25 rows of one
+/// permutation, and the bits of its rows inside the block are copied into the words.
+fn pack_block<F: Field>(
+    block: &mut [u64],
+    block_index: usize,
+    inputs: &[[u64; 25]],
+    num_rows: usize,
+    cells: &mut [F],
+) {
+    let num_perm_rows = inputs.len() * KECCAK_BINARY_ROWS_PER_PERM;
+    let block_start = block_index * BITS_PER_WORD;
+    let block_end = (block_start + BITS_PER_WORD).min(num_rows);
+    let perm_rows_end = block_end.min(num_perm_rows);
+
+    if block_start < perm_rows_end {
+        let first_perm = block_start / KECCAK_BINARY_ROWS_PER_PERM;
+        let last_perm = (perm_rows_end - 1) / KECCAK_BINARY_ROWS_PER_PERM;
+        for (offset, &input) in inputs[first_perm..=last_perm].iter().enumerate() {
+            cells.fill(F::ZERO);
+            let (prefix, rows, suffix) = unsafe { cells.align_to_mut::<KeccakBinaryCols<F>>() };
+            assert!(prefix.is_empty(), "Alignment should match");
+            assert!(suffix.is_empty(), "Alignment should match");
+            assert_eq!(rows.len(), KECCAK_BINARY_ROWS_PER_PERM);
+            generate_perm_rows(rows, input);
+
+            let perm_start = (first_perm + offset) * KECCAK_BINARY_ROWS_PER_PERM;
+            let start = block_start.max(perm_start);
+            let end = perm_rows_end.min(perm_start + KECCAK_BINARY_ROWS_PER_PERM);
+            for row in start..end {
+                let first_cell = (row - perm_start) * NUM_KECCAK_BINARY_COLS;
+                let row_cells = &cells[first_cell..first_cell + NUM_KECCAK_BINARY_COLS];
+                for (word, &cell) in block.iter_mut().zip(row_cells) {
+                    if cell == F::ONE {
+                        *word |= 1u64 << (row - block_start);
+                    }
+                }
+            }
+        }
+    }
+
+    // The state of a padding row is zero.
+    for row in block_start.max(num_perm_rows)..block_end {
+        block[OUTPUT_FLAG_COLUMN] |= 1u64 << (row - block_start);
+    }
+}
+
 /// Fill the 25 rows of one permutation, starting from a zeroed buffer.
 fn generate_perm_rows<F: Field>(rows: &mut [KeccakBinaryCols<F>], input: [u64; 25]) {
     let (round_rows, output_row) = rows.split_at_mut(NUM_ROUNDS);
@@ -115,7 +213,7 @@ mod tests {
     use alloc::vec;
     use core::borrow::Borrow;
 
-    use p3_binary_field::BinaryField128;
+    use p3_binary_field::{BinaryField128, Gf2};
     use p3_field::PrimeCharacteristicRing;
     use p3_goldilocks::Goldilocks;
     use p3_keccak::KeccakF;
@@ -125,6 +223,7 @@ mod tests {
     use rand::{RngExt, SeedableRng};
 
     use super::*;
+    use crate::binary::KeccakBinaryAir;
 
     type F = BinaryField128;
 
@@ -209,5 +308,84 @@ mod tests {
     #[should_panic(expected = "at least one permutation")]
     fn rejects_empty_input() {
         let _ = generate_binary_trace_rows::<F>(Vec::new(), 0);
+    }
+
+    /// Bit of a packed trace at a logical row and column.
+    fn packed_bit(packed: &RowMajorMatrix<u64>, row: usize, column: usize) -> bool {
+        (packed.values[(row / 64) * packed.width + column] >> (row % 64)) & 1 == 1
+    }
+
+    /// Require a packed trace to hold exactly the cells of a dense trace, with zero padding bits.
+    fn assert_packed_matches_dense(dense: &RowMajorMatrix<F>, packed: &RowMajorMatrix<u64>) {
+        let height = dense.height();
+        assert_eq!(packed.width, NUM_KECCAK_BINARY_COLS);
+        assert_eq!(packed.height(), height.div_ceil(64));
+        for row in 0..height {
+            for column in 0..NUM_KECCAK_BINARY_COLS {
+                assert_eq!(
+                    dense.values[row * NUM_KECCAK_BINARY_COLS + column],
+                    F::from_bool(packed_bit(packed, row, column)),
+                    "row {row}, column {column}"
+                );
+            }
+        }
+        if !height.is_multiple_of(64) {
+            for word in &packed.values[packed.width * (packed.height() - 1)..] {
+                assert_eq!(*word >> (height % 64), 0);
+            }
+        }
+    }
+
+    #[test]
+    fn packed_trace_matches_dense_trace() {
+        // Permutations of 25 rows straddle the 64-row blocks:
+        //
+        //     1 permutation      : height 32, one partial block
+        //     2 permutations     : height 64, one full block
+        //     3, 5 permutations  : height 128, padding rows past row 75 or 125
+        //     6, 7 permutations  : height 256, the last block has padding rows only
+        //     41 permutations    : height 2048, permutation rows end past row 1024
+        //     62 permutations    : height 2048, block 24 mixes permutation and padding rows
+        //     64 permutations    : height 2048, permutation rows end on the block boundary 1600
+        //     65 permutations    : height 2048, permutation 64 starts on the block boundary 1600
+        let mut rng = SmallRng::seed_from_u64(11);
+        for num_hashes in [1usize, 2, 3, 5, 6, 7, 41, 62, 64, 65] {
+            let inputs: Vec<[u64; 25]> = (0..num_hashes).map(|_| rng.random()).collect();
+            let dense = generate_binary_trace_rows::<F>(inputs.clone(), 0);
+            let packed = generate_binary_trace_packed::<Gf2>(inputs);
+            assert_packed_matches_dense(&dense, &packed);
+        }
+    }
+
+    #[test]
+    fn packed_bits_do_not_depend_on_the_temporary_field() {
+        let mut rng = SmallRng::seed_from_u64(12);
+        let inputs: Vec<[u64; 25]> = (0..6).map(|_| rng.random()).collect();
+        assert_eq!(
+            generate_binary_trace_packed::<Gf2>(inputs.clone()).values,
+            generate_binary_trace_packed::<F>(inputs).values
+        );
+    }
+
+    #[test]
+    fn packed_random_trace_uses_the_dense_generator_sequence() {
+        let air = KeccakBinaryAir {};
+        for num_hashes in [1usize, 3, 6] {
+            let dense = air.generate_random_trace_rows::<F>(num_hashes, 0);
+            let packed = air.generate_random_trace_packed::<Gf2>(num_hashes);
+            assert_packed_matches_dense(&dense, &packed);
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "characteristic 2")]
+    fn packed_generator_rejects_odd_characteristic() {
+        let _ = generate_binary_trace_packed::<Goldilocks>(vec![[0; 25]]);
+    }
+
+    #[test]
+    #[should_panic(expected = "at least one permutation")]
+    fn packed_generator_rejects_empty_input() {
+        let _ = generate_binary_trace_packed::<Gf2>(Vec::new());
     }
 }

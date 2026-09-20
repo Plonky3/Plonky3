@@ -898,7 +898,7 @@ mod tests {
     use crate::layout::prover::test_utils::{
         FOLDING, build_tables, run_roundtrip_test, table_shapes, tables_from_shape,
     };
-    use crate::layout::{Layout, Verifier};
+    use crate::layout::{Layout, SuffixLayoutPlan, SuffixTableSource, Verifier};
     use crate::strategy::Basis;
     use crate::table::{OpeningBatch, OpeningEvals};
     use crate::tests::*;
@@ -1021,6 +1021,74 @@ mod tests {
             SuffixProver::<F, EF>::new_witness(build_tables(), FOLDING),
             &table_shapes(),
             ASCENDING_POLYS,
+        );
+    }
+
+    #[test]
+    fn direct_fill_roundtrips_through_the_suffix_prover() {
+        // Build the commitment stack through the ingestion API rather than dense restacking.
+        let tables = build_tables();
+        let plan =
+            SuffixLayoutPlan::new(tables.iter().map(|table| table.shape()).collect(), FOLDING)
+                .expect("the fixture dimensions fit the suffix layout");
+        let sources = tables
+            .iter()
+            .map(|table| table as &dyn SuffixTableSource<F>)
+            .collect::<Vec<_>>();
+        let filled = plan
+            .fill(&sources)
+            .expect("every dense source writes each declared column");
+
+        // Dense suffix-round tables are derived from the committed stack itself.
+        let witness = filled.into_witness();
+        let shapes = witness.table_shapes();
+        run_roundtrip_test::<SuffixProver<F, EF>>(witness, &shapes, ASCENDING_POLYS);
+    }
+
+    #[test]
+    fn prefix_handoff_narrower_than_one_packed_element() {
+        // Two columns leave one selector variable after preprocessing.
+        let witness =
+            PrefixProver::<F, EF>::new_witness(tables_from_shape(&[(FOLDING, 2)]), FOLDING);
+        let stacked_num_variables = witness.num_variables();
+        assert_eq!(stacked_num_variables, FOLDING + 1);
+
+        // Keep the original polynomial for an independent evaluation.
+        let stacked_poly = witness.poly().clone();
+
+        // Exercise both concrete and virtual claims.
+        let mut prover_challenger = challenger();
+        let mut prover_state = PrefixProver::<F, EF>::from_witness(witness);
+        let batch = OpeningBatch::new(vec![0, 1], Vec::new());
+        let _ = prover_state.eval(0, &batch, &mut prover_challenger);
+        let _ = prover_state.add_virtual_eval(&mut prover_challenger);
+
+        // Fold until only the selector variable remains.
+        let mut preprocessing_data = SumcheckData::<F, EF>::default();
+        let (mut prover, mut prover_randomness) =
+            prover_state.into_sumcheck(&mut preprocessing_data, 0, &mut prover_challenger);
+        let residual = stacked_num_variables - FOLDING;
+        assert_eq!(prover.num_variables(), residual);
+
+        // Bind the scalar residual.
+        let mut residual_data = SumcheckData::<F, EF>::default();
+        prover_randomness.extend(&prover.compute_sumcheck_polynomials(
+            &mut residual_data,
+            &mut prover_challenger,
+            residual,
+            0,
+            None,
+        ));
+
+        // The folded constant must equal direct evaluation at the sampled point.
+        let folded = prover
+            .evals()
+            .as_constant()
+            .expect("all variables were bound");
+        let expected = stacked_poly.eval_base(&prover_randomness);
+        assert_eq!(
+            folded, expected,
+            "the scalar handoff must preserve the original evaluation"
         );
     }
 

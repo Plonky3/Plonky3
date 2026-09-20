@@ -21,26 +21,41 @@ use crate::{ErrorBits, SecurityTerm};
 /// Label for the bit-alphabet ring-switch term.
 pub const BIT_RING_SWITCH_LABEL: &str = "bit-ring-switch";
 
+/// Label for the independent column-point challenge in a batched opening.
+pub const COLUMN_BATCH_LABEL: &str = "column-batching";
+
+/// Error of batching `num_batches` column openings with `k` fresh coordinates each.
+///
+/// Every coordinate is sampled independently from the transcript after the claimed
+/// column values are bound. A nonzero discrepancy therefore survives with probability
+/// at most `num_batches * k / |F|`.
+#[must_use]
+pub fn column_batch_error(num_batches: usize, k: usize, field_bits: usize) -> ErrorBits {
+    if num_batches == 0 || k == 0 {
+        return ErrorBits::from_log2(f64::INFINITY);
+    }
+    // Keep the product in the logarithm's domain: usize multiplication can overflow even
+    // though the union-bound degree is representable as a floating-point number.
+    let log_challenges = log2(num_batches as f64) + log2(k as f64);
+    ErrorBits::from_log2(field_bits as f64 - log_challenges)
+}
+
+/// The labelled column-batching soundness term.
+#[must_use]
+pub fn column_batch_term(num_batches: usize, k: usize, field_bits: usize) -> SecurityTerm {
+    SecurityTerm::new(
+        COLUMN_BATCH_LABEL,
+        column_batch_error(num_batches, k, field_bits),
+    )
+}
+
 /// Error of reducing claims about a bit witness to claims about the elements packing it.
 ///
-/// One element holds `2^absorbed_log` bits, so a point of `n` variables splits in two:
-///
-/// ```text
-///     absorbed_log         coordinates inside one element
-///     n - absorbed_log     coordinates addressing the elements
-/// ```
-///
-/// One reduction draws `absorbed_log` batching coordinates.
-///
-/// It then runs one degree-two sumcheck round per surviving variable.
+/// The single-tensor case of [`bit_ring_switch_tensors_error`], with `num_tensors = 1`.
 ///
 /// ```text
 ///     error = (absorbed_log + 2 * surviving) / |F|
 /// ```
-///
-/// Reductions at different points share no challenge, so `k` of them union to `k` times that.
-///
-/// The commitment the surviving claims are discharged against charges its own budget.
 ///
 /// # Arguments
 ///
@@ -55,17 +70,13 @@ pub fn bit_ring_switch_error(
     surviving_variables: usize,
     field_bits: usize,
 ) -> ErrorBits {
-    // No reduction runs, so no challenge separates anything.
-    if num_reductions == 0 {
-        return ErrorBits::from_log2(f64::INFINITY);
-    }
-    // Rounds per reduction: one batching draw per absorbed coordinate, two per sumcheck round.
-    let per_reduction = absorbed_log as f64 + 2.0 * surviving_variables as f64;
-    // A reduction over a point the packing absorbs whole runs no sumcheck round.
-    if per_reduction == 0.0 {
-        return ErrorBits::from_log2(f64::INFINITY);
-    }
-    ErrorBits::from_log2(field_bits as f64 - log2(num_reductions as f64 * per_reduction))
+    bit_ring_switch_tensors_error(
+        num_reductions,
+        1,
+        absorbed_log,
+        surviving_variables,
+        field_bits,
+    )
 }
 
 /// The bit-alphabet ring-switch term, labelled for a report.
@@ -76,10 +87,84 @@ pub fn bit_ring_switch_term(
     surviving_variables: usize,
     field_bits: usize,
 ) -> SecurityTerm {
+    bit_ring_switch_tensors_term(
+        num_reductions,
+        1,
+        absorbed_log,
+        surviving_variables,
+        field_bits,
+    )
+}
+
+/// Error of reducing claims about a bit witness to claims about the elements packing it,
+/// batching `num_tensors` claims at the same point under powers of a challenge alpha.
+///
+/// One element holds `2^absorbed_log` bits, so a point of `n` variables splits in two:
+///
+/// ```text
+///     absorbed_log         coordinates inside one element
+///     n - absorbed_log     coordinates addressing the elements
+/// ```
+///
+/// One reduction draws `absorbed_log` batching coordinates and, when `num_tensors > 1`, one
+/// challenge alpha.
+/// The batched row claim is multilinear in the coordinates and of degree `num_tensors - 1`
+/// in alpha. It then runs one degree-two sumcheck round per surviving variable.
+///
+/// ```text
+///     error = (absorbed_log + (num_tensors - 1) + 2 * surviving) / |F|
+/// ```
+///
+/// Reductions at different points share no challenge, so `k` of them union to `k` times that.
+///
+/// The commitment the surviving claims are discharged against charges its own budget.
+///
+/// # Arguments
+///
+/// - `num_reductions`: points reduced, one reduction each.
+/// - `num_tensors`: tensors batched together at each point under powers of alpha.
+/// - `absorbed_log`: log of the bits one packed element holds.
+/// - `surviving_variables`: variables the packed multilinear has.
+/// - `field_bits`: bit width of the field the challenges are drawn from.
+#[must_use]
+pub fn bit_ring_switch_tensors_error(
+    num_reductions: usize,
+    num_tensors: usize,
+    absorbed_log: usize,
+    surviving_variables: usize,
+    field_bits: usize,
+) -> ErrorBits {
+    // No reduction runs, so no challenge separates anything.
+    if num_reductions == 0 {
+        return ErrorBits::from_log2(f64::INFINITY);
+    }
+    // Rounds per reduction: one batching draw per absorbed coordinate, degree
+    // num_tensors - 1 in the alpha challenge, two per sumcheck round.
+    let per_reduction = absorbed_log as f64
+        + num_tensors.saturating_sub(1) as f64
+        + 2.0 * surviving_variables as f64;
+    // A reduction over a point the packing absorbs whole, with a single tensor, runs no
+    // sumcheck round and no batching draw.
+    if per_reduction == 0.0 {
+        return ErrorBits::from_log2(f64::INFINITY);
+    }
+    ErrorBits::from_log2(field_bits as f64 - log2(num_reductions as f64 * per_reduction))
+}
+
+/// The bit-alphabet ring-switch term over batched tensors, labelled for a report.
+#[must_use]
+pub fn bit_ring_switch_tensors_term(
+    num_reductions: usize,
+    num_tensors: usize,
+    absorbed_log: usize,
+    surviving_variables: usize,
+    field_bits: usize,
+) -> SecurityTerm {
     SecurityTerm::new(
         BIT_RING_SWITCH_LABEL,
-        bit_ring_switch_error(
+        bit_ring_switch_tensors_error(
             num_reductions,
+            num_tensors,
             absorbed_log,
             surviving_variables,
             field_bits,
@@ -822,5 +907,44 @@ mod tests {
         let term = bit_ring_switch_term(4, 7, 4, 128);
         assert_eq!(term.label, BIT_RING_SWITCH_LABEL);
         assert_eq!(term.bits.bits(), four);
+    }
+
+    #[test]
+    fn column_batching_charges_one_coordinate_per_batch() {
+        let one = column_batch_error(1, 3, 128).bits();
+        let four = column_batch_error(4, 3, 128).bits();
+        assert!((one - (128.0 - log2(3.0))).abs() < 1e-9, "{one}");
+        assert!((one - four - 2.0).abs() < 1e-9, "{one} {four}");
+        assert!(column_batch_error(0, 3, 128).bits().is_infinite());
+        assert!(column_batch_error(4, 0, 128).bits().is_infinite());
+
+        let term = column_batch_term(4, 3, 128);
+        assert_eq!(term.label, COLUMN_BATCH_LABEL);
+        assert_eq!(term.bits.bits(), four);
+    }
+
+    #[test]
+    fn column_batching_does_not_cap_an_overflowing_count() {
+        let batches = usize::MAX;
+        let coordinates = usize::MAX;
+        let expected = 128.0 - log2(batches as f64) - log2(coordinates as f64);
+        let actual = column_batch_error(batches, coordinates, 128).bits();
+        assert!((actual - expected).abs() < 1e-9, "{actual} vs {expected}");
+    }
+
+    #[test]
+    fn successor_tensors_charge_their_batching_degree() {
+        // Invariant: K tensors batched under powers of alpha add K - 1 to the per-reduction degree.
+        //
+        //     K = 1   ->  the plain reduction, bit for bit
+        //     K = 3   ->  (7 + 2 + 2 * 4) / 2^128 per reduction
+        assert_eq!(
+            bit_ring_switch_tensors_error(4, 1, 7, 4, 128).bits(),
+            bit_ring_switch_error(4, 7, 4, 128).bits()
+        );
+        let three = bit_ring_switch_tensors_error(1, 3, 7, 4, 128).bits();
+        assert!((three - (128.0 - libm::log2(17.0))).abs() < 1e-9);
+        let term = bit_ring_switch_tensors_term(1, 3, 7, 4, 128);
+        assert_eq!(term.label, BIT_RING_SWITCH_LABEL);
     }
 }

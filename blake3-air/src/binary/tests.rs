@@ -1,3 +1,4 @@
+use alloc::vec;
 use alloc::vec::Vec;
 use core::array;
 use core::borrow::{Borrow, BorrowMut};
@@ -15,7 +16,7 @@ use rand::{RngExt, SeedableRng};
 
 use super::{
     Blake3BinaryAir, Blake3BinaryCols, Blake3CompressionInput, NUM_BLAKE3_BINARY_COLS,
-    generate_binary_trace_rows, iv_word,
+    generate_binary_trace_packed, generate_binary_trace_rows, iv_word,
 };
 use crate::constants::permute;
 
@@ -214,6 +215,68 @@ fn random_traces_satisfy_constraints() {
         assert_eq!(trace.height(), height);
         check_constraints(&air, &trace, &[]);
     }
+}
+
+#[test]
+fn packed_trace_matches_dense_trace_at_word_boundaries() {
+    let mut rng = SmallRng::seed_from_u64(17);
+    for height in [1usize, 2, 32, 64, 128] {
+        let inputs: Vec<_> = (0..height)
+            .map(|_| Blake3CompressionInput {
+                chaining_value: rng.random(),
+                block: rng.random(),
+                counter: rng.random(),
+                block_len: rng.random(),
+                flags: rng.random(),
+            })
+            .collect();
+        let dense = generate_binary_trace_rows::<F>(inputs.clone(), 0);
+        let packed = generate_binary_trace_packed::<F>(inputs);
+        assert_eq!(packed.width, NUM_BLAKE3_BINARY_COLS);
+        assert_eq!(packed.height(), height.div_ceil(64));
+        for row in 0..height {
+            for column in 0..NUM_BLAKE3_BINARY_COLS {
+                let expected = dense.values[row * NUM_BLAKE3_BINARY_COLS + column];
+                let word = packed.values[(row / 64) * packed.width + column];
+                assert_eq!(expected, F::from_bool((word >> (row % 64)) & 1 == 1));
+            }
+        }
+        if !height.is_multiple_of(64) {
+            for word in &packed.values[packed.width * (packed.height() - 1)..] {
+                assert_eq!(*word >> (height % 64), 0);
+            }
+        }
+    }
+}
+
+#[test]
+fn packed_random_trace_uses_the_dense_generator_sequence() {
+    let air = Blake3BinaryAir {};
+    for height in [1usize, 64, 128] {
+        let dense = air.generate_random_trace_rows::<F>(height, 0);
+        let packed = air.generate_random_trace_packed::<F>(height);
+        for row in 0..height {
+            for column in 0..NUM_BLAKE3_BINARY_COLS {
+                let word = packed.values[(row / 64) * packed.width + column];
+                assert_eq!(
+                    dense.values[row * NUM_BLAKE3_BINARY_COLS + column],
+                    F::from_bool((word >> (row % 64)) & 1 == 1)
+                );
+            }
+        }
+    }
+}
+
+#[test]
+#[should_panic(expected = "at least one input")]
+fn packed_generator_rejects_empty_input() {
+    let _ = generate_binary_trace_packed::<F>(Vec::new());
+}
+
+#[test]
+#[should_panic(expected = "power of two")]
+fn packed_generator_rejects_non_power_of_two_input() {
+    let _ = generate_binary_trace_packed::<F>(vec![Blake3CompressionInput::default(); 3]);
 }
 
 #[test]
