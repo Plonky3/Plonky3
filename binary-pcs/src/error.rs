@@ -102,12 +102,26 @@ pub enum BinaryPcsError<F, MmcsError> {
     #[error("prescribed opening points do not match the opening protocol")]
     OpeningPointShapeMismatch,
 
+    /// Supplied evaluations must cover every batch the protocol schedules.
+    ///
+    /// Reported apart from the points, which the same protocol also prescribes, so a caller
+    /// that got one of the two lists wrong learns which.
+    #[error("expected {expected} evaluation batches, {actual} supplied")]
+    OpeningEvalCountMismatch { expected: usize, actual: usize },
+
     /// One opening batch has the wrong number of evaluations for its column list.
-    #[error("table {table_idx} opening expected {expected} evaluations, got {actual}")]
+    ///
+    /// A batch's shape is the pair of side lengths, not their total, so the two sides are
+    /// reported apart: a request and a list that agree on the total can still disagree here.
+    #[error(
+        "table {table_idx} opening expected {expected_current} direct and {expected_next} successor evaluations, got {actual_current} and {actual_next}"
+    )]
     OpeningBatchSizeMismatch {
         table_idx: usize,
-        expected: usize,
-        actual: usize,
+        expected_current: usize,
+        expected_next: usize,
+        actual_current: usize,
+        actual_next: usize,
     },
 
     /// The committed layout runs preprocessing rounds the opening pipeline does not lay out.

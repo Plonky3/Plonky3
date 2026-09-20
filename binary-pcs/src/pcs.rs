@@ -39,8 +39,8 @@ use p3_multilinear_util::poly::Poly;
 use p3_sumcheck::layout::{Layout, Verifier, Witness, observe_commitment};
 use p3_sumcheck::strategy::Basis;
 use p3_sumcheck::{
-    OpeningEvals, OpeningProtocol, PrescribedOpeningSecurity, PrescribedPointPcs, SumcheckData,
-    SumcheckError,
+    OpeningBatch, OpeningEvals, OpeningProtocol, PrescribedOpeningSecurity, PrescribedPointPcs,
+    SumcheckData, SumcheckError,
 };
 use p3_util::log2_ceil_usize;
 
@@ -57,6 +57,24 @@ use crate::verifier::{
 
 /// Why an opening could not be produced or accepted, for one base commitment scheme.
 type Failure<F, MT> = BinaryPcsError<F, <MT as Mmcs<F>>::Error>;
+
+/// The mismatch between one opening request and the evaluations offered against it.
+///
+/// Both sides carry their own length, because a request and a list of evaluations that agree
+/// on the total can still split it differently.
+fn batch_size_mismatch<F, MmcsError, T, U>(
+    table_idx: usize,
+    batch: &OpeningBatch<T>,
+    evals: &OpeningBatch<U>,
+) -> BinaryPcsError<F, MmcsError> {
+    BinaryPcsError::OpeningBatchSizeMismatch {
+        table_idx,
+        expected_current: batch.current().len(),
+        expected_next: batch.next().len(),
+        actual_current: evals.current().len(),
+        actual_next: evals.next().len(),
+    }
+}
 
 /// An opening proof, or the reason there is none.
 type Opening<F, EF, MT, MX> = Result<BinaryPcsProof<F, EF, MT, MX>, Failure<F, MT>>;
@@ -348,15 +366,14 @@ where
         evals: &[OpeningEvals<EF>],
     ) -> Result<(), BinaryPcsError<F, MT::Error>> {
         if protocol.num_openings() != evals.len() {
-            return Err(BinaryPcsError::OpeningPointShapeMismatch);
+            return Err(BinaryPcsError::OpeningEvalCountMismatch {
+                expected: protocol.num_openings(),
+                actual: evals.len(),
+            });
         }
         for ((table_idx, batch), batch_evals) in protocol.iter_openings().zip(evals) {
             if !batch.has_same_shape(batch_evals) {
-                return Err(BinaryPcsError::OpeningBatchSizeMismatch {
-                    table_idx,
-                    expected: batch.len(),
-                    actual: batch_evals.len(),
-                });
+                return Err(batch_size_mismatch(table_idx, batch, batch_evals));
             }
         }
         Ok(())
@@ -549,11 +566,7 @@ where
         for (i, (table_idx, batch)) in protocol.iter_openings().enumerate() {
             let evals = &proof.evals[i];
             if !batch.has_same_shape(evals) {
-                return Err(BinaryPcsError::OpeningBatchSizeMismatch {
-                    table_idx,
-                    expected: batch.len(),
-                    actual: evals.len(),
-                });
+                return Err(batch_size_mismatch(table_idx, batch, evals));
             }
             match points {
                 Some(points) => {
@@ -1131,10 +1144,11 @@ mod tests {
 
     #[test]
     fn a_known_opening_whose_evaluations_miss_the_protocol_is_refused() {
-        // Both refusals are structural, so neither may move the sponge.
+        // Every refusal is structural, so none may move the sponge.
         //
         //     none      : no evaluation for the one batch the protocol names
         //     two values: one batch, but two values where it opens one column
+        //     wrong side: one batch and one value, but against the successor view
         let protocol = one_column_protocol();
         let config =
             BinaryPcsConfig::try_new::<F, F>(NUM_VARIABLES, reproducible_params()).unwrap();
@@ -1159,13 +1173,19 @@ mod tests {
             .err()
             .unwrap();
         assert!(
-            matches!(missing, BinaryPcsError::OpeningPointShapeMismatch),
+            matches!(
+                missing,
+                BinaryPcsError::OpeningEvalCountMismatch {
+                    expected: 1,
+                    actual: 0,
+                }
+            ),
             "{missing:?}"
         );
 
         let over = pcs
             .try_open_at_known(
-                data,
+                data.clone(),
                 &protocol,
                 core::slice::from_ref(&point),
                 &[OpeningBatch::new(vec![sample, sample], Vec::new())],
@@ -1178,11 +1198,37 @@ mod tests {
                 over,
                 BinaryPcsError::OpeningBatchSizeMismatch {
                     table_idx: 0,
-                    expected: 1,
-                    actual: 2,
+                    expected_current: 1,
+                    expected_next: 0,
+                    actual_current: 2,
+                    actual_next: 0,
                 }
             ),
             "{over:?}"
+        );
+
+        let sided = pcs
+            .try_open_at_known(
+                data,
+                &protocol,
+                core::slice::from_ref(&point),
+                &[OpeningBatch::new(Vec::new(), vec![sample])],
+                &mut prover_challenger,
+            )
+            .err()
+            .unwrap();
+        assert!(
+            matches!(
+                sided,
+                BinaryPcsError::OpeningBatchSizeMismatch {
+                    table_idx: 0,
+                    expected_current: 1,
+                    expected_next: 0,
+                    actual_current: 0,
+                    actual_next: 1,
+                }
+            ),
+            "{sided:?}"
         );
 
         assert_eq!(
