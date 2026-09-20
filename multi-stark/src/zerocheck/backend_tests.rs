@@ -31,6 +31,7 @@ use crate::lookup::{
     ActiveLookupRuntime, AirLinkClaim, AirLinkInstance, AirLinkLookup, LookupRuntime,
 };
 use crate::rounds::sliced::MAX_SLICED_ROUNDS;
+use crate::sliced::SLICED_LANES;
 
 /// The trace and challenge field of every fixture.
 pub(crate) type Tower = BinaryField128;
@@ -931,9 +932,15 @@ fn fixture_degrees_are_the_named_ones() {
 /// the polynomial the generic kernel computes, so no count may move the transcript.
 #[test]
 fn every_sliced_round_count_agrees_with_the_generic_backend() {
+    // The kernel also caps the count at the row variables a stage keeps once a word's lanes
+    // are spent, so a shorter fixture would run fewer rounds than the loop below asks for and
+    // leave the top of the range unreached. Deriving the height from the ceiling pins that.
+    const LANE_VARIABLES: usize = SLICED_LANES.trailing_zeros() as usize;
+    const HEIGHT: usize = 1 << (MAX_SLICED_ROUNDS + LANE_VARIABLES);
+
     let instances = [
-        Instance::honest(FixtureAir::Gate { scale: Tower::ONE }, 1 << 9, 20),
-        Instance::honest(FixtureAir::Pair, 1 << 9, 21),
+        Instance::honest(FixtureAir::Gate { scale: Tower::ONE }, HEIGHT, 20),
+        Instance::honest(FixtureAir::Pair, HEIGHT, 21),
     ];
     let generic = transcript::<GenericBackend>(&instances, LookupRuntime::Inactive, 0, false);
 
