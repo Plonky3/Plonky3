@@ -1892,6 +1892,17 @@ mod tests {
     }
 
     #[test]
+    #[should_panic = "this layout retains its stacked polynomial"]
+    fn prefix_prover_refuses_a_contiguously_stacked_witness() {
+        // Invariant:
+        //     The prefix prover folds the stacked polynomial directly, so it only accepts a
+        //     witness built by its own constructor. A contiguously stacked witness carries a
+        //     different variable order and no retained polynomial, and is refused outright
+        //     rather than silently folded in the wrong order.
+        let _ = PrefixProver::<F, EF>::from_witness(fixture_witness());
+    }
+
+    #[test]
     fn suffix_prover_from_witness_carries_stacked_state() {
         // Invariant:
         //     Handing the witness to the suffix prover preserves the
