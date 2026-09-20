@@ -2,7 +2,7 @@
 //!
 //! Without it only a target carrying the byte-map instruction would exercise any of them.
 
-use crate::lanes::ByteLanes;
+use crate::lanes::{ByteLanes, ByteRegister};
 
 /// Bytes one modelled register holds.
 ///
@@ -31,7 +31,7 @@ fn apply(matrix: u64, input: u8) -> u8 {
     out
 }
 
-impl ByteLanes for Model {
+impl ByteRegister for Model {
     const BYTES: usize = LANE_BYTES;
 
     unsafe fn load(from: *const u8) -> Self {
@@ -49,7 +49,9 @@ impl ByteLanes for Model {
     fn xor(self, other: Self) -> Self {
         Self(core::array::from_fn(|i| self.0[i] ^ other.0[i]))
     }
+}
 
+impl ByteLanes for Model {
     fn rotate_group<const GROUP: usize>(self, shift: usize) -> Self {
         assert!(shift < GROUP, "rotation leaves the group");
 
