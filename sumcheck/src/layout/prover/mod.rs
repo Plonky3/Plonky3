@@ -66,7 +66,8 @@ pub trait Layout<F: Field, EF: ExtensionField<F>>: Sized {
 
     /// Lays the witness out in this layout's variable order, inside the committed message.
     ///
-    /// The message arrives zeroed and holds one cell per stacked evaluation.
+    /// The message arrives zeroed and holds one cell per stacked evaluation. Every cell an
+    /// implementation leaves untouched is committed as zero.
     fn write_message(witness: &Witness<F>, folding: usize, message: &mut [F]);
 
     /// Returns the shared claim state recorded against the stacked polynomial.

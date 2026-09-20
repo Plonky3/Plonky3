@@ -60,6 +60,10 @@ pub fn write_stacked_message<F: Field>(
 /// `write_message` receives the leading `2^num_variables` cells of the codeword buffer,
 /// zeroed, and lays the committed polynomial out in the residual variable order.
 ///
+/// Every cell it leaves untouched is committed as zero, so a callback that means to commit
+/// a non-zero value at a cell must write it: there is no guard against a partial write, and
+/// a callback that writes nothing at all commits the zero polynomial without complaint.
+///
 /// The message is therefore built directly at codeword height, with a zero tail.
 ///
 /// The encoder can then skip the zero coefficients, and reuse this one allocation.
