@@ -12,6 +12,10 @@
 //! - **\[BCSS25\]** Ben-Sasson, Carmon, Haboeck, Kopparty, Saraf.
 //!   *On Proximity Gaps for Reed-Solomon Codes*.
 //!   <https://eprint.iacr.org/2025/2055>
+//! - **\[Hab25\]** Haboeck. *A note on mutual correlated agreement for
+//!   Reed-Solomon codes*. <https://eprint.iacr.org/2025/2110>
+//! - **\[BCGM26\]** Bordage, Chiesa, Guan, Manzur. *All Polynomial Generators
+//!   Preserve Distance with Mutual Correlated Agreement*. CCC 2026.
 //!
 //! \[BCSS25\] improves the Johnson-bound proximity gap from `O(n²/η⁷)` to
 //! `O(n/η⁵)`, enabling 128-bit provable security with degree-5 extensions
@@ -42,8 +46,9 @@ pub enum SecurityAssumption {
     /// Unique decoding: each oracle is within the UDR. No conjectures.
     UniqueDecoding,
 
-    /// Johnson bound at `δ = 1 − √ρ − η`, with `η = √ρ / 20`. Requires
-    /// mutual correlated agreement up to the Johnson bound.
+    /// Johnson bound at `δ = 1 − √ρ − η`, with `η = √ρ / 20`. No conjectures.
+    ///
+    /// Reed-Solomon mutual correlated agreement is proven at this radius in \[Hab25\] and \[BCGM26\].
     ///
     /// The proximity-gap error uses \[BCSS25\] Theorem 1.5:
     /// `a > (2(m + 1/2)⁵ + 3(m + 1/2)γρ) / (3ρ^{3/2}) · n + (m + 1/2)/√ρ`,

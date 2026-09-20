@@ -3653,6 +3653,14 @@ mod tests {
             let config = &prepared.stir_configs[0];
             assert_eq!(config.quotient_batches, vec![(8, 32 * num_points)]);
             // Capacity bound, independently evaluated at the config's initial eta.
+            //
+            // The 123 is the rigorous field size.
+            //
+            // The extension has a 124-bit order, priced one bit below at floor(log2(|E|)).
+            //
+            // The capacity assumption charges no further reserve.
+            //
+            // This is therefore the same number the derivation itself uses.
             let batching_bits = 123. - libm::log2((32 * num_points - 1) as f64) - 8. - 2.
                 + libm::log2(config.round_configs[0].eta);
             // Four folds have 22 error terms after adding PCS batching: ceil(log2 22)=5.

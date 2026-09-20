@@ -191,14 +191,29 @@ pub(crate) fn minimum_eta(assumption: SecurityAssumption, log_inv_rate: usize) -
     }
 }
 
-/// PCS schedules use a rigorous integer lower bound on log2(|E|), rather than
-/// Field::bits()'s ceiling. Johnson reserves one further bit: twice BCSS25's
-/// dominant term upper-bounds the full expression for m >= 3, rho <= 1, N >= 1.
-/// Indeed the omitted terms divided by the dominant one sum to at most
-/// 3 / (m + 1/2)^4 < 1 (using gamma <= 1). Applying this reserve to the field
-/// size covers both the new block and the existing STIR proximity-gap calls.
+/// Field size, in bits, that every derived schedule is priced against.
+///
+/// # Why this value
+///
+/// - The bit length of the field order is `floor(log2(|E|)) + 1`, rounding `log2(|E|)` up.
+/// - Proximity-gap bounds spend the field size as a denominator, so rounding up overcredits.
+/// - Subtracting one gives `floor(log2(|E|))`, a rigorous lower bound.
+/// - Johnson reserves one further bit, since its bound keeps only BCSS25's dominant term.
+/// - Twice that term upper-bounds the full expression for `m >= 3`, `rho <= 1`, `N >= 1`.
+/// - The omitted terms over the dominant one sum to at most `3 / (m + 1/2)^4 < 1`.
+/// - A factor of two in the error is one bit of field size, so one bit covers every term.
+///
+/// Both adjustments only shrink the field size, and every bound in the schedule grows with it.
+///
+/// The result is always conservative: a smaller field size forces a larger safety gap.
 pub(crate) fn field_bits<EF: Field>(assumption: SecurityAssumption) -> usize {
+    // Bit length of the order is floor(log2(|E|)) + 1, so dropping a bit lands on the floor.
+    //
+    //     |E| = 2^124 - c  ->  bit length 124  ->  floor 123
     let floor = EF::order().bits() as usize - 1;
+    // Johnson additionally pays the factor-of-two reserve described above.
+    //
+    // Saturating so a hypothetical one-bit field cannot wrap to a huge size.
     floor.saturating_sub(usize::from(assumption == SecurityAssumption::JohnsonBound))
 }
 

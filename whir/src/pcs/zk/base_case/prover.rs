@@ -9,7 +9,7 @@ use p3_dft::TwoAdicSubgroupDft;
 use p3_field::{ExtensionField, TwoAdicField, dot_product};
 use p3_zk_codes::{ZkEncoding, ZkEncodingWithRandomness};
 use rand::distr::{Distribution, StandardUniform};
-use rand::{Rng, RngExt};
+use rand::{CryptoRng, RngExt};
 
 use super::config::{BaseCaseZkConfig, MaskGroupWitness};
 use crate::pcs::proof::{QueryOpenings, SharedProofOpening};
@@ -61,6 +61,16 @@ where
     /// # Arguments
     ///
     /// - `open_source`: opens the (virtual) source at the folded-domain positions.
+    ///
+    /// # Randomness
+    ///
+    /// The fresh mask and every per-group blind drawn here are one-time pads.
+    ///
+    /// Each pad is added to a witness-derived value before that value is sent in the clear.
+    ///
+    /// An adversary able to predict the pad subtracts it back out and reads the witness.
+    ///
+    /// The generator must therefore be cryptographically secure.
     #[allow(clippy::too_many_arguments)]
     pub fn prove<Dft, Challenger, R>(
         &self,
@@ -80,7 +90,7 @@ where
             + GrindingChallenger<Witness = F>
             + CanSampleUniformBits<F>
             + CanObserve<MT::Commitment>,
-        R: Rng,
+        R: CryptoRng,
     {
         let code = &self.config.code;
         // The witness must fit the agreed folded source code exactly.

@@ -22,6 +22,7 @@ mod security_tests;
 pub(crate) mod test_util;
 pub mod transcript;
 mod verifier;
+pub mod whir;
 
 pub use boolean::{
     BitOpening, BitReadings, BooleanMultilinearPcs, BooleanPcs, BooleanPcsError, BooleanProof,
