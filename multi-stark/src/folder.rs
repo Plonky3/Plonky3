@@ -158,6 +158,9 @@ pub struct MultilinearFolder<'a, F, Var, Acc> {
     ///
     /// Position `i` holds constraint `ALPHA_BATCH * q + i` of the batch being filled.
     /// Unused while the accumulator folds by Horner.
+    ///
+    /// Every slot is zeroed when the folder is built, so an AIR asserting fewer than
+    /// `ALPHA_BATCH` constraints still pays for the whole width.
     pending: [Var; ALPHA_BATCH],
     /// Two-row preprocessed window; zero-width when the AIR has no preprocessed columns.
     pub preprocessed_window: RowWindow<'a, Var>,
@@ -169,7 +172,7 @@ pub struct MultilinearFolder<'a, F, Var, Acc> {
 
 impl<'a, F, Var, Acc> MultilinearFolder<'a, F, Var, Acc>
 where
-    Var: PrimeCharacteristicRing + Copy,
+    Var: PrimeCharacteristicRing,
     Acc: Algebra<Var> + Copy,
 {
     /// Build a folder for a single AIR evaluation.
@@ -206,7 +209,7 @@ where
             // No precomputed powers until attached; batching folds by Horner.
             alpha_powers: None,
             constraint_index: 0,
-            pending: [Var::ZERO; ALPHA_BATCH],
+            pending: core::array::from_fn(|_| Var::ZERO),
         }
     }
 
@@ -639,7 +642,7 @@ pub struct InteractionMultilinearFolder<'a, F, Var, Acc> {
 
 impl<'a, F, Var, Acc> InteractionMultilinearFolder<'a, F, Var, Acc>
 where
-    Var: PrimeCharacteristicRing + Copy,
+    Var: PrimeCharacteristicRing,
     Acc: Algebra<Var> + Copy,
 {
     /// Wrap an ordinary folder so the same AIR evaluation also builds the lookup link.
