@@ -1,6 +1,6 @@
 use alloc::string::ToString;
-use alloc::vec;
 use alloc::vec::Vec;
+use alloc::{format, vec};
 use core::num::NonZeroUsize;
 
 use p3_air::symbolic::{AirLayout, BaseEntry, SymbolicExpr, SymbolicVariable};
@@ -72,8 +72,8 @@ struct ReadAir;
 
 impl BaseAir<F> for ReadAir {
     fn width(&self) -> usize {
-        // Address, count, value, and activation each use one trace column.
-        4
+        // Address, count, and value each use one trace column.
+        3
     }
 }
 
@@ -82,7 +82,7 @@ where
     AB: ReadOnlyMemoryInteractionBuilder<F = F>,
 {
     fn eval(&self, builder: &mut AB) {
-        // One selector controls the paired pull and push declarations.
+        // Every row issues one unconditional read.
         let row = builder.main();
         let cells = row.current_slice();
         builder.read_only_memory(
@@ -90,7 +90,6 @@ where
             cells[0].into(),
             cells[1].into(),
             [cells[2].into()],
-            BusActivation::Boolean(cells[3].into()),
         );
     }
 }
@@ -197,8 +196,19 @@ fn air_helper_emits_one_paired_count_transition() {
         SymbolicExpr::Mul { .. }
     ));
 
-    // The shared selector contributes one Booleanity constraint rather than two.
-    assert_eq!(profile.base_constraints().len(), 1);
+    // Both directions must read the same address and the same value expression.
+    // A push reading another column would leave every honest trace unbalanced.
+    assert_eq!(
+        format!("{:?}", interactions[0].fields[0]),
+        format!("{:?}", interactions[1].fields[0]),
+    );
+    assert_eq!(
+        format!("{:?}", interactions[0].fields[2]),
+        format!("{:?}", interactions[1].fields[2]),
+    );
+
+    // An unconditional read declares no selector, so no Booleanity constraint appears.
+    assert_eq!(profile.base_constraints().len(), 0);
 }
 
 #[test]
@@ -373,8 +383,104 @@ fn security_uses_the_three_tree_schedule() {
 
     // Two layers batch three trees, giving numerator 2 * (3 - 1) = 4.
     assert_eq!(batching.bits.bits(), 126.0);
+
+    // Tuple compression charges two variables against the five factors of the larger side.
+    // Understating that input to the three read factors would report 128 - log2(6) bits instead.
+    let fingerprint = components
+        .iter()
+        .find(|term| term.label == p3_security::bus::BUS_FINGERPRINT_LABEL)
+        .expect("tuple compression is always charged");
+    assert!(close(fingerprint.bits.bits(), 124.678_071_905_112_63));
+
+    // The four numerators 10, 5, 4 and 3 union to 22 over the same field order.
+    let combined = plan.security_term(NonZeroUsize::new(128).unwrap());
+    assert_eq!(combined.label, p3_security::bus::BINARY_BUS_LABEL);
+    assert!(close(combined.bits.bits(), 123.540_568_381_362_7));
+}
+
+/// Compares two soundness bit counts up to floating-point rounding.
+fn close(actual: f64, expected: f64) -> bool {
+    // The reference values come from the union-bound formula, not from the implementation.
+    let difference = actual - expected;
+    difference < 1e-9 && difference > -1e-9
+}
+
+/// Evaluates the multilinear extension of a table padded with ones outside one block.
+fn padded_evaluation(leaves: &[F], offset: usize, log_height: usize, point: &[F]) -> F {
+    // Coordinates run from the most significant index bit to the least significant bit.
+    let mut table = vec![F::ONE; 1usize << log_height];
+    table[offset..offset + leaves.len()].copy_from_slice(leaves);
+    for &coordinate in point.iter().rev() {
+        let half = table.len() / 2;
+        for row in 0..half {
+            table[row] = table[2 * row] + coordinate * (table[2 * row + 1] - table[2 * row]);
+        }
+        table.truncate(half);
+    }
+
+    table[0]
+}
+
+#[test]
+fn leaf_claims_authenticate_only_under_their_own_prefix() {
+    // Fixture state: two entries, three reads, and one value component.
+    let HonestFixture {
+        bus: _bus,
+        plan,
+        table,
+        addresses,
+        counts,
+        values,
+        final_counts,
+    } = honest_fixture();
+    let table_refs = table.iter().map(Vec::as_slice).collect::<Vec<_>>();
+    let value_refs = values.iter().map(Vec::as_slice).collect::<Vec<_>>();
+    let columns = ReadOnlyMemoryColumns {
+        table: &table_refs,
+        read_addresses: &addresses,
+        read_counts: &counts,
+        read_values: &value_refs,
+        final_counts: &final_counts,
+    };
+    let point = [F::GENERATOR.exp_u64(7), F::GENERATOR.exp_u64(9)];
+    let leaves = plan
+        .materialize(columns, &point, F::GENERATOR.exp_u64(17))
+        .expect("all witness dimensions match the statement");
+    let mut prover_challenger = challenger();
+    let (proof, _) = ProductGkrProof::prove::<F, _>(
+        &leaves.product_inputs(),
+        plan.product_shape(),
+        &mut prover_challenger,
+    );
+    let mut verifier_challenger = challenger();
+    let output = proof
+        .verify::<F, _>(plan.product_shape(), &mut verifier_challenger)
+        .expect("the honest product reduction verifies");
+    let claims = plan.claims(output).expect("the honest reduction is valid");
+
+    // Bus factors fill five leaves while only the three read counts fill the count tree.
+    assert_eq!(claims.prefix_lens, [5, 5, 3]);
+    assert_eq!(claims.read_offset, 2);
+
+    // Each claim reproduces only when its own table is padded from its own prefix.
+    let log_height = plan.product_shape().log_height();
+    let [pushes, pulls, count_leaves] = leaves.product_inputs();
     assert_eq!(
-        plan.security_term(NonZeroUsize::new(128).unwrap()).label,
-        p3_security::bus::BINARY_BUS_LABEL,
+        padded_evaluation(pushes, 0, log_height, &claims.point),
+        claims.push,
+    );
+    assert_eq!(
+        padded_evaluation(pulls, 0, log_height, &claims.point),
+        claims.pull,
+    );
+    assert_eq!(
+        padded_evaluation(count_leaves, 0, log_height, &claims.point),
+        claims.counts,
+    );
+
+    // A composer reusing the bus-side layout would place the counts at the read offset.
+    assert_ne!(
+        padded_evaluation(count_leaves, claims.read_offset, log_height, &claims.point),
+        claims.counts,
     );
 }

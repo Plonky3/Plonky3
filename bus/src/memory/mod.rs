@@ -14,7 +14,7 @@ use core::marker::PhantomData;
 use core::num::NonZeroUsize;
 
 use num_bigint::BigUint;
-use p3_field::{Dup, ExtensionField, Field, PrimeCharacteristicRing};
+use p3_field::{Dup, ExtensionField, Field};
 use p3_security::SecurityTerm;
 use p3_security::bus::{BusSecurityModel, ProductGkrSecurityProfile};
 
@@ -37,35 +37,27 @@ where
 {
     /// Declares one paired read transition on a named array bus.
     ///
-    /// A conditional activation is constrained to zero or one exactly once.
+    /// Every row of the declaring trace issues exactly one read.
+    ///
+    /// Conditional reads are unsupported because the materialized leaves carry no selector.
     fn read_only_memory(
         &mut self,
         bus_name: &str,
         address: Self::Expr,
         count: Self::Expr,
         values: impl IntoIterator<Item = Self::Expr>,
-        activation: BusActivation<Self::Expr>,
     ) {
-        // One activation controls both sides of the same semantic read.
-        if let BusActivation::Boolean(selector) = &activation {
-            self.assert_zero(selector.dup().bool_check());
-        }
-
         // Retain value expressions once so both directions use identical payloads.
         let values = values.into_iter().collect::<Vec<_>>();
         let pull = core::iter::once(address.dup())
             .chain(core::iter::once(count.dup()))
             .chain(values.iter().map(Dup::dup));
-        let pull_activation = match &activation {
-            BusActivation::Always => BusActivation::Always,
-            BusActivation::Boolean(selector) => BusActivation::Boolean(selector.dup()),
-        };
         self.record_bus_interaction(
             RecordToken(()),
             bus_name,
             BusDirection::Pull,
             pull,
-            pull_activation,
+            BusActivation::Always,
         );
 
         // Multiplying by the full-order generator advances one logical count.
@@ -77,7 +69,7 @@ where
             bus_name,
             BusDirection::Push,
             push,
-            activation,
+            BusActivation::Always,
         );
     }
 }
@@ -151,6 +143,17 @@ impl<EF: Field> ReadOnlyMemoryLeaves<EF> {
 }
 
 /// Authenticated claims still owed after the product reduction.
+///
+/// Every evaluation belongs to a distinct table padded with ones up to the shared product height.
+/// The three tables have different non-padding prefixes, so each claim must be authenticated against its own prefix.
+///
+/// Read factors start at a nonzero index on both bus sides while their counts start at index zero.
+/// Authenticating a count against the bus-side prefix accepts a value unrelated to the counts that appear in the bus factors.
+///
+/// The address of every seed and finalization factor is a verifier-derived power of the field generator.
+/// A composer must never take that coordinate from a committed column.
+///
+/// An all-equal committed address column would make the array multiset-valued and let one read return any stored value.
 #[must_use = "leaf claims must be tied to committed columns"]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ReadOnlyMemoryClaims<EF> {
@@ -162,6 +165,10 @@ pub struct ReadOnlyMemoryClaims<EF> {
     pub pull: EF,
     /// Evaluation of the read-count table.
     pub counts: EF,
+    /// Non-padding prefix length of each table, in the order the product inputs are given.
+    pub prefix_lens: [usize; 3],
+    /// Index of the first read factor on both bus sides, which is index zero of the count table.
+    pub read_offset: usize,
 }
 
 /// Verifier-derived layout and orbit bounds for one read-only array.
@@ -425,7 +432,8 @@ impl<F: Field> ReadOnlyMemoryPlan<F> {
             });
         }
 
-        // Root sharing is structural in a verified reduction.
+        // The shared-root encoding of this plan already forces the two bus roots to agree.
+        // This check is therefore defensive against an output produced under a different root shape.
         if output.roots[0] != output.roots[1] {
             return Err(ReadOnlyMemoryError::UnbalancedProducts);
         }
@@ -433,11 +441,15 @@ impl<F: Field> ReadOnlyMemoryPlan<F> {
             return Err(ReadOnlyMemoryError::ZeroCountProduct);
         }
 
+        // Each tree pads a different prefix, so the obligation travels with the claims.
+        let bus_prefix = self.table_len + self.read_len;
         Ok(ReadOnlyMemoryClaims {
             point: output.point,
             push: output.values[0],
             pull: output.values[1],
             counts: output.values[2],
+            prefix_lens: [bus_prefix, bus_prefix, self.read_len],
+            read_offset: self.table_len,
         })
     }
 
