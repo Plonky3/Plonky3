@@ -11,7 +11,6 @@ use core::borrow::Borrow;
 use p3_binary_field::TowerLevel;
 use p3_challenger::fs::TranscriptField;
 use p3_challenger::{FieldChallenger, GrindingChallenger};
-use p3_field::Field;
 use p3_maybe_rayon::prelude::*;
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
@@ -814,10 +813,13 @@ impl<EF: TowerLevel> BitRingSwitchBatch<'_, EF> {
     ///
     /// Every entry is a subset sum of the batching table, so carrying that table into `R`
     /// first puts the whole multilinear there for the cost of `d` conversions.
+    ///
+    /// The entries are sums and products of those images, so `R` must carry the arithmetic
+    /// of `EF` and not merely its elements.
     fn weights_over<R>(&self, equality: &Poly<EF>) -> Poly<R>
     where
         EF: Send + Sync,
-        R: Field + From<EF> + Send + Sync,
+        R: IntoTranscriptField<EF> + Sync,
     {
         let mut table = Poly::zero(equality.num_variables());
         let batching: Vec<R> = self
