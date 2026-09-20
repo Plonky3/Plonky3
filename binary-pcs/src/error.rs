@@ -110,6 +110,14 @@ pub enum BinaryPcsError<F, MmcsError> {
         actual: usize,
     },
 
+    /// The committed layout runs preprocessing rounds the opening pipeline does not lay out.
+    ///
+    /// The commit phase lays out a single committed column, so no round has a per-round
+    /// residual to read. Checked before any transcript operation, like every other shape
+    /// check here, so a layout the pipeline cannot open leaves the challenger alone.
+    #[error("the committed layout runs {folding} preprocessing rounds, expected none")]
+    OpeningPreprocessingDepth { folding: usize },
+
     /// The sumcheck transcript did not verify.
     #[error(transparent)]
     Sumcheck(#[from] p3_sumcheck::SumcheckError),

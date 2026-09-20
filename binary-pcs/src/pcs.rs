@@ -221,6 +221,7 @@ where
             + CanObserve<MX::Commitment>,
     {
         self.validate_opening_protocol(protocol)?;
+        Self::validate_preprocessing_depth(&prover_data)?;
         let evals = protocol
             .iter_openings()
             .map(|(table_idx, batch)| prover_data.layout.eval(table_idx, batch, challenger))
@@ -250,6 +251,7 @@ where
             + CanObserve<MX::Commitment>,
     {
         self.validate_opening_protocol(protocol)?;
+        Self::validate_preprocessing_depth(&prover_data)?;
         Self::validate_points(protocol, points)?;
         let evals = protocol
             .iter_openings()
@@ -296,6 +298,7 @@ where
             + CanObserve<MX::Commitment>,
     {
         self.validate_opening_protocol(protocol)?;
+        Self::validate_preprocessing_depth(&prover_data)?;
         Self::validate_points(protocol, points)?;
         Self::validate_evals(protocol, evals)?;
         for (((table_idx, batch), point), batch_evals) in
@@ -306,6 +309,21 @@ where
                 .eval_at_known(table_idx, batch, point, batch_evals, challenger);
         }
         Ok(self.finish_open(prover_data, evals.to_vec(), challenger))
+    }
+
+    /// Check that the committed layout runs no round the opening pipeline cannot supply.
+    ///
+    /// A preprocessing round reads a per-round residual of the column, which neither the
+    /// width-1 committed codeword nor a supplied evaluation carries. The pipeline asserts
+    /// that depth once it is under way, so the entry points refuse it before then.
+    fn validate_preprocessing_depth(
+        prover_data: &BinaryPcsProverData<F, EF, MT>,
+    ) -> Result<(), BinaryPcsError<F, MT::Error>> {
+        let folding = prover_data.layout.folding();
+        if folding != 0 {
+            return Err(BinaryPcsError::OpeningPreprocessingDepth { folding });
+        }
+        Ok(())
     }
 
     fn validate_points(
@@ -1166,6 +1184,64 @@ mod tests {
             ),
             "{over:?}"
         );
+
+        assert_eq!(
+            prover_challenger.sample_algebra_element::<F>(),
+            snapshot.sample_algebra_element::<F>(),
+            "a refused opening leaves the transcript alone"
+        );
+    }
+
+    #[test]
+    fn an_opening_of_a_layout_that_runs_preprocessing_rounds_is_refused() {
+        // The commit phase lays out one committed column, so no round has the per-round
+        // residual a preprocessing round reads, and the fold pipeline asserts that depth
+        // once it is already under way. Every entry point must refuse it before then.
+        //
+        // Fixture state: one random single-column table, committed at depth one.
+        let protocol = one_column_protocol();
+        let config =
+            BinaryPcsConfig::try_new::<F, F>(NUM_VARIABLES, reproducible_params()).unwrap();
+        let pcs = BinaryPcs::new(config, mmcs(), mmcs()).unwrap();
+
+        let mut rng = SmallRng::seed_from_u64(0x0EAF);
+        let witness =
+            SuffixProver::<F, F>::new_witness(vec![Table::rand(&mut rng, 1, NUM_VARIABLES)], 1);
+        let mut prover_challenger = challenger();
+        let (_, data) = pcs.commit(witness, &mut prover_challenger).unwrap();
+        assert_eq!(data.layout.folding(), 1, "the fixture must carry the depth");
+
+        let sample: F = prover_challenger.sample_algebra_element();
+        let point = Point::expand_from_univariate(sample, NUM_VARIABLES);
+        let evals = [OpeningBatch::new(vec![sample], Vec::new())];
+
+        let mut snapshot = prover_challenger.clone();
+        let refusals = [
+            pcs.try_open(data.clone(), &protocol, &mut prover_challenger),
+            pcs.try_open_at(
+                data.clone(),
+                &protocol,
+                core::slice::from_ref(&point),
+                &mut prover_challenger,
+            ),
+            pcs.try_open_at_known(
+                data,
+                &protocol,
+                core::slice::from_ref(&point),
+                &evals,
+                &mut prover_challenger,
+            ),
+        ];
+        for refusal in refusals {
+            let refusal = refusal.err().unwrap();
+            assert!(
+                matches!(
+                    refusal,
+                    BinaryPcsError::OpeningPreprocessingDepth { folding: 1 }
+                ),
+                "{refusal:?}"
+            );
+        }
 
         assert_eq!(
             prover_challenger.sample_algebra_element::<F>(),
