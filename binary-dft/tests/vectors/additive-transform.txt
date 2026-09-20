@@ -1,0 +1,110 @@
+# Plonky3 vectors for the additive transform over the Wiedemann tower.
+#
+# Let v_0, v_1, ... be the Cantor basis, v_0 = 1 and v_i^2 + v_i = v_{i-1}.
+# Write D(i) for the sum of the v_r whose index bit r is set in i.
+#
+# Let V_j be the polynomial vanishing on { D(m) : m < 2^j }, as the product of x + D(m).
+# Let N_j be V_j divided by V_j evaluated at v_j, so that N_j(v_j) = 1.
+# The novel basis is X_j = the product of the N_r whose index bit r is set in j.
+#
+# A transform of length 2^L over a coset takes coefficients c_0 .. c_{2^L - 1} in that basis
+# to values y_i = sum over j of c_j times X_j evaluated at shift + D(i).
+# Both the coefficient index and the value index are in natural order.
+#
+# Records are:
+#
+#   transform <bits> <L> <shift>   opens a case at that level, length and coset
+#   coeff <i> <hex>                one input coefficient
+#   value <i> <hex>                one output value
+#
+# Every element is a big-endian hex integer in the tower layout, padded to the level's width.
+#
+# The values were computed from the definitions above, not dumped from this crate's transform.
+
+transform 32 3 00000000
+coeff 0 e76e11d4
+coeff 1 35ed0a0a
+coeff 2 d2b0f0bb
+coeff 3 aa0fdf24
+coeff 4 e56a37e7
+coeff 5 813ae386
+coeff 6 73633136
+coeff 7 aec73fcf
+value 0 e76e11d4
+value 1 d2831bde
+value 2 d0ad8b58
+value 3 4f4f5e76
+value 4 ee343199
+value 5 52afa868
+value 6 94afce9a
+value 7 2cfcb780
+
+transform 32 3 bb6d4ee8
+coeff 0 07776d65
+coeff 1 578b39c7
+coeff 2 c383961a
+coeff 3 22c50177
+coeff 4 6a99c2b3
+coeff 5 1e96ab05
+coeff 6 9d781dbc
+coeff 7 9497c48b
+value 0 f5ae7e89
+value 1 0e10b70e
+value 2 dd882129
+value 3 a674a54e
+value 4 bf00fdd8
+value 5 a1d97770
+value 6 f095acd5
+value 7 fa99af16
+
+transform 128 3 00000000000000000000000000000000
+coeff 0 930c005634cb0d40808bf500676a6310
+coeff 1 e7c406cf7ae51f176ceaff111e04118c
+coeff 2 d40b69b7ecfb1b3b4ae1f7f0404f5b90
+coeff 3 232e487a1c4e2249a5900803538e462e
+coeff 4 37d777481149dd2085ff4dafef2773b9
+coeff 5 fb42d3ea0a2327c86466a9c8553a733a
+coeff 6 1f6e2df5c12de72ea8d2ccc2f14e3213
+coeff 7 95ba0dc64ce1fd51a10edc5a7d348465
+value 0 930c005634cb0d40808bf500676a6310
+value 1 74c806994e2e1257ec610a11796e729c
+value 2 0f78ee3b63cd00dc84f55bd3a1ea9173
+value 3 cb92a08e05663d824d8facc1ec60c6d1
+value 4 065b49f13361362276542f43a4e3e2e9
+value 5 c1351600e3526bd1763f1134d802c3d2
+value 6 4c36592b6e852f839b674cf3fc521e8b
+value 7 3dcc4366ee19ad689f92a6ddae09fdfb
+
+transform 128 4 f92cb5c6fda61eacd4f1bbda24d555a7
+coeff 0 7a7fc16a3eeede89aa6d61cc55cb83ff
+coeff 1 2b6a9cabfd591fff4472e1271feee2dd
+coeff 2 9dde4faf1ff803fe989fe5614456313e
+coeff 3 36d72ffad3b9ca81f161d16f0f352c19
+coeff 4 4f150dfb32f4911671417624c320dc83
+coeff 5 fb492b827336ec375456010bfda5ccc2
+coeff 6 83d35aec32a1cf3c4c3ff840afa0e7f4
+coeff 7 a04368909c1462f88e000c47e62a6740
+coeff 8 ab323bcc3f129051d9fe1c5dfedbbdf0
+coeff 9 276414246d6ebd4aa2bfdcb10c039fc3
+coeff 10 f83ea0b46b574adabc5d74bd32cc1fee
+coeff 11 c011d023b4eedbb37c6d52be518f0541
+coeff 12 bf0e156b0f44e770ae93be5aa82c99d8
+coeff 13 315ff27c49aadcc4bfc3c8e639ec3431
+coeff 14 1252e14661e4bf6a62e2ca08476d0631
+coeff 15 59f5db15307c2475ad290de87b471767
+value 0 24cfd29c0a4cba292b587e7255c28fd4
+value 1 1697539a7f23af298bb0665b26098775
+value 2 40ee437ef0883119a862423111b7d965
+value 3 76829f9579bf76b3e334c887fd4fcdd3
+value 4 1193a4a7aad9b4895ede5d9d57e20d0d
+value 5 7c9e8425f4ad92192425679c2fb9309a
+value 6 3a7d6d2c62338b89929e7cda16c7e4fc
+value 7 7b6af9e038c19d9194f89fe4d2850a80
+value 8 029e9a3a0e4e055ecd44fc47a462d9c7
+value 9 6fed875bf77cd245b06e2cd4f632a917
+value 10 2fd3b4e496aae8cfed8603ceb010241f
+value 11 076cb547cd78b6370ab724ca9efa0c52
+value 12 bb86dd5d162534fef03d8e45b13bb947
+value 13 102891530d928811f410ddaea1a18e27
+value 14 6c9cc93851338b7f7e505a394307df88
+value 15 f325ab4220c6f824da6cb80d774a68ee

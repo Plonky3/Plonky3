@@ -44,14 +44,16 @@
 //! [`crate::stark::conjectured_security_report`], with `k` in place of `k − 1`, and loses a bit for
 //! every doubling of the trace height.
 
+pub mod coverage;
 pub mod report;
 pub mod shape;
 
+pub use coverage::{AuditedReport, ChallengeSchedule, Unaccounted};
+pub use report::{Accounting, SecurityReport, SecurityTerm};
 use report::{
     COLLISION_LABEL, COMPOSITION_LABEL, DEEP_COMPOSITION_LABEL, FOLDING_LABEL, LOOKUP_LABEL,
     OUT_OF_DOMAIN_LABEL, QUERY_LABEL,
 };
-pub use report::{SecurityReport, SecurityTerm};
 pub use shape::{AirShape, InstanceShape, LookupShape, ProtocolParams};
 
 use crate::fixed;
@@ -226,7 +228,7 @@ const fn round(
     cap: u64,
 ) -> SecurityTerm {
     let coefficient = match coefficient {
-        None => return SecurityTerm::new(label, cap),
+        None => return SecurityTerm::waived(label, cap),
         Some(coefficient) => match core::num::NonZeroU64::new(coefficient) {
             Some(coefficient) => coefficient,
             None => return SecurityTerm::new(label, 0),

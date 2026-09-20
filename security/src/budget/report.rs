@@ -20,8 +20,18 @@ pub const QUERY_LABEL: &str = "fri-query";
 /// Label for the commitment-collision cap.
 pub const COLLISION_LABEL: &str = "commitment-collision";
 
-/// Number of rounds a [`SecurityReport`] carries.
+/// Number of rounds a report carries.
 pub const NUM_TERMS: usize = 7;
+
+/// Whether a round's bits came from bounding its error.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum Accounting {
+    /// The round's own error was bounded.
+    Bounded,
+
+    /// The configuration declared the round absent, so nothing was bounded.
+    Waived,
+}
 
 /// One round's contribution, as `-log2(error)` in fixed point.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -30,12 +40,27 @@ pub struct SecurityTerm {
     pub label: &'static str,
     /// Attained bits for the round, grinding included, in fixed point.
     pub bits: u64,
+    /// Whether those bits bound anything.
+    pub accounting: Accounting,
 }
 
 impl SecurityTerm {
-    /// Builds a term from a label and its fixed-point bit count.
+    /// Builds a term whose error was bounded.
     pub const fn new(label: &'static str, bits: u64) -> Self {
-        Self { label, bits }
+        Self {
+            label,
+            bits,
+            accounting: Accounting::Bounded,
+        }
+    }
+
+    /// Builds a term for a round the configuration declared absent.
+    pub const fn waived(label: &'static str, bits: u64) -> Self {
+        Self {
+            label,
+            bits,
+            accounting: Accounting::Waived,
+        }
     }
 }
 
@@ -60,7 +85,7 @@ impl SecurityReport {
     ///
     /// Ties resolve to the earliest such round, so the reported bottleneck is the one an
     /// adversary reaches first.
-    pub const fn binding_term(&self) -> SecurityTerm {
+    pub(crate) const fn binding_term(&self) -> SecurityTerm {
         let mut binding = self.terms[0];
         let mut index = 1;
         while index < NUM_TERMS {
@@ -73,12 +98,14 @@ impl SecurityReport {
     }
 
     /// Attained conjectured security, in fixed point.
-    pub const fn attained(&self) -> u64 {
+    pub(crate) const fn attained(&self) -> u64 {
         self.binding_term().bits
     }
 
     /// Attained conjectured security in whole bits, rounded down.
-    pub const fn security_level(&self) -> u32 {
+    ///
+    /// Reachable only through the audited form.
+    pub(crate) const fn security_level(&self) -> u32 {
         crate::fixed::to_bits(self.attained())
     }
 }

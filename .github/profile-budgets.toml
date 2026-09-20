@@ -1,0 +1,36 @@
+# Release budgets for the supported proving profiles.
+#
+# A profile is a shipped entry point whose cost a release is allowed to be judged on.
+# Each one declares three budgets, and a release is refused when a measurement breaks any of them.
+#
+# `proof_bytes` and `verify_millis` are ceilings: a measurement above the value fails.
+# `throughput_per_second` is a floor: a measurement below the value fails.
+#
+# Every budget here is deliberately `unset`. The reproducible measurement harness that produces
+# the numbers is tracked separately, and inventing figures before it lands would gate releases on
+# fiction. `unset` is not the same as absent: the checker refuses a profile that omits a key, so a
+# budget can only ever be missing on purpose.
+#
+# The checker also refuses a measurement for a profile that is not listed, which is what stops a
+# new supported profile from shipping with no budget at all.
+
+[[profile]]
+name = "multi-stark/prove_binary_field"
+description = "Binary-tower multi-table STARK over the grouped Merkle commitment."
+proof_bytes = "unset"
+verify_millis = "unset"
+throughput_per_second = "unset"
+
+[[profile]]
+name = "multi-stark/prove_boolean_trace"
+description = "Bit-width trace proved through the Boolean commitment."
+proof_bytes = "unset"
+verify_millis = "unset"
+throughput_per_second = "unset"
+
+[[profile]]
+name = "multi-stark/bench_binary_grouping"
+description = "Binary path with codeword grouping, the leaf-grouping configuration."
+proof_bytes = "unset"
+verify_millis = "unset"
+throughput_per_second = "unset"

@@ -155,6 +155,15 @@ jobs:
             gfni: true
             target: x86_64-unknown-linux-gnu
             modes: serial parallel
+          # Every leg above that runs tests pins a narrow feature set, and every leg with a
+          # wide one only compiles, so a kernel or assertion gated on packing width is
+          # untested by construction. This leg runs the suite at whatever width the runner's
+          # own processor offers and records that width, so the coverage a run really had is
+          # visible rather than assumed.
+          - name: linux, native vector width
+            os: ubuntu-latest
+            target_cpu: native
+            modes: serial parallel
           - name: arm64, sve2, build only
             os: ubuntu-24.04-arm
             features: "+sve2"
@@ -182,6 +191,26 @@ jobs:
         run: |
           # Append the leg's target features to existing flags so we keep -C debuginfo=0.
           echo "RUSTFLAGS=$RUSTFLAGS -C target-feature=${{ matrix.features }}" >> "$GITHUB_ENV"
+
+      - name: Set native flags
+        if: ${{ needs.plan.outputs.rust == 'true' && matrix.target_cpu }}
+        run: |
+          # Whatever this runner's processor offers, rather than a feature set chosen here.
+          echo "RUSTFLAGS=$RUSTFLAGS -C target-cpu=${{ matrix.target_cpu }}" >> "$GITHUB_ENV"
+
+      - name: Report and check the native width
+        if: ${{ needs.plan.outputs.rust == 'true' && matrix.target_cpu }}
+        run: |
+          resolved=$(rustc --print cfg -C target-cpu=native | grep '^target_feature')
+          echo "$resolved" | tr '\n' ' '
+          echo
+          # The runner pool is heterogeneous, so this leg only widens coverage if it lands
+          # above the widest feature set another test leg already pins. Fail loudly when a
+          # pool change silently turns it into a duplicate of the baseline leg.
+          grep -qx 'target_feature="avx2"' <<< "$resolved" || {
+            echo "::error::native leg resolved below AVX2, so it no longer widens coverage"
+            exit 1
+          }
 
       # Smarter cache for Rust builds; avoids overfilling the runner disk.
       - uses: Swatinem/rust-cache@v2
@@ -448,6 +477,13 @@ jobs:
       - name: Test repository command interface
         if: ${{ needs.plan.outputs.scripts == 'true' }}
         run: python3 scripts/check.py lint --check scripts
+
+      # The release budgets are a gate whether or not their numbers are set: a profile that
+      # names no shipped entry point, or one that declares an incomplete budget, fails here.
+      - name: Release budget table
+        run: |
+          python3 .github/scripts/profile_gate.py --self-test
+          python3 .github/scripts/profile_gate.py --budgets .github/profile-budgets.toml
 
       - name: Sort Cargo.toml
         if: ${{ needs.plan.outputs.manifests == 'true' }}
