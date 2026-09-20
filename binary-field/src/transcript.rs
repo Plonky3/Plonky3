@@ -51,16 +51,14 @@ use crate::{
 ///
 /// The level is named by its Rust type, its backing integer, and its bit width.
 ///
+/// The last argument names the algebra, which is the only part a level chooses.
+///
 /// Every level shares one seeding rule, so every level is generated from here.
 macro_rules! impl_transcript_field {
-    ($name:ty, $repr:ty, $bits:literal) => {
+    ($name:ty, $repr:ty, $bits:literal, |$degree:ident, $basis:ident| $tag:expr) => {
         impl TranscriptField for $name {
-            fn algebra_tag(degree: usize, basis: [u8; 32]) -> TypeTag {
-                TypeTag::BinaryTower {
-                    bits: $bits,
-                    degree,
-                    basis,
-                }
+            fn algebra_tag($degree: usize, $basis: [u8; 32]) -> TypeTag {
+                $tag
             }
 
             fn observe_seed<C: CanObserve<Self>>(challenger: &mut C, bytes: &[u8]) {
@@ -114,50 +112,45 @@ macro_rules! impl_transcript_field {
     };
 }
 
-impl_transcript_field!(BinaryField8, u8, 8);
-impl_transcript_field!(BinaryField16, u16, 16);
-impl_transcript_field!(BinaryField32, u32, 32);
-impl_transcript_field!(BinaryField64, u64, 64);
-impl_transcript_field!(BinaryField128, u128, 128);
-
-impl TranscriptField for Poly64 {
-    fn algebra_tag(degree: usize, basis: [u8; 32]) -> TypeTag {
-        TypeTag::BinaryPolynomial {
-            bits: 64,
-            modulus: 0x1b,
-            degree,
-            basis,
-        }
+impl_transcript_field!(BinaryField8, u8, 8, |degree, basis| TypeTag::BinaryTower {
+    bits: 8,
+    degree,
+    basis,
+});
+impl_transcript_field!(BinaryField16, u16, 16, |degree, basis| {
+    TypeTag::BinaryTower {
+        bits: 16,
+        degree,
+        basis,
     }
-
-    fn observe_seed<C: CanObserve<Self>>(challenger: &mut C, bytes: &[u8]) {
-        for chunk in (bytes.len() as u64).to_le_bytes().chunks(8) {
-            let mut word = [0; 8];
-            word[..chunk.len()].copy_from_slice(chunk);
-            challenger.observe(Self::new(u64::from_le_bytes(word)));
-        }
-        for chunk in bytes.chunks(8) {
-            let mut word = [0; 8];
-            word[..chunk.len()].copy_from_slice(chunk);
-            challenger.observe(Self::new(u64::from_le_bytes(word)));
-        }
+});
+impl_transcript_field!(BinaryField32, u32, 32, |degree, basis| {
+    TypeTag::BinaryTower {
+        bits: 32,
+        degree,
+        basis,
     }
-
-    fn wire_len() -> usize {
-        8
+});
+impl_transcript_field!(BinaryField64, u64, 64, |degree, basis| {
+    TypeTag::BinaryTower {
+        bits: 64,
+        degree,
+        basis,
     }
-
-    fn encode(value: &Self, out: &mut Vec<u8>) {
-        out.extend_from_slice(&value.to_repr().to_be_bytes());
+});
+impl_transcript_field!(BinaryField128, u128, 128, |degree, basis| {
+    TypeTag::BinaryTower {
+        bits: 128,
+        degree,
+        basis,
     }
-
-    fn decode(bytes: &[u8]) -> Result<Self, TranscriptError> {
-        let prefix = bytes.get(..8).ok_or(TranscriptError::BadProofShape {
-            reason: "not enough bytes for a canonical polynomial-basis field encoding",
-        })?;
-        Ok(Self::new(u64::from_be_bytes(prefix.try_into().unwrap())))
-    }
-}
+});
+impl_transcript_field!(Poly64, u64, 64, |degree, basis| TypeTag::BinaryPolynomial {
+    bits: 64,
+    modulus: 0x1b,
+    degree,
+    basis,
+});
 
 #[cfg(test)]
 mod tests {

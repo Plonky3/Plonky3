@@ -364,7 +364,6 @@ fn run_whir(
         .len();
 
     let queries = pcs
-        .config
         .round_parameters
         .iter()
         .map(|r| r.num_queries.to_string())

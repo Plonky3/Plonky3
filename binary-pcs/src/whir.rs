@@ -2,29 +2,55 @@
 
 use p3_binary_dft::{AdditiveNtt, AdditiveRsEncoder, LchNtt, domain_point, subspace_polynomial};
 use p3_binary_field::{Poly64, Poly192};
+use p3_challenger::{FieldChallenger, GrindingChallenger};
 use p3_commit::Encoder;
 use p3_field::BasedVectorSpace;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_multilinear_util::point::Point;
+use p3_whir::transcript::query_draws;
 use p3_whir::{SecurityAssumption, WhirDomain, WhirQueryPoint};
 
-/// Returns the Merkle cap height of the deepest query stratum.
+/// Returns a Merkle cap height that every round's tree can carry.
 ///
-/// One cap node covers each deepest stratum, so authentication paths stop at
-/// a protocol-fixed layer.
+/// One cap node covers each deepest stratum, so authentication paths stop at a protocol-fixed layer.
+///
+/// A round that opens every position draws nothing and fixes no stratum.
+///
+/// All rounds share one commitment scheme, so the shallowest tree bounds the result.
 #[must_use]
 pub fn recommended_cap_height<Challenger>(
     config: &p3_whir::WhirConfig<Poly192, Poly64, Challenger>,
-) -> usize {
-    config
+) -> usize
+where
+    Challenger: FieldChallenger<Poly64> + GrindingChallenger<Witness = Poly64>,
+{
+    let mut deepest = 0;
+    let mut shallowest = usize::MAX;
+
+    for (log_folded_domain_size, queries) in config
         .round_parameters
         .iter()
-        .map(|round| round.num_queries)
-        .chain(core::iter::once(config.final_queries))
-        .filter(|&queries| queries != 0)
-        .map(|queries| queries.ilog2() as usize)
-        .max()
-        .unwrap_or(0)
+        .map(|round| (round.log_folded_domain_size, round.num_queries))
+        .chain(core::iter::once((
+            config.final_round_config().log_folded_domain_size,
+            config.final_queries,
+        )))
+    {
+        shallowest = shallowest.min(log_folded_domain_size);
+
+        // A domain too wide to size as a machine word can never be saturated.
+        let draws = 1usize
+            .checked_shl(log_folded_domain_size as u32)
+            .map_or(queries, |folded_domain_size| {
+                query_draws(folded_domain_size, queries)
+            });
+
+        if draws != 0 {
+            deepest = deepest.max(draws.ilog2() as usize);
+        }
+    }
+
+    deepest.min(shallowest)
 }
 
 /// WHIR's Reed--Solomon code over nested 64-bit Cantor subspaces.

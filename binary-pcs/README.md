@@ -10,7 +10,8 @@ Multilinears over Binary Towers* (FRI-Binius, ring switching),
 The capacity bound is refuted over characteristic 2 with `F_2`-subspace domains, and the Cantor
 domain is one. The classical Johnson list-decoding radius remains unconditional; using it in a
 folding argument additionally needs the proven Reed--Solomon mutual-correlated-agreement bound.
-This BaseFold implementation nevertheless stays in unique decoding by design.
+This BaseFold implementation nevertheless stays in unique decoding by design; the WHIR adapter
+below also accepts the Johnson regime.
 
 The committed alphabet and the challenge field are separate choices. Columns and the base
 codeword live in the alphabet; every challenge, every folded codeword and every claimed value

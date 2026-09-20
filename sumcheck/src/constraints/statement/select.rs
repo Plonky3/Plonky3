@@ -125,12 +125,40 @@ fn packed_batch_pows<F: Field>(points: RowMajorMatrixView<'_, F>) -> RowMajorMat
 
 /// Evaluation constraints batched through selector polynomials.
 ///
+/// For two vectors of length `k` the selector is
+///
+/// ```text
+/// select(X, Y) = prod_i (X_i * Y_i + (1 - Y_i))
+/// ```
+///
 /// A statement uses exactly one point representation:
 ///
-/// - A scalar expands to `(z, z^2, ..., z^(2^(k - 1)))`.
-/// - A direct point supplies all `k` multilinear coordinates.
+/// - A scalar `z` expands to the power map `pow(z) = (z, z^2, z^4, ..., z^(2^(k - 1)))`.
+/// - A direct point supplies all `k` coordinates of `X` itself.
 ///
-/// A random challenge combines every claimed evaluation into one sumcheck.
+/// On a Boolean vector the power map collapses to a single monomial:
+///
+/// ```text
+/// select(pow(z), b)  =  prod_i (z^(2^i) * b_i + (1 - b_i))
+///                    =  prod_(i : b_i = 1) z^(2^i)
+///                    =  z^int(b)
+/// ```
+///
+/// Each stored constraint therefore asserts
+///
+/// ```text
+/// sum_(b in {0,1}^k) P(b) * select(X_i, b) = s_i
+/// ```
+///
+/// where `P` lists the polynomial's values over the hypercube.
+///
+/// One challenge `gamma` reduces the whole set to a single sumcheck claim:
+///
+/// ```text
+/// W(b) = sum_i gamma^i * select(X_i, b)
+/// S    = sum_i gamma^i * s_i
+/// sum_(b in {0,1}^k) P(b) * W(b) = S
+/// ```
 #[derive(Clone, Debug)]
 pub struct SelectStatement<F, EF> {
     /// Number of variables in the multilinear polynomial.
@@ -299,8 +327,9 @@ impl<F: Field, EF: ExtensionField<F>> SelectStatement<F, EF> {
     ///
     /// # Panics
     ///
-    /// Panics if a univariate constraint was already added or the point has the
-    /// wrong dimension. A statement uses exactly one selector representation.
+    /// Panics when a scalar constraint is already stored, since one statement uses one representation.
+    ///
+    /// Panics when the point does not have the statement's dimension.
     pub fn add_point_constraint(&mut self, point: Point<F>, eval: EF) {
         assert!(self.vars.is_empty(), "cannot mix selector representations");
         assert_eq!(point.num_variables(), self.num_variables);
@@ -310,18 +339,24 @@ impl<F: Field, EF: ExtensionField<F>> SelectStatement<F, EF> {
 
     /// Batches every constraint into one weight polynomial and target sum.
     ///
-    /// Each point is first represented by `k` selector coordinates.
-    /// Scalar points use successive powers.
-    /// Direct points use their stored coordinates.
-    ///
-    /// A challenge `gamma` produces the sumcheck claim:
+    /// Both accumulators are added to, never overwritten:
     ///
     /// ```text
-    /// sum_(b in {0,1}^k) P(b) * W(b) = S
+    /// W(b) = sum_i gamma^(i + shift) * select(X_i, b)
+    /// S    = sum_i gamma^(i + shift) * s_i
     /// ```
     ///
-    /// Here `W` is the challenge-weighted sum of selectors.
-    /// The target `S` is the same combination of claimed evaluations.
+    /// The offset lets several statement kinds share one challenge without reusing a power.
+    ///
+    /// Three stages build the weights:
+    ///
+    /// - Fill the `k` by `n` coordinate matrix, row `i` holding every point's `i`-th coordinate.
+    /// - Double it into the `2^k` by `n` selector matrix, whose entry `[b, j]` is selector `j` at `b`.
+    /// - Dot each row of that matrix with the challenge powers.
+    ///
+    /// Scalar points contribute successive squares, direct points their stored coordinates.
+    ///
+    /// The matrix is flat and row-major, so each doubling step reads one contiguous row.
     #[instrument(skip_all, level = "debug", fields(num_constraints = self.len(), num_variables = self.num_variables()))]
     pub fn combine(
         &self,

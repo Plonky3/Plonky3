@@ -34,7 +34,7 @@ pub mod errors;
 ///
 /// - Config and Merkle scheme are borrowed for the lifetime of the check.
 /// - Nothing is cloned across `verify`.
-/// - Construction is `const`; spinning up a fresh verifier per proof is free.
+/// - Construction only checks the config against the domain, so a fresh verifier per proof is cheap.
 ///
 /// # Variable order
 ///
@@ -103,6 +103,10 @@ where
             config.stratified_queries,
             domain.stratified_queries(),
             "WHIR configuration and domain disagree on query stratification"
+        );
+        assert!(
+            domain.supports_security_assumption(config.soundness_type),
+            "WHIR configuration uses a soundness regime the domain rejects"
         );
 
         Self {

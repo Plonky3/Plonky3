@@ -77,13 +77,13 @@ where
     EF: ExtensionField<F>,
 {
     /// Derived per-protocol parameters and per-round configuration.
-    pub config: WhirConfig<EF, F, Challenger>,
+    pub(crate) config: WhirConfig<EF, F, Challenger>,
     /// FFT engine used to encode polynomials before each commitment.
-    pub dft: Dft,
+    pub(crate) dft: Dft,
     /// Base-field Merkle commitment scheme used in the initial round.
-    pub mmcs: MT,
+    pub(crate) mmcs: MT,
     /// Extension-field commitment scheme used in every folded round.
-    pub extension_mmcs: ExtensionMmcs<F, EF, MT>,
+    pub(crate) extension_mmcs: ExtensionMmcs<F, EF, MT>,
     /// Marker tying the prover to a specific stacked-layout binding mode.
     _marker: PhantomData<Layout>,
 }
@@ -132,6 +132,10 @@ where
             config.stratified_queries,
             dft.stratified_queries(),
             "WHIR configuration and domain disagree on query stratification"
+        );
+        assert!(
+            dft.supports_security_assumption(config.soundness_type),
+            "WHIR configuration uses a soundness regime the domain rejects"
         );
         let extension_mmcs = ExtensionMmcs::new(mmcs.clone());
         Self {

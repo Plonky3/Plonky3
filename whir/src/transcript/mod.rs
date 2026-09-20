@@ -206,6 +206,35 @@ const fn stratified_index(width: usize, depth: usize, stratum: usize, low: usize
     (stratum << (width - depth)) | low
 }
 
+/// Assemble one query phase's indices from a caller-supplied draw.
+///
+/// Both drivers share this body, so their index schedules cannot drift apart.
+fn assemble_query_indices(
+    width: usize,
+    draws: usize,
+    stratified: bool,
+    depths: &[usize],
+    mut draw: impl FnMut(usize, usize) -> Vec<usize>,
+) -> Vec<usize> {
+    // A saturated phase has nothing left to decide, so it opens every position.
+    if draws == 0 {
+        return (0..1usize << width).collect();
+    }
+    if !stratified {
+        return draw(width, draws);
+    }
+    let mut indices = Vec::with_capacity(draws);
+    for &depth in depths {
+        let lows = draw(width - depth, 1usize << depth);
+        indices.extend(
+            lows.into_iter()
+                .enumerate()
+                .map(|(stratum, low)| stratified_index(width, depth, stratum, low)),
+        );
+    }
+    indices
+}
+
 /// Append `value` as eight big-endian bytes to the instance label.
 fn push_u64<U: Unit>(separator: &mut DomainSeparator<U>, value: usize) {
     separator.instance(&(value as u64).to_be_bytes());
@@ -870,30 +899,14 @@ where
     /// A saturated phase opens every position instead and draws nothing.
     pub fn query_indices(&mut self, round: usize) -> Vec<usize> {
         let (label, width, draws, stratified, depths) = self.shape.query_index_site(round);
-        // A saturated phase has nothing left to decide, so no draw is described.
-        if draws == 0 {
-            return (0..1usize << width).collect();
-        }
-        if !stratified {
-            return self
-                .state
-                .challenge_uniform_bits::<F>(label, width, draws)
+        let depths = depths.to_vec();
+        assemble_query_indices(width, draws, stratified, &depths, |bits, count| {
+            self.state
+                .challenge_uniform_bits::<F>(label, bits, count)
                 .into_iter()
                 .map(TranscriptBound::into_inner)
-                .collect();
-        }
-        let depths = depths.to_vec();
-        let mut indices = Vec::with_capacity(draws);
-        for depth in depths {
-            let low_bits = width - depth;
-            let lows = self
-                .state
-                .challenge_uniform_bits::<F>(label, low_bits, 1usize << depth);
-            indices.extend(lows.into_iter().enumerate().map(|(stratum, low)| {
-                stratified_index(width, depth, stratum, TranscriptBound::into_inner(low))
-            }));
-        }
-        indices
+                .collect()
+        })
     }
 
     /// Draw the challenge weighting one round's fresh constraints.
@@ -1036,30 +1049,14 @@ where
     /// A `round` at or past the last one names the final site.
     pub fn query_indices(&mut self, round: usize) -> Vec<usize> {
         let (label, width, draws, stratified, depths) = self.shape.query_index_site(round);
-        // A saturated phase has nothing left to decide, so no draw is described.
-        if draws == 0 {
-            return (0..1usize << width).collect();
-        }
-        if !stratified {
-            return self
-                .state
-                .challenge_uniform_bits::<F>(label, width, draws)
+        let depths = depths.to_vec();
+        assemble_query_indices(width, draws, stratified, &depths, |bits, count| {
+            self.state
+                .challenge_uniform_bits::<F>(label, bits, count)
                 .into_iter()
                 .map(TranscriptBound::into_inner)
-                .collect();
-        }
-        let depths = depths.to_vec();
-        let mut indices = Vec::with_capacity(draws);
-        for depth in depths {
-            let low_bits = width - depth;
-            let lows = self
-                .state
-                .challenge_uniform_bits::<F>(label, low_bits, 1usize << depth);
-            indices.extend(lows.into_iter().enumerate().map(|(stratum, low)| {
-                stratified_index(width, depth, stratum, TranscriptBound::into_inner(low))
-            }));
-        }
-        indices
+                .collect()
+        })
     }
 
     /// Redraw the challenge weighting one round's fresh constraints.

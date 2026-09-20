@@ -160,3 +160,36 @@ fn additive_domain_rejects_the_capacity_regime() {
         }
     ));
 }
+
+#[test]
+fn the_cap_height_fits_every_round_tree() {
+    // A flat round rate shrinks the last tree far below the first round's folded domain.
+    let config = WhirConfig::<Poly192, Poly64, Challenger>::new_with_domain(
+        11,
+        ProtocolParameters {
+            security_level: 32,
+            pow_bits: 0,
+            round_log_inv_rates: vec![1],
+            folding_factor: FoldingFactor::Constant(4),
+            soundness_type: SecurityAssumption::JohnsonBound,
+            starting_log_inv_rate: 2,
+        },
+        &Domain::default(),
+    )
+    .unwrap();
+
+    let round = &config.round_parameters[0];
+    let final_round = config.final_round_config();
+
+    // The last phase asks for more queries than its folded domain holds, so it draws nothing.
+    assert_eq!(round.num_queries, 35);
+    assert_eq!(round.log_folded_domain_size, 9);
+    assert_eq!(config.final_queries, 75);
+    assert_eq!(final_round.log_folded_domain_size, 4);
+
+    // Both trees carry the cap, so the shallower one bounds the deepest stratum of the other.
+    let cap_height = recommended_cap_height(&config);
+    assert_eq!(cap_height, 4);
+    assert!(cap_height <= round.log_folded_domain_size);
+    assert!(cap_height <= final_round.log_folded_domain_size);
+}

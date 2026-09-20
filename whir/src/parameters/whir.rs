@@ -260,7 +260,7 @@ where
     ///
     /// - The domain does not support the requested soundness regime.
     /// - The folding factor does not fit the polynomial size.
-    /// - The first fold leaves a domain larger than the base-field two-adicity.
+    /// - The first fold leaves a domain larger than the encoder's capacity.
     /// - Explicit per-round rates or folding factors have the wrong length.
     /// - A requested rate would grow the Reed-Solomon domain.
     /// - The field is too small to reach the requested security level.
