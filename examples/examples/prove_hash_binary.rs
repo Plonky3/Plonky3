@@ -1,8 +1,10 @@
 use clap::Parser;
 use p3_binary_field::{BinaryField128, Gf2};
 use p3_blake3_air::Blake3BinaryAir;
-use p3_examples::binary::{Backend, BinaryProofOptions, prove_boolean_air_with_backend};
-use p3_examples::parsers::{BinaryHashOptions, RepresentationOptions};
+use p3_examples::binary::{
+    Backend, BinaryProofOptions, HashFamily, prove_boolean_air_with_backend,
+};
+use p3_examples::parsers::{BinaryCommitmentHashOptions, BinaryHashOptions, RepresentationOptions};
 use p3_keccak_air::{KECCAK_BINARY_ROWS_PER_PERM, KeccakBinaryAir};
 use p3_matrix::Matrix;
 use p3_sha256_air::Sha256BinaryAir;
@@ -57,6 +59,21 @@ struct Args {
     /// 4 trades larger authentication paths in the proof for fewer compressions per tree.
     #[arg(long, default_value_t = 4, value_parser = parse_merkle_arity)]
     merkle_arity: usize,
+
+    /// The byte hash the Merkle trees and the Fiat-Shamir transcript share.
+    ///
+    /// Both emit a 32-byte digest and are capped at the same collision resistance, so the
+    /// composed security does not move between them. The proof bytes do.
+    #[arg(long, ignore_case = true, value_enum, default_value_t = BinaryCommitmentHashOptions::Keccak256)]
+    hash: BinaryCommitmentHashOptions,
+
+    /// Field elements each Merkle leaf packs; defaults to one fold batch's coset.
+    ///
+    /// A wider leaf shortens the tree and hands the hash longer messages, and pays for it in
+    /// proof bytes: a query then authenticates symbols it did not ask for, and those symbols
+    /// travel in the opening.
+    #[arg(long, value_parser = parse_leaf_elements)]
+    leaf_elements: Option<usize>,
 }
 
 /// Parses a `--merkle-arity` value, rejecting anything but 2 or 4.
@@ -65,6 +82,17 @@ fn parse_merkle_arity(arg: &str) -> Result<usize, String> {
         Ok(arity @ (2 | 4)) => Ok(arity),
         Ok(arity) => Err(format!("merkle arity must be 2 or 4, got {arity}")),
         Err(_) => Err(format!("invalid merkle arity: {arg}")),
+    }
+}
+
+/// Parses a `--leaf-elements` value, rejecting anything but a power of two.
+fn parse_leaf_elements(arg: &str) -> Result<usize, String> {
+    match arg.parse::<usize>() {
+        Ok(elements) if elements.is_power_of_two() => Ok(elements),
+        Ok(elements) => Err(format!(
+            "leaf elements must be a power of two, got {elements}"
+        )),
+        Err(_) => Err(format!("invalid leaf element count: {arg}")),
     }
 }
 
@@ -87,12 +115,19 @@ fn main() {
         RepresentationOptions::PolyBasis => Backend::PolyBasis,
     };
 
+    let hash = match args.hash {
+        BinaryCommitmentHashOptions::Keccak256 => HashFamily::Keccak256,
+        BinaryCommitmentHashOptions::Blake3 => HashFamily::Blake3,
+    };
+
     let options = BinaryProofOptions {
         log_inv_rate: args.log_inv_rate,
         pcs_pow_bits: args.pcs_pow_bits,
         security_bits: args.security_bits,
         folding: args.folding,
         merkle_arity: args.merkle_arity,
+        hash,
+        leaf_elements: args.leaf_elements,
         ..BinaryProofOptions::default()
     };
 
@@ -175,5 +210,41 @@ mod tests {
         assert_eq!(args.log_inv_rate, 1);
         assert_eq!(args.folding, 4);
         assert_eq!(args.merkle_arity, 4);
+        assert_eq!(args.hash, BinaryCommitmentHashOptions::Keccak256);
+        assert_eq!(args.leaf_elements, None);
+    }
+
+    #[test]
+    fn cli_selects_the_hash_and_the_leaf_geometry() {
+        let args = Args::try_parse_from([
+            "prove_hash_binary",
+            "--objective",
+            "blake-3-compressions",
+            "--log-trace-length",
+            "2",
+            "--hash",
+            "blake-3",
+            "--leaf-elements",
+            "64",
+        ])
+        .expect("the hash and leaf-geometry arguments parse");
+        assert_eq!(args.hash, BinaryCommitmentHashOptions::Blake3);
+        assert_eq!(args.leaf_elements, Some(64));
+    }
+
+    #[test]
+    fn cli_rejects_a_leaf_size_that_is_not_a_power_of_two() {
+        assert!(
+            Args::try_parse_from([
+                "prove_hash_binary",
+                "--objective",
+                "blake-3-compressions",
+                "--log-trace-length",
+                "2",
+                "--leaf-elements",
+                "48",
+            ])
+            .is_err()
+        );
     }
 }

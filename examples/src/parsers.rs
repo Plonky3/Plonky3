@@ -57,6 +57,13 @@ pub enum RepresentationOptions {
     PolyBasis,
 }
 
+/// The byte hash a binary-field proof builds its Merkle trees and transcript from.
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum BinaryCommitmentHashOptions {
+    Keccak256,
+    Blake3,
+}
+
 /// Produce a collection of PossibleValue's for an Enum variant.
 ///
 /// We allow any prefix of the full name which uniquely determines the variant.
@@ -223,6 +230,19 @@ impl ValueEnum for BinaryHashOptions {
                 1,
                 Some(vec![("sha256-compressions", 4)]),
             ),
+        })
+    }
+}
+
+impl ValueEnum for BinaryCommitmentHashOptions {
+    fn value_variants<'a>() -> &'a [Self] {
+        &[Self::Keccak256, Self::Blake3]
+    }
+
+    fn to_possible_value(&self) -> Option<PossibleValue> {
+        Some(match self {
+            Self::Keccak256 => get_aliases("keccak-256", 1, Some(vec![("keccak256", 7)])),
+            Self::Blake3 => get_aliases("blake-3", 1, Some(vec![("blake3", 6), ("b3", 2)])),
         })
     }
 }

@@ -44,14 +44,43 @@ impl<Inner> GroupedCodewordMmcs<Inner> {
     /// Pack one full coset for the next fold batch, including a shorter final batch.
     /// Prover and verifier must use the same validated PCS configuration.
     pub const fn for_folding(inner: Inner, config: &crate::BinaryPcsConfig) -> Self {
+        Self::with_group_size(inner, config, 1 << config.log_folding_factor())
+    }
+
+    /// Pack `group_size` adjacent symbols per leaf, capped at each round's message length.
+    ///
+    /// A leaf wider than the fold coset authenticates symbols no query asked for, and the
+    /// opening carries those symbols as proof bytes; a narrower one splits a coset across
+    /// several leaves. Prover and verifier must agree on the same size, so it is read from
+    /// the configuration rather than from the proof.
+    ///
+    /// # Panics
+    /// Panics if `group_size` is zero or not a power of two.
+    pub const fn with_group_size(
+        inner: Inner,
+        config: &crate::BinaryPcsConfig,
+        group_size: usize,
+    ) -> Self {
+        assert!(
+            group_size.is_power_of_two(),
+            "group size must be a power of two"
+        );
         Self {
             inner,
-            group_size: 1 << config.log_folding_factor(),
+            group_size,
             log_inv_rate: Some(config.log_inv_rate()),
         }
     }
 
-    fn group_size_at(&self, height: usize) -> Option<usize> {
+    /// Field elements one leaf packs over a codeword of `height` symbols.
+    ///
+    /// A leaf never reaches past the round's message, so the configured group size is capped at
+    /// `height >> log_inv_rate`. The cap tightens round by round as the codeword folds.
+    ///
+    /// # Returns
+    ///
+    /// `None` when `height` is shorter than the inverse rate and so carries no message.
+    pub fn group_size_at(&self, height: usize) -> Option<usize> {
         let message_len = height >> self.log_inv_rate.unwrap_or(0);
         (message_len != 0).then(|| self.group_size.min(message_len))
     }
@@ -334,6 +363,7 @@ mod tests {
 
     use super::{GroupedCodeword, GroupedCodewordMmcs};
     use crate::test_util::mmcs;
+    use crate::{BinaryPcsConfig, BinaryPcsParams};
 
     /// A width-3 packing, wide enough to reach both the no-wrap and the wrap-around reads.
     type Packed = FieldArray<F, 3>;
@@ -416,7 +446,6 @@ mod tests {
 
     #[test]
     fn folding_schedule_sizes_leaves_for_the_next_actual_batch() {
-        use crate::{BinaryPcsConfig, BinaryPcsParams};
         let config = BinaryPcsConfig::try_new::<F, F>(
             6,
             BinaryPcsParams {
@@ -447,6 +476,50 @@ mod tests {
                 )
                 .unwrap();
         }
+    }
+
+    #[test]
+    fn a_leaf_wider_than_the_fold_coset_carries_the_symbols_no_query_asked_for() {
+        let config = BinaryPcsConfig::try_new::<F, F>(
+            6,
+            BinaryPcsParams {
+                log_inv_rate: 2,
+                security_level: 100,
+                pow_bits: 0,
+            },
+        )
+        .unwrap()
+        .try_with_folding(2)
+        .unwrap();
+        let values: Vec<_> = (0..256).map(|i| F::from_repr(i as u128)).collect();
+        let dims = [Dimensions {
+            height: 256,
+            width: 1,
+        }];
+        // One fold coset, the four symbols `for_folding` packs into a leaf.
+        let coset = [4, 5, 6, 7];
+
+        let coset_leaves = GroupedCodewordMmcs::for_folding(mmcs(), &config);
+        assert_eq!(
+            coset_leaves.group_size_at(256),
+            Some(1 << config.log_folding_factor())
+        );
+        let (root, data) = coset_leaves.commit_matrix(RowMajorMatrix::new(values.clone(), 1));
+        let (rows, proof) = coset_leaves.open_multi_batch(&coset, &data);
+        assert!(proof.missing_symbols.is_empty());
+        coset_leaves
+            .verify_multi_batch(&root, &dims, &coset, &rows, &proof)
+            .unwrap();
+
+        // Four cosets per leaf: the three the query did not ask for travel in the proof.
+        let wide_leaves = GroupedCodewordMmcs::with_group_size(mmcs(), &config, 16);
+        let (wide_root, wide_data) = wide_leaves.commit_matrix(RowMajorMatrix::new(values, 1));
+        assert_ne!(wide_root, root);
+        let (wide_rows, wide_proof) = wide_leaves.open_multi_batch(&coset, &wide_data);
+        assert_eq!(wide_proof.missing_symbols.len(), 12);
+        wide_leaves
+            .verify_multi_batch(&wide_root, &dims, &coset, &wide_rows, &wide_proof)
+            .unwrap();
     }
 
     #[test]
