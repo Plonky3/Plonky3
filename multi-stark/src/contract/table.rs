@@ -371,29 +371,39 @@ mod tests {
 
     #[test]
     fn a_height_above_the_ceiling_is_refused() {
-        assert!(matches!(
-            declared(HeightRange::new(0, MAX_LOG_HEIGHT + 1))
-                .validate(0)
-                .unwrap_err(),
-            DeclarationError::AboveLimit { .. }
-        ));
+        // Forty is the ceiling, so forty-one is the smallest exponent that is refused.
+        assert_eq!(
+            declared(HeightRange::new(0, 41)).validate(0).unwrap_err(),
+            DeclarationError::AboveLimit {
+                table: 0,
+                what: "height exponent",
+                found: 41,
+                limit: 40,
+            }
+        );
     }
 
     #[test]
     fn a_column_count_above_the_ceiling_is_refused() {
+        // The ceiling is two to the twentieth, so one more than that is refused.
         let wide = TableDeclaration::new(
             ColumnCounts {
-                committed: MAX_COLUMNS + 1,
+                committed: 1_048_577,
                 preprocessed: 0,
                 public: 0,
             },
             LocalConstraints::default(),
             HeightRange::exactly(4),
         );
-        assert!(matches!(
+        assert_eq!(
             wide.validate(3).unwrap_err(),
-            DeclarationError::AboveLimit { table: 3, .. }
-        ));
+            DeclarationError::AboveLimit {
+                table: 3,
+                what: "committed column count",
+                found: 1_048_577,
+                limit: 1_048_576,
+            }
+        );
     }
 
     #[test]

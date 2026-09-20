@@ -251,6 +251,16 @@ fn check(bytes: &[u8]) -> Result<(), SealedVerificationError<PcsError<BindingCon
     )
 }
 
+/// Verify a byte string and take the framing rejection out of the wrapper.
+///
+/// The wrapper cannot be compared, because the verifier's own error is not comparable.
+fn framing_error(bytes: &[u8]) -> EnvelopeError {
+    match check(bytes).unwrap_err() {
+        SealedVerificationError::Envelope(error) => error,
+        other => panic!("expected a framing rejection, got {other:?}"),
+    }
+}
+
 fn fixture_path() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(FIXTURE)
 }
@@ -297,31 +307,39 @@ fn the_promise_is_part_of_the_type() {
     // A proof sealed under one promise does not open under the other.
     let run = hiding.run(&[LOG_HEIGHT], 0).unwrap();
     let err = hiding.open::<BindingConfig>(&run, &sealed()).unwrap_err();
-    assert!(matches!(err, EnvelopeError::RunMismatch));
+    assert_eq!(err, EnvelopeError::RunMismatch);
 }
 
 #[test]
 fn a_height_outside_the_declared_range_is_refused() {
     let declaration = declaration();
-    assert!(matches!(
-        declaration.run(&[1], 0),
-        Err(DeclarationError::HeightNotDeclared { .. })
-    ));
-    assert!(matches!(
-        declaration.run(&[LOG_HEIGHT, LOG_HEIGHT], 0),
-        Err(DeclarationError::HeightCountMismatch { .. })
-    ));
+    // The table declares 2..=20, so one below the floor names the whole range back.
+    assert_eq!(
+        declaration.run(&[1], 0).unwrap_err(),
+        DeclarationError::HeightNotDeclared {
+            table: 0,
+            found: 1,
+            min: 2,
+            max: 20,
+        }
+    );
+    assert_eq!(
+        declaration.run(&[LOG_HEIGHT, LOG_HEIGHT], 0).unwrap_err(),
+        DeclarationError::HeightCountMismatch {
+            expected: 1,
+            found: 2,
+        }
+    );
 }
 
 #[test]
 fn a_truncated_header_is_refused() {
     let bytes = sealed();
-    for length in [0, 1, HEADER_LEN - 1] {
-        let err = check(&bytes[..length]).unwrap_err();
-        assert!(matches!(
-            err,
-            SealedVerificationError::Envelope(EnvelopeError::HeaderTooShort { .. })
-        ));
+    for length in [0, 1, 47] {
+        assert_eq!(
+            framing_error(&bytes[..length]),
+            EnvelopeError::HeaderTooShort { found: length }
+        );
     }
 }
 
@@ -329,37 +347,38 @@ fn a_truncated_header_is_refused() {
 fn the_wrong_opening_bytes_are_refused() {
     let mut bytes = sealed();
     bytes[0] ^= 1;
-    assert!(matches!(
-        check(&bytes).unwrap_err(),
-        SealedVerificationError::Envelope(EnvelopeError::BadMagic)
-    ));
+    assert_eq!(framing_error(&bytes), EnvelopeError::BadMagic);
 }
 
 #[test]
 fn an_unknown_revision_is_refused() {
     let mut bytes = sealed();
     bytes[8..10].copy_from_slice(&(ENVELOPE_VERSION + 1).to_le_bytes());
-    assert!(matches!(
-        check(&bytes).unwrap_err(),
-        SealedVerificationError::Envelope(EnvelopeError::EnvelopeVersion { .. })
-    ));
+    // The two numbers differ, so a report that swaps them fails here.
+    assert_eq!(
+        framing_error(&bytes),
+        EnvelopeError::EnvelopeVersion {
+            found: ENVELOPE_VERSION + 1,
+            expected: ENVELOPE_VERSION,
+        }
+    );
 
     let mut bytes = sealed();
     bytes[10..12].copy_from_slice(&(BODY_REVISION + 1).to_le_bytes());
-    assert!(matches!(
-        check(&bytes).unwrap_err(),
-        SealedVerificationError::Envelope(EnvelopeError::BodyRevision { .. })
-    ));
+    assert_eq!(
+        framing_error(&bytes),
+        EnvelopeError::BodyRevision {
+            found: BODY_REVISION + 1,
+            expected: BODY_REVISION,
+        }
+    );
 }
 
 #[test]
 fn a_fingerprint_from_another_statement_is_refused() {
     let mut bytes = sealed();
     bytes[12] ^= 1;
-    assert!(matches!(
-        check(&bytes).unwrap_err(),
-        SealedVerificationError::Envelope(EnvelopeError::RunMismatch)
-    ));
+    assert_eq!(framing_error(&bytes), EnvelopeError::RunMismatch);
 }
 
 #[test]
@@ -367,10 +386,13 @@ fn a_length_field_above_the_budget_is_refused() {
     // The length a proof declares can never make the reader look past the budget.
     let mut bytes = sealed();
     bytes[44..48].copy_from_slice(&u32::MAX.to_le_bytes());
-    assert!(matches!(
-        check(&bytes).unwrap_err(),
-        SealedVerificationError::Envelope(EnvelopeError::BodyAboveBudget { .. })
-    ));
+    assert_eq!(
+        framing_error(&bytes),
+        EnvelopeError::BodyAboveBudget {
+            found: u32::MAX as usize,
+            budget: PROOF_BUDGET,
+        }
+    );
 }
 
 #[test]
@@ -380,17 +402,20 @@ fn a_length_field_disagreeing_with_the_input_is_refused() {
 
     let mut short = bytes.clone();
     short[44..48].copy_from_slice(&((body + 1) as u32).to_le_bytes());
-    assert!(matches!(
-        check(&short).unwrap_err(),
-        SealedVerificationError::Envelope(EnvelopeError::Truncated { .. })
-    ));
+    assert_eq!(
+        framing_error(&short),
+        EnvelopeError::Truncated {
+            declared: body + 1,
+            available: body,
+        }
+    );
 
     let mut long = bytes;
     long[44..48].copy_from_slice(&((body - 1) as u32).to_le_bytes());
-    assert!(matches!(
-        check(&long).unwrap_err(),
-        SealedVerificationError::Envelope(EnvelopeError::TrailingBytes { .. })
-    ));
+    assert_eq!(
+        framing_error(&long),
+        EnvelopeError::TrailingBytes { extra: 1 }
+    );
 }
 
 #[test]
@@ -398,10 +423,10 @@ fn trailing_bytes_are_refused() {
     // The decoder itself would ignore them, so the framing is what rejects them.
     let mut bytes = sealed();
     bytes.push(0);
-    assert!(matches!(
-        check(&bytes).unwrap_err(),
-        SealedVerificationError::Envelope(EnvelopeError::TrailingBytes { extra: 1 })
-    ));
+    assert_eq!(
+        framing_error(&bytes),
+        EnvelopeError::TrailingBytes { extra: 1 }
+    );
 }
 
 #[test]
@@ -416,10 +441,10 @@ fn a_body_the_decoder_does_not_finish_is_refused() {
     padded.push(0);
     padded[44..48].copy_from_slice(&((body + 1) as u32).to_le_bytes());
 
-    assert!(matches!(
-        check(&padded).unwrap_err(),
-        SealedVerificationError::Envelope(EnvelopeError::UnreadBodyBytes { remaining: 1 })
-    ));
+    assert_eq!(
+        framing_error(&padded),
+        EnvelopeError::UnreadBodyBytes { remaining: 1 }
+    );
 }
 
 #[test]
@@ -433,11 +458,7 @@ fn a_corrupted_body_is_refused_before_the_transcript() {
     forged[44..48].copy_from_slice(&(body.len() as u32).to_le_bytes());
     forged.extend_from_slice(&body);
 
-    let err = check(&forged).unwrap_err();
-    assert!(matches!(
-        err,
-        SealedVerificationError::Envelope(EnvelopeError::Malformed)
-    ));
+    assert_eq!(framing_error(&forged), EnvelopeError::Malformed);
 }
 
 #[test]
@@ -465,10 +486,13 @@ fn the_declared_heights_must_match_the_instances() {
             &mut challenger(),
         )
         .unwrap_err();
-    assert!(matches!(
-        err,
-        SealedVerificationError::RunDisagreement { .. }
-    ));
+    // The wrapper is not comparable, so the variant is matched and its payload compared.
+    match err {
+        SealedVerificationError::RunDisagreement { what } => {
+            assert_eq!(what, "a table height");
+        }
+        other => panic!("expected a height disagreement, got {other:?}"),
+    }
 }
 
 #[test]
@@ -486,7 +510,13 @@ fn a_statement_declaring_a_lookup_refuses_a_proof_without_one() {
 
     let bytes = declaration.seal(&run, &proof()).unwrap().into_bytes();
     let err = declaration.open::<BindingConfig>(&run, &bytes).unwrap_err();
-    assert!(matches!(err, EnvelopeError::SectionMismatch { .. }));
+    assert_eq!(
+        err,
+        EnvelopeError::SectionMismatch {
+            section: "lookup",
+            present: false,
+        }
+    );
 }
 
 #[test]

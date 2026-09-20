@@ -439,32 +439,48 @@ mod tests {
             LocalConstraints::default(),
             HeightRange::new(9, 8),
         );
-        assert!(matches!(
+        assert_eq!(
             Declaration::new(Keccak256Hash, vec![table(), inverted], 1024).unwrap_err(),
-            DeclarationError::EmptyHeightRange { table: 1, .. }
-        ));
+            DeclarationError::EmptyHeightRange {
+                table: 1,
+                min: 9,
+                max: 8,
+            }
+        );
     }
 
     #[test]
     fn a_height_outside_the_declared_range_is_refused() {
         let declaration = Declaration::new(Keccak256Hash, vec![table()], 1024).unwrap();
-        assert!(matches!(
+        // The one table declares 2..=16, so one below the floor names the whole range back.
+        assert_eq!(
             declaration.run(&[1], 0).unwrap_err(),
-            DeclarationError::HeightNotDeclared { .. }
-        ));
-        assert!(matches!(
+            DeclarationError::HeightNotDeclared {
+                table: 0,
+                found: 1,
+                min: 2,
+                max: 16,
+            }
+        );
+        assert_eq!(
             declaration.run(&[8, 8], 0).unwrap_err(),
-            DeclarationError::HeightCountMismatch { .. }
-        ));
+            DeclarationError::HeightCountMismatch {
+                expected: 1,
+                found: 2,
+            }
+        );
     }
 
     #[test]
     fn grinding_above_the_ceiling_is_refused() {
         let declaration = Declaration::new(Keccak256Hash, vec![table()], 1024).unwrap();
-        assert!(matches!(
+        assert_eq!(
             declaration.run(&[8], 1000).unwrap_err(),
-            DeclarationError::PowBitsAboveLimit { .. }
-        ));
+            DeclarationError::PowBitsAboveLimit {
+                found: 1000,
+                limit: 64,
+            }
+        );
     }
 
     #[test]

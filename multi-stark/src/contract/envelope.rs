@@ -224,16 +224,23 @@ mod tests {
     fn a_revision_this_build_does_not_speak_is_refused() {
         let mut framing = Header::write(&FINGERPRINT, 0);
         framing[8..10].copy_from_slice(&(ENVELOPE_VERSION + 1).to_le_bytes());
-        assert!(matches!(
+        // The two numbers differ, so a report that swaps them fails here.
+        assert_eq!(
             Header::parse(&framing).unwrap_err(),
-            EnvelopeError::EnvelopeVersion { .. }
-        ));
+            EnvelopeError::EnvelopeVersion {
+                found: ENVELOPE_VERSION + 1,
+                expected: ENVELOPE_VERSION,
+            }
+        );
 
         let mut body = Header::write(&FINGERPRINT, 0);
         body[10..12].copy_from_slice(&(BODY_REVISION + 1).to_le_bytes());
-        assert!(matches!(
+        assert_eq!(
             Header::parse(&body).unwrap_err(),
-            EnvelopeError::BodyRevision { .. }
-        ));
+            EnvelopeError::BodyRevision {
+                found: BODY_REVISION + 1,
+                expected: BODY_REVISION,
+            }
+        );
     }
 }
