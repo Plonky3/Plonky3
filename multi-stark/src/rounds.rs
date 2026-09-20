@@ -2175,10 +2175,6 @@ where
     }
 
     /// Add one residual row's eq-weighted evaluations at every node of `schedule` to `scratch`.
-    ///
-    /// Never inlined: the AIR evaluation needs a large stack frame, which inside the parallel
-    /// fold would be reserved again at every level of Rayon's recursive split.
-    #[inline(never)]
     fn accumulate_row(
         &self,
         mut scratch: Scratch<R, R>,
@@ -2227,6 +2223,32 @@ where
             }
         }
 
+        self.walk_row_nodes(&mut scratch, s, eq_suffix, schedule, next_columns);
+        scratch
+    }
+
+    /// Step one residual row through every node of `schedule`, adding its evaluations there.
+    ///
+    /// The row's values at node zero, and the step from each node to the next, are already in
+    /// `scratch`.
+    ///
+    /// Never inlined: the AIR evaluation needs a large stack frame, which inside the parallel
+    /// fold would be reserved again at every level of Rayon's recursive split.
+    #[inline(never)]
+    fn walk_row_nodes(
+        &self,
+        scratch: &mut Scratch<R, R>,
+        s: usize,
+        eq_suffix: R,
+        schedule: &[(usize, NodeStep<R>)],
+        next_columns: &[Range<usize>],
+    ) where
+        R: Algebra<F>,
+        A: for<'b> Air<MultilinearFolder<'b, F, R, R>>
+            + for<'b> Air<InteractionMultilinearFolder<'b, F, R, R>>,
+    {
+        let num_evals = self.num_evals();
+        let half = num_evals / 2;
         let (mut boundary, boundary_diff) =
             BoundaryEvals::row_pair_with_prefix(s, half, num_evals, self.boundary);
 
@@ -2278,8 +2300,6 @@ where
                 }
             }
         }
-
-        scratch
     }
 
     /// Update each group's claim for binding the next variable at `r`.

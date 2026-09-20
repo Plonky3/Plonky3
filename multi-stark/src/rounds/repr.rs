@@ -37,14 +37,16 @@ const TABLE_ENTRIES: usize = 1 << u8::BITS;
 
 /// One lane group of the representation field, holding the value each lane reads.
 #[inline]
-fn lane_group<F, R: Field>(value: impl FnMut(usize) -> R) -> PackedRepr<F, R> {
+pub(super) fn lane_group<F, R: Field>(value: impl FnMut(usize) -> R) -> PackedRepr<F, R> {
     PackedExt::new(R::Packing::from_fn(value))
 }
 
 /// Carry per-node sums from lane groups back into the challenge field.
 ///
 /// Each lane of a sum covers residual rows of its own, so a node's value is the sum of its lanes.
-fn sum_lanes<F, R: Field, EF: From<R>>(evals: Vec<Vec<PackedRepr<F, R>>>) -> Vec<Vec<EF>> {
+pub(super) fn sum_lanes<F, R: Field, EF: From<R>>(
+    evals: Vec<Vec<PackedRepr<F, R>>>,
+) -> Vec<Vec<EF>> {
     evals
         .into_iter()
         .map(|evals| {
@@ -57,11 +59,11 @@ fn sum_lanes<F, R: Field, EF: From<R>>(evals: Vec<Vec<PackedRepr<F, R>>>) -> Vec
 }
 
 /// The round-wide values a lane-group row loop reads, the same in every lane.
-struct LaneRound<P> {
+pub(super) struct LaneRound<P> {
     /// The interpolation nodes, and the step from each to the next.
     schedule: Vec<(usize, NodeStep<P>)>,
     /// The column runs any AIR reads on the next row.
-    next_columns: Vec<Range<usize>>,
+    pub(super) next_columns: Vec<Range<usize>>,
     /// The constraint batching challenge.
     alpha: P,
     /// Its powers, per AIR of the stage.
@@ -345,35 +347,7 @@ where
             "residual rows must fill whole lane groups"
         );
 
-        let broadcast = |value: R| PackedExt::new(R::Packing::broadcast(value));
-        let round = LaneRound {
-            schedule: node_schedule::<EF>(evaluated_nodes(&self.slots, self.degree(), true))
-                .into_iter()
-                .map(|(node, step)| (node, step.map(|step| broadcast(R::from(step)))))
-                .collect(),
-            next_columns: next_row_runs(&self.slots),
-            alpha: broadcast(self.alpha),
-            alpha_powers: self
-                .alpha_powers
-                .iter()
-                .map(|powers| powers.iter().copied().map(broadcast).collect())
-                .collect(),
-            coupling: InteractionCoupling {
-                links: self
-                    .coupling
-                    .links
-                    .iter()
-                    .map(|link| link.map(broadcast))
-                    .collect(),
-                theta_beta_powers: self
-                    .coupling
-                    .theta_beta_powers
-                    .iter()
-                    .copied()
-                    .map(broadcast)
-                    .collect(),
-            },
-        };
+        let round = self.lane_round();
         let constraint_degrees = self
             .slots
             .iter()
@@ -425,13 +399,46 @@ where
         )
     }
 
+    /// The round-wide values every lane group of this round reads, broadcast to all lanes.
+    pub(super) fn lane_round(&self) -> LaneRound<PackedRepr<F, R>>
+    where
+        R: Algebra<F>,
+        R::Packing: Algebra<F::Packing>,
+    {
+        let broadcast = |value: R| PackedExt::new(R::Packing::broadcast(value));
+        LaneRound {
+            schedule: node_schedule::<EF>(evaluated_nodes(&self.slots, self.degree(), true))
+                .into_iter()
+                .map(|(node, step)| (node, step.map(|step| broadcast(R::from(step)))))
+                .collect(),
+            next_columns: next_row_runs(&self.slots),
+            alpha: broadcast(self.alpha),
+            alpha_powers: self
+                .alpha_powers
+                .iter()
+                .map(|powers| powers.iter().copied().map(broadcast).collect())
+                .collect(),
+            coupling: InteractionCoupling {
+                links: self
+                    .coupling
+                    .links
+                    .iter()
+                    .map(|link| link.map(broadcast))
+                    .collect(),
+                theta_beta_powers: self
+                    .coupling
+                    .theta_beta_powers
+                    .iter()
+                    .copied()
+                    .map(broadcast)
+                    .collect(),
+            },
+        }
+    }
+
     /// Add one lane group's eq-weighted evaluations at every node of the round to `scratch`.
     ///
     /// Lane `j` reads residual row `s + j`.
-    ///
-    /// Never inlined: the AIR evaluation needs a large stack frame, which inside the parallel
-    /// fold would be reserved again at every level of Rayon's recursive split.
-    #[inline(never)]
     fn accumulate_lanes(
         &self,
         mut scratch: PackedScratch<PackedRepr<F, R>, PackedRepr<F, R>>,
@@ -483,6 +490,32 @@ where
             }
         }
 
+        self.walk_lane_nodes(&mut scratch, s, eq_suffix, round);
+        scratch
+    }
+
+    /// Step one lane group through every node of the round, adding its evaluations there.
+    ///
+    /// The group's values at node zero, and the step from each node to the next, are already in
+    /// `scratch`.
+    ///
+    /// Never inlined: the AIR evaluation needs a large stack frame, which inside the parallel
+    /// fold would be reserved again at every level of Rayon's recursive split.
+    #[inline(never)]
+    pub(super) fn walk_lane_nodes(
+        &self,
+        scratch: &mut PackedScratch<PackedRepr<F, R>, PackedRepr<F, R>>,
+        s: usize,
+        eq_suffix: PackedRepr<F, R>,
+        round: &LaneRound<PackedRepr<F, R>>,
+    ) where
+        R: Algebra<F>,
+        R::Packing: Algebra<F::Packing>,
+        A: for<'b> Air<MultilinearFolder<'b, F, PackedRepr<F, R>, PackedRepr<F, R>>>
+            + for<'b> Air<InteractionMultilinearFolder<'b, F, PackedRepr<F, R>, PackedRepr<F, R>>>,
+    {
+        let num_evals = self.num_evals();
+        let half = num_evals / 2;
         let (boundary, boundary_diff) = BoundaryEvals::row_pair_with_prefix_lanes::<R::Packing>(
             s,
             half,
@@ -546,8 +579,6 @@ where
                 }
             }
         }
-
-        scratch
     }
 
     /// Bind the next variable at `r`, folding the scalar columns in `R`.
