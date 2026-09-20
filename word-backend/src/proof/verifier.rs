@@ -113,15 +113,17 @@ mod tests {
     use alloc::vec::Vec;
 
     use p3_binary_field::{BinaryChallenger, BinaryField128};
-    use p3_binary_pcs::{BinaryPcsConfig, BinaryPcsParams, BooleanMultilinearPcs, BooleanPcs};
+    use p3_binary_pcs::{
+        BinaryPcsConfig, BinaryPcsParams, BooleanMultilinearPcs, BooleanPcs, BooleanPcsError,
+    };
     use p3_challenger::HashChallenger;
     use p3_field::PrimeCharacteristicRing;
     use p3_keccak::Keccak256Hash;
     use p3_merkle_tree::MerkleTreeMmcs;
     use p3_symmetric::{CompressionFunctionFromHasher, SerializingHasher};
     use p3_word::{
-        AndConstraint, ConstraintSystem, IntegerMulConstraint, Operand, Shift, ShiftKind,
-        ShiftedValue, ValueIndex, Word32, Word64, ZeroConstraint,
+        AndConstraint, ConstraintKind, ConstraintSystem, IntegerMulConstraint, Operand, Shift,
+        ShiftKind, ShiftedValue, ValueIndex, VerificationError, Word32, Word64, ZeroConstraint,
     };
 
     use super::*;
@@ -392,14 +394,24 @@ mod tests {
         // Mutation: flip one bit of the word the vanishing relation pins.
         let (system, public_words, mut words) = word64_statement(0x0F1E_2D3C_4B5A_6978);
         words[0] = Word64::new(words[0].get() ^ 1);
-        assert!(system.verify(&public_words, &words).is_err());
+        assert_eq!(
+            system.verify(&public_words, &words),
+            Err(VerificationError::Unsatisfied {
+                kind: ConstraintKind::Zero,
+                constraint: 0,
+            })
+        );
 
         let key = WordProofKey::new(system.clone()).unwrap();
         let scheme = commitment_scheme(key.trace_variables());
         let values = PackedWitness::new(&system, &public_words, &words).unwrap();
         let (commitment, proof) = run(&key, &scheme, &values);
 
-        assert!(check(&key, &scheme, &commitment, &public_words, &proof).is_err());
+        let rejection = check(&key, &scheme, &commitment, &public_words, &proof);
+        assert!(
+            matches!(&rejection, Err(WordProofError::RelationClaim)),
+            "the vanishing check must reject, got {rejection:?}"
+        );
     }
 
     #[test]
@@ -407,14 +419,24 @@ mod tests {
         // Mutation: flip the highest bit of the second bitwise output.
         let (system, public_words, mut words) = word64_statement(0x2222_3333_4444_5555);
         words[7] = Word64::new(words[7].get() ^ (1 << 63));
-        assert!(system.verify(&public_words, &words).is_err());
+        assert_eq!(
+            system.verify(&public_words, &words),
+            Err(VerificationError::Unsatisfied {
+                kind: ConstraintKind::And,
+                constraint: 1,
+            })
+        );
 
         let key = WordProofKey::new(system.clone()).unwrap();
         let scheme = commitment_scheme(key.trace_variables());
         let values = PackedWitness::new(&system, &public_words, &words).unwrap();
         let (commitment, proof) = run(&key, &scheme, &values);
 
-        assert!(check(&key, &scheme, &commitment, &public_words, &proof).is_err());
+        let rejection = check(&key, &scheme, &commitment, &public_words, &proof);
+        assert!(
+            matches!(&rejection, Err(WordProofError::RelationClaim)),
+            "the vanishing check must reject, got {rejection:?}"
+        );
     }
 
     #[test]
@@ -429,7 +451,11 @@ mod tests {
             broken[5] = Word32::new(broken[5].get() ^ (1 << bit));
             let values = PackedWitness::new(&system, &public_words, &broken).unwrap();
             let (commitment, proof) = run(&key, &scheme, &values);
-            assert!(check(&key, &scheme, &commitment, &public_words, &proof).is_err());
+            let rejection = check(&key, &scheme, &commitment, &public_words, &proof);
+            assert!(
+                matches!(&rejection, Err(WordProofError::RelationClaim)),
+                "bit {bit} must be rejected, got {rejection:?}"
+            );
         }
     }
 
@@ -445,7 +471,11 @@ mod tests {
             broken[0] = Word32::new(broken[0].get() ^ (1 << bit));
             let values = PackedWitness::new(&system, &public_words, &broken).unwrap();
             let (commitment, proof) = run(&key, &scheme, &values);
-            assert!(check(&key, &scheme, &commitment, &public_words, &proof).is_err());
+            let rejection = check(&key, &scheme, &commitment, &public_words, &proof);
+            assert!(
+                matches!(&rejection, Err(WordProofError::RelationClaim)),
+                "bit {bit} must be rejected, got {rejection:?}"
+            );
         }
     }
 
@@ -461,7 +491,11 @@ mod tests {
         for slot in 0..OPERAND_EVALUATIONS {
             let mut tampered = proof.clone();
             tampered.operands[slot] += EF::ONE;
-            assert!(check(&key, &scheme, &commitment, &public_words, &tampered).is_err());
+            let rejection = check(&key, &scheme, &commitment, &public_words, &tampered);
+            assert!(
+                matches!(&rejection, Err(WordProofError::RelationClaim)),
+                "operand {slot} must be rejected, got {rejection:?}"
+            );
         }
     }
 
@@ -477,7 +511,11 @@ mod tests {
         for round in 0..proof.zerocheck.round_polys.len() {
             let mut tampered = proof.clone();
             tampered.zerocheck.round_polys[round][0] += EF::ONE;
-            assert!(check(&key, &scheme, &commitment, &public_words, &tampered).is_err());
+            let rejection = check(&key, &scheme, &commitment, &public_words, &tampered);
+            assert!(
+                matches!(&rejection, Err(WordProofError::RelationClaim)),
+                "round {round} must be rejected, got {rejection:?}"
+            );
         }
     }
 
@@ -530,7 +568,11 @@ mod tests {
         let (commitment, proof) = run(&key, &scheme, &values);
 
         let substituted = [Word64::new(public_words[0].get() ^ 1), public_words[1]];
-        assert!(check(&key, &scheme, &commitment, &substituted, &proof).is_err());
+        let rejection = check(&key, &scheme, &commitment, &substituted, &proof);
+        assert!(
+            matches!(&rejection, Err(WordProofError::RelationClaim)),
+            "a substituted public word moves the challenges, got {rejection:?}"
+        );
     }
 
     #[test]
@@ -546,7 +588,44 @@ mod tests {
         let other = PackedWitness::new(&other_system, &other_public, &other_words).unwrap();
         let (other_commitment, _) = run(&key, &scheme, &other);
 
-        assert!(check(&key, &scheme, &other_commitment, &public_words, &proof).is_err());
+        let rejection = check(&key, &scheme, &other_commitment, &public_words, &proof);
+        assert!(
+            matches!(&rejection, Err(WordProofError::RelationClaim)),
+            "the commitment moves the vanishing point, got {rejection:?}"
+        );
+    }
+
+    #[test]
+    fn a_foreign_trace_opening_is_rejected() {
+        // Mutation: keep every reduction and swap only the commitment's opening proof.
+        //
+        // Nothing before the final discharge changes, so only the commitment can catch it.
+        let (system, public_words, words) = word64_statement(0x7E57_0BEC_7E57_0BEC);
+        let key = WordProofKey::new(system.clone()).unwrap();
+        let scheme = commitment_scheme(key.trace_variables());
+        let values = PackedWitness::new(&system, &public_words, &words).unwrap();
+        let (commitment, proof) = run(&key, &scheme, &values);
+
+        let (_, other_words) = {
+            let (other, _, other_words) = word64_statement(0x1D1D_2E2E_3F3F_4040);
+            (other, other_words)
+        };
+        let other_values = PackedWitness::new(&system, &public_words, &other_words).unwrap();
+        let (_, other_proof) = run(&key, &scheme, &other_values);
+
+        let mut tampered = proof;
+        tampered.opening = other_proof.opening;
+        // The commitment's own reduction error is opaque here, so only it is left open.
+        let rejection = check(&key, &scheme, &commitment, &public_words, &tampered);
+        assert!(
+            matches!(
+                &rejection,
+                Err(WordProofError::Commitment(BooleanPcsError::ReductionProof(
+                    _
+                )))
+            ),
+            "the commitment must refuse a foreign opening, got {rejection:?}"
+        );
     }
 
     #[test]
@@ -560,10 +639,16 @@ mod tests {
         let words = [Word64::new(0); 8];
         let values = PackedWitness::new(&system, &[], &words).unwrap();
 
-        assert!(matches!(
-            key.prove::<EF, EF, _, _>(&scheme, &values, &mut challenger()),
-            Err(WordProofError::UnprovedRelation { count: 1 })
-        ));
+        let refusal = key
+            .prove::<EF, EF, _, _>(&scheme, &values, &mut challenger())
+            .err();
+        assert!(
+            matches!(
+                &refusal,
+                Some(WordProofError::UnprovedRelation { count: 1 })
+            ),
+            "one declared product must be refused, got {refusal:?}"
+        );
 
         // A proof of another statement is refused before the transcript is replayed.
         let (sound, public_words, sound_words) = word64_statement(0x0123_4567_89AB_CDEF);
@@ -571,10 +656,11 @@ mod tests {
         let sound_scheme = commitment_scheme(sound_key.trace_variables());
         let sound_values = PackedWitness::new(&sound, &public_words, &sound_words).unwrap();
         let (commitment, proof) = run(&sound_key, &sound_scheme, &sound_values);
-        assert!(matches!(
-            check(&key, &scheme, &commitment, &[], &proof),
-            Err(WordProofError::UnprovedRelation { count: 1 })
-        ));
+        let refusal = check(&key, &scheme, &commitment, &[], &proof);
+        assert!(
+            matches!(&refusal, Err(WordProofError::UnprovedRelation { count: 1 })),
+            "one declared product must be refused, got {refusal:?}"
+        );
     }
 
     #[test]
@@ -585,20 +671,34 @@ mod tests {
         let wider = commitment_scheme(key.trace_variables() + 1);
         let values = PackedWitness::new(&system, &public_words, &words).unwrap();
 
-        let expected = key.trace_variables();
-        assert!(matches!(
-            key.prove::<EF, EF, _, _>(&wider, &values, &mut challenger()),
-            Err(WordProofError::TraceShape { expected: reported, actual })
-                if reported == expected && actual == expected + 1
-        ));
+        // Eight committed 64-bit words need three word coordinates beside six bit ones.
+        let refusal = key
+            .prove::<EF, EF, _, _>(&wider, &values, &mut challenger())
+            .err();
+        assert!(
+            matches!(
+                &refusal,
+                Some(WordProofError::TraceShape {
+                    expected: 9,
+                    actual: 10,
+                })
+            ),
+            "a ten-variable commitment must be refused, got {refusal:?}"
+        );
 
         // The verifier reads the same dimension, so it refuses the same mismatch.
-        let narrow = commitment_scheme(expected);
+        let narrow = commitment_scheme(9);
         let (commitment, proof) = run(&key, &narrow, &values);
-        assert!(matches!(
-            check(&key, &wider, &commitment, &public_words, &proof),
-            Err(WordProofError::TraceShape { expected: reported, actual })
-                if reported == expected && actual == expected + 1
-        ));
+        let refusal = check(&key, &wider, &commitment, &public_words, &proof);
+        assert!(
+            matches!(
+                &refusal,
+                Err(WordProofError::TraceShape {
+                    expected: 9,
+                    actual: 10,
+                })
+            ),
+            "a ten-variable commitment must be refused, got {refusal:?}"
+        );
     }
 }

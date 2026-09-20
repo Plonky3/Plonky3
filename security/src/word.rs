@@ -270,8 +270,22 @@ mod tests {
         assert_eq!(components[2].label, WORD_ZEROCHECK_ROUNDS_LABEL);
         assert_eq!(components[2].bits.bits(), 128.0 - libm::log2(27.0));
 
-        // The shift, ring-switch, and commitment stages each add their own label.
-        assert_eq!(components.len(), 3 + shift.components().len() + 2);
+        // Four shift batching variables give the numerator four.
+        assert_eq!(components[3].label, WORD_SHIFT_BATCHING_LABEL);
+        assert_eq!(components[3].bits.bits(), 126.0);
+
+        // Twenty-six quadratic shift rounds give the numerator fifty-two.
+        assert_eq!(components[4].label, WORD_SHIFT_SUMCHECK_LABEL);
+        assert_eq!(components[4].bits.bits(), 128.0 - libm::log2(52.0));
+
+        // Seven absorbed coordinates and six surviving ones give the numerator nineteen.
+        assert_eq!(components[5].label, crate::BIT_RING_SWITCH_LABEL);
+        assert_eq!(components[5].bits.bits(), 128.0 - libm::log2(19.0));
+
+        // The commitment prices its own single opening claim.
+        assert_eq!(components[6].label, crate::binary::BINARY_PCS_OPENING_LABEL);
+        assert_eq!(components[6].bits, pcs.opening_term(1).bits);
+        assert_eq!(components.len(), 7);
 
         // The composable term is the union of every event.
         let errors = components

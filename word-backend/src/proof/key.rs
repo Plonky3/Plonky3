@@ -192,7 +192,9 @@ impl<W: PackedWord> WordProofKey<W> {
 #[cfg(test)]
 mod tests {
     use p3_security::binary::BinaryPcsRegime;
-    use p3_word::{Operand, ShiftedValue, ValueIndex, Word64, ZeroConstraint};
+    use p3_word::{
+        IntegerMulConstraint, Operand, ShiftedValue, ValueIndex, Word64, ZeroConstraint,
+    };
 
     use super::*;
 
@@ -212,6 +214,47 @@ mod tests {
     fn the_padded_trace_spans_the_word_and_bit_coordinates() {
         // Eight committed words need three word coordinates beside six within-word ones.
         assert_eq!(key().trace_variables(), 9);
+
+        // One relation fits the single padded row, so only the bit axis is bound.
+        assert_eq!(key().zerocheck_variables(), 6);
+    }
+
+    #[test]
+    fn an_unproved_relation_family_is_refused_before_anything_is_absorbed() {
+        let operand = |position| {
+            Operand::single(ShiftedValue::plain(
+                ValueIndex::witness(position).expect("test position fits"),
+            ))
+        };
+        let product = IntegerMulConstraint::new(operand(0), operand(1), operand(2), operand(3));
+        let system = ConstraintSystem::<Word64>::new(0, 8, vec![], vec![], vec![product])
+            .expect("the fixture addresses only declared words");
+        let key = WordProofKey::new(system).expect("the fixture compiles");
+
+        assert_eq!(
+            key.validate_statement::<()>(),
+            Err(WordProofError::UnprovedRelation { count: 1 })
+        );
+    }
+
+    #[test]
+    fn a_commitment_over_another_hypercube_is_refused_before_anything_is_absorbed() {
+        // The padded trace spans nine variables, so any other width is a mismatch.
+        assert_eq!(key().validate_arity::<()>(9), Ok(()));
+        assert_eq!(
+            key().validate_arity::<()>(10),
+            Err(WordProofError::TraceShape {
+                expected: 9,
+                actual: 10,
+            })
+        );
+        assert_eq!(
+            key().validate_arity::<()>(8),
+            Err(WordProofError::TraceShape {
+                expected: 9,
+                actual: 8,
+            })
+        );
     }
 
     #[test]
@@ -241,6 +284,10 @@ mod tests {
                 p3_security::binary::BINARY_PCS_OPENING_LABEL,
             ]
         );
+
+        // One separating coefficient, and four shift batching variables.
+        assert_eq!(components[0].bits.bits(), 128.0);
+        assert_eq!(components[3].bits.bits(), 126.0);
 
         // The union of every event is no stronger than its weakest component.
         let combined = key
