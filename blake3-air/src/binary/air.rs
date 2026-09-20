@@ -146,14 +146,17 @@ impl<AB: AirBuilder> Air<AB> for Blake3BinaryAir {
             c: array::from_fn(|i| u32_to_bits_le(iv_word(i))),
             d: initial_d,
         };
-        let mut m = local.block;
+        // The schedule permutes which message word each G step reads, so it is the positions
+        // that move from round to round rather than the words themselves.
+        let mut m: [usize; 16] = array::from_fn(|i| i);
 
         for (round_idx, round) in local.rounds.iter().enumerate() {
             if round_idx > 0 {
                 permute(&mut m);
             }
             for (g, (cols, slots)) in round.iter().zip(G_SCHEDULE).enumerate() {
-                eval_g(builder, &mut state, slots, &m[2 * g], &m[2 * g + 1], cols);
+                let (mx, my) = (&local.block[m[2 * g]], &local.block[m[2 * g + 1]]);
+                eval_g(builder, &mut state, slots, mx, my, cols);
             }
         }
     }
