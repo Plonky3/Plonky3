@@ -317,7 +317,7 @@ fn subfield_prefix<F: ByteCoordinates, const INVERSE: bool>(
     use core::arch::x86_64::__m512i;
 
     use crate::affine;
-    use crate::lanes::ByteLanes;
+    use crate::lanes::ByteRegister;
 
     const {
         // The layout contract holds only where the bytes run from the low coordinate up.
@@ -334,13 +334,15 @@ fn subfield_prefix<F: ByteCoordinates, const INVERSE: bool>(
 
     // A run below one register covers nothing, so its blocks would be built and thrown away.
     // The narrow stages of a narrow matrix are almost all of the butterflies, and all short.
-    if bytes < <__m512i as ByteLanes>::BYTES {
+    if bytes < <__m512i as ByteRegister>::BYTES {
         return 0;
     }
 
     // SAFETY: the marker trait's contract makes each run exactly that many initialised bytes.
     //
     // It rules out padding, and any byte pattern a write could turn into an invalid element.
+    // The two runs are halves of one split slice, so no byte belongs to both.
+    // The runs have equal length, so one byte count is in bounds for both.
     let (lo, hi) = unsafe {
         (
             core::slice::from_raw_parts_mut(lo.as_mut_ptr().cast::<u8>(), bytes),
@@ -366,21 +368,36 @@ fn subfield_prefix<F: ByteCoordinates, const INVERSE: bool>(
     covered / size_of::<F>()
 }
 
-/// The one-byte subfield butterfly on NEON. Returns the elements covered.
-#[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
+/// The one-byte subfield butterfly on NEON.
+///
+/// # Returns
+///
+/// - The number of elements covered, which the caller finishes from.
+#[cfg(all(
+    target_arch = "aarch64",
+    target_feature = "neon",
+    target_endian = "little"
+))]
 #[inline]
 fn subfield_prefix<F: ByteCoordinates, const INVERSE: bool>(
     lo: &mut [F],
     hi: &mut [F],
     width: TwiddleWidth,
 ) -> usize {
+    use core::arch::aarch64::uint8x16_t;
+
+    use crate::lanes::ByteRegister;
     use crate::neon;
 
-    // Same layout contract as the x86 kernel, and a register holds whole elements.
+    // The byte layout only holds where the bytes run from the low coordinate up.
+    //
+    // That is a little-endian target, which the gate on this function already requires.
     const {
-        assert!(cfg!(target_endian = "little"));
+        // One element is its whole backing integer, so its size is its coordinate count.
         assert!(size_of::<F>() == 1 << (F::LOG_BITS - 3));
-        assert!(neon::REGISTER_BYTES.is_multiple_of(size_of::<F>()));
+
+        // A register is sixteen bytes, so a whole number of them is a whole number of elements.
+        assert!(<uint8x16_t as ByteRegister>::BYTES.is_multiple_of(size_of::<F>()));
     }
 
     let TwiddleWidth::Byte(t) = width else {
@@ -392,7 +409,11 @@ fn subfield_prefix<F: ByteCoordinates, const INVERSE: bool>(
         return 0;
     }
 
-    // SAFETY: `ByteCoordinates` guarantees each element is exactly its bytes.
+    // SAFETY: the marker trait's contract makes each run exactly that many initialised bytes.
+    //
+    // It rules out padding, and any byte pattern a write could turn into an invalid element.
+    // The two runs are halves of one split slice, so no byte belongs to both.
+    // The runs have equal length, so one byte count is in bounds for both.
     let (lo, hi) = unsafe {
         (
             core::slice::from_raw_parts_mut(lo.as_mut_ptr().cast::<u8>(), bytes),
@@ -416,7 +437,11 @@ fn subfield_prefix<F: ByteCoordinates, const INVERSE: bool>(
         target_feature = "avx512f",
         target_feature = "avx512bw"
     ),
-    all(target_arch = "aarch64", target_feature = "neon")
+    all(
+        target_arch = "aarch64",
+        target_feature = "neon",
+        target_endian = "little"
+    )
 )))]
 #[inline]
 const fn subfield_prefix<F: ByteCoordinates, const INVERSE: bool>(
