@@ -38,6 +38,7 @@
 //! See [`InterpolateArbitrary`] for the matrix-level entry points and
 //! [`interpolate_lagrange`] for a single-polynomial convenience helper.
 
+use alloc::vec;
 use alloc::vec::Vec;
 
 use p3_field::coset::TwoAdicMultiplicativeCoset;
@@ -64,6 +65,11 @@ use crate::dense::RowMajorMatrix;
 /// # Performance
 ///
 /// One extension-field inversion + N parallel extension-field subtractions.
+///
+/// # Panics
+///
+/// Panics if `point` is zero: the adjusted form factors `1/z` out of every weight, so it
+/// does not exist there. [`Interpolate::interpolate_coset`] handles that point itself.
 pub fn compute_adjusted_weights<EF: Field>(point: EF, diff_invs: &[EF]) -> Vec<EF> {
     // Single inversion of z, amortised over all N weights.
     let point_inv = point.inverse();
@@ -113,6 +119,16 @@ pub trait Interpolate<F: TwoAdicField>: Matrix<F> {
             return self.row(i).unwrap().into_iter().map(EF::from).collect();
         }
 
+        // At z = 0 every Lagrange basis polynomial of the coset takes the value 1/N, so the
+        // evaluation is the column mean. The adjusted-weight form below factors 1/z out of
+        // each weight and cannot express this point.
+        if point.is_zero() {
+            let ones = vec![EF::ONE; self.height()];
+            let mut evals = self.columnwise_dot_product(&ones);
+            scale_slice_in_place_single_core(&mut evals, EF::ONE.div_2exp_u64(log_height as u64));
+            return evals;
+        }
+
         let diff_invs = batch_multiplicative_inverse(&diffs);
 
         // Convert to adjusted weights and delegate to the zero-allocation hot path.
@@ -148,7 +164,7 @@ pub trait Interpolate<F: TwoAdicField>: Matrix<F> {
     ///
     /// # Correctness requirements
     ///
-    /// - The evaluation point must not lie in the coset.
+    /// - The evaluation point must not lie in the coset and must not be zero.
     /// - Each weight must equal 1/(z - x_i) - 1/z for the corresponding coset element.
     ///
     /// # Performance
@@ -576,6 +592,26 @@ mod tests {
 
         let result = evals_mat.interpolate_coset(shift, point);
         assert_eq!(result, vec![c]);
+    }
+
+    #[test]
+    fn test_interpolate_coset_at_zero() {
+        // f(x) = 3 + 2x + 5x^2 + 7x^3 over a shifted coset of size 8: f(0) is the constant
+        // term, and the point is off the coset because the shift is non-zero.
+        let coeffs = [3, 2, 5, 7].map(F::from_u32);
+        let shift = F::GENERATOR;
+        let evals: Vec<F> = eval_poly_on_coset(&coeffs, shift, 3);
+        let m = RowMajorMatrix::new(evals, 1);
+
+        assert_eq!(m.interpolate_coset(shift, F::ZERO), vec![coeffs[0]]);
+        assert_eq!(
+            m.interpolate_coset(shift, EF4::ZERO),
+            vec![EF4::from(coeffs[0])]
+        );
+
+        let on_subgroup: Vec<F> = eval_poly_on_coset(&coeffs, F::ONE, 3);
+        let m = RowMajorMatrix::new(on_subgroup, 1);
+        assert_eq!(m.interpolate_subgroup(F::ZERO), vec![coeffs[0]]);
     }
 
     #[test]
