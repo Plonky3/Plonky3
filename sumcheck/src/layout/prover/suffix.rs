@@ -1391,9 +1391,6 @@ mod tests {
         );
     }
 
-    /// The challenge field as its own representation, taking tables through the default map.
-    impl FromTable<Self> for BabyBearExt4 {}
-
     /// Records a claim set that exercises every column arity of the weight combiner, then checks
     /// that combining in `R` lands on the image of combining in `EF`.
     ///

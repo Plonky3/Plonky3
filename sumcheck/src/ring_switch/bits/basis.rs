@@ -4,6 +4,7 @@ use alloc::vec::Vec;
 use core::marker::PhantomData;
 
 use p3_binary_field::TowerLevel;
+use p3_field::Field;
 
 /// The widest tower level these coordinates hold.
 ///
@@ -131,20 +132,30 @@ impl<EF: TowerLevel> Coefficients<EF> {
 /// ```
 ///
 /// So a sum costs one table read per byte, however many coordinates are set.
+///
+/// # Two fields
+///
+/// `EF` is the level whose coordinates index the weights, and `A` is what a weight is.
+///
+/// The two part company when the caller wants the sums in a field isomorphic to `EF`:
+/// a subset sum is additive, and a field isomorphism of characteristic two carries
+/// addition, so tabulating the image of each weight gives the image of each sum.
 #[derive(Clone, Debug)]
-pub(crate) struct CoordinateSums<EF> {
+pub(crate) struct CoordinateSums<EF, A> {
     /// Per byte position, the weight sum over every subset of its eight coordinates.
-    tables: Vec<[EF; 256]>,
+    tables: Vec<[A; 256]>,
+    /// Marker for the level the coordinates are read from.
+    _ef: PhantomData<EF>,
 }
 
-impl<EF: TowerLevel> CoordinateSums<EF> {
+impl<EF: TowerLevel, A: Field> CoordinateSums<EF, A> {
     /// Tabulate the subset sums of one weight per coordinate.
     ///
     /// # Panics
     ///
     /// Panics unless there is exactly one weight per coordinate.
     #[must_use]
-    pub(crate) fn new(weights: &[EF]) -> Self {
+    pub(crate) fn new(weights: &[A]) -> Self {
         assert_eq!(
             weights.len(),
             Coefficients::<EF>::DIMENSION,
@@ -152,24 +163,27 @@ impl<EF: TowerLevel> CoordinateSums<EF> {
         );
         let tables = (0..EF::NUM_BYTES)
             .map(|position| {
-                let mut table = [EF::ZERO; 256];
+                let mut table = [A::ZERO; 256];
                 // Each subset extends the one without its lowest coordinate by that coordinate.
                 // A coordinate past a sub-byte level's width is never set, so it weighs nothing.
                 for subset in 1..256usize {
                     let lowest = position * 8 + subset.trailing_zeros() as usize;
                     table[subset] = table[subset & (subset - 1)]
-                        + weights.get(lowest).copied().unwrap_or(EF::ZERO);
+                        + weights.get(lowest).copied().unwrap_or(A::ZERO);
                 }
                 table
             })
             .collect();
-        Self { tables }
+        Self {
+            tables,
+            _ef: PhantomData,
+        }
     }
 
     /// The sum of the weights over the coordinates `value` has set.
     #[inline]
     #[must_use]
-    pub(crate) fn sum(&self, value: EF) -> EF {
+    pub(crate) fn sum(&self, value: EF) -> A {
         self.tables
             .iter()
             .zip(value.into_bytes())

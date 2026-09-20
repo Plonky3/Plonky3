@@ -205,6 +205,11 @@ where
     pub(crate) fn weights(&mut self) -> Poly<R> {
         self.inner.weights()
     }
+
+    /// Returns the current evaluation table, applying any outstanding binding first.
+    pub(crate) fn evals(&mut self) -> Poly<R> {
+        self.inner.evals()
+    }
 }
 
 /// A field that takes a whole table of another field's elements at once.
@@ -241,7 +246,12 @@ where
     }
 }
 
-impl FromTable<Self> for BinaryField64 {}
+/// The identity map, which hands back the table it was given.
+impl<T: Field> FromTable<T> for T {
+    fn from_table(table: Vec<Self>) -> Vec<Self> {
+        table
+    }
+}
 
 impl FromTable<BinaryField64> for Poly64 {
     /// Converts the table in its existing allocation.
@@ -301,9 +311,6 @@ mod tests {
         let sum = poly.dot_product();
         SumcheckProver::new(poly, sum)
     }
-
-    /// The field as its own representation, taking tables through the default map.
-    impl FromTable<Self> for F {}
 
     /// Plays the challenge-field transcript through a prover represented in `R`.
     fn assert_repr_rounds_play_the_challenge_field_transcript<R>()
