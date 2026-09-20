@@ -12,13 +12,15 @@
 //! The second binds the committed word index.
 //! Source words remain bit-packed until the first point has been sampled.
 //!
-//! Shift spellings are verifier-fixed metadata, so they are summed exactly instead of opened as
-//! prover polynomials. Each two-slot operator is evaluated as `inner^T(outer^T(output))`, which
-//! preserves composition order without adding sampled shift-code variables.
+//! Shift spellings are verifier-fixed metadata, so they are summed exactly rather than opened as prover polynomials.
 //!
-//! A false operand claim either survives as a false final opening or hits a batching or sumcheck
-//! collision. Before the PCS opening, that algebraic error is
-//! `(4 + 2 * (log2(word_bits) + log2(padded_words))) / |EF|`.
+//! A two-slot operator applies the outer transpose first and the inner one second.
+//!
+//! That ordering preserves composition without adding sampled shift-code variables.
+//!
+//! A false operand claim either survives as a false final opening or hits a batching or sumcheck collision.
+//!
+//! Before the PCS opening that algebraic error is `(4 + 2 * (log2(word_bits) + log2(padded_words))) / |EF|`.
 
 mod claim;
 mod error;
