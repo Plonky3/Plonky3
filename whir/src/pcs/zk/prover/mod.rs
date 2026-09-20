@@ -329,7 +329,9 @@ where
                 self.open_and_fold(&round_data, &stir_indexes, &batch.randomness);
             let query_vars: Vec<F> = stir_indexes
                 .iter()
-                .map(|&index| round_params.folded_domain_gen.exp_u64(index as u64))
+                .map(|&index| {
+                    F::two_adic_generator(round_params.log_folded_domain_size).exp_u64(index as u64)
+                })
                 .collect();
             let query_points: Vec<EF> = query_vars.iter().map(|&x| EF::from(x)).collect();
 

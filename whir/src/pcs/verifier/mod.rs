@@ -7,7 +7,7 @@ use errors::VerifierError;
 use p3_challenger::fs::TranscriptField;
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
 use p3_commit::{ExtensionMmcs, Mmcs};
-use p3_field::{ExtensionField, Field, TwoAdicField};
+use p3_field::{ExtensionField, Field};
 use p3_matrix::Dimensions;
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
@@ -20,6 +20,7 @@ use tracing::instrument;
 
 use super::committer::reader::ParsedCommitment;
 use crate::alloc::string::ToString;
+use crate::domain::{WhirDomain, WhirQueryPoint};
 use crate::parameters::{RoundConfig, WhirConfig};
 use crate::pcs::proof::{QueryOpenings, WhirProof};
 use crate::transcript::{WhirShape, WhirVerifierTranscript};
@@ -33,7 +34,7 @@ pub mod errors;
 ///
 /// - Config and Merkle scheme are borrowed for the lifetime of the check.
 /// - Nothing is cloned across `verify`.
-/// - Construction is `const`; spinning up a fresh verifier per proof is free.
+/// - Construction only checks the config against the domain, so a fresh verifier per proof is cheap.
 ///
 /// # Variable order
 ///
@@ -45,7 +46,7 @@ pub mod errors;
 ///     Suffix:  fold(rs.rev())   -> same checks, reversed binding
 /// ```
 #[derive(Debug)]
-pub struct WhirVerifier<'a, EF, F, MT, Challenger>
+pub struct WhirVerifier<'a, EF, F, Dft, MT, Challenger>
 where
     F: Field,
     EF: ExtensionField<F>,
@@ -55,14 +56,17 @@ where
     pub(crate) config: &'a WhirConfig<EF, F, Challenger>,
     /// Base-field Merkle commitment scheme used to authenticate STIR queries.
     pub(crate) mmcs: &'a MT,
+    /// Domain implementation used to reconstruct queried evaluation points.
+    pub(crate) domain: &'a Dft,
     /// Binding direction used to interpret folding randomness.
     pub(crate) variable_order: VariableOrder,
 }
 
-impl<'a, EF, F, MT, Challenger> WhirVerifier<'a, EF, F, MT, Challenger>
+impl<'a, EF, F, Dft, MT, Challenger> WhirVerifier<'a, EF, F, Dft, MT, Challenger>
 where
-    F: TwoAdicField + TranscriptField,
-    EF: ExtensionField<F> + TwoAdicField,
+    F: Field + TranscriptField,
+    EF: ExtensionField<F>,
+    Dft: WhirDomain<F, EF>,
     MT: Mmcs<F>,
     Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F> + CanSampleUniformBits<F>,
 {
@@ -71,15 +75,43 @@ where
     /// # Arguments
     ///
     /// - `config`         — derived per-protocol parameters and per-round configuration.
+    /// - `domain`         — code and evaluation-point map used by every query.
     /// - `mmcs`           — base-field Merkle commitment scheme used to authenticate STIR queries.
     /// - `variable_order` — binding direction the prover declared at commit time.
-    pub const fn new(
+    ///
+    /// # Panics
+    ///
+    /// Panics when the configuration was derived for another domain.
+    pub fn new(
         config: &'a WhirConfig<EF, F, Challenger>,
+        domain: &'a Dft,
         mmcs: &'a MT,
         variable_order: VariableOrder,
     ) -> Self {
+        // The verifier must reconstruct the same code and query schedule as the prover.
+        assert_eq!(
+            config.max_log_domain_size,
+            domain.max_log_domain_size(),
+            "WHIR configuration and domain have different capacities"
+        );
+        assert_eq!(
+            config.domain_id,
+            domain.protocol_id(),
+            "WHIR configuration and domain have different protocol identities"
+        );
+        assert_eq!(
+            config.stratified_queries,
+            domain.stratified_queries(),
+            "WHIR configuration and domain disagree on query stratification"
+        );
+        assert!(
+            domain.supports_security_assumption(config.soundness_type),
+            "WHIR configuration uses a soundness regime the domain rejects"
+        );
+
         Self {
             config,
+            domain,
             mmcs,
             variable_order,
         }
@@ -378,7 +410,7 @@ where
         &self,
         proof: &WhirProof<F, EF, MT>,
         transcript: &mut WhirVerifierTranscript<'_, Challenger, F, EF>,
-        params: &RoundConfig<F>,
+        params: &RoundConfig,
         commitment: &MT::Commitment,
         folding_randomness: &Point<EF>,
         round_index: usize,
@@ -418,16 +450,22 @@ where
             .map(|answer| Poly::new(answer).eval_ext::<F>(&query_randomness))
             .collect();
 
-        let stir_constraints = stir_challenges_indexes
-            .iter()
-            .map(|&index| params.folded_domain_gen.exp_u64(index as u64))
-            .collect();
-
-        Ok(SelectStatement::new(
-            params.num_variables,
-            stir_constraints,
-            folds,
-        ))
+        let mut statement = SelectStatement::initialize(params.num_variables);
+        for (&index, evaluation) in stir_challenges_indexes.iter().zip(folds) {
+            match self.domain.query_point(
+                params.log_folded_domain_size,
+                params.num_variables,
+                index,
+            ) {
+                WhirQueryPoint::Univariate(var) => {
+                    statement.add_constraint(var, evaluation);
+                }
+                WhirQueryPoint::Multilinear(point) => {
+                    statement.add_point_constraint(point, evaluation);
+                }
+            }
+        }
+        Ok(statement)
     }
 
     /// Verify the Merkle multi-opening of one round at the given indices.
@@ -502,7 +540,7 @@ where
     }
 }
 
-impl<EF, F, MT, Challenger> Deref for WhirVerifier<'_, EF, F, MT, Challenger>
+impl<EF, F, Dft, MT, Challenger> Deref for WhirVerifier<'_, EF, F, Dft, MT, Challenger>
 where
     F: Field,
     EF: ExtensionField<F>,

@@ -575,9 +575,8 @@ fn security_small_base_challenges_cannot_claim_a_large_target() {
 #[test]
 fn opening_budget_failure_preserves_challenger() {
     use p3_challenger::CanSample;
-    let mut config = config_for(16, NUM_COLS);
     let folding_factor = FoldingFactor::Constant(FOLDING);
-    config.pcs.config = WhirConfig::new(
+    let whir_config = WhirConfig::new(
         17,
         ProtocolParameters {
             security_level: 100,
@@ -589,6 +588,14 @@ fn opening_budget_failure_preserves_challenger() {
         },
     )
     .unwrap();
+    let config = WhirConfigForTest {
+        pcs: TestPcs::new(
+            whir_config,
+            MyDft::default(),
+            MyMmcs::new(MyHash::new(perm()), MyCompress::new(perm()), 0),
+        ),
+        collision_bits: config_for(16, NUM_COLS).collision_bits,
+    };
     let air = FibAir;
     let (pk, _) = setup(&config, &[&air], &mut challenger()).unwrap();
     let trace = fib_trace(1 << 16);

@@ -5,7 +5,7 @@ use core::ops::Mul;
 use p3_binary_field::poly_basis::HAS_HARDWARE_CLMUL;
 use p3_binary_field::{
     BinaryField2, BinaryField4, BinaryField8, BinaryField16, BinaryField32, BinaryField64,
-    BinaryField128, Gf2, Ghash128, TowerLevel,
+    BinaryField128, Gf2, Ghash128, Poly64, TowerLevel,
 };
 use p3_field::{PackedValue, PrimeCharacteristicRing};
 
@@ -486,6 +486,13 @@ impl ButterflyField for BinaryField4 {
 }
 
 impl ButterflyField for Ghash128 {
+    #[inline]
+    fn butterfly<const INVERSE: bool>(lo: &mut [Self], hi: &mut [Self], t: Self) {
+        plain_butterfly::<Self, INVERSE>(lo, hi, t);
+    }
+}
+
+impl ButterflyField for Poly64 {
     #[inline]
     fn butterfly<const INVERSE: bool>(lo: &mut [Self], hi: &mut [Self], t: Self) {
         plain_butterfly::<Self, INVERSE>(lo, hi, t);

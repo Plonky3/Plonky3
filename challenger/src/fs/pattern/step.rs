@@ -134,6 +134,17 @@ pub enum TypeTag {
         /// Keccak-256 of the explicit defining-relations and ordered-basis identity.
         basis: [u8; 32],
     },
+    /// Coefficients in a binary field represented modulo a polynomial.
+    BinaryPolynomial {
+        /// Number of bits in each coefficient-field element.
+        bits: usize,
+        /// Low coefficients of the monic defining polynomial.
+        modulus: u128,
+        /// Number of coefficient-field elements per value.
+        degree: usize,
+        /// Digest of the extension's defining relations and ordered basis.
+        basis: [u8; 32],
+    },
     /// A value whose encoding belongs to the challenger, not to this layer.
     ///
     /// A commitment is the usual case.
@@ -441,6 +452,18 @@ impl Display for TypeTag {
                 basis,
             } => {
                 write!(f, "BinaryTower({bits}^{degree};")?;
+                for byte in basis {
+                    write!(f, "{byte:02x}")?;
+                }
+                write!(f, ")")
+            }
+            Self::BinaryPolynomial {
+                bits,
+                modulus,
+                degree,
+                basis,
+            } => {
+                write!(f, "BinaryPolynomial({bits},0x{modulus:x}^{degree};")?;
                 for byte in basis {
                     write!(f, "{byte:02x}")?;
                 }
