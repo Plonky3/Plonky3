@@ -817,6 +817,46 @@ mod tests {
     }
 
     #[test]
+    fn dynamic_coordinate_map_handles_empty_and_dispatch_boundaries() {
+        let columns = core::array::from_fn(|index| Ghash128::from_repr(1u128 << (127 - index)));
+
+        for len in [0, 4095, 4096, 4097] {
+            let input = (0..len)
+                .map(|index| BinaryField128::from_repr(1u128 << (index % 128)))
+                .collect::<Vec<_>>();
+            let poison = Ghash128::from_repr(u128::MAX);
+            let mut output = vec![poison; len];
+            let accepted = Ghash128::try_map_tower_coordinates_into(&columns, &input, &mut output);
+
+            #[cfg(all(
+                target_arch = "x86_64",
+                target_feature = "gfni",
+                target_feature = "avx512f",
+                target_feature = "avx512bw"
+            ))]
+            assert_eq!(accepted, len >= 4096, "length {len}");
+            #[cfg(not(all(
+                target_arch = "x86_64",
+                target_feature = "gfni",
+                target_feature = "avx512f",
+                target_feature = "avx512bw"
+            )))]
+            assert!(!accepted, "portable length {len}");
+
+            if accepted {
+                let expected = input
+                    .iter()
+                    .copied()
+                    .map(|value| column_walk(&columns, value))
+                    .collect::<Vec<_>>();
+                assert_eq!(output, expected, "length {len}");
+            } else {
+                assert!(output.iter().all(|&value| value == poison), "length {len}");
+            }
+        }
+    }
+
+    #[test]
     fn dynamic_coordinate_map_handles_singular_and_mixed_columns() {
         let maps = [
             [Ghash128::ZERO; 128],

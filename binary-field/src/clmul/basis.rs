@@ -605,7 +605,8 @@ mod blocked {
 
     /// Applies a prepared map out of place to complete 64-element blocks.
     ///
-    /// The source is loaded before any destination store, and the caller handles the remainder.
+    /// Each source block is loaded before that block's destination stores, and the caller handles
+    /// the remainder.
     #[inline(never)]
     pub(super) fn apply_out_of_place(
         prepared: &PreparedMap,
@@ -1029,6 +1030,29 @@ mod tests {
             assert_eq!(tower_to_poly_128_slice(&mut values), want, "len {len}");
             assert_eq!(poly_to_tower_128_slice(&mut values), want, "len {len}");
         }
+    }
+
+    /// The dynamic kernel reports exactly its complete-block prefix and leaves the caller's tail
+    /// untouched for the independent scalar path.
+    #[cfg(all(
+        target_arch = "x86_64",
+        target_feature = "gfni",
+        target_feature = "avx512f",
+        target_feature = "avx512bw"
+    ))]
+    #[test]
+    fn dynamic_prepared_map_reports_prefix_and_leaves_tail_untouched() {
+        let columns = core::array::from_fn(|index| 1u128 << index);
+        let input = sample(4097);
+        let poison = SENTINEL;
+        let mut output = alloc::vec![poison; input.len()];
+        let prepared = blocked::PreparedMap::new(columns);
+
+        let processed = blocked::apply_out_of_place(&prepared, &input, &mut output);
+
+        assert_eq!(processed, 4096);
+        assert_eq!(&output[..processed], &input[..processed]);
+        assert!(output[processed..].iter().all(|&value| value == poison));
     }
 
     /// Diagnostic-only native benchmark for the runtime-map constructor and prepared kernel.
