@@ -11,7 +11,7 @@ use p3_matrix::stack::ViewPair;
 use crate::boundary::{self, BoundaryPublic};
 use crate::{
     Air, AirBuilder, AirBuilderWithContext, BaseAir, ExtensionBuilder, Name, NamedAirBuilder,
-    NamedExtensionBuilder, PermutationAirBuilder, RowWindow, check_periodic_column_lengths,
+    NamedExtensionBuilder, PermutationAirBuilder, RowWindow,
 };
 
 /// A single constraint violation captured during debug evaluation.
@@ -477,19 +477,50 @@ fn boundary_io_label(cell: &BoundaryPublic) -> String {
 
 /// Reject a periodic column whose shape the trace cannot carry.
 ///
+/// A column of length `p` holds the evaluations of one polynomial over a subgroup of order `p`.
+///
+/// - Such a subgroup exists only when `p` is a power of two.
+/// - It tiles the rows only when `p` divides the height.
+///
+/// ```text
+///     height 8,  length 2   [0,1][0,1][0,1][0,1]       tiles
+///     height 8,  length 16  [0,1,...,7|8,...,15]       truncated
+///     height 12, length 8   [0,...,7][0,1,2,3|4,...]   partial repeat
+/// ```
+///
 /// The debug run reads periodic values through a wrapping row lookup.
 ///
-/// That lookup accepts a column of any non-zero length, so the shape is screened separately.
+/// That lookup accepts a column of any non-zero length, so it never exposes the mistake.
+/// The commitment layer does, but only once a proof is being built or verified.
 ///
-/// Doing it here keeps the diagnosis in the layer that owns the AIR.
+/// Screening here turns that late failure into one an AIR author sees on the first debug run.
+///
+/// This is a diagnostic, not a precondition.
+/// The commitment layer screens for itself and does not rely on this.
 ///
 /// # Panics
 ///
 /// Panics when a declared column cannot be laid over the given number of rows.
 fn assert_periodic_column_shapes<F: Clone, A: BaseAir<F>>(air: &A, height: usize) {
-    // Screening the declared columns is what keeps this verdict and the verifier's in step.
-    if let Err(err) = check_periodic_column_lengths(&air.periodic_columns(), height) {
-        panic!("debug constraint check rejected the AIR: {err}");
+    for (index, column) in air.periodic_columns().iter().enumerate() {
+        // The length is how many values the column lists before repeating.
+        let length = column.len();
+
+        // Powers of two are the orders for which a two-adic subgroup exists.
+        // Zero fails here, ahead of the row lookup that would divide by it.
+        assert!(
+            length.is_power_of_two(),
+            "debug constraint check rejected the AIR: \
+             periodic column {index} has length {length}, which is not a power of two"
+        );
+
+        // Divisibility lands every repetition on a whole copy of that subgroup.
+        assert!(
+            height.is_multiple_of(length),
+            "debug constraint check rejected the AIR: \
+             periodic column {index} has length {length}, \
+             which does not divide the trace height {height}"
+        );
     }
 }
 

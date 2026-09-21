@@ -4,11 +4,12 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use itertools::Itertools;
-pub use p3_air::check_periodic_column_lengths;
 use p3_air::symbolic::SymbolicAirBuilder;
 use p3_air::{Air, RowWindow};
 use p3_challenger::GrindingChallenger;
-use p3_commit::{CommitmentWithOpeningPoints, Pcs, PolynomialSpace, UnivariateStarkPcs};
+use p3_commit::{
+    CommitmentWithOpeningPoints, Pcs, PeriodicColumns, PolynomialSpace, UnivariateStarkPcs,
+};
 use p3_field::{BasedVectorSpace, ExtensionField, Field, PrimeCharacteristicRing};
 use p3_matrix::dense::RowMajorMatrixView;
 use p3_matrix::stack::VerticalPair;
@@ -346,11 +347,11 @@ where
     }
 
     // Periodic columns are AIR logic; a malformed one must error, not panic.
-    let periodic_columns = air.periodic_columns();
-    check_periodic_column_lengths(&periodic_columns, init_trace_domain.size())?;
+    let declared = air.periodic_columns();
+    let periodic_columns = PeriodicColumns::new(&declared, init_trace_domain.size())?;
 
     let periodic_values: Vec<SC::Challenge> =
-        init_trace_domain.evaluate_periodic_columns_at(&periodic_columns, zeta);
+        init_trace_domain.evaluate_periodic_columns_at(periodic_columns, zeta);
 
     let zeta_next = init_trace_domain
         .next_point(zeta)

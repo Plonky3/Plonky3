@@ -29,7 +29,7 @@
 
 use alloc::vec::Vec;
 
-use p3_commit::{PeriodicEvaluator, PeriodicLdeTable};
+use p3_commit::{PeriodicColumns, PeriodicEvaluator, PeriodicLdeTable};
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::coset::TwoAdicMultiplicativeCoset;
 use p3_field::{ExtensionField, TwoAdicField};
@@ -77,10 +77,6 @@ impl<Dft> TwoAdicPeriodicEvaluator<Dft> {
         F: TwoAdicField,
         Dft: TwoAdicSubgroupDft<F>,
     {
-        if periodic_table.is_empty() {
-            return PeriodicLdeTable::empty();
-        }
-
         let trace_len = trace_domain.size();
         let lde_len = lde_domain.size();
         assert!(
@@ -99,9 +95,14 @@ impl<Dft> TwoAdicPeriodicEvaluator<Dft> {
         );
         let log_blowup = log2_strict_usize(blowup);
 
-        assert_periodic_column_shapes(periodic_table, trace_len);
+        // A malformed declaration is a bug in the AIR the prover was handed, not proof data.
+        let periodic_table =
+            PeriodicColumns::new(periodic_table, trace_len).unwrap_or_else(|err| panic!("{err}"));
 
-        let max_period = periodic_table.iter().map(|c| c.len()).max().unwrap();
+        // No declared column means no table, and no longest period to pad up to.
+        let Some(max_period) = periodic_table.max_period() else {
+            return PeriodicLdeTable::empty();
+        };
 
         let extended_height = max_period
             .checked_mul(blowup)
@@ -123,7 +124,7 @@ impl<Dft> TwoAdicPeriodicEvaluator<Dft> {
         // Build the result in column-major order first, then transpose to row-major
         let mut columns: Vec<Vec<F>> = Vec::with_capacity(num_cols);
 
-        for col in periodic_table {
+        for col in periodic_table.as_slice() {
             let period = col.len();
 
             // Pad column to max_period by repeating values
@@ -169,9 +170,13 @@ where
         point: EF,
     ) -> Vec<EF> {
         let trace_len = trace_domain.size();
-        assert_periodic_column_shapes(periodic_table, trace_len);
+
+        // A malformed declaration is a bug in the AIR, so there is no proof-shape error to raise.
+        let periodic_table =
+            PeriodicColumns::new(periodic_table, trace_len).unwrap_or_else(|err| panic!("{err}"));
 
         periodic_table
+            .as_slice()
             .iter()
             .map(|col| {
                 let period = col.len();
@@ -183,38 +188,6 @@ where
                 eval_periodic_poly(col, periodic_point)
             })
             .collect()
-    }
-}
-
-/// Reject periodic columns the trace domain cannot carry.
-///
-/// A column of length `p` holds the evaluations of one polynomial over a subgroup of order `p`.
-///
-/// - Such a subgroup exists only when `p` is a power of two.
-/// - It embeds in the trace domain only when `p` divides its size.
-///
-/// Both evaluation paths depend on that relation, so both screen for it before any work.
-///
-/// # Panics
-///
-/// - A length that is not a power of two, zero included.
-/// - A length that does not divide the trace domain size.
-fn assert_periodic_column_shapes<F>(periodic_table: &[Vec<F>], trace_len: usize) {
-    for col in periodic_table {
-        // The period is how many values the column lists before repeating.
-        let period = col.len();
-
-        // Zero is not a power of two, so an empty column is caught by this assertion too.
-        assert!(
-            period.is_power_of_two(),
-            "periodic column length must be a non-zero power of 2, got {period}",
-        );
-
-        // Divisibility lands every repetition on a whole copy of that subgroup.
-        assert!(
-            trace_len.is_multiple_of(period),
-            "trace domain size ({trace_len}) must be divisible by periodic column length ({period})",
-        );
     }
 }
 
@@ -323,7 +296,7 @@ mod tests {
     //
     // The table build extrapolates by DFT, which needs that subgroup, so it must refuse.
     #[test]
-    #[should_panic(expected = "periodic column length must be a non-zero power of 2, got 3")]
+    #[should_panic(expected = "periodic column 0 has length 3, which is not a power of two")]
     fn lde_table_rejects_a_non_power_of_two_column() {
         let (trace, lde) = domains();
         let table = vec![vec![F::ONE, F::TWO, F::from_u64(3)]];
@@ -339,7 +312,7 @@ mod tests {
     // integer here, so the point-wise evaluation must refuse as well.
     #[test]
     #[should_panic(
-        expected = "trace domain size (8) must be divisible by periodic column length (16)"
+        expected = "periodic column 0 has length 16, which does not divide the trace height 8"
     )]
     fn point_evaluation_rejects_a_column_longer_than_the_trace() {
         let (trace, _) = domains();

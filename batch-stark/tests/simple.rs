@@ -25,7 +25,7 @@ use p3_lookup::{Count, InteractionBuilder, LookupError, LookupTerminal};
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_security::grinding::{GrindingBudget, GrindingSites, RecordedGrind};
-use p3_uni_stark::{InvalidProofShapeError, OpeningShape, PeriodicColumnError};
+use p3_uni_stark::{InvalidProofShapeError, OpeningShape, PeriodicColumnShapeError};
 use p3_util::log2_strict_usize;
 
 const TWO_ADIC_FIXTURE: &str = "tests/fixtures/batch_stark_two_adic_v0_8_0.postcard";
@@ -835,12 +835,12 @@ fn periodic_column_non_power_of_two_is_rejected() {
     };
     let result = verify_batch(&config, &[bad], &proof, &[vec![]], common);
 
-    // The shared check fires here exactly as it does in the single-AIR verifier.
+    // The shape rule fires here exactly as it does in the single-AIR verifier.
     assert!(
         matches!(
             result,
             Err(BatchVerificationError::Verification(
-                VerificationError::PeriodicColumn(PeriodicColumnError::LengthNotPowerOfTwo {
+                VerificationError::PeriodicColumn(PeriodicColumnShapeError::LengthNotPowerOfTwo {
                     index: 0,
                     length: 3
                 })

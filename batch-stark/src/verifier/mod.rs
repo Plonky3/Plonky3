@@ -5,9 +5,11 @@ use alloc::vec::Vec;
 
 pub use data::VerifierData;
 use p3_air::symbolic::{AirLayout, SymbolicExpressionExt};
-use p3_air::{Air, BaseAir, check_periodic_column_lengths};
+use p3_air::{Air, BaseAir};
 use p3_challenger::GrindingChallenger;
-use p3_commit::{CommitmentWithOpeningPoints, Pcs, PolynomialSpace, UnivariateStarkPcs};
+use p3_commit::{
+    CommitmentWithOpeningPoints, Pcs, PeriodicColumns, PolynomialSpace, UnivariateStarkPcs,
+};
 use p3_field::{Algebra, BasedVectorSpace, ExtensionField, PrimeCharacteristicRing, PrimeField64};
 use p3_lookup::logup::LogUpGadget;
 use p3_lookup::{
@@ -804,11 +806,11 @@ where
         let perm_vals: Vec<SC::Challenge> = lookup_terminals[i].iter().map(|t| t.0).collect();
 
         // Periodic columns are AIR logic; a malformed one must error, not panic.
-        let periodic_columns = air.periodic_columns();
-        check_periodic_column_lengths(&periodic_columns, trace_domains[i].size())?;
+        let declared = air.periodic_columns();
+        let periodic_columns = PeriodicColumns::new(&declared, trace_domains[i].size())?;
 
         let periodic_values: Vec<Challenge<SC>> =
-            trace_domains[i].evaluate_periodic_columns_at(&periodic_columns, zeta);
+            trace_domains[i].evaluate_periodic_columns_at(periodic_columns, zeta);
         let verifier_data = VerifierData {
             trace_local: &opened_values.instances[i].base_opened_values.trace_local,
             trace_next: trace_next_ref,

@@ -3,7 +3,7 @@
 use core::fmt::Debug;
 
 use p3_lookup::LookupError;
-use p3_uni_stark::{InvalidProofShapeError, PeriodicColumnError, VerificationError};
+use p3_uni_stark::{InvalidProofShapeError, PeriodicColumnShapeError, VerificationError};
 use thiserror::Error;
 
 use crate::transcript::BatchTranscriptFailure;
@@ -45,8 +45,8 @@ impl<PcsErr: Debug> From<InvalidProofShapeError> for BatchVerificationError<PcsE
     }
 }
 
-impl<PcsErr: Debug> From<PeriodicColumnError> for BatchVerificationError<PcsErr> {
-    fn from(err: PeriodicColumnError) -> Self {
+impl<PcsErr: Debug> From<PeriodicColumnShapeError> for BatchVerificationError<PcsErr> {
+    fn from(err: PeriodicColumnShapeError) -> Self {
         Self::Verification(VerificationError::PeriodicColumn(err))
     }
 }

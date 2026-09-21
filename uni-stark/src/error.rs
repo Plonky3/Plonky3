@@ -3,7 +3,7 @@
 use alloc::format;
 use alloc::string::String;
 
-pub use p3_air::PeriodicColumnError;
+pub use p3_commit::PeriodicColumnShapeError;
 use thiserror::Error;
 
 use crate::StarkTranscriptFailure;
@@ -162,7 +162,7 @@ where
     InvalidProofShape(#[from] InvalidProofShapeError),
     /// A periodic column declared by the AIR cannot be evaluated.
     #[error(transparent)]
-    PeriodicColumn(#[from] PeriodicColumnError),
+    PeriodicColumn(#[from] PeriodicColumnShapeError),
     /// An error occurred while verifying the claimed openings.
     #[error("invalid opening argument: {0:?}")]
     InvalidOpeningArgument(PcsErr),

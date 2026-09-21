@@ -11,7 +11,9 @@ use p3_fri::{FriParameters, TwoAdicFriPcs};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
-use p3_uni_stark::{PcsError, PeriodicColumnError, StarkConfig, VerificationError, prove, verify};
+use p3_uni_stark::{
+    PcsError, PeriodicColumnShapeError, StarkConfig, VerificationError, prove, verify,
+};
 use rand::SeedableRng;
 use rand::rngs::SmallRng;
 
@@ -126,7 +128,7 @@ fn empty_periodic_column_is_rejected() {
         matches!(
             result,
             Err(VerificationError::PeriodicColumn(
-                PeriodicColumnError::LengthNotPowerOfTwo {
+                PeriodicColumnShapeError::LengthNotPowerOfTwo {
                     index: 0,
                     length: 0
                 }
@@ -145,7 +147,7 @@ fn non_power_of_two_periodic_column_is_rejected() {
         matches!(
             result,
             Err(VerificationError::PeriodicColumn(
-                PeriodicColumnError::LengthNotPowerOfTwo {
+                PeriodicColumnShapeError::LengthNotPowerOfTwo {
                     index: 0,
                     length: 3
                 }
@@ -168,7 +170,7 @@ fn oversized_periodic_column_is_rejected() {
         matches!(
             result,
             Err(VerificationError::PeriodicColumn(
-                PeriodicColumnError::LengthNotDividingHeight {
+                PeriodicColumnShapeError::LengthNotDividingHeight {
                     index: 0,
                     length,
                     height
@@ -187,9 +189,9 @@ fn every_period_dividing_the_trace_length_verifies() {
     //     TRACE_LENGTH = 64 = 2^6
     //     p = 2^a fits  <=>  a <= 6  <=>  p divides 64
     //
-    // Every such period therefore has to verify, which pins the rule to the looser one it
-    // replaced: widening it back to a size comparison would accept nothing new here, and
-    // narrowing it further would break one of these rounds.
+    // Every such period therefore has to verify.
+    // A looser size comparison would accept nothing new on this height.
+    // A stricter rule would break one of these rounds.
     let config = config();
 
     for log_period in 0..=TRACE_LENGTH.ilog2() {
