@@ -52,7 +52,7 @@ const COMPACT_ROUNDS: usize = 2;
 /// The generic compact driver is intentionally bounded while its ranked shapes are measured.
 const COMPACT_MAX_ROUNDS: usize = 6;
 /// Keep at least this many equality blocks per bank in the production path.
-const COMPACT_MIN_BLOCK_BITS: usize = 5;
+const COMPACT_MIN_BLOCK_BITS: usize = 6;
 /// The materializer keeps a fixed total EF scratch budget across all compact banks.
 const COMPACT_TOTAL_SCRATCH: usize = 1 << 14;
 
@@ -2378,7 +2378,7 @@ mod tests {
 
     #[test]
     fn production_gate_uses_compact_two_rounds_at_the_minimum_shape() {
-        let packing = BitPacking::<EF>::new(&bits(0xC015, 512)).unwrap();
+        let packing = BitPacking::<EF>::new(&bits(0xC015, 1024)).unwrap();
         let mut rng = SmallRng::seed_from_u64(0xD015);
         let mut point = Point::<EF>::rand(
             &mut rng,
@@ -2393,8 +2393,17 @@ mod tests {
             }
         };
         let reduction = BitRingSwitch::new(&Point::new(point)).unwrap();
+        assert_eq!(
+            reduction.num_variables(),
+            COMPACT_ROUNDS + LOG_CHUNK + COMPACT_MIN_BLOCK_BITS
+        );
         assert!(reduction.compact_depth_is_eligible(
             reduction.num_variables(),
+            COMPACT_ROUNDS,
+            false,
+        ));
+        assert!(!reduction.compact_depth_is_eligible(
+            reduction.num_variables() - 1,
             COMPACT_ROUNDS,
             false,
         ));
