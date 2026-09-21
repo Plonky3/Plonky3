@@ -9,7 +9,7 @@ use p3_matrix::dense::RowMajorMatrix;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
-use crate::{PeriodicLdeTable, PolynomialSpace};
+use crate::{PeriodicColumns, PeriodicLdeTable, PolynomialSpace};
 
 pub type Val<D> = <D as PolynomialSpace>::Val;
 
@@ -268,9 +268,6 @@ where
         Self::Domain: Clone,
         Val<Self::Domain>: Clone,
     {
-        if periodic_cols.is_empty() {
-            return PeriodicLdeTable::empty();
-        }
         let trace_size = trace_domain.size();
         let quotient_size = quotient_domain.size();
         assert!(
@@ -283,24 +280,20 @@ where
         );
         let blowup = quotient_size / trace_size;
 
-        for col in periodic_cols {
-            let period = col.len();
-            assert!(
-                period > 0 && period.is_power_of_two(),
-                "periodic column length must be a non-zero power of 2, got {period}",
-            );
-            assert!(
-                trace_size.is_multiple_of(period),
-                "trace domain size ({trace_size}) must be divisible by periodic column length ({period})",
-            );
-        }
-        let max_period = periodic_cols.iter().map(|c| c.len()).max().unwrap();
+        // A malformed declaration is a bug in the AIR the prover was handed, not proof data.
+        let periodic_cols =
+            PeriodicColumns::new(periodic_cols, trace_size).unwrap_or_else(|err| panic!("{err}"));
+
+        // No declared column means no table, and no longest period to pad up to.
+        let Some(max_period) = periodic_cols.max_period() else {
+            return PeriodicLdeTable::empty();
+        };
+
         let extended_height = max_period
             .checked_mul(blowup)
             .expect("extended height overflow when computing max_period * blowup");
-        // Implied by the column checks above.
-        // Each period divides the trace size, so max_period <= trace_size.
-        // Therefore extended_height = max_period * blowup <= trace_size * blowup = quotient_size.
+        // Every period divides the trace size, so the longest one is at most the trace size.
+        // Hence max_period * blowup <= trace_size * blowup = quotient_size.
         debug_assert!(extended_height <= quotient_size);
         let num_cols = periodic_cols.len();
         let row_major_capacity = extended_height
@@ -317,6 +310,7 @@ where
         }
 
         let padded_cols: Vec<Vec<Val<Self::Domain>>> = periodic_cols
+            .as_slice()
             .iter()
             .map(|col| (0..max_period).map(|i| col[i % col.len()]).collect())
             .collect();

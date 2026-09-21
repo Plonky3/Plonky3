@@ -475,6 +475,55 @@ fn boundary_io_label(cell: &BoundaryPublic) -> String {
     )
 }
 
+/// Reject a periodic column whose shape the trace cannot carry.
+///
+/// A column of length `p` holds the evaluations of one polynomial over a subgroup of order `p`.
+///
+/// - Such a subgroup exists only when `p` is a power of two.
+/// - It tiles the rows only when `p` divides the height.
+///
+/// ```text
+///     height 8,  length 2   [0,1][0,1][0,1][0,1]       tiles
+///     height 8,  length 16  [0,1,...,7|8,...,15]       truncated
+///     height 12, length 8   [0,...,7][0,1,2,3|4,...]   partial repeat
+/// ```
+///
+/// The debug run reads periodic values through a wrapping row lookup.
+///
+/// That lookup accepts a column of any non-zero length, so it never exposes the mistake.
+/// The commitment layer does, but only once a proof is being built or verified.
+///
+/// Screening here turns that late failure into one an AIR author sees on the first debug run.
+///
+/// This is a diagnostic, not a precondition.
+/// The commitment layer screens for itself and does not rely on this.
+///
+/// # Panics
+///
+/// Panics when a declared column cannot be laid over the given number of rows.
+fn assert_periodic_column_shapes<F: Clone, A: BaseAir<F>>(air: &A, height: usize) {
+    for (index, column) in air.periodic_columns().iter().enumerate() {
+        // The length is how many values the column lists before repeating.
+        let length = column.len();
+
+        // Powers of two are the orders for which a two-adic subgroup exists.
+        // Zero fails here, ahead of the row lookup that would divide by it.
+        assert!(
+            length.is_power_of_two(),
+            "debug constraint check rejected the AIR: \
+             periodic column {index} has length {length}, which is not a power of two"
+        );
+
+        // Divisibility lands every repetition on a whole copy of that subgroup.
+        assert!(
+            height.is_multiple_of(length),
+            "debug constraint check rejected the AIR: \
+             periodic column {index} has length {length}, \
+             which does not divide the trace height {height}"
+        );
+    }
+}
+
 /// Evaluate every AIR constraint against a concrete trace and panic on failure.
 ///
 /// The function walks the trace row by row. For each row it:
@@ -510,6 +559,7 @@ where
             height
         );
     }
+    assert_periodic_column_shapes(air, height);
 
     // A listed cell has no AIR constraint, so the row loop below would never see it.
     if let Some(&(index, row)) = boundary_io_mismatches(air, main, public_values).first() {
@@ -630,6 +680,7 @@ where
             height
         );
     }
+    assert_periodic_column_shapes(air, height);
 
     // Accumulate violations across all rows.
     let mut all_failures = Vec::new();
@@ -729,6 +780,7 @@ where
 
 #[cfg(test)]
 mod tests {
+    use alloc::borrow::Cow;
     use alloc::{format, vec};
 
     use p3_baby_bear::BabyBear;
@@ -1338,5 +1390,101 @@ mod tests {
 
         // Expected: panic on entry. The would-be report is unreachable → bound to `_`.
         let _ = check_all_constraints(&air, &main, &[], None);
+    }
+
+    /// Single column pinned to a periodic column listing `0, 1, ..., period - 1`.
+    #[derive(Debug)]
+    struct PeriodicCopyAir {
+        period: usize,
+    }
+
+    impl<F: Field> BaseAir<F> for PeriodicCopyAir {
+        fn width(&self) -> usize {
+            1
+        }
+
+        fn num_periodic_columns(&self) -> usize {
+            1
+        }
+
+        fn periodic_columns(&self) -> Cow<'_, [Vec<F>]> {
+            Cow::Owned(vec![(0..self.period).map(F::from_usize).collect()])
+        }
+    }
+
+    impl<F: Field> Air<DebugConstraintBuilder<'_, F>> for PeriodicCopyAir {
+        fn eval(&self, builder: &mut DebugConstraintBuilder<'_, F>) {
+            let main = builder.main();
+            let periodic = builder.periodic_values()[0];
+            builder.assert_eq(main.current(0).unwrap(), periodic);
+        }
+    }
+
+    // Trace holding `row mod period`, which is exactly what the AIR reads off the
+    // periodic column, so every rejection below can only come from the shape check.
+    fn periodic_copy_trace(period: usize, height: usize) -> RowMajorMatrix<BabyBear> {
+        RowMajorMatrix::new_col(
+            (0..height)
+                .map(|i| BabyBear::from_usize(i % period))
+                .collect(),
+        )
+    }
+
+    #[test]
+    fn test_periodic_column_with_valid_shape_passes() {
+        // Three shapes that tile an 8-row trace, spanning the accepted range:
+        //
+        //     period 1 : [0][0][0][0][0][0][0][0]   constant column
+        //     period 2 : [0,1][0,1][0,1][0,1]       the common case
+        //     period 8 : [0,1,2,3,4,5,6,7]          period equal to the height
+        for period in [1, 2, 8] {
+            let air = PeriodicCopyAir { period };
+            let trace = periodic_copy_trace(period, 8);
+
+            check_constraints(&air, &trace, &[]);
+
+            let report = check_all_constraints(&air, &trace, &[], None);
+            assert!(report.failures.is_empty(), "period {period} was rejected");
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "periodic column 0 has length 3, which is not a power of two")]
+    fn test_periodic_column_length_not_power_of_two_is_rejected() {
+        // Period 3 sits inside the 8 rows but has no subgroup of order 3 to interpolate over.
+        let air = PeriodicCopyAir { period: 3 };
+        check_constraints(&air, &periodic_copy_trace(3, 8), &[]);
+    }
+
+    #[test]
+    #[should_panic(expected = "periodic column 0 has length 0, which is not a power of two")]
+    fn test_empty_periodic_column_is_rejected() {
+        // An empty column would send the row lookup into `row mod 0`.
+        // Zero is not a power of two, so the shape check names the column first.
+        let air = PeriodicCopyAir { period: 0 };
+        let trace = RowMajorMatrix::new_col(BabyBear::zero_vec(8));
+        let _ = check_all_constraints(&air, &trace, &[], None);
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "periodic column 0 has length 16, which does not divide the trace height 8"
+    )]
+    fn test_periodic_column_longer_than_trace_is_rejected() {
+        // Only the first 8 of the 16 values are ever read, so the debug run would
+        // score a different AIR than the one the prover builds.
+        let air = PeriodicCopyAir { period: 16 };
+        let _ = check_all_constraints(&air, &periodic_copy_trace(16, 8), &[], None);
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "periodic column 0 has length 8, which does not divide the trace height 12"
+    )]
+    fn test_periodic_column_not_dividing_trace_is_rejected() {
+        // Period 8 is a power of two and fits inside 12 rows, yet 12 = 8 + 4 leaves a
+        // partial repetition, so fitting is not the relation that matters.
+        let air = PeriodicCopyAir { period: 8 };
+        check_constraints(&air, &periodic_copy_trace(8, 12), &[]);
     }
 }

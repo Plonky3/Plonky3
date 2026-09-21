@@ -7,15 +7,16 @@ pub use data::VerifierData;
 use p3_air::symbolic::{AirLayout, SymbolicExpressionExt};
 use p3_air::{Air, BaseAir};
 use p3_challenger::GrindingChallenger;
-use p3_commit::{CommitmentWithOpeningPoints, Pcs, PolynomialSpace, UnivariateStarkPcs};
+use p3_commit::{
+    CommitmentWithOpeningPoints, Pcs, PeriodicColumns, PolynomialSpace, UnivariateStarkPcs,
+};
 use p3_field::{Algebra, BasedVectorSpace, ExtensionField, PrimeCharacteristicRing, PrimeField64};
 use p3_lookup::logup::LogUpGadget;
 use p3_lookup::{
     InteractionSymbolicBuilder, LookupError, LookupProtocol, check_multiplicity_height_bound,
 };
 use p3_uni_stark::{
-    InvalidProofShapeError, VerificationError, check_periodic_column_lengths,
-    recompose_quotient_from_chunks, validate_degree_bits,
+    InvalidProofShapeError, VerificationError, recompose_quotient_from_chunks, validate_degree_bits,
 };
 use p3_util::checked_log_size_sum;
 use p3_util::zip_eq::zip_eq;
@@ -86,7 +87,7 @@ pub type OpeningArgumentWithQuotientDomains<SC> = (
 ///   consistency check (`commitments.permutation.is_some()` iff some AIR has lookups);
 /// - [`check_multiplicity_height_bound`], the LogUp bound that stops multiplicities wrapping
 ///   modulo `p`;
-/// - [`check_periodic_column_lengths`].
+/// - the shape rule every declared periodic column must satisfy against its trace height.
 ///
 /// A caller needing all of them should either call `verify_batch` directly or replicate the
 /// ones it needs.
@@ -805,11 +806,11 @@ where
         let perm_vals: Vec<SC::Challenge> = lookup_terminals[i].iter().map(|t| t.0).collect();
 
         // Periodic columns are AIR logic; a malformed one must error, not panic.
-        let periodic_columns = air.periodic_columns();
-        check_periodic_column_lengths(&periodic_columns, trace_domains[i].size())?;
+        let declared = air.periodic_columns();
+        let periodic_columns = PeriodicColumns::new(&declared, trace_domains[i].size())?;
 
         let periodic_values: Vec<Challenge<SC>> =
-            trace_domains[i].evaluate_periodic_columns_at(&periodic_columns, zeta);
+            trace_domains[i].evaluate_periodic_columns_at(periodic_columns, zeta);
         let verifier_data = VerifierData {
             trace_local: &opened_values.instances[i].base_opened_values.trace_local,
             trace_next: trace_next_ref,

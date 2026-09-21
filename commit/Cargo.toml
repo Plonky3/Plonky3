@@ -22,6 +22,7 @@ p3-util.workspace = true
 itertools.workspace = true
 # The opening types derive their codecs, and they hold `Vec`s.
 serde = { workspace = true, features = ["derive", "alloc"] }
+thiserror.workspace = true
 
 # for testing
 p3-challenger = { workspace = true, optional = true }
