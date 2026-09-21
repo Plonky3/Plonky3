@@ -128,8 +128,9 @@ const PICOS_PER_BYTE: u64 = 100;
 /// How much real work that is depends on how closely a body matches the rate.
 /// A narrow-field fold is priced about 1.6x high, so its gate sits nearer one dispatch.
 ///
-/// Linear in the worker count down to two, from the length at which the same fold first
-/// beats itself run whole:
+/// Linear in the worker count down to two.
+///
+/// Each row is the length at which the same fold first beats itself run whole:
 ///
 /// ```text
 ///     workers   break-even serial work   per worker
@@ -144,7 +145,31 @@ const PICOS_PER_BYTE: u64 = 100;
 #[cfg(not(target_os = "macos"))]
 const MIN_PARALLEL_PICOS_PER_WORKER: u64 = 625_000;
 
-/// macOS dispatch costs about 2.5 us per worker on Apple silicon.
+/// Serial time a loop must be worth per worker in the pool, on Apple silicon.
+///
+/// Dispatching a fan-out costs 1.7 to 2.0 us per worker, four to five times the Linux price.
+///
+/// Measured on an M4 Pro, forcing a split that the gate would otherwise refuse:
+///
+/// ```text
+///     workers   forced split   per worker
+///           2         3.7 us      1.85 us
+///           4         6.7 us      1.68 us
+///           8        16   us      2.00 us
+/// ```
+///
+/// - Asking 2.5 us per worker demands a loop the model prices at 1.25 to 1.5 dispatches.
+/// - That is the same margin over a dispatch as the Linux gate asks for.
+///
+/// The value is a gate, not the dispatch cost itself.
+///
+/// Break-even at 14 workers fell between 21 and 52 us of serial work.
+///
+/// The gate lands inside that bracket:
+///
+/// ```text
+///     14 workers : 35 us before a split is worth it
+/// ```
 #[cfg(target_os = "macos")]
 const MIN_PARALLEL_PICOS_PER_WORKER: u64 = 2_500_000;
 
@@ -745,7 +770,11 @@ mod tests {
         let budget = TaskBudget::default();
         assert_eq!(budget.min_parallel_ns, None);
         // The public nanosecond value exactly represents the internal picosecond cap.
-        assert_eq!(budget.max_task_ns, MAX_TASK_PICOS / 1_000);
+        //
+        // Multiplying back up pins the round trip, which a truncating division would hide:
+        //
+        //     2_000_500 ps / 1_000 = 2_000 ns  ->  2_000 ns * 1_000 = 2_000_000 ps  != cap
+        assert_eq!(budget.max_task_ns * 1_000, MAX_TASK_PICOS);
     }
 
     #[cfg(feature = "parallel")]
