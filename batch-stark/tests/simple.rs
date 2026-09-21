@@ -841,11 +841,12 @@ fn periodic_column_non_power_of_two_is_rejected() {
             result,
             Err(BatchVerificationError::Verification(
                 VerificationError::PeriodicColumn(PeriodicColumnError::LengthNotPowerOfTwo {
-                    got: 3
+                    index: 0,
+                    length: 3
                 })
             ))
         ),
-        "expected LengthNotPowerOfTwo {{ got: 3 }}, got {result:?}"
+        "expected column 0 to be reported as a non-power-of-two length, got {result:?}"
     );
 }
 

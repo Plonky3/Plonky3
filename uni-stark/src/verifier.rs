@@ -4,6 +4,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use itertools::Itertools;
+pub use p3_air::check_periodic_column_lengths;
 use p3_air::symbolic::SymbolicAirBuilder;
 use p3_air::{Air, RowWindow};
 use p3_challenger::GrindingChallenger;
@@ -15,51 +16,12 @@ use p3_util::zip_eq::zip_eq;
 use p3_util::{checked_log_size_sum, checked_pow2};
 use tracing::instrument;
 
-use crate::error::{InvalidProofShapeError, PeriodicColumnError, VerificationError};
+use crate::error::{InvalidProofShapeError, VerificationError};
 use crate::symbolic::get_log_num_quotient_chunks_for_domain;
 use crate::{
     AirLayout, Com, Commitments, Domain, PcsError, PreprocessedVerifierKey, Proof,
     StarkGenericConfig, StarkShape, StarkVerifierTranscript, Val, VerifierConstraintFolder,
 };
-
-/// Reject periodic columns the verifier cannot evaluate over the trace domain.
-///
-/// - Evaluation samples a subdomain whose size is the column length.
-/// - Both verifiers call this before evaluating.
-/// - A malformed AIR therefore errors instead of panicking.
-///
-/// # Arguments
-///
-/// - `periodic_columns` — the periodic columns declared by the AIR.
-/// - `trace_length` — the number of rows the columns repeat over.
-///
-/// # Errors
-///
-/// - A length that is not a power of two has no evaluation subdomain.
-/// - A length larger than the trace cannot sit inside the trace domain.
-pub fn check_periodic_column_lengths<F>(
-    periodic_columns: &[Vec<F>],
-    trace_length: usize,
-) -> Result<(), PeriodicColumnError> {
-    for col in periodic_columns {
-        let period = col.len();
-
-        // A subdomain of size `period` exists only for powers of two.
-        if !period.is_power_of_two() {
-            return Err(PeriodicColumnError::LengthNotPowerOfTwo { got: period });
-        }
-
-        // That subdomain must sit inside the trace domain.
-        if period > trace_length {
-            return Err(PeriodicColumnError::LengthTooLarge {
-                maximum: trace_length,
-                got: period,
-            });
-        }
-    }
-
-    Ok(())
-}
 
 pub fn validate_degree_bits(
     air: Option<usize>,

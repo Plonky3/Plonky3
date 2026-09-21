@@ -126,42 +126,79 @@ fn empty_periodic_column_is_rejected() {
         matches!(
             result,
             Err(VerificationError::PeriodicColumn(
-                PeriodicColumnError::LengthNotPowerOfTwo { got: 0 }
+                PeriodicColumnError::LengthNotPowerOfTwo {
+                    index: 0,
+                    length: 0
+                }
             ))
         ),
-        "expected LengthNotPowerOfTwo {{ got: 0 }}, got {result:?}"
+        "expected the empty column to be reported as a non-power-of-two length, got {result:?}"
     );
 }
 
 #[test]
 fn non_power_of_two_periodic_column_is_rejected() {
-    // Period 3 lies inside 1..=64 but is not a power of two, so it has no subdomain.
-    // The error names the power-of-two requirement, not the range bound.
+    // Period 3 lies inside the 64-row trace but is not a power of two, so it has no subdomain.
+    // The report names the power-of-two requirement, not the tiling one.
     let result = verify_with_period(3);
     assert!(
         matches!(
             result,
             Err(VerificationError::PeriodicColumn(
-                PeriodicColumnError::LengthNotPowerOfTwo { got: 3 }
+                PeriodicColumnError::LengthNotPowerOfTwo {
+                    index: 0,
+                    length: 3
+                }
             ))
         ),
-        "expected LengthNotPowerOfTwo {{ got: 3 }}, got {result:?}"
+        "expected period 3 to be reported as a non-power-of-two length, got {result:?}"
     );
 }
 
 #[test]
 fn oversized_periodic_column_is_rejected() {
-    // Period 128 is a power of two but exceeds the 64-row trace length.
-    // The error names the range bound and the offending period.
+    // Period 128 is a power of two but twice the 64-row trace length.
+    //
+    //     [0,...,63|64,...,127]  <- only the first half would ever be read
+    //
+    // A column longer than the trace cannot tile it, so the report names the trace height.
     let oversized = 2 * TRACE_LENGTH;
     let result = verify_with_period(oversized);
     assert!(
         matches!(
             result,
             Err(VerificationError::PeriodicColumn(
-                PeriodicColumnError::LengthTooLarge { maximum, got }
-            )) if maximum == TRACE_LENGTH && got == oversized
+                PeriodicColumnError::LengthNotDividingHeight {
+                    index: 0,
+                    length,
+                    height
+                }
+            )) if length == oversized && height == TRACE_LENGTH
         ),
-        "expected LengthTooLarge {{ maximum: {TRACE_LENGTH}, got: {oversized} }}, got {result:?}"
+        "expected period {oversized} to be reported against height {TRACE_LENGTH}, got {result:?}"
     );
+}
+
+#[test]
+fn every_period_dividing_the_trace_length_verifies() {
+    // The trace length is a power of two, so for a power-of-two period p the two candidate
+    // rules coincide: p <= 2^b iff p divides 2^b.
+    //
+    //     TRACE_LENGTH = 64 = 2^6
+    //     p = 2^a fits  <=>  a <= 6  <=>  p divides 64
+    //
+    // Every such period therefore has to verify, which pins the rule to the looser one it
+    // replaced: widening it back to a size comparison would accept nothing new here, and
+    // narrowing it further would break one of these rounds.
+    let config = config();
+
+    for log_period in 0..=TRACE_LENGTH.ilog2() {
+        let period = 1usize << log_period;
+        let air = SinglePeriodicAir { period };
+        let trace = periodic_trace(period, TRACE_LENGTH);
+
+        let proof = prove(&config, &air, trace, &[]).unwrap();
+        verify(&config, &air, &proof, &[])
+            .unwrap_or_else(|err| panic!("period {period} must verify, got {err:?}"));
+    }
 }

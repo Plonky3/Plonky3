@@ -3,6 +3,7 @@
 use alloc::format;
 use alloc::string::String;
 
+pub use p3_air::PeriodicColumnError;
 use thiserror::Error;
 
 use crate::StarkTranscriptFailure;
@@ -148,20 +149,6 @@ pub enum InvalidProofShapeError {
     // Zero is the only value an honest prover emits, so zero is the only value accepted.
     #[error("out-of-domain grinding witness is nonzero at zero difficulty, expected zero")]
     NonCanonicalOodPowWitness,
-}
-
-/// Reasons a periodic column cannot be evaluated.
-///
-/// - Periodic columns are AIR definition, not proof data.
-/// - A malformed one is an AIR bug, surfaced here instead of a panic.
-#[derive(Debug, Error)]
-pub enum PeriodicColumnError {
-    /// A periodic column length is not a power of two.
-    #[error("periodic column length must be a power of two, got {got}")]
-    LengthNotPowerOfTwo { got: usize },
-    /// A periodic column is longer than the trace it repeats over.
-    #[error("periodic column length too large: expected at most {maximum}, got {got}")]
-    LengthTooLarge { maximum: usize, got: usize },
 }
 
 /// Top-level verification error.

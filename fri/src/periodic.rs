@@ -99,17 +99,8 @@ impl<Dft> TwoAdicPeriodicEvaluator<Dft> {
         );
         let log_blowup = log2_strict_usize(blowup);
 
-        for col in periodic_table {
-            let period = col.len();
-            assert!(
-                period > 0 && period.is_power_of_two(),
-                "periodic column length must be a non-zero power of 2, got {period}",
-            );
-            assert!(
-                trace_len.is_multiple_of(period),
-                "trace domain size ({trace_len}) must be divisible by periodic column length ({period})",
-            );
-        }
+        assert_periodic_column_shapes(periodic_table, trace_len);
+
         let max_period = periodic_table.iter().map(|c| c.len()).max().unwrap();
 
         let extended_height = max_period
@@ -178,19 +169,12 @@ where
         point: EF,
     ) -> Vec<EF> {
         let trace_len = trace_domain.size();
+        assert_periodic_column_shapes(periodic_table, trace_len);
 
         periodic_table
             .iter()
             .map(|col| {
                 let period = col.len();
-                assert!(
-                    period > 0 && period.is_power_of_two(),
-                    "periodic column length must be a non-zero power of 2, got {period}",
-                );
-                assert!(
-                    trace_len.is_multiple_of(period),
-                    "trace domain size ({trace_len}) must be divisible by periodic column length ({period})",
-                );
 
                 // Project point to periodic subdomain: ζ^(n/p)
                 let periodic_point = point.exp_u64((trace_len / period) as u64);
@@ -199,6 +183,38 @@ where
                 eval_periodic_poly(col, periodic_point)
             })
             .collect()
+    }
+}
+
+/// Reject periodic columns the trace domain cannot carry.
+///
+/// A column of length `p` holds the evaluations of one polynomial over a subgroup of order `p`.
+///
+/// - Such a subgroup exists only when `p` is a power of two.
+/// - It embeds in the trace domain only when `p` divides its size.
+///
+/// Both evaluation paths depend on that relation, so both screen for it before any work.
+///
+/// # Panics
+///
+/// - A length that is not a power of two, zero included.
+/// - A length that does not divide the trace domain size.
+fn assert_periodic_column_shapes<F>(periodic_table: &[Vec<F>], trace_len: usize) {
+    for col in periodic_table {
+        // The period is how many values the column lists before repeating.
+        let period = col.len();
+
+        // Zero is not a power of two, so an empty column is caught by this assertion too.
+        assert!(
+            period.is_power_of_two(),
+            "periodic column length must be a non-zero power of 2, got {period}",
+        );
+
+        // Divisibility lands every repetition on a whole copy of that subgroup.
+        assert!(
+            trace_len.is_multiple_of(period),
+            "trace domain size ({trace_len}) must be divisible by periodic column length ({period})",
+        );
     }
 }
 
@@ -264,7 +280,8 @@ mod tests {
     use alloc::vec::Vec;
 
     use p3_baby_bear::BabyBear;
-    use p3_field::PrimeCharacteristicRing;
+    use p3_dft::Radix2Dit;
+    use p3_field::{Field, PrimeCharacteristicRing};
 
     use super::*;
 
@@ -290,5 +307,47 @@ mod tests {
             let result = eval_periodic_poly(&values, point);
             assert_eq!(result, expected, "Failed at root index {}", i);
         }
+    }
+
+    // Trace domain of 8 points, blown up by 2 to a 16-point LDE domain.
+    fn domains() -> (TwoAdicMultiplicativeCoset<F>, TwoAdicMultiplicativeCoset<F>) {
+        let trace = TwoAdicMultiplicativeCoset::new(F::ONE, 3).unwrap();
+        let lde = TwoAdicMultiplicativeCoset::new(F::GENERATOR, 4).unwrap();
+        (trace, lde)
+    }
+
+    // Three values are not the evaluations of a polynomial over a two-adic subgroup.
+    //
+    //     trace domain: 8 points
+    //     column:       [1, 2, 3]  -> no subgroup of order 3 exists
+    //
+    // The table build extrapolates by DFT, which needs that subgroup, so it must refuse.
+    #[test]
+    #[should_panic(expected = "periodic column length must be a non-zero power of 2, got 3")]
+    fn lde_table_rejects_a_non_power_of_two_column() {
+        let (trace, lde) = domains();
+        let table = vec![vec![F::ONE, F::TWO, F::from_u64(3)]];
+
+        TwoAdicPeriodicEvaluator::eval_on_lde_with_dft(&Radix2Dit::default(), &table, &trace, &lde);
+    }
+
+    // Sixteen values over an 8-point trace domain.
+    //
+    //     [v_0,...,v_7 | v_8,...,v_15]  <- only the first half would ever be read
+    //
+    // Projecting the opening point raises it to the power trace_len / period, which is not an
+    // integer here, so the point-wise evaluation must refuse as well.
+    #[test]
+    #[should_panic(
+        expected = "trace domain size (8) must be divisible by periodic column length (16)"
+    )]
+    fn point_evaluation_rejects_a_column_longer_than_the_trace() {
+        let (trace, _) = domains();
+        let table = vec![vec![F::ONE; 16]];
+
+        <TwoAdicPeriodicEvaluator<Radix2Dit<F>> as PeriodicEvaluator<
+            F,
+            TwoAdicMultiplicativeCoset<F>,
+        >>::eval_at_point::<F>(&table, &trace, F::from_u64(7));
     }
 }
