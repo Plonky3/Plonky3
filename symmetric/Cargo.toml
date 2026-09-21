@@ -22,6 +22,7 @@ p3-goldilocks = { path = "../goldilocks" }
 p3-koala-bear = { path = "../koala-bear" }
 
 proptest.workspace = true
+serde_json.workspace = true
 
 [lints]
 workspace = true

@@ -4,7 +4,8 @@ use core::borrow::Borrow;
 use core::marker::PhantomData;
 
 use p3_util::log2_strict_usize;
-use serde::{Deserialize, Serialize};
+use serde::de::Error;
+use serde::{Deserialize, Deserializer, Serialize};
 
 /// A wrapper around an array digest, with a phantom type parameter to ensure that the digest is
 /// associated with a particular field.
@@ -21,12 +22,36 @@ pub struct Hash<F, W, const DIGEST_ELEMS: usize> {
 ///
 /// A cap of height 0 contains a single element (the root), while a cap of height `h` contains
 /// `2^h` elements. The `Digest` type is the full digest (e.g. `[W; DIGEST_ELEMS]`).
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// The number of roots is always a power of two: [`MerkleCap::new`] asserts it and the
+/// `Deserialize` impl rejects anything else, so a cap read from the wire upholds it too.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(bound(serialize = "Digest: Serialize"))]
-#[serde(bound(deserialize = "Digest: Deserialize<'de>"))]
 pub struct MerkleCap<F, Digest> {
     cap: Vec<Digest>,
     _marker: PhantomData<F>,
+}
+
+/// The derived wire shape of [`MerkleCap`], deserialized before the root count is checked.
+#[derive(Deserialize)]
+#[serde(rename = "MerkleCap")]
+#[serde(bound(deserialize = "Digest: Deserialize<'de>"))]
+struct MerkleCapRepr<F, Digest> {
+    cap: Vec<Digest>,
+    _marker: PhantomData<F>,
+}
+
+impl<'de, F, Digest: Deserialize<'de>> Deserialize<'de> for MerkleCap<F, Digest> {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let MerkleCapRepr { cap, _marker } = MerkleCapRepr::<F, Digest>::deserialize(deserializer)?;
+        if !cap.len().is_power_of_two() {
+            return Err(D::Error::invalid_length(
+                cap.len(),
+                &"a power-of-two number of Merkle cap roots",
+            ));
+        }
+        Ok(Self { cap, _marker })
+    }
 }
 
 impl<F, Digest> MerkleCap<F, Digest> {
@@ -151,6 +176,7 @@ impl<F, W, const DIGEST_ELEMS: usize> AsRef<[W; DIGEST_ELEMS]> for Hash<F, W, DI
 
 #[cfg(test)]
 mod tests {
+    use alloc::string::ToString;
     use alloc::vec;
 
     use p3_goldilocks::Goldilocks;
@@ -173,6 +199,29 @@ mod tests {
         let cap = MerkleCap::<F, Digest>::new(vec![[0u8; 4]; 8]);
         assert_eq!(cap.num_roots(), 8);
         assert_eq!(cap.height(), 3);
+    }
+
+    #[test]
+    fn test_merkle_cap_deserialize_round_trips() {
+        let cap = MerkleCap::<F, Digest>::new(vec![[1u8; 4], [2u8; 4], [3u8; 4], [4u8; 4]]);
+        let json = serde_json::to_string(&cap).unwrap();
+        let back: MerkleCap<F, Digest> = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, cap);
+        assert_eq!(back.height(), 2);
+    }
+
+    #[test]
+    fn test_merkle_cap_deserialize_rejects_non_power_of_two_root_count() {
+        // The wire shape `new` would refuse: three roots, then zero.
+        for roots in ["[[1,1,1,1],[2,2,2,2],[3,3,3,3]]", "[]"] {
+            let json = alloc::format!("{{\"cap\":{roots},\"_marker\":null}}");
+            let err = serde_json::from_str::<MerkleCap<F, Digest>>(&json)
+                .expect_err("a cap with a non-power-of-two root count must not deserialize");
+            assert!(
+                err.to_string().contains("power-of-two"),
+                "unexpected error: {err}"
+            );
+        }
     }
 
     #[test]
