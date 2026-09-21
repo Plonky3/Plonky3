@@ -414,6 +414,16 @@ mod blocked {
     /// Reindexing by this table recovers the true transpose and costs no instruction.
     const BITREV4: [usize; 16] = [0, 8, 4, 12, 2, 10, 6, 14, 1, 9, 5, 13, 3, 11, 7, 15];
 
+    /// A runtime 128 × 128 map prepared for the GFNI byte-affine kernel.
+    ///
+    /// The columns are retained for the scalar tail; the blocks hold the same map in GFNI's
+    /// reversed row-byte convention. Construction is intentionally per call because transcript
+    /// challenges make the map dynamic.
+    pub(super) struct PreparedMap {
+        pub(super) columns: [u128; 128],
+        blocks: [[u64; 16]; 16],
+    }
+
     /// The `8 × 8` blocks of a `128 × 128` map, at `blocks[k][j]` for input byte `j` to output `k`.
     ///
     /// # Algorithm
@@ -453,6 +463,17 @@ mod blocked {
             k += 1;
         }
         blocks
+    }
+
+    impl PreparedMap {
+        /// Builds the GFNI blocks for one runtime coordinate map.
+        #[inline]
+        pub(super) fn new(columns: [u128; 128]) -> Self {
+            Self {
+                blocks: affine_blocks(&columns),
+                columns,
+            }
+        }
     }
 
     /// The blocks of `N`, the map out of the tower basis.
@@ -582,6 +603,43 @@ mod blocked {
         chunks.len() * BLOCK
     }
 
+    /// Applies a prepared map out of place to complete 64-element blocks.
+    ///
+    /// The source is loaded before any destination store, and the caller handles the remainder.
+    #[inline(never)]
+    pub(super) fn apply_out_of_place(
+        prepared: &PreparedMap,
+        input: &[u128],
+        output: &mut [u128],
+    ) -> usize {
+        assert_eq!(
+            input.len(),
+            output.len(),
+            "input and output must have equal lengths"
+        );
+        let (input_chunks, _) = input.as_chunks::<BLOCK>();
+        let (output_chunks, _) = output.as_chunks_mut::<BLOCK>();
+
+        for (input_chunk, output_chunk) in input_chunks.iter().zip(output_chunks.iter_mut()) {
+            // SAFETY: each chunk holds one whole block, which is sixteen 512-bit registers.
+            // The unaligned forms accept every slice alignment, and this module's target gate
+            // enables every intrinsic used by the transpose and affine operations.
+            unsafe {
+                let raw: [__m512i; 16] = core::array::from_fn(|r| {
+                    _mm512_loadu_si512(input_chunk.as_ptr().add(4 * r).cast())
+                });
+                let input = transpose(raw);
+                let mapped: [__m512i; 16] =
+                    core::array::from_fn(|k| plane(&input, &prepared.blocks[k]));
+                let mapped = transpose(mapped);
+                for (r, &value) in mapped.iter().enumerate() {
+                    _mm512_storeu_si512(output_chunk.as_mut_ptr().add(4 * r).cast(), value);
+                }
+            }
+        }
+        input_chunks.len() * BLOCK
+    }
+
     /// Crosses whole blocks out of the tower basis, returning how many elements it covered.
     #[inline]
     pub(super) fn tower_to_poly(values: &mut [u128]) -> usize {
@@ -616,6 +674,57 @@ mod blocked {
     #[inline]
     pub(super) const fn poly_to_tower(_values: &mut [u128]) -> usize {
         0
+    }
+}
+
+/// A runtime map must cover enough entries to amortize preparing its 256 GFNI affine blocks.
+pub(crate) const DYNAMIC_MAP_THRESHOLD: usize = 4096;
+
+/// Tries to apply an arbitrary runtime 128 × 128 binary map with the prepared GFNI kernel.
+///
+/// The caller has already checked the concrete field types, while this layer owns the target
+/// gate, matrix construction, blocked application, and scalar tail. A refusal leaves `output`
+/// untouched so callers can use their existing portable map without a second allocation.
+#[inline]
+pub(crate) fn try_map_tower_coordinates_into(
+    columns: &[u128; 128],
+    input: &[u128],
+    output: &mut [u128],
+) -> bool {
+    assert_eq!(
+        input.len(),
+        output.len(),
+        "input and output must have equal lengths"
+    );
+
+    if input.len() < DYNAMIC_MAP_THRESHOLD {
+        return false;
+    }
+
+    #[cfg(all(
+        target_arch = "x86_64",
+        target_feature = "gfni",
+        target_feature = "avx512f",
+        target_feature = "avx512bw"
+    ))]
+    {
+        let prepared = blocked::PreparedMap::new(*columns);
+        let processed = blocked::apply_out_of_place(&prepared, input, output);
+        for (source, destination) in input[processed..].iter().zip(&mut output[processed..]) {
+            *destination = image(*source, 128, &prepared.columns);
+        }
+        return true;
+    }
+
+    #[cfg(not(all(
+        target_arch = "x86_64",
+        target_feature = "gfni",
+        target_feature = "avx512f",
+        target_feature = "avx512bw"
+    )))]
+    {
+        let _ = (columns, input, output);
+        false
     }
 }
 
@@ -699,7 +808,23 @@ pub(crate) fn poly_to_tower_128_slice(values: &mut [u128]) -> usize {
 
 #[cfg(test)]
 mod tests {
+    extern crate std;
+
     use alloc::vec::Vec;
+    #[cfg(all(
+        target_arch = "x86_64",
+        target_feature = "gfni",
+        target_feature = "avx512f",
+        target_feature = "avx512bw"
+    ))]
+    use std::hint::black_box;
+    #[cfg(all(
+        target_arch = "x86_64",
+        target_feature = "gfni",
+        target_feature = "avx512f",
+        target_feature = "avx512bw"
+    ))]
+    use std::time::Instant;
 
     use p3_field::PrimeCharacteristicRing;
     use proptest::prelude::*;
@@ -903,6 +1028,66 @@ mod tests {
             let mut values = sample(len);
             assert_eq!(tower_to_poly_128_slice(&mut values), want, "len {len}");
             assert_eq!(poly_to_tower_128_slice(&mut values), want, "len {len}");
+        }
+    }
+
+    /// Diagnostic-only native benchmark for the runtime-map constructor and prepared kernel.
+    ///
+    /// This intentionally bypasses the production threshold so the constructor, apply-only,
+    /// and combined costs can be compared at every candidate size. It is ignored because it is
+    /// for the native GFNI host used to choose that threshold, not a correctness test.
+    #[cfg(all(
+        target_arch = "x86_64",
+        target_feature = "gfni",
+        target_feature = "avx512f",
+        target_feature = "avx512bw"
+    ))]
+    #[test]
+    #[ignore = "native GFNI benchmark; run with --ignored --nocapture"]
+    fn dynamic_prepared_map_forced_kernel_benchmark() {
+        for len in [64, 256, 1024, 4096, 16384] {
+            let input = sample(len);
+            let mut output = vec![0u128; len];
+            let mut construct = 0u128;
+            let mut apply = 0u128;
+            let mut combined = 0u128;
+
+            for iteration in 0..7 {
+                let started = Instant::now();
+                let prepared = blocked::PreparedMap::new(black_box(COLUMNS_128));
+                let construct_elapsed = started.elapsed().as_nanos();
+                let started_apply = Instant::now();
+                let processed = blocked::apply_out_of_place(
+                    &prepared,
+                    black_box(&input),
+                    black_box(&mut output),
+                );
+                let apply_elapsed = started_apply.elapsed().as_nanos();
+
+                let started_combined = Instant::now();
+                let prepared = blocked::PreparedMap::new(black_box(COLUMNS_128));
+                let combined_processed = blocked::apply_out_of_place(
+                    &prepared,
+                    black_box(&input),
+                    black_box(&mut output),
+                );
+                let combined_elapsed = started_combined.elapsed().as_nanos();
+                assert_eq!(processed, len - len % super::blocked::BLOCK);
+                assert_eq!(combined_processed, processed);
+
+                if iteration >= 2 {
+                    construct += construct_elapsed;
+                    apply += apply_elapsed;
+                    combined += combined_elapsed;
+                }
+            }
+            let samples = 5;
+            std::println!(
+                "dynamic_prepared_map len={len} construct_ns={} apply_ns={} construct_and_apply_ns={}",
+                construct / samples,
+                apply / samples,
+                combined / samples
+            );
         }
     }
 

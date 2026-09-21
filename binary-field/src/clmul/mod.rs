@@ -61,7 +61,7 @@ mod portable;
 pub(crate) use basis::TAIL_128;
 pub(crate) use basis::{
     poly_to_tower_64, poly_to_tower_128, poly_to_tower_128_slice, tower_image_64, tower_image_128,
-    tower_to_poly_64, tower_to_poly_128, tower_to_poly_128_slice,
+    tower_to_poly_64, tower_to_poly_128, tower_to_poly_128_slice, try_map_tower_coordinates_into,
 };
 
 use crate::BinaryField64;

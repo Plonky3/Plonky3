@@ -883,9 +883,7 @@ impl<EF: TowerLevel> BitRingSwitchBatch<'_, EF> {
                 || sums.clone(),
                 |scaled, (block, &weight)| {
                     scaled_sums_into(scaled, &sums, weight);
-                    for (slot, &inner) in block.iter_mut().zip(equality.inner()) {
-                        *slot = scaled.sum(inner);
-                    }
+                    scaled.apply_into(equality.inner(), block);
                 },
             );
 
