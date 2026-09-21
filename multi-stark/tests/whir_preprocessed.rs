@@ -641,6 +641,10 @@ fn verify_rejects_violated_main_constraint() {
 
 #[test]
 fn verify_rejects_a_proof_missing_its_expected_preprocessed_opening() {
+    // Fixture state: the AIR declares one preprocessed column, so the key commits to it.
+    //
+    //     key   -> Some(commitment)
+    //     proof -> Some(opening)
     let n = 256;
     let fixed = fixed_column(n);
     let air = PreprocessedAir {
@@ -665,9 +669,19 @@ fn verify_rejects_a_proof_missing_its_expected_preprocessed_opening() {
     .unwrap();
     assert!(proof.preprocessed_opening.is_some());
 
-    // Mutation: drop the opening the verifying key's preprocessed commitment requires.
+    // Mutation: drop the opening that commitment requires.
+    //
+    //     key   -> Some(commitment)
+    //     proof -> None
     proof.preprocessed_opening = None;
 
+    // Expected rejection: the key expects an opening the proof does not carry.
+    // Why: the rejection has to land before the opening schedule is described.
+    //   the step that replays the preprocessed opening assumes the section is there
+    //   -> reaching it empty-handed is an internal contradiction, not a verdict.
+    //
+    // This is presence, not contents.
+    // A test further down tampers with the values inside an opening that is present.
     let err = verify(
         &config,
         VerifierInstances::new(vec![VerifierInstance::new(&air, &vk, log_height, &[])]),
