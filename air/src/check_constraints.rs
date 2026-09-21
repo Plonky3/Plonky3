@@ -486,9 +486,8 @@ fn boundary_io_label(cell: &BoundaryPublic) -> String {
 /// # Panics
 ///
 /// Panics when a declared column cannot be laid over the given number of rows.
-fn assert_periodic_column_shapes<F: Field, A: BaseAir<F>>(air: &A, height: usize) {
-    // The shape rule lives with the trait that declares periodic columns.
-    // Reusing it keeps the debug verdict and the verifier verdict in step by construction.
+fn assert_periodic_column_shapes<F: Clone, A: BaseAir<F>>(air: &A, height: usize) {
+    // Screening the declared columns is what keeps this verdict and the verifier's in step.
     if let Err(err) = check_periodic_column_lengths(&air.periodic_columns(), height) {
         panic!("debug constraint check rejected the AIR: {err}");
     }
