@@ -1990,6 +1990,13 @@ where
                     PolyView::new(values).fix_prefix_var_to_packed(r)
                 } else {
                     let half = column.len() / 2;
+                    // Invariant: the low half holds at least one full lane group.
+                    // Halves are powers of two, so one group then divides the half exactly.
+                    debug_assert!(
+                        half >= F::Packing::WIDTH,
+                        "packed fold needs a low half of at least {} rows, got {half}",
+                        F::Packing::WIDTH
+                    );
                     Poly::new(
                         (0..half)
                             .step_by(F::Packing::WIDTH)
