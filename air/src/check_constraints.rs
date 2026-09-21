@@ -477,6 +477,26 @@ fn boundary_io_label(cell: &BoundaryPublic) -> String {
 
 /// Evaluate every AIR constraint against a concrete trace and panic on failure.
 ///
+/// Panics when a periodic column cannot repeat over a trace of `height` rows.
+///
+/// A periodic column needs a period that is a non-zero power of two dividing the trace
+/// length. `BaseAir::periodic_values` indexes with `row % period`, which is defined for any
+/// non-zero period, so without this check the debug run accepts a shape the prover and the
+/// verifier reject much later, with the failure attributed to the commitment scheme.
+fn assert_periodic_column_shapes<F: Field, A: BaseAir<F>>(air: &A, height: usize) {
+    for (index, col) in air.periodic_columns().iter().enumerate() {
+        let period = col.len();
+        assert!(
+            period.is_power_of_two(),
+            "debug constraint check requires periodic column {index} to have a power-of-two length, got {period}"
+        );
+        assert!(
+            period <= height,
+            "debug constraint check requires periodic column {index} (length {period}) to fit in the trace height ({height})"
+        );
+    }
+}
+
 /// The function walks the trace row by row. For each row it:
 ///
 /// 1. Builds a vertical pair of the current and next rows (wrapping around
@@ -510,6 +530,7 @@ where
             height
         );
     }
+    assert_periodic_column_shapes(air, height);
 
     // A listed cell has no AIR constraint, so the row loop below would never see it.
     if let Some(&(index, row)) = boundary_io_mismatches(air, main, public_values).first() {
@@ -630,6 +651,7 @@ where
             height
         );
     }
+    assert_periodic_column_shapes(air, height);
 
     // Accumulate violations across all rows.
     let mut all_failures = Vec::new();
@@ -729,6 +751,7 @@ where
 
 #[cfg(test)]
 mod tests {
+    use alloc::borrow::Cow;
     use alloc::{format, vec};
 
     use p3_baby_bear::BabyBear;
@@ -1338,5 +1361,60 @@ mod tests {
 
         // Expected: panic on entry. The would-be report is unreachable → bound to `_`.
         let _ = check_all_constraints(&air, &main, &[], None);
+    }
+
+    /// One column that must equal a periodic column of the given length on every row.
+    #[derive(Debug)]
+    struct PeriodicCopyAir {
+        period: usize,
+    }
+
+    impl<F: Field> BaseAir<F> for PeriodicCopyAir {
+        fn width(&self) -> usize {
+            1
+        }
+
+        fn periodic_columns(&self) -> Cow<'_, [Vec<F>]> {
+            Cow::Owned(vec![(0..self.period).map(F::from_usize).collect()])
+        }
+    }
+
+    impl<F: Field> Air<DebugConstraintBuilder<'_, F>> for PeriodicCopyAir {
+        fn eval(&self, builder: &mut DebugConstraintBuilder<'_, F>) {
+            let main = builder.main();
+            let periodic = builder.periodic_values()[0];
+            builder.assert_eq(main.current(0).unwrap(), periodic);
+        }
+    }
+
+    fn periodic_copy_trace(period: usize, height: usize) -> RowMajorMatrix<BabyBear> {
+        RowMajorMatrix::new_col(
+            (0..height)
+                .map(|i| BabyBear::from_usize(i % period))
+                .collect(),
+        )
+    }
+
+    #[test]
+    fn test_periodic_column_with_valid_shape_passes() {
+        let air = PeriodicCopyAir { period: 2 };
+        check_constraints(&air, &periodic_copy_trace(2, 8), &[]);
+        let report = check_all_constraints(&air, &periodic_copy_trace(2, 8), &[], None);
+        assert!(report.failures.is_empty());
+    }
+
+    #[test]
+    #[should_panic(expected = "periodic column 0 to have a power-of-two length, got 3")]
+    fn test_periodic_column_length_not_power_of_two_is_rejected() {
+        // The trace itself satisfies the constraint, so only the shape check can reject it.
+        let air = PeriodicCopyAir { period: 3 };
+        check_constraints(&air, &periodic_copy_trace(3, 8), &[]);
+    }
+
+    #[test]
+    #[should_panic(expected = "periodic column 0 (length 16) to fit in the trace height (8)")]
+    fn test_periodic_column_longer_than_trace_is_rejected() {
+        let air = PeriodicCopyAir { period: 16 };
+        let _ = check_all_constraints(&air, &periodic_copy_trace(16, 8), &[], None);
     }
 }
