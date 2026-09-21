@@ -386,29 +386,30 @@ mod tests {
             .unwrap();
         let (proof, _) = output.into_parts();
 
+        // Every mutation below moves the transcript seed, so the surviving value misses the product.
+        //
+        // Naming that variant is what separates the intended rejection from an accidental one.
+
         // Mutation: move one live row from the first column to the second.
         let other_layout = JaggedLayout::new(3, &[2, 1, 5, 1]).unwrap();
-        assert!(
-            other_layout
-                .verify(&point, value, &proof, &mut challenger())
-                .is_err()
+        assert_eq!(
+            other_layout.verify(&point, value, &proof, &mut challenger()),
+            Err(JaggedError::TerminalMismatch)
         );
 
         // Mutation: change one coordinate while preserving the point width.
         let mut other_row = point.row().as_slice().to_vec();
         other_row[0] += EF::ONE;
         let other_point = JaggedPoint::new(Point::new(other_row), point.column().clone());
-        assert!(
-            layout
-                .verify(&other_point, value, &proof, &mut challenger())
-                .is_err()
+        assert_eq!(
+            layout.verify(&other_point, value, &proof, &mut challenger()),
+            Err(JaggedError::TerminalMismatch)
         );
 
         // Mutation: change only the claimed sparse evaluation.
-        assert!(
-            layout
-                .verify(&point, value + EF::ONE, &proof, &mut challenger())
-                .is_err()
+        assert_eq!(
+            layout.verify(&point, value + EF::ONE, &proof, &mut challenger()),
+            Err(JaggedError::TerminalMismatch)
         );
     }
 
@@ -429,14 +430,16 @@ mod tests {
         );
 
         // One missing round cannot redefine the transcript shape.
+        // Nine live cells sit in a sixteen-cell envelope, so the honest proof carries four rounds.
         let mut short = proof.clone();
         short.sumcheck.polynomial_evaluations.pop();
-        assert!(matches!(
+        assert_eq!(
             layout.verify(&point, value, &short, &mut challenger()),
-            Err(JaggedError::Sumcheck(
-                SumcheckError::RoundCountMismatch { .. }
-            ))
-        ));
+            Err(JaggedError::Sumcheck(SumcheckError::RoundCountMismatch {
+                expected: 4,
+                actual: 3
+            }))
+        );
 
         // A zero-difficulty reduction admits no grinding witnesses at all.
         let mut ground = proof.clone();

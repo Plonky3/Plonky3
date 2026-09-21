@@ -185,8 +185,12 @@ fn a_bit_trace_that_was_not_committed_is_refused() {
     pcs.observe_commitment(&commitment, &mut verifier);
     let bound = BoundJaggedLayout::new::<EF, _>(&layout, &mut verifier);
     let replayed = bound.sample_point::<EF, EF, _>(&mut verifier);
-    assert!(matches!(
-        bound.verify(&pcs, &commitment, &opening, &replayed, value, &mut verifier),
-        Err(JaggedOpeningError::DenseMismatch)
-    ));
+    // A rejection anywhere else would mean the opening never reached the comparison under test.
+    let error = bound
+        .verify(&pcs, &commitment, &opening, &replayed, value, &mut verifier)
+        .unwrap_err();
+    assert!(
+        matches!(error, JaggedOpeningError::DenseMismatch),
+        "the committed bits must be what refuse the claim, not {error:?}"
+    );
 }

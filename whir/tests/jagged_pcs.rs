@@ -10,8 +10,8 @@ use p3_matrix::dense::RowMajorMatrix;
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_multilinear_util::point::Point;
 use p3_sumcheck::jagged::{
-    BoundJaggedLayout, CellBudget, ColumnSource, JaggedLayout, JaggedOpeningError, JaggedPoint,
-    JaggedWitness, TraceSource,
+    BoundJaggedLayout, CellBudget, ColumnSource, JaggedError, JaggedLayout, JaggedOpeningError,
+    JaggedPoint, JaggedWitness, TraceSource,
 };
 use p3_sumcheck::layout::{Layout, PrefixProver, Table, observe_commitment};
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
@@ -199,10 +199,14 @@ fn a_reduction_against_a_vector_that_was_not_committed_is_refused() {
     observe_commitment::<F, _, _>(&mut verifier, commitment.clone());
     let bound = BoundJaggedLayout::new::<F, _>(&layout, &mut verifier);
     let replayed = bound.sample_point::<F, EF, _>(&mut verifier);
-    assert!(matches!(
-        bound.verify(&pcs, &commitment, &opening, &replayed, value, &mut verifier),
-        Err(JaggedOpeningError::DenseMismatch)
-    ));
+    // A rejection anywhere else would mean the opening never reached the comparison under test.
+    let error = bound
+        .verify(&pcs, &commitment, &opening, &replayed, value, &mut verifier)
+        .unwrap_err();
+    assert!(
+        matches!(error, JaggedOpeningError::DenseMismatch),
+        "the committed vector must be what refuses the claim, not {error:?}"
+    );
 }
 
 #[test]
@@ -237,9 +241,14 @@ fn a_transcript_sealed_to_other_heights_rejects() {
     let bound = BoundJaggedLayout::new::<F, _>(&other, &mut verifier);
     let replayed = bound.sample_point::<F, EF, _>(&mut verifier);
     assert_ne!(replayed, point);
-    assert!(
-        bound
-            .verify(&pcs, &commitment, &opening, &replayed, value, &mut verifier)
-            .is_err()
-    );
+    // The commitment scheme's own error is opaque, so its variant is destructured away.
+    //
+    // The reduction's error is not opaque, and is named in full.
+    let error = bound
+        .verify(&pcs, &commitment, &opening, &replayed, value, &mut verifier)
+        .unwrap_err();
+    let JaggedOpeningError::Reduction(reduction) = error else {
+        panic!("the reduction must be what rejects, not {error:?}");
+    };
+    assert_eq!(reduction, JaggedError::TerminalMismatch);
 }
