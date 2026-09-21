@@ -60,17 +60,17 @@ pub enum ReadOnlyMemoryError {
         /// Multiplicative order of the configured field generator.
         orbit_len: usize,
     },
+    /// A representable row count could span the whole count orbit of the declaring field.
+    #[error(
+        "read-only memory declarations need an unreachable count orbit, but the field's has length {orbit_len}"
+    )]
+    CountOrbitReachable {
+        /// Multiplicative order of the configured field generator.
+        orbit_len: usize,
+    },
     /// Boundary and read factors cannot fit in one addressable product tree.
     #[error("read-only memory factor count overflows usize")]
     FactorCountOverflow,
-    /// The fingerprint challenge has the wrong dimension.
-    #[error("read-only memory fingerprint point has dimension {actual}, expected {expected}")]
-    FingerprintDimensionMismatch {
-        /// Dimension fixed by the bus tuple width.
-        expected: usize,
-        /// Dimension supplied by the caller.
-        actual: usize,
-    },
     /// The table carries the wrong number of value columns.
     #[error("read-only memory table has {actual} value columns, expected {expected}")]
     TableWidthMismatch {

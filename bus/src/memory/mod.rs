@@ -6,15 +6,19 @@
 //!
 //! Balance proves membership when every read count is nonzero and fewer reads occur than the generator orbit allows.
 //!
-//! The declarations the read helper emits only fix the tuple layout and publish how many reads the statement covers.
+//! The read helper enforces both obligations itself.
 //!
-//! Seeds, finalization, and the nonzero-count tree exist only on the materialized path, whose three-tree reduction lives here.
+//! It constrains every count against a supplied inverse, and its named-array handle refuses a field whose orbit a representable row count could span.
 //!
-//! The two-tree reduction a whole bus plan derives has no slot for a count tree, so a bus carrying read-only memory must be left out of it.
+//! Declarations are therefore sound under any reduction proving the bus balance, including the two-tree one a whole plan derives.
+//!
+//! Seeding and finalizing the array is left to the declaring AIR, which must place every entry at its own verifier-derived generator power.
+//!
+//! The materialized path here carries no AIR constraints, so a third product tree rejects a zero read count in their place.
 //!
 //! Reduction returns leaf claims that still require commitment authentication.
 
-use alloc::string::ToString;
+use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use core::marker::PhantomData;
 use core::num::NonZeroUsize;
@@ -42,6 +46,48 @@ const STATEMENT_VERSION: u8 = 1;
 /// Protocol name bound into the memory statement seed.
 const STATEMENT_NAME: &[u8] = b"p3-bus-read-only-memory";
 
+/// Named read-only array whose count orbit no representable row count can span.
+///
+/// A shorter orbit would let a full forged count cycle balance the bus on its own, and a declaration cannot see how many rows will exist.
+///
+/// Every read declaration goes through this handle so that bound is checked once, before any AIR can name the array.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ReadOnlyMemoryBus<F: Field> {
+    /// Channel shared by every declaration of this array.
+    name: String,
+    /// Bind the checked generator orbit to this handle.
+    marker: PhantomData<fn() -> F>,
+}
+
+impl<F: Field> ReadOnlyMemoryBus<F> {
+    /// Names one read-only array and checks its field against the forged-cycle bound.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a machine-word row count could span the whole count orbit.
+    pub fn new(name: &str) -> Result<Self, ReadOnlyMemoryError> {
+        // Only an orbit no row index can reach is safe without knowing the trace heights.
+        let orbit = F::order() - BigUint::from(1u8);
+        if orbit <= BigUint::from(usize::MAX) {
+            return Err(ReadOnlyMemoryError::CountOrbitReachable {
+                orbit_len: usize::try_from(orbit).expect("a rejected orbit fits in a machine word"),
+            });
+        }
+
+        Ok(Self {
+            name: name.to_string(),
+            marker: PhantomData,
+        })
+    }
+
+    /// Channel shared by every declaration of this array.
+    #[must_use]
+    pub fn name(&self) -> &str {
+        // The enclosing bus plan groups declarations by this name.
+        &self.name
+    }
+}
+
 /// AIR interface for one read-only array access.
 ///
 /// A read consumes its current count and produces the next generator-orbit count.
@@ -51,30 +97,36 @@ pub trait ReadOnlyMemoryInteractionBuilder: BusInteractionBuilder
 where
     Self::F: Field,
 {
-    /// Declares one paired read transition on a named array bus.
+    /// Declares one paired read transition on a checked array handle.
     ///
     /// Every row of the declaring trace issues exactly one read.
+    ///
+    /// The supplied inverse is constrained against the count, which rules out the self-cancelling read a zero count would otherwise contribute to both directions.
     ///
     /// Conditional reads are unsupported because the materialized leaves carry no selector.
     fn read_only_memory(
         &mut self,
-        bus_name: &str,
+        bus: &ReadOnlyMemoryBus<Self::F>,
         address: Self::Expr,
         count: Self::Expr,
+        count_inverse: Self::Expr,
         values: impl IntoIterator<Item = Self::Expr>,
     ) {
+        // An invertible count differs from its generator multiple, so the two sides cannot cancel.
+        self.assert_one(count.dup() * count_inverse);
+
         // Retain value expressions once so both directions use identical payloads.
         let values = values.into_iter().collect::<Vec<_>>();
         let pull = core::iter::once(address.dup())
             .chain(core::iter::once(count.dup()))
             .chain(values.iter().map(Dup::dup));
-        self.push_bus_interaction(bus_name, BusDirection::Pull, pull, BusActivation::Always);
+        self.push_bus_interaction(bus.name(), BusDirection::Pull, pull, BusActivation::Always);
 
         // Multiplying by the full-order generator advances one logical count.
         let push = core::iter::once(address)
             .chain(core::iter::once(count * Self::F::GENERATOR))
             .chain(values);
-        self.push_bus_interaction(bus_name, BusDirection::Push, push, BusActivation::Always);
+        self.push_bus_interaction(bus.name(), BusDirection::Push, push, BusActivation::Always);
     }
 }
 
@@ -126,7 +178,7 @@ pub struct ReadOnlyMemoryColumns<'a, F> {
 
 /// Product leaves for bus balance and the read-count nonzero check.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ReadOnlyMemoryLeaves<EF> {
+struct ReadOnlyMemoryLeaves<EF> {
     /// Factors produced by seeds and count-advancing reads.
     pushes: Vec<EF>,
     /// Factors consumed by reads and finalization.
@@ -139,20 +191,13 @@ impl<EF: Field> ReadOnlyMemoryLeaves<EF> {
     /// Returns the three product inputs in their protocol order.
     ///
     /// The first two roots must be equal and the final root must be nonzero.
-    ///
-    /// Callers should check both before invoking a prover that assumes shared roots.
-    #[must_use]
-    pub fn product_inputs(&self) -> [&[EF]; 3] {
+    fn product_inputs(&self) -> [&[EF]; 3] {
         // Keep the semantic order fixed for product-root sharing.
         [&self.pushes, &self.pulls, &self.counts]
     }
 
     /// Checks the two deterministic root obligations before proving.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when bus products differ or a read count is zero.
-    pub fn check_products(&self) -> Result<(), ReadOnlyMemoryError> {
+    fn check_products(&self) -> Result<(), ReadOnlyMemoryError> {
         // Bus balance is equality of the first two product roots.
         let push_product = self.pushes.iter().copied().product::<EF>();
         let pull_product = self.pulls.iter().copied().product::<EF>();
@@ -170,6 +215,17 @@ impl<EF: Field> ReadOnlyMemoryLeaves<EF> {
     }
 }
 
+/// Verifier challenges defining every memory leaf factor.
+///
+/// Both are drawn from a transcript that already carries the public dimensions of the statement.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ReadOnlyMemoryChallenges<EF> {
+    /// Point evaluating the padded tuple's multilinear extension.
+    pub fingerprint: Vec<EF>,
+    /// Random shift applied to every tuple fingerprint.
+    pub offset: EF,
+}
+
 /// Authenticated claims still owed after the product reduction.
 ///
 /// Every evaluation belongs to a distinct table padded with ones up to the shared product height, and the three prefixes differ.
@@ -184,6 +240,8 @@ impl<EF: Field> ReadOnlyMemoryLeaves<EF> {
 #[must_use = "leaf claims must be tied to committed columns"]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ReadOnlyMemoryClaims<EF> {
+    /// Challenges that defined the reduced leaf polynomials.
+    pub challenges: ReadOnlyMemoryChallenges<EF>,
     /// Shared multilinear point for all three leaf tables.
     pub point: Vec<EF>,
     /// Evaluation of the produced-factor table.
@@ -345,19 +403,10 @@ impl<F: Field> ReadOnlyMemoryPlan<F> {
         self.value_width
     }
 
-    /// Checked product shape for push, pull, and count trees.
-    #[must_use]
-    pub const fn product_shape(&self) -> ProductGkrShape {
-        // The root encoding forces equality of the first two trees.
-        self.product_shape
-    }
-
     /// Binds every public dimension of this statement into a transcript.
     ///
     /// The reduction transcript otherwise separates only on the padded tree height, so two statements whose factor counts round to the same power of two would share it.
-    ///
-    /// Both reduction entry points call this, and a composer must call it once more before sampling the fingerprint challenge that is drawn outside this crate.
-    pub fn observe_statement<Challenger>(&self, challenger: &mut Challenger)
+    fn observe_statement<Challenger>(&self, challenger: &mut Challenger)
     where
         F: TranscriptField,
         Challenger: FieldChallenger<F>,
@@ -385,31 +434,23 @@ impl<F: Field> ReadOnlyMemoryPlan<F> {
     ///
     /// The named-bus identity comes from the enclosing bus plan, and direction stays structural through separate output vectors.
     ///
-    /// Both fingerprint challenges must be sampled after every source column is committed and after this statement is bound to the transcript.
-    ///
     /// # Errors
     ///
     /// Returns an error when witness columns disagree with public statement dimensions.
-    pub fn materialize<EF>(
+    fn materialize<EF>(
         &self,
         columns: ReadOnlyMemoryColumns<'_, F>,
-        fingerprint_point: &[EF],
-        offset: EF,
+        challenges: &ReadOnlyMemoryChallenges<EF>,
     ) -> Result<ReadOnlyMemoryLeaves<EF>, ReadOnlyMemoryError>
     where
         EF: ExtensionField<F>,
     {
         // Validate every borrowed slice before allocating challenge-sized tables.
         self.validate_columns(columns)?;
-        if fingerprint_point.len() != self.tuple_variables {
-            return Err(ReadOnlyMemoryError::FingerprintDimensionMismatch {
-                expected: self.tuple_variables,
-                actual: fingerprint_point.len(),
-            });
-        }
+        debug_assert_eq!(challenges.fingerprint.len(), self.tuple_variables);
 
         // One equality table supplies the coefficient of every padded tuple slot.
-        let weights = equality_weights(fingerprint_point);
+        let weights = equality_weights(&challenges.fingerprint);
         debug_assert_eq!(weights.len(), self.tuple_slots.len());
 
         // Fixed domain bits contribute the same fingerprint term to every row.
@@ -433,7 +474,7 @@ impl<F: Field> ReadOnlyMemoryPlan<F> {
                 .sum::<EF>();
             let fingerprint =
                 domain_term + address_weight * address + count_weight * count + value_term;
-            offset - fingerprint
+            challenges.offset - fingerprint
         };
 
         // Both bus sides contain one boundary row per entry and one row per read.
@@ -478,12 +519,14 @@ impl<F: Field> ReadOnlyMemoryPlan<F> {
 
     /// Binds this statement, reduces the three trees, and returns the claims still owed.
     ///
+    /// Challenges are drawn here rather than supplied, so no caller can fingerprint the witness before its dimensions are bound.
+    ///
     /// # Errors
     ///
-    /// Returns an error when the leaves fail their deterministic root obligations.
+    /// Returns an error when the columns disagree with the statement or the leaves fail their deterministic root obligations.
     pub fn prove<EF, Challenger>(
         &self,
-        leaves: &ReadOnlyMemoryLeaves<EF>,
+        columns: ReadOnlyMemoryColumns<'_, F>,
         challenger: &mut Challenger,
     ) -> Result<(ProductGkrProof<EF>, ReadOnlyMemoryClaims<EF>), ReadOnlyMemoryError>
     where
@@ -491,15 +534,29 @@ impl<F: Field> ReadOnlyMemoryPlan<F> {
         EF: ExtensionField<F>,
         Challenger: FieldChallenger<F>,
     {
+        // Reject a malformed witness before it can perturb the shared transcript.
+        self.validate_columns(columns)?;
+        let challenges = self.sample_challenges(challenger);
+        let leaves = self.materialize(columns, &challenges)?;
+
         // The product prover panics on a false shared-root statement, so reject one here.
         leaves.check_products()?;
-        self.observe_statement(challenger);
+
+        // Leaf lengths come from the statement itself, so they always fit the checked shape.
+        debug_assert_eq!(
+            leaves.product_inputs().map(<[_]>::len),
+            [
+                self.table_len + self.read_len,
+                self.table_len + self.read_len,
+                self.read_len
+            ]
+        );
         let (proof, output) = ProductGkrProof::prove::<F, _>(
             &leaves.product_inputs(),
             self.product_shape,
             challenger,
         );
-        Ok((proof, self.claims(output)?))
+        Ok((proof, self.claims(challenges, output)?))
     }
 
     /// Binds this statement, verifies the three-tree reduction, and returns the claims still owed.
@@ -520,16 +577,36 @@ impl<F: Field> ReadOnlyMemoryPlan<F> {
         Challenger: FieldChallenger<F>,
     {
         // Prover and verifier bind the same dimensions before replaying the reduction.
-        self.observe_statement(challenger);
+        let challenges = self.sample_challenges(challenger);
         let output = proof.verify::<F, _>(self.product_shape, challenger)?;
-        self.claims(output)
+        self.claims(challenges, output)
+    }
+
+    /// Binds this statement and draws the fingerprint challenges from the bound transcript.
+    fn sample_challenges<EF, Challenger>(
+        &self,
+        challenger: &mut Challenger,
+    ) -> ReadOnlyMemoryChallenges<EF>
+    where
+        F: TranscriptField,
+        EF: ExtensionField<F>,
+        Challenger: FieldChallenger<F>,
+    {
+        // Sampling lives inside the reduction so the ordering cannot be skipped.
+        self.observe_statement(challenger);
+        ReadOnlyMemoryChallenges {
+            fingerprint: (0..self.tuple_variables)
+                .map(|_| challenger.sample_algebra_element())
+                .collect(),
+            offset: challenger.sample_algebra_element(),
+        }
     }
 
     /// Builds the union-bound term consumed by a protocol security report.
     ///
     /// The result covers tuple compression and the three-tree product reduction, while count-orbit safety and root checks are deterministic.
     ///
-    /// Commitment binding, leaf-claim authentication, and fixing the memory dimensions before the fingerprint challenge remain caller obligations.
+    /// Commitment binding and leaf-claim authentication remain caller obligations.
     #[must_use]
     pub fn security_term(&self, field_bits: NonZeroUsize) -> SecurityTerm {
         // Compose every random experiment as one protocol extra.
@@ -548,6 +625,7 @@ impl<F: Field> ReadOnlyMemoryPlan<F> {
     /// Converts a verified three-tree reduction into claims for commitment authentication.
     fn claims<EF: ExtensionField<F>>(
         &self,
+        challenges: ReadOnlyMemoryChallenges<EF>,
         output: ProductGkrOutput<EF>,
     ) -> Result<ReadOnlyMemoryClaims<EF>, ReadOnlyMemoryError> {
         // Attacker-controlled vector lengths must be checked before indexing.
@@ -582,6 +660,7 @@ impl<F: Field> ReadOnlyMemoryPlan<F> {
         // Each tree pads a different prefix, so the obligation travels with the claims.
         let bus_prefix = self.table_len + self.read_len;
         Ok(ReadOnlyMemoryClaims {
+            challenges,
             point: output.point,
             push: output.values[0],
             pull: output.values[1],
