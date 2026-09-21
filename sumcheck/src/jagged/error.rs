@@ -83,3 +83,86 @@ pub enum JaggedError {
     #[error("the terminal jagged relation is inconsistent")]
     TerminalMismatch,
 }
+
+/// A trace a jagged geometry cannot read.
+#[derive(Clone, Debug, Error, PartialEq, Eq)]
+pub enum JaggedIngestError {
+    /// The producer supplies a different number of columns than the geometry has.
+    #[error("the trace has {actual} columns, expected {expected}")]
+    ColumnCountMismatch {
+        /// Number of columns the geometry reserves.
+        expected: usize,
+        /// Number of columns the producer supplies.
+        actual: usize,
+    },
+    /// One column supplies a different number of cells than the geometry reserves.
+    #[error("column {column} supplies {actual} cells, expected {expected}")]
+    ColumnHeightMismatch {
+        /// Index of the disagreeing column.
+        column: usize,
+        /// Number of cells the geometry reserves.
+        expected: usize,
+        /// Number of cells the producer supplies.
+        actual: usize,
+    },
+    /// An interleaved column would read past the block it is drawn from.
+    #[error("column {column} needs {required} cells of its block, which holds {available}")]
+    StrideOutOfRange {
+        /// Index of the invalid column.
+        column: usize,
+        /// Position one past the last cell the column reads.
+        required: usize,
+        /// Number of cells in the block.
+        available: usize,
+    },
+    /// An interleaved column declares a step of zero.
+    #[error("column {column} declares a step of zero between its cells")]
+    ZeroStride {
+        /// Index of the invalid column.
+        column: usize,
+    },
+    /// A packed column holds fewer words than its height needs.
+    #[error("column {column} needs {required} packed words and holds {available}")]
+    PackedWordsTooShort {
+        /// Index of the invalid column.
+        column: usize,
+        /// Number of words the height needs.
+        required: usize,
+        /// Number of words the producer supplies.
+        available: usize,
+    },
+    /// A pre-concatenated trace is shorter than the envelope the geometry commits.
+    #[error("the committed vector holds {available} cells and the envelope needs {required}")]
+    CommittedVectorTooShort {
+        /// Size of the envelope.
+        required: usize,
+        /// Number of cells the producer supplies.
+        available: usize,
+    },
+}
+
+/// A sparse claim the dense commitment did not authenticate.
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum JaggedOpeningError<E> {
+    /// The sparse-to-dense reduction failed.
+    #[error(transparent)]
+    Reduction(#[from] JaggedError),
+    /// The dense commitment scheme failed.
+    #[error("the dense commitment scheme reported {0:?}")]
+    Commitment(E),
+    /// The dense opening does not have the shape the reduction asked for.
+    #[error(
+        "the dense opening returned {batches} batches of {direct} direct and {successor} successor values"
+    )]
+    OpeningShape {
+        /// Number of opening batches returned.
+        batches: usize,
+        /// Number of direct readings in the single expected batch.
+        direct: usize,
+        /// Number of successor readings in the single expected batch.
+        successor: usize,
+    },
+    /// The committed vector does not take the reduced value at the reduced point.
+    #[error("the dense commitment does not carry the value the reduction produced")]
+    DenseMismatch,
+}

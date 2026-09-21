@@ -202,14 +202,8 @@ where
     F: TranscriptField,
     EF: ExtensionField<F>,
 {
-    // Fixed-width integer encoding makes proofs portable across 32-bit and 64-bit hosts.
-    let mut bytes = Vec::new();
-    encode_usize(&mut bytes, layout.row_variables());
-    encode_usize(&mut bytes, layout.dense_variables());
-    encode_usize(&mut bytes, layout.cumulative_heights().len());
-    for &height in layout.cumulative_heights() {
-        encode_usize(&mut bytes, height);
-    }
+    // The geometry is encoded exactly as the standalone seal encodes it.
+    let mut bytes = encode_layout(layout);
 
     // Field elements use the transcript field's canonical coefficient encoding.
     for value in point
@@ -223,6 +217,19 @@ where
         }
     }
 
+    bytes
+}
+
+/// Encodes a sparse geometry injectively.
+pub(super) fn encode_layout(layout: &JaggedLayout) -> Vec<u8> {
+    // Fixed-width integer encoding makes proofs portable across 32-bit and 64-bit hosts.
+    let mut bytes = Vec::new();
+    encode_usize(&mut bytes, layout.row_variables());
+    encode_usize(&mut bytes, layout.dense_variables());
+    encode_usize(&mut bytes, layout.cumulative_heights().len());
+    for &height in layout.cumulative_heights() {
+        encode_usize(&mut bytes, height);
+    }
     bytes
 }
 

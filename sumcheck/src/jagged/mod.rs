@@ -6,14 +6,20 @@
 //!
 //! The reduction converts an evaluation of the virtual zero-padded table into one dense claim.
 
+mod budget;
 mod error;
+mod ingest;
 mod layout;
+mod pcs;
 mod selector;
 mod transcript;
 
-pub use error::{JaggedError, JaggedLayoutError};
+pub use budget::{CellBudget, stacked_budget};
+pub use error::{JaggedError, JaggedIngestError, JaggedLayoutError, JaggedOpeningError};
+pub use ingest::{ColumnSource, ConversionPass, IngestReport, JaggedWitness, TraceSource};
 pub use layout::JaggedLayout;
 use p3_multilinear_util::point::Point;
+pub use pcs::{BoundJaggedLayout, JaggedOpening};
 use serde::{Deserialize, Serialize};
 
 use crate::SumcheckData;
