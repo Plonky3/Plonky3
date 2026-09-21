@@ -1288,15 +1288,14 @@ fn test_preprocessed_rejects_present_preprocessed_next() {
     // Both AIRs declare one preprocessed column, opened on the current row only.
     let pre_w = proof.opened_values.instances[1]
         .base_opened_values
-        .preprocessed_local
-        .as_ref()
+        .preprocessed_local()
         .expect("instance 1 declares preprocessed columns")
         .len();
     assert_eq!(pre_w, 1);
     assert!(
         proof.opened_values.instances[1]
             .base_opened_values
-            .preprocessed_next
+            .preprocessed_next()
             .is_none()
     );
 
@@ -1316,7 +1315,10 @@ fn test_preprocessed_rejects_present_preprocessed_next() {
     // Zero columns is the width expected of an absent opening, so presence is what rejects it.
     proof.opened_values.instances[1]
         .base_opened_values
-        .preprocessed_next = Some(vec![]);
+        .preprocessed
+        .as_mut()
+        .unwrap()
+        .next = Some(vec![]);
 
     let err = verify_batch(&config, &airs, &proof, &pvs, common)
         .expect_err("a present next-row preprocessed opening must be rejected");
@@ -1339,7 +1341,10 @@ fn test_preprocessed_rejects_present_preprocessed_next() {
     // This one is caught by the width comparison rather than by presence.
     proof.opened_values.instances[1]
         .base_opened_values
-        .preprocessed_next = Some(vec![Challenge::ZERO; pre_w]);
+        .preprocessed
+        .as_mut()
+        .unwrap()
+        .next = Some(vec![Challenge::ZERO; pre_w]);
 
     let err = verify_batch(&config, &airs, &proof, &pvs, common)
         .expect_err("a full-width next-row preprocessed opening must be rejected");
@@ -1519,8 +1524,7 @@ fn test_invalid_trace_width_rejected() {
                         .base_opened_values
                         .trace_next
                         .clone(),
-                    preprocessed_local: None,
-                    preprocessed_next: None,
+                    preprocessed: None,
                     quotient_chunks: valid_proof.opened_values.instances[0]
                         .base_opened_values
                         .quotient_chunks
@@ -2936,8 +2940,8 @@ fn test_batch_stark_both_lookups_zk() -> Result<(), impl Debug> {
             let base = &opened.base_opened_values;
             base.trace_local.len()
                 + base.trace_next.as_ref().map_or(0, Vec::len)
-                + base.preprocessed_local.as_ref().map_or(0, Vec::len)
-                + base.preprocessed_next.as_ref().map_or(0, Vec::len)
+                + base.preprocessed_local().map_or(0, <[_]>::len)
+                + base.preprocessed_next().map_or(0, <[_]>::len)
                 + base.quotient_chunks.iter().map(Vec::len).sum::<usize>()
                 + base.random.as_ref().map_or(0, Vec::len)
                 + opened.permutation_local.len()

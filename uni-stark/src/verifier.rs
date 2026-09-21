@@ -228,47 +228,57 @@ where
         .map(|vk| vk.width)
         .unwrap_or_else(|| air.preprocessed_width());
 
-    // Check that the proof's opened preprocessed values match the expected width.
-    let preprocessed_local_len = opened_values
-        .preprocessed_local
-        .as_ref()
-        .map_or(0, |v| v.len());
-    let preprocessed_next_len = opened_values
-        .preprocessed_next
-        .as_ref()
-        .map_or(0, |v| v.len());
+    // The proof carries a preprocessed opening exactly when the AIR has preprocessed columns,
+    // and it reads the next row exactly when the AIR does.
+    //
+    //     no preprocessed columns    -> no opening at all
+    //     reads the next row         -> next row present, as wide as the current row
+    //     does not read the next row -> next row absent
+    //
+    // Why: a present-but-empty next row is zero columns wide yet still a present opening.
+    // Nothing in the opening argument covers it, so its value is unbound, and it would then be
+    // stacked under a full-width current row.
     let preprocessed_next_used = !air.preprocessed_next_row_columns().is_empty();
-    let expected_next_len = if preprocessed_next_used {
-        preprocessed_width
-    } else {
-        0
-    };
-    if preprocessed_width != preprocessed_local_len || expected_next_len != preprocessed_next_len {
-        return Err(InvalidProofShapeError::PreprocessedTraceWidthMismatch {
-            expected_local: preprocessed_width,
-            expected_next: expected_next_len,
-            got_local: preprocessed_local_len,
-            got_next: preprocessed_next_len,
+    match &opened_values.preprocessed {
+        Some(_) if preprocessed_width == 0 => {
+            return Err(InvalidProofShapeError::UnexpectedPreprocessedValues { air: None }.into());
         }
-        .into());
-    }
-    // An AIR either reads the preprocessed trace on the next row or it does not.
-    //
-    //     reads the next row         -> opening present, as wide as the preprocessed trace
-    //     does not read the next row -> opening absent
-    //
-    // Why: an empty vector is zero columns wide, yet it is still a present opening.
-    // Nothing in the opening argument covers it, so its value is unbound.
-    // It would then be stacked under a full-width current row.
-    if !preprocessed_next_used && opened_values.preprocessed_next.is_some() {
-        return Err(InvalidProofShapeError::UnexpectedPreprocessedNext { air: None }.into());
-    }
-    // An AIR with no preprocessed columns carries no preprocessed opening at all.
-    // Presence is tested rather than width, since an empty vector is zero columns wide.
-    if preprocessed_width == 0
-        && (opened_values.preprocessed_local.is_some() || opened_values.preprocessed_next.is_some())
-    {
-        return Err(InvalidProofShapeError::UnexpectedPreprocessedValues { air: None }.into());
+        Some(preprocessed) => {
+            let expected_next_len = if preprocessed_next_used {
+                preprocessed_width
+            } else {
+                0
+            };
+            let got_next = preprocessed.next.as_ref().map_or(0, Vec::len);
+            if preprocessed.local.len() != preprocessed_width || got_next != expected_next_len {
+                return Err(InvalidProofShapeError::PreprocessedTraceWidthMismatch {
+                    expected_local: preprocessed_width,
+                    expected_next: expected_next_len,
+                    got_local: preprocessed.local.len(),
+                    got_next,
+                }
+                .into());
+            }
+            if !preprocessed_next_used && preprocessed.next.is_some() {
+                return Err(
+                    InvalidProofShapeError::UnexpectedPreprocessedNext { air: None }.into(),
+                );
+            }
+        }
+        None if preprocessed_width > 0 => {
+            return Err(InvalidProofShapeError::PreprocessedTraceWidthMismatch {
+                expected_local: preprocessed_width,
+                expected_next: if preprocessed_next_used {
+                    preprocessed_width
+                } else {
+                    0
+                },
+                got_local: 0,
+                got_next: 0,
+            }
+            .into());
+        }
+        None => {}
     }
 
     // Validate consistency between width, verifier key, and zk settings.
@@ -408,9 +418,11 @@ where
 
     // Add the preprocessed commitment when the AIR declares preprocessed columns.
     if let Some(preprocessed_commit) = preprocessed_commit {
-        let mut pre_points = vec![(zeta, opened_values.preprocessed_local.clone().unwrap())];
-        if !air.preprocessed_next_row_columns().is_empty() {
-            pre_points.push((zeta_next, opened_values.preprocessed_next.clone().unwrap()));
+        // The shape check above guarantees the opening is present with the declared rows.
+        let preprocessed = opened_values.preprocessed.as_ref().unwrap();
+        let mut pre_points = vec![(zeta, preprocessed.local.clone())];
+        if let Some(next) = &preprocessed.next {
+            pre_points.push((zeta_next, next.clone()));
         }
         claims.push((preprocessed_commit, vec![(trace_domain, pre_points)]));
     }
@@ -471,7 +483,7 @@ where
         degree_bits,
         config.is_zk(),
         pcs.log_min_trace_height(),
-        pcs.log_max_lde_height(),
+        pcs.log_max_trace_height(),
     )?;
     let trace_domain = pcs.natural_domain_for_degree(degree);
     // TODO: allow moving preprocessed commitment to preprocess time, if known in advance
@@ -527,7 +539,7 @@ where
         .try_create_disjoint_domain(quotient_domain_size)
         .ok_or_else(|| InvalidProofShapeError::QuotientDomainTooLarge {
             air: None,
-            maximum: pcs.log_max_lde_height(),
+            maximum: pcs.log_max_trace_height(),
             got: quotient_domain_log_size,
         })?;
     let quotient_chunks_domains = quotient_domain.split_domains(num_quotient_chunks);
@@ -691,8 +703,8 @@ where
         }
     };
     let pre_next_zeros;
-    let preprocessed_next_for_verify = match &opened_values.preprocessed_next {
-        Some(v) => Some(v.as_slice()),
+    let preprocessed_next_for_verify = match opened_values.preprocessed_next() {
+        Some(v) => Some(v),
         None if preprocessed_width > 0 => {
             pre_next_zeros = SC::Challenge::zero_vec(preprocessed_width);
             Some(pre_next_zeros.as_slice())
@@ -703,7 +715,7 @@ where
         air,
         &opened_values.trace_local,
         trace_next_slice,
-        opened_values.preprocessed_local.as_deref(),
+        opened_values.preprocessed_local(),
         preprocessed_next_for_verify,
         &periodic_values,
         public_values,

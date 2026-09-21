@@ -17,8 +17,8 @@ use tracing::{debug_span, info_span, instrument};
 
 use crate::{
     Com, Commitments, Domain, OpenedValues, PackedChallenge, PackedVal, PcsProverError,
-    PreprocessedProverData, Proof, ProverConstraintFolder, ProvingError, StarkGenericConfig,
-    StarkProverTranscript, StarkShape, Val, get_constraint_layout,
+    PreprocessedOpenedValues, PreprocessedProverData, Proof, ProverConstraintFolder, ProvingError,
+    StarkGenericConfig, StarkProverTranscript, StarkShape, Val, get_constraint_layout,
     get_log_num_quotient_chunks_for_domain,
 };
 #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
@@ -462,22 +462,14 @@ where
     } else {
         None
     };
-    let (preprocessed_local, preprocessed_next) = if preprocessed_width > 0 {
-        let local = Some(opened_values[opening_layout.preprocessed][0][0].clone());
-        let next = if pre_next {
-            Some(opened_values[opening_layout.preprocessed][0][1].clone())
-        } else {
-            None
-        };
-        (local, next)
-    } else {
-        (None, None)
-    };
+    let preprocessed = (preprocessed_width > 0).then(|| PreprocessedOpenedValues {
+        local: opened_values[opening_layout.preprocessed][0][0].clone(),
+        next: pre_next.then(|| opened_values[opening_layout.preprocessed][0][1].clone()),
+    });
     let opened_values = OpenedValues {
         trace_local,
         trace_next,
-        preprocessed_local,
-        preprocessed_next,
+        preprocessed,
         quotient_chunks,
         random,
     };

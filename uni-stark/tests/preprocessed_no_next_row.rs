@@ -108,7 +108,7 @@ fn test_preprocessed_no_next_row_air() {
     let (config, air, proof, vk) = prove_copy_air();
 
     assert!(
-        proof.opened_values.preprocessed_next.is_none(),
+        proof.opened_values.preprocessed_next().is_none(),
         "preprocessed_next should be None for an AIR that does not read the next preprocessed row"
     );
 
@@ -134,7 +134,7 @@ fn test_preprocessed_no_next_row_rejects_present_preprocessed_next() {
     //
     // No other field has to change, because the opening argument does not cover this one.
     let mut tampered = proof;
-    tampered.opened_values.preprocessed_next = Some(vec![]);
+    tampered.opened_values.preprocessed.as_mut().unwrap().next = Some(vec![]);
 
     let err = verify_with_preprocessed(&config, &air, &tampered, &[], Some(&vk))
         .expect_err("verifier should reject a present preprocessed_next when the AIR does not read the next row");

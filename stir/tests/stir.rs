@@ -2129,10 +2129,10 @@ mod babybear_pcs {
     }
 
     #[test]
-    fn test_pcs_log_max_lde_height_reserves_blowup_bits() {
+    fn test_pcs_log_max_trace_height_reserves_blowup_bits() {
         let (pcs, _challenger) = get_pcs();
         assert_eq!(
-            <MyPcs as UnivariateStarkPcs<Challenge, Challenger>>::log_max_lde_height(&pcs),
+            <MyPcs as UnivariateStarkPcs<Challenge, Challenger>>::log_max_trace_height(&pcs),
             Val::TWO_ADICITY - 1
         );
     }

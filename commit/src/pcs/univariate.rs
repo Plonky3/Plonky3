@@ -105,8 +105,12 @@ where
     /// or an arbitrary use of the underlying opening protocol.
     const ZK: bool;
 
-    /// The base-2 logarithm of the largest evaluation domain this PCS can construct.
-    fn log_max_lde_height(&self) -> usize;
+    /// The base-2 logarithm of the largest trace domain a proof may claim.
+    ///
+    /// A verifier rejects a proof-supplied height above this before deriving any domain from
+    /// it, so backends whose evaluation domain must fit a two-adic subgroup subtract their
+    /// blowup here. The counterpart of [`log_min_trace_height`](Self::log_min_trace_height).
+    fn log_max_trace_height(&self) -> usize;
 
     /// The base-2 logarithm of the smallest base trace domain a proof may claim.
     ///

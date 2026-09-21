@@ -22,7 +22,9 @@ use p3_lookup::{
 use p3_matrix::Matrix;
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
 use p3_maybe_rayon::prelude::*;
-use p3_uni_stark::{OpenedValues, PackedChallenge, PackedVal, ProverConstraintFolder};
+use p3_uni_stark::{
+    OpenedValues, PackedChallenge, PackedVal, PreprocessedOpenedValues, ProverConstraintFolder,
+};
 use p3_util::{DisjointMutPtr, log2_strict_usize};
 use tracing::{debug_span, info_span, instrument};
 
@@ -721,29 +723,30 @@ where
         }
 
         // Preprocessed openings: local and optionally next row.
-        let (preprocessed_local, preprocessed_next) = if let (Some(global), Some(pre_round)) =
-            (&common.preprocessed, preprocessed_openings)
-        {
-            global.instances[i].as_ref().map_or((None, None), |meta| {
+        let preprocessed = match (&common.preprocessed, preprocessed_openings) {
+            (Some(global), Some(pre_round)) => global.instances[i].as_ref().map(|meta| {
                 let vals = &pre_round[meta.matrix_index];
-                if !airs[i].preprocessed_next_row_columns().is_empty() {
+                let next = if !airs[i].preprocessed_next_row_columns().is_empty() {
                     assert_eq!(
                         vals.len(),
                         2,
                         "expected two opening points (zeta, zeta_next) for preprocessed trace"
                     );
-                    (Some(vals[0].clone()), Some(vals[1].clone()))
+                    Some(vals[1].clone())
                 } else {
                     assert_eq!(
                         vals.len(),
                         1,
                         "expected one opening point (zeta) for preprocessed trace"
                     );
-                    (Some(vals[0].clone()), None)
+                    None
+                };
+                PreprocessedOpenedValues {
+                    local: vals[0].clone(),
+                    next,
                 }
-            })
-        } else {
-            (None, None)
+            }),
+            _ => None,
         };
 
         // Permutation openings: present only for instances with lookups.
@@ -760,8 +763,7 @@ where
         let base_opened = OpenedValues {
             trace_local,
             trace_next,
-            preprocessed_local,
-            preprocessed_next,
+            preprocessed,
             quotient_chunks: qcs,
             random,
         };
