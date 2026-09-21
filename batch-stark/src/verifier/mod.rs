@@ -548,8 +548,8 @@ where
         //     reads the next row         -> next row present, as wide as the current row
         //     does not read the next row -> next row absent
         //
-        // Presence is tested rather than width, since an empty row is zero columns wide yet
-        // still a present opening that nothing in the opening argument covers.
+        // Presence is tested rather than width.
+        // An empty row is zero columns wide, yet still an opening nothing binds.
         let pre_w = preprocessed_widths[i];
         let pre_next_used = !airs[i].preprocessed_next_row_columns().is_empty();
         match &inst_base_opened_vals.preprocessed {

@@ -20,8 +20,9 @@ use tracing::instrument;
 use crate::error::{InvalidProofShapeError, VerificationError};
 use crate::symbolic::get_log_num_quotient_chunks_for_domain;
 use crate::{
-    AirLayout, Com, Commitments, Domain, PcsError, PreprocessedVerifierKey, Proof,
-    StarkGenericConfig, StarkShape, StarkVerifierTranscript, Val, VerifierConstraintFolder,
+    AirLayout, Com, Commitments, Domain, PcsError, PreprocessedOpenedValues,
+    PreprocessedVerifierKey, Proof, StarkGenericConfig, StarkShape, StarkVerifierTranscript, Val,
+    VerifierConstraintFolder,
 };
 
 pub fn validate_degree_bits(
@@ -203,23 +204,30 @@ where
     Ok(())
 }
 
-/// Validates and commits the preprocessed trace if present.
-/// Returns the preprocessed width and its commitment hash (available iff width > 0).
+/// Validates the preprocessed trace and pairs its commitment with its opening.
+///
+/// # Returns
+///
+/// - The preprocessed width in force, taken from the verifier key when one is supplied.
+/// - The commitment and the opening it binds, present together exactly when that width is positive.
 #[allow(clippy::type_complexity)]
-fn process_preprocessed_trace<SC, A>(
+fn process_preprocessed_trace<'a, SC, A>(
     air: &A,
-    opened_values: &crate::proof::OpenedValues<SC::Challenge>,
+    opened_values: &'a crate::proof::OpenedValues<SC::Challenge>,
     preprocessed_vk: Option<&PreprocessedVerifierKey<SC>>,
 ) -> Result<
     (
         usize,
-        Option<<SC::Pcs as Pcs<SC::Challenge, SC::Challenger>>::Commitment>,
+        Option<(
+            <SC::Pcs as Pcs<SC::Challenge, SC::Challenger>>::Commitment,
+            &'a PreprocessedOpenedValues<SC::Challenge>,
+        )>,
     ),
     VerificationError<PcsError<SC>>,
 >
 where
     SC: StarkGenericConfig,
-    A: for<'a> Air<VerifierConstraintFolder<'a, SC>>,
+    A: for<'b> Air<VerifierConstraintFolder<'b, SC>>,
 {
     // Determine expected preprocessed width.
     // - If a verifier key is provided, trust its width.
@@ -236,10 +244,10 @@ where
     //     does not read the next row -> next row absent
     //
     // Why: a present-but-empty next row is zero columns wide yet still a present opening.
-    // Nothing in the opening argument covers it, so its value is unbound, and it would then be
-    // stacked under a full-width current row.
+    // Nothing in the opening argument covers it.
+    // Its value is therefore unbound, under a full-width current row.
     let preprocessed_next_used = !air.preprocessed_next_row_columns().is_empty();
-    match &opened_values.preprocessed {
+    let preprocessed = match &opened_values.preprocessed {
         Some(_) if preprocessed_width == 0 => {
             return Err(InvalidProofShapeError::UnexpectedPreprocessedValues { air: None }.into());
         }
@@ -264,6 +272,7 @@ where
                     InvalidProofShapeError::UnexpectedPreprocessedNext { air: None }.into(),
                 );
             }
+            Some(preprocessed)
         }
         None if preprocessed_width > 0 => {
             return Err(InvalidProofShapeError::PreprocessedTraceWidthMismatch {
@@ -278,8 +287,8 @@ where
             }
             .into());
         }
-        None => {}
-    }
+        None => None,
+    };
 
     // Validate consistency between width, verifier key, and zk settings.
     match (preprocessed_width, preprocessed_vk) {
@@ -291,7 +300,11 @@ where
         // Case: Preprocessed columns exist.
         //
         // Valid only if VK exists, widths match, and we are NOT in zk mode.
-        (w, Some(vk)) if w == vk.width => Ok((w, Some(vk.commitment.clone()))),
+        //
+        // A zero width leaves the opening absent.
+        // The commitment then binds nothing.
+        // It is dropped rather than carried forward.
+        (w, Some(vk)) if w == vk.width => Ok((w, preprocessed.map(|p| (vk.commitment.clone(), p)))),
 
         // Catch-all for invalid states, such as:
         // - Width is 0 but VK is provided.
@@ -321,7 +334,7 @@ struct OpeningClaims<SC: StarkGenericConfig> {
 /// - `air`: the AIR being verified, read for its periodic columns and its next-row usage.
 /// - `commitments`: the commitments the proof carries.
 /// - `opened_values`: the claimed evaluations the proof carries.
-/// - `preprocessed_commit`: the preprocessed commitment, when the width in force is positive.
+/// - `preprocessed`: the preprocessed commitment and the opening it binds, when there is one.
 /// - `trace_domain`: the domain every committed matrix is defined over.
 /// - `init_trace_domain`: the trace domain before any zero-knowledge extension.
 /// - `randomized_quotient_chunks_domains`: one domain per committed quotient chunk.
@@ -339,7 +352,7 @@ fn prepare_opening_claims<SC, A>(
     air: &A,
     commitments: &Commitments<Com<SC>>,
     opened_values: &crate::proof::OpenedValues<SC::Challenge>,
-    preprocessed_commit: Option<Com<SC>>,
+    preprocessed: Option<(Com<SC>, &PreprocessedOpenedValues<SC::Challenge>)>,
     trace_domain: Domain<SC>,
     init_trace_domain: Domain<SC>,
     randomized_quotient_chunks_domains: &[Domain<SC>],
@@ -417,9 +430,9 @@ where
     ]);
 
     // Add the preprocessed commitment when the AIR declares preprocessed columns.
-    if let Some(preprocessed_commit) = preprocessed_commit {
-        // The shape check above guarantees the opening is present with the declared rows.
-        let preprocessed = opened_values.preprocessed.as_ref().unwrap();
+    //
+    // The shape check that produced this pair already matched the rows to the AIR.
+    if let Some((preprocessed_commit, preprocessed)) = preprocessed {
         let mut pre_points = vec![(zeta, preprocessed.local.clone())];
         if let Some(next) = &preprocessed.next {
             pre_points.push((zeta_next, next.clone()));
@@ -487,7 +500,7 @@ where
     )?;
     let trace_domain = pcs.natural_domain_for_degree(degree);
     // TODO: allow moving preprocessed commitment to preprocess time, if known in advance
-    let (preprocessed_width, preprocessed_commit) =
+    let (preprocessed_width, preprocessed) =
         process_preprocessed_trace::<SC, A>(air, opened_values, preprocessed_vk)?;
 
     // Ensure the preprocessed trace and main trace have the same height.
@@ -609,9 +622,10 @@ where
         return Err(InvalidProofShapeError::NonCanonicalOodPowWitness.into());
     }
 
-    // A preprocessed commitment is bound only when the width in force is positive.
-    let preprocessed_commit = preprocessed_commit.filter(|_| preprocessed_width > 0);
-    let preprocessed_index = preprocessed_commit
+    // The transcript binds the commitment alone.
+    // The opening travels with the claims instead.
+    let preprocessed_commit = preprocessed.as_ref().map(|(commit, _)| commit.clone());
+    let preprocessed_index = preprocessed
         .as_ref()
         .map(|_| crate::StarkOpeningLayout::new(SC::Pcs::ZK).preprocessed);
 
@@ -638,7 +652,7 @@ where
     // Soundness Error: n/|EF| where n is the number of constraints.
     let alpha = transcript.constraint_phase::<Com<SC>>(
         commitments.trace.clone(),
-        preprocessed_commit.clone(),
+        preprocessed_commit,
         public_values,
     )?;
 
@@ -665,7 +679,7 @@ where
         air,
         commitments,
         opened_values,
-        preprocessed_commit,
+        preprocessed,
         trace_domain,
         init_trace_domain,
         &randomized_quotient_chunks_domains,

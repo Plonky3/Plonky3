@@ -2085,6 +2085,10 @@ fn verify_two_adic_compat_fixture() -> Result<(), Box<dyn std::error::Error>> {
         ProverData::from_airs_and_degrees(&config, &airs, &proof.degree_bits).unwrap();
     let common = &prover_data.common;
     verify_batch(&config, &airs, &proof, &pvs, common)?;
+
+    // Re-encoding must reproduce the stored bytes.
+    // The wire layout is then pinned in both directions, not just on decode.
+    assert_eq!(postcard::to_allocvec(&proof)?, proof_bytes);
     Ok(())
 }
 
@@ -2098,6 +2102,10 @@ fn verify_circle_compat_fixture() -> Result<(), Box<dyn std::error::Error>> {
         ProverData::from_airs_and_degrees(&config, &airs, &proof.degree_bits).unwrap();
     let common = &prover_data.common;
     verify_batch(&config, &airs, &proof, &pvs, common)?;
+
+    // Re-encoding must reproduce the stored bytes.
+    // The wire layout is then pinned in both directions, not just on decode.
+    assert_eq!(postcard::to_allocvec(&proof)?, proof_bytes);
     Ok(())
 }
 
