@@ -5,6 +5,7 @@ use alloc::vec::Vec;
 use p3_field::Field;
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
+use p3_util::log2_ceil_usize;
 
 use super::{JaggedError, JaggedLayout, JaggedPoint};
 
@@ -80,31 +81,23 @@ impl<'a> JaggedSelector<'a> {
     }
 }
 
-/// Materializes the first equality weights without allocating the full row cube.
+/// Materializes the first equality weights without visiting the full row cube.
 fn equality_prefix<F: Field>(point: &[F], length: usize) -> Vec<F> {
-    // Each coordinate doubles the lexicographically ordered table.
-    let mut weights = Vec::with_capacity(length);
     if length == 0 {
-        return weights;
-    }
-    weights.push(F::ONE);
-
-    for &coordinate in point {
-        let previous = weights.len();
-        let next = previous.saturating_mul(2).min(length);
-        weights.resize(next, F::ZERO);
-
-        // A new least-significant coordinate interleaves its zero and one branches.
-        // Descending order preserves each source entry until both children are written.
-        for index in (0..next.div_ceil(2)).rev() {
-            let weight = weights[index];
-            if 2 * index + 1 < next {
-                weights[2 * index + 1] = weight * coordinate;
-            }
-            weights[2 * index] = weight * (F::ONE - coordinate);
-        }
+        return Vec::new();
     }
 
+    // Every index below the requested length leaves the leading coordinates on their zero branch.
+    // Those coordinates contribute one shared scalar instead of a pass over the whole table.
+    let expanded = point.len().min(log2_ceil_usize(length));
+    let (leading, trailing) = point.split_at(point.len() - expanded);
+    let scale = leading
+        .iter()
+        .fold(F::ONE, |weight, &value| weight * (F::ONE - value));
+
+    // The remaining coordinates span at most twice the requested length.
+    let mut weights = Poly::new_from_point(trailing, scale).into_evals();
+    weights.truncate(length);
     weights
 }
 
@@ -132,7 +125,7 @@ impl JaggedSelector<'_> {
     ///
     /// Accepting only on a set comparison bit gives a strict inequality, and the lower bound is free because the row index is non-negative.
     ///
-    /// The extra top layer gives each point one zero variable, which absorbs the overflow bit of an endpoint at the dense capacity and forces the last carry to vanish.
+    /// Reading one layer above the wider point leaves both points at zero there, which absorbs the overflow bit of an endpoint at the dense capacity and forces the last carry to vanish.
     ///
     /// The two conditions together say exactly that the row index is below the column height.
     pub(super) fn evaluate<F: Field>(
@@ -145,8 +138,7 @@ impl JaggedSelector<'_> {
         // One extra zero layer checks the final carry and the endpoint's overflow bit.
         let top = row_point.num_variables().max(dense_point.num_variables());
 
-        // Only the two secret coordinates carry a nonzero equality factor, and both are shared by every column.
-        // Hoisting their four products out of the column loop is the whole difference from a per-column automaton.
+        // The four products of a row and a dense coordinate depend only on the layer, so every column shares them.
         let layer_weights = (0..=top)
             .map(|layer| {
                 let row = point_coordinate_from_low(row_point, layer);
@@ -316,6 +308,23 @@ mod tests {
             .sum()
     }
 
+    // Equality weight of one Boolean index, written straight from the product definition.
+    // Coordinates are most-significant first, so the trailing coordinate owns the low index bit.
+    fn definitional_weight(point: &[F], index: usize) -> F {
+        point
+            .iter()
+            .rev()
+            .enumerate()
+            .map(|(bit, &value)| {
+                if (index >> bit) & 1 == 1 {
+                    value
+                } else {
+                    F::ONE - value
+                }
+            })
+            .product()
+    }
+
     fn field_point(values: &[u32]) -> Point<F> {
         // Small canonical values make failures easy to reproduce.
         Point::new(values.iter().copied().map(F::from_u32).collect())
@@ -367,6 +376,16 @@ mod tests {
                 equality_prefix(point.as_slice(), length),
                 full.as_slice()[..length]
             );
+        }
+
+        // A forty-variable point never materializes its cube, so the definition is the only reference.
+        // Lengths straddling a power of two catch an off-by-one in the count of expanded coordinates.
+        let wide = field_point(&[3; 40]);
+        for length in [1, 2, 3, 8, 17] {
+            let expected = (0..length)
+                .map(|index| definitional_weight(wide.as_slice(), index))
+                .collect::<Vec<_>>();
+            assert_eq!(equality_prefix(wide.as_slice(), length), expected);
         }
     }
 

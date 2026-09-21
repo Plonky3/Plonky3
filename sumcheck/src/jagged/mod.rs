@@ -2,7 +2,7 @@
 //!
 //! This module implements the basic sparse-to-dense reduction from ePrint 2025/917.
 //!
-//! A downstream multilinear PCS authenticates only the live cells concatenated column by column.
+//! A downstream multilinear PCS authenticates the live cells concatenated column by column, padded to a power-of-two envelope.
 //!
 //! The reduction converts an evaluation of the virtual zero-padded table into one dense claim.
 
@@ -198,18 +198,17 @@ mod tests {
         total
     }
 
-    // Evaluation of the padded dense witness, which is the claim the underlying PCS must answer.
-    fn padded_evaluation(witness: &[F], capacity: usize, point: &Point<EF>) -> EF {
-        let mut padded = witness.iter().copied().map(EF::from).collect::<Vec<_>>();
-        padded.resize(capacity, EF::ZERO);
-        Poly::new(padded).eval_base(point)
+    // Evaluation of the committed dense vector, which is the claim the underlying PCS must answer.
+    fn committed_evaluation(witness: &[F], point: &Point<EF>) -> EF {
+        Poly::new(witness.to_vec()).eval_base(point)
     }
 
     fn fixture() -> (JaggedLayout, Vec<usize>, Vec<F>, JaggedPoint<EF>) {
-        // Four unequal columns concatenate to nine live dense cells.
+        // Four unequal columns concatenate to nine live cells inside a sixteen-cell envelope.
+        // The seven padding cells are nonzero, so a reduction that silently assumed zeros is caught here.
         let heights = vec![3, 0, 5, 1];
         let layout = JaggedLayout::new(3, &heights).unwrap();
-        let dense = (1..=layout.area())
+        let dense = (1..=layout.dense_capacity())
             .map(|value| F::from_u64(value as u64))
             .collect();
         let point = JaggedPoint::new(
@@ -237,22 +236,27 @@ mod tests {
     }
 
     #[test]
-    fn the_column_geometry_separates_two_transcript_seeds() {
-        // Moving one live row between columns keeps the point widths and the round count.
+    fn every_public_statement_component_separates_two_transcript_seeds() {
+        // Each mutation below keeps the point widths and the round count.
         // Only the seed can tell the two statements apart, so the challenge must move with it.
         let (layout, _, _, point) = fixture();
-        let moved = JaggedLayout::new(3, &[2, 1, 5, 1]).unwrap();
         let value = EF::from_u64(42);
-        assert_eq!(moved.dense_variables(), layout.dense_variables());
+        let baseline = seeded_challenge(&layout, &point, value);
+        assert_eq!(baseline, seeded_challenge(&layout, &point, value));
 
-        assert_eq!(
-            seeded_challenge(&layout, &point, value),
-            seeded_challenge(&layout, &point, value)
-        );
-        assert_ne!(
-            seeded_challenge(&layout, &point, value),
-            seeded_challenge(&moved, &point, value)
-        );
+        // Mutation: move one live row between columns.
+        let moved = JaggedLayout::new(3, &[2, 1, 5, 1]).unwrap();
+        assert_eq!(moved.dense_variables(), layout.dense_variables());
+        assert_ne!(baseline, seeded_challenge(&moved, &point, value));
+
+        // Mutation: shift one row coordinate of the sparse point.
+        let mut shifted = point.row().as_slice().to_vec();
+        shifted[0] += EF::ONE;
+        let shifted_point = JaggedPoint::new(Point::new(shifted), point.column().clone());
+        assert_ne!(baseline, seeded_challenge(&layout, &shifted_point, value));
+
+        // Mutation: shift the claimed sparse evaluation alone.
+        assert_ne!(baseline, seeded_challenge(&layout, &point, value + EF::ONE));
     }
 
     #[test]
@@ -268,11 +272,11 @@ mod tests {
             .verify(&point, value, &proof, &mut challenger())
             .unwrap();
 
-        // The surviving claim is exactly an evaluation of the zero-padded dense witness.
+        // The surviving claim is exactly an evaluation of the vector the caller committed.
         assert_eq!(prover_claim, verifier_claim);
         assert_eq!(
             *verifier_claim.value(),
-            padded_evaluation(&dense, layout.dense_capacity(), verifier_claim.point())
+            committed_evaluation(&dense, verifier_claim.point())
         );
     }
 
@@ -301,8 +305,8 @@ mod tests {
                 .prove(&short, &point, EF::ZERO, &mut challenger())
                 .err(),
             Some(JaggedError::DenseLengthMismatch {
-                expected: 9,
-                actual: 8
+                expected: 16,
+                actual: 15
             })
         );
 
@@ -452,26 +456,72 @@ mod tests {
 
     #[test]
     fn empty_trace_proves_only_the_zero_sparse_polynomial() {
-        // Zero live cells produce a constant dense zero polynomial and no sumcheck rounds.
+        // Zero live cells leave a one-cell envelope that is entirely padding, and no sumcheck rounds.
         let layout = JaggedLayout::new(2, &[0, 0]).unwrap();
         let point = JaggedPoint::new(
             extension_point(&[2, 3, 5, 7, 11, 13, 17, 19]),
             extension_point(&[23, 29, 31, 37]),
         );
         let output = layout
-            .prove(&[], &point, EF::ZERO, &mut challenger())
+            .prove(&[F::ONE], &point, EF::ZERO, &mut challenger())
             .unwrap();
-        let (proof, _) = output.into_parts();
+        let (proof, claim) = output.into_parts();
+
+        // The sparse table is empty, yet the claim still names the nonzero cell that was committed.
+        assert_eq!(*claim.value(), EF::ONE);
 
         // No witness can make the empty table take a nonzero value.
         assert_eq!(
-            layout.prove(&[], &point, EF::ONE, &mut challenger()).err(),
+            layout
+                .prove(&[F::ONE], &point, EF::ONE, &mut challenger())
+                .err(),
             Some(JaggedError::ClaimMismatch)
         );
         assert!(
             layout
                 .verify(&point, EF::ZERO, &proof, &mut challenger())
                 .is_ok()
+        );
+    }
+
+    #[test]
+    fn padding_is_free_but_the_claim_names_the_committed_vector() {
+        // Two witnesses agreeing on every live cell state the same sparse claim.
+        let (layout, heights, dense, point) = fixture();
+        let mut other = dense.clone();
+        other[layout.area()] += F::ONE;
+        let value = jagged_evaluation(&heights, &dense, &point);
+        assert_eq!(value, jagged_evaluation(&heights, &other, &point));
+
+        // Both proofs are honest, and neither verifier learns which padding was used.
+        let (proof, claim) = layout
+            .prove(&dense, &point, value, &mut challenger())
+            .unwrap()
+            .into_parts();
+        let (other_proof, other_claim) = layout
+            .prove(&other, &point, value, &mut challenger())
+            .unwrap()
+            .into_parts();
+        assert!(
+            layout
+                .verify(&point, value, &proof, &mut challenger())
+                .is_ok()
+        );
+        assert!(
+            layout
+                .verify(&point, value, &other_proof, &mut challenger())
+                .is_ok()
+        );
+
+        // Each delegated claim names its own committed vector, so a prover handed only the live cells would open against the wrong one.
+        assert_eq!(*claim.value(), committed_evaluation(&dense, claim.point()));
+        assert_eq!(
+            *other_claim.value(),
+            committed_evaluation(&other, other_claim.point())
+        );
+        assert_ne!(
+            *other_claim.value(),
+            committed_evaluation(&dense, other_claim.point())
         );
     }
 
@@ -486,7 +536,7 @@ mod tests {
             // Heights up to the row bound sweep empty columns, a full column and non-power-of-two areas.
             let layout = JaggedLayout::new(3, &heights).unwrap();
             let point = JaggedPoint::new(extension_point(&row), extension_point(&column));
-            let witness = cells[..layout.area()]
+            let witness = cells[..layout.dense_capacity()]
                 .iter()
                 .map(|&cell| F::from_u32(cell))
                 .collect::<Vec<_>>();
@@ -504,7 +554,7 @@ mod tests {
             prop_assert_eq!(&prover_claim, &verifier_claim);
             prop_assert_eq!(
                 *verifier_claim.value(),
-                padded_evaluation(&witness, layout.dense_capacity(), verifier_claim.point())
+                committed_evaluation(&witness, verifier_claim.point())
             );
             prop_assert_eq!(
                 layout.prove(&witness, &point, value + EF::ONE, &mut challenger()).err(),
@@ -517,13 +567,13 @@ mod tests {
             heights in prop::collection::vec(0usize..=3, 4),
             row in prop::collection::vec(any::<u32>(), 80),
             column in prop::collection::vec(any::<u32>(), 8),
-            cells in prop::collection::vec(any::<u32>(), 12),
+            cells in prop::collection::vec(any::<u32>(), 16),
         ) {
             // Twenty row variables over twelve live cells is the capacity-free shape this exists for.
             let layout = JaggedLayout::new(20, &heights).unwrap();
             prop_assert!(layout.dense_variables() <= 4);
             let point = JaggedPoint::new(extension_point(&row), extension_point(&column));
-            let witness = cells[..layout.area()]
+            let witness = cells[..layout.dense_capacity()]
                 .iter()
                 .map(|&cell| F::from_u32(cell))
                 .collect::<Vec<_>>();
@@ -540,7 +590,7 @@ mod tests {
             prop_assert_eq!(&prover_claim, &verifier_claim);
             prop_assert_eq!(
                 *verifier_claim.value(),
-                padded_evaluation(&witness, layout.dense_capacity(), verifier_claim.point())
+                committed_evaluation(&witness, verifier_claim.point())
             );
         }
     }

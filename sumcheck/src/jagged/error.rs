@@ -65,10 +65,10 @@ pub enum JaggedError {
         /// Number of coordinates supplied by the caller.
         actual: usize,
     },
-    /// The dense witness does not contain exactly the live cells.
+    /// The dense witness does not fill the power-of-two envelope exactly.
     #[error("the dense witness has {actual} cells, expected {expected}")]
     DenseLengthMismatch {
-        /// Number of live cells fixed by the layout.
+        /// Envelope size fixed by the layout.
         expected: usize,
         /// Number of cells supplied by the prover.
         actual: usize,

@@ -23,7 +23,7 @@ use crate::strategy::{Basis, SumcheckProver, VariableOrder};
 ///
 /// Every column occupies one consecutive interval in the dense witness.
 ///
-/// The final power-of-two suffix is virtual zero padding.
+/// The suffix filling out the power-of-two envelope holds no sparse cell, and the selector ignores it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct JaggedLayout {
     /// Number of variables addressing a row in the sparse view.
@@ -159,22 +159,20 @@ impl JaggedLayout {
 
     /// Proves that a virtual jagged table takes a caller-supplied value at a sparse point.
     ///
-    /// The dense witness contains only live cells in column-major order.
+    /// The witness is the committed vector itself: this layout's live cells in column-major order, followed by padding out to the power-of-two envelope.
     ///
-    /// The returned dense claim must be opened against the commitment to the same witness.
+    /// The returned dense claim is an evaluation of exactly that vector, so passing the live cells alone would only ever open against zero padding.
     ///
     /// # Soundness
     ///
     /// The reduction contributes at most `2m / |EF|` error, where `m` is the base-two logarithm of the padded live area rather than the row bound, which may be far larger.
-    ///
-    /// The bound is meaningful only when the extension is large enough for the target security level.
     ///
     /// This bound does not include the binding error of the underlying PCS.
     ///
     /// # Errors
     ///
     /// - The sparse point does not match the public layout.
-    /// - The dense witness length differs from the live trace area.
+    /// - The dense witness length differs from the power-of-two envelope.
     /// - The witness does not take the supplied value at the supplied point.
     pub fn prove<F, EF, Challenger>(
         &self,
@@ -191,9 +189,9 @@ impl JaggedLayout {
         // Reject malformed public geometry before touching the transcript.
         let selector = JaggedSelector::new(self);
         selector.validate_point(point)?;
-        if dense_witness.len() != self.area() {
+        if dense_witness.len() != self.dense_capacity() {
             return Err(JaggedError::DenseLengthMismatch {
-                expected: self.area(),
+                expected: self.dense_capacity(),
                 actual: dense_witness.len(),
             });
         }
@@ -212,12 +210,8 @@ impl JaggedLayout {
             return Err(JaggedError::ClaimMismatch);
         }
 
-        // The committed data occupies the live prefix.
-        // The power-of-two suffix is represented only by zeros inside this reduction.
-        let mut dense = EF::zero_vec(self.dense_capacity());
-        for (destination, &source) in dense.iter_mut().zip(dense_witness) {
-            *destination = EF::from(source);
-        }
+        // The sumcheck runs over the envelope, so the padding the caller committed must ride along.
+        let dense = dense_witness.iter().copied().map(EF::from).collect();
 
         // Both parties seed from the complete sparse statement before any challenge is drawn.
         let mut transcript = JaggedProverTranscript::<Challenger, F, EF>::new(
@@ -272,6 +266,8 @@ impl JaggedLayout {
     /// What rules that out is the caller opening its commitment at the returned point and finding exactly the returned value, so discarding the returned claim is not a weakened check but unconditional acceptance.
     ///
     /// The commitment must name as many variables as the dense arity and hold this layout's live cells in column-major order, while evaluations past the live area are unconstrained because the selector vanishes there.
+    ///
+    /// The column heights must already be bound into the transcript, normally by that commitment, before the sparse point is drawn.
     ///
     /// # Soundness
     ///
@@ -348,8 +344,6 @@ impl JaggedLayout {
 
 #[cfg(test)]
 mod tests {
-    use alloc::vec;
-
     use super::*;
 
     #[test]
@@ -394,9 +388,6 @@ mod tests {
         assert_eq!(empty.area(), 0);
         assert_eq!(empty.dense_capacity(), 1);
         assert_eq!(empty.dense_variables(), 0);
-
-        // Keep the allocation alive until every assertion has read it.
-        drop(vec![empty]);
     }
 
     #[test]
