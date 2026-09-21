@@ -34,6 +34,8 @@ use crate::poly::{Poly, PolyMaybePacked};
 ///
 /// The kernels read this table as eq(z, .), not as an arbitrary polynomial.
 /// Construction therefore goes through `new_unpacked` or `new_packed` only.
+/// Cross-field conversion goes through `to_field`, which maps each logical scalar lane
+/// semantically and deliberately stores the result unpacked.
 #[derive(Debug, Clone)]
 pub struct EqMaybePacked<F: Field, EF: ExtensionField<F>>(PolyMaybePacked<F, EF>);
 
@@ -64,6 +66,25 @@ impl<F: Field, EF: ExtensionField<F>> EqMaybePacked<F, EF> {
             // Not enough evaluations to pack; fall back to scalar.
             Self::new_unpacked(point)
         }
+    }
+
+    /// Converts this table to an unpacked equality table in another field.
+    ///
+    /// The packed representation is streamed in logical scalar lane order and the
+    /// destination deliberately uses unpacked storage. The caller supplies the same
+    /// field-homomorphic `From<EF>` conversion contract as the representation prover;
+    /// lanes are never reinterpreted across fields.
+    pub(super) fn to_field<R>(&self) -> EqMaybePacked<R, R>
+    where
+        R: Field + From<EF>,
+    {
+        let scalar = match &self.0 {
+            PolyMaybePacked::Scalar(eq1) => eq1.iter().copied().map(R::from).collect(),
+            PolyMaybePacked::Packed(eq1) => EF::ExtensionPacking::to_ext_iter(eq1.iter().copied())
+                .map(R::from)
+                .collect(),
+        };
+        EqMaybePacked(PolyMaybePacked::Scalar(Poly::new(scalar)))
     }
 
     /// Total number of boolean variables represented by this table.
