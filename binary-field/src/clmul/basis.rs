@@ -465,12 +465,55 @@ mod blocked {
         blocks
     }
 
+    /// Transposes the bits of an 8 × 8 byte matrix packed row-major in a u64.
+    ///
+    /// The three exchanges swap the three-bit byte and bit indices. GFNI reads output rows in
+    /// reverse order, so the caller reverses the resulting row bytes afterward.
+    #[inline]
+    fn transpose8(mut value: u64) -> u64 {
+        let mut exchange = (value ^ (value >> 7)) & 0x00aa_00aa_00aa_00aa;
+        value ^= exchange ^ (exchange << 7);
+        exchange = (value ^ (value >> 14)) & 0x0000_cccc_0000_cccc;
+        value ^= exchange ^ (exchange << 14);
+        exchange = (value ^ (value >> 28)) & 0x0000_0000_f0f0_f0f0;
+        value ^ exchange ^ (exchange << 28)
+    }
+
+    /// Builds runtime GFNI blocks by gathering column bytes and transposing each 8 × 8 submatrix.
+    ///
+    /// `affine_blocks` above remains the static reference constructor. Keeping this candidate
+    /// separate lets native tests compare every generated word against that independent oracle.
+    #[inline]
+    fn affine_blocks_runtime(cols: &[u128; 128]) -> [[u64; 16]; 16] {
+        let mut blocks = [[0u64; 16]; 16];
+        let mut j = 0;
+        while j < 16 {
+            let c0 = cols[8 * j].to_le_bytes();
+            let c1 = cols[8 * j + 1].to_le_bytes();
+            let c2 = cols[8 * j + 2].to_le_bytes();
+            let c3 = cols[8 * j + 3].to_le_bytes();
+            let c4 = cols[8 * j + 4].to_le_bytes();
+            let c5 = cols[8 * j + 5].to_le_bytes();
+            let c6 = cols[8 * j + 6].to_le_bytes();
+            let c7 = cols[8 * j + 7].to_le_bytes();
+            let mut k = 0;
+            while k < 16 {
+                let packed =
+                    u64::from_le_bytes([c0[k], c1[k], c2[k], c3[k], c4[k], c5[k], c6[k], c7[k]]);
+                blocks[k][j] = transpose8(packed).swap_bytes();
+                k += 1;
+            }
+            j += 1;
+        }
+        blocks
+    }
+
     impl PreparedMap {
         /// Builds the GFNI blocks for one runtime coordinate map.
         #[inline]
         pub(super) fn new(columns: [u128; 128]) -> Self {
             Self {
-                blocks: affine_blocks(&columns),
+                blocks: affine_blocks_runtime(&columns),
                 columns,
             }
         }
@@ -651,6 +694,45 @@ mod blocked {
     #[inline]
     pub(super) fn poly_to_tower(values: &mut [u128]) -> usize {
         apply(&POLY_TO_TOWER, values)
+    }
+
+    #[cfg(test)]
+    mod runtime_constructor_tests {
+        use super::{affine_blocks, affine_blocks_runtime};
+
+        fn next_word(state: &mut u128) -> u128 {
+            *state ^= *state << 7;
+            *state ^= *state >> 9;
+            *state ^= *state << 8;
+            *state
+        }
+
+        #[test]
+        fn runtime_constructor_matches_reference_for_singletons_and_random_maps() {
+            // Every one of the 16,384 input-bit matrices pins byte gathering, transpose
+            // orientation, and GFNI row reversal independently of the static constructor.
+            for column in 0..128 {
+                for output_bit in 0..128 {
+                    let mut columns = [0u128; 128];
+                    columns[column] = 1u128 << output_bit;
+                    assert_eq!(
+                        affine_blocks_runtime(&columns),
+                        affine_blocks(&columns),
+                        "column {column}, output bit {output_bit}"
+                    );
+                }
+            }
+
+            let mut state = 0xC011_8A8E_51ED_5EED_1234_5678_9ABC_DEF0u128;
+            for map in 0..8 {
+                let columns = core::array::from_fn(|_| next_word(&mut state));
+                assert_eq!(
+                    affine_blocks_runtime(&columns),
+                    affine_blocks(&columns),
+                    "random map {map}"
+                );
+            }
+        }
     }
 }
 
