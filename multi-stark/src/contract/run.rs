@@ -1,12 +1,12 @@
-//! The choices one proof makes within a statement it cannot change.
+//! The choices a verifier makes within a statement it cannot change.
 
 use alloc::vec::Vec;
 
-/// What one proof picks, inside what its statement already allows.
+/// What one verification runs at, inside what its statement already allows.
 ///
 /// The only way to build one is to pick heights a statement already allows.
 ///
-/// A height outside the declared range therefore never reaches the prover or the verifier.
+/// The prover never sees one, so this bounds what is accepted rather than what is produced.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Run {
     statement: [u8; 32],

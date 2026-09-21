@@ -9,19 +9,20 @@ use p3_dft::Radix2DFTSmallBatch;
 use p3_field::extension::BinomialExtensionField;
 use p3_field::{Field, PrimeCharacteristicRing};
 use p3_keccak::Keccak256Hash;
+use p3_lookup::{Count, InteractionBuilder, InteractionSymbolicBuilder};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_multi_stark::config::{MultiStarkConfig, PcsError};
 use p3_multi_stark::contract::{
-    BODY_REVISION, BindingOnly, ColumnCounts, DeclarationError, ENVELOPE_VERSION, EnvelopeError,
-    HEADER_LEN, HeightRange, Hiding, MachineDeclaration, SealedVerificationError, TableDeclaration,
+    BODY_REVISION, ColumnCounts, DeclarationError, ENVELOPE_VERSION, EnvelopeError, HEADER_LEN,
+    HeightRange, MachineDeclaration, SealedVerificationError, TableDeclaration,
 };
 use p3_multi_stark::{
-    MultiStarkProof, ProverInstance, ProverInstances, VerifierInstance, VerifierInstances, prove,
-    setup,
+    MultiStarkProof, ProverInstance, ProverInstances, SecurityError, VerificationError,
+    VerifierInstance, VerifierInstances, prove, setup,
 };
 use p3_sumcheck::layout::{Layout, PrefixProver, Table, Witness};
-use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
+use p3_symmetric::{CryptographicHasher, PaddingFreeSponge, TruncatedPermutation};
 use p3_util::log2_ceil_usize;
 use p3_whir::{
     FoldingFactor, ProtocolParameters, SecurityAssumption, WhirConfig, WhirProver, WhirProverData,
@@ -56,7 +57,22 @@ const LOG_HEIGHT: usize = 8;
 /// Budget the fixture was measured against, in bytes.
 const PROOF_BUDGET: usize = 1 << 16;
 
+/// Security level every verification below must reach.
+const SECURITY_TARGET: usize = 20;
+
+/// Collision resistance the primitives of this configuration supply.
+const COLLISION_BITS: usize = 100;
+
 const FIXTURE: &str = "tests/fixtures/backend_contract_v1.envelope";
+
+/// Body revision the fixture on disk was written under.
+const FIXTURE_REVISION: u16 = 1;
+
+/// Digest of the fixture bytes, pinned so a silent regeneration cannot pass.
+const FIXTURE_DIGEST: [u8; 32] = [
+    97, 180, 157, 109, 1, 250, 201, 13, 65, 209, 188, 132, 114, 90, 196, 70, 205, 65, 107, 72, 155,
+    62, 109, 120, 145, 192, 249, 69, 240, 171, 159, 67,
+];
 
 /// A commitment scheme that binds the trace without hiding it.
 struct BindingConfig {
@@ -71,6 +87,10 @@ impl MultiStarkConfig for BindingConfig {
 
     fn pcs(&self) -> &TestPcs {
         &self.pcs
+    }
+
+    fn collision_resistance_bits(&self) -> Option<usize> {
+        Some(COLLISION_BITS)
     }
 
     fn min_num_variables(&self) -> usize {
@@ -176,6 +196,104 @@ impl<AB: AirBuilder> Air<AB> for FibAir {
     }
 }
 
+/// A table of three columns, so its declaration cannot pass for the one above.
+struct WideAir;
+
+impl<X> BaseAir<X> for WideAir {
+    fn width(&self) -> usize {
+        NUM_COLS + 1
+    }
+    fn num_public_values(&self) -> usize {
+        3
+    }
+}
+
+impl<AB: AirBuilder> Air<AB> for WideAir {
+    fn eval(&self, builder: &mut AB) {
+        let main = builder.main();
+        let current = main.current(0).expect("the table has three columns");
+        let next = main.next(0).expect("the table has three columns");
+        builder.when_transition().assert_eq(current, next);
+    }
+}
+
+/// The recurrence above with one sign flipped, and every count left alone.
+struct SubtractingFibAir;
+
+impl<X> BaseAir<X> for SubtractingFibAir {
+    fn width(&self) -> usize {
+        NUM_COLS
+    }
+    fn num_public_values(&self) -> usize {
+        3
+    }
+}
+
+impl<AB: AirBuilder> Air<AB> for SubtractingFibAir {
+    fn eval(&self, builder: &mut AB) {
+        let main = builder.main();
+        let pis = builder.public_values();
+        let (a, b, x) = (pis[0], pis[1], pis[2]);
+
+        let local: &FibRow<AB::Var> = main.current_slice().borrow();
+        let next: &FibRow<AB::Var> = main.next_slice().borrow();
+
+        let mut first = builder.when_first_row();
+        first.assert_eq(local.left, a);
+        first.assert_eq(local.right, b);
+
+        let mut trans = builder.when_transition();
+        trans.assert_eq(local.right, next.left);
+        trans.assert_eq(local.right - local.left, next.right);
+
+        builder.when_last_row().assert_eq(local.right, x);
+    }
+}
+
+/// The recurrence above, plus a lookup that really does move tuples.
+struct LookupFibAir;
+
+impl<X> BaseAir<X> for LookupFibAir {
+    fn width(&self) -> usize {
+        NUM_COLS
+    }
+    fn num_public_values(&self) -> usize {
+        3
+    }
+}
+
+impl<AB: AirBuilder + InteractionBuilder> Air<AB> for LookupFibAir {
+    fn eval(&self, builder: &mut AB) {
+        FibAir.eval(builder);
+        let main = builder.main();
+        let local: &FibRow<AB::Var> = main.current_slice().borrow();
+        let (left, right) = (local.left, local.right);
+        builder.push_local_interaction([
+            (vec![left.into()], Count::bounded(AB::Expr::ONE, 1)),
+            (vec![right.into()], Count::provided(-AB::Expr::ONE)),
+        ]);
+    }
+}
+
+/// The recurrence above, plus a lookup with no tuple at all.
+struct InertLookupFibAir;
+
+impl<X> BaseAir<X> for InertLookupFibAir {
+    fn width(&self) -> usize {
+        NUM_COLS
+    }
+    fn num_public_values(&self) -> usize {
+        3
+    }
+}
+
+impl<AB: AirBuilder + InteractionBuilder> Air<AB> for InertLookupFibAir {
+    fn eval(&self, builder: &mut AB) {
+        FibAir.eval(builder);
+        builder.push_local_interaction(core::iter::empty::<(Vec<AB::Expr>, Count<AB::Expr>)>());
+    }
+}
+
 fn trace(n: usize) -> RowMajorMatrix<F> {
     let (mut left, mut right) = (F::ZERO, F::ONE);
     let mut values = Vec::with_capacity(NUM_COLS * n);
@@ -196,12 +314,18 @@ fn public_values(n: usize) -> [F; 3] {
 }
 
 /// The declaration the machine publishes, derived from the constraint system itself.
-fn declaration() -> MachineDeclaration<BindingOnly, Keccak256Hash> {
-    let table = TableDeclaration::from_constraints::<F, EF, FibAir>(
-        &FibAir,
-        HeightRange::new(FOLDING as u32, 20),
-    );
-    MachineDeclaration::new(Keccak256Hash, vec![table], PROOF_BUDGET).unwrap()
+fn declaration() -> MachineDeclaration<Keccak256Hash> {
+    declaration_for(&FibAir)
+}
+
+/// The declaration one constraint system produces, at the heights every test here uses.
+fn declaration_for<A>(air: &A) -> MachineDeclaration<Keccak256Hash>
+where
+    A: BaseAir<F> + Air<InteractionSymbolicBuilder<F, EF>>,
+{
+    let table =
+        TableDeclaration::from_constraints::<F, EF, A>(air, HeightRange::new(FOLDING as u32, 20));
+    MachineDeclaration::new(Keccak256Hash, vec![table], PROOF_BUDGET, SECURITY_TARGET).unwrap()
 }
 
 /// Prove the fixed instance.
@@ -261,6 +385,11 @@ fn framing_error(bytes: &[u8]) -> EnvelopeError {
     }
 }
 
+/// The digest the fixture is pinned by.
+fn digest(bytes: &[u8]) -> [u8; 32] {
+    Keccak256Hash.hash_iter(bytes.iter().copied())
+}
+
 fn fixture_path() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(FIXTURE)
 }
@@ -293,21 +422,157 @@ fn a_sealed_proof_verifies() {
 }
 
 #[test]
-fn the_promise_is_part_of_the_type() {
-    // The same tables under a different promise are a different statement.
-    let binding = declaration();
-    let hiding = MachineDeclaration::<Hiding, _>::new(
+fn the_security_target_is_part_of_the_statement() {
+    // The same tables under a different target are a different statement.
+    let stated = declaration();
+    let stricter = MachineDeclaration::new(
         Keccak256Hash,
-        binding.tables().to_vec(),
+        stated.tables().to_vec(),
         PROOF_BUDGET,
+        SECURITY_TARGET + 1,
     )
     .unwrap();
-    assert_eq!(binding.tables(), hiding.tables());
+    assert_eq!(stated.tables(), stricter.tables());
 
-    // A proof sealed under one promise does not open under the other.
-    let run = hiding.run(&[LOG_HEIGHT], 0).unwrap();
-    let err = hiding.open::<BindingConfig>(&run, &sealed()).unwrap_err();
+    // A proof sealed under one target does not open under the other.
+    let run = stricter.run(&[LOG_HEIGHT], 0).unwrap();
+    let err = stricter.open::<BindingConfig>(&run, &sealed()).unwrap_err();
     assert_eq!(err, EnvelopeError::RunMismatch);
+}
+
+#[test]
+fn a_target_the_statement_cannot_reach_is_refused() {
+    // The declaration carries the target, so the caller cannot lower it.
+    let ambitious = MachineDeclaration::new(
+        Keccak256Hash,
+        declaration().tables().to_vec(),
+        PROOF_BUDGET,
+        256,
+    )
+    .unwrap();
+    let run = ambitious.run(&[LOG_HEIGHT], 0).unwrap();
+    let bytes = ambitious.seal(&run, &proof()).unwrap().into_bytes();
+
+    let config = config();
+    let pis = public_values(1 << LOG_HEIGHT);
+    let airs = [&FibAir];
+    let (_, vk) = setup(&config, &airs, &mut challenger()).unwrap();
+    let err = ambitious
+        .verify(
+            &run,
+            &bytes,
+            &config,
+            VerifierInstances::new(vec![VerifierInstance::new(&FibAir, &vk, LOG_HEIGHT, &pis)]),
+            &mut challenger(),
+        )
+        .unwrap_err();
+    match err {
+        SealedVerificationError::Verification(VerificationError::Security(
+            SecurityError::InsufficientSecurity { requested, .. },
+        )) => assert_eq!(requested, 256),
+        other => panic!("expected a security refusal, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_height_range_reaching_a_single_row_is_refused() {
+    // One row panics deep in the reduction, so the floor belongs here instead.
+    let table =
+        TableDeclaration::from_constraints::<F, EF, FibAir>(&FibAir, HeightRange::new(0, 20));
+    assert_eq!(
+        MachineDeclaration::new(Keccak256Hash, vec![table], PROOF_BUDGET, SECURITY_TARGET)
+            .unwrap_err(),
+        DeclarationError::HeightBelowFloor {
+            table: 0,
+            min: 0,
+            floor: 1,
+        }
+    );
+}
+
+#[test]
+fn a_statement_that_describes_another_table_is_refused() {
+    // The declaration is sealed against, so the framing passes and the AIRs are what disagree.
+    let config = config();
+    let pis = public_values(1 << LOG_HEIGHT);
+    let airs = [&FibAir];
+    let (_, vk) = setup(&config, &airs, &mut challenger()).unwrap();
+
+    let refusal = |declaration: MachineDeclaration<Keccak256Hash>| {
+        let run = declaration.run(&[LOG_HEIGHT], 0).unwrap();
+        let bytes = declaration.seal(&run, &proof()).unwrap().into_bytes();
+        declaration
+            .verify(
+                &run,
+                &bytes,
+                &config,
+                VerifierInstances::new(vec![VerifierInstance::new(&FibAir, &vk, LOG_HEIGHT, &pis)]),
+                &mut challenger(),
+            )
+            .unwrap_err()
+    };
+
+    // A table of a different width, and one that agrees on every count but asserts something else.
+    for (air_case, expected) in [
+        (refusal(declaration_for(&WideAir)), "the committed columns"),
+        (
+            refusal(declaration_for(&SubtractingFibAir)),
+            "the constraints themselves",
+        ),
+    ] {
+        match air_case {
+            SealedVerificationError::AirDisagreement { table, what } => {
+                assert_eq!((table, what), (0, expected));
+            }
+            other => panic!("expected a constraint-system disagreement, got {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn a_lookup_that_carries_no_tuple_is_not_a_lookup() {
+    // The reduction drops it, so the statement must drop it too or refuse an honest proof.
+    let table = TableDeclaration::from_constraints::<F, EF, InertLookupFibAir>(
+        &InertLookupFibAir,
+        HeightRange::new(FOLDING as u32, 20),
+    );
+    assert!(!table.has_lookups());
+
+    let n = 1 << LOG_HEIGHT;
+    let config = config();
+    let pis = public_values(n);
+    let airs = [&InertLookupFibAir];
+    let (pk, vk) = setup(&config, &airs, &mut challenger()).unwrap();
+    let honest = prove(
+        &config,
+        ProverInstances::new(vec![ProverInstance::new(
+            &InertLookupFibAir,
+            Table::new(trace(n).transpose()),
+            &pk,
+            &pis,
+        )]),
+        0,
+        &mut challenger(),
+    )
+    .unwrap();
+
+    let declaration = declaration_for(&InertLookupFibAir);
+    let run = declaration.run(&[LOG_HEIGHT], 0).unwrap();
+    let bytes = declaration.seal(&run, &honest).unwrap().into_bytes();
+    declaration
+        .verify(
+            &run,
+            &bytes,
+            &config,
+            VerifierInstances::new(vec![VerifierInstance::new(
+                &InertLookupFibAir,
+                &vk,
+                LOG_HEIGHT,
+                &pis,
+            )]),
+            &mut challenger(),
+        )
+        .unwrap();
 }
 
 #[test]
@@ -497,15 +762,8 @@ fn the_declared_heights_must_match_the_instances() {
 
 #[test]
 fn a_statement_declaring_a_lookup_refuses_a_proof_without_one() {
-    // The proof carries no lookup part, and the statement says one must be there.
-    let table = TableDeclaration::from_constraints::<F, EF, FibAir>(
-        &FibAir,
-        HeightRange::new(FOLDING as u32, 20),
-    )
-    .with_local_lookups(1);
-    let declaration =
-        MachineDeclaration::<BindingOnly, _>::new(Keccak256Hash, vec![table], PROOF_BUDGET)
-            .unwrap();
+    // The statement is read off a table that does look something up, and the proof is not.
+    let declaration = declaration_for(&LookupFibAir);
     let run = declaration.run(&[LOG_HEIGHT], 0).unwrap();
 
     let bytes = declaration.seal(&run, &proof()).unwrap().into_bytes();
@@ -524,7 +782,30 @@ fn verify_the_compatibility_fixture() {
     let bytes = std::fs::read(fixture_path()).expect(
         "missing fixture; run: cargo test -p p3-multi-stark --test backend_contract -- --ignored",
     );
+    // The bytes are pinned, so regenerating the file without saying so fails here.
+    assert_eq!(
+        digest(&bytes),
+        FIXTURE_DIGEST,
+        "the fixture changed; regenerate it, bump the body revision, and pin the new digest"
+    );
+    // The pinned revision is the one on disk, and the one this build speaks.
+    assert_eq!(u16::from_le_bytes([bytes[10], bytes[11]]), FIXTURE_REVISION);
+    assert_eq!(FIXTURE_REVISION, BODY_REVISION);
     check(&bytes).unwrap();
+}
+
+#[test]
+fn a_fixture_from_an_older_revision_is_refused() {
+    // This is the path a fixture takes once the layout it was written under moves on.
+    let mut bytes = std::fs::read(fixture_path()).expect("missing fixture");
+    bytes[10..12].copy_from_slice(&(FIXTURE_REVISION - 1).to_le_bytes());
+    assert_eq!(
+        framing_error(&bytes),
+        EnvelopeError::BodyRevision {
+            found: FIXTURE_REVISION - 1,
+            expected: BODY_REVISION,
+        }
+    );
 }
 
 #[test]
@@ -532,6 +813,9 @@ fn verify_the_compatibility_fixture() {
 fn generate_the_compatibility_fixture() {
     // Regenerate with: cargo test -p p3-multi-stark --test backend_contract -- --ignored
     let path = fixture_path();
+    let bytes = sealed();
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    std::fs::write(path, sealed()).unwrap();
+    std::fs::write(path, &bytes).unwrap();
+    println!("pin this digest, under body revision {BODY_REVISION}:");
+    println!("{:?}", digest(&bytes));
 }

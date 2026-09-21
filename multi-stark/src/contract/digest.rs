@@ -18,11 +18,6 @@ impl Preimage {
         Self(bytes)
     }
 
-    /// Absorb one byte.
-    pub(crate) fn byte(&mut self, value: u8) {
-        self.0.push(value);
-    }
-
     /// Absorb a thirty-two-bit value.
     pub(crate) fn u32(&mut self, value: u32) {
         self.0.extend_from_slice(&value.to_le_bytes());
@@ -88,11 +83,11 @@ mod tests {
 
     #[test]
     fn the_scalar_widths_are_fixed() {
-        // A count and a byte of the same value must not absorb the same bytes.
+        // A count and a half-width value of the same number must not absorb the same bytes.
         let mut wide = Preimage::new(b"domain");
         wide.usize(1);
         let mut narrow = Preimage::new(b"domain");
-        narrow.byte(1);
+        narrow.u32(1);
         assert_ne!(wide.finish(&Keccak256Hash), narrow.finish(&Keccak256Hash));
 
         let mut half = Preimage::new(b"domain");

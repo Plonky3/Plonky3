@@ -5,7 +5,6 @@
 //! Opening refuses a byte string the statement does not account for, before any replay.
 
 use alloc::vec::Vec;
-use core::marker::PhantomData;
 
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
 use p3_sumcheck::PrescribedPointPcs;
@@ -16,43 +15,54 @@ use crate::contract::digest::Preimage;
 use crate::contract::envelope::{AcceptedProof, HEADER_LEN, Header, SealedProof};
 use crate::contract::error::{DeclarationError, EnvelopeError, SealedVerificationError};
 use crate::contract::run::Run;
-use crate::contract::secrecy::SecrecyLevel;
 use crate::contract::table::TableDeclaration;
 use crate::folder::VerifierAir;
 use crate::instance::VerifierInstances;
 use crate::proof::MultiStarkProof;
-use crate::verifier::verify;
+use crate::verifier::verify_with_security;
 
 /// Largest number of tables one statement may declare.
 pub const MAX_TABLES: usize = 1 << 12;
 
 /// Largest grinding difficulty a run may request.
-pub const MAX_POW_BITS: u32 = 64;
+///
+/// Every field this backend proves over has more than two to this power of elements.
+///
+/// That is what a transcript needs in order to sample that many bits at all.
+pub const MAX_POW_BITS: u32 = 30;
+
+/// Largest security target a statement may ask for, in bits.
+pub const MAX_SECURITY_BITS: usize = 1 << 10;
 
 /// Hard ceiling on any declared proof-size budget, in bytes.
-pub const MAX_PROOF_BYTES: usize = 1 << 30;
+///
+/// A decoder can hold about twenty-four bytes of memory per byte it reads.
+///
+/// An empty inner list costs one input byte and a pointer triple to keep.
+pub const MAX_PROOF_BYTES: usize = 1 << 26;
 
-/// Every table of one statement, the commitment promise, the hash, and the size budget.
+/// Every table of one statement, the hash that names it, the size budget, and the target.
 ///
-/// The promise and the hash are type parameters.
+/// The hash is a type parameter.
 ///
-/// A statement proved under one pair is not the statement proved under another.
+/// A statement named by one hash is not the statement named by another.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct MachineDeclaration<S, H> {
+pub struct MachineDeclaration<H> {
     hasher: H,
     tables: Vec<TableDeclaration>,
     max_proof_bytes: usize,
-    secrecy: PhantomData<fn() -> S>,
+    security_bits: usize,
 }
 
-impl<S, H> MachineDeclaration<S, H>
+impl<H> MachineDeclaration<H>
 where
-    S: SecrecyLevel,
     H: CryptographicHasher<u8, [u8; 32]>,
 {
-    /// Fix the tables of a statement, the hash that fingerprints it, and the byte budget.
+    /// Fix the tables of a statement, the hash that names it, the byte budget, and the target.
     ///
     /// The budget is a public parameter, and the proof reader rejects anything longer.
+    ///
+    /// The target is the security level every verification of this statement must reach.
     ///
     /// # Errors
     ///
@@ -61,6 +71,7 @@ where
         hasher: H,
         tables: Vec<TableDeclaration>,
         max_proof_bytes: usize,
+        security_bits: usize,
     ) -> Result<Self, DeclarationError> {
         if tables.is_empty() {
             return Err(DeclarationError::NoTables);
@@ -79,6 +90,12 @@ where
                 limit: MAX_PROOF_BYTES,
             });
         }
+        if security_bits == 0 || security_bits > MAX_SECURITY_BITS {
+            return Err(DeclarationError::SecurityOutOfRange {
+                found: security_bits,
+                limit: MAX_SECURITY_BITS,
+            });
+        }
         for (index, table) in tables.iter().enumerate() {
             table.validate(index)?;
         }
@@ -87,7 +104,7 @@ where
             hasher,
             tables,
             max_proof_bytes,
-            secrecy: PhantomData,
+            security_bits,
         })
     }
 
@@ -101,6 +118,12 @@ where
     #[must_use]
     pub const fn max_proof_bytes(&self) -> usize {
         self.max_proof_bytes
+    }
+
+    /// The security level every verification of this statement must reach.
+    #[must_use]
+    pub const fn security_bits(&self) -> usize {
+        self.security_bits
     }
 
     /// Whether any table commits columns fixed at setup.
@@ -176,7 +199,7 @@ where
         &self,
         run: &Run,
         proof: &MultiStarkProof<C>,
-    ) -> Result<SealedProof<S>, EnvelopeError> {
+    ) -> Result<SealedProof, EnvelopeError> {
         let fingerprint = self.run_digest(run).map_err(EnvelopeError::Declaration)?;
         let body = postcard::to_allocvec(proof).map_err(|_| EnvelopeError::Malformed)?;
 
@@ -214,7 +237,7 @@ where
         &self,
         run: &Run,
         bytes: &[u8],
-    ) -> Result<AcceptedProof<S, C>, EnvelopeError> {
+    ) -> Result<AcceptedProof<C>, EnvelopeError> {
         let fingerprint = self.run_digest(run).map_err(EnvelopeError::Declaration)?;
         let header = Header::parse(bytes)?;
 
@@ -268,9 +291,15 @@ where
     ///
     /// The heights the instances carry are compared against the run rather than trusted.
     ///
+    /// Each constraint system is read back and compared against the table that claims it.
+    ///
+    /// The declared security target is then enforced before the transcript is replayed.
+    ///
     /// # Errors
     ///
     /// Returns an error when the framing, the shape, the heights, or the proof itself fails.
+    ///
+    /// Returns an error when a table and its constraint system describe different statements.
     pub fn verify<'a, C, A>(
         &self,
         run: &Run,
@@ -308,17 +337,29 @@ where
             });
         }
 
-        verify(
+        // Nothing above reads a constraint system, so this is where the two sides meet.
+        for (table, (declared, instance)) in self.tables.iter().zip(instances.iter()).enumerate() {
+            if let Some(what) = declared.disagreement::<C::Val, C::Challenge, A>(instance.air()) {
+                return Err(SealedVerificationError::AirDisagreement { table, what });
+            }
+        }
+
+        verify_with_security(
             config,
             instances,
             accepted.proof(),
             accepted.pow_bits(),
+            self.security_bits,
             challenger,
         )
         .map_err(SealedVerificationError::Verification)
     }
 
     /// Reject a decoded proof whose parts disagree with what the statement declares.
+    ///
+    /// The verifier reaches the same verdict from the constraint systems.
+    ///
+    /// It holds those and this reader does not.
     fn check_shape<C: MultiStarkConfig>(
         &self,
         proof: &MultiStarkProof<C>,
@@ -355,8 +396,8 @@ where
     /// Fingerprint of everything fixed before a proof exists.
     fn statement_digest(&self) -> [u8; 32] {
         let mut preimage = Preimage::new(b"p3-backend-contract/statement/v1");
-        preimage.byte(S::SECRECY.tag());
         preimage.usize(self.max_proof_bytes);
+        preimage.usize(self.security_bits);
         preimage.usize(self.tables.len());
         for table in &self.tables {
             table.absorb(&mut preimage);
@@ -386,35 +427,61 @@ where
 mod tests {
     use alloc::vec;
 
+    use p3_air::{Air, AirBuilder, BaseAir, WindowAccess};
+    use p3_baby_bear::BabyBear;
     use p3_keccak::Keccak256Hash;
 
     use super::*;
-    use crate::contract::secrecy::BindingOnly;
-    use crate::contract::table::{
-        ColumnCounts, FlushDeclaration, FlushDirection, HeightRange, LocalConstraints,
-    };
+    use crate::contract::table::HeightRange;
 
-    type Declaration = MachineDeclaration<BindingOnly, Keccak256Hash>;
+    type F = BabyBear;
+    type Declaration = MachineDeclaration<Keccak256Hash>;
 
-    fn table() -> TableDeclaration {
-        TableDeclaration::new(
-            ColumnCounts {
-                committed: 4,
-                preprocessed: 0,
-                public: 1,
-            },
-            LocalConstraints {
-                count: 3,
-                degree: 2,
-            },
-            HeightRange::new(2, 16),
+    const TARGET: usize = 80;
+
+    // Two tables alike in every count, telling the trace to do different things.
+    struct Toy {
+        doubling: bool,
+    }
+
+    impl<X> BaseAir<X> for Toy {
+        fn width(&self) -> usize {
+            4
+        }
+    }
+
+    impl<AB: AirBuilder> Air<AB> for Toy {
+        fn eval(&self, builder: &mut AB) {
+            let main = builder.main();
+            let current = main.current(0).expect("the table has four columns");
+            let next = main.next(0).expect("the table has four columns");
+            let mut transition = builder.when_transition();
+            if self.doubling {
+                transition.assert_eq(current + current, next);
+            } else {
+                transition.assert_eq(current, next);
+            }
+        }
+    }
+
+    fn table(heights: HeightRange) -> TableDeclaration {
+        TableDeclaration::from_constraints::<F, F, Toy>(&Toy { doubling: false }, heights)
+    }
+
+    fn declaration() -> Declaration {
+        Declaration::new(
+            Keccak256Hash,
+            vec![table(HeightRange::new(2, 16))],
+            1024,
+            TARGET,
         )
+        .unwrap()
     }
 
     #[test]
     fn a_statement_needs_at_least_one_table() {
         assert_eq!(
-            Declaration::new(Keccak256Hash, vec![], 1024).unwrap_err(),
+            Declaration::new(Keccak256Hash, vec![], 1024, TARGET).unwrap_err(),
             DeclarationError::NoTables
         );
     }
@@ -423,7 +490,13 @@ mod tests {
     fn a_budget_outside_the_ceiling_is_refused() {
         for budget in [0, MAX_PROOF_BYTES + 1] {
             assert_eq!(
-                Declaration::new(Keccak256Hash, vec![table()], budget).unwrap_err(),
+                Declaration::new(
+                    Keccak256Hash,
+                    vec![table(HeightRange::new(2, 16))],
+                    budget,
+                    TARGET
+                )
+                .unwrap_err(),
                 DeclarationError::BudgetOutOfRange {
                     found: budget,
                     limit: MAX_PROOF_BYTES,
@@ -433,14 +506,54 @@ mod tests {
     }
 
     #[test]
-    fn a_table_that_fails_its_own_checks_is_refused() {
-        let inverted = TableDeclaration::new(
-            ColumnCounts::default(),
-            LocalConstraints::default(),
-            HeightRange::new(9, 8),
-        );
+    fn a_security_target_outside_the_ceiling_is_refused() {
+        // Zero is refused because a statement that asks for nothing is the defect.
+        for target in [0, MAX_SECURITY_BITS + 1] {
+            assert_eq!(
+                Declaration::new(
+                    Keccak256Hash,
+                    vec![table(HeightRange::new(2, 16))],
+                    1024,
+                    target
+                )
+                .unwrap_err(),
+                DeclarationError::SecurityOutOfRange {
+                    found: target,
+                    limit: MAX_SECURITY_BITS,
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn the_security_target_reaches_the_fingerprint() {
+        // Two statements alike but for the target are not the same statement.
+        let weak = declaration();
+        let strong = Declaration::new(
+            Keccak256Hash,
+            vec![table(HeightRange::new(2, 16))],
+            1024,
+            TARGET + 1,
+        )
+        .unwrap();
+        let run = weak.run(&[8], 0).unwrap();
         assert_eq!(
-            Declaration::new(Keccak256Hash, vec![table(), inverted], 1024).unwrap_err(),
+            strong.run_digest(&run).unwrap_err(),
+            DeclarationError::ForeignRun
+        );
+    }
+
+    #[test]
+    fn a_table_that_fails_its_own_checks_is_refused() {
+        let inverted = table(HeightRange::new(9, 8));
+        assert_eq!(
+            Declaration::new(
+                Keccak256Hash,
+                vec![table(HeightRange::new(2, 16)), inverted],
+                1024,
+                TARGET
+            )
+            .unwrap_err(),
             DeclarationError::EmptyHeightRange {
                 table: 1,
                 min: 9,
@@ -451,7 +564,7 @@ mod tests {
 
     #[test]
     fn a_height_outside_the_declared_range_is_refused() {
-        let declaration = Declaration::new(Keccak256Hash, vec![table()], 1024).unwrap();
+        let declaration = declaration();
         // The one table declares 2..=16, so one below the floor names the whole range back.
         assert_eq!(
             declaration.run(&[1], 0).unwrap_err(),
@@ -473,43 +586,40 @@ mod tests {
 
     #[test]
     fn grinding_above_the_ceiling_is_refused() {
-        let declaration = Declaration::new(Keccak256Hash, vec![table()], 1024).unwrap();
         assert_eq!(
-            declaration.run(&[8], 1000).unwrap_err(),
+            declaration().run(&[8], 1000).unwrap_err(),
             DeclarationError::PowBitsAboveLimit {
                 found: 1000,
-                limit: 64,
+                limit: MAX_POW_BITS,
             }
         );
     }
 
     #[test]
     fn a_run_of_one_statement_is_refused_by_another() {
-        // Two statements differing only in the channel a table flushes on.
-        let plain = Declaration::new(Keccak256Hash, vec![table()], 1024).unwrap();
-        let flushing = Declaration::new(
-            Keccak256Hash,
-            vec![table().with_flushes(vec![FlushDeclaration {
-                channel: "shared".into(),
-                direction: FlushDirection::Push,
-                tuple_width: 3,
-                max_multiplicity: 1,
-            }])],
-            1024,
-        )
-        .unwrap();
+        // The two tables agree on every count and differ only in what they assert.
+        let doubling = TableDeclaration::from_constraints::<F, F, Toy>(
+            &Toy { doubling: true },
+            HeightRange::new(2, 16),
+        );
+        let plain = table(HeightRange::new(2, 16));
+        assert_eq!(plain.columns(), doubling.columns());
+        assert_eq!(plain.constraints(), doubling.constraints());
 
-        let run = plain.run(&[8], 0).unwrap();
+        let one = declaration();
+        let other = Declaration::new(Keccak256Hash, vec![doubling], 1024, TARGET).unwrap();
+
+        let run = one.run(&[8], 0).unwrap();
         assert_eq!(
-            flushing.run_digest(&run).unwrap_err(),
+            other.run_digest(&run).unwrap_err(),
             DeclarationError::ForeignRun
         );
-        assert!(plain.run_digest(&run).is_ok());
+        assert!(one.run_digest(&run).is_ok());
     }
 
     #[test]
     fn the_choices_a_run_makes_change_the_fingerprint() {
-        let declaration = Declaration::new(Keccak256Hash, vec![table()], 1024).unwrap();
+        let declaration = declaration();
         let low = declaration.run(&[8], 0).unwrap();
         let high = declaration.run(&[9], 0).unwrap();
         let ground = declaration.run(&[8], 1).unwrap();
@@ -517,5 +627,19 @@ mod tests {
         let digest = |run| declaration.run_digest(run).unwrap();
         assert_ne!(digest(&low), digest(&high));
         assert_ne!(digest(&low), digest(&ground));
+    }
+
+    #[test]
+    fn a_table_that_disagrees_with_its_constraint_system_is_named() {
+        // The declaration is read off one system and then checked against another.
+        let plain = table(HeightRange::new(2, 16));
+        assert_eq!(
+            plain.disagreement::<F, F, Toy>(&Toy { doubling: false }),
+            None
+        );
+        assert_eq!(
+            plain.disagreement::<F, F, Toy>(&Toy { doubling: true }),
+            Some("the constraints themselves")
+        );
     }
 }

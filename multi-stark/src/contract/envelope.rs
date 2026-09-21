@@ -5,11 +5,9 @@
 //! It decides whether a byte string is framed at all, not whether the framing suits a statement.
 
 use alloc::vec::Vec;
-use core::marker::PhantomData;
 
 use crate::config::MultiStarkConfig;
 use crate::contract::error::EnvelopeError;
-use crate::contract::secrecy::{Secrecy, SecrecyLevel};
 use crate::proof::MultiStarkProof;
 
 /// Bytes that open every sealed proof.
@@ -98,28 +96,16 @@ impl Header {
 
 /// A proof framed for transport under one statement and one run of it.
 ///
-/// The commitment promise is part of the type.
-///
-/// A proof that only binds its trace cannot stand in for one that also hides it.
+/// The framing binds the bytes to a statement; it says nothing about what they reveal.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct SealedProof<S> {
+pub struct SealedProof {
     bytes: Vec<u8>,
-    secrecy: PhantomData<fn() -> S>,
 }
 
-impl<S: SecrecyLevel> SealedProof<S> {
+impl SealedProof {
     /// Wrap bytes that a header has just been written in front of.
     pub(super) const fn new(bytes: Vec<u8>) -> Self {
-        Self {
-            bytes,
-            secrecy: PhantomData,
-        }
-    }
-
-    /// What the commitments behind this proof promise.
-    #[must_use]
-    pub const fn secrecy(&self) -> Secrecy {
-        S::SECRECY
+        Self { bytes }
     }
 
     /// The bytes to transmit.
@@ -141,35 +127,28 @@ impl<S: SecrecyLevel> SealedProof<S> {
 ///
 /// It also carries the grinding difficulty the run fixed.
 ///
-/// Verification cannot then run at a difficulty the proof was not sealed under.
-pub struct AcceptedProof<S, C: MultiStarkConfig> {
+/// The decoded proof stays inside this crate, so no caller can replay it at another difficulty.
+pub struct AcceptedProof<C: MultiStarkConfig> {
     proof: MultiStarkProof<C>,
     pow_bits: usize,
-    secrecy: PhantomData<fn() -> S>,
 }
 
-impl<S: SecrecyLevel, C: MultiStarkConfig> core::fmt::Debug for AcceptedProof<S, C> {
+impl<C: MultiStarkConfig> core::fmt::Debug for AcceptedProof<C> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("AcceptedProof")
-            .field("secrecy", &S::SECRECY)
             .field("pow_bits", &self.pow_bits)
             .finish_non_exhaustive()
     }
 }
 
-impl<S: SecrecyLevel, C: MultiStarkConfig> AcceptedProof<S, C> {
+impl<C: MultiStarkConfig> AcceptedProof<C> {
     /// Record a proof that has passed every pre-replay check.
     pub(super) const fn new(proof: MultiStarkProof<C>, pow_bits: usize) -> Self {
-        Self {
-            proof,
-            pow_bits,
-            secrecy: PhantomData,
-        }
+        Self { proof, pow_bits }
     }
 
-    /// The decoded proof, for a caller that only wants to look at it.
-    #[must_use]
-    pub const fn proof(&self) -> &MultiStarkProof<C> {
+    /// The decoded proof.
+    pub(super) const fn proof(&self) -> &MultiStarkProof<C> {
         &self.proof
     }
 

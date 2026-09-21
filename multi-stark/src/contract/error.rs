@@ -25,6 +25,16 @@ pub enum DeclarationError {
         /// The largest accepted value.
         limit: usize,
     },
+    /// A height range reaches below the smallest height the backend can prove.
+    #[error("table {table}: height exponent floor {min} is below {floor}")]
+    HeightBelowFloor {
+        /// Position of the offending table in declaration order.
+        table: usize,
+        /// Smallest declared exponent.
+        min: u32,
+        /// Smallest exponent the backend accepts.
+        floor: u32,
+    },
     /// A height range excludes every height.
     #[error("table {table}: height range {min}..={max} is empty")]
     EmptyHeightRange {
@@ -37,12 +47,7 @@ pub enum DeclarationError {
     },
     /// The declared proof-size budget is zero or above the hard ceiling.
     #[error("proof-size budget {found} is outside 1..={limit} bytes")]
-    BudgetOutOfRange {
-        /// The declared budget.
-        found: usize,
-        /// The largest accepted budget.
-        limit: usize,
-    },
+    BudgetOutOfRange { found: usize, limit: usize },
     /// A run supplies a different number of heights than the statement has tables.
     #[error("the run supplies {found} heights for {expected} tables")]
     HeightCountMismatch {
@@ -63,6 +68,9 @@ pub enum DeclarationError {
         /// Largest declared exponent.
         max: u32,
     },
+    /// The declared security target is zero or above the hard ceiling.
+    #[error("security target {found} is outside 1..={limit} bits")]
+    SecurityOutOfRange { found: usize, limit: usize },
     /// A run requests more grinding than this module accepts.
     #[error("grinding difficulty {found} is above the limit of {limit}")]
     PowBitsAboveLimit {
@@ -178,6 +186,14 @@ pub enum SealedVerificationError<E: Debug> {
     /// The run and the instances describe different statements.
     #[error("the run and the instances disagree on {what}")]
     RunDisagreement {
+        /// Which part disagrees.
+        what: &'static str,
+    },
+    /// The statement and a constraint system describe different tables.
+    #[error("table {table}: the statement and the constraint system disagree on {what}")]
+    AirDisagreement {
+        /// Position of the offending table in declaration order.
+        table: usize,
         /// Which part disagrees.
         what: &'static str,
     },
