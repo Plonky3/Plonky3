@@ -861,8 +861,8 @@ impl<F: Field, EF: ExtensionField<F>> SuffixProver<F, EF> {
     /// Each entry is the `R` image of the same entry [`Self::combine_weights`] builds, since
     /// `R::from` is a field isomorphism and every entry is a polynomial in the converted inputs.
     ///
-    /// Each per-claim table spans a single column slot, so the crossing costs one pass over a
-    /// slot per claim, against the whole output the products it feeds then cover.
+    /// The factored equality data, SVO coordinates and challenges, and small per-column
+    /// coefficients cross into `R`; each full per-claim table is materialized directly in `R`.
     ///
     /// Packs the virtual-claim equality tables over `R` itself. That is only the wide-SIMD
     /// choice where `R::Packing` already is: a binary field crossing into its own
@@ -1437,8 +1437,39 @@ mod tests {
     ///
     /// At `folding == 0`, the depth the binary PCS runs at, the challenges are empty and the
     /// virtual claim's SVO half is too.
-    fn assert_combine_weights_in_matches_image<F, EF, R>(folding: usize, seed: u64)
+    #[derive(Clone, Copy)]
+    enum PointCoordinates {
+        Random,
+        Zero,
+        One,
+        Alternating,
+    }
+
+    fn point_with_coordinates<EF: Field>(
+        rng: &mut SmallRng,
+        num_variables: usize,
+        coordinates: PointCoordinates,
+    ) -> Point<EF>
     where
+        StandardUniform: Distribution<EF>,
+    {
+        match coordinates {
+            PointCoordinates::Random => Point::rand(rng, num_variables),
+            PointCoordinates::Zero => Point::new(vec![EF::ZERO; num_variables]),
+            PointCoordinates::One => Point::new(vec![EF::ONE; num_variables]),
+            PointCoordinates::Alternating => Point::new(
+                (0..num_variables)
+                    .map(|index| if index % 2 == 0 { EF::ZERO } else { EF::ONE })
+                    .collect(),
+            ),
+        }
+    }
+
+    fn assert_combine_weights_in_matches_image<F, EF, R>(
+        folding: usize,
+        seed: u64,
+        coordinates: PointCoordinates,
+    ) where
         F: Field,
         EF: ExtensionField<F>,
         R: Field + FromTable<EF>,
@@ -1458,13 +1489,14 @@ mod tests {
         ];
         for (table_idx, request) in &requests {
             let num_variables = prover.claims.tables[*table_idx].num_variables();
-            let point = Point::<EF>::rand(&mut rng, num_variables);
+            let point = point_with_coordinates(&mut rng, num_variables, coordinates);
             prover.record_opening(*table_idx, request, &point);
         }
-        let virtual_point = Point::<EF>::rand(&mut rng, prover.claims.num_variables);
+        let virtual_point =
+            point_with_coordinates(&mut rng, prover.claims.num_variables, coordinates);
         prover.record_virtual(&virtual_point);
 
-        let rs = Point::<EF>::rand(&mut rng, folding);
+        let rs = point_with_coordinates(&mut rng, folding, coordinates);
         let alpha: EF = rng.random();
         let expected = prover.combine_weights(&rs, alpha);
         let (tables, column_weights) = prover.weight_plan_in::<R>(&rs, alpha);
@@ -1482,7 +1514,9 @@ mod tests {
     fn combine_weights_in_the_field_itself_matches_the_challenge_field() {
         for folding in [0, 2] {
             assert_combine_weights_in_matches_image::<BabyBear, BabyBearExt4, BabyBearExt4>(
-                folding, 5,
+                folding,
+                5,
+                PointCoordinates::Random,
             );
         }
     }
@@ -1491,8 +1525,27 @@ mod tests {
     fn combine_weights_in_the_polynomial_basis_matches_the_tower() {
         for folding in [0, 2] {
             assert_combine_weights_in_matches_image::<BinaryField128, BinaryField128, Ghash128>(
-                folding, 7,
+                folding,
+                7,
+                PointCoordinates::Random,
             );
+        }
+    }
+
+    #[test]
+    fn combine_weights_in_binary_basis_handles_zero_one_coordinates() {
+        for coordinates in [
+            PointCoordinates::Zero,
+            PointCoordinates::One,
+            PointCoordinates::Alternating,
+        ] {
+            for folding in [0, 2] {
+                assert_combine_weights_in_matches_image::<BinaryField128, BinaryField128, Ghash128>(
+                    folding,
+                    8,
+                    coordinates,
+                );
+            }
         }
     }
 
