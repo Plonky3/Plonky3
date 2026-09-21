@@ -93,6 +93,49 @@ where
     Some(planes)
 }
 
+/// Copy packed Boolean source tables into the final word-major plane layout.
+///
+/// Every source matrix already stores one row-block per physical row, so this path only adds the
+/// zero high plane and interleaves table segments in their merged-buffer order. `None` keeps the
+/// caller on the representation-independent path when any source is dense or has an unexpected
+/// number of word blocks.
+fn direct_packed_cells<F: Field>(tables: &[&Table<F>], words: usize) -> Option<Vec<[u64; 2]>> {
+    if tables.is_empty() {
+        return None;
+    }
+    let width = tables.iter().map(|table| table.num_polys()).sum();
+    if tables.iter().any(|table| {
+        let Some(packed) = table.packed_bits() else {
+            return true;
+        };
+        packed.width != table.num_polys()
+            || words.checked_mul(packed.width) != Some(packed.values.len())
+    }) {
+        return None;
+    }
+
+    let mut cells = vec![[0; 2]; words * width];
+    cells
+        .par_chunks_mut(width)
+        .enumerate()
+        .for_each(|(word, output)| {
+            let mut offset = 0;
+            for table in tables {
+                let packed = table
+                    .packed_bits()
+                    .expect("direct packed ingestion checked every source table");
+                let source = &packed.values[word * packed.width..(word + 1) * packed.width];
+                for (destination, &value) in
+                    output[offset..offset + packed.width].iter_mut().zip(source)
+                {
+                    *destination = [value, 0];
+                }
+                offset += packed.width;
+            }
+        });
+    Some(cells)
+}
+
 /// The successor planes of one word: every lane reads the next row.
 ///
 /// The top lane reads `carry`, the coordinates of the cell after the word.
@@ -594,72 +637,25 @@ where
             .flat_map(|table| table.columns())
             .collect::<Vec<_>>();
         let width = columns.len();
+        let next_columns = next_row_runs(&self.slots);
         let mut is_successor = vec![false; width];
-        for column in next_row_runs(&self.slots).into_iter().flatten() {
+        for column in next_columns.iter().flat_map(|run| run.clone()) {
             is_successor[column] = true;
         }
 
-        // Pack each column on its own, successor planes included, reading it contiguously.
-        let top = SLICED_LANES - 1;
-        let packed = columns
-            .par_iter()
-            .zip(&is_successor)
-            .map(|(column, &is_successor)| {
-                let column_planes = if let Some(values) = column.as_dense() {
-                    values
-                        .as_chunks::<SLICED_LANES>()
-                        .0
-                        .iter()
-                        .map(pack_word::<F, S>)
-                        .collect::<Option<Vec<_>>>()?
-                } else {
-                    (0..column.len() / SLICED_LANES)
-                        .map(|word| Some([column.boolean_word(word)?, 0]))
-                        .collect::<Option<Vec<_>>>()?
-                };
-                let successor_planes = if is_successor {
-                    // Each word's top lane reads the lowest lane of the next word, and the last
-                    // word's top lane repeats itself.
-                    let lane = |planes: [u64; 2], lane: usize| {
-                        ((planes[0] >> lane) & 1 == 1, (planes[1] >> lane) & 1 == 1)
-                    };
-                    let last = column_planes[column_planes.len() - 1];
-                    let carries = column_planes[1..]
-                        .iter()
-                        .map(|&next| lane(next, 0))
-                        .chain([lane(last, top)]);
-                    column_planes
-                        .iter()
-                        .zip(carries)
-                        .map(|(&planes, carry)| successor_word(planes, carry))
-                        .collect()
-                } else {
-                    Vec::new()
-                };
-                Some((column_planes, successor_planes))
-            })
-            .collect::<Option<Vec<_>>>()?;
-
-        // Lay the words out word by word, every column of a word side by side.
+        // Each table's packed matrix is already word-major. Copy directly into the final layout
+        // when no successor planes are needed; otherwise retain the generic column path, which
+        // also computes the repeat-last successor words.
         let words = 1 << (num_vars - LANE_VARIABLES);
-        let mut cells = vec![[0; 2]; words * width];
-        let mut successors = vec![[0; 2]; words * width];
-        cells
-            .par_chunks_mut(width)
-            .zip(successors.par_chunks_mut(width))
-            .enumerate()
-            .for_each(|(word, (word_cells, word_successors))| {
-                for ((cell, successor), (column_planes, successor_planes)) in word_cells
-                    .iter_mut()
-                    .zip(word_successors.iter_mut())
-                    .zip(&packed)
-                {
-                    *cell = column_planes[word];
-                    if let Some(&planes) = successor_planes.get(word) {
-                        *successor = planes;
-                    }
-                }
-            });
+        let (cells, successors) = if next_columns.is_empty() {
+            if let Some(cells) = direct_packed_cells(&tables, words) {
+                (cells, vec![[0; 2]; words * width])
+            } else {
+                pack_sliced_columns::<F, S>(&columns, &is_successor, words, width)?
+            }
+        } else {
+            pack_sliced_columns::<F, S>(&columns, &is_successor, words, width)?
+        };
 
         let last = SLICED_LANES - 1;
         let boundary = (0..words)
@@ -786,6 +782,80 @@ where
             boundary: BoundaryEvals::new(R::from(EF::ONE - r), R::from(r), R::from(EF::ONE - r)),
         }
     }
+}
+
+/// Pack representation-independent columns into word-major cell and successor planes.
+fn pack_sliced_columns<F, S>(
+    columns: &[p3_sumcheck::layout::ColumnView<'_, F>],
+    is_successor: &[bool],
+    words: usize,
+    width: usize,
+) -> Option<(Vec<[u64; 2]>, Vec<[u64; 2]>)>
+where
+    F: HasSubfield<S>,
+    S: Field,
+{
+    // Pack each column on its own, successor planes included, reading it contiguously.
+    let top = SLICED_LANES - 1;
+    let packed = columns
+        .par_iter()
+        .zip(is_successor)
+        .map(|(column, &is_successor)| {
+            let column_planes = if let Some(values) = column.as_dense() {
+                values
+                    .as_chunks::<SLICED_LANES>()
+                    .0
+                    .iter()
+                    .map(pack_word::<F, S>)
+                    .collect::<Option<Vec<_>>>()?
+            } else {
+                (0..column.len() / SLICED_LANES)
+                    .map(|word| Some([column.boolean_word(word)?, 0]))
+                    .collect::<Option<Vec<_>>>()?
+            };
+            let successor_planes = if is_successor {
+                // Each word's top lane reads the lowest lane of the next word, and the last
+                // word's top lane repeats itself.
+                let lane = |planes: [u64; 2], lane: usize| {
+                    ((planes[0] >> lane) & 1 == 1, (planes[1] >> lane) & 1 == 1)
+                };
+                let last = column_planes[column_planes.len() - 1];
+                let carries = column_planes[1..]
+                    .iter()
+                    .map(|&next| lane(next, 0))
+                    .chain([lane(last, top)]);
+                column_planes
+                    .iter()
+                    .zip(carries)
+                    .map(|(&planes, carry)| successor_word(planes, carry))
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            Some((column_planes, successor_planes))
+        })
+        .collect::<Option<Vec<_>>>()?;
+
+    // Lay the words out word by word, every column of a word side by side.
+    let mut cells = vec![[0; 2]; words * width];
+    let mut successors = vec![[0; 2]; words * width];
+    cells
+        .par_chunks_mut(width)
+        .zip(successors.par_chunks_mut(width))
+        .enumerate()
+        .for_each(|(word, (word_cells, word_successors))| {
+            for ((cell, successor), (column_planes, successor_planes)) in word_cells
+                .iter_mut()
+                .zip(word_successors.iter_mut())
+                .zip(&packed)
+            {
+                *cell = column_planes[word];
+                if let Some(&planes) = successor_planes.get(word) {
+                    *successor = planes;
+                }
+            }
+        });
+    Some((cells, successors))
 }
 
 /// A sliced stage's planes and the challenges bound so far.

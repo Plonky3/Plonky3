@@ -128,6 +128,113 @@ fn packed_boolean_columns_match_dense_sliced_first_round() {
 }
 
 #[test]
+fn packed_tables_ingest_directly_in_merged_order() {
+    let mut rng = SmallRng::seed_from_u64(0xD1CE);
+    for height in [128, 256, 512] {
+        let words = height / SLICED_LANES;
+        let pair_words = (0..words * 3)
+            .map(|index| match index % 3 {
+                0 => 0,
+                1 => u64::MAX,
+                _ => rng.random(),
+            })
+            .collect();
+        let linear_words = (0..words * 2)
+            .map(|index| match index % 3 {
+                0 => 0,
+                1 => u64::MAX,
+                _ => rng.random(),
+            })
+            .collect();
+        let pair = Table::from_packed_bits(
+            RowMajorMatrix::new(pair_words, 3),
+            height.trailing_zeros() as usize,
+        );
+        let linear = Table::from_packed_bits(
+            RowMajorMatrix::new(linear_words, 2),
+            height.trailing_zeros() as usize,
+        );
+        let tables = [&pair, &linear];
+
+        let expected = (0..words)
+            .flat_map(|word| {
+                tables.iter().flat_map(move |table| {
+                    table.packed_bits().unwrap().values
+                        [word * table.num_polys()..(word + 1) * table.num_polys()]
+                        .iter()
+                        .map(|&value| [value, 0])
+                })
+            })
+            .collect::<Vec<_>>();
+
+        with_stage_state(
+            &[&FixtureAir::Pair, &FixtureAir::Linear { scale: Tower::ONE }],
+            &[&[], &[]],
+            &[None, None],
+            &[&pair, &linear],
+            no_lookups(),
+            |state, _| {
+                let trace = state
+                    .sliced_trace::<Gf4>()
+                    .expect("packed Boolean tables should fit the sliced path");
+                assert_eq!(trace.width, 5);
+                assert_eq!(trace.cells, expected, "height {height}");
+                assert!(trace.successors.iter().all(|planes| *planes == [0; 2]));
+            },
+        );
+    }
+}
+
+#[test]
+fn packed_direct_ingestion_matches_dense_rounds_for_multiple_tables() {
+    for height in [128, 256, 512] {
+        let instances = [
+            Instance::honest(FixtureAir::Pair, height, 0xA11CE),
+            Instance::honest(FixtureAir::Linear { scale: Tower::ONE }, height, 0xB0B),
+        ];
+        let dense = instances
+            .iter()
+            .map(Instance::main_table)
+            .collect::<Vec<_>>();
+        let packed = dense.iter().map(packed_boolean_table).collect::<Vec<_>>();
+        let airs = instances
+            .iter()
+            .map(|instance| &instance.air)
+            .collect::<Vec<_>>();
+        let publics = instances
+            .iter()
+            .map(|instance| instance.public_values.as_slice())
+            .collect::<Vec<_>>();
+
+        let run = |main: &[Table<Tower>]| {
+            with_stage_state(
+                &airs,
+                &publics,
+                &[None, None],
+                &main.iter().collect::<Vec<_>>(),
+                no_lookups(),
+                |mut state, eq_suffix| {
+                    (
+                        state
+                            .round_poly_sliced::<Gf4, Tower>(eq_suffix)
+                            .expect("stage should fit the sliced path"),
+                        state.round_poly(eq_suffix),
+                    )
+                },
+            )
+        };
+
+        assert_eq!(run(&packed), run(&dense), "height {height}");
+    }
+}
+
+#[test]
+fn packed_direct_ingestion_rejects_a_word_count_mismatch() {
+    let table = packed_boolean_table(&Instance::honest(FixtureAir::Pair, 128, 0xBAD).main_table());
+    assert!(direct_packed_cells(&[&table], 3).is_none());
+}
+
+#[test]
 fn a_stage_too_short_to_fill_a_word_is_not_sliced() {
     let instances = [Instance::honest(
         FixtureAir::Gate { scale: Tower::ONE },
