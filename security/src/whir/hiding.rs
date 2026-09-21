@@ -46,8 +46,8 @@ pub enum HidingBoundClassification {
     Conditional,
     /// The term is a numerical approximation, not a conservative theorem bound.
     ///
-    /// This is used for the current Johnson MCA helper, which retains only the
-    /// dominant finite-parameter term.
+    /// Retained for compatibility with analyses that use an explicitly
+    /// approximate bound; the current Johnson MCA helper is theorem-backed.
     Approximation,
     /// No accepted numerical bound is encoded for this geometry.
     Unavailable,
@@ -573,7 +573,7 @@ fn log2_binomial(n: usize, k: usize) -> f64 {
 const fn mca_classification(assumption: SecurityAssumption) -> HidingBoundClassification {
     match assumption {
         SecurityAssumption::UniqueDecoding => HidingBoundClassification::Proven,
-        SecurityAssumption::JohnsonBound => HidingBoundClassification::Approximation,
+        SecurityAssumption::JohnsonBound => HidingBoundClassification::Proven,
         SecurityAssumption::CapacityBound => HidingBoundClassification::Conditional,
     }
 }
@@ -748,7 +748,7 @@ mod tests {
             ),
             (
                 SecurityAssumption::JohnsonBound,
-                HidingBoundClassification::Approximation,
+                HidingBoundClassification::Proven,
             ),
             (
                 SecurityAssumption::CapacityBound,

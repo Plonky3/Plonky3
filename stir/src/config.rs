@@ -51,9 +51,9 @@ struct CombineRequirement {
 ///
 /// At `d* = 2^20`, `log_blowup = 1` and 100-bit security that is ~151 bits, so a 155-bit
 /// quintic extension fits with a few bits to spare and narrower challenge fields do not.
-/// `JohnsonBound` does not fit at production scale at all: the largest permitted
-/// `eta = sqrt(rho)/20` pins BCSS25's multiplicity at `m = 10`, which retains only ~95 bits at
-/// the same shape.
+/// `JohnsonBound` also pays the Combine multiplicity: the largest permitted
+/// `eta = sqrt(rho)/20` pins the interpolation multiplicity at `m = 10`. The DKT26
+/// bound improves this term, but feasibility still depends on the full buffered target.
 /// Outside the envelope, derivation reports the shortfall rather than silently weakening the
 /// parameters; callers that need wider height spreads should commit the outliers separately.
 /// The PCS derives a separate joint alpha/Combine budget and credits its configured
@@ -806,7 +806,7 @@ where
         //
         // Johnson drops one bit further.
         //
-        // That bit pays for the dominant-term-only proximity-gap approximation.
+        // This is a legacy conservative reserve; the DKT26 bound includes all terms.
         let field_size_bits = crate::pcs_budget::field_bits::<EF>(params.soundness_type);
         let log_blowup = params.log_blowup;
         let log_folding_factor = params.log_folding_factor;

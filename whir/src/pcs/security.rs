@@ -96,8 +96,8 @@ where
     };
     let add_folds = |errors: &mut Vec<ErrorBits>, variables, rate, folds, pow| {
         // Use the largest degree/rate bound for every binary fold in a phase.
-        // The Johnson helper retains the dominant term; one additional bit
-        // covers its positive lower-order terms at the fixed m = 10.
+        // Retain the legacy one-bit Johnson reserve. The shared helper now
+        // includes a complete theorem bound, so this is extra conservatism.
         let gap = assumption.prox_gaps_error(variables, rate, field_bits, 2)
             - if assumption == SecurityAssumption::JohnsonBound {
                 1.0

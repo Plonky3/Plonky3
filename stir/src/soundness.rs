@@ -132,9 +132,9 @@ pub(crate) fn minimum_eta_for_target(
     }
 
     // Every bound used here is monotone in eta: a larger safety gap means a
-    // smaller list and a smaller BCSS25 exceptional set. Keep `high` feasible
+    // smaller list and a smaller Johnson exceptional set. Keep `high` feasible
     // throughout so the returned value remains on the sound side of a step in
-    // BCSS25's integer multiplicity.
+    // the interpolation multiplicity.
     let mut low = 0.;
     let mut high = upper_bound;
     for _ in 0..80 {
@@ -189,7 +189,7 @@ pub(crate) fn initial_batching_error(
 /// This is [`SecurityAssumption::prox_gaps_error_at_log_eta`] with the linear combination's
 /// oracle count replaced by Lemma 4.13's degree-gap-inflated `ell`: `err*` is the §4.1
 /// abstraction both lemmas invoke, so the conjectured route (Conjecture 5.6, `CapacityBound`)
-/// and the provable one (BCSS25 Theorem 1.5, `JohnsonBound`) each inflate by `ell` exactly as
+/// and the provable one (DKT26 §7.2, `JohnsonBound`) each inflate by `ell` exactly as
 /// they do by the oracle count. Sharing the function, rather than restating either regime's
 /// bound, is what keeps `eta` from being derived off two different Johnson-regime bounds
 /// depending on which term is asked about.
@@ -303,7 +303,7 @@ impl StirSoundness for SecurityAssumption {
 
         let schedule_eta = match self {
             // The old BCIKS-form 1/7-power expression is intentionally not
-            // retained here: validation uses BCSS25's O(n/eta^5) bound, so
+            // retained here: validation uses DKT26's O(n/eta^3) bound, so
             // deriving eta from the same bound avoids rejecting feasible JB
             // configurations at realistic security levels.
             Self::JohnsonBound => 0.,
@@ -433,10 +433,10 @@ impl StirSoundness for SecurityAssumption {
     /// factor of two of `d*` and `log2(ell)` is close to `log_d_star` however tight the height
     /// spread is. Combine therefore costs roughly `2·log_d_star` bits of field regardless of
     /// how the classes are chosen, and is feasible only on wide challenge fields — see
-    /// [`crate::StirParameters`] for the closed form. Under `JohnsonBound` it does not fit at
-    /// production scale at all: the largest permitted `eta = sqrt(rho)/20` pins BCSS25's
-    /// multiplicity at `m = 10`, which at `log_d_star = 20`, `log_inv_rate = 1` and a 155-bit
-    /// challenge field retains only ~95 bits.
+    /// [`crate::StirParameters`] for the closed form. Under `JohnsonBound`, the largest
+    /// permitted `eta = sqrt(rho)/20` pins the interpolation multiplicity at `m = 10`.
+    /// DKT26 improves the bound, but the full buffered target must still fit after charging
+    /// the Combine multiplicity.
     ///
     /// # Errors
     ///
@@ -595,7 +595,7 @@ mod tests {
     }
 
     #[test]
-    fn johnson_initial_eta_is_derived_from_bcss25_validation_bound() {
+    fn johnson_initial_eta_is_derived_from_validation_bound() {
         let jb = SecurityAssumption::JohnsonBound;
 
         for (target, field_bits) in [(100, 155), (128, 192)] {
@@ -710,18 +710,25 @@ mod tests {
     }
 
     #[test]
-    fn combine_eta_johnson_bound_is_infeasible_at_production_scale() {
-        // Documented consequence of deriving Combine from the same BCSS25 bound the rest of
-        // the file validates against: at `d* = 2^20` on a 155-bit challenge field, the largest
-        // permitted eta pins `m = 10` and retains well under the buffered 100-bit target.
+    fn combine_eta_johnson_bound_reaches_a_raw_100_bit_target() {
+        // DKT26 lifts this Combine term above 100 bits; BCHKS25 left it below 96.
+        // This checks the raw term, before a full schedule's union-bound buffer.
         let jb = SecurityAssumption::JohnsonBound;
         let (log_inv_rate, log_d_star, ell) = (1, 20, (1u64 << 20) + (1 << 19) + 3);
         let upper = jb.stir_eta_upper_bound(log_inv_rate);
         let bits =
             combine_error_at_log_eta(jb, log_d_star, log_inv_rate, 155, ell, libm::log2(upper));
         assert!(
-            bits < 100.,
-            "expected JB + Combine to fall short, got {bits}"
+            (100.0..101.0).contains(&bits),
+            "expected JB + Combine to clear 100 bits, got {bits}"
+        );
+        let eta = jb
+            .stir_combine_eta(155, log_inv_rate, log_d_star, ell, 100)
+            .expect("the improved Johnson bound fits the raw target");
+        assert!(jb.stir_eta_is_valid(log_inv_rate, eta));
+        assert!(
+            combine_error_at_log_eta(jb, log_d_star, log_inv_rate, 155, ell, libm::log2(eta))
+                >= 100.0
         );
     }
 
@@ -735,8 +742,8 @@ mod tests {
 
     #[test]
     fn combine_eta_reports_infeasibility_instead_of_panicking() {
-        // The Johnson regime cannot fit Combine at production scale; the caller gets the
-        // shortfall rather than an abort, which is what `StirConfig::try_new` relies on.
+        // The improved Johnson bound still cannot fit this higher target; the caller gets
+        // the shortfall rather than an abort, which is what `StirConfig::try_new` relies on.
         let err = SecurityAssumption::JohnsonBound
             .stir_combine_eta(155, 1, 20, (1u64 << 20) + (1 << 19) + 3, 106)
             .expect_err("JB + Combine must not fit at this scale");

@@ -3,8 +3,8 @@
 //! Conjectured regime: random-words bound, [2025/2010] §1.5.
 //! Legacy regime: historical pre-random-words ethSTARK query estimate, [2021/582].
 //! Proven regime: round-by-round, [2024/1553] Theorems 2 & 3, with the
-//! BCHKS25 LDR commit bound ([2025/2055] Theorem 4.2). Cross-checked
-//! against Ethereum's `soundcalc`.
+//! DKT26 Johnson line-MCA commit bound ([2026/2056] Theorem 5.12 and
+//! Appendix B.1–B.2, extended to powers batching via §7.2).
 //!
 //! Correspondence with [`crate::assumption::SecurityAssumption`]:
 //! - [`proven_error_udr`] is the FRI counterpart of `UniqueDecoding`
@@ -22,7 +22,10 @@ use libm::{log2, pow};
 
 use crate::error::ErrorBits;
 use crate::ldt::LowDegreeTest;
-use crate::proximity::{LDR_M_CAP, alpha_ldr_m, alpha_udr, compute_upper_m, gamma_ldr_m};
+use crate::proximity::{
+    LDR_M_CAP, alpha_ldr_m, alpha_udr, compute_upper_m, gamma_ldr_m,
+    johnson_exceptional_line_count_log2,
+};
 use crate::report::{LDT_COMMIT_LABEL, LDT_QUERY_LABEL, SecurityTerm};
 use crate::shape::{InstanceShape, StarkAirParams};
 
@@ -174,14 +177,13 @@ pub fn commit_phase_error_udr(regime: &FriRegime, shape: &InstanceShape) -> Opti
 }
 
 /// FRI commit-phase per-round error in LDR with explicit proximity
-/// parameter `m`. BCHKS25 Theorem 1.5 (Equation (1)):
-///
-/// ε_lin   = ((2·m'⁵ + 3·m'·γρ)·n / (3·ρ^{3/2}) + m'/√ρ) / |F|,
-/// ε_round = ε_lin · (folding − 1).
-///
-/// We also evaluate the n/q-style bound from [2024/1553] and report the
-/// tighter of the two. Round-by-round soundness is dominated by round 0
-/// (largest `n`), so we use `n = lde_domain_size` for every round.
+/// parameter `m`. DKT26 Theorem 5.12 and Appendix B.1–B.2 give the
+/// Johnson-regime line-MCA count `C = 8·n·(m + 1/2)^3/(3·rho_minus)`;
+/// multiplying by `folding − 1` accounts for the polynomial-curve degree of
+/// a folding round. We also retain the independent `n/|F|` bound from
+/// [2024/1553] and take the minimum of their security bits. Round-by-
+/// round soundness is dominated by round 0 (largest `n`), so we use
+/// `n = lde_domain_size` for every round.
 ///
 /// Returns `None` when `regime.max_log_arity` is `0` (folding factor `1`,
 /// i.e. no fold at all) — such a regime has no commit-phase round, rather
@@ -192,8 +194,6 @@ pub fn commit_phase_error_ldr_m(
     m: usize,
 ) -> Option<ErrorBits> {
     let rho = pow(2.0, -(regime.log_blowup as f64));
-    let sqrt_rho = libm::sqrt(rho);
-    let m_shifted = m as f64 + 0.5;
     let pp = gamma_ldr_m(regime.log_blowup, m);
     if pp <= 0.0 {
         return Some(ErrorBits::from_log2(0.0));
@@ -203,18 +203,16 @@ pub fn commit_phase_error_ldr_m(
         return None;
     }
     let lde_log = shape.log_trace_length + regime.log_blowup;
-    let n = (1u64 << lde_log) as f64;
+    let line_count_log =
+        johnson_exceptional_line_count_log2(shape.log_trace_length, regime.log_blowup, m);
+    let bits_linear = shape.modulus_bits as f64 - line_count_log - log2(folding_minus_one)
+        + regime.commit_pow_bits as f64;
 
-    let num = (2.0 * pow(m_shifted, 5.0) + 3.0 * m_shifted * pp * rho) * n;
-    let den = 3.0 * rho * sqrt_rho;
-    let eps_linear = num / den + m_shifted / sqrt_rho;
-    let eps_powers = eps_linear * folding_minus_one;
-    let bits_linear =
-        shape.modulus_bits as f64 - log2(eps_powers.max(1.0)) + regime.commit_pow_bits as f64;
+    let log_n_plus_one = lde_log as f64 + log2(1.0 + pow(2.0, -(lde_log as f64)));
 
     let bits_n_over_q = shape.modulus_bits as f64
         - log2(regime.folding_factor())
-        - log2(n + 1.0)
+        - log_n_plus_one
         - log2(2.0 * m as f64 + 1.0)
         + 0.5 * log2(rho)
         + regime.commit_pow_bits as f64;
@@ -502,6 +500,53 @@ mod tests {
                 no_arity.query_pow_bits,
             )
             .bits()
+        );
+    }
+
+    /// FRI-only Johnson line-MCA vector: k = 2^20, blowup = 8,
+    /// arity = 4, m = 3, commit grinding = 28, query grinding = 17, and
+    /// 81 queries over a conservative 127-bit field. This is an LDT-only
+    /// example, not a complete VM security claim.
+    #[test]
+    fn johnson_line_mca_fri_example_keeps_curve_and_grinding_terms() {
+        let regime = FriRegime {
+            log_blowup: 3,
+            num_queries: 81,
+            log_final_poly_len: 0,
+            max_log_arity: 2,
+            commit_pow_bits: 28,
+            query_pow_bits: 17,
+        };
+        let shape = InstanceShape {
+            log_trace_length: 20,
+            modulus_bits: 127,
+            collision_resistance: 128,
+            num_batched_functions: 1,
+        };
+
+        let commit = commit_phase_error_ldr_m(&regime, &shape, 3)
+            .expect("arity four has folding rounds")
+            .bits();
+        let alpha = alpha_ldr_m(regime.log_blowup, 3);
+        let query = query_phase_error(alpha, regime.num_queries, regime.query_pow_bits).bits();
+        let ldt = proven_error_ldr_m(&regime, &benchmark_air(), &shape, 3).bits();
+        assert!(
+            (ldt - 120.4862138717).abs() < 1e-9,
+            "commit={commit}, query={query}, ldt={ldt}",
+        );
+        assert!((commit - 120.57793385796532).abs() < 1e-9, "got {commit}");
+
+        let ungrounded = FriRegime {
+            commit_pow_bits: 0,
+            ..regime
+        };
+        let ungrounded_commit = commit_phase_error_ldr_m(&ungrounded, &shape, 3)
+            .expect("arity four has folding rounds")
+            .bits();
+        assert!((commit - ungrounded_commit - 28.0).abs() < 1e-9);
+        assert_eq!(
+            query_phase_error(alpha, regime.num_queries, regime.query_pow_bits).bits(),
+            query_phase_error(alpha, ungrounded.num_queries, ungrounded.query_pow_bits).bits()
         );
     }
 
