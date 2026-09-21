@@ -1047,7 +1047,7 @@ mod tests {
     fn dynamic_prepared_map_forced_kernel_benchmark() {
         for len in [64, 256, 1024, 4096, 16384] {
             let input = sample(len);
-            let mut output = vec![0u128; len];
+            let mut output = alloc::vec![0u128; len];
             let mut construct = 0u128;
             let mut apply = 0u128;
             let mut combined = 0u128;
