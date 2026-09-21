@@ -38,11 +38,25 @@ const NAME: &[u8] = b"p3-sumcheck-jagged-layout";
 #[derive(Clone, Copy, Debug)]
 pub struct BoundJaggedLayout<'a>(&'a JaggedLayout);
 
-impl JaggedLayout {
-    /// Seals a transcript to this geometry.
+/// The shape a commitment to one jagged geometry must be opened under.
+///
+/// One column of the dense arity, read at one point.
+///
+/// A caller needs this before it commits, which is before any transcript is sealed.
+impl From<&JaggedLayout> for OpeningProtocol {
+    fn from(layout: &JaggedLayout) -> Self {
+        Self::new(vec![TableSpec::new(
+            TableShape::new(layout.dense_variables(), 1),
+            vec![OpeningBatch::new(vec![0], Vec::new())],
+        )])
+    }
+}
+
+impl<'a> BoundJaggedLayout<'a> {
+    /// Seals a transcript to one geometry.
     ///
     /// Both sides absorb the same bytes at the same position, so neither can drift from the other.
-    pub fn bind<F, Challenger>(&self, challenger: &mut Challenger) -> BoundJaggedLayout<'_>
+    pub fn new<F, Challenger>(layout: &'a JaggedLayout, challenger: &mut Challenger) -> Self
     where
         F: TranscriptField,
         Challenger: CanObserve<F>,
@@ -51,25 +65,12 @@ impl JaggedLayout {
         let pattern = InteractionPattern::new(Vec::new())
             .expect("an empty description is structurally valid");
         let mut separator = DomainSeparator::<FieldUnit<F>>::new(VERSION, NAME, pattern);
-        separator.instance(&encode_layout(self));
+        separator.instance(&encode_layout(layout));
         separator.seed(challenger);
 
-        BoundJaggedLayout(self)
+        Self(layout)
     }
 
-    /// Returns the shape a commitment to this geometry must be opened under.
-    ///
-    /// One column of the dense arity, read at one point.
-    #[must_use]
-    pub fn dense_opening_protocol(&self) -> OpeningProtocol {
-        OpeningProtocol::new(vec![TableSpec::new(
-            TableShape::new(self.dense_variables(), 1),
-            vec![OpeningBatch::new(vec![0], Vec::new())],
-        )])
-    }
-}
-
-impl<'a> BoundJaggedLayout<'a> {
     /// Returns the sealed geometry.
     #[must_use]
     pub const fn layout(&self) -> &'a JaggedLayout {
@@ -134,7 +135,7 @@ impl<'a> BoundJaggedLayout<'a> {
         let dense = pcs
             .open_at(
                 prover_data,
-                &self.0.dense_opening_protocol(),
+                &OpeningProtocol::from(self.0),
                 slice::from_ref(claim.point()),
                 challenger,
             )
@@ -185,7 +186,7 @@ impl<'a> BoundJaggedLayout<'a> {
             .verify_at(
                 commitment,
                 &opening.dense,
-                &self.0.dense_opening_protocol(),
+                &OpeningProtocol::from(self.0),
                 slice::from_ref(claim.point()),
                 challenger,
             )
@@ -247,7 +248,7 @@ mod tests {
     // The first coordinate drawn after a seal is the cheapest witness that the seal moved the sponge.
     fn first_coordinate_after_binding(layout: &JaggedLayout) -> EF {
         let mut challenger = challenger();
-        let bound = layout.bind::<F, _>(&mut challenger);
+        let bound = BoundJaggedLayout::new::<F, _>(layout, &mut challenger);
         bound.sample_point::<F, EF, _>(&mut challenger).row()[0]
     }
 
@@ -273,8 +274,7 @@ mod tests {
     fn a_drawn_point_has_the_coordinates_the_geometry_addresses() {
         let layout = JaggedLayout::new(5, &[3, 0, 5, 1]).unwrap();
         let mut challenger = challenger();
-        let point = layout
-            .bind::<F, _>(&mut challenger)
+        let point = BoundJaggedLayout::new::<F, _>(&layout, &mut challenger)
             .sample_point::<F, EF, _>(&mut challenger);
 
         assert_eq!(point.row().num_variables(), 5);
@@ -287,7 +287,7 @@ mod tests {
     #[test]
     fn the_dense_opening_reads_one_column_at_one_point() {
         let layout = JaggedLayout::new(3, &[3, 0, 5, 1]).unwrap();
-        let protocol = layout.dense_opening_protocol();
+        let protocol = OpeningProtocol::from(&layout);
 
         assert_eq!(protocol.table_shapes(), vec![TableShape::new(4, 1)]);
         assert_eq!(protocol.num_openings(), 1);

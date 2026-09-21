@@ -18,6 +18,34 @@ pub struct CellBudget {
 }
 
 impl CellBudget {
+    /// Returns what one validated jagged geometry provisions.
+    ///
+    /// Only the final round-up to the envelope is dead, whatever the individual heights are.
+    #[must_use]
+    pub fn of(layout: &JaggedLayout) -> Self {
+        Self {
+            live: layout.area(),
+            provisioned: layout.dense_capacity(),
+        }
+    }
+
+    /// Returns what a stacking that rounds every column up to a power of two provisions.
+    ///
+    /// This is what a commitment pays when unequal columns share one polynomial without a reduction.
+    #[must_use]
+    pub fn stacked(heights: &[usize]) -> Self {
+        // One slot per column, each the smallest power of two that holds it, then one final round-up.
+        let slots = heights
+            .iter()
+            .map(|&height| 1usize << log2_ceil_usize(height.max(1)))
+            .sum::<usize>();
+
+        Self {
+            live: heights.iter().sum(),
+            provisioned: slots.max(1).next_power_of_two(),
+        }
+    }
+
     /// Returns the cells the trace fills.
     #[must_use]
     pub const fn live(&self) -> usize {
@@ -48,38 +76,6 @@ impl CellBudget {
     }
 }
 
-/// Returns what a stacking that rounds every column up to a power of two provisions.
-///
-/// This is what a commitment pays when unequal columns share one polynomial without a reduction.
-#[must_use]
-pub fn stacked_budget(heights: &[usize]) -> CellBudget {
-    let live = heights.iter().sum();
-
-    // One slot per column, each the smallest power of two that holds it, then one final round-up.
-    let slots = heights
-        .iter()
-        .map(|&height| 1usize << log2_ceil_usize(height.max(1)))
-        .sum::<usize>();
-
-    CellBudget {
-        live,
-        provisioned: slots.max(1).next_power_of_two(),
-    }
-}
-
-impl JaggedLayout {
-    /// Returns what this geometry provisions.
-    ///
-    /// Only the final round-up to the envelope is dead, whatever the individual heights are.
-    #[must_use]
-    pub fn budget(&self) -> CellBudget {
-        CellBudget {
-            live: self.area(),
-            provisioned: self.dense_capacity(),
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use alloc::vec;
@@ -91,7 +87,7 @@ mod tests {
     use crate::layout::plan_stacked_layout;
     use crate::table::TableShape;
 
-    // The stacking model above must be the one the planner the commitment schemes share implements.
+    // The stacking constructor must be the one the planner the commitment schemes share implements.
     // A hand-rolled formula that drifted from it would make every number below fiction.
     fn planner_provisioned(heights: &[usize]) -> usize {
         let shapes = heights
@@ -111,12 +107,12 @@ mod tests {
         //     stacked      8 + 16 + 32 + 64 = 120, rounded to 128
         //     jagged       64, already a power of two
         let heights = [5, 9, 17, 33];
-        let stacked = stacked_budget(&heights);
+        let stacked = CellBudget::stacked(&heights);
         assert_eq!(stacked.live(), 64);
         assert_eq!(stacked.provisioned(), 128);
         assert_eq!(stacked.dead(), 64);
 
-        let jagged = JaggedLayout::new(6, &heights).unwrap().budget();
+        let jagged = CellBudget::of(&JaggedLayout::new(6, &heights).unwrap());
         assert_eq!(jagged.live(), 64);
         assert_eq!(jagged.provisioned(), 64);
         assert_eq!(jagged.dead(), 0);
@@ -127,10 +123,10 @@ mod tests {
         // Sixty-four columns of three rows each fill one hundred and ninety-two cells.
         // A stacking gives each of them four, and a jagged envelope gives the whole trace 256.
         let heights = vec![3usize; 64];
-        assert_eq!(stacked_budget(&heights).provisioned(), 256);
-        assert_eq!(stacked_budget(&heights).dead(), 64);
+        assert_eq!(CellBudget::stacked(&heights).provisioned(), 256);
+        assert_eq!(CellBudget::stacked(&heights).dead(), 64);
 
-        let jagged = JaggedLayout::new(2, &heights).unwrap().budget();
+        let jagged = CellBudget::of(&JaggedLayout::new(2, &heights).unwrap());
         assert_eq!(jagged.provisioned(), 256);
         assert_eq!(jagged.dead(), 64);
     }
@@ -138,11 +134,11 @@ mod tests {
     #[test]
     fn a_ratio_is_reported_without_floating_point() {
         // Nine live cells inside a sixteen-cell envelope is one and seven ninths.
-        let budget = JaggedLayout::new(3, &[3, 0, 5, 1]).unwrap().budget();
+        let budget = CellBudget::of(&JaggedLayout::new(3, &[3, 0, 5, 1]).unwrap());
         assert_eq!(budget.provisioned_per_live(1000), 1777);
 
         // An empty trace has no ratio to report.
-        let empty = JaggedLayout::new(3, &[0, 0]).unwrap().budget();
+        let empty = CellBudget::of(&JaggedLayout::new(3, &[0, 0]).unwrap());
         assert_eq!(empty.provisioned_per_live(1000), 0);
     }
 
@@ -152,7 +148,7 @@ mod tests {
             heights in prop::collection::vec(0usize..=40, 1..=16),
         ) {
             prop_assert_eq!(
-                stacked_budget(&heights).provisioned(),
+                CellBudget::stacked(&heights).provisioned(),
                 planner_provisioned(&heights)
             );
         }
@@ -165,8 +161,8 @@ mod tests {
             let mut heights = heights;
             heights.resize(heights.len().next_power_of_two(), 0);
 
-            let jagged = JaggedLayout::new(6, &heights).unwrap().budget();
-            let stacked = stacked_budget(&heights);
+            let jagged = CellBudget::of(&JaggedLayout::new(6, &heights).unwrap());
+            let stacked = CellBudget::stacked(&heights);
             prop_assert_eq!(jagged.live(), stacked.live());
             prop_assert!(jagged.provisioned() <= stacked.provisioned());
         }

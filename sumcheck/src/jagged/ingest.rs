@@ -10,7 +10,7 @@ use core::ops::Deref;
 use p3_field::Field;
 use p3_maybe_rayon::prelude::*;
 
-use super::error::{JaggedIngestError, JaggedLayoutError};
+use super::error::JaggedIngestError;
 use super::layout::JaggedLayout;
 
 /// Bits one packed word carries.
@@ -71,6 +71,14 @@ impl<F: Field> ColumnSource<'_, F> {
             Self::Interleaved { height, .. } | Self::Bits { height, .. } => *height,
             Self::Chunked(parts) => parts.iter().map(Self::height).sum(),
         }
+    }
+
+    /// Returns the live height of every column of one trace, in concatenation order.
+    ///
+    /// This is what a geometry is built from when the producer is the only record of the shape.
+    #[must_use]
+    pub fn heights(columns: &[Self]) -> Vec<usize> {
+        columns.iter().map(Self::height).collect()
     }
 
     /// Returns the most expensive conversion this source needs.
@@ -257,32 +265,8 @@ pub enum JaggedWitness<'a, F> {
     Assembled(Vec<F>),
 }
 
-impl<F> Deref for JaggedWitness<'_, F> {
-    type Target = [F];
-
-    fn deref(&self) -> &[F] {
-        match self {
-            Self::Shared(cells) => cells,
-            Self::Assembled(cells) => cells,
-        }
-    }
-}
-
-impl JaggedLayout {
-    /// Builds the geometry one source per column implies.
-    ///
-    /// # Errors
-    ///
-    /// Returns whatever the geometry rejects about the heights the sources declare.
-    pub fn from_columns<F: Field>(
-        row_variables: usize,
-        columns: &[ColumnSource<'_, F>],
-    ) -> Result<Self, JaggedLayoutError> {
-        let heights = columns.iter().map(ColumnSource::height).collect::<Vec<_>>();
-        Self::new(row_variables, &heights)
-    }
-
-    /// Reads one trace into the vector a commitment to this geometry binds.
+impl<'a, F: Field> JaggedWitness<'a, F> {
+    /// Reads one trace into the vector a commitment to the geometry binds.
     ///
     /// # Errors
     ///
@@ -290,11 +274,11 @@ impl JaggedLayout {
     /// - A source supplies a different height than the geometry reserves.
     /// - A source cannot supply the cells it declares.
     /// - A pre-concatenated vector is shorter than the envelope.
-    pub fn ingest<'a, F: Field>(
-        &self,
+    pub fn read(
+        layout: &JaggedLayout,
         source: TraceSource<'a, F>,
-    ) -> Result<(JaggedWitness<'a, F>, IngestReport), JaggedIngestError> {
-        let capacity = self.dense_capacity();
+    ) -> Result<(Self, IngestReport), JaggedIngestError> {
+        let capacity = layout.dense_capacity();
         let mut report = IngestReport::default();
 
         let columns = match source {
@@ -307,20 +291,20 @@ impl JaggedLayout {
                 }
 
                 // Padding is unconstrained, so whatever follows the live area rides along untouched.
-                report.charge(ConversionPass::Shared, self.area());
-                return Ok((JaggedWitness::Shared(&cells[..capacity]), report));
+                report.charge(ConversionPass::Shared, layout.area());
+                return Ok((Self::Shared(&cells[..capacity]), report));
             }
             TraceSource::Columns(columns) => columns,
         };
 
-        if columns.len() != self.num_columns() {
+        if columns.len() != layout.num_columns() {
             return Err(JaggedIngestError::ColumnCountMismatch {
-                expected: self.num_columns(),
+                expected: layout.num_columns(),
                 actual: columns.len(),
             });
         }
         for (index, column) in columns.iter().enumerate() {
-            let declared = self.column_height(index);
+            let declared = layout.column_height(index);
             let actual = column.height();
             if actual != declared {
                 return Err(JaggedIngestError::ColumnHeightMismatch {
@@ -334,12 +318,12 @@ impl JaggedLayout {
         }
 
         // The envelope is zeroed once, and only the live prefix is written over.
-        report.envelope = capacity - self.area();
+        report.envelope = capacity - layout.area();
         let mut witness = F::zero_vec(capacity);
 
         // Each column owns one interval, so every destination below is disjoint.
         let mut slots = Vec::with_capacity(columns.len());
-        let mut rest = &mut witness[..self.area()];
+        let mut rest = &mut witness[..layout.area()];
         for column in columns {
             let (head, tail) = rest.split_at_mut(column.height());
             slots.push(head);
@@ -350,12 +334,25 @@ impl JaggedLayout {
             .zip(columns.par_iter())
             .for_each(|(slot, column)| column.write_into(slot));
 
-        Ok((JaggedWitness::Assembled(witness), report))
+        Ok((Self::Assembled(witness), report))
+    }
+}
+
+impl<F> Deref for JaggedWitness<'_, F> {
+    type Target = [F];
+
+    fn deref(&self) -> &[F] {
+        match self {
+            Self::Shared(cells) => cells,
+            Self::Assembled(cells) => cells,
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use alloc::vec;
+
     use p3_field::PrimeCharacteristicRing;
     use proptest::prelude::*;
 
@@ -395,7 +392,8 @@ mod tests {
         let layout = JaggedLayout::new(3, &[3, 0, 5, 1]).unwrap();
         let committed = cells(&(1..=16).collect::<Vec<_>>());
 
-        let (witness, report) = layout.ingest(TraceSource::Committed(&committed)).unwrap();
+        let (witness, report) =
+            JaggedWitness::read(&layout, TraceSource::Committed(&committed)).unwrap();
         assert!(matches!(witness, JaggedWitness::Shared(_)));
         assert_eq!(&*witness, &committed[..]);
         assert!(report.is_zero_copy());
@@ -406,7 +404,7 @@ mod tests {
 
         // The vector may run past the envelope, and the surplus is neither read nor committed.
         let long = cells(&(1..=32).collect::<Vec<_>>());
-        let (witness, _) = layout.ingest(TraceSource::Committed(&long)).unwrap();
+        let (witness, _) = JaggedWitness::read(&layout, TraceSource::Committed(&long)).unwrap();
         assert_eq!(witness.len(), 16);
     }
 
@@ -431,7 +429,7 @@ mod tests {
             ColumnSource::Dense(&third),
             ColumnSource::Dense(&fourth),
         ];
-        let (witness, report) = layout.ingest(TraceSource::Columns(&dense)).unwrap();
+        let (witness, report) = JaggedWitness::read(&layout, TraceSource::Columns(&dense)).unwrap();
         assert_eq!(&*witness, &expected[..]);
         assert_eq!(report.charged(ConversionPass::Copied), 9);
         assert_eq!(report.envelope(), 7);
@@ -445,7 +443,8 @@ mod tests {
             stride: 4,
             height: layout.column_height(column),
         });
-        let (witness, report) = layout.ingest(TraceSource::Columns(&interleaved)).unwrap();
+        let (witness, report) =
+            JaggedWitness::read(&layout, TraceSource::Columns(&interleaved)).unwrap();
         assert_eq!(&*witness, &expected[..]);
         assert_eq!(report.charged(ConversionPass::Gathered), 9);
 
@@ -459,7 +458,7 @@ mod tests {
             ColumnSource::Dense(&third),
             ColumnSource::Dense(&fourth),
         ];
-        let (witness, _) = layout.ingest(TraceSource::Columns(&chunked)).unwrap();
+        let (witness, _) = JaggedWitness::read(&layout, TraceSource::Columns(&chunked)).unwrap();
         assert_eq!(&*witness, &expected[..]);
     }
 
@@ -476,7 +475,8 @@ mod tests {
             ColumnSource::Dense(&[]),
         ];
 
-        let (witness, report) = layout.ingest(TraceSource::Columns(&sources)).unwrap();
+        let (witness, report) =
+            JaggedWitness::read(&layout, TraceSource::Columns(&sources)).unwrap();
         assert_eq!(
             witness[..9],
             cells(&[1, 0, 1, 1, 0, 0, 0, 1, 1])[..],
@@ -523,7 +523,7 @@ mod tests {
         // One source short of the column count.
         let short = [ColumnSource::Dense(&three)];
         assert_eq!(
-            layout.ingest(TraceSource::Columns(&short)).err(),
+            JaggedWitness::read(&layout, TraceSource::Columns(&short)).err(),
             Some(JaggedIngestError::ColumnCountMismatch {
                 expected: 4,
                 actual: 1
@@ -538,7 +538,7 @@ mod tests {
             ColumnSource::Dense(&three),
         ];
         assert_eq!(
-            layout.ingest(TraceSource::Columns(&wrong)).err(),
+            JaggedWitness::read(&layout, TraceSource::Columns(&wrong)).err(),
             Some(JaggedIngestError::ColumnHeightMismatch {
                 column: 2,
                 expected: 2,
@@ -560,7 +560,7 @@ mod tests {
             },
         ];
         assert_eq!(
-            layout.ingest(TraceSource::Columns(&over)).err(),
+            JaggedWitness::read(&layout, TraceSource::Columns(&over)).err(),
             Some(JaggedIngestError::StrideOutOfRange {
                 column: 3,
                 required: 8,
@@ -581,7 +581,7 @@ mod tests {
             },
         ];
         assert_eq!(
-            layout.ingest(TraceSource::Columns(&stalled)).err(),
+            JaggedWitness::read(&layout, TraceSource::Columns(&stalled)).err(),
             Some(JaggedIngestError::ZeroStride { column: 3 })
         );
 
@@ -600,7 +600,7 @@ mod tests {
             },
         ];
         assert_eq!(
-            layout.ingest(TraceSource::Columns(&packed)).err(),
+            JaggedWitness::read(&layout, TraceSource::Columns(&packed)).err(),
             Some(JaggedIngestError::PackedWordsTooShort {
                 column: 2,
                 required: 1,
@@ -611,7 +611,7 @@ mod tests {
         // A pre-concatenated trace shorter than the envelope.
         let committed = cells(&[1, 2, 3]);
         assert_eq!(
-            layout.ingest(TraceSource::Committed(&committed)).err(),
+            JaggedWitness::read(&layout, TraceSource::Committed(&committed)).err(),
             Some(JaggedIngestError::CommittedVectorTooShort {
                 required: 16,
                 available: 3
@@ -631,7 +631,8 @@ mod tests {
             },
         ];
 
-        let layout = JaggedLayout::from_columns(3, &sources).unwrap();
+        assert_eq!(ColumnSource::heights(&sources), vec![3, 5]);
+        let layout = JaggedLayout::new(3, &ColumnSource::heights(&sources)).unwrap();
         assert_eq!(layout.column_height(0), 3);
         assert_eq!(layout.column_height(1), 5);
         assert_eq!(layout.area(), 8);
@@ -667,7 +668,7 @@ mod tests {
                 })
                 .collect::<Vec<_>>();
 
-            let (witness, report) = layout.ingest(TraceSource::Columns(&sources)).unwrap();
+            let (witness, report) = JaggedWitness::read(&layout, TraceSource::Columns(&sources)).unwrap();
             let expected = sources.iter().flat_map(expected_cells).collect::<Vec<_>>();
 
             prop_assert_eq!(witness.len(), layout.dense_capacity());

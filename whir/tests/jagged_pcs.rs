@@ -10,7 +10,8 @@ use p3_matrix::dense::RowMajorMatrix;
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_multilinear_util::point::Point;
 use p3_sumcheck::jagged::{
-    ColumnSource, JaggedLayout, JaggedOpeningError, JaggedPoint, TraceSource,
+    BoundJaggedLayout, CellBudget, ColumnSource, JaggedLayout, JaggedOpeningError, JaggedPoint,
+    JaggedWitness, TraceSource,
 };
 use p3_sumcheck::layout::{Layout, PrefixProver, Table, observe_commitment};
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
@@ -140,15 +141,15 @@ fn a_sparse_claim_is_authenticated_by_the_commitment_that_carries_it() {
         .iter()
         .map(|cells| ColumnSource::Dense(cells))
         .collect::<Vec<_>>();
-    let (witness, report) = layout.ingest(TraceSource::Columns(&sources)).unwrap();
+    let (witness, report) = JaggedWitness::read(&layout, TraceSource::Columns(&sources)).unwrap();
     assert_eq!(report.live(), 256);
     assert_eq!(report.envelope(), 0);
-    assert_eq!(layout.budget().dead(), 0);
+    assert_eq!(CellBudget::of(&layout).dead(), 0);
 
     // Prover: bind the commitment, seal the transcript to the geometry, then draw the point.
     let mut prover = challenger();
     let (pcs, commitment, data) = commit(&witness, &mut prover);
-    let bound = layout.bind::<F, _>(&mut prover);
+    let bound = BoundJaggedLayout::new::<F, _>(&layout, &mut prover);
     let point = bound.sample_point::<F, EF, _>(&mut prover);
     let value = jagged_evaluation(&heights, &witness, &point);
     let opening = bound
@@ -158,7 +159,7 @@ fn a_sparse_claim_is_authenticated_by_the_commitment_that_carries_it() {
     // Verifier: the same three steps, from its own public inputs.
     let mut verifier = challenger();
     observe_commitment::<F, _, _>(&mut verifier, commitment.clone());
-    let bound = layout.bind::<F, _>(&mut verifier);
+    let bound = BoundJaggedLayout::new::<F, _>(&layout, &mut verifier);
     let replayed = bound.sample_point::<F, EF, _>(&mut verifier);
     assert_eq!(replayed, point);
     bound
@@ -176,7 +177,7 @@ fn a_reduction_against_a_vector_that_was_not_committed_is_refused() {
         .iter()
         .map(|cells| ColumnSource::Dense(cells))
         .collect::<Vec<_>>();
-    let (committed, _) = layout.ingest(TraceSource::Columns(&sources)).unwrap();
+    let (committed, _) = JaggedWitness::read(&layout, TraceSource::Columns(&sources)).unwrap();
 
     // Mutation: one live cell of the vector the reduction speaks about, which was never committed.
     let mut forged = committed.to_vec();
@@ -184,7 +185,7 @@ fn a_reduction_against_a_vector_that_was_not_committed_is_refused() {
 
     let mut prover = challenger();
     let (pcs, commitment, data) = commit(&committed, &mut prover);
-    let bound = layout.bind::<F, _>(&mut prover);
+    let bound = BoundJaggedLayout::new::<F, _>(&layout, &mut prover);
     let point = bound.sample_point::<F, EF, _>(&mut prover);
 
     // The forged trace is internally consistent, so the reduction itself has nothing to object to.
@@ -196,7 +197,7 @@ fn a_reduction_against_a_vector_that_was_not_committed_is_refused() {
 
     let mut verifier = challenger();
     observe_commitment::<F, _, _>(&mut verifier, commitment.clone());
-    let bound = layout.bind::<F, _>(&mut verifier);
+    let bound = BoundJaggedLayout::new::<F, _>(&layout, &mut verifier);
     let replayed = bound.sample_point::<F, EF, _>(&mut verifier);
     assert!(matches!(
         bound.verify(&pcs, &commitment, &opening, &replayed, value, &mut verifier),
@@ -213,11 +214,11 @@ fn a_transcript_sealed_to_other_heights_rejects() {
         .iter()
         .map(|cells| ColumnSource::Dense(cells))
         .collect::<Vec<_>>();
-    let (witness, _) = layout.ingest(TraceSource::Columns(&sources)).unwrap();
+    let (witness, _) = JaggedWitness::read(&layout, TraceSource::Columns(&sources)).unwrap();
 
     let mut prover = challenger();
     let (pcs, commitment, data) = commit(&witness, &mut prover);
-    let bound = layout.bind::<F, _>(&mut prover);
+    let bound = BoundJaggedLayout::new::<F, _>(&layout, &mut prover);
     let point = bound.sample_point::<F, EF, _>(&mut prover);
     let value = jagged_evaluation(&heights, &witness, &point);
     let opening = bound
@@ -233,7 +234,7 @@ fn a_transcript_sealed_to_other_heights_rejects() {
 
     let mut verifier = challenger();
     observe_commitment::<F, _, _>(&mut verifier, commitment.clone());
-    let bound = other.bind::<F, _>(&mut verifier);
+    let bound = BoundJaggedLayout::new::<F, _>(&other, &mut verifier);
     let replayed = bound.sample_point::<F, EF, _>(&mut verifier);
     assert_ne!(replayed, point);
     assert!(

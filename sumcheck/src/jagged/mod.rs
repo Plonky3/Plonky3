@@ -14,7 +14,7 @@ mod pcs;
 mod selector;
 mod transcript;
 
-pub use budget::{CellBudget, stacked_budget};
+pub use budget::CellBudget;
 pub use error::{JaggedError, JaggedIngestError, JaggedLayoutError, JaggedOpeningError};
 pub use ingest::{ColumnSource, ConversionPass, IngestReport, JaggedWitness, TraceSource};
 pub use layout::JaggedLayout;

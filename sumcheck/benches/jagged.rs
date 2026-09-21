@@ -13,7 +13,9 @@ use p3_field::PrimeCharacteristicRing;
 use p3_field::extension::BinomialExtensionField;
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
-use p3_sumcheck::jagged::{ColumnSource, JaggedLayout, JaggedPoint, TraceSource, stacked_budget};
+use p3_sumcheck::jagged::{
+    CellBudget, ColumnSource, JaggedLayout, JaggedPoint, JaggedWitness, TraceSource,
+};
 use p3_util::log2_ceil_usize;
 use rand::SeedableRng;
 use rand::rngs::SmallRng;
@@ -126,8 +128,7 @@ fn bench_ingest(c: &mut Criterion) {
         group.bench_function(BenchmarkId::new("committed", log_area), |b| {
             b.iter(|| {
                 black_box(
-                    layout
-                        .ingest(TraceSource::Committed(black_box(&witness)))
+                    JaggedWitness::read(&layout, TraceSource::Committed(black_box(&witness)))
                         .unwrap(),
                 )
             });
@@ -146,8 +147,7 @@ fn bench_ingest(c: &mut Criterion) {
         group.bench_function(BenchmarkId::new("column_major", log_area), |b| {
             b.iter(|| {
                 black_box(
-                    layout
-                        .ingest(TraceSource::Columns(black_box(&columns)))
+                    JaggedWitness::read(&layout, TraceSource::Columns(black_box(&columns)))
                         .unwrap(),
                 )
             });
@@ -171,8 +171,7 @@ fn bench_ingest(c: &mut Criterion) {
         group.bench_function(BenchmarkId::new("row_major", log_area), |b| {
             b.iter(|| {
                 black_box(
-                    layout
-                        .ingest(TraceSource::Columns(black_box(&interleaved)))
+                    JaggedWitness::read(&layout, TraceSource::Columns(black_box(&interleaved)))
                         .unwrap(),
                 )
             });
@@ -189,9 +188,7 @@ fn bench_ingest(c: &mut Criterion) {
         group.bench_function(BenchmarkId::new("bit_sliced", log_area), |b| {
             b.iter(|| {
                 black_box(
-                    layout
-                        .ingest(TraceSource::Columns(black_box(&packed)))
-                        .unwrap(),
+                    JaggedWitness::read(&layout, TraceSource::Columns(black_box(&packed))).unwrap(),
                 )
             });
         });
@@ -228,8 +225,8 @@ fn bench_verify(c: &mut Criterion) {
     // Not a timing, but the cell accounting a sparse commitment is chosen for.
     for log_area in AREAS {
         let heights = heights(log_area);
-        let jagged = JaggedLayout::new(ROW_VARIABLES, &heights).unwrap().budget();
-        let stacked = stacked_budget(&heights);
+        let jagged = CellBudget::of(&JaggedLayout::new(ROW_VARIABLES, &heights).unwrap());
+        let stacked = CellBudget::stacked(&heights);
         println!(
             "jagged/cells log_area={log_area} live={} jagged={} stacked={}",
             jagged.live(),
