@@ -81,8 +81,14 @@ pub fn compute_adjusted_weights<EF: Field>(point: EF, diff_invs: &[EF]) -> Vec<E
     );
     // Single inversion of z, amortised over all N weights.
     let point_inv = point.inverse();
-    // Subtract z^{-1} from each 1/(z - x_i) in parallel.
-    diff_invs.par_iter().map(|&d| d - point_inv).collect()
+    // Subtract z^{-1} from each 1/(z - x_i).
+    //
+    // One item reads one weight and writes one, for a body of a single subtraction.
+    // The floor keeps a short table off rayon's bridge, which costs about as much as the body.
+    let item_bytes = 2 * size_of::<EF>();
+    diff_invs
+        .par_iter()
+        .map_collect_min_task_bytes(item_bytes, |&d| d - point_inv)
 }
 
 /// Barycentric Lagrange interpolation over two-adic cosets.
@@ -117,9 +123,14 @@ pub trait Interpolate<F: TwoAdicField>: Matrix<F> {
             .iter()
             .collect();
 
-        // Compute z - x_i in parallel, then batch-invert in one shot
+        // Compute z - x_i, then batch-invert in one shot
         // (Montgomery's trick: single field inversion + O(N) multiplications).
-        let diffs: Vec<EF> = coset.par_iter().map(|&g| point - g).collect();
+        //
+        // One item reads one coset element and writes one difference.
+        let item_bytes = size_of::<F>() + size_of::<EF>();
+        let diffs: Vec<EF> = coset
+            .par_iter()
+            .map_collect_min_task_bytes(item_bytes, |&g| point - g);
 
         // If point lies on the coset, return that row directly.
         // Detected by scanning the already-computed diffs to keep the off-domain path parallel.
