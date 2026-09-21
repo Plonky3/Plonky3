@@ -17,7 +17,7 @@ pub use builder::{
 };
 pub use debug::{
     BusDebugError, BusDebugInstance, BusDebugLimits, BusDebugLocation, BusDebugOccurrence,
-    BusDebugReport, BusImbalance,
+    BusDebugReport, BusImbalance, BusUnmatched,
 };
 pub use leaf::{BusDirection, BusLeafDeclaration, BusLeafError, BusLeaves, BusSelector};
 pub use plan::{

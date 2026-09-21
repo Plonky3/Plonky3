@@ -11,7 +11,7 @@ use core::fmt;
 use hashbrown::HashMap;
 use p3_air::symbolic::{BaseEntry, BaseLeaf, SymbolicExpr, SymbolicExpression};
 use p3_field::{ExtensionField, Field};
-use p3_sumcheck::layout::Table;
+use p3_sumcheck::layout::{ColumnView, Table};
 use thiserror::Error;
 
 use crate::{
@@ -144,7 +144,9 @@ pub struct BusDebugLocation {
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct BusDebugOccurrence {
-    /// Number of active rows carrying the tuple.
+    /// Number of active declaration occurrences carrying the tuple.
+    ///
+    /// One row contributes once per declaration it activates, so a row can be counted more than once.
     pub count: usize,
     /// Sources of the occurrences this side holds in excess of the other side.
     ///
@@ -152,7 +154,9 @@ pub struct BusDebugOccurrence {
     ///
     /// The smaller side is fully paired and therefore carries no sample at all.
     ///
-    /// Removing the sampled rows restores balance for this tuple, but when both sides are non-empty no single row is the unique culprit.
+    /// The sample is bounded, so it covers the whole excess only when it holds as many occurrences as the two counts differ by.
+    ///
+    /// When it does, removing those occurrences restores balance for this tuple, though with both sides non-empty no single one is the unique culprit.
     pub locations: Vec<BusDebugLocation>,
 }
 
@@ -170,28 +174,55 @@ pub struct BusImbalance<F> {
     pub pulls: BusDebugOccurrence,
 }
 
+/// Total unmatched tuples found in one named multiset.
+///
+/// The total is exact whether or not the report retained every tuple behind it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct BusUnmatched {
+    /// Name of the independently balanced multiset.
+    pub bus_name: String,
+    /// Unmatched tuples found, counting those the retained list dropped.
+    pub unmatched: usize,
+}
+
 /// Deterministic list of unmatched bus tuples.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct BusDebugReport<F> {
     /// Retained unmatched tuples in first-occurrence order.
     pub imbalances: Vec<BusImbalance<F>>,
-    /// Unmatched tuples dropped because the retained list was already full.
-    pub unreported: usize,
+    /// Exact unmatched totals of every multiset that does not balance, in layout order.
+    ///
+    /// A multiset appears here even when the retained list dropped all of its tuples.
+    pub buses: Vec<BusUnmatched>,
 }
 
 impl<F> BusDebugReport<F> {
     /// Returns whether every named multiset balances exactly.
     #[must_use]
     pub const fn is_balanced(&self) -> bool {
-        // A dropped tuple is still an imbalance, so both fields decide the verdict.
-        self.imbalances.is_empty() && self.unreported == 0
+        // A multiset is listed exactly when it holds at least one unmatched tuple.
+        self.buses.is_empty()
+    }
+
+    /// Returns the unmatched tuples dropped because the retained list was already full.
+    #[must_use]
+    pub fn unreported(&self) -> usize {
+        // Every retained tuple is counted in exactly one of the totals.
+        self.total_unmatched() - self.imbalances.len()
+    }
+
+    /// Returns the unmatched tuples found across every named multiset.
+    #[must_use]
+    pub fn total_unmatched(&self) -> usize {
+        self.buses.iter().map(|bus| bus.unmatched).sum()
     }
 
     /// Returns whether unmatched tuples were dropped from the retained list.
     #[must_use]
-    pub const fn is_truncated(&self) -> bool {
-        self.unreported != 0
+    pub fn is_truncated(&self) -> bool {
+        self.unreported() != 0
     }
 }
 
@@ -201,30 +232,25 @@ impl<F: fmt::Display> fmt::Display for BusDebugReport<F> {
             return write!(f, "every named bus balances");
         }
 
-        // Entries keep first-occurrence order, so grouping walks the distinct names in that order.
-        let mut printed = Vec::<&str>::new();
-        for imbalance in &self.imbalances {
-            if printed.contains(&imbalance.bus_name.as_str()) {
-                continue;
-            }
-            printed.push(imbalance.bus_name.as_str());
+        // Walking the totals rather than the retained list also reaches a multiset that retained nothing.
+        for bus in &self.buses {
             let group = self
                 .imbalances
                 .iter()
-                .filter(|other| other.bus_name == imbalance.bus_name);
-            writeln!(
+                .filter(|entry| entry.bus_name == bus.bus_name);
+            let shown = group.clone().count();
+            write!(
                 f,
                 "bus {:?}: {} unmatched tuples",
-                imbalance.bus_name,
-                group.clone().count()
+                bus.bus_name, bus.unmatched
             )?;
+            if shown != bus.unmatched {
+                write!(f, " ({shown} shown)")?;
+            }
+            writeln!(f)?;
             for entry in group {
                 write_imbalance(f, entry)?;
             }
-        }
-
-        if self.unreported != 0 {
-            writeln!(f, "... and {} more unmatched tuples", self.unreported)?;
         }
         Ok(())
     }
@@ -444,7 +470,7 @@ impl<F: Field> BusDebugReport<F> {
         let Some(plan) = BusPlan::build(&inputs)? else {
             return Ok(Self {
                 imbalances: Vec::new(),
-                unreported: 0,
+                buses: Vec::new(),
             });
         };
 
@@ -507,13 +533,15 @@ impl<F: Field> BusDebugReport<F> {
         // Equal multiplicities cancel as integers rather than as field elements.
         let mut positions = HashMap::<usize, usize>::new();
         let mut imbalances = Vec::new();
-        let mut unreported = 0;
+
+        // The totals are accumulated before the cap applies, so truncation cannot shrink them.
+        let mut unmatched = alloc::vec![0usize; plan.domains().len()];
         for (index, entry) in counts.iter().enumerate() {
             if entry.pushes == entry.pulls {
                 continue;
             }
+            unmatched[entry.bus] += 1;
             if imbalances.len() == limits.imbalances {
-                unreported += 1;
                 continue;
             }
             positions.insert(index, imbalances.len());
@@ -531,11 +559,18 @@ impl<F: Field> BusDebugReport<F> {
             });
         }
         drop(counts);
+        let buses = plan
+            .domains()
+            .iter()
+            .zip(&unmatched)
+            .filter(|&(_, &unmatched)| unmatched != 0)
+            .map(|(domain, &unmatched)| BusUnmatched {
+                bus_name: domain.name.clone(),
+                unmatched,
+            })
+            .collect::<Vec<_>>();
         if positions.is_empty() {
-            return Ok(Self {
-                imbalances,
-                unreported,
-            });
+            return Ok(Self { imbalances, buses });
         }
 
         // The second scan samples only the occurrences a side holds beyond the pairing with the other side.
@@ -569,10 +604,7 @@ impl<F: Field> BusDebugReport<F> {
             },
         )?;
 
-        Ok(Self {
-            imbalances,
-            unreported,
-        })
+        Ok(Self { imbalances, buses })
     }
 }
 
@@ -663,7 +695,7 @@ fn replay<F: Field>(
 }
 
 /// One declaration whose expressions are resolved against concrete columns.
-struct CompiledDeclaration<'a, F> {
+struct CompiledDeclaration<'a, F: Field> {
     /// Stable position of the named multiset.
     bus: usize,
     /// Side of the multiset equality receiving the tuple.
@@ -675,9 +707,11 @@ struct CompiledDeclaration<'a, F> {
 }
 
 /// One resolved node of a flattened expression.
-enum Op<'a, F> {
+enum Op<'a, F: Field> {
     /// A whole trace column, indexed by row at evaluation time.
-    Column(&'a [F]),
+    ///
+    /// The view decodes a cell from either dense or packed storage.
+    Column(ColumnView<'a, F>),
     /// A value shared by every row.
     Constant(F),
     /// Indicator of the first row.
@@ -697,15 +731,15 @@ enum Op<'a, F> {
 }
 
 /// An expression flattened into an order where every operand precedes its use.
-struct Program<'a, F>(Vec<Op<'a, F>>);
+struct Program<'a, F: Field>(Vec<Op<'a, F>>);
 
 impl<F: Field> Program<'_, F> {
     fn run(&self, row: usize, height: usize, slots: &mut Vec<F>) -> F {
-        // A linear scan over shared storage replaces a per-row hash table.
+        // Operands always precede their use, so one forward pass over reusable storage suffices.
         slots.clear();
         for op in &self.0 {
             let value = match *op {
-                Op::Column(column) => column[row],
+                Op::Column(column) => column.value(row),
                 Op::Constant(value) => value,
                 Op::FirstRow => F::from_bool(row == 0),
                 Op::LastRow => F::from_bool(row + 1 == height),
@@ -746,10 +780,10 @@ fn compile_instance<'a, F: Field>(
     instance: &BusDebugInstance<'a, F>,
     domains: &HashMap<&str, usize>,
 ) -> Result<Vec<CompiledDeclaration<'a, F>>, BusDebugError> {
-    let main = instance.main.iter_polys().collect::<Vec<_>>();
+    let main = instance.main.columns().collect::<Vec<_>>();
     let preprocessed = instance
         .preprocessed
-        .map(|table| table.iter_polys().collect::<Vec<_>>());
+        .map(|table| table.columns().collect::<Vec<_>>());
 
     instance
         .interactions
@@ -792,9 +826,9 @@ struct Compiler<'a, 'b, F: Field> {
     /// Declaration position within the AIR.
     declaration: usize,
     /// Committed trace columns.
-    main: &'b [&'a [F]],
+    main: &'b [ColumnView<'a, F>],
     /// Optional fixed trace columns.
-    preprocessed: Option<&'b [&'a [F]]>,
+    preprocessed: Option<&'b [ColumnView<'a, F>]>,
     /// Public inputs supplied to the AIR.
     public_values: &'a [F],
 }
@@ -1715,21 +1749,28 @@ mod tests {
             imbalances: 3,
         };
 
-        // Three tuples survive the cap and the remaining five are counted rather than dropped silently.
+        // Three tuples survive the cap and the remaining five are still counted in the total.
         let report = BusDebugReport::check_with_limits(&instances, limits).unwrap();
         assert_eq!(report.imbalances.len(), 3);
-        assert_eq!(report.unreported, 5);
+        assert_eq!(report.unreported(), 5);
+        assert_eq!(report.total_unmatched(), 8);
+        assert_eq!(
+            report.buses,
+            vec![BusUnmatched {
+                bus_name: "order".to_string(),
+                unmatched: 8,
+            }],
+        );
         assert!(report.is_truncated());
         assert!(!report.is_balanced());
 
-        // The rendering is one line per tuple plus a header and a truncation notice.
+        // The header carries the true total and says how much of it the body holds.
         assert_eq!(
             format!("{report}"),
-            "bus \"order\": 3 unmatched tuples\n\
+            "bus \"order\": 8 unmatched tuples (3 shown)\n\
              \x20 (1)  push 1  pull 0  excess push at air 0 decl 0 row 0\n\
              \x20 (2)  push 1  pull 0  excess push at air 0 decl 0 row 1\n\
-             \x20 (3)  push 1  pull 0  excess push at air 0 decl 0 row 2\n\
-             ... and 5 more unmatched tuples\n",
+             \x20 (3)  push 1  pull 0  excess push at air 0 decl 0 row 2\n",
         );
     }
 
@@ -1867,7 +1908,7 @@ mod tests {
     fn an_unsupported_leaf_is_named_rather_than_panicked_on() {
         // Fixture state: a next-row access and a periodic access, both rejected by planning first.
         let column = [F::ZERO];
-        let main = [column.as_slice()];
+        let main = [ColumnView::Dense(column.as_slice())];
         let compiler = Compiler {
             air: 2,
             declaration: 1,
@@ -1965,5 +2006,131 @@ mod tests {
             prop_assert_eq!(gained.pulls.locations[0].row, row);
             prop_assert_eq!(gained.pulls.locations[0].air, 1);
         }
+    }
+
+    #[test]
+    fn packed_boolean_storage_is_read_without_materializing_a_dense_trace() {
+        // Fixture state: two main columns and one activation column over eight logical rows.
+        //
+        // Bit i of a packed word is row i, so the dense spellings below are the words 77, 150 and 107.
+        let packed_main = Table::<B>::from_packed_bits(RowMajorMatrix::new(vec![77, 150], 2), 3);
+        let packed_fixed = Table::<B>::from_packed_bits(RowMajorMatrix::new(vec![107], 1), 3);
+        let dense_main = table::<B>(&[&[1, 0, 1, 1, 0, 0, 1, 0], &[0, 1, 1, 0, 1, 0, 0, 1]]);
+        let dense_fixed = table::<B>(&[&[1, 1, 0, 1, 0, 1, 1, 0]]);
+
+        let interactions = [interaction(
+            "bits",
+            BusDirection::Push,
+            vec![current(0), current(1)],
+            BusActivation::Boolean(
+                SymbolicVariable::<B>::new(BaseEntry::Preprocessed { offset: 0 }, 0).into(),
+            ),
+        )];
+        let report = |main, preprocessed| {
+            BusDebugReport::check(&[BusDebugInstance {
+                main,
+                preprocessed: Some(preprocessed),
+                public_values: &[],
+                interactions: &interactions,
+            }])
+            .unwrap()
+        };
+
+        // Rows 0, 1, 3, 5 and 6 are active, pushing (1,0) three times and (0,1) and (0,0) once.
+        let packed = report(&packed_main, &packed_fixed);
+        assert_eq!(
+            packed.buses,
+            vec![BusUnmatched {
+                bus_name: "bits".to_string(),
+                unmatched: 3,
+            }],
+        );
+        assert_eq!(
+            packed
+                .imbalances
+                .iter()
+                .map(|entry| (entry.tuple.clone(), entry.pushes.count, entry.pulls.count))
+                .collect::<Vec<_>>(),
+            vec![
+                (vec![B::ONE, B::ZERO], 3, 0),
+                (vec![B::ZERO, B::ONE], 1, 0),
+                (vec![B::ZERO, B::ZERO], 1, 0),
+            ],
+        );
+
+        // Both storage layouts describe the same logical trace, so they must diagnose identically.
+        assert_eq!(packed, report(&dense_main, &dense_fixed));
+    }
+
+    #[test]
+    fn a_bus_whose_tuples_all_fall_past_the_cap_is_still_named() {
+        // Fixture state: four unmatched tuples in the first AIR and two in the second.
+        let first = table::<F>(&[&[1, 2, 3, 4]]);
+        let second = table::<F>(&[&[5, 6]]);
+        let alpha = [interaction(
+            "alpha",
+            BusDirection::Push,
+            vec![current(0)],
+            BusActivation::Always,
+        )];
+        let zulu = [interaction(
+            "zulu",
+            BusDirection::Push,
+            vec![current(0)],
+            BusActivation::Always,
+        )];
+        let instances = [
+            BusDebugInstance {
+                main: &first,
+                preprocessed: None,
+                public_values: &[],
+                interactions: &alpha,
+            },
+            BusDebugInstance {
+                main: &second,
+                preprocessed: None,
+                public_values: &[],
+                interactions: &zulu,
+            },
+        ];
+        let limits = BusDebugLimits {
+            locations: 1,
+            imbalances: 4,
+        };
+
+        // The first AIR fills the retained list, so nothing of the second survives it.
+        let report = BusDebugReport::check_with_limits(&instances, limits).unwrap();
+        assert_eq!(report.imbalances.len(), 4);
+        assert!(
+            report
+                .imbalances
+                .iter()
+                .all(|entry| entry.bus_name == "alpha")
+        );
+        assert_eq!(
+            report.buses,
+            vec![
+                BusUnmatched {
+                    bus_name: "alpha".to_string(),
+                    unmatched: 4,
+                },
+                BusUnmatched {
+                    bus_name: "zulu".to_string(),
+                    unmatched: 2,
+                },
+            ],
+        );
+        assert_eq!(report.unreported(), 2);
+
+        // The bus with no retained entry is named with its own total rather than omitted.
+        assert_eq!(
+            format!("{report}"),
+            "bus \"alpha\": 4 unmatched tuples\n\
+             \x20 (1)  push 1  pull 0  excess push at air 0 decl 0 row 0\n\
+             \x20 (2)  push 1  pull 0  excess push at air 0 decl 0 row 1\n\
+             \x20 (3)  push 1  pull 0  excess push at air 0 decl 0 row 2\n\
+             \x20 (4)  push 1  pull 0  excess push at air 0 decl 0 row 3\n\
+             bus \"zulu\": 2 unmatched tuples (0 shown)\n",
+        );
     }
 }
