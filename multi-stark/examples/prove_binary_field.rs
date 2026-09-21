@@ -203,7 +203,8 @@ mod tests {
     use p3_bus::{BusActivation, BusDirection, BusInteractionBuilder};
     use p3_field::PrimeCharacteristicRing;
     use p3_multi_stark::config::PcsError;
-    use p3_multi_stark::{VerificationError, VerifyingKey, prove, verify};
+    use p3_multi_stark::zerocheck::ZerocheckError;
+    use p3_multi_stark::{SecurityError, VerificationError, VerifyingKey, prove, verify};
 
     use super::*;
 
@@ -364,7 +365,17 @@ mod tests {
             let report = p3_multi_stark::security_report(&config, &instances).unwrap();
             assert!(report.unassessed_components().is_empty());
             report.require_security(100).unwrap();
-            assert!(report.require_security(128).is_err());
+
+            // The union bound lies between the target that passes and the one that does not.
+            let Err(SecurityError::InsufficientSecurity {
+                requested,
+                available,
+            }) = report.require_security(128)
+            else {
+                panic!("a 128-bit target must be refused for lack of bits");
+            };
+            assert_eq!(requested, 128);
+            assert!((100.0..128.0).contains(&available), "{available}");
         }
         let config = config(4);
         let (table, public) = trace(4);
@@ -398,7 +409,12 @@ mod tests {
         for index in 0..3 {
             let mut fixture = Fixture::new(3, 0);
             fixture.public[index] += F::ONE;
-            assert!(fixture.verify().is_err());
+
+            // Public values are bound before any challenge, so every later one moves with them.
+            assert!(matches!(
+                fixture.verify(),
+                Err(VerificationError::Opening(BinaryPcsError::FinalCheck))
+            ));
         }
     }
 
@@ -406,7 +422,12 @@ mod tests {
     fn rejects_changed_sumcheck_polynomial() {
         let mut fixture = Fixture::new(3, 0);
         fixture.proof.sumcheck.round_polys[0][0] += F::ONE;
-        assert!(fixture.verify().is_err());
+
+        // A changed round message moves the challenge, and so the point the opening answers.
+        assert!(matches!(
+            fixture.verify(),
+            Err(VerificationError::Opening(BinaryPcsError::FinalCheck))
+        ));
     }
 
     #[test]
@@ -449,7 +470,14 @@ mod tests {
             log_height,
             pow_bits: 0,
         };
-        assert!(fixture.verify().is_err());
+
+        // The corrupted row leaves the constraint nonzero at the bound point.
+        assert!(matches!(
+            fixture.verify(),
+            Err(VerificationError::Zerocheck(
+                ZerocheckError::FinalSumMismatch
+            ))
+        ));
     }
 
     #[test]
@@ -637,7 +665,12 @@ mod tests {
                 .unwrap()
                 .final_codeword
                 .as_mut_slice()[1] += F::ONE;
-            assert!(check(&proof).is_err());
+
+            // The tampered codeword fails the scheme's own final check, not a later one.
+            assert!(matches!(
+                check(&proof),
+                Err(VerificationError::Opening(BinaryPcsError::FinalCheck))
+            ));
         }
     }
 }
