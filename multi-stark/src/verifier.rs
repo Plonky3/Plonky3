@@ -329,7 +329,10 @@ where
         (None, None) => None,
         // The shape describes the bracket exactly when the AIRs declare a read.
         //
-        // The two disagree only if the proof carries a section nobody asked for.
+        // Either direction of disagreement lands here.
+        //
+        //     the proof carries a section nobody asked for
+        //     the AIRs declare a read the proof does not answer
         _ => {
             transcript.abort();
             return Err(VerificationError::UnexpectedIndexedReduction);

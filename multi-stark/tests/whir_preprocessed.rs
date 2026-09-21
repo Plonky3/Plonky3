@@ -640,6 +640,63 @@ fn verify_rejects_violated_main_constraint() {
 }
 
 #[test]
+fn verify_rejects_a_proof_missing_its_expected_preprocessed_opening() {
+    // Fixture state: the AIR declares one preprocessed column, so the key commits to it.
+    //
+    //     key   -> Some(commitment)
+    //     proof -> Some(opening)
+    let n = 256;
+    let fixed = fixed_column(n);
+    let air = PreprocessedAir {
+        height: n,
+        cells: &[],
+    };
+    let trace = main_trace(&fixed);
+    let log_height = log2_strict_usize(n);
+    let config = config_for(log_height);
+    let (pk, vk) = setup(&config, &[&air], &mut challenger()).unwrap();
+    let mut proof = prove(
+        &config,
+        ProverInstances::new(vec![ProverInstance::new(
+            &air,
+            Table::new(trace.transpose()),
+            &pk,
+            &[],
+        )]),
+        0,
+        &mut challenger(),
+    )
+    .unwrap();
+    assert!(proof.preprocessed_opening.is_some());
+
+    // Mutation: drop the opening that commitment requires.
+    //
+    //     key   -> Some(commitment)
+    //     proof -> None
+    proof.preprocessed_opening = None;
+
+    // Expected rejection: the key expects an opening the proof does not carry.
+    // Why: the rejection has to land before the opening schedule is described.
+    //   the step that replays the preprocessed opening assumes the section is there
+    //   -> reaching it empty-handed is an internal contradiction, not a verdict.
+    //
+    // This is presence, not contents.
+    // A test further down tampers with the values inside an opening that is present.
+    let err = verify(
+        &config,
+        VerifierInstances::new(vec![VerifierInstance::new(&air, &vk, log_height, &[])]),
+        &proof,
+        0,
+        &mut challenger(),
+    )
+    .unwrap_err();
+    assert!(
+        matches!(err, VerificationError::MissingPreprocessedOpening),
+        "expected MissingPreprocessedOpening, got {err:?}"
+    );
+}
+
+#[test]
 fn verify_rejects_tampered_preprocessed_opening() {
     // Fixture state: the proof carries commitment-bound preprocessed openings.
     let n = 256;
