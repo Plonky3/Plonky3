@@ -1409,7 +1409,7 @@ impl<EF: TranscriptField + TowerLevel> BitRingSwitch<EF> {
                     Self::tensor_over(
                         packing,
                         offset + bank * tail_equality.num_evals(),
-                        &tail_equality,
+                        tail_equality,
                     )
                 })
                 .collect::<Vec<_>>();
@@ -1419,7 +1419,7 @@ impl<EF: TranscriptField + TowerLevel> BitRingSwitch<EF> {
                         self.successor_tensors_over(
                             packing,
                             offset + bank * tail_equality.num_evals(),
-                            &tail_equality,
+                            tail_equality,
                         )
                         .expect("eligible successor compact bank has successor tensors")
                     })
@@ -1545,7 +1545,7 @@ impl<EF: TranscriptField + TowerLevel> BitRingSwitch<EF> {
                 let bound_weights = {
                     let _span =
                         tracing::debug_span!("compact_weights", depth = requested_k).entered();
-                    batch.weights_from_generators::<R>(&tail_equality, &generators)
+                    batch.weights_from_generators::<R>(tail_equality, &generators)
                 };
                 let _span = tracing::debug_span!("compact_tail", depth = requested_k).entered();
                 let mut tail_prover = ReprSumcheckProver::<EF, EF, R>::from_repr_tables(
