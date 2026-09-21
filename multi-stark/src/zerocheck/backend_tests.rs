@@ -105,6 +105,9 @@ pub(crate) fn outside() -> Tower {
 /// The one cell the gate AIR binds to a public value.
 const GATE_CELLS: [BoundaryPublic; 1] = [BoundaryPublic::new(0, BoundaryEnd::First, 0)];
 
+/// Public boundary pin used by the eligible quadratic-input fixture.
+const QUADRATIC_PUBLIC: [BoundaryPublic; 1] = [BoundaryPublic::new(0, BoundaryEnd::First, 0)];
+
 /// Period of the gate AIR's periodic column.
 const GATE_PERIOD: usize = 4;
 
@@ -182,6 +185,10 @@ pub(crate) enum FixtureAir {
         /// Constant multiplying the equality.
         scale: Tower,
     },
+    /// Eligible quadratic AIR using fixed, periodic, selector, and public inputs.
+    QuadraticInputs,
+    /// AIR with a main column but no constraints, whose native degree is zero.
+    Empty,
 }
 
 impl BaseAir<Tower> for FixtureAir {
@@ -190,13 +197,14 @@ impl BaseAir<Tower> for FixtureAir {
             Self::Gate { .. } | Self::Quartic => 4,
             Self::Pair => 3,
             Self::Link | Self::Recurrence | Self::Linear { .. } => 2,
+            Self::QuadraticInputs | Self::Empty => 1,
             Self::Periodic { .. } => 1,
         }
     }
 
     fn preprocessed_width(&self) -> usize {
         match self {
-            Self::Gate { .. } => 1,
+            Self::Gate { .. } | Self::QuadraticInputs => 1,
             _ => 0,
         }
     }
@@ -204,13 +212,14 @@ impl BaseAir<Tower> for FixtureAir {
     fn num_public_values(&self) -> usize {
         match self {
             Self::Gate { .. } => 2,
+            Self::QuadraticInputs => 1,
             _ => 0,
         }
     }
 
     fn num_periodic_columns(&self) -> usize {
         match self {
-            Self::Gate { .. } | Self::Periodic { .. } => 1,
+            Self::Gate { .. } | Self::Periodic { .. } | Self::QuadraticInputs => 1,
             _ => 0,
         }
     }
@@ -219,6 +228,7 @@ impl BaseAir<Tower> for FixtureAir {
         match self {
             Self::Gate { .. } => Cow::Owned(vec![(0..GATE_PERIOD).map(gf4).collect()]),
             Self::Periodic { period } => Cow::Owned(vec![period.to_vec()]),
+            Self::QuadraticInputs => Cow::Owned(vec![vec![Tower::ONE]]),
             _ => Cow::Owned(vec![]),
         }
     }
@@ -228,7 +238,12 @@ impl BaseAir<Tower> for FixtureAir {
             Self::Gate { .. } => vec![2],
             Self::Quartic => vec![3],
             Self::Recurrence => vec![0, 1],
-            Self::Pair | Self::Link | Self::Periodic { .. } | Self::Linear { .. } => vec![],
+            Self::Pair
+            | Self::Link
+            | Self::Periodic { .. }
+            | Self::Linear { .. }
+            | Self::QuadraticInputs
+            | Self::Empty => vec![],
         }
     }
 
@@ -242,6 +257,7 @@ impl BaseAir<Tower> for FixtureAir {
     fn public_boundary_io(&self) -> &[BoundaryPublic] {
         match self {
             Self::Gate { .. } => &GATE_CELLS,
+            Self::QuadraticInputs => &QUADRATIC_PUBLIC,
             _ => &[],
         }
     }
@@ -302,6 +318,16 @@ impl<AB: AirBuilder<F = Tower> + InteractionBuilder> Air<AB> for FixtureAir {
             Self::Linear { scale } => {
                 builder.assert_zero((local[0] - local[1]) * *scale);
             }
+            Self::QuadraticInputs => {
+                let fixed = builder.preprocessed().current_slice()[0];
+                let periodic: AB::Expr = builder.periodic_values()[0].into();
+                let value: AB::Expr = local[0].into();
+                let public = builder.public_values()[0];
+                builder.assert_zero(value * periodic - fixed);
+                builder.when_first_row().assert_eq(local[0], public);
+                builder.when_last_row().assert_eq(local[0], public);
+            }
+            Self::Empty => {}
         }
     }
 }
@@ -376,6 +402,20 @@ impl Instance {
                     .collect();
                 (RowMajorMatrix::new(values, 2), None, vec![])
             }
+            FixtureAir::QuadraticInputs => {
+                let values = vec![Tower::ONE; height];
+                let fixed = vec![Tower::ONE; height];
+                (
+                    RowMajorMatrix::new(values, 1),
+                    Some(RowMajorMatrix::new(fixed, 1)),
+                    vec![Tower::ONE],
+                )
+            }
+            FixtureAir::Empty => (
+                RowMajorMatrix::new(vec![Tower::ZERO; height], 1),
+                None,
+                vec![],
+            ),
             FixtureAir::Recurrence => {
                 let (mut a, mut b): (Tower, Tower) = (rng.random(), rng.random());
                 let mut values = Vec::with_capacity(2 * height);
@@ -866,6 +906,146 @@ fn backends_agree_on_stages_tall_enough_to_slice() {
 }
 
 #[test]
+fn representation_tensor4_matches_generic_on_invalid_boolean_and_gf4_traces() {
+    let height = 1 << 10;
+    let mut invalid_boolean = Instance::honest(FixtureAir::Pair, height, 0x7E50_10);
+    for row in 0..height {
+        invalid_boolean.main.values[3 * row..3 * row + 3].copy_from_slice(&[
+            Tower::ZERO,
+            Tower::ZERO,
+            Tower::ONE,
+        ]);
+    }
+    let mut non_boolean = Instance::honest(FixtureAir::Pair, height, 0x7E50_11);
+    for row in 0..height {
+        non_boolean.main.values[3 * row..3 * row + 3].copy_from_slice(&[
+            gf4(2),
+            Tower::ONE,
+            Tower::ZERO,
+        ]);
+    }
+
+    for instance in [invalid_boolean, non_boolean] {
+        let instances = [instance];
+        let generic = transcript::<GenericBackend>(&instances, LookupRuntime::Inactive, 0, false);
+        let repr = transcript::<ReprBackend<Gf4, PolyBasis>>(
+            &instances,
+            LookupRuntime::Inactive,
+            0,
+            false,
+        );
+        assert_eq!(
+            repr, generic,
+            "tensor4 must preserve invalid witness transcript"
+        );
+    }
+}
+
+#[test]
+fn representation_tensor4_invalid_proofs_are_rejected() {
+    let height = 1 << 10;
+    let mut invalid_boolean = Instance::honest(FixtureAir::Pair, height, 0x7E50_16);
+    for row in 0..height {
+        invalid_boolean.main.values[3 * row..3 * row + 3].copy_from_slice(&[
+            Tower::ZERO,
+            Tower::ZERO,
+            Tower::ONE,
+        ]);
+    }
+    let mut non_boolean = Instance::honest(FixtureAir::Pair, height, 0x7E50_17);
+    for row in 0..height {
+        non_boolean.main.values[3 * row..3 * row + 3].copy_from_slice(&[
+            gf4(2),
+            Tower::ONE,
+            Tower::ZERO,
+        ]);
+    }
+
+    for instance in [invalid_boolean, non_boolean] {
+        let airs = [&instance.air];
+        let zerocheck = AirZerocheck::new(&airs, 0);
+        let main = instance.main_table();
+        let (proof, _) = zerocheck
+            .prove_with_lookup::<Tower, Tower, ReprBackend<Gf4, PolyBasis>, _>(
+                &[None],
+                &[&main],
+                &[&instance.public_values],
+                LookupRuntime::Inactive,
+                DEFAULT_SLICED_ROUNDS,
+                &mut challenger(),
+            );
+        assert!(
+            zerocheck
+                .verify::<Tower, Tower, _>(
+                    &proof,
+                    &[10],
+                    &[&instance.public_values],
+                    &mut challenger(),
+                )
+                .is_err(),
+            "invalid tensor4 proof must be rejected"
+        );
+    }
+}
+
+#[test]
+fn representation_tensor4_honest_proof_verifies() {
+    let instance = Instance::honest(FixtureAir::Pair, 1 << 10, 0x7E50_18);
+    let airs = [&instance.air];
+    let zerocheck = AirZerocheck::new(&airs, 0);
+    let main = instance.main_table();
+    let (proof, point) = zerocheck
+        .prove_with_lookup::<Tower, Tower, ReprBackend<Gf4, PolyBasis>, _>(
+            &[None],
+            &[&main],
+            &[&instance.public_values],
+            LookupRuntime::Inactive,
+            DEFAULT_SLICED_ROUNDS,
+            &mut challenger(),
+        );
+    let verified = zerocheck
+        .verify::<Tower, Tower, _>(&proof, &[10], &[&instance.public_values], &mut challenger())
+        .expect("honest tensor4 proof must verify");
+    assert_eq!(verified, point);
+}
+
+#[test]
+fn representation_tensor4_matches_generic_for_mixed_native_degrees() {
+    let height = 1 << 10;
+    let instances = [
+        Instance::honest(FixtureAir::Linear { scale: Tower::ONE }, height, 0x7E50_12),
+        Instance::honest(FixtureAir::Pair, height, 0x7E50_13),
+    ];
+    let generic = transcript::<GenericBackend>(&instances, LookupRuntime::Inactive, 0, false);
+    let repr =
+        transcript::<ReprBackend<Gf4, PolyBasis>>(&instances, LookupRuntime::Inactive, 0, false);
+    assert_eq!(repr, generic, "mixed degree tensor4 transcript");
+}
+
+#[test]
+fn representation_tensor4_is_restricted_to_default_three_slices() {
+    let height = 1 << 10;
+    let instances = [Instance::honest(FixtureAir::Pair, height, 0x7E50_14)];
+    let generic = transcript_with_storage::<GenericBackend>(
+        DEFAULT_SLICED_ROUNDS,
+        &instances,
+        LookupRuntime::Inactive,
+        0,
+        |_, _| false,
+    );
+    for sliced_rounds in [0, 1, 2, 4] {
+        let repr = transcript_with_storage::<ReprBackend<Gf4, PolyBasis>>(
+            sliced_rounds,
+            &instances,
+            LookupRuntime::Inactive,
+            0,
+            |_, _| false,
+        );
+        assert_eq!(repr, generic, "configured sliced rounds {sliced_rounds}");
+    }
+}
+
+#[test]
 fn backends_agree_when_a_tall_stage_does_not_fit() {
     // Each stage is tall enough to slice, so every misfit reaches the sliced kernel first.
     let height = 1 << 8;
@@ -922,8 +1102,20 @@ fn fixture_degrees_are_the_named_ones() {
     assert_eq!(degree(&periodic), 3);
     assert_eq!(degree(&FixtureAir::Recurrence), 3);
     assert_eq!(degree(&FixtureAir::Linear { scale: gf4(2) }), 1);
+    assert_eq!(degree(&FixtureAir::QuadraticInputs), 2);
     let link = super::get_air_profile::<Tower, Tower, _>(&FixtureAir::Link).degrees;
     assert!(link.interactions > 0);
+}
+
+#[test]
+fn representation_tensor4_handles_fixed_periodic_selectors_and_public_pins() {
+    let height = 1 << 10;
+    let instances = [Instance::honest(
+        FixtureAir::QuadraticInputs,
+        height,
+        0x7E50_15,
+    )];
+    assert_backends_agree(&instances, || LookupRuntime::Inactive, 0);
 }
 
 /// Every sliced-round count must leave the proof the generic backend's.

@@ -242,7 +242,7 @@ pub(crate) struct RoundStateBase<'air, 'data, A, F: Field, EF> {
     /// Every other kernel leaves it false.
     fits_subfield: bool,
     /// The stage's bit planes, once its first round ran on them.
-    sliced: Option<sliced::SlicedTrace>,
+    sliced: Option<sliced::SlicedColumns<EF>>,
     /// Rounds this stage evaluates on its planes, when the sliced kernel takes it.
     sliced_rounds: usize,
 }
