@@ -21,6 +21,7 @@ thiserror.workspace = true
 p3-goldilocks = { path = "../goldilocks" }
 p3-koala-bear = { path = "../koala-bear" }
 
+postcard = { workspace = true, features = ["alloc"] }
 proptest.workspace = true
 serde_json.workspace = true
 

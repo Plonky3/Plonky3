@@ -23,8 +23,13 @@ pub struct Hash<F, W, const DIGEST_ELEMS: usize> {
 /// A cap of height 0 contains a single element (the root), while a cap of height `h` contains
 /// `2^h` elements. The `Digest` type is the full digest (e.g. `[W; DIGEST_ELEMS]`).
 ///
-/// The number of roots is always a power of two: [`MerkleCap::new`] asserts it and the
-/// `Deserialize` impl rejects anything else, so a cap read from the wire upholds it too.
+/// The root count is always a power of two.
+///
+/// A cap is one full layer of a binary tree, so a layer at depth `h` holds `2^h` digests.
+///
+/// The height is recovered as `log_2` of the root count, which exists only for a power of two.
+///
+/// Every path that builds a cap enforces this, including the one that reads it off the wire.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(bound(serialize = "Digest: Serialize"))]
 pub struct MerkleCap<F, Digest> {
@@ -32,32 +37,64 @@ pub struct MerkleCap<F, Digest> {
     _marker: PhantomData<F>,
 }
 
-/// The derived wire shape of [`MerkleCap`], deserialized before the root count is checked.
+/// Mirror of the cap layer that lets the derive produce the decoder.
+///
+/// The cap itself exposes no unchecked constructor, so the derive cannot target it.
+///
+/// Field names, field order and the container name reproduce the derived encoding exactly.
+///
+/// Changing any of the three moves the bytes of every stored proof.
 #[derive(Deserialize)]
 #[serde(rename = "MerkleCap")]
 #[serde(bound(deserialize = "Digest: Deserialize<'de>"))]
 struct MerkleCapRepr<F, Digest> {
+    /// The digests of the layer, left to right.
     cap: Vec<Digest>,
+    /// Pins the layer to one field without carrying any data of its own.
     _marker: PhantomData<F>,
 }
 
 impl<'de, F, Digest: Deserialize<'de>> Deserialize<'de> for MerkleCap<F, Digest> {
+    /// # Errors
+    ///
+    /// Returns an error when the root count is not a power of two.
+    ///
+    /// Such a count has no base-two logarithm, so the cap would have no height.
+    ///
+    /// Untrusted bytes are the only route by which such a cap could reach a verifier.
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        // Read the wire shape first, so the check runs on a fully decoded layer.
         let MerkleCapRepr { cap, _marker } = MerkleCapRepr::<F, Digest>::deserialize(deserializer)?;
+
+        // Invariant: a cap is a full tree layer, so it holds 2^h digests for its depth h.
+        //
+        //     4 roots -> depth 2, accepted
+        //     3 roots -> no layer has that size, rejected
+        //     0 roots -> no layer has that size, rejected
         if !cap.len().is_power_of_two() {
             return Err(D::Error::invalid_length(
                 cap.len(),
                 &"a power-of-two number of Merkle cap roots",
             ));
         }
+
         Ok(Self { cap, _marker })
     }
 }
 
 impl<F, Digest> MerkleCap<F, Digest> {
-    /// Create a new `MerkleCap` from a vector of digests.
+    /// Wrap one full layer of digests as a cap.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the number of digests is not a power of two.
     pub fn new(cap: Vec<Digest>) -> Self {
-        assert!(cap.len().is_power_of_two());
+        // Invariant: a cap is a full tree layer, so it holds 2^h digests for its depth h.
+        assert!(
+            cap.len().is_power_of_two(),
+            "a Merkle cap holds a power-of-two number of roots, got {}",
+            cap.len()
+        );
         Self {
             cap,
             _marker: PhantomData,
@@ -202,26 +239,68 @@ mod tests {
     }
 
     #[test]
-    fn test_merkle_cap_deserialize_round_trips() {
+    fn test_merkle_cap_wire_shape_is_stable() {
+        // Fixture state: four roots, each a digest of four repeated bytes.
         let cap = MerkleCap::<F, Digest>::new(vec![[1u8; 4], [2u8; 4], [3u8; 4], [4u8; 4]]);
-        let json = serde_json::to_string(&cap).unwrap();
-        let back: MerkleCap<F, Digest> = serde_json::from_str(&json).unwrap();
+
+        // Compact encoding: a varint root count, the roots in order, nothing for the marker.
+        //
+        //     04 | 01010101 | 02020202 | 03030303 | 04040404
+        //
+        // Every stored proof replays these bytes, so they are pinned rather than round-tripped.
+        let bytes = postcard::to_allocvec(&cap).unwrap();
+        assert_eq!(bytes, [4, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4]);
+        let back: MerkleCap<F, Digest> = postcard::from_bytes(&bytes).unwrap();
         assert_eq!(back, cap);
         assert_eq!(back.height(), 2);
+
+        // Self-describing encoding: a map whose two keys pin the field names and their order.
+        let json = serde_json::to_string(&cap).unwrap();
+        assert_eq!(
+            json,
+            r#"{"cap":[[1,1,1,1],[2,2,2,2],[3,3,3,3],[4,4,4,4]],"_marker":null}"#
+        );
+        assert_eq!(
+            serde_json::from_str::<MerkleCap<F, Digest>>(&json).unwrap(),
+            cap
+        );
     }
 
     #[test]
     fn test_merkle_cap_deserialize_rejects_non_power_of_two_root_count() {
-        // The wire shape `new` would refuse: three roots, then zero.
-        for roots in ["[[1,1,1,1],[2,2,2,2],[3,3,3,3]]", "[]"] {
-            let json = alloc::format!("{{\"cap\":{roots},\"_marker\":null}}");
-            let err = serde_json::from_str::<MerkleCap<F, Digest>>(&json)
+        // Three roots is the smallest count no tree layer can have.
+        //
+        // Zero roots is the degenerate count a truncating encoder would produce.
+        //
+        // Each count is fed through both decoding paths:
+        //
+        //     compact         -> the fields arrive as a sequence
+        //     self-describing -> the fields arrive as a map
+        for (bytes, json) in [
+            (
+                &[3u8, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3][..],
+                r#"{"cap":[[1,1,1,1],[2,2,2,2],[3,3,3,3]],"_marker":null}"#,
+            ),
+            (&[0u8][..], r#"{"cap":[],"_marker":null}"#),
+        ] {
+            postcard::from_bytes::<MerkleCap<F, Digest>>(bytes)
                 .expect_err("a cap with a non-power-of-two root count must not deserialize");
-            assert!(
-                err.to_string().contains("power-of-two"),
-                "unexpected error: {err}"
-            );
+            serde_json::from_str::<MerkleCap<F, Digest>>(json)
+                .expect_err("a cap with a non-power-of-two root count must not deserialize");
         }
+    }
+
+    #[test]
+    fn test_merkle_cap_deserialize_error_names_the_requirement() {
+        // The rejection reaches an operator as text, so it has to state what was wrong.
+        let err = serde_json::from_str::<MerkleCap<F, Digest>>(
+            r#"{"cap":[[1,1,1,1],[2,2,2,2],[3,3,3,3]],"_marker":null}"#,
+        )
+        .expect_err("three roots is not a power of two");
+        assert!(
+            err.to_string().contains("power-of-two"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
