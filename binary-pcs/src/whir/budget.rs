@@ -91,6 +91,7 @@ mod tests {
         opened_base_elements: 100,
         opened_extension_elements: 200,
         merkle_digests: 300,
+        sent_base_elements: 10,
         sent_extension_elements: 50,
         grinding_bits: 16,
     };
@@ -129,23 +130,23 @@ mod tests {
         );
 
         let bytes = BinaryWhirBudget {
-            max_proof_bytes: 13_999,
+            max_proof_bytes: 14_039,
             ..BinaryWhirBudget::PRODUCTION
         };
         assert_eq!(
             bytes.check_shape(&SHAPE, 4, 16, 32),
             Err(BudgetError::Bytes {
-                actual: 14_000,
-                budget: 13_999
+                actual: 14_040,
+                budget: 14_039
             })
         );
         assert_eq!(
-            bytes.check_bytes(14_000),
+            bytes.check_bytes(14_040),
             Err(BudgetError::Bytes {
-                actual: 14_000,
-                budget: 13_999
+                actual: 14_040,
+                budget: 14_039
             })
         );
-        assert_eq!(bytes.check_bytes(13_999), Ok(()));
+        assert_eq!(bytes.check_bytes(14_039), Ok(()));
     }
 }

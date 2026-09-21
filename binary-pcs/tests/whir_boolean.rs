@@ -9,13 +9,14 @@
 //!     size         the proof against the folding-only path at one target
 //! ```
 
-use p3_binary_field::{BinaryChallenger, BinaryField128, Gf2, PackedGf2x64};
+use p3_binary_field::{BinaryChallenger, BinaryField128, Gf2, Ghash128, PackedGf2x64};
 use p3_binary_pcs::whir::{
     BinaryWhirBudget, BinaryWhirProfile, BooleanWhirDomain, BooleanWhirError, BooleanWhirPcs,
-    BooleanWhirProver, BooleanWhirTracePcs, BudgetError, ProofShape, recommended_cap_height,
+    BooleanWhirProof, BooleanWhirProver, BooleanWhirTracePcs, BudgetError, ProofShape,
+    recommended_cap_height,
 };
 use p3_binary_pcs::{
-    BinaryPcsConfig, BinaryPcsParams, BooleanMultilinearPcs, BooleanPcs,
+    BinaryPcsConfig, BinaryPcsParams, BitOpening, BitReadings, BooleanMultilinearPcs, BooleanPcs,
     BooleanTraceCommitmentError, GroupedCodewordMmcs,
 };
 use p3_challenger::HashChallenger;
@@ -27,7 +28,7 @@ use p3_merkle_tree::MerkleTreeMmcs;
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
 use p3_sumcheck::layout::{Table, plan_stacked_layout};
-use p3_sumcheck::ring_switch::bits::BitRingSwitchProofError;
+use p3_sumcheck::ring_switch::bits::{BitPacking, BitRingSwitch, BitRingSwitchProofError};
 use p3_sumcheck::{OpeningBatch, OpeningProtocol, PrescribedPointPcs, TableShape, TableSpec};
 use p3_symmetric::{CompressionFunctionFromHasher, SerializingHasher};
 use p3_whir::SecurityAssumption;
@@ -59,8 +60,11 @@ const LOG_INV_RATE: usize = 2;
 /// Variables each proximity round eliminates.
 const FOLDING: usize = 3;
 
-/// Bytes one committed element of the widest tower level occupies.
+/// Bytes one committed element of the widest tower level occupies in memory.
 const ELEMENT_BYTES: usize = 16;
+
+/// Bytes the encoder writes for one element, whose widest variable-length code is this long.
+const ENCODED_ELEMENT_BYTES: usize = 19;
 
 /// Bytes one Merkle digest occupies.
 const DIGEST_BYTES: usize = 32;
@@ -102,24 +106,55 @@ fn embedded(bits: &[PackedGf2x64]) -> Poly<EF> {
     )
 }
 
-/// Two opening points the fixtures reuse.
-fn points(seed: u64) -> Vec<Point<EF>> {
+/// This many opening points, drawn from one seed.
+fn points_at(seed: u64, count: usize) -> Vec<Point<EF>> {
     let mut rng = SmallRng::seed_from_u64(seed);
-    (0..2)
+    (0..count)
         .map(|_| Point::<EF>::rand(&mut rng, LOG_BITS))
         .collect()
 }
 
-/// The WHIR-backed Boolean commitment for one regime, and the shape of the proofs it makes.
-fn whir_pcs(profile: BinaryWhirProfile) -> (Pcs, ProofShape) {
+/// Two opening points the fixtures reuse.
+fn points(seed: u64) -> Vec<Point<EF>> {
+    points_at(seed, 2)
+}
+
+/// The proximity argument the fixtures wrap, built fresh from one regime.
+fn whir_prover(profile: BinaryWhirProfile) -> Prover {
     let domain = BooleanWhirDomain::default();
     let config = profile
         .config::<EF, EF, MyChallenger, _>(LOG_BITS - ABSORBED, &domain)
         .unwrap();
-    let shape = ProofShape::of(&config);
     let cap_height = recommended_cap_height(&config);
-    let inner = Prover::new(config, domain, mmcs(cap_height));
-    (BooleanWhirPcs::new(inner, LOG_BITS).unwrap(), shape)
+    Prover::new(config, domain, mmcs(cap_height))
+}
+
+/// The WHIR-backed Boolean commitment for one regime.
+fn whir_pcs(profile: BinaryWhirProfile) -> Pcs {
+    BooleanWhirPcs::new(whir_prover(profile), LOG_BITS).unwrap()
+}
+
+/// The schedule this many surviving claims are discharged through, as the adapter builds it.
+fn protocol(num_claims: usize) -> OpeningProtocol {
+    OpeningProtocol::new(vec![TableSpec::new(
+        TableShape::new(LOG_BITS - ABSORBED, 1),
+        (0..num_claims)
+            .map(|_| OpeningBatch::new(vec![0], Vec::new()))
+            .collect(),
+    )])
+}
+
+/// Each point as an opening asking for the current reading alone.
+fn current_openings(points: &[Point<EF>]) -> Vec<BitOpening<EF>> {
+    points
+        .iter()
+        .map(|point| BitOpening {
+            point: point.clone(),
+            row_variables: point.num_variables(),
+            current: true,
+            next: false,
+        })
+        .collect()
 }
 
 /// The folding-only Boolean commitment, graded at the same target and the same rate.
@@ -153,7 +188,7 @@ fn a_boolean_opening_round_trips_through_whir() {
         BinaryWhirProfile::unique_decoding(SECURITY_LEVEL, LOG_INV_RATE, FOLDING),
         BinaryWhirProfile::proven_list_decoding(SECURITY_LEVEL, LOG_INV_RATE, FOLDING),
     ] {
-        let (pcs, _) = whir_pcs(profile);
+        let pcs = whir_pcs(profile);
         let regime = profile.assumption();
 
         let mut prover_chal = challenger();
@@ -194,11 +229,12 @@ fn a_boolean_opening_round_trips_through_whir() {
 fn the_commitment_holds_one_byte_per_eight_bits() {
     // A widened commitment would hold one element per bit, sixteen bytes each.
     // The packed one holds one element per one hundred and twenty-eight bits.
-    let (pcs, shape) = whir_pcs(BinaryWhirProfile::unique_decoding(
+    let pcs = whir_pcs(BinaryWhirProfile::unique_decoding(
         SECURITY_LEVEL,
         LOG_INV_RATE,
         FOLDING,
     ));
+    let shape = pcs.proof_shape(2, false);
     assert_eq!(pcs.committed_bytes(), (1 << LOG_BITS) / 8);
 
     let bits = witness(0x5713);
@@ -221,12 +257,15 @@ fn the_commitment_holds_one_byte_per_eight_bits() {
 #[test]
 fn the_budget_grades_the_schedule_and_the_proof() {
     let profile = BinaryWhirProfile::proven_list_decoding(SECURITY_LEVEL, LOG_INV_RATE, FOLDING);
-    let (pcs, shape) = whir_pcs(profile);
+    let pcs = whir_pcs(profile);
+    let shape = pcs.proof_shape(2, false);
     let budget = BinaryWhirBudget::PRODUCTION;
 
     // The schedule this fixture derives, pinned whole so a drift in any figure is visible.
     //
     // It folds three variables once, then sends six in the clear.
+    //
+    // Two claims add two opened values and two reductions of a hundred and forty-seven elements.
     assert_eq!(
         shape,
         ProofShape {
@@ -234,13 +273,19 @@ fn the_budget_grades_the_schedule_and_the_proof() {
             opened_base_elements: 840,
             opened_extension_elements: 0,
             merkle_digests: 840,
-            sent_extension_elements: 92,
+            sent_base_elements: 10,
+            sent_extension_elements: 379,
             grinding_bits: 3,
         }
     );
 
     budget
-        .check_shape(&shape, ELEMENT_BYTES, ELEMENT_BYTES, DIGEST_BYTES)
+        .check_shape(
+            &shape,
+            ENCODED_ELEMENT_BYTES,
+            ENCODED_ELEMENT_BYTES,
+            DIGEST_BYTES,
+        )
         .unwrap();
 
     let bits = witness(0x5714);
@@ -252,9 +297,9 @@ fn the_budget_grades_the_schedule_and_the_proof() {
 
     // The schedule's own estimate must not be a fiction the real proof exceeds.
     //
-    //     840*16 + (0 + 92)*16 + 840*32 = 13440 + 1472 + 26880
-    let estimate = shape.max_bytes(ELEMENT_BYTES, ELEMENT_BYTES, DIGEST_BYTES);
-    assert_eq!(estimate, 41_792);
+    //     (840 + 10)*19 + (0 + 379)*19 + 840*32 = 16150 + 7201 + 26880
+    let estimate = shape.max_bytes(ENCODED_ELEMENT_BYTES, ENCODED_ELEMENT_BYTES, DIGEST_BYTES);
+    assert_eq!(estimate, 50_231);
 
     // The proof-of-work search runs in parallel and keeps whichever witness a worker reaches first.
     //
@@ -266,7 +311,7 @@ fn the_budget_grades_the_schedule_and_the_proof() {
         "the estimate understates the proof: {bytes}"
     );
     assert!(
-        bytes * 2 > estimate,
+        bytes * 3 > estimate,
         "the estimate is far too loose: {bytes}"
     );
     budget.check_bytes(bytes).unwrap();
@@ -277,23 +322,192 @@ fn the_budget_grades_the_schedule_and_the_proof() {
             max_stir_queries: 104,
             ..budget
         }
-        .check_shape(&shape, ELEMENT_BYTES, ELEMENT_BYTES, DIGEST_BYTES),
+        .check_shape(
+            &shape,
+            ENCODED_ELEMENT_BYTES,
+            ENCODED_ELEMENT_BYTES,
+            DIGEST_BYTES
+        ),
         Err(BudgetError::Queries {
             actual: 105,
             budget: 104
         })
     );
+    // The refusal is tied to the proof that was measured, not to one host's figure.
     assert_eq!(
         BinaryWhirBudget {
-            max_proof_bytes: 26_818,
+            max_proof_bytes: bytes - 1,
             ..budget
         }
-        .check_bytes(26_819),
+        .check_bytes(bytes),
         Err(BudgetError::Bytes {
-            actual: 26_819,
-            budget: 26_818
+            actual: bytes,
+            budget: bytes - 1
         })
     );
+}
+
+#[test]
+fn the_estimate_covers_the_reductions_and_not_the_opening_alone() {
+    // One reduction per claim rides along with the single opening, so the claim count moves it.
+    let pcs = whir_pcs(BinaryWhirProfile::proven_list_decoding(
+        SECURITY_LEVEL,
+        LOG_INV_RATE,
+        FOLDING,
+    ));
+    let two = pcs.proof_shape(2, false);
+    let eight = pcs.proof_shape(8, false);
+    assert_eq!(
+        eight.sent_extension_elements - two.sent_extension_elements,
+        6 * (128 + 2 * (LOG_BITS - ABSORBED) + 2)
+    );
+    // Sending carry and last triples the element each reduction puts on the wire.
+    assert_eq!(
+        pcs.proof_shape(2, true).sent_extension_elements - two.sent_extension_elements,
+        2 * 2 * 128
+    );
+
+    // Eight claims outgrow the opening-only estimate of 41,792 bytes this fixture used to report.
+    let bits = witness(0x5718);
+    let points = points_at(0x5719, 8);
+    let mut prover_chal = challenger();
+    let (_, data) = pcs.commit_bits(&bits, &mut prover_chal).unwrap();
+    let (_, proof) = pcs.open_at_points(data, &points, &mut prover_chal).unwrap();
+    let bytes = postcard::to_allocvec(&proof).unwrap().len();
+    assert!(bytes > 41_792, "the reductions no longer dominate: {bytes}");
+
+    let estimate = eight.max_bytes(ENCODED_ELEMENT_BYTES, ENCODED_ELEMENT_BYTES, DIGEST_BYTES);
+    assert!(
+        bytes <= estimate,
+        "the estimate understates the proof: {bytes} against {estimate}"
+    );
+}
+
+#[test]
+fn a_non_first_reduction_over_another_witness_leaves_a_claim_the_commitment_does_not_open() {
+    // Invariant: the closing comparison is what ties the reductions to the commitment.
+    //
+    // Mutation: reduce the middle claim over witness A and open witness B.
+    //
+    //     - transcript  A's reduction runs on the sponge that absorbed B's root
+    //     - reduction   replays and accepts, being a true proof about A
+    //     - commitment  accepts, being a true opening of B
+    //     - closing     the two surviving values at that point disagree
+    //
+    // A fresh sponge would split the transcripts at the first draw and pin nothing.
+    let profile = BinaryWhirProfile::proven_list_decoding(SECURITY_LEVEL, LOG_INV_RATE, FOLDING);
+    let pcs = whir_pcs(profile);
+    let inner = whir_prover(profile);
+
+    const FORGED: usize = 1;
+    let points = points_at(0x5720, 3);
+    let openings = current_openings(&points);
+
+    // Witness A supplies the packing the middle reduction runs over, B the root and the opening.
+    let (_, data_a) = pcs
+        .commit_bits(&witness(0xAAAA), &mut challenger())
+        .unwrap();
+    let mut chal = challenger();
+    let (root_b, data_b) = pcs.commit_bits(&witness(0xBBBB), &mut chal).unwrap();
+
+    let packing_a = BitPacking::from_packed(data_a.table(0).poly(0)).unwrap();
+    let packing_b = BitPacking::from_packed(data_b.table(0).poly(0)).unwrap();
+
+    let mut reductions = Vec::with_capacity(points.len());
+    let mut readings = Vec::with_capacity(points.len());
+    let mut surviving_points = Vec::with_capacity(points.len());
+    let mut surviving_values = Vec::with_capacity(points.len());
+    for (index, point) in points.iter().enumerate() {
+        let packing = if index == FORGED {
+            &packing_a
+        } else {
+            &packing_b
+        };
+        let reduction = BitRingSwitch::new(point).unwrap();
+        let (sent, surviving_point, surviving_value) =
+            reduction.prove::<Ghash128, _, _>(packing, &mut chal);
+        readings.push(BitReadings {
+            current: Some(reduction.incoming_claim(&sent.tensor)),
+            next: None,
+        });
+        reductions.push(sent);
+        surviving_points.push(surviving_point);
+        surviving_values.push(surviving_value);
+    }
+
+    // The commitment then opens B at all three surviving points.
+    let opening = PrescribedPointPcs::<EF, MyChallenger>::open_at(
+        &inner,
+        data_b,
+        &protocol(points.len()),
+        &surviving_points,
+        &mut chal,
+    )
+    .unwrap();
+
+    // The first claim agrees, so checking only the first pair would accept this forgery.
+    assert_eq!(opening.evals[0].current()[0], surviving_values[0]);
+    // The middle claims about the same point disagree, which is what is caught below.
+    assert_ne!(opening.evals[FORGED].current()[0], surviving_values[FORGED]);
+    // The final claim also agrees, isolating the forged non-first index.
+    assert_eq!(opening.evals[2].current()[0], surviving_values[2]);
+
+    let proof = BooleanWhirProof {
+        reductions,
+        opening,
+    };
+    let mut verifier_chal = challenger();
+    pcs.observe_commitment(&root_b, &mut verifier_chal);
+    let refused = pcs
+        .verify_readings(&root_b, &openings, &readings, &proof, &mut verifier_chal)
+        .unwrap_err();
+    assert!(
+        matches!(refused, BooleanWhirError::SurvivingClaim),
+        "{refused:?}"
+    );
+
+    // B's own reductions at the same points are accepted, so the rejection is the mismatch.
+    let mut honest = challenger();
+    let (root, data) = pcs.commit_bits(&witness(0xBBBB), &mut honest).unwrap();
+    let (values, honest_proof) = pcs.open_at_points(data, &points, &mut honest).unwrap();
+    let mut verifier_chal = challenger();
+    pcs.observe_commitment(&root, &mut verifier_chal);
+    pcs.verify_at_points(&root, &points, &values, &honest_proof, &mut verifier_chal)
+        .unwrap();
+}
+
+#[test]
+fn a_tampered_proximity_transcript_is_refused_by_the_opening() {
+    // The reductions stay honest, so only the proximity argument can catch this.
+    let pcs = whir_pcs(BinaryWhirProfile::proven_list_decoding(
+        SECURITY_LEVEL,
+        LOG_INV_RATE,
+        FOLDING,
+    ));
+    let bits = witness(0x5721);
+    let points = points(0x5722);
+
+    let mut prover_chal = challenger();
+    let (commitment, data) = pcs.commit_bits(&bits, &mut prover_chal).unwrap();
+    let (values, proof) = pcs.open_at_points(data, &points, &mut prover_chal).unwrap();
+
+    let mut tampered = proof.clone();
+    tampered.opening.whir.initial_ood_answers[0] += EF::ONE;
+    let mut verifier_chal = challenger();
+    pcs.observe_commitment(&commitment, &mut verifier_chal);
+    let refused = pcs
+        .verify_at_points(&commitment, &points, &values, &tampered, &mut verifier_chal)
+        .unwrap_err();
+    assert!(
+        matches!(refused, BooleanWhirError::Opening(_)),
+        "{refused:?}"
+    );
+
+    // The untouched proof is accepted, so the rejection is the tampering and nothing else.
+    let mut verifier_chal = challenger();
+    pcs.observe_commitment(&commitment, &mut verifier_chal);
+    pcs.verify_at_points(&commitment, &points, &values, &proof, &mut verifier_chal)
+        .unwrap();
 }
 
 #[test]
@@ -307,7 +521,7 @@ fn the_whir_proof_is_smaller_than_the_folding_only_one_at_the_same_target() {
     let (_, proof) = basefold.open_at_points(data, &points, &mut chal).unwrap();
     let basefold_bytes = postcard::to_allocvec(&proof).unwrap().len();
 
-    let (pcs, _) = whir_pcs(BinaryWhirProfile::unique_decoding(
+    let pcs = whir_pcs(BinaryWhirProfile::unique_decoding(
         SECURITY_LEVEL,
         LOG_INV_RATE,
         FOLDING,
@@ -329,7 +543,7 @@ fn the_whir_proof_is_smaller_than_the_folding_only_one_at_the_same_target() {
 
 #[test]
 fn the_report_names_every_error_the_adapter_charges() {
-    let (pcs, _) = whir_pcs(BinaryWhirProfile::proven_list_decoding(
+    let pcs = whir_pcs(BinaryWhirProfile::proven_list_decoding(
         SECURITY_LEVEL,
         LOG_INV_RATE,
         FOLDING,
@@ -342,9 +556,41 @@ fn the_report_names_every_error_the_adapter_charges() {
     assert!(labels.contains(&p3_security::BIT_RING_SWITCH_LABEL));
 
     // The successor view sends two more elements, which costs strictly more.
-    let plain = security.error().bits();
-    let with_successor = pcs.readings_security(2, true).unwrap().error().bits();
-    assert!(with_successor < plain);
+    let plain = security
+        .terms
+        .iter()
+        .map(|term| term.bits.bits())
+        .fold(f64::INFINITY, f64::min);
+    let with_successor = pcs
+        .readings_security(2, true)
+        .unwrap()
+        .terms
+        .iter()
+        .map(|term| term.bits.bits())
+        .fold(f64::INFINITY, f64::min);
+    assert!(with_successor <= plain);
+
+    // The reductions run while the commitment still admits a list of codewords.
+    //
+    // A prover therefore picks its member after seeing their challenges, so they pay for the list.
+    assert!(security.log2_max_candidates > 0.0);
+    let charged = security
+        .terms
+        .iter()
+        .find(|term| term.label == p3_security::BIT_RING_SWITCH_LABEL)
+        .unwrap()
+        .bits
+        .bits();
+    let alone = p3_security::multilinear::bit_ring_switch_tensors_term(
+        2,
+        1,
+        ABSORBED,
+        LOG_BITS - ABSORBED,
+        128,
+    )
+    .bits
+    .bits();
+    assert!((charged - (alone - security.log2_max_candidates)).abs() < 1e-9);
 }
 
 #[test]
@@ -492,6 +738,15 @@ fn one_table_read_whole_takes_the_batched_route_through_whir() {
             p3_security::COLUMN_BATCH_LABEL
         ]
     );
+
+    // The batching challenge is drawn before the proximity argument names one codeword.
+    //
+    // It therefore pays the same union bound the reduction pays.
+    let charged = security.terms[2].bits.bits();
+    let alone = p3_security::multilinear::column_batch_term(1, 2, 128)
+        .bits
+        .bits();
+    assert!((charged - (alone - security.log2_max_candidates)).abs() < 1e-9);
 
     let mut prover_chal = challenger();
     let (commitment, data) =

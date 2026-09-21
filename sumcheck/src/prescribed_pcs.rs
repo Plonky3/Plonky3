@@ -45,6 +45,19 @@ impl PrescribedOpeningSecurity {
         }
     }
 
+    /// Charge one error the caller's own reduction draws after the commitment.
+    ///
+    /// A prover may pick its candidate after seeing those challenges.
+    ///
+    /// So the union bound over the candidate set is what this subtracts.
+    pub fn charge_reduction(&mut self, term: SecurityTerm) {
+        let bits = (term.bits.bits() - self.log2_max_candidates).max(0.0);
+        self.terms.push(SecurityTerm {
+            bits: ErrorBits::from_log2(bits),
+            ..term
+        });
+    }
+
     /// Union of every term, which is the whole algebraic error of the opening.
     #[must_use]
     pub fn error(&self) -> ErrorBits {
@@ -156,4 +169,38 @@ where
         points: &[Point<Challenge>],
         challenger: &mut Challenger,
     ) -> Result<Vec<OpeningEvals<Challenge>>, Self::Error>;
+}
+
+#[cfg(test)]
+mod tests {
+    use p3_security::{ErrorBits, SecurityTerm};
+
+    use super::PrescribedOpeningSecurity;
+
+    #[test]
+    fn a_reduction_pays_the_union_bound_over_the_candidate_set() {
+        // A commitment leaving sixteen candidates costs a reduction four bits.
+        let mut security = PrescribedOpeningSecurity {
+            terms: alloc::vec::Vec::new(),
+            log2_max_candidates: 4.0,
+        };
+        security.charge_reduction(SecurityTerm::new("r", ErrorBits::from_log2(100.0)));
+        assert_eq!(security.terms[0].bits.bits(), 96.0);
+        assert_eq!(security.terms[0].label, "r");
+
+        // A reduction weaker than the candidate count is worth nothing, rather than negative.
+        security.charge_reduction(SecurityTerm::new("weak", ErrorBits::from_log2(3.0)));
+        assert_eq!(security.terms[1].bits.bits(), 0.0);
+    }
+
+    #[test]
+    fn unique_decoding_leaves_a_reduction_at_its_own_strength() {
+        // One candidate is no choice at all, so nothing is subtracted.
+        let mut security = PrescribedOpeningSecurity {
+            terms: alloc::vec::Vec::new(),
+            log2_max_candidates: 0.0,
+        };
+        security.charge_reduction(SecurityTerm::new("r", ErrorBits::from_log2(100.0)));
+        assert_eq!(security.terms[0].bits.bits(), 100.0);
+    }
 }

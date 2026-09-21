@@ -218,11 +218,11 @@ mod small_field {
     type NarrowPcs =
         WhirProver<EF, F, NarrowDomain, NarrowMmcs, NarrowChallenger, SuffixProver<F, EF>>;
 
-    /// Bytes one committed element of the narrow alphabet occupies.
-    const ALPHABET_BYTES: usize = 4;
+    /// Bytes the encoder writes for one element of the narrow alphabet.
+    const ALPHABET_BYTES: usize = 5;
 
-    /// Bytes one committed element of the challenge field would occupy instead.
-    const CHALLENGE_BYTES: usize = 16;
+    /// Bytes the encoder writes for one element of the challenge field instead.
+    const CHALLENGE_BYTES: usize = 19;
 
     /// Bytes one Merkle digest occupies.
     const DIGEST_BYTES: usize = 32;
@@ -247,7 +247,7 @@ mod small_field {
         let config = profile
             .config::<EF, F, NarrowChallenger, _>(NUM_VARIABLES, &domain)
             .unwrap();
-        let shape = ProofShape::of(&config);
+        let shape = ProofShape::of(&config, 1);
 
         // The first codeword is opened at the alphabet's own width, not the challenge field's.
         let narrow = shape.max_bytes(ALPHABET_BYTES, CHALLENGE_BYTES, DIGEST_BYTES);

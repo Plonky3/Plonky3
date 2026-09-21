@@ -1078,13 +1078,12 @@ where
                 let k = width.next_power_of_two().trailing_zeros() as usize;
                 let successor_tensors = next && shapes[0].num_variables() > absorbed;
                 let mut security = self.inner.readings_security(batches, successor_tensors)?;
-                security
-                    .terms
-                    .push(p3_security::multilinear::column_batch_term(
-                        batches * views,
-                        k,
-                        EF::bits(),
-                    ));
+                // The batching challenge is drawn before any candidate has been named.
+                security.charge_reduction(p3_security::multilinear::column_batch_term(
+                    batches * views,
+                    k,
+                    EF::bits(),
+                ));
                 Some(security)
             },
         )

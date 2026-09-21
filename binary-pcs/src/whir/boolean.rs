@@ -22,6 +22,10 @@
 //! ```
 //!
 //! Both come back labelled, so a report says which one is short.
+//!
+//! The reductions run before the proximity argument names one codeword.
+//!
+//! So each is charged over every candidate the commitment still leaves open.
 
 use alloc::vec;
 use alloc::vec::Vec;
@@ -31,12 +35,10 @@ use p3_challenger::fs::TranscriptField;
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
 use p3_commit::Mmcs;
 use p3_field::Field;
-use p3_maybe_rayon::prelude::*;
 use p3_multilinear_util::point::Point;
-use p3_multilinear_util::poly::Poly;
 use p3_security::multilinear::bit_ring_switch_tensors_term;
 use p3_sumcheck::layout::{Layout, SuffixProver};
-use p3_sumcheck::ring_switch::bits::{BitPacking, BitRingSwitch};
+use p3_sumcheck::ring_switch::bits::{BitPacking, BitPackingView, BitRingSwitch};
 use p3_sumcheck::{
     OpeningBatch, OpeningProtocol, PrescribedOpeningSecurity, PrescribedPointPcs, TableShape,
     TableSpec,
@@ -45,9 +47,11 @@ use p3_whir::{WhirDomain, WhirProver, WhirProverData};
 
 use crate::boolean::{BitOpening, BitReadings, BooleanBackend, BooleanMultilinearPcs};
 use crate::boolean_trace::BooleanTraceCommitment;
+use crate::fold::ChallengeField;
 use crate::packing::{Coordinates, PackedStack};
 use crate::whir::error::BooleanWhirError;
 use crate::whir::proof::BooleanWhirProof;
+use crate::whir::shape::ProofShape;
 
 /// The binding mode the committed layout uses.
 ///
@@ -191,34 +195,22 @@ where
         Ok(())
     }
 
-    /// The packed multilinear the commitment holds, read back out of the retained table.
+    /// The packed multilinear the commitment holds, borrowed from the retained table.
     ///
     /// # Panics
     ///
     /// Never for a table this scheme committed.
     ///
     /// Its alphabet is byte aligned and its height is a power of two.
-    fn packing(prover_data: &BooleanWhirData<EF, MT>) -> BitPacking<EF>
-    where
-        EF: Send + Sync,
-    {
-        let packed = Poly::new(
-            prover_data
-                .table(0)
-                .poly(0)
-                .as_slice()
-                .par_iter()
-                .copied()
-                .collect(),
-        );
-        BitPacking::from_packed(packed)
+    fn packing(prover_data: &BooleanWhirData<EF, MT>) -> BitPackingView<'_, EF> {
+        BitPacking::from_packed(prover_data.table(0).poly(0))
             .expect("a committed table is a hypercube over a byte-aligned level")
     }
 }
 
 impl<EF, Dft, MT, Challenger> BooleanWhirPcs<EF, Dft, MT, Challenger>
 where
-    EF: Field + TranscriptField + TowerLevel + Coordinates + Ord + Send + Sync,
+    EF: Field + TranscriptField + TowerLevel + Coordinates + Ord + Send + Sync + ChallengeField<EF>,
     Dft: WhirDomain<EF, EF>,
     MT: Mmcs<EF>,
     Challenger: FieldChallenger<EF>
@@ -235,6 +227,10 @@ where
     ///
     /// The two are independent draws, so they compose by a union bound.
     ///
+    /// The reduction is charged over every candidate the commitment leaves open.
+    ///
+    /// Its challenges are drawn before the proximity argument names one of them.
+    ///
     /// Nothing here covers hash or transcript collisions, which the caller supplies.
     ///
     /// # Returns
@@ -250,7 +246,8 @@ where
         let mut security = self.inner.prescribed_security(&protocol)?;
         // The tensor alone, or the tensor with carry and last.
         let num_tensors = if successor_tensors { 3 } else { 1 };
-        security.terms.push(bit_ring_switch_tensors_term(
+        // The reductions run before one candidate is named, so they pay for every one left open.
+        security.charge_reduction(bit_ring_switch_tensors_term(
             num_claims,
             num_tensors,
             BitRingSwitch::<EF>::ABSORBED,
@@ -258,6 +255,14 @@ where
             EF::bits(),
         ));
         Some(security)
+    }
+
+    /// The shape of every proof an opening of this many claims can produce.
+    ///
+    /// It covers the reductions as well as the opening, so a ceiling graded against it binds both.
+    #[must_use]
+    pub fn proof_shape(&self, num_claims: usize, successor_tensors: bool) -> ProofShape {
+        ProofShape::of_bit_readings(&self.inner, num_claims, successor_tensors)
     }
 
     /// Open the bit witness with the readings every opening asks for, in one proof.
@@ -293,8 +298,12 @@ where
         let mut surviving_points = Vec::with_capacity(openings.len());
 
         for (opening, reduction) in openings.iter().zip(&reductions) {
-            let (proof, surviving_point, _) = tracing::info_span!("bit ring switch")
-                .in_scope(|| reduction.prove(&packing, challenger));
+            let (proof, surviving_point, _) =
+                tracing::info_span!("bit ring switch").in_scope(|| {
+                    reduction.prove::<<EF as ChallengeField<EF>>::SumcheckRepr, _, _>(
+                        &packing, challenger,
+                    )
+                });
 
             // The elements the reduction sends already hold the witness's readings.
             let current = opening
@@ -311,7 +320,7 @@ where
             sent.push(proof);
         }
 
-        // The surviving values never cross the wire: a verifier recomputes its own.
+        // Each surviving value crosses the wire twice, and the closing check is that the two agree.
         // Every surviving point came out of a reduction's rounds, so all are bound already.
         let opening = self
             .inner
@@ -412,7 +421,7 @@ where
 impl<EF, Dft, MT, Challenger> BooleanMultilinearPcs<EF, Challenger>
     for BooleanWhirPcs<EF, Dft, MT, Challenger>
 where
-    EF: Field + TranscriptField + TowerLevel + Coordinates + Ord + Send + Sync,
+    EF: Field + TranscriptField + TowerLevel + Coordinates + Ord + Send + Sync + ChallengeField<EF>,
     Dft: WhirDomain<EF, EF>,
     MT: Mmcs<EF>,
     Challenger: FieldChallenger<EF>

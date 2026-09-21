@@ -548,7 +548,7 @@ where
             sent.push(proof);
         }
 
-        // The surviving values never cross the wire: a verifier recomputes its own.
+        // Each surviving value crosses the wire twice, and the closing check is that the two agree.
         // Every surviving point came out of a reduction's rounds, so all are bound already.
         let opening = self
             .inner

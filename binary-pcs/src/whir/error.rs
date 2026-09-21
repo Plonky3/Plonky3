@@ -150,4 +150,13 @@ pub enum ProfileError {
     /// The derivation refused the profile.
     #[error(transparent)]
     Schedule(WhirConfigError),
+
+    /// The analysis demands more grinding than one witness of the alphabet can carry.
+    #[error("the schedule needs {required} grinding bits, one witness allows {ceiling}")]
+    Grinding {
+        /// Bits the analysis demands.
+        required: usize,
+        /// Bits one witness carries.
+        ceiling: usize,
+    },
 }

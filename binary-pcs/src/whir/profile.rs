@@ -10,10 +10,13 @@ use p3_whir::{
 
 use crate::whir::error::ProfileError;
 
-/// Grinding search ceiling.
+/// Widest candidate space a grinding search enumerates, in bits.
 ///
-/// A witness is one alphabet element, so no schedule can demand more bits than a wide one holds.
-const MAX_GRINDING_BITS: usize = 64;
+/// The search counts with a sixty-four bit index, so no alphabet offers more than that.
+const GRIND_SEARCH_BITS: usize = 64;
+
+/// Headroom a grinding search keeps below the candidate space, so an exhaustive one rarely fails.
+const GRIND_MARGIN_BITS: usize = 8;
 
 /// A named parameter profile for one proximity regime.
 ///
@@ -106,7 +109,7 @@ impl BinaryWhirProfile {
     ///
     /// Returns an error when the domain refuses the regime.
     ///
-    /// Returns an error when no grinding within one alphabet element reaches the target.
+    /// Returns an error when the analysis demands more grinding than one witness can carry.
     ///
     /// Returns an error when the schedule itself is infeasible.
     pub fn config<EF, F, Challenger, Domain>(
@@ -120,6 +123,10 @@ impl BinaryWhirProfile {
         Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
         Domain: WhirDomain<F, EF>,
     {
+        // A witness is one alphabet element, and the search keeps headroom below what it holds.
+        let ceiling = F::bits()
+            .min(GRIND_SEARCH_BITS)
+            .saturating_sub(GRIND_MARGIN_BITS);
         let mut pow_bits = 0;
         loop {
             let parameters = ProtocolParameters {
@@ -135,8 +142,11 @@ impl BinaryWhirProfile {
                 // The analysis reports exactly how much grinding the gap needs.
                 // Raising the allowance to that figure is the derivation, not a search.
                 Err(WhirConfigError::PowBitsExceedBudget { required, .. })
-                    if required > pow_bits && required <= MAX_GRINDING_BITS =>
+                    if required > pow_bits =>
                 {
+                    if required > ceiling {
+                        return Err(ProfileError::Grinding { required, ceiling });
+                    }
                     pow_bits = required;
                 }
                 Err(error) => return Err(ProfileError::Schedule(error)),
@@ -147,15 +157,18 @@ impl BinaryWhirProfile {
 
 #[cfg(test)]
 mod tests {
-    use p3_binary_field::BinaryField128;
+    use p3_binary_field::{BinaryChallenger, BinaryField32, BinaryField128};
+    use p3_challenger::{GrindingChallenger, HashChallenger};
+    use p3_keccak::Keccak256Hash;
     use p3_whir::{SecurityAssumption, WhirConfigError};
 
     use super::BinaryWhirProfile;
     use crate::test_util::MyChallenger;
     use crate::whir::error::ProfileError;
-    use crate::whir::{BooleanWhirDomain, ProofShape};
+    use crate::whir::{BinaryWhirDomain, BooleanWhirDomain, ProofShape};
 
     type EF = BinaryField128;
+    type NarrowChallenger = BinaryChallenger<BinaryField32, HashChallenger<u8, Keccak256Hash, 32>>;
 
     const NUM_VARIABLES: usize = 9;
     const SECURITY_LEVEL: usize = 100;
@@ -187,6 +200,7 @@ mod tests {
                 &profile
                     .config::<EF, EF, MyChallenger, _>(NUM_VARIABLES, &domain)
                     .unwrap(),
+                1,
             )
         };
         let unique = shape(BinaryWhirProfile::unique_decoding(
@@ -220,5 +234,62 @@ mod tests {
             alloc::format!("{refused}"),
             "the evaluation domain does not support the CapacityBound soundness regime"
         );
+    }
+
+    #[test]
+    fn a_schedule_grinding_past_the_narrow_alphabet_is_refused() {
+        // Twenty variables at this target need twenty-seven bits, three past what a witness holds.
+        let refused = BinaryWhirProfile::proven_list_decoding(100, 3, 4)
+            .config::<EF, BinaryField32, NarrowChallenger, _>(
+                20,
+                &BinaryWhirDomain::<BinaryField32>::default(),
+            )
+            .unwrap_err();
+        assert!(
+            matches!(
+                refused,
+                ProfileError::Grinding {
+                    required: 27,
+                    ceiling: 24
+                }
+            ),
+            "{refused:?}"
+        );
+        assert_eq!(
+            alloc::format!("{refused}"),
+            "the schedule needs 27 grinding bits, one witness allows 24"
+        );
+    }
+
+    #[test]
+    fn a_schedule_grinding_past_the_wide_alphabet_is_refused() {
+        let refused = BinaryWhirProfile::proven_list_decoding(135, 4, 4)
+            .config::<EF, EF, MyChallenger, _>(16, &BooleanWhirDomain::default())
+            .unwrap_err();
+        assert!(
+            matches!(
+                refused,
+                ProfileError::Grinding {
+                    required: 57,
+                    ceiling: 56
+                }
+            ),
+            "{refused:?}"
+        );
+    }
+
+    #[test]
+    #[should_panic = "too small a margin"]
+    fn the_narrow_ceiling_is_the_one_the_challenger_enforces() {
+        // The refusal above is worth nothing unless one more bit really does abort a prover.
+        let mut challenger = NarrowChallenger::from_hasher(alloc::vec::Vec::new(), Keccak256Hash);
+        let _ = challenger.grind(25);
+    }
+
+    #[test]
+    #[should_panic = "too small a margin"]
+    fn the_wide_ceiling_is_the_one_the_challenger_enforces() {
+        let mut challenger = MyChallenger::from_hasher(alloc::vec::Vec::new(), Keccak256Hash);
+        let _ = challenger.grind(57);
     }
 }
