@@ -4,6 +4,7 @@ use alloc::vec::Vec;
 use p3_binary_field::{Ghash128, TowerLevel};
 use p3_field::{Field, PrimeCharacteristicRing};
 use p3_matrix::dense::RowMajorMatrix;
+use p3_multilinear_util::point::Point;
 use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
 
@@ -389,8 +390,13 @@ fn tensor4_path_retains_all_entries_and_replays_cached_rounds() {
         assert_eq!(tensor.depth, 4);
         assert_eq!(tensor.values.len(), 1);
         assert_eq!(tensor.values[0].len(), 81);
+        assert!(state.sliced.as_ref().unwrap().challenges.is_empty());
 
         let mut state = state.fold_sliced::<Ghash128>(challenge(0));
+        assert_eq!(state.round, 1);
+        assert!(
+            matches!(&state.columns, ExtColumns::Sliced(columns) if columns.challenges.len() == 1)
+        );
         let tau = state.tau.as_slice().to_vec();
         let eq_suffix = Poly::new_from_point(&tau[2..], Tower::ONE);
         let round_one = state
@@ -402,7 +408,11 @@ fn tensor4_path_retains_all_entries_and_replays_cached_rounds() {
         assert_eq!(round_one, replay);
         assert!(state.has_sliced_tensor());
 
-        state.fold_sliced(challenge(1));
+        assert!(state.fold_sliced(challenge(1)));
+        assert_eq!(state.round, 2);
+        assert!(
+            matches!(&state.columns, ExtColumns::Sliced(columns) if columns.challenges.len() == 2)
+        );
         let tau = state.tau.as_slice().to_vec();
         let eq_suffix = Poly::new_from_point(&tau[3..], Tower::ONE);
         let round_two = state
@@ -412,7 +422,11 @@ fn tensor4_path_retains_all_entries_and_replays_cached_rounds() {
             round_two,
             state.round_poly_sliced::<Gf4>(&eq_suffix).unwrap()
         );
-        state.fold_sliced(challenge(2));
+        assert!(state.fold_sliced(challenge(2)));
+        assert_eq!(state.round, 3);
+        assert!(
+            matches!(&state.columns, ExtColumns::Sliced(columns) if columns.challenges.len() == 3)
+        );
         let tau = state.tau.as_slice().to_vec();
         let eq_suffix = Poly::new_from_point(&tau[4..], Tower::ONE);
         let round_three = state
@@ -424,38 +438,113 @@ fn tensor4_path_retains_all_entries_and_replays_cached_rounds() {
         );
         assert!(state.has_sliced_tensor());
         assert!(state.fold_boundary::<Gf4>(challenge(3)));
+        assert_eq!(state.round, 4);
+        assert_eq!(state.num_evals(), height >> 4);
         assert!(!state.has_sliced_tensor());
     });
 }
 
 #[test]
+fn tensor4_installs_at_two_eligible_activation_heights() {
+    for (height, seed) in [(1 << 12, 0x7E50_22), (1 << 10, 0x7E50_23)] {
+        let instances = [Instance::honest(FixtureAir::Pair, height, seed)];
+        with_state(&instances, no_lookups(), |mut state, eq_suffix| {
+            state
+                .round_poly_sliced_with_strategy::<Gf4, Ghash128>(
+                    eq_suffix,
+                    SlicedStrategy::TensorBoundary,
+                )
+                .expect("eligible height should build tensor4");
+            assert!(state.has_sliced_tensor());
+        });
+    }
+}
+
+#[test]
 fn tensor4_evaluates_mixed_linear_and_quadratic_airs() {
     let height = 1 << 10;
+    let mut linear = Instance::honest(FixtureAir::Linear { scale: Tower::ONE }, height, 0x7E50_02);
+    linear.main.values[0] = gf4(2);
     let instances = [
-        Instance::honest(FixtureAir::Linear { scale: Tower::ONE }, height, 0x7E50_02),
+        linear,
         Instance::honest(FixtureAir::Pair, height, 0x7E50_03),
     ];
-    let tensor = with_state(&instances, no_lookups(), |mut state, eq_suffix| {
-        let evals = state
-            .round_poly_sliced_with_strategy::<Gf4, Ghash128>(
-                eq_suffix,
-                SlicedStrategy::TensorBoundary,
-            )
-            .expect("mixed degree stage should build tensor4");
-        assert!(state.has_sliced_tensor());
-        let tensor = state
-            .sliced
-            .as_ref()
-            .and_then(|columns| columns.tensor.as_ref())
-            .expect("tensor cache should be installed");
-        assert_eq!(tensor.values.len(), 2);
-        assert!(tensor.values.iter().all(|values| values.len() == 81));
-        evals
-    });
-    let generic = with_state(&instances, no_lookups(), |mut state, eq_suffix| {
-        state.round_poly(eq_suffix)
-    });
-    assert_eq!(tensor, generic);
+    let tensor = collect_tensor_rounds(&instances, true);
+    let sequential = collect_tensor_rounds(&instances, false);
+    assert_eq!(
+        tensor, sequential,
+        "mixed degree tensor4 rounds and openings"
+    );
+}
+
+/// Collect every round and final opening from either the tensor or sequential sliced path.
+fn collect_tensor_rounds(
+    instances: &[Instance],
+    tensor: bool,
+) -> (Vec<Vec<Tower>>, Vec<[Vec<Tower>; 4]>) {
+    with_state(instances, no_lookups(), |mut state, _| {
+        let tau = state.tau.as_slice().to_vec();
+        let eq_suffix = Poly::new_from_point(&tau[1..], Tower::ONE);
+        let first = if tensor {
+            state
+                .round_poly_sliced_with_strategy::<Gf4, Ghash128>(
+                    &eq_suffix,
+                    SlicedStrategy::TensorBoundary,
+                )
+                .expect("tensor4 should be eligible")
+        } else {
+            state
+                .round_poly_sliced::<Gf4, Ghash128>(&eq_suffix)
+                .expect("sequential sliced path should be eligible")
+        };
+        if tensor {
+            assert!(state.has_sliced_tensor());
+        }
+        let mut state = state.fold_sliced::<Ghash128>(challenge(0));
+        let mut round_polys = vec![first];
+        for round in 1..tau.len() {
+            let tau = state.tau.as_slice().to_vec();
+            let suffix = Poly::new_from_point(&tau[round + 1..], Tower::ONE);
+            let round_poly = if (tensor && round < 4) || (!tensor && round < 3) {
+                state
+                    .round_poly_sliced::<Gf4>(&suffix)
+                    .expect("tensor cache should serve cached round")
+            } else if !tensor && round == 3 {
+                state
+                    .round_poly_boundary::<Gf4>(&suffix)
+                    .expect("sequential boundary should serve round three")
+            } else {
+                assert!(
+                    matches!(state.columns, ExtColumns::Scalar(_)),
+                    "tensor={tensor} round={round} should be scalar"
+                );
+                state.round_poly_repr(&suffix)
+            };
+            round_polys.push(round_poly);
+            if round < 3 {
+                assert!(state.fold_sliced(challenge(round)));
+            } else if round == 3 {
+                let folded = state.fold_boundary::<Gf4>(challenge(round));
+                assert!(folded, "tensor={tensor} round={round}");
+                assert!(matches!(state.columns, ExtColumns::Scalar(_)));
+            } else {
+                state.fold_repr(challenge(round));
+            }
+        }
+        let openings = state
+            .into_openings()
+            .into_iter()
+            .map(|(_, opening)| {
+                [
+                    opening.local,
+                    opening.next,
+                    opening.preprocessed_local,
+                    opening.preprocessed_next,
+                ]
+            })
+            .collect();
+        (round_polys, openings)
+    })
 }
 
 #[test]
@@ -466,15 +555,15 @@ fn tensor4_path_includes_fixed_periodic_and_boundary_inputs() {
         height,
         0x7E50_04,
     )];
-    with_state(&instances, no_lookups(), |mut state, eq_suffix| {
-        state
-            .round_poly_sliced_with_strategy::<Gf4, Ghash128>(
-                eq_suffix,
-                SlicedStrategy::TensorBoundary,
-            )
-            .expect("quadratic fixed-input stage should build tensor4");
-        assert!(state.has_sliced_tensor());
-    });
+    let tensor = collect_tensor_rounds(&instances, true);
+    let sequential = collect_tensor_rounds(&instances, false);
+    assert_eq!(tensor, sequential, "quadratic input rounds and openings");
+    assert!(
+        tensor
+            .0
+            .iter()
+            .any(|poly| poly.iter().any(|&value| value != Tower::ZERO))
+    );
 }
 
 #[test]
@@ -486,67 +575,89 @@ fn tensor4_contraction_matches_sequential_at_special_challenges() {
     }
     let instances = [instance];
     let challenges = [
-        Tower::ZERO,
-        Tower::ONE,
-        Tower::interpolation_node(2),
-        Tower::from_repr(0x1234),
+        [Tower::ZERO, challenge(1), challenge(2), challenge(3)],
+        [challenge(0), Tower::ZERO, challenge(2), challenge(3)],
+        [
+            challenge(0),
+            challenge(1),
+            Tower::interpolation_node(2),
+            challenge(3),
+        ],
+        [
+            challenge(0),
+            challenge(1),
+            challenge(2),
+            Tower::from_repr(0x1234),
+        ],
     ];
-    for special_challenge in challenges {
-        let tensor = with_state(&instances, no_lookups(), |mut state, eq_suffix| {
+    for prefix_challenges in challenges {
+        let tensor = with_state(&instances, no_lookups(), |mut state, _| {
+            let mut tau = state.tau.as_slice().to_vec();
+            tau[1] = Tower::ONE;
+            tau[2] = gf4(2);
+            tau[3] = Tower::from_repr(0x4567);
+            state.tau = Point::new(tau);
+            let eq_suffix = Poly::new_from_point(&state.tau.as_slice()[1..], Tower::ONE);
             let first = state
                 .round_poly_sliced_with_strategy::<Gf4, Ghash128>(
-                    eq_suffix,
+                    &eq_suffix,
                     SlicedStrategy::TensorBoundary,
                 )
                 .expect("tensor4 should be eligible");
-            let mut state = state.fold_sliced::<Ghash128>(special_challenge);
+            let mut state = state.fold_sliced::<Ghash128>(prefix_challenges[0]);
             let tau = state.tau.as_slice().to_vec();
             let suffix = Poly::new_from_point(&tau[2..], Tower::ONE);
             let second = state
                 .round_poly_sliced::<Gf4>(&suffix)
                 .expect("tensor4 should serve round one");
-            assert!(state.fold_sliced(challenge(1)));
+            assert!(state.fold_sliced(prefix_challenges[1]));
             let tau = state.tau.as_slice().to_vec();
             let suffix = Poly::new_from_point(&tau[3..], Tower::ONE);
             let third = state
                 .round_poly_sliced::<Gf4>(&suffix)
                 .expect("tensor4 should serve round two");
-            assert!(state.fold_sliced(challenge(2)));
+            assert!(state.fold_sliced(prefix_challenges[2]));
             let tau = state.tau.as_slice().to_vec();
             let suffix = Poly::new_from_point(&tau[4..], Tower::ONE);
             let fourth = state
                 .round_poly_sliced::<Gf4>(&suffix)
                 .expect("tensor4 should serve round three");
-            assert!(state.fold_boundary::<Gf4>(challenge(3)));
+            assert!(state.fold_boundary::<Gf4>(prefix_challenges[3]));
             assert!(!state.has_sliced_tensor());
             (first, second, third, fourth)
         });
-        let sequential = with_state(&instances, no_lookups(), |mut state, eq_suffix| {
+        let sequential = with_state(&instances, no_lookups(), |mut state, _| {
+            let mut tau = state.tau.as_slice().to_vec();
+            tau[1] = Tower::ONE;
+            tau[2] = gf4(2);
+            tau[3] = Tower::from_repr(0x4567);
+            state.tau = Point::new(tau);
+            let eq_suffix = Poly::new_from_point(&state.tau.as_slice()[1..], Tower::ONE);
             let first = state
-                .round_poly_sliced::<Gf4, Ghash128>(eq_suffix)
+                .round_poly_sliced::<Gf4, Ghash128>(&eq_suffix)
                 .expect("sequential sliced path should be eligible");
-            let mut state = state.fold_sliced::<Ghash128>(special_challenge);
+            let mut state = state.fold_sliced::<Ghash128>(prefix_challenges[0]);
             let tau = state.tau.as_slice().to_vec();
             let suffix = Poly::new_from_point(&tau[2..], Tower::ONE);
             let second = state
                 .round_poly_sliced::<Gf4>(&suffix)
                 .expect("sequential sliced path should serve round one");
-            assert!(state.fold_sliced(challenge(1)));
+            assert!(state.fold_sliced(prefix_challenges[1]));
             let tau = state.tau.as_slice().to_vec();
             let suffix = Poly::new_from_point(&tau[3..], Tower::ONE);
             let third = state
                 .round_poly_sliced::<Gf4>(&suffix)
                 .expect("sequential sliced path should serve round two");
-            assert!(state.fold_sliced(challenge(2)));
+            assert!(state.fold_sliced(prefix_challenges[2]));
             let tau = state.tau.as_slice().to_vec();
             let suffix = Poly::new_from_point(&tau[4..], Tower::ONE);
             let fourth = state
                 .round_poly_boundary::<Gf4>(&suffix)
                 .expect("sequential boundary path should serve round three");
-            assert!(state.fold_boundary::<Gf4>(challenge(3)));
+            assert!(state.fold_boundary::<Gf4>(prefix_challenges[3]));
             (first, second, third, fourth)
         });
-        assert_eq!(tensor, sequential, "challenge {special_challenge:?}");
+        assert_eq!(tensor, sequential, "challenge {prefix_challenges:?}");
     }
 }
 
@@ -577,6 +688,122 @@ fn tensor4_strategy_falls_back_for_short_or_cubic_stages() {
             .expect("cubic gate should retain sequential sliced fallback");
         assert!(!state.has_sliced_tensor());
     });
+}
+
+#[test]
+fn tensor4_eligibility_gates_are_isolated_at_height_ten() {
+    let height = 1 << 10;
+    let assert_no_tensor = |instances: &[Instance], coupling| {
+        with_state(instances, coupling, |mut state, eq_suffix| {
+            let _ = state.round_poly_sliced_with_strategy::<Gf4, Ghash128>(
+                eq_suffix,
+                SlicedStrategy::TensorBoundary,
+            );
+            assert!(!state.has_sliced_tensor());
+        });
+    };
+
+    for sliced_rounds in [0, 1, 2, 4] {
+        let instance = Instance::honest(FixtureAir::Pair, height, 0x7E50_08 + sliced_rounds as u64);
+        with_state(&[instance], no_lookups(), |mut state, eq_suffix| {
+            state.sliced_rounds = sliced_rounds;
+            let _ = state.round_poly_sliced_with_strategy::<Gf4, Ghash128>(
+                eq_suffix,
+                SlicedStrategy::TensorBoundary,
+            );
+            assert!(
+                !state.has_sliced_tensor(),
+                "configured sliced rounds {sliced_rounds}"
+            );
+        });
+    }
+    assert_no_tensor(
+        &[Instance::honest(
+            FixtureAir::Periodic {
+                period: [gf4(2), gf4(3)],
+            },
+            height,
+            0x7E50_09,
+        )],
+        no_lookups(),
+    );
+    assert_no_tensor(
+        &[Instance::honest(
+            FixtureAir::QuadraticSuccessor,
+            height,
+            0x7E50_0A,
+        )],
+        no_lookups(),
+    );
+    assert_no_tensor(
+        &[Instance::honest(FixtureAir::Link, height, 0x7E50_0B)],
+        link_coupling(),
+    );
+
+    let mut main = Instance::honest(FixtureAir::QuadraticInputs, height, 0x7E50_0C);
+    main.main.values[5] = outside();
+    assert_no_tensor(&[main], no_lookups());
+
+    let mut preprocessed = Instance::honest(FixtureAir::QuadraticInputs, height, 0x7E50_0D);
+    preprocessed
+        .preprocessed
+        .as_mut()
+        .expect("quadratic inputs has fixed data")
+        .values[5] = outside();
+    assert_no_tensor(&[preprocessed], no_lookups());
+
+    let mut public = Instance::honest(FixtureAir::QuadraticInputs, height, 0x7E50_0E);
+    public.public_values[0] = outside();
+    assert_no_tensor(&[public], no_lookups());
+
+    assert_no_tensor(
+        &[Instance::honest(
+            FixtureAir::QuadraticInputsOutsidePeriodic,
+            height,
+            0x7E50_0F,
+        )],
+        no_lookups(),
+    );
+}
+
+#[test]
+fn tensor4_poison_falls_back_transactionally_on_eligible_mixed_stage() {
+    let height = 1 << 10;
+    let instances = [
+        Instance::honest(FixtureAir::Pair, height, 0x7E50_20),
+        Instance::honest(FixtureAir::Linear { scale: outside() }, height, 0x7E50_21),
+    ];
+    let tensor = with_state(&instances, no_lookups(), |mut state, eq_suffix| {
+        let evals = state
+            .round_poly_sliced_with_strategy::<Gf4, Ghash128>(
+                eq_suffix,
+                SlicedStrategy::TensorBoundary,
+            )
+            .expect("poisoned tensor attempt should retain sequential fallback");
+        assert!(!state.has_sliced_tensor());
+        (
+            evals,
+            state
+                .constraint_groups
+                .iter()
+                .map(|group| (group.claim, group.last_evals.clone()))
+                .collect::<Vec<_>>(),
+        )
+    });
+    let sequential = with_state(&instances, no_lookups(), |mut state, eq_suffix| {
+        let evals = state
+            .round_poly_sliced::<Gf4, Ghash128>(eq_suffix)
+            .expect("sequential sliced path should remain eligible");
+        (
+            evals,
+            state
+                .constraint_groups
+                .iter()
+                .map(|group| (group.claim, group.last_evals.clone()))
+                .collect::<Vec<_>>(),
+        )
+    });
+    assert_eq!(tensor, sequential);
 }
 
 #[test]

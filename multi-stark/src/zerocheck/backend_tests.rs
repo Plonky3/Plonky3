@@ -187,6 +187,10 @@ pub(crate) enum FixtureAir {
     },
     /// Eligible quadratic AIR using fixed, periodic, selector, and public inputs.
     QuadraticInputs,
+    /// The same eligible shape with one periodic value outside GF(4).
+    QuadraticInputsOutsidePeriodic,
+    /// Degree-two successor-reading AIR used to isolate successor rejection.
+    QuadraticSuccessor,
     /// AIR with a main column but no constraints, whose native degree is zero.
     Empty,
 }
@@ -197,14 +201,17 @@ impl BaseAir<Tower> for FixtureAir {
             Self::Gate { .. } | Self::Quartic => 4,
             Self::Pair => 3,
             Self::Link | Self::Recurrence | Self::Linear { .. } => 2,
-            Self::QuadraticInputs | Self::Empty => 1,
+            Self::QuadraticInputs
+            | Self::QuadraticInputsOutsidePeriodic
+            | Self::QuadraticSuccessor
+            | Self::Empty => 1,
             Self::Periodic { .. } => 1,
         }
     }
 
     fn preprocessed_width(&self) -> usize {
         match self {
-            Self::Gate { .. } | Self::QuadraticInputs => 1,
+            Self::Gate { .. } | Self::QuadraticInputs | Self::QuadraticInputsOutsidePeriodic => 1,
             _ => 0,
         }
     }
@@ -212,14 +219,17 @@ impl BaseAir<Tower> for FixtureAir {
     fn num_public_values(&self) -> usize {
         match self {
             Self::Gate { .. } => 2,
-            Self::QuadraticInputs => 1,
+            Self::QuadraticInputs | Self::QuadraticInputsOutsidePeriodic => 1,
             _ => 0,
         }
     }
 
     fn num_periodic_columns(&self) -> usize {
         match self {
-            Self::Gate { .. } | Self::Periodic { .. } | Self::QuadraticInputs => 1,
+            Self::Gate { .. }
+            | Self::Periodic { .. }
+            | Self::QuadraticInputs
+            | Self::QuadraticInputsOutsidePeriodic => 1,
             _ => 0,
         }
     }
@@ -228,7 +238,10 @@ impl BaseAir<Tower> for FixtureAir {
         match self {
             Self::Gate { .. } => Cow::Owned(vec![(0..GATE_PERIOD).map(gf4).collect()]),
             Self::Periodic { period } => Cow::Owned(vec![period.to_vec()]),
-            Self::QuadraticInputs => Cow::Owned(vec![vec![Tower::ONE]]),
+            Self::QuadraticInputs => Cow::Owned(vec![vec![gf4(0), gf4(1), gf4(2), gf4(3)]]),
+            Self::QuadraticInputsOutsidePeriodic => {
+                Cow::Owned(vec![vec![outside(), gf4(1), gf4(2), gf4(3)]])
+            }
             _ => Cow::Owned(vec![]),
         }
     }
@@ -243,7 +256,9 @@ impl BaseAir<Tower> for FixtureAir {
             | Self::Periodic { .. }
             | Self::Linear { .. }
             | Self::QuadraticInputs
+            | Self::QuadraticInputsOutsidePeriodic
             | Self::Empty => vec![],
+            Self::QuadraticSuccessor => vec![0],
         }
     }
 
@@ -257,7 +272,7 @@ impl BaseAir<Tower> for FixtureAir {
     fn public_boundary_io(&self) -> &[BoundaryPublic] {
         match self {
             Self::Gate { .. } => &GATE_CELLS,
-            Self::QuadraticInputs => &QUADRATIC_PUBLIC,
+            Self::QuadraticInputs | Self::QuadraticInputsOutsidePeriodic => &QUADRATIC_PUBLIC,
             _ => &[],
         }
     }
@@ -318,7 +333,7 @@ impl<AB: AirBuilder<F = Tower> + InteractionBuilder> Air<AB> for FixtureAir {
             Self::Linear { scale } => {
                 builder.assert_zero((local[0] - local[1]) * *scale);
             }
-            Self::QuadraticInputs => {
+            Self::QuadraticInputs | Self::QuadraticInputsOutsidePeriodic => {
                 let fixed = builder.preprocessed().current_slice()[0];
                 let periodic: AB::Expr = builder.periodic_values()[0].into();
                 let value: AB::Expr = local[0].into();
@@ -326,6 +341,11 @@ impl<AB: AirBuilder<F = Tower> + InteractionBuilder> Air<AB> for FixtureAir {
                 builder.assert_zero(value * periodic - fixed);
                 builder.when_first_row().assert_eq(local[0], public);
                 builder.when_last_row().assert_eq(local[0], public);
+            }
+            Self::QuadraticSuccessor => {
+                let value: AB::Expr = local[0].into();
+                builder.assert_zero(value.bool_check());
+                builder.when_transition().assert_eq(next[0], value);
             }
             Self::Empty => {}
         }
@@ -402,14 +422,33 @@ impl Instance {
                     .collect();
                 (RowMajorMatrix::new(values, 2), None, vec![])
             }
-            FixtureAir::QuadraticInputs => {
-                let values = vec![Tower::ONE; height];
-                let fixed = vec![Tower::ONE; height];
+            ref
+            air @ (FixtureAir::QuadraticInputs | FixtureAir::QuadraticInputsOutsidePeriodic) => {
+                let mut values = (0..height)
+                    .map(|row| gf4((row % 3) + 1))
+                    .collect::<Vec<_>>();
+                values[height - 1] = values[0];
+                let periodic = match air {
+                    FixtureAir::QuadraticInputs => [gf4(0), gf4(1), gf4(2), gf4(3)],
+                    FixtureAir::QuadraticInputsOutsidePeriodic => {
+                        [outside(), gf4(1), gf4(2), gf4(3)]
+                    }
+                    _ => unreachable!(),
+                };
+                let fixed = values
+                    .iter()
+                    .enumerate()
+                    .map(|(row, &value)| value * periodic[row % 4])
+                    .collect::<Vec<_>>();
                 (
                     RowMajorMatrix::new(values, 1),
                     Some(RowMajorMatrix::new(fixed, 1)),
-                    vec![Tower::ONE],
+                    vec![gf4(1)],
                 )
+            }
+            FixtureAir::QuadraticSuccessor => {
+                let value = Tower::ONE;
+                (RowMajorMatrix::new(vec![value; height], 1), None, vec![])
             }
             FixtureAir::Empty => (
                 RowMajorMatrix::new(vec![Tower::ZERO; height], 1),
@@ -1012,14 +1051,28 @@ fn representation_tensor4_honest_proof_verifies() {
 #[test]
 fn representation_tensor4_matches_generic_for_mixed_native_degrees() {
     let height = 1 << 10;
+    let mut linear = Instance::honest(FixtureAir::Linear { scale: Tower::ONE }, height, 0x7E50_12);
+    linear.main.values[0] = gf4(2);
     let instances = [
-        Instance::honest(FixtureAir::Linear { scale: Tower::ONE }, height, 0x7E50_12),
+        linear,
         Instance::honest(FixtureAir::Pair, height, 0x7E50_13),
     ];
     let generic = transcript::<GenericBackend>(&instances, LookupRuntime::Inactive, 0, false);
     let repr =
         transcript::<ReprBackend<Gf4, PolyBasis>>(&instances, LookupRuntime::Inactive, 0, false);
     assert_eq!(repr, generic, "mixed degree tensor4 transcript");
+}
+
+#[test]
+fn representation_tensor4_matches_generic_at_two_eligible_heights() {
+    let instances = [
+        Instance::honest(FixtureAir::Pair, 1 << 12, 0x7E50_22),
+        Instance::honest(FixtureAir::Pair, 1 << 10, 0x7E50_23),
+    ];
+    let generic = transcript::<GenericBackend>(&instances, LookupRuntime::Inactive, 0, false);
+    let repr =
+        transcript::<ReprBackend<Gf4, PolyBasis>>(&instances, LookupRuntime::Inactive, 0, false);
+    assert_eq!(repr, generic, "two eligible tensor4 activation heights");
 }
 
 #[test]
@@ -1103,6 +1156,7 @@ fn fixture_degrees_are_the_named_ones() {
     assert_eq!(degree(&FixtureAir::Recurrence), 3);
     assert_eq!(degree(&FixtureAir::Linear { scale: gf4(2) }), 1);
     assert_eq!(degree(&FixtureAir::QuadraticInputs), 2);
+    assert_eq!(degree(&FixtureAir::QuadraticInputsOutsidePeriodic), 2);
     let link = super::get_air_profile::<Tower, Tower, _>(&FixtureAir::Link).degrees;
     assert!(link.interactions > 0);
 }
