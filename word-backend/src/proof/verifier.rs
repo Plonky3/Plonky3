@@ -662,9 +662,7 @@ mod tests {
         assert_ne!(tampered.operands, proof.operands);
         assert!(matches!(
             check(&key, &scheme, &commitment, &public_words, &tampered),
-            Err(WordProofError::Shift(
-                ShiftReductionError::IntermediateClaim
-            ))
+            Err(WordProofError::Shift(ShiftReductionError::EnteringClaim))
         ));
     }
 
