@@ -12,6 +12,7 @@ use p3_lookup::{Count, IndexedLookupBuilder, InteractionBuilder, TraceWindow};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_multi_stark::config::MultiStarkConfig;
+use p3_multi_stark::lookup::LookupError;
 use p3_multi_stark::zerocheck::ZerocheckError;
 use p3_multi_stark::{
     BoundaryIoError, MultiStarkProof, ProverInstance, ProverInstances, VerificationError,
@@ -1109,6 +1110,233 @@ fn verify_rejects_tampered_main_commitment() {
 const WHIR_FIXTURE: &str = "tests/fixtures/multi_stark_whir_v0_8_0.postcard";
 
 /// A fixed Fibonacci instance shared by the WHIR compat-fixture generator and checker.
+/// An honest Fibonacci proof over 256 rows, with everything `verify` needs to check it.
+fn honest_fibonacci() -> (
+    WhirConfigForTest,
+    p3_multi_stark::VerifyingKey<WhirConfigForTest>,
+    usize,
+    [F; 3],
+    MultiStarkProof<WhirConfigForTest>,
+) {
+    let n = 256;
+    let trace = fib_trace(n);
+    let pis = fib_public_values(n);
+    let log_height = log2_strict_usize(n);
+    let config = config_for(log_height, NUM_COLS);
+    let (pk, vk) = setup(&config, &[&FibAir], &mut challenger()).unwrap();
+    let proof = prove(
+        &config,
+        ProverInstances::new(vec![ProverInstance::new(
+            &FibAir,
+            Table::new(trace.transpose()),
+            &pk,
+            &pis,
+        )]),
+        0,
+        &mut challenger(),
+    )
+    .unwrap();
+    (config, vk, log_height, pis, proof)
+}
+
+/// An honest proof of the 64-row `LocalPermutationLookupAir`, which carries a lookup section.
+fn honest_lookup() -> (
+    WhirConfigForTest,
+    p3_multi_stark::VerifyingKey<WhirConfigForTest>,
+    usize,
+    MultiStarkProof<WhirConfigForTest>,
+) {
+    let n = 64;
+    let log_height = log2_strict_usize(n);
+    let air = LocalPermutationLookupAir;
+    let trace = permutation_trace(n);
+    let config = config_for(log_height, air.width());
+    let (pk, vk) = setup(&config, &[&air], &mut challenger()).unwrap();
+    let proof = prove(
+        &config,
+        ProverInstances::new(vec![ProverInstance::new(
+            &air,
+            Table::new(trace.transpose()),
+            &pk,
+            &[],
+        )]),
+        0,
+        &mut challenger(),
+    )
+    .unwrap();
+    assert!(proof.lookup.is_some());
+    (config, vk, log_height, proof)
+}
+
+fn verify_fibonacci(
+    config: &WhirConfigForTest,
+    vk: &p3_multi_stark::VerifyingKey<WhirConfigForTest>,
+    log_height: usize,
+    pis: &[F; 3],
+    proof: &MultiStarkProof<WhirConfigForTest>,
+) -> Result<(), VerificationError<p3_multi_stark::config::PcsError<WhirConfigForTest>>> {
+    verify(
+        config,
+        VerifierInstances::new(vec![VerifierInstance::new(&FibAir, vk, log_height, pis)]),
+        proof,
+        0,
+        &mut challenger(),
+    )
+}
+
+// The three optional sections of a proof each answer a declaration made by the AIR set:
+// preprocessed columns, interactions, indexed reads. A proof and an AIR set that disagree on
+// whether a section is present must be rejected with the error that names the section, in
+// both directions, before anything in the section is read.
+
+#[test]
+fn verify_rejects_an_unexpected_preprocessed_opening() {
+    let (config, vk, log_height, pis, mut proof) = honest_fibonacci();
+    assert!(proof.preprocessed_opening.is_none());
+
+    // Mutation: attach a well-formed opening as the preprocessed one on an AIR set that
+    // declares no preprocessed columns.
+    proof.preprocessed_opening = Some(proof.opening.clone());
+
+    let err = verify_fibonacci(&config, &vk, log_height, &pis, &proof).unwrap_err();
+    assert!(
+        matches!(err, VerificationError::UnexpectedPreprocessedOpening),
+        "expected UnexpectedPreprocessedOpening, got {err:?}"
+    );
+}
+
+#[test]
+fn verify_rejects_a_lookup_proof_for_an_air_declaring_no_interaction() {
+    let (config, vk, log_height, pis, mut proof) = honest_fibonacci();
+    assert!(proof.lookup.is_none());
+    let (_, _, _, lookup_proof) = honest_lookup();
+
+    // Mutation: graft an honest lookup section onto a proof whose AIR declares none.
+    proof.lookup = lookup_proof.lookup;
+
+    let err = verify_fibonacci(&config, &vk, log_height, &pis, &proof).unwrap_err();
+    assert!(
+        matches!(err, VerificationError::Lookup(LookupError::UnexpectedProof)),
+        "expected Lookup(UnexpectedProof), got {err:?}"
+    );
+}
+
+#[test]
+fn verify_rejects_an_air_declaring_an_interaction_with_no_lookup_proof() {
+    let (config, vk, log_height, mut proof) = honest_lookup();
+
+    // Mutation: drop the lookup section the AIR's interactions require.
+    proof.lookup = None;
+
+    let air = LocalPermutationLookupAir;
+    let err = verify(
+        &config,
+        VerifierInstances::new(vec![VerifierInstance::new(&air, &vk, log_height, &[])]),
+        &proof,
+        0,
+        &mut challenger(),
+    )
+    .unwrap_err();
+    assert!(
+        matches!(err, VerificationError::Lookup(LookupError::MissingProof)),
+        "expected Lookup(MissingProof), got {err:?}"
+    );
+}
+
+/// An honest proof of the squares batch, which carries an indexed-lookup section.
+fn honest_indexed() -> (
+    WhirConfigForTest,
+    p3_multi_stark::VerifyingKey<WhirConfigForTest>,
+    (usize, usize),
+    MultiStarkProof<WhirConfigForTest>,
+) {
+    let table_rows = ((1 << FOLDING) * PackedF::WIDTH / 4).max(1 << FOLDING);
+    let reader_rows = 2 * table_rows;
+    let table_log = log2_strict_usize(table_rows);
+    let reader_log = log2_strict_usize(reader_rows);
+    let squares = RowMajorMatrix::new((0..table_rows).map(|v| F::from_usize(v * v)).collect(), 1);
+    let named = (0..table_rows)
+        .chain((0..table_rows).rev())
+        .collect::<Vec<_>>();
+    let reads = RowMajorMatrix::new(
+        named
+            .iter()
+            .flat_map(|&v| [F::from_usize(v), F::from_usize(v * v)])
+            .collect(),
+        2,
+    );
+    let stacked_num_variables = log2_ceil_usize(2 * reader_rows + table_rows);
+    let config = config_for_stacked(stacked_num_variables);
+    let (pk, vk) = setup(
+        &config,
+        &[&SquaresBatch::Reader, &SquaresBatch::Table],
+        &mut challenger(),
+    )
+    .unwrap();
+    let proof = prove(
+        &config,
+        ProverInstances::new(vec![
+            ProverInstance::new(
+                &SquaresBatch::Reader,
+                Table::new(reads.transpose()),
+                &pk,
+                &[],
+            ),
+            ProverInstance::new(
+                &SquaresBatch::Table,
+                Table::new(squares.transpose()),
+                &pk,
+                &[],
+            ),
+        ]),
+        0,
+        &mut challenger(),
+    )
+    .unwrap();
+    assert!(proof.indexed.is_some());
+    (config, vk, (reader_log, table_log), proof)
+}
+
+#[test]
+fn verify_rejects_an_indexed_proof_for_an_air_declaring_no_indexed_read() {
+    let (config, vk, log_height, pis, mut proof) = honest_fibonacci();
+    assert!(proof.indexed.is_none());
+    let (_, _, _, indexed_proof) = honest_indexed();
+
+    // Mutation: graft an honest indexed section onto a proof whose AIR reads no table.
+    proof.indexed = indexed_proof.indexed;
+
+    let err = verify_fibonacci(&config, &vk, log_height, &pis, &proof).unwrap_err();
+    assert!(
+        matches!(err, VerificationError::UnexpectedIndexedReduction),
+        "expected UnexpectedIndexedReduction, got {err:?}"
+    );
+}
+
+#[test]
+fn verify_rejects_an_air_declaring_an_indexed_read_with_no_indexed_proof() {
+    let (config, vk, (reader_log, table_log), mut proof) = honest_indexed();
+
+    // Mutation: drop the indexed section the reader's declaration requires.
+    proof.indexed = None;
+
+    let err = verify(
+        &config,
+        VerifierInstances::new(vec![
+            VerifierInstance::new(&SquaresBatch::Reader, &vk, reader_log, &[]),
+            VerifierInstance::new(&SquaresBatch::Table, &vk, table_log, &[]),
+        ]),
+        &proof,
+        0,
+        &mut challenger(),
+    )
+    .unwrap_err();
+    assert!(
+        matches!(err, VerificationError::UnexpectedIndexedReduction),
+        "expected UnexpectedIndexedReduction, got {err:?}"
+    );
+}
+
 fn whir_compat_case() -> (WhirConfigForTest, RowMajorMatrix<F>, [F; 3], usize) {
     let n = 256;
     let trace = fib_trace(n);

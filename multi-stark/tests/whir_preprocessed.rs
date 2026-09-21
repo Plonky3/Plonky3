@@ -640,6 +640,49 @@ fn verify_rejects_violated_main_constraint() {
 }
 
 #[test]
+fn verify_rejects_a_proof_missing_its_expected_preprocessed_opening() {
+    let n = 256;
+    let fixed = fixed_column(n);
+    let air = PreprocessedAir {
+        height: n,
+        cells: &[],
+    };
+    let trace = main_trace(&fixed);
+    let log_height = log2_strict_usize(n);
+    let config = config_for(log_height);
+    let (pk, vk) = setup(&config, &[&air], &mut challenger()).unwrap();
+    let mut proof = prove(
+        &config,
+        ProverInstances::new(vec![ProverInstance::new(
+            &air,
+            Table::new(trace.transpose()),
+            &pk,
+            &[],
+        )]),
+        0,
+        &mut challenger(),
+    )
+    .unwrap();
+    assert!(proof.preprocessed_opening.is_some());
+
+    // Mutation: drop the opening the verifying key's preprocessed commitment requires.
+    proof.preprocessed_opening = None;
+
+    let err = verify(
+        &config,
+        VerifierInstances::new(vec![VerifierInstance::new(&air, &vk, log_height, &[])]),
+        &proof,
+        0,
+        &mut challenger(),
+    )
+    .unwrap_err();
+    assert!(
+        matches!(err, VerificationError::MissingPreprocessedOpening),
+        "expected MissingPreprocessedOpening, got {err:?}"
+    );
+}
+
+#[test]
 fn verify_rejects_tampered_preprocessed_opening() {
     // Fixture state: the proof carries commitment-bound preprocessed openings.
     let n = 256;
