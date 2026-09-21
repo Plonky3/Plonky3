@@ -15,7 +15,7 @@ pub use keys::{
     CompiledKey, CompiledKeyLayout, CompiledSegment, ConstraintReference, KeyCompileError,
     LayoutComponent,
 };
-pub use proof::{ProvedStatement, WordProof, WordProofError, WordProofKey};
+pub use proof::{WordProof, WordProofError, WordProofKey};
 pub use shift::{
     ShiftClaim, ShiftOpeningClaim, ShiftReductionError, ShiftReductionKey, ShiftReductionProof,
 };

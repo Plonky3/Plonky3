@@ -22,6 +22,7 @@ serde.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
+p3-commit.workspace = true
 p3-keccak.workspace = true
 p3-merkle-tree.workspace = true
 p3-symmetric.workspace = true

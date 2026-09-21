@@ -9,14 +9,8 @@ use crate::ShiftReductionError;
 /// A malformed statement or a failed word-level proof.
 #[derive(Clone, Debug, Error, PartialEq, Eq)]
 pub enum WordProofError<E> {
-    /// The statement declares a relation family this protocol does not prove.
-    #[error("{count} unsigned integer product relations are not proved by this protocol")]
-    UnprovedRelation {
-        /// Number of declared relations in the unsupported family.
-        count: usize,
-    },
-    /// The commitment spans a different hypercube from the padded bit trace.
-    #[error("the committed trace spans {actual} variables, expected {expected}")]
+    /// The commitment is too narrow to hold the padded bit trace.
+    #[error("the commitment spans {actual} variables, short of the {expected} the trace needs")]
     TraceShape {
         /// Variables the padded word trace needs.
         expected: usize,
@@ -39,6 +33,9 @@ pub enum WordProofError<E> {
     /// The delegated vanishing check is malformed or inconsistent.
     #[error("relation vanishing check failed: {0}")]
     Zerocheck(GenericDegreeError),
+    /// The proof claims a nonzero sum for a check whose whole point is that it vanishes.
+    #[error("the batched relation sum is claimed nonzero, so some relation fails on the cube")]
+    RelationSum,
     /// The vanishing check does not close against the supplied operand evaluations.
     #[error("the relation vanishing check does not close against the claimed operands")]
     RelationClaim,

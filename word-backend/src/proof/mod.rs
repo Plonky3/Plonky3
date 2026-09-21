@@ -12,4 +12,4 @@ mod verifier;
 
 pub use error::WordProofError;
 pub use key::WordProofKey;
-pub use record::{ProvedStatement, WordProof};
+pub use record::WordProof;

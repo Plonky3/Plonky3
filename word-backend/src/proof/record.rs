@@ -1,21 +1,10 @@
 //! The transcript record one complete word-level proof carries.
 
-use p3_binary_pcs::BooleanMultilinearPcs;
 use p3_sumcheck::generic_degree::GenericDegreeProof;
 use serde::{Deserialize, Serialize};
 
+use super::relation::OPERAND_EVALUATIONS;
 use crate::ShiftReductionProof;
-
-/// Operand evaluations the vanishing check leaves for the shift reduction.
-///
-/// The order is the vanishing operand, then the left, right, and output operands.
-pub(super) const OPERAND_EVALUATIONS: usize = 4;
-
-/// One successful proof: the trace commitment beside its transcript record.
-pub type ProvedStatement<F, EF, Pcs, Challenger> = (
-    <Pcs as BooleanMultilinearPcs<EF, Challenger>>::Commitment,
-    WordProof<F, EF, <Pcs as BooleanMultilinearPcs<EF, Challenger>>::Proof>,
-);
 
 /// Transcript record of one complete word-level proof.
 #[derive(Clone, Debug, Serialize, Deserialize)]

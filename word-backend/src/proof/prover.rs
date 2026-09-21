@@ -1,23 +1,22 @@
 //! Proving side of the ordered sub-reductions.
 //!
-//! # Sub-reduction order
+//! # Step order
 //!
 //! ```text
-//!     commitment -> unsigned product -> binary product -> bitwise -> linear
-//!                -> shift -> public -> commitment opening
+//!     commitment -> statement -> vanishing point -> batching coefficient
+//!                -> batched zerocheck -> operand claims
+//!                -> shift batching, public share subtracted
+//!                -> bit sumcheck -> word sumcheck -> trace evaluation
+//!                -> commitment opening
 //! ```
 //!
 //! The order is load-bearing and the verifier must not diverge from it.
 //!
-//! The two product slots read nothing from the transcript here.
-//!
-//! A statement declaring unsigned products is refused rather than proved.
-//!
-//! The relation language carries no binary-field product family.
+//! One zerocheck covers both proved families under one coefficient.
 //!
 //! # Why the order is sound
 //!
-//! Every slot binds its claims before the challenge that consumes them.
+//! Every step binds its claims before the challenge that consumes them.
 //!
 //! - The commitment is bound before the vanishing point, so the trace cannot follow it.
 //! - Public words and every dimension are bound before both relation challenges.
@@ -35,12 +34,11 @@ use p3_binary_pcs::BooleanMultilinearPcs;
 use p3_challenger::fs::TranscriptField;
 use p3_challenger::{FieldChallenger, GrindingChallenger};
 use p3_field::{Algebra, ExtensionField, Field};
-use p3_multilinear_util::point::Point;
 use p3_sumcheck::generic_degree::RoundProver;
 
 use super::error::WordProofError;
 use super::key::WordProofKey;
-use super::record::{ProvedStatement, WordProof};
+use super::record::WordProof;
 use super::relation::{RelationZerocheck, ZEROCHECK_DEGREE};
 use super::transcript::ProofProverTranscript;
 use crate::shift::transcript::equality_weights;
@@ -55,16 +53,19 @@ impl<W: PackedWord> WordProofKey<W> {
     ///
     /// Returns an error when any of the following holds.
     ///
-    /// - The statement declares a relation family this protocol does not prove.
-    /// - The witness or the commitment has the wrong shape.
+    /// - The witness has the wrong shape, or the commitment is too narrow for it.
     /// - The sampled batching coefficient vanishes.
     /// - The commitment refuses the trace or its opening.
+    #[allow(
+        clippy::type_complexity,
+        reason = "an alias would need bounds it cannot carry"
+    )]
     pub fn prove<F, EF, Pcs, Challenger>(
         &self,
         pcs: &Pcs,
         values: &PackedWitness<W>,
         challenger: &mut Challenger,
-    ) -> Result<ProvedStatement<F, EF, Pcs, Challenger>, WordProofError<Pcs::Error>>
+    ) -> Result<(Pcs::Commitment, WordProof<F, EF, Pcs::Proof>), WordProofError<Pcs::Error>>
     where
         F: TranscriptField,
         EF: ExtensionField<F> + Algebra<Gf2>,
@@ -72,19 +73,19 @@ impl<W: PackedWord> WordProofKey<W> {
         Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
     {
         // Reject every shape before the transcript absorbs a single statement value.
-        self.validate_statement()?;
-        self.validate_arity(pcs.num_variables())?;
-        values
-            .check_shape(self.system())
-            .map_err(|error| WordProofError::SegmentLength {
+        let commitment_variables = pcs.num_variables();
+        self.validate_arity(commitment_variables)?;
+        let columns = OperationColumns::new(self.system(), values).map_err(|error| {
+            WordProofError::SegmentLength {
                 segment: error.segment,
                 expected: error.expected,
                 actual: error.actual,
-            })?;
+            }
+        })?;
 
         // Binding the commitment first stops the trace being chosen after the challenges.
         let (commitment, prover_data) = pcs
-            .commit_bits(&self.trace_bits(values), challenger)
+            .commit_bits(&self.trace_bits(values, commitment_variables), challenger)
             .map_err(WordProofError::Commitment)?;
 
         // Both relation challenges follow the complete statement.
@@ -97,22 +98,14 @@ impl<W: PackedWord> WordProofKey<W> {
         let variables = self.zerocheck_variables();
         let mut transcript = ProofProverTranscript::<_, F, EF>::new(
             challenger,
-            self.transcript_shape(),
+            self.transcript_shape(commitment_variables),
             &public_words,
         );
-        let (vanishing_point, batching) = transcript.challenges(variables);
-        if batching.is_zero() {
-            return Err(WordProofError::DegenerateBatching);
-        }
+        let (vanishing_point, batching) = transcript
+            .challenges(variables)
+            .ok_or(WordProofError::DegenerateBatching)?;
 
         // The batched relation polynomial vanishes on the whole padded cube.
-        let columns = OperationColumns::new(self.system(), values).map_err(|error| {
-            WordProofError::SegmentLength {
-                segment: error.segment,
-                expected: error.expected,
-                actual: error.actual,
-            }
-        })?;
         let rows = 1 << self.shift.constraint_variables();
         let mut prover = RelationZerocheck::new(
             equality_weights(&vanishing_point),
@@ -140,7 +133,7 @@ impl<W: PackedWord> WordProofKey<W> {
         let (opened, opening_proof) = pcs
             .open_at_points(
                 prover_data,
-                &[Point::new(opening.point().to_vec())],
+                &[self.commitment_point(opening.point(), commitment_variables)],
                 challenger,
             )
             .map_err(WordProofError::Commitment)?;
@@ -161,7 +154,7 @@ impl<W: PackedWord> WordProofKey<W> {
 }
 
 /// Expands one packed column into its bit multilinear over the padded cube.
-fn bit_table<W: PackedWord, EF: Field>(column: &[Packed<W>], rows: usize) -> Vec<EF> {
+pub(super) fn bit_table<W: PackedWord, EF: Field>(column: &[Packed<W>], rows: usize) -> Vec<EF> {
     // Row index leads the flat address and within-word bit index trails it.
     let width = W::BITS as usize;
     let mut table = EF::zero_vec(rows * width);

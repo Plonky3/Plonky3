@@ -28,6 +28,11 @@ pub(super) const ZEROCHECK_DEGREE: usize = 3;
 /// Relation families combined under one batching coefficient.
 pub(super) const BATCHED_FAMILIES: usize = 2;
 
+/// Operand evaluations the vanishing check leaves for the shift reduction.
+///
+/// The order is the vanishing operand, then the left, right, and output operands.
+pub(super) const OPERAND_EVALUATIONS: usize = 4;
+
 /// Prover state for the batched relation vanishing check.
 pub(super) struct RelationZerocheck<F> {
     /// Equality weights of the sampled vanishing point.
@@ -54,10 +59,8 @@ impl<F: Field> RelationZerocheck<F> {
         }
     }
 
-    /// Returns the four operand evaluations left once every variable is bound.
-    ///
-    /// The order is the vanishing operand, then the left, right, and output operands.
-    pub(super) fn terminal_operands(&self) -> [F; 4] {
+    /// Returns the operand evaluations left once every variable is bound.
+    pub(super) fn terminal_operands(&self) -> [F; OPERAND_EVALUATIONS] {
         let constant = |poly: &Poly<F>| {
             poly.as_constant()
                 .expect("every zerocheck variable was bound")
@@ -112,7 +115,11 @@ impl<F: Field> RoundProver<F> for RelationZerocheck<F> {
 }
 
 /// Closes the vanishing check against the operand evaluations the prover supplied.
-pub(super) fn closing_value<F: Field>(equality: F, operands: &[F; 4], batching: F) -> F {
+pub(super) fn closing_value<F: Field>(
+    equality: F,
+    operands: &[F; OPERAND_EVALUATIONS],
+    batching: F,
+) -> F {
     // The bitwise family contributes the product of its inputs against its output.
     let [linear, left, right, output] = *operands;
     equality * (linear + batching * (left * right - output))

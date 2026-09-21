@@ -23,8 +23,7 @@ impl<W: Word> WordProofKey<W> {
     ///
     /// Returns an error when any of the following holds.
     ///
-    /// - The statement declares a relation family this protocol does not prove.
-    /// - The statement or the commitment has the wrong shape.
+    /// - The statement has the wrong shape, or the commitment is too narrow for it.
     /// - The sampled batching coefficient vanishes.
     /// - A reduction or the final opening does not close.
     pub fn verify<F, EF, Pcs, Challenger>(
@@ -42,8 +41,8 @@ impl<W: Word> WordProofKey<W> {
         Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
     {
         // Statement dimensions are checked before any transcript replay.
-        self.validate_statement()?;
-        self.validate_arity(pcs.num_variables())?;
+        let commitment_variables = pcs.num_variables();
+        self.validate_arity(commitment_variables)?;
         if public.len() != self.system().public_len() {
             return Err(WordProofError::SegmentLength {
                 segment: Segment::Public,
@@ -55,17 +54,19 @@ impl<W: Word> WordProofKey<W> {
         // The verifier reaches the prover's sponge state from the same commitment.
         pcs.observe_commitment(commitment, challenger);
         let variables = self.zerocheck_variables();
-        let mut transcript =
-            ProofVerifierTranscript::<_, F, EF>::new(challenger, self.transcript_shape(), public);
-        let (vanishing_point, batching) = transcript.challenges(variables);
-        if batching.is_zero() {
-            return Err(WordProofError::DegenerateBatching);
-        }
+        let mut transcript = ProofVerifierTranscript::<_, F, EF>::new(
+            challenger,
+            self.transcript_shape(commitment_variables),
+            public,
+        );
+        let (vanishing_point, batching) = transcript
+            .challenges(variables)
+            .ok_or(WordProofError::DegenerateBatching)?;
 
         // A relation set that fails anywhere on the cube cannot sum to zero here.
         if !proof.zerocheck.claimed_sum.is_zero() {
             transcript.abort();
-            return Err(WordProofError::RelationClaim);
+            return Err(WordProofError::RelationSum);
         }
         let replay = transcript.zerocheck(|challenger| {
             proof
@@ -98,7 +99,7 @@ impl<W: Word> WordProofKey<W> {
         // One authenticated opening closes the whole protocol.
         pcs.verify_at_points(
             commitment,
-            &[Point::new(opening.point().to_vec())],
+            &[self.commitment_point(opening.point(), commitment_variables)],
             &[opening.value()],
             &proof.opening,
             challenger,
@@ -114,24 +115,26 @@ mod tests {
 
     use p3_binary_field::{BinaryChallenger, BinaryField128};
     use p3_binary_pcs::{
-        BinaryPcsConfig, BinaryPcsParams, BooleanMultilinearPcs, BooleanPcs, BooleanPcsError,
+        BinaryPcsConfig, BinaryPcsParams, BooleanPcs, BooleanPcsError, BooleanProof,
     };
     use p3_challenger::HashChallenger;
+    use p3_commit::Mmcs;
     use p3_field::PrimeCharacteristicRing;
     use p3_keccak::Keccak256Hash;
     use p3_merkle_tree::MerkleTreeMmcs;
+    use p3_sumcheck::generic_degree::RoundProver;
     use p3_symmetric::{CompressionFunctionFromHasher, SerializingHasher};
     use p3_word::{
-        AndConstraint, ConstraintKind, ConstraintSystem, IntegerMulConstraint, Operand, Shift,
-        ShiftKind, ShiftedValue, ValueIndex, VerificationError, Word32, Word64, ZeroConstraint,
+        AndConstraint, ConstraintKind, ConstraintSystem, Operand, Shift, ShiftKind, ShiftedValue,
+        ValueIndex, VerificationError, Word32, Word64, ZeroConstraint,
     };
 
     use super::*;
-    use crate::proof::record::OPERAND_EVALUATIONS;
-    use crate::proof::relation::ZEROCHECK_DEGREE;
-    use crate::proof::transcript::ProofVerifierTranscript;
+    use crate::proof::prover::bit_table;
+    use crate::proof::relation::{OPERAND_EVALUATIONS, RelationZerocheck, ZEROCHECK_DEGREE};
+    use crate::proof::transcript::{ProofProverTranscript, ProofVerifierTranscript};
     use crate::shift::transcript::equality_weights;
-    use crate::{PackedWitness, PackedWord, ShiftReductionError, WordProofKey};
+    use crate::{OperationColumns, PackedWitness, PackedWord, ShiftReductionError, WordProofKey};
 
     type EF = BinaryField128;
     type MyHash = SerializingHasher<Keccak256Hash>;
@@ -139,9 +142,9 @@ mod tests {
     type MyMmcs = MerkleTreeMmcs<EF, u8, MyHash, MyCompress, 2, 32>;
     type Scheme = BooleanPcs<EF, MyMmcs, MyMmcs>;
     type Challenger = BinaryChallenger<EF, HashChallenger<u8, Keccak256Hash, 32>>;
-    type SchemeProof = <Scheme as BooleanMultilinearPcs<EF, Challenger>>::Proof;
-    type SchemeError = <Scheme as BooleanMultilinearPcs<EF, Challenger>>::Error;
-    type Commitment = <Scheme as BooleanMultilinearPcs<EF, Challenger>>::Commitment;
+    type SchemeProof = BooleanProof<EF, MyMmcs, MyMmcs>;
+    type SchemeError = BooleanPcsError<EF, <MyMmcs as Mmcs<EF>>::Error>;
+    type Commitment = <MyMmcs as Mmcs<EF>>::Commitment;
     type Record = WordProof<EF, EF, SchemeProof>;
 
     /// Base-two logarithm of the bits one committed element holds.
@@ -342,16 +345,17 @@ mod tests {
 
         // Replay the transcript far enough to recover the point the prover ended on.
         let mut replay = challenger();
+        let arity = key.trace_variables();
         let _ = scheme
-            .commit_bits(&key.trace_bits(&values), &mut replay)
+            .commit_bits(&key.trace_bits(&values, arity), &mut replay)
             .unwrap();
         let variables = key.zerocheck_variables();
         let mut transcript = ProofVerifierTranscript::<_, EF, EF>::new(
             &mut replay,
-            key.transcript_shape(),
+            key.transcript_shape(arity),
             &public_words,
         );
-        let _ = transcript.challenges(variables);
+        let _ = transcript.challenges(variables).unwrap();
         let (point, _) = transcript
             .zerocheck(|challenger| {
                 proof
@@ -532,8 +536,114 @@ mod tests {
         tampered.zerocheck.claimed_sum += EF::ONE;
         assert!(matches!(
             check(&key, &scheme, &commitment, &public_words, &tampered),
-            Err(WordProofError::RelationClaim)
+            Err(WordProofError::RelationSum)
         ));
+    }
+
+    #[test]
+    fn a_consistent_proof_of_a_false_statement_only_fails_the_zero_sum_check() {
+        // Mutation: break the statement, then prove its true nonzero sum honestly.
+        let (system, public_words, mut words) = word64_statement(0x0C0F_FEE0_0C0F_FEE0);
+        words[0] = Word64::new(words[0].get() ^ 1);
+        assert_eq!(
+            system.verify(&public_words, &words),
+            Err(VerificationError::Unsatisfied {
+                kind: ConstraintKind::Zero,
+                constraint: 0,
+            })
+        );
+
+        let key = WordProofKey::new(system.clone()).unwrap();
+        let arity = key.trace_variables();
+        let scheme = commitment_scheme(arity);
+        let values = PackedWitness::new(&system, &public_words, &words).unwrap();
+
+        let mut sponge = challenger();
+        let (commitment, prover_data) = scheme
+            .commit_bits(&key.trace_bits(&values, arity), &mut sponge)
+            .unwrap();
+        let variables = key.zerocheck_variables();
+        let mut transcript = ProofProverTranscript::<_, EF, EF>::new(
+            &mut sponge,
+            key.transcript_shape(arity),
+            &public_words,
+        );
+        let (vanishing_point, batching) = transcript.challenges(variables).unwrap();
+
+        // Sum the batched relation over the cube directly, from the relation definition.
+        let columns = OperationColumns::new(key.system(), &values).unwrap();
+        let rows = 1 << key.shift.constraint_variables();
+        let equality = equality_weights(&vanishing_point);
+        let linear = bit_table::<Word64, EF>(columns.zero(), rows);
+        let bitwise = columns
+            .bitwise_and()
+            .each_ref()
+            .map(|column| bit_table::<Word64, EF>(column, rows));
+        let claimed = (0..equality.len())
+            .map(|cell| {
+                let product = bitwise[0][cell] * bitwise[1][cell] - bitwise[2][cell];
+                equality[cell] * (linear[cell] + batching * product)
+            })
+            .sum::<EF>();
+        assert_ne!(claimed, EF::ZERO, "a false statement has a nonzero sum");
+
+        // Everything after the claimed sum is an honest run over that sum.
+        let mut prover = RelationZerocheck::new(equality, linear, bitwise, batching);
+        let (zerocheck, point) = transcript.zerocheck(|challenger| {
+            prover.prove::<EF, _>(challenger, variables, ZEROCHECK_DEGREE, 0, claimed)
+        });
+        let operands = prover.terminal_operands();
+        transcript.finish();
+        let (shift, opening) = key
+            .shift
+            .prove::<EF, EF, _>(&values, &key.operand_claim(&point, &operands), &mut sponge)
+            .unwrap();
+        let (_, opening_proof) = scheme
+            .open_at_points(
+                prover_data,
+                &[key.commitment_point(opening.point(), arity)],
+                &mut sponge,
+            )
+            .unwrap();
+        let forged = WordProof {
+            zerocheck,
+            operands,
+            shift,
+            opening: opening_proof,
+        };
+
+        // Replay far enough to show the closing check accepts this proof unaided.
+        let mut replay = challenger();
+        scheme.observe_commitment(&commitment, &mut replay);
+        let mut verifier = ProofVerifierTranscript::<_, EF, EF>::new(
+            &mut replay,
+            key.transcript_shape(arity),
+            &public_words,
+        );
+        let (replayed_point, replayed_batching) = verifier.challenges(variables).unwrap();
+        let (end, final_claim) = verifier
+            .zerocheck(|challenger| {
+                forged
+                    .zerocheck
+                    .verify(challenger, variables, ZEROCHECK_DEGREE, 0)
+            })
+            .unwrap();
+        verifier.finish();
+        assert_eq!(
+            final_claim,
+            closing_value(
+                Point::eval_eq(&replayed_point, end.as_slice()),
+                &forged.operands,
+                replayed_batching,
+            )
+        );
+
+        // Only the zero-sum refusal stands between this proof and acceptance.
+        let rejection = check(&key, &scheme, &commitment, &public_words, &forged);
+        assert!(
+            matches!(&rejection, Err(WordProofError::RelationSum)),
+            "the zero-sum check must reject, got {rejection:?}"
+        );
     }
 
     #[test]
@@ -629,76 +739,69 @@ mod tests {
     }
 
     #[test]
-    fn an_unproved_relation_family_is_refused() {
-        // An unsigned product has no reduction here, so the statement must be refused.
-        let operand = |position| Operand::single(ShiftedValue::plain(committed(position)));
-        let product = IntegerMulConstraint::new(operand(0), operand(1), operand(2), operand(3));
-        let system = ConstraintSystem::<Word64>::new(0, 8, vec![], vec![], vec![product]).unwrap();
-        let key = WordProofKey::new(system.clone()).unwrap();
-        let scheme = commitment_scheme(key.trace_variables());
-        let words = [Word64::new(0); 8];
-        let values = PackedWitness::new(&system, &[], &words).unwrap();
-
-        let refusal = key
-            .prove::<EF, EF, _, _>(&scheme, &values, &mut challenger())
-            .err();
-        assert!(
-            matches!(
-                &refusal,
-                Some(WordProofError::UnprovedRelation { count: 1 })
-            ),
-            "one declared product must be refused, got {refusal:?}"
-        );
-
-        // A proof of another statement is refused before the transcript is replayed.
-        let (sound, public_words, sound_words) = word64_statement(0x0123_4567_89AB_CDEF);
-        let sound_key = WordProofKey::new(sound.clone()).unwrap();
-        let sound_scheme = commitment_scheme(sound_key.trace_variables());
-        let sound_values = PackedWitness::new(&sound, &public_words, &sound_words).unwrap();
-        let (commitment, proof) = run(&sound_key, &sound_scheme, &sound_values);
-        let refusal = check(&key, &scheme, &commitment, &[], &proof);
-        assert!(
-            matches!(&refusal, Err(WordProofError::UnprovedRelation { count: 1 })),
-            "one declared product must be refused, got {refusal:?}"
-        );
-    }
-
-    #[test]
-    fn a_commitment_over_another_hypercube_is_refused() {
-        // The padded trace and the commitment must span exactly the same variables.
+    fn a_commitment_too_narrow_for_the_trace_is_refused() {
+        // Eight committed 64-bit words need three word coordinates beside six bit ones.
         let (system, public_words, words) = word64_statement(0x3141_5926_5358_9793);
         let key = WordProofKey::new(system.clone()).unwrap();
-        let wider = commitment_scheme(key.trace_variables() + 1);
+        let narrow = commitment_scheme(key.trace_variables() - 1);
         let values = PackedWitness::new(&system, &public_words, &words).unwrap();
 
-        // Eight committed 64-bit words need three word coordinates beside six bit ones.
         let refusal = key
-            .prove::<EF, EF, _, _>(&wider, &values, &mut challenger())
+            .prove::<EF, EF, _, _>(&narrow, &values, &mut challenger())
             .err();
         assert!(
             matches!(
                 &refusal,
                 Some(WordProofError::TraceShape {
                     expected: 9,
-                    actual: 10,
+                    actual: 8,
                 })
             ),
-            "a ten-variable commitment must be refused, got {refusal:?}"
+            "an eight-variable commitment must be refused, got {refusal:?}"
         );
 
         // The verifier reads the same dimension, so it refuses the same mismatch.
-        let narrow = commitment_scheme(9);
-        let (commitment, proof) = run(&key, &narrow, &values);
-        let refusal = check(&key, &wider, &commitment, &public_words, &proof);
+        let exact = commitment_scheme(9);
+        let (commitment, proof) = run(&key, &exact, &values);
+        let refusal = check(&key, &narrow, &commitment, &public_words, &proof);
         assert!(
             matches!(
                 &refusal,
                 Err(WordProofError::TraceShape {
                     expected: 9,
-                    actual: 10,
+                    actual: 8,
                 })
             ),
-            "a ten-variable commitment must be refused, got {refusal:?}"
+            "an eight-variable commitment must be refused, got {refusal:?}"
+        );
+    }
+
+    #[test]
+    fn a_statement_narrower_than_one_committed_element_still_proves() {
+        // A single committed 64-bit word spans six variables, one short of the minimum.
+        //
+        // The word axis is therefore padded up to the commitment's own arity.
+        let value = ValueIndex::witness(0).expect("test position fits");
+        let linear = ZeroConstraint::new(Operand::single(ShiftedValue::plain(value)));
+        let system = ConstraintSystem::<Word64>::new(0, 1, vec![linear], vec![], vec![]).unwrap();
+        let words = [Word64::new(0)];
+        assert_eq!(system.verify(&[], &words), Ok(()));
+
+        let key = WordProofKey::new(system.clone()).unwrap();
+        assert_eq!(key.trace_variables(), 6);
+        let scheme = commitment_scheme(ABSORBED + 1);
+        let values = PackedWitness::new(&system, &[], &words).unwrap();
+        let (commitment, proof) = run(&key, &scheme, &values);
+
+        check(&key, &scheme, &commitment, &[], &proof).unwrap();
+
+        // The padding must not absorb a violation: a nonzero word has to be rejected.
+        let broken = PackedWitness::new(&system, &[], &[Word64::new(1)]).unwrap();
+        let (broken_commitment, broken_proof) = run(&key, &scheme, &broken);
+        let rejection = check(&key, &scheme, &broken_commitment, &[], &broken_proof);
+        assert!(
+            matches!(&rejection, Err(WordProofError::RelationClaim)),
+            "a violated relation must be rejected, got {rejection:?}"
         );
     }
 }

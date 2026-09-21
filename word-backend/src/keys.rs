@@ -215,7 +215,7 @@ pub enum LayoutComponent {
     WordOffsets,
 }
 
-/// A constraint system too large for the compact key representation.
+/// A constraint system no key can represent or prove.
 #[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
 pub enum KeyCompileError {
     /// A segment component cannot be addressed by its compact index.
@@ -227,6 +227,12 @@ pub enum KeyCompileError {
         component: LayoutComponent,
         /// The rejected length.
         len: usize,
+    },
+    /// The system declares a relation family the compiled protocol does not prove.
+    #[error("{count} unsigned integer product relations are not proved by this protocol")]
+    UnprovedRelation {
+        /// Number of declared relations in the unsupported family.
+        count: usize,
     },
 }
 

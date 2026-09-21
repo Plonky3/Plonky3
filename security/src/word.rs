@@ -2,8 +2,6 @@
 
 use alloc::vec::Vec;
 
-use crate::binary::BinaryPcsRegime;
-use crate::multilinear::bit_ring_switch_term;
 use crate::{ErrorBits, SecurityTerm};
 
 /// Label for the complete word shift reduction error.
@@ -95,7 +93,7 @@ pub const WORD_ZEROCHECK_POINT_LABEL: &str = "word-relation-zerocheck-point";
 pub const WORD_ZEROCHECK_ROUNDS_LABEL: &str = "word-relation-zerocheck-rounds";
 
 /// Checked dimensions of one complete word-level relation proof.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct WordProofSecurityModel {
     /// Lower bound on the base-two logarithm of the challenge-field order.
     field_bits: usize,
@@ -107,12 +105,8 @@ pub struct WordProofSecurityModel {
     zerocheck_degree: usize,
     /// Dimensions of the shift reduction that follows.
     shift: WordShiftSecurityModel,
-    /// Base-two logarithm of the bits one committed element holds.
-    absorbed_log: usize,
-    /// Variables the committed bit trace spans.
-    trace_variables: usize,
-    /// Dimensions of the commitment the final claim is discharged through.
-    pcs: BinaryPcsRegime,
+    /// Labelled errors the commitment charges for discharging the one surviving claim.
+    commitment: Vec<SecurityTerm>,
 }
 
 impl WordProofSecurityModel {
@@ -121,19 +115,19 @@ impl WordProofSecurityModel {
     /// The width argument is a lower bound on the base-two logarithm of the challenge-field order.
     ///
     /// Every batching, vanishing, and reduction challenge must be drawn from that same field.
+    ///
+    /// The last argument holds the terms the commitment charges, priced by the commitment itself.
     #[must_use]
-    pub const fn new(
+    pub fn new(
         field_bits: usize,
         relation_families: usize,
         zerocheck_variables: usize,
         zerocheck_degree: usize,
         shift: WordShiftSecurityModel,
-        absorbed_log: usize,
-        trace_variables: usize,
-        pcs: BinaryPcsRegime,
+        commitment: Vec<SecurityTerm>,
     ) -> Option<Self> {
         // A degree-zero composition carries no round polynomial to separate against.
-        if field_bits == 0 || zerocheck_degree == 0 || trace_variables < absorbed_log {
+        if field_bits == 0 || zerocheck_degree == 0 {
             return None;
         }
 
@@ -143,15 +137,13 @@ impl WordProofSecurityModel {
             zerocheck_variables,
             zerocheck_degree,
             shift,
-            absorbed_log,
-            trace_variables,
-            pcs,
+            commitment,
         })
     }
 
     /// Returns each algebraic error source for diagnostic reporting.
     #[must_use]
-    pub fn components(self) -> Vec<SecurityTerm> {
+    pub fn components(&self) -> Vec<SecurityTerm> {
         let mut terms = Vec::new();
 
         // One coefficient separates the families, so its degree is one below their count.
@@ -181,23 +173,15 @@ impl WordProofSecurityModel {
         // The shift reduction publishes its own separately labelled experiments.
         terms.extend(self.shift.components());
 
-        // Recovering the packed commitment from the bit claim is one more reduction.
-        terms.push(bit_ring_switch_term(
-            1,
-            self.absorbed_log,
-            self.trace_variables - self.absorbed_log,
-            self.field_bits,
-        ));
-
-        // The reduction leaves exactly one claim for the commitment to discharge.
-        terms.push(self.pcs.opening_term(1));
+        // The commitment prices the ring switch and its own opening from its own schedule.
+        terms.extend(self.commitment.iter().copied());
 
         terms
     }
 
     /// Returns the union bound over every experiment the proof runs.
     #[must_use]
-    pub fn combined_term(self) -> SecurityTerm {
+    pub fn combined_term(&self) -> SecurityTerm {
         // Compose the independently labelled failure events by probability addition.
         let errors = self
             .components()
@@ -220,7 +204,11 @@ fn error_from_numerator(field_bits: usize, numerator: u128) -> ErrorBits {
 
 #[cfg(test)]
 mod tests {
+    use alloc::vec;
+
     use super::*;
+    use crate::binary::BinaryPcsRegime;
+    use crate::multilinear::bit_ring_switch_term;
 
     #[test]
     fn word64_profile_charges_both_random_experiments() {
@@ -252,10 +240,11 @@ mod tests {
         // - two relation families, so one separating coefficient;
         // - nine vanishing variables bound at per-variable degree three;
         // - four shift batching variables and twenty-six quadratic rounds;
-        // - thirteen trace variables, seven of them absorbed by one element.
+        // - a commitment charging a ring switch beside its own single opening.
         let shift = WordShiftSecurityModel::new(128, 4, 26).unwrap();
         let pcs = BinaryPcsRegime::new(128, 6, 2, 1, 40, 0).unwrap();
-        let model = WordProofSecurityModel::new(128, 2, 9, 3, shift, 7, 13, pcs).unwrap();
+        let commitment = vec![bit_ring_switch_term(1, 7, 6, 128), pcs.opening_term(1)];
+        let model = WordProofSecurityModel::new(128, 2, 9, 3, shift, commitment.clone()).unwrap();
         let components = model.components();
 
         // One coefficient separates two families, so its numerator is one.
@@ -278,13 +267,8 @@ mod tests {
         assert_eq!(components[4].label, WORD_SHIFT_SUMCHECK_LABEL);
         assert_eq!(components[4].bits.bits(), 128.0 - libm::log2(52.0));
 
-        // Seven absorbed coordinates and six surviving ones give the numerator nineteen.
-        assert_eq!(components[5].label, crate::BIT_RING_SWITCH_LABEL);
-        assert_eq!(components[5].bits.bits(), 128.0 - libm::log2(19.0));
-
-        // The commitment prices its own single opening claim.
-        assert_eq!(components[6].label, crate::binary::BINARY_PCS_OPENING_LABEL);
-        assert_eq!(components[6].bits, pcs.opening_term(1).bits);
+        // The commitment's own terms close the list, in the order it supplied them.
+        assert_eq!(components[5..], commitment);
         assert_eq!(components.len(), 7);
 
         // The composable term is the union of every event.
@@ -298,16 +282,12 @@ mod tests {
     #[test]
     fn a_proof_model_rejects_a_shape_it_cannot_charge_honestly() {
         let shift = WordShiftSecurityModel::new(128, 4, 26).unwrap();
-        let pcs = BinaryPcsRegime::new(128, 6, 2, 1, 40, 0).unwrap();
 
         // A challenge field must expose at least one bit of entropy.
-        assert!(WordProofSecurityModel::new(0, 2, 9, 3, shift, 7, 13, pcs).is_none());
+        assert!(WordProofSecurityModel::new(0, 2, 9, 3, shift, Vec::new()).is_none());
 
         // A degree-zero composition carries no round polynomial to separate against.
-        assert!(WordProofSecurityModel::new(128, 2, 9, 0, shift, 7, 13, pcs).is_none());
-
-        // A trace narrower than one committed element leaves the ring switch nothing to do.
-        assert!(WordProofSecurityModel::new(128, 2, 9, 3, shift, 7, 6, pcs).is_none());
+        assert!(WordProofSecurityModel::new(128, 2, 9, 0, shift, Vec::new()).is_none());
     }
 
     #[test]

@@ -1,4 +1,4 @@
-//! Packed nonlinear-relation columns derived from a checked witness.
+//! Packed relation columns derived from a checked witness.
 
 use alloc::vec::Vec;
 use core::array;

@@ -9,7 +9,7 @@ use p3_challenger::fs::{
     Kind, Length, ProverState, TranscriptField, VerifierState,
 };
 use p3_challenger::{CanObserve, CanSample};
-use p3_field::ExtensionField;
+use p3_field::{ExtensionField, Field};
 use p3_word::Word;
 
 /// Coefficients separating the two relation families.
@@ -43,8 +43,8 @@ pub(super) struct TranscriptShape {
     constraint_variables: usize,
     /// Number of within-word variables.
     bit_variables: usize,
-    /// Number of variables the committed bit trace spans.
-    trace_variables: usize,
+    /// Number of variables the commitment spans, which the padded trace sits inside.
+    commitment_variables: usize,
     /// Number of verifier-known words.
     public_words: usize,
     /// Number of committed words.
@@ -58,16 +58,16 @@ impl TranscriptShape {
     pub(super) const fn new(
         constraint_variables: usize,
         bit_variables: usize,
-        trace_variables: usize,
+        commitment_variables: usize,
         public_words: usize,
         witness_words: usize,
         relation_counts: [usize; 3],
     ) -> Self {
-        // Every value originates in a checked constraint-system shape.
+        // Every value originates in a checked shape or in the commitment itself.
         Self {
             constraint_variables,
             bit_variables,
-            trace_variables,
+            commitment_variables,
             public_words,
             witness_words,
             relation_counts,
@@ -118,7 +118,7 @@ impl TranscriptShape {
         let dimensions = [
             self.constraint_variables,
             self.bit_variables,
-            self.trace_variables,
+            self.commitment_variables,
             self.public_words,
             self.witness_words,
         ];
@@ -163,14 +163,24 @@ where
     }
 
     /// Samples the vanishing point before the batching coefficient.
-    pub(super) fn challenges(&mut self, variables: usize) -> (Vec<EF>, EF) {
-        challenges(variables, |label, count| {
+    ///
+    /// Returns nothing when the sampled coefficient vanishes, releasing the transcript first.
+    pub(super) fn challenges(&mut self, variables: usize) -> Option<(Vec<EF>, EF)>
+    where
+        EF: Field,
+    {
+        let drawn = challenges(variables, |label, count| {
             self.state
                 .challenge_extensions::<F, EF, FieldToFieldCodec<F>>(label, count)
                 .into_iter()
                 .map(|value| value.into_inner())
                 .collect()
-        })
+        });
+        if drawn.1.is_zero() {
+            self.abort();
+            return None;
+        }
+        Some(drawn)
     }
 
     /// Lends the challenger to the relation vanishing check.
@@ -186,6 +196,12 @@ where
     pub(super) fn finish(self) {
         // Every value is public or carried by a delegated proof.
         assert!(self.state.finalize().is_empty());
+    }
+
+    /// Releases the completeness check when the proof is abandoned part-way.
+    fn abort(&mut self) {
+        // Dropping a transcript that still owes pattern steps would panic instead.
+        self.state.abort();
     }
 }
 
@@ -219,14 +235,24 @@ where
     }
 
     /// Replays the vanishing draw before the batching draw.
-    pub(super) fn challenges(&mut self, variables: usize) -> (Vec<EF>, EF) {
-        challenges(variables, |label, count| {
+    ///
+    /// Returns nothing when the sampled coefficient vanishes, releasing the transcript first.
+    pub(super) fn challenges(&mut self, variables: usize) -> Option<(Vec<EF>, EF)>
+    where
+        EF: Field,
+    {
+        let drawn = challenges(variables, |label, count| {
             self.state
                 .challenge_extensions::<F, EF, FieldToFieldCodec<F>>(label, count)
                 .into_iter()
                 .map(|value| value.into_inner())
                 .collect()
-        })
+        });
+        if drawn.1.is_zero() {
+            self.abort();
+            return None;
+        }
+        Some(drawn)
     }
 
     /// Lends the challenger to the vanishing check replay.
@@ -268,6 +294,7 @@ fn challenges<EF: Copy>(
 mod tests {
     use p3_binary_field::{BinaryChallenger, BinaryField128, TowerLevel};
     use p3_challenger::{CanObserve, CanSample, HashChallenger};
+    use p3_field::PrimeCharacteristicRing;
     use p3_keccak::Keccak256Hash;
     use p3_word::Word64;
 
@@ -276,13 +303,26 @@ mod tests {
     type F = BinaryField128;
     type Challenger = BinaryChallenger<F, HashChallenger<u8, Keccak256Hash, 32>>;
 
+    // A sponge whose every draw is zero, which is the degenerate batching coefficient.
+    struct ZeroChallenger;
+
+    impl CanObserve<F> for ZeroChallenger {
+        fn observe(&mut self, _value: F) {}
+    }
+
+    impl CanSample<F> for ZeroChallenger {
+        fn sample(&mut self) -> F {
+            F::ZERO
+        }
+    }
+
     fn challenger() -> Challenger {
         // An empty byte transcript gives both roles the same initial state.
         Challenger::from_hasher(Vec::new(), Keccak256Hash)
     }
 
     fn shape() -> TranscriptShape {
-        // Fixture state: three constraint variables over 64-bit words and nine trace variables.
+        // Fixture state: three constraint variables, 64-bit words, nine commitment variables.
         TranscriptShape::new(3, 6, 9, 2, 8, [1, 2, 0])
     }
 
@@ -297,7 +337,9 @@ mod tests {
             challenger.observe(value);
         }
         let mut transcript = ProofProverTranscript::<_, F, F>::new(&mut challenger, shape, public);
-        let drawn = transcript.challenges(shape.zerocheck_variables());
+        let drawn = transcript
+            .challenges(shape.zerocheck_variables())
+            .expect("a hashed sponge does not draw zero");
         transcript.zerocheck(|_| {});
         transcript.finish();
         drawn
@@ -316,8 +358,8 @@ mod tests {
             ProofVerifierTranscript::<_, F, F>::new(&mut verifier, shape(), &public);
         let variables = shape().zerocheck_variables();
         assert_eq!(
-            prover_transcript.challenges(variables),
-            verifier_transcript.challenges(variables)
+            prover_transcript.challenges(variables).unwrap(),
+            verifier_transcript.challenges(variables).unwrap()
         );
 
         // Empty closures still consume the named sub-protocol boundary.
@@ -384,6 +426,34 @@ mod tests {
             ),
             base
         );
+    }
+
+    #[test]
+    #[should_panic(expected = "Dropped unfinalized VerifierState")]
+    fn abandoning_a_drawn_transcript_is_a_hard_failure() {
+        // Returning after the two draws leaves the named bracket owed on both sides.
+        let mut challenger = challenger();
+        let mut transcript =
+            ProofVerifierTranscript::<_, F, F>::new(&mut challenger, shape(), &words());
+        let _ = transcript.challenges(shape().zerocheck_variables());
+    }
+
+    #[test]
+    fn a_vanishing_coefficient_releases_both_transcripts() {
+        // Mutation: force the degenerate draw the refusal is written for.
+        let variables = shape().zerocheck_variables();
+        let mut prover = ZeroChallenger;
+        let mut verifier = ZeroChallenger;
+
+        // Both roles refuse, and dropping either state afterwards must not panic.
+        let mut prover_transcript =
+            ProofProverTranscript::<_, F, F>::new(&mut prover, shape(), &words());
+        assert!(prover_transcript.challenges(variables).is_none());
+        drop(prover_transcript);
+
+        let mut verifier_transcript =
+            ProofVerifierTranscript::<_, F, F>::new(&mut verifier, shape(), &words());
+        assert!(verifier_transcript.challenges(variables).is_none());
     }
 
     #[test]
