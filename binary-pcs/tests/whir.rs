@@ -11,7 +11,8 @@ use p3_sumcheck::layout::{Layout, PrefixProver, SuffixProver, Table};
 use p3_sumcheck::{OpeningBatch, OpeningProtocol, TableShape, TableSpec};
 use p3_symmetric::{CompressionFunctionFromHasher, SerializingHasher};
 use p3_whir::{
-    FoldingFactor, ProtocolParameters, SecurityAssumption, WhirConfig, WhirConfigError, WhirProver,
+    FoldingFactor, ProtocolParameters, SecurityAssumption, VerifierError, WhirConfig,
+    WhirConfigError, WhirProver,
 };
 use rand::SeedableRng;
 use rand::rngs::SmallRng;
@@ -80,8 +81,8 @@ fn additive_whir_commits_opens_and_verifies() {
 
     let mut tampered = proof;
     tampered.whir.final_poly.as_mut().unwrap().as_mut_slice()[0] += Poly192::ONE;
-    assert!(
-        pcs.verify(
+    let refused = pcs
+        .verify(
             &commitment,
             &tampered,
             &mut challenger(),
@@ -90,7 +91,22 @@ fn additive_whir_commits_opens_and_verifies() {
                 vec![OpeningBatch::new(vec![0, 1], vec![])],
             )]),
         )
-        .is_err()
+        .unwrap_err();
+
+    // The final polynomial feeds the transcript, so moving it moves every position drawn after.
+    //
+    // The error carries no equality, so the variant is pinned whole and its message checked.
+    assert!(
+        matches!(
+            refused,
+            VerifierError::MerkleProofInvalid { position: 0, .. }
+        ),
+        "{refused:?}"
+    );
+    assert_eq!(
+        refused.to_string(),
+        "Merkle proof verification failed at position 0: \
+         Extension field Merkle multiproof verification failed"
     );
 }
 

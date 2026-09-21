@@ -1064,16 +1064,22 @@ mod tests {
         for index in 0..NUM_POINTS {
             let mut tampered = values.clone();
             tampered[index] += EF::ONE;
-            assert!(
-                pcs.verify_at_points(
+            let refused = pcs
+                .verify_at_points(
                     &commitment,
                     &points,
                     &tampered,
                     &proof,
-                    &mut replayed(&pcs, &commitment)
+                    &mut replayed(&pcs, &commitment),
                 )
-                .is_err(),
-                "value {index}"
+                .unwrap_err();
+            // Reading the claim off the element is the check that refuses a moved value.
+            assert!(
+                matches!(
+                    refused,
+                    BooleanPcsError::ReductionProof(BitRingSwitchProofError::ClaimMismatch)
+                ),
+                "value {index}: {refused:?}"
             );
         }
 

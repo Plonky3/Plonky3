@@ -1245,6 +1245,7 @@ mod tests {
     use p3_field::PrimeCharacteristicRing;
     use p3_matrix::dense::RowMajorMatrix;
     use p3_multilinear_util::poly::Poly;
+    use p3_sumcheck::ring_switch::bits::BitRingSwitchProofError;
     use p3_sumcheck::{OpeningBatch, PrescribedPointPcs, TableSpec};
     use rand::rngs::SmallRng;
     use rand::{RngExt, SeedableRng};
@@ -1254,6 +1255,16 @@ mod tests {
     use crate::test_util::{MyChallenger, MyMmcs, challenger, mmcs};
 
     type EF = BinaryField128;
+
+    // The reduction error a rejection carries, so a test names the check that refused it.
+    fn reduction_error<E: core::fmt::Debug>(
+        error: BooleanTraceError<EF, E>,
+    ) -> BitRingSwitchProofError {
+        match error {
+            BooleanTraceCommitmentError::Boolean(BooleanPcsError::ReductionProof(inner)) => inner,
+            other => panic!("{other:?}"),
+        }
+    }
 
     /// Columns every fixture table holds.
     const FIXTURE_WIDTH: usize = 2;
@@ -1728,10 +1739,13 @@ mod tests {
         // Binding it a second time moves every later draw, so the two sides split.
         let mut double_bound = challenger();
         scheme.observe_commitment(&commitment, &mut double_bound);
-        assert!(
-            scheme
-                .verify(&commitment, &proof, &mut double_bound, protocol)
-                .is_err()
+        let refused = scheme
+            .verify(&commitment, &proof, &mut double_bound, protocol)
+            .unwrap_err();
+        // The split transcript gives the replayed reduction a different column point.
+        assert_eq!(
+            reduction_error(refused),
+            BitRingSwitchProofError::ClaimMismatch
         );
     }
 
@@ -1934,10 +1948,12 @@ mod tests {
 
         let mut verifier_chal = challenger();
         scheme.observe_commitment(&commitment, &mut verifier_chal);
-        assert!(
-            scheme
-                .verify_at(&commitment, &proof, &protocol, &[point], &mut verifier_chal)
-                .is_err()
+        let refused = scheme
+            .verify_at(&commitment, &proof, &protocol, &[point], &mut verifier_chal)
+            .unwrap_err();
+        assert_eq!(
+            reduction_error(refused),
+            BitRingSwitchProofError::ClaimMismatch
         );
     }
 
@@ -2106,48 +2122,67 @@ mod tests {
             tampered.values[index] += EF::ONE;
             let mut verifier_chal = challenger();
             scheme.observe_commitment(&commitment, &mut verifier_chal);
-            assert!(
-                scheme
-                    .verify_at(
-                        &commitment,
-                        &tampered,
-                        &protocol,
-                        &points,
-                        &mut verifier_chal
-                    )
-                    .is_err()
-            );
+            let refused = scheme
+                .verify_at(
+                    &commitment,
+                    &tampered,
+                    &protocol,
+                    &points,
+                    &mut verifier_chal,
+                )
+                .unwrap_err();
+            // A value of the first batch is caught reading its claim off the element.
+            // A value of the second is caught when its surviving claim fails to close.
+            let expected = if index < 3 {
+                BitRingSwitchProofError::ClaimMismatch
+            } else {
+                BitRingSwitchProofError::FinalCheck
+            };
+            assert_eq!(reduction_error(refused), expected, "value {index}");
         }
 
         let mut tampered = proof.clone();
         tampered.opening.reductions.pop();
         let mut verifier_chal = challenger();
         scheme.observe_commitment(&commitment, &mut verifier_chal);
+        let refused = scheme
+            .verify_at(
+                &commitment,
+                &tampered,
+                &protocol,
+                &points,
+                &mut verifier_chal,
+            )
+            .unwrap_err();
+        // A dropped reduction is a count disagreement, refused before the transcript moves.
         assert!(
-            scheme
-                .verify_at(
-                    &commitment,
-                    &tampered,
-                    &protocol,
-                    &points,
-                    &mut verifier_chal
-                )
-                .is_err()
+            matches!(
+                refused,
+                BooleanTraceCommitmentError::Boolean(BooleanPcsError::ClaimCount {
+                    expected: 2,
+                    values: 2,
+                    reductions: 1
+                })
+            ),
+            "{refused:?}"
         );
 
         let mut verifier_chal = challenger();
         scheme.observe_commitment(&commitment, &mut verifier_chal);
         let reordered = vec![points[1].clone(), points[0].clone()];
-        assert!(
-            scheme
-                .verify_at(
-                    &commitment,
-                    &proof,
-                    &protocol,
-                    &reordered,
-                    &mut verifier_chal
-                )
-                .is_err()
+        let refused = scheme
+            .verify_at(
+                &commitment,
+                &proof,
+                &protocol,
+                &reordered,
+                &mut verifier_chal,
+            )
+            .unwrap_err();
+        // Swapping the points reduces each claim at the other one's point.
+        assert_eq!(
+            reduction_error(refused),
+            BitRingSwitchProofError::ClaimMismatch
         );
     }
 
@@ -2682,12 +2717,16 @@ mod tests {
         let table = table_with_width(0xB614, 8, 3);
         let point = Point::<EF>::rand(&mut SmallRng::seed_from_u64(0xB615), 8);
 
-        for protocol in [
-            both_views_protocol(shape, 1),
-            OpeningProtocol::new(vec![TableSpec::new(
-                shape,
-                vec![OpeningBatch::new(vec![0, 1, 2], vec![1])],
-            )]),
+        // The first protocol combines both views of every column, the second names them apart.
+        for (per_column, protocol) in [
+            (false, both_views_protocol(shape, 1)),
+            (
+                true,
+                OpeningProtocol::new(vec![TableSpec::new(
+                    shape,
+                    vec![OpeningBatch::new(vec![0, 1, 2], vec![1])],
+                )]),
+            ),
         ] {
             let mut prover_chal = challenger();
             let (commitment, data) = scheme
@@ -2720,18 +2759,23 @@ mod tests {
                 tampered.values[index] += EF::ONE;
                 let mut verifier_chal = challenger();
                 scheme.observe_commitment(&commitment, &mut verifier_chal);
-                assert!(
-                    scheme
-                        .verify_at(
-                            &commitment,
-                            &tampered,
-                            &protocol,
-                            core::slice::from_ref(&point),
-                            &mut verifier_chal,
-                        )
-                        .is_err(),
-                    "value {index}"
-                );
+                let refused = scheme
+                    .verify_at(
+                        &commitment,
+                        &tampered,
+                        &protocol,
+                        core::slice::from_ref(&point),
+                        &mut verifier_chal,
+                    )
+                    .unwrap_err();
+                // Combining feeds every value into one column point the current claim answers.
+                // Named apart, the lone next value is the one the successor claim answers.
+                let expected = if per_column && index >= shape.width() {
+                    BitRingSwitchProofError::SuccessorClaimMismatch
+                } else {
+                    BitRingSwitchProofError::ClaimMismatch
+                };
+                assert_eq!(reduction_error(refused), expected, "value {index}");
             }
         }
     }
@@ -2814,7 +2858,11 @@ mod tests {
         for batch in 0..points.len() {
             for column in 0..shape.width() {
                 let at = batch * 2 * shape.width() + shape.width() + column;
-                assert!(forge(Some(at)).is_err(), "next value {at}");
+                assert_eq!(
+                    reduction_error(forge(Some(at)).unwrap_err()),
+                    BitRingSwitchProofError::SuccessorClaimMismatch,
+                    "next value {at}"
+                );
             }
         }
     }
