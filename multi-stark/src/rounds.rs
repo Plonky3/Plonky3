@@ -3,12 +3,13 @@
 //! Builds round polynomials for `sum_x eq(tau, x) * g(x)` and folds state across challenges.
 
 mod repr;
-mod sliced;
+pub(crate) mod sliced;
 mod subfield;
 
 use alloc::collections::BTreeMap;
+use alloc::sync::Arc;
 use alloc::vec::Vec;
-use core::ops::Range;
+use core::ops::{Deref, Range};
 
 use itertools::Itertools;
 use p3_air::{Air, BaseAir};
@@ -242,6 +243,8 @@ pub(crate) struct RoundStateBase<'air, 'data, A, F: Field, EF> {
     fits_subfield: bool,
     /// The stage's bit planes, once its first round ran on them.
     sliced: Option<sliced::SlicedTrace>,
+    /// Rounds this stage evaluates on its planes, when the sliced kernel takes it.
+    sliced_rounds: usize,
 }
 
 /// Extension-round column storage.
@@ -554,6 +557,63 @@ pub(crate) fn rows_per_task(rows: usize) -> usize {
     (rows / (current_num_threads() * TASKS_PER_WORKER)).max(1)
 }
 
+/// Successor-row buffers of one worker.
+///
+/// A stage whose AIRs read no successor row never writes them, so they hold zeros for the whole
+/// fold and one allocation serves every worker. A stage that does read a successor row gives
+/// each worker buffers of its own to fill.
+enum NextRows<P> {
+    /// Buffers this worker fills, one entry per column of the stage.
+    Filled(Vec<P>),
+    /// Zeros every worker of the stage reads.
+    Shared(Arc<[P]>),
+}
+
+impl<P: PrimeCharacteristicRing> NextRows<P> {
+    /// Buffers spanning `width` columns.
+    ///
+    /// `zeros` is the shared buffer of a stage that reads no successor row; without one the
+    /// worker allocates buffers of its own.
+    fn new(width: usize, zeros: Option<&Arc<[P]>>) -> Self {
+        zeros.map_or_else(
+            || Self::Filled(P::zero_vec(width)),
+            |zeros| Self::Shared(zeros.clone()),
+        )
+    }
+}
+
+impl<P: Clone> NextRows<P> {
+    /// The buffers as this worker's own, ready to fill.
+    ///
+    /// Buffers shared with the other workers of the stage are copied before the first write, so
+    /// a worker only ever fills its own. Only a stage that reads no successor row shares its
+    /// buffers, and every fill runs inside a walk of that stage's successor runs, which is then
+    /// empty, so the copy is never taken.
+    #[inline]
+    fn fill(&mut self) -> &mut [P] {
+        if let Self::Shared(zeros) = self {
+            let owned = zeros.to_vec();
+            *self = Self::Filled(owned);
+        }
+        let Self::Filled(rows) = self else {
+            unreachable!("the shared buffers are replaced just above")
+        };
+        rows
+    }
+}
+
+impl<P> Deref for NextRows<P> {
+    type Target = [P];
+
+    #[inline]
+    fn deref(&self) -> &[P] {
+        match self {
+            Self::Filled(rows) => rows,
+            Self::Shared(rows) => rows,
+        }
+    }
+}
+
 /// Scratch for scalar round-polynomial folds.
 ///
 /// The base path uses one instance; the extension path allocates one per worker.
@@ -569,9 +629,9 @@ struct Scratch<F, EF> {
     /// Successor-row value of each column at the active interpolation node.
     ///
     /// Zero for every column no AIR reads on the next row.
-    next_point: Vec<F>,
+    next_point: NextRows<F>,
     /// Difference between the high and low successor-row values.
-    next_diff: Vec<F>,
+    next_diff: NextRows<F>,
 }
 
 /// Per-worker scratch for the packed base-field first-round fold.
@@ -590,9 +650,9 @@ struct PackedScratch<P, EF> {
     /// Successor-row lanes of each column at the active interpolation node.
     ///
     /// Zero for every column no AIR reads on the next row.
-    next_point: Vec<P>,
+    next_point: NextRows<P>,
     /// Difference between the high and low successor-row lanes.
-    next_diff: Vec<P>,
+    next_diff: NextRows<P>,
 }
 
 impl<F, EF> Scratch<F, EF>
@@ -600,7 +660,16 @@ where
     F: PrimeCharacteristicRing,
     EF: PrimeCharacteristicRing,
 {
-    fn new(constraint_degrees: &[usize], interaction_degrees: &[usize], width: usize) -> Self {
+    /// Scratch spanning `width` columns.
+    ///
+    /// `next_zeros` is the successor buffer a stage that reads no successor row shares across
+    /// its workers; see [`NextRows`].
+    fn new(
+        constraint_degrees: &[usize],
+        interaction_degrees: &[usize],
+        width: usize,
+        next_zeros: Option<&Arc<[F]>>,
+    ) -> Self {
         Self {
             constraint_evals: constraint_degrees
                 .iter()
@@ -614,8 +683,8 @@ where
                 .collect(),
             local_point: F::zero_vec(width),
             local_diff: F::zero_vec(width),
-            next_point: F::zero_vec(width),
-            next_diff: F::zero_vec(width),
+            next_point: NextRows::new(width, next_zeros),
+            next_diff: NextRows::new(width, next_zeros),
         }
     }
 }
@@ -626,7 +695,7 @@ impl<F: Field, EF> Scratch<F, EF> {
         F::add_slices(&mut self.local_point, &self.local_diff);
         for run in next_columns {
             F::add_slices(
-                &mut self.next_point[run.clone()],
+                &mut self.next_point.fill()[run.clone()],
                 &self.next_diff[run.clone()],
             );
         }
@@ -637,7 +706,7 @@ impl<F: Field, EF> Scratch<F, EF> {
         add_scaled_slice(&mut self.local_point, &self.local_diff, step);
         for run in next_columns {
             add_scaled_slice(
-                &mut self.next_point[run.clone()],
+                &mut self.next_point.fill()[run.clone()],
                 &self.next_diff[run.clone()],
                 step,
             );
@@ -650,7 +719,16 @@ where
     P: PrimeCharacteristicRing,
     EF: PrimeCharacteristicRing,
 {
-    fn new(constraint_degrees: &[usize], interaction_degrees: &[usize], width: usize) -> Self {
+    /// Scratch spanning `width` columns.
+    ///
+    /// `next_zeros` is the successor buffer a stage that reads no successor row shares across
+    /// its workers; see [`NextRows`].
+    fn new(
+        constraint_degrees: &[usize],
+        interaction_degrees: &[usize],
+        width: usize,
+        next_zeros: Option<&Arc<[P]>>,
+    ) -> Self {
         Self {
             constraint_evals: constraint_degrees
                 .iter()
@@ -664,8 +742,8 @@ where
                 .collect(),
             local_point: P::zero_vec(width),
             local_diff: P::zero_vec(width),
-            next_point: P::zero_vec(width),
-            next_diff: P::zero_vec(width),
+            next_point: NextRows::new(width, next_zeros),
+            next_diff: NextRows::new(width, next_zeros),
         }
     }
 
@@ -677,7 +755,7 @@ where
         add_slice(&mut self.local_point, &self.local_diff);
         for run in next_columns {
             add_slice(
-                &mut self.next_point[run.clone()],
+                &mut self.next_point.fill()[run.clone()],
                 &self.next_diff[run.clone()],
             );
         }
@@ -691,7 +769,7 @@ where
         add_scaled_slice(&mut self.local_point, &self.local_diff, step);
         for run in next_columns {
             add_scaled_slice(
-                &mut self.next_point[run.clone()],
+                &mut self.next_point.fill()[run.clone()],
                 &self.next_diff[run.clone()],
                 step,
             );
@@ -1301,6 +1379,7 @@ where
         eta: EF,
         betas: Vec<EF>,
         tau: Point<EF>,
+        sliced_rounds: usize,
     ) -> Self {
         assert_eq!(
             tau.num_variables(),
@@ -1446,6 +1525,7 @@ where
             eta,
             fits_subfield: false,
             sliced: None,
+            sliced_rounds,
         }
     }
 
@@ -1516,6 +1596,10 @@ where
         let degree = self.degree();
         let schedule = node_schedule::<F>(evaluated_nodes(&self.slots, degree, false));
         let next_columns = next_row_runs(&self.slots);
+        // Every worker of a stage that reads no successor row reads the same zeros.
+        let next_zeros = next_columns
+            .is_empty()
+            .then(|| Arc::from(<F::Packing>::zero_vec(width)));
         let alpha = EF::ExtensionPacking::from(self.alpha);
         let alpha_powers = self
             .alpha_powers
@@ -1563,7 +1647,14 @@ where
             .par_chunks_exact(packing_width)
             .enumerate()
             .par_fold_reduce(
-                || PackedScratch::new(&constraint_degrees, &interaction_degrees, width),
+                || {
+                    PackedScratch::new(
+                        &constraint_degrees,
+                        &interaction_degrees,
+                        width,
+                        next_zeros.as_ref(),
+                    )
+                },
                 |mut scratch, (packed_s, eq_suffix)| {
                     let s = packed_s * packing_width;
 
@@ -1587,10 +1678,11 @@ where
                                      table: &Table<F>,
                                      runs: &[Range<usize>]| {
                         for run in runs {
-                            for ((next, next_delta), column) in scratch.next_point[run.clone()]
-                                .iter_mut()
-                                .zip(scratch.next_diff[run.clone()].iter_mut())
-                                .zip(table.columns().skip(run.start - offset))
+                            for ((next, next_delta), column) in scratch.next_point.fill()
+                                [run.clone()]
+                            .iter_mut()
+                            .zip(scratch.next_diff.fill()[run.clone()].iter_mut())
+                            .zip(table.columns().skip(run.start - offset))
                             {
                                 let next_lo = packed_column_at(column, s + 1);
                                 let next_hi_start = s + scalar_half + 1;
@@ -1737,6 +1829,10 @@ where
         let degree = self.degree();
         let schedule = node_schedule::<F>(evaluated_nodes(&self.slots, degree, false));
         let next_columns = next_row_runs(&self.slots);
+        // Every worker of a stage that reads no successor row reads the same zeros.
+        let next_zeros = next_columns
+            .is_empty()
+            .then(|| Arc::from(<F>::zero_vec(width)));
 
         let constraint_degrees = self
             .slots
@@ -1750,7 +1846,12 @@ where
             .map(|group| group.degree)
             .collect::<Vec<_>>();
 
-        let mut scratch = Scratch::<F, EF>::new(&constraint_degrees, &interaction_degrees, width);
+        let mut scratch = Scratch::<F, EF>::new(
+            &constraint_degrees,
+            &interaction_degrees,
+            width,
+            next_zeros.as_ref(),
+        );
 
         for (s, &eq_suffix) in eq_suffix.as_slice().iter().enumerate() {
             let fill_local = |scratch: &mut Scratch<F, EF>, offset: usize, table: &Table<F>| {
@@ -1771,9 +1872,9 @@ where
                              table: &Table<F>,
                              runs: &[Range<usize>]| {
                 for run in runs {
-                    scratch.next_point[run.clone()]
+                    scratch.next_point.fill()[run.clone()]
                         .iter_mut()
-                        .zip(scratch.next_diff[run.clone()].iter_mut())
+                        .zip(scratch.next_diff.fill()[run.clone()].iter_mut())
                         .zip(table.columns().skip(run.start - offset))
                         .for_each(|((next, next_delta), column)| {
                             let next_lo = column.value(s + 1);
@@ -2126,6 +2227,10 @@ where
             .map(|(node, step)| (node, step.map(R::from)))
             .collect::<Vec<_>>();
         let next_columns = next_row_runs(&self.slots);
+        // Every worker of a stage that reads no successor row reads the same zeros.
+        let next_zeros = next_columns
+            .is_empty()
+            .then(|| Arc::from(<R>::zero_vec(width)));
         let constraint_degrees = self
             .slots
             .iter()
@@ -2143,7 +2248,14 @@ where
             .with_min_len(rows_per_task(eq_suffix.num_evals()))
             .enumerate()
             .par_fold_reduce(
-                || Scratch::<R, R>::new(&constraint_degrees, &interaction_degrees, width),
+                || {
+                    Scratch::<R, R>::new(
+                        &constraint_degrees,
+                        &interaction_degrees,
+                        width,
+                        next_zeros.as_ref(),
+                    )
+                },
                 |scratch, (s, &eq_suffix)| {
                     self.accumulate_row(scratch, s, eq_suffix, &schedule, &next_columns)
                 },
@@ -2171,10 +2283,6 @@ where
     }
 
     /// Add one residual row's eq-weighted evaluations at every node of `schedule` to `scratch`.
-    ///
-    /// Never inlined: the AIR evaluation needs a large stack frame, which inside the parallel
-    /// fold would be reserved again at every level of Rayon's recursive split.
-    #[inline(never)]
     fn accumulate_row(
         &self,
         mut scratch: Scratch<R, R>,
@@ -2204,9 +2312,9 @@ where
             *local_delta = local_hi - local_lo;
         }
         for run in next_columns {
-            for (((next, next_delta), column), next_tail) in scratch.next_point[run.clone()]
+            for (((next, next_delta), column), next_tail) in scratch.next_point.fill()[run.clone()]
                 .iter_mut()
-                .zip(scratch.next_diff[run.clone()].iter_mut())
+                .zip(scratch.next_diff.fill()[run.clone()].iter_mut())
                 .zip(&columns[run.clone()])
                 .zip(&self.next_tail[run.clone()])
             {
@@ -2223,6 +2331,32 @@ where
             }
         }
 
+        self.walk_row_nodes(&mut scratch, s, eq_suffix, schedule, next_columns);
+        scratch
+    }
+
+    /// Step one residual row through every node of `schedule`, adding its evaluations there.
+    ///
+    /// The row's values at node zero, and the step from each node to the next, are already in
+    /// `scratch`.
+    ///
+    /// Never inlined: the AIR evaluation needs a large stack frame, which inside the parallel
+    /// fold would be reserved again at every level of Rayon's recursive split.
+    #[inline(never)]
+    fn walk_row_nodes(
+        &self,
+        scratch: &mut Scratch<R, R>,
+        s: usize,
+        eq_suffix: R,
+        schedule: &[(usize, NodeStep<R>)],
+        next_columns: &[Range<usize>],
+    ) where
+        R: Algebra<F>,
+        A: for<'b> Air<MultilinearFolder<'b, F, R, R>>
+            + for<'b> Air<InteractionMultilinearFolder<'b, F, R, R>>,
+    {
+        let num_evals = self.num_evals();
+        let half = num_evals / 2;
         let (mut boundary, boundary_diff) =
             BoundaryEvals::row_pair_with_prefix(s, half, num_evals, self.boundary);
 
@@ -2274,8 +2408,6 @@ where
                 }
             }
         }
-
-        scratch
     }
 
     /// Update each group's claim for binding the next variable at `r`.
@@ -2399,6 +2531,10 @@ where
         let degree = self.degree();
         let schedule = node_schedule::<EF>(evaluated_nodes(&self.slots, degree, true));
         let next_columns = next_row_runs(&self.slots);
+        // Every worker of a stage that reads no successor row reads the same zeros.
+        let next_zeros = next_columns
+            .is_empty()
+            .then(|| Arc::from(<PackedExt<F, EF::ExtensionPacking>>::zero_vec(width)));
         let alpha = PackedExt::new(EF::ExtensionPacking::from(self.alpha));
         let alpha_powers = self
             .alpha_powers
@@ -2447,6 +2583,7 @@ where
                         &constraint_degrees,
                         &interaction_degrees,
                         width,
+                        next_zeros.as_ref(),
                     )
                 },
                 |mut scratch, (packed_s, eq_suffix)| {
@@ -2466,10 +2603,10 @@ where
                         *local_delta = local_hi - local_lo;
                     }
                     for run in &next_columns {
-                        for (((next, next_delta), column), next_tail) in scratch.next_point
+                        for (((next, next_delta), column), next_tail) in scratch.next_point.fill()
                             [run.clone()]
                         .iter_mut()
-                        .zip(scratch.next_diff[run.clone()].iter_mut())
+                        .zip(scratch.next_diff.fill()[run.clone()].iter_mut())
                         .zip(&columns[run.clone()])
                         .zip(&self.next_tail[run.clone()])
                         {
@@ -2625,6 +2762,7 @@ mod tests {
     use rand::rngs::SmallRng;
 
     use super::*;
+    use crate::config::DEFAULT_SLICED_ROUNDS;
 
     type F = BinaryField128;
 
@@ -2646,6 +2784,22 @@ mod tests {
     #[should_panic = "successor column is outside the trace width"]
     fn successor_runs_reject_a_column_past_the_width() {
         let _runs = successor_runs(0, 4, &[4]);
+    }
+
+    #[test]
+    fn filling_shared_successor_rows_copies_them_first() {
+        // Invariant: a worker writes only buffers of its own, so the zeros a stage shares stay
+        // zero and no worker observes another's rows.
+        let zeros: Arc<[F]> = Arc::from(F::zero_vec(4));
+        let mut written = NextRows::new(4, Some(&zeros));
+        let mut untouched = NextRows::new(4, Some(&zeros));
+
+        written.fill()[1] = F::ONE;
+
+        assert_eq!(&*written, &[F::ZERO, F::ONE, F::ZERO, F::ZERO][..]);
+        assert_eq!(&*untouched, &[F::ZERO; 4][..]);
+        assert_eq!(untouched.fill(), &[F::ZERO; 4][..]);
+        assert_eq!(&*zeros, &[F::ZERO; 4][..]);
     }
 
     #[test]
@@ -2726,8 +2880,14 @@ mod tests {
         );
         let alpha = F::interpolation_node(11);
         let tau = [5, 6, 7].map(F::interpolation_node);
-        let mut base =
-            RoundStateBase::new(stage, alpha, F::ONE, vec![F::ONE], Point::new(tau.to_vec()));
+        let mut base = RoundStateBase::new(
+            stage,
+            alpha,
+            F::ONE,
+            vec![F::ONE],
+            Point::new(tau.to_vec()),
+            DEFAULT_SLICED_ROUNDS,
+        );
         let prefix = if extension {
             vec![F::interpolation_node(9)]
         } else {
@@ -2962,7 +3122,14 @@ mod tests {
                 }],
                 StageCoupling::new(BTreeMap::new(), BTreeMap::new(), vec![]),
             );
-            RoundStateBase::new(stage, alpha, F::ONE, vec![F::ONE], Point::new(tau.clone()))
+            RoundStateBase::new(
+                stage,
+                alpha,
+                F::ONE,
+                vec![F::ONE],
+                Point::new(tau.clone()),
+                DEFAULT_SLICED_ROUNDS,
+            )
         };
         let mut scattered = state(&scattered_air);
         let mut full = state(&full_air);

@@ -39,8 +39,8 @@ use p3_multilinear_util::poly::Poly;
 use p3_sumcheck::layout::{Layout, Verifier, Witness, observe_commitment};
 use p3_sumcheck::strategy::Basis;
 use p3_sumcheck::{
-    OpeningEvals, OpeningProtocol, PrescribedOpeningSecurity, PrescribedPointPcs, SumcheckData,
-    SumcheckError,
+    OpeningBatch, OpeningEvals, OpeningProtocol, PrescribedOpeningSecurity, PrescribedPointPcs,
+    SumcheckData, SumcheckError,
 };
 use p3_util::log2_ceil_usize;
 
@@ -57,6 +57,24 @@ use crate::verifier::{
 
 /// Why an opening could not be produced or accepted, for one base commitment scheme.
 type Failure<F, MT> = BinaryPcsError<F, <MT as Mmcs<F>>::Error>;
+
+/// The mismatch between one opening request and the evaluations offered against it.
+///
+/// Both sides carry their own length, because a request and a list of evaluations that agree
+/// on the total can still split it differently.
+fn batch_size_mismatch<F, MmcsError, T, U>(
+    table_idx: usize,
+    batch: &OpeningBatch<T>,
+    evals: &OpeningBatch<U>,
+) -> BinaryPcsError<F, MmcsError> {
+    BinaryPcsError::OpeningBatchSizeMismatch {
+        table_idx,
+        expected_current: batch.current().len(),
+        expected_next: batch.next().len(),
+        actual_current: evals.current().len(),
+        actual_next: evals.next().len(),
+    }
+}
 
 /// An opening proof, or the reason there is none.
 type Opening<F, EF, MT, MX> = Result<BinaryPcsProof<F, EF, MT, MX>, Failure<F, MT>>;
@@ -221,6 +239,7 @@ where
             + CanObserve<MX::Commitment>,
     {
         self.validate_opening_protocol(protocol)?;
+        Self::validate_preprocessing_depth(&prover_data)?;
         let evals = protocol
             .iter_openings()
             .map(|(table_idx, batch)| prover_data.layout.eval(table_idx, batch, challenger))
@@ -250,6 +269,7 @@ where
             + CanObserve<MX::Commitment>,
     {
         self.validate_opening_protocol(protocol)?;
+        Self::validate_preprocessing_depth(&prover_data)?;
         Self::validate_points(protocol, points)?;
         let evals = protocol
             .iter_openings()
@@ -261,6 +281,67 @@ where
             })
             .collect();
         Ok(self.finish_open(prover_data, evals, challenger))
+    }
+
+    /// Produce a prescribed-point opening from evaluations the caller already holds.
+    ///
+    /// As [`Self::try_open_at`], except that each batch's claimed values are supplied
+    /// instead of read off the committed columns. A protocol whose own reduction already
+    /// produced the evaluation at every prescribed point passes it here, rather than paying
+    /// a pass over the columns to find a value it has.
+    ///
+    /// Points must already be transcript-bound, as the prescribed-point contract requires.
+    /// Rejection leaves the challenger unchanged.
+    ///
+    /// Prover data must match the committed tables.
+    ///
+    /// # Soundness
+    ///
+    /// A supplied evaluation is bound exactly as a computed one is, and a verifier recomputes
+    /// its own. A wrong one therefore yields a proof that does not verify, never one that does.
+    #[tracing::instrument(name = "binary pcs open", skip_all)]
+    pub fn try_open_at_known<Challenger>(
+        &self,
+        mut prover_data: BinaryPcsProverData<F, EF, MT>,
+        protocol: &OpeningProtocol,
+        points: &[Point<EF>],
+        evals: &[OpeningEvals<EF>],
+        challenger: &mut Challenger,
+    ) -> Opening<F, EF, MT, MX>
+    where
+        Challenger: FieldChallenger<F>
+            + GrindingChallenger<Witness = F>
+            + CanSampleUniformBits<F>
+            + CanObserve<MT::Commitment>
+            + CanObserve<MX::Commitment>,
+    {
+        self.validate_opening_protocol(protocol)?;
+        Self::validate_preprocessing_depth(&prover_data)?;
+        Self::validate_points(protocol, points)?;
+        Self::validate_evals(protocol, evals)?;
+        for (((table_idx, batch), point), batch_evals) in
+            protocol.iter_openings().zip(points).zip(evals)
+        {
+            prover_data
+                .layout
+                .eval_at_known(table_idx, batch, point, batch_evals, challenger);
+        }
+        Ok(self.finish_open(prover_data, evals.to_vec(), challenger))
+    }
+
+    /// Check that the committed layout runs no round the opening pipeline cannot supply.
+    ///
+    /// A preprocessing round reads a per-round residual of the column, which neither the
+    /// width-1 committed codeword nor a supplied evaluation carries. The pipeline asserts
+    /// that depth once it is under way, so the entry points refuse it before then.
+    fn validate_preprocessing_depth(
+        prover_data: &BinaryPcsProverData<F, EF, MT>,
+    ) -> Result<(), BinaryPcsError<F, MT::Error>> {
+        let folding = prover_data.layout.folding();
+        if folding != 0 {
+            return Err(BinaryPcsError::OpeningPreprocessingDepth { folding });
+        }
+        Ok(())
     }
 
     fn validate_points(
@@ -275,6 +356,25 @@ where
                 .any(|((table, _), point)| point.num_variables() != shapes[table].num_variables())
         {
             return Err(BinaryPcsError::OpeningPointShapeMismatch);
+        }
+        Ok(())
+    }
+
+    /// Check that supplied evaluations cover every batch the protocol names, column for column.
+    fn validate_evals(
+        protocol: &OpeningProtocol,
+        evals: &[OpeningEvals<EF>],
+    ) -> Result<(), BinaryPcsError<F, MT::Error>> {
+        if protocol.num_openings() != evals.len() {
+            return Err(BinaryPcsError::OpeningEvalCountMismatch {
+                expected: protocol.num_openings(),
+                actual: evals.len(),
+            });
+        }
+        for ((table_idx, batch), batch_evals) in protocol.iter_openings().zip(evals) {
+            if !batch.has_same_shape(batch_evals) {
+                return Err(batch_size_mismatch(table_idx, batch, batch_evals));
+            }
         }
         Ok(())
     }
@@ -466,11 +566,7 @@ where
         for (i, (table_idx, batch)) in protocol.iter_openings().enumerate() {
             let evals = &proof.evals[i];
             if !batch.has_same_shape(evals) {
-                return Err(BinaryPcsError::OpeningBatchSizeMismatch {
-                    table_idx,
-                    expected: batch.len(),
-                    actual: evals.len(),
-                });
+                return Err(batch_size_mismatch(table_idx, batch, evals));
             }
             match points {
                 Some(points) => {
@@ -706,7 +802,7 @@ mod tests {
     use p3_challenger::FieldChallenger;
     use p3_commit::{Mmcs, MultilinearPcs};
     use p3_multilinear_util::point::Point;
-    use p3_sumcheck::layout::{Layout, SuffixProver, Table};
+    use p3_sumcheck::layout::{Layout, SuffixProver, Table, Witness};
     use p3_sumcheck::{OpeningBatch, OpeningProtocol, PrescribedPointPcs, TableShape, TableSpec};
     use rand::SeedableRng;
     use rand::rngs::SmallRng;
@@ -938,6 +1034,266 @@ mod tests {
             pcs.verify(&got_commitment, &got, &mut challenger(), protocol)
                 .unwrap();
         }
+    }
+
+    /// Zero grinding, so every draw after the first is reproducible run to run.
+    const fn reproducible_params() -> BinaryPcsParams {
+        BinaryPcsParams {
+            log_inv_rate: 2,
+            pow_bits: 0,
+            security_level: 40,
+        }
+    }
+
+    /// One random single-column table, rebuilt from the same seed on every call.
+    fn one_column_witness() -> Witness<F> {
+        let mut rng = SmallRng::seed_from_u64(0x0EAF);
+        SuffixProver::<F, F>::new_witness(vec![Table::rand(&mut rng, 1, NUM_VARIABLES)], 0)
+    }
+
+    /// The single-claim protocol [`one_column_witness`] is opened under.
+    fn one_column_protocol() -> OpeningProtocol {
+        OpeningProtocol::new(vec![TableSpec::new(
+            TableShape::new(NUM_VARIABLES, 1),
+            vec![OpeningBatch::new(vec![0], Vec::new())],
+        )])
+    }
+
+    #[test]
+    fn supplying_the_evaluation_leaves_the_proof_byte_identical() {
+        // Invariant: where a claimed value comes from never changes what is proved.
+        //
+        //     computed: the commitment evaluates the opened column at the point
+        //     supplied: the caller hands in the same value, and no column is read
+        //
+        // Both routes record one claim and bind one value, so the proof bytes and the
+        // transcript state must match.
+        //
+        // Fixture state: one random single-column table.
+        //
+        //     opened at: a point each route derives from its own identically seeded sponge
+        //     ground   : nothing, so the whole proof is reproducible
+        let protocol = one_column_protocol();
+        let config =
+            BinaryPcsConfig::try_new::<F, F>(NUM_VARIABLES, reproducible_params()).unwrap();
+        let pcs = BinaryPcs::new(config, mmcs(), mmcs()).unwrap();
+
+        // Computed route.
+        let mut computed_challenger = challenger();
+        let (commitment, computed_data) = pcs
+            .commit(one_column_witness(), &mut computed_challenger)
+            .unwrap();
+        let sample: F = computed_challenger.sample_algebra_element();
+        let point = Point::expand_from_univariate(sample, NUM_VARIABLES);
+        let computed = pcs
+            .try_open_at(
+                computed_data,
+                &protocol,
+                core::slice::from_ref(&point),
+                &mut computed_challenger,
+            )
+            .unwrap();
+
+        // Supplied route, from an identically seeded challenger, handed what the first found.
+        let mut supplied_challenger = challenger();
+        let (same_commitment, supplied_data) = pcs
+            .commit(one_column_witness(), &mut supplied_challenger)
+            .unwrap();
+        let sample: F = supplied_challenger.sample_algebra_element();
+        let supplied_point = Point::expand_from_univariate(sample, NUM_VARIABLES);
+        assert_eq!(same_commitment, commitment, "same witness, same commitment");
+        assert_eq!(supplied_point, point, "same sponge, same point");
+
+        let supplied = pcs
+            .try_open_at_known(
+                supplied_data,
+                &protocol,
+                core::slice::from_ref(&supplied_point),
+                &computed.evals,
+                &mut supplied_challenger,
+            )
+            .unwrap();
+
+        assert_eq!(
+            postcard::to_allocvec(&supplied).unwrap(),
+            postcard::to_allocvec(&computed).unwrap(),
+            "proof bytes"
+        );
+
+        // Equal proof bytes do not show the two sponges agree, so check that separately.
+        assert_eq!(
+            supplied_challenger.sample_algebra_element::<F>(),
+            computed_challenger.sample_algebra_element::<F>(),
+            "transcript state after opening"
+        );
+
+        // And the proof the supplied route produced verifies against an independent sponge.
+        let mut verifier_challenger = challenger();
+        pcs.observe_commitment(&commitment, &mut verifier_challenger);
+        let verifier_sample: F = verifier_challenger.sample_algebra_element();
+        let verifier_point = Point::expand_from_univariate(verifier_sample, NUM_VARIABLES);
+        pcs.verify_at(
+            &commitment,
+            &supplied,
+            &protocol,
+            core::slice::from_ref(&verifier_point),
+            &mut verifier_challenger,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn a_known_opening_whose_evaluations_miss_the_protocol_is_refused() {
+        // Every refusal is structural, so none may move the sponge.
+        //
+        //     none      : no evaluation for the one batch the protocol names
+        //     two values: one batch, but two values where it opens one column
+        //     wrong side: one batch and one value, but against the successor view
+        let protocol = one_column_protocol();
+        let config =
+            BinaryPcsConfig::try_new::<F, F>(NUM_VARIABLES, reproducible_params()).unwrap();
+        let pcs = BinaryPcs::new(config, mmcs(), mmcs()).unwrap();
+
+        let mut prover_challenger = challenger();
+        let (_, data) = pcs
+            .commit(one_column_witness(), &mut prover_challenger)
+            .unwrap();
+        let sample: F = prover_challenger.sample_algebra_element();
+        let point = Point::expand_from_univariate(sample, NUM_VARIABLES);
+
+        let mut snapshot = prover_challenger.clone();
+        let missing = pcs
+            .try_open_at_known(
+                data.clone(),
+                &protocol,
+                core::slice::from_ref(&point),
+                &[],
+                &mut prover_challenger,
+            )
+            .err()
+            .unwrap();
+        assert!(
+            matches!(
+                missing,
+                BinaryPcsError::OpeningEvalCountMismatch {
+                    expected: 1,
+                    actual: 0,
+                }
+            ),
+            "{missing:?}"
+        );
+
+        let over = pcs
+            .try_open_at_known(
+                data.clone(),
+                &protocol,
+                core::slice::from_ref(&point),
+                &[OpeningBatch::new(vec![sample, sample], Vec::new())],
+                &mut prover_challenger,
+            )
+            .err()
+            .unwrap();
+        assert!(
+            matches!(
+                over,
+                BinaryPcsError::OpeningBatchSizeMismatch {
+                    table_idx: 0,
+                    expected_current: 1,
+                    expected_next: 0,
+                    actual_current: 2,
+                    actual_next: 0,
+                }
+            ),
+            "{over:?}"
+        );
+
+        let sided = pcs
+            .try_open_at_known(
+                data,
+                &protocol,
+                core::slice::from_ref(&point),
+                &[OpeningBatch::new(Vec::new(), vec![sample])],
+                &mut prover_challenger,
+            )
+            .err()
+            .unwrap();
+        assert!(
+            matches!(
+                sided,
+                BinaryPcsError::OpeningBatchSizeMismatch {
+                    table_idx: 0,
+                    expected_current: 1,
+                    expected_next: 0,
+                    actual_current: 0,
+                    actual_next: 1,
+                }
+            ),
+            "{sided:?}"
+        );
+
+        assert_eq!(
+            prover_challenger.sample_algebra_element::<F>(),
+            snapshot.sample_algebra_element::<F>(),
+            "a refused opening leaves the transcript alone"
+        );
+    }
+
+    #[test]
+    fn an_opening_of_a_layout_that_runs_preprocessing_rounds_is_refused() {
+        // The commit phase lays out one committed column, so no round has the per-round
+        // residual a preprocessing round reads, and the fold pipeline asserts that depth
+        // once it is already under way. Every entry point must refuse it before then.
+        //
+        // Fixture state: one random single-column table, committed at depth one.
+        let protocol = one_column_protocol();
+        let config =
+            BinaryPcsConfig::try_new::<F, F>(NUM_VARIABLES, reproducible_params()).unwrap();
+        let pcs = BinaryPcs::new(config, mmcs(), mmcs()).unwrap();
+
+        let mut rng = SmallRng::seed_from_u64(0x0EAF);
+        let witness =
+            SuffixProver::<F, F>::new_witness(vec![Table::rand(&mut rng, 1, NUM_VARIABLES)], 1);
+        let mut prover_challenger = challenger();
+        let (_, data) = pcs.commit(witness, &mut prover_challenger).unwrap();
+        assert_eq!(data.layout.folding(), 1, "the fixture must carry the depth");
+
+        let sample: F = prover_challenger.sample_algebra_element();
+        let point = Point::expand_from_univariate(sample, NUM_VARIABLES);
+        let evals = [OpeningBatch::new(vec![sample], Vec::new())];
+
+        let mut snapshot = prover_challenger.clone();
+        let refusals = [
+            pcs.try_open(data.clone(), &protocol, &mut prover_challenger),
+            pcs.try_open_at(
+                data.clone(),
+                &protocol,
+                core::slice::from_ref(&point),
+                &mut prover_challenger,
+            ),
+            pcs.try_open_at_known(
+                data,
+                &protocol,
+                core::slice::from_ref(&point),
+                &evals,
+                &mut prover_challenger,
+            ),
+        ];
+        for refusal in refusals {
+            let refusal = refusal.err().unwrap();
+            assert!(
+                matches!(
+                    refusal,
+                    BinaryPcsError::OpeningPreprocessingDepth { folding: 1 }
+                ),
+                "{refusal:?}"
+            );
+        }
+
+        assert_eq!(
+            prover_challenger.sample_algebra_element::<F>(),
+            snapshot.sample_algebra_element::<F>(),
+            "a refused opening leaves the transcript alone"
+        );
     }
 
     const fn params() -> BinaryPcsParams {

@@ -6,6 +6,7 @@
 //! The sibling module's are free functions because there the reduction has none.
 
 use alloc::vec::Vec;
+use core::borrow::Borrow;
 
 use p3_binary_field::TowerLevel;
 use p3_challenger::fs::TranscriptField;
@@ -16,6 +17,7 @@ use p3_multilinear_util::poly::Poly;
 use serde::{Deserialize, Serialize};
 
 use super::basis::{Coefficients, CoordinateSums};
+use super::equality::{FactoredEquality, scaled_sums_into};
 use super::packing::BitPacking;
 use super::tensor::{BitTensor, BitTensorBuckets};
 use super::transcript::{
@@ -24,21 +26,24 @@ use super::transcript::{
 };
 use crate::data::SumcheckData;
 use crate::error::SumcheckError;
-use crate::product_polynomial::ProductPolynomial;
-use crate::strategy::{Basis, SumcheckProver, VariableOrder};
+use crate::strategy::{Basis, FromTable, IntoTranscriptField, ReprSumcheckProver, VariableOrder};
 
-/// The hypercube points one task accumulates before its partial combines.
+/// Log of the hypercube points one task accumulates before its partial combines.
 ///
-/// Large enough that the `d`-element accumulator is amortised.
-/// Small enough to keep every core fed at the heights this reduction runs at.
+/// Large enough that the `d`-element accumulator and the block's own scaling are amortised,
+/// and small enough both to keep every core fed at the heights this reduction runs at and to
+/// keep the equality factor a block reads within cache.
 #[cfg(not(test))]
-const CHUNK: usize = 1 << 12;
+const LOG_CHUNK: usize = 14;
 
 /// Small enough under test that a case above one variable splits in chunks.
 ///
 /// The partial-combination fold is then on the path the tests take.
 #[cfg(test)]
-const CHUNK: usize = 1 << 1;
+const LOG_CHUNK: usize = 1;
+
+/// The hypercube points one task accumulates before its partial combines.
+const CHUNK: usize = 1 << LOG_CHUNK;
 
 /// One ring-switching reduction at a bit alphabet, before the batching draw.
 ///
@@ -362,22 +367,27 @@ impl<EF: TowerLevel> BitRingSwitch<EF> {
     ///
     /// - The number of leading coordinates fixed to bits.
     /// - The first element of the supported run.
-    /// - The equality table over that run.
-    fn support(&self) -> (usize, usize, Poly<EF>) {
+    /// - The equality table over that run, in the factored form its sweeps read.
+    fn support(&self) -> (usize, usize, FactoredEquality<EF>) {
         // The equality table uses the first coordinate as the most significant index bit.
         // A Boolean prefix therefore selects one contiguous run.
         let (prefix, address) = self.fixed_prefix();
 
         // One element of the run per assignment of the coordinates that are left.
-        let table = Poly::new_from_point(&self.high()[prefix..], EF::ONE);
+        let table = FactoredEquality::new(&self.high()[prefix..], LOG_CHUNK);
         (prefix, address * table.num_evals(), table)
     }
 
-    /// The committed polynomial restricted to the Boolean prefix of the claim.
+    /// The committed polynomial restricted to the Boolean prefix of the claim, held in `R`.
     ///
     /// A leading bit coordinate selects one half without a sumcheck round.
     /// Repeating that selection leaves exactly the slot the claim addresses.
-    fn restricted_packing(&self, packing: &BitPacking<EF>) -> Poly<EF> {
+    ///
+    /// The slot is copied out of the packing, and the crossing into `R` runs over that copy.
+    fn restricted_packing<R: FromTable<EF>, S: Borrow<[EF]>>(
+        &self,
+        packing: &BitPacking<EF, S>,
+    ) -> Poly<R> {
         // The support identifies the same contiguous slot in both equality and witness order.
         let (prefix, address) = self.fixed_prefix();
         let len = 1usize << (self.num_variables() - prefix);
@@ -385,12 +395,15 @@ impl<EF: TowerLevel> BitRingSwitch<EF> {
 
         // Only the selected slot feeds the sumcheck.
         // This avoids cloning and folding unrelated columns of a stacked trace.
-        Poly::new(
-            packing.poly().as_slice()[offset..offset + len]
-                .par_iter()
-                .copied()
-                .collect(),
-        )
+        let values = &packing.poly().as_slice()[offset..offset + len];
+        // The copy below is the only pass over the buffer, for a level handing back a zeroed
+        // allocation rather than writing one element at a time. A level taking the trait's
+        // default fills the slot serially first, at the width of the slot.
+        let mut slot = EF::zero_vec(len);
+        slot.par_chunks_mut(CHUNK)
+            .zip(values.par_chunks(CHUNK))
+            .for_each(|(slot, values)| slot.copy_from_slice(values));
+        Poly::new(R::from_table(slot))
     }
 
     /// Restore the Boolean slot address in front of a point inside that slot.
@@ -432,7 +445,10 @@ impl<EF: TowerLevel> BitRingSwitch<EF> {
     /// # Errors
     ///
     /// Returns an error unless the packing has the reduction's variables.
-    pub fn tensor(&self, packing: &BitPacking<EF>) -> Result<BitTensor<EF>, BitRingSwitchError>
+    pub fn tensor<S: Borrow<[EF]>>(
+        &self,
+        packing: &BitPacking<EF, S>,
+    ) -> Result<BitTensor<EF>, BitRingSwitchError>
     where
         EF: Send + Sync,
     {
@@ -444,31 +460,50 @@ impl<EF: TowerLevel> BitRingSwitch<EF> {
     /// The element sent, accumulated against the equality table of the supported run.
     ///
     /// Elements outside the run weigh zero, so leaving them out changes no sum.
-    fn tensor_over(packing: &BitPacking<EF>, offset: usize, equality: &Poly<EF>) -> BitTensor<EF>
+    ///
+    /// # Algorithm
+    ///
+    /// The equality weight of a block is its own weight times the block's outer weight, and
+    /// the first tensor leg carries the weight:
+    ///
+    /// ```text
+    ///     sum_j (outer_i * inner_j) ⊗ t'(w)  =  (outer_i ⊗ 1) * sum_j inner_j ⊗ t'(w)
+    /// ```
+    ///
+    /// So a block accumulates against the inner weights alone, and the outer weight is one
+    /// scaling of the partial element rather than one multiplication per point.
+    fn tensor_over<S: Borrow<[EF]>>(
+        packing: &BitPacking<EF, S>,
+        offset: usize,
+        equality: &FactoredEquality<EF>,
+    ) -> BitTensor<EF>
     where
         EF: Send + Sync,
     {
         let values = &packing.poly().as_slice()[offset..offset + equality.num_evals()];
 
-        equality
-            .as_slice()
-            .par_chunks(CHUNK)
-            .zip(values.par_chunks(CHUNK))
+        values
+            .par_chunks(equality.block_len())
+            .zip(equality.outer().par_iter())
             .par_fold_reduce(
-                BitTensorBuckets::zero,
-                |mut accumulator, (weights, values)| {
-                    for (&weight, &value) in weights.iter().zip(values) {
-                        accumulator.add_exterior_product(weight, value);
+                // The scratch is what a block accumulates into, so only a fold arm holds one.
+                || (BitTensor::zero(), None),
+                |(mut total, mut scratch), (values, &weight)| {
+                    let buckets = scratch.get_or_insert_with(BitTensorBuckets::zero);
+                    buckets.clear();
+                    for (&inner, &value) in equality.inner().iter().zip(values) {
+                        buckets.add_exterior_product(inner, value);
                     }
-                    accumulator
+                    total.add_scaled_columns(&buckets.tensor(), weight);
+                    (total, scratch)
                 },
-                |mut accumulator, partial| {
+                |(mut total, scratch), (partial, _)| {
                     // Addition is associative, so regrouping cannot change it.
-                    accumulator.merge(&partial);
-                    accumulator
+                    total += partial;
+                    (total, scratch)
                 },
             )
-            .into_tensor()
+            .0
     }
 
     /// What the claim being reduced must equal, given the element sent.
@@ -513,9 +548,9 @@ impl<EF: TowerLevel> BitRingSwitch<EF> {
     /// # Errors
     ///
     /// Returns an error unless the packing has the reduction's variables.
-    pub fn successor_tensors(
+    pub fn successor_tensors<S: Borrow<[EF]>>(
         &self,
-        packing: &BitPacking<EF>,
+        packing: &BitPacking<EF, S>,
     ) -> Result<Option<SuccessorTensors<EF>>, BitRingSwitchError>
     where
         EF: Send + Sync,
@@ -531,11 +566,11 @@ impl<EF: TowerLevel> BitRingSwitch<EF> {
     /// The successor elements, accumulated against the equality table of the supported run.
     ///
     /// `None` unless the reduction sends successor elements.
-    fn successor_tensors_over(
+    fn successor_tensors_over<S: Borrow<[EF]>>(
         &self,
-        packing: &BitPacking<EF>,
+        packing: &BitPacking<EF, S>,
         offset: usize,
-        equality: &Poly<EF>,
+        equality: &FactoredEquality<EF>,
     ) -> Option<SuccessorTensors<EF>>
     where
         EF: Send + Sync,
@@ -543,38 +578,47 @@ impl<EF: TowerLevel> BitRingSwitch<EF> {
         let kept = self.kept_row_variables()?;
 
         // Elements outside the run weigh zero in all three elements.
-        let table = equality.as_slice();
-        let values = &packing.poly().as_slice()[offset..offset + table.len()];
+        let block = equality.block_len();
+        let values = &packing.poly().as_slice()[offset..offset + equality.num_evals()];
         // The run holds whole columns, so the kept row bits are the low bits of `w`.
         let max = (1usize << kept) - 1;
 
-        let (carry, last) = values.par_chunks(CHUNK).enumerate().par_fold_reduce(
-            || (BitTensorBuckets::zero(), BitTensor::zero()),
-            |(mut carry, mut last), (chunk, values)| {
-                for (w, &value) in (chunk * CHUNK..).zip(values) {
-                    let row = w & max;
+        let (carry, last, _) = values.par_chunks(block).enumerate().par_fold_reduce(
+            // The scratch is what a block accumulates into, so only a fold arm holds one.
+            || (BitTensor::zero(), BitTensor::zero(), None),
+            |(mut carry, mut last, mut scratch), (index, values)| {
+                let weight = equality.outer()[index];
+                let inner = equality.inner();
+                let buckets = scratch.get_or_insert_with(BitTensorBuckets::zero);
+                buckets.clear();
+                for (j, &value) in values.iter().enumerate() {
+                    let row = (index * block + j) & max;
                     // The +1 ripples out of the element before, inside the same column.
                     if row != 0 {
-                        carry.add_exterior_product(table[w - 1], value);
+                        if j == 0 {
+                            // The element before closes the block before, under its weight.
+                            carry.add_exterior_product(equality.before_block(index), value);
+                        } else {
+                            buckets.add_exterior_product(inner[j - 1], value);
+                        }
                     }
                     // The last element of a column reads itself again.
+                    // One element in a column qualifies, so its weight is formed directly.
                     if row == max {
-                        last.add_exterior_product(table[w], value);
+                        last.add_exterior_product(weight * inner[j], value);
                     }
                 }
-                (carry, last)
+                carry.add_scaled_columns(&buckets.tensor(), weight);
+                (carry, last, scratch)
             },
-            |(mut carry, mut last), (other_carry, other_last)| {
+            |(mut carry, mut last, scratch), (other_carry, other_last, _)| {
                 // Addition is associative, so regrouping cannot change it.
-                carry.merge(&other_carry);
+                carry += other_carry;
                 last += other_last;
-                (carry, last)
+                (carry, last, scratch)
             },
         );
-        Some(SuccessorTensors {
-            carry: carry.into_tensor(),
-            last,
-        })
+        Some(SuccessorTensors { carry, last })
     }
 
     /// The weights the successor claim puts on the tensor's columns.
@@ -798,21 +842,52 @@ impl<EF: TowerLevel> BitRingSwitchBatch<'_, EF> {
         self.weights_over(&equality)
     }
 
-    /// The weight multilinear, read off the equality table of the supported run.
-    fn weights_over(&self, equality: &Poly<EF>) -> Poly<EF>
+    /// The weight multilinear, read off the equality table of the supported run, held in `R`.
+    ///
+    /// Every entry is a subset sum of the batching table, so carrying that table into `R`
+    /// first puts the whole multilinear there for the cost of `d` conversions.
+    ///
+    /// The entries are sums and products of those images, so `R` must carry the arithmetic
+    /// of `EF` and not merely its elements.
+    fn weights_over<R>(&self, equality: &FactoredEquality<EF>) -> Poly<R>
     where
         EF: Send + Sync,
+        R: IntoTranscriptField<EF> + Sync,
     {
         let mut table = Poly::zero(equality.num_variables());
-        let sums = CoordinateSums::new(self.eq_batch.as_slice());
+        let batching: Vec<R> = self
+            .eq_batch
+            .as_slice()
+            .iter()
+            .copied()
+            .map(R::from)
+            .collect();
+        let sums = CoordinateSums::<EF, R>::new(&batching);
 
         // Every entry belongs to the selected slot.
         // No zero run for another slot is allocated or folded.
+        //
+        // A block's entries are its own weights under one outer weight, and the coordinate
+        // sums absorb that scale once per block instead of once per entry.
+        //
+        // The block is that amortisation unit and the split follows it, so a run holding
+        // fewer blocks than there are threads sweeps on fewer tasks. Splitting below the
+        // block does not recover them: a task spanning less than a block has to scale the
+        // sums for itself, and one scaling costs more than the entries such a task writes.
         table
             .as_mut_slice()
-            .par_iter_mut()
-            .zip(equality.as_slice().par_iter())
-            .for_each(|(slot, &value)| *slot = sums.sum(value));
+            .par_chunks_mut(equality.block_len())
+            .zip(equality.outer().par_iter())
+            .for_each_init(
+                // Scratch of the right shape, overwritten before each block reads it.
+                || sums.clone(),
+                |scaled, (block, &weight)| {
+                    scaled_sums_into(scaled, &sums, weight);
+                    for (slot, &inner) in block.iter_mut().zip(equality.inner()) {
+                        *slot = scaled.sum(inner);
+                    }
+                },
+            );
 
         let Some(alpha) = self.alpha else {
             return table;
@@ -821,28 +896,40 @@ impl<EF: TowerLevel> BitRingSwitchBatch<'_, EF> {
             .reduction
             .kept_row_variables()
             .expect("a batch carries alpha only for a reduction sending successor elements");
-        let max = (1usize << kept) - 1;
+        let column = 1usize << kept;
+        let max = column - 1;
+        let alpha = R::from(alpha);
         let alpha_squared = alpha.square();
 
-        // The shift reads the entry before, so the combined table is a second one.
-        let base = table.as_slice();
-        let mut combined = Poly::zero(table.num_variables());
-        combined
+        // The shift reads the entry before, which a column taken from its last row down still
+        // finds unmoved. So the combination lands in the table it reads, in chunks of whole
+        // columns.
+        //
+        // A column fits inside the run: `prefix_limit` lets no Boolean prefix fix a row
+        // coordinate, so the table keeps at least the kept rows. Every chunk below is
+        // therefore exactly `stride` long and splits into whole columns.
+        let stride = equality.block_len().max(column).min(table.num_evals());
+        debug_assert!(column.is_power_of_two() && stride.is_multiple_of(column));
+        debug_assert!(table.num_evals().is_multiple_of(stride));
+        table
             .as_mut_slice()
-            .par_iter_mut()
-            .enumerate()
-            .for_each(|(w, slot)| {
-                let row = w & max;
-                let mut value = base[w];
-                if row != 0 {
-                    value += alpha * base[w - 1];
+            .par_chunks_mut(stride)
+            .for_each(|part| {
+                for entries in part.chunks_mut(column) {
+                    for row in (0..column).rev() {
+                        let settled = entries[row];
+                        let mut value = settled;
+                        if row != 0 {
+                            value += alpha * entries[row - 1];
+                        }
+                        if row == max {
+                            value += alpha_squared * settled;
+                        }
+                        entries[row] = value;
+                    }
                 }
-                if row == max {
-                    value += alpha_squared * base[w];
-                }
-                *slot = value;
             });
-        combined
+        table
     }
 
     /// The sum the reduction's sumcheck starts from.
@@ -1098,6 +1185,24 @@ pub enum BitRingSwitchProofError {
 impl<EF: TranscriptField + TowerLevel> BitRingSwitch<EF> {
     /// Reduce the claims this reduction was set up over to one about the packing.
     ///
+    /// # The field the rounds run in
+    ///
+    /// Every round multiplies a packing entry by a weight, and both tables are witness-sized.
+    /// `R` is the representation those two tables and the rounds over them are held in.
+    ///
+    /// ```text
+    ///     once per reduction   the restricted packing, the batching table, alpha,
+    ///                          the initial claim, and the surviving claim on its way back
+    ///     once per round       the challenge, and the round message on its way back
+    ///     never                the tensor elements, the equality table, the point
+    /// ```
+    ///
+    /// The weight multilinear is accumulated in `R` from the batching table, so it is
+    /// built there rather than carried across.
+    ///
+    /// The map is a field isomorphism, so each round message is the one the challenge
+    /// field's own tables measure and the transcript is unchanged.
+    ///
     /// # Returns
     ///
     /// The proof, the point the rounds ended at, and the surviving claim's value.
@@ -1106,14 +1211,16 @@ impl<EF: TranscriptField + TowerLevel> BitRingSwitch<EF> {
     /// # Panics
     ///
     /// Panics unless the packing has the variables the evaluation point leaves.
-    pub fn prove<Challenger>(
+    pub fn prove<R, Challenger, S>(
         &self,
-        packing: &BitPacking<EF>,
+        packing: &BitPacking<EF, S>,
         challenger: &mut Challenger,
     ) -> (BitRingSwitchProof<EF>, Point<EF>, EF)
     where
         EF: Send + Sync,
+        R: IntoTranscriptField<EF>,
         Challenger: FieldChallenger<EF> + GrindingChallenger<Witness = EF>,
+        S: Borrow<[EF]>,
     {
         let max_rounds = self.num_variables();
         assert_eq!(
@@ -1145,21 +1252,25 @@ impl<EF: TranscriptField + TowerLevel> BitRingSwitch<EF> {
             .expect("the transcript draws what the reduction's kind batches with");
         // A Boolean prefix is a public slot address.
         // Restricting to that slot removes one sumcheck round per address bit.
-        let restricted = self.restricted_packing(packing);
+        let restricted = self.restricted_packing::<R, _>(packing);
         let rounds = restricted.num_variables();
-        let weights = batch.weights_over(&equality);
+        let weights = batch.weights_over::<R>(&equality);
         drop(equality);
-        let poly = ProductPolynomial::new_unpacked(VariableOrder::Prefix, restricted, weights);
-        let mut prover = SumcheckProver::new(poly, batch.initial_sum(&tensor, successor.as_ref()));
+        let mut prover = ReprSumcheckProver::<EF, EF, R>::from_repr_tables(
+            VariableOrder::Prefix,
+            restricted,
+            weights,
+            batch.initial_sum(&tensor, successor.as_ref()),
+        );
         let mut sumcheck = SumcheckData::default();
 
         let r_prime = transcript.batched_sumcheck(|challenger| {
-            prover.compute_sumcheck_polynomials(&mut sumcheck, challenger, rounds, 0, None)
+            prover.compute_sumcheck_polynomials(&mut sumcheck, challenger, rounds, 0)
         });
 
         // After the last round the evaluation side has folded to the packing at that point.
         // No second pass over the packing is needed to find it.
-        let final_eval = prover.evals().as_slice()[0];
+        let final_eval = prover.evals().as_slice()[0].into_transcript();
         transcript.surviving_claim(final_eval);
         transcript.finish();
 
@@ -1354,7 +1465,7 @@ impl<EF: TranscriptField + TowerLevel> BitRingSwitch<EF> {
 mod tests {
     use alloc::vec::Vec;
 
-    use p3_binary_field::{BinaryChallenger, BinaryField16};
+    use p3_binary_field::{BinaryChallenger, BinaryField16, BinaryField128, Ghash128};
     use p3_challenger::{CanSample, HashChallenger};
     use p3_field::{Field, PrimeCharacteristicRing};
     use p3_keccak::Keccak256Hash;
@@ -1366,6 +1477,7 @@ mod tests {
 
     type EF = BinaryField16;
     type Chal = BinaryChallenger<EF, HashChallenger<u8, Keccak256Hash, 32>>;
+    type WideChal = BinaryChallenger<BinaryField128, HashChallenger<u8, Keccak256Hash, 32>>;
 
     /// A fresh sponge, so the two sides start from the same state.
     fn challenger() -> Chal {
@@ -1402,13 +1514,18 @@ mod tests {
 
     /// The witness as a multilinear over every variable, one element per bit.
     fn embedded(witness: &[u8]) -> Poly<EF> {
+        embedded_over(witness)
+    }
+
+    /// The same embedding over any level the bits are read into.
+    fn embedded_over<K: Field>(witness: &[u8]) -> Poly<K> {
         Poly::new(
             (0..witness.len() * 8)
                 .map(|cell| {
                     if (witness[cell / 8] >> (cell % 8)) & 1 == 1 {
-                        EF::ONE
+                        K::ONE
                     } else {
-                        EF::ZERO
+                        K::ZERO
                     }
                 })
                 .collect::<Vec<_>>(),
@@ -1765,7 +1882,7 @@ mod tests {
                 // It restores the address before handing the point to the commitment.
                 let claim = embedded(&witness).eval_base(&r);
                 let (proof, surviving_point, surviving_value) =
-                    reduction.prove(&packing, &mut challenger());
+                    reduction.prove::<EF, _, _>(&packing, &mut challenger());
                 assert_eq!(
                     proof.sumcheck.num_rounds(),
                     reduction.num_variables() - prefix
@@ -1818,7 +1935,7 @@ mod tests {
         let claim = embedded(&witness).eval_base(&r);
 
         let mut prover_chal = challenger();
-        let (proof, r_prime_p, s_prime_p) = reduction.prove(&packing, &mut prover_chal);
+        let (proof, r_prime_p, s_prime_p) = reduction.prove::<EF, _, _>(&packing, &mut prover_chal);
 
         let mut verifier_chal = challenger();
         let (r_prime_v, s_prime_v) = reduction.verify(&proof, claim, &mut verifier_chal).unwrap();
@@ -1837,7 +1954,7 @@ mod tests {
         let reduction = BitRingSwitch::new(&r).unwrap();
         let claim = embedded(&witness).eval_base(&r);
 
-        let (proof, _, _) = reduction.prove(&packing, &mut challenger());
+        let (proof, _, _) = reduction.prove::<EF, _, _>(&packing, &mut challenger());
 
         let err = reduction
             .verify(&proof, claim + EF::ONE, &mut challenger())
@@ -1859,7 +1976,7 @@ mod tests {
         let r = Point::<EF>::rand(&mut SmallRng::seed_from_u64(0x7A18), 8);
         let reduction = BitRingSwitch::new(&r).unwrap();
         let claim = embedded(&witness).eval_base(&r);
-        let (honest, _, _) = reduction.prove(&packing, &mut challenger());
+        let (honest, _, _) = reduction.prove::<EF, _, _>(&packing, &mut challenger());
 
         // Case 1: add one to a row.
         //
@@ -1960,7 +2077,7 @@ mod tests {
         let reduction = BitRingSwitch::new(&r).unwrap();
         let claim = embedded(&witness).eval_base(&r);
 
-        let (mut proof, _, _) = reduction.prove(&packing, &mut challenger());
+        let (mut proof, _, _) = reduction.prove::<EF, _, _>(&packing, &mut challenger());
         proof.sumcheck.pow_witnesses.push(EF::ONE);
 
         assert_eq!(
@@ -1988,7 +2105,7 @@ mod tests {
         let r = Point::<EF>::rand(&mut SmallRng::seed_from_u64(0x9108), 8);
         let claim = embedded(&witness).eval_base(&r);
         let reduction = BitRingSwitch::new(&r).unwrap();
-        let (proof, _, _) = reduction.prove(&packing, &mut challenger());
+        let (proof, _, _) = reduction.prove::<EF, _, _>(&packing, &mut challenger());
 
         let mut moved = r.as_slice().to_vec();
         moved[0] += EF::ONE;
@@ -2018,7 +2135,7 @@ mod tests {
             let reduction = BitRingSwitch::new(&r).unwrap();
             let claim = embedded(&witness).eval_base(&r);
 
-            let (proof, _, s_prime_p) = reduction.prove(&packing, &mut challenger());
+            let (proof, _, s_prime_p) = reduction.prove::<EF, _, _>(&packing, &mut challenger());
             let (r_prime, s_prime) =
                 reduction.verify(&proof, claim, &mut challenger()).unwrap();
 
@@ -2042,7 +2159,7 @@ mod tests {
             let current = embedded(&witness).eval_base(&r);
             let next = dense_successor_claim(&witness, &r, row_variables);
 
-            let (proof, r_prime_p, s_prime_p) = reduction.prove(&packing, &mut challenger());
+            let (proof, r_prime_p, s_prime_p) = reduction.prove::<EF, _, _>(&packing, &mut challenger());
             let (r_prime, s_prime) = reduction
                 .verify_readings(&proof, Some(current), Some(next), &mut challenger())
                 .unwrap();
@@ -2175,6 +2292,154 @@ mod tests {
     }
 
     #[test]
+    fn the_successor_elements_are_their_term_by_term_sums() {
+        // Invariant: the two elements are the terms the dense equality table names, added
+        // one at a time. The production path adds a block against the inner weights alone
+        // and scales the partial once, which is the same product regrouped.
+        //
+        //     carry  =  sum_{x(w) != 0}   E[w - 1] ⊗ t'(w)
+        //     last   =  sum_{x(w) = max}  E[w]     ⊗ t'(w)
+        let witness = bits(0x7E24, 64);
+        let packing = BitPacking::<EF>::new(&witness).unwrap();
+
+        for &row_variables in &ROW_VARIABLES {
+            for selector in Selector::ALL {
+                let r = successor_point(0x7E25, 9, row_variables, selector);
+                let reduction = BitRingSwitch::with_successor(&r, row_variables).unwrap();
+                let Some(kept) = reduction.kept_row_variables() else {
+                    continue;
+                };
+                let table = dense_eq_high(&reduction);
+                let max = (1usize << kept) - 1;
+
+                let mut carry = BitTensor::zero();
+                let mut last = BitTensor::zero();
+                for (w, &value) in packing.poly().as_slice().iter().enumerate() {
+                    let row = w & max;
+                    if row != 0 {
+                        carry += BitTensor::exterior_product(table.as_slice()[w - 1], value);
+                    }
+                    if row == max {
+                        last += BitTensor::exterior_product(table.as_slice()[w], value);
+                    }
+                }
+
+                let elements = reduction.successor_tensors(&packing).unwrap().unwrap();
+                assert_eq!(elements.carry, carry, "{selector:?}, {row_variables} rows");
+                assert_eq!(elements.last, last, "{selector:?}, {row_variables} rows");
+            }
+        }
+    }
+
+    #[test]
+    fn the_successor_weights_are_the_dense_table_entry_by_entry() {
+        // Invariant: the weight table is the one a pass over the dense equality table builds,
+        // entry for entry, shift and all.
+        //
+        //     A(w)       = sum over the set coordinates of eq(r_high, w) of eq(r_batch, .)
+        //     weights(w) = A(w) + alpha * A(w - 1) [x(w) != 0] + alpha^2 * A(w) [x(w) = max]
+        //
+        // The production path takes the coordinate sums under the block's own scale and
+        // combines the shift in place. Both group the same factors, and the field's
+        // multiplication is associative, so nothing may differ at all.
+        let mut rng = SmallRng::seed_from_u64(0xDE96);
+        let r = successor_point(0xDE97, 9, 6, Selector::Random);
+        let reduction = BitRingSwitch::with_successor(&r, 6).unwrap();
+        let r_batch = Point::<EF>::rand(&mut rng, BitRingSwitch::<EF>::ABSORBED);
+        let alpha = non_boolean(&mut rng);
+
+        // Built from the challenge here, not read off the stage under test.
+        let eq_batch = Poly::<EF>::new_from_point(r_batch.as_slice(), EF::ONE);
+        let base = dense_eq_high(&reduction)
+            .as_slice()
+            .iter()
+            .map(|&value| {
+                Coefficients::of(value)
+                    .iter_set()
+                    .map(|u| eq_batch.as_slice()[u])
+                    .sum::<EF>()
+            })
+            .collect::<Vec<_>>();
+
+        let max = (1usize << reduction.kept_row_variables().unwrap()) - 1;
+        let expected = (0..base.len())
+            .map(|w| {
+                let row = w & max;
+                let mut value = base[w];
+                if row != 0 {
+                    value += alpha * base[w - 1];
+                }
+                if row == max {
+                    value += alpha.square() * base[w];
+                }
+                value
+            })
+            .collect::<Vec<_>>();
+
+        let batch = reduction.batch_with_successor(&r_batch, alpha).unwrap();
+        assert_eq!(batch.weights().as_slice(), expected.as_slice());
+    }
+
+    #[test]
+    fn the_sweeps_read_the_same_table_at_every_block_size() {
+        // Invariant: the block is an amortisation unit, not part of what a sweep computes.
+        //
+        //     table[i * block + j]  ==  outer[i] * inner[j]   for every split of the point
+        //
+        // The size the reduction ships is far above the one these tests run at, and it is
+        // what decides how much of each sweep is boundary and how much is interior: the
+        // carry's first entry, the weights' stride against a column, and the count of blocks
+        // a fold combines. Sweeping the split covers all three shapes at one place.
+        let mut rng = SmallRng::seed_from_u64(0xB10C5);
+        let packing = BitPacking::<EF>::new(&bits(0xB10C6, 64)).unwrap();
+        let r_batch = Point::<EF>::rand(&mut rng, BitRingSwitch::<EF>::ABSORBED);
+        let alpha = non_boolean(&mut rng);
+
+        for &row_variables in &ROW_VARIABLES {
+            for selector in Selector::ALL {
+                let r = successor_point(0xB10C7, 9, row_variables, selector);
+                let reduction = BitRingSwitch::with_successor(&r, row_variables).unwrap();
+                let (prefix, offset, _) = reduction.support();
+                let run = &reduction.high()[prefix..];
+                let batch = reduction
+                    .batch_drawn(
+                        &r_batch,
+                        reduction.sends_successor_tensors().then_some(alpha),
+                    )
+                    .unwrap();
+
+                // One entry per block leaves the outer factor the dense table itself.
+                let dense = FactoredEquality::new(run, 0);
+                let tensor = BitRingSwitch::tensor_over(&packing, offset, &dense);
+                let successor = reduction.successor_tensors_over(&packing, offset, &dense);
+                let weights = batch.weights_over::<EF>(&dense);
+
+                for log_block in 0..=run.len() + 2 {
+                    let equality = FactoredEquality::new(run, log_block);
+                    let case =
+                        alloc::format!("{selector:?}, {row_variables} rows, 2^{log_block} block");
+
+                    assert_eq!(
+                        BitRingSwitch::tensor_over(&packing, offset, &equality),
+                        tensor,
+                        "{case}"
+                    );
+                    assert_eq!(
+                        reduction.successor_tensors_over(&packing, offset, &equality),
+                        successor,
+                        "{case}"
+                    );
+                    assert_eq!(
+                        batch.weights_over::<EF>(&equality).as_slice(),
+                        weights.as_slice(),
+                        "{case}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn the_successor_weights_close_the_batched_sum() {
         // Invariant: the weights are what both ends of the sumcheck read.
         //
@@ -2227,7 +2492,8 @@ mod tests {
                 let current = cells.eval_base(&r);
                 let next = dense_successor_claim(&witness, &r, row_variables);
 
-                let (proof, r_prime, value) = reduction.prove(&packing, &mut challenger());
+                let (proof, r_prime, value) =
+                    reduction.prove::<EF, _, _>(&packing, &mut challenger());
                 let verified = reduction
                     .verify_readings(&proof, Some(current), Some(next), &mut challenger())
                     .unwrap();
@@ -2256,10 +2522,10 @@ mod tests {
 
             let mut plain_challenger = challenger();
             let (plain_proof, plain_point, plain_value) =
-                plain.prove(&packing, &mut plain_challenger);
+                plain.prove::<EF, _, _>(&packing, &mut plain_challenger);
             let mut successor_challenger = challenger();
             let (successor_proof, successor_point, successor_value) =
-                successor.prove(&packing, &mut successor_challenger);
+                successor.prove::<EF, _, _>(&packing, &mut successor_challenger);
 
             assert_eq!(successor_proof.tensor, plain_proof.tensor);
             assert!(successor_proof.successor.is_none());
@@ -2312,7 +2578,7 @@ mod tests {
             next
         );
 
-        let (proof, r_prime, value) = reduction.prove(&packing, &mut challenger());
+        let (proof, r_prime, value) = reduction.prove::<EF, _, _>(&packing, &mut challenger());
         assert_eq!(proof.sumcheck.num_rounds(), 2);
         assert_eq!(
             reduction
@@ -2324,7 +2590,7 @@ mod tests {
         // The plain reduction eats the Boolean row coordinate too, which the cap is for.
         let (plain, _, _) = BitRingSwitch::new(&r)
             .unwrap()
-            .prove(&packing, &mut challenger());
+            .prove::<EF, _, _>(&packing, &mut challenger());
         assert_eq!(plain.sumcheck.num_rounds(), 1);
     }
 
@@ -2341,7 +2607,7 @@ mod tests {
             let reduction = BitRingSwitch::with_successor(&r, row_variables).unwrap();
             let current = embedded(&witness).eval_base(&r);
             let next = dense_successor_claim(&witness, &r, row_variables);
-            let (proof, _, _) = reduction.prove(&packing, &mut challenger());
+            let (proof, _, _) = reduction.prove::<EF, _, _>(&packing, &mut challenger());
 
             assert_eq!(
                 reduction
@@ -2377,7 +2643,7 @@ mod tests {
         let reduction = BitRingSwitch::with_successor(&r, 6).unwrap();
         let current = embedded(&witness).eval_base(&r);
         let next = dense_successor_claim(&witness, &r, 6);
-        let (honest, _, _) = reduction.prove(&packing, &mut challenger());
+        let (honest, _, _) = reduction.prove::<EF, _, _>(&packing, &mut challenger());
         let elements = honest.successor.clone().unwrap();
 
         let flipped = |element: &BitTensor<EF>, row: usize, bit: EF| {
@@ -2436,12 +2702,12 @@ mod tests {
 
         let r_sending = successor_point(0xC0DF, 9, 6, Selector::Random);
         let sending = BitRingSwitch::with_successor(&r_sending, 6).unwrap();
-        let (mut missing, _, _) = sending.prove(&packing, &mut challenger());
+        let (mut missing, _, _) = sending.prove::<EF, _, _>(&packing, &mut challenger());
         let spare = missing.successor.take();
 
         let r_fitting = successor_point(0xC0E0, 9, 2, Selector::Random);
         let fitting = BitRingSwitch::with_successor(&r_fitting, 2).unwrap();
-        let (mut spurious, _, _) = fitting.prove(&packing, &mut challenger());
+        let (mut spurious, _, _) = fitting.prove::<EF, _, _>(&packing, &mut challenger());
         spurious.successor = spare;
 
         for (reduction, proof, r, expected, actual) in [
@@ -2474,7 +2740,7 @@ mod tests {
         // A plain reduction has no successor view to check a next claim against.
         // A call supplying neither reading would check nothing at all.
         let (reduction, packing, _, _) = fixture(0x2EAD, 32);
-        let (proof, _, _) = reduction.prove(&packing, &mut challenger());
+        let (proof, _, _) = reduction.prove::<EF, _, _>(&packing, &mut challenger());
 
         assert_eq!(
             reduction
@@ -2527,5 +2793,128 @@ mod tests {
                 .unwrap_err(),
             BitRingSwitchError::NoSuccessorView
         );
+    }
+
+    /// A 128-bit reduction, played once per representation its rounds can run in.
+    ///
+    /// The test level of this module is 16 bits wide and has no second representation,
+    /// so the comparison widens to the level that does.
+    ///
+    /// # Returns
+    ///
+    /// The proof, the point the rounds ended at, the surviving claim, and the sponge left
+    /// behind, once for the tower basis and once for the polynomial basis.
+    #[allow(clippy::type_complexity)]
+    fn both_representations(
+        reduction: &BitRingSwitch<BinaryField128>,
+        packing: &BitPacking<BinaryField128>,
+    ) -> [(
+        BitRingSwitchProof<BinaryField128>,
+        Point<BinaryField128>,
+        BinaryField128,
+        WideChal,
+    ); 2] {
+        let mut tower_sponge = WideChal::from_hasher(Vec::new(), Keccak256Hash);
+        let tower = reduction.prove::<BinaryField128, _, _>(packing, &mut tower_sponge);
+        let mut poly_sponge = WideChal::from_hasher(Vec::new(), Keccak256Hash);
+        let poly = reduction.prove::<Ghash128, _, _>(packing, &mut poly_sponge);
+
+        [
+            (tower.0, tower.1, tower.2, tower_sponge),
+            (poly.0, poly.1, poly.2, poly_sponge),
+        ]
+    }
+
+    #[test]
+    fn a_borrowed_packing_plays_the_owned_packing_transcript() {
+        // Invariant: the store the elements are read from reaches no wire.
+        //
+        // A commitment hands the reduction a view over the table it already holds,
+        // and that is the only route production takes.
+        let (reduction, packing, _, _) = fixture(0x5AE, 16);
+        let borrowed = BitPacking::from_packed(packing.poly().as_view()).unwrap();
+        assert_eq!(borrowed.num_variables(), packing.num_variables());
+
+        let (owned_proof, owned_point, owned_value) =
+            reduction.prove::<EF, _, _>(&packing, &mut challenger());
+        let (borrowed_proof, borrowed_point, borrowed_value) =
+            reduction.prove::<EF, _, _>(&borrowed, &mut challenger());
+
+        assert_eq!(borrowed_proof.tensor, owned_proof.tensor);
+        assert_eq!(borrowed_proof.successor, owned_proof.successor);
+        assert_eq!(
+            borrowed_proof.sumcheck.polynomial_evaluations,
+            owned_proof.sumcheck.polynomial_evaluations
+        );
+        assert_eq!(borrowed_proof.final_eval, owned_proof.final_eval);
+        assert_eq!(borrowed_point, owned_point);
+        assert_eq!(borrowed_value, owned_value);
+    }
+
+    #[test]
+    fn the_polynomial_basis_rounds_play_the_tower_basis_transcript() {
+        // Invariant: the representation the rounds run in reaches no wire.
+        //
+        // The two maps are inverse field isomorphisms, so every round polynomial is the
+        // one the tower-basis tables measure, message by message.
+        let witness = bits(0x9F17, 512);
+        let packing = BitPacking::<BinaryField128>::new(&witness).unwrap();
+        let absorbed = BitRingSwitch::<BinaryField128>::ABSORBED;
+        let mut rng = SmallRng::seed_from_u64(0x2C0D);
+        let num_variables = packing.num_variables() + absorbed;
+
+        // A random point, one whose Boolean prefix drops rounds, and one sending successor
+        // elements, so every stage that crosses into the representation is on the path.
+        let random = Point::<BinaryField128>::rand(&mut rng, num_variables);
+        let mut addressed = random.as_slice().to_vec();
+        addressed[0] = BinaryField128::ONE;
+        addressed[1] = BinaryField128::ZERO;
+        let addressed = Point::new(addressed);
+        let reductions = [
+            (BitRingSwitch::new(&random).unwrap(), &random),
+            (BitRingSwitch::new(&addressed).unwrap(), &addressed),
+            (
+                BitRingSwitch::with_successor(&random, absorbed + 1).unwrap(),
+                &random,
+            ),
+        ];
+        let embedding = embedded_over::<BinaryField128>(&witness);
+
+        for (case, (reduction, point)) in reductions.iter().enumerate() {
+            let [
+                (tower, tower_point, tower_value, mut tower_sponge),
+                (poly, poly_point, poly_value, mut poly_sponge),
+            ] = both_representations(reduction, &packing);
+
+            // A Boolean prefix drops rounds, so the kept coordinates do not count them.
+            assert!(poly.sumcheck.num_rounds() > 0, "case {case} runs no round");
+            assert_eq!(poly.tensor, tower.tensor, "case {case}");
+            assert_eq!(poly.successor, tower.successor, "case {case}");
+            assert_eq!(
+                poly.sumcheck.polynomial_evaluations, tower.sumcheck.polynomial_evaluations,
+                "case {case}"
+            );
+            assert_eq!(
+                poly.sumcheck.pow_witnesses, tower.sumcheck.pow_witnesses,
+                "case {case}"
+            );
+            assert_eq!(poly.final_eval, tower.final_eval, "case {case}");
+            assert_eq!(poly_point, tower_point, "case {case}");
+            assert_eq!(poly_value, tower_value, "case {case}");
+            assert_eq!(
+                CanSample::<BinaryField128>::sample(&mut poly_sponge),
+                CanSample::<BinaryField128>::sample(&mut tower_sponge),
+                "case {case}"
+            );
+
+            // Agreeing legs would still agree if both were wrong in the same way.
+            // The claim is read off the witness, so the replay has to close on it.
+            let claim = embedding.eval_base(*point);
+            let mut verifier_sponge = WideChal::from_hasher(Vec::new(), Keccak256Hash);
+            assert!(
+                reduction.verify(&poly, claim, &mut verifier_sponge).is_ok(),
+                "case {case}"
+            );
+        }
     }
 }

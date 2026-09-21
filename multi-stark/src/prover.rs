@@ -383,6 +383,7 @@ where
             &tables,
             &public_values,
             lookup_data,
+            config.sliced_rounds(),
             challenger,
         )
     });

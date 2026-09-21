@@ -81,14 +81,12 @@ use p3_challenger::fs::TranscriptField;
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
 use p3_commit::{Mmcs, MultilinearPcs};
 use p3_field::Field;
-use p3_maybe_rayon::prelude::*;
 use p3_multilinear_util::point::Point;
-use p3_multilinear_util::poly::Poly;
 use p3_security::SecurityTerm;
 use p3_security::multilinear::{bit_ring_switch_tensors_term, bit_ring_switch_term};
 use p3_sumcheck::layout::{Layout, SuffixProver};
 use p3_sumcheck::ring_switch::bits::{
-    BitPacking, BitRingSwitch, BitRingSwitchProof, BitRingSwitchProofError,
+    BitPacking, BitPackingView, BitRingSwitch, BitRingSwitchProof, BitRingSwitchProofError,
 };
 use p3_sumcheck::{
     OpeningBatch, OpeningProtocol, PrescribedOpeningSecurity, PrescribedPointPcs, TableShape,
@@ -369,17 +367,8 @@ where
     ///     sub-byte level   excluded by the encodable bound, which starts at a byte
     ///     no hypercube     excluded by the layout, whose tables are power-of-two
     /// ```
-    fn packing(prover_data: &BinaryPcsProverData<EF, EF, MT>) -> BitPacking<EF> {
-        let packed = Poly::new(
-            prover_data
-                .table(0)
-                .poly(0)
-                .as_slice()
-                .par_iter()
-                .copied()
-                .collect(),
-        );
-        BitPacking::from_packed(packed)
+    fn packing(prover_data: &BinaryPcsProverData<EF, EF, MT>) -> BitPackingView<'_, EF> {
+        BitPacking::from_packed(prover_data.table(0).poly(0))
             .expect("a committed table is a hypercube over a byte-aligned level")
     }
 
@@ -476,16 +465,22 @@ where
             .iter()
             .map(Self::reduction)
             .collect::<Result<Vec<_>, _>>()?;
-        let packing = Self::packing(&prover_data);
+        let packing =
+            tracing::info_span!("read committed packing").in_scope(|| Self::packing(&prover_data));
 
         // One reduction per opening, each leaving one claim about the same packing.
         let mut readings = Vec::with_capacity(openings.len());
         let mut sent = Vec::with_capacity(openings.len());
         let mut surviving_points = Vec::with_capacity(openings.len());
+        let mut surviving_values = Vec::with_capacity(openings.len());
 
         for (opening, reduction) in openings.iter().zip(&reductions) {
-            let (proof, surviving_point, _) = tracing::info_span!("bit ring switch")
-                .in_scope(|| reduction.prove(&packing, challenger));
+            let (proof, surviving_point, surviving_value) = tracing::info_span!("bit ring switch")
+                .in_scope(|| {
+                    reduction.prove::<<EF as ChallengeField<EF>>::SumcheckRepr, _, _>(
+                        &packing, challenger,
+                    )
+                });
 
             // The elements the reduction sends already hold the witness's readings.
             // Read by columns they are the claimed values, so neither costs a pass of its own.
@@ -500,6 +495,9 @@ where
 
             readings.push(BitReadings { current, next });
             surviving_points.push(surviving_point);
+            // The rounds folded the packing down to this value, so the commitment is spared
+            // a pass over its single column to find the same one again.
+            surviving_values.push(OpeningBatch::new(vec![surviving_value], Vec::new()));
             sent.push(proof);
         }
 
@@ -507,10 +505,11 @@ where
         // Every surviving point came out of a reduction's rounds, so all are bound already.
         let opening = self
             .inner
-            .try_open_at(
+            .try_open_at_known(
                 prover_data,
                 &self.protocol(openings.len()),
                 &surviving_points,
+                &surviving_values,
                 challenger,
             )
             .map_err(BooleanPcsError::Commitment)?;
@@ -834,8 +833,9 @@ pub enum BooleanPcsError<EF, MmcsError> {
 
 #[cfg(test)]
 mod tests {
-    use p3_binary_field::{BinaryField64, BinaryField128, Gf2, PackedGf2x64};
+    use p3_binary_field::{BinaryField64, BinaryField128, Gf2, Ghash128, PackedGf2x64};
     use p3_field::PrimeCharacteristicRing;
+    use p3_multilinear_util::poly::Poly;
     use proptest::prelude::*;
     use rand::rngs::SmallRng;
     use rand::{RngExt, SeedableRng};
@@ -1088,7 +1088,8 @@ mod tests {
                 &packing_b
             };
             let reduction = BitRingSwitch::new(point).unwrap();
-            let (sent, surviving_point, surviving_value) = reduction.prove(packing, &mut chal);
+            let (sent, surviving_point, surviving_value) =
+                reduction.prove::<Ghash128, _, _>(packing, &mut chal);
             values.push(reduction.incoming_claim(&sent.tensor));
             reductions.push(sent);
             surviving_points.push(surviving_point);

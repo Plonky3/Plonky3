@@ -103,6 +103,13 @@ impl<F: Field, EF: ExtensionField<F>> Layout<F, EF> for SuffixProver<F, EF> {
         Witness::new(tables, folding)
     }
 
+    fn write_message(witness: &Witness<F>, _folding: usize, message: &mut [F]) {
+        // The contiguous slot layout is the suffix layout: folding blocks are already
+        // contiguous, so each column slot lands where it belongs.
+        debug_assert_eq!(Self::variable_order(), VariableOrder::Suffix);
+        witness.write_stacked_slots(message);
+    }
+
     fn claims(&self) -> &StackedClaims<F, EF> {
         &self.claims
     }
@@ -236,6 +243,25 @@ impl<F: Field, EF: ExtensionField<F>> Layout<F, EF> for SuffixProver<F, EF> {
 
         // Return both eval groups in the canonical current-then-next order.
         OpeningBatch::new(current_evals, next_evals)
+    }
+
+    fn record_opening_known(
+        &mut self,
+        table_idx: usize,
+        batch: &OpeningRequest,
+        point: &Point<EF>,
+        evals: &OpeningEvals<EF>,
+    ) {
+        // The opening point lives in the table's local frame, one coordinate per variable.
+        debug_assert_eq!(
+            point.num_variables(),
+            self.claims.tables[table_idx].num_variables()
+        );
+        debug_assert!(self.known_evals_agree(table_idx, batch, point, evals));
+
+        // The point is factorised as the evaluating route factorises it; only the pass is skipped.
+        let point = SvoPoint::new_unpacked(self.claims.folding, point, VariableOrder::Suffix);
+        self.claims.record_known(table_idx, batch, point, evals);
     }
 
     /// Evaluates the full stacked polynomial at a point and records the claim.
@@ -417,6 +443,35 @@ impl<F: Field, EF: ExtensionField<F>> Layout<F, EF> for SuffixProver<F, EF> {
 }
 
 impl<F: Field, EF: ExtensionField<F>> SuffixProver<F, EF> {
+    /// Whether supplied evaluations are the ones the opened columns hold at the point.
+    ///
+    /// This runs exactly the passes a supplied evaluation exists to avoid, so it is only
+    /// ever reached from a debug assertion.
+    fn known_evals_agree(
+        &self,
+        table_idx: usize,
+        batch: &OpeningRequest,
+        point: &Point<EF>,
+        evals: &OpeningEvals<EF>,
+    ) -> bool {
+        let table = &self.claims.tables[table_idx];
+        let point = SvoPoint::new_unpacked(self.claims.folding, point, VariableOrder::Suffix);
+
+        batch.has_same_shape(evals)
+            && batch
+                .current()
+                .iter()
+                .zip(evals.current())
+                .all(|(&poly_idx, &eval)| point.eval(table.poly(poly_idx)).0 == eval)
+            && batch
+                .next()
+                .iter()
+                .zip(evals.next())
+                .all(|(&poly_idx, &eval)| {
+                    point.eval_next_suffix(table.poly(poly_idx), None).0 == eval
+                })
+    }
+
     /// Runs the SVO preprocessing rounds.
     ///
     /// # Returns
@@ -839,7 +894,7 @@ impl<F: Field, EF: ExtensionField<F>> SuffixProver<F, EF> {
         R: Field + FromTable<EF>,
     {
         // Each source table is released as its image appears.
-        let tables: Vec<ClaimWeightTables<R>> = tables
+        let mut tables: Vec<ClaimWeightTables<R>> = tables
             .into_iter()
             .map(ClaimWeightTables::into_image)
             .collect();
@@ -857,7 +912,50 @@ impl<F: Field, EF: ExtensionField<F>> SuffixProver<F, EF> {
                     .collect()
             })
             .collect();
+
+        // A lone claim whose column is the whole stacked space leaves the residual weights
+        // equal to that claim's own table, so the table becomes the output rather than being
+        // read into a second one.
+        if let Some(sole) = self.sole_whole_space_table(&mut tables, &column_weights) {
+            return Poly::new(sole);
+        }
+
         self.combine_weights_from_plan::<R, R>(rs, alpha, &tables, &column_weights)
+    }
+
+    /// The one claim table the residual weights reduce to, when they reduce to one.
+    ///
+    /// This holds only when every accumulation the general path would run is the identity:
+    ///
+    /// ```text
+    ///     one source table, filling the stacked space, holding one column
+    ///     one claim on it, opening that column directly, at alpha^0
+    ///     no virtual claim, which would span the output on top of it
+    /// ```
+    ///
+    /// The commitment schemes that stack a single committed column open exactly this way.
+    fn sole_whole_space_table<R: Field>(
+        &self,
+        tables: &mut [ClaimWeightTables<R>],
+        column_weights: &[ColumnWeights<R>],
+    ) -> Option<Vec<R>> {
+        if !self.claims.virtual_claims.is_empty() || self.claims.tables.len() != 1 {
+            return None;
+        }
+        // The single table must be the whole stacked space, so its slot is the whole output.
+        if self.num_variables_table(0) != self.claims.num_variables {
+            return None;
+        }
+        let [column] = column_weights.first()?.as_slice() else {
+            return None;
+        };
+        let &[(claim_idx, false, scale)] = column.as_slice() else {
+            return None;
+        };
+        // Any other coefficient has to be applied, which is a pass of its own.
+        (scale == R::ONE)
+            .then(|| tables.get_mut(claim_idx)?.current.take())
+            .flatten()
     }
 
     /// Builds each claim's residual weight tables and the per-column batching coefficients.
@@ -1300,9 +1398,6 @@ mod tests {
         );
     }
 
-    /// The challenge field as its own representation, taking tables through the default map.
-    impl FromTable<Self> for BabyBearExt4 {}
-
     /// Records a claim set that exercises every column arity of the weight combiner, then checks
     /// that combining in `R` lands on the image of combining in `EF`.
     ///
@@ -1373,6 +1468,39 @@ mod tests {
             assert_combine_weights_in_matches_image::<BinaryField128, BinaryField128, Ghash128>(
                 folding, 7,
             );
+        }
+    }
+
+    /// The lone-claim shortcut must answer what the accumulating route answers.
+    ///
+    /// A commitment that stacks one committed column opens exactly this way, so that shape
+    /// always takes the shortcut. The accumulating route is the reference it is held to.
+    #[test]
+    fn a_lone_whole_space_claim_matches_the_accumulating_route() {
+        type F = BinaryField128;
+
+        let mut rng = SmallRng::seed_from_u64(0x501E);
+        // One table of one column, so the column's slot is the whole stacked space.
+        let tables = vec![table::<F>(&mut rng, 5, 1)];
+        let mut prover =
+            SuffixProver::<F, F>::from_witness(SuffixProver::<F, F>::new_witness(tables, 0));
+        assert_eq!(prover.num_variables_table(0), prover.claims.num_variables);
+
+        let point = Point::<F>::rand(&mut rng, prover.claims.tables[0].num_variables());
+        prover.record_opening(0, &OpeningBatch::new(vec![0], Vec::new()), &point);
+
+        // No preprocessing round, so the batching coefficient of the one claim is alpha^0.
+        let rs = Point::<F>::rand(&mut rng, 0);
+        let alpha: F = rng.random();
+        let expected = prover.combine_weights(&rs, alpha);
+        let (tables, column_weights) = prover.weight_plan(&rs, alpha);
+        let combined = prover.combine_weights_in::<Ghash128>(&rs, alpha, tables, column_weights);
+
+        assert_eq!(combined.num_variables(), expected.num_variables());
+        // Guard against a vacuous comparison of two zero tables.
+        assert!(expected.iter().any(|&weight| weight != F::ZERO));
+        for (&combined, &expected) in combined.iter().zip_eq(expected.iter()) {
+            assert_eq!(combined, Ghash128::from(expected));
         }
     }
 

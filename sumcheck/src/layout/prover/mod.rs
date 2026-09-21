@@ -33,6 +33,29 @@ use crate::layout::{LayoutStrategy, Table, Witness};
 use crate::strategy::{SumcheckProver, VariableOrder};
 use crate::table::{OpeningEvals, OpeningRequest, TableShape};
 
+/// The description an opening of one batch at a caller-fixed point plays.
+///
+/// A caller-fixed point contributes no step, so the description holds no challenge.
+fn given_opening_shape<F, EF, L>(
+    layout: &L,
+    table_idx: usize,
+    batch: &OpeningRequest,
+) -> OpeningShape
+where
+    F: Field,
+    EF: ExtensionField<F>,
+    L: Layout<F, EF>,
+{
+    OpeningShape::new(
+        LayoutBinding::new(layout.num_variables(), L::strategy(), layout.table_shapes()),
+        table_idx,
+        layout.num_variables_table(table_idx),
+        batch.current(),
+        batch.next(),
+        PointSource::Given,
+    )
+}
+
 /// Stacked-sumcheck prover layout
 pub trait Layout<F: Field, EF: ExtensionField<F>>: Sized {
     /// Builds this layout from a committed witness.
@@ -40,6 +63,12 @@ pub trait Layout<F: Field, EF: ExtensionField<F>>: Sized {
 
     /// Builds a witness structure for this layout from source tables.
     fn new_witness(tables: Vec<Table<F>>, folding: usize) -> Witness<F>;
+
+    /// Lays the witness out in this layout's variable order, inside the committed message.
+    ///
+    /// The message arrives zeroed and holds one cell per stacked evaluation. Every cell an
+    /// implementation leaves untouched is committed as zero.
+    fn write_message(witness: &Witness<F>, folding: usize, message: &mut [F]);
 
     /// Returns the shared claim state recorded against the stacked polynomial.
     fn claims(&self) -> &StackedClaims<F, EF>;
@@ -76,12 +105,12 @@ pub trait Layout<F: Field, EF: ExtensionField<F>>: Sized {
     {
         // Encode and Merkle-commit the stacked polynomial in the mode's variable order.
         let (root, prover_data) = commit_base(
-            Self::variable_order(),
             encoder,
             mmcs,
-            &witness.poly,
+            witness.num_variables(),
             folding,
             starting_log_inv_rate,
+            |message| Self::write_message(&witness, folding, message),
         );
 
         // The witness is consumed into the layout once its codeword is committed.
@@ -258,17 +287,7 @@ pub trait Layout<F: Field, EF: ExtensionField<F>>: Sized {
             "opening schedule must name at least one column"
         );
 
-        // A caller-fixed point contributes no step.
-        //
-        // This description therefore holds no challenge.
-        let shape = OpeningShape::new(
-            LayoutBinding::new(self.num_variables(), Self::strategy(), self.table_shapes()),
-            table_idx,
-            self.num_variables_table(table_idx),
-            batch.current(),
-            batch.next(),
-            PointSource::Given,
-        );
+        let shape = given_opening_shape(self, table_idx, batch);
         let mut transcript = OpeningProverTranscript::<Ch, F, EF>::new(challenger, shape);
 
         // Evaluate at the supplied point, then bind what was found.
@@ -279,6 +298,60 @@ pub trait Layout<F: Field, EF: ExtensionField<F>>: Sized {
         transcript.finish();
 
         evals
+    }
+
+    /// Records opening claims at a given point from evaluations the caller already holds.
+    ///
+    /// Plays exactly the transcript [`Self::eval_at`] plays. Only the source of the
+    /// evaluations differs: they are supplied rather than read off the columns.
+    ///
+    /// # Soundness
+    ///
+    /// A supplied evaluation is bound like any other, and the verifier recomputes its own.
+    /// A wrong one therefore yields a proof that does not verify, never one that does.
+    ///
+    /// # Arguments
+    ///
+    /// - Index of the table whose columns are opened.
+    /// - Column indices opened directly and through the successor view.
+    /// - Local-frame opening point.
+    /// - Evaluations, in the order [`Self::record_opening`] returns them.
+    /// - Sponge of the surrounding protocol, borrowed for this call.
+    ///
+    /// # Panics
+    ///
+    /// When the request names no column at all, or the evaluations do not match its shape.
+    fn eval_at_known<Ch>(
+        &mut self,
+        table_idx: usize,
+        batch: &OpeningRequest,
+        point: &Point<EF>,
+        evals: &OpeningEvals<EF>,
+        challenger: &mut Ch,
+    ) where
+        F: TranscriptField,
+        Ch: FieldChallenger<F> + GrindingChallenger<Witness = F>,
+    {
+        // Opening nothing would silently record an empty claim.
+        assert!(
+            !batch.is_empty(),
+            "opening schedule must name at least one column"
+        );
+        // One evaluation per column the request names, in the same two groups.
+        assert!(
+            batch.has_same_shape(evals),
+            "one evaluation per opened column, direct and successor alike"
+        );
+
+        let shape = given_opening_shape(self, table_idx, batch);
+        let mut transcript = OpeningProverTranscript::<Ch, F, EF>::new(challenger, shape);
+
+        // Record the supplied evaluations against the point, then bind them.
+        self.record_opening_known(table_idx, batch, point, evals);
+        transcript.evaluations(evals);
+
+        // Require that every described step was played.
+        transcript.finish();
     }
 
     /// Evaluates the selected columns of one table and records the resulting claim.
@@ -306,6 +379,35 @@ pub trait Layout<F: Field, EF: ExtensionField<F>>: Sized {
         batch: &OpeningRequest,
         point: &Point<EF>,
     ) -> OpeningEvals<EF>;
+
+    /// Records opening claims for the selected columns of one table from known evaluations.
+    ///
+    /// The arithmetic half of [`Self::eval_at_known`], with no transcript of its own.
+    ///
+    /// # Overview
+    ///
+    /// - Each evaluation is taken as the claim its column's pass would have produced.
+    /// - The claim is appended to this table's list in insertion order, as
+    ///   [`Self::record_opening`] appends it.
+    ///
+    /// # Arguments
+    ///
+    /// - Index of the table whose columns are opened.
+    /// - Column indices opened directly and through the successor view.
+    /// - Local-frame opening point, one coordinate per table variable.
+    /// - Evaluations, in the order [`Self::record_opening`] returns them.
+    ///
+    /// # Panics
+    ///
+    /// When the layout runs preprocessing rounds: those rounds read per-round residuals
+    /// of the column, which an evaluation alone does not carry.
+    fn record_opening_known(
+        &mut self,
+        table_idx: usize,
+        batch: &OpeningRequest,
+        point: &Point<EF>,
+        evals: &OpeningEvals<EF>,
+    );
 
     /// Records an out-of-domain evaluation of the full stacked polynomial.
     ///
@@ -714,7 +816,7 @@ pub(super) mod test_utils {
         let mut prover_challenger = challenger();
         let stacked_num_variables = witness.num_variables();
         // Snapshot the stacked polynomial before the witness is consumed.
-        let stacked_poly = witness.poly().clone();
+        let stacked_poly = witness.stacked_poly();
 
         // Prover: build the selected layout, record openings, add a virtual claim.
         let mut prover_state = L::from_witness(witness);
@@ -1054,7 +1156,7 @@ mod tests {
         assert_eq!(stacked_num_variables, FOLDING + 1);
 
         // Keep the original polynomial for an independent evaluation.
-        let stacked_poly = witness.poly().clone();
+        let stacked_poly = witness.stacked_poly();
 
         // Exercise both concrete and virtual claims.
         let mut prover_challenger = challenger();
@@ -1115,7 +1217,7 @@ mod tests {
         let shapes = table_shapes();
         let stacked_num_variables = witness.num_variables();
         // Keep a copy of the stacked polynomial to cross-check the final fold.
-        let stacked_poly = witness.poly().clone();
+        let stacked_poly = witness.stacked_poly();
         let strategy = SuffixProver::<F, EF>::strategy();
 
         // Mixed schedule: each tuple is (table, current columns, next columns).
@@ -1248,7 +1350,7 @@ mod tests {
         let witness = PrefixProver::<F, EF>::new_witness(build_tables(), FOLDING);
         let shapes = table_shapes();
         let stacked_num_variables = witness.num_variables();
-        let stacked_poly = witness.poly().clone();
+        let stacked_poly = witness.stacked_poly();
         let strategy = PrefixProver::<F, EF>::strategy();
 
         // Mixed schedule: each tuple is (table, current columns, next columns).

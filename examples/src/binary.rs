@@ -20,8 +20,10 @@ use p3_binary_pcs::{
     BinaryPcs, BinaryPcsConfig, BinaryPcsConfigError, BinaryPcsParams, BinaryPcsProverData,
     BooleanPcsError, BooleanTraceData, BooleanTraceError, BooleanTracePcs, GroupedCodewordMmcs,
 };
+use p3_blake3::Blake3;
 use p3_challenger::{CanObserve, HashChallenger};
 use p3_commit::MultilinearPcs;
+use p3_field::RawDataSerializable;
 use p3_keccak::Keccak256Hash;
 use p3_lookup::InteractionSymbolicBuilder;
 use p3_matrix::Matrix;
@@ -39,41 +41,144 @@ use p3_multi_stark::{
 use p3_sumcheck::layout::{Layout, SuffixProver, Table, Witness, plan_stacked_layout};
 use p3_sumcheck::ring_switch::bits::BitRingSwitch;
 use p3_sumcheck::{PrescribedPointPcs, TableShape};
-use p3_symmetric::{CompressionFunctionFromHasher, SerializingHasher};
+use p3_symmetric::{CompressionFunctionFromHasher, CryptographicHasher, SerializingHasher};
 use p3_util::log2_strict_usize;
 
 type F = BinaryField128;
-type Hash = SerializingHasher<Keccak256Hash>;
+/// `H` is the byte hash the Merkle leaves, the Merkle nodes, and the transcript all run.
+type Hash<H> = SerializingHasher<H>;
 /// `N` is the number of children each Merkle-tree node compresses.
-type Compress<const N: usize> = CompressionFunctionFromHasher<Keccak256Hash, N, 32>;
-type MerkleMmcs<const N: usize> = p3_merkle_tree::MerkleTreeMmcs<F, u8, Hash, Compress<N>, N, 32>;
-type Mmcs<const N: usize> = GroupedCodewordMmcs<MerkleMmcs<N>>;
-type Challenger = BinaryChallenger<F, HashChallenger<u8, Keccak256Hash, 32>>;
+type Compress<H, const N: usize> = CompressionFunctionFromHasher<H, N, 32>;
+type MerkleMmcs<H, const N: usize> =
+    p3_merkle_tree::MerkleTreeMmcs<F, u8, Hash<H>, Compress<H, N>, N, 32>;
+type Mmcs<H, const N: usize> = GroupedCodewordMmcs<MerkleMmcs<H, N>>;
+type Challenger<H> = BinaryChallenger<F, HashChallenger<u8, H, 32>>;
+
+/// A byte hash the harness builds its Merkle trees and its Fiat-Shamir transcript from.
+///
+/// Every implementor is a unit type carrying no state, so [`Self::INSTANCE`] is the only value
+/// a configuration ever needs to name one.
+pub trait HarnessHash:
+    CryptographicHasher<u8, [u8; 32]> + Clone + Copy + fmt::Debug + Send + Sync + 'static
+{
+    /// The hash itself.
+    const INSTANCE: Self;
+
+    /// Collision resistance of this hash, in bits, as the security report's cap.
+    ///
+    /// The digest is 32 bytes wide, so a hash whose construction is as strong as its output
+    /// states the birthday bound, half of that. One that is weaker states the lower number, so
+    /// every implementor names its own.
+    const COLLISION_RESISTANCE_BITS: usize;
+}
+
+impl HarnessHash for Keccak256Hash {
+    const INSTANCE: Self = Self;
+    const COLLISION_RESISTANCE_BITS: usize = 128;
+}
+
+impl HarnessHash for Blake3 {
+    const INSTANCE: Self = Self;
+    const COLLISION_RESISTANCE_BITS: usize = 128;
+}
+
+/// The byte hash one run commits and transcribes with.
+///
+/// Both choices emit a 32-byte digest and are capped at the same collision resistance, so the
+/// composed security a statement reports does not move between them. Proof bytes do: the two
+/// hashes produce different roots and different challenges.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum HashFamily {
+    /// Keccak-256.
+    #[default]
+    Keccak256,
+    /// BLAKE3, which compresses a 64-byte block where Keccak-256 permutes a 136-byte rate.
+    Blake3,
+}
+
+impl fmt::Display for HashFamily {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Keccak256 => f.write_str("keccak-256"),
+            Self::Blake3 => f.write_str("blake3"),
+        }
+    }
+}
+
+/// The grouped Merkle commitment the rounds of `pcs_config` commit and fold through.
+///
+/// `leaf_elements` packs that many field elements into one leaf; `None` packs exactly the coset
+/// one fold batch opens, which is the grouping the schedule itself derives.
+///
+/// # Errors
+///
+/// `leaf_elements` is zero or not a power of two, so no grouping matches it.
+fn grouped_mmcs<H: HarnessHash, const N: usize>(
+    pcs_config: &BinaryPcsConfig,
+    leaf_elements: Option<usize>,
+) -> Result<Mmcs<H, N>, BinaryProofError> {
+    let merkle = MerkleMmcs::<H, N>::new(
+        Hash::new(H::INSTANCE),
+        Compress::<H, N>::new(H::INSTANCE),
+        0,
+    );
+    match leaf_elements {
+        Some(elements) if !elements.is_power_of_two() => {
+            Err(BinaryProofError::UnsupportedLeafElements(elements))
+        }
+        Some(elements) => Ok(Mmcs::with_group_size(merkle, pcs_config, elements)),
+        None => Ok(Mmcs::for_folding(merkle, pcs_config)),
+    }
+}
+
+/// Field elements one Merkle leaf of the base codeword packs under `mmcs`.
+///
+/// The commitment caps a leaf at each round's message length, so a request wider than the base
+/// codeword's message is reported at the cap rather than at its face value.
+///
+/// # Panics
+///
+/// Panics if the base codeword carries no message, which a validated schedule never does.
+fn leaf_elements_of<H, const N: usize>(pcs_config: &BinaryPcsConfig, mmcs: &Mmcs<H, N>) -> usize {
+    let base_height = 1usize << (pcs_config.num_variables() + pcs_config.log_inv_rate());
+    mmcs.group_size_at(base_height)
+        .expect("a validated schedule blows its message up by the inverse rate")
+}
 
 /// Multi-STARK configuration proving AIRs over `BinaryField128` with the binary PCS.
 ///
 /// `N` is the Merkle tree's child arity.
 /// `Ntt` selects the additive transform used to encode the base codeword.
-pub struct BinaryStarkConfig<const N: usize, Ntt = PolyBasisNtt> {
-    pcs: BinaryPcs<F, F, Mmcs<N>, Mmcs<N>, AdditiveRsEncoder<F, Ntt>>,
+/// `H` is the byte hash the Merkle tree and the transcript share.
+pub struct BinaryStarkConfig<const N: usize, Ntt = PolyBasisNtt, H = Keccak256Hash> {
+    pcs: BinaryPcs<F, F, Mmcs<H, N>, Mmcs<H, N>, AdditiveRsEncoder<F, Ntt>>,
+    leaf_elements: usize,
 }
 
-impl<const N: usize, Ntt> MultiStarkConfig for BinaryStarkConfig<N, Ntt>
+impl<const N: usize, Ntt, H> BinaryStarkConfig<N, Ntt, H> {
+    /// Field elements each Merkle leaf of the base codeword packs.
+    pub const fn leaf_elements(&self) -> usize {
+        self.leaf_elements
+    }
+}
+
+impl<const N: usize, Ntt, H> MultiStarkConfig for BinaryStarkConfig<N, Ntt, H>
 where
     Ntt: AdditiveNtt<F> + Sync,
+    H: HarnessHash,
 {
     type Val = F;
     type Challenge = F;
-    type Challenger = Challenger;
-    type Pcs = BinaryPcs<F, F, Mmcs<N>, Mmcs<N>, AdditiveRsEncoder<F, Ntt>>;
+    type Challenger = Challenger<H>;
+    type Pcs = BinaryPcs<F, F, Mmcs<H, N>, Mmcs<H, N>, AdditiveRsEncoder<F, Ntt>>;
 
     fn pcs(&self) -> &Self::Pcs {
         &self.pcs
     }
 
     fn collision_resistance_bits(&self) -> Option<usize> {
-        // Keccak-256 is shared by the transcript and Merkle tree.
-        Some(128)
+        // One hash serves the transcript and the Merkle tree alike.
+        Some(H::COLLISION_RESISTANCE_BITS)
     }
 
     fn min_num_variables(&self) -> usize {
@@ -87,7 +192,7 @@ where
 
     fn committed_table<'a>(
         &self,
-        prover_data: &'a BinaryPcsProverData<F, F, Mmcs<N>>,
+        prover_data: &'a BinaryPcsProverData<F, F, Mmcs<H, N>>,
         table_index: usize,
     ) -> &'a Table<F> {
         prover_data.table(table_index)
@@ -95,29 +200,35 @@ where
 }
 
 /// Derives a [`BinaryStarkConfig`] for a stacked polynomial of `arity` variables, committing
-/// through an `N`-ary Merkle tree and encoding its codeword through `ntt`.
+/// through an `N`-ary Merkle tree of `H` and encoding its codeword through `ntt`.
 ///
 /// `folding` batches up to that many sequential variable folds between PCS commitments; it is
 /// clamped to `arity`, since a batch cannot fold more variables than the polynomial has.
-pub fn binary_config<const N: usize, Ntt>(
+/// `leaf_elements` sizes the Merkle leaves independently of that batch; `None` sizes each leaf
+/// to exactly the coset a batch opens.
+///
+/// # Errors
+///
+/// - `leaf_elements` is zero or not a power of two.
+/// - The PCS parameters do not describe a usable schedule for `arity`.
+pub fn binary_config<const N: usize, Ntt, H>(
     arity: usize,
     params: BinaryPcsParams,
     folding: usize,
+    leaf_elements: Option<usize>,
     ntt: Ntt,
-) -> Result<BinaryStarkConfig<N, Ntt>, BinaryPcsConfigError>
+) -> Result<BinaryStarkConfig<N, Ntt, H>, BinaryProofError>
 where
     Ntt: AdditiveNtt<F> + Sync,
+    H: HarnessHash,
 {
     let pcs_config =
         BinaryPcsConfig::try_new_with_folding::<F, F>(arity, params, folding.min(arity))?;
-    let merkle = MerkleMmcs::<N>::new(
-        Hash::new(Keccak256Hash),
-        Compress::<N>::new(Keccak256Hash),
-        0,
-    );
-    let mmcs = Mmcs::<N>::for_folding(merkle, &pcs_config);
+    let mmcs = grouped_mmcs::<H, N>(&pcs_config, leaf_elements)?;
+    let leaf_elements = leaf_elements_of(&pcs_config, &mmcs);
     Ok(BinaryStarkConfig {
         pcs: BinaryPcs::with_ntt(pcs_config, mmcs.clone(), mmcs, ntt)?,
+        leaf_elements,
     })
 }
 
@@ -127,24 +238,32 @@ where
 /// The trace is committed as bits, one committed element per 128 of them, and its codeword is
 /// encoded through the level's own additive NTT, [`PolyBasisNtt`].
 ///
-/// `N` is the Merkle tree's child arity.
-pub struct BooleanStarkConfig<const N: usize> {
-    pcs: BooleanTracePcs<F, Mmcs<N>, Mmcs<N>>,
+/// `N` is the Merkle tree's child arity, and `H` the byte hash it shares with the transcript.
+pub struct BooleanStarkConfig<const N: usize, H = Keccak256Hash> {
+    pcs: BooleanTracePcs<F, Mmcs<H, N>, Mmcs<H, N>>,
+    leaf_elements: usize,
 }
 
-impl<const N: usize> MultiStarkConfig for BooleanStarkConfig<N> {
+impl<const N: usize, H> BooleanStarkConfig<N, H> {
+    /// Field elements each Merkle leaf of the base codeword packs.
+    pub const fn leaf_elements(&self) -> usize {
+        self.leaf_elements
+    }
+}
+
+impl<const N: usize, H: HarnessHash> MultiStarkConfig for BooleanStarkConfig<N, H> {
     type Val = F;
     type Challenge = F;
-    type Challenger = Challenger;
-    type Pcs = BooleanTracePcs<F, Mmcs<N>, Mmcs<N>>;
+    type Challenger = Challenger<H>;
+    type Pcs = BooleanTracePcs<F, Mmcs<H, N>, Mmcs<H, N>>;
 
     fn pcs(&self) -> &Self::Pcs {
         &self.pcs
     }
 
     fn collision_resistance_bits(&self) -> Option<usize> {
-        // Keccak-256 is shared by the transcript and Merkle tree.
-        Some(128)
+        // One hash serves the transcript and the Merkle tree alike.
+        Some(H::COLLISION_RESISTANCE_BITS)
     }
 
     fn min_num_variables(&self) -> usize {
@@ -159,7 +278,7 @@ impl<const N: usize> MultiStarkConfig for BooleanStarkConfig<N> {
 
     fn committed_table<'a>(
         &self,
-        prover_data: &'a BooleanTraceData<F, Mmcs<N>>,
+        prover_data: &'a BooleanTraceData<F, Mmcs<H, N>>,
         table_index: usize,
     ) -> &'a Table<F> {
         prover_data.table(table_index)
@@ -167,21 +286,24 @@ impl<const N: usize> MultiStarkConfig for BooleanStarkConfig<N> {
 }
 
 /// Derives a [`BooleanStarkConfig`] for one Boolean trace of `shape`, committing through an
-/// `N`-ary Merkle tree.
+/// `N`-ary Merkle tree of `H`.
 ///
 /// Every column of the trace stacks into one bit witness. Each committed element absorbs
 /// [`BitRingSwitch::ABSORBED`] of its variables, and the PCS schedule covers the rest. `folding`
-/// is clamped to that committed arity, as in [`binary_config`].
+/// and `leaf_elements` mean what they do in [`binary_config`], with `folding` clamped to the
+/// committed arity.
 ///
 /// # Errors
 ///
 /// - The bit witness has fewer variables than one committed element absorbs.
 /// - The PCS parameters do not describe a usable schedule for the committed arity.
-pub fn boolean_config<const N: usize>(
+/// - `leaf_elements` is zero or not a power of two.
+pub fn boolean_config<const N: usize, H: HarnessHash>(
     shape: TableShape,
     params: BinaryPcsParams,
     folding: usize,
-) -> Result<BooleanStarkConfig<N>, BinaryProofError> {
+    leaf_elements: Option<usize>,
+) -> Result<BooleanStarkConfig<N, H>, BinaryProofError> {
     let (arity, _) = plan_stacked_layout(&[shape]);
     let absorbed = BitRingSwitch::<F>::ABSORBED;
     let committed = arity
@@ -195,20 +317,16 @@ pub fn boolean_config<const N: usize>(
 
     let pcs_config =
         BinaryPcsConfig::try_new_with_folding::<F, F>(committed, params, folding.min(committed))?;
-    let merkle = MerkleMmcs::<N>::new(
-        Hash::new(Keccak256Hash),
-        Compress::<N>::new(Keccak256Hash),
-        0,
-    );
-    let mmcs = Mmcs::<N>::for_folding(merkle, &pcs_config);
+    let mmcs = grouped_mmcs::<H, N>(&pcs_config, leaf_elements)?;
+    let leaf_elements = leaf_elements_of(&pcs_config, &mmcs);
     let pcs = BooleanTracePcs::new(pcs_config, mmcs.clone(), mmcs, arity)
         .map_err(BinaryProofError::BooleanConfig)?;
-    Ok(BooleanStarkConfig { pcs })
+    Ok(BooleanStarkConfig { pcs, leaf_elements })
 }
 
 /// A fresh transcript seeded for one commit, prove, or verify call.
-fn binary_challenger() -> Challenger {
-    Challenger::from_hasher(b"p3-examples-binary-hash-air-v1".to_vec(), Keccak256Hash)
+fn binary_challenger<H: HarnessHash>() -> Challenger<H> {
+    Challenger::from_hasher(b"p3-examples-binary-hash-air-v1".to_vec(), H::INSTANCE)
 }
 
 /// Tunable parameters for [`prove_binary_air`].
@@ -233,6 +351,14 @@ pub struct BinaryProofOptions {
     /// 4 cuts the tree's compression count to a third, since a 4-ary node's 128 bytes of children still
     /// fit one Keccak-256 block, at the cost of larger authentication paths in the proof.
     pub merkle_arity: usize,
+    /// Byte hash the Merkle trees and the Fiat-Shamir transcript share.
+    pub hash: HashFamily,
+    /// Field elements each Merkle leaf packs, or `None` to pack one fold batch's coset.
+    ///
+    /// A leaf wider than that coset shortens the tree and hashes longer messages, and pays for
+    /// it in proof bytes: every query then authenticates symbols it did not ask for, and those
+    /// symbols travel in the opening.
+    pub leaf_elements: Option<usize>,
 }
 
 impl Default for BinaryProofOptions {
@@ -244,6 +370,8 @@ impl Default for BinaryProofOptions {
             folding: 3,
             sumcheck_pow_bits: 0,
             merkle_arity: 2,
+            hash: HashFamily::Keccak256,
+            leaf_elements: None,
         }
     }
 }
@@ -268,6 +396,15 @@ pub struct BinaryProofReport {
     pub width: usize,
     /// Number of variables in the stacked polynomial the PCS commits to.
     pub stacked_variables: usize,
+    /// Byte hash the Merkle trees and the transcript ran.
+    pub hash: HashFamily,
+    /// Field elements each Merkle leaf of the base codeword packed.
+    pub leaf_elements: usize,
+    /// Field elements the run asked a leaf to pack, or `None` for one fold batch's coset.
+    ///
+    /// A request above the base codeword's message length is capped, and only
+    /// [`Self::leaf_elements`] describes what the commitment then packed.
+    pub requested_leaf_elements: Option<usize>,
     /// Serialized proof size, in bytes.
     pub proof_bytes: usize,
     /// Wall-clock time to lay the trace out as a table and run `prove`.
@@ -283,6 +420,23 @@ impl fmt::Display for BinaryProofReport {
         writeln!(f, "Rows: {}", self.rows)?;
         writeln!(f, "Width: {}", self.width)?;
         writeln!(f, "Stacked variables: {}", self.stacked_variables)?;
+        writeln!(f, "Hash: {}", self.hash)?;
+        write!(
+            f,
+            "Merkle leaf: {} field elements ({} bytes",
+            self.leaf_elements,
+            self.leaf_elements.saturating_mul(F::NUM_BYTES)
+        )?;
+        if let Some(requested) = self
+            .requested_leaf_elements
+            .filter(|&requested| requested > self.leaf_elements)
+        {
+            write!(
+                f,
+                "; requested {requested}, capped at the base message length"
+            )?;
+        }
+        writeln!(f, ")")?;
         writeln!(f, "Proof size: {} bytes", self.proof_bytes)?;
         writeln!(f, "Prove time: {:.3}s", self.prove_seconds)?;
         writeln!(f, "Verify time: {:.3}s", self.verify_seconds)?;
@@ -293,8 +447,8 @@ impl fmt::Display for BinaryProofReport {
 /// Failure constructing the config, setting up keys, proving, or verifying a binary AIR.
 ///
 /// The wrapped PCS errors project through `BinaryStarkConfig<2>` and `BooleanStarkConfig<2>`,
-/// but neither commitment's error type depends on the Merkle arity, so the same variant covers
-/// every supported arity.
+/// but neither commitment's error type depends on the Merkle arity or the hash, so the same
+/// variant covers every supported combination.
 #[derive(Debug, thiserror::Error)]
 pub enum BinaryProofError {
     /// The requested PCS parameters do not describe a usable binary-PCS schedule.
@@ -321,6 +475,9 @@ pub enum BinaryProofError {
     /// `options.merkle_arity` is not one of the arities the binary-field harness builds.
     #[error("unsupported Merkle arity {0}; expected 2 or 4")]
     UnsupportedMerkleArity(usize),
+    /// `options.leaf_elements` is not a power of two, so no grouping matches it.
+    #[error("unsupported leaf size {0}; expected a power of two")]
+    UnsupportedLeafElements(usize),
 }
 
 impl From<BinaryPcsConfigError> for BinaryProofError {
@@ -341,12 +498,15 @@ impl From<VerificationError<PcsError<BinaryStarkConfig<2>>>> for BinaryProofErro
     }
 }
 
-/// How a harness configuration's proving and verification failures surface as a
-/// [`BinaryProofError`].
+/// What the harness needs of a configuration beyond [`MultiStarkConfig`]: the leaf geometry it
+/// resolved, and how its proving and verification failures surface as a [`BinaryProofError`].
 ///
 /// Coherence cannot tell the two configurations' error projections apart, so `From` impls for
 /// both would overlap.
-trait HarnessErrors: MultiStarkConfig {
+trait HarnessConfig: MultiStarkConfig {
+    /// Field elements each Merkle leaf of the base codeword packs.
+    fn leaf_elements(&self) -> usize;
+
     /// Wrap a failure from `setup` or proving.
     fn prove_error(error: ProvingError<PcsProverError<Self>>) -> BinaryProofError;
 
@@ -354,10 +514,15 @@ trait HarnessErrors: MultiStarkConfig {
     fn verify_error(error: VerificationError<PcsError<Self>>) -> BinaryProofError;
 }
 
-impl<const N: usize, Ntt> HarnessErrors for BinaryStarkConfig<N, Ntt>
+impl<const N: usize, Ntt, H> HarnessConfig for BinaryStarkConfig<N, Ntt, H>
 where
     Ntt: AdditiveNtt<F> + Sync,
+    H: HarnessHash,
 {
+    fn leaf_elements(&self) -> usize {
+        self.leaf_elements
+    }
+
     fn prove_error(error: ProvingError<PcsProverError<Self>>) -> BinaryProofError {
         BinaryProofError::Prove(error)
     }
@@ -367,7 +532,11 @@ where
     }
 }
 
-impl<const N: usize> HarnessErrors for BooleanStarkConfig<N> {
+impl<const N: usize, H: HarnessHash> HarnessConfig for BooleanStarkConfig<N, H> {
+    fn leaf_elements(&self) -> usize {
+        self.leaf_elements
+    }
+
     fn prove_error(error: ProvingError<PcsProverError<Self>>) -> BinaryProofError {
         BinaryProofError::BooleanProve(error)
     }
@@ -457,17 +626,17 @@ impl Backend {
     }
 
     /// Prove through this backend, whose proof and transcript are those of every other.
-    fn prove<A: BinaryAir, C>(
+    fn prove<A: BinaryAir, C, H: HarnessHash>(
         self,
         config: &C,
         instances: ProverInstances<'_, C, A>,
         pow_bits: usize,
-        challenger: &mut Challenger,
+        challenger: &mut Challenger<H>,
     ) -> Result<MultiStarkProof<C>, ProvingError<PcsProverError<C>>>
     where
-        C: MultiStarkConfig<Val = F, Challenge = F, Challenger = Challenger>,
-        C::Pcs: PrescribedPointPcs<F, Challenger>,
-        Challenger: CanObserve<Commitment<C>>,
+        C: MultiStarkConfig<Val = F, Challenge = F, Challenger = Challenger<H>>,
+        C::Pcs: PrescribedPointPcs<F, Challenger<H>>,
+        Challenger<H>: CanObserve<Commitment<C>>,
         Commitment<C>: Clone,
         ProverData<C>: Clone,
     {
@@ -504,9 +673,10 @@ where
 
 /// Proves and verifies `air` against `trace`, reporting size and timing measurements.
 ///
-/// Dispatches on `options.merkle_arity` to build a Merkle tree of that child count, encodes the
-/// binary-PCS codeword through `ntt`, and runs its zerocheck through [`Backend::preferred`]; see
-/// [`prove_binary_air_with_ntt_and_backend`] to choose a different backend.
+/// Dispatches on `options.merkle_arity` and `options.hash` to build a Merkle tree of that child
+/// count over that hash, encodes the binary-PCS codeword through `ntt`, and runs its zerocheck
+/// through [`Backend::preferred`]; see [`prove_binary_air_with_ntt_and_backend`] to choose a
+/// different backend.
 ///
 /// # Panics
 ///
@@ -527,11 +697,11 @@ where
 
 /// Proves and verifies `air` against `trace`, reporting size and timing measurements.
 ///
-/// Dispatches on `options.merkle_arity` to build a Merkle tree of that child count, encodes the
-/// binary-PCS codeword through `ntt`, and runs its zerocheck through `backend`: [`ReprBackend`]
-/// over `GF(4)` and [`Ghash128`] for [`Backend::PolyBasis`], [`SubfieldBackend`] over `GF(4)` for
-/// [`Backend::Subfield`]. Every backend emits a proof identical to the one
-/// [`p3_multi_stark::prove`] does.
+/// Dispatches on `options.merkle_arity` and `options.hash` to build a Merkle tree of that child
+/// count over that hash, encodes the binary-PCS codeword through `ntt`, and runs its zerocheck
+/// through `backend`: [`ReprBackend`] over `GF(4)` and [`Ghash128`] for [`Backend::PolyBasis`],
+/// [`SubfieldBackend`] over `GF(4)` for [`Backend::Subfield`]. Every backend emits a proof
+/// identical to the one [`p3_multi_stark::prove`] does.
 ///
 /// # Panics
 ///
@@ -548,10 +718,20 @@ where
     A: BinaryAir,
     Ntt: AdditiveNtt<F> + Sync,
 {
-    match options.merkle_arity {
-        2 => prove_binary_air_with::<A, 2, Ntt>(air, trace, options, ntt, backend),
-        4 => prove_binary_air_with::<A, 4, Ntt>(air, trace, options, ntt, backend),
-        other => Err(BinaryProofError::UnsupportedMerkleArity(other)),
+    match (options.merkle_arity, options.hash) {
+        (2, HashFamily::Keccak256) => {
+            prove_binary_air_with::<A, 2, Ntt, Keccak256Hash>(air, trace, options, ntt, backend)
+        }
+        (2, HashFamily::Blake3) => {
+            prove_binary_air_with::<A, 2, Ntt, Blake3>(air, trace, options, ntt, backend)
+        }
+        (4, HashFamily::Keccak256) => {
+            prove_binary_air_with::<A, 4, Ntt, Keccak256Hash>(air, trace, options, ntt, backend)
+        }
+        (4, HashFamily::Blake3) => {
+            prove_binary_air_with::<A, 4, Ntt, Blake3>(air, trace, options, ntt, backend)
+        }
+        (other, _) => Err(BinaryProofError::UnsupportedMerkleArity(other)),
     }
 }
 
@@ -562,7 +742,7 @@ where
 /// one extra variable per doubling of the column count, since every column is stacked into a
 /// single committed polynomial.
 #[allow(clippy::needless_pass_by_value)]
-fn prove_binary_air_with<A, const N: usize, Ntt>(
+fn prove_binary_air_with<A, const N: usize, Ntt, H>(
     air: &A,
     trace: RowMajorMatrix<F>,
     options: BinaryProofOptions,
@@ -572,10 +752,17 @@ fn prove_binary_air_with<A, const N: usize, Ntt>(
 where
     A: BinaryAir,
     Ntt: AdditiveNtt<F> + Sync,
+    H: HarnessHash,
 {
     let shape = TableShape::new(log2_strict_usize(trace.height()), trace.width());
     let (arity, _) = plan_stacked_layout(&[shape]);
-    let config = binary_config::<N, Ntt>(arity, options.pcs_params(), options.folding, ntt)?;
+    let config = binary_config::<N, Ntt, H>(
+        arity,
+        options.pcs_params(),
+        options.folding,
+        options.leaf_elements,
+        ntt,
+    )?;
     prove_and_verify(&config, air, shape, options, backend, || {
         Table::new(trace.transpose())
     })
@@ -610,9 +797,9 @@ where
 /// Proves and verifies a Boolean-valued `air` against `trace`, committing the trace as bits, and
 /// reports size and timing measurements.
 ///
-/// Dispatches on `options.merkle_arity` to build a Merkle tree of that child count, and runs its
-/// zerocheck through `backend`. The codeword is encoded through [`PolyBasisNtt`], the Boolean
-/// commitment's own encoder.
+/// Dispatches on `options.merkle_arity` and `options.hash` to build a Merkle tree of that child
+/// count over that hash, and runs its zerocheck through `backend`. The codeword is encoded
+/// through [`PolyBasisNtt`], the Boolean commitment's own encoder.
 ///
 /// # Errors
 ///
@@ -631,16 +818,26 @@ pub fn prove_boolean_air_with_backend<A>(
 where
     A: BinaryAir,
 {
-    match options.merkle_arity {
-        2 => prove_boolean_air_with::<A, 2>(air, trace, options, backend),
-        4 => prove_boolean_air_with::<A, 4>(air, trace, options, backend),
-        other => Err(BinaryProofError::UnsupportedMerkleArity(other)),
+    match (options.merkle_arity, options.hash) {
+        (2, HashFamily::Keccak256) => {
+            prove_boolean_air_with::<A, 2, Keccak256Hash>(air, trace, options, backend)
+        }
+        (2, HashFamily::Blake3) => {
+            prove_boolean_air_with::<A, 2, Blake3>(air, trace, options, backend)
+        }
+        (4, HashFamily::Keccak256) => {
+            prove_boolean_air_with::<A, 4, Keccak256Hash>(air, trace, options, backend)
+        }
+        (4, HashFamily::Blake3) => {
+            prove_boolean_air_with::<A, 4, Blake3>(air, trace, options, backend)
+        }
+        (other, _) => Err(BinaryProofError::UnsupportedMerkleArity(other)),
     }
 }
 
 /// Proves and verifies a Boolean-valued `air` against `trace` through an `N`-ary Merkle tree,
 /// reporting size and timing measurements.
-fn prove_boolean_air_with<A, const N: usize>(
+fn prove_boolean_air_with<A, const N: usize, H>(
     air: &A,
     trace: Table<F>,
     options: BinaryProofOptions,
@@ -648,9 +845,15 @@ fn prove_boolean_air_with<A, const N: usize>(
 ) -> Result<BinaryProofReport, BinaryProofError>
 where
     A: BinaryAir,
+    H: HarnessHash,
 {
     let shape = trace.shape();
-    let config = boolean_config::<N>(shape, options.pcs_params(), options.folding)?;
+    let config = boolean_config::<N, H>(
+        shape,
+        options.pcs_params(),
+        options.folding,
+        options.leaf_elements,
+    )?;
     prove_and_verify(&config, air, shape, options, backend, || trace)
 }
 
@@ -658,8 +861,9 @@ where
 /// measurements.
 ///
 /// The statement's security is assessed once against `options.security_bits` before proving,
-/// so the timed phases are the plain prover and verifier.
-fn prove_and_verify<A, C>(
+/// so the timed phases are the plain prover and verifier. The Merkle grouping `config` resolved
+/// is reported alongside the measurements.
+fn prove_and_verify<A, C, H>(
     config: &C,
     air: &A,
     shape: TableShape,
@@ -669,9 +873,10 @@ fn prove_and_verify<A, C>(
 ) -> Result<BinaryProofReport, BinaryProofError>
 where
     A: BinaryAir,
-    C: HarnessErrors + MultiStarkConfig<Val = F, Challenge = F, Challenger = Challenger>,
-    C::Pcs: PrescribedPointPcs<F, Challenger>,
-    Challenger: CanObserve<Commitment<C>>,
+    H: HarnessHash,
+    C: HarnessConfig + MultiStarkConfig<Val = F, Challenge = F, Challenger = Challenger<H>>,
+    C::Pcs: PrescribedPointPcs<F, Challenger<H>>,
+    Challenger<H>: CanObserve<Commitment<C>>,
     Commitment<C>: Clone,
     ProverData<C>: Clone,
     MultiStarkProof<C>: serde::Serialize + serde::de::DeserializeOwned,
@@ -748,6 +953,9 @@ where
         rows,
         width,
         stacked_variables: config.pcs().num_vars(),
+        hash: options.hash,
+        leaf_elements: config.leaf_elements(),
+        requested_leaf_elements: options.leaf_elements,
         proof_bytes,
         prove_seconds,
         verify_seconds,
@@ -832,8 +1040,14 @@ mod tests {
             pow_bits: 0,
             security_level: 100,
         };
-        let config = binary_config::<2, PolyBasisNtt>(arity, params, 3, PolyBasisNtt::default())
-            .expect("the test shape configures the PCS");
+        let config = binary_config::<2, PolyBasisNtt, Keccak256Hash>(
+            arity,
+            params,
+            3,
+            None,
+            PolyBasisNtt::default(),
+        )
+        .expect("the test shape configures the PCS");
         let (pk, _) = setup(&config, &[air], &mut binary_challenger()).expect("setup succeeds");
 
         let public_values: [F; 0] = [];
@@ -860,7 +1074,7 @@ mod tests {
         backend: Backend,
     ) -> (Vec<u8>, F) {
         let shape = table.shape();
-        let config = boolean_config::<2>(
+        let config = boolean_config::<2, Keccak256Hash>(
             shape,
             BinaryPcsParams {
                 log_inv_rate: 1,
@@ -868,6 +1082,7 @@ mod tests {
                 security_level: 100,
             },
             4,
+            None,
         )
         .expect("the test shape configures the Boolean PCS");
         let (pk, _) = setup(&config, &[air], &mut binary_challenger()).expect("setup succeeds");
@@ -999,6 +1214,132 @@ mod tests {
         )
         .expect("a tiny binary AIR proof must verify at arity 4");
         assert_ne!(report2.proof_bytes, report4.proof_bytes);
+    }
+
+    #[test]
+    fn proof_size_differs_between_leaf_geometries() {
+        let log_height = 6;
+        let report = |leaf_elements| {
+            prove_binary_air(
+                &RecurrenceAir,
+                recurrence_trace(log_height),
+                BinaryProofOptions {
+                    folding: 2,
+                    leaf_elements,
+                    ..BinaryProofOptions::default()
+                },
+            )
+            .expect("a tiny binary AIR proof must verify at every leaf size")
+        };
+        // The fold coset is four symbols, so `None` and an explicit four agree exactly.
+        let coset = report(None);
+        assert_eq!(coset.leaf_elements, 4);
+        assert_eq!(report(Some(4)).proof_bytes, coset.proof_bytes);
+
+        // A wider leaf reshapes both the tree and the opening, so the proof encoding moves.
+        // It does not move the statement's security.
+        let wide = report(Some(16));
+        assert_eq!(wide.leaf_elements, 16);
+        assert_ne!(wide.proof_bytes, coset.proof_bytes);
+        assert_eq!(wide.security_bits, coset.security_bits);
+    }
+
+    #[test]
+    fn a_blake3_commitment_proves_the_same_statement_with_different_bytes() {
+        let log_height = 4;
+        let report = |hash| {
+            prove_binary_air(
+                &RecurrenceAir,
+                recurrence_trace(log_height),
+                BinaryProofOptions {
+                    hash,
+                    ..BinaryProofOptions::default()
+                },
+            )
+            .expect("a tiny binary AIR proof must verify under either hash")
+        };
+        let keccak = report(HashFamily::Keccak256);
+        let blake3 = report(HashFamily::Blake3);
+
+        assert_eq!(keccak.hash, HashFamily::Keccak256);
+        assert_eq!(blake3.hash, HashFamily::Blake3);
+        // Both digests are 32 bytes, so the composed security is the same bound.
+        assert_eq!(blake3.security_bits, keccak.security_bits);
+        // A different transcript draws different challenges, hence a different proof.
+        assert_ne!(blake3.proof_bytes, keccak.proof_bytes);
+    }
+
+    #[test]
+    fn a_boolean_trace_proves_under_either_hash() {
+        // Three columns over this many rows stack into fourteen variables, seven of which one
+        // committed element absorbs, so the base message is 128 symbols: wide enough for the
+        // commitment to pack the requested leaf whole.
+        let log_height = 12;
+        for hash in [HashFamily::Keccak256, HashFamily::Blake3] {
+            let report = prove_boolean_air(
+                &XorAir,
+                Table::new(xor_trace(log_height).transpose()),
+                BinaryProofOptions {
+                    hash,
+                    leaf_elements: Some(64),
+                    ..BinaryProofOptions::default()
+                },
+            )
+            .expect("a Boolean trace must prove and verify under either hash");
+            assert_eq!(report.hash, hash);
+            assert_eq!(report.leaf_elements, 64);
+            assert!(report.security_bits >= 100.0);
+        }
+    }
+
+    #[test]
+    fn a_leaf_wider_than_the_base_message_reports_the_cap() {
+        // Three columns over 256 rows stack into ten variables, seven of which one committed
+        // element absorbs, leaving a base message of eight symbols.
+        let log_height = 8;
+        let report = |leaf_elements| {
+            prove_boolean_air(
+                &XorAir,
+                Table::new(xor_trace(log_height).transpose()),
+                BinaryProofOptions {
+                    leaf_elements,
+                    ..BinaryProofOptions::default()
+                },
+            )
+            .expect("a Boolean trace must prove and verify at every leaf size")
+        };
+
+        // The commitment packs the whole message into one leaf and cannot pack more, so a
+        // wider request and the message itself describe the same tree.
+        let capped = report(Some(1 << 20));
+        let exact = report(Some(8));
+        assert_eq!(capped.leaf_elements, 8);
+        assert_eq!(capped.requested_leaf_elements, Some(1 << 20));
+        assert_eq!(capped.leaf_elements, exact.leaf_elements);
+        assert_eq!(capped.proof_bytes, exact.proof_bytes);
+        assert!(
+            capped
+                .to_string()
+                .contains("Merkle leaf: 8 field elements (128 bytes; requested 1048576, capped")
+        );
+    }
+
+    #[test]
+    fn rejects_a_leaf_size_that_is_not_a_power_of_two() {
+        let result = prove_binary_air(
+            &RecurrenceAir,
+            recurrence_trace(4),
+            BinaryProofOptions {
+                leaf_elements: Some(48),
+                ..BinaryProofOptions::default()
+            },
+        );
+        let error = result.expect_err("a leaf size off a power of two has no grouping");
+        assert_eq!(
+            error.to_string(),
+            "unsupported leaf size 48; expected a power of two"
+        );
+        assert!(error.source().is_none());
     }
 
     #[test]

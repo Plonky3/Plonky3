@@ -75,9 +75,9 @@ const OUTPUT_FLAG_COLUMN: usize = NUM_ROUNDS;
 ///
 /// The returned matrix keeps the AIR columns as its width. Physical row `w` stores logical
 /// rows `64 * w..64 * w + 63`, with bit zero holding the first logical row. The bits of the
-/// last block past the trace height are zero. The generic field parameter controls only the
-/// reusable temporary permutation rows used while generating the witness; the resulting bits
-/// are independent of that field.
+/// last block past the trace height are zero. The witness is built as the words its cells are
+/// the bits of, so the generic field parameter names only the characteristic the cells are read
+/// in; no cell is ever held in it.
 ///
 /// # Panics
 ///
@@ -102,26 +102,55 @@ pub fn generate_binary_trace_packed<F: Field>(inputs: Vec<[u64; 25]>) -> RowMajo
         .enumerate()
         .for_each_init(
             // One permutation's 25 rows per worker keep temporary storage bounded by 25 rows of
-            // the AIR width, independently of the number of trace rows and blocks.
-            || F::zero_vec(KECCAK_BINARY_ROWS_PER_PERM * NUM_KECCAK_BINARY_COLS),
-            |cells, (block_index, block)| {
-                pack_block(block, block_index, &inputs, num_rows, cells);
+            // witness words, independently of the number of trace rows and blocks.
+            || [RowWords::default(); KECCAK_BINARY_ROWS_PER_PERM],
+            |rows, (block_index, block)| {
+                pack_block(block, block_index, &inputs, num_rows, rows);
             },
         );
 
     RowMajorMatrix::new(words, NUM_KECCAK_BINARY_COLS)
 }
 
+/// The witness words of one row: the one-hot row kind, then the state lane by lane.
+///
+/// The state is stored as the AIR stores it, lane `5y + x`, so the lanes are the column groups
+/// of the row in order.
+#[derive(Clone, Copy, Default)]
+struct RowWords {
+    /// The one-hot row kind, bit `r` for round `r` and bit `NUM_ROUNDS` for an output row.
+    flags: u32,
+    /// The state at the start of the row.
+    state: [u64; 25],
+}
+
+/// Fill the words of the 25 rows of one permutation.
+///
+/// Writes exactly what [`generate_perm_rows`] writes, as the words the cells are read from.
+fn generate_perm_words(rows: &mut [RowWords; KECCAK_BINARY_ROWS_PER_PERM], input: [u64; 25]) {
+    let (round_rows, output_row) = rows.split_at_mut(NUM_ROUNDS);
+
+    let mut state = input;
+    for (round, row) in round_rows.iter_mut().enumerate() {
+        row.flags = 1 << round;
+        row.state = state;
+        keccak_round(&mut state, round);
+    }
+
+    output_row[0].flags = 1 << NUM_ROUNDS;
+    output_row[0].state = state;
+}
+
 /// Pack the logical rows `64 * block_index..64 * block_index + 63` of the trace into `block`.
 ///
-/// Each permutation overlapping the block is regenerated into `cells`, the 25 rows of one
-/// permutation, and the bits of its rows inside the block are copied into the words.
-fn pack_block<F: Field>(
+/// Each permutation overlapping the block is regenerated into `rows`, the 25 rows of one
+/// permutation as witness words, and the bits of its rows inside the block are read out of them.
+fn pack_block(
     block: &mut [u64],
     block_index: usize,
     inputs: &[[u64; 25]],
     num_rows: usize,
-    cells: &mut [F],
+    rows: &mut [RowWords; KECCAK_BINARY_ROWS_PER_PERM],
 ) {
     let num_perm_rows = inputs.len() * KECCAK_BINARY_ROWS_PER_PERM;
     let block_start = block_index * BITS_PER_WORD;
@@ -132,23 +161,25 @@ fn pack_block<F: Field>(
         let first_perm = block_start / KECCAK_BINARY_ROWS_PER_PERM;
         let last_perm = (perm_rows_end - 1) / KECCAK_BINARY_ROWS_PER_PERM;
         for (offset, &input) in inputs[first_perm..=last_perm].iter().enumerate() {
-            cells.fill(F::ZERO);
-            let (prefix, rows, suffix) = unsafe { cells.align_to_mut::<KeccakBinaryCols<F>>() };
-            assert!(prefix.is_empty(), "Alignment should match");
-            assert!(suffix.is_empty(), "Alignment should match");
-            assert_eq!(rows.len(), KECCAK_BINARY_ROWS_PER_PERM);
-            generate_perm_rows(rows, input);
+            generate_perm_words(rows, input);
 
             let perm_start = (first_perm + offset) * KECCAK_BINARY_ROWS_PER_PERM;
             let start = block_start.max(perm_start);
             let end = perm_rows_end.min(perm_start + KECCAK_BINARY_ROWS_PER_PERM);
             for row in start..end {
-                let first_cell = (row - perm_start) * NUM_KECCAK_BINARY_COLS;
-                let row_cells = &cells[first_cell..first_cell + NUM_KECCAK_BINARY_COLS];
-                for (word, &cell) in block.iter_mut().zip(row_cells) {
-                    if cell == F::ONE {
-                        *word |= 1u64 << (row - block_start);
+                let words = &rows[row - perm_start];
+                // The row kind is one-hot, so exactly one flag column takes a bit.
+                block[words.flags.trailing_zeros() as usize] |= 1u64 << (row - block_start);
+
+                // A lane's cells are its bits, so its columns take them in one sweep.
+                let shift = row - block_start;
+                let mut column = KECCAK_BINARY_ROWS_PER_PERM;
+                for &lane in &words.state {
+                    let columns = &mut block[column..column + u64::BITS as usize];
+                    for (index, word) in columns.iter_mut().enumerate() {
+                        *word |= ((lane >> index) & 1) << shift;
                     }
+                    column += u64::BITS as usize;
                 }
             }
         }

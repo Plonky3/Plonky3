@@ -11,6 +11,7 @@ use p3_multilinear_util::poly::Poly;
 use p3_multilinear_util::split_eq::SplitEq;
 use p3_util::log2_strict_usize;
 
+use crate::commit::write_stacked_message;
 use crate::lagrange::lagrange_weights_01inf_multi;
 use crate::layout::opening::Opening;
 use crate::layout::prover::{Layout, StackedClaims};
@@ -51,12 +52,23 @@ impl<F: Field, EF: ExtensionField<F>> Layout<F, EF> for PrefixProver<F, EF> {
                 parts.num_variables,
                 parts.folding,
             ),
-            poly: parts.poly,
+            poly: parts
+                .poly
+                .expect("this layout retains its stacked polynomial"),
         }
     }
 
     fn new_witness(tables: Vec<Table<F>>, folding: usize) -> Witness<F> {
         Witness::new_interleaved(tables, folding)
+    }
+
+    fn write_message(witness: &Witness<F>, folding: usize, message: &mut [F]) {
+        write_stacked_message(
+            Self::variable_order(),
+            witness.retained_poly(),
+            folding,
+            message,
+        );
     }
 
     fn claims(&self) -> &StackedClaims<F, EF> {
@@ -130,6 +142,25 @@ impl<F: Field, EF: ExtensionField<F>> Layout<F, EF> for PrefixProver<F, EF> {
 
         // Return both eval groups in the canonical current-then-next order.
         OpeningBatch::new(current_evals, next_evals)
+    }
+
+    fn record_opening_known(
+        &mut self,
+        table_idx: usize,
+        batch: &OpeningRequest,
+        point: &Point<EF>,
+        evals: &OpeningEvals<EF>,
+    ) {
+        // The opening point lives in the table's local frame, one coordinate per variable.
+        debug_assert_eq!(
+            point.num_variables(),
+            self.claims.tables[table_idx].num_variables()
+        );
+        debug_assert!(self.known_evals_agree(table_idx, batch, point, evals));
+
+        // The point is factorised as the evaluating route factorises it; only the pass is skipped.
+        let point = SvoPoint::new_packed(self.claims.folding, point);
+        self.claims.record_known(table_idx, batch, point, evals);
     }
 
     /// Evaluates the full stacked polynomial at a point and records the claim.
@@ -341,6 +372,33 @@ impl<F: Field, EF: ExtensionField<F>> Layout<F, EF> for PrefixProver<F, EF> {
 }
 
 impl<F: Field, EF: ExtensionField<F>> PrefixProver<F, EF> {
+    /// Whether supplied evaluations are the ones the opened columns hold at the point.
+    ///
+    /// This runs exactly the passes a supplied evaluation exists to avoid, so it is only
+    /// ever reached from a debug assertion.
+    fn known_evals_agree(
+        &self,
+        table_idx: usize,
+        batch: &OpeningRequest,
+        point: &Point<EF>,
+        evals: &OpeningEvals<EF>,
+    ) -> bool {
+        let table = &self.claims.tables[table_idx];
+        let point = SvoPoint::new_packed(self.claims.folding, point);
+
+        batch.has_same_shape(evals)
+            && batch
+                .current()
+                .iter()
+                .zip(evals.current())
+                .all(|(&poly_idx, &eval)| point.eval(table.poly(poly_idx)).0 == eval)
+            && batch
+                .next()
+                .iter()
+                .zip(evals.next())
+                .all(|(&poly_idx, &eval)| point.eval_next_prefix(table.poly(poly_idx)).0 == eval)
+    }
+
     /// Builds the residual product polynomial with packed or scalar compression.
     pub(crate) fn residual_product(
         &self,

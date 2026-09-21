@@ -56,13 +56,14 @@
 //! The payoff is that packing becomes a reinterpretation, not a computation.
 
 pub mod basis;
+mod equality;
 pub mod packing;
 pub mod reduction;
 pub mod tensor;
 pub mod transcript;
 
 pub use basis::Coefficients;
-pub use packing::{BitPacking, BitPackingError};
+pub use packing::{BitPacking, BitPackingError, BitPackingView};
 pub use reduction::{
     BitRingSwitch, BitRingSwitchBatch, BitRingSwitchError, BitRingSwitchProof,
     BitRingSwitchProofError, SuccessorTensors,
