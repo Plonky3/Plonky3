@@ -373,7 +373,7 @@ fn a_sliced_first_round_records_the_fit_for_the_fold() {
 #[test]
 fn tensor4_path_retains_all_entries_and_replays_cached_rounds() {
     let height = 1 << 10;
-    let instances = [Instance::honest(FixtureAir::Pair, height, 0x7E50_01)];
+    let instances = [Instance::honest(FixtureAir::Pair, height, 0x007E_5001)];
     with_state(&instances, no_lookups(), |mut state, eq_suffix| {
         let _first = state
             .round_poly_sliced_with_strategy::<Gf4, Ghash128>(
@@ -446,7 +446,7 @@ fn tensor4_path_retains_all_entries_and_replays_cached_rounds() {
 
 #[test]
 fn tensor4_installs_at_two_eligible_activation_heights() {
-    for (height, seed) in [(1 << 12, 0x7E50_22), (1 << 10, 0x7E50_23)] {
+    for (height, seed) in [(1 << 12, 0x007E_5022), (1 << 10, 0x007E_5023)] {
         let instances = [Instance::honest(FixtureAir::Pair, height, seed)];
         with_state(&instances, no_lookups(), |mut state, eq_suffix| {
             state
@@ -463,11 +463,15 @@ fn tensor4_installs_at_two_eligible_activation_heights() {
 #[test]
 fn tensor4_evaluates_mixed_linear_and_quadratic_airs() {
     let height = 1 << 10;
-    let mut linear = Instance::honest(FixtureAir::Linear { scale: Tower::ONE }, height, 0x7E50_02);
+    let mut linear = Instance::honest(
+        FixtureAir::Linear { scale: Tower::ONE },
+        height,
+        0x007E_5002,
+    );
     linear.main.values[0] = gf4(2);
     let instances = [
         linear,
-        Instance::honest(FixtureAir::Pair, height, 0x7E50_03),
+        Instance::honest(FixtureAir::Pair, height, 0x007E_5003),
     ];
     let tensor = collect_tensor_rounds(&instances, true);
     let sequential = collect_tensor_rounds(&instances, false);
@@ -553,7 +557,7 @@ fn tensor4_path_includes_fixed_periodic_and_boundary_inputs() {
     let instances = [Instance::honest(
         FixtureAir::QuadraticInputs,
         height,
-        0x7E50_04,
+        0x007E_5004,
     )];
     let tensor = collect_tensor_rounds(&instances, true);
     let sequential = collect_tensor_rounds(&instances, false);
@@ -569,9 +573,9 @@ fn tensor4_path_includes_fixed_periodic_and_boundary_inputs() {
 #[test]
 fn tensor4_contraction_matches_sequential_at_special_challenges() {
     let height = 1 << 10;
-    let mut instance = Instance::honest(FixtureAir::Pair, height, 0x7E50_05);
+    let mut instance = Instance::honest(FixtureAir::Pair, height, 0x007E_5005);
     for (index, value) in instance.main.values.iter_mut().enumerate() {
-        *value = gf4((index as usize + 2) & 3);
+        *value = gf4((index + 2) & 3);
     }
     let instances = [instance];
     let challenges = [
@@ -663,7 +667,7 @@ fn tensor4_contraction_matches_sequential_at_special_challenges() {
 
 #[test]
 fn tensor4_strategy_falls_back_for_short_or_cubic_stages() {
-    let short = [Instance::honest(FixtureAir::Pair, 1 << 9, 0x7E50_06)];
+    let short = [Instance::honest(FixtureAir::Pair, 1 << 9, 0x007E_5006)];
     with_state(&short, no_lookups(), |mut state, eq_suffix| {
         state
             .round_poly_sliced_with_strategy::<Gf4, Ghash128>(
@@ -677,7 +681,7 @@ fn tensor4_strategy_falls_back_for_short_or_cubic_stages() {
     let cubic = [Instance::honest(
         FixtureAir::Gate { scale: Tower::ONE },
         1 << 10,
-        0x7E50_07,
+        0x007E_5007,
     )];
     with_state(&cubic, no_lookups(), |mut state, eq_suffix| {
         state
@@ -704,7 +708,8 @@ fn tensor4_eligibility_gates_are_isolated_at_height_ten() {
     };
 
     for sliced_rounds in [0, 1, 2, 4] {
-        let instance = Instance::honest(FixtureAir::Pair, height, 0x7E50_08 + sliced_rounds as u64);
+        let instance =
+            Instance::honest(FixtureAir::Pair, height, 0x007E_5008 + sliced_rounds as u64);
         with_state(&[instance], no_lookups(), |mut state, eq_suffix| {
             state.sliced_rounds = sliced_rounds;
             let _ = state.round_poly_sliced_with_strategy::<Gf4, Ghash128>(
@@ -723,7 +728,7 @@ fn tensor4_eligibility_gates_are_isolated_at_height_ten() {
                 period: [gf4(2), gf4(3)],
             },
             height,
-            0x7E50_09,
+            0x007E_5009,
         )],
         no_lookups(),
     );
@@ -731,20 +736,20 @@ fn tensor4_eligibility_gates_are_isolated_at_height_ten() {
         &[Instance::honest(
             FixtureAir::QuadraticSuccessor,
             height,
-            0x7E50_0A,
+            0x007E_500A,
         )],
         no_lookups(),
     );
     assert_no_tensor(
-        &[Instance::honest(FixtureAir::Link, height, 0x7E50_0B)],
+        &[Instance::honest(FixtureAir::Link, height, 0x007E_500B)],
         link_coupling(),
     );
 
-    let mut main = Instance::honest(FixtureAir::QuadraticInputs, height, 0x7E50_0C);
+    let mut main = Instance::honest(FixtureAir::QuadraticInputs, height, 0x007E_500C);
     main.main.values[5] = outside();
     assert_no_tensor(&[main], no_lookups());
 
-    let mut preprocessed = Instance::honest(FixtureAir::QuadraticInputs, height, 0x7E50_0D);
+    let mut preprocessed = Instance::honest(FixtureAir::QuadraticInputs, height, 0x007E_500D);
     preprocessed
         .preprocessed
         .as_mut()
@@ -752,7 +757,7 @@ fn tensor4_eligibility_gates_are_isolated_at_height_ten() {
         .values[5] = outside();
     assert_no_tensor(&[preprocessed], no_lookups());
 
-    let mut public = Instance::honest(FixtureAir::QuadraticInputs, height, 0x7E50_0E);
+    let mut public = Instance::honest(FixtureAir::QuadraticInputs, height, 0x007E_500E);
     public.public_values[0] = outside();
     assert_no_tensor(&[public], no_lookups());
 
@@ -760,7 +765,7 @@ fn tensor4_eligibility_gates_are_isolated_at_height_ten() {
         &[Instance::honest(
             FixtureAir::QuadraticInputsOutsidePeriodic,
             height,
-            0x7E50_0F,
+            0x007E_500F,
         )],
         no_lookups(),
     );
@@ -770,8 +775,8 @@ fn tensor4_eligibility_gates_are_isolated_at_height_ten() {
 fn tensor4_poison_falls_back_transactionally_on_eligible_mixed_stage() {
     let height = 1 << 10;
     let instances = [
-        Instance::honest(FixtureAir::Pair, height, 0x7E50_20),
-        Instance::honest(FixtureAir::Linear { scale: outside() }, height, 0x7E50_21),
+        Instance::honest(FixtureAir::Pair, height, 0x007E_5020),
+        Instance::honest(FixtureAir::Linear { scale: outside() }, height, 0x007E_5021),
     ];
     let tensor = with_state(&instances, no_lookups(), |mut state, eq_suffix| {
         let evals = state

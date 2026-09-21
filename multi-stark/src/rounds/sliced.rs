@@ -1028,6 +1028,7 @@ where
 }
 
 /// Pack representation-independent columns into word-major cell and successor planes.
+#[allow(clippy::type_complexity)]
 fn pack_sliced_columns<F, S>(
     columns: &[p3_sumcheck::layout::ColumnView<'_, F>],
     is_successor: &[bool],
@@ -1558,7 +1559,7 @@ where
 {
     /// Whether the representation-specific four-variable cache is still installed.
     #[cfg(test)]
-    pub(crate) fn has_sliced_tensor(&self) -> bool {
+    pub(crate) const fn has_sliced_tensor(&self) -> bool {
         matches!(&self.columns, ExtColumns::Sliced(columns) if columns.tensor.is_some())
     }
 

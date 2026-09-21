@@ -947,7 +947,7 @@ fn backends_agree_on_stages_tall_enough_to_slice() {
 #[test]
 fn representation_tensor4_matches_generic_on_invalid_boolean_and_gf4_traces() {
     let height = 1 << 10;
-    let mut invalid_boolean = Instance::honest(FixtureAir::Pair, height, 0x7E50_10);
+    let mut invalid_boolean = Instance::honest(FixtureAir::Pair, height, 0x007E_5010);
     for row in 0..height {
         invalid_boolean.main.values[3 * row..3 * row + 3].copy_from_slice(&[
             Tower::ZERO,
@@ -955,7 +955,7 @@ fn representation_tensor4_matches_generic_on_invalid_boolean_and_gf4_traces() {
             Tower::ONE,
         ]);
     }
-    let mut non_boolean = Instance::honest(FixtureAir::Pair, height, 0x7E50_11);
+    let mut non_boolean = Instance::honest(FixtureAir::Pair, height, 0x007E_5011);
     for row in 0..height {
         non_boolean.main.values[3 * row..3 * row + 3].copy_from_slice(&[
             gf4(2),
@@ -983,7 +983,7 @@ fn representation_tensor4_matches_generic_on_invalid_boolean_and_gf4_traces() {
 #[test]
 fn representation_tensor4_invalid_proofs_are_rejected() {
     let height = 1 << 10;
-    let mut invalid_boolean = Instance::honest(FixtureAir::Pair, height, 0x7E50_16);
+    let mut invalid_boolean = Instance::honest(FixtureAir::Pair, height, 0x007E_5016);
     for row in 0..height {
         invalid_boolean.main.values[3 * row..3 * row + 3].copy_from_slice(&[
             Tower::ZERO,
@@ -991,7 +991,7 @@ fn representation_tensor4_invalid_proofs_are_rejected() {
             Tower::ONE,
         ]);
     }
-    let mut non_boolean = Instance::honest(FixtureAir::Pair, height, 0x7E50_17);
+    let mut non_boolean = Instance::honest(FixtureAir::Pair, height, 0x007E_5017);
     for row in 0..height {
         non_boolean.main.values[3 * row..3 * row + 3].copy_from_slice(&[
             gf4(2),
@@ -1029,7 +1029,7 @@ fn representation_tensor4_invalid_proofs_are_rejected() {
 
 #[test]
 fn representation_tensor4_honest_proof_verifies() {
-    let instance = Instance::honest(FixtureAir::Pair, 1 << 10, 0x7E50_18);
+    let instance = Instance::honest(FixtureAir::Pair, 1 << 10, 0x007E_5018);
     let airs = [&instance.air];
     let zerocheck = AirZerocheck::new(&airs, 0);
     let main = instance.main_table();
@@ -1051,11 +1051,15 @@ fn representation_tensor4_honest_proof_verifies() {
 #[test]
 fn representation_tensor4_matches_generic_for_mixed_native_degrees() {
     let height = 1 << 10;
-    let mut linear = Instance::honest(FixtureAir::Linear { scale: Tower::ONE }, height, 0x7E50_12);
+    let mut linear = Instance::honest(
+        FixtureAir::Linear { scale: Tower::ONE },
+        height,
+        0x007E_5012,
+    );
     linear.main.values[0] = gf4(2);
     let instances = [
         linear,
-        Instance::honest(FixtureAir::Pair, height, 0x7E50_13),
+        Instance::honest(FixtureAir::Pair, height, 0x007E_5013),
     ];
     let generic = transcript::<GenericBackend>(&instances, LookupRuntime::Inactive, 0, false);
     let repr =
@@ -1066,8 +1070,8 @@ fn representation_tensor4_matches_generic_for_mixed_native_degrees() {
 #[test]
 fn representation_tensor4_matches_generic_at_two_eligible_heights() {
     let instances = [
-        Instance::honest(FixtureAir::Pair, 1 << 12, 0x7E50_22),
-        Instance::honest(FixtureAir::Pair, 1 << 10, 0x7E50_23),
+        Instance::honest(FixtureAir::Pair, 1 << 12, 0x007E_5022),
+        Instance::honest(FixtureAir::Pair, 1 << 10, 0x007E_5023),
     ];
     let generic = transcript::<GenericBackend>(&instances, LookupRuntime::Inactive, 0, false);
     let repr =
@@ -1078,7 +1082,7 @@ fn representation_tensor4_matches_generic_at_two_eligible_heights() {
 #[test]
 fn representation_tensor4_is_restricted_to_default_three_slices() {
     let height = 1 << 10;
-    let instances = [Instance::honest(FixtureAir::Pair, height, 0x7E50_14)];
+    let instances = [Instance::honest(FixtureAir::Pair, height, 0x007E_5014)];
     let generic = transcript_with_storage::<GenericBackend>(
         DEFAULT_SLICED_ROUNDS,
         &instances,
@@ -1167,7 +1171,7 @@ fn representation_tensor4_handles_fixed_periodic_selectors_and_public_pins() {
     let instances = [Instance::honest(
         FixtureAir::QuadraticInputs,
         height,
-        0x7E50_15,
+        0x007E_5015,
     )];
     assert_backends_agree(&instances, || LookupRuntime::Inactive, 0);
 }
