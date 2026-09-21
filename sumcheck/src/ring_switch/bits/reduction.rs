@@ -1477,7 +1477,8 @@ impl<EF: TranscriptField + TowerLevel> BitRingSwitch<EF> {
         // A Boolean prefix is a public slot address. The compact branch keeps the first
         // requested coordinates in banked tensors and emits them through one n-round transcript.
         let (r_prime, final_eval) = if compact {
-            let _span = tracing::debug_span!("compact_factors", depth = requested_k).entered();
+            let factors_span =
+                tracing::debug_span!("compact_factors", depth = requested_k).entered();
             let bank_tensors = bank_tensors.expect("compact banks are present");
             let bank_successors = bank_successors.as_ref();
             let banks = 1usize << requested_k;
@@ -1512,11 +1513,13 @@ impl<EF: TranscriptField + TowerLevel> BitRingSwitch<EF> {
                 }
             }
             drop(bank_tensors);
+            drop(factors_span);
             transcript.batched_sumcheck(|challenger| {
                 let mut rounds_transcript = ProverTranscript::<Challenger, EF, EF>::new(
                     challenger,
                     SumcheckShape::new(n, 0, Basis::Evaluation),
                 );
+                let head_span = tracing::debug_span!("compact_head", depth = requested_k).entered();
                 let mut compact_prover = ReprSumcheckProver::<EF, EF, R>::from_repr_tables(
                     VariableOrder::Prefix,
                     Poly::new(factors),
@@ -1530,6 +1533,7 @@ impl<EF: TranscriptField + TowerLevel> BitRingSwitch<EF> {
                 let handoff_sum = compact_prover.claimed_sum();
                 let generators = compact_prover.weights().into_evals();
                 drop(compact_prover);
+                drop(head_span);
 
                 let bound_packing = materialize_compact_packing::<EF, R, _>(
                     packing,
