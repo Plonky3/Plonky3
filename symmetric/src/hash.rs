@@ -272,35 +272,52 @@ mod tests {
         //
         // Zero roots is the degenerate count a truncating encoder would produce.
         //
-        // Each count is fed through both decoding paths:
+        // The self-describing decoder reports the count and the requirement verbatim.
         //
-        //     compact         -> the fields arrive as a sequence
-        //     self-describing -> the fields arrive as a map
-        for (bytes, json) in [
+        // Pinning the whole message keeps the count in it and keeps it readable to an operator.
+        for (json, message) in [
             (
-                &[3u8, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3][..],
                 r#"{"cap":[[1,1,1,1],[2,2,2,2],[3,3,3,3]],"_marker":null}"#,
+                "invalid length 3, expected a power-of-two number of Merkle cap roots",
             ),
-            (&[0u8][..], r#"{"cap":[],"_marker":null}"#),
+            (
+                r#"{"cap":[],"_marker":null}"#,
+                "invalid length 0, expected a power-of-two number of Merkle cap roots",
+            ),
         ] {
-            postcard::from_bytes::<MerkleCap<F, Digest>>(bytes)
+            let err = serde_json::from_str::<MerkleCap<F, Digest>>(json)
                 .expect_err("a cap with a non-power-of-two root count must not deserialize");
-            serde_json::from_str::<MerkleCap<F, Digest>>(json)
-                .expect_err("a cap with a non-power-of-two root count must not deserialize");
+            assert_eq!(err.to_string(), message);
         }
     }
 
     #[test]
-    fn test_merkle_cap_deserialize_error_names_the_requirement() {
-        // The rejection reaches an operator as text, so it has to state what was wrong.
-        let err = serde_json::from_str::<MerkleCap<F, Digest>>(
-            r#"{"cap":[[1,1,1,1],[2,2,2,2],[3,3,3,3]],"_marker":null}"#,
-        )
-        .expect_err("three roots is not a power of two");
-        assert!(
-            err.to_string().contains("power-of-two"),
-            "unexpected error: {err}"
-        );
+    fn test_merkle_cap_compact_decoding_rejects_a_non_power_of_two_root_count() {
+        // The compact decoder collapses every failure into one opaque message.
+        //
+        // Asserting that text would pin a catch-all that a truncated buffer also produces.
+        //
+        // Instead each rejected count is paired with the next legal one:
+        //
+        //     03 | three roots  -> refused
+        //     04 | four roots   -> accepted
+        //
+        // Only the count differs between the two, so the count is what the refusal turns on.
+        for (rejected, accepted, roots) in [
+            (
+                &[3u8, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3][..],
+                &[4u8, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4][..],
+                4,
+            ),
+            (&[0u8][..], &[1u8, 1, 1, 1, 1][..], 1),
+        ] {
+            postcard::from_bytes::<MerkleCap<F, Digest>>(rejected)
+                .expect_err("a cap with a non-power-of-two root count must not deserialize");
+
+            let cap = postcard::from_bytes::<MerkleCap<F, Digest>>(accepted)
+                .expect("a power-of-two root count is accepted");
+            assert_eq!(cap.num_roots(), roots);
+        }
     }
 
     #[test]
