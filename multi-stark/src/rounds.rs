@@ -1990,6 +1990,14 @@ where
                     PolyView::new(values).fix_prefix_var_to_packed(r)
                 } else {
                     let half = column.len() / 2;
+                    // Each lane group reads `WIDTH` rows of the low half, so the half must hold
+                    // at least one group; `fix_prefix_var_to_packed` asserts the same bound on
+                    // the dense side, and `fold_columns` only picks this kernel above it.
+                    debug_assert!(
+                        half >= F::Packing::WIDTH,
+                        "packed fold needs a low half of at least {} rows, got {half}",
+                        F::Packing::WIDTH
+                    );
                     Poly::new(
                         (0..half)
                             .step_by(F::Packing::WIDTH)
