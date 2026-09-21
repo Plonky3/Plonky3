@@ -1,8 +1,9 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
+use p3_air::BaseAir;
 use p3_binary_field::{Ghash128, TowerLevel};
-use p3_field::{Field, PrimeCharacteristicRing};
+use p3_field::{Field, HasSubfield, PrimeCharacteristicRing};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_multilinear_util::point::Point;
 use rand::rngs::SmallRng;
@@ -578,21 +579,22 @@ fn tensor4_contraction_matches_sequential_at_special_challenges() {
         *value = gf4((index + 2) & 3);
     }
     let instances = [instance];
+    let normal = [challenge(0), challenge(1), challenge(2), challenge(3)];
+    let lambda = Tower::interpolation_node(2);
+    let full_width = Tower::from_repr(0x1234);
     let challenges = [
-        [Tower::ZERO, challenge(1), challenge(2), challenge(3)],
-        [challenge(0), Tower::ZERO, challenge(2), challenge(3)],
-        [
-            challenge(0),
-            challenge(1),
-            Tower::interpolation_node(2),
-            challenge(3),
-        ],
-        [
-            challenge(0),
-            challenge(1),
-            challenge(2),
-            Tower::from_repr(0x1234),
-        ],
+        [Tower::ZERO, normal[1], normal[2], normal[3]],
+        [Tower::ONE, normal[1], normal[2], normal[3]],
+        [lambda, normal[1], normal[2], normal[3]],
+        [full_width, normal[1], normal[2], normal[3]],
+        [normal[0], Tower::ZERO, normal[2], normal[3]],
+        [normal[0], Tower::ONE, normal[2], normal[3]],
+        [normal[0], lambda, normal[2], normal[3]],
+        [normal[0], full_width, normal[2], normal[3]],
+        [normal[0], normal[1], Tower::ZERO, normal[3]],
+        [normal[0], normal[1], Tower::ONE, normal[3]],
+        [normal[0], normal[1], lambda, normal[3]],
+        [normal[0], normal[1], full_width, normal[3]],
     ];
     for prefix_challenges in challenges {
         let tensor = with_state(&instances, no_lookups(), |mut state, _| {
@@ -761,14 +763,32 @@ fn tensor4_eligibility_gates_are_isolated_at_height_ten() {
     public.public_values[0] = outside();
     assert_no_tensor(&[public], no_lookups());
 
-    assert_no_tensor(
-        &[Instance::honest(
-            FixtureAir::QuadraticInputsOutsidePeriodic,
-            height,
-            0x007E_500F,
-        )],
-        no_lookups(),
+    let mut periodic = Instance::honest(
+        FixtureAir::QuadraticInputsOutsidePeriodic,
+        height,
+        0x007E_500F,
     );
+    periodic
+        .preprocessed
+        .as_mut()
+        .expect("quadratic inputs has fixed data")
+        .values
+        .fill(Tower::ZERO);
+    assert!(<Tower as HasSubfield<Gf4>>::all_in_subfield(
+        &periodic.main.values
+    ));
+    assert!(<Tower as HasSubfield<Gf4>>::all_in_subfield(
+        &periodic
+            .preprocessed
+            .as_ref()
+            .expect("quadratic inputs has fixed data")
+            .values
+    ));
+    assert!(<Tower as HasSubfield<Gf4>>::all_in_subfield(
+        &periodic.public_values
+    ));
+    assert_eq!(periodic.air.periodic_columns()[0][0], outside());
+    assert_no_tensor(&[periodic], no_lookups());
 }
 
 #[test]
