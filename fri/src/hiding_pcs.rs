@@ -414,8 +414,8 @@ where
         self.inner.verify(rounds, inner_proof, challenger)
     }
 
-    fn log_max_lde_height(&self) -> usize {
-        <TwoAdicFriPcs<Val, Dft, InputMmcs, FriMmcs> as UnivariateStarkPcs<Challenge, Challenger>>::log_max_lde_height(
+    fn log_max_trace_height(&self) -> usize {
+        <TwoAdicFriPcs<Val, Dft, InputMmcs, FriMmcs> as UnivariateStarkPcs<Challenge, Challenger>>::log_max_trace_height(
             &self.inner)
     }
 

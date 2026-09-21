@@ -2095,7 +2095,7 @@ where
 
     const ZK: bool = false;
 
-    fn log_max_lde_height(&self) -> usize {
+    fn log_max_trace_height(&self) -> usize {
         Val::TWO_ADICITY.saturating_sub(self.stir.log_blowup)
     }
 
