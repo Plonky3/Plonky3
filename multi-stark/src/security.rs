@@ -403,6 +403,7 @@ where
             .checked_mul(tuples)
             .and_then(|count| num_fractions.checked_add(count))
             .ok_or_else(|| invalid("lookup dimensions overflow"))?;
+        // Binary-bus declarations are reduced outside the zerocheck and do not count here.
         if constraints == 0 && tuples == 0 {
             return Err(invalid("AIR declares no constraints or lookup tuples"));
         }

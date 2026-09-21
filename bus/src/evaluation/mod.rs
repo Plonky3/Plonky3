@@ -1,5 +1,6 @@
 //! Evaluation of planned bus expressions at Boolean rows and extension-field points.
 
+use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 
 use p3_air::symbolic::{BaseEntry, BaseLeaf, SymbolicExpr, SymbolicExpression};
@@ -29,61 +30,144 @@ pub struct BusEvaluation<'a, F, EF> {
     pub is_transition: EF,
 }
 
-impl<F, EF> BusEvaluation<'_, F, EF>
-where
-    F: Field,
-    EF: ExtensionField<F>,
-{
-    /// Resolve one symbolic expression against commitment-bound evaluations.
-    fn evaluate(&self, expression: &SymbolicExpression<F>) -> Result<EF, BusEvaluationError> {
-        // Every leaf is checked independently because this API also accepts caller-built trees.
-        match expression {
-            SymbolicExpr::Leaf(BaseLeaf::Variable(variable)) => match variable.entry {
-                BaseEntry::Main { offset: 0 } => {
-                    self.main
-                        .get(variable.index)
-                        .copied()
-                        .ok_or(BusEvaluationError::MainColumn {
-                            column: variable.index,
-                        })
-                }
-                BaseEntry::Main { offset } => Err(BusEvaluationError::MainOffset {
+/// One node of a declaration's arithmetic graph, with operands given by position.
+///
+/// Every operand sits earlier in the node list, so one forward pass resolves all of them.
+#[derive(Clone, Copy, Debug)]
+enum BusNode<F> {
+    /// Current-row main column at this index.
+    Main(usize),
+    /// Current-row preprocessed column at this index.
+    Preprocessed(usize),
+    /// Public value at this index.
+    Public(usize),
+    /// First-row selector.
+    IsFirstRow,
+    /// Last-row selector.
+    IsLastRow,
+    /// Transition selector.
+    IsTransition,
+    /// Literal field element.
+    Constant(F),
+    /// Sum of two earlier nodes.
+    Add(usize, usize),
+    /// Difference of two earlier nodes.
+    Sub(usize, usize),
+    /// Negation of one earlier node.
+    Neg(usize),
+    /// Product of two earlier nodes.
+    Mul(usize, usize),
+}
+
+/// Resolve one symbolic leaf, rejecting the accesses no committed opening can answer.
+const fn compile_leaf<F: Field>(leaf: &BaseLeaf<F>) -> Result<BusNode<F>, BusEvaluationError> {
+    // Every leaf is checked independently because this API also accepts caller-built trees.
+    Ok(match leaf {
+        BaseLeaf::Variable(variable) => match variable.entry {
+            BaseEntry::Main { offset: 0 } => BusNode::Main(variable.index),
+            BaseEntry::Main { offset } => {
+                return Err(BusEvaluationError::MainOffset {
                     column: variable.index,
                     offset,
-                }),
-                BaseEntry::Preprocessed { offset: 0 } => {
-                    self.preprocessed.get(variable.index).copied().ok_or(
-                        BusEvaluationError::PreprocessedColumn {
-                            column: variable.index,
-                        },
-                    )
-                }
-                BaseEntry::Preprocessed { offset } => Err(BusEvaluationError::PreprocessedOffset {
+                });
+            }
+            BaseEntry::Preprocessed { offset: 0 } => BusNode::Preprocessed(variable.index),
+            BaseEntry::Preprocessed { offset } => {
+                return Err(BusEvaluationError::PreprocessedOffset {
                     column: variable.index,
                     offset,
-                }),
-                BaseEntry::Public => self
-                    .public
-                    .get(variable.index)
-                    .copied()
-                    .map(Into::into)
-                    .ok_or(BusEvaluationError::PublicValue {
-                        index: variable.index,
-                    }),
-                BaseEntry::Periodic => Err(BusEvaluationError::PeriodicColumn {
+                });
+            }
+            BaseEntry::Public => BusNode::Public(variable.index),
+            BaseEntry::Periodic => {
+                return Err(BusEvaluationError::PeriodicColumn {
                     column: variable.index,
-                }),
-            },
-            SymbolicExpr::Leaf(BaseLeaf::IsFirstRow) => Ok(self.is_first_row),
-            SymbolicExpr::Leaf(BaseLeaf::IsLastRow) => Ok(self.is_last_row),
-            SymbolicExpr::Leaf(BaseLeaf::IsTransition) => Ok(self.is_transition),
-            SymbolicExpr::Leaf(BaseLeaf::Constant(value)) => Ok((*value).into()),
-            SymbolicExpr::Add { x, y, .. } => Ok(self.evaluate(x)? + self.evaluate(y)?),
-            SymbolicExpr::Sub { x, y, .. } => Ok(self.evaluate(x)? - self.evaluate(y)?),
-            SymbolicExpr::Neg { x, .. } => Ok(-self.evaluate(x)?),
-            SymbolicExpr::Mul { x, y, .. } => Ok(self.evaluate(x)? * self.evaluate(y)?),
+                });
+            }
+        },
+        BaseLeaf::IsFirstRow => BusNode::IsFirstRow,
+        BaseLeaf::IsLastRow => BusNode::IsLastRow,
+        BaseLeaf::IsTransition => BusNode::IsTransition,
+        BaseLeaf::Constant(value) => BusNode::Constant(*value),
+    })
+}
+
+/// Flatten one symbolic tree into the shared node list, and return its root position.
+///
+/// Arithmetic nodes share their operands, so the declaration is a graph rather than a tree.
+///
+/// Recording each distinct arithmetic node once keeps every later pass linear in the graph size.
+///
+/// A leaf is copied at each use, which stays linear and keeps a small declaration off the lookup.
+fn compile_expression<F: Field>(
+    nodes: &mut Vec<BusNode<F>>,
+    positions: &mut BTreeMap<*const SymbolicExpression<F>, usize>,
+    root: &SymbolicExpression<F>,
+) -> Result<usize, BusEvaluationError> {
+    /// Record one operand and return its position in the shared node list.
+    fn operand<F: Field>(
+        nodes: &mut Vec<BusNode<F>>,
+        positions: &BTreeMap<*const SymbolicExpression<F>, usize>,
+        child: &SymbolicExpression<F>,
+    ) -> Result<usize, BusEvaluationError> {
+        match child {
+            SymbolicExpr::Leaf(leaf) => {
+                nodes.push(compile_leaf(leaf)?);
+                Ok(nodes.len() - 1)
+            }
+            _ => Ok(positions[&core::ptr::from_ref(child)]),
         }
     }
+
+    if let SymbolicExpr::Leaf(leaf) = root {
+        nodes.push(compile_leaf(leaf)?);
+        return Ok(nodes.len() - 1);
+    }
+
+    // An explicit worklist keeps a deep declaration off the call stack.
+    // Each arithmetic node is visited once to schedule its operands and once to be recorded.
+    let mut pending = alloc::vec![(root, false)];
+    while let Some((expression, recording)) = pending.pop() {
+        let key = core::ptr::from_ref(expression);
+        if positions.contains_key(&key) {
+            continue;
+        }
+        let (x, y) = match expression {
+            SymbolicExpr::Add { x, y, .. }
+            | SymbolicExpr::Sub { x, y, .. }
+            | SymbolicExpr::Mul { x, y, .. } => (&**x, Some(&**y)),
+            SymbolicExpr::Neg { x, .. } => (&**x, None),
+            SymbolicExpr::Leaf(_) => unreachable!("leaves never reach the worklist"),
+        };
+        if !recording {
+            pending.push((expression, true));
+            for child in [Some(x), y].into_iter().flatten() {
+                if !matches!(child, SymbolicExpr::Leaf(_)) {
+                    pending.push((child, false));
+                }
+            }
+            continue;
+        }
+        let node = match expression {
+            SymbolicExpr::Add { .. } => BusNode::Add(
+                operand(nodes, positions, x)?,
+                operand(nodes, positions, y.unwrap())?,
+            ),
+            SymbolicExpr::Sub { .. } => BusNode::Sub(
+                operand(nodes, positions, x)?,
+                operand(nodes, positions, y.unwrap())?,
+            ),
+            SymbolicExpr::Mul { .. } => BusNode::Mul(
+                operand(nodes, positions, x)?,
+                operand(nodes, positions, y.unwrap())?,
+            ),
+            SymbolicExpr::Neg { .. } => BusNode::Neg(operand(nodes, positions, x)?),
+            SymbolicExpr::Leaf(_) => unreachable!("leaves never reach the worklist"),
+        };
+        positions.insert(key, nodes.len());
+        nodes.push(node);
+    }
+    Ok(positions[&core::ptr::from_ref(root)])
 }
 
 impl<EF: Field> BusChallenges<EF> {
@@ -98,11 +182,18 @@ impl<EF: Field> BusChallenges<EF> {
 /// One declaration's leaf factor reduced to the terms that read the trace.
 ///
 /// Slot placement, the named-domain contribution, and every width check are settled once.
-/// What remains per row is one payload evaluation and one inner product.
-#[derive(Clone, Copy, Debug)]
+///
+/// So is the arithmetic graph, which is flattened so that a shared node costs one evaluation.
+///
+/// What remains per row is one forward pass and one inner product.
+#[derive(Clone, Debug)]
 pub struct BusFactorPlan<'a, F: Field, EF> {
-    /// Declaration whose payload and activation expressions are resolved at each point.
-    interaction: &'a SymbolicBusInteraction<F>,
+    /// Arithmetic graph in an order that resolves every operand before its user.
+    nodes: Vec<BusNode<F>>,
+    /// Node carrying each payload position, in declaration order.
+    payload: Vec<usize>,
+    /// Node carrying the conditional selector, when the declaration has one.
+    activation: Option<usize>,
     /// Tuple weight of each payload position, in declaration order.
     payload_weights: &'a [EF],
     /// Random shift already reduced by the fixed named-domain contribution.
@@ -118,29 +209,61 @@ where
     ///
     /// Boolean rows resolve in the base field and cost far less than a folded point.
     ///
+    /// The scratch buffer holds one value per graph node and is reused across rows.
+    ///
     /// # Errors
     ///
     /// Returns an error when the supplied evaluation view omits a referenced value.
-    pub fn evaluate<A>(&self, values: BusEvaluation<'_, F, A>) -> Result<EF, BusEvaluationError>
+    pub fn evaluate<A>(
+        &self,
+        scratch: &mut Vec<A>,
+        values: BusEvaluation<'_, F, A>,
+    ) -> Result<EF, BusEvaluationError>
     where
         A: ExtensionField<F>,
         EF: ExtensionField<A>,
     {
+        scratch.clear();
+        scratch.reserve(self.nodes.len());
+        for node in &self.nodes {
+            let value = match *node {
+                BusNode::Main(column) => *values
+                    .main
+                    .get(column)
+                    .ok_or(BusEvaluationError::MainColumn { column })?,
+                BusNode::Preprocessed(column) => *values
+                    .preprocessed
+                    .get(column)
+                    .ok_or(BusEvaluationError::PreprocessedColumn { column })?,
+                BusNode::Public(index) => values
+                    .public
+                    .get(index)
+                    .copied()
+                    .map(Into::into)
+                    .ok_or(BusEvaluationError::PublicValue { index })?,
+                BusNode::IsFirstRow => values.is_first_row,
+                BusNode::IsLastRow => values.is_last_row,
+                BusNode::IsTransition => values.is_transition,
+                BusNode::Constant(value) => value.into(),
+                BusNode::Add(x, y) => scratch[x] + scratch[y],
+                BusNode::Sub(x, y) => scratch[x] - scratch[y],
+                BusNode::Neg(x) => -scratch[x],
+                BusNode::Mul(x, y) => scratch[x] * scratch[y],
+            };
+            scratch.push(value);
+        }
+
         // Padding and named-domain slots are constant, so only payload slots are summed here.
         let mut fingerprint = EF::ZERO;
-        for (expression, &weight) in self.interaction.fields.iter().zip(self.payload_weights) {
-            fingerprint += weight * values.evaluate(expression)?;
+        for (&node, &weight) in self.payload.iter().zip(self.payload_weights) {
+            fingerprint += weight * scratch[node];
         }
         let factor = self.shifted_offset - fingerprint;
 
         // Conditional rows interpolate between identity padding and the live factor.
-        match &self.interaction.activation {
-            BusActivation::Always => Ok(factor),
-            BusActivation::Boolean(selector) => {
-                let selector = values.evaluate(selector)?;
-                Ok(EF::ONE + (factor - EF::ONE) * selector)
-            }
-        }
+        Ok(self
+            .activation
+            .map_or(factor, |node| EF::ONE + (factor - EF::ONE) * scratch[node]))
     }
 }
 
@@ -151,11 +274,11 @@ impl BusPlan {
     ///
     /// # Errors
     ///
-    /// Returns an error when the bus, the payload width, or the weight count is wrong.
+    /// Returns an error when the bus, the payload width, the weight count, or a leaf is wrong.
     pub fn compile_factor<'a, F, EF>(
         &self,
         bus: usize,
-        interaction: &'a SymbolicBusInteraction<F>,
+        interaction: &SymbolicBusInteraction<F>,
         weights: &'a [EF],
         offset: EF,
     ) -> Result<BusFactorPlan<'a, F, EF>, BusEvaluationError>
@@ -198,8 +321,25 @@ impl BusPlan {
             .map(|(_, &weight)| weight)
             .sum::<EF>();
 
+        // Both sides of one declaration share a node list, so a common factor is recorded once.
+        let mut nodes = Vec::new();
+        let mut positions = BTreeMap::new();
+        let payload = interaction
+            .fields
+            .iter()
+            .map(|expression| compile_expression(&mut nodes, &mut positions, expression))
+            .collect::<Result<Vec<_>, _>>()?;
+        let activation = match &interaction.activation {
+            BusActivation::Always => None,
+            BusActivation::Boolean(selector) => {
+                Some(compile_expression(&mut nodes, &mut positions, selector)?)
+            }
+        };
+
         Ok(BusFactorPlan {
-            interaction,
+            nodes,
+            payload,
+            activation,
             // Payload position and tuple slot coincide over the leading payload slots.
             payload_weights: &weights[..domain.payload_width],
             shifted_offset: offset - domain_constant,
@@ -225,7 +365,7 @@ impl BusPlan {
     {
         // A single point pays for the placement it would otherwise reuse.
         self.compile_factor(bus, interaction, weights, offset)?
-            .evaluate::<EF>(values)
+            .evaluate::<EF>(&mut Vec::new(), values)
     }
 }
 
@@ -313,6 +453,47 @@ mod tests {
             evaluate(periodic),
             Err(BusEvaluationError::PeriodicColumn { column: 7 })
         );
+    }
+
+    #[test]
+    fn a_deeply_shared_payload_resolves_once_per_distinct_node() {
+        // A doubling chain of this depth has one node per level and two paths out of each.
+        // Re-walking the graph per path would take about thirteen seconds here.
+        const DEPTH: u32 = 32;
+
+        let leaf = F::from_u8(5);
+        let mut expression: SymbolicExpression<F> =
+            SymbolicVariable::new(BaseEntry::Main { offset: 0 }, 0).into();
+        for _ in 0..DEPTH {
+            expression = expression.clone() + expression;
+        }
+        let interaction = SymbolicBusInteraction::<F> {
+            bus_name: "memory".to_string(),
+            direction: BusDirection::Push,
+            fields: vec![expression],
+            activation: BusActivation::Always,
+        };
+
+        // Weight one on the payload slot and a zero shift leave the negated payload.
+        let factor = plan()
+            .compile_factor(0, &interaction, &[F::ONE, F::ZERO], F::ZERO)
+            .unwrap();
+        let value = factor
+            .evaluate(
+                &mut vec![],
+                BusEvaluation {
+                    main: &[leaf],
+                    preprocessed: &[],
+                    public: &[],
+                    is_first_row: F::ZERO,
+                    is_last_row: F::ZERO,
+                    is_transition: F::ZERO,
+                },
+            )
+            .unwrap();
+
+        // Doubling that many times multiplies the leaf by that power of two.
+        assert_eq!(value, -(leaf * F::TWO.exp_u64(u64::from(DEPTH))));
     }
 
     #[test]

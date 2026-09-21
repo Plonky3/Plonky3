@@ -45,6 +45,8 @@ pub(crate) struct Forgery {
     pub(crate) columns: Option<(usize, Vec<u64>)>,
     /// A reader in plan order, and the columns its claims are read off.
     pub(crate) claims: Option<(usize, Vec<usize>)>,
+    /// An AIR, and the table the bus phase materializes and composes in place of its own.
+    pub(crate) bus_table: Option<(usize, Vec<u64>)>,
 }
 
 /// A proving-time PCS budget failure or a failed statement security assessment.
@@ -56,9 +58,6 @@ pub enum ProvingError<E> {
     /// The requested complete-statement security target was not met.
     #[error(transparent)]
     Security(#[from] SecurityError),
-    /// Binary-native bus declarations do not define a supported statement.
-    #[error("binary-bus planning failed: {0}")]
-    BusPlan(#[from] p3_bus::BusPlanError),
     /// The product-tree bus reduction rejected the committed witness.
     #[error("binary-bus product reduction failed: {0}")]
     BusArgument(#[from] p3_bus::BusArgumentError),
@@ -381,6 +380,31 @@ where
     // They belong to the whole statement, so they land before either phase samples anything.
     transcript.public_values(&public_values);
 
+    // Under test the bus phase may read a table other than the one this proof commits.
+    // A proof can then carry terminal claims the committed trace does not support.
+    #[cfg(test)]
+    let bus_substitute =
+        forgery
+            .and_then(|forgery| forgery.bus_table.as_ref())
+            .map(|&(air, ref values)| {
+                use p3_field::PrimeCharacteristicRing;
+                let height = 1usize << instances.num_variables()[air];
+                let cells = values.iter().copied().map(C::Val::from_u64).collect();
+                let matrix = p3_matrix::dense::RowMajorMatrix::new(cells, height);
+                (air, p3_sumcheck::layout::Table::new(matrix))
+            });
+    #[cfg(test)]
+    let bus_tables = bus_substitute.as_ref().map_or_else(
+        || tables.clone(),
+        |&(forged, ref table)| {
+            let mut substituted = tables.clone();
+            substituted[forged] = table;
+            substituted
+        },
+    );
+    #[cfg(not(test))]
+    let bus_tables = tables.clone();
+
     // 4. Reduce each planned bus product and bind its terminal claims by composition sumcheck.
     let bus_round = transcript
         .bus_argument(|challenger| {
@@ -388,10 +412,15 @@ where
                 .as_ref()
                 .expect("the transcript describes a bus argument");
             // Checking widths once per AIR keeps a caller mistake out of the row loop below.
-            context.check_tables(&tables, &preprocessed_tables, &public_values)?;
+            context.check_tables(&bus_tables, &preprocessed_tables, &public_values)?;
             let (product, output) = context.plan().prove::<C::Val, C::Challenge, _>(
                 |challenges| {
-                    context.materialize(&tables, &preprocessed_tables, &public_values, challenges)
+                    context.materialize(
+                        &bus_tables,
+                        &preprocessed_tables,
+                        &public_values,
+                        challenges,
+                    )
                 },
                 challenger,
             )?;
@@ -418,7 +447,7 @@ where
             let mut prover = BusCompositionProver::new(
                 context,
                 &output,
-                &tables,
+                &bus_tables,
                 &preprocessed_tables,
                 &public_values,
                 direction,
@@ -834,12 +863,13 @@ mod tests {
             let main = builder.main().current_slice()[0];
 
             // Both sides expose the same one-coordinate tuple through different commitments.
+            //
+            // A bus declaration leaves the zerocheck nothing to fold, and the batch refuses an
+            // AIR with no round polynomial of its own, so each side also carries a constraint.
             let value: AB::Expr = if self.fixed.is_some() {
-                // The otherwise unused main column keeps an ordinary zerocheck constraint.
                 builder.assert_zero(main);
                 builder.preprocessed().current_slice()[0].into()
             } else {
-                // Pin one committed cell so this AIR also contributes an ordinary constraint.
                 builder.when_first_row().assert_one(main);
                 main.into()
             };
@@ -1404,16 +1434,33 @@ mod tests {
         assert_ne!(old_shortcut, true_factor_mle);
 
         // Every proof-controlled layer message is bound by ProductGKR or composition sumcheck.
+        // Each tamper names the check that must catch it, so a weakened check shows up here.
         proof.bus.as_mut().unwrap().product.product.roots[0] += EF::ONE;
-        assert!(verify_with(&proof, &push, &pull, 2).is_err());
+        assert!(matches!(
+            verify_with(&proof, &push, &pull, 2),
+            Err(VerificationError::BusArgument(
+                p3_bus::BusArgumentError::Product(p3_bus::ProductGkrError::LayerConsistency {
+                    layer: 0
+                })
+            ))
+        ));
         proof.bus.as_mut().unwrap().product.product.roots[0] -= EF::ONE;
 
         proof.bus.as_mut().unwrap().composition.claimed_sum += EF::ONE;
-        assert!(verify_with(&proof, &push, &pull, 2).is_err());
+        assert!(matches!(
+            verify_with(&proof, &push, &pull, 2),
+            Err(VerificationError::BusBinding(
+                BusBindingError::InitialClaimMismatch
+            ))
+        ));
         proof.bus.as_mut().unwrap().composition.claimed_sum -= EF::ONE;
 
+        // A changed round message moves the challenge the terminal point is drawn from.
         proof.bus.as_mut().unwrap().composition.round_polys[0][0] += EF::ONE;
-        assert!(verify_with(&proof, &push, &pull, 2).is_err());
+        assert!(matches!(
+            verify_with(&proof, &push, &pull, 2),
+            Err(VerificationError::Opening(_))
+        ));
         proof.bus.as_mut().unwrap().composition.round_polys[0][0] -= EF::ONE;
 
         // Direction, activation, and block geometry are verifier statement metadata.
@@ -1421,12 +1468,26 @@ mod tests {
             direction: BusDirection::Push,
             conditional: true,
         };
-        assert!(verify_with(&proof, &push, &wrong_direction, 2).is_err());
+        assert!(matches!(
+            verify_with(&proof, &push, &wrong_direction, 2),
+            Err(VerificationError::BusArgument(
+                p3_bus::BusArgumentError::Product(p3_bus::ProductGkrError::LayerCountMismatch {
+                    expected: 2,
+                    actual: 1
+                })
+            ))
+        ));
+
+        // Dropping the activation stops the declaration reading the selector column.
+        // The bus batch then answers one column where the proof carries two.
         let wrong_activation = ConditionalBusAir {
             direction: BusDirection::Pull,
             conditional: false,
         };
-        assert!(verify_with(&proof, &push, &wrong_activation, 2).is_err());
+        assert!(matches!(
+            verify_with(&proof, &push, &wrong_activation, 2),
+            Err(VerificationError::Opening(_))
+        ));
 
         // A height change moves the block prefix while retaining the same AIR declarations.
         assert!(matches!(
@@ -1440,8 +1501,262 @@ mod tests {
         let mut current = batch.current().to_vec();
         current[0] += EF::ONE;
         *batch = p3_sumcheck::OpeningBatch::new(current, batch.next().to_vec());
-        assert!(verify_with(&proof, &push, &pull, 2).is_err());
+        assert!(matches!(
+            verify_with(&proof, &push, &pull, 2),
+            Err(VerificationError::Opening(_))
+        ));
         *proof.opening.evals.last_mut().unwrap() = original;
+    }
+
+    /// AIR that constrains its single column and declares nothing optional.
+    struct SilentAir;
+
+    impl BaseAir<F> for SilentAir {
+        fn width(&self) -> usize {
+            1
+        }
+    }
+
+    impl<AB: AirBuilder<F = F>> Air<AB> for SilentAir {
+        fn eval(&self, builder: &mut AB) {
+            let cell = builder.main().current_slice()[0];
+            builder.when_first_row().assert_zero(cell);
+        }
+    }
+
+    /// Prove a batch of two conditional bus AIRs whose committed tables need not balance.
+    ///
+    /// The forgery lets the bus phase read a substitute for the pull side's table.
+    fn bus_verdict(
+        push_columns: &[u64],
+        pull_columns: &[u64],
+        forgery: Option<&Forgery>,
+    ) -> Result<(), VerificationError<PcsError<TestConfig>>> {
+        let push = ConditionalBusAir {
+            direction: BusDirection::Push,
+            conditional: true,
+        };
+        let pull = ConditionalBusAir {
+            direction: BusDirection::Pull,
+            conditional: true,
+        };
+        let config = config(4, FOLDING);
+        let (pk, vk) = setup(&config, &[&push, &pull], &mut challenger()).unwrap();
+        let table = |values: &[u64]| {
+            Table::new(RowMajorMatrix::new(
+                values.iter().copied().map(F::from_u64).collect(),
+                values.len() / 2,
+            ))
+        };
+        let proof = prove_forged::<_, _, GenericBackend>(
+            &config,
+            ProverInstances::new(vec![
+                ProverInstance::new(&push, table(push_columns), &pk, &[]),
+                ProverInstance::new(&pull, table(pull_columns), &pk, &[]),
+            ]),
+            0,
+            &mut challenger(),
+            forgery,
+        )
+        .unwrap();
+
+        verify(
+            &config,
+            VerifierInstances::new(vec![
+                VerifierInstance::new(&push, &vk, 2, &[]),
+                VerifierInstance::new(&pull, &vk, 2, &[]),
+            ]),
+            &proof,
+            0,
+            &mut challenger(),
+        )
+    }
+
+    #[test]
+    fn a_bus_terminal_claim_the_committed_trace_does_not_support_is_rejected() {
+        // Four rows of payload under an all-active selector, identical on both sides.
+        let balanced = [1, 2, 3, 4, 1, 1, 1, 1];
+
+        // The honest batch commits the same table on both sides and verifies.
+        bus_verdict(&balanced, &balanced, None).unwrap();
+
+        // The pull side commits a payload that cancels nothing the push side sent.
+        let unbalanced = [5, 6, 7, 8, 1, 1, 1, 1];
+        let forgery = Forgery {
+            bus_table: Some((1, balanced.to_vec())),
+            ..Forgery::default()
+        };
+
+        // The product reduction and the composition sumcheck both close on the substitute.
+        //
+        // Only the comparison against the opened columns sees the committed table at all.
+        assert!(matches!(
+            bus_verdict(&balanced, &unbalanced, Some(&forgery)),
+            Err(VerificationError::BusBinding(
+                BusBindingError::TerminalMismatch
+            ))
+        ));
+    }
+
+    #[test]
+    fn verify_rejects_a_bus_section_for_airs_declaring_no_bus() {
+        // Fixture state: this AIR declares no bus, so the proof carries no bus section.
+        //
+        //     AIRs  -> no declaration
+        //     proof -> None
+        let height = packed_floor();
+        let log_height = log2_strict_usize(height);
+        let config = config(log_height, FOLDING);
+        let (pk, vk) = setup(&config, &[&SilentAir], &mut challenger()).unwrap();
+        let mut proof = prove(
+            &config,
+            ProverInstances::new(vec![ProverInstance::new(
+                &SilentAir,
+                Table::new(RowMajorMatrix::new(F::zero_vec(height), height)),
+                &pk,
+                &[],
+            )]),
+            0,
+            &mut challenger(),
+        )
+        .unwrap();
+        assert!(proof.bus.is_none());
+
+        // Mutation: graft the section of a proof whose AIRs really do declare a bus.
+        //
+        //     AIRs  -> no declaration
+        //     proof -> Some(a well-formed reduction)
+        let (_, _, _, _, _, honest) = conditional_bus_fixture();
+        proof.bus = honest.bus;
+
+        // Expected rejection: the plan rebuilt from the AIRs describes no bus at all.
+        // Why: the transcript replays a bus step only when a declaration asks for one.
+        //   nothing would absorb the grafted section, so it would bind to no challenge
+        //   -> the proof is refused before the reduction is read.
+        assert!(matches!(
+            verify(
+                &config,
+                VerifierInstances::new(vec![VerifierInstance::new(
+                    &SilentAir,
+                    &vk,
+                    log_height,
+                    &[]
+                )]),
+                &proof,
+                0,
+                &mut challenger(),
+            ),
+            Err(VerificationError::UnexpectedBus)
+        ));
+    }
+
+    #[test]
+    fn verify_rejects_bus_airs_whose_proof_carries_no_bus_section() {
+        // Fixture state: both AIRs declare a bus, so the proof carries the section.
+        //
+        //     AIRs  -> one declaration each
+        //     proof -> Some(...)
+        let (config, push, pull, _pk, vk, mut proof) = conditional_bus_fixture();
+        assert!(proof.bus.is_some());
+
+        // Mutation: drop the section those declarations require.
+        //
+        //     AIRs  -> one declaration each
+        //     proof -> None
+        proof.bus = None;
+
+        // Expected rejection: the rebuilt plan describes a bus with nothing to check.
+        // Why: skipping the reduction instead would leave the terminal claims unmade.
+        //   the committed openings would then be compared against nothing at all
+        //   -> an unbalanced multiset would verify.
+        assert!(matches!(
+            verify(
+                &config,
+                VerifierInstances::new(vec![
+                    VerifierInstance::new(&push, &vk, 2, &[]),
+                    VerifierInstance::new(&pull, &vk, 2, &[]),
+                ]),
+                &proof,
+                0,
+                &mut challenger(),
+            ),
+            Err(VerificationError::UnexpectedBus)
+        ));
+    }
+
+    #[test]
+    fn a_bus_over_packed_boolean_tables_proves_and_verifies() {
+        // Every cell is a bit, so squaring the payload is the identity and both sides match.
+        let height = packed_floor();
+        let log_height = log2_strict_usize(height);
+        let push = ConditionalBusAir {
+            direction: BusDirection::Push,
+            conditional: true,
+        };
+        let pull = ConditionalBusAir {
+            direction: BusDirection::Pull,
+            conditional: true,
+        };
+
+        // Alternating payload bits under a selector that silences every fourth row.
+        // Rows past the table height are absent from the word, which the layout requires.
+        let words = (0..height.div_ceil(64))
+            .flat_map(|block| {
+                let live = (height - block * 64).min(64);
+                let mask = u64::MAX >> (64 - live);
+                [
+                    0xAAAA_AAAA_AAAA_AAAA_u64 & mask,
+                    0x7777_7777_7777_7777_u64 & mask,
+                ]
+            })
+            .collect::<Vec<u64>>();
+        let packed = || Table::from_packed_bits(RowMajorMatrix::new(words.clone(), 2), log_height);
+
+        // The scheme hands the bus prover its own retained tables, which stay packed here.
+        static PACKED: OnceLock<Table<F>> = OnceLock::new();
+        let retained = PACKED.get_or_init(|| {
+            let height = packed_floor();
+            let log_height = log2_strict_usize(height);
+            let words = (0..height.div_ceil(64))
+                .flat_map(|block| {
+                    let live = (height - block * 64).min(64);
+                    let mask = u64::MAX >> (64 - live);
+                    [
+                        0xAAAA_AAAA_AAAA_AAAA_u64 & mask,
+                        0x7777_7777_7777_7777_u64 & mask,
+                    ]
+                })
+                .collect::<Vec<u64>>();
+            Table::from_packed_bits(RowMajorMatrix::new(words, 2), log_height)
+        });
+        assert!(retained.packed_bits().is_some());
+
+        let mut config = config(log_height + 2, FOLDING);
+        let (pk, vk) = setup(&config, &[&push, &pull], &mut challenger()).unwrap();
+        config.committed_table_override = Some(retained);
+
+        let proof = prove(
+            &config,
+            ProverInstances::new(vec![
+                ProverInstance::new(&push, packed(), &pk, &[]),
+                ProverInstance::new(&pull, packed(), &pk, &[]),
+            ]),
+            0,
+            &mut challenger(),
+        )
+        .unwrap();
+
+        verify(
+            &config,
+            VerifierInstances::new(vec![
+                VerifierInstance::new(&push, &vk, log_height, &[]),
+                VerifierInstance::new(&pull, &vk, log_height, &[]),
+            ]),
+            &proof,
+            0,
+            &mut challenger(),
+        )
+        .unwrap();
     }
 
     #[test]

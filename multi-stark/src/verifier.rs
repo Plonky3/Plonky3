@@ -66,9 +66,6 @@ where
     /// The proof and the AIRs disagree on whether an indexed reduction exists.
     #[error("indexed reduction present but not expected, or absent but described")]
     UnexpectedIndexedReduction,
-    /// Binary-native bus declarations do not define a supported statement.
-    #[error("binary-bus planning failed: {0}")]
-    BusPlan(#[from] p3_bus::BusPlanError),
     /// The product-tree bus proof is malformed or inconsistent.
     #[error("binary-bus product reduction failed: {0}")]
     BusArgument(#[from] p3_bus::BusArgumentError),
@@ -540,22 +537,43 @@ where
     if let Some((output, direction, point, terminal)) = &bus_reduction {
         let context = bus.as_ref().expect("a bus reduction has a public bus plan");
         let empty = &[][..];
+
+        // The batch answers only the columns a declaration names, in ascending column order.
+        // Placing each answer at its own column index restores the view the plan evaluates.
+        let scatter = |columns: &[usize], width: usize, opened: &[C::Challenge]| {
+            let mut values = p3_field::PrimeCharacteristicRing::zero_vec(width);
+            for (&column, &value) in columns.iter().zip(opened) {
+                values[column] = value;
+            }
+            values
+        };
         let bus_main = (0..airs.len())
             .map(|air| {
-                main_schedule
+                let opened = main_schedule
                     .batch_answering(BatchRole::Bus { air })
                     .and_then(|batch| main_evals.get(batch))
-                    .map_or(empty, OpeningEvals::current)
+                    .map_or(empty, OpeningEvals::current);
+                scatter(context.main_columns(air), airs[air].width(), opened)
             })
             .collect::<Vec<_>>();
         let opened_preprocessed = preprocessed_evals.iter().flatten().collect::<Vec<_>>();
         let bus_preprocessed = (0..airs.len())
             .map(|air| {
-                preprocessed_schedule
+                let opened = preprocessed_schedule
                     .batch_answering(BatchRole::Bus { air })
                     .and_then(|batch| opened_preprocessed.get(batch).copied())
-                    .map_or(empty, OpeningEvals::current)
+                    .map_or(empty, OpeningEvals::current);
+                scatter(
+                    context.preprocessed_columns(air),
+                    airs[air].preprocessed_width(),
+                    opened,
+                )
             })
+            .collect::<Vec<_>>();
+        let bus_main = bus_main.iter().map(Vec::as_slice).collect::<Vec<_>>();
+        let bus_preprocessed = bus_preprocessed
+            .iter()
+            .map(Vec::as_slice)
             .collect::<Vec<_>>();
         let expected = context.terminal_composition(
             output,

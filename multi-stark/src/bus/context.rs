@@ -26,6 +26,10 @@ pub(crate) struct BusContext<F: Field, EF: ExtensionField<F>> {
     profiles: Vec<BusSymbolicBuilder<F, EF>>,
     /// Shared mixed-height layout derived from the profiles.
     plan: BusPlan,
+    /// Sorted main columns each AIR's declarations read, in AIR order.
+    main_columns: Vec<Vec<usize>>,
+    /// Sorted preprocessed columns each AIR's declarations read, in AIR order.
+    preprocessed_columns: Vec<Vec<usize>>,
 }
 
 impl<F, EF> BusContext<F, EF>
@@ -61,7 +65,40 @@ where
         let Some(plan) = BusPlan::build(&inputs)? else {
             return Ok(None);
         };
-        Ok(Some(Self { profiles, plan }))
+
+        // Only the columns a declaration reads have to be opened, lifted and folded.
+        let (main_columns, preprocessed_columns) = profiles
+            .iter()
+            .map(|profile| {
+                let mut main = alloc::collections::BTreeSet::new();
+                let mut preprocessed = alloc::collections::BTreeSet::new();
+                for interaction in profile.interactions() {
+                    let (fields, fixed) = interaction.referenced_columns();
+                    main.extend(fields);
+                    preprocessed.extend(fixed);
+                }
+                (
+                    main.into_iter().collect::<Vec<_>>(),
+                    preprocessed.into_iter().collect::<Vec<_>>(),
+                )
+            })
+            .collect::<(Vec<_>, Vec<_>)>();
+        Ok(Some(Self {
+            profiles,
+            plan,
+            main_columns,
+            preprocessed_columns,
+        }))
+    }
+
+    /// Main columns one AIR's declarations read, in ascending order.
+    pub(crate) fn main_columns(&self, air: usize) -> &[usize] {
+        &self.main_columns[air]
+    }
+
+    /// Preprocessed columns one AIR's declarations read, in ascending order.
+    pub(crate) fn preprocessed_columns(&self, air: usize) -> &[usize] {
+        &self.preprocessed_columns[air]
     }
 
     /// Reject committed tables that cannot resolve the declarations their AIR owns.
@@ -84,14 +121,17 @@ where
             let fixed = F::zero_vec(preprocessed[air].map_or(0, Table::num_polys));
             self.plan
                 .compile_factor(block.bus, self.interaction(block.owner), &weights, EF::ZERO)?
-                .evaluate(BusEvaluation {
-                    main: &main,
-                    preprocessed: &fixed,
-                    public: public_values[air],
-                    is_first_row: F::ZERO,
-                    is_last_row: F::ZERO,
-                    is_transition: F::ZERO,
-                })?;
+                .evaluate(
+                    &mut Vec::new(),
+                    BusEvaluation {
+                        main: &main,
+                        preprocessed: &fixed,
+                        public: public_values[air],
+                        is_first_row: F::ZERO,
+                        is_last_row: F::ZERO,
+                        is_transition: F::ZERO,
+                    },
+                )?;
         }
         Ok(())
     }
@@ -264,10 +304,11 @@ where
             .plan
             .compile_factor(block.bus, interaction, weights, offset)
             .expect("a checked bus plan compiles against its own declarations");
-        let main_columns = tables[air].iter_polys().collect::<Vec<_>>();
+        // Representation-independent views read a packed Boolean table without expanding it.
+        let main_columns = tables[air].columns().collect::<Vec<_>>();
         let fixed_columns = preprocessed[air]
             .iter()
-            .flat_map(|table| table.iter_polys())
+            .flat_map(|table| table.columns())
             .collect::<Vec<_>>();
         let public = public_values[air];
         let height = 1usize << block.log_height;
@@ -280,24 +321,28 @@ where
                     (
                         F::zero_vec(main_columns.len()),
                         F::zero_vec(fixed_columns.len()),
+                        Vec::new(),
                     )
                 },
-                |(main, fixed), row| {
+                |(main, fixed, scratch), row| {
                     for (value, column) in main.iter_mut().zip(&main_columns) {
-                        *value = column[row];
+                        *value = column.value(row);
                     }
                     for (value, column) in fixed.iter_mut().zip(&fixed_columns) {
-                        *value = column[row];
+                        *value = column.value(row);
                     }
                     factor
-                        .evaluate(BusEvaluation {
-                            main,
-                            preprocessed: fixed,
-                            public,
-                            is_first_row: F::from_bool(row == 0),
-                            is_last_row: F::from_bool(row + 1 == height),
-                            is_transition: F::from_bool(row + 1 < height),
-                        })
+                        .evaluate(
+                            scratch,
+                            BusEvaluation {
+                                main,
+                                preprocessed: fixed,
+                                public,
+                                is_first_row: F::from_bool(row == 0),
+                                is_last_row: F::from_bool(row + 1 == height),
+                                is_transition: F::from_bool(row + 1 < height),
+                            },
+                        )
                         // Table widths are checked against every AIR before this loop starts.
                         .expect("a checked bus plan resolves against its committed table")
                 },
@@ -371,6 +416,17 @@ mod tests {
         // The declared width resolves the same declaration without an error.
         let wide = Table::new(RowMajorMatrix::new(vec![BabyBear::ZERO; 4], 2));
         assert_eq!(context.check_tables(&[&wide], &[None], &[&[]]), Ok(()));
+    }
+
+    #[test]
+    fn only_the_columns_a_declaration_reads_are_scheduled() {
+        // This AIR has two main columns and its declaration reads the second one.
+        let context = BusContext::<BabyBear, BabyBear>::build(&[&TwoColumnAir], &[1])
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(context.main_columns(0), &[1]);
+        assert!(context.preprocessed_columns(0).is_empty());
     }
 
     #[test]

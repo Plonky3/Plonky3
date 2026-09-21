@@ -11,8 +11,6 @@
 //! A degree-four extension therefore holds four times the trace for the whole reduction.
 //!
 //! The batched zerocheck avoids that by folding packed base-field rows in its first round.
-//!
-//! Matching it here needs the same folder-generic plumbing and is deferred.
 
 use alloc::vec::Vec;
 
@@ -56,10 +54,14 @@ struct CompositionTerm<EF> {
 
 /// Folded source multilinears shared by every bus term owned by one AIR.
 struct AirState<F: Field, EF: ExtensionField<F>> {
-    /// Main trace column polynomials.
+    /// Polynomials of the main columns this AIR's declarations read.
     main: Vec<Poly<EF>>,
-    /// Preprocessed trace column polynomials.
+    /// Column index of each of those, and the declared width they are placed into.
+    main_layout: (Vec<usize>, usize),
+    /// Polynomials of the preprocessed columns this AIR's declarations read.
     preprocessed: Vec<Poly<EF>>,
+    /// Column index of each of those, and the declared width they are placed into.
+    preprocessed_layout: (Vec<usize>, usize),
     /// First-row, last-row, and transition selector polynomials.
     selectors: [Poly<EF>; 3],
     /// Equality polynomial anchored at the ProductGKR row point.
@@ -80,6 +82,8 @@ where
     EF: ExtensionField<F>,
 {
     /// Compute every term's initial cube sum in one pass over the shared AIR columns.
+    ///
+    /// The result is read only while the global prefix is still ahead of this table.
     fn initialize_claims(
         &mut self,
         context: &BusContext<F, EF>,
@@ -87,8 +91,6 @@ where
         offset: EF,
     ) {
         let height = self.equality.as_slice().len();
-        let mut main = EF::zero_vec(self.main.len());
-        let mut preprocessed = EF::zero_vec(self.preprocessed.len());
 
         // Slot placement is settled once per term, outside the row loop below.
         let factors = self
@@ -107,28 +109,61 @@ where
             })
             .collect::<Vec<_>>();
 
-        for row in 0..height {
-            for (value, column) in main.iter_mut().zip(&self.main) {
-                *value = column.as_slice()[row];
-            }
-            for (value, column) in preprocessed.iter_mut().zip(&self.preprocessed) {
-                *value = column.as_slice()[row];
-            }
-            let evaluation = BusEvaluation {
-                main: &main,
-                preprocessed: &preprocessed,
-                public: &self.public_values,
-                is_first_row: self.selectors[0].as_slice()[row],
-                is_last_row: self.selectors[1].as_slice()[row],
-                is_transition: self.selectors[2].as_slice()[row],
-            };
-            let equality = self.equality.as_slice()[row];
-            for (term, factor) in self.terms.iter_mut().zip(&factors) {
-                let value = factor
-                    .evaluate::<EF>(evaluation)
-                    .expect("a planned expression resolves against its owning table");
-                term.row_claim += equality * (value - EF::ONE);
-            }
+        let main_polys = &self.main;
+        let (main_indices, main_width) = (&self.main_layout.0, self.main_layout.1);
+        let fixed_polys = &self.preprocessed;
+        let (fixed_indices, fixed_width) =
+            (&self.preprocessed_layout.0, self.preprocessed_layout.1);
+        let selectors = &self.selectors;
+        let equality = &self.equality;
+        let public_values = &self.public_values;
+        let claims = (0..height)
+            .into_par_iter()
+            .par_fold_reduce(
+                || {
+                    (
+                        EF::zero_vec(factors.len()),
+                        EF::zero_vec(main_width),
+                        EF::zero_vec(fixed_width),
+                        Vec::new(),
+                    )
+                },
+                |(mut claims, mut main, mut preprocessed, mut scratch), row| {
+                    // Unread columns keep their zero, which no planned expression names.
+                    for (&index, column) in main_indices.iter().zip(main_polys) {
+                        main[index] = column.as_slice()[row];
+                    }
+                    for (&index, column) in fixed_indices.iter().zip(fixed_polys) {
+                        preprocessed[index] = column.as_slice()[row];
+                    }
+                    let evaluation = BusEvaluation {
+                        main: &main,
+                        preprocessed: &preprocessed,
+                        public: public_values,
+                        is_first_row: selectors[0].as_slice()[row],
+                        is_last_row: selectors[1].as_slice()[row],
+                        is_transition: selectors[2].as_slice()[row],
+                    };
+                    let weight = equality.as_slice()[row];
+                    for (claim, factor) in claims.iter_mut().zip(&factors) {
+                        let value = factor
+                            .evaluate::<EF>(&mut scratch, evaluation)
+                            .expect("a planned expression resolves against its owning table");
+                        *claim += weight * (value - EF::ONE);
+                    }
+                    (claims, main, preprocessed, scratch)
+                },
+                |(mut left, main, preprocessed, scratch), (right, ..)| {
+                    for (claim, partial) in left.iter_mut().zip(right) {
+                        *claim += partial;
+                    }
+                    (left, main, preprocessed, scratch)
+                },
+            )
+            .0;
+
+        for (term, claim) in self.terms.iter_mut().zip(claims) {
+            term.row_claim = claim;
         }
     }
 }
@@ -164,14 +199,30 @@ where
                     .expect("a planned share addresses its own product-tree point");
                 let coefficient = direction_weight * block_weight;
                 let state = airs[air].get_or_insert_with(|| {
-                    let main = tables[air]
-                        .iter_polys()
-                        .map(|column| Poly::new(column.iter().copied().map(Into::into).collect()))
+                    // Column views read a packed Boolean table without expanding it first.
+                    // Only the columns a declaration reads are lifted, and then folded.
+                    let main_columns = context.main_columns(air);
+                    let main = main_columns
+                        .iter()
+                        .map(|&column| {
+                            Poly::new(
+                                tables[air]
+                                    .column(column)
+                                    .values()
+                                    .map(Into::into)
+                                    .collect(),
+                            )
+                        })
                         .collect::<Vec<_>>();
+                    let fixed_columns = context.preprocessed_columns(air);
+                    let fixed_width = preprocessed[air].map_or(0, Table::num_polys);
                     let preprocessed = preprocessed[air]
                         .iter()
-                        .flat_map(|table| table.iter_polys())
-                        .map(|column| Poly::new(column.iter().copied().map(Into::into).collect()))
+                        .flat_map(|table| {
+                            fixed_columns.iter().map(|&column| {
+                                Poly::new(table.column(column).values().map(Into::into).collect())
+                            })
+                        })
                         .collect::<Vec<_>>();
                     let height = 1usize << share.row_variables;
                     let selectors = [
@@ -189,7 +240,9 @@ where
                     ];
                     AirState {
                         main,
+                        main_layout: (main_columns.to_vec(), tables[air].num_polys()),
                         preprocessed,
+                        preprocessed_layout: (fixed_columns.to_vec(), fixed_width),
                         selectors,
                         equality: Poly::new(equality_weights(row_point)),
                         terms: Vec::new(),
@@ -213,7 +266,12 @@ where
             }
         }
 
-        for air in airs.iter_mut().flatten() {
+        // A table as tall as the statement never reads its own claim, so it never pays for one.
+        for air in airs
+            .iter_mut()
+            .flatten()
+            .filter(|air| air.unused_prefix > 0)
+        {
             air.initialize_claims(context, &weights, output.challenges.offset);
         }
 
@@ -252,20 +310,24 @@ where
             .map_init(
                 || {
                     (
-                        EF::zero_vec(air.main.len()),
-                        EF::zero_vec(air.preprocessed.len()),
+                        EF::zero_vec(air.main_layout.1),
+                        EF::zero_vec(air.preprocessed_layout.1),
+                        Vec::new(),
                     )
                 },
-                |(main, prep), row| {
+                |(main, prep, scratch), row| {
                     let interpolate = |poly: &Poly<EF>| {
                         let values = poly.as_slice();
                         values[row] + (values[row + half] - values[row]) * node
                     };
-                    for (value, polynomial) in main.iter_mut().zip(&air.main) {
-                        *value = interpolate(polynomial);
+                    // Unread columns keep their zero, which no planned expression names.
+                    for (&index, polynomial) in air.main_layout.0.iter().zip(&air.main) {
+                        main[index] = interpolate(polynomial);
                     }
-                    for (value, polynomial) in prep.iter_mut().zip(&air.preprocessed) {
-                        *value = interpolate(polynomial);
+                    for (&index, polynomial) in
+                        air.preprocessed_layout.0.iter().zip(&air.preprocessed)
+                    {
+                        prep[index] = interpolate(polynomial);
                     }
                     let evaluation = BusEvaluation {
                         main,
@@ -281,7 +343,7 @@ where
                         .zip(&factors)
                         .map(|(term, factor)| {
                             let value = factor
-                                .evaluate::<EF>(evaluation)
+                                .evaluate::<EF>(scratch, evaluation)
                                 .expect("a planned expression resolves against its folded table");
                             term.coefficient * equality * (value - EF::ONE)
                         })

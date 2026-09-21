@@ -4,7 +4,8 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
 use p3_air::symbolic::{
-    AirLayout, ConstraintLayout, SymbolicAirBuilder, SymbolicExpression, SymbolicExpressionExt,
+    AirLayout, BaseEntry, BaseLeaf, ConstraintLayout, SymbolicAirBuilder, SymbolicExpr,
+    SymbolicExpression, SymbolicExpressionExt,
 };
 use p3_air::{Air, AirBuilder, DebugConstraintBuilder, ExtensionBuilder, PermutationAirBuilder};
 use p3_field::{Algebra, ExtensionField, Field, PrimeCharacteristicRing};
@@ -20,6 +21,12 @@ pub enum BusActivation<E> {
     /// Every row contributes one tuple.
     Always,
     /// One expression selects whether the row contributes its tuple.
+    ///
+    /// Soundness needs that expression to be zero or one on every row.
+    ///
+    /// The public declaration path emits that constraint.
+    ///
+    /// A declaration assembled by hand carries no such constraint, so its author owes one.
     Boolean(E),
 }
 
@@ -73,6 +80,10 @@ pub trait BusInteractionBuilder: BusInteractionRecorder {
     ///
     /// A conditional activation is constrained to zero or one before it is recorded.
     ///
+    /// The declaration is reduced outside the batched zerocheck and leaves it nothing to fold.
+    ///
+    /// An AIR carrying nothing else is refused, so a provider needs a constraint of its own.
+    ///
     /// # Arguments
     ///
     /// - `bus_name`: channel shared by every matching declaration.
@@ -110,6 +121,54 @@ pub struct SymbolicBusInteraction<F: Field> {
 }
 
 impl<F: Field> SymbolicBusInteraction<F> {
+    /// Sorted current-row main and preprocessed columns this declaration reads.
+    ///
+    /// Only these columns have to be opened and folded for the declaration to be resolved.
+    #[must_use]
+    pub fn referenced_columns(&self) -> (Vec<usize>, Vec<usize>) {
+        let mut main = alloc::collections::BTreeSet::new();
+        let mut preprocessed = alloc::collections::BTreeSet::new();
+        let mut seen = alloc::collections::BTreeSet::new();
+        let mut pending = self
+            .fields
+            .iter()
+            .chain(match &self.activation {
+                BusActivation::Always => None,
+                BusActivation::Boolean(selector) => Some(selector),
+            })
+            .collect::<Vec<_>>();
+
+        // Arithmetic nodes share their operands, so each distinct node is visited once.
+        while let Some(expression) = pending.pop() {
+            if !seen.insert(core::ptr::from_ref(expression)) {
+                continue;
+            }
+            match expression {
+                SymbolicExpr::Leaf(BaseLeaf::Variable(variable)) => match variable.entry {
+                    BaseEntry::Main { offset: 0 } => {
+                        main.insert(variable.index);
+                    }
+                    BaseEntry::Preprocessed { offset: 0 } => {
+                        preprocessed.insert(variable.index);
+                    }
+                    _ => {}
+                },
+                SymbolicExpr::Leaf(_) => {}
+                SymbolicExpr::Add { x, y, .. }
+                | SymbolicExpr::Sub { x, y, .. }
+                | SymbolicExpr::Mul { x, y, .. } => {
+                    pending.push(x);
+                    pending.push(y);
+                }
+                SymbolicExpr::Neg { x, .. } => pending.push(x),
+            }
+        }
+        (
+            main.into_iter().collect(),
+            preprocessed.into_iter().collect(),
+        )
+    }
+
     /// Degree of this interaction's selected factor under a transition-degree scale.
     #[must_use]
     pub fn factor_degree_multiple_with_transition(&self, multiple: usize) -> usize {

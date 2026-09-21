@@ -868,18 +868,22 @@ mod tests {
                 let factor = plan
                     .compile_factor(block.bus, &owner[block.owner.declaration], &weights, offset)
                     .unwrap();
+                let mut scratch = Vec::new();
                 for row in 0..1usize << block.log_height {
                     let payload = [F::from_usize(block.owner.air * 16 + row + 2)];
                     leaves.push(
                         factor
-                            .evaluate(crate::BusEvaluation {
-                                main: &payload,
-                                preprocessed: &[],
-                                public: &[],
-                                is_first_row: F::ZERO,
-                                is_last_row: F::ZERO,
-                                is_transition: F::ZERO,
-                            })
+                            .evaluate(
+                                &mut scratch,
+                                crate::BusEvaluation {
+                                    main: &payload,
+                                    preprocessed: &[],
+                                    public: &[],
+                                    is_first_row: F::ZERO,
+                                    is_last_row: F::ZERO,
+                                    is_transition: F::ZERO,
+                                },
+                            )
                             .unwrap(),
                     );
                 }
@@ -1008,6 +1012,47 @@ mod tests {
                 Err(BusPlanError::UnsupportedExpression { access, .. }) if access == expected
             ));
         }
+
+        // A doubling chain of this depth has two paths out of each of its nodes.
+        // Re-walking the graph per path would take about thirteen seconds per declaration.
+        const DEPTH: usize = 32;
+        let mut supported = variable(BaseEntry::Main { offset: 0 }, 0);
+        let mut unsupported = variable(BaseEntry::Periodic, 0);
+        for _ in 0..DEPTH {
+            supported = supported.clone() + supported;
+            unsupported = unsupported.clone() + unsupported;
+        }
+        let deep = vec![SymbolicBusInteraction {
+            bus_name: "deep".to_string(),
+            direction: BusDirection::Push,
+            fields: vec![supported],
+            activation: BusActivation::Always,
+        }];
+        assert!(
+            BusPlan::build(&[BusPlanInput {
+                log_height: 1,
+                interactions: &deep,
+            }])
+            .is_ok()
+        );
+
+        // Sharing must not swallow a rejection buried under the same depth.
+        let deep_invalid = vec![SymbolicBusInteraction {
+            bus_name: "deep".to_string(),
+            direction: BusDirection::Push,
+            fields: vec![unsupported],
+            activation: BusActivation::Always,
+        }];
+        assert!(matches!(
+            BusPlan::build(&[BusPlanInput {
+                log_height: 1,
+                interactions: &deep_invalid,
+            }]),
+            Err(BusPlanError::UnsupportedExpression {
+                access: UnsupportedBusAccess::Periodic,
+                ..
+            })
+        ));
 
         let enormous = vec![
             interaction("large", BusDirection::Push, 1),

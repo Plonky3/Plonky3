@@ -3,7 +3,7 @@
 use std::hint::black_box;
 use std::time::Duration;
 
-use criterion::{Criterion, criterion_group, criterion_main};
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use p3_air::symbolic::{BaseEntry, SymbolicExpression, SymbolicVariable};
 use p3_baby_bear::BabyBear;
 use p3_bus::{
@@ -20,6 +20,9 @@ type EF = BinomialExtensionField<F, 4>;
 const LOG_HEIGHT: usize = 20;
 const WIDTH: usize = 3;
 
+/// Doubling-chain depths standing in for a word recomposed from its bits.
+const SHARED_DEPTHS: [usize; 3] = [16, 20, 24];
+
 /// One declaration reading the leading columns of its own table.
 fn declaration() -> SymbolicBusInteraction<F> {
     let fields: Vec<SymbolicExpression<F>> = (0..WIDTH)
@@ -31,6 +34,77 @@ fn declaration() -> SymbolicBusInteraction<F> {
         fields,
         activation: BusActivation::Always,
     }
+}
+
+/// One declaration whose single payload slot is a chain of `depth` shared additions.
+///
+/// The chain has `depth + 1` distinct nodes and two paths out of each of them.
+fn shared_declaration(depth: usize) -> SymbolicBusInteraction<F> {
+    let mut expression: SymbolicExpression<F> =
+        SymbolicVariable::new(BaseEntry::Main { offset: 0 }, 0).into();
+    for _ in 0..depth {
+        expression = expression.clone() + expression;
+    }
+    SymbolicBusInteraction {
+        bus_name: String::from("memory"),
+        direction: BusDirection::Push,
+        fields: vec![expression],
+        activation: BusActivation::Always,
+    }
+}
+
+/// Time one row of a declaration whose payload shares every arithmetic node.
+///
+/// A walk that revisits shared nodes costs time exponential in the depth here.
+fn bench_shared(criterion: &mut Criterion) {
+    let mut group = criterion.benchmark_group("bus-shared-subexpression");
+    group
+        .sample_size(10)
+        .measurement_time(Duration::from_secs(5));
+
+    for depth in SHARED_DEPTHS {
+        let interaction = shared_declaration(depth);
+        let plan = BusPlan::build(&[BusPlanInput {
+            log_height: 1,
+            interactions: std::slice::from_ref(&interaction),
+        }])
+        .unwrap()
+        .unwrap();
+        let challenges = BusChallenges::<EF> {
+            fingerprint: (0..plan.security_geometry().tuple_variables())
+                .map(|index| EF::from_u64(7 + index as u64))
+                .collect(),
+            offset: EF::from_u64(11),
+        };
+        let weights = challenges.fingerprint_weights();
+
+        group.bench_with_input(BenchmarkId::new("row", depth), &depth, |bencher, _| {
+            let factor = plan
+                .compile_factor(0, &interaction, &weights, challenges.offset)
+                .unwrap();
+            let main = [F::from_u64(5)];
+            let mut workspace = Vec::new();
+            bencher.iter(|| {
+                black_box(
+                    factor
+                        .evaluate(
+                            &mut workspace,
+                            BusEvaluation {
+                                main: &main,
+                                preprocessed: &[],
+                                public: &[],
+                                is_first_row: F::ZERO,
+                                is_last_row: F::ZERO,
+                                is_transition: F::ZERO,
+                            },
+                        )
+                        .unwrap(),
+                )
+            });
+        });
+    }
+
+    group.finish();
 }
 
 fn bench(criterion: &mut Criterion) {
@@ -69,6 +143,7 @@ fn bench(criterion: &mut Criterion) {
             .compile_factor(0, &interaction, &weights, challenges.offset)
             .unwrap();
         let mut main = vec![F::ZERO; WIDTH];
+        let mut workspace = Vec::new();
         bencher.iter(|| {
             let mut leaves = Vec::with_capacity(height);
             for row in 0..height {
@@ -77,14 +152,17 @@ fn bench(criterion: &mut Criterion) {
                 }
                 leaves.push(
                     factor
-                        .evaluate(BusEvaluation {
-                            main: &main,
-                            preprocessed: &[],
-                            public: &[],
-                            is_first_row: F::from_bool(row == 0),
-                            is_last_row: F::from_bool(row + 1 == height),
-                            is_transition: F::from_bool(row + 1 < height),
-                        })
+                        .evaluate(
+                            &mut workspace,
+                            BusEvaluation {
+                                main: &main,
+                                preprocessed: &[],
+                                public: &[],
+                                is_first_row: F::from_bool(row == 0),
+                                is_last_row: F::from_bool(row + 1 == height),
+                                is_transition: F::from_bool(row + 1 < height),
+                            },
+                        )
                         .unwrap(),
                 );
             }
@@ -126,5 +204,5 @@ fn bench(criterion: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench);
+criterion_group!(benches, bench_shared, bench);
 criterion_main!(benches);

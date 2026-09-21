@@ -638,13 +638,14 @@ where
             }
         }
 
+        // A declaration resolves from the columns it names, so the batch opens only those.
         if let Some(context) = bus {
             for (air, table) in tables.iter_mut().enumerate() {
-                if context.contains_air(air) {
+                let columns = context.main_columns(air);
+                if context.contains_air(air) && !columns.is_empty() {
                     let role = BatchRole::Bus { air };
-                    let width = self.0[air].air.width();
                     table.1.push((
-                        OpeningBatch::new((0..width).collect(), Vec::new()),
+                        OpeningBatch::new(columns.to_vec(), Vec::new()),
                         Opening {
                             role,
                             against: against(role, self.0[air].num_variables),
@@ -724,11 +725,11 @@ where
 
         if let Some(context) = bus {
             for (slot, &air) in committed.iter().enumerate() {
-                if context.contains_air(air) {
+                let columns = context.preprocessed_columns(air);
+                if context.contains_air(air) && !columns.is_empty() {
                     let role = BatchRole::Bus { air };
-                    let width = self.0[air].air.preprocessed_width();
                     tables[slot].1.push((
-                        OpeningBatch::new((0..width).collect(), Vec::new()),
+                        OpeningBatch::new(columns.to_vec(), Vec::new()),
                         Opening {
                             role,
                             against: against(role, self.0[air].num_variables),
