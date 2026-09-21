@@ -166,6 +166,11 @@ fn packed_tables_ingest_directly_in_merged_order() {
                 })
             })
             .collect::<Vec<_>>();
+        assert_eq!(
+            direct_packed_cells(&tables, words),
+            Some(expected.clone()),
+            "packed sources should be eligible for direct ingestion at height {height}"
+        );
 
         with_stage_state(
             &[&FixtureAir::Pair, &FixtureAir::Linear { scale: Tower::ONE }],
