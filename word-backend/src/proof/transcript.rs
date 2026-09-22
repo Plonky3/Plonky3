@@ -12,7 +12,7 @@ use p3_challenger::{CanObserve, CanSample};
 use p3_field::{ExtensionField, Field};
 use p3_word::Word;
 
-/// Coefficients separating the two relation families.
+/// Coefficients separating the relation terms, whose powers weight every term.
 pub(super) const RELATION_BATCH_COEFFICIENTS: usize = 1;
 
 /// Version byte bound into the protocol seed.
@@ -30,8 +30,14 @@ const RELATION_BATCH: &str = "relation_batch";
 /// Label around the relation vanishing check.
 const ZEROCHECK: &str = "relation_zerocheck";
 
+/// Label around the multiplication reduction.
+const INTEGER_MUL: &str = "integer_mul";
+
 /// Type-level identity of the relation vanishing sub-protocol.
 struct Zerocheck;
+
+/// Type-level identity of the multiplication sub-protocol.
+struct IntegerMul;
 
 /// Sponge alphabet of a challenger native to the challenge field.
 type Alphabet<F> = FieldUnit<F>;
@@ -80,7 +86,9 @@ impl TranscriptShape {
         self.constraint_variables + self.bit_variables
     }
 
-    /// Describes the two challenge draws around the vanishing check.
+    /// Describes the multiplication bracket, then the two draws around the vanishing check.
+    ///
+    /// The bracket is played even when the statement declares no product.
     fn pattern<F, EF>(&self) -> InteractionPattern
     where
         F: TranscriptField,
@@ -88,6 +96,8 @@ impl TranscriptShape {
     {
         // Both lengths come from the verifier's own constraint system.
         let steps = vec![
+            Interaction::marker::<IntegerMul>(Hierarchy::Begin, Kind::Protocol, INTEGER_MUL),
+            Interaction::marker::<IntegerMul>(Hierarchy::End, Kind::Protocol, INTEGER_MUL),
             Interaction::algebra::<F, EF>(
                 Hierarchy::Atomic,
                 Kind::Challenge,
@@ -162,6 +172,15 @@ where
         }
     }
 
+    /// Lends the challenger to the multiplication reduction, before either relation draw.
+    pub(super) fn integer_mul<R>(&mut self, run: impl FnOnce(&mut C) -> R) -> R {
+        // Every product claim is bound before the vanishing point that weights it.
+        self.state.begin_protocol::<IntegerMul>(INTEGER_MUL);
+        let result = run(self.state.challenger_mut());
+        self.state.end_protocol::<IntegerMul>(INTEGER_MUL);
+        result
+    }
+
     /// Samples the vanishing point before the batching coefficient.
     ///
     /// Returns nothing when the sampled coefficient vanishes, releasing the transcript first.
@@ -232,6 +251,15 @@ where
             state: VerifierState::new(challenger, &separator, &[]),
             _field: PhantomData,
         }
+    }
+
+    /// Lends the challenger to the multiplication replay, before either relation draw.
+    pub(super) fn integer_mul<R>(&mut self, run: impl FnOnce(&mut C) -> R) -> R {
+        // The verifier follows the prover's named sub-protocol boundary exactly.
+        self.state.begin_protocol::<IntegerMul>(INTEGER_MUL);
+        let result = run(self.state.challenger_mut());
+        self.state.end_protocol::<IntegerMul>(INTEGER_MUL);
+        result
     }
 
     /// Replays the vanishing draw before the batching draw.
@@ -337,6 +365,7 @@ mod tests {
             challenger.observe(value);
         }
         let mut transcript = ProofProverTranscript::<_, F, F>::new(&mut challenger, shape, public);
+        transcript.integer_mul(|_| {});
         let drawn = transcript
             .challenges(shape.zerocheck_variables())
             .expect("a hashed sponge does not draw zero");
@@ -357,6 +386,8 @@ mod tests {
         let mut verifier_transcript =
             ProofVerifierTranscript::<_, F, F>::new(&mut verifier, shape(), &public);
         let variables = shape().zerocheck_variables();
+        prover_transcript.integer_mul(|_| {});
+        verifier_transcript.integer_mul(|_| {});
         assert_eq!(
             prover_transcript.challenges(variables).unwrap(),
             verifier_transcript.challenges(variables).unwrap()
@@ -435,6 +466,7 @@ mod tests {
         let mut challenger = challenger();
         let mut transcript =
             ProofVerifierTranscript::<_, F, F>::new(&mut challenger, shape(), &words());
+        transcript.integer_mul(|_| {});
         let _ = transcript.challenges(shape().zerocheck_variables());
     }
 
@@ -448,11 +480,13 @@ mod tests {
         // Both roles refuse, and dropping either state afterwards must not panic.
         let mut prover_transcript =
             ProofProverTranscript::<_, F, F>::new(&mut prover, shape(), &words());
+        prover_transcript.integer_mul(|_| {});
         assert!(prover_transcript.challenges(variables).is_none());
         drop(prover_transcript);
 
         let mut verifier_transcript =
             ProofVerifierTranscript::<_, F, F>::new(&mut verifier, shape(), &words());
+        verifier_transcript.integer_mul(|_| {});
         assert!(verifier_transcript.challenges(variables).is_none());
     }
 

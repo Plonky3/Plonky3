@@ -4,7 +4,7 @@ use p3_sumcheck::generic_degree::GenericDegreeError;
 use p3_word::Segment;
 use thiserror::Error;
 
-use crate::ShiftReductionError;
+use crate::{IntegerMulError, ShiftReductionError};
 
 /// A malformed statement or a failed word-level proof.
 #[derive(Clone, Debug, Error, PartialEq, Eq)]
@@ -30,11 +30,19 @@ pub enum WordProofError<E> {
     /// The sampled batching coefficient leaves one relation family unchecked.
     #[error("the sampled relation batching coefficient vanishes and checks no bitwise relation")]
     DegenerateBatching,
+    /// The proof carries a multiplication record exactly when the statement declares no product.
+    #[error("the multiplication record does not match the statement's product relations")]
+    ProductRecord,
+    /// The multiplication reduction rejected the field or the proof.
+    #[error("multiplication reduction failed: {0}")]
+    IntegerMul(IntegerMulError),
     /// The delegated vanishing check is malformed or inconsistent.
     #[error("relation vanishing check failed: {0}")]
     Zerocheck(GenericDegreeError),
-    /// The proof claims a nonzero sum for a check whose whole point is that it vanishes.
-    #[error("the batched relation sum is claimed nonzero, so some relation fails on the cube")]
+    /// The proof claims a batched sum other than the one the product claims fix.
+    ///
+    /// Without products that sum is zero, since every local relation vanishes on the cube.
+    #[error("the batched relation sum differs from the one the statement fixes")]
     RelationSum,
     /// The vanishing check does not close against the supplied operand evaluations.
     #[error("the relation vanishing check does not close against the claimed operands")]
@@ -53,6 +61,12 @@ pub enum WordProofError<E> {
 impl<E> From<GenericDegreeError> for WordProofError<E> {
     fn from(value: GenericDegreeError) -> Self {
         Self::Zerocheck(value)
+    }
+}
+
+impl<E> From<IntegerMulError> for WordProofError<E> {
+    fn from(value: IntegerMulError) -> Self {
+        Self::IntegerMul(value)
     }
 }
 

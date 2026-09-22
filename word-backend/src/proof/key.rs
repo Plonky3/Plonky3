@@ -12,8 +12,9 @@ use p3_sumcheck::PrescribedOpeningSecurity;
 use p3_word::Word;
 
 use super::error::WordProofError;
-use super::relation::{BATCHED_FAMILIES, OPERAND_EVALUATIONS, ZEROCHECK_DEGREE};
+use super::relation::{BASE_TERMS, OPERAND_EVALUATIONS, PRODUCT_TERMS, ZEROCHECK_DEGREE};
 use super::transcript::TranscriptShape;
+use crate::integer_mul::{IntegerMulReduction, OperandClaim};
 use crate::statement::Statement;
 use crate::{KeyCompileError, Packed, PackedWitness, PackedWord, ShiftClaim, ShiftReductionKey};
 
@@ -22,6 +23,8 @@ use crate::{KeyCompileError, Packed, PackedWitness, PackedWord, ShiftClaim, Shif
 pub struct WordProofKey<W: Word> {
     /// Reduction from shifted operand claims to one committed-trace claim.
     pub(super) shift: ShiftReductionKey<W>,
+    /// Reduction of every unsigned product to operand claims, when the statement declares one.
+    pub(super) integer_mul: Option<IntegerMulReduction>,
 }
 
 impl<W: Word> WordProofKey<W> {
@@ -30,19 +33,13 @@ impl<W: Word> WordProofKey<W> {
     /// # Errors
     ///
     /// Returns an error when the system is too large for the compact key representation.
-    ///
-    /// Returns an error when the system declares a relation family this protocol cannot prove.
     pub fn new(statement: impl Into<Statement<W>>) -> Result<Self, KeyCompileError> {
-        // A key that could never be proved must not exist, so nothing can price one either.
-        let statement = statement.into();
-        let count = statement.unproved_relations();
-        if count != 0 {
-            return Err(KeyCompileError::UnprovedRelation { count });
-        }
-
         // Key compilation fixes every sparse reference before proving begins.
+        let statement = statement.into();
+        let products = statement.relation_counts()[2];
         Ok(Self {
             shift: ShiftReductionKey::new(statement)?,
+            integer_mul: IntegerMulReduction::new(products, Self::bit_variables()),
         })
     }
 
@@ -83,7 +80,9 @@ impl<W: Word> WordProofKey<W> {
 
     /// Returns separately labelled terms for security-report diagnostics.
     ///
-    /// The terms cover batching, vanishing, shift, and whatever the commitment charges.
+    /// The terms cover multiplication, batching, vanishing, and shift.
+    ///
+    /// Whatever the commitment charges closes the list.
     ///
     /// # Returns
     ///
@@ -103,11 +102,18 @@ impl<W: Word> WordProofKey<W> {
     ) -> Option<WordProofSecurityModel> {
         // The counts are the key's own and both commitment inputs are the commitment's own.
         let field_bits = NonZeroUsize::new(EF::bits()).expect("a field has at least one element");
+        let terms = if self.integer_mul.is_some() {
+            PRODUCT_TERMS
+        } else {
+            BASE_TERMS
+        };
         WordProofSecurityModel::new(
             field_bits.get(),
-            BATCHED_FAMILIES,
+            terms,
             self.zerocheck_variables(),
             ZEROCHECK_DEGREE,
+            self.integer_mul
+                .map(|reduction| reduction.security_model(field_bits.get())),
             self.shift.security_model(field_bits),
             commitment.terms.clone(),
             commitment.log2_max_candidates,
@@ -177,14 +183,54 @@ impl<W: Word> WordProofKey<W> {
     ) -> ShiftClaim<EF> {
         // Constraint coordinates lead the point and within-word coordinates trail it.
         let (constraint_point, bit_point) = point.split_at(self.shift.constraint_variables());
-        let [linear, left, right, output] = *operands;
+        let [linear, left, right, output, a, b, low, high] = *operands;
         ShiftClaim::new(
             constraint_point.as_slice().to_vec(),
             bit_point.as_slice().to_vec(),
             [linear],
             [left, right, output],
-            [EF::ZERO; 4],
+            [a, b, low, high],
         )
+    }
+
+    /// Returns the four points the product terms of the vanishing check are weighted at.
+    ///
+    /// The order is the low-bit point, then the left, right, and limb claim points.
+    pub(super) fn product_points<EF: Field>(
+        &self,
+        vanishing_point: &[EF],
+        claims: &[OperandClaim<EF>; 4],
+    ) -> [Vec<EF>; 4] {
+        // The low bit reads every constraint row at the within-word index zero.
+        let rows = self.shift.constraint_variables();
+        let mut low_bit = vanishing_point[..rows].to_vec();
+        low_bit.resize(rows + Self::bit_variables(), EF::ZERO);
+
+        // Product rows fill the lowest rows of the shared cube, and the rest are zero.
+        //
+        // A claim over fewer rows is therefore read with its leading row coordinates at zero.
+        let lift = |claim: &OperandClaim<EF>| {
+            let padding = rows + Self::bit_variables() - claim.point.len();
+            let mut point = vec![EF::ZERO; padding];
+            point.extend_from_slice(&claim.point);
+            point
+        };
+        [
+            low_bit,
+            lift(&claims[0]),
+            lift(&claims[1]),
+            lift(&claims[2]),
+        ]
+    }
+
+    /// Returns the equality tables of the product points over the shared cube.
+    pub(super) fn product_weights<EF: Field>(
+        &self,
+        vanishing_point: &[EF],
+        claims: &[OperandClaim<EF>; 4],
+    ) -> [Vec<EF>; 4] {
+        self.product_points(vanishing_point, claims)
+            .map(|point| Point::new(point.as_slice()).equality_weights_msb())
     }
 }
 
@@ -270,20 +316,39 @@ mod tests {
     }
 
     #[test]
-    fn an_unproved_relation_family_leaves_no_key_to_price() {
+    fn a_product_key_charges_the_multiplication_reduction_first() {
+        // Fixture state: three products, so two padded row variables.
         let operand = |position| {
             Operand::single(ShiftedValue::plain(
                 ValueIndex::witness(position).expect("test position fits"),
             ))
         };
         let product = IntegerMulConstraint::new(operand(0), operand(1), operand(2), operand(3));
-        let system = ConstraintSystem::<Word64>::new(0, 8, vec![], vec![], vec![product])
+        let system = ConstraintSystem::<Word64>::new(0, 8, vec![], vec![], vec![product; 3])
             .expect("the fixture addresses only declared words");
+        let key = WordProofKey::new(system).expect("a product statement compiles");
+        let commitment = commitment_scheme(key.trace_variables()).opening_security(1);
+        let components = key.security_components::<EF>(&commitment).unwrap();
 
+        // The products run before the vanishing check, so their terms lead the list.
         assert_eq!(
-            WordProofKey::new(system),
-            Err(KeyCompileError::UnprovedRelation { count: 1 })
+            components[..3]
+                .iter()
+                .map(|component| component.label)
+                .collect::<Vec<_>>(),
+            [
+                p3_security::word::WORD_INTEGER_MUL_POINT_LABEL,
+                p3_security::word::WORD_INTEGER_MUL_PRODUCT_LABEL,
+                p3_security::word::WORD_RELATION_BATCHING_LABEL,
+            ]
         );
+
+        // Two row variables price the comparison point.
+        assert_eq!(components[0].bits.bits(), 127.0);
+
+        // Seven terms under powers of one coefficient give the batching numerator six.
+        // 128 - log2(6) = 125.415...
+        assert!((components[2].bits.bits() - 125.415_037_499_278_84).abs() < 1e-9);
     }
 
     #[test]

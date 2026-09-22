@@ -570,12 +570,6 @@ pub enum KeyCompileError {
         /// The rejected length.
         len: usize,
     },
-    /// The system declares a relation family the compiled protocol does not prove.
-    #[error("{count} unsigned integer product relations are not proved by this protocol")]
-    UnprovedRelation {
-        /// Number of declared relations in the unsupported family.
-        count: usize,
-    },
     /// A call's instances do not fit the compact relation address space.
     #[error("call {call} repeats its {kind:?} relations past the compact address space")]
     UnrepresentableComposition {

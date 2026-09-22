@@ -3,6 +3,7 @@
 use alloc::vec::Vec;
 use core::array;
 
+use p3_field::Field;
 use p3_word::{ConstraintSystem, Operand, ValueIndex};
 
 use crate::statement::Statement;
@@ -119,13 +120,32 @@ impl<W: PackedWord> OperationColumns<W> {
     }
 }
 
+/// Expands one packed column into its bit multilinear over the padded cube.
+pub(crate) fn bit_table<W: PackedWord, EF: Field>(column: &[Packed<W>], rows: usize) -> Vec<EF> {
+    // Row index leads the flat address and within-word bit index trails it.
+    let width = W::BITS as usize;
+    let mut table = EF::zero_vec(rows * width);
+    for (row, &packed) in column.iter().enumerate() {
+        let mut remaining = W::unpack(packed).to_u64();
+        while remaining != 0 {
+            // Visit only set lanes, which halves the scatter on random words.
+            let bit = remaining.trailing_zeros() as usize;
+            table[row * width + bit] = EF::ONE;
+            remaining &= remaining - 1;
+        }
+    }
+    table
+}
+
 #[cfg(test)]
 mod tests {
     use alloc::vec;
 
+    use p3_binary_field::BinaryField128;
+    use p3_field::PrimeCharacteristicRing;
     use p3_word::{
         AndConstraint, ConstraintSystem, IntegerMulConstraint, Operand, Shift, ShiftKind,
-        ShiftedValue, ValueIndex, Word64,
+        ShiftedValue, ValueIndex, Word32, Word64,
     };
     use proptest::prelude::*;
 
@@ -250,5 +270,41 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn a_packed_column_expands_to_its_set_bits() {
+        // Fixture state: one 32-bit word with its lowest and highest bits set.
+        let column = [Word32::pack(Word32::new(0x8000_0001))];
+        let table = bit_table::<Word32, BinaryField128>(&column, 2);
+
+        // Set lanes are one, every other lane of both rows is zero.
+        assert_eq!(table.len(), 64);
+        for (index, value) in table.iter().enumerate() {
+            let expected = if index == 0 || index == 31 {
+                BinaryField128::ONE
+            } else {
+                BinaryField128::ZERO
+            };
+            assert_eq!(*value, expected, "lane {index}");
+        }
+    }
+
+    #[test]
+    fn a_padded_row_contributes_no_bits() {
+        // Fixture state: one 64-bit row inside a two-row padded cube.
+        let column = [Word64::pack(Word64::new(u64::MAX))];
+        let table = bit_table::<Word64, BinaryField128>(&column, 2);
+
+        assert!(
+            table[..64]
+                .iter()
+                .all(|value| *value == BinaryField128::ONE)
+        );
+        assert!(
+            table[64..]
+                .iter()
+                .all(|value| *value == BinaryField128::ZERO)
+        );
     }
 }
