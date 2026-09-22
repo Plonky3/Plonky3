@@ -2395,6 +2395,19 @@ mod tests {
         conditional: bool,
     }
 
+    #[cfg(all(
+        target_arch = "x86_64",
+        target_feature = "vpclmulqdq",
+        any(target_feature = "avx2", target_feature = "avx512f")
+    ))]
+    type BinaryBusPacked = PackedRepr<F, Ghash128>;
+    #[cfg(not(all(
+        target_arch = "x86_64",
+        target_feature = "vpclmulqdq",
+        any(target_feature = "avx2", target_feature = "avx512f")
+    )))]
+    type BinaryBusPacked = PackedExt<F, Ghash128>;
+
     impl<X> BaseAir<X> for BinaryBusAir {
         fn width(&self) -> usize {
             3
@@ -2496,29 +2509,18 @@ mod tests {
         }
     }
 
-    impl<'a> Air<MultilinearFolder<'a, F, PackedExt<F, Ghash128>, PackedExt<F, Ghash128>>>
-        for BinaryBusAir
-    {
-        fn eval(
-            &self,
-            builder: &mut MultilinearFolder<'a, F, PackedExt<F, Ghash128>, PackedExt<F, Ghash128>>,
-        ) {
+    impl<'a> Air<MultilinearFolder<'a, F, BinaryBusPacked, BinaryBusPacked>> for BinaryBusAir {
+        fn eval(&self, builder: &mut MultilinearFolder<'a, F, BinaryBusPacked, BinaryBusPacked>) {
             eval_bus(self, builder);
         }
     }
 
-    impl<'a>
-        Air<InteractionMultilinearFolder<'a, F, PackedExt<F, Ghash128>, PackedExt<F, Ghash128>>>
+    impl<'a> Air<InteractionMultilinearFolder<'a, F, BinaryBusPacked, BinaryBusPacked>>
         for BinaryBusAir
     {
         fn eval(
             &self,
-            builder: &mut InteractionMultilinearFolder<
-                'a,
-                F,
-                PackedExt<F, Ghash128>,
-                PackedExt<F, Ghash128>,
-            >,
+            builder: &mut InteractionMultilinearFolder<'a, F, BinaryBusPacked, BinaryBusPacked>,
         ) {
             eval_bus(self, builder);
         }
