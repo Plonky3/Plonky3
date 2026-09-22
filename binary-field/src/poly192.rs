@@ -28,6 +28,7 @@ use rand::Rng;
 use rand::distr::{Distribution, StandardUniform};
 use serde::{Deserialize, Serialize};
 
+use crate::gf2::characteristic_two_methods;
 use crate::{Gf2, Poly64};
 
 /// The number of coordinates over the coefficient field.
@@ -244,35 +245,7 @@ impl PrimeCharacteristicRing for Poly192 {
         Self([s0, s2, s1 + s2])
     }
 
-    #[inline]
-    fn double(&self) -> Self {
-        // `a + a = 0` in characteristic 2.
-        Self::ZERO
-    }
-
-    /// # Panics
-    /// Always panics: `2` is not invertible in characteristic 2.
-    #[inline]
-    fn halve(&self) -> Self {
-        panic!("halve is undefined in characteristic 2")
-    }
-
-    #[inline]
-    fn xor(&self, y: &Self) -> Self {
-        *self + *y
-    }
-
-    #[inline]
-    fn mul_2exp_u64(&self, exp: u64) -> Self {
-        if exp == 0 { *self } else { Self::ZERO }
-    }
-
-    /// # Panics
-    /// Always panics: `2` is not invertible in characteristic 2.
-    #[inline]
-    fn div_2exp_u64(&self, _exp: u64) -> Self {
-        panic!("div_2exp_u64 is undefined in characteristic 2")
-    }
+    characteristic_two_methods!();
 }
 
 impl Field for Poly192 {
