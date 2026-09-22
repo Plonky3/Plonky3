@@ -1,6 +1,5 @@
 //! Multilinear arithmetic shared by product-tree proving and verification.
 
-use alloc::vec;
 use alloc::vec::Vec;
 
 use p3_field::Field;
@@ -12,30 +11,6 @@ pub(super) fn fold_dense<F: Field>(values: &mut Vec<F>, challenge: F) {
         values[row] = interpolate_pair([values[2 * row], values[2 * row + 1]], challenge);
     }
     values.truncate(output_len);
-}
-
-/// Materializes equality weights over a low-variable-first Boolean cube.
-pub(super) fn equality_weights<F: Field>(point: &[F]) -> Vec<F> {
-    let mut weights = vec![F::ONE];
-    for &coordinate in point {
-        let old_len = weights.len();
-        weights.resize(old_len * 2, F::ZERO);
-        for index in 0..old_len {
-            let weight = weights[index];
-            weights[index] = weight * (F::ONE - coordinate);
-            weights[old_len + index] = weight * coordinate;
-        }
-    }
-    weights
-}
-
-/// Evaluates the multilinear equality polynomial at two points.
-pub(super) fn equality_evaluation<F: Field>(left: &[F], right: &[F]) -> F {
-    debug_assert_eq!(left.len(), right.len());
-    left.iter()
-        .zip(right)
-        .map(|(&left, &right)| (F::ONE - left) * (F::ONE - right) + left * right)
-        .product()
 }
 
 /// Combines one claim per tree with consecutive powers of one challenge.
@@ -73,32 +48,4 @@ pub(super) fn has_distinct_round_nodes<F: Field>() -> bool {
         .iter()
         .enumerate()
         .all(|(index, node)| !nodes[index + 1..].contains(node))
-}
-
-#[cfg(test)]
-mod tests {
-    use alloc::vec;
-
-    use p3_baby_bear::BabyBear;
-    use p3_field::PrimeCharacteristicRing;
-
-    use super::*;
-
-    #[test]
-    fn internal_equality_coordinates_bind_low_bits_first() {
-        // Internal folding binds adjacent entries before it binds complete halves.
-        let low = BabyBear::from_u8(2);
-        let high = BabyBear::from_u8(3);
-
-        // Vertex order is 00, 01, 10, 11 while coordinates arrive low then high.
-        assert_eq!(
-            equality_weights(&[low, high]),
-            vec![
-                (BabyBear::ONE - low) * (BabyBear::ONE - high),
-                low * (BabyBear::ONE - high),
-                (BabyBear::ONE - low) * high,
-                low * high,
-            ]
-        );
-    }
 }

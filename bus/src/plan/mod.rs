@@ -8,12 +8,13 @@ use core::cmp::Reverse;
 use hashbrown::HashSet;
 use p3_air::symbolic::{BaseEntry, BaseLeaf, SymbolicExpr, SymbolicExpression};
 use p3_field::Field;
+use p3_multilinear_util::point::Point;
+use p3_util::log2_ceil_usize;
 
 mod error;
 
 pub use error::BusPlanError;
 
-use crate::multilinear::equality_at_msb_vertex;
 use crate::{BusDirection, BusName, ProductGkrRootShape, ProductGkrShape, SymbolicBusInteraction};
 
 /// Symbolic bus declarations belonging to one AIR instance.
@@ -112,7 +113,7 @@ impl BusTerminalShare {
         // The leading coordinates address the aligned block containing this share.
         let prefix = point.get(..self.prefix_variables)?;
         // Coordinate zero binds the most significant bit of the block address.
-        equality_at_msb_vertex(prefix, self.prefix_index)
+        Point::new(prefix).equality_at_vertex(self.prefix_index)
     }
 }
 
@@ -277,7 +278,7 @@ impl BusPlan {
         let identity_limit = domain_count
             .checked_add(1)
             .ok_or(BusPlanError::DomainCountOverflow)?;
-        let domain_slots = log2_ceil(identity_limit);
+        let domain_slots = log2_ceil_usize(identity_limit);
         let payload_slots = widths.values().copied().max().unwrap_or(0);
         let logical_tuple_width = payload_slots
             .checked_add(domain_slots)
@@ -542,10 +543,6 @@ struct PendingBlock {
     owner: BusBlockOwner,
     /// Base-two logarithm of the block height, taken from the table not the declaration.
     log_height: usize,
-}
-
-const fn log2_ceil(value: usize) -> usize {
-    usize::BITS as usize - value.saturating_sub(1).leading_zeros() as usize
 }
 
 fn validate_interaction<F: Field>(

@@ -284,7 +284,7 @@ impl<EF: TowerLevel> BitRingSwitch<EF> {
     ///
     /// This is the maximum number of sumcheck rounds the reduction takes.
     /// Each leading Boolean selector coordinate selects a slot and removes one round.
-    pub const fn num_variables(&self) -> usize {
+    pub fn num_variables(&self) -> usize {
         self.point.num_variables() - Self::ABSORBED
     }
 
@@ -788,7 +788,7 @@ impl<EF: TowerLevel> BitRingSwitch<EF> {
     }
 
     /// Check that something names the variables this reduction runs over.
-    const fn check_width(&self, actual: usize) -> Result<(), BitRingSwitchError> {
+    fn check_width(&self, actual: usize) -> Result<(), BitRingSwitchError> {
         if actual == self.num_variables() {
             Ok(())
         } else {

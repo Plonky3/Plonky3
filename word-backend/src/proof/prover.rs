@@ -34,6 +34,7 @@ use p3_binary_pcs::BooleanMultilinearPcs;
 use p3_challenger::fs::TranscriptField;
 use p3_challenger::{FieldChallenger, GrindingChallenger};
 use p3_field::{Algebra, ExtensionField, Field};
+use p3_multilinear_util::point::Point;
 use p3_sumcheck::generic_degree::RoundProver;
 
 use super::error::WordProofError;
@@ -41,7 +42,6 @@ use super::key::WordProofKey;
 use super::record::WordProof;
 use super::relation::{RelationZerocheck, ZEROCHECK_DEGREE};
 use super::transcript::ProofProverTranscript;
-use crate::shift::transcript::equality_weights;
 use crate::{OperationColumns, Packed, PackedWitness, PackedWord};
 
 impl<W: PackedWord> WordProofKey<W> {
@@ -108,7 +108,7 @@ impl<W: PackedWord> WordProofKey<W> {
         // The batched relation polynomial vanishes on the whole padded cube.
         let rows = 1 << self.shift.constraint_variables();
         let mut prover = RelationZerocheck::new(
-            equality_weights(&vanishing_point),
+            Point::new(vanishing_point.as_slice()).equality_weights_msb(),
             bit_table::<W, EF>(columns.zero(), rows),
             columns
                 .bitwise_and()

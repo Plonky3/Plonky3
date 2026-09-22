@@ -165,7 +165,7 @@ mod tests {
     fn the_bound_equality_column_matches_the_verifier_formula() {
         // Fixture state: a two-variable vanishing point and its expanded weights.
         let point = [F::from_repr(11), F::from_repr(13)];
-        let weights = crate::shift::transcript::equality_weights(&point);
+        let weights = Point::new(point.as_slice()).equality_weights_msb();
         let zeros = F::zero_vec(4);
         let mut prover = RelationZerocheck::new(
             weights,

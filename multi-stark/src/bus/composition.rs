@@ -22,7 +22,6 @@ use p3_sumcheck::generic_degree::{RoundPolyInterpolator, RoundProver};
 use p3_sumcheck::layout::Table;
 
 use crate::bus::BusContext;
-use crate::bus::math::equality_weights;
 
 /// Prover state for the mixed-height bus composition polynomial.
 pub(crate) struct BusCompositionProver<'a, F: Field, EF: ExtensionField<F>> {
@@ -244,7 +243,7 @@ where
                         preprocessed,
                         preprocessed_layout: (fixed_columns.to_vec(), fixed_width),
                         selectors,
-                        equality: Poly::new(equality_weights(row_point)),
+                        equality: Poly::new_from_point(row_point, EF::ONE),
                         terms: Vec::new(),
                         unused_prefix: num_variables - share.row_variables,
                         prefix_evaluation: EF::ONE,

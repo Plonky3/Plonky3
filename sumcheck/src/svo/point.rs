@@ -193,7 +193,7 @@ impl<F: Field, EF: ExtensionField<F>> SvoPoint<F, EF> {
     /// This is the depth of the SVO optimization.
     /// These coordinates are processed via the accumulator-based Lagrange
     /// interpolation path rather than the standard fold-and-sum path.
-    pub const fn num_variables_svo(&self) -> usize {
+    pub fn num_variables_svo(&self) -> usize {
         self.z_svo.num_variables()
     }
 

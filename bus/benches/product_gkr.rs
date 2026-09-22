@@ -8,6 +8,7 @@ use p3_binary_field::{BinaryChallenger, BinaryField128};
 use p3_bus::{ProductGkrProof, ProductGkrRootShape, ProductGkrShape};
 use p3_field::{Field, PrimeCharacteristicRing};
 use p3_keccak::Keccak256Hash;
+use p3_multilinear_util::point::Point;
 use rand::{RngExt, SeedableRng};
 use rand_xoshiro::Xoroshiro128Plus;
 
@@ -35,22 +36,6 @@ fn build_layers(leaves: &[F], log_height: usize, radix_four: bool) -> Vec<Vec<F>
     }
 
     layers
-}
-
-/// Build equality weights in low-variable-first address order.
-fn equality_weights(point: &[F]) -> Vec<F> {
-    // Each coordinate selects between two complete halves of the current table.
-    let mut weights = vec![F::ONE];
-    for &coordinate in point {
-        let old_len = weights.len();
-        weights.resize(2 * old_len, F::ZERO);
-        for index in 0..old_len {
-            let weight = weights[index];
-            weights[index] = weight * (F::ONE - coordinate);
-            weights[old_len + index] = weight * coordinate;
-        }
-    }
-    weights
 }
 
 /// Bind one low-order variable in an identity-padded prefix.
@@ -91,7 +76,7 @@ fn arity_workload(inputs: &[Vec<F>; 3], log_height: usize, radix_four: bool) -> 
             }
             slots
         });
-        let mut equality = equality_weights(&point);
+        let mut equality = Point::new(point.as_slice()).equality_weights_lsb();
         let mut remaining = logical_len;
         let mut round_point = Vec::with_capacity(point.len());
 

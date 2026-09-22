@@ -27,10 +27,10 @@ use num_bigint::BigUint;
 use p3_challenger::FieldChallenger;
 use p3_challenger::fs::{DomainSeparator, FieldUnit, InteractionPattern, TranscriptField};
 use p3_field::{Dup, ExtensionField, Field};
+use p3_multilinear_util::point::Point;
 use p3_security::SecurityTerm;
 use p3_security::bus::{BusSecurityModel, ProductGkrSecurityProfile};
 
-use crate::multilinear::equality_weights_lsb;
 use crate::{
     BusActivation, BusDirection, BusInteractionBuilder, BusName, BusPlan, BusTupleSlot,
     ProductGkrOutput, ProductGkrProof, ProductGkrRootShape, ProductGkrShape,
@@ -455,7 +455,7 @@ impl<F: Field> ReadOnlyMemoryPlan<F> {
         debug_assert_eq!(challenges.fingerprint.len(), self.tuple_variables);
 
         // One equality table supplies the coefficient of every padded tuple slot.
-        let weights = equality_weights_lsb(&challenges.fingerprint);
+        let weights = Point::new(challenges.fingerprint.as_slice()).equality_weights_lsb();
         debug_assert_eq!(weights.len(), self.tuple_slots.len());
 
         // Fixed domain bits contribute the same fingerprint term to every row.

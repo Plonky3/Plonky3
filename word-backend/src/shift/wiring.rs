@@ -5,6 +5,7 @@ use alloc::vec::Vec;
 
 use p3_binary_field::Gf2;
 use p3_field::{Algebra, Field};
+use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
 #[cfg(test)]
 use p3_word::ConstraintSystem;
@@ -12,7 +13,7 @@ use p3_word::{ConstraintKind, OperandRole, Shift, Word};
 
 use super::ShiftClaim;
 use super::polynomial::SumOfProducts;
-use super::transcript::{BatchWeights, equality_weights};
+use super::transcript::BatchWeights;
 use crate::{CompiledKey, CompiledKeyLayout, CompiledSegment, PackedWitness, PackedWord};
 
 /// Equality and batching tables shared by both proving phases.
@@ -30,7 +31,7 @@ impl<F: Field> PreparedWeights<F> {
     pub(super) fn new(claim: &ShiftClaim<F>, batch: BatchWeights<F>) -> Self {
         // Every compiled reference reads one entry from each table.
         Self {
-            constraint: equality_weights(claim.constraint_point()),
+            constraint: Point::new(claim.constraint_point()).equality_weights_msb(),
             operation: batch.operation,
             operand: batch.operand,
         }
@@ -130,7 +131,7 @@ where
     F: Field + Algebra<Gf2>,
 {
     // One equality table serves every shifted public word.
-    let output = equality_weights(bit_point);
+    let output = Point::new(bit_point).equality_weights_msb();
     let mut contribution = F::ZERO;
 
     for (word_index, &word) in words.iter().enumerate() {
@@ -194,7 +195,7 @@ where
     }
 
     // The other factor is the transpose action of each fixed shift sequence.
-    let output = equality_weights(bit_point);
+    let output = Point::new(bit_point).equality_weights_msb();
     let pairs = witness_rows
         .into_iter()
         .zip(sequences)
@@ -221,7 +222,7 @@ where
     F: Field + Algebra<Gf2>,
 {
     // The bit point folds each packed source word directly to one challenge-field element.
-    let bit_weights = equality_weights(bit_point);
+    let bit_weights = Point::new(bit_point).equality_weights_msb();
     let mut witness = values
         .witness()
         .iter()
@@ -255,7 +256,7 @@ where
     F: Field + Algebra<Gf2>,
 {
     // Missing words in the final power-of-two domain carry zero wiring weight.
-    let word_weights = equality_weights(word_point);
+    let word_weights = Point::new(word_point).equality_weights_msb();
     (0..layout.witness().len())
         .map(|word| {
             word_weights[word] * word_weight(layout.witness(), word, prepared, shift_evaluations)
@@ -289,8 +290,8 @@ where
     F: Field,
 {
     // Each small operator row is evaluated independently at the same input point.
-    let output = equality_weights(output_point);
-    let input = equality_weights(input_point);
+    let output = Point::new(output_point).equality_weights_msb();
+    let input = Point::new(input_point).equality_weights_msb();
     layout
         .witness()
         .shift_sequences()
@@ -318,8 +319,8 @@ where
     F: Field + Algebra<Gf2>,
 {
     // Constraint rows are zero-padded to the widest relation family.
-    let constraint_weights = equality_weights(&constraint_point);
-    let bit_weights = equality_weights(&bit_point);
+    let constraint_weights = Point::new(constraint_point.as_slice()).equality_weights_msb();
+    let bit_weights = Point::new(bit_point.as_slice()).equality_weights_msb();
     let public = values
         .public()
         .iter()
