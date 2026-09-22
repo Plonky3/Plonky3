@@ -522,7 +522,7 @@ where
     let lane_weights = Poly::new_from_point(lane_point, EF::ONE);
     let word_weights = Poly::new_from_point(word_point, EF::ONE);
     // The row weights factor as word weight times lane weight, as a table the caller passes must.
-    debug_assert!(eq_suffix.is_none_or(|eq_suffix| {
+    debug_assert!(eq_suffix.is_some_and(|eq_suffix| {
         eq_suffix.num_evals() == word_weights.num_evals() * SLICED_LANES
             && eq_suffix
                 .as_slice()
