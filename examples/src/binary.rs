@@ -1461,7 +1461,7 @@ mod tests {
     fn whir_complete_serialized_byte_budget_checks_actual_proof_length() {
         let air = Blake3BinaryAir::default();
         let words = air.generate_random_trace_packed::<Gf2>(4);
-        let trace = Table::from_packed_bits(words.clone(), 2);
+        let trace = Table::from_packed_bits(words, 2);
         let baseline =
             prove_boolean_air(&air, trace.clone(), whir_small_options(HashFamily::Blake3))
                 .expect("baseline WHIR proof must verify");
@@ -2430,14 +2430,14 @@ mod tests {
     {
         let main = builder.main();
         let activation = if air.conditional {
-            BusActivation::Boolean(main.current_slice()[1].clone().into())
+            BusActivation::Boolean(main.current_slice()[1].into())
         } else {
             BusActivation::Always
         };
         builder.push_bus_interaction(
             BusName::new("whir-test-bus"),
             air.direction,
-            [main.current_slice()[0].clone()],
+            [main.current_slice()[0]],
             activation,
         );
     }
