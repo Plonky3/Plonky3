@@ -680,8 +680,11 @@ fn tensor4_strategy_falls_back_for_short_or_cubic_stages() {
         assert!(!state.has_sliced_tensor());
     });
 
+    // The periodic stage reads no successor, so the degree clause alone rejects it.
     let cubic = [Instance::honest(
-        FixtureAir::Gate { scale: Tower::ONE },
+        FixtureAir::Periodic {
+            period: [gf4(2), gf4(3)],
+        },
         1 << 10,
         0x007E_5007,
     )];
@@ -691,7 +694,7 @@ fn tensor4_strategy_falls_back_for_short_or_cubic_stages() {
                 eq_suffix,
                 SlicedStrategy::TensorBoundary,
             )
-            .expect("cubic gate should retain sequential sliced fallback");
+            .expect("cubic periodic stage should retain sequential sliced fallback");
         assert!(!state.has_sliced_tensor());
     });
 }
