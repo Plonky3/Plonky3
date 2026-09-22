@@ -1,11 +1,12 @@
+use alloc::collections::BTreeSet;
 use alloc::vec;
 use alloc::vec::Vec;
 use core::array;
 use core::borrow::{Borrow, BorrowMut};
 
 use p3_air::{
-    AirLayout, BaseAir, ConstraintFailure, check_all_constraints, check_constraints,
-    get_max_constraint_degree, get_symbolic_constraints,
+    AirLayout, BaseAir, BaseEntry, BaseLeaf, ConstraintFailure, SymbolicExpr,
+    check_all_constraints, check_constraints, get_max_constraint_degree, get_symbolic_constraints,
 };
 use p3_baby_bear::BabyBear;
 use p3_binary_field::BinaryField128;
@@ -14,6 +15,7 @@ use p3_matrix::Matrix;
 use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
 
+use super::air::NUM_INPUT_BITS;
 use super::{
     Blake3BinaryAir, Blake3BinaryCols, Blake3CompressionInput, NUM_BLAKE3_BINARY_COLS,
     generate_binary_trace_packed, generate_binary_trace_rows, iv_word,
@@ -358,4 +360,117 @@ fn rejects_non_boolean_witness_at_the_top_bit() {
 fn rejects_message_bit_flip_without_regeneration() {
     let failures = failures_after_edit(2, |row| row.block[5][9] += F::ONE);
     assert!(!failures.is_empty());
+}
+
+/// Every current-row main column the expression reads.
+fn columns_of(expr: &SymbolicExpr<BaseLeaf<F>>, out: &mut BTreeSet<usize>) {
+    match expr {
+        SymbolicExpr::Leaf(BaseLeaf::Variable(v)) => {
+            if v.entry == (BaseEntry::Main { offset: 0 }) {
+                out.insert(v.index);
+            }
+        }
+        SymbolicExpr::Leaf(_) => {}
+        SymbolicExpr::Add { x, y, .. }
+        | SymbolicExpr::Sub { x, y, .. }
+        | SymbolicExpr::Mul { x, y, .. } => {
+            columns_of(x, out);
+            columns_of(y, out);
+        }
+        SymbolicExpr::Neg { x, .. } => columns_of(x, out),
+    }
+}
+
+/// Evaluates `expr` on the cells of one row.
+fn eval_on_row(expr: &SymbolicExpr<BaseLeaf<F>>, row: &[F]) -> F {
+    match expr {
+        SymbolicExpr::Leaf(BaseLeaf::Variable(v)) => {
+            assert_eq!(v.entry, BaseEntry::Main { offset: 0 });
+            row[v.index]
+        }
+        SymbolicExpr::Leaf(BaseLeaf::Constant(c)) => *c,
+        SymbolicExpr::Leaf(_) => unreachable!("the AIR uses no selector"),
+        SymbolicExpr::Add { x, y, .. } => eval_on_row(x, row) + eval_on_row(y, row),
+        SymbolicExpr::Sub { x, y, .. } => eval_on_row(x, row) - eval_on_row(y, row),
+        SymbolicExpr::Mul { x, y, .. } => eval_on_row(x, row) * eval_on_row(y, row),
+        SymbolicExpr::Neg { x, .. } => -eval_on_row(x, row),
+    }
+}
+
+/// Sets every non-input cell of `row` to the value the constraints give it from the inputs.
+///
+/// Each constraint after input booleanity is one new column plus an expression in columns
+/// already set, so in characteristic 2 that column equals the expression. No cell has to be a
+/// bit for this.
+fn derive_from_inputs(row: &mut [F]) {
+    let layout = AirLayout {
+        main_width: NUM_BLAKE3_BINARY_COLS,
+        ..Default::default()
+    };
+    let constraints = get_symbolic_constraints::<F, _>(&Blake3BinaryAir::default(), layout);
+
+    let mut fixed: BTreeSet<usize> = BTreeSet::new();
+    for (i, constraint) in constraints.iter().enumerate() {
+        let mut columns = BTreeSet::new();
+        columns_of(constraint, &mut columns);
+        if i < NUM_INPUT_BITS {
+            fixed.extend(columns);
+            continue;
+        }
+
+        let new: Vec<usize> = columns.difference(&fixed).copied().collect();
+        let [column] = new[..] else {
+            panic!("constraint {i} introduces columns {new:?}");
+        };
+        row[column] = F::ZERO;
+        row[column] = eval_on_row(constraint, row);
+        fixed.insert(column);
+    }
+}
+
+#[test]
+fn only_booleanity_rejects_a_non_boolean_input() {
+    // A non-bit input cell, with every other cell derived from the inputs, fails only its own
+    // booleanity constraint. The AIR without booleanity accepts the row, so nothing else keeps
+    // an input cell in `{0, 1}`.
+    //
+    // Bit `b` of input word `w` is constraint `32 * w + b`, as in `rejects_non_boolean_input`.
+    assert!(F::GENERATOR != F::ZERO && F::GENERATOR != F::ONE);
+    let air = Blake3BinaryAir::default();
+    for (word, bit) in [(0, 0), (13, 31), (27, 17)] {
+        let mut trace = air.generate_random_trace_rows::<F>(1, 0);
+        let row = trace.row_mut(0);
+        let cols: &mut Blake3BinaryCols<F> = row.borrow_mut();
+        let input_word = match word {
+            0..8 => &mut cols.chaining_value[word],
+            8..24 => &mut cols.block[word - 8],
+            24 => &mut cols.counter_low,
+            25 => &mut cols.counter_high,
+            26 => &mut cols.block_len,
+            _ => &mut cols.flags,
+        };
+        input_word[bit] = F::GENERATOR;
+        derive_from_inputs(row);
+
+        // The non-bit reached the derived cells.
+        let non_bits = row.iter().filter(|&&c| c != F::ZERO && c != F::ONE).count();
+        assert!(non_bits > 1, "bit {bit} of input word {word}");
+
+        let failures: Vec<usize> = check_all_constraints(&air, &trace, &[], None)
+            .failures
+            .iter()
+            .map(|failure| failure.constraint)
+            .collect();
+        assert_eq!(
+            failures,
+            [32 * word + bit],
+            "bit {bit} of input word {word}"
+        );
+
+        let unconstrained = Blake3BinaryAir::assuming_boolean_trace();
+        assert!(
+            check_all_constraints(&unconstrained, &trace, &[], None).is_ok(),
+            "bit {bit} of input word {word}"
+        );
+    }
 }

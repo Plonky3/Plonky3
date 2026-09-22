@@ -19,7 +19,7 @@ use super::{G_PER_ROUND, G_SCHEDULE, NUM_ROUNDS, iv_word};
 use crate::constants::permute;
 
 /// Number of input bits: chaining value, message, counter, block length and flags.
-const NUM_INPUT_BITS: usize = (8 + 16 + 4) * 32;
+pub(super) const NUM_INPUT_BITS: usize = (8 + 16 + 4) * 32;
 
 /// Constraints per G step: two 3-operand and two 2-operand additions.
 const CONSTRAINTS_PER_G: usize = 2 * (31 + 32) + 2 * 32;

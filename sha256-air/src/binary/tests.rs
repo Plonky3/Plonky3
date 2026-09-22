@@ -188,6 +188,53 @@ fn columns_of(expr: &SymbolicExpr<BaseLeaf<F>>, out: &mut BTreeSet<usize>) {
     }
 }
 
+/// Evaluates `expr` on the cells of one row.
+fn eval_on_row(expr: &SymbolicExpr<BaseLeaf<F>>, row: &[F]) -> F {
+    match expr {
+        SymbolicExpr::Leaf(BaseLeaf::Variable(v)) => {
+            assert_eq!(v.entry, BaseEntry::Main { offset: 0 });
+            row[v.index]
+        }
+        SymbolicExpr::Leaf(BaseLeaf::Constant(c)) => *c,
+        SymbolicExpr::Leaf(_) => unreachable!("the AIR uses no selector"),
+        SymbolicExpr::Add { x, y, .. } => eval_on_row(x, row) + eval_on_row(y, row),
+        SymbolicExpr::Sub { x, y, .. } => eval_on_row(x, row) - eval_on_row(y, row),
+        SymbolicExpr::Mul { x, y, .. } => eval_on_row(x, row) * eval_on_row(y, row),
+        SymbolicExpr::Neg { x, .. } => -eval_on_row(x, row),
+    }
+}
+
+/// Sets every non-input cell of `row` to the value the constraints give it from the inputs.
+///
+/// Each constraint after input booleanity is one new column plus an expression in columns
+/// already set, so in characteristic 2 that column equals the expression. No cell has to be a
+/// bit for this.
+fn derive_from_inputs(row: &mut [F]) {
+    let layout = AirLayout {
+        main_width: NUM_SHA256_BINARY_COLS,
+        ..Default::default()
+    };
+    let constraints = get_symbolic_constraints::<F, _>(&Sha256BinaryAir::default(), layout);
+
+    let mut fixed: BTreeSet<usize> = BTreeSet::new();
+    for (i, constraint) in constraints.iter().enumerate() {
+        let mut columns = BTreeSet::new();
+        columns_of(constraint, &mut columns);
+        if i < NUM_INPUT_BITS {
+            fixed.extend(columns);
+            continue;
+        }
+
+        let new: Vec<usize> = columns.difference(&fixed).copied().collect();
+        let [column] = new[..] else {
+            panic!("constraint {i} introduces columns {new:?}");
+        };
+        row[column] = F::ZERO;
+        row[column] = eval_on_row(constraint, row);
+        fixed.insert(column);
+    }
+}
+
 #[test]
 fn every_column_is_forced_to_a_bit_by_the_constraints() {
     // The AIR only asserts booleanity on the input columns and relies on the rest being forced
@@ -232,6 +279,50 @@ fn every_column_is_forced_to_a_bit_by_the_constraints() {
 
     // Every column of the row ends up determined.
     assert_eq!(fixed.len(), NUM_SHA256_BINARY_COLS);
+}
+
+#[test]
+fn only_booleanity_rejects_a_non_boolean_input() {
+    // A non-bit input cell, with every other cell derived from the inputs, fails only its own
+    // booleanity constraint. The AIR without booleanity accepts the row, so nothing else keeps
+    // an input cell in `{0, 1}`.
+    //
+    // Bit `b` of input word `n` is constraint `32 * n + b`, as in `rejects_non_boolean_input`.
+    assert!(F::GENERATOR != F::ZERO && F::GENERATOR != F::ONE);
+    let air = Sha256BinaryAir::default();
+    for (word, bit) in [(0, 0), (6, 31), (23, 17)] {
+        let mut trace = air.generate_random_trace_rows::<F>(1, 0);
+        let row = trace.row_mut(0);
+        let cols: &mut Sha256BinaryCols<F> = row.borrow_mut();
+        let input_word = match word {
+            0..4 => &mut cols.a_chain[word],
+            4..8 => &mut cols.e_chain[word - 4],
+            _ => &mut cols.w[word - 8],
+        };
+        input_word[bit] = F::GENERATOR;
+        derive_from_inputs(row);
+
+        // The non-bit reached the derived cells.
+        let non_bits = row.iter().filter(|&&c| c != F::ZERO && c != F::ONE).count();
+        assert!(non_bits > 1, "bit {bit} of input word {word}");
+
+        let failures: Vec<usize> = check_all_constraints(&air, &trace, &[], None)
+            .failures
+            .iter()
+            .map(|failure| failure.constraint)
+            .collect();
+        assert_eq!(
+            failures,
+            [32 * word + bit],
+            "bit {bit} of input word {word}"
+        );
+
+        let unconstrained = Sha256BinaryAir::assuming_boolean_trace();
+        assert!(
+            check_all_constraints(&unconstrained, &trace, &[], None).is_ok(),
+            "bit {bit} of input word {word}"
+        );
+    }
 }
 
 #[test]
