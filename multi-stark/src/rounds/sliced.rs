@@ -195,14 +195,14 @@ fn successor_word(planes: [u64; 2], carry: (bool, bool)) -> [u64; 2] {
 ///
 /// # Panics
 ///
-/// Panics unless `prefix` holds one node per variable of the corners other than `t`.
+/// Debug builds panic unless `prefix` holds one node per variable of the corners other than `t`.
 #[inline(always)]
 fn fold_corners<F, S, const CORNERS: usize>(
     mut corners: [SlicedGf4<F, S>; CORNERS],
     prefix: &[(bool, bool)],
 ) -> (SlicedGf4<F, S>, SlicedGf4<F, S>) {
     let variables = CORNERS.trailing_zeros() as usize - 1;
-    assert_eq!(prefix.len(), variables, "one node per prefix variable");
+    debug_assert_eq!(prefix.len(), variables, "one node per prefix variable");
     let mut len = CORNERS;
     for &(low, high) in &prefix[..variables] {
         len /= 2;
@@ -364,11 +364,13 @@ where
 
     /// Add one word of residual rows at one prefix to the scratch sums.
     fn accumulate(&self, scratch: &mut SlicedScratch<F, S, R>, word: usize, prefix_index: usize) {
+        // The arms below cover every corner count up to the largest a sliced round reads.
+        const { assert!(MAX_CORNERS == 16, "one dispatch arm per corner count") };
         match self.prefixes[prefix_index].corners.len() {
             2 => self.accumulate_corners::<2>(scratch, word, prefix_index),
             4 => self.accumulate_corners::<4>(scratch, word, prefix_index),
             8 => self.accumulate_corners::<8>(scratch, word, prefix_index),
-            MAX_CORNERS => self.accumulate_corners::<MAX_CORNERS>(scratch, word, prefix_index),
+            16 => self.accumulate_corners::<16>(scratch, word, prefix_index),
             corners => {
                 unreachable!("a sliced round reads at most {MAX_CORNERS} corners, not {corners}")
             }
@@ -376,6 +378,10 @@ where
     }
 
     /// [`Self::accumulate`] at a prefix that reads `CORNERS` corners.
+    ///
+    /// # Panics
+    ///
+    /// Panics unless the prefix folds one node per variable of its corners other than `t`.
     fn accumulate_corners<const CORNERS: usize>(
         &self,
         scratch: &mut SlicedScratch<F, S, R>,
@@ -383,6 +389,11 @@ where
         prefix_index: usize,
     ) {
         let prefix = &self.prefixes[prefix_index];
+        assert_eq!(
+            2 << prefix.nodes.len(),
+            CORNERS,
+            "one node per prefix variable"
+        );
         let trace = self.trace;
         let SlicedScratch {
             local,
