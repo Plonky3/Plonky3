@@ -160,19 +160,15 @@ pub enum ProfileError {
         ceiling: usize,
     },
 
-    /// The profile asks for no security at all.
+    /// The derived schedule opens no position, so nothing ties a codeword to the commitment.
     ///
-    /// Every error term in the derivation is charged against this target.
+    /// Queries are the only part of the run that tests proximity.
     ///
-    /// A target of zero is met by any schedule, so the derivation reports a level it never
-    /// had to deliver.
-    #[error("a profile needs a positive security target")]
-    ZeroSecurityLevel,
-
-    /// The profile folds no variable per round.
+    /// A schedule opening none of them accepts any codeword, whatever the level reported.
     ///
-    /// A round that eliminates nothing never reaches the final codeword, so the schedule it
-    /// describes does not terminate.
-    #[error("a profile needs to fold at least one variable per round")]
-    ZeroFoldingFactor,
+    /// That is what a security target of zero derives to.
+    ///
+    /// Every error term is then under budget, so no query is ever bought.
+    #[error("the derived schedule opens no position, so it accepts any codeword")]
+    ZeroQueries,
 }

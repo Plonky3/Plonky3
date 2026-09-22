@@ -28,13 +28,13 @@ use p3_field::Field;
 ///   zeros, so e.g. `[x]` and `[0, x]` fingerprint identically on one bus.
 ///   Every tuple on a given bus must therefore share a width.
 ///
-/// That rule is enforced rather than asked for: [`assert_uniform_tuple_width`] runs on the
-/// local path when the lookups are built, and on the global path when
-/// [`Lookups::pack_same_bus_with_degree`] folds a bus into one column, which is the only
-/// step that can put two independently-authored interactions in one fraction column.
+/// That rule is enforced rather than asked for.
 ///
-/// [`assert_uniform_tuple_width`]: crate::assert_uniform_tuple_width
-/// [`Lookups::pack_same_bus_with_degree`]: crate::Lookups::pack_same_bus_with_degree
+/// Local lookups are checked when they are built.
+///
+/// Global ones are checked when a bus is packed into one column.
+///
+/// Only packing brings two independently-authored interactions together.
 ///
 /// # Soundness
 ///

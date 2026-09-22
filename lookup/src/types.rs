@@ -1,9 +1,8 @@
 //! Core data types for lookup arguments.
 
-use alloc::format;
 use alloc::string::String;
-use alloc::vec;
 use alloc::vec::Vec;
+use alloc::{format, vec};
 use core::ops::Deref;
 
 use num_bigint::BigUint;
@@ -116,8 +115,7 @@ pub fn assert_uniform_tuple_width<F>(
 
 /// The width check itself, over tuple widths rather than the tuples.
 ///
-/// Taking widths lets a caller that already holds the tuples in several places check them
-/// without gathering or cloning them first.
+/// Taking widths lets a caller holding the tuples in several places check them in place.
 fn assert_uniform_widths(widths: impl IntoIterator<Item = usize>, context: &str) -> usize {
     let mut widths = widths.into_iter();
     let Some(width) = widths.next() else {
@@ -267,9 +265,9 @@ impl<F: Field> Lookups<F> {
     ///
     /// # Panics
     ///
-    /// When two tuples on one bus declare different payload widths. Folding them into one
-    /// fraction column would make the shorter alias the longer, since both are combined
-    /// under the same `beta` powers.
+    /// When two tuples on one bus declare different payload widths.
+    ///
+    /// Both are combined under the same powers, so the shorter would alias the longer.
     #[must_use]
     pub fn pack_same_bus_with_degree(
         self,
@@ -307,15 +305,19 @@ impl<F: Field> Lookups<F> {
         // Fill columns greedily within each bus.
         // Seal a column when the next interaction would exceed the degree budget.
         for (name, members) in buses {
-            // Every tuple that ends up in one fraction column is folded under the same
-            // `beta` powers, so two widths in one bus make a short tuple alias a long one:
-            // `[x]` and `[0, x]` reduce to the same fingerprint.
+            // Every tuple in one fraction column is folded under the same powers.
             //
-            // Only packing can put two independently-authored interactions in one column,
-            // so this is where the rule is enforceable. The local path already checks it at
-            // construction; before this the global path checked it nowhere, and the only
-            // reason an in-tree caller was safe is that both STARK backends re-checked it
-            // themselves.
+            // Two widths on one bus therefore let a short tuple alias a long one:
+            //
+            //     [x]  and  [0, x]   ->   the same fingerprint
+            //
+            // Only packing brings two independently-authored interactions together.
+            //
+            // So this is the one place the rule can be enforced.
+            //
+            // The local path already checks it when the lookups are built.
+            //
+            // The global path checked it nowhere, and both backends re-checked it themselves.
             assert_uniform_widths(
                 members
                     .iter()
@@ -755,12 +757,13 @@ mod tests {
     fn pack_refuses_two_tuple_widths_on_one_bus() {
         // Invariant: every tuple folded into one fraction column shares a payload width.
         //
-        // Two widths on one bus let a short tuple alias a long one, because both are folded
-        // under the same `beta` powers: `[x]` and `[0, x]` reduce to the same fingerprint,
-        // and the bus balances against an entry that was never provided.
+        // Two widths on one bus let a short tuple alias a long one:
         //
-        // Before this check the rule was documented on `Challenges` and enforced only on the
-        // local path; the global path reached packing unguarded.
+        //     [x]  and  [0, x]   ->   the same fingerprint
+        //
+        // The bus then balances against an entry that was never provided.
+        //
+        // Before this check the rule was documented, and enforced only on the local path.
         //
         // Fixture state: one bus, one width-1 payload and one width-2 payload.
         let col = SymbolicVariable::<F>::new(BaseEntry::Main { offset: 0 }, 0);

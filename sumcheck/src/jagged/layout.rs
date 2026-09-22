@@ -269,11 +269,13 @@ impl JaggedLayout {
     ///
     /// The column heights must already be bound into the transcript, normally by that commitment, before the sparse point is drawn.
     ///
-    /// That ordering is the one obligation this crate cannot check; see `docs/caller-obligations.md`.
+    /// That ordering is the one obligation this crate cannot check.
+    ///
+    /// The caller-obligations page under `docs` records it.
     ///
     /// # Minimum non-degenerate shape
     ///
-    /// The delegated sumcheck runs [`Self::dense_variables`] rounds, so it samples that many challenges.
+    /// The delegated sumcheck runs one round per dense variable.
     ///
     /// ```text
     ///     live area   dense variables   challenges drawn
@@ -281,21 +283,21 @@ impl JaggedLayout {
     ///     2 or more   at least 1        at least one
     /// ```
     ///
-    /// The smallest shape that folds anything is therefore a live area of two.
+    /// The smallest shape that folds anything is a live area of two.
     ///
-    /// Below it the reduction samples no challenge, and that is harmless rather than vacuous:
-    /// a one-cell dense multilinear has no interior to test.
+    /// Below it no challenge is drawn, which is harmless rather than vacuous.
     ///
-    /// The terminal relation reads `claimed_value == dense_evaluation * selector_weight`, both
-    /// factors are computed from public data or pinned by the commitment, and the returned claim
-    /// names that single cell verbatim.
+    /// A one-cell dense multilinear has no interior left to test.
     ///
-    /// The transcript seed still binds the whole statement, so two degenerate instances never
-    /// share a challenge stream even though neither draws one from this reduction.
+    /// Its terminal relation weighs the surviving evaluation by a public selector value.
     ///
-    /// What the degenerate case does rest on is the caller opening the returned claim, which is
-    /// why [`JaggedDenseClaim`] is `#[must_use]`: with the selector weight zero the terminal
-    /// equation pins nothing, and only the opening does.
+    /// Both sides are public or pinned by the commitment, and the claim names that one cell.
+    ///
+    /// The seed still binds the whole statement, so two such instances part anyway.
+    ///
+    /// What the small shape does rest on is the caller opening the claim it returns.
+    ///
+    /// A vanishing selector leaves the terminal equation pinning nothing.
     ///
     /// # Soundness
     ///

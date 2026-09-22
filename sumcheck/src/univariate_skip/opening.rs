@@ -390,8 +390,9 @@ pub enum SkipOpeningError {
 }
 /// What a replayed opening reduction leaves for a commitment to answer.
 ///
-/// Dropping this value without checking committed openings against it makes the surrounding
-/// verification accept everything: nothing before it ties the replay to a commitment.
+/// Nothing before this claim ties the replay to a commitment.
+///
+/// Dropping it without checking committed openings therefore accepts everything.
 #[must_use]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SkipOpeningClaim<EF> {

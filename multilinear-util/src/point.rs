@@ -10,17 +10,19 @@ use rand::distr::{Distribution, StandardUniform};
 
 /// A point `(x_1, ..., x_n)` in `F^n` for some field `F`.
 ///
-/// # Why this type is `#[must_use]`
+/// # Why dropping one is refused
 ///
-/// A point is what a reduction hands back: the place its challenges landed, and the place
-/// the surviving claim has to be discharged.
+/// A reduction hands back the place its challenges landed.
 ///
-/// Dropping it is never a way of accepting less. It is a way of accepting everything, because
-/// the reduction's terminal relation is only pinned once something opens at that point.
+/// That is where the surviving claim has to be opened.
 ///
-/// The workspace denies `unused_must_use`, so a discarded point is a compile error rather than
-/// a lint. A caller that genuinely wants the sponge advanced and nothing else writes `let _ =`
-/// and says why.
+/// Dropping it does not accept less.
+///
+/// It accepts everything, because only an opening there pins the terminal relation.
+///
+/// The workspace turns that discard into a compile error.
+///
+/// A caller wanting only the sponge advanced discards explicitly, and says why.
 #[must_use]
 #[derive(Default, Debug, Clone, PartialEq, Eq)]
 pub struct Point<F>(pub(crate) Vec<F>);

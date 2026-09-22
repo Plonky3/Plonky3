@@ -63,6 +63,38 @@ impl<F, EF> GenericDegreeProof<F, EF> {
     ///
     /// When an outer protocol fixes the claimed sum, the caller must also check the proof's claimed sum against it.
     ///
+    /// # Zero rounds
+    ///
+    /// A run of no rounds is accepted.
+    ///
+    /// It is the trivial reduction, not a degenerate one, and the two look alike:
+    ///
+    /// ```text
+    ///     degenerate  ->  no challenge is sampled AND nothing downstream pins the result
+    ///     trivial     ->  no challenge is sampled because there is nothing left to fold
+    /// ```
+    ///
+    /// This is the second.
+    ///
+    /// At zero variables the summand is a constant.
+    ///
+    /// The sum over the empty cube is then that constant.
+    ///
+    /// The same two checks bracket the run as would bracket a longer one:
+    ///
+    /// - the claimed sum reaches the seed first, so no prover picks it late
+    /// - the value handed back is opened at the returned point, which here is that constant
+    ///
+    /// Nothing is left unpinned, so there is no floor to impose.
+    ///
+    /// The shape stays canonical too, since no rounds admits only the empty proof.
+    ///
+    /// Two callers reach this shape honestly.
+    ///
+    /// A shift reduction folds no word variable for a statement under one committed element.
+    ///
+    /// A closing fold plays no bracket when it has no rounds left to run.
+    ///
     /// # Shape checks
     ///
     /// The counts this proof carries are attacker-controlled.
@@ -101,20 +133,6 @@ impl<F, EF> GenericDegreeProof<F, EF> {
         // Interpolation would later index an empty evaluation slice.
         if degree == 0 {
             return Err(GenericDegreeError::InvalidDegree { degree });
-        }
-
-        // Minimum non-degenerate shape: one round.
-        //
-        // At zero rounds the loop below never runs, so no challenge is drawn. The point
-        // handed back is empty and the "surviving" value is `self.claimed_sum`, which the
-        // prover chose. A caller that discharges that against an opening is checking the
-        // prover's own number against itself.
-        //
-        // The transcript seed still moves, so this is not a Fiat-Shamir break on its own.
-        // It is the reduction becoming the identity while still reading as a reduction, which
-        // is how a cross-instance separation test can pass against every transcript.
-        if num_rounds == 0 {
-            return Err(GenericDegreeError::NoRounds);
         }
 
         // Reject up front if the proof has the wrong round count.
@@ -376,36 +394,78 @@ mod tests {
     }
 
     #[test]
-    fn verify_rejects_a_zero_round_run() {
-        // Invariant: the reduction must sample at least one challenge.
+    fn a_zero_round_run_is_the_trivial_reduction_and_stays_bound() {
+        // Invariant: zero rounds is accepted, and it is still pinned at both ends.
         //
-        // At zero rounds the loop never runs. The point is empty and the value handed back
-        // is the prover's own `claimed_sum`, so the "reduction" is the identity.
+        // At zero variables the summand is a constant, and so is the sum over it.
         //
-        // Fixture state: a well-formed proof with no rounds, a legal degree.
-        let mut ch = fresh_challenger();
+        // No challenge is sampled because nothing is left to fold.
+        //
+        // That is not the same as the reduction having stopped constraining anything.
+        //
+        // A shift reduction reaches this shape for a statement under one committed element.
+        //
+        // Rejecting it would break a sound protocol.
+        //
+        // Fixture state: the empty proof, degree one, no grinding.
         let proof = GenericDegreeProof::<F, EF> {
-            claimed_sum: EF::ONE,
+            claimed_sum: EF::from_u64(7),
             round_polys: vec![],
             pow_witnesses: vec![],
         };
-        assert_eq!(
-            proof.verify(&mut ch, 0, 1, 0).unwrap_err(),
-            GenericDegreeError::NoRounds
+
+        let mut ch = fresh_challenger();
+        let (point, value) = proof.verify(&mut ch, 0, 1, 0).unwrap();
+
+        // No variable was bound, so the surviving claim is the constant itself.
+        //
+        // The caller's opening at this empty point is what pins it.
+        assert_eq!(point.num_variables(), 0);
+        assert_eq!(value, proof.claimed_sum);
+
+        // The claimed sum still reaches the sponge before anything is drawn.
+        //
+        // Two empty runs over different statements therefore part at once.
+        let other = GenericDegreeProof::<F, EF> {
+            claimed_sum: EF::from_u64(8),
+            ..proof.clone()
+        };
+        let mut ch_a = fresh_challenger();
+        let _ = proof.verify(&mut ch_a, 0, 1, 0).unwrap();
+        let mut ch_b = fresh_challenger();
+        let _ = other.verify(&mut ch_b, 0, 1, 0).unwrap();
+        assert_ne!(
+            ch_a.sample_algebra_element::<EF>(),
+            ch_b.sample_algebra_element::<EF>()
         );
+
+        // The shape stays canonical: a zero-round run admits exactly the empty proof.
+        let mut ch = fresh_challenger();
+        let padded = GenericDegreeProof::<F, EF> {
+            claimed_sum: EF::from_u64(7),
+            round_polys: vec![vec![EF::ONE]],
+            pow_witnesses: vec![],
+        };
+        assert!(matches!(
+            padded.verify(&mut ch, 0, 1, 0).unwrap_err(),
+            GenericDegreeError::RoundCountMismatch {
+                expected: 0,
+                actual: 1
+            }
+        ));
     }
 
     #[test]
-    fn the_smallest_legal_shape_still_samples_a_challenge() {
-        // Invariant: at the minimum non-degenerate shape a challenge is drawn, and it moves
-        // with the statement.
+    fn the_smallest_folding_shape_still_samples_a_challenge() {
+        // Invariant: the smallest folding run draws a challenge that moves with the statement.
         //
-        // This is the test that fails if the smallest run stops sampling. Without it, a
-        // reduction can contract to a bare identity and every separation test still passes,
-        // because two instances that draw no challenge cannot be told apart by one.
+        // This test fails if that run ever stops sampling.
         //
-        // Fixture state: one round, degree one, no grinding — the smallest run `verify`
-        // accepts.
+        // A reduction can otherwise contract to a bare identity while separation tests pass.
+        //
+        // Two instances that draw no challenge cannot be told apart by one.
+        //
+        // Fixture state: one round, degree one, no grinding.
         let proof = GenericDegreeProof::<F, EF> {
             claimed_sum: EF::ONE,
             round_polys: vec![vec![EF::ONE]],

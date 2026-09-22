@@ -121,8 +121,9 @@ where
 ///
 /// This mirrors [`ZkSumcheckHandoff`] without prover-only mask data.
 ///
-/// The residual it carries is a claim, not a verdict. Dropping it leaves the masked residual
-/// unchecked against the mask oracle and the witness commitment, which accepts everything.
+/// The residual it carries is a claim, not a verdict.
+///
+/// Dropping it leaves that residual unchecked, which accepts everything.
 #[must_use]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ZkVerifierHandoff<EF> {

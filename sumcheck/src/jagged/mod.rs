@@ -453,12 +453,13 @@ mod tests {
 
     #[test]
     fn the_smallest_folding_shape_still_samples_a_challenge() {
-        // Invariant: at the minimum non-degenerate shape the reduction draws a challenge, and
-        // the challenge moves with the statement.
+        // Invariant: the smallest folding shape draws a challenge that moves with the statement.
         //
-        // This is the test that fails if the reduction ever contracts to a bare identity at
-        // its smallest legal shape. A reduction that samples nothing cannot separate two
-        // instances, so every separation test above it would pass for the wrong reason.
+        // This test fails if the reduction ever contracts to a bare identity here.
+        //
+        // A reduction that samples nothing cannot separate two instances.
+        //
+        // Every separation test above it would then pass for the wrong reason.
         //
         // Fixture state: two live cells in two columns, so
         //
@@ -488,8 +489,9 @@ mod tests {
         // The surviving claim is an honest evaluation of the committed vector at that challenge.
         assert_eq!(*claim.value(), committed_evaluation(&dense, claim.point()));
 
-        // Mutation: swap the two live cells between columns. The layout is unchanged, the
-        // statement is not, and the drawn challenge must follow it.
+        // Mutation: swap the two live cells between columns.
+        //
+        // The layout is unchanged, the statement is not, and the challenge must follow it.
         let other_dense = vec![F::from_u64(9), F::from_u64(5)];
         let other_value = jagged_evaluation(&heights, &other_dense, &point);
         let other_proof = layout

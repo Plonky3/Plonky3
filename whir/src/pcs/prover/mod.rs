@@ -426,8 +426,7 @@ where
         // A run with no closing rounds delegates nothing, so no bracket is played.
         let final_sumcheck = transcript.delegate_final_fold(|challenger| {
             let mut sumcheck_data: SumcheckData<F, EF> = SumcheckData::default();
-            // The prover keeps the folded state itself, so the returned point is redundant
-            // here; the verifier recomputes it from the same transcript.
+            // The prover holds the folded state, so the returned point is redundant here.
             let _ = round_state.sumcheck_prover.compute_sumcheck_polynomials(
                 &mut sumcheck_data,
                 challenger,
