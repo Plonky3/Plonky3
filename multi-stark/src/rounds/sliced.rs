@@ -51,8 +51,12 @@ use crate::sliced::{LaneSums, SLICED_LANES, SlicedFolder, SlicedGf4, gf4_coordin
 /// count has a ceiling. A stage is also capped by the row variables its words leave unbound.
 pub const MAX_SLICED_ROUNDS: usize = 4;
 
-/// Maximum prefix length supported by direct plane materialization.
-const MAX_PLANE_FOLD_ROUNDS: usize = 5;
+/// Longest prefix a plane fold binds.
+///
+/// A stage evaluates rounds on its planes with at most [`MAX_SLICED_ROUNDS`] challenges bound.
+/// The delayed boundary path binds the challenge of its last such round as it unslices, so a
+/// plane fold binds at most one challenge more.
+const MAX_PLANE_FOLD_ROUNDS: usize = MAX_SLICED_ROUNDS + 1;
 
 /// How a sliced first round is used by a backend.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
