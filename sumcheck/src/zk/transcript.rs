@@ -1174,6 +1174,11 @@ mod tests {
 
     #[test]
     fn the_challenge_stream_is_pinned() {
+        // Invariant: the challenge stream stays the same value over this fixed run,
+        // for both a batch that draws its own batching challenge and one that
+        // inherits its claim.
+        //
+        // Grinding stays off: parallel PoW may return any valid witness.
         let extension_words = |value: &EF| -> Vec<u64> {
             value
                 .as_basis_coefficients_slice()
@@ -1276,6 +1281,8 @@ mod tests {
         expected = "a batch described as inheriting its claim draws no batching challenge"
     )]
     fn a_prover_that_draws_a_batching_challenge_on_an_inherited_shape_fails_loudly() {
+        // Invariant: a batch described as inheriting its claim draws no batching
+        // challenge, prover side.
         let mut challenger = fresh_challenger();
         let mut transcript = ZkProverTranscript::<Ch, F, EF>::new(
             &mut challenger,
@@ -1289,6 +1296,8 @@ mod tests {
         expected = "a batch described as batching recorded claims binds no inherited claim"
     )]
     fn a_prover_that_binds_an_inherited_claim_on_a_batching_shape_fails_loudly() {
+        // Invariant: a batch described as batching recorded claims binds no
+        // inherited claim, prover side.
         let mut challenger = fresh_challenger();
         let mut transcript = ZkProverTranscript::<Ch, F, EF>::new(
             &mut challenger,
@@ -1302,6 +1311,8 @@ mod tests {
         expected = "a batch described as inheriting its claim draws no batching challenge"
     )]
     fn a_verifier_that_draws_a_batching_challenge_on_an_inherited_shape_fails_loudly() {
+        // Invariant: a batch described as inheriting its claim draws no batching
+        // challenge, verifier side.
         let mut challenger = fresh_challenger();
         let mut transcript = ZkVerifierTranscript::<Ch, F, EF>::new(
             &mut challenger,
@@ -1315,6 +1326,8 @@ mod tests {
         expected = "a batch described as batching recorded claims binds no inherited claim"
     )]
     fn a_verifier_that_binds_an_inherited_claim_on_a_batching_shape_fails_loudly() {
+        // Invariant: a batch described as batching recorded claims binds no
+        // inherited claim, verifier side.
         let mut challenger = fresh_challenger();
         let mut transcript = ZkVerifierTranscript::<Ch, F, EF>::new(
             &mut challenger,

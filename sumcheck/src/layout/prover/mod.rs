@@ -1934,8 +1934,9 @@ mod tests {
 
     #[test]
     fn preprocessing_transcripts_are_pinned() {
-        // Invariant: every message the preprocessing rounds send, and every challenge
-        // they draw, stays the same value over this fixed run.
+        // Invariant: every message the openings, the preprocessing rounds and the
+        // residual rounds send, and every challenge they draw, stays the same value
+        // over this fixed run.
         //
         // Fixture state: the mixed schedule (both direct and successor openings on
         // both fixture tables), two virtual claims (so the virtual alpha offset moves

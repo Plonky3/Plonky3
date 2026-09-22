@@ -202,7 +202,6 @@ where
     ///
     /// - The configuration cannot describe a masked batch.
     /// - Folding factor exceeds the polynomial's arity.
-    #[allow(clippy::too_many_lines)]
     #[tracing::instrument(skip_all)]
     pub fn into_sumcheck<R, Ch>(
         self,
@@ -535,9 +534,9 @@ mod tests {
         // Invariant: every message the HVZK batch sends, and every challenge it
         // draws, stays the same value over this fixed run.
         //
-        // Fixture state: a batch that mixes a current opening, a direct-only
-        // opening, and two virtual claims, folded to a constant and one further
-        // challenge drawn from the residual handoff.
+        // Fixture state: a batch that mixes a current-and-successor opening, a
+        // current-only opening, and two virtual claims, folded to a constant and
+        // one further challenge drawn from the residual handoff.
         //
         // Grinding stays off: under `--features parallel`, a PoW search may return
         // any valid witness, so a pinned value would be flaky with grinding on.
