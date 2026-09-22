@@ -1056,6 +1056,7 @@ fn representation_tensor4_matches_generic_on_invalid_boolean_and_gf4_traces() {
 
 #[test]
 fn representation_invalid_proofs_are_rejected_at_n11() {
+    // Eleven row variables is the delayed path's floor, `MIN_LATE_BOUNDARY_VARS`.
     let height = 1 << 11;
     let mut invalid_boolean = Instance::honest(FixtureAir::Pair, height, 0x007E_5016);
     for row in 0..height {
@@ -1256,6 +1257,7 @@ fn representation_late_boundary_matches_generic_at_two_activation_heights() {
 
 #[test]
 fn representation_late_boundary_matches_generic_for_n13_and_n11_stages() {
+    // The shorter stage sits on the delayed path's floor, `MIN_LATE_BOUNDARY_VARS`.
     let instances = [
         Instance::honest(FixtureAir::Pair, 1 << 13, 0x007E_5032),
         Instance::honest(FixtureAir::Pair, 1 << 11, 0x007E_5033),

@@ -72,6 +72,13 @@ pub(crate) enum SlicedStrategy {
 /// Row variables one word's lanes span.
 const LANE_VARIABLES: usize = SLICED_LANES.trailing_zeros() as usize;
 
+/// Fewest row variables a stage takes the delayed boundary path with.
+///
+/// Its round-four fold binds [`MAX_PLANE_FOLD_ROUNDS`] challenges, which must leave a whole
+/// word of residual rows. Its round-four evaluation binds one challenge fewer, which must leave
+/// a whole word pair. Either way the stage needs [`LANE_VARIABLES`] past the fold's prefix.
+const MIN_LATE_BOUNDARY_VARS: usize = MAX_PLANE_FOLD_ROUNDS + LANE_VARIABLES;
+
 /// A stage's cells as bit planes, laid out word by word.
 pub(super) struct SlicedTrace {
     /// Number of variables of the stage.
@@ -940,7 +947,7 @@ where
             ) {
                 let evals = tensor_round(&tensor, &self.slots, self.tau.as_slice(), &[], 0);
                 let late_boundary = strategy == SlicedStrategy::TensorBoundaryLate
-                    && trace.num_vars >= 11
+                    && trace.num_vars >= MIN_LATE_BOUNDARY_VARS
                     && SLICED_LANES.is_multiple_of(R::Packing::WIDTH);
                 self.sliced = Some(SlicedColumns {
                     trace,

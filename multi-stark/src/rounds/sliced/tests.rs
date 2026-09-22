@@ -755,6 +755,8 @@ fn late_boundary_keeps_planes_until_fifth_challenge() {
 
 #[test]
 fn late_boundary_marker_requires_the_n11_height_floor() {
+    // The n11 of the late tests is `MIN_LATE_BOUNDARY_VARS`, the delayed path's floor.
+    assert_eq!(MIN_LATE_BOUNDARY_VARS, 11);
     for (height, expected) in [(1 << 9, false), (1 << 10, false), (1 << 11, true)] {
         let instances = [Instance::honest(
             FixtureAir::Pair,
