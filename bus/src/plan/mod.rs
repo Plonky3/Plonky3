@@ -14,7 +14,7 @@ mod error;
 pub use error::BusPlanError;
 
 use crate::multilinear::equality_at_msb_vertex;
-use crate::{BusDirection, ProductGkrRootShape, ProductGkrShape, SymbolicBusInteraction};
+use crate::{BusDirection, BusName, ProductGkrRootShape, ProductGkrShape, SymbolicBusInteraction};
 
 /// Symbolic bus declarations belonging to one AIR instance.
 #[derive(Clone, Copy, Debug)]
@@ -61,6 +61,14 @@ pub struct BusDomain {
 }
 
 impl BusDomain {
+    /// Checked channel name of this group.
+    ///
+    /// The plan rechecked every name it was given, so this never fails.
+    #[must_use]
+    pub fn bus_name(&self) -> BusName<'_> {
+        BusName::try_new(&self.name).expect("a planned domain holds a checked channel name")
+    }
+
     /// Read one little-endian bit of the nonzero domain identity.
     #[must_use]
     pub const fn identity_bit(&self, bit: usize) -> bool {
@@ -204,8 +212,11 @@ impl BusPlan {
     /// Build a deterministic layout from trusted symbolic AIR declarations.
     ///
     /// Empty batches produce no plan.
+    ///
     /// Named groups are independent of AIR caller order.
+    ///
     /// Blocks are ordered by descending height before their named domain.
+    ///
     /// This keeps every mixed-height block aligned to its own Boolean subcube.
     ///
     /// # Errors
@@ -231,6 +242,16 @@ impl BusPlan {
                 if interaction.fields.is_empty() {
                     return Err(BusPlanError::EmptyTuple { air, declaration });
                 }
+
+                // The plan owns channel identity, so it rechecks every name it is handed.
+                // A profile built through the declaration surface always passes.
+                interaction
+                    .bus()
+                    .map_err(|source| BusPlanError::InvalidBusName {
+                        air,
+                        declaration,
+                        source,
+                    })?;
                 validate_interaction(air, declaration, interaction)?;
 
                 match widths.get(&interaction.bus_name) {
@@ -373,6 +394,29 @@ impl BusPlan {
         &self.domains
     }
 
+    /// Position of one channel in this plan's identity order.
+    ///
+    /// This is the index every other method here takes as its bus argument.
+    ///
+    /// Resolving a channel through the plan, rather than by scanning its domains, keeps identity where the verifier assigns it.
+    ///
+    /// Returns no value when this statement declares nothing on that channel.
+    #[must_use]
+    pub fn domain_index(&self, bus: BusName<'_>) -> Option<usize> {
+        // Domains are sorted by name, so the lookup is a binary search rather than a scan.
+        self.domains
+            .binary_search_by(|domain| domain.name.as_str().cmp(bus.as_str()))
+            .ok()
+    }
+
+    /// Identity and payload width of one channel.
+    ///
+    /// Returns no value when this statement declares nothing on that channel.
+    #[must_use]
+    pub fn domain(&self, bus: BusName<'_>) -> Option<&BusDomain> {
+        self.domain_index(bus).map(|index| &self.domains[index])
+    }
+
     /// Maximum payload width reserved in every fingerprint tuple.
     #[must_use]
     pub const fn payload_slots(&self) -> usize {
@@ -432,8 +476,11 @@ impl BusPlan {
     /// Terminal shares in the product tree's physical block order.
     ///
     /// The leading point coordinates select one aligned block.
+    ///
     /// The trailing coordinates evaluate the owning AIR expression over its rows.
+    ///
     /// Each owning expression contributes its leaf factor minus one.
+    ///
     /// Materialized declarations must follow this exact order on each direction.
     pub fn terminal_shares(
         &self,
@@ -511,6 +558,7 @@ fn validate_interaction<F: Field>(
             expression,
         )?;
     }
+    // A boundary indicator names no expression, so only a caller selector needs validating.
     if let crate::BusActivation::Boolean(expression) = &interaction.activation {
         validate_expression(
             air,
@@ -1118,5 +1166,227 @@ mod tests {
                 ..
             })
         ));
+    }
+}
+
+#[cfg(test)]
+mod width_tests {
+    use alloc::string::ToString;
+    use alloc::vec;
+
+    use p3_air::symbolic::{BaseEntry, SymbolicVariable};
+    use p3_baby_bear::BabyBear;
+
+    use super::*;
+    use crate::{BusActivation, BusName, BusNameError};
+
+    type F = BabyBear;
+
+    /// Channel names a machine of this shape would define once and import everywhere.
+    const STATE: BusName<'static> = BusName::new("state");
+    const MEMORY: BusName<'static> = BusName::new("memory");
+    const BYTECODE: BusName<'static> = BusName::new("bytecode");
+    const RANGE: BusName<'static> = BusName::new("range");
+
+    fn declaration(
+        bus: BusName<'_>,
+        direction: BusDirection,
+        width: usize,
+    ) -> SymbolicBusInteraction<F> {
+        SymbolicBusInteraction {
+            bus_name: bus.as_str().to_string(),
+            direction,
+            fields: (0..width)
+                .map(|index| SymbolicVariable::new(BaseEntry::Main { offset: 0 }, index).into())
+                .collect(),
+            activation: BusActivation::Always,
+        }
+    }
+
+    /// Widths and heights of the order a machine reaches.
+    ///
+    /// A narrow range channel, a state channel, an address-count-value memory channel, and a wide instruction channel.
+    fn machine_plan() -> BusPlan {
+        let cpu = [
+            declaration(STATE, BusDirection::Push, 3),
+            declaration(STATE, BusDirection::Pull, 3),
+            declaration(BYTECODE, BusDirection::Pull, 40),
+            declaration(MEMORY, BusDirection::Pull, 12),
+            declaration(RANGE, BusDirection::Pull, 2),
+        ];
+        let memory = [
+            declaration(MEMORY, BusDirection::Push, 12),
+            declaration(MEMORY, BusDirection::Pull, 12),
+        ];
+        let tables = [declaration(BYTECODE, BusDirection::Push, 40)];
+        BusPlan::build(&[
+            BusPlanInput {
+                log_height: 7,
+                interactions: &cpu,
+            },
+            BusPlanInput {
+                log_height: 5,
+                interactions: &memory,
+            },
+            BusPlanInput {
+                log_height: 3,
+                interactions: &tables,
+            },
+        ])
+        .unwrap()
+        .unwrap()
+    }
+
+    #[test]
+    fn four_channels_of_machine_width_share_one_fingerprint_table() {
+        let plan = machine_plan();
+
+        // Four names need three identity bits above the widest payload.
+        assert_eq!(plan.domains().len(), 4);
+        assert_eq!(plan.payload_slots(), 40);
+        assert_eq!(plan.domain_slots(), 3);
+        assert_eq!(plan.logical_tuple_width(), 43);
+
+        // The padded table is the next power of two, so it costs six challenge coordinates.
+        assert_eq!(plan.fingerprint_width(), 64);
+        assert_eq!(plan.security_geometry().tuple_variables(), 6);
+    }
+
+    #[test]
+    fn a_narrow_channel_is_zero_padded_up_to_the_widest_one() {
+        let plan = machine_plan();
+        let range = plan.domain_index(RANGE).unwrap();
+        assert_eq!(plan.domains()[range].payload_width, 2);
+
+        // Its own payload occupies the leading slots.
+        for slot in 0..2 {
+            assert_eq!(
+                plan.tuple_slot(range, slot),
+                Some(BusTupleSlot::Payload(slot))
+            );
+        }
+
+        // Everything up to the widest payload is equalizing zero, not another channel's data.
+        for slot in 2..40 {
+            assert_eq!(plan.tuple_slot(range, slot), Some(BusTupleSlot::Zero));
+        }
+
+        // The identity bits follow, then the power-of-two padding.
+        let identity = plan.domains()[range].identity;
+        for bit in 0..3 {
+            assert_eq!(
+                plan.tuple_slot(range, 40 + bit),
+                Some(BusTupleSlot::DomainBit((identity >> bit) & 1 == 1))
+            );
+        }
+        for slot in 43..64 {
+            assert_eq!(plan.tuple_slot(range, slot), Some(BusTupleSlot::Zero));
+        }
+        assert_eq!(plan.tuple_slot(range, 64), None);
+    }
+
+    #[test]
+    fn no_two_channels_share_a_padded_tuple_space() {
+        let plan = machine_plan();
+
+        // Identities are distinct and nonzero.
+        //
+        // A tuple of one channel therefore cannot be replayed as a tuple of another, however it is padded.
+        let identities = plan
+            .domains()
+            .iter()
+            .map(|domain| domain.identity)
+            .collect::<Vec<_>>();
+        assert!(identities.iter().all(|&identity| identity != 0));
+        for (index, &identity) in identities.iter().enumerate() {
+            assert!(!identities[..index].contains(&identity));
+        }
+
+        // Every identity fits the slots reserved for it.
+        assert!(identities.iter().all(|&identity| identity < 1 << 3));
+    }
+
+    #[test]
+    fn a_channel_resolves_through_the_plan_that_assigned_its_identity() {
+        let plan = machine_plan();
+
+        // Identity order is lexicographic over names, not the order the AIRs declared them.
+        assert_eq!(
+            plan.domains()
+                .iter()
+                .map(|domain| domain.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["bytecode", "memory", "range", "state"]
+        );
+        for (index, bus) in [BYTECODE, MEMORY, RANGE, STATE].into_iter().enumerate() {
+            assert_eq!(plan.domain_index(bus), Some(index));
+            assert_eq!(plan.domain(bus).unwrap().bus_name(), bus);
+            assert_eq!(plan.domain(bus).unwrap().identity, index + 1);
+        }
+
+        // A channel this statement never declares has no identity to resolve.
+        assert_eq!(plan.domain_index(BusName::new("unused")), None);
+        assert!(plan.domain(BusName::new("unused")).is_none());
+    }
+
+    #[test]
+    fn the_plan_rechecks_every_name_it_is_handed() {
+        // The declaration surface cannot produce this, but a profile built by hand can.
+        let mut malformed = declaration(STATE, BusDirection::Push, 1);
+        malformed.bus_name = "state machine".to_string();
+        assert_eq!(
+            BusPlan::build(&[BusPlanInput {
+                log_height: 1,
+                interactions: &[malformed],
+            }])
+            .unwrap_err(),
+            BusPlanError::InvalidBusName {
+                air: 0,
+                declaration: 0,
+                source: BusNameError::Byte {
+                    index: 5,
+                    byte: b' ',
+                },
+            }
+        );
+
+        // An empty name would otherwise index a domain nothing can name.
+        let mut empty = declaration(STATE, BusDirection::Push, 1);
+        empty.bus_name = String::new();
+        assert!(matches!(
+            BusPlan::build(&[BusPlanInput {
+                log_height: 1,
+                interactions: &[empty],
+            }]),
+            Err(BusPlanError::InvalidBusName {
+                source: BusNameError::Empty,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn one_channel_declared_at_two_widths_is_refused() {
+        // Two chips that disagree on a channel's arity is the mistake the plan has to name.
+        let cpu = [declaration(MEMORY, BusDirection::Pull, 12)];
+        let memory = [declaration(MEMORY, BusDirection::Push, 11)];
+        assert_eq!(
+            BusPlan::build(&[
+                BusPlanInput {
+                    log_height: 3,
+                    interactions: &cpu,
+                },
+                BusPlanInput {
+                    log_height: 3,
+                    interactions: &memory,
+                },
+            ])
+            .unwrap_err(),
+            BusPlanError::PayloadWidthMismatch {
+                name: "memory".to_string(),
+                expected: 12,
+                actual: 11,
+            }
+        );
     }
 }

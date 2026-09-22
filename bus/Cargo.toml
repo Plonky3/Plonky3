@@ -9,6 +9,12 @@ homepage.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
+[features]
+default = ["diagnostics"]
+# Out-of-circuit bus diagnostics. No proving or verifying path reads them, so a
+# production build can turn them off without changing a proof or a transcript.
+diagnostics = []
+
 [dependencies]
 p3-air.workspace = true
 p3-challenger.workspace = true

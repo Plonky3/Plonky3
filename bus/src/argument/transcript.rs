@@ -245,7 +245,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use alloc::string::ToString;
+    use alloc::string::{String, ToString};
     use alloc::vec::Vec;
 
     use p3_air::symbolic::{BaseEntry, SymbolicVariable};
@@ -512,6 +512,74 @@ mod tests {
         omega
             .verify::<F, EF, _>(&proof, &mut challenger())
             .expect_err("a claim about one named bus is not a claim about another");
+    }
+
+    /// The plan two channels of these names produce, with everything else held equal.
+    ///
+    /// Both carry one payload slot, both sit on one table of eight rows, and the first is pushed while the second is pulled.
+    ///
+    /// Every public dimension except the two name strings therefore agrees between any two calls.
+    fn two_named_channels(first: &str, second: &str) -> BusPlan {
+        let interactions = [
+            interaction(first, BusDirection::Push, 1),
+            interaction(second, BusDirection::Pull, 1),
+        ];
+        BusPlan::build(&[BusPlanInput {
+            log_height: 3,
+            interactions: &interactions,
+        }])
+        .unwrap()
+        .unwrap()
+    }
+
+    #[test]
+    fn the_separator_binds_where_one_name_ends_and_the_next_begins() {
+        // Sorted, these two statements name the domains "ab", "c" and "a", "bc".
+        //
+        // Their name bytes concatenate to "abc" either way, so only the length prefixes separate them.
+        let left = two_named_channels("ab", "c");
+        let right = two_named_channels("a", "bc");
+
+        // Every other public dimension is equal, which is what makes the test about names.
+        assert_eq!(left.payload_slots(), right.payload_slots());
+        assert_eq!(left.domain_slots(), right.domain_slots());
+        assert_eq!(left.fingerprint_width(), right.fingerprint_width());
+        assert_eq!(left.product_shape(), right.product_shape());
+        for direction in BusDirection::ALL {
+            let strip = |plan: &BusPlan| {
+                plan.blocks(direction)
+                    .iter()
+                    .map(|block| (block.bus, block.owner, block.log_height, block.offset))
+                    .collect::<Vec<_>>()
+            };
+            assert_eq!(strip(&left), strip(&right));
+        }
+
+        // An unprefixed encoding would collide here. The prefixed one does not.
+        assert_ne!(label(&left), label(&right));
+        assert!(!seeds_agree(&left, &right));
+        let concatenated = |plan: &BusPlan| {
+            plan.domains()
+                .iter()
+                .map(|domain| domain.name.as_str())
+                .collect::<String>()
+        };
+        assert_eq!(concatenated(&left), concatenated(&right));
+
+        // The reduction at this size draws real challenges, so the rejection is not vacuous.
+        assert_eq!(left.security_geometry().log_logical_leaf_count(), 3);
+        assert!(left.product_shape().layers().len() > 1);
+
+        let (proof, output) = left
+            .prove::<F, EF, _>(balanced_witness, &mut challenger())
+            .unwrap();
+        let replayed = left
+            .verify::<F, EF, _>(&proof, &mut challenger())
+            .expect("the proof verifies under the plan that produced it");
+        assert_eq!(replayed, output);
+        right
+            .verify::<F, EF, _>(&proof, &mut challenger())
+            .expect_err("a claim about one channel split is not a claim about another");
     }
 
     #[test]

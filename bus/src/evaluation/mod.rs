@@ -11,7 +11,9 @@ mod error;
 pub use error::BusEvaluationError;
 
 use crate::multilinear::equality_weights_msb;
-use crate::{BusActivation, BusChallenges, BusPlan, BusTupleSlot, SymbolicBusInteraction};
+use crate::{
+    BusActivation, BusBoundary, BusChallenges, BusPlan, BusTupleSlot, SymbolicBusInteraction,
+};
 
 /// Values resolving every supported symbolic leaf at one common point.
 #[derive(Clone, Copy, Debug)]
@@ -331,6 +333,14 @@ impl BusPlan {
             .collect::<Result<Vec<_>, _>>()?;
         let activation = match &interaction.activation {
             BusActivation::Always => None,
+            // A boundary indicator is a backend leaf, so it joins the graph without an expression.
+            BusActivation::Boundary(boundary) => {
+                nodes.push(match boundary {
+                    BusBoundary::First => BusNode::IsFirstRow,
+                    BusBoundary::Last => BusNode::IsLastRow,
+                });
+                Some(nodes.len() - 1)
+            }
             BusActivation::Boolean(selector) => {
                 Some(compile_expression(&mut nodes, &mut positions, selector)?)
             }
@@ -517,5 +527,114 @@ mod tests {
                 a * b,
             ]
         );
+    }
+}
+
+#[cfg(test)]
+mod boundary_tests {
+    use alloc::string::ToString;
+    use alloc::vec;
+
+    use p3_air::symbolic::{BaseEntry, SymbolicVariable};
+    use p3_baby_bear::BabyBear;
+    use p3_field::PrimeCharacteristicRing;
+
+    use super::*;
+    use crate::{BusDirection, BusPlanInput};
+
+    type F = BabyBear;
+
+    /// One declaration on a one-payload channel, activated however the caller asks.
+    fn interaction(activation: BusActivation<SymbolicExpression<F>>) -> SymbolicBusInteraction<F> {
+        SymbolicBusInteraction {
+            bus_name: "state".to_string(),
+            direction: BusDirection::Push,
+            fields: vec![SymbolicVariable::new(BaseEntry::Main { offset: 0 }, 0).into()],
+            activation,
+        }
+    }
+
+    fn plan(interaction: &SymbolicBusInteraction<F>) -> BusPlan {
+        BusPlan::build(&[BusPlanInput {
+            log_height: 2,
+            interactions: core::slice::from_ref(interaction),
+        }])
+        .unwrap()
+        .unwrap()
+    }
+
+    /// The leaf factor of one declaration at one Boolean row of a four-row table.
+    fn factor_at_row(interaction: &SymbolicBusInteraction<F>, row: usize) -> F {
+        let plan = plan(interaction);
+        let weights = alloc::vec![F::ONE; plan.fingerprint_width()];
+        plan.evaluate_factor(
+            0,
+            interaction,
+            BusEvaluation {
+                main: &[F::from_usize(row + 1)],
+                preprocessed: &[],
+                public: &[],
+                is_first_row: F::from_bool(row == 0),
+                is_last_row: F::from_bool(row == 3),
+                is_transition: F::from_bool(row < 3),
+            },
+            &weights,
+            F::from_u64(17),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn a_boundary_declaration_is_the_identity_away_from_its_end() {
+        for (boundary, live) in [(BusBoundary::First, 0usize), (BusBoundary::Last, 3)] {
+            let declaration = interaction(BusActivation::Boundary(boundary));
+            for row in 0..4 {
+                let factor = factor_at_row(&declaration, row);
+                if row == live {
+                    // The live row contributes its shifted fingerprint, never the identity.
+                    assert_ne!(factor, F::ONE);
+                } else {
+                    // Every other row multiplies the product tree by one.
+                    assert_eq!(factor, F::ONE, "{boundary:?} leaked into row {row}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_boundary_declaration_evaluates_as_its_selector_form_does() {
+        // The proving path must not distinguish the first-class form from the hand-written one.
+        let pairs = [
+            (
+                BusActivation::Boundary(BusBoundary::First),
+                BusActivation::Boolean(SymbolicExpr::Leaf(BaseLeaf::<F>::IsFirstRow)),
+            ),
+            (
+                BusActivation::Boundary(BusBoundary::Last),
+                BusActivation::Boolean(SymbolicExpr::Leaf(BaseLeaf::<F>::IsLastRow)),
+            ),
+        ];
+        for (boundary, selector) in pairs {
+            let boundary = interaction(boundary);
+            let selector = interaction(selector);
+            for row in 0..4 {
+                assert_eq!(factor_at_row(&boundary, row), factor_at_row(&selector, row));
+            }
+        }
+    }
+
+    #[test]
+    fn a_boundary_declaration_reads_no_column_of_its_own() {
+        // Compiling adds exactly one graph node for the indicator, and it names no column.
+        let always = interaction(BusActivation::Always);
+        let boundary = interaction(BusActivation::Boundary(BusBoundary::Last));
+        let plan = plan(&boundary);
+        let weights = alloc::vec![F::ONE; plan.fingerprint_width()];
+        let compiled = plan
+            .compile_factor(0, &boundary, &weights, F::ZERO)
+            .unwrap();
+        let baseline = plan.compile_factor(0, &always, &weights, F::ZERO).unwrap();
+        assert_eq!(compiled.nodes.len(), baseline.nodes.len() + 1);
+        assert!(matches!(compiled.nodes.last(), Some(BusNode::IsLastRow)));
     }
 }

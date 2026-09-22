@@ -32,8 +32,8 @@ use p3_security::bus::{BusSecurityModel, ProductGkrSecurityProfile};
 
 use crate::multilinear::equality_weights_lsb;
 use crate::{
-    BusActivation, BusDirection, BusInteractionBuilder, BusPlan, BusTupleSlot, ProductGkrOutput,
-    ProductGkrProof, ProductGkrRootShape, ProductGkrShape,
+    BusActivation, BusDirection, BusInteractionBuilder, BusName, BusPlan, BusTupleSlot,
+    ProductGkrOutput, ProductGkrProof, ProductGkrRootShape, ProductGkrShape,
 };
 
 mod error;
@@ -66,6 +66,9 @@ impl<F: Field> ReadOnlyMemoryBus<F> {
     ///
     /// Returns an error when a machine-word row count could span the whole count orbit.
     pub fn new(name: &str) -> Result<Self, ReadOnlyMemoryError> {
+        // Declarations name a checked channel, so the handle refuses a name they could not carry.
+        BusName::try_new(name)?;
+
         // Only an orbit no row index can reach is safe without knowing the trace heights.
         let orbit = F::order() - BigUint::from(1u8);
         if orbit <= BigUint::from(usize::MAX) {
@@ -82,9 +85,9 @@ impl<F: Field> ReadOnlyMemoryBus<F> {
 
     /// Channel shared by every declaration of this array.
     #[must_use]
-    pub fn name(&self) -> &str {
-        // The enclosing bus plan groups declarations by this name.
-        &self.name
+    pub fn name(&self) -> BusName<'_> {
+        // The enclosing bus plan groups declarations by this name, checked on construction.
+        BusName::new(&self.name)
     }
 }
 
