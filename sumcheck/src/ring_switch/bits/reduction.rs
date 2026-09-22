@@ -20,6 +20,7 @@ use serde::{Deserialize, Serialize};
 use super::basis::{Coefficients, CoordinateSums};
 use super::equality::{FactoredEquality, scaled_sums_into};
 use super::packing::BitPacking;
+use super::products::LeftFactors;
 use super::tensor::{BitTensor, BitTensorBuckets};
 use super::transcript::{
     BitRingSwitchProverTranscript, BitRingSwitchShape, BitRingSwitchVerifierTranscript,
@@ -568,6 +569,8 @@ impl<EF: TowerLevel> BitRingSwitch<EF> {
         EF: Send + Sync,
     {
         let values = &packing.poly().as_slice()[offset..offset + equality.num_evals()];
+        // Every block reads the same inner weights, so their layout is prepared once.
+        let inner = LeftFactors::new(equality.inner());
 
         values
             .par_chunks(equality.block_len())
@@ -576,12 +579,7 @@ impl<EF: TowerLevel> BitRingSwitch<EF> {
                 // The scratch is what a block accumulates into, so only a fold arm holds one.
                 || (BitTensor::zero(), None),
                 |(mut total, mut scratch), (values, &weight)| {
-                    let buckets = scratch.get_or_insert_with(BitTensorBuckets::zero);
-                    buckets.clear();
-                    for (&inner, &value) in equality.inner().iter().zip(values) {
-                        buckets.add_exterior_product(inner, value);
-                    }
-                    total.add_scaled_columns(&buckets.tensor(), weight);
+                    total.add_scaled_columns(&inner.sum(values, &mut scratch), weight);
                     (total, scratch)
                 },
                 |(mut total, scratch), (partial, _)| {
@@ -3359,6 +3357,45 @@ mod tests {
                         "{case}"
                     );
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn the_wide_sweeps_read_the_same_elements_at_every_block_size() {
+        // Invariant: at the level the bit-block kernel is shaped for, the split changes nothing.
+        //
+        // Blocks of eight elements and up run that kernel where the target has one. The carry
+        // meets columns shorter than a block, as long as one, and longer.
+        type Wide = BinaryField128;
+        let mut rng = SmallRng::seed_from_u64(0x31DE);
+        let packing = BitPacking::<Wide>::new(&bits(0x31DF, 1 << 13)).unwrap();
+        let num_variables = packing.num_variables() + BitRingSwitch::<Wide>::ABSORBED;
+
+        for row_variables in [8, 10, 12, num_variables] {
+            let r = Point::<Wide>::rand(&mut rng, num_variables);
+            let reduction = BitRingSwitch::with_successor(&r, row_variables).unwrap();
+            let (prefix, offset, _) = reduction.support();
+            let run = &reduction.high()[prefix..];
+
+            // One entry per block sums every term through the buckets.
+            let dense = FactoredEquality::new(run, 0);
+            let tensor = BitRingSwitch::tensor_over(&packing, offset, &dense);
+            let successor = reduction.successor_tensors_over(&packing, offset, &dense);
+
+            for log_block in 0..=run.len() {
+                let equality = FactoredEquality::new(run, log_block);
+                let case = alloc::format!("{row_variables} rows, 2^{log_block} block");
+                assert_eq!(
+                    BitRingSwitch::tensor_over(&packing, offset, &equality),
+                    tensor,
+                    "{case}"
+                );
+                assert_eq!(
+                    reduction.successor_tensors_over(&packing, offset, &equality),
+                    successor,
+                    "{case}"
+                );
             }
         }
     }
