@@ -19,13 +19,13 @@ use super::{G_PER_ROUND, G_SCHEDULE, NUM_ROUNDS, iv_word};
 use crate::constants::permute;
 
 /// Number of input bits: chaining value, message, counter, block length and flags.
-const NUM_INPUT_BITS: usize = (8 + 16 + 4) * 32;
+pub(super) const NUM_INPUT_BITS: usize = (8 + 16 + 4) * 32;
 
 /// Constraints per G step: two 3-operand and two 2-operand additions.
 const CONSTRAINTS_PER_G: usize = 2 * (31 + 32) + 2 * 32;
 
-/// Total number of constraints: input booleanity plus every G step.
-const NUM_CONSTRAINTS: usize = NUM_INPUT_BITS + NUM_ROUNDS * G_PER_ROUND * CONSTRAINTS_PER_G;
+/// Number of constraints excluding input booleanity: every G step.
+const NUM_G_CONSTRAINTS: usize = NUM_ROUNDS * G_PER_ROUND * CONSTRAINTS_PER_G;
 
 /// An AIR for the Blake-3 compression function over a field of characteristic 2.
 ///
@@ -36,14 +36,38 @@ const NUM_CONSTRAINTS: usize = NUM_INPUT_BITS + NUM_ROUNDS * G_PER_ROUND * CONST
 /// value and the last round's `b1`, `d1`, `b2`, `d2` words, and
 /// [`Blake3BinaryCols::compression_output`] recovers it from a row.
 ///
-/// The input bits are constrained to be boolean. Every other column is then forced to a
-/// bit by the addition constraints, since the majority of three bits is a bit.
+/// [`Self::default`] constrains the input bits to be boolean, and
+/// [`Self::assuming_boolean_trace`] leaves that to the trace commitment. Every other column is
+/// then forced to a bit by the addition constraints, since the majority of three bits is a bit.
 ///
 /// The constraints describe Blake-3 only over a field of characteristic 2.
 #[derive(Debug)]
-pub struct Blake3BinaryAir {}
+pub struct Blake3BinaryAir {
+    /// Whether the AIR constrains every input cell to be a bit.
+    constrain_booleanity: bool,
+}
+
+impl Default for Blake3BinaryAir {
+    fn default() -> Self {
+        Self {
+            constrain_booleanity: true,
+        }
+    }
+}
 
 impl Blake3BinaryAir {
+    /// An AIR that skips the input booleanity constraints, which the commitment must then supply.
+    ///
+    /// The AIR reports [`BaseAir::assumes_boolean_trace`]. It is sound only under a commitment
+    /// whose alphabet is one bit per cell, such as a commitment to the trace's bits, where a cell
+    /// outside `{0, 1}` is not representable. Under a commitment to field elements, nothing else
+    /// keeps an input cell in `{0, 1}`.
+    pub const fn assuming_boolean_trace() -> Self {
+        Self {
+            constrain_booleanity: false,
+        }
+    }
+
     /// Generate a trace over `num_hashes` fixed-seed random compression inputs.
     ///
     /// Each row draws a random chaining value and block, uses its row index as the counter,
@@ -98,8 +122,17 @@ impl<F> BaseAir<F> for Blake3BinaryAir {
         vec![]
     }
 
+    fn assumes_boolean_trace(&self) -> bool {
+        !self.constrain_booleanity
+    }
+
     fn num_constraints(&self) -> Option<usize> {
-        Some(NUM_CONSTRAINTS)
+        let booleanity = if self.constrain_booleanity {
+            NUM_INPUT_BITS
+        } else {
+            0
+        };
+        Some(booleanity + NUM_G_CONSTRAINTS)
     }
 
     fn max_constraint_degree(&self) -> Option<usize> {
@@ -131,13 +164,15 @@ impl<AB: AirBuilder> Air<AB> for Blake3BinaryAir {
             local.flags,
         ];
 
-        for word in local
-            .chaining_value
-            .iter()
-            .chain(&local.block)
-            .chain(&initial_d)
-        {
-            builder.assert_bools(*word);
+        if self.constrain_booleanity {
+            for word in local
+                .chaining_value
+                .iter()
+                .chain(&local.block)
+                .chain(&initial_d)
+            {
+                builder.assert_bools(*word);
+            }
         }
 
         let mut state = State::<AB> {

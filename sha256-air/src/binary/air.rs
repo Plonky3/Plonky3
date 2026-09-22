@@ -37,9 +37,8 @@ pub(super) const CONSTRAINTS_PER_ROUND: usize = 32
     + SUM_CARRY_ADD
     + (STORED_CARRY_ADD + SUM_CARRY_ADD);
 
-/// Total number of constraints: input booleanity, the schedule, every round and the output.
-const NUM_CONSTRAINTS: usize = NUM_INPUT_BITS
-    + SCHEDULE_EXTENSIONS * CONSTRAINTS_PER_SCHEDULE_WORD
+/// Number of constraints excluding input booleanity: the schedule, every round and the output.
+const NUM_HASH_CONSTRAINTS: usize = SCHEDULE_EXTENSIONS * CONSTRAINTS_PER_SCHEDULE_WORD
     + NUM_COMPRESSION_ROUNDS * CONSTRAINTS_PER_ROUND
     + STATE_WORDS * SUM_CARRY_ADD;
 
@@ -48,14 +47,39 @@ const NUM_CONSTRAINTS: usize = NUM_INPUT_BITS
 /// Each row proves one compression. The AIR reads no next row and every constraint has
 /// degree at most 2.
 ///
-/// The input bits are constrained to be boolean. Every other column is then forced to a
-/// bit by the constraints that define it, since the majority of three bits is a bit.
+/// [`Self::default`] constrains the input bits to be boolean, and
+/// [`Self::assuming_boolean_trace`] leaves that to the trace commitment. Every other column is
+/// then forced to a bit by the constraints that define it, since the majority of three bits is
+/// a bit.
 ///
 /// The constraints describe SHA-256 only over a field of characteristic 2.
 #[derive(Debug)]
-pub struct Sha256BinaryAir {}
+pub struct Sha256BinaryAir {
+    /// Whether the AIR constrains every input cell to be a bit.
+    constrain_booleanity: bool,
+}
+
+impl Default for Sha256BinaryAir {
+    fn default() -> Self {
+        Self {
+            constrain_booleanity: true,
+        }
+    }
+}
 
 impl Sha256BinaryAir {
+    /// An AIR that skips the input booleanity constraints, which the commitment must then supply.
+    ///
+    /// The AIR reports [`BaseAir::assumes_boolean_trace`]. It is sound only under a commitment
+    /// whose alphabet is one bit per cell, such as a commitment to the trace's bits, where a cell
+    /// outside `{0, 1}` is not representable. Under a commitment to field elements, nothing else
+    /// keeps an input cell in `{0, 1}`.
+    pub const fn assuming_boolean_trace() -> Self {
+        Self {
+            constrain_booleanity: false,
+        }
+    }
+
     /// Generate a trace over `num_hashes` fixed-seed random compression inputs.
     ///
     /// This is for benches/examples only. Use the free [`generate_binary_trace_rows`]
@@ -93,8 +117,17 @@ impl<F> BaseAir<F> for Sha256BinaryAir {
         vec![]
     }
 
+    fn assumes_boolean_trace(&self) -> bool {
+        !self.constrain_booleanity
+    }
+
     fn num_constraints(&self) -> Option<usize> {
-        Some(NUM_CONSTRAINTS)
+        let booleanity = if self.constrain_booleanity {
+            NUM_INPUT_BITS
+        } else {
+            0
+        };
+        Some(booleanity + NUM_HASH_CONSTRAINTS)
     }
 
     fn max_constraint_degree(&self) -> Option<usize> {
@@ -108,12 +141,14 @@ impl<AB: AirBuilder> Air<AB> for Sha256BinaryAir {
         let main = builder.main();
         let local: &Sha256BinaryCols<AB::Var> = main.current_slice().borrow();
 
-        for word in local.a_chain[..4]
-            .iter()
-            .chain(&local.e_chain[..4])
-            .chain(&local.w[..BLOCK_WORDS])
-        {
-            builder.assert_bools(*word);
+        if self.constrain_booleanity {
+            for word in local.a_chain[..4]
+                .iter()
+                .chain(&local.e_chain[..4])
+                .chain(&local.w[..BLOCK_WORDS])
+            {
+                builder.assert_bools(*word);
+            }
         }
 
         let a_chain: [[AB::Expr; 32]; _] = local.a_chain.map(|word| word.map(Into::into));

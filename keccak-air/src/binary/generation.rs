@@ -400,7 +400,7 @@ mod tests {
 
     #[test]
     fn packed_random_trace_uses_the_dense_generator_sequence() {
-        let air = KeccakBinaryAir {};
+        let air = KeccakBinaryAir::default();
         for num_hashes in [1usize, 3, 6] {
             let dense = air.generate_random_trace_rows::<F>(num_hashes, 0);
             let packed = air.generate_random_trace_packed::<Gf2>(num_hashes);
