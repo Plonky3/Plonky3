@@ -170,6 +170,8 @@ where
     }
 
     /// Budget of the masked base case against the randomized terminal source code.
+    ///
+    /// `terminal()`, reached through `Deref`, is the plain budget `inner` was sized with.
     #[must_use]
     pub const fn randomized_terminal(&self) -> TerminalBudget {
         self.randomized_terminal

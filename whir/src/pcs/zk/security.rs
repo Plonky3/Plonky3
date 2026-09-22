@@ -182,6 +182,18 @@ mod tests {
     }
 
     #[test]
+    fn stock_config_spends_different_pow_bits_on_the_plain_and_randomized_terminals() {
+        let config = stock_config(SecurityAssumption::CapacityBound);
+
+        let randomized_pow_bits = config.base_case_config().pow_bits;
+        let plain_pow_bits = config.inner().terminal().pow_bits;
+
+        assert_eq!(randomized_pow_bits, 10);
+        assert_eq!(plain_pow_bits, 13);
+        assert_ne!(randomized_pow_bits, plain_pow_bits);
+    }
+
+    #[test]
     fn mask_groups_keep_chronological_roles() {
         let report =
             stock_config(SecurityAssumption::CapacityBound).hiding_base_case_security_report();
