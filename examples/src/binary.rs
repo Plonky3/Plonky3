@@ -2400,7 +2400,7 @@ mod tests {
         target_feature = "vpclmulqdq",
         any(target_feature = "avx2", target_feature = "avx512f")
     ))]
-    type BinaryBusPacked = PackedRepr<F, Ghash128>;
+    type BinaryBusPacked = PackedExt<F, p3_binary_field::PackedGhash128>;
     #[cfg(not(all(
         target_arch = "x86_64",
         target_feature = "vpclmulqdq",
