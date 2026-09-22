@@ -32,6 +32,12 @@ pub(crate) type MyChallenger = BinaryChallenger<F, HashChallenger<u8, Keccak256H
 pub(crate) type NarrowChallenger =
     BinaryChallenger<BinaryField64, HashChallenger<u8, Keccak256Hash, 32>>;
 
+/// The same scheme over any tower level, for a test that picks its levels.
+pub(crate) type LevelMmcs<A> = MerkleTreeMmcs<A, u8, MyHash, MyCompress, 2, 32>;
+
+/// The transcript over any tower level, which is a transcript over its bytes.
+pub(crate) type LevelChallenger<A> = BinaryChallenger<A, HashChallenger<u8, Keccak256Hash, 32>>;
+
 pub(crate) const fn mmcs() -> MyMmcs {
     MyMmcs::new(
         MyHash::new(Keccak256Hash),
@@ -56,6 +62,18 @@ pub(crate) const fn challenger() -> MyChallenger {
 /// The sponge a narrow-alphabet run speaks, whose grinding witness is a narrow element.
 pub(crate) const fn narrow_challenger() -> NarrowChallenger {
     NarrowChallenger::from_hasher(Vec::new(), Keccak256Hash)
+}
+
+pub(crate) const fn level_mmcs<A>() -> LevelMmcs<A> {
+    LevelMmcs::new(
+        MyHash::new(Keccak256Hash),
+        MyCompress::new(Keccak256Hash),
+        0,
+    )
+}
+
+pub(crate) const fn level_challenger<A>() -> LevelChallenger<A> {
+    LevelChallenger::from_hasher(Vec::new(), Keccak256Hash)
 }
 
 /// Fixed parameters the lifecycle fixture derives its config from.
