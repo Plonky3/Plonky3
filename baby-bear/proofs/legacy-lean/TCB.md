@@ -15,7 +15,7 @@ Measured totals (regenerate with the commands in [`SYNC.md`](SYNC.md)):
 | Quantity | Value |
 |---|---|
 | Generated `p3_baby_bear.lean` | **4306** lines, **0** `sorry` |
-| Hand-written interface `extraction/p3_baby_bear/*.lean` | **1004** lines, **0** `sorry`, **15** `opaque` |
+| Hand-written interface `extraction/p3_baby_bear/*.lean` | **1025** lines, **0** `sorry`, **17** `opaque` |
 | Pre-extraction patches (Rust source) | **0** — none needed |
 | Post-extraction patches | **6** files, **7** hunks total |
 | `of_isOk` obligations discharged by `rfl` | **45 of 46** |
@@ -42,9 +42,9 @@ type exists, which for a function type is true and is exactly what
 `opaque` is used rather than `axiom` because `axiom` breaks the code generator,
 which this build needs for the `native_decide` obligation in patch `040`.
 
-The practical benefit is as large as the logical one: with 15 `sorry` warnings
-gone, a `sorry` introduced later by drift is immediately visible instead of
-lost in noise.
+The practical benefit is as large as the logical one: with the previous `sorry`
+warnings gone, a `sorry` introduced later by drift is immediately visible
+instead of lost in noise.
 
 What this does **not** mean: the operations are still undefined. It means the
 assumption is well-formed rather than contradictory. The footprint is now
@@ -83,7 +83,7 @@ The lakefile pins Hax by **revision, not `main`**: the generated file and the
 proof library must come from the same hax revision, and a floating `rev` would
 let them drift apart silently.
 
-## Layer 3 — the hand-written interface (`extraction/p3_baby_bear/`) (1004 lines, 15 `opaque`, 0 `sorry`)
+## Layer 3 — the hand-written interface (`extraction/p3_baby_bear/`) (1025 lines, 17 `opaque`, 0 `sorry`)
 
 One file per crate in `baby-bear/Cargo.toml`'s `[dependencies]`, so the
 axiomatization boundary is exactly the crate's declared dependency edge.
@@ -122,13 +122,15 @@ cannot be discharged for an abstract `MONTY_BITS`. Total arithmetic also avoids
 needing `Cast u32 i128` / `Cast i128 i64` instances, which the Hax library does
 not provide.
 
-### The 8 assumed operations
+### The 10 assumed operations
 
 All `opaque`. Nothing else in this directory is assumed.
 
 | Count | Symbol(s) | What is assumed | Reachable? |
 |---:|---|---|---|
 | 6 | `p3_field.field.ring_{add,sub,mul,add_assign,sub_assign,neg}` | **The core assumption: no ring arithmetic is modelled.** `Output := R` is faithful; the operations are undefined. | yes |
+| 1 | `p3_field.exponentiation.exp_1725656503` | BabyBear's `exp_root_d` / seventh-root map. Upstream is the addition chain `x^1725656503`; nothing about the S-box follows from the opaque. | yes |
+| 1 | `p3_mds.util.first_row_to_first_col` | Circulant first-row → first-column (`col[0] = row[0]`, `col[i] = row[N-i]`). A commented hand-model is in `p3_mds.lean`; the live symbol is opaque, so the MDS coefficients are not pinned. | yes |
 | 1 | `p3_monty_31.data_traits.mul_w_default` | Upstream body is `a * Self::W`, needing `Algebra`'s multiplication — one of the six above. Used at `DEG` 4 and 8. | yes |
 | 1 | `p3_monty_31.mds.mds_permute_mut` | The MDS permutation's behaviour. | yes |
 
@@ -136,7 +138,7 @@ Seven further `opaque`s are structural rather than behavioural — four instance
 witnesses (`mds.Impl`, `mds.Impl_Permutation` and their two `AssociatedTypes`
 companions) and three Poseidon1/2 constructors (`p3_poseidon1.Impl_1.new`,
 `p3_poseidon2.Impl.new`, `p3_poseidon2.Impl_4.new`). They assert an inhabitant
-exists without saying which. 8 behavioural + 7 structural = **15** `opaque`
+exists without saying which. 10 behavioural + 7 structural = **17** `opaque`
 declarations; recount with the regex in [`SYNC.md`](SYNC.md) step 3, since a
 bare `grep -c opaque` also matches the prose in these files.
 
@@ -144,16 +146,6 @@ The `Permutation` witnesses supply their `Clone`/`Sync` parent clauses
 *explicitly* from the Hax library's blanket instances. Hax's `Copy` carries
 `Clone` as a parent clause, so leaving them to instance search sends the
 elaborator around a `Clone`/`Copy` cycle until it times out.
-
-### Two infidelities, which matter more than the count
-
-Neither is a `sorry`, so neither shows up as a warning:
-
-- **`p3_mds.util.first_row_to_first_col` is `pure v`** — the identity. Upstream
-  reverses and rotates the row. The MDS coefficients in the Lean are therefore
-  the *input rows*, and nothing about the MDS matrix itself is pinned down.
-- **`p3_field.exponentiation.exp_1725656503` is `pure val`** — the identity, not
-  the exponentiation. Nothing about the Poseidon S-box follows from it.
 
 ## Layer 4 — the patches
 
@@ -316,7 +308,8 @@ The three live directions, in order of value:
 2. **Extract `p3-monty-31` for real** and consume it as a Lake dependency (the
    pattern `keccak`/`blake3` use for `p3_symmetric` in the fork). That collapses
    the 666-line monty-31 file and makes `first_row_to_first_col` and
-   `exp_1725656503` real instead of identity stand-ins.
+   `exp_1725656503` real instead of opaques. Uncommenting the hand-model in
+   `p3_mds.lean` is the smaller local step for the MDS coefficients.
 3. **Upstream the two hax bugs** (`def _`, the hoisted-helper name collision),
    each worth one patch hunk.
 

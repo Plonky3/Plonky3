@@ -63,16 +63,15 @@ end p3_field.dup
 namespace p3_field.exponentiation
 
 /-- BabyBear's `exp_root_d`: `7 * 1725656503 = 6*(2^31 - 2^27) + 1 ≡ 1 mod (p-1)`.
-    ASSUMED — the body here is the identity, which is *not* the upstream
-    algorithm. Nothing may be concluded about the S-box from this stub. -/
-def exp_1725656503
+    ASSUMED — declared `opaque` Nothing may be concluded about the S-box from this. -/
+opaque exp_1725656503
     (R : Type)
     [_trait_constr_exp_1725656503_associated_type_i0 :
       p3_field.field.PrimeCharacteristicRing.AssociatedTypes
       R]
     [_trait_constr_exp_1725656503_i0 : p3_field.field.PrimeCharacteristicRing R ]
     (val : R) :
-    RustM R := pure val
+    RustM R
 
 end p3_field.exponentiation
 
