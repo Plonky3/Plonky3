@@ -175,13 +175,11 @@ where
             .expect("a bus context contains at least one declaration")
     }
 
-    /// Whether one AIR owns any bus declaration.
-    pub(crate) fn contains_air(&self, air: usize) -> bool {
-        // Only participating tables need a second prescribed-point opening.
-        !self.profiles[air].interactions().is_empty()
-    }
-
     /// Evaluate the formal bus composition at the terminal sumcheck point.
+    ///
+    /// The point spans the shared cube, which may be wider than any bus table.
+    /// Each share reads its rows off the point's suffix.
+    /// Every coordinate ahead of that suffix joins its all-one-vertex selector.
     pub(crate) fn terminal_composition(
         &self,
         output: &p3_bus::BusReductionOutput<EF>,
@@ -191,8 +189,8 @@ where
         preprocessed: &[&[EF]],
         public_values: &[&[F]],
     ) -> Result<EF, BusBindingError> {
-        // The terminal point belongs to the tallest participating table.
-        if point.num_variables() != self.max_num_variables() {
+        // The terminal point must at least address the tallest participating table.
+        if point.num_variables() < self.max_num_variables() {
             return Err(BusBindingError::CompositionPointDimension {
                 expected: self.max_num_variables(),
                 actual: point.num_variables(),

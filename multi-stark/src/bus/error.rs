@@ -26,18 +26,12 @@ pub enum BusBindingError {
         /// Dimension returned by the reduction.
         actual: usize,
     },
-    /// The composition sumcheck returned a terminal point of the wrong dimension.
-    #[error("binary-bus composition point has dimension {actual}, expected {expected}")]
+    /// The shared sumcheck point is too short to address the tallest bus table.
+    #[error("binary-bus composition point has dimension {actual}, expected at least {expected}")]
     CompositionPointDimension {
         /// Dimension fixed by the tallest participating table.
         expected: usize,
-        /// Dimension returned by the sumcheck.
+        /// Dimension of the supplied point.
         actual: usize,
     },
-    /// The composition proof starts from a claim other than the ProductGKR terminal identity.
-    #[error("binary-bus composition initial claim disagrees with ProductGKR")]
-    InitialClaimMismatch,
-    /// The composition sumcheck terminal claim differs from committed-column evaluation.
-    #[error("binary-bus composition terminal claim is not authenticated")]
-    TerminalMismatch,
 }

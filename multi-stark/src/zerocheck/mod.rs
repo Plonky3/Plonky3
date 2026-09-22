@@ -23,6 +23,7 @@ use core::iter;
 
 use p3_air::symbolic::{BaseEntry, BaseLeaf, ExtLeaf, SymbolicExpr};
 use p3_air::{Air, AirLayout, BaseAir};
+use p3_bus::{BusArgumentError, BusReductionOutput};
 use p3_challenger::fs::TranscriptField;
 use p3_challenger::{FieldChallenger, GrindingChallenger};
 use p3_field::{ExtensionField, Field};
@@ -31,12 +32,14 @@ use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
 use p3_sumcheck::generic_degree::{
     GenericDegreeError, GenericDegreeProof, GenericDegreeShape, ProverTranscript,
-    RoundPolyInterpolator,
+    RoundPolyInterpolator, RoundProver,
 };
 use p3_sumcheck::layout::Table;
 use thiserror::Error;
 
 use crate::backend::{GenericBackend, ZerocheckBackend};
+use crate::bus::composition::BusCompositionProver;
+use crate::bus::{BusBindingError, BusContext};
 use crate::config::DEFAULT_SLICED_ROUNDS;
 use crate::folder::{
     InteractionMultilinearFolder, MultilinearFolder, ProverAir, VerifierAir, boundary_io_pins,
@@ -58,6 +61,12 @@ pub enum ZerocheckError {
     /// The proof claimed a nonzero sum, but a zerocheck always sums to zero.
     #[error("zerocheck claimed sum is nonzero")]
     NonZeroClaimedSum,
+    /// The product-tree output cannot be batched into the bus claim.
+    #[error("zerocheck bus claim: {0}")]
+    BusClaim(BusArgumentError),
+    /// The bus family cannot be rebuilt from the committed openings.
+    #[error("zerocheck bus binding: {0}")]
+    BusBinding(BusBindingError),
     /// The sumcheck claim does not match the lookup-derived AIR-link claim.
     #[error("AIR sumcheck claimed sum does not match the lookup link")]
     ClaimedSumMismatch,
@@ -130,6 +139,22 @@ pub struct ZerocheckProof<F, EF> {
     pub preprocessed_local: Vec<Vec<EF>>,
     /// Repeat-last preprocessed successor values, grouped by input AIR order.
     pub preprocessed_next: Vec<Vec<EF>>,
+}
+
+/// The binary-bus family one zerocheck run folds into its sumcheck.
+///
+/// The product-tree reduction left one terminal claim per direction.
+/// Its row compositions share the AIR sumcheck, weighted apart by one fresh challenge.
+///
+/// ```text
+///     claim = eta * lookup + lambda * (push + lambda * pull)
+/// ```
+#[derive(Clone, Copy)]
+pub(crate) struct BusFamily<'a, F: Field, EF: ExtensionField<F>> {
+    /// Checked declarations and the physical layout of every bus share.
+    pub(crate) context: &'a BusContext<F, EF>,
+    /// Terminal claims and challenges the product-tree reduction left.
+    pub(crate) output: &'a BusReductionOutput<EF>,
 }
 
 /// A batched AIR zerocheck instance.
@@ -565,13 +590,57 @@ impl<'a, A> AirZerocheck<'a, A> {
     /// Panics if an AIR declares lookups but the batch carries no link for it.
     /// Panics if a periodic column's period is not a power of two dividing the trace height.
     /// Panics if any trace height is less than two.
-    #[tracing::instrument(skip_all)]
     pub(crate) fn prove_with_lookup<F, EF, B, Challenger>(
         &self,
         preprocessed: &[Option<&Table<F>>],
         tables: &[&Table<F>],
         public_values: &[&[F]],
         lookup: LookupRuntime<EF>,
+        sliced_rounds: usize,
+        challenger: &mut Challenger,
+    ) -> (ZerocheckProof<F, EF>, Point<EF>)
+    where
+        F: TranscriptField,
+        EF: ExtensionField<F>,
+        A: BaseAir<F> + Air<SymbolicAirBuilder<F, EF>>,
+        B: ZerocheckBackend<F, EF, A>,
+        Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
+    {
+        self.prove_with_lookup_and_bus::<F, EF, B, Challenger>(
+            preprocessed,
+            tables,
+            public_values,
+            lookup,
+            None,
+            sliced_rounds,
+            challenger,
+        )
+    }
+
+    /// Prove AIR constraints, lookup links, and binary-bus shares in one sumcheck.
+    ///
+    /// The bus family is back-loaded like every short table.
+    ///
+    /// ```text
+    ///     rounds       : | missing prefix x_1 .. x_k | own rows x_(k+1) .. x_n |
+    ///     short share  : |    x_1 * ... * x_k        |  eq(q, x) * (f(x) - 1)  |
+    /// ```
+    ///
+    /// The prefix factor is the all-one-vertex selector of the missing coordinates.
+    /// Its Boolean-cube sum is one in every characteristic, including two.
+    ///
+    /// # Panics
+    ///
+    /// Every reason [`Self::prove_with_lookup`] panics for.
+    #[tracing::instrument(skip_all)]
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn prove_with_lookup_and_bus<F, EF, B, Challenger>(
+        &self,
+        preprocessed: &[Option<&Table<F>>],
+        tables: &[&Table<F>],
+        public_values: &[&[F]],
+        lookup: LookupRuntime<EF>,
+        bus: Option<BusFamily<'_, F, EF>>,
         sliced_rounds: usize,
         challenger: &mut Challenger,
     ) -> (ZerocheckProof<F, EF>, Point<EF>)
@@ -672,20 +741,25 @@ impl<'a, A> AirZerocheck<'a, A> {
         let air_log_height = indices_by_height.keys().copied().max().unwrap();
         let log_height = air_log_height.max(lookup_point.num_variables());
 
-        // One driver covers the whole zerocheck, challenges and delegated sumcheck alike.
-        let mut transcript = ZerocheckProverTranscript::<Challenger, F, EF>::new(
-            challenger,
-            ZerocheckShape::new(
-                &degrees,
-                log_height,
-                lookup_point.num_variables(),
-                self.pow_bits,
-            ),
+        // Every bus share lives in one of the tables above, so the cube already covers it.
+        let bus_degree = bus.map(|family| family.context.composition_degree());
+        let mut shape = ZerocheckShape::new(
+            &degrees,
+            log_height,
+            lookup_point.num_variables(),
+            self.pow_bits,
         );
+        if let Some(degree) = bus_degree {
+            shape = shape.with_bus(degree);
+        }
+
+        // One driver covers the whole zerocheck, challenges and delegated sumcheck alike.
+        let mut transcript = ZerocheckProverTranscript::<Challenger, F, EF>::new(challenger, shape);
         let ZerocheckChallenges {
             alpha,
             beta,
             eta,
+            lambda,
             tau,
         } = transcript.challenges(lookup_point.as_slice());
         let tau = Point::new(tau);
@@ -739,11 +813,33 @@ impl<'a, A> AirZerocheck<'a, A> {
             })
             .peekable();
 
-        let claimed_sum = eta * lookup_claimed_sum;
+        // The bus family carries its own equality weight, anchored at the product-tree point.
+        // Its running claim is kept apart, since the AIR stages never see it.
+        let mut bus_family = bus.map(|family| {
+            let claim = family
+                .output
+                .batched_terminal_claim(lambda)
+                .expect("the prover's own product-tree output has one claim per direction");
+            let prover = BusCompositionProver::new(
+                family.context,
+                family.output,
+                tables,
+                preprocessed,
+                public_values,
+                lambda,
+                log_height,
+            );
+            (prover, claim)
+        });
+        let bus_claim = bus_family.as_ref().map_or(EF::ZERO, |&(_, claim)| claim);
+        let air_claimed_sum = eta * lookup_claimed_sum;
+        let claimed_sum = air_claimed_sum + lambda * bus_claim;
 
         // A transmitted round polynomial is one degree wider than the internal one.
         // The zerocheck's equality weight contributes that extra degree.
-        let transmitted_degree = max_degree + 1;
+        // A bus family of higher degree widens the shared message instead.
+        let air_degree = max_degree + 1;
+        let transmitted_degree = bus_degree.map_or(air_degree, |degree| air_degree.max(degree));
 
         // The rounds below drive the delegated sumcheck transcript.
         // They never touch the challenger directly, so this loop cannot drift from the
@@ -766,7 +862,8 @@ impl<'a, A> AirZerocheck<'a, A> {
             let mut claims = Vec::<EF>::new();
 
             // Before any height activates, the full lookup claim is dormant.
-            let mut pending_claim = claimed_sum;
+            // The bus claim is not part of it: the bus family tracks its own.
+            let mut pending_claim = air_claimed_sum;
 
             // All stages share the same global sumcheck point.
             // eq_prefix covers folded rounds; eq_suffix covers the tail still inside each state.
@@ -779,6 +876,8 @@ impl<'a, A> AirZerocheck<'a, A> {
             let interpolators = (0..=max_degree)
                 .map(RoundPolyInterpolator::<EF>::new)
                 .collect::<Vec<_>>();
+            let air_interpolator = RoundPolyInterpolator::<EF>::new(air_degree);
+            let bus_interpolator = bus_degree.map(RoundPolyInterpolator::<EF>::new);
 
             for round in 0..log_height {
                 let num_vars = log_height - round;
@@ -844,16 +943,49 @@ impl<'a, A> AirZerocheck<'a, A> {
                 // The verifier sees one global sumcheck round.
                 // Convert the accumulated internal q-evals back to eq-weighted standard evals.
                 let interpolator = interpolators.last().unwrap();
-                let (standard_evals, _) = standard_round_from_q_evals(
+                let air_claim =
+                    claims.iter().copied().sum::<EF>() + activating_claim + pending_claim;
+                let (mut standard_evals, _) = standard_round_from_q_evals(
                     interpolator,
                     &round_poly_acc,
-                    claims.iter().copied().sum::<EF>() + activating_claim + pending_claim,
+                    air_claim,
                     eq_prefix,
                     tau.as_slice()[round],
                 );
 
+                // Both families are raised to the shared degree, then added under lambda.
+                //
+                //     s(X) = s_air(X) + lambda * s_bus(X)
+                //
+                // Each extension reads its own family's running sum s(0) + s(1).
+                if air_degree < transmitted_degree {
+                    standard_evals = air_interpolator.extend_evals(
+                        &standard_evals,
+                        eq_prefix * air_claim,
+                        transmitted_degree,
+                    );
+                }
+                let bus_evals = bus_family.as_ref().zip(bus_interpolator.as_ref()).map(
+                    |((prover, claim), interpolator)| {
+                        let evals = prover.round_poly();
+                        let raised = interpolator.extend_evals(&evals, *claim, transmitted_degree);
+                        for (combined, bus) in standard_evals.iter_mut().zip(raised) {
+                            *combined += lambda * bus;
+                        }
+                        evals
+                    },
+                );
+
                 // Bind the polynomial, grind, and draw this round's challenge.
                 let (r, witness) = sumcheck.round(&standard_evals);
+
+                // The bus family folds through the same challenge as every AIR table.
+                if let (Some((prover, claim)), Some(interpolator), Some(evals)) =
+                    (bus_family.as_mut(), bus_interpolator.as_ref(), bus_evals)
+                {
+                    *claim = interpolator.eval(&evals, *claim, r);
+                    prover.fold(r);
+                }
 
                 // Store what the round produced alongside what it bound.
                 proof.round_polys.push(standard_evals);
@@ -1165,6 +1297,43 @@ impl<'a, A> AirZerocheck<'a, A> {
         A: Air<SymbolicAirBuilder<F, EF>>,
         Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
     {
+        self.verify_reduction_with_lookup_and_bus(
+            sumcheck,
+            log_heights,
+            public_values,
+            lookup,
+            None,
+            challenger,
+        )
+    }
+
+    /// Verify the shared sumcheck with lookup links and binary-bus shares coupled in.
+    ///
+    /// The starting claim is rebuilt from the two reductions that ran before it.
+    ///
+    /// ```text
+    ///     claim = eta * lookup + lambda * (push + lambda * pull)
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Every reason [`Self::verify_reduction_with_lookup`] rejects for.
+    /// Returns an error when the product-tree output carries the wrong number of claims.
+    pub(crate) fn verify_reduction_with_lookup_and_bus<F, EF, Challenger>(
+        &self,
+        sumcheck: &GenericDegreeProof<F, EF>,
+        log_heights: &[usize],
+        public_values: &[&[F]],
+        lookup: Option<&AirLinkClaim<EF>>,
+        bus: Option<BusFamily<'_, F, EF>>,
+        challenger: &mut Challenger,
+    ) -> Result<ZerocheckReduction<EF>, ZerocheckError>
+    where
+        F: TranscriptField,
+        EF: ExtensionField<F>,
+        A: Air<SymbolicAirBuilder<F, EF>>,
+        Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
+    {
         assert!(!self.airs.is_empty(), "zerocheck requires at least one AIR");
         assert_eq!(
             self.airs.len(),
@@ -1199,9 +1368,12 @@ impl<'a, A> AirZerocheck<'a, A> {
         validate_lookup_links(&degrees, lookup)?;
 
         // One extra degree for the eq weight the sumcheck carries.
-        let degree = degrees.iter().copied().map(AirDegrees::max).max().unwrap() + 1;
+        // A bus family of higher degree widens the shared message instead.
+        let bus_degree = bus.map(|family| family.context.composition_degree());
+        let air_degree = degrees.iter().copied().map(AirDegrees::max).max().unwrap() + 1;
+        let degree = bus_degree.map_or(air_degree, |bus_degree| air_degree.max(bus_degree));
 
-        if lookup.is_none() && sumcheck.claimed_sum != EF::ZERO {
+        if lookup.is_none() && bus.is_none() && sumcheck.claimed_sum != EF::ZERO {
             return Err(ZerocheckError::NonZeroClaimedSum);
         }
 
@@ -1209,21 +1381,37 @@ impl<'a, A> AirZerocheck<'a, A> {
         let lookup_tail = lookup.map_or(&[][..], |lookup| lookup.point.as_slice());
 
         // One driver covers the whole zerocheck, challenges and delegated sumcheck alike.
-        let mut transcript = ZerocheckVerifierTranscript::<Challenger, F, EF>::new(
-            challenger,
-            ZerocheckShape::new(&degrees, max_log_height, lookup_tail.len(), self.pow_bits),
-        );
+        let mut shape =
+            ZerocheckShape::new(&degrees, max_log_height, lookup_tail.len(), self.pow_bits);
+        if let Some(bus_degree) = bus_degree {
+            shape = shape.with_bus(bus_degree);
+        }
+        let mut transcript =
+            ZerocheckVerifierTranscript::<Challenger, F, EF>::new(challenger, shape);
         let ZerocheckChallenges {
             alpha,
             beta,
             eta,
+            lambda,
             tau,
         } = transcript.challenges(lookup_tail);
 
-        // The claim the sumcheck starts from is fixed by the reduction, so it is checked here.
+        // Lambda is drawn after the product tree fixed both terminal claims.
+        // A malformed output is rejected before any sumcheck work.
+        let bus_claim = match bus.map(|family| family.output.batched_terminal_claim(lambda)) {
+            Some(Ok(claim)) => claim,
+            Some(Err(error)) => {
+                transcript.abort();
+                return Err(ZerocheckError::BusClaim(error));
+            }
+            None => EF::ZERO,
+        };
+
+        // The claim the sumcheck starts from is fixed by the reductions, so it is checked here.
         //
         // Releasing the completeness check keeps this rejection the only failure.
-        let expected_claim = lookup.map_or(EF::ZERO, |lookup| eta * lookup.claimed_sum);
+        let expected_claim =
+            lookup.map_or(EF::ZERO, |lookup| eta * lookup.claimed_sum) + lambda * bus_claim;
         if sumcheck.claimed_sum != expected_claim {
             transcript.abort();
             return Err(ZerocheckError::ClaimedSumMismatch);
@@ -1242,6 +1430,7 @@ impl<'a, A> AirZerocheck<'a, A> {
             alpha,
             beta,
             eta,
+            lambda,
             tau,
             point,
             final_sum,
@@ -1302,6 +1491,48 @@ impl<'a, A> AirZerocheck<'a, A> {
         log_heights: &[usize],
         public_values: &[&[F]],
         lookup: Option<&AirLinkClaim<EF>>,
+    ) -> Result<(), ZerocheckError>
+    where
+        F: Field,
+        EF: ExtensionField<F>,
+        A: VerifierAir<F, EF>,
+    {
+        self.check_constraint_with_lookup_and_bus(
+            reduction,
+            main,
+            preprocessed,
+            log_heights,
+            public_values,
+            lookup,
+            None,
+        )
+    }
+
+    /// Close the shared sumcheck with lookup links and binary-bus shares coupled in.
+    ///
+    /// Both families are rebuilt from the same opened values at the same point.
+    ///
+    /// ```text
+    ///     final_sum = eq(tau, r) * g_air(r) + lambda * g_bus(r)
+    /// ```
+    ///
+    /// The bus family never goes through the AIR folder.
+    /// Its product-tree terminal claims are therefore authenticated only here.
+    ///
+    /// # Errors
+    ///
+    /// Every reason [`Self::check_constraint_with_lookup`] rejects for.
+    /// Returns an error when a bus declaration cannot be evaluated from the openings.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn check_constraint_with_lookup_and_bus<F, EF>(
+        &self,
+        reduction: &ZerocheckReduction<EF>,
+        main: &[TableOpening<'_, EF>],
+        preprocessed: &[TableOpening<'_, EF>],
+        log_heights: &[usize],
+        public_values: &[&[F]],
+        lookup: Option<&AirLinkClaim<EF>>,
+        bus: Option<BusFamily<'_, F, EF>>,
     ) -> Result<(), ZerocheckError>
     where
         F: Field,
@@ -1436,8 +1667,32 @@ impl<'a, A> AirZerocheck<'a, A> {
             }
         }
 
+        // Every opening group was checked against its declared width above.
+        // The bus evaluator can therefore index any column a declaration names.
+        let bus_term = match bus {
+            Some(family) => {
+                let main = main.iter().map(|opening| opening.local).collect::<Vec<_>>();
+                let preprocessed = preprocessed
+                    .iter()
+                    .map(|opening| opening.local)
+                    .collect::<Vec<_>>();
+                family
+                    .context
+                    .terminal_composition(
+                        family.output,
+                        reduction.lambda,
+                        &reduction.point,
+                        &main,
+                        &preprocessed,
+                        public_values,
+                    )
+                    .map_err(ZerocheckError::BusBinding)?
+            }
+            None => EF::ZERO,
+        };
+
         let eq_at_point = Point::eval_eq(&reduction.tau, reduction.point.as_slice());
-        if reduction.final_sum != eq_at_point * g {
+        if reduction.final_sum != eq_at_point * g + reduction.lambda * bus_term {
             return Err(ZerocheckError::FinalSumMismatch);
         }
         Ok(())
@@ -1456,6 +1711,8 @@ pub struct ZerocheckReduction<EF> {
     pub beta: EF,
     /// Random scalar separating lookup-link expressions from ordinary constraints.
     pub eta: EF,
+    /// Random scalar batching the binary-bus family, or zero when no bus shares the sumcheck.
+    pub lambda: EF,
     /// Zerocheck point sampled before the sumcheck.
     pub tau: Vec<EF>,
     /// Bound sumcheck point with every variable fixed to one challenge.

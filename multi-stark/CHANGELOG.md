@@ -13,6 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Breaking:** `MultiStarkShape::new` takes a `has_bus` flag and `MultiStarkShape` gains a `has_bus` field.
 - **Breaking:** `VerificationError` and `ProvingError` gain binary-bus variants, and `BusBindingError` is re-exported.
 - Regenerated the pinned WHIR proof fixture for the new proof shape.
+- **Breaking:** Binary-bus shares join the AIR zerocheck in one back-loaded sumcheck.
+  `MultiStarkProof::bus` holds the product-tree proof alone, bus tables open only at the zerocheck point,
+  `ZerocheckShape`, `ZerocheckChallenges` and `ZerocheckReduction` gain the bus batching fields,
+  `ZerocheckError` gains `BusClaim` and `BusBinding`, and the separate bus-composition errors are removed.
 
 ## [0.7.0] - 2026-09-04
 ### Merged PRs

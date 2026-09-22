@@ -16,7 +16,7 @@ Its debugger replays symbolic declarations and reports unmatched tuples with the
 
 The standalone reduction returns unauthenticated terminal claims.
 
-`p3-multi-stark` binds them to committed trace columns with a composition sumcheck and prescribed-point openings.
+`p3-multi-stark` binds them to committed trace columns inside its shared zerocheck sumcheck, then checks them against the openings at the zerocheck point.
 
 ## The declaration surface
 

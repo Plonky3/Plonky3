@@ -10,12 +10,9 @@ use p3_field::PrimeCharacteristicRing;
 use p3_field::{ExtensionField, Field};
 use p3_lookup::InteractionSymbolicBuilder;
 use p3_sumcheck::PrescribedPointPcs;
-use p3_sumcheck::generic_degree::RoundProver;
 
 use crate::ProverInstances;
 use crate::backend::{GenericBackend, ZerocheckBackend};
-use crate::bus::composition::BusCompositionProver;
-use crate::bus::transcript::{BusCompositionProverTranscript, BusCompositionShape};
 use crate::bus::{BusBindingError, BusContext};
 use crate::config::{Commitment, MultiStarkConfig, PcsProverError, ProverData};
 use crate::folder::ProverAir;
@@ -24,10 +21,10 @@ use crate::instance::{ProverParts, RunPoints, trace_suffix};
 use crate::logup_star::LogupStarProof;
 use crate::lookup::prove_lookup;
 use crate::opening::TableOpening;
-use crate::proof::{BusProof, IndexedLookupProof, MultiStarkProof};
+use crate::proof::{IndexedLookupProof, MultiStarkProof};
 use crate::security::{SecurityError, assess_statement};
 use crate::transcript::{MultiStarkProverTranscript, MultiStarkShape};
-use crate::zerocheck::AirZerocheck;
+use crate::zerocheck::{AirZerocheck, BusFamily};
 
 /// What a test may substitute for what the indexed reduction reads.
 ///
@@ -110,9 +107,9 @@ where
 ///     1. bind batched preprocessed commitment (if any)
 ///     2. commit(main trace tables)  -> the scheme absorbs the main commitment
 ///     3. bind public values, one step per instance
-///     4. binary bus (if any)        -> delegated, leaves one composition point
+///     4. binary bus (if any)        -> delegated, leaves two terminal claims
 ///     5. lookup reduction (if any)  -> delegated
-///     6. zerocheck reduction        -> delegated, yields bound point r
+///     6. shared sumcheck            -> delegated, AIR and bus families, yields point r
 ///     7. indexed reduction (if any) -> delegated, leaves claims at two further points
 ///     8. open main tables           -> delegated, openings bind every terminal claim
 ///     9. open preprocessed tables (if any)
@@ -406,7 +403,8 @@ where
     #[cfg(not(test))]
     let bus_tables = tables.clone();
 
-    // 4. Reduce each planned bus product and bind its terminal claims by composition sumcheck.
+    // 4. Reduce each planned bus product to its two terminal claims.
+    // Nothing authenticates them yet; the shared sumcheck below binds them to the tables.
     let bus_round = transcript
         .bus_argument(|challenger| {
             let context = bus
@@ -414,67 +412,34 @@ where
                 .expect("the transcript describes a bus argument");
             // Checking widths once per AIR keeps a caller mistake out of the row loop below.
             context.check_tables(&bus_tables, &preprocessed_tables, &public_values)?;
-            let (product, output) = context.plan().prove::<C::Val, C::Challenge, _>(
-                |challenges| {
-                    context.materialize(
-                        &bus_tables,
-                        &preprocessed_tables,
-                        &public_values,
-                        challenges,
-                    )
-                },
-                challenger,
-            )?;
-            let degree = context.composition_degree();
-            let num_variables = context.max_num_variables();
-            let mut composition_transcript =
-                BusCompositionProverTranscript::<_, C::Val, C::Challenge>::new(
-                    challenger,
-                    BusCompositionShape {
-                        num_variables,
-                        degree,
-                        pow_bits,
+            context
+                .plan()
+                .prove::<C::Val, C::Challenge, _>(
+                    |challenges| {
+                        context.materialize(
+                            &bus_tables,
+                            &preprocessed_tables,
+                            &public_values,
+                            challenges,
+                        )
                     },
-                );
-            let direction = composition_transcript.direction_challenge();
-            // The driver refuses to be dropped mid-pattern, so it is released first.
-            let claimed_sum = match output.batched_terminal_claim(direction) {
-                Ok(claimed_sum) => claimed_sum,
-                Err(error) => {
-                    composition_transcript.abort();
-                    return Err(error.into());
-                }
-            };
-            let mut prover = BusCompositionProver::new(
-                context,
-                &output,
-                &bus_tables,
-                &preprocessed_tables,
-                &public_values,
-                direction,
-            );
-            let (composition, point) = composition_transcript.sumcheck(|challenger| {
-                prover.prove::<C::Val, _>(challenger, num_variables, degree, pow_bits, claimed_sum)
-            });
-            composition_transcript.finish();
-            Ok::<_, ProvingError<PcsProverError<C>>>((
-                BusProof {
-                    product,
-                    composition,
-                },
-                output,
-                point,
-            ))
+                    challenger,
+                )
+                .map_err(ProvingError::<PcsProverError<C>>::from)
         })
         .transpose();
-    let (bus_proof, bus_point) = match bus_round {
-        Ok(Some((proof, _output, point))) => (Some(proof), Some(point)),
+    let (bus_proof, bus_output) = match bus_round {
+        Ok(Some((proof, output))) => (Some(proof), Some(output)),
         Ok(None) => (None, None),
         Err(error) => {
             transcript.abort();
             return Err(error);
         }
     };
+    let bus_family = bus
+        .as_ref()
+        .zip(bus_output.as_ref())
+        .map(|(context, output)| BusFamily { context, output });
 
     // 5. Materialize the lookup fractions and reduce them, inside the delegation bracket.
     // The resulting claim feeds the coupled AIR sumcheck below.
@@ -488,16 +453,20 @@ where
         )
     });
 
-    // 6. Reduce all AIR constraints to one batched sumcheck and one bound point.
+    // 6. Reduce AIR constraints, lookup links, and bus shares to one sumcheck and one point.
     // The committed prover opens columns through the commitment schemes below, so
     // the zerocheck's own opened values are not used as the final proof openings.
+    //
+    // Under test the bus tables may stand in for the committed ones.
+    // The closing check then meets openings the sumcheck never folded, and rejects.
     let zerocheck = AirZerocheck::with_profiles(&airs, &proving_key.air_profiles, pow_bits);
     let (zerocheck_proof, point) = transcript.zerocheck(|challenger| {
-        zerocheck.prove_with_lookup::<C::Val, C::Challenge, B, _>(
+        zerocheck.prove_with_lookup_and_bus::<C::Val, C::Challenge, B, _>(
             &preprocessed_tables,
-            &tables,
+            &bus_tables,
             &public_values,
             lookup_data,
+            bus_family,
             config.sliced_rounds(),
             challenger,
         )
@@ -589,12 +558,11 @@ where
     drop(preprocessed_tables);
 
     // 8. Open each main trace table at every point a claim was left at.
-    let points = RunPoints::new(&point, indexed_output.as_ref(), bus_point.as_ref());
+    let points = RunPoints::new(&point, indexed_output.as_ref());
     let opening = transcript.main_opening(|challenger| {
-        let schedule =
-            instances.main_schedule(indexed_plan.as_ref(), bus.as_ref(), |role, rows| {
-                trace_suffix(points.at(role), rows)
-            });
+        let schedule = instances.main_schedule(indexed_plan.as_ref(), |role, rows| {
+            trace_suffix(points.at(role), rows)
+        });
         config.pcs().open_at(
             prover_data,
             schedule.protocol(),
@@ -617,10 +585,9 @@ where
             .preprocessed
             .as_ref()
             .expect("preprocessed proving key is missing for an AIR with preprocessed columns");
-        let schedule =
-            instances.preprocessed_schedule(indexed_plan.as_ref(), bus.as_ref(), |role, rows| {
-                trace_suffix(points.at(role), rows)
-            });
+        let schedule = instances.preprocessed_schedule(indexed_plan.as_ref(), |role, rows| {
+            trace_suffix(points.at(role), rows)
+        });
         config.preprocessed_pcs().open_at(
             preprocessed.prover_data.clone(),
             schedule.protocol(),
@@ -682,6 +649,7 @@ mod tests {
     use super::*;
     use crate::config::PcsError;
     use crate::verifier::{VerificationError, verify};
+    use crate::zerocheck::ZerocheckError;
     use crate::{ProverInstance, ProverInstances, VerifierInstance, VerifierInstances, setup};
 
     type F = BabyBear;
@@ -1422,7 +1390,7 @@ mod tests {
             )
         };
 
-        // The new composition sumcheck accepts a balanced bus with both nonlinear payload
+        // The shared sumcheck accepts a balanced bus with both nonlinear payload
         // and nonconstant activation.
         verify_with(&proof, &push, &pull, 2).unwrap();
 
@@ -1434,9 +1402,9 @@ mod tests {
         let true_factor_mle = EF::from_u64(4) * r;
         assert_ne!(old_shortcut, true_factor_mle);
 
-        // Every proof-controlled layer message is bound by ProductGKR or composition sumcheck.
+        // Every proof-controlled layer message is bound by ProductGKR or the shared sumcheck.
         // Each tamper names the check that must catch it, so a weakened check shows up here.
-        proof.bus.as_mut().unwrap().product.product.roots[0] += EF::ONE;
+        proof.bus.as_mut().unwrap().product.roots[0] += EF::ONE;
         assert!(matches!(
             verify_with(&proof, &push, &pull, 2),
             Err(VerificationError::BusArgument(
@@ -1445,24 +1413,25 @@ mod tests {
                 })
             ))
         ));
-        proof.bus.as_mut().unwrap().product.product.roots[0] -= EF::ONE;
+        proof.bus.as_mut().unwrap().product.roots[0] -= EF::ONE;
 
-        proof.bus.as_mut().unwrap().composition.claimed_sum += EF::ONE;
+        // The shared claim is rebuilt from the product-tree terminal claims.
+        proof.sumcheck.claimed_sum += EF::ONE;
         assert!(matches!(
             verify_with(&proof, &push, &pull, 2),
-            Err(VerificationError::BusBinding(
-                BusBindingError::InitialClaimMismatch
+            Err(VerificationError::Zerocheck(
+                ZerocheckError::ClaimedSumMismatch
             ))
         ));
-        proof.bus.as_mut().unwrap().composition.claimed_sum -= EF::ONE;
+        proof.sumcheck.claimed_sum -= EF::ONE;
 
         // A changed round message moves the challenge the terminal point is drawn from.
-        proof.bus.as_mut().unwrap().composition.round_polys[0][0] += EF::ONE;
+        proof.sumcheck.round_polys[0][0] += EF::ONE;
         assert!(matches!(
             verify_with(&proof, &push, &pull, 2),
             Err(VerificationError::Opening(_))
         ));
-        proof.bus.as_mut().unwrap().composition.round_polys[0][0] -= EF::ONE;
+        proof.sumcheck.round_polys[0][0] -= EF::ONE;
 
         // Direction, activation, and block geometry are verifier statement metadata.
         let wrong_direction = ConditionalBusAir {
@@ -1480,14 +1449,16 @@ mod tests {
         ));
 
         // Dropping the activation stops the declaration reading the selector column.
-        // The bus batch then answers one column where the proof carries two.
+        // The bus family then closes on a factor the committed rows never produced.
         let wrong_activation = ConditionalBusAir {
             direction: BusDirection::Pull,
             conditional: false,
         };
         assert!(matches!(
             verify_with(&proof, &push, &wrong_activation, 2),
-            Err(VerificationError::Opening(_))
+            Err(VerificationError::Zerocheck(
+                ZerocheckError::FinalSumMismatch
+            ))
         ));
 
         // A height change moves the block prefix while retaining the same AIR declarations.
@@ -1496,7 +1467,7 @@ mod tests {
             Err(VerificationError::BusArgument(_))
         ));
 
-        // Alter only the prescribed bus-opening answer while retaining its proof shape.
+        // Alter only the pull table's opened answer while retaining its proof shape.
         let batch = proof.opening.evals.last_mut().unwrap();
         let original = batch.clone();
         let mut current = batch.current().to_vec();
@@ -1522,6 +1493,42 @@ mod tests {
         fn eval(&self, builder: &mut AB) {
             let cell = builder.main().current_slice()[0];
             builder.when_first_row().assert_zero(cell);
+        }
+    }
+
+    /// Either a table declaring no bus, or one end of a conditional bus.
+    ///
+    /// One type lets a single batch mix both kinds of table.
+    #[derive(Clone, Copy)]
+    enum MixedAir {
+        /// A table whose first-row constraint is steeper than the bus composition.
+        Steep,
+        /// One end of the conditional-square bus.
+        Bus(ConditionalBusAir),
+    }
+
+    impl BaseAir<F> for MixedAir {
+        fn width(&self) -> usize {
+            match self {
+                Self::Steep => 1,
+                Self::Bus(air) => BaseAir::<F>::width(air),
+            }
+        }
+    }
+
+    impl<AB> Air<AB> for MixedAir
+    where
+        AB: BusInteractionBuilder<F = F>,
+    {
+        fn eval(&self, builder: &mut AB) {
+            match self {
+                Self::Steep => {
+                    // Degree six: the first-row selector times the fifth power of the cell.
+                    let cell: AB::Expr = builder.main().current_slice()[0].into();
+                    builder.when_first_row().assert_zero(cell.exp_u64(5));
+                }
+                Self::Bus(air) => air.eval(builder),
+            }
         }
     }
 
@@ -1588,13 +1595,13 @@ mod tests {
             ..Forgery::default()
         };
 
-        // The product reduction and the composition sumcheck both close on the substitute.
+        // The product reduction and the shared sumcheck both close on the substitute.
         //
         // Only the comparison against the opened columns sees the committed table at all.
         assert!(matches!(
             bus_verdict(&balanced, &unbalanced, Some(&forgery)),
-            Err(VerificationError::BusBinding(
-                BusBindingError::TerminalMismatch
+            Err(VerificationError::Zerocheck(
+                ZerocheckError::FinalSumMismatch
             ))
         ));
     }
@@ -1895,6 +1902,163 @@ mod tests {
             &mut challenger(),
         )
         .unwrap();
+    }
+
+    #[test]
+    fn the_security_report_charges_the_shared_sumcheck_at_the_bus_degree() {
+        let (config, push, pull, _, vk, _) = conditional_bus_fixture();
+        let instances = VerifierInstances::new(vec![
+            VerifierInstance::new(&push, &vk, 2, &[]),
+            VerifierInstance::new(&pull, &vk, 2, &[]),
+        ]);
+        let report = crate::security_report(&config, &instances).unwrap();
+        let bits = |label| {
+            report
+                .terms()
+                .iter()
+                .find(|term| term.label == label)
+                .map(|term| term.bits.bits())
+        };
+
+        // The bus family has no sumcheck of its own anymore.
+        assert_eq!(bits("binary-bus-composition-sumcheck"), None);
+        assert_eq!(bits("binary-bus-direction-batching"), None);
+
+        // Both terms lose the same candidate-list charge, so their gap is raw.
+        //
+        //     batching  = field - 1
+        //     sumcheck  = field - log2(rounds * degree)
+        //     gap       = log2(rounds * degree) - 1
+        let batching = bits("binary-bus-batching").unwrap();
+        let sumcheck = bits("constraint-sumcheck").unwrap();
+        let context = BusContext::<F, EF>::build(&[&push, &pull], &[2, 2])
+            .unwrap()
+            .unwrap();
+        let air_degree = crate::zerocheck::get_air_degrees::<F, EF, _>(&push).max() + 1;
+        let degree = air_degree.max(context.composition_degree());
+        assert!(context.composition_degree() > air_degree);
+        let charged = 2f64.powf(batching - sumcheck + 1.0);
+        assert!((charged - (2 * degree) as f64).abs() < 1e-6, "{charged}");
+    }
+
+    #[test]
+    fn a_noncanonical_terminal_value_count_rejects_without_unwinding() {
+        // A product-tree output carrying one terminal value has no push-then-pull reading.
+        let (_, push, pull, _, _, proof) = conditional_bus_fixture();
+        let context = BusContext::<F, EF>::build(&[&push, &pull], &[2, 2])
+            .unwrap()
+            .unwrap();
+        let output = p3_bus::BusReductionOutput {
+            challenges: p3_bus::BusChallenges {
+                fingerprint: Vec::new(),
+                offset: EF::ZERO,
+            },
+            product: p3_bus::ProductGkrOutput {
+                roots: Vec::new(),
+                point: Vec::new(),
+                values: vec![EF::ONE],
+            },
+        };
+
+        // Lambda has been drawn by then, so an early return must release the driver.
+        // A drop-time panic would unwind instead of returning the error below.
+        let airs = [&push, &pull];
+        let zerocheck = AirZerocheck::new(&airs, 0);
+        let error = zerocheck
+            .verify_reduction_with_lookup_and_bus::<F, EF, _>(
+                &proof.sumcheck,
+                &[2, 2],
+                &[&[], &[]],
+                None,
+                Some(BusFamily {
+                    context: &context,
+                    output: &output,
+                }),
+                &mut challenger(),
+            )
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            ZerocheckError::BusClaim(p3_bus::BusArgumentError::TerminalValueCount {
+                expected: 2,
+                actual: 1,
+            })
+        ));
+    }
+
+    #[test]
+    fn a_bus_below_a_taller_table_shares_its_sumcheck_and_opening_point() {
+        // A tall AIR without any bus sets the cube; both bus tables are four times shorter.
+        //
+        //     rounds : | r_0 r_1        | r_2 r_3      |
+        //     steep  : | own rows       | own rows     |
+        //     bus    : | x_0 * x_1 lift | own rows     |
+        //
+        // The steep AIR outranks the bus composition, so the bus message is the one raised.
+        let end = |direction| {
+            MixedAir::Bus(ConditionalBusAir {
+                direction,
+                conditional: true,
+            })
+        };
+        let steep = MixedAir::Steep;
+        let push = end(BusDirection::Push);
+        let pull = end(BusDirection::Pull);
+        let airs = [&steep, &push, &pull];
+        let context = BusContext::<F, EF>::build(&airs, &[4, 2, 2])
+            .unwrap()
+            .unwrap();
+        let air_degree = crate::zerocheck::get_air_degrees::<F, EF, _>(&steep).max() + 1;
+        assert!(air_degree > context.composition_degree());
+        let config = config(5, FOLDING);
+        let (pk, vk) = setup(&config, &airs, &mut challenger()).unwrap();
+        let bus_rows = || {
+            let cells = [1, 2, 3, 4, 1, 1, 1, 1].map(F::from_u64).to_vec();
+            Table::new(RowMajorMatrix::new(cells, 4))
+        };
+        let mut proof = prove(
+            &config,
+            ProverInstances::new(vec![
+                ProverInstance::new(
+                    airs[0],
+                    Table::new(RowMajorMatrix::new(vec![F::ZERO; 16], 16)),
+                    &pk,
+                    &[],
+                ),
+                ProverInstance::new(airs[1], bus_rows(), &pk, &[]),
+                ProverInstance::new(airs[2], bus_rows(), &pk, &[]),
+            ]),
+            0,
+            &mut challenger(),
+        )
+        .unwrap();
+        let verify_with = |proof: &MultiStarkProof<TestConfig>| {
+            verify(
+                &config,
+                VerifierInstances::new(vec![
+                    VerifierInstance::new(airs[0], &vk, 4, &[]),
+                    VerifierInstance::new(airs[1], &vk, 2, &[]),
+                    VerifierInstance::new(airs[2], &vk, 2, &[]),
+                ]),
+                proof,
+                0,
+                &mut challenger(),
+            )
+        };
+        verify_with(&proof).unwrap();
+
+        // One sumcheck leaves one point, so each table opens exactly one batch there.
+        assert_eq!(proof.sumcheck.round_polys.len(), 4);
+        assert_eq!(proof.opening.evals.len(), 3);
+
+        // Round zero is dormant for the bus, yet its message still carries the bus family.
+        // Moving it moves every later challenge, so the openings no longer match.
+        proof.sumcheck.round_polys[0][0] += EF::ONE;
+        assert!(matches!(
+            verify_with(&proof),
+            Err(VerificationError::Opening(_))
+        ));
     }
 
     #[test]

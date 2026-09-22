@@ -1,10 +1,11 @@
-//! Sumcheck binding product-GKR leaf claims to committed trace polynomials.
+//! Bus family of the shared AIR sumcheck, binding product-GKR leaf claims to committed traces.
 //!
-//! For each direction, ProductGKR leaves a claim `L(q)`. This module proves
+//! For each direction, ProductGKR leaves a claim `L(q)`. This family proves
 //! `L(q) - 1` equals the weighted sum of the rowwise bus factors minus one.
 //! Short tables are lifted with `eq(prefix, 1^k)`, whose Boolean-cube sum is one.
 //!
-//! The terminal expression is checked only after its source columns open from the PCS.
+//! The family runs inside the zerocheck sumcheck, over the same cube and challenges.
+//! Its terminal expression is checked against the same openings the AIR constraints read.
 //!
 //! Round zero lifts every source column into the challenge field before any folding.
 //!
@@ -174,6 +175,10 @@ where
     EF: ExtensionField<F>,
 {
     /// Build the formal polynomial whose cube sum must equal the ProductGKR claims.
+    ///
+    /// # Arguments
+    ///
+    /// - `num_variables`: width of the shared cube, at least the tallest bus table.
     pub(crate) fn new(
         context: &'a BusContext<F, EF>,
         output: &BusReductionOutput<EF>,
@@ -181,8 +186,9 @@ where
         preprocessed: &[Option<&Table<F>>],
         public_values: &[&[F]],
         direction_challenge: EF,
+        num_variables: usize,
     ) -> Self {
-        let num_variables = context.max_num_variables();
+        debug_assert!(num_variables >= context.max_num_variables());
         let weights = output.challenges.fingerprint_weights();
         let mut airs = (0..tables.len()).map(|_| None).collect::<Vec<_>>();
 
@@ -447,6 +453,24 @@ mod tests {
             profile.interactions()[0].factor_degree_multiple_with_transition(1),
             2
         );
+    }
+
+    #[test]
+    fn the_all_one_vertex_lift_sums_to_one_in_characteristic_two() {
+        // A share two variables short of the cube is lifted by chi(x) = x_0 * x_1.
+        //
+        //     sum over {0,1}^2 of chi  = 1        only (1, 1) survives
+        //     sum over {0,1}^2 of 1    = 4 = 0    in characteristic two
+        //
+        // The constant lift would erase the share; the selector keeps it intact.
+        let vertex = |index: usize, bit: usize| BinaryField128::from_bool((index >> bit) & 1 == 1);
+        let selector_sum = (0..4)
+            .map(|index| vertex(index, 0) * vertex(index, 1))
+            .sum::<BinaryField128>();
+        let constant_sum = (0..4).map(|_| BinaryField128::ONE).sum::<BinaryField128>();
+
+        assert_eq!(selector_sum, BinaryField128::ONE);
+        assert_eq!(constant_sum, BinaryField128::ZERO);
     }
 
     #[test]
