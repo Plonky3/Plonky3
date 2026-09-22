@@ -101,23 +101,48 @@ through an opaque head and the obligation becomes unprovable. Where the
 generated file wraps a dependency symbol in `of_isOk`, a total body is forced —
 the choice is only ever *which* total body, never body-versus-assumption.
 
-**These transcriptions are now unchecked.** `SanityCheck.lean`, which verified
-them against upstream's own `const assert!`s and against the mathematical specs,
-has been removed. Nothing in the pipeline would notice if one of these drifted
-from upstream; only `PRIME`, `MONTY_BITS` and `TWO_ADICITY` are covered, by the
-theorems in `spec/`. Re-reading them against upstream is a manual audit step.
+**Read this table as a worklist, not as a list of things we got right.** Every
+row is a stand-in for an extraction that has not happened yet. A hand
+transcription is the weakest artifact in this tree — it is the one place where
+a human decided what the Rust means and nothing in the build disagrees — so
+each row carries a standing obligation that is discharged only when the owning
+crate is extracted and consumed as a Lake dependency. That is what the
+"Retired by" column names.
 
-| Symbol | Upstream | Checked by |
-|---|---|---|
-| `utils.to_monty` | `utils.rs:7-9` | **nothing** — read it against upstream by hand |
-| `Impl.new` | `monty_31.rs:51` | **nothing** |
-| `Impl.new_array`, `Impl.new_2d_array` | `monty_31.rs:88`, `101` | the length assertions in the extraction |
-| `MontyParameters.MONTY_MASK` | `data_traits.rs:23` | **nothing** |
-| `TwoAdicData.ODD_FACTOR` | `data_traits.rs:93` | **nothing** |
-| `BarrettParameters.PRIME_I128`, `.PSEUDO_INV` | `data_traits.rs:54-55` | **nothing** |
-| `p3_mds.util.first_row_to_first_col` | `mds/src/util.rs:52-62` | **nothing** — see below |
-| `p3_field.dup.Dup.dup` | blanket `impl<T: Copy>`, body `*self` | faithful by inspection |
-| `hax_ext` `AsRef.as_ref` | `rust_primitives.unsize` **is** this coercion | faithful by inspection |
+`SanityCheck.lean`, which checked these against upstream's own `const assert!`s,
+has been removed. Its replacement is
+[`check-transcriptions.py`](check-transcriptions.py): it reads the Rust,
+computes what each constant must be, `#eval`s the Lean and diffs. It is **not**
+run by CI or by `build-proofs.sh` — [`SYNC.md`](SYNC.md) step 3a tells you to run
+it by hand. Its two strengths of check are not worth the same and it labels
+each row accordingly:
+
+- **`[rust]`** — the expected value is read straight out of the Rust source.
+  This detects drift: change the Rust and the check fails.
+- **`[formula]`** — the script re-implements a Rust formula. This catches
+  Lean-side drift and disagreement between two independent transcriptions, but
+  both could be wrong the same way. Strictly weaker.
+
+| Symbol | Upstream | Checked by | Retired by |
+|---|---|---|---|
+| `utils.to_monty` | `utils.rs:7-9` | `check-transcriptions.py` `[formula]`, 6 sample points | `p3-monty-31` |
+| `Impl.new` | `monty_31.rs:51` | `check-transcriptions.py` `[formula]`, 6 sample points | `p3-monty-31` |
+| `Impl.new_array`, `Impl.new_2d_array` | `monty_31.rs:88`, `101` | the length assertions in the extraction; body shared with `Impl.new` | `p3-monty-31` |
+| `MontyParameters.MONTY_MASK` | `data_traits.rs:23` | `check-transcriptions.py` `[formula]` | `p3-monty-31` |
+| `TwoAdicData.ODD_FACTOR` | `data_traits.rs:93` | `check-transcriptions.py` `[formula]` | `p3-monty-31` |
+| `BarrettParameters.N`, `.PRIME_I128`, `.PSEUDO_INV`, `.MASK` | `data_traits.rs:53-56` | `check-transcriptions.py` — `N` `[rust]`, the rest `[formula]` | `p3-monty-31` |
+| `p3_mds.util.first_row_to_first_col` | `mds/src/util.rs:52-62` | `check-transcriptions.py` `[rust]`, all six tables — see below | **`p3-mds`** |
+| `p3_field.dup.Dup.dup` | blanket `impl<T: Copy>`, body `*self` | **nothing** — faithful by inspection | `p3-field` |
+| `hax_ext` `AsRef.as_ref` | `rust_primitives.unsize` **is** this coercion | **nothing** — faithful by inspection | — (Hax library shadow; never retires) |
+
+The two inspection-only rows have no evaluable data, so no probe can reach
+them. They are also the two smallest claims in the table.
+
+Retiring a row moves the trust rather than removing it: `p3-monty-31`'s own
+extraction will have its own interface stubs for `p3-field`, with their own
+TCB. The boundary moves outward and a human transcription is replaced by
+machine output, which is a real gain — but this is a chain, not a terminus, and
+the last link is always Layer 2.
 
 `new_array`/`new_2d_array`/`first_row_to_first_col` use `Vector.ofFn`, not
 `Vector.map`: `Array.map`'s `size` does not reduce definitionally, which blocks
@@ -130,13 +155,18 @@ the length assertions. This is load-bearing.
 the tree where a wrong dependency body would corrupt *data* rather than leave a
 function unmodelled — and it carried exactly that defect through first review,
 as `pure v`, making all six constants hold the first row where the Rust holds
-the first column. Its "checked by **nothing**" is worth reading carefully: the six
-`of_isOk` obligations above it constrain the body to be *total and
-kernel-reducible*, not to be the *right permutation*. The identity body
-discharged all six too. The current values were checked once, by hand, by
-parsing the six row literals out of `baby-bear/src/mds.rs`, applying Rust's
-`col[i] = row[N - i]` outside Lean, and diffing against `#eval` of each
-extracted constant; all six agreed. Nothing re-runs that.
+the first column.
+
+That defect is the reason this whole subsection is worded as it is. The six
+`of_isOk` obligations sitting above those constants look like verification and
+are not: they constrain the body to be *total and kernel-reducible*, never to
+be the *right permutation*. The identity discharged all six. A green
+`lake build` is not, and has never been, a fidelity check on a transcription.
+`check-transcriptions.py` covers this row at `[rust]` strength — it parses the
+six row literals out of `baby-bear/src/mds.rs`, applies `col[i] = row[N - i]`
+outside Lean and diffs against `#eval` — and it has been regression-tested in
+both directions: restoring the identity body fails all six rows, and
+perturbing a literal in the Rust fails the corresponding row.
 
 `MONTY_MASK`, `ODD_FACTOR`, `PRIME_I128` and `PSEUDO_INV` are written with total
 arithmetic rather than hax's fallible `<<<?` / `cast_op`. These are class
@@ -161,7 +191,7 @@ witnesses (`mds.Impl`, `mds.Impl_Permutation` and their two `AssociatedTypes`
 companions) and three Poseidon1/2 constructors (`p3_poseidon1.Impl_1.new`,
 `p3_poseidon2.Impl.new`, `p3_poseidon2.Impl_4.new`). They assert an inhabitant
 exists without saying which. 9 behavioural + 7 structural = **16** `opaque`
-declarations; recount with the regex in [`SYNC.md`](SYNC.md) step 3, since a
+declarations; recount with the regex in [`SYNC.md`](SYNC.md) step 3b, since a
 bare `grep -c opaque` also matches the prose in these files.
 
 The `Permutation` witnesses supply their `Clone`/`Sync` parent clauses
@@ -327,12 +357,15 @@ The three live directions, in order of value:
 
 1. **Model the six ring operations.** They are the core assumption and they also
    unblock `mul_w_default`. Everything about BabyBear arithmetic is downstream.
-2. **Extract `p3-monty-31` for real** and consume it as a Lake dependency (the
-   pattern `keccak`/`blake3` use for `p3_symmetric` in the fork). That collapses
-   the 666-line monty-31 file, and replaces the hand-transcribed
-   `first_row_to_first_col` with the extracted one — moving it out of the
-   "checked by nothing" table rather than merely making it correct. It also
-   makes `exp_1725656503` real instead of an opaque.
+2. **Extract the dependency crates for real** and consume them as Lake
+   dependencies (the pattern `keccak`/`blake3` use for `p3_symmetric` in the
+   fork). This is the "Retired by" column of the layer-3 table, in order of
+   yield: `p3-monty-31` retires six of the nine rows and collapses the 666-line
+   monty-31 file; `p3-mds` retires `first_row_to_first_col` — note it is
+   `p3-mds` that owns it (`mds/src/util.rs`), not `p3-monty-31`; `p3-field`
+   retires `Dup.dup` and makes `exp_1725656503` real instead of an opaque.
+   Each one replaces a human transcription with machine output, which is a
+   larger gain than making any individual body correct.
 3. **Upstream the two hax bugs** (`def _`, the hoisted-helper name collision),
    each worth one patch hunk.
 
@@ -356,6 +389,13 @@ Banked so far, worth keeping as the regression baseline:
       `extraction/p3_baby_bear/`
       (comments in `p3_field.lean` mention the word; no declaration uses it).
 - [ ] Every `opaque` in `p3_baby_bear/` appears in a layer-3 table.
+- [ ] `./check-transcriptions.py` exits 0. It builds first, so a stale olean
+      cannot make it pass; a green `lake build` alone proves nothing about
+      whether a transcribed body matches the Rust.
+- [ ] Every row of the layer-3 faithful-bodies table is either covered by
+      `check-transcriptions.py` or explicitly marked inspection-only, and each
+      row's `Retired by` crate is still the crate that owns the upstream
+      definition.
 - [ ] `patches/check-patches.sh` exits 0 — every patch declares `Cost:`, its
       declared hunk count matches its diff, and the set applies with zero fuzz.
 - [ ] `040-sampling-bits-native-decide` is the ONLY patch whose `Cost:` is not
