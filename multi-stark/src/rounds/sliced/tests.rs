@@ -2294,3 +2294,81 @@ fn a_prefix_fold_matches_the_multilinear_interpolation() {
         }
     }
 }
+
+/// Every row pair a tile reads, in the tower's scalar rows and in the polynomial basis's lane
+/// groups, beside the plane fold of the two words it joins.
+///
+/// One tile lays out every word pair in turn. A few words carry a high plane, so the tile's
+/// reads switch between the plane pairs and the low plane alone from one pair to the next, and
+/// the prefixes span one and two corner groups.
+#[test]
+fn a_reused_tile_reads_the_plane_fold_of_every_row_pair() {
+    let lanes = <Ghash128 as Field>::Packing::WIDTH;
+    for prefix_len in [3, 4] {
+        let (mut trace, _) = plane_fold_trace_fixture(prefix_len + LANE_VARIABLES + 3, 5, true);
+        let challenges = (0..prefix_len)
+            .map(|index| Tower::from_repr(0x51 + index as u128))
+            .collect::<Vec<_>>();
+        let words = (trace.cells.len() / trace.width) >> prefix_len;
+        let pairs = words / ROW_HALVES;
+        // Pair one's high word and pair three's low word each set one high-plane bit.
+        for (corner, word, column) in [(1, 1 + pairs, 2), ((1 << prefix_len) - 1, 3, 4)] {
+            trace.cells[(corner * words + word) * trace.width + column][1] |= 1 << 17;
+        }
+
+        let tower = PlaneFold::<Tower>::new::<Gf4, Tower>(&trace, &challenges);
+        let poly = PlaneFold::<Ghash128>::new::<Gf4, Tower>(&trace, &challenges);
+        let mut tower_tile = RowTile::new(tower.corners, trace.width);
+        let mut poly_tile = RowTile::new(poly.corners, trace.width);
+        let mut rows = Scratch::<Tower, Tower>::new(&[], &[], trace.width, None);
+        let mut groups =
+            PackedScratch::<PackedRepr<Tower, Ghash128>, PackedRepr<Tower, Ghash128>>::new(
+                &[],
+                &[],
+                trace.width,
+                None,
+            );
+        let (mut lo, mut hi) = (
+            vec![Tower::ZERO; SLICED_LANES],
+            vec![Tower::ZERO; SLICED_LANES],
+        );
+        let (mut poly_lo, mut poly_hi) = (
+            vec![Ghash128::ZERO; SLICED_LANES],
+            vec![Ghash128::ZERO; SLICED_LANES],
+        );
+        for pair in 0..pairs {
+            tower_tile.fill(&tower, pair, &[]);
+            poly_tile.fill(&poly, pair, &[]);
+            assert_eq!(
+                tower_tile.high,
+                pair % 2 == 1,
+                "pair {pair} of {prefix_len}"
+            );
+            assert_eq!(poly_tile.high, pair % 2 == 1, "pair {pair} of {prefix_len}");
+            for lane in 0..SLICED_LANES {
+                tower_tile.read_row(&tower, lane, &[], &mut rows);
+                for column in 0..trace.width {
+                    tower.fold_word(&trace.cells, column, pair, &mut lo);
+                    tower.fold_word(&trace.cells, column, pair + pairs, &mut hi);
+                    assert_eq!(rows.local_point[column], lo[lane], "lane {lane}");
+                    assert_eq!(rows.local_diff[column], hi[lane] - lo[lane], "lane {lane}");
+                }
+            }
+            for lane in (0..SLICED_LANES).step_by(lanes) {
+                poly_tile.read_lane_group(&poly, lane, &[], &mut groups);
+                for column in 0..trace.width {
+                    poly.fold_word(&trace.cells, column, pair, &mut poly_lo);
+                    poly.fold_word(&trace.cells, column, pair + pairs, &mut poly_hi);
+                    for step in 0..lanes {
+                        let row = lane + step;
+                        assert_eq!(groups.local_point[column].0.as_slice()[step], poly_lo[row]);
+                        assert_eq!(
+                            groups.local_diff[column].0.as_slice()[step],
+                            poly_hi[row] - poly_lo[row]
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
