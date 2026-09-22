@@ -20,9 +20,11 @@
 //!
 //! Every stride is the block's own width.
 //!
-//! Two instances can therefore never reach the same word or the same relation.
+//! Two instances therefore never reach the same word or the same relation.
 //!
-//! That follows from the arithmetic, so no runtime check has to enforce it.
+//! That follows from the arithmetic alone, once the slot is known to be in range.
+//!
+//! Readdressing checks the slot against that width, so an out-of-range one is refused.
 //!
 //! # Why instance-major
 //!
@@ -54,7 +56,7 @@ use thiserror::Error;
 
 use crate::constraint::{AndConstraint, IntegerMulConstraint, ZeroConstraint};
 use crate::index::{Segment, ValueIndex};
-use crate::system::{ConstraintKind, ConstraintSystem, ShapeError, SystemError};
+use crate::system::{ConstraintKind, ConstraintSystem, SystemError};
 use crate::word::Word;
 
 /// Number of relation families a statement can declare.
@@ -120,6 +122,28 @@ pub enum CompositionError {
         /// The rejected instance index.
         instance: usize,
         /// The number of declared instances.
+        instances: usize,
+    },
+    /// A slot index reaches past the width of one instance's block.
+    #[error(
+        "call {call} gives an instance {segment:?} width of {slots}, so slot {slot} is outside it"
+    )]
+    UnknownSlot {
+        /// The call whose slot was requested.
+        call: usize,
+        /// The segment the slot addresses.
+        segment: Segment,
+        /// The rejected slot index.
+        slot: u32,
+        /// The slots one instance of the call owns.
+        slots: usize,
+    },
+    /// A call declares more instances than the compact address space can index.
+    #[error("call {call} declares {instances} instances, which exceeds u32::MAX")]
+    TooManyInstances {
+        /// The call whose count is rejected.
+        call: usize,
+        /// The rejected instance count.
         instances: usize,
     },
 }
@@ -339,7 +363,15 @@ impl<W: Word> Composition<W> {
         let mut relation_counts = [0_usize; FAMILIES];
         let mut bases = Vec::with_capacity(calls.len());
 
-        for call in &calls {
+        for (call, index) in calls.iter().zip(0_usize..) {
+            // A count past the compact index space is refused before it is laid out.
+            if u32::try_from(call.instances).is_err() {
+                return Err(CompositionError::TooManyInstances {
+                    call: index,
+                    instances: call.instances,
+                });
+            }
+
             bases.push(CallBase {
                 public: public_len,
                 witness: witness_len,
@@ -449,33 +481,6 @@ impl<W: Word> Composition<W> {
         kind: ConstraintKind,
     ) -> Result<usize, CompositionError> {
         Ok(self.base(call)?.constraint[kind.code() as usize])
-    }
-
-    /// Checks the composed segment lengths against a supplied statement.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error naming the segment whose length differs.
-    pub const fn check_shape(
-        &self,
-        public_len: usize,
-        witness_len: usize,
-    ) -> Result<(), ShapeError> {
-        if public_len != self.public_len() {
-            return Err(ShapeError {
-                segment: Segment::Public,
-                expected: self.public_len(),
-                actual: public_len,
-            });
-        }
-        if witness_len != self.witness_len() {
-            return Err(ShapeError {
-                segment: Segment::Witness,
-                expected: self.witness_len(),
-                actual: witness_len,
-            });
-        }
-        Ok(())
     }
 
     /// Returns one instance's interface words inside a composed public segment.
@@ -645,9 +650,13 @@ impl<W: Word> Composition<W> {
 
     /// Readdresses one component-local index into the composed segment.
     ///
+    /// The slot is checked against the width of one instance's block.
+    ///
+    /// Without that check a slot past the width would reach the next instance.
+    ///
     /// # Errors
     ///
-    /// Returns an error when the call or the instance does not exist.
+    /// Returns an error when the call, the instance, or the slot does not exist.
     pub fn resolve(
         &self,
         call: usize,
@@ -656,12 +665,27 @@ impl<W: Word> Composition<W> {
     ) -> Result<ValueIndex, CompositionError> {
         let base = *self.base(call)?;
         let component = &self.check_instance(call, instance)?.component;
+
+        // A slot outside the block is another instance's word, so it is refused.
+        let slots = match index.segment() {
+            Segment::Public => component.interface_slots(),
+            Segment::Witness => component.local_slots(),
+        };
+        if index.position() as usize >= slots {
+            return Err(CompositionError::UnknownSlot {
+                call,
+                segment: index.segment(),
+                slot: index.position(),
+                slots,
+            });
+        }
+
         let position = self.position(&base, component, instance, index);
         Ok(match index.segment() {
             Segment::Public => ValueIndex::public(position),
             Segment::Witness => ValueIndex::witness(position),
         }
-        .expect("a composed position was bounded when the layout was built"))
+        .expect("an in-range slot of a laid-out call has a representable position"))
     }
 
     /// Computes the composed word position of one component-local index.

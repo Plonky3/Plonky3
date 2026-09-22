@@ -354,8 +354,8 @@ impl<W: Word> CompiledKeyLayout<W> {
         for (call, index) in composition.calls().iter().zip(0_usize..) {
             // One compilation of the body serves every instance of the call.
             let compiled = Self::new(call.component().body())?;
-            let instances =
-                KeyCompileError::bound(call.instances(), Segment::Witness, LayoutComponent::Keys)?;
+            let instances = u32::try_from(call.instances())
+                .expect("a laid-out composition bounded every instance count");
             let strides = SegmentPiece::strides(call, index)?;
 
             public.push(SegmentPiece {

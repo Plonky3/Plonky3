@@ -49,7 +49,7 @@ impl<W: PackedWord> OperationColumns<W> {
                         columns.extend(component.body(), values, |slot| {
                             composition
                                 .resolve(index, instance, slot)
-                                .expect("the layout bounded every call and instance")
+                                .expect("a checked body only names slots the call declares")
                         });
                     }
                 }

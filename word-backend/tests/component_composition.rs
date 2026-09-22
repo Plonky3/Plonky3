@@ -20,8 +20,9 @@ use p3_keccak::Keccak256Hash;
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_symmetric::{CompressionFunctionFromHasher, SerializingHasher};
 use p3_word::{
-    AndConstraint, Component, ComponentCall, Composition, ConstraintSystem, Operand, Segment,
-    Shift, ShiftKind, ShiftedValue, ValueIndex, Word64, ZeroConstraint,
+    AndConstraint, Component, ComponentCall, Composition, ConstraintKind, ConstraintSystem,
+    IntegerMulConstraint, Operand, Segment, Shift, ShiftKind, ShiftedValue, ValueIndex, Word64,
+    ZeroConstraint,
 };
 use p3_word_backend::{PackedWitness, Statement, WordProof, WordProofError, WordProofKey};
 
@@ -254,55 +255,155 @@ fn a_composed_key_and_its_lowered_key_produce_the_same_proof() {
     );
 }
 
+/// Asserts one composition's compiled wiring equals its lowered statement's.
+fn assert_layout_matches(composition: Composition<Word64>, label: &str) {
+    let flat = composition
+        .lower()
+        .expect("the lowered system is well formed");
+    let composed = Statement::from(composition)
+        .compiled_layout()
+        .expect("the composed layout compiles");
+    let lowered = Statement::from(flat)
+        .compiled_layout()
+        .expect("the lowered layout compiles");
+
+    assert_eq!(composed.witness().len(), lowered.witness().len(), "{label}");
+    assert_eq!(composed.public().len(), lowered.public().len(), "{label}");
+
+    for (segment, composed, lowered) in [
+        (Segment::Public, composed.public(), lowered.public()),
+        (Segment::Witness, composed.witness(), lowered.witness()),
+    ] {
+        let resolved = |layout: &p3_word_backend::CompiledSegment<Word64>, word| {
+            layout.keys(word).map(|keys| {
+                keys.map(|key| {
+                    (
+                        key.operation(),
+                        key.shifts(),
+                        key.references().collect::<Vec<_>>(),
+                    )
+                })
+                .collect::<Vec<_>>()
+            })
+        };
+        for word in 0..lowered.len() {
+            assert_eq!(
+                resolved(composed, word),
+                resolved(lowered, word),
+                "{label} {segment:?} word {word}"
+            );
+        }
+    }
+}
+
+/// A gadget with no interface at all, so its public block is empty.
+fn private_gadget() -> Component<Word64> {
+    let a = ValueIndex::witness(0).expect("slot fits");
+    let b = ValueIndex::witness(1).expect("slot fits");
+    let body = ConstraintSystem::new(
+        0,
+        2,
+        vec![ZeroConstraint::new(Operand::new(vec![
+            ShiftedValue::plain(a),
+            ShiftedValue::plain(b),
+        ]))],
+        vec![],
+        vec![],
+    )
+    .expect("the gadget addresses only its declared slots");
+    Component::new(body, 0, 0).expect("a gadget may expose no interface")
+}
+
 #[test]
 fn the_composed_layout_is_the_lowered_layout() {
     // The compiled wiring is what the reduction reads, so it must match exactly.
     for instances in [1_usize, 2, 3, 5] {
-        let composition = composition(instances);
-        let flat = composition
-            .lower()
-            .expect("the lowered system is well formed");
-
-        let composed = Statement::from(composition)
-            .compiled_layout()
-            .expect("the composed layout compiles");
-        let lowered = Statement::from(flat)
-            .compiled_layout()
-            .expect("the lowered layout compiles");
-
-        assert_eq!(composed.witness().len(), lowered.witness().len());
-        assert_eq!(composed.public().len(), lowered.public().len());
-        for (segment, composed, lowered) in [
-            (Segment::Public, composed.public(), lowered.public()),
-            (Segment::Witness, composed.witness(), lowered.witness()),
-        ] {
-            for word in 0..lowered.len() {
-                let actual = composed
-                    .keys(word)
-                    .expect("the composed segment covers this word")
-                    .map(|key| {
-                        (
-                            key.operation(),
-                            key.shifts(),
-                            key.references().collect::<Vec<_>>(),
-                        )
-                    })
-                    .collect::<Vec<_>>();
-                let expected = lowered
-                    .keys(word)
-                    .expect("the lowered segment covers this word")
-                    .map(|key| {
-                        (
-                            key.operation(),
-                            key.shifts(),
-                            key.references().collect::<Vec<_>>(),
-                        )
-                    })
-                    .collect::<Vec<_>>();
-                assert_eq!(actual, expected, "{segment:?} word {word}");
-            }
-        }
+        assert_layout_matches(composition(instances), "one call");
     }
+}
+
+#[test]
+fn the_composed_layout_matches_across_several_calls() {
+    // Every multi-call part of the merge needs a shape that exercises it.
+    let cases: [(&str, Vec<ComponentCall<Word64>>); 5] = [
+        (
+            "two calls of one gadget",
+            vec![
+                ComponentCall::new(gadget(), 2),
+                ComponentCall::new(gadget(), 3),
+            ],
+        ),
+        (
+            "two differently shaped gadgets",
+            vec![
+                ComponentCall::new(gadget(), 3),
+                ComponentCall::new(other_gadget(), 5),
+            ],
+        ),
+        (
+            "a dead call first",
+            vec![
+                ComponentCall::new(other_gadget(), 0),
+                ComponentCall::new(gadget(), 4),
+            ],
+        ),
+        (
+            "a dead call between two live ones",
+            vec![
+                ComponentCall::new(gadget(), 2),
+                ComponentCall::new(other_gadget(), 0),
+                ComponentCall::new(gadget(), 3),
+            ],
+        ),
+        (
+            "a gadget with an empty public block",
+            vec![
+                ComponentCall::new(private_gadget(), 3),
+                ComponentCall::new(gadget(), 2),
+                ComponentCall::new(private_gadget(), 1),
+            ],
+        ),
+    ];
+
+    for (label, calls) in cases {
+        let composition =
+            Composition::new(calls).expect("the fixture fits the compact address space");
+        assert_layout_matches(composition, label);
+    }
+}
+
+#[test]
+fn the_relation_base_advances_between_calls() {
+    // Two calls of one gadget: the second call's relations follow the first call's.
+    let composition = Composition::new(vec![
+        ComponentCall::new(gadget(), 2),
+        ComponentCall::new(gadget(), 3),
+    ])
+    .expect("the fixture fits the compact address space");
+
+    // Two instances of one zero relation and two products precede the second call.
+    assert_eq!(composition.constraint_base(1, ConstraintKind::Zero), Ok(2));
+    assert_eq!(composition.constraint_base(1, ConstraintKind::And), Ok(4));
+
+    // The first word of the second call names those shifted relation positions.
+    let layout = Statement::from(composition)
+        .compiled_layout()
+        .expect("the composed layout compiles");
+    let first_word_of_second_call = 4;
+    let positions = layout
+        .witness()
+        .keys(first_word_of_second_call)
+        .expect("the segment covers this word")
+        .flat_map(|key| {
+            key.references()
+                .map(|reference| reference.constraint())
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        positions.iter().all(|position| *position >= 2),
+        "second-call references {positions:?} did not advance past the first call"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -764,4 +865,156 @@ fn a_call_with_no_live_instances_addresses_nothing() {
     let (commitment, proof) =
         prove(&key, &scheme, &public, &witness).expect("the composed statement holds");
     assert!(verify(&key, &scheme, &commitment, &public, &proof).is_ok());
+}
+
+// ---------------------------------------------------------------------------
+// The relation family this protocol does not prove
+// ---------------------------------------------------------------------------
+
+/// A gadget declaring one full-width unsigned product, which is not proved.
+fn product_gadget() -> Component<Word64> {
+    let left = ValueIndex::public(0).expect("slot fits");
+    let right = ValueIndex::public(1).expect("slot fits");
+    let low = ValueIndex::witness(0).expect("slot fits");
+    let high = ValueIndex::witness(1).expect("slot fits");
+    let body = ConstraintSystem::new(
+        2,
+        2,
+        vec![],
+        vec![],
+        vec![IntegerMulConstraint::new(
+            Operand::single(ShiftedValue::plain(left)),
+            Operand::single(ShiftedValue::plain(right)),
+            Operand::single(ShiftedValue::plain(low)),
+            Operand::single(ShiftedValue::plain(high)),
+        )],
+    )
+    .expect("the gadget addresses only its declared slots");
+    Component::new(body, 2, 0).expect("two inputs span the interface")
+}
+
+#[test]
+fn a_composed_product_relation_leaves_no_key_to_price() {
+    // Four live instances declare four products, and the count names all of them.
+    let composition = Composition::new(vec![ComponentCall::new(product_gadget(), 4)])
+        .expect("the fixture fits the compact address space");
+    assert_eq!(composition.relation_counts(), [0, 0, 4]);
+    assert_eq!(
+        WordProofKey::new(composition),
+        Err(p3_word_backend::KeyCompileError::UnprovedRelation { count: 4 })
+    );
+
+    // A product beside a proved gadget is refused just the same.
+    let mixed = Composition::new(vec![
+        ComponentCall::new(gadget(), 2),
+        ComponentCall::new(product_gadget(), 1),
+    ])
+    .expect("the fixture fits the compact address space");
+    assert_eq!(
+        WordProofKey::new(mixed),
+        Err(p3_word_backend::KeyCompileError::UnprovedRelation { count: 1 })
+    );
+}
+
+#[test]
+fn a_dead_product_call_declares_no_product() {
+    // No live instance means no relation, so the statement is provable.
+    let padded = Composition::new(vec![
+        ComponentCall::new(product_gadget(), 0),
+        ComponentCall::new(gadget(), 4),
+    ])
+    .expect("the fixture fits the compact address space");
+    assert_eq!(padded.relation_counts(), [4, 8, 0]);
+
+    let (public, witness) = honest_values(&composition(4));
+    let key = WordProofKey::new(padded).expect("the composed key compiles");
+    let scheme = commitment_scheme(key.trace_variables());
+    let (commitment, proof) =
+        prove(&key, &scheme, &public, &witness).expect("the composed statement holds");
+    assert!(verify(&key, &scheme, &commitment, &public, &proof).is_ok());
+}
+
+// ---------------------------------------------------------------------------
+// Slot bounds
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_slot_past_the_block_width_cannot_reach_the_next_instance() {
+    // Fixture state: three instances, three interface slots and two private ones.
+    let composition = composition(3);
+
+    // The last valid private slot of instance zero is one below the block width.
+    assert_eq!(
+        composition.resolve(0, 0, ValueIndex::witness(1).unwrap()),
+        Ok(ValueIndex::witness(1).unwrap())
+    );
+
+    // One past it is instance one's first word, so it is refused rather than returned.
+    assert_eq!(
+        composition.resolve(0, 1, ValueIndex::witness(0).unwrap()),
+        Ok(ValueIndex::witness(2).unwrap())
+    );
+    assert_eq!(
+        composition.resolve(0, 0, ValueIndex::witness(2).unwrap()),
+        Err(p3_word::CompositionError::UnknownSlot {
+            call: 0,
+            segment: Segment::Witness,
+            slot: 2,
+            slots: 2,
+        })
+    );
+
+    // A slot far outside the whole segment is refused, not wrapped into it.
+    assert_eq!(
+        composition.resolve(0, 2, ValueIndex::witness(7).unwrap()),
+        Err(p3_word::CompositionError::UnknownSlot {
+            call: 0,
+            segment: Segment::Witness,
+            slot: 7,
+            slots: 2,
+        })
+    );
+
+    // A slot near the top of the index space returns an error instead of panicking.
+    assert_eq!(
+        composition.resolve(0, 2, ValueIndex::witness(u32::MAX as usize).unwrap()),
+        Err(p3_word::CompositionError::UnknownSlot {
+            call: 0,
+            segment: Segment::Witness,
+            slot: u32::MAX,
+            slots: 2,
+        })
+    );
+
+    // The interface is bounded by its own width, independently of the private one.
+    assert_eq!(
+        composition.resolve(0, 0, ValueIndex::public(2).unwrap()),
+        Ok(ValueIndex::public(2).unwrap())
+    );
+    assert_eq!(
+        composition.resolve(0, 0, ValueIndex::public(3).unwrap()),
+        Err(p3_word::CompositionError::UnknownSlot {
+            call: 0,
+            segment: Segment::Public,
+            slot: 3,
+            slots: 3,
+        })
+    );
+}
+
+#[test]
+fn an_instance_count_past_the_index_space_is_refused_by_the_layout() {
+    // An empty gadget bounds nothing through its widths, so the count is bounded itself.
+    let empty = Component::new(
+        ConstraintSystem::<Word64>::new(0, 0, vec![], vec![], vec![]).expect("an empty body"),
+        0,
+        0,
+    )
+    .expect("an empty gadget has an empty interface");
+
+    let instances = u32::MAX as usize + 1;
+    assert_eq!(
+        Composition::new(vec![ComponentCall::new(empty, instances)]),
+        Err(p3_word::CompositionError::TooManyInstances { call: 0, instances })
+    );
 }

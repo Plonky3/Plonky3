@@ -9,9 +9,12 @@
 //! For each count the table reports:
 //!
 //! - committed cells: bits of the padded Boolean trace the commitment covers;
-//! - opened values: evaluations the proof discharges through the commitment;
 //! - proof bytes: the serialized transcript record;
 //! - metadata entries: the compiled wiring each path has to store.
+//!
+//! The opening count is not a column, because it cannot vary.
+//!
+//! Both paths discharge the one point the proving routine passes to the commitment.
 //!
 //! Run it with `cargo run --release -p p3-word-backend --example component_scaling`.
 
@@ -128,8 +131,6 @@ fn commitment_scheme(trace_variables: usize) -> Scheme {
 struct Row {
     /// Bits of the padded Boolean trace the commitment covers.
     committed_cells: usize,
-    /// Evaluations the proof discharges through the commitment.
-    opened_values: usize,
     /// Serialized transcript record.
     proof_bytes: usize,
     /// Compiled wiring entries the path stores.
@@ -177,8 +178,6 @@ impl Row {
         Self {
             // The padded trace is one bit per lane of the committed cube.
             committed_cells: 1 << key.trace_variables(),
-            // The whole protocol ends at exactly one opened evaluation.
-            opened_values: 1,
             proof_bytes: postcard::to_allocvec(&proof)
                 .expect("the record serializes")
                 .len(),
@@ -190,8 +189,8 @@ impl Row {
 
 fn main() {
     println!(
-        "{:>6} {:>8} {:>12} {:>7} {:>11} {:>11} {:>11} {:>10} {:>10}",
-        "n", "witness", "cells", "opened", "bytes/in", "proof B", "meta in", "meta cmp", "prove ms",
+        "{:>6} {:>8} {:>12} {:>11} {:>11} {:>11} {:>10} {:>10}",
+        "n", "witness", "cells", "bytes/in", "proof B", "meta in", "meta cmp", "prove ms",
     );
 
     for instances in SWEEP {
@@ -207,15 +206,13 @@ fn main() {
 
         // The two paths describe one statement, so every proof figure must agree.
         assert_eq!(inline.committed_cells, composed.committed_cells);
-        assert_eq!(inline.opened_values, composed.opened_values);
         assert_eq!(inline.proof_bytes, composed.proof_bytes);
 
         println!(
-            "{:>6} {:>8} {:>12} {:>7} {:>11.2} {:>11} {:>11} {:>10} {:>10.1}",
+            "{:>6} {:>8} {:>12} {:>11.2} {:>11} {:>11} {:>10} {:>10.1}",
             instances,
             witness.len(),
             composed.committed_cells,
-            composed.opened_values,
             composed.proof_bytes as f64 / instances as f64,
             composed.proof_bytes,
             inline.metadata,

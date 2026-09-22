@@ -52,7 +52,7 @@ impl PackedWord for Word64 {
 
 /// A witness whose words retain the bit order consumed by the Boolean PCS.
 ///
-/// A word's bits occupy one contiguous run of binary lanes, least significant first.
+/// Bit `i` of word `w` occupies binary lane `word_bits * w + i`.
 ///
 /// Multilinear points place the within-word index in the trailing coordinates.
 ///
