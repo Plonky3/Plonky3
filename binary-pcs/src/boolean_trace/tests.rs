@@ -673,7 +673,7 @@ fn a_single_table_batch_uses_one_reduction_for_all_columns() {
         .unwrap();
 
     assert_eq!(proof.values.len(), 3);
-    assert_eq!(proof.opening.reductions.len(), 1);
+    assert_eq!(proof.opening.reduction.claims.len(), 1);
 }
 
 #[test]
@@ -733,7 +733,7 @@ fn each_route_emits_the_reductions_its_plan_counts() {
             .open_at(data, &protocol, &points, &mut prover_chal)
             .unwrap();
         assert_eq!(
-            proof.opening.reductions.len(),
+            proof.opening.reduction.claims.len(),
             route.num_reductions(),
             "{seed:#x}"
         );
@@ -801,7 +801,7 @@ fn complete_batches_support_multiple_points_and_width_one() {
         .open_at(data, &protocol, &points, &mut prover_chal)
         .unwrap();
     assert_eq!(proof.values.len(), 2);
-    assert_eq!(proof.opening.reductions.len(), 2);
+    assert_eq!(proof.opening.reduction.claims.len(), 2);
 
     let mut verifier_chal = challenger();
     scheme.observe_commitment(&commitment, &mut verifier_chal);
@@ -893,7 +893,7 @@ fn non_power_two_complete_batches_round_trip_below_and_above_packing_width() {
         let proof = scheme
             .open_at(data, &protocol, &points, &mut prover_chal)
             .unwrap();
-        assert_eq!(proof.opening.reductions.len(), num_batches);
+        assert_eq!(proof.opening.reduction.claims.len(), num_batches);
 
         let mut verifier_chal = challenger();
         scheme.observe_commitment(&commitment, &mut verifier_chal);
@@ -950,18 +950,17 @@ fn optimized_proofs_reject_each_column_tampering_reduction_tampering_and_point_r
                 &mut verifier_chal,
             )
             .unwrap_err();
-        // A value of the first batch is caught reading its claim off the element.
-        // A value of the second is caught when its surviving claim fails to close.
-        let expected = if index < 3 {
-            BitRingSwitchProofError::ClaimMismatch
-        } else {
-            BitRingSwitchProofError::FinalCheck
-        };
-        assert_eq!(reduction_error(refused), expected, "value {index}");
+        // Every claim's readings are checked against its own element before the shared rounds.
+        // So a value of either batch is caught reading its claim off the element.
+        assert_eq!(
+            reduction_error(refused),
+            BitRingSwitchProofError::ClaimMismatch,
+            "value {index}"
+        );
     }
 
     let mut tampered = proof.clone();
-    tampered.opening.reductions.pop();
+    tampered.opening.reduction.claims.pop();
     let mut verifier_chal = challenger();
     scheme.observe_commitment(&commitment, &mut verifier_chal);
     let refused = scheme
@@ -1203,7 +1202,7 @@ fn reordered_subset_batches_use_the_fallback_column_route() {
         )
         .unwrap();
     assert_eq!(proof.values.len(), 2);
-    assert_eq!(proof.opening.reductions.len(), 2);
+    assert_eq!(proof.opening.reduction.claims.len(), 2);
 
     let mut verifier_chal = challenger();
     scheme.observe_commitment(&commitment, &mut verifier_chal);
@@ -1263,7 +1262,7 @@ fn complete_successor_batches_round_trip_around_the_packing_width() {
             .open_at(data, &protocol, &points, &mut prover_chal)
             .unwrap();
         assert_eq!(proof.values.len(), 2 * width * num_batches);
-        assert_eq!(proof.opening.reductions.len(), num_batches);
+        assert_eq!(proof.opening.reduction.claims.len(), num_batches);
 
         let mut verifier_chal = challenger();
         scheme.observe_commitment(&commitment, &mut verifier_chal);
@@ -1386,7 +1385,7 @@ fn partial_successor_views_use_the_fallback_column_route() {
             )
             .unwrap();
         assert_eq!(proof.values.len(), current.len() + next.len());
-        assert_eq!(proof.opening.reductions.len(), claims);
+        assert_eq!(proof.opening.reduction.claims.len(), claims);
 
         let mut verifier_chal = challenger();
         scheme.observe_commitment(&commitment, &mut verifier_chal);
@@ -1450,7 +1449,7 @@ fn reordered_successor_views_keep_each_side_in_its_own_order() {
             )
             .unwrap();
         assert_eq!(proof.values.len(), current.len() + next.len());
-        assert_eq!(proof.opening.reductions.len(), claims);
+        assert_eq!(proof.opening.reduction.claims.len(), claims);
 
         let mut verifier_chal = challenger();
         scheme.observe_commitment(&commitment, &mut verifier_chal);
@@ -1697,7 +1696,7 @@ fn opening_routes_and_their_security_are_pinned() {
         assert_eq!(after_open, after_verify);
         assert_eq!(
             pinned_digest(&(&proof, after_open)),
-            "227c4eb378900f053ba51d57ba1668162309e0e8402522329aab065c82e48661"
+            "95bb155239e73df6f128fb1eac4a8971107886a49fb194ef27c2ba01bc35962e"
         );
 
         let security = <BooleanTracePcs<EF, MyMmcs, MyMmcs> as PrescribedPointPcs<
@@ -1705,10 +1704,11 @@ fn opening_routes_and_their_security_are_pinned() {
             MyChallenger,
         >>::prescribed_security(&scheme, &protocol)
         .unwrap();
-        assert_eq!(security.terms.len(), 3);
+        assert_eq!(security.terms.len(), 4);
         assert!((term_bits(&security, "column-batching") - 125.0).abs() < 1e-9);
-        assert!((term_bits(&security, "binary-pcs-opening") - 121.95560588064154).abs() < 1e-9);
-        assert!((term_bits(&security, "bit-ring-switch") - 123.09310940439148).abs() < 1e-9);
+        assert!((term_bits(&security, "binary-pcs-opening") - 121.97763218697155).abs() < 1e-9);
+        assert!((term_bits(&security, "bit-ring-switch") - 124.09310940439148).abs() < 1e-9);
+        assert!((term_bits(&security, "bit-ring-switch-claim-batching") - 128.0).abs() < 1e-9);
         assert!((security.log2_max_candidates - 0.0).abs() < 1e-9);
     }
 
@@ -1804,7 +1804,7 @@ fn opening_routes_and_their_security_are_pinned() {
         assert_eq!(after_open, after_verify);
         assert_eq!(
             pinned_digest(&(&proof, after_open)),
-            "a8773e76db42b1d14631b6ee21baa3ba5eece6dd4423ab6e754d28ada5f9e07c"
+            "7bff6b57739b0e69f24e7ece7dc4ced96212c9a1f0503262547f8d309a9484b5"
         );
 
         let security = <BooleanTracePcs<EF, MyMmcs, MyMmcs> as PrescribedPointPcs<
@@ -1812,9 +1812,13 @@ fn opening_routes_and_their_security_are_pinned() {
             MyChallenger,
         >>::prescribed_security(&scheme, &protocol)
         .unwrap();
-        assert_eq!(security.terms.len(), 2);
-        assert!((term_bits(&security, "binary-pcs-opening") - 121.77118130950412).abs() < 1e-9);
-        assert!((term_bits(&security, "bit-ring-switch") - 120.8401286632216).abs() < 1e-9);
+        assert_eq!(security.terms.len(), 3);
+        assert!((term_bits(&security, "binary-pcs-opening") - 121.97763218697155).abs() < 1e-9);
+        assert!((term_bits(&security, "bit-ring-switch") - 124.2995602818589).abs() < 1e-9);
+        assert!(
+            (term_bits(&security, "bit-ring-switch-claim-batching") - 124.67807190511263).abs()
+                < 1e-9
+        );
         assert!((security.log2_max_candidates - 0.0).abs() < 1e-9);
     }
 }

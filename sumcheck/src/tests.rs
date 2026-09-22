@@ -682,13 +682,17 @@ fn test_invalid_pow_witness() {
 ///
 /// The bit-alphabet reduction seeds over a binary tower field.
 /// Its separator has a different sponge alphabet, so it cannot travel either.
-const CRATE_PROTOCOL_NAMES: [(&str, &[u8]); 9] = [
+const CRATE_PROTOCOL_NAMES: [(&str, &[u8]); 10] = [
     ("quadratic", crate::transcript::NAME),
     ("hvzk", crate::zk::transcript::NAME),
     ("ring switch", crate::ring_switch::transcript::NAME),
     (
         "bit ring switch",
         crate::ring_switch::bits::transcript::NAME,
+    ),
+    (
+        "bit ring switch claims",
+        crate::ring_switch::bits::transcript::CLAIMS_NAME,
     ),
     ("generic degree", crate::generic_degree::transcript::NAME),
     (

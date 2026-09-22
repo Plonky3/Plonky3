@@ -27,7 +27,9 @@ use p3_merkle_tree::MerkleTreeMmcs;
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
 use p3_sumcheck::layout::{Table, plan_stacked_layout};
-use p3_sumcheck::ring_switch::bits::{BitPacking, BitRingSwitch, BitRingSwitchProofError};
+use p3_sumcheck::ring_switch::bits::{
+    BitPacking, BitRingSwitch, BitRingSwitchClaims, BitRingSwitchProofError,
+};
 use p3_sumcheck::{OpeningBatch, OpeningProtocol, PrescribedPointPcs, TableShape, TableSpec};
 use p3_symmetric::{CompressionFunctionFromHasher, SerializingHasher};
 use p3_whir::{SecurityAssumption, WhirDomain, WhirQueryPoint};
@@ -277,11 +279,12 @@ fn the_budget_grades_the_schedule_and_the_proof() {
 
     // What the claim count adds is fixed by the claims, not by the schedule.
     //
-    // Each brings its opened value and one reduction, whose size the packing's arity fixes.
+    // Each claim brings its element.
+    // The batch brings one run of rounds, its surviving value and the one opened value.
     let opening_only = pcs.proof_shape(0, false);
     assert_eq!(
         shape.sent_extension_elements - opening_only.sent_extension_elements,
-        2 * (128 + 2 * (LOG_BITS - ABSORBED) + 2)
+        2 * 128 + 2 * (LOG_BITS - ABSORBED) + 2
     );
     assert_eq!(shape.stir_queries, opening_only.stir_queries);
 
@@ -354,7 +357,7 @@ fn the_budget_grades_the_schedule_and_the_proof() {
 
 #[test]
 fn the_estimate_covers_the_reductions_and_not_the_opening_alone() {
-    // One reduction per claim rides along with the single opening, so the claim count moves it.
+    // One element per claim rides along with the single opening, so the claim count moves it.
     let pcs = whir_pcs(BinaryWhirProfile::proven_list_decoding(
         SECURITY_LEVEL,
         LOG_INV_RATE,
@@ -362,9 +365,10 @@ fn the_estimate_covers_the_reductions_and_not_the_opening_alone() {
     ));
     let two = pcs.proof_shape(2, false);
     let eight = pcs.proof_shape(8, false);
+    // The rounds, the surviving value and the opened value are the batch's, paid once.
     assert_eq!(
         eight.sent_extension_elements - two.sent_extension_elements,
-        6 * (128 + 2 * (LOG_BITS - ABSORBED) + 2)
+        6 * 128
     );
     // Sending carry and last triples the element each reduction puts on the wire.
     assert_eq!(
@@ -397,12 +401,12 @@ fn the_estimate_covers_the_reductions_and_not_the_opening_alone() {
 }
 
 #[test]
-fn a_non_first_reduction_over_another_witness_leaves_a_claim_the_commitment_does_not_open() {
-    // Invariant: the closing comparison is what ties the reductions to the commitment.
+fn a_batch_over_another_witness_leaves_a_claim_the_commitment_does_not_open() {
+    // Invariant: the closing comparison is what ties the batch to the commitment.
     //
-    // Mutation: reduce the middle claim over witness A and open witness B.
+    // Mutation: reduce the claims over witness A and open witness B.
     //
-    //     - transcript  A's reduction runs on the sponge that absorbed B's root
+    //     - transcript  A's batch runs on the sponge that absorbed B's root
     //     - reduction   replays and accepts, being a true proof about A
     //     - commitment  accepts, being a true opening of B
     //     - closing     the two surviving values at that point disagree
@@ -412,63 +416,49 @@ fn a_non_first_reduction_over_another_witness_leaves_a_claim_the_commitment_does
     let pcs = whir_pcs(profile);
     let inner = whir_prover(profile);
 
-    const FORGED: usize = 1;
     let points = points_at(0x5720, 3);
     let openings = current_openings(&points);
 
-    // Witness A supplies the packing the middle reduction runs over, B the root and the opening.
+    // Witness A supplies the packing the batch runs over, B the root and the opening.
     let (_, data_a) = pcs
         .commit_bits(&witness(0xAAAA), &mut challenger())
         .unwrap();
     let mut chal = challenger();
     let (root_b, data_b) = pcs.commit_bits(&witness(0xBBBB), &mut chal).unwrap();
-
     let packing_a = BitPacking::from_packed(data_a.table(0).poly(0)).unwrap();
-    let packing_b = BitPacking::from_packed(data_b.table(0).poly(0)).unwrap();
 
-    let mut reductions = Vec::with_capacity(points.len());
-    let mut readings = Vec::with_capacity(points.len());
-    let mut surviving_points = Vec::with_capacity(points.len());
-    let mut surviving_values = Vec::with_capacity(points.len());
-    for (index, point) in points.iter().enumerate() {
-        let packing = if index == FORGED {
-            &packing_a
-        } else {
-            &packing_b
-        };
-        let reduction = BitRingSwitch::new(point).unwrap();
-        let (sent, surviving_point, surviving_value) =
-            reduction.prove::<Ghash128, _, _>(packing, &mut chal);
-        readings.push(BitReadings {
-            current: Some(reduction.incoming_claim(&sent.tensor)),
+    // The batch is a true proof about A, played on B's sponge.
+    let claims = BitRingSwitchClaims::new(
+        points
+            .iter()
+            .map(|point| BitRingSwitch::new(point).unwrap())
+            .collect(),
+    )
+    .unwrap();
+    let (reduction, surviving_point, surviving_value) =
+        claims.prove::<Ghash128, _, _>(&packing_a, &mut chal);
+    let readings = claims
+        .reductions()
+        .iter()
+        .zip(&reduction.claims)
+        .map(|(switch, elements)| BitReadings {
+            current: Some(switch.incoming_claim(&elements.tensor)),
             next: None,
-        });
-        reductions.push(sent);
-        surviving_points.push(surviving_point);
-        surviving_values.push(surviving_value);
-    }
+        })
+        .collect::<Vec<_>>();
 
-    // The commitment then opens B at all three surviving points.
+    // The commitment then opens B at the surviving point, where A and B disagree.
     let opening = PrescribedPointPcs::<EF, MyChallenger>::open_at(
         &inner,
         data_b,
-        &protocol(points.len()),
-        &surviving_points,
+        &protocol(1),
+        &[surviving_point],
         &mut chal,
     )
     .unwrap();
+    assert_ne!(opening.evals[0].current()[0], surviving_value);
 
-    // The first claim agrees, so checking only the first pair would accept this forgery.
-    assert_eq!(opening.evals[0].current()[0], surviving_values[0]);
-    // The middle claims about the same point disagree, which is what is caught below.
-    assert_ne!(opening.evals[FORGED].current()[0], surviving_values[FORGED]);
-    // The final claim also agrees, isolating the forged non-first index.
-    assert_eq!(opening.evals[2].current()[0], surviving_values[2]);
-
-    let proof = BooleanWhirProof {
-        reductions,
-        opening,
-    };
+    let proof = BooleanWhirProof { reduction, opening };
     let mut verifier_chal = challenger();
     pcs.observe_commitment(&root_b, &mut verifier_chal);
     let refused = pcs
@@ -589,8 +579,9 @@ fn the_report_names_every_error_the_adapter_charges() {
     //
     // A prover therefore picks its member after seeing their challenges, so they pay for the list.
     assert!(security.log2_max_candidates > 0.0);
+    // The two claims share one reduction, so it is charged once.
     let alone = p3_security::multilinear::bit_ring_switch_tensors_term(
-        2,
+        1,
         1,
         ABSORBED,
         LOG_BITS - ABSORBED,
@@ -599,6 +590,17 @@ fn the_report_names_every_error_the_adapter_charges() {
     .bits
     .bits();
     assert!((reduction_bits(false) - (alone - security.log2_max_candidates)).abs() < 1e-9);
+
+    // Folding the two claims under lambda is charged beside it, over the same list.
+    let batching = security
+        .terms
+        .iter()
+        .find(|term| term.label == p3_security::BIT_RING_SWITCH_CLAIM_BATCHING_LABEL)
+        .unwrap()
+        .bits
+        .bits();
+    let lambda = p3_security::bit_ring_switch_claim_batching_error(2, 128).bits();
+    assert!((batching - (lambda - security.log2_max_candidates)).abs() < 1e-9);
 }
 
 /// The Boolean domain under its own identity, accepting every soundness regime.
@@ -712,7 +714,8 @@ fn a_boolean_trace_commits_and_opens_through_whir() {
     // The schedule must be priced, or a security-checked caller would refuse to prove at all.
     let security = PrescribedPointPcs::<EF, MyChallenger>::prescribed_security(&pcs, &protocol)
         .expect("the trace opening is priced");
-    // Several tables take the per-column route, which combines nothing and charges no batching.
+    // Several tables take the per-column route, which combines no columns.
+    // Its several claims still fold into one reduction under lambda, charged as its own term.
     assert_eq!(
         security
             .terms
@@ -721,7 +724,8 @@ fn a_boolean_trace_commits_and_opens_through_whir() {
             .collect::<Vec<_>>(),
         vec![
             p3_security::whir::WHIR_OPENING_LABEL,
-            p3_security::BIT_RING_SWITCH_LABEL
+            p3_security::BIT_RING_SWITCH_LABEL,
+            p3_security::BIT_RING_SWITCH_CLAIM_BATCHING_LABEL,
         ]
     );
 

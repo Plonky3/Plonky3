@@ -34,6 +34,7 @@
 //!     BitRingSwitch   one reduction, before the batching draw
 //!     BitRingSwitchBatch  the same reduction, after it
 //!     SuccessorTensors    the two elements a successor view adds past one element's rows
+//!     BitRingSwitchClaims     several claims at their own points, one sumcheck for all
 //! ```
 //!
 //! The reduction owns the two sides that run it, as methods over its own transcript.
@@ -56,6 +57,7 @@
 //! The payoff is that packing becomes a reinterpretation, not a computation.
 
 pub mod basis;
+pub mod claims;
 mod equality;
 pub mod packing;
 mod products;
@@ -64,6 +66,7 @@ pub mod tensor;
 pub mod transcript;
 
 pub use basis::Coefficients;
+pub use claims::{BitRingSwitchClaims, BitRingSwitchClaimsProof, ClaimElements};
 pub use packing::{BitPacking, BitPackingError, BitPackingView};
 pub use reduction::{
     BitRingSwitch, BitRingSwitchBatch, BitRingSwitchError, BitRingSwitchProof,
@@ -71,6 +74,7 @@ pub use reduction::{
 };
 pub use tensor::{BitTensor, MalformedBitTensor};
 pub use transcript::{
-    BitRingSwitchProverTranscript, BitRingSwitchShape, BitRingSwitchVerifierTranscript,
-    TranscriptWidth,
+    BitRingSwitchClaimsProverTranscript, BitRingSwitchClaimsShape,
+    BitRingSwitchClaimsVerifierTranscript, BitRingSwitchProverTranscript, BitRingSwitchShape,
+    BitRingSwitchVerifierTranscript, ClaimStatement, ClaimsDraws, TranscriptWidth,
 };

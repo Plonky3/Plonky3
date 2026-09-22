@@ -112,9 +112,10 @@ impl ProofShape {
 
     /// Read the shape of every bit-witness opening a schedule can produce for this many claims.
     ///
-    /// One reduction per claim travels beside the proximity opening.
+    /// One batched reduction travels beside a proximity opening of its one surviving point.
     ///
-    /// Each sends its element by rows, its own degree-two rounds, and the value it survives with.
+    /// Each claim sends its elements by rows.
+    /// The batch sends one run of degree-two rounds and the value it survives with.
     #[must_use]
     pub fn of_bit_readings<EF, Challenger>(
         config: &WhirConfig<EF, EF, Challenger>,
@@ -125,12 +126,15 @@ impl ProofShape {
         EF: Field + TowerLevel,
         Challenger: FieldChallenger<EF> + GrindingChallenger<Witness = EF>,
     {
-        let mut shape = Self::of(config, num_claims);
+        // The batch leaves one surviving claim, however many claims it folds.
+        let surviving = num_claims.min(1);
+        let mut shape = Self::of(config, surviving);
         // The element alone, or the element with carry and last.
         let num_tensors = if successor_tensors { 3 } else { 1 };
         let rows = num_tensors * BitTensor::<EF>::DIMENSION;
         // A Boolean prefix only removes rounds, so the packing's arity bounds them.
-        shape.sent_extension_elements += num_claims * (rows + 2 * config.num_variables() + 1);
+        shape.sent_extension_elements +=
+            num_claims * rows + surviving * (2 * config.num_variables() + 1);
         shape
     }
 
