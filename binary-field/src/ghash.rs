@@ -124,12 +124,14 @@ impl Ghash128 {
         unsafe { Vec::from_raw_parts(ptr.cast::<Self>(), len, capacity) }
     }
 
-    /// Tries to apply a runtime binary-linear map from tower coordinates into this basis.
+    /// Tries to apply an arbitrary `F_2`-linear map, given by its column images, to a batch.
     ///
     /// `images[j]` is the output image of input bit `j`, in the little-endian coordinate order.
+    /// The map need not be a change of basis: any linear map, invertible or not, is applied to the
+    /// raw bits of each input.
     /// A short or unsupported target returns `false` without touching `output`; equal lengths are
     /// required before that dispatch so an invalid call cannot be mistaken for a refusal.
-    pub fn try_map_tower_coordinates_into(
+    pub fn try_apply_linear_map_into(
         images: &[Self; 128],
         input: &[BinaryField128],
         output: &mut [Self],
@@ -776,7 +778,7 @@ mod tests {
         let poison = Ghash128::from_repr(u128::MAX);
         let mut output = vec![poison; len];
 
-        let accepted = Ghash128::try_map_tower_coordinates_into(&columns, &input, &mut output);
+        let accepted = Ghash128::try_apply_linear_map_into(&columns, &input, &mut output);
         assert_eq!(
             input, original,
             "the out-of-place map must not modify its source"
@@ -808,7 +810,7 @@ mod tests {
         let poison = Ghash128::from_repr(u128::MAX);
         let mut output = vec![poison; input.len()];
 
-        assert!(!Ghash128::try_map_tower_coordinates_into(
+        assert!(!Ghash128::try_apply_linear_map_into(
             &columns,
             &input,
             &mut output
@@ -826,7 +828,7 @@ mod tests {
                 .collect::<Vec<_>>();
             let poison = Ghash128::from_repr(u128::MAX);
             let mut output = vec![poison; len];
-            let accepted = Ghash128::try_map_tower_coordinates_into(&columns, &input, &mut output);
+            let accepted = Ghash128::try_apply_linear_map_into(&columns, &input, &mut output);
 
             #[cfg(all(
                 target_arch = "x86_64",
@@ -881,7 +883,7 @@ mod tests {
         for columns in maps {
             let poison = Ghash128::from_repr(u128::MAX);
             let mut output = vec![poison; input.len()];
-            let accepted = Ghash128::try_map_tower_coordinates_into(&columns, &input, &mut output);
+            let accepted = Ghash128::try_apply_linear_map_into(&columns, &input, &mut output);
             #[cfg(all(
                 target_arch = "x86_64",
                 target_feature = "gfni",
@@ -922,8 +924,7 @@ mod tests {
 
         let input_slice = &input[input_offset..input_offset + input_values.len()];
         let output_slice = &mut output[output_offset..output_offset + input_values.len()];
-        let accepted =
-            Ghash128::try_map_tower_coordinates_into(&columns, input_slice, output_slice);
+        let accepted = Ghash128::try_apply_linear_map_into(&columns, input_slice, output_slice);
         #[cfg(all(
             target_arch = "x86_64",
             target_feature = "gfni",
@@ -965,7 +966,7 @@ mod tests {
         let columns = [Ghash128::ZERO; 128];
         let input = [BinaryField128::ZERO; 1];
         let mut output = [Ghash128::ZERO; 0];
-        let _ = Ghash128::try_map_tower_coordinates_into(&columns, &input, &mut output);
+        let _ = Ghash128::try_apply_linear_map_into(&columns, &input, &mut output);
     }
 
     #[test]

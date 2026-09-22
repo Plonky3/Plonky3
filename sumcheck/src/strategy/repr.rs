@@ -283,7 +283,7 @@ impl FromTable<BinaryField128> for Ghash128 {
         input: &[BinaryField128],
         output: &mut [Self],
     ) -> bool {
-        Self::try_map_tower_coordinates_into(images, input, output)
+        Self::try_apply_linear_map_into(images, input, output)
     }
 }
 
