@@ -2394,6 +2394,12 @@ mod tests {
         derived_field_moves_the_seed("inner.final_folding_pow_bits", |c| {
             c.inner.final_folding_pow_bits += 1;
         });
+        derived_field_moves_the_seed("inner.final_queries", |c| {
+            c.inner.final_queries += 1;
+        });
+        derived_field_moves_the_seed("inner.final_pow_bits", |c| {
+            c.inner.final_pow_bits += 1;
+        });
         derived_field_moves_the_seed("round.ood_samples", |c| {
             c.inner.round_parameters[0].ood_samples += 1;
         });
@@ -2444,6 +2450,18 @@ mod tests {
         derived_field_moves_the_seed("switch_masks[0].domain_size", |c| {
             c.switch_masks[0].domain_size <<= 1;
         });
+    }
+
+    #[test]
+    fn the_label_binds_the_plain_terminal_and_the_base_case_the_randomized_one() {
+        let config = base_config();
+        let shape = ZkWhirShape::new(&config);
+
+        assert_eq!(shape.unreplayed_plain[3], config.inner.final_queries);
+        assert_eq!(shape.unreplayed_plain[4], config.inner.final_pow_bits);
+
+        assert_eq!(shape.base_case.source_queries, config.final_queries);
+        assert_eq!(shape.base_case.pow_bits, config.final_pow_bits);
     }
 
     #[test]

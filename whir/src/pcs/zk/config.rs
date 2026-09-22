@@ -540,4 +540,21 @@ mod tests {
         // (5 + 3).next_power_of_two() << 1 = 16.
         assert_eq!(shape.domain_size, 16);
     }
+
+    #[test]
+    fn base_case_spends_the_randomized_terminal_budget() {
+        let config = ZkWhirConfig::<EF, F, MyChallenger>::new(16, params(), zk_params()).unwrap();
+        let base = config.base_case_config();
+
+        assert_eq!(base.num_queries, config.final_queries);
+        assert_eq!(base.pow_bits, config.final_pow_bits);
+        assert_eq!(base.code.randomness_len, config.final_queries);
+
+        assert_ne!(config.final_queries, config.inner.final_queries);
+        assert_eq!(
+            (config.inner.final_queries, config.inner.final_pow_bits),
+            (5, 0)
+        );
+        assert_eq!((config.final_queries, config.final_pow_bits), (6, 0));
+    }
 }
