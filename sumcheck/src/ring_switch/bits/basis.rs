@@ -6,6 +6,8 @@ use core::marker::PhantomData;
 use p3_binary_field::TowerLevel;
 use p3_field::Field;
 
+use crate::strategy::FromTable;
+
 /// The widest tower level these coordinates hold.
 ///
 /// A fixed buffer of this width reads coordinates without allocating.
@@ -206,6 +208,40 @@ impl<EF: TowerLevel, A: Field> CoordinateSums<EF, A> {
             .map(|(table, byte)| table[usize::from(byte)])
             .sum()
     }
+
+    /// Applies this coordinate map to a batch, using a representation-specific bulk path when
+    /// one is available. The scalar sum remains the portable and small-batch fallback.
+    pub(crate) fn apply_into(&self, input: &[EF], output: &mut [A])
+    where
+        A: FromTable<EF>,
+    {
+        assert_eq!(
+            input.len(),
+            output.len(),
+            "input and output must have equal lengths"
+        );
+
+        #[cfg(all(
+            target_arch = "x86_64",
+            target_feature = "gfni",
+            target_feature = "avx512f",
+            target_feature = "avx512bw"
+        ))]
+        {
+            if Coefficients::<EF>::DIMENSION == 128 {
+                let images = core::array::from_fn(|coordinate| {
+                    self.tables[coordinate / 8][1 << (coordinate % 8)]
+                });
+                if A::try_map_coordinates_into(&images, input, output) {
+                    return;
+                }
+            }
+        }
+
+        for (destination, &value) in output.iter_mut().zip(input) {
+            *destination = self.sum(value);
+        }
+    }
 }
 
 /// The set bit positions of one byte, lowest first.
@@ -231,9 +267,10 @@ impl Iterator for SetBits {
 
 #[cfg(test)]
 mod tests {
+    use alloc::vec;
     use alloc::vec::Vec;
 
-    use p3_binary_field::{BinaryField16, BinaryField128};
+    use p3_binary_field::{BinaryField16, BinaryField128, Ghash128};
     use p3_field::PrimeCharacteristicRing;
     use proptest::prelude::*;
     use rand::rngs::SmallRng;
@@ -267,6 +304,67 @@ mod tests {
     fn coordinate_sums_are_the_weights_over_the_set_coordinates() {
         coordinate_sums_match_the_walk::<BinaryField128>(1);
         coordinate_sums_match_the_walk::<BinaryField16>(2);
+    }
+
+    #[test]
+    fn coordinate_sums_apply_into_matches_the_scalar_sum_for_a_large_batch() {
+        let mut rng = SmallRng::seed_from_u64(0xA991_5EED);
+        let weights = (0..Coefficients::<BinaryField128>::DIMENSION)
+            .map(|_| rng.random::<Ghash128>())
+            .collect::<Vec<_>>();
+        let sums = CoordinateSums::<BinaryField128, Ghash128>::new(&weights);
+        let input = (0..4096 + 63)
+            .map(|_| rng.random::<BinaryField128>())
+            .collect::<Vec<_>>();
+        let mut output = vec![Ghash128::from_repr(u128::MAX); input.len()];
+
+        sums.apply_into(&input, &mut output);
+
+        let expected = input
+            .iter()
+            .map(|&value| sums.sum(value))
+            .collect::<Vec<_>>();
+        assert_eq!(output, expected);
+    }
+
+    #[test]
+    fn coordinate_sums_apply_into_survives_repeated_rescaling() {
+        use super::super::equality::scaled_sums_into;
+
+        let mut rng = SmallRng::seed_from_u64(0x51A1_5CA1);
+        let weights = (0..Coefficients::<BinaryField128>::DIMENSION)
+            .map(|_| rng.random::<Ghash128>())
+            .collect::<Vec<_>>();
+        let sums = CoordinateSums::<BinaryField128, Ghash128>::new(&weights);
+        let input = (0..4096 + 17)
+            .map(|_| rng.random::<BinaryField128>())
+            .collect::<Vec<_>>();
+        let mut scaled = sums.clone();
+
+        for scale in [
+            BinaryField128::ZERO,
+            BinaryField128::ONE,
+            rng.random(),
+            rng.random(),
+        ] {
+            scaled_sums_into(&mut scaled, &sums, scale);
+            let mut output = vec![Ghash128::ZERO; input.len()];
+            scaled.apply_into(&input, &mut output);
+            let expected = input
+                .iter()
+                .map(|&value| sums.sum(scale * value))
+                .collect::<Vec<_>>();
+            assert_eq!(output, expected);
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "equal lengths")]
+    fn coordinate_sums_apply_into_rejects_mismatched_shapes() {
+        let sums = CoordinateSums::<BinaryField128, Ghash128>::new(&[Ghash128::ZERO; 128]);
+        let input = [BinaryField128::ZERO; 1];
+        let mut output = [Ghash128::ZERO; 0];
+        sums.apply_into(&input, &mut output);
     }
 
     #[test]

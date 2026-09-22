@@ -23,6 +23,7 @@ use p3_multilinear_util::poly::Poly;
 
 use crate::folder::{InteractionMultilinearFolder, MultilinearFolder, ProverAir};
 use crate::packed_ext::PackedRepr;
+use crate::rounds::sliced::SlicedStrategy;
 use crate::rounds::{AirOpenings, RoundStateBase, RoundStateExt};
 use crate::sliced::SlicedFolder;
 use crate::subfield::{SubfieldAcc, SubfieldVar};
@@ -277,7 +278,7 @@ where
 
     fn round0(state: &mut RoundStateBase<'_, '_, A, F, EF>, eq_suffix: &Poly<EF>) -> Vec<EF> {
         state
-            .round_poly_sliced::<S, R>(eq_suffix)
+            .round_poly_sliced_with_strategy::<S, R>(eq_suffix, SlicedStrategy::TensorBoundary)
             .or_else(|| state.round_poly_subfield::<S>(eq_suffix))
             .unwrap_or_else(|| state.round_poly(eq_suffix))
     }

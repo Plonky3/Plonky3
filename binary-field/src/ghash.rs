@@ -124,6 +124,35 @@ impl Ghash128 {
         unsafe { Vec::from_raw_parts(ptr.cast::<Self>(), len, capacity) }
     }
 
+    /// Tries to apply an arbitrary `F_2`-linear map, given by its column images, to a batch.
+    ///
+    /// `images[j]` is the output image of input bit `j`, in the little-endian coordinate order.
+    /// The map need not be a change of basis: any linear map, invertible or not, is applied to the
+    /// raw bits of each input.
+    /// A short or unsupported target returns `false` without touching `output`; equal lengths are
+    /// required before that dispatch so an invalid call cannot be mistaken for a refusal.
+    pub fn try_apply_linear_map_into(
+        images: &[Self; 128],
+        input: &[BinaryField128],
+        output: &mut [Self],
+    ) -> bool {
+        assert_eq!(
+            input.len(),
+            output.len(),
+            "input and output must have equal lengths"
+        );
+
+        let columns = images.map(Self::to_repr);
+        // SAFETY: both field types are repr(transparent) over u128; all bit patterns are valid
+        // for BinaryField128 and Ghash128. The slices have already been checked to have equal
+        // lengths, and the map kernel only writes output after a successful target dispatch.
+        let input_words =
+            unsafe { slice::from_raw_parts(input.as_ptr().cast::<u128>(), input.len()) };
+        let output_words =
+            unsafe { slice::from_raw_parts_mut(output.as_mut_ptr().cast::<u128>(), output.len()) };
+        clmul::try_map_tower_coordinates_into(&columns, input_words, output_words)
+    }
+
     /// Construct a field element from its little-endian byte representation.
     ///
     /// Every byte string of this length is a valid element.
@@ -534,6 +563,7 @@ impl Algebra<Gf2> for Ghash128 {}
 mod tests {
     extern crate std;
 
+    use std::vec;
     use std::vec::Vec;
 
     use p3_field::{Algebra, Field, PrimeCharacteristicRing, RawDataSerializable};
@@ -720,6 +750,223 @@ mod tests {
             values.reserve(100);
             assert_eq!(values.pop(), Some(Ghash128::from_repr(7)));
         }
+    }
+
+    /// An independent definition of an arbitrary binary linear map: XOR the columns selected
+    /// by the input's little-endian bits. This deliberately does not use a field conversion.
+    fn column_walk(columns: &[Ghash128; 128], input: BinaryField128) -> Ghash128 {
+        let mut output = Ghash128::ZERO;
+        let bits = input.to_repr();
+        for (index, &column) in columns.iter().enumerate() {
+            if (bits >> index) & 1 == 1 {
+                output += column;
+            }
+        }
+        output
+    }
+
+    #[test]
+    fn dynamic_coordinate_map_matches_an_independent_bit_column_oracle() {
+        // Reversed singleton columns make every input/output bit order observable. The length
+        // crosses the production threshold so native GFNI builds take the prepared path.
+        let columns = core::array::from_fn(|index| Ghash128::from_repr(1u128 << (127 - index)));
+        let len = 4096 + 63;
+        let input: Vec<BinaryField128> = (0..len)
+            .map(|index| BinaryField128::from_repr(1u128 << (index % 128)))
+            .collect();
+        let original = input.clone();
+        let poison = Ghash128::from_repr(u128::MAX);
+        let mut output = vec![poison; len];
+
+        let accepted = Ghash128::try_apply_linear_map_into(&columns, &input, &mut output);
+        assert_eq!(
+            input, original,
+            "the out-of-place map must not modify its source"
+        );
+        #[cfg(all(
+            target_arch = "x86_64",
+            target_feature = "gfni",
+            target_feature = "avx512f",
+            target_feature = "avx512bw"
+        ))]
+        assert!(accepted, "native GFNI must accept a batch at the threshold");
+        if accepted {
+            for (index, &value) in output.iter().enumerate() {
+                assert_eq!(
+                    value,
+                    column_walk(&columns, input[index]),
+                    "input bit {index}"
+                );
+            }
+        } else {
+            assert!(output.iter().all(|&value| value == poison));
+        }
+    }
+
+    #[test]
+    fn dynamic_coordinate_map_declines_short_inputs_without_touching_output() {
+        let columns = core::array::from_fn(|index| Ghash128::from_repr(index as u128));
+        let input = vec![BinaryField128::from_repr(7); 4095];
+        let poison = Ghash128::from_repr(u128::MAX);
+        let mut output = vec![poison; input.len()];
+
+        assert!(!Ghash128::try_apply_linear_map_into(
+            &columns,
+            &input,
+            &mut output
+        ));
+        assert!(output.iter().all(|&value| value == poison));
+    }
+
+    #[test]
+    fn dynamic_coordinate_map_handles_empty_and_dispatch_boundaries() {
+        let columns = core::array::from_fn(|index| Ghash128::from_repr(1u128 << (127 - index)));
+
+        for len in [0, 4095, 4096, 4097] {
+            let input = (0..len)
+                .map(|index| BinaryField128::from_repr(1u128 << (index % 128)))
+                .collect::<Vec<_>>();
+            let poison = Ghash128::from_repr(u128::MAX);
+            let mut output = vec![poison; len];
+            let accepted = Ghash128::try_apply_linear_map_into(&columns, &input, &mut output);
+
+            #[cfg(all(
+                target_arch = "x86_64",
+                target_feature = "gfni",
+                target_feature = "avx512f",
+                target_feature = "avx512bw"
+            ))]
+            assert_eq!(accepted, len >= 4096, "length {len}");
+            #[cfg(not(all(
+                target_arch = "x86_64",
+                target_feature = "gfni",
+                target_feature = "avx512f",
+                target_feature = "avx512bw"
+            )))]
+            assert!(!accepted, "portable length {len}");
+
+            if accepted {
+                let expected = input
+                    .iter()
+                    .copied()
+                    .map(|value| column_walk(&columns, value))
+                    .collect::<Vec<_>>();
+                assert_eq!(output, expected, "length {len}");
+            } else {
+                assert!(output.iter().all(|&value| value == poison), "length {len}");
+            }
+        }
+    }
+
+    #[test]
+    fn dynamic_coordinate_map_handles_singular_and_mixed_columns() {
+        let maps = [
+            [Ghash128::ZERO; 128],
+            core::array::from_fn(|index| Ghash128::from_repr(1u128 << index)),
+            core::array::from_fn(|index| Ghash128::from_repr(1u128 << (index % 7))),
+            core::array::from_fn(|index| {
+                Ghash128::from_repr(
+                    (index as u128).wrapping_mul(0x9e37_79b9_7f4a_7c15)
+                        ^ (0xD1B5_4A32_1C6E_8F09u128.rotate_left(index as u32)),
+                )
+            }),
+        ];
+        let len = 4096 + 17;
+        let input = (0..len)
+            .map(|index| {
+                BinaryField128::from_repr(
+                    (index as u128).wrapping_mul(0xA5A5_5A5A_3141_5926) ^ (1u128 << (index % 128)),
+                )
+            })
+            .collect::<Vec<_>>();
+
+        for columns in maps {
+            let poison = Ghash128::from_repr(u128::MAX);
+            let mut output = vec![poison; input.len()];
+            let accepted = Ghash128::try_apply_linear_map_into(&columns, &input, &mut output);
+            #[cfg(all(
+                target_arch = "x86_64",
+                target_feature = "gfni",
+                target_feature = "avx512f",
+                target_feature = "avx512bw"
+            ))]
+            assert!(accepted);
+            if accepted {
+                let expected = input
+                    .iter()
+                    .copied()
+                    .map(|value| column_walk(&columns, value))
+                    .collect::<Vec<_>>();
+                assert_eq!(output, expected);
+            } else {
+                assert!(output.iter().all(|&value| value == poison));
+            }
+        }
+    }
+
+    #[test]
+    fn dynamic_coordinate_map_preserves_offsets_and_destination_guards() {
+        let columns = core::array::from_fn(|index| {
+            Ghash128::from_repr((1u128 << (127 - index)) ^ (index as u128))
+        });
+        let input_values = (0..4096 + 63)
+            .map(|index| BinaryField128::from_repr(index as u128 * 17 + 3))
+            .collect::<Vec<_>>();
+        let input_offset = 3;
+        let output_offset = 5;
+        let guard = Ghash128::from_repr(0x5A5A_5A5A_5A5A_5A5A_5A5A_5A5A_5A5A_5A5A);
+        let mut input = vec![BinaryField128::ZERO; input_offset];
+        input.extend_from_slice(&input_values);
+        input.extend(core::iter::repeat_n(BinaryField128::ZERO, 7));
+        let mut output = vec![guard; output_offset];
+        output.extend(core::iter::repeat_n(guard, input_values.len()));
+        output.extend(core::iter::repeat_n(guard, 7));
+
+        let input_slice = &input[input_offset..input_offset + input_values.len()];
+        let output_slice = &mut output[output_offset..output_offset + input_values.len()];
+        let accepted = Ghash128::try_apply_linear_map_into(&columns, input_slice, output_slice);
+        #[cfg(all(
+            target_arch = "x86_64",
+            target_feature = "gfni",
+            target_feature = "avx512f",
+            target_feature = "avx512bw"
+        ))]
+        assert!(accepted);
+        assert_eq!(
+            &input[input_offset..input_offset + input_values.len()],
+            &input_values
+        );
+        assert!(output[..output_offset].iter().all(|&value| value == guard));
+        assert!(
+            output[output_offset + input_values.len()..]
+                .iter()
+                .all(|&value| value == guard)
+        );
+        if accepted {
+            assert!(
+                output[output_offset..]
+                    .iter()
+                    .take(input_values.len())
+                    .enumerate()
+                    .all(|(index, &value)| value == column_walk(&columns, input_values[index]))
+            );
+        } else {
+            assert!(
+                output[output_offset..]
+                    .iter()
+                    .take(input_values.len())
+                    .all(|&value| value == guard)
+            );
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "equal lengths")]
+    fn dynamic_coordinate_map_rejects_mismatched_shapes() {
+        let columns = [Ghash128::ZERO; 128];
+        let input = [BinaryField128::ZERO; 1];
+        let mut output = [Ghash128::ZERO; 0];
+        let _ = Ghash128::try_apply_linear_map_into(&columns, &input, &mut output);
     }
 
     #[test]

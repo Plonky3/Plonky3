@@ -170,6 +170,20 @@ impl<F: Field, EF: ExtensionField<F>> SplitEq<F, EF> {
         Self { eq0, eq1 }
     }
 
+    /// Converts the factored equality table to an unpacked table in another field.
+    ///
+    /// Each factor is mapped elementwise without materializing the full equality table. The
+    /// caller must provide an `R::from(EF)` map that is a field homomorphism, as required by
+    /// the representation prover; this method preserves the factored layout only.
+    pub fn to_field<R>(&self) -> SplitEq<R, R>
+    where
+        R: Field + From<EF>,
+    {
+        let eq0 = Poly::new(self.eq0.iter().copied().map(R::from).collect());
+        let eq1 = self.eq1.to_field();
+        SplitEq { eq0, eq1 }
+    }
+
     /// Total number of variables: k = k_prefix + k_suffix.
     pub fn num_variables(&self) -> usize {
         self.eq0.num_variables() + self.eq1.num_variables()
@@ -977,6 +991,24 @@ mod tests {
                 expected,
                 SplitEq::<F, EF>::new_unpacked(&point, EF::ONE).eval_packed(packed.as_view()),
             );
+        }
+    }
+
+    #[test]
+    fn factored_conversion_preserves_scalar_and_packed_layouts() {
+        let mut rng = SmallRng::seed_from_u64(0xC0FFEE);
+        for (num_variables, packed) in [(K_PACK, false), (2 * K_PACK, true)] {
+            let point = Point::<EF>::rand(&mut rng, num_variables);
+            let scale: EF = rng.random();
+            let split = if packed {
+                SplitEq::<F, EF>::new_packed(&point, scale)
+            } else {
+                SplitEq::<F, EF>::new_unpacked(&point, scale)
+            };
+            let converted = split.to_field::<EF>();
+
+            assert_eq!(converted.num_variables(), split.num_variables());
+            assert_eq!(converted.materialize(), split.materialize());
         }
     }
 
