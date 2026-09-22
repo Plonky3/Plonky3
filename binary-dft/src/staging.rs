@@ -83,8 +83,8 @@ impl StagedRuns {
 /// gather wrote, and no worker zeroes a buffer it is about to overwrite in full.
 ///
 /// # Panics
-/// Panics if a tile's walk reaches past the end of `values`, or if `run == 0`, which divides
-/// by zero laying out the tiles.
+/// Panics if the tiles do not partition `values`, if a tile's walk reaches past the end of
+/// `values`, or if `run == 0`, which divides by zero laying out the tiles.
 pub(crate) fn for_each_staged_tile<T, P>(
     values: &mut [T],
     runs: StagedRuns,
@@ -101,7 +101,9 @@ pub(crate) fn for_each_staged_tile<T, P>(
     let tiles = len / tile_len;
     // Runs in the matrix.
     let count = len / run;
-    debug_assert_eq!(tiles * tile_len, len, "tiles do not partition the matrix");
+    // A tile longer than the matrix lays out no tiles at all, which would return the matrix
+    // untransformed. The check runs once per pass, not once per tile.
+    assert_eq!(tiles * tile_len, len, "tiles do not partition the matrix");
 
     let base = DisjointMutPtr::new(values);
     let task = move |tile: &mut Vec<T>, index: usize| {
@@ -242,6 +244,19 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    #[should_panic = "tiles do not partition the matrix"]
+    fn a_tile_longer_than_the_matrix_is_refused() {
+        // One tile of four runs against a matrix of three: no tile fits, so none would run.
+        let mut values = vec![0u8; 3];
+        for_each_staged_tile(
+            &mut values,
+            StagedRuns::new(1, 0, 2),
+            Dispatch::Serial,
+            |_, _| {},
+        );
     }
 
     #[test]
