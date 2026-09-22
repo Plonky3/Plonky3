@@ -59,22 +59,13 @@ where
         return None;
     }
 
-    let total_cells = protocol
-        .table_shapes()
-        .iter()
-        .try_fold(0usize, |total, table| {
-            let cells = (1usize.checked_shl(table.num_variables().try_into().ok()?)?)
-                .checked_mul(table.width())?;
-            total.checked_add(cells)
-        })?;
+    let total_cells = protocol.checked_num_cells()?;
     if total_cells == 0 || log2_ceil_usize(total_cells) != config.num_variables {
         return None;
     }
     let num_claims = protocol
-        .iter_openings()
-        .try_fold(config.commitment_ood_samples, |total, (_, batch)| {
-            total.checked_add(batch.len())
-        })?;
+        .checked_num_claims()?
+        .checked_add(config.commitment_ood_samples)?;
     config.validate_initial_claims(num_claims).ok()?;
 
     // Field::bits() rounds upward. A whole-bit lower bound avoids granting
