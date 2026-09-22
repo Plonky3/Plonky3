@@ -1832,19 +1832,21 @@ where
         S: Field,
         EF: HasSubfield<S>,
     {
-        let (round, prefix_len, tensor_present) = match &self.columns {
+        let (round, prefix_len, tensor_present, late) = match &self.columns {
             ExtColumns::Sliced(columns) => (
                 self.round,
                 columns.challenges.len(),
                 columns.tensor.is_some(),
+                columns.late_boundary,
             ),
             _ => return false,
         };
-        let valid = match round {
-            3 => prefix_len == 3 && tensor_present,
-            4 => prefix_len == 4 && !tensor_present,
-            _ => false,
-        } && matches!(&self.columns, ExtColumns::Sliced(columns) if columns.late_boundary);
+        let valid = late
+            && match round {
+                3 => prefix_len == 3 && tensor_present,
+                4 => prefix_len == 4 && !tensor_present,
+                _ => false,
+            };
         if !valid {
             return false;
         }
