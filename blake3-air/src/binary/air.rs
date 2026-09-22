@@ -36,20 +36,15 @@ const NUM_G_CONSTRAINTS: usize = NUM_ROUNDS * G_PER_ROUND * CONSTRAINTS_PER_G;
 /// value and the last round's `b1`, `d1`, `b2`, `d2` words, and
 /// [`Blake3BinaryCols::compression_output`] recovers it from a row.
 ///
-/// The input bits are constrained to be boolean, unless [`Self::constrain_booleanity`] is
-/// cleared. Every other column is then forced to a bit by the addition constraints, since the
-/// majority of three bits is a bit.
+/// [`Self::default`] constrains the input bits to be boolean, and
+/// [`Self::assuming_boolean_trace`] leaves that to the trace commitment. Every other column is
+/// then forced to a bit by the addition constraints, since the majority of three bits is a bit.
 ///
 /// The constraints describe Blake-3 only over a field of characteristic 2.
 #[derive(Debug)]
 pub struct Blake3BinaryAir {
     /// Whether the AIR constrains every input cell to be a bit.
-    ///
-    /// Clearing it makes the AIR report [`BaseAir::assumes_boolean_trace`]. That is sound only
-    /// when the trace commitment refuses every cell outside `{0, 1}`, as a commitment to the
-    /// trace's bits does. Under a commitment to field elements, nothing else keeps an input cell
-    /// in `{0, 1}`.
-    pub constrain_booleanity: bool,
+    constrain_booleanity: bool,
 }
 
 impl Default for Blake3BinaryAir {
@@ -61,6 +56,18 @@ impl Default for Blake3BinaryAir {
 }
 
 impl Blake3BinaryAir {
+    /// An AIR that skips the input booleanity constraints, which the commitment must then supply.
+    ///
+    /// The AIR reports [`BaseAir::assumes_boolean_trace`]. It is sound only under a commitment
+    /// whose alphabet is one bit per cell, such as a commitment to the trace's bits, where a cell
+    /// outside `{0, 1}` is not representable. Under a commitment to field elements, nothing else
+    /// keeps an input cell in `{0, 1}`.
+    pub const fn assuming_boolean_trace() -> Self {
+        Self {
+            constrain_booleanity: false,
+        }
+    }
+
     /// Generate a trace over `num_hashes` fixed-seed random compression inputs.
     ///
     /// Each row draws a random chaining value and block, uses its row index as the counter,

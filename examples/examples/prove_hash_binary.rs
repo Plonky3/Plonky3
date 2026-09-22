@@ -132,8 +132,6 @@ fn main() {
     };
 
     // The Boolean commitment refuses every cell outside `{0, 1}`, so no AIR constrains booleanity.
-    let constrain_booleanity = false;
-
     let result = match args.objective {
         BinaryHashOptions::KeccakFPermutations => {
             assert!(
@@ -145,9 +143,7 @@ fn main() {
             let num_hashes = trace_height / KECCAK_BINARY_ROWS_PER_PERM;
             println!("Proving {num_hashes} Keccak-f permutations");
 
-            let air = KeccakBinaryAir {
-                constrain_booleanity,
-            };
+            let air = KeccakBinaryAir::assuming_boolean_trace();
             let words = air.generate_random_trace_packed::<Gf2>(num_hashes);
             assert_eq!(
                 words.height(),
@@ -162,9 +158,7 @@ fn main() {
         BinaryHashOptions::Blake3Compressions => {
             println!("Proving {trace_height} Blake-3 compressions");
 
-            let air = Blake3BinaryAir {
-                constrain_booleanity,
-            };
+            let air = Blake3BinaryAir::assuming_boolean_trace();
             let words = air.generate_random_trace_packed::<Gf2>(trace_height);
             let trace =
                 Table::<BinaryField128>::from_packed_bits(words, args.log_trace_length as usize);
@@ -178,9 +172,7 @@ fn main() {
         BinaryHashOptions::Sha256Compressions => {
             println!("Proving {trace_height} SHA-256 compressions");
 
-            let air = Sha256BinaryAir {
-                constrain_booleanity,
-            };
+            let air = Sha256BinaryAir::assuming_boolean_trace();
             let words = air.generate_random_trace_packed::<Gf2>(trace_height);
             let trace =
                 Table::<BinaryField128>::from_packed_bits(words, args.log_trace_length as usize);

@@ -35,15 +35,13 @@ const NUM_FLAG_CONSTRAINTS: usize = KECCAK_BINARY_ROWS_PER_PERM + NUM_ROUNDS_MIN
 ///     wrap to row 0 : output row -> round 0
 ///     repeat last   : output row -> itself
 /// ```
+///
+/// [`Self::default`] constrains every state cell to be a bit, and
+/// [`Self::assuming_boolean_trace`] leaves that to the trace commitment.
 #[derive(Debug)]
 pub struct KeccakBinaryAir {
     /// Whether the AIR constrains every state cell to be a bit.
-    ///
-    /// Clearing it makes the AIR report [`BaseAir::assumes_boolean_trace`]. That is sound only
-    /// when the trace commitment refuses every cell outside `{0, 1}`, as a commitment to the
-    /// trace's bits does. Under a commitment to field elements, a non-bit state run through the
-    /// round map satisfies every other constraint.
-    pub constrain_booleanity: bool,
+    constrain_booleanity: bool,
 }
 
 impl Default for KeccakBinaryAir {
@@ -55,6 +53,18 @@ impl Default for KeccakBinaryAir {
 }
 
 impl KeccakBinaryAir {
+    /// An AIR that skips the state booleanity constraints, which the commitment must then supply.
+    ///
+    /// The AIR reports [`BaseAir::assumes_boolean_trace`]. It is sound only under a commitment
+    /// whose alphabet is one bit per cell, such as a commitment to the trace's bits, where a cell
+    /// outside `{0, 1}` is not representable. Under a commitment to field elements, a non-bit
+    /// state run through the round map satisfies every other constraint.
+    pub const fn assuming_boolean_trace() -> Self {
+        Self {
+            constrain_booleanity: false,
+        }
+    }
+
     /// Generate a trace over `num_hashes` fixed-seed random permutation inputs.
     ///
     /// This is for benches/examples only — it does not let callers supply the actual
@@ -464,9 +474,7 @@ mod tests {
         assert!(failures.iter().all(|(_, c)| BOOL_CONSTRAINTS.contains(c)));
 
         // Without booleanity, the AIR accepts the non-bit state.
-        let air = KeccakBinaryAir {
-            constrain_booleanity: false,
-        };
+        let air = KeccakBinaryAir::assuming_boolean_trace();
         assert!(check_all_constraints(&air, &trace, &[], None).is_ok());
     }
 
@@ -562,10 +570,10 @@ mod tests {
 
     #[test]
     fn symbolic_constraints_match_hints() {
-        for (constrain_booleanity, num_constraints) in [(true, 3250), (false, 1650)] {
-            let air = KeccakBinaryAir {
-                constrain_booleanity,
-            };
+        for (air, assumes_boolean_trace, num_constraints) in [
+            (KeccakBinaryAir::default(), false, 3250),
+            (KeccakBinaryAir::assuming_boolean_trace(), true, 1650),
+        ] {
             let layout = AirLayout::from_air::<F>(&air);
 
             let constraints = get_symbolic_constraints::<F, _>(&air, layout);
@@ -573,7 +581,7 @@ mod tests {
             assert_eq!(Some(constraints.len()), BaseAir::<F>::num_constraints(&air));
             assert_eq!(
                 BaseAir::<F>::assumes_boolean_trace(&air),
-                !constrain_booleanity
+                assumes_boolean_trace
             );
 
             let degree = get_max_constraint_degree::<F, _>(&air, layout, 32);

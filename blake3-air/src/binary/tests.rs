@@ -145,10 +145,10 @@ fn width_and_constraint_hints_match_symbolic_evaluation() {
         main_width: NUM_BLAKE3_BINARY_COLS,
         ..Default::default()
     };
-    for (constrain_booleanity, num_constraints) in [(true, 11_536), (false, 10_640)] {
-        let air = Blake3BinaryAir {
-            constrain_booleanity,
-        };
+    for (air, assumes_boolean_trace, num_constraints) in [
+        (Blake3BinaryAir::default(), false, 11_536),
+        (Blake3BinaryAir::assuming_boolean_trace(), true, 10_640),
+    ] {
         let constraints = get_symbolic_constraints::<F, _>(&air, layout);
         assert_eq!(constraints.len(), num_constraints);
         assert_eq!(
@@ -157,7 +157,7 @@ fn width_and_constraint_hints_match_symbolic_evaluation() {
         );
         assert_eq!(
             <Blake3BinaryAir as BaseAir<F>>::assumes_boolean_trace(&air),
-            !constrain_booleanity
+            assumes_boolean_trace
         );
 
         let degree = get_max_constraint_degree::<F, _>(&air, layout, 1 << 4);

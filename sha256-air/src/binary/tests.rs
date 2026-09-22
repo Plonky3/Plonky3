@@ -97,10 +97,10 @@ fn width_and_constraint_hints_match_symbolic_evaluation() {
         main_width: NUM_SHA256_BINARY_COLS,
         ..Default::default()
     };
-    for (constrain_booleanity, num_constraints) in [(true, 23_712), (false, 22_944)] {
-        let air = Sha256BinaryAir {
-            constrain_booleanity,
-        };
+    for (air, assumes_boolean_trace, num_constraints) in [
+        (Sha256BinaryAir::default(), false, 23_712),
+        (Sha256BinaryAir::assuming_boolean_trace(), true, 22_944),
+    ] {
         let constraints = get_symbolic_constraints::<F, _>(&air, layout);
         assert_eq!(constraints.len(), num_constraints);
         assert_eq!(
@@ -109,7 +109,7 @@ fn width_and_constraint_hints_match_symbolic_evaluation() {
         );
         assert_eq!(
             <Sha256BinaryAir as BaseAir<F>>::assumes_boolean_trace(&air),
-            !constrain_booleanity
+            assumes_boolean_trace
         );
 
         let degree = get_max_constraint_degree::<F, _>(&air, layout, 1 << 4);

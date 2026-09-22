@@ -1153,9 +1153,7 @@ mod tests {
 
     #[test]
     fn dense_and_packed_sha256_tables_have_identical_boolean_proofs() {
-        let air = Sha256BinaryAir {
-            constrain_booleanity: false,
-        };
+        let air = Sha256BinaryAir::assuming_boolean_trace();
         let dense = Table::new(air.generate_random_trace_rows::<F>(4, 0).transpose());
         let packed = Table::from_packed_bits(air.generate_random_trace_packed::<Gf2>(4), 2);
         for backend in [Backend::Subfield, Backend::PolyBasis] {
@@ -1169,9 +1167,7 @@ mod tests {
 
     #[test]
     fn dense_and_packed_blake3_tables_have_identical_boolean_proofs() {
-        let air = Blake3BinaryAir {
-            constrain_booleanity: false,
-        };
+        let air = Blake3BinaryAir::assuming_boolean_trace();
         let dense = Table::new(air.generate_random_trace_rows::<F>(4, 0).transpose());
         let packed = Table::from_packed_bits(air.generate_random_trace_packed::<Gf2>(4), 2);
         for backend in [Backend::Subfield, Backend::PolyBasis] {
@@ -1187,9 +1183,7 @@ mod tests {
     fn dense_and_packed_keccak_tables_have_identical_boolean_proofs() {
         // Three permutations fill 75 of 128 rows: the packed blocks hold permutations that
         // straddle block boundaries and padding rows.
-        let air = KeccakBinaryAir {
-            constrain_booleanity: false,
-        };
+        let air = KeccakBinaryAir::assuming_boolean_trace();
         let dense = Table::new(air.generate_random_trace_rows::<F>(3, 0).transpose());
         let packed = Table::from_packed_bits(air.generate_random_trace_packed::<Gf2>(3), 7);
         for backend in [Backend::Subfield, Backend::PolyBasis] {
@@ -1437,9 +1431,7 @@ mod tests {
         // One permutation pads to 32 rows, and every constraint links a row to the next.
         //
         // The Boolean commitment opens both views of all 1625 columns in one reduction.
-        let air = KeccakBinaryAir {
-            constrain_booleanity: false,
-        };
+        let air = KeccakBinaryAir::assuming_boolean_trace();
         let trace = air.generate_random_trace_rows::<F>(1, 0);
         let width = trace.width();
         let report = prove_boolean_air(
@@ -1455,9 +1447,7 @@ mod tests {
 
     #[test]
     fn proves_and_verifies_a_packed_keccak_trace() {
-        let air = KeccakBinaryAir {
-            constrain_booleanity: false,
-        };
+        let air = KeccakBinaryAir::assuming_boolean_trace();
         let words = air.generate_random_trace_packed::<Gf2>(1);
         let table = Table::<F>::from_packed_bits(words, 5);
         let report = prove_boolean_air(&air, table, BinaryProofOptions::default())
@@ -1468,9 +1458,7 @@ mod tests {
 
     #[test]
     fn proves_and_verifies_a_packed_blake3_trace() {
-        let air = Blake3BinaryAir {
-            constrain_booleanity: false,
-        };
+        let air = Blake3BinaryAir::assuming_boolean_trace();
         let words = air.generate_random_trace_packed::<Gf2>(4);
         let table = Table::<F>::from_packed_bits(words, 2);
         let report = prove_boolean_air(&air, table, BinaryProofOptions::default())
@@ -1502,9 +1490,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "cannot prove an AIR that assumes a Boolean trace")]
     fn field_commitment_refuses_an_air_that_assumes_a_boolean_trace() {
-        let air = KeccakBinaryAir {
-            constrain_booleanity: false,
-        };
+        let air = KeccakBinaryAir::assuming_boolean_trace();
         let trace = air.generate_random_trace_rows::<F>(1, 0);
         let _ = prove_binary_air(&air, trace, BinaryProofOptions::default());
     }
