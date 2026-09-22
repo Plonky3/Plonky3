@@ -9,6 +9,23 @@ use rand::RngExt;
 use rand::distr::{Distribution, StandardUniform};
 
 /// A point `(x_1, ..., x_n)` in `F^n` for some field `F`.
+///
+/// # Why dropping one is refused
+///
+/// A reduction hands back the place its challenges landed.
+///
+/// That is where the surviving claim has to be opened.
+///
+/// Dropping it does not accept less.
+///
+/// It accepts everything, because only an opening there pins the terminal relation.
+///
+/// The workspace refuses an unused result, so leaving one as a statement is a compile error.
+///
+/// Binding it is not refused, and neither is destructuring away the point.
+///
+/// A caller wanting only the sponge advanced binds it explicitly, and says why.
+#[must_use]
 #[derive(Default, Debug, Clone, PartialEq, Eq)]
 pub struct Point<F>(pub(crate) Vec<F>);
 
@@ -17,7 +34,6 @@ where
     F: Field,
 {
     /// Construct a new `Point` from a vector of field elements.
-    #[must_use]
     pub const fn new(coords: Vec<F>) -> Self {
         Self(coords)
     }
@@ -25,7 +41,6 @@ where
     /// Construct a `Point` corresponding to a vertex of the hypercube.
     ///
     /// Returns `value` encoded big-endian: bit `num_variables - 1 - i` lands at coordinate `i`.
-    #[must_use]
     pub fn hypercube(value: usize, num_variables: usize) -> Self {
         assert!(value < (1 << num_variables));
         Self(
@@ -58,7 +73,6 @@ where
 
     /// Return a sub-point over the specified range of variables.
     #[inline]
-    #[must_use]
     pub fn get_subpoint_over_range<R: RangeBounds<usize> + SliceIndex<[F], Output = [F]>>(
         &self,
         range: R,
@@ -201,7 +215,6 @@ where
     }
 
     /// Returns a new `Point` with the variables in reversed order.
-    #[must_use]
     pub fn reversed(&self) -> Self {
         Self(self.0.iter().rev().copied().collect())
     }

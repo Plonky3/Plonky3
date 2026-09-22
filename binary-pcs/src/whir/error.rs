@@ -159,4 +159,20 @@ pub enum ProfileError {
         /// Bits one witness carries.
         ceiling: usize,
     },
+
+    /// The derived schedule opens no position, so nothing ties a codeword to the commitment.
+    ///
+    /// Queries are the only part of the run that tests proximity.
+    ///
+    /// A schedule opening none of them accepts any codeword, whatever the level reported.
+    ///
+    /// That is what crediting grinding with the whole target derives to.
+    ///
+    /// The protocol level is a saturating difference.
+    ///
+    /// So the credit is whole whenever the budget reaches the target, not only at zero.
+    ///
+    /// The floor lives in the schedule itself, so every constructor meets it.
+    #[error("the derived schedule opens no position, so it accepts any codeword")]
+    ZeroQueries,
 }

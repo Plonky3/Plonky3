@@ -75,3 +75,5 @@ test-features = ["backend-a", "backend-b"]
 The listed features are enabled together. A parallel CI leg also enables `parallel` when that package defines it.
 
 See [the architecture guide](docs/architecture.md) for the crate map and backend capabilities. Keep pull requests focused, add behavioral coverage for fixes, and document security assumptions at the public API where they apply.
+
+A security assumption that a caller has to act on is not finished when it is documented. Make the compiler carry it with `#[must_use]` on the returned type, or make the code carry it with a typed error, and fall back to prose only when neither is possible. When neither is possible, add a row to [the caller-obligations list](docs/caller-obligations.md) with the reason, so a caller reads one page rather than discovering the rule per module. That page also records each reduction's minimum non-degenerate shape.

@@ -146,7 +146,7 @@ fn run_sumcheck<L: Layout<F, EF>>(prover: L, challenger: &mut Challenger, foldin
     assert_eq!(data.num_rounds(), folding);
     assert_eq!(randomness.num_variables(), folding);
     assert!(residual.num_variables() > 0);
-    black_box((data, residual, randomness));
+    let _ = black_box((data, residual, randomness));
 }
 
 /// Mask sampling happens inside the timed region.

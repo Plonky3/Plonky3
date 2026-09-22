@@ -269,6 +269,40 @@ impl JaggedLayout {
     ///
     /// The column heights must already be bound into the transcript, normally by that commitment, before the sparse point is drawn.
     ///
+    /// That ordering is on the caller when the reduction is reached through this entry point.
+    ///
+    /// Sealing the geometry before drawing the point makes that ordering structural.
+    ///
+    /// Prefer that route where one exists.
+    ///
+    /// The caller-obligations page under `docs` records the raw route.
+    ///
+    /// # Minimum non-degenerate shape
+    ///
+    /// The delegated sumcheck runs one round per dense variable.
+    ///
+    /// ```text
+    ///     live area   dense variables   challenges drawn
+    ///     0 or 1      0                 none
+    ///     2 or more   at least 1        at least one
+    /// ```
+    ///
+    /// The smallest shape that folds anything is a live area of two.
+    ///
+    /// Below it no challenge is drawn, which is harmless rather than vacuous.
+    ///
+    /// A one-cell dense multilinear has no interior left to test.
+    ///
+    /// Its terminal relation weighs the surviving evaluation by a public selector value.
+    ///
+    /// Both sides are public or pinned by the commitment, and the claim names that one cell.
+    ///
+    /// The seed still binds the whole statement, so two such instances part anyway.
+    ///
+    /// What the small shape does rest on is the caller opening the claim it returns.
+    ///
+    /// A vanishing selector leaves the terminal equation pinning nothing.
+    ///
     /// # Soundness
     ///
     /// The terminal selector is evaluated independently through a width-four branching program.

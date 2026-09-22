@@ -57,7 +57,8 @@ pub(crate) fn transcript_fingerprint(
 ) -> [u32; 4] {
     let rounds = residual.num_variables();
     let mut data = SumcheckData::<F, EF>::default();
-    residual.compute_sumcheck_polynomials(&mut data, challenger, rounds, 0, None);
+    // The fingerprint is the draw below, which already follows every challenge of the fold.
+    let _ = residual.compute_sumcheck_polynomials(&mut data, challenger, rounds, 0, None);
     let folded = residual
         .evals()
         .as_constant()

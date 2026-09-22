@@ -7,7 +7,8 @@ use p3_word::{OperandRole, Segment, Word};
 
 use super::code::{KeyCode, ShiftSequenceCode};
 use super::{
-    CompiledSegment, ConstraintReference, KeyCompileError, LayoutComponent, Reference, StoredKey,
+    CompiledSegment, ConstraintReference, FAMILIES, InstanceBlock, KeyCompileError,
+    LayoutComponent, Reference, StoredKey,
 };
 
 /// First-pass storage for reference counts and distinct key discovery.
@@ -201,11 +202,33 @@ impl PreparedSegment {
             word_keys.push(start..end);
         }
 
+        // A flat statement is one block of one instance: slots are its words.
+        let slots =
+            u32::try_from(word_keys.len()).map_err(|_| KeyCompileError::LayoutTooLarge {
+                segment: self.segment,
+                component: LayoutComponent::WordOffsets,
+                len: word_keys.len(),
+            })?;
+        let words = word_keys.len();
+        let blocks = (slots != 0)
+            .then_some(InstanceBlock {
+                word_base: 0,
+                slots,
+                instances: 1,
+                slot_base: 0,
+                strides: [0; FAMILIES],
+                constraint_base: [0; FAMILIES],
+            })
+            .into_iter()
+            .collect();
+
         Ok(CompiledSegment {
             shifts,
             keys,
-            word_keys,
+            slot_keys: word_keys,
             references: flat_references,
+            blocks,
+            words,
         })
     }
 }

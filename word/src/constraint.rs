@@ -74,6 +74,19 @@ impl<W: Word> Operand<W> {
         Ok(value)
     }
 
+    /// Rebuilds the operand with every term moved to another word position.
+    ///
+    /// Term order and multiplicity are preserved, so cancellation is unchanged.
+    pub fn readdress(&self, map: impl Fn(ValueIndex) -> ValueIndex) -> Self {
+        // Only the addresses move, so a checked term stays checked.
+        Self::new(
+            self.terms
+                .iter()
+                .map(|term| term.with_index(map(term.index())))
+                .collect(),
+        )
+    }
+
     pub(crate) fn indices(&self) -> impl Iterator<Item = (usize, ValueIndex)> + '_ {
         // Preserve the term position so validation can report the precise source.
         self.terms

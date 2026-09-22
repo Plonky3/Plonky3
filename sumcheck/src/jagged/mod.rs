@@ -36,14 +36,12 @@ impl<F> JaggedPoint<F> {
     }
 
     /// Returns the row coordinates.
-    #[must_use]
     pub const fn row(&self) -> &Point<F> {
         // Return the borrowed point without re-encoding its coordinates.
         &self.row
     }
 
     /// Returns the column coordinates.
-    #[must_use]
     pub const fn column(&self) -> &Point<F> {
         // Return the borrowed point without re-encoding its coordinates.
         &self.column
@@ -64,7 +62,6 @@ pub struct JaggedDenseClaim<F> {
 
 impl<F> JaggedDenseClaim<F> {
     /// Returns the dense evaluation point.
-    #[must_use]
     pub const fn point(&self) -> &Point<F> {
         // The point is owned by the claim and remains in protocol order.
         &self.point
@@ -452,6 +449,60 @@ mod tests {
             layout.verify(&point, value, &forged, &mut challenger()),
             Err(JaggedError::TerminalMismatch)
         );
+    }
+
+    #[test]
+    fn the_smallest_folding_shape_still_samples_a_challenge() {
+        // Invariant: the smallest folding shape draws a challenge that moves with the statement.
+        //
+        // This test fails if the reduction ever contracts to a bare identity here.
+        //
+        // A reduction that samples nothing cannot separate two instances.
+        //
+        // Every separation test above it would then pass for the wrong reason.
+        //
+        // Fixture state: two live cells in two columns, so
+        //
+        //     area 2  ->  dense_variables 1  ->  exactly one sumcheck round
+        let heights = vec![1, 1];
+        let layout = JaggedLayout::new(1, &heights).unwrap();
+        assert_eq!(layout.dense_variables(), 1);
+
+        let dense = vec![F::from_u64(5), F::from_u64(9)];
+        let point = JaggedPoint::new(
+            extension_point(&[2, 3, 5, 7]),
+            extension_point(&[11, 13, 17, 19]),
+        );
+        let value = jagged_evaluation(&heights, &dense, &point);
+
+        let output = layout
+            .prove(&dense, &point, value, &mut challenger())
+            .unwrap();
+        let (proof, _) = output.into_parts();
+        let claim = layout
+            .verify(&point, value, &proof, &mut challenger())
+            .unwrap();
+
+        // One round means one challenge. Zero would make the dense point empty.
+        assert_eq!(claim.point().num_variables(), 1);
+
+        // The surviving claim is an honest evaluation of the committed vector at that challenge.
+        assert_eq!(*claim.value(), committed_evaluation(&dense, claim.point()));
+
+        // Mutation: swap the two live cells between columns.
+        //
+        // The layout is unchanged, the statement is not, and the challenge must follow it.
+        let other_dense = vec![F::from_u64(9), F::from_u64(5)];
+        let other_value = jagged_evaluation(&heights, &other_dense, &point);
+        let other_proof = layout
+            .prove(&other_dense, &point, other_value, &mut challenger())
+            .unwrap()
+            .into_parts()
+            .0;
+        let other_claim = layout
+            .verify(&point, other_value, &other_proof, &mut challenger())
+            .unwrap();
+        assert_ne!(claim.point(), other_claim.point());
     }
 
     #[test]

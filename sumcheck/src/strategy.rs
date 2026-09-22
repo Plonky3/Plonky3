@@ -2297,7 +2297,14 @@ mod tests {
 
                 let mut driven = super::SumcheckProver::new(poly, sum);
                 let mut data = SumcheckData::<F, EF>::default();
-                driven.compute_sumcheck_polynomials(&mut data, &mut challenger(), rounds, 0, None);
+                // This arm is exercised for its prover state, not for its challenges.
+                let _ = driven.compute_sumcheck_polynomials(
+                    &mut data,
+                    &mut challenger(),
+                    rounds,
+                    0,
+                    None,
+                );
 
                 // Reference arm: the same state with the outstanding binding applied.
                 let mut settled = driven.clone();
@@ -2465,7 +2472,14 @@ mod tests {
 
                 let mut driven = super::SumcheckProver::new(poly, sum);
                 let mut data = SumcheckData::<F, EF>::default();
-                driven.compute_sumcheck_polynomials(&mut data, &mut challenger(), rounds, 0, None);
+                // This arm is exercised for its prover state, not for its challenges.
+                let _ = driven.compute_sumcheck_polynomials(
+                    &mut data,
+                    &mut challenger(),
+                    rounds,
+                    0,
+                    None,
+                );
 
                 // Reference arm: the same state with the outstanding binding applied.
                 let mut settled = driven.clone();

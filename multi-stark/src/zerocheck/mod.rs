@@ -1899,7 +1899,7 @@ mod tests {
 
         let mut verifier_challenger = fresh_challenger();
         let log_heights = [log2_strict_usize(n)];
-        zerocheck
+        let _ = zerocheck
             .verify::<F, EF, _>(
                 &proof,
                 &log_heights,
@@ -2017,7 +2017,7 @@ mod tests {
         // The verifier re-checks each round's witness while replaying the transcript.
         let mut verifier_challenger = fresh_challenger();
         let log_heights = [log2_strict_usize(n)];
-        zerocheck
+        let _ = zerocheck
             .verify::<F, EF, _>(
                 &proof,
                 &log_heights,
@@ -2265,7 +2265,7 @@ mod tests {
         // The reduction still verifies end to end.
         let mut verifier_challenger = fresh_challenger();
         let log_heights = [log2_strict_usize(n)];
-        zerocheck
+        let _ = zerocheck
             .verify::<F, EF, _>(
                 &proof,
                 &log_heights,
@@ -2959,7 +2959,7 @@ mod tests {
 
             // The whole batch verifies end to end.
             let mut verifier_challenger = fresh_challenger();
-            zerocheck
+            let _ = zerocheck
                 .verify::<F, EF, _>(
                     &proof,
                     &log_heights,
@@ -3202,7 +3202,7 @@ mod tests {
         let loose = AirZerocheck::new(&loose_airs, 0);
         let (loose_proof, _) =
             prove_traces(&loose, &traces, &public_values, &mut fresh_challenger());
-        loose
+        let _ = loose
             .verify::<F, EF, _>(
                 &loose_proof,
                 &log_heights,
@@ -3272,7 +3272,7 @@ mod tests {
         }
 
         // A truncated round polynomial would not reduce to the constraint at the point.
-        zerocheck
+        let _ = zerocheck
             .verify::<F, EF, _>(
                 &proof,
                 &[log2_strict_usize(n)],
@@ -3372,7 +3372,7 @@ mod tests {
         let honest = [F::from_u64(5), F::from_u64(9)];
         let public_values = [&honest[..]];
         let (proof, _) = prove_traces(&zerocheck, &traces, &public_values, &mut fresh_challenger());
-        zerocheck
+        let _ = zerocheck
             .verify::<F, EF, _>(&proof, &[1], &public_values, &mut fresh_challenger())
             .expect("both ends of a two-row trace must verify");
 
@@ -3518,7 +3518,7 @@ mod tests {
             }
 
             let mut verifier_challenger = fresh_challenger();
-            zerocheck
+            let _ = zerocheck
                 .verify::<F, EF, _>(
                     &proof,
                     &[num_vars],
@@ -3667,7 +3667,7 @@ mod tests {
         }
 
         let mut verifier_challenger = fresh_challenger();
-        zerocheck
+        let _ = zerocheck
             .verify::<F, EF, _>(
                 &proof,
                 &[num_vars],
@@ -3716,7 +3716,7 @@ mod tests {
         }
 
         let mut verifier_challenger = fresh_challenger();
-        zerocheck
+        let _ = zerocheck
             .verify::<F, EF, _>(
                 &proof,
                 &[num_vars, num_vars],
