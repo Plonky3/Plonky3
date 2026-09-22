@@ -277,14 +277,16 @@ where
         }
     }
 
-    // The last round's challenge is discarded rather than applied.
+    // A challenge the sumcheck still holds after the last round is never applied.
     //
-    // The codeword fold, not the sumcheck tables, carries the folded message forward.
+    // The last batch's codeword, not the sumcheck tables, carries the folded message forward.
     // The returned tuple holds no sumcheck state, so nothing downstream can read the tables.
     // A final binding pass would only produce a table nobody looks at.
     //
-    // A debug build applies it anyway, purely to check the claim against the pair it binds.
-    // That is the last held binding's only validation, in any profile.
+    // A last codeword encoded from the bound message has applied it already, and holds none.
+    //
+    // A debug build applies a held one anyway, purely to check the claim against the pair it
+    // binds. That is the last held binding's only validation, in any profile.
     #[cfg(debug_assertions)]
     sumcheck.settle();
 
@@ -317,8 +319,7 @@ where
     let mut message = EF::zero_vec(column.len() << log_inv_rate);
     EF::from_sumcheck_repr(column, &mut message[..column.len()]);
     let codeword = tracing::info_span!("encode bound message").in_scope(|| {
-        <EF as ChallengeField<F>>::Encoder::default()
-            .encode_batch_padded(RowMajorMatrix::new(message, 1), log_inv_rate)
+        EF::Encoder::default().encode_batch_padded(RowMajorMatrix::new(message, 1), log_inv_rate)
     });
     Some(codeword.values)
 }

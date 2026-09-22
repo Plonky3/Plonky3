@@ -153,6 +153,10 @@ where
 {
     /// Builds an instance around an explicitly selected additive transform.
     ///
+    /// The transform encodes the base codeword only. A folded codeword the opening encodes from
+    /// its bound message goes through the challenge field's own encoder instead. Every correct
+    /// transform produces the same codeword, so the choice moves no committed symbol.
+    ///
     /// # Errors
     ///
     /// Returns an error unless the schedule was derived for these two tower levels.
