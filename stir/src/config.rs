@@ -508,6 +508,84 @@ pub enum StirConfigError {
     NonDisjointCosets { round_index: usize, n_i: usize },
 }
 
+impl<F, EF, M, Challenger> StirConfig<F, EF, M, Challenger> {
+    /// `(log_native_degree, num_quotients)` for each PCS alpha batch on the initial domain.
+    /// Standalone STIR configurations leave this empty.
+    pub fn quotient_batches(&self) -> &[(usize, usize)] {
+        &self.quotient_batches
+    }
+
+    /// Log₂ of the degree of the initial polynomial.
+    pub const fn log_starting_degree(&self) -> usize {
+        self.log_starting_degree
+    }
+
+    /// Which Reed-Solomon proximity bound is assumed for soundness.
+    pub const fn soundness_type(&self) -> SecurityAssumption {
+        self.soundness_type
+    }
+
+    /// Target security level in bits.
+    pub const fn security_level(&self) -> usize {
+        self.security_level
+    }
+
+    /// Fixed proof-of-work difficulty in bits applied to each grinding step.
+    pub const fn max_pow_bits(&self) -> usize {
+        self.max_pow_bits
+    }
+
+    /// Log₂ of the inverse rate of the initial RS code.
+    pub const fn log_blowup(&self) -> usize {
+        self.log_blowup
+    }
+
+    /// Log₂ of the folding arity used from round 1 onward.
+    pub const fn log_folding_factor(&self) -> usize {
+        self.log_folding_factor
+    }
+
+    /// Log₂ of the folding arity used in round 0 (the fold of the initial oracle).
+    pub const fn log_starting_folding_factor(&self) -> usize {
+        self.log_starting_folding_factor
+    }
+
+    /// Per-round derived configurations for each intermediate STIR round.
+    pub fn round_configs(&self) -> &[StirRoundConfig<F>] {
+        &self.round_configs
+    }
+
+    /// Log₂ of the degree of the final (directly-sent) polynomial.
+    pub const fn log_final_degree(&self) -> usize {
+        self.log_final_degree
+    }
+
+    /// Number of STIR proximity queries in the final round.
+    pub const fn final_queries(&self) -> usize {
+        self.final_queries
+    }
+
+    /// The final round's `eta_M` parameter from the paper's recommended schedule.
+    pub const fn final_eta(&self) -> f64 {
+        self.final_eta
+    }
+
+    /// Proof-of-work difficulty used for the final query phase.
+    pub const fn final_pow_bits(&self) -> usize {
+        self.final_pow_bits
+    }
+
+    /// Proof-of-work difficulty used for the final folding step.
+    pub const fn final_folding_pow_bits(&self) -> usize {
+        self.final_folding_pow_bits
+    }
+
+    /// Merkle tree commitment scheme.
+    pub const fn mmcs(&self) -> &M {
+        &self.mmcs
+    }
+}
+
 impl<F, EF, M, Challenger> StirConfig<F, EF, M, Challenger>
 where
     F: TwoAdicField,

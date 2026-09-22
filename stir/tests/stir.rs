@@ -362,7 +362,7 @@ mod babybear_stir {
         let (params, dft, challenger) = make_params(1, 3);
         let config = StirConfig::<F, EF, MyMmcs, Challenger>::new(3, params);
         assert_eq!(config.num_rounds(), 0);
-        assert_eq!(config.log_final_degree, 0);
+        assert_eq!(config.log_final_degree(), 0);
 
         let mut rng = seeded_rng();
         let degree = 1usize << 3;
@@ -413,10 +413,10 @@ mod babybear_stir {
         let (params, dft, challenger) = make_two_tier_params(1, 2, 3);
         let config = StirConfig::<F, EF, MyMmcs, Challenger>::new(10, params.clone());
         assert_eq!(config.num_rounds(), 2);
-        assert_eq!(config.round_configs[0].log_folding_factor, 2);
-        assert_eq!(config.round_configs[1].log_folding_factor, 3);
+        assert_eq!(config.round_configs()[0].log_folding_factor, 2);
+        assert_eq!(config.round_configs()[1].log_folding_factor, 3);
         assert_eq!(config.final_log_folding_factor(), 3);
-        assert_eq!(config.log_final_degree, 2);
+        assert_eq!(config.log_final_degree(), 2);
 
         do_test_stir_prove_verify::<F, EF, Dft, MyMmcs, Challenger>(&params, &dft, &challenger, 10);
     }
@@ -430,7 +430,7 @@ mod babybear_stir {
         let config = StirConfig::<F, EF, MyMmcs, Challenger>::new(5, params);
         assert_eq!(config.num_rounds(), 0);
         assert_eq!(config.final_log_folding_factor(), 2);
-        assert_eq!(config.log_final_degree, 3);
+        assert_eq!(config.log_final_degree(), 3);
 
         let mut rng = seeded_rng();
         let degree = 1usize << 5;
@@ -485,7 +485,7 @@ mod babybear_stir {
 
         // Sanity: the test is only meaningful if at least one round actually grinds.
         let any_query_pow =
-            config.round_configs.iter().any(|rc| rc.pow_bits > 0) || config.final_pow_bits > 0;
+            config.round_configs().iter().any(|rc| rc.pow_bits > 0) || config.final_pow_bits() > 0;
         assert!(
             any_query_pow,
             "PoW test parameters must produce at least one round with pow_bits > 0"
@@ -508,24 +508,24 @@ mod babybear_stir {
             make_params_with_soundness(2, 2, SecurityAssumption::JohnsonBound, 28, 8);
         let config = StirConfig::<F, EF, MyMmcs, Challenger>::new(POW_LOG_DEGREE, params);
 
-        assert_eq!(config.soundness_type, SecurityAssumption::JohnsonBound);
+        assert_eq!(config.soundness_type(), SecurityAssumption::JohnsonBound);
         assert!(
             config
-                .round_configs
+                .round_configs()
                 .iter()
                 .all(|rc| rc.num_ood_samples == 1 && rc.eta.is_finite() && rc.eta > 0.)
         );
-        assert!(config.final_eta.is_finite() && config.final_eta > 0.);
+        assert!(config.final_eta().is_finite() && config.final_eta() > 0.);
         assert!(
-            config.round_configs.iter().any(|rc| rc.pow_bits > 0) || config.final_pow_bits > 0,
+            config.round_configs().iter().any(|rc| rc.pow_bits > 0) || config.final_pow_bits() > 0,
             "Johnson-bound test parameters must exercise query grinding"
         );
         assert!(
             config
-                .round_configs
+                .round_configs()
                 .iter()
                 .any(|rc| rc.folding_pow_bits > 0)
-                || config.final_folding_pow_bits > 0,
+                || config.final_folding_pow_bits() > 0,
             "Johnson-bound test parameters must exercise folding grinding"
         );
 
@@ -545,7 +545,7 @@ mod babybear_stir {
     fn test_tampered_round_pow_witness_fails() {
         let (config, dft, challenger, poly) = pow_proof_setup();
         let round_with_pow = config
-            .round_configs
+            .round_configs()
             .iter()
             .position(|rc| rc.pow_bits > 0)
             .expect("expected at least one intermediate round with pow_bits > 0");
@@ -575,7 +575,7 @@ mod babybear_stir {
     fn test_tampered_ood_answer_invalidates_following_pow_witness() {
         let (config, dft, challenger, poly) = pow_proof_setup();
         let round_with_pow = config
-            .round_configs
+            .round_configs()
             .iter()
             .position(|rc| rc.pow_bits > 0)
             .expect("expected at least one intermediate round with pow_bits > 0");
@@ -603,7 +603,7 @@ mod babybear_stir {
     fn test_tampered_final_pow_witness_fails() {
         let (config, dft, challenger, poly) = pow_proof_setup();
         assert!(
-            config.final_pow_bits > 0,
+            config.final_pow_bits() > 0,
             "expected final_pow_bits > 0 under PoW test parameters"
         );
 
@@ -971,7 +971,7 @@ mod babybear_stir {
             prove_stir_from_external_codeword(&config, codeword.clone(), &dft, &mut p_challenger);
         mutate(&mut proof);
 
-        let arity0 = 1usize << config.log_starting_folding_factor;
+        let arity0 = 1usize << config.log_starting_folding_factor();
         let fold_height = (1usize << log_domain) / arity0;
 
         let mut v_challenger = challenger;
@@ -3966,9 +3966,9 @@ mod babybear_stir_multi {
 
         for ((config, (_, first_round)), output) in configs.iter().zip(&results).zip(&outputs) {
             let expected_draws = if config.num_rounds() == 0 {
-                config.final_queries
+                config.final_queries()
             } else {
-                config.round_configs[0].num_queries
+                config.round_configs()[0].num_queries
             };
             assert_eq!(first_round.draws.len(), expected_draws);
             assert_eq!(first_round.draws, output.first_round_draws);
@@ -3999,13 +3999,13 @@ mod babybear_stir_multi {
 
         // The grinding instance must actually grind, or the batch proves nothing.
         assert!(
-            configs[1].round_configs.iter().any(|rc| rc.pow_bits > 0)
-                || configs[1].final_pow_bits > 0,
+            configs[1].round_configs().iter().any(|rc| rc.pow_bits > 0)
+                || configs[1].final_pow_bits() > 0,
             "the second instance must derive a positive difficulty for this batch to be mixed",
         );
         assert!(
-            configs[0].round_configs.iter().all(|rc| rc.pow_bits == 0)
-                && configs[0].final_pow_bits == 0,
+            configs[0].round_configs().iter().all(|rc| rc.pow_bits == 0)
+                && configs[0].final_pow_bits() == 0,
             "the first instance must derive no difficulty for this batch to be mixed",
         );
 
@@ -4155,7 +4155,7 @@ mod babybear_stir_multi {
             .iter()
             .zip(codewords)
             .map(|(config, codeword)| {
-                let arity = 1 << config.log_starting_folding_factor;
+                let arity = 1 << config.log_starting_folding_factor();
                 let height = codeword.len() / arity;
                 external_fiber_source(codeword, arity, height)
             })
@@ -4198,7 +4198,7 @@ mod babybear_stir_multi {
             .zip([true, false, true])
             .map(|(full, compact_answers)| {
                 StirConfig::<F, EF, MyMmcs, Challenger>::new_with_options(
-                    full.log_starting_degree,
+                    full.log_starting_degree(),
                     params.clone(),
                     StirOptions {
                         compact_answers,
@@ -4213,7 +4213,7 @@ mod babybear_stir_multi {
         let polys: Vec<Vec<EF>> = configs
             .iter()
             .map(|config| {
-                (0..1 << config.log_starting_degree)
+                (0..1 << config.log_starting_degree())
                     .map(|_| rng.random())
                     .collect()
             })
@@ -4253,7 +4253,7 @@ mod babybear_stir_multi {
                         .iter()
                         .zip(&codewords)
                         .map(|(config, codeword)| {
-                            let arity = 1 << config.log_starting_folding_factor;
+                            let arity = 1 << config.log_starting_folding_factor();
                             external_fiber_source(codeword.clone(), arity, codeword.len() / arity)
                         })
                         .collect();
@@ -4367,7 +4367,7 @@ mod babybear_stir_multi {
             .iter()
             .zip(&codewords)
             .map(|(config, codeword)| {
-                let arity = 1usize << config.log_starting_folding_factor;
+                let arity = 1usize << config.log_starting_folding_factor();
                 let fold_height = (1usize << config.log_starting_domain_size()) / arity;
                 external_fiber_source(codeword.clone(), arity, fold_height)
             })
@@ -4384,7 +4384,7 @@ mod babybear_stir_multi {
         for (((config, codeword), (_, first_round)), output) in
             configs.iter().zip(&codewords).zip(&results).zip(&outputs)
         {
-            let arity = 1usize << config.log_starting_folding_factor;
+            let arity = 1usize << config.log_starting_folding_factor();
             let fold_height = (1usize << config.log_starting_domain_size()) / arity;
 
             assert_eq!(sorted_dedup(&first_round.draws), first_round.unique_sorted);
@@ -4440,8 +4440,8 @@ mod babybear_stir_multi {
         assert!(configs[0].num_rounds() > configs[1].num_rounds());
         assert!(configs[1].num_rounds() > 0);
         assert_eq!(configs[2].num_rounds(), 0);
-        assert!(configs[1].round_configs[0].folding_pow_bits > 0);
-        assert!(configs[2].final_folding_pow_bits > 0);
+        assert!(configs[1].round_configs()[0].folding_pow_bits > 0);
+        assert!(configs[2].final_folding_pow_bits() > 0);
         let config_refs: Vec<_> = configs.iter().collect();
 
         let mut prover_challenger = challenger.clone();
@@ -4500,7 +4500,7 @@ mod babybear_stir_multi {
         let log_degree = 8;
         let config = StirConfig::<F, EF, MyMmcs, Challenger>::new(log_degree, params);
         let round_with_pow = config
-            .round_configs
+            .round_configs()
             .iter()
             .position(|rc| rc.pow_bits > 0)
             .expect("expected a round with pow_bits > 0");
