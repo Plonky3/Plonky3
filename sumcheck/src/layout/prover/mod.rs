@@ -16,7 +16,7 @@ pub use claims::StackedClaims;
 use p3_challenger::fs::TranscriptField;
 use p3_challenger::{FieldChallenger, GrindingChallenger};
 use p3_commit::{Encoder, Mmcs};
-use p3_field::{ExtensionField, Field, dot_product};
+use p3_field::{ExtensionField, Field};
 use p3_matrix::dense::DenseMatrix;
 use p3_multilinear_util::point::Point;
 pub use prefix::PrefixProver;
@@ -24,14 +24,12 @@ pub use residual::SuffixResidualProver;
 pub use suffix::SuffixProver;
 
 use crate::commit::commit_base;
-use crate::lagrange::lagrange_weights_01inf_multi;
 use crate::layout::transcript::{
     BatchingShape, LayoutBinding, OpeningProverTranscript, OpeningShape, PointSource,
     VirtualProverTranscript, VirtualShape, prover_batching_challenge,
 };
 use crate::layout::{LayoutStrategy, Table, Witness};
 use crate::strategy::{Basis, SumcheckProver, VariableOrder};
-use crate::svo::calculate_accumulators_batch;
 use crate::table::{OpeningEvals, OpeningRequest, TableShape};
 use crate::transcript::{ProverTranscript, SumcheckShape};
 use crate::{SumcheckData, extrapolate_01inf};
@@ -572,80 +570,20 @@ where
     //
     // Both claim counts therefore reach the sponge before the challenge is drawn.
     let alpha: EF = layout.batching_challenge(challenger);
-    let n_claims = claims.num_claims();
 
-    // Stage A: batch per-claim accumulators using insertion-order alpha powers.
-    //
-    // - Iteration order is placement order, matching `sum` and `combine_weights`.
-    // - Each claim consumes exactly `claim.len()` consecutive powers from
-    //   the shared iterator, so the per-claim alpha vector is aligned with
-    //   the claim's opening list by construction.
-    let mut alphas = alpha.powers();
-    let accumulators: Vec<_> = claims
-        .concrete_claims()
-        .map(|claim| {
-            let per_claim: Vec<EF> = alphas.by_ref().take(claim.len()).collect();
-            calculate_accumulators_batch(claim, &per_claim)
-        })
-        .collect();
+    // Batch every recorded claim's accumulators under the drawn challenge.
+    let accumulators = claims.batched_accumulators(alpha);
 
-    // Stage C: drive the preprocessing rounds from the accumulators.
+    // Drive the preprocessing rounds from the accumulators.
     let mut sum = claims.sum(alpha);
     let mut rs = Vec::new();
-
-    // First alpha power assigned to the virtual claims, sitting just past the concrete claims.
-    // The claim count is fixed for the whole fold, so this exponentiation is loop-invariant.
-    let alpha_base = alpha.exp_u64(n_claims as u64);
 
     // One driver spans the whole preprocessing batch, so the description is walked exactly once.
     let shape = SumcheckShape::new(claims.folding, pow_bits, Basis::Evaluation);
     let mut transcript = ProverTranscript::<Ch, F, EF>::new(challenger, shape);
 
-    for round_idx in 0..claims.folding {
-        // Lagrange weights at the challenges sampled so far.
-        let weights = lagrange_weights_01inf_multi(&rs);
-
-        // Round-coefficient identity (linearity of the dot product):
-        //
-        //     c0    = sum_c  dot(claim_c.accs[0], weights)
-        //           + sum_v  alpha_v * dot(virtual_v.accs[0], weights)
-        //     c_inf = same with accs[1]
-        //
-        // - Concrete claims carry alpha pre-batched in stage B.
-        // - Virtual claims keep a separate scalar per claim.
-        // - No intermediate element-wise accumulator is needed.
-        let mut c0 = EF::ZERO;
-        let mut c_inf = EF::ZERO;
-
-        for accs in &accumulators {
-            c0 += dot_product::<EF, _, _>(
-                accs[round_idx][0].iter().copied(),
-                weights.iter().copied(),
-            );
-            c_inf += dot_product::<EF, _, _>(
-                accs[round_idx][1].iter().copied(),
-                weights.iter().copied(),
-            );
-        }
-
-        // Virtual-claim contributions: scale each claim's dot by its alpha power.
-        for (vc, alpha_i) in claims
-            .virtual_claims
-            .iter()
-            .zip(alpha.shifted_powers(alpha_base))
-        {
-            let vc_accs = &vc.data;
-            c0 += alpha_i
-                * dot_product::<EF, _, _>(
-                    vc_accs[round_idx][0].iter().copied(),
-                    weights.iter().copied(),
-                );
-            c_inf += alpha_i
-                * dot_product::<EF, _, _>(
-                    vc_accs[round_idx][1].iter().copied(),
-                    weights.iter().copied(),
-                );
-        }
+    for _ in 0..claims.folding {
+        let (c0, c_inf) = accumulators.round_coefficients(&rs);
 
         // Observe coefficients, sample r, extrapolate the running sum.
         let r = sumcheck_data.observe_and_sample(&mut transcript, c0, c_inf);

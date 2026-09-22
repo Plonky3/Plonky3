@@ -404,7 +404,7 @@ impl<F: Field, EF: ExtensionField<F>> Layout<F, EF> for SuffixProver<F, EF> {
     {
         let (alpha, sum, rs) = preprocess(&self, sumcheck_data, pow_bits, challenger);
 
-        // Stage D: materialise the residual product polynomial.
+        // Materialise the residual product polynomial.
         //
         // - Suffix binding folds variables in reverse.
         // - The residual poly therefore lives in the reversed-challenges frame.
