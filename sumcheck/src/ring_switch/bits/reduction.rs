@@ -57,7 +57,14 @@ const COMPACT_MAX_ROUNDS: usize = 6;
 /// Keep at least this many equality blocks per bank in the production path.
 const COMPACT_MIN_BLOCK_BITS: usize = 6;
 /// The materializer keeps a fixed total EF scratch budget across all compact banks.
+#[cfg(not(test))]
 const COMPACT_TOTAL_SCRATCH: usize = 1 << 14;
+
+/// Small enough under test that the materializer splits a tail in several chunks.
+///
+/// The bank offsets of every chunk past the first are then on the path the tests take.
+#[cfg(test)]
+const COMPACT_TOTAL_SCRATCH: usize = 1 << 4;
 
 /// The fewest free variables an unforced compact run of `requested_k` rounds accepts.
 ///
