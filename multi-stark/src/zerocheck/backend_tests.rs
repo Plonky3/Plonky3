@@ -191,6 +191,8 @@ pub(crate) enum FixtureAir {
     QuadraticInputsOutsidePeriodic,
     /// Degree-two successor-reading AIR used to isolate successor rejection.
     QuadraticSuccessor,
+    /// Degree-two AIR whose only successor is a fixed Boolean column.
+    QuadraticPreprocessedSuccessor,
     /// AIR with a main column but no constraints, whose native degree is zero.
     Empty,
 }
@@ -204,6 +206,7 @@ impl BaseAir<Tower> for FixtureAir {
             Self::QuadraticInputs
             | Self::QuadraticInputsOutsidePeriodic
             | Self::QuadraticSuccessor
+            | Self::QuadraticPreprocessedSuccessor
             | Self::Empty => 1,
             Self::Periodic { .. } => 1,
         }
@@ -211,7 +214,10 @@ impl BaseAir<Tower> for FixtureAir {
 
     fn preprocessed_width(&self) -> usize {
         match self {
-            Self::Gate { .. } | Self::QuadraticInputs | Self::QuadraticInputsOutsidePeriodic => 1,
+            Self::Gate { .. }
+            | Self::QuadraticInputs
+            | Self::QuadraticInputsOutsidePeriodic
+            | Self::QuadraticPreprocessedSuccessor => 1,
             _ => 0,
         }
     }
@@ -259,12 +265,14 @@ impl BaseAir<Tower> for FixtureAir {
             | Self::QuadraticInputsOutsidePeriodic
             | Self::Empty => vec![],
             Self::QuadraticSuccessor => vec![0],
+            Self::QuadraticPreprocessedSuccessor => vec![],
         }
     }
 
     fn preprocessed_next_row_columns(&self) -> Vec<usize> {
         match self {
             Self::Gate { .. } => vec![0],
+            Self::QuadraticPreprocessedSuccessor => vec![0],
             _ => vec![],
         }
     }
@@ -346,6 +354,15 @@ impl<AB: AirBuilder<F = Tower> + InteractionBuilder> Air<AB> for FixtureAir {
                 let value: AB::Expr = local[0].into();
                 builder.assert_zero(value.bool_check());
                 builder.when_transition().assert_eq(next[0], value);
+            }
+            Self::QuadraticPreprocessedSuccessor => {
+                let value: AB::Expr = local[0].into();
+                let (fixed_local, fixed_next) = {
+                    let fixed = builder.preprocessed();
+                    (fixed.current_slice()[0], fixed.next_slice()[0])
+                };
+                builder.assert_zero(value.bool_check());
+                builder.when_transition().assert_eq(fixed_next, fixed_local);
             }
             Self::Empty => {}
         }
@@ -450,6 +467,16 @@ impl Instance {
                 let value = Tower::ONE;
                 (RowMajorMatrix::new(vec![value; height], 1), None, vec![])
             }
+            FixtureAir::QuadraticPreprocessedSuccessor => (
+                RowMajorMatrix::new(
+                    (0..height)
+                        .map(|row| Tower::from_bool(row % 2 == 0))
+                        .collect(),
+                    1,
+                ),
+                Some(RowMajorMatrix::new(vec![Tower::ONE; height], 1)),
+                vec![],
+            ),
             FixtureAir::Empty => (
                 RowMajorMatrix::new(vec![Tower::ZERO; height], 1),
                 None,
@@ -659,6 +686,9 @@ fn assert_backends_agree(
     assert_eq!(subfield, generic, "subfield backend");
     let repr = transcript::<ReprBackend<Gf4, PolyBasis>>(instances, lookup(), pow_bits, false);
     assert_eq!(repr, generic, "representation backend");
+    let late =
+        transcript::<ReprBackend<Gf4, PolyBasis, true>>(instances, lookup(), pow_bits, false);
+    assert_eq!(late, generic, "late representation backend");
 }
 
 fn assert_packed_matches_dense(
@@ -709,6 +739,10 @@ fn assert_packed_matches_dense(
             "representation",
             transcript::<ReprBackend<Gf4, PolyBasis>>(instances, lookup(), pow_bits, true),
         ),
+        (
+            "late representation",
+            transcript::<ReprBackend<Gf4, PolyBasis, true>>(instances, lookup(), pow_bits, true),
+        ),
     ] {
         assert_eq!(packed, dense, "packed {name} backend");
     }
@@ -738,6 +772,16 @@ fn assert_packed_matches_dense(
             (
                 "representation",
                 transcript_with_storage::<ReprBackend<Gf4, PolyBasis>>(
+                    DEFAULT_SLICED_ROUNDS,
+                    instances,
+                    lookup(),
+                    pow_bits,
+                    |index, _| index % 2 == 0,
+                ),
+            ),
+            (
+                "late representation",
+                transcript_with_storage::<ReprBackend<Gf4, PolyBasis, true>>(
                     DEFAULT_SLICED_ROUNDS,
                     instances,
                     lookup(),
@@ -993,16 +1037,26 @@ fn representation_tensor4_matches_generic_on_invalid_boolean_and_gf4_traces() {
             0,
             false,
         );
+        let late = transcript::<ReprBackend<Gf4, PolyBasis, true>>(
+            &instances,
+            LookupRuntime::Inactive,
+            0,
+            false,
+        );
         assert_eq!(
             repr, generic,
             "tensor4 must preserve invalid witness transcript"
+        );
+        assert_eq!(
+            late, generic,
+            "late boundary must preserve invalid witness transcript"
         );
     }
 }
 
 #[test]
-fn representation_tensor4_invalid_proofs_are_rejected() {
-    let height = 1 << 10;
+fn representation_invalid_proofs_are_rejected_at_n11() {
+    let height = 1 << 11;
     let mut invalid_boolean = Instance::honest(FixtureAir::Pair, height, 0x007E_5016);
     for row in 0..height {
         invalid_boolean.main.values[3 * row..3 * row + 3].copy_from_slice(&[
@@ -1021,30 +1075,76 @@ fn representation_tensor4_invalid_proofs_are_rejected() {
     }
 
     for instance in [invalid_boolean, non_boolean] {
-        let airs = [&instance.air];
-        let zerocheck = AirZerocheck::new(&airs, 0);
-        let main = instance.main_table();
-        let (proof, _) = zerocheck
-            .prove_with_lookup::<Tower, Tower, ReprBackend<Gf4, PolyBasis>, _>(
-                &[None],
-                &[&main],
-                &[&instance.public_values],
-                LookupRuntime::Inactive,
-                DEFAULT_SLICED_ROUNDS,
-                &mut challenger(),
-            );
-        assert!(
-            zerocheck
-                .verify::<Tower, Tower, _>(
-                    &proof,
-                    &[10],
+        for (name, backend) in [("incumbent", false), ("late", true)] {
+            let airs = [&instance.air];
+            let zerocheck = AirZerocheck::new(&airs, 0);
+            let main = instance.main_table();
+            let (proof, _) = if backend {
+                zerocheck.prove_with_lookup::<Tower, Tower, ReprBackend<Gf4, PolyBasis, true>, _>(
+                    &[None],
+                    &[&main],
                     &[&instance.public_values],
+                    LookupRuntime::Inactive,
+                    DEFAULT_SLICED_ROUNDS,
                     &mut challenger(),
                 )
-                .is_err(),
-            "invalid tensor4 proof must be rejected"
-        );
+            } else {
+                zerocheck.prove_with_lookup::<Tower, Tower, ReprBackend<Gf4, PolyBasis>, _>(
+                    &[None],
+                    &[&main],
+                    &[&instance.public_values],
+                    LookupRuntime::Inactive,
+                    DEFAULT_SLICED_ROUNDS,
+                    &mut challenger(),
+                )
+            };
+            assert!(
+                zerocheck
+                    .verify::<Tower, Tower, _>(
+                        &proof,
+                        &[11],
+                        &[&instance.public_values],
+                        &mut challenger(),
+                    )
+                    .is_err(),
+                "invalid {name} proof must be rejected"
+            );
+        }
     }
+}
+
+#[test]
+fn representation_tensor4_invalid_proof_at_n10_is_rejected() {
+    let height = 1 << 10;
+    let mut instance = Instance::honest(FixtureAir::Pair, height, 0x007E_5019);
+    for row in 0..height {
+        instance.main.values[3 * row..3 * row + 3].copy_from_slice(&[
+            Tower::ZERO,
+            Tower::ZERO,
+            Tower::ONE,
+        ]);
+    }
+    let airs = [&instance.air];
+    let zerocheck = AirZerocheck::new(&airs, 0);
+    let main = instance.main_table();
+    let (proof, _) = zerocheck.prove_with_lookup::<Tower, Tower, ReprBackend<Gf4, PolyBasis>, _>(
+        &[None],
+        &[&main],
+        &[&instance.public_values],
+        LookupRuntime::Inactive,
+        DEFAULT_SLICED_ROUNDS,
+        &mut challenger(),
+    );
+    assert!(
+        zerocheck
+            .verify::<Tower, Tower, _>(
+                &proof,
+                &[10],
+                &[&instance.public_values],
+                &mut challenger(),
+            )
+            .is_err()
+    );
 }
 
 #[test]
@@ -1065,6 +1165,27 @@ fn representation_tensor4_honest_proof_verifies() {
     let verified = zerocheck
         .verify::<Tower, Tower, _>(&proof, &[10], &[&instance.public_values], &mut challenger())
         .expect("honest tensor4 proof must verify");
+    assert_eq!(verified, point);
+}
+
+#[test]
+fn representation_late_boundary_honest_proof_verifies() {
+    let instance = Instance::honest(FixtureAir::Pair, 1 << 11, 0x007E_501A);
+    let airs = [&instance.air];
+    let zerocheck = AirZerocheck::new(&airs, 0);
+    let main = instance.main_table();
+    let (proof, point) = zerocheck
+        .prove_with_lookup::<Tower, Tower, ReprBackend<Gf4, PolyBasis, true>, _>(
+            &[None],
+            &[&main],
+            &[&instance.public_values],
+            LookupRuntime::Inactive,
+            DEFAULT_SLICED_ROUNDS,
+            &mut challenger(),
+        );
+    let verified = zerocheck
+        .verify::<Tower, Tower, _>(&proof, &[11], &[&instance.public_values], &mut challenger())
+        .expect("honest late-boundary proof must verify");
     assert_eq!(verified, point);
 }
 
@@ -1097,6 +1218,58 @@ fn representation_tensor4_matches_generic_at_two_eligible_heights() {
     let repr =
         transcript::<ReprBackend<Gf4, PolyBasis>>(&instances, LookupRuntime::Inactive, 0, false);
     assert_eq!(repr, generic, "two eligible tensor4 activation heights");
+}
+
+#[test]
+fn representation_late_boundary_matches_generic_at_two_activation_heights() {
+    for height in [1 << 11, 1 << 12] {
+        let instances = [Instance::honest(
+            FixtureAir::Pair,
+            height,
+            0x007E_5030 + height as u64,
+        )];
+        let generic = transcript::<GenericBackend>(&instances, LookupRuntime::Inactive, 0, false);
+        let incumbent = transcript::<ReprBackend<Gf4, PolyBasis>>(
+            &instances,
+            LookupRuntime::Inactive,
+            0,
+            false,
+        );
+        let late = transcript::<ReprBackend<Gf4, PolyBasis, true>>(
+            &instances,
+            LookupRuntime::Inactive,
+            0,
+            false,
+        );
+        assert_eq!(incumbent, generic, "incumbent representation at {height}");
+        assert_eq!(late, generic, "late representation at {height}");
+    }
+}
+
+#[test]
+fn representation_late_boundary_matches_generic_for_n13_and_n11_stages() {
+    let instances = [
+        Instance::honest(FixtureAir::Pair, 1 << 13, 0x007E_5032),
+        Instance::honest(FixtureAir::Pair, 1 << 11, 0x007E_5033),
+    ];
+    let generic = transcript::<GenericBackend>(&instances, LookupRuntime::Inactive, 0, false);
+    let late = transcript::<ReprBackend<Gf4, PolyBasis, true>>(
+        &instances,
+        LookupRuntime::Inactive,
+        0,
+        false,
+    );
+    assert_eq!(late, generic, "n13+n11 late stages");
+}
+
+#[test]
+fn representation_late_boundary_rejects_preprocessed_successor_optimization() {
+    let instances = [Instance::honest(
+        FixtureAir::QuadraticPreprocessedSuccessor,
+        1 << 11,
+        0x007E_5034,
+    )];
+    assert_backends_agree(&instances, || LookupRuntime::Inactive, 0);
 }
 
 #[test]

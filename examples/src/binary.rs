@@ -614,6 +614,9 @@ pub enum Backend {
     Subfield,
     /// [`ReprBackend`] over `GF(4)`, with later rounds in [`Ghash128`].
     PolyBasis,
+    /// [`ReprBackend`] with one additional representation round evaluated directly on planes.
+    /// This is a time/memory policy choice; proof bytes remain identical to [`Self::PolyBasis`].
+    PolyBasisLate,
 }
 
 impl Backend {
@@ -652,6 +655,11 @@ impl Backend {
             Self::PolyBasis => prove_with_backend::<_, _, ReprBackend<BinaryField2, Ghash128>>(
                 config, instances, pow_bits, challenger,
             ),
+            Self::PolyBasisLate => {
+                prove_with_backend::<_, _, ReprBackend<BinaryField2, Ghash128, true>>(
+                    config, instances, pow_bits, challenger,
+                )
+            }
         }
     }
 }
@@ -1121,7 +1129,11 @@ mod tests {
     /// Require every harness backend to emit the proof and transcript of [`prove`].
     fn assert_backends_prove_byte_for_byte<A: BinaryAir>(air: &A, trace: &RowMajorMatrix<F>) {
         let generic = proof_transcript(air, trace, None);
-        for backend in [Backend::Subfield, Backend::PolyBasis] {
+        for backend in [
+            Backend::Subfield,
+            Backend::PolyBasis,
+            Backend::PolyBasisLate,
+        ] {
             assert_eq!(
                 proof_transcript(air, trace, Some(backend)),
                 generic,
@@ -1163,7 +1175,11 @@ mod tests {
         let air = Sha256BinaryAir::assuming_boolean_trace();
         let dense = Table::new(air.generate_random_trace_rows::<F>(4, 0).transpose());
         let packed = Table::from_packed_bits(air.generate_random_trace_packed::<Gf2>(4), 2);
-        for backend in [Backend::Subfield, Backend::PolyBasis] {
+        for backend in [
+            Backend::Subfield,
+            Backend::PolyBasis,
+            Backend::PolyBasisLate,
+        ] {
             assert_eq!(
                 boolean_proof_transcript(&air, dense.clone(), backend),
                 boolean_proof_transcript(&air, packed.clone(), backend),
@@ -1177,7 +1193,11 @@ mod tests {
         let air = Blake3BinaryAir::assuming_boolean_trace();
         let dense = Table::new(air.generate_random_trace_rows::<F>(4, 0).transpose());
         let packed = Table::from_packed_bits(air.generate_random_trace_packed::<Gf2>(4), 2);
-        for backend in [Backend::Subfield, Backend::PolyBasis] {
+        for backend in [
+            Backend::Subfield,
+            Backend::PolyBasis,
+            Backend::PolyBasisLate,
+        ] {
             assert_eq!(
                 boolean_proof_transcript(&air, dense.clone(), backend),
                 boolean_proof_transcript(&air, packed.clone(), backend),
@@ -1193,7 +1213,11 @@ mod tests {
         let air = KeccakBinaryAir::assuming_boolean_trace();
         let dense = Table::new(air.generate_random_trace_rows::<F>(3, 0).transpose());
         let packed = Table::from_packed_bits(air.generate_random_trace_packed::<Gf2>(3), 7);
-        for backend in [Backend::Subfield, Backend::PolyBasis] {
+        for backend in [
+            Backend::Subfield,
+            Backend::PolyBasis,
+            Backend::PolyBasisLate,
+        ] {
             assert_eq!(
                 boolean_proof_transcript(&air, dense.clone(), backend),
                 boolean_proof_transcript(&air, packed.clone(), backend),

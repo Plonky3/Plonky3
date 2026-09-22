@@ -254,11 +254,12 @@ where
 /// are the challenge field's own, carried into `R`, never `R`'s interpolation nodes.
 /// Every round polynomial is then the one [`GenericBackend`] computes, so the proof is the same.
 #[derive(Debug)]
-pub struct ReprBackend<S, R>(PhantomData<fn() -> (S, R)>);
+pub struct ReprBackend<S, R, const LATE_MATERIALIZATION: bool = false>(PhantomData<fn() -> (S, R)>);
 
 // The sealed kernels take the crate-private round states.
 #[expect(private_interfaces)]
-impl<F, EF, A, S, R> private::Dispatch<F, EF, A> for ReprBackend<S, R>
+impl<F, EF, A, S, R, const LATE_MATERIALIZATION: bool> private::Dispatch<F, EF, A>
+    for ReprBackend<S, R, LATE_MATERIALIZATION>
 where
     S: Field,
     F: HasSubfield<S>,
@@ -277,8 +278,13 @@ where
     type Repr = R;
 
     fn round0(state: &mut RoundStateBase<'_, '_, A, F, EF>, eq_suffix: &Poly<EF>) -> Vec<EF> {
+        let strategy = if LATE_MATERIALIZATION {
+            SlicedStrategy::TensorBoundaryLate
+        } else {
+            SlicedStrategy::TensorBoundary
+        };
         state
-            .round_poly_sliced_with_strategy::<S, R>(eq_suffix, SlicedStrategy::TensorBoundary)
+            .round_poly_sliced_with_strategy::<S, R>(eq_suffix, strategy)
             .or_else(|| state.round_poly_subfield::<S>(eq_suffix))
             .unwrap_or_else(|| state.round_poly(eq_suffix))
     }
@@ -304,6 +310,11 @@ where
     fn round(state: &mut RoundStateExt<'_, '_, A, F, EF, R>, eq_suffix: &Poly<EF>) -> Vec<EF> {
         state
             .round_poly_sliced::<S>(eq_suffix)
+            .or_else(|| {
+                LATE_MATERIALIZATION
+                    .then(|| state.round_poly_late_boundary::<S>(eq_suffix))
+                    .flatten()
+            })
             .or_else(|| state.round_poly_boundary::<S>(eq_suffix))
             .unwrap_or_else(|| {
                 state.unslice::<S>();
@@ -312,7 +323,10 @@ where
     }
 
     fn fold(state: &mut RoundStateExt<'_, '_, A, F, EF, R>, r: EF) {
-        if !state.fold_boundary::<S>(r) && !state.fold_sliced(r) {
+        if !(LATE_MATERIALIZATION && state.fold_late_boundary::<S>(r))
+            && !state.fold_boundary::<S>(r)
+            && !state.fold_sliced(r)
+        {
             state.fold_repr(r);
         }
     }
