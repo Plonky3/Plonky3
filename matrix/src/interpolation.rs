@@ -83,9 +83,33 @@ pub fn compute_adjusted_weights<EF: Field>(point: EF, diff_invs: &[EF]) -> Vec<E
     let point_inv = point.inverse();
     // Subtract z^{-1} from each 1/(z - x_i).
     //
-    // One item reads one weight and writes one, for a body of a single subtraction.
-    // The floor keeps a short table off rayon's bridge, which costs about as much as the body.
-    let item_bytes = 2 * size_of::<EF>();
+    // One item reads one weight and writes one, so it moves two elements.
+    //
+    // The rate behind a byte charge is calibrated on a fold, whose multiplication dominates.
+    //
+    // A lone subtraction is far cheaper per byte, so the raw count overprices this body.
+    //
+    // Over a degree-four extension of a 31-bit prime, one item takes 0.37 ns on one Linux core.
+    //
+    // A build that vectorizes the subtraction runs it in 0.18 ns instead.
+    //
+    // The raw count charges 3.2 ns either way, so the gate splits work not worth splitting.
+    //
+    // Against the same loop run whole, on 32 workers, whose gate is 20 us of serial work:
+    //
+    //     charged as 32 bytes : splits from 2^13, and loses 3.4x there and 1.7x at 2^14
+    //     charged as  4 bytes : splits from 2^16, where the split first pays
+    //
+    // A vectorized build loses 9x and 4.7x on those first two rows instead.
+    //
+    // Dividing by eight is what lands the gate on that break-even.
+    //
+    // It also cuts the split eight times coarser, which costs up to 1.3x from 2^18 to 2^20.
+    //
+    // That band is one where the split already wins 3x, so the coarser cut is the cheaper side.
+    //
+    // The floor also keeps a short table off rayon's bridge, which costs as much as the body.
+    let item_bytes = (2 * size_of::<EF>()).div_ceil(8);
     diff_invs
         .par_iter()
         .map_collect_min_task_bytes(item_bytes, |&d| d - point_inv)

@@ -62,8 +62,22 @@
 //! A floor of one is rayon's own unbounded splitting, which is what an A/B run of a loop wants.
 //!
 //! A site that uses the floor as its own chunk length reads that same `0` as a chunk of one item.
-//! That shape is slower than either arm and is not one the model ever picks, so such a site is
-//! measured against its own body rather than through these knobs.
+//!
+//! That shape is slower than either arm, and it is not one the model ever picks.
+//!
+//! The packed fill behind a table of ascending powers is the site to watch.
+//!
+//! It pays one exponentiation per chunk, so a chunk of one item pays one per item.
+//!
+//! On 32 Linux workers that setting costs the fill 60x at 2^12 powers and about 4x at 2^22.
+//!
+//! Twiddle tables and query power tables both come from it, so a whole-prover A/B mostly times it.
+//!
+//! A lower bound on the chunk does not rescue the setting.
+//!
+//! One fill round as the bound wins back 2 to 3x at 2^22 and nothing at 2^12.
+//!
+//! Such a site is measured against its own body rather than through these knobs.
 //!
 //! A caller that would rather not depend on the ambient environment sets both from code.
 //!
@@ -159,7 +173,7 @@ const MIN_PARALLEL_PICOS_PER_WORKER: u64 = 625_000;
 /// ```
 ///
 /// - Asking 2.5 us per worker demands a loop the model prices at 1.25 to 1.5 dispatches.
-/// - That is the same margin over a dispatch as the Linux gate asks for.
+/// - The Linux gate asks for 1.56, so this reaches that margin but is thinner at eight workers.
 ///
 /// The value is a gate, not the dispatch cost itself.
 ///
