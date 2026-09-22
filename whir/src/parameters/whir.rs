@@ -168,6 +168,36 @@ pub struct TerminalBudget {
 /// Built from user-facing protocol parameters plus the polynomial size.
 ///
 /// Contains all precomputed values needed by the prover and verifier.
+///
+/// Fields are written only by the constructors in this module; the schedule
+/// is read through accessors.
+///
+/// ```
+/// use p3_field::{ExtensionField, Field};
+/// use p3_whir::WhirConfig;
+///
+/// fn final_queries<EF: ExtensionField<F>, F: Field, C>(config: &WhirConfig<EF, F, C>) -> usize {
+///     config.terminal().num_queries
+/// }
+/// ```
+///
+/// ```compile_fail
+/// use p3_field::{ExtensionField, Field};
+/// use p3_whir::WhirConfig;
+///
+/// fn weaken<EF: ExtensionField<F>, F: Field, C>(config: &mut WhirConfig<EF, F, C>) {
+///     config.terminal.num_queries = 0;
+/// }
+/// ```
+///
+/// ```compile_fail
+/// use p3_field::{ExtensionField, Field};
+/// use p3_whir::{SecurityAssumption, WhirConfig};
+///
+/// fn swap_regime<EF: ExtensionField<F>, F: Field, C>(config: &mut WhirConfig<EF, F, C>) {
+///     config.params.soundness_type = SecurityAssumption::CapacityBound;
+/// }
+/// ```
 #[derive(Debug, Clone)]
 pub struct WhirConfig<EF, F, Challenger>
 where
@@ -175,7 +205,7 @@ where
     EF: ExtensionField<F>,
 {
     /// Number of variables in the original multilinear polynomial.
-    pub num_variables: usize,
+    pub(crate) num_variables: usize,
     /// Largest base-two domain dimension supported by the encoder.
     pub(crate) max_log_domain_size: usize,
     /// Stable evaluation-domain identity committed by the transcript.
@@ -183,30 +213,30 @@ where
     /// Whether proximity queries are allocated to protocol-fixed strata.
     pub(crate) stratified_queries: bool,
     /// Protocol parameters.
-    pub params: ProtocolParameters,
+    pub(crate) params: ProtocolParameters,
     /// Per-round derived configuration for each intermediate STIR round.
-    pub round_parameters: Vec<RoundConfig>,
+    pub(crate) round_parameters: Vec<RoundConfig>,
     /// Concrete folding factors used before the final direct-send phase.
     ///
     /// For constant schedules the last entry may be smaller than the nominal
     /// configured factor, e.g. `Constant(8)` on 15 variables derives `[8, 7]`.
-    pub folding_schedule: Vec<usize>,
+    pub(crate) folding_schedule: Vec<usize>,
     /// Number of out-of-domain samples during the commitment phase.
-    pub commitment_ood_samples: usize,
+    pub(crate) commitment_ood_samples: usize,
     /// PoW bits for the initial folding sumcheck (before any STIR rounds).
-    pub starting_folding_pow_bits: usize,
+    pub(crate) starting_folding_pow_bits: usize,
     /// Query budget of the final proximity test against the last committed codeword.
-    pub terminal: TerminalBudget,
+    pub(crate) terminal: TerminalBudget,
     /// Number of sumcheck rounds in the final phase.
-    pub final_sumcheck_rounds: usize,
+    pub(crate) final_sumcheck_rounds: usize,
     /// PoW bits for the final folding sumcheck.
-    pub final_folding_pow_bits: usize,
+    pub(crate) final_folding_pow_bits: usize,
     /// Phantom marker for the extension field type.
-    pub _extension_field: PhantomData<EF>,
+    _extension_field: PhantomData<EF>,
     /// Phantom marker for the base field type.
-    pub _base_field: PhantomData<F>,
+    _base_field: PhantomData<F>,
     /// Phantom marker for the challenger type.
-    pub _challenger: PhantomData<Challenger>,
+    _challenger: PhantomData<Challenger>,
 }
 
 impl<EF, F, Challenger> Deref for WhirConfig<EF, F, Challenger>
