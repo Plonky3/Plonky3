@@ -7,40 +7,44 @@ use p3_field::Field;
 
 use super::{RamBoundary, RamError, RamLayout, RamStatement};
 
-/// One memory access, in the order the machine issued it.
+/// One memory access the machine issued.
 ///
-/// There is no clock field, because an access is timed by its position in the list.
+/// The clock reading is the machine's own, not this module's.
 ///
-/// That is exactly what the clock constraint goes on to enforce.
+/// Two accesses to one cell need different readings, and the constraints enforce that.
 ///
-/// A caller cannot hand out two accesses at one time, since there is no way to say it.
+/// Two accesses to different cells may share a reading, because no read's answer depends on it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RamAccess<F> {
     /// Whether this access replaces the stored value.
     pub write: bool,
     /// Cell this access touches.
     pub address: u64,
+    /// Clock reading the machine attached to this access.
+    pub time: u64,
     /// Value read, or value written, one field element per component.
     pub value: Vec<F>,
 }
 
 impl<F: Field> RamAccess<F> {
-    /// One read of a cell, returning what it held.
-    pub fn read(address: u64, value: impl IntoIterator<Item = F>) -> Self {
+    /// One read of a cell at a clock reading, returning what it held.
+    pub fn read(address: u64, time: u64, value: impl IntoIterator<Item = F>) -> Self {
         // A read carries the value it saw, so the permutation has something to match.
         Self {
             write: false,
             address,
+            time,
             value: value.into_iter().collect(),
         }
     }
 
-    /// One write of a value to a cell.
-    pub fn write(address: u64, value: impl IntoIterator<Item = F>) -> Self {
+    /// One write of a value to a cell at a clock reading.
+    pub fn write(address: u64, time: u64, value: impl IntoIterator<Item = F>) -> Self {
         // A write carries the new value, which later reads of that cell inherit.
         Self {
             write: true,
             address,
+            time,
             value: value.into_iter().collect(),
         }
     }
@@ -48,7 +52,7 @@ impl<F: Field> RamAccess<F> {
 
 /// Row-major trace of one mutable read-write memory.
 ///
-/// Both access orders live here, so committing this commits both.
+/// The rows are the accesses sorted by cell and then by clock reading.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RamTrace<F> {
     /// Row-major values.
@@ -61,7 +65,7 @@ impl<F> RamTrace<F> {
     /// Columns per row.
     #[must_use]
     pub const fn width(&self) -> usize {
-        // The width is the AIR's width, so a caller never has to recompute it.
+        // The width is the constraint set's width, so a caller never recomputes it.
         self.width
     }
 
@@ -93,6 +97,14 @@ impl<F> RamTrace<F> {
         &self.values[row * self.width..(row + 1) * self.width]
     }
 
+    /// Wraps row-major values that some other routine laid out.
+    ///
+    /// Only this crate's own tests use it, to lay out traces the constraints have to reject.
+    #[cfg(test)]
+    pub(crate) const fn from_values(values: Vec<F>, width: usize) -> Self {
+        Self { values, width }
+    }
+
     /// One row of the trace, mutably.
     ///
     /// Only this crate's own tests use it, to build the traces the constraints have to reject.
@@ -109,7 +121,7 @@ impl<F> RamTrace<F> {
 impl<F: Field> RamTrace<F> {
     /// Builds the committed trace from the accesses a machine issued.
     ///
-    /// The sorted order, the comparison witness, the clock, and the markers are derived here.
+    /// The sort, the comparison witness, and the markers are derived here.
     ///
     /// A caller supplies only the accesses themselves.
     ///
@@ -123,7 +135,9 @@ impl<F: Field> RamTrace<F> {
     ///
     /// Returns an error for a malformed statement or a witness of the wrong shape.
     ///
-    /// Returns an error for a cell number too large to write down.
+    /// Returns an error for a cell number or a clock reading too large to write down.
+    ///
+    /// Returns an error for two accesses to one cell at one reading.
     ///
     /// Returns an error for a read that breaks continuity.
     ///
@@ -155,44 +169,38 @@ impl<F: Field> RamTrace<F> {
                     address_bits: statement.address_bits,
                 });
             }
+            if u128::from(access.time) >= 1u128 << statement.timestamp_bits {
+                return Err(RamError::TimeRange {
+                    index,
+                    time: access.time,
+                    timestamp_bits: statement.timestamp_bits,
+                });
+            }
         }
 
         let mut values = vec![F::ZERO; statement.access_count * layout.width];
 
-        // The issuing order is the order they arrived, timed by position.
-        for (index, access) in accesses.iter().enumerate() {
-            let row = &mut values[index * layout.width..(index + 1) * layout.width];
-            write_access(
-                row,
-                [
-                    layout.execution_write,
-                    layout.execution_address,
-                    layout.execution_timestamp,
-                    layout.execution_value,
-                ],
-                &layout,
-                access,
-                index as u64,
-            );
-
-            // The clock adds one to this row's reading to reach the next row's.
-            let mut carry = 1u64;
-            row[layout.execution_carry] = F::ONE;
-            for bit in 1..statement.timestamp_bits {
-                carry &= (index as u64 >> (bit - 1)) & 1;
-                row[layout.execution_carry + bit] = F::from_bool(carry == 1);
-            }
-        }
-
-        // Sorting goes by cell, then by time, and a time belongs to exactly one access.
+        // Sorting goes by cell, then by the machine's reading.
         let mut order = (0..statement.access_count).collect::<Vec<_>>();
-        order.sort_unstable_by_key(|&index| (accesses[index].address, index));
+        order.sort_unstable_by_key(|&index| (accesses[index].address, accesses[index].time));
 
         for (sorted, &index) in order.iter().enumerate() {
             let access = &accesses[index];
             let previous = sorted.checked_sub(1).map(|earlier| order[earlier]);
             let same_address =
                 previous.is_some_and(|earlier| accesses[earlier].address == access.address);
+
+            // One cell cannot hold two accesses at one reading, or they would have no order.
+            if same_address {
+                let earlier = previous.expect("a continued run has a row above it");
+                if accesses[earlier].time == access.time {
+                    return Err(RamError::RepeatedTime {
+                        index: sorted,
+                        address: access.address,
+                        time: access.time,
+                    });
+                }
+            }
 
             // A cell's opening row owes something different at each kind of boundary.
             if !same_address {
@@ -210,36 +218,25 @@ impl<F: Field> RamTrace<F> {
                 }
             } else if !access.write {
                 // Within a cell's run, a read returns whatever the access before it left.
-                let earlier = &accesses[previous.expect("a continued group has a previous row")];
+                let earlier = &accesses[previous.expect("a continued run has a row above it")];
                 if access.value != earlier.value {
                     return Err(RamError::ReadContinuity { index: sorted });
                 }
             }
 
             let row = &mut values[sorted * layout.width..(sorted + 1) * layout.width];
-            write_access(
-                row,
-                [
-                    layout.memory_write,
-                    layout.memory_address,
-                    layout.memory_timestamp,
-                    layout.memory_value,
-                ],
-                &layout,
-                access,
-                index as u64,
-            );
+            write_access(row, &layout, access);
             row[layout.same_address] = F::from_bool(same_address);
 
             // One gap witness serves whichever of the two comparisons is running.
             if let Some(earlier) = previous {
                 let (left, right, bits) = if same_address {
-                    (earlier as u64, index as u64, statement.timestamp_bits)
+                    (accesses[earlier].time, access.time, layout.timestamp_bits)
                 } else {
                     (
                         accesses[earlier].address,
                         access.address,
-                        statement.address_bits,
+                        layout.address_bits,
                     )
                 };
                 fill_comparison(row, &layout, left, right, bits);
@@ -249,10 +246,8 @@ impl<F: Field> RamTrace<F> {
         // A cell's run ends where the next begins, and the last row always ends one.
         if statement.boundary.is_segment() {
             for sorted in 0..statement.access_count {
-                let ends = sorted + 1 == statement.access_count || {
-                    let next = order[sorted + 1];
-                    accesses[next].address != accesses[order[sorted]].address
-                };
+                let ends = sorted + 1 == statement.access_count
+                    || accesses[order[sorted + 1]].address != accesses[order[sorted]].address;
                 values[sorted * layout.width + layout.group_end] = F::from_bool(ends);
             }
         }
@@ -264,26 +259,17 @@ impl<F: Field> RamTrace<F> {
     }
 }
 
-/// Writes one access into a row at the given component offsets.
-fn write_access<F: Field>(
-    row: &mut [F],
-    offsets: [usize; 4],
-    layout: &RamLayout,
-    access: &RamAccess<F>,
-    clock: u64,
-) {
-    // Offsets arrive in operation, cell, clock, then value order.
-    let [write, address, timestamp, value] = offsets;
-
-    // Digits run least significant first in both orders, which the comparisons assume.
-    row[write] = F::from_bool(access.write);
+/// Writes one access into a row.
+fn write_access<F: Field>(row: &mut [F], layout: &RamLayout, access: &RamAccess<F>) {
+    // Digits run least significant first, which the comparisons assume.
+    row[layout.operation] = F::from_bool(access.write);
     for bit in 0..layout.address_bits {
-        row[address + bit] = F::from_bool((access.address >> bit) & 1 == 1);
+        row[layout.address + bit] = F::from_bool((access.address >> bit) & 1 == 1);
     }
     for bit in 0..layout.timestamp_bits {
-        row[timestamp + bit] = F::from_bool((clock >> bit) & 1 == 1);
+        row[layout.timestamp + bit] = F::from_bool((access.time >> bit) & 1 == 1);
     }
-    row[value..value + layout.value_width].copy_from_slice(&access.value);
+    row[layout.value..layout.value + layout.value_width].copy_from_slice(&access.value);
 }
 
 /// Fills the adder witness showing the later key exceeds the earlier one.

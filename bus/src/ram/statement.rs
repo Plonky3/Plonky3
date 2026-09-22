@@ -17,6 +17,13 @@ use crate::BusPlan;
 /// It also keeps every witness index a plain unsigned integer.
 pub const MAX_RAM_BIT_WIDTH: usize = 64;
 
+/// Fewest accesses a statement may cover.
+///
+/// A one-row trace has no transition, so nothing would compare a row against the row above it.
+///
+/// Proof systems downstream refuse a one-row table anyway.
+pub const MIN_RAM_ACCESS_COUNT: usize = 2;
+
 /// How one proof's memory relates to the executions on either side of it.
 ///
 /// These are two statements, not two settings of one.
@@ -40,7 +47,7 @@ pub enum RamBoundary {
     SingleProof,
     /// One part of a longer execution, bounded by two committed memory images.
     ///
-    /// The first access to a cell has to be a read, declared on the inherited channel.
+    /// The first access to a cell declares its value on the inherited channel.
     ///
     /// The last access to a cell declares the value it leaves on the handed-on channel.
     ///
@@ -48,9 +55,9 @@ pub enum RamBoundary {
     ///
     /// Both are ordinary named channels the enclosing plan balances like any other.
     ///
-    /// Forcing that opening read is what binds the inherited value.
+    /// Balancing the inherited channel is what binds the value a cell starts this part with.
     ///
-    /// A part of an execution cannot invent the memory it starts from.
+    /// That declaration carries the opening row's own value, so it has to match an image entry.
     Segment {
         /// Channel carrying one entry per cell this part of the execution inherits.
         incoming: String,
@@ -87,14 +94,8 @@ pub struct RamStatement {
     ///
     /// Each chip produces one access and this memory consumes it.
     ///
-    /// Balance then proves the issuing order holds exactly what the machine issued.
+    /// Balance then proves this trace holds exactly the accesses the machine issued.
     pub access_bus: String,
-    /// Channel carrying the permutation between the two orders.
-    ///
-    /// The issuing order produces every access and the sorted order consumes it.
-    ///
-    /// Balance then proves the two orders hold the same accesses.
-    pub order_bus: String,
     /// Number of accesses, which is also the height of the trace.
     pub access_count: usize,
     /// Number of bits in a cell number.
@@ -134,9 +135,12 @@ impl RamStatement {
     ///
     /// Returns an error for one channel name used in two roles.
     pub fn validate(&self) -> Result<(), RamError> {
-        // A memory with no accesses has no product tree and no first row to constrain.
-        if self.access_count == 0 {
-            return Err(RamError::EmptyTrace);
+        // A one-row trace has no transition, so no row would ever be compared against another.
+        if self.access_count < MIN_RAM_ACCESS_COUNT {
+            return Err(RamError::TooFewAccesses {
+                access_count: self.access_count,
+                minimum: MIN_RAM_ACCESS_COUNT,
+            });
         }
 
         // The plan's product tree aligns each block, so a block height is a power of two.
@@ -157,28 +161,13 @@ impl RamStatement {
                 maximum: MAX_RAM_BIT_WIDTH,
             });
         }
-
-        // The clock counts up from zero once per access, and it must not wrap.
-        //
-        // A wrap repeats a reading, and two accesses at one cell would then have no order.
-        //
-        // A read could be matched against the later write instead of the earlier one.
-        let capacity = 1u128 << self.timestamp_bits;
-        if self.access_count as u128 > capacity {
-            return Err(RamError::TimestampCapacity {
-                access_count: self.access_count,
-                timestamp_bits: self.timestamp_bits,
-                capacity,
-            });
-        }
         if self.value_width == 0 {
             return Err(RamError::EmptyValue);
         }
 
         // Two roles on one channel would let a tuple of one cancel a tuple of the other.
-        let mut names = Vec::with_capacity(4);
+        let mut names = Vec::with_capacity(3);
         names.push(self.access_bus.as_str());
-        names.push(self.order_bus.as_str());
         names.extend(self.boundary.image_buses().into_iter().flatten());
         for (position, name) in names.iter().enumerate() {
             if names[..position].contains(name) {
@@ -208,10 +197,8 @@ impl RamStatement {
         // Dimensions come first, so no width is compared against a nonsense statement.
         self.validate()?;
 
-        // The access and permutation channels carry a whole access each.
-        for name in [self.access_bus.as_str(), self.order_bus.as_str()] {
-            check_payload_width(bus_plan, name, self.access_payload_width())?;
-        }
+        // The access channel carries a whole access.
+        check_payload_width(bus_plan, &self.access_bus, self.access_payload_width())?;
 
         // An image channel carries only a cell number and a value.
         for name in self.boundary.image_buses().into_iter().flatten() {
@@ -223,9 +210,7 @@ impl RamStatement {
 
     /// Produced and consumed leaves this memory adds to the plan, in that order.
     ///
-    /// The issuing order produces one access and the sorted order consumes it.
-    ///
-    /// This memory also consumes one access from the machine's own chips.
+    /// This memory produces nothing on the access channel and consumes one access per row.
     ///
     /// A continuing proof adds an inherited entry and a handed-on entry per row.
     ///
@@ -240,14 +225,14 @@ impl RamStatement {
         } else {
             0
         };
-        [self.access_count + images, 2 * self.access_count + images]
+        [images, self.access_count + images]
     }
 
     /// Soundness of this memory's claims, at the field the transcript samples from.
     ///
     /// This memory runs no random experiment of its own.
     ///
-    /// Its two cross-order claims are ordinary multiset claims on the plan's product tree.
+    /// Its claims are ordinary multiset claims on the plan's product tree.
     ///
     /// Every constraint it adds is deterministic.
     ///
@@ -298,13 +283,11 @@ fn check_payload_width(bus_plan: &BusPlan, name: &str, expected: usize) -> Resul
     Ok(())
 }
 
-/// Column offsets of the single trace holding both access orders.
+/// Column offsets of the address-sorted access trace.
 ///
-/// One trace for both orders is not a space optimisation.
+/// There is one trace, holding the accesses sorted by cell and then by clock reading.
 ///
-/// It makes them share a height and a commitment.
-///
-/// No later step can then check one order against a trace the other did not come from.
+/// The machine's own chips are the copy in issuing order, and the access channel joins the two.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RamLayout {
     /// Number of cell digits, repeated here so a layout describes itself.
@@ -315,29 +298,15 @@ pub struct RamLayout {
     pub value_width: usize,
     /// Width of the shared comparison witness, the wider of the two digit counts.
     pub compare_bits: usize,
-    /// Operation marker of the issuing-order access.
-    pub execution_write: usize,
-    /// First issuing-order cell digit, least significant first.
-    pub execution_address: usize,
-    /// First issuing-order clock digit, least significant first.
-    pub execution_timestamp: usize,
-    /// First issuing-order value component.
-    pub execution_value: usize,
-    /// First carry of the increment that produces the next row's clock reading.
-    ///
-    /// The chain holds one carry per clock digit and no carry out.
-    ///
-    /// The statement's capacity check already forbids a clock that could reach one.
-    pub execution_carry: usize,
-    /// Operation marker of the sorted-order access.
-    pub memory_write: usize,
-    /// First sorted-order cell digit, least significant first.
-    pub memory_address: usize,
-    /// First sorted-order clock digit, least significant first.
-    pub memory_timestamp: usize,
-    /// First sorted-order value component.
-    pub memory_value: usize,
-    /// Whether this sorted row touches the same cell as the row before it.
+    /// Operation marker, set on a write.
+    pub operation: usize,
+    /// First cell digit, least significant first.
+    pub address: usize,
+    /// First clock digit, least significant first.
+    pub timestamp: usize,
+    /// First value component.
+    pub value: usize,
+    /// Whether this row touches the same cell as the row before it.
     pub same_address: usize,
     /// Digits of the gap up from the row before this one.
     pub compare_delta: usize,
@@ -368,7 +337,7 @@ impl RamLayout {
             ..
         } = *statement;
 
-        // Exactly one of the two comparisons runs on a sorted row, so they share one witness.
+        // Exactly one of the two comparisons runs on a row, so they share one witness.
         //
         // Whichever runs leaves any column above its own digit count unconstrained.
         let compare_bits = address_bits.max(timestamp_bits);
@@ -381,15 +350,10 @@ impl RamLayout {
             Ok(start)
         };
 
-        let execution_write = take(1)?;
-        let execution_address = take(address_bits)?;
-        let execution_timestamp = take(timestamp_bits)?;
-        let execution_value = take(value_width)?;
-        let execution_carry = take(timestamp_bits)?;
-        let memory_write = take(1)?;
-        let memory_address = take(address_bits)?;
-        let memory_timestamp = take(timestamp_bits)?;
-        let memory_value = take(value_width)?;
+        let operation = take(1)?;
+        let address = take(address_bits)?;
+        let timestamp = take(timestamp_bits)?;
+        let value = take(value_width)?;
         let same_address = take(1)?;
         let compare_delta = take(compare_bits)?;
         let compare_carry = take(compare_bits + 1)?;
@@ -402,15 +366,10 @@ impl RamLayout {
             timestamp_bits,
             value_width,
             compare_bits,
-            execution_write,
-            execution_address,
-            execution_timestamp,
-            execution_value,
-            execution_carry,
-            memory_write,
-            memory_address,
-            memory_timestamp,
-            memory_value,
+            operation,
+            address,
+            timestamp,
+            value,
             same_address,
             compare_delta,
             compare_carry,
@@ -420,47 +379,24 @@ impl RamLayout {
         })
     }
 
-    /// Columns of one issuing-order access, in payload order.
+    /// Columns of one access, in payload order.
     ///
     /// The order is operation, cell digits, clock digits, then value components.
-    pub fn execution_access_columns(&self) -> impl Iterator<Item = usize> + '_ {
-        // One iterator drives both the declaration and every test that checks it.
-        self.access_columns([
-            self.execution_write,
-            self.execution_address,
-            self.execution_timestamp,
-            self.execution_value,
-        ])
-    }
-
-    /// Columns of one sorted-order access, in payload order.
-    pub fn memory_access_columns(&self) -> impl Iterator<Item = usize> + '_ {
-        // Both orders share a payload order, so their fingerprints are comparable.
-        self.access_columns([
-            self.memory_write,
-            self.memory_address,
-            self.memory_timestamp,
-            self.memory_value,
-        ])
-    }
-
-    /// Columns of one access, given its operation, cell, clock, and value offsets.
     ///
     /// The operation marker leads, so whoever reads an access sees what it is first.
-    fn access_columns(&self, offsets: [usize; 4]) -> impl Iterator<Item = usize> {
-        let [write, address, timestamp, value] = offsets;
-        core::iter::once(write)
-            .chain(address..address + self.address_bits)
-            .chain(timestamp..timestamp + self.timestamp_bits)
-            .chain(value..value + self.value_width)
+    pub fn access_columns(&self) -> impl Iterator<Item = usize> + '_ {
+        core::iter::once(self.operation)
+            .chain(self.address..self.address + self.address_bits)
+            .chain(self.timestamp..self.timestamp + self.timestamp_bits)
+            .chain(self.value..self.value + self.value_width)
     }
 
     /// Columns of one memory-image entry, in payload order.
     ///
-    /// The cell digits lead, then the value components, read off the sorted order.
+    /// The cell digits lead, then the value components.
     pub fn image_columns(&self) -> impl Iterator<Item = usize> + '_ {
         // An image entry names a value held at a cell and nothing else.
-        (self.memory_address..self.memory_address + self.address_bits)
-            .chain(self.memory_value..self.memory_value + self.value_width)
+        (self.address..self.address + self.address_bits)
+            .chain(self.value..self.value + self.value_width)
     }
 }

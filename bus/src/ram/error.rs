@@ -7,9 +7,14 @@ use thiserror::Error;
 /// Invalid statements, layouts, or witnesses for mutable read-write memory.
 #[derive(Clone, Debug, PartialEq, Eq, Error)]
 pub enum RamError {
-    /// A memory with no accesses has nothing to prove and no product tree.
-    #[error("mutable memory requires at least one access")]
-    EmptyTrace,
+    /// A one-row trace has no transition, so nothing compares a row against the row above it.
+    #[error("mutable memory covers {access_count} accesses, expected at least {minimum}")]
+    TooFewAccesses {
+        /// Access count supplied by the statement.
+        access_count: usize,
+        /// Fewest accesses a statement may cover.
+        minimum: usize,
+    },
     /// The permutation reuses the enclosing plan's product tree.
     ///
     /// That tree aligns one block per declaration, so a block height is a power of two.
@@ -33,22 +38,6 @@ pub enum RamError {
         timestamp_bits: usize,
         /// Largest supported width.
         maximum: usize,
-    },
-    /// Distinct clock readings need one value per access.
-    ///
-    /// A wrapped clock repeats a reading.
-    ///
-    /// Two accesses at one cell would then have no order, so a read could match either.
-    #[error(
-        "mutable memory has {access_count} accesses, but {timestamp_bits} clock digits count {capacity}"
-    )]
-    TimestampCapacity {
-        /// Access count supplied by the statement.
-        access_count: usize,
-        /// Timestamp width supplied by the statement.
-        timestamp_bits: usize,
-        /// Distinct clock values that width can represent.
-        capacity: u128,
     },
     /// An access with no value components carries no memory state.
     #[error("mutable memory requires at least one value component")]
@@ -109,6 +98,26 @@ pub enum RamError {
         address: u64,
         /// Width fixed by the statement.
         address_bits: usize,
+    },
+    /// One access names a clock reading the statement cannot represent.
+    #[error("mutable memory access {index} is timed {time}, wider than {timestamp_bits} digits")]
+    TimeRange {
+        /// Position of the malformed access in the caller's list.
+        index: usize,
+        /// Clock reading supplied by the witness.
+        time: u64,
+        /// Width fixed by the statement.
+        timestamp_bits: usize,
+    },
+    /// Two accesses to one cell share a clock reading, so they have no order between them.
+    #[error("mutable memory has two accesses to cell {address} at reading {time}")]
+    RepeatedTime {
+        /// Position of the later access in address-then-reading order.
+        index: usize,
+        /// Cell both accesses touch.
+        address: u64,
+        /// Reading both accesses claim.
+        time: u64,
     },
     /// A continuing proof touches a cell it never opened against the inherited image.
     #[error(

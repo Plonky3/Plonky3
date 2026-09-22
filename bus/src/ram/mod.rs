@@ -10,29 +10,39 @@
 //!
 //! # Two orders
 //!
-//! The accesses are written down twice.
+//! The accesses exist twice: as the machine's chips issued them, and sorted by cell then time.
 //!
-//! One copy runs as the machine issued them, the other sorted by cell and then by time.
+//! Only the sorted copy is committed here, because the machine's chips already are the other.
 //!
-//! Proving the copies hold the same accesses makes every memory rule local to the sorted one.
+//! They produce each access on a named channel and this copy consumes it.
 //!
-//! Both copies live in one committed trace, so a single commitment binds them together.
+//! Balancing that channel is the permutation, and the enclosing plan already runs it.
 //!
-//! No later step can check one order against a trace the other did not come from.
+//! Sorting is what makes every memory rule local.
+//!
+//! Each rule below reads one row against the row above it.
 //!
 //! # The clock
 //!
-//! Time is the row position in the issuing order.
+//! A clock reading belongs to the machine, and nothing here can check it against real time.
 //!
-//! An increment chain proves the clock counts up from zero, and the shape check caps how far.
+//! A machine has to constrain its own readings to rise along its execution.
 //!
-//! Distinct times give the sorted order one answer instead of several.
+//! What this argument adds is that two accesses to one cell cannot share a reading.
+//!
+//! Readings at different cells may collide freely, because no read's answer depends on that.
+//!
+//! An earlier draft kept a second committed copy whose reading was its row position.
+//!
+//! It bound nothing: a multiset claim lets the machine attach those readings in any order.
+//!
+//! Dropping it removed one operation, one cell, two clocks and one value per access.
 //!
 //! # The comparison
 //!
 //! Sorting needs a greater-than, which a field does not have.
 //!
-//! Each sorted row witnesses the gap up from the row above it and adds that gap back.
+//! Each row witnesses the gap up from the row above it and adds that gap back.
 //!
 //! The carry has to vanish at the top, which is what makes the comparison unsigned.
 //!
@@ -40,19 +50,11 @@
 //!
 //! # Nothing new on the wire
 //!
-//! The permutation is not a new reduction.
-//!
-//! The issuing order produces each access on a named channel and the sorted order consumes it.
-//!
-//! Balancing that channel is the whole proof, and the enclosing plan already does it.
-//!
-//! The machine's own chips produce their accesses on a second channel this memory consumes.
-//!
-//! That ties the issuing order to the computation rather than to an invented history.
+//! The permutation is not a new reduction, only the plan's ordinary multiset balance.
 //!
 //! Static indexed tables keep the lookup path they already had.
 //!
-//! An immutable entry has no operation and no time, so its tuple cannot pass for this one.
+//! An immutable entry has no operation and no reading, so its tuple cannot pass for this one.
 //!
 //! # Boundaries
 //!
@@ -84,7 +86,11 @@
 //!
 //! # Cost
 //!
-//! Most columns hold a single bit, which the Boolean commitment path stores cheaply.
+//! A statement commits one operation column, its cell and clock digits, and its value.
+//!
+//! On top of those sits a comparison witness a little wider than the larger digit count.
+//!
+//! Most of those columns hold a single bit, which the Boolean commitment path stores cheaply.
 //!
 //! A continuing proof's image channels take one leaf per access, not one per cell.
 //!
@@ -95,6 +101,8 @@
 //! # What remains the caller's
 //!
 //! Committing the trace, running the plan, and checking the constraints, as for any table.
+//!
+//! Constraining the machine's own clock readings, which nothing here can do for it.
 //!
 //! A continuing proof's two image tables are the caller's as well.
 //!
@@ -110,5 +118,7 @@ mod tests;
 
 pub use air::RamAir;
 pub use error::RamError;
-pub use statement::{MAX_RAM_BIT_WIDTH, RamBoundary, RamLayout, RamStatement};
+pub use statement::{
+    MAX_RAM_BIT_WIDTH, MIN_RAM_ACCESS_COUNT, RamBoundary, RamLayout, RamStatement,
+};
 pub use witness::{RamAccess, RamTrace};

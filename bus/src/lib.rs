@@ -47,5 +47,6 @@ pub use product::{
     ProductGkrShape, ProductGkrShapeError,
 };
 pub use ram::{
-    MAX_RAM_BIT_WIDTH, RamAccess, RamAir, RamBoundary, RamError, RamLayout, RamStatement, RamTrace,
+    MAX_RAM_BIT_WIDTH, MIN_RAM_ACCESS_COUNT, RamAccess, RamAir, RamBoundary, RamError, RamLayout,
+    RamStatement, RamTrace,
 };
