@@ -2575,9 +2575,6 @@ mod babybear_pcs {
     /// commitments, a merged (`Combine`) bucket, and buckets that one commitment skips.
     #[test]
     fn test_pcs_openings_are_pinned_across_spreads() {
-        #[allow(unused_imports)]
-        use p3_commit::Pcs as _;
-
         let cases: [(usize, Vec<Vec<bool>>, &str); 3] = [
             (
                 0,
