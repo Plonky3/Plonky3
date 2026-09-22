@@ -378,10 +378,21 @@ fn plane_fold_five_challenges_matches_explicit_corner_sum() {
             let main_width = instance.air.width();
             for (row, values) in instance.main.values.chunks_mut(main_width).enumerate() {
                 for (column, value) in values.iter_mut().enumerate() {
-                    *value = gf4(plane_fold_fixture_bits(row, column, 3));
+                    *value = gf4(plane_fold_fixture_bits(row, column, main_width));
                 }
             }
-            with_state(&[instance], no_lookups(), |state, _| {
+            if let Some(preprocessed) = instance.preprocessed.as_mut() {
+                for (row, value) in preprocessed.values.iter_mut().enumerate() {
+                    *value = gf4(plane_fold_fixture_bits(row, 1, main_width));
+                }
+            }
+            with_state(&[instance], no_lookups(), |mut state, _| {
+                if name == "merged" {
+                    let periodic = (0..height)
+                        .map(|row| gf4(plane_fold_fixture_bits(row, 2, main_width)))
+                        .collect();
+                    state.periodic[0] = Some(Table::new(RowMajorMatrix::new(periodic, height)));
+                }
                 let trace = state
                     .sliced_trace::<Gf4>()
                     .expect("the GF(4) trace should fit the sliced path");
@@ -431,14 +442,16 @@ fn plane_fold_five_challenges_matches_explicit_corner_sum() {
 }
 
 fn plane_fold_fixture_bits(row: usize, column: usize, width: usize) -> usize {
-    let mixed = row
-        ^ (row >> 2)
-        ^ (row >> 4)
-        ^ (row >> 6)
-        ^ (row >> 8)
-        ^ (row >> 10)
-        ^ column.wrapping_mul(width + 5);
-    mixed & 3
+    let mut mixed = 0xD1CE_BA5E_1234_5678u64
+        .wrapping_add((row as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15))
+        .wrapping_add((column as u64).wrapping_mul(0xBF58_476D_1CE4_E5B9))
+        .wrapping_add(width as u64);
+    mixed ^= mixed >> 30;
+    mixed = mixed.wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    mixed ^= mixed >> 27;
+    mixed = mixed.wrapping_mul(0x94D0_49BB_1331_11EB);
+    mixed ^= mixed >> 31;
+    (mixed & 3) as usize
 }
 
 fn plane_fold_trace_fixture(
@@ -483,6 +496,25 @@ fn plane_fold_reference_covers_prefixes_widths_and_special_challenges() {
         Tower::interpolation_node(2),
         Tower::from_repr(0x1234),
     ];
+    for num_vars in [11, 12] {
+        for width in [1, 3, 9] {
+            let (_, values) = plane_fold_trace_fixture(num_vars, width, false);
+            let remaining = num_vars - 5;
+            let differs_after_reversal = (0usize..(1 << 5)).any(|corner| {
+                let reversed = corner.reverse_bits() >> (usize::BITS as usize - 5);
+                (0..1 << remaining).any(|suffix| {
+                    (0..width).any(|column| {
+                        values[((corner << remaining) | suffix) * width + column]
+                            != values[((reversed << remaining) | suffix) * width + column]
+                    })
+                })
+            });
+            assert!(
+                differs_after_reversal,
+                "fixture must distinguish five-prefix reversal at n={num_vars}, width={width}"
+            );
+        }
+    }
     for prefix_len in 3..=5 {
         for width in [1, 3, 9] {
             for boolean in [true, false] {
