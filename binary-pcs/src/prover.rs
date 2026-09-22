@@ -47,6 +47,12 @@ use crate::verifier::flat_coset_indices;
 /// its own eq-weighted column combination before it composes with the folds below.
 const FOLDING: usize = 0;
 
+/// Fewest rounds a batch folds for its codeword to be encoded from the bound message rather than
+/// folded from the previous codeword.
+///
+/// Below it, folding the previous codeword is the cheaper of the two at every codeword length.
+const MIN_ENCODED_ARITY: usize = 4;
+
 /// Data produced by committing the base codeword: the layout used to build the residual
 /// sumcheck, and the base commitment's Merkle prover data.
 ///
@@ -230,9 +236,15 @@ where
             }
         }
 
-        // A batch's fold is the encoding of the message its rounds bound. When the sumcheck holds
-        // that message, encoding it reads a message shorter than the codeword the fold reads by
-        // the batch's folding factor times the rate.
+        // A batch's folded codeword is also the encoding of the message its rounds bound.
+        //
+        //     fold     one pass per round over the previous codeword, halving it each time,
+        //              so its cost is set by the codeword it reads, whatever the arity
+        //     encode   one transform of the folded codeword, a product per symbol per bit of
+        //              its length, so its cost halves with every round the batch folds
+        //
+        // Encoding is therefore the cheaper one only for a batch of enough rounds, and it needs
+        // the sumcheck to hold the bound message at the batch's end.
         //
         // Otherwise fold out of the previous batch's Merkle leaves, never out of a copy of them.
         // The commitment scheme already owns every codeword it committed.
@@ -240,7 +252,10 @@ where
         // The first batch reads the committed alphabet, every later one the challenge field.
         // The two arms therefore differ in the type of the codeword they load.
         let folded = tracing::info_span!("fold codeword").in_scope(|| {
-            encode_bound_message(&mut sumcheck, config.log_inv_rate()).unwrap_or_else(|| {
+            let encoded = (arity >= MIN_ENCODED_ARITY)
+                .then(|| encode_bound_message(&mut sumcheck, config.log_inv_rate()))
+                .flatten();
+            encoded.unwrap_or_else(|| {
                 if batch == 0 {
                     fold_codeword_batch(&mmcs.get_matrices(&merkle_data)[0].values, &challenges)
                 } else {
