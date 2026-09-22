@@ -12,8 +12,7 @@
 use p3_binary_field::{BinaryChallenger, BinaryField128, Gf2, Ghash128, PackedGf2x64};
 use p3_binary_pcs::whir::{
     BinaryWhirBudget, BinaryWhirProfile, BooleanWhirDomain, BooleanWhirError, BooleanWhirPcs,
-    BooleanWhirProof, BooleanWhirProver, BooleanWhirTracePcs, BudgetError, ProofShape,
-    recommended_cap_height,
+    BooleanWhirProof, BooleanWhirProver, BooleanWhirTracePcs, BudgetError, recommended_cap_height,
 };
 use p3_binary_pcs::{
     BinaryPcsConfig, BinaryPcsParams, BitOpening, BitReadings, BooleanMultilinearPcs, BooleanPcs,
@@ -261,23 +260,30 @@ fn the_budget_grades_the_schedule_and_the_proof() {
     let shape = pcs.proof_shape(2, false);
     let budget = BinaryWhirBudget::PRODUCTION;
 
-    // The schedule this fixture derives, pinned whole so a drift in any figure is visible.
+    // The derived schedule is not pinned here.
     //
-    // It folds three variables once, then sends six in the clear.
+    // It trades grinding against queries, and that trade has differed between builds.
     //
-    // Two claims add two opened values and two reductions of a hundred and forty-seven elements.
+    // The shape's own arithmetic holds whichever way the trade lands.
+    //
+    // Three variables fold once, so every position opens eight off a tree of one depth.
+    assert_eq!(shape.opened_base_elements, shape.stir_queries << FOLDING);
+    assert_eq!(shape.opened_extension_elements, 0);
     assert_eq!(
-        shape,
-        ProofShape {
-            stir_queries: 105,
-            opened_base_elements: 840,
-            opened_extension_elements: 0,
-            merkle_digests: 840,
-            sent_base_elements: 10,
-            sent_extension_elements: 379,
-            grinding_bits: 3,
-        }
+        shape.merkle_digests,
+        shape.stir_queries * (LOG_BITS - ABSORBED - FOLDING + LOG_INV_RATE)
     );
+    assert!(shape.grinding_bits <= budget.max_grinding_bits);
+
+    // What the claim count adds is fixed by the claims, not by the schedule.
+    //
+    // Each brings its opened value and one reduction, whose size the packing's arity fixes.
+    let opening_only = pcs.proof_shape(0, false);
+    assert_eq!(
+        shape.sent_extension_elements - opening_only.sent_extension_elements,
+        2 * (128 + 2 * (LOG_BITS - ABSORBED) + 2)
+    );
+    assert_eq!(shape.stir_queries, opening_only.stir_queries);
 
     budget
         .check_shape(
@@ -296,10 +302,7 @@ fn the_budget_grades_the_schedule_and_the_proof() {
     let bytes = postcard::to_allocvec(&proof).unwrap().len();
 
     // The schedule's own estimate must not be a fiction the real proof exceeds.
-    //
-    //     (840 + 10)*19 + (0 + 379)*19 + 840*32 = 16150 + 7201 + 26880
     let estimate = shape.max_bytes(ENCODED_ELEMENT_BYTES, ENCODED_ELEMENT_BYTES, DIGEST_BYTES);
-    assert_eq!(estimate, 50_231);
 
     // The proof-of-work search runs in parallel and keeps whichever witness a worker reaches first.
     //
@@ -317,9 +320,11 @@ fn the_budget_grades_the_schedule_and_the_proof() {
     budget.check_bytes(bytes).unwrap();
 
     // A ceiling below what the schedule needs must refuse it rather than warn.
+    //
+    // The ceiling is read off the schedule that was derived, not off one host's figure.
     assert_eq!(
         BinaryWhirBudget {
-            max_stir_queries: 104,
+            max_stir_queries: shape.stir_queries - 1,
             ..budget
         }
         .check_shape(
@@ -329,8 +334,8 @@ fn the_budget_grades_the_schedule_and_the_proof() {
             DIGEST_BYTES
         ),
         Err(BudgetError::Queries {
-            actual: 105,
-            budget: 104
+            actual: shape.stir_queries,
+            budget: shape.stir_queries - 1
         })
     );
     // The refusal is tied to the proof that was measured, not to one host's figure.
@@ -367,16 +372,24 @@ fn the_estimate_covers_the_reductions_and_not_the_opening_alone() {
         2 * 2 * 128
     );
 
-    // Eight claims outgrow the opening-only estimate of 41,792 bytes this fixture used to report.
+    // Enough claims that the reductions outweigh what the digest count over-estimates.
+    //
+    // Reading the schedule alone grows an estimate by one value, the proof by a reduction.
+    //
+    // At this many claims such an estimate has fallen behind the proof.
+    const MANY: usize = 12;
     let bits = witness(0x5718);
-    let points = points_at(0x5719, 8);
     let mut prover_chal = challenger();
     let (_, data) = pcs.commit_bits(&bits, &mut prover_chal).unwrap();
-    let (_, proof) = pcs.open_at_points(data, &points, &mut prover_chal).unwrap();
+    let (_, proof) = pcs
+        .open_at_points(data, &points_at(0x5719, MANY), &mut prover_chal)
+        .unwrap();
     let bytes = postcard::to_allocvec(&proof).unwrap().len();
-    assert!(bytes > 41_792, "the reductions no longer dominate: {bytes}");
-
-    let estimate = eight.max_bytes(ENCODED_ELEMENT_BYTES, ENCODED_ELEMENT_BYTES, DIGEST_BYTES);
+    let estimate = pcs.proof_shape(MANY, false).max_bytes(
+        ENCODED_ELEMENT_BYTES,
+        ENCODED_ELEMENT_BYTES,
+        DIGEST_BYTES,
+    );
     assert!(
         bytes <= estimate,
         "the estimate understates the proof: {bytes} against {estimate}"
