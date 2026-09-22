@@ -1239,14 +1239,17 @@ where
 
 #[cfg(test)]
 mod tests {
-    use alloc::vec;
+    use alloc::string::String;
+    use alloc::{format, vec};
 
     use p3_binary_field::BinaryField128;
     use p3_field::PrimeCharacteristicRing;
+    use p3_keccak::Keccak256Hash;
     use p3_matrix::dense::RowMajorMatrix;
     use p3_multilinear_util::poly::Poly;
     use p3_sumcheck::ring_switch::bits::BitRingSwitchProofError;
     use p3_sumcheck::{OpeningBatch, PrescribedPointPcs, TableSpec};
+    use p3_symmetric::CryptographicHasher;
     use rand::rngs::SmallRng;
     use rand::{RngExt, SeedableRng};
 
@@ -2823,6 +2826,182 @@ mod tests {
                 .iter()
                 .all(|term| term.label != "column-batching")
         );
+    }
+
+    /// Keccak-256 hex digest of a value's postcard encoding.
+    fn pinned_digest<T: Serialize>(value: &T) -> String {
+        let bytes = postcard::to_allocvec(value).expect("postcard serialization must not fail");
+        Keccak256Hash
+            .hash_iter(bytes)
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect()
+    }
+
+    /// The bits of the labelled term of a `prescribed_security` report, or a panic naming
+    /// the label that is missing.
+    fn term_bits(security: &PrescribedOpeningSecurity, label: &str) -> f64 {
+        security
+            .terms
+            .iter()
+            .find(|term| term.label == label)
+            .unwrap_or_else(|| panic!("missing {label}"))
+            .bits
+            .bits()
+    }
+
+    /// Pins the opening proof bytes, the shared post-open/post-verify challenger state, and
+    /// the `prescribed_security` report, for all three opening routes: the batched route
+    /// reading both views, the batched route sampled through the transcript, and the
+    /// per-column route over several tables with a subset, a reordering and a partial
+    /// successor batch.
+    #[test]
+    fn opening_routes_and_their_security_are_pinned() {
+        // (a) Batched, both views, prescribed points.
+        {
+            let shape = TableShape::new(8, 3);
+            let scheme = pcs(&[shape]);
+            let protocol = both_views_protocol(shape, 2);
+            let table = table_with_width(0xB900, 8, 3);
+            let mut rng = SmallRng::seed_from_u64(0xB901);
+            let points = vec![Point::<EF>::rand(&mut rng, 8), Point::rand(&mut rng, 8)];
+
+            let mut prover_chal = challenger();
+            let (commitment, data) = scheme.commit(vec![table], &mut prover_chal).unwrap();
+            let proof = scheme
+                .open_at(data, &protocol, &points, &mut prover_chal)
+                .unwrap();
+            let after_open: EF = prover_chal.sample_algebra_element();
+
+            let mut verifier_chal = challenger();
+            scheme.observe_commitment(&commitment, &mut verifier_chal);
+            scheme
+                .verify_at(&commitment, &proof, &protocol, &points, &mut verifier_chal)
+                .unwrap();
+            let after_verify: EF = verifier_chal.sample_algebra_element();
+            assert_eq!(after_open, after_verify);
+            assert_eq!(
+                pinned_digest(&(&proof, after_open)),
+                "227c4eb378900f053ba51d57ba1668162309e0e8402522329aab065c82e48661"
+            );
+
+            let security = <BooleanTracePcs<EF, MyMmcs, MyMmcs> as PrescribedPointPcs<
+                EF,
+                MyChallenger,
+            >>::prescribed_security(&scheme, &protocol)
+            .unwrap();
+            assert_eq!(security.terms.len(), 3);
+            assert!((term_bits(&security, "column-batching") - 125.0).abs() < 1e-9);
+            assert!((term_bits(&security, "binary-pcs-opening") - 121.95560588064154).abs() < 1e-9);
+            assert!((term_bits(&security, "bit-ring-switch") - 123.09310940439148).abs() < 1e-9);
+            assert!((security.log2_max_candidates - 0.0).abs() < 1e-9);
+        }
+
+        // (b) Batched, current only, sampled path.
+        {
+            let shapes = [TableShape::new(10, 2)];
+            let scheme = pcs(&shapes);
+            let protocol = protocol(&shapes);
+            let table = table_with_width(0xB910, 10, 2);
+
+            let mut prover_chal = challenger();
+            let (commitment, data) = scheme.commit(vec![table], &mut prover_chal).unwrap();
+            let proof = scheme
+                .open(data, protocol.clone(), &mut prover_chal)
+                .unwrap();
+            let after_open: EF = prover_chal.sample_algebra_element();
+
+            let mut verifier_chal = challenger();
+            scheme
+                .verify(&commitment, &proof, &mut verifier_chal, protocol.clone())
+                .unwrap();
+            let after_verify: EF = verifier_chal.sample_algebra_element();
+            assert_eq!(after_open, after_verify);
+            assert_eq!(
+                pinned_digest(&(&proof, after_open)),
+                "f53d7dbf97b73103bc07fc16aa2051e00e51b1edccabe4aea741275bcfb58394"
+            );
+
+            let security = <BooleanTracePcs<EF, MyMmcs, MyMmcs> as PrescribedPointPcs<
+                EF,
+                MyChallenger,
+            >>::prescribed_security(&scheme, &protocol)
+            .unwrap();
+            assert_eq!(security.terms.len(), 3);
+            assert!((term_bits(&security, "column-batching") - 128.0).abs() < 1e-9);
+            assert!((term_bits(&security, "binary-pcs-opening") - 120.95560588064154).abs() < 1e-9);
+            assert!((term_bits(&security, "bit-ring-switch") - 124.09310940439148).abs() < 1e-9);
+            assert!((security.log2_max_candidates - 0.0).abs() < 1e-9);
+        }
+
+        // (c) Per-column: three tables, a reordered subset, a complete batch and a partial
+        // successor batch.
+        {
+            let shapes = [
+                TableShape::new(6, 3),
+                TableShape::new(4, 5),
+                TableShape::new(7, 2),
+            ];
+            let scheme = pcs(&shapes);
+            let protocol = OpeningProtocol::new(vec![
+                TableSpec::new(shapes[0], vec![OpeningBatch::new(vec![2, 0], vec![1])]),
+                TableSpec::new(
+                    shapes[1],
+                    vec![OpeningBatch::new(
+                        (0..shapes[1].width()).collect(),
+                        Vec::new(),
+                    )],
+                ),
+                TableSpec::new(
+                    shapes[2],
+                    vec![
+                        OpeningBatch::new(vec![1], vec![0, 1]),
+                        OpeningBatch::new(Vec::new(), vec![1]),
+                    ],
+                ),
+            ]);
+            let tables = vec![
+                table_with_width(0xB920, 6, 3),
+                table_with_width(0xB921, 4, 5),
+                table_with_width(0xB922, 7, 2),
+            ];
+            let mut rng = SmallRng::seed_from_u64(0xB923);
+            let points = vec![
+                Point::<EF>::rand(&mut rng, 6),
+                Point::<EF>::rand(&mut rng, 4),
+                Point::<EF>::rand(&mut rng, 7),
+                Point::<EF>::rand(&mut rng, 7),
+            ];
+
+            let mut prover_chal = challenger();
+            let (commitment, data) = scheme.commit(tables, &mut prover_chal).unwrap();
+            let proof = scheme
+                .open_at(data, &protocol, &points, &mut prover_chal)
+                .unwrap();
+            let after_open: EF = prover_chal.sample_algebra_element();
+
+            let mut verifier_chal = challenger();
+            scheme.observe_commitment(&commitment, &mut verifier_chal);
+            scheme
+                .verify_at(&commitment, &proof, &protocol, &points, &mut verifier_chal)
+                .unwrap();
+            let after_verify: EF = verifier_chal.sample_algebra_element();
+            assert_eq!(after_open, after_verify);
+            assert_eq!(
+                pinned_digest(&(&proof, after_open)),
+                "a8773e76db42b1d14631b6ee21baa3ba5eece6dd4423ab6e754d28ada5f9e07c"
+            );
+
+            let security = <BooleanTracePcs<EF, MyMmcs, MyMmcs> as PrescribedPointPcs<
+                EF,
+                MyChallenger,
+            >>::prescribed_security(&scheme, &protocol)
+            .unwrap();
+            assert_eq!(security.terms.len(), 2);
+            assert!((term_bits(&security, "binary-pcs-opening") - 121.77118130950412).abs() < 1e-9);
+            assert!((term_bits(&security, "bit-ring-switch") - 120.8401286632216).abs() < 1e-9);
+            assert!((security.log2_max_candidates - 0.0).abs() < 1e-9);
+        }
     }
 
     #[test]
