@@ -6,6 +6,7 @@ use alloc::vec::Vec;
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_challenger::{CanSample, DuplexChallenger};
 use p3_commit::MultilinearPcs;
+use p3_commit::testing::assert_multilinear_commit_contract;
 use p3_dft::Radix2DFTSmallBatch;
 use p3_field::extension::BinomialExtensionField;
 use p3_field::{BasedVectorSpace, Field, PrimeCharacteristicRing};
@@ -1121,5 +1122,23 @@ fn the_open_phase_binds_the_statement_and_nothing_else() {
     assert_eq!(
         CanSample::<F>::sample(&mut adapter),
         CanSample::<F>::sample(&mut replay),
+    );
+}
+
+/// The commit phase must bind the root the verifier binds, and bind it once.
+///
+/// Hiding makes no difference to this: the mask is drawn from the scheme's own randomness,
+/// not from the transcript, so the sponge still owes exactly one binding and the verifier
+/// still reaches it through `observe_commitment`.
+#[test]
+fn commit_binds_what_the_verifier_binds() {
+    let setup = Setup::new(0xB1D);
+    let num_variables = setup.num_variables;
+    let mut rng = SmallRng::seed_from_u64(0xB1D);
+    assert_multilinear_commit_contract::<_, EF, _>(
+        &setup.pcs(),
+        &fresh_challenger(),
+        Poly::<F>::rand(&mut rng, num_variables),
+        Poly::<F>::rand(&mut rng, num_variables),
     );
 }

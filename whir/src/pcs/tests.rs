@@ -6,6 +6,7 @@ use alloc::vec::Vec;
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_challenger::{CanSample, DuplexChallenger, FieldChallenger};
 use p3_commit::MultilinearPcs;
+use p3_commit::testing::assert_multilinear_commit_contract;
 use p3_dft::Radix2DFTSmallBatch;
 use p3_field::extension::BinomialExtensionField;
 use p3_field::{Field, PackedValue, PrimeCharacteristicRing};
@@ -1596,4 +1597,39 @@ fn the_opening_proof_bytes_are_pinned() {
     .expect("verification failed");
     let verifier_next: EF = verifier_challenger.sample_algebra_element();
     assert_eq!(verifier_next, next);
+}
+
+/// The commit phase must bind the root the verifier binds, and bind it once.
+///
+/// The prover binds its root inside `commit`; the verifier, which never produces one,
+/// binds through `observe_commitment`. Only the transcript state says whether the two
+/// did the same thing, so that is what this checks.
+#[test]
+fn commit_binds_what_the_verifier_binds() {
+    type L = PrefixProver<F, EF>;
+
+    let mut rng = SmallRng::seed_from_u64(0xB1D);
+    let perm = Perm::new_from_rng_128(&mut rng);
+    let mmcs = MyMmcs::new(MyHash::new(perm.clone()), MyCompress::new(perm), 0);
+
+    let num_variables = 6;
+    let folding_factor = FoldingFactor::Constant(2);
+    let params = ProtocolParameters {
+        security_level: 32,
+        pow_bits: 0,
+        round_log_inv_rates: default_round_log_inv_rates(num_variables, &folding_factor),
+        folding_factor,
+        soundness_type: SecurityAssumption::CapacityBound,
+        starting_log_inv_rate: 1,
+    };
+    let config = WhirConfig::new(num_variables, params).unwrap();
+    let pcs = TestWhirPcs::<L>::new(config, MyDft::default(), mmcs);
+
+    let witness = |rng: &mut SmallRng| L::new_witness(vec![Table::rand(rng, 1, num_variables)], 4);
+    assert_multilinear_commit_contract::<_, EF, _>(
+        &pcs,
+        &challenger(),
+        witness(&mut rng),
+        witness(&mut rng),
+    );
 }
