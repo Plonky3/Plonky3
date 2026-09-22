@@ -268,6 +268,11 @@ impl TableDeclaration {
         self.buses > 0
     }
 
+    /// How many bus declarations this table makes.
+    pub(super) const fn bus_declarations(&self) -> usize {
+        self.buses
+    }
+
     /// Name the first part on which this table and a constraint system disagree.
     ///
     /// The height range is left out, because no constraint system fixes it.

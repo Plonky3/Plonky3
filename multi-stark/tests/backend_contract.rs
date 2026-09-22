@@ -18,7 +18,8 @@ use p3_merkle_tree::MerkleTreeMmcs;
 use p3_multi_stark::config::{MultiStarkConfig, PcsError};
 use p3_multi_stark::contract::{
     BODY_REVISION, ColumnCounts, DeclarationError, ENVELOPE_VERSION, EnvelopeError, HEADER_LEN,
-    HeightRange, LocalConstraints, MachineDeclaration, SealedVerificationError, TableDeclaration,
+    HeightRange, LocalConstraints, MachineDeclaration, PublicSlot, SealedVerificationError,
+    SegmentInterface, TableCost, TableDeclaration,
 };
 use p3_multi_stark::{
     MultiStarkProof, ProverInstance, ProverInstances, SecurityError, VerificationError,
@@ -1097,6 +1098,176 @@ fn a_statement_declaring_a_lookup_refuses_a_proof_without_one() {
             present: false,
         }
     );
+}
+
+/// The Fibonacci table read as a segment: it enters at its first pair and exits at its last value.
+fn segment_declaration() -> MachineDeclaration<Keccak256Hash> {
+    declaration()
+        .with_segment(SegmentInterface::new(
+            vec![PublicSlot::new(0, 0)],
+            vec![PublicSlot::new(0, 2)],
+        ))
+        .unwrap()
+}
+
+#[test]
+fn a_verified_segment_reports_the_boundary_it_proved() {
+    let config = config();
+    let pis = public_values(1 << LOG_HEIGHT);
+    let airs = [&FibAir];
+    let (_, vk) = setup(&config, &airs, &mut challenger()).unwrap();
+
+    let declaration = segment_declaration();
+    let run = declaration.run(&[LOG_HEIGHT], 0).unwrap();
+    let bytes = declaration.seal(&run, &proof()).unwrap().into_bytes();
+
+    // The verifier reads the claim off the public values it checked.
+    let verified = declaration
+        .verify_segment(
+            &run,
+            &bytes,
+            &config,
+            VerifierInstances::new(vec![VerifierInstance::new(&FibAir, &vk, LOG_HEIGHT, &pis)]),
+            &mut challenger(),
+        )
+        .unwrap();
+
+    // The prover computes the same claim from the same values, before any proof exists.
+    assert_eq!(verified, declaration.segment_claim(&[&pis]).unwrap());
+    assert_eq!(verified.statement(), declaration.statement_digest());
+    // Zero in, and the last Fibonacci value out, hash apart.
+    assert_ne!(verified.entry(), verified.exit());
+}
+
+#[test]
+fn the_segment_boundary_is_part_of_the_statement() {
+    // A run picked under the plain statement names a different statement.
+    let plain = declaration();
+    let run = plain.run(&[LOG_HEIGHT], 0).unwrap();
+    let bytes = plain.seal(&run, &proof()).unwrap().into_bytes();
+
+    let segmented = segment_declaration();
+    assert_ne!(plain.statement_digest(), segmented.statement_digest());
+    assert_eq!(
+        segmented.open::<BindingConfig>(&run, &bytes).unwrap_err(),
+        EnvelopeError::Declaration(DeclarationError::ForeignRun)
+    );
+
+    // Which value exits is part of it too.
+    let other_exit = declaration()
+        .with_segment(SegmentInterface::new(
+            vec![PublicSlot::new(0, 0)],
+            vec![PublicSlot::new(0, 1)],
+        ))
+        .unwrap();
+    assert_ne!(other_exit.statement_digest(), segmented.statement_digest());
+}
+
+#[test]
+fn a_segment_boundary_must_name_declared_values() {
+    // The table declares three public values, so position three does not exist.
+    assert_eq!(
+        declaration()
+            .with_segment(SegmentInterface::new(
+                vec![PublicSlot::new(0, 0)],
+                vec![PublicSlot::new(0, 3)],
+            ))
+            .unwrap_err(),
+        DeclarationError::SlotOutOfRange { table: 0, index: 3 }
+    );
+    // Neither does a second table.
+    assert_eq!(
+        declaration()
+            .with_segment(SegmentInterface::new(
+                vec![PublicSlot::new(1, 0)],
+                vec![PublicSlot::new(0, 0)],
+            ))
+            .unwrap_err(),
+        DeclarationError::SlotOutOfRange { table: 1, index: 0 }
+    );
+}
+
+#[test]
+fn a_claim_needs_a_boundary_and_the_declared_public_values() {
+    let pis = public_values(1 << LOG_HEIGHT);
+    assert_eq!(
+        declaration().segment_claim(&[&pis[..]]).unwrap_err(),
+        DeclarationError::NoSegmentInterface
+    );
+
+    let declaration = segment_declaration();
+    assert_eq!(
+        declaration.segment_claim(&[&pis[..2]]).unwrap_err(),
+        DeclarationError::PublicValueCount {
+            table: 0,
+            expected: 3,
+            found: 2,
+        }
+    );
+    assert_eq!(
+        declaration
+            .segment_claim::<F>(&[&pis[..], &pis[..]])
+            .unwrap_err(),
+        DeclarationError::PublicValueTables {
+            expected: 1,
+            found: 2,
+        }
+    );
+}
+
+#[test]
+fn the_cost_report_is_read_off_the_shape() {
+    let declaration = declaration();
+    let run = declaration.run(&[LOG_HEIGHT], 0).unwrap();
+    let report = declaration.cost_report::<EF>(&run).unwrap();
+
+    // Two columns of 256 rows, no channel, and one 16-byte element per opened column.
+    let expected = TableCost {
+        log_height: 8,
+        committed_cells: 512,
+        preprocessed_cells: 0,
+        bus_flushes: 0,
+        sumcheck_rounds: 8,
+        opening_bytes: 32,
+        peak_temporary_bytes: 2 * 128 * 16,
+    };
+    assert_eq!(report.tables(), &[expected]);
+    assert_eq!(report.total(), expected);
+
+    // The proof runs exactly the rounds the report predicts.
+    assert_eq!(proof().sumcheck.round_polys.len(), expected.sumcheck_rounds);
+
+    // A run of another statement is refused.
+    let foreign = segment_declaration().run(&[LOG_HEIGHT], 0).unwrap();
+    assert_eq!(
+        declaration.cost_report::<EF>(&foreign).unwrap_err(),
+        DeclarationError::ForeignRun
+    );
+}
+
+#[test]
+fn a_channel_is_priced_per_row() {
+    // One bus declaration on a four-row table offers four tuple slots.
+    let air = BusAir {
+        channel: "ping",
+        direction: BusDirection::Push,
+        cubed: false,
+    };
+    let declaration = MachineDeclaration::new(
+        Keccak256Hash,
+        vec![TableDeclaration::from_constraints::<F, EF, BusAir>(
+            &air,
+            HeightRange::new(FOLDING as u32, 20),
+        )],
+        PROOF_BUDGET,
+        SECURITY_TARGET,
+    )
+    .unwrap();
+    let run = declaration.run(&[2], 0).unwrap();
+    let cost = declaration.cost_report::<EF>(&run).unwrap().tables()[0];
+    assert_eq!(cost.bus_flushes, 4);
+    // Two columns folded to two rows each, plus one product leaf per row, sixteen bytes apiece.
+    assert_eq!(cost.peak_temporary_bytes, (2 * 2 + 4) * 16);
 }
 
 #[test]
