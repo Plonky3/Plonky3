@@ -1,23 +1,34 @@
 //! Security accounting derived from the verifier's statement.
 //!
-//! The report union-composes the AIR, lookup, and binary-bus reductions, both
-//! prescribed-point commitment openings when present, and the configured collision cap.
-//! It inherits each PCS's proximity and Fiat-Shamir assumptions; a conjectural PCS
-//! assessment does not become a proven bound here. Uniform transcript challenges are assumed.
+//! The report union-composes the AIR, lookup, and binary-bus reductions.
+//!
+//! Both prescribed-point openings join them, when present, along with the collision cap.
+//!
+//! It inherits each scheme's proximity and Fiat-Shamir assumptions.
+//!
+//! A conjectural assessment does not become a proven bound here.
+//!
+//! Uniform transcript challenges are assumed throughout.
+//!
 //! The outer sumcheck's grinding is conservatively given no credit.
 //!
-//! A commitment can leave multiple candidate trace polynomials while the outer
-//! AIR and lookup challenges are drawn. Every outer reduction term therefore
-//! includes a union over the product of the main and preprocessed candidate
-//! list sizes, fixed at commitment time. PCS errors and collision security are
-//! then composed separately.
+//! # The candidate-set charge
 //!
-//! That union is [`p3_security::SecurityTerm::over_candidates`], which is the one
-//! implementation of the charge in the workspace. This crate is the top of the stack
-//! it prices: each opening charged the reductions it drew itself and forwarded its
-//! candidate count unchanged, so what is left for this layer is its own AIR, lookup,
-//! and binary-bus draws. [`ReportBuilder`] keeps those apart from the already-charged
-//! terms and applies the charge exactly once, when the report is closed.
+//! A commitment can leave several candidate traces open while the outer challenges land.
+//!
+//! Every outer term therefore unions over the product of both commitments' lists.
+//!
+//! That product is fixed at commitment time, and the charge for it lives in one place.
+//!
+//! This crate is the top of the stack it prices.
+//!
+//! Each opening already charged the reductions it drew, and forwarded its count intact.
+//!
+//! What is left for this layer is its own AIR, lookup, and binary-bus draws.
+//!
+//! The builder below keeps those apart from the settled terms.
+//!
+//! It applies the charge exactly once, when the report is closed.
 
 use alloc::vec::Vec;
 use core::num::NonZeroUsize;
@@ -75,14 +86,17 @@ pub enum SecurityError {
 
 /// Labeled, union-composed accounting for a concrete multilinear AIR statement.
 ///
-/// Missing PCS or collision evidence leaves [`Self::security_bits`] as `None`.
-/// The numeric result is conditional on the PCS implementations' security
-/// assessments and the configured hash cap, not a claim about arbitrary primitives.
+/// Missing scheme or collision evidence leaves the report with no number to give.
 ///
-/// Every term here is final. The draws the composition makes before an opening names a
-/// candidate were charged over the candidate set once, while the report was assembled by
-/// [`ReportBuilder`], and the finished report keeps no candidate set for anything to
-/// charge a second time.
+/// The number is conditional on the schemes' own assessments and the configured cap.
+///
+/// It is not a claim about arbitrary primitives.
+///
+/// Every term here is final.
+///
+/// The draws made before an opening named a candidate paid for the set once, on assembly.
+///
+/// The finished report keeps no set, so nothing can charge a second time.
 #[derive(Clone, Debug)]
 pub struct MultiStarkSecurityReport {
     terms: Vec<SecurityTerm>,
@@ -127,7 +141,7 @@ impl MultiStarkSecurityReport {
     }
 }
 
-/// Assembles a [`MultiStarkSecurityReport`], charging the candidate set exactly once.
+/// Assembles the report, charging the candidate set exactly once.
 ///
 /// The two kinds of term are kept in separate lists until the report is closed.
 ///
@@ -138,12 +152,17 @@ impl MultiStarkSecurityReport {
 ///               the layer that drew them, and the collision cap
 /// ```
 ///
-/// [`Self::finish`] is the only way to a report, it consumes the builder, and it is the
-/// single place the charge is applied. An outer term therefore cannot be charged twice:
-/// there is no second pass over the list, and the finished report carries no candidate
-/// set at all. A settled term cannot be charged even once, which is the point — the layer
-/// that drew it already paid, and [`PrescribedOpeningSecurity`] forwards the count rather
-/// than spending it precisely so that this layer charges only its own draws over it.
+/// Closing the builder consumes it, and is the single place the charge is applied.
+///
+/// An outer term cannot be charged twice, because no second pass over the list exists.
+///
+/// The finished report carries no candidate set at all.
+///
+/// A settled term is never charged here, which is the point.
+///
+/// The layer that drew it already paid, and forwarded the count rather than spending it.
+///
+/// That is exactly what lets this layer charge only its own draws over the same set.
 struct ReportBuilder {
     /// Reductions this composition draws, still uncharged.
     outer: Vec<SecurityTerm>,
@@ -190,10 +209,13 @@ impl ReportBuilder {
     ///     component                     ->  which of the two the term belongs to
     /// ```
     ///
-    /// The terms arrive already charged by the layers that drew them, so they settle here
-    /// untouched. What the opening adds to this layer is its candidate count: the set is
-    /// still open while every outer draw is made, and two open commitments multiply the
-    /// tries a single outer draw gets.
+    /// The terms arrive already charged, so they settle here untouched.
+    ///
+    /// What the opening adds to this layer is its candidate count.
+    ///
+    /// The set is still open while every outer draw is made.
+    ///
+    /// Two open commitments multiply the tries a single outer draw gets.
     ///
     /// A component with nothing to charge is recorded as unassessed under the same name.
     fn add_opening_evidence(
@@ -243,8 +265,9 @@ impl ReportBuilder {
             unassessed,
         } = self;
         MultiStarkSecurityReport {
-            // A prover may pick which candidate trace it meant after seeing every outer
-            // challenge, so each outer draw is union-bounded over the whole set.
+            // A prover may pick which trace it meant after seeing every outer challenge.
+            //
+            // So each outer draw is union-bounded over the whole set.
             terms: outer
                 .into_iter()
                 .map(|term| term.over_candidates(candidates).term())
@@ -353,8 +376,10 @@ impl IndexedPlan {
 
 /// Assess this verifier statement without reading any proof-supplied counts.
 ///
-/// The PCS receives the same opening protocol used by verification, including
-/// main and preprocessed successor columns. It must assess that exact shape.
+/// The scheme receives the same opening protocol verification uses.
+///
+/// That includes the main and preprocessed successor columns, and it must assess them.
+///
 /// AIR definitions and configurations remain trusted inputs, as in verification.
 pub fn security_report<C, A>(
     config: &C,
@@ -426,6 +451,7 @@ where
         }
 
         // A malformed declaration is rejected by prove and by verify.
+        //
         // Reporting a security level for a statement neither accepts would mislead.
         if boundary::validate(
             air.public_boundary_io(),
@@ -449,8 +475,9 @@ where
             .len()
             .checked_add(builder.extension_constraints().len())
             .ok_or_else(|| invalid("constraint count overflow"))?;
-        // The folder batches one pin per listed cell with the AIR's own constraints,
-        // and no symbolic pass sees them.
+        // The folder batches one pin per listed cell with the AIR's own constraints.
+        //
+        // No symbolic pass sees them.
         let pins = boundary_io_pins(air.public_boundary_io());
         let constraints = own_constraints
             .checked_add(pins.count)
@@ -477,8 +504,10 @@ where
             ));
         }
         // A constant family has no round polynomial of its own.
-        // A listed cell lifts it to the pin's degree, which is what `get_air_degrees` scores,
-        // so both entry points accept and reject the same statements.
+        //
+        // A listed cell lifts it to the pin's degree, which is what the scorer reads.
+        //
+        // So both entry points accept and reject the same statements.
         if own_constraints > 0 && symbolic_degree.max(pins.degree) == 0 {
             return Err(invalid("constant constraint families are unsupported"));
         }
@@ -537,9 +566,11 @@ where
     let order = C::Challenge::order();
     let field_bits = order.bits().saturating_sub(1) as usize;
     let nonzero_field_bits = (order - 1u32).bits().saturating_sub(1) as usize;
-    // Every term below is a draw this composition makes while both commitments still
-    // leave a list of traces open, so each of them is charged over that list once, by
-    // `ReportBuilder::finish`. Nothing here subtracts anything itself.
+    // Every term below is a draw made while both commitments still leave a list open.
+    //
+    // Each is charged over that list once, when the builder is closed.
+    //
+    // Nothing here subtracts anything itself.
     let mut builder = ReportBuilder::new(reduction_terms(
         &MultilinearAirParams {
             num_instances: instances.len(),
@@ -548,8 +579,10 @@ where
             constraint_degree: max_degree,
             lookup,
             // This prover spends one round per variable.
-            // A skip round would change the accounting, so it is declared
-            // absent rather than defaulted.
+            //
+            // A skip round would change the accounting.
+            //
+            // So it is declared absent rather than defaulted.
             skip: None,
             logup_star,
         },
@@ -621,8 +654,9 @@ mod tests {
         //
         //     union  ->  2^-100 + 0  ->  100 bits
         //
-        // Rejecting the zero term would leave the component unassessed on a sound
-        // statement, and the proving path fails closed on an unassessed component.
+        // Rejecting the zero term would leave the component unassessed on a sound claim.
+        //
+        // The proving path then fails closed on an unassessed component.
         let mut builder = ReportBuilder::new(Vec::new());
         let evidence = PrescribedOpeningSecurity {
             terms: alloc::vec![
@@ -649,8 +683,9 @@ mod tests {
         // The zero-error term contributes nothing to the union, so the bound is the other.
         assert_eq!(report.security_bits(), Some(100.0));
 
-        // A component whose every term is a zero error has no bound at all, so it is
-        // unassessed rather than certified at infinite security.
+        // A component whose every term is a zero error has no bound at all.
+        //
+        // It is recorded unassessed rather than certified at infinite security.
         let mut empty = ReportBuilder::new(Vec::new());
         let nothing = PrescribedOpeningSecurity::single(
             "reduction",
@@ -693,14 +728,18 @@ mod tests {
 
     #[test]
     fn every_outer_draw_is_charged_once_over_both_open_commitments() {
-        // Fixture state: two outer draws at 100 bits, two commitments leaving 2^4 and
-        // 2^3 candidates open, each charging one 90-bit term of its own.
+        // Fixture state: two outer draws at 100 bits, over two open commitments.
         //
+        // They leave 2^4 and 2^3 candidates, and each charges one 90-bit term of its own.
+        //
+        // ```text
         //     outer draws      100 - (4 + 3)  ->  93 bits each
         //     opening terms    already charged by the layer that drew them  ->  90 bits
+        // ```
         //
-        // A prover picks a main trace and a preprocessed trace after seeing both outer
-        // challenges, so an outer draw faces the product of the two lists.
+        // A prover picks one trace from each list after seeing both outer challenges.
+        //
+        // So an outer draw faces the product of the two.
         let outer = alloc::vec![
             SecurityTerm::new("air", ErrorBits::from_log2(100.0)),
             SecurityTerm::new("lookup", ErrorBits::from_log2(100.0)),
@@ -737,9 +776,11 @@ mod tests {
         assert_eq!(bits("air", None), 93.0);
         assert_eq!(bits("lookup", None), 93.0);
 
-        // The openings charged their own reductions and forwarded the count, so this
-        // layer leaves their terms alone. Charging them again would report 83 bits for
-        // errors that are worth 90, and nothing downstream could tell the difference.
+        // The openings charged their own reductions, so this layer leaves them alone.
+        //
+        // Charging them again would report 83 bits for errors that are worth 90.
+        //
+        // Nothing downstream could tell the difference.
         assert_eq!(bits("opening", Some("main-pcs")), 90.0);
         assert_eq!(bits("opening", Some("preprocessed-pcs")), 90.0);
     }
@@ -748,9 +789,11 @@ mod tests {
     fn an_outer_draw_drowned_by_the_candidate_set_reports_no_security_at_all() {
         // A draw three bits weaker than the list it is charged over is not a bound.
         //
-        // The floor stops it at zero bits rather than letting it go negative, and a
-        // union containing a zero-bit term composes to zero, so the report cannot be
-        // read as leaving any margin. Grading it against any positive target fails.
+        // The floor stops it at zero bits rather than letting it go negative.
+        //
+        // A union holding a zero-bit term composes to zero, leaving no margin to read.
+        //
+        // Grading the report against any positive target therefore fails.
         let outer = alloc::vec![SecurityTerm::new("air", ErrorBits::from_log2(5.0))];
         let mut builder = ReportBuilder::new(outer);
         builder.add_opening_evidence(

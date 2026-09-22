@@ -15,26 +15,25 @@ use crate::table::{OpeningEvals, OpeningProtocol};
 ///
 /// The terms union-bound the probability that this opening accepts a wrong evaluation.
 ///
-/// Except with that probability, accepted evaluations agree with one of at most
-/// `2^log2_max_candidates` polynomials of a set the commitment fixes.
+/// Otherwise an accepted evaluation agrees with one polynomial the commitment left open.
 ///
-/// That set is fixed before the outer protocol samples any challenge of its own.
-///
-/// Callers must union-bound their own reductions over it.
+/// That set of candidates is fixed before the outer protocol samples anything.
 ///
 /// The error arrives broken out by source rather than pre-summed.
 ///
 /// An opening that stacks a reduction on a commitment charges both.
 ///
-/// A report showing one number for the pair cannot say which of them is short.
+/// One number for the pair could not say which of the two is short.
+///
 /// # The candidate count is forwarded, not consumed
 ///
-/// [`Self::charge_reduction`] leaves `log2_max_candidates` exactly as it found it.
+/// A charge here leaves the count exactly as it found it.
 ///
-/// A layer charges the draws it makes itself, then hands the same count on, because the
-/// set is fixed by the commitment and a union bound taken over it at one layer takes
-/// nothing away from the prover's freedom at the next. [`CandidateSet`] states the rule
-/// and carries it in the type; this struct is one link in the stack it describes.
+/// So a layer charges the draws it makes itself, then hands the same count on.
+///
+/// The set was fixed by the commitment, and one union bound does not shrink it.
+///
+/// This evidence is one link in a stack that relies on that:
 ///
 /// ```text
 ///     WHIR commitment        fixes the set, charges its own proximity error
@@ -43,19 +42,16 @@ use crate::table::{OpeningEvals, OpeningProtocol};
 ///     multi-STARK report     charges its AIR and lookup draws over the same set
 /// ```
 ///
-/// Terms already in [`Self::terms`] are final: each was charged by the layer that drew
-/// it, and no layer above re-charges them.
+/// Terms already recorded here are final, each charged by the layer that drew it.
 #[derive(Clone, Debug)]
 pub struct PrescribedOpeningSecurity {
     /// Every labelled algebraic error the opening charges, composed by a union bound.
     ///
-    /// Each term is already charged for whatever it had to pay, so a caller composes
-    /// these as they are rather than charging them again.
+    /// Each has already paid what it owed, so a caller composes them as they are.
     pub terms: Vec<SecurityTerm>,
     /// Logarithm of the maximum candidate set size at commitment time.
     ///
-    /// [`Self::candidates`] is the checked view of this, and the one to read before
-    /// trusting a number derived from it.
+    /// Read the checked view below before trusting any number derived from this.
     pub log2_max_candidates: f64,
 }
 
@@ -73,8 +69,9 @@ impl PrescribedOpeningSecurity {
     ///
     /// # Returns
     ///
-    /// Nothing when [`Self::log2_max_candidates`] names no set — negative, infinite, or
-    /// NaN. A caller that needs a number from this evidence fails closed on that.
+    /// Nothing when the recorded count is negative, infinite, or undefined.
+    ///
+    /// A caller needing a number from this evidence fails closed on that.
     #[must_use]
     pub fn candidates(&self) -> Option<CandidateSet> {
         CandidateSet::from_log2(self.log2_max_candidates)
@@ -82,18 +79,19 @@ impl PrescribedOpeningSecurity {
 
     /// Charge one error the caller's own reduction draws after the commitment.
     ///
-    /// A prover may pick its candidate after seeing those challenges, so the union bound
-    /// over the candidate set is what this subtracts.
+    /// A prover may pick its candidate after seeing those challenges.
     ///
-    /// [`SecurityTerm::over_candidates`] is the one implementation of that arithmetic;
-    /// this only decides which set the term is charged over.
+    /// So the union bound over the whole candidate set is what this subtracts.
     ///
-    /// The count is left untouched, so the layer above charges the same set over the
-    /// draws it makes itself. The term pushed here is final and is never charged again.
+    /// The arithmetic itself lives in one place, and this only picks the set.
+    ///
+    /// The count is left untouched, so the layer above charges the same set.
+    ///
+    /// The term recorded here is final and is never charged again.
     pub fn charge_reduction(&mut self, term: SecurityTerm) {
-        // A count naming no set prices nothing, so the term is left with no bound at all
-        // rather than with a number resting on it. A negative count would otherwise
-        // *raise* the term, which is the one direction that must not happen silently.
+        // A count naming no set prices nothing, so the term is left with no bound.
+        //
+        // A negative count would otherwise raise it, which must never happen quietly.
         let unusable = SecurityTerm {
             bits: ErrorBits::from_log2(0.0),
             ..term
@@ -114,27 +112,36 @@ impl PrescribedOpeningSecurity {
 /// A multilinear commitment scheme that opens columns at caller-chosen points.
 ///
 /// The base opening path draws each evaluation point from the transcript.
-/// An AIR proof fixes the point during its zerocheck.
+///
+/// An AIR proof instead fixes the point during its zerocheck.
+///
 /// The opening phase then opens the columns at that fixed point.
 ///
 /// Shape agreement uses one table spec per committed table.
+///
 /// Each table spec carries its point-local column batches.
+///
 /// The caller supplies one point per batch instead of letting the transcript pick it.
 ///
 /// The prescribed-point verifier does not absorb the commitment.
-/// The outer protocol absorbs the commitment once.
-/// That absorption happens before the outer protocol samples challenges.
+///
+/// The outer protocol absorbs it once, before sampling any challenge.
 ///
 /// # Fiat-Shamir / Soundness
 ///
-/// In the sampled-point convention the opening point is transcript-derived by
-/// construction, so it cannot be influenced by the prover. In prescribed mode there is no
-/// such guarantee from this trait alone: soundness rests entirely on the caller fixing the
-/// point via the shared transcript (e.g. deriving it from the AIR's zerocheck challenges,
-/// which are themselves bound after the commitment is absorbed) *before* calling
-/// [`open_at`](PrescribedPointPcs::open_at) / `verify_at`. A prover-influenceable,
-/// non-transcript-bound point breaks the soundness of the alpha-batched claim this opening
-/// feeds into.
+/// In the sampled-point convention the transcript derives the point by construction.
+///
+/// The prover cannot influence it, and nothing further is required of the caller.
+///
+/// Prescribed mode carries no such guarantee from this trait alone.
+///
+/// Soundness rests entirely on the caller fixing the point through the shared transcript.
+///
+/// Deriving it from the zerocheck challenges does that, since those follow the commitment.
+///
+/// The point must be fixed before either the opening or the verification call.
+///
+/// A prover-influenceable point breaks the batched claim this opening feeds into.
 pub trait PrescribedPointPcs<Challenge, Challenger>: MultilinearPcs<Challenge, Challenger>
 where
     Challenge: ExtensionField<Self::Val>,
@@ -145,12 +152,17 @@ where
 {
     /// Soundness evidence for this exact opening protocol, or `None` when unknown.
     ///
-    /// The bound must include claim batching and every opening reduction, composed by a
-    /// union bound. It inherits the implementation's documented proximity assumptions.
-    /// It excludes hash and transcript collision security, which the outer protocol must
-    /// supply separately. Returning the configured per-round target is insufficient.
-    /// The candidate count must apply before outer challenges, even if opening-time
-    /// checks later reduce the list to a single polynomial.
+    /// The bound must union-bound claim batching and every opening reduction.
+    ///
+    /// It inherits the implementation's documented proximity assumptions.
+    ///
+    /// It excludes hash and transcript collisions, which the outer protocol supplies.
+    ///
+    /// Returning the configured per-round target is not enough.
+    ///
+    /// The candidate count must apply before any outer challenge.
+    ///
+    /// That holds even when opening-time checks later cut the list to one polynomial.
     ///
     /// The default makes security-checked callers fail closed for unaudited backends.
     fn prescribed_security(
@@ -169,8 +181,9 @@ where
     /// - One prescribed point per batch.
     /// - Fiat-Shamir transcript with the commitment already absorbed.
     ///
-    /// Configuration and budget errors are returned before any transcript interaction
-    /// or consumption of private randomness, as for [`MultilinearPcs::open`].
+    /// Configuration and budget errors come back before the transcript moves.
+    ///
+    /// No private randomness is consumed either, as on the sampled-point path.
     ///
     /// # Panics
     ///
@@ -196,12 +209,13 @@ where
     /// # Returns
     ///
     /// One evaluation batch per opening batch.
+    ///
     /// Each lists the direct column values, then the repeat-last successor-view values.
     ///
     /// # Errors
     ///
-    /// Returns an error if any count disagrees.
-    /// Returns an error if any shape disagrees.
+    /// Returns an error if any count or any shape disagrees.
+    ///
     /// Returns an error if the proof fails to verify.
     ///
     /// # Panics
@@ -257,12 +271,16 @@ mod tests {
     fn a_charge_forwards_the_candidate_count_to_the_layer_above() {
         // Fixture state: a commitment leaving sixteen candidates, two layers stacked on it.
         //
+        // ```text
         //     inner layer   charges its own reduction  ->  100 - 4 = 96 bits
         //     outer layer   charges its own draw       ->  100 - 4 = 96 bits
+        // ```
         //
-        // The outer layer must see the same count. If the charge consumed it, the outer
-        // draw would be priced against a set the prover still has, and the report would
-        // come out four bits optimistic.
+        // The outer layer must see the same count.
+        //
+        // A consumed count would price its draw against a set the prover still has.
+        //
+        // The report would then come out four bits optimistic.
         let mut inner = evidence(4.0);
         inner.charge_reduction(SecurityTerm::new("inner", ErrorBits::from_log2(100.0)));
         assert_eq!(inner.log2_max_candidates, 4.0);
@@ -277,11 +295,13 @@ mod tests {
 
     #[test]
     fn the_layer_above_never_charges_a_term_the_layer_below_already_charged() {
-        // Same stack, read from the top: the outer layer adds one term and leaves the
-        // inner one exactly where the inner layer left it.
+        // Same stack, read from the top: the outer layer adds one term.
         //
-        // Charging it twice would report 92 bits for a draw that is worth 96, which no
-        // test of the outer layer alone would notice — both numbers look like bounds.
+        // It leaves the inner one exactly where the inner layer left it.
+        //
+        // Charging it twice would report 92 bits for a draw that is worth 96.
+        //
+        // No test of the outer layer alone would notice, since both look like bounds.
         let mut security = evidence(4.0);
         security.charge_reduction(SecurityTerm::new("inner", ErrorBits::from_log2(100.0)));
         let after_inner = security.terms.clone();
@@ -302,8 +322,9 @@ mod tests {
     fn a_count_that_names_no_set_leaves_a_reduction_with_no_bound() {
         // A negative count would add bits to the term, which is the unsafe direction.
         //
-        // Nothing here guesses a set size: the term is charged to zero bits, and
-        // `candidates` reports that the evidence is unusable so a caller fails closed.
+        // Nothing here guesses a set size, so the term is charged to zero bits.
+        //
+        // The checked view reports the evidence unusable, and a caller fails closed.
         for count in [-1.0, f64::INFINITY, f64::NAN] {
             let mut security = evidence(count);
             assert_eq!(security.candidates(), None);

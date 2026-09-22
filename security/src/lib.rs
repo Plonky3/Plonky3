@@ -1,11 +1,14 @@
 //! Soundness analysis for STARK protocols.
 //!
-//! Decomposition is by **error source**, not by PCS. A protocol's params
-//! type lives in its own crate; this crate provides the error-bit math and
-//! the regime mirrors. The protocol assembles the regime, picks which
-//! error terms apply, and composes them via [`ErrorBits::sum`] or
-//! [`ErrorBits::min`] (or via [`stark::proven_security`] for the
-//! AIR + DEEP + LDT composite).
+//! Decomposition is by error source, not by commitment scheme.
+//!
+//! A protocol's parameter type lives in its own crate.
+//!
+//! This crate supplies the error-bit math and the regime mirrors.
+//!
+//! The protocol assembles the regime and picks which error terms apply.
+//!
+//! It then composes them by union bound, or by minimum, or through the composite.
 //!
 //! # Layering
 //!
@@ -16,12 +19,15 @@
 //!     p3-security ── p3-air, p3-field, p3-util, libm
 //! ```
 //!
-//! Each `XxxRegime` mirrors the security-relevant subset of the
-//! corresponding `XxxParameters` runtime config, **plus** instance-shape
-//! metadata that doesn't live in the runtime config (trace length,
-//! opening counts, …). There is intentionally no `From<XxxParameters>`
-//! impl — the protocol crate is the only site with visibility into both
-//! sides and assembles the regime explicitly.
+//! Each regime mirrors the security-relevant subset of a runtime configuration.
+//!
+//! It also carries instance-shape metadata the runtime configuration does not hold.
+//!
+//! Trace length and opening counts are the usual examples.
+//!
+//! No conversion from the runtime configuration exists, and that is deliberate.
+//!
+//! Only the protocol crate can see both sides, so it assembles the regime explicitly.
 //!
 //! # References
 //! - ethSTARK ([2021/582](https://eprint.iacr.org/2021/582))

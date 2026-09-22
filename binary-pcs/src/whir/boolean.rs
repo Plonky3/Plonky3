@@ -245,9 +245,11 @@ where
     ///
     /// Its challenges are drawn before the proximity argument names one of them.
     ///
-    /// The count itself is forwarded untouched, because this is a link in the stack and
-    /// not the end of it: a caller stacking its own draw on this opening faces the same
-    /// list the proximity argument left open, and charges it over the same count.
+    /// The count itself is forwarded untouched, because this is a link and not the end.
+    ///
+    /// A caller stacking its own draw faces the same list the proximity argument left.
+    ///
+    /// So it charges that draw over the same count.
     ///
     /// Nothing here covers hash or transcript collisions, which the caller supplies.
     ///
@@ -265,9 +267,11 @@ where
         let mut security = self.inner.prescribed_security(&protocol)?;
         // The tensor alone, or the tensor with carry and last.
         let num_tensors = if successor_tensors { 3 } else { 1 };
-        // The batch runs before one candidate is named, so it pays for every one left
-        // open. The charge leaves `security.log2_max_candidates` alone, so the caller
-        // above still sees the list this commitment left and charges its own draws over it.
+        // The batch runs before one candidate is named, so it pays for all of them.
+        //
+        // The charge leaves the count alone, so the caller above still sees the same list.
+        //
+        // It then charges its own draws over that list.
         security.charge_reduction(bit_ring_switch_tensors_term(
             num_claims.min(1),
             num_tensors,

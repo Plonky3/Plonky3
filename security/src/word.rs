@@ -208,9 +208,9 @@ pub struct WordProofSecurityModel {
     commitment: Vec<SecurityTerm>,
     /// The candidates the commitment still leaves open while this proof draws.
     ///
-    /// Every draw below lands after the commitment and before the opening names one,
-    /// so each of them is charged over this set. The set itself is untouched by that:
-    /// see [`CandidateSet`] for why a charge forwards it rather than spending it.
+    /// Every draw below lands after the commitment and before the opening names one.
+    ///
+    /// Each is charged over this set, and the set itself comes through untouched.
     candidates: CandidateSet,
 }
 
@@ -307,8 +307,9 @@ impl WordProofSecurityModel {
 
         // The commitment prices the ring switch and its own opening from its own schedule.
         //
-        // Those terms arrive already charged by the layer that drew them, so this proof
-        // carries them through rather than charging the same set over them again.
+        // Those terms arrive already charged by the layer that drew them.
+        //
+        // So this proof carries them through rather than charging the same set twice.
         terms.extend(self.commitment.iter().copied());
 
         terms
@@ -349,9 +350,11 @@ mod tests {
     fn word64_profile_charges_both_random_experiments() {
         // Fixture state:
         //
+        // ```text
         //     batching point   2 operation bits + 2 operand bits
         //     bit sumcheck     6 quadratic rounds
         //     word sumcheck   20 quadratic rounds
+        // ```
         let model = WordShiftSecurityModel::new(128, 4, 26).unwrap();
         let components = model.components();
 

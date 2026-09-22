@@ -1,9 +1,10 @@
 //! Labeled soundness breakdown produced by the composite orchestration.
 //!
-//! [`SecurityReport`] is the public, audit-facing output of
-//! [`crate::stark::proven_security_report`]. It carries every soundness
-//! contribution as a named [`SecurityTerm`], per proximity regime, so the
-//! binding term is inspectable rather than collapsed into a single number.
+//! The report is the audit-facing output of the proven-security composite.
+//!
+//! Every soundness contribution arrives as a named term, one set per proximity regime.
+//!
+//! The binding term stays inspectable instead of collapsing into a single number.
 
 use alloc::vec::Vec;
 use core::cmp::Ordering;
@@ -16,27 +17,29 @@ use crate::error::ErrorBits;
 pub const ALI_LABEL: &str = "air-composition";
 /// Label for the DEEP-ALI out-of-domain term.
 pub const DEEP_LABEL: &str = "deep-ali";
-/// Label for the low-degree-test term, when an implementation reports its
-/// phases as one already-composed bound.
+/// Label for the low-degree test, reported as one already-composed bound.
 ///
 /// # Asymmetry with the conjectured path
 ///
-/// The proven path reports this single label while the conjectured path
-/// reports [`LDT_QUERY_LABEL`] and [`LDT_COMMIT_LABEL`] separately, so a
-/// consumer diffing the two sees different label sets for the same protocol
-/// phases. That is deliberate, not an oversight: the proven path's LDT error
-/// is *already* a minimum by the time the composite sees it, because
-/// [`crate::fri::best_ldr_m`] searches for the proximity parameter `m`
-/// maximising `min(commit, query)` and returns only the winning value.
-/// Splitting the label there would require the regime search to carry both
-/// phases through, which changes what `best_ldr` optimises. The conjectured
-/// path has no such search, so nothing forces the phases together.
+/// The proven path reports one label here, and the conjectured path reports two.
+///
+/// A consumer diffing the two sees different label sets for the same protocol phases.
+///
+/// That is deliberate.
+///
+/// The proven error is already a minimum by the time the composite sees it.
+///
+/// The regime search picks the proximity parameter that maximises the weaker phase.
+///
+/// Splitting the label would force that search to carry both phases through.
+///
+/// It would then be optimising something else.
+///
+/// The conjectured path runs no such search, so nothing forces its phases together.
 pub const LDT_LABEL: &str = "low-degree-test";
-/// Label for the low-degree test's query-phase term, when an implementation
-/// reports its phases separately (see [`crate::ldt::LowDegreeTest::conjectured_terms`]).
+/// Label for the low-degree test's query phase, when the phases are reported apart.
 pub const LDT_QUERY_LABEL: &str = "ldt-query-phase";
-/// Label for the low-degree test's commit-phase (folding) term, when an
-/// implementation reports its phases separately.
+/// Label for the low-degree test's commit phase, when the phases are reported apart.
 pub const LDT_COMMIT_LABEL: &str = "ldt-commit-phase";
 /// Label for the batched-openings random-linear-combination term.
 pub const BATCH_LABEL: &str = "batch-combination";
@@ -45,9 +48,10 @@ pub const COLLISION_LABEL: &str = "commitment-collision";
 
 /// A single named soundness contribution, in `−log2(error)` bits.
 ///
-/// The label names the error source, which the crate charging it chooses.
+/// The label names the error source, and the crate charging it picks the name.
 ///
 /// A protocol composing two instances of one scheme sees that label twice.
+///
 /// Naming the instance is what the component is for.
 #[derive(Copy, Clone, Debug, PartialEq, Serialize)]
 pub struct SecurityTerm {
@@ -81,23 +85,24 @@ impl SecurityTerm {
 
     /// The same term, charged over every candidate a commitment still leaves open.
     ///
-    /// A draw made before one candidate is named gives a prover that many tries at it,
-    /// so the union bound over the whole set is what this subtracts.
+    /// A draw made before one candidate is named gives a prover one try per candidate.
     ///
-    /// This is the one implementation of that charge. Every layer that prices a draw
-    /// made between a commitment and its opening goes through here.
+    /// Subtracting the log of the set size is the union bound over those tries.
     ///
-    /// The set is not consumed — see [`CandidateSet`] for the layering rule.
+    /// This is the workspace's only implementation of that charge.
     ///
-    /// The result is a [`ChargedTerm`], which has no charge of its own, so a second
-    /// charge of the same term is not something a caller can write.
+    /// The set is passed by value and comes back unspent, so the layer above charges it too.
+    ///
+    /// The result is a charged term, and a charged term has no charge of its own.
     #[must_use]
     pub fn over_candidates(self, candidates: CandidateSet) -> ChargedTerm {
         // An error above one is no bound at all, so the charge stops at zero bits.
         //
-        // Zero bits is the honest report of "no bound", not a margin hidden by the floor:
-        // a union bound containing a zero-bit term composes to at most zero bits, and
-        // every caller grading a report against a positive target fails closed there.
+        // Zero bits reports "no bound" rather than hiding a shortfall under the floor.
+        //
+        // A union holding a zero-bit term composes to at most zero bits.
+        //
+        // Every caller grading a report against a positive target then fails closed.
         ChargedTerm {
             term: Self {
                 bits: ErrorBits::from_log2((self.bits.bits() - candidates.log2_size()).max(0.0)),
@@ -108,36 +113,21 @@ impl SecurityTerm {
     }
 }
 
-/// How many polynomials a commitment still leaves open while later challenges are drawn.
+/// How many polynomials a commitment still leaves open.
 ///
-/// A commitment in the unique-decoding regime names one polynomial, so its set is
-/// [`CandidateSet::UNIQUE`] and costs a later draw nothing. A list-decoding argument
-/// leaves a whole list open until its own opening phase names a member, so every draw
-/// made in between hands a prover one try per member.
+/// The rule: a layer charges its own draws over the whole set, then passes the set on.
 ///
-/// # A charge does not consume the set
+/// A charge never shrinks the set, which the commitment fixed before anything above drew.
 ///
-/// This is the question three copies of the charge used to answer differently, so the
-/// contract states it once, here.
+/// Unique decoding leaves one candidate, which costs a later draw nothing.
 ///
-/// The set is fixed by the commitment, once, before any layer above it draws. A layer
-/// that union-bounds its own draws over the set takes nothing away from the prover's
-/// freedom in the layer above, which therefore faces exactly the same set. The rule is:
+/// A list-decoding argument leaves a list, and each earlier draw gets one try per member.
 ///
-/// ```text
-///     a layer charges the draws it makes itself, over the whole set
-///     a layer hands the same set, unchanged, to the layer above it
-///     a term that has been charged is final, and is never charged again
-/// ```
-///
-/// The types say so rather than the prose alone. `CandidateSet` is [`Copy`] and has no
-/// operation that shrinks or spends it, so forwarding is the only thing a caller can do
-/// with one. [`SecurityTerm::over_candidates`] hands back a [`ChargedTerm`], which has no
-/// `over_candidates` of its own, so charging the same term twice does not typecheck.
+/// Nothing here can spend a set, and a term that has paid cannot be charged twice.
 ///
 /// # Example
 ///
-/// A commitment leaving sixteen candidates open, charged by two stacked layers.
+/// Two stacked layers, over a commitment leaving sixteen candidates open.
 ///
 /// ```
 /// use p3_security::{CandidateSet, ErrorBits, SecurityTerm};
@@ -154,7 +144,9 @@ impl SecurityTerm {
 /// ```
 #[derive(Copy, Clone, Debug, PartialEq, PartialOrd, Serialize)]
 pub struct CandidateSet {
-    /// Base-two logarithm of the set size. Finite and non-negative by construction.
+    /// Base-two logarithm of the set size.
+    ///
+    /// Finite and non-negative by construction.
     log2_size: f64,
 }
 
@@ -162,12 +154,15 @@ impl CandidateSet {
     /// The commitment names one polynomial, so a later draw pays nothing.
     pub const UNIQUE: Self = Self { log2_size: 0.0 };
 
-    /// A set of `2^log2_size` candidates.
+    /// A set of that many candidates, as a base-two logarithm.
     ///
     /// # Returns
     ///
-    /// Nothing when the argument is not a set size: a set has at least one member and
-    /// finitely many, so anything negative, infinite, or NaN names no set at all.
+    /// Nothing when the argument is not a set size.
+    ///
+    /// A set has at least one member and finitely many.
+    ///
+    /// So a negative, infinite, or undefined argument names no set at all.
     #[must_use]
     pub fn from_log2(log2_size: f64) -> Option<Self> {
         (log2_size.is_finite() && log2_size >= 0.0).then_some(Self { log2_size })
@@ -196,14 +191,13 @@ impl CandidateSet {
     }
 }
 
-/// A [`SecurityTerm`] that has already paid for the candidate set it was drawn against.
+/// A term that has already paid for the candidate set it was drawn against.
 ///
-/// Its only purpose is to be a different type from an uncharged term. A charged term has
-/// no `over_candidates`, so the second charge that would silently halve a reported level
-/// is a compile error rather than a review finding.
+/// Being a distinct type is the whole point: a charged term offers no charge of its own.
 ///
-/// [`Self::term`] unwraps it for composition into a report, and that unwrap is the single
-/// visible place where a term re-enters the uncharged world.
+/// So the second charge, which would quietly halve a reported level, will not compile.
+///
+/// Unwrapping it for a report is the one visible step back to an uncharged term.
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct ChargedTerm {
     term: SecurityTerm,
@@ -286,10 +280,13 @@ mod candidate_tests {
     fn the_floor_reports_no_bound_rather_than_hiding_a_negative_margin() {
         // A draw three bits short of the candidate count has no bound left at all.
         //
+        // ```text
         //     2^-3 error, 16 tries  ->  the prover expects to succeed
+        // ```
         //
-        // Zero bits is what that is, and a union containing it composes to zero bits,
-        // so nothing downstream can read the shortfall as a passing margin.
+        // Zero bits says exactly that, and a union holding one composes to zero bits.
+        //
+        // So nothing downstream can read the shortfall as a passing margin.
         let drowned =
             SecurityTerm::new("weak", ErrorBits::from_log2(1.0)).over_candidates(sixteen());
         assert_eq!(drowned.bits().bits(), 0.0);
@@ -300,8 +297,9 @@ mod candidate_tests {
 
     #[test]
     fn a_count_that_names_no_set_is_refused_before_it_can_be_charged() {
-        // A negative count would *add* bits, which is the unsafe direction, and an
-        // infinite or NaN one prices nothing. None of the three is a set size.
+        // A negative count would add bits, which is the unsafe direction.
+        //
+        // An infinite or undefined one prices nothing, and neither names a set.
         for count in [-1.0, f64::INFINITY, f64::NEG_INFINITY, f64::NAN] {
             assert_eq!(CandidateSet::from_log2(count), None);
         }
@@ -311,12 +309,15 @@ mod candidate_tests {
     fn a_layer_charges_its_own_draw_and_forwards_the_set_untouched() {
         // Fixture state: one commitment leaving sixteen candidates, two layers above it.
         //
+        // ```text
         //     commitment        its own error, already final
         //     inner reduction   drawn before a candidate is named  ->  pays 4 bits
         //     outer reduction   also drawn before one is named     ->  pays 4 bits
+        // ```
         //
-        // The outer layer charges the set the commitment fixed, not a set the inner
-        // layer somehow shrank: the inner union bound took nothing away from the prover.
+        // The outer layer charges the set the commitment fixed, not a smaller one.
+        //
+        // The inner union bound took nothing away from the prover.
         let candidates = sixteen();
 
         let commitment = SecurityTerm::new("commitment", ErrorBits::from_log2(90.0));
@@ -335,11 +336,11 @@ mod candidate_tests {
         let report = [commitment, inner.term(), outer.term()];
         assert_eq!(report[0].bits.bits(), 90.0);
 
-        // Charging the inner term a second time would halve nothing here, because there
-        // is no way to write it: `inner` is a `ChargedTerm` and has no `over_candidates`.
+        // A charged term offers no charge, so a second one cannot be written directly.
         //
-        // The only route back is `term()`, which is the one visible unwrap, so a double
-        // charge is a line a reviewer can point at rather than a silent default.
+        // Unwrapping it first is the one visible route back, shown here.
+        //
+        // A double charge is therefore a line a reviewer can point at.
         let recharged = inner.term().over_candidates(candidates);
         assert_eq!(recharged.bits().bits(), 92.0);
         assert_ne!(recharged.bits().bits(), inner.bits().bits());
@@ -362,7 +363,7 @@ mod candidate_tests {
     }
 }
 
-/// The proximity regime a [`RegimeReport`] was evaluated in.
+/// The proximity regime a report was evaluated in.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize)]
 #[non_exhaustive]
 pub enum Regime {
@@ -370,28 +371,27 @@ pub enum Regime {
     UniqueDecoding,
     /// List-decoding regime at proximity parameter `m`.
     ListDecoding { m: usize },
-    /// Conjectured (random-words) regime: correlated agreement up to
-    /// list-decoding capacity, at list size 1. See
-    /// [`crate::proximity::list_size_conjectured`].
+    /// Conjectured random-words regime, at list size one.
+    ///
+    /// Correlated agreement is assumed up to list-decoding capacity.
     Conjectured,
-    /// Legacy conjectured regime using the pre-random-words ethSTARK
-    /// query bound. For FRI this omits the folding round; see
-    /// [`crate::fri::legacy_conjectured_error`] and
-    /// [`crate::stark::legacy_security_report`].
+    /// Legacy conjectured regime, on the pre-random-words ethSTARK query bound.
+    ///
+    /// For FRI this omits the folding round.
     Legacy,
 }
 
 /// Full soundness breakdown within a single proximity regime.
 ///
-/// `terms` holds every contribution — ALI, DEEP, LDT, any protocol extras,
-/// and the commitment-collision cap. The attained security is the minimum
-/// over all terms: a collision, or any single binding error, forges the
-/// proof.
+/// The terms hold every contribution, plus the commitment-collision cap.
 ///
-/// This is also the top-level output of
-/// [`crate::stark::conjectured_security_report`] and
-/// [`crate::stark::legacy_security_report`], which each have a single regime
-/// and therefore no [`SecurityReport`] envelope to maximize over.
+/// The attained security is the minimum over all of them.
+///
+/// A collision, or any single binding error, forges the proof.
+///
+/// The conjectured and legacy paths also stop here.
+///
+/// Each has one regime, so neither needs an envelope to maximize over.
 #[derive(Clone, Debug, Serialize)]
 pub struct RegimeReport {
     pub regime: Regime,
@@ -399,8 +399,9 @@ pub struct RegimeReport {
 }
 
 impl RegimeReport {
-    /// Builds a report from its labeled terms. `terms` must be non-empty —
-    /// every regime carries at least the ALI, DEEP, LDT, and collision terms.
+    /// Builds a report from its labeled terms.
+    ///
+    /// The terms must be non-empty, and every regime carries at least four of them.
     pub(crate) fn new(regime: Regime, terms: Vec<SecurityTerm>) -> Self {
         debug_assert!(
             !terms.is_empty(),
@@ -409,14 +410,14 @@ impl RegimeReport {
         Self { regime, terms }
     }
 
-    /// Every soundness contribution in this regime — ALI, DEEP, LDT, any
-    /// protocol extras, and the commitment-collision cap.
+    /// Every soundness contribution in this regime, cap included.
     pub fn terms(&self) -> &[SecurityTerm] {
         &self.terms
     }
 
-    /// The binding (minimum-bits) term. `terms` is always non-empty — every
-    /// regime carries at least the ALI, DEEP, LDT, and collision terms.
+    /// The binding term, which is the one with the fewest bits.
+    ///
+    /// A regime always carries at least four terms, so there is always one.
     pub fn binding(&self) -> SecurityTerm {
         self.terms
             .iter()
@@ -438,12 +439,13 @@ impl RegimeReport {
 
 /// Proven-soundness report across both proximity regimes.
 ///
-/// Each regime is an independent valid lower bound on round-by-round
-/// soundness, so the attained security is the maximum of the two.
+/// Each regime is an independent lower bound on round-by-round soundness.
+///
+/// So the attained security is the larger of the two.
 #[derive(Clone, Debug, Serialize)]
 pub struct SecurityReport {
     pub udr: RegimeReport,
-    /// `None` when no valid list-decoding regime exists for the instance.
+    /// Absent when no valid list-decoding regime exists for the instance.
     pub ldr: Option<RegimeReport>,
 }
 
