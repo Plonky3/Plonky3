@@ -59,8 +59,8 @@ pub const MAX_SLICED_ROUNDS: usize = 4;
 /// Longest prefix a plane fold binds.
 ///
 /// A stage evaluates rounds on its planes with at most [`MAX_SLICED_ROUNDS`] challenges bound.
-/// The delayed boundary path binds the challenge of its last such round as it unslices, so a
-/// plane fold binds at most one challenge more.
+/// The boundary fold and the delayed boundary path bind the challenge of their last such round
+/// as they unslice, so a plane fold binds at most one challenge more.
 const MAX_PLANE_FOLD_ROUNDS: usize = MAX_SLICED_ROUNDS + 1;
 
 /// How a sliced first round is used by a backend.
@@ -1328,7 +1328,7 @@ const GROUP_ENTRIES: usize = 1 << u8::BITS;
 /// Corners the bound variables of a stage evaluating a round on its planes can range over.
 const MAX_CORNERS: usize = 1 << MAX_SLICED_ROUNDS;
 
-/// Corners the bound variables of the delayed boundary path's unslice range over.
+/// Corners the bound variables of an unslice that binds the boundary challenge range over.
 const MAX_PLANE_FOLD_CORNERS: usize = 1 << MAX_PLANE_FOLD_ROUNDS;
 
 /// Mask bytes one corner group of one residual row reads, one per plane.
@@ -1349,8 +1349,8 @@ const ROW_HALVES: usize = 2;
 /// lookup per plane per group of eight `b`. The tables do not depend on the column or the row,
 /// so one set serves a whole round.
 ///
-/// Each word's corners are gathered into buffers of `CORNERS` words per plane. Only the delayed
-/// boundary path's unslice binds enough challenges to need [`MAX_PLANE_FOLD_CORNERS`].
+/// Each word's corners are gathered into buffers of `CORNERS` words per plane. Only an unslice
+/// that binds one challenge past [`MAX_SLICED_ROUNDS`] needs [`MAX_PLANE_FOLD_CORNERS`].
 struct PlaneFold<'a, R, const CORNERS: usize = MAX_CORNERS> {
     /// The stage's planes.
     trace: &'a SlicedTrace,
@@ -1874,8 +1874,9 @@ where
 
     /// Bind the next variable at `r`, folding the stage off its planes in the same pass.
     ///
-    /// Each folded row reads the two residual rows the bound variable joins straight from the
-    /// planes, so only the half-size result is ever written out.
+    /// The bound variable joins the prefix the planes fold at, so each folded row is one plane
+    /// fold over twice the corners and only the half-size result is ever written out. The
+    /// repeat-last tails read the successor planes at the new last residual row the same way.
     ///
     /// # Returns
     ///
@@ -1885,60 +1886,22 @@ where
         S: Field,
         EF: HasSubfield<S>,
     {
-        let ExtColumns::Sliced(columns) = &self.columns else {
+        let ExtColumns::Sliced(columns) = &mut self.columns else {
             return false;
         };
         if !columns.at_boundary() {
             return false;
         }
         let _span = tracing::debug_span!("fold_boundary").entered();
-        let Some((trace, challenges)) = self.take_planes() else {
-            unreachable!("the stage holds its planes")
-        };
-        let fold = PlaneFold::<R>::new::<S, EF>(&trace, &challenges);
-        let half = fold.words * SLICED_LANES / ROW_HALVES;
-        let challenge = R::from(r);
-
+        columns.challenges.push(r);
+        let bound = columns.challenges.len();
         self.fold_claims(r);
-
-        // Each tail folds with the column value at the first residual row of the high half,
-        // which is the first lane of the first word of that half.
-        let high_words = fold.words / ROW_HALVES;
-        let mut buffer = [R::ZERO; SLICED_LANES];
-        for run in next_row_runs(&self.slots) {
-            for column in run {
-                fold.fold_word(&trace.successors, column, fold.words - 1, &mut buffer);
-                let tail = buffer[SLICED_LANES - 1];
-                fold.fold_word(&trace.cells, column, high_words, &mut buffer);
-                let lo = buffer[0];
-                self.next_tail[column] = lo + (tail - lo) * challenge;
-            }
+        if bound <= MAX_SLICED_ROUNDS {
+            self.unslice_with::<S, MAX_CORNERS>();
+        } else {
+            self.unslice_with::<S, MAX_PLANE_FOLD_CORNERS>();
         }
-
-        let scalar = (0..trace.width)
-            .into_par_iter()
-            .map(|column| {
-                let mut values = R::zero_vec(half);
-                let mut lo = [R::ZERO; SLICED_LANES];
-                let mut hi = [R::ZERO; SLICED_LANES];
-                for (word, out) in values
-                    .as_chunks_mut::<SLICED_LANES>()
-                    .0
-                    .iter_mut()
-                    .enumerate()
-                {
-                    fold.fold_word(&trace.cells, column, word, &mut lo);
-                    fold.fold_word(&trace.cells, column, word + high_words, &mut hi);
-                    for (value, (&lo, &hi)) in out.iter_mut().zip(lo.iter().zip(&hi)) {
-                        *value = lo + (hi - lo) * challenge;
-                    }
-                }
-                Poly::new(values)
-            })
-            .collect();
-
-        self.columns = ExtColumns::Scalar(scalar);
-        self.boundary.apply(challenge);
+        self.boundary.apply(R::from(r));
         self.round += 1;
         true
     }
