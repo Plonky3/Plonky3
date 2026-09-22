@@ -18,11 +18,12 @@ use p3_challenger::HashChallenger;
 use p3_commit::Mmcs;
 use p3_keccak::Keccak256Hash;
 use p3_merkle_tree::MerkleTreeMmcs;
+use p3_sumcheck::generic_degree::GenericDegreeError;
 use p3_symmetric::{CompressionFunctionFromHasher, SerializingHasher};
 use p3_word::{
     AndConstraint, Component, ComponentCall, Composition, ConstraintKind, ConstraintSystem,
-    IntegerMulConstraint, Operand, Segment, Shift, ShiftKind, ShiftedValue, ValueIndex, Word64,
-    ZeroConstraint,
+    IntegerMulConstraint, Operand, Segment, Shift, ShiftKind, ShiftedValue, ValueIndex,
+    VerificationError, Word64, ZeroConstraint,
 };
 use p3_word_backend::{PackedWitness, Statement, WordProof, WordProofError, WordProofKey};
 
@@ -512,9 +513,23 @@ fn a_proof_of_one_instance_count_does_not_verify_at_another() {
     ));
 
     // Padding the public words to the declared length does not rescue it either.
+    //
+    // The rejection then comes from the cube, not from the words.
+    //
+    // Three instances need three constraint coordinates beside the six bit ones.
+    //
+    // The proof of two instances carries one round fewer than that.
     let mut padded = public;
     padded.resize(9, Word64::new(0));
-    assert!(verify(&declared_key, &scheme, &commitment, &padded, &proof).is_err());
+    assert!(matches!(
+        verify(&declared_key, &scheme, &commitment, &padded, &proof),
+        Err(WordProofError::Zerocheck(
+            GenericDegreeError::RoundCountMismatch {
+                expected: 9,
+                actual: 8,
+            }
+        ))
+    ));
 }
 
 // ---------------------------------------------------------------------------
@@ -544,13 +559,16 @@ fn one_instance_cannot_borrow_another_instance_private_word() {
         .copy_from_slice(&borrowed);
     assert_ne!(shared, honest);
 
-    // The scalar reference agrees the composed statement no longer holds.
-    assert!(
+    // The scalar reference agrees, and names instance one's own linear relation.
+    assert_eq!(
         composition
             .lower()
             .expect("the lowered system is well formed")
-            .verify(&public, &shared)
-            .is_err()
+            .verify(&public, &shared),
+        Err(VerificationError::Unsatisfied {
+            kind: ConstraintKind::Zero,
+            constraint: 1,
+        })
     );
 
     // The proof of the shared witness cannot close the vanishing check.
@@ -651,7 +669,10 @@ fn repeating_one_instance_where_two_were_declared_is_rejected() {
     // The repetition therefore cannot pass for two different instances.
     let (declared_public, _) = honest_values(&composition);
     assert_ne!(declared_public, public);
-    assert!(verify(&key, &scheme, &commitment, &declared_public, &proof).is_err());
+    assert!(matches!(
+        verify(&key, &scheme, &commitment, &declared_public, &proof),
+        Err(WordProofError::RelationClaim)
+    ));
 }
 
 #[test]
@@ -722,7 +743,10 @@ fn a_substituted_public_output_is_rejected() {
         .interface_mut(&mut tampered, 0, 1)
         .expect("the instance exists");
     output[2] = Word64::new(output[2].get() ^ 1);
-    assert!(verify(&key, &scheme, &commitment, &tampered, &proof).is_err());
+    assert!(matches!(
+        verify(&key, &scheme, &commitment, &tampered, &proof),
+        Err(WordProofError::RelationClaim)
+    ));
 }
 
 // ---------------------------------------------------------------------------

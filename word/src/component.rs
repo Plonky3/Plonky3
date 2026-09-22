@@ -762,6 +762,7 @@ mod tests {
     use super::*;
     use crate::constraint::Operand;
     use crate::shift::ShiftedValue;
+    use crate::system::VerificationError;
     use crate::word::Word64;
 
     /// `out = in AND local`, with the input and output public.
@@ -881,7 +882,13 @@ mod tests {
         // Giving instance one instance zero's mask breaks only that instance.
         let borrowed = composition.locals(&witness, 0, 0).unwrap()[0];
         composition.locals_mut(&mut witness, 0, 1).unwrap()[0] = borrowed;
-        assert!(flat.verify(&public, &witness).is_err());
+        assert_eq!(
+            flat.verify(&public, &witness),
+            Err(VerificationError::Unsatisfied {
+                kind: ConstraintKind::And,
+                constraint: 1,
+            })
+        );
     }
 
     #[test]
