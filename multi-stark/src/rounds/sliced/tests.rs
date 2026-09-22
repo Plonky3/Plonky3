@@ -10,6 +10,7 @@ use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
 
 use super::*;
+use crate::config::DEFAULT_SLICED_ROUNDS;
 use crate::packed_ext::PackedRepr;
 use crate::rounds::subfield::tests::{
     first_challenge, later_rounds, link_coupling, no_lookups, with_stage_state, with_state,
@@ -2032,10 +2033,12 @@ enum Boundary {
 
 /// Every round polynomial and the openings, with the sliced rounds accumulated in `R`.
 ///
-/// Also returns how many rounds ran on the planes, how many residual rows the stage left them
-/// with, and whether the round that spent them read the planes.
+/// The stage runs at most `planes_rounds` rounds on its planes. Also returns how many rounds
+/// ran on the planes, how many residual rows the stage left them with, and whether the round
+/// that spent them read the planes.
 fn sliced_rounds<R>(
     instances: &[Instance],
+    planes_rounds: usize,
     boundary: Boundary,
 ) -> (Rounds, usize, Option<usize>, bool)
 where
@@ -2057,6 +2060,7 @@ where
         >,
 {
     with_state(instances, no_lookups(), |mut state, eq_suffix| {
+        state.sliced_rounds = planes_rounds;
         let first = state
             .round_poly_sliced::<Gf4, R>(eq_suffix)
             .expect("the stage is sliced");
@@ -2148,7 +2152,7 @@ fn every_round_on_and_off_the_planes_matches_the_generic_kernel() {
         ];
         let generic = generic_rounds(&instances);
         let (tower, tower_on_planes, tower_residual_rows, _) =
-            sliced_rounds::<Tower>(&instances, Boundary::Unsliced);
+            sliced_rounds::<Tower>(&instances, DEFAULT_SLICED_ROUNDS, Boundary::Unsliced);
         assert_eq!(tower_on_planes, expected_on_planes, "{height} rows");
         assert_eq!(
             tower_residual_rows,
@@ -2157,7 +2161,7 @@ fn every_round_on_and_off_the_planes_matches_the_generic_kernel() {
         );
         assert_eq!(tower, generic, "{height} rows, tower");
         let (poly_basis, on_planes, poly_residual_rows, _) =
-            sliced_rounds::<Ghash128>(&instances, Boundary::Unsliced);
+            sliced_rounds::<Ghash128>(&instances, DEFAULT_SLICED_ROUNDS, Boundary::Unsliced);
         assert_eq!(on_planes, expected_on_planes, "{height} rows");
         assert_eq!(
             poly_residual_rows,
@@ -2172,32 +2176,40 @@ fn every_round_on_and_off_the_planes_matches_the_generic_kernel() {
 fn a_boundary_round_and_fold_on_the_planes_match_the_unsliced_kernels() {
     // A word pair of residual rows is the shortest the planes can serve a boundary round, and
     // several pairs reuse one tile, join the accumulators, and put the high half's successor
-    // word short of the last.
-    for (height, on_planes) in [
-        (32 * SHORTEST, true),
-        (16 * SHORTEST, true),
-        (8 * SHORTEST, true),
-        (4 * SHORTEST, false),
+    // word short of the last. With four rounds on the planes, the boundary round reads two
+    // corner groups per row and the boundary fold binds five challenges.
+    for (height, planes_rounds, on_planes) in [
+        (32 * SHORTEST, DEFAULT_SLICED_ROUNDS, true),
+        (16 * SHORTEST, DEFAULT_SLICED_ROUNDS, true),
+        (8 * SHORTEST, DEFAULT_SLICED_ROUNDS, true),
+        (4 * SHORTEST, DEFAULT_SLICED_ROUNDS, false),
+        (32 * SHORTEST, MAX_SLICED_ROUNDS, true),
+        (16 * SHORTEST, MAX_SLICED_ROUNDS, true),
+        (8 * SHORTEST, MAX_SLICED_ROUNDS, false),
     ] {
         let instances = [
             Instance::honest(FixtureAir::Gate { scale: gf4(3) }, height, 25),
             Instance::honest(FixtureAir::Pair, height, 26),
         ];
+        let generic = generic_rounds(&instances);
         for name in ["tower", "polynomial basis"] {
             let (unsliced, planes) = if name == "tower" {
                 (
-                    sliced_rounds::<Tower>(&instances, Boundary::Unsliced),
-                    sliced_rounds::<Tower>(&instances, Boundary::OnPlanes),
+                    sliced_rounds::<Tower>(&instances, planes_rounds, Boundary::Unsliced),
+                    sliced_rounds::<Tower>(&instances, planes_rounds, Boundary::OnPlanes),
                 )
             } else {
                 (
-                    sliced_rounds::<Ghash128>(&instances, Boundary::Unsliced),
-                    sliced_rounds::<Ghash128>(&instances, Boundary::OnPlanes),
+                    sliced_rounds::<Ghash128>(&instances, planes_rounds, Boundary::Unsliced),
+                    sliced_rounds::<Ghash128>(&instances, planes_rounds, Boundary::OnPlanes),
                 )
             };
-            assert_eq!(planes.3, on_planes, "{height} rows, {name}");
-            assert_eq!(planes.0, unsliced.0, "{height} rows, {name}");
-            assert_eq!(planes.2, unsliced.2, "{height} rows, {name}");
+            let case = alloc::format!("{height} rows, {planes_rounds} rounds, {name}");
+            assert_eq!(planes.1, planes_rounds, "{case}");
+            assert_eq!(planes.3, on_planes, "{case}");
+            assert_eq!(planes.0, unsliced.0, "{case}");
+            assert_eq!(planes.0, generic, "{case}");
+            assert_eq!(planes.2, unsliced.2, "{case}");
         }
     }
 }
@@ -2296,77 +2308,177 @@ fn a_prefix_fold_matches_the_multilinear_interpolation() {
     }
 }
 
+/// The successor planes of `trace`'s cells: row `s` holds the cell at row `min(s + 1, height - 1)`.
+fn successor_planes(trace: &SlicedTrace) -> Vec<[u64; 2]> {
+    let lane = |planes: [u64; 2], lane: usize| {
+        ((planes[0] >> lane) & 1 == 1, (planes[1] >> lane) & 1 == 1)
+    };
+    let words = trace.cells.len() / trace.width;
+    (0..words)
+        .flat_map(|word| {
+            (0..trace.width).map(move |column| {
+                let planes = trace.cells[word * trace.width + column];
+                let carry = if word + 1 < words {
+                    lane(trace.cells[(word + 1) * trace.width + column], 0)
+                } else {
+                    lane(planes, SLICED_LANES - 1)
+                };
+                successor_word(planes, carry)
+            })
+        })
+        .collect()
+}
+
 /// Every row pair a tile reads, in the tower's scalar rows and in the polynomial basis's lane
-/// groups, beside the plane fold of the two words it joins.
+/// groups, beside the plane fold of the two words it joins and of their successor words.
 ///
 /// One tile lays out every word pair in turn. A few words carry a high plane, so the tile's
-/// reads switch between the plane pairs and the low plane alone from one pair to the next, and
-/// the prefixes span one and two corner groups.
+/// reads switch between the plane pairs and the low plane alone from one pair to the next. The
+/// prefixes span one and two corner groups, and the widths end in a partial block of staged
+/// columns. When every column is a successor column, across two runs, pair zero's only
+/// high-plane bit lies in its successor lane, past the last lane of its words.
 #[test]
 fn a_reused_tile_reads_the_plane_fold_of_every_row_pair() {
     let lanes = <Ghash128 as Field>::Packing::WIDTH;
-    for prefix_len in [3, 4] {
-        let (mut trace, _) = plane_fold_trace_fixture(prefix_len + LANE_VARIABLES + 3, 5, true);
+    for (prefix_len, width) in [(3, 5), (4, 5), (3, 70), (4, 130)] {
+        let (mut trace, _) = plane_fold_trace_fixture(prefix_len + LANE_VARIABLES + 3, width, true);
         let challenges = (0..prefix_len)
             .map(|index| Tower::from_repr(0x51 + index as u128))
             .collect::<Vec<_>>();
         let words = (trace.cells.len() / trace.width) >> prefix_len;
         let pairs = words / ROW_HALVES;
-        // Pair one's high word and pair three's low word each set one high-plane bit.
-        for (corner, word, column) in [(1, 1 + pairs, 2), ((1 << prefix_len) - 1, 3, 4)] {
-            trace.cells[(corner * words + word) * trace.width + column][1] |= 1 << 17;
+        // Pair one's high word and pair three's low word each set one high-plane bit. So does
+        // lane zero of pair one's low word, the successor of pair zero's last lane.
+        for (corner, word, column, lane) in [
+            (1, 1 + pairs, 2, 17),
+            ((1 << prefix_len) - 1, 3, 4, 17),
+            (2, 1, width - 1, 0),
+        ] {
+            trace.cells[(corner * words + word) * width + column][1] |= 1 << lane;
         }
+        trace.successors = successor_planes(&trace);
 
         let tower = PlaneFold::<Tower>::new::<Gf4, Tower>(&trace, &challenges);
         let poly = PlaneFold::<Ghash128>::new::<Gf4, Tower>(&trace, &challenges);
-        let mut tower_tile = RowTile::new(tower.corners, trace.width);
-        let mut poly_tile = RowTile::new(poly.corners, trace.width);
-        let mut rows = Scratch::<Tower, Tower>::new(&[], &[], trace.width, None);
-        let mut groups =
-            PackedScratch::<PackedRepr<Tower, Ghash128>, PackedRepr<Tower, Ghash128>>::new(
-                &[],
-                &[],
-                trace.width,
-                None,
-            );
-        let (mut lo, mut hi) = (
-            vec![Tower::ZERO; SLICED_LANES],
-            vec![Tower::ZERO; SLICED_LANES],
-        );
-        let (mut poly_lo, mut poly_hi) = (
-            vec![Ghash128::ZERO; SLICED_LANES],
-            vec![Ghash128::ZERO; SLICED_LANES],
-        );
-        for pair in 0..pairs {
-            tower_tile.fill(&tower, pair, &[]);
-            poly_tile.fill(&poly, pair, &[]);
-            assert_eq!(
-                tower_tile.high,
-                pair % 2 == 1,
-                "pair {pair} of {prefix_len}"
-            );
-            assert_eq!(poly_tile.high, pair % 2 == 1, "pair {pair} of {prefix_len}");
-            for lane in 0..SLICED_LANES {
-                tower_tile.read_row(&tower, lane, &[], &mut rows);
-                for column in 0..trace.width {
-                    tower.fold_word(&trace.cells, column, pair, &mut lo);
-                    tower.fold_word(&trace.cells, column, pair + pairs, &mut hi);
-                    assert_eq!(rows.local_point[column], lo[lane], "lane {lane}");
-                    assert_eq!(rows.local_diff[column], hi[lane] - lo[lane], "lane {lane}");
+        let fold_pair = |planes: &[[u64; 2]], column: usize, pair: usize| {
+            let mut halves = [[Tower::ZERO; SLICED_LANES]; ROW_HALVES];
+            let mut poly_halves = [[Ghash128::ZERO; SLICED_LANES]; ROW_HALVES];
+            for (half, word) in [pair, pair + pairs].into_iter().enumerate() {
+                tower.fold_word(planes, column, word, &mut halves[half]);
+                poly.fold_word(planes, column, word, &mut poly_halves[half]);
+            }
+            (halves, poly_halves)
+        };
+        for next_columns in [vec![], vec![0..width / 2, width / 2..width]] {
+            let mut tower_tile = RowTile::new(tower.corners, width);
+            let mut poly_tile = RowTile::new(poly.corners, width);
+            let mut rows = Scratch::<Tower, Tower>::new(&[], &[], width, None);
+            let mut groups = PackedScratch::<
+                PackedRepr<Tower, Ghash128>,
+                PackedRepr<Tower, Ghash128>,
+            >::new(&[], &[], width, None);
+            for pair in 0..pairs {
+                let case = alloc::format!(
+                    "pair {pair}, prefix {prefix_len}, width {width}, {} successor runs",
+                    next_columns.len()
+                );
+                tower_tile.fill(&tower, pair, &next_columns);
+                poly_tile.fill(&poly, pair, &next_columns);
+                let high = pair % 2 == 1 || (pair == 0 && !next_columns.is_empty());
+                assert_eq!(tower_tile.high, high, "{case}");
+                assert_eq!(poly_tile.high, high, "{case}");
+                let (cells, successors): (Vec<_>, Vec<_>) = (0..width)
+                    .map(|column| {
+                        (
+                            fold_pair(&trace.cells, column, pair),
+                            fold_pair(&trace.successors, column, pair),
+                        )
+                    })
+                    .unzip();
+                for lane in 0..SLICED_LANES {
+                    tower_tile.read_row(&tower, lane, &next_columns, &mut rows);
+                    for column in 0..width {
+                        let ([lo, hi], _) = cells[column];
+                        assert_eq!(rows.local_point[column], lo[lane], "lane {lane}, {case}");
+                        assert_eq!(
+                            rows.local_diff[column],
+                            hi[lane] - lo[lane],
+                            "lane {lane}, {case}"
+                        );
+                        if !next_columns.is_empty() {
+                            let ([lo, hi], _) = successors[column];
+                            assert_eq!(rows.next_point[column], lo[lane], "lane {lane}, {case}");
+                            assert_eq!(
+                                rows.next_diff[column],
+                                hi[lane] - lo[lane],
+                                "lane {lane}, {case}"
+                            );
+                        }
+                    }
+                }
+                for lane in (0..SLICED_LANES).step_by(lanes) {
+                    poly_tile.read_lane_group(&poly, lane, &next_columns, &mut groups);
+                    for column in 0..width {
+                        for step in 0..lanes {
+                            let row = lane + step;
+                            let (_, [lo, hi]) = cells[column];
+                            let local = groups.local_point[column].0.as_slice()[step];
+                            let delta = groups.local_diff[column].0.as_slice()[step];
+                            assert_eq!(local, lo[row], "row {row}, {case}");
+                            assert_eq!(delta, hi[row] - lo[row], "row {row}, {case}");
+                            if !next_columns.is_empty() {
+                                let (_, [lo, hi]) = successors[column];
+                                let next = groups.next_point[column].0.as_slice()[step];
+                                let delta = groups.next_diff[column].0.as_slice()[step];
+                                assert_eq!(next, lo[row], "row {row}, {case}");
+                                assert_eq!(delta, hi[row] - lo[row], "row {row}, {case}");
+                            }
+                        }
+                    }
                 }
             }
-            for lane in (0..SLICED_LANES).step_by(lanes) {
-                poly_tile.read_lane_group(&poly, lane, &[], &mut groups);
-                for column in 0..trace.width {
-                    poly.fold_word(&trace.cells, column, pair, &mut poly_lo);
-                    poly.fold_word(&trace.cells, column, pair + pairs, &mut poly_hi);
-                    for step in 0..lanes {
-                        let row = lane + step;
-                        assert_eq!(groups.local_point[column].0.as_slice()[step], poly_lo[row]);
-                        assert_eq!(
-                            groups.local_diff[column].0.as_slice()[step],
-                            poly_hi[row] - poly_lo[row]
-                        );
+        }
+    }
+}
+
+/// Every column a plane fold writes out, whatever block of columns each task stages, beside
+/// the plane fold of each of its words.
+///
+/// The widths end in a partial block for every block width, the Boolean trace takes the low
+/// plane alone and the other both planes, and the prefixes span one to four corner groups.
+#[test]
+fn folded_columns_match_the_plane_fold_across_block_boundaries() {
+    for width in [70, 130] {
+        for boolean in [true, false] {
+            let (trace, _) = plane_fold_trace_fixture(12, width, boolean);
+            for prefix_len in 3..=MAX_PLANE_FOLD_ROUNDS {
+                let challenges = (0..prefix_len)
+                    .map(|index| Tower::from_repr(0x71 + index as u128))
+                    .collect::<Vec<_>>();
+                let fold = PlaneFold::<Ghash128, MAX_PLANE_FOLD_CORNERS>::new::<Gf4, Tower>(
+                    &trace,
+                    &challenges,
+                );
+                let mut expected = [Ghash128::ZERO; SLICED_LANES];
+                for block_columns in [1, 7, STAGED_COLUMNS, 3 * STAGED_COLUMNS] {
+                    let case = alloc::format!(
+                        "width {width}, boolean {boolean}, prefix {prefix_len}, \
+                         blocks of {block_columns}"
+                    );
+                    let columns = fold.fold_columns(block_columns);
+                    assert_eq!(columns.len(), width, "{case}");
+                    for (column, values) in columns.iter().enumerate() {
+                        assert_eq!(values.num_evals(), fold.words * SLICED_LANES, "{case}");
+                        for (word, values) in values
+                            .as_slice()
+                            .as_chunks::<SLICED_LANES>()
+                            .0
+                            .iter()
+                            .enumerate()
+                        {
+                            fold.fold_word(&trace.cells, column, word, &mut expected);
+                            assert_eq!(*values, expected, "column {column}, word {word}, {case}");
+                        }
                     }
                 }
             }
