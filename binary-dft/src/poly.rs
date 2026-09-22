@@ -244,6 +244,10 @@ const STAGING_BYTES: usize = 64 * 1024;
 /// different phases; it is the gather and the scatter, which stream the matrix through the
 /// same cache for as long as the tile is live.
 ///
+/// One pass does hold a second tile: the first group every coset of a padded message shares
+/// runs each further coset on a copy of the gathered tile, so it takes a thread's whole share
+/// rather than half of it.
+///
 /// Halving lands on this figure for a core holding 1 MiB of private cache for two threads.
 /// Where a target holds less, the budget is the whole of a thread's share rather than half of
 /// it, and that is the edge the sweep below sits at:
