@@ -555,32 +555,27 @@ fn the_report_names_every_error_the_adapter_charges() {
     assert!(labels.contains(&p3_security::whir::WHIR_OPENING_LABEL));
     assert!(labels.contains(&p3_security::BIT_RING_SWITCH_LABEL));
 
-    // The successor view sends two more elements, which costs strictly more.
-    let plain = security
-        .terms
-        .iter()
-        .map(|term| term.bits.bits())
-        .fold(f64::INFINITY, f64::min);
-    let with_successor = pcs
-        .readings_security(2, true)
-        .unwrap()
-        .terms
-        .iter()
-        .map(|term| term.bits.bits())
-        .fold(f64::INFINITY, f64::min);
-    assert!(with_successor <= plain);
+    // The reduction's own term, picked by name rather than by being the weakest of the report.
+    let reduction_bits = |successor_tensors| {
+        pcs.readings_security(2, successor_tensors)
+            .unwrap()
+            .terms
+            .iter()
+            .find(|term| term.label == p3_security::BIT_RING_SWITCH_LABEL)
+            .unwrap()
+            .bits
+            .bits()
+    };
+
+    // Carry and last are two more elements batched under the same draw, so the reduction is dearer.
+    //
+    // The weakest term is the proximity argument's either way, so a minimum would see no change.
+    assert!(reduction_bits(true) < reduction_bits(false));
 
     // The reductions run while the commitment still admits a list of codewords.
     //
     // A prover therefore picks its member after seeing their challenges, so they pay for the list.
     assert!(security.log2_max_candidates > 0.0);
-    let charged = security
-        .terms
-        .iter()
-        .find(|term| term.label == p3_security::BIT_RING_SWITCH_LABEL)
-        .unwrap()
-        .bits
-        .bits();
     let alone = p3_security::multilinear::bit_ring_switch_tensors_term(
         2,
         1,
@@ -590,7 +585,7 @@ fn the_report_names_every_error_the_adapter_charges() {
     )
     .bits
     .bits();
-    assert!((charged - (alone - security.log2_max_candidates)).abs() < 1e-9);
+    assert!((reduction_bits(false) - (alone - security.log2_max_candidates)).abs() < 1e-9);
 }
 
 #[test]
