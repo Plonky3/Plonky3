@@ -1,13 +1,16 @@
 //! What a proving key proves: one flat system, or components instantiated many times.
 //!
-//! The two forms describe exactly the same statement. A [`Composition`] names
-//! its relations once per component and repeats them across instances, so its
-//! stored description is the size of the components; [`Composition::lower`]
-//! expands it into the flat form, which is the size of the whole statement.
+//! The two forms describe exactly the same statement.
 //!
-//! Every dimension the protocol binds — segment lengths, relation counts, the
-//! compiled shift wiring — is read through this type, so the two forms produce
-//! the same transcript and the same proof.
+//! A composition names each gadget's relations once and repeats them across instances.
+//!
+//! Its stored description is therefore the size of the gadgets.
+//!
+//! Lowering expands it into the flat form, which is the size of the whole statement.
+//!
+//! Segment lengths, relation counts and the compiled wiring are all read through here.
+//!
+//! That is why both forms reach the same transcript and the same proof.
 
 use p3_word::{Composition, ConstraintKind, ConstraintSystem, Segment, ShapeError, Word};
 
@@ -18,8 +21,9 @@ pub(crate) const FAMILIES: usize = 3;
 
 /// Anything that fixes the two segment lengths a witness must have.
 ///
-/// Both statement forms and a bare component body implement it, so a packed
-/// witness can be checked against whichever one the caller holds.
+/// Both statement forms and a bare gadget body implement it.
+///
+/// A packed witness can therefore be checked against whichever one the caller holds.
 pub trait StatementShape<W: Word> {
     /// Returns the number of verifier-known words.
     fn public_len(&self) -> usize;
@@ -169,8 +173,7 @@ impl<W: Word> Statement<W> {
     ///
     /// # Errors
     ///
-    /// Returns an error when the statement is too large for the compact key
-    /// representation.
+    /// Returns an error when the statement outgrows the compact key representation.
     #[inline]
     pub fn compiled_layout(&self) -> Result<CompiledKeyLayout<W>, KeyCompileError> {
         match self {

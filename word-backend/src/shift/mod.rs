@@ -9,7 +9,9 @@
 //! ```
 //!
 //! The first sumcheck binds the 32-bit or 64-bit coordinate.
+//!
 //! The second binds the committed word index.
+//!
 //! Source words remain bit-packed until the first point has been sampled.
 //!
 //! Shift spellings are verifier-fixed metadata, so they are summed exactly rather than opened as prover polynomials.
@@ -79,13 +81,13 @@ pub struct ShiftReductionKey<W: Word> {
 impl<W: Word> ShiftReductionKey<W> {
     /// Compiles a checked statement into a reusable reduction key.
     ///
-    /// A composed statement compiles each component once, whatever its instance
-    /// count, and reaches the same wiring the lowered flat system would.
+    /// A composed statement compiles each gadget once, whatever its instance count.
+    ///
+    /// It reaches the same wiring the lowered flat statement would.
     ///
     /// # Errors
     ///
-    /// Returns an error when the statement is too large for the compact key
-    /// representation.
+    /// Returns an error when the statement outgrows the compact key representation.
     pub fn new(statement: impl Into<Statement<W>>) -> Result<Self, KeyCompileError> {
         // Key compilation fixes every sparse reference before proving begins.
         let statement = statement.into();

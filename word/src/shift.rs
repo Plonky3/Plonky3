@@ -267,8 +267,9 @@ impl<W: Word> ShiftedValue<W> {
 
     /// Returns the same movements applied to another word position.
     ///
-    /// Readdressing cannot invalidate a term, because irreducibility is a
-    /// property of the two movements alone and they are carried unchanged.
+    /// Readdressing cannot invalidate a term.
+    ///
+    /// Irreducibility depends on the two movements alone, and those are carried unchanged.
     #[inline]
     pub const fn with_index(self, index: ValueIndex) -> Self {
         Self {

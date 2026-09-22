@@ -108,9 +108,11 @@ fn shift_transpose<W: Word, F: Field>(shift: Shift<W>, output: &[F]) -> Vec<F> {
 
 /// Builds the factorized transpose action of one two-slot shift sequence.
 fn shift_weights<W: Word, F: Field>(shifts: [Shift<W>; 2], output: &[F]) -> Vec<F> {
-    // If the forward map is `outer(inner(word))`, its transpose is
-    // `inner^T(outer^T(output))`. Keeping the two slots separate avoids materializing a dense
-    // composed operator and makes their protocol order explicit.
+    // Transposing a composed map applies the outer slot first and the inner one second.
+    //
+    // Keeping the two slots apart avoids materializing a dense composed operator.
+    //
+    // It also leaves their protocol order visible.
     let [inner, outer] = shifts;
     let intermediate = shift_transpose(outer, output);
     shift_transpose(inner, &intermediate)

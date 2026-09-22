@@ -1,60 +1,52 @@
 //! Word gadgets declared once and instantiated many times.
 //!
-//! A [`Component`] is one word gadget written against *component-local* word
-//! slots. A [`ComponentCall`] pairs it with a checked instance count, and a
-//! [`Composition`] lays several calls out into one statement.
+//! A component is one word gadget, written against word slots of its own.
+//!
+//! A call pairs that gadget with a checked instance count.
+//!
+//! A composition lays several calls out into one statement.
 //!
 //! # Addressing
 //!
-//! The composed statement keeps two independent segments, exactly as a flat
-//! [`ConstraintSystem`] does, and each call owns a contiguous, disjoint block of
-//! each one. Inside a block the words are **packed by instance**:
+//! Each call owns a contiguous, disjoint block of both word segments.
+//!
+//! Inside a block the words are packed by instance:
 //!
 //! ```text
-//! public  word = public_base(call)  + instance * interface_slots + slot
-//! witness word = witness_base(call) + instance * local_slots     + slot
+//! public  word = public base   + instance * interface slots + slot
+//! private word = private base  + instance * private slots   + slot
+//! relation     = relation base + instance * relations       + relation
 //! ```
 //!
-//! Relations are laid out the same way, one family at a time:
+//! Every stride is the block's own width.
 //!
-//! ```text
-//! constraint = constraint_base(call, family) + instance * relations(family) + relation
-//! ```
+//! Two instances can therefore never reach the same word or the same relation.
 //!
-//! Both maps are affine with an instance stride equal to the block's own width,
-//! so two instances can never name the same word and never name the same
-//! relation. That is a property of the arithmetic, not of a runtime check.
+//! That follows from the arithmetic, so no runtime check has to enforce it.
 //!
-//! # Why instance-major, and not the other way round
+//! # Why instance-major
 //!
-//! binius64's chip path stores a chip's witness *wire-major*: row `r` of its
-//! `ValueTable` occupies `data[r << log_instances ..]`, so the instance index is
-//! the minor axis. That layout is what lets its per-chip commitment split the
-//! sumcheck point as `r_rho || r_x_star`, instance coordinates low.
+//! Binius64 stores a repeated gadget's witness the other way round, instance index minor.
 //!
-//! This backend does not have a per-component commitment to split. Every call
-//! lands in one shared Boolean trace and discharges one opening, and the
-//! constraint index of instance `i` is `base + i * relations + r`, which does
-//! not factor into a slot part and an instance part unless each instance's
-//! relations are padded to a power of two. Interleaving would therefore buy
-//! nothing here and would cost the one thing instance-major does buy: each
-//! instance owns a contiguous run of words, so [`Composition::locals_mut`] hands
-//! out genuinely disjoint slices and a witness generator writes one gadget's
-//! output in one pass.
+//! That lets its per-gadget commitment split the sumcheck point along the instance axis.
 //!
-//! binius64 also rounds an instance count up to a power of two by *repeating the
-//! last invocation*. Nothing here repeats an instance: the instance axis is not
-//! padded at all, and the trace's own padding words are zero, which is not a
-//! copy of any instance.
+//! Nothing here commits a gadget on its own, so there is no such split to gain.
+//!
+//! Instance-major instead gives every instance one contiguous run of words.
+//!
+//! A caller can then be handed one writable slice per instance, and no two of them overlap.
 //!
 //! # Public inputs and outputs
 //!
-//! A component's public segment *is* its interface: the first
-//! [`Component::public_inputs`] slots are its inputs and the next
-//! [`Component::public_outputs`] slots are its outputs. Both are verifier-known
-//! words of the composed statement, and their positions follow from the
-//! declared interface and instance counts alone, so a verifier derives them
-//! without reading anything the prover supplied.
+//! A gadget's public segment is its interface.
+//!
+//! The leading slots are its inputs and the trailing slots its outputs.
+//!
+//! Both are verifier-known words of the composed statement.
+//!
+//! Their positions follow from the declared interface and the instance counts alone.
+//!
+//! Nothing the prover supplies can move them.
 
 use alloc::vec::Vec;
 
@@ -134,8 +126,9 @@ pub enum CompositionError {
 
 /// A word gadget written once against component-local slots.
 ///
-/// The body's public segment is the per-instance interface and its witness
-/// segment is the per-instance private storage.
+/// Its public segment is the interface one instance exposes.
+///
+/// Its witness segment is the private storage one instance keeps.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Component<W: Word> {
     /// Relations over component-local slots.
@@ -151,8 +144,7 @@ impl<W: Word> Component<W> {
     ///
     /// # Errors
     ///
-    /// Returns an error when the declared interface widths do not add up to the
-    /// number of public words the body addresses.
+    /// Returns an error when the two interface widths do not cover the body's public segment.
     pub fn new(
         body: ConstraintSystem<W>,
         public_inputs: usize,
@@ -289,8 +281,7 @@ impl<W: Word> Composition<W> {
     ///
     /// # Errors
     ///
-    /// Returns an error when the composed segments or relation families would
-    /// exceed the compact 32-bit address space the protocol indexes them with.
+    /// Returns an error when a composed segment or family outgrows the compact address space.
     pub fn new(calls: Vec<ComponentCall<W>>) -> Result<Self, CompositionError> {
         let mut public_len = 0_usize;
         let mut witness_len = 0_usize;
@@ -504,8 +495,9 @@ impl<W: Word> Composition<W> {
 
     /// Returns one instance's interface words for writing.
     ///
-    /// Distinct instances yield disjoint slices, so a caller cannot write one
-    /// instance's word through another instance's handle.
+    /// Distinct instances yield disjoint slices.
+    ///
+    /// One instance's word cannot be written through another instance's handle.
     ///
     /// # Errors
     ///
@@ -522,8 +514,9 @@ impl<W: Word> Composition<W> {
 
     /// Returns one instance's private words for writing.
     ///
-    /// Distinct instances yield disjoint slices, so a caller cannot write one
-    /// instance's word through another instance's handle.
+    /// Distinct instances yield disjoint slices.
+    ///
+    /// One instance's word cannot be written through another instance's handle.
     ///
     /// # Errors
     ///
@@ -540,14 +533,15 @@ impl<W: Word> Composition<W> {
 
     /// Materialises the equivalent flat statement.
     ///
-    /// This is the duplicated-metadata form the composition exists to avoid, so
-    /// it is only worth building as a reference or for a caller that wants the
-    /// flat path. Its relation order matches the composed addressing exactly.
+    /// This is the duplicated form the composition exists to avoid.
+    ///
+    /// It is worth building as a reference, or for a caller that wants the flat path.
+    ///
+    /// Its relation order matches the composed addressing exactly.
     ///
     /// # Errors
     ///
-    /// Returns an error when the composed statement exceeds the flat system's
-    /// own compact address space.
+    /// Returns an error when the composed statement outgrows the flat address space.
     pub fn lower(&self) -> Result<ConstraintSystem<W>, SystemError> {
         let counts = self.relation_counts();
         let mut zero = Vec::with_capacity(counts[0]);

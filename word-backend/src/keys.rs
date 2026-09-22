@@ -43,9 +43,11 @@ impl ConstraintReference {
 
 /// One word's resolved references under a fixed operation and shift sequence.
 ///
-/// The stored references are the ones a *component slot* carries. An instanced
-/// segment stores them once and adds this key's `constraint_offset` on the way
-/// out, which is what makes the metadata independent of the instance count.
+/// The stored references are the ones one gadget slot carries.
+///
+/// An instanced segment stores them once and adds the instance's offset on the way out.
+///
+/// That is what keeps the stored metadata independent of the instance count.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CompiledKey<'a, W: Word> {
     /// The relation family consuming the word.
@@ -116,8 +118,9 @@ struct StoredKey {
 
 /// One call's slot storage, repeated across its instances.
 ///
-/// A flat statement is the degenerate case: one block of one instance whose
-/// slots are the segment's words.
+/// A flat statement is the degenerate case.
+///
+/// It is one block of one instance whose slots are the segment's own words.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct InstanceBlock {
     /// The block's first word in the composed segment.
@@ -152,8 +155,9 @@ impl InstanceBlock {
 
 /// Storage the compiled metadata of one segment occupies.
 ///
-/// The counts are what an instanced layout keeps flat as the instance count
-/// grows, so they are the quantity a scaling measurement should report.
+/// An instanced layout keeps these counts flat as the instance count grows.
+///
+/// They are therefore the quantity a scaling measurement should report.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct LayoutFootprint {
     /// Stored relation occurrences.
@@ -331,17 +335,17 @@ impl<W: Word> CompiledKeyLayout<W> {
 
     /// Compiles each component once and repeats it across its instances.
     ///
-    /// The relations of a call are declared exactly once here, whatever its
-    /// instance count, so the stored metadata is the size of the components
-    /// rather than the size of the composed statement.
+    /// A call's relations are declared exactly once here, whatever its instance count.
     ///
-    /// The result is indistinguishable from compiling [`Composition::lower`],
-    /// because the composed addressing is the affine map this reverses.
+    /// The stored metadata is therefore the size of the gadgets, not of the statement.
+    ///
+    /// Compiling the lowered statement instead would give an indistinguishable result.
+    ///
+    /// That is because the composed addressing is the affine map this one reverses.
     ///
     /// # Errors
     ///
-    /// Returns an error when a component or the merged layout is too large for
-    /// the compact key representation.
+    /// Returns an error when a gadget or the merged layout outgrows the compact key.
     pub fn compose(composition: &Composition<W>) -> Result<Self, KeyCompileError> {
         let mut public = Vec::with_capacity(composition.calls().len());
         let mut witness = Vec::with_capacity(composition.calls().len());

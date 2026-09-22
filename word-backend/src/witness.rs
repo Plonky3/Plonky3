@@ -52,8 +52,10 @@ impl PackedWord for Word64 {
 
 /// A witness whose words retain the bit order consumed by the Boolean PCS.
 ///
-/// Bit `i` of word `w` occupies binary lane `word_bits * w + i`.
+/// A word's bits occupy one contiguous run of binary lanes, least significant first.
+///
 /// Multilinear points place the within-word index in the trailing coordinates.
+///
 /// The least-significant coordinate is last under the big-endian convention.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PackedWitness<W: PackedWord> {

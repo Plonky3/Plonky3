@@ -1,9 +1,12 @@
 //! Word-level relation proving, from a packed witness to one authenticated trace opening.
 //!
-//! A key proves a [`Statement`], which is either a flat constraint system or a
-//! composition of components instantiated many times. The composed form compiles
-//! each component once, so its stored wiring is the size of the components rather
-//! than the size of the statement, and it reaches the same proof either way.
+//! A key proves either a flat constraint system or a composition of repeated gadgets.
+//!
+//! The composed form compiles each gadget once, whatever its instance count.
+//!
+//! Its stored wiring is therefore the size of the gadgets, not the size of the statement.
+//!
+//! Both forms reach the same proof.
 
 #![no_std]
 

@@ -22,8 +22,9 @@ pub struct OperationColumns<W: PackedWord> {
 impl<W: PackedWord> OperationColumns<W> {
     /// Evaluates the operands needed by the nonlinear reductions.
     ///
-    /// A composed statement walks each component once per instance, so the
-    /// column position of a relation is exactly the composed relation index.
+    /// A composed statement walks each gadget once per instance.
+    ///
+    /// A relation's column position is therefore exactly its composed relation index.
     ///
     /// # Errors
     ///

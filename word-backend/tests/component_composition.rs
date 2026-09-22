@@ -1,12 +1,16 @@
 //! Repeated word gadgets proved as instances of one compiled component.
 //!
-//! Every test here is about the one thing a shared compiled component can get
-//! wrong: the index arithmetic that tells one instance from another. The
-//! equivalence test pins the composed path to the duplicated-inline path it
-//! replaces, and the remaining tests are the three attacks a shared component
-//! invites — a witness that does not match the declared instance count, two
-//! instances reading one cell, and a proof that repeats one instance where two
-//! were declared.
+//! Every test here is about the one thing a shared gadget can get wrong.
+//!
+//! That is the index arithmetic telling one instance from another.
+//!
+//! The equivalence test pins the composed path to the written-out path it replaces.
+//!
+//! The rest are the three attacks a shared gadget invites:
+//!
+//! - a witness that does not match the declared instance count;
+//! - two instances reading one cell;
+//! - a proof that repeats one instance where two were declared.
 
 use p3_binary_field::{BinaryChallenger, BinaryField128};
 use p3_binary_pcs::{BinaryPcsConfig, BinaryPcsParams, BooleanPcs, BooleanPcsError, BooleanProof};
@@ -99,7 +103,7 @@ fn gadget() -> Component<Word64> {
     Component::new(body, 2, 1).expect("two inputs and one output span the interface")
 }
 
-/// Runs the gadget natively, returning `(out, [t, u])`.
+/// Runs the gadget natively, returning its output word and its two private words.
 const fn run_gadget(in0: u64, in1: u64) -> (u64, [u64; 2]) {
     let t = in0 & in1.rotate_right(ROTATION as u32);
     let u = t ^ (in0 << SHIFT);
@@ -115,7 +119,7 @@ const fn instance_inputs(instance: usize) -> (u64, u64) {
     )
 }
 
-/// Builds a composition of one call with `instances` live instances.
+/// Builds a composition of one call with the requested number of live instances.
 fn composition(instances: usize) -> Composition<Word64> {
     Composition::new(vec![ComponentCall::new(gadget(), instances)])
         .expect("the fixture fits the compact address space")
@@ -221,8 +225,9 @@ fn a_composed_key_and_its_lowered_key_produce_the_same_proof() {
     let (flat_commitment, flat_proof) =
         prove(&flat_key, &scheme, &public, &witness).expect("the flat statement holds");
 
-    // The composed path is a different description of one statement, not a
-    // different protocol, so the transcript record is the same byte for byte.
+    // The composed path is another description of one statement, not another protocol.
+    //
+    // The transcript record is therefore the same byte for byte.
     assert_eq!(composed_commitment, flat_commitment);
     assert_eq!(bytes(&composed_proof), bytes(&flat_proof));
 
@@ -531,15 +536,18 @@ fn repeating_one_instance_where_two_were_declared_is_rejected() {
         private[1] = Word64::new(locals[1]);
     }
 
-    // Repeating an instance is a *valid* statement; it just is not the one the
-    // verifier asked for, because the public interface names the repetition.
+    // Repeating an instance is a valid statement, just not the one the verifier wants.
+    //
+    // The public interface names the repetition, so the two are told apart.
     let (commitment, proof) =
         prove(&key, &scheme, &public, &witness).expect("the repeated statement holds");
     assert!(verify(&key, &scheme, &commitment, &public, &proof).is_ok());
 
-    // Against the interface the verifier actually holds, the proof fails: the
-    // second instance's public words are bound into the transcript, so the
-    // repetition cannot pass for two different instances.
+    // Against the interface the verifier actually holds, the proof fails.
+    //
+    // The second instance's public words are bound into the transcript first.
+    //
+    // The repetition therefore cannot pass for two different instances.
     let (declared_public, _) = honest_values(&composition);
     assert_ne!(declared_public, public);
     assert!(verify(&key, &scheme, &commitment, &declared_public, &proof).is_err());
@@ -547,8 +555,9 @@ fn repeating_one_instance_where_two_were_declared_is_rejected() {
 
 #[test]
 fn a_second_instance_cannot_reuse_the_first_committed_words() {
-    // Fixture state: the declared interface of two distinct instances, but a
-    // witness that only ever computed the first one.
+    // Fixture state: an interface declaring two distinct instances.
+    //
+    // The witness behind it only ever computed the first one.
     let composition = composition(2);
     let (public, honest) = honest_values(&composition);
     let key = WordProofKey::new(composition.clone()).expect("the composed key compiles");

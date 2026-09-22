@@ -1,8 +1,12 @@
 //! Measures what a repeated word gadget costs, inline against composed.
 //!
-//! The same statement is built twice — once with the gadget's relations written
-//! out `n` times, once as `n` instances of one compiled component — and both are
-//! proved end to end. The table reports, for each `n`:
+//! The same statement is built twice, then proved end to end both ways.
+//!
+//! One build writes the gadget's relations out once per use.
+//!
+//! The other declares the gadget once and gives it a live instance count.
+//!
+//! For each count the table reports:
 //!
 //! - committed cells: bits of the padded Boolean trace the commitment covers;
 //! - opened values: evaluations the proof discharges through the commitment;

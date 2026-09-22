@@ -1,9 +1,12 @@
 //! Word-level relations over XOR, AND, shifts, and integer multiplication.
 //!
-//! A [`ConstraintSystem`] writes every relation out once. A [`Component`] instead
-//! declares one word gadget against component-local slots, and a [`Composition`]
-//! instantiates several such gadgets a checked number of times each, laying their
-//! words out packed by instance.
+//! A constraint system writes every relation out once.
+//!
+//! A component instead declares one word gadget against slots of its own.
+//!
+//! A composition instantiates several gadgets a checked number of times each.
+//!
+//! It lays their words out packed by instance.
 
 #![no_std]
 
