@@ -3500,6 +3500,117 @@ mod tests {
     }
 
     #[test]
+    fn one_sweep_over_the_banks_gives_each_bank_its_own_elements() {
+        // Invariant: sweeping the compact banks together changes no bank's elements.
+        //
+        // Four banks at the wide level, in blocks of eight elements and up, run the bit-block
+        // kernel where the target has one. Each bank swept alone in blocks of one element is
+        // summed through the buckets. The carry meets columns shorter than a block, longer
+        // than one, and as long as a bank.
+        type Wide = BinaryField128;
+        let absorbed = BitRingSwitch::<Wide>::ABSORBED;
+        let (head, tail, banks) = (2, 8, 4);
+        let bank_len = 1 << tail;
+        let packing = BitPacking::<Wide>::new(&bits(0xBA4C, banks * bank_len * 16)).unwrap();
+        let num_variables = head + tail + absorbed;
+        assert_eq!(packing.num_variables() + absorbed, num_variables);
+        let mut rng = SmallRng::seed_from_u64(0xBA4D);
+
+        for row_variables in [absorbed + 1, absorbed + 3, absorbed + 6, absorbed + tail] {
+            let r = Point::<Wide>::rand(&mut rng, num_variables);
+            let reduction = BitRingSwitch::with_successor(&r, row_variables).unwrap();
+            let run = &reduction.high()[head..];
+
+            let single = FactoredEquality::new(run, 0);
+            let tensors = (0..banks)
+                .map(|bank| BitRingSwitch::tensor_over(&packing, bank * bank_len, &single))
+                .collect::<Vec<_>>();
+            let successors = (0..banks)
+                .map(|bank| {
+                    reduction
+                        .successor_tensors_over(&packing, bank * bank_len, &single)
+                        .unwrap()
+                })
+                .collect::<Vec<_>>();
+
+            for log_block in 3..=6 {
+                let equality = FactoredEquality::new(run, log_block);
+                let case = alloc::format!("{row_variables} rows, 2^{log_block} block");
+                assert_eq!(
+                    BitRingSwitch::bank_tensors_over(&packing, 0, banks, &equality),
+                    tensors,
+                    "{case}"
+                );
+                assert_eq!(
+                    reduction.bank_successor_tensors_over(&packing, 0, banks, &equality),
+                    Some(successors.clone()),
+                    "{case}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_deepest_production_head_proves_what_the_dense_path_proves() {
+        // Invariant: the production depth changes the prover's work, never its messages.
+        //
+        // The run is the size floor of the deepest production depth, so `prove` takes that
+        // depth and splits the packing in its most banks. Rows of the successor view stay out
+        // of the head, which a view with a few kept rows leaves room for.
+        type Wide = BinaryField128;
+        let absorbed = BitRingSwitch::<Wide>::ABSORBED;
+        let n = compact_size_floor(COMPACT_PRODUCTION_ROUNDS, LOG_CHUNK);
+        let packing = BitPacking::<Wide>::new(&bits(0xDE4, (1 << n) * 16)).unwrap();
+        let mut rng = SmallRng::seed_from_u64(0xDE5);
+        let r = Point::<Wide>::rand(&mut rng, n + absorbed);
+
+        for reduction in [
+            BitRingSwitch::new(&r).unwrap(),
+            BitRingSwitch::with_successor(&r, absorbed + 3).unwrap(),
+        ] {
+            assert_eq!(reduction.fixed_prefix().0, 0);
+            assert_eq!(reduction.production_depth(n), COMPACT_PRODUCTION_ROUNDS);
+
+            let mut dense_challenger = wide_challenger();
+            let dense = reduction.prove_with_compact_depth::<Ghash128, _, _>(
+                &packing,
+                &mut dense_challenger,
+                0,
+                true,
+            );
+            let mut production_challenger = wide_challenger();
+            let production =
+                reduction.prove::<Ghash128, _, _>(&packing, &mut production_challenger);
+
+            assert_eq!(production.0.tensor, dense.0.tensor);
+            assert_eq!(production.0.successor, dense.0.successor);
+            assert_eq!(
+                production.0.sumcheck.polynomial_evaluations,
+                dense.0.sumcheck.polynomial_evaluations
+            );
+            assert_eq!(production.0.final_eval, dense.0.final_eval);
+            assert_eq!(production.1, dense.1);
+            assert_eq!(production.2, dense.2);
+            assert_eq!(
+                CanSample::<Wide>::sample(&mut production_challenger),
+                CanSample::<Wide>::sample(&mut dense_challenger)
+            );
+
+            let current = reduction.incoming_claim(&production.0.tensor);
+            let next = reduction.sends_successor_tensors().then(|| {
+                reduction
+                    .successor_claim(&production.0.tensor, production.0.successor.as_ref())
+                    .unwrap()
+            });
+            assert!(
+                reduction
+                    .verify_readings(&production.0, Some(current), next, &mut wide_challenger())
+                    .is_ok()
+            );
+        }
+    }
+
+    #[test]
     fn the_successor_weights_close_the_batched_sum() {
         // Invariant: the weights are what both ends of the sumcheck read.
         //
