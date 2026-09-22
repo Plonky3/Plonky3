@@ -3,7 +3,7 @@ use alloc::{format, vec};
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_challenger::testing::seed_digest;
 use p3_challenger::{CanSampleBits, DuplexChallenger, HashChallenger};
-use p3_commit::ExtensionMmcs;
+use p3_commit::{ExtensionMmcs, MatrixOpening, PointOpening};
 use p3_dft::Radix2DitParallel;
 use p3_field::PrimeCharacteristicRing;
 use p3_field::extension::BinomialExtensionField;
@@ -19,9 +19,10 @@ use rand::{RngExt, SeedableRng};
 use super::open::{PreparedOpen, combined_bucket_codeword};
 use super::plan::{
     BucketInput, BucketPlan, CommitmentPlan, MatrixSlot, OpenedCommitment, OpenedMatrix,
-    OpeningPlan,
+    OpeningPlan, combine_coefficients,
 };
 use super::*;
+use crate::error::ProofShapeError;
 use crate::pcs_transcript::{OpeningProverTranscript, observe_opened_values};
 use crate::prover::{codeword_from_coeffs, prove_stir_multi_from_codewords};
 use crate::verifier::verify_stir_multi;
