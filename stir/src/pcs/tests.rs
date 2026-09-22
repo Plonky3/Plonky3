@@ -11,13 +11,19 @@ use p3_keccak::Keccak256Hash;
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_security::whir::SecurityAssumption;
 use p3_symmetric::{Hash, PaddingFreeSponge, TruncatedPermutation};
+use p3_util::reverse_slice_index_bits;
 use proptest::prelude::*;
 use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
 
-use super::plan::{BucketInput, BucketPlan, CommitmentPlan, MatrixSlot};
+use super::open::{PreparedOpen, combined_bucket_codeword};
+use super::plan::{
+    BucketInput, BucketPlan, CommitmentPlan, MatrixSlot, OpenedCommitment, OpenedMatrix,
+    OpeningPlan,
+};
 use super::*;
-use crate::prover::codeword_from_coeffs;
+use crate::pcs_transcript::{OpeningProverTranscript, observe_opened_values};
+use crate::prover::{codeword_from_coeffs, prove_stir_multi_from_codewords};
 use crate::verifier::verify_stir_multi;
 
 type EF = BinomialExtensionField<BabyBear, 4>;
