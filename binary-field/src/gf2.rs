@@ -552,6 +552,12 @@ mod tests {
     }
 
     #[test]
+    #[should_panic = "div_2exp_u64 is undefined in characteristic 2"]
+    fn div_2exp_u64_panics_at_exponent_zero() {
+        let _divided = Gf2::ONE.div_2exp_u64(0);
+    }
+
+    #[test]
     fn field_order_and_interpolation_nodes() {
         assert_eq!(Gf2::order(), num_bigint::BigUint::from(2u8));
         assert_eq!(Gf2::bits(), 1);
