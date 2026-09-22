@@ -7,6 +7,7 @@ use p3_binary_pcs::whir::{
     BinaryWhirBudget, BinaryWhirProfile, BooleanWhirData, BooleanWhirDomain, BooleanWhirPcs,
     BooleanWhirProver, BooleanWhirTracePcs, recommended_cap_height,
 };
+use p3_bus::BusSymbolicBuilder;
 use p3_lookup::InteractionSymbolicBuilder;
 use p3_multi_stark::config::MultiStarkConfig;
 use p3_sumcheck::TableShape;
@@ -61,6 +62,8 @@ pub enum WhirInteractionFamily {
     IndexedRead,
     /// Indexed tables.
     IndexedTable,
+    /// Binary-native bus declarations.
+    BinaryBus,
 }
 
 impl core::fmt::Display for WhirInteractionFamily {
@@ -71,6 +74,7 @@ impl core::fmt::Display for WhirInteractionFamily {
             Self::Exclusive => "exclusive interactions",
             Self::IndexedRead => "indexed reads",
             Self::IndexedTable => "indexed tables",
+            Self::BinaryBus => "binary bus interactions",
         })
     }
 }
@@ -296,6 +300,16 @@ pub fn boolean_whir_config<A: BinaryAir, H: HarnessHash>(
     options: BinaryProofOptions,
     whir: WhirOptions,
 ) -> Result<BooleanWhirStarkConfig<H>, BinaryProofError> {
+    boolean_whir_config_with_schedule(air, shape, options, whir, false)
+}
+
+pub(crate) fn boolean_whir_config_with_schedule<A: BinaryAir, H: HarnessHash>(
+    air: &A,
+    shape: TableShape,
+    options: BinaryProofOptions,
+    whir: WhirOptions,
+    trace_schedule: bool,
+) -> Result<BooleanWhirStarkConfig<H>, BinaryProofError> {
     let embedded = match options.pcs {
         BooleanPcsChoice::Whir(embedded) => embedded,
         BooleanPcsChoice::Folding => {
@@ -376,38 +390,41 @@ pub fn boolean_whir_config<A: BinaryAir, H: HarnessHash>(
     let whir_config = profile
         .config::<F, F, Challenger<H>, _>(packed_variables, &domain)
         .map_err(BinaryProofError::WhirProfile)?;
-    tracing::debug!(
-        target: "p3_examples::binary::whir",
-        regime = ?whir.regime,
-        term_security_bits = whir.term_security_bits,
-        folding_schedule = ?whir_config.folding_schedule,
-        round_log_inv_rates = ?whir_config
-            .round_parameters
-            .iter()
-            .map(|round| round.log_inv_rate)
-            .collect::<Vec<_>>(),
-        round_queries = ?whir_config
-            .round_parameters
-            .iter()
-            .map(|round| round.num_queries)
-            .collect::<Vec<_>>(),
-        round_ood_samples = ?whir_config
-            .round_parameters
-            .iter()
-            .map(|round| round.ood_samples)
-            .collect::<Vec<_>>(),
-        round_pow_bits = ?whir_config
-            .round_parameters
-            .iter()
-            .map(|round| (round.pow_bits, round.folding_pow_bits))
-            .collect::<Vec<_>>(),
-        commitment_ood_samples = whir_config.commitment_ood_samples,
-        final_queries = whir_config.final_queries,
-        final_pow_bits = whir_config.final_pow_bits,
-        final_folding_pow_bits = whir_config.final_folding_pow_bits,
-        final_sumcheck_rounds = whir_config.final_sumcheck_rounds,
-        final_direct_send_arity = whir_config.final_round_config().folding_factor,
-    );
+    if trace_schedule {
+        tracing::debug!(
+            target: "p3_examples::binary::whir",
+            regime = ?whir.regime,
+            term_security_bits = whir.term_security_bits,
+            folding_schedule = ?whir_config.folding_schedule,
+            starting_folding_pow_bits = whir_config.starting_folding_pow_bits,
+            round_log_inv_rates = ?whir_config
+                .round_parameters
+                .iter()
+                .map(|round| round.log_inv_rate)
+                .collect::<Vec<_>>(),
+            round_queries = ?whir_config
+                .round_parameters
+                .iter()
+                .map(|round| round.num_queries)
+                .collect::<Vec<_>>(),
+            round_ood_samples = ?whir_config
+                .round_parameters
+                .iter()
+                .map(|round| round.ood_samples)
+                .collect::<Vec<_>>(),
+            round_pow_bits = ?whir_config
+                .round_parameters
+                .iter()
+                .map(|round| (round.pow_bits, round.folding_pow_bits))
+                .collect::<Vec<_>>(),
+            commitment_ood_samples = whir_config.commitment_ood_samples,
+            final_queries = whir_config.final_queries,
+            final_pow_bits = whir_config.final_pow_bits,
+            final_folding_pow_bits = whir_config.final_folding_pow_bits,
+            final_sumcheck_rounds = whir_config.final_sumcheck_rounds,
+            final_direct_send_arity = whir_config.final_round_config().num_variables,
+        );
+    }
     let first_fold =
         whir_config
             .folding_schedule
@@ -539,6 +556,12 @@ fn validate_options<A: BinaryAir>(
     if !symbolic.indexed_tables().is_empty() {
         return Err(BinaryProofError::WhirIncompatible(
             WhirIncompatibility::UnsupportedInteractions(WhirInteractionFamily::IndexedTable),
+        ));
+    }
+    let bus = BusSymbolicBuilder::<F, F>::from_air(air, layout);
+    if !bus.interactions().is_empty() {
+        return Err(BinaryProofError::WhirIncompatible(
+            WhirIncompatibility::UnsupportedInteractions(WhirInteractionFamily::BinaryBus),
         ));
     }
     validate_successors(air)
