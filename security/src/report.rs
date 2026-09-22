@@ -78,6 +78,42 @@ impl SecurityTerm {
         self.component = Some(component);
         self
     }
+
+    /// The same term, charged over every candidate a commitment still leaves open.
+    ///
+    /// A draw made before one candidate is named gives a prover that many tries at it.
+    ///
+    /// The argument is the base-two logarithm of how many are left open.
+    #[must_use]
+    pub fn over_candidates(mut self, log2_candidates: f64) -> Self {
+        // An error above one is no bound at all, so the charge stops at zero bits.
+        self.bits = ErrorBits::from_log2((self.bits.bits() - log2_candidates).max(0.0));
+        self
+    }
+}
+
+#[cfg(test)]
+mod candidate_tests {
+    use super::*;
+
+    #[test]
+    fn a_draw_before_a_candidate_is_named_pays_for_every_one_left_open() {
+        // Sixteen candidates cost a draw four bits, and the label is carried through.
+        let charged = SecurityTerm::new("r", ErrorBits::from_log2(100.0)).over_candidates(4.0);
+        assert_eq!(charged.bits.bits(), 96.0);
+        assert_eq!(charged.label, "r");
+
+        // A draw weaker than the candidate count is worth nothing, rather than negative.
+        let drowned = SecurityTerm::new("weak", ErrorBits::from_log2(3.0)).over_candidates(4.0);
+        assert_eq!(drowned.bits.bits(), 0.0);
+    }
+
+    #[test]
+    fn one_candidate_leaves_a_draw_at_its_own_strength() {
+        // No choice is no advantage, so nothing is subtracted.
+        let term = SecurityTerm::new("r", ErrorBits::from_log2(100.0));
+        assert_eq!(term.over_candidates(0.0).bits.bits(), 100.0);
+    }
 }
 
 /// The proximity regime a [`RegimeReport`] was evaluated in.

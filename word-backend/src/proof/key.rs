@@ -67,28 +67,39 @@ impl<W: Word> WordProofKey<W> {
     /// The challenge field is the one every sub-reduction draws from.
     ///
     /// The argument is what the commitment charges for one opening, priced by itself.
+    ///
+    /// # Returns
+    ///
+    /// Nothing when the commitment names a candidate count that is not a real set size.
     #[must_use]
-    pub fn security_term<EF: Field>(&self, commitment: &PrescribedOpeningSecurity) -> SecurityTerm {
-        self.security_model::<EF>(commitment).combined_term()
+    pub fn security_term<EF: Field>(
+        &self,
+        commitment: &PrescribedOpeningSecurity,
+    ) -> Option<SecurityTerm> {
+        Some(self.security_model::<EF>(commitment)?.combined_term())
     }
 
     /// Returns separately labelled terms for security-report diagnostics.
     ///
     /// The terms cover batching, vanishing, shift, and whatever the commitment charges.
+    ///
+    /// # Returns
+    ///
+    /// Nothing when the commitment names a candidate count that is not a real set size.
     #[must_use]
     pub fn security_components<EF: Field>(
         &self,
         commitment: &PrescribedOpeningSecurity,
-    ) -> Vec<SecurityTerm> {
-        self.security_model::<EF>(commitment).components()
+    ) -> Option<Vec<SecurityTerm>> {
+        Some(self.security_model::<EF>(commitment)?.components())
     }
 
     /// Builds the numeric soundness model from the executed schedule.
     fn security_model<EF: Field>(
         &self,
         commitment: &PrescribedOpeningSecurity,
-    ) -> WordProofSecurityModel {
-        // The counts are the key's own and the terms are the commitment's own.
+    ) -> Option<WordProofSecurityModel> {
+        // The counts are the key's own and both commitment inputs are the commitment's own.
         let field_bits = NonZeroUsize::new(EF::bits()).expect("a field has at least one element");
         WordProofSecurityModel::new(
             field_bits.get(),
@@ -97,8 +108,8 @@ impl<W: Word> WordProofKey<W> {
             ZEROCHECK_DEGREE,
             self.shift.security_model(field_bits),
             commitment.terms.clone(),
+            commitment.log2_max_candidates,
         )
-        .expect("a nonzero field width and a cubic composition give a valid model")
     }
 
     /// Number of within-word variables of the selected word width.
@@ -217,6 +228,12 @@ mod tests {
     // Base-two logarithm of the bits one committed element holds.
     const ABSORBED: usize = 7;
 
+    // Draws this proof makes itself, before the opening names one candidate.
+    const OWN_DRAWS: usize = 5;
+
+    // A candidate count a proximity argument in the list-decoding regime would report.
+    const CANDIDATES: f64 = 5.321_928_094_887_363;
+
     // A statement wide enough that the padded trace covers more than one element.
     fn key() -> WordProofKey<Word64> {
         let value = ValueIndex::witness(0).expect("test position fits");
@@ -296,11 +313,60 @@ mod tests {
     }
 
     #[test]
+    fn a_commitment_leaving_candidates_open_charges_every_draw_before_it() {
+        // Fixture state: the same commitment, once settled and once leaving 2^5.32 open.
+        //
+        // That count is what a Johnson-regime proximity argument reports at rate one quarter.
+        let key = key();
+        let scheme = commitment_scheme(key.trace_variables());
+        let settled = scheme.opening_security(1);
+        assert_eq!(settled.log2_max_candidates, 0.0);
+        let open = PrescribedOpeningSecurity {
+            terms: settled.terms.clone(),
+            log2_max_candidates: CANDIDATES,
+        };
+
+        // Each draw this proof makes between the commitment and the opening loses that much.
+        let before = key.security_components::<EF>(&settled).unwrap();
+        let after = key.security_components::<EF>(&open).unwrap();
+        for (before, after) in before.iter().zip(&after).take(OWN_DRAWS) {
+            assert_eq!(after.label, before.label);
+            assert_eq!(after.bits.bits(), before.bits.bits() - CANDIDATES);
+        }
+
+        // The commitment charged its own reductions already, so its terms are carried intact.
+        assert_eq!(after[OWN_DRAWS..], settled.terms);
+
+        // A union bound over the whole set costs at most the set itself.
+        let settled_level = key.security_term::<EF>(&settled).unwrap().bits.bits();
+        let open_level = key.security_term::<EF>(&open).unwrap().bits.bits();
+        assert!(open_level < settled_level);
+        assert!(settled_level - open_level <= CANDIDATES);
+    }
+
+    #[test]
+    fn a_candidate_count_that_names_no_set_is_refused() {
+        let key = key();
+        let scheme = commitment_scheme(key.trace_variables());
+        let terms = scheme.opening_security(1).terms;
+
+        // Nothing is reported rather than a number resting on an unusable count.
+        for count in [f64::NAN, f64::INFINITY, -1.0] {
+            let unusable = PrescribedOpeningSecurity {
+                terms: terms.clone(),
+                log2_max_candidates: count,
+            };
+            assert_eq!(key.security_term::<EF>(&unusable), None);
+            assert_eq!(key.security_components::<EF>(&unusable), None);
+        }
+    }
+
+    #[test]
     fn the_security_model_charges_every_reduction_stage() {
         let key = key();
         let scheme = commitment_scheme(key.trace_variables());
         let commitment = scheme.opening_security(1);
-        let components = key.security_components::<EF>(&commitment);
+        let components = key.security_components::<EF>(&commitment).unwrap();
 
         // Batching, both vanishing draws, both shift draws, then whatever the commitment charges.
         let labels = components
@@ -326,7 +392,7 @@ mod tests {
         assert_eq!(components[5..], commitment.terms);
 
         // The union of every event is no stronger than its weakest component.
-        let combined = key.security_term::<EF>(&commitment);
+        let combined = key.security_term::<EF>(&commitment).unwrap();
         assert!(
             components
                 .iter()

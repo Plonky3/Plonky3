@@ -107,6 +107,8 @@ pub struct WordProofSecurityModel {
     shift: WordShiftSecurityModel,
     /// Labelled errors the commitment charges for discharging the one surviving claim.
     commitment: Vec<SecurityTerm>,
+    /// Base-two logarithm of how many candidates the commitment still leaves open.
+    log2_candidates: f64,
 }
 
 impl WordProofSecurityModel {
@@ -116,7 +118,9 @@ impl WordProofSecurityModel {
     ///
     /// Every batching, vanishing, and reduction challenge must be drawn from that same field.
     ///
-    /// The last argument holds the terms the commitment charges, priced by the commitment itself.
+    /// The last two arguments both come from the commitment.
+    ///
+    /// They are what it charges, and how many candidates it still leaves open.
     #[must_use]
     pub fn new(
         field_bits: usize,
@@ -125,9 +129,15 @@ impl WordProofSecurityModel {
         zerocheck_degree: usize,
         shift: WordShiftSecurityModel,
         commitment: Vec<SecurityTerm>,
+        log2_candidates: f64,
     ) -> Option<Self> {
         // A degree-zero composition carries no round polynomial to separate against.
         if field_bits == 0 || zerocheck_degree == 0 {
+            return None;
+        }
+
+        // A count that is not a real size prices nothing, so no number is reported at all.
+        if !log2_candidates.is_finite() || log2_candidates < 0.0 {
             return None;
         }
 
@@ -138,6 +148,7 @@ impl WordProofSecurityModel {
             zerocheck_degree,
             shift,
             commitment,
+            log2_candidates,
         })
     }
 
@@ -172,6 +183,13 @@ impl WordProofSecurityModel {
 
         // The shift reduction publishes its own separately labelled experiments.
         terms.extend(self.shift.components());
+
+        // Every draw above lands after the commitment and before the opening names one.
+        //
+        // A prover may therefore choose which candidate it is after seeing them.
+        for term in &mut terms {
+            *term = term.over_candidates(self.log2_candidates);
+        }
 
         // The commitment prices the ring switch and its own opening from its own schedule.
         terms.extend(self.commitment.iter().copied());
@@ -244,7 +262,8 @@ mod tests {
         let shift = WordShiftSecurityModel::new(128, 4, 26).unwrap();
         let pcs = BinaryPcsRegime::new(128, 6, 2, 1, 40, 0).unwrap();
         let commitment = vec![bit_ring_switch_term(1, 7, 6, 128), pcs.opening_term(1)];
-        let model = WordProofSecurityModel::new(128, 2, 9, 3, shift, commitment.clone()).unwrap();
+        let model =
+            WordProofSecurityModel::new(128, 2, 9, 3, shift, commitment.clone(), 0.0).unwrap();
         let components = model.components();
 
         // One coefficient separates two families, so its numerator is one.
@@ -284,10 +303,39 @@ mod tests {
         let shift = WordShiftSecurityModel::new(128, 4, 26).unwrap();
 
         // A challenge field must expose at least one bit of entropy.
-        assert!(WordProofSecurityModel::new(0, 2, 9, 3, shift, Vec::new()).is_none());
+        assert!(WordProofSecurityModel::new(0, 2, 9, 3, shift, Vec::new(), 0.0).is_none());
 
         // A degree-zero composition carries no round polynomial to separate against.
-        assert!(WordProofSecurityModel::new(128, 2, 9, 0, shift, Vec::new()).is_none());
+        assert!(WordProofSecurityModel::new(128, 2, 9, 0, shift, Vec::new(), 0.0).is_none());
+
+        // A candidate count that names no real set size prices nothing.
+        for count in [f64::NAN, f64::INFINITY, -1.0] {
+            assert!(WordProofSecurityModel::new(128, 2, 9, 3, shift, Vec::new(), count).is_none());
+        }
+    }
+
+    #[test]
+    fn candidates_left_open_are_charged_to_every_draw_that_precedes_them() {
+        // Fixture state: the same shape, priced against a commitment leaving 2^5 candidates.
+        let shift = WordShiftSecurityModel::new(128, 4, 26).unwrap();
+        let pcs = BinaryPcsRegime::new(128, 6, 2, 1, 40, 0).unwrap();
+        let commitment = vec![bit_ring_switch_term(1, 7, 6, 128), pcs.opening_term(1)];
+        let settled =
+            WordProofSecurityModel::new(128, 2, 9, 3, shift, commitment.clone(), 0.0).unwrap();
+        let open =
+            WordProofSecurityModel::new(128, 2, 9, 3, shift, commitment.clone(), 5.0).unwrap();
+
+        // Each of the proof's own five draws loses exactly the candidate bound.
+        let before = settled.components();
+        let after = open.components();
+        for (settled, open) in before.iter().zip(&after).take(5) {
+            assert_eq!(open.label, settled.label);
+            assert_eq!(open.bits.bits(), settled.bits.bits() - 5.0);
+        }
+
+        // The commitment already charged its own reductions, so its terms do not move.
+        assert_eq!(after[5..], commitment);
+        assert_eq!(before[5..], commitment);
     }
 
     #[test]
