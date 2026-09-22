@@ -3,6 +3,12 @@
 //! A producer declares the shape its cells arrive in, and that declaration decides every pass.
 //!
 //! Every conversion is charged to the report the ingestion returns.
+//!
+//! What is measured here is the ingestion pass alone, and not the path to the commitment.
+//!
+//! Every commitment scheme here takes its witness by value, so a shared vector is copied to commit.
+//!
+//! The proving side then holds that vector twice, until it has opened.
 
 use alloc::vec::Vec;
 use core::ops::Deref;
@@ -185,7 +191,7 @@ impl<F: Field> ColumnSource<'_, F> {
 pub enum TraceSource<'a, F> {
     /// The committed vector itself, already concatenated and at least as long as the envelope.
     ///
-    /// This is the only shape that costs nothing.
+    /// This is the only shape the ingestion pass reads nothing for.
     Committed(&'a [F]),
     /// One source per sparse column, in the order the geometry concatenates them.
     Columns(&'a [ColumnSource<'a, F>]),
@@ -247,16 +253,22 @@ impl IngestReport {
         self.envelope
     }
 
-    /// Returns whether the committed vector was taken without reading a cell.
+    /// Returns whether the ingestion pass read no cell and wrote none.
+    ///
+    /// This says nothing about what follows.
+    ///
+    /// A commitment taking its witness by value copies a shared vector whatever this reports.
     #[must_use]
-    pub const fn is_zero_copy(&self) -> bool {
+    pub const fn reads_no_cell(&self) -> bool {
         self.converted() == 0 && self.envelope == 0
     }
 }
 
 /// The committed vector, borrowed whenever its producer already owned it.
 ///
-/// The variant is the evidence of whether a pass ran.
+/// The variant is the evidence of whether an ingestion pass ran.
+///
+/// A borrow ends at the commitment, which takes its witness by value in every scheme here.
 #[derive(Clone, Debug)]
 pub enum JaggedWitness<'a, F> {
     /// The producer's own cells, used where they lie.
@@ -396,7 +408,7 @@ mod tests {
             JaggedWitness::read(&layout, TraceSource::Committed(&committed)).unwrap();
         assert!(matches!(witness, JaggedWitness::Shared(_)));
         assert_eq!(&*witness, &committed[..]);
-        assert!(report.is_zero_copy());
+        assert!(report.reads_no_cell());
         assert_eq!(report.live(), 9);
         assert_eq!(report.charged(ConversionPass::Shared), 9);
         assert_eq!(report.converted(), 0);
@@ -410,19 +422,22 @@ mod tests {
 
     #[test]
     fn every_arrival_shape_lands_on_the_same_committed_vector() {
-        // One logical trace of three columns, presented four different ways.
+        // One logical trace of four columns, presented four different ways.
         //
-        //     column 0   cells 1, 2, 3
+        // ```text
+        //     column 0   cells 1, 0, 1
         //     column 1   empty
+        //     column 2   cells 1, 1
+        //     column 3   cells 0, 1, 1, 0
+        // ```
         //
-        //     column 2   cells 4, 5
-        //     column 3   cells 6, 7, 8, 9
+        // The cells are Boolean so that the packed shape can carry the very same trace.
         let layout = JaggedLayout::new(3, &[3, 0, 2, 4]).unwrap();
-        let expected = cells(&[1, 2, 3, 4, 5, 6, 7, 8, 9, 0, 0, 0, 0, 0, 0, 0]);
+        let expected = cells(&[1, 0, 1, 1, 1, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0]);
 
-        let first = cells(&[1, 2, 3]);
-        let third = cells(&[4, 5]);
-        let fourth = cells(&[6, 7, 8, 9]);
+        let first = cells(&[1, 0, 1]);
+        let third = cells(&[1, 1]);
+        let fourth = cells(&[0, 1, 1, 0]);
         let dense = [
             ColumnSource::Dense(&first),
             ColumnSource::Dense(&[]),
@@ -433,10 +448,10 @@ mod tests {
         assert_eq!(&*witness, &expected[..]);
         assert_eq!(report.charged(ConversionPass::Copied), 9);
         assert_eq!(report.envelope(), 7);
-        assert!(!report.is_zero_copy());
+        assert!(!report.reads_no_cell());
 
         // The same trace as one row-major block of four columns and four rows.
-        let block = cells(&[1, 0, 4, 6, 2, 0, 5, 7, 3, 0, 0, 8, 0, 0, 0, 9]);
+        let block = cells(&[1, 0, 1, 0, 0, 0, 1, 1, 1, 0, 0, 1, 0, 0, 0, 0]);
         let interleaved = [0usize, 1, 2, 3].map(|column| ColumnSource::Interleaved {
             cells: &block,
             first: column,
@@ -448,9 +463,20 @@ mod tests {
         assert_eq!(&*witness, &expected[..]);
         assert_eq!(report.charged(ConversionPass::Gathered), 9);
 
+        // The same trace as one packed word per column, least significant bit first.
+        let words = [0b101u64, 0, 0b11, 0b0110];
+        let packed: [ColumnSource<'_, F>; 4] = [0usize, 1, 2, 3].map(|column| ColumnSource::Bits {
+            words: &words[column..=column],
+            height: layout.column_height(column),
+        });
+        let (witness, report) =
+            JaggedWitness::read(&layout, TraceSource::Columns(&packed)).unwrap();
+        assert_eq!(&*witness, &expected[..]);
+        assert_eq!(report.charged(ConversionPass::Widened), 9);
+
         // One column split into two consecutive pieces reads as one column.
-        let head = cells(&[1, 2]);
-        let tail = cells(&[3]);
+        let head = cells(&[1, 0]);
+        let tail = cells(&[1]);
         let parts = [ColumnSource::Dense(&head), ColumnSource::Dense(&tail)];
         let chunked = [
             ColumnSource::Chunked(&parts),

@@ -101,11 +101,12 @@ mod tests {
     fn a_jagged_envelope_rounds_up_once_and_a_stacking_rounds_up_per_column() {
         // Fixture state: four columns whose heights are each one above a power of two.
         //
+        // ```text
         //     heights      [5, 9, 17, 33]
         //     live         64
-        //
         //     stacked      8 + 16 + 32 + 64 = 120, rounded to 128
         //     jagged       64, already a power of two
+        // ```
         let heights = [5, 9, 17, 33];
         let stacked = CellBudget::stacked(&heights);
         assert_eq!(stacked.live(), 64);

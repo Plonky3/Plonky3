@@ -6,19 +6,20 @@
 
 use alloc::vec;
 use alloc::vec::Vec;
-use core::slice;
 
 use p3_challenger::fs::{DomainSeparator, FieldUnit, InteractionPattern, TranscriptField};
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
 use p3_field::{ExtensionField, Field};
 use p3_multilinear_util::point::Point;
+use p3_security::{ErrorBits, SecurityTerm};
+use p3_util::log2_ceil_usize;
 use serde::{Deserialize, Serialize};
 
 use super::error::JaggedOpeningError;
 use super::layout::JaggedLayout;
 use super::transcript::encode_layout;
 use super::{JaggedPoint, JaggedProof};
-use crate::prescribed_pcs::PrescribedPointPcs;
+use crate::prescribed_pcs::{PrescribedOpeningSecurity, PrescribedPointPcs};
 use crate::table::{OpeningBatch, OpeningProtocol, TableShape, TableSpec};
 
 /// Version bound into the geometry seal.
@@ -26,6 +27,9 @@ const VERSION: u8 = 1;
 
 /// Protocol name separating the geometry seal from every other absorption.
 const NAME: &[u8] = b"p3-sumcheck-jagged-layout";
+
+/// Label the composed report files the jagged reductions under.
+const REDUCTION_LABEL: &str = "jagged sparse-to-dense reduction";
 
 /// A geometry a transcript has been sealed to.
 ///
@@ -38,16 +42,33 @@ const NAME: &[u8] = b"p3-sumcheck-jagged-layout";
 #[derive(Clone, Copy, Debug)]
 pub struct BoundJaggedLayout<'a>(&'a JaggedLayout);
 
+/// One geometry and the number of sparse claims one commitment to it answers.
+///
+/// A caller sizes its commitment from this before it commits, which is before any seal exists.
+#[derive(Clone, Copy, Debug)]
+pub struct JaggedOpeningShape<'a> {
+    /// Geometry whose envelope the commitment binds.
+    layout: &'a JaggedLayout,
+    /// Sparse claims the one opening discharges.
+    claims: usize,
+}
+
+impl<'a> JaggedOpeningShape<'a> {
+    /// Names one geometry and how many sparse claims one opening of it answers.
+    #[must_use]
+    pub const fn new(layout: &'a JaggedLayout, claims: usize) -> Self {
+        Self { layout, claims }
+    }
+}
+
 /// The shape a commitment to one jagged geometry must be opened under.
 ///
-/// One column of the dense arity, read at one point.
-///
-/// A caller needs this before it commits, which is before any transcript is sealed.
-impl From<&JaggedLayout> for OpeningProtocol {
-    fn from(layout: &JaggedLayout) -> Self {
+/// One column of the dense arity, read once per sparse claim.
+impl From<JaggedOpeningShape<'_>> for OpeningProtocol {
+    fn from(shape: JaggedOpeningShape<'_>) -> Self {
         Self::new(vec![TableSpec::new(
-            TableShape::new(layout.dense_variables(), 1),
-            vec![OpeningBatch::new(vec![0], Vec::new())],
+            TableShape::new(shape.layout.dense_variables(), 1),
+            vec![OpeningBatch::new(vec![0], Vec::new()); shape.claims],
         )])
     }
 }
@@ -100,21 +121,27 @@ impl<'a> BoundJaggedLayout<'a> {
         JaggedPoint::new(row, column)
     }
 
-    /// Proves a sparse evaluation and opens the dense commitment that answers it.
+    /// Proves several sparse evaluations and opens the dense commitment that answers them all.
     ///
-    /// The witness is the committed vector, so the opening and the reduction speak about one object.
+    /// The witness is the committed vector, so the opening and the reductions speak about one object.
+    ///
+    /// A trace is read at more than one point in practice, at a zerocheck point and at its successor.
+    ///
+    /// Those claims share one commitment and one opening rather than taking one each.
+    ///
+    /// Claims are discharged in the order given, and both sides must present that same order.
     ///
     /// # Errors
     ///
-    /// - The reduction refuses the caller's statement or witness.
+    /// - No claim was supplied.
+    /// - A reduction refuses the caller's statement or witness.
     /// - The commitment scheme refuses the opening.
     pub fn open<F, EF, Pcs, Challenger>(
         &self,
         pcs: &Pcs,
         prover_data: Pcs::ProverData,
         dense_witness: &[F],
-        point: &JaggedPoint<EF>,
-        claimed_value: EF,
+        claims: &[(JaggedPoint<EF>, EF)],
         challenger: &mut Challenger,
     ) -> Result<JaggedOpening<F, EF, Pcs::Proof>, JaggedOpeningError<Pcs::ProverError>>
     where
@@ -126,47 +153,102 @@ impl<'a> BoundJaggedLayout<'a> {
             + CanSampleUniformBits<F>
             + CanObserve<Pcs::Commitment>,
     {
-        let (reduction, claim) = self
-            .0
-            .prove(dense_witness, point, claimed_value, challenger)?
-            .into_parts();
+        if claims.is_empty() {
+            return Err(JaggedOpeningError::NoClaims);
+        }
 
-        // The reduction fixed the point, so the opening cannot be moved anywhere else.
+        // Every reduction runs against the same committed vector, in the order the caller gave.
+        let mut reductions = Vec::with_capacity(claims.len());
+        let mut points = Vec::with_capacity(claims.len());
+        for (point, value) in claims {
+            let (reduction, claim) = self
+                .0
+                .prove(dense_witness, point, *value, challenger)?
+                .into_parts();
+            reductions.push(reduction);
+            points.push(claim.point().clone());
+        }
+
+        // The reductions fixed the points, so the opening cannot be moved anywhere else.
         let dense = pcs
             .open_at(
                 prover_data,
-                &OpeningProtocol::from(self.0),
-                slice::from_ref(claim.point()),
+                &OpeningProtocol::from(JaggedOpeningShape::new(self.0, claims.len())),
+                &points,
                 challenger,
             )
             .map_err(JaggedOpeningError::Commitment)?;
 
-        Ok(JaggedOpening { reduction, dense })
+        Ok(JaggedOpening { reductions, dense })
     }
 
-    /// Verifies a sparse evaluation against the commitment that authenticates it.
+    /// Returns the composed soundness evidence for discharging a number of sparse claims here.
+    ///
+    /// # Returns
+    ///
+    /// Nothing when the commitment scheme does not assess this opening protocol.
     ///
     /// # Soundness
     ///
-    /// The reduction alone is satisfiable for any sparse value, because the prover supplies one unknown.
+    /// The commitment fixes a candidate set before anything below is drawn, and the scheme reports it.
     ///
-    /// The opening below removes that freedom by pinning the unknown to the committed vector.
+    /// Of what this layer draws next, only the sumcheck challenges carry a claim of their own.
     ///
-    /// The whole error is the reduction's own term plus whatever the commitment scheme charges.
+    /// That claim is the one charged over the candidate set here.
+    ///
+    /// The sparse point is a statement rather than a test, because the caller supplies its value.
+    ///
+    /// A caller whose own statement rests on that point being unpredictable charges the draw itself.
+    ///
+    /// The geometry seal absorbs and draws nothing, so it is free.
+    ///
+    /// The scheme's own draws are already inside the evidence this starts from.
+    #[must_use]
+    pub fn security<EF, Pcs, Challenger>(
+        &self,
+        pcs: &Pcs,
+        claims: usize,
+    ) -> Option<PrescribedOpeningSecurity>
+    where
+        EF: ExtensionField<Pcs::Val>,
+        Pcs: PrescribedPointPcs<EF, Challenger>,
+        Challenger: FieldChallenger<Pcs::Val>
+            + GrindingChallenger<Witness = Pcs::Val>
+            + CanSampleUniformBits<Pcs::Val>
+            + CanObserve<Pcs::Commitment>,
+    {
+        let protocol = OpeningProtocol::from(JaggedOpeningShape::new(self.0, claims));
+        let mut security = pcs.prescribed_security(&protocol)?;
+        security.charge_reduction(reduction_term::<EF>(self.0.dense_variables(), claims));
+        Some(security)
+    }
+
+    /// Verifies several sparse evaluations against the commitment that authenticates them.
+    ///
+    /// # Soundness
+    ///
+    /// A reduction alone is satisfiable for any sparse value, because the prover supplies one unknown.
+    ///
+    /// The opening below removes that freedom by pinning each unknown to the committed vector.
+    ///
+    /// The whole error is what the scheme charges, plus the reductions charged over its candidate set.
+    ///
+    /// That composed figure is what this handle reports.
     ///
     /// # Errors
     ///
-    /// - The reduction rejects.
+    /// - No claim was supplied.
+    /// - A reduction rejects.
     /// - The commitment scheme rejects the opening.
-    /// - The opening has a shape the reduction did not ask for.
-    /// - The committed vector does not take the reduced value at the reduced point.
+    /// - The opening returns a different number of readings than there are claims.
+    /// - One reading is not the single direct value a claim asks for.
+    /// - The committed vector does not take a reduced value at its reduced point.
     pub fn verify<F, EF, Pcs, Challenger>(
         &self,
         pcs: &Pcs,
         commitment: &Pcs::Commitment,
         opening: &JaggedOpening<F, EF, Pcs::Proof>,
-        point: &JaggedPoint<EF>,
-        claimed_value: EF,
+        claims: &[(JaggedPoint<EF>, EF)],
         challenger: &mut Challenger,
     ) -> Result<(), JaggedOpeningError<Pcs::Error>>
     where
@@ -178,59 +260,98 @@ impl<'a> BoundJaggedLayout<'a> {
             + CanSampleUniformBits<F>
             + CanObserve<Pcs::Commitment>,
     {
-        let claim = self
-            .0
-            .verify(point, claimed_value, &opening.reduction, challenger)?;
+        if claims.is_empty() {
+            return Err(JaggedOpeningError::NoClaims);
+        }
+
+        // A proof carrying a different number of reductions describes another statement.
+        if opening.reductions.len() != claims.len() {
+            return Err(JaggedOpeningError::ReductionCountMismatch {
+                expected: claims.len(),
+                actual: opening.reductions.len(),
+            });
+        }
+
+        // Replaying every reduction before the opening keeps both sides in one transcript order.
+        let mut values = Vec::with_capacity(claims.len());
+        let mut points = Vec::with_capacity(claims.len());
+        for ((point, value), reduction) in claims.iter().zip(&opening.reductions) {
+            let claim = self.0.verify(point, *value, reduction, challenger)?;
+            values.push(*claim.value());
+            points.push(claim.point().clone());
+        }
 
         let opened = pcs
             .verify_at(
                 commitment,
                 &opening.dense,
-                &OpeningProtocol::from(self.0),
-                slice::from_ref(claim.point()),
+                &OpeningProtocol::from(JaggedOpeningShape::new(self.0, claims.len())),
+                &points,
                 challenger,
             )
             .map_err(JaggedOpeningError::Commitment)?;
 
-        // One batch of one direct reading is the only shape the protocol above describes.
-        let [batch] = opened.as_slice() else {
-            return Err(JaggedOpeningError::OpeningShape {
-                batches: opened.len(),
-                direct: 0,
-                successor: 0,
-            });
-        };
-        if batch.current().len() != 1 || !batch.next().is_empty() {
-            return Err(JaggedOpeningError::OpeningShape {
-                batches: 1,
-                direct: batch.current().len(),
-                successor: batch.next().len(),
+        // One reading per claim is the only shape the protocol above describes.
+        if opened.len() != claims.len() {
+            return Err(JaggedOpeningError::OpeningCountMismatch {
+                expected: claims.len(),
+                actual: opened.len(),
             });
         }
+        for (index, batch) in opened.iter().enumerate() {
+            if batch.current().len() != 1 || !batch.next().is_empty() {
+                return Err(JaggedOpeningError::OpeningShape {
+                    reading: index,
+                    direct: batch.current().len(),
+                    successor: batch.next().len(),
+                });
+            }
 
-        // Discharging the reduction is this one comparison, and skipping it accepts everything.
-        if batch.current()[0] != *claim.value() {
-            return Err(JaggedOpeningError::DenseMismatch);
+            // Discharging a reduction is this one comparison, and skipping it accepts everything.
+            if batch.current()[0] != values[index] {
+                return Err(JaggedOpeningError::DenseMismatch { reading: index });
+            }
         }
 
         Ok(())
     }
 }
 
-/// A sparse evaluation reduced to a dense claim, and the opening that answers it.
+/// The soundness term a number of jagged reductions over one envelope charges.
+///
+/// The paper bounds one reduction over an envelope of `m` variables by `2m` field inverses.
+///
+/// A union bound over independent claims multiplies that count.
+///
+/// The field width is taken one bit short of the order, because the order need not be a power of two.
+///
+/// The union-bound degree is rounded up to the next power of two, which can only lower the bound.
+fn reduction_term<EF: Field>(dense_variables: usize, claims: usize) -> SecurityTerm {
+    // No variable leaves no challenge to guess, so such a reduction has nothing to charge.
+    let error = if dense_variables == 0 || claims == 0 {
+        ErrorBits::from_log2(f64::INFINITY)
+    } else {
+        let degree = dense_variables.saturating_mul(claims).saturating_mul(2);
+        let bits = EF::bits().saturating_sub(1) as f64 - log2_ceil_usize(degree) as f64;
+        ErrorBits::from_log2(bits)
+    };
+    SecurityTerm::new(REDUCTION_LABEL, error)
+}
+
+/// Sparse evaluations reduced to dense claims, and the one opening that answers them.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct JaggedOpening<F, EF, Proof> {
-    /// Reduction from the sparse statement to one dense evaluation.
-    reduction: JaggedProof<F, EF>,
-    /// Opening of the committed vector at the point the reduction produced.
+    /// One reduction per sparse claim, in the order the claims were given.
+    reductions: Vec<JaggedProof<F, EF>>,
+    /// Opening of the committed vector at every point the reductions produced.
     dense: Proof,
 }
 
 impl<F, EF, Proof> JaggedOpening<F, EF, Proof> {
-    /// Returns the sparse-to-dense reduction.
+    /// Returns one sparse-to-dense reduction per claim.
     #[must_use]
-    pub const fn reduction(&self) -> &JaggedProof<F, EF> {
-        &self.reduction
+    pub fn reductions(&self) -> &[JaggedProof<F, EF>] {
+        &self.reductions
     }
 
     /// Returns the opening of the committed vector.
@@ -285,16 +406,41 @@ mod tests {
     }
 
     #[test]
-    fn the_dense_opening_reads_one_column_at_one_point() {
+    fn the_dense_opening_reads_one_column_once_per_claim() {
+        // Nine live cells sit in a sixteen-cell envelope, which is four variables of one column.
         let layout = JaggedLayout::new(3, &[3, 0, 5, 1]).unwrap();
-        let protocol = OpeningProtocol::from(&layout);
+        let protocol = OpeningProtocol::from(JaggedOpeningShape::new(&layout, 3));
 
         assert_eq!(protocol.table_shapes(), vec![TableShape::new(4, 1)]);
-        assert_eq!(protocol.num_openings(), 1);
+        assert_eq!(protocol.num_openings(), 3);
 
-        let (table, batch) = protocol.iter_openings().next().unwrap();
-        assert_eq!(table, 0);
-        assert_eq!(batch.current(), &[0]);
-        assert!(batch.next().is_empty());
+        for (table, batch) in protocol.iter_openings() {
+            assert_eq!(table, 0);
+            assert_eq!(batch.current(), &[0]);
+            assert!(batch.next().is_empty());
+        }
+    }
+
+    #[test]
+    fn the_reduction_term_prices_every_challenge_the_claims_draw() {
+        // The extension is four thirty-one-bit limbs, and the width is taken one bit short.
+        let field_bits = (EF::bits() - 1) as f64;
+
+        // Four envelope variables and one claim draw eight guesses, which is three bits.
+        assert_eq!(
+            reduction_term::<EF>(4, 1).bits.bits(),
+            field_bits - 3.0,
+            "one claim over four variables"
+        );
+
+        // Four claims over the same envelope draw four times as many, which is two bits more.
+        assert_eq!(
+            reduction_term::<EF>(4, 4).bits.bits(),
+            field_bits - 5.0,
+            "four claims over four variables"
+        );
+
+        // An envelope of one cell has no round to challenge, so there is nothing to charge.
+        assert!(reduction_term::<EF>(0, 1).bits.bits().is_infinite());
     }
 }

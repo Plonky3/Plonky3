@@ -44,6 +44,12 @@ pub enum JaggedLayoutError {
         /// Sum of all live column lengths.
         area: usize,
     },
+    /// The requested envelope arity cannot be represented by a machine index.
+    #[error("an envelope of {variables} variables does not fit in a machine index")]
+    DenseVariablesOverflow {
+        /// Number of envelope variables the floor asks for.
+        variables: usize,
+    },
 }
 
 /// A malformed prover input or rejected jagged proof.
@@ -150,19 +156,39 @@ pub enum JaggedOpeningError<E> {
     /// The dense commitment scheme failed.
     #[error("the dense commitment scheme reported {0:?}")]
     Commitment(E),
-    /// The dense opening does not have the shape the reduction asked for.
-    #[error(
-        "the dense opening returned {batches} batches of {direct} direct and {successor} successor values"
-    )]
+    /// No sparse claim was supplied to discharge.
+    #[error("a jagged opening must carry at least one sparse claim")]
+    NoClaims,
+    /// The proof carries a different number of reductions than there are claims.
+    #[error("the proof carries {actual} reductions for {expected} claims")]
+    ReductionCountMismatch {
+        /// Number of claims the caller stated.
+        expected: usize,
+        /// Number of reductions the proof carries.
+        actual: usize,
+    },
+    /// The dense opening returned a different number of readings than there are claims.
+    #[error("the dense opening returned {actual} readings for {expected} claims")]
+    OpeningCountMismatch {
+        /// Number of claims the caller stated.
+        expected: usize,
+        /// Number of readings the opening returned.
+        actual: usize,
+    },
+    /// One dense reading does not have the shape a claim asked for.
+    #[error("reading {reading} returned {direct} direct and {successor} successor values")]
     OpeningShape {
-        /// Number of opening batches returned.
-        batches: usize,
-        /// Number of direct readings in the single expected batch.
+        /// Position of the malformed reading.
+        reading: usize,
+        /// Number of direct readings it returned.
         direct: usize,
-        /// Number of successor readings in the single expected batch.
+        /// Number of successor readings it returned.
         successor: usize,
     },
-    /// The committed vector does not take the reduced value at the reduced point.
-    #[error("the dense commitment does not carry the value the reduction produced")]
-    DenseMismatch,
+    /// The committed vector does not take a reduced value at its reduced point.
+    #[error("the dense commitment does not carry the value reduction {reading} produced")]
+    DenseMismatch {
+        /// Position of the claim the commitment refused.
+        reading: usize,
+    },
 }

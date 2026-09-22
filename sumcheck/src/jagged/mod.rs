@@ -19,7 +19,7 @@ pub use error::{JaggedError, JaggedIngestError, JaggedLayoutError, JaggedOpening
 pub use ingest::{ColumnSource, ConversionPass, IngestReport, JaggedWitness, TraceSource};
 pub use layout::JaggedLayout;
 use p3_multilinear_util::point::Point;
-pub use pcs::{BoundJaggedLayout, JaggedOpening};
+pub use pcs::{BoundJaggedLayout, JaggedOpening, JaggedOpeningShape};
 use serde::{Deserialize, Serialize};
 
 use crate::SumcheckData;

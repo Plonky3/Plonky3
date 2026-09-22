@@ -70,8 +70,8 @@ fn jagged_evaluation(heights: &[usize], cells: &[EF], point: &JaggedPoint<EF>) -
 
 // Eight bit columns of unequal height, delivered as packed words.
 //
-//     heights   2048, 1536, 1200, 1024, 900, 800, 500, 184
-//     live      8192 bits, which is already a power of two
+//     Heights   2048, 1536, 1200, 1024, 900, 800, 500, 184
+//     Live      8192 bits, which is already a power of two
 fn trace() -> (Vec<usize>, Vec<Vec<u64>>) {
     let heights = vec![2048usize, 1536, 1200, 1024, 900, 800, 500, 184];
     let words = heights
@@ -112,8 +112,8 @@ fn bit_columns_of_unequal_height_pay_for_no_dead_cell() {
 
     // The measurement criterion four asks for, on the same heights.
     //
-    //     stacked   2048 + 2048 + 2048 + 1024 + 1024 + 1024 + 512 + 256 = 9984, rounded to 16384
-    //     jagged    8192, which is the live area itself
+    //     Stacked   2048 + 2048 + 2048 + 1024 + 1024 + 1024 + 512 + 256 = 9984, rounded to 16384
+    //     Jagged    8192, which is the live area itself
     let stacked = CellBudget::stacked(&heights);
     assert_eq!(stacked.live(), 8192);
     assert_eq!(stacked.provisioned(), 16384);
@@ -140,7 +140,7 @@ fn bit_columns_of_unequal_height_pay_for_no_dead_cell() {
     let point = bound.sample_point::<EF, EF, _>(&mut prover);
     let value = jagged_evaluation(&heights, &witness, &point);
     let opening = bound
-        .open(&pcs, data, &witness, &point, value, &mut prover)
+        .open(&pcs, data, &witness, &[(point.clone(), value)], &mut prover)
         .expect("an honest bit trace opens");
 
     let mut verifier = challenger();
@@ -149,7 +149,13 @@ fn bit_columns_of_unequal_height_pay_for_no_dead_cell() {
     let replayed = bound.sample_point::<EF, EF, _>(&mut verifier);
     assert_eq!(replayed, point);
     bound
-        .verify(&pcs, &commitment, &opening, &replayed, value, &mut verifier)
+        .verify(
+            &pcs,
+            &commitment,
+            &opening,
+            &[(replayed, value)],
+            &mut verifier,
+        )
         .expect("the ring-switched bit commitment authenticates the sparse claim");
 }
 
@@ -178,7 +184,7 @@ fn a_bit_trace_that_was_not_committed_is_refused() {
     let value = jagged_evaluation(&heights, &forged, &point);
     assert_ne!(value, jagged_evaluation(&heights, &committed, &point));
     let opening = bound
-        .open(&pcs, data, &forged, &point, value, &mut prover)
+        .open(&pcs, data, &forged, &[(point, value)], &mut prover)
         .expect("the reduction proves the forged statement on its own");
 
     let mut verifier = challenger();
@@ -187,10 +193,16 @@ fn a_bit_trace_that_was_not_committed_is_refused() {
     let replayed = bound.sample_point::<EF, EF, _>(&mut verifier);
     // A rejection anywhere else would mean the opening never reached the comparison under test.
     let error = bound
-        .verify(&pcs, &commitment, &opening, &replayed, value, &mut verifier)
+        .verify(
+            &pcs,
+            &commitment,
+            &opening,
+            &[(replayed, value)],
+            &mut verifier,
+        )
         .unwrap_err();
     assert!(
-        matches!(error, JaggedOpeningError::DenseMismatch),
+        matches!(error, JaggedOpeningError::DenseMismatch { reading: 0 }),
         "the committed bits must be what refuse the claim, not {error:?}"
     );
 }

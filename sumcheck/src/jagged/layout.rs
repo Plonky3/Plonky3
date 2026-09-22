@@ -45,6 +45,23 @@ impl JaggedLayout {
     /// - The row bound or dense area cannot be represented by `usize`.
     /// - A column height exceeds the declared row bound.
     pub fn new(row_variables: usize, heights: &[usize]) -> Result<Self, JaggedLayoutError> {
+        Self::with_min_dense_variables(row_variables, heights, 0)
+    }
+
+    /// Builds a layout whose envelope holds at least a given number of variables.
+    ///
+    /// A folding commitment scheme refuses an arity below its factor, which a short trace falls under.
+    ///
+    /// Widening buys only padding, which no sparse cell reaches and no constraint binds.
+    ///
+    /// # Errors
+    ///
+    /// - Everything the smallest envelope is rejected for, and an arity no machine index holds.
+    pub fn with_min_dense_variables(
+        row_variables: usize,
+        heights: &[usize],
+        min_dense_variables: usize,
+    ) -> Result<Self, JaggedLayoutError> {
         // A column point names one vertex of a Boolean cube.
         if heights.is_empty() {
             return Err(JaggedLayoutError::NoColumns);
@@ -92,7 +109,14 @@ impl JaggedLayout {
             .max(1)
             .checked_next_power_of_two()
             .ok_or(JaggedLayoutError::DenseAreaOverflow { area })?;
-        let dense_variables = log2_ceil_usize(capacity);
+        let dense_variables = log2_ceil_usize(capacity).max(min_dense_variables);
+
+        // The envelope index must stay inside a machine word after the floor is applied.
+        if dense_variables >= usize::BITS as usize {
+            return Err(JaggedLayoutError::DenseVariablesOverflow {
+                variables: dense_variables,
+            });
+        }
 
         Ok(Self {
             row_variables,
@@ -350,9 +374,9 @@ mod tests {
     fn mixed_heights_form_contiguous_dense_intervals() {
         // Fixture state:
         //
-        //     heights   [3, 0, 5, 1]
-        //     prefixes  [0, 3, 3, 8, 9]
-        //     capacity  16 cells
+        //     Heights   [3, 0, 5, 1]
+        //     Prefixes  [0, 3, 3, 8, 9]
+        //     Capacity  16 cells
         let layout = JaggedLayout::new(3, &[3, 0, 5, 1]).unwrap();
 
         assert_eq!(layout.cumulative_heights(), &[0, 3, 3, 8, 9]);
@@ -360,6 +384,31 @@ mod tests {
         assert_eq!(layout.dense_variables(), 4);
         assert_eq!(layout.dense_capacity(), 16);
         assert_eq!(layout.column_height(1), 0);
+    }
+
+    #[test]
+    fn an_envelope_floor_buys_padding_and_nothing_else() {
+        // Two live cells give an envelope of one variable, below what a folding schedule accepts.
+        let heights = [1, 1];
+        assert_eq!(JaggedLayout::new(1, &heights).unwrap().dense_variables(), 1);
+
+        // The floor widens the envelope, leaving the live geometry underneath untouched.
+        let raised = JaggedLayout::with_min_dense_variables(1, &heights, 4).unwrap();
+        assert_eq!(raised.dense_variables(), 4);
+        assert_eq!(raised.dense_capacity(), 16);
+        assert_eq!(raised.area(), 2);
+        assert_eq!(raised.cumulative_heights(), &[0, 1, 2]);
+
+        let unraised = JaggedLayout::with_min_dense_variables(1, &heights, 1).unwrap();
+        assert_eq!(unraised, JaggedLayout::new(1, &heights).unwrap());
+
+        // An envelope wider than a machine index has no representable capacity.
+        assert_eq!(
+            JaggedLayout::with_min_dense_variables(1, &heights, usize::BITS as usize),
+            Err(JaggedLayoutError::DenseVariablesOverflow {
+                variables: usize::BITS as usize
+            })
+        );
     }
 
     #[test]

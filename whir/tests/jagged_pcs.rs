@@ -11,9 +11,10 @@ use p3_merkle_tree::MerkleTreeMmcs;
 use p3_multilinear_util::point::Point;
 use p3_sumcheck::jagged::{
     BoundJaggedLayout, CellBudget, ColumnSource, JaggedError, JaggedLayout, JaggedOpeningError,
-    JaggedPoint, JaggedWitness, TraceSource,
+    JaggedOpeningShape, JaggedPoint, JaggedWitness, TraceSource,
 };
 use p3_sumcheck::layout::{Layout, PrefixProver, Table, observe_commitment};
+use p3_sumcheck::{OpeningProtocol, PrescribedPointPcs};
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
 use p3_whir::parameters::{FoldingFactor, ProtocolParameters, SecurityAssumption, WhirConfig};
 use p3_whir::pcs::prover::WhirProver;
@@ -103,9 +104,8 @@ fn trace() -> (Vec<usize>, Vec<Vec<F>>) {
     (heights, columns)
 }
 
-// Commits one vector as a single column of the stacked polynomial.
-fn commit(vector: &[F], challenger: &mut MyChallenger) -> (MyPcs, Commitment, WhirData) {
-    let num_variables = p3_util::log2_strict_usize(vector.len());
+// The commitment scheme one envelope arity is committed and opened under.
+fn configure(num_variables: usize) -> MyPcs {
     let mut rng = SmallRng::seed_from_u64(1);
     let perm = Perm::new_from_rng_128(&mut rng);
     let mmcs = MyMmcs::new(MyHash::new(perm.clone()), MyCompress::new(perm), 0);
@@ -118,12 +118,16 @@ fn commit(vector: &[F], challenger: &mut MyChallenger) -> (MyPcs, Commitment, Wh
         soundness_type: SecurityAssumption::CapacityBound,
         starting_log_inv_rate: 1,
     };
-    let pcs = MyPcs::new(
+    MyPcs::new(
         WhirConfig::new(num_variables, params).unwrap(),
         MyDft::default(),
         mmcs,
-    );
+    )
+}
 
+// Commits one vector as a single column of the stacked polynomial.
+fn commit(vector: &[F], challenger: &mut MyChallenger) -> (MyPcs, Commitment, WhirData) {
+    let pcs = configure(p3_util::log2_strict_usize(vector.len()));
     let table = Table::new(RowMajorMatrix::new(vector.to_vec(), vector.len()));
     let witness = L::new_witness(vec![table], FOLDING);
     let (commitment, data) = MultilinearPcs::<EF, MyChallenger>::commit(&pcs, witness, challenger)
@@ -153,7 +157,7 @@ fn a_sparse_claim_is_authenticated_by_the_commitment_that_carries_it() {
     let point = bound.sample_point::<F, EF, _>(&mut prover);
     let value = jagged_evaluation(&heights, &witness, &point);
     let opening = bound
-        .open(&pcs, data, &witness, &point, value, &mut prover)
+        .open(&pcs, data, &witness, &[(point.clone(), value)], &mut prover)
         .expect("an honest trace opens");
 
     // Verifier: the same three steps, from its own public inputs.
@@ -163,7 +167,13 @@ fn a_sparse_claim_is_authenticated_by_the_commitment_that_carries_it() {
     let replayed = bound.sample_point::<F, EF, _>(&mut verifier);
     assert_eq!(replayed, point);
     bound
-        .verify(&pcs, &commitment, &opening, &replayed, value, &mut verifier)
+        .verify(
+            &pcs,
+            &commitment,
+            &opening,
+            &[(replayed, value)],
+            &mut verifier,
+        )
         .expect("the commitment authenticates the sparse claim");
 }
 
@@ -192,7 +202,7 @@ fn a_reduction_against_a_vector_that_was_not_committed_is_refused() {
     let value = jagged_evaluation(&heights, &forged, &point);
     assert_ne!(value, jagged_evaluation(&heights, &committed, &point));
     let opening = bound
-        .open(&pcs, data, &forged, &point, value, &mut prover)
+        .open(&pcs, data, &forged, &[(point, value)], &mut prover)
         .expect("the reduction proves the forged statement on its own");
 
     let mut verifier = challenger();
@@ -201,10 +211,16 @@ fn a_reduction_against_a_vector_that_was_not_committed_is_refused() {
     let replayed = bound.sample_point::<F, EF, _>(&mut verifier);
     // A rejection anywhere else would mean the opening never reached the comparison under test.
     let error = bound
-        .verify(&pcs, &commitment, &opening, &replayed, value, &mut verifier)
+        .verify(
+            &pcs,
+            &commitment,
+            &opening,
+            &[(replayed, value)],
+            &mut verifier,
+        )
         .unwrap_err();
     assert!(
-        matches!(error, JaggedOpeningError::DenseMismatch),
+        matches!(error, JaggedOpeningError::DenseMismatch { reading: 0 }),
         "the committed vector must be what refuses the claim, not {error:?}"
     );
 }
@@ -226,7 +242,7 @@ fn a_transcript_sealed_to_other_heights_rejects() {
     let point = bound.sample_point::<F, EF, _>(&mut prover);
     let value = jagged_evaluation(&heights, &witness, &point);
     let opening = bound
-        .open(&pcs, data, &witness, &point, value, &mut prover)
+        .open(&pcs, data, &witness, &[(point.clone(), value)], &mut prover)
         .expect("an honest trace opens");
 
     // Mutation: one live row moves between two columns, which leaves the area and the envelope alone.
@@ -245,10 +261,217 @@ fn a_transcript_sealed_to_other_heights_rejects() {
     //
     // The reduction's error is not opaque, and is named in full.
     let error = bound
-        .verify(&pcs, &commitment, &opening, &replayed, value, &mut verifier)
+        .verify(
+            &pcs,
+            &commitment,
+            &opening,
+            &[(replayed, value)],
+            &mut verifier,
+        )
         .unwrap_err();
     let JaggedOpeningError::Reduction(reduction) = error else {
         panic!("the reduction must be what rejects, not {error:?}");
     };
     assert_eq!(reduction, JaggedError::TerminalMismatch);
+}
+
+#[test]
+fn one_commitment_answers_several_sparse_points() {
+    // A machine reads one trace at a zerocheck point and at its successor, and lookups add more.
+    // All of them share one commitment and one opening rather than one commitment each.
+    let (heights, columns) = trace();
+    let layout = JaggedLayout::new(6, &heights).unwrap();
+    let sources = columns
+        .iter()
+        .map(|cells| ColumnSource::Dense(cells))
+        .collect::<Vec<_>>();
+    let (witness, _) = JaggedWitness::read(&layout, TraceSource::Columns(&sources)).unwrap();
+
+    let mut prover = challenger();
+    let (pcs, commitment, data) = commit(&witness, &mut prover);
+    let bound = BoundJaggedLayout::new::<F, _>(&layout, &mut prover);
+
+    // Three points drawn in sequence, each with the value the committed vector takes there.
+    let claims = (0..3)
+        .map(|_| {
+            let point = bound.sample_point::<F, EF, _>(&mut prover);
+            let value = jagged_evaluation(&heights, &witness, &point);
+            (point, value)
+        })
+        .collect::<Vec<_>>();
+    assert_ne!(claims[0].0, claims[1].0);
+    let opening = bound
+        .open(&pcs, data, &witness, &claims, &mut prover)
+        .expect("three honest claims open together");
+    assert_eq!(opening.reductions().len(), 3);
+
+    let mut verifier = challenger();
+    observe_commitment::<F, _, _>(&mut verifier, commitment.clone());
+    let bound = BoundJaggedLayout::new::<F, _>(&layout, &mut verifier);
+    let replayed = (0..3)
+        .map(|index| {
+            (
+                bound.sample_point::<F, EF, _>(&mut verifier),
+                claims[index].1,
+            )
+        })
+        .collect::<Vec<_>>();
+    bound
+        .verify(&pcs, &commitment, &opening, &replayed, &mut verifier)
+        .expect("one opening authenticates all three");
+}
+
+#[test]
+fn a_proof_carrying_the_wrong_number_of_reductions_is_refused() {
+    // The claim list is the statement, so a proof answering a different number of claims is another.
+    //
+    // It must be refused before any transcript is replayed.
+    let (heights, columns) = trace();
+    let layout = JaggedLayout::new(6, &heights).unwrap();
+    let sources = columns
+        .iter()
+        .map(|cells| ColumnSource::Dense(cells))
+        .collect::<Vec<_>>();
+    let (witness, _) = JaggedWitness::read(&layout, TraceSource::Columns(&sources)).unwrap();
+
+    let mut prover = challenger();
+    let (pcs, commitment, data) = commit(&witness, &mut prover);
+    let bound = BoundJaggedLayout::new::<F, _>(&layout, &mut prover);
+    let claims = (0..3)
+        .map(|_| {
+            let point = bound.sample_point::<F, EF, _>(&mut prover);
+            let value = jagged_evaluation(&heights, &witness, &point);
+            (point, value)
+        })
+        .collect::<Vec<_>>();
+    let opening = bound
+        .open(&pcs, data, &witness, &claims, &mut prover)
+        .expect("three honest claims open together");
+
+    let mut verifier = challenger();
+    observe_commitment::<F, _, _>(&mut verifier, commitment.clone());
+    let bound = BoundJaggedLayout::new::<F, _>(&layout, &mut verifier);
+    let error = bound
+        .verify(&pcs, &commitment, &opening, &claims[..2], &mut verifier)
+        .unwrap_err();
+    assert!(
+        matches!(
+            error,
+            JaggedOpeningError::ReductionCountMismatch {
+                expected: 2,
+                actual: 3
+            }
+        ),
+        "the count must be what refuses the proof, not {error:?}"
+    );
+
+    // An empty statement has nothing to discharge and is refused rather than accepted vacuously.
+    let mut verifier = challenger();
+    observe_commitment::<F, _, _>(&mut verifier, commitment.clone());
+    let bound = BoundJaggedLayout::new::<F, _>(&layout, &mut verifier);
+    let error = bound
+        .verify(&pcs, &commitment, &opening, &[], &mut verifier)
+        .unwrap_err();
+    assert!(
+        matches!(error, JaggedOpeningError::NoClaims),
+        "an empty claim list must be refused, not {error:?}"
+    );
+}
+
+#[test]
+fn the_reported_security_charges_the_reduction_over_the_candidate_set() {
+    // The commitment fixes a candidate set before the sparse point or any round challenge exists.
+    //
+    // A prover may therefore pick which candidate to answer for after seeing them.
+    let (heights, _) = trace();
+    let layout = JaggedLayout::new(6, &heights).unwrap();
+    assert_eq!(layout.dense_variables(), 8);
+
+    let mut prover = challenger();
+    let pcs = configure(layout.dense_variables());
+    let bound = BoundJaggedLayout::new::<F, _>(&layout, &mut prover);
+
+    let uncharged = pcs
+        .prescribed_security(&OpeningProtocol::from(JaggedOpeningShape::new(&layout, 1)))
+        .expect("the configured protocol is assessed");
+    let composed = bound
+        .security::<EF, _, MyChallenger>(&pcs, 1)
+        .expect("the same protocol is assessed through the handle");
+
+    // Eight envelope variables and one claim draw sixteen guesses, so the raw term is four bits short.
+    //
+    // The field width it falls short of is taken one bit below the order.
+    let raw = (EF::bits() - 1 - 4) as f64;
+    let candidates = composed.log2_max_candidates;
+    assert!(candidates > 0.0, "the commitment leaves a set open");
+    assert_eq!(uncharged.log2_max_candidates, candidates);
+
+    // The composed report is the scheme's own terms plus exactly one more, charged over that set.
+    assert_eq!(composed.terms.len(), uncharged.terms.len() + 1);
+    let charged = composed.terms.last().unwrap();
+    assert_eq!(charged.bits.bits(), (raw - candidates).max(0.0));
+
+    // Charging is not free: the composed figure is strictly below the uncharged union bound.
+    let mut naive = uncharged;
+    naive.terms.push(p3_security::SecurityTerm::new(
+        charged.label,
+        p3_security::ErrorBits::from_log2(raw),
+    ));
+    // The charge never improves the composed figure.
+    //
+    // At this fixture's target it does not move it either, the proximity term being far the weaker.
+    assert!(composed.error().bits() <= naive.error().bits());
+
+    // A wider envelope leaves a larger set open, so the same reduction is worth fewer bits.
+    let wide = JaggedLayout::with_min_dense_variables(6, &heights, 16).unwrap();
+    let mut transcript = challenger();
+    let bound = BoundJaggedLayout::new::<F, _>(&wide, &mut transcript);
+    let wider = bound
+        .security::<EF, _, MyChallenger>(&configure(16), 1)
+        .expect("the wider protocol is assessed");
+    assert!(wider.log2_max_candidates > candidates);
+    assert!(wider.terms.last().unwrap().bits.bits() < charged.bits.bits());
+}
+
+#[test]
+fn a_trace_below_the_folding_factor_commits_once_its_envelope_is_raised() {
+    // Two live cells give an envelope of one variable, which no folding schedule of two accepts.
+    let heights = vec![1usize, 1];
+    assert_eq!(JaggedLayout::new(1, &heights).unwrap().dense_variables(), 1);
+
+    // Raising the floor buys envelope cells that no sparse cell reaches and no constraint binds.
+    let layout = JaggedLayout::with_min_dense_variables(1, &heights, 4).unwrap();
+    assert_eq!(layout.dense_variables(), 4);
+    assert_eq!(CellBudget::of(&layout).live(), 2);
+    assert_eq!(CellBudget::of(&layout).dead(), 14);
+
+    let cells = [F::from_u64(7), F::from_u64(9)];
+    let sources = [
+        ColumnSource::Dense(&cells[..1]),
+        ColumnSource::Dense(&cells[1..]),
+    ];
+    let (witness, _) = JaggedWitness::read(&layout, TraceSource::Columns(&sources)).unwrap();
+
+    let mut prover = challenger();
+    let (pcs, commitment, data) = commit(&witness, &mut prover);
+    let bound = BoundJaggedLayout::new::<F, _>(&layout, &mut prover);
+    let point = bound.sample_point::<F, EF, _>(&mut prover);
+    let value = jagged_evaluation(&heights, &witness, &point);
+    let opening = bound
+        .open(&pcs, data, &witness, &[(point, value)], &mut prover)
+        .expect("the raised envelope is a shape the folding schedule accepts");
+
+    let mut verifier = challenger();
+    observe_commitment::<F, _, _>(&mut verifier, commitment.clone());
+    let bound = BoundJaggedLayout::new::<F, _>(&layout, &mut verifier);
+    let replayed = bound.sample_point::<F, EF, _>(&mut verifier);
+    bound
+        .verify(
+            &pcs,
+            &commitment,
+            &opening,
+            &[(replayed, value)],
+            &mut verifier,
+        )
+        .expect("a raised envelope changes no sparse statement");
 }

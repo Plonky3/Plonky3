@@ -390,9 +390,9 @@ mod tests {
     fn branching_program_matches_the_materialized_selector() {
         // Fixture state:
         //
-        //     rows       2^3
-        //     heights    [3, 0, 5, 1]
-        //     dense      9 live cells in a 16-cell envelope
+        //     Rows       2^3
+        //     Heights    [3, 0, 5, 1]
+        //     Dense      9 live cells in a 16-cell envelope
         let layout = JaggedLayout::new(3, &[3, 0, 5, 1]).unwrap();
         let sparse = JaggedPoint::new(field_point(&[2, 3, 5]), field_point(&[7, 11]));
         let dense = field_point(&[13, 17, 19, 23]);
@@ -478,8 +478,10 @@ mod tests {
     fn the_automaton_computes_the_function_the_paper_defines() {
         // Fixture state: one column spanning rows 3 to 8, read under two row bounds.
         //
+        // ```text
         //     start   3
         //     end     9
+        // ```
         //
         // The second bound is above the dense arity, which the paper assumes away.
         let dense = field_point(&[7, 11, 13, 17]);
