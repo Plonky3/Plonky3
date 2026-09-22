@@ -243,13 +243,13 @@ impl<W: Word> ShiftedValue<W> {
         outer: Shift<W>,
     ) -> Result<Self, ShiftSequenceError> {
         // Two slots are reserved only for maps that genuinely need both.
-        match Composition::classify(inner, outer) {
-            Composition::Pair => Ok(Self {
+        match ShiftComposition::classify(inner, outer) {
+            ShiftComposition::Pair => Ok(Self {
                 index,
                 shifts: [inner, outer],
             }),
-            Composition::Single => Err(ShiftSequenceError::Reducible),
-            Composition::Zero => Err(ShiftSequenceError::AlwaysZero),
+            ShiftComposition::Single => Err(ShiftSequenceError::Reducible),
+            ShiftComposition::Zero => Err(ShiftSequenceError::AlwaysZero),
         }
     }
 
@@ -265,6 +265,19 @@ impl<W: Word> ShiftedValue<W> {
         self.shifts
     }
 
+    /// Returns the same movements applied to another word position.
+    ///
+    /// Readdressing cannot invalidate a term.
+    ///
+    /// Irreducibility depends on the two movements alone, and those are carried unchanged.
+    #[inline]
+    pub const fn with_index(self, index: ValueIndex) -> Self {
+        Self {
+            index,
+            shifts: self.shifts,
+        }
+    }
+
     /// Applies the inner movement before the outer movement.
     #[inline]
     pub fn apply(self, word: W) -> W {
@@ -273,7 +286,7 @@ impl<W: Word> ShiftedValue<W> {
     }
 }
 
-enum Composition {
+enum ShiftComposition {
     /// The composition has an equivalent single movement.
     Single,
     /// The composition clears every input bit.
@@ -282,7 +295,7 @@ enum Composition {
     Pair,
 }
 
-impl Composition {
+impl ShiftComposition {
     fn classify<W: Word>(inner: Shift<W>, outer: Shift<W>) -> Self {
         // An identity leaves the other movement as a single shift.
         if inner.is_identity() || outer.is_identity() {

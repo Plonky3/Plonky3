@@ -75,7 +75,7 @@ impl<W: PackedWord> WordProofKey<W> {
         // Reject every shape before the transcript absorbs a single statement value.
         let commitment_variables = pcs.num_variables();
         self.validate_arity(commitment_variables)?;
-        let columns = OperationColumns::new(self.system(), values).map_err(|error| {
+        let columns = OperationColumns::new(self.statement(), values).map_err(|error| {
             WordProofError::SegmentLength {
                 segment: error.segment,
                 expected: error.expected,

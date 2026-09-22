@@ -36,23 +36,21 @@ impl<F: Field> PreparedWeights<F> {
         }
     }
 
-    /// Returns the coefficient carried by one compiled relation occurrence.
-    fn reference<W: Word>(&self, key: &CompiledKey<'_, W>, reference: usize) -> F {
-        // The compiled role is translated into its family-local operand position.
-        let reference = key.references()[reference];
-        let operation = key.operation().code() as usize;
-        let operand = operand_index(key.operation(), reference.operand());
-        self.operation[operation]
-            * self.operand[operand]
-            * self.constraint[reference.constraint() as usize]
-    }
-
     /// Sums all relation occurrences grouped under one compiled key.
     fn key<W: Word>(&self, key: &CompiledKey<'_, W>) -> F {
+        // The family weight is shared by every occurrence under one key.
+        let operation = self.operation[key.operation().code() as usize];
+
         // Repeated terms add in the challenge field and cancel in characteristic two.
-        (0..key.references().len())
-            .map(|reference| self.reference(key, reference))
-            .sum()
+        let occurrences = key
+            .references()
+            .map(|reference| {
+                // The compiled role is translated into its family-local operand position.
+                let operand = operand_index(key.operation(), reference.operand());
+                self.operand[operand] * self.constraint[reference.constraint() as usize]
+            })
+            .sum::<F>();
+        operation * occurrences
     }
 
     /// Batches the supplied operand claims with these transcript weights.
@@ -110,9 +108,11 @@ fn shift_transpose<W: Word, F: Field>(shift: Shift<W>, output: &[F]) -> Vec<F> {
 
 /// Builds the factorized transpose action of one two-slot shift sequence.
 fn shift_weights<W: Word, F: Field>(shifts: [Shift<W>; 2], output: &[F]) -> Vec<F> {
-    // If the forward map is `outer(inner(word))`, its transpose is
-    // `inner^T(outer^T(output))`. Keeping the two slots separate avoids materializing a dense
-    // composed operator and makes their protocol order explicit.
+    // Transposing a composed map applies the outer slot first and the inner one second.
+    //
+    // Keeping the two slots apart avoids materializing a dense composed operator.
+    //
+    // It also leaves their protocol order visible.
     let [inner, outer] = shifts;
     let intermediate = shift_transpose(outer, output);
     shift_transpose(inner, &intermediate)
