@@ -29,11 +29,15 @@ enum WhirRegimeOptions {
     #[value(alias = "unique")]
     UniqueDecoding,
     Johnson,
-    Capacity,
 }
 
 #[derive(Parser, Debug)]
-#[command(version, about, long_about = None)]
+#[command(
+    version,
+    about,
+    long_about = None,
+    after_help = "WHIR preflight example:\n  prove_hash_binary --objective blake-3-compressions --log-trace-length 2 --pcs whir --merkle-arity 2 --whir-regime unique-decoding --whir-term-security-bits 102 --security-bits 100 --whir-max-queries 200 --whir-max-proof-bytes 262144 --whir-max-grinding-bits 0 --preflight"
+)]
 struct Args {
     /// What we are trying to prove.
     #[arg(short, long, ignore_case = true, value_enum)]
@@ -156,9 +160,6 @@ impl Args {
                 }
                 let regime = match self.whir_regime {
                     None => return Err("--whir-regime is required with --pcs whir".to_string()),
-                    Some(WhirRegimeOptions::Capacity) => {
-                        return Err("WHIR capacity regime is unsupported".to_string());
-                    }
                     Some(WhirRegimeOptions::UniqueDecoding) => WhirRegime::UniqueDecoding,
                     Some(WhirRegimeOptions::Johnson) => WhirRegime::Johnson,
                 };
@@ -375,6 +376,8 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
+    use clap::CommandFactory;
+
     use super::*;
 
     #[test]
@@ -524,8 +527,8 @@ mod tests {
             "--whir-term-security-bits",
             "98",
         ])
-        .expect("capacity parses as an explicit unsupported mode");
-        assert!(capacity.proof_options().is_err());
+        .expect_err("capacity is not a CLI regime");
+        assert!(capacity.to_string().contains("possible values"));
 
         let folding_flags = Args::try_parse_from([
             "prove_hash_binary",
@@ -540,6 +543,24 @@ mod tests {
         ])
         .expect("WHIR flags parse before PCS combination validation");
         assert!(folding_flags.proof_options().is_err());
+    }
+
+    #[test]
+    fn cli_help_shows_a_valid_whir_preflight_invocation() {
+        let help = Args::command().render_help().to_string();
+        for fragment in [
+            "--pcs whir",
+            "--merkle-arity 2",
+            "--whir-regime unique-decoding",
+            "--whir-term-security-bits 102",
+            "--security-bits 100",
+            "--whir-max-queries 200",
+            "--whir-max-proof-bytes 262144",
+            "--whir-max-grinding-bits 0",
+            "--preflight",
+        ] {
+            assert!(help.contains(fragment), "help is missing {fragment:?}");
+        }
     }
 
     #[test]
