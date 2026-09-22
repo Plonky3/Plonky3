@@ -1499,7 +1499,7 @@ mod tests {
         };
 
         // Control: the loose AIR never reads the claim, so the shifted output slips through.
-        check(&loose).expect("an unbound public value is not checked at all");
+        let _ = check(&loose).expect("an unbound public value is not checked at all");
 
         // Listing the cell adds one surviving pin to the closing check:
         //

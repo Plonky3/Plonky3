@@ -127,6 +127,8 @@ impl BinaryWhirProfile {
     ///
     /// # Errors
     ///
+    /// Returns an error when the derived schedule opens no position.
+    ///
     /// Returns an error when the domain refuses the regime.
     ///
     /// Returns an error when the analysis demands more grinding than one witness can carry.
@@ -162,6 +164,10 @@ impl BinaryWhirProfile {
                 {
                     pow_bits = raise_allowance::<F>(required)?;
                 }
+                // The schedule refuses a run that opens nothing, whichever route built it.
+                //
+                // Naming it here keeps callers from reading a bare scheduling failure.
+                Err(WhirConfigError::ZeroQueries) => return Err(ProfileError::ZeroQueries),
                 Err(error) => return Err(ProfileError::Schedule(error)),
             }
         }
@@ -173,7 +179,7 @@ mod tests {
     use p3_binary_field::{BinaryChallenger, BinaryField32, BinaryField64, BinaryField128};
     use p3_challenger::{GrindingChallenger, HashChallenger};
     use p3_keccak::Keccak256Hash;
-    use p3_whir::{SecurityAssumption, WhirConfigError};
+    use p3_whir::{FoldingFactorError, SecurityAssumption, WhirConfigError};
 
     use super::{BinaryWhirProfile, grinding_ceiling, raise_allowance};
     use crate::test_util::MyChallenger;
@@ -187,6 +193,50 @@ mod tests {
     const SECURITY_LEVEL: usize = 100;
     const LOG_INV_RATE: usize = 2;
     const FOLDING: usize = 3;
+
+    #[test]
+    fn a_schedule_that_opens_no_position_is_refused() {
+        // Invariant: a schedule must open at least one position.
+        //
+        // Queries alone test proximity, so a schedule opening none accepts any codeword.
+        //
+        // Crediting grinding with the whole target derives exactly that.
+        //
+        // This profile reaches it with a zero target, which credits the whole of nothing.
+        let domain = BooleanWhirDomain::default();
+        let profile = BinaryWhirProfile::proven_list_decoding(0, LOG_INV_RATE, FOLDING);
+        assert!(matches!(
+            profile
+                .config::<EF, EF, MyChallenger, _>(NUM_VARIABLES, &domain)
+                .err(),
+            Some(ProfileError::ZeroQueries)
+        ));
+
+        // The floor is on the derived count, so a target that does buy queries is untouched.
+        let real = BinaryWhirProfile::proven_list_decoding(SECURITY_LEVEL, LOG_INV_RATE, FOLDING)
+            .config::<EF, EF, MyChallenger, _>(NUM_VARIABLES, &domain)
+            .unwrap();
+        assert!(real.final_queries > 0);
+    }
+
+    #[test]
+    fn a_profile_that_folds_nothing_is_refused_by_the_schedule() {
+        // Invariant: a round must eliminate at least one variable.
+        //
+        // This one needs no check of our own, since the schedule already refuses it.
+        //
+        // The test pins that refusal, so nobody adds a redundant guard here later.
+        let domain = BooleanWhirDomain::default();
+        let profile = BinaryWhirProfile::proven_list_decoding(SECURITY_LEVEL, LOG_INV_RATE, 0);
+        assert!(matches!(
+            profile
+                .config::<EF, EF, MyChallenger, _>(NUM_VARIABLES, &domain)
+                .err(),
+            Some(ProfileError::Schedule(WhirConfigError::FoldingFactor(
+                FoldingFactorError::ZeroFactor
+            )))
+        ));
+    }
 
     #[test]
     fn each_regime_is_reached_by_its_own_constructor() {
@@ -261,7 +311,7 @@ mod tests {
                 assert!(*required > ceiling, "{required} bits is not past {ceiling}");
             }
             // A derivation refused for another reason is not this test's business.
-            Err(ProfileError::Schedule(_)) => {}
+            Err(ProfileError::Schedule(_) | ProfileError::ZeroQueries) => {}
         }
     }
 

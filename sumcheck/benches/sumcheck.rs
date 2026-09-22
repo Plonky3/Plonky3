@@ -593,7 +593,7 @@ where
                                 0,
                                 None,
                             );
-                            black_box((r, data));
+                            let _ = black_box((r, data));
                         },
                         BatchSize::LargeInput,
                     );
@@ -619,7 +619,7 @@ where
                                 0,
                                 Some(constraint),
                             );
-                            black_box((r, data));
+                            let _ = black_box((r, data));
                         },
                         BatchSize::LargeInput,
                     );
@@ -697,7 +697,7 @@ where
                                     0,
                                     None,
                                 );
-                                black_box(r);
+                                let _ = black_box(r);
                             }
                             black_box(data);
                         },
@@ -725,7 +725,7 @@ where
                                 );
                                 // Applying the challenge now is the second pass per round.
                                 prover.settle();
-                                black_box(r);
+                                let _ = black_box(r);
                             }
                             black_box(data);
                         },
@@ -810,7 +810,7 @@ where
 
     // Consume the prover, yielding the residual prover and the sampled challenges.
     let (residual, randomness) = prover.into_sumcheck(&mut data, 0, challenger);
-    black_box((data, residual, randomness));
+    let _ = black_box((data, residual, randomness));
 }
 
 /// Variable count for the hiding residual driver.
