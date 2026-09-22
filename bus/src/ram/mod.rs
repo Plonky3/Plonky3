@@ -1,82 +1,104 @@
 //! Authenticated mutable read-write memory over the binary-native bus.
 //!
-//! A machine's memory is mutable: the value at an address is whatever the last write left there.
-//! The read-only argument next door cannot say that. It seeds one immutable value per address and
-//! proves every read matches it, which is exactly the wrong shape once a cell can change.
+//! A machine's memory is mutable: a cell holds whatever the last write put there.
 //!
-//! This module proves the mutable statement with the classical offline-memory-checking
-//! construction: write the accesses down twice, once in the order the machine issued them and
-//! once sorted by address and then by time, prove the two orders hold the same accesses, and read
-//! the memory semantics off the sorted order, where they are local.
+//! The read-only argument next door cannot say that, because it fixes one value per cell.
 //!
-//! # The two orders
+//! Its counting proof also needs a read to carry the same value on both sides of the bus.
 //!
-//! Both orders live in one committed matrix, so one commitment binds both and no composition step
-//! can authenticate one order against a matrix the other did not come from.
+//! A write breaks that, so mutable memory needs a different argument.
 //!
-//! The execution order is timestamped by row index. An explicit increment chain proves the clock
-//! runs `0, 1, ..., n - 1` and refuses its carry out, so the timestamps are pairwise distinct and
-//! the sorted order has a unique answer.
+//! # Two orders
 //!
-//! The sorted order is compared row against row with a ripple adder over bit columns: the later
-//! row's key is the earlier row's key plus a nonzero difference that does not carry out. That is
-//! an unsigned, non-wrapping, strict increase, which is what makes address groups contiguous and
-//! within-group time strictly forward.
+//! The accesses are written down twice.
 //!
-//! # Nothing here is a second protocol
+//! One copy runs as the machine issued them, the other sorted by cell and then by time.
 //!
-//! The permutation is not a new reduction. The execution order pushes each access on a named bus
-//! and the sorted order pulls it, so the plan's existing multiset balance proves the two orders
-//! agree. The machine's own chips push their accesses on a second named bus that this memory
-//! pulls, which is what binds the execution order to the computation.
+//! Proving the copies hold the same accesses makes every memory rule local to the sorted one.
 //!
-//! Static indexed tables keep their own argument: an immutable table has no timestamps to sort
-//! and no writes to order, so it stays on the lookup path, and [`RamStatement::check_against`]
-//! refuses a channel whose payload width belongs to one.
+//! Both copies live in one committed trace, so a single commitment binds them together.
 //!
-//! # Relationship to the references
+//! No later step can check one order against a trace the other did not come from.
 //!
-//! leanVM solves a different problem. Its memory is write-once, so the value at an address is
-//! invariant and its offline memory check collapses to a per-address read counter in the orbit of
-//! a multiplicative generator — which is the construction our read-only module already uses. With
-//! a mutable cell a write's old and new values differ, the two bus sides no longer cancel at a
-//! fixed `(address, value)` pair, and that counting argument stops working. Ordering is what
-//! replaces it, which is why this module has a sorted trace and leanVM has none.
+//! # The clock
+//!
+//! Time is the row position in the issuing order.
+//!
+//! An increment chain proves the clock counts up from zero, and the shape check caps how far.
+//!
+//! Distinct times give the sorted order one answer instead of several.
+//!
+//! # The comparison
+//!
+//! Sorting needs a greater-than, which a field does not have.
+//!
+//! Each sorted row witnesses the gap up from the row above it and adds that gap back.
+//!
+//! The carry has to vanish at the top, which is what makes the comparison unsigned.
+//!
+//! The gap has to be nonzero, which is what makes it strict rather than merely non-decreasing.
+//!
+//! # Nothing new on the wire
+//!
+//! The permutation is not a new reduction.
+//!
+//! The issuing order produces each access on a named channel and the sorted order consumes it.
+//!
+//! Balancing that channel is the whole proof, and the enclosing plan already does it.
+//!
+//! The machine's own chips produce their accesses on a second channel this memory consumes.
+//!
+//! That ties the issuing order to the computation rather than to an invented history.
+//!
+//! Static indexed tables keep the lookup path they already had.
+//!
+//! An immutable entry has no operation and no time, so its tuple cannot pass for this one.
+//!
+//! # Boundaries
+//!
+//! A proof that stands alone starts from empty memory and exports nothing.
+//!
+//! A proof continuing an execution inherits a committed image and hands one on.
+//!
+//! Those are different statements, and confusing them is the easiest mistake to make here.
+//!
+//! # Against the references
+//!
+//! leanVM's memory is write-once, so it needs no ordering and keeps no sorted copy.
+//!
+//! Its offline check is the per-cell read counter our read-only module already uses.
 //!
 //! binius64 has no memory argument at all.
 //!
-//! Where leanVM does compare magnitudes it avoids bit columns: an integer lives in the exponent of
-//! a generator, so `t < t'` becomes a range check on a discrete logarithm, discharged by two
-//! lookups against the address table. That is cheaper in a field-element-per-column cost model.
-//! We decompose into bits instead, because this backend commits Boolean columns at one bit each,
-//! and because bit columns keep the argument self-contained: no range table, no second channel
-//! per comparison, and no dependence on the orbit length of a generator.
+//! Where leanVM does compare magnitudes it puts integers in a generator's exponent.
 //!
-//! binius64's word-level comparison gates point at the eventual optimisation here. It expresses a
-//! whole 64-bit borrow chain as one constraint over packed lanes rather than 64 Boolean columns.
-//! Once the word backend can state a packed-lane relation, the comparison witness below should
-//! collapse the same way; the constraint shape is already the same full adder.
+//! A comparison is then a range check on a logarithm, settled by two table lookups.
+//!
+//! That is cheaper when a column costs a whole field element, which here it does not.
+//!
+//! This backend stores a bit column as a bit, and digits need no range table.
+//!
+//! binius64 states a whole sixty-four-bit borrow chain as one relation over packed lanes.
+//!
+//! The shape below is already that adder, so it should collapse once the word backend can.
 //!
 //! # Cost
 //!
-//! A statement over `A` address bits, `T` timestamp bits, and `V` value components commits
-//! `2(1 + A + T + V) + T + 3 max(A, T) + 2` columns per access, plus one more for a segment. Most
-//! of those are single bits, which this backend's Boolean commitment path stores at one bit each
-//! rather than one field element each.
+//! Most columns hold a single bit, which the Boolean commitment path stores cheaply.
 //!
-//! On the bus, the access and permutation channels take one leaf per access per declaration. A
-//! segment's two image channels take one leaf per access as well, not one per address group,
-//! because a conditional declaration still occupies its leaf on the rows where it is inactive.
-//! That is not an oversight: which rows open and close a group is witness-dependent, so the
-//! declaration cannot be narrowed to a short block the way a fixed boundary flush can be.
-//! [`RamStatement::leaf_contribution`] reports the totals.
+//! A continuing proof's image channels take one leaf per access, not one per cell.
 //!
-//! # What is still the caller's
+//! A conditional declaration still holds its leaf on rows where it contributes nothing.
 //!
-//! Committing the trace, running the enclosing bus plan, and checking this AIR are the caller's,
-//! as they are for every other table. In segment mode the incoming and outgoing image tables are
-//! the caller's too: this module declares the tuples, and the plan balances them against whatever
-//! committed images the machine supplies.
+//! Narrowing it is impossible, since the witness decides which rows open and close a run.
+//!
+//! # What remains the caller's
+//!
+//! Committing the trace, running the plan, and checking the constraints, as for any table.
+//!
+//! A continuing proof's two image tables are the caller's as well.
+//!
+//! This module declares their tuples and the plan balances them against what is committed.
 
 mod air;
 mod error;

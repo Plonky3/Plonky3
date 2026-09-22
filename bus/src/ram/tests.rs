@@ -76,8 +76,9 @@ fn value(tag: u64) -> Vec<F> {
 
 /// Whether the AIR accepts a concrete trace.
 ///
-/// The constraint checker panics on a violation, so this reports acceptance rather than
-/// asserting it, which lets an attack test state its precondition before it states its verdict.
+/// The constraint checker panics on a violation, so this reports rather than asserts.
+///
+/// An attack test can then state its precondition before it states its verdict.
 fn air_accepts(air: &RamAir, trace: &RamTrace<F>) -> bool {
     let main = RowMajorMatrix::new(trace.values().to_vec(), trace.width());
     catch_unwind(AssertUnwindSafe(|| check_constraints(air, &main, &[]))).is_ok()
@@ -85,10 +86,11 @@ fn air_accepts(air: &RamAir, trace: &RamTrace<F>) -> bool {
 
 /// Stand-in for the machine's chips, and for a segment's committed image tables.
 ///
-/// Every declaration mirrors one of the memory's own, on the opposite side of the multiset and
-/// over the same trace columns. That makes the counterparty exactly right by construction, which
-/// is what an attack test wants: any imbalance it then reports comes from the memory's own
-/// declarations rather than from a mismatched fixture.
+/// Every declaration mirrors one of the memory's own, on the opposite side and the same columns.
+///
+/// That makes the counterparty right by construction, which is what an attack test wants.
+///
+/// Any imbalance it reports then comes from the memory rather than from a bad fixture.
 struct Counterparty {
     /// Total trace width, shared with the memory under test.
     width: usize,
@@ -129,8 +131,9 @@ impl<AB: BusInteractionBuilder> Air<AB> for Counterparty {
 
 /// One channel the counterparty mirrors: name, side, payload columns, and activation.
 ///
-/// The activation names a trace column and says whether to take its complement, which is how a
-/// group-opening declaration is mirrored against a group-closing one.
+/// The activation names a column and says whether to take its complement.
+///
+/// That is how an opening declaration is mirrored against a closing one.
 type MirroredDeclaration = (String, BusDirection, Vec<usize>, Option<(usize, bool)>);
 
 /// Builds the counterparty for one memory, mirroring every channel it declares on.
@@ -178,9 +181,11 @@ fn table(trace: &RamTrace<F>) -> Table<F> {
 
 /// Replays every named multiset this memory and its counterparty declare.
 ///
-/// The incoming-image counterparty is gated by the memory's own group flag, so it mirrors
-/// whatever the memory declared. That is deliberate: these tests use the report to ask whether
-/// the *two access orders* agree, not whether a fixture image table is correct.
+/// The inherited-image counterparty reads the memory's own run flag, so it mirrors it exactly.
+///
+/// That is deliberate, because these tests ask whether the two access orders agree.
+///
+/// Whether a fixture image table is right is not the question here.
 fn bus_report(air: &RamAir, trace: &RamTrace<F>) -> BusDebugReport<F> {
     let memory_profile = BusSymbolicBuilder::<F, F>::from_air(air, AirLayout::from_air::<F>(air));
     let source = counterparty(air);
@@ -233,9 +238,11 @@ fn plan(air: &RamAir) -> BusPlan {
 
 /// Rewrites the address-sorted half of a trace to follow a caller-chosen order.
 ///
-/// The comparison witness is filled modularly, so a descending step produces exactly the wrapped
-/// ripple-adder witness an adversary would supply: every full-adder identity still holds and only
-/// the refused carry out is left to reject the row.
+/// The comparison witness is filled with wrapping arithmetic.
+///
+/// A descending step then produces exactly the witness an adversary would supply.
+///
+/// Every adder identity still holds, and only the refused carry out is left to reject the row.
 fn reorder_memory(
     trace: &mut RamTrace<F>,
     statement: &RamStatement,
@@ -429,9 +436,13 @@ fn a_clock_too_narrow_to_count_the_accesses_is_refused_at_declaration() {
         .is_ok()
     );
 
-    // Two bits count four. A ninth access would have to reuse a timestamp, and two accesses at
-    // one address sharing a timestamp have no defined order, so a read could be matched against
-    // the later write instead of the earlier one. The statement refuses that before any witness.
+    // Two digits count four, so a ninth access would have to reuse a reading.
+    //
+    // Two accesses at one cell sharing a reading have no order between them.
+    //
+    // A read could then be matched against the later write instead of the earlier one.
+    //
+    // The statement refuses that before it ever sees a witness.
     assert_eq!(
         RamStatement {
             timestamp_bits: 2,
@@ -596,8 +607,9 @@ fn a_non_boolean_address_digit_is_refused() {
     // Precondition: the multiset claims all still hold, so nothing but the digit check can reject.
     assert!(buses_balance(&air, &trace));
 
-    // A non-Boolean digit makes the ripple-adder comparison meaningless, so ordering stops
-    // constraining anything and an adversary can place rows where it likes.
+    // A digit holding something else empties out the comparison.
+    //
+    // Ordering then constrains nothing and an adversary can place rows where it likes.
     assert!(!air_accepts(&air, &trace));
 }
 
@@ -664,8 +676,9 @@ fn a_repeated_execution_timestamp_is_refused() {
     // Precondition: the two orders still hold the same tuples.
     assert!(buses_balance(&air, &trace));
 
-    // Two accesses sharing a timestamp have no order at their address, so the sorted trace could
-    // put either first and the read would see whichever write the prover preferred.
+    // Two accesses sharing a reading have no order at their cell.
+    //
+    // The sorted order could put either first, so the read sees whichever write suits.
     assert!(!air_accepts(&air, &trace));
 }
 
@@ -713,8 +726,9 @@ fn splitting_one_address_into_two_groups_is_refused() {
     // Precondition: both multiset claims still hold, so only the ordering check can reject.
     assert!(buses_balance(&air, &trace));
 
-    // The strict increase needs a nonzero difference, and a repeated address has none. Without
-    // it the read returns the initial zero rather than the value the write left.
+    // A strict increase needs a nonzero gap, and a repeated cell number has none.
+    //
+    // Without it the read returns the starting zero rather than what the write left.
     assert!(!air_accepts(&air, &trace));
 }
 
@@ -736,8 +750,9 @@ fn a_wrapped_address_comparison_is_refused() {
     // Sort descending instead: address three, then address one.
     reorder_memory(&mut trace, &statement, &accesses, &[0, 1]);
 
-    // Precondition: every full-adder identity of the comparison still holds. Three plus the
-    // witnessed difference really is one, modulo four, and the difference is nonzero.
+    // Precondition: every adder identity of the comparison still holds.
+    //
+    // Three plus the witnessed gap really is one, with a wrap, and the gap is nonzero.
     let left = read_bits(&trace, 0, layout.memory_address, layout.address_bits);
     let right = read_bits(&trace, 1, layout.memory_address, layout.address_bits);
     let delta = read_bits(&trace, 1, layout.compare_delta, layout.address_bits);
@@ -759,9 +774,11 @@ fn a_wrapped_address_comparison_is_refused() {
     // Precondition: both multiset claims still hold.
     assert!(buses_balance(&air, &trace));
 
-    // Refusing the carry out is what makes the comparison unsigned. Without it the sorted trace
-    // need not be sorted, address groups stop being contiguous, and a read can be moved into a
-    // group that never saw the write it should have.
+    // Refusing the carry out is what makes the comparison unsigned.
+    //
+    // Without it the sorted order need not be sorted and a cell's accesses can be split.
+    //
+    // A read can then be moved into a run that never saw the write it should have.
     assert!(!air_accepts(&air, &trace));
 }
 
@@ -782,8 +799,9 @@ fn a_read_placed_before_the_write_it_should_see_is_refused() {
     let air = air(statement.clone());
     assert!(air_accepts(&air, &trace));
 
-    // Swap the two writes inside the group so the surviving value is the earlier one, and make
-    // the read return that earlier value on both sides.
+    // Swap the two writes so the surviving value is the earlier one.
+    //
+    // The read then returns that earlier value, on both sides.
     let forged = vec![
         RamAccess::write(1, value(11)),
         RamAccess::write(1, value(13)),
@@ -801,8 +819,9 @@ fn a_read_placed_before_the_write_it_should_see_is_refused() {
     // Precondition: both multiset claims still hold.
     assert!(buses_balance(&air, &trace));
 
-    // Only the within-group timestamp order is left, and it has wrapped from one to zero. That
-    // order is the whole reason a read sees the *last* write rather than any write.
+    // Only the order of time within the run is left, and it has wrapped from one to zero.
+    //
+    // That order is the whole reason a read sees the last write rather than any write.
     assert_eq!(
         trace.row(1)[layout.compare_carry + layout.timestamp_bits],
         F::ONE
@@ -893,8 +912,9 @@ fn the_permutation_is_what_catches_an_access_the_machine_never_issued() {
     trace.row_mut(0)[layout.memory_value] = forged;
     trace.row_mut(1)[layout.memory_value] = forged;
 
-    // Precondition: every constraint still holds. The sorted trace is internally consistent, so
-    // the AIR alone cannot tell that it describes a different computation.
+    // Precondition: every constraint still holds, because the sorted order is self-consistent.
+    //
+    // The constraints alone cannot tell that it describes a different computation.
     assert!(air_accepts(&air, &trace));
 
     // The permutation channel is what rejects it, and it names exactly that channel.
@@ -929,8 +949,9 @@ fn a_segment_opens_every_address_group_against_the_incoming_image() {
         .count();
     assert_eq!((openings, closings), (2, 2));
 
-    // The outgoing image carries the last value at each address, which for cell five is the
-    // written value rather than the inherited one.
+    // The handed-on image carries the last value at each cell.
+    //
+    // For the cell that was written, that is the written value, not the inherited one.
     let last_of_five = (0..4)
         .find(|&row| {
             trace.row(row)[layout.group_end] == F::ONE
@@ -1032,8 +1053,9 @@ fn a_static_indexed_table_keeps_the_lookup_argument() {
     // That table is served by the lookup argument, which is happy with it.
     assert!(ReadOnlyMemoryPlan::<F>::new(&bus_plan, "rom", 1, 1).is_ok());
 
-    // A mutable memory cannot be pointed at it. Its tuple has no operation marker and no
-    // timestamp, because an immutable entry has neither, so the widths cannot agree.
+    // A mutable memory cannot be pointed at it.
+    //
+    // An immutable entry has no operation and no clock reading, so the widths disagree.
     let statement = RamStatement {
         access_bus: "rom".to_string(),
         ..single_proof(2, 2, 1)
@@ -1075,8 +1097,9 @@ fn security_reporting_reads_its_field_size_off_the_challenge_field() {
     let bus_plan = plan(&air);
     let statement = air.statement();
 
-    // A 128-bit challenge field and a 31-bit one give different bounds for one statement, and
-    // the difference is the field size rather than anything about the memory.
+    // A wide challenge field and a narrow one give different bounds for one statement.
+    //
+    // What differs is the field size, not anything about the memory.
     let wide = statement
         .security_term::<BinaryField128>(&bus_plan)
         .expect("the fixture plan defines every channel");
@@ -1085,8 +1108,9 @@ fn security_reporting_reads_its_field_size_off_the_challenge_field() {
         .expect("the fixture plan defines every channel");
     assert!(wide.bits.bits() > narrow.bits.bits() + 90.0);
 
-    // The term is the enclosing plan's own, evaluated at the challenge field's size, so a report
-    // that already carries the plan's term must not add this one on top.
+    // The term is the plan's own, read at the challenge field's size.
+    //
+    // A report already carrying the plan's term must not add this one on top.
     let field_bits =
         core::num::NonZeroUsize::new(BinaryField128::order().bits() as usize - 1).unwrap();
     assert_eq!(wide, bus_plan.security_term(field_bits));
@@ -1222,15 +1246,15 @@ fn the_statement_and_the_layout_agree_on_every_tuple_width() {
 
 #[test]
 fn the_constraints_hold_over_an_odd_characteristic_field_too() {
-    // Exclusive or and majority both carry correction terms that vanish in characteristic two:
-    // `a + b - 2ab` and `ab + ac + bc - 2abc`. A binary-only test accepts a wrong correction, so
-    // the same memory runs over a prime field too.
+    // Exclusive or and majority both carry a correction that vanishes in characteristic two.
     //
-    // The schedule is chosen so the carry chain actually reaches the inputs that separate the two
-    // formulas. Majority differs from `ab + ac + bc` only when all three inputs are one, and from
-    // the near-miss `ab + ac + bc - 2ac` only when the middle input is zero while the other two
-    // are one. Adding three to four supplies both: bit zero carries out of `1 + 1`, and bit one
-    // then sees a set addend, a clear difference, and an incoming carry.
+    // A test over a binary field alone would accept a wrong correction, so a prime field runs too.
+    //
+    // The schedule is chosen to reach the inputs that separate the right formula from the wrong.
+    //
+    // Majority differs from the uncorrected form only when all three inputs are set.
+    //
+    // It differs from the near-miss only when the middle input is clear and the others are set.
     let word = |tag: u32| vec![BabyBear::from_u32(tag)];
     let statement = single_proof(8, 3, 1);
     let accesses = vec![
@@ -1251,10 +1275,15 @@ fn the_constraints_hold_over_an_odd_characteristic_field_too() {
 
     // Precondition: the two separating input patterns really occur.
     //
-    // Cell three's group spans timestamps three and six, so that comparison adds three to three
-    // and bit one sees all three inputs set. Cell four's group opens right after cell three's, so
-    // that comparison adds one to three and bit one sees a set addend, a clear difference, and an
-    // incoming carry. Without both, a wrong correction term would go unnoticed.
+    // One cell's run spans readings three and six, so that comparison adds three to three.
+    //
+    // Its second digit then sees all three inputs set.
+    //
+    // The next run opens right after, so that comparison adds one to three.
+    //
+    // Its second digit sees a set addend, a clear gap, and an incoming carry.
+    //
+    // Without both patterns a wrong correction would go unnoticed.
     assert_eq!(
         read_bits_in(&trace, 1, layout.memory_timestamp, layout.timestamp_bits),
         6
@@ -1337,11 +1366,13 @@ fn an_execution_clock_that_does_not_start_at_zero_is_refused() {
     let air = air(statement.clone());
     assert!(air_accepts(&air, &honest));
 
-    // Start the clock one short of its capacity, so it wraps at the first step: 1, then 0. The
-    // two timestamps are still distinct, and the increment chain still adds one at every step.
+    // Start the clock one short of its capacity, so it wraps at the very first step.
     //
-    // The wrap reverses the sorted order inside the group. The read now sorts first, becomes the
-    // group opener, and so returns the initial zero rather than the value the write left.
+    // The two readings are still distinct, and every step still adds one.
+    //
+    // The wrap reverses the sorted order within the run.
+    //
+    // The read now sorts first and opens the run, so it returns zero rather than what was written.
     let forged_accesses = vec![
         RamAccess::write(1, value(11)),
         RamAccess::read(1, vec![F::ZERO]),
@@ -1371,8 +1402,9 @@ fn an_execution_clock_that_does_not_start_at_zero_is_refused() {
         .collect::<Vec<_>>();
     assert_eq!(clocks, vec![1, 0]);
 
-    // Precondition: the sorted order is internally consistent. Its first row opens the group and
-    // reads zero, and its second row follows at a strictly later timestamp.
+    // Precondition: the sorted order is self-consistent.
+    //
+    // Its first row opens the run and reads zero, and its second follows at a later reading.
     assert_eq!(trace.row(0)[layout.same_address], F::ZERO);
     assert_eq!(trace.row(0)[layout.memory_value], F::ZERO);
     assert_eq!(trace.row(1)[layout.same_address], F::ONE);
@@ -1384,9 +1416,11 @@ fn an_execution_clock_that_does_not_start_at_zero_is_refused() {
     // Precondition: both multiset claims still hold.
     assert!(buses_balance(&air, &trace));
 
-    // Pinning the first timestamp to zero is the only thing left, and together with the
-    // statement's capacity check it is what forbids a wrap inside the trace. A wrap reorders a
-    // group against the order the machine actually executed it in.
+    // Pinning the first reading to zero is the only thing left.
+    //
+    // With the statement's capacity check, that is what forbids a wrap inside the trace.
+    //
+    // A wrap reorders a cell's run against the order the machine actually ran it in.
     assert!(!air_accepts(&air, &trace));
 }
 
@@ -1424,8 +1458,9 @@ fn a_group_continued_at_a_different_address_is_refused() {
         trace.row_mut(1)[layout.compare_nonzero + bit] = F::ONE;
     }
 
-    // Precondition: read continuity now holds, because the row it copies from really does hold
-    // that value, and the timestamp comparison holds too.
+    // Precondition: read continuity now holds, since the row copied from really holds that value.
+    //
+    // The comparison of readings holds as well.
     assert_eq!(trace.row(0)[layout.memory_value], stolen);
     assert_eq!(trace.row(1)[layout.memory_value], stolen);
     assert_eq!(
@@ -1436,8 +1471,9 @@ fn a_group_continued_at_a_different_address_is_refused() {
     // Precondition: both multiset claims still hold.
     assert!(buses_balance(&air, &trace));
 
-    // Only the same-group address equality is left. Without it a read of one cell could inherit
-    // another cell's value, which is a read of the wrong address.
+    // Only the equal cell number within a run is left.
+    //
+    // Without it a read of one cell inherits another cell's value, which reads the wrong cell.
     assert_ne!(
         read_bits(&trace, 0, layout.memory_address, layout.address_bits),
         read_bits(&trace, 1, layout.memory_address, layout.address_bits),
@@ -1469,19 +1505,23 @@ fn the_first_sorted_row_cannot_claim_to_continue_a_group() {
         0
     );
 
-    // The first row always opens a group. Letting it say otherwise would skip its pull against
-    // the incoming image, and the segment could then invent the value it inherits.
+    // The first row always opens a run.
+    //
+    // Letting it say otherwise would skip the inherited image and let it invent what it starts from.
     assert!(!air_accepts(&air, &trace));
 }
 
 #[test]
 fn every_derived_witness_column_is_pinned_by_its_own_identity() {
-    // The comparison difference, its carry chain, its running-or chain, and the clock's carry
-    // chain are all prover-supplied. Each is pinned by an identity rather than merely permitted,
-    // and a prover free to choose any of them could choose one that makes a false order pass.
+    // The gap, its carries, its running flags, and the clock's carries are all prover-supplied.
     //
-    // Equal address and timestamp widths keep every shared witness column active on every row,
-    // so nothing below is flipped in a column that no constraint reads.
+    // Each is pinned by an identity rather than merely permitted.
+    //
+    // A prover free to pick any of them could pick one that makes a false order pass.
+    //
+    // Equal cell and clock widths keep every shared column active on every row.
+    //
+    // So nothing below is flipped in a column that no constraint reads.
     let statement = single_proof(4, 2, 1);
     let accesses = vec![
         RamAccess::write(1, value(11)),
@@ -1514,9 +1554,9 @@ fn every_derived_witness_column_is_pinned_by_its_own_identity() {
         }
     }
 
-    // The clock's carry chain is read on every row that has a successor, and the timestamp it
-    // produces is pinned just as tightly: the whole point of the clock is that the prover has no
-    // say in it.
+    // The clock's carries are read on every row that has a successor.
+    //
+    // The reading they produce is pinned just as tightly, since a prover has no say in it.
     for row in 0..4 {
         let carries = if row < 3 {
             layout.execution_carry..layout.execution_carry + layout.timestamp_bits
@@ -1538,8 +1578,9 @@ fn every_derived_witness_column_is_pinned_by_its_own_identity() {
 
 #[test]
 fn a_clock_whose_carry_chain_is_chosen_freely_can_repeat_a_timestamp() {
-    // Four accesses to four cells, so the ordering constraints never look at a timestamp and the
-    // clock is the only thing under test.
+    // Four accesses to four cells, so no comparison ever looks at a reading.
+    //
+    // The clock is then the only thing under test.
     let statement = single_proof(4, 2, 1);
     let accesses = (0..4)
         .map(|cell| RamAccess::write(cell, value(cell + 11)))
@@ -1551,9 +1592,11 @@ fn a_clock_whose_carry_chain_is_chosen_freely_can_repeat_a_timestamp() {
     let air = air(statement.clone());
     assert!(air_accepts(&air, &honest));
 
-    // The clock runs 0, 1, 0, 3 instead of 0, 1, 2, 3. It starts at zero, and every step still
-    // flips the low bit, because the carry into the low bit is fixed at one. The carries above
-    // it are the only freedom, and they are exactly what the recurrence removes.
+    // The clock runs zero, one, zero, three instead of counting up.
+    //
+    // It still starts at zero, and every step still flips the lowest digit.
+    //
+    // The carries above that digit are the only freedom, and the recurrence is what removes it.
     let clock = [0u64, 1, 0, 3];
     let mut trace = honest;
     for (row, &tick) in clock.iter().enumerate() {
@@ -1635,8 +1678,9 @@ fn materialize(
 
 #[test]
 fn the_plan_reduction_proves_the_two_orders_hold_the_same_accesses() {
-    // A machine would reach this through its own prover. The point here is that the permutation
-    // needs no protocol of its own: the plan's ordinary multiset reduction discharges it.
+    // A machine would reach this through its own prover.
+    //
+    // The point here is that the permutation needs no reduction of its own.
     let statement = single_proof(4, 3, 1);
     let accesses = vec![
         RamAccess::write(5, value(11)),
@@ -1657,8 +1701,9 @@ fn the_plan_reduction_proves_the_two_orders_hold_the_same_accesses() {
     let profiles = [&memory_profile, &source_profile];
     let bus_plan = plan(&air);
 
-    // Challenges are drawn inside the reduction, after whatever the caller already bound into
-    // the transcript, which for a real prover is the commitment to this very trace.
+    // Challenges are drawn inside the reduction, after whatever the caller already bound.
+    //
+    // For a real prover that is the commitment to this very trace.
     let reduce = |trace: &RamTrace<F>| {
         let mut challenger = Challenger::from_hasher(Vec::new(), Keccak256Hash);
         bus_plan.prove::<F, F, _>(
@@ -1679,8 +1724,9 @@ fn the_plan_reduction_proves_the_two_orders_hold_the_same_accesses() {
     assert_eq!(prover_output.product.point, verifier_output.product.point);
     assert_eq!(prover_output.product.values, verifier_output.product.values);
 
-    // Rewrite one value in the sorted order only. The constraints cannot see it, because the
-    // sorted trace stays internally consistent.
+    // Rewrite one value in the sorted order only.
+    //
+    // The constraints cannot see it, because that order stays self-consistent.
     let mut forged = honest;
     for row in 0..4 {
         if forged.row(row)[layout.memory_value] == value(11)[0] {

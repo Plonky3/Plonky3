@@ -10,9 +10,9 @@ pub enum RamError {
     /// A memory with no accesses has nothing to prove and no product tree.
     #[error("mutable memory requires at least one access")]
     EmptyTrace,
-    /// The permutation reduction reuses the enclosing bus plan's product tree.
+    /// The permutation reuses the enclosing plan's product tree.
     ///
-    /// That tree addresses one aligned block per declaration, so a block height must be a power of two.
+    /// That tree aligns one block per declaration, so a block height is a power of two.
     #[error("mutable memory covers {access_count} accesses, which is not a power of two")]
     NonPowerOfTwoAccessCount {
         /// Access count supplied by the statement.
@@ -34,10 +34,11 @@ pub enum RamError {
         /// Largest supported width.
         maximum: usize,
     },
-    /// Distinct execution timestamps need one clock value per access.
+    /// Distinct clock readings need one value per access.
     ///
-    /// A clock that wrapped would repeat a timestamp, and two accesses at one address would then
-    /// have no defined order, so a read could be matched against either of them.
+    /// A wrapped clock repeats a reading.
+    ///
+    /// Two accesses at one cell would then have no order, so a read could match either.
     #[error(
         "mutable memory covers {access_count} accesses, but {timestamp_bits} timestamp bits count only {capacity}"
     )]
@@ -52,7 +53,7 @@ pub enum RamError {
     /// An access with no value components carries no memory state.
     #[error("mutable memory requires at least one value component")]
     EmptyValue,
-    /// Two roles cannot share one named bus without their tuples cancelling.
+    /// Two roles on one channel would let a tuple of one cancel a tuple of the other.
     #[error("mutable memory reuses bus {name} for two different roles")]
     DuplicateBus {
         /// Caller-owned name used for more than one role.
@@ -64,10 +65,11 @@ pub enum RamError {
         /// Caller-owned name that the plan does not define.
         name: String,
     },
-    /// The named bus tuple cannot hold this memory's payload.
+    /// The named channel's tuple cannot hold this memory's payload.
     ///
-    /// A static indexed table keeps its own narrower lookup tuple, so this also refuses a plan that
-    /// tried to reuse a table channel as a mutable-memory channel.
+    /// A static indexed table keeps its own narrower lookup tuple.
+    ///
+    /// This is what refuses an attempt to reuse a table channel for mutable memory.
     #[error("mutable memory bus {name} has payload width {actual}, expected {expected}")]
     PayloadWidth {
         /// Caller-owned name of the mismatched bus.
@@ -110,7 +112,7 @@ pub enum RamError {
         /// Width fixed by the statement.
         address_bits: usize,
     },
-    /// A segment witness reads an address it never opened against the incoming image.
+    /// A continuing proof touches a cell it never opened against the inherited image.
     #[error(
         "mutable memory segment access {index} is the first at its address but is not a read that opens the group"
     )]
@@ -121,7 +123,7 @@ pub enum RamError {
     /// The transcript's challenge field has no room for a challenge.
     #[error("mutable memory needs a challenge field larger than one element")]
     TrivialChallengeField,
-    /// A read returns a value other than the one the last write left at its address.
+    /// A read returns something other than what the last write left at its cell.
     #[error(
         "mutable memory access {index} reads a value the preceding access at its address did not leave"
     )]

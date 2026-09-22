@@ -8,62 +8,79 @@ use p3_field::{Algebra, PrimeCharacteristicRing};
 use super::{RamBoundary, RamError, RamLayout, RamStatement};
 use crate::{BusActivation, BusDirection, BusInteractionBuilder};
 
-/// Constraints and bus declarations of one mutable read-write memory.
+/// Constraints and channel declarations of one mutable read-write memory.
 ///
-/// One committed matrix holds both access orders. Every constraint below is enforced by the
-/// enclosing proof system's constraint check, and every cross-trace claim is a named-bus
-/// declaration the enclosing bus plan balances. Nothing is left as a handoff for a caller to
-/// remember: an integration that commits this trace and runs the plan has the whole argument.
+/// One committed trace holds both access orders.
+///
+/// Every constraint below is checked by the enclosing proof system.
+///
+/// Every claim spanning the two orders is a named-channel declaration the plan balances.
+///
+/// Nothing is left as a handoff a caller has to remember.
 ///
 /// # What each constraint buys
 ///
-/// Address and timestamp **bits** are what make the ripple-adder comparisons mean anything. A
-/// non-Boolean digit makes "the difference is nonzero and did not wrap" an empty statement, and an
-/// adversary can then order rows however it likes.
+/// The digit columns are what make the comparisons mean anything.
 ///
-/// A **unique, non-wrapping execution order** is what makes the sorted order total. The clock runs
-/// `0, 1, ..., n - 1` with a refused carry-out, so no two accesses share a timestamp. If two did,
-/// two accesses at one address would have no defined order and a read could be matched against the
-/// later write instead of the earlier one.
+/// A digit holding something other than a bit empties out "the gap is nonzero and did not wrap".
 ///
-/// **Unsigned memory order** is what makes address groups contiguous. Without the refused
-/// carry-out an address could wrap, splitting one address into two groups; the second group
-/// re-initialises, so a read returns the initial value instead of what was written.
+/// An adversary can then order rows however it likes.
 ///
-/// Without the nonzero difference, two rows could hold the *same* address while claiming a new
-/// group, which is the same attack with no wrap needed.
+/// A unique, non-wrapping clock is what makes the sorted order total.
 ///
-/// **Read continuity** is what makes a read see the last write. **Write updates** are the absence
-/// of a value constraint on a write, so the next read at that address inherits the written value.
+/// If two accesses shared a reading, two of them touching one cell would have no order.
 ///
-/// **Initialization** and **final boundaries** are what tie this proof's memory to the world
-/// around it, and they differ by [`RamBoundary`].
+/// A read could then be matched against the later write instead of the earlier one.
+///
+/// An unsigned comparison is what keeps a cell's accesses together in one run.
+///
+/// If a cell number could wrap, one cell would split into two runs.
+///
+/// The second run starts over, so a read returns the starting value rather than what was written.
+///
+/// A nonzero gap is the same protection without the wrap.
+///
+/// Without it two rows could hold one cell number while claiming a fresh run.
+///
+/// Read continuity is what makes a read see the last write.
+///
+/// A write is left unconstrained in value, which is how the next read inherits it.
+///
+/// The two boundaries tie this proof's memory to the world around it.
 ///
 /// # Which constraints are load-bearing
 ///
-/// Mutation testing puts a name on the difference between a constraint that carries the argument
-/// and one that restates something another constraint already forces. Removing any of these makes
-/// a test in this module fail, so each is doing work on its own:
+/// Deleting a constraint and re-running the tests sorts them into two kinds.
 ///
-/// - memory-side address Booleanity;
+/// Some carry the argument; the rest restate something another constraint already forces.
+///
+/// Removing any of these makes a test in this module fail:
+///
+/// - the sorted order's cell digits;
 /// - the clock's zero start, its sum identity, and its carry recurrence;
-/// - the comparison's sum identity, carry recurrence, and running-or recurrence;
-/// - the refused carry out and the nonzero difference;
-/// - the same-group address equality and the first row's group flag;
+/// - the comparison's sum identity, carry recurrence, and running flag;
+/// - the refused carry out and the nonzero gap;
+/// - the equal cell number within a run, and the first row's run flag;
 /// - read continuity;
-/// - a segment's group-opening read and its group-end marker.
+/// - a continuing proof's opening read and its closing marker.
 ///
-/// The rest are kept deliberately, and it is worth saying why rather than leaving a reader to
-/// wonder. Timestamp Booleanity is already forced by the clock and carried to the sorted order by
-/// the permutation. Difference Booleanity is already forced by the sum identity once the compared
-/// digits are Boolean. The group flag's Booleanity is forced by the two comparisons being mutually
-/// exclusive. The comparison's zero carry in only tightens the witnessed difference by one, and
-/// the clock's unit carry in only fixes which direction the clock runs.
+/// The rest are kept on purpose, and it is worth saying why.
 ///
-/// They stay because each is the local, self-evident form of something the acceptance criteria
-/// name outright, and because an argument that rests on an induction threaded through a separate
-/// multiset claim is one refactor away from being wrong. They cost one degree-two constraint per
-/// column.
+/// The clock already forces its own digits, and the permutation carries that to the sorted order.
+///
+/// The sum identity already forces the gap digits, once the compared digits are bits.
+///
+/// The run flag is forced by the two comparisons never running together.
+///
+/// The comparison's zero carry in only tightens the witnessed gap by one.
+///
+/// The clock's unit carry in only fixes which way the clock runs.
+///
+/// Each stays because it is the plain local form of something this argument has to prove.
+///
+/// An argument resting on an induction threaded through a separate claim is fragile.
+///
+/// Each costs one small constraint per column.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RamAir {
     /// Public shape this AIR enforces.
@@ -100,9 +117,11 @@ impl RamAir {
 
     /// Asserts that every digit column holds a bit.
     ///
-    /// Carry and running-or columns are left out on purpose: their recurrences are products and
-    /// ors of columns already known to be Boolean, so each is Boolean wherever it is constrained
-    /// at all, and free where nothing reads it.
+    /// Carry and running flags are left out on purpose.
+    ///
+    /// Each is a product or an or of columns already known to hold bits.
+    ///
+    /// So each holds a bit wherever anything reads it, and is free where nothing does.
     fn eval_booleanity<AB: AirBuilder>(&self, builder: &mut AB) {
         let main = builder.main();
         let row = main.current_slice();
@@ -140,19 +159,23 @@ impl RamAir {
         }
     }
 
-    /// Asserts that the execution timestamp of row `i` is the integer `i`.
+    /// Asserts that a row's clock reading is its own position in the issuing order.
     ///
-    /// The clock is a half-adder chain adding one: the carry into the low bit is one, and each bit
-    /// flips while the carry is still travelling.
+    /// Adding one is a carry into the lowest digit.
     ///
-    /// Together with the zero start this pins row `i` to `i mod 2^timestamp_bits`, and
-    /// [`RamStatement::validate`] refuses an access count larger than `2^timestamp_bits`, so the
-    /// clock never reaches the wrap. The `access_count` timestamps are therefore exactly
-    /// `0, ..., access_count - 1`: unique, in order, and non-wrapping.
+    /// Each digit flips for as long as that carry is still travelling.
     ///
-    /// Uniqueness is what gives the address-sorted order a single answer. Two accesses at one
-    /// address sharing a timestamp would have no order between them, and a read could then be
-    /// matched against the later write instead of the earlier one.
+    /// With the zero start, a row's reading is its position taken modulo the clock's range.
+    ///
+    /// The shape check refuses more accesses than the clock can count.
+    ///
+    /// So the clock never reaches its wrap, and the readings run up from zero without repeating.
+    ///
+    /// Distinct readings are what give the sorted order a single answer.
+    ///
+    /// Two accesses at one cell sharing a reading would have no order between them.
+    ///
+    /// A read could then be matched against the later write instead of the earlier one.
     fn eval_execution_clock<AB: AirBuilder>(&self, builder: &mut AB) {
         let main = builder.main();
         let row = main.current_slice();
@@ -189,10 +212,11 @@ impl RamAir {
         }
     }
 
-    /// Asserts unsigned address-then-timestamp order, read continuity, and the opening boundary.
+    /// Asserts the sorted order, read continuity, and the opening boundary.
     ///
-    /// Row zero opens the first address group and has no predecessor, so it gets the group-start
-    /// rules directly. Every later row is compared against the row before it.
+    /// Row zero opens the first run and has nothing above it, so it takes the opening rules.
+    ///
+    /// Every later row is compared against the row before it.
     fn eval_memory_order<AB: AirBuilder>(&self, builder: &mut AB) {
         let main = builder.main();
         let row = main.current_slice();
@@ -254,8 +278,9 @@ impl RamAir {
                 RamBoundary::SingleProof => {
                     transition.assert_zero(read.clone() * (current - same.clone() * previous));
                 }
-                // A segment inherits its opening value from the incoming image instead, so
-                // continuity applies only inside a group.
+                // A continuing proof takes its opening value from the inherited image.
+                //
+                // So continuity applies only within a cell's run.
                 RamBoundary::Segment { .. } => {
                     transition
                         .assert_zero(read.clone() * same.clone() * (current - previous.clone()));
@@ -263,22 +288,26 @@ impl RamAir {
             }
         }
 
-        // A single proof's group-start rule is already folded into the continuity constraint
-        // above, so only a segment needs a separate opening filter here.
+        // A self-contained proof folds its opening rule into the continuity check above.
+        //
+        // Only a continuing proof needs a separate filter here.
         if self.statement.boundary.is_segment() {
             let mut opening = transition.when_ne(same, AB::Expr::ONE);
             self.eval_group_start(&mut opening, next_row);
         }
     }
 
-    /// Asserts what a row that opens an address group owes.
+    /// Asserts what the first row of a cell's run owes.
     ///
-    /// A single proof initialises memory to zero, so an opening read must return zero. A write may
-    /// open a group freely: it overwrites the initial value.
+    /// A self-contained proof starts memory empty, so an opening read returns zero.
     ///
-    /// A segment inherits its opening value from a committed image instead, so an opening access
-    /// is forced to be a read. The value that read returns is fixed by the incoming-image
-    /// declaration, which is what stops a segment inventing the memory it starts from.
+    /// An opening write is free, because it only overwrites that zero.
+    ///
+    /// A continuing proof takes its opening value from a committed image instead.
+    ///
+    /// So its opening access has to be a read, and the image declaration fixes what it returns.
+    ///
+    /// That is what stops a continuing proof inventing the memory it starts from.
     fn eval_group_start<AB: AirBuilder>(&self, builder: &mut AB, row: &[AB::Var]) {
         let layout = &self.layout;
         match self.statement.boundary {
@@ -294,9 +323,9 @@ impl RamAir {
         }
     }
 
-    /// Asserts that the group-end marker names the last sorted row of each address group.
+    /// Asserts that the closing marker names the last sorted row of each cell's run.
     ///
-    /// Only a segment allocates this column, because only a segment exports a final image.
+    /// Only a continuing proof has this column, because only it hands on an image.
     fn eval_group_marker<AB: AirBuilder>(&self, builder: &mut AB) {
         if !self.statement.boundary.is_segment() {
             return;
@@ -307,30 +336,31 @@ impl RamAir {
         let group_end = self.layout.group_end;
         let same_address = self.layout.same_address;
 
-        // A row ends its group exactly when the row after it opens a new one.
+        // A row closes its run exactly when the row after it opens a new one.
         builder.when_transition().assert_eq(
             row[group_end],
             AB::Expr::ONE - next_row[same_address].into(),
         );
 
-        // The last sorted row ends whichever group it belongs to.
+        // The last sorted row closes whichever run it belongs to.
         builder.when_last_row().assert_one(row[group_end]);
     }
 
     /// Declares this memory's tuples on the named channels the enclosing plan balances.
     ///
-    /// Three claims leave this AIR, and none of them is checked here:
+    /// Three claims leave here, and none of them is checked here:
     ///
-    /// - the execution order holds exactly the accesses the machine issued, on `access_bus`;
-    /// - the two orders hold the same accesses, on `order_bus`;
-    /// - in segment mode, the opening and closing values match the committed images.
+    /// - the issuing order holds exactly the accesses the machine issued;
+    /// - the two orders hold the same accesses;
+    /// - a continuing proof's opening and closing values match the committed images.
     ///
-    /// Each is an ordinary multiset claim, discharged by the same product reduction every other
-    /// table in the plan uses. There is no second memory protocol here.
+    /// Each is an ordinary multiset claim on the reduction every other table already uses.
+    ///
+    /// There is no second memory protocol here.
     fn declare<AB: BusInteractionBuilder>(&self, builder: &mut AB) {
         let layout = &self.layout;
 
-        // The machine's chips push each access; this memory pulls it.
+        // The machine's chips produce each access and this memory consumes it.
         let execution = self.tuple::<AB>(builder, layout.execution_access_columns());
         builder.push_bus_interaction(
             &self.statement.access_bus,
@@ -339,7 +369,7 @@ impl RamAir {
             BusActivation::Always,
         );
 
-        // The same execution tuple is the push side of the permutation.
+        // That same access is the producing side of the permutation.
         builder.push_bus_interaction(
             &self.statement.order_bus,
             BusDirection::Push,
@@ -347,7 +377,7 @@ impl RamAir {
             BusActivation::Always,
         );
 
-        // The sorted order pulls it back, so balance proves the two orders agree as multisets.
+        // The sorted order consumes it back, so balance proves the two orders agree.
         let memory = self.tuple::<AB>(builder, layout.memory_access_columns());
         builder.push_bus_interaction(
             &self.statement.order_bus,
@@ -360,7 +390,7 @@ impl RamAir {
             return;
         };
 
-        // The value a group opens with comes from the incoming image.
+        // The value a cell's run opens with comes from the inherited image.
         let image = self.tuple::<AB>(builder, layout.image_columns());
         let opening = AB::Expr::ONE - builder.main().current_slice()[layout.same_address].into();
         builder.push_bus_interaction(
@@ -370,7 +400,7 @@ impl RamAir {
             BusActivation::Boolean(opening),
         );
 
-        // The value a group closes with becomes an entry of the outgoing image.
+        // The value a cell's run closes with becomes an entry of the handed-on image.
         let closing: AB::Expr = builder.main().current_slice()[layout.group_end].into();
         builder.push_bus_interaction(
             outgoing,
@@ -386,7 +416,7 @@ impl RamAir {
         builder: &AB,
         columns: impl Iterator<Item = usize>,
     ) -> Vec<AB::Expr> {
-        // Collecting releases the trace window before the declaration borrows the builder again.
+        // Collecting releases the trace window before the declaration borrows the builder.
         let main = builder.main();
         let row = main.current_slice();
         columns.map(|column| row[column].into()).collect()
@@ -395,7 +425,7 @@ impl RamAir {
 
 impl<F> BaseAir<F> for RamAir {
     fn width(&self) -> usize {
-        // One committed matrix holds both access orders and every witness column.
+        // One committed trace holds both access orders and every witness column.
         self.layout.width
     }
 }
@@ -410,18 +440,23 @@ impl<AB: BusInteractionBuilder> Air<AB> for RamAir {
     }
 }
 
-/// Asserts `right > left` as unsigned little-endian integers, whenever `enabled` is one.
+/// Asserts that the later key exceeds the earlier one, whenever this comparison is running.
 ///
-/// The witness is the difference `right - left`, added back with an explicit ripple adder:
-/// `right = left + delta`, with the carry into the low bit zero and the carry out of the top bit
-/// zero. A refused carry out is what makes the comparison unsigned and non-wrapping, so `right`
-/// really is the larger integer rather than the smaller one seen through a modular reduction.
+/// The witness is the gap between them, added back to the earlier key by an explicit adder.
 ///
-/// The running-or chain forces `delta` to be nonzero, which turns the comparison from `>=` into
-/// `>`. Without it two rows could hold the same address while claiming to open a new group.
+/// The carry into the lowest digit is zero and the carry out of the highest must be too.
 ///
-/// `delta`, `carry`, and `nonzero` may be wider than the compared values: the two comparisons on a
-/// sorted row are mutually exclusive, so they share one witness sized for the wider of the two.
+/// Refusing that carry out is what makes the comparison unsigned and non-wrapping.
+///
+/// The later key is then really the larger one, not the smaller one seen through a wrap.
+///
+/// The running flag forces the gap to be nonzero, which makes the comparison strict.
+///
+/// Without it two rows could hold one cell number while claiming to open a fresh run.
+///
+/// The witness may be wider than the keys being compared.
+///
+/// The two comparisons never run together, so they share one witness sized for the wider.
 fn assert_strict_increase<AB: AirBuilder>(
     builder: &mut AB,
     enabled: &AB::Expr,
@@ -437,7 +472,7 @@ fn assert_strict_increase<AB: AirBuilder>(
     debug_assert!(carry.len() > bits);
     debug_assert!(nonzero.len() >= bits);
 
-    // An addition starts with no carry in.
+    // An addition starts with nothing carried in.
     builder.assert_zero(enabled.clone() * carry[0]);
 
     for bit in 0..bits {
@@ -445,7 +480,7 @@ fn assert_strict_increase<AB: AirBuilder>(
         let difference: AB::Expr = delta[bit].into();
         let carry_in: AB::Expr = carry[bit].into();
 
-        // The sum bit and the carry out are the full-adder identities.
+        // The sum digit and the carry out are the usual adder identities.
         let sum = xor3::<AB::Expr, AB::F>(addend.clone(), difference.clone(), carry_in.clone());
         builder.assert_zero(enabled.clone() * (right[bit].into() - sum));
         builder.assert_zero(
@@ -454,7 +489,7 @@ fn assert_strict_increase<AB: AirBuilder>(
                     - majority::<AB::Expr, AB::F>(addend, difference.clone(), carry_in)),
         );
 
-        // The running or reaches one exactly when some difference bit is set.
+        // The running flag reaches one exactly when some gap digit is set.
         let running = if bit == 0 {
             difference
         } else {
@@ -463,33 +498,33 @@ fn assert_strict_increase<AB: AirBuilder>(
         builder.assert_zero(enabled.clone() * (nonzero[bit].into() - running));
     }
 
-    // A carry out of the top bit means the addition wrapped, so the order is not unsigned.
+    // A carry out of the highest digit means the addition wrapped, so the order is not unsigned.
     builder.assert_zero(enabled.clone() * carry[bits]);
 
-    // A zero difference would only prove `right >= left`.
+    // A zero gap would leave the two keys equal rather than ordered.
     builder.assert_zero(enabled.clone() * (AB::Expr::ONE - nonzero[bits - 1].into()));
 }
 
-/// Exclusive or of two Boolean-valued expressions.
+/// Exclusive or of two bit-valued expressions.
 ///
-/// In characteristic two the correction term vanishes and this is a plain sum.
+/// In characteristic two the correction vanishes and this is a plain sum.
 fn xor<E: Algebra<F>, F: PrimeCharacteristicRing>(left: E, right: E) -> E {
     left.clone() + right.clone() - E::TWO * left * right
 }
 
-/// Exclusive or of three Boolean-valued expressions.
+/// Exclusive or of three bit-valued expressions.
 fn xor3<E: Algebra<F>, F: PrimeCharacteristicRing>(first: E, second: E, third: E) -> E {
     xor::<E, F>(xor::<E, F>(first, second), third)
 }
 
-/// Majority of three Boolean-valued expressions, which is a full adder's carry out.
+/// Majority of three bit-valued expressions, which is an adder's carry out.
 fn majority<E: Algebra<F>, F: PrimeCharacteristicRing>(first: E, second: E, third: E) -> E {
-    // Three pairwise products count each all-ones input three times, so two copies come back off.
+    // Three pairwise products count an all-ones input three times, so two copies come back off.
     first.clone() * second.clone() + first.clone() * third.clone() + second.clone() * third.clone()
         - E::TWO * first * second * third
 }
 
-/// Inclusive or of two Boolean-valued expressions.
+/// Inclusive or of two bit-valued expressions.
 fn or<E: Algebra<F>, F: PrimeCharacteristicRing>(left: E, right: E) -> E {
     left.clone() + right.clone() - left * right
 }
