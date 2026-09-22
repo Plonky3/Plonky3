@@ -51,12 +51,14 @@ const PRODUCTION_LOG_CHUNK: usize = 14;
 /// The hypercube points one task accumulates before its partial combines.
 const CHUNK: usize = 1 << LOG_CHUNK;
 
-/// Deepest production compact depth. Benchmark controls can force another supported depth.
+/// Deepest compact depth the production path requests.
 ///
 /// A run too small for it steps down to the deepest depth its size floor admits.
-const COMPACT_ROUNDS: usize = 4;
-/// Shallowest production compact depth. A run too small for it takes the dense path.
-const COMPACT_MIN_ROUNDS: usize = 2;
+const COMPACT_PRODUCTION_ROUNDS: usize = 4;
+/// Shallowest compact depth the production path requests.
+///
+/// A run too small for it takes the dense path.
+const COMPACT_PRODUCTION_MIN_ROUNDS: usize = 2;
 /// The generic compact driver is intentionally bounded while its ranked shapes are measured.
 const COMPACT_MAX_ROUNDS: usize = 6;
 /// Keep at least this many equality blocks per bank in the production path.
@@ -940,14 +942,14 @@ impl<EF: TowerLevel> BitRingSwitch<EF> {
 
     /// The compact depth the production path requests over `n` free variables.
     ///
-    /// The deepest depth the unforced gate admits, from [`COMPACT_ROUNDS`] down to
-    /// [`COMPACT_MIN_ROUNDS`]. Where none is admitted it is the shallowest, which the gate then
-    /// sends down the dense path.
+    /// The deepest depth the unforced gate admits, from [`COMPACT_PRODUCTION_ROUNDS`] down to
+    /// [`COMPACT_PRODUCTION_MIN_ROUNDS`]. Where none is admitted it is the shallowest, which the
+    /// gate then sends down the dense path.
     fn production_depth(&self, n: usize) -> usize {
-        (COMPACT_MIN_ROUNDS..=COMPACT_ROUNDS)
+        (COMPACT_PRODUCTION_MIN_ROUNDS..=COMPACT_PRODUCTION_ROUNDS)
             .rev()
             .find(|&depth| self.compact_depth_is_eligible(n, depth, false))
-            .unwrap_or(COMPACT_MIN_ROUNDS)
+            .unwrap_or(COMPACT_PRODUCTION_MIN_ROUNDS)
     }
 
     /// Common compact-depth guards, evaluated before bank slices or shifts are formed.
@@ -2478,24 +2480,27 @@ mod tests {
         let reduction = BitRingSwitch::new(&Point::new(point)).unwrap();
         // A production build first accepts 22 free variables, and a test build 9.
         assert_eq!(
-            compact_size_floor(COMPACT_MIN_ROUNDS, PRODUCTION_LOG_CHUNK),
+            compact_size_floor(COMPACT_PRODUCTION_MIN_ROUNDS, PRODUCTION_LOG_CHUNK),
             22
         );
-        assert_eq!(compact_size_floor(COMPACT_MIN_ROUNDS, LOG_CHUNK), 9);
+        assert_eq!(
+            compact_size_floor(COMPACT_PRODUCTION_MIN_ROUNDS, LOG_CHUNK),
+            9
+        );
         assert_eq!(reduction.num_variables(), 9);
         assert!(reduction.compact_depth_is_eligible(
             reduction.num_variables(),
-            COMPACT_MIN_ROUNDS,
+            COMPACT_PRODUCTION_MIN_ROUNDS,
             false,
         ));
         assert!(!reduction.compact_depth_is_eligible(
             reduction.num_variables() - 1,
-            COMPACT_MIN_ROUNDS,
+            COMPACT_PRODUCTION_MIN_ROUNDS,
             false,
         ));
         assert_eq!(
             reduction.production_depth(reduction.num_variables()),
-            COMPACT_MIN_ROUNDS
+            COMPACT_PRODUCTION_MIN_ROUNDS
         );
         let mut dense_challenger = challenger();
         let dense = reduction.prove_with_compact_depth::<EF, _, _>(
@@ -2522,26 +2527,29 @@ mod tests {
         // and a run below the shallowest floor asks for the shallowest, which runs dense.
         let (reduction, ..) = fixture(0xDE97, 16);
         let floor = |depth| compact_size_floor(depth, LOG_CHUNK);
-        let below = floor(COMPACT_MIN_ROUNDS) - 1;
-        assert!(!reduction.compact_depth_is_eligible(below, COMPACT_MIN_ROUNDS, false));
-        assert_eq!(reduction.production_depth(below), COMPACT_MIN_ROUNDS);
-        for depth in COMPACT_MIN_ROUNDS..=COMPACT_ROUNDS {
+        let below = floor(COMPACT_PRODUCTION_MIN_ROUNDS) - 1;
+        assert!(!reduction.compact_depth_is_eligible(below, COMPACT_PRODUCTION_MIN_ROUNDS, false));
+        assert_eq!(
+            reduction.production_depth(below),
+            COMPACT_PRODUCTION_MIN_ROUNDS
+        );
+        for depth in COMPACT_PRODUCTION_MIN_ROUNDS..=COMPACT_PRODUCTION_ROUNDS {
             assert_eq!(reduction.production_depth(floor(depth)), depth);
         }
         assert_eq!(
-            reduction.production_depth(floor(COMPACT_ROUNDS) + 3),
-            COMPACT_ROUNDS
+            reduction.production_depth(floor(COMPACT_PRODUCTION_ROUNDS) + 3),
+            COMPACT_PRODUCTION_ROUNDS
         );
 
         // Kept row coordinates stay out of the head, which caps it below the size floor.
         let mut rng = SmallRng::seed_from_u64(0xDE98);
         let absorbed = BitRingSwitch::<EF>::ABSORBED;
-        let r = Point::<EF>::rand(&mut rng, floor(COMPACT_ROUNDS) + absorbed);
-        let kept_rows = floor(COMPACT_ROUNDS) - (COMPACT_ROUNDS - 1);
+        let r = Point::<EF>::rand(&mut rng, floor(COMPACT_PRODUCTION_ROUNDS) + absorbed);
+        let kept_rows = floor(COMPACT_PRODUCTION_ROUNDS) - (COMPACT_PRODUCTION_ROUNDS - 1);
         let successor = BitRingSwitch::with_successor(&r, kept_rows + absorbed).unwrap();
         assert_eq!(
-            successor.production_depth(floor(COMPACT_ROUNDS)),
-            COMPACT_ROUNDS - 1
+            successor.production_depth(floor(COMPACT_PRODUCTION_ROUNDS)),
+            COMPACT_PRODUCTION_ROUNDS - 1
         );
     }
 
