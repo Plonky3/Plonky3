@@ -532,7 +532,8 @@ impl LegacySecurity {
 /// Follows Theorems 2 and 3 of [2024/1553](https://eprint.iacr.org/2024/1553)
 /// (round-by-round soundness; unique-decoding and list-decoding regimes), with the
 /// Johnson MCA bound from [2026/2056](https://eprint.iacr.org/2026/2056)
-/// Theorem 5.12 and §7.2, composed by `p3-security`.
+/// Theorem 5.12 and §7.2, Equation (88)'s order-zero case (Lemma 5.3),
+/// composed by `p3-security`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProvenSecurity {
     pub unique_decoding_bits: usize,

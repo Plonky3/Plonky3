@@ -141,6 +141,10 @@ impl SecurityAssumption {
     /// decodes at a different explicit `m` (e.g. FRI's `best_m`) — the
     /// fixed `m = 10` here is a WHIR-style default, not necessarily the `m`
     /// the caller's list-decoding regime actually operates at.
+    ///
+    /// # Panics
+    /// Panics when `num_functions < 2`: this API bounds a nontrivial batching
+    /// challenge. Callers must handle empty and singleton batches separately.
     #[must_use]
     pub fn prox_gaps_error(
         &self,
@@ -168,6 +172,9 @@ impl SecurityAssumption {
     /// `log_eta` and defers to [`Self::prox_gaps_error_jb_at_m`] — at
     /// `log_eta = self.log_eta(log_inv_rate)` that derivation reduces to exactly `m = 10`,
     /// [`Self::prox_gaps_error`]'s fixed safety choice.
+    ///
+    /// # Panics
+    /// Panics when `num_functions < 2`, as in [`Self::prox_gaps_error`].
     #[must_use]
     pub fn prox_gaps_error_at_log_eta(
         &self,
@@ -225,6 +232,22 @@ impl SecurityAssumption {
     /// [`crate::fri::best_ldr_m`]) and needs the batch-combination term
     /// evaluated at that same radius rather than the WHIR-style fixed
     /// safety margin.
+    ///
+    /// # Decoding-radius contract
+    /// The caller must use agreement at least
+    /// `alpha = (1 + 1/(2m)) * sqrt(k/n)`, where `k = 2^log_degree`.
+    /// Writing `rho_minus = (k - 1)/n`, this gives
+    /// `eta0 = alpha - sqrt(rho_minus) >= sqrt(rho_minus)/(2m)`.
+    /// Thus the theorem's minimum `max(3, ceil(sqrt(rho_minus)/(2*eta0)))`
+    /// is at most the supplied `m >= 3`; Appendix B.1's interpolant remains
+    /// valid, and the closed exceptional-count bound grows with `m`.
+    /// Supplying a smaller `m` than the surrounding radius permits is unsound.
+    ///
+    /// Unsupported `m` or inverse rate returns `-∞` security bits through the
+    /// shared helper. The batch-size precondition is checked separately.
+    ///
+    /// # Panics
+    /// Panics when `num_functions < 2`, as in [`Self::prox_gaps_error`].
     #[must_use]
     pub fn prox_gaps_error_jb_at_m(
         log_degree: usize,
@@ -357,6 +380,18 @@ mod tests {
     fn prox_gaps_error_panics_when_num_functions_is_zero() {
         let assumption = SecurityAssumption::UniqueDecoding;
         let _ = assumption.prox_gaps_error(1, 1, 64, 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "num_functions must be >= 2")]
+    fn explicit_johnson_gap_rejects_a_singleton_batch() {
+        let _ = SecurityAssumption::prox_gaps_error_jb_at_m(1, 1, 64, 1, 3);
+    }
+
+    #[test]
+    #[should_panic(expected = "num_functions must be >= 2")]
+    fn explicit_johnson_gap_rejects_an_empty_batch() {
+        let _ = SecurityAssumption::prox_gaps_error_jb_at_m(1, 1, 64, 0, 3);
     }
 
     #[test]

@@ -35,18 +35,55 @@ pub const LDR_M_CAP: usize = 1000;
 /// The chosen agreement parameter
 /// `alpha = (1 + 1/(2m))·sqrt(k/n)` gives `eta0 >= sqrt(rho_minus)/(2m)`;
 /// therefore an explicit `m >= 3` can be larger than the theorem's minimum
-/// and still satisfies the DKT26 Appendix B.1 interpolant. For a degree-`ell`
-/// curve, write `D = k - 1` and `t = m + 1/2`. Its weighted monomials use
-/// `i + D·j < t·sqrt(Dn)` and
-/// `ell·j + h < ell·t²/(3·rho_minus)`, hence `B_Z < ell·t²/(3·rho_minus)`.
-/// Section 7.2 Equation (88), with Appendix B.2's closed estimate, is linear
-/// in `ell` and yields the displayed `ell·C` factor without multiplying a
-/// rounded finite line count.
+/// and still satisfies the DKT26 Appendix B.1 interpolant.
+///
+/// # Polynomial-curve extension derived here
+///
+/// The paper states Proposition B.1 for a line. To extend its dimension
+/// count, put `D = k - 1`, `t = m + 1/2`, `s = t·sqrt(n/D)` and choose
+/// `M = ceil(Ds)`, `B = ceil(s) - 1`, `H = ceil(ell·s²/3) - 1`.
+/// Use monomials `X^i Y^j Z^h` with `i + D·j < Ds` and
+/// `ell·j + h < ell·s²/3`. Since `s²/3 > s > B >= m`, no slice is truncated.
+/// Translation by a degree-`ell` curve bounds the challenge degree of each
+/// multiplicity constraint indexed by `(a,b)` by `H - ell·b`. Thus
+///
+/// ```text
+/// N_var = sum_{j=0}^B (M - D·j)(H + 1 - ell·j),
+/// N_eq  = n·sum_{b=0}^{m-1} (m - b)(H + 1 - ell·b).
+/// K = sum_{j=0}^B (M - D·j),  W = sum_{j=0}^B j(M - D·j),
+/// R = n·m(m+1)/2,            V = n·m(m-1)(m+1)/6,
+/// N_var - N_eq = (H + 1)(K - R) - ell·(W - V).
+/// ```
+///
+/// The ceilings cannot be pulled outside `ell`. To account for their
+/// residual, let `u = ceil(s) - s` and first use `M = Ds`, giving `K0,W0`.
+/// Direct expansion yields
+///
+/// ```text
+/// K0 - R = D·(s + u(1-u))/2 + n/8 > 0,
+/// ((s²/3)(K0-R) - W0 + V)/D
+///   = s/6 + s⁴/(24t²) + u(1-u)(s²-3s-2u+1)/6 + V/D > 0.
+/// ```
+///
+/// Every summand is nonnegative: `s >= 7/2` and `0 <= u < 1` give
+/// `s²-3s-2u+1 >= 3/4`. Rounding `M` upward increases the second expression
+/// because `s²/3 > j`; rounding `H+1` upward increases the surplus because
+/// `K-R > 0`. Hence `N_var > N_eq`, even with both rounding residuals.
+/// The specialization has degree `< Ds <= m·A`, so multiplicity `m` at
+/// `A = ceil(alpha·n)` agreements forces the required identity.
+///
+/// Apply Lemma 5.3, as stated in §7.2 Equation (88)'s order-zero case.
+/// This is characteristic-free, unlike that section's positive-order
+/// corollary. Since `H/ell < s²/3`, Appendix B.2's termwise estimate has
+/// the same slack after dividing by `ell`, giving `E < ell·C`. This does
+/// not multiply an already-rounded finite line count.
 ///
 /// Theorem 5.12 requires positive degree, inverse rate, and `m >= 3`. The
-/// constant-code case uses the conservative `binom(n, 2)` line count from
-/// Lemma 3.2. Inputs outside those supported cases return `+∞` so callers
-/// fail closed.
+/// constant-code case instead uses the conservative `binom(n, 2)` count
+/// from Lemma 3.2, independent of `m`. This can be substantially tighter;
+/// it is a separate bound for future callers admitting dimension one,
+/// not a continuation of the positive-degree formula. Inputs outside
+/// those supported cases return `+∞` so callers fail closed.
 pub(crate) fn johnson_exceptional_line_count_log2(
     log_degree: usize,
     log_inv_rate: usize,
@@ -150,6 +187,100 @@ pub fn compute_upper_m(trace_length: usize, max_combo: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::johnson_exceptional_line_count_log2;
+    use crate::assumption::SecurityAssumption;
+
+    struct CurveCertificate {
+        challenge_degree: u128,
+        variables: u128,
+        equations: u128,
+        exceptional_count: f64,
+    }
+
+    /// Reconstruct Proposition B.1's scaled support and Equation (88), using
+    /// exact integer cutoffs rather than the implementation's closed constant.
+    fn finite_curve_certificate(d: usize, r: usize, m: usize, ell: usize) -> CurveCertificate {
+        let ceil_sqrt_ratio = |num: u128, den: u128| {
+            let root = (num / den).isqrt();
+            root + u128::from(root * root * den < num)
+        };
+        let k = 1u128 << d;
+        let n = k << r;
+        let degree = k - 1;
+        let m = m as u128;
+        let ell = ell as u128;
+        let four_t_squared = (2 * m + 1).pow(2);
+        let spectral_cutoff = ceil_sqrt_ratio(four_t_squared * degree * n, 4);
+        let jet_degree = ceil_sqrt_ratio(four_t_squared * n, 4 * degree) - 1;
+        // ceil(x/y) - 1 = (x - 1)/y for positive integers x,y.
+        let challenge_degree = (ell * four_t_squared * n - 1) / (12 * degree);
+        let agreements = ceil_sqrt_ratio(four_t_squared * k * n, 4 * m * m);
+        assert!(agreements > k && agreements <= n);
+        assert!(jet_degree >= m && challenge_degree >= ell * jet_degree);
+
+        let variables = (0..=jet_degree)
+            .map(|j| (spectral_cutoff - degree * j) * (challenge_degree + 1 - ell * j))
+            .sum();
+        let equations = n
+            * (0..m)
+                .map(|b| (m - b) * (challenge_degree + 1 - ell * b))
+                .sum::<u128>();
+        let psi = 1
+            + (2 * degree - 1) * (2 * jet_degree - 1)
+            + 2 * jet_degree.saturating_sub(2 * degree + 1);
+        let denominator = agreements - degree;
+        let numerator = ((2 * jet_degree - 1) * challenge_degree
+            + ell * (n - degree - 1) * jet_degree)
+            * denominator
+            + (n - degree) * (ell * jet_degree + challenge_degree * psi);
+        CurveCertificate {
+            challenge_degree,
+            variables,
+            equations,
+            exceptional_count: numerator as f64 / denominator as f64,
+        }
+    }
+
+    #[test]
+    fn curve_interpolation_keeps_the_rounding_residuals() {
+        // The ell=3 support has H=97, exceeding 3 times the line's H=32.
+        // Exact-cutoff cases also catch replacing ceil(x)-1 by floor(x).
+        for (d, r, m, ell, h, variables, equations) in [
+            (1, 1, 3, 3, 48, 1204, 1128),
+            (1, 2, 3, 1, 32, 1650, 1552),
+            (1, 2, 3, 3, 97, 4895, 4608),
+            (2, 2, 4, 1, 35, 6127, 5600),
+        ] {
+            let certificate = finite_curve_certificate(d, r, m, ell);
+            assert_eq!(certificate.challenge_degree, h);
+            assert_eq!(certificate.variables, variables);
+            assert_eq!(certificate.equations, equations);
+        }
+        let line = finite_curve_certificate(1, 2, 3, 1);
+        let curve = finite_curve_certificate(1, 2, 3, 3);
+        assert_eq!(line.exceptional_count, 2293.75);
+        assert_eq!(curve.exceptional_count, 6950.75);
+        assert!(curve.exceptional_count > 3.0 * line.exceptional_count);
+    }
+
+    #[test]
+    fn johnson_curve_bound_covers_finite_interpolation_certificates() {
+        for d in [1, 2, 3, 5, 8, 12, 20] {
+            for r in [1, 2, 3, 4, 8] {
+                for m in [3, 4, 10, 31, 100, 1000] {
+                    for ell in [1, 2, 3, 7, 31, 257, 1_572_866] {
+                        let certificate = finite_curve_certificate(d, r, m, ell);
+                        assert!(certificate.variables > certificate.equations);
+                        let closed_log2 = 256.0
+                            - SecurityAssumption::prox_gaps_error_jb_at_m(d, r, 256, ell + 1, m);
+                        assert!(
+                            libm::log2(certificate.exceptional_count) < closed_log2,
+                            "d={d}, r={r}, m={m}, ell={ell}"
+                        );
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn johnson_line_count_matches_dkt26_vectors() {
@@ -169,9 +300,12 @@ mod tests {
 
     #[test]
     fn johnson_line_count_handles_constant_and_invalid_inputs() {
-        let constant = johnson_exceptional_line_count_log2(0, 3, 3);
-        let expected = libm::log2((8.0 * 7.0) / 2.0);
-        assert!((constant - expected).abs() < 1e-12);
+        for (r, pairs) in [(1, 1.0), (2, 6.0), (3, 28.0)] {
+            for m in [3, 10, 1000] {
+                let constant = johnson_exceptional_line_count_log2(0, r, m);
+                assert!((constant - libm::log2(pairs)).abs() < 1e-12);
+            }
+        }
         assert!(johnson_exceptional_line_count_log2(1, 0, 3).is_infinite());
         assert!(johnson_exceptional_line_count_log2(1, 1, 2).is_infinite());
         assert!(johnson_exceptional_line_count_log2(usize::MAX, usize::MAX, 3).is_finite());

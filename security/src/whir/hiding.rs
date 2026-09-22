@@ -46,8 +46,8 @@ pub enum HidingBoundClassification {
     Conditional,
     /// The term is a numerical approximation, not a conservative theorem bound.
     ///
-    /// Retained for compatibility with analyses that use an explicitly
-    /// approximate bound; the current Johnson MCA helper is theorem-backed.
+    /// Retained for API compatibility and downstream constructions of
+    /// approximate bounds. This crate's reports do not currently produce it.
     Approximation,
     /// No accepted numerical bound is encoded for this geometry.
     Unavailable,
@@ -497,6 +497,9 @@ fn code_report(
         |log_inv_rate| {
             let one_minus_delta = one_minus_delta.expect("a positive-rate envelope has a radius");
             let query_bits = assumption.queries_error(log_inv_rate, effective_queries);
+            // Two functions give curve degree one: Johnson's Proven label here
+            // uses the literal line theorem, without the polynomial-curve extension.
+            // Its complete bound needs no legacy one-bit reporting reserve.
             let mca_bits =
                 assumption.prox_gaps_error(log_degree, log_inv_rate, field_order_log2_floor, 2)
                     - libm::log2(width as f64);

@@ -189,7 +189,8 @@ pub(crate) fn initial_batching_error(
 /// This is [`SecurityAssumption::prox_gaps_error_at_log_eta`] with the linear combination's
 /// oracle count replaced by Lemma 4.13's degree-gap-inflated `ell`: `err*` is the §4.1
 /// abstraction both lemmas invoke, so the conjectured route (Conjecture 5.6, `CapacityBound`)
-/// and the provable one (DKT26 §7.2, `JohnsonBound`) each inflate by `ell` exactly as
+/// and the provable one (DKT26 §7.2, Equation (88), order zero, `JohnsonBound`)
+/// each inflate by `ell` exactly as
 /// they do by the oracle count. Sharing the function, rather than restating either regime's
 /// bound, is what keeps `eta` from being derived off two different Johnson-regime bounds
 /// depending on which term is asked about.
@@ -712,15 +713,17 @@ mod tests {
     #[test]
     fn combine_eta_johnson_bound_reaches_a_raw_100_bit_target() {
         // DKT26 lifts this Combine term above 100 bits; BCHKS25 left it below 96.
-        // This checks the raw term, before a full schedule's union-bound buffer.
+        // The eta -> log_eta round trip takes ceil just above 10, hence m=11.
+        // The resulting raw margin is 0.4293 bits (m=10 would give 0.8230),
+        // before a full schedule's union-bound buffer. Pin the production path.
         let jb = SecurityAssumption::JohnsonBound;
         let (log_inv_rate, log_d_star, ell) = (1, 20, (1u64 << 20) + (1 << 19) + 3);
         let upper = jb.stir_eta_upper_bound(log_inv_rate);
         let bits =
             combine_error_at_log_eta(jb, log_d_star, log_inv_rate, 155, ell, libm::log2(upper));
         assert!(
-            (100.0..101.0).contains(&bits),
-            "expected JB + Combine to clear 100 bits, got {bits}"
+            (bits - 100.42931092148666).abs() < 1e-10,
+            "expected the m=11 finite-bound margin, got {bits}"
         );
         let eta = jb
             .stir_combine_eta(155, log_inv_rate, log_d_star, ell, 100)

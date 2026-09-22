@@ -182,6 +182,7 @@ mod tests {
     use p3_field::Field;
     use p3_field::extension::BinomialExtensionField;
     use p3_merkle_tree::MerkleTreeMmcs;
+    use p3_security::ErrorBits;
     use p3_sumcheck::layout::PrefixProver;
     use p3_sumcheck::{OpeningBatch, OpeningProtocol, PrescribedPointPcs, TableShape, TableSpec};
     use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
@@ -213,6 +214,24 @@ mod tests {
                 soundness_type,
                 security_level: 32,
                 pow_bits: 0,
+            },
+        )
+        .unwrap();
+        Pcs::new(config, Radix2DFTSmallBatch::default(), mmcs)
+    }
+
+    fn johnson_reserve_pcs() -> Pcs {
+        let perm = Perm::new_from_rng_128(&mut SmallRng::seed_from_u64(73));
+        let mmcs = Mmcs::new(Hash::new(perm.clone()), Compress::new(perm), 0);
+        let config = WhirConfig::new(
+            4,
+            ProtocolParameters {
+                starting_log_inv_rate: 1,
+                round_log_inv_rates: vec![],
+                folding_factor: FoldingFactor::Constant(4),
+                soundness_type: SecurityAssumption::JohnsonBound,
+                security_level: 112,
+                pow_bits: 16,
             },
         )
         .unwrap();
@@ -271,5 +290,55 @@ mod tests {
         let mut pcs = pcs();
         pcs.config.final_queries = 0;
         assert!(pcs.prescribed_security(&protocol(12)).is_none());
+    }
+
+    #[test]
+    fn johnson_report_reserves_one_bit_for_each_proximity_gap() {
+        let pcs = johnson_reserve_pcs();
+        let protocol = protocol(4);
+        let report = pcs
+            .prescribed_security(&protocol)
+            .expect("WHIR supplies Johnson security evidence");
+        assert!(pcs.config.round_parameters.is_empty());
+        assert_eq!(pcs.config.folding_schedule, [4]);
+        assert_eq!(pcs.config.final_sumcheck_rounds, 0);
+        let assumption = SecurityAssumption::JohnsonBound;
+        let field_bits = EF::bits() - 1;
+        let num_claims = pcs.config.commitment_ood_samples + 1;
+        let mut expected_terms = vec![
+            ErrorBits::from_log2(pcs.config.initial_claims_error(num_claims)),
+            ErrorBits::from_log2(assumption.ood_error(
+                pcs.config.num_variables,
+                pcs.config.starting_log_inv_rate,
+                field_bits,
+                pcs.config.commitment_ood_samples,
+            )),
+        ];
+        // The four identical binary folds compose to two terms with two bits
+        // subtracted; the first subtraction is the Johnson reserve under test.
+        expected_terms.push(ErrorBits::from_log2(
+            assumption.prox_gaps_error(
+                pcs.config.num_variables,
+                pcs.config.starting_log_inv_rate,
+                field_bits,
+                2,
+            ) - 1.0
+                + pcs.config.starting_folding_pow_bits as f64
+                - 2.0,
+        ));
+        expected_terms.push(ErrorBits::from_log2(
+            assumption.fold_sumcheck_error(
+                field_bits,
+                pcs.config.num_variables,
+                pcs.config.starting_log_inv_rate,
+            ) + pcs.config.starting_folding_pow_bits as f64
+                - 2.0,
+        ));
+        expected_terms.push(ErrorBits::from_log2(
+            assumption.queries_error(pcs.config.starting_log_inv_rate, pcs.config.final_queries)
+                + pcs.config.final_pow_bits as f64,
+        ));
+        let expected = ErrorBits::sum(&expected_terms).bits();
+        assert!((report.error().bits() - expected).abs() < 1e-10);
     }
 }

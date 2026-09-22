@@ -4,7 +4,9 @@
 //! Legacy regime: historical pre-random-words ethSTARK query estimate, [2021/582].
 //! Proven regime: round-by-round, [2024/1553] Theorems 2 & 3, with the
 //! DKT26 Johnson line-MCA commit bound ([2026/2056] Theorem 5.12 and
-//! Appendix B.1–B.2, extended to powers batching via §7.2).
+//! Appendix B.1–B.2, extended to powers batching through the order-zero
+//! case of §7.2, Equation (88)). Its characteristic-free transfer is Lemma
+//! 5.3, not the positive-order powers-batching corollary in that section.
 //!
 //! Correspondence with [`crate::assumption::SecurityAssumption`]:
 //! - [`proven_error_udr`] is the FRI counterpart of `UniqueDecoding`
@@ -184,6 +186,9 @@ pub fn commit_phase_error_udr(regime: &FriRegime, shape: &InstanceShape) -> Opti
 /// [2024/1553] and take the minimum of their security bits. Round-by-
 /// round soundness is dominated by round 0 (largest `n`), so we use
 /// `n = lde_domain_size` for every round.
+/// For positive-degree codes at `m >= 3`, MCA gives fewer security bits and
+/// determines this minimum. Reconstruction can instead cap the separate
+/// constant-code bound.
 ///
 /// Returns `None` when `regime.max_log_arity` is `0` (folding factor `1`,
 /// i.e. no fold at all) — such a regime has no commit-phase round, rather
