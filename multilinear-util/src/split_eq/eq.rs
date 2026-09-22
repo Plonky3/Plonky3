@@ -70,10 +70,18 @@ impl<F: Field, EF: ExtensionField<F>> EqMaybePacked<F, EF> {
 
     /// Converts this table to an unpacked equality table in another field.
     ///
-    /// The packed representation is streamed in logical scalar lane order and the
-    /// destination deliberately uses unpacked storage. The caller supplies the same
-    /// field-homomorphic `From<EF>` conversion contract as the representation prover;
-    /// lanes are never reinterpreted across fields.
+    /// A packed source is streamed in logical scalar lane order, and each lane goes through the
+    /// field-homomorphic `From<EF>` conversion the representation prover already requires.
+    /// No lane is reinterpreted across fields.
+    ///
+    /// `new_packed` keeps a table scalar below `log_2(W)` variables, so a packed table always
+    /// holds a whole number of lane groups and the stream emits no padding lane.
+    ///
+    /// The result is stored flat for its consumer, the suffix weight builder in the
+    /// representation field, which accumulates it into flat scalar buffers through
+    /// `SplitEq::accumulate_into` and `accumulate_next_chunk_into`.
+    /// Those kernels read a flat factor directly, but split a packed one back into lanes once per
+    /// outer weight.
     pub(super) fn to_field<R>(&self) -> EqMaybePacked<R, R>
     where
         R: Field + From<EF>,
