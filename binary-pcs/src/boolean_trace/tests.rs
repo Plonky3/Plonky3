@@ -12,6 +12,9 @@ use p3_symmetric::CryptographicHasher;
 use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
 
+use super::evaluate::{BLOCKS_PER_TASK, packed_column_sums};
+use super::gather::GATHER_GROUP;
+use super::plan::{ColumnClaim, column_claims, covers_every_value};
 use super::*;
 use crate::params::BinaryPcsParams;
 use crate::test_util::{MyChallenger, MyMmcs, challenger, mmcs};

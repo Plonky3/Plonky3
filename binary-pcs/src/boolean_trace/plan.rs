@@ -1,0 +1,372 @@
+//! Planning an opening: where each column lands, which route discharges it, and where
+//! each value sits.
+
+use alloc::vec::Vec;
+
+use p3_binary_dft::EncodableLevel;
+use p3_binary_field::TowerLevel;
+use p3_challenger::FieldChallenger;
+use p3_challenger::fs::TranscriptField;
+use p3_field::Field;
+use p3_multilinear_util::point::Point;
+use p3_sumcheck::layout::{Table, TablePlacement, plan_stacked_layout};
+use p3_sumcheck::{OpeningEvals, OpeningPointMismatch, OpeningProtocol, TableShape};
+
+use super::{BooleanTraceCommitment, BooleanTraceCommitmentError};
+use crate::boolean::{BitOpening, BitReadings, BooleanBackend};
+use crate::boolean_trace_transcript::ColumnBatchShape;
+use crate::fold::{ChallengeField, FoldAlphabet};
+use crate::packing::Coordinates;
+
+impl<EF, B> BooleanTraceCommitment<EF, B>
+where
+    EF: ChallengeField<EF>
+        + EncodableLevel
+        + TranscriptField
+        + TowerLevel
+        + FoldAlphabet<EF>
+        + Coordinates,
+    B: BooleanBackend<EF>,
+{
+    /// Where each table's columns land in the bit witness, planned from the shapes.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error unless the shapes stack to the committed arity.
+    pub(super) fn placements(
+        &self,
+        shapes: &[TableShape],
+    ) -> Result<Vec<TablePlacement>, BooleanTraceCommitmentError<B::Error>> {
+        // Prover and verifier both plan from the public shapes, so neither picks its own.
+        let (arity, placements) = plan_stacked_layout(shapes);
+        if arity != self.num_variables() {
+            return Err(BooleanTraceCommitmentError::StackedArity {
+                expected: self.num_variables(),
+                actual: arity,
+            });
+        }
+        Ok(placements)
+    }
+
+    /// The bit claims the per-column route raises, in transcript order.
+    ///
+    /// One claim per column a batch reads, that batch's point prefixed by the slot address,
+    /// asking for whichever readings the claim's entry in the plan names.
+    pub(super) fn bit_openings(
+        protocol: &OpeningProtocol,
+        claims: &[ColumnClaim],
+        points: &[Point<EF>],
+        placements: &[TablePlacement],
+    ) -> Vec<BitOpening<EF>> {
+        let shapes = protocol.table_shapes();
+
+        // Placements arrive largest table first, so index them by the table each one owns.
+        let mut by_table = alloc::vec![None; shapes.len()];
+        for placement in placements {
+            by_table[placement.idx()] = Some(placement);
+        }
+
+        claims
+            .iter()
+            .map(|claim| {
+                let placement =
+                    by_table[claim.table].expect("the planner places every supplied shape");
+                BitOpening {
+                    // Slot address as the leading coordinates, the row point as the trailing ones.
+                    point: placement.selectors()[claim.column].lift_prefix(&points[claim.opening]),
+                    // The successor view steps within the rows, never into the slot address.
+                    row_variables: shapes[claim.table].num_variables(),
+                    current: claim.current_at.is_some(),
+                    next: claim.next_at.is_some(),
+                }
+            })
+            .collect()
+    }
+
+    /// Validate all public opening metadata without constructing per-column claims.
+    pub(super) fn validate_opening(
+        &self,
+        protocol: &OpeningProtocol,
+        points: &[Point<EF>],
+    ) -> Result<Vec<TablePlacement>, BooleanTraceCommitmentError<B::Error>> {
+        let placements = self.placements(&protocol.table_shapes())?;
+        protocol
+            .check_points(points)
+            .map_err(|mismatch| match mismatch {
+                OpeningPointMismatch::Count { expected, actual } => {
+                    BooleanTraceCommitmentError::PointCount { expected, actual }
+                }
+                OpeningPointMismatch::Arity {
+                    table,
+                    expected,
+                    actual,
+                } => BooleanTraceCommitmentError::PointArity {
+                    table,
+                    expected,
+                    actual,
+                },
+            })?;
+        Ok(placements)
+    }
+
+    /// Validate retained source shapes before any sampled point or opening transcript is used.
+    pub(super) fn validate_source_shapes(
+        tables: &[Table<EF>],
+        protocol: &OpeningProtocol,
+    ) -> Result<(), BooleanTraceCommitmentError<B::Error>> {
+        let expected = protocol.table_shapes();
+        if tables.len() != expected.len() {
+            return Err(BooleanTraceCommitmentError::TableCountMismatch {
+                expected: expected.len(),
+                actual: tables.len(),
+            });
+        }
+        for (table, expected) in expected.iter().copied().enumerate() {
+            let actual = tables[table].shape();
+            if actual != expected {
+                return Err(BooleanTraceCommitmentError::TableShapeMismatch {
+                    table,
+                    expected,
+                    actual,
+                });
+            }
+        }
+        Ok(())
+    }
+}
+
+/// How one opening protocol is discharged against the bit commitment.
+///
+/// A function of the protocol alone: the security assessment, the prover and the verifier
+/// read the same resolution.
+#[derive(Clone, Debug)]
+pub(super) enum OpeningRoute {
+    /// One table, every batch reading all of it at the current row and either none or all of
+    /// it one row ahead: one reduction per batch, over one shared column point.
+    Batched(ColumnBatchShape),
+    /// Any other protocol: one reduction per column read, in transcript order.
+    PerColumn(Vec<ColumnClaim>),
+}
+
+impl OpeningRoute {
+    /// Resolve the route a protocol takes.
+    pub(super) fn new(protocol: &OpeningProtocol) -> Self {
+        batched_shape(protocol)
+            .map_or_else(|| Self::PerColumn(column_claims(protocol)), Self::Batched)
+    }
+
+    /// Reductions the bit commitment answers on this route.
+    pub(super) const fn num_reductions(&self) -> usize {
+        match self {
+            Self::Batched(shape) => shape.num_batches,
+            Self::PerColumn(claims) => claims.len(),
+        }
+    }
+
+    /// Whether some reduction reads a successor view over more rows than one element absorbs.
+    pub(super) fn successor_tensors(&self, shapes: &[TableShape], absorbed: usize) -> bool {
+        match self {
+            Self::Batched(shape) => shape.next && shape.table_variables > absorbed,
+            Self::PerColumn(claims) => claims.iter().any(|claim| {
+                claim.next_at.is_some() && shapes[claim.table].num_variables() > absorbed
+            }),
+        }
+    }
+}
+
+/// The complete single-table shape the batched route handles, if the protocol has one.
+///
+/// Every batch reads the whole width at the current row, and either none of it or all
+/// of it one row ahead, the same way in every batch.
+fn batched_shape(protocol: &OpeningProtocol) -> Option<ColumnBatchShape> {
+    let shapes = protocol.table_shapes();
+    if shapes.len() != 1 || protocol.num_openings() == 0 {
+        return None;
+    }
+    let width = shapes[0].width();
+    let columns = (0..width).collect::<Vec<_>>();
+    // The first batch fixes the views, and every other batch has to agree with it.
+    let next = protocol
+        .iter_openings()
+        .next()
+        .is_some_and(|(_, batch)| !batch.next().is_empty());
+    let complete = |read: &[usize], asked: bool| {
+        if asked {
+            read == columns.as_slice()
+        } else {
+            read.is_empty()
+        }
+    };
+    protocol
+        .iter_openings()
+        .all(|(table, batch)| {
+            table == 0 && complete(batch.current(), true) && complete(batch.next(), next)
+        })
+        .then(|| ColumnBatchShape {
+            table_variables: shapes[0].num_variables(),
+            width,
+            num_batches: protocol.num_openings(),
+            next,
+        })
+}
+
+/// One bit claim of the per-column route: the column it reads, and where its values sit.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct ColumnClaim {
+    /// Table the claim's batch opens.
+    pub(super) table: usize,
+    /// Column of that table the claim reads.
+    pub(super) column: usize,
+    /// Batch the claim belongs to, whose point it is lifted by.
+    pub(super) opening: usize,
+    /// Where the reading at the point sits in the value run, when it is asked for.
+    pub(super) current_at: Option<usize>,
+    /// Where the reading one row ahead sits in the value run, when it is asked for.
+    pub(super) next_at: Option<usize>,
+}
+
+/// One claim per column a batch reads, batches in protocol order.
+///
+/// A batch contributes one claim per entry of its current list, then one per successor
+/// entry no current claim already answers. Each claim carries the positions of its own
+/// values in the run, which is every batch's current values followed by its next ones.
+pub(super) fn column_claims(protocol: &OpeningProtocol) -> Vec<ColumnClaim> {
+    let mut claims = Vec::new();
+    let mut cursor = 0;
+    for (opening, (table, batch)) in protocol.iter_openings().enumerate() {
+        let next_cursor = cursor + batch.current().len();
+        // Every successor entry is answered exactly once, so no claimed value goes unchecked.
+        let mut answered = alloc::vec![false; batch.next().len()];
+        for (offset, &column) in batch.current().iter().enumerate() {
+            let at = batch
+                .next()
+                .iter()
+                .zip(&answered)
+                .position(|(&other, &taken)| other == column && !taken);
+            if let Some(at) = at {
+                answered[at] = true;
+            }
+            claims.push(ColumnClaim {
+                table,
+                column,
+                opening,
+                current_at: Some(cursor + offset),
+                next_at: at.map(|at| next_cursor + at),
+            });
+        }
+        for (at, &column) in batch.next().iter().enumerate() {
+            if !answered[at] {
+                claims.push(ColumnClaim {
+                    table,
+                    column,
+                    opening,
+                    current_at: None,
+                    next_at: Some(next_cursor + at),
+                });
+            }
+        }
+        cursor = next_cursor + batch.next().len();
+    }
+    claims
+}
+
+/// Values one protocol opens: per batch, its current readings then its successor ones.
+pub(super) fn value_count(protocol: &OpeningProtocol) -> usize {
+    protocol.iter_openings().map(|(_, batch)| batch.len()).sum()
+}
+
+/// Whether a claim plan writes each of the `len` value positions exactly once.
+///
+/// A position two claims write is one reading the plan answers twice, and a position no
+/// claim writes is one the run leaves at whatever it was filled with.
+pub(super) fn covers_every_value(claims: &[ColumnClaim], len: usize) -> bool {
+    let mut written = alloc::vec![false; len];
+    for claim in claims {
+        for at in [claim.current_at, claim.next_at].into_iter().flatten() {
+            if at >= len || core::mem::replace(&mut written[at], true) {
+                return false;
+            }
+        }
+    }
+    written.into_iter().all(|written| written)
+}
+
+/// Lay the readings every claim came back with out in the protocol's value order.
+pub(super) fn claim_values<EF: Field>(
+    claims: &[ColumnClaim],
+    readings: &[BitReadings<EF>],
+    len: usize,
+) -> Vec<EF> {
+    // The zero fill stands only until the plan writes over it, which it does everywhere.
+    debug_assert!(
+        covers_every_value(claims, len),
+        "the claim plan writes every value position exactly once",
+    );
+    let mut values = alloc::vec![EF::ZERO; len];
+    for (claim, reading) in claims.iter().zip(readings) {
+        if let Some(at) = claim.current_at {
+            values[at] = reading
+                .current
+                .expect("a claim asking for the reading at the point carries it");
+        }
+        if let Some(at) = claim.next_at {
+            values[at] = reading
+                .next
+                .expect("a claim asking for the reading one row ahead carries it");
+        }
+    }
+    values
+}
+
+/// The readings every claim asks for, read back out of the protocol's value order.
+pub(super) fn claim_readings<EF: Field>(
+    claims: &[ColumnClaim],
+    values: &[EF],
+) -> Vec<BitReadings<EF>> {
+    claims
+        .iter()
+        .map(|claim| BitReadings {
+            current: claim.current_at.map(|at| values[at]),
+            next: claim.next_at.map(|at| values[at]),
+        })
+        .collect()
+}
+
+/// Split the flat value run back into each batch's current and successor values.
+pub(super) fn opening_evals<EF: Field>(
+    protocol: &OpeningProtocol,
+    values: &[EF],
+) -> Vec<OpeningEvals<EF>> {
+    let mut evals = Vec::with_capacity(protocol.num_openings());
+    let mut cursor = 0;
+    for (_, batch) in protocol.iter_openings() {
+        let next_cursor = cursor + batch.current().len();
+        let end = next_cursor + batch.next().len();
+        evals.push(OpeningEvals::new(
+            values[cursor..next_cursor].to_vec(),
+            values[next_cursor..end].to_vec(),
+        ));
+        cursor = end;
+    }
+    evals
+}
+
+/// One point per opening batch, drawn from the transcript in batch order.
+pub(super) fn sample_points<EF, Challenger>(
+    protocol: &OpeningProtocol,
+    challenger: &mut Challenger,
+) -> Vec<Point<EF>>
+where
+    EF: Field,
+    Challenger: FieldChallenger<EF>,
+{
+    // Coordinates are drawn in the order the batches stream, one batch's point at a time.
+    let shapes = protocol.table_shapes();
+    protocol
+        .iter_openings()
+        .map(|(table, _)| {
+            let num_variables = shapes[table].num_variables();
+            Point::new((0..num_variables).map(|_| challenger.sample()).collect())
+        })
+        .collect()
+}
