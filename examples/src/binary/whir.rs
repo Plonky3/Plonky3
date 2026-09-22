@@ -408,44 +408,39 @@ pub(crate) fn boolean_whir_config_with_schedule<A: BinaryAir, H: HarnessHash>(
             target: "p3_examples::binary::whir",
             regime = ?whir.regime,
             term_security_bits = whir.term_security_bits,
-            folding_schedule = ?whir_config.folding_schedule,
-            starting_folding_pow_bits = whir_config.starting_folding_pow_bits,
+            folding_schedule = ?whir_config.folding_schedule(),
+            starting_folding_pow_bits = whir_config.starting_folding_pow_bits(),
             round_log_inv_rates = ?whir_config
-                .round_parameters
+                .round_parameters()
                 .iter()
                 .map(|round| round.log_inv_rate)
                 .collect::<Vec<_>>(),
             round_queries = ?whir_config
-                .round_parameters
+                .round_parameters()
                 .iter()
                 .map(|round| round.num_queries)
                 .collect::<Vec<_>>(),
             round_ood_samples = ?whir_config
-                .round_parameters
+                .round_parameters()
                 .iter()
                 .map(|round| round.ood_samples)
                 .collect::<Vec<_>>(),
             round_pow_bits = ?whir_config
-                .round_parameters
+                .round_parameters()
                 .iter()
                 .map(|round| (round.pow_bits, round.folding_pow_bits))
                 .collect::<Vec<_>>(),
-            commitment_ood_samples = whir_config.commitment_ood_samples,
-            final_queries = whir_config.final_queries,
-            final_pow_bits = whir_config.final_pow_bits,
-            final_folding_pow_bits = whir_config.final_folding_pow_bits,
-            final_sumcheck_rounds = whir_config.final_sumcheck_rounds,
+            commitment_ood_samples = whir_config.commitment_ood_samples(),
+            final_queries = whir_config.terminal().num_queries,
+            final_pow_bits = whir_config.terminal().pow_bits,
+            final_folding_pow_bits = whir_config.final_folding_pow_bits(),
+            final_sumcheck_rounds = whir_config.final_sumcheck_rounds(),
             final_direct_send_arity = whir_config.final_round_config().num_variables,
         );
     }
-    let first_fold =
-        whir_config
-            .folding_schedule
-            .first()
-            .copied()
-            .ok_or(BinaryProofError::WhirIncompatible(
-                WhirIncompatibility::ZeroFolding,
-            ))?;
+    let first_fold = whir_config.folding_schedule().first().copied().ok_or(
+        BinaryProofError::WhirIncompatible(WhirIncompatibility::ZeroFolding),
+    )?;
     let leaf_elements =
         1usize
             .checked_shl(first_fold as u32)
