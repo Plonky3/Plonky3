@@ -9,7 +9,7 @@ use alloc::vec::Vec;
 use hashbrown::HashMap;
 use p3_air::symbolic::{BaseEntry, BaseLeaf, ExtEntry, ExtLeaf, SymbolicExpr, SymbolicExpression};
 use p3_air::{Air, BaseAir, BoundaryEnd};
-use p3_bus::{BusActivation, BusDirection, BusSymbolicBuilder};
+use p3_bus::{BusActivation, BusBoundary, BusDirection, BusSymbolicBuilder};
 use p3_field::{ExtensionField, Field, RawDataSerializable};
 use p3_lookup::{InteractionSymbolicBuilder, TraceWindow};
 
@@ -139,6 +139,15 @@ where
             BusActivation::Boolean(selector) => {
                 arena.byte(1);
                 arena.expression(selector);
+            }
+            // This form leaves nothing in the zerocheck, so the end it names is the only
+            // thing separating two declarations that are otherwise identical.
+            BusActivation::Boundary(end) => {
+                arena.byte(2);
+                arena.byte(match end {
+                    BusBoundary::First => 0,
+                    BusBoundary::Last => 1,
+                });
             }
         }
     }
