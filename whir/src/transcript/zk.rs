@@ -79,7 +79,7 @@ use core::marker::PhantomData;
 
 use p3_challenger::fs::{
     DomainSeparator, FieldToFieldCodec, Hierarchy, Interaction, InteractionPattern, Kind, Length,
-    ProverState, TranscriptBound, TranscriptField, Unit, VerifierState,
+    ProverState, SymmetricSteps, TranscriptBound, TranscriptField, Unit, VerifierState,
 };
 use p3_challenger::{
     CanObserve, CanSample, CanSampleUniformBits, FieldChallenger, GrindingChallenger,
@@ -194,6 +194,29 @@ fn bind_mask_code<U: Unit>(separator: &mut DomainSeparator<U>, code: &MaskCodeSh
     push_u64(separator, code.randomness_len);
     // How long the codeword those two encode into is.
     push_u64(separator, code.domain_size);
+}
+
+/// Draw one phase's positions through either driver, or open them all.
+///
+/// A saturated phase has nothing left to decide, so no draw is described there.
+fn play_positions<F, S>(
+    state: &mut S,
+    label: &'static str,
+    width: usize,
+    draws: usize,
+) -> Vec<usize>
+where
+    S: SymmetricSteps,
+    S::Challenger: CanSampleUniformBits<F>,
+{
+    if draws == 0 {
+        return (0..1usize << width).collect();
+    }
+    state
+        .challenge_uniform_bits::<F>(label, width, draws)
+        .into_iter()
+        .map(TranscriptBound::into_inner)
+        .collect()
 }
 
 /// Numbers that fix one masked sumcheck batch.
@@ -1155,17 +1178,7 @@ where
     /// A saturated round opens every position instead.
     pub fn query_indices(&mut self, round: usize) -> Vec<usize> {
         let (width, draws) = self.shape.query_index_site(round);
-        // A saturated round has nothing left to decide.
-        //
-        // No draw is described there.
-        if draws == 0 {
-            return (0..1usize << width).collect();
-        }
-        self.state
-            .challenge_uniform_bits::<F>(QUERY_INDICES, width, draws)
-            .into_iter()
-            .map(TranscriptBound::into_inner)
-            .collect()
+        play_positions::<F, _>(&mut self.state, QUERY_INDICES, width, draws)
     }
 
     /// Draw the challenge weighting one round's fresh constraints.
@@ -1324,17 +1337,7 @@ where
     /// Redraw the query indices of one round.
     pub fn query_indices(&mut self, round: usize) -> Vec<usize> {
         let (width, draws) = self.shape.query_index_site(round);
-        // A saturated round has nothing left to decide.
-        //
-        // No draw is described there.
-        if draws == 0 {
-            return (0..1usize << width).collect();
-        }
-        self.state
-            .challenge_uniform_bits::<F>(QUERY_INDICES, width, draws)
-            .into_iter()
-            .map(TranscriptBound::into_inner)
-            .collect()
+        play_positions::<F, _>(&mut self.state, QUERY_INDICES, width, draws)
     }
 
     /// Redraw the challenge weighting one round's fresh constraints.
@@ -1487,17 +1490,7 @@ where
     pub fn source_queries(&mut self) -> Vec<usize> {
         let draws = self.shape.source_query_draws();
         let width = self.shape.source_index_bits();
-        // A saturated source has nothing left to decide.
-        //
-        // No draw is described there.
-        if draws == 0 {
-            return (0..1usize << width).collect();
-        }
-        self.state
-            .challenge_uniform_bits::<F>(BASE_SOURCE_QUERIES, width, draws)
-            .into_iter()
-            .map(TranscriptBound::into_inner)
-            .collect()
+        play_positions::<F, _>(&mut self.state, BASE_SOURCE_QUERIES, width, draws)
     }
 
     /// Draw one group's spot-check positions.
@@ -1509,17 +1502,7 @@ where
     /// When no group sits at that index.
     pub fn mask_queries(&mut self, group: usize) -> Vec<usize> {
         let (width, draws) = self.shape.mask_query_site(group);
-        // A saturated group has nothing left to decide.
-        //
-        // No draw is described there.
-        if draws == 0 {
-            return (0..1usize << width).collect();
-        }
-        self.state
-            .challenge_uniform_bits::<F>(BASE_MASK_QUERIES, width, draws)
-            .into_iter()
-            .map(TranscriptBound::into_inner)
-            .collect()
+        play_positions::<F, _>(&mut self.state, BASE_MASK_QUERIES, width, draws)
     }
 
     /// Close the transcript once every described step has been played.
@@ -1707,17 +1690,7 @@ where
     pub fn source_queries(&mut self) -> Vec<usize> {
         let draws = self.shape.source_query_draws();
         let width = self.shape.source_index_bits();
-        // A saturated source has nothing left to decide.
-        //
-        // No draw is described there.
-        if draws == 0 {
-            return (0..1usize << width).collect();
-        }
-        self.state
-            .challenge_uniform_bits::<F>(BASE_SOURCE_QUERIES, width, draws)
-            .into_iter()
-            .map(TranscriptBound::into_inner)
-            .collect()
+        play_positions::<F, _>(&mut self.state, BASE_SOURCE_QUERIES, width, draws)
     }
 
     /// Redraw one group's spot-check positions.
@@ -1727,17 +1700,7 @@ where
     /// When no group sits at that index.
     pub fn mask_queries(&mut self, group: usize) -> Vec<usize> {
         let (width, draws) = self.shape.mask_query_site(group);
-        // A saturated group has nothing left to decide.
-        //
-        // No draw is described there.
-        if draws == 0 {
-            return (0..1usize << width).collect();
-        }
-        self.state
-            .challenge_uniform_bits::<F>(BASE_MASK_QUERIES, width, draws)
-            .into_iter()
-            .map(TranscriptBound::into_inner)
-            .collect()
+        play_positions::<F, _>(&mut self.state, BASE_MASK_QUERIES, width, draws)
     }
 
     /// Release the completeness check because the proof is being rejected.
