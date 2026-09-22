@@ -24,8 +24,8 @@ const NUM_INPUT_BITS: usize = (8 + 16 + 4) * 32;
 /// Constraints per G step: two 3-operand and two 2-operand additions.
 const CONSTRAINTS_PER_G: usize = 2 * (31 + 32) + 2 * 32;
 
-/// Total number of constraints: input booleanity plus every G step.
-const NUM_CONSTRAINTS: usize = NUM_INPUT_BITS + NUM_ROUNDS * G_PER_ROUND * CONSTRAINTS_PER_G;
+/// Number of constraints after input booleanity: every G step.
+const NUM_G_CONSTRAINTS: usize = NUM_ROUNDS * G_PER_ROUND * CONSTRAINTS_PER_G;
 
 /// An AIR for the Blake-3 compression function over a field of characteristic 2.
 ///
@@ -36,12 +36,29 @@ const NUM_CONSTRAINTS: usize = NUM_INPUT_BITS + NUM_ROUNDS * G_PER_ROUND * CONST
 /// value and the last round's `b1`, `d1`, `b2`, `d2` words, and
 /// [`Blake3BinaryCols::compression_output`] recovers it from a row.
 ///
-/// The input bits are constrained to be boolean. Every other column is then forced to a
-/// bit by the addition constraints, since the majority of three bits is a bit.
+/// The input bits are constrained to be boolean, unless [`Self::constrain_booleanity`] is
+/// cleared. Every other column is then forced to a bit by the addition constraints, since the
+/// majority of three bits is a bit.
 ///
 /// The constraints describe Blake-3 only over a field of characteristic 2.
 #[derive(Debug)]
-pub struct Blake3BinaryAir {}
+pub struct Blake3BinaryAir {
+    /// Whether the AIR constrains every input cell to be a bit.
+    ///
+    /// Clearing it makes the AIR report [`BaseAir::assumes_boolean_trace`]. That is sound only
+    /// when the trace commitment refuses every cell outside `{0, 1}`, as a commitment to the
+    /// trace's bits does. Under a commitment to field elements, nothing else keeps an input cell
+    /// in `{0, 1}`.
+    pub constrain_booleanity: bool,
+}
+
+impl Default for Blake3BinaryAir {
+    fn default() -> Self {
+        Self {
+            constrain_booleanity: true,
+        }
+    }
+}
 
 impl Blake3BinaryAir {
     /// Generate a trace over `num_hashes` fixed-seed random compression inputs.
@@ -98,8 +115,17 @@ impl<F> BaseAir<F> for Blake3BinaryAir {
         vec![]
     }
 
+    fn assumes_boolean_trace(&self) -> bool {
+        !self.constrain_booleanity
+    }
+
     fn num_constraints(&self) -> Option<usize> {
-        Some(NUM_CONSTRAINTS)
+        let booleanity = if self.constrain_booleanity {
+            NUM_INPUT_BITS
+        } else {
+            0
+        };
+        Some(booleanity + NUM_G_CONSTRAINTS)
     }
 
     fn max_constraint_degree(&self) -> Option<usize> {
@@ -131,13 +157,15 @@ impl<AB: AirBuilder> Air<AB> for Blake3BinaryAir {
             local.flags,
         ];
 
-        for word in local
-            .chaining_value
-            .iter()
-            .chain(&local.block)
-            .chain(&initial_d)
-        {
-            builder.assert_bools(*word);
+        if self.constrain_booleanity {
+            for word in local
+                .chaining_value
+                .iter()
+                .chain(&local.block)
+                .chain(&initial_d)
+            {
+                builder.assert_bools(*word);
+            }
         }
 
         let mut state = State::<AB> {

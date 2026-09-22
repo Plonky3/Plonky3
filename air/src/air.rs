@@ -235,6 +235,19 @@ pub trait BaseAir<F>: Sync {
     fn public_boundary_io(&self) -> &[BoundaryPublic] {
         &[]
     }
+
+    /// Whether the AIR is sound only when every main-trace cell is a bit, which its constraints
+    /// do not enforce.
+    ///
+    /// Such an AIR must be proven under a commitment that admits nothing but bits, such as a
+    /// commitment to the trace's bits. A prover that commits field elements must refuse it.
+    ///
+    /// A wrapper or enum AIR must forward this method, since the default reports no reliance.
+    ///
+    /// Returns `false` by default.
+    fn assumes_boolean_trace(&self) -> bool {
+        false
+    }
 }
 
 /// An algebraic intermediate representation (AIR) definition.

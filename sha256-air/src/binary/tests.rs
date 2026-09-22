@@ -59,7 +59,7 @@ fn digest_bytes(state: &[u32; 8]) -> [u8; 32] {
 
 /// Generate a trace for `inputs`, check its constraints, and return the output of every row.
 fn trace_outputs(inputs: &[[u32; INPUT_WORDS]]) -> Vec<[u32; 8]> {
-    let air = Sha256BinaryAir {};
+    let air = Sha256BinaryAir::default();
     let trace = generate_binary_trace_rows::<F>(inputs.to_vec(), 0);
     check_constraints(&air, &trace, &[]);
     (0..trace.height())
@@ -78,7 +78,7 @@ fn failures_after_edit(
     row_index: usize,
     mutate: impl FnOnce(&mut Sha256BinaryCols<F>),
 ) -> Vec<ConstraintFailure> {
-    let air = Sha256BinaryAir {};
+    let air = Sha256BinaryAir::default();
     let mut trace = air.generate_random_trace_rows::<F>(4, 0);
     mutate(trace.row_mut(row_index).borrow_mut());
     let failures = check_all_constraints(&air, &trace, &[], None).failures;
@@ -88,7 +88,7 @@ fn failures_after_edit(
 
 #[test]
 fn width_and_constraint_hints_match_symbolic_evaluation() {
-    let air = Sha256BinaryAir {};
+    let air = Sha256BinaryAir::default();
     assert_eq!(NUM_SHA256_BINARY_COLS, 23_712);
     assert_eq!(<Sha256BinaryAir as BaseAir<F>>::width(&air), 23_712);
     assert!(<Sha256BinaryAir as BaseAir<F>>::main_next_row_columns(&air).is_empty());
@@ -97,19 +97,28 @@ fn width_and_constraint_hints_match_symbolic_evaluation() {
         main_width: NUM_SHA256_BINARY_COLS,
         ..Default::default()
     };
-    let constraints = get_symbolic_constraints::<F, _>(&air, layout);
-    assert_eq!(constraints.len(), 23_712);
-    assert_eq!(
-        <Sha256BinaryAir as BaseAir<F>>::num_constraints(&air),
-        Some(constraints.len())
-    );
+    for (constrain_booleanity, num_constraints) in [(true, 23_712), (false, 22_944)] {
+        let air = Sha256BinaryAir {
+            constrain_booleanity,
+        };
+        let constraints = get_symbolic_constraints::<F, _>(&air, layout);
+        assert_eq!(constraints.len(), num_constraints);
+        assert_eq!(
+            <Sha256BinaryAir as BaseAir<F>>::num_constraints(&air),
+            Some(constraints.len())
+        );
+        assert_eq!(
+            <Sha256BinaryAir as BaseAir<F>>::assumes_boolean_trace(&air),
+            !constrain_booleanity
+        );
 
-    let degree = get_max_constraint_degree::<F, _>(&air, layout, 1 << 4);
-    assert_eq!(degree, 2);
-    assert_eq!(
-        <Sha256BinaryAir as BaseAir<F>>::max_constraint_degree(&air),
-        Some(degree)
-    );
+        let degree = get_max_constraint_degree::<F, _>(&air, layout, 1 << 4);
+        assert_eq!(degree, 2);
+        assert_eq!(
+            <Sha256BinaryAir as BaseAir<F>>::max_constraint_degree(&air),
+            Some(degree)
+        );
+    }
 }
 
 /// How a constraint depends on one column.
@@ -189,7 +198,7 @@ fn every_column_is_forced_to_a_bit_by_the_constraints() {
     // one column no earlier constraint fixed, and must be linear in it. Then that column equals
     // an expression in columns already known to be bits, so it is a bit too, and the row is
     // determined by the inputs.
-    let air = Sha256BinaryAir {};
+    let air = Sha256BinaryAir::default();
     let layout = AirLayout {
         main_width: NUM_SHA256_BINARY_COLS,
         ..Default::default()
@@ -278,7 +287,7 @@ fn boundary_inputs_match_reference_compression() {
 
 #[test]
 fn random_traces_satisfy_constraints() {
-    let air = Sha256BinaryAir {};
+    let air = Sha256BinaryAir::default();
     for height in [1, 2, 4] {
         let trace = air.generate_random_trace_rows::<F>(height, 0);
         assert_eq!(trace.height(), height);
@@ -289,7 +298,7 @@ fn random_traces_satisfy_constraints() {
 #[test]
 #[should_panic(expected = "characteristic 2")]
 fn generator_rejects_odd_characteristic() {
-    let air = Sha256BinaryAir {};
+    let air = Sha256BinaryAir::default();
     air.generate_random_trace_rows::<BabyBear>(1, 0);
 }
 

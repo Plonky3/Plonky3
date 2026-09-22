@@ -107,7 +107,7 @@ fn hash_bytes(output: &[u32; 16]) -> [u8; 32] {
 
 /// Generate a trace for `inputs` and return the output of every row.
 fn trace_outputs(inputs: &[Blake3CompressionInput]) -> Vec<[u32; 16]> {
-    let air = Blake3BinaryAir {};
+    let air = Blake3BinaryAir::default();
     let trace = generate_binary_trace_rows::<F>(inputs.to_vec(), 0);
     check_constraints(&air, &trace, &[]);
     (0..trace.height())
@@ -126,7 +126,7 @@ fn failures_after_edit(
     row_index: usize,
     mutate: impl FnOnce(&mut Blake3BinaryCols<F>),
 ) -> Vec<ConstraintFailure> {
-    let air = Blake3BinaryAir {};
+    let air = Blake3BinaryAir::default();
     let mut trace = air.generate_random_trace_rows::<F>(4, 0);
     mutate(trace.row_mut(row_index).borrow_mut());
     let failures = check_all_constraints(&air, &trace, &[], None).failures;
@@ -136,7 +136,7 @@ fn failures_after_edit(
 
 #[test]
 fn width_and_constraint_hints_match_symbolic_evaluation() {
-    let air = Blake3BinaryAir {};
+    let air = Blake3BinaryAir::default();
     assert_eq!(NUM_BLAKE3_BINARY_COLS, 11_536);
     assert_eq!(<Blake3BinaryAir as BaseAir<F>>::width(&air), 11_536);
     assert!(<Blake3BinaryAir as BaseAir<F>>::main_next_row_columns(&air).is_empty());
@@ -145,19 +145,28 @@ fn width_and_constraint_hints_match_symbolic_evaluation() {
         main_width: NUM_BLAKE3_BINARY_COLS,
         ..Default::default()
     };
-    let constraints = get_symbolic_constraints::<F, _>(&air, layout);
-    assert_eq!(constraints.len(), 11_536);
-    assert_eq!(
-        <Blake3BinaryAir as BaseAir<F>>::num_constraints(&air),
-        Some(constraints.len())
-    );
+    for (constrain_booleanity, num_constraints) in [(true, 11_536), (false, 10_640)] {
+        let air = Blake3BinaryAir {
+            constrain_booleanity,
+        };
+        let constraints = get_symbolic_constraints::<F, _>(&air, layout);
+        assert_eq!(constraints.len(), num_constraints);
+        assert_eq!(
+            <Blake3BinaryAir as BaseAir<F>>::num_constraints(&air),
+            Some(constraints.len())
+        );
+        assert_eq!(
+            <Blake3BinaryAir as BaseAir<F>>::assumes_boolean_trace(&air),
+            !constrain_booleanity
+        );
 
-    let degree = get_max_constraint_degree::<F, _>(&air, layout, 1 << 4);
-    assert_eq!(degree, 2);
-    assert_eq!(
-        <Blake3BinaryAir as BaseAir<F>>::max_constraint_degree(&air),
-        Some(degree)
-    );
+        let degree = get_max_constraint_degree::<F, _>(&air, layout, 1 << 4);
+        assert_eq!(degree, 2);
+        assert_eq!(
+            <Blake3BinaryAir as BaseAir<F>>::max_constraint_degree(&air),
+            Some(degree)
+        );
+    }
 }
 
 #[test]
@@ -209,7 +218,7 @@ fn random_inputs_match_reference_compression() {
 
 #[test]
 fn random_traces_satisfy_constraints() {
-    let air = Blake3BinaryAir {};
+    let air = Blake3BinaryAir::default();
     for height in [1, 2, 4] {
         let trace = air.generate_random_trace_rows::<F>(height, 0);
         assert_eq!(trace.height(), height);
@@ -251,7 +260,7 @@ fn packed_trace_matches_dense_trace_at_word_boundaries() {
 
 #[test]
 fn packed_random_trace_uses_the_dense_generator_sequence() {
-    let air = Blake3BinaryAir {};
+    let air = Blake3BinaryAir::default();
     for height in [1usize, 64, 128] {
         let dense = air.generate_random_trace_rows::<F>(height, 0);
         let packed = air.generate_random_trace_packed::<F>(height);
@@ -282,7 +291,7 @@ fn packed_generator_rejects_non_power_of_two_input() {
 #[test]
 #[should_panic(expected = "characteristic 2")]
 fn generator_rejects_odd_characteristic() {
-    let air = Blake3BinaryAir {};
+    let air = Blake3BinaryAir::default();
     air.generate_random_trace_rows::<BabyBear>(1, 0);
 }
 

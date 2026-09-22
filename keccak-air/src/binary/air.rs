@@ -19,9 +19,6 @@ const NUM_STATE_BITS: usize = 1600;
 /// Round-flag constraints: 25 on the first row, 23 round steps, the wrap, and exclusivity.
 const NUM_FLAG_CONSTRAINTS: usize = KECCAK_BINARY_ROWS_PER_PERM + NUM_ROUNDS_MIN_1 + 2;
 
-/// Round-flag constraints, then booleanity and the round map for every state bit.
-const NUM_CONSTRAINTS: usize = NUM_FLAG_CONSTRAINTS + 2 * NUM_STATE_BITS;
-
 /// AIR for the Keccak-f permutation over a field of characteristic 2.
 ///
 /// Each row holds a 1600-bit state and a one-hot round flag (see [`KeccakBinaryCols`]).
@@ -39,7 +36,23 @@ const NUM_CONSTRAINTS: usize = NUM_FLAG_CONSTRAINTS + 2 * NUM_STATE_BITS;
 ///     repeat last   : output row -> itself
 /// ```
 #[derive(Debug)]
-pub struct KeccakBinaryAir {}
+pub struct KeccakBinaryAir {
+    /// Whether the AIR constrains every state cell to be a bit.
+    ///
+    /// Clearing it makes the AIR report [`BaseAir::assumes_boolean_trace`]. That is sound only
+    /// when the trace commitment refuses every cell outside `{0, 1}`, as a commitment to the
+    /// trace's bits does. Under a commitment to field elements, a non-bit state run through the
+    /// round map satisfies every other constraint.
+    pub constrain_booleanity: bool,
+}
+
+impl Default for KeccakBinaryAir {
+    fn default() -> Self {
+        Self {
+            constrain_booleanity: true,
+        }
+    }
+}
 
 impl KeccakBinaryAir {
     /// Generate a trace over `num_hashes` fixed-seed random permutation inputs.
@@ -88,8 +101,18 @@ impl<F> BaseAir<F> for KeccakBinaryAir {
         Some(3)
     }
 
+    fn assumes_boolean_trace(&self) -> bool {
+        !self.constrain_booleanity
+    }
+
     fn num_constraints(&self) -> Option<usize> {
-        Some(NUM_CONSTRAINTS)
+        // Round-flag constraints, then booleanity if stated, then the round map per state bit.
+        let booleanity = if self.constrain_booleanity {
+            NUM_STATE_BITS
+        } else {
+            0
+        };
+        Some(NUM_FLAG_CONSTRAINTS + booleanity + NUM_STATE_BITS)
     }
 }
 
@@ -126,9 +149,11 @@ impl<AB: AirBuilder> Air<AB> for KeccakBinaryAir {
         builder.assert_zero(flags[0] * output_flag);
 
         // Every state bit is a bit.
-        for plane in &local.a {
-            for lane in plane {
-                builder.assert_bools(*lane);
+        if self.constrain_booleanity {
+            for plane in &local.a {
+                for lane in plane {
+                    builder.assert_bools(*lane);
+                }
             }
         }
 
@@ -253,7 +278,7 @@ mod tests {
                     F::from_bool(r != height - 1),
                     &[],
                 );
-                KeccakBinaryAir {}.eval(&mut builder);
+                KeccakBinaryAir::default().eval(&mut builder);
                 builder
                     .into_failures()
                     .into_iter()
@@ -328,9 +353,9 @@ mod tests {
         // Heights: 25 -> 32, 50 -> 64, 75 -> 128.
         // The debug checker wraps the last row to row 0.
         for (num_hashes, height) in [(1, 32), (2, 64), (3, 128)] {
-            let trace = KeccakBinaryAir {}.generate_random_trace_rows::<F>(num_hashes, 0);
+            let trace = KeccakBinaryAir::default().generate_random_trace_rows::<F>(num_hashes, 0);
             assert_eq!(trace.height(), height);
-            check_constraints(&KeccakBinaryAir {}, &trace, &[]);
+            check_constraints(&KeccakBinaryAir::default(), &trace, &[]);
         }
     }
 
@@ -342,7 +367,7 @@ mod tests {
         //     round r < 23 : next.f[r + 1] + f[r]                     = 0 + 0
         //     wrap         : next.f[0] + next.f[24] + f[23] + f[24]  = 0 + 1 + 0 + 1
         for num_hashes in 1..=3 {
-            let trace = KeccakBinaryAir {}.generate_random_trace_rows::<F>(num_hashes, 0);
+            let trace = KeccakBinaryAir::default().generate_random_trace_rows::<F>(num_hashes, 0);
             let last = row(&trace, trace.height() - 1);
             assert_eq!(last.round_flags[NUM_ROUNDS], F::ONE);
             assert_eq!(repeat_last_failures(&trace), Vec::new());
@@ -378,10 +403,10 @@ mod tests {
     fn flipped_state_bit_mid_permutation_is_rejected() {
         // Flip one bit of the round-12 input.
         // It is still a bit, but it no longer equals the round-11 output.
-        let mut trace = KeccakBinaryAir {}.generate_random_trace_rows::<F>(1, 0);
+        let mut trace = KeccakBinaryAir::default().generate_random_trace_rows::<F>(1, 0);
         row_mut(&mut trace, 12).a[2][3][17] += F::ONE;
 
-        let report = check_all_constraints(&KeccakBinaryAir {}, &trace, &[], None);
+        let report = check_all_constraints(&KeccakBinaryAir::default(), &trace, &[], None);
         assert!(!report.is_ok());
         assert!(report.failures.iter().any(|f| f.row == 11));
         assert!(
@@ -396,10 +421,10 @@ mod tests {
     #[test]
     fn flipped_output_bit_is_rejected() {
         // Flip one bit of the output row: it no longer equals the round-23 output.
-        let mut trace = KeccakBinaryAir {}.generate_random_trace_rows::<F>(1, 0);
+        let mut trace = KeccakBinaryAir::default().generate_random_trace_rows::<F>(1, 0);
         row_mut(&mut trace, NUM_ROUNDS).a[0][0][0] += F::ONE;
 
-        let report = check_all_constraints(&KeccakBinaryAir {}, &trace, &[], None);
+        let report = check_all_constraints(&KeccakBinaryAir::default(), &trace, &[], None);
         assert!(!report.is_ok());
         assert!(report.failures.iter().all(|f| f.row == NUM_ROUNDS_MIN_1));
         assert!(!repeat_last_failures(&trace).is_empty());
@@ -407,7 +432,7 @@ mod tests {
 
     #[test]
     fn non_boolean_state_is_rejected_by_booleanity() {
-        let mut trace = KeccakBinaryAir {}.generate_random_trace_rows::<F>(1, 0);
+        let mut trace = KeccakBinaryAir::default().generate_random_trace_rows::<F>(1, 0);
 
         // The field-level round map reproduces the honest trace.
         for r in 0..NUM_ROUNDS {
@@ -425,7 +450,7 @@ mod tests {
         }
 
         // Only booleanity catches it.
-        let report = check_all_constraints(&KeccakBinaryAir {}, &trace, &[], None);
+        let report = check_all_constraints(&KeccakBinaryAir::default(), &trace, &[], None);
         assert!(report.failures.iter().any(|f| f.row == 0));
         assert!(
             report
@@ -437,15 +462,21 @@ mod tests {
         let failures = repeat_last_failures(&trace);
         assert!(!failures.is_empty());
         assert!(failures.iter().all(|(_, c)| BOOL_CONSTRAINTS.contains(c)));
+
+        // Without booleanity, the AIR accepts the non-bit state.
+        let air = KeccakBinaryAir {
+            constrain_booleanity: false,
+        };
+        assert!(check_all_constraints(&air, &trace, &[], None).is_ok());
     }
 
     #[test]
     fn two_round_flags_in_one_row_are_rejected() {
         // The output row also claims round 0.
-        let mut trace = KeccakBinaryAir {}.generate_random_trace_rows::<F>(1, 0);
+        let mut trace = KeccakBinaryAir::default().generate_random_trace_rows::<F>(1, 0);
         row_mut(&mut trace, NUM_ROUNDS).round_flags[0] = F::ONE;
 
-        let report = check_all_constraints(&KeccakBinaryAir {}, &trace, &[], None);
+        let report = check_all_constraints(&KeccakBinaryAir::default(), &trace, &[], None);
         assert!(!report.is_ok());
         assert!(
             report
@@ -468,7 +499,7 @@ mod tests {
         // Only the round-0 row's product u * (1 + u) is nonzero.
         let u = F::GENERATOR;
         assert!(u != F::ZERO && u != F::ONE);
-        let mut trace = KeccakBinaryAir {}.generate_random_trace_rows::<F>(2, 0);
+        let mut trace = KeccakBinaryAir::default().generate_random_trace_rows::<F>(2, 0);
         for round in 0..NUM_ROUNDS {
             let flags = &mut row_mut(&mut trace, KECCAK_BINARY_ROWS_PER_PERM + round).round_flags;
             flags[round] = u;
@@ -477,7 +508,7 @@ mod tests {
 
         let exclusivity = NUM_FLAG_CONSTRAINTS - 1;
         let expected = vec![(KECCAK_BINARY_ROWS_PER_PERM, exclusivity)];
-        let report = check_all_constraints(&KeccakBinaryAir {}, &trace, &[], None);
+        let report = check_all_constraints(&KeccakBinaryAir::default(), &trace, &[], None);
         let failures: Vec<(usize, usize)> = report
             .failures
             .iter()
@@ -495,7 +526,7 @@ mod tests {
         // Only the output row's step into the first flagless row fails:
         //
         //     next.f[0] + next.f[24] + f[23] + f[24] = 0 + 0 + 0 + 1
-        let mut trace = KeccakBinaryAir {}.generate_random_trace_rows::<F>(1, 0);
+        let mut trace = KeccakBinaryAir::default().generate_random_trace_rows::<F>(1, 0);
         for r in KECCAK_BINARY_ROWS_PER_PERM..trace.height() {
             row_mut(&mut trace, r).round_flags[NUM_ROUNDS] = F::ZERO;
         }
@@ -512,7 +543,7 @@ mod tests {
         let schedule: Vec<usize> = (0..NUM_ROUNDS).filter(|&r| r != 5).collect();
         let trace = trace_for_schedule([0xfedc_ba98_7654_3210; 25], &schedule, 32);
 
-        let report = check_all_constraints(&KeccakBinaryAir {}, &trace, &[], None);
+        let report = check_all_constraints(&KeccakBinaryAir::default(), &trace, &[], None);
         assert!(!report.is_ok());
         assert!(report.failures.iter().all(|f| f.row == 4));
         assert!(
@@ -531,15 +562,23 @@ mod tests {
 
     #[test]
     fn symbolic_constraints_match_hints() {
-        let air = KeccakBinaryAir {};
-        let layout = AirLayout::from_air::<F>(&air);
+        for (constrain_booleanity, num_constraints) in [(true, 3250), (false, 1650)] {
+            let air = KeccakBinaryAir {
+                constrain_booleanity,
+            };
+            let layout = AirLayout::from_air::<F>(&air);
 
-        let constraints = get_symbolic_constraints::<F, _>(&air, layout);
-        assert_eq!(constraints.len(), 3250);
-        assert_eq!(Some(constraints.len()), BaseAir::<F>::num_constraints(&air));
+            let constraints = get_symbolic_constraints::<F, _>(&air, layout);
+            assert_eq!(constraints.len(), num_constraints);
+            assert_eq!(Some(constraints.len()), BaseAir::<F>::num_constraints(&air));
+            assert_eq!(
+                BaseAir::<F>::assumes_boolean_trace(&air),
+                !constrain_booleanity
+            );
 
-        let degree = get_max_constraint_degree::<F, _>(&air, layout, 32);
-        assert_eq!(degree, 3);
-        assert_eq!(Some(degree), BaseAir::<F>::max_constraint_degree(&air));
+            let degree = get_max_constraint_degree::<F, _>(&air, layout, 32);
+            assert_eq!(degree, 3);
+            assert_eq!(Some(degree), BaseAir::<F>::max_constraint_degree(&air));
+        }
     }
 }
