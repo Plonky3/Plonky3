@@ -140,6 +140,7 @@ macro_rules! impl_additive_rs_encoder {
     )*};
 }
 
+// The six `impl Encoder<F> for AdditiveRsEncoder<F, _>`, one per alphabet below.
 impl_additive_rs_encoder!(
     BinaryField128,
     BinaryField64,

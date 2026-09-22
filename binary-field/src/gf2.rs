@@ -28,6 +28,9 @@ use serde::{Deserialize, Deserializer, Serialize};
 /// `div_2exp_u64` panics at exponent `0` as well.
 ///
 /// The implementing type has to be `Copy` and add to itself.
+///
+/// These override default trait methods. Stable Rust cannot override a default for a class of
+/// types through a blanket implementation, so each implementation invokes this instead.
 macro_rules! characteristic_two_methods {
     () => {
         #[inline]
