@@ -10,12 +10,13 @@ use p3_matrix::dense::RowMajorMatrix;
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_multilinear_util::point::Point;
 use p3_sumcheck::jagged::{
-    BoundJaggedLayout, CellBudget, ColumnSource, JaggedError, JaggedLayout, JaggedOpeningError,
-    JaggedOpeningShape, JaggedPoint, JaggedWitness, TraceSource,
+    BoundJaggedLayout, CellBudget, ColumnSource, JaggedError, JaggedLayout, JaggedOpening,
+    JaggedOpeningError, JaggedOpeningShape, JaggedPoint, JaggedWitness, TraceSource,
 };
 use p3_sumcheck::layout::{Layout, PrefixProver, Table, observe_commitment};
 use p3_sumcheck::{OpeningProtocol, PrescribedPointPcs};
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
+use p3_whir::PcsProof;
 use p3_whir::parameters::{FoldingFactor, ProtocolParameters, SecurityAssumption, WhirConfig};
 use p3_whir::pcs::prover::WhirProver;
 use rand::SeedableRng;
@@ -391,6 +392,9 @@ fn the_reported_security_charges_the_reduction_over_the_candidate_set() {
     let pcs = configure(layout.dense_variables());
     let bound = BoundJaggedLayout::new::<F, _>(&layout, &mut prover);
 
+    // An empty statement is refused when it is opened, so no figure describes it.
+    assert!(bound.security::<EF, _, MyChallenger>(&pcs, 0).is_none());
+
     let uncharged = pcs
         .prescribed_security(&OpeningProtocol::from(JaggedOpeningShape::new(&layout, 1)))
         .expect("the configured protocol is assessed");
@@ -474,4 +478,80 @@ fn a_trace_below_the_folding_factor_commits_once_its_envelope_is_raised() {
             &mut verifier,
         )
         .expect("a raised envelope changes no sparse statement");
+}
+
+#[test]
+fn a_later_claim_the_commitment_does_not_support_is_named() {
+    // The comparison runs once per reading, so a test that only forges the first proves nothing.
+    //
+    // Such a test passes just as well when the loop stops after that first reading.
+    //
+    // The prover is honest about the committed vector for one claim, and another for the next.
+    //
+    // That is the shape a batched opening has to catch.
+    let (heights, columns) = trace();
+    let layout = JaggedLayout::new(6, &heights).unwrap();
+    let sources = columns
+        .iter()
+        .map(|cells| ColumnSource::Dense(cells))
+        .collect::<Vec<_>>();
+    let (committed, _) = JaggedWitness::read(&layout, TraceSource::Columns(&sources)).unwrap();
+    let mut forged = committed.to_vec();
+    forged[100] += F::ONE;
+
+    // Replaying what the opening does, one claim at a time, with a different vector for the second.
+    let mut prover = challenger();
+    let (pcs, commitment, data) = commit(&committed, &mut prover);
+    let bound = BoundJaggedLayout::new::<F, _>(&layout, &mut prover);
+    let first = bound.sample_point::<F, EF, _>(&mut prover);
+    let second = bound.sample_point::<F, EF, _>(&mut prover);
+    let claims = [
+        (
+            first.clone(),
+            jagged_evaluation(&heights, &committed, &first),
+        ),
+        (
+            second.clone(),
+            jagged_evaluation(&heights, &forged, &second),
+        ),
+    ];
+
+    let (honest, honest_claim) = layout
+        .prove(&committed, &claims[0].0, claims[0].1, &mut prover)
+        .unwrap()
+        .into_parts();
+    let (divergent, divergent_claim) = layout
+        .prove(&forged, &claims[1].0, claims[1].1, &mut prover)
+        .unwrap()
+        .into_parts();
+    let dense = pcs
+        .open_at(
+            data,
+            &OpeningProtocol::from(JaggedOpeningShape::new(&layout, 2)),
+            &[
+                honest_claim.point().clone(),
+                divergent_claim.point().clone(),
+            ],
+            &mut prover,
+        )
+        .unwrap();
+
+    // The proof shape is public, so a wire round trip is what assembles it here.
+    let bytes = postcard::to_allocvec(&(vec![honest, divergent], dense)).unwrap();
+    let opening: JaggedOpening<F, EF, PcsProof<F, EF, MyMmcs>> =
+        postcard::from_bytes(&bytes).unwrap();
+
+    // Both reductions verify on their own, because each is an honest proof of some statement.
+    let mut verifier = challenger();
+    observe_commitment::<F, _, _>(&mut verifier, commitment.clone());
+    let bound = BoundJaggedLayout::new::<F, _>(&layout, &mut verifier);
+    assert_eq!(bound.sample_point::<F, EF, _>(&mut verifier), first);
+    assert_eq!(bound.sample_point::<F, EF, _>(&mut verifier), second);
+    let error = bound
+        .verify(&pcs, &commitment, &opening, &claims, &mut verifier)
+        .unwrap_err();
+    assert!(
+        matches!(error, JaggedOpeningError::DenseMismatch { reading: 1 }),
+        "the second reading is the one the commitment refuses, not {error:?}"
+    );
 }

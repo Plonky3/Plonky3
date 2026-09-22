@@ -186,7 +186,7 @@ impl<'a> BoundJaggedLayout<'a> {
     ///
     /// # Returns
     ///
-    /// Nothing when the commitment scheme does not assess this opening protocol.
+    /// Nothing for no claims, and nothing when the scheme does not assess this opening protocol.
     ///
     /// # Soundness
     ///
@@ -217,6 +217,11 @@ impl<'a> BoundJaggedLayout<'a> {
             + CanSampleUniformBits<Pcs::Val>
             + CanObserve<Pcs::Commitment>,
     {
+        // An empty statement is refused when it is opened, so no figure describes it.
+        if claims == 0 {
+            return None;
+        }
+
         let protocol = OpeningProtocol::from(JaggedOpeningShape::new(self.0, claims));
         let mut security = pcs.prescribed_security(&protocol)?;
         security.charge_reduction(reduction_term::<EF>(self.0.dense_variables(), claims));
