@@ -871,7 +871,7 @@ fn print_diagnostic_table() {
 
                 let whir_queries = whir_rig
                     .pcs
-                    .round_parameters
+                    .round_parameters()
                     .iter()
                     .map(|r| r.num_queries.to_string())
                     .join(",");

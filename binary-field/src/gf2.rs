@@ -16,6 +16,57 @@ use rand::distr::{Distribution, StandardUniform};
 use serde::de::Error;
 use serde::{Deserialize, Deserializer, Serialize};
 
+/// The [`PrimeCharacteristicRing`] methods whose values characteristic 2 fixes.
+///
+/// Invoked inside an implementation of that trait, it supplies:
+///
+/// - `double`, which is `ZERO`, since `a + a = 0`,
+/// - `halve` and `div_2exp_u64`, which always panic, since `2` is not invertible,
+/// - `xor`, which is addition,
+/// - `mul_2exp_u64`, which is the identity at exponent `0` and `ZERO` above it.
+///
+/// `div_2exp_u64` panics at exponent `0` as well.
+///
+/// The implementing type has to be `Copy` and add to itself.
+///
+/// These override default trait methods. Stable Rust cannot override a default for a class of
+/// types through a blanket implementation, so each implementation invokes this instead.
+macro_rules! characteristic_two_methods {
+    () => {
+        #[inline]
+        fn double(&self) -> Self {
+            // `a + a = 0` in characteristic 2.
+            Self::ZERO
+        }
+
+        /// # Panics
+        /// Always panics: `2` is not invertible in characteristic 2.
+        #[inline]
+        fn halve(&self) -> Self {
+            panic!("halve is undefined in characteristic 2")
+        }
+
+        #[inline]
+        fn xor(&self, y: &Self) -> Self {
+            *self + *y
+        }
+
+        #[inline]
+        fn mul_2exp_u64(&self, exp: u64) -> Self {
+            if exp == 0 { *self } else { Self::ZERO }
+        }
+
+        /// # Panics
+        /// Always panics: `2` is not invertible in characteristic 2.
+        #[inline]
+        fn div_2exp_u64(&self, _exp: u64) -> Self {
+            panic!("div_2exp_u64 is undefined in characteristic 2")
+        }
+    };
+}
+
+pub(crate) use characteristic_two_methods;
+
 /// The prime field `GF(2) = {0, 1}`, with addition given by `XOR` and multiplication by `AND`.
 ///
 /// This is the base case of the characteristic-2 tower `GF(2) ⊂ GF(4) ⊂ … ⊂ GF(2^128)`.
@@ -118,40 +169,12 @@ impl PrimeCharacteristicRing for Gf2 {
         Self(b as u8)
     }
 
-    #[inline]
-    fn double(&self) -> Self {
-        // `a + a = 0` in characteristic 2.
-        Self::ZERO
-    }
-
-    /// # Panics
-    /// Always panics: `2` is not invertible in characteristic 2.
-    #[inline]
-    fn halve(&self) -> Self {
-        panic!("halve is undefined in characteristic 2")
-    }
+    characteristic_two_methods!();
 
     #[inline]
     fn square(&self) -> Self {
         // `0^2 = 0` and `1^2 = 1`.
         *self
-    }
-
-    #[inline]
-    fn xor(&self, y: &Self) -> Self {
-        *self + *y
-    }
-
-    #[inline]
-    fn mul_2exp_u64(&self, exp: u64) -> Self {
-        if exp == 0 { *self } else { Self::ZERO }
-    }
-
-    /// # Panics
-    /// Always panics: `2` is not invertible in characteristic 2.
-    #[inline]
-    fn div_2exp_u64(&self, _exp: u64) -> Self {
-        panic!("div_2exp_u64 is undefined in characteristic 2")
     }
 }
 
@@ -549,6 +572,12 @@ mod tests {
     #[should_panic = "div_2exp_u64 is undefined in characteristic 2"]
     fn div_2exp_u64_panics() {
         let _divided = Gf2::ONE.div_2exp_u64(1);
+    }
+
+    #[test]
+    #[should_panic = "div_2exp_u64 is undefined in characteristic 2"]
+    fn div_2exp_u64_panics_at_exponent_zero() {
+        let _divided = Gf2::ONE.div_2exp_u64(0);
     }
 
     #[test]

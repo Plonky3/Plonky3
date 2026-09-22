@@ -28,6 +28,7 @@ use serde::de::Error;
 use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::clmul::{HAS_HARDWARE_CLMUL, mul_64, mul_128};
+use crate::gf2::characteristic_two_methods;
 use crate::{Gf2, tables};
 
 /// Seals [`TowerLevel`] against implementation outside this crate.
@@ -333,18 +334,7 @@ macro_rules! binary_tower_level {
                 Self(<$repr>::from(b))
             }
 
-            #[inline]
-            fn double(&self) -> Self {
-                // `a + a = 0` in characteristic 2.
-                Self::ZERO
-            }
-
-            /// # Panics
-            /// Always panics: `2` is not invertible in characteristic 2.
-            #[inline]
-            fn halve(&self) -> Self {
-                panic!("halve is undefined in characteristic 2")
-            }
+            characteristic_two_methods!();
 
             #[inline]
             fn square(&self) -> Self {
@@ -419,29 +409,12 @@ macro_rules! binary_tower_level {
                 }
             }
 
-            #[inline]
-            fn xor(&self, y: &Self) -> Self {
-                *self + *y
-            }
-
             /// `x·(x - 1) = x² - x = x² + x` in characteristic 2, and squaring is a linear
             /// map here, so this avoids the tower/polynomial basis changes a general product
             /// pays for.
             #[inline]
             fn bool_check(&self) -> Self {
                 self.square() + *self
-            }
-
-            #[inline]
-            fn mul_2exp_u64(&self, exp: u64) -> Self {
-                if exp == 0 { *self } else { Self::ZERO }
-            }
-
-            /// # Panics
-            /// Always panics: `2` is not invertible in characteristic 2.
-            #[inline]
-            fn div_2exp_u64(&self, _exp: u64) -> Self {
-                panic!("div_2exp_u64 is undefined in characteristic 2")
             }
         }
 

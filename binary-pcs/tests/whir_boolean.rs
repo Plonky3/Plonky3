@@ -19,7 +19,7 @@ use p3_binary_pcs::{
     BooleanTraceCommitmentError, GroupedCodewordMmcs,
 };
 use p3_challenger::HashChallenger;
-use p3_commit::MultilinearPcs;
+use p3_commit::{Encoder, MultilinearPcs};
 use p3_field::PrimeCharacteristicRing;
 use p3_keccak::Keccak256Hash;
 use p3_matrix::dense::RowMajorMatrix;
@@ -30,7 +30,7 @@ use p3_sumcheck::layout::{Table, plan_stacked_layout};
 use p3_sumcheck::ring_switch::bits::{BitPacking, BitRingSwitch, BitRingSwitchProofError};
 use p3_sumcheck::{OpeningBatch, OpeningProtocol, PrescribedPointPcs, TableShape, TableSpec};
 use p3_symmetric::{CompressionFunctionFromHasher, SerializingHasher};
-use p3_whir::SecurityAssumption;
+use p3_whir::{SecurityAssumption, WhirDomain, WhirQueryPoint};
 use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
 
@@ -601,16 +601,59 @@ fn the_report_names_every_error_the_adapter_charges() {
     assert!((reduction_bits(false) - (alone - security.log2_max_candidates)).abs() < 1e-9);
 }
 
+/// The Boolean domain under its own identity, accepting every soundness regime.
+struct PermissiveDomain(BooleanWhirDomain);
+
+impl Encoder<EF> for PermissiveDomain {
+    fn encode_batch(&self, message: RowMajorMatrix<EF>, log_inv_rate: usize) -> RowMajorMatrix<EF> {
+        self.0.encode_batch(message, log_inv_rate)
+    }
+}
+
+impl WhirDomain<EF, EF> for PermissiveDomain {
+    fn protocol_id(&self) -> &'static [u8] {
+        WhirDomain::<EF, EF>::protocol_id(&self.0)
+    }
+
+    fn supports_security_assumption(&self, _assumption: SecurityAssumption) -> bool {
+        true
+    }
+
+    fn stratified_queries(&self) -> bool {
+        WhirDomain::<EF, EF>::stratified_queries(&self.0)
+    }
+
+    fn max_log_domain_size(&self) -> usize {
+        WhirDomain::<EF, EF>::max_log_domain_size(&self.0)
+    }
+
+    fn encode_extension_batch_padded(
+        &self,
+        message: RowMajorMatrix<EF>,
+        log_inv_rate: usize,
+    ) -> RowMajorMatrix<EF> {
+        WhirDomain::<EF, EF>::encode_extension_batch_padded(&self.0, message, log_inv_rate)
+    }
+
+    fn query_point(
+        &self,
+        log_domain_size: usize,
+        num_variables: usize,
+        index: usize,
+    ) -> WhirQueryPoint<EF> {
+        WhirDomain::<EF, EF>::query_point(&self.0, log_domain_size, num_variables, index)
+    }
+}
+
 #[test]
 #[should_panic(expected = "soundness regime the domain rejects")]
-fn a_regime_swapped_after_derivation_is_refused_at_construction() {
-    // The regime is a security claim, so it must not be reachable by editing a derived schedule.
-    let domain = BooleanWhirDomain::default();
-    let mut config = BinaryWhirProfile::proven_list_decoding(SECURITY_LEVEL, LOG_INV_RATE, FOLDING)
-        .config::<EF, EF, MyChallenger, _>(LOG_BITS - ABSORBED, &domain)
+fn a_regime_derived_under_a_laxer_twin_is_refused_at_construction() {
+    // The twin shares the domain's identity, so only the regime check tells them apart.
+    let twin = PermissiveDomain(BooleanWhirDomain::default());
+    let config = BinaryWhirProfile::conjectural(SECURITY_LEVEL, LOG_INV_RATE, FOLDING)
+        .config::<EF, EF, MyChallenger, _>(LOG_BITS - ABSORBED, &twin)
         .unwrap();
-    config.params.soundness_type = SecurityAssumption::CapacityBound;
-    let _ = Prover::new(config, domain, mmcs(0));
+    let _ = Prover::new(config, BooleanWhirDomain::default(), mmcs(0));
 }
 
 #[test]

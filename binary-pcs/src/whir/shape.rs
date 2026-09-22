@@ -50,7 +50,7 @@ impl ProofShape {
         EF: ExtensionField<F>,
         Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
     {
-        let num_rounds = config.round_parameters.len();
+        let num_rounds = config.round_parameters().len();
         let mut shape = Self {
             stir_queries: 0,
             opened_base_elements: 0,
@@ -58,17 +58,17 @@ impl ProofShape {
             // One root per folded codeword, before any authentication node is counted.
             merkle_digests: num_rounds,
             // One witness per folding round, one per folded codeword, and one closing the run.
-            sent_base_elements: config.num_variables + num_rounds + 1,
+            sent_base_elements: config.num_variables() + num_rounds + 1,
             // Two coefficients bound one degree-two round, and one value closes the run.
-            sent_extension_elements: 2 * config.num_variables
-                + (1 << config.final_sumcheck_rounds)
-                + config.commitment_ood_samples
+            sent_extension_elements: 2 * config.num_variables()
+                + (1 << config.final_sumcheck_rounds())
+                + config.commitment_ood_samples()
                 + opened_values,
             grinding_bits: config.max_pow_bits(),
         };
 
         let rounds = config
-            .round_parameters
+            .round_parameters()
             .iter()
             .map(|round| {
                 (
@@ -83,7 +83,7 @@ impl ProofShape {
                 (
                     final_round.log_folded_domain_size,
                     final_round.folding_factor,
-                    config.final_queries,
+                    config.terminal().num_queries,
                     0,
                 )
             }));
@@ -130,7 +130,7 @@ impl ProofShape {
         let num_tensors = if successor_tensors { 3 } else { 1 };
         let rows = num_tensors * BitTensor::<EF>::DIMENSION;
         // A Boolean prefix only removes rounds, so the packing's arity bounds them.
-        shape.sent_extension_elements += num_claims * (rows + 2 * config.num_variables + 1);
+        shape.sent_extension_elements += num_claims * (rows + 2 * config.num_variables() + 1);
         shape
     }
 

@@ -188,23 +188,45 @@ where
     ///
     /// Use this preflight, or a fallible opening entry point, to validate one directly.
     /// The commitment traits propagate the same typed errors.
+    ///
+    /// # Minimum non-degenerate protocol
+    ///
+    /// A protocol of empty batches passes every check here.
+    ///
+    /// A table with no opening still contributes its rows, and no claim is under any budget.
+    ///
+    /// Such a run reaches the terminal relation with both sides zero:
+    ///
+    /// ```text
+    ///     0  ==  0 * final_value      holds whatever the final value is
+    /// ```
+    ///
+    /// That is harmless rather than unsound.
+    ///
+    /// A run that claims nothing proves nothing, and asserts nothing either.
+    ///
+    /// Every column it might have opened stays as unconstrained as it was.
+    ///
+    /// The shape is also load-bearing in the security tests.
+    ///
+    /// Only it reaches query sampling with a tampered final codeword.
+    ///
+    /// That isolates the codeword's binding from the check that otherwise rejects first.
+    ///
+    /// A caller wanting a floor of one claim can read the opening count and impose it.
     pub fn validate_opening_protocol(
         &self,
         protocol: &OpeningProtocol,
     ) -> Result<(), BinaryPcsError<F, MT::Error>> {
-        let total = protocol
-            .table_shapes()
-            .iter()
-            .try_fold(0usize, |total, table| {
-                let rows = 1usize.checked_shl(table.num_variables().try_into().ok()?)?;
-                total.checked_add(rows.checked_mul(table.width())?)
-            });
+        let total = protocol.checked_num_cells();
         if !matches!(total, Some(total) if total > 0 && log2_ceil_usize(total) == self.config.num_variables())
         {
             return Err(BinaryPcsError::InvalidOpeningProtocol);
         }
-        let actual =
-            Self::opening_claim_count(protocol).ok_or(BinaryPcsError::InvalidOpeningProtocol)?;
+        let actual = protocol
+            .checked_num_claims()
+            .ok_or(BinaryPcsError::InvalidOpeningProtocol)?;
+
         let max = self.config.max_opening_claims();
         if actual > max {
             return Err(BinaryPcsError::OpeningClaimCountExceedsSecurityBudget {
@@ -214,12 +236,6 @@ where
             });
         }
         Ok(())
-    }
-
-    fn opening_claim_count(protocol: &OpeningProtocol) -> Option<usize> {
-        protocol
-            .iter_openings()
-            .try_fold(0usize, |count, (_, batch)| count.checked_add(batch.len()))
     }
 
     /// Produce a sampled-point opening, returning an error for an invalid or over-budget
@@ -348,16 +364,9 @@ where
         protocol: &OpeningProtocol,
         points: &[Point<EF>],
     ) -> Result<(), BinaryPcsError<F, MT::Error>> {
-        let shapes = protocol.table_shapes();
-        if protocol.num_openings() != points.len()
-            || protocol
-                .iter_openings()
-                .zip(points)
-                .any(|((table, _), point)| point.num_variables() != shapes[table].num_variables())
-        {
-            return Err(BinaryPcsError::OpeningPointShapeMismatch);
-        }
-        Ok(())
+        protocol
+            .check_points(points)
+            .map_err(|_| BinaryPcsError::OpeningPointShapeMismatch)
     }
 
     /// Check that supplied evaluations cover every batch the protocol names, column for column.
@@ -751,7 +760,7 @@ where
             terms: vec![
                 self.config
                     .security_regime()
-                    .opening_term(Self::opening_claim_count(protocol)?),
+                    .opening_term(protocol.checked_num_claims()?),
             ],
             log2_max_candidates: 0.0,
         })

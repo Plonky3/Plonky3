@@ -19,6 +19,7 @@ use rand::distr::{Distribution, StandardUniform};
 use serde::{Deserialize, Serialize};
 
 use crate::cantor::CANTOR_BASIS_128;
+use crate::gf2::characteristic_two_methods;
 use crate::tower::TowerLevel;
 use crate::{
     BinaryField8, BinaryField16, BinaryField32, BinaryField64, BinaryField128, Gf2, clmul,
@@ -268,18 +269,7 @@ impl PrimeCharacteristicRing for Ghash128 {
         Self(u128::from(b))
     }
 
-    #[inline]
-    fn double(&self) -> Self {
-        // `a + a = 0` in characteristic 2.
-        Self::ZERO
-    }
-
-    /// # Panics
-    /// Always panics: `2` is not invertible in characteristic 2.
-    #[inline]
-    fn halve(&self) -> Self {
-        panic!("halve is undefined in characteristic 2")
-    }
+    characteristic_two_methods!();
 
     #[inline]
     fn square(&self) -> Self {
@@ -294,28 +284,11 @@ impl PrimeCharacteristicRing for Ghash128 {
         ))
     }
 
-    #[inline]
-    fn xor(&self, y: &Self) -> Self {
-        *self + *y
-    }
-
     /// `x·(x - 1) = x² - x = x² + x` in characteristic 2, and `poly_square_128` skips the
     /// cross-term carryless multiplies a general product pays for.
     #[inline]
     fn bool_check(&self) -> Self {
         self.square() + *self
-    }
-
-    #[inline]
-    fn mul_2exp_u64(&self, exp: u64) -> Self {
-        if exp == 0 { *self } else { Self::ZERO }
-    }
-
-    /// # Panics
-    /// Always panics: `2` is not invertible in characteristic 2.
-    #[inline]
-    fn div_2exp_u64(&self, _exp: u64) -> Self {
-        panic!("div_2exp_u64 is undefined in characteristic 2")
     }
 }
 

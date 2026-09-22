@@ -2,11 +2,16 @@
 
 use alloc::vec::Vec;
 
-use p3_field::{ExtensionField, Field};
+use p3_challenger::fs::TranscriptField;
+use p3_challenger::{FieldChallenger, GrindingChallenger};
+use p3_field::{ExtensionField, Field, HornerIter};
+
+use crate::zk::data::ZkSumcheckData;
+use crate::zk::transcript::ZkProverTranscript;
 
 /// Round-invariant context for the per-round polynomial assembly.
 ///
-/// Built once at the top of the per-round loop and shared across every call.
+/// Every round of a batch assembles against the same context.
 #[derive(Debug, Clone, Copy)]
 pub(super) struct RoundContext<'a, F, EF> {
     /// Folding factor.
@@ -168,6 +173,113 @@ pub(super) fn round_poly_to_wire<EF: Copy>(h: &[EF]) -> Vec<EF> {
     wire.push(h[0]);
     wire.extend_from_slice(&h[2..]);
     wire
+}
+
+/// Round-by-round state of one masked batch.
+///
+/// Owns what every round advances: the round index, the running endpoint sum of the masks still ahead, and each played mask's evaluation at its challenge.
+/// Records every played round in the proof.
+///
+/// The claim the batch starts from, any carry added to the plain piece, and when the plain side binds each challenge stay with the caller.
+pub(super) struct MaskedRounds<'a, EF> {
+    /// Mask coefficient vectors, one per round, in round order.
+    masks: &'a [Vec<EF>],
+    /// Mask code message length; lower bound on the round polynomial length.
+    ell_zk: usize,
+    /// Powers-of-two table, length `k + 1` for a batch of `k` rounds.
+    pow2: Vec<EF>,
+    /// Combining challenge that scales the plain piece.
+    eps: EF,
+    /// Running `sum_{l >= j} ( s_l(0) + s_l(1) )`.
+    ///
+    /// The first round decrement drops `s_1`, leaving `sum_{l > 1}`.
+    future_endpoints: EF,
+    /// Cache of `s_j(gamma_j)` values used as the past-mask term in later rounds.
+    past_mask_evals: Vec<EF>,
+}
+
+impl<'a, EF: Field> MaskedRounds<'a, EF> {
+    /// Opens the batch before its first round.
+    ///
+    /// `endpoints` is the running endpoint sum `mask_endpoints` returns for these masks.
+    pub(super) fn new(masks: &'a [Vec<EF>], ell_zk: usize, endpoints: EF, eps: EF) -> Self {
+        let k = masks.len();
+        Self {
+            masks,
+            ell_zk,
+            // Powers-of-two table for the per-round multipliers:
+            //
+            //     mult_live   = pow2[k - j]
+            //     mult_past   = pow2[k - j + 1]
+            //     mult_future = pow2[k - j - 1]
+            pow2: EF::TWO.powers().collect_n(k + 1),
+            eps,
+            future_endpoints: endpoints,
+            past_mask_evals: Vec::with_capacity(k),
+        }
+    }
+
+    /// Plays the next round: assembles its polynomial, binds the wire, records it, returns the challenge.
+    ///
+    /// # Panics
+    ///
+    /// When every round of the batch has already been played.
+    pub(super) fn play<F, Ch>(
+        &mut self,
+        plain: PlainPiece<EF>,
+        transcript: &mut ZkProverTranscript<'_, Ch, F, EF>,
+        zk_data: &mut ZkSumcheckData<F, EF>,
+    ) -> EF
+    where
+        F: TranscriptField,
+        EF: ExtensionField<F>,
+        Ch: FieldChallenger<F> + GrindingChallenger<Witness = F>,
+    {
+        let round_idx = self.past_mask_evals.len();
+        assert!(
+            round_idx < self.masks.len(),
+            "every round of the masked batch has already been played",
+        );
+        let mask = &self.masks[round_idx];
+
+        // Update the running future-endpoint sum: drop s_j's contribution so the round-j formula reads only sum_{l > j}.
+        self.future_endpoints -= mask[0].double() + mask[1..].iter().copied().sum::<EF>();
+
+        // Assemble h_j; see `RoundContext::assemble` for the formula and the
+        // in-place affine-consistency cross-check.
+        let h = RoundContext {
+            k: self.masks.len(),
+            ell_zk: self.ell_zk,
+            pow2: &self.pow2,
+            eps: self.eps,
+        }
+        .assemble(
+            RoundState {
+                j: round_idx + 1,
+                mask,
+                past_mask_evals: &self.past_mask_evals,
+                future_endpoints: self.future_endpoints,
+            },
+            plain,
+        );
+
+        // Wire format: drop the linear coefficient — the verifier
+        // reconstructs it from the affine identity.
+        let wire = round_poly_to_wire(&h);
+
+        // One call binds the wire, grinds when enabled, and draws the challenge.
+        let (gamma, witness) = transcript.round(&wire);
+
+        // Record what the round produced alongside what it bound.
+        zk_data.round_coefficients.push(wire);
+        zk_data.pow_witnesses.extend(witness);
+
+        // Cache s_j(gamma_j) via Horner for the past-mask term in future rounds.
+        self.past_mask_evals
+            .push(mask.iter().copied().horner(gamma));
+
+        gamma
+    }
 }
 
 #[cfg(test)]

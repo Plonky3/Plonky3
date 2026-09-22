@@ -21,6 +21,7 @@ use rand::{Rng, RngExt};
 use super::engine::{invert_slice, mul_slice};
 use super::{ByteMatrix, Rijndael8b};
 use crate::Gf2;
+use crate::gf2::characteristic_two_methods;
 
 /// The block width the scalar field advertises as its packing.
 ///
@@ -338,40 +339,12 @@ impl<const N: usize> PrimeCharacteristicRing for PackedRijndael8b<N> {
         Self::splat(Rijndael8b::from_prime_subfield(f))
     }
 
-    #[inline]
-    fn double(&self) -> Self {
-        // `a + a = 0` in characteristic 2.
-        Self::ZERO
-    }
-
-    /// # Panics
-    /// Always panics: `2` is not invertible in characteristic 2.
-    #[inline]
-    fn halve(&self) -> Self {
-        panic!("halve is undefined in characteristic 2")
-    }
+    characteristic_two_methods!();
 
     /// Raising to `2^k` is one tabulated map, whatever the exponent.
     #[inline]
     fn exp_power_of_2(&self, power_log: usize) -> Self {
         self.frobenius(power_log)
-    }
-
-    #[inline]
-    fn xor(&self, y: &Self) -> Self {
-        *self + *y
-    }
-
-    #[inline]
-    fn mul_2exp_u64(&self, exp: u64) -> Self {
-        if exp == 0 { *self } else { Self::ZERO }
-    }
-
-    /// # Panics
-    /// Always panics: `2` is not invertible in characteristic 2.
-    #[inline]
-    fn div_2exp_u64(&self, _exp: u64) -> Self {
-        panic!("div_2exp_u64 is undefined in characteristic 2")
     }
 }
 

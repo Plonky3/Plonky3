@@ -361,7 +361,8 @@ mod tests {
                 //
                 // A handoff after any batch carries that batch's last challenge across.
                 for &rounds in &batches[..split] {
-                    handoff.compute_sumcheck_polynomials(
+                    // The tail replays these challenges, so the head only advances the sponge.
+                    let _ = handoff.compute_sumcheck_polynomials(
                         &mut handoff_data,
                         &mut handoff_challenger,
                         rounds,

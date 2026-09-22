@@ -79,7 +79,7 @@ use core::marker::PhantomData;
 
 use p3_challenger::fs::{
     DomainSeparator, FieldToFieldCodec, FieldUnit, Hierarchy, Interaction, InteractionPattern,
-    Kind, Length, ProverState, TranscriptField, VerifierState,
+    Kind, Length, ProverState, SymmetricSteps, TranscriptField, VerifierState,
 };
 use p3_challenger::{CanObserve, CanSample, GrindingChallenger};
 use p3_field::{ExtensionField, Field};
@@ -437,15 +437,7 @@ where
     ///
     /// When the batch was described as inheriting its claim instead.
     pub fn batching_challenge(&mut self) -> EF {
-        assert_eq!(
-            self.shape.prelude,
-            ZkPrelude::RecordedClaims,
-            "a batch described as inheriting its claim draws no batching challenge",
-        );
-
-        self.state
-            .challenge_extension::<F, EF, FieldToFieldCodec<F>>(CLAIM_BATCHING)
-            .into_inner()
+        play_batching_challenge::<F, EF, _>(&mut self.state, self.shape.prelude)
     }
 
     /// Bind the scalar claim this batch inherits from its caller.
@@ -454,14 +446,7 @@ where
     ///
     /// When the batch was described as batching recorded claims instead.
     pub fn bind_claim(&mut self, claim: EF) {
-        assert_eq!(
-            self.shape.prelude,
-            ZkPrelude::InheritedClaim,
-            "a batch described as batching recorded claims binds no inherited claim",
-        );
-
-        self.state
-            .observe_extension::<F, EF, FieldToFieldCodec<F>>(JOINT_CLAIM, &claim);
+        play_bind_claim::<F, _, _>(&mut self.state, self.shape.prelude, claim);
     }
 
     /// Bind the mask oracle and its endpoint sum, then draw the combining challenge.
@@ -479,14 +464,7 @@ where
         Com: Clone,
         C: CanObserve<Com>,
     {
-        // The oracle is fixed before the value summed out of the masks behind it.
-        self.state.observe_opaque(MASK_COMMITMENT, commitment);
-        self.state
-            .observe_extension::<F, EF, FieldToFieldCodec<F>>(MU_TILDE, &mu_tilde);
-
-        self.state
-            .challenge_extension::<F, EF, FieldToFieldCodec<F>>(MASK_COMBINATION)
-            .into_inner()
+        play_masks::<F, EF, _, _>(&mut self.state, commitment, mu_tilde)
     }
 
     /// Play one round: bind the transmitted coefficients, grind, and draw the challenge.
@@ -589,15 +567,7 @@ where
     ///
     /// When the batch was described as inheriting its claim instead.
     pub fn batching_challenge(&mut self) -> EF {
-        assert_eq!(
-            self.shape.prelude,
-            ZkPrelude::RecordedClaims,
-            "a batch described as inheriting its claim draws no batching challenge",
-        );
-
-        self.state
-            .challenge_extension::<F, EF, FieldToFieldCodec<F>>(CLAIM_BATCHING)
-            .into_inner()
+        play_batching_challenge::<F, EF, _>(&mut self.state, self.shape.prelude)
     }
 
     /// Bind the scalar claim this batch inherits from its caller.
@@ -609,14 +579,7 @@ where
     ///
     /// When the batch was described as batching recorded claims instead.
     pub fn bind_claim(&mut self, claim: EF) {
-        assert_eq!(
-            self.shape.prelude,
-            ZkPrelude::InheritedClaim,
-            "a batch described as batching recorded claims binds no inherited claim",
-        );
-
-        self.state
-            .observe_extension::<F, EF, FieldToFieldCodec<F>>(JOINT_CLAIM, &claim);
+        play_bind_claim::<F, _, _>(&mut self.state, self.shape.prelude, claim);
     }
 
     /// Bind the mask oracle and its endpoint sum, then draw the combining challenge.
@@ -634,14 +597,7 @@ where
         Com: Clone,
         C: CanObserve<Com>,
     {
-        // The oracle is fixed before the value summed out of the masks behind it.
-        self.state.observe_opaque(MASK_COMMITMENT, commitment);
-        self.state
-            .observe_extension::<F, EF, FieldToFieldCodec<F>>(MU_TILDE, &mu_tilde);
-
-        self.state
-            .challenge_extension::<F, EF, FieldToFieldCodec<F>>(MASK_COMBINATION)
-            .into_inner()
+        play_masks::<F, EF, _, _>(&mut self.state, commitment, mu_tilde)
     }
 
     /// Replay one round: bind the wire, re-check the grind, draw the challenge.
@@ -725,6 +681,69 @@ where
     }
 }
 
+/// Draw the challenge that weights the claims a layout recorded.
+///
+/// # Panics
+///
+/// When the batch was described as inheriting its claim instead.
+fn play_batching_challenge<F, EF, S>(state: &mut S, prelude: ZkPrelude) -> EF
+where
+    F: TranscriptField,
+    EF: ExtensionField<F>,
+    S: SymmetricSteps,
+    S::Challenger: CanObserve<F> + CanSample<F>,
+{
+    assert_eq!(
+        prelude,
+        ZkPrelude::RecordedClaims,
+        "a batch described as inheriting its claim draws no batching challenge",
+    );
+
+    state
+        .challenge_extension::<F, EF, FieldToFieldCodec<F>>(CLAIM_BATCHING)
+        .into_inner()
+}
+
+/// Bind the scalar claim the batch inherits from its caller.
+///
+/// # Panics
+///
+/// When the batch was described as batching recorded claims instead.
+fn play_bind_claim<F, EF, S>(state: &mut S, prelude: ZkPrelude, claim: EF)
+where
+    F: TranscriptField,
+    EF: ExtensionField<F>,
+    S: SymmetricSteps,
+    S::Challenger: CanObserve<F> + CanSample<F>,
+{
+    assert_eq!(
+        prelude,
+        ZkPrelude::InheritedClaim,
+        "a batch described as batching recorded claims binds no inherited claim",
+    );
+
+    state.observe_extension::<F, EF, FieldToFieldCodec<F>>(JOINT_CLAIM, &claim);
+}
+
+/// Bind the mask oracle and its endpoint sum, then draw the combining challenge.
+///
+/// The oracle is fixed before the value summed out of the masks behind it.
+fn play_masks<F, EF, S, Com>(state: &mut S, commitment: Com, mu_tilde: EF) -> EF
+where
+    F: TranscriptField,
+    EF: ExtensionField<F>,
+    S: SymmetricSteps,
+    Com: Clone,
+    S::Challenger: CanObserve<F> + CanSample<F> + CanObserve<Com>,
+{
+    state.observe_opaque(MASK_COMMITMENT, commitment);
+    state.observe_extension::<F, EF, FieldToFieldCodec<F>>(MU_TILDE, &mu_tilde);
+
+    state
+        .challenge_extension::<F, EF, FieldToFieldCodec<F>>(MASK_COMBINATION)
+        .into_inner()
+}
+
 #[cfg(test)]
 mod tests {
     use alloc::vec;
@@ -733,8 +752,10 @@ mod tests {
     use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
     use p3_challenger::testing::pow_difficulties;
     use p3_challenger::{CanSample, DuplexChallenger};
-    use p3_field::PrimeCharacteristicRing;
     use p3_field::extension::BinomialExtensionField;
+    use p3_field::{BasedVectorSpace, PrimeCharacteristicRing, PrimeField64};
+    use p3_keccak::Keccak256Hash;
+    use p3_symmetric::CryptographicHasher;
     use rand::SeedableRng;
     use rand::rngs::StdRng;
 
@@ -752,6 +773,11 @@ mod tests {
         // Fixed seed so two runs differ only where the transcript makes them differ.
         let mut rng = StdRng::seed_from_u64(0xDEADBEEF);
         Ch::new(Perm::new_from_rng_128(&mut rng))
+    }
+
+    /// Keccak-256 over canonical values, eight little-endian bytes each.
+    fn stream_digest(values: &[u64]) -> [u8; 32] {
+        Keccak256Hash.hash_iter(values.iter().flat_map(|v| v.to_le_bytes()))
     }
 
     /// A commitment stand-in built from one number.
@@ -1144,5 +1170,169 @@ mod tests {
                     .all(|&(label, got)| label == ROUND_POW && got == bits)
             );
         }
+    }
+
+    #[test]
+    fn the_challenge_stream_is_pinned() {
+        // Invariant: the challenge stream stays the same value over this fixed run,
+        // for both a batch that draws its own batching challenge and one that
+        // inherits its claim.
+        //
+        // Grinding stays off: parallel PoW may return any valid witness.
+        let extension_words = |value: &EF| -> Vec<u64> {
+            value
+                .as_basis_coefficients_slice()
+                .iter()
+                .map(F::as_canonical_u64)
+                .collect()
+        };
+
+        // (a) a batch that draws its own batching challenge over recorded claims.
+        let wires = honest_wires();
+        let shape = ZkSumcheckShape::new_batching(2, 4, 0);
+
+        let mut prover_challenger = fresh_challenger();
+        let (alpha, eps, gammas, witnesses) = drive_prover(
+            &mut prover_challenger,
+            shape,
+            commitment(7),
+            EF::from_u8(9),
+            &wires,
+        );
+        let prover_next: F = prover_challenger.sample();
+
+        let mut stream = extension_words(&alpha);
+        stream.extend(extension_words(&eps));
+        stream.extend(gammas.iter().flat_map(extension_words));
+        stream.push(prover_next.as_canonical_u64());
+        assert_eq!(
+            stream_digest(&stream),
+            [
+                254, 63, 232, 210, 132, 116, 250, 106, 226, 104, 125, 26, 147, 235, 33, 70, 49,
+                221, 46, 219, 10, 107, 95, 110, 106, 17, 93, 160, 174, 29, 97, 156,
+            ],
+        );
+
+        let mut verifier_challenger = fresh_challenger();
+        let (replayed_alpha, replayed_eps, replayed_gammas) = drive_verifier(
+            &mut verifier_challenger,
+            shape,
+            commitment(7),
+            EF::from_u8(9),
+            &wires,
+            &witnesses,
+        )
+        .expect("the honest batch must replay");
+        assert_eq!(alpha, replayed_alpha);
+        assert_eq!(eps, replayed_eps);
+        assert_eq!(gammas, replayed_gammas);
+        let verifier_next: F = verifier_challenger.sample();
+        assert_eq!(prover_next, verifier_next);
+
+        // (b) a batch that inherits its claim, played inline on both sides.
+        let inherited = ZkSumcheckShape::new_inherited(2, 4, 0);
+
+        let mut prover_challenger = fresh_challenger();
+        let mut prover_transcript =
+            ZkProverTranscript::<Ch, F, EF>::new(&mut prover_challenger, inherited);
+        prover_transcript.bind_claim(EF::from_u8(11));
+        let eps = prover_transcript.masks(commitment(7), EF::from_u8(9));
+        let mut gammas = Vec::new();
+        for wire in &wires {
+            let (gamma, _witness) = prover_transcript.round(wire);
+            gammas.push(gamma);
+        }
+        prover_transcript.finish();
+        let prover_next: F = prover_challenger.sample();
+
+        let mut stream = extension_words(&eps);
+        stream.extend(gammas.iter().flat_map(extension_words));
+        stream.push(prover_next.as_canonical_u64());
+        assert_eq!(
+            stream_digest(&stream),
+            [
+                170, 180, 70, 73, 217, 13, 161, 0, 67, 226, 192, 230, 52, 98, 66, 178, 120, 50, 53,
+                15, 16, 48, 140, 167, 165, 63, 61, 44, 121, 169, 24, 120,
+            ],
+        );
+
+        let mut verifier_challenger = fresh_challenger();
+        let mut verifier_transcript =
+            ZkVerifierTranscript::<Ch, F, EF>::new(&mut verifier_challenger, inherited);
+        verifier_transcript.bind_claim(EF::from_u8(11));
+        let replayed_eps = verifier_transcript.masks(commitment(7), EF::from_u8(9));
+        let mut replayed_gammas = Vec::new();
+        for wire in &wires {
+            replayed_gammas.push(
+                verifier_transcript
+                    .round(wire, None)
+                    .expect("the honest batch must replay"),
+            );
+        }
+        verifier_transcript.finish();
+        assert_eq!(eps, replayed_eps);
+        assert_eq!(gammas, replayed_gammas);
+        let verifier_next: F = verifier_challenger.sample();
+        assert_eq!(prover_next, verifier_next);
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "a batch described as inheriting its claim draws no batching challenge"
+    )]
+    fn a_prover_that_draws_a_batching_challenge_on_an_inherited_shape_fails_loudly() {
+        // Invariant: a batch described as inheriting its claim draws no batching
+        // challenge, prover side.
+        let mut challenger = fresh_challenger();
+        let mut transcript = ZkProverTranscript::<Ch, F, EF>::new(
+            &mut challenger,
+            ZkSumcheckShape::new_inherited(1, 4, 0),
+        );
+        let _ = transcript.batching_challenge();
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "a batch described as batching recorded claims binds no inherited claim"
+    )]
+    fn a_prover_that_binds_an_inherited_claim_on_a_batching_shape_fails_loudly() {
+        // Invariant: a batch described as batching recorded claims binds no
+        // inherited claim, prover side.
+        let mut challenger = fresh_challenger();
+        let mut transcript = ZkProverTranscript::<Ch, F, EF>::new(
+            &mut challenger,
+            ZkSumcheckShape::new_batching(1, 4, 0),
+        );
+        transcript.bind_claim(EF::from_u8(11));
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "a batch described as inheriting its claim draws no batching challenge"
+    )]
+    fn a_verifier_that_draws_a_batching_challenge_on_an_inherited_shape_fails_loudly() {
+        // Invariant: a batch described as inheriting its claim draws no batching
+        // challenge, verifier side.
+        let mut challenger = fresh_challenger();
+        let mut transcript = ZkVerifierTranscript::<Ch, F, EF>::new(
+            &mut challenger,
+            ZkSumcheckShape::new_inherited(1, 4, 0),
+        );
+        let _ = transcript.batching_challenge();
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "a batch described as batching recorded claims binds no inherited claim"
+    )]
+    fn a_verifier_that_binds_an_inherited_claim_on_a_batching_shape_fails_loudly() {
+        // Invariant: a batch described as batching recorded claims binds no
+        // inherited claim, verifier side.
+        let mut challenger = fresh_challenger();
+        let mut transcript = ZkVerifierTranscript::<Ch, F, EF>::new(
+            &mut challenger,
+            ZkSumcheckShape::new_batching(1, 4, 0),
+        );
+        transcript.bind_claim(EF::from_u8(11));
     }
 }

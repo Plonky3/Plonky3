@@ -22,60 +22,13 @@ where
     EF: ExtensionField<F>,
     Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
 {
-    // Public derived fields can be changed after construction. Only certify a
-    // schedule which agrees with the validated parameter derivation.
-    let canonical = WhirConfig::<EF, F, Challenger>::new_with_max_domain_log(
-        config.num_variables,
-        config.params.clone(),
-        config.max_log_domain_size,
-    )
-    .ok()?;
-    // Domain identity and query stratification affect transcript separation and
-    // sampling geometry, not the derived algebraic budget. The encoder capacity
-    // is the only domain-specific input to the schedule reconstructed here.
-    if config.commitment_ood_samples != canonical.commitment_ood_samples
-        || config.folding_schedule != canonical.folding_schedule
-        || config.starting_folding_pow_bits != canonical.starting_folding_pow_bits
-        || config.final_queries != canonical.final_queries
-        || config.final_pow_bits != canonical.final_pow_bits
-        || config.final_sumcheck_rounds != canonical.final_sumcheck_rounds
-        || config.final_folding_pow_bits != canonical.final_folding_pow_bits
-        || config.round_parameters.len() != canonical.round_parameters.len()
-        || config
-            .round_parameters
-            .iter()
-            .zip(&canonical.round_parameters)
-            .any(|(a, b)| {
-                a.pow_bits != b.pow_bits
-                    || a.folding_pow_bits != b.folding_pow_bits
-                    || a.num_queries != b.num_queries
-                    || a.ood_samples != b.ood_samples
-                    || a.num_variables != b.num_variables
-                    || a.folding_factor != b.folding_factor
-                    || a.log_inv_rate != b.log_inv_rate
-                    || a.domain_size != b.domain_size
-                    || a.log_folded_domain_size != b.log_folded_domain_size
-            })
-    {
-        return None;
-    }
-
-    let total_cells = protocol
-        .table_shapes()
-        .iter()
-        .try_fold(0usize, |total, table| {
-            let cells = (1usize.checked_shl(table.num_variables().try_into().ok()?)?)
-                .checked_mul(table.width())?;
-            total.checked_add(cells)
-        })?;
+    let total_cells = protocol.checked_num_cells()?;
     if total_cells == 0 || log2_ceil_usize(total_cells) != config.num_variables {
         return None;
     }
     let num_claims = protocol
-        .iter_openings()
-        .try_fold(config.commitment_ood_samples, |total, (_, batch)| {
-            total.checked_add(batch.len())
-        })?;
+        .checked_num_claims()?
+        .checked_add(config.commitment_ood_samples)?;
     config.validate_initial_claims(num_claims).ok()?;
 
     // Field::bits() rounds upward. A whole-bit lower bound avoids granting
@@ -153,7 +106,8 @@ where
         old_rate = round.log_inv_rate;
     }
     errors.push(ErrorBits::from_log2(
-        assumption.queries_error(old_rate, config.final_queries) + config.final_pow_bits as f64,
+        assumption.queries_error(old_rate, config.terminal.num_queries)
+            + config.terminal.pow_bits as f64,
     ));
     for _ in 0..config.final_sumcheck_rounds {
         errors.push(ErrorBits::from_log2(
@@ -286,13 +240,6 @@ mod tests {
     }
 
     #[test]
-    fn modified_derived_parameters_have_no_security_evidence() {
-        let mut pcs = pcs();
-        pcs.config.final_queries = 0;
-        assert!(pcs.prescribed_security(&protocol(12)).is_none());
-    }
-
-    #[test]
     fn johnson_report_reserves_one_bit_for_each_proximity_gap() {
         let pcs = johnson_reserve_pcs();
         let protocol = protocol(4);
@@ -335,8 +282,10 @@ mod tests {
                 - 2.0,
         ));
         expected_terms.push(ErrorBits::from_log2(
-            assumption.queries_error(pcs.config.starting_log_inv_rate, pcs.config.final_queries)
-                + pcs.config.final_pow_bits as f64,
+            assumption.queries_error(
+                pcs.config.starting_log_inv_rate,
+                pcs.config.terminal.num_queries,
+            ) + pcs.config.terminal.pow_bits as f64,
         ));
         let expected = ErrorBits::sum(&expected_terms).bits();
         assert!((report.error().bits() - expected).abs() < 1e-10);

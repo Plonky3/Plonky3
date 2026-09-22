@@ -90,7 +90,7 @@ fn bench_poseidon2_zerocheck_prove(c: &mut Criterion) {
                             &public_values,
                             &mut challenger,
                         );
-                        black_box((proof, point, num_vars, num_airs));
+                        let _ = black_box((proof, point, num_vars, num_airs));
                     });
                 },
             );

@@ -903,6 +903,18 @@ impl<T> DisjointMutPtr<T> {
     pub const unsafe fn slice_mut<'a>(self, offset: usize, len: usize) -> &'a mut [T] {
         unsafe { core::slice::from_raw_parts_mut(self.0.add(offset), len) }
     }
+
+    /// Get a shared slice starting at `offset` with `len` elements.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure the range `[offset, offset+len)` is within bounds
+    /// and is not written by any concurrent access. The returned slice must not
+    /// outlive the buffer passed to [`Self::new`].
+    #[inline]
+    pub const unsafe fn slice<'a>(self, offset: usize, len: usize) -> &'a [T] {
+        unsafe { core::slice::from_raw_parts(self.0.add(offset), len) }
+    }
 }
 
 #[cfg(test)]

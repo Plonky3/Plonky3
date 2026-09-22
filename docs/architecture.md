@@ -40,6 +40,8 @@ AIR + trace
 | `p3-whir` | Multilinear polynomials and constrained Reed–Solomon codes | Yes: `HidingWhirPcs` provides honest-verifier ZK at the PCS layer | Implements `MultilinearPcs`; applications must compose and analyze the complete protocol |
 | `p3-binary-pcs::BinaryPcs` | Multilinear polynomials over `BinaryField128` with an additive-domain code | No; query symbols and the final codeword are revealed | Used by the binary multilinear STARK example in an explicitly non-ZK composition |
 
+Soundness conditions a caller has to discharge itself — transcript ordering, properties of the committed witness, parameters a crate cannot see the other side of — are collected in [the caller-obligations list](caller-obligations.md), together with each reduction's minimum non-degenerate shape.
+
 A hiding PCS is one part of a zero-knowledge proof system. It does not by itself establish that every trace commitment, auxiliary argument, transcript message, or application-level statement is zero knowledge. The univariate STARK implementations contain explicit paths selected by the backend's `ZK` capability and tests with hiding FRI; other compositions need their own complete protocol analysis.
 
 ## Portability and features

@@ -389,6 +389,11 @@ pub enum SkipOpeningError {
     Sumcheck(#[from] GenericDegreeError),
 }
 /// What a replayed opening reduction leaves for a commitment to answer.
+///
+/// Nothing before this claim ties the replay to a commitment.
+///
+/// Dropping it without checking committed openings therefore accepts everything.
+#[must_use]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SkipOpeningClaim<EF> {
     /// The point the rounds ended on.

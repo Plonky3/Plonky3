@@ -51,6 +51,7 @@ mod naive;
 ))]
 mod neon;
 mod poly;
+mod staging;
 mod subfield;
 #[cfg(test)]
 pub(crate) mod test_util;

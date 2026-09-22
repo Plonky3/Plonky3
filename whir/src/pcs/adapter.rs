@@ -126,10 +126,8 @@ where
     ) -> Result<Self::Proof, Self::ProverError> {
         self.config.validate_initial_claims(
             protocol
-                .iter_openings()
-                .try_fold(self.commitment_ood_samples, |n, (_, batch)| {
-                    n.checked_add(batch.len())
-                })
+                .checked_num_claims()
+                .and_then(|n| n.checked_add(self.commitment_ood_samples))
                 .ok_or(WhirConfigError::InitialClaimCountOverflow)?,
         )?;
         let initial_ood_answers = tracing::info_span!("ood claims").in_scope(|| {
@@ -216,7 +214,8 @@ where
                 .saturating_add(self.commitment_ood_samples),
         )?;
         let verifier = WhirVerifier::new(&self.config, &self.dft, &self.mmcs, L::variable_order());
-        verifier.verify(
+        // The run closes its own terminal check, so its folding point is informational.
+        let _ = verifier.verify(
             &proof.whir,
             challenger,
             commitment,
@@ -262,10 +261,8 @@ where
     ) -> Result<Self::Proof, Self::ProverError> {
         self.config.validate_initial_claims(
             protocol
-                .iter_openings()
-                .try_fold(self.commitment_ood_samples, |n, (_, batch)| {
-                    n.checked_add(batch.len())
-                })
+                .checked_num_claims()
+                .and_then(|n| n.checked_add(self.commitment_ood_samples))
                 .ok_or(WhirConfigError::InitialClaimCountOverflow)?,
         )?;
         // One prescribed point per opening batch.
@@ -363,7 +360,8 @@ where
                 .saturating_add(self.commitment_ood_samples),
         )?;
         let verifier = WhirVerifier::new(&self.config, &self.dft, &self.mmcs, L::variable_order());
-        verifier.verify(
+        // The run closes its own terminal check, so its folding point is informational.
+        let _ = verifier.verify(
             &proof.whir,
             challenger,
             commitment,

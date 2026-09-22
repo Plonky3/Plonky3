@@ -92,6 +92,27 @@ pub enum WhirConfigError {
     )]
     NonRedundantStartingRate { log_inv_rate: usize },
 
+    /// The derived schedule opens no position.
+    ///
+    /// - Queries are the only part of the run that tests proximity.
+    /// - A schedule opening none of them accepts any committed function.
+    /// - A redundant rate rules out the usual way of reaching zero.
+    /// - Crediting grinding with the whole target reaches it anyway.
+    ///
+    /// The protocol level is a saturating difference.
+    ///
+    /// So the credit is whole whenever the budget reaches the target, not only at zero:
+    ///
+    /// ```text
+    ///     pow_bits >= security_level  ->  protocol level 0  ->  no query is bought
+    /// ```
+    ///
+    /// The count is derived, so this catches every parameter combination that lands on zero.
+    #[error(
+        "the derived schedule opens no position, so the proximity test accepts any committed function"
+    )]
+    ZeroQueries,
+
     /// A per-round code rate is not redundant.
     ///
     /// - The codeword committed after one intermediate round has rate `1`.
@@ -154,11 +175,50 @@ pub struct RoundConfig {
     pub log_folded_domain_size: usize,
 }
 
+/// Query budget of one terminal proximity test.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TerminalBudget {
+    /// Number of proximity queries against the terminal codeword.
+    pub num_queries: usize,
+    /// Proof-of-work difficulty (in bits) guarding those queries.
+    pub pow_bits: usize,
+}
+
 /// Fully derived WHIR protocol configuration.
 ///
 /// Built from user-facing protocol parameters plus the polynomial size.
 ///
 /// Contains all precomputed values needed by the prover and verifier.
+///
+/// Fields are written only by the constructors in this module; the schedule
+/// is read through accessors.
+///
+/// ```
+/// use p3_field::{ExtensionField, Field};
+/// use p3_whir::WhirConfig;
+///
+/// fn final_queries<EF: ExtensionField<F>, F: Field, C>(config: &WhirConfig<EF, F, C>) -> usize {
+///     config.terminal().num_queries
+/// }
+/// ```
+///
+/// ```compile_fail
+/// use p3_field::{ExtensionField, Field};
+/// use p3_whir::WhirConfig;
+///
+/// fn weaken<EF: ExtensionField<F>, F: Field, C>(config: &mut WhirConfig<EF, F, C>) {
+///     config.terminal.num_queries = 0;
+/// }
+/// ```
+///
+/// ```compile_fail
+/// use p3_field::{ExtensionField, Field};
+/// use p3_whir::{SecurityAssumption, WhirConfig};
+///
+/// fn swap_regime<EF: ExtensionField<F>, F: Field, C>(config: &mut WhirConfig<EF, F, C>) {
+///     config.params.soundness_type = SecurityAssumption::CapacityBound;
+/// }
+/// ```
 #[derive(Debug, Clone)]
 pub struct WhirConfig<EF, F, Challenger>
 where
@@ -166,7 +226,7 @@ where
     EF: ExtensionField<F>,
 {
     /// Number of variables in the original multilinear polynomial.
-    pub num_variables: usize,
+    pub(crate) num_variables: usize,
     /// Largest base-two domain dimension supported by the encoder.
     pub(crate) max_log_domain_size: usize,
     /// Stable evaluation-domain identity committed by the transcript.
@@ -174,32 +234,30 @@ where
     /// Whether proximity queries are allocated to protocol-fixed strata.
     pub(crate) stratified_queries: bool,
     /// Protocol parameters.
-    pub params: ProtocolParameters,
+    pub(crate) params: ProtocolParameters,
     /// Per-round derived configuration for each intermediate STIR round.
-    pub round_parameters: Vec<RoundConfig>,
+    pub(crate) round_parameters: Vec<RoundConfig>,
     /// Concrete folding factors used before the final direct-send phase.
     ///
     /// For constant schedules the last entry may be smaller than the nominal
     /// configured factor, e.g. `Constant(8)` on 15 variables derives `[8, 7]`.
-    pub folding_schedule: Vec<usize>,
+    pub(crate) folding_schedule: Vec<usize>,
     /// Number of out-of-domain samples during the commitment phase.
-    pub commitment_ood_samples: usize,
+    pub(crate) commitment_ood_samples: usize,
     /// PoW bits for the initial folding sumcheck (before any STIR rounds).
-    pub starting_folding_pow_bits: usize,
-    /// Number of STIR queries in the final proximity test.
-    pub final_queries: usize,
-    /// PoW bits for the final STIR query phase.
-    pub final_pow_bits: usize,
+    pub(crate) starting_folding_pow_bits: usize,
+    /// Query budget of the final proximity test against the last committed codeword.
+    pub(crate) terminal: TerminalBudget,
     /// Number of sumcheck rounds in the final phase.
-    pub final_sumcheck_rounds: usize,
+    pub(crate) final_sumcheck_rounds: usize,
     /// PoW bits for the final folding sumcheck.
-    pub final_folding_pow_bits: usize,
+    pub(crate) final_folding_pow_bits: usize,
     /// Phantom marker for the extension field type.
-    pub _extension_field: PhantomData<EF>,
+    _extension_field: PhantomData<EF>,
     /// Phantom marker for the base field type.
-    pub _base_field: PhantomData<F>,
+    _base_field: PhantomData<F>,
     /// Phantom marker for the challenger type.
-    pub _challenger: PhantomData<Challenger>,
+    _challenger: PhantomData<Challenger>,
 }
 
 impl<EF, F, Challenger> Deref for WhirConfig<EF, F, Challenger>
@@ -211,6 +269,57 @@ where
 
     fn deref(&self) -> &Self::Target {
         &self.params
+    }
+}
+
+impl<EF, F, Challenger> WhirConfig<EF, F, Challenger>
+where
+    F: Field,
+    EF: ExtensionField<F>,
+{
+    /// Number of variables in the original multilinear polynomial.
+    pub const fn num_variables(&self) -> usize {
+        self.num_variables
+    }
+
+    /// User-facing parameters the schedule was derived from.
+    pub const fn params(&self) -> &ProtocolParameters {
+        &self.params
+    }
+
+    /// Derived configuration of each intermediate round, in round order.
+    pub fn round_parameters(&self) -> &[RoundConfig] {
+        &self.round_parameters
+    }
+
+    /// Concrete folding factors used before the final direct-send phase.
+    pub fn folding_schedule(&self) -> &[usize] {
+        &self.folding_schedule
+    }
+
+    /// Number of out-of-domain samples during the commitment phase.
+    pub const fn commitment_ood_samples(&self) -> usize {
+        self.commitment_ood_samples
+    }
+
+    /// PoW bits for the initial folding sumcheck.
+    pub const fn starting_folding_pow_bits(&self) -> usize {
+        self.starting_folding_pow_bits
+    }
+
+    /// Query budget of the final proximity test against the last committed codeword.
+    pub const fn terminal(&self) -> TerminalBudget {
+        self.terminal
+    }
+
+    /// Number of sumcheck rounds in the final phase.
+    pub const fn final_sumcheck_rounds(&self) -> usize {
+        self.final_sumcheck_rounds
+    }
+
+    /// PoW bits for the final folding sumcheck.
+    pub const fn final_folding_pow_bits(&self) -> usize {
+        self.final_folding_pow_bits
     }
 }
 
@@ -621,8 +730,10 @@ where
             starting_folding_pow_bits: ceil_pow_bits(starting_folding_pow_bits),
             round_parameters,
             folding_schedule,
-            final_queries,
-            final_pow_bits: ceil_pow_bits(final_pow_bits),
+            terminal: TerminalBudget {
+                num_queries: final_queries,
+                pow_bits: ceil_pow_bits(final_pow_bits),
+            },
             final_sumcheck_rounds,
             final_folding_pow_bits: ceil_pow_bits(final_folding_pow_bits),
             _extension_field: PhantomData,
@@ -639,6 +750,27 @@ where
             config.final_round_config().num_variables,
             config.final_sumcheck_rounds
         );
+
+        // Invariant: the schedule must open at least one position.
+        //
+        // A non-redundant rate is refused above, which rules out the usual route to zero.
+        //
+        // Crediting grinding with the whole target is the other, and nothing above sees it.
+        //
+        // The protocol level is a saturating difference.
+        //
+        // So that credit is whole whenever the budget reaches the target, not only at zero:
+        //
+        //     - pow_bits >= security_level  ->  protocol level 0, so no query is bought
+        //     - zero queries                ->  nothing ties a codeword to its commitment
+        if config.terminal.num_queries == 0
+            && config
+                .round_parameters
+                .iter()
+                .all(|round| round.num_queries == 0)
+        {
+            return Err(WhirConfigError::ZeroQueries);
+        }
 
         // Enforce the grinding budget.
         // A derived PoW above the cap means the field or rate cannot reach
@@ -717,7 +849,7 @@ where
         // Whole-protocol grinding steps outside the per-round loop.
         let outer = self
             .starting_folding_pow_bits
-            .max(self.final_pow_bits)
+            .max(self.terminal.pow_bits)
             .max(self.final_folding_pow_bits);
 
         // Each round grinds once for queries and once for folding.
@@ -761,8 +893,8 @@ where
             RoundConfig {
                 num_variables: self.num_variables - self.round_folding_factor(0),
                 folding_factor: self.round_folding_factor(self.n_rounds()),
-                num_queries: self.final_queries,
-                pow_bits: self.final_pow_bits,
+                num_queries: self.terminal.num_queries,
+                pow_bits: self.terminal.pow_bits,
                 log_inv_rate: self.params.starting_log_inv_rate,
                 domain_size: self.starting_domain_size(),
                 log_folded_domain_size: self.starting_domain_size().ilog2() as usize
@@ -788,8 +920,8 @@ where
                 // Variables remaining after this final fold.
                 num_variables: last.num_variables - folding_factor,
                 folding_factor,
-                num_queries: self.final_queries,
-                pow_bits: self.final_pow_bits,
+                num_queries: self.terminal.num_queries,
+                pow_bits: self.terminal.pow_bits,
                 log_inv_rate: last.log_inv_rate,
                 domain_size,
                 log_folded_domain_size,
@@ -904,10 +1036,16 @@ mod tests {
         //
         // The 31-bit field forces a large grinding gap, so the budget is set
         // wide enough to admit it; this test probes the rounding, not the cap.
+        //
+        // The budget stays below the target, so the algebraic protocol still covers bits.
+        //
+        // Crediting the whole target to grinding would buy no query at all.
+        //
+        // A run that opens no position is refused during construction.
         let soundness = SecurityAssumption::UniqueDecoding;
         let params = ProtocolParameters {
             security_level: 128,
-            pow_bits: 128,
+            pow_bits: 127,
             round_log_inv_rates: vec![],
             folding_factor: FoldingFactor::Constant(4),
             soundness_type: soundness,
@@ -945,11 +1083,11 @@ mod tests {
         }
 
         // Final query phase grinds at the last accumulated rate.
-        let final_error = soundness.queries_error(old_rate, config.final_queries);
+        let final_error = soundness.queries_error(old_rate, config.terminal.num_queries);
         assert!(
-            config.final_pow_bits as f64 + final_error >= target,
+            config.terminal.pow_bits as f64 + final_error >= target,
             "final query phase undershoots: {} + {final_error} < {target}",
-            config.final_pow_bits
+            config.terminal.pow_bits
         );
     }
 
@@ -995,7 +1133,7 @@ mod tests {
 
         // Force one phase to dominate, then confirm it is the reported max.
         config.starting_folding_pow_bits = 7;
-        config.final_pow_bits = 31;
+        config.terminal.pow_bits = 31;
         config.final_folding_pow_bits = 5;
         config.round_parameters = vec![RoundConfig {
             pow_bits: 11,
@@ -1125,6 +1263,50 @@ mod tests {
     }
 
     #[test]
+    fn new_rejects_a_schedule_that_opens_no_position() {
+        // Invariant: a schedule must open at least one position.
+        //
+        // Queries alone test proximity, so opening none accepts any committed function.
+        //
+        // A redundant rate rules out the usual route to zero.
+        //
+        // Crediting grinding with the whole target reaches it anyway.
+        //
+        // The protocol level is a saturating difference.
+        //
+        // So the trigger is the budget reaching the target, not the target being zero:
+        //
+        //     - security_level 0,   pow_bits 0     ->  nothing to cover
+        //     - security_level 0,   pow_bits 20    ->  nothing to cover
+        //     - security_level 20,  pow_bits 20    ->  the credit covers all of it
+        //     - security_level 128, pow_bits 128   ->  likewise, at a realistic target
+        //
+        // The last two are why the wording matters.
+        //
+        // Read as "a zero target", the guard looks inapplicable to a realistic fixture.
+        //
+        // The floor lives here rather than in a caller, so both construction routes meet it.
+        //
+        // Fixture state: 10 variables, folding 4, a redundant rate.
+        for (security_level, pow_bits) in [(0, 0), (0, 20), (20, 20), (128, 128)] {
+            let mut params = default_whir_params();
+            params.security_level = security_level;
+            params.pow_bits = pow_bits;
+
+            let err = WhirConfig::<F, F, MyChallenger>::new(10, params)
+                .expect_err("a schedule opening nothing must be rejected");
+            assert!(
+                matches!(err, WhirConfigError::ZeroQueries),
+                "expected ZeroQueries at {security_level}/{pow_bits}, got {err:?}"
+            );
+        }
+
+        // A positive target still buys queries, so the floor does not disturb it.
+        let config = WhirConfig::<EF4, F, MyChallenger>::new(10, default_whir_params()).unwrap();
+        assert!(config.terminal.num_queries > 0);
+    }
+
+    #[test]
     fn new_rejects_zero_starting_rate() {
         // Invariant: a code rate of 2^-0 = 1 has no Reed-Solomon redundancy.
         //
@@ -1199,8 +1381,8 @@ mod tests {
 
             // Final proximity phase must spot-check at least one position.
             assert!(
-                config.final_queries > 0,
-                "{soundness_type:?}: final_queries must be positive"
+                config.terminal.num_queries > 0,
+                "{soundness_type:?}: terminal.num_queries must be positive"
             );
             // Every intermediate round must spot-check at least one position.
             for (round, cfg) in config.round_parameters.iter().enumerate() {
@@ -1327,7 +1509,7 @@ mod tests {
         // Set all values within limits
         config.params.pow_bits = 20;
         config.starting_folding_pow_bits = 15;
-        config.final_pow_bits = 18;
+        config.terminal.pow_bits = 18;
         config.final_folding_pow_bits = 19;
 
         // Ensure all rounds are within limits
@@ -1369,7 +1551,7 @@ mod tests {
 
         config.params.pow_bits = 20;
         config.starting_folding_pow_bits = 21; // Exceeds max_pow_bits
-        config.final_pow_bits = 18;
+        config.terminal.pow_bits = 18;
         config.final_folding_pow_bits = 19;
 
         assert!(
@@ -1385,7 +1567,7 @@ mod tests {
 
         config.params.pow_bits = 20;
         config.starting_folding_pow_bits = 15;
-        config.final_pow_bits = 21; // Exceeds max_pow_bits
+        config.terminal.pow_bits = 21; // Exceeds max_pow_bits
         config.final_folding_pow_bits = 19;
 
         assert!(
@@ -1401,7 +1583,7 @@ mod tests {
 
         config.params.pow_bits = 20;
         config.starting_folding_pow_bits = 15;
-        config.final_pow_bits = 18;
+        config.terminal.pow_bits = 18;
         config.final_folding_pow_bits = 19;
 
         // One round's pow_bits exceeds limit
@@ -1430,7 +1612,7 @@ mod tests {
 
         config.params.pow_bits = 20;
         config.starting_folding_pow_bits = 15;
-        config.final_pow_bits = 18;
+        config.terminal.pow_bits = 18;
         config.final_folding_pow_bits = 19;
 
         // One round's folding_pow_bits exceeds limit
@@ -1459,7 +1641,7 @@ mod tests {
 
         config.params.pow_bits = 20;
         config.starting_folding_pow_bits = 20;
-        config.final_pow_bits = 20;
+        config.terminal.pow_bits = 20;
         config.final_folding_pow_bits = 20;
 
         config.round_parameters = vec![RoundConfig {
@@ -1487,7 +1669,7 @@ mod tests {
 
         config.params.pow_bits = 20;
         config.starting_folding_pow_bits = 22;
-        config.final_pow_bits = 23;
+        config.terminal.pow_bits = 23;
         config.final_folding_pow_bits = 24;
 
         config.round_parameters = vec![RoundConfig {
