@@ -3,15 +3,18 @@
 
 extern crate alloc;
 
+mod argument;
 mod builder;
 mod debug;
-mod leaf;
+mod direction;
+mod evaluation;
 mod memory;
+mod multilinear;
 mod plan;
 mod product;
 mod security;
-mod transcript;
 
+pub use argument::{BusArgumentError, BusChallenges, BusProof, BusReductionOutput};
 pub use builder::{
     BusActivation, BusInteractionBuilder, BusInteractionRecorder, BusSymbolicBuilder, RecordToken,
     SymbolicBusInteraction,
@@ -20,7 +23,8 @@ pub use debug::{
     BusDebugError, BusDebugInstance, BusDebugLimits, BusDebugLocation, BusDebugOccurrence,
     BusDebugReport, BusImbalance, BusUnmatched,
 };
-pub use leaf::{BusDirection, BusLeafDeclaration, BusLeafError, BusLeaves, BusSelector};
+pub use direction::BusDirection;
+pub use evaluation::{BusEvaluation, BusEvaluationError, BusFactorPlan};
 pub use memory::{
     MemoryFinalCounts, MemoryReadAddresses, MemoryReadCounts, MemoryReadValues, MemoryTableValues,
     ReadOnlyMemoryBus, ReadOnlyMemoryChallenges, ReadOnlyMemoryClaims, ReadOnlyMemoryColumns,

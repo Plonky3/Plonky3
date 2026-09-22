@@ -17,6 +17,7 @@
 extern crate alloc;
 
 pub mod backend;
+mod bus;
 pub mod config;
 pub mod folder;
 pub mod fractional_gkr;
@@ -39,6 +40,7 @@ pub mod verifier;
 pub mod zerocheck;
 
 pub use backend::{GenericBackend, ReprBackend, SubfieldBackend, ZerocheckBackend};
+pub use bus::BusBindingError;
 pub use instance::{ProverInstance, ProverInstances, VerifierInstance, VerifierInstances};
 pub use keys::{ProvingKey, VerifyingKey, setup};
 pub use p3_air::BoundaryIoError;

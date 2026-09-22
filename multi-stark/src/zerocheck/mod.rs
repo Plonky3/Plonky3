@@ -192,7 +192,7 @@ where
 /// Panics if the AIR declares mutually-exclusive interactions.
 /// Panics if a declared family is constant and no listed cell lifts it,
 /// since a constant has no round polynomial of its own.
-/// Panics if the AIR declares neither constraints nor interactions.
+/// Panics if the AIR declares neither constraints nor lookup interactions.
 pub(crate) fn get_air_profile<F, EF, A>(air: &A) -> AirProfile
 where
     F: Field,
@@ -278,11 +278,13 @@ where
         !has_interactions || interaction_degree > 0,
         "zerocheck requires every nonempty interaction family to have positive symbolic degree"
     );
+    // A bus declaration is reduced outside the zerocheck and leaves no round polynomial here.
+    // An AIR carried by one alone therefore still owes this batch a constraint of its own.
     assert!(
         has_constraints || has_interactions,
-        "zerocheck requires every AIR to contribute constraints or interactions"
+        "zerocheck requires every AIR to contribute constraints or lookup interactions; \
+         binary-bus declarations are reduced separately and do not count"
     );
-
     AirProfile {
         degrees: AirDegrees {
             constraints: constraint_degree,

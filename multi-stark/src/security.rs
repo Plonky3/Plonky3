@@ -1,9 +1,9 @@
 //! Security accounting derived from the verifier's statement.
 //!
-//! The report union-composes the AIR and lookup reductions, both prescribed-point
-//! commitment openings when present, and the configured collision cap. It inherits
-//! each PCS's proximity and Fiat-Shamir assumptions; a conjectural PCS assessment
-//! does not become a proven bound here. Uniform transcript challenges are assumed.
+//! The report union-composes the AIR, lookup, and binary-bus reductions, both
+//! prescribed-point commitment openings when present, and the configured collision cap.
+//! It inherits each PCS's proximity and Fiat-Shamir assumptions; a conjectural PCS
+//! assessment does not become a proven bound here. Uniform transcript challenges are assumed.
 //! The outer sumcheck's grinding is conservatively given no credit.
 //!
 //! A commitment can leave multiple candidate trace polynomials while the outer
@@ -13,6 +13,7 @@
 //! then composed separately.
 
 use alloc::vec::Vec;
+use core::num::NonZeroUsize;
 
 use p3_air::boundary;
 use p3_air::symbolic::AirLayout;
@@ -28,6 +29,7 @@ use p3_util::log2_ceil_usize;
 use thiserror::Error;
 
 use crate::VerifierInstances;
+use crate::bus::BusContext;
 use crate::config::{Commitment, MultiStarkConfig};
 use crate::folder::{VerifierAir, boundary_io_pins};
 use crate::indexed::IndexedPlan;
@@ -171,6 +173,26 @@ impl MultiStarkSecurityReport {
             }
         }
     }
+}
+
+fn bus_composition_terms(
+    field_bits: NonZeroUsize,
+    num_variables: usize,
+    degree: usize,
+) -> [SecurityTerm; 2] {
+    // One fresh scalar batches the push and pull identities.
+    let direction = SecurityTerm::new(
+        "binary-bus-direction-batching",
+        ErrorBits::from_log2(field_bits.get() as f64),
+    );
+
+    // Schwartz--Zippel charges at most one degree-D identity test per round.
+    let events = num_variables.saturating_mul(degree);
+    let composition = SecurityTerm::new(
+        "binary-bus-composition-sumcheck",
+        ErrorBits::from_log2((field_bits.get() as f64 - libm::log2(events as f64)).max(0.0)),
+    );
+    [direction, composition]
 }
 
 impl IndexedPlan {
@@ -381,6 +403,7 @@ where
             .checked_mul(tuples)
             .and_then(|count| num_fractions.checked_add(count))
             .ok_or_else(|| invalid("lookup dimensions overflow"))?;
+        // Binary-bus declarations are reduced outside the zerocheck and do not count here.
         if constraints == 0 && tuples == 0 {
             return Err(invalid("AIR declares no constraints or lookup tuples"));
         }
@@ -404,6 +427,8 @@ where
     //
     // An assessment covering fewer batches than the proof opens overstates the bound.
     let indexed = IndexedPlan::build::<C::Val, C::Challenge, A>(&instances.airs(), &heights)?;
+    let bus = BusContext::<C::Val, C::Challenge>::build(&instances.airs(), &heights)
+        .map_err(|_| invalid("binary-bus declarations do not define a supported plan"))?;
     let logup_star = indexed.as_ref().map(IndexedPlan::security_params);
     let num_variables = heights
         .iter()
@@ -433,6 +458,16 @@ where
         ),
         unassessed: Vec::new(),
     };
+    if let Some(context) = &bus {
+        let field_bits = NonZeroUsize::new(field_bits)
+            .ok_or_else(|| invalid("binary-bus challenge field is trivial"))?;
+        report.terms.push(context.plan().security_term(field_bits));
+        report.terms.extend(bus_composition_terms(
+            field_bits,
+            context.max_num_variables(),
+            context.composition_degree(),
+        ));
+    }
     let num_reduction_terms = report.terms.len();
     // The scheme is assessed against the opening protocol verification actually runs.
     //
@@ -447,7 +482,7 @@ where
         "main-pcs",
         config.pcs().prescribed_security(
             &instances
-                .main_schedule(indexed.as_ref(), |_, _| ())
+                .main_schedule(indexed.as_ref(), bus.as_ref(), |_, _| ())
                 .into_protocol(),
         ),
     );
@@ -456,7 +491,7 @@ where
             "preprocessed-pcs",
             config.preprocessed_pcs().prescribed_security(
                 &instances
-                    .preprocessed_schedule(indexed.as_ref(), |_, _| ())
+                    .preprocessed_schedule(indexed.as_ref(), bus.as_ref(), |_, _| ())
                     .into_protocol(),
             ),
         );
@@ -476,6 +511,17 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bus_composition_terms_charge_only_their_actual_randomness() {
+        let [direction, composition] =
+            bus_composition_terms(NonZeroUsize::new(128).unwrap(), 12, 4);
+
+        assert_eq!(direction.label, "binary-bus-direction-batching");
+        assert_eq!(direction.bits.bits(), 128.0);
+        assert_eq!(composition.label, "binary-bus-composition-sumcheck");
+        assert_eq!(composition.bits.bits(), 128.0 - 48.0_f64.log2());
+    }
 
     #[test]
     fn a_reduction_with_nothing_to_charge_is_still_assessed() {

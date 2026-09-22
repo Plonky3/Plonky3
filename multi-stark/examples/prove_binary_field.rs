@@ -200,11 +200,55 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use p3_binary_pcs::{BinaryPcsError, BinaryPcsProof};
+    use p3_bus::{BusActivation, BusDirection, BusInteractionBuilder};
     use p3_field::PrimeCharacteristicRing;
     use p3_multi_stark::config::PcsError;
-    use p3_multi_stark::{VerificationError, VerifyingKey, prove, verify};
+    use p3_multi_stark::zerocheck::ZerocheckError;
+    use p3_multi_stark::{SecurityError, VerificationError, VerifyingKey, prove, verify};
 
     use super::*;
+
+    /// Binary-field AIR that contributes selected nonlinear payloads to one bus side.
+    struct BinaryBusAir {
+        /// Multiset side receiving this table's active rows.
+        direction: BusDirection,
+    }
+
+    impl BaseAir<F> for BinaryBusAir {
+        fn width(&self) -> usize {
+            2
+        }
+    }
+
+    impl<AB> Air<AB> for BinaryBusAir
+    where
+        AB: BusInteractionBuilder<F = F>,
+    {
+        fn eval(&self, builder: &mut AB) {
+            let main = builder.main();
+            let row = main.current_slice();
+            let value: AB::Expr = row[0].into();
+            let selector: AB::Expr = row[1].into();
+            builder.push_bus_interaction(
+                "binary-selected-square",
+                self.direction,
+                [value.clone() * value],
+                BusActivation::Boolean(selector),
+            );
+        }
+    }
+
+    /// Builds one two-column binary bus table in trace-row order.
+    fn binary_bus_table(log_height: usize) -> Table<F> {
+        let mut rows = Vec::with_capacity(2 << log_height);
+        for row in 0usize..1usize << log_height {
+            rows.extend([
+                F::from_repr((row + 2) as u128),
+                F::from_bool(row.is_multiple_of(2)),
+            ]);
+        }
+        Table::new(RowMajorMatrix::new(rows, 2).transpose())
+    }
 
     struct Fixture {
         config: Config,
@@ -271,6 +315,42 @@ mod tests {
     }
 
     #[test]
+    fn binary_bus_proof_round_trips() {
+        let log_height = 3;
+        // Four stacked columns need two variables above the trace height.
+        let config = config(log_height + 1);
+        let push = BinaryBusAir {
+            direction: BusDirection::Push,
+        };
+        let pull = BinaryBusAir {
+            direction: BusDirection::Pull,
+        };
+        let (pk, vk) = setup(&config, &[&push, &pull], &mut challenger()).unwrap();
+        let proof = prove(
+            &config,
+            ProverInstances::new(vec![
+                ProverInstance::new(&push, binary_bus_table(log_height), &pk, &[]),
+                ProverInstance::new(&pull, binary_bus_table(log_height), &pk, &[]),
+            ]),
+            0,
+            &mut challenger(),
+        )
+        .unwrap();
+
+        verify(
+            &config,
+            VerifierInstances::new(vec![
+                VerifierInstance::new(&push, &vk, log_height, &[]),
+                VerifierInstance::new(&pull, &vk, log_height, &[]),
+            ]),
+            &proof,
+            0,
+            &mut challenger(),
+        )
+        .unwrap();
+    }
+
+    #[test]
     fn security_certifies_binary_pcs_and_rejects_an_excessive_target() {
         for log_height in [1, 4, 18] {
             let config = config(log_height);
@@ -285,7 +365,17 @@ mod tests {
             let report = p3_multi_stark::security_report(&config, &instances).unwrap();
             assert!(report.unassessed_components().is_empty());
             report.require_security(100).unwrap();
-            assert!(report.require_security(128).is_err());
+
+            // The union bound lies between the target that passes and the one that does not.
+            let Err(SecurityError::InsufficientSecurity {
+                requested,
+                available,
+            }) = report.require_security(128)
+            else {
+                panic!("a 128-bit target must be refused for lack of bits");
+            };
+            assert_eq!(requested, 128);
+            assert!((100.0..128.0).contains(&available), "{available}");
         }
         let config = config(4);
         let (table, public) = trace(4);
@@ -319,7 +409,12 @@ mod tests {
         for index in 0..3 {
             let mut fixture = Fixture::new(3, 0);
             fixture.public[index] += F::ONE;
-            assert!(fixture.verify().is_err());
+
+            // Public values are bound before any challenge, so every later one moves with them.
+            assert!(matches!(
+                fixture.verify(),
+                Err(VerificationError::Opening(BinaryPcsError::FinalCheck))
+            ));
         }
     }
 
@@ -327,7 +422,12 @@ mod tests {
     fn rejects_changed_sumcheck_polynomial() {
         let mut fixture = Fixture::new(3, 0);
         fixture.proof.sumcheck.round_polys[0][0] += F::ONE;
-        assert!(fixture.verify().is_err());
+
+        // A changed round message moves the challenge, and so the point the opening answers.
+        assert!(matches!(
+            fixture.verify(),
+            Err(VerificationError::Opening(BinaryPcsError::FinalCheck))
+        ));
     }
 
     #[test]
@@ -370,7 +470,14 @@ mod tests {
             log_height,
             pow_bits: 0,
         };
-        assert!(fixture.verify().is_err());
+
+        // The corrupted row leaves the constraint nonzero at the bound point.
+        assert!(matches!(
+            fixture.verify(),
+            Err(VerificationError::Zerocheck(
+                ZerocheckError::FinalSumMismatch
+            ))
+        ));
     }
 
     #[test]
@@ -558,7 +665,12 @@ mod tests {
                 .unwrap()
                 .final_codeword
                 .as_mut_slice()[1] += F::ONE;
-            assert!(check(&proof).is_err());
+
+            // The tampered codeword fails the scheme's own final check, not a later one.
+            assert!(matches!(
+                check(&proof),
+                Err(VerificationError::Opening(BinaryPcsError::FinalCheck))
+            ));
         }
     }
 }

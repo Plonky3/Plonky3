@@ -84,15 +84,12 @@ mod tests {
         let fields = (0..width)
             .map(|index| SymbolicVariable::new(BaseEntry::Main { offset: 0 }, index).into())
             .collect::<Vec<_>>();
-        let interactions =
-            [BusDirection::Push, BusDirection::Pull].map(|direction| SymbolicBusInteraction::<
-                BabyBear,
-            > {
-                bus_name: "bus".to_string(),
-                direction,
-                fields: fields.clone(),
-                activation: BusActivation::Always,
-            });
+        let interactions = BusDirection::ALL.map(|direction| SymbolicBusInteraction::<BabyBear> {
+            bus_name: "bus".to_string(),
+            direction,
+            fields: fields.clone(),
+            activation: BusActivation::Always,
+        });
         BusPlan::build(&[BusPlanInput {
             log_height,
             interactions: &interactions,

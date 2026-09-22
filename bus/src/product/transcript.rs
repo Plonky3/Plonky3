@@ -1,4 +1,4 @@
-//! Typed Fiat-Shamir transcript for batched product-tree GKR.
+//! Typed Fiat-Shamir transcript for the batched product-tree reduction.
 //!
 //! The verifier supplies the tree height, tree count, and root encoding.
 //! Those values determine every message length and enter the transcript seed.
@@ -299,7 +299,3 @@ where
             .expect("the product reduction reads an empty wire");
     }
 }
-
-#[cfg(test)]
-#[path = "transcript_tests.rs"]
-mod tests;

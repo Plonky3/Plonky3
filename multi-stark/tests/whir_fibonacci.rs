@@ -15,8 +15,8 @@ use p3_multi_stark::config::MultiStarkConfig;
 use p3_multi_stark::lookup::LookupError;
 use p3_multi_stark::zerocheck::ZerocheckError;
 use p3_multi_stark::{
-    BoundaryIoError, MultiStarkProof, ProverInstance, ProverInstances, VerificationError,
-    VerifierInstance, VerifierInstances, prove, setup, verify,
+    BoundaryIoError, MultiStarkProof, ProverInstance, ProverInstances, SecurityError,
+    VerificationError, VerifierInstance, VerifierInstances, prove, setup, verify,
 };
 use p3_sumcheck::OpeningBatch;
 use p3_sumcheck::layout::{Layout, PrefixProver, Table, Witness};
@@ -339,7 +339,14 @@ fn security_rejects_missing_collision_evidence() {
     let instances = VerifierInstances::new(vec![VerifierInstance::new(&air, &vk, 4, &public)]);
     let report = p3_multi_stark::security_report(&config, &instances).unwrap();
     assert_eq!(report.security_bits(), None);
-    assert!(report.require_security(1).is_err());
+
+    // The named component is the one this configuration supplies no evidence for.
+    assert!(matches!(
+        report.require_security(1),
+        Err(SecurityError::UnassessedComponent(
+            "commitment-and-transcript-collision"
+        ))
+    ));
 }
 
 #[test]
@@ -354,7 +361,13 @@ fn security_rejects_verifier_height_overflow_without_panicking() {
         usize::BITS as usize,
         &public,
     )]);
-    assert!(p3_multi_stark::security_report(&config, &instances).is_err());
+    // The declared arity exceeds what a trace height can represent.
+    assert!(matches!(
+        p3_multi_stark::security_report(&config, &instances),
+        Err(SecurityError::InvalidShape(
+            "trace arity is outside the supported range"
+        ))
+    ));
 }
 
 #[test]
@@ -1461,6 +1474,7 @@ fn verify_whir_compat_fixture() -> Result<(), Box<dyn std::error::Error>> {
         0,
         &mut challenger(),
     )?;
+
     Ok(())
 }
 

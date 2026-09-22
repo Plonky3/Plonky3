@@ -4,10 +4,14 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
 use p3_air::symbolic::{
-    AirLayout, ConstraintLayout, SymbolicAirBuilder, SymbolicExpression, SymbolicExpressionExt,
+    AirLayout, BaseEntry, BaseLeaf, ConstraintLayout, SymbolicAirBuilder, SymbolicExpr,
+    SymbolicExpression, SymbolicExpressionExt,
 };
 use p3_air::{Air, AirBuilder, DebugConstraintBuilder, ExtensionBuilder, PermutationAirBuilder};
 use p3_field::{Algebra, ExtensionField, Field, PrimeCharacteristicRing};
+use p3_lookup::{
+    Count, IndexedLookupBuilder, InteractionBuilder, InteractionSymbolicBuilder, TraceWindow,
+};
 
 use crate::BusDirection;
 
@@ -17,6 +21,12 @@ pub enum BusActivation<E> {
     /// Every row contributes one tuple.
     Always,
     /// One expression selects whether the row contributes its tuple.
+    ///
+    /// Soundness needs that expression to be zero or one on every row.
+    ///
+    /// The public declaration path emits that constraint.
+    ///
+    /// A declaration assembled by hand carries no such constraint, so its author owes one.
     Boolean(E),
 }
 
@@ -70,6 +80,10 @@ pub trait BusInteractionBuilder: BusInteractionRecorder {
     ///
     /// A conditional activation is constrained to zero or one before it is recorded.
     ///
+    /// That Booleanity check is the only thing a declaration leaves the batched zerocheck.
+    ///
+    /// An AIR declaring nothing else, and no conditional activation either, is refused.
+    ///
     /// # Arguments
     ///
     /// - `bus_name`: channel shared by every matching declaration.
@@ -104,6 +118,73 @@ pub struct SymbolicBusInteraction<F: Field> {
     pub fields: Vec<SymbolicExpression<F>>,
     /// Row activation expression, when the contribution is conditional.
     pub activation: BusActivation<SymbolicExpression<F>>,
+}
+
+impl<F: Field> SymbolicBusInteraction<F> {
+    /// Sorted current-row main and preprocessed columns this declaration reads.
+    ///
+    /// Only these columns have to be opened and folded for the declaration to be resolved.
+    #[must_use]
+    pub fn referenced_columns(&self) -> (Vec<usize>, Vec<usize>) {
+        let mut main = alloc::collections::BTreeSet::new();
+        let mut preprocessed = alloc::collections::BTreeSet::new();
+        let mut seen = alloc::collections::BTreeSet::new();
+        let mut pending = self
+            .fields
+            .iter()
+            .chain(match &self.activation {
+                BusActivation::Always => None,
+                BusActivation::Boolean(selector) => Some(selector),
+            })
+            .collect::<Vec<_>>();
+
+        // Arithmetic nodes share their operands, so each distinct node is visited once.
+        while let Some(expression) = pending.pop() {
+            if !seen.insert(core::ptr::from_ref(expression)) {
+                continue;
+            }
+            match expression {
+                SymbolicExpr::Leaf(BaseLeaf::Variable(variable)) => match variable.entry {
+                    BaseEntry::Main { offset: 0 } => {
+                        main.insert(variable.index);
+                    }
+                    BaseEntry::Preprocessed { offset: 0 } => {
+                        preprocessed.insert(variable.index);
+                    }
+                    _ => {}
+                },
+                SymbolicExpr::Leaf(_) => {}
+                SymbolicExpr::Add { x, y, .. }
+                | SymbolicExpr::Sub { x, y, .. }
+                | SymbolicExpr::Mul { x, y, .. } => {
+                    pending.push(x);
+                    pending.push(y);
+                }
+                SymbolicExpr::Neg { x, .. } => pending.push(x),
+            }
+        }
+        (
+            main.into_iter().collect(),
+            preprocessed.into_iter().collect(),
+        )
+    }
+
+    /// Degree of this interaction's selected factor under a transition-degree scale.
+    #[must_use]
+    pub fn factor_degree_multiple_with_transition(&self, multiple: usize) -> usize {
+        let payload = self
+            .fields
+            .iter()
+            .map(|expression| expression.degree_multiple_with_transition(multiple))
+            .max()
+            .unwrap_or(0);
+        match &self.activation {
+            BusActivation::Always => payload,
+            BusActivation::Boolean(selector) => {
+                payload + selector.degree_multiple_with_transition(multiple)
+            }
+        }
+    }
 }
 
 /// Symbolic AIR builder that retains binary-native bus declarations.
@@ -274,6 +355,72 @@ impl<F: Field, EF: ExtensionField<F>> BusInteractionRecorder for BusSymbolicBuil
     }
 }
 
+impl<F: Field, EF: ExtensionField<F>> InteractionBuilder for BusSymbolicBuilder<F, EF> {
+    fn push_interaction<E: Into<Self::Expr>>(
+        &mut self,
+        _bus_name: &str,
+        fields: impl IntoIterator<Item = E>,
+        _count: impl Into<Count<Self::Expr>>,
+    ) {
+        // This dedicated pass records binary-bus declarations; the lookup pass records these.
+        fields.into_iter().for_each(drop);
+    }
+
+    fn push_local_interaction(
+        &mut self,
+        tuples: impl IntoIterator<Item = (Vec<Self::Expr>, Count<Self::Expr>)>,
+    ) {
+        // Drain caller-owned iterators while leaving lookup metadata to its dedicated pass.
+        tuples.into_iter().for_each(drop);
+    }
+}
+
+impl<F: Field, EF: ExtensionField<F>> IndexedLookupBuilder for BusSymbolicBuilder<F, EF> {
+    fn push_indexed_read(
+        &mut self,
+        _table: &str,
+        _position: usize,
+        payload: impl IntoIterator<Item = usize>,
+    ) {
+        // Indexed declarations are recorded by their own symbolic builder.
+        payload.into_iter().for_each(drop);
+    }
+
+    fn push_indexed_table(
+        &mut self,
+        _name: &str,
+        _window: TraceWindow,
+        columns: impl IntoIterator<Item = usize>,
+    ) {
+        // Indexed declarations are recorded by their own symbolic builder.
+        columns.into_iter().for_each(drop);
+    }
+
+    fn num_indexed_reads(&self) -> usize {
+        0
+    }
+
+    fn num_indexed_tables(&self) -> usize {
+        0
+    }
+}
+
+impl<F: Field, EF: ExtensionField<F>> BusInteractionRecorder for InteractionSymbolicBuilder<F, EF> {
+    fn record_bus_interaction<E: Into<Self::Expr>>(
+        &mut self,
+        _token: RecordToken,
+        _bus_name: &str,
+        _direction: BusDirection,
+        fields: impl IntoIterator<Item = E>,
+        _activation: BusActivation<Self::Expr>,
+    ) {
+        // This dedicated pass records lookup declarations; the bus pass records these.
+        fields.into_iter().for_each(|field| {
+            let _ = field.into();
+        });
+    }
+}
+
 impl<F: Field, EF: ExtensionField<F>> BusInteractionRecorder for DebugConstraintBuilder<'_, F, EF> {
     fn record_bus_interaction<E: Into<Self::Expr>>(
         &mut self,
@@ -293,7 +440,7 @@ impl<F: Field, EF: ExtensionField<F>> BusInteractionRecorder for DebugConstraint
 #[cfg(test)]
 mod tests {
     use alloc::borrow::Cow;
-    use alloc::vec;
+    use alloc::{format, vec};
 
     use p3_air::symbolic::{AirLayout, BaseEntry, BaseLeaf, SymbolicExpr};
     use p3_air::{Air, BaseAir, WindowAccess, check_constraints};
@@ -401,6 +548,54 @@ mod tests {
                 if variable.entry == BaseEntry::Main { offset: 0 }
                     && variable.index == 1
         ));
+    }
+
+    #[test]
+    fn dedicated_symbolic_passes_record_only_their_protocol() {
+        struct MixedAir;
+
+        impl BaseAir<BinaryField128> for MixedAir {
+            fn width(&self) -> usize {
+                2
+            }
+        }
+
+        impl<AB> Air<AB> for MixedAir
+        where
+            AB: BusInteractionBuilder<F = BinaryField128> + InteractionBuilder,
+        {
+            fn eval(&self, builder: &mut AB) {
+                let value: AB::Expr = builder.main().current_slice()[0].into();
+                let selector: AB::Expr = builder.main().current_slice()[1].into();
+                builder.assert_zero(value.clone() - value.clone());
+                builder.push_interaction("legacy", [value.clone()], 1);
+                builder.push_bus_interaction(
+                    "binary",
+                    BusDirection::Push,
+                    [value],
+                    BusActivation::Boolean(selector),
+                );
+            }
+        }
+
+        let layout = AirLayout::from_air(&MixedAir);
+        let bus = BusSymbolicBuilder::<BinaryField128>::from_air(&MixedAir, layout);
+        let lookup = InteractionSymbolicBuilder::<BinaryField128>::from_air(&MixedAir, layout);
+
+        // Each dedicated pass keeps only its own protocol metadata.
+        assert_eq!(bus.interactions().len(), 1);
+        assert_eq!(lookup.global_interactions().len(), 1);
+
+        // Both passes retain the same ordinary constraints, including bus selector Booleanity.
+        assert_eq!(
+            format!("{:?}", bus.base_constraints()),
+            format!("{:?}", lookup.base_constraints())
+        );
+        assert_eq!(
+            format!("{:?}", bus.constraint_layout()),
+            format!("{:?}", lookup.constraint_layout())
+        );
+        assert_eq!(bus.base_constraints().len(), 2);
     }
 
     #[test]

@@ -1,4 +1,4 @@
-//! Verifier-derived layout for binary-native bus declarations.
+//! Verifier-derived layouts for binary-native bus declarations.
 
 use alloc::collections::BTreeMap;
 use alloc::string::String;
@@ -8,12 +8,13 @@ use core::cmp::Reverse;
 use hashbrown::HashSet;
 use p3_air::symbolic::{BaseEntry, BaseLeaf, SymbolicExpr, SymbolicExpression};
 use p3_field::Field;
-use thiserror::Error;
 
-use crate::{
-    BusDirection, ProductGkrRootShape, ProductGkrShape, ProductGkrShapeError,
-    SymbolicBusInteraction,
-};
+mod error;
+
+pub use error::BusPlanError;
+
+use crate::multilinear::equality_at_msb_vertex;
+use crate::{BusDirection, ProductGkrRootShape, ProductGkrShape, SymbolicBusInteraction};
 
 /// Symbolic bus declarations belonging to one AIR instance.
 #[derive(Clone, Copy, Debug)]
@@ -42,7 +43,7 @@ pub struct BusBlock {
     pub direction: BusDirection,
     /// AIR and declaration that own the block.
     pub owner: BusBlockOwner,
-    /// Base-two logarithm of the block height.
+    /// Base-two logarithm of the block height, shared by every block one AIR emits.
     pub log_height: usize,
     /// First leaf in the direction-specific tree.
     pub offset: usize,
@@ -89,6 +90,21 @@ pub struct BusTerminalShare {
     pub prefix_index: usize,
 }
 
+impl BusTerminalShare {
+    /// Evaluate this block's selector at a terminal product-tree point.
+    ///
+    /// Point coordinates and vertex bits are interpreted most-significant first.
+    ///
+    /// Returns no value when the point or public share fields are inconsistent.
+    #[must_use]
+    pub fn prefix_weight<F: Field>(&self, point: &[F]) -> Option<F> {
+        // The leading coordinates address the aligned block containing this share.
+        let prefix = point.get(..self.prefix_variables)?;
+        // Coordinate zero binds the most significant bit of the block address.
+        equality_at_msb_vertex(prefix, self.prefix_index)
+    }
+}
+
 /// Exact security-relevant dimensions of one bus plan.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BusSecurityGeometry {
@@ -117,6 +133,12 @@ impl BusSecurityGeometry {
     #[must_use]
     pub const fn non_padding_leaf_counts(&self) -> [usize; 2] {
         self.non_padding_leaf_counts
+    }
+
+    /// Non-padding leaf positions on one side of the multiset equality.
+    #[must_use]
+    pub const fn non_padding_leaf_count(&self, direction: BusDirection) -> usize {
+        self.non_padding_leaf_counts[direction.index()]
     }
 
     /// Power-of-two capacity shared by both product trees.
@@ -270,7 +292,7 @@ impl BusPlan {
 
         pending.sort_by_key(|block| {
             (
-                direction_index(block.direction),
+                block.direction.index(),
                 Reverse(block.log_height),
                 block.bus,
                 block.owner.air,
@@ -282,7 +304,7 @@ impl BusPlan {
         let mut pulls = Vec::new();
         let mut non_padding_leaf_counts = [0usize; 2];
         for block in pending {
-            let side = direction_index(block.direction);
+            let side = block.direction.index();
             let len = 1usize << block.log_height;
             let offset = non_padding_leaf_counts[side];
             debug_assert_eq!(offset % len, 0);
@@ -460,67 +482,6 @@ pub enum UnsupportedBusAccess {
     Periodic,
 }
 
-/// Invalid statement shapes rejected before transcript construction.
-#[derive(Clone, Debug, PartialEq, Eq, Error)]
-pub enum BusPlanError {
-    /// The total number of symbolic declarations overflowed.
-    #[error("binary-bus declaration count overflows usize")]
-    DeclarationCountOverflow,
-    /// One AIR's trace height cannot be represented.
-    #[error("binary-bus AIR {air} height overflows usize")]
-    HeightOverflow {
-        /// AIR position in statement order.
-        air: usize,
-    },
-    /// A tuple has no payload expression.
-    #[error("binary-bus AIR {air} declaration {declaration} has an empty tuple")]
-    EmptyTuple {
-        /// AIR position in statement order.
-        air: usize,
-        /// Declaration position within the AIR.
-        declaration: usize,
-    },
-    /// Two declarations on one named bus disagree on payload width.
-    #[error("binary bus {name} has payload widths {expected} and {actual}")]
-    PayloadWidthMismatch {
-        /// Shared bus name.
-        name: String,
-        /// Width fixed by the first declaration.
-        expected: usize,
-        /// Width carried by the conflicting declaration.
-        actual: usize,
-    },
-    /// The number of named domains overflowed its nonzero encoding.
-    #[error("binary-bus domain count overflows usize")]
-    DomainCountOverflow,
-    /// Tuple slots or their power-of-two table overflowed.
-    #[error("binary-bus fingerprint tuple width overflows usize")]
-    TupleWidthOverflow,
-    /// One direction's materialized leaf count overflowed.
-    #[error("binary-bus {direction:?} leaf count overflows usize")]
-    LeafCountOverflow {
-        /// Side whose blocks overflowed.
-        direction: BusDirection,
-    },
-    /// A symbolic expression reads data the terminal evaluator cannot reconstruct.
-    #[error(
-        "binary-bus AIR {air} declaration {declaration} {location:?} uses unsupported {access:?}"
-    )]
-    UnsupportedExpression {
-        /// AIR position in statement order.
-        air: usize,
-        /// Declaration position within the AIR.
-        declaration: usize,
-        /// Payload or activation expression containing the access.
-        location: BusExpressionLocation,
-        /// Unsupported access encountered in the expression tree.
-        access: UnsupportedBusAccess,
-    },
-    /// The derived product-tree shape is invalid.
-    #[error(transparent)]
-    ProductShape(#[from] ProductGkrShapeError),
-}
-
 #[derive(Clone, Copy, Debug)]
 struct PendingBlock {
     /// Named-bus position in lexicographic name order.
@@ -529,15 +490,8 @@ struct PendingBlock {
     direction: BusDirection,
     /// AIR and declaration that own the block.
     owner: BusBlockOwner,
-    /// Base-two logarithm of the block height.
+    /// Base-two logarithm of the block height, taken from the table not the declaration.
     log_height: usize,
-}
-
-const fn direction_index(direction: BusDirection) -> usize {
-    match direction {
-        BusDirection::Push => 0,
-        BusDirection::Pull => 1,
-    }
 }
 
 const fn log2_ceil(value: usize) -> usize {
@@ -651,7 +605,7 @@ mod tests {
     }
 
     fn layout_signature(plan: &BusPlan) -> Vec<(BusDirection, usize, usize, usize)> {
-        [BusDirection::Push, BusDirection::Pull]
+        BusDirection::ALL
             .into_iter()
             .flat_map(|direction| {
                 plan.blocks(direction)
@@ -870,22 +824,8 @@ mod tests {
             .terminal_shares(BusDirection::Push)
             .zip(blocks)
             .map(|(share, block)| {
-                let prefix = &point[..share.prefix_variables];
                 let row_point = &point[share.prefix_variables..];
-                let prefix_vertex = (0..share.prefix_variables)
-                    .map(|coordinate| {
-                        ((share.prefix_index >> (share.prefix_variables - 1 - coordinate)) & 1)
-                            as u8
-                    })
-                    .map(F::from_u8)
-                    .collect::<Vec<_>>();
-                let weight = prefix
-                    .iter()
-                    .zip(prefix_vertex)
-                    .map(|(&challenge, bit)| {
-                        (F::ONE - challenge) * (F::ONE - bit) + challenge * bit
-                    })
-                    .product::<F>();
+                let weight = share.prefix_weight(&point).unwrap();
                 weight * (evaluate(block, row_point) - F::ONE)
             })
             .sum::<F>();
@@ -916,26 +856,36 @@ mod tests {
         let offset = EF::from_u8(11);
 
         // Materialize declarations in the plan's physical order on each direction.
+        let weights = crate::BusChallenges {
+            fingerprint: fingerprint_point.to_vec(),
+            offset,
+        }
+        .fingerprint_weights();
         let materialize_direction = |direction| {
             let mut leaves = Vec::new();
             for block in plan.blocks(direction) {
-                let height = 1usize << block.log_height;
-                let payload = (0..height)
-                    .map(|row| F::from_usize(block.owner.air * 16 + row + 2))
-                    .collect::<Vec<_>>();
-                let identity = vec![F::ONE; height];
-                let columns = [&payload[..], &identity[..]];
-                let declaration = [crate::BusLeafDeclaration {
-                    direction,
-                    columns: &columns,
-                    selector: crate::BusSelector::Always,
-                }];
-                let materialized =
-                    crate::BusLeaves::materialize(&declaration, &fingerprint_point, offset)
-                        .unwrap();
-                match direction {
-                    BusDirection::Push => leaves.extend(materialized.pushes),
-                    BusDirection::Pull => leaves.extend(materialized.pulls),
+                let owner = if block.owner.air == 0 { &tall } else { &short };
+                let factor = plan
+                    .compile_factor(block.bus, &owner[block.owner.declaration], &weights, offset)
+                    .unwrap();
+                let mut scratch = Vec::new();
+                for row in 0..1usize << block.log_height {
+                    let payload = [F::from_usize(block.owner.air * 16 + row + 2)];
+                    leaves.push(
+                        factor
+                            .evaluate(
+                                &mut scratch,
+                                crate::BusEvaluation {
+                                    main: &payload,
+                                    preprocessed: &[],
+                                    public: &[],
+                                    is_first_row: F::ZERO,
+                                    is_last_row: F::ZERO,
+                                    is_transition: F::ZERO,
+                                },
+                            )
+                            .unwrap(),
+                    );
                 }
             }
             leaves
@@ -967,24 +917,8 @@ mod tests {
                 assert_eq!(share.owner, block.owner);
                 let rows = 1usize << block.log_height;
                 let values = &pushes[block.offset..block.offset + rows];
-                let prefix_point = &prover_output.point[..share.prefix_variables];
                 let row_point = &prover_output.point[share.prefix_variables..];
-                let prefix_bits = (0..share.prefix_variables)
-                    .map(|coordinate| {
-                        (share.prefix_index >> (share.prefix_variables - 1 - coordinate)) & 1
-                    })
-                    .collect::<Vec<_>>();
-                let prefix_weight = prefix_point
-                    .iter()
-                    .zip(prefix_bits)
-                    .map(|(&challenge, bit)| {
-                        if bit == 0 {
-                            EF::ONE - challenge
-                        } else {
-                            challenge
-                        }
-                    })
-                    .product::<EF>();
+                let prefix_weight = share.prefix_weight(&prover_output.point).unwrap();
                 prefix_weight * (evaluate(values, row_point) - EF::ONE)
             })
             .sum::<EF>();
@@ -992,6 +926,38 @@ mod tests {
             reconstructed,
             evaluate(&dense, &prover_output.point) - EF::ONE
         );
+    }
+
+    #[test]
+    fn terminal_share_coordinates_address_prefixes_most_significant_first() {
+        // Prefix index 01 selects the low half and then its high child.
+        let share = BusTerminalShare {
+            bus: 0,
+            direction: BusDirection::Push,
+            owner: BusBlockOwner {
+                air: 0,
+                declaration: 0,
+            },
+            row_variables: 1,
+            prefix_variables: 2,
+            prefix_index: 1,
+        };
+        let a = F::from_u8(2);
+        let b = F::from_u8(3);
+
+        // Trailing row coordinates do not enter the aligned-block selector.
+        assert_eq!(
+            share.prefix_weight(&[a, b, F::from_u8(5)]),
+            Some((F::ONE - a) * b)
+        );
+
+        // Publicly constructible malformed shares fail without shifting by an invalid amount.
+        let malformed = BusTerminalShare {
+            prefix_index: 4,
+            ..share
+        };
+        assert_eq!(malformed.prefix_weight(&[a, b]), None);
+        assert_eq!(share.prefix_weight(&[a]), None);
     }
 
     #[test]
@@ -1046,6 +1012,47 @@ mod tests {
                 Err(BusPlanError::UnsupportedExpression { access, .. }) if access == expected
             ));
         }
+
+        // A doubling chain of this depth has two paths out of each of its nodes.
+        // Re-walking the graph per path would take about thirteen seconds per declaration.
+        const DEPTH: usize = 32;
+        let mut supported = variable(BaseEntry::Main { offset: 0 }, 0);
+        let mut unsupported = variable(BaseEntry::Periodic, 0);
+        for _ in 0..DEPTH {
+            supported = supported.clone() + supported;
+            unsupported = unsupported.clone() + unsupported;
+        }
+        let deep = vec![SymbolicBusInteraction {
+            bus_name: "deep".to_string(),
+            direction: BusDirection::Push,
+            fields: vec![supported],
+            activation: BusActivation::Always,
+        }];
+        assert!(
+            BusPlan::build(&[BusPlanInput {
+                log_height: 1,
+                interactions: &deep,
+            }])
+            .is_ok()
+        );
+
+        // Sharing must not swallow a rejection buried under the same depth.
+        let deep_invalid = vec![SymbolicBusInteraction {
+            bus_name: "deep".to_string(),
+            direction: BusDirection::Push,
+            fields: vec![unsupported],
+            activation: BusActivation::Always,
+        }];
+        assert!(matches!(
+            BusPlan::build(&[BusPlanInput {
+                log_height: 1,
+                interactions: &deep_invalid,
+            }]),
+            Err(BusPlanError::UnsupportedExpression {
+                access: UnsupportedBusAccess::Periodic,
+                ..
+            })
+        ));
 
         let enormous = vec![
             interaction("large", BusDirection::Push, 1),

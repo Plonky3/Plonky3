@@ -7,10 +7,13 @@ use p3_air::{BoundaryIoError, boundary};
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
 use p3_commit::MultilinearPcs;
 use p3_lookup::TraceWindow;
+use p3_multilinear_util::point::Point;
 use p3_sumcheck::{OpeningEvals, PrescribedPointPcs};
 use thiserror::Error;
 
 use crate::VerifierInstances;
+use crate::bus::transcript::{BusCompositionShape, BusCompositionVerifierTranscript};
+use crate::bus::{BusBindingError, BusContext};
 use crate::config::{Commitment, MultiStarkConfig, PcsError};
 use crate::folder::VerifierAir;
 use crate::indexed::IndexedPlan;
@@ -63,6 +66,18 @@ where
     /// The proof and the AIRs disagree on whether an indexed reduction exists.
     #[error("indexed reduction present but not expected, or absent but described")]
     UnexpectedIndexedReduction,
+    /// The product-tree bus proof is malformed or inconsistent.
+    #[error("binary-bus product reduction failed: {0}")]
+    BusArgument(#[from] p3_bus::BusArgumentError),
+    /// The bus composition sumcheck is malformed or inconsistent.
+    #[error("binary-bus composition sumcheck failed: {0}")]
+    BusSumcheck(#[from] p3_sumcheck::generic_degree::GenericDegreeError),
+    /// The bus terminal identity is not authenticated by committed openings.
+    #[error("binary-bus commitment binding failed: {0}")]
+    BusBinding(#[from] BusBindingError),
+    /// The proof and AIRs disagree on whether a binary-native bus exists.
+    #[error("binary-bus proof present but not expected, or absent but described")]
+    UnexpectedBus,
     /// An AIR names a public boundary cell or public value it does not have.
     #[error("instance {instance} boundary IO: {error}")]
     BoundaryIo {
@@ -71,6 +86,64 @@ where
         /// What is wrong with the declaration.
         error: BoundaryIoError,
     },
+}
+
+/// Bind the reduced bus products to the composition sumcheck the proof carries.
+///
+/// Every rejection releases the typed driver first.
+///
+/// A malformed proof is therefore rejected rather than unwound through a drop-time panic.
+fn bind_bus_composition<C, Val, Challenge, E>(
+    challenger: &mut C,
+    output: &p3_bus::BusReductionOutput<Challenge>,
+    proof: &crate::proof::BusProof<Val, Challenge>,
+    shape: BusCompositionShape,
+) -> Result<(Challenge, Point<Challenge>, Challenge), VerificationError<E>>
+where
+    Val: p3_challenger::fs::TranscriptField,
+    Challenge: p3_field::ExtensionField<Val>,
+    C: FieldChallenger<Val> + GrindingChallenger<Witness = Val>,
+    E: Debug,
+{
+    let mut composition =
+        BusCompositionVerifierTranscript::<_, Val, Challenge>::new(challenger, shape);
+    let direction = composition.direction_challenge();
+
+    // The driver refuses to be dropped mid-pattern, so it is released before every return.
+    let expected_claim = match output.batched_terminal_claim(direction) {
+        Ok(claim) => claim,
+        Err(error) => {
+            composition.abort();
+            return Err(error.into());
+        }
+    };
+
+    // Comparing first costs one field equality instead of a whole sumcheck replay.
+    if proof.composition.claimed_sum != expected_claim {
+        composition.abort();
+        return Err(VerificationError::BusBinding(
+            BusBindingError::InitialClaimMismatch,
+        ));
+    }
+
+    let verified = composition.sumcheck(|challenger| {
+        proof.composition.verify(
+            challenger,
+            shape.num_variables,
+            shape.degree,
+            shape.pow_bits,
+        )
+    });
+    let (point, terminal) = match verified {
+        Ok(verified) => verified,
+        Err(error) => {
+            composition.abort();
+            return Err(VerificationError::BusSumcheck(error));
+        }
+    };
+    composition.finish();
+
+    Ok((direction, point, terminal))
 }
 
 /// Verify only when the verifier's statement meets the requested security target.
@@ -114,13 +187,14 @@ where
 ///     1. replay batched preprocessed commitment (if any)
 ///     2. replay main commitment
 ///     3. replay public values, one step per instance
-///     4. verify the lookup reduction (if any)  -> delegated
-///     5. verify zerocheck sumcheck             -> delegated, yields bound point r
-///     6. verify the indexed reduction (if any) -> delegated, closes on claims from the proof
-///     7. open main tables                      -> delegated, bound to the main commitment
-///     8. open preprocessed tables (if any)
+///     4. verify the binary bus (if any)        -> delegated, leaves one composition point
+///     5. verify the lookup reduction (if any)  -> delegated
+///     6. verify zerocheck sumcheck             -> delegated, yields bound point r
+///     7. verify the indexed reduction (if any) -> delegated, closes on claims from the proof
+///     8. open main tables                      -> delegated, binds every terminal claim
+///     9. open preprocessed tables (if any)
 ///                                              -> delegated, bound to the preprocessed commitment
-///     9. discharge the indexed claims against those openings, then close the zerocheck at r
+///    10. discharge bus and indexed claims, then close the zerocheck at r
 /// ```
 ///
 /// Both sides walk one pattern, and each driver checks only its own party against it:
@@ -229,10 +303,17 @@ where
     // Both sides derive it from the AIRs alone, so no proof value reaches it.
     let indexed_plan = IndexedPlan::build::<C::Val, C::Challenge, A>(&airs, &log_heights)
         .map_err(VerificationError::IndexedLookup)?;
+    let bus = BusContext::<C::Val, C::Challenge>::build(&airs, &log_heights)?;
 
     let mut transcript = MultiStarkVerifierTranscript::<C::Challenger, C::Val>::new(
         challenger,
-        MultiStarkShape::new::<C::Val, A>(&airs, &log_heights, pow_bits, indexed_plan.is_some()),
+        MultiStarkShape::new::<C::Val, A>(
+            &airs,
+            &log_heights,
+            pow_bits,
+            indexed_plan.is_some(),
+            bus.is_some(),
+        ),
     );
 
     // 1. Replay the reusable batched preprocessed commitment before any challenge
@@ -257,7 +338,42 @@ where
         .public_values(&public_values)
         .map_err(VerificationError::Transcript)?;
 
-    // 4. Verify the lookup reduction, inside the delegation bracket.
+    // 4. Reduce the bus products, then bind their terminal claims by composition sumcheck.
+    let bus_reduction = match (bus.as_ref(), proof.bus.as_ref()) {
+        (Some(context), Some(bus_proof)) => {
+            let reduction = transcript
+                .bus_argument(|challenger| {
+                    let output = context
+                        .plan()
+                        .verify::<C::Val, C::Challenge, _>(&bus_proof.product, challenger)?;
+                    let shape = BusCompositionShape {
+                        num_variables: context.max_num_variables(),
+                        degree: context.composition_degree(),
+                        pow_bits,
+                    };
+                    let (direction, point, terminal) =
+                        bind_bus_composition::<_, C::Val, C::Challenge, PcsError<C>>(
+                            challenger, &output, bus_proof, shape,
+                        )?;
+                    Ok((output, direction, point, terminal))
+                })
+                .expect("the statement describes a bus delegation");
+            match reduction {
+                Ok(reduction) => Some(reduction),
+                Err(error) => {
+                    transcript.abort();
+                    return Err(error);
+                }
+            }
+        }
+        (None, None) => None,
+        _ => {
+            transcript.abort();
+            return Err(VerificationError::UnexpectedBus);
+        }
+    };
+
+    // 5. Verify the lookup reduction, inside the delegation bracket.
     // Its claim feeds the coupled AIR sumcheck below, so a rejection stops the replay here.
     let lookup = match transcript.lookup_argument(|challenger| {
         verify_lookup::<C::Val, C::Challenge, A, _>(
@@ -275,7 +391,7 @@ where
         }
     };
 
-    // 5. Verify the batched zerocheck sumcheck, inside the delegation bracket.
+    // 6. Verify the batched zerocheck sumcheck, inside the delegation bracket.
     // It yields the common bound point and the reduced sum, which both openings need.
     let zerocheck = AirZerocheck::with_profiles(&airs, &verifying_key.air_profiles, pow_bits);
     let reduction = match transcript.zerocheck(|challenger| {
@@ -294,7 +410,7 @@ where
         }
     };
 
-    // 6. Verify the indexed reduction against the point the zerocheck bound.
+    // 7. Verify the indexed reduction against the point the zerocheck bound.
     //
     // The claims come from the proof, since only the opening supplies committed values.
     //
@@ -349,13 +465,15 @@ where
     //
     // A rejected batch with preprocessed columns therefore costs one opening, not two.
 
-    // 7. Open the committed main trace tables at every point a claim was left at.
+    // 8. Open the committed main trace tables at every point a claim was left at.
     // The returned values are bound to the main commitment.
     let indexed_output = indexed.as_ref().map(|(_, output)| output);
-    let points = RunPoints::new(&reduction.point, indexed_output);
-    let main_schedule = instances.main_schedule(indexed_plan.as_ref(), |role, rows| {
-        trace_suffix(points.at(role), rows)
-    });
+    let bus_point = bus_reduction.as_ref().map(|(_, _, point, _)| point);
+    let points = RunPoints::new(&reduction.point, indexed_output, bus_point);
+    let main_schedule =
+        instances.main_schedule(indexed_plan.as_ref(), bus.as_ref(), |role, rows| {
+            trace_suffix(points.at(role), rows)
+        });
     let main_evals = match transcript.main_opening(|challenger| {
         config.pcs().verify_at(
             &proof.commitment,
@@ -373,10 +491,10 @@ where
         }
     };
 
-    // 8. Open the preprocessed tables at every point a claim was left at.
+    // 9. Open the preprocessed tables at every point a claim was left at.
     // The owned batches are kept local so the closing check can borrow them.
-    let preprocessed_schedule = instances
-        .preprocessed_schedule(indexed_plan.as_ref(), |role, rows| {
+    let preprocessed_schedule =
+        instances.preprocessed_schedule(indexed_plan.as_ref(), bus.as_ref(), |role, rows| {
             trace_suffix(points.at(role), rows)
         });
     let opened_preprocessed = transcript.preprocessed_opening(|challenger| {
@@ -414,6 +532,63 @@ where
         .zip(next_columns.iter())
         .map(|(batch, next_columns)| TableOpening::new(batch.current(), next_columns, batch.next()))
         .collect::<Vec<_>>();
+
+    // ProductGKR terminal values remain unauthenticated until this committed opening check.
+    if let Some((output, direction, point, terminal)) = &bus_reduction {
+        let context = bus.as_ref().expect("a bus reduction has a public bus plan");
+        let empty = &[][..];
+
+        // The batch answers only the columns a declaration names, in ascending column order.
+        // Placing each answer at its own column index restores the view the plan evaluates.
+        let scatter = |columns: &[usize], width: usize, opened: &[C::Challenge]| {
+            let mut values = p3_field::PrimeCharacteristicRing::zero_vec(width);
+            for (&column, &value) in columns.iter().zip(opened) {
+                values[column] = value;
+            }
+            values
+        };
+        let bus_main = (0..airs.len())
+            .map(|air| {
+                let opened = main_schedule
+                    .batch_answering(BatchRole::Bus { air })
+                    .and_then(|batch| main_evals.get(batch))
+                    .map_or(empty, OpeningEvals::current);
+                scatter(context.main_columns(air), airs[air].width(), opened)
+            })
+            .collect::<Vec<_>>();
+        let opened_preprocessed = preprocessed_evals.iter().flatten().collect::<Vec<_>>();
+        let bus_preprocessed = (0..airs.len())
+            .map(|air| {
+                let opened = preprocessed_schedule
+                    .batch_answering(BatchRole::Bus { air })
+                    .and_then(|batch| opened_preprocessed.get(batch).copied())
+                    .map_or(empty, OpeningEvals::current);
+                scatter(
+                    context.preprocessed_columns(air),
+                    airs[air].preprocessed_width(),
+                    opened,
+                )
+            })
+            .collect::<Vec<_>>();
+        let bus_main = bus_main.iter().map(Vec::as_slice).collect::<Vec<_>>();
+        let bus_preprocessed = bus_preprocessed
+            .iter()
+            .map(Vec::as_slice)
+            .collect::<Vec<_>>();
+        let expected = context.terminal_composition(
+            output,
+            *direction,
+            point,
+            &bus_main,
+            &bus_preprocessed,
+            &public_values,
+        )?;
+        if expected != *terminal {
+            return Err(VerificationError::BusBinding(
+                BusBindingError::TerminalMismatch,
+            ));
+        }
+    }
 
     // The reduction is a statement about claims, and two sets of them arrive unauthenticated.
     //
@@ -501,7 +676,7 @@ where
         })
         .collect::<Vec<_>>();
 
-    // 9. Close the zerocheck.
+    // 10. Close the zerocheck.
     // Recompute the batched constraint from commitment-bound values and match the reduced sum.
     zerocheck
         .check_constraint_with_lookup(
@@ -513,4 +688,108 @@ where
             lookup.as_ref(),
         )
         .map_err(VerificationError::Zerocheck)
+}
+
+#[cfg(test)]
+mod tests {
+    use alloc::vec;
+
+    use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
+    use p3_bus::{
+        BusArgumentError, BusChallenges, BusReductionOutput, ProductGkrOutput, ProductGkrProof,
+    };
+    use p3_challenger::DuplexChallenger;
+    use p3_field::PrimeCharacteristicRing;
+    use p3_field::extension::BinomialExtensionField;
+    use p3_sumcheck::generic_degree::GenericDegreeProof;
+    use rand::SeedableRng;
+    use rand::rngs::SmallRng;
+
+    use super::*;
+    use crate::proof::BusProof;
+
+    type F = BabyBear;
+    type EF = BinomialExtensionField<F, 4>;
+    type Perm = Poseidon2BabyBear<16>;
+    type Chal = DuplexChallenger<F, Perm, 16, 8>;
+
+    fn challenger() -> Chal {
+        let mut rng = SmallRng::seed_from_u64(0xD15EA5E);
+        Chal::new(Perm::new_from_rng_128(&mut rng))
+    }
+
+    fn reduction(values: Vec<EF>) -> BusReductionOutput<EF> {
+        BusReductionOutput {
+            challenges: BusChallenges {
+                fingerprint: Vec::new(),
+                offset: EF::ZERO,
+            },
+            product: ProductGkrOutput {
+                roots: Vec::new(),
+                point: Vec::new(),
+                values,
+            },
+        }
+    }
+
+    fn bus_proof(claimed_sum: EF) -> BusProof<F, EF> {
+        BusProof {
+            product: p3_bus::BusProof {
+                product: ProductGkrProof {
+                    roots: Vec::new(),
+                    layers: Vec::new(),
+                },
+            },
+            composition: GenericDegreeProof {
+                claimed_sum,
+                round_polys: Vec::new(),
+                pow_witnesses: Vec::new(),
+            },
+        }
+    }
+
+    #[test]
+    fn a_noncanonical_terminal_value_count_rejects_without_unwinding() {
+        // The direction challenge has been drawn, so an early return would abandon the driver.
+        let error = bind_bus_composition::<_, F, EF, core::convert::Infallible>(
+            &mut challenger(),
+            &reduction(vec![EF::ONE]),
+            &bus_proof(EF::ZERO),
+            BusCompositionShape {
+                num_variables: 2,
+                degree: 2,
+                pow_bits: 0,
+            },
+        )
+        .expect_err("one terminal value has no push-then-pull reading");
+
+        assert!(matches!(
+            error,
+            VerificationError::BusArgument(BusArgumentError::TerminalValueCount {
+                expected: 2,
+                actual: 1,
+            })
+        ));
+    }
+
+    #[test]
+    fn a_tampered_initial_claim_rejects_before_the_sumcheck_runs() {
+        // An empty round list would fail the sumcheck's own shape check if it ever ran.
+        let error = bind_bus_composition::<_, F, EF, core::convert::Infallible>(
+            &mut challenger(),
+            &reduction(vec![EF::ONE, EF::ONE]),
+            &bus_proof(EF::from_u8(7)),
+            BusCompositionShape {
+                num_variables: 2,
+                degree: 2,
+                pow_bits: 0,
+            },
+        )
+        .expect_err("the batched terminal claim of two identity roots is zero");
+
+        assert!(matches!(
+            error,
+            VerificationError::BusBinding(BusBindingError::InitialClaimMismatch)
+        ));
+    }
 }

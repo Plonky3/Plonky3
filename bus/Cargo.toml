@@ -13,6 +13,7 @@ categories.workspace = true
 p3-air.workspace = true
 p3-challenger.workspace = true
 p3-field.workspace = true
+p3-lookup.workspace = true
 p3-security.workspace = true
 p3-sumcheck.workspace = true
 
@@ -35,6 +36,10 @@ rand_xoshiro.workspace = true
 
 [[bench]]
 name = "product_gkr"
+harness = false
+
+[[bench]]
+name = "factor"
 harness = false
 
 [lints]

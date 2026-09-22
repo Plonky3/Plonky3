@@ -19,7 +19,9 @@ parallel = [
 [dependencies]
 hashbrown.workspace = true
 itertools.workspace = true
+libm.workspace = true
 p3-air.workspace = true
+p3-bus.workspace = true
 p3-challenger.workspace = true
 p3-commit.workspace = true
 p3-field.workspace = true
