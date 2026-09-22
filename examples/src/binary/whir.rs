@@ -19,6 +19,16 @@ use super::{
     Challenger, F, HarnessHash, MerkleMmcs,
 };
 
+/// Bytes the encoder writes for one base-field element: the widest variable-length code
+/// for a 16-byte `F`, not its in-memory width.
+const ENCODED_BASE_ELEMENT_BYTES: usize = 19;
+
+/// Bytes the encoder writes for one extension-field element.
+const ENCODED_EXTENSION_ELEMENT_BYTES: usize = 19;
+
+/// Bytes one Merkle digest occupies.
+const DIGEST_BYTES: usize = 32;
+
 /// The proximity regime used for the WHIR schedule.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WhirRegime {
@@ -109,6 +119,9 @@ pub enum WhirIncompatibility {
     /// The harness scope excludes preprocessed columns.
     #[error("WHIR harness does not support {actual} preprocessed columns")]
     PreprocessedColumns { actual: usize },
+    /// The table shape and the AIR disagree on the main trace width.
+    #[error("WHIR table shape width {shape} does not match AIR width {air}")]
+    WidthMismatch { shape: usize, air: usize },
     /// An AIR declaration names a successor column outside its main width.
     #[error("WHIR successor column {column} is outside AIR width {width}")]
     SuccessorOutOfRange { column: usize, width: usize },
@@ -456,7 +469,12 @@ pub(crate) fn boolean_whir_config_with_schedule<A: BinaryAir, H: HarnessHash>(
     let (num_claims, successor_tensors) = claim_shape(air, shape);
     let shape = pcs.proof_shape(num_claims, successor_tensors);
     whir.budget
-        .check_shape(&shape, 19, 19, 32)
+        .check_shape(
+            &shape,
+            ENCODED_BASE_ELEMENT_BYTES,
+            ENCODED_EXTENSION_ELEMENT_BYTES,
+            DIGEST_BYTES,
+        )
         .map_err(BinaryProofError::WhirBudget)?;
     let pcs = BooleanWhirTracePcs::from_commitment(pcs);
     let summary = WhirSummary {
@@ -465,7 +483,11 @@ pub(crate) fn boolean_whir_config_with_schedule<A: BinaryAir, H: HarnessHash>(
         packed_variables,
         cap_height,
         total_opened_positions: shape.stir_queries,
-        pcs_payload_bytes: shape.max_bytes(19, 19, 32),
+        pcs_payload_bytes: shape.max_bytes(
+            ENCODED_BASE_ELEMENT_BYTES,
+            ENCODED_EXTENSION_ELEMENT_BYTES,
+            DIGEST_BYTES,
+        ),
         max_grinding_bits: shape.grinding_bits,
     };
     Ok(BooleanWhirStarkConfig {
@@ -525,9 +547,9 @@ fn validate_options<A: BinaryAir>(
     }
     if shape.width() != air.width() {
         return Err(BinaryProofError::WhirIncompatible(
-            WhirIncompatibility::SuccessorOutOfRange {
-                column: shape.width(),
-                width: air.width(),
+            WhirIncompatibility::WidthMismatch {
+                shape: shape.width(),
+                air: air.width(),
             },
         ));
     }

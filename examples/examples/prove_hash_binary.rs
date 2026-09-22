@@ -492,7 +492,12 @@ mod tests {
             "98",
         ])
         .expect("missing regime remains a conversion error");
-        assert!(missing_regime.proof_options().is_err());
+        assert!(
+            missing_regime
+                .proof_options()
+                .unwrap_err()
+                .contains("--whir-regime is required with --pcs whir")
+        );
 
         let missing_term = Args::try_parse_from([
             "prove_hash_binary",
@@ -508,7 +513,12 @@ mod tests {
             "unique",
         ])
         .expect("missing term target remains a conversion error");
-        assert!(missing_term.proof_options().is_err());
+        assert!(
+            missing_term
+                .proof_options()
+                .unwrap_err()
+                .contains("--whir-term-security-bits is required with --pcs whir")
+        );
     }
 
     #[test]

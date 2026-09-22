@@ -2050,6 +2050,27 @@ mod tests {
     }
 
     #[test]
+    fn whir_reports_shape_and_air_width_disagreement() {
+        let error = whir_error(
+            &ShapeAir {
+                width: 5,
+                next: vec![],
+                public_values: 0,
+                preprocessed_width: 0,
+            },
+            small_whir_shape(),
+            whir_test_options(),
+        );
+        assert!(matches!(
+            error,
+            BinaryProofError::WhirIncompatible(WhirIncompatibility::WidthMismatch {
+                shape: 3,
+                air: 5,
+            })
+        ));
+    }
+
+    #[test]
     fn whir_rejects_permuted_duplicate_and_out_of_range_successors_before_budget_pricing() {
         let mut options = whir_test_options();
         let BooleanPcsChoice::Whir(mut whir) = options.pcs else {
