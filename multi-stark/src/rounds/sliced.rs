@@ -26,6 +26,7 @@ extern crate std;
 use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
+use core::mem::swap;
 use core::ops::Range;
 
 use p3_air::{Air, BaseAir};
@@ -40,13 +41,15 @@ use p3_sumcheck::layout::Table;
 use super::repr::{lane_group, sum_lanes};
 use super::{
     AirSlot, ExtColumns, InteractionCoupling, NodeStep, PackedScratch, RoundStateBase,
-    RoundStateExt, Scratch, add_slice, evaluated_nodes, finish_round, lower_evals, next_row_runs,
-    node_schedule, rows_per_task,
+    RoundStateExt, Scratch, TASKS_PER_WORKER, add_slice, evaluated_nodes, finish_round,
+    lower_evals, next_row_runs, node_schedule, rows_per_task,
 };
 use crate::folder::{InteractionMultilinearFolder, MultilinearFolder};
 use crate::packed_ext::{PackedExt, PackedRepr};
 use crate::selectors::BoundaryEvals;
-use crate::sliced::{LaneSums, SLICED_LANES, SlicedFolder, SlicedGf4, gf4_coordinates, is_gf4};
+use crate::sliced::{
+    LaneSums, SLICED_LANES, SlicedFolder, SlicedGf4, gf4_coordinates, is_gf4, scale_planes,
+};
 
 /// Most rounds a stage may evaluate on its planes.
 ///
@@ -208,6 +211,167 @@ fn fold_corners<F, S>(
     (corners[0], corners[1])
 }
 
+/// How one sliced pass may group the prefixes of a word into tasks.
+///
+/// A task folds its word at a group of prefixes sharing their leading coordinates.
+/// Larger groups share more folds, but hold one column buffer per prefix.
+#[derive(Clone, Copy, Debug)]
+struct GroupLimits {
+    /// Most cells, prefixes times columns, one group's buffers span.
+    cells: usize,
+    /// Fewest tasks the pass splits into.
+    min_tasks: usize,
+    /// Most coordinates a group leaves free, so it spans at most `nodes^max_free` prefixes.
+    max_free: usize,
+}
+
+impl GroupLimits {
+    /// The limits a pass runs under.
+    ///
+    /// - A group spans at most 2^17 cells: four buffers of 24-byte cells, 12 MiB per worker.
+    /// - Every worker gets a couple of tasks.
+    /// - A group leaves one coordinate free.
+    ///
+    /// Freeing a second coordinate saves the next level of folds.
+    /// Its buffers then outgrow the cache a one-coordinate group fits in.
+    /// In parallel, that cache traffic costs more than the saved folds.
+    // The worker count is `const` in serial builds only, so this cannot be `const` everywhere.
+    #[allow(clippy::missing_const_for_fn)]
+    fn of_pass() -> Self {
+        #[cfg(test)]
+        if let Some(limits) = GROUP_LIMITS_OVERRIDE.with(core::cell::Cell::get) {
+            return limits;
+        }
+        Self {
+            cells: 1 << 17,
+            min_tasks: current_num_threads() * TASKS_PER_WORKER,
+            max_free: 1,
+        }
+    }
+
+    /// The fewest leading prefix coordinates each task can bind.
+    ///
+    /// Binding more coordinates shrinks each group and multiplies the tasks.
+    /// Every constraint loosens as `fixed` grows, so the first fit is the fewest:
+    ///
+    /// ```text
+    ///     group fits the budget :  nodes^(round - fixed) * width  <= cells
+    ///     tasks feed the workers:  words * nodes^fixed            >= min_tasks
+    ///     group stays narrow    :  round - fixed                  <= max_free
+    /// ```
+    ///
+    /// A stage too wide or too short for all three binds every coordinate, one prefix per task.
+    fn fixed_coordinates(
+        self,
+        round: usize,
+        nodes: usize,
+        (width, words): (usize, usize),
+    ) -> usize {
+        (round.saturating_sub(self.max_free)..round)
+            .find(|&fixed| {
+                let fits = nodes.pow((round - fixed) as u32) * width <= self.cells;
+                let spreads = words * nodes.pow(fixed as u32) >= self.min_tasks;
+                fits && spreads
+            })
+            .unwrap_or(round)
+    }
+}
+
+#[cfg(test)]
+std::thread_local! {
+    /// Limits replacing [`GroupLimits::of_pass`] for passes this thread starts.
+    ///
+    /// Test fixtures are narrow, so a test sets the limits to reach every grouping.
+    pub(crate) static GROUP_LIMITS_OVERRIDE: core::cell::Cell<Option<GroupLimits>> =
+        const { core::cell::Cell::new(None) };
+}
+
+/// Fold one column's corners at every prefix of a group, sharing their common folds.
+///
+/// Every prefix of the group starts with `fixed`, followed by any `free` coordinates in `nodes`.
+/// The fold of a coordinate serves every prefix below it in the tree:
+///
+/// ```text
+///     corners --fixed--> one block --node a--> block a --node b--> block ab ...
+///                                  \-node b--> block b ...
+/// ```
+///
+/// A per-prefix [`fold_corners`] redoes the upper folds once per prefix.
+/// The tree does each once, so the total work tracks the last level's `2 * nodes^free` values.
+///
+/// Trace planes are never poisoned, so the fold runs on bare planes.
+///
+/// # Arguments
+///
+/// - `corners`: the column's corner planes, ordered as [`fold_corners`] takes them; clobbered.
+/// - `tree`: scratch of at least [`corner_tree_len`] entries.
+/// - `emit`: receives each prefix of the group in index order, with the planes at `t = 0, 1`.
+#[inline]
+fn fold_corner_tree(
+    corners: &mut [[u64; 2]],
+    fixed: &[(bool, bool)],
+    free: usize,
+    nodes: &[(bool, bool)],
+    tree: &mut [[u64; 2]],
+    mut emit: impl FnMut(usize, [u64; 2], [u64; 2]),
+) {
+    // Each coordinate folds as lo + v * (hi - lo); subtracting is adding.
+    let fold = |lo: [u64; 2], step: [u64; 2], (low, high): (bool, bool)| {
+        let [s0, s1] = scale_planes(step, low, high);
+        [lo[0] ^ s0, lo[1] ^ s1]
+    };
+    let diff = |lo: [u64; 2], hi: [u64; 2]| [lo[0] ^ hi[0], lo[1] ^ hi[1]];
+
+    // The fixed coordinates leave one block, folded in place as a single prefix would.
+    let mut len = corners.len();
+    for &node in fixed {
+        len /= 2;
+        let (lo, hi) = corners.split_at_mut(len);
+        for (lo, &hi) in lo.iter_mut().zip(hi.iter()) {
+            *lo = fold(*lo, diff(*lo, hi), node);
+        }
+    }
+
+    // Invariant: `current` holds `blocks` blocks of `len` values, prefix order.
+    //
+    //     block b, node n  ->  block b * nodes + n  of half the length
+    //
+    // The step hi - lo is shared by every node of a block.
+    let (mut current, mut next) = tree.split_at_mut(tree.len() / 2);
+    current[..len].copy_from_slice(&corners[..len]);
+    let mut blocks = 1;
+    for _ in 0..free {
+        let half = len / 2;
+        for block in 0..blocks {
+            let (lo, hi) = current[block * len..(block + 1) * len].split_at(half);
+            for (i, (&lo, &hi)) in lo.iter().zip(hi).enumerate() {
+                let step = diff(lo, hi);
+                for (index, &node) in nodes.iter().enumerate() {
+                    next[(block * nodes.len() + index) * half + i] = fold(lo, step, node);
+                }
+            }
+        }
+        blocks *= nodes.len();
+        len = half;
+        swap(&mut current, &mut next);
+    }
+    debug_assert_eq!(len, 2, "the round variable t is the last one left");
+    for block in 0..blocks {
+        emit(block, current[2 * block], current[2 * block + 1]);
+    }
+}
+
+/// Entries the scratch of [`fold_corner_tree`] needs: two levels of its widest expansion.
+///
+/// Level `k` of the free expansion holds `nodes^k` blocks of `block >> k` values.
+fn corner_tree_len(block: usize, free: usize, nodes: usize) -> usize {
+    let widest = (0..=free)
+        .map(|level| nodes.pow(level as u32) * (block >> level))
+        .max()
+        .unwrap_or(block);
+    2 * widest
+}
+
 /// What every task of one sliced round shares.
 struct SlicedRound<'a, 'air, A, F, S, R> {
     /// The stage's planes.
@@ -220,6 +384,12 @@ struct SlicedRound<'a, 'air, A, F, S, R> {
     alpha_powers: &'a [Vec<R>],
     /// Every prefix of this round: node coordinates of each bound variable, first variable first.
     prefixes: Vec<Vec<(bool, bool)>>,
+    /// The coordinates of every interpolation node, in node order.
+    nodes: Vec<(bool, bool)>,
+    /// Leading prefix coordinates each task binds; the rest vary within its group.
+    fixed: usize,
+    /// Prefixes each task folds at: `nodes^(round - fixed)`, consecutive in prefix order.
+    group: usize,
     /// Nodes this round evaluates, each with the step that reaches it.
     schedule: Vec<(usize, NodeStep<(bool, bool)>)>,
     /// Every successor column run of the stage.
@@ -239,6 +409,8 @@ struct SlicedRound<'a, 'air, A, F, S, R> {
 }
 
 /// Per-worker sums of a sliced round.
+///
+/// The column buffers hold one task's group of prefixes, `width` columns per prefix.
 struct SlicedScratch<F, S, R> {
     /// `sums[air][prefix][node]`: eq-weighted, alpha-batched constraint sums.
     sums: Vec<Vec<Vec<R>>>,
@@ -252,22 +424,36 @@ struct SlicedScratch<F, S, R> {
     next_diff: Vec<SlicedGf4<F, S>>,
     /// Corner buffer of one column.
     corners: Vec<SlicedGf4<F, S>>,
+    /// Corner planes of one column.
+    planes: Vec<[u64; 2]>,
+    /// Scratch of the corner tree of one column.
+    tree: Vec<[u64; 2]>,
     /// Whether any evaluation was poisoned.
     poisoned: bool,
 }
 
 impl<F, S, R: Field> SlicedScratch<F, S, R> {
-    fn new(degrees: &[usize], prefixes: usize, width: usize, corners: usize, tensor: bool) -> Self {
+    fn new<A>(
+        context: &SlicedRound<'_, '_, A, F, S, R>,
+        degrees: &[usize],
+        corners: usize,
+    ) -> Self {
+        let cells = context.group * context.trace.width;
+        let free = context.prefixes[0].len() - context.fixed;
+        let tree = corner_tree_len(corners >> context.fixed, free, context.nodes.len());
+        let evals = |degree| if context.tensor { 3 } else { degree };
         Self {
             sums: degrees
                 .iter()
-                .map(|&degree| vec![R::zero_vec(if tensor { 3 } else { degree }); prefixes])
+                .map(|&degree| vec![R::zero_vec(evals(degree)); context.prefixes.len()])
                 .collect(),
-            local: vec![SlicedGf4::default(); width],
-            local_diff: vec![SlicedGf4::default(); width],
-            next: vec![SlicedGf4::default(); width],
-            next_diff: vec![SlicedGf4::default(); width],
+            local: vec![SlicedGf4::default(); cells],
+            local_diff: vec![SlicedGf4::default(); cells],
+            next: vec![SlicedGf4::default(); cells],
+            next_diff: vec![SlicedGf4::default(); cells],
             corners: vec![SlicedGf4::default(); corners],
+            planes: vec![[0; 2]; corners],
+            tree: vec![[0; 2]; tree],
             poisoned: false,
         }
     }
@@ -291,70 +477,102 @@ where
     R: Field,
     A: for<'b> Air<SlicedFolder<'b, F, S, R>>,
 {
-    /// Fold one column's corners at the prefix, over word `word` of each corner block.
+    /// Fold one column's corners at every prefix of a group, over word `word` of each block.
+    ///
+    /// `emit` receives each prefix of the group, the value at `t = 0`, and the step to `t = 1`.
     #[inline]
     fn fold_column(
         &self,
         planes: &[[u64; 2]],
-        column: usize,
-        word: usize,
-        prefix: &[(bool, bool)],
-        corners: &mut [SlicedGf4<F, S>],
-    ) -> (SlicedGf4<F, S>, SlicedGf4<F, S>) {
+        (column, word): (usize, usize),
+        fixed: &[(bool, bool)],
+        (corners, tree): (&mut [[u64; 2]], &mut [[u64; 2]]),
+        mut emit: impl FnMut(usize, SlicedGf4<F, S>, SlicedGf4<F, S>),
+    ) {
         let width = self.trace.width;
         for (corner, value) in corners.iter_mut().enumerate() {
-            let [low, high] = planes[(corner * self.words + word) * width + column];
-            *value = SlicedGf4::from_planes(low, high);
+            *value = planes[(corner * self.words + word) * width + column];
         }
-        fold_corners(corners, prefix)
+        let free = self.prefixes[0].len() - fixed.len();
+        fold_corner_tree(corners, fixed, free, &self.nodes, tree, |prefix, lo, hi| {
+            let [low, high] = lo;
+            let [step_low, step_high] = [lo[0] ^ hi[0], lo[1] ^ hi[1]];
+            emit(
+                prefix,
+                SlicedGf4::from_planes(low, high),
+                SlicedGf4::from_planes(step_low, step_high),
+            );
+        });
     }
 
-    /// Add one word of residual rows at one prefix to the scratch sums.
-    fn accumulate(&self, scratch: &mut SlicedScratch<F, S, R>, word: usize, prefix_index: usize) {
-        let prefix = &self.prefixes[prefix_index];
+    /// Add one word of residual rows, at every prefix of group `group_index`, to the scratch sums.
+    fn accumulate(&self, scratch: &mut SlicedScratch<F, S, R>, word: usize, group_index: usize) {
+        let first_prefix = group_index * self.group;
+        let fixed = &self.prefixes[first_prefix][..self.fixed];
         let trace = self.trace;
+        let width = trace.width;
         let SlicedScratch {
+            sums,
             local,
             local_diff,
             next,
             next_diff,
             corners,
-            ..
+            planes,
+            tree,
+            poisoned,
         } = scratch;
 
-        for column in 0..trace.width {
-            let (lo, hi) = self.fold_column(&trace.cells, column, word, prefix, corners);
-            local[column] = lo;
-            local_diff[column] = lo + hi;
+        // Layout: prefix p of the group owns cells p * width .. (p + 1) * width.
+        for column in 0..width {
+            let emit = |prefix: usize, lo, step| {
+                local[prefix * width + column] = lo;
+                local_diff[prefix * width + column] = step;
+            };
+            self.fold_column(&trace.cells, (column, word), fixed, (planes, tree), emit);
         }
         for run in &self.next_columns {
             for column in run.clone() {
-                let (lo, hi) = self.fold_column(&trace.successors, column, word, prefix, corners);
-                next[column] = lo;
-                next_diff[column] = lo + hi;
+                let emit = |prefix: usize, lo, step| {
+                    next[prefix * width + column] = lo;
+                    next_diff[prefix * width + column] = step;
+                };
+                self.fold_column(
+                    &trace.successors,
+                    (column, word),
+                    fixed,
+                    (planes, tree),
+                    emit,
+                );
             }
         }
-        let mut selector = |index: usize| {
-            for (corner, value) in corners.iter_mut().enumerate() {
-                let plane = trace.boundary[corner * self.words + word][index];
-                *value = SlicedGf4::from_planes(plane, 0);
-            }
-            let (lo, hi) = fold_corners(corners, prefix);
-            (lo, lo + hi)
-        };
-        let (first, first_diff) = selector(0);
-        let (last, last_diff) = selector(1);
-        let (transition, transition_diff) = selector(2);
-        let boundary = BoundaryEvals::new(first, last, transition);
-        let boundary_diff = BoundaryEvals::new(first_diff, last_diff, transition_diff);
 
-        self.evaluate_nodes(
-            scratch,
-            boundary,
-            boundary_diff,
-            self.word_weights[word],
-            prefix_index,
-        );
+        for prefix in 0..self.group {
+            let prefix_index = first_prefix + prefix;
+            // The three selectors are few, so each prefix folds them on its own.
+            let mut selector = |index: usize| {
+                for (corner, value) in corners.iter_mut().enumerate() {
+                    let plane = trace.boundary[corner * self.words + word][index];
+                    *value = SlicedGf4::from_planes(plane, 0);
+                }
+                let (lo, hi) = fold_corners(corners, &self.prefixes[prefix_index]);
+                (lo, lo + hi)
+            };
+            let (first, first_diff) = selector(0);
+            let (last, last_diff) = selector(1);
+            let (transition, transition_diff) = selector(2);
+            let cells = prefix * width..(prefix + 1) * width;
+            let columns = NodeColumns {
+                local: &mut local[cells.clone()],
+                local_diff: &local_diff[cells.clone()],
+                next: &mut next[cells.clone()],
+                next_diff: &next_diff[cells],
+                boundary: BoundaryEvals::new(first, last, transition),
+                boundary_diff: BoundaryEvals::new(first_diff, last_diff, transition_diff),
+            };
+            let weight = self.word_weights[word];
+            self.evaluate_nodes(columns, (sums, poisoned), weight, prefix_index);
+        }
     }
 
     /// Step the folded word through every scheduled node, adding each AIR's value there.
@@ -364,21 +582,19 @@ where
     #[inline(never)]
     fn evaluate_nodes(
         &self,
-        scratch: &mut SlicedScratch<F, S, R>,
-        mut boundary: BoundaryEvals<SlicedGf4<F, S>>,
-        boundary_diff: BoundaryEvals<SlicedGf4<F, S>>,
+        columns: NodeColumns<'_, F, S>,
+        (sums, poisoned): (&mut [Vec<Vec<R>>], &mut bool),
         weight: R,
         prefix_index: usize,
     ) {
-        let SlicedScratch {
-            sums,
+        let NodeColumns {
             local,
             local_diff,
             next,
             next_diff,
-            poisoned,
-            ..
-        } = scratch;
+            mut boundary,
+            boundary_diff,
+        } = columns;
         for &(node, step) in &self.schedule {
             match step {
                 NodeStep::Unit(count) => {
@@ -440,6 +656,22 @@ where
             }
         }
     }
+}
+
+/// One prefix's folded word at `t = 0`, and its steps to `t = 1`.
+struct NodeColumns<'s, F, S> {
+    /// Column values, stepped in place from node to node.
+    local: &'s mut [SlicedGf4<F, S>],
+    /// Column steps from `t = 0` to `t = 1`.
+    local_diff: &'s [SlicedGf4<F, S>],
+    /// Successor values, zero outside the successor runs.
+    next: &'s mut [SlicedGf4<F, S>],
+    /// Successor steps, zero outside the successor runs.
+    next_diff: &'s [SlicedGf4<F, S>],
+    /// The selectors, stepped like the columns.
+    boundary: BoundaryEvals<SlicedGf4<F, S>>,
+    /// The selector steps.
+    boundary_diff: BoundaryEvals<SlicedGf4<F, S>>,
 }
 
 /// Step every column, and the successor columns inside `next_columns`, to the next node.
@@ -586,12 +818,17 @@ where
             prefix
         })
         .collect::<Vec<_>>();
+    let shape = (trace.width, word_weights.len());
+    let fixed = GroupLimits::of_pass().fixed_coordinates(round, nodes.len(), shape);
     let context = SlicedRound {
         trace,
         slots,
         public_values,
         alpha_powers,
         prefixes,
+        group: nodes.len().pow((round - fixed) as u32),
+        nodes,
+        fixed,
         schedule,
         next_columns: next_row_runs(slots),
         words: word_weights.len(),
@@ -606,14 +843,18 @@ where
         .iter()
         .map(|slot| slot.constraint_degree)
         .collect::<Vec<_>>();
-    let prefixes = context.prefixes.len();
+    let groups = context.prefixes.len() / context.group;
     let corners = 2 << round;
-    let scratch = (0..context.words * prefixes)
+    // Why: each Rayon split allocates a scratch of `group * width` cells per buffer.
+    // Bounding the splits to a few per worker keeps that allocation off the hot path.
+    let tasks = context.words * groups;
+    let scratch = (0..tasks)
         .into_par_iter()
+        .with_min_len(rows_per_task(tasks))
         .par_fold_reduce(
-            || SlicedScratch::new(&degrees, prefixes, trace.width, corners, tensor),
+            || SlicedScratch::new(&context, &degrees, corners),
             |mut scratch, task| {
-                context.accumulate(&mut scratch, task / prefixes, task % prefixes);
+                context.accumulate(&mut scratch, task / groups, task % groups);
                 scratch
             },
             SlicedScratch::merge,

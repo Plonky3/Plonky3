@@ -154,20 +154,27 @@ impl<F, S> SlicedGf4<F, S> {
 
     /// Multiply every lane by the element of `S` with coordinates `(low, high)`.
     ///
-    /// ```text
-    ///     (c0 + c1 g)(a0 + a1 g) = (c0 a0 + c1 a1) + (c0 a1 + c1 a0 + c1 a1) g
-    /// ```
+    /// The planes follow [`scale_planes`]; the poison flag carries over.
     #[inline]
     #[must_use]
     pub(crate) const fn scale(self, low: bool, high: bool) -> Self {
-        let (c0, c1) = (broadcast_bit(low), broadcast_bit(high));
-        Self::with_flags(
-            (c0 & self.low) ^ (c1 & self.high),
-            (c0 & self.high) ^ (c1 & (self.low ^ self.high)),
-            self.poisoned,
-            false,
-        )
+        let [low, high] = scale_planes([self.low, self.high], low, high);
+        Self::with_flags(low, high, self.poisoned, false)
     }
+}
+
+/// Multiply every lane of the coordinate planes `[a0, a1]` by `c0 + c1 g`.
+///
+/// `low` and `high` are the coordinates `c0` and `c1`:
+///
+/// ```text
+///     (c0 + c1 g)(a0 + a1 g) = (c0 a0 + c1 a1) + (c0 a1 + c1 a0 + c1 a1) g
+/// ```
+#[inline]
+#[must_use]
+pub(crate) const fn scale_planes([a0, a1]: [u64; 2], low: bool, high: bool) -> [u64; 2] {
+    let (c0, c1) = (broadcast_bit(low), broadcast_bit(high));
+    [(c0 & a0) ^ (c1 & a1), (c0 & a1) ^ (c1 & (a0 ^ a1))]
 }
 
 impl<F, S: Field> SlicedGf4<F, S> {

@@ -6,6 +6,9 @@ use p3_binary_field::{Ghash128, TowerLevel};
 use p3_field::{Field, HasSubfield, PrimeCharacteristicRing};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_multilinear_util::point::Point;
+use proptest::collection::vec as vec_of;
+use proptest::prelude::*;
+use proptest::sample::subsequence;
 use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
 
@@ -2225,6 +2228,146 @@ fn lane_masks_transpose_the_corner_words() {
                 mask | ((((word >> lane) & 1) as u8) << i)
             });
             assert_eq!(mask, expected, "lane {lane} of {corners} corners");
+        }
+    }
+}
+
+/// Every lane of a sliced value, in lane order.
+fn every_lane(value: SlicedGf4<Tower, Gf4>) -> Vec<Gf4> {
+    (0..SLICED_LANES).map(|lane| value.lane(lane)).collect()
+}
+
+/// The coordinates of the elements of `GF(4)`: `0`, `1`, `g` and `1 + g`.
+const GF4_COORDINATES: [(bool, bool); 4] =
+    [(false, false), (true, false), (false, true), (true, true)];
+
+/// Distinct interpolation nodes of `GF(4)`, in any order.
+fn arb_nodes() -> impl Strategy<Value = Vec<(bool, bool)>> {
+    subsequence(GF4_COORDINATES.to_vec(), 1..=GF4_COORDINATES.len()).prop_shuffle()
+}
+
+proptest! {
+    #[test]
+    fn a_corner_tree_folds_every_prefix_as_the_per_prefix_reference_does(
+        round in 0..MAX_SLICED_ROUNDS,
+        fixed_seed in any::<usize>(),
+        fixed_bits in vec_of(any::<(bool, bool)>(), MAX_SLICED_ROUNDS),
+        nodes in arb_nodes(),
+        planes in vec_of(any::<[u64; 2]>(), MAX_CORNERS),
+    ) {
+        // A round binds `round` coordinates before t; the task fixes a leading run of them.
+        let fixed = &fixed_bits[..fixed_seed % (round + 1)];
+        let free = round - fixed.len();
+        let corners = &planes[..2 << round];
+
+        // The tree emits every prefix of the group once, in index order.
+        let mut tree_corners = corners.to_vec();
+        let tree_len = corner_tree_len(corners.len() >> fixed.len(), free, nodes.len());
+        let mut tree = vec![[0; 2]; tree_len];
+        let mut emitted = Vec::new();
+        fold_corner_tree(&mut tree_corners, fixed, free, &nodes, &mut tree, |prefix, lo, hi| {
+            emitted.push((prefix, lo, hi));
+        });
+        prop_assert_eq!(emitted.len(), nodes.len().pow(free as u32));
+
+        for (index, (prefix, lo, hi)) in emitted.into_iter().enumerate() {
+            prop_assert_eq!(prefix, index);
+
+            // The prefix: the fixed run, then the base-`nodes` digits of its index, highest first.
+            let mut coordinates = fixed.to_vec();
+            coordinates.extend(
+                (0..free)
+                    .rev()
+                    .map(|digit| nodes[index / nodes.len().pow(digit as u32) % nodes.len()]),
+            );
+
+            // The reference folds the prefix alone, corner by corner.
+            let mut reference = corners
+                .iter()
+                .map(|&[low, high]| SlicedGf4::<Tower, Gf4>::from_planes(low, high))
+                .collect::<Vec<_>>();
+            let (expected_lo, expected_hi) = fold_corners(&mut reference, &coordinates);
+            prop_assert_eq!(
+                every_lane(SlicedGf4::from_planes(lo[0], lo[1])),
+                every_lane(expected_lo)
+            );
+            prop_assert_eq!(
+                every_lane(SlicedGf4::from_planes(hi[0], hi[1])),
+                every_lane(expected_hi)
+            );
+        }
+    }
+}
+
+/// Limits that only the group budget `cells` binds.
+const fn budget_only(cells: usize) -> GroupLimits {
+    GroupLimits {
+        cells,
+        min_tasks: 1,
+        max_free: usize::MAX,
+    }
+}
+
+#[test]
+fn fixed_coordinates_bind_the_fewest_leading_coordinates_within_every_limit() {
+    // Three nodes over three coordinates: groups of 27, 9, 3 or 1 prefixes.
+    let width = 10;
+    let one_word = (width, 1);
+    let fixed = |limits: GroupLimits, round, shape| limits.fixed_coordinates(round, 3, shape);
+
+    // A budget of the whole tree lets one task fold every prefix.
+    assert_eq!(fixed(budget_only(27 * width), 3, one_word), 0);
+    // One cell short of it fixes the first coordinate.
+    assert_eq!(fixed(budget_only(27 * width - 1), 3, one_word), 1);
+    assert_eq!(fixed(budget_only(3 * width), 3, one_word), 2);
+    // A stage wider than the budget still folds one prefix per task.
+    assert_eq!(fixed(budget_only(1), 3, one_word), 3);
+    // Round zero has the empty prefix only.
+    assert_eq!(fixed(budget_only(1), 0, one_word), 0);
+
+    // Four words feeding twelve workers fix one coordinate: 4 * 3 tasks.
+    let workers = |min_tasks| GroupLimits {
+        min_tasks,
+        ..budget_only(usize::MAX)
+    };
+    assert_eq!(fixed(workers(12), 3, (width, 4)), 1);
+    // One task more than that fixes a second: 4 * 9 tasks.
+    assert_eq!(fixed(workers(13), 3, (width, 4)), 2);
+    // Workers beyond every prefix of every word leave one prefix per task.
+    assert_eq!(fixed(workers(1000), 3, (width, 4)), 3);
+
+    // A group leaving at most one coordinate free fixes all the others.
+    let narrow = GroupLimits {
+        max_free: 1,
+        ..budget_only(usize::MAX)
+    };
+    assert_eq!(fixed(narrow, 3, one_word), 2);
+    assert_eq!(fixed(narrow, 1, one_word), 0);
+}
+
+#[test]
+fn every_prefix_grouping_yields_the_rounds_of_one_prefix_per_task() {
+    let height = 1 << 10;
+    let mut linear = Instance::honest(FixtureAir::Linear { scale: Tower::ONE }, height, 0x6_0001);
+    linear.main.values[0] = gf4(2);
+    let instances = [linear, Instance::honest(FixtureAir::Pair, height, 0x6_0002)];
+    let under_budget = |cells, tensor| {
+        GROUP_LIMITS_OVERRIDE.with(|cell| cell.set(Some(budget_only(cells))));
+        let rounds = collect_tensor_rounds(&instances, tensor);
+        GROUP_LIMITS_OVERRIDE.with(|cell| cell.set(None));
+        rounds
+    };
+    for tensor in [false, true] {
+        // A budget of one cell folds each prefix in a task of its own.
+        let reference = under_budget(1, tensor);
+
+        // Growing budgets sweep every fixed-coordinate count, down to one group per word.
+        for budget in [2, 3, 4, 6, 8, 9, 12, 18, 27, 36, 54, 81, 108, usize::MAX] {
+            assert_eq!(
+                under_budget(budget, tensor),
+                reference,
+                "budget {budget}, tensor {tensor}"
+            );
         }
     }
 }
