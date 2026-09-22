@@ -196,7 +196,7 @@ fn successor_word(planes: [u64; 2], carry: (bool, bool)) -> [u64; 2] {
 /// # Panics
 ///
 /// Panics unless `prefix` holds one node per variable of the corners other than `t`.
-#[inline]
+#[inline(always)]
 fn fold_corners<F, S, const CORNERS: usize>(
     mut corners: [SlicedGf4<F, S>; CORNERS],
     prefix: &[(bool, bool)],
