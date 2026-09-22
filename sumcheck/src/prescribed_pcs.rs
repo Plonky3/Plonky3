@@ -7,7 +7,7 @@ use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingC
 use p3_commit::MultilinearPcs;
 use p3_field::ExtensionField;
 use p3_multilinear_util::point::Point;
-use p3_security::{ErrorBits, SecurityTerm};
+use p3_security::{CandidateSet, ErrorBits, SecurityTerm};
 
 use crate::table::{OpeningEvals, OpeningProtocol};
 
@@ -27,11 +27,35 @@ use crate::table::{OpeningEvals, OpeningProtocol};
 /// An opening that stacks a reduction on a commitment charges both.
 ///
 /// A report showing one number for the pair cannot say which of them is short.
+/// # The candidate count is forwarded, not consumed
+///
+/// [`Self::charge_reduction`] leaves `log2_max_candidates` exactly as it found it.
+///
+/// A layer charges the draws it makes itself, then hands the same count on, because the
+/// set is fixed by the commitment and a union bound taken over it at one layer takes
+/// nothing away from the prover's freedom at the next. [`CandidateSet`] states the rule
+/// and carries it in the type; this struct is one link in the stack it describes.
+///
+/// ```text
+///     WHIR commitment        fixes the set, charges its own proximity error
+///     bit ring switch        charges its reduction over the set, forwards the count
+///     column batching        charges its draw over the same set, forwards the count
+///     multi-STARK report     charges its AIR and lookup draws over the same set
+/// ```
+///
+/// Terms already in [`Self::terms`] are final: each was charged by the layer that drew
+/// it, and no layer above re-charges them.
 #[derive(Clone, Debug)]
 pub struct PrescribedOpeningSecurity {
     /// Every labelled algebraic error the opening charges, composed by a union bound.
+    ///
+    /// Each term is already charged for whatever it had to pay, so a caller composes
+    /// these as they are rather than charging them again.
     pub terms: Vec<SecurityTerm>,
     /// Logarithm of the maximum candidate set size at commitment time.
+    ///
+    /// [`Self::candidates`] is the checked view of this, and the one to read before
+    /// trusting a number derived from it.
     pub log2_max_candidates: f64,
 }
 
@@ -45,17 +69,39 @@ impl PrescribedOpeningSecurity {
         }
     }
 
+    /// The candidate set the commitment leaves open, as a checked value.
+    ///
+    /// # Returns
+    ///
+    /// Nothing when [`Self::log2_max_candidates`] names no set — negative, infinite, or
+    /// NaN. A caller that needs a number from this evidence fails closed on that.
+    #[must_use]
+    pub fn candidates(&self) -> Option<CandidateSet> {
+        CandidateSet::from_log2(self.log2_max_candidates)
+    }
+
     /// Charge one error the caller's own reduction draws after the commitment.
     ///
-    /// A prover may pick its candidate after seeing those challenges.
+    /// A prover may pick its candidate after seeing those challenges, so the union bound
+    /// over the candidate set is what this subtracts.
     ///
-    /// So the union bound over the candidate set is what this subtracts.
+    /// [`SecurityTerm::over_candidates`] is the one implementation of that arithmetic;
+    /// this only decides which set the term is charged over.
+    ///
+    /// The count is left untouched, so the layer above charges the same set over the
+    /// draws it makes itself. The term pushed here is final and is never charged again.
     pub fn charge_reduction(&mut self, term: SecurityTerm) {
-        let bits = (term.bits.bits() - self.log2_max_candidates).max(0.0);
-        self.terms.push(SecurityTerm {
-            bits: ErrorBits::from_log2(bits),
+        // A count naming no set prices nothing, so the term is left with no bound at all
+        // rather than with a number resting on it. A negative count would otherwise
+        // *raise* the term, which is the one direction that must not happen silently.
+        let unusable = SecurityTerm {
+            bits: ErrorBits::from_log2(0.0),
             ..term
+        };
+        let charged = self.candidates().map_or(unusable, |candidates| {
+            term.over_candidates(candidates).term()
         });
+        self.terms.push(charged);
     }
 
     /// Union of every term, which is the whole algebraic error of the opening.
@@ -173,17 +219,22 @@ where
 
 #[cfg(test)]
 mod tests {
-    use p3_security::{ErrorBits, SecurityTerm};
+    use p3_security::{CandidateSet, ErrorBits, SecurityTerm};
 
     use super::PrescribedOpeningSecurity;
+
+    /// Evidence for a commitment leaving `2^log2` candidates and charging nothing itself.
+    fn evidence(log2: f64) -> PrescribedOpeningSecurity {
+        PrescribedOpeningSecurity {
+            terms: alloc::vec::Vec::new(),
+            log2_max_candidates: log2,
+        }
+    }
 
     #[test]
     fn a_reduction_pays_the_union_bound_over_the_candidate_set() {
         // A commitment leaving sixteen candidates costs a reduction four bits.
-        let mut security = PrescribedOpeningSecurity {
-            terms: alloc::vec::Vec::new(),
-            log2_max_candidates: 4.0,
-        };
+        let mut security = evidence(4.0);
         security.charge_reduction(SecurityTerm::new("r", ErrorBits::from_log2(100.0)));
         assert_eq!(security.terms[0].bits.bits(), 96.0);
         assert_eq!(security.terms[0].label, "r");
@@ -196,11 +247,69 @@ mod tests {
     #[test]
     fn unique_decoding_leaves_a_reduction_at_its_own_strength() {
         // One candidate is no choice at all, so nothing is subtracted.
-        let mut security = PrescribedOpeningSecurity {
-            terms: alloc::vec::Vec::new(),
-            log2_max_candidates: 0.0,
-        };
+        let mut security = evidence(0.0);
         security.charge_reduction(SecurityTerm::new("r", ErrorBits::from_log2(100.0)));
         assert_eq!(security.terms[0].bits.bits(), 100.0);
+        assert_eq!(security.candidates(), Some(CandidateSet::UNIQUE));
+    }
+
+    #[test]
+    fn a_charge_forwards_the_candidate_count_to_the_layer_above() {
+        // Fixture state: a commitment leaving sixteen candidates, two layers stacked on it.
+        //
+        //     inner layer   charges its own reduction  ->  100 - 4 = 96 bits
+        //     outer layer   charges its own draw       ->  100 - 4 = 96 bits
+        //
+        // The outer layer must see the same count. If the charge consumed it, the outer
+        // draw would be priced against a set the prover still has, and the report would
+        // come out four bits optimistic.
+        let mut inner = evidence(4.0);
+        inner.charge_reduction(SecurityTerm::new("inner", ErrorBits::from_log2(100.0)));
+        assert_eq!(inner.log2_max_candidates, 4.0);
+
+        let mut outer = inner.clone();
+        outer.charge_reduction(SecurityTerm::new("outer", ErrorBits::from_log2(100.0)));
+        assert_eq!(outer.log2_max_candidates, 4.0);
+
+        assert_eq!(outer.terms[0].bits.bits(), 96.0);
+        assert_eq!(outer.terms[1].bits.bits(), 96.0);
+    }
+
+    #[test]
+    fn the_layer_above_never_charges_a_term_the_layer_below_already_charged() {
+        // Same stack, read from the top: the outer layer adds one term and leaves the
+        // inner one exactly where the inner layer left it.
+        //
+        // Charging it twice would report 92 bits for a draw that is worth 96, which no
+        // test of the outer layer alone would notice — both numbers look like bounds.
+        let mut security = evidence(4.0);
+        security.charge_reduction(SecurityTerm::new("inner", ErrorBits::from_log2(100.0)));
+        let after_inner = security.terms.clone();
+
+        security.charge_reduction(SecurityTerm::new("outer", ErrorBits::from_log2(100.0)));
+        assert_eq!(security.terms[..1], after_inner[..]);
+        assert_eq!(security.terms[0].bits.bits(), 96.0);
+        assert_ne!(security.terms[0].bits.bits(), 92.0);
+
+        // The union of the two independent draws is what the opening as a whole charges.
+        assert_eq!(
+            security.error(),
+            ErrorBits::sum(&[ErrorBits::from_log2(96.0), ErrorBits::from_log2(96.0)])
+        );
+    }
+
+    #[test]
+    fn a_count_that_names_no_set_leaves_a_reduction_with_no_bound() {
+        // A negative count would add bits to the term, which is the unsafe direction.
+        //
+        // Nothing here guesses a set size: the term is charged to zero bits, and
+        // `candidates` reports that the evidence is unusable so a caller fails closed.
+        for count in [-1.0, f64::INFINITY, f64::NAN] {
+            let mut security = evidence(count);
+            assert_eq!(security.candidates(), None);
+            security.charge_reduction(SecurityTerm::new("r", ErrorBits::from_log2(100.0)));
+            assert_eq!(security.terms[0].bits.bits(), 0.0);
+            assert_eq!(security.terms[0].label, "r");
+        }
     }
 }

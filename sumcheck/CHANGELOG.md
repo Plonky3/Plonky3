@@ -7,9 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `PrescribedOpeningSecurity::candidates`, the checked view of `log2_max_candidates`.
+
 ### Changed
 
 - **Breaking:** `BitRingSwitch::num_variables` and `SvoPoint::num_variables_svo` are no longer `const`.
+- `PrescribedOpeningSecurity::charge_reduction` delegates to `SecurityTerm::over_candidates`
+  and documents that the candidate count is forwarded to the layer above, not consumed. A
+  count that names no set now leaves the term with no bound instead of raising it.
 
 ## [0.7.0] - 2026-09-04
 ### Merged PRs

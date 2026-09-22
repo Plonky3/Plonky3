@@ -21,6 +21,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `BusBindingError::CompositionPointDimension` now accepts any point at least as wide as the tallest bus table.
   The security report charges one `binary-bus-batching` term in place of
   `binary-bus-direction-batching` and `binary-bus-composition-sumcheck`.
+- The candidate-set charge on every outer reduction term is applied once, by
+  `p3_security::SecurityTerm::over_candidates`, instead of being open-coded over a
+  term slice. Reported security levels are unchanged.
 
 ### Removed
 

@@ -450,7 +450,12 @@ where
         if let OpeningRoute::Batched(shape) = route {
             // Both combined claims of a batch read one column point, so each is charged.
             //
-            // The batching challenge is drawn before any candidate has been named.
+            // The batching challenge is drawn before any candidate has been named,
+            // so it pays the same list the ring-switch reduction below it paid for.
+            //
+            // Charging it over the count the inner layer forwarded, rather than over
+            // whatever that layer had left, is the whole of the rule: a union bound
+            // taken once does not shrink the set the next draw is exposed to.
             security.charge_reduction(p3_security::multilinear::column_batch_term(
                 shape.num_batches * shape.num_views(),
                 shape.column_variables(),

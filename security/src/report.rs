@@ -81,14 +81,164 @@ impl SecurityTerm {
 
     /// The same term, charged over every candidate a commitment still leaves open.
     ///
-    /// A draw made before one candidate is named gives a prover that many tries at it.
+    /// A draw made before one candidate is named gives a prover that many tries at it,
+    /// so the union bound over the whole set is what this subtracts.
     ///
-    /// The argument is the base-two logarithm of how many are left open.
+    /// This is the one implementation of that charge. Every layer that prices a draw
+    /// made between a commitment and its opening goes through here.
+    ///
+    /// The set is not consumed — see [`CandidateSet`] for the layering rule.
+    ///
+    /// The result is a [`ChargedTerm`], which has no charge of its own, so a second
+    /// charge of the same term is not something a caller can write.
     #[must_use]
-    pub fn over_candidates(mut self, log2_candidates: f64) -> Self {
+    pub fn over_candidates(self, candidates: CandidateSet) -> ChargedTerm {
         // An error above one is no bound at all, so the charge stops at zero bits.
-        self.bits = ErrorBits::from_log2((self.bits.bits() - log2_candidates).max(0.0));
-        self
+        //
+        // Zero bits is the honest report of "no bound", not a margin hidden by the floor:
+        // a union bound containing a zero-bit term composes to at most zero bits, and
+        // every caller grading a report against a positive target fails closed there.
+        ChargedTerm {
+            term: Self {
+                bits: ErrorBits::from_log2((self.bits.bits() - candidates.log2_size()).max(0.0)),
+                ..self
+            },
+            over: candidates,
+        }
+    }
+}
+
+/// How many polynomials a commitment still leaves open while later challenges are drawn.
+///
+/// A commitment in the unique-decoding regime names one polynomial, so its set is
+/// [`CandidateSet::UNIQUE`] and costs a later draw nothing. A list-decoding argument
+/// leaves a whole list open until its own opening phase names a member, so every draw
+/// made in between hands a prover one try per member.
+///
+/// # A charge does not consume the set
+///
+/// This is the question three copies of the charge used to answer differently, so the
+/// contract states it once, here.
+///
+/// The set is fixed by the commitment, once, before any layer above it draws. A layer
+/// that union-bounds its own draws over the set takes nothing away from the prover's
+/// freedom in the layer above, which therefore faces exactly the same set. The rule is:
+///
+/// ```text
+///     a layer charges the draws it makes itself, over the whole set
+///     a layer hands the same set, unchanged, to the layer above it
+///     a term that has been charged is final, and is never charged again
+/// ```
+///
+/// The types say so rather than the prose alone. `CandidateSet` is [`Copy`] and has no
+/// operation that shrinks or spends it, so forwarding is the only thing a caller can do
+/// with one. [`SecurityTerm::over_candidates`] hands back a [`ChargedTerm`], which has no
+/// `over_candidates` of its own, so charging the same term twice does not typecheck.
+///
+/// # Example
+///
+/// A commitment leaving sixteen candidates open, charged by two stacked layers.
+///
+/// ```
+/// use p3_security::{CandidateSet, ErrorBits, SecurityTerm};
+///
+/// let candidates = CandidateSet::from_log2(4.0).unwrap();
+///
+/// // The inner layer charges its own reduction and forwards the set untouched.
+/// let inner = SecurityTerm::new("inner", ErrorBits::from_log2(100.0)).over_candidates(candidates);
+/// assert_eq!(inner.bits().bits(), 96.0);
+///
+/// // The outer layer charges its own draw over the same set, not over what is left of it.
+/// let outer = SecurityTerm::new("outer", ErrorBits::from_log2(100.0)).over_candidates(candidates);
+/// assert_eq!(outer.bits().bits(), 96.0);
+/// ```
+#[derive(Copy, Clone, Debug, PartialEq, PartialOrd, Serialize)]
+pub struct CandidateSet {
+    /// Base-two logarithm of the set size. Finite and non-negative by construction.
+    log2_size: f64,
+}
+
+impl CandidateSet {
+    /// The commitment names one polynomial, so a later draw pays nothing.
+    pub const UNIQUE: Self = Self { log2_size: 0.0 };
+
+    /// A set of `2^log2_size` candidates.
+    ///
+    /// # Returns
+    ///
+    /// Nothing when the argument is not a set size: a set has at least one member and
+    /// finitely many, so anything negative, infinite, or NaN names no set at all.
+    #[must_use]
+    pub fn from_log2(log2_size: f64) -> Option<Self> {
+        (log2_size.is_finite() && log2_size >= 0.0).then_some(Self { log2_size })
+    }
+
+    /// Base-two logarithm of how many candidates are left open.
+    #[must_use]
+    pub const fn log2_size(self) -> f64 {
+        self.log2_size
+    }
+
+    /// Whether the commitment already names one polynomial.
+    #[must_use]
+    pub fn is_unique(self) -> bool {
+        self.log2_size == 0.0
+    }
+
+    /// The set a draw faces when two independent commitments are both still open.
+    ///
+    /// A prover chooses one member of each, so the two choices multiply.
+    #[must_use]
+    pub fn product(self, other: Self) -> Self {
+        Self {
+            log2_size: self.log2_size + other.log2_size,
+        }
+    }
+}
+
+/// A [`SecurityTerm`] that has already paid for the candidate set it was drawn against.
+///
+/// Its only purpose is to be a different type from an uncharged term. A charged term has
+/// no `over_candidates`, so the second charge that would silently halve a reported level
+/// is a compile error rather than a review finding.
+///
+/// [`Self::term`] unwraps it for composition into a report, and that unwrap is the single
+/// visible place where a term re-enters the uncharged world.
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub struct ChargedTerm {
+    term: SecurityTerm,
+    over: CandidateSet,
+}
+
+impl ChargedTerm {
+    /// The charged term, ready to be composed into a report.
+    #[must_use]
+    pub const fn term(self) -> SecurityTerm {
+        self.term
+    }
+
+    /// The set this term was charged over, kept so a report can say what it paid for.
+    #[must_use]
+    pub const fn candidates(self) -> CandidateSet {
+        self.over
+    }
+
+    /// The error source, which the charge leaves unchanged.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        self.term.label
+    }
+
+    /// The bound after the charge, in `-log2(error)` bits.
+    #[must_use]
+    pub const fn bits(self) -> ErrorBits {
+        self.term.bits
+    }
+}
+
+impl From<ChargedTerm> for SecurityTerm {
+    fn from(charged: ChargedTerm) -> Self {
+        charged.term
     }
 }
 
@@ -96,23 +246,119 @@ impl SecurityTerm {
 mod candidate_tests {
     use super::*;
 
+    /// Sixteen candidates, the running example of the layering rule.
+    fn sixteen() -> CandidateSet {
+        CandidateSet::from_log2(4.0).expect("sixteen is a set size")
+    }
+
     #[test]
     fn a_draw_before_a_candidate_is_named_pays_for_every_one_left_open() {
         // Sixteen candidates cost a draw four bits, and the label is carried through.
-        let charged = SecurityTerm::new("r", ErrorBits::from_log2(100.0)).over_candidates(4.0);
-        assert_eq!(charged.bits.bits(), 96.0);
-        assert_eq!(charged.label, "r");
+        let charged =
+            SecurityTerm::new("r", ErrorBits::from_log2(100.0)).over_candidates(sixteen());
+        assert_eq!(charged.bits().bits(), 96.0);
+        assert_eq!(charged.label(), "r");
+
+        // The charge records what it paid for, so a report can name the set.
+        assert_eq!(charged.candidates(), sixteen());
 
         // A draw weaker than the candidate count is worth nothing, rather than negative.
-        let drowned = SecurityTerm::new("weak", ErrorBits::from_log2(3.0)).over_candidates(4.0);
-        assert_eq!(drowned.bits.bits(), 0.0);
+        let drowned =
+            SecurityTerm::new("weak", ErrorBits::from_log2(3.0)).over_candidates(sixteen());
+        assert_eq!(drowned.bits().bits(), 0.0);
     }
 
     #[test]
     fn one_candidate_leaves_a_draw_at_its_own_strength() {
         // No choice is no advantage, so nothing is subtracted.
         let term = SecurityTerm::new("r", ErrorBits::from_log2(100.0));
-        assert_eq!(term.over_candidates(0.0).bits.bits(), 100.0);
+        assert_eq!(
+            term.over_candidates(CandidateSet::UNIQUE).bits().bits(),
+            100.0
+        );
+
+        // Unique decoding is exactly the set a commitment that names one polynomial leaves.
+        assert!(CandidateSet::UNIQUE.is_unique());
+        assert_eq!(CandidateSet::from_log2(0.0), Some(CandidateSet::UNIQUE));
+    }
+
+    #[test]
+    fn the_floor_reports_no_bound_rather_than_hiding_a_negative_margin() {
+        // A draw three bits short of the candidate count has no bound left at all.
+        //
+        //     2^-3 error, 16 tries  ->  the prover expects to succeed
+        //
+        // Zero bits is what that is, and a union containing it composes to zero bits,
+        // so nothing downstream can read the shortfall as a passing margin.
+        let drowned =
+            SecurityTerm::new("weak", ErrorBits::from_log2(1.0)).over_candidates(sixteen());
+        assert_eq!(drowned.bits().bits(), 0.0);
+
+        let composed = ErrorBits::sum(&[drowned.bits(), ErrorBits::from_log2(128.0)]);
+        assert!(composed.bits() <= 0.0);
+    }
+
+    #[test]
+    fn a_count_that_names_no_set_is_refused_before_it_can_be_charged() {
+        // A negative count would *add* bits, which is the unsafe direction, and an
+        // infinite or NaN one prices nothing. None of the three is a set size.
+        for count in [-1.0, f64::INFINITY, f64::NEG_INFINITY, f64::NAN] {
+            assert_eq!(CandidateSet::from_log2(count), None);
+        }
+    }
+
+    #[test]
+    fn a_layer_charges_its_own_draw_and_forwards_the_set_untouched() {
+        // Fixture state: one commitment leaving sixteen candidates, two layers above it.
+        //
+        //     commitment        its own error, already final
+        //     inner reduction   drawn before a candidate is named  ->  pays 4 bits
+        //     outer reduction   also drawn before one is named     ->  pays 4 bits
+        //
+        // The outer layer charges the set the commitment fixed, not a set the inner
+        // layer somehow shrank: the inner union bound took nothing away from the prover.
+        let candidates = sixteen();
+
+        let commitment = SecurityTerm::new("commitment", ErrorBits::from_log2(90.0));
+        let inner =
+            SecurityTerm::new("inner", ErrorBits::from_log2(100.0)).over_candidates(candidates);
+        let outer =
+            SecurityTerm::new("outer", ErrorBits::from_log2(100.0)).over_candidates(candidates);
+
+        assert_eq!(inner.bits().bits(), 96.0);
+        assert_eq!(outer.bits().bits(), 96.0);
+
+        // The set the inner layer forwarded is the one the outer layer charged.
+        assert_eq!(inner.candidates(), outer.candidates());
+
+        // The commitment's own term is not a draw made before it, so it pays nothing.
+        let report = [commitment, inner.term(), outer.term()];
+        assert_eq!(report[0].bits.bits(), 90.0);
+
+        // Charging the inner term a second time would halve nothing here, because there
+        // is no way to write it: `inner` is a `ChargedTerm` and has no `over_candidates`.
+        //
+        // The only route back is `term()`, which is the one visible unwrap, so a double
+        // charge is a line a reviewer can point at rather than a silent default.
+        let recharged = inner.term().over_candidates(candidates);
+        assert_eq!(recharged.bits().bits(), 92.0);
+        assert_ne!(recharged.bits().bits(), inner.bits().bits());
+    }
+
+    #[test]
+    fn two_open_commitments_multiply_the_tries_a_single_draw_gets() {
+        // A joint choice of one member from each list is a choice from the product.
+        let main = CandidateSet::from_log2(4.0).unwrap();
+        let preprocessed = CandidateSet::from_log2(3.0).unwrap();
+        assert_eq!(main.product(preprocessed).log2_size(), 7.0);
+
+        // Charging over the product is charging once, for both, as one union bound.
+        let charged = SecurityTerm::new("r", ErrorBits::from_log2(100.0))
+            .over_candidates(main.product(preprocessed));
+        assert_eq!(charged.bits().bits(), 93.0);
+
+        // Unique decoding on one side leaves the other side's set as it was.
+        assert_eq!(main.product(CandidateSet::UNIQUE), main);
     }
 }
 
