@@ -37,7 +37,7 @@ pub(super) const CONSTRAINTS_PER_ROUND: usize = 32
     + SUM_CARRY_ADD
     + (STORED_CARRY_ADD + SUM_CARRY_ADD);
 
-/// Number of constraints after input booleanity: the schedule, every round and the output.
+/// Number of constraints excluding input booleanity: the schedule, every round and the output.
 const NUM_HASH_CONSTRAINTS: usize = SCHEDULE_EXTENSIONS * CONSTRAINTS_PER_SCHEDULE_WORD
     + NUM_COMPRESSION_ROUNDS * CONSTRAINTS_PER_ROUND
     + STATE_WORDS * SUM_CARRY_ADD;

@@ -24,7 +24,7 @@ const NUM_INPUT_BITS: usize = (8 + 16 + 4) * 32;
 /// Constraints per G step: two 3-operand and two 2-operand additions.
 const CONSTRAINTS_PER_G: usize = 2 * (31 + 32) + 2 * 32;
 
-/// Number of constraints after input booleanity: every G step.
+/// Number of constraints excluding input booleanity: every G step.
 const NUM_G_CONSTRAINTS: usize = NUM_ROUNDS * G_PER_ROUND * CONSTRAINTS_PER_G;
 
 /// An AIR for the Blake-3 compression function over a field of characteristic 2.

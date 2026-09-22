@@ -778,7 +778,9 @@ where
 /// Proves and verifies a Boolean-valued `air` against `trace`, committing the trace as bits, and
 /// reports size and timing measurements.
 ///
-/// The commitment refuses every cell outside `{0, 1}`, so `air` need not constrain booleanity.
+/// The commitment's alphabet is one bit per cell: bits pack into the committed elements by a
+/// bijection, so a cell outside `{0, 1}` is not representable, and `air` need not constrain
+/// booleanity.
 ///
 /// Runs its zerocheck through [`Backend::preferred`]; see [`prove_boolean_air_with_backend`] to
 /// choose a different backend.

@@ -239,8 +239,11 @@ pub trait BaseAir<F>: Sync {
     /// Whether the AIR is sound only when every main-trace cell is a bit, which its constraints
     /// do not enforce.
     ///
-    /// Such an AIR must be proven under a commitment that admits nothing but bits, such as a
-    /// commitment to the trace's bits. A prover that commits field elements must refuse it.
+    /// Such an AIR must be proven under a commitment whose alphabet is one bit per cell, such as a
+    /// commitment to the trace's bits, where a cell outside `{0, 1}` is not representable.
+    ///
+    /// The hint is advisory: no prover or verifier consults it. Code that pairs an AIR with a
+    /// commitment to field elements must check it and refuse an AIR that reports `true`.
     ///
     /// A wrapper or enum AIR must forward this method, since the default reports no reliance.
     ///
