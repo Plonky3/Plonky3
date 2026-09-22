@@ -1075,6 +1075,14 @@ fn representation_invalid_proofs_are_rejected_at_n11() {
     }
 
     for instance in [invalid_boolean, non_boolean] {
+        let one = core::slice::from_ref(&instance);
+        let generic = transcript::<GenericBackend>(one, LookupRuntime::Inactive, 0, false);
+        let incumbent =
+            transcript::<ReprBackend<Gf4, PolyBasis>>(one, LookupRuntime::Inactive, 0, false);
+        let late =
+            transcript::<ReprBackend<Gf4, PolyBasis, true>>(one, LookupRuntime::Inactive, 0, false);
+        assert_eq!(incumbent, generic, "invalid n11 incumbent transcript");
+        assert_eq!(late, generic, "invalid n11 late transcript");
         for (name, backend) in [("incumbent", false), ("late", true)] {
             let airs = [&instance.air];
             let zerocheck = AirZerocheck::new(&airs, 0);
@@ -1260,6 +1268,82 @@ fn representation_late_boundary_matches_generic_for_n13_and_n11_stages() {
         false,
     );
     assert_eq!(late, generic, "n13+n11 late stages");
+}
+
+#[test]
+fn representation_late_boundary_covers_active_degree_order_and_storage_matrix() {
+    let height = 1 << 11;
+    for (name, instances) in [
+        (
+            "quadratic-then-linear",
+            vec![
+                Instance::honest(FixtureAir::Pair, height, 0x007E_5040),
+                Instance::honest(FixtureAir::Linear { scale: gf4(2) }, height, 0x007E_5041),
+            ],
+        ),
+        (
+            "linear-then-quadratic",
+            vec![
+                Instance::honest(FixtureAir::Linear { scale: gf4(3) }, height, 0x007E_5042),
+                Instance::honest(FixtureAir::Pair, height, 0x007E_5043),
+            ],
+        ),
+    ] {
+        for packed in [false, true] {
+            let generic =
+                transcript::<GenericBackend>(&instances, LookupRuntime::Inactive, 0, packed);
+            let incumbent = transcript::<ReprBackend<Gf4, PolyBasis>>(
+                &instances,
+                LookupRuntime::Inactive,
+                0,
+                packed,
+            );
+            let late = transcript::<ReprBackend<Gf4, PolyBasis, true>>(
+                &instances,
+                LookupRuntime::Inactive,
+                0,
+                packed,
+            );
+            assert_eq!(incumbent, generic, "{name} incumbent packed={packed}");
+            assert_eq!(late, generic, "{name} late packed={packed}");
+        }
+        let mixed = transcript_with_storage::<ReprBackend<Gf4, PolyBasis, true>>(
+            DEFAULT_SLICED_ROUNDS,
+            &instances,
+            LookupRuntime::Inactive,
+            0,
+            |index, _| index == 0,
+        );
+        let dense = transcript::<GenericBackend>(&instances, LookupRuntime::Inactive, 0, false);
+        assert_eq!(mixed, dense, "{name} mixed dense/packed late");
+    }
+
+    let quadratic_inputs = [Instance::honest(
+        FixtureAir::QuadraticInputs,
+        height,
+        0x007E_5044,
+    )];
+    for packed in [false, true] {
+        let generic =
+            transcript::<GenericBackend>(&quadratic_inputs, LookupRuntime::Inactive, 0, packed);
+        let incumbent = transcript::<ReprBackend<Gf4, PolyBasis>>(
+            &quadratic_inputs,
+            LookupRuntime::Inactive,
+            0,
+            packed,
+        );
+        let late = transcript::<ReprBackend<Gf4, PolyBasis, true>>(
+            &quadratic_inputs,
+            LookupRuntime::Inactive,
+            0,
+            packed,
+        );
+        assert_eq!(
+            incumbent, generic,
+            "quadratic inputs incumbent packed={packed}"
+        );
+        assert_eq!(late, generic, "quadratic inputs late packed={packed}");
+    }
 }
 
 #[test]

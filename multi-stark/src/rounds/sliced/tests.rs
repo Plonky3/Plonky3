@@ -680,12 +680,19 @@ fn late_boundary_keeps_planes_until_fifth_challenge() {
             assert!(
                 matches!(&state.columns, ExtColumns::Sliced(columns) if columns.challenges.len() == 1 && columns.tensor.is_some())
             );
-            assert!(state.fold_sliced(challenge(1)));
-            assert!(state.fold_sliced(challenge(2)));
+            for round in 1..=2 {
+                let tau = state.tau.as_slice().to_vec();
+                let suffix = Poly::new_from_point(&tau[round + 1..], Tower::ONE);
+                assert!(state.round_poly_sliced::<Gf4>(&suffix).is_some());
+                assert!(state.fold_sliced(challenge(round)));
+            }
             assert!(
                 matches!(&state.columns, ExtColumns::Sliced(columns) if columns.challenges.len() == 3 && columns.tensor.is_some())
             );
 
+            let tau = state.tau.as_slice().to_vec();
+            let suffix = Poly::new_from_point(&tau[4..], Tower::ONE);
+            assert!(state.round_poly_sliced::<Gf4>(&suffix).is_some());
             assert!(state.fold_late_boundary::<Gf4>(challenge(3)));
             assert!(
                 matches!(&state.columns, ExtColumns::Sliced(columns) if columns.challenges.len() == 4 && columns.late_boundary && columns.tensor.is_none() && columns.num_evals() == height >> 4)
@@ -708,7 +715,41 @@ fn late_boundary_keeps_planes_until_fifth_challenge() {
                 matches!(&state.columns, ExtColumns::Scalar(columns) if columns.len() == 3 && columns.iter().all(|column| column.num_evals() == height >> 5))
             );
             assert_eq!(state.round, 5);
+
+            for round in 5..tau.len() {
+                let tau = state.tau.as_slice().to_vec();
+                let suffix = Poly::new_from_point(&tau[round + 1..], Tower::ONE);
+                state.round_poly_repr(&suffix);
+                state.fold_repr(challenge(round));
+            }
+            assert!(!state.into_openings().is_empty());
         });
+
+        assert_eq!(
+            collect_late_boundary_rounds(
+                &instances,
+                [
+                    challenge(0),
+                    challenge(1),
+                    challenge(2),
+                    challenge(3),
+                    challenge(4)
+                ],
+                true,
+            ),
+            collect_late_boundary_rounds(
+                &instances,
+                [
+                    challenge(0),
+                    challenge(1),
+                    challenge(2),
+                    challenge(3),
+                    challenge(4)
+                ],
+                false,
+            ),
+            "late lifecycle must match incumbent through openings at {height}"
+        );
     }
 }
 
@@ -735,6 +776,12 @@ fn late_boundary_marker_requires_the_n11_height_floor() {
                 expected,
                 "height {height}"
             );
+            if height == 1 << 10 {
+                assert!(
+                    state.has_sliced_tensor(),
+                    "n10 keeps ordinary tensor4 state"
+                );
+            }
         });
     }
 }
@@ -743,16 +790,32 @@ fn late_boundary_marker_requires_the_n11_height_floor() {
 fn late_boundary_refusal_unslices_with_the_four_recorded_challenges() {
     let height = 1 << 11;
     let instances = [Instance::honest(FixtureAir::Pair, height, 0x007E_50B1)];
-    with_state(&instances, no_lookups(), |mut state, eq_suffix| {
-        state
+    let fallback = with_state(&instances, no_lookups(), |mut state, eq_suffix| {
+        let first = state
             .round_poly_sliced_with_strategy::<Gf4, Ghash128>(
                 eq_suffix,
                 SlicedStrategy::TensorBoundaryLate,
             )
             .expect("late tensor4 should build");
+        let mut round_polys = vec![first];
         let mut state = state.fold_sliced::<Ghash128>(challenge(0));
-        assert!(state.fold_sliced(challenge(1)));
-        assert!(state.fold_sliced(challenge(2)));
+        for round in 1..=2 {
+            let tau = state.tau.as_slice().to_vec();
+            let suffix = Poly::new_from_point(&tau[round + 1..], Tower::ONE);
+            round_polys.push(
+                state
+                    .round_poly_sliced::<Gf4>(&suffix)
+                    .expect("tensor round should be evaluated before its fold"),
+            );
+            assert!(state.fold_sliced(challenge(round)));
+        }
+        let tau = state.tau.as_slice().to_vec();
+        let suffix = Poly::new_from_point(&tau[4..], Tower::ONE);
+        round_polys.push(
+            state
+                .round_poly_sliced::<Gf4>(&suffix)
+                .expect("tensor round should be evaluated before its fold"),
+        );
         assert!(state.fold_late_boundary::<Gf4>(challenge(3)));
         if let ExtColumns::Sliced(columns) = &mut state.columns {
             columns.late_boundary = false;
@@ -767,7 +830,41 @@ fn late_boundary_refusal_unslices_with_the_four_recorded_challenges() {
         assert!(
             matches!(&state.columns, ExtColumns::Scalar(columns) if columns.iter().all(|column| column.num_evals() == height >> 4))
         );
+        for round in 4..tau.len() {
+            let tau = state.tau.as_slice().to_vec();
+            let suffix = Poly::new_from_point(&tau[round + 1..], Tower::ONE);
+            round_polys.push(state.round_poly_repr(&suffix));
+            state.fold_repr(challenge(round));
+        }
+        let openings = state
+            .into_openings()
+            .into_iter()
+            .map(|(_, opening)| {
+                [
+                    opening.local,
+                    opening.next,
+                    opening.preprocessed_local,
+                    opening.preprocessed_next,
+                ]
+            })
+            .collect();
+        (round_polys, openings)
     });
+    assert_eq!(
+        fallback,
+        collect_late_boundary_rounds(
+            &instances,
+            [
+                challenge(0),
+                challenge(1),
+                challenge(2),
+                challenge(3),
+                challenge(4)
+            ],
+            false,
+        ),
+        "forced refusal must preserve the incumbent transcript and openings"
+    );
 }
 
 #[test]
@@ -836,6 +933,17 @@ fn late_boundary_rejection_gates_are_isolated_at_height_eleven() {
     let mut outside_main = Instance::honest(FixtureAir::QuadraticInputs, height, 0x007E_50C8);
     outside_main.main.values[0] = outside();
     assert_no_late(&[outside_main], no_lookups());
+    let mut outside_preprocessed =
+        Instance::honest(FixtureAir::QuadraticInputs, height, 0x007E_50CB);
+    outside_preprocessed
+        .preprocessed
+        .as_mut()
+        .expect("quadratic inputs has fixed data")
+        .values[0] = outside();
+    assert_no_late(&[outside_preprocessed], no_lookups());
+    let mut outside_public = Instance::honest(FixtureAir::QuadraticInputs, height, 0x007E_50CC);
+    outside_public.public_values[0] = outside();
+    assert_no_late(&[outside_public], no_lookups());
     assert_no_late(
         &[Instance::honest(
             FixtureAir::QuadraticInputsOutsidePeriodic,
@@ -886,14 +994,34 @@ fn tensor4_evaluates_mixed_linear_and_quadratic_airs() {
 /// Collect the complete direct-state transcript for the incumbent tensor4 path or the delayed
 /// plane path, using caller-supplied first five fold challenges.
 fn collect_late_boundary_rounds(instances: &[Instance], prefix: [Tower; 5], late: bool) -> Rounds {
-    with_state(instances, no_lookups(), |mut state, eq_suffix| {
+    collect_late_boundary_rounds_with_tau(instances, prefix, late, None, None)
+}
+
+fn collect_late_boundary_rounds_with_tau(
+    instances: &[Instance],
+    prefix: [Tower; 5],
+    late: bool,
+    tau4: Option<Tower>,
+    tau5: Option<Tower>,
+) -> Rounds {
+    with_state(instances, no_lookups(), |mut state, _eq_suffix| {
+        let mut tau = state.tau.as_slice().to_vec();
+        if let Some(value) = tau4 {
+            tau[4] = value;
+        }
+        if let Some(value) = tau5 {
+            tau[5] = value;
+        }
+        state.tau = Point::new(tau);
+        let tau = state.tau.as_slice().to_vec();
+        let eq_suffix = Poly::new_from_point(&tau[1..], Tower::ONE);
         let strategy = if late {
             SlicedStrategy::TensorBoundaryLate
         } else {
             SlicedStrategy::TensorBoundary
         };
         let first = state
-            .round_poly_sliced_with_strategy::<Gf4, Ghash128>(eq_suffix, strategy)
+            .round_poly_sliced_with_strategy::<Gf4, Ghash128>(&eq_suffix, strategy)
             .expect("eligible tensor stage should build");
         let mut state = state.fold_sliced::<Ghash128>(prefix[0]);
         let tau = state.tau.as_slice().to_vec();
@@ -983,6 +1111,69 @@ fn late_boundary_matches_incumbent_for_all_special_prefix_coordinates() {
     }
 }
 
+#[test]
+fn late_boundary_matches_incumbent_for_special_tau4_and_tau5() {
+    let height = 1 << 11;
+    let instances = [Instance::honest(FixtureAir::Pair, height, 0x007E_50B3)];
+    let special = [
+        Tower::ONE,
+        Tower::interpolation_node(2),
+        Tower::from_repr(0x1234),
+    ];
+    let prefix = [
+        challenge(0),
+        challenge(1),
+        challenge(2),
+        challenge(3),
+        challenge(4),
+    ];
+    for &tau4 in &special {
+        for &tau5 in &special {
+            assert_eq!(
+                collect_late_boundary_rounds_with_tau(
+                    &instances,
+                    prefix,
+                    true,
+                    Some(tau4),
+                    Some(tau5),
+                ),
+                collect_late_boundary_rounds_with_tau(
+                    &instances,
+                    prefix,
+                    false,
+                    Some(tau4),
+                    Some(tau5),
+                ),
+                "special tau4={tau4:?}, tau5={tau5:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn late_boundary_active_quadratic_inputs_have_nonzero_merged_nodes() {
+    let height = 1 << 11;
+    let instances = [Instance::honest(
+        FixtureAir::QuadraticInputs,
+        height,
+        0x007E_50B4,
+    )];
+    let prefix = [
+        challenge(0),
+        challenge(1),
+        challenge(2),
+        challenge(3),
+        challenge(4),
+    ];
+    let late = collect_late_boundary_rounds(&instances, prefix, true);
+    let incumbent = collect_late_boundary_rounds(&instances, prefix, false);
+    assert_eq!(late, incumbent, "active quadratic-input late transcript");
+    assert!(
+        late.0[4].iter().any(|&value| value != Tower::ZERO),
+        "round-four merged nodes must be nonzero"
+    );
+}
+
 fn explicit_eq_weight(point: &[Tower], mask: usize) -> Tower {
     point
         .iter()
@@ -1062,17 +1253,33 @@ fn late_boundary_round4_matches_independent_raw_pair_and_corrupted_linear_nodes(
     let instances = [pair, linear];
     let prefix = [challenge(0), challenge(1), challenge(2), challenge(3)];
 
-    let (late_raw, late_nodes, late_last_evals, late_claims) =
+    let (late_raw, late_nodes, late_last_evals, late_claims, late_rounds, late_openings) =
         with_state(&instances, no_lookups(), |mut state, eq_suffix| {
-            state
+            let first = state
                 .round_poly_sliced_with_strategy::<Gf4, Ghash128>(
                     eq_suffix,
                     SlicedStrategy::TensorBoundaryLate,
                 )
                 .expect("late tensor4 should build");
+            let mut round_polys = vec![first];
             let mut state = state.fold_sliced::<Ghash128>(prefix[0]);
-            assert!(state.fold_sliced(prefix[1]));
-            assert!(state.fold_sliced(prefix[2]));
+            for round in 1..=2 {
+                let tau = state.tau.as_slice().to_vec();
+                let suffix = Poly::new_from_point(&tau[round + 1..], Tower::ONE);
+                round_polys.push(
+                    state
+                        .round_poly_sliced::<Gf4>(&suffix)
+                        .expect("tensor round should be evaluated before its fold"),
+                );
+                assert!(state.fold_sliced(prefix[round]));
+            }
+            let tau = state.tau.as_slice().to_vec();
+            let suffix = Poly::new_from_point(&tau[4..], Tower::ONE);
+            round_polys.push(
+                state
+                    .round_poly_sliced::<Gf4>(&suffix)
+                    .expect("tensor round should be evaluated before its fold"),
+            );
             assert!(state.fold_late_boundary::<Gf4>(prefix[3]));
             let tau = state.tau.as_slice().to_vec();
             let suffix = Poly::new_from_point(&tau[5..], Tower::ONE);
@@ -1088,6 +1295,7 @@ fn late_boundary_round4_matches_independent_raw_pair_and_corrupted_linear_nodes(
             assert_eq!(raw, expected, "independent raw sparse nodes");
             assert!(raw.iter().flatten().any(|&value| value != Tower::ZERO));
             let nodes = state.round_poly_late_boundary::<Gf4>(&suffix).unwrap();
+            round_polys.push(nodes.clone());
             let last_evals = state
                 .constraint_groups
                 .iter()
@@ -1098,41 +1306,153 @@ fn late_boundary_round4_matches_independent_raw_pair_and_corrupted_linear_nodes(
                 .iter()
                 .map(|group| group.claim)
                 .collect::<Vec<_>>();
-            (raw, nodes, last_evals, claims)
+            assert!(state.fold_late_boundary::<Gf4>(challenge(4)));
+            for round in 5..tau.len() {
+                let tau = state.tau.as_slice().to_vec();
+                let suffix = Poly::new_from_point(&tau[round + 1..], Tower::ONE);
+                round_polys.push(state.round_poly_repr(&suffix));
+                state.fold_repr(challenge(round));
+            }
+            let openings: Vec<[Vec<Tower>; 4]> = state
+                .into_openings()
+                .into_iter()
+                .map(|(_, opening)| {
+                    [
+                        opening.local,
+                        opening.next,
+                        opening.preprocessed_local,
+                        opening.preprocessed_next,
+                    ]
+                })
+                .collect();
+            (raw, nodes, last_evals, claims, round_polys, openings)
         });
 
-    let (incumbent_nodes, incumbent_last_evals, incumbent_claims) =
-        with_state(&instances, no_lookups(), |mut state, eq_suffix| {
-            state
-                .round_poly_sliced_with_strategy::<Gf4, Ghash128>(
-                    eq_suffix,
-                    SlicedStrategy::TensorBoundary,
-                )
-                .expect("incumbent tensor4 should build");
-            let mut state = state.fold_sliced::<Ghash128>(prefix[0]);
-            assert!(state.fold_sliced(prefix[1]));
-            assert!(state.fold_sliced(prefix[2]));
-            assert!(state.fold_boundary::<Gf4>(prefix[3]));
+    let (
+        incumbent_nodes,
+        incumbent_last_evals,
+        incumbent_claims,
+        incumbent_rounds,
+        incumbent_openings,
+    ) = with_state(&instances, no_lookups(), |mut state, eq_suffix| {
+        let first = state
+            .round_poly_sliced_with_strategy::<Gf4, Ghash128>(
+                eq_suffix,
+                SlicedStrategy::TensorBoundary,
+            )
+            .expect("incumbent tensor4 should build");
+        let mut round_polys = vec![first];
+        let mut state = state.fold_sliced::<Ghash128>(prefix[0]);
+        for round in 1..=2 {
             let tau = state.tau.as_slice().to_vec();
-            let suffix = Poly::new_from_point(&tau[5..], Tower::ONE);
-            let nodes = state.round_poly_repr(&suffix);
-            let last_evals = state
-                .constraint_groups
-                .iter()
-                .map(|group| group.last_evals.clone())
-                .collect::<Vec<_>>();
-            let claims = state
-                .constraint_groups
-                .iter()
-                .map(|group| group.claim)
-                .collect::<Vec<_>>();
-            (nodes, last_evals, claims)
-        });
+            let suffix = Poly::new_from_point(&tau[round + 1..], Tower::ONE);
+            round_polys.push(
+                state
+                    .round_poly_sliced::<Gf4>(&suffix)
+                    .expect("tensor round should be evaluated before its fold"),
+            );
+            assert!(state.fold_sliced(prefix[round]));
+        }
+        let tau = state.tau.as_slice().to_vec();
+        let suffix = Poly::new_from_point(&tau[4..], Tower::ONE);
+        round_polys.push(
+            state
+                .round_poly_sliced::<Gf4>(&suffix)
+                .expect("tensor round should be evaluated before its fold"),
+        );
+        assert!(state.fold_boundary::<Gf4>(prefix[3]));
+        let tau = state.tau.as_slice().to_vec();
+        let suffix = Poly::new_from_point(&tau[5..], Tower::ONE);
+        let nodes = state.round_poly_repr(&suffix);
+        round_polys.push(nodes.clone());
+        let last_evals = state
+            .constraint_groups
+            .iter()
+            .map(|group| group.last_evals.clone())
+            .collect::<Vec<_>>();
+        let claims = state
+            .constraint_groups
+            .iter()
+            .map(|group| group.claim)
+            .collect::<Vec<_>>();
+        assert_eq!(state.round, 4);
+        state.fold_repr(challenge(4));
+        for round in 5..tau.len() {
+            let tau = state.tau.as_slice().to_vec();
+            let suffix = Poly::new_from_point(&tau[round + 1..], Tower::ONE);
+            round_polys.push(state.round_poly_repr(&suffix));
+            state.fold_repr(challenge(round));
+        }
+        let openings: Vec<[Vec<Tower>; 4]> = state
+            .into_openings()
+            .into_iter()
+            .map(|(_, opening)| {
+                [
+                    opening.local,
+                    opening.next,
+                    opening.preprocessed_local,
+                    opening.preprocessed_next,
+                ]
+            })
+            .collect();
+        (nodes, last_evals, claims, round_polys, openings)
+    });
 
     assert_eq!(late_nodes, incumbent_nodes, "transmitted stage nodes");
     assert_eq!(late_last_evals, incumbent_last_evals, "stored sparse nodes");
     assert_eq!(late_claims, incumbent_claims, "group claims");
+    assert_eq!(late_rounds, incumbent_rounds, "all round polynomials");
+    assert_eq!(late_openings, incumbent_openings, "final openings");
     assert_eq!(late_raw.len(), 2);
+}
+
+#[test]
+fn late_boundary_raw_round4_matches_tau5_zero_and_one_without_claim_folding() {
+    let height = 1 << 11;
+    let instances = [Instance::honest(FixtureAir::Pair, height, 0x007E_50D2)];
+    let prefix = [challenge(0), challenge(1), challenge(2), challenge(3)];
+    for tau5 in [Tower::ZERO, Tower::ONE] {
+        with_state(&instances, no_lookups(), |mut state, _| {
+            let mut tau = state.tau.as_slice().to_vec();
+            tau[5] = tau5;
+            state.tau = Point::new(tau.clone());
+            let eq_suffix = Poly::new_from_point(&tau[1..], Tower::ONE);
+            state
+                .round_poly_sliced_with_strategy::<Gf4, Ghash128>(
+                    &eq_suffix,
+                    SlicedStrategy::TensorBoundaryLate,
+                )
+                .expect("late tensor4 should build");
+            let mut state = state.fold_sliced::<Ghash128>(prefix[0]);
+            for round in 1..=2 {
+                let tau = state.tau.as_slice().to_vec();
+                let suffix = Poly::new_from_point(&tau[round + 1..], Tower::ONE);
+                state
+                    .round_poly_sliced::<Gf4>(&suffix)
+                    .expect("tensor round should be evaluated before its fold");
+                assert!(state.fold_sliced(prefix[round]));
+            }
+            let tau = state.tau.as_slice().to_vec();
+            let suffix = Poly::new_from_point(&tau[4..], Tower::ONE);
+            state
+                .round_poly_sliced::<Gf4>(&suffix)
+                .expect("tensor round should be evaluated before its fold");
+            assert!(state.fold_late_boundary::<Gf4>(prefix[3]));
+            let suffix = Poly::new_from_point(&tau[5..], Tower::ONE);
+            let ExtColumns::Sliced(columns) = &state.columns else {
+                panic!("raw tau test requires retained planes")
+            };
+            let fold =
+                PlaneFold::<Ghash128>::new::<Gf4, Tower>(&columns.trace, &columns.challenges);
+            let raw = state.boundary_evals_rows(&suffix, &fold).0;
+            assert_eq!(
+                raw,
+                explicit_round4_raw_nodes(&instances, &prefix, &tau[5..]),
+                "raw sparse nodes for tau5={tau5:?}"
+            );
+            assert!(raw.iter().flatten().any(|&value| value != Tower::ZERO));
+        });
+    }
 }
 
 /// Collect every round and final opening from either the tensor or sequential sliced path.
@@ -1521,6 +1841,55 @@ fn tensor4_poison_falls_back_transactionally_on_eligible_mixed_stage() {
         )
     });
     assert_eq!(tensor, sequential);
+}
+
+#[test]
+fn late_tensor4_poison_falls_back_without_installing_late_state() {
+    let height = 1 << 11;
+    let instances = [
+        Instance::honest(FixtureAir::Pair, height, 0x007E_5024),
+        Instance::honest(FixtureAir::Linear { scale: outside() }, height, 0x007E_5025),
+    ];
+    let late = with_state(&instances, no_lookups(), |mut state, eq_suffix| {
+        let evals = state
+            .round_poly_sliced_with_strategy::<Gf4, Ghash128>(
+                eq_suffix,
+                SlicedStrategy::TensorBoundaryLate,
+            )
+            .expect("poisoned late tensor attempt should retain sliced fallback");
+        assert!(!state.has_sliced_tensor());
+        assert!(
+            !state
+                .sliced
+                .as_ref()
+                .is_some_and(|columns| columns.late_boundary)
+        );
+        (
+            evals,
+            state
+                .constraint_groups
+                .iter()
+                .map(|group| (group.claim, group.last_evals.clone()))
+                .collect::<Vec<_>>(),
+        )
+    });
+    let sequential = with_state(&instances, no_lookups(), |mut state, eq_suffix| {
+        let evals = state
+            .round_poly_sliced::<Gf4, Ghash128>(eq_suffix)
+            .expect("sequential sliced fallback should remain eligible");
+        (
+            evals,
+            state
+                .constraint_groups
+                .iter()
+                .map(|group| (group.claim, group.last_evals.clone()))
+                .collect::<Vec<_>>(),
+        )
+    });
+    assert_eq!(
+        late, sequential,
+        "poisoned late attempt must match fallback"
+    );
 }
 
 #[test]
