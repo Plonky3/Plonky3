@@ -1438,7 +1438,9 @@ mod goldilocks_stir {
 mod babybear_pcs {
     use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
     use p3_fri::{FriParameters, TwoAdicFriPcs};
+    use p3_keccak::Keccak256Hash;
     use p3_stir::TwoAdicStirPcs;
+    use p3_symmetric::CryptographicHasher;
 
     use super::*;
 
@@ -2559,6 +2561,147 @@ mod babybear_pcs {
             &mut v_ch,
         )
         .unwrap_or_else(|e| panic!("two-commitment same-bucket verification failed: {e:?}"));
+    }
+
+    /// Hex-encodes a 32-byte digest, lowercase, no separators.
+    fn hex(bytes: [u8; 32]) -> String {
+        bytes.iter().map(|b| format!("{b:02x}")).collect()
+    }
+
+    /// Pins the PCS opening proof bytes and the shared post-open/post-verify challenger
+    /// state across three shared-domain spreads: no grouping (0), partial grouping (1),
+    /// and the default. The fixture commits two commitments whose native heights interleave
+    /// so each spread exercises a different bucket layout: a class pooled across
+    /// commitments, a merged (`Combine`) bucket, and buckets that one commitment skips.
+    #[test]
+    fn test_pcs_openings_are_pinned_across_spreads() {
+        #[allow(unused_imports)]
+        use p3_commit::Pcs as _;
+
+        let cases: [(usize, Vec<Vec<bool>>, &str); 3] = [
+            (
+                0,
+                vec![
+                    vec![true, true],
+                    vec![true, false],
+                    vec![true, false],
+                    vec![false, true],
+                ],
+                "52178969d7f46183455a44211f664299c5bc9707c41b0cf3fd4a5bbc697281c2",
+            ),
+            (
+                1,
+                vec![vec![true, true], vec![true, false], vec![false, true]],
+                "a89d5232fdbfca3d660119f1f6b5d62c6570c4161c571368db3d392c5a002c39",
+            ),
+            (
+                p3_stir::DEFAULT_MAX_LOG_HEIGHT_SPREAD,
+                vec![vec![true, true]],
+                "510f022cfc5cb394490d67b6381ecb05871ec620e8e5da74d446b51da3850581",
+            ),
+        ];
+
+        for (spread, expected_pattern, expected_digest) in cases {
+            let (pcs, challenger_template) = get_pcs_with_spread(spread);
+            let mut rng = seeded_rng();
+
+            let domains_a: Vec<_> = [6, 5, 4]
+                .into_iter()
+                .map(|log_d| {
+                    <MyPcs as Pcs<Challenge, Challenger>>::natural_domain_for_degree(
+                        &pcs,
+                        1 << log_d,
+                    )
+                })
+                .collect();
+            let mats_a: Vec<_> = domains_a
+                .iter()
+                .zip([3, 2, 1])
+                .map(|(&d, width)| (d, RowMajorMatrix::<Val>::rand(&mut rng, d.size(), width)))
+                .collect();
+
+            let domains_b: Vec<_> = [6, 3]
+                .into_iter()
+                .map(|log_d| {
+                    <MyPcs as Pcs<Challenge, Challenger>>::natural_domain_for_degree(
+                        &pcs,
+                        1 << log_d,
+                    )
+                })
+                .collect();
+            let mats_b: Vec<_> = domains_b
+                .iter()
+                .zip([4, 2])
+                .map(|(&d, width)| (d, RowMajorMatrix::<Val>::rand(&mut rng, d.size(), width)))
+                .collect();
+
+            let mut p_ch = challenger_template.clone();
+            let (commit_a, data_a) =
+                <MyPcs as Pcs<Challenge, Challenger>>::commit(&pcs, mats_a.iter().cloned())
+                    .unwrap();
+            observe_commitment(&mut p_ch, &commit_a);
+            let (commit_b, data_b) =
+                <MyPcs as Pcs<Challenge, Challenger>>::commit(&pcs, mats_b.iter().cloned())
+                    .unwrap();
+            observe_commitment(&mut p_ch, &commit_b);
+
+            let z1: Challenge = p_ch.sample_algebra_element();
+            let z2: Challenge = p_ch.sample_algebra_element();
+            let z3: Challenge = p_ch.sample_algebra_element();
+
+            let mut v_ch = p_ch.clone();
+
+            let data_and_points = vec![
+                (&data_a, vec![vec![z1, z2], vec![z1], vec![z2]]),
+                (&data_b, vec![vec![z1, z3], vec![z3]]),
+            ];
+            let (values, proof) = <MyPcs as Pcs<Challenge, Challenger>>::open(
+                &pcs,
+                data_and_points.into_iter().map(Into::into).collect(),
+                &mut p_ch,
+            )
+            .unwrap();
+            let after_open: Challenge = p_ch.sample_algebra_element();
+
+            let pattern: Vec<Vec<bool>> = proof
+                .buckets
+                .iter()
+                .map(|(_, inputs)| inputs.iter().map(Option::is_some).collect())
+                .collect();
+            assert_eq!(proof.buckets.len(), expected_pattern.len());
+            assert_eq!(pattern, expected_pattern);
+
+            let claims_a = vec![
+                (
+                    domains_a[0],
+                    vec![(z1, values[0][0][0].clone()), (z2, values[0][0][1].clone())],
+                ),
+                (domains_a[1], vec![(z1, values[0][1][0].clone())]),
+                (domains_a[2], vec![(z2, values[0][2][0].clone())]),
+            ];
+            let claims_b = vec![
+                (
+                    domains_b[0],
+                    vec![(z1, values[1][0][0].clone()), (z3, values[1][0][1].clone())],
+                ),
+                (domains_b[1], vec![(z3, values[1][1][0].clone())]),
+            ];
+
+            <MyPcs as Pcs<Challenge, Challenger>>::verify(
+                &pcs,
+                vec![(commit_a, claims_a).into(), (commit_b, claims_b).into()],
+                &proof,
+                &mut v_ch,
+            )
+            .unwrap_or_else(|e| panic!("pinned-opening verification failed: {e:?}"));
+            let after_verify: Challenge = v_ch.sample_algebra_element();
+
+            assert_eq!(after_open, after_verify);
+
+            let bytes = postcard::to_allocvec(&(&proof, &values, after_open)).unwrap();
+            let digest = hex(Keccak256Hash.hash_iter(bytes));
+            assert_eq!(digest, expected_digest, "spread {spread}");
+        }
     }
 
     /// Committing a matrix and then opening it at no points would emit a proof that cannot
