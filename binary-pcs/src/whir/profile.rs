@@ -38,21 +38,6 @@ fn raise_allowance<F: Field>(required: usize) -> Result<usize, ProfileError> {
     Ok(required)
 }
 
-/// Whether a derived schedule opens no position at all.
-///
-/// Every round's count and the closing one have to be zero for that.
-fn opens_nothing<EF, F, Challenger>(config: &WhirConfig<EF, F, Challenger>) -> bool
-where
-    F: Field,
-    EF: ExtensionField<F>,
-{
-    config.final_queries == 0
-        && config
-            .round_parameters
-            .iter()
-            .all(|round| round.num_queries == 0)
-}
-
 /// A named parameter profile for one proximity regime.
 ///
 /// The regime, the code rate and the folding width are chosen by the caller.
@@ -171,16 +156,6 @@ impl BinaryWhirProfile {
                 pow_bits,
             };
             match WhirConfig::new_with_domain(num_variables, parameters, domain) {
-                // Minimum non-degenerate schedule: one opened position.
-                //
-                // Queries alone test proximity, and this count can reach zero on its own.
-                //
-                // A target of zero derives exactly that, and accepts any codeword.
-                //
-                // Gating the derived count, not the target, catches every way of landing there.
-                //
-                // A zero folding factor needs no check here, as the schedule already refuses it.
-                Ok(config) if opens_nothing(&config) => return Err(ProfileError::ZeroQueries),
                 Ok(config) => return Ok(config),
                 // The analysis reports exactly how much grinding the gap needs.
                 // Raising the allowance to that figure is the derivation, not a search.
@@ -189,6 +164,10 @@ impl BinaryWhirProfile {
                 {
                     pow_bits = raise_allowance::<F>(required)?;
                 }
+                // The schedule refuses a run that opens nothing, whichever route built it.
+                //
+                // Naming it here keeps callers from reading a bare scheduling failure.
+                Err(WhirConfigError::ZeroQueries) => return Err(ProfileError::ZeroQueries),
                 Err(error) => return Err(ProfileError::Schedule(error)),
             }
         }

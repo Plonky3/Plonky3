@@ -279,6 +279,13 @@ impl<F: Field> Lookups<F> {
         // Globals bucket by bus name, in first-appearance order.
         let mut buses: Vec<(String, Vec<Lookup<F>>)> = Vec::new();
 
+        // Every tuple on a bus must share a width, exclusive branches included.
+        //
+        // The sweep runs before the sort below.
+        //
+        // That sort sends an exclusive lookup down a route nothing else looks at.
+        assert_bus_widths(self.0.iter());
+
         // Sort each lookup: locals straight through, globals into their bus bucket.
         for lookup in self.0 {
             // Exclusive lookups already occupy one column under a distinct denominator algebra.
@@ -304,27 +311,7 @@ impl<F: Field> Lookups<F> {
 
         // Fill columns greedily within each bus.
         // Seal a column when the next interaction would exceed the degree budget.
-        for (name, members) in buses {
-            // Every tuple in one fraction column is folded under the same powers.
-            //
-            // Two widths on one bus therefore let a short tuple alias a long one:
-            //
-            //     [x]  and  [0, x]   ->   the same fingerprint
-            //
-            // Only packing brings two independently-authored interactions together.
-            //
-            // So this is the one place the rule can be enforced.
-            //
-            // The local path already checks it when the lookups are built.
-            //
-            // The global path checked it nowhere, and both backends re-checked it themselves.
-            assert_uniform_widths(
-                members
-                    .iter()
-                    .flat_map(|lookup| lookup.elements.iter().map(Vec::len)),
-                &format!("bus \"{name}\""),
-            );
-
+        for (_name, members) in buses {
             let mut current: Option<Lookup<F>> = None;
             for member in members {
                 match current.take() {
@@ -376,6 +363,82 @@ impl<F: Field> Lookups<F> {
     pub fn total_count_weight(&self) -> u64 {
         self.0.iter().map(|l| u64::from(l.count_weight)).sum()
     }
+}
+
+/// Widths of every tuple on each bus, grouped by bus name.
+///
+/// Exclusive branches are included, since each is one tuple folded on that bus.
+fn bus_widths<'a, F: Field + 'a>(
+    lookups: impl Iterator<Item = &'a Lookup<F>>,
+) -> Vec<(&'a str, Vec<usize>)> {
+    let mut buses: Vec<(&str, Vec<usize>)> = Vec::new();
+    for lookup in lookups {
+        let Kind::Global(name) = &lookup.kind else {
+            continue;
+        };
+        let widths = lookup.elements.iter().map(Vec::len);
+        match buses.iter_mut().find(|(seen, _)| *seen == name.as_str()) {
+            Some((_, found)) => found.extend(widths),
+            None => buses.push((name.as_str(), widths.collect())),
+        }
+    }
+    buses
+}
+
+/// Panics unless every tuple on each bus shares a payload width.
+fn assert_bus_widths<'a, F: Field + 'a>(lookups: impl Iterator<Item = &'a Lookup<F>>) {
+    for (name, widths) in bus_widths(lookups) {
+        assert_uniform_widths(widths, &format!("bus \"{name}\""));
+    }
+}
+
+/// Enforce one payload width per bus, across every AIR sharing it.
+///
+/// # Why this exists
+///
+/// Payload elements are folded under successive powers of one challenge.
+///
+/// A shorter tuple is therefore a longer one left-padded with zeros:
+///
+/// ```text
+///     [x]  and  [0, x]   ->   the same fingerprint
+/// ```
+///
+/// A bus balances in the cross-AIR sum, so two tuples alias without ever sharing a column.
+///
+/// One AIR cannot see that, which is why the check takes every AIR at once.
+///
+/// # Returns
+///
+/// The widest payload on any bus, which is the figure a challenge table is built from.
+///
+/// # Errors
+///
+/// When two tuples on one bus declare different widths.
+pub fn check_bus_widths<F: Field>(lookups: &[Lookups<F>]) -> Result<usize, LookupError> {
+    let mut buses: Vec<(&str, usize)> = Vec::new();
+    let mut widest = 0;
+
+    for air in lookups {
+        for (name, widths) in bus_widths(air.iter()) {
+            for width in widths {
+                widest = widest.max(width);
+                match buses.iter().find(|(seen, _)| *seen == name) {
+                    Some(&(_, expected)) if expected != width => {
+                        return Err(LookupError::BusWidthMismatch {
+                            bus: String::from(name),
+                            expected,
+                            actual: width,
+                        });
+                    }
+                    Some(_) => {}
+                    None => buses.push((name, width)),
+                }
+            }
+        }
+    }
+
+    Ok(widest)
 }
 
 /// Enforce the LogUp multiplicity height-bound `sum_i w_i * h_i < p`.
@@ -465,6 +528,21 @@ pub struct LookupTerminal<F>(pub F);
 /// Lookup verification error.
 #[derive(Debug, Error)]
 pub enum LookupError {
+    /// Two tuples on one bus declare different payload widths.
+    ///
+    /// - Payload elements are folded under successive powers of one challenge.
+    /// - A shorter tuple is then a longer one left-padded with zeros.
+    /// - So `[x]` and `[0, x]` share a fingerprint, and the bus balances against an entry
+    ///   that was never provided.
+    #[error("bus {bus}: tuple widths {expected} and {actual} differ")]
+    BusWidthMismatch {
+        /// Name of the bus carrying both widths.
+        bus: String,
+        /// Width seen first on this bus.
+        expected: usize,
+        /// Width that disagrees with it.
+        actual: usize,
+    },
     /// Cross-AIR sum of committed lookup terminals is non-zero.
     ///
     /// - Any imbalance makes the sum non-zero with overwhelming probability.
@@ -519,6 +597,7 @@ mod tests {
     use p3_field::{PrimeCharacteristicRing, PrimeField32};
 
     use super::*;
+    use crate::builder::{SymbolicExclusiveBranch, SymbolicExclusiveInteraction};
     use crate::count::Count;
     use crate::logup::LogUpGadget;
 
@@ -750,6 +829,107 @@ mod tests {
         assert_eq!(packed.len(), 4);
         assert!(packed.iter().all(|l| l.elements.len() == 1));
         assert_contiguous_columns(&packed);
+    }
+
+    // One exclusive group on `bus`, with one branch per supplied payload width.
+    fn exclusive_group(bus: &str, widths: &[usize]) -> SymbolicExclusiveInteraction<F> {
+        let col = SymbolicVariable::<F>::new(BaseEntry::Main { offset: 0 }, 0);
+        SymbolicExclusiveInteraction {
+            bus_name: String::from(bus),
+            branches: widths
+                .iter()
+                .map(|&width| SymbolicExclusiveBranch {
+                    flag: SymbolicExpression::from(F::ONE),
+                    count: SymbolicExpression::from(F::ONE),
+                    fields: vec![SymbolicExpression::from(col); width],
+                    count_weight: 1,
+                })
+                .collect(),
+        }
+    }
+
+    // One global payload interaction on `bus`, with the given tuple width.
+    fn global_of_width(bus: &str, width: usize) -> SymbolicInteraction<F> {
+        let col = SymbolicVariable::<F>::new(BaseEntry::Main { offset: 0 }, 0);
+        SymbolicInteraction {
+            bus_name: String::from(bus),
+            fields: vec![SymbolicExpression::from(col); width],
+            count: SymbolicExpression::from(F::ONE),
+            count_weight: 1,
+        }
+    }
+
+    #[test]
+    #[should_panic = "tuple widths"]
+    fn pack_refuses_a_wide_exclusive_branch_beside_a_narrow_global() {
+        // Invariant: the width sweep sees exclusive branches too.
+        //
+        // An exclusive lookup takes its own route, which a per-bus sweep never reaches.
+        //
+        // Fixture state: bus `a` carries a width-1 global and a width-2 exclusive branch.
+        let global = vec![global_of_width("a", 1)];
+        let exclusive = vec![exclusive_group("a", &[2])];
+        let _ =
+            Lookups::from_interactions(&global, &[], &exclusive).pack_same_bus(&LogUpGadget, 16);
+    }
+
+    #[test]
+    #[should_panic = "tuple widths"]
+    fn pack_refuses_two_widths_inside_one_exclusive_group() {
+        // Invariant: branches of one group are tuples on the same bus, so they share a width.
+        //
+        // Fixture state: one group whose branches are width 1 and width 2.
+        let exclusive = vec![exclusive_group("a", &[1, 2])];
+        let _ = Lookups::from_interactions(&[], &[], &exclusive).pack_same_bus(&LogUpGadget, 16);
+    }
+
+    #[test]
+    fn the_cross_air_check_sees_what_one_air_cannot() {
+        // Invariant: a bus spans AIRs, so two tuples alias without sharing a column.
+        //
+        // Each AIR below is uniform on its own, and packing each one panics at nothing.
+        //
+        // Fixture state: AIR 0 sends width 1 on bus `a`, AIR 1 sends width 2 on bus `a`.
+        let air0 = Lookups::from_interactions(&[global_of_width("a", 1)], &[], &[])
+            .pack_same_bus(&LogUpGadget, 16);
+        let air1 = Lookups::from_interactions(&[global_of_width("a", 2)], &[], &[])
+            .pack_same_bus(&LogUpGadget, 16);
+
+        assert!(matches!(
+            check_bus_widths(&[air0, air1]),
+            Err(LookupError::BusWidthMismatch {
+                expected: 1,
+                actual: 2,
+                ..
+            })
+        ));
+
+        // Two buses at different widths are fine, since a bus only balances against itself.
+        let air0 = Lookups::from_interactions(&[global_of_width("a", 1)], &[], &[])
+            .pack_same_bus(&LogUpGadget, 16);
+        let air1 = Lookups::from_interactions(&[global_of_width("b", 3)], &[], &[])
+            .pack_same_bus(&LogUpGadget, 16);
+
+        // The widest payload is what a challenge table is built from.
+        assert!(matches!(check_bus_widths(&[air0, air1]), Ok(3)));
+    }
+
+    #[test]
+    fn the_cross_air_check_covers_unpacked_and_exclusive_lookups() {
+        // Invariant: the check reads the lookups as they are, packed or not.
+        //
+        // Fixture state: one AIR never packed, one exclusive branch of another width.
+        let loose = Lookups::from_interactions(&[global_of_width("a", 1)], &[], &[]);
+        let wide = Lookups::from_interactions(&[], &[], &[exclusive_group("a", &[2])]);
+
+        assert!(matches!(
+            check_bus_widths(&[loose, wide]),
+            Err(LookupError::BusWidthMismatch {
+                expected: 1,
+                actual: 2,
+                ..
+            })
+        ));
     }
 
     #[test]

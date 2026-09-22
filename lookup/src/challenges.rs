@@ -28,13 +28,17 @@ use p3_field::Field;
 ///   zeros, so e.g. `[x]` and `[0, x]` fingerprint identically on one bus.
 ///   Every tuple on a given bus must therefore share a width.
 ///
-/// That rule is enforced rather than asked for.
+/// Two checks cover part of that, and neither covers all of it.
 ///
 /// Local lookups are checked when they are built.
 ///
-/// Global ones are checked when a bus is packed into one column.
+/// Every global on a bus, exclusive branches included, is checked when that AIR is packed.
 ///
-/// Only packing brings two independently-authored interactions together.
+/// Both look at one AIR, and a bus spans AIRs.
+///
+/// Senders and receivers cancel in the cross-AIR sum, so tuples alias without sharing a column.
+///
+/// The cross-AIR check is a separate call, and an assembler owes it.
 ///
 /// # Soundness
 ///

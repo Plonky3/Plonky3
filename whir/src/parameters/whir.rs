@@ -92,6 +92,19 @@ pub enum WhirConfigError {
     )]
     NonRedundantStartingRate { log_inv_rate: usize },
 
+    /// The derived schedule opens no position.
+    ///
+    /// - Queries are the only part of the run that tests proximity.
+    /// - A schedule opening none of them accepts any committed function.
+    /// - A redundant rate rules out the usual way of reaching zero.
+    /// - A security target of zero reaches it anyway, since every term is then under budget.
+    ///
+    /// The count is derived, so this catches every parameter combination that lands on zero.
+    #[error(
+        "the derived schedule opens no position, so the proximity test accepts any committed function"
+    )]
+    ZeroQueries,
+
     /// A per-round code rate is not redundant.
     ///
     /// - The codeword committed after one intermediate round has rate `1`.
@@ -640,6 +653,23 @@ where
             config.final_sumcheck_rounds
         );
 
+        // Invariant: the schedule must open at least one position.
+        //
+        // A non-redundant rate is refused above, which rules out the usual route to zero.
+        //
+        // A security target of zero is the other one, and nothing before this sees it:
+        // every error term is then under budget, so no query is ever bought.
+        //
+        //     zero queries  ->  nothing ties a codeword to its commitment
+        if config.final_queries == 0
+            && config
+                .round_parameters
+                .iter()
+                .all(|round| round.num_queries == 0)
+        {
+            return Err(WhirConfigError::ZeroQueries);
+        }
+
         // Enforce the grinding budget.
         // A derived PoW above the cap means the field or rate cannot reach
         // security_level within the allowed grinding, so the claimed security
@@ -904,10 +934,16 @@ mod tests {
         //
         // The 31-bit field forces a large grinding gap, so the budget is set
         // wide enough to admit it; this test probes the rounding, not the cap.
+        //
+        // The budget stays below the target, so the algebraic protocol still covers bits.
+        //
+        // Crediting the whole target to grinding would buy no query at all.
+        //
+        // A run that opens no position is refused during construction.
         let soundness = SecurityAssumption::UniqueDecoding;
         let params = ProtocolParameters {
             security_level: 128,
-            pow_bits: 128,
+            pow_bits: 127,
             round_log_inv_rates: vec![],
             folding_factor: FoldingFactor::Constant(4),
             soundness_type: soundness,
@@ -1122,6 +1158,37 @@ mod tests {
             }
             other => panic!("expected InsufficientFolding, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn new_rejects_a_schedule_that_opens_no_position() {
+        // Invariant: a schedule must open at least one position.
+        //
+        // Queries alone test proximity, so opening none accepts any committed function.
+        //
+        // A redundant rate rules out the usual route to zero.
+        //
+        // A target of zero reaches it anyway, since every error term is then under budget.
+        //
+        // The floor lives here rather than in a caller, so both construction routes meet it.
+        //
+        // Fixture state: 10 variables, folding 4, a redundant rate, and no target.
+        for pow_bits in [0, 20] {
+            let mut params = default_whir_params();
+            params.security_level = 0;
+            params.pow_bits = pow_bits;
+
+            let err = WhirConfig::<F, F, MyChallenger>::new(10, params)
+                .expect_err("a schedule opening nothing must be rejected");
+            assert!(
+                matches!(err, WhirConfigError::ZeroQueries),
+                "expected ZeroQueries, got {err:?}"
+            );
+        }
+
+        // A positive target still buys queries, so the floor does not disturb it.
+        let config = WhirConfig::<EF4, F, MyChallenger>::new(10, default_whir_params()).unwrap();
+        assert!(config.final_queries > 0);
     }
 
     #[test]

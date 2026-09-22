@@ -269,9 +269,13 @@ impl JaggedLayout {
     ///
     /// The column heights must already be bound into the transcript, normally by that commitment, before the sparse point is drawn.
     ///
-    /// That ordering is the one obligation this crate cannot check.
+    /// That ordering is on the caller when the reduction is reached through this entry point.
     ///
-    /// The caller-obligations page under `docs` records it.
+    /// Sealing the geometry before drawing the point makes that ordering structural.
+    ///
+    /// Prefer that route where one exists.
+    ///
+    /// The caller-obligations page under `docs` records the raw route.
     ///
     /// # Minimum non-degenerate shape
     ///

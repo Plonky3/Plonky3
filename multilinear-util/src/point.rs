@@ -20,9 +20,11 @@ use rand::distr::{Distribution, StandardUniform};
 ///
 /// It accepts everything, because only an opening there pins the terminal relation.
 ///
-/// The workspace turns that discard into a compile error.
+/// The workspace refuses an unused result, so leaving one as a statement is a compile error.
 ///
-/// A caller wanting only the sponge advanced discards explicitly, and says why.
+/// Binding it is not refused, and neither is destructuring away the point.
+///
+/// A caller wanting only the sponge advanced binds it explicitly, and says why.
 #[must_use]
 #[derive(Default, Debug, Clone, PartialEq, Eq)]
 pub struct Point<F>(pub(crate) Vec<F>);

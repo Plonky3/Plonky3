@@ -61,7 +61,17 @@ impl<F, EF> GenericDegreeProof<F, EF> {
     /// - PCS openings for committed multilinears.
     /// - Closed-form evaluation for structural multilinears (`eq`, `next`, selectors).
     ///
-    /// When an outer protocol fixes the claimed sum, the caller must also check the proof's claimed sum against it.
+    /// # The claimed sum is read from the proof
+    ///
+    /// This value is whatever the prover wrote, and no argument here pins it.
+    ///
+    /// A caller that skips the comparison verifies a sound reduction of the wrong sum.
+    ///
+    /// So when an outer protocol fixes the sum, the caller must compare the two itself.
+    ///
+    /// Every caller in the tree does, raising its own error and abandoning its transcript.
+    ///
+    /// That is why the comparison is not folded in here.
     ///
     /// # Zero rounds
     ///

@@ -169,6 +169,8 @@ pub enum ProfileError {
     /// That is what a security target of zero derives to.
     ///
     /// Every error term is then under budget, so no query is ever bought.
+    ///
+    /// The floor lives in the schedule itself, so every route to a config meets it.
     #[error("the derived schedule opens no position, so it accepts any codeword")]
     ZeroQueries,
 }
