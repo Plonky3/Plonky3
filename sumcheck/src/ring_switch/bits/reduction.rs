@@ -1047,7 +1047,18 @@ impl<EF: TowerLevel> BitRingSwitchBatch<'_, EF> {
         let alpha = R::from(alpha);
         let alpha_squared = alpha.square();
         let max = column - 1;
+        // A column fits inside the tail: the kept-row clause of `compact_depth_is_eligible` keeps
+        // the compact head off the kept row coordinates, so the tail keeps at least the kept rows.
+        // Every chunk below is therefore exactly `stride` long and splits into whole columns.
         let stride = equality.block_len().max(column).min(table.num_evals());
+        debug_assert!(
+            column.is_power_of_two() && stride.is_multiple_of(column),
+            "the compact tail is shorter than one column; see compact_depth_is_eligible"
+        );
+        debug_assert!(
+            table.num_evals().is_multiple_of(stride),
+            "the compact tail does not split into whole strides; see compact_depth_is_eligible"
+        );
         table
             .as_mut_slice()
             .par_chunks_mut(stride)
