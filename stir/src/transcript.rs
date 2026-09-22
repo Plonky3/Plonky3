@@ -1461,9 +1461,10 @@ mod tests {
     use p3_challenger::{CanSample, DuplexChallenger};
     use p3_commit::ExtensionMmcs;
     use p3_field::extension::BinomialExtensionField;
-    use p3_field::{Field, PrimeCharacteristicRing};
+    use p3_field::{BasedVectorSpace, Field, PrimeCharacteristicRing};
+    use p3_keccak::Keccak256Hash;
     use p3_merkle_tree::MerkleTreeMmcs;
-    use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
+    use p3_symmetric::{CryptographicHasher, PaddingFreeSponge, TruncatedPermutation};
     use rand::SeedableRng;
     use rand::rngs::SmallRng;
 
@@ -1499,6 +1500,11 @@ mod tests {
     /// The three domains a round's out-of-domain points must miss.
     fn excluded_domains() -> OodFilter<F> {
         OodFilter::new([(F::GENERATOR, 3), (F::GENERATOR, 2), (F::GENERATOR, 1)])
+    }
+
+    /// Keccak-256 over canonical values, eight little-endian bytes each.
+    fn stream_digest(values: &[u64]) -> [u8; 32] {
+        Keccak256Hash.hash_iter(values.iter().flat_map(|v| v.to_le_bytes()))
     }
 
     /// One round with no grinding and small counts.
@@ -1888,6 +1894,92 @@ mod tests {
         let prover_next: F = prover_challenger.sample();
         let verifier_next: F = verifier_challenger.sample();
         assert_eq!(prover_next, verifier_next);
+    }
+
+    #[test]
+    fn the_challenge_stream_is_pinned() {
+        // The fixture shape carries zero difficulty at every site, so every witness this
+        // run draws is `F::ZERO`.
+        let shape = shape();
+        let ood_answers = [EF::TWO];
+        let ans = [EF::ONE, EF::TWO];
+        let final_poly = [EF::ONE, EF::ZERO];
+        let filter = excluded_domains();
+
+        let mut prover_challenger = fresh_challenger();
+        let mut prover = ProverTranscript::<Ch, F, EF>::new(&mut prover_challenger, shape.clone());
+        prover.initial_commitment(COMMITMENT);
+        assert_eq!(prover.folding_pow(0), F::ZERO);
+        let gamma = prover.fold_challenge();
+        prover.fold_commitment(COMMITMENT);
+        let ood_points = prover.ood_points(0, 0, &filter);
+        prover.ood_answers(&ood_answers);
+        assert_eq!(prover.query_pow(0), F::ZERO);
+        let (r_comb, indices) = prover.query_phase(0, 0);
+        prover.answer_phase(0, 0, &ans);
+        assert_eq!(prover.final_folding_pow(), F::ZERO);
+        let final_gamma = prover.final_fold_challenge();
+        prover.final_polynomial(&final_poly);
+        assert_eq!(prover.final_pow(), F::ZERO);
+        let final_indices = prover.final_query_indices(0);
+        prover.finish();
+        let prover_next: F = prover_challenger.sample();
+
+        let extension_words = |value: &EF| -> Vec<u64> {
+            value
+                .as_basis_coefficients_slice()
+                .iter()
+                .map(F::as_canonical_u64)
+                .collect()
+        };
+        let mut stream = extension_words(&gamma);
+        stream.extend(ood_points.iter().flat_map(extension_words));
+        stream.extend(extension_words(&r_comb));
+        stream.extend(indices.iter().map(|&index| index as u64));
+        stream.extend(extension_words(&final_gamma));
+        stream.extend(final_indices.iter().map(|&index| index as u64));
+        stream.push(prover_next.as_canonical_u64());
+
+        assert_eq!(
+            stream_digest(&stream),
+            [
+                214, 95, 178, 156, 247, 113, 219, 158, 47, 131, 8, 176, 152, 40, 50, 134, 224, 134,
+                190, 165, 152, 115, 7, 21, 190, 108, 154, 26, 140, 196, 173, 131
+            ]
+        );
+
+        // Verifier replay over the same values: every redraw and the next sample agree.
+        let mut verifier_challenger = fresh_challenger();
+        let mut verifier = VerifierTranscript::<Ch, F, EF>::new(&mut verifier_challenger, shape);
+        verifier.initial_commitment(COMMITMENT);
+        verifier
+            .folding_pow(0, F::ZERO)
+            .expect("no work is asked for");
+        assert_eq!(verifier.fold_challenge(), gamma);
+        verifier.fold_commitment(COMMITMENT);
+        assert_eq!(verifier.ood_points(0, 0, &filter), ood_points);
+        verifier
+            .ood_answers(0, 0, &ood_answers)
+            .expect("the described answer count");
+        verifier
+            .query_pow(0, F::ZERO)
+            .expect("no work is asked for");
+        assert_eq!(verifier.query_phase(0, 0), (r_comb, indices));
+        let _rho = verifier
+            .answer_phase(0, 0, &ans)
+            .expect("an answer polynomial inside the cap");
+        verifier
+            .final_folding_pow(F::ZERO)
+            .expect("no work is asked for");
+        assert_eq!(verifier.final_fold_challenge(), final_gamma);
+        verifier
+            .final_polynomial(0, &final_poly)
+            .expect("the described coefficient count");
+        verifier.final_pow(F::ZERO).expect("no work is asked for");
+        assert_eq!(verifier.final_query_indices(0), final_indices);
+        verifier.finish();
+        let verifier_next: F = verifier_challenger.sample();
+        assert_eq!(verifier_next, prover_next);
     }
 
     #[test]
