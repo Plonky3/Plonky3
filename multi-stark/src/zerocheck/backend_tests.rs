@@ -810,6 +810,26 @@ fn packed_backends_match_dense_across_round_boundaries_and_fallback() {
 }
 
 #[test]
+fn packed_successor_stages_match_dense_on_the_sliced_kernel() {
+    // A degree-two stage reading a successor column reaches the sliced kernel at these heights,
+    // so its packed source must yield the same successor planes as its dense one.
+    // Random bits make the successor column vary from row to row, and a transcript needs no
+    // valid witness.
+    for height in [128, 256, 1 << 10] {
+        let mut instance = Instance::honest(
+            FixtureAir::QuadraticSuccessor,
+            height,
+            0xB604 + height as u64,
+        );
+        let mut rng = SmallRng::seed_from_u64(0xB605 + height as u64);
+        for value in &mut instance.main.values {
+            *value = Tower::from_bool(rng.random());
+        }
+        assert_packed_matches_dense(&[instance], || LookupRuntime::Inactive, 0);
+    }
+}
+
+#[test]
 fn backends_agree_with_grinding() {
     let instances = [Instance::honest(FixtureAir::Gate { scale: gf4(2) }, 16, 2)];
     assert_backends_agree(&instances, || LookupRuntime::Inactive, 2);
