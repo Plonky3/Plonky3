@@ -52,8 +52,8 @@ use crate::sliced::{LaneSums, SLICED_LANES, SlicedFolder, SlicedGf4, gf4_coordin
 ///
 /// Each round doubles both the plane work and the corner words a residual row folds, so the
 /// count has a ceiling. A stage is also capped by the row variables its words leave unbound.
-/// With its late-materialization parameter set, [`ReprBackend`](crate::ReprBackend) serves a
-/// stage that qualifies one further round from its planes, outside this cap.
+/// With its late-materialization parameter set, [`ReprBackend`](crate::ReprBackend) also serves
+/// the round after a qualifying stage's boundary round from its planes.
 pub const MAX_SLICED_ROUNDS: usize = 4;
 
 /// Longest prefix a plane fold binds.
@@ -1859,8 +1859,8 @@ where
     /// intermediate residual column.
     ///
     /// The round-three fold only drops the tensor. The round-four fold consumes all five
-    /// recorded challenges through [`Self::unslice`], so its first scalar columns have length
-    /// `N / 32`.
+    /// recorded challenges through [`Self::unslice_with`] at [`MAX_PLANE_FOLD_CORNERS`] corners,
+    /// so its first scalar columns have length `N / 32`.
     pub(crate) fn fold_late_boundary<S>(&mut self, r: EF) -> bool
     where
         S: Field,
