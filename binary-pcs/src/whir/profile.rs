@@ -200,9 +200,9 @@ mod tests {
         //
         // Queries alone test proximity, so a schedule opening none accepts any codeword.
         //
-        // A security target of zero derives exactly that.
+        // Crediting grinding with the whole target derives exactly that.
         //
-        // Every error term is then under budget, so no query is ever bought.
+        // This profile reaches it with a zero target, which credits the whole of nothing.
         let domain = BooleanWhirDomain::default();
         let profile = BinaryWhirProfile::proven_list_decoding(0, LOG_INV_RATE, FOLDING);
         assert!(matches!(

@@ -410,7 +410,13 @@ fn assert_bus_widths<'a, F: Field + 'a>(lookups: impl Iterator<Item = &'a Lookup
 ///
 /// # Returns
 ///
-/// The widest payload on any bus, which is the figure a challenge table is built from.
+/// The widest global payload, or zero when no AIR declares a global lookup.
+///
+/// That is not yet the width a challenge table is built from.
+///
+/// A table sizes itself over local lookups too, and reserves a power for the bus offset.
+///
+/// So it starts from one rather than zero.
 ///
 /// # Errors
 ///

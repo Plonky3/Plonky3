@@ -151,7 +151,7 @@ Name the value nobody checks, and if you cannot name one, impose no floor.
 | Hiding sumcheck | no rounds | **Rejected.** The shape validator refuses it |
 | Jagged reduction | live area of one | **Trivial.** One dense cell has no interior to test, and the claim names that cell |
 | Binary PCS opening protocol | no claims | **Trivial.** A run that claims nothing proves nothing, and asserts nothing |
-| WHIR schedule | no opened position | **Rejected** during construction, so every route to a config meets it. Queries alone test proximity, so opening none accepts any committed function |
+| WHIR schedule | no opened position | **Rejected** by every constructor, though the fields are public and the verifier does not recount. Queries alone test proximity, so opening none accepts any committed function. The trigger is grinding credited with the whole target, which a saturating difference makes reachable at any target, not only at zero |
 | Plain sumcheck rounds | no rounds | **Trivial**, as above. The surrounding protocol owns any floor |
 
 ## Known gaps

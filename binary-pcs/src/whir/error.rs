@@ -166,11 +166,13 @@ pub enum ProfileError {
     ///
     /// A schedule opening none of them accepts any codeword, whatever the level reported.
     ///
-    /// That is what a security target of zero derives to.
+    /// That is what crediting grinding with the whole target derives to.
     ///
-    /// Every error term is then under budget, so no query is ever bought.
+    /// The protocol level is a saturating difference.
     ///
-    /// The floor lives in the schedule itself, so every route to a config meets it.
+    /// So the credit is whole whenever the budget reaches the target, not only at zero.
+    ///
+    /// The floor lives in the schedule itself, so every constructor meets it.
     #[error("the derived schedule opens no position, so it accepts any codeword")]
     ZeroQueries,
 }
