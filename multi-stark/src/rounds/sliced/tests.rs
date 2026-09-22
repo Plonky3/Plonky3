@@ -904,7 +904,9 @@ fn late_boundary_rejection_gates_are_isolated_at_height_eleven() {
     }
     assert_no_late(
         &[Instance::honest(
-            FixtureAir::Gate { scale: Tower::ONE },
+            FixtureAir::Periodic {
+                period: [gf4(2), gf4(3)],
+            },
             height,
             0x007E_50C5,
         )],
@@ -944,14 +946,32 @@ fn late_boundary_rejection_gates_are_isolated_at_height_eleven() {
     let mut outside_public = Instance::honest(FixtureAir::QuadraticInputs, height, 0x007E_50CC);
     outside_public.public_values[0] = outside();
     assert_no_late(&[outside_public], no_lookups());
-    assert_no_late(
-        &[Instance::honest(
-            FixtureAir::QuadraticInputsOutsidePeriodic,
-            height,
-            0x007E_50C9,
-        )],
-        no_lookups(),
+    let mut outside_periodic = Instance::honest(
+        FixtureAir::QuadraticInputsOutsidePeriodic,
+        height,
+        0x007E_50C9,
     );
+    outside_periodic
+        .preprocessed
+        .as_mut()
+        .expect("quadratic inputs has fixed data")
+        .values
+        .fill(Tower::ZERO);
+    assert!(<Tower as HasSubfield<Gf4>>::all_in_subfield(
+        &outside_periodic.main.values
+    ));
+    assert!(<Tower as HasSubfield<Gf4>>::all_in_subfield(
+        &outside_periodic
+            .preprocessed
+            .as_ref()
+            .expect("quadratic inputs has fixed data")
+            .values
+    ));
+    assert!(<Tower as HasSubfield<Gf4>>::all_in_subfield(
+        &outside_periodic.public_values
+    ));
+    assert_eq!(outside_periodic.air.periodic_columns()[0][0], outside());
+    assert_no_late(&[outside_periodic], no_lookups());
 }
 
 #[test]
