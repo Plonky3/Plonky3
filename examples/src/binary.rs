@@ -1249,7 +1249,7 @@ mod tests {
     use p3_air::{Air, AirBuilder, BaseAir, WindowAccess};
     use p3_binary_field::{Gf2, TowerLevel};
     use p3_blake3_air::{Blake3BinaryAir, NUM_BLAKE3_BINARY_COLS};
-    use p3_bus::{BusActivation, BusDirection, BusInteractionBuilder, BusSymbolicBuilder};
+    use p3_bus::{BusActivation, BusDirection, BusInteractionBuilder, BusName, BusSymbolicBuilder};
     use p3_challenger::CanSample;
     use p3_field::{HasSubfield, PrimeCharacteristicRing};
     use p3_keccak_air::{KeccakBinaryAir, NUM_KECCAK_BINARY_COLS};
@@ -2435,7 +2435,7 @@ mod tests {
             BusActivation::Always
         };
         builder.push_bus_interaction(
-            "whir-test-bus",
+            BusName::new("whir-test-bus"),
             air.direction,
             [main.current_slice()[0].clone()],
             activation,
