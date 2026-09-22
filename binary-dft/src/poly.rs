@@ -802,6 +802,22 @@ fn first_group_into_cosets(
     );
 }
 
+/// Encode a zero-padded message whose cosets all share a first staging group of `depth`.
+///
+/// `values` is `2^log_inv_rate` cosets of one message each, the leading one holding the
+/// message in the tower basis, and every coset comes back evaluated in the tower basis.
+fn padded_sharing_first_group(values: &mut [u128], plan: Plan, depth: usize, log_inv_rate: usize) {
+    let log_message = plan.log_n;
+    let len = values.len() >> log_inv_rate;
+    let twiddles: Vec<Twiddles> = (0..1 << log_inv_rate)
+        .map(|c| Twiddles::new(log_message, domain_point(c << log_message)))
+        .collect();
+    first_group_into_cosets(values, len, plan, depth, &twiddles);
+    for_chunks(values, len, log_message, |(c, coset)| {
+        forward_below(coset, plan, &twiddles[c], 1, Fold::EXIT);
+    });
+}
+
 /// Forward transform of polynomial-basis values in an existing allocation.
 fn forward(values: &mut [u128], plan: Plan, shift: BinaryField128, fold: Fold) {
     forward_below(values, plan, &Twiddles::new(plan.log_n, shift), 0, fold);
@@ -963,13 +979,7 @@ impl AdditiveNtt<BinaryField128> for PolyBasisNtt {
         if let Some(depth) = plan.group_sizes().next().filter(|_| large) {
             // Large cosets that stage their first group read the message once for all of them,
             // and every coset finishes on its own.
-            let twiddles: Vec<Twiddles> = (0..1 << log_inv_rate)
-                .map(|c| Twiddles::new(log_message, domain_point(c << log_message)))
-                .collect();
-            first_group_into_cosets(&mut values, len, plan, depth, &twiddles);
-            for_chunks(&mut values, len, log_message, |(c, coset)| {
-                forward_below(coset, plan, &twiddles[c], 1, Fold::EXIT);
-            });
+            padded_sharing_first_group(&mut values, plan, depth, log_inv_rate);
             mat.values = values.into_iter().map(BinaryField128::from_repr).collect();
             return mat;
         }
@@ -1758,20 +1768,31 @@ mod tests {
 
     #[test]
     fn padded_transform_matches_the_tower_where_cosets_share_their_first_group() {
-        // Heights past the parallel threshold of the padded entry point. Rows of four and
-        // sixteen elements fill a cache line, so those plans stage a first group whatever the
-        // worker count; a single column stages one from four workers up, as it commits.
-        let poly = PolyBasisNtt::default();
+        // The padded entry point shares a first group only above a length that grows with the
+        // worker count, and a single column stages one only from a worker count up. Both are
+        // the host's, so the shared path is driven directly, under the plan a pinned count of
+        // workers gets, rather than through the entry point.
+        //
+        // Rows of four and sixteen elements fill a cache line, and a single column is staged
+        // from `STAGED_WORKERS` up, as it commits.
         let tower = LchNtt::<BinaryField128>::default();
         for (width, log_message) in [(4, 14), (16, 12), (1, 17)] {
+            let plan = Plan::for_workers(width, log_message, STAGED_WORKERS);
+            let depth = plan
+                .group_sizes()
+                .next()
+                .expect("every shape here stages a first group");
             for log_inv_rate in 1..=2 {
                 let mut mat = matrix(log_message, width, 29);
                 mat.values
                     .resize(mat.values.len() << log_inv_rate, BinaryField128::ZERO);
                 let expected = tower.ntt_batch(mat.clone());
+
+                let mut values: Vec<u128> = mat.values.iter().map(|v| v.to_repr()).collect();
+                super::padded_sharing_first_group(&mut values, plan, depth, log_inv_rate);
+                let actual: Vec<_> = values.into_iter().map(BinaryField128::from_repr).collect();
                 assert_eq!(
-                    poly.ntt_batch_padded(mat, log_inv_rate),
-                    expected,
+                    actual, expected.values,
                     "width={width} log_message={log_message} rate={log_inv_rate}"
                 );
             }
