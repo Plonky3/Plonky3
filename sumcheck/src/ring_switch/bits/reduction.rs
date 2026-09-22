@@ -881,6 +881,9 @@ impl<EF: TowerLevel> BitRingSwitch<EF> {
         {
             return false;
         }
+        // At the production depth this floor is 2 + 14 + 6 = 22 free variables, but 2 + 1 + 6 = 9
+        // under test, where `LOG_CHUNK` is 1, so no unit test runs the compact head at the shape
+        // or the chunk size a production build first accepts.
         force || n >= compact_size_floor(requested_k, LOG_CHUNK)
     }
 }
