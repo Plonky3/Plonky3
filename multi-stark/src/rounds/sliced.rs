@@ -192,13 +192,19 @@ fn successor_word(planes: [u64; 2], carry: (bool, bool)) -> [u64; 2] {
 /// `corners[c]` holds corner `c`, whose bits are the prefix bits, first variable highest, then
 /// `t`. Each prefix variable folds as `lo + v * (hi - lo)` with `v` a node of `GF(4)`, which
 /// leaves the values at `t = 0` and `t = 1` in the first two entries.
+///
+/// # Panics
+///
+/// Panics unless `prefix` holds one node per variable of the corners other than `t`.
 #[inline]
-fn fold_corners<F, S>(
-    corners: &mut [SlicedGf4<F, S>],
+fn fold_corners<F, S, const CORNERS: usize>(
+    mut corners: [SlicedGf4<F, S>; CORNERS],
     prefix: &[(bool, bool)],
 ) -> (SlicedGf4<F, S>, SlicedGf4<F, S>) {
-    let mut len = corners.len();
-    for &(low, high) in prefix {
+    let variables = CORNERS.trailing_zeros() as usize - 1;
+    assert_eq!(prefix.len(), variables, "one node per prefix variable");
+    let mut len = CORNERS;
+    for &(low, high) in &prefix[..variables] {
         len /= 2;
         let (lo, hi) = corners.split_at_mut(len);
         for (lo, &hi) in lo.iter_mut().zip(hi.iter()) {
@@ -291,14 +297,12 @@ struct SlicedScratch<F, S, R> {
     next: Vec<SlicedGf4<F, S>>,
     /// Successor steps, zero outside the successor runs.
     next_diff: Vec<SlicedGf4<F, S>>,
-    /// Corner buffer of one column.
-    corners: Vec<SlicedGf4<F, S>>,
     /// Whether any evaluation was poisoned.
     poisoned: bool,
 }
 
 impl<F, S, R: Field> SlicedScratch<F, S, R> {
-    fn new(degrees: &[usize], prefixes: usize, width: usize, corners: usize, tensor: bool) -> Self {
+    fn new(degrees: &[usize], prefixes: usize, width: usize, tensor: bool) -> Self {
         Self {
             sums: degrees
                 .iter()
@@ -308,7 +312,6 @@ impl<F, S, R: Field> SlicedScratch<F, S, R> {
             local_diff: vec![SlicedGf4::default(); width],
             next: vec![SlicedGf4::default(); width],
             next_diff: vec![SlicedGf4::default(); width],
-            corners: vec![SlicedGf4::default(); corners],
             poisoned: false,
         }
     }
@@ -332,27 +335,53 @@ where
     R: Field,
     A: for<'b> Air<SlicedFolder<'b, F, S, R>>,
 {
-    /// Fold one column's corners at the prefix, over word `word` of each corner block.
+    /// Fold the `CORNERS` corners of `columns` at the prefix, over word `word` of each block.
+    ///
+    /// Each column's value at `t = 0` lands in `values`, and its step to `t = 1` in `steps`.
     #[inline]
-    fn fold_column(
+    fn fold_columns<const CORNERS: usize>(
         &self,
         planes: &[[u64; 2]],
-        column: usize,
+        columns: Range<usize>,
         word: usize,
         prefix: &PrefixFold,
-        corners: &mut [SlicedGf4<F, S>],
-    ) -> (SlicedGf4<F, S>, SlicedGf4<F, S>) {
+        values: &mut [SlicedGf4<F, S>],
+        steps: &mut [SlicedGf4<F, S>],
+    ) {
         let width = self.trace.width;
-        let corners = &mut corners[..prefix.corners.len()];
-        for (value, &corner) in corners.iter_mut().zip(&prefix.corners) {
-            let [low, high] = planes[(corner * self.words + word) * width + column];
-            *value = SlicedGf4::from_planes(low, high);
+        let starts: [usize; CORNERS] =
+            core::array::from_fn(|corner| (prefix.corners[corner] * self.words + word) * width);
+        for column in columns {
+            let corners = starts.map(|start| {
+                let [low, high] = planes[start + column];
+                SlicedGf4::from_planes(low, high)
+            });
+            let (lo, hi) = fold_corners(corners, &prefix.nodes);
+            values[column] = lo;
+            steps[column] = lo + hi;
         }
-        fold_corners(corners, &prefix.nodes)
     }
 
     /// Add one word of residual rows at one prefix to the scratch sums.
     fn accumulate(&self, scratch: &mut SlicedScratch<F, S, R>, word: usize, prefix_index: usize) {
+        match self.prefixes[prefix_index].corners.len() {
+            2 => self.accumulate_corners::<2>(scratch, word, prefix_index),
+            4 => self.accumulate_corners::<4>(scratch, word, prefix_index),
+            8 => self.accumulate_corners::<8>(scratch, word, prefix_index),
+            MAX_CORNERS => self.accumulate_corners::<MAX_CORNERS>(scratch, word, prefix_index),
+            corners => {
+                unreachable!("a sliced round reads at most {MAX_CORNERS} corners, not {corners}")
+            }
+        }
+    }
+
+    /// [`Self::accumulate`] at a prefix that reads `CORNERS` corners.
+    fn accumulate_corners<const CORNERS: usize>(
+        &self,
+        scratch: &mut SlicedScratch<F, S, R>,
+        word: usize,
+        prefix_index: usize,
+    ) {
         let prefix = &self.prefixes[prefix_index];
         let trace = self.trace;
         let SlicedScratch {
@@ -360,29 +389,33 @@ where
             local_diff,
             next,
             next_diff,
-            corners,
             ..
         } = scratch;
 
-        for column in 0..trace.width {
-            let (lo, hi) = self.fold_column(&trace.cells, column, word, prefix, corners);
-            local[column] = lo;
-            local_diff[column] = lo + hi;
-        }
+        self.fold_columns::<CORNERS>(
+            &trace.cells,
+            0..trace.width,
+            word,
+            prefix,
+            local,
+            local_diff,
+        );
         for run in &self.next_columns {
-            for column in run.clone() {
-                let (lo, hi) = self.fold_column(&trace.successors, column, word, prefix, corners);
-                next[column] = lo;
-                next_diff[column] = lo + hi;
-            }
+            self.fold_columns::<CORNERS>(
+                &trace.successors,
+                run.clone(),
+                word,
+                prefix,
+                next,
+                next_diff,
+            );
         }
-        let mut selector = |index: usize| {
-            let corners = &mut corners[..prefix.corners.len()];
-            for (value, &corner) in corners.iter_mut().zip(&prefix.corners) {
-                let plane = trace.boundary[corner * self.words + word][index];
-                *value = SlicedGf4::from_planes(plane, 0);
-            }
-            let (lo, hi) = fold_corners(corners, &prefix.nodes);
+        let selector = |index: usize| {
+            let corners = core::array::from_fn(|corner| {
+                let plane = trace.boundary[prefix.corners[corner] * self.words + word][index];
+                SlicedGf4::from_planes(plane, 0)
+            });
+            let (lo, hi) = fold_corners::<F, S, CORNERS>(corners, &prefix.nodes);
             (lo, lo + hi)
         };
         let (first, first_diff) = selector(0);
@@ -650,13 +683,12 @@ where
         .map(|slot| slot.constraint_degree)
         .collect::<Vec<_>>();
     let prefixes = context.prefixes.len();
-    let corners = 2 << round;
     let tasks = context.words * prefixes;
     let scratch = (0..tasks)
         .into_par_iter()
         .with_min_len(rows_per_task(tasks))
         .par_fold_reduce(
-            || SlicedScratch::new(&degrees, prefixes, trace.width, corners, tensor),
+            || SlicedScratch::new(&degrees, prefixes, trace.width, tensor),
             |mut scratch, task| {
                 context.accumulate(&mut scratch, task / prefixes, task % prefixes);
                 scratch

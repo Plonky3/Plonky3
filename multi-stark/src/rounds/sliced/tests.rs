@@ -2229,12 +2229,25 @@ fn lane_masks_transpose_the_corner_words() {
     }
 }
 
+/// Fold the `CORNERS` corners `fold` reads from `planes`.
+fn fold_read<const CORNERS: usize>(
+    planes: &[[u64; 2]],
+    fold: &PrefixFold,
+) -> (SlicedGf4<Tower, Gf4>, SlicedGf4<Tower, Gf4>) {
+    let corners = core::array::from_fn(|corner| {
+        let [low, high] = planes[fold.corners[corner]];
+        SlicedGf4::from_planes(low, high)
+    });
+    fold_corners::<Tower, Gf4, CORNERS>(corners, &fold.nodes)
+}
+
 #[test]
-fn a_prefix_fold_matches_folding_every_corner() {
-    type Sliced = SlicedGf4<Tower, Gf4>;
+fn a_prefix_fold_matches_the_multilinear_interpolation() {
+    let element =
+        |(low, high): (bool, bool)| Gf4::from_bool(low) + Gf4::from_bool(high) * Gf4::GENERATOR;
     let coordinates = [(false, false), (true, false), (false, true), (true, true)];
     let mut rng = SmallRng::seed_from_u64(28);
-    for round in 0..=MAX_SLICED_ROUNDS {
+    for round in 0..MAX_SLICED_ROUNDS {
         let planes = (0..2 << round)
             .map(|_| [rng.random(), rng.random()])
             .collect::<Vec<[u64; 2]>>();
@@ -2242,34 +2255,41 @@ fn a_prefix_fold_matches_folding_every_corner() {
             let prefix = (0..round)
                 .map(|variable| coordinates[(index >> (2 * variable)) % coordinates.len()])
                 .collect::<Vec<_>>();
-            let mut every = planes
-                .iter()
-                .map(|&[low, high]| Sliced::from_planes(low, high))
-                .collect::<Vec<_>>();
-            let expected = fold_corners(&mut every, &prefix);
-
             let fold = PrefixFold::new(&prefix);
-            assert_eq!(
-                fold.corners.len(),
-                2 << fold.nodes.len(),
-                "prefix {prefix:?}"
-            );
-            let mut read = fold
-                .corners
-                .iter()
-                .map(|&corner| Sliced::from_planes(planes[corner][0], planes[corner][1]))
-                .collect::<Vec<_>>();
-            let folded = fold_corners(&mut read, &fold.nodes);
-            for (folded, expected) in [(folded.0, expected.0), (folded.1, expected.1)] {
-                assert_eq!(
-                    (0..SLICED_LANES)
-                        .map(|lane| folded.lane(lane))
-                        .collect::<Vec<_>>(),
-                    (0..SLICED_LANES)
-                        .map(|lane| expected.lane(lane))
-                        .collect::<Vec<_>>(),
-                    "prefix {prefix:?}"
-                );
+            let (lo, hi) = match fold.corners.len() {
+                2 => fold_read::<2>(&planes, &fold),
+                4 => fold_read::<4>(&planes, &fold),
+                8 => fold_read::<8>(&planes, &fold),
+                16 => fold_read::<16>(&planes, &fold),
+                corners => unreachable!("{corners} corners"),
+            };
+            for (t, value) in [lo, hi].into_iter().enumerate() {
+                for lane in 0..SLICED_LANES {
+                    // Corner bits are the prefix variables, first variable highest, then t.
+                    let expected = (0..1 << round)
+                        .map(|bits| {
+                            let weight = prefix
+                                .iter()
+                                .enumerate()
+                                .map(|(variable, &node)| {
+                                    let node = element(node);
+                                    if (bits >> (round - 1 - variable)) & 1 == 1 {
+                                        node
+                                    } else {
+                                        Gf4::ONE - node
+                                    }
+                                })
+                                .product::<Gf4>();
+                            let [low, high] = planes[(bits << 1) | t];
+                            weight * element(((low >> lane) & 1 == 1, (high >> lane) & 1 == 1))
+                        })
+                        .sum::<Gf4>();
+                    assert_eq!(
+                        value.lane(lane),
+                        expected,
+                        "prefix {prefix:?}, t = {t}, lane {lane}"
+                    );
+                }
             }
         }
     }
