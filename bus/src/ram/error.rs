@@ -48,6 +48,14 @@ pub enum RamError {
         /// Caller-owned name used for more than one role.
         name: String,
     },
+    /// A channel name leaves the alphabet the bus separator binds.
+    #[error("mutable memory channel {name} is not a well-formed name: {error}")]
+    BusName {
+        /// Caller-owned name the alphabet refused.
+        name: String,
+        /// Why the alphabet refused it.
+        error: crate::BusNameError,
+    },
     /// A named bus carries no declarations in the enclosing plan.
     #[error("mutable memory bus {name} does not exist in this plan")]
     UnknownBus {

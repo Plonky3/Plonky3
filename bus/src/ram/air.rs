@@ -5,6 +5,7 @@ use alloc::vec::Vec;
 use p3_air::{Air, AirBuilder, BaseAir, WindowAccess};
 use p3_field::{Algebra, PrimeCharacteristicRing};
 
+use super::statement::channel;
 use super::{RamBoundary, RamError, RamLayout, RamStatement};
 use crate::{BusActivation, BusDirection, BusInteractionBuilder};
 
@@ -16,11 +17,27 @@ use crate::{BusActivation, BusDirection, BusInteractionBuilder};
 ///
 /// Balancing it is the permutation between the two orders.
 ///
-/// Two of the sixteen constraints below are redundant alone, each implied by the other.
-///
-/// They are the gap digits and the cleared carry in.
+/// Two constraints below survive deletion alone; the pull request says which and why.
 ///
 /// A test pins the constraint count, so changing the set forces a fresh sweep.
+///
+/// That test fails on every deletion, so a sweep has to skip it to learn anything.
+///
+/// # What the machine owes
+///
+/// Three obligations sit outside these constraints, for a machine to meet itself.
+///
+/// A reading is the machine's, so its chips must constrain readings to rise along execution.
+///
+/// Skip that and the proof still verifies, but of the wrong statement.
+///
+/// A read then sees the last write by reading, not the last write the machine performed.
+///
+/// Two accesses to one cell need different readings, and that one the constraints do enforce.
+///
+/// The access count is the trace height, so it is a power of two and every row pulls a tuple.
+///
+/// A machine with fewer real accesses pads with real ones its own chips also produce.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RamAir {
     /// Public shape this AIR enforces.
@@ -97,14 +114,13 @@ impl RamAir {
         let mut transition = builder.when_transition();
         let same: AB::Expr = next_row[layout.same_address].into();
 
-        // A continued run repeats its cell number exactly.
         for bit in 0..layout.address_bits {
             let previous: AB::Expr = row[layout.address + bit].into();
             let current: AB::Expr = next_row[layout.address + bit].into();
             transition.assert_zero(same.clone() * (current - previous));
         }
 
-        // Exactly one of the two holds on a row, so both read one shared gap witness.
+        // Exactly one holds on a row, so both read one shared gap witness.
         let delta = &next_row[layout.compare_delta..layout.compare_delta + layout.compare_bits];
         let carry = &next_row[layout.compare_carry..layout.compare_carry + layout.compare_bits + 1];
         let nonzero =
@@ -128,7 +144,7 @@ impl RamAir {
             nonzero,
         );
 
-        // A read inside a run returns the value the access before it left.
+        // A read inside a run returns what the access before it left.
         let read = AB::Expr::ONE - next_row[layout.operation].into();
         for component in 0..layout.value_width {
             let previous: AB::Expr = row[layout.value + component].into();
@@ -146,7 +162,6 @@ impl RamAir {
             }
         }
 
-        // A self-contained proof folds its opening rule into the continuity check above.
         if self.statement.boundary.is_segment() {
             let mut opening = transition.when_ne(same, AB::Expr::ONE);
             self.eval_run_start(&mut opening, next_row);
@@ -210,7 +225,7 @@ impl RamAir {
 
         let access = self.tuple::<AB>(builder, layout.access_columns());
         builder.push_bus_interaction(
-            &self.statement.access_bus,
+            channel(&self.statement.access_bus),
             BusDirection::Pull,
             access,
             BusActivation::Always,
@@ -224,16 +239,15 @@ impl RamAir {
         let image = self.tuple::<AB>(builder, layout.image_columns());
         let opening = AB::Expr::ONE - builder.main().current_slice()[layout.same_address].into();
         builder.push_bus_interaction(
-            incoming,
+            channel(incoming),
             BusDirection::Pull,
             image.iter().cloned(),
             BusActivation::Boolean(opening),
         );
 
-        // The value a cell's run closes with becomes an entry of the handed-on image.
         let closing: AB::Expr = builder.main().current_slice()[layout.group_end].into();
         builder.push_bus_interaction(
-            outgoing,
+            channel(outgoing),
             BusDirection::Push,
             image,
             BusActivation::Boolean(closing),
@@ -292,7 +306,6 @@ fn assert_strict_increase<AB: AirBuilder>(
     debug_assert!(carry.len() > bits);
     debug_assert!(nonzero.len() >= bits);
 
-    // An addition starts with nothing carried in.
     builder.assert_zero(enabled.clone() * carry[0]);
 
     for bit in 0..bits {

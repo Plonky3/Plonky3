@@ -18,7 +18,7 @@ pub struct RamAccess<F> {
     pub write: bool,
     /// Cell this access touches.
     pub address: u64,
-    /// Clock reading the machine attached to this access.
+    /// Clock reading the machine attached to this access, which its own chips must order.
     pub time: u64,
     /// Value read, or value written, one field element per component.
     pub value: Vec<F>,

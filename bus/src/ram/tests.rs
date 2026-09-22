@@ -18,7 +18,7 @@ use rand_xoshiro::Xoroshiro128Plus;
 use super::*;
 use crate::{
     BusActivation, BusArgumentError, BusChallenges, BusDebugInstance, BusDebugReport, BusDirection,
-    BusEvaluation, BusInteractionBuilder, BusPlan, BusPlanInput, BusSymbolicBuilder,
+    BusEvaluation, BusInteractionBuilder, BusName, BusPlan, BusPlanInput, BusSymbolicBuilder,
     ReadOnlyMemoryBus, ReadOnlyMemoryInteractionBuilder, ReadOnlyMemoryPlan,
 };
 
@@ -120,7 +120,8 @@ impl<AB: BusInteractionBuilder> Air<AB> for MachineTable {
                 .map(|&column| row[column].into())
                 .collect::<Vec<AB::Expr>>()
         };
-        builder.push_bus_interaction(&self.bus, BusDirection::Push, fields, BusActivation::Always);
+        let name = BusName::try_new(&self.bus).expect("the fixture names a valid channel");
+        builder.push_bus_interaction(name, BusDirection::Push, fields, BusActivation::Always);
     }
 }
 
@@ -153,7 +154,8 @@ impl<AB: BusInteractionBuilder> Air<AB> for ImageTable {
                 .map(|column| row[column].into())
                 .collect::<Vec<AB::Expr>>()
         };
-        builder.push_bus_interaction(&self.bus, self.direction, fields, BusActivation::Always);
+        let name = BusName::try_new(&self.bus).expect("the fixture names a valid channel");
+        builder.push_bus_interaction(name, self.direction, fields, BusActivation::Always);
     }
 }
 
@@ -1108,13 +1110,13 @@ fn an_opening_read_is_bound_to_the_inherited_image() {
 }
 
 #[test]
-fn a_segment_run_opened_by_a_write_is_refused() {
-    let statement = segment(2, 2, 1);
+fn a_segment_run_opened_by_a_write_is_refused_on_any_row() {
+    let two = segment(2, 2, 1);
 
     // A write opening a run would declare the value it stores, not the one it inherited.
     assert_eq!(
         RamTrace::build(
-            &statement,
+            &two,
             &[
                 RamAccess::write(1, 0, value(11)),
                 RamAccess::read(1, 1, value(11)),
@@ -1128,18 +1130,38 @@ fn a_segment_run_opened_by_a_write_is_refused() {
         RamAccess::read(1, 0, value(11)),
         RamAccess::write(1, 1, value(13)),
     ];
-    let mut trace = RamTrace::build(&statement, &honest).expect("the run opens with a read");
-    let layout = RamLayout::new(&statement).expect("the fixture statement is well formed");
-    let air = air(statement);
-    assert!(air_accepts(&air, &trace));
-
+    let mut trace = RamTrace::build(&two, &honest).expect("the run opens with a read");
+    let layout = RamLayout::new(&two).expect("the fixture statement is well formed");
+    let first = air(two);
+    assert!(air_accepts(&first, &trace));
     trace.row_mut(0)[layout.operation] = F::ONE;
+    assert!(buses_balance(&first, &trace));
+    assert!(!air_accepts(&first, &trace));
 
-    // Precondition: the multiset claim still holds.
-    assert!(buses_balance(&air, &trace));
+    // Every later run owes the same, and only the transition copy of the rule reaches those.
+    let four = segment(4, 2, 1);
+    let accesses = vec![
+        RamAccess::read(1, 0, value(11)),
+        RamAccess::write(1, 1, value(13)),
+        RamAccess::read(2, 2, value(17)),
+        RamAccess::read(2, 3, value(17)),
+    ];
+    let mut later = RamTrace::build(&four, &accesses).expect("every run opens with a read");
+    let layout = RamLayout::new(&four).expect("the fixture statement is well formed");
+    let later_air = air(four);
+    assert!(air_accepts(&later_air, &later));
 
-    // An opening write would declare a stored value where an inherited one belongs.
-    assert!(!air_accepts(&air, &trace));
+    // Row two opens the second cell's run, so row zero's copy of the rule never sees it.
+    assert_eq!(later.row(2)[layout.same_address], F::ZERO);
+    later.row_mut(2)[layout.operation] = F::ONE;
+
+    // Precondition: the ordering, continuity and marker columns are all untouched.
+    assert_eq!(later.row(3)[layout.same_address], F::ONE);
+    assert_eq!(later.row(2)[layout.value], later.row(3)[layout.value]);
+    assert_eq!(later.row(3)[layout.group_end], F::ONE);
+    assert!(buses_balance(&later_air, &later));
+
+    assert!(!air_accepts(&later_air, &later));
 }
 
 #[test]

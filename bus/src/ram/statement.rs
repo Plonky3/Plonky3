@@ -8,7 +8,7 @@ use p3_field::Field;
 use p3_security::SecurityTerm;
 
 use super::RamError;
-use crate::BusPlan;
+use crate::{BusName, BusPlan};
 
 /// Largest cell number or clock width this argument decomposes into digits.
 pub const MAX_RAM_BIT_WIDTH: usize = 64;
@@ -92,7 +92,7 @@ impl RamStatement {
     /// # Errors
     ///
     /// - An unsupported shape.
-    /// - One channel name used in two roles.
+    /// - A channel name outside the alphabet, or one used in two roles.
     pub fn validate(&self) -> Result<(), RamError> {
         if self.access_count < MIN_RAM_ACCESS_COUNT {
             return Err(RamError::TooFewAccesses {
@@ -128,6 +128,11 @@ impl RamStatement {
         names.push(self.access_bus.as_str());
         names.extend(self.boundary.image_buses().into_iter().flatten());
         for (position, name) in names.iter().enumerate() {
+            // Checking the name here means no declaration ever has to check it again.
+            BusName::try_new(name).map_err(|error| RamError::BusName {
+                name: (*name).to_string(),
+                error,
+            })?;
             if names[..position].contains(name) {
                 return Err(RamError::DuplicateBus {
                     name: (*name).to_string(),
@@ -190,6 +195,11 @@ impl RamStatement {
             .ok_or(RamError::TrivialChallengeField)?;
         Ok(bus_plan.security_term(field_bits))
     }
+}
+
+/// Reads back a channel name the statement already checked.
+pub(super) fn channel(name: &str) -> BusName<'_> {
+    BusName::try_new(name).expect("a validated statement holds only well-formed channel names")
 }
 
 /// Checks that one named channel exists and carries the expected payload width.

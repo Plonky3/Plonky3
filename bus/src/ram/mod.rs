@@ -20,9 +20,7 @@
 //!
 //! # What the machine owes
 //!
-//! A clock reading is the machine's, and nothing here can check it against real time.
-//!
-//! A machine has to constrain its own readings to rise along its execution.
+//! Three obligations sit outside the constraints, and [`RamAir`] spells them out.
 
 mod air;
 mod error;
