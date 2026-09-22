@@ -470,7 +470,7 @@ mod blocked {
     /// The three exchanges swap the three-bit byte and bit indices. GFNI reads output rows in
     /// reverse order, so the caller reverses the resulting row bytes afterward.
     #[inline]
-    fn transpose8(mut value: u64) -> u64 {
+    const fn transpose8(mut value: u64) -> u64 {
         let mut exchange = (value ^ (value >> 7)) & 0x00aa_00aa_00aa_00aa;
         value ^= exchange ^ (exchange << 7);
         exchange = (value ^ (value >> 14)) & 0x0000_cccc_0000_cccc;
@@ -484,7 +484,7 @@ mod blocked {
     /// `affine_blocks` above remains the static reference constructor. Keeping this candidate
     /// separate lets native tests compare every generated word against that independent oracle.
     #[inline]
-    fn affine_blocks_runtime(cols: &[u128; 128]) -> [[u64; 16]; 16] {
+    const fn affine_blocks_runtime(cols: &[u128; 128]) -> [[u64; 16]; 16] {
         let mut blocks = [[0u64; 16]; 16];
         let mut j = 0;
         while j < 16 {
@@ -511,7 +511,7 @@ mod blocked {
     impl PreparedMap {
         /// Builds the GFNI blocks for one runtime coordinate map.
         #[inline]
-        pub(super) fn new(columns: [u128; 128]) -> Self {
+        pub(super) const fn new(columns: [u128; 128]) -> Self {
             Self {
                 blocks: affine_blocks_runtime(&columns),
                 columns,
@@ -796,7 +796,7 @@ pub(crate) fn try_map_tower_coordinates_into(
         for (source, destination) in input[processed..].iter().zip(&mut output[processed..]) {
             *destination = image(*source, 128, &prepared.columns);
         }
-        return true;
+        true
     }
 
     #[cfg(not(all(
