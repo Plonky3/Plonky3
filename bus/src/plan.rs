@@ -5,6 +5,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use core::cmp::Reverse;
 
+use hashbrown::HashSet;
 use p3_air::symbolic::{BaseEntry, BaseLeaf, SymbolicExpr, SymbolicExpression};
 use p3_field::Field;
 use thiserror::Error;
@@ -573,8 +574,14 @@ fn validate_expression<F: Field>(
     location: BusExpressionLocation,
     expression: &SymbolicExpression<F>,
 ) -> Result<(), BusPlanError> {
+    // Arithmetic nodes share their operands, so the expression is a graph rather than a tree.
+    // Walking it per path costs time exponential in the depth, which a bit recomposition reaches immediately.
+    let mut seen = HashSet::<*const SymbolicExpression<F>>::new();
     let mut pending = alloc::vec![expression];
     while let Some(expression) = pending.pop() {
+        if !seen.insert(core::ptr::from_ref(expression)) {
+            continue;
+        }
         match expression {
             SymbolicExpr::Leaf(BaseLeaf::Variable(variable)) => {
                 let access = match variable.entry {
@@ -1061,6 +1068,48 @@ mod tests {
                 interactions: &ordinary,
             }]),
             Err(BusPlanError::HeightOverflow { air: 0 })
+        ));
+    }
+
+    #[test]
+    fn a_shared_operand_graph_is_walked_once_per_node_rather_than_once_per_path() {
+        // Fixture state: forty doublings share their operand, giving eighty nodes and 2^40 root-to-leaf paths.
+        const DEPTH: usize = 40;
+        let deep = |entry: BaseEntry| {
+            let mut field = variable(entry, 0);
+            for _ in 0..DEPTH {
+                field = field.clone() + field;
+            }
+            vec![SymbolicBusInteraction {
+                bus_name: "deep".to_string(),
+                direction: BusDirection::Push,
+                fields: vec![field],
+                activation: BusActivation::Always,
+            }]
+        };
+
+        // A path-wise walk would not finish, so reaching the assertion at all is the property under test.
+        let accepted = deep(BaseEntry::Main { offset: 0 });
+        assert!(
+            BusPlan::build(&[BusPlanInput {
+                log_height: 1,
+                interactions: &accepted,
+            }])
+            .unwrap()
+            .is_some()
+        );
+
+        // Skipping repeated nodes must not skip the rejection buried under the same sharing.
+        let rejected = deep(BaseEntry::Main { offset: 1 });
+        assert!(matches!(
+            BusPlan::build(&[BusPlanInput {
+                log_height: 1,
+                interactions: &rejected,
+            }]),
+            Err(BusPlanError::UnsupportedExpression {
+                access: UnsupportedBusAccess::MainOffset(1),
+                ..
+            })
         ));
     }
 }

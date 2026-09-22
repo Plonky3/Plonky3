@@ -16,6 +16,7 @@ p3-field.workspace = true
 p3-security.workspace = true
 p3-sumcheck.workspace = true
 
+hashbrown.workspace = true
 serde = { workspace = true, features = ["derive", "alloc"] }
 thiserror.workspace = true
 
@@ -27,6 +28,7 @@ p3-keccak.workspace = true
 p3-matrix.workspace = true
 
 criterion.workspace = true
+proptest.workspace = true
 rand.workspace = true
 rand_xoshiro.workspace = true
 
