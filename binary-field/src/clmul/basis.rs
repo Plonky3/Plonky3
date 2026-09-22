@@ -765,7 +765,13 @@ mod blocked {
     }
 }
 
-/// A runtime map must cover enough entries to amortize preparing its 256 GFNI affine blocks.
+/// The shortest batch a runtime map is sent to the prepared GFNI kernel for.
+///
+/// Preparing the 256 affine blocks is a small fixed cost next to applying them to this many
+/// entries, so the value is not set by amortizing preparation.
+/// It is a conservative floor at which the GFNI route beats the byte-table route, and shorter
+/// batches keep the byte tables until constructor-inclusive and whole-proof measurements, such as
+/// the forced-kernel benchmark in this file, justify a lower value.
 pub(crate) const DYNAMIC_MAP_THRESHOLD: usize = 4096;
 
 /// Tries to apply an arbitrary runtime 128 × 128 binary map with the prepared GFNI kernel.
