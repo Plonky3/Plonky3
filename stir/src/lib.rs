@@ -30,7 +30,8 @@
 //!   (`s = 1` for Johnson, `s = 2` for capacity); [`config::StirConfig::new`] does not search
 //!   for the smallest valid `s`.
 //! - **Proximity-gaps formulas from later work.** Johnson-bound proximity gaps use the
-//!   tighter \[BCSS25\] bound rather than \[BCI+20\].
+//!   \[DKT26\] bound ([2026/2056](https://eprint.iacr.org/2026/2056), Theorem 5.12
+//!   and §7.2) through `p3-security`.
 //! - **Round-0 joint queries-combination bound (CB only).**
 //!   The capacity-bound initial eta extends the paper's prox-gap formula with a joint
 //!   queries-combination × prox-gap term, using a closed-form upper bound on `t_0` in place

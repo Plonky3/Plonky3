@@ -181,7 +181,7 @@ pub(crate) fn combine_requirement(
     Ok(Some((classes.len(), ell)))
 }
 
-/// Keep BCSS25's integer multiplicity below usize::MAX in *every* PCS stage.
+/// Keep the Johnson interpolation multiplicity below usize::MAX in *every* PCS stage.
 /// Use at most 2^(word_bits-1), which remains exactly representable in f64.
 pub(crate) fn minimum_eta(assumption: SecurityAssumption, log_inv_rate: usize) -> f64 {
     if assumption == SecurityAssumption::JohnsonBound {
@@ -198,10 +198,9 @@ pub(crate) fn minimum_eta(assumption: SecurityAssumption, log_inv_rate: usize) -
 /// - The bit length of the field order is `floor(log2(|E|)) + 1`, rounding `log2(|E|)` up.
 /// - Proximity-gap bounds spend the field size as a denominator, so rounding up overcredits.
 /// - Subtracting one gives `floor(log2(|E|))`, a rigorous lower bound.
-/// - Johnson reserves one further bit, since its bound keeps only BCSS25's dominant term.
-/// - Twice that term upper-bounds the full expression for `m >= 3`, `rho <= 1`, `N >= 1`.
-/// - The omitted terms over the dominant one sum to at most `3 / (m + 1/2)^4 < 1`.
-/// - A factor of two in the error is one bit of field size, so one bit covers every term.
+/// - Johnson retains its existing extra bit of conservative reserve. The DKT26
+///   proximity-gap bound includes all terms, so it no longer needs this bit to cover
+///   terms omitted from the former BCSS25 dominant-term approximation.
 ///
 /// Both adjustments only shrink the field size, and every bound in the schedule grows with it.
 ///

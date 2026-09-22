@@ -234,17 +234,17 @@ mod tests {
         );
         assert_eq!(
             johnson.source.mca.classification,
-            HidingBoundClassification::Approximation
+            HidingBoundClassification::Proven
         );
         assert_eq!(
             johnson.gamma_round.combined.classification,
-            HidingBoundClassification::Approximation
+            HidingBoundClassification::Proven
         );
         assert_eq!(
             johnson.round_by_round.classification,
-            HidingBoundClassification::Approximation
+            HidingBoundClassification::Proven
         );
-        assert_eq!(johnson.round_by_round.proven_bits(), None);
+        assert!(johnson.round_by_round.proven_bits().is_some());
 
         let capacity =
             stock_config(SecurityAssumption::CapacityBound).hiding_base_case_security_report();

@@ -16,10 +16,15 @@
 //!   Reed-Solomon codes*. <https://eprint.iacr.org/2025/2110>
 //! - **\[BCGM26\]** Bordage, Chiesa, Guan, Manzur. *All Polynomial Generators
 //!   Preserve Distance with Mutual Correlated Agreement*. CCC 2026.
+//! - **\[DKT26\]** Dao, Kominers, Thaler. *Reed–Solomon Codes Beyond Johnson*.
+//!   Theorem 5.12 and Appendix B.1–B.2.
+//!   <https://eprint.iacr.org/2026/2056>
 //!
 //! \[BCSS25\] improves the Johnson-bound proximity gap from `O(n²/η⁷)` to
 //! `O(n/η⁵)`, enabling 128-bit provable security with degree-5 extensions
 //! of small prime fields (e.g. KoalaBear).
+//! DKT26 Theorem 5.12 gives the line-MCA count used here as
+//! `8·n·(m + 1/2)^3/(3·rho_minus)` at the finite Johnson rate.
 
 use alloc::format;
 use alloc::string::String;
@@ -28,17 +33,6 @@ use core::fmt::Display;
 use core::str::FromStr;
 
 use serde::Serialize;
-
-/// \[BCSS25\] Theorem 1.5 dominant term, in bits:
-/// `log_2(2·(m + 1/2)⁵ / (3·ρ^{3/2}) · n)`. Shared by
-/// [`SecurityAssumption::prox_gaps_error`] (fixed `m = 10`) and
-/// [`SecurityAssumption::prox_gaps_error_jb_at_m`] (explicit `m`).
-fn jb_prox_gaps_dominant_term_bits(log_degree: usize, log_inv_rate: usize, m: usize) -> f64 {
-    let log_n = (log_degree + log_inv_rate) as f64;
-    let constant = libm::log2(2. * libm::pow(m as f64 + 0.5, 5.) / 3.);
-    let log_rho_neg_3_2 = 1.5 * log_inv_rate as f64;
-    log_n + constant + log_rho_neg_3_2
-}
 
 /// Proximity regime selector for Reed–Solomon-based IOPs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -50,9 +44,10 @@ pub enum SecurityAssumption {
     ///
     /// Reed-Solomon mutual correlated agreement is proven at this radius in \[Hab25\] and \[BCGM26\].
     ///
-    /// The proximity-gap error uses \[BCSS25\] Theorem 1.5:
-    /// `a > (2(m + 1/2)⁵ + 3(m + 1/2)γρ) / (3ρ^{3/2}) · n + (m + 1/2)/√ρ`,
-    /// asymptotically `O(n/η⁵)` — a `n·η²` improvement over [BCI+20].
+    /// The line-MCA proximity-gap error uses \[DKT26\] Theorem 5.12 and
+    /// Appendix B.1–B.2: `a < 8·n·(m + 1/2)^3/(3·rho_minus)` exceptional
+    /// challenges, with `rho_minus = (k - 1)/n`. This finite-rate bound is
+    /// the Johnson-regime improvement applied by this crate.
     JohnsonBound,
 
     /// Capacity bound at `δ = 1 − ρ − η`, with `η = ρ / 20`. Requires
@@ -137,15 +132,19 @@ impl SecurityAssumption {
     /// Proximity-gap error in bits for combining `num_functions` functions
     /// at the regime's distance.
     ///
-    /// The Johnson-bound branch uses \[BCSS25\] Theorem 1.5 at the fixed
-    /// safety choice `m = max(ceil(sqrt(rho)/(2*eta)), 3) = 10` (η = √ρ/20,
-    /// see [`Self::log_eta`]). Only the dominant term
-    /// `2·(m + 1/2)⁵ / (3·ρ^{3/2}) · n` is kept; the additive `(m + 1/2)/√ρ`
-    /// and sub-dominant `3·(m + 1/2)·γ·ρ` terms are negligible at `m = 10`.
+    /// The Johnson-bound branch uses the DKT26 Theorem 5.12 line-MCA bound
+    /// at the fixed safety choice `m = max(ceil(sqrt(rho)/(2*eta)), 3) = 10`
+    /// (η = √ρ/20, see [`Self::log_eta`]). The shared line-count helper
+    /// implements `8·n·(m + 1/2)^3/(3·rho_minus)` from Theorem 5.12 and
+    /// Appendix B.1–B.2, with the finite `rho_minus = (k - 1)/n`.
     /// Use [`Self::prox_gaps_error_jb_at_m`] when the surrounding regime
     /// decodes at a different explicit `m` (e.g. FRI's `best_m`) — the
     /// fixed `m = 10` here is a WHIR-style default, not necessarily the `m`
     /// the caller's list-decoding regime actually operates at.
+    ///
+    /// # Panics
+    /// Panics when `num_functions < 2`: this API bounds a nontrivial batching
+    /// challenge. Callers must handle empty and singleton batches separately.
     #[must_use]
     pub fn prox_gaps_error(
         &self,
@@ -169,10 +168,13 @@ impl SecurityAssumption {
     /// A caller deriving its own schedule of `eta` values across a protocol (STIR's per-round
     /// bisection, for instance) needs the proximity-gap error at each of those working
     /// points, not just at the regime's fixed default. On [`SecurityAssumption::JohnsonBound`]
-    /// this derives the \[BCSS25\] proximity parameter `m = max(ceil(√ρ / (2η)), 3)` from
+    /// this derives the DKT26 proximity parameter `m = max(ceil(√ρ / (2η)), 3)` from
     /// `log_eta` and defers to [`Self::prox_gaps_error_jb_at_m`] — at
     /// `log_eta = self.log_eta(log_inv_rate)` that derivation reduces to exactly `m = 10`,
     /// [`Self::prox_gaps_error`]'s fixed safety choice.
+    ///
+    /// # Panics
+    /// Panics when `num_functions < 2`, as in [`Self::prox_gaps_error`].
     #[must_use]
     pub fn prox_gaps_error_at_log_eta(
         &self,
@@ -195,11 +197,7 @@ impl SecurityAssumption {
                 field_size_bits as f64 - (error + num_functions_1_log)
             }
 
-            // From Theorem 1.5 in [BCSS25] "On Proximity Gaps for Reed-Solomon Codes":
-            //
-            // For gamma < J(delta) - eta, the number of exceptional z's is bounded by:
-            //   a > (2(m + 1/2)^5 + 3(m + 1/2)*gamma*rho) / (3*rho^(3/2)) * n + (m + 1/2) / sqrt(rho)
-            //
+            // DKT26 Theorem 5.12 and Appendix B.1–B.2, with
             // m = max(ceil(sqrt(rho)/(2*eta)), 3).
             Self::JohnsonBound => {
                 let log_sqrt_rho_over_2eta = -(log_inv_rate as f64) / 2. - 1. - log_eta;
@@ -222,22 +220,34 @@ impl SecurityAssumption {
         }
     }
 
-    /// Johnson-bound proximity-gap error (\[BCSS25\] Theorem 1.5, dominant
-    /// term) at an explicit proximity parameter `m`, rather than the fixed
-    /// `m = 10` safety choice [`Self::prox_gaps_error`] uses.
-    ///
-    /// Only the dominant term `2·(m + 1/2)⁵ / (3·ρ^{3/2}) · n` is kept; see
-    /// [`Self::prox_gaps_error`] for the full derivation and the terms this
-    /// drops. Those terms remain negligible for any `m` in FRI's searched
-    /// range (`m ∈ [3, 1000]`): the dropped `3·(m + 1/2)·γ·ρ` sub-term is
-    /// smaller than the kept `2·(m + 1/2)⁵` term by a factor of
-    /// `2·(m + 1/2)⁴ / (3·γ)`, which grows with `m`.
+    /// Johnson-bound line-MCA error at an explicit proximity parameter `m`,
+    /// rather than the fixed `m = 10` safety choice [`Self::prox_gaps_error`]
+    /// uses. DKT26 Theorem 5.12 and Appendix B.1–B.2 give the exceptional
+    /// line count `C = 8·n·(m + 1/2)^3/(3·rho_minus)`. The helper excludes the
+    /// curve-degree factor, so a batch of `num_functions` words contributes
+    /// one factor of `num_functions - 1` here.
     ///
     /// For use when the caller already knows the `m` the surrounding
     /// list-decoding regime decodes at (e.g. FRI's `best_m` from
     /// [`crate::fri::best_ldr_m`]) and needs the batch-combination term
     /// evaluated at that same radius rather than the WHIR-style fixed
     /// safety margin.
+    ///
+    /// # Decoding-radius contract
+    /// The caller must use agreement at least
+    /// `alpha = (1 + 1/(2m)) * sqrt(k/n)`, where `k = 2^log_degree`.
+    /// Writing `rho_minus = (k - 1)/n`, this gives
+    /// `eta0 = alpha - sqrt(rho_minus) >= sqrt(rho_minus)/(2m)`.
+    /// Thus the theorem's minimum `max(3, ceil(sqrt(rho_minus)/(2*eta0)))`
+    /// is at most the supplied `m >= 3`; Appendix B.1's interpolant remains
+    /// valid, and the closed exceptional-count bound grows with `m`.
+    /// Supplying a smaller `m` than the surrounding radius permits is unsound.
+    ///
+    /// Unsupported `m` or inverse rate returns `-∞` security bits through the
+    /// shared helper. The batch-size precondition is checked separately.
+    ///
+    /// # Panics
+    /// Panics when `num_functions < 2`, as in [`Self::prox_gaps_error`].
     #[must_use]
     pub fn prox_gaps_error_jb_at_m(
         log_degree: usize,
@@ -250,7 +260,8 @@ impl SecurityAssumption {
             num_functions >= 2,
             "num_functions must be >= 2 to compute proximity gaps error",
         );
-        let error = jb_prox_gaps_dominant_term_bits(log_degree, log_inv_rate, m);
+        let error =
+            crate::proximity::johnson_exceptional_line_count_log2(log_degree, log_inv_rate, m);
         let num_functions_1_log = libm::log2(num_functions as f64 - 1.);
         field_size_bits as f64 - (error + num_functions_1_log)
     }
@@ -372,6 +383,18 @@ mod tests {
     }
 
     #[test]
+    #[should_panic(expected = "num_functions must be >= 2")]
+    fn explicit_johnson_gap_rejects_a_singleton_batch() {
+        let _ = SecurityAssumption::prox_gaps_error_jb_at_m(1, 1, 64, 1, 3);
+    }
+
+    #[test]
+    #[should_panic(expected = "num_functions must be >= 2")]
+    fn explicit_johnson_gap_rejects_an_empty_batch() {
+        let _ = SecurityAssumption::prox_gaps_error_jb_at_m(1, 1, 64, 0, 3);
+    }
+
+    #[test]
     fn test_ud_errors() {
         let assumption = SecurityAssumption::UniqueDecoding;
 
@@ -413,24 +436,17 @@ mod tests {
         let computed_list_size = assumption.list_size_bits(log_degree, log_inv_rate);
         assert!((real_list_size.log2() - computed_list_size).abs() < 0.01);
 
-        // Prox gaps - Updated to use Theorem 1.5 from [BCSS25]
-        //
-        // From "On Proximity Gaps for Reed-Solomon Codes" (eprint 2025/2055):
-        // With eta = sqrt(rho)/20, m = 10, the error bound is:
-        //   a ~ (2 * 10.5^5) / (3 * rho^(3/2)) * n
-        //
-        // where n = 2^(log_degree + log_inv_rate)
+        // Proximity gaps use DKT26 Theorem 5.12 and Appendix B.1–B.2.
+        // At eta = sqrt(rho)/20, m = 10, the line count is
+        //   C = 8 * n * (m + 1/2)^3 / (3 * rho_minus),
+        // where rho_minus = (2^log_degree - 1) / n.
         let computed_error =
             assumption.prox_gaps_error(log_degree, log_inv_rate, field_size_bits, 2);
 
         // n = 2^(log_degree + log_inv_rate) = 2^22
         let n = (1_u64 << (log_degree + log_inv_rate)) as f64;
-        // rho = rate = 2^(-log_inv_rate) = 0.25
-        let rho = rate;
-        // Constant from Theorem 1.5: (2 * 10.5^5) / 3 ~ 85085.44
-        let constant = 2. * 10.5_f64.powi(5) / 3.;
-        // a ~ constant * n / rho^(3/2)
-        let real_error_non_log = constant * n / rho.powf(1.5);
+        let rho_minus = ((1_u64 << log_degree) - 1) as f64 / n;
+        let real_error_non_log = 8. * n * 10.5_f64.powi(3) / (3. * rho_minus);
         let real_error = field_size_bits as f64 - real_error_non_log.log2();
 
         assert!(
@@ -519,11 +535,9 @@ mod tests {
 
     #[test]
     fn jb_prox_gap_strictly_improves_over_old_bound() {
-        // gap = log_2((m + 1/2)^2 / 2) + log_2(n) bits over [BCI+20], with
-        // log_2(55.125) ~= 5.78 at the safety choice m = 10.
+        // Compare the DKT26 line count against the [BCI+20] baseline at the
+        // same finite degree and nominal rate.
         let jb = SecurityAssumption::JohnsonBound;
-        let leading_ratio_log = libm::log2(10.5_f64.powi(2) / 2.0);
-
         for log_degree in 10..=25 {
             for log_inv_rate in 1..=4 {
                 let new_bits =
@@ -538,8 +552,14 @@ mod tests {
                 );
 
                 let log_n = (log_degree + log_inv_rate) as f64;
+                let rho = 2.0_f64.powi(-(log_inv_rate as i32));
+                let rho_minus = rho * (1.0 - 2.0_f64.powi(-(log_degree as i32)));
+                let new_count_log =
+                    libm::log2(8.0 * 2.0_f64.powf(log_n) * 10.5_f64.powi(3) / (3.0 * rho_minus));
+                let old_count_log =
+                    libm::log2(10.5_f64.powi(7) / 3.0) + 2.0 * log_n + 1.5 * log_inv_rate as f64;
                 let observed = new_bits - old_bits;
-                let expected = log_n + leading_ratio_log;
+                let expected = old_count_log - new_count_log;
 
                 assert!(
                     (observed - expected).abs() < 1e-9,
@@ -599,7 +619,7 @@ mod tests {
                 10,
                 [
                     4.321928094887362,
-                    122.12337538682735,
+                    127.4066006621302,
                     282.35614381022526,
                     149.67807190511263,
                     144.28575448233389,
@@ -611,7 +631,7 @@ mod tests {
                 20,
                 [
                     4.321928094887362,
-                    112.12337538682735,
+                    117.40800885652301,
                     262.35614381022526,
                     149.67807190511263,
                     144.28575448233389,
@@ -623,7 +643,7 @@ mod tests {
                 24,
                 [
                     4.321928094887362,
-                    108.12337538682735,
+                    113.40801014639354,
                     254.35614381022526,
                     149.67807190511263,
                     144.28575448233389,
@@ -635,7 +655,7 @@ mod tests {
                 10,
                 [
                     5.321928094887362,
-                    119.62337538682735,
+                    125.4066006621302,
                     280.35614381022526,
                     148.67807190511263,
                     143.28575448233389,
@@ -647,7 +667,7 @@ mod tests {
                 20,
                 [
                     5.321928094887362,
-                    109.62337538682735,
+                    115.40800885652301,
                     260.35614381022526,
                     148.67807190511263,
                     143.28575448233389,
@@ -659,7 +679,7 @@ mod tests {
                 24,
                 [
                     5.321928094887362,
-                    105.62337538682735,
+                    111.40801014639355,
                     252.35614381022526,
                     148.67807190511263,
                     143.28575448233389,
@@ -671,7 +691,7 @@ mod tests {
                 10,
                 [
                     6.321928094887362,
-                    117.12337538682735,
+                    123.4066006621302,
                     278.35614381022526,
                     147.67807190511263,
                     142.28575448233389,
@@ -683,7 +703,7 @@ mod tests {
                 20,
                 [
                     6.321928094887362,
-                    107.12337538682735,
+                    113.40800885652301,
                     258.35614381022526,
                     147.67807190511263,
                     142.28575448233389,
@@ -695,7 +715,7 @@ mod tests {
                 24,
                 [
                     6.321928094887362,
-                    103.12337538682735,
+                    109.40801014639355,
                     250.35614381022526,
                     147.67807190511263,
                     142.28575448233389,
@@ -707,7 +727,7 @@ mod tests {
                 10,
                 [
                     7.321928094887362,
-                    114.62337538682735,
+                    121.4066006621302,
                     276.35614381022526,
                     146.67807190511263,
                     141.28575448233389,
@@ -719,7 +739,7 @@ mod tests {
                 20,
                 [
                     7.321928094887362,
-                    104.62337538682735,
+                    111.40800885652301,
                     256.35614381022526,
                     146.67807190511263,
                     141.28575448233389,
@@ -731,7 +751,7 @@ mod tests {
                 24,
                 [
                     7.321928094887362,
-                    100.62337538682735,
+                    107.40801014639355,
                     248.35614381022526,
                     146.67807190511263,
                     141.28575448233389,
@@ -743,7 +763,7 @@ mod tests {
                 10,
                 [
                     11.321928094887362,
-                    104.62337538682735,
+                    113.4066006621302,
                     268.35614381022526,
                     142.67807190511263,
                     137.28575448233389,
@@ -755,7 +775,7 @@ mod tests {
                 20,
                 [
                     11.321928094887362,
-                    94.62337538682735,
+                    103.40800885652301,
                     248.35614381022526,
                     142.67807190511263,
                     137.28575448233389,
@@ -767,7 +787,7 @@ mod tests {
                 24,
                 [
                     11.321928094887362,
-                    90.62337538682735,
+                    99.40801014639355,
                     240.35614381022526,
                     142.67807190511263,
                     137.28575448233389,
@@ -1072,7 +1092,7 @@ mod tests {
         // `f64 -> usize` round-trip whose input lands one ULP *below* 10 — on the correct side
         // of the `ceil`, but only just. Reassociating the `log_eta` expression could push the
         // residue the other way, making `m = 11` and moving every JB proximity-gap error by
-        // about 0.65 bits, with nothing else in the suite noticing.
+        // about 0.39 bits, with nothing else in the suite noticing.
         let jb = SecurityAssumption::JohnsonBound;
         for log_inv_rate in 0..=32 {
             for log_degree in [10, 20, 24] {
