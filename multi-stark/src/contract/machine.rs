@@ -152,6 +152,12 @@ where
         self.tables.iter().any(TableDeclaration::has_lookups)
     }
 
+    /// Whether any table moves a tuple across a bus.
+    #[must_use]
+    pub fn has_buses(&self) -> bool {
+        self.tables.iter().any(TableDeclaration::has_buses)
+    }
+
     /// Total number of indexed reads across every table.
     #[must_use]
     pub fn num_indexed_reads(&self) -> usize {
@@ -383,6 +389,7 @@ where
         };
 
         section("lookup", proof.lookup.is_some(), self.has_lookups())?;
+        section("bus", proof.bus.is_some(), self.has_buses())?;
         section(
             "preprocessed opening",
             proof.preprocessed_opening.is_some(),

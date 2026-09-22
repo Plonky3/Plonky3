@@ -1,6 +1,6 @@
 //! One byte string naming everything a table asserts.
 //!
-//! Two tables that differ anywhere a prover can observe produce different strings.
+//! Two tables differing anywhere the verifying key does not already bind produce different strings.
 //!
 //! Nothing here is ever decoded, so the string only has to be injective.
 
@@ -9,6 +9,7 @@ use alloc::vec::Vec;
 use hashbrown::HashMap;
 use p3_air::symbolic::{BaseEntry, BaseLeaf, ExtEntry, ExtLeaf, SymbolicExpr, SymbolicExpression};
 use p3_air::{Air, BaseAir, BoundaryEnd};
+use p3_bus::{BusActivation, BusDirection, BusSymbolicBuilder};
 use p3_field::{ExtensionField, Field, RawDataSerializable};
 use p3_lookup::{InteractionSymbolicBuilder, TraceWindow};
 
@@ -16,17 +17,22 @@ use p3_lookup::{InteractionSymbolicBuilder, TraceWindow};
 ///
 /// The two fields come first, so a table read over one pair never matches another.
 ///
-/// A symbolic pass runs the evaluation alone, so what a table declares beside it goes in here:
+/// A symbolic pass over the evaluation misses what a table declares beside it, so that goes in too:
 ///
 /// - the cells the backend pins to public values;
 /// - the periodic tables;
 /// - the windows opened at the next row;
-/// - the degree hint.
+/// - the degree hint;
+/// - every bus declaration, which the interaction pass throws away.
 ///
 /// The contents of a fixed trace stay out, because the verifying key is what binds those.
 ///
 /// Mutually exclusive interactions are left out, because this backend refuses them outright.
-pub(super) fn encode<F, EF, A>(air: &A, builder: &InteractionSymbolicBuilder<F, EF>) -> Vec<u8>
+pub(super) fn encode<F, EF, A>(
+    air: &A,
+    builder: &InteractionSymbolicBuilder<F, EF>,
+    buses: &BusSymbolicBuilder<F, EF>,
+) -> Vec<u8>
 where
     F: Field,
     EF: ExtensionField<F>,
@@ -113,6 +119,27 @@ where
             }
             arena.u32(count.weight());
             arena.expression(multiplicities.next().expect("one per tuple"));
+        }
+    }
+
+    let declarations = buses.interactions();
+    arena.count(declarations.len());
+    for declaration in declarations {
+        arena.text(&declaration.bus_name);
+        arena.byte(match declaration.direction {
+            BusDirection::Push => 0,
+            BusDirection::Pull => 1,
+        });
+        arena.count(declaration.fields.len());
+        for field in &declaration.fields {
+            arena.expression(field);
+        }
+        match &declaration.activation {
+            BusActivation::Always => arena.byte(0),
+            BusActivation::Boolean(selector) => {
+                arena.byte(1);
+                arena.expression(selector);
+            }
         }
     }
 

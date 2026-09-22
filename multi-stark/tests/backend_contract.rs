@@ -4,6 +4,7 @@ use core::borrow::Borrow;
 
 use p3_air::{Air, AirBuilder, BaseAir, BoundaryEnd, BoundaryPublic, WindowAccess};
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
+use p3_bus::{BusActivation, BusDirection, BusInteractionBuilder, BusSymbolicBuilder};
 use p3_challenger::DuplexChallenger;
 use p3_dft::Radix2DFTSmallBatch;
 use p3_field::extension::BinomialExtensionField;
@@ -63,15 +64,27 @@ const SECURITY_TARGET: usize = 20;
 /// Collision resistance the primitives of this configuration supply.
 const COLLISION_BITS: usize = 100;
 
-const FIXTURE: &str = "tests/fixtures/backend_contract_v1.envelope";
+const FIXTURE: &str = "tests/fixtures/backend_contract_v2.envelope";
 
 /// Body revision the fixture on disk was written under.
-const FIXTURE_REVISION: u16 = 1;
+const FIXTURE_REVISION: u16 = 2;
+
+/// The fixture the revision before this one, kept so its refusal stays covered.
+const RETIRED_FIXTURE: &str = "tests/fixtures/backend_contract_v1.envelope";
+
+/// Body revision that retired fixture was written under.
+const RETIRED_REVISION: u16 = 1;
+
+/// Digest of the retired fixture, pinned for the same reason as the current one.
+const RETIRED_DIGEST: [u8; 32] = [
+    221, 124, 62, 217, 215, 200, 177, 190, 217, 133, 169, 60, 188, 91, 111, 34, 191, 182, 104, 149,
+    158, 140, 125, 78, 86, 192, 161, 83, 7, 24, 161, 71,
+];
 
 /// Digest of the fixture bytes, pinned so a silent regeneration cannot pass.
 const FIXTURE_DIGEST: [u8; 32] = [
-    221, 124, 62, 217, 215, 200, 177, 190, 217, 133, 169, 60, 188, 91, 111, 34, 191, 182, 104, 149,
-    158, 140, 125, 78, 86, 192, 161, 83, 7, 24, 161, 71,
+    67, 120, 119, 33, 178, 5, 117, 117, 239, 112, 28, 25, 240, 230, 83, 11, 241, 141, 72, 44, 47,
+    112, 118, 245, 54, 155, 7, 227, 20, 32, 152, 65,
 ];
 
 /// A commitment scheme that binds the trace without hiding it.
@@ -304,6 +317,61 @@ impl<AB: AirBuilder> Air<AB> for PinnedFibAir {
     }
 }
 
+/// The same two cells again, wired to the other public value each.
+struct SwappedPinFibAir;
+
+const SWAPPED_PINS: [BoundaryPublic; 2] = [
+    BoundaryPublic::new(0, BoundaryEnd::First, 1),
+    BoundaryPublic::new(1, BoundaryEnd::First, 0),
+];
+
+impl<X> BaseAir<X> for SwappedPinFibAir {
+    fn width(&self) -> usize {
+        NUM_COLS
+    }
+    fn num_public_values(&self) -> usize {
+        3
+    }
+    fn public_boundary_io(&self) -> &[BoundaryPublic] {
+        &SWAPPED_PINS
+    }
+}
+
+impl<AB: AirBuilder> Air<AB> for SwappedPinFibAir {
+    fn eval(&self, builder: &mut AB) {
+        UnpinnedFibAir.eval(builder);
+    }
+}
+
+/// A table that moves one tuple across a bus, with every part of the route a parameter.
+struct BusAir {
+    channel: &'static str,
+    direction: BusDirection,
+    cubed: bool,
+}
+
+impl<X> BaseAir<X> for BusAir {
+    fn width(&self) -> usize {
+        NUM_COLS
+    }
+}
+
+impl<AB: AirBuilder + BusInteractionBuilder> Air<AB> for BusAir {
+    fn eval(&self, builder: &mut AB) {
+        let main = builder.main();
+        let value: AB::Expr = main.current(0).expect("two columns").into();
+        let selector: AB::Expr = main.current(1).expect("two columns").into();
+        let square = value.clone() * value.clone();
+        let payload = if self.cubed { square * value } else { square };
+        builder.push_bus_interaction(
+            self.channel,
+            self.direction,
+            [payload],
+            BusActivation::Boolean(selector),
+        );
+    }
+}
+
 /// A table whose periodic values are a parameter, so two of them differ in nothing else.
 struct PeriodicAir([F; 2]);
 
@@ -399,7 +467,7 @@ fn declaration() -> MachineDeclaration<Keccak256Hash> {
 /// The declaration one constraint system produces, at the heights every test here uses.
 fn declaration_for<A>(air: &A) -> MachineDeclaration<Keccak256Hash>
 where
-    A: BaseAir<F> + Air<InteractionSymbolicBuilder<F, EF>>,
+    A: BaseAir<F> + Air<InteractionSymbolicBuilder<F, EF>> + Air<BusSymbolicBuilder<F, EF>>,
 {
     let table =
         TableDeclaration::from_constraints::<F, EF, A>(air, HeightRange::new(FOLDING as u32, 20));
@@ -468,8 +536,8 @@ fn digest(bytes: &[u8]) -> [u8; 32] {
     Keccak256Hash.hash_iter(bytes.iter().copied())
 }
 
-fn fixture_path() -> std::path::PathBuf {
-    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(FIXTURE)
+fn fixture_path(name: &str) -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(name)
 }
 
 #[test]
@@ -641,6 +709,83 @@ fn a_cell_the_backend_pins_reaches_the_declaration() {
     assert_eq!(
         other.seal(&run, &proof()).unwrap_err(),
         EnvelopeError::Declaration(DeclarationError::ForeignRun)
+    );
+}
+
+#[test]
+fn which_public_value_a_pinned_cell_names_reaches_the_declaration() {
+    // The same two cells, so a count on its own cannot tell these two tables apart.
+    let heights = HeightRange::new(FOLDING as u32, 20);
+    let pinned = TableDeclaration::from_constraints::<F, EF, PinnedFibAir>(&PinnedFibAir, heights);
+    let swapped =
+        TableDeclaration::from_constraints::<F, EF, SwappedPinFibAir>(&SwappedPinFibAir, heights);
+
+    assert_eq!(pinned.constraints(), swapped.constraints());
+    assert_ne!(pinned, swapped);
+}
+
+#[test]
+fn every_part_of_a_bus_route_reaches_the_declaration() {
+    // One symbolic pass keeps the Booleanity check and throws the whole route away.
+    let heights = HeightRange::new(FOLDING as u32, 20);
+    let route = |channel, direction, cubed| {
+        TableDeclaration::from_constraints::<F, EF, BusAir>(
+            &BusAir {
+                channel,
+                direction,
+                cubed,
+            },
+            heights,
+        )
+    };
+    let push = route("squares", BusDirection::Push, false);
+    let pull = route("squares", BusDirection::Pull, false);
+    let elsewhere = route("memory", BusDirection::Push, false);
+    let cubed = route("squares", BusDirection::Push, true);
+
+    // Every one of them writes a single Booleanity check and nothing else.
+    for other in [&pull, &elsewhere, &cubed] {
+        assert_eq!(
+            other.constraints(),
+            LocalConstraints {
+                count: 1,
+                degree: 2,
+            }
+        );
+        assert_eq!(push.constraints(), other.constraints());
+        assert_ne!(&push, other);
+    }
+
+    // A batch that balances is therefore not the batch that does not.
+    let digest = |tables| {
+        MachineDeclaration::new(Keccak256Hash, tables, PROOF_BUDGET, SECURITY_TARGET)
+            .unwrap()
+            .statement_digest()
+    };
+    assert_ne!(
+        digest(vec![push.clone(), pull]),
+        digest(vec![push.clone(), push])
+    );
+}
+
+#[test]
+fn a_statement_declaring_a_bus_refuses_a_proof_without_one() {
+    // The statement moves a tuple across a bus, and the proof carries no bus part.
+    let declaration = declaration_for(&BusAir {
+        channel: "squares",
+        direction: BusDirection::Push,
+        cubed: false,
+    });
+    let run = declaration.run(&[LOG_HEIGHT], 0).unwrap();
+
+    let bytes = declaration.seal(&run, &proof()).unwrap().into_bytes();
+    let err = declaration.open::<BindingConfig>(&run, &bytes).unwrap_err();
+    assert_eq!(
+        err,
+        EnvelopeError::SectionMismatch {
+            section: "bus",
+            present: false,
+        }
     );
 }
 
@@ -908,7 +1053,7 @@ fn a_statement_declaring_a_lookup_refuses_a_proof_without_one() {
 
 #[test]
 fn verify_the_compatibility_fixture() {
-    let bytes = std::fs::read(fixture_path()).expect(
+    let bytes = std::fs::read(fixture_path(FIXTURE)).expect(
         "missing fixture; run: cargo test -p p3-multi-stark --test backend_contract -- --ignored",
     );
     // The bytes are pinned, so regenerating the file without saying so fails here.
@@ -925,13 +1070,14 @@ fn verify_the_compatibility_fixture() {
 
 #[test]
 fn a_fixture_from_an_older_revision_is_refused() {
-    // This is the path a fixture takes once the layout it was written under moves on.
-    let mut bytes = std::fs::read(fixture_path()).expect("missing fixture");
-    bytes[10..12].copy_from_slice(&(FIXTURE_REVISION - 1).to_le_bytes());
+    // The real file from the revision before this one, kept rather than reconstructed.
+    let bytes = std::fs::read(fixture_path(RETIRED_FIXTURE)).expect("missing retired fixture");
+    assert_eq!(digest(&bytes), RETIRED_DIGEST);
+    assert_eq!(u16::from_le_bytes([bytes[10], bytes[11]]), RETIRED_REVISION);
     assert_eq!(
         framing_error(&bytes),
         EnvelopeError::BodyRevision {
-            found: FIXTURE_REVISION - 1,
+            found: RETIRED_REVISION,
             expected: BODY_REVISION,
         }
     );
@@ -941,7 +1087,7 @@ fn a_fixture_from_an_older_revision_is_refused() {
 #[ignore]
 fn generate_the_compatibility_fixture() {
     // Regenerate with: cargo test -p p3-multi-stark --test backend_contract -- --ignored
-    let path = fixture_path();
+    let path = fixture_path(FIXTURE);
     let bytes = sealed();
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(path, &bytes).unwrap();

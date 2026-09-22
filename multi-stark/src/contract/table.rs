@@ -6,6 +6,7 @@ use core::fmt::{Debug, Formatter, Result as FmtResult};
 
 use p3_air::symbolic::AirLayout;
 use p3_air::{Air, BaseAir};
+use p3_bus::BusSymbolicBuilder;
 use p3_field::{ExtensionField, Field};
 use p3_lookup::InteractionSymbolicBuilder;
 
@@ -113,6 +114,7 @@ pub struct TableDeclaration {
     heights: HeightRange,
     flushes: Vec<FlushDeclaration>,
     local_lookups: usize,
+    buses: usize,
     indexed_reads: usize,
     indexed_tables: usize,
     system: Vec<u8>,
@@ -126,6 +128,7 @@ impl Debug for TableDeclaration {
             .field("heights", &self.heights)
             .field("flushes", &self.flushes)
             .field("local_lookups", &self.local_lookups)
+            .field("buses", &self.buses)
             .field("indexed_reads", &self.indexed_reads)
             .field("indexed_tables", &self.indexed_tables)
             .field("system_bytes", &self.system.len())
@@ -154,10 +157,12 @@ impl TableDeclaration {
     where
         F: Field,
         EF: ExtensionField<F>,
-        A: BaseAir<F> + Air<InteractionSymbolicBuilder<F, EF>>,
+        A: BaseAir<F> + Air<InteractionSymbolicBuilder<F, EF>> + Air<BusSymbolicBuilder<F, EF>>,
     {
         let layout = AirLayout::from_air::<F>(table);
         let builder = InteractionSymbolicBuilder::<F, EF>::from_air(table, layout);
+        // The interaction pass drops every bus declaration, so the bus pass runs too.
+        let buses = BusSymbolicBuilder::<F, EF>::from_air(table, layout);
 
         let base = builder.base_constraints();
         let extension = builder.extension_constraints();
@@ -214,9 +219,10 @@ impl TableDeclaration {
             heights,
             flushes,
             local_lookups,
+            buses: buses.interactions().len(),
             indexed_reads: builder.indexed_reads().len(),
             indexed_tables: builder.indexed_tables().len(),
-            system: constraints::encode(table, &builder),
+            system: constraints::encode(table, &builder, &buses),
         }
     }
 
@@ -256,6 +262,12 @@ impl TableDeclaration {
         !self.flushes.is_empty() || self.local_lookups > 0
     }
 
+    /// Whether this table moves any tuple across a bus.
+    #[must_use]
+    pub const fn has_buses(&self) -> bool {
+        self.buses > 0
+    }
+
     /// Name the first part on which this table and a constraint system disagree.
     ///
     /// The height range is left out, because no constraint system fixes it.
@@ -263,7 +275,7 @@ impl TableDeclaration {
     where
         F: Field,
         EF: ExtensionField<F>,
-        A: BaseAir<F> + Air<InteractionSymbolicBuilder<F, EF>>,
+        A: BaseAir<F> + Air<InteractionSymbolicBuilder<F, EF>> + Air<BusSymbolicBuilder<F, EF>>,
     {
         let read = Self::from_constraints::<F, EF, A>(table, self.heights);
         [
@@ -275,6 +287,7 @@ impl TableDeclaration {
             (self.constraints.degree != read.constraints.degree).then_some("the constraint degree"),
             (self.flushes != read.flushes).then_some("the channel traffic"),
             (self.local_lookups != read.local_lookups).then_some("the local lookups"),
+            (self.buses != read.buses).then_some("the bus declarations"),
             (self.indexed_reads != read.indexed_reads).then_some("the indexed reads"),
             (self.indexed_tables != read.indexed_tables).then_some("the indexed tables"),
             (self.system != read.system).then_some("the constraints themselves"),
@@ -317,6 +330,7 @@ impl TableDeclaration {
         )?;
         check("flush count", self.flushes.len(), MAX_FLUSHES)?;
         check("local lookup count", self.local_lookups, MAX_INDEXED)?;
+        check("bus declaration count", self.buses, MAX_FLUSHES)?;
         check("indexed read count", self.indexed_reads, MAX_INDEXED)?;
         check("indexed table count", self.indexed_tables, MAX_INDEXED)?;
         check(
@@ -356,6 +370,7 @@ impl TableDeclaration {
         preimage.u32(self.heights.min);
         preimage.u32(self.heights.max);
         preimage.usize(self.local_lookups);
+        preimage.usize(self.buses);
         preimage.usize(self.indexed_reads);
         preimage.usize(self.indexed_tables);
         preimage.usize(self.flushes.len());
@@ -383,6 +398,7 @@ mod tests {
             heights,
             flushes: Vec::new(),
             local_lookups: 0,
+            buses: 0,
             indexed_reads: 0,
             indexed_tables: 0,
             system: Vec::new(),

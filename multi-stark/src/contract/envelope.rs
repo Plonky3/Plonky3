@@ -21,7 +21,7 @@ pub const ENVELOPE_VERSION: u16 = 1;
 /// Revision of the encoded body.
 ///
 /// Bump it whenever the serialized form of a proof changes in any way.
-pub const BODY_REVISION: u16 = 1;
+pub const BODY_REVISION: u16 = 2;
 
 /// Size of the fixed header, in bytes.
 pub const HEADER_LEN: usize = 48;
