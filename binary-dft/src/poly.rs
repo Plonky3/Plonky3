@@ -11,6 +11,7 @@ use p3_util::{log2_ceil_usize, log2_floor_usize, log2_strict_usize};
 
 use crate::domain::domain_point;
 use crate::lch::BUTTERFLY_GRAIN;
+use crate::staging::{Dispatch, StagedRuns, for_each_staged_tile};
 use crate::traits::AdditiveNtt;
 
 /// [`LchNtt`](crate::LchNtt) over `BinaryField128`, with the data held in the polynomial basis throughout.
@@ -641,103 +642,6 @@ fn local_stages(values: &mut [u128], plan: Plan, twiddles: &Twiddles, inverse: b
     });
 }
 
-/// A raw handle to the matrix, so tasks owning runs spaced apart can run side by side.
-///
-/// A run is the `2^log_block` adjacent matrix rows one strided address moves, which is one row
-/// of the reshaped matrix the staging reads. Slice splitters cut a slice into contiguous pieces
-/// only, and the runs one staging tile gathers are a power of two apart, so the tasks share
-/// this handle and address their own runs through it.
-///
-/// # Safety
-/// The run sets two live tasks address must be disjoint, and the exclusive borrow the base
-/// pointer comes from must outlive every task.
-#[derive(Copy, Clone)]
-struct Rows {
-    /// First element of the matrix.
-    base: *mut u128,
-    /// Elements in one run.
-    run: usize,
-    /// Runs in the matrix.
-    count: usize,
-}
-
-// SAFETY: the handle is a pointer and two lengths, with no interior mutability and no `Drop`,
-// so sending or sharing it moves no data.
-//
-// The only caller derives the run index of every task from a bijection onto the run range,
-// which is what makes concurrent use race-free. A run is a block of adjacent rows of one fixed
-// length, so disjoint run sets are disjoint element ranges.
-unsafe impl Send for Rows {}
-// SAFETY: see the `Send` implementation.
-unsafe impl Sync for Rows {}
-
-impl Rows {
-    /// Check that a walk of `runs` runs from `first` in steps of `stride` stays in the matrix.
-    ///
-    /// The walk is increasing, so bounding its last run bounds all of them.
-    /// This runs once per tile rather than once per run, which is why it is a hard check and
-    /// not a debug one.
-    ///
-    /// A run index past the end would otherwise be a write past the end of the matrix.
-    ///
-    /// # Panics
-    /// Panics if the last run of the walk is at or beyond the run count.
-    fn check(&self, first: usize, stride: usize, runs: usize) {
-        assert!(
-            runs == 0 || first + (runs - 1) * stride < self.count,
-            "staged row walk leaves the matrix"
-        );
-    }
-
-    /// Copy the runs `first`, `first + stride`, ... into consecutive rows of the tile.
-    ///
-    /// The tile is emptied first and then grown one run at a time.
-    /// So it holds no element the walk did not write.
-    ///
-    /// And a worker never has to zero a tile it is about to overwrite in full.
-    ///
-    /// A tile whose capacity already covers the walk grows without reallocating.
-    ///
-    /// # Safety
-    /// No other live task may address any of the runs the walk names.
-    unsafe fn gather(&self, first: usize, stride: usize, runs: usize, tile: &mut Vec<u128>) {
-        self.check(first, stride, runs);
-        tile.clear();
-        for k in 0..runs {
-            // SAFETY: the bound above puts every run of the walk inside the matrix, and the
-            // exclusive borrow the base pointer came from outlives the task.
-            //
-            // No other live task addresses this run, so nothing can write it during the read.
-            let run = unsafe {
-                core::slice::from_raw_parts(
-                    self.base.add((first + k * stride) * self.run),
-                    self.run,
-                )
-            };
-            tile.extend_from_slice(run);
-        }
-    }
-
-    /// Write consecutive rows of the tile back over the runs they were gathered from.
-    ///
-    /// # Safety
-    /// No other live task may address any of the runs the walk names.
-    unsafe fn scatter(&self, first: usize, stride: usize, tile: &[u128]) {
-        let runs = tile.chunks_exact(self.run);
-        self.check(first, stride, runs.len());
-        for (k, run) in runs.enumerate() {
-            // SAFETY: as in the gather, with the direction of the copy reversed.
-            unsafe {
-                core::ptr::copy_nonoverlapping(
-                    run.as_ptr(),
-                    self.base.add((first + k * stride) * self.run),
-                    self.run,
-                );
-            }
-        }
-    }
-}
-
 /// Run stages `top - 1` down to `top - depth` through one staging tile per worker.
 /// Each of those stages pairs rows far apart, so on its own it reads and writes the whole
 /// matrix.
@@ -804,45 +708,16 @@ fn fused_stages(
     let log_block = plan.log_block.min(top - depth);
     // One row of the reshaped matrix, in elements.
     let run = plan.width << log_block;
-    let len = values.len();
-    // Reshaped rows between two consecutive staged runs, and elements in one staging tile.
-    let stride = 1 << (top - log_block - depth);
-    let tile_len = run << depth;
-    // One tile per `(block, offset)` pair, which is one tile per `2^depth` reshaped rows.
-    let tiles = len / tile_len;
-    debug_assert_eq!(
-        stride << depth,
-        1 << (top - log_block),
-        "staged rows do not span a block"
-    );
-    debug_assert_eq!(tiles * tile_len, len, "tiles do not partition the matrix");
-
-    let rows = Rows {
-        base: values.as_mut_ptr(),
-        run,
-        count: len / run,
+    // One staging tile per worker, not per task: a task is a few tens of microseconds of
+    // work and the tile is tens of kilobytes.
+    let dispatch = if use_parallel(values.len().saturating_mul(depth)) {
+        Dispatch::Parallel { min_len: 1 }
+    } else {
+        Dispatch::Serial
     };
-    let task = |tile: &mut Vec<u128>, index: usize| {
-        // A tile index splits into the stage-`top` block it lies in and its offset in the
-        // stride, and those two together with `k` name a reshaped row:
-        //
-        //     index  = block * S + offset
-        //     row(k) = block * 2^(top-log_block) + offset + k * S
-        let block = index >> (top - log_block - depth);
-        let first = (block << (top - log_block)) + (index & (stride - 1));
-        // SAFETY: `index` runs over `0..tiles` and `k` over `0..2^depth`, so the map
-        // `(block, offset, k) -> row(k)` decomposes `0..2^(log_n-log_block)` in mixed radix.
-        // Every reshaped row is therefore inside the matrix, and every one belongs to exactly
-        // one tile index, hence to exactly one task.
-        //
-        // A reshaped row is a fixed-length block of adjacent matrix rows, so the matrix rows
-        // partition across the tasks too.
-        //
-        // The exclusive borrow of the matrix outlives the whole region.
-        unsafe { rows.gather(first, stride, 1 << depth, tile) };
-        // Invariant: every element of the tile comes from the walk the gather just ran, so
-        // nothing below reads an element the gather did not write.
-        debug_assert_eq!(tile.len(), tile_len, "the gather left the tile short");
+    // Consecutive staged runs are `S = 2^(top - log_block - depth)` reshaped rows apart.
+    let runs = StagedRuns::new(run, top - log_block - depth, depth);
+    for_each_staged_tile(values, runs, dispatch, |tile, block| {
         // The gather is the first read of every element when this is the first group of a
         // forward transform.
         if convert_basis && !inverse {
@@ -854,26 +729,7 @@ fn fused_stages(
         if convert_basis && inverse {
             convert_tile(tile, INTO_TOWER);
         }
-        // SAFETY: the rows are the ones the gather read, so the argument above applies
-        // unchanged.
-        unsafe { rows.scatter(first, stride, tile) };
-    };
-
-    // One staging tile per worker, not per task: a task is a few tens of microseconds of
-    // work and the tile is tens of kilobytes.
-    //
-    // The tile is capacity only, with no initialized elements: the gather grows it from
-    // empty, so no worker spends bandwidth zeroing tens of kilobytes it is about to
-    // overwrite in full.
-    let new_tile = || Vec::with_capacity(tile_len);
-    if use_parallel(len.saturating_mul(depth)) {
-        (0..tiles).into_par_iter().for_each_init(new_tile, task);
-    } else {
-        let mut tile = new_tile();
-        for index in 0..tiles {
-            task(&mut tile, index);
-        }
-    }
+    });
 }
 
 /// Forward transform of polynomial-basis values in an existing allocation.
