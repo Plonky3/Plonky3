@@ -113,6 +113,7 @@ fn main() {
         RepresentationOptions::Auto => Backend::preferred(),
         RepresentationOptions::Subfield => Backend::Subfield,
         RepresentationOptions::PolyBasis => Backend::PolyBasis,
+        RepresentationOptions::PolyBasisLate => Backend::PolyBasisLate,
     };
 
     let hash = match args.hash {
