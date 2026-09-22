@@ -11,7 +11,8 @@ use p3_sumcheck::layout::{Layout, PrefixProver, SuffixProver, Table};
 use p3_sumcheck::{OpeningBatch, OpeningProtocol, TableShape, TableSpec};
 use p3_symmetric::{CompressionFunctionFromHasher, SerializingHasher};
 use p3_whir::{
-    FoldingFactor, ProtocolParameters, SecurityAssumption, WhirConfig, WhirConfigError, WhirProver,
+    FoldingFactor, ProtocolParameters, SecurityAssumption, VerifierError, WhirConfig,
+    WhirConfigError, WhirProver,
 };
 use rand::SeedableRng;
 use rand::rngs::SmallRng;
@@ -80,8 +81,8 @@ fn additive_whir_commits_opens_and_verifies() {
 
     let mut tampered = proof;
     tampered.whir.final_poly.as_mut().unwrap().as_mut_slice()[0] += Poly192::ONE;
-    assert!(
-        pcs.verify(
+    let refused = pcs
+        .verify(
             &commitment,
             &tampered,
             &mut challenger(),
@@ -90,7 +91,22 @@ fn additive_whir_commits_opens_and_verifies() {
                 vec![OpeningBatch::new(vec![0, 1], vec![])],
             )]),
         )
-        .is_err()
+        .unwrap_err();
+
+    // The final polynomial feeds the transcript, so moving it moves every position drawn after.
+    //
+    // The error carries no equality, so the variant is pinned whole and its message checked.
+    assert!(
+        matches!(
+            refused,
+            VerifierError::MerkleProofInvalid { position: 0, .. }
+        ),
+        "{refused:?}"
+    );
+    assert_eq!(
+        refused.to_string(),
+        "Merkle proof verification failed at position 0: \
+         Extension field Merkle multiproof verification failed"
     );
 }
 
@@ -192,4 +208,95 @@ fn the_cap_height_fits_every_round_tree() {
     assert_eq!(cap_height, 4);
     assert!(cap_height <= round.log_folded_domain_size);
     assert!(cap_height <= final_round.log_folded_domain_size);
+}
+
+/// A trace over a thirty-two-bit alphabet, committed at its own width.
+mod small_field {
+    use p3_binary_field::{BinaryChallenger, BinaryField32, BinaryField128};
+    use p3_binary_pcs::whir::{BinaryWhirBudget, BinaryWhirDomain, BinaryWhirProfile, ProofShape};
+    use p3_challenger::HashChallenger;
+    use p3_commit::MultilinearPcs;
+    use p3_keccak::Keccak256Hash;
+    use p3_merkle_tree::MerkleTreeMmcs;
+    use p3_sumcheck::layout::{Layout, SuffixProver, Table};
+    use p3_sumcheck::{OpeningBatch, OpeningProtocol, TableShape, TableSpec};
+    use p3_whir::WhirProver;
+    use rand::SeedableRng;
+    use rand::rngs::SmallRng;
+
+    use super::{Compress, Hash};
+
+    type F = BinaryField32;
+    type EF = BinaryField128;
+    type NarrowMmcs = MerkleTreeMmcs<F, u8, Hash, Compress, 2, 32>;
+    type NarrowChallenger = BinaryChallenger<F, HashChallenger<u8, Keccak256Hash, 32>>;
+    type NarrowDomain = BinaryWhirDomain<F>;
+    type NarrowPcs =
+        WhirProver<EF, F, NarrowDomain, NarrowMmcs, NarrowChallenger, SuffixProver<F, EF>>;
+
+    /// Bytes the encoder writes for one element of the narrow alphabet.
+    const ALPHABET_BYTES: usize = 5;
+
+    /// Bytes the encoder writes for one element of the challenge field instead.
+    const CHALLENGE_BYTES: usize = 19;
+
+    /// Bytes one Merkle digest occupies.
+    const DIGEST_BYTES: usize = 32;
+
+    #[test]
+    fn a_small_field_trace_commits_at_its_own_width() {
+        const NUM_VARIABLES: usize = 12;
+        const FOLDING: usize = 3;
+
+        let mut rng = SmallRng::seed_from_u64(0x5A11_F1E1);
+        let witness = SuffixProver::<F, EF>::new_witness(
+            vec![Table::rand(&mut rng, 1, NUM_VARIABLES)],
+            FOLDING,
+        );
+        let protocol = OpeningProtocol::new(vec![TableSpec::new(
+            TableShape::new(NUM_VARIABLES, 1),
+            vec![OpeningBatch::new(vec![0], vec![])],
+        )]);
+
+        let domain = NarrowDomain::default();
+        let profile = BinaryWhirProfile::proven_list_decoding(80, 2, FOLDING);
+        let config = profile
+            .config::<EF, F, NarrowChallenger, _>(NUM_VARIABLES, &domain)
+            .unwrap();
+        let shape = ProofShape::of(&config, 1);
+
+        // The first codeword is opened at the alphabet's own width, not the challenge field's.
+        let narrow = shape.max_bytes(ALPHABET_BYTES, CHALLENGE_BYTES, DIGEST_BYTES);
+        let widened = shape.max_bytes(CHALLENGE_BYTES, CHALLENGE_BYTES, DIGEST_BYTES);
+        assert!(narrow < widened);
+
+        BinaryWhirBudget::PRODUCTION
+            .check_shape(&shape, ALPHABET_BYTES, CHALLENGE_BYTES, DIGEST_BYTES)
+            .unwrap();
+
+        let cap_height = p3_binary_pcs::whir::recommended_cap_height(&config);
+        let mmcs = NarrowMmcs::new(
+            Hash::new(Keccak256Hash),
+            Compress::new(Keccak256Hash),
+            cap_height,
+        );
+        let pcs = NarrowPcs::new(config, domain, mmcs);
+
+        let mut prover_challenger = NarrowChallenger::from_hasher(Vec::new(), Keccak256Hash);
+        let (commitment, prover_data) = pcs.commit(witness, &mut prover_challenger).unwrap();
+        let proof = pcs
+            .open(prover_data, protocol.clone(), &mut prover_challenger)
+            .unwrap();
+
+        let mut verifier_challenger = NarrowChallenger::from_hasher(Vec::new(), Keccak256Hash);
+        pcs.verify(&commitment, &proof, &mut verifier_challenger, protocol)
+            .unwrap();
+
+        let bytes = postcard::to_allocvec(&proof).unwrap().len();
+        assert!(
+            bytes <= narrow,
+            "{bytes} bytes against an estimate of {narrow}"
+        );
+        eprintln!("small-field 2^{NUM_VARIABLES} over a 32-bit alphabet: {bytes} bytes");
+    }
 }

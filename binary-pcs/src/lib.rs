@@ -25,9 +25,14 @@ mod verifier;
 pub mod whir;
 
 pub use boolean::{
-    BitOpening, BitReadings, BooleanMultilinearPcs, BooleanPcs, BooleanPcsError, BooleanProof,
+    BitOpening, BitReadings, BooleanBackend, BooleanMultilinearPcs, BooleanPcs, BooleanPcsError,
+    BooleanProof,
 };
-pub use boolean_trace::{BooleanTraceData, BooleanTraceError, BooleanTracePcs, BooleanTraceProof};
+pub use boolean_trace::{
+    BooleanTraceCommitment, BooleanTraceCommitmentData, BooleanTraceCommitmentError,
+    BooleanTraceCommitmentProof, BooleanTraceData, BooleanTraceError, BooleanTracePcs,
+    BooleanTraceProof,
+};
 pub use error::BinaryPcsError;
 pub use fold::{ChallengeField, FoldAlphabet, fold_codeword, fold_pair};
 pub use grouped_mmcs::GroupedCodewordMmcs;

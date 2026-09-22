@@ -70,6 +70,7 @@
 //! An AIR whose constraints read only the current row names no successor column.
 
 use alloc::vec::Vec;
+use core::marker::PhantomData;
 
 use p3_binary_dft::EncodableLevel;
 use p3_binary_field::{PackedGf2, PackedGf2x64, TowerLevel};
@@ -91,7 +92,8 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::boolean::{
-    BitOpening, BitReadings, BooleanMultilinearPcs, BooleanPcs, BooleanPcsError, BooleanProof,
+    BitOpening, BitReadings, BooleanBackend, BooleanMultilinearPcs, BooleanPcs, BooleanPcsError,
+    BooleanProof,
 };
 use crate::boolean_trace_transcript::{
     ColumnBatchProverTranscript, ColumnBatchShape, ColumnBatchVerifierTranscript,
@@ -128,12 +130,17 @@ const BLOCKS_PER_TASK: usize = 16;
 /// The committed object is the bits, so the codeword is as short as the alphabet allows.
 ///
 /// The tables themselves are retained, for a prover that evaluates constraints over them.
-pub struct BooleanTracePcs<EF: EncodableLevel, MT, MX> {
+pub struct BooleanTraceCommitment<EF, B> {
     /// The bit commitment every column claim is discharged against.
-    inner: BooleanPcs<EF, MT, MX>,
+    inner: B,
+    /// Marker tying the commitment to its challenge field; carries no runtime state.
+    _marker: PhantomData<EF>,
 }
 
-impl<EF, MT, MX> BooleanTracePcs<EF, MT, MX>
+/// The trace commitment discharged through the folding-only bit commitment.
+pub type BooleanTracePcs<EF, MT, MX> = BooleanTraceCommitment<EF, BooleanPcs<EF, MT, MX>>;
+
+impl<EF, MT, MX> BooleanTraceCommitment<EF, BooleanPcs<EF, MT, MX>>
 where
     EF: ChallengeField<EF>
         + EncodableLevel
@@ -150,7 +157,8 @@ where
     ///
     /// # Errors
     ///
-    /// Returns an error unless the schedule was derived for `(EF, EF)`.
+    /// Returns an error unless the schedule was derived for the committed alphabet.
+    ///
     /// Returns an error unless the schedule commits exactly the elements the packing holds.
     pub fn new(
         config: BinaryPcsConfig,
@@ -159,13 +167,32 @@ where
         num_variables: usize,
     ) -> Result<Self, BooleanTraceError<EF, MT::Error>> {
         BooleanPcs::new(config, mmcs, round_mmcs, num_variables)
-            .map(|inner| Self { inner })
-            .map_err(BooleanTraceError::Boolean)
+            .map(Self::from_commitment)
+            .map_err(BooleanTraceCommitmentError::Boolean)
+    }
+}
+
+impl<EF, B> BooleanTraceCommitment<EF, B>
+where
+    EF: ChallengeField<EF>
+        + EncodableLevel
+        + TranscriptField
+        + TowerLevel
+        + FoldAlphabet<EF>
+        + Coordinates,
+    B: BooleanBackend<EF>,
+{
+    /// Stack trace tables into an already-built bit commitment.
+    pub const fn from_commitment(inner: B) -> Self {
+        Self {
+            inner,
+            _marker: PhantomData,
+        }
     }
 
     /// Variables the stacked bit witness has, so `2^n` bits in all.
     #[must_use]
-    pub const fn num_variables(&self) -> usize {
+    pub fn num_variables(&self) -> usize {
         self.inner.num_variables()
     }
 
@@ -177,11 +204,11 @@ where
     fn placements(
         &self,
         shapes: &[TableShape],
-    ) -> Result<Vec<TablePlacement>, BooleanTraceError<EF, MT::Error>> {
+    ) -> Result<Vec<TablePlacement>, BooleanTraceCommitmentError<B::Error>> {
         // Prover and verifier both plan from the public shapes, so neither picks its own.
         let (arity, placements) = plan_stacked_layout(shapes);
         if arity != self.num_variables() {
-            return Err(BooleanTraceError::StackedArity {
+            return Err(BooleanTraceCommitmentError::StackedArity {
                 expected: self.num_variables(),
                 actual: arity,
             });
@@ -230,11 +257,11 @@ where
         &self,
         protocol: &OpeningProtocol,
         points: &[Point<EF>],
-    ) -> Result<Vec<TablePlacement>, BooleanTraceError<EF, MT::Error>> {
+    ) -> Result<Vec<TablePlacement>, BooleanTraceCommitmentError<B::Error>> {
         let shapes = protocol.table_shapes();
         let placements = self.placements(&shapes)?;
         if points.len() != protocol.num_openings() {
-            return Err(BooleanTraceError::PointCount {
+            return Err(BooleanTraceCommitmentError::PointCount {
                 expected: protocol.num_openings(),
                 actual: points.len(),
             });
@@ -242,7 +269,7 @@ where
 
         for ((table, _), point) in protocol.iter_openings().zip(points) {
             if point.num_variables() != shapes[table].num_variables() {
-                return Err(BooleanTraceError::PointArity {
+                return Err(BooleanTraceCommitmentError::PointArity {
                     table,
                     expected: shapes[table].num_variables(),
                     actual: point.num_variables(),
@@ -256,10 +283,10 @@ where
     fn validate_source_shapes(
         tables: &[Table<EF>],
         protocol: &OpeningProtocol,
-    ) -> Result<(), BooleanTraceError<EF, MT::Error>> {
+    ) -> Result<(), BooleanTraceCommitmentError<B::Error>> {
         let expected = protocol.table_shapes();
         if tables.len() != expected.len() {
-            return Err(BooleanTraceError::TableCountMismatch {
+            return Err(BooleanTraceCommitmentError::TableCountMismatch {
                 expected: expected.len(),
                 actual: tables.len(),
             });
@@ -267,7 +294,7 @@ where
         for (table, expected) in expected.iter().copied().enumerate() {
             let actual = tables[table].shape();
             if actual != expected {
-                return Err(BooleanTraceError::TableShapeMismatch {
+                return Err(BooleanTraceCommitmentError::TableShapeMismatch {
                     table,
                     expected,
                     actual,
@@ -396,7 +423,7 @@ where
     fn gather_bits(
         &self,
         tables: &[Table<EF>],
-    ) -> Result<Vec<PackedGf2x64>, BooleanTraceError<EF, MT::Error>> {
+    ) -> Result<Vec<PackedGf2x64>, BooleanTraceCommitmentError<B::Error>> {
         let shapes = tables.iter().map(Table::shape).collect::<Vec<_>>();
         let placements = self.placements(&shapes)?;
 
@@ -482,7 +509,7 @@ where
         }
 
         if let Some((position, column)) = long_refusal.into_iter().chain(short_refusal).min() {
-            return Err(BooleanTraceError::NonBooleanCell {
+            return Err(BooleanTraceCommitmentError::NonBooleanCell {
                 table: placements[position].idx(),
                 column,
             });
@@ -784,16 +811,19 @@ where
 }
 
 /// The committed trace tables, held until the commitment is opened.
-pub struct BooleanTraceData<EF: Field, MT: Mmcs<EF>> {
+pub struct BooleanTraceCommitmentData<EF: Field, D> {
     /// Prover data of the bit commitment underneath.
-    inner: BinaryPcsProverData<EF, EF, MT>,
+    inner: D,
     /// Source tables, lent back to whatever evaluates constraints over them.
     tables: Vec<Table<EF>>,
 }
 
-impl<EF: Field, MT: Mmcs<EF>> Clone for BooleanTraceData<EF, MT>
+/// The retained data of a trace behind the folding-only bit commitment.
+pub type BooleanTraceData<EF, MT> = BooleanTraceCommitmentData<EF, BinaryPcsProverData<EF, EF, MT>>;
+
+impl<EF: Field, D> Clone for BooleanTraceCommitmentData<EF, D>
 where
-    BinaryPcsProverData<EF, EF, MT>: Clone,
+    D: Clone,
 {
     fn clone(&self) -> Self {
         Self {
@@ -803,7 +833,7 @@ where
     }
 }
 
-impl<EF: Field, MT: Mmcs<EF>> BooleanTraceData<EF, MT> {
+impl<EF: Field, D> BooleanTraceCommitmentData<EF, D> {
     /// One committed table, in the order the tables were supplied.
     ///
     /// # Panics
@@ -818,23 +848,30 @@ impl<EF: Field, MT: Mmcs<EF>> BooleanTraceData<EF, MT> {
 /// One opening of a Boolean trace: the column values, and the bit proof behind them.
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(bound(
-    serialize = "EF: TowerLevel, MT::Commitment: Serialize, MT::MultiProof: Serialize, MX::Commitment: Serialize, MX::MultiProof: Serialize",
-    deserialize = "EF: TowerLevel, MT::Commitment: Deserialize<'de>, MT::MultiProof: Deserialize<'de>, MX::Commitment: Deserialize<'de>, MX::MultiProof: Deserialize<'de>"
+    serialize = "EF: TowerLevel, P: Serialize",
+    deserialize = "EF: TowerLevel, P: Deserialize<'de>"
 ))]
-pub struct BooleanTraceProof<EF: Field, MT: Mmcs<EF>, MX: Mmcs<EF>> {
+pub struct BooleanTraceCommitmentProof<EF: Field, P> {
     /// One value per column a batch reads, its current ones first, batches in transcript order.
     pub values: Vec<EF>,
     /// The bit commitment's own proof, answering for every value at once.
-    pub opening: BooleanProof<EF, MT, MX>,
+    pub opening: P,
 }
+
+/// One opening of a trace behind the folding-only bit commitment.
+pub type BooleanTraceProof<EF, MT, MX> = BooleanTraceCommitmentProof<EF, BooleanProof<EF, MT, MX>>;
+
+/// Why a trace behind the folding-only bit commitment could not be committed or opened.
+pub type BooleanTraceError<EF, MmcsError> =
+    BooleanTraceCommitmentError<BooleanPcsError<EF, MmcsError>>;
 
 /// Why a Boolean trace could not be committed or opened.
 #[derive(Debug, Error)]
 #[non_exhaustive]
-pub enum BooleanTraceError<EF, MmcsError> {
+pub enum BooleanTraceCommitmentError<E> {
     /// The bit commitment underneath refused the witness or the opening.
     #[error(transparent)]
-    Boolean(BooleanPcsError<EF, MmcsError>),
+    Boolean(E),
 
     /// The table shapes do not stack to the arity this commitment holds.
     #[error("the shapes stack to {actual} variables, the commitment holds {expected}")]
@@ -918,7 +955,7 @@ pub enum BooleanTraceError<EF, MmcsError> {
     },
 }
 
-impl<EF, MT, MX, Challenger> MultilinearPcs<EF, Challenger> for BooleanTracePcs<EF, MT, MX>
+impl<EF, B, Challenger> MultilinearPcs<EF, Challenger> for BooleanTraceCommitment<EF, B>
 where
     EF: ChallengeField<EF>
         + EncodableLevel
@@ -926,20 +963,18 @@ where
         + TowerLevel
         + FoldAlphabet<EF>
         + Coordinates,
-    MT: Mmcs<EF>,
-    MX: Mmcs<EF, Error = MT::Error>,
+    B: BooleanMultilinearPcs<EF, Challenger>,
     Challenger: FieldChallenger<EF>
         + GrindingChallenger<Witness = EF>
         + CanSampleUniformBits<EF>
-        + CanObserve<MT::Commitment>
-        + CanObserve<MX::Commitment>,
+        + CanObserve<B::Commitment>,
 {
     type Val = EF;
-    type Commitment = MT::Commitment;
-    type ProverData = BooleanTraceData<EF, MT>;
-    type Proof = BooleanTraceProof<EF, MT, MX>;
-    type Error = BooleanTraceError<EF, MT::Error>;
-    type ProverError = BooleanTraceError<EF, MT::Error>;
+    type Commitment = B::Commitment;
+    type ProverData = BooleanTraceCommitmentData<EF, B::ProverData>;
+    type Proof = BooleanTraceCommitmentProof<EF, B::Proof>;
+    type Error = BooleanTraceCommitmentError<B::Error>;
+    type ProverError = BooleanTraceCommitmentError<B::Error>;
     type Witness = Vec<Table<EF>>;
     type OpeningProtocol = OpeningProtocol;
 
@@ -958,10 +993,10 @@ where
         let (commitment, inner) = self
             .inner
             .commit_bits(&bits, challenger)
-            .map_err(BooleanTraceError::Boolean)?;
+            .map_err(BooleanTraceCommitmentError::Boolean)?;
         Ok((
             commitment,
-            BooleanTraceData {
+            BooleanTraceCommitmentData {
                 inner,
                 tables: witness,
             },
@@ -1005,7 +1040,7 @@ where
     }
 }
 
-impl<EF, MT, MX, Challenger> PrescribedPointPcs<EF, Challenger> for BooleanTracePcs<EF, MT, MX>
+impl<EF, B, Challenger> PrescribedPointPcs<EF, Challenger> for BooleanTraceCommitment<EF, B>
 where
     EF: ChallengeField<EF>
         + EncodableLevel
@@ -1013,13 +1048,11 @@ where
         + TowerLevel
         + FoldAlphabet<EF>
         + Coordinates,
-    MT: Mmcs<EF>,
-    MX: Mmcs<EF, Error = MT::Error>,
+    B: BooleanMultilinearPcs<EF, Challenger>,
     Challenger: FieldChallenger<EF>
         + GrindingChallenger<Witness = EF>
         + CanSampleUniformBits<EF>
-        + CanObserve<MT::Commitment>
-        + CanObserve<MX::Commitment>,
+        + CanObserve<B::Commitment>,
 {
     fn prescribed_security(&self, protocol: &OpeningProtocol) -> Option<PrescribedOpeningSecurity> {
         // A protocol this scheme would refuse gets no assessment, so a caller fails closed.
@@ -1035,10 +1068,8 @@ where
                 let successor_tensors = claims.iter().any(|claim| {
                     claim.next_at.is_some() && shapes[claim.table].num_variables() > absorbed
                 });
-                Some(
-                    self.inner
-                        .readings_security(claims.len(), successor_tensors),
-                )
+                self.inner
+                    .readings_security(claims.len(), successor_tensors)
             },
             |(width, next)| {
                 let batches = protocol.num_openings();
@@ -1046,14 +1077,13 @@ where
                 let views = 1 + usize::from(next);
                 let k = width.next_power_of_two().trailing_zeros() as usize;
                 let successor_tensors = next && shapes[0].num_variables() > absorbed;
-                let mut security = self.inner.readings_security(batches, successor_tensors);
-                security
-                    .terms
-                    .push(p3_security::multilinear::column_batch_term(
-                        batches * views,
-                        k,
-                        EF::bits(),
-                    ));
+                let mut security = self.inner.readings_security(batches, successor_tensors)?;
+                // The batching challenge is drawn before any candidate has been named.
+                security.charge_reduction(p3_security::multilinear::column_batch_term(
+                    batches * views,
+                    k,
+                    EF::bits(),
+                ));
                 Some(security)
             },
         )
@@ -1074,12 +1104,12 @@ where
             let (readings, opening) = self
                 .inner
                 .open_readings(prover_data.inner, &openings, challenger)
-                .map_err(BooleanTraceError::Boolean)?;
+                .map_err(BooleanTraceCommitmentError::Boolean)?;
             let values = claim_values(&claims, &readings, value_count(protocol));
-            return Ok(BooleanTraceProof { values, opening });
+            return Ok(BooleanTraceCommitmentProof { values, opening });
         };
 
-        let BooleanTraceData { inner, tables } = prover_data;
+        let BooleanTraceCommitmentData { inner, tables } = prover_data;
         let shape = ColumnBatchShape {
             table_variables: protocol.table_shapes()[0].num_variables(),
             width,
@@ -1121,18 +1151,18 @@ where
         let (readings, opening) = self
             .inner
             .open_readings(inner, &openings, challenger)
-            .map_err(BooleanTraceError::Boolean)?;
+            .map_err(BooleanTraceCommitmentError::Boolean)?;
         if readings.len() != expected.len() {
-            return Err(BooleanTraceError::ColumnBatchValueMismatch {
+            return Err(BooleanTraceCommitmentError::ColumnBatchValueMismatch {
                 batch: expected.len(),
             });
         }
         for (batch, (actual, expected)) in readings.iter().zip(&expected).enumerate() {
             if actual != expected {
-                return Err(BooleanTraceError::ColumnBatchValueMismatch { batch });
+                return Err(BooleanTraceCommitmentError::ColumnBatchValueMismatch { batch });
             }
         }
-        Ok(BooleanTraceProof { values, opening })
+        Ok(BooleanTraceCommitmentProof { values, opening })
     }
 
     fn verify_at(
@@ -1147,7 +1177,7 @@ where
         let placements = self.validate_opening(protocol, points)?;
         let expected_values = value_count(protocol);
         if proof.values.len() != expected_values {
-            return Err(BooleanTraceError::ValueCount {
+            return Err(BooleanTraceCommitmentError::ValueCount {
                 expected: expected_values,
                 actual: proof.values.len(),
             });
@@ -1165,7 +1195,7 @@ where
                     &proof.opening,
                     challenger,
                 )
-                .map_err(BooleanTraceError::Boolean)?;
+                .map_err(BooleanTraceCommitmentError::Boolean)?;
             return Ok(opening_evals(protocol, &proof.values));
         };
 
@@ -1201,7 +1231,7 @@ where
         // One bit proof answers for every batched claim at once.
         self.inner
             .verify_readings(commitment, &openings, &readings, &proof.opening, challenger)
-            .map_err(BooleanTraceError::Boolean)?;
+            .map_err(BooleanTraceCommitmentError::Boolean)?;
 
         Ok(opening_evals(protocol, &proof.values))
     }
@@ -1215,6 +1245,7 @@ mod tests {
     use p3_field::PrimeCharacteristicRing;
     use p3_matrix::dense::RowMajorMatrix;
     use p3_multilinear_util::poly::Poly;
+    use p3_sumcheck::ring_switch::bits::BitRingSwitchProofError;
     use p3_sumcheck::{OpeningBatch, PrescribedPointPcs, TableSpec};
     use rand::rngs::SmallRng;
     use rand::{RngExt, SeedableRng};
@@ -1224,6 +1255,16 @@ mod tests {
     use crate::test_util::{MyChallenger, MyMmcs, challenger, mmcs};
 
     type EF = BinaryField128;
+
+    // The reduction error a rejection carries, so a test names the check that refused it.
+    fn reduction_error<E: core::fmt::Debug>(
+        error: BooleanTraceError<EF, E>,
+    ) -> BitRingSwitchProofError {
+        match error {
+            BooleanTraceCommitmentError::Boolean(BooleanPcsError::ReductionProof(inner)) => inner,
+            other => panic!("{other:?}"),
+        }
+    }
 
     /// Columns every fixture table holds.
     const FIXTURE_WIDTH: usize = 2;
@@ -1380,7 +1421,9 @@ mod tests {
                 })
                 .collect::<Vec<_>>();
             match scheme.gather_bits(&tables) {
-                Err(BooleanTraceError::NonBooleanCell { table, column }) => (table, column),
+                Err(BooleanTraceCommitmentError::NonBooleanCell { table, column }) => {
+                    (table, column)
+                }
                 _ => panic!("a non-Boolean cell must be refused"),
             }
         };
@@ -1450,7 +1493,7 @@ mod tests {
         challenger: &mut MyChallenger,
     ) -> BooleanTraceProof<EF, MyMmcs, MyMmcs> {
         type Scheme = BooleanTracePcs<EF, MyMmcs, MyMmcs>;
-        let BooleanTraceData { inner, tables } = data;
+        let BooleanTraceCommitmentData { inner, tables } = data;
         let width = shape.width();
         let mut values = Vec::new();
         for point in points {
@@ -1488,7 +1531,7 @@ mod tests {
             .inner
             .open_readings(inner, &openings, challenger)
             .unwrap();
-        BooleanTraceProof { values, opening }
+        BooleanTraceCommitmentProof { values, opening }
     }
 
     /// A column read one row ahead: row `z` reads row `z + 1`, the last row itself.
@@ -1696,10 +1739,13 @@ mod tests {
         // Binding it a second time moves every later draw, so the two sides split.
         let mut double_bound = challenger();
         scheme.observe_commitment(&commitment, &mut double_bound);
-        assert!(
-            scheme
-                .verify(&commitment, &proof, &mut double_bound, protocol)
-                .is_err()
+        let refused = scheme
+            .verify(&commitment, &proof, &mut double_bound, protocol)
+            .unwrap_err();
+        // The split transcript gives the replayed reduction a different column point.
+        assert_eq!(
+            reduction_error(refused),
+            BitRingSwitchProofError::ClaimMismatch
         );
     }
 
@@ -1724,7 +1770,7 @@ mod tests {
         ) else {
             panic!("a shape set stacking elsewhere describes another commitment")
         };
-        let BooleanTraceError::TableShapeMismatch {
+        let BooleanTraceCommitmentError::TableShapeMismatch {
             table: table_index,
             expected,
             actual,
@@ -1745,7 +1791,7 @@ mod tests {
         };
         assert!(matches!(
             error,
-            BooleanTraceError::PointCount {
+            BooleanTraceCommitmentError::PointCount {
                 expected: 1,
                 actual: 0
             }
@@ -1782,7 +1828,7 @@ mod tests {
         };
         assert!(matches!(
             error,
-            BooleanTraceError::ValueCount {
+            BooleanTraceCommitmentError::ValueCount {
                 expected: 2,
                 actual: 1
             }
@@ -1902,10 +1948,12 @@ mod tests {
 
         let mut verifier_chal = challenger();
         scheme.observe_commitment(&commitment, &mut verifier_chal);
-        assert!(
-            scheme
-                .verify_at(&commitment, &proof, &protocol, &[point], &mut verifier_chal)
-                .is_err()
+        let refused = scheme
+            .verify_at(&commitment, &proof, &protocol, &[point], &mut verifier_chal)
+            .unwrap_err();
+        assert_eq!(
+            reduction_error(refused),
+            BitRingSwitchProofError::ClaimMismatch
         );
     }
 
@@ -2074,48 +2122,67 @@ mod tests {
             tampered.values[index] += EF::ONE;
             let mut verifier_chal = challenger();
             scheme.observe_commitment(&commitment, &mut verifier_chal);
-            assert!(
-                scheme
-                    .verify_at(
-                        &commitment,
-                        &tampered,
-                        &protocol,
-                        &points,
-                        &mut verifier_chal
-                    )
-                    .is_err()
-            );
+            let refused = scheme
+                .verify_at(
+                    &commitment,
+                    &tampered,
+                    &protocol,
+                    &points,
+                    &mut verifier_chal,
+                )
+                .unwrap_err();
+            // A value of the first batch is caught reading its claim off the element.
+            // A value of the second is caught when its surviving claim fails to close.
+            let expected = if index < 3 {
+                BitRingSwitchProofError::ClaimMismatch
+            } else {
+                BitRingSwitchProofError::FinalCheck
+            };
+            assert_eq!(reduction_error(refused), expected, "value {index}");
         }
 
         let mut tampered = proof.clone();
         tampered.opening.reductions.pop();
         let mut verifier_chal = challenger();
         scheme.observe_commitment(&commitment, &mut verifier_chal);
+        let refused = scheme
+            .verify_at(
+                &commitment,
+                &tampered,
+                &protocol,
+                &points,
+                &mut verifier_chal,
+            )
+            .unwrap_err();
+        // A dropped reduction is a count disagreement, refused before the transcript moves.
         assert!(
-            scheme
-                .verify_at(
-                    &commitment,
-                    &tampered,
-                    &protocol,
-                    &points,
-                    &mut verifier_chal
-                )
-                .is_err()
+            matches!(
+                refused,
+                BooleanTraceCommitmentError::Boolean(BooleanPcsError::ClaimCount {
+                    expected: 2,
+                    values: 2,
+                    reductions: 1
+                })
+            ),
+            "{refused:?}"
         );
 
         let mut verifier_chal = challenger();
         scheme.observe_commitment(&commitment, &mut verifier_chal);
         let reordered = vec![points[1].clone(), points[0].clone()];
-        assert!(
-            scheme
-                .verify_at(
-                    &commitment,
-                    &proof,
-                    &protocol,
-                    &reordered,
-                    &mut verifier_chal
-                )
-                .is_err()
+        let refused = scheme
+            .verify_at(
+                &commitment,
+                &proof,
+                &protocol,
+                &reordered,
+                &mut verifier_chal,
+            )
+            .unwrap_err();
+        // Swapping the points reduces each claim at the other one's point.
+        assert_eq!(
+            reduction_error(refused),
+            BitRingSwitchProofError::ClaimMismatch
         );
     }
 
@@ -2141,7 +2208,7 @@ mod tests {
         };
         assert!(matches!(
             error,
-            BooleanTraceError::PointArity { table: 0, .. }
+            BooleanTraceCommitmentError::PointArity { table: 0, .. }
         ));
         assert_eq!(
             p3_challenger::CanSample::<EF>::sample(&mut prover_chal),
@@ -2164,7 +2231,7 @@ mod tests {
         };
         assert!(matches!(
             error,
-            BooleanTraceError::PointArity { table: 0, .. }
+            BooleanTraceCommitmentError::PointArity { table: 0, .. }
         ));
         assert_eq!(
             p3_challenger::CanSample::<EF>::sample(&mut prover_chal),
@@ -2188,7 +2255,7 @@ mod tests {
         };
         assert!(matches!(
             error,
-            BooleanTraceError::TableShapeMismatch { .. }
+            BooleanTraceCommitmentError::TableShapeMismatch { .. }
         ));
         assert_eq!(
             p3_challenger::CanSample::<EF>::sample(&mut prover_chal),
@@ -2234,11 +2301,11 @@ mod tests {
             match expected {
                 "shape" => assert!(matches!(
                     error,
-                    BooleanTraceError::TableShapeMismatch { .. }
+                    BooleanTraceCommitmentError::TableShapeMismatch { .. }
                 )),
                 "count" => assert!(matches!(
                     error,
-                    BooleanTraceError::TableCountMismatch { .. }
+                    BooleanTraceCommitmentError::TableCountMismatch { .. }
                 )),
                 _ => unreachable!(),
             }
@@ -2278,8 +2345,13 @@ mod tests {
             };
             assert!(matches!(
                 (expected, error),
-                ("shape", BooleanTraceError::TableShapeMismatch { .. })
-                    | ("count", BooleanTraceError::TableCountMismatch { .. })
+                (
+                    "shape",
+                    BooleanTraceCommitmentError::TableShapeMismatch { .. }
+                ) | (
+                    "count",
+                    BooleanTraceCommitmentError::TableCountMismatch { .. }
+                )
             ));
             assert_eq!(
                 p3_challenger::CanSample::<EF>::sample(&mut challenger),
@@ -2645,12 +2717,16 @@ mod tests {
         let table = table_with_width(0xB614, 8, 3);
         let point = Point::<EF>::rand(&mut SmallRng::seed_from_u64(0xB615), 8);
 
-        for protocol in [
-            both_views_protocol(shape, 1),
-            OpeningProtocol::new(vec![TableSpec::new(
-                shape,
-                vec![OpeningBatch::new(vec![0, 1, 2], vec![1])],
-            )]),
+        // The first protocol combines both views of every column, the second names them apart.
+        for (per_column, protocol) in [
+            (false, both_views_protocol(shape, 1)),
+            (
+                true,
+                OpeningProtocol::new(vec![TableSpec::new(
+                    shape,
+                    vec![OpeningBatch::new(vec![0, 1, 2], vec![1])],
+                )]),
+            ),
         ] {
             let mut prover_chal = challenger();
             let (commitment, data) = scheme
@@ -2683,18 +2759,23 @@ mod tests {
                 tampered.values[index] += EF::ONE;
                 let mut verifier_chal = challenger();
                 scheme.observe_commitment(&commitment, &mut verifier_chal);
-                assert!(
-                    scheme
-                        .verify_at(
-                            &commitment,
-                            &tampered,
-                            &protocol,
-                            core::slice::from_ref(&point),
-                            &mut verifier_chal,
-                        )
-                        .is_err(),
-                    "value {index}"
-                );
+                let refused = scheme
+                    .verify_at(
+                        &commitment,
+                        &tampered,
+                        &protocol,
+                        core::slice::from_ref(&point),
+                        &mut verifier_chal,
+                    )
+                    .unwrap_err();
+                // Combining feeds every value into one column point the current claim answers.
+                // Named apart, the lone next value is the one the successor claim answers.
+                let expected = if per_column && index >= shape.width() {
+                    BitRingSwitchProofError::SuccessorClaimMismatch
+                } else {
+                    BitRingSwitchProofError::ClaimMismatch
+                };
+                assert_eq!(reduction_error(refused), expected, "value {index}");
             }
         }
     }
@@ -2777,7 +2858,11 @@ mod tests {
         for batch in 0..points.len() {
             for column in 0..shape.width() {
                 let at = batch * 2 * shape.width() + shape.width() + column;
-                assert!(forge(Some(at)).is_err(), "next value {at}");
+                assert_eq!(
+                    reduction_error(forge(Some(at)).unwrap_err()),
+                    BitRingSwitchProofError::SuccessorClaimMismatch,
+                    "next value {at}"
+                );
             }
         }
     }
