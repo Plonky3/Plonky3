@@ -9,6 +9,7 @@ use p3_matrix::dense::RowMajorMatrix;
 use p3_maybe_rayon::prelude::*;
 use tracing::instrument;
 
+use super::air::NUM_INPUT_BITS;
 use super::columns::{Blake3BinaryCols, Blake3BinaryGCols, NUM_BLAKE3_BINARY_COLS};
 use super::{G_SCHEDULE, NUM_ROUNDS, iv_word};
 use crate::constants::permute;
@@ -112,7 +113,7 @@ pub fn generate_binary_trace_packed<F: Field>(
 
 /// Number of input words of one compression: the chaining value, the message block, the two
 /// counter halves, the block length and the flags.
-const NUM_INPUT_WORDS: usize = 8 + 16 + 4;
+pub(super) const NUM_INPUT_WORDS: usize = 8 + 16 + 4;
 
 /// Fill one packed block with the witness of up to 64 compressions, lane `j` holding input `j`.
 ///
@@ -125,7 +126,7 @@ fn generate_block(block: &mut [u64], inputs: &[Blake3CompressionInput]) {
     for (lane, input) in words.iter_mut().zip(inputs) {
         *lane = input_words(input);
     }
-    let (pairs, _) = block[..NUM_INPUT_WORDS * 32].as_chunks_mut::<64>();
+    let (pairs, _) = block[..NUM_INPUT_BITS].as_chunks_mut::<64>();
     for (pair, rows) in pairs.iter_mut().enumerate() {
         for (row, lane) in rows.iter_mut().zip(&words) {
             *row = u64::from(lane[2 * pair]) | (u64::from(lane[2 * pair + 1]) << 32);
@@ -214,8 +215,9 @@ fn g_planes(
         &mut row_d[id],
     );
 
-    // Each word is computed in place, in the witness columns or the state, so no plane is
-    // copied; the carries of the additions that have no carry columns go to `unused`.
+    // The witness words are written straight to their columns and `a2`, `c2` to their state
+    // slots; `d2` and `b2` are copied from their columns into the state. The carries of the
+    // additions that have no carry columns go to `unused`.
     let mut unused = [0; 31];
     let a_plus_b = add_planes(a, b, &mut cols.add1_carries);
     let a1 = add_planes(&a_plus_b, mx, &mut unused);
