@@ -145,7 +145,19 @@ struct HonestFixture {
 }
 
 /// AIR that issues one array read per row.
-struct ReadAir;
+struct ReadAir {
+    /// Checked handle naming the array every row reads.
+    bus: ReadOnlyMemoryBus<F>,
+}
+
+impl ReadAir {
+    /// Builds the handle once so repeated evaluations reuse it.
+    fn new() -> Self {
+        Self {
+            bus: ReadOnlyMemoryBus::new("memory").expect("a 128-bit count orbit is unreachable"),
+        }
+    }
+}
 
 impl BaseAir<F> for ReadAir {
     fn width(&self) -> usize {
@@ -159,12 +171,11 @@ where
     AB: ReadOnlyMemoryInteractionBuilder<F = F>,
 {
     fn eval(&self, builder: &mut AB) {
-        // Every row issues one unconditional read through a checked array handle.
-        let bus = ReadOnlyMemoryBus::new("memory").expect("a 128-bit count orbit is unreachable");
+        // The handle is built once by the AIR, so an evaluation per point costs nothing extra.
         let row = builder.main();
         let cells = row.current_slice();
         builder.read_only_memory(
-            &bus,
+            &self.bus,
             cells[0].into(),
             cells[1].into(),
             cells[2].into(),
@@ -249,7 +260,7 @@ fn honest_memory_reduces_to_three_authenticated_claims() {
 #[test]
 fn air_helper_emits_one_paired_count_transition() {
     // Evaluate the declaration path once over symbolic trace variables.
-    let air = ReadAir;
+    let air = ReadAir::new();
     let profile = BusSymbolicBuilder::<F, F>::from_air(&air, AirLayout::from_air(&air));
     let interactions = profile.interactions();
 
@@ -626,7 +637,7 @@ fn the_read_helper_constrains_every_count_against_its_inverse() {
         vec![F::ONE, count, count.inverse(), F::GENERATOR.exp_u64(11)],
         4,
     );
-    check_constraints(&ReadAir, &honest, &[]);
+    check_constraints(&ReadAir::new(), &honest, &[]);
 }
 
 #[test]
@@ -634,7 +645,7 @@ fn the_read_helper_constrains_every_count_against_its_inverse() {
 fn a_zero_count_row_is_refused_by_the_read_helper() {
     // A zero count has no inverse, so the self-cancelling read cannot be declared at all.
     let forged = RowMajorMatrix::new(vec![F::ONE, F::ZERO, F::ZERO, F::GENERATOR.exp_u64(11)], 4);
-    check_constraints(&ReadAir, &forged, &[]);
+    check_constraints(&ReadAir::new(), &forged, &[]);
 }
 
 #[test]

@@ -92,7 +92,9 @@ impl<F: Field> ReadOnlyMemoryBus<F> {
 ///
 /// A read consumes its current count and produces the next generator-orbit count.
 ///
-/// These declarations are not the leaves the reduction proves, only the tuple layout and the read count it covers.
+/// A whole-plan two-tree reduction proves these declarations directly, alongside whatever seeds and finalization the declaring AIRs add.
+///
+/// The materialized path in this module instead rebuilds seeds and finalization itself, so it refuses a statement whose bus declares anything beyond the reads.
 pub trait ReadOnlyMemoryInteractionBuilder: BusInteractionBuilder
 where
     Self::F: Field,
@@ -521,6 +523,10 @@ impl<F: Field> ReadOnlyMemoryPlan<F> {
     ///
     /// Challenges are drawn here rather than supplied, so no caller can fingerprint the witness before its dimensions are bound.
     ///
+    /// Every column passed here must already be committed, with its commitment observed by the transcript.
+    ///
+    /// A caller that commits afterwards may choose the witness once the fingerprint point and offset are known, and balance is then free.
+    ///
     /// # Errors
     ///
     /// Returns an error when the columns disagree with the statement or the leaves fail their deterministic root obligations.
@@ -562,6 +568,8 @@ impl<F: Field> ReadOnlyMemoryPlan<F> {
     /// Binds this statement, verifies the three-tree reduction, and returns the claims still owed.
     ///
     /// This checks bus balance and the nonzero count root, and authenticates no leaf evaluation.
+    ///
+    /// The transcript must already carry the same column commitments the prover observed, in the same order.
     ///
     /// # Errors
     ///
