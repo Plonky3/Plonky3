@@ -55,7 +55,7 @@ where
     let mut shallowest = usize::MAX;
 
     for (log_folded_domain_size, queries) in config
-        .round_parameters
+        .round_parameters()
         .iter()
         .map(|round| (round.log_folded_domain_size, round.num_queries))
         .chain(core::iter::once((

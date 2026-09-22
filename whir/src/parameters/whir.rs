@@ -226,9 +226,49 @@ where
     F: Field,
     EF: ExtensionField<F>,
 {
+    /// Number of variables in the original multilinear polynomial.
+    pub const fn num_variables(&self) -> usize {
+        self.num_variables
+    }
+
+    /// User-facing parameters the schedule was derived from.
+    pub const fn params(&self) -> &ProtocolParameters {
+        &self.params
+    }
+
+    /// Derived configuration of each intermediate round, in round order.
+    pub fn round_parameters(&self) -> &[RoundConfig] {
+        &self.round_parameters
+    }
+
+    /// Concrete folding factors used before the final direct-send phase.
+    pub fn folding_schedule(&self) -> &[usize] {
+        &self.folding_schedule
+    }
+
+    /// Number of out-of-domain samples during the commitment phase.
+    pub const fn commitment_ood_samples(&self) -> usize {
+        self.commitment_ood_samples
+    }
+
+    /// PoW bits for the initial folding sumcheck.
+    pub const fn starting_folding_pow_bits(&self) -> usize {
+        self.starting_folding_pow_bits
+    }
+
     /// Query budget of the final proximity test against the last committed codeword.
     pub const fn terminal(&self) -> TerminalBudget {
         self.terminal
+    }
+
+    /// Number of sumcheck rounds in the final phase.
+    pub const fn final_sumcheck_rounds(&self) -> usize {
+        self.final_sumcheck_rounds
+    }
+
+    /// PoW bits for the final folding sumcheck.
+    pub const fn final_folding_pow_bits(&self) -> usize {
+        self.final_folding_pow_bits
     }
 }
 

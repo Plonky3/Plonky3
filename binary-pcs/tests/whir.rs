@@ -194,7 +194,7 @@ fn the_cap_height_fits_every_round_tree() {
     )
     .unwrap();
 
-    let round = &config.round_parameters[0];
+    let round = &config.round_parameters()[0];
     let final_round = config.final_round_config();
 
     // The last phase asks for more queries than its folded domain holds, so it draws nothing.
