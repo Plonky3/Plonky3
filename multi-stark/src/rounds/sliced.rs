@@ -651,8 +651,10 @@ where
         .collect::<Vec<_>>();
     let prefixes = context.prefixes.len();
     let corners = 2 << round;
-    let scratch = (0..context.words * prefixes)
+    let tasks = context.words * prefixes;
+    let scratch = (0..tasks)
         .into_par_iter()
+        .with_min_len(rows_per_task(tasks))
         .par_fold_reduce(
             || SlicedScratch::new(&degrees, prefixes, trace.width, corners, tensor),
             |mut scratch, task| {
