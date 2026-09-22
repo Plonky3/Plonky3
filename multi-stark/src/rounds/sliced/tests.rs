@@ -697,6 +697,42 @@ fn tensor4_strategy_falls_back_for_short_or_cubic_stages() {
 }
 
 #[test]
+fn tensor4_strategy_matches_the_generic_kernel_on_a_cubic_stage() {
+    // The periodic stage is cubic, reads no successor, and fits GF(4) with three sliced rounds,
+    // so only the degree clause keeps it off the tensor, whose contraction stops at node two.
+    let instances = [Instance::honest(
+        FixtureAir::Periodic {
+            period: [gf4(2), gf4(3)],
+        },
+        1 << 10,
+        0x007E_5026,
+    )];
+    let first_round = |tensor: bool| {
+        with_state(&instances, no_lookups(), |mut state, eq_suffix| {
+            let evals = if tensor {
+                state
+                    .round_poly_sliced_with_strategy::<Gf4, Ghash128>(
+                        eq_suffix,
+                        SlicedStrategy::TensorBoundary,
+                    )
+                    .expect("a cubic stage should retain the sequential sliced path")
+            } else {
+                state.round_poly(eq_suffix)
+            };
+            (
+                evals,
+                state
+                    .constraint_groups
+                    .iter()
+                    .map(|group| (group.claim, group.last_evals.clone()))
+                    .collect::<Vec<_>>(),
+            )
+        })
+    };
+    assert_eq!(first_round(true), first_round(false));
+}
+
+#[test]
 fn tensor4_eligibility_gates_are_isolated_at_height_ten() {
     let height = 1 << 10;
     let assert_no_tensor = |instances: &[Instance], coupling| {
