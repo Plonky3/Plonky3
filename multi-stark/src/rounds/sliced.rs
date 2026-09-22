@@ -681,6 +681,10 @@ where
     R: Field + From<EF>,
     A: for<'b> Air<SlicedFolder<'b, F, S, R>>,
 {
+    debug_assert!(
+        slots.iter().all(|slot| slot.constraint_degree <= 2),
+        "the tensor holds nodes 0, 1 and 2 of each variable, which pin at most a quadratic"
+    );
     let raw = sliced_raw(
         eq_suffix,
         trace,
@@ -717,6 +721,10 @@ fn tensor_round<EF: Field, A>(
 ) -> Vec<Vec<EF>> {
     debug_assert!(round < tensor.depth && challenges.len() == round);
     debug_assert!(tau.len() >= tensor.depth);
+    debug_assert!(
+        slots.iter().all(|slot| slot.constraint_degree <= 2),
+        "the contraction interpolates quadratics and fills nodes 0 and 2 only"
+    );
     let prefix_weights = challenges
         .iter()
         .map(|&challenge| lagrange_weights(2, challenge))
