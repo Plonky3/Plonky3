@@ -1958,7 +1958,6 @@ where
     }
 
     /// Evaluate round four of the delayed boundary path from the retained planes.
-    #[tracing::instrument(skip_all, level = "debug", name = "round_poly_late_boundary")]
     pub(crate) fn round_poly_late_boundary<S>(&mut self, eq_suffix: &Poly<EF>) -> Option<Vec<EF>>
     where
         S: Field,
@@ -1981,6 +1980,7 @@ where
         {
             return None;
         }
+        let _span = tracing::debug_span!("round_poly_late_boundary").entered();
         Some(self.round_poly_planes::<S>(eq_suffix))
     }
 
