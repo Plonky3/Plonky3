@@ -9,11 +9,9 @@ use super::{RamBoundary, RamError, RamLayout, RamStatement};
 
 /// One memory access the machine issued.
 ///
-/// The clock reading is the machine's own, not this module's.
+/// The reading is the machine's own, and two accesses to one cell need different ones.
 ///
-/// Two accesses to one cell need different readings, and the constraints enforce that.
-///
-/// Two accesses to different cells may share a reading, because no read's answer depends on it.
+/// Two at different cells may share one, since no read's answer depends on that.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RamAccess<F> {
     /// Whether this access replaces the stored value.
@@ -50,9 +48,7 @@ impl<F: Field> RamAccess<F> {
     }
 }
 
-/// Row-major trace of one mutable read-write memory.
-///
-/// The rows are the accesses sorted by cell and then by clock reading.
+/// Row-major trace whose rows are the accesses sorted by cell and then by clock reading.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RamTrace<F> {
     /// Row-major values.
@@ -97,21 +93,15 @@ impl<F> RamTrace<F> {
         &self.values[row * self.width..(row + 1) * self.width]
     }
 
-    /// Wraps row-major values that some other routine laid out.
-    ///
-    /// Only this crate's own tests use it, to lay out traces the constraints have to reject.
+    /// Wraps row-major values that some other routine laid out, for this crate's own tests.
     #[cfg(test)]
     pub(crate) const fn from_values(values: Vec<F>, width: usize) -> Self {
         Self { values, width }
     }
 
-    /// One row of the trace, mutably.
-    ///
-    /// Only this crate's own tests use it, to build the traces the constraints have to reject.
+    /// One row of the trace, mutably, for this crate's own tests.
     ///
     /// A caller builds a trace from its accesses instead.
-    ///
-    /// Every derived column then stays consistent with them.
     #[cfg(test)]
     pub(crate) fn row_mut(&mut self, row: usize) -> &mut [F] {
         &mut self.values[row * self.width..(row + 1) * self.width]
@@ -121,27 +111,19 @@ impl<F> RamTrace<F> {
 impl<F: Field> RamTrace<F> {
     /// Builds the committed trace from the accesses a machine issued.
     ///
-    /// The sort, the comparison witness, and the markers are derived here.
+    /// A caller supplies the accesses, and the sort and every witness column follow.
     ///
-    /// A caller supplies only the accesses themselves.
-    ///
-    /// Memory rules are checked while the trace is built.
+    /// Memory rules are checked here too, turning a witness bug into a named error.
     ///
     /// That check is not what makes the proof sound, since the constraints are.
     ///
-    /// It turns a witness bug into a named error rather than an unexplained failure.
-    ///
     /// # Errors
     ///
-    /// Returns an error for a malformed statement or a witness of the wrong shape.
-    ///
-    /// Returns an error for a cell number or a clock reading too large to write down.
-    ///
-    /// Returns an error for two accesses to one cell at one reading.
-    ///
-    /// Returns an error for a read that breaks continuity.
-    ///
-    /// Returns an error when a continuing proof leaves a cell's first access unopened.
+    /// - A malformed statement, or a witness of the wrong shape.
+    /// - A cell number or clock reading too large to write down.
+    /// - Two accesses to one cell at one reading.
+    /// - A read that breaks continuity.
+    /// - A cell whose first access a continuing proof leaves unopened.
     pub fn build(statement: &RamStatement, accesses: &[RamAccess<F>]) -> Result<Self, RamError> {
         let layout = RamLayout::new(statement)?;
 
@@ -277,8 +259,6 @@ fn write_access<F: Field>(row: &mut [F], layout: &RamLayout, access: &RamAccess<
 /// The gap is added back to the earlier key, so this is the carry chain the constraints check.
 ///
 /// Columns above the compared width stay zero, because the wider comparison owns them.
-///
-/// Nothing reads them here beyond checking each holds a bit.
 fn fill_comparison<F: Field>(
     row: &mut [F],
     layout: &RamLayout,

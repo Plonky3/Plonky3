@@ -10,54 +10,28 @@ use p3_security::SecurityTerm;
 use super::RamError;
 use crate::BusPlan;
 
-/// Largest cell number or clock width this argument decomposes.
-///
-/// Both become explicit bit columns, so a machine word is the natural ceiling.
-///
-/// It also keeps every witness index a plain unsigned integer.
+/// Largest cell number or clock width this argument decomposes into digits.
 pub const MAX_RAM_BIT_WIDTH: usize = 64;
 
-/// Fewest accesses a statement may cover.
-///
-/// A one-row trace has no transition, so nothing would compare a row against the row above it.
-///
-/// Proof systems downstream refuse a one-row table anyway.
+/// Fewest accesses a statement may cover, since a one-row trace has no transition.
 pub const MIN_RAM_ACCESS_COUNT: usize = 2;
 
 /// How one proof's memory relates to the executions on either side of it.
 ///
-/// These are two statements, not two settings of one.
-///
-/// They constrain the first access to a cell differently.
-///
-/// Only one of them says anything about the memory this proof leaves behind.
+/// They differ at a cell's first access, and only one exports the memory left behind.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RamBoundary {
-    /// One self-contained proof.
+    /// One self-contained proof, whose memory starts empty and is not exported.
     ///
-    /// Memory starts empty, so a first read of a cell returns zero.
+    /// A first read of a cell returns zero, and a first write is free.
     ///
-    /// A first write to a cell is free, since it only overwrites that zero.
-    ///
-    /// Nothing about the memory left behind leaves the proof.
-    ///
-    /// An execution that continues past this proof must not choose this.
-    ///
-    /// Its next part would be free to start from any memory it liked.
+    /// A continuing execution must not choose it, or its next part could start from anything.
     SingleProof,
     /// One part of a longer execution, bounded by two committed memory images.
     ///
-    /// The first access to a cell declares its value on the inherited channel.
+    /// A cell's first access declares on the inherited channel, its last on the handed-on one.
     ///
-    /// The last access to a cell declares the value it leaves on the handed-on channel.
-    ///
-    /// Neither image is checked here.
-    ///
-    /// Both are ordinary named channels the enclosing plan balances like any other.
-    ///
-    /// Balancing the inherited channel is what binds the value a cell starts this part with.
-    ///
-    /// That declaration carries the opening row's own value, so it has to match an image entry.
+    /// Balance binds the start value, since the opening row's own value must match an entry.
     Segment {
         /// Channel carrying one entry per cell this part of the execution inherits.
         incoming: String,
@@ -67,17 +41,15 @@ pub enum RamBoundary {
 }
 
 impl RamBoundary {
-    /// Whether this proof hands a memory image to whatever follows it.
+    /// Whether this proof hands a memory image on.
     #[must_use]
     pub const fn is_segment(&self) -> bool {
-        // Only a continuing proof allocates and constrains the closing marker.
         matches!(self, Self::Segment { .. })
     }
 
     /// Names of the image channels, inherited first and handed-on second.
     #[must_use]
     pub fn image_buses(&self) -> Option<[&str; 2]> {
-        // A self-contained proof declares no image at either edge.
         match self {
             Self::SingleProof => None,
             Self::Segment { incoming, outgoing } => Some([incoming, outgoing]),
@@ -85,16 +57,10 @@ impl RamBoundary {
     }
 }
 
-/// Public shape of one mutable read-write memory.
-///
-/// A verifier derives every field below without seeing a witness.
+/// Public shape of one mutable read-write memory, derived without seeing a witness.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RamStatement {
-    /// Channel on which the machine's chips issue their memory accesses.
-    ///
-    /// Each chip produces one access and this memory consumes it.
-    ///
-    /// Balance then proves this trace holds exactly the accesses the machine issued.
+    /// Channel the machine's chips issue their accesses on, which this memory consumes.
     pub access_bus: String,
     /// Number of accesses, which is also the height of the trace.
     pub access_count: usize,
@@ -109,21 +75,15 @@ pub struct RamStatement {
 }
 
 impl RamStatement {
-    /// Number of payload slots in one access.
-    ///
-    /// The operation marker leads, then the cell digits, the clock digits, and the value.
+    /// Number of payload slots in one access: operation, cell, clock, then value.
     #[must_use]
     pub const fn access_payload_width(&self) -> usize {
-        // One slot per field element, and a digit keeps a slot to itself.
         1 + self.address_bits + self.timestamp_bits + self.value_width
     }
 
-    /// Number of payload slots in one memory-image entry.
-    ///
-    /// An image is a snapshot, so an entry has no operation and no clock reading.
+    /// Number of payload slots in one image entry, which is a cell and a value.
     #[must_use]
     pub const fn image_payload_width(&self) -> usize {
-        // A cell number and its value are all an entry needs.
         self.address_bits + self.value_width
     }
 
@@ -131,11 +91,9 @@ impl RamStatement {
     ///
     /// # Errors
     ///
-    /// Returns an error for an unsupported shape.
-    ///
-    /// Returns an error for one channel name used in two roles.
+    /// - An unsupported shape.
+    /// - One channel name used in two roles.
     pub fn validate(&self) -> Result<(), RamError> {
-        // A one-row trace has no transition, so no row would ever be compared against another.
         if self.access_count < MIN_RAM_ACCESS_COUNT {
             return Err(RamError::TooFewAccesses {
                 access_count: self.access_count,
@@ -180,27 +138,19 @@ impl RamStatement {
         Ok(())
     }
 
-    /// Checks this statement against the channels a plan actually defines.
+    /// Checks this statement against the channels a plan defines.
     ///
-    /// Everything declaring on a channel fixes its width, so a mismatch means the wrong channel.
-    ///
-    /// A static indexed table keeps a narrower lookup tuple of its own.
-    ///
-    /// That is what refuses an attempt to serve one through this argument instead.
+    /// A static indexed table keeps a narrower tuple, so this refuses one served here.
     ///
     /// # Errors
     ///
-    /// Returns an error for a malformed statement or a missing channel.
-    ///
-    /// Returns an error for a channel whose payload is the wrong width.
+    /// - A malformed statement, or a channel the plan does not define.
+    /// - A channel whose payload is the wrong width.
     pub fn check_against(&self, bus_plan: &BusPlan) -> Result<(), RamError> {
-        // Dimensions come first, so no width is compared against a nonsense statement.
         self.validate()?;
 
-        // The access channel carries a whole access.
         check_payload_width(bus_plan, &self.access_bus, self.access_payload_width())?;
 
-        // An image channel carries only a cell number and a value.
         for name in self.boundary.image_buses().into_iter().flatten() {
             check_payload_width(bus_plan, name, self.image_payload_width())?;
         }
@@ -210,13 +160,7 @@ impl RamStatement {
 
     /// Produced and consumed leaves this memory adds to the plan, in that order.
     ///
-    /// This memory produces nothing on the access channel and consumes one access per row.
-    ///
-    /// A continuing proof adds an inherited entry and a handed-on entry per row.
-    ///
-    /// The plan's fingerprint error grows with the larger of the two totals.
-    ///
-    /// That is what says, in bits, what a memory of a given size costs.
+    /// It consumes one access per row, and a continuing proof adds an entry each way per row.
     #[must_use]
     pub const fn leaf_contribution(&self) -> [usize; 2] {
         // A conditional declaration keeps its leaf even where it contributes nothing.
@@ -230,29 +174,14 @@ impl RamStatement {
 
     /// Soundness of this memory's claims, at the field the transcript samples from.
     ///
-    /// This memory runs no random experiment of its own.
+    /// This memory runs no random experiment, so the honest report is the plan's own term.
     ///
-    /// Its claims are ordinary multiset claims on the plan's product tree.
-    ///
-    /// Every constraint it adds is deterministic.
-    ///
-    /// What it contributes is leaves, which the plan's union bound already counts.
-    ///
-    /// So the honest report is the plan's own term rather than a second one on top.
-    ///
-    /// A separate term would charge the same fingerprint twice.
-    ///
-    /// The field size is read off the challenge field rather than supplied.
-    ///
-    /// Only the field challenges are actually drawn from bounds this error.
-    ///
-    /// A caller passing a base-field width would report a bound the protocol never had.
+    /// The size is read off that field, so no base-field width can slip in.
     ///
     /// # Errors
     ///
-    /// Returns an error for a statement the plan does not support.
-    ///
-    /// Returns an error for a challenge field with no room for a challenge.
+    /// - A statement the plan does not support.
+    /// - A challenge field with no room for a challenge.
     pub fn security_term<EF: Field>(&self, bus_plan: &BusPlan) -> Result<SecurityTerm, RamError> {
         self.check_against(bus_plan)?;
 
@@ -265,7 +194,6 @@ impl RamStatement {
 
 /// Checks that one named channel exists and carries the expected payload width.
 fn check_payload_width(bus_plan: &BusPlan, name: &str, expected: usize) -> Result<(), RamError> {
-    // A name is the only stable identity a plan exposes, so lookup goes by name.
     let domain = bus_plan
         .domains()
         .iter()
@@ -283,14 +211,10 @@ fn check_payload_width(bus_plan: &BusPlan, name: &str, expected: usize) -> Resul
     Ok(())
 }
 
-/// Column offsets of the address-sorted access trace.
-///
-/// There is one trace, holding the accesses sorted by cell and then by clock reading.
-///
-/// The machine's own chips are the copy in issuing order, and the access channel joins the two.
+/// Column offsets of the trace, whose rows are the accesses sorted by cell then reading.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RamLayout {
-    /// Number of cell digits, repeated here so a layout describes itself.
+    /// Number of cell digits.
     pub address_bits: usize,
     /// Number of clock digits.
     pub timestamp_bits: usize,
@@ -325,9 +249,8 @@ impl RamLayout {
     ///
     /// # Errors
     ///
-    /// Returns an error for a malformed statement.
-    ///
-    /// Returns an error for a width that overflows a machine word.
+    /// - A malformed statement.
+    /// - A width that overflows a machine word.
     pub fn new(statement: &RamStatement) -> Result<Self, RamError> {
         statement.validate()?;
         let RamStatement {
@@ -338,11 +261,8 @@ impl RamLayout {
         } = *statement;
 
         // Exactly one of the two comparisons runs on a row, so they share one witness.
-        //
-        // Whichever runs leaves any column above its own digit count unconstrained.
         let compare_bits = address_bits.max(timestamp_bits);
 
-        // Every offset is a running total, checked once so no later index wraps in silence.
         let mut next = 0usize;
         let mut take = |count: usize| -> Result<usize, RamError> {
             let start = next;
@@ -379,11 +299,7 @@ impl RamLayout {
         })
     }
 
-    /// Columns of one access, in payload order.
-    ///
-    /// The order is operation, cell digits, clock digits, then value components.
-    ///
-    /// The operation marker leads, so whoever reads an access sees what it is first.
+    /// Columns of one access: operation, cell digits, clock digits, then value components.
     pub fn access_columns(&self) -> impl Iterator<Item = usize> + '_ {
         core::iter::once(self.operation)
             .chain(self.address..self.address + self.address_bits)
@@ -391,11 +307,8 @@ impl RamLayout {
             .chain(self.value..self.value + self.value_width)
     }
 
-    /// Columns of one memory-image entry, in payload order.
-    ///
-    /// The cell digits lead, then the value components.
+    /// Columns of one image entry: the cell digits, then the value components.
     pub fn image_columns(&self) -> impl Iterator<Item = usize> + '_ {
-        // An image entry names a value held at a cell and nothing else.
         (self.address..self.address + self.address_bits)
             .chain(self.value..self.value + self.value_width)
     }

@@ -1681,7 +1681,7 @@ fn the_plan_reduction_proves_the_trace_holds_the_machine_s_accesses() {
     assert_eq!(prover_output.product.point, verifier_output.product.point);
     assert_eq!(prover_output.product.values, verifier_output.product.values);
 
-    // A memory holding an access the machine never issued no longer balances.
+    // A memory holding an access the machine never issued fails to balance.
     let mut forged = honest.clone();
     forged.row_mut(0)[layout.value] = value(99)[0];
     assert!(matches!(
