@@ -6,6 +6,7 @@ extern crate alloc;
 mod builder;
 mod debug;
 mod leaf;
+mod memory;
 mod plan;
 mod product;
 mod security;
@@ -20,6 +21,11 @@ pub use debug::{
     BusDebugReport, BusImbalance, BusUnmatched,
 };
 pub use leaf::{BusDirection, BusLeafDeclaration, BusLeafError, BusLeaves, BusSelector};
+pub use memory::{
+    MemoryFinalCounts, MemoryReadAddresses, MemoryReadCounts, MemoryReadValues, MemoryTableValues,
+    ReadOnlyMemoryBus, ReadOnlyMemoryChallenges, ReadOnlyMemoryClaims, ReadOnlyMemoryColumns,
+    ReadOnlyMemoryError, ReadOnlyMemoryInteractionBuilder, ReadOnlyMemoryPlan,
+};
 pub use plan::{
     BusBlock, BusBlockOwner, BusDomain, BusExpressionLocation, BusPlan, BusPlanError, BusPlanInput,
     BusSecurityGeometry, BusTerminalShare, BusTupleSlot, UnsupportedBusAccess,
