@@ -1343,6 +1343,9 @@ const GROUP_CELL_BYTES: usize = ROW_HALVES * PLANE_BYTES;
 /// Halves of the residual rows a round reads side by side: the low one and the high one.
 const ROW_HALVES: usize = 2;
 
+/// Adjacent columns a plane fold copies out of each corner in one run, see [`PlaneFold::stage`].
+const STAGED_COLUMNS: usize = 64;
+
 /// The byte-indexed tables that carry a stage's planes into residual rows of `R`.
 ///
 /// Each residual row of a column combines the cells the bound variables range over:
@@ -1441,12 +1444,12 @@ impl<'a, R: Field, const CORNERS: usize> PlaneFold<'a, R, CORNERS> {
         (low, high)
     }
 
-    /// The corners of one group, one array per plane.
+    /// The corners of one group, one slice per plane.
     #[inline]
     fn group_words<'b>(
         &self,
-        low: &'b [u64; CORNERS],
-        high: &'b [u64; CORNERS],
+        low: &'b [u64],
+        high: &'b [u64],
         group: usize,
     ) -> (&'b [u64], &'b [u64]) {
         let start = group * GROUP_CORNERS;
@@ -1462,16 +1465,52 @@ impl<'a, R: Field, const CORNERS: usize> PlaneFold<'a, R, CORNERS> {
         }
     }
 
+    /// Copy one word of a block of adjacent columns out of every corner, one plane per buffer.
+    ///
+    /// Each buffer then holds the block's columns one after another, and each column's corner
+    /// words side by side in corner order, see [`Self::staged_words`].
+    #[inline]
+    fn stage(
+        &self,
+        planes: &[[u64; 2]],
+        columns: Range<usize>,
+        word: usize,
+        low: &mut [u64],
+        high: &mut [u64],
+    ) {
+        let base = word * self.trace.width + columns.start;
+        let stride = self.words * self.trace.width;
+        for corner in 0..self.corners {
+            let start = base + corner * stride;
+            for ((low, high), &[low_word, high_word]) in low
+                .chunks_exact_mut(self.corners)
+                .zip(high.chunks_exact_mut(self.corners))
+                .zip(&planes[start..start + columns.len()])
+            {
+                low[corner] = low_word;
+                high[corner] = high_word;
+            }
+        }
+    }
+
+    /// The corner words of the `column`-th column [`Self::stage`] copied, one slice per plane.
+    #[inline]
+    fn staged_words<'b>(
+        &self,
+        low: &'b [u64],
+        high: &'b [u64],
+        column: usize,
+    ) -> (&'b [u64], &'b [u64]) {
+        let at = column * self.corners;
+        (&low[at..at + self.corners], &high[at..at + self.corners])
+    }
+
     /// The value at every residual row of one word, lane by lane, from its corner words.
     ///
     /// A cell of the Boolean subfield leaves its high plane clear, so a word whose corners all
     /// do so needs none of the high plane's masks or lookups.
     #[inline]
-    fn corner_values(
-        &self,
-        low: &[u64; CORNERS],
-        high: &[u64; CORNERS],
-    ) -> impl Iterator<Item = R> + '_ {
+    fn corner_values(&self, low: &[u64], high: &[u64]) -> impl Iterator<Item = R> + '_ {
         let has_high = high.iter().any(|&word| word != 0);
         let mut low_masks = [[0; SLICED_LANES]; MAX_PLANE_FOLD_GROUPS];
         let mut high_masks = [[0; SLICED_LANES]; MAX_PLANE_FOLD_GROUPS];
@@ -1556,23 +1595,15 @@ impl<'a, R: Field, const CORNERS: usize> PlaneFold<'a, R, CORNERS> {
         (lo, hi)
     }
 
-    /// Write one `(column, word)`'s mask bytes lane by lane, `stride` bytes apart.
+    /// Write one word's mask bytes lane by lane, `stride` bytes apart, from its corner words.
     ///
     /// # Returns
     ///
     /// Whether any corner's high plane is set.
-    fn write_lane_masks(
-        &self,
-        planes: &[[u64; 2]],
-        column: usize,
-        word: usize,
-        stride: usize,
-        out: &mut [u8],
-    ) -> bool {
-        let (low, high) = self.corner_words(planes, column, word);
+    fn write_lane_masks(&self, low: &[u64], high: &[u64], stride: usize, out: &mut [u8]) -> bool {
         let has_high = high.iter().any(|&word| word != 0);
         for group in 0..self.groups {
-            let (low, high) = self.group_words(&low, &high, group);
+            let (low, high) = self.group_words(low, high, group);
             let low = lane_masks(low);
             let high = if has_high {
                 lane_masks(high)
@@ -1630,11 +1661,16 @@ struct RowTile {
     ///
     /// When none is, every read skips the high plane's lookups.
     high: bool,
+    /// Both halves' low-plane corner words of one block of columns, see [`PlaneFold::stage`].
+    staged_low: Vec<u64>,
+    /// The high-plane corner words, laid out the same way.
+    staged_high: Vec<u64>,
 }
 
 impl RowTile {
-    /// An empty tile for a stage of `width` columns whose rows read `groups` corner groups.
-    fn new(groups: usize, width: usize) -> Self {
+    /// An empty tile for a stage of `width` columns whose rows read `corners` corners.
+    fn new(corners: usize, width: usize) -> Self {
+        let groups = corners.div_ceil(GROUP_CORNERS);
         let column_stride = ROW_HALVES * groups * PLANE_BYTES;
         let lane_stride = column_stride * width;
         Self {
@@ -1642,6 +1678,8 @@ impl RowTile {
             column_stride,
             lane_stride,
             high: false,
+            staged_low: vec![0; ROW_HALVES * corners * STAGED_COLUMNS],
+            staged_high: vec![0; ROW_HALVES * corners * STAGED_COLUMNS],
         }
     }
 
@@ -1673,16 +1711,33 @@ impl RowTile {
         let words = [pair, pair + fold.words / ROW_HALVES];
         let half_bytes = fold.groups * PLANE_BYTES;
         let mut high = false;
-        for column in 0..fold.trace.width {
-            for (half, &word) in words.iter().enumerate() {
-                let at = column * self.column_stride + half * half_bytes;
-                high |= fold.write_lane_masks(
-                    &fold.trace.cells,
-                    column,
-                    word,
-                    self.lane_stride,
-                    &mut self.bytes[at..],
-                );
+        for start in (0..fold.trace.width).step_by(STAGED_COLUMNS) {
+            let columns = start..(start + STAGED_COLUMNS).min(fold.trace.width);
+            let half_len = fold.corners * columns.len();
+            let staged_low = &mut self.staged_low[..ROW_HALVES * half_len];
+            let staged_high = &mut self.staged_high[..ROW_HALVES * half_len];
+            for ((low, high_words), &word) in staged_low
+                .chunks_exact_mut(half_len)
+                .zip(staged_high.chunks_exact_mut(half_len))
+                .zip(&words)
+            {
+                fold.stage(&fold.trace.cells, columns.clone(), word, low, high_words);
+            }
+            for (offset, column) in columns.clone().enumerate() {
+                for (half, (low, high_words)) in staged_low
+                    .chunks_exact(half_len)
+                    .zip(staged_high.chunks_exact(half_len))
+                    .enumerate()
+                {
+                    let (low, high_words) = fold.staged_words(low, high_words, offset);
+                    let at = column * self.column_stride + half * half_bytes;
+                    high |= fold.write_lane_masks(
+                        low,
+                        high_words,
+                        self.lane_stride,
+                        &mut self.bytes[at..],
+                    );
+                }
             }
         }
 
@@ -1993,19 +2048,26 @@ where
         let fold = PlaneFold::<R, CORNERS>::new::<S, EF>(&trace, &challenges);
         let rows = fold.words * SLICED_LANES;
 
-        let scalar = (0..trace.width)
+        // Each worker allocates the columns it writes, so the memory comes from its own arena.
+        let scalar = (0..trace.width.div_ceil(STAGED_COLUMNS))
             .into_par_iter()
-            .map(|column| {
-                let mut values = R::zero_vec(rows);
-                for (word, out) in values
-                    .as_chunks_mut::<SLICED_LANES>()
-                    .0
-                    .iter_mut()
-                    .enumerate()
-                {
-                    fold.fold_word(&trace.cells, column, word, out);
+            .flat_map_iter(|block| {
+                let start = block * STAGED_COLUMNS;
+                let columns = start..(start + STAGED_COLUMNS).min(trace.width);
+                let mut values = columns
+                    .clone()
+                    .map(|_| Vec::with_capacity(rows))
+                    .collect::<Vec<Vec<R>>>();
+                let mut low = vec![0; fold.corners * columns.len()];
+                let mut high = vec![0; fold.corners * columns.len()];
+                for word in 0..fold.words {
+                    fold.stage(&trace.cells, columns.clone(), word, &mut low, &mut high);
+                    for (column, values) in values.iter_mut().enumerate() {
+                        let (low, high) = fold.staged_words(&low, &high, column);
+                        values.extend(fold.corner_values(low, high));
+                    }
                 }
-                Poly::new(values)
+                values.into_iter().map(Poly::new)
             })
             .collect();
 
@@ -2258,7 +2320,7 @@ where
                             width,
                             next_zeros.as_ref(),
                         ),
-                        RowTile::new(fold.groups, width),
+                        RowTile::new(fold.corners, width),
                     )
                 },
                 |(mut scratch, mut tile), pair| {
@@ -2339,7 +2401,7 @@ where
                             width,
                             next_zeros.as_ref(),
                         ),
-                        RowTile::new(fold.groups, width),
+                        RowTile::new(fold.corners, width),
                     )
                 },
                 |(mut scratch, mut tile), pair| {
