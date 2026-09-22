@@ -85,6 +85,16 @@ If a `by rfl` starts failing after a re-extraction, in order:
    `opaque` asserts only that an inhabitant exists. Use `opaque`, not `axiom` —
    `axiom` breaks the code generator, which this build needs.
 
+   **`opaque` is not available at an `of_isOk`-gated site.** If the generated
+   file wraps the symbol in `RustM.of_isOk _ (by rfl)`, making it `opaque`
+   turns the obligation from provable into *unprovable*: `RustM α` is
+   `Option (Except Error α)`, so an opaque inhabitant could be `div` or `fail`,
+   and `isOk` does not reduce through an opaque head. `native_decide` does not
+   rescue it either — the evaluator cannot unfold an opaque. At such a site the
+   only options are a total body (step 2) or patching the generated file, and
+   the body is always the better trust position. Check before reaching for
+   `opaque`: `grep -B20 '<symbol>' extraction/p3_baby_bear.lean | grep of_isOk`.
+
 Watch for one non-obvious trap: use `Vector.ofFn`, not `Vector.map`, when a
 stub builds an array. `Array.map`'s `size` does not reduce definitionally, which
 silently breaks the length assertions the extraction makes about constant
@@ -125,7 +135,15 @@ grep -hcE '^[[:space:]]*(@\[[a-z_, ]*\][[:space:]]*)?opaque[[:space:]]' \
 
 grep -c 'sorry'  extraction/p3_baby_bear.lean       # must be 0
 grep -c '^theorem' spec/p3_baby_bear_proofs/constants.lean
-grep -c '^\s*(by rfl)$' extraction/p3_baby_bear.lean   # obligations still proved
+
+# `of_isOk` obligations: the total, then how many are discharged by `rfl`.
+# Count `(by rfl)` ANYWHERE on the line, not just `^\s*(by rfl)$` -- one
+# obligation is written inline and an anchored pattern silently undercounts.
+# `rfl` + `native_decide` must sum to the `of_isOk` total.
+grep -c 'RustM.of_isOk' extraction/p3_baby_bear.lean
+grep -c '^[^-]*(by rfl)' extraction/p3_baby_bear.lean       # excludes the commented site
+grep -c '(by native_decide)' extraction/p3_baby_bear.lean
+
 grep -c 'by sorry) -- PATCHED' extraction/p3_baby_bear.lean  # must be 0
 
 # Warnings. The two `Lean.Grind.USize64.{nat,int}Cast` lints come from the

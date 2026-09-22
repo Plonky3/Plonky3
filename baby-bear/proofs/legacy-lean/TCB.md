@@ -15,11 +15,11 @@ Measured totals (regenerate with the commands in [`SYNC.md`](SYNC.md)):
 | Quantity | Value |
 |---|---|
 | Generated `p3_baby_bear.lean` | **4306** lines, **0** `sorry` |
-| Hand-written interface `extraction/p3_baby_bear/*.lean` | **1025** lines, **0** `sorry`, **17** `opaque` |
+| Hand-written interface `extraction/p3_baby_bear/*.lean` | **1018** lines, **0** `sorry`, **16** `opaque` |
 | Pre-extraction patches (Rust source) | **0** — none needed |
 | Post-extraction patches | **6** files, **7** hunks total |
-| `of_isOk` obligations discharged by `rfl` | **45 of 46** |
-| `of_isOk` obligations needing `native_decide` | 1 of 46 |
+| `of_isOk` obligations discharged by `rfl` | **46 of 47** |
+| `of_isOk` obligations needing `native_decide` | 1 of 47 |
 | **`lake build` warnings** | **0** |
 
 **There is no `sorry` anywhere in this directory**, and a clean `lake build`
@@ -83,16 +83,23 @@ The lakefile pins Hax by **revision, not `main`**: the generated file and the
 proof library must come from the same hax revision, and a floating `rev` would
 let them drift apart silently.
 
-## Layer 3 — the hand-written interface (`extraction/p3_baby_bear/`) (1025 lines, 17 `opaque`, 0 `sorry`)
+## Layer 3 — the hand-written interface (`extraction/p3_baby_bear/`) (1018 lines, 16 `opaque`, 0 `sorry`)
 
 One file per crate in `baby-bear/Cargo.toml`'s `[dependencies]`, so the
 axiomatization boundary is exactly the crate's declared dependency edge.
 
 ### Given real, faithful bodies
 
-Transcriptions of upstream, not placeholders. Supplying these is what lets 45 of
-46 `of_isOk` obligations discharge by `rfl` — the whole `(by rfl)` → `(by sorry)`
+Transcriptions of upstream, not placeholders. Supplying these is what lets 46 of
+47 `of_isOk` obligations discharge by `rfl` — the whole `(by rfl)` → `(by sorry)`
 patch category disappeared.
+
+This is also why these symbols cannot be `opaque`. An `of_isOk` obligation is a
+proof that the call returns `.ok`, and `RustM α = Option (Except Error α)`, so
+an opaque inhabitant could equally be `div` or `fail`: `isOk` does not reduce
+through an opaque head and the obligation becomes unprovable. Where the
+generated file wraps a dependency symbol in `of_isOk`, a total body is forced —
+the choice is only ever *which* total body, never body-versus-assumption.
 
 **These transcriptions are now unchecked.** `SanityCheck.lean`, which verified
 them against upstream's own `const assert!`s and against the mathematical specs,
@@ -108,12 +115,28 @@ theorems in `spec/`. Re-reading them against upstream is a manual audit step.
 | `MontyParameters.MONTY_MASK` | `data_traits.rs:23` | **nothing** |
 | `TwoAdicData.ODD_FACTOR` | `data_traits.rs:93` | **nothing** |
 | `BarrettParameters.PRIME_I128`, `.PSEUDO_INV` | `data_traits.rs:54-55` | **nothing** |
+| `p3_mds.util.first_row_to_first_col` | `mds/src/util.rs:52-62` | **nothing** — see below |
 | `p3_field.dup.Dup.dup` | blanket `impl<T: Copy>`, body `*self` | faithful by inspection |
 | `hax_ext` `AsRef.as_ref` | `rust_primitives.unsize` **is** this coercion | faithful by inspection |
 
-`new_array`/`new_2d_array` use `Vector.ofFn`, not `Vector.map`: `Array.map`'s
-`size` does not reduce definitionally, which blocks the length assertions. This
-is load-bearing.
+`new_array`/`new_2d_array`/`first_row_to_first_col` use `Vector.ofFn`, not
+`Vector.map`: `Array.map`'s `size` does not reduce definitionally, which blocks
+the length assertions. This is load-bearing.
+
+`first_row_to_first_col` is the circulant row → column permutation
+(`col[0] = row[0]`, `col[i] = row[N - i]`), written as `v.toVec[-i]` because
+`Fin.neg` *is* that index map: `i ↦ (N - i) % N`. It is indexed by the six
+`MATRIX_CIRC_MDS_{8,12,16,24,32,64}_COL` constants, which are the only place in
+the tree where a wrong dependency body would corrupt *data* rather than leave a
+function unmodelled — and it carried exactly that defect through first review,
+as `pure v`, making all six constants hold the first row where the Rust holds
+the first column. Its "checked by **nothing**" is worth reading carefully: the six
+`of_isOk` obligations above it constrain the body to be *total and
+kernel-reducible*, not to be the *right permutation*. The identity body
+discharged all six too. The current values were checked once, by hand, by
+parsing the six row literals out of `baby-bear/src/mds.rs`, applying Rust's
+`col[i] = row[N - i]` outside Lean, and diffing against `#eval` of each
+extracted constant; all six agreed. Nothing re-runs that.
 
 `MONTY_MASK`, `ODD_FACTOR`, `PRIME_I128` and `PSEUDO_INV` are written with total
 arithmetic rather than hax's fallible `<<<?` / `cast_op`. These are class
@@ -122,15 +145,14 @@ cannot be discharged for an abstract `MONTY_BITS`. Total arithmetic also avoids
 needing `Cast u32 i128` / `Cast i128 i64` instances, which the Hax library does
 not provide.
 
-### The 10 assumed operations
+### The 9 assumed operations
 
 All `opaque`. Nothing else in this directory is assumed.
 
 | Count | Symbol(s) | What is assumed | Reachable? |
 |---:|---|---|---|
 | 6 | `p3_field.field.ring_{add,sub,mul,add_assign,sub_assign,neg}` | **The core assumption: no ring arithmetic is modelled.** `Output := R` is faithful; the operations are undefined. | yes |
-| 1 | `p3_field.exponentiation.exp_1725656503` | BabyBear's `exp_root_d` / seventh-root map. Upstream is the addition chain `x^1725656503`; nothing about the S-box follows from the opaque. | yes |
-| 1 | `p3_mds.util.first_row_to_first_col` | Circulant first-row → first-column (`col[0] = row[0]`, `col[i] = row[N-i]`). A commented hand-model is in `p3_mds.lean`; the live symbol is opaque, so the MDS coefficients are not pinned. | yes |
+| 1 | `p3_field.exponentiation.exp_1725656503` | BabyBear's `exp_root_d` / seventh-root map. Upstream is the addition chain `x^1725656503`; nothing about the S-box follows from the opaque. Its one call site is not under `of_isOk`, which is what makes `opaque` available here and not for `first_row_to_first_col`. | yes |
 | 1 | `p3_monty_31.data_traits.mul_w_default` | Upstream body is `a * Self::W`, needing `Algebra`'s multiplication — one of the six above. Used at `DEG` 4 and 8. | yes |
 | 1 | `p3_monty_31.mds.mds_permute_mut` | The MDS permutation's behaviour. | yes |
 
@@ -138,7 +160,7 @@ Seven further `opaque`s are structural rather than behavioural — four instance
 witnesses (`mds.Impl`, `mds.Impl_Permutation` and their two `AssociatedTypes`
 companions) and three Poseidon1/2 constructors (`p3_poseidon1.Impl_1.new`,
 `p3_poseidon2.Impl.new`, `p3_poseidon2.Impl_4.new`). They assert an inhabitant
-exists without saying which. 10 behavioural + 7 structural = **17** `opaque`
+exists without saying which. 9 behavioural + 7 structural = **16** `opaque`
 declarations; recount with the regex in [`SYNC.md`](SYNC.md) step 3, since a
 bare `grep -c opaque` also matches the prose in these files.
 
@@ -307,9 +329,10 @@ The three live directions, in order of value:
    unblock `mul_w_default`. Everything about BabyBear arithmetic is downstream.
 2. **Extract `p3-monty-31` for real** and consume it as a Lake dependency (the
    pattern `keccak`/`blake3` use for `p3_symmetric` in the fork). That collapses
-   the 666-line monty-31 file and makes `first_row_to_first_col` and
-   `exp_1725656503` real instead of opaques. Uncommenting the hand-model in
-   `p3_mds.lean` is the smaller local step for the MDS coefficients.
+   the 666-line monty-31 file, and replaces the hand-transcribed
+   `first_row_to_first_col` with the extracted one — moving it out of the
+   "checked by nothing" table rather than merely making it correct. It also
+   makes `exp_1725656503` real instead of an opaque.
 3. **Upstream the two hax bugs** (`def _`, the hoisted-helper name collision),
    each worth one patch hunk.
 
