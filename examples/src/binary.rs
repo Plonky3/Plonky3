@@ -45,6 +45,15 @@ use p3_sumcheck::{PrescribedPointPcs, TableShape};
 use p3_symmetric::{CompressionFunctionFromHasher, CryptographicHasher, SerializingHasher};
 use p3_util::log2_strict_usize;
 
+mod whir;
+use p3_binary_pcs::BooleanTraceCommitmentError;
+pub use p3_binary_pcs::whir::{BinaryWhirBudget, BudgetError};
+use p3_binary_pcs::whir::{BooleanWhirError, ProfileError};
+pub use whir::{
+    BooleanPcsChoice, BooleanWhirStarkConfig, WhirIncompatibility, WhirInteractionFamily,
+    WhirOptions, WhirRegime, WhirSummary, boolean_whir_config,
+};
+
 type F = BinaryField128;
 /// `H` is the byte hash the Merkle leaves, the Merkle nodes, and the transcript all run.
 type Hash<H> = SerializingHasher<H>;
@@ -335,6 +344,8 @@ fn binary_challenger<H: HarnessHash>() -> Challenger<H> {
 /// Defaults match `multi-stark/examples/prove_binary_field.rs`.
 #[derive(Clone, Copy, Debug)]
 pub struct BinaryProofOptions {
+    /// Commitment scheme used for Boolean traces.
+    pub pcs: BooleanPcsChoice,
     /// Log of the inverse code rate for the binary PCS.
     pub log_inv_rate: usize,
     /// Grinding bits the binary PCS demands once, before its query phase.
@@ -365,6 +376,7 @@ pub struct BinaryProofOptions {
 impl Default for BinaryProofOptions {
     fn default() -> Self {
         Self {
+            pcs: BooleanPcsChoice::Folding,
             log_inv_rate: 2,
             pcs_pow_bits: 0,
             security_bits: 100,
@@ -470,6 +482,24 @@ pub enum BinaryProofError {
     /// The generated Boolean-committed proof failed verification.
     #[error("Boolean proof verification failed: {0}")]
     BooleanVerify(VerificationError<PcsError<BooleanStarkConfig<2>>>),
+    /// A WHIR profile could not derive a schedule.
+    #[error("WHIR profile configuration failed: {0}")]
+    WhirProfile(ProfileError),
+    /// The WHIR Boolean trace adapter refused its configuration.
+    #[error("WHIR Boolean commitment configuration failed: {0}")]
+    WhirConfig(BooleanTraceCommitmentError<BooleanWhirError>),
+    /// A WHIR configuration exceeded its explicit schedule or payload budget.
+    #[error("WHIR budget check failed: {0}")]
+    WhirBudget(BinaryWhirBudgetError),
+    /// WHIR was selected with unsupported harness options or AIR declarations.
+    #[error("WHIR option is incompatible: {0}")]
+    WhirIncompatible(WhirIncompatibility),
+    /// WHIR proving failed.
+    #[error("WHIR proof generation failed: {0}")]
+    WhirProve(BooleanWhirProveError),
+    /// WHIR verification failed.
+    #[error("WHIR proof verification failed: {0}")]
+    WhirVerify(BooleanWhirVerifyError),
     /// The statement's security assessment left a component unassessed or below target.
     #[error("binary proof security check failed: {0}")]
     Security(SecurityError),
@@ -479,6 +509,27 @@ pub enum BinaryProofError {
     /// `options.leaf_elements` is not a power of two, so no grouping matches it.
     #[error("unsupported leaf size {0}; expected a power of two")]
     UnsupportedLeafElements(usize),
+}
+
+/// The budget failure projected from the binary WHIR adapter.
+pub type BinaryWhirBudgetError = p3_binary_pcs::whir::BudgetError;
+
+/// The WHIR proving error projected through the two supported hash instantiations.
+#[derive(Debug, thiserror::Error)]
+pub enum BooleanWhirProveError {
+    #[error("Keccak-256: {0}")]
+    Keccak(ProvingError<PcsProverError<BooleanWhirStarkConfig<Keccak256Hash>>>),
+    #[error("BLAKE3: {0}")]
+    Blake3(ProvingError<PcsProverError<BooleanWhirStarkConfig<Blake3>>>),
+}
+
+/// The WHIR verification error projected through the two supported hash instantiations.
+#[derive(Debug, thiserror::Error)]
+pub enum BooleanWhirVerifyError {
+    #[error("Keccak-256: {0}")]
+    Keccak(VerificationError<PcsError<BooleanWhirStarkConfig<Keccak256Hash>>>),
+    #[error("BLAKE3: {0}")]
+    Blake3(VerificationError<PcsError<BooleanWhirStarkConfig<Blake3>>>),
 }
 
 impl From<BinaryPcsConfigError> for BinaryProofError {
@@ -762,6 +813,11 @@ where
     Ntt: AdditiveNtt<F> + Sync,
     H: HarnessHash,
 {
+    if matches!(options.pcs, BooleanPcsChoice::Whir(_)) {
+        return Err(BinaryProofError::WhirIncompatible(
+            WhirIncompatibility::DenseField,
+        ));
+    }
     assert!(
         !BaseAir::<F>::assumes_boolean_trace(air),
         "the binary PCS commits field elements, so it cannot prove an AIR that assumes a Boolean trace"
@@ -989,11 +1045,428 @@ mod tests {
     use p3_challenger::CanSample;
     use p3_field::{HasSubfield, PrimeCharacteristicRing};
     use p3_keccak_air::{KeccakBinaryAir, NUM_KECCAK_BINARY_COLS};
+    use p3_lookup::{Count, IndexedLookupBuilder, InteractionBuilder, TraceWindow};
     use p3_multi_stark::prove;
     use p3_sha256_air::Sha256BinaryAir;
     use p3_util::log2_ceil_usize;
 
     use super::*;
+
+    #[test]
+    fn whir_l20_unique_schedule_configures_without_a_witness() {
+        let options = BinaryProofOptions {
+            pcs: BooleanPcsChoice::Whir(WhirOptions {
+                regime: WhirRegime::UniqueDecoding,
+                term_security_bits: 98,
+                budget: BinaryWhirBudget {
+                    max_stir_queries: 1024,
+                    max_proof_bytes: 2 * 1024 * 1024,
+                    max_grinding_bits: 0,
+                },
+            }),
+            security_bits: 95,
+            log_inv_rate: 1,
+            folding: 4,
+            merkle_arity: 2,
+            ..BinaryProofOptions::default()
+        };
+        let BooleanPcsChoice::Whir(whir) = options.pcs else {
+            unreachable!()
+        };
+        let config = boolean_whir_config::<_, Blake3>(
+            &Blake3BinaryAir {},
+            TableShape::new(20, 11_536),
+            options,
+            whir,
+        )
+        .expect("l20 unique schedule configures without a witness");
+        assert_eq!(config.summary.packed_variables, 27);
+        assert_eq!(config.summary.max_grinding_bits, 0);
+    }
+
+    #[test]
+    fn whir_johnson_grinding_budget_is_checked_before_witness_generation() {
+        let options = BinaryProofOptions {
+            pcs: BooleanPcsChoice::Whir(WhirOptions {
+                regime: WhirRegime::Johnson,
+                term_security_bits: 102,
+                budget: BinaryWhirBudget {
+                    max_stir_queries: usize::MAX,
+                    max_proof_bytes: usize::MAX,
+                    max_grinding_bits: 24,
+                },
+            }),
+            security_bits: 95,
+            log_inv_rate: 1,
+            folding: 4,
+            merkle_arity: 2,
+            ..BinaryProofOptions::default()
+        };
+        let BooleanPcsChoice::Whir(whir) = options.pcs else {
+            unreachable!()
+        };
+        let error = match boolean_whir_config::<_, Blake3>(
+            &Blake3BinaryAir {},
+            TableShape::new(20, 11_536),
+            options,
+            whir,
+        ) {
+            Ok(_) => panic!("Johnson l20 must exceed the 24-bit grinding ceiling"),
+            Err(error) => error,
+        };
+        assert!(matches!(
+            error,
+            BinaryProofError::WhirBudget(BudgetError::Grinding {
+                actual: 38,
+                budget: 24
+            })
+        ));
+    }
+
+    #[test]
+    fn whir_rejects_each_incompatible_geometry_option_with_its_payload() {
+        let cases = [
+            (
+                BinaryProofOptions {
+                    merkle_arity: 4,
+                    ..whir_test_options()
+                },
+                WhirIncompatibility::MerkleArity { actual: 4 },
+            ),
+            (
+                BinaryProofOptions {
+                    leaf_elements: Some(16),
+                    ..whir_test_options()
+                },
+                WhirIncompatibility::LeafElements { actual: Some(16) },
+            ),
+            (
+                BinaryProofOptions {
+                    pcs_pow_bits: 1,
+                    ..whir_test_options()
+                },
+                WhirIncompatibility::PcsPowBits { actual: 1 },
+            ),
+            (
+                BinaryProofOptions {
+                    log_inv_rate: 0,
+                    ..whir_test_options()
+                },
+                WhirIncompatibility::NonRedundantRate { actual: 0 },
+            ),
+            (
+                BinaryProofOptions {
+                    folding: 0,
+                    ..whir_test_options()
+                },
+                WhirIncompatibility::ZeroFolding,
+            ),
+            (
+                BinaryProofOptions {
+                    folding: 4,
+                    ..whir_test_options()
+                },
+                WhirIncompatibility::FoldingExceeds {
+                    requested: 4,
+                    committed: 3,
+                },
+            ),
+        ];
+        for (options, expected) in cases {
+            let actual = whir_error(
+                &ShapeAir {
+                    width: 3,
+                    next: vec![],
+                    public_values: 0,
+                    preprocessed_width: 0,
+                },
+                small_whir_shape(),
+                options,
+            );
+            assert!(matches!(
+                (actual, expected),
+                (
+                    BinaryProofError::WhirIncompatible(actual),
+                    expected
+                ) if actual == expected
+            ));
+        }
+    }
+
+    #[test]
+    fn whir_rejects_dense_trace_selection_before_binary_setup() {
+        let error = prove_binary_air(
+            &RecurrenceAir,
+            recurrence_trace(4),
+            BinaryProofOptions {
+                pcs: BooleanPcsChoice::Whir(WhirOptions {
+                    regime: WhirRegime::UniqueDecoding,
+                    term_security_bits: 98,
+                    budget: BinaryWhirBudget::PRODUCTION,
+                }),
+                ..BinaryProofOptions::default()
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            BinaryProofError::WhirIncompatible(WhirIncompatibility::DenseField)
+        ));
+    }
+
+    #[test]
+    fn whir_rejects_public_preprocessed_and_overflowing_shapes_before_pricing() {
+        let public = whir_error(
+            &ShapeAir {
+                width: 3,
+                next: vec![],
+                public_values: 1,
+                preprocessed_width: 0,
+            },
+            small_whir_shape(),
+            whir_test_options(),
+        );
+        assert!(matches!(
+            public,
+            BinaryProofError::WhirIncompatible(WhirIncompatibility::PublicValues { actual: 1 })
+        ));
+
+        let preprocessed = whir_error(
+            &ShapeAir {
+                width: 3,
+                next: vec![],
+                public_values: 0,
+                preprocessed_width: 1,
+            },
+            small_whir_shape(),
+            whir_test_options(),
+        );
+        assert!(matches!(
+            preprocessed,
+            BinaryProofError::WhirIncompatible(WhirIncompatibility::PreprocessedColumns {
+                actual: 1
+            })
+        ));
+
+        let overflowing = whir_error(
+            &Blake3BinaryAir {},
+            TableShape::new(usize::BITS as usize - 1, usize::MAX),
+            whir_test_options(),
+        );
+        assert!(matches!(
+            overflowing,
+            BinaryProofError::WhirIncompatible(WhirIncompatibility::ShapeOverflow { .. })
+        ));
+    }
+
+    #[test]
+    fn whir_successor_claim_routes_cover_current_full_and_sorted_subset() {
+        let current = boolean_whir_config::<_, Blake3>(
+            &ShapeAir {
+                width: 3,
+                next: vec![],
+                public_values: 0,
+                preprocessed_width: 0,
+            },
+            small_whir_shape(),
+            whir_test_options(),
+            match whir_test_options().pcs {
+                BooleanPcsChoice::Whir(options) => options,
+                BooleanPcsChoice::Folding => unreachable!(),
+            },
+        )
+        .expect("current-only successor declarations configure");
+        let full_options = whir_test_options();
+        let full = boolean_whir_config::<_, Blake3>(
+            &ShapeAir {
+                width: 3,
+                next: vec![0, 1, 2],
+                public_values: 0,
+                preprocessed_width: 0,
+            },
+            small_whir_shape(),
+            full_options,
+            match full_options.pcs {
+                BooleanPcsChoice::Whir(options) => options,
+                BooleanPcsChoice::Folding => unreachable!(),
+            },
+        )
+        .expect("ordered full successor declarations configure");
+        let subset_options = whir_test_options();
+        let subset = boolean_whir_config::<_, Blake3>(
+            &ShapeAir {
+                width: 3,
+                next: vec![0, 2],
+                public_values: 0,
+                preprocessed_width: 0,
+            },
+            small_whir_shape(),
+            subset_options,
+            match subset_options.pcs {
+                BooleanPcsChoice::Whir(options) => options,
+                BooleanPcsChoice::Folding => unreachable!(),
+            },
+        )
+        .expect("sorted proper successor declarations configure");
+        assert_eq!(
+            current.summary.total_opened_positions,
+            full.summary.total_opened_positions
+        );
+        assert!(
+            subset.summary.pcs_payload_bytes > current.summary.pcs_payload_bytes,
+            "current={:?}, subset={:?}",
+            current.summary,
+            subset.summary
+        );
+    }
+
+    #[test]
+    fn whir_rejects_permuted_duplicate_and_out_of_range_successors_before_budget_pricing() {
+        let mut options = whir_test_options();
+        let BooleanPcsChoice::Whir(mut whir) = options.pcs else {
+            unreachable!()
+        };
+        whir.budget.max_stir_queries = 0;
+        options.pcs = BooleanPcsChoice::Whir(whir);
+        for (next, expected) in [
+            (
+                vec![1, 0, 2],
+                WhirIncompatibility::SuccessorNotStrict {
+                    previous: 1,
+                    current: 0,
+                },
+            ),
+            (
+                vec![0, 0, 1],
+                WhirIncompatibility::SuccessorNotStrict {
+                    previous: 0,
+                    current: 0,
+                },
+            ),
+            (
+                vec![0, 3],
+                WhirIncompatibility::SuccessorOutOfRange {
+                    column: 3,
+                    width: 3,
+                },
+            ),
+        ] {
+            let error = whir_error(
+                &ShapeAir {
+                    width: 3,
+                    next,
+                    public_values: 0,
+                    preprocessed_width: 0,
+                },
+                small_whir_shape(),
+                options,
+            );
+            assert!(matches!(
+                (error, expected),
+                (BinaryProofError::WhirIncompatible(actual), expected) if actual == expected
+            ));
+        }
+    }
+
+    #[test]
+    fn whir_rejects_each_symbolic_declaration_family_independently() {
+        let cases: [(&dyn Fn() -> BinaryProofError, WhirInteractionFamily); 5] = [
+            (
+                &|| {
+                    whir_error(
+                        &LocalInteractionAir,
+                        small_whir_shape(),
+                        whir_test_options(),
+                    )
+                },
+                WhirInteractionFamily::Local,
+            ),
+            (
+                &|| {
+                    whir_error(
+                        &GlobalInteractionAir,
+                        small_whir_shape(),
+                        whir_test_options(),
+                    )
+                },
+                WhirInteractionFamily::Global,
+            ),
+            (
+                &|| {
+                    whir_error(
+                        &ExclusiveInteractionAir,
+                        small_whir_shape(),
+                        whir_test_options(),
+                    )
+                },
+                WhirInteractionFamily::Exclusive,
+            ),
+            (
+                &|| whir_error(&IndexedReadAir, small_whir_shape(), whir_test_options()),
+                WhirInteractionFamily::IndexedRead,
+            ),
+            (
+                &|| whir_error(&IndexedTableAir, small_whir_shape(), whir_test_options()),
+                WhirInteractionFamily::IndexedTable,
+            ),
+        ];
+        for (make_error, family) in cases {
+            let error = make_error();
+            assert!(matches!(
+                error,
+                BinaryProofError::WhirIncompatible(
+                    WhirIncompatibility::UnsupportedInteractions(actual)
+                ) if actual == family
+            ));
+        }
+    }
+
+    #[test]
+    fn whir_symbolic_refusals_precede_zero_query_pricing() {
+        let mut options = whir_test_options();
+        let BooleanPcsChoice::Whir(mut whir) = options.pcs else {
+            unreachable!()
+        };
+        whir.budget.max_stir_queries = 0;
+        options.pcs = BooleanPcsChoice::Whir(whir);
+
+        let exclusive = whir_error(&ExclusiveInteractionAir, small_whir_shape(), options);
+        assert!(matches!(
+            exclusive,
+            BinaryProofError::WhirIncompatible(WhirIncompatibility::UnsupportedInteractions(
+                WhirInteractionFamily::Exclusive
+            ))
+        ));
+        let indexed_table = whir_error(&IndexedTableAir, small_whir_shape(), options);
+        assert!(matches!(
+            indexed_table,
+            BinaryProofError::WhirIncompatible(WhirIncompatibility::UnsupportedInteractions(
+                WhirInteractionFamily::IndexedTable
+            ))
+        ));
+    }
+
+    #[test]
+    fn folding_config_keeps_accepting_whir_only_successor_restrictions() {
+        let air = ShapeAir {
+            width: 3,
+            next: vec![1, 0, 2],
+            public_values: 0,
+            preprocessed_width: 0,
+        };
+        let trace = Table::new(RowMajorMatrix::new(vec![F::ZERO; 64 * 3], 3).transpose());
+        let report = prove_boolean_air(
+            &air,
+            trace,
+            BinaryProofOptions {
+                hash: HashFamily::Blake3,
+                security_bits: 10,
+                ..BinaryProofOptions::default()
+            },
+        )
+        .expect("folding does not apply WHIR successor restrictions");
+        assert_eq!(report.width, 3);
+    }
 
     /// A nonlinear recurrence over `BinaryField128`: `(a, b) -> (b, a * b + a)`.
     ///
@@ -1028,6 +1501,169 @@ mod tests {
             (a, b) = (b, a * b + a);
         }
         RowMajorMatrix::new(values, 2)
+    }
+
+    #[derive(Clone, Debug)]
+    struct ShapeAir {
+        width: usize,
+        next: Vec<usize>,
+        public_values: usize,
+        preprocessed_width: usize,
+    }
+
+    impl<X> BaseAir<X> for ShapeAir {
+        fn width(&self) -> usize {
+            self.width
+        }
+
+        fn num_public_values(&self) -> usize {
+            self.public_values
+        }
+
+        fn preprocessed_width(&self) -> usize {
+            self.preprocessed_width
+        }
+
+        fn main_next_row_columns(&self) -> Vec<usize> {
+            self.next.clone()
+        }
+    }
+
+    impl<AB: AirBuilder> Air<AB> for ShapeAir {
+        fn eval(&self, builder: &mut AB) {
+            builder.assert_zero(builder.main().current_slice()[0]);
+        }
+    }
+
+    struct GlobalInteractionAir;
+
+    impl<X> BaseAir<X> for GlobalInteractionAir {
+        fn width(&self) -> usize {
+            3
+        }
+    }
+
+    impl<AB> Air<AB> for GlobalInteractionAir
+    where
+        AB: AirBuilder + InteractionBuilder,
+    {
+        fn eval(&self, builder: &mut AB) {
+            let value = builder.main().current_slice()[0];
+            builder.push_interaction("global", [value], Count::bounded(AB::Expr::ONE, 1));
+        }
+    }
+
+    struct LocalInteractionAir;
+
+    impl<X> BaseAir<X> for LocalInteractionAir {
+        fn width(&self) -> usize {
+            3
+        }
+    }
+
+    impl<AB> Air<AB> for LocalInteractionAir
+    where
+        AB: AirBuilder + InteractionBuilder,
+    {
+        fn eval(&self, builder: &mut AB) {
+            let value = builder.main().current_slice()[0];
+            builder.push_local_interaction([(vec![value.into()], Count::provided(AB::Expr::ONE))]);
+        }
+    }
+
+    struct ExclusiveInteractionAir;
+
+    impl<X> BaseAir<X> for ExclusiveInteractionAir {
+        fn width(&self) -> usize {
+            3
+        }
+    }
+
+    impl<AB> Air<AB> for ExclusiveInteractionAir
+    where
+        AB: AirBuilder + InteractionBuilder,
+    {
+        fn eval(&self, builder: &mut AB) {
+            let main = builder.main();
+            let flag = main.current_slice()[0];
+            let value = main.current_slice()[1];
+            builder.push_exclusive_interaction(
+                "exclusive",
+                [(
+                    flag.into(),
+                    Count::bounded(AB::Expr::ONE, 1),
+                    vec![value.into()],
+                )],
+            );
+        }
+    }
+
+    struct IndexedReadAir;
+
+    impl<X> BaseAir<X> for IndexedReadAir {
+        fn width(&self) -> usize {
+            3
+        }
+    }
+
+    impl<AB> Air<AB> for IndexedReadAir
+    where
+        AB: AirBuilder + IndexedLookupBuilder,
+    {
+        fn eval(&self, builder: &mut AB) {
+            builder.push_indexed_read("table", 0, [1]);
+        }
+    }
+
+    struct IndexedTableAir;
+
+    impl<X> BaseAir<X> for IndexedTableAir {
+        fn width(&self) -> usize {
+            3
+        }
+    }
+
+    impl<AB> Air<AB> for IndexedTableAir
+    where
+        AB: AirBuilder + IndexedLookupBuilder,
+    {
+        fn eval(&self, builder: &mut AB) {
+            builder.push_indexed_table("table", TraceWindow::Main, [0]);
+        }
+    }
+
+    fn whir_test_options() -> BinaryProofOptions {
+        BinaryProofOptions {
+            pcs: BooleanPcsChoice::Whir(WhirOptions {
+                regime: WhirRegime::UniqueDecoding,
+                term_security_bits: 98,
+                budget: BinaryWhirBudget {
+                    max_stir_queries: usize::MAX,
+                    max_proof_bytes: usize::MAX,
+                    max_grinding_bits: usize::MAX,
+                },
+            }),
+            security_bits: 95,
+            log_inv_rate: 1,
+            folding: 1,
+            merkle_arity: 2,
+            ..BinaryProofOptions::default()
+        }
+    }
+
+    fn small_whir_shape() -> TableShape {
+        TableShape::new(8, 3)
+    }
+
+    fn whir_error<A: BinaryAir>(
+        air: &A,
+        shape: TableShape,
+        options: BinaryProofOptions,
+    ) -> BinaryProofError {
+        let BooleanPcsChoice::Whir(whir) = options.pcs else {
+            unreachable!()
+        };
+        boolean_whir_config::<_, Blake3>(air, shape, options, whir).unwrap_err()
     }
 
     #[test]
