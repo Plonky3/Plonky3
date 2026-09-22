@@ -21,7 +21,7 @@ use super::basis::{Coefficients, CoordinateSums};
 use super::equality::{FactoredEquality, scaled_sums_into};
 use super::packing::BitPacking;
 use super::products::LeftFactors;
-use super::tensor::{BitTensor, BitTensorBuckets};
+use super::tensor::BitTensor;
 use super::transcript::{
     BitRingSwitchProverTranscript, BitRingSwitchShape, BitRingSwitchVerifierTranscript,
     TranscriptWidth,
@@ -666,34 +666,36 @@ impl<EF: TowerLevel> BitRingSwitch<EF> {
         let block = equality.block_len();
         let values = &packing.poly().as_slice()[offset..offset + equality.num_evals()];
         // The run holds whole columns, so the kept row bits are the low bits of `w`.
-        let max = (1usize << kept) - 1;
+        let column = 1usize << kept;
+        let max = column - 1;
+        let inner = equality.inner();
+
+        // Past a block's first element, the element before lies in the block, and in the same
+        // column unless the element starts one. Blocks and columns are both powers of two, so
+        // that turns on the offset in the block alone: every block reads the same inner
+        // weights shifted by one, which are therefore prepared once.
+        let shifted = (0..block)
+            .map(|j| if j & max == 0 { EF::ZERO } else { inner[j - 1] })
+            .collect::<Vec<_>>();
+        let shifted = LeftFactors::new(&shifted);
 
         let (carry, last, _) = values.par_chunks(block).enumerate().par_fold_reduce(
             // The scratch is what a block accumulates into, so only a fold arm holds one.
             || (BitTensor::zero(), BitTensor::zero(), None),
             |(mut carry, mut last, mut scratch), (index, values)| {
                 let weight = equality.outer()[index];
-                let inner = equality.inner();
-                let buckets = scratch.get_or_insert_with(BitTensorBuckets::zero);
-                buckets.clear();
-                for (j, &value) in values.iter().enumerate() {
-                    let row = (index * block + j) & max;
-                    // The +1 ripples out of the element before, inside the same column.
-                    if row != 0 {
-                        if j == 0 {
-                            // The element before closes the block before, under its weight.
-                            carry.add_exterior_product(equality.before_block(index), value);
-                        } else {
-                            buckets.add_exterior_product(inner[j - 1], value);
-                        }
-                    }
-                    // The last element of a column reads itself again.
-                    // One element in a column qualifies, so its weight is formed directly.
-                    if row == max {
-                        last.add_exterior_product(weight * inner[j], value);
-                    }
+                let start = (index * block) & max;
+                // The +1 ripples out of the element before, inside the same column.
+                // Before a block's first element, that closes the block before, under its weight.
+                if start != 0 {
+                    carry.add_exterior_product(equality.before_block(index), values[0]);
                 }
-                carry.add_scaled_columns(&buckets.tensor(), weight);
+                carry.add_scaled_columns(&shifted.sum(values, &mut scratch), weight);
+                // The last element of a column reads itself again.
+                // One element in a column qualifies, so its weight is formed directly.
+                for j in (max - start..values.len()).step_by(column) {
+                    last.add_exterior_product(weight * inner[j], values[j]);
+                }
                 (carry, last, scratch)
             },
             |(mut carry, mut last, scratch), (other_carry, other_last, _)| {
