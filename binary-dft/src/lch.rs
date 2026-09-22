@@ -258,7 +258,8 @@ fn deep_tiles<F: ButterflyField, const INVERSE: bool>(
         });
 }
 
-/// The runs the `depth` stages ending at stage `top` stage, `2^log_slab` matrix rows to a run.
+/// The runs that the `depth` stages ending at stage `top` gather, `2^log_slab` matrix rows to a
+/// run.
 ///
 /// A task owns one butterfly block of the group's widest stage and one run of rows inside it,
 /// so with `S = 2^(top + 1 - depth)` the narrowest stage's row distance, its staged run `k`

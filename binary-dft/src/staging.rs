@@ -83,7 +83,8 @@ impl StagedRuns {
 /// gather wrote, and no worker zeroes a buffer it is about to overwrite in full.
 ///
 /// # Panics
-/// Panics if a tile's walk reaches past the end of `values`.
+/// Panics if a tile's walk reaches past the end of `values`, or if `run == 0`, which divides
+/// by zero laying out the tiles.
 pub(crate) fn for_each_staged_tile<T, P>(
     values: &mut [T],
     runs: StagedRuns,
@@ -121,6 +122,9 @@ pub(crate) fn for_each_staged_tile<T, P>(
             // The assert above puts every run of this walk inside `values`. The exclusive
             // borrow the pointer came from outlives every task, since the pass returns only
             // once all of them have run.
+            //
+            // `index < tiles <= len / 2^depth` keeps every `run_index` below `len`, so none of
+            // its shifts or sums wrap.
             let source = unsafe { base.slice_mut(runs.run_index(index, k) * run, run) };
             tile.extend_from_slice(source);
         }
