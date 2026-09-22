@@ -15,6 +15,7 @@ use proptest::prelude::*;
 use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
 
+use super::plan::{BucketInput, BucketPlan, CommitmentPlan, MatrixSlot};
 use super::*;
 use crate::prover::codeword_from_coeffs;
 use crate::verifier::verify_stir_multi;
