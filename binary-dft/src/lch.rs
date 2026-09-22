@@ -306,7 +306,8 @@ fn fused_group<F: ButterflyField, const INVERSE: bool>(
     debug_assert!(top < log_n);
 
     let row_len = (1 << log_slab) * width;
-    let tasks = 1 << (log_n - depth - log_slab);
+    // The tiles the staged pass lays out, each `2^depth` staged rows.
+    let tasks = values.len() / (row_len << depth);
 
     // Rayon splits a range as far as it likes, and a split is what a staging tile belongs to.
     //
