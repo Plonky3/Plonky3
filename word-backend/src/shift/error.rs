@@ -30,6 +30,9 @@ pub enum ShiftReductionError {
     /// One delegated quadratic sumcheck is malformed or inconsistent.
     #[error("shift reduction sumcheck failed: {0}")]
     Sumcheck(#[from] GenericDegreeError),
+    /// The bit phase does not start from the statement claim less the public share.
+    #[error("the bit sumcheck disagrees with the claim the statement enters it with")]
+    EnteringClaim,
     /// The two reduction phases do not meet at the same intermediate claim.
     #[error("bit and word sumchecks disagree on their shared claim")]
     IntermediateClaim,

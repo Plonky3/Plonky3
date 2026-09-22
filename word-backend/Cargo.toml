@@ -1,6 +1,6 @@
 [package]
 name = "p3-word-backend"
-description = "Packed witness layout for Plonky3 word-level constraint systems."
+description = "Proving backend for Plonky3 word-level constraint systems."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -11,6 +11,7 @@ categories.workspace = true
 
 [dependencies]
 p3-binary-field.workspace = true
+p3-binary-pcs.workspace = true
 p3-challenger.workspace = true
 p3-field.workspace = true
 p3-multilinear-util.workspace = true
@@ -21,7 +22,10 @@ serde.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
+p3-commit.workspace = true
 p3-keccak.workspace = true
+p3-merkle-tree.workspace = true
+p3-symmetric.workspace = true
 proptest.workspace = true
 
 criterion.workspace = true

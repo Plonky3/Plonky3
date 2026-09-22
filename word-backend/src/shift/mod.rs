@@ -25,7 +25,7 @@
 mod claim;
 mod error;
 mod polynomial;
-mod transcript;
+pub(crate) mod transcript;
 mod wiring;
 
 use alloc::vec::Vec;
@@ -269,7 +269,7 @@ impl<W: Word> ShiftReductionKey<W> {
         let expected_claim = prepared.claim(claim) - public;
         if proof.bit_sumcheck.claimed_sum != expected_claim {
             transcript.abort();
-            return Err(ShiftReductionError::IntermediateClaim);
+            return Err(ShiftReductionError::EnteringClaim);
         }
 
         // The two sumchecks meet at the evaluation left by the bit-index rounds.
@@ -368,8 +368,15 @@ impl<W: Word> ShiftReductionKey<W> {
         self.system.witness_len().max(1).next_power_of_two().ilog2() as usize
     }
 
+    /// Returns the number of variables spanning the widest padded relation family.
+    #[must_use]
+    pub const fn constraint_variables(&self) -> usize {
+        // Every family is zero-padded to this shared constraint cube.
+        self.constraint_variables
+    }
+
     /// Builds the numeric soundness model from the executed schedule.
-    fn security_model(&self, field_bits: NonZeroUsize) -> WordShiftSecurityModel {
+    pub(crate) fn security_model(&self, field_bits: NonZeroUsize) -> WordShiftSecurityModel {
         // Two two-variable batching axes and both quadratic round counts are exact.
         WordShiftSecurityModel::new(
             field_bits.get(),
@@ -513,12 +520,16 @@ mod tests {
         let mut prover = challenger();
         let (proof, _) = key.prove(&witness, &claim, &mut prover).unwrap();
 
-        // Mutation 1: the first bit-round message no longer sums to the entering claim.
+        // Mutation 1: perturb the first bit-round message.
+        //
+        // The omitted value at one is reconstructed from the running claim.
+        //
+        // The round stays self-consistent, so the phase ends elsewhere instead of rejecting.
         let mut bit = proof.clone();
         bit.bit_sumcheck.round_polys[0][0] += F::ONE;
-        assert!(
-            key.verify(&public, &claim, &bit, &mut challenger())
-                .is_err()
+        assert_eq!(
+            key.verify(&public, &claim, &bit, &mut challenger()),
+            Err(ShiftReductionError::IntermediateClaim)
         );
 
         // Mutation 2: the word phase claims a different intermediate value.
@@ -530,10 +541,14 @@ mod tests {
         );
 
         // Mutation 3: public words are part of the statement bound before batching.
+        //
+        // Their share is subtracted from the claim the bit phase starts at.
+        //
+        // The first boundary therefore rejects, before either sumcheck runs.
         let changed_public = [Word64::new(public[0].get() ^ 1)];
-        assert!(
-            key.verify(&changed_public, &claim, &proof, &mut challenger())
-                .is_err()
+        assert_eq!(
+            key.verify(&changed_public, &claim, &proof, &mut challenger()),
+            Err(ShiftReductionError::EnteringClaim)
         );
 
         // Mutation 4: the final PCS opening no longer closes the word sumcheck.
@@ -570,9 +585,9 @@ mod tests {
                 integer_mul,
             );
 
-            assert!(
-                key.verify(&public, &changed_claim, &proof, &mut challenger())
-                    .is_err(),
+            assert_eq!(
+                key.verify(&public, &changed_claim, &proof, &mut challenger()),
+                Err(ShiftReductionError::EnteringClaim),
                 "claim position {changed} was not bound",
             );
         }
@@ -614,10 +629,9 @@ mod tests {
         let (proof, _) = key.prove(&witness, &claim, &mut prover).unwrap();
 
         // The shape and transcript inputs agree, but the verifier-fixed row wiring does not.
-        assert!(
-            reordered_key
-                .verify(&[], &claim, &proof, &mut challenger())
-                .is_err()
+        assert_eq!(
+            reordered_key.verify(&[], &claim, &proof, &mut challenger()),
+            Err(ShiftReductionError::FinalClaim)
         );
     }
 
