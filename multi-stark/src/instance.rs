@@ -381,6 +381,18 @@ where
             public_values,
         }
     }
+
+    /// Base-two logarithm of this instance's main trace height.
+    #[must_use]
+    pub const fn num_variables(&self) -> usize {
+        self.num_variables
+    }
+
+    /// The AIR whose constraints this instance is checked against.
+    #[must_use]
+    pub const fn air(&self) -> &'a A {
+        self.air
+    }
 }
 
 impl<'a, C, A> Deref for ProverInstances<'a, C, A>

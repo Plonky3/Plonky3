@@ -4,11 +4,14 @@ use alloc::string::String;
 
 use thiserror::Error;
 
-use crate::ProductGkrError;
+use crate::{BusNameError, ProductGkrError};
 
 /// Invalid plans, witnesses, or reduced claims for read-only memory checking.
 #[derive(Clone, Debug, PartialEq, Eq, Error)]
 pub enum ReadOnlyMemoryError {
+    /// The caller named the array outside the channel-name alphabet.
+    #[error("read-only memory bus name is invalid: {0}")]
+    InvalidBusName(#[from] BusNameError),
     /// The named array has no declarations in the enclosing bus plan.
     #[error("binary bus {name} does not exist")]
     UnknownBus {

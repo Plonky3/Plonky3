@@ -664,7 +664,7 @@ mod tests {
 
     use p3_air::{Air, AirBuilder, BaseAir, WindowAccess};
     use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
-    use p3_bus::{BusActivation, BusDirection, BusInteractionBuilder};
+    use p3_bus::{BusActivation, BusDirection, BusInteractionBuilder, BusName};
     use p3_challenger::{CanSample, DuplexChallenger};
     use p3_dft::Radix2DFTSmallBatch;
     use p3_field::extension::BinomialExtensionField;
@@ -823,7 +823,7 @@ mod tests {
                 BusActivation::Always
             };
             builder.push_bus_interaction(
-                "conditional-square",
+                BusName::new("conditional-square"),
                 self.direction,
                 [value.clone() * value],
                 activation,
@@ -875,7 +875,7 @@ mod tests {
                 main.into()
             };
             builder.push_bus_interaction(
-                "preprocessed-payload",
+                BusName::new("preprocessed-payload"),
                 self.direction,
                 [value],
                 BusActivation::Always,
@@ -1705,7 +1705,7 @@ mod tests {
             let value: AB::Expr = row[0].into();
             let selector: AB::Expr = row[1].into();
             builder.push_bus_interaction(
-                "conditional-only",
+                BusName::new("conditional-only"),
                 self.0,
                 [value],
                 BusActivation::Boolean(selector),

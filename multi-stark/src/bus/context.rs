@@ -367,7 +367,8 @@ mod tests {
     use p3_air::{Air, BaseAir, WindowAccess};
     use p3_baby_bear::BabyBear;
     use p3_bus::{
-        BusActivation, BusDirection, BusEvaluationError, BusInteractionBuilder, BusSymbolicBuilder,
+        BusActivation, BusDirection, BusEvaluationError, BusInteractionBuilder, BusName,
+        BusSymbolicBuilder,
     };
     use p3_field::PrimeCharacteristicRing;
     use p3_matrix::dense::RowMajorMatrix;
@@ -399,7 +400,7 @@ mod tests {
         fn eval(&self, builder: &mut AB) {
             let value: AB::Expr = builder.main().current_slice()[1].into();
             builder.push_bus_interaction(
-                "memory",
+                BusName::new("memory"),
                 BusDirection::Push,
                 [value],
                 BusActivation::Always,
