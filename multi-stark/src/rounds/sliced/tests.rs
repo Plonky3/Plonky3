@@ -787,6 +787,41 @@ fn late_boundary_marker_requires_the_n11_height_floor() {
 }
 
 #[test]
+#[should_panic(expected = "a plane round needs a whole word pair")]
+fn a_forced_late_round_below_the_height_floor_panics_instead_of_summing_no_rows() {
+    // Four bound challenges leave 2^10 rows a single word, so round four has no word pair.
+    let instances = [Instance::honest(FixtureAir::Pair, 1 << 10, 0x007E_50E0)];
+    with_state(&instances, no_lookups(), |mut state, eq_suffix| {
+        state
+            .round_poly_sliced_with_strategy::<Gf4, Ghash128>(
+                eq_suffix,
+                SlicedStrategy::TensorBoundaryLate,
+            )
+            .expect("tensor4 should build at 2^10");
+        let columns = state.sliced.as_mut().expect("the stage is on its planes");
+        assert!(
+            !columns.late_boundary,
+            "the height floor withholds the marker"
+        );
+        columns.late_boundary = true;
+
+        let mut state = state.fold_sliced::<Ghash128>(challenge(0));
+        let tau = state.tau.as_slice().to_vec();
+        for round in 1..=2 {
+            let suffix = Poly::new_from_point(&tau[round + 1..], Tower::ONE);
+            assert!(state.round_poly_sliced::<Gf4>(&suffix).is_some());
+            assert!(state.fold_sliced(challenge(round)));
+        }
+        let suffix = Poly::new_from_point(&tau[4..], Tower::ONE);
+        assert!(state.round_poly_sliced::<Gf4>(&suffix).is_some());
+        assert!(state.fold_late_boundary::<Gf4>(challenge(3)));
+
+        let suffix = Poly::new_from_point(&tau[5..], Tower::ONE);
+        let _ = state.round_poly_late_boundary::<Gf4>(&suffix);
+    });
+}
+
+#[test]
 fn late_boundary_refusal_unslices_with_the_four_recorded_challenges() {
     let height = 1 << 11;
     let instances = [Instance::honest(FixtureAir::Pair, height, 0x007E_50B1)];

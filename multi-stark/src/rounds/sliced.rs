@@ -1895,6 +1895,10 @@ where
     ///
     /// This is shared by the incumbent boundary round and the delayed fifth-challenge path so
     /// both use the same row/packed evaluator, node schedule, and finish-round semantics.
+    ///
+    /// # Panics
+    ///
+    /// When the residual rows do not fill a word pair.
     fn round_poly_planes<S>(&mut self, eq_suffix: &Poly<EF>) -> Vec<EF>
     where
         S: Field,
@@ -1912,6 +1916,10 @@ where
         let num_evals = self.num_evals();
         let (constraints, interactions) = {
             let fold = PlaneFold::<R>::new::<S, EF>(&columns.trace, &columns.challenges);
+            assert!(
+                fold.words >= ROW_HALVES,
+                "a plane round needs a whole word pair, or its round polynomial sums no rows"
+            );
             if R::Packing::WIDTH > 1 && num_evals / 2 >= R::Packing::WIDTH {
                 self.boundary_evals_lanes(eq_suffix, &fold)
             } else {
