@@ -52,7 +52,7 @@ use alloc::vec::Vec;
 
 use thiserror::Error;
 
-use crate::constraint::{AndConstraint, IntegerMulConstraint, Operand, ZeroConstraint};
+use crate::constraint::{AndConstraint, IntegerMulConstraint, ZeroConstraint};
 use crate::index::{Segment, ValueIndex};
 use crate::system::{ConstraintKind, ConstraintSystem, ShapeError, SystemError};
 use crate::word::Word;
@@ -122,6 +122,57 @@ pub enum CompositionError {
         /// The number of declared instances.
         instances: usize,
     },
+}
+
+impl CompositionError {
+    /// Grows one segment by an instance-packed block of words.
+    ///
+    /// # Errors
+    ///
+    /// Returns the oversized-segment error when the block cannot be addressed.
+    fn extend_segment(
+        total: usize,
+        slots: usize,
+        instances: usize,
+        segment: Segment,
+    ) -> Result<usize, Self> {
+        slots
+            .checked_mul(instances)
+            .and_then(|block| total.checked_add(block))
+            .ok_or(Self::SegmentTooLong {
+                segment,
+                len: usize::MAX,
+            })
+    }
+
+    /// Grows one relation family by an instance-packed block of relations.
+    ///
+    /// # Errors
+    ///
+    /// Returns the oversized-family error when the block cannot be addressed.
+    fn extend_family(
+        total: usize,
+        count: usize,
+        instances: usize,
+        kind: ConstraintKind,
+    ) -> Result<usize, Self> {
+        count
+            .checked_mul(instances)
+            .and_then(|block| total.checked_add(block))
+            .ok_or(Self::TooManyConstraints {
+                kind,
+                len: usize::MAX,
+            })
+    }
+
+    /// Narrows one composed segment length to the compact protocol address space.
+    ///
+    /// # Errors
+    ///
+    /// Returns the oversized-segment error naming the rejected length.
+    fn bound_segment(len: usize, segment: Segment) -> Result<u32, Self> {
+        u32::try_from(len).map_err(|_| Self::SegmentTooLong { segment, len })
+    }
 }
 
 /// A word gadget written once against component-local slots.
@@ -297,13 +348,13 @@ impl<W: Word> Composition<W> {
 
             // Every block is the instance count times one instance's own width.
             let component = &call.component;
-            public_len = extend(
+            public_len = CompositionError::extend_segment(
                 public_len,
                 component.interface_slots(),
                 call.instances,
                 Segment::Public,
             )?;
-            witness_len = extend(
+            witness_len = CompositionError::extend_segment(
                 witness_len,
                 component.local_slots(),
                 call.instances,
@@ -312,14 +363,18 @@ impl<W: Word> Composition<W> {
             for (family, count) in component.relation_counts().into_iter().enumerate() {
                 let kind = ConstraintKind::from_code(family as u8)
                     .expect("relation counts are indexed by assigned family codes");
-                relation_counts[family] =
-                    extend_constraints(relation_counts[family], count, call.instances, kind)?;
+                relation_counts[family] = CompositionError::extend_family(
+                    relation_counts[family],
+                    count,
+                    call.instances,
+                    kind,
+                )?;
             }
         }
 
         // A composed statement is addressed with exactly the flat index space.
-        let public = bound_segment(public_len, Segment::Public)?;
-        let witness = bound_segment(witness_len, Segment::Witness)?;
+        let public = CompositionError::bound_segment(public_len, Segment::Public)?;
+        let witness = CompositionError::bound_segment(witness_len, Segment::Witness)?;
         let mut counts = [0_u32; FAMILIES];
         for (family, count) in relation_counts.into_iter().enumerate() {
             let kind = ConstraintKind::from_code(family as u8)
@@ -563,23 +618,23 @@ impl<W: Word> Composition<W> {
 
                 // Families stay in their own order, so each block is contiguous.
                 zero.extend(
-                    body.zero_constraints().iter().map(|relation| {
-                        ZeroConstraint::new(remap_operand(relation.value(), remap))
-                    }),
+                    body.zero_constraints()
+                        .iter()
+                        .map(|relation| ZeroConstraint::new(relation.value().readdress(remap))),
                 );
                 and.extend(body.and_constraints().iter().map(|relation| {
                     AndConstraint::new(
-                        remap_operand(relation.left(), remap),
-                        remap_operand(relation.right(), remap),
-                        remap_operand(relation.output(), remap),
+                        relation.left().readdress(remap),
+                        relation.right().readdress(remap),
+                        relation.output().readdress(remap),
                     )
                 }));
                 product.extend(body.integer_mul_constraints().iter().map(|relation| {
                     IntegerMulConstraint::new(
-                        remap_operand(relation.left(), remap),
-                        remap_operand(relation.right(), remap),
-                        remap_operand(relation.low(), remap),
-                        remap_operand(relation.high(), remap),
+                        relation.left().readdress(remap),
+                        relation.right().readdress(remap),
+                        relation.low().readdress(remap),
+                        relation.high().readdress(remap),
                     )
                 }));
             }
@@ -676,63 +731,12 @@ impl<W: Word> Composition<W> {
     }
 }
 
-/// Rebuilds one operand at readdressed word positions.
-fn remap_operand<W: Word>(
-    operand: &Operand<W>,
-    remap: impl Fn(ValueIndex) -> ValueIndex,
-) -> Operand<W> {
-    // Term order and multiplicity are preserved, so cancellation is unchanged.
-    Operand::new(
-        operand
-            .terms()
-            .iter()
-            .map(|term| term.with_index(remap(term.index())))
-            .collect(),
-    )
-}
-
-/// Grows one segment by an instance-packed block.
-fn extend(
-    total: usize,
-    slots: usize,
-    instances: usize,
-    segment: Segment,
-) -> Result<usize, CompositionError> {
-    slots
-        .checked_mul(instances)
-        .and_then(|block| total.checked_add(block))
-        .ok_or(CompositionError::SegmentTooLong {
-            segment,
-            len: usize::MAX,
-        })
-}
-
-/// Grows one relation family by an instance-packed block.
-fn extend_constraints(
-    total: usize,
-    count: usize,
-    instances: usize,
-    kind: ConstraintKind,
-) -> Result<usize, CompositionError> {
-    count
-        .checked_mul(instances)
-        .and_then(|block| total.checked_add(block))
-        .ok_or(CompositionError::TooManyConstraints {
-            kind,
-            len: usize::MAX,
-        })
-}
-
-/// Bounds one composed segment to the compact protocol address space.
-fn bound_segment(len: usize, segment: Segment) -> Result<u32, CompositionError> {
-    u32::try_from(len).map_err(|_| CompositionError::SegmentTooLong { segment, len })
-}
-
 #[cfg(test)]
 mod tests {
     use alloc::vec;
 
     use super::*;
+    use crate::constraint::Operand;
     use crate::shift::ShiftedValue;
     use crate::word::Word64;
 

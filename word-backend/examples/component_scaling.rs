@@ -138,45 +138,53 @@ struct Row {
     prove_ms: f64,
 }
 
-fn measure(statement: Statement<Word64>, public: &[Word64], witness: &[Word64]) -> Row {
-    let metadata = statement
-        .compiled_layout()
-        .expect("the layout compiles")
-        .footprint()
-        .entries();
-    let key = WordProofKey::new(statement).expect("the key compiles");
-    let scheme = commitment_scheme(key.trace_variables());
-    let values = PackedWitness::new(key.statement(), public, witness).expect("the shape matches");
+impl Row {
+    /// Proves and verifies one statement, then reports what it cost.
+    ///
+    /// The verification is a self-check on the fixture, not part of the measurement.
+    ///
+    /// The timing covers proving only, which is the part that grows with the instances.
+    fn measure(statement: Statement<Word64>, public: &[Word64], witness: &[Word64]) -> Self {
+        let metadata = statement
+            .compiled_layout()
+            .expect("the layout compiles")
+            .footprint()
+            .entries();
+        let key = WordProofKey::new(statement).expect("the key compiles");
+        let scheme = commitment_scheme(key.trace_variables());
+        let values =
+            PackedWitness::new(key.statement(), public, witness).expect("the shape matches");
 
-    let start = Instant::now();
-    let (commitment, proof) = key
-        .prove::<EF, EF, _, _>(
+        let start = Instant::now();
+        let (commitment, proof) = key
+            .prove::<EF, EF, _, _>(
+                &scheme,
+                &values,
+                &mut Challenger::from_hasher(Vec::new(), Keccak256Hash),
+            )
+            .expect("the statement holds");
+        let prove_ms = start.elapsed().as_secs_f64() * 1e3;
+
+        key.verify::<EF, EF, _, _>(
             &scheme,
-            &values,
+            &commitment,
+            public,
+            &proof,
             &mut Challenger::from_hasher(Vec::new(), Keccak256Hash),
         )
-        .expect("the statement holds");
-    let prove_ms = start.elapsed().as_secs_f64() * 1e3;
+        .expect("the proof verifies");
 
-    key.verify::<EF, EF, _, _>(
-        &scheme,
-        &commitment,
-        public,
-        &proof,
-        &mut Challenger::from_hasher(Vec::new(), Keccak256Hash),
-    )
-    .expect("the proof verifies");
-
-    Row {
-        // The padded trace is one bit per lane of the committed cube.
-        committed_cells: 1 << key.trace_variables(),
-        // The whole protocol ends at exactly one opened evaluation.
-        opened_values: 1,
-        proof_bytes: postcard::to_allocvec(&proof)
-            .expect("the record serializes")
-            .len(),
-        metadata,
-        prove_ms,
+        Self {
+            // The padded trace is one bit per lane of the committed cube.
+            committed_cells: 1 << key.trace_variables(),
+            // The whole protocol ends at exactly one opened evaluation.
+            opened_values: 1,
+            proof_bytes: postcard::to_allocvec(&proof)
+                .expect("the record serializes")
+                .len(),
+            metadata,
+            prove_ms,
+        }
     }
 }
 
@@ -194,8 +202,8 @@ fn main() {
             .lower()
             .expect("the lowered system is well formed");
 
-        let inline = measure(Statement::from(flat), &public, &witness);
-        let composed = measure(Statement::from(composition), &public, &witness);
+        let inline = Row::measure(Statement::from(flat), &public, &witness);
+        let composed = Row::measure(Statement::from(composition), &public, &witness);
 
         // The two paths describe one statement, so every proof figure must agree.
         assert_eq!(inline.committed_cells, composed.committed_cells);

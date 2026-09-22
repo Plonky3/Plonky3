@@ -349,60 +349,43 @@ impl<W: Word> CompiledKeyLayout<W> {
     pub fn compose(composition: &Composition<W>) -> Result<Self, KeyCompileError> {
         let mut public = Vec::with_capacity(composition.calls().len());
         let mut witness = Vec::with_capacity(composition.calls().len());
-        let mut public_base = 0_u32;
-        let mut witness_base = 0_u32;
         let mut constraint_base = [0_u32; FAMILIES];
 
         for (call, index) in composition.calls().iter().zip(0_usize..) {
             // One compilation of the body serves every instance of the call.
-            let component = call.component();
-            let compiled = Self::new(component.body())?;
-            let instances = bound(call.instances(), Segment::Witness, LayoutComponent::Keys)?;
-            let strides = relation_strides(call)?;
+            let compiled = Self::new(call.component().body())?;
+            let instances =
+                KeyCompileError::bound(call.instances(), Segment::Witness, LayoutComponent::Keys)?;
+            let strides = SegmentPiece::strides(call, index)?;
 
             public.push(SegmentPiece {
                 segment: compiled.public,
-                word_base: public_base,
                 instances,
                 strides,
                 constraint_base,
             });
             witness.push(SegmentPiece {
                 segment: compiled.witness,
-                word_base: witness_base,
                 instances,
                 strides,
                 constraint_base,
             });
 
-            // The next call starts where this one's instance-packed block ends.
-            public_base = advance(
-                public_base,
-                component.interface_slots(),
-                instances,
-                Segment::Public,
-            )?;
-            witness_base = advance(
-                witness_base,
-                component.local_slots(),
-                instances,
-                Segment::Witness,
-            )?;
+            // The next call's relations start past this call's whole block.
             for (family, stride) in strides.into_iter().enumerate() {
                 let kind = ConstraintKind::from_code(family as u8)
                     .expect("relation strides are indexed by assigned family codes");
-                constraint_base[family] =
-                    constraint_base[family]
-                        .checked_add(stride.checked_mul(instances).ok_or(
-                            KeyCompileError::UnrepresentableComposition { call: index, kind },
-                        )?)
-                        .ok_or(KeyCompileError::UnrepresentableComposition { call: index, kind })?;
+                let overflow = || KeyCompileError::UnrepresentableComposition { call: index, kind };
+                constraint_base[family] = stride
+                    .checked_mul(instances)
+                    .and_then(|block| constraint_base[family].checked_add(block))
+                    .ok_or_else(overflow)?;
             }
         }
 
         Ok(Self {
-            public: merge(public, Segment::Public)?,
-            witness: merge(witness, Segment::Witness)?,
+            public: CompiledSegment::merge(public, Segment::Public)?,
+            witness: CompiledSegment::merge(witness, Segment::Witness)?,
         })
     }
 
@@ -429,8 +412,6 @@ impl<W: Word> CompiledKeyLayout<W> {
 struct SegmentPiece<W: Word> {
     /// The component body compiled once, in slot-local positions.
     segment: CompiledSegment<W>,
-    /// The block's first word in the composed segment.
-    word_base: u32,
     /// Live instances of the call.
     instances: u32,
     /// Relations one instance adds to each family.
@@ -439,150 +420,130 @@ struct SegmentPiece<W: Word> {
     constraint_base: [u32; FAMILIES],
 }
 
-/// Merges one compiled component per call into a single instanced segment.
-fn merge<W: Word>(
-    pieces: Vec<SegmentPiece<W>>,
-    segment: Segment,
-) -> Result<CompiledSegment<W>, KeyCompileError> {
-    // Shift spellings are shared, so the merged table is the sorted union.
-    let mut codes = pieces
-        .iter()
-        .flat_map(|piece| piece.segment.shifts.iter().copied().map(sequence_code))
-        .collect::<Vec<_>>();
-    codes.sort_unstable();
-    codes.dedup();
-    let shifts = codes
-        .iter()
-        .copied()
-        .map(ShiftSequenceCode::shifts)
-        .collect::<Vec<_>>();
+impl<W: Word> SegmentPiece<W> {
+    /// Returns the relations one instance of a call adds to each family.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error naming the call whose family outgrows the address space.
+    fn strides(call: &ComponentCall<W>, index: usize) -> Result<[u32; FAMILIES], KeyCompileError> {
+        let mut strides = [0_u32; FAMILIES];
+        for (family, count) in call.component().relation_counts().into_iter().enumerate() {
+            let kind = ConstraintKind::from_code(family as u8)
+                .expect("relation counts are indexed by assigned family codes");
+            strides[family] = u32::try_from(count)
+                .map_err(|_| KeyCompileError::UnrepresentableComposition { call: index, kind })?;
+        }
+        Ok(strides)
+    }
+}
 
-    let mut keys = Vec::new();
-    let mut slot_keys = Vec::new();
-    let mut references = Vec::new();
-    let mut blocks = Vec::new();
-    let mut words = 0_usize;
-
-    for piece in pieces {
-        let slot_base = bound(slot_keys.len(), segment, LayoutComponent::WordOffsets)?;
-        let key_base = bound(keys.len(), segment, LayoutComponent::Keys)?;
-        let reference_base = bound(references.len(), segment, LayoutComponent::References)?;
-
-        // Dense shift indices are rebased onto the merged table.
-        let remap = piece
-            .segment
-            .shifts
+impl<W: Word> CompiledSegment<W> {
+    /// Merges one compiled component per call into a single instanced segment.
+    ///
+    /// Each piece's block starts where the preceding pieces' blocks end.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the merged segment outgrows the compact index space.
+    fn merge(pieces: Vec<SegmentPiece<W>>, segment: Segment) -> Result<Self, KeyCompileError> {
+        // Shift spellings are shared, so the merged table is the sorted union.
+        let mut codes = pieces
             .iter()
-            .copied()
-            .map(|entry| {
-                let code = sequence_code(entry);
-                codes
-                    .binary_search(&code)
-                    .expect("the merged shift table covers every component spelling")
-                    as u32
+            .flat_map(|piece| {
+                piece
+                    .segment
+                    .shifts
+                    .iter()
+                    .copied()
+                    .map(ShiftSequenceCode::new)
             })
             .collect::<Vec<_>>();
+        codes.sort_unstable();
+        codes.dedup();
+        let shifts = codes
+            .iter()
+            .copied()
+            .map(ShiftSequenceCode::shifts)
+            .collect::<Vec<_>>();
 
-        references.extend(piece.segment.references.iter().copied());
-        keys.extend(piece.segment.keys.iter().map(|key| StoredKey {
-            operation: key.operation,
-            shift: remap[key.shift as usize],
-            references: (key.references.start + reference_base)
-                ..(key.references.end + reference_base),
-        }));
-        slot_keys.extend(
-            piece
+        let mut keys = Vec::new();
+        let mut slot_keys = Vec::new();
+        let mut references = Vec::new();
+        let mut blocks = Vec::new();
+        let mut words = 0_u32;
+
+        for piece in pieces {
+            let bound = |len, component| KeyCompileError::bound(len, segment, component);
+            let slot_base = bound(slot_keys.len(), LayoutComponent::WordOffsets)?;
+            let key_base = bound(keys.len(), LayoutComponent::Keys)?;
+            let reference_base = bound(references.len(), LayoutComponent::References)?;
+
+            // Dense shift indices are rebased onto the merged table.
+            let remap = piece
                 .segment
-                .slot_keys
+                .shifts
                 .iter()
-                .map(|range| (range.start + key_base)..(range.end + key_base)),
-        );
+                .copied()
+                .map(|entry| {
+                    codes
+                        .binary_search(&ShiftSequenceCode::new(entry))
+                        .expect("the merged shift table covers every component spelling")
+                        as u32
+                })
+                .collect::<Vec<_>>();
 
-        // A call with no words of this segment holds no addressable block.
-        let slots = bound(
-            piece.segment.slot_keys.len(),
-            segment,
-            LayoutComponent::WordOffsets,
-        )?;
-        let width = slots
-            .checked_mul(piece.instances)
-            .ok_or(KeyCompileError::LayoutTooLarge {
+            references.extend(piece.segment.references.iter().copied());
+            keys.extend(piece.segment.keys.iter().map(|key| StoredKey {
+                operation: key.operation,
+                shift: remap[key.shift as usize],
+                references: (key.references.start + reference_base)
+                    ..(key.references.end + reference_base),
+            }));
+            slot_keys.extend(
+                piece
+                    .segment
+                    .slot_keys
+                    .iter()
+                    .map(|range| (range.start + key_base)..(range.end + key_base)),
+            );
+
+            // A call with no words of this segment holds no addressable block.
+            let slots = bound(piece.segment.slot_keys.len(), LayoutComponent::WordOffsets)?;
+            let too_wide = || KeyCompileError::LayoutTooLarge {
                 segment,
                 component: LayoutComponent::WordOffsets,
                 len: usize::MAX,
-            })?;
-        if width != 0 {
-            blocks.push(InstanceBlock {
-                word_base: piece.word_base,
-                slots,
-                instances: piece.instances,
-                slot_base,
-                strides: piece.strides,
-                constraint_base: piece.constraint_base,
-            });
-            words += width as usize;
+            };
+            let width = slots.checked_mul(piece.instances).ok_or_else(too_wide)?;
+            if width != 0 {
+                // The running total is exactly the first word this block owns.
+                blocks.push(InstanceBlock {
+                    word_base: words,
+                    slots,
+                    instances: piece.instances,
+                    slot_base,
+                    strides: piece.strides,
+                    constraint_base: piece.constraint_base,
+                });
+                words = words.checked_add(width).ok_or_else(too_wide)?;
+            }
         }
+
+        // Bound every merged endpoint before the segment is handed out.
+        KeyCompileError::bound(keys.len(), segment, LayoutComponent::Keys)?;
+        KeyCompileError::bound(references.len(), segment, LayoutComponent::References)?;
+        KeyCompileError::bound(slot_keys.len(), segment, LayoutComponent::WordOffsets)?;
+
+        Ok(Self {
+            shifts,
+            keys,
+            slot_keys,
+            references,
+            blocks,
+            words: words as usize,
+        })
     }
-
-    // Bound every merged endpoint before the segment is handed out.
-    bound(keys.len(), segment, LayoutComponent::Keys)?;
-    bound(references.len(), segment, LayoutComponent::References)?;
-    bound(slot_keys.len(), segment, LayoutComponent::WordOffsets)?;
-
-    Ok(CompiledSegment {
-        shifts,
-        keys,
-        slot_keys,
-        references,
-        blocks,
-        words,
-    })
-}
-
-/// Returns the operation-independent code of one shift spelling.
-fn sequence_code<W: Word>(shifts: [Shift<W>; 2]) -> ShiftSequenceCode {
-    // The family tag is discarded, so any operation gives the same sequence.
-    KeyCode::new(ConstraintKind::Zero, shifts).sequence()
-}
-
-/// Returns the relations one instance of a call adds to each family.
-fn relation_strides<W: Word>(call: &ComponentCall<W>) -> Result<[u32; FAMILIES], KeyCompileError> {
-    let mut strides = [0_u32; FAMILIES];
-    for (family, count) in call.component().relation_counts().into_iter().enumerate() {
-        let kind = ConstraintKind::from_code(family as u8)
-            .expect("relation counts are indexed by assigned family codes");
-        strides[family] = u32::try_from(count)
-            .map_err(|_| KeyCompileError::UnrepresentableComposition { call: 0, kind })?;
-    }
-    Ok(strides)
-}
-
-/// Bounds one merged component length to its compact index.
-fn bound(len: usize, segment: Segment, component: LayoutComponent) -> Result<u32, KeyCompileError> {
-    u32::try_from(len).map_err(|_| KeyCompileError::LayoutTooLarge {
-        segment,
-        component,
-        len,
-    })
-}
-
-/// Advances a segment base past one instance-packed block.
-fn advance(
-    base: u32,
-    slots: usize,
-    instances: u32,
-    segment: Segment,
-) -> Result<u32, KeyCompileError> {
-    let too_large = || KeyCompileError::LayoutTooLarge {
-        segment,
-        component: LayoutComponent::WordOffsets,
-        len: usize::MAX,
-    };
-    let slots = u32::try_from(slots).map_err(|_| too_large())?;
-    slots
-        .checked_mul(instances)
-        .and_then(|width| base.checked_add(width))
-        .ok_or_else(too_large)
 }
 
 /// A bounded part of the compact key layout.
@@ -623,6 +584,21 @@ pub enum KeyCompileError {
         /// The relation family that overflows.
         kind: ConstraintKind,
     },
+}
+
+impl KeyCompileError {
+    /// Narrows one compiled length to the compact index the layout stores it in.
+    ///
+    /// # Errors
+    ///
+    /// Returns the oversized-layout error naming the segment and the component.
+    fn bound(len: usize, segment: Segment, component: LayoutComponent) -> Result<u32, Self> {
+        u32::try_from(len).map_err(|_| Self::LayoutTooLarge {
+            segment,
+            component,
+            len,
+        })
+    }
 }
 
 /// One semantic term translated into backend storage coordinates.
