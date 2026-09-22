@@ -69,7 +69,9 @@ pub trait MultiStarkConfig {
     ///
     /// A count above [`MAX_SLICED_ROUNDS`] is capped by it, as is one above the row variables
     /// a stage keeps once a word's lanes are spent. Both caps are silent: the proof is the
-    /// same either way, so only the timing of a stage tells them apart.
+    /// same either way, so only the timing of a stage tells them apart. With its
+    /// late-materialization parameter set, [`ReprBackend`](crate::ReprBackend) serves a stage
+    /// that qualifies one further round from its planes, which this count does not grant.
     fn sliced_rounds(&self) -> usize {
         DEFAULT_SLICED_ROUNDS
     }

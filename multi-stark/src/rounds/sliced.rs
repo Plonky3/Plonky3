@@ -52,6 +52,8 @@ use crate::sliced::{LaneSums, SLICED_LANES, SlicedFolder, SlicedGf4, gf4_coordin
 ///
 /// Each round doubles both the plane work and the corner words a residual row folds, so the
 /// count has a ceiling. A stage is also capped by the row variables its words leave unbound.
+/// With its late-materialization parameter set, [`ReprBackend`](crate::ReprBackend) serves a
+/// stage that qualifies one further round from its planes, outside this cap.
 pub const MAX_SLICED_ROUNDS: usize = 4;
 
 /// Longest prefix a plane fold binds.
@@ -1171,6 +1173,10 @@ impl<EF> SlicedColumns<EF> {
     }
 
     /// Whether the stage's sliced rounds are spent and its planes can still serve a round.
+    ///
+    /// This admits the boundary round alone. The delayed boundary path evaluates its round four
+    /// with one more challenge bound, so this is false there, and
+    /// [`RoundStateExt::round_poly_late_boundary`] gates that round instead.
     ///
     /// A word pair is the shortest run of residual rows that holds both halves of a row pair.
     const fn at_boundary(&self) -> bool {
