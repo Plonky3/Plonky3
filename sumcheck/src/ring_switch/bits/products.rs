@@ -358,8 +358,10 @@ mod kernel {
         }
 
         /// Never called: no value of this type exists.
+        // The empty match is the proof of that, so the dereference it names never runs.
+        #[allow(clippy::uninhabited_references)]
         pub(super) fn sum<EF: TowerLevel>(&self, _right: &[EF]) -> BitTensor<EF> {
-            unreachable!("no layout is prepared on a target without the kernel")
+            match *self {}
         }
     }
 }
