@@ -9,15 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- `CandidateSet`, the checked candidate count a commitment leaves open, and `ChargedTerm`,
-  a term that has already paid for one. A charge forwards the set rather than consuming it,
-  and a charged term cannot be charged again.
+- `CandidateSet`, the checked candidate count a commitment leaves open. A charge forwards
+  the set rather than consuming it, and a count that names no set is refused rather than
+  subtracted — a negative one used to add bits to the term it was charged over.
 
 ### Changed
 
-- **Breaking:** `SecurityTerm::over_candidates` takes a `CandidateSet` instead of an `f64`
-  and returns a `ChargedTerm`. It is now the only implementation of the candidate-set charge
-  in the workspace.
+- **Breaking:** `SecurityTerm::over_candidates` takes a `CandidateSet` instead of an `f64`.
+  It is now the only implementation of the candidate-set charge in the workspace.
 
 ## [0.7.0] - 2026-09-04
 ### Merged PRs

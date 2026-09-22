@@ -39,7 +39,7 @@ use crate::table::{OpeningEvals, OpeningProtocol};
 ///     WHIR commitment        fixes the set, charges its own proximity error
 ///     bit ring switch        charges its reduction over the set, forwards the count
 ///     column batching        charges its draw over the same set, forwards the count
-///     multi-STARK report     charges its AIR and lookup draws over the same set
+///     multi-STARK report     charges its AIR, lookup and bus draws over the same set
 /// ```
 ///
 /// Terms already recorded here are final, each charged by the layer that drew it.
@@ -87,7 +87,7 @@ impl PrescribedOpeningSecurity {
     ///
     /// The count is left untouched, so the layer above charges the same set.
     ///
-    /// The term recorded here is final and is never charged again.
+    /// The term recorded here is final, and the layer above adds its own beside it.
     pub fn charge_reduction(&mut self, term: SecurityTerm) {
         // A count naming no set prices nothing, so the term is left with no bound.
         //
@@ -96,9 +96,9 @@ impl PrescribedOpeningSecurity {
             bits: ErrorBits::from_log2(0.0),
             ..term
         };
-        let charged = self.candidates().map_or(unusable, |candidates| {
-            term.over_candidates(candidates).term()
-        });
+        let charged = self
+            .candidates()
+            .map_or(unusable, |candidates| term.over_candidates(candidates));
         self.terms.push(charged);
     }
 

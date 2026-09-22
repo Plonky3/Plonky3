@@ -78,5 +78,5 @@ pub use multilinear::{
     bit_ring_switch_error, bit_ring_switch_tensors_error, bit_ring_switch_tensors_term,
     bit_ring_switch_term, column_batch_error, column_batch_term,
 };
-pub use report::{CandidateSet, ChargedTerm, Regime, RegimeReport, SecurityReport, SecurityTerm};
+pub use report::{CandidateSet, Regime, RegimeReport, SecurityReport, SecurityTerm};
 pub use shape::{InstanceShape, StarkAirParams};

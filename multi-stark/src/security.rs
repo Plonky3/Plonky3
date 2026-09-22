@@ -29,6 +29,10 @@
 //! The builder below keeps those apart from the settled terms.
 //!
 //! It applies the charge exactly once, when the report is closed.
+//!
+//! Its lists are private to the module it lives in.
+//!
+//! So a term reaches the report only through a method that decides the charge for it.
 
 use alloc::vec::Vec;
 use core::num::NonZeroUsize;
@@ -41,8 +45,8 @@ use p3_lookup::{IndexedLookupError, InteractionSymbolicBuilder};
 use p3_security::multilinear::{
     MultilinearAirParams, MultilinearLogupStarParams, MultilinearLookupParams, reduction_terms,
 };
-use p3_security::{CandidateSet, ErrorBits, SecurityTerm};
-use p3_sumcheck::{PrescribedOpeningSecurity, PrescribedPointPcs};
+use p3_security::{ErrorBits, SecurityTerm};
+use p3_sumcheck::PrescribedPointPcs;
 use p3_util::log2_ceil_usize;
 use thiserror::Error;
 
@@ -55,6 +59,9 @@ use crate::instance::Instances;
 use crate::lookup::{LookupError, LookupPlan};
 use crate::selectors::{PeriodicError, periodic_num_variables};
 use crate::zerocheck::get_air_degrees;
+
+/// Label the report gives the commitment and transcript collision cap.
+const COLLISION_CAP_LABEL: &str = "commitment-and-transcript-collision";
 
 /// Reasons a security target cannot be certified for this statement.
 #[derive(Debug, Error)]
@@ -96,7 +103,7 @@ pub enum SecurityError {
 ///
 /// The draws made before an opening named a candidate paid for the set once, on assembly.
 ///
-/// The finished report keeps no set, so nothing can charge a second time.
+/// The finished report keeps no set, so a reader composes these terms as they stand.
 #[derive(Clone, Debug)]
 pub struct MultiStarkSecurityReport {
     terms: Vec<SecurityTerm>,
@@ -141,139 +148,224 @@ impl MultiStarkSecurityReport {
     }
 }
 
-/// Assembles the report, charging the candidate set exactly once.
-///
-/// The two kinds of term are kept in separate lists until the report is closed.
-///
-/// ```text
-///     outer     draws this composition makes after the commitments and before an
-///               opening names a candidate: AIR, lookup, and binary-bus reductions
-///     settled   terms that are already final: each opening's own errors, charged by
-///               the layer that drew them, and the collision cap
-/// ```
-///
-/// Closing the builder consumes it, and is the single place the charge is applied.
-///
-/// An outer term cannot be charged twice, because no second pass over the list exists.
-///
-/// The finished report carries no candidate set at all.
-///
-/// A settled term is never charged here, which is the point.
-///
-/// The layer that drew it already paid, and forwarded the count rather than spending it.
-///
-/// That is exactly what lets this layer charge only its own draws over the same set.
-struct ReportBuilder {
-    /// Reductions this composition draws, still uncharged.
-    outer: Vec<SecurityTerm>,
-    /// Terms that are final as they stand.
-    settled: Vec<SecurityTerm>,
-    /// Every candidate both commitments together still leave open.
-    candidates: CandidateSet,
-    /// Components that prevent a complete bound from being returned.
-    unassessed: Vec<&'static str>,
-}
+use builder::{CommittedTrace, ReportBuilder};
 
-impl ReportBuilder {
-    /// A builder whose outer draws are the ones the AIR and lookup reductions make.
+/// Assembly of the report, behind a boundary the rest of this module cannot reach past.
+///
+/// The builder's fields are private to this child module.
+///
+/// So a term reaches the report only through one of the methods below.
+///
+/// Each decides the charge itself, rather than trusting the caller to have done it.
+mod builder {
+    use alloc::vec::Vec;
+
+    use p3_security::{CandidateSet, ErrorBits, SecurityTerm};
+    use p3_sumcheck::PrescribedOpeningSecurity;
+
+    use super::{COLLISION_CAP_LABEL, MultiStarkSecurityReport};
+
+    /// Which commitment an opening's errors belong to.
     ///
-    /// Nothing is committed yet, so the candidate set starts at unique decoding.
-    const fn new(outer: Vec<SecurityTerm>) -> Self {
-        Self {
-            outer,
-            settled: Vec::new(),
-            candidates: CandidateSet::UNIQUE,
-            unassessed: Vec::new(),
-        }
+    /// The set is closed because the report has exactly two commitments.
+    ///
+    /// Naming anything else is then a compile error rather than a label nobody checks.
+    ///
+    /// A reduction this composition draws itself is the case that matters.
+    #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+    pub(super) enum CommittedTrace {
+        /// The main trace commitment.
+        Main,
+        /// The preprocessed trace commitment.
+        Preprocessed,
     }
 
-    fn add_evidence(&mut self, label: &'static str, bits: Option<ErrorBits>) {
-        match bits {
-            Some(bits) if bits.bits().is_finite() && bits.bits() >= 0.0 => {
-                self.settled.push(SecurityTerm::new(label, bits));
+    impl CommittedTrace {
+        /// The name this commitment's terms are attributed to in the report.
+        const fn label(self) -> &'static str {
+            match self {
+                Self::Main => "main-pcs",
+                Self::Preprocessed => "preprocessed-pcs",
             }
-            _ => self.unassessed.push(label),
         }
     }
 
-    /// Add one PCS's labelled errors and widen the set every outer draw pays for.
+    /// Assembles the report, charging the candidate set exactly once.
     ///
-    /// A scheme stacking a reduction on a commitment charges one term per source.
-    ///
-    /// Each keeps the label its own crate gave it, so the report says which one is short.
-    ///
-    /// Every term is also attributed to the commitment it was charged for.
+    /// The two kinds of term are kept in separate lists until the report is closed.
     ///
     /// ```text
-    ///     one scheme, both commitments  ->  the same label twice
-    ///     component                     ->  which of the two the term belongs to
+    ///     outer     draws this composition makes after the commitments and before an
+    ///               opening names a candidate: AIR, lookup, and binary-bus reductions
+    ///     settled   terms that are already final: each opening's own errors, charged by
+    ///               the layer that drew them, and the collision cap
     /// ```
     ///
-    /// The terms arrive already charged, so they settle here untouched.
+    /// Closing the builder consumes it, and is the single place the charge is applied.
     ///
-    /// What the opening adds to this layer is its candidate count.
+    /// # What is enforced, and what is not
     ///
-    /// The set is still open while every outer draw is made.
+    /// Both lists are private to this module.
     ///
-    /// Two open commitments multiply the tries a single outer draw gets.
+    /// Nothing outside can push a term onto either one.
     ///
-    /// A component with nothing to charge is recorded as unassessed under the same name.
-    fn add_opening_evidence(
-        &mut self,
-        component: &'static str,
-        evidence: Option<PrescribedOpeningSecurity>,
-    ) {
-        // A term is usable when it names a probability in `[0, 1]`, so its bits are `>= 0`.
-        //
-        // Infinite bits are a zero error, which a reduction that never runs reports.
-        //
-        // Rejecting that would leave a component unassessed for having nothing to charge.
-        //
-        // The union of the terms is what has to be a real bound, and it is checked below.
-        let charged = |term: &SecurityTerm| !term.bits.bits().is_nan() && term.bits.bits() >= 0.0;
-
-        // One unusable term makes the whole component unassessed, rather than shrinking it.
-        let usable = |evidence: &PrescribedOpeningSecurity| {
-            !evidence.terms.is_empty()
-                && evidence.terms.iter().all(charged)
-                && evidence.error().bits().is_finite()
-                && evidence.candidates().is_some()
-        };
-        match evidence {
-            Some(evidence) if usable(&evidence) => {
-                let candidates = evidence
-                    .candidates()
-                    .expect("a usable count names a candidate set");
-                self.settled.extend(
-                    evidence
-                        .terms
-                        .iter()
-                        .map(|term| term.in_component(component)),
-                );
-                self.candidates = self.candidates.product(candidates);
-            }
-            _ => self.unassessed.push(component),
-        }
+    /// Three methods add terms, and each fixes the charge for what it adds.
+    ///
+    /// ```text
+    ///     outer draws       charged over the set when the builder is closed
+    ///     opening evidence  charged already, by the layer that drew it
+    ///     collision cap     owes nothing, and the method takes no term of its own
+    /// ```
+    ///
+    /// A draw this composition makes cannot be attributed to a commitment either.
+    ///
+    /// The commitment name is a closed set of two, so there is no third name to give.
+    ///
+    /// What is left open is handing this a fabricated opening.
+    ///
+    /// That means a term of one's own, wrapped as evidence for one of the two commitments.
+    ///
+    /// It is a false claim about that commitment rather than a term taking a wrong turn.
+    ///
+    /// Sealing it belongs where the evidence type lives, not here.
+    ///
+    /// Nothing here sees a draw that was never added at all.
+    ///
+    /// A component with no usable evidence leaves the report with no number to give.
+    ///
+    /// That catches a missing component, not a missing term inside one.
+    ///
+    /// The tests naming each expected label are what cover the rest.
+    pub(super) struct ReportBuilder {
+        /// Reductions this composition draws, still uncharged.
+        outer: Vec<SecurityTerm>,
+        /// Terms that are final as they stand.
+        settled: Vec<SecurityTerm>,
+        /// Every candidate both commitments together still leave open.
+        candidates: CandidateSet,
+        /// Components that prevent a complete bound from being returned.
+        unassessed: Vec<&'static str>,
     }
 
-    /// Charge every outer draw over the candidate set, once, and close the report.
-    fn finish(self) -> MultiStarkSecurityReport {
-        let Self {
-            outer,
-            settled,
-            candidates,
-            unassessed,
-        } = self;
-        MultiStarkSecurityReport {
-            // A prover may pick which trace it meant after seeing every outer challenge.
+    impl ReportBuilder {
+        /// A builder whose outer draws are the ones the AIR and lookup reductions make.
+        ///
+        /// Nothing is committed yet, so the candidate set starts at unique decoding.
+        pub(super) const fn new(outer: Vec<SecurityTerm>) -> Self {
+            Self {
+                outer,
+                settled: Vec::new(),
+                candidates: CandidateSet::UNIQUE,
+                unassessed: Vec::new(),
+            }
+        }
+
+        /// Add more draws this composition makes before an opening names a candidate.
+        ///
+        /// They join the list that is charged when the builder closes.
+        pub(super) fn add_outer_draws(&mut self, terms: impl IntoIterator<Item = SecurityTerm>) {
+            self.outer.extend(terms);
+        }
+
+        /// Record the commitment and transcript collision cap.
+        ///
+        /// The cap is the one term that settles without a charge and is not an opening's.
+        ///
+        /// A collision is available to a prover before it commits to anything.
+        ///
+        /// So no candidate set applies to it, and it is not an outer draw.
+        ///
+        /// The label is fixed here, so nothing else may enter the report this way.
+        pub(super) fn add_collision_cap(&mut self, bits: Option<ErrorBits>) {
+            match bits {
+                Some(bits) if bits.bits().is_finite() && bits.bits() >= 0.0 => {
+                    self.settled
+                        .push(SecurityTerm::new(COLLISION_CAP_LABEL, bits));
+                }
+                _ => self.unassessed.push(COLLISION_CAP_LABEL),
+            }
+        }
+
+        /// Add one commitment's labelled errors and widen the set every outer draw pays for.
+        ///
+        /// A scheme stacking a reduction on a commitment charges one term per source.
+        ///
+        /// Each keeps the label its own crate gave it, so the report says which one is short.
+        ///
+        /// Every term is also attributed to the commitment it was charged for.
+        ///
+        /// ```text
+        ///     one scheme, both commitments  ->  the same label twice
+        ///     component                     ->  which of the two the term belongs to
+        /// ```
+        ///
+        /// The terms arrive already charged, so they settle here untouched.
+        ///
+        /// What the opening adds to this layer is its candidate count.
+        ///
+        /// The set is still open while every outer draw is made.
+        ///
+        /// Two open commitments multiply the tries a single outer draw gets.
+        ///
+        /// A commitment with nothing to charge is recorded as unassessed under its name.
+        pub(super) fn add_opening_evidence(
+            &mut self,
+            commitment: CommittedTrace,
+            evidence: Option<PrescribedOpeningSecurity>,
+        ) {
+            // A term is usable when it names a probability in `[0, 1]`, so bits are `>= 0`.
             //
-            // So each outer draw is union-bounded over the whole set.
-            terms: outer
-                .into_iter()
-                .map(|term| term.over_candidates(candidates).term())
-                .chain(settled)
-                .collect(),
-            unassessed,
+            // Infinite bits are a zero error, which a reduction that never runs reports.
+            //
+            // Rejecting that would leave a component unassessed for nothing to charge.
+            //
+            // The union of the terms is what has to be a real bound, checked below.
+            let charged =
+                |term: &SecurityTerm| !term.bits.bits().is_nan() && term.bits.bits() >= 0.0;
+
+            // One unusable term makes the whole component unassessed, not just smaller.
+            let usable = |evidence: &PrescribedOpeningSecurity| {
+                !evidence.terms.is_empty()
+                    && evidence.terms.iter().all(charged)
+                    && evidence.error().bits().is_finite()
+                    && evidence.candidates().is_some()
+            };
+            match evidence {
+                Some(evidence) if usable(&evidence) => {
+                    let candidates = evidence
+                        .candidates()
+                        .expect("a usable count names a candidate set");
+                    self.settled.extend(
+                        evidence
+                            .terms
+                            .iter()
+                            .map(|term| term.in_component(commitment.label())),
+                    );
+                    self.candidates = self.candidates.product(candidates);
+                }
+                _ => self.unassessed.push(commitment.label()),
+            }
+        }
+
+        /// Charge every outer draw over the candidate set, once, and close the report.
+        pub(super) fn finish(self) -> MultiStarkSecurityReport {
+            let Self {
+                outer,
+                settled,
+                candidates,
+                unassessed,
+            } = self;
+            MultiStarkSecurityReport {
+                // A prover may pick which trace it meant after seeing every outer challenge.
+                //
+                // So each outer draw is union-bounded over the whole set.
+                terms: outer
+                    .into_iter()
+                    .map(|term| term.over_candidates(candidates))
+                    .chain(settled)
+                    .collect(),
+                unassessed,
+            }
         }
     }
 }
@@ -592,8 +684,10 @@ where
     if let Some(context) = &bus {
         let field_bits = NonZeroUsize::new(field_bits)
             .ok_or_else(|| invalid("binary-bus challenge field is trivial"))?;
-        builder.outer.push(context.plan().security_term(field_bits));
-        builder.outer.push(bus_batching_term(field_bits));
+        builder.add_outer_draws([
+            context.plan().security_term(field_bits),
+            bus_batching_term(field_bits),
+        ]);
     }
     // The scheme is assessed against the opening protocol verification actually runs.
     //
@@ -605,7 +699,7 @@ where
     //
     // It also understates the candidate count charged to every outer draw above.
     builder.add_opening_evidence(
-        "main-pcs",
+        CommittedTrace::Main,
         config.pcs().prescribed_security(
             &instances
                 .main_schedule(indexed.as_ref(), |_, _| ())
@@ -614,7 +708,7 @@ where
     );
     if preprocessed_cells > 0 {
         builder.add_opening_evidence(
-            "preprocessed-pcs",
+            CommittedTrace::Preprocessed,
             config.preprocessed_pcs().prescribed_security(
                 &instances
                     .preprocessed_schedule(indexed.as_ref(), |_, _| ())
@@ -622,8 +716,7 @@ where
             ),
         );
     }
-    builder.add_evidence(
-        "commitment-and-transcript-collision",
+    builder.add_collision_cap(
         config
             .collision_resistance_bits()
             .map(|bits| ErrorBits::from_log2(bits as f64)),
@@ -633,6 +726,8 @@ where
 
 #[cfg(test)]
 mod tests {
+    use p3_sumcheck::PrescribedOpeningSecurity;
+
     use super::*;
 
     #[test]
@@ -666,8 +761,7 @@ mod tests {
             log2_max_candidates: 0.0,
         };
 
-        builder.add_opening_evidence("main-pcs", Some(evidence));
-        assert_eq!(builder.candidates, CandidateSet::UNIQUE);
+        builder.add_opening_evidence(CommittedTrace::Main, Some(evidence));
         let report = builder.finish();
         assert!(report.unassessed_components().is_empty());
 
@@ -692,7 +786,7 @@ mod tests {
             ErrorBits::from_log2(f64::INFINITY),
             0.0,
         );
-        empty.add_opening_evidence("main-pcs", Some(nothing));
+        empty.add_opening_evidence(CommittedTrace::Main, Some(nothing));
         assert_eq!(empty.finish().unassessed_components(), ["main-pcs"]);
     }
 
@@ -716,7 +810,7 @@ mod tests {
             .chain(bad_error.into_iter().map(Some))
         {
             let mut builder = ReportBuilder::new(Vec::new());
-            builder.add_opening_evidence("main-pcs", evidence);
+            builder.add_opening_evidence(CommittedTrace::Main, evidence);
             let report = builder.finish();
             assert!(matches!(
                 report.require_security(1),
@@ -746,7 +840,7 @@ mod tests {
         ];
         let mut builder = ReportBuilder::new(outer);
         builder.add_opening_evidence(
-            "main-pcs",
+            CommittedTrace::Main,
             Some(PrescribedOpeningSecurity::single(
                 "opening",
                 ErrorBits::from_log2(90.0),
@@ -754,15 +848,13 @@ mod tests {
             )),
         );
         builder.add_opening_evidence(
-            "preprocessed-pcs",
+            CommittedTrace::Preprocessed,
             Some(PrescribedOpeningSecurity::single(
                 "opening",
                 ErrorBits::from_log2(90.0),
                 3.0,
             )),
         );
-        assert_eq!(builder.candidates.log2_size(), 7.0);
-
         let report = builder.finish();
         let bits = |label, component| {
             report
@@ -797,17 +889,14 @@ mod tests {
         let outer = alloc::vec![SecurityTerm::new("air", ErrorBits::from_log2(5.0))];
         let mut builder = ReportBuilder::new(outer);
         builder.add_opening_evidence(
-            "main-pcs",
+            CommittedTrace::Main,
             Some(PrescribedOpeningSecurity::single(
                 "opening",
                 ErrorBits::from_log2(128.0),
                 8.0,
             )),
         );
-        builder.add_evidence(
-            "commitment-and-transcript-collision",
-            Some(ErrorBits::from_log2(128.0)),
-        );
+        builder.add_collision_cap(Some(ErrorBits::from_log2(128.0)));
 
         let report = builder.finish();
         assert_eq!(report.terms()[0].bits.bits(), 0.0);
@@ -819,19 +908,66 @@ mod tests {
     }
 
     #[test]
+    fn the_only_term_that_settles_without_a_charge_is_the_collision_cap() {
+        // A term reaches the report by three routes, and each fixes its own charge.
+        //
+        // An outer draw goes on the list that is charged when the builder closes.
+        //
+        // An opening's terms arrive charged already, by the layer that drew them.
+        //
+        // The cap has a method of its own that fixes the label, so nothing else fits.
+        //
+        // A new outer draw therefore has nowhere to land at full strength by accident.
+        //
+        // Pushing one straight onto the settled list does not compile from out here.
+        //
+        // Naming it as a commitment does not either, the names being a closed set.
+        let mut builder = ReportBuilder::new(Vec::new());
+        builder.add_outer_draws([SecurityTerm::new("air", ErrorBits::from_log2(100.0))]);
+        builder.add_opening_evidence(
+            CommittedTrace::Main,
+            Some(PrescribedOpeningSecurity::single(
+                "opening",
+                ErrorBits::from_log2(128.0),
+                8.0,
+            )),
+        );
+        builder.add_collision_cap(Some(ErrorBits::from_log2(128.0)));
+
+        let report = builder.finish();
+        let bits = |label| {
+            report
+                .terms()
+                .iter()
+                .find(|term| term.label == label)
+                .unwrap_or_else(|| panic!("missing {label}"))
+                .bits
+                .bits()
+        };
+
+        // The outer draw paid for every candidate the opening left open.
+        assert_eq!(bits("air"), 92.0);
+
+        // The opening's own term was charged by its own layer, so it stands as given.
+        assert_eq!(bits("opening"), 128.0);
+
+        // A collision is available before the prover commits, so no set applies to it.
+        assert_eq!(bits(COLLISION_CAP_LABEL), 128.0);
+    }
+
+    #[test]
     fn a_commitment_that_names_one_trace_costs_the_outer_draws_nothing() {
         // Unique decoding leaves one candidate, so an outer draw keeps its own strength.
         let outer = alloc::vec![SecurityTerm::new("air", ErrorBits::from_log2(100.0))];
         let mut builder = ReportBuilder::new(outer);
         builder.add_opening_evidence(
-            "main-pcs",
+            CommittedTrace::Main,
             Some(PrescribedOpeningSecurity::single(
                 "opening",
                 ErrorBits::from_log2(90.0),
                 0.0,
             )),
         );
-        assert!(builder.candidates.is_unique());
         assert_eq!(builder.finish().terms()[0].bits.bits(), 100.0);
     }
 }

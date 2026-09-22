@@ -302,7 +302,7 @@ impl WordProofSecurityModel {
         //
         // A prover may therefore choose which candidate it is after seeing them.
         for term in &mut terms {
-            *term = term.over_candidates(self.candidates).term();
+            *term = term.over_candidates(self.candidates);
         }
 
         // The commitment prices the ring switch and its own opening from its own schedule.

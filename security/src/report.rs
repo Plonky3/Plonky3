@@ -92,10 +92,8 @@ impl SecurityTerm {
     /// This is the workspace's only implementation of that charge.
     ///
     /// The set is passed by value and comes back unspent, so the layer above charges it too.
-    ///
-    /// The result is a charged term, and a charged term has no charge of its own.
     #[must_use]
-    pub fn over_candidates(self, candidates: CandidateSet) -> ChargedTerm {
+    pub fn over_candidates(self, candidates: CandidateSet) -> Self {
         // An error above one is no bound at all, so the charge stops at zero bits.
         //
         // Zero bits reports "no bound" rather than hiding a shortfall under the floor.
@@ -103,12 +101,9 @@ impl SecurityTerm {
         // A union holding a zero-bit term composes to at most zero bits.
         //
         // Every caller grading a report against a positive target then fails closed.
-        ChargedTerm {
-            term: Self {
-                bits: ErrorBits::from_log2((self.bits.bits() - candidates.log2_size()).max(0.0)),
-                ..self
-            },
-            over: candidates,
+        Self {
+            bits: ErrorBits::from_log2((self.bits.bits() - candidates.log2_size()).max(0.0)),
+            ..self
         }
     }
 }
@@ -123,7 +118,27 @@ impl SecurityTerm {
 ///
 /// A list-decoding argument leaves a list, and each earlier draw gets one try per member.
 ///
-/// Nothing here can spend a set, and a term that has paid cannot be charged twice.
+/// # What this type does and does not catch
+///
+/// It catches a count that is not a set size.
+///
+/// That is the one arithmetic error here that overstates a level.
+///
+/// A negative count would add bits to the term it is charged over.
+///
+/// Being copied rather than spent is what forwarding looks like in the signature.
+///
+/// It does not catch a draw nobody charged.
+///
+/// Nor a scheme reporting an open list as unique.
+///
+/// Both of those overstate a level, and no type can see either one.
+///
+/// A component supplying no evidence leaves the report with no number to give.
+///
+/// Past that, a missing term is caught by the tests that name each one.
+///
+/// An understated list is a claim about the proximity argument, checked where it lives.
 ///
 /// # Example
 ///
@@ -136,11 +151,11 @@ impl SecurityTerm {
 ///
 /// // The inner layer charges its own reduction and forwards the set untouched.
 /// let inner = SecurityTerm::new("inner", ErrorBits::from_log2(100.0)).over_candidates(candidates);
-/// assert_eq!(inner.bits().bits(), 96.0);
+/// assert_eq!(inner.bits.bits(), 96.0);
 ///
 /// // The outer layer charges its own draw over the same set, not over what is left of it.
 /// let outer = SecurityTerm::new("outer", ErrorBits::from_log2(100.0)).over_candidates(candidates);
-/// assert_eq!(outer.bits().bits(), 96.0);
+/// assert_eq!(outer.bits.bits(), 96.0);
 /// ```
 #[derive(Copy, Clone, Debug, PartialEq, PartialOrd, Serialize)]
 pub struct CandidateSet {
@@ -191,51 +206,6 @@ impl CandidateSet {
     }
 }
 
-/// A term that has already paid for the candidate set it was drawn against.
-///
-/// Being a distinct type is the whole point: a charged term offers no charge of its own.
-///
-/// So the second charge, which would quietly halve a reported level, will not compile.
-///
-/// Unwrapping it for a report is the one visible step back to an uncharged term.
-#[derive(Copy, Clone, Debug, PartialEq)]
-pub struct ChargedTerm {
-    term: SecurityTerm,
-    over: CandidateSet,
-}
-
-impl ChargedTerm {
-    /// The charged term, ready to be composed into a report.
-    #[must_use]
-    pub const fn term(self) -> SecurityTerm {
-        self.term
-    }
-
-    /// The set this term was charged over, kept so a report can say what it paid for.
-    #[must_use]
-    pub const fn candidates(self) -> CandidateSet {
-        self.over
-    }
-
-    /// The error source, which the charge leaves unchanged.
-    #[must_use]
-    pub const fn label(self) -> &'static str {
-        self.term.label
-    }
-
-    /// The bound after the charge, in `-log2(error)` bits.
-    #[must_use]
-    pub const fn bits(self) -> ErrorBits {
-        self.term.bits
-    }
-}
-
-impl From<ChargedTerm> for SecurityTerm {
-    fn from(charged: ChargedTerm) -> Self {
-        charged.term
-    }
-}
-
 #[cfg(test)]
 mod candidate_tests {
     use super::*;
@@ -250,16 +220,13 @@ mod candidate_tests {
         // Sixteen candidates cost a draw four bits, and the label is carried through.
         let charged =
             SecurityTerm::new("r", ErrorBits::from_log2(100.0)).over_candidates(sixteen());
-        assert_eq!(charged.bits().bits(), 96.0);
-        assert_eq!(charged.label(), "r");
-
-        // The charge records what it paid for, so a report can name the set.
-        assert_eq!(charged.candidates(), sixteen());
+        assert_eq!(charged.bits.bits(), 96.0);
+        assert_eq!(charged.label, "r");
 
         // A draw weaker than the candidate count is worth nothing, rather than negative.
         let drowned =
             SecurityTerm::new("weak", ErrorBits::from_log2(3.0)).over_candidates(sixteen());
-        assert_eq!(drowned.bits().bits(), 0.0);
+        assert_eq!(drowned.bits.bits(), 0.0);
     }
 
     #[test]
@@ -267,7 +234,7 @@ mod candidate_tests {
         // No choice is no advantage, so nothing is subtracted.
         let term = SecurityTerm::new("r", ErrorBits::from_log2(100.0));
         assert_eq!(
-            term.over_candidates(CandidateSet::UNIQUE).bits().bits(),
+            term.over_candidates(CandidateSet::UNIQUE).bits.bits(),
             100.0
         );
 
@@ -289,15 +256,15 @@ mod candidate_tests {
         // So nothing downstream can read the shortfall as a passing margin.
         let drowned =
             SecurityTerm::new("weak", ErrorBits::from_log2(1.0)).over_candidates(sixteen());
-        assert_eq!(drowned.bits().bits(), 0.0);
+        assert_eq!(drowned.bits.bits(), 0.0);
 
-        let composed = ErrorBits::sum(&[drowned.bits(), ErrorBits::from_log2(128.0)]);
+        let composed = ErrorBits::sum(&[drowned.bits, ErrorBits::from_log2(128.0)]);
         assert!(composed.bits() <= 0.0);
     }
 
     #[test]
     fn a_count_that_names_no_set_is_refused_before_it_can_be_charged() {
-        // A negative count would add bits, which is the unsafe direction.
+        // A negative count would add bits, which is the direction that overstates.
         //
         // An infinite or undefined one prices nothing, and neither names a set.
         for count in [-1.0, f64::INFINITY, f64::NEG_INFINITY, f64::NAN] {
@@ -326,24 +293,20 @@ mod candidate_tests {
         let outer =
             SecurityTerm::new("outer", ErrorBits::from_log2(100.0)).over_candidates(candidates);
 
-        assert_eq!(inner.bits().bits(), 96.0);
-        assert_eq!(outer.bits().bits(), 96.0);
-
-        // The set the inner layer forwarded is the one the outer layer charged.
-        assert_eq!(inner.candidates(), outer.candidates());
+        assert_eq!(inner.bits.bits(), 96.0);
+        assert_eq!(outer.bits.bits(), 96.0);
 
         // The commitment's own term is not a draw made before it, so it pays nothing.
-        let report = [commitment, inner.term(), outer.term()];
-        assert_eq!(report[0].bits.bits(), 90.0);
+        assert_eq!(commitment.bits.bits(), 90.0);
 
-        // A charged term offers no charge, so a second one cannot be written directly.
+        // Charging the inner draw again would take the log of the same list off twice.
         //
-        // Unwrapping it first is the one visible route back, shown here.
+        // That reports 92 bits for a draw worth 96, which understates the level.
         //
-        // A double charge is therefore a line a reviewer can point at.
-        let recharged = inner.term().over_candidates(candidates);
-        assert_eq!(recharged.bits().bits(), 92.0);
-        assert_ne!(recharged.bits().bits(), inner.bits().bits());
+        // It is the harmless direction, so nothing in the type stands in its way.
+        //
+        // Each layer holding its own draws apart, and paying once, is what avoids it.
+        assert_eq!(inner.over_candidates(candidates).bits.bits(), 92.0);
     }
 
     #[test]
@@ -356,7 +319,7 @@ mod candidate_tests {
         // Charging over the product is charging once, for both, as one union bound.
         let charged = SecurityTerm::new("r", ErrorBits::from_log2(100.0))
             .over_candidates(main.product(preprocessed));
-        assert_eq!(charged.bits().bits(), 93.0);
+        assert_eq!(charged.bits.bits(), 93.0);
 
         // Unique decoding on one side leaves the other side's set as it was.
         assert_eq!(main.product(CandidateSet::UNIQUE), main);
