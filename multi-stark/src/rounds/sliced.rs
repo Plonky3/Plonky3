@@ -117,8 +117,7 @@ fn direct_packed_cells<F: Field>(tables: &[&Table<F>], words: usize) -> Option<V
         let Some(packed) = table.packed_bits() else {
             return true;
         };
-        packed.width != table.num_polys()
-            || words.checked_mul(packed.width) != Some(packed.values.len())
+        words.checked_mul(packed.width) != Some(packed.values.len())
     }) {
         return None;
     }
