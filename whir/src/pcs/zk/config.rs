@@ -72,6 +72,27 @@ pub struct ZkParameters {
 ///
 /// Wraps the plain [`WhirConfig`] round structure and adds the ZK budgets:
 /// per-oracle encoding randomness, mask code shapes, and spot-check counts.
+///
+/// Fields are written only by the constructor in this module; the budgets
+/// are read through accessors.
+///
+/// ```
+/// use p3_field::{ExtensionField, Field};
+/// use p3_whir::ZkWhirConfig;
+///
+/// fn first_budget<EF: ExtensionField<F>, F: Field, C>(config: &ZkWhirConfig<EF, F, C>) -> usize {
+///     config.oracle_randomness()[0]
+/// }
+/// ```
+///
+/// ```compile_fail
+/// use p3_field::{ExtensionField, Field};
+/// use p3_whir::ZkWhirConfig;
+///
+/// fn weaken<EF: ExtensionField<F>, F: Field, C>(config: &mut ZkWhirConfig<EF, F, C>) {
+///     config.oracle_randomness[0] = 0;
+/// }
+/// ```
 #[derive(Debug, Clone)]
 pub struct ZkWhirConfig<EF, F, Challenger>
 where
@@ -88,16 +109,16 @@ where
     /// `final_sumcheck_rounds` still determines the terminal message length.
     /// `inner.terminal` sizes the plain message code. The base case runs
     /// against a randomized code instead, sized by `randomized_terminal`.
-    pub inner: WhirConfig<EF, F, Challenger>,
+    pub(crate) inner: WhirConfig<EF, F, Challenger>,
     /// ZK extension parameters.
-    pub zk: ZkParameters,
+    pub(crate) zk: ZkParameters,
     /// Budget of the masked base case against the randomized terminal source code.
     ///
     /// The base case tests proximity to a code of dimension
     /// `message_len + randomized_terminal.num_queries`, not the plain message code
     /// `inner.terminal` was sized against. The query count is also the terminal
     /// oracle's randomness budget, i.e. `oracle_randomness[n_rounds]`.
-    pub randomized_terminal: TerminalBudget,
+    pub(crate) randomized_terminal: TerminalBudget,
     /// ZK randomness coefficients per limb of each committed oracle
     /// `u_0, ..., u_{n_rounds}`.
     ///
@@ -109,14 +130,14 @@ where
     /// `log_inv_rate` fixes the outer geometry `H / M`, not that coefficient
     /// occupancy. [`ZkWhirConfig::new`] therefore enforces `M + t_i <= H` for
     /// every oracle.
-    pub oracle_randomness: Vec<usize>,
+    pub(crate) oracle_randomness: Vec<usize>,
     /// Mask code for the HVZK sumcheck rounds.
-    pub sumcheck_mask: MaskCodeShape,
+    pub(crate) sumcheck_mask: MaskCodeShape,
     /// Mask code per code-switching round.
     /// It commits the previous oracle's folded randomness plus the OOD pad.
-    pub switch_masks: Vec<MaskCodeShape>,
+    pub(crate) switch_masks: Vec<MaskCodeShape>,
     /// Base-case spot checks per mask group, derived from `security_level`.
-    pub mask_queries: usize,
+    pub(crate) mask_queries: usize,
 }
 
 impl<EF, F, Challenger> Deref for ZkWhirConfig<EF, F, Challenger>
@@ -128,6 +149,54 @@ where
 
     fn deref(&self) -> &Self::Target {
         &self.inner
+    }
+}
+
+impl<EF, F, Challenger> ZkWhirConfig<EF, F, Challenger>
+where
+    F: Field,
+    EF: ExtensionField<F>,
+{
+    /// Plain WHIR schedule the hiding pipeline reuses.
+    #[must_use]
+    pub const fn inner(&self) -> &WhirConfig<EF, F, Challenger> {
+        &self.inner
+    }
+
+    /// ZK extension parameters the configuration was derived from.
+    #[must_use]
+    pub const fn zk(&self) -> &ZkParameters {
+        &self.zk
+    }
+
+    /// Budget of the masked base case against the randomized terminal source code.
+    #[must_use]
+    pub const fn randomized_terminal(&self) -> TerminalBudget {
+        self.randomized_terminal
+    }
+
+    /// ZK randomness coefficients per limb of each committed oracle.
+    #[must_use]
+    pub fn oracle_randomness(&self) -> &[usize] {
+        &self.oracle_randomness
+    }
+
+    /// Mask code for the HVZK sumcheck rounds.
+    #[must_use]
+    pub const fn sumcheck_mask(&self) -> MaskCodeShape {
+        self.sumcheck_mask
+    }
+
+    /// Mask code per code-switching round.
+    #[must_use]
+    pub fn switch_masks(&self) -> &[MaskCodeShape] {
+        &self.switch_masks
+    }
+
+    /// Base-case spot checks per mask group.
+    #[must_use]
+    pub const fn mask_queries(&self) -> usize {
+        self.mask_queries
     }
 }
 
