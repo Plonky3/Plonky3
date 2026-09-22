@@ -3,8 +3,9 @@
 use alloc::vec::Vec;
 use core::array;
 
-use p3_word::{ConstraintSystem, Operand};
+use p3_word::{ConstraintSystem, Operand, ValueIndex};
 
+use crate::statement::Statement;
 use crate::{Packed, PackedWitness, PackedWord, WitnessError};
 
 /// Packed rows used by the relation reductions.
@@ -20,16 +21,54 @@ pub struct OperationColumns<W: PackedWord> {
 
 impl<W: PackedWord> OperationColumns<W> {
     /// Evaluates the operands needed by the nonlinear reductions.
-    pub fn new(
+    ///
+    /// A composed statement walks each component once per instance, so the
+    /// column position of a relation is exactly the composed relation index.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the witness does not have the statement's shape.
+    pub fn new(statement: &Statement<W>, values: &PackedWitness<W>) -> Result<Self, WitnessError> {
+        values.check_shape(statement)?;
+        let counts = statement.relation_counts();
+        let mut columns = Self {
+            zero: Vec::with_capacity(counts[0]),
+            bitwise_and: array::from_fn(|_| Vec::with_capacity(counts[1])),
+            integer_mul: array::from_fn(|_| Vec::with_capacity(counts[2])),
+        };
+
+        match statement {
+            // A flat statement addresses the composed segments directly.
+            Statement::Flat(system) => columns.extend(system, values, |index| index),
+            Statement::Composed(composition) => {
+                for (call, index) in composition.calls().iter().zip(0_usize..) {
+                    let component = call.component();
+                    for instance in 0..call.instances() {
+                        // The affine map is the same one the compiled layout reverses.
+                        columns.extend(component.body(), values, |slot| {
+                            composition
+                                .resolve(index, instance, slot)
+                                .expect("the layout bounded every call and instance")
+                        });
+                    }
+                }
+            }
+        }
+        Ok(columns)
+    }
+
+    /// Appends one relation block, readdressing every term as it is read.
+    fn extend(
+        &mut self,
         system: &ConstraintSystem<W>,
         values: &PackedWitness<W>,
-    ) -> Result<Self, WitnessError> {
-        values.check_shape(system)?;
+        remap: impl Fn(ValueIndex) -> ValueIndex,
+    ) {
         let evaluate = |operand: &Operand<W>| {
             let mut result = W::pack(W::ZERO);
             for term in operand.terms() {
                 let word = values
-                    .get(term.index())
+                    .get(remap(term.index()))
                     .expect("the checked system only contains in-bounds indices");
                 result += W::pack(term.apply(word));
             }
@@ -37,36 +76,27 @@ impl<W: PackedWord> OperationColumns<W> {
         };
 
         // The linear family has one semantic operand per relation.
-        let zero = system
-            .zero_constraints()
-            .iter()
-            .map(|constraint| evaluate(constraint.value()))
-            .collect();
+        self.zero.extend(
+            system
+                .zero_constraints()
+                .iter()
+                .map(|constraint| evaluate(constraint.value())),
+        );
 
         // One constraint-major pass fills all three bitwise reduction columns.
-        let and_constraints = system.and_constraints();
-        let mut bitwise_and = array::from_fn(|_| Vec::with_capacity(and_constraints.len()));
-        for constraint in and_constraints {
-            bitwise_and[0].push(evaluate(constraint.left()));
-            bitwise_and[1].push(evaluate(constraint.right()));
-            bitwise_and[2].push(evaluate(constraint.output()));
+        for constraint in system.and_constraints() {
+            self.bitwise_and[0].push(evaluate(constraint.left()));
+            self.bitwise_and[1].push(evaluate(constraint.right()));
+            self.bitwise_and[2].push(evaluate(constraint.output()));
         }
 
         // One constraint-major pass fills all four integer-product columns.
-        let integer_mul_constraints = system.integer_mul_constraints();
-        let mut integer_mul = array::from_fn(|_| Vec::with_capacity(integer_mul_constraints.len()));
-        for constraint in integer_mul_constraints {
-            integer_mul[0].push(evaluate(constraint.left()));
-            integer_mul[1].push(evaluate(constraint.right()));
-            integer_mul[2].push(evaluate(constraint.low()));
-            integer_mul[3].push(evaluate(constraint.high()));
+        for constraint in system.integer_mul_constraints() {
+            self.integer_mul[0].push(evaluate(constraint.left()));
+            self.integer_mul[1].push(evaluate(constraint.right()));
+            self.integer_mul[2].push(evaluate(constraint.low()));
+            self.integer_mul[3].push(evaluate(constraint.high()));
         }
-
-        Ok(Self {
-            zero,
-            bitwise_and,
-            integer_mul,
-        })
     }
 
     /// Returns the operand of each linear relation.
@@ -93,8 +123,8 @@ mod tests {
     use alloc::vec;
 
     use p3_word::{
-        AndConstraint, IntegerMulConstraint, Operand, Shift, ShiftKind, ShiftedValue, ValueIndex,
-        Word64,
+        AndConstraint, ConstraintSystem, IntegerMulConstraint, Operand, Shift, ShiftKind,
+        ShiftedValue, ValueIndex, Word64,
     };
     use proptest::prelude::*;
 
@@ -119,7 +149,7 @@ mod tests {
         let public = [Word64::new(0x0102_0304_0506_0708)];
         let witness = [Word64::new(0xfedc_ba98_7654_3210)];
         let packed = PackedWitness::new(&system, &public, &witness).unwrap();
-        let columns = OperationColumns::new(&system, &packed).unwrap();
+        let columns = OperationColumns::new(&Statement::from(system), &packed).unwrap();
 
         assert_eq!(
             columns.bitwise_and()[0][0].to_bits(),
@@ -145,7 +175,7 @@ mod tests {
     fn empty_families_have_no_protocol_padding() {
         let system = ConstraintSystem::<Word64>::new(0, 0, vec![], vec![], vec![]).unwrap();
         let packed = PackedWitness::new(&system, &[], &[]).unwrap();
-        let columns = OperationColumns::new(&system, &packed).unwrap();
+        let columns = OperationColumns::new(&Statement::from(system), &packed).unwrap();
 
         assert!(columns.bitwise_and().iter().all(Vec::is_empty));
         assert!(columns.integer_mul().iter().all(Vec::is_empty));
@@ -158,7 +188,7 @@ mod tests {
         let packed = PackedWitness::new(&source, &[], &[]).unwrap();
 
         assert_eq!(
-            OperationColumns::new(&target, &packed),
+            OperationColumns::new(&Statement::from(target), &packed),
             Err(WitnessError {
                 segment: p3_word::Segment::Witness,
                 expected: 1,
@@ -196,7 +226,7 @@ mod tests {
             let public = [Word64::new(public_value)];
             let witness = [Word64::new(witness_value)];
             let packed = PackedWitness::new(&system, &public, &witness).unwrap();
-            let columns = OperationColumns::new(&system, &packed).unwrap();
+            let columns = OperationColumns::new(&Statement::from(system), &packed).unwrap();
 
             for (column, expected) in columns
                 .bitwise_and()

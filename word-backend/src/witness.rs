@@ -3,7 +3,9 @@
 use alloc::vec::Vec;
 
 use p3_binary_field::{PackedGf2, Underlier};
-use p3_word::{ConstraintSystem, Segment, ShapeError, ValueIndex, Word, Word32, Word64};
+use p3_word::{Segment, ShapeError, ValueIndex, Word, Word32, Word64};
+
+use crate::statement::StatementShape;
 
 /// One field lane per bit of a word, from least to most significant.
 pub type Packed<W> = PackedGf2<<W as PackedWord>::Lane>;
@@ -67,12 +69,12 @@ pub type WitnessError = ShapeError;
 impl<W: PackedWord> PackedWitness<W> {
     /// Packs an exactly shaped public and committed word vector.
     pub fn new(
-        system: &ConstraintSystem<W>,
+        shape: &impl StatementShape<W>,
         public: &[W],
         witness: &[W],
     ) -> Result<Self, WitnessError> {
         // Packing preserves the statement's two independent segment lengths.
-        system.check_shape(public.len(), witness.len())?;
+        shape.check_shape(public.len(), witness.len())?;
 
         Ok(Self {
             public: public.iter().copied().map(W::pack).collect(),
@@ -82,21 +84,18 @@ impl<W: PackedWord> PackedWitness<W> {
 
     /// Takes ownership of exactly shaped buffers that are already bit-packed.
     pub fn from_packed(
-        system: &ConstraintSystem<W>,
+        shape: &impl StatementShape<W>,
         public: Vec<Packed<W>>,
         witness: Vec<Packed<W>>,
     ) -> Result<Self, WitnessError> {
         // Prepacked buffers obey the same checked statement shape.
-        system.check_shape(public.len(), witness.len())?;
+        shape.check_shape(public.len(), witness.len())?;
         Ok(Self { public, witness })
     }
 
-    pub(crate) const fn check_shape(
-        &self,
-        system: &ConstraintSystem<W>,
-    ) -> Result<(), WitnessError> {
+    pub(crate) fn check_shape(&self, shape: &impl StatementShape<W>) -> Result<(), WitnessError> {
         // Revalidation protects backend entry points that receive stored witnesses.
-        system.check_shape(self.public.len(), self.witness.len())
+        shape.check_shape(self.public.len(), self.witness.len())
     }
 
     /// Returns the packed public words.

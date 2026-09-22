@@ -4,7 +4,8 @@ use alloc::vec::Vec;
 use core::ops::Range;
 
 use p3_word::{
-    ConstraintKind, ConstraintSystem, ConstraintTerm, OperandRole, Segment, Shift, Word,
+    ComponentCall, Composition, ConstraintKind, ConstraintSystem, ConstraintTerm, OperandRole,
+    Segment, Shift, Word,
 };
 use thiserror::Error;
 
@@ -12,7 +13,10 @@ mod builder;
 mod code;
 
 use builder::CountingSegment;
-use code::KeyCode;
+use code::{KeyCode, ShiftSequenceCode};
+
+/// Number of relation families a statement can declare.
+const FAMILIES: usize = 3;
 
 /// A compact index into one operation family.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -38,6 +42,10 @@ impl ConstraintReference {
 }
 
 /// One word's resolved references under a fixed operation and shift sequence.
+///
+/// The stored references are the ones a *component slot* carries. An instanced
+/// segment stores them once and adds this key's `constraint_offset` on the way
+/// out, which is what makes the metadata independent of the instance count.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CompiledKey<'a, W: Word> {
     /// The relation family consuming the word.
@@ -46,8 +54,10 @@ pub struct CompiledKey<'a, W: Word> {
     shift_index: u32,
     /// The inner and outer movements in evaluation order.
     shifts: [Shift<W>; 2],
-    /// The relation occurrences consuming the shifted word.
+    /// The relation occurrences consuming the shifted word, in slot-local form.
     references: &'a [ConstraintReference],
+    /// The instance's first relation position within this key's family.
+    constraint_offset: u32,
 }
 
 impl<W: Word> CompiledKey<'_, W> {
@@ -69,10 +79,27 @@ impl<W: Word> CompiledKey<'_, W> {
         self.shifts
     }
 
-    /// Returns every relation occurrence in reduction order.
+    /// Returns the number of relation occurrences grouped under this key.
     #[inline]
-    pub const fn references(&self) -> &'_ [ConstraintReference] {
-        self.references
+    pub const fn num_references(&self) -> usize {
+        self.references.len()
+    }
+
+    /// Returns every relation occurrence in reduction order.
+    ///
+    /// Positions are already resolved to the composed statement.
+    #[inline]
+    pub fn references(
+        &self,
+    ) -> impl ExactSizeIterator<Item = ConstraintReference> + Clone + use<'_, W> {
+        let offset = self.constraint_offset;
+        self.references.iter().map(move |reference| {
+            // The stored position is slot-local, so the instance is added here.
+            ConstraintReference {
+                operand: reference.operand,
+                constraint: reference.constraint + offset,
+            }
+        })
     }
 }
 
@@ -87,30 +114,119 @@ struct StoredKey {
     references: Range<u32>,
 }
 
+/// One call's slot storage, repeated across its instances.
+///
+/// A flat statement is the degenerate case: one block of one instance whose
+/// slots are the segment's words.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct InstanceBlock {
+    /// The block's first word in the composed segment.
+    word_base: u32,
+    /// Words one instance occupies, which is also the instance stride.
+    slots: u32,
+    /// Live instances of the call.
+    instances: u32,
+    /// The block's first entry in the shared slot-key table.
+    slot_base: u32,
+    /// Relations one instance adds to each family, in family-code order.
+    strides: [u32; FAMILIES],
+    /// The first relation position of instance zero, in family-code order.
+    constraint_base: [u32; FAMILIES],
+}
+
+impl InstanceBlock {
+    /// Returns the number of words the block spans.
+    #[inline]
+    const fn width(&self) -> u32 {
+        // Both factors were bounded when the composition was laid out.
+        self.slots * self.instances
+    }
+
+    /// Returns the instance and slot a composed word belongs to.
+    #[inline]
+    const fn split(&self, word: u32) -> (u32, u32) {
+        let local = word - self.word_base;
+        (local / self.slots, local % self.slots)
+    }
+}
+
+/// Storage the compiled metadata of one segment occupies.
+///
+/// The counts are what an instanced layout keeps flat as the instance count
+/// grows, so they are the quantity a scaling measurement should report.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct LayoutFootprint {
+    /// Stored relation occurrences.
+    pub references: usize,
+    /// Stored operation-and-shift groups.
+    pub keys: usize,
+    /// Stored per-slot key spans.
+    pub slots: usize,
+    /// Stored distinct shift spellings.
+    pub shift_sequences: usize,
+    /// Stored instance blocks.
+    pub blocks: usize,
+}
+
+impl LayoutFootprint {
+    /// Returns the total of every stored entry.
+    #[must_use]
+    pub const fn entries(&self) -> usize {
+        self.references + self.keys + self.slots + self.shift_sequences + self.blocks
+    }
+
+    /// Adds another segment's footprint.
+    const fn add(self, other: Self) -> Self {
+        Self {
+            references: self.references + other.references,
+            keys: self.keys + other.keys,
+            slots: self.slots + other.slots,
+            shift_sequences: self.shift_sequences + other.shift_sequences,
+            blocks: self.blocks + other.blocks,
+        }
+    }
+}
+
 /// Metadata compiled independently for one visibility segment.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CompiledSegment<W: Word> {
     /// The distinct shift-sequence spellings.
     shifts: Vec<[Shift<W>; 2]>,
-    /// The operation and shift groups across all words.
+    /// The operation and shift groups across all slots.
     keys: Vec<StoredKey>,
-    /// The contiguous key span assigned to each word.
-    word_keys: Vec<Range<u32>>,
-    /// The relation consumers grouped by key.
+    /// The contiguous key span assigned to each slot.
+    slot_keys: Vec<Range<u32>>,
+    /// The relation consumers grouped by key, in slot-local positions.
     references: Vec<ConstraintReference>,
+    /// The calls whose slots repeat across instances, in word order.
+    blocks: Vec<InstanceBlock>,
+    /// The number of composed words the blocks cover.
+    words: usize,
 }
 
 impl<W: Word> CompiledSegment<W> {
     /// Returns the number of indexed words.
     #[inline]
     pub const fn len(&self) -> usize {
-        self.word_keys.len()
+        self.words
     }
 
     /// Returns whether the segment has no words.
     #[inline]
     pub const fn is_empty(&self) -> bool {
-        self.word_keys.is_empty()
+        self.words == 0
+    }
+
+    /// Returns the storage this segment's metadata occupies.
+    #[must_use]
+    pub const fn footprint(&self) -> LayoutFootprint {
+        LayoutFootprint {
+            references: self.references.len(),
+            keys: self.keys.len(),
+            slots: self.slot_keys.len(),
+            shift_sequences: self.shifts.len(),
+            blocks: self.blocks.len(),
+        }
     }
 
     /// Returns the resolved keys attached to one word.
@@ -119,9 +235,19 @@ impl<W: Word> CompiledSegment<W> {
         word: usize,
     ) -> Option<impl ExactSizeIterator<Item = CompiledKey<'_, W>> + Clone + '_> {
         // Keep storage-local indices inside this segment.
-        let range = self.word_keys.get(word)?;
+        let word = u32::try_from(word).ok()?;
+        let block = self.block_of(word)?;
+        let (instance, slot) = block.split(word);
+        let range = self.slot_keys.get((block.slot_base + slot) as usize)?;
         let keys = self.keys.get(range.start as usize..range.end as usize)?;
-        Some(keys.iter().map(|key| self.resolve(key)))
+
+        // Every family shifts by this instance's own share of that family.
+        let offsets = [
+            block.constraint_base[0] + instance * block.strides[0],
+            block.constraint_base[1] + instance * block.strides[1],
+            block.constraint_base[2] + instance * block.strides[2],
+        ];
+        Some(keys.iter().map(move |key| self.resolve(key, offsets)))
     }
 
     /// Returns the dense shift-sequence table.
@@ -130,7 +256,18 @@ impl<W: Word> CompiledSegment<W> {
         &self.shifts
     }
 
-    fn resolve(&self, key: &StoredKey) -> CompiledKey<'_, W> {
+    /// Returns the block owning one composed word.
+    fn block_of(&self, word: u32) -> Option<&InstanceBlock> {
+        // Blocks are stored in increasing word order and never overlap.
+        let index = self
+            .blocks
+            .partition_point(|block| block.word_base <= word)
+            .checked_sub(1)?;
+        let block = &self.blocks[index];
+        (word < block.word_base + block.width()).then_some(block)
+    }
+
+    fn resolve(&self, key: &StoredKey, offsets: [u32; FAMILIES]) -> CompiledKey<'_, W> {
         // Construction bounds every dense index and contiguous reference span.
         CompiledKey {
             operation: key.operation,
@@ -138,6 +275,7 @@ impl<W: Word> CompiledSegment<W> {
             shifts: self.shifts[key.shift as usize],
             references: &self.references
                 [key.references.start as usize..key.references.end as usize],
+            constraint_offset: offsets[key.operation.code() as usize],
         }
     }
 }
@@ -191,6 +329,79 @@ impl<W: Word> CompiledKeyLayout<W> {
         })
     }
 
+    /// Compiles each component once and repeats it across its instances.
+    ///
+    /// The relations of a call are declared exactly once here, whatever its
+    /// instance count, so the stored metadata is the size of the components
+    /// rather than the size of the composed statement.
+    ///
+    /// The result is indistinguishable from compiling [`Composition::lower`],
+    /// because the composed addressing is the affine map this reverses.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a component or the merged layout is too large for
+    /// the compact key representation.
+    pub fn compose(composition: &Composition<W>) -> Result<Self, KeyCompileError> {
+        let mut public = Vec::with_capacity(composition.calls().len());
+        let mut witness = Vec::with_capacity(composition.calls().len());
+        let mut public_base = 0_u32;
+        let mut witness_base = 0_u32;
+        let mut constraint_base = [0_u32; FAMILIES];
+
+        for (call, index) in composition.calls().iter().zip(0_usize..) {
+            // One compilation of the body serves every instance of the call.
+            let component = call.component();
+            let compiled = Self::new(component.body())?;
+            let instances = bound(call.instances(), Segment::Witness, LayoutComponent::Keys)?;
+            let strides = relation_strides(call)?;
+
+            public.push(SegmentPiece {
+                segment: compiled.public,
+                word_base: public_base,
+                instances,
+                strides,
+                constraint_base,
+            });
+            witness.push(SegmentPiece {
+                segment: compiled.witness,
+                word_base: witness_base,
+                instances,
+                strides,
+                constraint_base,
+            });
+
+            // The next call starts where this one's instance-packed block ends.
+            public_base = advance(
+                public_base,
+                component.interface_slots(),
+                instances,
+                Segment::Public,
+            )?;
+            witness_base = advance(
+                witness_base,
+                component.local_slots(),
+                instances,
+                Segment::Witness,
+            )?;
+            for (family, stride) in strides.into_iter().enumerate() {
+                let kind = ConstraintKind::from_code(family as u8)
+                    .expect("relation strides are indexed by assigned family codes");
+                constraint_base[family] =
+                    constraint_base[family]
+                        .checked_add(stride.checked_mul(instances).ok_or(
+                            KeyCompileError::UnrepresentableComposition { call: index, kind },
+                        )?)
+                        .ok_or(KeyCompileError::UnrepresentableComposition { call: index, kind })?;
+            }
+        }
+
+        Ok(Self {
+            public: merge(public, Segment::Public)?,
+            witness: merge(witness, Segment::Witness)?,
+        })
+    }
+
     /// Returns metadata for verifier-known words.
     #[inline]
     pub const fn public(&self) -> &CompiledSegment<W> {
@@ -202,6 +413,172 @@ impl<W: Word> CompiledKeyLayout<W> {
     pub const fn witness(&self) -> &CompiledSegment<W> {
         &self.witness
     }
+
+    /// Returns the storage both segments' metadata occupies.
+    #[must_use]
+    pub const fn footprint(&self) -> LayoutFootprint {
+        self.public.footprint().add(self.witness.footprint())
+    }
+}
+
+/// One call's compiled component before the segment blocks are merged.
+struct SegmentPiece<W: Word> {
+    /// The component body compiled once, in slot-local positions.
+    segment: CompiledSegment<W>,
+    /// The block's first word in the composed segment.
+    word_base: u32,
+    /// Live instances of the call.
+    instances: u32,
+    /// Relations one instance adds to each family.
+    strides: [u32; FAMILIES],
+    /// The first relation position of instance zero.
+    constraint_base: [u32; FAMILIES],
+}
+
+/// Merges one compiled component per call into a single instanced segment.
+fn merge<W: Word>(
+    pieces: Vec<SegmentPiece<W>>,
+    segment: Segment,
+) -> Result<CompiledSegment<W>, KeyCompileError> {
+    // Shift spellings are shared, so the merged table is the sorted union.
+    let mut codes = pieces
+        .iter()
+        .flat_map(|piece| piece.segment.shifts.iter().copied().map(sequence_code))
+        .collect::<Vec<_>>();
+    codes.sort_unstable();
+    codes.dedup();
+    let shifts = codes
+        .iter()
+        .copied()
+        .map(ShiftSequenceCode::shifts)
+        .collect::<Vec<_>>();
+
+    let mut keys = Vec::new();
+    let mut slot_keys = Vec::new();
+    let mut references = Vec::new();
+    let mut blocks = Vec::new();
+    let mut words = 0_usize;
+
+    for piece in pieces {
+        let slot_base = bound(slot_keys.len(), segment, LayoutComponent::WordOffsets)?;
+        let key_base = bound(keys.len(), segment, LayoutComponent::Keys)?;
+        let reference_base = bound(references.len(), segment, LayoutComponent::References)?;
+
+        // Dense shift indices are rebased onto the merged table.
+        let remap = piece
+            .segment
+            .shifts
+            .iter()
+            .copied()
+            .map(|entry| {
+                let code = sequence_code(entry);
+                codes
+                    .binary_search(&code)
+                    .expect("the merged shift table covers every component spelling")
+                    as u32
+            })
+            .collect::<Vec<_>>();
+
+        references.extend(piece.segment.references.iter().copied());
+        keys.extend(piece.segment.keys.iter().map(|key| StoredKey {
+            operation: key.operation,
+            shift: remap[key.shift as usize],
+            references: (key.references.start + reference_base)
+                ..(key.references.end + reference_base),
+        }));
+        slot_keys.extend(
+            piece
+                .segment
+                .slot_keys
+                .iter()
+                .map(|range| (range.start + key_base)..(range.end + key_base)),
+        );
+
+        // A call with no words of this segment holds no addressable block.
+        let slots = bound(
+            piece.segment.slot_keys.len(),
+            segment,
+            LayoutComponent::WordOffsets,
+        )?;
+        let width = slots
+            .checked_mul(piece.instances)
+            .ok_or(KeyCompileError::LayoutTooLarge {
+                segment,
+                component: LayoutComponent::WordOffsets,
+                len: usize::MAX,
+            })?;
+        if width != 0 {
+            blocks.push(InstanceBlock {
+                word_base: piece.word_base,
+                slots,
+                instances: piece.instances,
+                slot_base,
+                strides: piece.strides,
+                constraint_base: piece.constraint_base,
+            });
+            words += width as usize;
+        }
+    }
+
+    // Bound every merged endpoint before the segment is handed out.
+    bound(keys.len(), segment, LayoutComponent::Keys)?;
+    bound(references.len(), segment, LayoutComponent::References)?;
+    bound(slot_keys.len(), segment, LayoutComponent::WordOffsets)?;
+
+    Ok(CompiledSegment {
+        shifts,
+        keys,
+        slot_keys,
+        references,
+        blocks,
+        words,
+    })
+}
+
+/// Returns the operation-independent code of one shift spelling.
+fn sequence_code<W: Word>(shifts: [Shift<W>; 2]) -> ShiftSequenceCode {
+    // The family tag is discarded, so any operation gives the same sequence.
+    KeyCode::new(ConstraintKind::Zero, shifts).sequence()
+}
+
+/// Returns the relations one instance of a call adds to each family.
+fn relation_strides<W: Word>(call: &ComponentCall<W>) -> Result<[u32; FAMILIES], KeyCompileError> {
+    let mut strides = [0_u32; FAMILIES];
+    for (family, count) in call.component().relation_counts().into_iter().enumerate() {
+        let kind = ConstraintKind::from_code(family as u8)
+            .expect("relation counts are indexed by assigned family codes");
+        strides[family] = u32::try_from(count)
+            .map_err(|_| KeyCompileError::UnrepresentableComposition { call: 0, kind })?;
+    }
+    Ok(strides)
+}
+
+/// Bounds one merged component length to its compact index.
+fn bound(len: usize, segment: Segment, component: LayoutComponent) -> Result<u32, KeyCompileError> {
+    u32::try_from(len).map_err(|_| KeyCompileError::LayoutTooLarge {
+        segment,
+        component,
+        len,
+    })
+}
+
+/// Advances a segment base past one instance-packed block.
+fn advance(
+    base: u32,
+    slots: usize,
+    instances: u32,
+    segment: Segment,
+) -> Result<u32, KeyCompileError> {
+    let too_large = || KeyCompileError::LayoutTooLarge {
+        segment,
+        component: LayoutComponent::WordOffsets,
+        len: usize::MAX,
+    };
+    let slots = u32::try_from(slots).map_err(|_| too_large())?;
+    slots
+        .checked_mul(instances)
+        .and_then(|width| base.checked_add(width))
+        .ok_or_else(too_large)
 }
 
 /// A bounded part of the compact key layout.
@@ -233,6 +610,14 @@ pub enum KeyCompileError {
     UnprovedRelation {
         /// Number of declared relations in the unsupported family.
         count: usize,
+    },
+    /// A call's instances do not fit the compact relation address space.
+    #[error("call {call} repeats its {kind:?} relations past the compact address space")]
+    UnrepresentableComposition {
+        /// The call whose block cannot be addressed.
+        call: usize,
+        /// The relation family that overflows.
+        kind: ConstraintKind,
     },
 }
 
@@ -301,8 +686,8 @@ mod tests {
         assert_eq!(public_keys.len(), 2);
         assert_eq!(public_keys[0].shifts(), [rotate, Shift::identity()]);
         assert_eq!(
-            public_keys[1].references(),
-            &[
+            public_keys[1].references().collect::<Vec<_>>(),
+            [
                 ConstraintReference {
                     operand: OperandRole::Left,
                     constraint: 0,
@@ -318,8 +703,8 @@ mod tests {
         let witness_keys = layout.witness().keys(1).unwrap().collect::<Vec<_>>();
         assert_eq!(witness_keys.len(), 2);
         assert_eq!(
-            witness_keys[0].references(),
-            &[
+            witness_keys[0].references().collect::<Vec<_>>(),
+            [
                 ConstraintReference {
                     operand: OperandRole::Value,
                     constraint: 0,
@@ -366,8 +751,8 @@ mod tests {
             ]
         );
         assert_eq!(
-            keys[1].references(),
-            &[
+            keys[1].references().collect::<Vec<_>>(),
+            [
                 ConstraintReference {
                     operand: OperandRole::Left,
                     constraint: 0,

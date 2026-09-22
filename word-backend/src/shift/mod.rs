@@ -40,7 +40,7 @@ use p3_field::{Algebra, ExtensionField};
 use p3_security::SecurityTerm;
 use p3_security::word::WordShiftSecurityModel;
 use p3_sumcheck::generic_degree::{GenericDegreeProof, RoundProver};
-use p3_word::{ConstraintSystem, Segment, Word};
+use p3_word::{Segment, Word};
 use serde::{Deserialize, Serialize};
 use transcript::{
     OPERAND_VARIABLES, OPERATION_VARIABLES, ShiftProverTranscript, ShiftVerifierTranscript,
@@ -51,6 +51,7 @@ use wiring::{
     word_prover,
 };
 
+use crate::statement::Statement;
 use crate::{CompiledKeyLayout, KeyCompileError, PackedWitness, PackedWord};
 
 /// Transcript record for the two quadratic sumchecks.
@@ -64,11 +65,11 @@ pub struct ShiftReductionProof<F, EF> {
     witness_evaluation: EF,
 }
 
-/// A checked word system together with its compiled shift wiring.
+/// A checked word statement together with its compiled shift wiring.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ShiftReductionKey<W: Word> {
-    /// Constraint system defining the statement.
-    system: ConstraintSystem<W>,
+    /// The relations defining the statement, flat or composed.
+    statement: Statement<W>,
     /// Sparse word-to-relation metadata used by both proving phases.
     layout: CompiledKeyLayout<W>,
     /// Variables spanning the widest padded relation family.
@@ -76,29 +77,38 @@ pub struct ShiftReductionKey<W: Word> {
 }
 
 impl<W: Word> ShiftReductionKey<W> {
-    /// Compiles a checked constraint system into a reusable reduction key.
-    pub fn new(system: ConstraintSystem<W>) -> Result<Self, KeyCompileError> {
+    /// Compiles a checked statement into a reusable reduction key.
+    ///
+    /// A composed statement compiles each component once, whatever its instance
+    /// count, and reaches the same wiring the lowered flat system would.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the statement is too large for the compact key
+    /// representation.
+    pub fn new(statement: impl Into<Statement<W>>) -> Result<Self, KeyCompileError> {
         // Key compilation fixes every sparse reference before proving begins.
-        let layout = CompiledKeyLayout::new(&system)?;
-        let constraint_count = system
-            .zero_constraints()
-            .len()
-            .max(system.and_constraints().len())
-            .max(system.integer_mul_constraints().len())
+        let statement = statement.into();
+        let layout = statement.compiled_layout()?;
+        let constraint_count = statement
+            .relation_counts()
+            .into_iter()
+            .max()
+            .unwrap_or(0)
             .max(1);
         let constraint_variables = constraint_count.next_power_of_two().ilog2() as usize;
         Ok(Self {
-            system,
+            statement,
             layout,
             constraint_variables,
         })
     }
 
-    /// Returns the checked relation system represented by this key.
+    /// Returns the checked statement represented by this key.
     #[inline]
-    pub const fn system(&self) -> &ConstraintSystem<W> {
-        // Owning the system prevents a compiled layout from being paired with another statement.
-        &self.system
+    pub const fn statement(&self) -> &Statement<W> {
+        // Owning the statement prevents a compiled layout from being paired with another.
+        &self.statement
     }
 
     /// Returns the exact algebraic soundness term for this reduction.
@@ -148,13 +158,13 @@ impl<W: Word> ShiftReductionKey<W> {
     {
         // Reject shape mismatches before the transcript absorbs any statement value.
         self.validate_claim(claim)?;
-        values
-            .check_shape(&self.system)
-            .map_err(|error| ShiftReductionError::SegmentLength {
+        values.check_shape(&self.statement).map_err(|error| {
+            ShiftReductionError::SegmentLength {
                 segment: error.segment,
                 expected: error.expected,
                 actual: error.actual,
-            })?;
+            }
+        })?;
 
         // Batch relation families first and operand positions second.
         let public_words = values
@@ -250,10 +260,10 @@ impl<W: Word> ShiftReductionKey<W> {
     {
         // Statement dimensions are checked before any transcript replay.
         self.validate_claim(claim)?;
-        if public.len() != self.system.public_len() {
+        if public.len() != self.statement.public_len() {
             return Err(ShiftReductionError::SegmentLength {
                 segment: Segment::Public,
-                expected: self.system.public_len(),
+                expected: self.statement.public_len(),
                 actual: public.len(),
             });
         }
@@ -352,8 +362,8 @@ impl<W: Word> ShiftReductionKey<W> {
         TranscriptShape::new(
             self.constraint_variables,
             W::BITS.ilog2() as usize,
-            self.system.public_len(),
-            self.system.witness_len(),
+            self.statement.public_len(),
+            self.statement.witness_len(),
         )
     }
 
@@ -365,7 +375,11 @@ impl<W: Word> ShiftReductionKey<W> {
     #[must_use]
     pub fn word_variables(&self) -> usize {
         // An empty segment is represented by one zero padding slot.
-        self.system.witness_len().max(1).next_power_of_two().ilog2() as usize
+        self.statement
+            .witness_len()
+            .max(1)
+            .next_power_of_two()
+            .ilog2() as usize
     }
 
     /// Returns the number of variables spanning the widest padded relation family.
@@ -396,8 +410,8 @@ mod tests {
     use p3_field::PrimeCharacteristicRing;
     use p3_keccak::Keccak256Hash;
     use p3_word::{
-        AndConstraint, IntegerMulConstraint, Operand, Shift, ShiftKind, ShiftedValue, ValueIndex,
-        Word32, Word64, ZeroConstraint,
+        AndConstraint, ConstraintSystem, IntegerMulConstraint, Operand, Shift, ShiftKind,
+        ShiftedValue, ValueIndex, Word32, Word64, ZeroConstraint,
     };
     use proptest::prelude::*;
 
@@ -468,10 +482,24 @@ mod tests {
         let key = ShiftReductionKey::new(system).unwrap();
         let public = vec![Word64::new(public_value)];
         let witness = witness_values.map(Word64::new).to_vec();
-        let packed = PackedWitness::new(key.system(), &public, &witness).unwrap();
+        let packed = PackedWitness::new(
+            key.statement()
+                .as_system()
+                .expect("the fixture is a flat statement"),
+            &public,
+            &witness,
+        )
+        .unwrap();
         let constraint_point = vec![];
         let bit_point = (1..=6).map(|bit| F::from_repr(1_u128 << bit)).collect();
-        let claim = evaluate_claim(key.system(), &packed, constraint_point, bit_point);
+        let claim = evaluate_claim(
+            key.statement()
+                .as_system()
+                .expect("the fixture is a flat statement"),
+            &packed,
+            constraint_point,
+            bit_point,
+        );
         (key, packed, public, claim)
     }
 
@@ -618,9 +646,18 @@ mod tests {
         let key = ShiftReductionKey::new(system).unwrap();
         let reordered_key = ShiftReductionKey::new(reordered).unwrap();
         let words = [Word64::new(0x0123), Word64::new(0x4567)];
-        let witness = PackedWitness::new(key.system(), &[], &words).unwrap();
+        let witness = PackedWitness::new(
+            key.statement()
+                .as_system()
+                .expect("the fixture is a flat statement"),
+            &[],
+            &words,
+        )
+        .unwrap();
         let claim = evaluate_claim(
-            key.system(),
+            key.statement()
+                .as_system()
+                .expect("the fixture is a flat statement"),
             &witness,
             vec![F::from_repr(1 << 17)],
             (18..24).map(|bit| F::from_repr(1 << bit)).collect(),
@@ -681,7 +718,14 @@ mod tests {
         // An empty committed segment makes the public wiring identically zero.
         let system = ConstraintSystem::<Word32>::new(0, 0, vec![], vec![], vec![]).unwrap();
         let key = ShiftReductionKey::new(system).unwrap();
-        let witness = PackedWitness::new(key.system(), &[], &[]).unwrap();
+        let witness = PackedWitness::new(
+            key.statement()
+                .as_system()
+                .expect("the fixture is a flat statement"),
+            &[],
+            &[],
+        )
+        .unwrap();
         let claim = ShiftClaim::new(
             vec![],
             (24..29).map(|bit| F::from_repr(1 << bit)).collect(),
@@ -750,9 +794,18 @@ mod tests {
 
         // A set high bit in each word drives the sign-extending movement.
         let words = [Word32::new(0x8765_4321), Word32::new(0xfedc_ba98)];
-        let witness = PackedWitness::new(key.system(), &[], &words).unwrap();
+        let witness = PackedWitness::new(
+            key.statement()
+                .as_system()
+                .expect("the fixture is a flat statement"),
+            &[],
+            &words,
+        )
+        .unwrap();
         let claim = evaluate_claim(
-            key.system(),
+            key.statement()
+                .as_system()
+                .expect("the fixture is a flat statement"),
             &witness,
             vec![],
             (1..6).map(|bit| F::from_repr(1 << bit)).collect(),
@@ -797,9 +850,18 @@ mod tests {
             Word64::new(0x8000_0001_8765_4321),
             Word64::new(0x1234_5678_9abc_def0),
         ];
-        let witness = PackedWitness::new(key.system(), &[], &words).unwrap();
+        let witness = PackedWitness::new(
+            key.statement()
+                .as_system()
+                .expect("the fixture is a flat statement"),
+            &[],
+            &words,
+        )
+        .unwrap();
         let claim = evaluate_claim(
-            key.system(),
+            key.statement()
+                .as_system()
+                .expect("the fixture is a flat statement"),
             &witness,
             vec![],
             (7..13).map(|bit| F::from_repr(1 << bit)).collect(),

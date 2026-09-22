@@ -36,23 +36,21 @@ impl<F: Field> PreparedWeights<F> {
         }
     }
 
-    /// Returns the coefficient carried by one compiled relation occurrence.
-    fn reference<W: Word>(&self, key: &CompiledKey<'_, W>, reference: usize) -> F {
-        // The compiled role is translated into its family-local operand position.
-        let reference = key.references()[reference];
-        let operation = key.operation().code() as usize;
-        let operand = operand_index(key.operation(), reference.operand());
-        self.operation[operation]
-            * self.operand[operand]
-            * self.constraint[reference.constraint() as usize]
-    }
-
     /// Sums all relation occurrences grouped under one compiled key.
     fn key<W: Word>(&self, key: &CompiledKey<'_, W>) -> F {
+        // The family weight is shared by every occurrence under one key.
+        let operation = self.operation[key.operation().code() as usize];
+
         // Repeated terms add in the challenge field and cancel in characteristic two.
-        (0..key.references().len())
-            .map(|reference| self.reference(key, reference))
-            .sum()
+        let occurrences = key
+            .references()
+            .map(|reference| {
+                // The compiled role is translated into its family-local operand position.
+                let operand = operand_index(key.operation(), reference.operand());
+                self.operand[operand] * self.constraint[reference.constraint() as usize]
+            })
+            .sum::<F>();
+        operation * occurrences
     }
 
     /// Batches the supplied operand claims with these transcript weights.
