@@ -1540,6 +1540,41 @@ impl<'a, R: Field, const CORNERS: usize> PlaneFold<'a, R, CORNERS> {
         })
     }
 
+    /// Every column's value at every residual row, `block_columns` adjacent columns per task.
+    ///
+    /// Each worker allocates the columns it writes, so the memory comes from its own arena.
+    fn fold_columns(&self, block_columns: usize) -> Vec<Poly<R>> {
+        let width = self.trace.width;
+        let rows = self.words * SLICED_LANES;
+        (0..width.div_ceil(block_columns))
+            .into_par_iter()
+            .flat_map_iter(|block| {
+                let start = block * block_columns;
+                let columns = start..(start + block_columns).min(width);
+                let mut values = columns
+                    .clone()
+                    .map(|_| Vec::with_capacity(rows))
+                    .collect::<Vec<Vec<R>>>();
+                let mut low = vec![0; self.corners * columns.len()];
+                let mut high = vec![0; self.corners * columns.len()];
+                for word in 0..self.words {
+                    self.stage(
+                        &self.trace.cells,
+                        columns.clone(),
+                        word,
+                        &mut low,
+                        &mut high,
+                    );
+                    for (column, values) in values.iter_mut().enumerate() {
+                        let (low, high) = self.staged_words(&low, &high, column);
+                        values.extend(self.corner_values(low, high));
+                    }
+                }
+                values.into_iter().map(Poly::new)
+            })
+            .collect()
+    }
+
     /// The value one half of one residual row's mask bytes stands for.
     ///
     /// The high-plane masks are read only when `HIGH` is set, so a caller clears it only when
@@ -2046,30 +2081,8 @@ where
         };
         let _span = tracing::debug_span!("unslice").entered();
         let fold = PlaneFold::<R, CORNERS>::new::<S, EF>(&trace, &challenges);
-        let rows = fold.words * SLICED_LANES;
-
-        // Each worker allocates the columns it writes, so the memory comes from its own arena.
-        let scalar = (0..trace.width.div_ceil(STAGED_COLUMNS))
-            .into_par_iter()
-            .flat_map_iter(|block| {
-                let start = block * STAGED_COLUMNS;
-                let columns = start..(start + STAGED_COLUMNS).min(trace.width);
-                let mut values = columns
-                    .clone()
-                    .map(|_| Vec::with_capacity(rows))
-                    .collect::<Vec<Vec<R>>>();
-                let mut low = vec![0; fold.corners * columns.len()];
-                let mut high = vec![0; fold.corners * columns.len()];
-                for word in 0..fold.words {
-                    fold.stage(&trace.cells, columns.clone(), word, &mut low, &mut high);
-                    for (column, values) in values.iter_mut().enumerate() {
-                        let (low, high) = fold.staged_words(&low, &high, column);
-                        values.extend(fold.corner_values(low, high));
-                    }
-                }
-                values.into_iter().map(Poly::new)
-            })
-            .collect();
+        // A stage too narrow to give every worker full blocks stages fewer columns per task.
+        let scalar = fold.fold_columns(STAGED_COLUMNS.min(rows_per_task(trace.width)));
 
         self.read_next_tails(&fold);
         self.columns = ExtColumns::Scalar(scalar);
