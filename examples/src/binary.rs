@@ -715,8 +715,10 @@ where
 /// Dispatches on `options.merkle_arity` and `options.hash` to build a Merkle tree of that child
 /// count over that hash, encodes the binary-PCS codeword through `ntt`, and runs its zerocheck
 /// through `backend`: [`ReprBackend`] over `GF(4)` and [`Ghash128`] for [`Backend::PolyBasis`],
-/// [`SubfieldBackend`] over `GF(4)` for [`Backend::Subfield`]. Every backend emits a proof
-/// identical to the one [`p3_multi_stark::prove`] does.
+/// [`SubfieldBackend`] over `GF(4)` for [`Backend::Subfield`], or
+/// [`ReprBackend<BinaryField2, Ghash128, true>`] with opt-in deferred materialization for
+/// [`Backend::PolyBasisLate`]. Every backend emits a proof identical to the one
+/// [`p3_multi_stark::prove`] does.
 ///
 /// # Panics
 ///
