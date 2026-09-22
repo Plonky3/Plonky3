@@ -202,60 +202,79 @@ type NonOwning<F, EF, Challenger> = PhantomData<fn() -> (F, EF, Challenger)>;
 ///
 /// Built from [`StirParameters`] plus the starting polynomial degree.
 /// Contains all precomputed values needed by the prover and verifier.
+///
+/// Fields are written only by the constructors in this module; the schedule is read through
+/// accessors.
+///
+/// ```
+/// use p3_stir::StirConfig;
+///
+/// fn read<F, EF, M, C>(config: &StirConfig<F, EF, M, C>) -> usize {
+///     config.final_queries()
+/// }
+/// ```
+///
+/// ```compile_fail
+/// use p3_stir::StirConfig;
+///
+/// fn weaken<F, EF, M, C>(config: &mut StirConfig<F, EF, M, C>) {
+///     config.final_queries = 0;
+/// }
+/// ```
 #[derive(Debug, Clone)]
 pub struct StirConfig<F, EF, M, Challenger> {
     options: StirOptions,
     /// `(log_native_degree, num_quotients)` for each PCS alpha batch on the initial domain.
     /// Standalone STIR configurations leave this empty.
-    pub quotient_batches: Vec<(usize, usize)>,
+    pub(crate) quotient_batches: Vec<(usize, usize)>,
     /// Log₂ of the degree of the initial polynomial.
-    pub log_starting_degree: usize,
+    pub(crate) log_starting_degree: usize,
 
     /// Which Reed-Solomon proximity bound is assumed for soundness.
-    pub soundness_type: SecurityAssumption,
+    pub(crate) soundness_type: SecurityAssumption,
 
     /// Target security level in bits.
-    pub security_level: usize,
+    pub(crate) security_level: usize,
 
     /// Fixed proof-of-work difficulty in bits applied to each grinding step.
-    pub max_pow_bits: usize,
+    pub(crate) max_pow_bits: usize,
 
     /// Log₂ of the inverse rate of the initial RS code.
     ///
     /// The effective inverse rate increases by `log_folding_factor - 1` each round.
-    pub log_blowup: usize,
+    pub(crate) log_blowup: usize,
 
     /// Log₂ of the folding arity used from round 1 onward.
-    pub log_folding_factor: usize,
+    pub(crate) log_folding_factor: usize,
 
     /// Log₂ of the folding arity used in round 0 (the fold of the initial oracle).
-    pub log_starting_folding_factor: usize,
+    pub(crate) log_starting_folding_factor: usize,
 
     /// Per-round derived configurations for each intermediate STIR round.
-    pub round_configs: Vec<StirRoundConfig<F>>,
+    pub(crate) round_configs: Vec<StirRoundConfig<F>>,
 
     /// Log₂ of the degree of the final (directly-sent) polynomial.
-    pub log_final_degree: usize,
+    pub(crate) log_final_degree: usize,
 
     /// Number of STIR proximity queries in the final round.
-    pub final_queries: usize,
+    pub(crate) final_queries: usize,
 
     /// The final round's `eta_M` parameter from the paper's recommended schedule.
-    pub final_eta: f64,
+    pub(crate) final_eta: f64,
 
     /// Proof-of-work difficulty used for the final query phase.
     ///
     /// Derived per the same rule as [`StirRoundConfig::pow_bits`], but using only the
     /// final-round query-failure soundness (no OOD or combination in the final round).
-    pub final_pow_bits: usize,
+    pub(crate) final_pow_bits: usize,
 
     /// Proof-of-work difficulty used for the final folding step.
     ///
     /// Derived per the same rule as [`StirRoundConfig::folding_pow_bits`].
-    pub final_folding_pow_bits: usize,
+    pub(crate) final_folding_pow_bits: usize,
 
     /// Merkle tree commitment scheme.
-    pub mmcs: M,
+    pub(crate) mmcs: M,
 
     /// `fn() -> _` rather than a bare tuple: this config *mentions* these types but owns no
     /// value of any of them, and the function-pointer form is unconditionally `Send + Sync`
@@ -506,6 +525,84 @@ pub enum StirConfigError {
          Field::GENERATOR^(2^{n_i}) != 1"
     )]
     NonDisjointCosets { round_index: usize, n_i: usize },
+}
+
+impl<F, EF, M, Challenger> StirConfig<F, EF, M, Challenger> {
+    /// `(log_native_degree, num_quotients)` for each PCS alpha batch on the initial domain.
+    /// Standalone STIR configurations leave this empty.
+    pub fn quotient_batches(&self) -> &[(usize, usize)] {
+        &self.quotient_batches
+    }
+
+    /// Log₂ of the degree of the initial polynomial.
+    pub const fn log_starting_degree(&self) -> usize {
+        self.log_starting_degree
+    }
+
+    /// Which Reed-Solomon proximity bound is assumed for soundness.
+    pub const fn soundness_type(&self) -> SecurityAssumption {
+        self.soundness_type
+    }
+
+    /// Target security level in bits.
+    pub const fn security_level(&self) -> usize {
+        self.security_level
+    }
+
+    /// Fixed proof-of-work difficulty in bits applied to each grinding step.
+    pub const fn max_pow_bits(&self) -> usize {
+        self.max_pow_bits
+    }
+
+    /// Log₂ of the inverse rate of the initial RS code.
+    pub const fn log_blowup(&self) -> usize {
+        self.log_blowup
+    }
+
+    /// Log₂ of the folding arity used from round 1 onward.
+    pub const fn log_folding_factor(&self) -> usize {
+        self.log_folding_factor
+    }
+
+    /// Log₂ of the folding arity used in round 0 (the fold of the initial oracle).
+    pub const fn log_starting_folding_factor(&self) -> usize {
+        self.log_starting_folding_factor
+    }
+
+    /// Per-round derived configurations for each intermediate STIR round.
+    pub fn round_configs(&self) -> &[StirRoundConfig<F>] {
+        &self.round_configs
+    }
+
+    /// Log₂ of the degree of the final (directly-sent) polynomial.
+    pub const fn log_final_degree(&self) -> usize {
+        self.log_final_degree
+    }
+
+    /// Number of STIR proximity queries in the final round.
+    pub const fn final_queries(&self) -> usize {
+        self.final_queries
+    }
+
+    /// The final round's `eta_M` parameter from the paper's recommended schedule.
+    pub const fn final_eta(&self) -> f64 {
+        self.final_eta
+    }
+
+    /// Proof-of-work difficulty used for the final query phase.
+    pub const fn final_pow_bits(&self) -> usize {
+        self.final_pow_bits
+    }
+
+    /// Proof-of-work difficulty used for the final folding step.
+    pub const fn final_folding_pow_bits(&self) -> usize {
+        self.final_folding_pow_bits
+    }
+
+    /// Merkle tree commitment scheme.
+    pub const fn mmcs(&self) -> &M {
+        &self.mmcs
+    }
 }
 
 impl<F, EF, M, Challenger> StirConfig<F, EF, M, Challenger>

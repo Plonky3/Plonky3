@@ -10,10 +10,11 @@ use alloc::vec::Vec;
 use p3_field::{ExtensionField, Field, dot_product};
 
 use crate::Claim;
+use crate::lagrange::lagrange_weights_01inf_multi;
 use crate::layout::opening::{EqSvoPartials, NextSvoPartials, Opening};
 use crate::layout::witness::{Table, TablePlacement};
 use crate::layout::{ProverMultiClaim, ProverVirtualClaim};
-use crate::svo::SvoPoint;
+use crate::svo::{SvoAccumulators, SvoPoint, calculate_accumulators_batch};
 use crate::table::{OpeningEvals, OpeningRequest, TableShape};
 
 /// Opening claims recorded against one stacked polynomial, shared by both binding modes.
@@ -219,6 +220,104 @@ impl<F: Field, EF: ExtensionField<F>> StackedClaims<F, EF> {
         );
 
         sum
+    }
+
+    /// Batches every recorded claim's accumulators under `alpha`.
+    ///
+    /// Powers follow the order of [`Self::sum`]:
+    /// placements, claims, current openings, successor openings, then virtual claims.
+    pub(crate) fn batched_accumulators(&self, alpha: EF) -> BatchedAccumulators<'_, EF> {
+        // Iteration order is placement order, matching `sum`. Each claim consumes exactly
+        // `claim.len()` consecutive powers from the shared iterator, so the per-claim alpha
+        // vector is aligned with the claim's opening list by construction.
+        let mut alphas = alpha.powers();
+        let concrete = self
+            .concrete_claims()
+            .map(|claim| {
+                let per_claim: Vec<EF> = alphas.by_ref().take(claim.len()).collect();
+                calculate_accumulators_batch(claim, &per_claim)
+            })
+            .collect();
+
+        // Virtual claims continue the alpha sequence right after the concrete ones.
+        let virtual_alphas = alpha
+            .shifted_powers(alpha.exp_u64(self.num_claims() as u64))
+            .take(self.virtual_claims.len())
+            .collect();
+
+        BatchedAccumulators {
+            concrete,
+            virtual_claims: &self.virtual_claims,
+            virtual_alphas,
+        }
+    }
+}
+
+/// SVO accumulators of every recorded claim, batched under one challenge.
+///
+/// - Concrete claims carry their alpha powers inside their accumulators.
+/// - Virtual claims keep their own accumulators and one alpha power each.
+pub(crate) struct BatchedAccumulators<'a, EF: Field> {
+    /// One accumulator set per concrete claim, in placement order.
+    concrete: Vec<SvoAccumulators<EF>>,
+    /// Virtual claims, in recording order.
+    virtual_claims: &'a [ProverVirtualClaim<EF>],
+    /// Alpha power of each virtual claim, continuing after the concrete openings.
+    virtual_alphas: Vec<EF>,
+}
+
+impl<EF: Field> BatchedAccumulators<'_, EF> {
+    /// Round polynomial `(h(0), h(inf))` of the next preprocessing round.
+    ///
+    /// `rs` holds the challenges drawn so far, so its length is the round index.
+    ///
+    /// # Identity
+    ///
+    /// Linearity of the dot product gives:
+    ///
+    /// ```text
+    ///     c0    = sum_c  dot(claim_c.accs[0], weights)
+    ///           + sum_v  alpha_v * dot(virtual_v.accs[0], weights)
+    ///     c_inf = same with accs[1]
+    /// ```
+    ///
+    /// - Concrete claims carry alpha pre-batched by [`StackedClaims::batched_accumulators`].
+    /// - Virtual claims keep a separate scalar per claim.
+    /// - No intermediate element-wise accumulator is needed.
+    pub(crate) fn round_coefficients(&self, rs: &[EF]) -> (EF, EF) {
+        let weights = lagrange_weights_01inf_multi(rs);
+        let round_idx = rs.len();
+
+        let mut c0 = EF::ZERO;
+        let mut c_inf = EF::ZERO;
+
+        for accs in &self.concrete {
+            c0 += dot_product::<EF, _, _>(
+                accs[round_idx][0].iter().copied(),
+                weights.iter().copied(),
+            );
+            c_inf += dot_product::<EF, _, _>(
+                accs[round_idx][1].iter().copied(),
+                weights.iter().copied(),
+            );
+        }
+
+        // Virtual-claim contributions: scale each claim's dot by its alpha power.
+        for (vc, &alpha_i) in self.virtual_claims.iter().zip(self.virtual_alphas.iter()) {
+            let vc_accs = &vc.data;
+            c0 += alpha_i
+                * dot_product::<EF, _, _>(
+                    vc_accs[round_idx][0].iter().copied(),
+                    weights.iter().copied(),
+                );
+            c_inf += alpha_i
+                * dot_product::<EF, _, _>(
+                    vc_accs[round_idx][1].iter().copied(),
+                    weights.iter().copied(),
+                );
+        }
+
+        (c0, c_inf)
     }
 }
 

@@ -34,8 +34,18 @@ pub(crate) struct ColumnBatchShape {
 }
 
 impl ColumnBatchShape {
-    const fn column_variables(self) -> usize {
+    pub(crate) const fn column_variables(self) -> usize {
         self.width.next_power_of_two().trailing_zeros() as usize
+    }
+
+    /// Views each batch reads: the current row, and the next one when it is asked for.
+    pub(crate) fn num_views(self) -> usize {
+        1 + usize::from(self.next)
+    }
+
+    /// Values each batch carries: the whole width once per view.
+    pub(crate) fn values_per_batch(self) -> usize {
+        self.width * self.num_views()
     }
 
     fn pattern<F, EF>(self) -> InteractionPattern

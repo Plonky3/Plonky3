@@ -118,123 +118,37 @@ where
 //
 // A blanket implementation over every level would overlap the two-adic one in `p3-commit`.
 // No downstream crate may resolve that overlap, so the alphabets are named instead.
-impl<Ntt: AdditiveNtt<BinaryField128> + Sync> Encoder<BinaryField128>
-    for AdditiveRsEncoder<BinaryField128, Ntt>
-{
-    fn encode_batch(
-        &self,
-        message: RowMajorMatrix<BinaryField128>,
-        log_inv_rate: usize,
-    ) -> RowMajorMatrix<BinaryField128> {
-        encode_by_padding(&self.ntt, message, log_inv_rate)
-    }
+macro_rules! impl_additive_rs_encoder {
+    ($($field:ty),* $(,)?) => {$(
+        impl<Ntt: AdditiveNtt<$field> + Sync> Encoder<$field> for AdditiveRsEncoder<$field, Ntt> {
+            fn encode_batch(
+                &self,
+                message: RowMajorMatrix<$field>,
+                log_inv_rate: usize,
+            ) -> RowMajorMatrix<$field> {
+                encode_by_padding(&self.ntt, message, log_inv_rate)
+            }
 
-    fn encode_batch_padded(
-        &self,
-        message: RowMajorMatrix<BinaryField128>,
-        log_inv_rate: usize,
-    ) -> RowMajorMatrix<BinaryField128> {
-        self.ntt.ntt_batch_padded(message, log_inv_rate)
-    }
+            fn encode_batch_padded(
+                &self,
+                message: RowMajorMatrix<$field>,
+                log_inv_rate: usize,
+            ) -> RowMajorMatrix<$field> {
+                self.ntt.ntt_batch_padded(message, log_inv_rate)
+            }
+        }
+    )*};
 }
 
-impl<Ntt: AdditiveNtt<BinaryField64> + Sync> Encoder<BinaryField64>
-    for AdditiveRsEncoder<BinaryField64, Ntt>
-{
-    fn encode_batch(
-        &self,
-        message: RowMajorMatrix<BinaryField64>,
-        log_inv_rate: usize,
-    ) -> RowMajorMatrix<BinaryField64> {
-        encode_by_padding(&self.ntt, message, log_inv_rate)
-    }
-
-    fn encode_batch_padded(
-        &self,
-        message: RowMajorMatrix<BinaryField64>,
-        log_inv_rate: usize,
-    ) -> RowMajorMatrix<BinaryField64> {
-        self.ntt.ntt_batch_padded(message, log_inv_rate)
-    }
-}
-
-impl<Ntt: AdditiveNtt<Poly64> + Sync> Encoder<Poly64> for AdditiveRsEncoder<Poly64, Ntt> {
-    fn encode_batch(
-        &self,
-        message: RowMajorMatrix<Poly64>,
-        log_inv_rate: usize,
-    ) -> RowMajorMatrix<Poly64> {
-        encode_by_padding(&self.ntt, message, log_inv_rate)
-    }
-
-    fn encode_batch_padded(
-        &self,
-        message: RowMajorMatrix<Poly64>,
-        log_inv_rate: usize,
-    ) -> RowMajorMatrix<Poly64> {
-        self.ntt.ntt_batch_padded(message, log_inv_rate)
-    }
-}
-
-impl<Ntt: AdditiveNtt<BinaryField32> + Sync> Encoder<BinaryField32>
-    for AdditiveRsEncoder<BinaryField32, Ntt>
-{
-    fn encode_batch(
-        &self,
-        message: RowMajorMatrix<BinaryField32>,
-        log_inv_rate: usize,
-    ) -> RowMajorMatrix<BinaryField32> {
-        encode_by_padding(&self.ntt, message, log_inv_rate)
-    }
-
-    fn encode_batch_padded(
-        &self,
-        message: RowMajorMatrix<BinaryField32>,
-        log_inv_rate: usize,
-    ) -> RowMajorMatrix<BinaryField32> {
-        self.ntt.ntt_batch_padded(message, log_inv_rate)
-    }
-}
-
-impl<Ntt: AdditiveNtt<BinaryField16> + Sync> Encoder<BinaryField16>
-    for AdditiveRsEncoder<BinaryField16, Ntt>
-{
-    fn encode_batch(
-        &self,
-        message: RowMajorMatrix<BinaryField16>,
-        log_inv_rate: usize,
-    ) -> RowMajorMatrix<BinaryField16> {
-        encode_by_padding(&self.ntt, message, log_inv_rate)
-    }
-
-    fn encode_batch_padded(
-        &self,
-        message: RowMajorMatrix<BinaryField16>,
-        log_inv_rate: usize,
-    ) -> RowMajorMatrix<BinaryField16> {
-        self.ntt.ntt_batch_padded(message, log_inv_rate)
-    }
-}
-
-impl<Ntt: AdditiveNtt<BinaryField8> + Sync> Encoder<BinaryField8>
-    for AdditiveRsEncoder<BinaryField8, Ntt>
-{
-    fn encode_batch(
-        &self,
-        message: RowMajorMatrix<BinaryField8>,
-        log_inv_rate: usize,
-    ) -> RowMajorMatrix<BinaryField8> {
-        encode_by_padding(&self.ntt, message, log_inv_rate)
-    }
-
-    fn encode_batch_padded(
-        &self,
-        message: RowMajorMatrix<BinaryField8>,
-        log_inv_rate: usize,
-    ) -> RowMajorMatrix<BinaryField8> {
-        self.ntt.ntt_batch_padded(message, log_inv_rate)
-    }
-}
+// The six `impl Encoder<F> for AdditiveRsEncoder<F, _>`, one per alphabet below.
+impl_additive_rs_encoder!(
+    BinaryField128,
+    BinaryField64,
+    Poly64,
+    BinaryField32,
+    BinaryField16,
+    BinaryField8,
+);
 
 #[cfg(test)]
 mod tests {

@@ -99,10 +99,10 @@ where
         num_variables: usize,
     ) -> Result<Self, BooleanWhirError> {
         let packed = Self::packed_variables(num_variables)?;
-        if inner.num_variables != packed {
+        if inner.num_variables() != packed {
             return Err(BooleanWhirError::ConfigArity {
                 expected: packed,
-                actual: inner.num_variables,
+                actual: inner.num_variables(),
             });
         }
         Ok(Self {
@@ -139,7 +139,7 @@ where
     /// One table of one column, opened directly at one point per claim.
     fn protocol(&self, num_claims: usize) -> OpeningProtocol {
         OpeningProtocol::new(vec![TableSpec::new(
-            TableShape::new(self.inner.num_variables, 1),
+            TableShape::new(self.inner.num_variables(), 1),
             (0..num_claims)
                 .map(|_| OpeningBatch::new(vec![0], Vec::new()))
                 .collect(),
@@ -251,7 +251,7 @@ where
             num_claims,
             num_tensors,
             BitRingSwitch::<EF>::ABSORBED,
-            self.inner.num_variables,
+            self.inner.num_variables(),
             EF::bits(),
         ));
         Some(security)
@@ -445,9 +445,9 @@ where
         // The packing is one copy of the bits, so the witness is never swept for arithmetic.
         let stack = PackedStack::<PackedGf2<U>, EF>::from_columns(&[bits])
             .map_err(BooleanWhirError::Packing)?;
-        if stack.column_num_variables() != self.inner.num_variables {
+        if stack.column_num_variables() != self.inner.num_variables() {
             return Err(BooleanWhirError::WitnessArity {
-                expected: self.inner.num_variables,
+                expected: self.inner.num_variables(),
                 actual: stack.column_num_variables(),
             });
         }

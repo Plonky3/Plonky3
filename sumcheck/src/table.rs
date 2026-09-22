@@ -1,6 +1,8 @@
 use alloc::vec::Vec;
 
+use p3_field::Field;
 use p3_matrix::Dimensions;
+use p3_multilinear_util::point::Point;
 use p3_util::log2_ceil_usize;
 use serde::{Deserialize, Serialize};
 
@@ -267,11 +269,83 @@ impl OpeningProtocol {
                 .map(move |batch| (table_idx, batch))
         })
     }
+
+    /// Entries across every batch, or `None` when the count overflows `usize`.
+    pub fn checked_num_claims(&self) -> Option<usize> {
+        self.iter_openings()
+            .try_fold(0usize, |count, (_, batch)| count.checked_add(batch.len()))
+    }
+
+    /// Cells across every table, `2^k` rows times width each, or `None` on overflow.
+    pub fn checked_num_cells(&self) -> Option<usize> {
+        self.0.iter().try_fold(0usize, |total, table| {
+            let shape = table.shape();
+            let rows = 1usize.checked_shl(shape.num_variables().try_into().ok()?)?;
+            total.checked_add(rows.checked_mul(shape.width())?)
+        })
+    }
+
+    /// One point per batch, each with its table's arity.
+    ///
+    /// The count is checked first, then batches in transcript order.
+    ///
+    /// # Errors
+    ///
+    /// The count mismatch, or else the first batch whose point has the wrong arity.
+    pub fn check_points<EF: Field>(
+        &self,
+        points: &[Point<EF>],
+    ) -> Result<(), OpeningPointMismatch> {
+        let expected = self.num_openings();
+        if points.len() != expected {
+            return Err(OpeningPointMismatch::Count {
+                expected,
+                actual: points.len(),
+            });
+        }
+        for ((table, _), point) in self.iter_openings().zip(points) {
+            let expected = self.0[table].shape().num_variables();
+            if point.num_variables() != expected {
+                return Err(OpeningPointMismatch::Arity {
+                    table,
+                    expected,
+                    actual: point.num_variables(),
+                });
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Why a list of opening points does not fit an opening protocol.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum OpeningPointMismatch {
+    /// One point per opening batch is required.
+    #[error("{actual} points against {expected} opening batches")]
+    Count {
+        /// Opening batches the protocol names.
+        expected: usize,
+        /// Points supplied.
+        actual: usize,
+    },
+    /// A point does not name the variables of the table its batch opens.
+    #[error("the point for table {table} names {actual} variables, expected {expected}")]
+    Arity {
+        /// Table the batch opens.
+        table: usize,
+        /// Variables of that table.
+        expected: usize,
+        /// Variables the point names.
+        actual: usize,
+    },
 }
 
 #[cfg(test)]
 mod tests {
     use alloc::vec;
+
+    use p3_baby_bear::BabyBear;
+    use p3_field::PrimeCharacteristicRing;
 
     use super::*;
 
@@ -562,5 +636,110 @@ mod tests {
 
         assert_eq!(spec.shape().num_variables(), 5);
         assert_eq!(spec.shape().width(), 1);
+    }
+
+    // One zero point per requested arity, in the order given.
+    fn points(arities: &[usize]) -> Vec<Point<BabyBear>> {
+        arities
+            .iter()
+            .map(|&num_variables| Point::new(vec![BabyBear::ZERO; num_variables]))
+            .collect()
+    }
+
+    #[test]
+    fn opening_protocol_counts_claims_and_cells() {
+        // Invariant:
+        //     Claims are the batch entries summed over every batch.
+        //     Cells are rows times width summed over every table.
+        //
+        // Fixture state:
+        //     table 0: 2^3 rows, 2 cols. one batch of 2 entries.
+        //     table 1: 2^4 rows, 3 cols. batches of 2 and 1 entries.
+        //     Expected: claims 2 + 2 + 1 = 5, cells 8·2 + 16·3 = 64.
+        let protocol = two_table_protocol();
+        assert_eq!(protocol.checked_num_claims(), Some(5));
+        assert_eq!(protocol.checked_num_cells(), Some(64));
+
+        // Edge case: empty protocol → nothing to count.
+        let empty = OpeningProtocol::new(vec![]);
+        assert_eq!(empty.checked_num_claims(), Some(0));
+        assert_eq!(empty.checked_num_cells(), Some(0));
+    }
+
+    #[test]
+    fn checked_num_cells_reports_an_overflow() {
+        // Invariant:
+        //     A cell count past usize is reported, never wrapped.
+        //
+        // Fixture state:
+        //     one table of the largest representable arity and 3 columns.
+        //     Its row count fits in usize, its cell count does not.
+        let protocol = OpeningProtocol::new(vec![TableSpec::new(
+            TableShape::new(usize::BITS as usize - 1, 3),
+            vec![OpeningBatch::new(vec![0], Vec::new())],
+        )]);
+
+        assert_eq!(protocol.checked_num_cells(), None);
+    }
+
+    #[test]
+    fn check_points_reports_the_count_before_any_arity() {
+        // Invariant:
+        //     A wrong point count is reported even when every point also has the wrong arity.
+        //
+        // Fixture state:
+        //     two-table protocol, three batches.
+        let protocol = two_table_protocol();
+
+        assert_eq!(
+            protocol.check_points(&points(&[1, 1])),
+            Err(OpeningPointMismatch::Count {
+                expected: 3,
+                actual: 2,
+            }),
+        );
+        assert_eq!(
+            protocol.check_points(&points(&[1, 1, 1, 1])),
+            Err(OpeningPointMismatch::Count {
+                expected: 3,
+                actual: 4,
+            }),
+        );
+    }
+
+    #[test]
+    fn check_points_reports_the_first_batch_with_the_wrong_arity() {
+        // Invariant:
+        //     Batches are checked in transcript order and the first mismatch wins.
+        //
+        // Fixture state:
+        //     two-table protocol; batches open tables 0, 1, 1 (arities 3, 4, 4).
+        //     Points of arity 3, 3, 5: batches 2 and 3 are both wrong.
+        let protocol = two_table_protocol();
+
+        assert_eq!(
+            protocol.check_points(&points(&[3, 3, 5])),
+            Err(OpeningPointMismatch::Arity {
+                table: 1,
+                expected: 4,
+                actual: 3,
+            }),
+        );
+    }
+
+    #[test]
+    fn check_points_accepts_matching_points() {
+        // Invariant:
+        //     One point per batch, each of its table's arity, is accepted.
+        //
+        // Fixture state:
+        //     two-table protocol; points of arity 3, 4, 4.
+        let protocol = two_table_protocol();
+
+        assert_eq!(protocol.check_points(&points(&[3, 4, 4])), Ok(()));
+
+        // Edge case: empty protocol takes no points.
+        let empty = OpeningProtocol::new(vec![]);
+        assert_eq!(empty.check_points::<BabyBear>(&[]), Ok(()));
     }
 }

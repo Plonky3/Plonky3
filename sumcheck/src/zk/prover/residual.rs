@@ -5,14 +5,14 @@ use alloc::vec::Vec;
 use p3_challenger::fs::TranscriptField;
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
 use p3_commit::Mmcs;
-use p3_field::{ExtensionField, Field, HornerIter};
+use p3_field::{ExtensionField, Field};
 use p3_matrix::Matrix;
 use p3_multilinear_util::point::Point;
 use p3_zk_codes::ZkEncodingWithRandomness;
 use rand::CryptoRng;
 
 use super::common::{mask_endpoints, sample_masks};
-use super::round::{PlainPiece, RoundContext, RoundState, round_poly_to_wire};
+use super::round::{MaskedRounds, PlainPiece};
 use crate::strategy::SumcheckProver;
 use crate::zk::transcript::{ZkProverTranscript, ZkSumcheckShape};
 use crate::zk::{ZkSumcheckData, ZkSumcheckHandoff};
@@ -106,28 +106,18 @@ where
 
         let (masks, mask_randomness, mask_oracle) =
             sample_masks::<EF, _, _, _>(folding_factor, encoding, mmcs, rng);
-        let (mu_tilde, mut sum_future_endpoints) = mask_endpoints::<EF>(&masks, folding_factor);
+        let (mu_tilde, endpoints) = mask_endpoints::<EF>(&masks, folding_factor);
         zk_data.mu_tilde = mu_tilde;
 
         let eps: EF = transcript.masks(mask_oracle.0.clone(), mu_tilde);
+        let mut rounds = MaskedRounds::new(&masks, ell_zk, endpoints, eps);
         let mut rs = Vec::with_capacity(folding_factor);
-        let mut mask_evals_at_gamma = Vec::with_capacity(folding_factor);
-        let pow2: Vec<EF> = EF::TWO.powers().collect_n(folding_factor + 1);
-        let round_ctx = RoundContext {
-            k: folding_factor,
-            ell_zk,
-            pow2: &pow2,
-            eps,
-        };
 
         // Running `aux * 2^{-j}` carry; halved once per round.
         let half = EF::TWO.inverse();
         let mut aux_carry = aux_claim;
 
-        for (round_idx, mask) in masks.iter().enumerate() {
-            let j = round_idx + 1;
-            let mask_endpoints = mask[0].double() + mask[1..].iter().copied().sum::<EF>();
-            sum_future_endpoints -= mask_endpoints;
+        for _ in 0..folding_factor {
             aux_carry *= half;
 
             // Measure this round, absorbing whatever binding the last one left behind.
@@ -139,27 +129,14 @@ where
             let (plain_c0, plain_c_inf) = self.measure_round();
             // The aux carry enters only the transmitted constant slot; the
             // source-side fold below keeps the raw coefficients.
-            let h = round_ctx.assemble(
-                RoundState {
-                    j,
-                    mask,
-                    past_mask_evals: &mask_evals_at_gamma,
-                    future_endpoints: sum_future_endpoints,
-                },
+            let gamma = rounds.play(
                 PlainPiece {
                     c0: plain_c0 + aux_carry,
                     c_inf: plain_c_inf,
                 },
+                &mut transcript,
+                zk_data,
             );
-            let wire = round_poly_to_wire(&h);
-
-            // One call binds the wire, grinds when enabled, and draws the challenge.
-            let (gamma, witness) = transcript.round(&wire);
-            zk_data.round_coefficients.push(wire);
-            zk_data.pow_witnesses.extend(witness);
-
-            let mask_at_gamma = mask.iter().copied().horner(gamma);
-            mask_evals_at_gamma.push(mask_at_gamma);
 
             // Advance the claim now; the binding waits for the next round's pass.
             self.reduce_claim_with_coefficients(plain_c0, plain_c_inf, gamma);
@@ -207,6 +184,7 @@ mod tests {
     use super::*;
     use crate::product_polynomial::ProductPolynomial;
     use crate::strategy::VariableOrder;
+    use crate::tests::transcript_fingerprint;
     use crate::zk::test_helpers::{MyChallenger, MyMmcs, make_setup};
     use crate::zk::{ZkVerifier, mask_residual};
 
@@ -520,5 +498,62 @@ mod tests {
 
         let sentinel = encoding.sample_message(&mut rng);
         assert_eq!(handoff.mask_messages, vec![sentinel; folding_factor]);
+    }
+
+    #[test]
+    fn hiding_residual_transcripts_are_pinned() {
+        // Invariant: every message this overlay sends, and every challenge it draws,
+        // stays the same value over each fixed shape and binding order below.
+        //
+        // Fixture state: a non-zero auxiliary claim, so the run pins the aux-carry
+        // path folded into the transmitted constant slot on every round.
+        //
+        // Grinding stays off: under `--features parallel`, a PoW search may return
+        // any valid witness, so a pinned value would be flaky with grinding on.
+        //
+        // The constants below depend on the seeded `StdRng` streams the witness, the
+        // setup, and the masks draw from.
+        let run = |n_vars: usize, folding_factor: usize, order: VariableOrder| -> [u32; 4] {
+            let mut rng = StdRng::seed_from_u64(0x5EED + n_vars as u64);
+            let evals = Poly::<EF>::rand(&mut rng, n_vars);
+            let weights = Poly::<EF>::rand(&mut rng, n_vars);
+            let claimed_sum = dot_product::<EF, _, _>(
+                evals.as_slice().iter().copied(),
+                weights.as_slice().iter().copied(),
+            );
+            let poly = ProductPolynomial::<F, EF>::new_unpacked(order, evals, weights);
+            let prover = SumcheckProver::new(poly, claimed_sum);
+
+            let ell_zk = 4;
+            let (perm, mmcs, encoding) = make_setup(31, ell_zk);
+            let mut ch = MyChallenger::new(perm);
+            let mut zk_data = ZkSumcheckData::<F, EF>::default();
+            let mut mask_rng = StdRng::seed_from_u64(37);
+
+            let mut handoff = prover.into_zk_sumcheck(
+                &mut zk_data,
+                &encoding,
+                &mmcs,
+                folding_factor,
+                0,
+                EF::from_u64(7),
+                &mut ch,
+                &mut mask_rng,
+            );
+            transcript_fingerprint(&mut handoff.residual_prover, &mut ch)
+        };
+
+        assert_eq!(
+            run(9, 3, VariableOrder::Prefix),
+            [1386866334, 1389861306, 1010820499, 200940945]
+        );
+        assert_eq!(
+            run(9, 3, VariableOrder::Suffix),
+            [1691378838, 838063769, 1589820943, 419946647]
+        );
+        assert_eq!(
+            run(2, 1, VariableOrder::Prefix),
+            [129191004, 1271819838, 501092298, 283849083]
+        );
     }
 }

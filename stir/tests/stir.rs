@@ -362,7 +362,7 @@ mod babybear_stir {
         let (params, dft, challenger) = make_params(1, 3);
         let config = StirConfig::<F, EF, MyMmcs, Challenger>::new(3, params);
         assert_eq!(config.num_rounds(), 0);
-        assert_eq!(config.log_final_degree, 0);
+        assert_eq!(config.log_final_degree(), 0);
 
         let mut rng = seeded_rng();
         let degree = 1usize << 3;
@@ -413,10 +413,10 @@ mod babybear_stir {
         let (params, dft, challenger) = make_two_tier_params(1, 2, 3);
         let config = StirConfig::<F, EF, MyMmcs, Challenger>::new(10, params.clone());
         assert_eq!(config.num_rounds(), 2);
-        assert_eq!(config.round_configs[0].log_folding_factor, 2);
-        assert_eq!(config.round_configs[1].log_folding_factor, 3);
+        assert_eq!(config.round_configs()[0].log_folding_factor, 2);
+        assert_eq!(config.round_configs()[1].log_folding_factor, 3);
         assert_eq!(config.final_log_folding_factor(), 3);
-        assert_eq!(config.log_final_degree, 2);
+        assert_eq!(config.log_final_degree(), 2);
 
         do_test_stir_prove_verify::<F, EF, Dft, MyMmcs, Challenger>(&params, &dft, &challenger, 10);
     }
@@ -430,7 +430,7 @@ mod babybear_stir {
         let config = StirConfig::<F, EF, MyMmcs, Challenger>::new(5, params);
         assert_eq!(config.num_rounds(), 0);
         assert_eq!(config.final_log_folding_factor(), 2);
-        assert_eq!(config.log_final_degree, 3);
+        assert_eq!(config.log_final_degree(), 3);
 
         let mut rng = seeded_rng();
         let degree = 1usize << 5;
@@ -485,7 +485,7 @@ mod babybear_stir {
 
         // Sanity: the test is only meaningful if at least one round actually grinds.
         let any_query_pow =
-            config.round_configs.iter().any(|rc| rc.pow_bits > 0) || config.final_pow_bits > 0;
+            config.round_configs().iter().any(|rc| rc.pow_bits > 0) || config.final_pow_bits() > 0;
         assert!(
             any_query_pow,
             "PoW test parameters must produce at least one round with pow_bits > 0"
@@ -508,24 +508,24 @@ mod babybear_stir {
             make_params_with_soundness(2, 2, SecurityAssumption::JohnsonBound, 28, 8);
         let config = StirConfig::<F, EF, MyMmcs, Challenger>::new(POW_LOG_DEGREE, params);
 
-        assert_eq!(config.soundness_type, SecurityAssumption::JohnsonBound);
+        assert_eq!(config.soundness_type(), SecurityAssumption::JohnsonBound);
         assert!(
             config
-                .round_configs
+                .round_configs()
                 .iter()
                 .all(|rc| rc.num_ood_samples == 1 && rc.eta.is_finite() && rc.eta > 0.)
         );
-        assert!(config.final_eta.is_finite() && config.final_eta > 0.);
+        assert!(config.final_eta().is_finite() && config.final_eta() > 0.);
         assert!(
-            config.round_configs.iter().any(|rc| rc.pow_bits > 0) || config.final_pow_bits > 0,
+            config.round_configs().iter().any(|rc| rc.pow_bits > 0) || config.final_pow_bits() > 0,
             "Johnson-bound test parameters must exercise query grinding"
         );
         assert!(
             config
-                .round_configs
+                .round_configs()
                 .iter()
                 .any(|rc| rc.folding_pow_bits > 0)
-                || config.final_folding_pow_bits > 0,
+                || config.final_folding_pow_bits() > 0,
             "Johnson-bound test parameters must exercise folding grinding"
         );
 
@@ -545,7 +545,7 @@ mod babybear_stir {
     fn test_tampered_round_pow_witness_fails() {
         let (config, dft, challenger, poly) = pow_proof_setup();
         let round_with_pow = config
-            .round_configs
+            .round_configs()
             .iter()
             .position(|rc| rc.pow_bits > 0)
             .expect("expected at least one intermediate round with pow_bits > 0");
@@ -575,7 +575,7 @@ mod babybear_stir {
     fn test_tampered_ood_answer_invalidates_following_pow_witness() {
         let (config, dft, challenger, poly) = pow_proof_setup();
         let round_with_pow = config
-            .round_configs
+            .round_configs()
             .iter()
             .position(|rc| rc.pow_bits > 0)
             .expect("expected at least one intermediate round with pow_bits > 0");
@@ -603,7 +603,7 @@ mod babybear_stir {
     fn test_tampered_final_pow_witness_fails() {
         let (config, dft, challenger, poly) = pow_proof_setup();
         assert!(
-            config.final_pow_bits > 0,
+            config.final_pow_bits() > 0,
             "expected final_pow_bits > 0 under PoW test parameters"
         );
 
@@ -971,7 +971,7 @@ mod babybear_stir {
             prove_stir_from_external_codeword(&config, codeword.clone(), &dft, &mut p_challenger);
         mutate(&mut proof);
 
-        let arity0 = 1usize << config.log_starting_folding_factor;
+        let arity0 = 1usize << config.log_starting_folding_factor();
         let fold_height = (1usize << log_domain) / arity0;
 
         let mut v_challenger = challenger;
@@ -1438,7 +1438,9 @@ mod goldilocks_stir {
 mod babybear_pcs {
     use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
     use p3_fri::{FriParameters, TwoAdicFriPcs};
+    use p3_keccak::Keccak256Hash;
     use p3_stir::TwoAdicStirPcs;
+    use p3_symmetric::CryptographicHasher;
 
     use super::*;
 
@@ -2559,6 +2561,144 @@ mod babybear_pcs {
             &mut v_ch,
         )
         .unwrap_or_else(|e| panic!("two-commitment same-bucket verification failed: {e:?}"));
+    }
+
+    /// Hex-encodes a 32-byte digest, lowercase, no separators.
+    fn hex(bytes: [u8; 32]) -> String {
+        bytes.iter().map(|b| format!("{b:02x}")).collect()
+    }
+
+    /// Pins the PCS opening proof bytes and the shared post-open/post-verify challenger
+    /// state across three shared-domain spreads: no grouping (0), partial grouping (1),
+    /// and the default. The fixture commits two commitments whose native heights interleave
+    /// so each spread exercises a different bucket layout: a class pooled across
+    /// commitments, a merged (`Combine`) bucket, and buckets that one commitment skips.
+    #[test]
+    fn test_pcs_openings_are_pinned_across_spreads() {
+        let cases: [(usize, Vec<Vec<bool>>, &str); 3] = [
+            (
+                0,
+                vec![
+                    vec![true, true],
+                    vec![true, false],
+                    vec![true, false],
+                    vec![false, true],
+                ],
+                "52178969d7f46183455a44211f664299c5bc9707c41b0cf3fd4a5bbc697281c2",
+            ),
+            (
+                1,
+                vec![vec![true, true], vec![true, false], vec![false, true]],
+                "a89d5232fdbfca3d660119f1f6b5d62c6570c4161c571368db3d392c5a002c39",
+            ),
+            (
+                p3_stir::DEFAULT_MAX_LOG_HEIGHT_SPREAD,
+                vec![vec![true, true]],
+                "510f022cfc5cb394490d67b6381ecb05871ec620e8e5da74d446b51da3850581",
+            ),
+        ];
+
+        for (spread, expected_pattern, expected_digest) in cases {
+            let (pcs, challenger_template) = get_pcs_with_spread(spread);
+            let mut rng = seeded_rng();
+
+            let domains_a: Vec<_> = [6, 5, 4]
+                .into_iter()
+                .map(|log_d| {
+                    <MyPcs as Pcs<Challenge, Challenger>>::natural_domain_for_degree(
+                        &pcs,
+                        1 << log_d,
+                    )
+                })
+                .collect();
+            let mats_a: Vec<_> = domains_a
+                .iter()
+                .zip([3, 2, 1])
+                .map(|(&d, width)| (d, RowMajorMatrix::<Val>::rand(&mut rng, d.size(), width)))
+                .collect();
+
+            let domains_b: Vec<_> = [6, 3]
+                .into_iter()
+                .map(|log_d| {
+                    <MyPcs as Pcs<Challenge, Challenger>>::natural_domain_for_degree(
+                        &pcs,
+                        1 << log_d,
+                    )
+                })
+                .collect();
+            let mats_b: Vec<_> = domains_b
+                .iter()
+                .zip([4, 2])
+                .map(|(&d, width)| (d, RowMajorMatrix::<Val>::rand(&mut rng, d.size(), width)))
+                .collect();
+
+            let mut p_ch = challenger_template.clone();
+            let (commit_a, data_a) =
+                <MyPcs as Pcs<Challenge, Challenger>>::commit(&pcs, mats_a.iter().cloned())
+                    .unwrap();
+            observe_commitment(&mut p_ch, &commit_a);
+            let (commit_b, data_b) =
+                <MyPcs as Pcs<Challenge, Challenger>>::commit(&pcs, mats_b.iter().cloned())
+                    .unwrap();
+            observe_commitment(&mut p_ch, &commit_b);
+
+            let z1: Challenge = p_ch.sample_algebra_element();
+            let z2: Challenge = p_ch.sample_algebra_element();
+            let z3: Challenge = p_ch.sample_algebra_element();
+
+            let mut v_ch = p_ch.clone();
+
+            let data_and_points = vec![
+                (&data_a, vec![vec![z1, z2], vec![z1], vec![z2]]),
+                (&data_b, vec![vec![z1, z3], vec![z3]]),
+            ];
+            let (values, proof) = <MyPcs as Pcs<Challenge, Challenger>>::open(
+                &pcs,
+                data_and_points.into_iter().map(Into::into).collect(),
+                &mut p_ch,
+            )
+            .unwrap();
+            let after_open: Challenge = p_ch.sample_algebra_element();
+
+            let pattern: Vec<Vec<bool>> = proof
+                .buckets
+                .iter()
+                .map(|(_, inputs)| inputs.iter().map(Option::is_some).collect())
+                .collect();
+            assert_eq!(proof.buckets.len(), expected_pattern.len());
+            assert_eq!(pattern, expected_pattern);
+
+            let claims_a = vec![
+                (
+                    domains_a[0],
+                    vec![(z1, values[0][0][0].clone()), (z2, values[0][0][1].clone())],
+                ),
+                (domains_a[1], vec![(z1, values[0][1][0].clone())]),
+                (domains_a[2], vec![(z2, values[0][2][0].clone())]),
+            ];
+            let claims_b = vec![
+                (
+                    domains_b[0],
+                    vec![(z1, values[1][0][0].clone()), (z3, values[1][0][1].clone())],
+                ),
+                (domains_b[1], vec![(z3, values[1][1][0].clone())]),
+            ];
+
+            <MyPcs as Pcs<Challenge, Challenger>>::verify(
+                &pcs,
+                vec![(commit_a, claims_a).into(), (commit_b, claims_b).into()],
+                &proof,
+                &mut v_ch,
+            )
+            .unwrap_or_else(|e| panic!("pinned-opening verification failed: {e:?}"));
+            let after_verify: Challenge = v_ch.sample_algebra_element();
+
+            assert_eq!(after_open, after_verify);
+
+            let bytes = postcard::to_allocvec(&(&proof, &values, after_open)).unwrap();
+            let digest = hex(Keccak256Hash.hash_iter(bytes));
+            assert_eq!(digest, expected_digest, "spread {spread}");
+        }
     }
 
     /// Committing a matrix and then opening it at no points would emit a proof that cannot
@@ -3826,9 +3966,9 @@ mod babybear_stir_multi {
 
         for ((config, (_, first_round)), output) in configs.iter().zip(&results).zip(&outputs) {
             let expected_draws = if config.num_rounds() == 0 {
-                config.final_queries
+                config.final_queries()
             } else {
-                config.round_configs[0].num_queries
+                config.round_configs()[0].num_queries
             };
             assert_eq!(first_round.draws.len(), expected_draws);
             assert_eq!(first_round.draws, output.first_round_draws);
@@ -3859,13 +3999,13 @@ mod babybear_stir_multi {
 
         // The grinding instance must actually grind, or the batch proves nothing.
         assert!(
-            configs[1].round_configs.iter().any(|rc| rc.pow_bits > 0)
-                || configs[1].final_pow_bits > 0,
+            configs[1].round_configs().iter().any(|rc| rc.pow_bits > 0)
+                || configs[1].final_pow_bits() > 0,
             "the second instance must derive a positive difficulty for this batch to be mixed",
         );
         assert!(
-            configs[0].round_configs.iter().all(|rc| rc.pow_bits == 0)
-                && configs[0].final_pow_bits == 0,
+            configs[0].round_configs().iter().all(|rc| rc.pow_bits == 0)
+                && configs[0].final_pow_bits() == 0,
             "the first instance must derive no difficulty for this batch to be mixed",
         );
 
@@ -4015,7 +4155,7 @@ mod babybear_stir_multi {
             .iter()
             .zip(codewords)
             .map(|(config, codeword)| {
-                let arity = 1 << config.log_starting_folding_factor;
+                let arity = 1 << config.log_starting_folding_factor();
                 let height = codeword.len() / arity;
                 external_fiber_source(codeword, arity, height)
             })
@@ -4058,7 +4198,7 @@ mod babybear_stir_multi {
             .zip([true, false, true])
             .map(|(full, compact_answers)| {
                 StirConfig::<F, EF, MyMmcs, Challenger>::new_with_options(
-                    full.log_starting_degree,
+                    full.log_starting_degree(),
                     params.clone(),
                     StirOptions {
                         compact_answers,
@@ -4073,7 +4213,7 @@ mod babybear_stir_multi {
         let polys: Vec<Vec<EF>> = configs
             .iter()
             .map(|config| {
-                (0..1 << config.log_starting_degree)
+                (0..1 << config.log_starting_degree())
                     .map(|_| rng.random())
                     .collect()
             })
@@ -4113,7 +4253,7 @@ mod babybear_stir_multi {
                         .iter()
                         .zip(&codewords)
                         .map(|(config, codeword)| {
-                            let arity = 1 << config.log_starting_folding_factor;
+                            let arity = 1 << config.log_starting_folding_factor();
                             external_fiber_source(codeword.clone(), arity, codeword.len() / arity)
                         })
                         .collect();
@@ -4227,7 +4367,7 @@ mod babybear_stir_multi {
             .iter()
             .zip(&codewords)
             .map(|(config, codeword)| {
-                let arity = 1usize << config.log_starting_folding_factor;
+                let arity = 1usize << config.log_starting_folding_factor();
                 let fold_height = (1usize << config.log_starting_domain_size()) / arity;
                 external_fiber_source(codeword.clone(), arity, fold_height)
             })
@@ -4244,7 +4384,7 @@ mod babybear_stir_multi {
         for (((config, codeword), (_, first_round)), output) in
             configs.iter().zip(&codewords).zip(&results).zip(&outputs)
         {
-            let arity = 1usize << config.log_starting_folding_factor;
+            let arity = 1usize << config.log_starting_folding_factor();
             let fold_height = (1usize << config.log_starting_domain_size()) / arity;
 
             assert_eq!(sorted_dedup(&first_round.draws), first_round.unique_sorted);
@@ -4300,8 +4440,8 @@ mod babybear_stir_multi {
         assert!(configs[0].num_rounds() > configs[1].num_rounds());
         assert!(configs[1].num_rounds() > 0);
         assert_eq!(configs[2].num_rounds(), 0);
-        assert!(configs[1].round_configs[0].folding_pow_bits > 0);
-        assert!(configs[2].final_folding_pow_bits > 0);
+        assert!(configs[1].round_configs()[0].folding_pow_bits > 0);
+        assert!(configs[2].final_folding_pow_bits() > 0);
         let config_refs: Vec<_> = configs.iter().collect();
 
         let mut prover_challenger = challenger.clone();
@@ -4360,7 +4500,7 @@ mod babybear_stir_multi {
         let log_degree = 8;
         let config = StirConfig::<F, EF, MyMmcs, Challenger>::new(log_degree, params);
         let round_with_pow = config
-            .round_configs
+            .round_configs()
             .iter()
             .position(|rc| rc.pow_bits > 0)
             .expect("expected a round with pow_bits > 0");

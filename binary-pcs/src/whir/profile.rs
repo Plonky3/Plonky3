@@ -216,7 +216,7 @@ mod tests {
         let real = BinaryWhirProfile::proven_list_decoding(SECURITY_LEVEL, LOG_INV_RATE, FOLDING)
             .config::<EF, EF, MyChallenger, _>(NUM_VARIABLES, &domain)
             .unwrap();
-        assert!(real.final_queries > 0);
+        assert!(real.terminal().num_queries > 0);
     }
 
     #[test]

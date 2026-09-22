@@ -7,10 +7,11 @@ use p3_binary_field::TowerLevel;
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_maybe_rayon::prelude::*;
-use p3_util::{DisjointMutPtr, log2_ceil_usize, log2_floor_usize, log2_strict_usize};
+use p3_util::{log2_ceil_usize, log2_floor_usize, log2_strict_usize};
 
 use crate::butterfly::ButterflyField;
 use crate::domain::{domain_point, domain_point_steps};
+use crate::staging::{Dispatch, StagedRuns, for_each_staged_tile};
 use crate::traits::AdditiveNtt;
 
 /// The Lin–Chung–Han additive NTT over the Cantor-basis domain.
@@ -257,49 +258,18 @@ fn deep_tiles<F: ButterflyField, const INVERSE: bool>(
         });
 }
 
-/// The map from a staging task to the matrix rows it stages.
+/// The runs that the `depth` stages ending at stage `top` gather, `2^log_slab` matrix rows to a
+/// run.
 ///
 /// A task owns one butterfly block of the group's widest stage and one run of rows inside it,
-/// so with `S` the narrowest stage's row distance its staged row `k` begins at
+/// so with `S = 2^(top + 1 - depth)` the narrowest stage's row distance, its staged run `k`
+/// begins at matrix row
 ///
 /// ```text
-///     R(t, k) = S · ((t / runs) · 2^depth + k) + (t % runs) · 2^log_slab
+///     R(t, k) = S · ((t / runs) · 2^depth + k) + (t % runs) · 2^log_slab ,   runs = S / 2^log_slab
 /// ```
-#[derive(Copy, Clone)]
-struct StagedRows {
-    /// Matrix rows between one staged row and the next, which is `S` above.
-    stride: usize,
-    /// Staged rows one tile holds.
-    rows: usize,
-    /// Runs of adjacent rows inside one butterfly block of the group's widest stage.
-    runs: usize,
-    /// Base-two log of the matrix rows one staged row holds.
-    log_slab: usize,
-}
-
-impl StagedRows {
-    /// The map the `depth` stages ending at stage `top` use, `2^log_slab` rows to a staged row.
-    const fn new(top: usize, depth: usize, log_slab: usize) -> Self {
-        let stride = 1 << (top + 1 - depth);
-        Self {
-            stride,
-            rows: 1 << depth,
-            runs: stride >> log_slab,
-            log_slab,
-        }
-    }
-
-    /// The butterfly block of the group's widest stage that task `task` owns.
-    #[inline]
-    const fn block(&self, task: usize) -> usize {
-        task / self.runs
-    }
-
-    /// The first matrix row of staged row `k` of task `task`.
-    #[inline]
-    const fn row(&self, task: usize, k: usize) -> usize {
-        self.stride * (self.block(task) * self.rows + k) + ((task % self.runs) << self.log_slab)
-    }
+const fn staged_runs(width: usize, top: usize, depth: usize, log_slab: usize) -> StagedRuns {
+    StagedRuns::new((1 << log_slab) * width, top + 1 - depth - log_slab, depth)
 }
 
 /// Run the `depth` stages ending at stage `top` through a staging tile, `2^log_slab` matrix
@@ -335,80 +305,22 @@ fn fused_group<F: ButterflyField, const INVERSE: bool>(
     debug_assert!(depth >= 1 && log_slab + depth <= top + 1);
     debug_assert!(top < log_n);
 
-    let map = StagedRows::new(top, depth, log_slab);
-    let rows = 1 << depth;
     let row_len = (1 << log_slab) * width;
-    let tasks = 1 << (log_n - depth - log_slab);
-    let len = values.len();
-
-    // Invariant: one task per run of rows, per butterfly block of the group's widest stage.
-    //
-    // Together they reach every row exactly once, which
-    // [`tests::a_staging_group_stages_every_row_exactly_once`] walks out over every shape.
-    debug_assert_eq!(map.runs << (log_n - 1 - top), tasks);
-    debug_assert_eq!(
-        tasks * rows * row_len,
-        len,
-        "tiles do not partition the matrix"
-    );
+    // The tiles the staged pass lays out, each `2^depth` staged rows.
+    let tasks = values.len() / (row_len << depth);
 
     // Rayon splits a range as far as it likes, and a split is what a staging tile belongs to.
     //
     // So bound the splits to a few per thread, rather than let every task allocate one.
     let min_len = (tasks / (4 * current_num_threads())).max(1);
-    let base = DisjointMutPtr::new(values);
-    (0..tasks)
-        .into_par_iter()
-        .with_min_len(min_len)
-        .for_each_init(
-            // The tile is capacity only, with no initialized elements, and the gather grows it
-            // from empty, so no worker zeroes a buffer it is about to overwrite in full.
-            || Vec::with_capacity(rows * row_len),
-            |tile: &mut Vec<F>, task| {
-                // The first element of staged row `k`, from the map [`StagedRows`] defines.
-                let row = |k: usize| map.row(task, k) * width;
-
-                // The walk ascends, so bounding its last element bounds all of them, and it
-                // runs once per task rather than once per row, which is what a hard check
-                // costs. A staged row past the end would be a write past the end of the matrix.
-                assert!(
-                    row(rows - 1) + row_len <= len,
-                    "staged row walk leaves the matrix"
-                );
-
-                tile.clear();
-                for k in 0..rows {
-                    // SAFETY: [`StagedRows::row`] is a bijection onto the matrix rows as the
-                    // task and the staged row index range, and a run spans `2^log_slab` rows
-                    // from each image, so no two tasks and no two iterations reach one element.
-                    //
-                    // The bound above puts every element of the walk inside `values`, and the
-                    // exclusive borrow the base pointer came from outlives every task.
-                    let source = unsafe { base.slice_mut(row(k), row_len) };
-                    tile.extend_from_slice(source);
-                }
-
-                // Invariant: every element of the tile comes from the walk the gather ran.
-                //
-                // So nothing below reads an element the gather did not write.
-                debug_assert_eq!(tile.len(), rows * row_len, "the gather left the tile short");
-
-                tile_stages::<F, INVERSE>(
-                    tile,
-                    row_len,
-                    depth,
-                    top + 1 - depth,
-                    map.block(task),
-                    twiddles,
-                );
-
-                for k in 0..rows {
-                    // SAFETY: the same ranges the gather above reached, for the same reason.
-                    let target = unsafe { base.slice_mut(row(k), row_len) };
-                    target.copy_from_slice(&tile[k * row_len..][..row_len]);
-                }
-            },
-        );
+    for_each_staged_tile(
+        values,
+        staged_runs(width, top, depth, log_slab),
+        Dispatch::Parallel { min_len },
+        |tile, block| {
+            tile_stages::<F, INVERSE>(tile, row_len, depth, top + 1 - depth, block, twiddles);
+        },
+    );
 }
 
 /// How wide the two kinds of row tile are for a given element size and matrix width.
@@ -666,7 +578,7 @@ mod tests {
 
     use super::{
         ButterflyField, DEEP_TILE_BYTES, LchNtt, MIN_FUSED_STAGES, STAGED_WORKERS, Schedule,
-        StagedRows, Twiddles, run, stage_pass,
+        Twiddles, run, stage_pass, staged_runs,
     };
     use crate::domain::{domain_point, subspace_polynomial};
     use crate::naive::NaiveAdditiveNtt;
@@ -1482,11 +1394,11 @@ mod tests {
                 for depth in 1..=top + 1 {
                     for log_slab in 0..=top + 1 - depth {
                         shapes += 1;
-                        let map = StagedRows::new(top, depth, log_slab);
+                        let map = staged_runs(1, top, depth, log_slab);
                         let mut seen = vec![false; 1 << log_n];
                         for task in 0..1usize << (log_n - depth - log_slab) {
                             for k in 0..1usize << depth {
-                                let first = map.row(task, k);
+                                let first = map.run_index(task, k) << log_slab;
 
                                 // A staged row is the run of `2^log_slab` rows from there.
                                 for row in first..first + (1 << log_slab) {
