@@ -13,13 +13,52 @@ use p3_lookup::{
     Count, IndexedLookupBuilder, InteractionBuilder, InteractionSymbolicBuilder, TraceWindow,
 };
 
-use crate::BusDirection;
+use crate::{BusDirection, BusName};
+
+/// End of a table at which a boundary declaration contributes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum BusBoundary {
+    /// Row zero.
+    First,
+    /// The last row of the table.
+    Last,
+}
+
+impl BusBoundary {
+    /// Both ends in stable first-then-last order.
+    pub const ALL: [Self; 2] = [Self::First, Self::Last];
+
+    /// Whether one row of a table of this height sits at this end.
+    #[must_use]
+    pub const fn contains_row(self, row: usize, height: usize) -> bool {
+        match self {
+            Self::First => row == 0,
+            Self::Last => row + 1 == height,
+        }
+    }
+}
 
 /// Row activation carried by one bus declaration.
 #[derive(Clone, Debug)]
 pub enum BusActivation<E> {
     /// Every row contributes one tuple.
     Always,
+    /// Only the row at one end of the table contributes its tuple.
+    ///
+    /// An initial state pushed once, and a final state pulled once, are the two uses.
+    ///
+    /// The indicator is supplied by the backend, and over the Boolean hypercube it is zero or one on every row, so the declaration owes no Booleanity constraint.
+    ///
+    /// Emitting no constraint has a sharp edge.
+    ///
+    /// A table carrying nothing else reaches the zerocheck with no constraint family, and setup asserts rather than returning an error.
+    ///
+    /// The same declaration under a caller-supplied selector keeps its Booleanity check and is accepted, so such a table needs a local constraint of its own.
+    ///
+    /// The block still spans the whole table, and its other rows contribute the product identity.
+    ///
+    /// The crate README says why, and what a height-one block would cost instead.
+    Boundary(BusBoundary),
     /// One expression selects whether the row contributes its tuple.
     ///
     /// Soundness needs that expression to be zero or one on every row.
@@ -39,7 +78,7 @@ pub trait BusInteractionRecorder: AirBuilder {
     fn record_bus_interaction<E: Into<Self::Expr>>(
         &mut self,
         token: RecordToken,
-        bus_name: &str,
+        bus: BusName<'_>,
         direction: BusDirection,
         fields: impl IntoIterator<Item = E>,
         activation: BusActivation<Self::Expr>,
@@ -63,12 +102,12 @@ pub struct RecordToken(());
 ///
 /// ```compile_fail
 /// use p3_air::AirBuilder;
-/// use p3_bus::{BusActivation, BusDirection, BusInteractionBuilder};
+/// use p3_bus::{BusActivation, BusDirection, BusInteractionBuilder, BusName};
 ///
 /// fn filtered_declaration<AB: BusInteractionBuilder>(builder: &mut AB) {
 ///     let condition = builder.is_first_row();
 ///     builder.when(condition).push_bus_interaction(
-///         "bus",
+///         BusName::new("bus"),
 ///         BusDirection::Push,
 ///         core::iter::empty::<AB::Expr>(),
 ///         BusActivation::Always,
@@ -86,22 +125,23 @@ pub trait BusInteractionBuilder: BusInteractionRecorder {
     ///
     /// # Arguments
     ///
-    /// - `bus_name`: channel shared by every matching declaration.
+    /// - `bus`: channel shared by every matching declaration.
     /// - `direction`: side of the multiset equality receiving the tuple.
     /// - `fields`: tuple expressions in slot order.
-    /// - `activation`: whether every row or only selected rows contribute.
+    /// - `activation`: whether every row, one boundary row, or only selected rows contribute.
     fn push_bus_interaction<E: Into<Self::Expr>>(
         &mut self,
-        bus_name: &str,
+        bus: BusName<'_>,
         direction: BusDirection,
         fields: impl IntoIterator<Item = E>,
         activation: BusActivation<Self::Expr>,
     ) {
+        // A backend boundary indicator is Boolean on every row of the hypercube already.
         if let BusActivation::Boolean(selector) = &activation {
             self.assert_zero(selector.clone().bool_check());
         }
 
-        self.record_bus_interaction(RecordToken(()), bus_name, direction, fields, activation);
+        self.record_bus_interaction(RecordToken(()), bus, direction, fields, activation);
     }
 }
 
@@ -111,6 +151,10 @@ impl<T: BusInteractionRecorder> BusInteractionBuilder for T {}
 #[derive(Clone, Debug)]
 pub struct SymbolicBusInteraction<F: Field> {
     /// Channel shared by matching contributions.
+    ///
+    /// The declaration path writes a checked name here.
+    ///
+    /// The plan rechecks every name it is given, so a profile assembled by hand is caught before the transcript.
     pub bus_name: String,
     /// Side of the multiset equality receiving the tuple.
     pub direction: BusDirection,
@@ -121,6 +165,15 @@ pub struct SymbolicBusInteraction<F: Field> {
 }
 
 impl<F: Field> SymbolicBusInteraction<F> {
+    /// Channel this declaration contributes to.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the retained name is outside the alphabet, which the declaration path never leaves.
+    pub const fn bus(&self) -> Result<BusName<'_>, crate::BusNameError> {
+        BusName::try_new(self.bus_name.as_str())
+    }
+
     /// Sorted current-row main and preprocessed columns this declaration reads.
     ///
     /// Only these columns have to be opened and folded for the declaration to be resolved.
@@ -133,7 +186,8 @@ impl<F: Field> SymbolicBusInteraction<F> {
             .fields
             .iter()
             .chain(match &self.activation {
-                BusActivation::Always => None,
+                // A boundary indicator is supplied by the backend rather than read from a column.
+                BusActivation::Always | BusActivation::Boundary(_) => None,
                 BusActivation::Boolean(selector) => Some(selector),
             })
             .collect::<Vec<_>>();
@@ -180,6 +234,8 @@ impl<F: Field> SymbolicBusInteraction<F> {
             .unwrap_or(0);
         match &self.activation {
             BusActivation::Always => payload,
+            // Both boundary indicators carry the degree multiple of a single trace variable.
+            BusActivation::Boundary(_) => payload + 1,
             BusActivation::Boolean(selector) => {
                 payload + selector.degree_multiple_with_transition(multiple)
             }
@@ -340,14 +396,14 @@ impl<F: Field, EF: ExtensionField<F>> BusInteractionRecorder for BusSymbolicBuil
     fn record_bus_interaction<E: Into<Self::Expr>>(
         &mut self,
         _token: RecordToken,
-        bus_name: &str,
+        bus: BusName<'_>,
         direction: BusDirection,
         fields: impl IntoIterator<Item = E>,
         activation: BusActivation<Self::Expr>,
     ) {
         // Keep direction outside field arithmetic so negation cannot erase it.
         self.interactions.push(SymbolicBusInteraction {
-            bus_name: bus_name.to_string(),
+            bus_name: bus.as_str().to_string(),
             direction,
             fields: fields.into_iter().map(Into::into).collect(),
             activation,
@@ -409,7 +465,7 @@ impl<F: Field, EF: ExtensionField<F>> BusInteractionRecorder for InteractionSymb
     fn record_bus_interaction<E: Into<Self::Expr>>(
         &mut self,
         _token: RecordToken,
-        _bus_name: &str,
+        _bus: BusName<'_>,
         _direction: BusDirection,
         fields: impl IntoIterator<Item = E>,
         _activation: BusActivation<Self::Expr>,
@@ -425,7 +481,7 @@ impl<F: Field, EF: ExtensionField<F>> BusInteractionRecorder for DebugConstraint
     fn record_bus_interaction<E: Into<Self::Expr>>(
         &mut self,
         _token: RecordToken,
-        _bus_name: &str,
+        _bus: BusName<'_>,
         _direction: BusDirection,
         fields: impl IntoIterator<Item = E>,
         _activation: BusActivation<Self::Expr>,
@@ -450,6 +506,9 @@ mod tests {
     use rand_xoshiro::Xoroshiro128Plus;
 
     use super::*;
+
+    /// The one place this fixture names its channel.
+    const DISPATCH: BusName<'static> = BusName::new("dispatch");
 
     /// Two-column AIR used to inspect symbolic bus declarations.
     struct DirectionAir {
@@ -477,7 +536,7 @@ mod tests {
 
             // Emit the first copy on the push side.
             builder.push_bus_interaction(
-                "dispatch",
+                DISPATCH,
                 BusDirection::Push,
                 [value.clone()],
                 BusActivation::Always,
@@ -490,7 +549,7 @@ mod tests {
             };
 
             // Emit an identical expression with independently recorded direction metadata.
-            builder.push_bus_interaction("dispatch", self.second, [value], activation);
+            builder.push_bus_interaction(DISPATCH, self.second, [value], activation);
         }
     }
 
@@ -570,7 +629,7 @@ mod tests {
                 builder.assert_zero(value.clone() - value.clone());
                 builder.push_interaction("legacy", [value.clone()], 1);
                 builder.push_bus_interaction(
-                    "binary",
+                    BusName::new("binary"),
                     BusDirection::Push,
                     [value],
                     BusActivation::Boolean(selector),
@@ -742,7 +801,7 @@ mod tests {
             let periodic: AB::Expr = builder.periodic_values()[0].into();
             let compound = value * selector.clone() + next + public + periodic;
             builder.push_bus_interaction(
-                "rich",
+                BusName::new("rich"),
                 BusDirection::Push,
                 [compound],
                 BusActivation::Boolean(selector),
@@ -787,5 +846,132 @@ mod tests {
             }
         }
         entries
+    }
+}
+
+#[cfg(test)]
+mod boundary_tests {
+    use alloc::vec;
+
+    use p3_air::symbolic::AirLayout;
+    use p3_air::{Air, BaseAir, WindowAccess, check_constraints};
+    use p3_binary_field::BinaryField128;
+    use p3_matrix::dense::RowMajorMatrix;
+
+    use super::*;
+
+    /// The one place this fixture names its channel.
+    const STATE: BusName<'static> = BusName::new("state");
+
+    /// One column carrying a state word, flushed once at each end of the table.
+    ///
+    /// The initial state enters the bus once and the final state leaves it once.
+    ///
+    /// The rows in between say nothing about either.
+    struct BoundaryAir {
+        /// Whether the two ends are declared as boundaries or as caller selectors.
+        first_class: bool,
+    }
+
+    impl BaseAir<BinaryField128> for BoundaryAir {
+        fn width(&self) -> usize {
+            1
+        }
+    }
+
+    impl<AB> Air<AB> for BoundaryAir
+    where
+        AB: BusInteractionBuilder<F = BinaryField128>,
+    {
+        fn eval(&self, builder: &mut AB) {
+            let value: AB::Expr = builder.main().current_slice()[0].into();
+            let (first, last) = if self.first_class {
+                (
+                    BusActivation::Boundary(BusBoundary::First),
+                    BusActivation::Boundary(BusBoundary::Last),
+                )
+            } else {
+                // The same statement written with the backend selectors as caller expressions.
+                (
+                    BusActivation::Boolean(builder.is_first_row()),
+                    BusActivation::Boolean(builder.is_last_row()),
+                )
+            };
+            builder.push_bus_interaction(STATE, BusDirection::Push, [value.clone()], first);
+            builder.push_bus_interaction(STATE, BusDirection::Pull, [value], last);
+        }
+    }
+
+    fn profile(first_class: bool) -> BusSymbolicBuilder<BinaryField128> {
+        let air = BoundaryAir { first_class };
+        BusSymbolicBuilder::from_air(&air, AirLayout::from_air(&air))
+    }
+
+    #[test]
+    fn a_boundary_flush_leaves_the_zerocheck_untouched() {
+        // A backend row indicator is Boolean on every row of the hypercube by construction.
+        assert!(profile(true).base_constraints().is_empty());
+
+        // Spelling the same selector as a caller expression buys two degree-two constraints.
+        assert_eq!(profile(false).base_constraints().len(), 2);
+    }
+
+    #[test]
+    fn a_boundary_flush_costs_what_the_selector_form_costs() {
+        // Both forms weight the payload by one linear selector, so the factor degree agrees.
+        for (boundary, selector) in profile(true)
+            .interactions()
+            .iter()
+            .zip(profile(false).interactions())
+        {
+            assert_eq!(
+                boundary.factor_degree_multiple_with_transition(1),
+                selector.factor_degree_multiple_with_transition(1),
+            );
+            assert_eq!(boundary.factor_degree_multiple_with_transition(1), 2);
+        }
+
+        // A boundary declaration reads no extra column, because its indicator is not a column.
+        let boundaries = profile(true);
+        let selectors = profile(false);
+        assert_eq!(
+            boundaries.interactions()[0].referenced_columns(),
+            (vec![0], vec![])
+        );
+        assert_eq!(
+            boundaries.interactions()[0].referenced_columns(),
+            selectors.interactions()[0].referenced_columns(),
+        );
+    }
+
+    #[test]
+    fn a_boundary_flush_imposes_nothing_on_the_trace() {
+        // Any four-row trace satisfies an AIR whose only declarations are boundaries.
+        let trace = RowMajorMatrix::new(
+            (0..4).map(BinaryField128::from_usize).collect::<Vec<_>>(),
+            1,
+        );
+        check_constraints(&BoundaryAir { first_class: true }, &trace, &[]);
+    }
+
+    #[test]
+    fn the_boundary_end_agrees_with_the_row_it_names() {
+        // The predicate is the same one the replay and the prover row loop evaluate.
+        for height in [1usize, 2, 8] {
+            for row in 0..height {
+                assert_eq!(BusBoundary::First.contains_row(row, height), row == 0,);
+                assert_eq!(
+                    BusBoundary::Last.contains_row(row, height),
+                    row + 1 == height,
+                );
+            }
+        }
+
+        // A one-row table has both ends on its single row.
+        assert!(
+            BusBoundary::ALL
+                .into_iter()
+                .all(|end| end.contains_row(0, 1))
+        );
     }
 }

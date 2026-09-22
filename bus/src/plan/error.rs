@@ -5,7 +5,7 @@ use alloc::string::String;
 use thiserror::Error;
 
 use super::{BusExpressionLocation, UnsupportedBusAccess};
-use crate::{BusDirection, ProductGkrShapeError};
+use crate::{BusDirection, BusNameError, ProductGkrShapeError};
 
 /// Invalid statement shapes rejected before transcript construction.
 #[derive(Clone, Debug, PartialEq, Eq, Error)]
@@ -26,6 +26,16 @@ pub enum BusPlanError {
         air: usize,
         /// Declaration position within the AIR.
         declaration: usize,
+    },
+    /// One declaration names a channel outside the channel-name alphabet.
+    #[error("binary-bus AIR {air} declaration {declaration} has an invalid channel name: {source}")]
+    InvalidBusName {
+        /// AIR position in statement order.
+        air: usize,
+        /// Declaration position within the AIR.
+        declaration: usize,
+        /// Reason the name was rejected.
+        source: BusNameError,
     },
     /// Two declarations on one named bus disagree on payload width.
     #[error("binary bus {name} has payload widths {expected} and {actual}")]

@@ -200,7 +200,7 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use p3_binary_pcs::{BinaryPcsError, BinaryPcsProof};
-    use p3_bus::{BusActivation, BusDirection, BusInteractionBuilder};
+    use p3_bus::{BusActivation, BusDirection, BusInteractionBuilder, BusName};
     use p3_field::PrimeCharacteristicRing;
     use p3_multi_stark::config::PcsError;
     use p3_multi_stark::zerocheck::ZerocheckError;
@@ -230,7 +230,7 @@ mod tests {
             let value: AB::Expr = row[0].into();
             let selector: AB::Expr = row[1].into();
             builder.push_bus_interaction(
-                "binary-selected-square",
+                BusName::new("binary-selected-square"),
                 self.direction,
                 [value.clone() * value],
                 BusActivation::Boolean(selector),
