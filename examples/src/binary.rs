@@ -1313,11 +1313,94 @@ mod tests {
             full.summary.total_opened_positions
         );
         assert!(
-            subset.summary.pcs_payload_bytes > current.summary.pcs_payload_bytes,
-            "current={:?}, subset={:?}",
+            current.summary.pcs_payload_bytes < full.summary.pcs_payload_bytes,
+            "current={:?}, full={:?}",
             current.summary,
+            full.summary
+        );
+        assert!(
+            full.summary.pcs_payload_bytes < subset.summary.pcs_payload_bytes,
+            "full={:?}, subset={:?}",
+            full.summary,
             subset.summary
         );
+    }
+
+    #[test]
+    fn whir_successor_tensor_admission_uses_row_variables_not_width() {
+        let current_options = whir_test_options();
+        let current = boolean_whir_config::<_, Blake3>(
+            &ShapeAir {
+                width: 8,
+                next: vec![],
+                public_values: 0,
+                preprocessed_width: 0,
+            },
+            TableShape::new(7, 8),
+            current_options,
+            match current_options.pcs {
+                BooleanPcsChoice::Whir(options) => options,
+                BooleanPcsChoice::Folding => unreachable!(),
+            },
+        )
+        .expect("current-only declarations configure");
+        let full_options = whir_test_options();
+        let full = boolean_whir_config::<_, Blake3>(
+            &ShapeAir {
+                width: 8,
+                next: (0..8).collect(),
+                public_values: 0,
+                preprocessed_width: 0,
+            },
+            TableShape::new(7, 8),
+            full_options,
+            match full_options.pcs {
+                BooleanPcsChoice::Whir(options) => options,
+                BooleanPcsChoice::Folding => unreachable!(),
+            },
+        )
+        .expect("ordered full declarations configure");
+        assert_eq!(
+            current.summary.total_opened_positions,
+            full.summary.total_opened_positions
+        );
+        assert_eq!(
+            current.summary.pcs_payload_bytes,
+            full.summary.pcs_payload_bytes
+        );
+    }
+
+    #[test]
+    fn whir_rejects_conflicting_embedded_and_explicit_options() {
+        let options = whir_test_options();
+        let BooleanPcsChoice::Whir(embedded) = options.pcs else {
+            unreachable!()
+        };
+        let explicit = WhirOptions {
+            term_security_bits: embedded.term_security_bits + 1,
+            ..embedded
+        };
+        let error = boolean_whir_config::<_, Blake3>(
+            &ShapeAir {
+                width: 3,
+                next: vec![],
+                public_values: 0,
+                preprocessed_width: 0,
+            },
+            small_whir_shape(),
+            options,
+            explicit,
+        )
+        .expect_err("conflicting WHIR option sources must be rejected");
+        assert!(matches!(
+            error,
+            BinaryProofError::WhirIncompatible(
+                WhirIncompatibility::PcsChoiceMismatch {
+                    embedded: Some(actual),
+                    explicit: expected,
+                }
+            ) if actual == embedded && expected == explicit
+        ));
     }
 
     #[test]

@@ -115,8 +115,13 @@ pub enum WhirIncompatibility {
     #[error("WHIR does not support {0}")]
     UnsupportedInteractions(WhirInteractionFamily),
     /// The options and the helper entry point disagree about the selected PCS.
-    #[error("boolean_whir_config requires BinaryPcsChoice::Whir")]
-    PcsChoiceMismatch,
+    #[error(
+        "boolean_whir_config requires matching WHIR options; embedded={embedded:?}, explicit={explicit:?}"
+    )]
+    PcsChoiceMismatch {
+        embedded: Option<WhirOptions>,
+        explicit: WhirOptions,
+    },
     /// Stacking the requested table shape would overflow `usize`.
     #[error("WHIR table shape overflows usize: 2^{num_variables} rows × {width} columns")]
     ShapeOverflow { num_variables: usize, width: usize },
@@ -281,9 +286,23 @@ pub fn boolean_whir_config<A: BinaryAir, H: HarnessHash>(
     options: BinaryProofOptions,
     whir: WhirOptions,
 ) -> Result<BooleanWhirStarkConfig<H>, BinaryProofError> {
-    if !matches!(options.pcs, BooleanPcsChoice::Whir(_)) {
+    let embedded = match options.pcs {
+        BooleanPcsChoice::Whir(embedded) => embedded,
+        BooleanPcsChoice::Folding => {
+            return Err(BinaryProofError::WhirIncompatible(
+                WhirIncompatibility::PcsChoiceMismatch {
+                    embedded: None,
+                    explicit: whir,
+                },
+            ));
+        }
+    };
+    if embedded != whir {
         return Err(BinaryProofError::WhirIncompatible(
-            WhirIncompatibility::PcsChoiceMismatch,
+            WhirIncompatibility::PcsChoiceMismatch {
+                embedded: Some(embedded),
+                explicit: whir,
+            },
         ));
     }
     let num_variables = shape.num_variables();
@@ -375,7 +394,7 @@ pub fn boolean_whir_config<A: BinaryAir, H: HarnessHash>(
     let pcs = BooleanWhirPcs::new(prover, arity).map_err(|error| {
         BinaryProofError::WhirConfig(p3_binary_pcs::BooleanTraceCommitmentError::Boolean(error))
     })?;
-    let (num_claims, successor_tensors) = claim_shape(air, shape.width());
+    let (num_claims, successor_tensors) = claim_shape(air, shape);
     let shape = pcs.proof_shape(num_claims, successor_tensors);
     whir.budget
         .check_shape(&shape, 19, 19, 32)
@@ -506,9 +525,13 @@ fn validate_successors<A: BinaryAir>(air: &A) -> Result<(), BinaryProofError> {
     Ok(())
 }
 
-fn claim_shape<A: BinaryAir>(air: &A, width: usize) -> (usize, bool) {
+fn claim_shape<A: BinaryAir>(air: &A, shape: TableShape) -> (usize, bool) {
+    let width = shape.width();
     let next = air.main_next_row_columns();
     let full = next.len() == width && next.iter().copied().eq(0..width);
     let claims = if next.is_empty() || full { 1 } else { width };
-    (claims, !next.is_empty() && width > 7)
+    (
+        claims,
+        !next.is_empty() && shape.num_variables() > BitRingSwitch::<F>::ABSORBED,
+    )
 }
