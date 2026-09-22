@@ -6,7 +6,7 @@ use core::marker::PhantomData;
 use p3_challenger::fs::TranscriptField;
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
 use p3_commit::Mmcs;
-use p3_field::{ExtensionField, Field, HornerIter, TwoAdicField};
+use p3_field::{ExtensionField, Field, TwoAdicField};
 use p3_matrix::Matrix;
 use p3_multilinear_util::point::Point;
 use p3_zk_codes::{ZkEncoding, ZkEncodingWithRandomness};
@@ -14,7 +14,7 @@ use rand::CryptoRng;
 
 use super::common::{mask_endpoints, sample_masks};
 use super::layout::ZkLayout;
-use super::round::{PlainPiece, RoundContext, RoundState, round_poly_to_wire};
+use super::round::{MaskedRounds, PlainPiece};
 use crate::extrapolate_01inf;
 use crate::layout::{PrefixProver, SuffixProver};
 use crate::strategy::SumcheckProver;
@@ -273,71 +273,26 @@ where
         // Per-round challenges.
         let mut rs: Vec<EF> = Vec::with_capacity(k);
 
-        // Cache of `s_j(gamma_j)` values used as the past-mask term in later rounds.
-        let mut mask_evals_at_gamma: Vec<EF> = Vec::with_capacity(k);
+        // Mask side of every round: endpoints still ahead, past evaluations, wire, and proof.
+        let mut rounds = MaskedRounds::new(&masks, ell_zk, sum_endpoints_init, eps);
 
-        // Running `sum_{l >= j} ( s_l(0) + s_l(1) )`.
-        // The first round decrement drops `s_1`, leaving `sum_{l > 1}`.
-        let mut sum_future_endpoints = sum_endpoints_init;
-
-        // Powers-of-two table for the per-round multipliers:
-        //
-        //     mult_live   = pow2[k - j]
-        //     mult_past   = pow2[k - j + 1]
-        //     mult_future = pow2[k - j - 1]
-        let pow2: Vec<EF> = EF::TWO.powers().collect_n(k + 1);
-
-        // Round-invariant context shared by every per-round assembly call.
-        let round_ctx = RoundContext {
-            k,
-            ell_zk,
-            pow2: &pow2,
-            eps,
-        };
-
-        for (round_idx, s_j) in masks.iter().enumerate() {
-            // 1-indexed round used by the formulas.
-            let j = round_idx + 1;
-
-            // Update the running future-endpoint sum: drop s_j's contribution so the round-j formula reads only sum_{l > j}.
-            let s_j_endpoints = s_j[0].double() + s_j[1..].iter().copied().sum::<EF>();
-            sum_future_endpoints -= s_j_endpoints;
-
+        for _ in 0..k {
             // Plain `(c_0, c_inf)` of every recorded claim at the challenges so far.
             let (plain_c0, plain_c_inf) = accumulators.round_coefficients(&rs);
 
-            // Assemble h_j; see the round module for the formula and the
-            // in-place affine-consistency cross-check.
+            // Assemble h_j, bind its wire, and record it; see the round module for the formula
+            // and the in-place affine-consistency cross-check.
             //
             // The linear coefficient is not passed: it is dropped from the wire
             // and reconstructed by the verifier from the affine identity.
-            let h = round_ctx.assemble(
-                RoundState {
-                    j,
-                    mask: s_j,
-                    past_mask_evals: &mask_evals_at_gamma,
-                    future_endpoints: sum_future_endpoints,
-                },
+            let gamma_j = rounds.play(
                 PlainPiece {
                     c0: plain_c0,
                     c_inf: plain_c_inf,
                 },
+                &mut transcript,
+                zk_data,
             );
-
-            // Wire format: drop the linear coefficient — the verifier
-            // reconstructs it from the affine identity.
-            let wire = round_poly_to_wire(&h);
-
-            // One call binds the wire, grinds when enabled, and draws the challenge.
-            let (gamma_j, witness) = transcript.round(&wire);
-
-            // Record what the round produced alongside what it bound.
-            zk_data.round_coefficients.push(wire);
-            zk_data.pow_witnesses.extend(witness);
-
-            // Cache s_j(gamma_j) via Horner for the past-mask term in future rounds.
-            let s_j_at_gamma_j: EF = s_j.iter().copied().horner(gamma_j);
-            mask_evals_at_gamma.push(s_j_at_gamma_j);
 
             // Advance the plain sumcheck claim via quadratic extrapolation through (0, 1, inf).
             plain_sum = extrapolate_01inf(plain_c0, plain_sum - plain_c0, plain_c_inf, gamma_j);
