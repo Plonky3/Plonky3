@@ -14,7 +14,7 @@ use rand::{RngExt, SeedableRng};
 
 use super::evaluate::{BLOCKS_PER_TASK, packed_column_sums};
 use super::gather::GATHER_GROUP;
-use super::plan::{ColumnClaim, column_claims, covers_every_value};
+use super::plan::{ClaimPlan, ColumnClaim, column_claims};
 use super::*;
 use crate::params::BinaryPcsParams;
 use crate::test_util::{MyChallenger, MyMmcs, challenger, mmcs};
@@ -614,7 +614,7 @@ fn the_claim_plan_writes_every_value_position_exactly_once() {
         let len = value_count(&protocol);
         assert_eq!(len, current.len() + next.len());
         assert!(
-            covers_every_value(&column_claims(&protocol), len),
+            ClaimPlan::new(column_claims(&protocol), len).is_some(),
             "{current:?} / {next:?}"
         );
     }
@@ -636,7 +636,7 @@ fn the_claim_plan_writes_every_value_position_exactly_once() {
     ]);
     let len = value_count(&protocol);
     assert_eq!(len, 5 + 3 + 3);
-    assert!(covers_every_value(&column_claims(&protocol), len));
+    assert!(ClaimPlan::new(column_claims(&protocol), len).is_some());
 
     // Both ways a plan can miss are refused, so the checks above are not vacuous.
     //
@@ -649,8 +649,8 @@ fn the_claim_plan_writes_every_value_position_exactly_once() {
         current_at: Some(0),
         next_at: Some(0),
     };
-    assert!(!covers_every_value(&[collided], 1));
-    assert!(!covers_every_value(&[], 1));
+    assert!(ClaimPlan::new(vec![collided], 1).is_none());
+    assert!(ClaimPlan::new(vec![], 1).is_none());
 }
 
 #[test]

@@ -93,9 +93,7 @@ use p3_sumcheck::{
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use self::plan::{
-    OpeningRoute, claim_readings, claim_values, opening_evals, sample_points, value_count,
-};
+use self::plan::{OpeningRoute, opening_evals, sample_points, value_count};
 use crate::boolean::{
     BitOpening, BitReadings, BooleanBackend, BooleanMultilinearPcs, BooleanPcs, BooleanPcsError,
     BooleanProof,
@@ -473,13 +471,13 @@ where
         Self::validate_source_shapes(&prover_data.tables, protocol)?;
         let placements = self.validate_opening(protocol, points)?;
         let shape = match OpeningRoute::new(protocol) {
-            OpeningRoute::PerColumn(claims) => {
-                let openings = Self::bit_openings(protocol, &claims, points, &placements);
+            OpeningRoute::PerColumn(plan) => {
+                let openings = Self::bit_openings(protocol, plan.claims(), points, &placements);
                 let (readings, opening) = self
                     .inner
                     .open_readings(prover_data.inner, &openings, challenger)
                     .map_err(BooleanTraceCommitmentError::Boolean)?;
-                let values = claim_values(&claims, &readings, value_count(protocol));
+                let values = plan.values(&readings);
                 return Ok(BooleanTraceCommitmentProof { values, opening });
             }
             OpeningRoute::Batched(shape) => shape,
@@ -555,15 +553,15 @@ where
         }
 
         let shape = match OpeningRoute::new(protocol) {
-            OpeningRoute::PerColumn(claims) => {
-                let openings = Self::bit_openings(protocol, &claims, points, &placements);
+            OpeningRoute::PerColumn(plan) => {
+                let openings = Self::bit_openings(protocol, plan.claims(), points, &placements);
 
                 // One bit proof answers for every column of every batch at once.
                 self.inner
                     .verify_readings(
                         commitment,
                         &openings,
-                        &claim_readings(&claims, &proof.values),
+                        &plan.readings(&proof.values),
                         &proof.opening,
                         challenger,
                     )

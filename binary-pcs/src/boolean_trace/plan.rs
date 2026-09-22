@@ -145,21 +145,21 @@ pub(super) enum OpeningRoute {
     /// it one row ahead: one reduction per batch, over one shared column point.
     Batched(ColumnBatchShape),
     /// Any other protocol: one reduction per column read, in transcript order.
-    PerColumn(Vec<ColumnClaim>),
+    PerColumn(ClaimPlan),
 }
 
 impl OpeningRoute {
     /// Resolve the route a protocol takes.
     pub(super) fn new(protocol: &OpeningProtocol) -> Self {
         batched_shape(protocol)
-            .map_or_else(|| Self::PerColumn(column_claims(protocol)), Self::Batched)
+            .map_or_else(|| Self::PerColumn(ClaimPlan::of(protocol)), Self::Batched)
     }
 
     /// Reductions the bit commitment answers on this route.
     pub(super) const fn num_reductions(&self) -> usize {
         match self {
             Self::Batched(shape) => shape.num_batches,
-            Self::PerColumn(claims) => claims.len(),
+            Self::PerColumn(plan) => plan.claims().len(),
         }
     }
 
@@ -167,7 +167,7 @@ impl OpeningRoute {
     pub(super) fn successor_tensors(&self, shapes: &[TableShape], absorbed: usize) -> bool {
         match self {
             Self::Batched(shape) => shape.next && shape.table_variables > absorbed,
-            Self::PerColumn(claims) => claims.iter().any(|claim| {
+            Self::PerColumn(plan) => plan.claims().iter().any(|claim| {
                 claim.next_at.is_some() && shapes[claim.table].num_variables() > absorbed
             }),
         }
@@ -275,61 +275,79 @@ pub(super) fn value_count(protocol: &OpeningProtocol) -> usize {
     protocol.iter_openings().map(|(_, batch)| batch.len()).sum()
 }
 
-/// Whether a claim plan writes each of the `len` value positions exactly once.
+/// The per-column claims of one protocol, together with the length of the value run they lay
+/// out.
 ///
-/// A position two claims write is one reading the plan answers twice, and a position no
-/// claim writes is one the run leaves at whatever it was filled with.
-pub(super) fn covers_every_value(claims: &[ColumnClaim], len: usize) -> bool {
-    let mut written = alloc::vec![false; len];
-    for claim in claims {
-        for at in [claim.current_at, claim.next_at].into_iter().flatten() {
-            if at >= len || core::mem::replace(&mut written[at], true) {
-                return false;
+/// A plan exists only when its claims write each position of that run exactly once, so the
+/// conversions between readings and values below touch every position and no other.
+#[derive(Clone, Debug)]
+pub(super) struct ClaimPlan {
+    /// The claims, in transcript order.
+    claims: Vec<ColumnClaim>,
+    /// Values in the run the claims lay out.
+    len: usize,
+}
+
+impl ClaimPlan {
+    /// The plan the per-column route raises for a protocol.
+    pub(super) fn of(protocol: &OpeningProtocol) -> Self {
+        Self::new(column_claims(protocol), value_count(protocol))
+            .expect("the per-column claims write every value position exactly once")
+    }
+
+    /// A plan over a run of `len` values, if the claims write each position exactly once.
+    ///
+    /// A position two claims write is one reading the plan answers twice, and a position no
+    /// claim writes is one no reading fills.
+    pub(super) fn new(claims: Vec<ColumnClaim>, len: usize) -> Option<Self> {
+        let mut written = alloc::vec![false; len];
+        for claim in &claims {
+            for at in [claim.current_at, claim.next_at].into_iter().flatten() {
+                if at >= len || core::mem::replace(&mut written[at], true) {
+                    return None;
+                }
             }
         }
+        written
+            .into_iter()
+            .all(|written| written)
+            .then_some(Self { claims, len })
     }
-    written.into_iter().all(|written| written)
-}
 
-/// Lay the readings every claim came back with out in the protocol's value order.
-pub(super) fn claim_values<EF: Field>(
-    claims: &[ColumnClaim],
-    readings: &[BitReadings<EF>],
-    len: usize,
-) -> Vec<EF> {
-    // The zero fill stands only until the plan writes over it, which it does everywhere.
-    debug_assert!(
-        covers_every_value(claims, len),
-        "the claim plan writes every value position exactly once",
-    );
-    let mut values = alloc::vec![EF::ZERO; len];
-    for (claim, reading) in claims.iter().zip(readings) {
-        if let Some(at) = claim.current_at {
-            values[at] = reading
-                .current
-                .expect("a claim asking for the reading at the point carries it");
-        }
-        if let Some(at) = claim.next_at {
-            values[at] = reading
-                .next
-                .expect("a claim asking for the reading one row ahead carries it");
-        }
+    /// The claims, in transcript order.
+    pub(super) const fn claims(&self) -> &[ColumnClaim] {
+        self.claims.as_slice()
     }
-    values
-}
 
-/// The readings every claim asks for, read back out of the protocol's value order.
-pub(super) fn claim_readings<EF: Field>(
-    claims: &[ColumnClaim],
-    values: &[EF],
-) -> Vec<BitReadings<EF>> {
-    claims
-        .iter()
-        .map(|claim| BitReadings {
-            current: claim.current_at.map(|at| values[at]),
-            next: claim.next_at.map(|at| values[at]),
-        })
-        .collect()
+    /// Lay the readings every claim came back with out in the protocol's value order.
+    pub(super) fn values<EF: Field>(&self, readings: &[BitReadings<EF>]) -> Vec<EF> {
+        // The plan writes every position, so none keeps the zero the run starts from.
+        let mut values = alloc::vec![EF::ZERO; self.len];
+        for (claim, reading) in self.claims.iter().zip(readings) {
+            if let Some(at) = claim.current_at {
+                values[at] = reading
+                    .current
+                    .expect("a claim asking for the reading at the point carries it");
+            }
+            if let Some(at) = claim.next_at {
+                values[at] = reading
+                    .next
+                    .expect("a claim asking for the reading one row ahead carries it");
+            }
+        }
+        values
+    }
+
+    /// The readings every claim asks for, read back out of the protocol's value order.
+    pub(super) fn readings<EF: Field>(&self, values: &[EF]) -> Vec<BitReadings<EF>> {
+        self.claims
+            .iter()
+            .map(|claim| BitReadings {
+                current: claim.current_at.map(|at| values[at]),
+                next: claim.next_at.map(|at| values[at]),
+            })
+            .collect()
+    }
 }
 
 /// Split the flat value run back into each batch's current and successor values.
