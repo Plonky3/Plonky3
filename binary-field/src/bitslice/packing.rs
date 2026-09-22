@@ -11,6 +11,7 @@ use rand::distr::{Distribution, StandardUniform};
 
 use super::underlier::{Divisible, M128, M256, M512, Underlier, Word};
 use crate::Gf2;
+use crate::gf2::characteristic_two_methods;
 
 /// Masks selecting the low `s` bits of every `2s`-bit block, indexed by `log2(s)`.
 ///
@@ -526,28 +527,12 @@ impl<U: Underlier> PrimeCharacteristicRing for PackedGf2<U> {
         Self::broadcast(Gf2::from_bool(b))
     }
 
-    #[inline]
-    fn double(&self) -> Self {
-        // `a + a = 0` in characteristic 2.
-        Self::ZERO
-    }
-
-    /// # Panics
-    /// Always panics: `2` is not invertible in characteristic 2.
-    #[inline]
-    fn halve(&self) -> Self {
-        panic!("halve is undefined in characteristic 2")
-    }
+    characteristic_two_methods!();
 
     #[inline]
     fn square(&self) -> Self {
         // `0^2 = 0` and `1^2 = 1`, so squaring fixes every lane.
         *self
-    }
-
-    #[inline]
-    fn xor(&self, y: &Self) -> Self {
-        *self + *y
     }
 
     #[inline]
@@ -560,18 +545,6 @@ impl<U: Underlier> PrimeCharacteristicRing for PackedGf2<U> {
     fn bool_check(&self) -> Self {
         // Every element of `GF(2)` is a bit, so the booleanity residue is always zero.
         Self::ZERO
-    }
-
-    #[inline]
-    fn mul_2exp_u64(&self, exp: u64) -> Self {
-        if exp == 0 { *self } else { Self::ZERO }
-    }
-
-    /// # Panics
-    /// Always panics: `2` is not invertible in characteristic 2.
-    #[inline]
-    fn div_2exp_u64(&self, _exp: u64) -> Self {
-        panic!("div_2exp_u64 is undefined in characteristic 2")
     }
 }
 
