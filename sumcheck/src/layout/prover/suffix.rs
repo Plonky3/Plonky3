@@ -569,6 +569,11 @@ impl<F: Field, EF: ExtensionField<F>> SuffixProver<F, EF> {
         if !eligible || claims.claim_map[0].is_empty() {
             return None;
         }
+        assert_eq!(
+            self.claim_points[0].len(),
+            claims.claim_map[0].len(),
+            "every recorded claim keeps its point"
+        );
 
         let mut alphas = alpha.powers();
         claims.claim_map[0]
@@ -1979,6 +1984,63 @@ mod tests {
             &mut challenger,
         );
         assert!(!residual.is_row_first());
+        assert!(!residual.is_banked());
+    }
+
+    #[test]
+    fn the_banked_route_refuses_every_shape_it_cannot_play() {
+        type F = BinaryField128;
+
+        // Whether a recorded prover's claims take the banked route, at a fresh challenge.
+        fn banked(prover: &SuffixProver<F, F>, rng: &mut SmallRng) -> bool {
+            prover.banked_claims(rng.random()).is_some()
+        }
+
+        let mut rng = SmallRng::seed_from_u64(25);
+        let direct = vec![(0, OpeningBatch::new(vec![0], Vec::new()))];
+        let column = vec![table::<F>(&mut rng, 5, 1)];
+
+        // Positive control: the shape every refusal below departs from.
+        let prover = recorded::<F, F>(column.clone(), &direct, 1);
+        assert!(banked(&prover, &mut rng));
+
+        // No claim at all leaves no weight to bank.
+        assert!(!banked(&recorded::<F, F>(column.clone(), &[], 2), &mut rng));
+
+        // A claim through the successor view weighs the column by no equality table.
+        let successor = vec![(0, OpeningBatch::new(vec![0], vec![0]))];
+        assert!(!banked(
+            &recorded::<F, F>(column.clone(), &successor, 3),
+            &mut rng
+        ));
+
+        // A virtual claim weighs the stacked space rather than the column.
+        let mut prover = recorded::<F, F>(column.clone(), &direct, 4);
+        let point = Point::<F>::rand(&mut rng, prover.claims.num_variables);
+        let _ = prover.record_virtual(&point);
+        assert!(!banked(&prover, &mut rng));
+
+        // Preprocessing rounds bind variables before the residual rounds begin.
+        let mut prover = SuffixProver::<F, F>::from_witness(SuffixProver::<F, F>::new_witness(
+            column.clone(),
+            2,
+        ));
+        let point = Point::<F>::rand(&mut rng, 5);
+        prover.record_opening(0, &direct[0].1, &point);
+        assert!(!banked(&prover, &mut rng));
+
+        // Two columns, whether in one table or in two.
+        let wide = vec![table::<F>(&mut rng, 4, 2)];
+        assert!(!banked(&recorded::<F, F>(wide, &direct, 5), &mut rng));
+        let two = vec![table::<F>(&mut rng, 4, 1), table::<F>(&mut rng, 4, 1)];
+        assert!(!banked(&recorded::<F, F>(two, &direct, 6), &mut rng));
+
+        // A column narrower than the stacked space leaves slots it does not fill.
+        //
+        // One table of one column always plans to its own arity, so the space is widened here.
+        let mut prover = recorded::<F, F>(column, &direct, 7);
+        prover.claims.num_variables += 1;
+        assert!(!banked(&prover, &mut rng));
     }
 
     #[test]

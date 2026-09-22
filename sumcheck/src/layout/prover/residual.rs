@@ -38,7 +38,7 @@ const AGGREGATE_BLOCK: usize = 1 << 12;
 ///                 between stages: P bound once at the stage's challenges
 /// ```
 ///
-/// Both routes measure the same round polynomials, so both play the same transcript.
+/// Every route measures the same round polynomials, so all of them play the same transcript.
 ///
 /// Suffix binding fixes the row variables first. The row-first route therefore measures its
 /// first `log2(height)` rounds on tables one column long, not stacked-space long. Once every row

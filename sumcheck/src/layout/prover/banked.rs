@@ -32,8 +32,10 @@
 //! The next stage runs over `P'`, which is `2^h` times shorter and already in the round
 //! representation. No weight table is ever materialized.
 
+use alloc::borrow::Cow;
 use alloc::vec::Vec;
 use core::array;
+use core::ops::Range;
 
 use p3_field::{ExtensionField, Field, PackedField, PackedValue, PrimeCharacteristicRing};
 use p3_maybe_rayon::prelude::*;
@@ -53,8 +55,8 @@ const BLOCK_ROWS: usize = 1 << 7;
 /// The column a banked prover plays its rounds over, and every claim's unbound coordinates.
 #[derive(Debug, Clone)]
 pub(super) struct BankedColumn<F: Field, R> {
-    /// The lone source table, one column over the whole stacked space.
-    table: Table<F>,
+    /// The lone source table, one column over the whole stacked space, until the first bind.
+    table: Option<Table<F>>,
     /// The column bound at every challenge of the stages bound so far, once one is.
     bound: Option<Vec<R>>,
     /// Per claim, the coordinates of its point that no stage has reached yet.
@@ -109,7 +111,7 @@ impl<F: Field, R: Field> BankedColumn<F, R> {
             })
             .unzip();
         let mut column = Self {
-            table,
+            table: Some(table),
             bound: None,
             points,
             scales,
@@ -182,7 +184,7 @@ impl<F: Field, R: Field> BankedColumn<F, R> {
     ///
     /// Each claim's coefficient takes the stage prover's settled weight: its equality weight
     /// over the stage's variables, at their challenges.
-    #[tracing::instrument(skip_all)]
+    #[tracing::instrument(skip_all, level = "debug")]
     fn bind<EF>(&mut self, stage: &mut ReprSumcheckProver<F, EF, R>)
     where
         EF: ExtensionField<F>,
@@ -201,15 +203,22 @@ impl<F: Field, R: Field> BankedColumn<F, R> {
         // Suffix rounds bind the lowest bit first, so the first challenge names it.
         let point = Point::new(core::mem::take(&mut self.challenges)).reversed();
         let eq = Poly::new_from_point(point.as_slice(), R::ONE);
-        let bound = self.bound.as_ref().map_or_else(
-            || bind_column::<F, EF, R>(self.column(), eq.as_slice()),
-            |bound| bind_column::<R, R, R>(bound, eq.as_slice()),
+        let bound = self.bound.as_deref().map_or_else(
+            || {
+                // No stage reads the source column once it is bound, so it is released here.
+                let table = self
+                    .table
+                    .take()
+                    .expect("the source column binds only once");
+                bind_column::<F, EF, R>(dense_column(&table), eq.as_slice())
+            },
+            |bound| bind_repr(bound, eq.as_slice()),
         );
         self.bound = Some(bound);
     }
 
     /// Opens a stage over the column as currently bound, with `sum` the claim it carries.
-    #[tracing::instrument(skip_all)]
+    #[tracing::instrument(skip_all, level = "debug")]
     fn stage<EF>(&mut self, sum: EF) -> ReprSumcheckProver<F, EF, R>
     where
         EF: ExtensionField<F>,
@@ -229,9 +238,15 @@ impl<F: Field, R: Field> BankedColumn<F, R> {
             .map(|point| point.split_at(unbound - rounds))
             .unzip();
         self.points = points;
-        let banks = self.bound.as_ref().map_or_else(
-            || bank_sums::<F, EF, R>(self.column(), &self.points, rounds),
-            |bound| bank_sums::<R, R, R>(bound, &self.points, rounds),
+        let banks = self.bound.as_deref().map_or_else(
+            || {
+                let table = self
+                    .table
+                    .as_ref()
+                    .expect("an unbound column is still held");
+                bank_sums::<F, EF, R>(dense_column(table), &self.points, rounds)
+            },
+            |bound| bank_sums_repr(bound, &self.points, rounds),
         );
 
         // Claim `c` owns entries `c * 2^rounds ..`, so suffix rounds bind its bank index first.
@@ -254,14 +269,24 @@ impl<F: Field, R: Field> BankedColumn<F, R> {
             sum,
         )
     }
+}
 
-    /// The source column, before any stage is bound.
-    fn column(&self) -> &[F] {
-        self.table
-            .column(0)
-            .as_dense()
-            .expect("a banked column is held densely")
-    }
+/// The lone column of a banked table.
+fn dense_column<F: Field>(table: &Table<F>) -> &[F] {
+    table
+        .column(0)
+        .as_dense()
+        .expect("a banked column is held densely")
+}
+
+/// A run of source values, crossed into `R` in one conversion.
+fn to_repr<F, EF, R>(values: &[F]) -> Vec<R>
+where
+    F: Field,
+    EF: ExtensionField<F>,
+    R: FromTable<EF>,
+{
+    R::from_table(values.iter().map(|&value| EF::from(value)).collect())
 }
 
 /// Every claim's bank sums, `2^banks` per claim, claim after claim.
@@ -281,25 +306,48 @@ where
     EF: ExtensionField<F>,
     R: Field + FromTable<EF>,
 {
+    bank_sums_over(column.len(), high_points, banks, |rows| {
+        Cow::Owned(to_repr::<F, EF, R>(&column[rows]))
+    })
+}
+
+/// [`bank_sums`] over a column already in `R`, read in place.
+fn bank_sums_repr<R: Field>(column: &[R], high_points: &[Point<R>], banks: usize) -> Vec<R> {
+    bank_sums_over(column.len(), high_points, banks, |rows| {
+        Cow::Borrowed(&column[rows])
+    })
+}
+
+/// [`bank_sums`] over a column of `len` entries, whose rows `block` hands out in `R`.
+fn bank_sums_over<'a, R: Field>(
+    len: usize,
+    high_points: &[Point<R>],
+    banks: usize,
+    block: impl Fn(Range<usize>) -> Cow<'a, [R]> + Sync,
+) -> Vec<R> {
     // A row of banks narrower than the packing is weighed one lane at a time.
     if (1usize << banks).is_multiple_of(R::Packing::WIDTH) {
-        bank_sums_in::<F, EF, R, R::Packing>(column, high_points, banks)
+        bank_sums_in::<R, R::Packing>(len, high_points, banks, block)
     } else {
-        bank_sums_in::<F, EF, R, R>(column, high_points, banks)
+        bank_sums_in::<R, R>(len, high_points, banks, block)
     }
 }
 
-/// [`bank_sums`] over lanes `P`, whose width divides `2^banks`.
-fn bank_sums_in<F, EF, R, P>(column: &[F], high_points: &[Point<R>], banks: usize) -> Vec<R>
+/// [`bank_sums_over`] over lanes `P`, whose width divides `2^banks`.
+fn bank_sums_in<'a, R, P>(
+    len: usize,
+    high_points: &[Point<R>],
+    banks: usize,
+    block: impl Fn(Range<usize>) -> Cow<'a, [R]> + Sync,
+) -> Vec<R>
 where
-    F: Field,
-    EF: ExtensionField<F>,
-    R: Field + FromTable<EF>,
+    R: Field,
     P: PackedField<Scalar = R>,
 {
     let groups = (1usize << banks) / P::WIDTH;
-    let block_rows = BLOCK_ROWS.min(column.len() >> banks);
+    let block_rows = BLOCK_ROWS.min(len >> banks);
     let block_variables = log2_strict_usize(block_rows);
+    let block_len = block_rows << banks;
 
     // Each claim's row weight splits into one factor per block and one per row inside it.
     let weights: Vec<(Vec<R>, Vec<P>)> = high_points
@@ -315,29 +363,26 @@ where
         })
         .collect();
 
-    let sums = column
-        .par_chunks(block_rows << banks)
-        .enumerate()
-        .par_fold_reduce(
-            || P::zero_vec(high_points.len() * groups),
-            |mut sums, (block, values)| {
-                let values = R::from_table(values.iter().map(|&value| EF::from(value)).collect());
-                let rows = P::pack_slice(&values);
-                for ((outer, inner), sums) in weights.iter().zip(sums.chunks_exact_mut(groups)) {
-                    let scale = P::from(outer[block]);
-                    for (group, sum) in sums.iter_mut().enumerate() {
-                        *sum += scale * dot::<_, 8>(inner, |row| rows[row * groups + group]);
-                    }
+    let sums = (0..len / block_len).into_par_iter().par_fold_reduce(
+        || P::zero_vec(high_points.len() * groups),
+        |mut sums, index| {
+            let values = block(index * block_len..(index + 1) * block_len);
+            let rows = P::pack_slice(&values);
+            for ((outer, inner), sums) in weights.iter().zip(sums.chunks_exact_mut(groups)) {
+                let scale = P::from(outer[index]);
+                for (group, sum) in sums.iter_mut().enumerate() {
+                    *sum += scale * dot::<_, 8>(inner, |row| rows[row * groups + group]);
                 }
-                sums
-            },
-            |mut sums, other| {
-                sums.iter_mut()
-                    .zip(other)
-                    .for_each(|(sum, other)| *sum += other);
-                sums
-            },
-        );
+            }
+            sums
+        },
+        |mut sums, other| {
+            sums.iter_mut()
+                .zip(other)
+                .for_each(|(sum, other)| *sum += other);
+            sums
+        },
+    );
     P::unpack_slice(&sums).to_vec()
 }
 
@@ -352,32 +397,51 @@ where
     EF: ExtensionField<F>,
     R: Field + FromTable<EF>,
 {
+    bind_column_over(column.len(), eq, |rows| {
+        Cow::Owned(to_repr::<F, EF, R>(&column[rows]))
+    })
+}
+
+/// [`bind_column`] over a column already in `R`, read in place.
+fn bind_repr<R: Field>(column: &[R], eq: &[R]) -> Vec<R> {
+    bind_column_over(column.len(), eq, |rows| Cow::Borrowed(&column[rows]))
+}
+
+/// [`bind_column`] over a column of `len` entries, whose rows `block` hands out in `R`.
+fn bind_column_over<'a, R: Field>(
+    len: usize,
+    eq: &[R],
+    block: impl Fn(Range<usize>) -> Cow<'a, [R]> + Sync,
+) -> Vec<R> {
     // A row of banks narrower than the packing is bound one lane at a time.
     if eq.len().is_multiple_of(R::Packing::WIDTH) {
-        bind_column_in::<F, EF, R, R::Packing>(column, eq)
+        bind_column_in::<R, R::Packing>(len, eq, block)
     } else {
-        bind_column_in::<F, EF, R, R>(column, eq)
+        bind_column_in::<R, R>(len, eq, block)
     }
 }
 
-/// [`bind_column`] over lanes `P`, whose width divides the length of `eq`.
-fn bind_column_in<F, EF, R, P>(column: &[F], eq: &[R]) -> Vec<R>
+/// [`bind_column_over`] over lanes `P`, whose width divides the length of `eq`.
+fn bind_column_in<'a, R, P>(
+    len: usize,
+    eq: &[R],
+    block: impl Fn(Range<usize>) -> Cow<'a, [R]> + Sync,
+) -> Vec<R>
 where
-    F: Field,
-    EF: ExtensionField<F>,
-    R: Field + FromTable<EF>,
+    R: Field,
     P: PackedField<Scalar = R>,
 {
     let banks = eq.len();
     let groups = banks / P::WIDTH;
     let eq = P::pack_slice(eq);
 
-    let mut bound = R::zero_vec(column.len() / banks);
+    let mut bound = R::zero_vec(len / banks);
     bound
         .par_chunks_mut(BLOCK_ROWS)
-        .zip(column.par_chunks(BLOCK_ROWS * banks))
-        .for_each(|(bound, values)| {
-            let values = R::from_table(values.iter().map(|&value| EF::from(value)).collect());
+        .enumerate()
+        .for_each(|(index, bound)| {
+            let first = index * BLOCK_ROWS * banks;
+            let values = block(first..first + bound.len() * banks);
             let rows = P::pack_slice(&values).chunks_exact(groups);
             for (slot, row) in bound.iter_mut().zip(rows) {
                 *slot = dot::<_, 4>(eq, |group| row[group])
@@ -423,7 +487,7 @@ mod tests {
     use rand::rngs::SmallRng;
     use rand::{RngExt, SeedableRng};
 
-    use super::{BLOCK_ROWS, bank_sums, bind_column};
+    use super::{BLOCK_ROWS, bank_sums, bank_sums_repr, bind_column, bind_repr};
     use crate::strategy::FromTable;
 
     /// Degree-4 binomial extension of BabyBear.
@@ -439,6 +503,9 @@ mod tests {
     ///
     /// The reference sums each bank directly over its rows, and binds the column one suffix
     /// variable at a time, the way the dense route does.
+    ///
+    /// Each kernel runs twice: over the source column, converting it block by block, and over
+    /// the same column already in `R`, read in place as every later stage reads it.
     fn assert_kernels_match_reference<F, EF, R>(seed: u64)
     where
         F: Field,
@@ -476,6 +543,11 @@ mod tests {
                     expected,
                     "{shape}"
                 );
+                assert_eq!(
+                    bank_sums_repr(&lifted, &points, depth),
+                    expected,
+                    "{shape}, in place"
+                );
 
                 // Bind the lowest variable first, one challenge at a time.
                 let challenges: Vec<R> = (0..depth).map(|_| rng.random()).collect();
@@ -490,6 +562,11 @@ mod tests {
                     reference.as_slice(),
                     "{shape}"
                 );
+                assert_eq!(
+                    bind_repr(&lifted, eq.as_slice()),
+                    reference.as_slice(),
+                    "{shape}, in place"
+                );
             }
         }
         // The sweep reaches past one block, so more than one task holds rows.
@@ -499,11 +576,6 @@ mod tests {
     #[test]
     fn kernels_match_reference_over_binary_field() {
         assert_kernels_match_reference::<BinaryField128, BinaryField128, Ghash128>(1);
-    }
-
-    #[test]
-    fn kernels_match_reference_in_the_round_representation() {
-        assert_kernels_match_reference::<Ghash128, Ghash128, Ghash128>(3);
     }
 
     #[test]
