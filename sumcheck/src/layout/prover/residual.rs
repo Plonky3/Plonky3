@@ -188,6 +188,21 @@ where
         self.prover.settle();
     }
 
+    /// The stacked polynomial bound at every challenge sampled so far, in `R`.
+    ///
+    /// Only the banked route holds that polynomial, and only once a stage is fully played.
+    /// The column is then bound here rather than when the next round opens a stage.
+    ///
+    /// `None`, applying nothing, on any other route or state.
+    pub fn bound_column(&mut self) -> Option<&[R]> {
+        match &mut self.banked {
+            Some(column) if column.stage_played(&self.prover) => {
+                Some(column.bound(&mut self.prover))
+            }
+            _ => None,
+        }
+    }
+
     /// Runs `folding_factor` sumcheck rounds.
     ///
     /// Plays the same transcript as [`ReprSumcheckProver::compute_sumcheck_polynomials`],

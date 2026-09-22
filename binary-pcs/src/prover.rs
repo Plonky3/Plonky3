@@ -31,7 +31,7 @@ use p3_field::{ExtensionField, Field};
 use p3_matrix::dense::{DenseMatrix, RowMajorMatrix};
 use p3_multilinear_util::point::Point;
 use p3_sumcheck::SumcheckData;
-use p3_sumcheck::layout::{Layout, Table, Witness};
+use p3_sumcheck::layout::{Layout, SuffixResidualProver, Table, Witness};
 
 use crate::PcsLayout;
 use crate::fold::{ChallengeField, FoldAlphabet, fold_codeword_batch};
@@ -230,18 +230,24 @@ where
             }
         }
 
-        // Fold out of the previous batch's Merkle leaves, never out of a copy of them.
+        // A batch's fold is the encoding of the message its rounds bound. When the sumcheck holds
+        // that message, encoding it reads a message shorter than the codeword the fold reads by
+        // the batch's folding factor times the rate.
+        //
+        // Otherwise fold out of the previous batch's Merkle leaves, never out of a copy of them.
         // The commitment scheme already owns every codeword it committed.
         //
         // The first batch reads the committed alphabet, every later one the challenge field.
         // The two arms therefore differ in the type of the codeword they load.
         let folded = tracing::info_span!("fold codeword").in_scope(|| {
-            if batch == 0 {
-                fold_codeword_batch(&mmcs.get_matrices(&merkle_data)[0].values, &challenges)
-            } else {
-                let source = &rounds[batch - 1].merkle_data;
-                fold_codeword_batch(&round_mmcs.get_matrices(source)[0].values, &challenges)
-            }
+            encode_bound_message(&mut sumcheck, config.log_inv_rate()).unwrap_or_else(|| {
+                if batch == 0 {
+                    fold_codeword_batch(&mmcs.get_matrices(&merkle_data)[0].values, &challenges)
+                } else {
+                    let source = &rounds[batch - 1].merkle_data;
+                    fold_codeword_batch(&round_mmcs.get_matrices(source)[0].values, &challenges)
+                }
+            })
         });
         if batch + 1 < num_batches {
             let (commitment, round_data) = tracing::info_span!("commit folded codeword")
@@ -274,6 +280,32 @@ where
         randomness,
         final_codeword,
     )
+}
+
+/// Encodes the message the rounds played so far bound, when the sumcheck holds it.
+///
+/// Folding a codeword binds its message's lowest variable, so this is the codeword that folding
+/// the base codeword by every challenge played so far produces, symbol for symbol.
+///
+/// `None` when the sumcheck does not hold that message.
+fn encode_bound_message<F, EF>(
+    sumcheck: &mut SuffixResidualProver<F, EF, <EF as ChallengeField<F>>::SumcheckRepr>,
+    log_inv_rate: usize,
+) -> Option<Vec<EF>>
+where
+    F: Field,
+    EF: ChallengeField<F> + ExtensionField<F>,
+{
+    let column = sumcheck.bound_column()?;
+
+    // The tail past the message stays zero, which is the padding the encoding reads it as.
+    let mut message = EF::zero_vec(column.len() << log_inv_rate);
+    EF::from_sumcheck_repr(column, &mut message[..column.len()]);
+    let codeword = tracing::info_span!("encode bound message").in_scope(|| {
+        <EF as ChallengeField<F>>::Encoder::default()
+            .encode_batch_padded(RowMajorMatrix::new(message, 1), log_inv_rate)
+    });
+    Some(codeword.values)
 }
 
 /// The query phase's prover-side output.
@@ -375,21 +407,26 @@ fn single_matrix_rows<T>(values: Vec<Vec<Vec<T>>>) -> Vec<Vec<T>> {
 
 #[cfg(test)]
 mod tests {
+    use alloc::vec::Vec;
     use alloc::{format, vec};
 
     use p3_binary_dft::{AdditiveRsEncoder, EncodableLevel, NaiveAdditiveNtt};
-    use p3_binary_field::{BinaryField64, BinaryField128};
-    use p3_challenger::FieldChallenger;
+    use p3_binary_field::{BinaryField64, BinaryField128, Ghash128};
+    use p3_challenger::fs::TranscriptField;
+    use p3_challenger::{FieldChallenger, GrindingChallenger};
     use p3_commit::Mmcs;
+    use p3_field::{Algebra, ExtensionField};
     use p3_matrix::dense::RowMajorMatrix;
+    use p3_multilinear_util::point::Point;
     use p3_multilinear_util::poly::Poly;
-    use p3_sumcheck::SumcheckData;
     use p3_sumcheck::layout::{Layout, PrefixProver, SuffixProver, Table};
+    use p3_sumcheck::{OpeningBatch, SumcheckData};
     use rand::SeedableRng;
+    use rand::distr::{Distribution, StandardUniform};
     use rand::rngs::SmallRng;
 
-    use super::{commit, fold_rounds_with};
-    use crate::fold::fold_codeword;
+    use super::{commit, encode_bound_message, fold_rounds_with};
+    use crate::fold::{FoldAlphabet, fold_codeword, fold_codeword_batch};
     use crate::params::{BinaryPcsConfig, BinaryPcsParams};
     use crate::test_util::{challenger, mmcs, narrow_challenger, narrow_mmcs};
     use crate::transcript::{BinaryPcsProverTranscript, BinaryPcsShape};
@@ -713,6 +750,113 @@ mod tests {
                 got_ch.sample_algebra_element::<F>(),
                 want_ch.sample_algebra_element::<F>(),
                 "{shape}: transcript state"
+            );
+        }
+    }
+
+    /// Encodes the message every four sumcheck rounds bound, and compares it with folding the
+    /// base codeword by every challenge sampled so far.
+    ///
+    /// One claim opens the one column directly, so the residual sumcheck holds the bound message
+    /// whenever a stage of rounds is played, the last and shorter one included.
+    ///
+    /// The rounds must play the transcript a run that never encodes plays.
+    fn check_encoding_matches_folding<A, M, Ch>(
+        mmcs: &M,
+        mut challenger: Ch,
+        num_variables: usize,
+        log_inv_rate: usize,
+        seed: u64,
+    ) where
+        A: EncodableLevel + TranscriptField + FoldAlphabet<F>,
+        F: ExtensionField<A>,
+        Ghash128: Algebra<A>,
+        M: Mmcs<A>,
+        Ch: FieldChallenger<A> + GrindingChallenger<Witness = A> + Clone,
+        StandardUniform: Distribution<A>,
+    {
+        let mut rng = SmallRng::seed_from_u64(seed);
+        let table = Table::<A>::rand(&mut rng, 1, num_variables);
+        let (mut layout, _root, data) = SuffixProver::<A, F>::commit(
+            &A::Encoder::default(),
+            mmcs,
+            SuffixProver::<A, F>::new_witness(vec![table], 0),
+            0,
+            log_inv_rate,
+        );
+        let base = mmcs.get_matrices(&data)[0].values.clone();
+
+        let point = Point::<F>::rand(&mut rng, num_variables);
+        layout.record_opening(0, &OpeningBatch::new(vec![0], Vec::new()), &point);
+        let mut reference = (
+            layout.clone(),
+            challenger.clone(),
+            SumcheckData::<A, F>::default(),
+        );
+
+        let mut sc = SumcheckData::<A, F>::default();
+        let (mut sumcheck, _) = layout.into_sumcheck_in::<Ghash128, _>(&mut sc, 0, &mut challenger);
+        let (layout, want_ch, want_sc) = &mut reference;
+        let (mut want, _) = layout
+            .clone()
+            .into_sumcheck_in::<Ghash128, _>(want_sc, 0, want_ch);
+
+        let mut challenges = Vec::new();
+        while sumcheck.num_variables() > 0 {
+            let rounds = sumcheck.num_variables().min(4);
+            let stage = sumcheck.compute_sumcheck_polynomials(&mut sc, &mut challenger, rounds, 0);
+            challenges.extend_from_slice(stage.as_slice());
+            let _ = want.compute_sumcheck_polynomials(want_sc, want_ch, rounds, 0);
+
+            let encoded = encode_bound_message(&mut sumcheck, log_inv_rate)
+                .expect("one direct claim on one column holds the bound message");
+            let shape = format!(
+                "bits={} num_variables={num_variables} log_inv_rate={log_inv_rate} round={}",
+                A::bits(),
+                challenges.len()
+            );
+            assert_eq!(encoded, fold_codeword_batch(&base, &challenges), "{shape}");
+        }
+
+        let shape = format!("bits={} num_variables={num_variables}", A::bits());
+        assert_eq!(
+            sc.polynomial_evaluations(),
+            want_sc.polynomial_evaluations(),
+            "{shape}"
+        );
+        assert_eq!(
+            challenger.sample_algebra_element::<F>(),
+            want_ch.sample_algebra_element::<F>(),
+            "{shape}"
+        );
+    }
+
+    /// Invariant: encoding the message the rounds so far bound reproduces the codeword that
+    /// folding the base codeword by their challenges produces, symbol for symbol.
+    ///
+    /// The prover commits each batch's codeword from whichever of the two it holds, and the
+    /// verifier folds queried cosets of the committed codewords, so the two must never differ.
+    ///
+    /// Shapes: one stage exactly, one stage and a single variable, and several stages ending on
+    /// a short one, at two rates, over the challenge field itself and a narrower alphabet.
+    #[test]
+    fn encoding_the_bound_message_matches_folding_the_base_codeword() {
+        for (seed, (num_variables, log_inv_rate)) in
+            (0..).zip([(4, 1), (5, 2), (10, 1), (13, 1), (13, 2)])
+        {
+            check_encoding_matches_folding::<F, _, _>(
+                &mmcs(),
+                challenger(),
+                num_variables,
+                log_inv_rate,
+                seed,
+            );
+            check_encoding_matches_folding::<BinaryField64, _, _>(
+                &narrow_mmcs(),
+                narrow_challenger(),
+                num_variables,
+                log_inv_rate,
+                seed,
             );
         }
     }

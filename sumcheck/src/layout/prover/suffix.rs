@@ -1794,11 +1794,13 @@ mod tests {
     /// Plays every residual round of the banked and the dense route from one recorded prover.
     ///
     /// Both routes run the same preprocessing from equal transcripts, then play
-    /// `rounds_per_call` rounds per call, settling after each call when `settle` is set.
+    /// `rounds_per_call` rounds per call. After each call the banked route hands out its bound
+    /// column whenever a stage is played, and both settle when `settle` is set.
     ///
     /// # Checks
     ///
     /// - Equal arities, challenges and running claims after every call.
+    /// - Every bound column equals the source column bound at every challenge so far.
     /// - Equal round messages over the whole run.
     /// - Equal sponge states once every round is played.
     fn assert_banked_matches_dense<F, EF, R, Ch>(
@@ -1836,6 +1838,16 @@ mod tests {
             SuffixResidualProver::<F, EF, R>::banked(table, &claims, sum, stage_rounds);
         assert!(banked.is_banked());
 
+        // The source column in `EF`, bound one suffix variable per challenge as the run goes.
+        let mut column = Poly::new(
+            prover.claims.tables[0]
+                .poly(0)
+                .as_slice()
+                .iter()
+                .map(|&value| EF::from(value))
+                .collect(),
+        );
+        let mut bound_columns = 0;
         while dense.num_variables() > 0 {
             assert_eq!(banked.num_variables(), dense.num_variables());
             let rounds = rounds_per_call.min(dense.num_variables());
@@ -1853,12 +1865,22 @@ mod tests {
             );
             assert_eq!(challenges, expected);
             assert_eq!(banked.claimed_sum(), dense.claimed_sum());
+            for &challenge in challenges.as_slice() {
+                column.fix_suffix_var_mut(challenge);
+            }
+            if let Some(bound) = banked.bound_column() {
+                let bound: Vec<EF> = bound.iter().map(|&value| EF::from(value)).collect();
+                assert_eq!(bound, column.as_slice());
+                bound_columns += 1;
+            }
             if settle {
                 dense.settle();
                 banked.settle();
             }
         }
         assert_eq!(banked.num_variables(), 0);
+        // The last call always ends a stage.
+        assert!(bound_columns > 0);
         assert_eq!(
             banked_data.polynomial_evaluations,
             dense_data.polynomial_evaluations

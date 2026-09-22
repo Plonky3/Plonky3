@@ -162,6 +162,22 @@ impl<F: Field, R: Field> BankedColumn<F, R> {
         self.stage(stage.claimed_sum())
     }
 
+    /// The column bound at every challenge played so far, binding the played stage's first.
+    ///
+    /// # Panics
+    ///
+    /// The current stage is not fully played.
+    pub(super) fn bound<EF>(&mut self, stage: &mut ReprSumcheckProver<F, EF, R>) -> &[R]
+    where
+        EF: ExtensionField<F>,
+        R: IntoTranscriptField<EF>,
+    {
+        self.bind(stage);
+        self.bound
+            .as_deref()
+            .expect("a played stage leaves a bound column")
+    }
+
     /// Binds the column at the played stage's challenges, unless it already is.
     ///
     /// Each claim's coefficient takes the stage prover's settled weight: its equality weight
