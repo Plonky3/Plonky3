@@ -1768,8 +1768,8 @@ mod tests {
     use p3_challenger::fs::TypeTag;
     use p3_challenger::testing::{assert_seeds_pairwise_distinct, pow_difficulties, seed_digest};
     use p3_challenger::{CanSample, DuplexChallenger};
-    use p3_field::PrimeCharacteristicRing;
     use p3_field::extension::BinomialExtensionField;
+    use p3_field::{BasedVectorSpace, PrimeCharacteristicRing, PrimeField64};
     use proptest::prelude::*;
     use rand::rngs::SmallRng;
     use rand::{RngExt, SeedableRng};
@@ -1777,6 +1777,7 @@ mod tests {
     use super::*;
     use crate::parameters::{ProtocolParameters, WhirConfig};
     use crate::pcs::zk::ZkParameters;
+    use crate::transcript::tests::stream_digest;
     use crate::transcript::{
         FINAL_FOLD, FINAL_POLY, FINAL_QUERY_INDICES, FINAL_QUERY_POW, WhirShape,
     };
@@ -2492,6 +2493,71 @@ mod tests {
         let prover_next: F = prover_challenger.sample();
         let verifier_next: F = verifier_challenger.sample();
         assert_eq!(prover_next, verifier_next);
+    }
+
+    #[test]
+    fn the_challenge_stream_is_pinned() {
+        let extension_words = |value: &EF| -> Vec<u64> {
+            value
+                .as_basis_coefficients_slice()
+                .iter()
+                .map(F::as_canonical_u64)
+                .collect()
+        };
+
+        // Play one variant of the fixture and assert its digest, its verifier
+        // replay, and the agreement of both sides' next sample.
+        let assert_pinned = |mut shape: ZkWhirShape, digest: [u8; 32]| {
+            // Fixture state: no grinding anywhere, so a zero witness clears every site.
+            for round in &mut shape.rounds {
+                round.query_pow_bits = 0;
+            }
+            shape.base_case.pow_bits = 0;
+            let carried = Carried::new(&shape, 0xC1A1);
+
+            let mut prover_challenger = fresh_challenger();
+            let prover = play_prover(&mut prover_challenger, &shape, &carried);
+            let prover_next: F = prover_challenger.sample();
+
+            let mut stream: Vec<u64> = prover.challenges.iter().flat_map(extension_words).collect();
+            stream.extend(prover.indices.iter().flatten().map(|&index| index as u64));
+            stream.extend(prover.witnesses.iter().map(F::as_canonical_u64));
+            stream.push(prover_next.as_canonical_u64());
+            assert_eq!(stream_digest(&stream), digest);
+
+            let mut verifier_challenger = fresh_challenger();
+            let verifier = play_verifier(
+                &mut verifier_challenger,
+                &shape,
+                &carried,
+                &prover.witnesses,
+            );
+            assert_eq!(prover, verifier);
+            let verifier_next: F = verifier_challenger.sample();
+            assert_eq!(prover_next, verifier_next);
+        };
+
+        // (a) the fixture.
+        assert_pinned(
+            ZkWhirShape::new(&base_config()),
+            [
+                230, 136, 76, 250, 31, 240, 171, 255, 160, 192, 229, 13, 43, 140, 135, 199, 222,
+                124, 72, 170, 100, 148, 63, 242, 241, 232, 25, 88, 195, 174, 35, 102,
+            ],
+        );
+
+        // (b) saturated: the first round and the base case open every position.
+        let mut saturated = ZkWhirShape::new(&base_config());
+        saturated.rounds[0].query_draws = 0;
+        saturated.base_case.source_queries = saturated.base_case.source_domain_size;
+        saturated.base_case.mask_queries = usize::MAX;
+        assert_pinned(
+            saturated,
+            [
+                186, 115, 244, 163, 160, 45, 196, 182, 53, 20, 226, 228, 150, 127, 86, 122, 229,
+                143, 71, 119, 120, 68, 136, 67, 17, 155, 107, 39, 122, 93, 198, 73,
+            ],
+        );
     }
 
     proptest! {

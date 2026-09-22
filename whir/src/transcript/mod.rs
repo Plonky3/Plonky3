@@ -1124,8 +1124,10 @@ mod tests {
     use p3_challenger::fs::TypeTag;
     use p3_challenger::testing::pow_difficulties;
     use p3_challenger::{CanSample, DuplexChallenger};
-    use p3_field::PrimeCharacteristicRing;
     use p3_field::extension::BinomialExtensionField;
+    use p3_field::{BasedVectorSpace, PrimeCharacteristicRing, PrimeField64};
+    use p3_keccak::Keccak256Hash;
+    use p3_symmetric::CryptographicHasher;
     use proptest::prelude::*;
     use rand::rngs::SmallRng;
     use rand::{RngExt, SeedableRng};
@@ -1173,6 +1175,11 @@ mod tests {
         // Fixed seed so two runs differ only where the transcript makes them differ.
         let mut rng = SmallRng::seed_from_u64(0x5EED);
         Ch::new(Perm::new_from_rng_128(&mut rng))
+    }
+
+    /// Keccak-256 over canonical values, eight little-endian bytes each.
+    pub(super) fn stream_digest(values: &[u64]) -> [u8; 32] {
+        Keccak256Hash.hash_iter(values.iter().flat_map(|v| v.to_le_bytes()))
     }
 
     /// One code rate per intermediate round, growing with the folding schedule.
@@ -1630,6 +1637,84 @@ mod tests {
         let prover_next: F = prover_challenger.sample();
         let verifier_next: F = verifier_challenger.sample();
         assert_eq!(prover_next, verifier_next);
+    }
+
+    #[test]
+    fn the_challenge_stream_is_pinned() {
+        let extension_words = |value: &EF| -> Vec<u64> {
+            value
+                .as_basis_coefficients_slice()
+                .iter()
+                .map(F::as_canonical_u64)
+                .collect()
+        };
+
+        // Play one variant of the fixture and assert its digest, its verifier
+        // replay, and the agreement of both sides' next sample.
+        let assert_pinned = |mut shape: WhirShape, digest: [u8; 32]| {
+            // Fixture state: no grinding anywhere, so a zero witness clears every site.
+            for round in &mut shape.rounds {
+                round.query_pow_bits = 0;
+            }
+            shape.final_pow_bits = 0;
+            let carried = Carried::new(&shape, 0xC1A1);
+
+            let mut prover_challenger = fresh_challenger();
+            let prover = play_prover(&mut prover_challenger, &shape, &carried);
+            let prover_next: F = prover_challenger.sample();
+
+            let mut stream: Vec<u64> = prover.challenges.iter().flat_map(extension_words).collect();
+            stream.extend(prover.indices.iter().flatten().map(|&index| index as u64));
+            stream.extend(prover.witnesses.iter().map(F::as_canonical_u64));
+            stream.push(prover_next.as_canonical_u64());
+            assert_eq!(stream_digest(&stream), digest);
+
+            let mut verifier_challenger = fresh_challenger();
+            let verifier = play_verifier(
+                &mut verifier_challenger,
+                &shape,
+                &carried,
+                &prover.witnesses,
+            );
+            assert_eq!(prover, verifier);
+            let verifier_next: F = verifier_challenger.sample();
+            assert_eq!(prover_next, verifier_next);
+        };
+
+        // (a) the fixture as-is.
+        assert_pinned(
+            shape_of(&config_from(base_params())),
+            [
+                239, 237, 48, 39, 140, 119, 127, 173, 71, 146, 27, 102, 238, 140, 189, 24, 211,
+                174, 32, 255, 99, 5, 89, 146, 186, 209, 231, 139, 123, 160, 129, 137,
+            ],
+        );
+
+        // (b) stratified: every query site draws through the stratified schedule.
+        let mut stratified = shape_of(&config_from(base_params()));
+        stratified.stratified_queries = true;
+        for round in &mut stratified.rounds {
+            round.stratified_queries = true;
+        }
+        assert_pinned(
+            stratified,
+            [
+                140, 154, 214, 44, 134, 232, 156, 153, 66, 10, 224, 123, 82, 176, 156, 89, 43, 43,
+                84, 0, 146, 197, 34, 72, 120, 96, 78, 90, 96, 164, 20, 93,
+            ],
+        );
+
+        // (c) saturated first round: asking for every position opens them all, drawing nothing.
+        let mut saturated = shape_of(&config_from(base_params()));
+        saturated.rounds[0].query_draws = 0;
+        saturated.rounds[0].query_summand_depths.clear();
+        assert_pinned(
+            saturated,
+            [
+                27, 168, 114, 184, 180, 232, 236, 16, 9, 149, 25, 203, 140, 186, 163, 92, 209, 254,
+                128, 52, 155, 209, 253, 155, 26, 167, 249, 213, 29, 123, 100, 155,
+            ],
+        );
     }
 
     proptest! {
