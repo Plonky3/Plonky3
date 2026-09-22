@@ -4,7 +4,9 @@ use core::borrow::Borrow;
 
 use p3_air::{Air, AirBuilder, BaseAir, BoundaryEnd, BoundaryPublic, WindowAccess};
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
-use p3_bus::{BusActivation, BusDirection, BusInteractionBuilder, BusSymbolicBuilder};
+use p3_bus::{
+    BusActivation, BusBoundary, BusDirection, BusInteractionBuilder, BusName, BusSymbolicBuilder,
+};
 use p3_challenger::DuplexChallenger;
 use p3_dft::Radix2DFTSmallBatch;
 use p3_field::extension::BinomialExtensionField;
@@ -364,10 +366,32 @@ impl<AB: AirBuilder + BusInteractionBuilder> Air<AB> for BusAir {
         let square = value.clone() * value.clone();
         let payload = if self.cubed { square * value } else { square };
         builder.push_bus_interaction(
-            self.channel,
+            BusName::new(self.channel),
             self.direction,
             [payload],
             BusActivation::Boolean(selector),
+        );
+    }
+}
+
+/// A table whose only variable is the end it flushes at.
+struct BoundaryAir(BusBoundary);
+
+impl<X> BaseAir<X> for BoundaryAir {
+    fn width(&self) -> usize {
+        NUM_COLS
+    }
+}
+
+impl<AB: AirBuilder + BusInteractionBuilder> Air<AB> for BoundaryAir {
+    fn eval(&self, builder: &mut AB) {
+        let main = builder.main();
+        let value: AB::Expr = main.current(0).expect("two columns").into();
+        builder.push_bus_interaction(
+            BusName::new("edge"),
+            BusDirection::Push,
+            [value],
+            BusActivation::Boundary(self.0),
         );
     }
 }
@@ -722,6 +746,30 @@ fn which_public_value_a_pinned_cell_names_reaches_the_declaration() {
 
     assert_eq!(pinned.constraints(), swapped.constraints());
     assert_ne!(pinned, swapped);
+}
+
+#[test]
+fn the_end_a_boundary_flush_names_reaches_the_declaration() {
+    // A boundary activation leaves nothing in the zerocheck, so the end it names is the
+    // only thing separating these two.
+    let heights = HeightRange::new(FOLDING as u32, 20);
+    let at =
+        |end| TableDeclaration::from_constraints::<F, EF, BoundaryAir>(&BoundaryAir(end), heights);
+    let first = at(BusBoundary::First);
+    let last = at(BusBoundary::Last);
+
+    // Neither writes a constraint, so every counted dimension agrees.
+    assert_eq!(
+        first.constraints(),
+        LocalConstraints {
+            count: 0,
+            degree: 0
+        }
+    );
+    assert_eq!(first.constraints(), last.constraints());
+
+    // Only the encoded route can tell them apart.
+    assert_ne!(first, last);
 }
 
 #[test]
