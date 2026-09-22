@@ -1873,4 +1873,41 @@ mod tests {
             run_shape_test::<SuffixProver<F, EF>>(&shape, &schedule);
         }
     }
+
+    #[test]
+    fn preprocessing_transcripts_are_pinned() {
+        // Invariant: every message the preprocessing rounds send, and every challenge
+        // they draw, stays the same value over this fixed run.
+        //
+        // Fixture state: the mixed schedule (both direct and successor openings on
+        // both fixture tables), two virtual claims (so the virtual alpha offset moves
+        // past one claim's worth of powers), then the residual handoff folded to a
+        // constant and one further challenge drawn.
+        //
+        // Grinding stays off: under `--features parallel`, a PoW search may return
+        // any valid witness, so a pinned value would be flaky with grinding on.
+        //
+        // The constants below depend on the seeded `SmallRng` streams `challenger()`
+        // and `build_tables()` draw from.
+        fn run<L: Layout<F, EF>>() -> [u32; 4] {
+            let mut prover = L::from_witness(L::new_witness(build_tables(), FOLDING));
+            let mut ch = challenger();
+            for (table_idx, batch) in mixed_schedule() {
+                prover.eval(table_idx, &batch, &mut ch);
+            }
+            let _ = prover.add_virtual_eval(&mut ch);
+            let _ = prover.add_virtual_eval(&mut ch);
+            let mut data = SumcheckData::<F, EF>::default();
+            let (mut residual, _) = prover.into_sumcheck(&mut data, 0, &mut ch);
+            transcript_fingerprint(&mut residual, &mut ch)
+        }
+        assert_eq!(
+            run::<PrefixProver<F, EF>>(),
+            [1375370533, 1850241826, 503846959, 749811634]
+        );
+        assert_eq!(
+            run::<SuffixProver<F, EF>>(),
+            [1607413650, 68580243, 436414694, 1835455702]
+        );
+    }
 }

@@ -4,7 +4,10 @@ use alloc::vec::Vec;
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_challenger::{DuplexChallenger, FieldChallenger, GrindingChallenger};
 use p3_field::extension::BinomialExtensionField;
-use p3_field::{Field, HornerIter, PackedValue, PrimeCharacteristicRing, TwoAdicField};
+use p3_field::{
+    BasedVectorSpace, Field, HornerIter, PackedValue, PrimeCharacteristicRing, PrimeField32,
+    TwoAdicField,
+};
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
 use p3_util::log2_strict_usize;
@@ -15,7 +18,7 @@ use rand::rngs::SmallRng;
 use crate::constraints::statement::{EqStatement, SelectStatement};
 use crate::constraints::{Constraint, Statements};
 use crate::layout::{Layout, PrefixProver, SuffixProver, TableShape, Verifier};
-use crate::strategy::{Basis, VariableOrder};
+use crate::strategy::{Basis, SumcheckProver, VariableOrder};
 use crate::test_util::{stacked_num_variables, table_point_schedule, table_specs_to_tables};
 use crate::{
     OpeningBatch, OpeningEvals, OpeningProtocol, SumcheckData, SumcheckError, TableSpec,
@@ -42,6 +45,27 @@ pub(crate) fn challenger() -> MyChallenger {
 
     // Create a new duplex challenger over the field `F` with this permutation
     MyChallenger::new(perm)
+}
+
+/// Folds a residual prover to a constant through the sponge, binds the constant, then draws one element.
+///
+/// Every value sent before and during the fold reaches the sponge ahead of the draw, so the
+/// drawn coordinates move with any of them.
+pub(crate) fn transcript_fingerprint(
+    residual: &mut SumcheckProver<F, EF>,
+    challenger: &mut MyChallenger,
+) -> [u32; 4] {
+    let rounds = residual.num_variables();
+    let mut data = SumcheckData::<F, EF>::default();
+    residual.compute_sumcheck_polynomials(&mut data, challenger, rounds, 0, None);
+    let folded = residual
+        .evals()
+        .as_constant()
+        .expect("every variable is bound");
+    challenger.observe_algebra_element(folded);
+    let digest: EF = challenger.sample_algebra_element();
+    let coeffs = BasedVectorSpace::<F>::as_basis_coefficients_slice(&digest);
+    core::array::from_fn(|i| coeffs[i].as_canonical_u32())
 }
 
 // Simulates the prover side of STIR constraint derivation for an intermediate round.

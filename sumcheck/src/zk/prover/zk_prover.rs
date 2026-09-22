@@ -425,13 +425,14 @@ mod tests {
     use rand::rngs::StdRng;
     use rand::{RngExt, SeedableRng};
 
-    use crate::layout::PrefixProver;
+    use crate::layout::{PrefixProver, SuffixProver};
     use crate::strategy::VariableOrder;
     use crate::table::OpeningBatch;
-    use crate::zk::ZkSumcheckData;
+    use crate::tests::transcript_fingerprint;
     use crate::zk::test_helpers::{
         EF, F, MyChallenger, MyMmcs, build_prover_verifier, make_setup, run_roundtrip,
     };
+    use crate::zk::{ZkLayout, ZkSumcheckData};
 
     #[test]
     fn prover_verifier_roundtrip_prefix() {
@@ -616,5 +617,47 @@ mod tests {
                     .is_ok()
             );
         }
+    }
+
+    #[test]
+    fn hiding_batch_transcripts_are_pinned() {
+        // Invariant: every message the HVZK batch sends, and every challenge it
+        // draws, stays the same value over this fixed run.
+        //
+        // Fixture state: a batch that mixes a current opening, a direct-only
+        // opening, and two virtual claims, folded to a constant and one further
+        // challenge drawn from the residual handoff.
+        //
+        // Grinding stays off: under `--features parallel`, a PoW search may return
+        // any valid witness, so a pinned value would be flaky with grinding on.
+        //
+        // The constants below depend on the seeded `StdRng` streams the setup, the
+        // witness, and the masks draw from.
+        fn run<L: ZkLayout<F, EF>>() -> [u32; 4] {
+            let (perm, mmcs, encoding) = make_setup(11, 4);
+            let mut data_rng = StdRng::seed_from_u64(12);
+            let evals: Vec<F> = (0..256).map(|_| data_rng.random()).collect();
+            let (mut prover, _verifier, _n_vars) =
+                build_prover_verifier::<L>(evals, 3, encoding, mmcs);
+            let mut ch = MyChallenger::new(perm);
+
+            prover.eval(0, &OpeningBatch::new(vec![0], vec![0]), &mut ch);
+            prover.eval(0, &OpeningBatch::new(vec![0], Vec::new()), &mut ch);
+            let _ = prover.add_virtual_eval(&mut ch);
+            let _ = prover.add_virtual_eval(&mut ch);
+
+            let mut zk_data = ZkSumcheckData::<F, EF>::default();
+            let mut prover_rng = StdRng::seed_from_u64(13);
+            let mut handoff = prover.into_sumcheck(&mut zk_data, 0, &mut ch, &mut prover_rng);
+            transcript_fingerprint(&mut handoff.residual_prover, &mut ch)
+        }
+        assert_eq!(
+            run::<PrefixProver<F, EF>>(),
+            [45553658, 1785166884, 1370940203, 990586681]
+        );
+        assert_eq!(
+            run::<SuffixProver<F, EF>>(),
+            [1049900532, 349798432, 102124702, 1192330144]
+        );
     }
 }

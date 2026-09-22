@@ -207,6 +207,7 @@ mod tests {
     use super::*;
     use crate::product_polynomial::ProductPolynomial;
     use crate::strategy::VariableOrder;
+    use crate::tests::transcript_fingerprint;
     use crate::zk::test_helpers::{MyChallenger, MyMmcs, make_setup};
     use crate::zk::{ZkVerifier, mask_residual};
 
@@ -520,5 +521,62 @@ mod tests {
 
         let sentinel = encoding.sample_message(&mut rng);
         assert_eq!(handoff.mask_messages, vec![sentinel; folding_factor]);
+    }
+
+    #[test]
+    fn hiding_residual_transcripts_are_pinned() {
+        // Invariant: every message this overlay sends, and every challenge it draws,
+        // stays the same value over each fixed shape and binding order below.
+        //
+        // Fixture state: a non-zero auxiliary claim, so the run pins the aux-carry
+        // path folded into the transmitted constant slot on every round.
+        //
+        // Grinding stays off: under `--features parallel`, a PoW search may return
+        // any valid witness, so a pinned value would be flaky with grinding on.
+        //
+        // The constants below depend on the seeded `StdRng` streams the witness, the
+        // setup, and the masks draw from.
+        let run = |n_vars: usize, folding_factor: usize, order: VariableOrder| -> [u32; 4] {
+            let mut rng = StdRng::seed_from_u64(0x5EED + n_vars as u64);
+            let evals = Poly::<EF>::rand(&mut rng, n_vars);
+            let weights = Poly::<EF>::rand(&mut rng, n_vars);
+            let claimed_sum = dot_product::<EF, _, _>(
+                evals.as_slice().iter().copied(),
+                weights.as_slice().iter().copied(),
+            );
+            let poly = ProductPolynomial::<F, EF>::new_unpacked(order, evals, weights);
+            let prover = SumcheckProver::new(poly, claimed_sum);
+
+            let ell_zk = 4;
+            let (perm, mmcs, encoding) = make_setup(31, ell_zk);
+            let mut ch = MyChallenger::new(perm);
+            let mut zk_data = ZkSumcheckData::<F, EF>::default();
+            let mut mask_rng = StdRng::seed_from_u64(37);
+
+            let mut handoff = prover.into_zk_sumcheck(
+                &mut zk_data,
+                &encoding,
+                &mmcs,
+                folding_factor,
+                0,
+                EF::from_u64(7),
+                &mut ch,
+                &mut mask_rng,
+            );
+            transcript_fingerprint(&mut handoff.residual_prover, &mut ch)
+        };
+
+        assert_eq!(
+            run(9, 3, VariableOrder::Prefix),
+            [1386866334, 1389861306, 1010820499, 200940945]
+        );
+        assert_eq!(
+            run(9, 3, VariableOrder::Suffix),
+            [1691378838, 838063769, 1589820943, 419946647]
+        );
+        assert_eq!(
+            run(2, 1, VariableOrder::Prefix),
+            [129191004, 1271819838, 501092298, 283849083]
+        );
     }
 }
