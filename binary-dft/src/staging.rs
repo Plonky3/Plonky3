@@ -127,7 +127,7 @@ pub(crate) fn for_each_staged_tile<T, P>(
             //
             // `index < tiles <= len / 2^depth` keeps every `run_index` below `len`, so none of
             // its shifts or sums wrap.
-            let source = unsafe { base.slice_mut(runs.run_index(index, k) * run, run) };
+            let source = unsafe { base.slice(runs.run_index(index, k) * run, run) };
             tile.extend_from_slice(source);
         }
         debug_assert_eq!(tile.len(), tile_len, "the gather left the tile short");
