@@ -6,8 +6,10 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use p3_air::symbolic::AirLayout;
 use p3_air::{Air, BaseAir, WindowAccess, check_constraints};
 use p3_baby_bear::BabyBear;
-use p3_binary_field::BinaryField128;
+use p3_binary_field::{BinaryChallenger, BinaryField128};
+use p3_challenger::HashChallenger;
 use p3_field::{Field, PrimeCharacteristicRing};
+use p3_keccak::Keccak256Hash;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_sumcheck::layout::Table;
 use rand::{RngExt, SeedableRng};
@@ -15,12 +17,15 @@ use rand_xoshiro::Xoroshiro128Plus;
 
 use super::*;
 use crate::{
-    BusActivation, BusDebugInstance, BusDebugReport, BusDirection, BusInteractionBuilder, BusPlan,
-    BusPlanInput, BusSymbolicBuilder, ReadOnlyMemoryBus, ReadOnlyMemoryInteractionBuilder,
-    ReadOnlyMemoryPlan,
+    BusActivation, BusArgumentError, BusChallenges, BusDebugInstance, BusDebugReport, BusDirection,
+    BusEvaluation, BusInteractionBuilder, BusPlan, BusPlanInput, BusSymbolicBuilder,
+    ReadOnlyMemoryBus, ReadOnlyMemoryInteractionBuilder, ReadOnlyMemoryPlan,
 };
 
 type F = BinaryField128;
+
+/// Binary-native transcript, matching the one the read-only memory tests use.
+type Challenger = BinaryChallenger<F, HashChallenger<u8, Keccak256Hash, 32>>;
 
 /// Channel the machine's chips issue their accesses on.
 const ACCESS: &str = "ram-access";
@@ -1587,4 +1592,103 @@ fn a_clock_whose_carry_chain_is_chosen_freely_can_repeat_a_timestamp() {
     // Two accesses at one address sharing a timestamp would have no order between them.
     assert_eq!(clock[0], clock[2]);
     assert!(!air_accepts(&air, &trace));
+}
+
+/// Materializes one side of a plan's product tree from concrete traces.
+///
+/// Leaves follow the plan's physical block order, which is what its reduction expects.
+fn materialize(
+    bus_plan: &BusPlan,
+    profiles: &[&BusSymbolicBuilder<F, F>],
+    trace: &RamTrace<F>,
+    challenges: &BusChallenges<F>,
+    direction: BusDirection,
+) -> Vec<F> {
+    let weights = challenges.fingerprint_weights();
+    let height = trace.height();
+    let mut leaves = Vec::new();
+    for block in bus_plan.blocks(direction) {
+        let interaction = &profiles[block.owner.air].interactions()[block.owner.declaration];
+        for row in 0..height {
+            leaves.push(
+                bus_plan
+                    .evaluate_factor(
+                        block.bus,
+                        interaction,
+                        BusEvaluation {
+                            main: trace.row(row),
+                            preprocessed: &[],
+                            public: &[],
+                            is_first_row: F::from_bool(row == 0),
+                            is_last_row: F::from_bool(row + 1 == height),
+                            is_transition: F::from_bool(row + 1 != height),
+                        },
+                        &weights,
+                        challenges.offset,
+                    )
+                    .expect("the fixture declarations match the plan"),
+            );
+        }
+    }
+    leaves
+}
+
+#[test]
+fn the_plan_reduction_proves_the_two_orders_hold_the_same_accesses() {
+    // A machine would reach this through its own prover. The point here is that the permutation
+    // needs no protocol of its own: the plan's ordinary multiset reduction discharges it.
+    let statement = single_proof(4, 3, 1);
+    let accesses = vec![
+        RamAccess::write(5, value(11)),
+        RamAccess::read(5, value(11)),
+        RamAccess::write(5, value(13)),
+        RamAccess::read(2, vec![F::ZERO]),
+    ];
+    let honest = statement
+        .build_trace(&accesses)
+        .expect("the fixture accesses are consistent");
+    let air = air(statement);
+    let layout = air.layout();
+
+    let memory_profile = BusSymbolicBuilder::<F, F>::from_air(&air, AirLayout::from_air::<F>(&air));
+    let source = counterparty(&air);
+    let source_profile =
+        BusSymbolicBuilder::<F, F>::from_air(&source, AirLayout::from_air::<F>(&source));
+    let profiles = [&memory_profile, &source_profile];
+    let bus_plan = plan(&air);
+
+    // Challenges are drawn inside the reduction, after whatever the caller already bound into
+    // the transcript, which for a real prover is the commitment to this very trace.
+    let reduce = |trace: &RamTrace<F>| {
+        let mut challenger = Challenger::from_hasher(Vec::new(), Keccak256Hash);
+        bus_plan.prove::<F, F, _>(
+            |challenges| {
+                BusDirection::ALL.map(|direction| {
+                    materialize(&bus_plan, &profiles, trace, challenges, direction)
+                })
+            },
+            &mut challenger,
+        )
+    };
+
+    let (proof, prover_output) = reduce(&honest).expect("the honest memory balances");
+    let mut verifier_challenger = Challenger::from_hasher(Vec::new(), Keccak256Hash);
+    let verifier_output = bus_plan
+        .verify::<F, F, _>(&proof, &mut verifier_challenger)
+        .expect("the honest reduction verifies");
+    assert_eq!(prover_output.product.point, verifier_output.product.point);
+    assert_eq!(prover_output.product.values, verifier_output.product.values);
+
+    // Rewrite one value in the sorted order only. The constraints cannot see it, because the
+    // sorted trace stays internally consistent.
+    let mut forged = honest;
+    for row in 0..4 {
+        if forged.row(row)[layout.memory_value] == value(11)[0] {
+            forged.row_mut(row)[layout.memory_value] = value(99)[0];
+        }
+    }
+    assert!(air_accepts(&air, &forged));
+
+    // The reduction refuses to prove it, because the two orders no longer hold the same accesses.
+    assert_eq!(reduce(&forged), Err(BusArgumentError::UnbalancedProducts));
 }
