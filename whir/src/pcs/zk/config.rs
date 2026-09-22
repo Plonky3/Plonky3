@@ -12,7 +12,9 @@ use thiserror::Error;
 use super::base_case::BaseCaseZkConfig;
 use super::committer::FoldedRsCode;
 use super::mask::{MaskCodeShape, MaskGroupShape};
-use crate::parameters::{ProtocolParameters, SecurityAssumption, WhirConfig, WhirConfigError};
+use crate::parameters::{
+    ProtocolParameters, SecurityAssumption, TerminalBudget, WhirConfig, WhirConfigError,
+};
 
 /// Reasons ZK parameters cannot extend a WHIR configuration.
 #[derive(Debug, Error)]
@@ -84,22 +86,18 @@ where
     /// case. Consequently, `commitment_ood_samples` and
     /// `final_folding_pow_bits` are not transcript steps here;
     /// `final_sumcheck_rounds` still determines the terminal message length.
-    /// `inner.terminal` sizes the plain message code; the base case runs
-    /// against a randomized code instead, sized by [`Self::final_queries`]
-    /// and [`Self::final_pow_bits`].
+    /// `inner.terminal` sizes the plain message code. The base case runs
+    /// against a randomized code instead, sized by `randomized_terminal`.
     pub inner: WhirConfig<EF, F, Challenger>,
     /// ZK extension parameters.
     pub zk: ZkParameters,
-    /// Spot checks against the base case's randomized terminal source code.
+    /// Budget of the masked base case against the randomized terminal source code.
     ///
     /// The base case tests proximity to a code of dimension
-    /// `message_len + final_queries`, not the plain message code
-    /// `inner.terminal` was sized against. Also serves as the terminal
+    /// `message_len + randomized_terminal.num_queries`, not the plain message code
+    /// `inner.terminal` was sized against. The query count is also the terminal
     /// oracle's randomness budget, i.e. `oracle_randomness[n_rounds]`.
-    pub final_queries: usize,
-    /// PoW bits bridging the gap between `final_queries` and
-    /// `security_level` at the randomized terminal code's rate.
-    pub final_pow_bits: usize,
+    pub randomized_terminal: TerminalBudget,
     /// ZK randomness coefficients per limb of each committed oracle
     /// `u_0, ..., u_{n_rounds}`.
     ///
@@ -188,7 +186,7 @@ where
         let final_message_len = 1 << final_config.num_variables;
         let final_domain_size = final_config.domain_size >> final_config.folding_factor;
         let protocol_security_level = security_level.saturating_sub(inner.pow_bits);
-        let (final_queries, final_pow_bits) = terminal_source_budget(
+        let (num_queries, pow_bits) = terminal_source_budget(
             soundness_type,
             security_level,
             protocol_security_level,
@@ -196,6 +194,10 @@ where
             final_domain_size,
             inner.terminal.num_queries,
         );
+        let randomized_terminal = TerminalBudget {
+            num_queries,
+            pow_bits,
+        };
 
         // Per-oracle ZK budget.
         //
@@ -208,7 +210,7 @@ where
                 if i < n_rounds {
                     inner.round_parameters[i].num_queries
                 } else {
-                    final_queries
+                    randomized_terminal.num_queries
                 }
             })
             .collect();
@@ -285,8 +287,7 @@ where
         Ok(Self {
             inner,
             zk,
-            final_queries,
-            final_pow_bits,
+            randomized_terminal,
             oracle_randomness,
             sumcheck_mask,
             switch_masks,
@@ -346,9 +347,9 @@ where
                 final_config.domain_size >> final_config.folding_factor,
             ),
             mask_groups: self.mask_groups(),
-            num_queries: self.final_queries,
+            num_queries: self.randomized_terminal.num_queries,
             mask_queries: self.mask_queries,
-            pow_bits: self.final_pow_bits,
+            pow_bits: self.randomized_terminal.pow_bits,
         }
     }
 }
@@ -434,7 +435,7 @@ mod tests {
         // The last oracle absorbs the final spot checks.
         assert_eq!(
             config.oracle_randomness[config.n_rounds()],
-            config.final_queries
+            config.randomized_terminal.num_queries
         );
         // One code-switch mask per intermediate round.
         assert_eq!(config.switch_masks.len(), config.n_rounds());
@@ -542,11 +543,17 @@ mod tests {
         let config = ZkWhirConfig::<EF, F, MyChallenger>::new(16, params(), zk_params()).unwrap();
         let base = config.base_case_config();
 
-        assert_eq!(base.num_queries, config.final_queries);
-        assert_eq!(base.pow_bits, config.final_pow_bits);
-        assert_eq!(base.code.randomness_len, config.final_queries);
+        assert_eq!(base.num_queries, config.randomized_terminal.num_queries);
+        assert_eq!(base.pow_bits, config.randomized_terminal.pow_bits);
+        assert_eq!(
+            base.code.randomness_len,
+            config.randomized_terminal.num_queries
+        );
 
-        assert_ne!(config.final_queries, config.inner.terminal.num_queries);
+        assert_ne!(
+            config.randomized_terminal.num_queries,
+            config.inner.terminal.num_queries
+        );
         assert_eq!(
             (
                 config.inner.terminal.num_queries,
@@ -554,6 +561,12 @@ mod tests {
             ),
             (5, 0)
         );
-        assert_eq!((config.final_queries, config.final_pow_bits), (6, 0));
+        assert_eq!(
+            (
+                config.randomized_terminal.num_queries,
+                config.randomized_terminal.pow_bits
+            ),
+            (6, 0)
+        );
     }
 }

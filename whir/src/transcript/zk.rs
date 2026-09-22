@@ -2425,8 +2425,12 @@ mod tests {
         });
 
         // Walk the hiding half.
-        derived_field_moves_the_seed("final_queries", |c| c.final_queries += 1);
-        derived_field_moves_the_seed("final_pow_bits", |c| c.final_pow_bits += 1);
+        derived_field_moves_the_seed("randomized_terminal.num_queries", |c| {
+            c.randomized_terminal.num_queries += 1;
+        });
+        derived_field_moves_the_seed("randomized_terminal.pow_bits", |c| {
+            c.randomized_terminal.pow_bits += 1;
+        });
         derived_field_moves_the_seed("mask_queries", |c| c.mask_queries += 1);
         derived_field_moves_the_seed("oracle_randomness[0]", |c| c.oracle_randomness[0] += 1);
         derived_field_moves_the_seed("oracle_randomness[last]", |c| {
@@ -2461,8 +2465,14 @@ mod tests {
         assert_eq!(shape.unreplayed_plain[3], config.inner.terminal.num_queries);
         assert_eq!(shape.unreplayed_plain[4], config.inner.terminal.pow_bits);
 
-        assert_eq!(shape.base_case.source_queries, config.final_queries);
-        assert_eq!(shape.base_case.pow_bits, config.final_pow_bits);
+        assert_eq!(
+            shape.base_case.source_queries,
+            config.randomized_terminal.num_queries
+        );
+        assert_eq!(
+            shape.base_case.pow_bits,
+            config.randomized_terminal.pow_bits
+        );
     }
 
     #[test]

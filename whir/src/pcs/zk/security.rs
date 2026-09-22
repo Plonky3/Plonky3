@@ -35,7 +35,7 @@ where
             self.oracle_randomness[self.n_rounds()],
             final_config.domain_size >> final_config.folding_factor,
             1,
-            self.final_queries,
+            self.randomized_terminal.num_queries,
         );
 
         let mask_groups = self
@@ -64,7 +64,7 @@ where
             self.soundness_type,
             source,
             mask_groups,
-            self.final_pow_bits,
+            self.randomized_terminal.pow_bits,
         )
     }
 }
