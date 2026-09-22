@@ -5,6 +5,8 @@ use alloc::vec::Vec;
 use p3_air::{Air, BaseAir, boundary};
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
 use p3_commit::MultilinearPcs;
+#[cfg(test)]
+use p3_field::PrimeCharacteristicRing;
 use p3_field::{ExtensionField, Field};
 use p3_lookup::InteractionSymbolicBuilder;
 use p3_sumcheck::PrescribedPointPcs;
@@ -387,7 +389,6 @@ where
         forgery
             .and_then(|forgery| forgery.bus_table.as_ref())
             .map(|&(air, ref values)| {
-                use p3_field::PrimeCharacteristicRing;
                 let height = 1usize << instances.num_variables()[air];
                 let cells = values.iter().copied().map(C::Val::from_u64).collect();
                 let matrix = p3_matrix::dense::RowMajorMatrix::new(cells, height);
@@ -1682,6 +1683,78 @@ mod tests {
             ),
             Err(VerificationError::UnexpectedBus)
         ));
+    }
+
+    /// AIR whose whole content is one conditional bus declaration.
+    #[derive(Clone, Copy)]
+    struct ConditionalOnlyBusAir(BusDirection);
+
+    impl BaseAir<F> for ConditionalOnlyBusAir {
+        fn width(&self) -> usize {
+            2
+        }
+    }
+
+    impl<AB> Air<AB> for ConditionalOnlyBusAir
+    where
+        AB: BusInteractionBuilder<F = F>,
+    {
+        fn eval(&self, builder: &mut AB) {
+            let main = builder.main();
+            let row = main.current_slice();
+            let value: AB::Expr = row[0].into();
+            let selector: AB::Expr = row[1].into();
+            builder.push_bus_interaction(
+                "conditional-only",
+                self.0,
+                [value],
+                BusActivation::Boolean(selector),
+            );
+        }
+    }
+
+    #[test]
+    fn an_air_whose_only_content_is_a_conditional_declaration_is_accepted() {
+        // The activation's Booleanity check is the AIR's whole constraint family.
+        // An unconditional declaration would leave the zerocheck nothing and be refused.
+        let push = ConditionalOnlyBusAir(BusDirection::Push);
+        let pull = ConditionalOnlyBusAir(BusDirection::Pull);
+        let config = config(4, FOLDING);
+        let (pk, vk) = setup(&config, &[&push, &pull], &mut challenger()).unwrap();
+        let columns = vec![
+            F::from_u64(1),
+            F::from_u64(2),
+            F::from_u64(3),
+            F::from_u64(4),
+            F::ZERO,
+            F::ONE,
+            F::ONE,
+            F::ZERO,
+        ];
+        let table = || Table::new(RowMajorMatrix::new(columns.clone(), 4));
+
+        let proof = prove(
+            &config,
+            ProverInstances::new(vec![
+                ProverInstance::new(&push, table(), &pk, &[]),
+                ProverInstance::new(&pull, table(), &pk, &[]),
+            ]),
+            0,
+            &mut challenger(),
+        )
+        .unwrap();
+
+        verify(
+            &config,
+            VerifierInstances::new(vec![
+                VerifierInstance::new(&push, &vk, 2, &[]),
+                VerifierInstance::new(&pull, &vk, 2, &[]),
+            ]),
+            &proof,
+            0,
+            &mut challenger(),
+        )
+        .unwrap();
     }
 
     #[test]

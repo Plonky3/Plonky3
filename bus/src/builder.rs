@@ -80,9 +80,9 @@ pub trait BusInteractionBuilder: BusInteractionRecorder {
     ///
     /// A conditional activation is constrained to zero or one before it is recorded.
     ///
-    /// The declaration is reduced outside the batched zerocheck and leaves it nothing to fold.
+    /// That Booleanity check is the only thing a declaration leaves the batched zerocheck.
     ///
-    /// An AIR carrying nothing else is refused, so a provider needs a constraint of its own.
+    /// An AIR declaring nothing else, and no conditional activation either, is refused.
     ///
     /// # Arguments
     ///

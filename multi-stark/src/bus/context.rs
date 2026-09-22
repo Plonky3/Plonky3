@@ -305,11 +305,19 @@ where
             .compile_factor(block.bus, interaction, weights, offset)
             .expect("a checked bus plan compiles against its own declarations");
         // Representation-independent views read a packed Boolean table without expanding it.
-        let main_columns = tables[air].columns().collect::<Vec<_>>();
+        // Only the columns this declaration names are read, so an unread one is never decoded.
+        let main_indices = self.main_columns(air);
+        let main_columns = main_indices
+            .iter()
+            .map(|&column| tables[air].column(column))
+            .collect::<Vec<_>>();
+        let fixed_indices = self.preprocessed_columns(air);
         let fixed_columns = preprocessed[air]
             .iter()
-            .flat_map(|table| table.columns())
+            .flat_map(|table| fixed_indices.iter().map(|&column| table.column(column)))
             .collect::<Vec<_>>();
+        let main_width = tables[air].num_polys();
+        let fixed_width = preprocessed[air].map_or(0, Table::num_polys);
         let public = public_values[air];
         let height = 1usize << block.log_height;
 
@@ -319,17 +327,18 @@ where
             .map_init(
                 || {
                     (
-                        F::zero_vec(main_columns.len()),
-                        F::zero_vec(fixed_columns.len()),
+                        F::zero_vec(main_width),
+                        F::zero_vec(fixed_width),
                         Vec::new(),
                     )
                 },
                 |(main, fixed, scratch), row| {
-                    for (value, column) in main.iter_mut().zip(&main_columns) {
-                        *value = column.value(row);
+                    // Unread columns keep their zero, which no planned expression names.
+                    for (&index, column) in main_indices.iter().zip(&main_columns) {
+                        main[index] = column.value(row);
                     }
-                    for (value, column) in fixed.iter_mut().zip(&fixed_columns) {
-                        *value = column.value(row);
+                    for (&index, column) in fixed_indices.iter().zip(&fixed_columns) {
+                        fixed[index] = column.value(row);
                     }
                     factor
                         .evaluate(
