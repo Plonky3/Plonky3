@@ -106,7 +106,7 @@ impl<F> RamTrace<F> {
     }
 }
 
-impl RamStatement {
+impl<F: Field> RamTrace<F> {
     /// Builds the committed trace from the accesses a machine issued.
     ///
     /// The sorted order, the comparison witness, the clock, and the markers are derived here.
@@ -128,39 +128,36 @@ impl RamStatement {
     /// Returns an error for a read that breaks continuity.
     ///
     /// Returns an error when a continuing proof leaves a cell's first access unopened.
-    pub fn build_trace<F: Field>(
-        &self,
-        accesses: &[RamAccess<F>],
-    ) -> Result<RamTrace<F>, RamError> {
-        let layout = RamLayout::new(self)?;
+    pub fn build(statement: &RamStatement, accesses: &[RamAccess<F>]) -> Result<Self, RamError> {
+        let layout = RamLayout::new(statement)?;
 
         // Every dimension is public, so a mismatch is the caller's mistake.
-        if accesses.len() != self.access_count {
+        if accesses.len() != statement.access_count {
             return Err(RamError::AccessCount {
-                expected: self.access_count,
+                expected: statement.access_count,
                 actual: accesses.len(),
             });
         }
         for (index, access) in accesses.iter().enumerate() {
-            if access.value.len() != self.value_width {
+            if access.value.len() != statement.value_width {
                 return Err(RamError::ValueWidth {
                     index,
-                    expected: self.value_width,
+                    expected: statement.value_width,
                     actual: access.value.len(),
                 });
             }
 
             // A cell number wider than the statement has no digits to commit.
-            if u128::from(access.address) >= 1u128 << self.address_bits {
+            if u128::from(access.address) >= 1u128 << statement.address_bits {
                 return Err(RamError::AddressRange {
                     index,
                     address: access.address,
-                    address_bits: self.address_bits,
+                    address_bits: statement.address_bits,
                 });
             }
         }
 
-        let mut values = vec![F::ZERO; self.access_count * layout.width];
+        let mut values = vec![F::ZERO; statement.access_count * layout.width];
 
         // The issuing order is the order they arrived, timed by position.
         for (index, access) in accesses.iter().enumerate() {
@@ -181,14 +178,14 @@ impl RamStatement {
             // The clock adds one to this row's reading to reach the next row's.
             let mut carry = 1u64;
             row[layout.execution_carry] = F::ONE;
-            for bit in 1..self.timestamp_bits {
+            for bit in 1..statement.timestamp_bits {
                 carry &= (index as u64 >> (bit - 1)) & 1;
                 row[layout.execution_carry + bit] = F::from_bool(carry == 1);
             }
         }
 
         // Sorting goes by cell, then by time, and a time belongs to exactly one access.
-        let mut order = (0..self.access_count).collect::<Vec<_>>();
+        let mut order = (0..statement.access_count).collect::<Vec<_>>();
         order.sort_unstable_by_key(|&index| (accesses[index].address, index));
 
         for (sorted, &index) in order.iter().enumerate() {
@@ -199,7 +196,7 @@ impl RamStatement {
 
             // A cell's opening row owes something different at each kind of boundary.
             if !same_address {
-                match self.boundary {
+                match statement.boundary {
                     RamBoundary::SingleProof => {
                         if !access.write && access.value.iter().any(|&value| value != F::ZERO) {
                             return Err(RamError::ReadContinuity { index: sorted });
@@ -237,18 +234,22 @@ impl RamStatement {
             // One gap witness serves whichever of the two comparisons is running.
             if let Some(earlier) = previous {
                 let (left, right, bits) = if same_address {
-                    (earlier as u64, index as u64, self.timestamp_bits)
+                    (earlier as u64, index as u64, statement.timestamp_bits)
                 } else {
-                    (accesses[earlier].address, access.address, self.address_bits)
+                    (
+                        accesses[earlier].address,
+                        access.address,
+                        statement.address_bits,
+                    )
                 };
                 fill_comparison(row, &layout, left, right, bits);
             }
         }
 
         // A cell's run ends where the next begins, and the last row always ends one.
-        if self.boundary.is_segment() {
-            for sorted in 0..self.access_count {
-                let ends = sorted + 1 == self.access_count || {
+        if statement.boundary.is_segment() {
+            for sorted in 0..statement.access_count {
+                let ends = sorted + 1 == statement.access_count || {
                     let next = order[sorted + 1];
                     accesses[next].address != accesses[order[sorted]].address
                 };
@@ -256,7 +257,7 @@ impl RamStatement {
             }
         }
 
-        Ok(RamTrace {
+        Ok(Self {
             values,
             width: layout.width,
         })

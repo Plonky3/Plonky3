@@ -425,29 +425,34 @@ impl RamLayout {
     /// The order is operation, cell digits, clock digits, then value components.
     pub fn execution_access_columns(&self) -> impl Iterator<Item = usize> + '_ {
         // One iterator drives both the declaration and every test that checks it.
-        access_columns(
+        self.access_columns([
             self.execution_write,
             self.execution_address,
             self.execution_timestamp,
             self.execution_value,
-            self.address_bits,
-            self.timestamp_bits,
-            self.value_width,
-        )
+        ])
     }
 
     /// Columns of one sorted-order access, in payload order.
     pub fn memory_access_columns(&self) -> impl Iterator<Item = usize> + '_ {
         // Both orders share a payload order, so their fingerprints are comparable.
-        access_columns(
+        self.access_columns([
             self.memory_write,
             self.memory_address,
             self.memory_timestamp,
             self.memory_value,
-            self.address_bits,
-            self.timestamp_bits,
-            self.value_width,
-        )
+        ])
+    }
+
+    /// Columns of one access, given its operation, cell, clock, and value offsets.
+    ///
+    /// The operation marker leads, so whoever reads an access sees what it is first.
+    fn access_columns(&self, offsets: [usize; 4]) -> impl Iterator<Item = usize> {
+        let [write, address, timestamp, value] = offsets;
+        core::iter::once(write)
+            .chain(address..address + self.address_bits)
+            .chain(timestamp..timestamp + self.timestamp_bits)
+            .chain(value..value + self.value_width)
     }
 
     /// Columns of one memory-image entry, in payload order.
@@ -458,21 +463,4 @@ impl RamLayout {
         (self.memory_address..self.memory_address + self.address_bits)
             .chain(self.memory_value..self.memory_value + self.value_width)
     }
-}
-
-/// Builds one access tuple's column order from its component offsets.
-fn access_columns(
-    write: usize,
-    address: usize,
-    timestamp: usize,
-    value: usize,
-    address_bits: usize,
-    timestamp_bits: usize,
-    value_width: usize,
-) -> impl Iterator<Item = usize> {
-    // The operation marker leads, so whoever reads an access sees what it is first.
-    core::iter::once(write)
-        .chain(address..address + address_bits)
-        .chain(timestamp..timestamp + timestamp_bits)
-        .chain(value..value + value_width)
 }

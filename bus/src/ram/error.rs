@@ -40,7 +40,7 @@ pub enum RamError {
     ///
     /// Two accesses at one cell would then have no order, so a read could match either.
     #[error(
-        "mutable memory covers {access_count} accesses, but {timestamp_bits} timestamp bits count only {capacity}"
+        "mutable memory has {access_count} accesses, but {timestamp_bits} clock digits count {capacity}"
     )]
     TimestampCapacity {
         /// Access count supplied by the statement.
@@ -101,9 +101,7 @@ pub enum RamError {
         actual: usize,
     },
     /// One access names an address the statement cannot represent.
-    #[error(
-        "mutable memory access {index} uses address {address}, which needs more than {address_bits} bits"
-    )]
+    #[error("mutable memory access {index} names cell {address}, wider than {address_bits} digits")]
     AddressRange {
         /// Position of the malformed access in execution order.
         index: usize,
@@ -114,7 +112,7 @@ pub enum RamError {
     },
     /// A continuing proof touches a cell it never opened against the inherited image.
     #[error(
-        "mutable memory segment access {index} is the first at its address but is not a read that opens the group"
+        "mutable memory access {index} is the first at its cell but does not open it with a read"
     )]
     UnopenedSegmentGroup {
         /// Position of the offending access in address-then-timestamp order.
@@ -124,9 +122,7 @@ pub enum RamError {
     #[error("mutable memory needs a challenge field larger than one element")]
     TrivialChallengeField,
     /// A read returns something other than what the last write left at its cell.
-    #[error(
-        "mutable memory access {index} reads a value the preceding access at its address did not leave"
-    )]
+    #[error("mutable memory access {index} reads a value the access before it did not leave")]
     ReadContinuity {
         /// Position of the offending access in address-then-timestamp order.
         index: usize,

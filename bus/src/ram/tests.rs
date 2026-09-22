@@ -136,34 +136,36 @@ impl<AB: BusInteractionBuilder> Air<AB> for Counterparty {
 /// That is how an opening declaration is mirrored against a closing one.
 type MirroredDeclaration = (String, BusDirection, Vec<usize>, Option<(usize, bool)>);
 
-/// Builds the counterparty for one memory, mirroring every channel it declares on.
-fn counterparty(air: &RamAir) -> Counterparty {
-    let statement = air.statement();
-    let layout = air.layout();
-    let mut declarations = vec![(
-        statement.access_bus.clone(),
-        BusDirection::Push,
-        layout.execution_access_columns().collect(),
-        None,
-    )];
-    if let RamBoundary::Segment { incoming, outgoing } = &statement.boundary {
-        // The image tables sit on the opposite side of each image channel.
-        declarations.push((
-            incoming.clone(),
+impl Counterparty {
+    /// Mirrors every channel one memory declares on, from the opposite side.
+    fn mirroring(air: &RamAir) -> Self {
+        let statement = air.statement();
+        let layout = air.layout();
+        let mut declarations = vec![(
+            statement.access_bus.clone(),
             BusDirection::Push,
-            layout.image_columns().collect(),
-            Some((layout.same_address, true)),
-        ));
-        declarations.push((
-            outgoing.clone(),
-            BusDirection::Pull,
-            layout.image_columns().collect(),
-            Some((layout.group_end, false)),
-        ));
-    }
-    Counterparty {
-        width: layout.width,
-        declarations,
+            layout.execution_access_columns().collect(),
+            None,
+        )];
+        if let RamBoundary::Segment { incoming, outgoing } = &statement.boundary {
+            // The image tables sit on the opposite side of each image channel.
+            declarations.push((
+                incoming.clone(),
+                BusDirection::Push,
+                layout.image_columns().collect(),
+                Some((layout.same_address, true)),
+            ));
+            declarations.push((
+                outgoing.clone(),
+                BusDirection::Pull,
+                layout.image_columns().collect(),
+                Some((layout.group_end, false)),
+            ));
+        }
+        Self {
+            width: layout.width,
+            declarations,
+        }
     }
 }
 
@@ -188,7 +190,7 @@ fn table(trace: &RamTrace<F>) -> Table<F> {
 /// Whether a fixture image table is right is not the question here.
 fn bus_report(air: &RamAir, trace: &RamTrace<F>) -> BusDebugReport<F> {
     let memory_profile = BusSymbolicBuilder::<F, F>::from_air(air, AirLayout::from_air::<F>(air));
-    let source = counterparty(air);
+    let source = Counterparty::mirroring(air);
     let source_profile =
         BusSymbolicBuilder::<F, F>::from_air(&source, AirLayout::from_air::<F>(&source));
     let table = table(trace);
@@ -218,7 +220,7 @@ fn unbalanced(air: &RamAir, trace: &RamTrace<F>) -> Vec<String> {
 /// Builds a plan holding this memory and its counterparty, the way a machine would.
 fn plan(air: &RamAir) -> BusPlan {
     let memory_profile = BusSymbolicBuilder::<F, F>::from_air(air, AirLayout::from_air::<F>(air));
-    let source = counterparty(air);
+    let source = Counterparty::mirroring(air);
     let source_profile =
         BusSymbolicBuilder::<F, F>::from_air(&source, AirLayout::from_air::<F>(&source));
     let log_height = air.statement().access_count.trailing_zeros() as usize;
@@ -506,9 +508,8 @@ fn an_honest_memory_satisfies_every_constraint_and_balances_every_channel() {
         RamAccess::write(5, value(13)),
         RamAccess::read(2, vec![F::ZERO]),
     ];
-    let trace = statement
-        .build_trace(&accesses)
-        .expect("the fixture accesses are consistent");
+    let trace =
+        RamTrace::build(&statement, &accesses).expect("the fixture accesses are consistent");
     let air = air(statement);
 
     // Both access orders live in one matrix of the AIR's width.
@@ -525,9 +526,8 @@ fn the_execution_clock_is_the_row_index() {
     let accesses = (0..8)
         .map(|row| RamAccess::write(row, value(row + 3)))
         .collect::<Vec<_>>();
-    let trace = statement
-        .build_trace(&accesses)
-        .expect("distinct addresses need no continuity");
+    let trace =
+        RamTrace::build(&statement, &accesses).expect("distinct addresses need no continuity");
     let layout = RamLayout::new(&statement).expect("the fixture statement is well formed");
 
     // The clock is what makes timestamps unique, so it is worth reading back directly.
@@ -554,9 +554,8 @@ fn the_sorted_order_groups_addresses_and_orders_time_inside_a_group() {
         RamAccess::read(6, value(11)),
         RamAccess::read(1, value(13)),
     ];
-    let trace = statement
-        .build_trace(&accesses)
-        .expect("the fixture accesses are consistent");
+    let trace =
+        RamTrace::build(&statement, &accesses).expect("the fixture accesses are consistent");
     let layout = RamLayout::new(&statement).expect("the fixture statement is well formed");
 
     // Address 1's two accesses come first, in timestamp order, then address 6's two.
@@ -590,9 +589,8 @@ fn a_non_boolean_address_digit_is_refused() {
         RamAccess::write(3, value(13)),
         RamAccess::read(3, value(13)),
     ];
-    let mut trace = statement
-        .build_trace(&accesses)
-        .expect("the fixture accesses are consistent");
+    let mut trace =
+        RamTrace::build(&statement, &accesses).expect("the fixture accesses are consistent");
     let layout = RamLayout::new(&statement).expect("the fixture statement is well formed");
     let air = air(statement);
     assert!(air_accepts(&air, &trace));
@@ -622,9 +620,8 @@ fn a_non_boolean_timestamp_digit_is_refused() {
         RamAccess::read(5, value(11)),
         RamAccess::read(5, value(11)),
     ];
-    let mut trace = statement
-        .build_trace(&accesses)
-        .expect("the fixture accesses are consistent");
+    let mut trace =
+        RamTrace::build(&statement, &accesses).expect("the fixture accesses are consistent");
     let layout = RamLayout::new(&statement).expect("the fixture statement is well formed");
     let air = air(statement);
     assert!(air_accepts(&air, &trace));
@@ -651,9 +648,8 @@ fn a_repeated_execution_timestamp_is_refused() {
         RamAccess::read(5, value(13)),
         RamAccess::read(2, vec![F::ZERO]),
     ];
-    let mut trace = statement
-        .build_trace(&accesses)
-        .expect("the fixture accesses are consistent");
+    let mut trace =
+        RamTrace::build(&statement, &accesses).expect("the fixture accesses are consistent");
     let layout = RamLayout::new(&statement).expect("the fixture statement is well formed");
     let air = air(statement);
     assert!(air_accepts(&air, &trace));
@@ -690,9 +686,8 @@ fn splitting_one_address_into_two_groups_is_refused() {
         RamAccess::write(1, value(11)),
         RamAccess::read(1, value(11)),
     ];
-    let mut trace = statement
-        .build_trace(&accesses)
-        .expect("the fixture accesses are consistent");
+    let mut trace =
+        RamTrace::build(&statement, &accesses).expect("the fixture accesses are consistent");
     let layout = RamLayout::new(&statement).expect("the fixture statement is well formed");
     let air = air(statement.clone());
     assert!(air_accepts(&air, &trace));
@@ -740,9 +735,8 @@ fn a_wrapped_address_comparison_is_refused() {
         RamAccess::read(3, vec![F::ZERO]),
         RamAccess::read(1, vec![F::ZERO]),
     ];
-    let mut trace = statement
-        .build_trace(&accesses)
-        .expect("reads of untouched cells return zero");
+    let mut trace =
+        RamTrace::build(&statement, &accesses).expect("reads of untouched cells return zero");
     let layout = RamLayout::new(&statement).expect("the fixture statement is well formed");
     let air = air(statement.clone());
     assert!(air_accepts(&air, &trace));
@@ -792,8 +786,7 @@ fn a_read_placed_before_the_write_it_should_see_is_refused() {
         RamAccess::read(1, value(13)),
         RamAccess::read(2, vec![F::ZERO]),
     ];
-    let mut trace = statement
-        .build_trace(&accesses)
+    let mut trace = RamTrace::build(&statement, &accesses)
         .expect("the read returns the value the last write left");
     let layout = RamLayout::new(&statement).expect("the fixture statement is well formed");
     let air = air(statement.clone());
@@ -836,9 +829,8 @@ fn a_read_that_ignores_the_last_write_is_refused() {
         RamAccess::write(1, value(11)),
         RamAccess::read(1, value(11)),
     ];
-    let mut trace = statement
-        .build_trace(&accesses)
-        .expect("the fixture accesses are consistent");
+    let mut trace =
+        RamTrace::build(&statement, &accesses).expect("the fixture accesses are consistent");
     let layout = RamLayout::new(&statement).expect("the fixture statement is well formed");
     let air = air(statement);
     assert!(air_accepts(&air, &trace));
@@ -866,7 +858,7 @@ fn a_read_of_an_untouched_cell_must_return_zero() {
         RamAccess::read(2, vec![F::ZERO]),
     ];
     assert_eq!(
-        statement.build_trace(&accesses),
+        RamTrace::build(&statement, &accesses),
         Err(RamError::ReadContinuity { index: 0 })
     );
 
@@ -875,9 +867,8 @@ fn a_read_of_an_untouched_cell_must_return_zero() {
         RamAccess::read(1, vec![F::ZERO]),
         RamAccess::read(2, vec![F::ZERO]),
     ];
-    let mut trace = statement
-        .build_trace(&honest)
-        .expect("reads of untouched cells return zero");
+    let mut trace =
+        RamTrace::build(&statement, &honest).expect("reads of untouched cells return zero");
     let layout = RamLayout::new(&statement).expect("the fixture statement is well formed");
     let air = air(statement);
     assert!(air_accepts(&air, &trace));
@@ -901,9 +892,8 @@ fn the_permutation_is_what_catches_an_access_the_machine_never_issued() {
         RamAccess::write(1, value(11)),
         RamAccess::read(1, value(11)),
     ];
-    let mut trace = statement
-        .build_trace(&accesses)
-        .expect("the fixture accesses are consistent");
+    let mut trace =
+        RamTrace::build(&statement, &accesses).expect("the fixture accesses are consistent");
     let layout = RamLayout::new(&statement).expect("the fixture statement is well formed");
     let air = air(statement);
 
@@ -931,9 +921,7 @@ fn a_segment_opens_every_address_group_against_the_incoming_image() {
         RamAccess::read(2, value(17)),
         RamAccess::read(2, value(17)),
     ];
-    let trace = statement
-        .build_trace(&accesses)
-        .expect("every group opens with a read");
+    let trace = RamTrace::build(&statement, &accesses).expect("every group opens with a read");
     let layout = RamLayout::new(&statement).expect("the fixture statement is well formed");
     let air = air(statement);
 
@@ -971,7 +959,7 @@ fn a_segment_group_opened_by_a_write_is_refused() {
         RamAccess::read(1, value(11)),
     ];
     assert_eq!(
-        statement.build_trace(&accesses),
+        RamTrace::build(&statement, &accesses),
         Err(RamError::UnopenedSegmentGroup { index: 0 })
     );
 
@@ -980,9 +968,7 @@ fn a_segment_group_opened_by_a_write_is_refused() {
         RamAccess::read(1, value(11)),
         RamAccess::write(1, value(13)),
     ];
-    let mut trace = statement
-        .build_trace(&honest)
-        .expect("the group opens with a read");
+    let mut trace = RamTrace::build(&statement, &honest).expect("the group opens with a read");
     let layout = RamLayout::new(&statement).expect("the fixture statement is well formed");
     let air = air(statement);
     assert!(air_accepts(&air, &trace));
@@ -1001,9 +987,7 @@ fn a_segment_group_opened_by_a_write_is_refused() {
 fn a_forged_group_marker_is_refused() {
     let statement = segment(2, 2, 1);
     let accesses = vec![RamAccess::read(1, value(11)), RamAccess::read(1, value(11))];
-    let mut trace = statement
-        .build_trace(&accesses)
-        .expect("the group opens with a read");
+    let mut trace = RamTrace::build(&statement, &accesses).expect("the group opens with a read");
     let layout = RamLayout::new(&statement).expect("the fixture statement is well formed");
     let air = air(statement);
     assert!(air_accepts(&air, &trace));
@@ -1126,7 +1110,7 @@ fn witness_generation_refuses_a_witness_that_does_not_match_the_statement() {
 
     // The access count is public, so a mismatch is the caller's mistake.
     assert_eq!(
-        statement.build_trace::<F>(&[]),
+        RamTrace::<F>::build(&statement, &[]),
         Err(RamError::AccessCount {
             expected: 2,
             actual: 0
@@ -1135,10 +1119,13 @@ fn witness_generation_refuses_a_witness_that_does_not_match_the_statement() {
 
     // So is the value width.
     assert_eq!(
-        statement.build_trace(&[
-            RamAccess::read(0, vec![F::ZERO, F::ZERO]),
-            RamAccess::read(1, vec![F::ZERO]),
-        ]),
+        RamTrace::build(
+            &statement,
+            &[
+                RamAccess::read(0, vec![F::ZERO, F::ZERO]),
+                RamAccess::read(1, vec![F::ZERO]),
+            ]
+        ),
         Err(RamError::ValueWidth {
             index: 0,
             expected: 1,
@@ -1148,10 +1135,13 @@ fn witness_generation_refuses_a_witness_that_does_not_match_the_statement() {
 
     // An address wider than the statement has no bit decomposition to commit.
     assert_eq!(
-        statement.build_trace(&[
-            RamAccess::read(0, vec![F::ZERO]),
-            RamAccess::read(9, vec![F::ZERO]),
-        ]),
+        RamTrace::build(
+            &statement,
+            &[
+                RamAccess::read(0, vec![F::ZERO]),
+                RamAccess::read(9, vec![F::ZERO]),
+            ]
+        ),
         Err(RamError::AddressRange {
             index: 1,
             address: 9,
@@ -1161,10 +1151,13 @@ fn witness_generation_refuses_a_witness_that_does_not_match_the_statement() {
 
     // And a read that ignores the last write is named before any constraint runs.
     assert_eq!(
-        statement.build_trace(&[
-            RamAccess::write(1, value(11)),
-            RamAccess::read(1, value(13)),
-        ]),
+        RamTrace::build(
+            &statement,
+            &[
+                RamAccess::write(1, value(11)),
+                RamAccess::read(1, value(13)),
+            ]
+        ),
         Err(RamError::ReadContinuity { index: 1 })
     );
 }
@@ -1173,8 +1166,7 @@ fn witness_generation_refuses_a_witness_that_does_not_match_the_statement() {
 fn the_smallest_memory_proves_and_balances() {
     // One access to one cell of one bit is the smallest legal statement.
     let statement = single_proof(1, 1, 1);
-    let trace = statement
-        .build_trace(&[RamAccess::write(1, value(11))])
+    let trace = RamTrace::build(&statement, &[RamAccess::write(1, value(11))])
         .expect("a single write needs no continuity");
     let air = air(statement);
 
@@ -1198,9 +1190,8 @@ fn a_wide_memory_keeps_every_value_component() {
         RamAccess::write(40, word(21)),
         RamAccess::read(40, word(21)),
     ];
-    let trace = statement
-        .build_trace(&accesses)
-        .expect("the fixture accesses are consistent");
+    let trace =
+        RamTrace::build(&statement, &accesses).expect("the fixture accesses are consistent");
     let air = air(statement);
 
     assert!(air_accepts(&air, &trace));
@@ -1267,9 +1258,8 @@ fn the_constraints_hold_over_an_odd_characteristic_field_too() {
         RamAccess::read(3, word(17)),
         RamAccess::read(6, word(13)),
     ];
-    let trace = statement
-        .build_trace(&accesses)
-        .expect("the fixture accesses are consistent");
+    let trace =
+        RamTrace::build(&statement, &accesses).expect("the fixture accesses are consistent");
     let air = air(statement);
     let layout = air.layout();
 
@@ -1331,9 +1321,7 @@ fn a_long_random_schedule_proves_and_balances() {
             }
         })
         .collect::<Vec<_>>();
-    let trace = statement
-        .build_trace(&accesses)
-        .expect("the schedule tracks its own memory");
+    let trace = RamTrace::build(&statement, &accesses).expect("the schedule tracks its own memory");
     let air = air(statement);
 
     assert!(air_accepts(&air, &trace));
@@ -1359,9 +1347,8 @@ fn an_execution_clock_that_does_not_start_at_zero_is_refused() {
         RamAccess::write(1, value(11)),
         RamAccess::read(1, value(11)),
     ];
-    let honest = statement
-        .build_trace(&accesses)
-        .expect("the read returns what the write left");
+    let honest =
+        RamTrace::build(&statement, &accesses).expect("the read returns what the write left");
     let layout = RamLayout::new(&statement).expect("the fixture statement is well formed");
     let air = air(statement.clone());
     assert!(air_accepts(&air, &honest));
@@ -1432,9 +1419,8 @@ fn a_group_continued_at_a_different_address_is_refused() {
         RamAccess::write(1, value(11)),
         RamAccess::read(2, vec![F::ZERO]),
     ];
-    let mut trace = statement
-        .build_trace(&accesses)
-        .expect("a read of an untouched cell returns zero");
+    let mut trace =
+        RamTrace::build(&statement, &accesses).expect("a read of an untouched cell returns zero");
     let layout = RamLayout::new(&statement).expect("the fixture statement is well formed");
     let air = air(statement);
     assert!(air_accepts(&air, &trace));
@@ -1486,9 +1472,7 @@ fn the_first_sorted_row_cannot_claim_to_continue_a_group() {
     // In segment mode the group flag gates the pull against the incoming image.
     let statement = segment(2, 2, 1);
     let accesses = vec![RamAccess::read(1, value(11)), RamAccess::read(1, value(11))];
-    let mut trace = statement
-        .build_trace(&accesses)
-        .expect("the group opens with a read");
+    let mut trace = RamTrace::build(&statement, &accesses).expect("the group opens with a read");
     let layout = RamLayout::new(&statement).expect("the fixture statement is well formed");
     let air = air(statement);
     assert!(air_accepts(&air, &trace));
@@ -1507,7 +1491,7 @@ fn the_first_sorted_row_cannot_claim_to_continue_a_group() {
 
     // The first row always opens a run.
     //
-    // Letting it say otherwise would skip the inherited image and let it invent what it starts from.
+    // Letting it say otherwise would skip the inherited image, so it could invent its start.
     assert!(!air_accepts(&air, &trace));
 }
 
@@ -1529,9 +1513,8 @@ fn every_derived_witness_column_is_pinned_by_its_own_identity() {
         RamAccess::write(2, value(13)),
         RamAccess::read(2, value(13)),
     ];
-    let honest = statement
-        .build_trace(&accesses)
-        .expect("the fixture accesses are consistent");
+    let honest =
+        RamTrace::build(&statement, &accesses).expect("the fixture accesses are consistent");
     let layout = RamLayout::new(&statement).expect("the fixture statement is well formed");
     let air = air(statement);
     assert!(air_accepts(&air, &honest));
@@ -1585,9 +1568,7 @@ fn a_clock_whose_carry_chain_is_chosen_freely_can_repeat_a_timestamp() {
     let accesses = (0..4)
         .map(|cell| RamAccess::write(cell, value(cell + 11)))
         .collect::<Vec<_>>();
-    let honest = statement
-        .build_trace(&accesses)
-        .expect("distinct cells need no continuity");
+    let honest = RamTrace::build(&statement, &accesses).expect("distinct cells need no continuity");
     let layout = RamLayout::new(&statement).expect("the fixture statement is well formed");
     let air = air(statement.clone());
     assert!(air_accepts(&air, &honest));
@@ -1688,14 +1669,13 @@ fn the_plan_reduction_proves_the_two_orders_hold_the_same_accesses() {
         RamAccess::write(5, value(13)),
         RamAccess::read(2, vec![F::ZERO]),
     ];
-    let honest = statement
-        .build_trace(&accesses)
-        .expect("the fixture accesses are consistent");
+    let honest =
+        RamTrace::build(&statement, &accesses).expect("the fixture accesses are consistent");
     let air = air(statement);
     let layout = air.layout();
 
     let memory_profile = BusSymbolicBuilder::<F, F>::from_air(&air, AirLayout::from_air::<F>(&air));
-    let source = counterparty(&air);
+    let source = Counterparty::mirroring(&air);
     let source_profile =
         BusSymbolicBuilder::<F, F>::from_air(&source, AirLayout::from_air::<F>(&source));
     let profiles = [&memory_profile, &source_profile];
