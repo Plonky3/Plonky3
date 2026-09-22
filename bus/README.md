@@ -4,6 +4,14 @@ Field-generic primitives for a direction-aware multiset bus.
 
 The crate plans mixed-height bus layouts, materializes fingerprint factors, reduces their products with GKR, and prepares read-only memory checks.
 
+It also carries a mutable read-write memory argument. Two access orders, one in execution order
+and one sorted by address and then time, live in a single committed trace. `RamAir` constrains the
+sorted order: address and timestamp bits, a unique non-wrapping execution clock, unsigned address
+and timestamp order, read continuity, write updates, and the boundary its `RamBoundary` names. The
+permutation between the two orders and the binding to the machine's own accesses are ordinary
+named-bus claims, so the plan's existing multiset balance discharges both and no second memory
+protocol is introduced. Static indexed tables keep the lookup path they already had.
+
 Its debugger replays symbolic declarations and reports unmatched tuples with their source rows.
 
 The standalone reduction returns unauthenticated terminal claims.

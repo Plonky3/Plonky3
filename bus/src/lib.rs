@@ -3,6 +3,9 @@
 
 extern crate alloc;
 
+#[cfg(test)]
+extern crate std;
+
 mod argument;
 mod builder;
 #[cfg(feature = "diagnostics")]
@@ -14,6 +17,7 @@ mod multilinear;
 mod name;
 mod plan;
 mod product;
+mod ram;
 mod security;
 
 pub use argument::{BusArgumentError, BusChallenges, BusProof, BusReductionOutput};
@@ -41,4 +45,7 @@ pub use plan::{
 pub use product::{
     ProductGkrError, ProductGkrLayerProof, ProductGkrOutput, ProductGkrProof, ProductGkrRootShape,
     ProductGkrShape, ProductGkrShapeError,
+};
+pub use ram::{
+    MAX_RAM_BIT_WIDTH, RamAccess, RamAir, RamBoundary, RamError, RamLayout, RamStatement, RamTrace,
 };
