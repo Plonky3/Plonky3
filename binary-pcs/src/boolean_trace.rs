@@ -217,15 +217,16 @@ where
         Ok(placements)
     }
 
-    /// The bit claims one opening protocol raises, in transcript order.
+    /// The bit claims the per-column route raises, in transcript order.
     ///
     /// One claim per column a batch reads, that batch's point prefixed by the slot address,
     /// asking for whichever readings the claim's entry in the plan names.
-    fn opening_claims(
+    fn bit_openings(
         protocol: &OpeningProtocol,
+        claims: &[ColumnClaim],
         points: &[Point<EF>],
         placements: &[TablePlacement],
-    ) -> (Vec<ColumnClaim>, Vec<BitOpening<EF>>) {
+    ) -> Vec<BitOpening<EF>> {
         let shapes = protocol.table_shapes();
 
         // Placements arrive largest table first, so index them by the table each one owns.
@@ -234,8 +235,7 @@ where
             by_table[placement.idx()] = Some(placement);
         }
 
-        let claims = column_claims(protocol);
-        let openings = claims
+        claims
             .iter()
             .map(|claim| {
                 let placement =
@@ -249,8 +249,7 @@ where
                     next: claim.next_at.is_some(),
                 }
             })
-            .collect();
-        (claims, openings)
+            .collect()
     }
 
     /// Validate all public opening metadata without constructing per-column claims.
@@ -302,37 +301,6 @@ where
             }
         }
         Ok(())
-    }
-
-    /// The width and views of the complete single-table shape the optimized route handles.
-    ///
-    /// Every batch reads the whole width at the current row, and either none of it or all
-    /// of it one row ahead, the same way in every batch.
-    fn batched_shape(&self, protocol: &OpeningProtocol) -> Option<(usize, bool)> {
-        let shapes = protocol.table_shapes();
-        if shapes.len() != 1 || protocol.num_openings() == 0 {
-            return None;
-        }
-        let width = shapes[0].width();
-        let columns = (0..width).collect::<Vec<_>>();
-        // The first batch fixes the views, and every other batch has to agree with it.
-        let next = protocol
-            .iter_openings()
-            .next()
-            .is_some_and(|(_, batch)| !batch.next().is_empty());
-        let complete = |read: &[usize], asked: bool| {
-            if asked {
-                read == columns.as_slice()
-            } else {
-                read.is_empty()
-            }
-        };
-        protocol
-            .iter_openings()
-            .all(|(table, batch)| {
-                table == 0 && complete(batch.current(), true) && complete(batch.next(), next)
-            })
-            .then_some((width, next))
     }
 
     /// Evaluate every column at one row point, and, when `next` holds, one row ahead of it.
@@ -652,6 +620,81 @@ fn pack_word<EF: Field>(cells: &[EF]) -> Option<u64> {
         .enumerate()
         .try_fold(0u64, |word, (lane, &value)| {
             Some(word | (bit_of(value)? << lane))
+        })
+}
+
+/// How one opening protocol is discharged against the bit commitment.
+///
+/// A function of the protocol alone: the security assessment, the prover and the verifier
+/// read the same resolution.
+#[derive(Clone, Debug)]
+enum OpeningRoute {
+    /// One table, every batch reading all of it at the current row and either none or all of
+    /// it one row ahead: one reduction per batch, over one shared column point.
+    Batched(ColumnBatchShape),
+    /// Any other protocol: one reduction per column read, in transcript order.
+    PerColumn(Vec<ColumnClaim>),
+}
+
+impl OpeningRoute {
+    /// Resolve the route a protocol takes.
+    fn new(protocol: &OpeningProtocol) -> Self {
+        batched_shape(protocol)
+            .map_or_else(|| Self::PerColumn(column_claims(protocol)), Self::Batched)
+    }
+
+    /// Reductions the bit commitment answers on this route.
+    const fn num_reductions(&self) -> usize {
+        match self {
+            Self::Batched(shape) => shape.num_batches,
+            Self::PerColumn(claims) => claims.len(),
+        }
+    }
+
+    /// Whether some reduction reads a successor view over more rows than one element absorbs.
+    fn successor_tensors(&self, shapes: &[TableShape], absorbed: usize) -> bool {
+        match self {
+            Self::Batched(shape) => shape.next && shape.table_variables > absorbed,
+            Self::PerColumn(claims) => claims.iter().any(|claim| {
+                claim.next_at.is_some() && shapes[claim.table].num_variables() > absorbed
+            }),
+        }
+    }
+}
+
+/// The complete single-table shape the batched route handles, if the protocol has one.
+///
+/// Every batch reads the whole width at the current row, and either none of it or all
+/// of it one row ahead, the same way in every batch.
+fn batched_shape(protocol: &OpeningProtocol) -> Option<ColumnBatchShape> {
+    let shapes = protocol.table_shapes();
+    if shapes.len() != 1 || protocol.num_openings() == 0 {
+        return None;
+    }
+    let width = shapes[0].width();
+    let columns = (0..width).collect::<Vec<_>>();
+    // The first batch fixes the views, and every other batch has to agree with it.
+    let next = protocol
+        .iter_openings()
+        .next()
+        .is_some_and(|(_, batch)| !batch.next().is_empty());
+    let complete = |read: &[usize], asked: bool| {
+        if asked {
+            read == columns.as_slice()
+        } else {
+            read.is_empty()
+        }
+    };
+    protocol
+        .iter_openings()
+        .all(|(table, batch)| {
+            table == 0 && complete(batch.current(), true) && complete(batch.next(), next)
+        })
+        .then(|| ColumnBatchShape {
+            table_variables: shapes[0].num_variables(),
+            width,
+            num_batches: protocol.num_openings(),
+            next,
         })
 }
 
@@ -1062,31 +1105,22 @@ where
         }
         // A reduction sends carry and last once its successor view outruns one element.
         let absorbed = BitRingSwitch::<EF>::ABSORBED;
-        self.batched_shape(protocol).map_or_else(
-            || {
-                let claims = column_claims(protocol);
-                let successor_tensors = claims.iter().any(|claim| {
-                    claim.next_at.is_some() && shapes[claim.table].num_variables() > absorbed
-                });
-                self.inner
-                    .readings_security(claims.len(), successor_tensors)
-            },
-            |(width, next)| {
-                let batches = protocol.num_openings();
-                // Both combined claims of a batch read one column point, so each is charged.
-                let views = 1 + usize::from(next);
-                let k = width.next_power_of_two().trailing_zeros() as usize;
-                let successor_tensors = next && shapes[0].num_variables() > absorbed;
-                let mut security = self.inner.readings_security(batches, successor_tensors)?;
-                // The batching challenge is drawn before any candidate has been named.
-                security.charge_reduction(p3_security::multilinear::column_batch_term(
-                    batches * views,
-                    k,
-                    EF::bits(),
-                ));
-                Some(security)
-            },
-        )
+        let route = OpeningRoute::new(protocol);
+        let mut security = self.inner.readings_security(
+            route.num_reductions(),
+            route.successor_tensors(&shapes, absorbed),
+        )?;
+        if let OpeningRoute::Batched(shape) = route {
+            // Both combined claims of a batch read one column point, so each is charged.
+            //
+            // The batching challenge is drawn before any candidate has been named.
+            security.charge_reduction(p3_security::multilinear::column_batch_term(
+                shape.num_batches * shape.num_views(),
+                shape.column_variables(),
+                EF::bits(),
+            ));
+        }
+        Some(security)
     }
 
     fn open_at(
@@ -1099,24 +1133,22 @@ where
         // Every shape and every point is checked before the transcript moves.
         Self::validate_source_shapes(&prover_data.tables, protocol)?;
         let placements = self.validate_opening(protocol, points)?;
-        let Some((width, next)) = self.batched_shape(protocol) else {
-            let (claims, openings) = Self::opening_claims(protocol, points, &placements);
-            let (readings, opening) = self
-                .inner
-                .open_readings(prover_data.inner, &openings, challenger)
-                .map_err(BooleanTraceCommitmentError::Boolean)?;
-            let values = claim_values(&claims, &readings, value_count(protocol));
-            return Ok(BooleanTraceCommitmentProof { values, opening });
+        let shape = match OpeningRoute::new(protocol) {
+            OpeningRoute::PerColumn(claims) => {
+                let openings = Self::bit_openings(protocol, &claims, points, &placements);
+                let (readings, opening) = self
+                    .inner
+                    .open_readings(prover_data.inner, &openings, challenger)
+                    .map_err(BooleanTraceCommitmentError::Boolean)?;
+                let values = claim_values(&claims, &readings, value_count(protocol));
+                return Ok(BooleanTraceCommitmentProof { values, opening });
+            }
+            OpeningRoute::Batched(shape) => shape,
         };
 
         let BooleanTraceCommitmentData { inner, tables } = prover_data;
-        let shape = ColumnBatchShape {
-            table_variables: protocol.table_shapes()[0].num_variables(),
-            width,
-            num_batches: protocol.num_openings(),
-            next,
-        };
-        let run = width * (1 + usize::from(next));
+        let ColumnBatchShape { width, next, .. } = shape;
+        let run = shape.values_per_batch();
         let mut values = Vec::with_capacity(run * shape.num_batches);
         tracing::info_span!("evaluate boolean columns", width, next).in_scope(|| {
             for point in points {
@@ -1183,29 +1215,27 @@ where
             });
         }
 
-        let Some((width, next)) = self.batched_shape(protocol) else {
-            let (claims, openings) = Self::opening_claims(protocol, points, &placements);
+        let shape = match OpeningRoute::new(protocol) {
+            OpeningRoute::PerColumn(claims) => {
+                let openings = Self::bit_openings(protocol, &claims, points, &placements);
 
-            // One bit proof answers for every column of every batch at once.
-            self.inner
-                .verify_readings(
-                    commitment,
-                    &openings,
-                    &claim_readings(&claims, &proof.values),
-                    &proof.opening,
-                    challenger,
-                )
-                .map_err(BooleanTraceCommitmentError::Boolean)?;
-            return Ok(opening_evals(protocol, &proof.values));
+                // One bit proof answers for every column of every batch at once.
+                self.inner
+                    .verify_readings(
+                        commitment,
+                        &openings,
+                        &claim_readings(&claims, &proof.values),
+                        &proof.opening,
+                        challenger,
+                    )
+                    .map_err(BooleanTraceCommitmentError::Boolean)?;
+                return Ok(opening_evals(protocol, &proof.values));
+            }
+            OpeningRoute::Batched(shape) => shape,
         };
 
-        let shape = ColumnBatchShape {
-            table_variables: protocol.table_shapes()[0].num_variables(),
-            width,
-            num_batches: protocol.num_openings(),
-            next,
-        };
-        let run = width * (1 + usize::from(next));
+        let ColumnBatchShape { width, next, .. } = shape;
+        let run = shape.values_per_batch();
         let mut transcript = ColumnBatchVerifierTranscript::new(challenger, shape);
         let mut openings = Vec::with_capacity(shape.num_batches);
         let mut readings = Vec::with_capacity(shape.num_batches);
@@ -1922,6 +1952,70 @@ mod tests {
 
         assert_eq!(proof.values.len(), 3);
         assert_eq!(proof.opening.reductions.len(), 1);
+    }
+
+    #[test]
+    fn each_route_emits_the_reductions_its_plan_counts() {
+        // Invariant: the route a protocol resolves to counts exactly the reductions its proof
+        // carries, so the security charge and the opening read one resolution.
+        //
+        //     every column, current row              batched      1 reduction
+        //     every column, both rows, two batches   batched      2 reductions
+        //     current [2, 0]                         per column   2 reductions
+        //     current [0, 1, 2], next [1]            per column   3 reductions
+        //     two tables, every column               per column   3 + 2 reductions
+        let shape = TableShape::new(8, 3);
+        let two_tables = [shape, TableShape::new(6, 2)];
+        let reordered = OpeningProtocol::new(vec![TableSpec::new(
+            shape,
+            vec![OpeningBatch::new(vec![2, 0], Vec::new())],
+        )]);
+        for (shapes, protocol, batched, reductions, seed) in [
+            (vec![shape], protocol(&[shape]), true, 1, 0xB700),
+            (vec![shape], both_views_protocol(shape, 2), true, 2, 0xB710),
+            (vec![shape], reordered, false, 2, 0xB720),
+            (
+                vec![shape],
+                successor_protocol(&[shape], &[1]),
+                false,
+                3,
+                0xB730,
+            ),
+            (two_tables.to_vec(), protocol(&two_tables), false, 5, 0xB740),
+        ] {
+            let route = OpeningRoute::new(&protocol);
+            assert_eq!(
+                matches!(route, OpeningRoute::Batched(_)),
+                batched,
+                "{seed:#x}"
+            );
+            assert_eq!(route.num_reductions(), reductions, "{seed:#x}");
+
+            let scheme = pcs(&shapes);
+            let tables = shapes
+                .iter()
+                .enumerate()
+                .map(|(index, shape)| {
+                    table_with_width(seed + index as u64, shape.num_variables(), shape.width())
+                })
+                .collect();
+            let mut rng = SmallRng::seed_from_u64(seed + 0xF);
+            let points = protocol
+                .iter_openings()
+                .map(|(table, _)| Point::<EF>::rand(&mut rng, shapes[table].num_variables()))
+                .collect::<Vec<_>>();
+
+            let mut prover_chal = challenger();
+            let (_, data) = scheme.commit(tables, &mut prover_chal).unwrap();
+            let proof = scheme
+                .open_at(data, &protocol, &points, &mut prover_chal)
+                .unwrap();
+            assert_eq!(
+                proof.opening.reductions.len(),
+                route.num_reductions(),
+                "{seed:#x}"
+            );
+        }
     }
 
     #[test]
