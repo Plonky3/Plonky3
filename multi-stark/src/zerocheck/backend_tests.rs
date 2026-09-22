@@ -9,6 +9,7 @@ use alloc::borrow::Cow;
 use alloc::collections::BTreeMap;
 use alloc::vec;
 use alloc::vec::Vec;
+use core::cell::Cell;
 
 use p3_air::{Air, AirBuilder, BaseAir, BoundaryEnd, BoundaryPublic, WindowAccess};
 use p3_binary_field::{BinaryChallenger, BinaryField2, BinaryField128, Ghash128, TowerLevel};
@@ -30,7 +31,7 @@ use crate::config::DEFAULT_SLICED_ROUNDS;
 use crate::lookup::{
     ActiveLookupRuntime, AirLinkClaim, AirLinkInstance, AirLinkLookup, LookupRuntime,
 };
-use crate::rounds::sliced::MAX_SLICED_ROUNDS;
+use crate::rounds::sliced::{LATE_BOUNDARY_ROUNDS, MAX_SLICED_ROUNDS};
 use crate::sliced::SLICED_LANES;
 
 /// The trace and challenge field of every fixture.
@@ -1227,6 +1228,40 @@ fn representation_tensor4_matches_generic_at_two_eligible_heights() {
     let repr =
         transcript::<ReprBackend<Gf4, PolyBasis>>(&instances, LookupRuntime::Inactive, 0, false);
     assert_eq!(repr, generic, "two eligible tensor4 activation heights");
+}
+
+/// How many delayed rounds the planes serve over one proof through `B`'s dispatch.
+///
+/// The round loop runs on the calling thread, so only this proof moves the thread's counter.
+fn late_boundary_rounds<B>(instances: &[Instance]) -> usize
+where
+    B: ZerocheckBackend<Tower, Tower, FixtureAir>,
+{
+    let before = LATE_BOUNDARY_ROUNDS.with(Cell::get);
+    let _ = transcript::<B>(instances, LookupRuntime::Inactive, 0, false);
+    LATE_BOUNDARY_ROUNDS.with(Cell::get) - before
+}
+
+#[test]
+fn only_the_late_backend_dispatch_serves_round_four_from_the_planes() {
+    // The late transcript is the incumbent's by construction, so only the counter tells them apart.
+    let floor = [Instance::honest(FixtureAir::Pair, 1 << 11, 0x007E_5050)];
+    assert_eq!(
+        late_boundary_rounds::<ReprBackend<Gf4, PolyBasis, true>>(&floor),
+        1,
+        "the late backend serves round four of a stage on the floor from its planes"
+    );
+    assert_eq!(
+        late_boundary_rounds::<ReprBackend<Gf4, PolyBasis>>(&floor),
+        0,
+        "the incumbent backend never takes the delayed round"
+    );
+    let short = [Instance::honest(FixtureAir::Pair, 1 << 10, 0x007E_5051)];
+    assert_eq!(
+        late_boundary_rounds::<ReprBackend<Gf4, PolyBasis, true>>(&short),
+        0,
+        "a stage below the floor refuses the delayed round"
+    );
 }
 
 #[test]

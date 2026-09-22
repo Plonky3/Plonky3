@@ -20,6 +20,9 @@
 //! `C` has degree at most `d` in each variable, so `d + 1` nodes interpolate it exactly.
 //! Every value is the one the generic kernel computes, so the round polynomial is the same.
 
+#[cfg(test)]
+extern crate std;
+
 use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
@@ -78,6 +81,16 @@ const LANE_VARIABLES: usize = SLICED_LANES.trailing_zeros() as usize;
 /// word of residual rows. Its round-four evaluation binds one challenge fewer, which must leave
 /// a whole word pair. Either way the stage needs [`LANE_VARIABLES`] past the fold's prefix.
 const MIN_LATE_BOUNDARY_VARS: usize = MAX_PLANE_FOLD_ROUNDS + LANE_VARIABLES;
+
+#[cfg(test)]
+std::thread_local! {
+    /// Delayed boundary rounds the planes have served on this thread.
+    ///
+    /// A proof's round loop runs on the thread that calls it, so a test reads this around one
+    /// proof to see whether the dispatch took the delayed round.
+    pub(crate) static LATE_BOUNDARY_ROUNDS: core::cell::Cell<usize> =
+        const { core::cell::Cell::new(0) };
+}
 
 /// A stage's cells as bit planes, laid out word by word.
 pub(super) struct SlicedTrace {
@@ -1981,6 +1994,8 @@ where
             return None;
         }
         let _span = tracing::debug_span!("round_poly_late_boundary").entered();
+        #[cfg(test)]
+        LATE_BOUNDARY_ROUNDS.with(|rounds| rounds.set(rounds.get() + 1));
         Some(self.round_poly_planes::<S>(eq_suffix))
     }
 
