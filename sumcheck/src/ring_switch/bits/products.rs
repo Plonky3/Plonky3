@@ -67,13 +67,12 @@ impl<'a, EF: TowerLevel> LeftFactors<'a, EF> {
     }
 }
 
-/// The bit-block product, on a target with `8 x 8` bit-matrix multiplication and byte permutes.
+/// The bit-block product, on a target with `8 x 8` bit-matrix multiplication and wide registers.
 #[cfg(all(
     target_arch = "x86_64",
     target_feature = "gfni",
     target_feature = "avx512f",
-    target_feature = "avx512bw",
-    target_feature = "avx512vbmi"
+    target_feature = "avx512bw"
 ))]
 mod kernel {
     use alloc::vec::Vec;
@@ -93,33 +92,74 @@ mod kernel {
     /// Quadword whose byte `i` is `1 << (7 - i)`, the transpose with its bytes reversed.
     const REVERSED: u64 = 0x0102_0408_1020_4080;
 
-    /// The byte gather of one half of eight elements, one quadword per byte position.
+    /// The quadword gather of one half of eight elements, quadword `t` from element `t`.
     ///
-    /// Two registers hold the eight elements in memory order, four to a register, so element
-    /// `t` spans bytes `16t .. 16t + 16` of the pair. Byte `t` of quadword `lane` takes byte
-    /// `8 * half + lane` of element `t`:
-    ///
-    /// ```text
-    ///     quadword lane  =  (e_0[8h + lane], e_1[8h + lane], .., e_7[8h + lane])
-    /// ```
-    const fn gather(half: usize) -> [i64; 8] {
+    /// Two registers hold the eight elements in memory order, four to a register, so quadword
+    /// `half` of element `t` is quadword `2t + half` of the pair. Elements `2k` and `2k + 1`
+    /// then share the 128-bit lane `k`.
+    const fn halves(half: usize) -> [i64; 8] {
         let mut quadwords = [0i64; 8];
-        let mut lane = 0;
-        while lane < 8 {
-            let mut word = 0u64;
-            let mut t = 0;
-            while t < GROUP {
-                word |= ((16 * t + 8 * half + lane) as u64) << (8 * t);
-                t += 1;
-            }
-            quadwords[lane] = word as i64;
-            lane += 1;
+        let mut t = 0;
+        while t < GROUP {
+            quadwords[t] = (2 * t + half) as i64;
+            t += 1;
         }
         quadwords
     }
 
-    /// The gathers of the low and the high eight bytes.
-    const GATHERS: [[i64; 8]; 2] = [gather(0), gather(1)];
+    /// The quadword gathers of the low and the high eight bytes.
+    const HALVES: [[i64; 8]; 2] = [halves(0), halves(1)];
+
+    /// The in-lane byte shuffle interleaving a lane's two quadwords, byte `j` of each together.
+    ///
+    /// Word `j` of lane `k` is then `(e_2k[j], e_2k+1[j])`, the two bytes the output keeps side
+    /// by side.
+    const fn interleave() -> [i64; 8] {
+        let mut quadwords = [0i64; 8];
+        let mut q = 0;
+        while q < 8 {
+            let mut word = 0u64;
+            let mut byte = 0;
+            while byte < 8 {
+                // Byte `b` of the lane takes byte `b / 2` of its first or its second quadword.
+                let b = 8 * (q % 2) + byte;
+                word |= ((b / 2 + 8 * (b % 2)) as u64) << (8 * byte);
+                byte += 1;
+            }
+            quadwords[q] = word as i64;
+            q += 1;
+        }
+        quadwords
+    }
+
+    /// See [`interleave`].
+    const INTERLEAVE: [i64; 8] = interleave();
+
+    /// The word permute taking word `j` of lane `k` to word `k` of quadword `j`.
+    ///
+    /// Quadword `j` of the result is then byte `j` of the half of every element in order:
+    ///
+    /// ```text
+    ///     quadword j  =  (e_0[8h + j], e_1[8h + j], .., e_7[8h + j])
+    /// ```
+    const fn transpose_words() -> [i64; 8] {
+        let mut quadwords = [0i64; 8];
+        let mut j = 0;
+        while j < 8 {
+            let mut word = 0u64;
+            let mut k = 0;
+            while k < 4 {
+                word |= ((8 * k + j) as u64) << (16 * k);
+                k += 1;
+            }
+            quadwords[j] = word as i64;
+            j += 1;
+        }
+        quadwords
+    }
+
+    /// See [`transpose_words`].
+    const TRANSPOSE_WORDS: [i64; 8] = transpose_words();
 
     /// The left factors, as the transposed `8 x 8` bit blocks of every group of eight.
     ///
@@ -169,7 +209,7 @@ mod kernel {
     }
 
     /// The transposed blocks of one group of eight left factors.
-    #[target_feature(enable = "avx512f,avx512bw,avx512vbmi,gfni")]
+    #[target_feature(enable = "avx512f,avx512bw,gfni")]
     fn left_blocks<EF: TowerLevel>(group: &[EF; GROUP]) -> [u64; 16] {
         let registers = registers(group);
         let mut blocks = [0u64; 16];
@@ -198,7 +238,7 @@ mod kernel {
     /// A register holds eight byte positions `q` of the right side, so one instruction per
     /// left block `p` covers half a byte row of the matrix. Each half runs over the whole
     /// block with its sixteen partial sums held in registers.
-    #[target_feature(enable = "avx512f,avx512bw,avx512vbmi,gfni")]
+    #[target_feature(enable = "avx512f,avx512bw,gfni")]
     fn rows<EF: TowerLevel>(groups: &[[u64; 16]], right: &[EF]) -> [u128; 128] {
         let mut rows = [0u128; 128];
         for half in 0..2 {
@@ -258,11 +298,21 @@ mod kernel {
     }
 
     /// One half of eight elements, one quadword per byte position.
-    #[target_feature(enable = "avx512f,avx512vbmi")]
+    ///
+    /// Byte `t` of quadword `j` is byte `8 * half + j` of element `t`: a byte transpose, taken
+    /// as a quadword gather, an in-lane byte interleave and a word permute.
+    #[target_feature(enable = "avx512f,avx512bw")]
     fn gathered(registers: [__m512i; 2], half: usize) -> __m512i {
-        let [q0, q1, q2, q3, q4, q5, q6, q7] = GATHERS[half];
-        let index = _mm512_set_epi64(q7, q6, q5, q4, q3, q2, q1, q0);
-        _mm512_permutex2var_epi8(registers[0], index, registers[1])
+        let halves = _mm512_permutex2var_epi64(registers[0], constant(HALVES[half]), registers[1]);
+        let pairs = _mm512_shuffle_epi8(halves, constant(INTERLEAVE));
+        _mm512_permutexvar_epi16(constant(TRANSPOSE_WORDS), pairs)
+    }
+
+    /// A register of eight quadwords, the first lowest.
+    #[target_feature(enable = "avx512f")]
+    fn constant(quadwords: [i64; 8]) -> __m512i {
+        let [q0, q1, q2, q3, q4, q5, q6, q7] = quadwords;
+        _mm512_set_epi64(q7, q6, q5, q4, q3, q2, q1, q0)
     }
 
     /// The eight quadwords of a register, lowest first.
@@ -288,8 +338,7 @@ mod kernel {
     target_arch = "x86_64",
     target_feature = "gfni",
     target_feature = "avx512f",
-    target_feature = "avx512bw",
-    target_feature = "avx512vbmi"
+    target_feature = "avx512bw"
 )))]
 mod kernel {
     use p3_binary_field::TowerLevel;
@@ -420,8 +469,7 @@ mod tests {
         target_arch = "x86_64",
         target_feature = "gfni",
         target_feature = "avx512f",
-        target_feature = "avx512bw",
-        target_feature = "avx512vbmi"
+        target_feature = "avx512bw"
     ))]
     #[test]
     fn the_kernel_target_prepares_a_grouped_wide_level() {
