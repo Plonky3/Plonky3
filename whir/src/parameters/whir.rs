@@ -154,6 +154,15 @@ pub struct RoundConfig {
     pub log_folded_domain_size: usize,
 }
 
+/// Query budget of one terminal proximity test.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TerminalBudget {
+    /// Number of proximity queries against the terminal codeword.
+    pub num_queries: usize,
+    /// Proof-of-work difficulty (in bits) guarding those queries.
+    pub pow_bits: usize,
+}
+
 /// Fully derived WHIR protocol configuration.
 ///
 /// Built from user-facing protocol parameters plus the polynomial size.
@@ -186,10 +195,8 @@ where
     pub commitment_ood_samples: usize,
     /// PoW bits for the initial folding sumcheck (before any STIR rounds).
     pub starting_folding_pow_bits: usize,
-    /// Number of STIR queries in the final proximity test.
-    pub final_queries: usize,
-    /// PoW bits for the final STIR query phase.
-    pub final_pow_bits: usize,
+    /// Query budget of the final proximity test against the last committed codeword.
+    pub terminal: TerminalBudget,
     /// Number of sumcheck rounds in the final phase.
     pub final_sumcheck_rounds: usize,
     /// PoW bits for the final folding sumcheck.
@@ -211,6 +218,17 @@ where
 
     fn deref(&self) -> &Self::Target {
         &self.params
+    }
+}
+
+impl<EF, F, Challenger> WhirConfig<EF, F, Challenger>
+where
+    F: Field,
+    EF: ExtensionField<F>,
+{
+    /// Query budget of the final proximity test against the last committed codeword.
+    pub const fn terminal(&self) -> TerminalBudget {
+        self.terminal
     }
 }
 
@@ -621,8 +639,10 @@ where
             starting_folding_pow_bits: ceil_pow_bits(starting_folding_pow_bits),
             round_parameters,
             folding_schedule,
-            final_queries,
-            final_pow_bits: ceil_pow_bits(final_pow_bits),
+            terminal: TerminalBudget {
+                num_queries: final_queries,
+                pow_bits: ceil_pow_bits(final_pow_bits),
+            },
             final_sumcheck_rounds,
             final_folding_pow_bits: ceil_pow_bits(final_folding_pow_bits),
             _extension_field: PhantomData,
@@ -717,7 +737,7 @@ where
         // Whole-protocol grinding steps outside the per-round loop.
         let outer = self
             .starting_folding_pow_bits
-            .max(self.final_pow_bits)
+            .max(self.terminal.pow_bits)
             .max(self.final_folding_pow_bits);
 
         // Each round grinds once for queries and once for folding.
@@ -761,8 +781,8 @@ where
             RoundConfig {
                 num_variables: self.num_variables - self.round_folding_factor(0),
                 folding_factor: self.round_folding_factor(self.n_rounds()),
-                num_queries: self.final_queries,
-                pow_bits: self.final_pow_bits,
+                num_queries: self.terminal.num_queries,
+                pow_bits: self.terminal.pow_bits,
                 log_inv_rate: self.params.starting_log_inv_rate,
                 domain_size: self.starting_domain_size(),
                 log_folded_domain_size: self.starting_domain_size().ilog2() as usize
@@ -788,8 +808,8 @@ where
                 // Variables remaining after this final fold.
                 num_variables: last.num_variables - folding_factor,
                 folding_factor,
-                num_queries: self.final_queries,
-                pow_bits: self.final_pow_bits,
+                num_queries: self.terminal.num_queries,
+                pow_bits: self.terminal.pow_bits,
                 log_inv_rate: last.log_inv_rate,
                 domain_size,
                 log_folded_domain_size,
@@ -945,11 +965,11 @@ mod tests {
         }
 
         // Final query phase grinds at the last accumulated rate.
-        let final_error = soundness.queries_error(old_rate, config.final_queries);
+        let final_error = soundness.queries_error(old_rate, config.terminal.num_queries);
         assert!(
-            config.final_pow_bits as f64 + final_error >= target,
+            config.terminal.pow_bits as f64 + final_error >= target,
             "final query phase undershoots: {} + {final_error} < {target}",
-            config.final_pow_bits
+            config.terminal.pow_bits
         );
     }
 
@@ -995,7 +1015,7 @@ mod tests {
 
         // Force one phase to dominate, then confirm it is the reported max.
         config.starting_folding_pow_bits = 7;
-        config.final_pow_bits = 31;
+        config.terminal.pow_bits = 31;
         config.final_folding_pow_bits = 5;
         config.round_parameters = vec![RoundConfig {
             pow_bits: 11,
@@ -1199,8 +1219,8 @@ mod tests {
 
             // Final proximity phase must spot-check at least one position.
             assert!(
-                config.final_queries > 0,
-                "{soundness_type:?}: final_queries must be positive"
+                config.terminal.num_queries > 0,
+                "{soundness_type:?}: terminal.num_queries must be positive"
             );
             // Every intermediate round must spot-check at least one position.
             for (round, cfg) in config.round_parameters.iter().enumerate() {
@@ -1327,7 +1347,7 @@ mod tests {
         // Set all values within limits
         config.params.pow_bits = 20;
         config.starting_folding_pow_bits = 15;
-        config.final_pow_bits = 18;
+        config.terminal.pow_bits = 18;
         config.final_folding_pow_bits = 19;
 
         // Ensure all rounds are within limits
@@ -1369,7 +1389,7 @@ mod tests {
 
         config.params.pow_bits = 20;
         config.starting_folding_pow_bits = 21; // Exceeds max_pow_bits
-        config.final_pow_bits = 18;
+        config.terminal.pow_bits = 18;
         config.final_folding_pow_bits = 19;
 
         assert!(
@@ -1385,7 +1405,7 @@ mod tests {
 
         config.params.pow_bits = 20;
         config.starting_folding_pow_bits = 15;
-        config.final_pow_bits = 21; // Exceeds max_pow_bits
+        config.terminal.pow_bits = 21; // Exceeds max_pow_bits
         config.final_folding_pow_bits = 19;
 
         assert!(
@@ -1401,7 +1421,7 @@ mod tests {
 
         config.params.pow_bits = 20;
         config.starting_folding_pow_bits = 15;
-        config.final_pow_bits = 18;
+        config.terminal.pow_bits = 18;
         config.final_folding_pow_bits = 19;
 
         // One round's pow_bits exceeds limit
@@ -1430,7 +1450,7 @@ mod tests {
 
         config.params.pow_bits = 20;
         config.starting_folding_pow_bits = 15;
-        config.final_pow_bits = 18;
+        config.terminal.pow_bits = 18;
         config.final_folding_pow_bits = 19;
 
         // One round's folding_pow_bits exceeds limit
@@ -1459,7 +1479,7 @@ mod tests {
 
         config.params.pow_bits = 20;
         config.starting_folding_pow_bits = 20;
-        config.final_pow_bits = 20;
+        config.terminal.pow_bits = 20;
         config.final_folding_pow_bits = 20;
 
         config.round_parameters = vec![RoundConfig {
@@ -1487,7 +1507,7 @@ mod tests {
 
         config.params.pow_bits = 20;
         config.starting_folding_pow_bits = 22;
-        config.final_pow_bits = 23;
+        config.terminal.pow_bits = 23;
         config.final_folding_pow_bits = 24;
 
         config.round_parameters = vec![RoundConfig {

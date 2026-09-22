@@ -635,8 +635,8 @@ impl ZkWhirShape {
                 config.commitment_ood_samples,
                 config.inner.final_sumcheck_rounds,
                 config.inner.final_folding_pow_bits,
-                config.inner.final_queries,
-                config.inner.final_pow_bits,
+                config.inner.terminal.num_queries,
+                config.inner.terminal.pow_bits,
             ],
             initial_sumcheck: ZkSumcheckShape {
                 rounds: config.round_folding_factor(0),
@@ -2395,11 +2395,11 @@ mod tests {
         derived_field_moves_the_seed("inner.final_folding_pow_bits", |c| {
             c.inner.final_folding_pow_bits += 1;
         });
-        derived_field_moves_the_seed("inner.final_queries", |c| {
-            c.inner.final_queries += 1;
+        derived_field_moves_the_seed("inner.terminal.num_queries", |c| {
+            c.inner.terminal.num_queries += 1;
         });
-        derived_field_moves_the_seed("inner.final_pow_bits", |c| {
-            c.inner.final_pow_bits += 1;
+        derived_field_moves_the_seed("inner.terminal.pow_bits", |c| {
+            c.inner.terminal.pow_bits += 1;
         });
         derived_field_moves_the_seed("round.ood_samples", |c| {
             c.inner.round_parameters[0].ood_samples += 1;
@@ -2458,8 +2458,8 @@ mod tests {
         let config = base_config();
         let shape = ZkWhirShape::new(&config);
 
-        assert_eq!(shape.unreplayed_plain[3], config.inner.final_queries);
-        assert_eq!(shape.unreplayed_plain[4], config.inner.final_pow_bits);
+        assert_eq!(shape.unreplayed_plain[3], config.inner.terminal.num_queries);
+        assert_eq!(shape.unreplayed_plain[4], config.inner.terminal.pow_bits);
 
         assert_eq!(shape.base_case.source_queries, config.final_queries);
         assert_eq!(shape.base_case.pow_bits, config.final_pow_bits);

@@ -84,9 +84,9 @@ where
     /// case. Consequently, `commitment_ood_samples` and
     /// `final_folding_pow_bits` are not transcript steps here;
     /// `final_sumcheck_rounds` still determines the terminal message length.
-    /// `inner.final_queries` and `inner.final_pow_bits` size the plain
-    /// message code; the base case runs against a randomized code instead,
-    /// sized by [`Self::final_queries`] and [`Self::final_pow_bits`].
+    /// `inner.terminal` sizes the plain message code; the base case runs
+    /// against a randomized code instead, sized by [`Self::final_queries`]
+    /// and [`Self::final_pow_bits`].
     pub inner: WhirConfig<EF, F, Challenger>,
     /// ZK extension parameters.
     pub zk: ZkParameters,
@@ -94,15 +94,11 @@ where
     ///
     /// The base case tests proximity to a code of dimension
     /// `message_len + final_queries`, not the plain message code
-    /// `inner.final_queries` was sized against. Shadows `inner.final_queries`
-    /// for every field access on this type, so every base-case use site
-    /// picks it up automatically. Also serves as the terminal oracle's
-    /// randomness budget, i.e. `oracle_randomness[n_rounds]`.
+    /// `inner.terminal` was sized against. Also serves as the terminal
+    /// oracle's randomness budget, i.e. `oracle_randomness[n_rounds]`.
     pub final_queries: usize,
     /// PoW bits bridging the gap between `final_queries` and
     /// `security_level` at the randomized terminal code's rate.
-    ///
-    /// Shadows `inner.final_pow_bits` for every field access on this type.
     pub final_pow_bits: usize,
     /// ZK randomness coefficients per limb of each committed oracle
     /// `u_0, ..., u_{n_rounds}`.
@@ -198,7 +194,7 @@ where
             protocol_security_level,
             final_message_len,
             final_domain_size,
-            inner.final_queries,
+            inner.terminal.num_queries,
         );
 
         // Per-oracle ZK budget.
@@ -550,9 +546,12 @@ mod tests {
         assert_eq!(base.pow_bits, config.final_pow_bits);
         assert_eq!(base.code.randomness_len, config.final_queries);
 
-        assert_ne!(config.final_queries, config.inner.final_queries);
+        assert_ne!(config.final_queries, config.inner.terminal.num_queries);
         assert_eq!(
-            (config.inner.final_queries, config.inner.final_pow_bits),
+            (
+                config.inner.terminal.num_queries,
+                config.inner.terminal.pow_bits
+            ),
             (5, 0)
         );
         assert_eq!((config.final_queries, config.final_pow_bits), (6, 0));

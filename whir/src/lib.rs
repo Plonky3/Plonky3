@@ -16,7 +16,7 @@ pub(crate) mod utils;
 pub use domain::{WhirDomain, WhirQueryPoint};
 pub use parameters::{
     DEFAULT_MAX_POW, FoldingFactor, FoldingFactorError, ProtocolParameters, RoundConfig,
-    SecurityAssumption, WhirConfig, WhirConfigError,
+    SecurityAssumption, TerminalBudget, WhirConfig, WhirConfigError,
 };
 pub use pcs::WhirProverData;
 pub use pcs::proof::{PcsProof, QueryOpenings, SharedProofOpening, WhirProof, WhirRoundProof};

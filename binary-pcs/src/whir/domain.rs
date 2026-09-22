@@ -60,7 +60,7 @@ where
         .map(|round| (round.log_folded_domain_size, round.num_queries))
         .chain(core::iter::once((
             config.final_round_config().log_folded_domain_size,
-            config.final_queries,
+            config.terminal().num_queries,
         )))
     {
         shallowest = shallowest.min(log_folded_domain_size);

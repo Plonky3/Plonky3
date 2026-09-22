@@ -200,7 +200,7 @@ fn the_cap_height_fits_every_round_tree() {
     // The last phase asks for more queries than its folded domain holds, so it draws nothing.
     assert_eq!(round.num_queries, 35);
     assert_eq!(round.log_folded_domain_size, 9);
-    assert_eq!(config.final_queries, 75);
+    assert_eq!(config.terminal().num_queries, 75);
     assert_eq!(final_round.log_folded_domain_size, 4);
 
     // Both trees carry the cap, so the shallower one bounds the deepest stratum of the other.

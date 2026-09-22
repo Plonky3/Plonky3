@@ -36,8 +36,7 @@ where
     if config.commitment_ood_samples != canonical.commitment_ood_samples
         || config.folding_schedule != canonical.folding_schedule
         || config.starting_folding_pow_bits != canonical.starting_folding_pow_bits
-        || config.final_queries != canonical.final_queries
-        || config.final_pow_bits != canonical.final_pow_bits
+        || config.terminal != canonical.terminal
         || config.final_sumcheck_rounds != canonical.final_sumcheck_rounds
         || config.final_folding_pow_bits != canonical.final_folding_pow_bits
         || config.round_parameters.len() != canonical.round_parameters.len()
@@ -153,7 +152,8 @@ where
         old_rate = round.log_inv_rate;
     }
     errors.push(ErrorBits::from_log2(
-        assumption.queries_error(old_rate, config.final_queries) + config.final_pow_bits as f64,
+        assumption.queries_error(old_rate, config.terminal.num_queries)
+            + config.terminal.pow_bits as f64,
     ));
     for _ in 0..config.final_sumcheck_rounds {
         errors.push(ErrorBits::from_log2(
@@ -288,7 +288,7 @@ mod tests {
     #[test]
     fn modified_derived_parameters_have_no_security_evidence() {
         let mut pcs = pcs();
-        pcs.config.final_queries = 0;
+        pcs.config.terminal.num_queries = 0;
         assert!(pcs.prescribed_security(&protocol(12)).is_none());
     }
 
@@ -335,8 +335,10 @@ mod tests {
                 - 2.0,
         ));
         expected_terms.push(ErrorBits::from_log2(
-            assumption.queries_error(pcs.config.starting_log_inv_rate, pcs.config.final_queries)
-                + pcs.config.final_pow_bits as f64,
+            assumption.queries_error(
+                pcs.config.starting_log_inv_rate,
+                pcs.config.terminal.num_queries,
+            ) + pcs.config.terminal.pow_bits as f64,
         ));
         let expected = ErrorBits::sum(&expected_terms).bits();
         assert!((report.error().bits() - expected).abs() < 1e-10);

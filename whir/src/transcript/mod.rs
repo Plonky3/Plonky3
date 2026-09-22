@@ -21,7 +21,7 @@
 //!                 End   fold
 //!     final polynomial       2^final_sumcheck_rounds extension elements
 //!     final grinding         only when the difficulty is positive
-//!     final queries          final_queries draws of index_bits bits
+//!     final queries          terminal.num_queries draws of index_bits bits
 //!     Begin final fold       the closing delegated sumcheck, when it runs at all
 //!     End   final fold
 //! ```
@@ -553,7 +553,7 @@ impl WhirShape {
         let final_config = config.final_round_config();
         let final_folded = final_config.domain_size >> final_config.folding_factor;
 
-        let final_query_draws = query_draws(final_folded, config.final_queries);
+        let final_query_draws = query_draws(final_folded, config.terminal.num_queries);
         Self {
             num_variables: config.num_variables,
             commitment_ood_samples: config.commitment_ood_samples,
@@ -566,7 +566,7 @@ impl WhirShape {
             },
             rounds,
             final_poly_len: 1 << final_config.num_variables,
-            final_pow_bits: config.final_pow_bits,
+            final_pow_bits: config.terminal.pow_bits,
             final_query_draws,
             final_index_bits: log2_strict_usize(final_folded),
             final_query_summand_depths: query_summand_depths(final_query_draws),
@@ -1554,8 +1554,8 @@ mod tests {
             c.starting_folding_pow_bits += 1;
         });
         derived_field_moves_the_seed("folding_schedule", |c| c.folding_schedule[0] -= 1);
-        derived_field_moves_the_seed("final_queries", |c| c.final_queries += 1);
-        derived_field_moves_the_seed("final_pow_bits", |c| c.final_pow_bits += 1);
+        derived_field_moves_the_seed("terminal.num_queries", |c| c.terminal.num_queries += 1);
+        derived_field_moves_the_seed("terminal.pow_bits", |c| c.terminal.pow_bits += 1);
         derived_field_moves_the_seed("final_sumcheck_rounds", |c| c.final_sumcheck_rounds -= 1);
         derived_field_moves_the_seed("final_folding_pow_bits", |c| c.final_folding_pow_bits += 1);
 
@@ -1971,8 +1971,8 @@ mod tests {
                 .filter(|round| round.pow_bits > 0)
                 .map(|round| (QUERY_POW, round.pow_bits))
                 .collect();
-            if config.final_pow_bits > 0 {
-                expected.push((FINAL_QUERY_POW, config.final_pow_bits));
+            if config.terminal.pow_bits > 0 {
+                expected.push((FINAL_QUERY_POW, config.terminal.pow_bits));
             }
 
             // The ground run really grinds and the unground one never does.

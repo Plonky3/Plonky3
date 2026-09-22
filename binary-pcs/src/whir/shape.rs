@@ -83,7 +83,7 @@ impl ProofShape {
                 (
                     final_round.log_folded_domain_size,
                     final_round.folding_factor,
-                    config.final_queries,
+                    config.terminal().num_queries,
                     0,
                 )
             }));
