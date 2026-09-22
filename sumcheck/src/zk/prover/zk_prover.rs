@@ -6,7 +6,7 @@ use core::marker::PhantomData;
 use p3_challenger::fs::TranscriptField;
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
 use p3_commit::Mmcs;
-use p3_field::{ExtensionField, Field, HornerIter, TwoAdicField, dot_product};
+use p3_field::{ExtensionField, Field, HornerIter, TwoAdicField};
 use p3_matrix::Matrix;
 use p3_multilinear_util::point::Point;
 use p3_zk_codes::{ZkEncoding, ZkEncodingWithRandomness};
@@ -16,10 +16,8 @@ use super::common::{mask_endpoints, sample_masks};
 use super::layout::ZkLayout;
 use super::round::{PlainPiece, RoundContext, RoundState, round_poly_to_wire};
 use crate::extrapolate_01inf;
-use crate::lagrange::lagrange_weights_01inf_multi;
 use crate::layout::{PrefixProver, SuffixProver};
 use crate::strategy::SumcheckProver;
-use crate::svo::calculate_accumulators_batch;
 use crate::table::{OpeningEvals, OpeningRequest};
 use crate::zk::data::{ZkSumcheckData, ZkSumcheckHandoff};
 use crate::zk::transcript::{ZkProverTranscript, ZkSumcheckShape};
@@ -245,28 +243,7 @@ where
         // `alpha` is the per-claim batching base: powers a^0, a^1, ... weight the claim accumulators below.
         let alpha: EF = transcript.batching_challenge();
 
-        // Materialise every alpha power in one batched pass.
-        //
-        // Layout:
-        //
-        //     [ a^0, ..., a^{n_concrete - 1} | a^{n_concrete}, ..., a^{N - 1} ]
-        //      \____ concrete-claim block __/  \___ virtual-claim block ___/
-        let n_concrete: usize = self.inner.concrete_claims().map(|claim| claim.len()).sum();
-        let n_virtual = self.inner.virtual_claims().len();
-        let all_alphas: Vec<EF> = alpha.powers().collect_n(n_concrete + n_virtual);
-        let (concrete_alphas, virtual_alphas) = all_alphas.split_at(n_concrete);
-
-        // One accumulator per concrete opening, sliced into its alpha block.
-        let mut offset = 0;
-        let accumulators: Vec<_> = self
-            .inner
-            .concrete_claims()
-            .map(|claim| {
-                let slice = &concrete_alphas[offset..offset + claim.len()];
-                offset += claim.len();
-                calculate_accumulators_batch(claim, slice)
-            })
-            .collect();
+        let accumulators = self.inner.claims().batched_accumulators(alpha);
 
         // Plain sumcheck claim `mu`, batched by the alphas.
         let mut plain_sum = self.inner.batched_sum(alpha);
@@ -318,37 +295,16 @@ where
             eps,
         };
 
-        for round_idx in 0..k {
+        for (round_idx, s_j) in masks.iter().enumerate() {
             // 1-indexed round used by the formulas.
             let j = round_idx + 1;
-            let s_j = &masks[round_idx];
 
             // Update the running future-endpoint sum: drop s_j's contribution so the round-j formula reads only sum_{l > j}.
             let s_j_endpoints = s_j[0].double() + s_j[1..].iter().copied().sum::<EF>();
             sum_future_endpoints -= s_j_endpoints;
 
-            // Lagrange weights at `(gamma_1, ..., gamma_{j-1})`, used by every accumulator dot product below.
-            let weights_lag = lagrange_weights_01inf_multi(&rs);
-
-            // Plain `(c_0, c_inf)`: same formula the plain inner prover computes, summed across every recorded claim.
-            let dot = |row: &[EF]| {
-                dot_product::<EF, _, _>(row.iter().copied(), weights_lag.iter().copied())
-            };
-
-            // Concrete-claim branch.
-            let mut plain_c0: EF = accumulators.iter().map(|a| dot(&a[round_idx][0])).sum();
-            let mut plain_c_inf: EF = accumulators.iter().map(|a| dot(&a[round_idx][1])).sum();
-
-            // Virtual-claim branch.
-            for (vc, alpha_i) in self
-                .inner
-                .virtual_claims()
-                .iter()
-                .zip(virtual_alphas.iter().copied())
-            {
-                plain_c0 += alpha_i * dot(&vc.data[round_idx][0]);
-                plain_c_inf += alpha_i * dot(&vc.data[round_idx][1]);
-            }
+            // Plain `(c_0, c_inf)` of every recorded claim at the challenges so far.
+            let (plain_c0, plain_c_inf) = accumulators.round_coefficients(&rs);
 
             // Assemble h_j; see the round module for the formula and the
             // in-place affine-consistency cross-check.
