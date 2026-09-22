@@ -44,7 +44,7 @@ use super::{
     node_schedule, rows_per_task,
 };
 use crate::folder::{InteractionMultilinearFolder, MultilinearFolder};
-use crate::packed_ext::{PackedExt, PackedRepr};
+use crate::packed_ext::PackedRepr;
 use crate::selectors::BoundaryEvals;
 use crate::sliced::{LaneSums, SLICED_LANES, SlicedFolder, SlicedGf4, gf4_coordinates, is_gf4};
 
@@ -1337,6 +1337,9 @@ const MAX_PLANE_FOLD_GROUPS: usize = MAX_PLANE_FOLD_CORNERS / GROUP_CORNERS;
 /// Mask bytes one corner group of one residual row reads, one per plane.
 const PLANE_BYTES: usize = 2;
 
+/// Bytes one corner group adds to a residual row pair's tile cell, one plane pair per half.
+const GROUP_CELL_BYTES: usize = ROW_HALVES * PLANE_BYTES;
+
 /// Halves of the residual rows a round reads side by side: the low one and the high one.
 const ROW_HALVES: usize = 2;
 
@@ -1532,6 +1535,25 @@ impl<'a, R: Field, const CORNERS: usize> PlaneFold<'a, R, CORNERS> {
             self.row_value::<HIGH>(&bytes[..half]),
             self.row_value::<HIGH>(&bytes[half..]),
         )
+    }
+
+    /// [`Self::row_pair`] for a tile cell of `CELL` bytes, one [`GROUP_CELL_BYTES`] per group.
+    #[inline(always)]
+    fn row_pair_cell<const CELL: usize, const HIGH: bool>(&self, bytes: &[u8; CELL]) -> (R, R) {
+        let groups = CELL / GROUP_CELL_BYTES;
+        let (low_sums, high_sums) = (&self.low_sums[..groups], &self.high_sums[..groups]);
+        let [lo, hi] = [0, 1].map(|half| {
+            let mut value = R::ZERO;
+            for (group, (low_table, high_table)) in low_sums.iter().zip(high_sums).enumerate() {
+                let at = (half * groups + group) * PLANE_BYTES;
+                value += low_table[usize::from(bytes[at])];
+                if HIGH {
+                    value += high_table[usize::from(bytes[at + 1])];
+                }
+            }
+            value
+        });
+        (lo, hi)
     }
 
     /// Write one `(column, word)`'s mask bytes lane by lane, `stride` bytes apart.
@@ -1734,24 +1756,31 @@ impl RowTile {
         }
     }
 
-    /// One lane group of one column's residual row pairs, low halves then high halves.
-    #[inline]
-    fn lane_pair<F, R: Field, const HIGH: bool>(
+    /// Write one lane group of one column's residual row pairs: the low halves into `local`, and
+    /// each high half less its low half into `delta`.
+    ///
+    /// Each lane is written in place, so no lane group is assembled on its way to the buffers.
+    #[inline(always)]
+    fn write_lane_pair<F, R: Field, const CELL: usize, const HIGH: bool>(
         &self,
         fold: &PlaneFold<'_, R>,
         lane: usize,
         column: usize,
-    ) -> (PackedRepr<F, R>, PackedRepr<F, R>) {
-        let (mut low, mut high) = (R::Packing::ZERO, R::Packing::ZERO);
-        for (step, (l, h)) in low
+        local: &mut PackedRepr<F, R>,
+        delta: &mut PackedRepr<F, R>,
+    ) {
+        for (step, (local, delta)) in local
+            .0
             .as_slice_mut()
             .iter_mut()
-            .zip(high.as_slice_mut())
+            .zip(delta.0.as_slice_mut())
             .enumerate()
         {
-            (*l, *h) = fold.row_pair::<HIGH>(self.cell(lane + step, column));
+            let bytes = &self.lane(lane + step).as_chunks::<CELL>().0[column];
+            let (lo, hi) = fold.row_pair_cell::<CELL, HIGH>(bytes);
+            *local = lo;
+            *delta = hi - lo;
         }
-        (PackedExt::new(low), PackedExt::new(high))
     }
 
     /// Read one lane group of residual row pairs of every column into a packed node walk's buffers.
@@ -1762,15 +1791,30 @@ impl RowTile {
         next_columns: &[Range<usize>],
         scratch: &mut PackedScratch<PackedRepr<F, R>, PackedRepr<F, R>>,
     ) {
-        if self.high {
-            self.read_lane_group_planes::<F, R, true>(fold, lane, next_columns, scratch);
-        } else {
-            self.read_lane_group_planes::<F, R, false>(fold, lane, next_columns, scratch);
+        const ONE: usize = GROUP_CELL_BYTES;
+        const TWO: usize = 2 * GROUP_CELL_BYTES;
+        match (self.column_stride, self.high) {
+            (ONE, false) => {
+                self.read_lane_group_cells::<F, R, ONE, false>(fold, lane, next_columns, scratch);
+            }
+            (ONE, true) => {
+                self.read_lane_group_cells::<F, R, ONE, true>(fold, lane, next_columns, scratch);
+            }
+            (TWO, false) => {
+                self.read_lane_group_cells::<F, R, TWO, false>(fold, lane, next_columns, scratch);
+            }
+            (TWO, true) => {
+                self.read_lane_group_cells::<F, R, TWO, true>(fold, lane, next_columns, scratch);
+            }
+            (stride, _) => {
+                unreachable!("a tile's rows read one or two corner groups, not {stride} bytes")
+            }
         }
     }
 
-    /// [`Self::read_lane_group`], reading the high plane only when `HIGH` is set.
-    fn read_lane_group_planes<F, R: Field, const HIGH: bool>(
+    /// [`Self::read_lane_group`] for cells of `CELL` bytes, reading the high plane only when
+    /// `HIGH` is set.
+    fn read_lane_group_cells<F, R: Field, const CELL: usize, const HIGH: bool>(
         &self,
         fold: &PlaneFold<'_, R>,
         lane: usize,
@@ -1789,9 +1833,7 @@ impl RowTile {
             .zip(local_diff.iter_mut())
             .enumerate()
         {
-            let (lo, hi) = self.lane_pair::<F, R, HIGH>(fold, lane, column);
-            *local = lo;
-            *local_delta = hi - lo;
+            self.write_lane_pair::<F, R, CELL, HIGH>(fold, lane, column, local, local_delta);
         }
         for run in next_columns {
             for ((column, next), next_delta) in run
@@ -1799,9 +1841,7 @@ impl RowTile {
                 .zip(next_point.fill()[run.clone()].iter_mut())
                 .zip(next_diff.fill()[run.clone()].iter_mut())
             {
-                let (lo, hi) = self.lane_pair::<F, R, HIGH>(fold, lane + 1, column);
-                *next = lo;
-                *next_delta = hi - lo;
+                self.write_lane_pair::<F, R, CELL, HIGH>(fold, lane + 1, column, next, next_delta);
             }
         }
     }
