@@ -477,7 +477,7 @@ struct SlicedRaw<R> {
 #[allow(clippy::too_many_arguments)]
 #[tracing::instrument(skip_all, level = "debug", fields(round = challenges.len()))]
 fn sliced_raw<A, F, EF, S, R>(
-    eq_suffix: &Poly<EF>,
+    eq_suffix: Option<&Poly<EF>>,
     trace: &SlicedTrace,
     slots: &[AirSlot<'_, A>],
     public_values: &[&[F]],
@@ -522,8 +522,8 @@ where
     let word_point = &tau[round + 1..num_vars - LANE_VARIABLES];
     let lane_weights = Poly::new_from_point(lane_point, EF::ONE);
     let word_weights = Poly::new_from_point(word_point, EF::ONE);
-    // The row weights factor as word weight times lane weight, the table the caller holds.
-    debug_assert!(
+    // The row weights factor as word weight times lane weight, as a table the caller passes must.
+    debug_assert!(eq_suffix.is_none_or(|eq_suffix| {
         eq_suffix.num_evals() == word_weights.num_evals() * SLICED_LANES
             && eq_suffix
                 .as_slice()
@@ -534,7 +534,7 @@ where
                         == word_weights.as_slice()[row / SLICED_LANES]
                             * lane_weights.as_slice()[row % SLICED_LANES]
                 })
-    );
+    }));
     let lift = |values: &[EF]| {
         values
             .iter()
@@ -616,7 +616,7 @@ where
     A: for<'b> Air<SlicedFolder<'b, F, S, R>>,
 {
     let raw = sliced_raw(
-        eq_suffix,
+        Some(eq_suffix),
         trace,
         slots,
         public_values,
@@ -667,7 +667,7 @@ struct SlicedTensor<EF> {
 #[allow(clippy::too_many_arguments)]
 #[tracing::instrument(skip_all, level = "debug", fields(round = 3))]
 fn sliced_tensor<A, F, EF, S, R>(
-    eq_suffix: &Poly<EF>,
+    eq_suffix: Option<&Poly<EF>>,
     trace: &SlicedTrace,
     slots: &[AirSlot<'_, A>],
     public_values: &[&[F]],
@@ -917,9 +917,11 @@ where
                 .all(|slot| slot.constraint_degree <= 2 && slot.interaction.is_none())
             && next_row_runs(&self.slots).is_empty();
         if tensor_eligible {
-            let tensor_eq_suffix = Poly::new_from_point(&self.tau.as_slice()[4..], EF::ONE);
+            // Only the factorization check inside the tensor pass reads this table.
+            let tensor_eq_suffix = cfg!(debug_assertions)
+                .then(|| Poly::new_from_point(&self.tau.as_slice()[4..], EF::ONE));
             if let Some(tensor) = sliced_tensor::<A, F, EF, S, R>(
-                &tensor_eq_suffix,
+                tensor_eq_suffix.as_ref(),
                 &trace,
                 &self.slots,
                 &self.public_values,
