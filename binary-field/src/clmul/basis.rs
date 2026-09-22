@@ -709,8 +709,13 @@ mod blocked {
 
         #[test]
         fn runtime_constructor_matches_reference_for_singletons_and_random_maps() {
-            // Every one of the 16,384 input-bit matrices pins byte gathering, transpose
-            // orientation, and GFNI row reversal independently of the static constructor.
+            // Both constructors are GF(2)-linear in the column array: the static one is a bit
+            // permutation of its input, and the runtime one is a byte gather, an
+            // exclusive-or/shift/mask transpose and a byte reversal.
+            // The 16,384 single-entry matrices below are a basis of the space of all 128 x 128
+            // binary maps, so agreement on them proves agreement on every one of the 2^16384 maps.
+            // The random maps that follow add nothing to that argument; they guard against an
+            // edit that breaks the linearity it rests on.
             for column in 0..128 {
                 for output_bit in 0..128 {
                     let mut columns = [0u128; 128];
