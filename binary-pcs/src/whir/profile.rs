@@ -18,6 +18,26 @@ const GRIND_SEARCH_BITS: usize = 64;
 /// Headroom a grinding search keeps below the candidate space, so an exhaustive one rarely fails.
 const GRIND_MARGIN_BITS: usize = 8;
 
+/// Grinding one witness of the alphabet can carry.
+fn grinding_ceiling<F: Field>() -> usize {
+    F::bits()
+        .min(GRIND_SEARCH_BITS)
+        .saturating_sub(GRIND_MARGIN_BITS)
+}
+
+/// Raise the grinding allowance to a figure the analysis asks for.
+///
+/// # Errors
+///
+/// Returns an error when one witness of the alphabet cannot carry the figure.
+fn raise_allowance<F: Field>(required: usize) -> Result<usize, ProfileError> {
+    let ceiling = grinding_ceiling::<F>();
+    if required > ceiling {
+        return Err(ProfileError::Grinding { required, ceiling });
+    }
+    Ok(required)
+}
+
 /// A named parameter profile for one proximity regime.
 ///
 /// The regime, the code rate and the folding width are chosen by the caller.
@@ -123,10 +143,6 @@ impl BinaryWhirProfile {
         Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
         Domain: WhirDomain<F, EF>,
     {
-        // A witness is one alphabet element, and the search keeps headroom below what it holds.
-        let ceiling = F::bits()
-            .min(GRIND_SEARCH_BITS)
-            .saturating_sub(GRIND_MARGIN_BITS);
         let mut pow_bits = 0;
         loop {
             let parameters = ProtocolParameters {
@@ -144,10 +160,7 @@ impl BinaryWhirProfile {
                 Err(WhirConfigError::PowBitsExceedBudget { required, .. })
                     if required > pow_bits =>
                 {
-                    if required > ceiling {
-                        return Err(ProfileError::Grinding { required, ceiling });
-                    }
-                    pow_bits = required;
+                    pow_bits = raise_allowance::<F>(required)?;
                 }
                 Err(error) => return Err(ProfileError::Schedule(error)),
             }
@@ -157,12 +170,12 @@ impl BinaryWhirProfile {
 
 #[cfg(test)]
 mod tests {
-    use p3_binary_field::{BinaryChallenger, BinaryField32, BinaryField128};
+    use p3_binary_field::{BinaryChallenger, BinaryField32, BinaryField64, BinaryField128};
     use p3_challenger::{GrindingChallenger, HashChallenger};
     use p3_keccak::Keccak256Hash;
     use p3_whir::{SecurityAssumption, WhirConfigError};
 
-    use super::BinaryWhirProfile;
+    use super::{BinaryWhirProfile, grinding_ceiling, raise_allowance};
     use crate::test_util::MyChallenger;
     use crate::whir::error::ProfileError;
     use crate::whir::{BinaryWhirDomain, BooleanWhirDomain, ProofShape};
@@ -236,20 +249,39 @@ mod tests {
         );
     }
 
+    // A schedule the challenger can grind, or a refusal naming a figure above what it can.
+    fn inside_the_ceiling(derived: &Result<usize, ProfileError>, ceiling: usize) {
+        match derived {
+            Ok(pow_bits) => assert!(*pow_bits <= ceiling, "{pow_bits} bits past {ceiling}"),
+            Err(ProfileError::Grinding {
+                required,
+                ceiling: named,
+            }) => {
+                assert_eq!(*named, ceiling);
+                assert!(*required > ceiling, "{required} bits is not past {ceiling}");
+            }
+            // A derivation refused for another reason is not this test's business.
+            Err(ProfileError::Schedule(_)) => {}
+        }
+    }
+
     #[test]
-    fn a_schedule_grinding_past_the_narrow_alphabet_is_refused() {
-        // Twenty variables at this target need twenty-seven bits, three past what a witness holds.
-        let refused = BinaryWhirProfile::proven_list_decoding(100, 3, 4)
-            .config::<EF, BinaryField32, NarrowChallenger, _>(
-                20,
-                &BinaryWhirDomain::<BinaryField32>::default(),
-            )
-            .unwrap_err();
+    fn the_ceiling_is_the_headroom_the_search_keeps_below_one_witness() {
+        // Integer arithmetic over the alphabet's width, so every host reads the same figure.
+        assert_eq!(grinding_ceiling::<BinaryField32>(), 24);
+        assert_eq!(grinding_ceiling::<BinaryField64>(), 56);
+        assert_eq!(grinding_ceiling::<EF>(), 56);
+    }
+
+    #[test]
+    fn a_request_one_bit_past_the_ceiling_is_refused() {
+        // The request is constructed rather than derived, so no analysis can move the premise.
+        let refused = raise_allowance::<BinaryField32>(25).unwrap_err();
         assert!(
             matches!(
                 refused,
                 ProfileError::Grinding {
-                    required: 27,
+                    required: 25,
                     ceiling: 24
                 }
             ),
@@ -257,25 +289,54 @@ mod tests {
         );
         assert_eq!(
             alloc::format!("{refused}"),
-            "the schedule needs 27 grinding bits, one witness allows 24"
+            "the schedule needs 25 grinding bits, one witness allows 24"
         );
+        assert!(matches!(
+            raise_allowance::<EF>(57).unwrap_err(),
+            ProfileError::Grinding {
+                required: 57,
+                ceiling: 56
+            }
+        ));
+
+        // The ceiling itself is allowed, so the refusal starts exactly one bit above it.
+        assert_eq!(raise_allowance::<BinaryField32>(24).unwrap(), 24);
+        assert_eq!(raise_allowance::<EF>(56).unwrap(), 56);
     }
 
     #[test]
-    fn a_schedule_grinding_past_the_wide_alphabet_is_refused() {
-        let refused = BinaryWhirProfile::proven_list_decoding(135, 4, 4)
-            .config::<EF, EF, MyChallenger, _>(16, &BooleanWhirDomain::default())
-            .unwrap_err();
-        assert!(
-            matches!(
-                refused,
-                ProfileError::Grinding {
-                    required: 57,
-                    ceiling: 56
+    fn no_schedule_the_profile_returns_can_abort_the_prover() {
+        // What must never come back is a schedule the challenger would refuse to grind.
+        let narrow = BinaryWhirDomain::<BinaryField32>::default();
+        let wide = BooleanWhirDomain::default();
+        for security_level in [80, 100, 128, 160, 200, 256] {
+            for log_inv_rate in [1, 2, 3, 4] {
+                for num_variables in [8, 12, 16, 20] {
+                    for folding in [2, 3, 4] {
+                        let profile = BinaryWhirProfile::proven_list_decoding(
+                            security_level,
+                            log_inv_rate,
+                            folding,
+                        );
+                        inside_the_ceiling(
+                            &profile
+                                .config::<EF, BinaryField32, NarrowChallenger, _>(
+                                    num_variables,
+                                    &narrow,
+                                )
+                                .map(|config| config.max_pow_bits()),
+                            grinding_ceiling::<BinaryField32>(),
+                        );
+                        inside_the_ceiling(
+                            &profile
+                                .config::<EF, EF, MyChallenger, _>(num_variables, &wide)
+                                .map(|config| config.max_pow_bits()),
+                            grinding_ceiling::<EF>(),
+                        );
+                    }
                 }
-            ),
-            "{refused:?}"
-        );
+            }
+        }
     }
 
     #[test]
@@ -283,13 +344,13 @@ mod tests {
     fn the_narrow_ceiling_is_the_one_the_challenger_enforces() {
         // The refusal above is worth nothing unless one more bit really does abort a prover.
         let mut challenger = NarrowChallenger::from_hasher(alloc::vec::Vec::new(), Keccak256Hash);
-        let _ = challenger.grind(25);
+        let _ = challenger.grind(grinding_ceiling::<BinaryField32>() + 1);
     }
 
     #[test]
     #[should_panic = "too small a margin"]
     fn the_wide_ceiling_is_the_one_the_challenger_enforces() {
         let mut challenger = MyChallenger::from_hasher(alloc::vec::Vec::new(), Keccak256Hash);
-        let _ = challenger.grind(57);
+        let _ = challenger.grind(grinding_ceiling::<EF>() + 1);
     }
 }
