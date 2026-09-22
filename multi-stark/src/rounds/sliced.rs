@@ -1237,8 +1237,11 @@ const GROUP_CORNERS: usize = 8;
 /// Entries of one corner group's subset-sum table, one per value of a mask byte.
 const GROUP_ENTRIES: usize = 1 << u8::BITS;
 
-/// Corners the bound variables of a sliced stage can range over.
-const MAX_CORNERS: usize = 1 << MAX_PLANE_FOLD_ROUNDS;
+/// Corners the bound variables of a stage evaluating a round on its planes can range over.
+const MAX_CORNERS: usize = 1 << MAX_SLICED_ROUNDS;
+
+/// Corners the bound variables of the delayed boundary path's unslice range over.
+const MAX_PLANE_FOLD_CORNERS: usize = 1 << MAX_PLANE_FOLD_ROUNDS;
 
 /// Mask bytes one corner group of one residual row reads, one per plane.
 const PLANE_BYTES: usize = 2;
@@ -1257,7 +1260,10 @@ const ROW_HALVES: usize = 2;
 /// A cell is `low + high * g`, so each row takes byte-indexed subset sums of `eq(r, .)`, one
 /// lookup per plane per group of eight `b`. The tables do not depend on the column or the row,
 /// so one set serves a whole round.
-struct PlaneFold<'a, R> {
+///
+/// Each word's corners are gathered into buffers of `CORNERS` words per plane. Only the delayed
+/// boundary path's unslice binds enough challenges to need [`MAX_PLANE_FOLD_CORNERS`].
+struct PlaneFold<'a, R, const CORNERS: usize = MAX_CORNERS> {
     /// The stage's planes.
     trace: &'a SlicedTrace,
     /// Subset sums of the eq weights, one table per corner group.
@@ -1272,7 +1278,7 @@ struct PlaneFold<'a, R> {
     words: usize,
 }
 
-impl<'a, R: Field> PlaneFold<'a, R> {
+impl<'a, R: Field, const CORNERS: usize> PlaneFold<'a, R, CORNERS> {
     /// Tabulate the fold of `trace` at every challenge bound so far.
     fn new<S, EF>(trace: &'a SlicedTrace, challenges: &[EF]) -> Self
     where
@@ -1281,7 +1287,7 @@ impl<'a, R: Field> PlaneFold<'a, R> {
         R: From<EF>,
     {
         assert!(
-            challenges.len() <= MAX_PLANE_FOLD_ROUNDS,
+            1 << challenges.len() <= CORNERS,
             "a plane fold's corner buffers must hold every corner of its bound prefix"
         );
         assert!(
@@ -1324,9 +1330,9 @@ impl<'a, R: Field> PlaneFold<'a, R> {
         planes: &[[u64; 2]],
         column: usize,
         word: usize,
-    ) -> ([u64; MAX_CORNERS], [u64; MAX_CORNERS]) {
-        let mut low = [0; MAX_CORNERS];
-        let mut high = [0; MAX_CORNERS];
+    ) -> ([u64; CORNERS], [u64; CORNERS]) {
+        let mut low = [0; CORNERS];
+        let mut high = [0; CORNERS];
         let base = word * self.trace.width + column;
         let stride = self.words * self.trace.width;
         for (corner, (low, high)) in low[..self.corners]
@@ -1345,8 +1351,8 @@ impl<'a, R: Field> PlaneFold<'a, R> {
     #[inline]
     fn group_words<'b>(
         &self,
-        low: &'b [u64; MAX_CORNERS],
-        high: &'b [u64; MAX_CORNERS],
+        low: &'b [u64; CORNERS],
+        high: &'b [u64; CORNERS],
         group: usize,
     ) -> (&'b [u64], &'b [u64]) {
         let start = group * GROUP_CORNERS;
@@ -1721,7 +1727,7 @@ where
     }
 
     /// Read each successor column at the last residual row into its repeat-last tail.
-    fn read_next_tails(&mut self, fold: &PlaneFold<'_, R>) {
+    fn read_next_tails<const CORNERS: usize>(&mut self, fold: &PlaneFold<'_, R, CORNERS>) {
         let mut last = [R::ZERO; SLICED_LANES];
         for run in next_row_runs(&self.slots) {
             for column in run {
@@ -1742,11 +1748,20 @@ where
         S: Field,
         EF: HasSubfield<S>,
     {
+        self.unslice_with::<S, MAX_CORNERS>();
+    }
+
+    /// [`Self::unslice`], gathering each word's corners into buffers of `CORNERS` words.
+    fn unslice_with<S, const CORNERS: usize>(&mut self)
+    where
+        S: Field,
+        EF: HasSubfield<S>,
+    {
         let Some((trace, challenges)) = self.take_planes() else {
             return;
         };
         let _span = tracing::debug_span!("unslice").entered();
-        let fold = PlaneFold::<R>::new::<S, EF>(&trace, &challenges);
+        let fold = PlaneFold::<R, CORNERS>::new::<S, EF>(&trace, &challenges);
         let rows = fold.words * SLICED_LANES;
 
         let scalar = (0..trace.width)
@@ -1886,7 +1901,7 @@ where
                     unreachable!("late boundary gate checked sliced columns")
                 };
                 columns.challenges.push(r);
-                self.unslice::<S>();
+                self.unslice_with::<S, MAX_PLANE_FOLD_CORNERS>();
                 self.boundary.apply(R::from(r));
                 self.round += 1;
             }

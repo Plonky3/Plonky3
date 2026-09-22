@@ -406,7 +406,8 @@ fn plane_fold_five_challenges_matches_explicit_corner_sum() {
                     .chain(state.periodic[0].iter().flat_map(Table::iter_polys))
                     .collect::<Vec<_>>();
                 assert_eq!(trace.width, columns.len(), "{name} width");
-                let fold = PlaneFold::<Tower>::new::<Gf4, Tower>(&trace, &prefix);
+                let fold =
+                    PlaneFold::<Tower, MAX_PLANE_FOLD_CORNERS>::new::<Gf4, Tower>(&trace, &prefix);
                 let remaining = num_vars - prefix.len();
                 let words = 1 << remaining.saturating_sub(LANE_VARIABLES);
                 let mut actual = vec![Tower::ZERO; SLICED_LANES];
@@ -532,7 +533,9 @@ fn plane_fold_reference_covers_prefixes_widths_and_special_challenges() {
                                 }
                             })
                             .collect::<Vec<_>>();
-                        let fold = PlaneFold::<Tower>::new::<Gf4, Tower>(&trace, &prefix);
+                        let fold = PlaneFold::<Tower, MAX_PLANE_FOLD_CORNERS>::new::<Gf4, Tower>(
+                            &trace, &prefix,
+                        );
                         let mut actual = vec![Tower::ZERO; SLICED_LANES];
                         for column in 0..width {
                             for word in 0..words {
@@ -564,6 +567,17 @@ fn plane_fold_reference_covers_prefixes_widths_and_special_challenges() {
             }
         }
     }
+}
+
+#[test]
+#[should_panic(
+    expected = "a plane fold's corner buffers must hold every corner of its bound prefix"
+)]
+fn a_default_plane_fold_refuses_the_delayed_five_challenge_prefix() {
+    // Only the delayed boundary path's unslice gathers five challenges' worth of corners.
+    let (trace, _) = plane_fold_trace_fixture(11, 1, true);
+    let prefix = [Tower::from_repr(0x1234); MAX_PLANE_FOLD_ROUNDS];
+    let _ = PlaneFold::<Tower>::new::<Gf4, Tower>(&trace, &prefix);
 }
 
 #[test]
