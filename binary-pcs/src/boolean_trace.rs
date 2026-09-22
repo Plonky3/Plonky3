@@ -86,7 +86,8 @@ use p3_multilinear_util::split_eq::SplitEq;
 use p3_sumcheck::layout::{ColumnView, Table, TablePlacement, plan_stacked_layout};
 use p3_sumcheck::ring_switch::bits::BitRingSwitch;
 use p3_sumcheck::{
-    OpeningEvals, OpeningProtocol, PrescribedOpeningSecurity, PrescribedPointPcs, TableShape,
+    OpeningEvals, OpeningPointMismatch, OpeningProtocol, PrescribedOpeningSecurity,
+    PrescribedPointPcs, TableShape,
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -258,24 +259,23 @@ where
         protocol: &OpeningProtocol,
         points: &[Point<EF>],
     ) -> Result<Vec<TablePlacement>, BooleanTraceCommitmentError<B::Error>> {
-        let shapes = protocol.table_shapes();
-        let placements = self.placements(&shapes)?;
-        if points.len() != protocol.num_openings() {
-            return Err(BooleanTraceCommitmentError::PointCount {
-                expected: protocol.num_openings(),
-                actual: points.len(),
-            });
-        }
-
-        for ((table, _), point) in protocol.iter_openings().zip(points) {
-            if point.num_variables() != shapes[table].num_variables() {
-                return Err(BooleanTraceCommitmentError::PointArity {
+        let placements = self.placements(&protocol.table_shapes())?;
+        protocol
+            .check_points(points)
+            .map_err(|mismatch| match mismatch {
+                OpeningPointMismatch::Count { expected, actual } => {
+                    BooleanTraceCommitmentError::PointCount { expected, actual }
+                }
+                OpeningPointMismatch::Arity {
                     table,
-                    expected: shapes[table].num_variables(),
-                    actual: point.num_variables(),
-                });
-            }
-        }
+                    expected,
+                    actual,
+                } => BooleanTraceCommitmentError::PointArity {
+                    table,
+                    expected,
+                    actual,
+                },
+            })?;
         Ok(placements)
     }
 
