@@ -159,4 +159,20 @@ pub enum ProfileError {
         /// Bits one witness carries.
         ceiling: usize,
     },
+
+    /// The profile asks for no security at all.
+    ///
+    /// Every error term in the derivation is charged against this target.
+    ///
+    /// A target of zero is met by any schedule, so the derivation reports a level it never
+    /// had to deliver.
+    #[error("a profile needs a positive security target")]
+    ZeroSecurityLevel,
+
+    /// The profile folds no variable per round.
+    ///
+    /// A round that eliminates nothing never reaches the final codeword, so the schedule it
+    /// describes does not terminate.
+    #[error("a profile needs to fold at least one variable per round")]
+    ZeroFoldingFactor,
 }

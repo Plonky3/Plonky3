@@ -188,6 +188,26 @@ where
     ///
     /// Use this preflight, or a fallible opening entry point, to validate one directly.
     /// The commitment traits propagate the same typed errors.
+    ///
+    /// # Minimum non-degenerate protocol
+    ///
+    /// A protocol of empty batches passes every check here: a table with no opening still
+    /// contributes its rows to the cell total, and a claim count of zero is under any budget.
+    ///
+    /// Such a run reaches the terminal relation with a claimed sum of zero and a weight
+    /// evaluation of zero, so `0 == 0 * final_value` holds for any final value, and the run
+    /// returns `Ok(vec![])`.
+    ///
+    /// That is deliberate and harmless rather than unsound: a run that claims nothing proves
+    /// nothing, and asserts nothing either. Every column it might have opened is left exactly
+    /// as unconstrained as it was before.
+    ///
+    /// The shape is load-bearing in `security_tests.rs`, where a claimless protocol is the
+    /// only way to reach query sampling with a tampered final codeword and so isolate the
+    /// codeword's transcript binding from the terminal check that otherwise rejects first.
+    ///
+    /// The floor a caller does care about is one claim, and a caller that wants it enforced
+    /// asks for it: `protocol.num_openings()` is public.
     pub fn validate_opening_protocol(
         &self,
         protocol: &OpeningProtocol,
@@ -205,6 +225,7 @@ where
         }
         let actual =
             Self::opening_claim_count(protocol).ok_or(BinaryPcsError::InvalidOpeningProtocol)?;
+
         let max = self.config.max_opening_claims();
         if actual > max {
             return Err(BinaryPcsError::OpeningClaimCountExceedsSecurityBudget {

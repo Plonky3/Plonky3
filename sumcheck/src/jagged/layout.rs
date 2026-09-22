@@ -269,6 +269,34 @@ impl JaggedLayout {
     ///
     /// The column heights must already be bound into the transcript, normally by that commitment, before the sparse point is drawn.
     ///
+    /// That ordering is the one obligation this crate cannot check; see `docs/caller-obligations.md`.
+    ///
+    /// # Minimum non-degenerate shape
+    ///
+    /// The delegated sumcheck runs [`Self::dense_variables`] rounds, so it samples that many challenges.
+    ///
+    /// ```text
+    ///     live area   dense variables   challenges drawn
+    ///     0 or 1      0                 none
+    ///     2 or more   at least 1        at least one
+    /// ```
+    ///
+    /// The smallest shape that folds anything is therefore a live area of two.
+    ///
+    /// Below it the reduction samples no challenge, and that is harmless rather than vacuous:
+    /// a one-cell dense multilinear has no interior to test.
+    ///
+    /// The terminal relation reads `claimed_value == dense_evaluation * selector_weight`, both
+    /// factors are computed from public data or pinned by the commitment, and the returned claim
+    /// names that single cell verbatim.
+    ///
+    /// The transcript seed still binds the whole statement, so two degenerate instances never
+    /// share a challenge stream even though neither draws one from this reduction.
+    ///
+    /// What the degenerate case does rest on is the caller opening the returned claim, which is
+    /// why [`JaggedDenseClaim`] is `#[must_use]`: with the selector weight zero the terminal
+    /// equation pins nothing, and only the opening does.
+    ///
     /// # Soundness
     ///
     /// The terminal selector is evaluated independently through a width-four branching program.

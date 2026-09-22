@@ -127,6 +127,9 @@ impl BinaryWhirProfile {
     ///
     /// # Errors
     ///
+    /// Returns an error when the profile's security target is zero, or when it folds no
+    /// variable per round.
+    ///
     /// Returns an error when the domain refuses the regime.
     ///
     /// Returns an error when the analysis demands more grinding than one witness can carry.
@@ -143,6 +146,22 @@ impl BinaryWhirProfile {
         Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
         Domain: WhirDomain<F, EF>,
     {
+        // Minimum non-degenerate profile.
+        //
+        // Both numbers below are caller-supplied and neither is derived from anything, so
+        // the only place they can be held to a floor is here, where the schedule is built.
+        //
+        //     security_level 0  ->  every term is under budget, so the derivation always
+        //                           succeeds and reports zero bits as met
+        //     folding_factor 0  ->  a round eliminates no variable, so the schedule never
+        //                           reaches its final codeword
+        if self.security_level == 0 {
+            return Err(ProfileError::ZeroSecurityLevel);
+        }
+        if self.folding_factor == 0 {
+            return Err(ProfileError::ZeroFoldingFactor);
+        }
+
         let mut pow_bits = 0;
         loop {
             let parameters = ProtocolParameters {
@@ -187,6 +206,37 @@ mod tests {
     const SECURITY_LEVEL: usize = 100;
     const LOG_INV_RATE: usize = 2;
     const FOLDING: usize = 3;
+
+    #[test]
+    fn a_profile_with_no_security_target_is_refused() {
+        // Invariant: the target every error term is charged against must be positive.
+        //
+        // At zero every term is trivially under budget, so the derivation succeeds and
+        // reports a level it never had to deliver.
+        let domain = BooleanWhirDomain::default();
+        let profile = BinaryWhirProfile::proven_list_decoding(0, LOG_INV_RATE, FOLDING);
+        assert!(matches!(
+            profile
+                .config::<EF, EF, MyChallenger, _>(NUM_VARIABLES, &domain)
+                .err(),
+            Some(ProfileError::ZeroSecurityLevel)
+        ));
+    }
+
+    #[test]
+    fn a_profile_that_folds_nothing_is_refused() {
+        // Invariant: a round must eliminate at least one variable.
+        //
+        // A zero folding factor describes a schedule that never reaches its final codeword.
+        let domain = BooleanWhirDomain::default();
+        let profile = BinaryWhirProfile::proven_list_decoding(SECURITY_LEVEL, LOG_INV_RATE, 0);
+        assert!(matches!(
+            profile
+                .config::<EF, EF, MyChallenger, _>(NUM_VARIABLES, &domain)
+                .err(),
+            Some(ProfileError::ZeroFoldingFactor)
+        ));
+    }
 
     #[test]
     fn each_regime_is_reached_by_its_own_constructor() {
@@ -261,7 +311,11 @@ mod tests {
                 assert!(*required > ceiling, "{required} bits is not past {ceiling}");
             }
             // A derivation refused for another reason is not this test's business.
-            Err(ProfileError::Schedule(_)) => {}
+            Err(
+                ProfileError::Schedule(_)
+                | ProfileError::ZeroSecurityLevel
+                | ProfileError::ZeroFoldingFactor,
+            ) => {}
         }
     }
 

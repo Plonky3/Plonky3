@@ -909,7 +909,7 @@ mod tests {
         );
 
         assert_eq!(zk_data.pow_witnesses.len(), folding_factor);
-        verifier
+        let _ = verifier
             .into_sumcheck::<MyMmcs, _>(
                 &zk_data,
                 &mask_commitment,
@@ -1372,7 +1372,7 @@ mod tests {
         assert_eq!(zk_data.pow_witnesses.len(), folding_factor);
 
         let mut verifier_ch = MyChallenger::new(perm);
-        ZkVerifier::<F, EF>::verify_claim::<MyMmcs, _>(
+        let _ = ZkVerifier::<F, EF>::verify_claim::<MyMmcs, _>(
             &zk_data,
             &mask_commitment,
             ell_zk,

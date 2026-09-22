@@ -49,4 +49,13 @@ pub enum GenericDegreeError {
         /// Rejected degree value.
         degree: usize,
     },
+    /// The run was described with no rounds, so it samples no challenge.
+    ///
+    /// A zero-round sumcheck is the identity reduction: the point it returns is empty and
+    /// the value it returns is the prover's own claimed sum, echoed back.
+    ///
+    /// Nothing about the statement is tested, and the surviving claim separates no two
+    /// instances, because no challenge was ever drawn.
+    #[error("sumcheck must run at least one round")]
+    NoRounds,
 }

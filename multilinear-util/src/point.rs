@@ -9,6 +9,19 @@ use rand::RngExt;
 use rand::distr::{Distribution, StandardUniform};
 
 /// A point `(x_1, ..., x_n)` in `F^n` for some field `F`.
+///
+/// # Why this type is `#[must_use]`
+///
+/// A point is what a reduction hands back: the place its challenges landed, and the place
+/// the surviving claim has to be discharged.
+///
+/// Dropping it is never a way of accepting less. It is a way of accepting everything, because
+/// the reduction's terminal relation is only pinned once something opens at that point.
+///
+/// The workspace denies `unused_must_use`, so a discarded point is a compile error rather than
+/// a lint. A caller that genuinely wants the sponge advanced and nothing else writes `let _ =`
+/// and says why.
+#[must_use]
 #[derive(Default, Debug, Clone, PartialEq, Eq)]
 pub struct Point<F>(pub(crate) Vec<F>);
 
@@ -17,7 +30,6 @@ where
     F: Field,
 {
     /// Construct a new `Point` from a vector of field elements.
-    #[must_use]
     pub const fn new(coords: Vec<F>) -> Self {
         Self(coords)
     }
@@ -25,7 +37,6 @@ where
     /// Construct a `Point` corresponding to a vertex of the hypercube.
     ///
     /// Returns `value` encoded big-endian: bit `num_variables - 1 - i` lands at coordinate `i`.
-    #[must_use]
     pub fn hypercube(value: usize, num_variables: usize) -> Self {
         assert!(value < (1 << num_variables));
         Self(
@@ -58,7 +69,6 @@ where
 
     /// Return a sub-point over the specified range of variables.
     #[inline]
-    #[must_use]
     pub fn get_subpoint_over_range<R: RangeBounds<usize> + SliceIndex<[F], Output = [F]>>(
         &self,
         range: R,
@@ -201,7 +211,6 @@ where
     }
 
     /// Returns a new `Point` with the variables in reversed order.
-    #[must_use]
     pub fn reversed(&self) -> Self {
         Self(self.0.iter().rev().copied().collect())
     }

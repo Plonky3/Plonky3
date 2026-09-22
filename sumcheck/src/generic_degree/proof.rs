@@ -103,6 +103,20 @@ impl<F, EF> GenericDegreeProof<F, EF> {
             return Err(GenericDegreeError::InvalidDegree { degree });
         }
 
+        // Minimum non-degenerate shape: one round.
+        //
+        // At zero rounds the loop below never runs, so no challenge is drawn. The point
+        // handed back is empty and the "surviving" value is `self.claimed_sum`, which the
+        // prover chose. A caller that discharges that against an opening is checking the
+        // prover's own number against itself.
+        //
+        // The transcript seed still moves, so this is not a Fiat-Shamir break on its own.
+        // It is the reduction becoming the identity while still reading as a reduction, which
+        // is how a cross-instance separation test can pass against every transcript.
+        if num_rounds == 0 {
+            return Err(GenericDegreeError::NoRounds);
+        }
+
         // Reject up front if the proof has the wrong round count.
         if self.round_polys.len() != num_rounds {
             return Err(GenericDegreeError::RoundCountMismatch {
@@ -359,6 +373,57 @@ mod tests {
             err,
             GenericDegreeError::InvalidDegree { degree: 0 }
         ));
+    }
+
+    #[test]
+    fn verify_rejects_a_zero_round_run() {
+        // Invariant: the reduction must sample at least one challenge.
+        //
+        // At zero rounds the loop never runs. The point is empty and the value handed back
+        // is the prover's own `claimed_sum`, so the "reduction" is the identity.
+        //
+        // Fixture state: a well-formed proof with no rounds, a legal degree.
+        let mut ch = fresh_challenger();
+        let proof = GenericDegreeProof::<F, EF> {
+            claimed_sum: EF::ONE,
+            round_polys: vec![],
+            pow_witnesses: vec![],
+        };
+        assert_eq!(
+            proof.verify(&mut ch, 0, 1, 0).unwrap_err(),
+            GenericDegreeError::NoRounds
+        );
+    }
+
+    #[test]
+    fn the_smallest_legal_shape_still_samples_a_challenge() {
+        // Invariant: at the minimum non-degenerate shape a challenge is drawn, and it moves
+        // with the statement.
+        //
+        // This is the test that fails if the smallest run stops sampling. Without it, a
+        // reduction can contract to a bare identity and every separation test still passes,
+        // because two instances that draw no challenge cannot be told apart by one.
+        //
+        // Fixture state: one round, degree one, no grinding — the smallest run `verify`
+        // accepts.
+        let proof = GenericDegreeProof::<F, EF> {
+            claimed_sum: EF::ONE,
+            round_polys: vec![vec![EF::ONE]],
+            pow_witnesses: vec![],
+        };
+
+        let mut ch = fresh_challenger();
+        let (point, _) = proof.verify(&mut ch, 1, 1, 0).unwrap();
+
+        // One round means exactly one challenge, not zero.
+        assert_eq!(point.num_variables(), 1);
+
+        // Mutation: change the round polynomial. The challenge must follow it.
+        let mut tampered = proof.clone();
+        tampered.round_polys[0][0] = EF::TWO;
+        let mut ch = fresh_challenger();
+        let (other, _) = tampered.verify(&mut ch, 1, 1, 0).unwrap();
+        assert_ne!(point, other);
     }
 
     #[test]

@@ -1,5 +1,6 @@
 //! Core data types for lookup arguments.
 
+use alloc::format;
 use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
@@ -110,14 +111,23 @@ pub fn assert_uniform_tuple_width<F>(
     elements: &[Vec<SymbolicExpression<F>>],
     context: &str,
 ) -> usize {
-    let width = elements.first().map_or(0, Vec::len);
-    for tuple in elements {
+    assert_uniform_widths(elements.iter().map(Vec::len), context)
+}
+
+/// The width check itself, over tuple widths rather than the tuples.
+///
+/// Taking widths lets a caller that already holds the tuples in several places check them
+/// without gathering or cloning them first.
+fn assert_uniform_widths(widths: impl IntoIterator<Item = usize>, context: &str) -> usize {
+    let mut widths = widths.into_iter();
+    let Some(width) = widths.next() else {
+        return 0;
+    };
+    for other in widths {
         assert_eq!(
-            tuple.len(),
-            width,
-            "{context}: tuple widths {width} and {} differ; every tuple folded into one \
+            other, width,
+            "{context}: tuple widths {width} and {other} differ; every tuple folded into one \
              lookup must share a payload width, or a shorter tuple can alias a longer one",
-            tuple.len(),
         );
     }
     width
@@ -254,6 +264,12 @@ impl<F: Field> Lookups<F> {
     ///
     /// `constraint_degree` must upper-bound the merged lookup's fraction-pin degree
     /// in the same units as `max_degree`.
+    ///
+    /// # Panics
+    ///
+    /// When two tuples on one bus declare different payload widths. Folding them into one
+    /// fraction column would make the shorter alias the longer, since both are combined
+    /// under the same `beta` powers.
     #[must_use]
     pub fn pack_same_bus_with_degree(
         self,
@@ -290,7 +306,23 @@ impl<F: Field> Lookups<F> {
 
         // Fill columns greedily within each bus.
         // Seal a column when the next interaction would exceed the degree budget.
-        for (_name, members) in buses {
+        for (name, members) in buses {
+            // Every tuple that ends up in one fraction column is folded under the same
+            // `beta` powers, so two widths in one bus make a short tuple alias a long one:
+            // `[x]` and `[0, x]` reduce to the same fingerprint.
+            //
+            // Only packing can put two independently-authored interactions in one column,
+            // so this is where the rule is enforceable. The local path already checks it at
+            // construction; before this the global path checked it nowhere, and the only
+            // reason an in-tree caller was safe is that both STARK backends re-checked it
+            // themselves.
+            assert_uniform_widths(
+                members
+                    .iter()
+                    .flat_map(|lookup| lookup.elements.iter().map(Vec::len)),
+                &format!("bus \"{name}\""),
+            );
+
             let mut current: Option<Lookup<F>> = None;
             for member in members {
                 match current.take() {
@@ -716,6 +748,30 @@ mod tests {
         assert_eq!(packed.len(), 4);
         assert!(packed.iter().all(|l| l.elements.len() == 1));
         assert_contiguous_columns(&packed);
+    }
+
+    #[test]
+    #[should_panic = "tuple widths"]
+    fn pack_refuses_two_tuple_widths_on_one_bus() {
+        // Invariant: every tuple folded into one fraction column shares a payload width.
+        //
+        // Two widths on one bus let a short tuple alias a long one, because both are folded
+        // under the same `beta` powers: `[x]` and `[0, x]` reduce to the same fingerprint,
+        // and the bus balances against an entry that was never provided.
+        //
+        // Before this check the rule was documented on `Challenges` and enforced only on the
+        // local path; the global path reached packing unguarded.
+        //
+        // Fixture state: one bus, one width-1 payload and one width-2 payload.
+        let col = SymbolicVariable::<F>::new(BaseEntry::Main { offset: 0 }, 0);
+        let wide = SymbolicInteraction {
+            bus_name: String::from("a"),
+            fields: vec![SymbolicExpression::from(col), SymbolicExpression::from(col)],
+            count: SymbolicExpression::from(F::ONE),
+            count_weight: 1,
+        };
+        let global = vec![global_payload("a", 1), wide];
+        let _ = Lookups::from_interactions(&global, &[], &[]).pack_same_bus(&LogUpGadget, 16);
     }
 
     #[test]

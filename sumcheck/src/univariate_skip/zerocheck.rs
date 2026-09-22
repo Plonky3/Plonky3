@@ -39,6 +39,10 @@ pub struct ZerocheckProof<EF> {
 }
 
 /// What a verified zerocheck leaves for the commitment to discharge.
+///
+/// Dropping this value without running [`ZerocheckClaim::discharge`] makes the surrounding
+/// verification accept everything: nothing before it ties the proof to a commitment.
+#[must_use]
 #[derive(Debug, Clone)]
 pub struct ZerocheckClaim<EF> {
     /// The point every committed polynomial is claimed at.

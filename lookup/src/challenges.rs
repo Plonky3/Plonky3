@@ -26,7 +26,15 @@ use p3_field::Field;
 ///   makes the fingerprint injective only across tuples of equal declared
 ///   width — a shorter tuple is equivalent to a longer one left-padded with
 ///   zeros, so e.g. `[x]` and `[0, x]` fingerprint identically on one bus.
-///   Callers must keep every tuple on a given bus at a fixed width.
+///   Every tuple on a given bus must therefore share a width.
+///
+/// That rule is enforced rather than asked for: [`assert_uniform_tuple_width`] runs on the
+/// local path when the lookups are built, and on the global path when
+/// [`Lookups::pack_same_bus_with_degree`] folds a bus into one column, which is the only
+/// step that can put two independently-authored interactions in one fraction column.
+///
+/// [`assert_uniform_tuple_width`]: crate::assert_uniform_tuple_width
+/// [`Lookups::pack_same_bus_with_degree`]: crate::Lookups::pack_same_bus_with_degree
 ///
 /// # Soundness
 ///

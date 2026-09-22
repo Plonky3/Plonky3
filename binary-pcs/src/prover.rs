@@ -151,7 +151,6 @@ where
 /// never compiles one.
 ///
 /// This is the only seam between the two routes.
-#[must_use]
 #[allow(clippy::type_complexity)]
 #[tracing::instrument(name = "binary pcs fold rounds", skip_all)]
 pub(crate) fn fold_rounds_with<const BIND_EACH_ROUND: bool, F, EF, MT, MX, Ch>(

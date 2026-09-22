@@ -216,7 +216,9 @@ where
                 .saturating_add(self.commitment_ood_samples),
         )?;
         let verifier = WhirVerifier::new(&self.config, &self.dft, &self.mmcs, L::variable_order());
-        verifier.verify(
+        // The run closes its own terminal check, so the folding point it hands back is
+        // informational here and is deliberately dropped.
+        let _ = verifier.verify(
             &proof.whir,
             challenger,
             commitment,
@@ -363,7 +365,9 @@ where
                 .saturating_add(self.commitment_ood_samples),
         )?;
         let verifier = WhirVerifier::new(&self.config, &self.dft, &self.mmcs, L::variable_order());
-        verifier.verify(
+        // The run closes its own terminal check, so the folding point it hands back is
+        // informational here and is deliberately dropped.
+        let _ = verifier.verify(
             &proof.whir,
             challenger,
             commitment,
