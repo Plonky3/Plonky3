@@ -574,7 +574,8 @@ fn plane_fold_reference_covers_prefixes_widths_and_special_challenges() {
     expected = "a plane fold's corner buffers must hold every corner of its bound prefix"
 )]
 fn a_default_plane_fold_refuses_the_delayed_five_challenge_prefix() {
-    // Only the delayed boundary path's unslice gathers five challenges' worth of corners.
+    // Only an unslice that binds the challenge past the sliced rounds gathers five challenges'
+    // worth of corners, through a fold sized for them.
     let (trace, _) = plane_fold_trace_fixture(11, 1, true);
     let prefix = [Tower::from_repr(0x1234); MAX_PLANE_FOLD_ROUNDS];
     let _ = PlaneFold::<Tower>::new::<Gf4, Tower>(&trace, &prefix);

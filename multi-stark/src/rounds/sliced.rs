@@ -1383,6 +1383,12 @@ impl<'a, R: Field, const CORNERS: usize> PlaneFold<'a, R, CORNERS> {
         EF: Field + HasSubfield<S>,
         R: From<EF>,
     {
+        const {
+            assert!(
+                CORNERS <= MAX_PLANE_FOLD_CORNERS,
+                "a plane fold's lane values hold at most MAX_PLANE_FOLD_GROUPS corner groups"
+            );
+        }
         assert!(
             1 << challenges.len() <= CORNERS,
             "a plane fold's corner buffers must hold every corner of its bound prefix"
@@ -1849,7 +1855,7 @@ impl RowTile {
     /// Write one lane group of one column's residual row pairs: the low halves into `local`, and
     /// each high half less its low half into `delta`.
     ///
-    /// Each lane is written in place, so no lane group is assembled on its way to the buffers.
+    /// Each lane's table sums go straight into that lane of the buffers.
     #[inline(always)]
     fn write_lane_pair<F, R: Field, const CELL: usize, const HIGH: bool>(
         &self,
@@ -1881,6 +1887,14 @@ impl RowTile {
         next_columns: &[Range<usize>],
         scratch: &mut PackedScratch<PackedRepr<F, R>, PackedRepr<F, R>>,
     ) {
+        // A tile's plane fold binds at most `MAX_SLICED_ROUNDS` challenges, so its cells hold
+        // one or two corner groups, and the arms below cover every width a tile lays out.
+        const {
+            assert!(
+                MAX_CORNERS <= 2 * GROUP_CORNERS,
+                "a tile's cells hold at most two corner groups"
+            );
+        }
         const ONE: usize = GROUP_CELL_BYTES;
         const TWO: usize = 2 * GROUP_CELL_BYTES;
         match (self.column_stride, self.high) {
