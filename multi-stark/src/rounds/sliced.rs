@@ -1261,8 +1261,14 @@ impl<'a, R: Field> PlaneFold<'a, R> {
         EF: Field + HasSubfield<S>,
         R: From<EF>,
     {
-        assert!(challenges.len() <= MAX_PLANE_FOLD_ROUNDS);
-        assert!(trace.num_vars >= challenges.len() + LANE_VARIABLES);
+        assert!(
+            challenges.len() <= MAX_PLANE_FOLD_ROUNDS,
+            "a plane fold's corner buffers must hold every corner of its bound prefix"
+        );
+        assert!(
+            trace.num_vars >= challenges.len() + LANE_VARIABLES,
+            "a bound prefix must leave a whole residual word, or its corners collapse onto one"
+        );
         let generator = R::from(EF::from(S::GENERATOR));
         let weights = Poly::new_from_point(challenges, EF::ONE)
             .as_slice()
