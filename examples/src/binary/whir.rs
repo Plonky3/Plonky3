@@ -208,7 +208,7 @@ where
     }
 }
 
-trait WhirErrorProjection: HarnessHash {
+pub(crate) trait WhirErrorProjection: HarnessHash {
     fn prove_error(
         error: p3_multi_stark::ProvingError<
             p3_multi_stark::config::PcsProverError<BooleanWhirStarkConfig<Self>>,
@@ -276,6 +276,16 @@ where
         error: p3_multi_stark::VerificationError<p3_multi_stark::config::PcsError<Self>>,
     ) -> BinaryProofError {
         H::verify_error(error)
+    }
+
+    fn check_proof_bytes(&self, bytes: usize) -> Result<(), BinaryProofError> {
+        self.budget()
+            .check_bytes(bytes)
+            .map_err(BinaryProofError::WhirBudget)
+    }
+
+    fn whir_summary(&self) -> Option<WhirSummary> {
+        Some(self.summary)
     }
 }
 
@@ -366,6 +376,38 @@ pub fn boolean_whir_config<A: BinaryAir, H: HarnessHash>(
     let whir_config = profile
         .config::<F, F, Challenger<H>, _>(packed_variables, &domain)
         .map_err(BinaryProofError::WhirProfile)?;
+    tracing::debug!(
+        target: "p3_examples::binary::whir",
+        regime = ?whir.regime,
+        term_security_bits = whir.term_security_bits,
+        folding_schedule = ?whir_config.folding_schedule,
+        round_log_inv_rates = ?whir_config
+            .round_parameters
+            .iter()
+            .map(|round| round.log_inv_rate)
+            .collect::<Vec<_>>(),
+        round_queries = ?whir_config
+            .round_parameters
+            .iter()
+            .map(|round| round.num_queries)
+            .collect::<Vec<_>>(),
+        round_ood_samples = ?whir_config
+            .round_parameters
+            .iter()
+            .map(|round| round.ood_samples)
+            .collect::<Vec<_>>(),
+        round_pow_bits = ?whir_config
+            .round_parameters
+            .iter()
+            .map(|round| (round.pow_bits, round.folding_pow_bits))
+            .collect::<Vec<_>>(),
+        commitment_ood_samples = whir_config.commitment_ood_samples,
+        final_queries = whir_config.final_queries,
+        final_pow_bits = whir_config.final_pow_bits,
+        final_folding_pow_bits = whir_config.final_folding_pow_bits,
+        final_sumcheck_rounds = whir_config.final_sumcheck_rounds,
+        final_direct_send_arity = whir_config.final_round_config().folding_factor,
+    );
     let first_fold =
         whir_config
             .folding_schedule

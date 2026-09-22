@@ -54,6 +54,7 @@ postcard = { workspace = true, features = ["alloc"] }
 rand.workspace = true
 serde.workspace = true
 thiserror.workspace = true
+tracing.workspace = true
 
 [dev-dependencies]
 p3-baby-bear = { path = "../baby-bear" }
@@ -67,7 +68,6 @@ p3-poseidon1 = { path = "../poseidon1" }
 p3-security = { path = "../security" }
 p3-whir = { path = "../whir" }
 
-tracing.workspace = true
 tracing-forest = { workspace = true, features = ["ansi", "smallvec"] }
 tracing-subscriber = { workspace = true, features = ["std", "env-filter"] }
 

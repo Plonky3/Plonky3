@@ -35,9 +35,9 @@ use p3_multi_stark::packed_ext::{PackedExt, PackedRepr};
 use p3_multi_stark::sliced::SlicedFolder;
 use p3_multi_stark::subfield::{SubfieldAcc, SubfieldVar};
 use p3_multi_stark::{
-    MultiStarkProof, ProverInstance, ProverInstances, ProvingError, ReprBackend, SecurityError,
-    SubfieldBackend, VerificationError, VerifierInstance, VerifierInstances, prove_with_backend,
-    security_report, setup, verify,
+    MultiStarkProof, ProverInstance, ProverInstances, ProvingError, ProvingKey, ReprBackend,
+    SecurityError, SubfieldBackend, VerificationError, VerifierInstance, VerifierInstances,
+    VerifyingKey, prove_with_backend, security_report, setup, verify,
 };
 use p3_sumcheck::layout::{Layout, SuffixProver, Table, Witness, plan_stacked_layout};
 use p3_sumcheck::ring_switch::bits::BitRingSwitch;
@@ -49,6 +49,7 @@ mod whir;
 use p3_binary_pcs::BooleanTraceCommitmentError;
 pub use p3_binary_pcs::whir::{BinaryWhirBudget, BudgetError};
 use p3_binary_pcs::whir::{BooleanWhirError, ProfileError};
+use whir::WhirErrorProjection;
 pub use whir::{
     BooleanPcsChoice, BooleanWhirStarkConfig, WhirIncompatibility, WhirInteractionFamily,
     WhirOptions, WhirRegime, WhirSummary, boolean_whir_config,
@@ -104,6 +105,15 @@ pub enum HashFamily {
     Keccak256,
     /// BLAKE3, which compresses a 64-byte block where Keccak-256 permutes a 136-byte rate.
     Blake3,
+}
+
+/// Commitment scheme selected for a proof run.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PcsIdentity {
+    /// The existing folding-only binary commitment.
+    Folding,
+    /// The additive-domain WHIR commitment.
+    Whir,
 }
 
 impl fmt::Display for HashFamily {
@@ -424,8 +434,14 @@ pub struct BinaryProofReport {
     pub prove_seconds: f64,
     /// Wall-clock time spent in `verify`.
     pub verify_seconds: f64,
+    /// Wall-clock time spent configuring, setting up, and assessing security.
+    pub setup_seconds: f64,
     /// Composed security bits reported by `p3_multi_stark::security_report`.
     pub security_bits: f64,
+    /// Commitment scheme selected for this run.
+    pub pcs: PcsIdentity,
+    /// WHIR schedule metadata, when the WHIR commitment was selected.
+    pub whir: Option<WhirSummary>,
 }
 
 impl fmt::Display for BinaryProofReport {
@@ -453,7 +469,23 @@ impl fmt::Display for BinaryProofReport {
         writeln!(f, "Proof size: {} bytes", self.proof_bytes)?;
         writeln!(f, "Prove time: {:.3}s", self.prove_seconds)?;
         writeln!(f, "Verify time: {:.3}s", self.verify_seconds)?;
-        write!(f, "Composed security: {:.2} bits", self.security_bits)
+        writeln!(f, "Setup/security time: {:.3}s", self.setup_seconds)?;
+        writeln!(f, "Composed security: {:.2} bits", self.security_bits)?;
+        writeln!(f, "PCS: {:?}", self.pcs)?;
+        if let Some(whir) = self.whir {
+            writeln!(f, "WHIR regime: {:?}", whir.regime)?;
+            writeln!(f, "WHIR term target: {} bits", whir.term_security_bits)?;
+            writeln!(f, "WHIR packed variables: {}", whir.packed_variables)?;
+            writeln!(f, "WHIR cap height: {}", whir.cap_height)?;
+            writeln!(f, "WHIR opened positions: {}", whir.total_opened_positions)?;
+            writeln!(
+                f,
+                "WHIR PCS payload estimate: {} bytes",
+                whir.pcs_payload_bytes
+            )?;
+            writeln!(f, "WHIR max grinding: {} bits", whir.max_grinding_bits)?;
+        }
+        Ok(())
     }
 }
 
@@ -564,6 +596,16 @@ trait HarnessConfig: MultiStarkConfig {
 
     /// Wrap a failure from verification.
     fn verify_error(error: VerificationError<PcsError<Self>>) -> BinaryProofError;
+
+    /// Check a complete serialized proof against any configuration-specific byte budget.
+    fn check_proof_bytes(&self, _bytes: usize) -> Result<(), BinaryProofError> {
+        Ok(())
+    }
+
+    /// Return scalar WHIR schedule metadata when this configuration uses WHIR.
+    fn whir_summary(&self) -> Option<WhirSummary> {
+        None
+    }
 }
 
 impl<const N: usize, Ntt, H> HarnessConfig for BinaryStarkConfig<N, Ntt, H>
@@ -866,6 +908,85 @@ where
     prove_boolean_air_with_backend(air, trace, options, Backend::preferred())
 }
 
+/// Assess the selected Boolean PCS and composed security for an AIR shape without a witness.
+pub fn preflight_boolean_air<A: BinaryAir>(
+    air: &A,
+    shape: TableShape,
+    options: BinaryProofOptions,
+) -> Result<f64, BinaryProofError> {
+    match (options.pcs, options.merkle_arity, options.hash) {
+        (BooleanPcsChoice::Folding, 2, HashFamily::Keccak256) => {
+            preflight_boolean_folding::<A, 2, Keccak256Hash>(air, shape, options)
+        }
+        (BooleanPcsChoice::Folding, 2, HashFamily::Blake3) => {
+            preflight_boolean_folding::<A, 2, Blake3>(air, shape, options)
+        }
+        (BooleanPcsChoice::Folding, 4, HashFamily::Keccak256) => {
+            preflight_boolean_folding::<A, 4, Keccak256Hash>(air, shape, options)
+        }
+        (BooleanPcsChoice::Folding, 4, HashFamily::Blake3) => {
+            preflight_boolean_folding::<A, 4, Blake3>(air, shape, options)
+        }
+        (BooleanPcsChoice::Folding, arity, _) => {
+            Err(BinaryProofError::UnsupportedMerkleArity(arity))
+        }
+        (BooleanPcsChoice::Whir(_), _, HashFamily::Keccak256) => {
+            preflight_boolean_whir::<A, Keccak256Hash>(air, shape, options)
+        }
+        (BooleanPcsChoice::Whir(_), _, HashFamily::Blake3) => {
+            preflight_boolean_whir::<A, Blake3>(air, shape, options)
+        }
+    }
+}
+
+fn preflight_boolean_folding<A, const N: usize, H>(
+    air: &A,
+    shape: TableShape,
+    options: BinaryProofOptions,
+) -> Result<f64, BinaryProofError>
+where
+    A: BinaryAir,
+    H: HarnessHash,
+{
+    let config = boolean_config::<N, H>(
+        shape,
+        options.pcs_params(),
+        options.folding,
+        options.leaf_elements,
+    )?;
+    let setup_start = Instant::now();
+    let (_, _, security_bits) = setup_and_assess(&config, air, shape, options)?;
+    tracing::debug!(
+        target: "p3_examples::binary",
+        preflight_seconds = setup_start.elapsed().as_secs_f64(),
+        "Boolean PCS preflight completed"
+    );
+    Ok(security_bits)
+}
+
+fn preflight_boolean_whir<A, H>(
+    air: &A,
+    shape: TableShape,
+    options: BinaryProofOptions,
+) -> Result<f64, BinaryProofError>
+where
+    A: BinaryAir,
+    H: HarnessHash + WhirErrorProjection,
+{
+    let BooleanPcsChoice::Whir(whir) = options.pcs else {
+        unreachable!("WHIR preflight requires a WHIR PCS choice")
+    };
+    let config = boolean_whir_config::<A, H>(air, shape, options, whir)?;
+    let setup_start = Instant::now();
+    let (_, _, security_bits) = setup_and_assess(&config, air, shape, options)?;
+    tracing::debug!(
+        target: "p3_examples::binary",
+        preflight_seconds = setup_start.elapsed().as_secs_f64(),
+        "WHIR Boolean PCS preflight completed"
+    );
+    Ok(security_bits)
+}
+
 /// Proves and verifies a Boolean-valued `air` against `trace`, committing the trace as bits, and
 /// reports size and timing measurements.
 ///
@@ -890,6 +1011,16 @@ pub fn prove_boolean_air_with_backend<A>(
 where
     A: BinaryAir,
 {
+    if matches!(options.pcs, BooleanPcsChoice::Whir(_)) {
+        return match options.hash {
+            HashFamily::Keccak256 => {
+                prove_boolean_whir_with::<A, Keccak256Hash>(air, trace, options, backend)
+            }
+            HashFamily::Blake3 => {
+                prove_boolean_whir_with::<A, Blake3>(air, trace, options, backend)
+            }
+        };
+    }
     match (options.merkle_arity, options.hash) {
         (2, HashFamily::Keccak256) => {
             prove_boolean_air_with::<A, 2, Keccak256Hash>(air, trace, options, backend)
@@ -929,6 +1060,69 @@ where
     prove_and_verify(&config, air, shape, options, backend, || trace)
 }
 
+fn prove_boolean_whir_with<A, H>(
+    air: &A,
+    trace: Table<F>,
+    options: BinaryProofOptions,
+    backend: Backend,
+) -> Result<BinaryProofReport, BinaryProofError>
+where
+    A: BinaryAir,
+    H: HarnessHash + WhirErrorProjection,
+{
+    let shape = trace.shape();
+    let BooleanPcsChoice::Whir(whir) = options.pcs else {
+        unreachable!("WHIR proving requires a WHIR PCS choice")
+    };
+    let config = boolean_whir_config::<A, H>(air, shape, options, whir)?;
+    prove_and_verify(&config, air, shape, options, backend, || trace)
+}
+
+fn setup_and_assess<A, C, H>(
+    config: &C,
+    air: &A,
+    shape: TableShape,
+    options: BinaryProofOptions,
+) -> Result<(ProvingKey<C>, VerifyingKey<C>, f64), BinaryProofError>
+where
+    A: BinaryAir,
+    H: HarnessHash,
+    C: HarnessConfig + MultiStarkConfig<Val = F, Challenge = F, Challenger = Challenger<H>>,
+    C::Pcs: PrescribedPointPcs<F, Challenger<H>>,
+    Challenger<H>: CanObserve<Commitment<C>>,
+    Commitment<C>: Clone,
+    ProverData<C>: Clone,
+{
+    assert_eq!(
+        BaseAir::<F>::num_public_values(air),
+        0,
+        "the harness proves AIRs without public values"
+    );
+    assert_eq!(
+        BaseAir::<F>::preprocessed_width(air),
+        0,
+        "the harness proves AIRs without preprocessed columns"
+    );
+
+    let (pk, vk) = setup(config, &[air], &mut binary_challenger()).map_err(C::prove_error)?;
+    let public_values: [F; 0] = [];
+    let verifier_instances = VerifierInstances::new(vec![VerifierInstance::new(
+        air,
+        &vk,
+        shape.num_variables(),
+        &public_values,
+    )]);
+    let report =
+        security_report(config, &verifier_instances).map_err(BinaryProofError::Security)?;
+    report
+        .require_security(options.security_bits)
+        .map_err(BinaryProofError::Security)?;
+    let security_bits = report
+        .security_bits()
+        .expect("require_security succeeded, so every component is assessed");
+    Ok((pk, vk, security_bits))
+}
+
 /// Proves and verifies `air` against `trace` under `config`, reporting size and timing
 /// measurements.
 ///
@@ -953,22 +1147,13 @@ where
     ProverData<C>: Clone,
     MultiStarkProof<C>: serde::Serialize + serde::de::DeserializeOwned,
 {
-    assert_eq!(
-        BaseAir::<F>::num_public_values(air),
-        0,
-        "the harness proves AIRs without public values"
-    );
-    assert_eq!(
-        BaseAir::<F>::preprocessed_width(air),
-        0,
-        "the harness proves AIRs without preprocessed columns"
-    );
-
     let rows = 1usize << shape.num_variables();
     let width = shape.width();
     let log_height = shape.num_variables();
 
-    let (pk, vk) = setup(config, &[air], &mut binary_challenger()).map_err(C::prove_error)?;
+    let setup_start = Instant::now();
+    let (pk, vk, security_bits) = setup_and_assess(config, air, shape, options)?;
+    let setup_seconds = setup_start.elapsed().as_secs_f64();
 
     let public_values: [F; 0] = [];
     let verifier_instances = || {
@@ -979,15 +1164,6 @@ where
             &public_values,
         )])
     };
-
-    let report =
-        security_report(config, &verifier_instances()).map_err(BinaryProofError::Security)?;
-    report
-        .require_security(options.security_bits)
-        .map_err(BinaryProofError::Security)?;
-    let security_bits = report
-        .security_bits()
-        .expect("require_security succeeded, so every component is assessed");
 
     let prove_start = Instant::now();
     // Prepare the table inside the timed section. Dense callers transpose here; packed callers
@@ -1007,6 +1183,7 @@ where
 
     let bytes = postcard::to_allocvec(&proof).expect("postcard serialization must not fail");
     let proof_bytes = bytes.len();
+    config.check_proof_bytes(proof_bytes)?;
     let proof: MultiStarkProof<C> =
         postcard::from_bytes(&bytes).expect("postcard round trip must not fail");
 
@@ -1031,7 +1208,14 @@ where
         proof_bytes,
         prove_seconds,
         verify_seconds,
+        setup_seconds,
         security_bits,
+        pcs: if config.whir_summary().is_some() {
+            PcsIdentity::Whir
+        } else {
+            PcsIdentity::Folding
+        },
+        whir: config.whir_summary(),
     })
 }
 
@@ -1082,6 +1266,401 @@ mod tests {
         .expect("l20 unique schedule configures without a witness");
         assert_eq!(config.summary.packed_variables, 27);
         assert_eq!(config.summary.max_grinding_bits, 0);
+    }
+
+    #[test]
+    fn whir_preflight_l18_and_l20_reaches_composed_target_under_both_hashes() {
+        for hash in [HashFamily::Keccak256, HashFamily::Blake3] {
+            for log_height in [18, 20] {
+                let bits = preflight_boolean_air(
+                    &Blake3BinaryAir {},
+                    TableShape::new(log_height, NUM_BLAKE3_BINARY_COLS),
+                    whir_preflight_options(hash, 98),
+                )
+                .expect("WHIR preflight reaches the composed target");
+                assert!(
+                    bits >= 95.0,
+                    "hash={hash:?}, log_height={log_height}, bits={bits}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn whir_preflight_rejects_inadequate_composed_security() {
+        let error = preflight_boolean_air(
+            &Blake3BinaryAir {},
+            TableShape::new(20, NUM_BLAKE3_BINARY_COLS),
+            whir_preflight_options(HashFamily::Blake3, 95),
+        )
+        .expect_err("per-term security 95 must not certify composed security 95");
+        assert!(matches!(
+            error,
+            BinaryProofError::Security(SecurityError::InsufficientSecurity { requested: 95, .. })
+        ));
+    }
+
+    #[test]
+    fn whir_proves_small_packed_blake3_under_both_hashes() {
+        let air = Blake3BinaryAir {};
+        let words = air.generate_random_trace_packed::<Gf2>(4);
+        for hash in [HashFamily::Keccak256, HashFamily::Blake3] {
+            let report = prove_boolean_air(
+                &air,
+                Table::from_packed_bits(words.clone(), 2),
+                whir_small_options(hash),
+            )
+            .expect("small packed BLAKE3 WHIR proof must verify");
+            assert_eq!(report.pcs, PcsIdentity::Whir);
+            assert_eq!(report.hash, hash);
+            assert!(report.security_bits >= 95.0);
+            assert!(report.whir.is_some());
+        }
+    }
+
+    #[test]
+    fn whir_proves_small_keccak_with_successors() {
+        let air = KeccakBinaryAir {};
+        let words = air.generate_random_trace_packed::<Gf2>(1);
+        let report = prove_boolean_air(
+            &air,
+            Table::from_packed_bits(words, 5),
+            whir_small_options(HashFamily::Blake3),
+        )
+        .expect("small Keccak WHIR proof must verify");
+        assert_eq!(report.pcs, PcsIdentity::Whir);
+        assert_eq!(report.width, NUM_KECCAK_BINARY_COLS);
+        assert!(report.security_bits >= 95.0);
+    }
+
+    #[test]
+    fn whir_proves_small_blake3_sorted_proper_successor_subset() {
+        let air = ShapeAir {
+            width: 3,
+            next: vec![0, 2],
+            public_values: 0,
+            preprocessed_width: 0,
+        };
+        let trace = Table::new(RowMajorMatrix::new(vec![F::ZERO; 256 * 3], 3).transpose());
+        let report = prove_boolean_air(
+            &air,
+            trace,
+            BinaryProofOptions {
+                folding: 3,
+                ..whir_small_options(HashFamily::Blake3)
+            },
+        )
+        .expect("small sorted proper-successor WHIR proof must verify");
+        assert_eq!(report.pcs, PcsIdentity::Whir);
+        assert!(report.security_bits >= 95.0);
+    }
+
+    #[test]
+    fn whir_schedule_budgets_refuse_query_and_grinding_limits_independently() {
+        let air = Blake3BinaryAir {};
+        let shape = TableShape::new(4, NUM_BLAKE3_BINARY_COLS);
+        let mut query_options = whir_small_options(HashFamily::Blake3);
+        let BooleanPcsChoice::Whir(query_whir) = query_options.pcs else {
+            unreachable!()
+        };
+        let generous = boolean_whir_config::<_, Blake3>(&air, shape, query_options, query_whir)
+            .expect("small WHIR config derives");
+        let actual_queries = generous.summary.total_opened_positions;
+        assert!(actual_queries > 0);
+        let query_whir = WhirOptions {
+            budget: BinaryWhirBudget {
+                max_stir_queries: actual_queries - 1,
+                ..query_whir.budget
+            },
+            ..query_whir
+        };
+        query_options.pcs = BooleanPcsChoice::Whir(query_whir);
+        let query_error = boolean_whir_config::<_, Blake3>(&air, shape, query_options, query_whir)
+            .expect_err("one fewer query must be refused before setup");
+        assert!(matches!(
+            query_error,
+            BinaryProofError::WhirBudget(BudgetError::Queries { actual, budget })
+                if actual == actual_queries && budget + 1 == actual_queries
+        ));
+
+        let mut grind_options = whir_preflight_options(HashFamily::Blake3, 102);
+        let BooleanPcsChoice::Whir(grind_whir) = grind_options.pcs else {
+            unreachable!()
+        };
+        let grind_whir = WhirOptions {
+            regime: WhirRegime::Johnson,
+            budget: BinaryWhirBudget {
+                max_stir_queries: usize::MAX,
+                max_proof_bytes: usize::MAX,
+                max_grinding_bits: 37,
+            },
+            ..grind_whir
+        };
+        grind_options.pcs = BooleanPcsChoice::Whir(grind_whir);
+        let grind_error = boolean_whir_config::<_, Blake3>(
+            &Blake3BinaryAir {},
+            TableShape::new(20, NUM_BLAKE3_BINARY_COLS),
+            grind_options,
+            grind_whir,
+        )
+        .expect_err("grinding below the derived requirement must be refused");
+        assert!(matches!(
+            grind_error,
+            BinaryProofError::WhirBudget(BudgetError::Grinding {
+                actual: 38,
+                budget: 37
+            })
+        ));
+    }
+
+    #[test]
+    fn whir_complete_serialized_byte_budget_checks_actual_proof_length() {
+        let air = Blake3BinaryAir {};
+        let words = air.generate_random_trace_packed::<Gf2>(4);
+        let trace = Table::from_packed_bits(words.clone(), 2);
+        let baseline =
+            prove_boolean_air(&air, trace.clone(), whir_small_options(HashFamily::Blake3))
+                .expect("baseline WHIR proof must verify");
+        let proof_len = baseline.proof_bytes;
+        let mut under = whir_small_options(HashFamily::Blake3);
+        let BooleanPcsChoice::Whir(under_whir) = under.pcs else {
+            unreachable!()
+        };
+        let under_whir = WhirOptions {
+            budget: BinaryWhirBudget {
+                max_proof_bytes: proof_len - 1,
+                ..under_whir.budget
+            },
+            ..under_whir
+        };
+        under.pcs = BooleanPcsChoice::Whir(under_whir);
+        let error = prove_boolean_air(&air, trace.clone(), under).unwrap_err();
+        assert!(matches!(
+            error,
+            BinaryProofError::WhirBudget(BudgetError::Bytes { actual, budget })
+                if actual == proof_len && budget + 1 == proof_len
+        ));
+
+        let mut exact = whir_small_options(HashFamily::Blake3);
+        let BooleanPcsChoice::Whir(exact_whir) = exact.pcs else {
+            unreachable!()
+        };
+        let exact_whir = WhirOptions {
+            budget: BinaryWhirBudget {
+                max_proof_bytes: proof_len,
+                ..exact_whir.budget
+            },
+            ..exact_whir
+        };
+        exact.pcs = BooleanPcsChoice::Whir(exact_whir);
+        let accepted = prove_boolean_air(&air, trace, exact)
+            .expect("a byte budget equal to the complete proof length accepts");
+        assert_eq!(accepted.proof_bytes, proof_len);
+    }
+
+    #[test]
+    fn whir_tampered_opening_values_and_final_polynomial_are_rejected() {
+        let air = Blake3BinaryAir {};
+        let table = Table::from_packed_bits(air.generate_random_trace_packed::<Gf2>(4), 2);
+        let shape = table.shape();
+        let options = whir_small_options(HashFamily::Blake3);
+        let BooleanPcsChoice::Whir(whir) = options.pcs else {
+            unreachable!()
+        };
+        let config = boolean_whir_config::<_, Blake3>(&air, shape, options, whir)
+            .expect("small WHIR config derives");
+        let (pk, vk, _) = setup_and_assess(&config, &air, shape, options)
+            .expect("setup and security assessment succeed");
+        let public_values: [F; 0] = [];
+        let prover_instances =
+            ProverInstances::new(vec![ProverInstance::new(&air, table, &pk, &public_values)]);
+        let proof = Backend::preferred()
+            .prove(
+                &config,
+                prover_instances,
+                options.sumcheck_pow_bits,
+                &mut binary_challenger(),
+            )
+            .expect("honest WHIR proof succeeds");
+        let bytes = postcard::to_allocvec(&proof).expect("proof serialization succeeds");
+        let proof: MultiStarkProof<BooleanWhirStarkConfig<Blake3>> =
+            postcard::from_bytes(&bytes).expect("proof deserialization succeeds");
+        let instances = || {
+            VerifierInstances::new(vec![VerifierInstance::new(
+                &air,
+                &vk,
+                shape.num_variables(),
+                &public_values,
+            )])
+        };
+
+        verify(
+            &config,
+            instances(),
+            &proof,
+            options.sumcheck_pow_bits,
+            &mut binary_challenger(),
+        )
+        .expect("serialized honest WHIR proof verifies");
+
+        let mut values_tampered: MultiStarkProof<BooleanWhirStarkConfig<Blake3>> =
+            postcard::from_bytes(&bytes).expect("proof replay deserialization succeeds");
+        values_tampered.opening.values[0] += F::ONE;
+        let values_error = verify(
+            &config,
+            instances(),
+            &values_tampered,
+            options.sumcheck_pow_bits,
+            &mut binary_challenger(),
+        )
+        .expect_err("tampered opening value must be rejected");
+        assert!(matches!(
+            values_error,
+            VerificationError::Opening(BooleanTraceCommitmentError::Boolean(
+                BooleanWhirError::ReductionProof(
+                    p3_sumcheck::ring_switch::bits::BitRingSwitchProofError::ClaimMismatch
+                )
+            ))
+        ));
+
+        let mut final_tampered: MultiStarkProof<BooleanWhirStarkConfig<Blake3>> =
+            postcard::from_bytes(&bytes).expect("proof replay deserialization succeeds");
+        let final_poly = final_tampered
+            .opening
+            .opening
+            .opening
+            .whir
+            .final_poly
+            .as_mut()
+            .expect("small WHIR proof has a final polynomial");
+        final_poly.as_mut_slice()[0] += F::ONE;
+        let final_error = verify(
+            &config,
+            instances(),
+            &final_tampered,
+            options.sumcheck_pow_bits,
+            &mut binary_challenger(),
+        )
+        .expect_err("tampered WHIR final polynomial must be rejected");
+        assert!(matches!(
+            final_error,
+            VerificationError::Opening(BooleanTraceCommitmentError::Boolean(
+                BooleanWhirError::Opening(_)
+            ))
+        ));
+    }
+
+    #[test]
+    fn folding_parent_transcript_has_stable_small_blake3_baseline() {
+        let air = Blake3BinaryAir {};
+        let table = Table::from_packed_bits(air.generate_random_trace_packed::<Gf2>(4), 2);
+        let (bytes, next_challenge) = boolean_proof_transcript(&air, table, Backend::preferred());
+        let digest = Blake3.hash_iter(bytes.iter().copied());
+        println!(
+            "folding parent baseline: proof_bytes={}, digest={digest:02x?}, next={next_challenge:?}",
+            bytes.len()
+        );
+        assert_eq!(bytes.len(), 232_201);
+        assert_eq!(
+            digest,
+            [
+                0xad, 0xb9, 0xd7, 0x80, 0x45, 0x78, 0x55, 0x48, 0xbc, 0x76, 0xac, 0x7c, 0x24, 0x1a,
+                0x20, 0xfb, 0x70, 0x8d, 0x7d, 0x2b, 0x15, 0x8d, 0x48, 0x7a, 0xde, 0xb2, 0x6f, 0x68,
+                0x83, 0xb4, 0x1d, 0xae,
+            ]
+        );
+        assert_eq!(
+            next_challenge,
+            F::from_repr(0xa377_5f1b_cdc0_002a_c595_02ac_d23e_90bd)
+        );
+    }
+
+    #[test]
+    fn whir_johnson_security_report_exposes_opening_and_outer_terms() {
+        let base = whir_small_options(HashFamily::Blake3);
+        let BooleanPcsChoice::Whir(whir) = base.pcs else {
+            unreachable!()
+        };
+        let options = BinaryProofOptions {
+            pcs: BooleanPcsChoice::Whir(WhirOptions {
+                regime: WhirRegime::Johnson,
+                ..whir
+            }),
+            ..base
+        };
+        let air = Blake3BinaryAir {};
+        let shape = TableShape::new(4, NUM_BLAKE3_BINARY_COLS);
+        let BooleanPcsChoice::Whir(whir) = options.pcs else {
+            unreachable!()
+        };
+        let config = boolean_whir_config::<_, Blake3>(&air, shape, options, whir)
+            .expect("Johnson small config must derive");
+        let (_, vk) = setup(&config, &[&air], &mut binary_challenger()).expect("setup succeeds");
+        let public_values: [F; 0] = [];
+        let instances = VerifierInstances::new(vec![VerifierInstance::new(
+            &air,
+            &vk,
+            shape.num_variables(),
+            &public_values,
+        )]);
+        let report = security_report(&config, &instances).expect("security report succeeds");
+        println!("Johnson security terms: {:?}", report.terms());
+        assert!(
+            report
+                .terms()
+                .iter()
+                .any(|term| term.label == "whir-opening")
+        );
+        assert!(
+            report
+                .terms()
+                .iter()
+                .any(|term| term.label == "bit-ring-switch")
+        );
+        assert!(
+            report
+                .terms()
+                .iter()
+                .any(|term| term.label == "column-batching")
+        );
+        for label in ["constraint-batching", "zerocheck", "constraint-sumcheck"] {
+            assert!(
+                report.terms().iter().any(|term| term.label == label),
+                "missing security term {label}"
+            );
+        }
+
+        let unique_options = base;
+        let BooleanPcsChoice::Whir(unique_whir) = unique_options.pcs else {
+            unreachable!()
+        };
+        let unique_config =
+            boolean_whir_config::<_, Blake3>(&air, shape, unique_options, unique_whir)
+                .expect("unique small config must derive");
+        let (_, unique_vk) =
+            setup(&unique_config, &[&air], &mut binary_challenger()).expect("setup succeeds");
+        let unique_instances = VerifierInstances::new(vec![VerifierInstance::new(
+            &air,
+            &unique_vk,
+            shape.num_variables(),
+            &public_values,
+        )]);
+        let unique_report =
+            security_report(&unique_config, &unique_instances).expect("security report succeeds");
+        let bits_for = |report: &p3_multi_stark::MultiStarkSecurityReport, label| {
+            report
+                .terms()
+                .iter()
+                .find(|term| term.label == label)
+                .expect("security term is present")
+                .bits
+                .bits()
+        };
+        let unique_batching = bits_for(&unique_report, "constraint-batching");
+        let johnson_batching = bits_for(&report, "constraint-batching");
+        let expected_charge =
+            p3_security::SecurityAssumption::JohnsonBound.list_size_bits(shape.num_variables(), 1);
+        assert!((unique_batching - johnson_batching - expected_charge).abs() < 1e-9);
     }
 
     #[test]
@@ -1730,6 +2309,46 @@ mod tests {
             log_inv_rate: 1,
             folding: 1,
             merkle_arity: 2,
+            ..BinaryProofOptions::default()
+        }
+    }
+
+    fn whir_preflight_options(hash: HashFamily, term_security_bits: usize) -> BinaryProofOptions {
+        BinaryProofOptions {
+            pcs: BooleanPcsChoice::Whir(WhirOptions {
+                regime: WhirRegime::UniqueDecoding,
+                term_security_bits,
+                budget: BinaryWhirBudget {
+                    max_stir_queries: usize::MAX,
+                    max_proof_bytes: usize::MAX,
+                    max_grinding_bits: 0,
+                },
+            }),
+            security_bits: 95,
+            log_inv_rate: 1,
+            folding: 4,
+            merkle_arity: 2,
+            hash,
+            ..BinaryProofOptions::default()
+        }
+    }
+
+    fn whir_small_options(hash: HashFamily) -> BinaryProofOptions {
+        BinaryProofOptions {
+            pcs: BooleanPcsChoice::Whir(WhirOptions {
+                regime: WhirRegime::UniqueDecoding,
+                term_security_bits: 102,
+                budget: BinaryWhirBudget {
+                    max_stir_queries: usize::MAX,
+                    max_proof_bytes: usize::MAX,
+                    max_grinding_bits: usize::MAX,
+                },
+            }),
+            security_bits: 95,
+            log_inv_rate: 1,
+            folding: 4,
+            merkle_arity: 2,
+            hash,
             ..BinaryProofOptions::default()
         }
     }
