@@ -20,6 +20,9 @@
 //! `C` has degree at most `d` in each variable, so `d + 1` nodes interpolate it exactly.
 //! Every value is the one the generic kernel computes, so the round polynomial is the same.
 
+#[cfg(test)]
+extern crate std;
+
 use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
@@ -49,10 +52,47 @@ use crate::sliced::{LaneSums, SLICED_LANES, SlicedFolder, SlicedGf4, gf4_coordin
 ///
 /// Each round doubles both the plane work and the corner words a residual row folds, so the
 /// count has a ceiling. A stage is also capped by the row variables its words leave unbound.
+/// With its late-materialization parameter set, [`ReprBackend`](crate::ReprBackend) also serves
+/// the round after a qualifying stage's boundary round from its planes.
 pub const MAX_SLICED_ROUNDS: usize = 4;
+
+/// Longest prefix a plane fold binds.
+///
+/// A stage evaluates rounds on its planes with at most [`MAX_SLICED_ROUNDS`] challenges bound.
+/// The delayed boundary path binds the challenge of its last such round as it unslices, so a
+/// plane fold binds at most one challenge more.
+const MAX_PLANE_FOLD_ROUNDS: usize = MAX_SLICED_ROUNDS + 1;
+
+/// How a sliced first round is used by a backend.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SlicedStrategy {
+    /// Evaluate only the sparse nodes needed by the current sliced round.
+    Sequential,
+    /// Build the four-variable tensor used by the representation backend lookahead.
+    TensorBoundary,
+    /// Build the tensor, then retain its planes for one later representation round.
+    TensorBoundaryLate,
+}
 
 /// Row variables one word's lanes span.
 const LANE_VARIABLES: usize = SLICED_LANES.trailing_zeros() as usize;
+
+/// Fewest row variables a stage takes the delayed boundary path with.
+///
+/// Its round-four fold binds [`MAX_PLANE_FOLD_ROUNDS`] challenges, which must leave a whole
+/// word of residual rows. Its round-four evaluation binds one challenge fewer, which must leave
+/// a whole word pair. Either way the stage needs [`LANE_VARIABLES`] past the fold's prefix.
+const MIN_LATE_BOUNDARY_VARS: usize = MAX_PLANE_FOLD_ROUNDS + LANE_VARIABLES;
+
+#[cfg(test)]
+std::thread_local! {
+    /// Delayed boundary rounds the planes have served on this thread.
+    ///
+    /// A proof's round loop runs on the thread that calls it, so a test reads this around one
+    /// proof to see whether the dispatch took the delayed round.
+    pub(crate) static LATE_BOUNDARY_ROUNDS: core::cell::Cell<usize> =
+        const { core::cell::Cell::new(0) };
+}
 
 /// A stage's cells as bit planes, laid out word by word.
 pub(super) struct SlicedTrace {
@@ -91,6 +131,48 @@ where
         planes[1] |= u64::from(high) << lane;
     }
     Some(planes)
+}
+
+/// Copy packed Boolean source tables into the final word-major plane layout.
+///
+/// Every source matrix already stores one row-block per physical row, so this path only adds the
+/// zero high plane and interleaves table segments in their merged-buffer order. `None` keeps the
+/// caller on the representation-independent path when any source is dense or has an unexpected
+/// number of word blocks.
+fn direct_packed_cells<F: Field>(tables: &[&Table<F>], words: usize) -> Option<Vec<[u64; 2]>> {
+    if tables.is_empty() {
+        return None;
+    }
+    let width = tables.iter().map(|table| table.num_polys()).sum();
+    if tables.iter().any(|table| {
+        let Some(packed) = table.packed_bits() else {
+            return true;
+        };
+        words.checked_mul(packed.width) != Some(packed.values.len())
+    }) {
+        return None;
+    }
+
+    let mut cells = vec![[0; 2]; words * width];
+    cells
+        .par_chunks_mut(width)
+        .enumerate()
+        .for_each(|(word, output)| {
+            let mut offset = 0;
+            for table in tables {
+                let packed = table
+                    .packed_bits()
+                    .expect("direct packed ingestion checked every source table");
+                let source = &packed.values[word * packed.width..(word + 1) * packed.width];
+                for (destination, &value) in
+                    output[offset..offset + packed.width].iter_mut().zip(source)
+                {
+                    *destination = [value, 0];
+                }
+                offset += packed.width;
+            }
+        });
+    Some(cells)
 }
 
 /// The successor planes of one word: every lane reads the next row.
@@ -150,6 +232,8 @@ struct SlicedRound<'a, 'air, A, F, S, R> {
     word_weights: Vec<R>,
     /// Whether node zero of the ordinary constraints is evaluated.
     include_node_zero: bool,
+    /// Whether this pass stores every tensor node, including node one.
+    tensor: bool,
     /// The subfield the planes hold.
     _subfield: core::marker::PhantomData<fn() -> S>,
 }
@@ -173,11 +257,11 @@ struct SlicedScratch<F, S, R> {
 }
 
 impl<F, S, R: Field> SlicedScratch<F, S, R> {
-    fn new(degrees: &[usize], prefixes: usize, width: usize, corners: usize) -> Self {
+    fn new(degrees: &[usize], prefixes: usize, width: usize, corners: usize, tensor: bool) -> Self {
         Self {
             sums: degrees
                 .iter()
-                .map(|&degree| vec![R::zero_vec(degree); prefixes])
+                .map(|&degree| vec![R::zero_vec(if tensor { 3 } else { degree }); prefixes])
                 .collect(),
             local: vec![SlicedGf4::default(); width],
             local_diff: vec![SlicedGf4::default(); width],
@@ -319,12 +403,21 @@ where
                     boundary.transition += boundary_diff.transition.scale(step.0, step.1);
                 }
             }
-            let eval_index = if node == 0 { 0 } else { node - 1 };
+            let eval_index = if self.tensor {
+                node
+            } else if node == 0 {
+                0
+            } else {
+                node - 1
+            };
             for slot in self.slots {
-                if !slot
-                    .enabled_families(node, self.include_node_zero)
-                    .constraints
-                {
+                let enabled = if self.tensor {
+                    slot.constraint_degree > 0 && node <= 2
+                } else {
+                    slot.enabled_families(node, self.include_node_zero)
+                        .constraints
+                };
+                if !enabled {
                     continue;
                 }
                 let main = slot.main_offset..slot.main_offset + slot.main_width;
@@ -405,16 +498,16 @@ where
     })
 }
 
-/// Evaluate round `challenges.len()` of a stage on its planes.
-///
-/// # Returns
-///
-/// Each AIR's eq-weighted, alpha-batched constraint sums at its native nodes `0, 2, 3, ...`, or
-/// `None` when an interpolation node lies outside `S` or an AIR constant poisoned a value.
+/// Raw output of one sliced row pass, retaining every prefix and node sum.
+struct SlicedRaw<R> {
+    sums: Vec<Vec<Vec<R>>>,
+}
+
+/// Evaluate one sliced row pass, retaining every prefix and node sum.
 #[allow(clippy::too_many_arguments)]
 #[tracing::instrument(skip_all, level = "debug", fields(round = challenges.len()))]
-fn sliced_round<A, F, EF, S, R>(
-    eq_suffix: &Poly<EF>,
+fn sliced_raw<A, F, EF, S, R>(
+    eq_suffix: Option<&Poly<EF>>,
     trace: &SlicedTrace,
     slots: &[AirSlot<'_, A>],
     public_values: &[&[F]],
@@ -422,7 +515,8 @@ fn sliced_round<A, F, EF, S, R>(
     tau: &[EF],
     challenges: &[EF],
     degree: usize,
-) -> Option<Vec<Vec<EF>>>
+    tensor: bool,
+) -> Option<SlicedRaw<R>>
 where
     F: HasSubfield<S>,
     EF: ExtensionField<F> + HasSubfield<S> + From<R>,
@@ -430,16 +524,25 @@ where
     R: Field + From<EF>,
     A: for<'b> Air<SlicedFolder<'b, F, S, R>>,
 {
-    let round = challenges.len();
+    // Tensor mode evaluates the fourth variable as the active node, so the existing
+    // round-three layout provides 3^3 prefixes and 2^4 corners for its 81 entries.
+    let round = if tensor { 3 } else { challenges.len() };
     let num_vars = trace.num_vars;
-    debug_assert!(round < trace.rounds && tau.len() == num_vars);
+    debug_assert!(
+        (tensor && trace.rounds == 3 || !tensor && round < trace.rounds) && tau.len() == num_vars
+    );
     debug_assert!(is_gf4::<S>(), "sliced values hold GF(4)");
 
     let nodes = (0..=degree)
         .map(|node| gf4_coordinates(EF::interpolation_node(node).as_subfield()?))
         .collect::<Option<Vec<_>>>()?;
-    let include_node_zero = round > 0;
-    let schedule = node_schedule::<EF>(evaluated_nodes(slots, degree, include_node_zero))
+    let include_node_zero = tensor || round > 0;
+    let schedule_nodes = if tensor {
+        (0..=degree).collect::<Vec<_>>()
+    } else {
+        evaluated_nodes(slots, degree, include_node_zero).collect::<Vec<_>>()
+    };
+    let schedule = node_schedule::<EF>(schedule_nodes)
         .into_iter()
         .map(|(node, step)| Some((node, step_coordinates::<S, EF>(step)?)))
         .collect::<Option<Vec<_>>>()?;
@@ -449,8 +552,8 @@ where
     let word_point = &tau[round + 1..num_vars - LANE_VARIABLES];
     let lane_weights = Poly::new_from_point(lane_point, EF::ONE);
     let word_weights = Poly::new_from_point(word_point, EF::ONE);
-    // The row weights factor as word weight times lane weight, the table the caller holds.
-    debug_assert!(
+    // The row weights factor as word weight times lane weight, as a table the caller passes must.
+    debug_assert!(eq_suffix.is_some_and(|eq_suffix| {
         eq_suffix.num_evals() == word_weights.num_evals() * SLICED_LANES
             && eq_suffix
                 .as_slice()
@@ -461,7 +564,7 @@ where
                         == word_weights.as_slice()[row / SLICED_LANES]
                             * lane_weights.as_slice()[row % SLICED_LANES]
                 })
-    );
+    }));
     let lift = |values: &[EF]| {
         values
             .iter()
@@ -495,6 +598,7 @@ where
         lanes,
         word_weights,
         include_node_zero,
+        tensor,
         _subfield: core::marker::PhantomData,
     };
 
@@ -507,7 +611,7 @@ where
     let scratch = (0..context.words * prefixes)
         .into_par_iter()
         .par_fold_reduce(
-            || SlicedScratch::new(&degrees, prefixes, trace.width, corners),
+            || SlicedScratch::new(&degrees, prefixes, trace.width, corners, tensor),
             |mut scratch, task| {
                 context.accumulate(&mut scratch, task / prefixes, task % prefixes);
                 scratch
@@ -519,7 +623,39 @@ where
         return None;
     }
 
-    // Interpolate each prefix sum at the challenges already drawn.
+    Some(SlicedRaw { sums: scratch.sums })
+}
+
+/// Evaluate round `challenges.len()` of a stage on its planes at sparse nodes.
+#[allow(clippy::too_many_arguments)]
+fn sliced_round<A, F, EF, S, R>(
+    eq_suffix: &Poly<EF>,
+    trace: &SlicedTrace,
+    slots: &[AirSlot<'_, A>],
+    public_values: &[&[F]],
+    alpha_powers: &[Vec<R>],
+    tau: &[EF],
+    challenges: &[EF],
+    degree: usize,
+) -> Option<Vec<Vec<EF>>>
+where
+    F: HasSubfield<S>,
+    EF: ExtensionField<F> + HasSubfield<S> + From<R>,
+    S: Field,
+    R: Field + From<EF>,
+    A: for<'b> Air<SlicedFolder<'b, F, S, R>>,
+{
+    let raw = sliced_raw(
+        Some(eq_suffix),
+        trace,
+        slots,
+        public_values,
+        alpha_powers,
+        tau,
+        challenges,
+        degree,
+        false,
+    )?;
     let weights = challenges
         .iter()
         .map(|&challenge| lagrange_weights(degree, challenge))
@@ -533,8 +669,7 @@ where
         weight
     };
     Some(
-        scratch
-            .sums
+        raw.sums
             .into_iter()
             .map(|prefix_sums| {
                 let mut evals = EF::zero_vec(prefix_sums.first().map_or(0, Vec::len));
@@ -548,6 +683,132 @@ where
             })
             .collect(),
     )
+}
+
+/// The complete four-variable tensor retained by representation-field lookahead.
+struct SlicedTensor<EF> {
+    /// Tensor entries in AIR, base-three prefix, node order.
+    values: Vec<Vec<EF>>,
+    /// Number of variables covered by the tensor.
+    depth: usize,
+}
+
+/// Evaluate all 81 tensor entries before the first sliced fold.
+#[allow(clippy::too_many_arguments)]
+#[tracing::instrument(skip_all, level = "debug", fields(round = 3))]
+fn sliced_tensor<A, F, EF, S, R>(
+    eq_suffix: Option<&Poly<EF>>,
+    trace: &SlicedTrace,
+    slots: &[AirSlot<'_, A>],
+    public_values: &[&[F]],
+    alpha_powers: &[Vec<R>],
+    tau: &[EF],
+) -> Option<SlicedTensor<EF>>
+where
+    F: HasSubfield<S>,
+    EF: ExtensionField<F> + HasSubfield<S> + From<R>,
+    S: Field,
+    R: Field + From<EF>,
+    A: for<'b> Air<SlicedFolder<'b, F, S, R>>,
+{
+    debug_assert!(
+        slots.iter().all(|slot| slot.constraint_degree <= 2),
+        "the tensor holds nodes 0, 1 and 2 of each variable, which pin at most a quadratic"
+    );
+    let raw = sliced_raw(
+        eq_suffix,
+        trace,
+        slots,
+        public_values,
+        alpha_powers,
+        tau,
+        &[],
+        2,
+        true,
+    )?;
+    Some(SlicedTensor {
+        values: raw
+            .sums
+            .into_iter()
+            .map(|prefix_sums| {
+                prefix_sums
+                    .into_iter()
+                    .flat_map(|sums| sums.into_iter().map(EF::from))
+                    .collect()
+            })
+            .collect(),
+        depth: 4,
+    })
+}
+
+/// Contract a cached tensor at one round's prefix and active interpolation node.
+fn tensor_round<EF: Field, A>(
+    tensor: &SlicedTensor<EF>,
+    slots: &[AirSlot<'_, A>],
+    tau: &[EF],
+    challenges: &[EF],
+    round: usize,
+) -> Vec<Vec<EF>> {
+    debug_assert!(round < tensor.depth && challenges.len() == round);
+    debug_assert!(tau.len() >= tensor.depth);
+    debug_assert!(
+        slots.iter().all(|slot| slot.constraint_degree <= 2),
+        "the contraction interpolates quadratics and fills nodes 0 and 2 only"
+    );
+    let prefix_weights = challenges
+        .iter()
+        .map(|&challenge| lagrange_weights(2, challenge))
+        .collect::<Vec<_>>();
+    slots
+        .iter()
+        .enumerate()
+        .map(|(air, slot)| {
+            if slot.constraint_degree == 0 {
+                return Vec::new();
+            }
+            let mut evals = EF::zero_vec(slot.constraint_degree);
+            for node in [0, 2] {
+                if node > slot.constraint_degree {
+                    continue;
+                }
+                let mut value = EF::ZERO;
+                for index in 0..81 {
+                    let mut coordinates = [0usize; 4];
+                    let mut remaining = index;
+                    for coordinate in coordinates.iter_mut().rev() {
+                        *coordinate = remaining % 3;
+                        remaining /= 3;
+                    }
+                    if coordinates[round] != node {
+                        continue;
+                    }
+                    let mut weight = EF::ONE;
+                    for (coordinate, weights) in
+                        coordinates.iter().zip(prefix_weights.iter()).take(round)
+                    {
+                        weight *= weights[*coordinate];
+                    }
+                    for (coordinate, &tau) in coordinates
+                        .iter()
+                        .skip(round + 1)
+                        .zip(&tau[round + 1..tensor.depth])
+                    {
+                        weight *= match *coordinate {
+                            0 => EF::ONE - tau,
+                            1 => tau,
+                            _ => EF::ZERO,
+                        };
+                    }
+                    value += weight * tensor.values[air][index];
+                }
+                if round == 0 && node == 0 {
+                    value = EF::ZERO;
+                }
+                evals[if node == 0 { 0 } else { 1 }] = value;
+            }
+            evals
+        })
+        .collect()
 }
 
 impl<'air, 'data, A, F, EF> RoundStateBase<'air, 'data, A, F, EF>
@@ -594,72 +855,25 @@ where
             .flat_map(|table| table.columns())
             .collect::<Vec<_>>();
         let width = columns.len();
+        let next_columns = next_row_runs(&self.slots);
         let mut is_successor = vec![false; width];
-        for column in next_row_runs(&self.slots).into_iter().flatten() {
+        for column in next_columns.iter().flat_map(|run| run.clone()) {
             is_successor[column] = true;
         }
 
-        // Pack each column on its own, successor planes included, reading it contiguously.
-        let top = SLICED_LANES - 1;
-        let packed = columns
-            .par_iter()
-            .zip(&is_successor)
-            .map(|(column, &is_successor)| {
-                let column_planes = if let Some(values) = column.as_dense() {
-                    values
-                        .as_chunks::<SLICED_LANES>()
-                        .0
-                        .iter()
-                        .map(pack_word::<F, S>)
-                        .collect::<Option<Vec<_>>>()?
-                } else {
-                    (0..column.len() / SLICED_LANES)
-                        .map(|word| Some([column.boolean_word(word)?, 0]))
-                        .collect::<Option<Vec<_>>>()?
-                };
-                let successor_planes = if is_successor {
-                    // Each word's top lane reads the lowest lane of the next word, and the last
-                    // word's top lane repeats itself.
-                    let lane = |planes: [u64; 2], lane: usize| {
-                        ((planes[0] >> lane) & 1 == 1, (planes[1] >> lane) & 1 == 1)
-                    };
-                    let last = column_planes[column_planes.len() - 1];
-                    let carries = column_planes[1..]
-                        .iter()
-                        .map(|&next| lane(next, 0))
-                        .chain([lane(last, top)]);
-                    column_planes
-                        .iter()
-                        .zip(carries)
-                        .map(|(&planes, carry)| successor_word(planes, carry))
-                        .collect()
-                } else {
-                    Vec::new()
-                };
-                Some((column_planes, successor_planes))
-            })
-            .collect::<Option<Vec<_>>>()?;
-
-        // Lay the words out word by word, every column of a word side by side.
+        // Each table's packed matrix is already word-major. Copy directly into the final layout
+        // when no successor planes are needed; otherwise retain the generic column path, which
+        // also computes the repeat-last successor words.
         let words = 1 << (num_vars - LANE_VARIABLES);
-        let mut cells = vec![[0; 2]; words * width];
-        let mut successors = vec![[0; 2]; words * width];
-        cells
-            .par_chunks_mut(width)
-            .zip(successors.par_chunks_mut(width))
-            .enumerate()
-            .for_each(|(word, (word_cells, word_successors))| {
-                for ((cell, successor), (column_planes, successor_planes)) in word_cells
-                    .iter_mut()
-                    .zip(word_successors.iter_mut())
-                    .zip(&packed)
-                {
-                    *cell = column_planes[word];
-                    if let Some(&planes) = successor_planes.get(word) {
-                        *successor = planes;
-                    }
-                }
-            });
+        let (cells, successors) = if next_columns.is_empty() {
+            if let Some(cells) = direct_packed_cells(&tables, words) {
+                (cells, vec![[0; 2]; words * width])
+            } else {
+                pack_sliced_columns::<F, S>(&columns, &is_successor, words, width)?
+            }
+        } else {
+            pack_sliced_columns::<F, S>(&columns, &is_successor, words, width)?
+        };
 
         let last = SLICED_LANES - 1;
         let boundary = (0..words)
@@ -698,6 +912,23 @@ where
         R: Field + From<EF>,
         A: for<'b> Air<SlicedFolder<'b, F, S, R>>,
     {
+        self.round_poly_sliced_with_strategy::<S, R>(eq_suffix, SlicedStrategy::Sequential)
+    }
+
+    /// Evaluate the first round on planes, optionally retaining the tensor lookahead cache.
+    #[tracing::instrument(skip_all, level = "debug")]
+    pub(crate) fn round_poly_sliced_with_strategy<S, R>(
+        &mut self,
+        eq_suffix: &Poly<EF>,
+        strategy: SlicedStrategy,
+    ) -> Option<Vec<EF>>
+    where
+        S: Field,
+        F: HasSubfield<S>,
+        EF: HasSubfield<S> + From<R>,
+        R: Field + From<EF>,
+        A: for<'b> Air<SlicedFolder<'b, F, S, R>>,
+    {
         self.subfield_schedule::<S>()?;
         let trace = self.sliced_trace::<S>()?;
         self.fits_subfield = true;
@@ -706,6 +937,50 @@ where
             .iter()
             .map(|powers| powers.iter().map(|&power| R::from(power)).collect())
             .collect::<Vec<Vec<R>>>();
+        let tensor_eligible = matches!(
+            strategy,
+            SlicedStrategy::TensorBoundary | SlicedStrategy::TensorBoundaryLate
+        ) && trace.rounds == 3
+            && trace.num_vars >= 10
+            && self.degree() == 2
+            && self
+                .slots
+                .iter()
+                .all(|slot| slot.constraint_degree <= 2 && slot.interaction.is_none())
+            && next_row_runs(&self.slots).is_empty();
+        if tensor_eligible {
+            // Only the factorization check inside the tensor pass reads this table.
+            let tensor_eq_suffix = cfg!(debug_assertions)
+                .then(|| Poly::new_from_point(&self.tau.as_slice()[4..], EF::ONE));
+            if let Some(tensor) = sliced_tensor::<A, F, EF, S, R>(
+                tensor_eq_suffix.as_ref(),
+                &trace,
+                &self.slots,
+                &self.public_values,
+                &alpha_powers,
+                self.tau.as_slice(),
+            ) {
+                let evals = tensor_round(&tensor, &self.slots, self.tau.as_slice(), &[], 0);
+                let late_boundary = strategy == SlicedStrategy::TensorBoundaryLate
+                    && trace.num_vars >= MIN_LATE_BOUNDARY_VARS
+                    && SLICED_LANES.is_multiple_of(R::Packing::WIDTH);
+                self.sliced = Some(SlicedColumns {
+                    trace,
+                    challenges: Vec::new(),
+                    tensor: Some(tensor),
+                    late_boundary,
+                });
+                return Some(finish_round(
+                    &mut self.constraint_groups,
+                    &mut self.interaction_groups,
+                    &self.betas,
+                    self.eta,
+                    &evals,
+                    &[],
+                    self.tau.as_slice()[0],
+                ));
+            }
+        }
         let evals = sliced_round::<A, F, EF, S, R>(
             eq_suffix,
             &trace,
@@ -716,7 +991,12 @@ where
             &[],
             self.degree(),
         )?;
-        self.sliced = Some(trace);
+        self.sliced = Some(SlicedColumns {
+            trace,
+            challenges: Vec::new(),
+            tensor: None,
+            late_boundary: false,
+        });
 
         // A sliced stage declares no lookup, so it has no lookup group to fill.
         Some(finish_round(
@@ -735,6 +1015,14 @@ where
         self.sliced.is_some()
     }
 
+    /// Whether the representation-specific four-variable cache was installed.
+    #[cfg(test)]
+    pub(crate) fn has_sliced_tensor(&self) -> bool {
+        self.sliced
+            .as_ref()
+            .is_some_and(|columns| columns.tensor.is_some())
+    }
+
     /// Bind the first variable at `r`, keeping every column on the stage's planes.
     ///
     /// The alpha powers, the lookup coefficients, and the selector prefix cross into `R` here.
@@ -748,11 +1036,12 @@ where
     where
         R: Field + From<EF>,
     {
-        let trace = self
+        let mut columns = self
             .sliced
             .take()
             .expect("the first round ran on the planes");
         self.fold_claims(r);
+        columns.challenges.push(r);
         let lift = |values: &[EF]| values.iter().map(|&value| R::from(value)).collect();
         RoundStateExt {
             public_values: self.public_values,
@@ -768,11 +1057,8 @@ where
             slots: self.slots,
             tau: self.tau,
             round: 1,
-            next_tail: R::zero_vec(trace.width),
-            columns: ExtColumns::Sliced(SlicedColumns {
-                trace,
-                challenges: vec![r],
-            }),
+            next_tail: R::zero_vec(columns.width()),
+            columns: ExtColumns::Sliced(columns),
             coupling: InteractionCoupling {
                 links: self
                     .coupling
@@ -788,12 +1074,91 @@ where
     }
 }
 
+/// Pack representation-independent columns into word-major cell and successor planes.
+#[allow(clippy::type_complexity)]
+fn pack_sliced_columns<F, S>(
+    columns: &[p3_sumcheck::layout::ColumnView<'_, F>],
+    is_successor: &[bool],
+    words: usize,
+    width: usize,
+) -> Option<(Vec<[u64; 2]>, Vec<[u64; 2]>)>
+where
+    F: HasSubfield<S>,
+    S: Field,
+{
+    // Pack each column on its own, successor planes included, reading it contiguously.
+    let top = SLICED_LANES - 1;
+    let packed = columns
+        .par_iter()
+        .zip(is_successor)
+        .map(|(column, &is_successor)| {
+            let column_planes = if let Some(values) = column.as_dense() {
+                values
+                    .as_chunks::<SLICED_LANES>()
+                    .0
+                    .iter()
+                    .map(pack_word::<F, S>)
+                    .collect::<Option<Vec<_>>>()?
+            } else {
+                (0..column.len() / SLICED_LANES)
+                    .map(|word| Some([column.boolean_word(word)?, 0]))
+                    .collect::<Option<Vec<_>>>()?
+            };
+            let successor_planes = if is_successor {
+                // Each word's top lane reads the lowest lane of the next word, and the last
+                // word's top lane repeats itself.
+                let lane = |planes: [u64; 2], lane: usize| {
+                    ((planes[0] >> lane) & 1 == 1, (planes[1] >> lane) & 1 == 1)
+                };
+                let last = column_planes[column_planes.len() - 1];
+                let carries = column_planes[1..]
+                    .iter()
+                    .map(|&next| lane(next, 0))
+                    .chain([lane(last, top)]);
+                column_planes
+                    .iter()
+                    .zip(carries)
+                    .map(|(&planes, carry)| successor_word(planes, carry))
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            Some((column_planes, successor_planes))
+        })
+        .collect::<Option<Vec<_>>>()?;
+
+    // Lay the words out word by word, every column of a word side by side.
+    let mut cells = vec![[0; 2]; words * width];
+    let mut successors = vec![[0; 2]; words * width];
+    cells
+        .par_chunks_mut(width)
+        .zip(successors.par_chunks_mut(width))
+        .enumerate()
+        .for_each(|(word, (word_cells, word_successors))| {
+            for ((cell, successor), (column_planes, successor_planes)) in word_cells
+                .iter_mut()
+                .zip(word_successors.iter_mut())
+                .zip(&packed)
+            {
+                *cell = column_planes[word];
+                if let Some(&planes) = successor_planes.get(word) {
+                    *successor = planes;
+                }
+            }
+        });
+    Some((cells, successors))
+}
+
 /// A sliced stage's planes and the challenges bound so far.
 pub(super) struct SlicedColumns<EF> {
     /// The stage's planes, none of whose columns has folded yet.
     trace: SlicedTrace,
     /// Every challenge bound so far, first variable first.
     challenges: Vec<EF>,
+    /// Optional four-variable tensor retained by the representation backend.
+    tensor: Option<SlicedTensor<EF>>,
+    /// Whether the representation backend may defer materialization through round four.
+    late_boundary: bool,
 }
 
 impl<EF> SlicedColumns<EF> {
@@ -808,6 +1173,10 @@ impl<EF> SlicedColumns<EF> {
     }
 
     /// Whether the stage's sliced rounds are spent and its planes can still serve a round.
+    ///
+    /// This admits the boundary round alone. The delayed boundary path evaluates its round four
+    /// with one more challenge bound, so this is false there, and
+    /// [`RoundStateExt::round_poly_late_boundary`] gates that round instead.
     ///
     /// A word pair is the shortest run of residual rows that holds both halves of a row pair.
     const fn at_boundary(&self) -> bool {
@@ -868,8 +1237,11 @@ const GROUP_CORNERS: usize = 8;
 /// Entries of one corner group's subset-sum table, one per value of a mask byte.
 const GROUP_ENTRIES: usize = 1 << u8::BITS;
 
-/// Corners the bound variables of a sliced stage can range over.
+/// Corners the bound variables of a stage evaluating a round on its planes can range over.
 const MAX_CORNERS: usize = 1 << MAX_SLICED_ROUNDS;
+
+/// Corners the bound variables of the delayed boundary path's unslice range over.
+const MAX_PLANE_FOLD_CORNERS: usize = 1 << MAX_PLANE_FOLD_ROUNDS;
 
 /// Mask bytes one corner group of one residual row reads, one per plane.
 const PLANE_BYTES: usize = 2;
@@ -888,7 +1260,10 @@ const ROW_HALVES: usize = 2;
 /// A cell is `low + high * g`, so each row takes byte-indexed subset sums of `eq(r, .)`, one
 /// lookup per plane per group of eight `b`. The tables do not depend on the column or the row,
 /// so one set serves a whole round.
-struct PlaneFold<'a, R> {
+///
+/// Each word's corners are gathered into buffers of `CORNERS` words per plane. Only the delayed
+/// boundary path's unslice binds enough challenges to need [`MAX_PLANE_FOLD_CORNERS`].
+struct PlaneFold<'a, R, const CORNERS: usize = MAX_CORNERS> {
     /// The stage's planes.
     trace: &'a SlicedTrace,
     /// Subset sums of the eq weights, one table per corner group.
@@ -903,7 +1278,7 @@ struct PlaneFold<'a, R> {
     words: usize,
 }
 
-impl<'a, R: Field> PlaneFold<'a, R> {
+impl<'a, R: Field, const CORNERS: usize> PlaneFold<'a, R, CORNERS> {
     /// Tabulate the fold of `trace` at every challenge bound so far.
     fn new<S, EF>(trace: &'a SlicedTrace, challenges: &[EF]) -> Self
     where
@@ -911,6 +1286,14 @@ impl<'a, R: Field> PlaneFold<'a, R> {
         EF: Field + HasSubfield<S>,
         R: From<EF>,
     {
+        assert!(
+            1 << challenges.len() <= CORNERS,
+            "a plane fold's corner buffers must hold every corner of its bound prefix"
+        );
+        assert!(
+            trace.num_vars >= challenges.len() + LANE_VARIABLES,
+            "a bound prefix must leave a whole residual word, or its corners collapse onto one"
+        );
         let generator = R::from(EF::from(S::GENERATOR));
         let weights = Poly::new_from_point(challenges, EF::ONE)
             .as_slice()
@@ -947,9 +1330,9 @@ impl<'a, R: Field> PlaneFold<'a, R> {
         planes: &[[u64; 2]],
         column: usize,
         word: usize,
-    ) -> ([u64; MAX_CORNERS], [u64; MAX_CORNERS]) {
-        let mut low = [0; MAX_CORNERS];
-        let mut high = [0; MAX_CORNERS];
+    ) -> ([u64; CORNERS], [u64; CORNERS]) {
+        let mut low = [0; CORNERS];
+        let mut high = [0; CORNERS];
         let base = word * self.trace.width + column;
         let stride = self.words * self.trace.width;
         for (corner, (low, high)) in low[..self.corners]
@@ -968,8 +1351,8 @@ impl<'a, R: Field> PlaneFold<'a, R> {
     #[inline]
     fn group_words<'b>(
         &self,
-        low: &'b [u64; MAX_CORNERS],
-        high: &'b [u64; MAX_CORNERS],
+        low: &'b [u64; CORNERS],
+        high: &'b [u64; CORNERS],
         group: usize,
     ) -> (&'b [u64], &'b [u64]) {
         let start = group * GROUP_CORNERS;
@@ -1241,6 +1624,12 @@ where
     EF: ExtensionField<F> + From<R>,
     R: Field + From<EF>,
 {
+    /// Whether the representation-specific four-variable cache is still installed.
+    #[cfg(test)]
+    pub(crate) const fn has_sliced_tensor(&self) -> bool {
+        matches!(&self.columns, ExtColumns::Sliced(columns) if columns.tensor.is_some())
+    }
+
     /// Evaluate this round's polynomial on the stage's planes, while they have rounds left.
     ///
     /// # Returns
@@ -1258,20 +1647,33 @@ where
         let ExtColumns::Sliced(columns) = &self.columns else {
             return None;
         };
-        if columns.challenges.len() == columns.trace.rounds {
-            return None;
-        }
         debug_assert_eq!(columns.challenges.len(), self.round);
-        let evals = sliced_round::<A, F, EF, S, R>(
-            eq_suffix,
-            &columns.trace,
-            &self.slots,
-            &self.public_values,
-            &self.alpha_powers,
-            self.tau.as_slice(),
-            &columns.challenges,
-            self.degree(),
-        )?;
+        let evals = if let Some(tensor) = &columns.tensor {
+            if columns.challenges.len() >= tensor.depth {
+                return None;
+            }
+            tensor_round(
+                tensor,
+                &self.slots,
+                self.tau.as_slice(),
+                &columns.challenges,
+                columns.challenges.len(),
+            )
+        } else {
+            if columns.challenges.len() >= columns.trace.rounds {
+                return None;
+            }
+            sliced_round::<A, F, EF, S, R>(
+                eq_suffix,
+                &columns.trace,
+                &self.slots,
+                &self.public_values,
+                &self.alpha_powers,
+                self.tau.as_slice(),
+                &columns.challenges,
+                self.degree(),
+            )?
+        };
 
         // A sliced stage declares no lookup, so it has no lookup group to fill.
         Some(finish_round(
@@ -1294,10 +1696,9 @@ where
         let ExtColumns::Sliced(columns) = &mut self.columns else {
             return false;
         };
-        debug_assert!(
-            columns.challenges.len() < columns.trace.rounds,
-            "a stage leaves its planes before binding past its sliced rounds"
-        );
+        if columns.challenges.len() >= columns.trace.rounds {
+            return false;
+        }
         columns.challenges.push(r);
         self.fold_claims(r);
         self.boundary.apply(R::from(r));
@@ -1312,7 +1713,12 @@ where
     /// `None` when the stage is not on its planes, which then stay where they are.
     fn take_planes(&mut self) -> Option<(SlicedTrace, Vec<EF>)> {
         match core::mem::replace(&mut self.columns, ExtColumns::Scalar(Vec::new())) {
-            ExtColumns::Sliced(SlicedColumns { trace, challenges }) => Some((trace, challenges)),
+            ExtColumns::Sliced(SlicedColumns {
+                trace,
+                challenges,
+                tensor: _,
+                late_boundary: _,
+            }) => Some((trace, challenges)),
             columns => {
                 self.columns = columns;
                 None
@@ -1321,7 +1727,7 @@ where
     }
 
     /// Read each successor column at the last residual row into its repeat-last tail.
-    fn read_next_tails(&mut self, fold: &PlaneFold<'_, R>) {
+    fn read_next_tails<const CORNERS: usize>(&mut self, fold: &PlaneFold<'_, R, CORNERS>) {
         let mut last = [R::ZERO; SLICED_LANES];
         for run in next_row_runs(&self.slots) {
             for column in run {
@@ -1342,11 +1748,20 @@ where
         S: Field,
         EF: HasSubfield<S>,
     {
+        self.unslice_with::<S, MAX_CORNERS>();
+    }
+
+    /// [`Self::unslice`], gathering each word's corners into buffers of `CORNERS` words.
+    fn unslice_with<S, const CORNERS: usize>(&mut self)
+    where
+        S: Field,
+        EF: HasSubfield<S>,
+    {
         let Some((trace, challenges)) = self.take_planes() else {
             return;
         };
         let _span = tracing::debug_span!("unslice").entered();
-        let fold = PlaneFold::<R>::new::<S, EF>(&trace, &challenges);
+        let fold = PlaneFold::<R, CORNERS>::new::<S, EF>(&trace, &challenges);
         let rows = fold.words * SLICED_LANES;
 
         let scalar = (0..trace.width)
@@ -1440,6 +1855,61 @@ where
         true
     }
 
+    /// Bind round three or four of the delayed boundary path without materializing an
+    /// intermediate residual column.
+    ///
+    /// The round-three fold only drops the tensor. The round-four fold consumes all five
+    /// recorded challenges through [`Self::unslice_with`] at [`MAX_PLANE_FOLD_CORNERS`] corners,
+    /// so its first scalar columns have length `N / 32`.
+    pub(crate) fn fold_late_boundary<S>(&mut self, r: EF) -> bool
+    where
+        S: Field,
+        EF: HasSubfield<S>,
+    {
+        let (round, prefix_len, tensor_present, late) = match &self.columns {
+            ExtColumns::Sliced(columns) => (
+                self.round,
+                columns.challenges.len(),
+                columns.tensor.is_some(),
+                columns.late_boundary,
+            ),
+            _ => return false,
+        };
+        let valid = late
+            && match round {
+                3 => prefix_len == 3 && tensor_present,
+                4 => prefix_len == 4 && !tensor_present,
+                _ => false,
+            };
+        if !valid {
+            return false;
+        }
+
+        self.fold_claims(r);
+        match round {
+            3 => {
+                let ExtColumns::Sliced(columns) = &mut self.columns else {
+                    unreachable!("late boundary gate checked sliced columns")
+                };
+                columns.challenges.push(r);
+                columns.tensor = None;
+                self.boundary.apply(R::from(r));
+                self.round += 1;
+            }
+            4 => {
+                let ExtColumns::Sliced(columns) = &mut self.columns else {
+                    unreachable!("late boundary gate checked sliced columns")
+                };
+                columns.challenges.push(r);
+                self.unslice_with::<S, MAX_PLANE_FOLD_CORNERS>();
+                self.boundary.apply(R::from(r));
+                self.round += 1;
+            }
+            _ => unreachable!("late boundary gate checked round three or four"),
+        }
+        true
+    }
+
     /// Evaluate this round's polynomial straight from the stage's planes, its sliced rounds spent.
     ///
     /// One word pair of residual rows is expanded at a time, into the mask bytes its rows read
@@ -1470,19 +1940,47 @@ where
         if !columns.at_boundary() || !SLICED_LANES.is_multiple_of(lanes) {
             return None;
         }
-        let num_evals = self.num_evals();
-
         let _span = tracing::debug_span!("round_poly_boundary").entered();
+        Some(self.round_poly_planes::<S>(eq_suffix))
+    }
+
+    /// Evaluate one representation-field round directly from the stage's planes.
+    ///
+    /// This is shared by the incumbent boundary round and the delayed fifth-challenge path so
+    /// both use the same row/packed evaluator, node schedule, and finish-round semantics.
+    ///
+    /// # Panics
+    ///
+    /// When the residual rows do not fill a word pair.
+    fn round_poly_planes<S>(&mut self, eq_suffix: &Poly<EF>) -> Vec<EF>
+    where
+        S: Field,
+        EF: HasSubfield<S>,
+        R: Algebra<F>,
+        R::Packing: Algebra<F::Packing>,
+        A: for<'b> Air<MultilinearFolder<'b, F, R, R>>
+            + for<'b> Air<InteractionMultilinearFolder<'b, F, R, R>>
+            + for<'b> Air<MultilinearFolder<'b, F, PackedRepr<F, R>, PackedRepr<F, R>>>
+            + for<'b> Air<InteractionMultilinearFolder<'b, F, PackedRepr<F, R>, PackedRepr<F, R>>>,
+    {
+        let ExtColumns::Sliced(columns) = &self.columns else {
+            unreachable!("plane round requires sliced columns")
+        };
+        let num_evals = self.num_evals();
         let (constraints, interactions) = {
             let fold = PlaneFold::<R>::new::<S, EF>(&columns.trace, &columns.challenges);
-            if lanes > 1 && num_evals / 2 >= lanes {
+            assert!(
+                fold.words >= ROW_HALVES,
+                "a plane round needs a whole word pair, or its round polynomial sums no rows"
+            );
+            if R::Packing::WIDTH > 1 && num_evals / 2 >= R::Packing::WIDTH {
                 self.boundary_evals_lanes(eq_suffix, &fold)
             } else {
                 self.boundary_evals_rows(eq_suffix, &fold)
             }
         };
 
-        Some(finish_round(
+        finish_round(
             &mut self.constraint_groups,
             &mut self.interaction_groups,
             &self.betas,
@@ -1490,7 +1988,36 @@ where
             &constraints,
             &interactions,
             self.tau.as_slice()[self.round],
-        ))
+        )
+    }
+
+    /// Evaluate round four of the delayed boundary path from the retained planes.
+    pub(crate) fn round_poly_late_boundary<S>(&mut self, eq_suffix: &Poly<EF>) -> Option<Vec<EF>>
+    where
+        S: Field,
+        EF: HasSubfield<S>,
+        R: Algebra<F>,
+        R::Packing: Algebra<F::Packing>,
+        A: for<'b> Air<MultilinearFolder<'b, F, R, R>>
+            + for<'b> Air<InteractionMultilinearFolder<'b, F, R, R>>
+            + for<'b> Air<MultilinearFolder<'b, F, PackedRepr<F, R>, PackedRepr<F, R>>>
+            + for<'b> Air<InteractionMultilinearFolder<'b, F, PackedRepr<F, R>, PackedRepr<F, R>>>,
+    {
+        let ExtColumns::Sliced(columns) = &self.columns else {
+            return None;
+        };
+        if !columns.late_boundary
+            || columns.tensor.is_some()
+            || self.round != 4
+            || columns.challenges.len() != 4
+            || !SLICED_LANES.is_multiple_of(R::Packing::WIDTH)
+        {
+            return None;
+        }
+        let _span = tracing::debug_span!("round_poly_late_boundary").entered();
+        #[cfg(test)]
+        LATE_BOUNDARY_ROUNDS.with(|rounds| rounds.set(rounds.get() + 1));
+        Some(self.round_poly_planes::<S>(eq_suffix))
     }
 
     /// Accumulate this round's node sums one residual row at a time, straight from the planes.

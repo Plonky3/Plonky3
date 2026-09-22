@@ -1673,7 +1673,9 @@ pub(crate) mod test {
         //
         // So no fixed length reaches the split arm on every host:
         //
-        //     mid * item_bytes * 100 ps  >=  0.625 us * threads
+        //     mid * item_bytes * 100 ps  >=  gate * threads
+        //
+        // The gate is 0.625 us per worker on Linux and 2.5 us on Apple silicon.
         //
         // Grow the fixture until it clears that gate, whatever the pool turns out to be.
         // A pool of one worker never splits, which is what a serial build reports.

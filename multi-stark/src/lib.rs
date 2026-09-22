@@ -19,6 +19,7 @@ extern crate alloc;
 pub mod backend;
 mod bus;
 pub mod config;
+pub mod contract;
 pub mod folder;
 pub mod fractional_gkr;
 pub mod indexed;
@@ -41,6 +42,7 @@ pub mod zerocheck;
 
 pub use backend::{GenericBackend, ReprBackend, SubfieldBackend, ZerocheckBackend};
 pub use bus::BusBindingError;
+pub use contract::{MachineDeclaration, SealedProof, TableDeclaration};
 pub use instance::{ProverInstance, ProverInstances, VerifierInstance, VerifierInstances};
 pub use keys::{ProvingKey, VerifyingKey, setup};
 pub use p3_air::BoundaryIoError;

@@ -55,6 +55,7 @@ pub enum RepresentationOptions {
     Auto,
     Subfield,
     PolyBasis,
+    PolyBasisLate,
 }
 
 /// The byte hash a binary-field proof builds its Merkle trees and transcript from.
@@ -249,7 +250,12 @@ impl ValueEnum for BinaryCommitmentHashOptions {
 
 impl ValueEnum for RepresentationOptions {
     fn value_variants<'a>() -> &'a [Self] {
-        &[Self::Auto, Self::Subfield, Self::PolyBasis]
+        &[
+            Self::Auto,
+            Self::Subfield,
+            Self::PolyBasis,
+            Self::PolyBasisLate,
+        ]
     }
 
     fn to_possible_value(&self) -> Option<PossibleValue> {
@@ -259,6 +265,48 @@ impl ValueEnum for RepresentationOptions {
             Self::PolyBasis => {
                 get_aliases("poly-basis", 1, Some(vec![("polybasis", 4), ("pb", 2)]))
             }
+            Self::PolyBasisLate => get_aliases(
+                "poly-basis-late",
+                11,
+                Some(vec![("polybasislate", 10), ("pbl", 3)]),
+            ),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn poly_basis_late_has_an_explicit_cli_spelling() {
+        assert_eq!(
+            RepresentationOptions::from_str("poly-basis-late", true),
+            Ok(RepresentationOptions::PolyBasisLate)
+        );
+        assert_eq!(
+            RepresentationOptions::from_str("poly-basis", true),
+            Ok(RepresentationOptions::PolyBasis)
+        );
+        assert_eq!(
+            RepresentationOptions::from_str("poly", true),
+            Ok(RepresentationOptions::PolyBasis)
+        );
+        assert_eq!(
+            RepresentationOptions::from_str("polybasis", true),
+            Ok(RepresentationOptions::PolyBasis)
+        );
+        assert_eq!(
+            RepresentationOptions::from_str("p", true),
+            Ok(RepresentationOptions::PolyBasis)
+        );
+        assert_eq!(
+            RepresentationOptions::from_str("pbl", true),
+            Ok(RepresentationOptions::PolyBasisLate)
+        );
+        assert_eq!(
+            RepresentationOptions::from_str("polybasislate", true),
+            Ok(RepresentationOptions::PolyBasisLate)
+        );
     }
 }

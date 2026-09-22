@@ -91,7 +91,7 @@ where
         tables: Vec<Table<F>>,
         placements: Vec<TablePlacement>,
         scales: Vec<Vec<EF>>,
-        row_weights: Vec<EF>,
+        row_weights: Vec<R>,
         sum: EF,
         num_variables: usize,
     ) -> Self {
@@ -104,7 +104,7 @@ where
         let prover = ReprSumcheckProver::from_repr_tables(
             VariableOrder::Suffix,
             Poly::new(aggregate),
-            Poly::new(R::from_table(row_weights)),
+            Poly::new(row_weights),
             sum,
         );
         Self {

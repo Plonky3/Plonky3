@@ -9,7 +9,7 @@ use alloc::vec::Vec;
 
 use p3_air::{Air, AirBuilder, BaseAir, BoundaryEnd, BoundaryPublic, RowWindow, WindowAccess};
 use p3_bus::{
-    BusActivation, BusDirection, BusInteractionRecorder, BusSymbolicBuilder, RecordToken,
+    BusActivation, BusDirection, BusInteractionRecorder, BusName, BusSymbolicBuilder, RecordToken,
 };
 use p3_field::{Algebra, ExtensionField, Field, PrimeCharacteristicRing, dot_product};
 use p3_lookup::{
@@ -58,7 +58,7 @@ where
     fn record_bus_interaction<E: Into<Self::Expr>>(
         &mut self,
         _token: RecordToken,
-        _bus_name: &str,
+        _bus: BusName<'_>,
         _direction: BusDirection,
         fields: impl IntoIterator<Item = E>,
         _activation: BusActivation<Self::Expr>,
@@ -896,7 +896,7 @@ where
     fn record_bus_interaction<E: Into<Self::Expr>>(
         &mut self,
         _token: RecordToken,
-        _bus_name: &str,
+        _bus: BusName<'_>,
         _direction: BusDirection,
         fields: impl IntoIterator<Item = E>,
         _activation: BusActivation<Self::Expr>,

@@ -1421,18 +1421,17 @@ impl<F: Field> BoundedPowers<F> {
     ///
     /// # Details
     ///
-    /// The computation is split evenly amongst available threads, and each chunk is computed
-    /// using packed fields. Small requests are computed on the current thread, as a parallel
-    /// dispatch would cost more than the fill itself.
+    /// Each chunk is computed using packed fields.
+    ///
+    /// The shared task-size policy picks the chunk length.
+    ///
+    /// A request too short to pay for a dispatch is filled on the calling thread.
     ///
     /// # Performance
     ///
     /// Enable the `parallel` feature to enable parallelization.
     #[must_use]
     pub fn collect(self) -> Vec<F> {
-        // Below this many scalars, a parallel dispatch costs more than the packed fill itself.
-        const PARALLEL_THRESHOLD: usize = 1 << 16;
-
         let num_powers = self.n;
 
         // When num_powers is small, fallback to serial computation
@@ -1448,13 +1447,18 @@ impl<F: Field> BoundedPowers<F> {
         let base = self.iter.base;
         let shift = self.iter.current;
 
-        if num_powers < PARALLEL_THRESHOLD {
+        // One item writes a packed element and reads none.
+        // It therefore moves exactly that element's width.
+        //
+        // One number answers both questions this fill has:
+        //
+        //     chunk >= total  ->  fill the whole buffer on this thread
+        //     chunk <  total  ->  packed elements one parallel chunk holds
+        let chunk_size = min_task_len(num_packed, size_of::<F::Packing>());
+
+        if chunk_size >= num_packed {
             fill_packed_shifted_powers(base, shift, &mut points_packed);
         } else {
-            // Split computation evenly among threads
-            let num_threads = current_num_threads().max(1);
-            let chunk_size = num_packed.div_ceil(num_threads);
-
             // Precompute base for each chunk.
             let chunk_base = base.exp_u64((chunk_size * width) as u64);
 

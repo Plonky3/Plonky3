@@ -46,6 +46,13 @@ impl KeyCode {
 pub(super) struct ShiftSequenceCode(u32);
 
 impl ShiftSequenceCode {
+    /// Encodes one shift spelling, independently of any relation family.
+    #[inline]
+    pub(super) fn new<W: Word>(shifts: [Shift<W>; 2]) -> Self {
+        // The family tag occupies higher bits, so any tag gives the same sequence.
+        KeyCode::new(ConstraintKind::Zero, shifts).sequence()
+    }
+
     /// Decodes the inner and outer shifts in evaluation order.
     #[inline]
     pub(super) fn shifts<W: Word>(self) -> [Shift<W>; 2] {

@@ -83,8 +83,12 @@ const BASE_MUL_ACC_BYTES: usize = 2;
 ///     a task's budget buys 1 / lanes   ->  the split walks back toward one item per task
 /// ```
 ///
-/// Break-even for a loop that only just crosses the gate is an overcharge of 1.56, since
-/// `0.625 us / 1.56` is the 0.4 us a dispatch costs per worker.
+/// Break-even for a loop that only just crosses the gate is an overcharge of 1.56 on Linux.
+///
+/// That is the 0.625 us gate divided down to the 0.4 us a dispatch costs per worker.
+///
+/// On macOS the same break-even is 1.25 to 1.5, from a 2.5 us gate over 1.7 to 2.0 us dispatches.
+///
 /// Undercharging instead leaves such a loop whole.
 ///
 /// It cannot cut a split loop below one task per worker.
@@ -164,6 +168,20 @@ impl<F: Field, EF: ExtensionField<F>> SplitEq<F, EF> {
         let eq0 = Poly::new_from_point(z0.as_slice(), scale);
         let eq1 = EqMaybePacked::new_packed(&z1);
         Self { eq0, eq1 }
+    }
+
+    /// Converts the factored equality table to an unpacked table in another field.
+    ///
+    /// Each factor is mapped elementwise without materializing the full equality table. The
+    /// caller must provide an `R::from(EF)` map that is a field homomorphism, as required by
+    /// the representation prover; this method preserves the factored layout only.
+    pub fn to_field<R>(&self) -> SplitEq<R, R>
+    where
+        R: Field + From<EF>,
+    {
+        let eq0 = Poly::new(self.eq0.iter().copied().map(R::from).collect());
+        let eq1 = self.eq1.to_field();
+        SplitEq { eq0, eq1 }
     }
 
     /// Total number of variables: k = k_prefix + k_suffix.
@@ -973,6 +991,24 @@ mod tests {
                 expected,
                 SplitEq::<F, EF>::new_unpacked(&point, EF::ONE).eval_packed(packed.as_view()),
             );
+        }
+    }
+
+    #[test]
+    fn factored_conversion_preserves_scalar_and_packed_layouts() {
+        let mut rng = SmallRng::seed_from_u64(0xC0FFEE);
+        for (num_variables, packed) in [(K_PACK, false), (2 * K_PACK, true)] {
+            let point = Point::<EF>::rand(&mut rng, num_variables);
+            let scale: EF = rng.random();
+            let split = if packed {
+                SplitEq::<F, EF>::new_packed(&point, scale)
+            } else {
+                SplitEq::<F, EF>::new_unpacked(&point, scale)
+            };
+            let converted = split.to_field::<EF>();
+
+            assert_eq!(converted.num_variables(), split.num_variables());
+            assert_eq!(converted.materialize(), split.materialize());
         }
     }
 

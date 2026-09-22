@@ -106,14 +106,28 @@ fn instance(
     let words = (0..count)
         .map(|index| Word64::new((index as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15)))
         .collect::<Vec<_>>();
-    let packed = PackedWitness::new(key.system(), &[], &words).unwrap();
+    let packed = PackedWitness::new(
+        key.statement()
+            .as_system()
+            .expect("the benchmark statement is flat"),
+        &[],
+        &words,
+    )
+    .unwrap();
     let constraint_point = (0..log_words)
         .map(|index| F::interpolation_node(index + 7))
         .collect();
     let bit_point = (0..6)
         .map(|index| F::interpolation_node(index + 31))
         .collect();
-    let claim = claim(key.system(), &words, constraint_point, bit_point);
+    let claim = claim(
+        key.statement()
+            .as_system()
+            .expect("the benchmark statement is flat"),
+        &words,
+        constraint_point,
+        bit_point,
+    );
     (key, packed, claim)
 }
 

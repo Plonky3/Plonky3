@@ -64,6 +64,18 @@ impl<F: Field, EF: ExtensionField<F>> SvoPoint<F, EF> {
         )
     }
 
+    /// Converts the factored point to an unpacked arithmetic representation.
+    pub(crate) fn to_field<R>(&self) -> SvoPoint<R, R>
+    where
+        R: Field + From<EF>,
+    {
+        SvoPoint::from_parts(
+            Point::new(self.z_svo.iter().copied().map(R::from).collect()),
+            self.z_split.to_field(),
+            self.var_order,
+        )
+    }
+
     /// Splits `point` into its SVO portion and the residual portion at depth `l0`.
     ///
     /// For `Prefix` the SVO portion is the leading `l0` coordinates.
@@ -1127,6 +1139,25 @@ mod test {
             svo_point.accumulate_next_suffix_into(out.as_mut_slice(), &rs, scale);
             assert_eq!(out, expected);
         }
+    }
+
+    #[test]
+    fn converted_suffix_successor_crosses_factored_chunk_boundary() {
+        let mut rng = SmallRng::seed_from_u64(0x51FF1);
+        let num_variables = 16;
+        let num_svo = 4;
+        let point = Point::<EF>::rand(&mut rng, num_variables);
+        let rs = Point::<EF>::rand(&mut rng, num_svo);
+        let scale: EF = rng.random();
+        let original = SvoPoint::<F, EF>::new_unpacked(num_svo, &point, VariableOrder::Suffix);
+        let converted = original.to_field::<EF>();
+
+        let mut expected = EF::zero_vec(1 << (num_variables - num_svo));
+        original.accumulate_next_suffix_into(&mut expected, &rs, scale);
+        let mut actual = EF::zero_vec(expected.len());
+        converted.accumulate_next_suffix_into(&mut actual, &rs, scale);
+
+        assert_eq!(actual, expected);
     }
 
     // Brute-force reference: compress the polynomial over the split prefix into the three SVO payloads.

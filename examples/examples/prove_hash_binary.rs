@@ -298,6 +298,7 @@ fn run(args: &Args) -> Result<(), String> {
         RepresentationOptions::Auto => Backend::preferred(),
         RepresentationOptions::Subfield => Backend::Subfield,
         RepresentationOptions::PolyBasis => Backend::PolyBasis,
+        RepresentationOptions::PolyBasisLate => Backend::PolyBasisLate,
     };
 
     // The Boolean commitment cannot represent a cell outside `{0, 1}`, so booleanity constraints

@@ -9,11 +9,12 @@ use p3_multilinear_util::point::Point;
 use p3_security::SecurityTerm;
 use p3_security::word::WordProofSecurityModel;
 use p3_sumcheck::PrescribedOpeningSecurity;
-use p3_word::{ConstraintSystem, Word};
+use p3_word::Word;
 
 use super::error::WordProofError;
 use super::relation::{BATCHED_FAMILIES, OPERAND_EVALUATIONS, ZEROCHECK_DEGREE};
 use super::transcript::TranscriptShape;
+use crate::statement::Statement;
 use crate::{KeyCompileError, Packed, PackedWitness, PackedWord, ShiftClaim, ShiftReductionKey};
 
 /// A checked word system compiled into a complete proving key.
@@ -31,24 +32,25 @@ impl<W: Word> WordProofKey<W> {
     /// Returns an error when the system is too large for the compact key representation.
     ///
     /// Returns an error when the system declares a relation family this protocol cannot prove.
-    pub fn new(system: ConstraintSystem<W>) -> Result<Self, KeyCompileError> {
+    pub fn new(statement: impl Into<Statement<W>>) -> Result<Self, KeyCompileError> {
         // A key that could never be proved must not exist, so nothing can price one either.
-        let count = system.integer_mul_constraints().len();
+        let statement = statement.into();
+        let count = statement.unproved_relations();
         if count != 0 {
             return Err(KeyCompileError::UnprovedRelation { count });
         }
 
         // Key compilation fixes every sparse reference before proving begins.
         Ok(Self {
-            shift: ShiftReductionKey::new(system)?,
+            shift: ShiftReductionKey::new(statement)?,
         })
     }
 
-    /// Returns the checked relation system represented by this key.
+    /// Returns the checked statement represented by this key.
     #[inline]
-    pub const fn system(&self) -> &ConstraintSystem<W> {
-        // Owning the system stops a compiled layout being paired with another statement.
-        self.shift.system()
+    pub const fn statement(&self) -> &Statement<W> {
+        // Owning the statement stops a compiled layout being paired with another.
+        self.shift.statement()
     }
 
     /// Returns the number of variables the padded committed bit trace spans.
@@ -126,18 +128,14 @@ impl<W: Word> WordProofKey<W> {
 
     /// Dimensions bound into the relation transcript before either challenge.
     pub(super) fn transcript_shape(&self, commitment_variables: usize) -> TranscriptShape {
-        let system = self.system();
+        let statement = self.statement();
         TranscriptShape::new(
             self.shift.constraint_variables(),
             Self::bit_variables(),
             commitment_variables,
-            system.public_len(),
-            system.witness_len(),
-            [
-                system.zero_constraints().len(),
-                system.and_constraints().len(),
-                system.integer_mul_constraints().len(),
-            ],
+            statement.public_len(),
+            statement.witness_len(),
+            statement.relation_counts(),
         )
     }
 
@@ -214,7 +212,8 @@ mod tests {
     use p3_merkle_tree::MerkleTreeMmcs;
     use p3_symmetric::{CompressionFunctionFromHasher, SerializingHasher};
     use p3_word::{
-        IntegerMulConstraint, Operand, ShiftedValue, ValueIndex, Word64, ZeroConstraint,
+        ConstraintSystem, IntegerMulConstraint, Operand, ShiftedValue, ValueIndex, Word64,
+        ZeroConstraint,
     };
 
     use super::*;

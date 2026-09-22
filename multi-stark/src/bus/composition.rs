@@ -412,7 +412,7 @@ mod tests {
     use p3_air::{Air, BaseAir, WindowAccess};
     use p3_baby_bear::BabyBear;
     use p3_binary_field::BinaryField128;
-    use p3_bus::{BusActivation, BusDirection, BusInteractionBuilder, BusSymbolicBuilder};
+    use p3_bus::{BusActivation, BusDirection, BusInteractionBuilder, BusName, BusSymbolicBuilder};
     use p3_field::PrimeCharacteristicRing;
     use p3_sumcheck::generic_degree::RoundPolyInterpolator;
 
@@ -430,7 +430,7 @@ mod tests {
             // Multiplying by the transition selector exposes its round-degree contribution.
             let value: AB::Expr = builder.main().current_slice()[0].into();
             builder.push_bus_interaction(
-                "transition",
+                BusName::new("transition"),
                 BusDirection::Push,
                 [builder.is_transition() * value],
                 BusActivation::Always,

@@ -11,6 +11,7 @@ use core::borrow::Borrow;
 use p3_binary_field::TowerLevel;
 use p3_challenger::fs::TranscriptField;
 use p3_challenger::{FieldChallenger, GrindingChallenger};
+use p3_field::{Field, PackedValue};
 use p3_maybe_rayon::prelude::*;
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
@@ -27,6 +28,7 @@ use super::transcript::{
 use crate::data::SumcheckData;
 use crate::error::SumcheckError;
 use crate::strategy::{Basis, FromTable, IntoTranscriptField, ReprSumcheckProver, VariableOrder};
+use crate::transcript::{ProverTranscript, SumcheckShape};
 
 /// Log of the hypercube points one task accumulates before its partial combines.
 ///
@@ -34,7 +36,7 @@ use crate::strategy::{Basis, FromTable, IntoTranscriptField, ReprSumcheckProver,
 /// and small enough both to keep every core fed at the heights this reduction runs at and to
 /// keep the equality factor a block reads within cache.
 #[cfg(not(test))]
-const LOG_CHUNK: usize = 14;
+const LOG_CHUNK: usize = PRODUCTION_LOG_CHUNK;
 
 /// Small enough under test that a case above one variable splits in chunks.
 ///
@@ -42,8 +44,93 @@ const LOG_CHUNK: usize = 14;
 #[cfg(test)]
 const LOG_CHUNK: usize = 1;
 
+/// The value `LOG_CHUNK` takes outside test builds.
+const PRODUCTION_LOG_CHUNK: usize = 14;
+
 /// The hypercube points one task accumulates before its partial combines.
 const CHUNK: usize = 1 << LOG_CHUNK;
+
+/// Initial production compact depth. Benchmark controls can force another supported depth.
+const COMPACT_ROUNDS: usize = 2;
+/// The generic compact driver is intentionally bounded while its ranked shapes are measured.
+const COMPACT_MAX_ROUNDS: usize = 6;
+/// Keep at least this many equality blocks per bank in the production path.
+const COMPACT_MIN_BLOCK_BITS: usize = 6;
+/// The materializer keeps a fixed total EF scratch budget across all compact banks.
+#[cfg(not(test))]
+const COMPACT_TOTAL_SCRATCH: usize = 1 << 14;
+
+/// Small enough under test that the materializer splits a tail in several chunks.
+///
+/// The bank offsets of every chunk past the first are then on the path the tests take.
+#[cfg(test)]
+const COMPACT_TOTAL_SCRATCH: usize = 1 << 4;
+
+/// The fewest free variables an unforced compact run of `requested_k` rounds accepts.
+///
+/// Each of its `2^requested_k` banks then spans at least `2^COMPACT_MIN_BLOCK_BITS` equality
+/// chunks of `2^log_chunk` points.
+const fn compact_size_floor(requested_k: usize, log_chunk: usize) -> usize {
+    requested_k + log_chunk + COMPACT_MIN_BLOCK_BITS
+}
+
+/// Bind prefix variables in one task-owned buffer without invoking Rayon recursively.
+fn bind_scratch_prefix<R: Field>(values: &mut Vec<R>, challenges: &[R]) {
+    for &challenge in challenges {
+        let half = values.len() / 2;
+        assert!(half > 0, "a compact prefix must leave a variable to bind");
+        let (low, high) = values.split_at_mut(half);
+        let (low_packed, low_tail) = R::Packing::pack_slice_with_suffix_mut(low);
+        let (high_packed, high_tail) = R::Packing::pack_slice_with_suffix(high);
+        let challenge_packed = R::Packing::broadcast(challenge);
+        for (low, &high) in low_packed.iter_mut().zip(high_packed) {
+            let old = *low;
+            *low = old + (high - old) * challenge_packed;
+        }
+        for (low, &high) in low_tail.iter_mut().zip(high_tail) {
+            *low += (high - *low) * challenge;
+        }
+        values.truncate(half);
+    }
+}
+
+/// Materialize the witness after binding the compact head, using one fixed total scratch budget.
+fn materialize_compact_packing<EF, R, S>(
+    packing: &BitPacking<EF, S>,
+    offset: usize,
+    n: usize,
+    compact_rounds: usize,
+    challenges: &[EF],
+) -> Poly<R>
+where
+    EF: TowerLevel + Send + Sync,
+    R: IntoTranscriptField<EF> + Sync,
+    S: Borrow<[EF]>,
+{
+    let _span = tracing::debug_span!("compact_packing").entered();
+    let banks = 1usize << compact_rounds;
+    let tail_evals = 1usize << (n - compact_rounds);
+    let output_chunk = (COMPACT_TOTAL_SCRATCH >> compact_rounds).max(1);
+    let prefix_challenges = challenges.iter().copied().map(R::from).collect::<Vec<_>>();
+    let source = packing.poly().as_slice();
+    let mut output = R::zero_vec(tail_evals);
+    let output_chunk_len = output_chunk;
+    output
+        .par_chunks_mut(output_chunk)
+        .enumerate()
+        .for_each(|(chunk_index, output_chunk)| {
+            let start = chunk_index * output_chunk_len;
+            let mut scratch = Vec::with_capacity(banks * output_chunk.len());
+            for bank in 0..banks {
+                let source_start = offset + bank * tail_evals + start;
+                scratch.extend_from_slice(&source[source_start..source_start + output_chunk.len()]);
+            }
+            let mut converted = R::from_table(scratch);
+            bind_scratch_prefix(&mut converted, &prefix_challenges);
+            output_chunk.copy_from_slice(&converted[..output_chunk.len()]);
+        });
+    Poly::new(output)
+}
 
 /// One ring-switching reduction at a bit alphabet, before the batching draw.
 ///
@@ -790,6 +877,22 @@ impl<EF: TowerLevel> BitRingSwitch<EF> {
         }
         (carry, last)
     }
+
+    /// Common compact-depth guards, evaluated before bank slices or shifts are formed.
+    fn compact_depth_is_eligible(&self, n: usize, requested_k: usize, force: bool) -> bool {
+        if requested_k == 0 || requested_k > COMPACT_MAX_ROUNDS || n < requested_k {
+            return false;
+        }
+        if let Some(kept_rows) = self.kept_row_variables()
+            && (n < kept_rows || requested_k > n - kept_rows)
+        {
+            return false;
+        }
+        // At the production depth this floor is 2 + 14 + 6 = 22 free variables, but 2 + 1 + 6 = 9
+        // under test, where `LOG_CHUNK` is 1, so no unit test runs the compact head at the shape
+        // or the chunk size a production build first accepts.
+        force || n >= compact_size_floor(requested_k, LOG_CHUNK)
+    }
 }
 
 /// The same reduction, once the batching challenge has been drawn.
@@ -883,9 +986,7 @@ impl<EF: TowerLevel> BitRingSwitchBatch<'_, EF> {
                 || sums.clone(),
                 |scaled, (block, &weight)| {
                     scaled_sums_into(scaled, &sums, weight);
-                    for (slot, &inner) in block.iter_mut().zip(equality.inner()) {
-                        *slot = scaled.sum(inner);
-                    }
+                    scaled.apply_into(equality.inner(), block);
                 },
             );
 
@@ -911,6 +1012,74 @@ impl<EF: TowerLevel> BitRingSwitchBatch<'_, EF> {
         let stride = equality.block_len().max(column).min(table.num_evals());
         debug_assert!(column.is_power_of_two() && stride.is_multiple_of(column));
         debug_assert!(table.num_evals().is_multiple_of(stride));
+        table
+            .as_mut_slice()
+            .par_chunks_mut(stride)
+            .for_each(|part| {
+                for entries in part.chunks_mut(column) {
+                    for row in (0..column).rev() {
+                        let settled = entries[row];
+                        let mut value = settled;
+                        if row != 0 {
+                            value += alpha * entries[row - 1];
+                        }
+                        if row == max {
+                            value += alpha_squared * settled;
+                        }
+                        entries[row] = value;
+                    }
+                }
+            });
+        table
+    }
+
+    /// Build the tail weights from the compact prover's settled coordinate images.
+    fn weights_from_generators<R>(
+        &self,
+        equality: &FactoredEquality<EF>,
+        generators: &[R],
+    ) -> Poly<R>
+    where
+        EF: Send + Sync,
+        R: IntoTranscriptField<EF> + Sync,
+    {
+        let sums = CoordinateSums::<EF, R>::new(generators);
+        let mut table = Poly::zero(equality.num_variables());
+        table
+            .as_mut_slice()
+            .par_chunks_mut(equality.block_len())
+            .zip(equality.outer().par_iter())
+            .for_each_init(
+                || sums.clone(),
+                |scaled, (block, &weight)| {
+                    scaled_sums_into(scaled, &sums, weight);
+                    scaled.apply_into(equality.inner(), block);
+                },
+            );
+
+        let Some(alpha) = self.alpha else {
+            return table;
+        };
+        let kept = self
+            .reduction
+            .kept_row_variables()
+            .expect("a compact alpha batch has successor rows");
+        let column = 1usize << kept;
+        let alpha = R::from(alpha);
+        let alpha_squared = alpha.square();
+        let max = column - 1;
+        // A column fits inside the tail: the kept-row clause of `compact_depth_is_eligible` keeps
+        // the compact head off the kept row coordinates, so the tail keeps at least the kept rows.
+        // Every chunk below is therefore exactly `stride` long and splits into whole columns.
+        let stride = equality.block_len().max(column).min(table.num_evals());
+        debug_assert!(
+            column.is_power_of_two() && stride.is_multiple_of(column),
+            "the compact tail is shorter than one column; see compact_depth_is_eligible"
+        );
+        debug_assert!(
+            table.num_evals().is_multiple_of(stride),
+            "the compact tail does not split into whole strides; see compact_depth_is_eligible"
+        );
         table
             .as_mut_slice()
             .par_chunks_mut(stride)
@@ -1222,6 +1391,29 @@ impl<EF: TranscriptField + TowerLevel> BitRingSwitch<EF> {
         Challenger: FieldChallenger<EF> + GrindingChallenger<Witness = EF>,
         S: Borrow<[EF]>,
     {
+        self.prove_with_compact_depth::<R, Challenger, S>(
+            packing,
+            challenger,
+            COMPACT_ROUNDS,
+            false,
+        )
+    }
+
+    /// Run the compact driver at a requested depth. The `force` flag is test/benchmark-only and
+    /// bypasses the conservative production size gate while retaining algebraic eligibility.
+    pub(crate) fn prove_with_compact_depth<R, Challenger, S>(
+        &self,
+        packing: &BitPacking<EF, S>,
+        challenger: &mut Challenger,
+        requested_k: usize,
+        force: bool,
+    ) -> (BitRingSwitchProof<EF>, Point<EF>, EF)
+    where
+        EF: Send + Sync,
+        R: IntoTranscriptField<EF>,
+        Challenger: FieldChallenger<EF> + GrindingChallenger<Witness = EF>,
+        S: Borrow<[EF]>,
+    {
         let max_rounds = self.num_variables();
         assert_eq!(
             packing.num_variables(),
@@ -1229,10 +1421,72 @@ impl<EF: TranscriptField + TowerLevel> BitRingSwitch<EF> {
             "the packing must have the {max_rounds} variables the evaluation point leaves"
         );
 
-        // One equality table over the supported run feeds every element and the weights.
-        let (_, offset, equality) = self.support();
-        let tensor = Self::tensor_over(packing, offset, &equality);
-        let successor = self.successor_tensors_over(packing, offset, &equality);
+        // Derive the selected slot before constructing any equality table. Compact runs only
+        // need the suffix factor; the dense fallback constructs the full supported-run factor.
+        let (prefix, address) = self.fixed_prefix();
+        let n = max_rounds - prefix;
+        let compact = self.compact_depth_is_eligible(n, requested_k, force);
+        let offset = address * (1usize << n);
+        let equality = (!compact).then(|| FactoredEquality::new(&self.high()[prefix..], LOG_CHUNK));
+        let compact_equality =
+            compact.then(|| FactoredEquality::new(&self.high()[prefix + requested_k..], LOG_CHUNK));
+        let (tensor, successor, bank_tensors, bank_successors) = if compact {
+            let _span = tracing::debug_span!("compact_stats", depth = requested_k).entered();
+            let banks = 1usize << requested_k;
+            let head = &self.high()[prefix..prefix + requested_k];
+            let tail_equality = compact_equality.as_ref().expect("compact equality exists");
+            let head_equality = Poly::new_from_point(head, EF::ONE);
+            let bank_tensors = (0..banks)
+                .map(|bank| {
+                    Self::tensor_over(
+                        packing,
+                        offset + bank * tail_equality.num_evals(),
+                        tail_equality,
+                    )
+                })
+                .collect::<Vec<_>>();
+            let bank_successors = self.kept_row_variables().map(|_| {
+                (0..banks)
+                    .map(|bank| {
+                        self.successor_tensors_over(
+                            packing,
+                            offset + bank * tail_equality.num_evals(),
+                            tail_equality,
+                        )
+                        .expect("eligible successor compact bank has successor tensors")
+                    })
+                    .collect::<Vec<_>>()
+            });
+            let mut tensor = BitTensor::zero();
+            for (&weight, bank) in head_equality.as_slice().iter().zip(&bank_tensors) {
+                tensor.add_scaled_columns(bank, weight);
+            }
+            let successor = bank_successors.as_ref().map(|banks| {
+                let mut carry = BitTensor::zero();
+                let mut last = BitTensor::zero();
+                for (&weight, bank) in head_equality.as_slice().iter().zip(banks) {
+                    carry.add_scaled_columns(&bank.carry, weight);
+                    last.add_scaled_columns(&bank.last, weight);
+                }
+                SuccessorTensors { carry, last }
+            });
+            (tensor, successor, Some(bank_tensors), bank_successors)
+        } else {
+            (
+                Self::tensor_over(
+                    packing,
+                    offset,
+                    equality.as_ref().expect("dense equality exists"),
+                ),
+                self.successor_tensors_over(
+                    packing,
+                    offset,
+                    equality.as_ref().expect("dense equality exists"),
+                ),
+                None,
+                None,
+            )
+        };
 
         // The elements are functions of the kept coordinates alone.
         // They are therefore ready before the transcript needs them.
@@ -1250,27 +1504,115 @@ impl<EF: TranscriptField + TowerLevel> BitRingSwitch<EF> {
         let batch = self
             .batch_drawn(&r_batch, alpha)
             .expect("the transcript draws what the reduction's kind batches with");
-        // A Boolean prefix is a public slot address.
-        // Restricting to that slot removes one sumcheck round per address bit.
-        let restricted = self.restricted_packing::<R, _>(packing);
-        let rounds = restricted.num_variables();
-        let weights = batch.weights_over::<R>(&equality);
-        drop(equality);
-        let mut prover = ReprSumcheckProver::<EF, EF, R>::from_repr_tables(
-            VariableOrder::Prefix,
-            restricted,
-            weights,
-            batch.initial_sum(&tensor, successor.as_ref()),
-        );
         let mut sumcheck = SumcheckData::default();
 
-        let r_prime = transcript.batched_sumcheck(|challenger| {
-            prover.compute_sumcheck_polynomials(&mut sumcheck, challenger, rounds, 0)
-        });
+        // A Boolean prefix is a public slot address. The compact branch keeps the first
+        // requested coordinates in banked tensors and emits them through one n-round transcript.
+        let (r_prime, final_eval) = if compact {
+            let factors_span =
+                tracing::debug_span!("compact_factors", depth = requested_k).entered();
+            let bank_tensors = bank_tensors.expect("compact banks are present");
+            let bank_successors = bank_successors.as_ref();
+            let banks = 1usize << requested_k;
+            let head = &self.high()[prefix..prefix + requested_k];
+            let tail_equality = compact_equality.as_ref().expect("compact equality exists");
+            let head_equality = Poly::new_from_point(head, EF::ONE);
+            let mut batching = Vec::with_capacity(Coefficients::<EF>::DIMENSION);
+            batching.extend(batch.eq_batch.as_slice().iter().copied().map(R::from));
+            let coordinate_sums = CoordinateSums::<EF, R>::new(&batching);
+            let mut factors = Vec::with_capacity(banks * BitTensor::<EF>::DIMENSION);
+            let alpha = batch.alpha.map(R::from);
+            let alpha_squared = alpha.map(|value| value.square());
+            for bank in 0..banks {
+                let successor = bank_successors.map(|all| &all[bank]);
+                for coordinate in 0..BitTensor::<EF>::DIMENSION {
+                    let mut value = R::from(bank_tensors[bank].rows()[coordinate]);
+                    if let (Some(elements), Some(alpha), Some(alpha_squared)) =
+                        (successor, alpha, alpha_squared)
+                    {
+                        value += alpha * R::from(elements.carry.rows()[coordinate])
+                            + alpha_squared * R::from(elements.last.rows()[coordinate]);
+                    }
+                    factors.push(value);
+                }
+            }
+            let mut generators = Vec::with_capacity(banks * BitTensor::<EF>::DIMENSION);
+            for &weight in head_equality.as_slice() {
+                for coordinate in 0..BitTensor::<EF>::DIMENSION {
+                    let mut basis = Coefficients::<EF>::zero();
+                    basis.set(coordinate);
+                    generators.push(coordinate_sums.sum(weight * basis.element()));
+                }
+            }
+            drop(bank_tensors);
+            drop(factors_span);
+            transcript.batched_sumcheck(|challenger| {
+                let mut rounds_transcript = ProverTranscript::<Challenger, EF, EF>::new(
+                    challenger,
+                    SumcheckShape::new(n, 0, Basis::Evaluation),
+                );
+                let head_span = tracing::debug_span!("compact_head", depth = requested_k).entered();
+                let mut compact_prover = ReprSumcheckProver::<EF, EF, R>::from_repr_tables(
+                    VariableOrder::Prefix,
+                    Poly::new(factors),
+                    Poly::new(generators),
+                    batch.initial_sum(&tensor, successor.as_ref()),
+                );
+                let mut challenges = Vec::with_capacity(n);
+                for _ in 0..requested_k {
+                    challenges.push(compact_prover.round(&mut sumcheck, &mut rounds_transcript));
+                }
+                let handoff_sum = compact_prover.claimed_sum();
+                let generators = compact_prover.weights().into_evals();
+                drop(compact_prover);
+                drop(head_span);
+
+                let bound_packing = materialize_compact_packing::<EF, R, _>(
+                    packing,
+                    offset,
+                    n,
+                    requested_k,
+                    &challenges,
+                );
+                let bound_weights = {
+                    let _span =
+                        tracing::debug_span!("compact_weights", depth = requested_k).entered();
+                    batch.weights_from_generators::<R>(tail_equality, &generators)
+                };
+                let _span = tracing::debug_span!("compact_tail", depth = requested_k).entered();
+                let mut tail_prover = ReprSumcheckProver::<EF, EF, R>::from_repr_tables(
+                    VariableOrder::Prefix,
+                    bound_packing,
+                    bound_weights,
+                    handoff_sum,
+                );
+                for _ in requested_k..n {
+                    challenges.push(tail_prover.round(&mut sumcheck, &mut rounds_transcript));
+                }
+                let final_eval = tail_prover.evals().as_slice()[0].into_transcript();
+                rounds_transcript.finish();
+                (Point::new(challenges), final_eval)
+            })
+        } else {
+            let restricted = self.restricted_packing::<R, _>(packing);
+            let rounds = restricted.num_variables();
+            let weights =
+                batch.weights_over::<R>(equality.as_ref().expect("dense equality exists"));
+            let mut prover = ReprSumcheckProver::<EF, EF, R>::from_repr_tables(
+                VariableOrder::Prefix,
+                restricted,
+                weights,
+                batch.initial_sum(&tensor, successor.as_ref()),
+            );
+            let r_prime = transcript.batched_sumcheck(|challenger| {
+                prover.compute_sumcheck_polynomials(&mut sumcheck, challenger, rounds, 0)
+            });
+            let final_eval = prover.evals().as_slice()[0].into_transcript();
+            (r_prime, final_eval)
+        };
 
         // After the last round the evaluation side has folded to the packing at that point.
         // No second pass over the packing is needed to find it.
-        let final_eval = prover.evals().as_slice()[0].into_transcript();
         transcript.surviving_claim(final_eval);
         transcript.finish();
 
@@ -1463,6 +1805,7 @@ impl<EF: TranscriptField + TowerLevel> BitRingSwitch<EF> {
 
 #[cfg(test)]
 mod tests {
+    use alloc::vec;
     use alloc::vec::Vec;
 
     use p3_binary_field::{BinaryChallenger, BinaryField16, BinaryField128, Ghash128};
@@ -1482,6 +1825,11 @@ mod tests {
     /// A fresh sponge, so the two sides start from the same state.
     fn challenger() -> Chal {
         Chal::from_hasher(Vec::new(), Keccak256Hash)
+    }
+
+    /// A fresh wide-field sponge for representation differential checks.
+    fn wide_challenger() -> WideChal {
+        WideChal::from_hasher(Vec::new(), Keccak256Hash)
     }
 
     /// A random bit witness of the given byte length.
@@ -1512,6 +1860,50 @@ mod tests {
         (reduction, packing, r, r_batch)
     }
 
+    fn assert_successor_proofs_match_dense(
+        reduction: &BitRingSwitch<EF>,
+        packing: &BitPacking<EF>,
+        requested_k: usize,
+    ) {
+        let tensor = reduction.tensor(packing).unwrap();
+        let successor = reduction.successor_tensors(packing).unwrap();
+        let current = reduction.incoming_claim(&tensor);
+        let next = reduction
+            .successor_claim(&tensor, successor.as_ref())
+            .unwrap();
+        let mut dense_challenger = challenger();
+        let dense =
+            reduction.prove_with_compact_depth::<EF, _, _>(packing, &mut dense_challenger, 0, true);
+        let dense_next: EF = dense_challenger.sample();
+        let mut requested_challenger = challenger();
+        let requested = reduction.prove_with_compact_depth::<EF, _, _>(
+            packing,
+            &mut requested_challenger,
+            requested_k,
+            true,
+        );
+        let requested_next: EF = requested_challenger.sample();
+        assert_eq!(requested.0.tensor, dense.0.tensor);
+        assert_eq!(requested.0.successor, dense.0.successor);
+        assert_eq!(
+            requested.0.sumcheck.polynomial_evaluations,
+            dense.0.sumcheck.polynomial_evaluations
+        );
+        assert_eq!(
+            requested.0.sumcheck.pow_witnesses,
+            dense.0.sumcheck.pow_witnesses
+        );
+        assert_eq!(requested.0.final_eval, dense.0.final_eval);
+        assert_eq!(requested.1, dense.1);
+        assert_eq!(requested.2, dense.2);
+        assert_eq!(requested_next, dense_next);
+        assert!(
+            reduction
+                .verify_readings(&requested.0, Some(current), Some(next), &mut challenger())
+                .is_ok()
+        );
+    }
+
     /// The witness as a multilinear over every variable, one element per bit.
     fn embedded(witness: &[u8]) -> Poly<EF> {
         embedded_over(witness)
@@ -1530,6 +1922,538 @@ mod tests {
                 })
                 .collect::<Vec<_>>(),
         )
+    }
+
+    #[test]
+    fn compact_prefix_fold_matches_the_existing_prefix_kernel() {
+        let mut rng = SmallRng::seed_from_u64(0xC0A7);
+        for (variables, rounds) in [(0, 0), (1, 1), (4, 2), (7, 3), (8, 4)] {
+            let mut rng_challenges = SmallRng::seed_from_u64(0xF01D + variables as u64);
+            let challenges = if rounds >= 2 {
+                vec![BinaryField128::ZERO, BinaryField128::ONE]
+                    .into_iter()
+                    .chain((2..rounds).map(|_| rng_challenges.random::<BinaryField128>()))
+                    .collect::<Vec<_>>()
+            } else {
+                (0..rounds)
+                    .map(|_| rng_challenges.random::<BinaryField128>())
+                    .collect::<Vec<_>>()
+            };
+            let mut values: Vec<BinaryField128> = (0..(1usize << variables))
+                .map(|_| rng.random::<BinaryField128>())
+                .collect();
+            let mut reference = Poly::new(values.clone());
+            for &challenge in &challenges {
+                reference.fix_prefix_var_mut(challenge);
+            }
+            bind_scratch_prefix(&mut values, &challenges);
+            assert_eq!(values, reference.into_evals());
+        }
+    }
+
+    #[test]
+    fn compact_composed_weight_map_matches_dense_at_zero_and_one_heads() {
+        let packing = BitPacking::<EF>::new(&bits(0xC01F, 16)).unwrap();
+        let mut rng = SmallRng::seed_from_u64(0xD01F);
+        let reduction = BitRingSwitch::new(&Point::<EF>::rand(
+            &mut rng,
+            packing.num_variables() + BitRingSwitch::<EF>::ABSORBED,
+        ))
+        .unwrap();
+        let r_batch = Point::<EF>::rand(&mut rng, BitRingSwitch::<EF>::ABSORBED);
+        let batch = reduction.batch(&r_batch).unwrap();
+        let dense_equality = FactoredEquality::new(reduction.high(), LOG_CHUNK);
+        let dense_weights = batch.weights_over::<EF>(&dense_equality);
+        let head = &reduction.high()[..2];
+        let head_equality = Poly::new_from_point(head, EF::ONE);
+        let tail_equality = FactoredEquality::new(&reduction.high()[2..], LOG_CHUNK);
+        let batching = batch.eq_batch.as_slice().to_vec();
+        let coordinate_sums = CoordinateSums::<EF, EF>::new(&batching);
+
+        for challenges in [
+            [EF::ZERO, EF::ZERO],
+            [EF::ZERO, EF::ONE],
+            [EF::ONE, EF::ZERO],
+            [EF::ONE, EF::ONE],
+        ] {
+            let lambda = Poly::new_from_point(&challenges, EF::ONE);
+            let mut generators = Vec::with_capacity(BitTensor::<EF>::DIMENSION);
+            for coordinate in 0..BitTensor::<EF>::DIMENSION {
+                let mut basis = Coefficients::<EF>::zero();
+                basis.set(coordinate);
+                let mut generator = EF::ZERO;
+                for bank in 0..4 {
+                    generator += lambda.as_slice()[bank]
+                        * coordinate_sums.sum(head_equality.as_slice()[bank] * basis.element());
+                }
+                generators.push(generator);
+            }
+            let compact_weights = batch.weights_from_generators(&tail_equality, &generators);
+            let mut folded_dense = dense_weights.clone();
+            for &challenge in &challenges {
+                folded_dense.fix_prefix_var_mut(challenge);
+            }
+            assert_eq!(compact_weights, folded_dense);
+        }
+    }
+
+    #[test]
+    fn forced_compact_depths_match_the_dense_transcript() {
+        for k in [1, 2, 4, 6] {
+            for remaining_n in [k, k + 1] {
+                let bytes = 2usize << remaining_n;
+                let packing =
+                    BitPacking::<EF>::new(&bits(0xC011 + k as u64 + remaining_n as u64, bytes))
+                        .unwrap();
+                let mut rng = SmallRng::seed_from_u64(0xD00D + k as u64 + remaining_n as u64);
+                let mut point = Point::<EF>::rand(
+                    &mut rng,
+                    packing.num_variables() + BitRingSwitch::<EF>::ABSORBED,
+                )
+                .as_slice()
+                .to_vec();
+                point[0] = loop {
+                    let value = rng.random::<EF>();
+                    if value != EF::ZERO && value != EF::ONE {
+                        break value;
+                    }
+                };
+                let reduction = BitRingSwitch::new(&Point::new(point)).unwrap();
+                assert_eq!(packing.num_variables(), remaining_n);
+                assert_eq!(reduction.fixed_prefix().0, 0);
+                assert!(reduction.compact_depth_is_eligible(remaining_n, k, true));
+                let current = reduction.incoming_claim(&reduction.tensor(&packing).unwrap());
+                let mut dense_challenger = challenger();
+                let (dense, dense_point, dense_value) = reduction
+                    .prove_with_compact_depth::<EF, _, _>(&packing, &mut dense_challenger, 0, true);
+                let dense_next: EF = dense_challenger.sample();
+                let mut compact_challenger = challenger();
+                let (compact, compact_point, compact_value) = reduction
+                    .prove_with_compact_depth::<EF, _, _>(
+                        &packing,
+                        &mut compact_challenger,
+                        k,
+                        true,
+                    );
+                let compact_next: EF = compact_challenger.sample();
+
+                assert_eq!(compact.tensor, dense.tensor, "k={k}, n={remaining_n}");
+                assert_eq!(compact.successor, dense.successor, "k={k}, n={remaining_n}");
+                assert_eq!(
+                    compact.sumcheck.polynomial_evaluations, dense.sumcheck.polynomial_evaluations,
+                    "k={k}, n={remaining_n}"
+                );
+                assert_eq!(
+                    compact.sumcheck.pow_witnesses, dense.sumcheck.pow_witnesses,
+                    "k={k}, n={remaining_n}"
+                );
+                assert_eq!(compact_point, dense_point, "k={k}, n={remaining_n}");
+                assert_eq!(compact_value, dense_value, "k={k}, n={remaining_n}");
+                assert_eq!(
+                    compact.final_eval, dense.final_eval,
+                    "k={k}, n={remaining_n}"
+                );
+                assert_eq!(compact_next, dense_next, "k={k}, n={remaining_n}");
+                assert!(
+                    reduction
+                        .verify(&compact, current, &mut challenger())
+                        .is_ok()
+                );
+            }
+        }
+
+        // The common guard must fall back before attempting a two-bank slice when only one
+        // free coordinate remains.
+        let packing = BitPacking::<EF>::new(&bits(0xC012, 4)).unwrap();
+        let mut rng = SmallRng::seed_from_u64(0xD012);
+        let reduction = BitRingSwitch::new(&Point::<EF>::rand(
+            &mut rng,
+            packing.num_variables() + BitRingSwitch::<EF>::ABSORBED,
+        ))
+        .unwrap();
+        let mut dense_challenger = challenger();
+        let dense = reduction.prove_with_compact_depth::<EF, _, _>(
+            &packing,
+            &mut dense_challenger,
+            0,
+            true,
+        );
+        let mut compact_challenger = challenger();
+        let compact = reduction.prove_with_compact_depth::<EF, _, _>(
+            &packing,
+            &mut compact_challenger,
+            2,
+            true,
+        );
+        assert_eq!(
+            dense.0.sumcheck.polynomial_evaluations,
+            compact.0.sumcheck.polynomial_evaluations
+        );
+        assert_eq!(dense.1, compact.1);
+        assert_eq!(dense.2, compact.2);
+    }
+
+    #[test]
+    fn compact_prefix_uses_a_nonzero_selected_slot() {
+        let packing = BitPacking::<EF>::new(&bits(0xC016, 64)).unwrap();
+        let mut rng = SmallRng::seed_from_u64(0xD016);
+        let mut coordinates = Point::<EF>::rand(
+            &mut rng,
+            packing.num_variables() + BitRingSwitch::<EF>::ABSORBED,
+        )
+        .as_slice()
+        .to_vec();
+        coordinates[0] = EF::ONE;
+        let reduction = BitRingSwitch::new(&Point::new(coordinates)).unwrap();
+        let current = reduction.incoming_claim(&reduction.tensor(&packing).unwrap());
+        let mut dense_challenger = challenger();
+        let dense = reduction.prove_with_compact_depth::<EF, _, _>(
+            &packing,
+            &mut dense_challenger,
+            0,
+            true,
+        );
+        let dense_next: EF = dense_challenger.sample();
+        let mut compact_challenger = challenger();
+        let compact = reduction.prove_with_compact_depth::<EF, _, _>(
+            &packing,
+            &mut compact_challenger,
+            2,
+            true,
+        );
+        let compact_next: EF = compact_challenger.sample();
+        assert_eq!(
+            reduction.fixed_prefix().1,
+            1,
+            "the test must select the upper slot"
+        );
+        assert_eq!(compact.0.tensor, dense.0.tensor);
+        assert_eq!(compact.0.successor, dense.0.successor);
+        assert_eq!(
+            compact.0.sumcheck.polynomial_evaluations,
+            dense.0.sumcheck.polynomial_evaluations
+        );
+        assert_eq!(
+            compact.0.sumcheck.pow_witnesses,
+            dense.0.sumcheck.pow_witnesses
+        );
+        assert_eq!(compact.0.final_eval, dense.0.final_eval);
+        assert_eq!(compact.1, dense.1);
+        assert_eq!(compact.2, dense.2);
+        assert_eq!(compact_next, dense_next);
+        assert!(
+            reduction
+                .verify(&compact.0, current, &mut challenger())
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn successor_compact_depth_refuses_fixed_selector_prefixes() {
+        let n = 4;
+        let kept_rows = 2;
+        let row_variables = BitRingSwitch::<EF>::ABSORBED + kept_rows;
+        let total = n + BitRingSwitch::<EF>::ABSORBED;
+        let mut rng = SmallRng::seed_from_u64(0xD017);
+        let mut non_boolean = || loop {
+            let value = rng.random::<EF>();
+            if value != EF::ZERO && value != EF::ONE {
+                break value;
+            }
+        };
+
+        // One fixed selector leaves only one free selector, so requested k2 is unsafe.
+        let mut partial = vec![EF::ZERO; total];
+        partial[0] = EF::ONE;
+        partial[1] = non_boolean();
+        partial[2..n].fill_with(&mut non_boolean);
+        let partial_reduction =
+            BitRingSwitch::with_successor(&Point::new(partial), row_variables).unwrap();
+        let partial_prefix = partial_reduction.fixed_prefix().0;
+        assert_eq!(partial_prefix, 1);
+        assert!(!partial_reduction.compact_depth_is_eligible(n - partial_prefix, 2, true,));
+        let fallback_packing = BitPacking::<EF>::new(&bits(0xD01B, 32)).unwrap();
+        assert_successor_proofs_match_dense(&partial_reduction, &fallback_packing, 2);
+
+        // Fixing every selector leaves only the kept rows, and therefore no compact head.
+        let mut all = vec![EF::ZERO; total];
+        all[..n - kept_rows].fill(EF::ONE);
+        all[n - kept_rows..n].fill_with(&mut non_boolean);
+        let all_reduction = BitRingSwitch::with_successor(&Point::new(all), row_variables).unwrap();
+        let all_prefix = all_reduction.fixed_prefix().0;
+        assert_eq!(all_prefix, n - kept_rows);
+        assert!(!all_reduction.compact_depth_is_eligible(n - all_prefix, 1, true));
+        assert_successor_proofs_match_dense(&all_reduction, &fallback_packing, 2);
+
+        // A successor contained inside one packed element still takes the plain path and must
+        // refuse a requested head wider than the one remaining variable.
+        let inside_packing = BitPacking::<EF>::new(&bits(0xC018, 4)).unwrap();
+        let inside_point = Point::<EF>::rand(
+            &mut rng,
+            inside_packing.num_variables() + BitRingSwitch::<EF>::ABSORBED,
+        );
+        let inside =
+            BitRingSwitch::with_successor(&inside_point, BitRingSwitch::<EF>::ABSORBED - 1)
+                .unwrap();
+        assert!(!inside.compact_depth_is_eligible(inside.num_variables(), 2, true));
+        assert_successor_proofs_match_dense(&inside, &inside_packing, 2);
+
+        // A kept-row width above the test equality block still has complete columns in each
+        // bank and must take the compact successor path.
+        let wide_packing = BitPacking::<EF>::new(&bits(0xC019, 32)).unwrap();
+        let mut wide_point = Point::<EF>::rand(
+            &mut rng,
+            wide_packing.num_variables() + BitRingSwitch::<EF>::ABSORBED,
+        )
+        .as_slice()
+        .to_vec();
+        wide_point[0] = loop {
+            let value = rng.random::<EF>();
+            if value != EF::ZERO && value != EF::ONE {
+                break value;
+            }
+        };
+        let wide = BitRingSwitch::with_successor(
+            &Point::new(wide_point),
+            BitRingSwitch::<EF>::ABSORBED + 2,
+        )
+        .unwrap();
+        assert_eq!(wide.fixed_prefix().0, 0);
+        assert!(wide.compact_depth_is_eligible(wide.num_variables(), 2, true));
+        let wide_tensor = wide.tensor(&wide_packing).unwrap();
+        let wide_successor = wide.successor_tensors(&wide_packing).unwrap();
+        let wide_current = wide.incoming_claim(&wide_tensor);
+        let wide_next = wide
+            .successor_claim(&wide_tensor, wide_successor.as_ref())
+            .unwrap();
+        let mut wide_dense_challenger = challenger();
+        let wide_dense = wide.prove_with_compact_depth::<EF, _, _>(
+            &wide_packing,
+            &mut wide_dense_challenger,
+            0,
+            true,
+        );
+        let mut wide_compact_challenger = challenger();
+        let wide_compact = wide.prove_with_compact_depth::<EF, _, _>(
+            &wide_packing,
+            &mut wide_compact_challenger,
+            2,
+            true,
+        );
+        assert_eq!(wide_compact.0.successor, wide_dense.0.successor);
+        assert_eq!(
+            wide_compact.0.sumcheck.polynomial_evaluations,
+            wide_dense.0.sumcheck.polynomial_evaluations
+        );
+        assert!(
+            wide.verify_readings(
+                &wide_compact.0,
+                Some(wide_current),
+                Some(wide_next),
+                &mut challenger(),
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn compact_plain_path_handles_zero_one_and_sparse_packing() {
+        let mut sparse = vec![0u8; 16];
+        sparse[0] = 1;
+        sparse[9] = 0x80;
+        for (seed, witness) in [
+            (0xD018, vec![0u8; 16]),
+            (0xD019, vec![0xFFu8; 16]),
+            (0xD01A, sparse),
+        ] {
+            let packing = BitPacking::<EF>::new(&witness).unwrap();
+            let mut rng = SmallRng::seed_from_u64(seed);
+            let reduction = BitRingSwitch::new(&Point::<EF>::rand(
+                &mut rng,
+                packing.num_variables() + BitRingSwitch::<EF>::ABSORBED,
+            ))
+            .unwrap();
+            let mut dense_challenger = challenger();
+            let dense = reduction.prove_with_compact_depth::<EF, _, _>(
+                &packing,
+                &mut dense_challenger,
+                0,
+                true,
+            );
+            let mut compact_challenger = challenger();
+            let compact = reduction.prove_with_compact_depth::<EF, _, _>(
+                &packing,
+                &mut compact_challenger,
+                2,
+                true,
+            );
+            assert_eq!(compact.0.tensor, dense.0.tensor);
+            assert_eq!(
+                compact.0.sumcheck.polynomial_evaluations,
+                dense.0.sumcheck.polynomial_evaluations
+            );
+            assert_eq!(
+                compact.0.sumcheck.pow_witnesses,
+                dense.0.sumcheck.pow_witnesses
+            );
+            assert_eq!(compact.1, dense.1);
+            assert_eq!(compact.2, dense.2);
+        }
+    }
+
+    #[test]
+    fn compact_successor_and_ghash_paths_match_dense() {
+        let packing = BitPacking::<EF>::new(&bits(0xC013, 16)).unwrap();
+        let mut rng = SmallRng::seed_from_u64(0xD013);
+        let reduction = BitRingSwitch::with_successor(
+            &Point::<EF>::rand(
+                &mut rng,
+                packing.num_variables() + BitRingSwitch::<EF>::ABSORBED,
+            ),
+            BitRingSwitch::<EF>::ABSORBED + 1,
+        )
+        .unwrap();
+        let tensor = reduction.tensor(&packing).unwrap();
+        let successor = reduction.successor_tensors(&packing).unwrap();
+        let current = reduction.incoming_claim(&tensor);
+        let next = reduction
+            .successor_claim(&tensor, successor.as_ref())
+            .unwrap();
+        let mut dense_challenger = challenger();
+        let (dense, dense_point, dense_value) = reduction.prove_with_compact_depth::<EF, _, _>(
+            &packing,
+            &mut dense_challenger,
+            0,
+            true,
+        );
+        let mut compact_challenger = challenger();
+        let (compact, compact_point, compact_value) = reduction
+            .prove_with_compact_depth::<EF, _, _>(&packing, &mut compact_challenger, 2, true);
+        assert_eq!(compact.successor, dense.successor);
+        assert_eq!(
+            compact.sumcheck.polynomial_evaluations,
+            dense.sumcheck.polynomial_evaluations
+        );
+        assert_eq!(compact_point, dense_point);
+        assert_eq!(compact_value, dense_value);
+        assert!(
+            reduction
+                .verify_readings(&compact, Some(current), Some(next), &mut challenger())
+                .is_ok()
+        );
+
+        for (bytes, requested_k, has_tail) in [(64, 2, false), (64, 1, true), (128, 2, true)] {
+            let wide_packing =
+                BitPacking::<BinaryField128>::new(&bits(0xC014 + bytes as u64, bytes)).unwrap();
+            let mut wide_rng = SmallRng::seed_from_u64(0xD014 + bytes as u64);
+            let mut wide_point = Point::<BinaryField128>::rand(
+                &mut wide_rng,
+                wide_packing.num_variables() + BitRingSwitch::<BinaryField128>::ABSORBED,
+            )
+            .as_slice()
+            .to_vec();
+            wide_point[0] = loop {
+                let value = wide_rng.random::<BinaryField128>();
+                if value != BinaryField128::ZERO && value != BinaryField128::ONE {
+                    break value;
+                }
+            };
+            let wide_reduction = BitRingSwitch::new(&Point::new(wide_point)).unwrap();
+            assert_eq!(wide_reduction.fixed_prefix().0, 0);
+            assert!(wide_packing.num_variables() >= requested_k);
+            assert_eq!(wide_packing.num_variables() > requested_k, has_tail);
+            assert!(wide_reduction.compact_depth_is_eligible(
+                wide_packing.num_variables(),
+                requested_k,
+                true,
+            ));
+            let mut wide_dense_challenger = wide_challenger();
+            let (wide_dense, wide_dense_point, wide_dense_value) = wide_reduction
+                .prove_with_compact_depth::<BinaryField128, _, _>(
+                    &wide_packing,
+                    &mut wide_dense_challenger,
+                    0,
+                    true,
+                );
+            let mut wide_compact_challenger = wide_challenger();
+            let (wide_compact, wide_compact_point, wide_compact_value) = wide_reduction
+                .prove_with_compact_depth::<Ghash128, _, _>(
+                    &wide_packing,
+                    &mut wide_compact_challenger,
+                    requested_k,
+                    true,
+                );
+            let wide_dense_next: BinaryField128 = wide_dense_challenger.sample();
+            let wide_compact_next: BinaryField128 = wide_compact_challenger.sample();
+            assert_eq!(wide_compact.tensor, wide_dense.tensor);
+            assert_eq!(wide_compact.successor, wide_dense.successor);
+            assert_eq!(
+                wide_compact.sumcheck.polynomial_evaluations,
+                wide_dense.sumcheck.polynomial_evaluations
+            );
+            assert_eq!(
+                wide_compact.sumcheck.pow_witnesses,
+                wide_dense.sumcheck.pow_witnesses
+            );
+            assert_eq!(wide_compact_point, wide_dense_point);
+            assert_eq!(wide_compact_value, wide_dense_value);
+            assert_eq!(wide_compact.final_eval, wide_dense.final_eval);
+            assert_eq!(wide_compact_next, wide_dense_next);
+            let wide_current = wide_reduction.incoming_claim(&wide_compact.tensor);
+            assert!(
+                wide_reduction
+                    .verify(&wide_compact, wide_current, &mut wide_challenger())
+                    .is_ok()
+            );
+        }
+    }
+
+    #[test]
+    fn production_gate_uses_compact_two_rounds_at_the_minimum_shape() {
+        let packing = BitPacking::<EF>::new(&bits(0xC015, 1024)).unwrap();
+        let mut rng = SmallRng::seed_from_u64(0xD015);
+        let mut point = Point::<EF>::rand(
+            &mut rng,
+            packing.num_variables() + BitRingSwitch::<EF>::ABSORBED,
+        )
+        .as_slice()
+        .to_vec();
+        point[0] = loop {
+            let value = rng.random::<EF>();
+            if value != EF::ZERO && value != EF::ONE {
+                break value;
+            }
+        };
+        let reduction = BitRingSwitch::new(&Point::new(point)).unwrap();
+        // A production build first accepts 22 free variables, and a test build 9.
+        assert_eq!(compact_size_floor(COMPACT_ROUNDS, PRODUCTION_LOG_CHUNK), 22);
+        assert_eq!(compact_size_floor(COMPACT_ROUNDS, LOG_CHUNK), 9);
+        assert_eq!(reduction.num_variables(), 9);
+        assert!(reduction.compact_depth_is_eligible(
+            reduction.num_variables(),
+            COMPACT_ROUNDS,
+            false,
+        ));
+        assert!(!reduction.compact_depth_is_eligible(
+            reduction.num_variables() - 1,
+            COMPACT_ROUNDS,
+            false,
+        ));
+        let mut dense_challenger = challenger();
+        let dense = reduction.prove_with_compact_depth::<EF, _, _>(
+            &packing,
+            &mut dense_challenger,
+            0,
+            true,
+        );
+        let mut production_challenger = challenger();
+        let production = reduction.prove::<EF, _, _>(&packing, &mut production_challenger);
+        assert_eq!(
+            production.0.sumcheck.polynomial_evaluations,
+            dense.0.sumcheck.polynomial_evaluations
+        );
+        assert_eq!(production.1, dense.1);
+        assert_eq!(production.2, dense.2);
     }
 
     #[test]

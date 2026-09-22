@@ -43,10 +43,10 @@ impl<W: Word> WordProofKey<W> {
         // Statement dimensions are checked before any transcript replay.
         let commitment_variables = pcs.num_variables();
         self.validate_arity(commitment_variables)?;
-        if public.len() != self.system().public_len() {
+        if public.len() != self.statement().public_len() {
             return Err(WordProofError::SegmentLength {
                 segment: Segment::Public,
-                expected: self.system().public_len(),
+                expected: self.statement().public_len(),
                 actual: public.len(),
             });
         }
@@ -571,7 +571,7 @@ mod tests {
         let (vanishing_point, batching) = transcript.challenges(variables).unwrap();
 
         // Sum the batched relation over the cube directly, from the relation definition.
-        let columns = OperationColumns::new(key.system(), &values).unwrap();
+        let columns = OperationColumns::new(key.statement(), &values).unwrap();
         let rows = 1 << key.shift.constraint_variables();
         let equality = equality_weights(&vanishing_point);
         let linear = bit_table::<Word64, EF>(columns.zero(), rows);

@@ -15,8 +15,8 @@ use p3_sumcheck::layout::{ColumnView, Table};
 use thiserror::Error;
 
 use crate::{
-    BusActivation, BusDirection, BusExpressionLocation, BusPlan, BusPlanError, BusPlanInput,
-    BusSymbolicBuilder, SymbolicBusInteraction, UnsupportedBusAccess,
+    BusActivation, BusBoundary, BusDirection, BusExpressionLocation, BusPlan, BusPlanError,
+    BusPlanInput, BusSymbolicBuilder, SymbolicBusInteraction, UnsupportedBusAccess,
 };
 
 /// Concrete data required to replay one AIR's bus declarations.
@@ -741,8 +741,9 @@ impl<F: Field> Program<'_, F> {
             let value = match *op {
                 Op::Column(column) => column.value(row),
                 Op::Constant(value) => value,
-                Op::FirstRow => F::from_bool(row == 0),
-                Op::LastRow => F::from_bool(row + 1 == height),
+                // One definition of each end, shared with the declaration surface.
+                Op::FirstRow => F::from_bool(BusBoundary::First.contains_row(row, height)),
+                Op::LastRow => F::from_bool(BusBoundary::Last.contains_row(row, height)),
                 Op::Transition => F::from_bool(row + 1 < height),
                 Op::Neg(x) => -slots[x],
                 Op::Add(x, y) => slots[x] + slots[y],
@@ -805,6 +806,11 @@ fn compile_instance<'a, F: Field>(
                 .collect::<Result<Vec<_>, _>>()?;
             let activation = match &interaction.activation {
                 BusActivation::Always => None,
+                // A boundary indicator resolves from the row index alone.
+                BusActivation::Boundary(boundary) => Some(Program(alloc::vec![match boundary {
+                    BusBoundary::First => Op::FirstRow,
+                    BusBoundary::Last => Op::LastRow,
+                }])),
                 BusActivation::Boolean(expression) => {
                     Some(compiler.compile(BusExpressionLocation::Activation, expression)?)
                 }
@@ -998,12 +1004,12 @@ mod tests {
     use proptest::prelude::*;
 
     use super::*;
-    use crate::BusInteractionBuilder;
+    use crate::{BusInteractionBuilder, BusName};
 
     type F = BabyBear;
     type B = BinaryField128;
 
-    fn table<K: Field>(columns: &[&[u64]]) -> Table<K> {
+    pub(super) fn table<K: Field>(columns: &[&[u64]]) -> Table<K> {
         // Polynomial-major storage places each complete trace column contiguously.
         let width = columns[0].len();
         let values = columns
@@ -1046,9 +1052,10 @@ mod tests {
     #[test]
     fn balanced_mixed_height_instances_have_no_diagnostics() {
         // Fixture state:
-        //     tall push rows : [3, 5, 7, 11]
-        //     short pulls    : [3, 5]
-        //     tall pulls     : [7, 11]
+        //
+        // - tall push rows : [3, 5, 7, 11]
+        // - short pulls    : [3, 5]
+        // - tall pulls     : [7, 11]
         let tall_push = table::<F>(&[&[3, 5, 7, 11]]);
         let short_pull = table(&[&[3, 5]]);
         let tall_pull = table(&[&[7, 11, 0, 0], &[1, 1, 0, 0]]);
@@ -1276,13 +1283,13 @@ mod tests {
             let value: AB::Expr = row[0].into();
             let selector: AB::Expr = row[1].into();
             builder.push_bus_interaction(
-                "pairs",
+                BusName::new("pairs"),
                 BusDirection::Push,
                 [value.clone()],
                 BusActivation::Always,
             );
             builder.push_bus_interaction(
-                "pairs",
+                BusName::new("pairs"),
                 BusDirection::Pull,
                 [value],
                 BusActivation::Boolean(selector),
@@ -2132,5 +2139,138 @@ mod tests {
              \x20 (4)  push 1  pull 0  excess push at air 0 decl 0 row 3\n\
              bus \"zulu\": 2 unmatched tuples (0 shown)\n",
         );
+    }
+}
+
+#[cfg(test)]
+mod boundary_tests {
+    use alloc::vec;
+
+    use p3_air::symbolic::AirLayout;
+    use p3_air::{Air, BaseAir, WindowAccess};
+    use p3_baby_bear::BabyBear;
+    use p3_field::PrimeCharacteristicRing;
+
+    use super::tests::table;
+    use super::*;
+    use crate::{BusInteractionBuilder, BusName};
+
+    type F = BabyBear;
+
+    /// One state column pushed once at the first row and pulled once at the last.
+    struct BoundaryAir;
+
+    impl BaseAir<F> for BoundaryAir {
+        fn width(&self) -> usize {
+            1
+        }
+    }
+
+    impl<AB: BusInteractionBuilder<F = F>> Air<AB> for BoundaryAir {
+        fn eval(&self, builder: &mut AB) {
+            let value: AB::Expr = builder.main().current_slice()[0].into();
+            builder.push_bus_interaction(
+                BusName::new("state"),
+                BusDirection::Push,
+                [value.clone()],
+                BusActivation::Boundary(BusBoundary::First),
+            );
+            builder.push_bus_interaction(
+                BusName::new("state"),
+                BusDirection::Pull,
+                [value],
+                BusActivation::Boundary(BusBoundary::Last),
+            );
+        }
+    }
+
+    #[test]
+    fn a_boundary_flush_contributes_once_for_the_whole_table() {
+        // Fixture state: four distinct rows, so each end names a different tuple.
+        let profile =
+            BusSymbolicBuilder::<F>::from_air(&BoundaryAir, AirLayout::from_air(&BoundaryAir));
+        let main = table::<F>(&[&[10, 11, 12, 13]]);
+        let instance = BusDebugInstance::new(&main, None, &[], &profile).unwrap();
+        let report = BusDebugReport::check(&[instance]).unwrap();
+
+        // Exactly one occurrence per end: the two middle rows contribute nothing at all.
+        assert_eq!(report.imbalances.len(), 2);
+        assert_eq!(report.imbalances[0].tuple, vec![F::from_u64(10)]);
+        assert_eq!(report.imbalances[0].pushes.count, 1);
+        assert_eq!(report.imbalances[0].pulls.count, 0);
+        assert_eq!(report.imbalances[0].pushes.locations[0].row, 0);
+        assert_eq!(report.imbalances[1].tuple, vec![F::from_u64(13)]);
+        assert_eq!(report.imbalances[1].pushes.count, 0);
+        assert_eq!(report.imbalances[1].pulls.count, 1);
+        assert_eq!(report.imbalances[1].pulls.locations[0].row, 3);
+        assert_eq!(report.total_unmatched(), 2);
+    }
+
+    #[test]
+    fn two_boundary_flushes_of_one_tuple_cancel() {
+        // Fixture state: the two ends carry the same state word and the middle rows do not.
+        let profile =
+            BusSymbolicBuilder::<F>::from_air(&BoundaryAir, AirLayout::from_air(&BoundaryAir));
+        let main = table::<F>(&[&[7, 7, 7, 7]]);
+        let instance = BusDebugInstance::new(&main, None, &[], &profile).unwrap();
+
+        // Read as "every row" the count would be four against four, which also balances.
+        //
+        // The middle rows have to carry a different word to tell the two readings apart.
+        let report = BusDebugReport::check(&[instance]).unwrap();
+        assert!(report.imbalances.is_empty());
+
+        let distinct = table::<F>(&[&[7, 1, 2, 7]]);
+        let instance = BusDebugInstance::new(&distinct, None, &[], &profile).unwrap();
+        let report = BusDebugReport::check(&[instance]).unwrap();
+        assert!(
+            report.imbalances.is_empty(),
+            "a per-row reading would report the two middle words as unmatched"
+        );
+    }
+
+    #[test]
+    fn a_boundary_flush_pairs_with_a_per_row_declaration() {
+        // One table pushes a word on every row; the other pulls only its two ends.
+        struct EveryRowAir;
+
+        impl BaseAir<F> for EveryRowAir {
+            fn width(&self) -> usize {
+                1
+            }
+        }
+
+        impl<AB: BusInteractionBuilder<F = F>> Air<AB> for EveryRowAir {
+            fn eval(&self, builder: &mut AB) {
+                let value: AB::Expr = builder.main().current_slice()[0].into();
+                builder.push_bus_interaction(
+                    BusName::new("state"),
+                    BusDirection::Pull,
+                    [value],
+                    BusActivation::Always,
+                );
+            }
+        }
+
+        let ends =
+            BusSymbolicBuilder::<F>::from_air(&BoundaryAir, AirLayout::from_air(&BoundaryAir));
+        let every =
+            BusSymbolicBuilder::<F>::from_air(&EveryRowAir, AirLayout::from_air(&EveryRowAir));
+
+        // The boundary table pushes 5 at row 0 and pulls 8 at row 3.
+        let boundary_main = table::<F>(&[&[5, 6, 7, 8]]);
+        // The two-row table pulls 5 and pushes nothing, so only the pull of 8 is left over.
+        let every_main = table::<F>(&[&[5, 8]]);
+        let report = BusDebugReport::check(&[
+            BusDebugInstance::new(&boundary_main, None, &[], &ends).unwrap(),
+            BusDebugInstance::new(&every_main, None, &[], &every).unwrap(),
+        ])
+        .unwrap();
+
+        // 5 is pushed once and pulled once; 8 is pulled twice and never pushed.
+        assert_eq!(report.imbalances.len(), 1);
+        assert_eq!(report.imbalances[0].tuple, vec![F::from_u64(8)]);
+        assert_eq!(report.imbalances[0].pushes.count, 0);
+        assert_eq!(report.imbalances[0].pulls.count, 2);
     }
 }

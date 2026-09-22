@@ -5,20 +5,23 @@ extern crate alloc;
 
 mod argument;
 mod builder;
+#[cfg(feature = "diagnostics")]
 mod debug;
 mod direction;
 mod evaluation;
 mod memory;
 mod multilinear;
+mod name;
 mod plan;
 mod product;
 mod security;
 
 pub use argument::{BusArgumentError, BusChallenges, BusProof, BusReductionOutput};
 pub use builder::{
-    BusActivation, BusInteractionBuilder, BusInteractionRecorder, BusSymbolicBuilder, RecordToken,
-    SymbolicBusInteraction,
+    BusActivation, BusBoundary, BusInteractionBuilder, BusInteractionRecorder, BusSymbolicBuilder,
+    RecordToken, SymbolicBusInteraction,
 };
+#[cfg(feature = "diagnostics")]
 pub use debug::{
     BusDebugError, BusDebugInstance, BusDebugLimits, BusDebugLocation, BusDebugOccurrence,
     BusDebugReport, BusImbalance, BusUnmatched,
@@ -30,6 +33,7 @@ pub use memory::{
     ReadOnlyMemoryBus, ReadOnlyMemoryChallenges, ReadOnlyMemoryClaims, ReadOnlyMemoryColumns,
     ReadOnlyMemoryError, ReadOnlyMemoryInteractionBuilder, ReadOnlyMemoryPlan,
 };
+pub use name::{BusName, BusNameError};
 pub use plan::{
     BusBlock, BusBlockOwner, BusDomain, BusExpressionLocation, BusPlan, BusPlanError, BusPlanInput,
     BusSecurityGeometry, BusTerminalShare, BusTupleSlot, UnsupportedBusAccess,

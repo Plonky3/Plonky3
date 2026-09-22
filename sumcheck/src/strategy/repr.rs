@@ -225,6 +225,17 @@ pub trait FromTable<EF: Copy + Send + Sync>: From<EF> + Send {
         drop(table);
         image
     }
+
+    /// Tries to map a batch of 128-dimensional coordinate vectors with a representation-specific
+    /// bulk kernel. The default keeps generic representations on the existing scalar path.
+    #[inline(always)]
+    fn try_map_coordinates_into(
+        _images: &[Self; 128],
+        _input: &[EF],
+        _output: &mut [Self],
+    ) -> bool {
+        false
+    }
 }
 
 /// An arithmetic representation that maps back into the transcript field.
@@ -264,6 +275,15 @@ impl FromTable<BinaryField128> for Ghash128 {
     /// Converts in the table's own buffer, a block at a time where the build has the kernel.
     fn from_table(table: Vec<BinaryField128>) -> Vec<Self> {
         Self::from_tower_vec(table)
+    }
+
+    #[inline]
+    fn try_map_coordinates_into(
+        images: &[Self; 128],
+        input: &[BinaryField128],
+        output: &mut [Self],
+    ) -> bool {
+        Self::try_apply_linear_map_into(images, input, output)
     }
 }
 
