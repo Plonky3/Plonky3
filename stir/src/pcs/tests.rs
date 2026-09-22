@@ -710,6 +710,34 @@ fn an_opening_plan_reports_an_alpha_power_overflow() {
 }
 
 #[test]
+fn an_opening_plan_reports_a_running_class_total_overflow() {
+    // Two matrices land in the same class `(7, 6)`. Neither `width * num_points`
+    // overflows on its own, but their running total does.
+    let opened = OpenedCommitment {
+        groups: GroupPlan {
+            log_lde_heights: vec![7],
+            group_of_matrix: vec![0, 0],
+        },
+        matrices: vec![
+            OpenedMatrix {
+                log_native_height: 6,
+                width: usize::MAX / 2 + 1,
+                num_points: 1,
+            },
+            OpenedMatrix {
+                log_native_height: 6,
+                width: usize::MAX / 2 + 1,
+                num_points: 1,
+            },
+        ],
+    };
+    assert_eq!(
+        OpeningPlan::new(&[opened]),
+        Err(StirConfigError::PcsBatchMultiplicityOverflow)
+    );
+}
+
+#[test]
 fn prover_and_verifier_derive_the_same_opening_plan() {
     // Per-height domains, a partial merge, and a single shared domain: between them, a
     // class pooled across commitments, a merged bucket, and buckets one commitment skips.

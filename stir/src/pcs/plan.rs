@@ -118,7 +118,8 @@ impl OpeningPlan {
     /// # Errors
     ///
     /// `StirConfigError::PcsBatchMultiplicityOverflow` at the first matrix, in claim order,
-    /// whose class total `width * num_points` overflows `usize`.
+    /// whose `width * num_points`, or the running total of its class after adding it,
+    /// overflows `usize`.
     pub(super) fn new(commitments: &[OpenedCommitment]) -> Result<Self, StirConfigError> {
         let mut class_totals = BTreeMap::<(usize, usize), usize>::new();
         let alpha_offsets = commitments
