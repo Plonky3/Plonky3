@@ -1093,12 +1093,23 @@ mod tests {
         (bytes, CanSample::<F>::sample(&mut challenger))
     }
 
+    /// Rows of the shortest stage [`Backend::PolyBasisLate`] defers: `p3-multi-stark` names the
+    /// exponent `MIN_LATE_BOUNDARY_VARS`.
+    ///
+    /// The harness traces sit below it, so their [`Backend::PolyBasisLate`] cases pin the
+    /// fallback that backend takes there, not the deferral.
+    const LATE_BOUNDARY_FLOOR: usize = 1 << 11;
+
     /// The Boolean-committed proof and next transcript challenge for a table representation.
     fn boolean_proof_transcript<A: BinaryAir>(
         air: &A,
         table: Table<F>,
         backend: Backend,
     ) -> (Vec<u8>, F) {
+        assert!(
+            1 << table.num_variables() < LATE_BOUNDARY_FLOOR,
+            "a harness table this tall would exercise the deferral, not its fallback"
+        );
         let shape = table.shape();
         let config = boolean_config::<2, Keccak256Hash>(
             shape,
@@ -1129,7 +1140,14 @@ mod tests {
     }
 
     /// Require every harness backend to emit the proof and transcript of [`prove`].
+    ///
+    /// The trace sits below [`LATE_BOUNDARY_FLOOR`], so [`Backend::PolyBasisLate`] runs its
+    /// fallback here.
     fn assert_backends_prove_byte_for_byte<A: BinaryAir>(air: &A, trace: &RowMajorMatrix<F>) {
+        assert!(
+            trace.height() < LATE_BOUNDARY_FLOOR,
+            "a harness trace this tall would exercise the deferral, not its fallback"
+        );
         let generic = proof_transcript(air, trace, None);
         for backend in [
             Backend::Subfield,
