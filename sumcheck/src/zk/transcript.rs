@@ -79,7 +79,7 @@ use core::marker::PhantomData;
 
 use p3_challenger::fs::{
     DomainSeparator, FieldToFieldCodec, FieldUnit, Hierarchy, Interaction, InteractionPattern,
-    Kind, Length, ProverState, TranscriptField, VerifierState,
+    Kind, Length, ProverState, SymmetricSteps, TranscriptField, VerifierState,
 };
 use p3_challenger::{CanObserve, CanSample, GrindingChallenger};
 use p3_field::{ExtensionField, Field};
@@ -437,15 +437,7 @@ where
     ///
     /// When the batch was described as inheriting its claim instead.
     pub fn batching_challenge(&mut self) -> EF {
-        assert_eq!(
-            self.shape.prelude,
-            ZkPrelude::RecordedClaims,
-            "a batch described as inheriting its claim draws no batching challenge",
-        );
-
-        self.state
-            .challenge_extension::<F, EF, FieldToFieldCodec<F>>(CLAIM_BATCHING)
-            .into_inner()
+        play_batching_challenge::<F, EF, _>(&mut self.state, self.shape.prelude)
     }
 
     /// Bind the scalar claim this batch inherits from its caller.
@@ -454,14 +446,7 @@ where
     ///
     /// When the batch was described as batching recorded claims instead.
     pub fn bind_claim(&mut self, claim: EF) {
-        assert_eq!(
-            self.shape.prelude,
-            ZkPrelude::InheritedClaim,
-            "a batch described as batching recorded claims binds no inherited claim",
-        );
-
-        self.state
-            .observe_extension::<F, EF, FieldToFieldCodec<F>>(JOINT_CLAIM, &claim);
+        play_bind_claim::<F, _, _>(&mut self.state, self.shape.prelude, claim);
     }
 
     /// Bind the mask oracle and its endpoint sum, then draw the combining challenge.
@@ -479,14 +464,7 @@ where
         Com: Clone,
         C: CanObserve<Com>,
     {
-        // The oracle is fixed before the value summed out of the masks behind it.
-        self.state.observe_opaque(MASK_COMMITMENT, commitment);
-        self.state
-            .observe_extension::<F, EF, FieldToFieldCodec<F>>(MU_TILDE, &mu_tilde);
-
-        self.state
-            .challenge_extension::<F, EF, FieldToFieldCodec<F>>(MASK_COMBINATION)
-            .into_inner()
+        play_masks::<F, EF, _, _>(&mut self.state, commitment, mu_tilde)
     }
 
     /// Play one round: bind the transmitted coefficients, grind, and draw the challenge.
@@ -589,15 +567,7 @@ where
     ///
     /// When the batch was described as inheriting its claim instead.
     pub fn batching_challenge(&mut self) -> EF {
-        assert_eq!(
-            self.shape.prelude,
-            ZkPrelude::RecordedClaims,
-            "a batch described as inheriting its claim draws no batching challenge",
-        );
-
-        self.state
-            .challenge_extension::<F, EF, FieldToFieldCodec<F>>(CLAIM_BATCHING)
-            .into_inner()
+        play_batching_challenge::<F, EF, _>(&mut self.state, self.shape.prelude)
     }
 
     /// Bind the scalar claim this batch inherits from its caller.
@@ -609,14 +579,7 @@ where
     ///
     /// When the batch was described as batching recorded claims instead.
     pub fn bind_claim(&mut self, claim: EF) {
-        assert_eq!(
-            self.shape.prelude,
-            ZkPrelude::InheritedClaim,
-            "a batch described as batching recorded claims binds no inherited claim",
-        );
-
-        self.state
-            .observe_extension::<F, EF, FieldToFieldCodec<F>>(JOINT_CLAIM, &claim);
+        play_bind_claim::<F, _, _>(&mut self.state, self.shape.prelude, claim);
     }
 
     /// Bind the mask oracle and its endpoint sum, then draw the combining challenge.
@@ -634,14 +597,7 @@ where
         Com: Clone,
         C: CanObserve<Com>,
     {
-        // The oracle is fixed before the value summed out of the masks behind it.
-        self.state.observe_opaque(MASK_COMMITMENT, commitment);
-        self.state
-            .observe_extension::<F, EF, FieldToFieldCodec<F>>(MU_TILDE, &mu_tilde);
-
-        self.state
-            .challenge_extension::<F, EF, FieldToFieldCodec<F>>(MASK_COMBINATION)
-            .into_inner()
+        play_masks::<F, EF, _, _>(&mut self.state, commitment, mu_tilde)
     }
 
     /// Replay one round: bind the wire, re-check the grind, draw the challenge.
@@ -723,6 +679,69 @@ where
             .finalize()
             .expect("the hiding sumcheck reads an empty wire");
     }
+}
+
+/// Draw the challenge that weights the claims a layout recorded.
+///
+/// # Panics
+///
+/// When the batch was described as inheriting its claim instead.
+fn play_batching_challenge<F, EF, S>(state: &mut S, prelude: ZkPrelude) -> EF
+where
+    F: TranscriptField,
+    EF: ExtensionField<F>,
+    S: SymmetricSteps,
+    S::Challenger: CanObserve<F> + CanSample<F>,
+{
+    assert_eq!(
+        prelude,
+        ZkPrelude::RecordedClaims,
+        "a batch described as inheriting its claim draws no batching challenge",
+    );
+
+    state
+        .challenge_extension::<F, EF, FieldToFieldCodec<F>>(CLAIM_BATCHING)
+        .into_inner()
+}
+
+/// Bind the scalar claim the batch inherits from its caller.
+///
+/// # Panics
+///
+/// When the batch was described as batching recorded claims instead.
+fn play_bind_claim<F, EF, S>(state: &mut S, prelude: ZkPrelude, claim: EF)
+where
+    F: TranscriptField,
+    EF: ExtensionField<F>,
+    S: SymmetricSteps,
+    S::Challenger: CanObserve<F> + CanSample<F>,
+{
+    assert_eq!(
+        prelude,
+        ZkPrelude::InheritedClaim,
+        "a batch described as batching recorded claims binds no inherited claim",
+    );
+
+    state.observe_extension::<F, EF, FieldToFieldCodec<F>>(JOINT_CLAIM, &claim);
+}
+
+/// Bind the mask oracle and its endpoint sum, then draw the combining challenge.
+///
+/// The oracle is fixed before the value summed out of the masks behind it.
+fn play_masks<F, EF, S, Com>(state: &mut S, commitment: Com, mu_tilde: EF) -> EF
+where
+    F: TranscriptField,
+    EF: ExtensionField<F>,
+    S: SymmetricSteps,
+    Com: Clone,
+    S::Challenger: CanObserve<F> + CanSample<F> + CanObserve<Com>,
+{
+    state.observe_opaque(MASK_COMMITMENT, commitment);
+    state.observe_extension::<F, EF, FieldToFieldCodec<F>>(MU_TILDE, &mu_tilde);
+
+    state
+        .challenge_extension::<F, EF, FieldToFieldCodec<F>>(MASK_COMBINATION)
+        .into_inner()
 }
 
 #[cfg(test)]
