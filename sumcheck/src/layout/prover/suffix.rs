@@ -11,19 +11,15 @@ use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
 use p3_multilinear_util::split_eq::SplitEq;
 
-use crate::lagrange::lagrange_weights_01inf_multi;
 use crate::layout::opening::{EqSvoPartials, NextSvoPartials, Opening, ProverMultiClaim};
-use crate::layout::prover::{Layout, StackedClaims, SuffixResidualProver};
+use crate::layout::prover::{Layout, StackedClaims, SuffixResidualProver, preprocess};
 use crate::layout::witness::{Table, column_slots};
 use crate::layout::{LayoutStrategy, Witness};
 use crate::product_polynomial::ProductPolynomial;
-use crate::strategy::{
-    Basis, IntoTranscriptField, ReprSumcheckProver, SumcheckProver, VariableOrder,
-};
+use crate::strategy::{IntoTranscriptField, ReprSumcheckProver, SumcheckProver, VariableOrder};
 use crate::svo::{SvoPoint, calculate_accumulators_batch};
 use crate::table::{OpeningBatch, OpeningEvals, OpeningRequest};
-use crate::transcript::{ProverTranscript, SumcheckShape};
-use crate::{Claim, SumcheckData, extrapolate_01inf};
+use crate::{Claim, SumcheckData};
 
 /// Largest table arity whose openings share one dense weight table per batch.
 ///
@@ -406,7 +402,7 @@ impl<F: Field, EF: ExtensionField<F>> Layout<F, EF> for SuffixProver<F, EF> {
         F: TranscriptField,
         Ch: FieldChallenger<F> + GrindingChallenger<Witness = F>,
     {
-        let (alpha, sum, rs) = self.preprocess(sumcheck_data, pow_bits, challenger);
+        let (alpha, sum, rs) = preprocess(&self, sumcheck_data, pow_bits, challenger);
 
         // Stage D: materialise the residual product polynomial.
         //
@@ -462,119 +458,6 @@ impl<F: Field, EF: ExtensionField<F>> SuffixProver<F, EF> {
                 })
     }
 
-    /// Runs the SVO preprocessing rounds.
-    ///
-    /// # Returns
-    ///
-    /// - Batching challenge that weights the recorded openings.
-    /// - Running claimed sum after the preprocessing rounds.
-    /// - Folding challenges, in sampling order.
-    fn preprocess<Ch>(
-        &self,
-        sumcheck_data: &mut SumcheckData<F, EF>,
-        pow_bits: usize,
-        challenger: &mut Ch,
-    ) -> (EF, EF, Point<EF>)
-    where
-        F: TranscriptField,
-        Ch: FieldChallenger<F> + GrindingChallenger<Witness = F>,
-    {
-        // Sanity: preprocessing cannot consume more rounds than the stacked arity.
-        assert!(self.claims.folding <= self.claims.num_variables);
-
-        // The batching challenge seeds a sub-transcript of its own.
-        //
-        // Both claim counts therefore reach the sponge before the challenge is drawn.
-        let alpha: EF = self.batching_challenge(challenger);
-        let n_claims = self.num_claims();
-
-        // Stage A: batch per-claim accumulators using insertion-order alpha powers.
-        //
-        // - Iteration order is placement order, matching `sum` and `combine_weights`.
-        // - Each claim consumes exactly `claim.len()` consecutive powers from
-        //   the shared iterator, so the per-claim alpha vector is aligned with
-        //   the claim's opening list by construction.
-        let mut alphas = alpha.powers();
-        let accumulators: Vec<_> = self
-            .claims
-            .concrete_claims()
-            .map(|claim| {
-                let per_claim: Vec<EF> = alphas.by_ref().take(claim.len()).collect();
-                calculate_accumulators_batch(claim, &per_claim)
-            })
-            .collect();
-
-        // Stage C: drive the preprocessing rounds from the accumulators.
-        let mut sum = self.claims.sum(alpha);
-        let mut rs: Vec<EF> = vec![];
-
-        // First alpha power assigned to the virtual claims, sitting just past the concrete claims.
-        // The claim count is fixed for the whole fold, so this exponentiation is loop-invariant.
-        let alpha_base = alpha.exp_u64(n_claims as u64);
-
-        // One driver spans the whole preprocessing batch, so the description is walked exactly once.
-        let shape = SumcheckShape::new(self.claims.folding, pow_bits, Basis::Evaluation);
-        let mut transcript = ProverTranscript::<Ch, F, EF>::new(challenger, shape);
-
-        for round_idx in 0..self.claims.folding {
-            // Lagrange weights at the challenges sampled so far.
-            let weights = lagrange_weights_01inf_multi(&rs);
-
-            // Round-coefficient identity (linearity of the dot product):
-            //
-            //     c0    = sum_c  dot(claim_c.accs[0], weights)
-            //           + sum_v  alpha_v * dot(virtual_v.accs[0], weights)
-            //     c_inf = same with accs[1]
-            //
-            // - Concrete claims carry alpha pre-batched in stage B.
-            // - Virtual claims keep a separate scalar per claim.
-            // - No intermediate element-wise accumulator is needed.
-            let mut c0 = EF::ZERO;
-            let mut c_inf = EF::ZERO;
-
-            for accs in &accumulators {
-                c0 += dot_product::<EF, _, _>(
-                    accs[round_idx][0].iter().copied(),
-                    weights.iter().copied(),
-                );
-                c_inf += dot_product::<EF, _, _>(
-                    accs[round_idx][1].iter().copied(),
-                    weights.iter().copied(),
-                );
-            }
-
-            // Virtual-claim contributions: scale each claim's dot by its alpha power.
-            for (vc, alpha_i) in self
-                .claims
-                .virtual_claims
-                .iter()
-                .zip(alpha.shifted_powers(alpha_base))
-            {
-                let vc_accs = &vc.data;
-                c0 += alpha_i
-                    * dot_product::<EF, _, _>(
-                        vc_accs[round_idx][0].iter().copied(),
-                        weights.iter().copied(),
-                    );
-                c_inf += alpha_i
-                    * dot_product::<EF, _, _>(
-                        vc_accs[round_idx][1].iter().copied(),
-                        weights.iter().copied(),
-                    );
-            }
-
-            // Observe coefficients, sample r, extrapolate the running sum.
-            let r = sumcheck_data.observe_and_sample(&mut transcript, c0, c_inf);
-            sum = extrapolate_01inf(c0, sum - c0, c_inf, r);
-            rs.push(r);
-        }
-
-        // Require that every described step was played.
-        transcript.finish();
-
-        (alpha, sum, Point::new(rs))
-    }
-
     /// Finalises SVO preprocessing and returns the residual prover over tables in `R`.
     ///
     /// Plays exactly the transcript [`Layout::into_sumcheck`] plays; only the field
@@ -601,7 +484,7 @@ impl<F: Field, EF: ExtensionField<F>> SuffixProver<F, EF> {
         R: IntoTranscriptField<EF> + Algebra<F>,
         Ch: FieldChallenger<F> + GrindingChallenger<Witness = F>,
     {
-        let (alpha, sum, rs) = self.preprocess(sumcheck_data, pow_bits, challenger);
+        let (alpha, sum, rs) = preprocess(&self, sumcheck_data, pow_bits, challenger);
 
         // Suffix binding folds variables in reverse, so the residual factors live in the
         // reversed-challenges frame.
@@ -1726,7 +1609,7 @@ mod tests {
     {
         let mut dense_challenger = challenger.clone();
         let mut dense_data = SumcheckData::default();
-        let (alpha, sum, rs) = prover.preprocess(&mut dense_data, 0, &mut dense_challenger);
+        let (alpha, sum, rs) = preprocess(&prover, &mut dense_data, 0, &mut dense_challenger);
         let (claim_tables, column_weights) = prover.weight_plan(&rs, alpha);
         let claim_tables: Vec<ClaimWeightTables<R>> = claim_tables
             .into_iter()
