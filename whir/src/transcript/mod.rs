@@ -86,7 +86,8 @@ use core::marker::PhantomData;
 
 use p3_challenger::fs::{
     DomainSeparator, FieldToFieldCodec, FieldUnit, Hierarchy, Interaction, InteractionPattern,
-    Kind, Length, ProverState, TranscriptBound, TranscriptField, Unit, VerifierState,
+    Kind, Length, ProverState, SymmetricSteps, TranscriptBound, TranscriptField, Unit,
+    VerifierState,
 };
 use p3_challenger::{
     CanObserve, CanSample, CanSampleUniformBits, FieldChallenger, GrindingChallenger,
@@ -233,6 +234,25 @@ fn assemble_query_indices(
         );
     }
     indices
+}
+
+/// Draw the query indices of one site through either driver.
+///
+/// A `round` at or past the last one names the final site.
+/// A saturated phase opens every position instead and draws nothing.
+fn play_query_indices<F, S>(state: &mut S, shape: &WhirShape, round: usize) -> Vec<usize>
+where
+    S: SymmetricSteps,
+    S::Challenger: CanSampleUniformBits<F>,
+{
+    let (label, width, draws, stratified, depths) = shape.query_index_site(round);
+    assemble_query_indices(width, draws, stratified, depths, |bits, count| {
+        state
+            .challenge_uniform_bits::<F>(label, bits, count)
+            .into_iter()
+            .map(TranscriptBound::into_inner)
+            .collect()
+    })
 }
 
 /// Append `value` as eight big-endian bytes to the instance label.
@@ -898,15 +918,7 @@ where
     /// Every index in draw order, repeats included.
     /// A saturated phase opens every position instead and draws nothing.
     pub fn query_indices(&mut self, round: usize) -> Vec<usize> {
-        let (label, width, draws, stratified, depths) = self.shape.query_index_site(round);
-        let depths = depths.to_vec();
-        assemble_query_indices(width, draws, stratified, &depths, |bits, count| {
-            self.state
-                .challenge_uniform_bits::<F>(label, bits, count)
-                .into_iter()
-                .map(TranscriptBound::into_inner)
-                .collect()
-        })
+        play_query_indices::<F, _>(&mut self.state, &self.shape, round)
     }
 
     /// Draw the challenge weighting one round's fresh constraints.
@@ -1048,15 +1060,7 @@ where
     ///
     /// A `round` at or past the last one names the final site.
     pub fn query_indices(&mut self, round: usize) -> Vec<usize> {
-        let (label, width, draws, stratified, depths) = self.shape.query_index_site(round);
-        let depths = depths.to_vec();
-        assemble_query_indices(width, draws, stratified, &depths, |bits, count| {
-            self.state
-                .challenge_uniform_bits::<F>(label, bits, count)
-                .into_iter()
-                .map(TranscriptBound::into_inner)
-                .collect()
-        })
+        play_query_indices::<F, _>(&mut self.state, &self.shape, round)
     }
 
     /// Redraw the challenge weighting one round's fresh constraints.
