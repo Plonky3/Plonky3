@@ -52,6 +52,7 @@ pub struct MachineDeclaration<H> {
     tables: Vec<TableDeclaration>,
     max_proof_bytes: usize,
     security_bits: usize,
+    statement: [u8; 32],
 }
 
 impl<H> MachineDeclaration<H>
@@ -100,11 +101,22 @@ where
             table.validate(index)?;
         }
 
+        // Absorbing the tables walks every constraint, so it happens here and nowhere else.
+        let mut preimage = Preimage::new(b"p3-backend-contract/statement/v1");
+        preimage.usize(max_proof_bytes);
+        preimage.usize(security_bits);
+        preimage.usize(tables.len());
+        for table in &tables {
+            table.absorb(&mut preimage);
+        }
+        let statement = preimage.finish(&hasher);
+
         Ok(Self {
             hasher,
             tables,
             max_proof_bytes,
             security_bits,
+            statement,
         })
     }
 
@@ -185,7 +197,7 @@ where
             heights.push(found);
         }
 
-        Ok(Run::new(self.statement_digest(), heights, pow_bits as u32))
+        Ok(Run::new(self.statement, heights, pow_bits as u32))
     }
 
     /// Frame a proof for transport under one run of this statement.
@@ -394,26 +406,19 @@ where
     }
 
     /// Fingerprint of everything fixed before a proof exists.
-    fn statement_digest(&self) -> [u8; 32] {
-        let mut preimage = Preimage::new(b"p3-backend-contract/statement/v1");
-        preimage.usize(self.max_proof_bytes);
-        preimage.usize(self.security_bits);
-        preimage.usize(self.tables.len());
-        for table in &self.tables {
-            table.absorb(&mut preimage);
-        }
-        preimage.finish(&self.hasher)
+    #[must_use]
+    pub const fn statement_digest(&self) -> [u8; 32] {
+        self.statement
     }
 
     /// Fingerprint of the statement together with the choices one proof makes.
     pub(crate) fn run_digest(&self, run: &Run) -> Result<[u8; 32], DeclarationError> {
-        let statement = self.statement_digest();
-        if run.statement() != &statement {
+        if run.statement() != &self.statement {
             return Err(DeclarationError::ForeignRun);
         }
 
         let mut preimage = Preimage::new(b"p3-backend-contract/run/v1");
-        preimage.bytes(&statement);
+        preimage.bytes(&self.statement);
         preimage.u32(run.pow_bits_raw());
         preimage.usize(run.log_heights().len());
         for &log_height in run.log_heights() {

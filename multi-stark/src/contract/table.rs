@@ -12,6 +12,7 @@ use p3_lookup::InteractionSymbolicBuilder;
 use crate::contract::constraints;
 use crate::contract::digest::Preimage;
 use crate::contract::error::DeclarationError;
+use crate::folder::boundary_io_pins;
 
 /// Largest number of columns of any one kind a table may declare.
 pub const MAX_COLUMNS: usize = 1 << 20;
@@ -62,6 +63,8 @@ pub struct ColumnCounts {
 }
 
 /// What a table asserts about one row and its successor.
+///
+/// A cell the backend pins to a public value is one of these, though no evaluation writes it.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct LocalConstraints {
     /// Number of expressions the table asserts vanish on every row.
@@ -135,7 +138,13 @@ impl TableDeclaration {
     ///
     /// One symbolic pass supplies the columns, the constraints, and the channel traffic.
     ///
+    /// The cells the backend pins to public values are counted and scored alongside them.
+    ///
     /// A lookup that carries no tuple is dropped, because the reduction drops it too.
+    ///
+    /// The contents of a fixed trace stay outside.
+    ///
+    /// The verifying key commits to those, and an opening against it is what binds them.
     ///
     /// # Panics
     ///
@@ -152,7 +161,7 @@ impl TableDeclaration {
 
         let base = builder.base_constraints();
         let extension = builder.extension_constraints();
-        let degree = base
+        let symbolic = base
             .iter()
             .map(|expression| expression.poly_degree(2, &[]))
             .chain(
@@ -162,6 +171,19 @@ impl TableDeclaration {
             )
             .max()
             .unwrap_or(0);
+
+        // Scored the way the reduction scores it, hint and pins included.
+        let written = base.len() + extension.len();
+        let own = if written == 0 {
+            0
+        } else {
+            table
+                .max_constraint_degree()
+                .unwrap_or(symbolic)
+                .max(symbolic)
+        };
+        let pins = boundary_io_pins(table.public_boundary_io());
+        let degree = own.max(pins.degree);
 
         let flushes = builder
             .global_interactions()
@@ -186,7 +208,7 @@ impl TableDeclaration {
                 public: table.num_public_values(),
             },
             constraints: LocalConstraints {
-                count: base.len() + extension.len(),
+                count: written + pins.count,
                 degree,
             },
             heights,
@@ -194,7 +216,7 @@ impl TableDeclaration {
             local_lookups,
             indexed_reads: builder.indexed_reads().len(),
             indexed_tables: builder.indexed_tables().len(),
-            system: constraints::encode(&builder),
+            system: constraints::encode(table, &builder),
         }
     }
 

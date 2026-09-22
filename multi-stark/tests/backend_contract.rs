@@ -2,7 +2,7 @@
 
 use core::borrow::Borrow;
 
-use p3_air::{Air, AirBuilder, BaseAir, WindowAccess};
+use p3_air::{Air, AirBuilder, BaseAir, BoundaryEnd, BoundaryPublic, WindowAccess};
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_challenger::DuplexChallenger;
 use p3_dft::Radix2DFTSmallBatch;
@@ -15,7 +15,7 @@ use p3_merkle_tree::MerkleTreeMmcs;
 use p3_multi_stark::config::{MultiStarkConfig, PcsError};
 use p3_multi_stark::contract::{
     BODY_REVISION, ColumnCounts, DeclarationError, ENVELOPE_VERSION, EnvelopeError, HEADER_LEN,
-    HeightRange, MachineDeclaration, SealedVerificationError, TableDeclaration,
+    HeightRange, LocalConstraints, MachineDeclaration, SealedVerificationError, TableDeclaration,
 };
 use p3_multi_stark::{
     MultiStarkProof, ProverInstance, ProverInstances, SecurityError, VerificationError,
@@ -70,8 +70,8 @@ const FIXTURE_REVISION: u16 = 1;
 
 /// Digest of the fixture bytes, pinned so a silent regeneration cannot pass.
 const FIXTURE_DIGEST: [u8; 32] = [
-    97, 180, 157, 109, 1, 250, 201, 13, 65, 209, 188, 132, 114, 90, 196, 70, 205, 65, 107, 72, 155,
-    62, 109, 120, 145, 192, 249, 69, 240, 171, 159, 67,
+    221, 124, 62, 217, 215, 200, 177, 190, 217, 133, 169, 60, 188, 91, 111, 34, 191, 182, 104, 149,
+    158, 140, 125, 78, 86, 192, 161, 83, 7, 24, 161, 71,
 ];
 
 /// A commitment scheme that binds the trace without hiding it.
@@ -247,6 +247,84 @@ impl<AB: AirBuilder> Air<AB> for SubtractingFibAir {
         trans.assert_eq(local.right - local.left, next.right);
 
         builder.when_last_row().assert_eq(local.right, x);
+    }
+}
+
+/// The recurrence above with its two first-row assertions dropped.
+struct UnpinnedFibAir;
+
+impl<X> BaseAir<X> for UnpinnedFibAir {
+    fn width(&self) -> usize {
+        NUM_COLS
+    }
+    fn num_public_values(&self) -> usize {
+        3
+    }
+}
+
+impl<AB: AirBuilder> Air<AB> for UnpinnedFibAir {
+    fn eval(&self, builder: &mut AB) {
+        let main = builder.main();
+        let x = builder.public_values()[2];
+
+        let local: &FibRow<AB::Var> = main.current_slice().borrow();
+        let next: &FibRow<AB::Var> = main.next_slice().borrow();
+
+        let mut trans = builder.when_transition();
+        trans.assert_eq(local.right, next.left);
+        trans.assert_eq(local.left + local.right, next.right);
+
+        builder.when_last_row().assert_eq(local.right, x);
+    }
+}
+
+/// The same table, with those two cells pinned by the backend instead.
+struct PinnedFibAir;
+
+const PINS: [BoundaryPublic; 2] = [
+    BoundaryPublic::new(0, BoundaryEnd::First, 0),
+    BoundaryPublic::new(1, BoundaryEnd::First, 1),
+];
+
+impl<X> BaseAir<X> for PinnedFibAir {
+    fn width(&self) -> usize {
+        NUM_COLS
+    }
+    fn num_public_values(&self) -> usize {
+        3
+    }
+    fn public_boundary_io(&self) -> &[BoundaryPublic] {
+        &PINS
+    }
+}
+
+impl<AB: AirBuilder> Air<AB> for PinnedFibAir {
+    fn eval(&self, builder: &mut AB) {
+        UnpinnedFibAir.eval(builder);
+    }
+}
+
+/// A table whose periodic values are a parameter, so two of them differ in nothing else.
+struct PeriodicAir([F; 2]);
+
+impl BaseAir<F> for PeriodicAir {
+    fn width(&self) -> usize {
+        NUM_COLS
+    }
+    fn num_public_values(&self) -> usize {
+        3
+    }
+    fn num_periodic_columns(&self) -> usize {
+        1
+    }
+    fn periodic_columns(&self) -> std::borrow::Cow<'_, [Vec<F>]> {
+        std::borrow::Cow::Owned(vec![self.0.to_vec()])
+    }
+}
+
+impl<AB: AirBuilder<F = F>> Air<AB> for PeriodicAir {
+    fn eval(&self, builder: &mut AB) {
+        UnpinnedFibAir.eval(builder);
     }
 }
 
@@ -527,6 +605,57 @@ fn a_statement_that_describes_another_table_is_refused() {
             other => panic!("expected a constraint-system disagreement, got {other:?}"),
         }
     }
+}
+
+#[test]
+fn a_cell_the_backend_pins_reaches_the_declaration() {
+    // A symbolic pass runs the evaluation alone, so a pinned cell has to be added back.
+    let heights = HeightRange::new(FOLDING as u32, 20);
+    let unpinned =
+        TableDeclaration::from_constraints::<F, EF, UnpinnedFibAir>(&UnpinnedFibAir, heights);
+    let pinned = TableDeclaration::from_constraints::<F, EF, PinnedFibAir>(&PinnedFibAir, heights);
+
+    // Three written assertions either way, and two pins the backend injects on top.
+    assert_eq!(
+        unpinned.constraints(),
+        LocalConstraints {
+            count: 3,
+            degree: 2,
+        }
+    );
+    assert_eq!(
+        pinned.constraints(),
+        LocalConstraints {
+            count: 5,
+            degree: 2,
+        }
+    );
+    assert_ne!(unpinned, pinned);
+
+    // A run of one statement is therefore refused by the other.
+    let one = MachineDeclaration::new(Keccak256Hash, vec![unpinned], PROOF_BUDGET, SECURITY_TARGET)
+        .unwrap();
+    let other = MachineDeclaration::new(Keccak256Hash, vec![pinned], PROOF_BUDGET, SECURITY_TARGET)
+        .unwrap();
+    let run = one.run(&[LOG_HEIGHT], 0).unwrap();
+    assert_eq!(
+        other.seal(&run, &proof()).unwrap_err(),
+        EnvelopeError::Declaration(DeclarationError::ForeignRun)
+    );
+}
+
+#[test]
+fn the_values_of_a_periodic_table_reach_the_declaration() {
+    // Two tables alike in every count, reading different fixed values.
+    let heights = HeightRange::new(FOLDING as u32, 20);
+    let low = PeriodicAir([F::ONE, F::TWO]);
+    let high = PeriodicAir([F::from_u8(3), F::from_u8(4)]);
+    let one = TableDeclaration::from_constraints::<F, EF, PeriodicAir>(&low, heights);
+    let other = TableDeclaration::from_constraints::<F, EF, PeriodicAir>(&high, heights);
+
+    assert_eq!(one.columns(), other.columns());
+    assert_eq!(one.constraints(), other.constraints());
+    assert_ne!(one, other);
 }
 
 #[test]

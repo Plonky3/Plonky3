@@ -1,41 +1,83 @@
-//! One byte string naming everything a constraint system asserts.
+//! One byte string naming everything a table asserts.
 //!
-//! Two systems that differ anywhere a prover can observe produce different strings.
+//! Two tables that differ anywhere a prover can observe produce different strings.
 //!
 //! Nothing here is ever decoded, so the string only has to be injective.
 
-use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 
+use hashbrown::HashMap;
 use p3_air::symbolic::{BaseEntry, BaseLeaf, ExtEntry, ExtLeaf, SymbolicExpr, SymbolicExpression};
+use p3_air::{Air, BaseAir, BoundaryEnd};
 use p3_field::{ExtensionField, Field, RawDataSerializable};
 use p3_lookup::{InteractionSymbolicBuilder, TraceWindow};
 
-/// Write the whole constraint system of one table into a fresh byte string.
+/// Write everything one table fixes into a fresh byte string.
 ///
-/// The two fields come first, so a system read over one pair never matches another.
+/// The two fields come first, so a table read over one pair never matches another.
+///
+/// A symbolic pass runs the evaluation alone, so what a table declares beside it goes in here:
+///
+/// - the cells the backend pins to public values;
+/// - the periodic tables;
+/// - the windows opened at the next row;
+/// - the degree hint.
+///
+/// The contents of a fixed trace stay out, because the verifying key is what binds those.
 ///
 /// Mutually exclusive interactions are left out, because this backend refuses them outright.
-pub(super) fn encode<F, EF>(builder: &InteractionSymbolicBuilder<F, EF>) -> Vec<u8>
+pub(super) fn encode<F, EF, A>(air: &A, builder: &InteractionSymbolicBuilder<F, EF>) -> Vec<u8>
 where
     F: Field,
     EF: ExtensionField<F>,
+    A: BaseAir<F> + Air<InteractionSymbolicBuilder<F, EF>>,
 {
     let mut arena = Arena::default();
     arena.blob(&F::order().to_bytes_le());
     arena.count(EF::DIMENSION);
     arena.blob(&EF::algebra_id());
 
+    let cells = air.public_boundary_io();
+    arena.count(cells.len());
+    for cell in cells {
+        arena.count(cell.column);
+        arena.byte(match cell.end {
+            BoundaryEnd::First => 0,
+            BoundaryEnd::Last => 1,
+        });
+        arena.count(cell.public_value);
+    }
+
+    let periodic = air.periodic_columns();
+    arena.count(air.num_periodic_columns());
+    arena.count(periodic.len());
+    for column in periodic.iter() {
+        arena.count(column.len());
+        for &value in column {
+            arena.scalar(value);
+        }
+    }
+
+    arena.indices(&air.main_next_row_columns());
+    arena.indices(&air.preprocessed_next_row_columns());
+    match air.max_constraint_degree() {
+        Some(degree) => {
+            arena.byte(1);
+            arena.count(degree);
+        }
+        None => arena.byte(0),
+    }
+
     let base = builder.base_constraints();
     arena.count(base.len());
     for constraint in &base {
-        arena.root(constraint);
+        arena.expression(constraint);
     }
 
     let extension = builder.extension_constraints();
     arena.count(extension.len());
     for constraint in &extension {
-        arena.root(constraint);
+        arena.expression(constraint);
     }
 
     let global = builder.global_interactions();
@@ -45,9 +87,9 @@ where
         arena.u32(interaction.count_weight);
         arena.count(interaction.fields.len());
         for field in &interaction.fields {
-            arena.root(field);
+            arena.expression(field);
         }
-        arena.root(&interaction.count);
+        arena.expression(&interaction.count);
     }
 
     // A pair owns its multiplicity, so every one is copied out first and kept alive together.
@@ -67,10 +109,10 @@ where
         for (fields, count) in &interaction.tuples {
             arena.count(fields.len());
             for field in fields {
-                arena.root(field);
+                arena.expression(field);
             }
             arena.u32(count.weight());
-            arena.root(multiplicities.next().expect("one per tuple"));
+            arena.expression(multiplicities.next().expect("one per tuple"));
         }
     }
 
@@ -96,14 +138,16 @@ where
     arena.bytes
 }
 
-/// A growing byte string, plus the position of every expression node already written.
+/// A growing byte string, plus where every expression node already written ended up.
 ///
-/// A repeated subtree is written once and named by its position afterwards.
+/// Every token stands for one value.
+///
+/// A repeated subtree becomes a reference to the value it left behind, not a second copy.
 #[derive(Default)]
 struct Arena {
     bytes: Vec<u8>,
-    written: BTreeMap<usize, u64>,
-    next: u64,
+    written: HashMap<usize, u64>,
+    values: u64,
 }
 
 impl Arena {
@@ -115,12 +159,17 @@ impl Arena {
         self.bytes.extend_from_slice(&value.to_le_bytes());
     }
 
-    fn u64(&mut self, value: u64) {
-        self.bytes.extend_from_slice(&value.to_le_bytes());
+    /// Write a number seven bits at a time, smallest first, so short ones stay short.
+    fn varint(&mut self, mut value: u64) {
+        while value >= 0x80 {
+            self.bytes.push((value as u8) | 0x80);
+            value >>= 7;
+        }
+        self.bytes.push(value as u8);
     }
 
     fn count(&mut self, value: usize) {
-        self.u64(value as u64);
+        self.varint(value as u64);
     }
 
     fn blob(&mut self, value: &[u8]) {
@@ -143,45 +192,36 @@ impl Arena {
         self.bytes.extend(value.into_bytes());
     }
 
-    /// Write one expression, then name the position its top node landed at.
-    fn root<A: Leaf>(&mut self, expression: &SymbolicExpr<A>) {
-        let position = self.expression(expression);
-        self.u64(position);
-    }
-
-    /// Write every node of one expression that is not written already.
-    ///
-    /// Children come first, so a node only ever names positions that already exist.
-    fn expression<A: Leaf>(&mut self, expression: &SymbolicExpr<A>) -> u64 {
+    /// Write every node of one expression, children before the node that uses them.
+    fn expression<A: Leaf>(&mut self, expression: &SymbolicExpr<A>) {
         let key = core::ptr::from_ref(expression) as usize;
         if let Some(&position) = self.written.get(&key) {
-            return position;
+            let back = self.values - position;
+            self.byte(9);
+            self.varint(back);
+            self.values += 1;
+            return;
         }
 
         match expression {
             SymbolicExpr::Leaf(leaf) => leaf.write(self),
-            SymbolicExpr::Add { x, y, .. } => self.pair(1, x, y),
-            SymbolicExpr::Sub { x, y, .. } => self.pair(2, x, y),
-            SymbolicExpr::Mul { x, y, .. } => self.pair(3, x, y),
+            SymbolicExpr::Add { x, y, .. } => self.pair(5, x, y),
+            SymbolicExpr::Sub { x, y, .. } => self.pair(6, x, y),
+            SymbolicExpr::Mul { x, y, .. } => self.pair(7, x, y),
             SymbolicExpr::Neg { x, .. } => {
-                let x = self.expression(x);
-                self.byte(4);
-                self.u64(x);
+                self.expression(x);
+                self.byte(8);
             }
         }
 
-        let position = self.next;
-        self.next += 1;
-        self.written.insert(key, position);
-        position
+        self.written.insert(key, self.values);
+        self.values += 1;
     }
 
     fn pair<A: Leaf>(&mut self, tag: u8, x: &SymbolicExpr<A>, y: &SymbolicExpr<A>) {
-        let x = self.expression(x);
-        let y = self.expression(y);
+        self.expression(x);
+        self.expression(y);
         self.byte(tag);
-        self.u64(x);
-        self.u64(y);
     }
 }
 
@@ -193,7 +233,6 @@ trait Leaf {
 
 impl<F: Field> Leaf for BaseLeaf<F> {
     fn write(&self, arena: &mut Arena) {
-        arena.byte(0);
         match self {
             Self::Variable(variable) => {
                 arena.byte(0);
@@ -226,14 +265,11 @@ impl<F: Field, EF: ExtensionField<F>> Leaf for ExtLeaf<F, EF> {
     fn write(&self, arena: &mut Arena) {
         match self {
             Self::Base(expression) => {
-                let position = arena.expression(expression);
-                arena.byte(0);
-                arena.byte(0);
-                arena.u64(position);
+                arena.expression(expression);
+                arena.byte(10);
             }
             Self::ExtVariable(variable) => {
-                arena.byte(0);
-                arena.byte(1);
+                arena.byte(11);
                 match variable.entry {
                     ExtEntry::Permutation { offset } => {
                         arena.byte(0);
@@ -245,8 +281,7 @@ impl<F: Field, EF: ExtensionField<F>> Leaf for ExtLeaf<F, EF> {
                 arena.count(variable.index);
             }
             Self::ExtConstant(value) => {
-                arena.byte(0);
-                arena.byte(2);
+                arena.byte(12);
                 arena.scalar(*value);
             }
         }

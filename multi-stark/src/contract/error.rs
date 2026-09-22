@@ -27,14 +27,7 @@ pub enum DeclarationError {
     },
     /// A height range reaches below the smallest height the backend can prove.
     #[error("table {table}: height exponent floor {min} is below {floor}")]
-    HeightBelowFloor {
-        /// Position of the offending table in declaration order.
-        table: usize,
-        /// Smallest declared exponent.
-        min: u32,
-        /// Smallest exponent the backend accepts.
-        floor: u32,
-    },
+    HeightBelowFloor { table: usize, min: u32, floor: u32 },
     /// A height range excludes every height.
     #[error("table {table}: height range {min}..={max} is empty")]
     EmptyHeightRange {
@@ -191,12 +184,7 @@ pub enum SealedVerificationError<E: Debug> {
     },
     /// The statement and a constraint system describe different tables.
     #[error("table {table}: the statement and the constraint system disagree on {what}")]
-    AirDisagreement {
-        /// Position of the offending table in declaration order.
-        table: usize,
-        /// Which part disagrees.
-        what: &'static str,
-    },
+    AirDisagreement { table: usize, what: &'static str },
     /// The proof was well framed but did not verify.
     #[error("verification: {0}")]
     Verification(VerificationError<E>),
