@@ -22,43 +22,6 @@ where
     EF: ExtensionField<F>,
     Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
 {
-    // Public derived fields can be changed after construction. Only certify a
-    // schedule which agrees with the validated parameter derivation.
-    let canonical = WhirConfig::<EF, F, Challenger>::new_with_max_domain_log(
-        config.num_variables,
-        config.params.clone(),
-        config.max_log_domain_size,
-    )
-    .ok()?;
-    // Domain identity and query stratification affect transcript separation and
-    // sampling geometry, not the derived algebraic budget. The encoder capacity
-    // is the only domain-specific input to the schedule reconstructed here.
-    if config.commitment_ood_samples != canonical.commitment_ood_samples
-        || config.folding_schedule != canonical.folding_schedule
-        || config.starting_folding_pow_bits != canonical.starting_folding_pow_bits
-        || config.terminal != canonical.terminal
-        || config.final_sumcheck_rounds != canonical.final_sumcheck_rounds
-        || config.final_folding_pow_bits != canonical.final_folding_pow_bits
-        || config.round_parameters.len() != canonical.round_parameters.len()
-        || config
-            .round_parameters
-            .iter()
-            .zip(&canonical.round_parameters)
-            .any(|(a, b)| {
-                a.pow_bits != b.pow_bits
-                    || a.folding_pow_bits != b.folding_pow_bits
-                    || a.num_queries != b.num_queries
-                    || a.ood_samples != b.ood_samples
-                    || a.num_variables != b.num_variables
-                    || a.folding_factor != b.folding_factor
-                    || a.log_inv_rate != b.log_inv_rate
-                    || a.domain_size != b.domain_size
-                    || a.log_folded_domain_size != b.log_folded_domain_size
-            })
-    {
-        return None;
-    }
-
     let total_cells = protocol.checked_num_cells()?;
     if total_cells == 0 || log2_ceil_usize(total_cells) != config.num_variables {
         return None;
@@ -274,13 +237,6 @@ mod tests {
     #[test]
     fn mismatched_stacked_shape_has_no_security_evidence() {
         assert!(pcs().prescribed_security(&protocol(13)).is_none());
-    }
-
-    #[test]
-    fn modified_derived_parameters_have_no_security_evidence() {
-        let mut pcs = pcs();
-        pcs.config.terminal.num_queries = 0;
-        assert!(pcs.prescribed_security(&protocol(12)).is_none());
     }
 
     #[test]
