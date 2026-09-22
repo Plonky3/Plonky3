@@ -915,6 +915,15 @@ pub fn preflight_boolean_air<A: BinaryAir>(
     shape: TableShape,
     options: BinaryProofOptions,
 ) -> Result<f64, BinaryProofError> {
+    preflight_boolean_air_with_summary(air, shape, options).map(|(security_bits, _)| security_bits)
+}
+
+/// Assess a Boolean PCS and return its composed security and optional WHIR schedule summary.
+pub fn preflight_boolean_air_with_summary<A: BinaryAir>(
+    air: &A,
+    shape: TableShape,
+    options: BinaryProofOptions,
+) -> Result<(f64, Option<WhirSummary>), BinaryProofError> {
     match (options.pcs, options.merkle_arity, options.hash) {
         (BooleanPcsChoice::Folding, 2, HashFamily::Keccak256) => {
             preflight_boolean_folding::<A, 2, Keccak256Hash>(air, shape, options)
@@ -944,7 +953,7 @@ fn preflight_boolean_folding<A, const N: usize, H>(
     air: &A,
     shape: TableShape,
     options: BinaryProofOptions,
-) -> Result<f64, BinaryProofError>
+) -> Result<(f64, Option<WhirSummary>), BinaryProofError>
 where
     A: BinaryAir,
     H: HarnessHash,
@@ -962,14 +971,14 @@ where
         preflight_seconds = setup_start.elapsed().as_secs_f64(),
         "Boolean PCS preflight completed"
     );
-    Ok(security_bits)
+    Ok((security_bits, None))
 }
 
 fn preflight_boolean_whir<A, H>(
     air: &A,
     shape: TableShape,
     options: BinaryProofOptions,
-) -> Result<f64, BinaryProofError>
+) -> Result<(f64, Option<WhirSummary>), BinaryProofError>
 where
     A: BinaryAir,
     H: HarnessHash + WhirErrorProjection,
@@ -985,7 +994,7 @@ where
         preflight_seconds = setup_start.elapsed().as_secs_f64(),
         "WHIR Boolean PCS preflight completed"
     );
-    Ok(security_bits)
+    Ok((security_bits, Some(config.summary)))
 }
 
 /// Proves and verifies a Boolean-valued `air` against `trace`, committing the trace as bits, and
@@ -1738,7 +1747,7 @@ mod tests {
             unreachable!()
         };
         let error = match boolean_whir_config::<_, Blake3>(&air, shape, options, whir) {
-            Ok(_) => panic!("Johnson l20 must exceed the 24-bit grinding ceiling"),
+            Ok(_) => panic!("Johnson l20 must exceed the derived grinding cap g-1 (g={actual})"),
             Err(error) => error,
         };
         assert!(matches!(
