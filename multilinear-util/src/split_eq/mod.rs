@@ -83,8 +83,12 @@ const BASE_MUL_ACC_BYTES: usize = 2;
 ///     a task's budget buys 1 / lanes   ->  the split walks back toward one item per task
 /// ```
 ///
-/// Break-even for a loop that only just crosses the gate is an overcharge of 1.56, since
-/// `0.625 us / 1.56` is the 0.4 us a dispatch costs per worker.
+/// Break-even for a loop that only just crosses the gate is an overcharge of 1.56 on Linux.
+///
+/// That is the 0.625 us gate divided down to the 0.4 us a dispatch costs per worker.
+///
+/// On macOS the same break-even is 1.25 to 1.5, from a 2.5 us gate over 1.7 to 2.0 us dispatches.
+///
 /// Undercharging instead leaves such a loop whole.
 ///
 /// It cannot cut a split loop below one task per worker.
