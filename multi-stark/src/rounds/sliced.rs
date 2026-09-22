@@ -1331,6 +1331,9 @@ const MAX_CORNERS: usize = 1 << MAX_SLICED_ROUNDS;
 /// Corners the bound variables of an unslice that binds the boundary challenge range over.
 const MAX_PLANE_FOLD_CORNERS: usize = 1 << MAX_PLANE_FOLD_ROUNDS;
 
+/// Corner groups the bound variables of a plane fold span at most.
+const MAX_PLANE_FOLD_GROUPS: usize = MAX_PLANE_FOLD_CORNERS / GROUP_CORNERS;
+
 /// Mask bytes one corner group of one residual row reads, one per plane.
 const PLANE_BYTES: usize = 2;
 
@@ -1451,24 +1454,60 @@ impl<'a, R: Field, const CORNERS: usize> PlaneFold<'a, R, CORNERS> {
     /// The value at every residual row of one word.
     fn fold_word(&self, planes: &[[u64; 2]], column: usize, word: usize, out: &mut [R]) {
         let (low, high) = self.corner_words(planes, column, word);
-        out.fill(R::ZERO);
-        for group in 0..self.groups {
-            let (low_table, high_table) = (&self.low_sums[group], &self.high_sums[group]);
-            let (low, high) = self.group_words(&low, &high, group);
-            let (low, high) = (lane_masks(low), lane_masks(high));
-            for (value, (&low, &high)) in out.iter_mut().zip(low.iter().zip(&high)) {
-                *value += low_table[usize::from(low)] + high_table[usize::from(high)];
-            }
+        for (out, value) in out.iter_mut().zip(self.corner_values(&low, &high)) {
+            *out = value;
         }
     }
 
+    /// The value at every residual row of one word, lane by lane, from its corner words.
+    ///
+    /// A cell of the Boolean subfield leaves its high plane clear, so a word whose corners all
+    /// do so needs none of the high plane's masks or lookups.
+    #[inline]
+    fn corner_values(
+        &self,
+        low: &[u64; CORNERS],
+        high: &[u64; CORNERS],
+    ) -> impl Iterator<Item = R> + '_ {
+        let has_high = high.iter().any(|&word| word != 0);
+        let mut low_masks = [[0; SLICED_LANES]; MAX_PLANE_FOLD_GROUPS];
+        let mut high_masks = [[0; SLICED_LANES]; MAX_PLANE_FOLD_GROUPS];
+        for (group, (low_masks, high_masks)) in low_masks
+            .iter_mut()
+            .zip(&mut high_masks)
+            .take(self.groups)
+            .enumerate()
+        {
+            let (low, high) = self.group_words(low, high, group);
+            *low_masks = lane_masks(low);
+            if has_high {
+                *high_masks = lane_masks(high);
+            }
+        }
+        (0..SLICED_LANES).map(move |lane| {
+            let mut value = R::ZERO;
+            for (low_table, low_masks) in self.low_sums.iter().zip(&low_masks) {
+                value += low_table[usize::from(low_masks[lane])];
+            }
+            if has_high {
+                for (high_table, high_masks) in self.high_sums.iter().zip(&high_masks) {
+                    value += high_table[usize::from(high_masks[lane])];
+                }
+            }
+            value
+        })
+    }
+
     /// The value one half of one residual row's mask bytes stands for.
+    ///
+    /// The high-plane masks are read only when `HIGH` is set, so a caller clears it only when
+    /// every one of them is clear.
     ///
     /// # Panics
     ///
     /// Debug builds panic unless `bytes` holds one plane pair per corner group.
     #[inline]
-    fn row_value(&self, bytes: &[u8]) -> R {
+    fn row_value<const HIGH: bool>(&self, bytes: &[u8]) -> R {
         debug_assert_eq!(bytes.len(), self.groups * PLANE_BYTES);
         let mut value = R::ZERO;
         for ((low_table, high_table), masks) in self
@@ -1477,22 +1516,29 @@ impl<'a, R: Field, const CORNERS: usize> PlaneFold<'a, R, CORNERS> {
             .zip(&self.high_sums)
             .zip(bytes.as_chunks::<PLANE_BYTES>().0)
         {
-            value += low_table[usize::from(masks[0])] + high_table[usize::from(masks[1])];
+            value += low_table[usize::from(masks[0])];
+            if HIGH {
+                value += high_table[usize::from(masks[1])];
+            }
         }
         value
     }
 
     /// The low-half and high-half values one residual row's mask bytes stand for.
     #[inline]
-    fn row_pair(&self, bytes: &[u8]) -> (R, R) {
+    fn row_pair<const HIGH: bool>(&self, bytes: &[u8]) -> (R, R) {
         let half = self.groups * PLANE_BYTES;
         (
-            self.row_value(&bytes[..half]),
-            self.row_value(&bytes[half..]),
+            self.row_value::<HIGH>(&bytes[..half]),
+            self.row_value::<HIGH>(&bytes[half..]),
         )
     }
 
     /// Write one `(column, word)`'s mask bytes lane by lane, `stride` bytes apart.
+    ///
+    /// # Returns
+    ///
+    /// Whether any corner's high plane is set.
     fn write_lane_masks(
         &self,
         planes: &[[u64; 2]],
@@ -1500,27 +1546,45 @@ impl<'a, R: Field, const CORNERS: usize> PlaneFold<'a, R, CORNERS> {
         word: usize,
         stride: usize,
         out: &mut [u8],
-    ) {
+    ) -> bool {
         let (low, high) = self.corner_words(planes, column, word);
+        let has_high = high.iter().any(|&word| word != 0);
         for group in 0..self.groups {
             let (low, high) = self.group_words(&low, &high, group);
-            let (low, high) = (lane_masks(low), lane_masks(high));
+            let low = lane_masks(low);
+            let high = if has_high {
+                lane_masks(high)
+            } else {
+                [0; SLICED_LANES]
+            };
             for (lane, (&low, &high)) in low.iter().zip(&high).enumerate() {
                 let at = lane * stride + group * PLANE_BYTES;
                 out[at] = low;
                 out[at + 1] = high;
             }
         }
+        has_high
     }
 
     /// Write one `(column, word)`'s top-lane mask bytes.
-    fn write_top_lane_mask(&self, planes: &[[u64; 2]], column: usize, word: usize, out: &mut [u8]) {
+    ///
+    /// # Returns
+    ///
+    /// Whether any corner's high plane is set.
+    fn write_top_lane_mask(
+        &self,
+        planes: &[[u64; 2]],
+        column: usize,
+        word: usize,
+        out: &mut [u8],
+    ) -> bool {
         let (low, high) = self.corner_words(planes, column, word);
         for group in 0..self.groups {
             let (low, high) = self.group_words(&low, &high, group);
             out[group * PLANE_BYTES] = top_lane_mask(low);
             out[group * PLANE_BYTES + 1] = top_lane_mask(high);
         }
+        high.iter().any(|&word| word != 0)
     }
 }
 
@@ -1540,6 +1604,10 @@ struct RowTile {
     column_stride: usize,
     /// Bytes one lane spans.
     lane_stride: usize,
+    /// Whether any high-plane mask byte of the word pair laid out last is set.
+    ///
+    /// When none is, every read skips the high plane's lookups.
+    high: bool,
 }
 
 impl RowTile {
@@ -1551,6 +1619,7 @@ impl RowTile {
             bytes: vec![0; (SLICED_LANES + 1) * lane_stride],
             column_stride,
             lane_stride,
+            high: false,
         }
     }
 
@@ -1581,10 +1650,11 @@ impl RowTile {
         debug_assert_eq!(self.lane_stride, self.column_stride * fold.trace.width);
         let words = [pair, pair + fold.words / ROW_HALVES];
         let half_bytes = fold.groups * PLANE_BYTES;
+        let mut high = false;
         for column in 0..fold.trace.width {
             for (half, &word) in words.iter().enumerate() {
                 let at = column * self.column_stride + half * half_bytes;
-                fold.write_lane_masks(
+                high |= fold.write_lane_masks(
                     &fold.trace.cells,
                     column,
                     word,
@@ -1600,7 +1670,7 @@ impl RowTile {
             for column in run.clone() {
                 for (half, &word) in words.iter().enumerate() {
                     let at = extra + column * self.column_stride + half * half_bytes;
-                    fold.write_top_lane_mask(
+                    high |= fold.write_top_lane_mask(
                         &fold.trace.successors,
                         column,
                         word,
@@ -1609,10 +1679,26 @@ impl RowTile {
                 }
             }
         }
+        self.high = high;
     }
 
     /// Read one residual row pair of every column into the buffers a node walk steps.
     fn read_row<R: Field>(
+        &self,
+        fold: &PlaneFold<'_, R>,
+        lane: usize,
+        next_columns: &[Range<usize>],
+        scratch: &mut Scratch<R, R>,
+    ) {
+        if self.high {
+            self.read_row_planes::<R, true>(fold, lane, next_columns, scratch);
+        } else {
+            self.read_row_planes::<R, false>(fold, lane, next_columns, scratch);
+        }
+    }
+
+    /// [`Self::read_row`], reading the high plane only when `HIGH` is set.
+    fn read_row_planes<R: Field, const HIGH: bool>(
         &self,
         fold: &PlaneFold<'_, R>,
         lane: usize,
@@ -1631,7 +1717,7 @@ impl RowTile {
             .zip(local_diff.iter_mut())
             .zip(self.lane(lane).chunks_exact(self.column_stride))
         {
-            let (lo, hi) = fold.row_pair(bytes);
+            let (lo, hi) = fold.row_pair::<HIGH>(bytes);
             *local = lo;
             *local_delta = hi - lo;
         }
@@ -1641,7 +1727,7 @@ impl RowTile {
                 .zip(next_point.fill()[run.clone()].iter_mut())
                 .zip(next_diff.fill()[run.clone()].iter_mut())
             {
-                let (lo, hi) = fold.row_pair(self.cell(lane + 1, column));
+                let (lo, hi) = fold.row_pair::<HIGH>(self.cell(lane + 1, column));
                 *next = lo;
                 *next_delta = hi - lo;
             }
@@ -1650,7 +1736,7 @@ impl RowTile {
 
     /// One lane group of one column's residual row pairs, low halves then high halves.
     #[inline]
-    fn lane_pair<F, R: Field>(
+    fn lane_pair<F, R: Field, const HIGH: bool>(
         &self,
         fold: &PlaneFold<'_, R>,
         lane: usize,
@@ -1663,13 +1749,28 @@ impl RowTile {
             .zip(high.as_slice_mut())
             .enumerate()
         {
-            (*l, *h) = fold.row_pair(self.cell(lane + step, column));
+            (*l, *h) = fold.row_pair::<HIGH>(self.cell(lane + step, column));
         }
         (PackedExt::new(low), PackedExt::new(high))
     }
 
     /// Read one lane group of residual row pairs of every column into a packed node walk's buffers.
     fn read_lane_group<F, R: Field>(
+        &self,
+        fold: &PlaneFold<'_, R>,
+        lane: usize,
+        next_columns: &[Range<usize>],
+        scratch: &mut PackedScratch<PackedRepr<F, R>, PackedRepr<F, R>>,
+    ) {
+        if self.high {
+            self.read_lane_group_planes::<F, R, true>(fold, lane, next_columns, scratch);
+        } else {
+            self.read_lane_group_planes::<F, R, false>(fold, lane, next_columns, scratch);
+        }
+    }
+
+    /// [`Self::read_lane_group`], reading the high plane only when `HIGH` is set.
+    fn read_lane_group_planes<F, R: Field, const HIGH: bool>(
         &self,
         fold: &PlaneFold<'_, R>,
         lane: usize,
@@ -1688,7 +1789,7 @@ impl RowTile {
             .zip(local_diff.iter_mut())
             .enumerate()
         {
-            let (lo, hi) = self.lane_pair(fold, lane, column);
+            let (lo, hi) = self.lane_pair::<F, R, HIGH>(fold, lane, column);
             *local = lo;
             *local_delta = hi - lo;
         }
@@ -1698,7 +1799,7 @@ impl RowTile {
                 .zip(next_point.fill()[run.clone()].iter_mut())
                 .zip(next_diff.fill()[run.clone()].iter_mut())
             {
-                let (lo, hi) = self.lane_pair(fold, lane + 1, column);
+                let (lo, hi) = self.lane_pair::<F, R, HIGH>(fold, lane + 1, column);
                 *next = lo;
                 *next_delta = hi - lo;
             }
