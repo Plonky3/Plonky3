@@ -140,6 +140,16 @@ impl<L: Lanes> SplitScalar<L> {
         Self { t, t_x64 }
     }
 
+    /// A multiplier whose lanes may differ, given beside its companion.
+    ///
+    /// Every lane of `t_x64` must hold the same lane of `t` scaled by `x^64` and reduced.
+    /// The companion is linear in the multiplier, so it can be carried along a sum of them.
+    #[cfg(any(test, target_feature = "avx512f"))]
+    #[inline(always)]
+    pub(crate) const fn from_parts(t: L, t_x64: L) -> Self {
+        Self { t, t_x64 }
+    }
+
     /// The reduced product of the multiplier with every lane of the argument.
     #[inline(always)]
     pub(crate) fn apply(self, v: L) -> L {
@@ -285,6 +295,18 @@ mod tests {
             let companion = fold_shifted(Model::<LANES>::zero(), Model::broadcast(scalar));
             let want = clmul::poly_mul_128(scalar, 1 << 64);
             prop_assert_eq!(companion, Model::broadcast(want));
+        }
+
+        /// A multiplier given lane by lane, beside its companion, scales each lane by its own.
+        #[test]
+        fn a_multiplier_from_its_parts_scales_each_lane_by_its_own(
+            scalars in any::<[u128; LANES]>(),
+            values in any::<[u128; LANES]>(),
+        ) {
+            let t = Model(scalars);
+            let got = SplitScalar::from_parts(t, fold_shifted(Model::zero(), t)).apply(Model(values));
+            let want = core::array::from_fn(|i| clmul::poly_mul_128(scalars[i], values[i]));
+            prop_assert_eq!(got, Model(want));
         }
     }
 }

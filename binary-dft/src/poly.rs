@@ -2,6 +2,7 @@
 
 use alloc::vec::Vec;
 
+use p3_binary_field::poly_basis::{LOW_STAGES, LowStageTwiddles};
 use p3_binary_field::{BinaryField128, TowerLevel, poly_basis};
 use p3_field::PrimeCharacteristicRing;
 use p3_matrix::Matrix;
@@ -627,15 +628,32 @@ fn tile_stages(
 
 /// Complete the stages confined to one cache-sized set of rows before leaving it.
 fn local_stages(values: &mut [u128], plan: Plan, twiddles: &Twiddles, inverse: bool, fold: Fold) {
-    let Plan { width, local, .. } = plan;
+    let Plan {
+        width,
+        log_n,
+        local,
+        ..
+    } = plan;
     let tile_len = (1 << local) * width;
+    // A single column pairs fewer elements than a register holds in its lowest stages, so a
+    // forward tile runs those together over runs of adjacent rows, one register set per run.
+    let low = (!inverse && width == 1 && local >= LOW_STAGES)
+        .then(|| LowStageTwiddles::new(&twiddles.shifts, &twiddles.basis[..log_n]));
     for_chunks(values, tile_len, local, |(index, tile)| {
         // The tile is the first read of every element it holds when it runs before every
         // other stage, and the last write when it runs after them.
         if fold.entry {
             convert_tile(tile, INTO_POLY);
         }
-        tile_stages(tile, width, local, local, twiddles, inverse, index);
+        if let Some(low) = &low {
+            // The stages above the low ones read a run of adjacent rows as one row, as the
+            // staging phase does.
+            let above = local - LOW_STAGES;
+            tile_stages(tile, 1 << LOW_STAGES, above, local, twiddles, false, index);
+            low.forward(tile, index << above);
+        } else {
+            tile_stages(tile, width, local, local, twiddles, inverse, index);
+        }
         if fold.exit {
             convert_tile(tile, INTO_TOWER);
         }
