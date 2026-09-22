@@ -71,7 +71,7 @@ impl<F: Field, EF: ExtensionField<F>> EqMaybePacked<F, EF> {
     /// Converts this table to an unpacked equality table in another field.
     ///
     /// A packed source is streamed in logical scalar lane order, and each lane goes through the
-    /// field-homomorphic `From<EF>` conversion the representation prover already requires.
+    /// field-homomorphic `From<EF>` conversion the representation prover requires.
     /// No lane is reinterpreted across fields.
     ///
     /// `new_packed` keeps a table scalar below `log_2(W)` variables, so a packed table always
