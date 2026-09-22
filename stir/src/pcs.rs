@@ -172,24 +172,29 @@ pub struct StirProverData<Val: Send + Sync + Clone, InputMmcs: Mmcs<Val>> {
 }
 
 impl<Val: Send + Sync + Clone, InputMmcs: Mmcs<Val>> StirProverData<Val, InputMmcs> {
-    /// `(native log2 height, log2 LDE height of the group holding it)` per matrix, in the
-    /// order the caller committed them.
-    fn matrix_layout(&self) -> Vec<(usize, usize)> {
-        self.placement
-            .iter()
-            .map(|&(group_idx, idx)| {
-                let group = &self.groups[group_idx];
-                (group.log_native_heights[idx], group.log_lde_height)
-            })
-            .collect()
+    /// The shared-domain layout this data was committed under: the plan `plan_groups`
+    /// produced from the committed heights, read back from the stored groups.
+    fn group_plan(&self) -> GroupPlan {
+        GroupPlan {
+            log_lde_heights: self
+                .groups
+                .iter()
+                .map(|group| group.log_lde_height)
+                .collect(),
+            group_of_matrix: self
+                .placement
+                .iter()
+                .map(|&(group_idx, _)| group_idx)
+                .collect(),
+        }
     }
 
-    /// The group committed on the domain of size `2^log_lde_height`, if this commitment has
-    /// one. Group LDE heights are distinct, so at most one can match.
-    fn group_at(&self, log_lde_height: usize) -> Option<&DomainGroup<Val, InputMmcs>> {
-        self.groups
+    /// Native log2 height of each matrix, in the order the caller committed them.
+    fn log_native_heights(&self) -> Vec<usize> {
+        self.placement
             .iter()
-            .find(|group| group.log_lde_height == log_lde_height)
+            .map(|&(group_idx, idx)| self.groups[group_idx].log_native_heights[idx])
+            .collect()
     }
 }
 
@@ -316,6 +321,8 @@ struct OpenedCommitment {
 struct MatrixSlot {
     /// Log2 of the shared LDE domain its group was committed on.
     log_lde_height: usize,
+    /// Log2 of its native height, which names its class.
+    log_native_height: usize,
     /// Index of its class within its bucket's `classes`.
     class: usize,
     width: usize,
@@ -481,6 +488,7 @@ impl OpeningPlan {
                                 .expect("every matrix names a class of the bucket at its height");
                             MatrixSlot {
                                 log_lde_height,
+                                log_native_height: matrix.log_native_height,
                                 class,
                                 width: matrix.width,
                                 alpha_offset,
@@ -1065,14 +1073,9 @@ struct PreparedOpen<Val, Challenge, StirMmcs, Challenger> {
     batch_pow_witness: Option<Val>,
     /// Claimed evaluations, already absorbed into the transcript.
     opened_values: OpenedValues<Challenge>,
-    /// Distinct shared LDE heights across every commitment's groups, descending: one STIR
-    /// instance ("bucket") each.
-    bucket_log_heights: Vec<usize>,
-    /// Native-height classes present in each bucket, descending.
-    ///
-    /// One entry per bucket, in the order the heights above are in.
-    bucket_native_heights: Vec<Vec<usize>>,
-    /// The derived config of each bucket's instance.
+    /// Buckets, classes and alpha offsets of this opening: one STIR instance per bucket.
+    plan: OpeningPlan,
+    /// The derived config of each bucket's instance, in the plan's bucket order.
     stir_configs: Vec<Arc<StirConfig<Val, Challenge, StirMmcs, Challenger>>>,
     /// One alpha-batched reduced opening per height class, bit-reversed and unmerged.
     ///
@@ -1124,32 +1127,31 @@ where
             )
             .collect();
 
-        // `(native height, group LDE height)` per matrix, in caller order: the first selects
-        // the `Combine` class, the second selects which STIR instance that class feeds.
-        let matrix_layouts: Vec<Vec<(usize, usize)>> = commitment_data_with_opening_points
+        // Each commitment's shared-domain layout, as committed.
+        let group_plans: Vec<GroupPlan> = commitment_data_with_opening_points
             .iter()
             .map(
                 |OpeningRequest {
                      prover_data: data, ..
-                 }| data.matrix_layout(),
+                 }| data.group_plan(),
             )
             .collect();
 
         // The quotient must be defined throughout each matrix's *shared* domain,
         // not just its native interpolation domain or the eventual query set.
-        for ((mats, points), layout) in mats_and_points.iter().zip(&matrix_layouts) {
+        for ((mats, points), group_plan) in mats_and_points.iter().zip(&group_plans) {
             assert_eq!(
                 mats.len(),
                 points.len(),
                 "one point list per committed matrix is required"
             );
-            for ((mat, points), &(_, log_lde_height)) in mats.iter().zip(points.iter()).zip(layout)
-            {
+            for (m, (mat, points)) in mats.iter().zip(points.iter()).enumerate() {
                 assert!(mat.width() > 0, "opening a matrix with zero columns");
                 assert!(
                     !points.is_empty(),
                     "matrix was opened at no points; every committed matrix must be opened at least once"
                 );
+                let log_lde_height = group_plan.log_lde_height_of(m);
                 for &point in points {
                     assert!(
                         !opening_point_in_domain::<Val, Challenge>(point, log_lde_height),
@@ -1160,33 +1162,40 @@ where
         }
 
         // Price every actual class before absorbing claims, sampling, or grinding.
-        let mut counts = BTreeMap::<(usize, usize), usize>::new();
-        for ((mats, points), layout) in mats_and_points.iter().zip(&matrix_layouts) {
-            for ((mat, points), &(native, shared)) in mats.iter().zip(points.iter()).zip(layout) {
-                let count = counts.entry((shared, native)).or_default();
-                *count = mat
-                    .width()
-                    .checked_mul(points.len())
-                    .and_then(|n| count.checked_add(n))
-                    .ok_or(StirConfigError::PcsBatchMultiplicityOverflow)?;
-            }
-        }
-        let mut checked_configs = BTreeMap::new();
-        for &(shared, _) in counts.keys() {
-            if checked_configs.contains_key(&shared) {
-                continue;
-            }
-            let classes: Vec<_> = counts
-                .iter()
-                .rev()
-                .filter(|((h, _), _)| *h == shared)
-                .map(|((_, native), count)| (*native, *count))
-                .collect();
-            checked_configs.insert(
-                shared,
-                self.get_or_try_compute_pcs_config(self.log_stir_degree(shared), &classes)?,
-            );
-        }
+        let opened: Vec<OpenedCommitment> = izip!(
+            commitment_data_with_opening_points,
+            &mats_and_points,
+            group_plans
+        )
+        .map(
+            |(
+                OpeningRequest {
+                    prover_data: data, ..
+                },
+                (mats, points),
+                groups,
+            )| OpenedCommitment {
+                groups,
+                matrices: izip!(mats, points.iter(), data.log_native_heights())
+                    .map(|(mat, points, log_native_height)| OpenedMatrix {
+                        log_native_height,
+                        width: mat.width(),
+                        num_points: points.len(),
+                    })
+                    .collect(),
+            },
+        )
+        .collect();
+        let plan = OpeningPlan::new(&opened)?;
+        // Schedules are derived in ascending bucket height, so an opening with several
+        // infeasible buckets reports the shortest one's error.
+        let mut stir_configs = plan
+            .buckets
+            .iter()
+            .rev()
+            .map(|bucket| self.bucket_config(bucket))
+            .collect::<Result<Vec<_>, _>>()?;
+        stir_configs.reverse();
 
         let (global_max_height, global_max_width) = mats_and_points
             .iter()
@@ -1210,9 +1219,9 @@ where
         // longest such prefix separately per point; inverse denominators remain full-size for
         // quotient construction below.
         let mut point_max_native_height: LinearMap<Challenge, usize> = LinearMap::new();
-        for ((_, points), layout) in mats_and_points.iter().zip(&matrix_layouts) {
-            for (points_for_mat, &(log_native_h, _)) in points.iter().zip(layout) {
-                let h = 1usize << log_native_h;
+        for ((_, points), commitment) in mats_and_points.iter().zip(&plan.commitments) {
+            for (points_for_mat, slot) in points.iter().zip(&commitment.matrices) {
+                let h = 1usize << slot.log_native_height;
                 for &point in points_for_mat {
                     if let Some(existing) = point_max_native_height.get_mut(&point) {
                         *existing = (*existing).max(h);
@@ -1235,11 +1244,11 @@ where
 
         let all_opened_values: OpenedValues<Challenge> = mats_and_points
             .iter()
-            .zip(&matrix_layouts)
-            .map(|((mats, points), layout)| {
-                izip!(mats.iter(), points.iter(), layout.iter())
-                    .map(|(mat, points_for_mat, &(log_native_h, _))| {
-                        let h = 1usize << log_native_h;
+            .zip(&plan.commitments)
+            .map(|((mats, points), commitment)| {
+                izip!(mats.iter(), points.iter(), commitment.matrices.iter())
+                    .map(|(mat, points_for_mat, slot)| {
+                        let h = 1usize << slot.log_native_height;
                         let (low_coset, _) = mat.split_rows(h);
 
                         points_for_mat
@@ -1292,18 +1301,15 @@ where
         // STIR instance a class feeds; the inner key is `Combine`'s per-class degree.
         let mut reduced_openings: alloc::collections::BTreeMap<(usize, usize), Vec<Challenge>> =
             alloc::collections::BTreeMap::new();
-        let mut num_reduced: alloc::collections::BTreeMap<(usize, usize), usize> =
-            alloc::collections::BTreeMap::new();
 
-        for (((mats, points), opened_vals), layout) in mats_and_points
+        for (((mats, points), opened_vals), commitment) in mats_and_points
             .iter()
             .zip(&all_opened_values)
-            .zip(&matrix_layouts)
+            .zip(&plan.commitments)
         {
-            for (((mat, points_for_mat), opened_for_mat), &(log_native_h, log_lde_h)) in
-                izip!(mats.iter(), points.iter())
-                    .zip(opened_vals.iter())
-                    .zip(layout.iter())
+            for (((mat, points_for_mat), opened_for_mat), slot) in izip!(mats.iter(), points.iter())
+                .zip(opened_vals.iter())
+                .zip(commitment.matrices.iter())
             {
                 // A matrix opened at no points would contribute nothing to the reduced
                 // opening, but the verifier still counts it as a native-height class (it reads
@@ -1312,11 +1318,12 @@ where
                 // the prover-side mirror.
                 assert!(
                     !points_for_mat.is_empty(),
-                    "STIR PCS: matrix at native height 2^{log_native_h} was opened at no \
-                     points; every committed matrix must be opened at least once"
+                    "STIR PCS: matrix at native height 2^{} was opened at no \
+                     points; every committed matrix must be opened at least once",
+                    slot.log_native_height
                 );
 
-                let key = (log_lde_h, log_native_h);
+                let key = (slot.log_lde_height, slot.log_native_height);
                 let ro = reduced_openings
                     .entry(key)
                     .or_insert_with(|| vec![Challenge::ZERO; mat.height()]);
@@ -1326,12 +1333,10 @@ where
                     .rowwise_packed_dot_product::<Challenge>(&packed_alpha_powers)
                     .collect();
 
-                for (point, ys) in points_for_mat.iter().zip(opened_for_mat.iter()) {
-                    let height_count = num_reduced.entry(key).or_insert(0);
-                    let alpha_pow_offset = alpha.exp_u64(*height_count as u64);
-                    *height_count = height_count
-                        .checked_add(ys.len())
-                        .ok_or(StirConfigError::PcsBatchMultiplicityOverflow)?;
+                for (k, (point, ys)) in points_for_mat.iter().zip(opened_for_mat.iter()).enumerate()
+                {
+                    // The plan already bounded every class total, hence every exponent.
+                    let alpha_pow_offset = alpha.exp_u64(slot.alpha_exponent(k) as u64);
 
                     let full_height = mat.height();
                     let inv_denom = &inv_denoms.get(point).unwrap()[..full_height];
@@ -1351,51 +1356,13 @@ where
             }
         }
 
-        // Step 3: within each distinct shared-LDE-height bucket (one physical domain, hence
-        // one STIR instance), merge its native-height classes via `Combine` (§4.5) when more
-        // than one is present, then run STIR on every bucket in lockstep, sharing every
-        // grind across buckets, then bind the input MMCS at each bucket's query positions.
-        let bucket_log_heights: Vec<usize> = {
-            let mut heights: Vec<usize> = reduced_openings.keys().map(|&(h, _)| h).collect();
-            heights.sort_unstable();
-            heights.dedup();
-            heights.reverse();
-            heights
-        };
-
-        // Reuse the schedules validated before any transcript interaction.
-        let stir_configs: Vec<Arc<StirConfig<Val, Challenge, StirMmcs, Challenger>>> =
-            bucket_log_heights
-                .iter()
-                .map(|log_h| checked_configs[log_h].clone())
-                .collect();
-
-        // Native-height classes present in each bucket, descending.
-        //
-        // The bucket phase reads them back to run `Combine` over the classes it merges.
-        let bucket_native_heights: Vec<Vec<usize>> = bucket_log_heights
-            .iter()
-            .map(|&log_h| {
-                let mut heights: Vec<usize> = reduced_openings
-                    .keys()
-                    .filter(|&&(h, _)| h == log_h)
-                    .map(|&(_, log_d)| log_d)
-                    .collect();
-                heights.sort_unstable();
-                heights.dedup();
-                heights.reverse();
-                heights
-            })
-            .collect();
-
         // Merging a bucket's classes needs a challenge drawn in the bucket phase.
         //
         // So the classes travel on unmerged.
         Ok(PreparedOpen {
             batch_pow_witness,
             opened_values: all_opened_values,
-            bucket_log_heights,
-            bucket_native_heights,
+            plan,
             stir_configs,
             reduced_openings,
         })
@@ -1432,8 +1399,7 @@ where
         let PreparedOpen {
             batch_pow_witness,
             opened_values,
-            bucket_log_heights,
-            bucket_native_heights,
+            plan,
             stir_configs,
             mut reduced_openings,
         } = prepared;
@@ -1443,26 +1409,25 @@ where
         // One description covers the whole bucket phase.
         //
         //     merging challenges  ->  bracketed proximity test  ->  lane draws
-        let shape = StirPcsOpeningShape::new(
-            izip!(&bucket_log_heights, &bucket_native_heights, &stir_configs)
-                .map(|(&log_h, native_heights, config)| {
-                    StirPcsBucketShape::new(log_h, native_heights.clone(), config)
-                })
-                .collect(),
-        );
+        let shape = plan.transcript_shape(&stir_configs);
         let mut transcript =
             OpeningProverTranscript::<Challenger, Val, Challenge>::new(challenger, shape);
 
         // Phase 1: merge each bucket's classes into the codeword STIR runs on.
         //
         // A bucket holding one class is already its own codeword and draws nothing.
-        let initial_codewords: Vec<Vec<Challenge>> = bucket_log_heights
+        let initial_codewords: Vec<Vec<Challenge>> = plan
+            .buckets
             .iter()
-            .zip(&bucket_native_heights)
             .enumerate()
-            .map(|(bucket, (&log_h, native_heights))| {
+            .map(|(bucket, bucket_plan)| {
                 let r_comb = transcript.combination_challenge(bucket);
-                combined_bucket_codeword(&mut reduced_openings, log_h, native_heights, r_comb)
+                combined_bucket_codeword(
+                    &mut reduced_openings,
+                    bucket_plan.log_lde_height,
+                    &bucket_plan.log_native_heights(),
+                    r_comb,
+                )
             })
             .collect();
 
@@ -1481,55 +1446,54 @@ where
         // Every STIR message is already in the sponge, the commitments above all.
         //
         // So no lane can be chosen to dodge a disagreement.
-        let bucket_lanes: Vec<Vec<usize>> = (0..bucket_log_heights.len())
+        let bucket_lanes: Vec<Vec<usize>> = (0..plan.buckets.len())
             .map(|bucket| transcript.lanes(bucket))
             .collect();
         transcript.finish();
 
-        let bucket_proofs = izip!(
-            &bucket_log_heights,
-            &stir_configs,
-            bucket_results,
-            bucket_lanes
-        )
-        .map(|(&log_h, stir_config, (stir_proof, first_round), lanes)| {
-            let log_arity0 = stir_config.log_starting_folding_factor;
-            // Both counts come from the schedule, derived independently of each other.
-            //
-            // The description fixes the lane count before the driver is seeded.
-            //
-            // The draw count comes out of the run.
-            //
-            // Pairing them zips two lists, which would silently truncate to the shorter.
-            assert_eq!(
-                lanes.len(),
-                first_round.draws.len(),
-                "the schedule describes {} lanes but the run drew {} round-0 queries",
-                lanes.len(),
-                first_round.draws.len(),
-            );
-            let positions = query_positions(&first_round.draws, &lanes, log_h, log_arity0);
-            let row_indices = positions_to_row_indices(&positions, log_h);
+        let bucket_proofs = izip!(&plan.buckets, &stir_configs, bucket_results, bucket_lanes)
+            .map(|(bucket, stir_config, (stir_proof, first_round), lanes)| {
+                let log_h = bucket.log_lde_height;
+                let log_arity0 = stir_config.log_starting_folding_factor;
+                // Both counts come from the schedule, derived independently of each other.
+                //
+                // The description fixes the lane count before the driver is seeded.
+                //
+                // The draw count comes out of the run.
+                //
+                // Pairing them zips two lists, which would silently truncate to the shorter.
+                assert_eq!(
+                    lanes.len(),
+                    first_round.draws.len(),
+                    "the schedule describes {} lanes but the run drew {} round-0 queries",
+                    lanes.len(),
+                    first_round.draws.len(),
+                );
+                let positions = query_positions(&first_round.draws, &lanes, log_h, log_arity0);
+                let row_indices = positions_to_row_indices(&positions, log_h);
 
-            let input_openings: Vec<Option<InputOpenings<Val, InputMmcs>>> = prover_data
-                .iter()
-                .map(|data| {
-                    // Each group has its own tree on its own domain.
-                    //
-                    // So a bucket reads exactly the group committed at its LDE height.
-                    let group = data.group_at(log_h)?;
-                    let (opened_values, opening_proof) =
-                        self.input_mmcs.open_multi_batch(&row_indices, &group.data);
-                    Some(InputOpenings {
-                        opened_values,
-                        opening_proof,
+                let input_openings: Vec<Option<InputOpenings<Val, InputMmcs>>> = bucket
+                    .inputs
+                    .iter()
+                    .zip(prover_data)
+                    .map(|(input, data)| {
+                        // Each group has its own tree on its own domain.
+                        //
+                        // So a bucket reads exactly the group committed at its LDE height.
+                        let input = input.as_ref()?;
+                        let (opened_values, opening_proof) = self
+                            .input_mmcs
+                            .open_multi_batch(&row_indices, &data.groups[input.group].data);
+                        Some(InputOpenings {
+                            opened_values,
+                            opening_proof,
+                        })
                     })
-                })
-                .collect();
+                    .collect();
 
-            (stir_proof, input_openings)
-        })
-        .collect();
+                (stir_proof, input_openings)
+            })
+            .collect();
 
         (
             opened_values,
@@ -3313,8 +3277,9 @@ mod tests {
 
         let plan = OpeningPlan::new(&[a, b]).unwrap();
 
-        let slot = |log_lde_height, class, width, alpha_offset| MatrixSlot {
+        let slot = |log_lde_height, log_native_height, class, width, alpha_offset| MatrixSlot {
             log_lde_height,
+            log_native_height,
             class,
             width,
             alpha_offset,
@@ -3331,12 +3296,16 @@ mod tests {
                 commitments: vec![
                     CommitmentPlan {
                         num_groups: 2,
-                        matrices: vec![slot(7, 0, 3, 0), slot(7, 1, 2, 0), slot(5, 0, 1, 0)],
+                        matrices: vec![
+                            slot(7, 6, 0, 3, 0),
+                            slot(7, 5, 1, 2, 0),
+                            slot(5, 4, 0, 1, 0)
+                        ],
                     },
                     CommitmentPlan {
                         num_groups: 2,
                         // A's 3 columns at 2 points already sit in class `(7, 6)`.
-                        matrices: vec![slot(7, 0, 4, 6), slot(4, 0, 2, 0)],
+                        matrices: vec![slot(7, 6, 0, 4, 6), slot(4, 3, 0, 2, 0)],
                     },
                 ],
                 buckets: vec![
@@ -3379,6 +3348,85 @@ mod tests {
             OpeningPlan::new(&[opened]),
             Err(StirConfigError::PcsBatchMultiplicityOverflow)
         );
+    }
+
+    #[test]
+    fn prover_and_verifier_derive_the_same_opening_plan() {
+        // Per-height domains, a partial merge, and a single shared domain: between them, a
+        // class pooled across commitments, a merged bucket, and buckets one commitment skips.
+        for (spread, num_buckets) in [(0, 4), (1, 3), (DEFAULT_MAX_LOG_HEIGHT_SPREAD, 1)] {
+            let pcs = test_pcs_with(spread, SecurityAssumption::CapacityBound, 16);
+            let mut rng = SmallRng::seed_from_u64(42);
+            let commit = |shape: &[(usize, usize)], rng: &mut SmallRng| {
+                let domains: Vec<_> = shape
+                    .iter()
+                    .map(|&(log_h, _)| pcs.natural_domain_for_degree(1 << log_h))
+                    .collect();
+                let (commitment, data) = pcs
+                    .commit(domains.iter().zip(shape).map(|(&domain, &(_, width))| {
+                        (
+                            domain,
+                            RowMajorMatrix::<TestVal>::rand(rng, domain.size(), width),
+                        )
+                    }))
+                    .unwrap();
+                (commitment, data, domains)
+            };
+            let (commit_a, data_a, domains_a) = commit(&[(6, 3), (5, 2), (4, 1)], &mut rng);
+            let (commit_b, data_b, domains_b) = commit(&[(6, 4), (3, 2)], &mut rng);
+            let mut challenger = TestChallenger::new(TestPerm::new_from_rng_128(&mut rng));
+            challenger.observe(commit_a.clone());
+            challenger.observe(commit_b.clone());
+            let z1: EF = challenger.sample_algebra_element();
+            let z2: EF = challenger.sample_algebra_element();
+            let z3: EF = challenger.sample_algebra_element();
+            let points = [
+                vec![vec![z1, z2], vec![z1], vec![z2]],
+                vec![vec![z1, z3], vec![z3]],
+            ];
+
+            let prepared = pcs
+                .prepare_open(
+                    &[
+                        OpeningRequest {
+                            prover_data: &data_a,
+                            points: points[0].clone(),
+                        },
+                        OpeningRequest {
+                            prover_data: &data_b,
+                            points: points[1].clone(),
+                        },
+                    ],
+                    &mut challenger,
+                )
+                .unwrap();
+            assert_eq!(prepared.plan.buckets.len(), num_buckets);
+
+            let claims: Vec<_> = [(commit_a, domains_a), (commit_b, domains_b)]
+                .into_iter()
+                .zip(&points)
+                .zip(&prepared.opened_values)
+                .map(
+                    |(((commitment, domains), points), values)| CommitmentOpening {
+                        commitment,
+                        matrices: izip!(domains, points, values)
+                            .map(|(domain, points, values)| MatrixOpening {
+                                domain,
+                                points: points
+                                    .iter()
+                                    .zip(values)
+                                    .map(|(&point, values)| PointOpening {
+                                        point,
+                                        values: values.clone(),
+                                    })
+                                    .collect(),
+                            })
+                            .collect(),
+                    },
+                )
+                .collect();
+            assert_eq!(pcs.claimed_opening_plan(&claims).unwrap(), prepared.plan);
+        }
     }
 
     #[test]
@@ -4254,7 +4302,7 @@ mod tests {
         // Fixture state: one commitment at one height.
         //
         // That is one bucket holding one class.
-        assert_eq!(prepared.bucket_log_heights.len(), 1);
+        assert_eq!(prepared.plan.buckets.len(), 1);
 
         // Mutation: the codeword the bucket will run on is no longer its reduced opening.
         //
@@ -4411,8 +4459,7 @@ mod tests {
         // Both the draws and the lanes are visible that way.
         let mut ch_draws = base;
         let PreparedOpen {
-            bucket_log_heights,
-            bucket_native_heights,
+            plan,
             stir_configs,
             mut reduced_openings,
             ..
@@ -4427,11 +4474,7 @@ mod tests {
             .unwrap();
 
         // The bucket phase's description, built exactly as the prover builds it.
-        let shape = StirPcsOpeningShape::new(vec![StirPcsBucketShape::new(
-            bucket_log_heights[0],
-            bucket_native_heights[0].clone(),
-            &stir_configs[0],
-        )]);
+        let shape = plan.transcript_shape(&stir_configs);
         let described_draws = shape.buckets[0].num_query_draws;
         assert_eq!(
             described_draws, final_queries,
@@ -4450,8 +4493,8 @@ mod tests {
         assert!(transcript.combination_challenge(0).is_none());
         let codeword = combined_bucket_codeword::<TestVal, EF>(
             &mut reduced_openings,
-            bucket_log_heights[0],
-            &bucket_native_heights[0],
+            plan.buckets[0].log_lde_height,
+            &plan.buckets[0].log_native_heights(),
             None,
         );
         let results = transcript.delegate(|challenger| {
