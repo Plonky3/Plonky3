@@ -36,13 +36,16 @@ use crate::transcript::{ProverTranscript, SumcheckShape};
 /// and small enough both to keep every core fed at the heights this reduction runs at and to
 /// keep the equality factor a block reads within cache.
 #[cfg(not(test))]
-const LOG_CHUNK: usize = 14;
+const LOG_CHUNK: usize = PRODUCTION_LOG_CHUNK;
 
 /// Small enough under test that a case above one variable splits in chunks.
 ///
 /// The partial-combination fold is then on the path the tests take.
 #[cfg(test)]
 const LOG_CHUNK: usize = 1;
+
+/// The value `LOG_CHUNK` takes outside test builds.
+const PRODUCTION_LOG_CHUNK: usize = 14;
 
 /// The hypercube points one task accumulates before its partial combines.
 const CHUNK: usize = 1 << LOG_CHUNK;
@@ -55,6 +58,14 @@ const COMPACT_MAX_ROUNDS: usize = 6;
 const COMPACT_MIN_BLOCK_BITS: usize = 6;
 /// The materializer keeps a fixed total EF scratch budget across all compact banks.
 const COMPACT_TOTAL_SCRATCH: usize = 1 << 14;
+
+/// The fewest free variables an unforced compact run of `requested_k` rounds accepts.
+///
+/// Each of its `2^requested_k` banks then spans at least `2^COMPACT_MIN_BLOCK_BITS` equality
+/// chunks of `2^log_chunk` points.
+const fn compact_size_floor(requested_k: usize, log_chunk: usize) -> usize {
+    requested_k + log_chunk + COMPACT_MIN_BLOCK_BITS
+}
 
 /// Bind prefix variables in one task-owned buffer without invoking Rayon recursively.
 fn bind_scratch_prefix<R: Field>(values: &mut Vec<R>, challenges: &[R]) {
@@ -870,7 +881,7 @@ impl<EF: TowerLevel> BitRingSwitch<EF> {
         {
             return false;
         }
-        force || n >= requested_k + LOG_CHUNK + COMPACT_MIN_BLOCK_BITS
+        force || n >= compact_size_floor(requested_k, LOG_CHUNK)
     }
 }
 
@@ -2404,10 +2415,10 @@ mod tests {
             }
         };
         let reduction = BitRingSwitch::new(&Point::new(point)).unwrap();
-        assert_eq!(
-            reduction.num_variables(),
-            COMPACT_ROUNDS + LOG_CHUNK + COMPACT_MIN_BLOCK_BITS
-        );
+        // A production build first accepts 22 free variables, and a test build 9.
+        assert_eq!(compact_size_floor(COMPACT_ROUNDS, PRODUCTION_LOG_CHUNK), 22);
+        assert_eq!(compact_size_floor(COMPACT_ROUNDS, LOG_CHUNK), 9);
+        assert_eq!(reduction.num_variables(), 9);
         assert!(reduction.compact_depth_is_eligible(
             reduction.num_variables(),
             COMPACT_ROUNDS,
