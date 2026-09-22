@@ -49,6 +49,12 @@ pub enum BusActivation<E> {
     ///
     /// The indicator is supplied by the backend, and over the Boolean hypercube it is zero or one on every row, so the declaration owes no Booleanity constraint.
     ///
+    /// Emitting no constraint has a sharp edge.
+    ///
+    /// A table carrying nothing else reaches the zerocheck with no constraint family, and setup asserts rather than returning an error.
+    ///
+    /// The same declaration under a caller-supplied selector keeps its Booleanity check and is accepted, so such a table needs a local constraint of its own.
+    ///
     /// The block still spans the whole table, and its other rows contribute the product identity.
     ///
     /// The crate README says why, and what a height-one block would cost instead.

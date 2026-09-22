@@ -76,6 +76,12 @@ impl BusPlan {
             .instance(&(self.fingerprint_width() as u64).to_be_bytes());
 
         // Domain names and identities prevent two named buses from sharing one tuple space.
+        //
+        // Each name is length-prefixed here, and again by the encoder.
+        //
+        // The two fixed-width fields after it also start with a zero byte the alphabet excludes.
+        //
+        // Where one name ends and the next begins is therefore readable three ways over.
         for domain in self.domains() {
             separator
                 .instance(&(domain.name.len() as u64).to_be_bytes())
@@ -533,10 +539,18 @@ mod tests {
     }
 
     #[test]
-    fn the_separator_binds_where_one_name_ends_and_the_next_begins() {
+    fn two_name_splits_of_the_same_bytes_land_on_different_seeds() {
         // Sorted, these two statements name the domains "ab", "c" and "a", "bc".
         //
-        // Their name bytes concatenate to "abc" either way, so only the length prefixes separate them.
+        // Their name bytes concatenate to "abc" either way, so the split is all that differs.
+        //
+        // Three things encode the split.
+        //
+        // The explicit length prefix, the encoder's own prefix, and the zero-leading payload width and identity written after every name.
+        //
+        // The alphabet excludes that zero byte, so the fixed-width fields alone already separate two names.
+        //
+        // The prefixes are belt and braces rather than the only guard.
         let left = two_named_channels("ab", "c");
         let right = two_named_channels("a", "bc");
 
@@ -555,7 +569,6 @@ mod tests {
             assert_eq!(strip(&left), strip(&right));
         }
 
-        // An unprefixed encoding would collide here. The prefixed one does not.
         assert_ne!(label(&left), label(&right));
         assert!(!seeds_agree(&left, &right));
         let concatenated = |plan: &BusPlan| {

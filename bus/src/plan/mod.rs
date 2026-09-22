@@ -63,10 +63,13 @@ pub struct BusDomain {
 impl BusDomain {
     /// Checked channel name of this group.
     ///
-    /// The plan rechecked every name it was given, so this never fails.
-    #[must_use]
-    pub fn bus_name(&self) -> BusName<'_> {
-        BusName::try_new(&self.name).expect("a planned domain holds a checked channel name")
+    /// # Errors
+    ///
+    /// Returns an error when the name is outside the alphabet.
+    ///
+    /// Every field here is public, so this is reachable for a domain built by hand rather than by planning.
+    pub const fn bus_name(&self) -> Result<BusName<'_>, crate::BusNameError> {
+        BusName::try_new(self.name.as_str())
     }
 
     /// Read one little-endian bit of the nonzero domain identity.
@@ -1320,7 +1323,7 @@ mod width_tests {
         );
         for (index, bus) in [BYTECODE, MEMORY, RANGE, STATE].into_iter().enumerate() {
             assert_eq!(plan.domain_index(bus), Some(index));
-            assert_eq!(plan.domain(bus).unwrap().bus_name(), bus);
+            assert_eq!(plan.domain(bus).unwrap().bus_name(), Ok(bus));
             assert_eq!(plan.domain(bus).unwrap().identity, index + 1);
         }
 

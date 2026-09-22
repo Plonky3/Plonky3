@@ -40,6 +40,10 @@ The constructor is a `const fn`, so a machine names each channel once in a const
 
 A chip that mistypes the constant fails to resolve a name, rather than quietly opening a second channel whose tuples never match.
 
+It is the const item that catches that, not the type.
+
+A chip that spells a fresh literal `"stat"` against everyone else's `"state"` still opens a second channel, and the only symptom is an unbalanced product that names no channel.
+
 The alphabet is not tidiness.
 
 The transcript separator length-prefixes every name, so arbitrary bytes would still encode injectively.
@@ -72,11 +76,15 @@ A caller-supplied selector still costs one constraint of twice its degree.
 
 The factor degree is the same either way.
 
-Two consequences are worth knowing.
+Two consequences are worth knowing, and the first is a sharp edge.
 
-A table whose entire content is boundary declarations leaves the batched zerocheck nothing to prove and is refused, though any table a machine would really write has local constraints.
+Emitting no constraint means a table whose entire content is boundary declarations reaches the batched zerocheck with no constraint family, which is an assertion failure during setup rather than a returned error.
 
-And a boundary declaration still occupies a block of its table's full height, whose other rows contribute the product identity, so it costs `2^k` leaves rather than one.
+The same two declarations written with a caller-supplied selector keep their Booleanity checks and prove and verify, so moving them to the first-class form turns a working table into a setup panic.
+
+A table needs a local constraint of its own, which any table a machine would really write has; the underlying limitation is tracked in Plonky3 issue 2284.
+
+The second consequence is cost: a boundary declaration still occupies a block of its table's full height, whose other rows contribute the product identity, so it costs `2^k` leaves rather than one.
 
 ### Tuple widths
 

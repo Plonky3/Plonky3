@@ -19,8 +19,8 @@ use p3_matrix::dense::RowMajorMatrix;
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_multi_stark::config::MultiStarkConfig;
 use p3_multi_stark::{
-    ProverInstance, ProverInstances, ProvingError, VerifierInstance, VerifierInstances, prove,
-    setup, verify,
+    BusBindingError, ProverInstance, ProverInstances, ProvingError, VerificationError,
+    VerifierInstance, VerifierInstances, prove, setup, verify,
 };
 use p3_sumcheck::layout::{Layout, PrefixProver, Table, Witness};
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
@@ -141,11 +141,35 @@ fn challenger() -> MyChallenger {
 ///
 /// The flag exists because a boundary indicator contributes no constraint of its own.
 ///
-/// A table with nothing but boundary declarations would leave the batched zerocheck empty and be refused.
+/// Without it the table reaches the zerocheck with no constraint family and setup asserts.
 #[derive(Clone, Copy)]
 struct BoundaryStateAir {
     /// Side of the multiset equality this table contributes both of its ends to.
     direction: BusDirection,
+    /// End the first declaration names.
+    opening: BusBoundary,
+    /// End the second declaration names.
+    closing: BusBoundary,
+}
+
+impl BoundaryStateAir {
+    /// The honest shape: open at the first row, close at the last.
+    const fn ends(direction: BusDirection) -> Self {
+        Self {
+            direction,
+            opening: BusBoundary::First,
+            closing: BusBoundary::Last,
+        }
+    }
+
+    /// A shape that names one end twice.
+    const fn twice(direction: BusDirection, end: BusBoundary) -> Self {
+        Self {
+            direction,
+            opening: end,
+            closing: end,
+        }
+    }
 }
 
 impl BaseAir<F> for BoundaryStateAir {
@@ -171,13 +195,13 @@ where
             STATE,
             self.direction,
             [state.clone()],
-            BusActivation::Boundary(BusBoundary::First),
+            BusActivation::Boundary(self.opening),
         );
         builder.push_bus_interaction(
             STATE,
             self.direction,
             [state],
-            BusActivation::Boundary(BusBoundary::Last),
+            BusActivation::Boundary(self.closing),
         );
     }
 }
@@ -195,12 +219,8 @@ fn table(states: [u64; 4]) -> Table<F> {
 ///
 /// A false answer is specifically an unbalanced multiset, never some other prover failure.
 fn balances(pushes: [u64; 4], pulls: [u64; 4]) -> bool {
-    let push = BoundaryStateAir {
-        direction: BusDirection::Push,
-    };
-    let pull = BoundaryStateAir {
-        direction: BusDirection::Pull,
-    };
+    let push = BoundaryStateAir::ends(BusDirection::Push);
+    let pull = BoundaryStateAir::ends(BusDirection::Pull);
     let log_height = log2_strict_usize(pushes.len());
     let config = config_for(log_height, 2);
     let (pk, _) = setup(&config, &[&push, &pull], &mut challenger()).unwrap();
@@ -229,12 +249,8 @@ fn boundary_flushes_balance_when_only_the_two_ends_agree() {
     // Read as boundaries the multiset balances, 10 and 13 against 10 and 13.
     //
     // Read as one tuple per row it would not, so an indicator that leaked past its end could not prove this.
-    let push = BoundaryStateAir {
-        direction: BusDirection::Push,
-    };
-    let pull = BoundaryStateAir {
-        direction: BusDirection::Pull,
-    };
+    let push = BoundaryStateAir::ends(BusDirection::Push);
+    let pull = BoundaryStateAir::ends(BusDirection::Pull);
     let log_height = 2;
     let config = config_for(log_height, 2);
     let (pk, vk) = setup(&config, &[&push, &pull], &mut challenger()).unwrap();
@@ -281,16 +297,12 @@ fn a_boundary_flush_is_not_a_per_row_flush() {
 }
 
 #[test]
-fn a_boundary_flush_on_a_one_row_table_fires_both_ends_at_that_row() {
+fn repeated_boundary_words_balance() {
     // A repeated word at both ends makes each side flush it twice.
     //
     // The two declarations then name one value rather than two, and the multiset still balances.
-    let push = BoundaryStateAir {
-        direction: BusDirection::Push,
-    };
-    let pull = BoundaryStateAir {
-        direction: BusDirection::Pull,
-    };
+    let push = BoundaryStateAir::ends(BusDirection::Push);
+    let pull = BoundaryStateAir::ends(BusDirection::Pull);
     let log_height = 2;
     let config = config_for(log_height, 2);
     let (pk, vk) = setup(&config, &[&push, &pull], &mut challenger()).unwrap();
@@ -318,4 +330,125 @@ fn a_boundary_flush_on_a_one_row_table_fires_both_ends_at_that_row() {
         &mut challenger(),
     )
     .expect("repeated ends verify like distinct ones");
+}
+
+#[test]
+fn the_verifier_rejects_a_proof_built_for_the_other_end() {
+    // Every rejection above is the honest prover refusing to build an unbalanced statement.
+    //
+    // This one is balanced, so the prover accepts it, and only the verifier can tell it apart.
+
+    // The prover declares both of its ends as the last row.
+    //
+    // Both tables then flush their row-three word twice, 13 against 13, and the multiset balances.
+    let proving_push = BoundaryStateAir::twice(BusDirection::Push, BusBoundary::Last);
+    let proving_pull = BoundaryStateAir::twice(BusDirection::Pull, BusBoundary::Last);
+
+    // The verifier holds the honest AIRs, which open at the first row and close at the last.
+    let verifying_push = BoundaryStateAir::ends(BusDirection::Push);
+    let verifying_pull = BoundaryStateAir::ends(BusDirection::Pull);
+
+    // Activation is not part of the plan, so both sides derive one layout and one separator.
+    //
+    // The proof therefore reaches the terminal comparison instead of failing as a transcript mismatch.
+    let log_height = 2;
+    let config = config_for(log_height, 2);
+    let (pk, vk) = setup(
+        &config,
+        &[&verifying_push, &verifying_pull],
+        &mut challenger(),
+    )
+    .unwrap();
+
+    // Row zero is where the two tables disagree, and the honest reading would not balance there.
+    let proof = prove(
+        &config,
+        ProverInstances::new(vec![
+            ProverInstance::new(&proving_push, table([10, 11, 12, 13]), &pk, &[]),
+            ProverInstance::new(&proving_pull, table([20, 11, 12, 13]), &pk, &[]),
+        ]),
+        0,
+        &mut challenger(),
+    )
+    .expect("naming one end twice balances, so the prover has nothing to object to");
+
+    // The verifier rebuilds the leaf factors from its own AIRs and finds different ones.
+    let rejection = verify(
+        &config,
+        VerifierInstances::new(vec![
+            VerifierInstance::new(&verifying_push, &vk, log_height, &[]),
+            VerifierInstance::new(&verifying_pull, &vk, log_height, &[]),
+        ]),
+        &proof,
+        0,
+        &mut challenger(),
+    )
+    .expect_err("a product proof for one pair of ends is not a proof for another");
+    assert!(matches!(
+        rejection,
+        VerificationError::BusBinding(BusBindingError::TerminalMismatch)
+    ));
+
+    // Under the AIRs it was built for, the same proof verifies.
+    verify(
+        &config,
+        VerifierInstances::new(vec![
+            VerifierInstance::new(&proving_push, &vk, log_height, &[]),
+            VerifierInstance::new(&proving_pull, &vk, log_height, &[]),
+        ]),
+        &proof,
+        0,
+        &mut challenger(),
+    )
+    .expect("the substitution is only a substitution, not a malformed proof");
+}
+
+/// A table whose whole content is boundary declarations, with no constraint of its own.
+#[derive(Clone, Copy)]
+struct BareBoundaryAir(BusDirection);
+
+impl BaseAir<F> for BareBoundaryAir {
+    fn width(&self) -> usize {
+        NUM_COLS
+    }
+}
+
+impl<AB> Air<AB> for BareBoundaryAir
+where
+    AB: BusInteractionBuilder<F = F>,
+{
+    fn eval(&self, builder: &mut AB) {
+        let main = builder.main();
+        let state: AB::Expr = main.current_slice()[0].into();
+        builder.push_bus_interaction(
+            STATE,
+            self.0,
+            [state.clone()],
+            BusActivation::Boundary(BusBoundary::First),
+        );
+        builder.push_bus_interaction(
+            STATE,
+            self.0,
+            [state],
+            BusActivation::Boundary(BusBoundary::Last),
+        );
+    }
+}
+
+#[test]
+#[should_panic = "zerocheck requires every AIR to contribute constraints"]
+fn a_table_of_boundary_flushes_alone_panics_in_setup() {
+    // A boundary indicator leaves the zerocheck nothing at all.
+    //
+    // An AIR carrying only boundary declarations therefore reaches the batch with no constraints.
+    //
+    // The same two written with a caller-supplied selector keep their Booleanity checks.
+    //
+    // Those are accepted, so the first-class form widens the gap tracked in #2284.
+    //
+    // This pins the behaviour rather than endorsing it, and should start failing when #2284 lands.
+    let push = BareBoundaryAir(BusDirection::Push);
+    let pull = BareBoundaryAir(BusDirection::Pull);
+    let config = config_for(2, 2);
+    let _ = setup(&config, &[&push, &pull], &mut challenger());
 }
