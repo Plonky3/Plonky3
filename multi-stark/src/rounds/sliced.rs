@@ -208,6 +208,47 @@ fn fold_corners<F, S>(
     (corners[0], corners[1])
 }
 
+/// The corners one prefix reads, and the nodes it still folds them at.
+///
+/// A prefix variable at node zero or one selects the low or the high half of the corners
+/// outright, as `lo + 0 * (hi - lo)` and `lo + 1 * (hi - lo)` do, so only the corners it selects
+/// are read and only the other variables fold.
+struct PrefixFold {
+    /// The corners read, in the order [`fold_corners`] expects: folding variables first variable
+    /// highest, then `t`.
+    corners: Vec<usize>,
+    /// Node coordinates of the variables that fold, first variable first.
+    nodes: Vec<(bool, bool)>,
+}
+
+impl PrefixFold {
+    /// The corners and folding nodes of `prefix`, whose corner bits are its variables, first
+    /// variable highest, then `t`.
+    fn new(prefix: &[(bool, bool)]) -> Self {
+        let mut corners = vec![0];
+        let mut nodes = Vec::new();
+        for (variable, &node) in prefix.iter().enumerate() {
+            let bit = 2 << (prefix.len() - 1 - variable);
+            match node {
+                (false, false) => {}
+                (true, false) => corners.iter_mut().for_each(|corner| *corner |= bit),
+                _ => {
+                    corners = corners
+                        .iter()
+                        .flat_map(|&corner| [corner, corner | bit])
+                        .collect();
+                    nodes.push(node);
+                }
+            }
+        }
+        let corners = corners
+            .iter()
+            .flat_map(|&corner| [corner, corner | 1])
+            .collect();
+        Self { corners, nodes }
+    }
+}
+
 /// What every task of one sliced round shares.
 struct SlicedRound<'a, 'air, A, F, S, R> {
     /// The stage's planes.
@@ -218,8 +259,8 @@ struct SlicedRound<'a, 'air, A, F, S, R> {
     public_values: &'a [&'a [F]],
     /// Descending alpha powers of each AIR, in the accumulation field.
     alpha_powers: &'a [Vec<R>],
-    /// Every prefix of this round: node coordinates of each bound variable, first variable first.
-    prefixes: Vec<Vec<(bool, bool)>>,
+    /// Every prefix of this round, as the corners it reads and the nodes it folds them at.
+    prefixes: Vec<PrefixFold>,
     /// Nodes this round evaluates, each with the step that reaches it.
     schedule: Vec<(usize, NodeStep<(bool, bool)>)>,
     /// Every successor column run of the stage.
@@ -298,15 +339,16 @@ where
         planes: &[[u64; 2]],
         column: usize,
         word: usize,
-        prefix: &[(bool, bool)],
+        prefix: &PrefixFold,
         corners: &mut [SlicedGf4<F, S>],
     ) -> (SlicedGf4<F, S>, SlicedGf4<F, S>) {
         let width = self.trace.width;
-        for (corner, value) in corners.iter_mut().enumerate() {
+        let corners = &mut corners[..prefix.corners.len()];
+        for (value, &corner) in corners.iter_mut().zip(&prefix.corners) {
             let [low, high] = planes[(corner * self.words + word) * width + column];
             *value = SlicedGf4::from_planes(low, high);
         }
-        fold_corners(corners, prefix)
+        fold_corners(corners, &prefix.nodes)
     }
 
     /// Add one word of residual rows at one prefix to the scratch sums.
@@ -335,11 +377,12 @@ where
             }
         }
         let mut selector = |index: usize| {
-            for (corner, value) in corners.iter_mut().enumerate() {
+            let corners = &mut corners[..prefix.corners.len()];
+            for (value, &corner) in corners.iter_mut().zip(&prefix.corners) {
                 let plane = trace.boundary[corner * self.words + word][index];
                 *value = SlicedGf4::from_planes(plane, 0);
             }
-            let (lo, hi) = fold_corners(corners, prefix);
+            let (lo, hi) = fold_corners(corners, &prefix.nodes);
             (lo, lo + hi)
         };
         let (first, first_diff) = selector(0);
@@ -583,7 +626,7 @@ where
                 *coordinate = nodes[index % nodes.len()];
                 index /= nodes.len();
             }
-            prefix
+            PrefixFold::new(&prefix)
         })
         .collect::<Vec<_>>();
     let context = SlicedRound {

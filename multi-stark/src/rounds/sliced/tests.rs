@@ -2228,3 +2228,49 @@ fn lane_masks_transpose_the_corner_words() {
         }
     }
 }
+
+#[test]
+fn a_prefix_fold_matches_folding_every_corner() {
+    type Sliced = SlicedGf4<Tower, Gf4>;
+    let coordinates = [(false, false), (true, false), (false, true), (true, true)];
+    let mut rng = SmallRng::seed_from_u64(28);
+    for round in 0..=MAX_SLICED_ROUNDS {
+        let planes = (0..2 << round)
+            .map(|_| [rng.random(), rng.random()])
+            .collect::<Vec<[u64; 2]>>();
+        for index in 0..coordinates.len().pow(round as u32) {
+            let prefix = (0..round)
+                .map(|variable| coordinates[(index >> (2 * variable)) % coordinates.len()])
+                .collect::<Vec<_>>();
+            let mut every = planes
+                .iter()
+                .map(|&[low, high]| Sliced::from_planes(low, high))
+                .collect::<Vec<_>>();
+            let expected = fold_corners(&mut every, &prefix);
+
+            let fold = PrefixFold::new(&prefix);
+            assert_eq!(
+                fold.corners.len(),
+                2 << fold.nodes.len(),
+                "prefix {prefix:?}"
+            );
+            let mut read = fold
+                .corners
+                .iter()
+                .map(|&corner| Sliced::from_planes(planes[corner][0], planes[corner][1]))
+                .collect::<Vec<_>>();
+            let folded = fold_corners(&mut read, &fold.nodes);
+            for (folded, expected) in [(folded.0, expected.0), (folded.1, expected.1)] {
+                assert_eq!(
+                    (0..SLICED_LANES)
+                        .map(|lane| folded.lane(lane))
+                        .collect::<Vec<_>>(),
+                    (0..SLICED_LANES)
+                        .map(|lane| expected.lane(lane))
+                        .collect::<Vec<_>>(),
+                    "prefix {prefix:?}"
+                );
+            }
+        }
+    }
+}
