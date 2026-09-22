@@ -358,6 +358,183 @@ fn the_planes_hold_every_cell_and_its_repeat_last_successor() {
 }
 
 #[test]
+fn plane_fold_five_challenges_matches_explicit_corner_sum() {
+    let prefix = [
+        Tower::from_repr(0x11),
+        Tower::from_repr(0x22),
+        Tower::from_repr(0x33),
+        Tower::from_repr(0x44),
+        Tower::from_repr(0x55),
+    ];
+    for num_vars in [11, 12] {
+        let height = 1 << num_vars;
+        for (name, mut instance) in [
+            ("pair", Instance::honest(FixtureAir::Pair, height, 0xF01D)),
+            (
+                "merged",
+                Instance::honest(FixtureAir::QuadraticInputs, height, 0xF01E),
+            ),
+        ] {
+            let main_width = instance.air.width();
+            for (row, values) in instance.main.values.chunks_mut(main_width).enumerate() {
+                for (column, value) in values.iter_mut().enumerate() {
+                    *value = gf4(plane_fold_fixture_bits(row, column, 3));
+                }
+            }
+            with_state(&[instance], no_lookups(), |state, _| {
+                let trace = state
+                    .sliced_trace::<Gf4>()
+                    .expect("the GF(4) trace should fit the sliced path");
+                let columns = state.tables[0]
+                    .iter_polys()
+                    .chain(
+                        state.preprocessed[0]
+                            .into_iter()
+                            .flat_map(Table::iter_polys),
+                    )
+                    .chain(state.periodic[0].iter().flat_map(Table::iter_polys))
+                    .collect::<Vec<_>>();
+                assert_eq!(trace.width, columns.len(), "{name} width");
+                let fold = PlaneFold::<Tower>::new::<Gf4, Tower>(&trace, &prefix);
+                let remaining = num_vars - prefix.len();
+                let words = 1 << remaining.saturating_sub(LANE_VARIABLES);
+                let mut actual = vec![Tower::ZERO; SLICED_LANES];
+                for column in 0..trace.width {
+                    for word in 0..words {
+                        fold.fold_word(&trace.cells, column, word, &mut actual);
+                        for row in 0..SLICED_LANES {
+                            let mut expected = Tower::ZERO;
+                            for corner in 0..1 << prefix.len() {
+                                let mut weight = Tower::ONE;
+                                for (i, &challenge) in prefix.iter().enumerate() {
+                                    weight *= if (corner >> (prefix.len() - 1 - i)) & 1 == 0 {
+                                        Tower::ONE - challenge
+                                    } else {
+                                        challenge
+                                    };
+                                }
+                                expected += weight
+                                    * columns[column]
+                                        [(corner << remaining) + word * SLICED_LANES + row];
+                            }
+                            assert_eq!(
+                                Tower::from(actual[row]),
+                                expected,
+                                "{name} column {column}"
+                            );
+                        }
+                    }
+                }
+            });
+        }
+    }
+}
+
+fn plane_fold_fixture_bits(row: usize, column: usize, width: usize) -> usize {
+    let mixed = row
+        ^ (row >> 2)
+        ^ (row >> 4)
+        ^ (row >> 6)
+        ^ (row >> 8)
+        ^ (row >> 10)
+        ^ column.wrapping_mul(width + 5);
+    mixed & 3
+}
+
+fn plane_fold_trace_fixture(
+    num_vars: usize,
+    width: usize,
+    boolean: bool,
+) -> (SlicedTrace, Vec<Tower>) {
+    let height = 1 << num_vars;
+    let words = height / SLICED_LANES;
+    let mut values = vec![Tower::ZERO; height * width];
+    let mut cells = vec![[0; 2]; words * width];
+    for word in 0..words {
+        for column in 0..width {
+            for lane in 0..SLICED_LANES {
+                let row = word * SLICED_LANES + lane;
+                let bits = plane_fold_fixture_bits(row, column, width);
+                let bits = if boolean { bits & 1 } else { bits };
+                values[row * width + column] = gf4(bits);
+                cells[word * width + column][0] |= u64::from(bits & 1 != 0) << lane;
+                cells[word * width + column][1] |= u64::from(bits & 2 != 0) << lane;
+            }
+        }
+    }
+    (
+        SlicedTrace {
+            num_vars,
+            width,
+            cells,
+            successors: vec![],
+            boundary: vec![],
+            rounds: 0,
+        },
+        values,
+    )
+}
+
+#[test]
+fn plane_fold_reference_covers_prefixes_widths_and_special_challenges() {
+    let special = [
+        Tower::ZERO,
+        Tower::ONE,
+        Tower::interpolation_node(2),
+        Tower::from_repr(0x1234),
+    ];
+    for prefix_len in 3..=5 {
+        for width in [1, 3, 9] {
+            for boolean in [true, false] {
+                let (trace, values) = plane_fold_trace_fixture(11, width, boolean);
+                let remaining = trace.num_vars - prefix_len;
+                let words = 1 << (remaining - LANE_VARIABLES);
+                for special_index in 0..prefix_len {
+                    for &special_challenge in &special {
+                        let prefix = (0..prefix_len)
+                            .map(|index| {
+                                if index == special_index {
+                                    special_challenge
+                                } else {
+                                    Tower::from_repr((0x100 + index) as u128)
+                                }
+                            })
+                            .collect::<Vec<_>>();
+                        let fold = PlaneFold::<Tower>::new::<Gf4, Tower>(&trace, &prefix);
+                        let mut actual = vec![Tower::ZERO; SLICED_LANES];
+                        for column in 0..width {
+                            for word in 0..words {
+                                fold.fold_word(&trace.cells, column, word, &mut actual);
+                                for row in 0..SLICED_LANES {
+                                    let mut expected = Tower::ZERO;
+                                    for corner in 0..1 << prefix_len {
+                                        let mut weight = Tower::ONE;
+                                        for (i, &challenge) in prefix.iter().enumerate() {
+                                            weight *= if (corner >> (prefix_len - 1 - i)) & 1 == 0 {
+                                                Tower::ONE - challenge
+                                            } else {
+                                                challenge
+                                            };
+                                        }
+                                        expected += weight
+                                            * values[((corner << remaining)
+                                                + word * SLICED_LANES
+                                                + row)
+                                                * width
+                                                + column];
+                                    }
+                                    assert_eq!(Tower::from(actual[row]), expected);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn a_sliced_first_round_records_the_fit_for_the_fold() {
     let instances = [Instance::honest(
         FixtureAir::Gate { scale: Tower::ONE },

@@ -51,6 +51,9 @@ use crate::sliced::{LaneSums, SLICED_LANES, SlicedFolder, SlicedGf4, gf4_coordin
 /// count has a ceiling. A stage is also capped by the row variables its words leave unbound.
 pub const MAX_SLICED_ROUNDS: usize = 4;
 
+/// Maximum prefix length supported by direct plane materialization.
+const MAX_PLANE_FOLD_ROUNDS: usize = 5;
+
 /// How a sliced first round is used by a backend.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SlicedStrategy {
@@ -1194,7 +1197,7 @@ const GROUP_CORNERS: usize = 8;
 const GROUP_ENTRIES: usize = 1 << u8::BITS;
 
 /// Corners the bound variables of a sliced stage can range over.
-const MAX_CORNERS: usize = 1 << MAX_SLICED_ROUNDS;
+const MAX_CORNERS: usize = 1 << MAX_PLANE_FOLD_ROUNDS;
 
 /// Mask bytes one corner group of one residual row reads, one per plane.
 const PLANE_BYTES: usize = 2;
@@ -1236,6 +1239,8 @@ impl<'a, R: Field> PlaneFold<'a, R> {
         EF: Field + HasSubfield<S>,
         R: From<EF>,
     {
+        assert!(challenges.len() <= MAX_PLANE_FOLD_ROUNDS);
+        assert!(trace.num_vars >= challenges.len() + LANE_VARIABLES);
         let generator = R::from(EF::from(S::GENERATOR));
         let weights = Poly::new_from_point(challenges, EF::ONE)
             .as_slice()
