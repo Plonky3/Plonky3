@@ -2371,3 +2371,32 @@ fn every_prefix_grouping_yields_the_rounds_of_one_prefix_per_task() {
         }
     }
 }
+
+#[test]
+fn every_prefix_grouping_of_a_successor_stage_matches_the_generic_kernel() {
+    let height = 1 << 10;
+    let mut rng = SmallRng::seed_from_u64(0x6_0003);
+    let mut gate = Instance::honest(FixtureAir::Gate { scale: gf4(3) }, height, 0x6_0004);
+    // Every element of GF(4) breaks the constraints, so every round and selector fold is live.
+    for value in &mut gate.main.values {
+        *value = gf4(rng.random_range(0..4));
+    }
+    // The gate reads a successor and pins its last row.
+    // Every prefix then owns its `next` cells and its selector fold.
+    let instances = [gate, Instance::honest(FixtureAir::Pair, height, 0x6_0005)];
+    let under_budget = |cells| {
+        GROUP_LIMITS_OVERRIDE.with(|cell| cell.set(Some(budget_only(cells))));
+        let (rounds, ..) = sliced_rounds::<Ghash128>(&instances, Boundary::Unsliced);
+        GROUP_LIMITS_OVERRIDE.with(|cell| cell.set(None));
+        rounds
+    };
+
+    // A budget of one cell folds each prefix in a task of its own, as the generic kernel sees it.
+    let reference = under_budget(1);
+    assert_eq!(reference, generic_rounds(&instances));
+
+    // Growing budgets sweep every fixed-coordinate count, down to one group per word.
+    for budget in [2, 3, 4, 6, 8, 9, 12, 18, 27, 36, 54, 81, 108, usize::MAX] {
+        assert_eq!(under_budget(budget), reference, "budget {budget}");
+    }
+}
