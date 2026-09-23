@@ -14,7 +14,6 @@ use p3_multilinear_util::point::Point;
 use p3_sumcheck::layout::Table;
 use p3_sumcheck::{OpeningBatch, OpeningProtocol, TableShape, TableSpec};
 
-use crate::bus::BusContext;
 use crate::config::MultiStarkConfig;
 use crate::indexed::IndexedPlan;
 pub use crate::keys::{ProvingKey, VerifyingKey, setup};
@@ -44,8 +43,6 @@ pub(super) struct RunPoints<'a, EF> {
     bound: &'a Point<EF>,
     /// What the indexed reduction closed on, when the batch declared one.
     indexed: Option<&'a LogupStarOutput<EF>>,
-    /// Where the bus composition sumcheck closed, when present.
-    bus: Option<&'a Point<EF>>,
 }
 
 impl<'a, EF> RunPoints<'a, EF> {
@@ -53,13 +50,8 @@ impl<'a, EF> RunPoints<'a, EF> {
     pub(super) const fn new(
         bound: &'a Point<EF>,
         indexed: Option<&'a LogupStarOutput<EF>>,
-        bus: Option<&'a Point<EF>>,
     ) -> Self {
-        Self {
-            bound,
-            indexed,
-            bus,
-        }
+        Self { bound, indexed }
     }
 
     /// The point a batch of this role is opened at.
@@ -76,7 +68,6 @@ impl<'a, EF> RunPoints<'a, EF> {
             BatchRole::Air => self.bound,
             BatchRole::Position { .. } => &indexed().position_point,
             BatchRole::TableColumns { .. } => &indexed().table_point,
-            BatchRole::Bus { .. } => self.bus.expect("a bus batch needs its composition point"),
         }
     }
 }
@@ -89,6 +80,8 @@ impl<'a, EF> RunPoints<'a, EF> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum BatchRole {
     /// An AIR's own columns, at the point the zerocheck bound.
+    ///
+    /// Bus shares close at that same point, so they read this batch too.
     Air,
     /// One reader's position column, at the point the reduction left its position claims.
     Position {
@@ -101,11 +94,6 @@ pub(super) enum BatchRole {
     TableColumns {
         /// Position of the table in plan order.
         table: usize,
-    },
-    /// One AIR's columns at the bus composition terminal point.
-    Bus {
-        /// AIR position in statement order.
-        air: usize,
     },
 }
 
@@ -602,7 +590,6 @@ where
     pub(super) fn main_schedule<P>(
         &self,
         indexed: Option<&IndexedPlan>,
-        bus: Option<&BusContext<C::Val, C::Challenge>>,
         against: impl Fn(BatchRole, usize) -> P,
     ) -> OpeningSchedule<Opening<P>> {
         let mut tables = self
@@ -650,23 +637,6 @@ where
             }
         }
 
-        // A declaration resolves from the columns it names, so the batch opens only those.
-        if let Some(context) = bus {
-            for (air, table) in tables.iter_mut().enumerate() {
-                let columns = context.main_columns(air);
-                if context.contains_air(air) && !columns.is_empty() {
-                    let role = BatchRole::Bus { air };
-                    table.1.push((
-                        OpeningBatch::new(columns.to_vec(), Vec::new()),
-                        Opening {
-                            role,
-                            against: against(role, self.0[air].num_variables),
-                        },
-                    ));
-                }
-            }
-        }
-
         OpeningSchedule::new(tables)
     }
 
@@ -683,7 +653,6 @@ where
     pub(super) fn preprocessed_schedule<P>(
         &self,
         indexed: Option<&IndexedPlan>,
-        bus: Option<&BusContext<C::Val, C::Challenge>>,
         against: impl Fn(BatchRole, usize) -> P,
     ) -> OpeningSchedule<Opening<P>> {
         // Only AIRs with preprocessed columns are committed, so the two orders differ.
@@ -732,22 +701,6 @@ where
                         against: against(role, planned.table.num_variables),
                     },
                 ));
-            }
-        }
-
-        if let Some(context) = bus {
-            for (slot, &air) in committed.iter().enumerate() {
-                let columns = context.preprocessed_columns(air);
-                if context.contains_air(air) && !columns.is_empty() {
-                    let role = BatchRole::Bus { air };
-                    tables[slot].1.push((
-                        OpeningBatch::new(columns.to_vec(), Vec::new()),
-                        Opening {
-                            role,
-                            against: against(role, self.0[air].num_variables),
-                        },
-                    ));
-                }
             }
         }
 

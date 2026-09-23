@@ -9,15 +9,6 @@ use crate::config::{Commitment, MultiStarkConfig, PcsProof};
 use crate::fractional_gkr::FractionGkrProof;
 use crate::logup_star::LogupStarProof;
 
-/// Binary-native bus reduction and its commitment-binding composition sumcheck.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct BusProof<F, EF> {
-    /// Product-tree reduction yielding two unauthenticated terminal leaf claims.
-    pub product: p3_bus::BusProof<EF>,
-    /// Sumcheck binding those claims to the committed trace polynomials.
-    pub composition: GenericDegreeProof<F, EF>,
-}
-
 /// One batch's indexed-lookup round.
 ///
 /// # Soundness
@@ -51,8 +42,9 @@ pub struct IndexedLookupProof<F, EF> {
 ///
 /// The parts are checked in order against one shared transcript:
 /// - the commitment binds all main trace tables.
+/// - the optional bus proof reduces its push and pull products to two terminal claims.
 /// - the optional lookup proof reduces the materialized fractions with GKR.
-/// - the sumcheck reduces the AIR constraint to one bound-point claim.
+/// - one sumcheck reduces AIR constraints, lookup links, and bus shares to one bound-point claim.
 /// - the optional indexed round reduces every indexed read against that point.
 /// - the main opening proves all main trace tables at every point a claim was left at.
 /// - the preprocessed opening, when present, proves all preprocessed tables the same way.
@@ -65,9 +57,11 @@ pub struct MultiStarkProof<C: MultiStarkConfig> {
     pub lookup: Option<FractionGkrProof<C::Challenge>>,
     /// Indexed-lookup round, absent when no AIR declares an indexed read.
     pub indexed: Option<IndexedLookupProof<C::Val, C::Challenge>>,
-    /// Binary-native bus proof, absent when no AIR declares a bus interaction.
-    pub bus: Option<BusProof<C::Val, C::Challenge>>,
-    /// Zerocheck sumcheck transcript for the beta-batched AIR constraints.
+    /// Binary-native product-tree proof, absent when no AIR declares a bus interaction.
+    ///
+    /// Its terminal claims are bound to the committed tables by the shared sumcheck.
+    pub bus: Option<p3_bus::BusProof<C::Challenge>>,
+    /// Shared sumcheck for the AIR constraints, lookup links, and bus shares.
     pub sumcheck: GenericDegreeProof<C::Val, C::Challenge>,
     /// Main-trace opening for every committed main table.
     pub opening: PcsProof<C>,

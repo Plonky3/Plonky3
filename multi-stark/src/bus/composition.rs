@@ -1,10 +1,11 @@
-//! Sumcheck binding product-GKR leaf claims to committed trace polynomials.
+//! Bus family of the shared AIR sumcheck, binding product-GKR leaf claims to committed traces.
 //!
-//! For each direction, ProductGKR leaves a claim `L(q)`. This module proves
+//! For each direction, ProductGKR leaves a claim `L(q)`. This family proves
 //! `L(q) - 1` equals the weighted sum of the rowwise bus factors minus one.
 //! Short tables are lifted with `eq(prefix, 1^k)`, whose Boolean-cube sum is one.
 //!
-//! The terminal expression is checked only after its source columns open from the PCS.
+//! The family runs inside the zerocheck sumcheck, over the same cube and challenges.
+//! Its terminal expression is checked against the same openings the AIR constraints read.
 //!
 //! Round zero lifts every source column into the challenge field before any folding.
 //!
@@ -174,6 +175,10 @@ where
     EF: ExtensionField<F>,
 {
     /// Build the formal polynomial whose cube sum must equal the ProductGKR claims.
+    ///
+    /// # Arguments
+    ///
+    /// - `num_variables`: width of the shared cube, at least the tallest bus table.
     pub(crate) fn new(
         context: &'a BusContext<F, EF>,
         output: &BusReductionOutput<EF>,
@@ -181,8 +186,9 @@ where
         preprocessed: &[Option<&Table<F>>],
         public_values: &[&[F]],
         direction_challenge: EF,
+        num_variables: usize,
     ) -> Self {
-        let num_variables = context.max_num_variables();
+        debug_assert!(num_variables >= context.max_num_variables());
         let weights = output.challenges.fingerprint_weights();
         let mut airs = (0..tables.len()).map(|_| None).collect::<Vec<_>>();
 

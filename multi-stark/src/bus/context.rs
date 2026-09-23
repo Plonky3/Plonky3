@@ -1,8 +1,9 @@
 //! Binding binary-native bus terminal claims to committed AIR columns.
 //!
-//! [`BusContext`] derives every block and opening from AIR metadata. It materializes
-//! the ProductGKR leaves for proving and reconstructs the formal composition from
-//! commitment-bound column evaluations for verification.
+//! [`BusContext`] derives every block and the columns it reads from AIR metadata.
+//! It materializes the ProductGKR leaves for proving.
+//! It evaluates the bus shares at the shared sumcheck point for verification.
+//! Those evaluations read each AIR's single opening at that point.
 
 use alloc::vec::Vec;
 
@@ -65,7 +66,7 @@ where
             return Ok(None);
         };
 
-        // Only the columns a declaration reads have to be opened, lifted and folded.
+        // Only the columns a declaration reads are lifted into the shared sumcheck and folded.
         let (main_columns, preprocessed_columns) = profiles
             .iter()
             .map(|profile| {
@@ -135,7 +136,7 @@ where
         Ok(())
     }
 
-    /// Checked layout used by both the transcript and opening schedule.
+    /// Checked layout read by the product tree, the shared sumcheck and the security report.
     pub(crate) const fn plan(&self) -> &BusPlan {
         // One shared plan keeps physical leaf order identical across every phase.
         &self.plan
@@ -175,13 +176,11 @@ where
             .expect("a bus context contains at least one declaration")
     }
 
-    /// Whether one AIR owns any bus declaration.
-    pub(crate) fn contains_air(&self, air: usize) -> bool {
-        // Only participating tables need a second prescribed-point opening.
-        !self.profiles[air].interactions().is_empty()
-    }
-
     /// Evaluate the formal bus composition at the terminal sumcheck point.
+    ///
+    /// The point spans the shared cube, which may be wider than any bus table.
+    /// Each share reads its rows off the point's suffix.
+    /// Every coordinate ahead of that suffix joins its all-one-vertex selector.
     pub(crate) fn terminal_composition(
         &self,
         output: &p3_bus::BusReductionOutput<EF>,
@@ -191,8 +190,8 @@ where
         preprocessed: &[&[EF]],
         public_values: &[&[F]],
     ) -> Result<EF, BusBindingError> {
-        // The terminal point belongs to the tallest participating table.
-        if point.num_variables() != self.max_num_variables() {
+        // The terminal point must at least address the tallest participating table.
+        if point.num_variables() < self.max_num_variables() {
             return Err(BusBindingError::CompositionPointDimension {
                 expected: self.max_num_variables(),
                 actual: point.num_variables(),
@@ -431,7 +430,7 @@ mod tests {
     }
 
     #[test]
-    fn only_the_columns_a_declaration_reads_are_scheduled() {
+    fn only_the_columns_a_declaration_reads_are_lifted() {
         // This AIR has two main columns and its declaration reads the second one.
         let context = BusContext::<BabyBear, BabyBear>::build(&[&TwoColumnAir], &[1])
             .unwrap()

@@ -448,6 +448,7 @@ fn zerocheck_cases() -> Vec<Case> {
                 interactions: 0,
             },
         ],
+        bus_degree: None,
     };
 
     let mut taller = plain.clone();

@@ -175,24 +175,34 @@ impl MultiStarkSecurityReport {
     }
 }
 
-fn bus_composition_terms(
-    field_bits: NonZeroUsize,
-    num_variables: usize,
-    degree: usize,
-) -> [SecurityTerm; 2] {
-    // One fresh scalar batches the push and pull identities.
-    let direction = SecurityTerm::new(
-        "binary-bus-direction-batching",
-        ErrorBits::from_log2(field_bits.get() as f64),
-    );
-
-    // Schwartz--Zippel charges at most one degree-D identity test per round.
-    let events = num_variables.saturating_mul(degree);
-    let composition = SecurityTerm::new(
-        "binary-bus-composition-sumcheck",
-        ErrorBits::from_log2((field_bits.get() as f64 - libm::log2(events as f64)).max(0.0)),
-    );
-    [direction, composition]
+/// Charge the one challenge that folds the bus family into the shared sumcheck.
+///
+/// Lambda weighs pull against push, then the bus against the AIR family.
+/// A false claim leaves this residual in the shared sumcheck:
+///
+/// ```text
+///     residual(tau, lambda) = P(tau) + lambda * d_push + lambda^2 * d_pull
+/// ```
+///
+/// - `P` is the AIR family's residual as a polynomial in tau, fixed before lambda.
+/// - `d_push` and `d_pull` are the bus share errors, fixed by ProductGKR before lambda.
+/// - tau's free coordinates are drawn after lambda.
+/// - So `P(tau)` itself is not fixed when lambda is drawn.
+///
+/// Two cases cover every forgery:
+/// - `P` nonconstant: tau catches it, and the `zerocheck` term already charges that event.
+/// - `P` constant: the residual is a nonzero polynomial of degree at most two in lambda.
+///
+/// Schwartz--Zippel bounds the second case by `2 / |EF|`.
+/// So the `zerocheck` term does not grow, and this term charges only the second case.
+///
+/// The sumcheck rounds themselves are charged by the `constraint-sumcheck` term.
+/// Its degree already covers the bus composition.
+fn bus_batching_term(field_bits: NonZeroUsize) -> SecurityTerm {
+    SecurityTerm::new(
+        "binary-bus-batching",
+        ErrorBits::from_log2(field_bits.get() as f64 - 1.0),
+    )
 }
 
 impl IndexedPlan {
@@ -403,7 +413,7 @@ where
             .checked_mul(tuples)
             .and_then(|count| num_fractions.checked_add(count))
             .ok_or_else(|| invalid("lookup dimensions overflow"))?;
-        // Binary-bus declarations are reduced outside the zerocheck and do not count here.
+        // Binary-bus declarations raise the shared round degree below, not the constraint count.
         if constraints == 0 && tuples == 0 {
             return Err(invalid("AIR declares no constraints or lookup tuples"));
         }
@@ -429,6 +439,14 @@ where
     let indexed = IndexedPlan::build::<C::Val, C::Challenge, A>(&instances.airs(), &heights)?;
     let bus = BusContext::<C::Val, C::Challenge>::build(&instances.airs(), &heights)
         .map_err(|_| invalid("binary-bus declarations do not define a supported plan"))?;
+    // The bus family shares the constraint sumcheck.
+    // Its composition degree already counts its own equality weight.
+    // The AIR degree is charged one more for the zerocheck weight.
+    //
+    //     round degree = max(air + 1, bus)
+    let max_degree = bus.as_ref().map_or(max_degree, |context| {
+        max_degree.max(context.composition_degree().saturating_sub(1))
+    });
     let logup_star = indexed.as_ref().map(IndexedPlan::security_params);
     let num_variables = heights
         .iter()
@@ -462,11 +480,7 @@ where
         let field_bits = NonZeroUsize::new(field_bits)
             .ok_or_else(|| invalid("binary-bus challenge field is trivial"))?;
         report.terms.push(context.plan().security_term(field_bits));
-        report.terms.extend(bus_composition_terms(
-            field_bits,
-            context.max_num_variables(),
-            context.composition_degree(),
-        ));
+        report.terms.push(bus_batching_term(field_bits));
     }
     let num_reduction_terms = report.terms.len();
     // The scheme is assessed against the opening protocol verification actually runs.
@@ -482,7 +496,7 @@ where
         "main-pcs",
         config.pcs().prescribed_security(
             &instances
-                .main_schedule(indexed.as_ref(), bus.as_ref(), |_, _| ())
+                .main_schedule(indexed.as_ref(), |_, _| ())
                 .into_protocol(),
         ),
     );
@@ -491,7 +505,7 @@ where
             "preprocessed-pcs",
             config.preprocessed_pcs().prescribed_security(
                 &instances
-                    .preprocessed_schedule(indexed.as_ref(), bus.as_ref(), |_, _| ())
+                    .preprocessed_schedule(indexed.as_ref(), |_, _| ())
                     .into_protocol(),
             ),
         );
@@ -513,14 +527,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn bus_composition_terms_charge_only_their_actual_randomness() {
-        let [direction, composition] =
-            bus_composition_terms(NonZeroUsize::new(128).unwrap(), 12, 4);
+    fn bus_batching_charges_a_degree_two_polynomial_in_lambda() {
+        // Two roots out of 2^128 candidates leave 127 bits.
+        let term = bus_batching_term(NonZeroUsize::new(128).unwrap());
 
-        assert_eq!(direction.label, "binary-bus-direction-batching");
-        assert_eq!(direction.bits.bits(), 128.0);
-        assert_eq!(composition.label, "binary-bus-composition-sumcheck");
-        assert_eq!(composition.bits.bits(), 128.0 - 48.0_f64.log2());
+        assert_eq!(term.label, "binary-bus-batching");
+        assert_eq!(term.bits.bits(), 127.0);
     }
 
     #[test]
