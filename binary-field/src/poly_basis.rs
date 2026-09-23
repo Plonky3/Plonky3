@@ -6,6 +6,8 @@
 //! The coordinates stay a bare integer on purpose.
 //! Wrapped, the two bases look alike, and a value in the wrong one is silently wrong.
 
+use alloc::vec::Vec;
+
 use crate::tower::TowerLevel;
 use crate::{BinaryField128, clmul, poly_slice};
 
@@ -131,20 +133,200 @@ pub fn butterfly_inverse(lo: &mut [u128], hi: &mut [u128], scalar: u128) {
     poly_slice::butterfly_inverse(lo, hi, scalar);
 }
 
+/// Stages [`LowStageTwiddles::forward`] runs together, over runs of `2^LOW_STAGES` elements.
+pub const LOW_STAGES: usize = poly_slice::LOW_STAGES;
+
+/// A value beside its product with `x^64`, the companion the packed multiply scales by.
+///
+/// The product is linear in the value, so a sum of pairs is the pair of the sum.
+type Pair = [u128; 2];
+
+/// The sum of two values, each beside its companion.
+#[inline(always)]
+const fn add(a: Pair, b: Pair) -> Pair {
+    [a[0] ^ b[0], a[1] ^ b[1]]
+}
+
+/// The twiddles of the lowest [`LOW_STAGES`] stages of a single-column additive transform.
+///
+/// Stage `j` pairs elements `2^j` apart, and block `b` of that stage, its `2^(j+1)` elements
+/// from `2^(j+1) b` on, scales by one twiddle, affine in `b`:
+///
+/// ```text
+///     twiddle(j, b) = shifts[j] + Σ basis[k]    over the set bits k of b
+/// ```
+///
+/// A run of `2^LOW_STAGES` elements is closed under all of those stages, so they run together
+/// while the run sits in registers, instead of in one sweep of the slice each.
+#[derive(Clone, Debug)]
+pub struct LowStageTwiddles {
+    /// `shifts[j]` for each low stage.
+    shifts: [Pair; LOW_STAGES],
+    /// `prefix[n]` is the sum of the first `n` basis elements.
+    prefix: Vec<Pair>,
+    /// `steps[t][j]` is what stage `j`'s twiddle moves by past a run index with `t` trailing
+    /// ones, for every `t` a run inside the basis can have.
+    steps: Vec<[Pair; LOW_STAGES]>,
+}
+
+impl LowStageTwiddles {
+    /// The twiddles of a transform with these stage shifts and this block basis.
+    ///
+    /// # Panics
+    /// Panics if `shifts` holds fewer than [`LOW_STAGES`] stages, or `basis` holds fewer than
+    /// `LOW_STAGES - 1` elements.
+    pub fn new(shifts: &[u128], basis: &[u128]) -> Self {
+        assert!(
+            basis.len() >= LOW_STAGES - 1,
+            "the low stages need at least three basis elements"
+        );
+        let pair = |value: u128| [value, clmul::poly_mul_128(value, 1 << 64)];
+        let prefix: Vec<Pair> = core::iter::once(0)
+            .chain(basis.iter().scan(0, |sum, &element| {
+                *sum ^= element;
+                Some(*sum)
+            }))
+            .map(pair)
+            .collect();
+        // Stepping a run index with `t` trailing ones flips its `t + 1` lowest bits, which stage
+        // `j` reads from `basis[LOW_STAGES - 1 - j]` on. Stage 0 reads the highest, so it is
+        // what bounds `t`.
+        let steps = (0..(basis.len() + 1).saturating_sub(LOW_STAGES))
+            .map(|trailing| {
+                core::array::from_fn(|j| {
+                    let from = LOW_STAGES - 1 - j;
+                    add(prefix[from + trailing + 1], prefix[from])
+                })
+            })
+            .collect();
+        Self {
+            shifts: core::array::from_fn(|j| pair(shifts[j])),
+            prefix,
+            steps,
+        }
+    }
+
+    /// Runs the low stages of the forward transform over `values`.
+    ///
+    /// `values` starts at element `2^LOW_STAGES · first_run` of the transform, and ends on a
+    /// whole run of `2^LOW_STAGES` elements.
+    ///
+    /// # Panics
+    /// Panics if `values` ends inside a run, or if a run lies past the basis the twiddles hold.
+    pub fn forward(&self, values: &mut [u128], first_run: usize) {
+        assert_eq!(
+            values.len() % (1 << LOW_STAGES),
+            0,
+            "the low stages run over whole runs"
+        );
+        poly_slice::forward_low_stages(values, first_run, self);
+    }
+
+    /// The sum of the basis elements the set bits of `bits` select, counted from `basis[from]`.
+    #[inline(always)]
+    pub(crate) fn span(&self, mut bits: usize, from: usize) -> Pair {
+        let mut sum = [0; 2];
+        while bits != 0 {
+            let k = from + bits.trailing_zeros() as usize;
+            sum = add(sum, add(self.prefix[k + 1], self.prefix[k]));
+            bits &= bits - 1;
+        }
+        sum
+    }
+
+    /// Each low stage's twiddle for the first pair of run `run`.
+    ///
+    /// Stage `j` sees the run as `2^(LOW_STAGES-1-j)` of its blocks, so the run index reaches
+    /// its twiddle shifted up by that many basis elements.
+    #[inline(always)]
+    pub(crate) fn run_twiddles(&self, run: usize) -> [Pair; LOW_STAGES] {
+        core::array::from_fn(|j| add(self.shifts[j], self.span(run, LOW_STAGES - 1 - j)))
+    }
+
+    /// What each low stage's twiddle moves by from run `run` to the run after it.
+    ///
+    /// Stepping `run` flips its trailing ones and the zero above them.
+    /// So each stage's twiddle moves by the sum of that many consecutive basis elements.
+    #[inline(always)]
+    pub(crate) fn step(&self, run: usize) -> &[Pair; LOW_STAGES] {
+        &self.steps[run.trailing_ones() as usize]
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use alloc::vec::Vec;
+
     use p3_field::PrimeCharacteristicRing;
     use proptest::prelude::*;
 
-    use super::{from_tower, mul, square, to_tower};
+    use super::{LOW_STAGES, LowStageTwiddles, from_tower, mul, square, to_tower};
     use crate::BinaryField128;
+
+    /// Elements in one run of the low stages.
+    const LOW_RUN: usize = 1 << LOW_STAGES;
+
+    /// Basis elements the low-stage tests draw, enough for every run index they reach.
+    const LOW_BASIS: usize = 40;
 
     /// Building an element from a 128-bit pattern, which every pattern is a valid one of.
     fn element(bits: u128) -> BinaryField128 {
         BinaryField128::from_le_bytes(bits.to_le_bytes())
     }
 
+    /// The low stages one stage at a time over the whole slice, each pair scaled by the twiddle
+    /// its block index selects, summed straight from the basis.
+    fn reference_low_stages(
+        values: &mut [u128],
+        first_run: usize,
+        shifts: &[u128],
+        basis: &[u128],
+    ) {
+        let first = first_run << LOW_STAGES;
+        for j in (0..LOW_STAGES).rev() {
+            let half = 1 << j;
+            for (index, pair) in values.chunks_exact_mut(2 * half).enumerate() {
+                let block = (first >> (j + 1)) + index;
+                let twiddle = (0..basis.len())
+                    .filter(|k| (block >> k) & 1 == 1)
+                    .fold(shifts[j], |twiddle, k| twiddle ^ basis[k]);
+                let (lo, hi) = pair.split_at_mut(half);
+                for (lo, hi) in lo.iter_mut().zip(hi) {
+                    *lo ^= mul(twiddle, *hi);
+                    *hi ^= *lo;
+                }
+            }
+        }
+    }
+
+    /// Run indices whose successors carry across many bits, beside small and random ones.
+    fn run_index() -> impl Strategy<Value = usize> {
+        prop_oneof![
+            0usize..64,
+            Just((1 << 20) - 1),
+            Just((1 << 24) - 2),
+            0usize..1 << 24,
+        ]
+    }
+
     proptest! {
+        /// Invariant: running the low stages together within each run reorders nothing that
+        /// depends on order, so every element matches the stage-at-a-time schedule.
+        #[test]
+        fn the_low_stages_match_one_stage_at_a_time(
+            shifts in any::<[u128; LOW_STAGES]>(),
+            basis in prop::collection::vec(any::<u128>(), LOW_BASIS),
+            values in prop::collection::vec(any::<u128>(), 5 * LOW_RUN),
+            runs in 0usize..=5,
+            first_run in run_index(),
+        ) {
+            let mut actual: Vec<u128> = values[..runs * LOW_RUN].to_vec();
+            let mut expected = actual.clone();
+            reference_low_stages(&mut expected, first_run, &shifts, &basis);
+            LowStageTwiddles::new(&shifts, &basis).forward(&mut actual, first_run);
+            prop_assert_eq!(actual, expected);
+        }
+
         #[test]
         fn the_change_of_basis_round_trips(bits in any::<u128>()) {
             let x = element(bits);
@@ -213,6 +395,19 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    #[should_panic = "the low stages run over whole runs"]
+    fn the_low_stages_reject_a_partial_run() {
+        let twiddles = LowStageTwiddles::new(&[1; LOW_STAGES], &[1; LOW_BASIS]);
+        twiddles.forward(&mut [0; LOW_RUN + 1], 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "the low stages need at least three basis elements")]
+    fn the_low_stages_reject_a_short_basis() {
+        LowStageTwiddles::new(&[1; LOW_STAGES], &[1; LOW_STAGES - 2]);
     }
 
     #[test]

@@ -13,13 +13,14 @@ use rand::{RngExt, SeedableRng};
 
 use super::columns::{Blake3BinaryCols, Blake3BinaryGCols, NUM_BLAKE3_BINARY_COLS};
 use super::generation::{
-    Blake3CompressionInput, generate_binary_trace_packed, generate_binary_trace_rows,
+    Blake3CompressionInput, NUM_INPUT_WORDS, generate_binary_trace_packed,
+    generate_binary_trace_rows,
 };
 use super::{G_PER_ROUND, G_SCHEDULE, NUM_ROUNDS, iv_word};
 use crate::constants::permute;
 
 /// Number of input bits: chaining value, message, counter, block length and flags.
-pub(super) const NUM_INPUT_BITS: usize = (8 + 16 + 4) * 32;
+pub(super) const NUM_INPUT_BITS: usize = NUM_INPUT_WORDS * 32;
 
 /// Constraints per G step: two 3-operand and two 2-operand additions.
 const CONSTRAINTS_PER_G: usize = 2 * (31 + 32) + 2 * 32;
@@ -96,8 +97,8 @@ impl Blake3BinaryAir {
     /// Generate the same fixed-seed random compression inputs as
     /// [`Self::generate_random_trace_rows`], packed into one `u64` per 64 trace rows.
     ///
-    /// The generic field controls the reusable temporary row used by the generator and does not
-    /// affect the resulting bits.
+    /// The generic field names only the characteristic the cells are read in and does not affect
+    /// the resulting bits.
     pub fn generate_random_trace_packed<F: Field>(&self, num_hashes: usize) -> RowMajorMatrix<u64> {
         let mut rng = SmallRng::seed_from_u64(1);
         let inputs = (0..num_hashes)

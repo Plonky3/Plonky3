@@ -158,12 +158,114 @@ pub(crate) fn for_each_staged_tile<T, P>(
     }
 }
 
+/// Gather every tile of the leading coset once, and scatter one result per coset from it.
+///
+/// `values` is `values.len() / coset_len` cosets of `coset_len` elements, and the tiles lay out
+/// the leading one. Each gathered tile goes to `prepare` once. Every coset then gets its own
+/// copy of the prepared tile, handed to `process` with its block and the coset's index, and
+/// scattered to the same runs of that coset. The leading coset is processed last, from the
+/// gathered tile itself, once every other coset has taken its copy.
+///
+/// # Panics
+/// Panics if the cosets do not partition `values`, if the tiles do not partition one coset, if
+/// a tile's walk reaches past the end of a coset, or if `coset_len` or `run` is zero.
+pub(crate) fn for_each_staged_tile_into_cosets<T, Q, P>(
+    values: &mut [T],
+    coset_len: usize,
+    runs: StagedRuns,
+    dispatch: Dispatch,
+    prepare: Q,
+    process: P,
+) where
+    T: Copy + Send + Sync,
+    Q: Fn(&mut [T]) + Send + Sync,
+    P: Fn(&mut [T], usize, usize) + Send + Sync,
+{
+    let StagedRuns { run, depth, .. } = runs;
+    let cosets = values.len() / coset_len;
+    let rows = 1 << depth;
+    let tile_len = run << depth;
+    let tiles = coset_len / tile_len;
+    // Runs in one coset.
+    let count = coset_len / run;
+    assert_eq!(
+        cosets * coset_len,
+        values.len(),
+        "cosets do not partition the matrix"
+    );
+    assert_eq!(
+        tiles * tile_len,
+        coset_len,
+        "tiles do not partition the coset"
+    );
+
+    let base = DisjointMutPtr::new(values);
+    // Every run of every coset, `coset` cosets past the leading one.
+    let slice_of = move |index: usize, k: usize, coset: usize| {
+        coset * coset_len + runs.run_index(index, k) * run
+    };
+    let task = move |(tile, copy): &mut (Vec<T>, Vec<T>), index: usize| {
+        // As in `for_each_staged_tile`: the walk ascends, so bounding its last run bounds all.
+        assert!(
+            runs.run_index(index, rows - 1) < count,
+            "staged row walk leaves the coset"
+        );
+
+        tile.clear();
+        for k in 0..rows {
+            // SAFETY: `run_index` is injective over `(index, k)`, as `StagedRuns` sets out, and
+            // the assert above keeps every run inside the leading coset, so no two tasks and no
+            // two iterations of one task reach the same element. The exclusive borrow the
+            // pointer came from outlives every task, since the pass returns only once all of
+            // them have run.
+            let source = unsafe { base.slice(slice_of(index, k, 0), run) };
+            tile.extend_from_slice(source);
+        }
+        debug_assert_eq!(tile.len(), tile_len, "the gather left the tile short");
+        prepare(tile.as_mut_slice());
+
+        let block = runs.block(index);
+        for coset in (0..cosets).rev() {
+            let staged = if coset == 0 {
+                &mut *tile
+            } else {
+                copy.clear();
+                copy.extend_from_slice(&tile[..]);
+                &mut *copy
+            };
+            process(staged.as_mut_slice(), block, coset);
+            for (k, source) in staged.chunks_exact(run).enumerate() {
+                // SAFETY: the runs the gather reached, moved whole cosets along, so they stay
+                // disjoint across tasks, iterations and cosets, and inside `values` since every
+                // coset is `coset_len` long.
+                let target = unsafe { base.slice_mut(slice_of(index, k, coset), run) };
+                target.copy_from_slice(source);
+            }
+        }
+    };
+
+    // Two buffers per worker, not per tile: the gathered tile and the copy a coset runs on.
+    let new_tiles = || (Vec::with_capacity(tile_len), Vec::with_capacity(tile_len));
+    match dispatch {
+        Dispatch::Parallel { min_len } => (0..tiles)
+            .into_par_iter()
+            .with_min_len(min_len)
+            .for_each_init(new_tiles, task),
+        Dispatch::Serial => {
+            let mut buffers = new_tiles();
+            for index in 0..tiles {
+                task(&mut buffers, index);
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use alloc::vec::Vec;
     use alloc::{format, vec};
 
-    use super::{Dispatch, StagedRuns, for_each_staged_tile};
+    use super::{Dispatch, StagedRuns, for_each_staged_tile, for_each_staged_tile_into_cosets};
 
     #[test]
     fn the_tiles_partition_the_runs() {
@@ -244,6 +346,84 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn every_coset_receives_its_own_result_of_the_leading_one() {
+        let dispatches = [
+            Dispatch::Serial,
+            Dispatch::Parallel { min_len: 1 },
+            Dispatch::Parallel { min_len: 4 },
+        ];
+        for dispatch in dispatches {
+            for cosets in [1usize, 2, 4] {
+                for run in [1usize, 3] {
+                    for (log_runs, log_stride, depth) in
+                        [(6, 2, 3), (6, 0, 6), (6, 6, 0), (5, 1, 2)]
+                    {
+                        let coset_len = run << log_runs;
+                        let label = format!(
+                            "{dispatch:?} cosets={cosets} run={run} log_runs={log_runs} \
+                             log_stride={log_stride} depth={depth}"
+                        );
+                        // The leading coset holds its own positions, and every later coset a
+                        // marker the pass has to overwrite.
+                        let mut values: Vec<u64> = (0..coset_len as u64)
+                            .chain(core::iter::repeat_n(u64::MAX, (cosets - 1) * coset_len))
+                            .collect();
+
+                        for_each_staged_tile_into_cosets(
+                            &mut values,
+                            coset_len,
+                            StagedRuns::new(run, log_stride, depth),
+                            dispatch,
+                            |tile| tile.iter_mut().for_each(|value| *value *= 2),
+                            |tile, block, coset| {
+                                for (k, staged) in tile.chunks_exact_mut(run).enumerate() {
+                                    // Each run arrives whole, in order and prepared once, so its
+                                    // first element names it.
+                                    let r = staged[0] as usize / (2 * run);
+                                    for (j, &value) in staged.iter().enumerate() {
+                                        assert_eq!(value, 2 * (r * run + j) as u64, "{label}");
+                                    }
+                                    assert_eq!(r >> (log_stride + depth), block, "{label}");
+                                    assert_eq!(
+                                        (r >> log_stride) & ((1 << depth) - 1),
+                                        k,
+                                        "{label}"
+                                    );
+                                    for value in staged.iter_mut() {
+                                        *value += (coset * coset_len) as u64;
+                                    }
+                                }
+                            },
+                        );
+
+                        // Element `i` of coset `c` is the doubled leading element moved `c`
+                        // cosets along.
+                        for (i, &value) in values.iter().enumerate() {
+                            let (coset, offset) = (i / coset_len, i % coset_len);
+                            let want = 2 * offset as u64 + (coset * coset_len) as u64;
+                            assert_eq!(value, want, "i={i} {label}");
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    #[should_panic = "cosets do not partition the matrix"]
+    fn cosets_that_do_not_partition_the_matrix_are_refused() {
+        let mut values = vec![0u8; 12];
+        for_each_staged_tile_into_cosets(
+            &mut values,
+            8,
+            StagedRuns::new(1, 1, 2),
+            Dispatch::Serial,
+            |_| {},
+            |_, _, _| {},
+        );
     }
 
     #[test]

@@ -3,8 +3,33 @@
 //! A prefix runs packed wherever the carryless multiply reaches several 128-bit lanes.
 //!
 //! Everything else runs one element at a time.
+//!
+//! The lowest stages of a single-column transform have their own kernel, which runs them
+//! together over short runs of the column.
 
 use crate::clmul;
+use crate::poly_basis::LowStageTwiddles;
+
+/// Stages the low-stage kernel runs together, over runs of `2^LOW_STAGES` elements.
+///
+/// Four stages span sixteen elements, which is four registers of the widest packing.
+pub(crate) const LOW_STAGES: usize = 4;
+
+/// Elements in one run of the low-stage kernel.
+const LOW_RUN: usize = 1 << LOW_STAGES;
+
+/// Run the lowest [`LOW_STAGES`] stages of a forward transform over whole runs of the slice.
+///
+/// The slice starts at run `first_run` of the transform, and its length is a whole number of
+/// runs, which the caller asserts.
+#[inline]
+pub(crate) fn forward_low_stages(
+    values: &mut [u128],
+    first_run: usize,
+    twiddles: &LowStageTwiddles,
+) {
+    low::forward(values, first_run, twiddles);
+}
 
 /// Multiply every element of a slice by the same scalar.
 #[inline]
@@ -163,6 +188,199 @@ mod wide {
             }
         }
         blocks * WIDTH
+    }
+}
+
+/// The low stages of a run, with its four registers held through all of them.
+///
+/// # Algorithm
+///
+/// Register `r` holds elements `4r .. 4r + 4` of the run. Stages 3 and 2 pair whole registers,
+/// eight and four elements apart, and every pair shares one twiddle:
+///
+/// ```text
+///     stage 3   (R0, R2)  (R1, R3)          block 0 of the run
+///     stage 2   (R0, R1)                    block 0
+///               (R2, R3)                    block 1
+/// ```
+///
+/// Stages 1 and 0 pair lanes of one register, so each pair of registers is interleaved until
+/// the partners sit in the same lane of two registers, one block per lane:
+///
+/// ```text
+///     a = R0, b = R1        lower half               upper half
+///     stage 1               a0 a1 b0 b1   blocks 0 0 1 1    a2 a3 b2 b3
+///     stage 0               a0 a2 b0 b2   blocks 0 1 2 3    a1 a3 b1 b3
+/// ```
+///
+/// Undoing both interleaves in reverse order puts the elements back in their own lanes.
+/// The second pair of registers is the same, with blocks two and four further on.
+#[cfg(all(
+    target_arch = "x86_64",
+    target_feature = "vpclmulqdq",
+    target_feature = "avx512f"
+))]
+mod low {
+    use super::LOW_RUN;
+    use crate::packed::lanes::{self, Reg, WIDTH};
+    use crate::packed::split::SplitScalar;
+    use crate::poly_basis::LowStageTwiddles;
+
+    // A run is exactly four registers, which the register assignment above relies on.
+    const _: () = assert!(LOW_RUN == 4 * WIDTH);
+
+    /// A value and its companion as two registers, each the same in every lane.
+    #[inline(always)]
+    fn broadcast(pair: [u128; 2]) -> [Reg; 2] {
+        [lanes::broadcast(pair[0]), lanes::broadcast(pair[1])]
+    }
+
+    /// Four values and their companions, one per lane, as two registers.
+    #[inline(always)]
+    fn per_lane(pairs: [[u128; 2]; WIDTH]) -> [Reg; 2] {
+        let values = pairs.map(|pair| pair[0]);
+        let companions = pairs.map(|pair| pair[1]);
+        // SAFETY: each array is one register of `u128` lanes, read unaligned.
+        unsafe {
+            [
+                lanes::load(values.as_ptr()),
+                lanes::load(companions.as_ptr()),
+            ]
+        }
+    }
+
+    /// The lane-by-lane sum of two values held beside their companions.
+    #[inline(always)]
+    fn add(a: [Reg; 2], b: [Reg; 2]) -> [Reg; 2] {
+        [lanes::xor(a[0], b[0]), lanes::xor(a[1], b[1])]
+    }
+
+    /// The multiplier a value and its companion describe.
+    #[inline(always)]
+    const fn twiddle(pair: [Reg; 2]) -> SplitScalar<Reg> {
+        SplitScalar::from_parts(pair[0], pair[1])
+    }
+
+    /// `(lo, hi) -> (lo + t·hi, lo + (t + 1)·hi)`, lane by lane.
+    #[inline(always)]
+    fn butterfly(lo: &mut Reg, hi: &mut Reg, twiddle: SplitScalar<Reg>) {
+        *lo = lanes::xor(*lo, twiddle.apply(*hi));
+        *hi = lanes::xor(*hi, *lo);
+    }
+
+    /// Stages 1 and 0 of one pair of registers, each twiddle laid out lane by lane as above.
+    #[inline(always)]
+    fn lane_stages(
+        a: &mut Reg,
+        b: &mut Reg,
+        twiddle_1: SplitScalar<Reg>,
+        twiddle_0: SplitScalar<Reg>,
+    ) {
+        let (mut lo, mut hi) = lanes::interleave(*a, *b, 2);
+        butterfly(&mut lo, &mut hi, twiddle_1);
+        let (mut lo, mut hi) = lanes::interleave(lo, hi, 1);
+        butterfly(&mut lo, &mut hi, twiddle_0);
+        let (lo, hi) = lanes::interleave(lo, hi, 1);
+        (*a, *b) = lanes::interleave(lo, hi, 2);
+    }
+
+    /// Runs the low stages over every whole run of the slice.
+    #[inline(never)]
+    pub(super) fn forward(values: &mut [u128], first_run: usize, twiddles: &LowStageTwiddles) {
+        let (runs, _) = values.as_chunks_mut::<LOW_RUN>();
+
+        // Within a run, stage `j` offsets its twiddle by the span of its block index there.
+        let span = |block: usize| twiddles.span(block, 0);
+        // Stage 2, second pair of registers: block 1.
+        let second_block = broadcast(span(1));
+        // Stage 1, lanes as interleaved above: blocks 0 0 1 1, then 2 2 3 3.
+        let offsets_1 = [
+            per_lane([span(0), span(0), span(1), span(1)]),
+            per_lane([span(2), span(2), span(3), span(3)]),
+        ];
+        // Stage 0: blocks 0 1 2 3, then 4 5 6 7.
+        let offsets_0 = [
+            per_lane([span(0), span(1), span(2), span(3)]),
+            per_lane([span(4), span(5), span(6), span(7)]),
+        ];
+
+        // The twiddles walk from run to run in registers, each stage's the same in every lane.
+        let mut run_twiddles = twiddles.run_twiddles(first_run).map(broadcast);
+        for (index, run) in runs.iter_mut().enumerate() {
+            if index != 0 {
+                let step = twiddles.step(first_run + index - 1);
+                for (twiddle, step) in run_twiddles.iter_mut().zip(step) {
+                    *twiddle = add(*twiddle, broadcast(*step));
+                }
+            }
+            let [t0, t1, t2, t3] = run_twiddles;
+
+            // SAFETY: a run is four whole registers, read and written unaligned. The target
+            // features the instructions need gate this module.
+            unsafe {
+                let base = run.as_mut_ptr();
+                let [mut r0, mut r1, mut r2, mut r3] =
+                    core::array::from_fn(|r| lanes::load(base.add(r * WIDTH)));
+
+                let twiddle_3 = twiddle(t3);
+                butterfly(&mut r0, &mut r2, twiddle_3);
+                butterfly(&mut r1, &mut r3, twiddle_3);
+
+                butterfly(&mut r0, &mut r1, twiddle(t2));
+                butterfly(&mut r2, &mut r3, twiddle(add(t2, second_block)));
+
+                lane_stages(
+                    &mut r0,
+                    &mut r1,
+                    twiddle(add(t1, offsets_1[0])),
+                    twiddle(add(t0, offsets_0[0])),
+                );
+                lane_stages(
+                    &mut r2,
+                    &mut r3,
+                    twiddle(add(t1, offsets_1[1])),
+                    twiddle(add(t0, offsets_0[1])),
+                );
+
+                for (r, register) in [r0, r1, r2, r3].into_iter().enumerate() {
+                    lanes::store(base.add(r * WIDTH), register);
+                }
+            }
+        }
+    }
+}
+
+/// The low stages one at a time within each run, through the slice butterflies.
+#[cfg(not(all(
+    target_arch = "x86_64",
+    target_feature = "vpclmulqdq",
+    target_feature = "avx512f"
+)))]
+mod low {
+    use super::{LOW_RUN, LOW_STAGES};
+    use crate::poly_basis::LowStageTwiddles;
+
+    pub(super) fn forward(values: &mut [u128], first_run: usize, twiddles: &LowStageTwiddles) {
+        // The scalar multiply takes the twiddle alone, so the companions stay behind.
+        let mut run_twiddles = twiddles.run_twiddles(first_run).map(|pair| pair[0]);
+        // Blocks within a run always use the same basis offsets.
+        let offsets: [u128; 8] = core::array::from_fn(|block| twiddles.span(block, 0)[0]);
+        for (index, run) in values.as_chunks_mut::<LOW_RUN>().0.iter_mut().enumerate() {
+            if index != 0 {
+                let step = twiddles.step(first_run + index - 1);
+                for (twiddle, step) in run_twiddles.iter_mut().zip(step) {
+                    *twiddle ^= step[0];
+                }
+            }
+            for j in (0..LOW_STAGES).rev() {
+                let half = 1 << j;
+                for (block, pair) in run.chunks_exact_mut(2 * half).enumerate() {
+                    let (lo, hi) = pair.split_at_mut(half);
+                    let twiddle = run_twiddles[j] ^ offsets[block];
+                    super::butterfly_forward(lo, hi, twiddle);
+                }
+            }
+        }
     }
 }
 

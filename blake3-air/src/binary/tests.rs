@@ -231,8 +231,17 @@ fn random_traces_satisfy_constraints() {
 #[test]
 fn packed_trace_matches_dense_trace_at_word_boundaries() {
     let mut rng = SmallRng::seed_from_u64(17);
+    // All-ones inputs carry out of every bit of the first additions, so the full carry chains
+    // are exercised whatever the random draws.
+    let all_ones = Blake3CompressionInput {
+        chaining_value: [u32::MAX; 8],
+        block: [u32::MAX; 16],
+        counter: u64::MAX,
+        block_len: u32::MAX,
+        flags: u32::MAX,
+    };
     for height in [1usize, 2, 32, 64, 128] {
-        let inputs: Vec<_> = (0..height)
+        let random: Vec<_> = (0..height)
             .map(|_| Blake3CompressionInput {
                 chaining_value: rng.random(),
                 block: rng.random(),
@@ -241,20 +250,22 @@ fn packed_trace_matches_dense_trace_at_word_boundaries() {
                 flags: rng.random(),
             })
             .collect();
-        let dense = generate_binary_trace_rows::<F>(inputs.clone(), 0);
-        let packed = generate_binary_trace_packed::<F>(inputs);
-        assert_eq!(packed.width, NUM_BLAKE3_BINARY_COLS);
-        assert_eq!(packed.height(), height.div_ceil(64));
-        for row in 0..height {
-            for column in 0..NUM_BLAKE3_BINARY_COLS {
-                let expected = dense.values[row * NUM_BLAKE3_BINARY_COLS + column];
-                let word = packed.values[(row / 64) * packed.width + column];
-                assert_eq!(expected, F::from_bool((word >> (row % 64)) & 1 == 1));
+        for inputs in [random, vec![all_ones; height]] {
+            let dense = generate_binary_trace_rows::<F>(inputs.clone(), 0);
+            let packed = generate_binary_trace_packed::<F>(inputs);
+            assert_eq!(packed.width, NUM_BLAKE3_BINARY_COLS);
+            assert_eq!(packed.height(), height.div_ceil(64));
+            for row in 0..height {
+                for column in 0..NUM_BLAKE3_BINARY_COLS {
+                    let expected = dense.values[row * NUM_BLAKE3_BINARY_COLS + column];
+                    let word = packed.values[(row / 64) * packed.width + column];
+                    assert_eq!(expected, F::from_bool((word >> (row % 64)) & 1 == 1));
+                }
             }
-        }
-        if !height.is_multiple_of(64) {
-            for word in &packed.values[packed.width * (packed.height() - 1)..] {
-                assert_eq!(*word >> (height % 64), 0);
+            if !height.is_multiple_of(64) {
+                for word in &packed.values[packed.width * (packed.height() - 1)..] {
+                    assert_eq!(*word >> (height % 64), 0);
+                }
             }
         }
     }

@@ -9,6 +9,7 @@ use p3_maybe_rayon::prelude::*;
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
 
+use super::banked::BankedColumn;
 use super::suffix::weighted_sum;
 use crate::SumcheckData;
 use crate::layout::witness::{Table, TablePlacement, column_slots};
@@ -31,9 +32,13 @@ const AGGREGATE_BLOCK: usize = 1 << 12;
 ///     row-first   W(c, x) = s_c * T(x)  for every column c and row x
 ///                 row rounds:     sum_x  A(x) * T(x),   A(x) = sum_c  s_c * P_c(x)
 ///                 column rounds:  sum_c  P_c(r) * s_c * T(r)
+///
+///     banked      one column P under equality claims, W(x) = sum_c  gamma_c * eq(z_c, x)
+///                 stage rounds:   over the bank sums of P, 2^h entries per claim
+///                 between stages: P bound once at the stage's challenges
 /// ```
 ///
-/// Both routes measure the same round polynomials, so both play the same transcript.
+/// Every route measures the same round polynomials, so all of them play the same transcript.
 ///
 /// Suffix binding fixes the row variables first. The row-first route therefore measures its
 /// first `log2(height)` rounds on tables one column long, not stacked-space long. Once every row
@@ -45,6 +50,8 @@ pub struct SuffixResidualProver<F: Field, EF: ExtensionField<F>, R: Field> {
     prover: ReprSumcheckProver<F, EF, R>,
     /// The column slots still to come, present while the row-first route binds rows.
     columns: Option<ColumnHandoff<F, EF, R>>,
+    /// The column the banked route plays its stages over, present on that route alone.
+    banked: Option<BankedColumn<F, R>>,
 }
 
 /// The column slots a row-first prover continues over once every row variable is bound.
@@ -73,6 +80,30 @@ where
         Self {
             prover,
             columns: None,
+            banked: None,
+        }
+    }
+
+    /// Builds the banked route over one dense column filling the stacked space.
+    ///
+    /// # Arguments
+    ///
+    /// - `table` — the lone source table, one column.
+    /// - `claims` — every claim's point and batching coefficient, each opening the column directly.
+    /// - `sum` — the batched claim.
+    /// - `stage_rounds` — rounds a full stage plays over bank sums before the column is bound.
+    #[tracing::instrument(skip_all)]
+    pub(crate) fn banked(
+        table: Table<F>,
+        claims: &[(Point<EF>, EF)],
+        sum: EF,
+        stage_rounds: usize,
+    ) -> Self {
+        let (prover, column) = BankedColumn::new(table, claims, sum, stage_rounds);
+        Self {
+            prover,
+            columns: None,
+            banked: Some(column),
         }
     }
 
@@ -116,6 +147,7 @@ where
                 num_variables,
                 challenges: Vec::new(),
             }),
+            banked: None,
         }
     }
 
@@ -123,6 +155,12 @@ where
     #[cfg(test)]
     pub(crate) const fn is_row_first(&self) -> bool {
         self.columns.is_some()
+    }
+
+    /// Whether the banked route plays the rounds.
+    #[cfg(test)]
+    pub(crate) const fn is_banked(&self) -> bool {
+        self.banked.is_some()
     }
 
     /// Returns the current claimed sum over the remaining unbound variables.
@@ -136,7 +174,11 @@ where
             .columns
             .as_ref()
             .map_or(0, ColumnHandoff::num_slot_variables);
-        self.prover.num_variables() + slot_variables
+        let played = self.banked.as_ref().map_or_else(
+            || self.prover.num_variables(),
+            |column| column.num_variables(&self.prover),
+        );
+        played + slot_variables
     }
 
     /// Applies an outstanding binding, so the tables are current with the claim.
@@ -144,6 +186,21 @@ where
     /// See [`ReprSumcheckProver::settle`].
     pub fn settle(&mut self) {
         self.prover.settle();
+    }
+
+    /// The stacked polynomial bound at every challenge sampled so far, in `R`.
+    ///
+    /// Only the banked route holds that polynomial, and only once a stage is fully played.
+    /// The column is then bound here rather than when the next round opens a stage.
+    ///
+    /// `None`, applying nothing, on any other route or state.
+    pub fn bound_column(&mut self) -> Option<&[R]> {
+        match &mut self.banked {
+            Some(column) if column.stage_played(&self.prover) => {
+                Some(column.bound(&mut self.prover))
+            }
+            _ => None,
+        }
     }
 
     /// Runs `folding_factor` sumcheck rounds.
@@ -182,9 +239,19 @@ where
                 self.prover = columns.into_prover(&mut self.prover);
             }
 
+            // Once a stage is played, the next one opens over the column bound at its challenges.
+            if let Some(column) = &mut self.banked
+                && column.stage_played(&self.prover)
+            {
+                self.prover = column.next_stage(&mut self.prover);
+            }
+
             let r = self.prover.round(sumcheck_data, &mut transcript);
             if let Some(columns) = &mut self.columns {
                 columns.challenges.push(r);
+            }
+            if let Some(column) = &mut self.banked {
+                column.push_challenge(R::from(r));
             }
             challenges.push(r);
         }

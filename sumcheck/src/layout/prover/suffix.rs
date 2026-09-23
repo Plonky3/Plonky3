@@ -12,6 +12,7 @@ use p3_multilinear_util::poly::Poly;
 use p3_multilinear_util::split_eq::SplitEq;
 
 use crate::layout::opening::{EqSvoPartials, NextSvoPartials, Opening, ProverMultiClaim};
+use crate::layout::prover::banked::STAGE_ROUNDS;
 use crate::layout::prover::{Layout, StackedClaims, SuffixResidualProver, preprocess};
 use crate::layout::witness::{Table, column_slots};
 use crate::layout::{LayoutStrategy, Witness};
@@ -67,6 +68,11 @@ pub struct SuffixProver<F: Field, EF: ExtensionField<F>> {
     /// - Suffix binding walks the per-table data directly.
     /// - No separate copy of the stacked polynomial is kept.
     pub(crate) claims: StackedClaims<F, EF>,
+    /// Opening point of every recorded claim, indexed as `claims.claim_map` is.
+    ///
+    /// A recorded claim keeps its point factored at one place only; the banked route splits
+    /// the point at another.
+    claim_points: Vec<Vec<Point<EF>>>,
 }
 
 impl<F: Field, EF: ExtensionField<F>> Layout<F, EF> for SuffixProver<F, EF> {
@@ -76,6 +82,7 @@ impl<F: Field, EF: ExtensionField<F>> Layout<F, EF> for SuffixProver<F, EF> {
         // primitive walks the per-table data instead.
         let parts = witness.into_parts();
         Self {
+            claim_points: vec![Vec::new(); parts.tables.len()],
             claims: StackedClaims::new(
                 parts.tables,
                 parts.placements,
@@ -172,6 +179,7 @@ impl<F: Field, EF: ExtensionField<F>> Layout<F, EF> for SuffixProver<F, EF> {
                 .unzip();
 
             // Record the claim at the zero-round factorisation of the point.
+            self.claim_points[table_idx].push(point.clone());
             self.claims.claim_map[table_idx].push(ProverMultiClaim::new(
                 SvoPoint::new_unpacked(0, point, VariableOrder::Suffix),
                 current_openings,
@@ -182,6 +190,7 @@ impl<F: Field, EF: ExtensionField<F>> Layout<F, EF> for SuffixProver<F, EF> {
         }
 
         // Factorise the point with the suffix split; every selected column reuses it.
+        self.claim_points[table_idx].push(point.clone());
         let point = SvoPoint::new_unpacked(self.claims.folding, point, VariableOrder::Suffix);
 
         // Current group: evaluate each column at the point.
@@ -246,6 +255,7 @@ impl<F: Field, EF: ExtensionField<F>> Layout<F, EF> for SuffixProver<F, EF> {
         debug_assert!(self.known_evals_agree(table_idx, batch, point, evals));
 
         // The point is factorised as the evaluating route factorises it; only the pass is skipped.
+        self.claim_points[table_idx].push(point.clone());
         let point = SvoPoint::new_unpacked(self.claims.folding, point, VariableOrder::Suffix);
         self.claims.record_known(table_idx, batch, point, evals);
     }
@@ -463,10 +473,12 @@ impl<F: Field, EF: ExtensionField<F>> SuffixProver<F, EF> {
     /// Plays exactly the transcript [`Layout::into_sumcheck`] plays; only the field
     /// the residual tables are held in differs.
     ///
-    /// Takes the row-first route of [`SuffixResidualProver`] when there is more than one column,
-    /// no preprocessing round, no virtual claim, every table has the same height, and every
-    /// column's weights are one shared row table times a scale of its own. Takes the dense route
-    /// otherwise.
+    /// Takes the banked route of [`SuffixResidualProver`] when one dense column fills the stacked
+    /// space and every claim opens it directly, with no preprocessing round and no virtual claim.
+    ///
+    /// Takes the row-first route when there is more than one column, no preprocessing round, no
+    /// virtual claim, every table has the same height, and every column's weights are one shared
+    /// row table times a scale of its own. Takes the dense route otherwise.
     ///
     /// # Returns
     ///
@@ -485,6 +497,13 @@ impl<F: Field, EF: ExtensionField<F>> SuffixProver<F, EF> {
         Ch: FieldChallenger<F> + GrindingChallenger<Witness = F>,
     {
         let (alpha, sum, rs) = preprocess(&self, sumcheck_data, pow_bits, challenger);
+
+        // A lone column under direct claims never materializes its weights.
+        if let Some(claims) = self.banked_claims(alpha) {
+            let table = self.claims.tables.into_iter().next().unwrap();
+            let prover = SuffixResidualProver::banked(table, &claims, sum, STAGE_ROUNDS);
+            return (prover, rs);
+        }
 
         // Suffix binding folds variables in reverse, so the residual factors live in the
         // reversed-challenges frame.
@@ -523,6 +542,54 @@ impl<F: Field, EF: ExtensionField<F>> SuffixProver<F, EF> {
 
         let prover = self.dense_residual(&reversed, alpha, sum, claim_tables, column_weights);
         (SuffixResidualProver::dense(prover), rs)
+    }
+
+    /// Every claim's point and batching coefficient, when the banked route applies.
+    ///
+    /// The coefficient of a claim is the sum of the alpha powers its openings take, in the order
+    /// the weight plan hands them out.
+    ///
+    /// `None` unless every one of these holds:
+    ///
+    /// - no preprocessing round and no virtual claim,
+    /// - one source table, held densely, of one column filling the stacked space,
+    /// - at least one variable, so there is a round to play,
+    /// - at least one claim, and no claim opening the successor view.
+    fn banked_claims(&self, alpha: EF) -> Option<Vec<(Point<EF>, EF)>> {
+        let claims = &self.claims;
+        let [table] = claims.tables.as_slice() else {
+            return None;
+        };
+        let eligible = claims.folding == 0
+            && claims.virtual_claims.is_empty()
+            && table.num_polys() == 1
+            && table.column(0).as_dense().is_some()
+            && table.num_variables() == claims.num_variables
+            && table.num_variables() > 0;
+        if !eligible || claims.claim_map[0].is_empty() {
+            return None;
+        }
+        assert_eq!(
+            self.claim_points[0].len(),
+            claims.claim_map[0].len(),
+            "every recorded claim keeps its point"
+        );
+
+        let mut alphas = alpha.powers();
+        claims.claim_map[0]
+            .iter()
+            .zip(&self.claim_points[0])
+            .map(|(claim, point)| {
+                claim.next_openings().is_empty().then(|| {
+                    let coefficient = claim
+                        .current_openings()
+                        .iter()
+                        .map(|_| alphas.next().unwrap())
+                        .sum();
+                    (point.clone(), coefficient)
+                })
+            })
+            .collect()
     }
 
     /// Builds the residual prover over the whole stacked space from a weight plan.
@@ -1701,6 +1768,206 @@ mod tests {
         }
     }
 
+    /// Schedules on one column of `num_variables` variables whose claims all open it directly.
+    ///
+    /// - One claim, the shape a commitment of one stacked column opens with.
+    /// - Two claims at distinct points.
+    /// - Three claims, so every stage carries a padding claim slot; one opens the column twice.
+    fn banked_cases<F: Field>(seed: u64, num_variables: usize) -> Vec<(Vec<Table<F>>, Vec<Batch>)>
+    where
+        StandardUniform: Distribution<F>,
+    {
+        let mut rng = SmallRng::seed_from_u64(seed);
+        let direct = || (0, OpeningBatch::new(vec![0], Vec::new()));
+        vec![
+            (vec![table(&mut rng, num_variables, 1)], vec![direct()]),
+            (
+                vec![table(&mut rng, num_variables, 1)],
+                vec![direct(), direct()],
+            ),
+            (
+                vec![table(&mut rng, num_variables, 1)],
+                vec![
+                    direct(),
+                    (0, OpeningBatch::new(vec![0, 0], Vec::new())),
+                    direct(),
+                ],
+            ),
+        ]
+    }
+
+    /// Plays every residual round of the banked and the dense route from one recorded prover.
+    ///
+    /// Both routes run the same preprocessing from equal transcripts, then play
+    /// `rounds_per_call` rounds per call. After each call the banked route hands out its bound
+    /// column whenever a stage is played, and both settle when `settle` is set.
+    ///
+    /// # Checks
+    ///
+    /// - Equal arities, challenges and running claims after every call.
+    /// - Every bound column equals the source column bound at every challenge so far.
+    /// - Equal round messages over the whole run.
+    /// - Equal sponge states once every round is played.
+    fn assert_banked_matches_dense<F, EF, R, Ch>(
+        prover: &SuffixProver<F, EF>,
+        challenger: Ch,
+        stage_rounds: usize,
+        rounds_per_call: usize,
+        settle: bool,
+    ) where
+        F: TranscriptField,
+        EF: ExtensionField<F> + From<R>,
+        R: Field + FromTable<EF> + Algebra<F>,
+        Ch: FieldChallenger<F> + GrindingChallenger<Witness = F> + Clone,
+    {
+        let mut dense_challenger = challenger.clone();
+        let mut dense_data = SumcheckData::default();
+        let (alpha, sum, rs) = preprocess(prover, &mut dense_data, 0, &mut dense_challenger);
+        let (claim_tables, column_weights) = prover.weight_plan(&rs, alpha);
+        let claim_tables: Vec<ClaimWeightTables<R>> = claim_tables
+            .into_iter()
+            .map(|ClaimWeightTables { current, next }| ClaimWeightTables {
+                current: current.map(R::from_table),
+                next: next.map(R::from_table),
+            })
+            .collect();
+        let dense = prover.dense_residual::<R>(&rs, alpha, sum, claim_tables, column_weights);
+        let mut dense = SuffixResidualProver::dense(dense);
+
+        let mut banked_challenger = challenger;
+        let mut banked_data = SumcheckData::default();
+        let (alpha, sum, _) = preprocess(prover, &mut banked_data, 0, &mut banked_challenger);
+        let claims = prover.banked_claims(alpha).unwrap();
+        let table = prover.claims.tables[0].clone();
+        let mut banked =
+            SuffixResidualProver::<F, EF, R>::banked(table, &claims, sum, stage_rounds);
+        assert!(banked.is_banked());
+
+        // The source column in `EF`, bound one suffix variable per challenge as the run goes.
+        let mut column = Poly::new(
+            prover.claims.tables[0]
+                .poly(0)
+                .as_slice()
+                .iter()
+                .map(|&value| EF::from(value))
+                .collect(),
+        );
+        let mut bound_columns = 0;
+        while dense.num_variables() > 0 {
+            assert_eq!(banked.num_variables(), dense.num_variables());
+            let rounds = rounds_per_call.min(dense.num_variables());
+            let expected = dense.compute_sumcheck_polynomials(
+                &mut dense_data,
+                &mut dense_challenger,
+                rounds,
+                0,
+            );
+            let challenges = banked.compute_sumcheck_polynomials(
+                &mut banked_data,
+                &mut banked_challenger,
+                rounds,
+                0,
+            );
+            assert_eq!(challenges, expected);
+            assert_eq!(banked.claimed_sum(), dense.claimed_sum());
+            for &challenge in challenges.as_slice() {
+                column.fix_suffix_var_mut(challenge);
+            }
+            if let Some(bound) = banked.bound_column() {
+                let bound: Vec<EF> = bound.iter().map(|&value| EF::from(value)).collect();
+                assert_eq!(bound, column.as_slice());
+                bound_columns += 1;
+            }
+            if settle {
+                dense.settle();
+                banked.settle();
+            }
+        }
+        assert_eq!(banked.num_variables(), 0);
+        // The last call always ends a stage.
+        assert!(bound_columns > 0);
+        assert_eq!(
+            banked_data.polynomial_evaluations,
+            dense_data.polynomial_evaluations
+        );
+        assert_eq!(
+            banked_challenger.sample_algebra_element::<EF>(),
+            dense_challenger.sample_algebra_element::<EF>()
+        );
+
+        // A debug build checks the last held binding against the pair it lands on.
+        banked.settle();
+    }
+
+    /// Every schedule, stage depth and round grouping the banked route is driven through.
+    ///
+    /// Arities cover a single round, a stage spanning the whole column, one variable past a
+    /// stage, and several stages past one block of rows. Stage depths run from one bank pair,
+    /// narrower than any wide packing, to a full stage. Round groupings end calls both on and
+    /// off stage boundaries.
+    fn assert_banked_route_plays_the_dense_transcript<F, EF, R, Ch>(
+        seed: u64,
+        challenger: impl Fn() -> Ch,
+    ) where
+        F: TranscriptField,
+        EF: ExtensionField<F> + From<R>,
+        R: Field + FromTable<EF> + Algebra<F>,
+        Ch: FieldChallenger<F> + GrindingChallenger<Witness = F> + Clone,
+        StandardUniform: Distribution<F> + Distribution<EF>,
+    {
+        for stage_rounds in [1, 2, 3, 4] {
+            for num_variables in [1, stage_rounds, stage_rounds + 1, 13] {
+                for (case, (tables, schedule)) in (0..).zip(banked_cases::<F>(seed, num_variables))
+                {
+                    let prover = recorded::<F, EF>(tables, &schedule, seed + case);
+                    for (rounds_per_call, settle) in [(1, false), (1, true), (3, false), (4, true)]
+                    {
+                        assert_banked_matches_dense::<F, EF, R, _>(
+                            &prover,
+                            challenger(),
+                            stage_rounds,
+                            rounds_per_call,
+                            settle,
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn banked_route_plays_the_dense_transcript_over_binary_field() {
+        assert_banked_route_plays_the_dense_transcript::<BinaryField128, BinaryField128, Ghash128, _>(
+            21,
+            || BinaryTranscript::from_hasher(Vec::new(), Keccak256Hash),
+        );
+    }
+
+    #[test]
+    fn banked_route_plays_the_dense_transcript_over_extension_of_prime_field() {
+        assert_banked_route_plays_the_dense_transcript::<BabyBear, BabyBearExt4, BabyBearExt4, _>(
+            22,
+            crate::tests::challenger,
+        );
+    }
+
+    #[test]
+    fn a_lone_column_under_direct_claims_takes_the_banked_route() {
+        type F = BinaryField128;
+
+        let schedule = vec![(0, OpeningBatch::new(vec![0], Vec::new()))];
+        let tables = vec![table::<F>(&mut SmallRng::seed_from_u64(23), 6, 1)];
+        let prover = recorded::<F, F>(tables, &schedule, 24);
+
+        let mut challenger = BinaryTranscript::from_hasher(Vec::new(), Keccak256Hash);
+        let (residual, _) = prover.into_sumcheck_in::<Ghash128, _>(
+            &mut SumcheckData::default(),
+            0,
+            &mut challenger,
+        );
+        assert!(residual.is_banked());
+    }
+
     #[test]
     fn a_single_column_takes_the_dense_route() {
         type F = BinaryField128;
@@ -1717,6 +1984,63 @@ mod tests {
             &mut challenger,
         );
         assert!(!residual.is_row_first());
+        assert!(!residual.is_banked());
+    }
+
+    #[test]
+    fn the_banked_route_refuses_every_shape_it_cannot_play() {
+        type F = BinaryField128;
+
+        // Whether a recorded prover's claims take the banked route, at a fresh challenge.
+        fn banked(prover: &SuffixProver<F, F>, rng: &mut SmallRng) -> bool {
+            prover.banked_claims(rng.random()).is_some()
+        }
+
+        let mut rng = SmallRng::seed_from_u64(25);
+        let direct = vec![(0, OpeningBatch::new(vec![0], Vec::new()))];
+        let column = vec![table::<F>(&mut rng, 5, 1)];
+
+        // Positive control: the shape every refusal below departs from.
+        let prover = recorded::<F, F>(column.clone(), &direct, 1);
+        assert!(banked(&prover, &mut rng));
+
+        // No claim at all leaves no weight to bank.
+        assert!(!banked(&recorded::<F, F>(column.clone(), &[], 2), &mut rng));
+
+        // A claim through the successor view weighs the column by no equality table.
+        let successor = vec![(0, OpeningBatch::new(vec![0], vec![0]))];
+        assert!(!banked(
+            &recorded::<F, F>(column.clone(), &successor, 3),
+            &mut rng
+        ));
+
+        // A virtual claim weighs the stacked space rather than the column.
+        let mut prover = recorded::<F, F>(column.clone(), &direct, 4);
+        let point = Point::<F>::rand(&mut rng, prover.claims.num_variables);
+        let _ = prover.record_virtual(&point);
+        assert!(!banked(&prover, &mut rng));
+
+        // Preprocessing rounds bind variables before the residual rounds begin.
+        let mut prover = SuffixProver::<F, F>::from_witness(SuffixProver::<F, F>::new_witness(
+            column.clone(),
+            2,
+        ));
+        let point = Point::<F>::rand(&mut rng, 5);
+        prover.record_opening(0, &direct[0].1, &point);
+        assert!(!banked(&prover, &mut rng));
+
+        // Two columns, whether in one table or in two.
+        let wide = vec![table::<F>(&mut rng, 4, 2)];
+        assert!(!banked(&recorded::<F, F>(wide, &direct, 5), &mut rng));
+        let two = vec![table::<F>(&mut rng, 4, 1), table::<F>(&mut rng, 4, 1)];
+        assert!(!banked(&recorded::<F, F>(two, &direct, 6), &mut rng));
+
+        // A column narrower than the stacked space leaves slots it does not fill.
+        //
+        // One table of one column always plans to its own arity, so the space is widened here.
+        let mut prover = recorded::<F, F>(column, &direct, 7);
+        prover.claims.num_variables += 1;
+        assert!(!banked(&prover, &mut rng));
     }
 
     #[test]

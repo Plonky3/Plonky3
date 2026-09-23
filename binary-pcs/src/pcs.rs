@@ -153,6 +153,10 @@ where
 {
     /// Builds an instance around an explicitly selected additive transform.
     ///
+    /// The transform encodes the base codeword only. A folded codeword the opening encodes from
+    /// its bound message goes through the challenge field's own encoder instead. Every correct
+    /// transform produces the same codeword, so the choice moves no committed symbol.
+    ///
     /// # Errors
     ///
     /// Returns an error unless the schedule was derived for these two tower levels.
@@ -807,21 +811,29 @@ mod tests {
     use alloc::vec::Vec;
     use alloc::{format, vec};
 
+    use p3_binary_dft::EncodableLevel;
     use p3_binary_field::{BinaryField8, BinaryField16, BinaryField64, BinaryField128};
-    use p3_challenger::FieldChallenger;
+    use p3_challenger::fs::TranscriptField;
+    use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
     use p3_commit::{Mmcs, MultilinearPcs};
+    use p3_field::{ExtensionField, PrimeCharacteristicRing};
     use p3_multilinear_util::point::Point;
     use p3_sumcheck::layout::{Layout, SuffixProver, Table, Witness};
     use p3_sumcheck::{OpeningBatch, OpeningProtocol, PrescribedPointPcs, TableShape, TableSpec};
     use rand::SeedableRng;
+    use rand::distr::{Distribution, StandardUniform};
     use rand::rngs::SmallRng;
 
     use super::BinaryPcs;
     use crate::error::BinaryPcsError;
+    use crate::fold::{ChallengeField, FoldAlphabet};
     use crate::params::{BinaryPcsConfig, BinaryPcsConfigError, BinaryPcsParams};
     use crate::proof::BinaryPcsProof;
     use crate::prover::BinaryPcsProverData;
-    use crate::test_util::{MyChallenger, MyMmcs, challenger, mmcs, run_lifecycle};
+    use crate::test_util::{
+        LevelChallenger, LevelMmcs, MyChallenger, MyMmcs, challenger, level_challenger, level_mmcs,
+        mmcs, run_lifecycle,
+    };
 
     type F = BinaryField128;
 
@@ -881,6 +893,98 @@ mod tests {
                 actual: 64,
             })
         );
+    }
+
+    /// Commit one column, open it directly at a transcript-sampled point, and verify, over one
+    /// committed alphabet and one challenge field.
+    ///
+    /// That claim shape is the one the banked residual route plays, so this reaches the
+    /// challenge field's own sumcheck representation and its encoder end to end.
+    ///
+    /// A tampered base symbol must then break the fold chain.
+    fn a_single_column_round_trip<A, C>(
+        num_variables: usize,
+        log_folding_factor: usize,
+        log_inv_rate: usize,
+        seed: u64,
+    ) where
+        A: EncodableLevel + TranscriptField + FoldAlphabet<C> + PrimeCharacteristicRing,
+        C: ChallengeField<A> + ExtensionField<A> + FoldAlphabet<C>,
+        StandardUniform: Distribution<A>,
+        LevelMmcs<A>: Mmcs<A>,
+        LevelMmcs<C>: Mmcs<C, Error = <LevelMmcs<A> as Mmcs<A>>::Error>,
+        LevelChallenger<A>: FieldChallenger<A>
+            + GrindingChallenger<Witness = A>
+            + CanSampleUniformBits<A>
+            + CanObserve<<LevelMmcs<A> as Mmcs<A>>::Commitment>
+            + CanObserve<<LevelMmcs<C> as Mmcs<C>>::Commitment>,
+    {
+        let shape = format!(
+            "bits {}/{}, arity {log_folding_factor}",
+            A::bits(),
+            C::bits()
+        );
+        let mut rng = SmallRng::seed_from_u64(seed);
+        let table = Table::<A>::rand(&mut rng, 1, num_variables);
+        let protocol = OpeningProtocol::new(vec![TableSpec::new(
+            TableShape::new(num_variables, 1),
+            vec![OpeningBatch::new(vec![0], Vec::new())],
+        )]);
+
+        let params = BinaryPcsParams {
+            log_inv_rate,
+            pow_bits: 0,
+            security_level: 40,
+        };
+        let config = BinaryPcsConfig::try_new_with_folding::<A, C>(
+            num_variables,
+            params,
+            log_folding_factor,
+        )
+        .unwrap();
+        let pcs: BinaryPcs<A, C, LevelMmcs<A>, LevelMmcs<C>> =
+            BinaryPcs::new(config, level_mmcs(), level_mmcs()).unwrap();
+
+        let mut prover_ch = level_challenger::<A>();
+        let witness = SuffixProver::<A, C>::new_witness(vec![table], 0);
+        let (root, data) = pcs.commit(witness, &mut prover_ch).unwrap();
+        let proof = pcs.open(data, protocol.clone(), &mut prover_ch).unwrap();
+
+        pcs.verify(
+            &root,
+            &proof,
+            &mut level_challenger::<A>(),
+            protocol.clone(),
+        )
+        .unwrap_or_else(|error| panic!("{shape}: {error:?}"));
+
+        let mut tampered = proof;
+        tampered.base_opened_values[0][0] += A::ONE;
+        assert!(
+            pcs.verify(&root, &tampered, &mut level_challenger::<A>(), protocol)
+                .is_err(),
+            "{shape}: a tampered base symbol was accepted"
+        );
+    }
+
+    #[test]
+    fn a_single_column_round_trips_over_every_challenge_field() {
+        // Fixture state: every folding factor from one round per batch to four.
+        //
+        //     8-bit alphabet    arity 6 at rate 2, a 2^8 base codeword, the whole 8-bit domain
+        //     wider alphabets   arity 10, several stages of the residual route
+        for log_folding_factor in 1..=4 {
+            a_single_column_round_trip::<BinaryField8, BinaryField64>(6, log_folding_factor, 2, 1);
+            a_single_column_round_trip::<BinaryField8, F>(6, log_folding_factor, 2, 2);
+            a_single_column_round_trip::<BinaryField64, BinaryField64>(
+                10,
+                log_folding_factor,
+                1,
+                3,
+            );
+            a_single_column_round_trip::<BinaryField64, F>(10, log_folding_factor, 1, 4);
+            a_single_column_round_trip::<F, F>(10, log_folding_factor, 1, 5);
+        }
     }
 
     /// Commit, open at a transcript-sampled point, verify. The prover and verifier run on

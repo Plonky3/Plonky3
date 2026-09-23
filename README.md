@@ -121,9 +121,11 @@ RUSTFLAGS="-Ctarget-cpu=native" cargo run --example prove_hash_binary --release 
   `2^log-trace-length / 25` permutations; `blake-3-compressions` and `sha-256-compressions` each
   prove `2^log-trace-length` compressions, one row per compression.
 - `--representation` (`-r`): the field representation the zerocheck prover runs its later
-  rounds in: `auto` (default; polynomial basis with a hardware carryless multiply, subfield-tower
-  basis otherwise), `subfield`, or `poly-basis`. Every choice proves and verifies the same
-  statement and emits a byte-identical proof; this is a performance tradeoff only.
+  rounds in: `auto` (default; `poly-basis-late` with a hardware carryless multiply,
+  subfield-tower basis otherwise), `subfield`, `poly-basis`, or `poly-basis-late` (polynomial
+  basis, with an eligible stage's first dense residual built one round later at half the size).
+  Every choice proves and verifies the same statement and emits a byte-identical proof; this is
+  a performance tradeoff only.
 - `--log-inv-rate`, `--pcs-pow-bits`, `--security-bits` (default 100), `--folding`, and
   `--merkle-arity` (`2` or `4`, default `4`) tune the PCS. The defaults are inverse rate 1,
   folding 4, and Merkle arity 4.

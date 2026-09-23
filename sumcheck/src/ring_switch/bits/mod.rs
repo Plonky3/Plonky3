@@ -58,6 +58,7 @@
 pub mod basis;
 mod equality;
 pub mod packing;
+mod products;
 pub mod reduction;
 pub mod tensor;
 pub mod transcript;

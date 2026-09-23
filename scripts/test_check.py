@@ -460,6 +460,26 @@ class CiPlanTests(unittest.TestCase):
         self.assertEqual(plan["packages"], ["p3-alpha", "p3-beta", "p3-runner"])
         self.assertFalse(plan["full"])
 
+    def test_sumcheck_change_selects_gfni_jobs(self):
+        import check  # noqa: PLC0415
+
+        with tempfile.TemporaryDirectory() as temp:
+            metadata = {
+                "workspace_root": temp,
+                "workspace_members": ["p3-sumcheck"],
+                "packages": [{
+                    "id": "p3-sumcheck",
+                    "name": "p3-sumcheck",
+                    "manifest_path": str(Path(temp) / "sumcheck" / "Cargo.toml"),
+                    "dependencies": [],
+                    "targets": [{"kind": ["lib"]}],
+                    "metadata": {},
+                    "features": {},
+                }],
+            }
+            plan = check.ci_plan(metadata, ["sumcheck/src/lib.rs"])
+        self.assertTrue(plan["gfni"])
+
     def test_changed_paths_keep_both_sides_of_a_rename(self):
         import check  # noqa: PLC0415
 

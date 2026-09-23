@@ -64,7 +64,7 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use p3_binary_dft::{domain_point, domain_point_steps};
+use p3_binary_dft::{EncodableLevel, domain_point, domain_point_steps};
 use p3_binary_field::{
     BinaryField8, BinaryField16, BinaryField32, BinaryField64, BinaryField128, Ghash128, Poly64,
     TowerLevel, poly_basis,
@@ -287,14 +287,33 @@ impl FoldAlphabet<BinaryField64> for BinaryField8 {
     }
 }
 
+/// Elements one task moves out of the sumcheck representation in a single block conversion.
+const REPR_CONVERSION_BLOCK: usize = 1 << 10;
+
 /// A challenge field and the arithmetic representation used by its residual sumcheck.
 ///
 /// The representation depends on the challenge field alone.
 /// A 128-bit challenge uses the carryless-multiply representation.
 /// A 64-bit challenge uses its polynomial-basis carryless-multiply representation.
-pub trait ChallengeField<F: Field>: TowerLevel {
+///
+/// A folded codeword over this field is an encoding under its own level's encoder.
+pub trait ChallengeField<F: Field>: EncodableLevel {
     /// Isomorphic field used for residual sumcheck arithmetic.
     type SumcheckRepr: IntoTranscriptField<Self> + Algebra<F>;
+
+    /// Writes every value of `values`, held in the sumcheck representation, into `out`.
+    ///
+    /// The default maps one value at a time.
+    ///
+    /// # Panics
+    ///
+    /// The two slices differ in length.
+    fn from_sumcheck_repr(values: &[Self::SumcheckRepr], out: &mut [Self]) {
+        assert_eq!(values.len(), out.len(), "one output per value");
+        out.par_iter_mut()
+            .zip(values.par_iter())
+            .for_each(|(slot, &value)| *slot = value.into_transcript());
+    }
 }
 
 impl<F: Field> ChallengeField<F> for BinaryField128
@@ -302,6 +321,21 @@ where
     Ghash128: Algebra<F>,
 {
     type SumcheckRepr = Ghash128;
+
+    /// Crosses a block of polynomial coordinates back into the tower basis in one pass.
+    fn from_sumcheck_repr(values: &[Ghash128], out: &mut [Self]) {
+        assert_eq!(values.len(), out.len(), "one output per value");
+        out.par_chunks_mut(REPR_CONVERSION_BLOCK)
+            .zip(values.par_chunks(REPR_CONVERSION_BLOCK))
+            .for_each_init(Vec::new, |words, (out, values)| {
+                words.clear();
+                words.extend(values.iter().map(|value| value.to_repr()));
+                poly_basis::to_tower_slice(words);
+                for (slot, &word) in out.iter_mut().zip(words.iter()) {
+                    *slot = Self::from_repr(word);
+                }
+            });
+    }
 }
 
 impl<F: Field> ChallengeField<F> for BinaryField64

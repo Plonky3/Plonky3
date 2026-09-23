@@ -2,6 +2,7 @@
 
 use alloc::vec::Vec;
 
+use p3_binary_field::poly_basis::{LOW_STAGES, LowStageTwiddles};
 use p3_binary_field::{BinaryField128, TowerLevel, poly_basis};
 use p3_field::PrimeCharacteristicRing;
 use p3_matrix::Matrix;
@@ -11,7 +12,9 @@ use p3_util::{log2_ceil_usize, log2_floor_usize, log2_strict_usize};
 
 use crate::domain::domain_point;
 use crate::lch::BUTTERFLY_GRAIN;
-use crate::staging::{Dispatch, StagedRuns, for_each_staged_tile};
+use crate::staging::{
+    Dispatch, StagedRuns, for_each_staged_tile, for_each_staged_tile_into_cosets,
+};
 use crate::traits::AdditiveNtt;
 
 /// [`LchNtt`](crate::LchNtt) over `BinaryField128`, with the data held in the polynomial basis throughout.
@@ -236,6 +239,9 @@ const STAGING_BYTES: usize = 64 * 1024;
 /// the core — halved again. The half is not a second tile, since the two tiles run in
 /// different phases; it is the gather and the scatter, which stream the matrix through the
 /// same cache for as long as the tile is live.
+///
+/// One pass does hold a second tile: the first group every coset of a padded message shares
+/// runs each further coset on a copy of the gathered tile, so it takes twice this budget.
 ///
 /// Halving lands on this figure for a core holding 1 MiB of private cache for two threads.
 /// Where a target holds less, the budget is the whole of a thread's share rather than half of
@@ -627,15 +633,32 @@ fn tile_stages(
 
 /// Complete the stages confined to one cache-sized set of rows before leaving it.
 fn local_stages(values: &mut [u128], plan: Plan, twiddles: &Twiddles, inverse: bool, fold: Fold) {
-    let Plan { width, local, .. } = plan;
+    let Plan {
+        width,
+        log_n,
+        local,
+        ..
+    } = plan;
     let tile_len = (1 << local) * width;
+    // A single column pairs fewer elements than a register holds in its lowest stages, so a
+    // forward tile runs those together over runs of adjacent rows, one register set per run.
+    let low = (!inverse && width == 1 && local >= LOW_STAGES)
+        .then(|| LowStageTwiddles::new(&twiddles.shifts, &twiddles.basis[..log_n]));
     for_chunks(values, tile_len, local, |(index, tile)| {
         // The tile is the first read of every element it holds when it runs before every
         // other stage, and the last write when it runs after them.
         if fold.entry {
             convert_tile(tile, INTO_POLY);
         }
-        tile_stages(tile, width, local, local, twiddles, inverse, index);
+        if let Some(low) = &low {
+            // The stages above the low ones read a run of adjacent rows as one row, as the
+            // staging phase does.
+            let above = local - LOW_STAGES;
+            tile_stages(tile, 1 << LOW_STAGES, above, local, twiddles, false, index);
+            low.forward(tile, index << above);
+        } else {
+            tile_stages(tile, width, local, local, twiddles, inverse, index);
+        }
         if fold.exit {
             convert_tile(tile, INTO_TOWER);
         }
@@ -704,19 +727,7 @@ fn fused_stages(
     inverse: bool,
     convert_basis: bool,
 ) {
-    // A group whose stride is shorter than the planned run shortens the run to match.
-    let log_block = plan.log_block.min(top - depth);
-    // One row of the reshaped matrix, in elements.
-    let run = plan.width << log_block;
-    // One staging tile per worker, not per task: a task is a few tens of microseconds of
-    // work and the tile is tens of kilobytes.
-    let dispatch = if use_parallel(values.len().saturating_mul(depth)) {
-        Dispatch::Parallel { min_len: 1 }
-    } else {
-        Dispatch::Serial
-    };
-    // Consecutive staged runs are `S = 2^(top - log_block - depth)` reshaped rows apart.
-    let runs = StagedRuns::new(run, top - log_block - depth, depth);
+    let (runs, run, dispatch) = staged_group(plan, top, depth, values.len());
     for_each_staged_tile(values, runs, dispatch, |tile, block| {
         // The gather is the first read of every element when this is the first group of a
         // forward transform.
@@ -732,15 +743,91 @@ fn fused_stages(
     });
 }
 
+/// The runs a staging group of `depth` stages below `top` moves, the elements in one run, and
+/// how a pass over `elements` elements spreads its tiles.
+fn staged_group(
+    plan: Plan,
+    top: usize,
+    depth: usize,
+    elements: usize,
+) -> (StagedRuns, usize, Dispatch) {
+    // A group whose stride is shorter than the planned run shortens the run to match.
+    let log_block = plan.log_block.min(top - depth);
+    // One row of the reshaped matrix, in elements.
+    let run = plan.width << log_block;
+    // One staging tile per worker, not per task: a task is a few tens of microseconds of
+    // work and the tile is tens of kilobytes.
+    let dispatch = if use_parallel(elements.saturating_mul(depth)) {
+        Dispatch::Parallel { min_len: 1 }
+    } else {
+        Dispatch::Serial
+    };
+    // Consecutive staged runs are `S = 2^(top - log_block - depth)` reshaped rows apart.
+    let runs = StagedRuns::new(run, top - log_block - depth, depth);
+    (runs, run, dispatch)
+}
+
+/// Run the first staging group of every coset of a zero-padded message in one pass.
+///
+/// `values` is one coset per twiddle set, the leading one holding the message in the tower
+/// basis. Every coset's transform starts from the message's coefficients, and its first group
+/// is its first read of every element. So one gather of the message serves every coset: the
+/// tile changes basis once, and each coset runs the group on its own copy of the tile and
+/// scatters it into its own slot. Neither a pass converting the message nor a copy of it into
+/// each coset is taken.
+fn first_group_into_cosets(
+    values: &mut [u128],
+    message_len: usize,
+    plan: Plan,
+    depth: usize,
+    twiddles: &[Twiddles],
+) {
+    let top = plan.log_n;
+    let (runs, run, dispatch) = staged_group(plan, top, depth, values.len());
+    for_each_staged_tile_into_cosets(
+        values,
+        message_len,
+        runs,
+        dispatch,
+        |tile| convert_tile(tile, INTO_POLY),
+        |tile, block, coset| tile_stages(tile, run, depth, top, &twiddles[coset], false, block),
+    );
+}
+
+/// Encode a zero-padded message whose cosets all share a first staging group of `depth`.
+///
+/// `values` is `2^log_inv_rate` cosets of one message each, the leading one holding the
+/// message in the tower basis, and every coset comes back evaluated in the tower basis.
+fn padded_sharing_first_group(values: &mut [u128], plan: Plan, depth: usize, log_inv_rate: usize) {
+    let log_message = plan.log_n;
+    let len = values.len() >> log_inv_rate;
+    let twiddles: Vec<Twiddles> = (0..1 << log_inv_rate)
+        .map(|c| Twiddles::new(log_message, domain_point(c << log_message)))
+        .collect();
+    first_group_into_cosets(values, len, plan, depth, &twiddles);
+    for_chunks(values, len, log_message, |(c, coset)| {
+        forward_below(coset, plan, &twiddles[c], 1, Fold::EXIT);
+    });
+}
+
 /// Forward transform of polynomial-basis values in an existing allocation.
 fn forward(values: &mut [u128], plan: Plan, shift: BinaryField128, fold: Fold) {
+    forward_below(values, plan, &Twiddles::new(plan.log_n, shift), 0, fold);
+}
+
+/// The forward stages below the first `done` staging groups, which have run already.
+fn forward_below(values: &mut [u128], plan: Plan, twiddles: &Twiddles, done: usize, fold: Fold) {
     let Plan {
         width,
         log_n,
         local,
         ..
     } = plan;
-    let twiddles = Twiddles::new(log_n, shift);
+    // A group that has run already read every element first.
+    debug_assert!(
+        done == 0 || !fold.entry,
+        "the entry conversion rides on the first group"
+    );
 
     // Peel fused groups from the top stage downwards, each replacing `take` full passes.
     //
@@ -748,9 +835,11 @@ fn forward(values: &mut [u128], plan: Plan, shift: BinaryField128, fold: Fold) {
     // conversion.
     let mut entry = fold.entry;
     let mut top = log_n;
-    for take in plan.group_sizes() {
-        fused_stages(values, plan, top, take, &twiddles, false, entry);
-        entry = false;
+    for (group, take) in plan.group_sizes().enumerate() {
+        if group >= done {
+            fused_stages(values, plan, top, take, twiddles, false, entry);
+            entry = false;
+        }
         top -= take;
     }
 
@@ -761,7 +850,7 @@ fn forward(values: &mut [u128], plan: Plan, shift: BinaryField128, fold: Fold) {
         entry = false;
     }
     for j in (local..top).rev() {
-        stage(values, (1 << j) * width, j, &twiddles, false);
+        stage(values, (1 << j) * width, j, twiddles, false);
     }
 
     // The contiguous tile finishes the bottom stages, and is the last write of every
@@ -769,7 +858,7 @@ fn forward(values: &mut [u128], plan: Plan, shift: BinaryField128, fold: Fold) {
     local_stages(
         values,
         plan,
-        &twiddles,
+        twiddles,
         false,
         Fold {
             entry,
@@ -878,6 +967,14 @@ impl AdditiveNtt<BinaryField128> for PolyBasisNtt {
             .map(BinaryField128::to_repr)
             .collect();
         let plan = Plan::new(width, log_message);
+        let large = len >= 2 * BUTTERFLY_GRAIN * p3_maybe_rayon::prelude::current_num_threads();
+        if let Some(depth) = plan.group_sizes().next().filter(|_| large) {
+            // Large cosets that stage their first group read the message once for all of them,
+            // and every coset finishes on its own.
+            padded_sharing_first_group(&mut values, plan, depth, log_inv_rate);
+            mat.values = values.into_iter().map(BinaryField128::from_repr).collect();
+            return mat;
+        }
         let (message, tail) = values.split_at_mut(len);
         // Every coset starts from a copy of the message, so one conversion of the message
         // alone serves all `2^log_inv_rate` of them.
@@ -886,7 +983,7 @@ impl AdditiveNtt<BinaryField128> for PolyBasisNtt {
         // once per coset, for nothing.
         convert(message, INTO_POLY);
         // Only the conversion back is left, and each coset's contiguous tile carries its own.
-        if len >= 2 * BUTTERFLY_GRAIN * p3_maybe_rayon::prelude::current_num_threads() {
+        if large {
             // Copy each large coset next to its evaluation, including when only one worker
             // is available.
             for_chunks(tail, len, log_message, |(c, chunk)| {
@@ -1625,6 +1722,71 @@ mod tests {
                 let mut actual = input;
                 scheduled(&mut actual, plan, inverse, Fold::EXIT);
                 assert_eq!(actual, expected, "exit {plan:?} inverse={inverse}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_first_group_shared_by_every_coset_matches_each_coset_alone() {
+        // Invariant: every coset of a padded message starts from the same coefficients, so
+        // gathering them once for the first group of all cosets changes the traffic alone,
+        // and every coset comes out as its own transform of the message would.
+        for plan in cut_plans() {
+            let Plan { width, log_n, .. } = plan;
+            let Some(depth) = plan.group_sizes().next() else {
+                continue;
+            };
+            let message = coefficients(log_n, width);
+            let len = message.len();
+            for log_cosets in 0..=2 {
+                let twiddles: Vec<_> = (0..1 << log_cosets)
+                    .map(|c| super::Twiddles::new(log_n, domain_point(c << log_n)))
+                    .collect();
+                let mut actual = message.clone();
+                actual.resize(len << log_cosets, 0);
+                super::first_group_into_cosets(&mut actual, len, plan, depth, &twiddles);
+                for (c, coset) in actual.chunks_mut(len).enumerate() {
+                    super::forward_below(coset, plan, &twiddles[c], 1, Fold::EXIT);
+                }
+
+                for (c, coset) in actual.chunks(len).enumerate() {
+                    let mut expected = message.clone();
+                    super::forward(&mut expected, plan, domain_point(c << log_n), Fold::BOTH);
+                    assert_eq!(coset, &expected[..], "{plan:?} coset={c}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn padded_transform_matches_the_tower_where_cosets_share_their_first_group() {
+        // The padded entry point shares a first group only above a length that grows with the
+        // worker count, and a single column stages one only from a worker count up. Both are
+        // the host's, so the shared path is driven directly, under the plan a pinned count of
+        // workers gets, rather than through the entry point.
+        //
+        // Rows of four and sixteen elements fill a cache line, and a single column is staged
+        // from `STAGED_WORKERS` up, as it commits.
+        let tower = LchNtt::<BinaryField128>::default();
+        for (width, log_message) in [(4, 14), (16, 12), (1, 17)] {
+            let plan = Plan::for_workers(width, log_message, STAGED_WORKERS);
+            let depth = plan
+                .group_sizes()
+                .next()
+                .expect("every shape here stages a first group");
+            for log_inv_rate in 1..=2 {
+                let mut mat = matrix(log_message, width, 29);
+                mat.values
+                    .resize(mat.values.len() << log_inv_rate, BinaryField128::ZERO);
+                let expected = tower.ntt_batch(mat.clone());
+
+                let mut values: Vec<u128> = mat.values.iter().map(|v| v.to_repr()).collect();
+                super::padded_sharing_first_group(&mut values, plan, depth, log_inv_rate);
+                let actual: Vec<_> = values.into_iter().map(BinaryField128::from_repr).collect();
+                assert_eq!(
+                    actual, expected.values,
+                    "width={width} log_message={log_message} rate={log_inv_rate}"
+                );
             }
         }
     }

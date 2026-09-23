@@ -5,6 +5,7 @@
 //! - Prefix prover: SVO-accumulator preprocessing, packed handoff.
 //! - Suffix prover: SVO-accumulator preprocessing, unpacked handoff.
 
+mod banked;
 mod claims;
 mod prefix;
 mod residual;

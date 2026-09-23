@@ -31,7 +31,7 @@ use p3_field::{ExtensionField, Field};
 use p3_matrix::dense::{DenseMatrix, RowMajorMatrix};
 use p3_multilinear_util::point::Point;
 use p3_sumcheck::SumcheckData;
-use p3_sumcheck::layout::{Layout, Table, Witness};
+use p3_sumcheck::layout::{Layout, SuffixResidualProver, Table, Witness};
 
 use crate::PcsLayout;
 use crate::fold::{ChallengeField, FoldAlphabet, fold_codeword_batch};
@@ -46,6 +46,12 @@ use crate::verifier::flat_coset_indices;
 /// across a row. Binding a prefix inside the row is the deferred head collapse, which needs
 /// its own eq-weighted column combination before it composes with the folds below.
 const FOLDING: usize = 0;
+
+/// Fewest rounds a batch folds for its codeword to be encoded from the bound message rather than
+/// folded from the previous codeword.
+///
+/// Below it, folding the previous codeword is the cheaper of the two at every codeword length.
+const MIN_ENCODED_ARITY: usize = 4;
 
 /// Data produced by committing the base codeword: the layout used to build the residual
 /// sumcheck, and the base commitment's Merkle prover data.
@@ -230,18 +236,33 @@ where
             }
         }
 
-        // Fold out of the previous batch's Merkle leaves, never out of a copy of them.
+        // A batch's folded codeword is also the encoding of the message its rounds bound.
+        //
+        //     fold     one pass per round over the previous codeword, halving it each time,
+        //              so its cost is set by the codeword it reads, whatever the arity
+        //     encode   one transform of the folded codeword, a product per symbol per bit of
+        //              its length, so its cost halves with every round the batch folds
+        //
+        // Encoding is therefore the cheaper one only for a batch of enough rounds, and it needs
+        // the sumcheck to hold the bound message at the batch's end.
+        //
+        // Otherwise fold out of the previous batch's Merkle leaves, never out of a copy of them.
         // The commitment scheme already owns every codeword it committed.
         //
         // The first batch reads the committed alphabet, every later one the challenge field.
         // The two arms therefore differ in the type of the codeword they load.
         let folded = tracing::info_span!("fold codeword").in_scope(|| {
-            if batch == 0 {
-                fold_codeword_batch(&mmcs.get_matrices(&merkle_data)[0].values, &challenges)
-            } else {
-                let source = &rounds[batch - 1].merkle_data;
-                fold_codeword_batch(&round_mmcs.get_matrices(source)[0].values, &challenges)
-            }
+            let encoded = (arity >= MIN_ENCODED_ARITY)
+                .then(|| encode_bound_message(&mut sumcheck, config.log_inv_rate()))
+                .flatten();
+            encoded.unwrap_or_else(|| {
+                if batch == 0 {
+                    fold_codeword_batch(&mmcs.get_matrices(&merkle_data)[0].values, &challenges)
+                } else {
+                    let source = &rounds[batch - 1].merkle_data;
+                    fold_codeword_batch(&round_mmcs.get_matrices(source)[0].values, &challenges)
+                }
+            })
         });
         if batch + 1 < num_batches {
             let (commitment, round_data) = tracing::info_span!("commit folded codeword")
@@ -256,14 +277,16 @@ where
         }
     }
 
-    // The last round's challenge is discarded rather than applied.
+    // A challenge the sumcheck still holds after the last round is never applied.
     //
-    // The codeword fold, not the sumcheck tables, carries the folded message forward.
+    // The last batch's codeword, not the sumcheck tables, carries the folded message forward.
     // The returned tuple holds no sumcheck state, so nothing downstream can read the tables.
     // A final binding pass would only produce a table nobody looks at.
     //
-    // A debug build applies it anyway, purely to check the claim against the pair it binds.
-    // That is the last held binding's only validation, in any profile.
+    // A last codeword encoded from the bound message has applied it already, and holds none.
+    //
+    // A debug build applies a held one anyway, purely to check the claim against the pair it
+    // binds. That is the last held binding's only validation, in any profile.
     #[cfg(debug_assertions)]
     sumcheck.settle();
 
@@ -274,6 +297,31 @@ where
         randomness,
         final_codeword,
     )
+}
+
+/// Encodes the message the rounds played so far bound, when the sumcheck holds it.
+///
+/// Folding a codeword binds its message's lowest variable, so this is the codeword that folding
+/// the base codeword by every challenge played so far produces, symbol for symbol.
+///
+/// `None` when the sumcheck does not hold that message.
+fn encode_bound_message<F, EF>(
+    sumcheck: &mut SuffixResidualProver<F, EF, <EF as ChallengeField<F>>::SumcheckRepr>,
+    log_inv_rate: usize,
+) -> Option<Vec<EF>>
+where
+    F: Field,
+    EF: ChallengeField<F> + ExtensionField<F>,
+{
+    let column = sumcheck.bound_column()?;
+
+    // The tail past the message stays zero, which is the padding the encoding reads it as.
+    let mut message = EF::zero_vec(column.len() << log_inv_rate);
+    EF::from_sumcheck_repr(column, &mut message[..column.len()]);
+    let codeword = tracing::info_span!("encode bound message").in_scope(|| {
+        EF::Encoder::default().encode_batch_padded(RowMajorMatrix::new(message, 1), log_inv_rate)
+    });
+    Some(codeword.values)
 }
 
 /// The query phase's prover-side output.
@@ -375,23 +423,31 @@ fn single_matrix_rows<T>(values: Vec<Vec<Vec<T>>>) -> Vec<Vec<T>> {
 
 #[cfg(test)]
 mod tests {
+    use alloc::vec::Vec;
     use alloc::{format, vec};
 
     use p3_binary_dft::{AdditiveRsEncoder, EncodableLevel, NaiveAdditiveNtt};
-    use p3_binary_field::{BinaryField64, BinaryField128};
-    use p3_challenger::FieldChallenger;
+    use p3_binary_field::{BinaryField8, BinaryField64, BinaryField128};
+    use p3_challenger::fs::TranscriptField;
+    use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
     use p3_commit::Mmcs;
+    use p3_field::ExtensionField;
     use p3_matrix::dense::RowMajorMatrix;
+    use p3_multilinear_util::point::Point;
     use p3_multilinear_util::poly::Poly;
-    use p3_sumcheck::SumcheckData;
     use p3_sumcheck::layout::{Layout, PrefixProver, SuffixProver, Table};
+    use p3_sumcheck::{OpeningBatch, SumcheckData};
     use rand::SeedableRng;
+    use rand::distr::{Distribution, StandardUniform};
     use rand::rngs::SmallRng;
 
-    use super::{commit, fold_rounds_with};
-    use crate::fold::fold_codeword;
+    use super::{MIN_ENCODED_ARITY, commit, fold_rounds_with};
+    use crate::fold::{ChallengeField, FoldAlphabet, fold_codeword, fold_codeword_batch};
     use crate::params::{BinaryPcsConfig, BinaryPcsParams};
-    use crate::test_util::{challenger, mmcs, narrow_challenger, narrow_mmcs};
+    use crate::test_util::{
+        LevelChallenger, LevelMmcs, challenger, level_challenger, level_mmcs, mmcs,
+        narrow_challenger, narrow_mmcs,
+    };
     use crate::transcript::{BinaryPcsProverTranscript, BinaryPcsShape};
 
     type F = BinaryField128;
@@ -715,6 +771,173 @@ mod tests {
                 "{shape}: transcript state"
             );
         }
+    }
+
+    /// Runs the fold phase over one column under one direct claim, and compares every codeword it
+    /// produces with folding the base codeword by the batch challenges it returns.
+    ///
+    /// The claim shape takes the banked residual route, which holds the bound message at its
+    /// stage boundaries. Whichever of encoding and folding the phase picks per batch, every
+    /// committed codeword and the final one must be the fold.
+    fn check_fold_phase_codewords<const BIND_EACH_ROUND: bool, A, EF>(
+        num_variables: usize,
+        log_folding_factor: usize,
+        log_inv_rate: usize,
+        seed: u64,
+    ) where
+        A: EncodableLevel + TranscriptField + FoldAlphabet<EF>,
+        EF: ChallengeField<A> + ExtensionField<A> + FoldAlphabet<EF>,
+        LevelMmcs<A>: Mmcs<A>,
+        LevelMmcs<EF>: Mmcs<EF>,
+        LevelChallenger<A>: FieldChallenger<A>
+            + GrindingChallenger<Witness = A>
+            + CanSampleUniformBits<A>
+            + CanObserve<<LevelMmcs<EF> as Mmcs<EF>>::Commitment>
+            + Clone,
+        StandardUniform: Distribution<A> + Distribution<EF>,
+    {
+        let params = BinaryPcsParams {
+            log_inv_rate,
+            pow_bits: 0,
+            security_level: 40,
+        };
+        let config = BinaryPcsConfig::try_new_with_folding::<A, EF>(
+            num_variables,
+            params,
+            log_folding_factor,
+        )
+        .unwrap();
+        let (base_mmcs, round_mmcs) = (level_mmcs::<A>(), level_mmcs::<EF>());
+        let shape = format!(
+            "bits {}/{}, {num_variables} variables, arity {log_folding_factor}, rate {log_inv_rate}",
+            A::bits(),
+            EF::bits()
+        );
+
+        let mut rng = SmallRng::seed_from_u64(seed);
+        let table = Table::<A>::rand(&mut rng, 1, num_variables);
+        let (_commitment, mut prover_data) = commit::<A, EF, _, _>(
+            &config,
+            &A::Encoder::default(),
+            &base_mmcs,
+            SuffixProver::<A, EF>::new_witness(vec![table], 0),
+        );
+        let point = Point::<EF>::rand(&mut rng, num_variables);
+        prover_data
+            .layout
+            .record_opening(0, &OpeningBatch::new(vec![0], Vec::new()), &point);
+
+        // The route hands out a bound column at some round, which only the banked route does.
+        // A batch folding enough rounds to be encoded ends on a round that holds one, so its
+        // codeword below comes from encoding rather than from folding.
+        let mut probe_ch = level_challenger::<A>();
+        let mut probe_sc = SumcheckData::default();
+        let (mut probe, _) = prover_data
+            .layout
+            .clone()
+            .into_sumcheck_in::<EF::SumcheckRepr, _>(&mut probe_sc, 0, &mut probe_ch);
+        let mut holds_bound_column = false;
+        for (batch, (_, arity)) in config.fold_batches().enumerate() {
+            for _ in 0..arity {
+                let _ = probe.compute_sumcheck_polynomials(&mut probe_sc, &mut probe_ch, 1, 0);
+                holds_bound_column |= probe.bound_column().is_some();
+            }
+            if arity >= MIN_ENCODED_ARITY {
+                assert!(
+                    probe.bound_column().is_some(),
+                    "{shape}: batch {batch} encodes its codeword"
+                );
+            }
+        }
+        assert!(holds_bound_column, "{shape}: banked route");
+
+        let mut ch = level_challenger::<A>();
+        let mut transcript = BinaryPcsProverTranscript::new(&mut ch, BinaryPcsShape::new(&config));
+        let (merkle_data, _sumcheck_data, rounds, randomness, final_codeword) =
+            fold_rounds_with::<BIND_EACH_ROUND, A, EF, _, _, _>(
+                prover_data,
+                &config,
+                &base_mmcs,
+                &round_mmcs,
+                &mut transcript,
+            );
+        transcript.abort();
+
+        // Fold batch by batch from the base codeword, the reference every route must match.
+        let base = base_mmcs.get_matrices(&merkle_data)[0].values.clone();
+        let mut expected: Vec<EF> = Vec::new();
+        for (batch, (start, arity)) in config.fold_batches().enumerate() {
+            let challenges = &randomness.as_slice()[start..start + arity];
+            expected = if batch == 0 {
+                fold_codeword_batch(&base, challenges)
+            } else {
+                fold_codeword_batch(&expected, challenges)
+            };
+            let got = rounds.get(batch).map_or_else(
+                || final_codeword.clone(),
+                |round| {
+                    round_mmcs.get_matrices(&round.merkle_data)[0]
+                        .values
+                        .clone()
+                },
+            );
+            assert_eq!(got, expected, "{shape}: batch {batch}");
+        }
+    }
+
+    /// Invariant: whichever of encoding the bound message and folding the previous codeword a
+    /// batch takes, its codeword is the fold of the base codeword by every challenge so far.
+    ///
+    /// The prover commits each batch's codeword from whichever of the two it picks, and the
+    /// verifier folds queried cosets of the committed codewords, so the two must never differ.
+    ///
+    /// Fixture state: every folding factor from one round per batch to four, both fold routes,
+    /// and every challenge field over a committed alphabet as wide as itself and a narrow one.
+    ///
+    ///     8-bit alphabet        a 2^8 base codeword, the whole domain it spans
+    ///     wider alphabets       several stages, ending on a short one, at two rates
+    #[test]
+    fn every_fold_phase_codeword_is_the_fold_of_the_base_codeword() {
+        for (seed, log_folding_factor) in (0..).zip(1..=4) {
+            for (num_variables, log_inv_rate) in [(13, 1), (13, 2)] {
+                check_fold_phase_codewords::<false, F, F>(
+                    num_variables,
+                    log_folding_factor,
+                    log_inv_rate,
+                    seed,
+                );
+                check_fold_phase_codewords::<false, BinaryField64, F>(
+                    num_variables,
+                    log_folding_factor,
+                    log_inv_rate,
+                    seed,
+                );
+                check_fold_phase_codewords::<false, BinaryField64, BinaryField64>(
+                    num_variables,
+                    log_folding_factor,
+                    log_inv_rate,
+                    seed,
+                );
+            }
+            check_fold_phase_codewords::<false, BinaryField8, BinaryField64>(
+                6,
+                log_folding_factor,
+                2,
+                seed,
+            );
+            check_fold_phase_codewords::<false, BinaryField8, F>(6, log_folding_factor, 2, seed);
+            check_fold_phase_codewords::<true, F, F>(13, log_folding_factor, 1, seed);
+            check_fold_phase_codewords::<true, BinaryField64, BinaryField64>(
+                13,
+                log_folding_factor,
+                1,
+                seed,
+            );
+        }
+        for (seed, num_variables) in [(4, 12), (5, 16)] {
+            check_fold_phase_codewords::<false, F, F>(num_variables, 4, 1, seed);
+        }
+        check_fold_phase_codewords::<false, F, F>(16, 8, 1, 6);
     }
 
     /// Committing rejects an arity mismatch in every build profile, not only a debug one.

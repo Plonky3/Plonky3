@@ -182,7 +182,7 @@ def ci_plan(
         "wasm": "p3-goldilocks" in affected,
         "keccak": "p3-keccak" in affected,
         "sha_ni": "p3-sha256" in affected,
-        "gfni": "p3-binary-field" in affected,
+        "gfni": bool({"p3-binary-field", "p3-sumcheck"} & affected),
         "toml": full or any_toml,
         "manifests": full or any_manifest,
         "scripts": full or scripts,

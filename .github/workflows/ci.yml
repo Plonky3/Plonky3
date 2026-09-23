@@ -284,11 +284,11 @@ jobs:
             echo "This runner has no SHA-NI; the build above is the coverage."
           fi
 
-      # The byte-wise field proptests pin the packed sweeps to the scalar routines, which
-      # only means something on a runner that has the instructions.
+      # The field and ring-switch tests exercise their packed kernels only on a runner with
+      # the instructions. The 512-bit ring-switch kernel also needs AVX-512F and AVX-512BW.
       #
       # `+avx512bw` is checked too, since the 512-bit form of the sweep needs it.
-      - name: Test binary-field (x86-64 GFNI)
+      - name: Test binary-field and sumcheck (x86-64 GFNI)
         if: >-
           needs.plan.outputs.rust == 'true' &&
           matrix.gfni &&
@@ -296,10 +296,14 @@ jobs:
         run: |
           if grep -qw gfni /proc/cpuinfo &&
              { ! grep -q avx512bw <<< "${{ matrix.features }}" ||
-               grep -qw avx512bw /proc/cpuinfo; }; then
+               { grep -qw avx512f /proc/cpuinfo &&
+                 grep -qw avx512bw /proc/cpuinfo; }; }; then
             python3 scripts/check.py test --package p3-binary-field
+            if grep -q avx512bw <<< "${{ matrix.features }}"; then
+              cargo test -p p3-sumcheck --lib ring_switch::bits
+            fi
           else
-            echo "This runner has no GFNI; the interpreter below is the coverage."
+            echo "This runner lacks the required SIMD features; the build above is the coverage."
           fi
 
       # Whatever the runner's own processor is, the interpreter has shims for the three
