@@ -77,11 +77,11 @@ use alloc::vec::Vec;
 use core::marker::PhantomData;
 
 use p3_binary_dft::EncodableLevel;
-use p3_binary_field::TowerLevel;
+use p3_binary_field::{BitCoordinates, TowerLevel};
 use p3_challenger::fs::TranscriptField;
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
 use p3_commit::{Mmcs, MultilinearPcs};
-use p3_field::Field;
+use p3_field::{ExtensionField, Field};
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
 use p3_multilinear_util::split_eq::SplitEq;
@@ -158,13 +158,9 @@ where
 
 impl<EF, B> BooleanTraceCommitment<EF, B>
 where
-    EF: ChallengeField<EF>
-        + EncodableLevel
-        + TranscriptField
-        + TowerLevel
-        + FoldAlphabet<EF>
-        + Coordinates,
+    EF: BitCoordinates + ExtensionField<B::Val>,
     B: BooleanBackend<EF>,
+    B::Val: TranscriptField + TowerLevel,
 {
     /// Stack trace tables into an already-built bit commitment.
     pub const fn from_commitment(inner: B) -> Self {
@@ -227,10 +223,7 @@ impl<EF: Field, D> BooleanTraceCommitmentData<EF, D> {
 
 /// One opening of a Boolean trace: the column values, and the bit proof behind them.
 #[derive(Clone, Serialize, Deserialize)]
-#[serde(bound(
-    serialize = "EF: TowerLevel, P: Serialize",
-    deserialize = "EF: TowerLevel, P: Deserialize<'de>"
-))]
+#[serde(bound(serialize = "P: Serialize", deserialize = "P: Deserialize<'de>"))]
 pub struct BooleanTraceCommitmentProof<EF: Field, P> {
     /// One value per column a batch reads, its current ones first, batches in transcript order.
     pub values: Vec<EF>,
@@ -337,25 +330,21 @@ pub enum BooleanTraceCommitmentError<E> {
 
 impl<EF, B, Challenger> MultilinearPcs<EF, Challenger> for BooleanTraceCommitment<EF, B>
 where
-    EF: ChallengeField<EF>
-        + EncodableLevel
-        + TranscriptField
-        + TowerLevel
-        + FoldAlphabet<EF>
-        + Coordinates,
+    EF: BitCoordinates + ExtensionField<B::Val>,
     B: BooleanMultilinearPcs<EF, Challenger>,
-    Challenger: FieldChallenger<EF>
-        + GrindingChallenger<Witness = EF>
-        + CanSampleUniformBits<EF>
+    B::Val: TranscriptField + TowerLevel,
+    Challenger: FieldChallenger<B::Val>
+        + GrindingChallenger<Witness = B::Val>
+        + CanSampleUniformBits<B::Val>
         + CanObserve<B::Commitment>,
 {
-    type Val = EF;
+    type Val = B::Val;
     type Commitment = B::Commitment;
-    type ProverData = BooleanTraceCommitmentData<EF, B::ProverData>;
+    type ProverData = BooleanTraceCommitmentData<B::Val, B::ProverData>;
     type Proof = BooleanTraceCommitmentProof<EF, B::Proof>;
     type Error = BooleanTraceCommitmentError<B::Error>;
     type ProverError = BooleanTraceCommitmentError<B::Error>;
-    type Witness = Vec<Table<EF>>;
+    type Witness = Vec<Table<B::Val>>;
     type OpeningProtocol = OpeningProtocol;
 
     fn num_vars(&self) -> usize {
@@ -422,16 +411,12 @@ where
 
 impl<EF, B, Challenger> PrescribedPointPcs<EF, Challenger> for BooleanTraceCommitment<EF, B>
 where
-    EF: ChallengeField<EF>
-        + EncodableLevel
-        + TranscriptField
-        + TowerLevel
-        + FoldAlphabet<EF>
-        + Coordinates,
+    EF: BitCoordinates + ExtensionField<B::Val>,
     B: BooleanMultilinearPcs<EF, Challenger>,
-    Challenger: FieldChallenger<EF>
-        + GrindingChallenger<Witness = EF>
-        + CanSampleUniformBits<EF>
+    B::Val: TranscriptField + TowerLevel,
+    Challenger: FieldChallenger<B::Val>
+        + GrindingChallenger<Witness = B::Val>
+        + CanSampleUniformBits<B::Val>
         + CanObserve<B::Commitment>,
 {
     fn prescribed_security(&self, protocol: &OpeningProtocol) -> Option<PrescribedOpeningSecurity> {
@@ -441,7 +426,7 @@ where
             return None;
         }
         // A reduction sends carry and last once its successor view outruns one element.
-        let absorbed = BitRingSwitch::<EF>::ABSORBED;
+        let absorbed = BitRingSwitch::<B::Val, EF>::ABSORBED;
         let route = OpeningRoute::new(protocol);
         let mut security = self.inner.readings_security(
             route.num_reductions(),

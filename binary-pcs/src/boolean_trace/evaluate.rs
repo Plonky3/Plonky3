@@ -2,10 +2,9 @@
 
 use alloc::vec::Vec;
 
-use p3_binary_dft::EncodableLevel;
-use p3_binary_field::TowerLevel;
+use p3_binary_field::{BitCoordinates, TowerLevel};
 use p3_challenger::fs::TranscriptField;
-use p3_field::Field;
+use p3_field::{ExtensionField, Field, PrimeCharacteristicRing};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_maybe_rayon::prelude::*;
 use p3_multilinear_util::point::Point;
@@ -15,8 +14,6 @@ use p3_sumcheck::layout::{ColumnView, Table};
 
 use super::{BooleanTraceCommitment, WORD_BITS};
 use crate::boolean::BooleanBackend;
-use crate::fold::{ChallengeField, FoldAlphabet};
-use crate::packing::Coordinates;
 
 /// Rows one task sums when a dense column is weighted.
 ///
@@ -36,13 +33,9 @@ pub(super) const BLOCKS_PER_TASK: usize = 16;
 
 impl<EF, B> BooleanTraceCommitment<EF, B>
 where
-    EF: ChallengeField<EF>
-        + EncodableLevel
-        + TranscriptField
-        + TowerLevel
-        + FoldAlphabet<EF>
-        + Coordinates,
+    EF: BitCoordinates + ExtensionField<B::Val>,
     B: BooleanBackend<EF>,
+    B::Val: TranscriptField + TowerLevel,
 {
     /// Evaluate every column at one row point, and, when `next` holds, one row ahead of it.
     ///
@@ -51,7 +44,7 @@ where
     ///
     /// The successor vector is empty unless it is asked for.
     pub(super) fn evaluate_views(
-        table: &Table<EF>,
+        table: &Table<B::Val>,
         point: &Point<EF>,
         next: bool,
     ) -> (Vec<EF>, Vec<EF>) {
@@ -78,7 +71,7 @@ where
     }
 
     /// Sum every column of a table against one weight per row.
-    fn weighted_columns(table: &Table<EF>, weights: &Poly<EF>) -> Vec<EF> {
+    fn weighted_columns(table: &Table<B::Val>, weights: &Poly<EF>) -> Vec<EF> {
         let rows = weights.as_slice();
         // A packed table is summed word by word, so no cell is decoded.
         if let Some(words) = table.packed_bits() {
@@ -97,7 +90,7 @@ where
     /// # Panics
     ///
     /// Panics on a packed column, which [`packed_column_sums`] sums a whole table at a time.
-    fn weighted_column(column: ColumnView<'_, EF>, rows: &[EF]) -> EF {
+    fn weighted_column(column: ColumnView<'_, B::Val>, rows: &[EF]) -> EF {
         let cells = column
             .as_dense()
             .expect("a packed table is summed word by word");
@@ -111,7 +104,7 @@ where
                 cells
                     .iter()
                     .zip(rows)
-                    .filter(|&(&cell, _)| cell == EF::ONE)
+                    .filter(|&(&cell, _)| cell == <B::Val>::ONE)
                     .map(|(_, &weight)| weight)
                     .sum::<EF>()
             })

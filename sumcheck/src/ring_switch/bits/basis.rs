@@ -1,24 +1,26 @@
-//! The `F_2`-coordinates of one tower-level element.
+//! The `F_2`-coordinates of one binary-field element.
 
 use alloc::vec::Vec;
 use core::marker::PhantomData;
 
-use p3_binary_field::TowerLevel;
+use p3_binary_field::{BitCoordinates, TowerLevel};
 use p3_field::Field;
 
 use crate::strategy::FromTable;
 
-/// The widest tower level these coordinates hold.
+/// The widest field these coordinates hold, in bytes.
 ///
 /// A fixed buffer of this width reads coordinates without allocating.
 /// An exactly sized array cannot, while the byte count is a trait const.
-const MAX_BYTES: usize = 16;
+///
+/// Twenty-four bytes hold the 192 coordinates of the widest challenge field.
+const MAX_BYTES: usize = 24;
 
 /// The `F_2`-coordinates of one element, in the basis its bytes define.
 ///
 /// # Overview
 ///
-/// A tower level may hold its elements in any `F_2`-basis of the field.
+/// A binary field may hold its elements in any `F_2`-basis of the field.
 /// This type fixes the one the representation already carries:
 ///
 /// ```text
@@ -38,18 +40,28 @@ const MAX_BYTES: usize = 16;
 /// It also keeps the set-bit walk in one place.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Coefficients<EF> {
-    /// The element's little-endian bytes, zero above the level's own width.
+    /// The element's little-endian bytes, zero above the field's own width.
     bytes: [u8; MAX_BYTES],
-    /// Marker for the level these coordinates belong to.
+    /// Marker for the field these coordinates belong to.
     _ef: PhantomData<EF>,
 }
 
 impl<EF: TowerLevel> Coefficients<EF> {
-    /// Coordinates one element has, the level's dimension over `F_2`.
-    pub const DIMENSION: usize = 1 << EF::LOG_BITS;
-
     /// Number of Boolean variables one element's coordinates index.
     pub const LOG_DIMENSION: usize = EF::LOG_BITS;
+}
+
+impl<EF: BitCoordinates> Coefficients<EF> {
+    /// Coordinates one element has, the field's dimension over `F_2`.
+    pub const DIMENSION: usize = EF::DIMENSION;
+
+    /// Boolean variables that index every coordinate, rounding the dimension up.
+    ///
+    /// ```text
+    ///     128 coordinates  ->  7 variables
+    ///     192 coordinates  ->  8 variables, the top 64 indices unused
+    /// ```
+    pub const INDEX_VARIABLES: usize = EF::DIMENSION.next_power_of_two().trailing_zeros() as usize;
 
     /// All coordinates zero.
     #[must_use]
@@ -64,12 +76,12 @@ impl<EF: TowerLevel> Coefficients<EF> {
     ///
     /// # Panics
     ///
-    /// Panics if the level is wider than the buffer.
+    /// Panics if the field is wider than the buffer.
     #[must_use]
     pub fn of(value: EF) -> Self {
         assert!(
             EF::NUM_BYTES <= MAX_BYTES,
-            "the tower level is wider than these coordinates hold"
+            "the field is wider than these coordinates hold"
         );
         let mut out = Self::zero();
         for (slot, byte) in out.bytes.iter_mut().zip(value.into_bytes()) {
@@ -80,7 +92,7 @@ impl<EF: TowerLevel> Coefficients<EF> {
 
     /// Whether one coordinate is set.
     ///
-    /// Bytes above the level's width stay zero.
+    /// Bytes above the field's width stay zero.
     ///
     /// An index below the dimension therefore never reads padding.
     #[must_use]
@@ -117,7 +129,7 @@ impl<EF: TowerLevel> Coefficients<EF> {
     /// The inverse of reading one, so a round trip here is the identity.
     #[must_use]
     pub fn element(&self) -> EF {
-        EF::from_le_byte_iter(self.bytes.iter().copied())
+        EF::from_coordinate_bytes(self.bytes.iter().copied())
     }
 }
 
@@ -137,7 +149,7 @@ impl<EF: TowerLevel> Coefficients<EF> {
 ///
 /// # Two fields
 ///
-/// `EF` is the level whose coordinates index the weights, and `A` is what a weight is.
+/// `EF` is the field whose coordinates index the weights, and `A` is what a weight is.
 ///
 /// The two part company when the caller wants the sums in a field isomorphic to `EF`:
 /// a subset sum is additive, and a field isomorphism of characteristic two carries
@@ -146,11 +158,11 @@ impl<EF: TowerLevel> Coefficients<EF> {
 pub(crate) struct CoordinateSums<EF, A> {
     /// Per byte position, the weight sum over every subset of its eight coordinates.
     tables: Vec<[A; 256]>,
-    /// Marker for the level the coordinates are read from.
+    /// Marker for the field the coordinates are read from.
     _ef: PhantomData<EF>,
 }
 
-impl<EF: TowerLevel, A: Field> CoordinateSums<EF, A> {
+impl<EF: BitCoordinates, A: Field> CoordinateSums<EF, A> {
     /// Tabulate the subset sums of one weight per coordinate.
     ///
     /// # Panics

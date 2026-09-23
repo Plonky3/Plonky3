@@ -1,13 +1,14 @@
 //! Typed transcript for batched Boolean trace column openings.
 
 use alloc::vec::Vec;
+use core::marker::PhantomData;
 
 use p3_challenger::fs::{
     DomainSeparator, FieldToFieldCodec, FieldUnit, Hierarchy, Interaction, InteractionPattern,
     Kind, Length, ProverState, TranscriptField, VerifierState,
 };
 use p3_challenger::{CanObserve, CanSample, CanSampleUniformBits, GrindingChallenger};
-use p3_field::{AlgebraIdentity, Field};
+use p3_field::{AlgebraIdentity, ExtensionField, Field};
 use p3_multilinear_util::point::Point;
 
 const VERSION: u8 = 1;
@@ -76,7 +77,7 @@ impl ColumnBatchShape {
                     Length::Fixed(self.width),
                 ));
             }
-            steps.push(Interaction::algebra::<F, F>(
+            steps.push(Interaction::algebra::<F, EF>(
                 Hierarchy::Atomic,
                 Kind::Challenge,
                 COLUMN_POINT,
@@ -105,39 +106,44 @@ impl ColumnBatchShape {
 }
 
 /// Prover-side driver for one optimized opening run.
-pub(crate) struct ColumnBatchProverTranscript<'a, F: TranscriptField, C> {
+///
+/// `F` is the sponge's alphabet and `EF` the field the points and values live in.
+pub(crate) struct ColumnBatchProverTranscript<'a, F: TranscriptField, EF, C> {
     state: ProverState<&'a mut C, Alphabet<F>>,
     shape: ColumnBatchShape,
+    _challenge: PhantomData<EF>,
 }
 
-impl<'a, F, C> ColumnBatchProverTranscript<'a, F, C>
+impl<'a, F, EF, C> ColumnBatchProverTranscript<'a, F, EF, C>
 where
     F: Field + TranscriptField + AlgebraIdentity<F>,
+    EF: ExtensionField<F>,
     C: CanObserve<F> + CanSample<F> + CanSampleUniformBits<F> + GrindingChallenger<Witness = F>,
 {
     pub(crate) fn new(challenger: &'a mut C, shape: ColumnBatchShape) -> Self {
-        let separator = shape.separator::<F, F>();
+        let separator = shape.separator::<F, EF>();
         Self {
             state: ProverState::new(challenger, &separator),
             shape,
+            _challenge: PhantomData,
         }
     }
 
-    pub(crate) fn batch(&mut self, point: &Point<F>, values: &[F], next: &[F]) -> Point<F> {
+    pub(crate) fn batch(&mut self, point: &Point<EF>, values: &[EF], next: &[EF]) -> Point<EF> {
         debug_assert_eq!(point.num_variables(), self.shape.table_variables);
         debug_assert_eq!(values.len(), self.shape.width);
         debug_assert_eq!(next.len(), self.shape.width * usize::from(self.shape.next));
         self.state
-            .observe_extensions::<F, F, FieldToFieldCodec<F>>(POINT, point.as_slice());
+            .observe_extensions::<F, EF, FieldToFieldCodec<F>>(POINT, point.as_slice());
         self.state
-            .observe_extensions::<F, F, FieldToFieldCodec<F>>(VALUES, values);
+            .observe_extensions::<F, EF, FieldToFieldCodec<F>>(VALUES, values);
         if self.shape.next {
             self.state
-                .observe_extensions::<F, F, FieldToFieldCodec<F>>(NEXT_VALUES, next);
+                .observe_extensions::<F, EF, FieldToFieldCodec<F>>(NEXT_VALUES, next);
         }
         let coordinates = self
             .state
-            .challenge_scalars::<F, FieldToFieldCodec<F>>(
+            .challenge_extensions::<F, EF, FieldToFieldCodec<F>>(
                 COLUMN_POINT,
                 self.shape.column_variables(),
             )
@@ -155,44 +161,49 @@ where
 }
 
 /// Verifier-side driver for one optimized opening run.
-pub(crate) struct ColumnBatchVerifierTranscript<'a, F: TranscriptField, C> {
+///
+/// `F` is the sponge's alphabet and `EF` the field the points and values live in.
+pub(crate) struct ColumnBatchVerifierTranscript<'a, F: TranscriptField, EF, C> {
     state: VerifierState<'static, &'a mut C, Alphabet<F>>,
     shape: ColumnBatchShape,
+    _challenge: PhantomData<EF>,
 }
 
-impl<'a, F, C> ColumnBatchVerifierTranscript<'a, F, C>
+impl<'a, F, EF, C> ColumnBatchVerifierTranscript<'a, F, EF, C>
 where
     F: Field + TranscriptField + AlgebraIdentity<F>,
+    EF: ExtensionField<F>,
     C: CanObserve<F> + CanSample<F> + CanSampleUniformBits<F> + GrindingChallenger<Witness = F>,
 {
     pub(crate) fn new(challenger: &'a mut C, shape: ColumnBatchShape) -> Self {
-        let separator = shape.separator::<F, F>();
+        let separator = shape.separator::<F, EF>();
         Self {
             state: VerifierState::new(challenger, &separator, &[]),
             shape,
+            _challenge: PhantomData,
         }
     }
 
     pub(crate) fn batch(
         &mut self,
-        point: &Point<F>,
-        values: &[F],
-        next: &[F],
-    ) -> Result<Point<F>, p3_challenger::fs::TranscriptError> {
+        point: &Point<EF>,
+        values: &[EF],
+        next: &[EF],
+    ) -> Result<Point<EF>, p3_challenger::fs::TranscriptError> {
         debug_assert_eq!(point.num_variables(), self.shape.table_variables);
         debug_assert_eq!(values.len(), self.shape.width);
         debug_assert_eq!(next.len(), self.shape.width * usize::from(self.shape.next));
         self.state
-            .observe_extensions::<F, F, FieldToFieldCodec<F>>(POINT, point.as_slice())?;
+            .observe_extensions::<F, EF, FieldToFieldCodec<F>>(POINT, point.as_slice())?;
         self.state
-            .observe_extensions::<F, F, FieldToFieldCodec<F>>(VALUES, values)?;
+            .observe_extensions::<F, EF, FieldToFieldCodec<F>>(VALUES, values)?;
         if self.shape.next {
             self.state
-                .observe_extensions::<F, F, FieldToFieldCodec<F>>(NEXT_VALUES, next)?;
+                .observe_extensions::<F, EF, FieldToFieldCodec<F>>(NEXT_VALUES, next)?;
         }
         let coordinates = self
             .state
-            .challenge_scalars::<F, FieldToFieldCodec<F>>(
+            .challenge_extensions::<F, EF, FieldToFieldCodec<F>>(
                 COLUMN_POINT,
                 self.shape.column_variables(),
             )

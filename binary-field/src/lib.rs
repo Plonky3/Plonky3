@@ -8,6 +8,7 @@ mod bitslice;
 mod cantor;
 mod challenger;
 mod clmul;
+mod coordinates;
 mod extension;
 mod gf2;
 mod ghash;
@@ -28,6 +29,7 @@ pub use bitslice::{
     PackedGf2x128, PackedGf2x256, PackedGf2x512, Underlier, Word,
 };
 pub use challenger::BinaryChallenger;
+pub use coordinates::BitCoordinates;
 pub use gf2::Gf2;
 pub use ghash::Ghash128;
 #[cfg(all(

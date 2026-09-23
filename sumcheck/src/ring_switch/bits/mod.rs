@@ -15,7 +15,7 @@
 //!     bit alphabet       ->  the set bits, added
 //! ```
 //!
-//! And the tensor element is a `d x d` bit matrix, one `EF` element per row:
+//! And the tensor element is a bit matrix, one packed element per row:
 //!
 //! ```text
 //!     one byte per coefficient   ->  16 KB at d = 128
@@ -46,6 +46,19 @@
 //! The reduction is split where the protocol splits.
 //! The batching challenge is drawn after the tensor element is bound.
 //! A type taking it up front would invite the unsound order.
+//!
+//! # Two fields
+//!
+//! The bits are packed into a tower level `F`, and the challenges come from a field `EF`.
+//!
+//! ```text
+//!     F    GF(2^128)   or   GF(2^64)
+//!     EF   GF(2^128)   or   GF(2^192)
+//! ```
+//!
+//! The packing needs `F` to have a power-of-two dimension, so a hypercube splits at it.
+//! `EF` only indexes the rows of the tensor element, so its dimension is free.
+//! A dimension that is no power of two pads the batching index, the extra indices weighing nothing.
 //!
 //! # The basis
 //!

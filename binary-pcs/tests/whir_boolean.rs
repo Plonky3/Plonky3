@@ -42,9 +42,9 @@ type MyCompress = CompressionFunctionFromHasher<Keccak256Hash, 2, 32>;
 type MyMmcs = MerkleTreeMmcs<EF, u8, MyHash, MyCompress, 2, 32>;
 type Grouped = GroupedCodewordMmcs<MyMmcs>;
 type MyChallenger = BinaryChallenger<EF, HashChallenger<u8, Keccak256Hash, 32>>;
-type Prover = BooleanWhirProver<EF, BooleanWhirDomain, MyMmcs, MyChallenger>;
-type Pcs = BooleanWhirPcs<EF, BooleanWhirDomain, MyMmcs, MyChallenger>;
-type TracePcs = BooleanWhirTracePcs<EF, BooleanWhirDomain, MyMmcs, MyChallenger>;
+type Prover = BooleanWhirProver<EF, EF, BooleanWhirDomain, MyMmcs, MyChallenger>;
+type Pcs = BooleanWhirPcs<EF, EF, BooleanWhirDomain, MyMmcs, MyChallenger>;
+type TracePcs = BooleanWhirTracePcs<EF, EF, BooleanWhirDomain, MyMmcs, MyChallenger>;
 
 /// Bits the fixture commits, in log bits of one Boolean column.
 const LOG_BITS: usize = 16;
@@ -279,12 +279,16 @@ fn the_budget_grades_the_schedule_and_the_proof() {
 
     // What the claim count adds is fixed by the claims, not by the schedule.
     //
-    // Each claim brings its element.
+    // Each claim brings its element, one packed row per coordinate.
     // The batch brings one run of rounds, its surviving value and the one opened value.
     let opening_only = pcs.proof_shape(0, false);
     assert_eq!(
+        shape.sent_base_elements - opening_only.sent_base_elements,
+        2 * 128
+    );
+    assert_eq!(
         shape.sent_extension_elements - opening_only.sent_extension_elements,
-        2 * 128 + 2 * (LOG_BITS - ABSORBED) + 2
+        2 * (LOG_BITS - ABSORBED) + 2
     );
     assert_eq!(shape.stir_queries, opening_only.stir_queries);
 
@@ -366,13 +370,11 @@ fn the_estimate_covers_the_reductions_and_not_the_opening_alone() {
     let two = pcs.proof_shape(2, false);
     let eight = pcs.proof_shape(8, false);
     // The rounds, the surviving value and the opened value are the batch's, paid once.
-    assert_eq!(
-        eight.sent_extension_elements - two.sent_extension_elements,
-        6 * 128
-    );
+    assert_eq!(eight.sent_base_elements - two.sent_base_elements, 6 * 128);
+    assert_eq!(eight.sent_extension_elements, two.sent_extension_elements);
     // Sending carry and last triples the element each reduction puts on the wire.
     assert_eq!(
-        pcs.proof_shape(2, true).sent_extension_elements - two.sent_extension_elements,
+        pcs.proof_shape(2, true).sent_base_elements - two.sent_base_elements,
         2 * 2 * 128
     );
 
@@ -817,4 +819,150 @@ fn one_table_read_whole_takes_the_batched_route_through_whir() {
         protocol,
     )
     .unwrap();
+}
+
+/// Bits packed sixty-four to a committed element, challenges drawn from `GF(2^192)`.
+mod wide_challenge {
+    use p3_binary_field::{Poly64, Poly192};
+    use p3_binary_pcs::whir::BinaryWhirDomain;
+
+    use super::*;
+
+    type F = Poly64;
+    type EF = Poly192;
+    type NarrowMmcs = MerkleTreeMmcs<F, u8, MyHash, MyCompress, 2, 32>;
+    type NarrowChallenger = BinaryChallenger<F, HashChallenger<u8, Keccak256Hash, 32>>;
+    type Domain = BinaryWhirDomain<F>;
+    type WidePcs = BooleanWhirTracePcs<F, EF, Domain, NarrowMmcs, NarrowChallenger>;
+
+    /// Coordinates one sixty-four-bit element absorbs.
+    const NARROW_ABSORBED: usize = 6;
+
+    const fn narrow_challenger() -> NarrowChallenger {
+        NarrowChallenger::from_hasher(Vec::new(), Keccak256Hash)
+    }
+
+    /// A trace commitment over these shapes, at the fixture's regime.
+    fn trace_pcs(shapes: &[TableShape]) -> WidePcs {
+        let (arity, _) = plan_stacked_layout(shapes);
+        let domain = Domain::default();
+        let config = BinaryWhirProfile::proven_list_decoding(SECURITY_LEVEL, LOG_INV_RATE, FOLDING)
+            .config::<EF, F, NarrowChallenger, _>(arity - NARROW_ABSORBED, &domain)
+            .unwrap();
+        let cap_height = recommended_cap_height(&config);
+        let merkle = NarrowMmcs::new(
+            MyHash::new(Keccak256Hash),
+            MyCompress::new(Keccak256Hash),
+            cap_height,
+        );
+        let bits = BooleanWhirPcs::new(BooleanWhirProver::new(config, domain, merkle), arity);
+        WidePcs::from_commitment(bits.unwrap())
+    }
+
+    /// Random Boolean tables of these shapes, one seed each.
+    fn tables(shapes: &[TableShape], seed: u64) -> Vec<Table<F>> {
+        shapes
+            .iter()
+            .enumerate()
+            .map(|(index, shape)| {
+                let rows = 1usize << shape.num_variables();
+                let mut rng = SmallRng::seed_from_u64(seed + index as u64);
+                let cells = (0..shape.width() * rows)
+                    .map(|_| F::from_bool(rng.random::<bool>()))
+                    .collect();
+                Table::new(RowMajorMatrix::new(cells, rows))
+            })
+            .collect()
+    }
+
+    /// Commit, open and verify, then refuse the same proof with its first value moved.
+    fn round_trip(shapes: &[TableShape], protocol: &OpeningProtocol, seed: u64) {
+        let pcs = trace_pcs(shapes);
+        let mut prover = narrow_challenger();
+        let (commitment, data) =
+            MultilinearPcs::<EF, NarrowChallenger>::commit(&pcs, tables(shapes, seed), &mut prover)
+                .unwrap();
+        let proof =
+            MultilinearPcs::<EF, NarrowChallenger>::open(&pcs, data, protocol.clone(), &mut prover)
+                .unwrap();
+        MultilinearPcs::<EF, NarrowChallenger>::verify(
+            &pcs,
+            &commitment,
+            &proof,
+            &mut narrow_challenger(),
+            protocol.clone(),
+        )
+        .unwrap();
+
+        let mut tampered = proof;
+        tampered.values[0] += EF::ONE;
+        assert!(
+            MultilinearPcs::<EF, NarrowChallenger>::verify(
+                &pcs,
+                &commitment,
+                &tampered,
+                &mut narrow_challenger(),
+                protocol.clone(),
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn the_per_column_route_round_trips() {
+        // Two tables of unequal height, the first read at both rows.
+        let shapes = [TableShape::new(9, 3), TableShape::new(8, 2)];
+        let protocol = OpeningProtocol::new(vec![
+            TableSpec::new(
+                shapes[0],
+                vec![OpeningBatch::new(vec![0, 1, 2], vec![0, 1, 2])],
+            ),
+            TableSpec::new(shapes[1], vec![OpeningBatch::new(vec![0, 1], Vec::new())]),
+        ]);
+        round_trip(&shapes, &protocol, 0x64C0_0000);
+    }
+
+    #[test]
+    fn the_batched_route_round_trips() {
+        // One table read whole at both rows combines its columns under one challenge.
+        let shape = TableShape::new(10, 4);
+        let protocol = OpeningProtocol::new(vec![TableSpec::new(
+            shape,
+            vec![OpeningBatch::new(vec![0, 1, 2, 3], vec![0, 1, 2, 3])],
+        )]);
+        round_trip(&[shape], &protocol, 0x64C0_B000);
+    }
+
+    #[test]
+    fn every_reduction_term_is_priced_at_the_challenge_width() {
+        // Same schedule, two challenge fields: only the width the terms are divided by moves.
+        let shape = TableShape::new(12, 2);
+        let protocol = OpeningProtocol::new(vec![TableSpec::new(
+            shape,
+            vec![OpeningBatch::new(vec![0, 1], Vec::new())],
+        )]);
+        let security = PrescribedPointPcs::<EF, NarrowChallenger>::prescribed_security(
+            &trace_pcs(&[shape]),
+            &protocol,
+        )
+        .expect("the trace opening is priced");
+
+        // The ring switch batches eight coordinates and runs eight rounds:
+        //
+        //     (8 + 2 * 8) / 2^192   ->   192 - log2(24) bits
+        let (arity, _) = plan_stacked_layout(&[shape]);
+        let rounds = arity - NARROW_ABSORBED;
+        //
+        // The batch runs before the commitment names a codeword, so every candidate pays it.
+        let candidates = security.candidates().expect("the regime bounds its list");
+        let expected = p3_security::multilinear::bit_ring_switch_term(1, 8, rounds, 192)
+            .over_candidates(candidates);
+        let switch = security
+            .terms
+            .iter()
+            .find(|term| term.label == p3_security::BIT_RING_SWITCH_LABEL)
+            .expect("the ring switch is charged");
+        assert_eq!(switch.bits, expected.bits);
+        assert!(switch.bits.bits() > 128.0);
+    }
 }

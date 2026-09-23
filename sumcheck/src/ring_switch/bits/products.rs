@@ -1,7 +1,8 @@
 //! Sums of exterior products against one fixed list of left factors.
 
-use p3_binary_field::TowerLevel;
+use p3_binary_field::BitCoordinates;
 
+use super::basis::Coefficients;
 use super::tensor::{BitTensor, BitTensorBuckets};
 
 /// Left factors read against many blocks of right factors, each block summed on its own.
@@ -36,7 +37,7 @@ pub(crate) struct LeftFactors<'a, EF> {
     prepared: Option<kernel::Prepared>,
 }
 
-impl<'a, EF: TowerLevel> LeftFactors<'a, EF> {
+impl<'a, EF: BitCoordinates> LeftFactors<'a, EF> {
     /// Prepare the left factors of every block sum to come.
     pub(crate) fn new(left: &'a [EF]) -> Self {
         Self {
@@ -48,13 +49,16 @@ impl<'a, EF: TowerLevel> LeftFactors<'a, EF> {
     /// `sum_j left[j] ⊗ right[j]`, over the terms both lists hold.
     ///
     /// The buckets are the fallback's scratch, allocated on first use and kept for the next block.
-    pub(crate) fn sum(
+    ///
+    /// The kernel takes 128-bit factors on both legs, and every other shape takes the buckets.
+    pub(crate) fn sum<R: BitCoordinates>(
         &self,
-        right: &[EF],
-        scratch: &mut Option<BitTensorBuckets<EF>>,
-    ) -> BitTensor<EF> {
+        right: &[R],
+        scratch: &mut Option<BitTensorBuckets<EF, R>>,
+    ) -> BitTensor<EF, R> {
         if let Some(prepared) = &self.prepared
             && right.len() == self.left.len()
+            && Coefficients::<R>::DIMENSION == 128
         {
             return prepared.sum(right);
         }
@@ -78,7 +82,7 @@ mod kernel {
     use alloc::vec::Vec;
     use core::arch::x86_64::*;
 
-    use p3_binary_field::TowerLevel;
+    use p3_binary_field::BitCoordinates;
 
     use super::super::basis::Coefficients;
     use super::super::tensor::BitTensor;
@@ -172,7 +176,7 @@ mod kernel {
 
     impl Prepared {
         /// The blocks of `left`, when its level is 128 bits wide and it splits into groups.
-        pub(super) fn new<EF: TowerLevel>(left: &[EF]) -> Option<Self> {
+        pub(super) fn new<EF: BitCoordinates>(left: &[EF]) -> Option<Self> {
             if Coefficients::<EF>::DIMENSION != 128
                 || left.is_empty()
                 || !left.len().is_multiple_of(GROUP)
@@ -190,7 +194,12 @@ mod kernel {
         }
 
         /// `sum_j left[j] ⊗ right[j]`, for exactly one right factor per prepared left factor.
-        pub(super) fn sum<EF: TowerLevel>(&self, right: &[EF]) -> BitTensor<EF> {
+        ///
+        /// Both legs are 128 bits wide, which the caller checks for the right one.
+        pub(super) fn sum<EF: BitCoordinates, R: BitCoordinates>(
+            &self,
+            right: &[R],
+        ) -> BitTensor<EF, R> {
             assert_eq!(
                 right.len(),
                 self.groups.len() * GROUP,
@@ -201,7 +210,7 @@ mod kernel {
             let rows = unsafe { rows(&self.groups, right) };
             BitTensor::try_from(
                 rows.iter()
-                    .map(|row| EF::from_le_byte_iter(row.to_le_bytes().into_iter()))
+                    .map(|row| R::from_coordinate_bytes(row.to_le_bytes().into_iter()))
                     .collect::<Vec<_>>(),
             )
             .expect("one row per coordinate of a 128-bit level")
@@ -210,7 +219,7 @@ mod kernel {
 
     /// The transposed blocks of one group of eight left factors.
     #[target_feature(enable = "avx512f,avx512bw,gfni")]
-    fn left_blocks<EF: TowerLevel>(group: &[EF; GROUP]) -> [u64; 16] {
+    fn left_blocks<EF: BitCoordinates>(group: &[EF; GROUP]) -> [u64; 16] {
         let registers = registers(group);
         let mut blocks = [0u64; 16];
         for (half, blocks) in blocks.as_chunks_mut::<8>().0.iter_mut().enumerate() {
@@ -239,7 +248,7 @@ mod kernel {
     /// left block `p` covers half a byte row of the matrix. Each half runs over the whole
     /// block with its sixteen partial sums held in registers.
     #[target_feature(enable = "avx512f,avx512bw,gfni")]
-    fn rows<EF: TowerLevel>(groups: &[[u64; 16]], right: &[EF]) -> [u128; 128] {
+    fn rows<R: BitCoordinates>(groups: &[[u64; 16]], right: &[R]) -> [u128; 128] {
         let mut rows = [0u128; 128];
         for half in 0..2 {
             let mut sums = [_mm512_setzero_si512(); 16];
@@ -271,7 +280,7 @@ mod kernel {
 
     /// Eight elements in memory order, four to a register.
     #[target_feature(enable = "avx512f")]
-    fn registers<EF: TowerLevel>(group: &[EF; GROUP]) -> [__m512i; 2] {
+    fn registers<EF: BitCoordinates>(group: &[EF; GROUP]) -> [__m512i; 2] {
         let words: [u128; GROUP] = core::array::from_fn(|t| {
             let mut bytes = [0u8; 16];
             for (slot, byte) in bytes.iter_mut().zip(group[t].into_bytes()) {
@@ -341,7 +350,7 @@ mod kernel {
     target_feature = "avx512bw"
 )))]
 mod kernel {
-    use p3_binary_field::TowerLevel;
+    use p3_binary_field::BitCoordinates;
 
     use super::super::tensor::BitTensor;
 
@@ -360,7 +369,10 @@ mod kernel {
         /// Never called: no value of this type exists.
         // The empty match is the proof of that, so the dereference it names never runs.
         #[allow(clippy::uninhabited_references)]
-        pub(super) fn sum<EF: TowerLevel>(&self, _right: &[EF]) -> BitTensor<EF> {
+        pub(super) fn sum<EF: BitCoordinates, R: BitCoordinates>(
+            &self,
+            _right: &[R],
+        ) -> BitTensor<EF, R> {
             match *self {}
         }
     }
@@ -370,14 +382,14 @@ mod kernel {
 mod tests {
     use alloc::vec::Vec;
 
-    use p3_binary_field::{BinaryField16, BinaryField128};
+    use p3_binary_field::{BinaryField16, BinaryField128, TowerLevel};
     use rand::rngs::SmallRng;
     use rand::{RngExt, SeedableRng};
 
     use super::*;
 
     /// The sum one exterior product at a time.
-    fn reference<EF: TowerLevel>(left: &[EF], right: &[EF]) -> BitTensor<EF> {
+    fn reference<EF: BitCoordinates>(left: &[EF], right: &[EF]) -> BitTensor<EF> {
         let mut tensor = BitTensor::zero();
         for (&left, &right) in left.iter().zip(right) {
             tensor.add_exterior_product(left, right);
@@ -385,7 +397,7 @@ mod tests {
         tensor
     }
 
-    fn random<EF: TowerLevel>(rng: &mut SmallRng, len: usize) -> Vec<EF>
+    fn random<EF: BitCoordinates>(rng: &mut SmallRng, len: usize) -> Vec<EF>
     where
         rand::distr::StandardUniform: rand::distr::Distribution<EF>,
     {

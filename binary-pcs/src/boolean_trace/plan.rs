@@ -3,11 +3,10 @@
 
 use alloc::vec::Vec;
 
-use p3_binary_dft::EncodableLevel;
-use p3_binary_field::TowerLevel;
+use p3_binary_field::{BitCoordinates, TowerLevel};
 use p3_challenger::FieldChallenger;
 use p3_challenger::fs::TranscriptField;
-use p3_field::Field;
+use p3_field::{ExtensionField, Field};
 use p3_multilinear_util::point::Point;
 use p3_sumcheck::layout::{Table, TablePlacement, plan_stacked_layout};
 use p3_sumcheck::{OpeningEvals, OpeningPointMismatch, OpeningProtocol, TableShape};
@@ -15,18 +14,12 @@ use p3_sumcheck::{OpeningEvals, OpeningPointMismatch, OpeningProtocol, TableShap
 use super::{BooleanTraceCommitment, BooleanTraceCommitmentError};
 use crate::boolean::{BitOpening, BitReadings, BooleanBackend};
 use crate::boolean_trace_transcript::ColumnBatchShape;
-use crate::fold::{ChallengeField, FoldAlphabet};
-use crate::packing::Coordinates;
 
 impl<EF, B> BooleanTraceCommitment<EF, B>
 where
-    EF: ChallengeField<EF>
-        + EncodableLevel
-        + TranscriptField
-        + TowerLevel
-        + FoldAlphabet<EF>
-        + Coordinates,
+    EF: BitCoordinates + ExtensionField<B::Val>,
     B: BooleanBackend<EF>,
+    B::Val: TranscriptField + TowerLevel,
 {
     /// Where each table's columns land in the bit witness, planned from the shapes.
     ///
@@ -111,7 +104,7 @@ where
 
     /// Validate retained source shapes before any sampled point or opening transcript is used.
     pub(super) fn validate_source_shapes(
-        tables: &[Table<EF>],
+        tables: &[Table<B::Val>],
         protocol: &OpeningProtocol,
     ) -> Result<(), BooleanTraceCommitmentError<B::Error>> {
         let expected = protocol.table_shapes();
@@ -370,13 +363,16 @@ pub(super) fn opening_evals<EF: Field>(
 }
 
 /// One point per opening batch, drawn from the transcript in batch order.
-pub(super) fn sample_points<EF, Challenger>(
+///
+/// The sponge speaks the packing level `F`, and each coordinate is an element of `EF`.
+pub(super) fn sample_points<F, EF, Challenger>(
     protocol: &OpeningProtocol,
     challenger: &mut Challenger,
 ) -> Vec<Point<EF>>
 where
-    EF: Field,
-    Challenger: FieldChallenger<EF>,
+    F: Field,
+    EF: ExtensionField<F>,
+    Challenger: FieldChallenger<F>,
 {
     // Coordinates are drawn in the order the batches stream, one batch's point at a time.
     let shapes = protocol.table_shapes();
@@ -384,7 +380,11 @@ where
         .iter_openings()
         .map(|(table, _)| {
             let num_variables = shapes[table].num_variables();
-            Point::new((0..num_variables).map(|_| challenger.sample()).collect())
+            Point::new(
+                (0..num_variables)
+                    .map(|_| challenger.sample_algebra_element())
+                    .collect(),
+            )
         })
         .collect()
 }

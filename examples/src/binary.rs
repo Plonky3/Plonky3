@@ -24,7 +24,6 @@ use p3_blake3::Blake3;
 use p3_bus::BusSymbolicBuilder;
 use p3_challenger::{CanObserve, HashChallenger};
 use p3_commit::MultilinearPcs;
-use p3_field::RawDataSerializable;
 use p3_keccak::Keccak256Hash;
 use p3_lookup::InteractionSymbolicBuilder;
 use p3_matrix::Matrix;
@@ -36,9 +35,9 @@ use p3_multi_stark::packed_ext::{PackedExt, PackedRepr};
 use p3_multi_stark::sliced::SlicedFolder;
 use p3_multi_stark::subfield::{SubfieldAcc, SubfieldVar};
 use p3_multi_stark::{
-    MultiStarkProof, ProverInstance, ProverInstances, ProvingError, ProvingKey, ReprBackend,
-    SecurityError, SubfieldBackend, VerificationError, VerifierInstance, VerifierInstances,
-    VerifyingKey, prove_with_backend, security_report, setup, verify,
+    GenericBackend, MultiStarkProof, ProverInstance, ProverInstances, ProvingError, ProvingKey,
+    ReprBackend, SecurityError, SubfieldBackend, VerificationError, VerifierInstance,
+    VerifierInstances, VerifyingKey, prove_with_backend, security_report, setup, verify,
 };
 use p3_sumcheck::layout::{Layout, SuffixProver, Table, Witness, plan_stacked_layout};
 use p3_sumcheck::ring_switch::bits::BitRingSwitch;
@@ -47,7 +46,12 @@ use p3_symmetric::{CompressionFunctionFromHasher, CryptographicHasher, Serializi
 use p3_util::log2_strict_usize;
 use serde::Serialize;
 
+mod cubic;
 mod whir;
+pub use cubic::{
+    CubicAir, CubicProveError, CubicVerifyError, CubicWhirStarkConfig, cubic_whir_config,
+    prove_boolean_air_cubic,
+};
 use p3_binary_pcs::BooleanTraceCommitmentError;
 pub use p3_binary_pcs::whir::{BinaryWhirBudget, BudgetError};
 use p3_binary_pcs::whir::{BooleanWhirError, ProfileError};
@@ -109,6 +113,38 @@ pub enum HashFamily {
     /// BLAKE3, which compresses a 64-byte block where Keccak-256 permutes a 136-byte rate.
     #[serde(rename = "blake3")]
     Blake3,
+}
+
+/// The fields one run commits its trace in and draws its challenges from.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
+pub enum BinaryFields {
+    /// `GF(2^128)` for both.
+    #[default]
+    #[serde(rename = "gf128")]
+    Gf128,
+    /// Values in `GF(2^64)`, challenges in its cubic extension `GF(2^192)`.
+    #[serde(rename = "gf64-gf192")]
+    Gf64Gf192,
+}
+
+impl BinaryFields {
+    /// Bytes one committed value occupies in memory.
+    #[must_use]
+    pub const fn value_bytes(self) -> usize {
+        match self {
+            Self::Gf128 => 16,
+            Self::Gf64Gf192 => 8,
+        }
+    }
+}
+
+impl fmt::Display for BinaryFields {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Gf128 => f.write_str("GF(2^128)"),
+            Self::Gf64Gf192 => f.write_str("GF(2^64) values, GF(2^192) challenges"),
+        }
+    }
 }
 
 /// Commitment scheme selected for a proof run.
@@ -430,6 +466,8 @@ pub struct BinaryProofReport {
     pub width: usize,
     /// Number of variables in the stacked polynomial the PCS commits to.
     pub stacked_variables: usize,
+    /// Fields the run committed in and drew challenges from.
+    pub fields: BinaryFields,
     /// Byte hash the Merkle trees and the transcript ran.
     pub hash: HashFamily,
     /// Field elements each Merkle leaf of the base codeword packed.
@@ -481,12 +519,13 @@ impl fmt::Display for BinaryProofReport {
         writeln!(f, "Rows: {}", self.rows)?;
         writeln!(f, "Width: {}", self.width)?;
         writeln!(f, "Stacked variables: {}", self.stacked_variables)?;
+        writeln!(f, "Fields: {}", self.fields)?;
         writeln!(f, "Hash: {}", self.hash)?;
         write!(
             f,
             "Merkle leaf: {} field elements ({} bytes",
             self.leaf_elements,
-            self.leaf_elements.saturating_mul(F::NUM_BYTES)
+            self.leaf_elements.saturating_mul(self.fields.value_bytes())
         )?;
         if let Some(requested) = self
             .requested_leaf_elements
@@ -570,6 +609,12 @@ pub enum BinaryProofError {
     /// WHIR verification failed.
     #[error("WHIR proof verification failed: {0}")]
     WhirVerify(BooleanWhirVerifyError),
+    /// Proving with `GF(2^64)` values and `GF(2^192)` challenges failed.
+    #[error("GF(2^64) x GF(2^192) proof generation failed: {0}")]
+    CubicProve(CubicProveError),
+    /// Verifying with `GF(2^64)` values and `GF(2^192)` challenges failed.
+    #[error("GF(2^64) x GF(2^192) proof verification failed: {0}")]
+    CubicVerify(CubicVerifyError),
     /// The statement's security assessment left a component unassessed or below target.
     #[error("binary proof security check failed: {0}")]
     Security(SecurityError),
@@ -748,6 +793,8 @@ pub enum Backend {
     /// [`ReprBackend`] with one additional representation round evaluated directly on planes.
     /// This is a time/memory policy choice; proof bytes remain identical to [`Self::PolyBasis`].
     PolyBasisLate,
+    /// [`GenericBackend`], every round in the challenge field itself.
+    Generic,
 }
 
 impl Backend {
@@ -791,6 +838,9 @@ impl Backend {
                 prove_with_backend::<_, _, ReprBackend<BinaryField2, Ghash128, true>>(
                     config, instances, pow_bits, challenger,
                 )
+            }
+            Self::Generic => {
+                prove_with_backend::<_, _, GenericBackend>(config, instances, pow_bits, challenger)
             }
         }
     }
@@ -1268,6 +1318,7 @@ where
         rows,
         width,
         stacked_variables: config.pcs().num_vars(),
+        fields: BinaryFields::Gf128,
         hash: options.hash,
         leaf_elements: config.leaf_elements(),
         requested_leaf_elements: options.leaf_elements,
@@ -2965,6 +3016,7 @@ mod tests {
             keys,
             [
                 "deserialize_seconds",
+                "fields",
                 "hash",
                 "leaf_elements",
                 "pcs",

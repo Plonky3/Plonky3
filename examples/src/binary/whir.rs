@@ -167,7 +167,7 @@ pub struct WhirSummary {
 
 /// A binary Boolean trace configuration backed by additive-domain WHIR.
 pub struct BooleanWhirStarkConfig<H: HarnessHash = p3_keccak::Keccak256Hash> {
-    pub(crate) pcs: BooleanWhirTracePcs<F, BooleanWhirDomain, MerkleMmcs<H, 2>, Challenger<H>>,
+    pub(crate) pcs: BooleanWhirTracePcs<F, F, BooleanWhirDomain, MerkleMmcs<H, 2>, Challenger<H>>,
     pub(crate) leaf_elements: usize,
     /// Derived schedule metadata used by the harness and its config-only tests.
     pub summary: WhirSummary,
@@ -200,7 +200,7 @@ where
     type Val = F;
     type Challenge = F;
     type Challenger = Challenger<H>;
-    type Pcs = BooleanWhirTracePcs<F, BooleanWhirDomain, MerkleMmcs<H, 2>, Challenger<H>>;
+    type Pcs = BooleanWhirTracePcs<F, F, BooleanWhirDomain, MerkleMmcs<H, 2>, Challenger<H>>;
 
     fn pcs(&self) -> &Self::Pcs {
         &self.pcs
@@ -220,7 +220,7 @@ where
 
     fn committed_table<'a>(
         &self,
-        prover_data: &'a BooleanTraceCommitmentData<F, BooleanWhirData<F, MerkleMmcs<H, 2>>>,
+        prover_data: &'a BooleanTraceCommitmentData<F, BooleanWhirData<F, F, MerkleMmcs<H, 2>>>,
         table_index: usize,
     ) -> &'a Table<F> {
         prover_data.table(table_index)
@@ -463,7 +463,7 @@ pub(crate) fn boolean_whir_config_with_schedule<A: BinaryAir, H: HarnessHash>(
     let pcs = BooleanWhirPcs::new(prover, arity).map_err(|error| {
         BinaryProofError::WhirConfig(p3_binary_pcs::BooleanTraceCommitmentError::Boolean(error))
     })?;
-    let (num_claims, successor_tensors) = claim_shape(air, shape);
+    let (num_claims, successor_tensors) = claim_shape(air, shape, absorbed);
     let shape = pcs.proof_shape(num_claims, successor_tensors);
     whir.budget
         .check_shape(
@@ -495,7 +495,8 @@ pub(crate) fn boolean_whir_config_with_schedule<A: BinaryAir, H: HarnessHash>(
     })
 }
 
-fn validate_options<A: BinaryAir>(
+/// Refuse the options and AIR declarations this one-opening adapter cannot prove.
+pub(super) fn validate_options<A: BinaryAir>(
     air: &A,
     shape: TableShape,
     options: BinaryProofOptions,
@@ -609,13 +610,17 @@ fn validate_successors<A: BinaryAir>(air: &A) -> Result<(), BinaryProofError> {
     Ok(())
 }
 
-fn claim_shape<A: BinaryAir>(air: &A, shape: TableShape) -> (usize, bool) {
+/// Claims one opening of this shape raises, and whether its successor view sends two more elements.
+///
+/// `absorbed` is the row count one packed element absorbs, in logarithm.
+pub(super) fn claim_shape<A: BinaryAir>(
+    air: &A,
+    shape: TableShape,
+    absorbed: usize,
+) -> (usize, bool) {
     let width = shape.width();
     let next = air.main_next_row_columns();
     let full = next.len() == width && next.iter().copied().eq(0..width);
     let claims = if next.is_empty() || full { 1 } else { width };
-    (
-        claims,
-        !next.is_empty() && shape.num_variables() > BitRingSwitch::<F>::ABSORBED,
-    )
+    (claims, !next.is_empty() && shape.num_variables() > absorbed)
 }

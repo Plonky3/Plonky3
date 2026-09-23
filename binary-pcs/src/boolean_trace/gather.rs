@@ -2,30 +2,23 @@
 
 use alloc::vec::Vec;
 
-use p3_binary_dft::EncodableLevel;
-use p3_binary_field::{PackedGf2, PackedGf2x64, TowerLevel};
+use p3_binary_field::{BitCoordinates, PackedGf2, PackedGf2x64, TowerLevel};
 use p3_challenger::fs::TranscriptField;
-use p3_field::Field;
+use p3_field::{ExtensionField, Field};
 use p3_maybe_rayon::prelude::*;
 use p3_sumcheck::layout::{Table, TablePlacement};
 
 use super::{BooleanTraceCommitment, BooleanTraceCommitmentError, WORD_BITS};
 use crate::boolean::BooleanBackend;
-use crate::fold::{ChallengeField, FoldAlphabet};
-use crate::packing::Coordinates;
 
 /// Adjacent packed columns one gather task copies, one source line's worth of words.
 pub(super) const GATHER_GROUP: usize = 8;
 
 impl<EF, B> BooleanTraceCommitment<EF, B>
 where
-    EF: ChallengeField<EF>
-        + EncodableLevel
-        + TranscriptField
-        + TowerLevel
-        + FoldAlphabet<EF>
-        + Coordinates,
+    EF: BitCoordinates + ExtensionField<B::Val>,
     B: BooleanBackend<EF>,
+    B::Val: TranscriptField + TowerLevel,
 {
     /// Gather the Boolean cells of every table into one bit witness.
     ///
@@ -35,7 +28,7 @@ where
     /// - A cell holds neither zero nor one, so it addresses no bit.
     pub(super) fn gather_bits(
         &self,
-        tables: &[Table<EF>],
+        tables: &[Table<B::Val>],
     ) -> Result<Vec<PackedGf2x64>, BooleanTraceCommitmentError<B::Error>> {
         let shapes = tables.iter().map(Table::shape).collect::<Vec<_>>();
         let placements = self.placements(&shapes)?;

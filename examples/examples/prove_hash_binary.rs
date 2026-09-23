@@ -2,17 +2,19 @@ use std::io;
 use std::time::Instant;
 
 use clap::{Parser, ValueEnum};
-use p3_binary_field::{BinaryField128, Gf2};
+use p3_binary_field::{BinaryField128, Gf2, Poly64};
 use p3_blake3_air::Blake3BinaryAir;
 use p3_examples::binary::{
-    Backend, BinaryProofOptions, BinaryWhirBudget, BooleanPcsChoice, HashFamily, WhirOptions,
-    WhirRegime, WhirSummary, preflight_boolean_air_with_summary, prove_boolean_air_with_backend,
+    Backend, BinaryAir, BinaryFields, BinaryProofOptions, BinaryProofReport, BinaryWhirBudget,
+    BooleanPcsChoice, CubicAir, HashFamily, WhirOptions, WhirRegime, WhirSummary,
+    preflight_boolean_air_with_summary, prove_boolean_air_cubic, prove_boolean_air_with_backend,
 };
 use p3_examples::parsers::{
     BinaryCommitmentHashOptions, BinaryHashOptions, OutputFormat, RepresentationOptions,
 };
 use p3_keccak_air::{KECCAK_BINARY_ROWS_PER_PERM, KeccakBinaryAir, NUM_KECCAK_BINARY_COLS};
 use p3_matrix::Matrix;
+use p3_matrix::dense::RowMajorMatrix;
 use p3_sha256_air::{NUM_SHA256_BINARY_COLS, Sha256BinaryAir};
 use p3_sumcheck::TableShape;
 use p3_sumcheck::layout::Table;
@@ -27,6 +29,15 @@ enum PcsOptions {
     #[value(alias = "fold")]
     Folding,
     Whir,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+enum FieldOptions {
+    /// `GF(2^128)` for the committed values and the challenges.
+    Gf128,
+    /// `GF(2^64)` values, `GF(2^192)` challenges, WHIR only.
+    #[value(name = "gf64-gf192")]
+    Gf64Gf192,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
@@ -113,6 +124,12 @@ struct Args {
     /// Boolean PCS used for the trace commitment.
     #[arg(long, value_enum, default_value_t = PcsOptions::Folding)]
     pcs: PcsOptions,
+
+    /// Fields the trace is committed in and the challenges drawn from.
+    ///
+    /// `gf64-gf192` runs the generic zerocheck backend, so `--representation` does not apply.
+    #[arg(long, value_enum, default_value_t = FieldOptions::Gf128)]
+    field: FieldOptions,
 
     /// WHIR proximity regime. Required when `--pcs whir` is selected.
     #[arg(long = "whir-regime", value_enum, visible_alias = "regime")]
@@ -257,21 +274,31 @@ fn status(format: OutputFormat, line: &str) {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn preflight_then_maybe_prove<A, Generate>(
     air: &A,
     shape: TableShape,
     options: BinaryProofOptions,
+    fields: BinaryFields,
     backend: Backend,
     preflight_only: bool,
     format: OutputFormat,
     generate: Generate,
-) -> Result<Option<p3_examples::binary::BinaryProofReport>, String>
+) -> Result<Option<BinaryProofReport>, String>
 where
-    A: p3_examples::binary::BinaryAir,
-    Generate: FnOnce() -> Table<BinaryField128>,
+    A: BinaryAir + CubicAir,
+    Generate: FnOnce() -> RowMajorMatrix<u64>,
 {
     let selected_whir = matches!(options.pcs, BooleanPcsChoice::Whir(_));
-    if selected_whir || preflight_only {
+    if fields == BinaryFields::Gf64Gf192 {
+        // The prover assesses the statement itself before it proves.
+        if preflight_only {
+            return Err("--preflight supports --field gf128 only".to_string());
+        }
+        if !selected_whir {
+            return Err("--field gf64-gf192 requires --pcs whir".to_string());
+        }
+    } else if selected_whir || preflight_only {
         let (security_bits, summary) = preflight_boolean_air_with_summary(air, shape, options)
             .map_err(|error| format!("Boolean PCS preflight failed: {error}"))?;
         print_preflight_result(options, security_bits, summary, format);
@@ -281,12 +308,31 @@ where
     }
     // Time the witness here, since the prover only ever sees the finished trace.
     let witness_start = Instant::now();
-    let trace = generate();
+    let words = generate();
     let witness_seconds = witness_start.elapsed().as_secs_f64();
+    let log_height = shape.num_variables();
+    assert_eq!(
+        words.height(),
+        (1usize << log_height).div_ceil(64),
+        "generated trace height must match the requested log-trace-length {log_height}"
+    );
 
-    prove_boolean_air_with_backend(air, trace, options, backend)
-        .map(|report| Some(report.with_witness_seconds(witness_seconds)))
-        .map_err(|error| format!("proof failed: {error}"))
+    // A packed word is a run of bits, whichever field reads it.
+    match fields {
+        BinaryFields::Gf128 => prove_boolean_air_with_backend(
+            air,
+            Table::<BinaryField128>::from_packed_bits(words, log_height),
+            options,
+            backend,
+        ),
+        BinaryFields::Gf64Gf192 => prove_boolean_air_cubic(
+            air,
+            Table::<Poly64>::from_packed_bits(words, log_height),
+            options,
+        ),
+    }
+    .map(|report| Some(report.with_witness_seconds(witness_seconds)))
+    .map_err(|error| format!("proof failed: {error}"))
 }
 
 fn print_preflight_result(
@@ -328,11 +374,16 @@ fn run(args: &Args) -> Result<(), String> {
     let options = args.proof_options()?;
     let (trace_height, shape) = requested_shape(args.objective, args.log_trace_length)?;
 
+    let fields = match args.field {
+        FieldOptions::Gf128 => BinaryFields::Gf128,
+        FieldOptions::Gf64Gf192 => BinaryFields::Gf64Gf192,
+    };
     let backend = match args.representation {
         RepresentationOptions::Auto => Backend::preferred(),
         RepresentationOptions::Subfield => Backend::Subfield,
         RepresentationOptions::PolyBasis => Backend::PolyBasis,
         RepresentationOptions::PolyBasisLate => Backend::PolyBasisLate,
+        RepresentationOptions::Generic => Backend::Generic,
     };
 
     // The Boolean commitment cannot represent a cell outside `{0, 1}`, so booleanity constraints
@@ -347,6 +398,7 @@ fn run(args: &Args) -> Result<(), String> {
                 &air,
                 shape,
                 options,
+                fields,
                 backend,
                 args.preflight,
                 args.format,
@@ -355,14 +407,7 @@ fn run(args: &Args) -> Result<(), String> {
                         args.format,
                         &format!("Proving {num_hashes} Keccak-f permutations"),
                     );
-                    let words = air.generate_random_trace_packed::<Gf2>(num_hashes);
-                    assert_eq!(
-                        words.height(),
-                        trace_height.div_ceil(64),
-                        "generated trace height must match the requested log-trace-length {}",
-                        args.log_trace_length
-                    );
-                    Table::<BinaryField128>::from_packed_bits(words, args.log_trace_length as usize)
+                    air.generate_random_trace_packed::<Gf2>(num_hashes)
                 },
             )
         }
@@ -372,6 +417,7 @@ fn run(args: &Args) -> Result<(), String> {
                 &air,
                 shape,
                 options,
+                fields,
                 backend,
                 args.preflight,
                 args.format,
@@ -380,17 +426,7 @@ fn run(args: &Args) -> Result<(), String> {
                         args.format,
                         &format!("Proving {trace_height} Blake-3 compressions"),
                     );
-                    let words = air.generate_random_trace_packed::<Gf2>(trace_height);
-                    let trace = Table::<BinaryField128>::from_packed_bits(
-                        words,
-                        args.log_trace_length as usize,
-                    );
-                    assert_eq!(
-                        trace.num_variables(),
-                        args.log_trace_length as usize,
-                        "generated trace height must match the requested log-trace-length"
-                    );
-                    trace
+                    air.generate_random_trace_packed::<Gf2>(trace_height)
                 },
             )
         }
@@ -400,6 +436,7 @@ fn run(args: &Args) -> Result<(), String> {
                 &air,
                 shape,
                 options,
+                fields,
                 backend,
                 args.preflight,
                 args.format,
@@ -408,17 +445,7 @@ fn run(args: &Args) -> Result<(), String> {
                         args.format,
                         &format!("Proving {trace_height} SHA-256 compressions"),
                     );
-                    let words = air.generate_random_trace_packed::<Gf2>(trace_height);
-                    let trace = Table::<BinaryField128>::from_packed_bits(
-                        words,
-                        args.log_trace_length as usize,
-                    );
-                    assert_eq!(
-                        trace.num_variables(),
-                        args.log_trace_length as usize,
-                        "generated trace height must match the requested log-trace-length"
-                    );
-                    trace
+                    air.generate_random_trace_packed::<Gf2>(trace_height)
                 },
             )
         }
@@ -762,6 +789,7 @@ mod tests {
             &air,
             shape,
             options,
+            BinaryFields::Gf128,
             Backend::preferred(),
             true,
             OutputFormat::Human,
@@ -798,6 +826,7 @@ mod tests {
             &air,
             shape,
             options,
+            BinaryFields::Gf128,
             Backend::preferred(),
             false,
             OutputFormat::Human,

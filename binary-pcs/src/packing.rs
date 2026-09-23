@@ -39,7 +39,7 @@ use core::{ptr, slice};
 
 use p3_binary_field::{
     BinaryField8, BinaryField16, BinaryField32, BinaryField64, BinaryField128, Gf2, PackedGf2,
-    TowerLevel, Underlier,
+    Poly64, TowerLevel, Underlier,
 };
 use p3_field::PrimeCharacteristicRing;
 use p3_matrix::dense::RowMajorMatrix;
@@ -101,6 +101,11 @@ unsafe impl Coordinates for BinaryField64 {
 
 unsafe impl Coordinates for BinaryField128 {
     const COORDINATES: usize = 128;
+}
+
+// SAFETY: the polynomial-basis level wraps a `u64` it fills, bit `j` the coefficient of `x^j`.
+unsafe impl Coordinates for Poly64 {
+    const COORDINATES: usize = 64;
 }
 
 // SAFETY: a packing is exactly its backing block, whose contract pins size and alignment.
