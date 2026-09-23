@@ -99,8 +99,6 @@ end p3_field.exponentiation
     marker so it cannot collide with Hax's instances for the primitive
     integer types. -/
 
-namespace p3_field.field
-
 /-! ### The assumed ring operations
 
     These are the **core assumption** of this interface: no ring arithmetic is
@@ -130,10 +128,6 @@ opaque ring_add_assign (R : Type) : R -> R -> RustM R
 opaque ring_sub_assign (R : Type) : R -> R -> RustM R
 /-- ASSUMED: `Neg` (`Output = Self`). -/
 opaque ring_neg (R : Type) : R -> RustM R
-
-end p3_field.field
-
-namespace p3_field.field
 
 variable {R : Type}
 

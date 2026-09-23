@@ -1,6 +1,9 @@
 # p3-baby-bear proofs
 
-This directory houses the formal verification of this crate.
+This directory houses the formal verification of this crate. The extraction is
+scalar-only (`thumbv7em-none-eabi`): AVX2, AVX-512 and NEON are out of scope.
+Production on x86-64 and aarch64 runs those backends, not the portable
+`no_packing` path modelled here.
 
 The active backend is [`legacy-lean/`](legacy-lean/) — Hax's `legacy-lean`
 output, as a Lake package (extraction, patches, theorems). See
