@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+
+### Changed
+
+- **Breaking:** `Point<F>` becomes `Point<F, S = Vec<F>>`, generic over its coordinate store, and `PointView<'a, F>` borrows a slice.
+- **Breaking:** `Point::new(iter.collect())` no longer infers the store; write `Point::<F>::new(iter.collect())` instead.
+- **Breaking:** `Point::num_variables` is no longer `const`.
+- `Point::equality_weights_msb`, `Point::equality_weights_lsb` and `Point::equality_at_vertex` materialize or evaluate the equality polynomial in either bit order.
+
 ## [0.7.0] - 2026-09-04
 ### Merged PRs
 - Feat(sumcheck): subtraction-free projective (monomial-basis) sum-check on the prover (eprint 2026/762) (#1900)
