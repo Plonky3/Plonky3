@@ -1,8 +1,9 @@
 //! Binding binary-native bus terminal claims to committed AIR columns.
 //!
-//! [`BusContext`] derives every block and opening from AIR metadata. It materializes
-//! the ProductGKR leaves for proving and reconstructs the formal composition from
-//! commitment-bound column evaluations for verification.
+//! [`BusContext`] derives every block and the columns it reads from AIR metadata.
+//! It materializes the ProductGKR leaves for proving.
+//! It evaluates the bus shares at the shared sumcheck point for verification.
+//! Those evaluations read each AIR's single opening at that point.
 
 use alloc::vec::Vec;
 
@@ -65,7 +66,7 @@ where
             return Ok(None);
         };
 
-        // Only the columns a declaration reads have to be opened, lifted and folded.
+        // Only the columns a declaration reads are lifted into the shared sumcheck and folded.
         let (main_columns, preprocessed_columns) = profiles
             .iter()
             .map(|profile| {
@@ -135,7 +136,7 @@ where
         Ok(())
     }
 
-    /// Checked layout used by both the transcript and opening schedule.
+    /// Checked layout read by the product tree, the shared sumcheck and the security report.
     pub(crate) const fn plan(&self) -> &BusPlan {
         // One shared plan keeps physical leaf order identical across every phase.
         &self.plan
@@ -429,7 +430,7 @@ mod tests {
     }
 
     #[test]
-    fn only_the_columns_a_declaration_reads_are_scheduled() {
+    fn only_the_columns_a_declaration_reads_are_lifted() {
         // This AIR has two main columns and its declaration reads the second one.
         let context = BusContext::<BabyBear, BabyBear>::build(&[&TwoColumnAir], &[1])
             .unwrap()

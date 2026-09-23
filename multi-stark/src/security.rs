@@ -178,15 +178,25 @@ impl MultiStarkSecurityReport {
 /// Charge the one challenge that folds the bus family into the shared sumcheck.
 ///
 /// Lambda weighs pull against push, then the bus against the AIR family.
+/// A false claim leaves this residual in the shared sumcheck:
 ///
 /// ```text
-///     claim(lambda) = air + lambda * push + lambda^2 * pull
+///     residual(tau, lambda) = P(tau) + lambda * d_push + lambda^2 * d_pull
 /// ```
 ///
-/// A false claim leaves a nonzero polynomial of degree two in lambda.
-/// Schwartz--Zippel bounds the chance lambda hits a root by `2 / |EF|`.
+/// - `P` is the AIR family's residual as a polynomial in tau, fixed before lambda.
+/// - `d_push` and `d_pull` are the bus share errors, fixed by ProductGKR before lambda.
+/// - tau's free coordinates are drawn after lambda.
+/// - So `P(tau)` itself is not fixed when lambda is drawn.
 ///
-/// The sumcheck rounds themselves are charged by the constraint-sumcheck term.
+/// Two cases cover every forgery:
+/// - `P` nonconstant: tau catches it, and the `zerocheck` term already charges that event.
+/// - `P` constant: the residual is a nonzero polynomial of degree at most two in lambda.
+///
+/// Schwartz--Zippel bounds the second case by `2 / |EF|`.
+/// So the `zerocheck` term does not grow, and this term charges only the second case.
+///
+/// The sumcheck rounds themselves are charged by the `constraint-sumcheck` term.
 /// Its degree already covers the bus composition.
 fn bus_batching_term(field_bits: NonZeroUsize) -> SecurityTerm {
     SecurityTerm::new(
