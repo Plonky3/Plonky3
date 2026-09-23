@@ -381,6 +381,12 @@ where
     pub const fn air(&self) -> &'a A {
         self.air
     }
+
+    /// Public values forwarded to the AIR.
+    #[must_use]
+    pub const fn public_values(&self) -> &'a [C::Val] {
+        self.public_values
+    }
 }
 
 impl<'a, C, A> Deref for ProverInstances<'a, C, A>

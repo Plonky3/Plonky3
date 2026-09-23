@@ -75,6 +75,54 @@ pub enum DeclarationError {
     /// A run belongs to a different statement than the one it is used with.
     #[error("the run describes a different statement")]
     ForeignRun,
+    /// A segment boundary names no value, so it would chain anything to anything.
+    #[error("a segment boundary must name at least one public value")]
+    EmptySegmentBoundary,
+    /// The two sides of a segment name different numbers of values.
+    #[error("a segment enters through {entry} values but exits through {exit}")]
+    SegmentArityMismatch {
+        /// Number of values the entry names.
+        entry: usize,
+        /// Number of values the exit names.
+        exit: usize,
+    },
+    /// A segment boundary names a public value no table declares.
+    #[error("table {table} declares no public value at position {index}")]
+    SlotOutOfRange {
+        /// Position of the table the slot names.
+        table: usize,
+        /// Position of the value the slot names.
+        index: usize,
+    },
+    /// A claim was asked of a statement that declares no segment boundary.
+    #[error("the statement declares no segment boundary")]
+    NoSegmentInterface,
+    /// One side of a segment boundary was given a different number of values than it names.
+    #[error("a segment boundary names {expected} values, but {found} were supplied")]
+    BoundaryValueCount {
+        /// Number of slots one side names.
+        expected: usize,
+        /// Number of values supplied.
+        found: usize,
+    },
+    /// Public values were supplied for a different number of tables.
+    #[error("public values cover {found} tables where the statement declares {expected}")]
+    PublicValueTables {
+        /// Number of declared tables.
+        expected: usize,
+        /// Number of tables the public values cover.
+        found: usize,
+    },
+    /// A table was supplied a different number of public values than it declares.
+    #[error("table {table}: {found} public values supplied where {expected} are declared")]
+    PublicValueCount {
+        /// Position of the offending table in declaration order.
+        table: usize,
+        /// Number of public values the table declares.
+        expected: usize,
+        /// Number supplied.
+        found: usize,
+    },
 }
 
 /// Why a byte string is not an acceptable proof for a statement.

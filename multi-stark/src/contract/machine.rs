@@ -7,14 +7,17 @@
 use alloc::vec::Vec;
 
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
+use p3_field::Field;
 use p3_sumcheck::PrescribedPointPcs;
 use p3_symmetric::CryptographicHasher;
 
 use crate::config::{Commitment, MultiStarkConfig, PcsError};
+use crate::contract::cost::CostReport;
 use crate::contract::digest::Preimage;
 use crate::contract::envelope::{AcceptedProof, HEADER_LEN, Header, SealedProof};
 use crate::contract::error::{DeclarationError, EnvelopeError, SealedVerificationError};
 use crate::contract::run::Run;
+use crate::contract::segment::{SegmentClaim, SegmentInterface, VerifiedSegment};
 use crate::contract::table::TableDeclaration;
 use crate::folder::VerifierAir;
 use crate::instance::VerifierInstances;
@@ -52,6 +55,7 @@ pub struct MachineDeclaration<H> {
     tables: Vec<TableDeclaration>,
     max_proof_bytes: usize,
     security_bits: usize,
+    segment: Option<SegmentInterface>,
     statement: [u8; 32],
 }
 
@@ -101,23 +105,101 @@ where
             table.validate(index)?;
         }
 
-        // Absorbing the tables walks every constraint, so it happens here and nowhere else.
-        let mut preimage = Preimage::new(b"p3-backend-contract/statement/v1");
-        preimage.usize(max_proof_bytes);
-        preimage.usize(security_bits);
-        preimage.usize(tables.len());
-        for table in &tables {
-            table.absorb(&mut preimage);
-        }
-        let statement = preimage.finish(&hasher);
+        let statement = statement_digest(&hasher, &tables, max_proof_bytes, security_bits, None);
 
         Ok(Self {
             hasher,
             tables,
             max_proof_bytes,
             security_bits,
+            segment: None,
             statement,
         })
+    }
+
+    /// Declare which public values a proof of this statement starts from and leaves behind.
+    ///
+    /// The interface joins the statement, so its fingerprint changes.
+    ///
+    /// A run picked before this call belongs to the old statement and is refused by the new one.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a slot names a value no table declares.
+    ///
+    /// Returns an error when the two sides are empty or of different lengths.
+    pub fn with_segment(mut self, interface: SegmentInterface) -> Result<Self, DeclarationError> {
+        interface.validate(&self.tables)?;
+        self.statement = statement_digest(
+            &self.hasher,
+            &self.tables,
+            self.max_proof_bytes,
+            self.security_bits,
+            Some(&interface),
+        );
+        self.segment = Some(interface);
+        Ok(self)
+    }
+
+    /// The segment boundary this statement declares, if it declares one.
+    #[must_use]
+    pub const fn segment(&self) -> Option<&SegmentInterface> {
+        self.segment.as_ref()
+    }
+
+    /// The claim a proof with these public values makes about its boundary.
+    ///
+    /// A prover calls this to learn the claim it is about to prove.
+    ///
+    /// The claim means nothing until the proof verifies.
+    ///
+    /// [`Self::verify_segment`] ties the two, and only its result chains.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the statement declares no segment boundary.
+    ///
+    /// Returns an error when the public values do not have the shape the tables declare.
+    pub fn segment_claim<F: Field>(
+        &self,
+        public_values: &[&[F]],
+    ) -> Result<SegmentClaim, DeclarationError> {
+        self.segment
+            .as_ref()
+            .ok_or(DeclarationError::NoSegmentInterface)?
+            .claim(&self.hasher, self.statement, &self.tables, public_values)
+    }
+
+    /// Digest of one side of a segment boundary, from its values in slot order.
+    ///
+    /// Entry and exit sides hash alike, so one digest can be compared with either.
+    ///
+    /// A checker uses it to tie a chain to the start and the end it expects.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the statement declares no segment boundary.
+    ///
+    /// Returns an error when the values are not one per slot of a side.
+    pub fn boundary_digest<F: Field>(&self, values: &[F]) -> Result<[u8; 32], DeclarationError> {
+        self.segment
+            .as_ref()
+            .ok_or(DeclarationError::NoSegmentInterface)?
+            .boundary(&self.hasher, values)
+    }
+
+    /// What each table of one run costs, read off the declared shape alone.
+    ///
+    /// `EF` is the challenge field the proof opens over.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the run belongs to a different statement.
+    pub fn cost_report<EF: Field>(&self, run: &Run) -> Result<CostReport, DeclarationError> {
+        if run.statement() != &self.statement {
+            return Err(DeclarationError::ForeignRun);
+        }
+        Ok(CostReport::new::<EF>(&self.tables, run))
     }
 
     /// The tables of this statement, in the order proofs list them.
@@ -373,6 +455,50 @@ where
         .map_err(SealedVerificationError::Verification)
     }
 
+    /// Verify a segment and return the boundary it proved.
+    ///
+    /// The claim is read off the very public values the verification checked.
+    ///
+    /// No caller can therefore pair a proof with the boundary of another.
+    ///
+    /// The result is the only input [`chain`](crate::contract::chain) accepts.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the statement declares no segment boundary.
+    ///
+    /// Returns every error [`Self::verify`] returns.
+    pub fn verify_segment<'a, C, A>(
+        &self,
+        run: &Run,
+        bytes: &[u8],
+        config: &C,
+        instances: VerifierInstances<'a, C, A>,
+        challenger: &mut C::Challenger,
+    ) -> Result<VerifiedSegment, SealedVerificationError<PcsError<C>>>
+    where
+        C: MultiStarkConfig,
+        C::Pcs: PrescribedPointPcs<C::Challenge, C::Challenger>,
+        C::Challenger: FieldChallenger<C::Val>
+            + GrindingChallenger<Witness = C::Val>
+            + CanSampleUniformBits<C::Val>
+            + CanObserve<Commitment<C>>,
+        Commitment<C>: Clone,
+        A: VerifierAir<C::Val, C::Challenge>,
+    {
+        // The claim is computed first, so a malformed boundary is refused before any replay.
+        let public_values: Vec<&[C::Val]> = instances
+            .iter()
+            .map(|instance| instance.public_values())
+            .collect();
+        let claim = self.segment_claim(&public_values).map_err(|error| {
+            SealedVerificationError::Envelope(EnvelopeError::Declaration(error))
+        })?;
+
+        self.verify(run, bytes, config, instances, challenger)?;
+        Ok(VerifiedSegment::new(claim))
+    }
+
     /// Reject a decoded proof whose parts disagree with what the statement declares.
     ///
     /// The verifier reaches the same verdict from the constraint systems.
@@ -433,6 +559,35 @@ where
         }
         Ok(preimage.finish(&self.hasher))
     }
+}
+
+/// Fingerprint of everything a statement fixes.
+///
+/// A statement without a segment boundary absorbs exactly what it always has.
+///
+/// The boundary follows the tables, whose encoding is self-delimiting, so it cannot alias them.
+fn statement_digest<H>(
+    hasher: &H,
+    tables: &[TableDeclaration],
+    max_proof_bytes: usize,
+    security_bits: usize,
+    segment: Option<&SegmentInterface>,
+) -> [u8; 32]
+where
+    H: CryptographicHasher<u8, [u8; 32]>,
+{
+    // Absorbing the tables walks every constraint, so it happens once per declaration.
+    let mut preimage = Preimage::new(b"p3-backend-contract/statement/v1");
+    preimage.usize(max_proof_bytes);
+    preimage.usize(security_bits);
+    preimage.usize(tables.len());
+    for table in tables {
+        table.absorb(&mut preimage);
+    }
+    if let Some(segment) = segment {
+        segment.absorb(&mut preimage);
+    }
+    preimage.finish(hasher)
 }
 
 #[cfg(test)]
