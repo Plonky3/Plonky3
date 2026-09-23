@@ -66,6 +66,17 @@ where
             return Ok(None);
         };
 
+        // This backend opens no periodic column, so a declaration reading one is refused.
+        for (air, profile) in profiles.iter().enumerate() {
+            if let Some(declaration) = profile
+                .interactions()
+                .iter()
+                .position(SymbolicBusInteraction::reads_periodic)
+            {
+                return Err(BusBindingError::PeriodicColumn { air, declaration });
+            }
+        }
+
         // Only the columns a declaration reads are lifted into the shared sumcheck and folded.
         let (main_columns, preprocessed_columns) = profiles
             .iter()
@@ -127,6 +138,7 @@ where
                         main: &main,
                         preprocessed: &fixed,
                         public: public_values[air],
+                        periodic: &[],
                         is_first_row: F::ZERO,
                         is_last_row: F::ZERO,
                         is_transition: F::ZERO,
@@ -240,6 +252,7 @@ where
                         main: main[air],
                         preprocessed: preprocessed[air],
                         public: public_values[air],
+                        periodic: &[],
                         is_first_row: boundary.first,
                         is_last_row: boundary.last,
                         is_transition: boundary.transition,
@@ -348,6 +361,7 @@ where
                                 main,
                                 preprocessed: fixed,
                                 public,
+                                periodic: &[],
                                 is_first_row: F::from_bool(row == 0),
                                 is_last_row: F::from_bool(row + 1 == height),
                                 is_transition: F::from_bool(row + 1 < height),
@@ -452,6 +466,26 @@ mod tests {
                 airs: 1,
                 heights: 0,
             }
+        );
+    }
+
+    #[test]
+    fn a_declaration_reading_a_periodic_column_is_refused() {
+        type B = p3_binary_field::BinaryField128;
+        type C = p3_binary_field::BinaryField64;
+        let memory =
+            p3_bus::TimestampedMemory::<C, B>::new("tm-memory", "tm-low", "tm-high", 1).unwrap();
+
+        // A public seed reads its image as a periodic column, which this backend never opens.
+        let image = p3_bus::PublicImage::new(&memory, 2, vec![(1, vec![B::ONE])]).unwrap();
+        let seed = p3_bus::TimestampedSeed::Public(image);
+        let air = p3_bus::TimestampedBoundaryAir::new(memory, seed).unwrap();
+        assert_eq!(
+            BusContext::<B, B>::build(&[&air], &[2]).err(),
+            Some(BusBindingError::PeriodicColumn {
+                air: 0,
+                declaration: 0
+            })
         );
     }
 }

@@ -10,7 +10,11 @@ use p3_air::{Air, BaseAir, WindowAccess, check_constraints};
 use p3_binary_field::{BinaryField32, BinaryField64, BinaryField128};
 use p3_field::{Field, PrimeCharacteristicRing};
 use p3_matrix::dense::RowMajorMatrix;
+use p3_multilinear_util::point::Point;
 use p3_sumcheck::layout::Table;
+use proptest::prelude::*;
+use rand::rngs::SmallRng;
+use rand::{RngExt, SeedableRng};
 
 use super::*;
 use crate::{BusDebugInstance, BusDebugReport, BusPlanInput, BusSymbolicBuilder};
@@ -110,6 +114,8 @@ struct Row {
 struct Witness {
     /// Machine rows.
     rows: Vec<Row>,
+    /// Starting value of every cell, in cell order.
+    starts: Vec<F>,
     /// Last time and final value of every cell, in cell order.
     closes: Vec<(F, F)>,
 }
@@ -117,12 +123,20 @@ struct Witness {
 /// One logical operation: a cell and an optional written value.
 type Op = (usize, Option<u128>);
 
-/// Runs a program honestly, padding the machine table to `ROWS`.
+/// Runs a program honestly from all-zero cells, padding the machine table to `ROWS`.
 ///
 /// Each entry is a clock exponent and one operation per slot.
 fn run(program: &[(u64, [Op; SLOTS])]) -> Witness {
-    // Every cell starts at time `g^0` holding zero.
-    let mut state = vec![(0u64, F::ZERO); CELLS];
+    run_from(&[F::ZERO; CELLS], program)
+}
+
+/// Runs a program honestly from the given starting values.
+fn run_from(starts: &[F], program: &[(u64, [Op; SLOTS])]) -> Witness {
+    // Every cell starts at time `g^0` holding its starting value.
+    let mut state = starts
+        .iter()
+        .map(|&start| (0u64, start))
+        .collect::<Vec<_>>();
     let mut rows = Vec::new();
     for &(clock, ops) in program {
         let slots = core::array::from_fn(|slot| {
@@ -156,7 +170,11 @@ fn run(program: &[(u64, [Op; SLOTS])]) -> Witness {
         .iter()
         .map(|&(last, final_value)| (time(last), final_value))
         .collect();
-    Witness { rows, closes }
+    Witness {
+        rows,
+        starts: starts.to_vec(),
+        closes,
+    }
 }
 
 /// The issue's example on cell 5, with two slots per row and one wide gap.
@@ -225,8 +243,8 @@ struct Traces {
     range: RowMajorMatrix<F>,
 }
 
-/// Assigns read-only counts and lays out every table.
-fn traces(witness: &Witness) -> Traces {
+/// Assigns read-only counts and lays out every table, for a block with this seed.
+fn traces(witness: &Witness, seed: &TimestampedSeed<F>) -> Traces {
     let height = ClockRangeAir::<C, F>::HEIGHT;
     let index = |entry: fn(usize) -> F| {
         (0..height)
@@ -268,11 +286,18 @@ fn traces(witness: &Witness) -> Traces {
         }
     }
 
+    // A private block commits the starting value after the final one.
+    let private = matches!(seed, TimestampedSeed::Private(_));
     let boundary = witness
         .closes
         .iter()
+        .zip(&witness.starts)
         .enumerate()
-        .flat_map(|(row, &(last, final_value))| [cell(row), last, final_value])
+        .flat_map(|(row, (&(last, final_value), &start))| {
+            [cell(row), last, final_value]
+                .into_iter()
+                .chain(private.then_some(start))
+        })
         .collect();
 
     let range = (0..height)
@@ -288,7 +313,7 @@ fn traces(witness: &Witness) -> Traces {
 
     Traces {
         machine: RowMajorMatrix::new(machine, 1 + SLOTS * SLOT_WIDTH),
-        boundary: RowMajorMatrix::new(boundary, 3),
+        boundary: RowMajorMatrix::new(boundary, if private { 4 } else { 3 }),
         range: RowMajorMatrix::new(range, 4),
     }
 }
@@ -302,15 +327,26 @@ fn table(trace: &RowMajorMatrix<F>) -> Table<F> {
     Table::new(RowMajorMatrix::new(columns, height))
 }
 
-/// The three AIRs under test.
+/// The three AIRs under test, with a zero seed.
 fn airs() -> (
+    MachineAir,
+    TimestampedBoundaryAir<C, F>,
+    ClockRangeAir<C, F>,
+) {
+    airs_with(TimestampedSeed::Zero)
+}
+
+/// The three AIRs under test, with a given seed.
+fn airs_with(
+    seed: TimestampedSeed<F>,
+) -> (
     MachineAir,
     TimestampedBoundaryAir<C, F>,
     ClockRangeAir<C, F>,
 ) {
     (
         MachineAir { memory: memory() },
-        TimestampedBoundaryAir::new(memory(), TimestampedSeed::Zero),
+        TimestampedBoundaryAir::new(memory(), seed).expect("the fixture seed fits"),
         ClockRangeAir::new(memory()),
     )
 }
@@ -323,10 +359,15 @@ where
     BusSymbolicBuilder::from_air(air, AirLayout::from_air::<F>(air))
 }
 
-/// Whether every table satisfies its constraints.
+/// Whether every table satisfies its constraints, with a zero seed.
 fn constraints_hold(witness: &Witness) -> bool {
-    let (machine, boundary, range) = airs();
-    let traces = traces(witness);
+    constraints_hold_with(witness, TimestampedSeed::Zero)
+}
+
+/// Whether every table satisfies its constraints, with a given seed.
+fn constraints_hold_with(witness: &Witness, seed: TimestampedSeed<F>) -> bool {
+    let traces = traces(witness, &seed);
+    let (machine, boundary, range) = airs_with(seed);
     catch_unwind(AssertUnwindSafe(|| {
         check_constraints(&machine, &traces.machine, &[]);
         check_constraints(&boundary, &traces.boundary, &[]);
@@ -335,23 +376,40 @@ fn constraints_hold(witness: &Witness) -> bool {
     .is_ok()
 }
 
-/// Names of the buses that do not balance, sorted.
+/// Names of the buses that do not balance, sorted, with a zero seed.
 fn unbalanced(witness: &Witness) -> Vec<String> {
-    let (machine, boundary, range) = airs();
-    let traces = traces(witness);
+    unbalanced_with(witness, TimestampedSeed::Zero)
+}
+
+/// Names of the buses that do not balance, sorted, with a given seed.
+fn unbalanced_with(witness: &Witness, seed: TimestampedSeed<F>) -> Vec<String> {
+    let traces = traces(witness, &seed);
+    let (machine, boundary, range) = airs_with(seed);
     let profiles = [profile(&machine), profile(&boundary), profile(&range)];
     let tables = [
         table(&traces.machine),
         table(&traces.boundary),
         table(&traces.range),
     ];
-    let instances = tables
+
+    // The replay reads a public image as the boundary block's periodic columns.
+    let periodic = boundary.periodic_columns();
+    let periodic = (!periodic.is_empty()).then(|| {
+        let values = (0..CELLS)
+            .flat_map(|row| periodic.iter().map(move |column| column[row]))
+            .collect();
+        table(&RowMajorMatrix::new(values, periodic.len()))
+    });
+    let mut instances = tables
         .iter()
         .zip(&profiles)
         .map(|(table, profile)| {
             BusDebugInstance::new(table, None, &[], profile).expect("the fixture matches")
         })
         .collect::<Vec<_>>();
+    if let Some(periodic) = &periodic {
+        instances[1] = instances[1].with_periodic(periodic);
+    }
     let mut names = BusDebugReport::check(&instances)
         .expect("the fixture declarations are well formed")
         .buses
@@ -479,7 +537,7 @@ fn the_range_table_pins_its_height() {
     let (_, _, range) = airs();
 
     // Dropping the last entry leaves `g^(2^16 - 1)` on the last row.
-    let full = traces(&honest()).range;
+    let full = traces(&honest(), &TimestampedSeed::Zero).range;
     let shorter = RowMajorMatrix::new(full.values[..full.values.len() / 2].to_vec(), 4);
     assert!(
         catch_unwind(AssertUnwindSafe(|| check_constraints(
@@ -581,4 +639,165 @@ fn the_plan_check_bounds_the_accesses() {
             actual: 3
         })
     );
+}
+
+/// The public image under test: cell 2 holds 11, cells 5 and 6 hold 7 and 9.
+fn image() -> PublicImage<F> {
+    PublicImage::new(
+        &memory(),
+        CELLS.trailing_zeros() as usize,
+        vec![(2, vec![value(11)]), (5, vec![value(7), value(9)])],
+    )
+    .expect("the fixture runs fit")
+}
+
+/// A program reading the three image words, then overwriting one.
+const IMAGE_PROGRAM: [(u64, [Op; SLOTS]); 2] =
+    [(4, [(5, None), (2, None)]), (9, [(6, None), (5, Some(3))])];
+
+#[test]
+fn a_public_image_seeds_its_words() {
+    // The prover starts from the image the verifier holds.
+    let seed = TimestampedSeed::Public(image());
+    let witness = run_from(&image().columns()[0], &IMAGE_PROGRAM);
+    assert_eq!(witness.rows[0].slots[0].old, value(7));
+
+    assert!(constraints_hold_with(&witness, seed.clone()));
+    assert!(unbalanced_with(&witness, seed).is_empty());
+}
+
+#[test]
+fn a_wrong_public_word_leaves_the_memory_unbalanced() {
+    // The prover claims cell 5 started as 5, while the image says 7.
+    let mut starts = image().columns().remove(0);
+    starts[5] = value(5);
+    let witness = run_from(&starts, &IMAGE_PROGRAM);
+
+    // Nothing committed carries the image, so only the memory bus can catch it.
+    let seed = TimestampedSeed::Public(image());
+    assert!(constraints_hold_with(&witness, seed.clone()));
+    assert_eq!(unbalanced_with(&witness, seed), [MEMORY]);
+}
+
+#[test]
+fn a_seeded_block_pins_its_height() {
+    let seed = TimestampedSeed::Private(PrivateRegion::new(0, 3).unwrap());
+    let (_, boundary, _) = airs_with(seed.clone());
+    let full = traces(&run(&[]), &seed).boundary;
+    check_constraints(&boundary, &full, &[]);
+
+    // Dropping the last four cells ends the block before the region does.
+    let shorter = RowMajorMatrix::new(full.values[..full.values.len() / 2].to_vec(), 4);
+    assert!(
+        catch_unwind(AssertUnwindSafe(|| check_constraints(
+            &boundary,
+            &shorter,
+            &[]
+        )))
+        .is_err()
+    );
+}
+
+#[test]
+fn a_public_image_refuses_malformed_runs() {
+    let log_cells = CELLS.trailing_zeros() as usize;
+    let image = |runs| PublicImage::new(&memory(), log_cells, runs);
+
+    // An empty run holds no word.
+    assert_eq!(
+        image(vec![(0, vec![])]),
+        Err(TimestampedMemoryError::ImageRunWidth {
+            run: 0,
+            len: 0,
+            value_width: 1
+        })
+    );
+
+    // A run starting inside the previous one would give a cell two starting words.
+    assert_eq!(
+        image(vec![(2, vec![value(1), value(2)]), (3, vec![value(3)])]),
+        Err(TimestampedMemoryError::OverlappingImageRuns { run: 1 })
+    );
+
+    // A run ending past the last cell names a cell outside the block.
+    assert_eq!(
+        image(vec![(7, vec![value(1), value(2)])]),
+        Err(TimestampedMemoryError::ImageRunOutOfRange {
+            run: 0,
+            cells: CELLS
+        })
+    );
+
+    // An image of two-component words does not fit a one-component memory.
+    let wide = Memory::new(MEMORY, LOW, HIGH, 2).unwrap();
+    let words = PublicImage::new(&wide, log_cells, vec![(0, vec![value(1), value(2)])]).unwrap();
+    assert_eq!(
+        TimestampedBoundaryAir::new(memory(), TimestampedSeed::Public(words)),
+        Err(TimestampedMemoryError::ImageWidth {
+            expected: 1,
+            actual: 2
+        })
+    );
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(8))]
+
+    #[test]
+    fn a_private_region_accepts_any_start_and_binds_every_read_to_it(
+        starts in prop::collection::vec(any::<u128>(), CELLS),
+        forged in 1u128..,
+    ) {
+        let seed = TimestampedSeed::Private(PrivateRegion::new(0, 3).unwrap());
+        let starts = starts.into_iter().map(value).collect::<Vec<_>>();
+
+        // Any committed starting values balance an honest run from them.
+        let witness = run_from(&starts, &IMAGE_PROGRAM);
+        prop_assert!(constraints_hold_with(&witness, seed.clone()));
+        prop_assert!(unbalanced_with(&witness, seed.clone()).is_empty());
+
+        // The first read of cell 2 returns something other than its committed start.
+        let mut witness = witness;
+        let read = &mut witness.rows[0].slots[1];
+        read.old += value(forged);
+        read.new = read.old;
+        prop_assert!(constraints_hold_with(&witness, seed.clone()));
+        prop_assert_eq!(unbalanced_with(&witness, seed), [MEMORY]);
+    }
+
+    #[test]
+    fn the_sparse_image_evaluation_matches_the_dense_column(
+        log_cells in 0usize..7,
+        value_width in 1usize..3,
+        runs in prop::collection::vec((0usize..6, 1usize..10), 0..5),
+        seed in any::<u64>(),
+    ) {
+        // Lay the runs out left to right, with gaps between them, clipped to the image.
+        let cells = 1usize << log_cells;
+        let mut rng = SmallRng::seed_from_u64(seed);
+        let mut next = 0;
+        let mut layout = Vec::new();
+        for (gap, len) in runs {
+            let start = next + gap;
+            let len = len.min(cells.saturating_sub(start));
+            if len == 0 {
+                break;
+            }
+            let words = (0..len * value_width).map(|_| rng.random::<F>()).collect();
+            layout.push((start, words));
+            next = start + len;
+        }
+        let memory = Memory::new(MEMORY, LOW, HIGH, value_width).unwrap();
+        let image = PublicImage::new(&memory, log_cells, layout).unwrap();
+
+        // The dense reference sums every cell, zero or not.
+        let point = (0..log_cells).map(|_| rng.random::<F>()).collect::<Vec<_>>();
+        let weights = Point::new(point.as_slice()).equality_weights_msb();
+        let dense = image
+            .columns()
+            .iter()
+            .map(|column| column.iter().zip(&weights).map(|(&v, &w)| v * w).sum::<F>())
+            .collect::<Vec<_>>();
+        prop_assert_eq!(image.evaluate(&point), dense);
+    }
 }

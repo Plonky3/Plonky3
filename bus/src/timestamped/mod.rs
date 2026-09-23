@@ -20,6 +20,18 @@
 //!     close   pull (a, last, final)
 //! ```
 //!
+//! # Seeds
+//!
+//! The seed's initial value comes from one of three sources.
+//!
+//! - Zero: every cell starts at zero.
+//! - Public: a sparse image the verifier knows, read as periodic columns and never committed.
+//! - Private: committed columns for one region, opened like any other column.
+//!
+//! The verifier evaluates a public image with [`PublicImage::evaluate`].
+//!
+//! Its cost is one term per image word, not one per cell.
+//!
 //! # Slots
 //!
 //! A row at clock `t` may make several accesses.
@@ -67,6 +79,7 @@
 
 mod air;
 mod error;
+mod image;
 
 #[cfg(test)]
 mod tests;
@@ -78,6 +91,7 @@ use core::num::NonZeroUsize;
 
 pub use air::{ClockRangeAir, TimestampedBoundaryAir, TimestampedSeed};
 pub use error::TimestampedMemoryError;
+pub use image::{PrivateRegion, PublicImage};
 use num_bigint::BigUint;
 use p3_field::{ExtensionField, Field, PrimeCharacteristicRing};
 use p3_security::SecurityTerm;

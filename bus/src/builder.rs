@@ -223,6 +223,45 @@ impl<F: Field> SymbolicBusInteraction<F> {
         )
     }
 
+    /// Whether this declaration reads a periodic column.
+    ///
+    /// A backend that evaluates no periodic column refuses such a declaration.
+    #[must_use]
+    pub fn reads_periodic(&self) -> bool {
+        let mut seen = alloc::collections::BTreeSet::new();
+        let mut pending = self
+            .fields
+            .iter()
+            .chain(match &self.activation {
+                BusActivation::Always | BusActivation::Boundary(_) => None,
+                BusActivation::Boolean(selector) => Some(selector),
+            })
+            .collect::<Vec<_>>();
+
+        // Arithmetic nodes share their operands, so each distinct node is visited once.
+        while let Some(expression) = pending.pop() {
+            if !seen.insert(core::ptr::from_ref(expression)) {
+                continue;
+            }
+            match expression {
+                SymbolicExpr::Leaf(BaseLeaf::Variable(variable)) => {
+                    if variable.entry == BaseEntry::Periodic {
+                        return true;
+                    }
+                }
+                SymbolicExpr::Leaf(_) => {}
+                SymbolicExpr::Add { x, y, .. }
+                | SymbolicExpr::Sub { x, y, .. }
+                | SymbolicExpr::Mul { x, y, .. } => {
+                    pending.push(x);
+                    pending.push(y);
+                }
+                SymbolicExpr::Neg { x, .. } => pending.push(x),
+            }
+        }
+        false
+    }
+
     /// Degree of this interaction's selected factor under a transition-degree scale.
     #[must_use]
     pub fn factor_degree_multiple_with_transition(&self, multiple: usize) -> usize {

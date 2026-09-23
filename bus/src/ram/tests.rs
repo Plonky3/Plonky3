@@ -1641,6 +1641,7 @@ fn materialize(
                             main: trace.row(row),
                             preprocessed: &[],
                             public: &[],
+                            periodic: &[],
                             is_first_row: F::from_bool(row == 0),
                             is_last_row: F::from_bool(row + 1 == height),
                             is_transition: F::from_bool(row + 1 != height),

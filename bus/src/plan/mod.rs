@@ -529,8 +529,6 @@ pub enum UnsupportedBusAccess {
     MainOffset(usize),
     /// A preprocessed-trace row other than the current row.
     PreprocessedOffset(usize),
-    /// A periodic column whose period is absent from this plan.
-    Periodic,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -587,14 +585,15 @@ fn validate_expression<F: Field>(
         match expression {
             SymbolicExpr::Leaf(BaseLeaf::Variable(variable)) => {
                 let access = match variable.entry {
+                    // A periodic column is verifier-known, so its current row resolves like a public value.
                     BaseEntry::Main { offset: 0 }
                     | BaseEntry::Preprocessed { offset: 0 }
-                    | BaseEntry::Public => None,
+                    | BaseEntry::Public
+                    | BaseEntry::Periodic => None,
                     BaseEntry::Main { offset } => Some(UnsupportedBusAccess::MainOffset(offset)),
                     BaseEntry::Preprocessed { offset } => {
                         Some(UnsupportedBusAccess::PreprocessedOffset(offset))
                     }
-                    BaseEntry::Periodic => Some(UnsupportedBusAccess::Periodic),
                 };
                 if let Some(access) = access {
                     return Err(BusPlanError::UnsupportedExpression {
@@ -927,6 +926,7 @@ mod tests {
                                     main: &payload,
                                     preprocessed: &[],
                                     public: &[],
+                                    periodic: &[],
                                     is_first_row: F::ZERO,
                                     is_last_row: F::ZERO,
                                     is_transition: F::ZERO,
@@ -1044,7 +1044,6 @@ mod tests {
                 BaseEntry::Preprocessed { offset: 1 },
                 UnsupportedBusAccess::PreprocessedOffset(1),
             ),
-            (BaseEntry::Periodic, UnsupportedBusAccess::Periodic),
         ] {
             let invalid = vec![SymbolicBusInteraction {
                 bus_name: "bad".to_string(),
@@ -1065,7 +1064,7 @@ mod tests {
         // Re-walking the graph per path would take about thirteen seconds per declaration.
         const DEPTH: usize = 32;
         let mut supported = variable(BaseEntry::Main { offset: 0 }, 0);
-        let mut unsupported = variable(BaseEntry::Periodic, 0);
+        let mut unsupported = variable(BaseEntry::Main { offset: 1 }, 0);
         for _ in 0..DEPTH {
             supported = supported.clone() + supported;
             unsupported = unsupported.clone() + unsupported;
@@ -1097,10 +1096,25 @@ mod tests {
                 interactions: &deep_invalid,
             }]),
             Err(BusPlanError::UnsupportedExpression {
-                access: UnsupportedBusAccess::Periodic,
+                access: UnsupportedBusAccess::MainOffset(1),
                 ..
             })
         ));
+
+        // A periodic column is verifier-known, so planning accepts it.
+        let periodic = vec![SymbolicBusInteraction {
+            bus_name: "periodic".to_string(),
+            direction: BusDirection::Push,
+            fields: vec![variable(BaseEntry::Periodic, 0) + F::ONE],
+            activation: BusActivation::Always,
+        }];
+        assert!(
+            BusPlan::build(&[BusPlanInput {
+                log_height: 1,
+                interactions: &periodic,
+            }])
+            .is_ok()
+        );
 
         let enormous = vec![
             interaction("large", BusDirection::Push, 1),
