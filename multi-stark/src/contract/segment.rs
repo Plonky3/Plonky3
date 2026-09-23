@@ -18,6 +18,10 @@
 //!
 //! Only a verified claim chains, and only with claims of the same statement.
 //!
+//! A statement fixes the declaration, not the contents of the preprocessed trace.
+//!
+//! The verifying key binds those contents, and a verified claim does not record that key.
+//!
 //! What those values mean, and which statements may follow which, stays with the machine.
 
 use alloc::vec::Vec;
@@ -261,6 +265,8 @@ impl SegmentClaim {
 /// A segment claim that a proof has just been verified against.
 ///
 /// Only a verification that passed builds one, so a predicted claim cannot pose as one.
+///
+/// It does not record the verifying key the proof was checked against.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub struct VerifiedSegment {
     /// The boundary the verified proof commits to.
@@ -323,7 +329,7 @@ impl ChainedExecution {
     }
 }
 
-/// Why a list of verified segments does not form one execution.
+/// Why a list of verified segments does not form one chain.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Error)]
 pub enum ChainError {
     /// An empty list describes no execution.
@@ -343,13 +349,23 @@ pub enum ChainError {
     },
 }
 
-/// Join verified segments into one execution, in order.
+/// Join verified segments into one chain, in order.
 ///
 /// Every segment must be proved under one statement.
 ///
-/// Two statements may share a boundary encoding and still mean different machines.
+/// Two statements may share a boundary encoding and still declare different constraint systems.
 ///
 /// A chain across statements is therefore refused rather than left to the caller to notice.
+///
+/// The statement leaves the preprocessed trace contents to the verifying key.
+///
+/// Two keys with different preprocessed commitments can share one declaration.
+///
+/// Segments verified under such keys chain whenever their boundaries meet.
+///
+/// A caller that trusts more than one key must pin the intended program on its own.
+///
+/// One way is a public program identity carried inside the segment boundary.
 ///
 /// # Errors
 ///

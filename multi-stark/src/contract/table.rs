@@ -1,6 +1,5 @@
 //! What one table fixes before a proof exists.
 
-use alloc::collections::BTreeSet;
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::fmt::{Debug, Formatter, Result as FmtResult};
@@ -230,7 +229,7 @@ impl TableDeclaration {
                 .map(|interaction| interaction.tuples.len())
                 .sum::<usize>();
 
-        let opened = opened_values(table, &builder, &buses);
+        let opened = opened_values(table, &builder);
 
         Self {
             columns: ColumnCounts {
@@ -457,31 +456,22 @@ impl TableDeclaration {
 ///
 /// ```text
 ///     main          every column, the next-row columns, one position per indexed read,
-///                   the columns of a main-window indexed table, the columns a bus reads
+///                   the columns of a main-window indexed table
 ///     preprocessed  every column, the next-row columns,
-///                   the columns of a preprocessed indexed table, the columns a bus reads
+///                   the columns of a preprocessed indexed table
 /// ```
 ///
+/// Bus shares close at the zerocheck point and read the zerocheck batch.
+///
+/// A bus therefore opens no value of its own.
+///
 /// A table with no preprocessed column commits no preprocessed trace, so it opens none there.
-fn opened_values<F, EF, A>(
-    table: &A,
-    builder: &InteractionSymbolicBuilder<F, EF>,
-    buses: &BusSymbolicBuilder<F, EF>,
-) -> OpenedValues
+fn opened_values<F, EF, A>(table: &A, builder: &InteractionSymbolicBuilder<F, EF>) -> OpenedValues
 where
     F: Field,
     EF: ExtensionField<F>,
     A: BaseAir<F>,
 {
-    // The bus batch opens the union of the columns every declaration reads.
-    let mut bus_main = BTreeSet::new();
-    let mut bus_preprocessed = BTreeSet::new();
-    for interaction in buses.interactions() {
-        let (main, preprocessed) = interaction.referenced_columns();
-        bus_main.extend(main);
-        bus_preprocessed.extend(preprocessed);
-    }
-
     // An indexed table opens the columns it carries, in the window that holds them.
     let indexed = |window| {
         builder
@@ -495,16 +485,12 @@ where
     let main = table.width()
         + table.main_next_row_columns().len()
         + builder.indexed_reads().len()
-        + indexed(TraceWindow::Main)
-        + bus_main.len();
+        + indexed(TraceWindow::Main);
 
     let preprocessed = match table.preprocessed_width() {
         0 => 0,
         width => {
-            width
-                + table.preprocessed_next_row_columns().len()
-                + indexed(TraceWindow::Preprocessed)
-                + bus_preprocessed.len()
+            width + table.preprocessed_next_row_columns().len() + indexed(TraceWindow::Preprocessed)
         }
     };
 

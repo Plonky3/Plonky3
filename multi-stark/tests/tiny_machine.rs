@@ -962,7 +962,7 @@ fn two_segments_prove_verify_and_chain() {
         );
     }
 
-    // The two segments join into one execution under the one statement.
+    // The two segments join into one chain under the one statement.
     let execution = chain(&verified).unwrap();
     assert_eq!(execution.segments(), 2);
     assert_eq!(
@@ -1024,23 +1024,16 @@ fn the_cost_report_matches_the_proof() {
             .map(|batch| batch.current().len() + batch.next().len())
             .collect()
     };
-    let main = opened(&proof.opening.evals);
+    let mut main = opened(&proof.opening.evals);
     let preprocessed = opened(&proof.preprocessed_opening.as_ref().unwrap().evals);
 
-    // Each table opens one zerocheck batch, and one bus batch when it declares a bus.
-    //
-    // Only the bytecode commits a preprocessed trace, and it declares no bus.
-    let mut batches = main.iter();
-    let mut take = |count: usize| batches.by_ref().take(count).sum::<usize>();
-    let from_proof = [
-        take(2),
-        take(1) + preprocessed[0],
-        take(1),
-        take(2),
-        take(2),
-    ];
-    assert_eq!(batches.next(), None);
+    // Each table opens one zerocheck batch, and its bus shares read that same batch.
+    assert_eq!(main.len(), machine.chips.len());
+
+    // Only the bytecode commits a preprocessed trace.
     assert_eq!(preprocessed.len(), 1);
+    main[1] += preprocessed[0];
+    let from_proof = main;
 
     // Every table opens exactly what the report counts.
     let from_report: Vec<usize> = report
@@ -1049,8 +1042,8 @@ fn the_cost_report_matches_the_proof() {
         .map(|table| table.opened_values)
         .collect();
     assert_eq!(from_report, from_proof);
-    assert_eq!(from_proof, [35, 10, 20, 47, 29]);
-    assert_eq!(report.total().opened_values, 141);
+    assert_eq!(from_proof, [28, 10, 20, 38, 24]);
+    assert_eq!(report.total().opened_values, 120);
 
     // The zerocheck runs over the lookup tree: 24 leaves pad to 32, five rounds past the tallest table's three.
     assert_eq!(report.total().lookup_leaves, 32);
@@ -1078,15 +1071,15 @@ fn the_cost_report_matches_the_proof() {
         report.tables(),
         &[
             // cpu: 14 columns; two lookup flushes and one bus declaration per row.
-            cost(2, 14 * 4, 0, 3 * 4, 2 * 4, 35, 14 * 2 + 2 * 2 * 4 + 4),
+            cost(2, 14 * 4, 0, 3 * 4, 2 * 4, 28, 14 * 2 + 2 * 2 * 4 + 4),
             // bytecode: one multiplicity column over four fixed ones; one lookup flush.
             cost(3, 8, 4 * 8, 8, 8, 10, 5 * 4 + 2 * 8),
             // macc: two lanes of five columns; one lookup flush per lane.
             cost(2, 10 * 4, 0, 2 * 4, 2 * 4, 20, 10 * 2 + 2 * 2 * 4),
             // ram: one access pull and two image declarations per row.
-            cost(2, ram_width * 4, 0, 3 * 4, 0, 47, ram_width * 2 + 3 * 4),
+            cost(2, ram_width * 4, 0, 3 * 4, 0, 38, ram_width * 2 + 3 * 4),
             // image: two image declarations per row.
-            cost(2, IMAGE_WIDTH * 4, 0, 2 * 4, 0, 29, IMAGE_WIDTH * 2 + 2 * 4),
+            cost(2, IMAGE_WIDTH * 4, 0, 2 * 4, 0, 24, IMAGE_WIDTH * 2 + 2 * 4),
         ]
     );
 
