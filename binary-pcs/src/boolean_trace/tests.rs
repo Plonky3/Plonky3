@@ -2,6 +2,7 @@ use alloc::string::String;
 use alloc::{format, vec};
 
 use p3_binary_field::BinaryField128;
+use p3_commit::testing::assert_multilinear_commit_contract;
 use p3_field::PrimeCharacteristicRing;
 use p3_keccak::Keccak256Hash;
 use p3_matrix::dense::RowMajorMatrix;
@@ -1863,4 +1864,33 @@ fn a_forged_next_value_is_rejected_at_every_position() {
             );
         }
     }
+}
+
+/// The commit phase must bind the root the verifier binds, and bind it once.
+///
+/// This scheme binds indirectly: it gathers its tables into bits and hands them to the inner
+/// Boolean PCS, which does the binding. So the check matters more here than where the binding
+/// is written in plain sight, since the state on each side is the only evidence the two agree.
+#[test]
+fn commit_binds_what_the_verifier_binds() {
+    let shapes = [TableShape::new(10, 2)];
+    let scheme = pcs(&shapes);
+    let mut rng = SmallRng::seed_from_u64(0xB1D);
+
+    let mut witness = || {
+        shapes
+            .iter()
+            .map(|shape| {
+                let words = (0..(1 << shape.num_variables()) / WORD_BITS * shape.width())
+                    .map(|_| rng.random::<u64>())
+                    .collect::<Vec<_>>();
+                Table::from_packed_bits(
+                    RowMajorMatrix::new(words, shape.width()),
+                    shape.num_variables(),
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    let (first, second) = (witness(), witness());
+    assert_multilinear_commit_contract::<_, EF, _>(&scheme, &challenger(), first, second);
 }

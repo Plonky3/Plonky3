@@ -120,8 +120,10 @@ where
     ///
     /// A scheme whose binding is a typed phase keeps that phase here.
     ///
-    /// The conformance tests pin the two against each other, so an implementation
-    /// that binds inside its commit phase instead is caught rather than trusted.
+    /// `testing::assert_multilinear_commit_contract` (behind the `test-utils` feature)
+    /// pins the two against each other, so an implementation that binds differently
+    /// inside its commit phase is caught rather than trusted. Every backend in the tree
+    /// runs it.
     ///
     /// # Arguments
     ///

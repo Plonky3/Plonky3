@@ -22,6 +22,14 @@ of swapped point fields, modified values and missing matrix/column claims. Fixtu
 must include a multi-matrix commitment and point-dependent expected values. FRI,
 Circle, and STIR use this helper alongside their backend-specific tests.
 
+`testing::assert_multilinear_commit_contract` covers the multilinear side. A prover
+binds its commitment while producing it, and a verifier, which never produces one,
+binds through `observe_commitment`. The helper compares the transcript states the two
+paths reach, so a commit phase that binds something else, binds twice, binds nothing,
+or binds regardless of the witness is caught rather than trusted. Fixtures supply two
+witnesses that commit to different values. `BinaryPcs`, `BooleanTraceCommitment`,
+`WhirProver` and `HidingWhirPcs` all run it.
+
 Part of [Plonky3](https://github.com/Plonky3/Plonky3), dual-licensed under MIT and Apache 2.0.
 
 ## Univariate PCS API migration

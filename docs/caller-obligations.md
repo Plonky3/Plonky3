@@ -164,7 +164,6 @@ Recorded rather than fixed, and tracked against
 - The layout verifier takes any field element where only the challenge it drew belongs.
 - Ring switching, its bit-level variant, and the skip domain each admit a zero-round shape.
 - The commitment trait reports no digest width, so the digest entry above cannot be checked.
-- The multilinear commitment contract claims conformance tests that cover only the other trait.
 - Neither backend calls the cross-AIR bus-width check yet, and each keeps its own narrower one.
 - A sumcheck's claimed sum could be passed in rather than compared by every caller, at the cost
   of flattening six distinct rejections into one.
