@@ -21,7 +21,6 @@
 #       post-extraction/    <- patches to generated Lean, applied AFTER hax
 #       check-patches.sh    <- conventions gate, run before anything is applied
 #       new-patch.sh        <- author a new patch
-#     check-transcriptions.py <- hand bodies vs. the Rust; NOT run from here
 #     README.md  TCB.md  SYNC.md
 #
 # Patches are hand-owned and each carries its own rationale in its header; there

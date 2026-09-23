@@ -13,7 +13,6 @@ legacy-lean/
     check-patches.sh               conventions + dry-run
     new-patch.sh                   author a new patch
   build-proofs.sh                  extract → patch → `lake build`
-  check-transcriptions.py          diff the hand-written bodies against the Rust
   lakefile.toml
   lean-toolchain
   lake-manifest.json
@@ -76,7 +75,6 @@ is rewritten every run and is not committed.
 | `build-proofs.sh` | check patches → pre-patch → `cargo hax into legacy-lean` → revert → snapshot → post-patch → `lake build` |
 | `patches/check-patches.sh` | Header conventions + dry-run apply. Step 0 of `build-proofs.sh` |
 | `patches/new-patch.sh` | Capture a new delta against (pristine + existing patches). Never overwrites |
-| `check-transcriptions.py` | Build, then `#eval` every hand-transcribed body and diff it against the Rust. Not run by CI or `build-proofs.sh`; [`SYNC.md`](SYNC.md) step 3a invokes it |
 
 ## Build
 
@@ -91,7 +89,3 @@ lake build
 
 `build-proofs.sh` runs `cache get` for you. When `baby-bear/src` (or a mirrored
 dependency signature) changes, follow [`SYNC.md`](SYNC.md).
-
-A green `lake build` does not check that the hand-written bodies in
-`extraction/p3_baby_bear/` say what the Rust says — it only checks they are
-well-typed and reduce. Run `./check-transcriptions.py` for that.

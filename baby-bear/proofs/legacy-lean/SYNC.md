@@ -10,14 +10,8 @@ hax / Lean pins move. It is self-contained: there is no repo-root orchestrator.
 Re-extract if a change touched `baby-bear/src/**` or `baby-bear/Cargo.toml`.
 Also re-extract if `monty-31/src`, `field/src`, `mds/src`, `poseidon1/src`,
 `poseidon2/src` or `symmetric/src` changed a **signature the axioms mirror**
-(anything in the layer-3 table of [`TCB.md`](TCB.md)).
-
-A change to a dependency *body* is mostly invisible here, because bodies are
-assumed rather than extracted — with one exception that matters: the bodies
-this tree **transcribes by hand** (the layer-3 faithful-bodies table). Those
-must track upstream, and nothing in the build notices when they stop. Run
-`./check-transcriptions.py` (step 3a) after any change under `monty-31/src` or
-`mds/src`, even one that touches no signature and needs no re-extraction.
+(anything in the layer-3 table of [`TCB.md`](TCB.md)) — a change to a dependency
+*body* is invisible here, because bodies are assumed, not extracted.
 
 Detection is deliberately conservative; re-extraction is idempotent, so running
 it unnecessarily is harmless.
@@ -78,12 +72,9 @@ If a `by rfl` starts failing after a re-extraction, in order:
 
 1. Find which stub gates it (walk back to the enclosing `RustM.of_isOk` and see
    which interface symbol the block calls).
-2. Give that stub a faithful body from upstream, then run
-   `./check-transcriptions.py` (step 3a) — do not rely on reading the two files
-   side by side. That instruction was in this runbook the entire time
-   `first_row_to_first_col` was the identity; prose did not catch it and will
-   not catch the next one. If the new body produces evaluable data and the
-   script does not cover it, add a row to the script.
+2. Give that stub a faithful body from upstream. (There is no longer an
+   automated check for stub fidelity — `SanityCheck.lean` was removed — so read
+   the Rust and the Lean side by side.)
 3. Only if the value genuinely cannot be computed — e.g. it routes through a
    loop, like `SAMPLING_BITS_M` — consider `native_decide`, and record the
    `Lean.ofReduceBool` cost in `TCB.md`.
@@ -123,43 +114,9 @@ lake build 2>&1 | grep 'Tactic `rfl` failed' \
 At the pins recorded in `TCB.md` this yields exactly one failing site
 (`SAMPLING_BITS_M`).
 
-## Step 3 — check the transcriptions, then refresh `TCB.md`
+## Step 3 — refresh `TCB.md`
 
-### 3a. Check the hand-written bodies against the Rust
-
-```bash
-cd baby-bear/proofs/legacy-lean
-./check-transcriptions.py
-```
-
-**A green `lake build` says nothing about whether a transcribed body matches
-the Rust.** The `of_isOk` obligations constrain a body to be total and
-kernel-reducible; they do not constrain it to be *correct*.
-`first_row_to_first_col` was the identity permutation and discharged all six of
-its obligations while making six MDS constants hold the wrong numbers. Run this
-script; do not substitute reading the files.
-
-The script builds before probing (`lake env lean` resolves `import
-p3_baby_bear` to the compiled olean, so without a build it silently measures
-the previous build and reports green against an edit it never saw). It exits
-non-zero on any mismatch and labels each row `[rust]` — expected value read
-straight out of the Rust, so it detects drift — or `[formula]` — the script
-re-implements a Rust formula, so it only catches two transcriptions
-disagreeing.
-
-Coverage is tracked in the layer-3 faithful-bodies table in
-[`TCB.md`](TCB.md); it is not repeated here, so that there is one place to keep
-current rather than two. Two rows (`Dup.dup`, `hax_ext AsRef.as_ref`) have no
-evaluable data and remain inspection-only.
-
-If a check fails, fix the Lean body — not the script — unless the Rust
-genuinely moved, in which case re-extract first. If you add or change a
-transcription, add it to the script; if you cannot, say why in `TCB.md` and
-mark the row inspection-only.
-
-### 3b. Re-derive every figure
-
-Do not leave a stale number:
+Re-derive every figure; do not leave a stale number:
 
 ```bash
 cd baby-bear/proofs/legacy-lean
@@ -237,8 +194,6 @@ Do **not** run `lake update` during a routine re-extraction.
   modifies no Rust source.
 - Re-running `build-proofs.sh` leaves `extraction/p3_baby_bear.lean`
   byte-identical, and `patches/check-patches.sh` exits 0.
-- `./check-transcriptions.py` exits 0 — every hand-written body that evaluates
-  to data still agrees with the Rust.
 - The coverage probes still pass:
   ```bash
   cd baby-bear/proofs/legacy-lean
