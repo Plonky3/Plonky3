@@ -18,6 +18,7 @@ mod plan;
 mod product;
 mod ram;
 mod security;
+mod timestamped;
 
 pub use argument::{BusArgumentError, BusChallenges, BusProof, BusReductionOutput};
 pub use builder::{
@@ -48,4 +49,9 @@ pub use product::{
 pub use ram::{
     MAX_RAM_BIT_WIDTH, MIN_RAM_ACCESS_COUNT, RamAccess, RamAir, RamBoundary, RamError, RamLayout,
     RamStatement, RamTrace,
+};
+pub use timestamped::{
+    CLOCK_GAP_BITS, CLOCK_RANGE_BITS, ClockGap, ClockRangeAir, RangeRead, TimestampedAccess,
+    TimestampedBoundaryAir, TimestampedMemory, TimestampedMemoryError,
+    TimestampedMemoryInteractionBuilder, TimestampedSeed,
 };
