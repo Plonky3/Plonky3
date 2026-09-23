@@ -6,6 +6,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.8.0] - 2026-09-23
+### Merged PRs
+- Ci: fail on unused dependencies, and drop the ones already there (#2029)
+- Perf(binary-dft): incremental twiddles, tiled stages, and fused kernels (#2043)
+- Fix(circle): account for transition selectors in quotient sizing (#2046)
+- Refactor(commit): separate univariate STARK capabilities from PCS (#2059)
+- Test: share PCS opening contracts and batch fixtures (#2061)
+- Fix(security)!: enforce PCS budgets and compose multi-STARK soundness (#2100)
+- Fix(transcript): address the review follow-ups from the typed-transcript stack (#2117)
+- Review: couple tweaks here and there (#2120)
+- Feat(pcs)!: bind commitments and hiding claims through the typed layer (#2129)
+- Perf(uni-stark,batch-stark): pack only the repeating period of periodic columns (#2197)
+- Fix(uni-stark,circle): reject degree_bits below the PCS minimum trace height (#2257)
+- Refactor(commit): own the periodic column shape rule where every consumer can reach it (#2276)
+- Refactor!(uni-stark,batch-stark,commit): group the preprocessed openings and name the trace-height bounds as a pair (#2281)
+
 ## [0.7.0] - 2026-09-04
 ### Merged PRs
 - Feat(binary-dft): additive NTT and the Encoder abstraction (#2003)

@@ -6,6 +6,35 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.8.0] - 2026-09-23
+### Merged PRs
+- Ci: fail on unused dependencies, and drop the ones already there (#2029)
+- Fix(whir): draw independent STIR query samples (#2031)
+- Fix(security,fri): accounting and grinding hygiene fixes (#2048)
+- Refactor(commit): separate univariate STARK capabilities from PCS (#2059)
+- Feat(whir)!: seed the WHIR transcript through the shared Fiat-Shamir layer (#2089)
+- Fix(security)!: enforce PCS budgets and compose multi-STARK soundness (#2100)
+- Feat(sumcheck)!: drive the quadratic sumcheck transcript through the typed Fiat-Shamir layer (#2081)
+- Feat(sumcheck)!: drive the hiding sumcheck transcript through the typed Fiat-Shamir layer (#2103)
+- Feat(whir)!: drive the plain WHIR transcript through the pattern player (#2104)
+- Fix(security): reject non-canonical grinding witnesses at zero difficulty (#2106)
+- Perf(ci): speed up slow test-suite tests (#2118)
+- Fix(transcript): address the review follow-ups from the typed-transcript stack (#2117)
+- Feat(whir): expose pcs::utils for downstream verifiers (#2119)
+- Review: couple tweaks here and there (#2120)
+- Feat(sumcheck)!: drive the ring-switching transcript through the typed Fiat-Shamir layer (#2122)
+- Refactor(fri)!: derive the commit-round shape from configuration rather than the proof (#2125)
+- Feat(pcs)!: bind commitments and hiding claims through the typed layer (#2129)
+- Test(transcript): tie each unpriced grinding site to the config it is credited from (#2143)
+- Feat(binary-pcs)!: build the small-field commitment path (#2166)
+- Feat(errors)!: make diagnostics actionable (#2202)
+- Feat!: add WHIR over binary additive domains (#2198)
+- Fix(sumcheck): require a cryptographic RNG for HVZK mask sampling (#2260)
+- Feat(security): use the DKT26 Johnson MCA bound (#2282)
+- Feat(sumcheck,binary-pcs,lookup,multilinear-util)!: enforce caller soundness obligations instead of documenting them (#2293)
+- Refactor!: give sumcheck, STIR, WHIR and binary PCS planning, transcript steps and configuration a single owner (#2297)
+- Feat(sumcheck): authenticate jagged claims and ingest live traces (#2285)
+
 ## [0.7.0] - 2026-09-04
 ### Merged PRs
 - Feat(sumcheck): subtraction-free projective (monomial-basis) sum-check on the prover (eprint 2026/762) (#1900)

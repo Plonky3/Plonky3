@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.8.0] - 2026-09-23
+### Merged PRs
+- Perf(binary-field): squaring, Frobenius, dot products, and buffer reuse (#2042)
+- Perf(dft,matrix): optimize inverse DFT and matrix hot paths (#2113)
+- Perf(maybe-rayon): size parallel tasks from a cost model (#2039)
+- Perf(maybe-rayon): close the review comments on the cost model, and apply it to three more loops (#2283)
+
 ## [0.7.0] - 2026-09-04
 ## [0.6.0] - 2026-06-11
 ### Merged PRs

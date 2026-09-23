@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.8.0] - 2026-09-23
+### Merged PRs
+- Ci: fail on unused dependencies, and drop the ones already there (#2029)
+- Perf(sumcheck): bind and measure in one pass (#2036)
+- Perf(ci): speed up slow test-suite tests (#2118)
+- Feat(multi-stark): run the indexed reduction inside the proof (#2150)
+- Perf(sumcheck,multilinear-util): fold suffix tables in place without the parallel feature (#2195)
+- Fix(multilinear-util): state and check the real precondition of fix_prefix_var_to_packed (#2264)
+- Perf(maybe-rayon): size parallel tasks from a cost model (#2039)
+- Perf(maybe-rayon): close the review comments on the cost model, and apply it to three more loops (#2283)
+- Perf(binary): reduce early-round work and representation passes (#2286)
+- Feat(sumcheck,binary-pcs,lookup,multilinear-util)!: enforce caller soundness obligations instead of documenting them (#2293)
+- Perf(multilinear-util,bus,multi-stark,word-backend,sumcheck)!: borrowed points and one packed equality-table kernel (#2305)
+
 
 ### Changed
 

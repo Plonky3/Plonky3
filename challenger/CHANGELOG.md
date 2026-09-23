@@ -6,6 +6,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.8.0] - 2026-09-23
+### Merged PRs
+- Feat(challenger): typed Fiat-Shamir transcript layer (DSFS / IETF draft) (#1603)
+- Perf(binary-field): squaring, Frobenius, dot products, and buffer reuse (#2042)
+- Feat(sumcheck)!: drive the generic-degree transcript through the typed Fiat-Shamir layer (#2024)
+- Feat(multi-stark): add binary-field end-to-end example (#2047)
+- Chore: expose the parallel feature on every crate that uses rayon (#2049)
+- Feat(fri)!: drive the FRI transcript through the typed Fiat-Shamir layer (#2035)
+- Feat(fri)!: drive the FRI PCS transcript through the typed Fiat-Shamir layer (#2086)
+- Feat(stir)!: drive the STIR transcript through the typed Fiat-Shamir layer (#2088)
+- Feat(whir)!: drive the plain WHIR transcript through the pattern player (#2104)
+- Test(challenger): assert no two protocols share a transcript seed (#2108)
+- Feat(security): check recorded grinding difficulties against the security model (#2109)
+- Review: couple tweaks here and there (#2120)
+- Feat(sumcheck)!: drive the ring-switching transcript through the typed Fiat-Shamir layer (#2122)
+- Feat(binary-pcs)!: drive the binary-tower PCS through the typed transcript (#2140)
+- Perf(challenger)!: squeeze the transcript before a proof-of-work search (#2199)
+- Perf(challenger)!: batch the byte-hash proof-of-work search (#2200)
+- Feat(errors)!: make diagnostics actionable (#2202)
+- Feat!: add WHIR over binary additive domains (#2198)
+- Refactor!: give sumcheck, STIR, WHIR and binary PCS planning, transcript steps and configuration a single owner (#2297)
+
 ## [0.7.0] - 2026-09-04
 ### Merged PRs
 - Feat: adapt log levels of some inner functions (#1999)

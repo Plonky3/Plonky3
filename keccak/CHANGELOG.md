@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.8.0] - 2026-09-23
+### Merged PRs
+- Perf(merkle-tree): reach the vectorized Keccak from the Merkle tree (#2051)
+- Optimize Goldilocks and wasm-simd128 primitives (#2116)
+- Perf(keccak): absorb every state word across all lanes with one store in hash_many (#2176)
+
 ## [0.7.0] - 2026-09-04
 ## [0.6.0] - 2026-06-11
 ### Merged PRs

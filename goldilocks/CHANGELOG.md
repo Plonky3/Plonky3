@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.8.0] - 2026-09-23
+### Merged PRs
+- Ci: fail on unused dependencies, and drop the ones already there (#2029)
+- Perf(goldilocks): optimize scalar and packed arithmetic across backends (#2098)
+- Optimize Goldilocks and wasm-simd128 primitives (#2116)
+- Review: couple tweaks here and there (#2120)
+- Fix(goldilocks): reduce round constants in the NEON asm Poseidon2 layers (#2262)
+
 ## [0.7.0] - 2026-09-04
 ### Merged PRs
 - Perf: fixed-width binary serialization for field elements (#1988)

@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.8.0] - 2026-09-23
+### Merged PRs
+- Ci: fail on unused dependencies, and drop the ones already there (#2029)
+- Chore: expose the parallel feature on every crate that uses rayon (#2049)
+- Perf(field): route the self-algebra mixed dot product to the type's own dot product (#2050)
+- Perf(goldilocks): optimize scalar and packed arithmetic across backends (#2098)
+- Optimize Goldilocks and wasm-simd128 primitives (#2116)
+- Review: couple tweaks here and there (#2120)
+- Perf(sumcheck,multi-stark,binary-field): faster binary PCS openings, zerocheck kernels and tower serialization (#2165)
+- Perf(field): scale packed extension coefficients in place when multiplying by a packed base (#2192)
+- Perf(field): interleave independent multiplication chains in Powers::collect_n (#2196)
+- Perf(maybe-rayon): size parallel tasks from a cost model (#2039)
+- Perf(maybe-rayon): close the review comments on the cost model, and apply it to three more loops (#2283)
+
 ## [0.7.0] - 2026-09-04
 ### Merged PRs
 - Chore: fix latest stable clippy (#1994)
