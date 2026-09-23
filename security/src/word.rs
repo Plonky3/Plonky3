@@ -2,7 +2,7 @@
 
 use alloc::vec::Vec;
 
-use crate::{ErrorBits, SecurityTerm};
+use crate::{CandidateSet, ErrorBits, SecurityTerm};
 
 /// Label for the complete word shift reduction error.
 pub const WORD_SHIFT_LABEL: &str = "word-shift-reduction";
@@ -206,8 +206,12 @@ pub struct WordProofSecurityModel {
     shift: WordShiftSecurityModel,
     /// Labelled errors the commitment charges for discharging the one surviving claim.
     commitment: Vec<SecurityTerm>,
-    /// Base-two logarithm of how many candidates the commitment still leaves open.
-    log2_candidates: f64,
+    /// The candidates the commitment still leaves open while this proof draws.
+    ///
+    /// Every draw below lands after the commitment and before the opening names one.
+    ///
+    /// Each is charged over this set, and the set itself comes through untouched.
+    candidates: CandidateSet,
 }
 
 impl WordProofSecurityModel {
@@ -243,9 +247,7 @@ impl WordProofSecurityModel {
         }
 
         // A count that is not a real size prices nothing, so no number is reported at all.
-        if !log2_candidates.is_finite() || log2_candidates < 0.0 {
-            return None;
-        }
+        let candidates = CandidateSet::from_log2(log2_candidates)?;
 
         Some(Self {
             field_bits,
@@ -255,7 +257,7 @@ impl WordProofSecurityModel {
             integer_mul,
             shift,
             commitment,
-            log2_candidates,
+            candidates,
         })
     }
 
@@ -300,10 +302,14 @@ impl WordProofSecurityModel {
         //
         // A prover may therefore choose which candidate it is after seeing them.
         for term in &mut terms {
-            *term = term.over_candidates(self.log2_candidates);
+            *term = term.over_candidates(self.candidates);
         }
 
         // The commitment prices the ring switch and its own opening from its own schedule.
+        //
+        // Those terms arrive already charged by the layer that drew them.
+        //
+        // So this proof carries them through rather than charging the same set twice.
         terms.extend(self.commitment.iter().copied());
 
         terms
@@ -344,9 +350,11 @@ mod tests {
     fn word64_profile_charges_both_random_experiments() {
         // Fixture state:
         //
+        // ```text
         //     batching point   2 operation bits + 2 operand bits
         //     bit sumcheck     6 quadratic rounds
         //     word sumcheck   20 quadratic rounds
+        // ```
         let model = WordShiftSecurityModel::new(128, 4, 26).unwrap();
         let components = model.components();
 

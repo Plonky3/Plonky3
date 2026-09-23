@@ -451,6 +451,10 @@ where
             // Both combined claims of a batch read one column point, so each is charged.
             //
             // The batching challenge is drawn before any candidate has been named.
+            //
+            // So it pays the same list the ring-switch reduction below it paid for.
+            //
+            // A union bound taken once does not shrink the set the next draw faces.
             security.charge_reduction(p3_security::multilinear::column_batch_term(
                 shape.num_batches * shape.num_views(),
                 shape.column_variables(),

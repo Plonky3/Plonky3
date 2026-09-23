@@ -97,8 +97,9 @@ fn challenger() -> Challenger {
 
 /// A nonlinear recurrence: (a, b) -> (b, a * b + a).
 ///
-/// Addition is XOR and multiplication is tower-field multiplication. Nonlinear
-/// constraints exercise interpolation beyond the two prime-subfield elements.
+/// Addition is XOR and multiplication is tower-field multiplication.
+///
+/// Nonlinear constraints exercise interpolation past the two prime-subfield elements.
 struct RecurrenceAir;
 
 impl<F> BaseAir<F> for RecurrenceAir {
@@ -350,6 +351,86 @@ mod tests {
                 Fixture::new(log_height, pow_bits).verify().unwrap();
             }
         }
+    }
+
+    #[test]
+    fn the_report_charges_every_binary_bus_draw() {
+        // The bus contributes two draws this composition makes for itself.
+        //
+        // Each lands after the commitment and before the opening names a candidate.
+        //
+        // Nothing else in the suite builds a report that contains them.
+        //
+        // So a bus draw could be dropped, or misattributed, with every other test green.
+        //
+        // This commitment decodes uniquely, so its candidate set holds one member.
+        //
+        // The charge over it is therefore the identity.
+        //
+        // A bus draw that went uncharged would therefore read the same here.
+        //
+        // What this does catch is a bus draw that never reached the report at all.
+        //
+        // It also catches one attributed to a commitment, which shows as a component.
+        //
+        // An uncharged bus draw is caught by the list-decoding bus test in the WHIR suite.
+        //
+        // Pushing a term past the builder, or onto a closed report, does not compile.
+        //
+        // The builder and the report keep their lists private, and the commitment name is a closed set.
+        let log_height = 3;
+        let config = config(log_height + 1);
+        let push = BinaryBusAir {
+            direction: BusDirection::Push,
+        };
+        let pull = BinaryBusAir {
+            direction: BusDirection::Pull,
+        };
+        let (_, vk) = setup(&config, &[&push, &pull], &mut challenger()).unwrap();
+        let report = p3_multi_stark::security_report(
+            &config,
+            &VerifierInstances::new(vec![
+                VerifierInstance::new(&push, &vk, log_height, &[]),
+                VerifierInstance::new(&pull, &vk, log_height, &[]),
+            ]),
+        )
+        .unwrap();
+        assert!(report.unassessed_components().is_empty());
+
+        for label in ["binary-bus", "binary-bus-batching"] {
+            let term = report
+                .terms()
+                .iter()
+                .find(|term| term.label == label)
+                .unwrap_or_else(|| panic!("the report drops the {label} draw"));
+
+            // A draw this composition makes belongs to no commitment.
+            //
+            // A component name here would mean the term took the opening route.
+            //
+            // It would then have settled at full strength instead of being charged.
+            assert_eq!(
+                term.component, None,
+                "{label} is attributed to a commitment"
+            );
+
+            // Every bus draw is a real bound, and none exceeds the field's own width.
+            assert!(term.bits.bits().is_finite() && term.bits.bits() > 0.0);
+            assert!(term.bits.bits() <= 128.0);
+        }
+
+        // The batching scalar is one fresh draw that must avoid two roots.
+        //
+        //     128 field bits - log2(2)  ->  127 bits
+        let batching = report
+            .terms()
+            .iter()
+            .find(|term| term.label == "binary-bus-batching")
+            .unwrap();
+        assert_eq!(batching.bits.bits(), 127.0);
+
+        // The bus is part of the composed bound the statement is graded against.
+        report.require_security(100).unwrap();
     }
 
     #[test]
