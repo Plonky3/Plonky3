@@ -24,15 +24,33 @@ theorem monty_prime_eq_fieldSize :
     (MontyParameters.PRIME BabyBearParameters).toNat = BabyBear.fieldSize := by
   simp [BabyBear.fieldSize, MontyParameters.PRIME, Impl.PRIME_hoisted]
 
+/-- The extracted modulus is prime. CompPoly's Pratt certificate
+`BabyBear.is_prime`, transported across `monty_prime_eq_fieldSize`. -/
+theorem monty_prime_is_prime :
+    Nat.Prime (MontyParameters.PRIME BabyBearParameters).toNat := by
+  rw [monty_prime_eq_fieldSize]
+  exact BabyBear.is_prime
+
 /-- Two-adicity declared for FFT / NTT matches `BabyBear.twoAdicity` (27). -/
 theorem two_adicity_eq_spec :
     (TwoAdicData.TWO_ADICITY BabyBearParameters).toNat = BabyBear.twoAdicity := by
   simp [BabyBear.twoAdicity, TwoAdicData.TWO_ADICITY, Impl_5.TWO_ADICITY_hoisted]
 
-/-- Montgomery representation uses 32-bit limbs (Plonky3 `MontyField31`). -/
+/-- Extraction tripwire: `MONTY_BITS` is the literal `32` that Rust asserts in
+`monty-31/src/monty_31.rs`. Both sides come from the extraction, so this is a
+wiring check, not a representation theorem. The Montgomery precondition is
+`monty_mu_inverse`. -/
 theorem monty_bits_eq_thirtyTwo :
-    (MontyParameters.MONTY_BITS BabyBearParameters).toNat = 32 := by
-  simp [MontyParameters.MONTY_BITS, Impl.MONTY_BITS_hoisted]
+    (MontyParameters.MONTY_BITS BabyBearParameters).toNat = 32 := by rfl
+
+/-- `PRIME * MONTY_MU ≡ 1 (mod 2^32)`. This is the Montgomery-reduction
+precondition that Rust asserts at compile time in `monty-31/src/monty_31.rs`
+and that Lean `Impl.new` does not re-check. -/
+theorem monty_mu_inverse :
+    ((MontyParameters.PRIME BabyBearParameters).toNat *
+     (MontyParameters.MONTY_MU BabyBearParameters).toNat) % (2 ^ 32) = 1 := by
+  simp [MontyParameters.PRIME, MontyParameters.MONTY_MU,
+        Impl.PRIME_hoisted, Impl.MONTY_MU_hoisted]
 
 /-- The degree-7 power map is a unit-group automorphism: `gcd(7, p - 1) = 1`.
 

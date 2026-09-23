@@ -6,8 +6,8 @@ Everything that, if wrong, could compromise this extraction *without* a Lean
 error to flag it.
 
 > Almost every declaration in this directory is on the **trusted** side. The
-> exception is `spec/p3_baby_bear_proofs/`: five theorems about the field
-> constants, which are proved rather than assumed — see "The five theorems are
+> exception is `spec/p3_baby_bear_proofs/`: seven theorems about the field
+> constants, which are proved rather than assumed — see "The seven theorems are
 > NOT in the TCB" below. Everything else is counted here.
 
 Measured totals (regenerate with the commands in [`SYNC.md`](SYNC.md)):
@@ -307,31 +307,41 @@ actually relied on is small and inspectable — from `CompPoly/Fields/BabyBear.l
 |---|---|
 | `BabyBear.fieldSize` | `2 ^ 31 - 2 ^ 27 + 1` (`@[reducible]`) |
 | `BabyBear.twoAdicity` | `27` (`@[reducible]`) |
+| `BabyBear.is_prime` | Pratt certificate that `fieldSize` is prime |
 
-Both are literal definitions, not derived results, so the trust here is the
-trivial kind: that someone wrote the right numbers down in CompPoly. Mathlib
-enters only through `Nat.Coprime`. `BabyBear.is_prime` (a Pratt certificate) is
-*not* currently used — the constants spec does not yet assert primality.
+`fieldSize` and `twoAdicity` are literal definitions, not derived results, so
+the trust there is the trivial kind: that someone wrote the right numbers down
+in CompPoly. `BabyBear.is_prime` is a Pratt certificate (mathlib's `pratt`
+tactic); `monty_prime_is_prime` transports it across `monty_prime_eq_fieldSize`.
+Mathlib also enters through `Nat.Coprime` (`coprime_seven_pred_prime`).
 
-## The five theorems are NOT in the TCB
+## The seven theorems are NOT in the TCB
 
 This is the distinction that matters. Everything above is assumed. The contents
 of `spec/p3_baby_bear_proofs/` are the opposite: they are the **verification target**,
 the first statements in this tree that are discharged rather than admitted.
 
 ```
-monty_prime_eq_fieldSize        depends on axioms: [propext]
-two_adicity_eq_spec             depends on axioms: [propext, Classical.choice, Quot.sound]
-monty_bits_eq_thirtyTwo         depends on axioms: [propext]
-coprime_seven_pred_prime        depends on axioms: [propext]
+monty_prime_eq_fieldSize         depends on axioms: [propext]
+monty_prime_is_prime             depends on axioms: [propext, Classical.choice, Quot.sound]
+two_adicity_eq_spec              depends on axioms: [propext, Classical.choice, Quot.sound]
+monty_bits_eq_thirtyTwo          depends on axioms: [propext]
+monty_mu_inverse                 depends on axioms: [propext]
+coprime_seven_pred_prime         depends on axioms: [propext]
 fieldSize_sub_one_factorization' depends on axioms: [propext, Classical.choice, Quot.sound]
 ```
 
 No `sorryAx`, and nothing from the Layer 3 interface — the `opaque` declarations
 contribute no axioms, which is exactly why they were written that way.
 
-Two cautions on reading them:
+Cautions on reading them:
 
+- `monty_bits_eq_thirtyTwo` is a wiring check: both sides come from the
+  extraction (`32 = 32` after `simp`). Keep it as a tripwire for the
+  `MONTY_BITS == 32` assert in `monty-31/src/monty_31.rs`. The Montgomery
+  precondition is `monty_mu_inverse`.
+- `monty_mu_inverse` is `PRIME * MONTY_MU ≡ 1 (mod 2^32)`, the compile-time
+  assert in `monty-31/src/monty_31.rs` that Lean `Impl.new` does not re-check.
 - `coprime_seven_pred_prime` uses **7**, not the **3** that KoalaBear uses.
   `p - 1 = 2^27 * 3 * 5`, so `gcd(3, p - 1) = 3`: the cube map is *not* a
   bijection on BabyBear's unit group, and the KoalaBear theorem transplanted
@@ -347,7 +357,7 @@ Two cautions on reading them:
 - The Rust source of `p3-baby-bear` — that is the object under extraction.
 - The numerical constants — they are extracted data, checkable against upstream.
 - Anything in `.lake/` — build output.
-- The five theorems in `spec/p3_baby_bear_proofs/` — they are proved, not assumed.
+- The seven theorems in `spec/p3_baby_bear_proofs/` — they are proved, not assumed.
 - `patches/post-extraction/pristine.snapshot.lean` — regenerated hax output, kept
   only so the patch can be diffed and reviewed.
 
