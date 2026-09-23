@@ -31,6 +31,10 @@
 //!
 //! The verifier recombines them itself, so the recombination draws nothing.
 //!
+//! Each batch is widened to its whole committed table, which makes it complete.
+//!
+//! So the coordinate columns share one column-batching reduction per aligned block.
+//!
 //! # Soundness
 //!
 //! The coordinate map is a bijection between field elements and bit strings.
@@ -40,6 +44,8 @@
 //! The recombination is deterministic, so it adds no term to the error.
 //!
 //! Every draw is made by the Boolean trace commitment underneath, which charges it.
+//!
+//! That includes the column point of each batch, charged once per block and view.
 
 use alloc::vec;
 use alloc::vec::Vec;
@@ -192,24 +198,29 @@ impl<EF: Field + Coordinates, B> MixedTraceCommitment<EF, B> {
         Ok(())
     }
 
-    /// The same schedule, over the committed columns.
+    /// The same schedule over the committed columns, each batch widened to its whole table.
+    ///
+    /// A table read one row ahead anywhere is read one row ahead in all of its batches.
+    ///
+    /// Every batch is then complete, so each table costs one reduction per aligned column block.
+    ///
+    /// The extra readings are opened and verified like the others, and dropped on the way back.
     fn expand_protocol(&self, protocol: &OpeningProtocol) -> OpeningProtocol {
         let shapes = protocol.table_shapes();
         let committed = committed_shapes::<EF>(&shapes, &self.boolean_columns);
-        let mut schedules = vec![Vec::new(); shapes.len()];
+        let mut successor = vec![false; shapes.len()];
         for (table, batch) in protocol.iter_openings() {
-            let expand = |columns: &[usize]| {
-                columns
-                    .iter()
-                    .flat_map(|&column| {
-                        committed_columns::<EF>(self.boolean_columns[table], column)
-                    })
-                    .collect()
+            successor[table] |= !batch.next().is_empty();
+        }
+        let mut schedules = vec![Vec::new(); shapes.len()];
+        for (table, _) in protocol.iter_openings() {
+            let all: Vec<usize> = (0..committed[table].width()).collect();
+            let next = if successor[table] {
+                all.clone()
+            } else {
+                Vec::new()
             };
-            schedules[table].push(OpeningBatch::new(
-                expand(batch.current()),
-                expand(batch.next()),
-            ));
+            schedules[table].push(OpeningBatch::new(all, next));
         }
         OpeningProtocol::new(
             committed
@@ -220,7 +231,9 @@ impl<EF: Field + Coordinates, B> MixedTraceCommitment<EF, B> {
         )
     }
 
-    /// Fold each dense column's coordinate values back into one value.
+    /// Read each requested column back out of its table's committed readings.
+    ///
+    /// A dense column folds its coordinate readings into one value.
     fn recombine(
         &self,
         protocol: &OpeningProtocol,
@@ -232,19 +245,18 @@ impl<EF: Field + Coordinates, B> MixedTraceCommitment<EF, B> {
             .map(|((table, batch), committed)| {
                 let bits = self.boolean_columns[table];
                 let side = |columns: &[usize], values: &[EF]| {
-                    let mut values = values.iter().copied();
                     columns
                         .iter()
                         .map(|&column| {
+                            let range = committed_columns::<EF>(bits, column);
                             if column < bits {
-                                values.next().expect("one value per committed column")
+                                values[range.start]
                             } else {
                                 // v(r) = sum_k c_k(r) * e_k
-                                values
-                                    .by_ref()
-                                    .take(EF::COORDINATES)
+                                values[range]
+                                    .iter()
                                     .zip(&self.basis)
-                                    .map(|(value, &element)| value * element)
+                                    .map(|(&value, &element)| value * element)
                                     .sum()
                             }
                         })

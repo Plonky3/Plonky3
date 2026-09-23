@@ -9,7 +9,7 @@ use p3_challenger::FieldChallenger;
 use p3_challenger::fs::TranscriptField;
 use p3_field::Field;
 use p3_multilinear_util::point::Point;
-use p3_sumcheck::layout::{Table, TablePlacement, plan_stacked_layout};
+use p3_sumcheck::layout::{Selector, Table, TablePlacement, plan_stacked_layout};
 use p3_sumcheck::{OpeningEvals, OpeningPointMismatch, OpeningProtocol, TableShape};
 
 use super::{BooleanTraceCommitment, BooleanTraceCommitmentError};
@@ -141,24 +141,56 @@ where
 /// read the same resolution.
 #[derive(Clone, Debug)]
 pub(super) enum OpeningRoute {
-    /// One table, every batch reading all of it at the current row and either none or all of
-    /// it one row ahead: one reduction per batch, over one shared column point.
-    Batched(ColumnBatchShape),
+    /// Every batch reads all of its table at the current row, and either none or all of it
+    /// one row ahead: one reduction per aligned column block, over one shared column point.
+    Batched(Vec<TableRun>),
     /// Any other protocol: one reduction per column read, in transcript order.
     PerColumn(ClaimPlan),
+}
+
+/// The batches of one table, run through one column-batching transcript.
+#[derive(Clone, Debug)]
+pub(super) struct TableRun {
+    /// Table every batch of the run opens.
+    pub(super) table: usize,
+    /// Shape the run's transcript binds.
+    pub(super) shape: ColumnBatchShape,
+    /// Aligned blocks the table's column slots split into, each one reduction per batch.
+    pub(super) blocks: Vec<ColumnBlock>,
+}
+
+/// One aligned run of a table's column slots, read as one claim at a lifted point.
+///
+/// ```text
+///     slots   [prefix * 2^j, (prefix + 1) * 2^j)
+///     claim   sum_i eq(u_j, i) * column_{first + i}(r)  =  W(prefix, u_j, r)
+/// ```
+///
+/// A slot past the table is past every table too, so the witness holds zero there.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct ColumnBlock {
+    /// Address of the block: the slot bits above its own column variables.
+    pub(super) prefix: Selector,
+    /// Column of the table the block starts at.
+    pub(super) first: usize,
+    /// Column variables the block spans, so `2^variables` slots.
+    pub(super) variables: usize,
 }
 
 impl OpeningRoute {
     /// Resolve the route a protocol takes.
     pub(super) fn new(protocol: &OpeningProtocol) -> Self {
-        batched_shape(protocol)
+        batched_runs(protocol)
             .map_or_else(|| Self::PerColumn(ClaimPlan::of(protocol)), Self::Batched)
     }
 
     /// Reductions the bit commitment answers on this route.
-    pub(super) const fn num_reductions(&self) -> usize {
+    pub(super) fn num_reductions(&self) -> usize {
         match self {
-            Self::Batched(shape) => shape.num_batches,
+            Self::Batched(runs) => runs
+                .iter()
+                .map(|run| run.shape.num_batches * run.blocks.len())
+                .sum(),
             Self::PerColumn(plan) => plan.claims().len(),
         }
     }
@@ -166,7 +198,9 @@ impl OpeningRoute {
     /// Whether some reduction reads a successor view over more rows than one element absorbs.
     pub(super) fn successor_tensors(&self, shapes: &[TableShape], absorbed: usize) -> bool {
         match self {
-            Self::Batched(shape) => shape.next && shape.table_variables > absorbed,
+            Self::Batched(runs) => runs
+                .iter()
+                .any(|run| run.shape.next && run.shape.table_variables > absorbed),
             Self::PerColumn(plan) => plan.claims().iter().any(|claim| {
                 claim.next_at.is_some() && shapes[claim.table].num_variables() > absorbed
             }),
@@ -174,40 +208,106 @@ impl OpeningRoute {
     }
 }
 
-/// The complete single-table shape the batched route handles, if the protocol has one.
+/// The complete shape the batched route handles, if the protocol has one.
 ///
-/// Every batch reads the whole width at the current row, and either none of it or all
-/// of it one row ahead, the same way in every batch.
-fn batched_shape(protocol: &OpeningProtocol) -> Option<ColumnBatchShape> {
+/// Every batch reads its table's whole width at the current row.
+///
+/// One row ahead it reads none of it or all of it, the same way across the table's batches.
+fn batched_runs(protocol: &OpeningProtocol) -> Option<Vec<TableRun>> {
     let shapes = protocol.table_shapes();
-    if shapes.len() != 1 || protocol.num_openings() == 0 {
+    if protocol.num_openings() == 0 {
         return None;
     }
-    let width = shapes[0].width();
-    let columns = (0..width).collect::<Vec<_>>();
-    // The first batch fixes the views, and every other batch has to agree with it.
-    let next = protocol
-        .iter_openings()
-        .next()
-        .is_some_and(|(_, batch)| !batch.next().is_empty());
-    let complete = |read: &[usize], asked: bool| {
-        if asked {
-            read == columns.as_slice()
-        } else {
-            read.is_empty()
+    let (arity, placements) = plan_stacked_layout(&shapes);
+    let used = shapes
+        .iter()
+        .map(|shape| shape.width() << shape.num_variables())
+        .sum::<usize>();
+    let mut by_table = alloc::vec![None; shapes.len()];
+    for placement in &placements {
+        by_table[placement.idx()] = Some(placement);
+    }
+
+    let mut runs: Vec<TableRun> = Vec::new();
+    for (table, batch) in protocol.iter_openings() {
+        let width = shapes[table].width();
+        let complete = |read: &[usize]| read.iter().copied().eq(0..width);
+        let next = !batch.next().is_empty();
+        if !complete(batch.current()) || (next && !complete(batch.next())) {
+            return None;
         }
-    };
-    protocol
-        .iter_openings()
-        .all(|(table, batch)| {
-            table == 0 && complete(batch.current(), true) && complete(batch.next(), next)
-        })
-        .then(|| ColumnBatchShape {
-            table_variables: shapes[0].num_variables(),
-            width,
-            num_batches: protocol.num_openings(),
-            next,
-        })
+        match runs.last_mut() {
+            Some(run) if run.table == table => {
+                // One transcript binds one view set, so a table's batches agree on it.
+                if run.shape.next != next {
+                    return None;
+                }
+                run.shape.num_batches += 1;
+            }
+            _ => {
+                let placement = by_table[table]?;
+                runs.push(TableRun {
+                    table,
+                    shape: ColumnBatchShape {
+                        table_variables: shapes[table].num_variables(),
+                        width,
+                        num_batches: 1,
+                        next,
+                    },
+                    blocks: column_blocks(placement, shapes[table], arity, used)?,
+                });
+            }
+        }
+    }
+    Some(runs)
+}
+
+/// Split a table's column slots into aligned blocks, largest first.
+///
+/// A block may run past the table only where no table follows it.
+///
+/// So one table alone is one block, the width padded to a power of two.
+fn column_blocks(
+    placement: &TablePlacement,
+    shape: TableShape,
+    arity: usize,
+    used: usize,
+) -> Option<Vec<ColumnBlock>> {
+    let rows = shape.num_variables();
+    let selectors = placement.selectors();
+    let start = selectors.first()?.index();
+    // The planner lays one table's columns out back to back.
+    if !selectors
+        .iter()
+        .enumerate()
+        .all(|(column, selector)| selector.index() == start + column)
+    {
+        return None;
+    }
+    let slots = 1usize << (arity - rows);
+    let end = start + shape.width();
+    let free_tail = end << rows >= used;
+    let column_variables = shape.width().next_power_of_two().trailing_zeros() as usize;
+
+    let mut blocks = Vec::new();
+    let mut position = start;
+    while position < end {
+        let mut variables = column_variables.min(position.trailing_zeros() as usize);
+        loop {
+            let stop = position + (1 << variables);
+            if stop <= end || (free_tail && stop <= slots) || variables == 0 {
+                break;
+            }
+            variables -= 1;
+        }
+        blocks.push(ColumnBlock {
+            prefix: Selector::new(arity - rows - variables, position >> variables),
+            first: position - start,
+            variables,
+        });
+        position += 1 << variables;
+    }
+    Some(blocks)
 }
 
 /// One bit claim of the per-column route: the column it reads, and where its values sit.

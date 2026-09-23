@@ -714,8 +714,8 @@ fn a_boolean_trace_commits_and_opens_through_whir() {
     // The schedule must be priced, or a security-checked caller would refuse to prove at all.
     let security = PrescribedPointPcs::<EF, MyChallenger>::prescribed_security(&pcs, &protocol)
         .expect("the trace opening is priced");
-    // Several tables take the per-column route, which combines no columns.
-    // Its several claims still fold into one reduction under lambda, charged as its own term.
+    // Every batch reads its whole table, so each table's columns combine under a column point.
+    // The combined claims of both tables fold into one reduction under lambda.
     assert_eq!(
         security
             .terms
@@ -726,6 +726,7 @@ fn a_boolean_trace_commits_and_opens_through_whir() {
             p3_security::whir::WHIR_OPENING_LABEL,
             p3_security::BIT_RING_SWITCH_LABEL,
             p3_security::BIT_RING_SWITCH_CLAIM_BATCHING_LABEL,
+            p3_security::multilinear::COLUMN_BATCH_LABEL,
         ]
     );
 

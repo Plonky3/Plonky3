@@ -294,3 +294,26 @@ fn the_security_is_the_committed_protocols_own() {
     assert_eq!(mixed.error().bits(), committed.error().bits());
     assert_eq!(mixed.terms.len(), committed.terms.len());
 }
+
+#[test]
+fn a_dense_column_costs_a_block_not_one_reduction_per_coordinate() {
+    // One bit column and two dense ones commit 257 columns, read one row ahead in column 1.
+    //
+    // Widened to the whole table, the batch is one aligned block: one reduction in all.
+    let shapes = [TableShape::new(6, 3)];
+    let scheme = scheme(&shapes, &[1]);
+    let protocol = protocol(&shapes, &[1]);
+    let mut rng = SmallRng::seed_from_u64(8);
+    let points = vec![Point::<EF>::rand(&mut rng, 6)];
+
+    let mut prover = challenger();
+    let (_, data) = scheme
+        .commit(vec![mixed_table(9, 6, 3, 1)], &mut prover)
+        .unwrap();
+    let proof = scheme
+        .open_at(data, &protocol, &points, &mut prover)
+        .unwrap();
+    assert_eq!(proof.opening.reduction.claims.len(), 1);
+    // Both views of every committed column are opened.
+    assert_eq!(proof.values.len(), 2 * 257);
+}
