@@ -835,46 +835,174 @@ mod tests {
         );
     }
 
+    /// A prover that tampers with the elements before binding them, then plays the rounds honestly.
+    ///
+    /// ```text
+    ///     honest elements  ->  tamper  ->  bind  ->  r'', alpha, lambda
+    ///     rounds           ->  measured on the honest tables, under those draws
+    /// ```
+    ///
+    /// Each round message is read off the tables alone.
+    /// The verifier derives the starting sum from the forged rows.
+    /// So the rounds prove the forged sum exactly when it equals the honest one.
+    fn forge(
+        setup: &BitRingSwitchClaims<EF>,
+        packing: &BitPacking<EF>,
+        tamper: impl FnOnce(&mut [ClaimElements<EF>]),
+    ) -> BitRingSwitchClaimsProof<EF> {
+        let supports = setup
+            .reductions()
+            .iter()
+            .map(BitRingSwitch::support)
+            .collect::<Vec<_>>();
+        let honest = setup
+            .reductions()
+            .iter()
+            .zip(&supports)
+            .map(|(reduction, (_, offset, equality))| ClaimElements {
+                tensor: BitRingSwitch::tensor_over(packing, *offset, equality),
+                successor: reduction.successor_tensors_over(packing, *offset, equality),
+            })
+            .collect::<Vec<_>>();
+        let mut claims = honest.clone();
+        tamper(&mut claims);
+
+        // The forged elements are what the transcript binds.
+        let mut challenger = challenger();
+        let mut transcript =
+            BitRingSwitchClaimsProverTranscript::<Chal, EF>::new(&mut challenger, setup.shape());
+        let draws = transcript.statement(&setup.statements(&claims));
+        let batches = setup.batches(&draws);
+        let weights = claim_weights(draws.lambda, claims.len());
+
+        // The combined weight table, exactly as the honest prover builds it.
+        let (prefix, address) = setup.common_prefix();
+        let rounds = setup.num_variables() - prefix;
+        let slot = 1usize << rounds;
+        let mut table = Poly::<EF>::zero(rounds);
+        for ((batch, (_, offset, equality)), &weight) in batches.iter().zip(&supports).zip(&weights)
+        {
+            let start = offset - address * slot;
+            let claim_weights = batch.weights_over::<EF>(equality);
+            for (entry, &value) in table.as_mut_slice()[start..]
+                .iter_mut()
+                .zip(claim_weights.as_slice())
+            {
+                *entry += weight * value;
+            }
+        }
+
+        // The prover is seeded with the sum the tables really have, which only its debug checks read.
+        let mut prover = ReprSumcheckProver::<EF, EF, EF>::from_repr_tables(
+            VariableOrder::Prefix,
+            slot_packing(packing, address * slot, slot),
+            table,
+            BitRingSwitchClaims::batched_sum(&batches, &honest, &weights),
+        );
+        let mut sumcheck = SumcheckData::default();
+        let _ = transcript.batched_sumcheck(|challenger| {
+            prover.compute_sumcheck_polynomials(&mut sumcheck, challenger, rounds, 0)
+        });
+        let final_eval = prover.evals().as_slice()[0];
+        transcript.surviving_claim(final_eval);
+        transcript.finish();
+
+        BitRingSwitchClaimsProof {
+            claims,
+            sumcheck,
+            final_eval,
+        }
+    }
+
+    /// The readings a proof's elements imply, so no column check can object to them.
+    fn implied_readings(
+        setup: &BitRingSwitchClaims<EF>,
+        proof: &BitRingSwitchClaimsProof<EF>,
+        claims: &[Claim],
+    ) -> Vec<(Option<EF>, Option<EF>)> {
+        setup
+            .reductions()
+            .iter()
+            .zip(&proof.claims)
+            .zip(claims)
+            .map(|((reduction, elements), claim)| {
+                let current = reduction.incoming_claim(&elements.tensor);
+                let next = claim.successor.map(|_| {
+                    reduction
+                        .successor_claim(&elements.tensor, elements.successor.as_ref())
+                        .unwrap()
+                });
+                (Some(current), next)
+            })
+            .collect()
+    }
+
+    /// Add one to row 5 of the tensor element of every listed claim.
+    fn shift_row(claims: &mut [ClaimElements<EF>], indices: &[usize]) {
+        for &index in indices {
+            let mut rows = claims[index].tensor.rows().to_vec();
+            rows[5] += EF::ONE;
+            claims[index].tensor = BitTensor::try_from(rows).unwrap();
+        }
+    }
+
     #[test]
-    fn a_tampered_element_at_one_point_is_caught_by_the_shared_rounds() {
-        // Invariant: a forged element its own readings agree with still moves the batched sum.
+    fn a_forged_element_at_one_point_moves_the_starting_sum() {
+        // Invariant: the rows of every claim's element reach the batched starting sum.
         //
         //     columns  ->  the forged readings, which the column check accepts
-        //     rows     ->  sum_i lambda^i * sigma_i, which the honest rounds no longer prove
-        let (_, claims, honest) = honest_batch();
+        //     rows     ->  sum_i lambda^i * sigma_i, off by lambda^index * D(r'')
+        let (witness, claims, _) = honest_batch();
+        let packing = BitPacking::<EF>::new(&witness).unwrap();
         let setup = batch(&claims);
         for index in 0..claims.len() {
-            let mut forged = honest.clone();
-            let mut rows = forged.claims[index].tensor.rows().to_vec();
-            rows[5] += EF::ONE;
-            forged.claims[index].tensor = BitTensor::try_from(rows).unwrap();
+            // Forge one claim's element, current-only or successor alike.
+            let forged = forge(&setup, &packing, |elements| shift_row(elements, &[index]));
+            let readings = implied_readings(&setup, &forged, &claims);
 
-            // The readings the forged elements imply, so no column check can object.
-            let readings = setup
-                .reductions()
-                .iter()
-                .zip(&forged.claims)
-                .zip(&claims)
-                .map(|((reduction, elements), claim)| {
-                    let current = reduction.incoming_claim(&elements.tensor);
-                    let next = claim.successor.map(|_| {
-                        reduction
-                            .successor_claim(&elements.tensor, elements.successor.as_ref())
-                            .unwrap()
-                    });
-                    (Some(current), next)
-                })
-                .collect::<Vec<_>>();
+            // The rounds were played for the forged transcript, yet the sum they close on is wrong.
+            assert_eq!(
+                setup
+                    .verify_readings(&forged, &readings, &mut challenger())
+                    .unwrap_err(),
+                BitRingSwitchProofError::FinalCheck,
+                "claim {index}"
+            );
+        }
+    }
 
-            let error = setup
-                .verify_readings(&forged, &readings, &mut challenger())
-                .unwrap_err();
-            assert!(
-                matches!(
-                    error,
-                    BitRingSwitchProofError::Sumcheck(_) | BitRingSwitchProofError::FinalCheck
-                ),
-                "claim {index}: {error:?}"
+    #[test]
+    fn one_row_error_in_two_claims_does_not_cancel() {
+        // Invariant: the powers of lambda keep two equal row errors apart.
+        //
+        //     weights 1, 1          D(r'') + D(r'') = 0 in characteristic 2  ->  accepted
+        //     weights 1, lambda     (1 + lambda) * D(r'') != 0               ->  refused
+        let witness = bits(0xA1, 64);
+        let packing = BitPacking::<EF>::new(&witness).unwrap();
+        let mut rng = SmallRng::seed_from_u64(0xA3);
+        let point = Point::<EF>::rand(&mut rng, 9);
+        let distinct = [point.clone(), Point::rand(&mut rng, 9)];
+        let repeated = [point.clone(), point];
+
+        // Two plain claims at distinct points, then at one point used twice.
+        for points in [distinct, repeated] {
+            let claims = points.map(|point| Claim {
+                point,
+                successor: None,
+            });
+            let setup = batch(&claims);
+
+            // The same row error in both elements.
+            let forged = forge(&setup, &packing, |elements| shift_row(elements, &[0, 1]));
+            let readings = implied_readings(&setup, &forged, &claims);
+
+            // Both readings moved, and each still agrees with its own element's columns.
+            assert_ne!(readings, honest_readings(&claims, &witness));
+            assert_eq!(
+                setup
+                    .verify_readings(&forged, &readings, &mut challenger())
+                    .unwrap_err(),
+                BitRingSwitchProofError::FinalCheck
             );
         }
     }
@@ -896,18 +1024,38 @@ mod tests {
     }
 
     #[test]
-    fn claims_in_another_order_are_another_statement() {
-        // The verifier binds the claims in its own order, so swapping two moves every draw.
-        let (witness, mut claims, proof) = honest_batch();
+    fn a_proof_does_not_verify_with_its_claims_reordered() {
+        // Swap the first and last claims, and their elements with them.
+        let (witness, mut claims, mut proof) = honest_batch();
         claims.swap(0, 2);
-        assert!(
-            batch(&claims)
-                .verify_readings(
-                    &proof,
-                    &honest_readings(&claims, &witness),
-                    &mut challenger()
+        proof.claims.swap(0, 2);
+        let setup = batch(&claims);
+        let readings = honest_readings(&claims, &witness);
+
+        // Every element still sits beside its own claim, so every column check passes.
+        for ((reduction, elements), &(current, next)) in
+            setup.reductions().iter().zip(&proof.claims).zip(&readings)
+        {
+            reduction
+                .check_element_readings(
+                    &elements.tensor,
+                    elements.successor.as_ref(),
+                    current,
+                    next,
                 )
-                .is_err()
+                .unwrap();
+        }
+
+        // The swapped statement draws other challenges, which the recorded rounds do not answer.
+        let error = setup
+            .verify_readings(&proof, &readings, &mut challenger())
+            .unwrap_err();
+        assert!(
+            matches!(
+                error,
+                BitRingSwitchProofError::Sumcheck(_) | BitRingSwitchProofError::FinalCheck
+            ),
+            "{error:?}"
         );
     }
 
