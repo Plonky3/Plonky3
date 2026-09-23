@@ -456,24 +456,6 @@ mod tests {
     }
 
     #[test]
-    fn the_all_one_vertex_lift_sums_to_one_in_characteristic_two() {
-        // A share two variables short of the cube is lifted by chi(x) = x_0 * x_1.
-        //
-        //     sum over {0,1}^2 of chi  = 1        only (1, 1) survives
-        //     sum over {0,1}^2 of 1    = 4 = 0    in characteristic two
-        //
-        // The constant lift would erase the share; the selector keeps it intact.
-        let vertex = |index: usize, bit: usize| BinaryField128::from_bool((index >> bit) & 1 == 1);
-        let selector_sum = (0..4)
-            .map(|index| vertex(index, 0) * vertex(index, 1))
-            .sum::<BinaryField128>();
-        let constant_sum = (0..4).map(|_| BinaryField128::ONE).sum::<BinaryField128>();
-
-        assert_eq!(selector_sum, BinaryField128::ONE);
-        assert_eq!(constant_sum, BinaryField128::ZERO);
-    }
-
-    #[test]
     fn round_nodes_are_distinct_in_characteristic_two() {
         // Integer embedding would map node two back to zero in characteristic two.
         let nodes = (0..5)

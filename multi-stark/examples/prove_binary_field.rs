@@ -238,13 +238,51 @@ mod tests {
         }
     }
 
+    /// Either the recurrence or one end of the binary bus, so both fit one batch.
+    enum LiftedAir {
+        /// The nonlinear recurrence, which declares no bus.
+        Recurrence,
+        /// One end of the selected-square bus.
+        Bus(BinaryBusAir),
+    }
+
+    impl BaseAir<F> for LiftedAir {
+        fn width(&self) -> usize {
+            match self {
+                Self::Recurrence => BaseAir::<F>::width(&RecurrenceAir),
+                Self::Bus(air) => air.width(),
+            }
+        }
+
+        fn num_public_values(&self) -> usize {
+            match self {
+                Self::Recurrence => BaseAir::<F>::num_public_values(&RecurrenceAir),
+                Self::Bus(air) => air.num_public_values(),
+            }
+        }
+    }
+
+    impl<AB> Air<AB> for LiftedAir
+    where
+        AB: BusInteractionBuilder<F = F>,
+    {
+        fn eval(&self, builder: &mut AB) {
+            match self {
+                Self::Recurrence => RecurrenceAir.eval(builder),
+                Self::Bus(air) => air.eval(builder),
+            }
+        }
+    }
+
     /// Builds one two-column binary bus table in trace-row order.
-    fn binary_bus_table(log_height: usize) -> Table<F> {
+    ///
+    /// Even rows below `live` are selected, so tables of any height can carry the same multiset.
+    fn binary_bus_table(log_height: usize, live: usize) -> Table<F> {
         let mut rows = Vec::with_capacity(2 << log_height);
         for row in 0usize..1usize << log_height {
             rows.extend([
                 F::from_repr((row + 2) as u128),
-                F::from_bool(row.is_multiple_of(2)),
+                F::from_bool(row < live && row.is_multiple_of(2)),
             ]);
         }
         Table::new(RowMajorMatrix::new(rows, 2).transpose())
@@ -329,8 +367,18 @@ mod tests {
         let proof = prove(
             &config,
             ProverInstances::new(vec![
-                ProverInstance::new(&push, binary_bus_table(log_height), &pk, &[]),
-                ProverInstance::new(&pull, binary_bus_table(log_height), &pk, &[]),
+                ProverInstance::new(
+                    &push,
+                    binary_bus_table(log_height, 1 << log_height),
+                    &pk,
+                    &[],
+                ),
+                ProverInstance::new(
+                    &pull,
+                    binary_bus_table(log_height, 1 << log_height),
+                    &pk,
+                    &[],
+                ),
             ]),
             0,
             &mut challenger(),
@@ -342,6 +390,83 @@ mod tests {
             VerifierInstances::new(vec![
                 VerifierInstance::new(&push, &vk, log_height, &[]),
                 VerifierInstance::new(&pull, &vk, log_height, &[]),
+            ]),
+            &proof,
+            0,
+            &mut challenger(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn lifted_binary_bus_shares_round_trip() {
+        // Each share shorter than the cube is lifted by the all-one-vertex selector.
+        //
+        //     lift(x) = prod over the unused coordinates of x_k
+        //
+        // A constant lift would multiply the share by 2^k, which is zero in characteristic two.
+        let push = BinaryBusAir {
+            direction: BusDirection::Push,
+        };
+        let pull = BinaryBusAir {
+            direction: BusDirection::Pull,
+        };
+
+        // Both sides select rows 0 and 2, so they carry the same multiset at any height.
+        let live = 4;
+
+        // Push at 3 and pull at 2: the cube has 3 variables and only the pull share is lifted.
+        // The 24 stacked cells pad to 2^5, which config(4) commits.
+        let config_short = config(4);
+        let (pk, vk) = setup(&config_short, &[&push, &pull], &mut challenger()).unwrap();
+        let proof = prove(
+            &config_short,
+            ProverInstances::new(vec![
+                ProverInstance::new(&push, binary_bus_table(3, live), &pk, &[]),
+                ProverInstance::new(&pull, binary_bus_table(2, live), &pk, &[]),
+            ]),
+            0,
+            &mut challenger(),
+        )
+        .unwrap();
+        verify(
+            &config_short,
+            VerifierInstances::new(vec![
+                VerifierInstance::new(&push, &vk, 3, &[]),
+                VerifierInstance::new(&pull, &vk, 2, &[]),
+            ]),
+            &proof,
+            0,
+            &mut challenger(),
+        )
+        .unwrap();
+
+        // The same bus under a recurrence at 5: the cube has 5 variables and both shares are lifted.
+        // The 88 stacked cells pad to 2^7, which config(6) commits.
+        let config_tall = config(6);
+        let (table, public) = trace(5);
+        let recurrence = LiftedAir::Recurrence;
+        let push = LiftedAir::Bus(push);
+        let pull = LiftedAir::Bus(pull);
+        let airs = [&recurrence, &push, &pull];
+        let (pk, vk) = setup(&config_tall, &airs, &mut challenger()).unwrap();
+        let proof = prove(
+            &config_tall,
+            ProverInstances::new(vec![
+                ProverInstance::new(airs[0], table, &pk, &public),
+                ProverInstance::new(airs[1], binary_bus_table(3, live), &pk, &[]),
+                ProverInstance::new(airs[2], binary_bus_table(2, live), &pk, &[]),
+            ]),
+            0,
+            &mut challenger(),
+        )
+        .unwrap();
+        verify(
+            &config_tall,
+            VerifierInstances::new(vec![
+                VerifierInstance::new(airs[0], &vk, 5, &public),
+                VerifierInstance::new(airs[1], &vk, 3, &[]),
+                VerifierInstance::new(airs[2], &vk, 2, &[]),
             ]),
             &proof,
             0,
