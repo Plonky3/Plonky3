@@ -173,8 +173,13 @@ impl LowStageTwiddles {
     /// The twiddles of a transform with these stage shifts and this block basis.
     ///
     /// # Panics
-    /// Panics if `shifts` holds fewer than [`LOW_STAGES`] stages.
+    /// Panics if `shifts` holds fewer than [`LOW_STAGES`] stages, or `basis` holds fewer than
+    /// `LOW_STAGES - 1` elements.
     pub fn new(shifts: &[u128], basis: &[u128]) -> Self {
+        assert!(
+            basis.len() >= LOW_STAGES - 1,
+            "the low stages need at least three basis elements"
+        );
         let pair = |value: u128| [value, clmul::poly_mul_128(value, 1 << 64)];
         let prefix: Vec<Pair> = core::iter::once(0)
             .chain(basis.iter().scan(0, |sum, &element| {
@@ -397,6 +402,12 @@ mod tests {
     fn the_low_stages_reject_a_partial_run() {
         let twiddles = LowStageTwiddles::new(&[1; LOW_STAGES], &[1; LOW_BASIS]);
         twiddles.forward(&mut [0; LOW_RUN + 1], 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "the low stages need at least three basis elements")]
+    fn the_low_stages_reject_a_short_basis() {
+        LowStageTwiddles::new(&[1; LOW_STAGES], &[1; LOW_STAGES - 2]);
     }
 
     #[test]

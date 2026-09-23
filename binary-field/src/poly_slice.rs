@@ -363,6 +363,8 @@ mod low {
     pub(super) fn forward(values: &mut [u128], first_run: usize, twiddles: &LowStageTwiddles) {
         // The scalar multiply takes the twiddle alone, so the companions stay behind.
         let mut run_twiddles = twiddles.run_twiddles(first_run).map(|pair| pair[0]);
+        // Blocks within a run always use the same basis offsets.
+        let offsets: [u128; 8] = core::array::from_fn(|block| twiddles.span(block, 0)[0]);
         for (index, run) in values.as_chunks_mut::<LOW_RUN>().0.iter_mut().enumerate() {
             if index != 0 {
                 let step = twiddles.step(first_run + index - 1);
@@ -374,7 +376,7 @@ mod low {
                 let half = 1 << j;
                 for (block, pair) in run.chunks_exact_mut(2 * half).enumerate() {
                     let (lo, hi) = pair.split_at_mut(half);
-                    let twiddle = run_twiddles[j] ^ twiddles.span(block, 0)[0];
+                    let twiddle = run_twiddles[j] ^ offsets[block];
                     super::butterfly_forward(lo, hi, twiddle);
                 }
             }

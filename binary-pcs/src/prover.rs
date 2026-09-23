@@ -934,6 +934,10 @@ mod tests {
                 seed,
             );
         }
+        for (seed, num_variables) in [(4, 12), (5, 16)] {
+            check_fold_phase_codewords::<false, F, F>(num_variables, 4, 1, seed);
+        }
+        check_fold_phase_codewords::<false, F, F>(16, 8, 1, 6);
     }
 
     /// Committing rejects an arity mismatch in every build profile, not only a debug one.

@@ -99,10 +99,6 @@ fn for_chunks(
 /// bytes to be worth dispatching, even when only a handful of cosets exist to parallelize over.
 const COSET_COPY_GRAIN: usize = 1 << 16;
 
-/// Elements in the smallest page the supported targets map, which is the unit memory is first
-/// touched in.
-const PAGE_ELEMENTS: usize = 4096 / core::mem::size_of::<u128>();
-
 /// Copies `src` into `dst`, splitting a large copy across workers.
 ///
 /// `for_chunks` gives every coset its own task, but a low-rate encoding has few cosets, so a
@@ -786,13 +782,6 @@ fn first_group_into_cosets(
     depth: usize,
     twiddles: &[Twiddles],
 ) {
-    // Every element past the leading coset is overwritten below, so writing one into each page
-    // first changes nothing. A padded allocation can leave those pages untouched, and this takes
-    // their first touch in one contiguous sweep instead of run by run in the strided scatter.
-    values[message_len..]
-        .par_chunks_mut(PAGE_ELEMENTS)
-        .for_each(|page| page[0] = 0);
-
     let top = plan.log_n;
     let (runs, run, dispatch) = staged_group(plan, top, depth, values.len());
     for_each_staged_tile_into_cosets(
