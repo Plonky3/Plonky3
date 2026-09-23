@@ -441,7 +441,7 @@ mod tests {
     use rand::distr::{Distribution, StandardUniform};
     use rand::rngs::SmallRng;
 
-    use super::{commit, fold_rounds_with};
+    use super::{MIN_ENCODED_ARITY, commit, fold_rounds_with};
     use crate::fold::{ChallengeField, FoldAlphabet, fold_codeword, fold_codeword_batch};
     use crate::params::{BinaryPcsConfig, BinaryPcsParams};
     use crate::test_util::{
@@ -828,6 +828,8 @@ mod tests {
             .record_opening(0, &OpeningBatch::new(vec![0], Vec::new()), &point);
 
         // The route hands out a bound column at some round, which only the banked route does.
+        // A batch folding enough rounds to be encoded ends on a round that holds one, so its
+        // codeword below comes from encoding rather than from folding.
         let mut probe_ch = level_challenger::<A>();
         let mut probe_sc = SumcheckData::default();
         let (mut probe, _) = prover_data
@@ -835,9 +837,17 @@ mod tests {
             .clone()
             .into_sumcheck_in::<EF::SumcheckRepr, _>(&mut probe_sc, 0, &mut probe_ch);
         let mut holds_bound_column = false;
-        while !holds_bound_column && probe.num_variables() > 0 {
-            let _ = probe.compute_sumcheck_polynomials(&mut probe_sc, &mut probe_ch, 1, 0);
-            holds_bound_column = probe.bound_column().is_some();
+        for (batch, (_, arity)) in config.fold_batches().enumerate() {
+            for _ in 0..arity {
+                let _ = probe.compute_sumcheck_polynomials(&mut probe_sc, &mut probe_ch, 1, 0);
+                holds_bound_column |= probe.bound_column().is_some();
+            }
+            if arity >= MIN_ENCODED_ARITY {
+                assert!(
+                    probe.bound_column().is_some(),
+                    "{shape}: batch {batch} encodes its codeword"
+                );
+            }
         }
         assert!(holds_bound_column, "{shape}: banked route");
 
