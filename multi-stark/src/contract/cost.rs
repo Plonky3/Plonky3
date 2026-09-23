@@ -57,8 +57,11 @@ pub struct TableCost {
     /// ```text
     ///     zerocheck point   every column, plus its next-row view where the table reads one
     ///     indexed points    one position per indexed read, the columns of an indexed table
-    ///     bus point         the columns the bus declarations read
     /// ```
+    ///
+    /// A bus opens nothing of its own.
+    ///
+    /// Its shares close at the zerocheck point and read the column values opened there.
     ///
     /// Both committed windows count, main and preprocessed.
     pub opened_values: usize,
