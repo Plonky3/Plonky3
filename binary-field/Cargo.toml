@@ -28,9 +28,9 @@ serde = { workspace = true, features = ["derive"] }
 tracing.workspace = true
 
 [dev-dependencies]
-p3-challenger = { workspace = true, features = ["test-utils"] }
-p3-field-testing.workspace = true
-p3-keccak.workspace = true
+p3-challenger = { path = "../challenger", features = ["test-utils"] }
+p3-field-testing = { path = "../field-testing" }
+p3-keccak = { path = "../keccak" }
 
 postcard = { workspace = true, features = ["alloc"] }
 proptest.workspace = true

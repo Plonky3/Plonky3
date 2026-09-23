@@ -22,10 +22,10 @@ serde.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
-p3-commit.workspace = true
-p3-keccak.workspace = true
-p3-merkle-tree.workspace = true
-p3-symmetric.workspace = true
+p3-commit = { path = "../commit" }
+p3-keccak = { path = "../keccak" }
+p3-merkle-tree = { path = "../merkle-tree" }
+p3-symmetric = { path = "../symmetric" }
 postcard = { workspace = true, features = ["alloc"] }
 proptest.workspace = true
 

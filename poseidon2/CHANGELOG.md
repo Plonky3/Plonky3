@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.8.0] - 2026-09-23
+### Merged PRs
+- Perf(goldilocks): optimize scalar and packed arithmetic across backends (#2098)
+- Feat(errors)!: make diagnostics actionable (#2202)
+
 ## [0.7.0] - 2026-09-04
 ### Merged PRs
 - Chore: fix latest stable clippy (#1994)

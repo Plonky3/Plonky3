@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.8.0] - 2026-09-23
+### Merged PRs
+- Perf(merkle-tree): reach the vectorized Keccak from the Merkle tree (#2051)
+- Perf(merkle-tree): optimize same-height multi-matrix hashing (#2057)
+- Perf(blake3): hash a batch of messages through one SIMD compression (#2151)
+- Perf(symmetric): keep lane-group batching for rows past the scratch budget (#2194)
+- Feat(errors)!: make diagnostics actionable (#2202)
+- Fix(symmetric): reject a non-power-of-two root count when deserializing a MerkleCap (#2277)
+
 ## [0.7.0] - 2026-09-04
 ## [0.6.0] - 2026-06-11
 ### Merged PRs
