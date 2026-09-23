@@ -5,12 +5,12 @@ use alloc::vec::Vec;
 
 use p3_air::symbolic::{BaseEntry, BaseLeaf, SymbolicExpr, SymbolicExpression};
 use p3_field::{ExtensionField, Field};
+use p3_multilinear_util::point::Point;
 
 mod error;
 
 pub use error::BusEvaluationError;
 
-use crate::multilinear::equality_weights_msb;
 use crate::{
     BusActivation, BusBoundary, BusChallenges, BusPlan, BusTupleSlot, SymbolicBusInteraction,
 };
@@ -177,7 +177,7 @@ impl<EF: Field> BusChallenges<EF> {
     #[must_use]
     pub fn fingerprint_weights(&self) -> Vec<EF> {
         // Public tuple coordinates bind slot-index bits from most to least significant.
-        equality_weights_msb(&self.fingerprint)
+        Point::new(self.fingerprint.as_slice()).equality_weights_msb()
     }
 }
 

@@ -6,12 +6,12 @@ use alloc::vec::Vec;
 use p3_challenger::FieldChallenger;
 use p3_challenger::fs::TranscriptField;
 use p3_field::ExtensionField;
+use p3_multilinear_util::point::Point;
 use p3_sumcheck::generic_degree::RoundPolyInterpolator;
 use serde::{Deserialize, Serialize};
 
 use super::math::{
-    combine, equality_evaluation, equality_weights, fold_dense, has_distinct_round_nodes,
-    interpolate_pair, interpolate_quad,
+    combine, fold_dense, has_distinct_round_nodes, interpolate_pair, interpolate_quad,
 };
 use super::prover::{ProductLayers, RadixFourBatch};
 use super::transcript::{ProductGkrProverTranscript, ProductGkrVerifierTranscript};
@@ -145,7 +145,7 @@ impl<EF> ProductGkrProof<EF> {
                 // Four child tables share one eq-weighted degree-five sumcheck.
                 let mut batch =
                     RadixFourBatch::new(&all_layers, child_depth, 1usize << round_count);
-                let mut equality = equality_weights(&point);
+                let mut equality = Point::new(point.as_slice()).equality_weights_lsb();
                 let mut logical_len = 1usize << round_count;
                 let mut round_point = Vec::with_capacity(round_count);
                 let mut round_polys = Vec::with_capacity(round_count);
@@ -271,7 +271,7 @@ impl<EF> ProductGkrProof<EF> {
                         running_sum = interpolator.eval(round_poly, running_sum, challenge);
                         round_point.push(challenge);
                     }
-                    let expected = equality_evaluation(&point, &round_point)
+                    let expected = Point::eval_eq(&point, &round_point)
                         * combine(
                             &children
                                 .iter()

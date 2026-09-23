@@ -411,6 +411,7 @@ mod tests {
     use p3_challenger::HashChallenger;
     use p3_field::PrimeCharacteristicRing;
     use p3_keccak::Keccak256Hash;
+    use p3_multilinear_util::point::Point;
     use p3_word::{
         AndConstraint, ConstraintSystem, IntegerMulConstraint, Operand, Shift, ShiftKind,
         ShiftedValue, ValueIndex, Word32, Word64, ZeroConstraint,
@@ -530,8 +531,8 @@ mod tests {
 
         // Direct evaluation uses the same word-major, bit-minor Boolean trace layout.
         let (word_point, bit_point) = prover_opening.point().split_at(key.word_variables());
-        let word_weights = transcript::equality_weights(word_point);
-        let bit_weights = transcript::equality_weights(bit_point);
+        let word_weights = Point::new(word_point).equality_weights_msb();
+        let bit_weights = Point::new(bit_point).equality_weights_msb();
         let expected = witness
             .witness()
             .iter()

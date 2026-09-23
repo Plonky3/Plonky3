@@ -9,7 +9,8 @@ use p3_challenger::fs::{
     Kind, Length, ProverState, TranscriptField, VerifierState,
 };
 use p3_challenger::{CanObserve, CanSample};
-use p3_field::{BasedVectorSpace, ExtensionField, Field, PrimeCharacteristicRing};
+use p3_field::{BasedVectorSpace, ExtensionField, PrimeCharacteristicRing};
+use p3_multilinear_util::point::Point;
 use p3_word::Word;
 
 use super::ShiftClaim;
@@ -237,8 +238,8 @@ where
             .collect::<Vec<_>>();
 
         BatchWeights {
-            operation: equality_weights(&operation_point),
-            operand: equality_weights(&operand_point),
+            operation: Point::new(operation_point.as_slice()).equality_weights_msb(),
+            operand: Point::new(operand_point.as_slice()).equality_weights_msb(),
         }
     }
 
@@ -339,8 +340,8 @@ where
             .collect::<Vec<_>>();
 
         BatchWeights {
-            operation: equality_weights(&operation_point),
-            operand: equality_weights(&operand_point),
+            operation: Point::new(operation_point.as_slice()).equality_weights_msb(),
+            operand: Point::new(operand_point.as_slice()).equality_weights_msb(),
         }
     }
 
@@ -385,23 +386,6 @@ where
         // A malformed sumcheck may stop after consuming only part of its own transcript.
         self.state.abort();
     }
-}
-
-/// Expands a point into its Boolean equality table in lexicographic order.
-pub(crate) fn equality_weights<F: Field>(point: &[F]) -> Vec<F> {
-    // Start with the empty product over a zero-variable cube.
-    let mut weights = vec![F::ONE];
-    for &coordinate in point {
-        // A new most-minor coordinate splits every existing vertex into zero and one.
-        let old_len = weights.len();
-        weights.resize(2 * old_len, F::ZERO);
-        for index in (0..old_len).rev() {
-            let weight = weights[index];
-            weights[2 * index] = weight * (F::ONE - coordinate);
-            weights[2 * index + 1] = weight * coordinate;
-        }
-    }
-    weights
 }
 
 /// Flattens extension elements into their canonical base-field coordinates.
@@ -532,12 +516,5 @@ mod tests {
         // So must a public word, which never enters the sampled points arithmetically.
         let changed = [Word64::new(13), Word64::new(17), Word64::new(23)];
         assert_ne!(sample(shape, &claim(), &changed), base);
-    }
-
-    #[test]
-    fn equality_table_uses_big_endian_point_order() {
-        // Boolean point (1, 0) selects lexicographic vertex two.
-        let weights = equality_weights(&[F::ONE, F::ZERO]);
-        assert_eq!(weights, [F::ZERO, F::ZERO, F::ONE, F::ZERO]);
     }
 }

@@ -17,12 +17,12 @@ use alloc::vec::Vec;
 use p3_bus::{BusDirection, BusEvaluation, BusReductionOutput};
 use p3_field::{ExtensionField, Field};
 use p3_maybe_rayon::prelude::*;
+use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
 use p3_sumcheck::generic_degree::{RoundPolyInterpolator, RoundProver};
 use p3_sumcheck::layout::Table;
 
 use crate::bus::BusContext;
-use crate::bus::math::equality_weights;
 
 /// Prover state for the mixed-height bus composition polynomial.
 pub(crate) struct BusCompositionProver<'a, F: Field, EF: ExtensionField<F>> {
@@ -244,7 +244,7 @@ where
                         preprocessed,
                         preprocessed_layout: (fixed_columns.to_vec(), fixed_width),
                         selectors,
-                        equality: Poly::new(equality_weights(row_point)),
+                        equality: Poly::new(Point::new(row_point).equality_weights_msb()),
                         terms: Vec::new(),
                         unused_prefix: num_variables - share.row_variables,
                         prefix_evaluation: EF::ONE,

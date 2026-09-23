@@ -18,7 +18,6 @@ use p3_multilinear_util::point::Point;
 use p3_sumcheck::layout::Table;
 
 use super::error::BusBindingError;
-use super::math::equality_evaluation;
 
 /// Verifier-derived bus declarations and their checked physical layout.
 pub(crate) struct BusContext<F: Field, EF: ExtensionField<F>> {
@@ -225,12 +224,15 @@ where
                         actual: output.product.point.len(),
                     },
                 )?;
-                let row_weight =
-                    equality_evaluation(&output.product.point[share.prefix_variables..], row_point)
-                        .ok_or(BusBindingError::ProductPointDimension {
-                            expected: share.prefix_variables + share.row_variables,
-                            actual: output.product.point.len(),
-                        })?;
+                // Truncating to the shorter point would return a well-formed but wrong weight.
+                let row_suffix = &output.product.point[share.prefix_variables..];
+                if row_suffix.len() != row_point.len() {
+                    return Err(BusBindingError::ProductPointDimension {
+                        expected: share.prefix_variables + share.row_variables,
+                        actual: output.product.point.len(),
+                    });
+                }
+                let row_weight = Point::eval_eq(row_suffix, row_point);
                 let boundary = crate::selectors::BoundaryEvals::at(row_point);
                 let factor = self.plan.evaluate_factor(
                     share.bus,

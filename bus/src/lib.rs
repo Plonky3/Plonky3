@@ -13,7 +13,6 @@ mod debug;
 mod direction;
 mod evaluation;
 mod memory;
-mod multilinear;
 mod name;
 mod plan;
 mod product;

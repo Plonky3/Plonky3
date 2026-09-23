@@ -7,28 +7,13 @@ use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use p3_binary_field::{BinaryChallenger, BinaryField128};
 use p3_field::{Field, PrimeCharacteristicRing};
 use p3_keccak::Keccak256Hash;
+use p3_multilinear_util::point::Point;
 use p3_word::{
     AndConstraint, ConstraintSystem, Operand, Shift, ShiftKind, ShiftedValue, ValueIndex, Word64,
 };
 use p3_word_backend::{PackedWitness, ShiftClaim, ShiftReductionKey};
 
 type F = BinaryField128;
-
-/// Expands a point into Boolean equality weights.
-fn equality_weights(point: &[F]) -> Vec<F> {
-    // Coordinates use the word backend's most-significant-variable-first convention.
-    let mut weights = vec![F::ONE];
-    for &coordinate in point {
-        let old_len = weights.len();
-        weights.resize(2 * old_len, F::ZERO);
-        for index in (0..old_len).rev() {
-            let weight = weights[index];
-            weights[2 * index] = weight * (F::ONE - coordinate);
-            weights[2 * index + 1] = weight * coordinate;
-        }
-    }
-    weights
-}
 
 /// Evaluates one word as a Boolean multilinear at a fixed point.
 fn evaluate_word(word: Word64, weights: &[F]) -> F {
@@ -48,8 +33,8 @@ fn claim(
     bit_point: Vec<F>,
 ) -> ShiftClaim<F> {
     // This benchmark uses only AND relations, leaving the other families identically zero.
-    let constraint_weights = equality_weights(&constraint_point);
-    let bit_weights = equality_weights(&bit_point);
+    let constraint_weights = Point::new(constraint_point.as_slice()).equality_weights_msb();
+    let bit_weights = Point::new(bit_point.as_slice()).equality_weights_msb();
     let column = |select: fn(&AndConstraint<Word64>) -> &Operand<Word64>| {
         system
             .and_constraints()

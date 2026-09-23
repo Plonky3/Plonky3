@@ -689,7 +689,7 @@ mod tests {
 
         let lambda = rng.random::<EF>();
         let opening = SkipOpening::new(round.selector::<EF>(lambda).lagrange().clone());
-        let rho = Point::new((0..4).map(|_| rng.random::<EF>()).collect());
+        let rho = Point::<EF>::rand(&mut rng, 4);
 
         let folded =
             opening.partial_evaluation(&rows, &Poly::new_from_point(rho.as_slice(), EF::ONE));

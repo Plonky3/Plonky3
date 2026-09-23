@@ -133,7 +133,6 @@ mod tests {
     use crate::proof::prover::bit_table;
     use crate::proof::relation::{OPERAND_EVALUATIONS, RelationZerocheck, ZEROCHECK_DEGREE};
     use crate::proof::transcript::{ProofProverTranscript, ProofVerifierTranscript};
-    use crate::shift::transcript::equality_weights;
     use crate::{OperationColumns, PackedWitness, PackedWord, ShiftReductionError, WordProofKey};
 
     type EF = BinaryField128;
@@ -367,8 +366,8 @@ mod tests {
 
         // Evaluate each operand column directly from the words the statement declares.
         let (constraint_point, bit_point) = point.split_at(key.shift.constraint_variables());
-        let rows = equality_weights(constraint_point.as_slice());
-        let bits = equality_weights(bit_point.as_slice());
+        let rows = constraint_point.equality_weights_msb();
+        let bits = bit_point.equality_weights_msb();
         let evaluate = |operand: &Operand<Word64>, row: usize| {
             let word = operand.evaluate(&public_words, &words).unwrap().get();
             rows[row]
@@ -573,7 +572,7 @@ mod tests {
         // Sum the batched relation over the cube directly, from the relation definition.
         let columns = OperationColumns::new(key.statement(), &values).unwrap();
         let rows = 1 << key.shift.constraint_variables();
-        let equality = equality_weights(&vanishing_point);
+        let equality = Point::new(vanishing_point.as_slice()).equality_weights_msb();
         let linear = bit_table::<Word64, EF>(columns.zero(), rows);
         let bitwise = columns
             .bitwise_and()

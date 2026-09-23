@@ -23,7 +23,7 @@ impl<'a> JaggedSelector<'a> {
     }
 
     /// Validates that a sparse evaluation point matches this layout.
-    pub(super) const fn validate_point<F: Field>(
+    pub(super) fn validate_point<F: Field>(
         &self,
         point: &JaggedPoint<F>,
     ) -> Result<(), JaggedError> {
