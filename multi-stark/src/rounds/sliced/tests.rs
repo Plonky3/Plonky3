@@ -2465,7 +2465,7 @@ fn folded_columns_match_the_plane_fold_across_block_boundaries() {
                         "width {width}, boolean {boolean}, prefix {prefix_len}, \
                          blocks of {block_columns}"
                     );
-                    let columns = fold.fold_columns(block_columns);
+                    let columns = fold.unslice_columns(block_columns);
                     assert_eq!(columns.len(), width, "{case}");
                     for (column, values) in columns.iter().enumerate() {
                         assert_eq!(values.num_evals(), fold.words * SLICED_LANES, "{case}");

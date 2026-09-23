@@ -1549,7 +1549,7 @@ impl<'a, R: Field, const CORNERS: usize> PlaneFold<'a, R, CORNERS> {
     /// Every column's value at every residual row, `block_columns` adjacent columns per task.
     ///
     /// Each worker allocates the columns it writes, so the memory comes from its own arena.
-    fn fold_columns(&self, block_columns: usize) -> Vec<Poly<R>> {
+    fn unslice_columns(&self, block_columns: usize) -> Vec<Poly<R>> {
         let width = self.trace.width;
         let rows = self.words * SLICED_LANES;
         (0..width.div_ceil(block_columns))
@@ -2096,7 +2096,7 @@ where
         let _span = tracing::debug_span!("unslice").entered();
         let fold = PlaneFold::<R, CORNERS>::new::<S, EF>(&trace, &challenges);
         // A stage too narrow to give every worker full blocks stages fewer columns per task.
-        let scalar = fold.fold_columns(STAGED_COLUMNS.min(rows_per_task(trace.width)));
+        let scalar = fold.unslice_columns(STAGED_COLUMNS.min(rows_per_task(trace.width)));
 
         self.read_next_tails(&fold);
         self.columns = ExtColumns::Scalar(scalar);
