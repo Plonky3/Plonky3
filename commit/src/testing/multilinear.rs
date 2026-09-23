@@ -38,8 +38,10 @@ fn fingerprint<Val, Challenger: Clone + CanSample<Val>>(
 ///   that does not depend on what was committed is caught.
 ///
 /// The two witnesses are the fixture's job: they must be different enough to commit to
-/// different values. Anything a backend does beyond the binding, such as its opening
-/// proof and its rejections, belongs in that backend's own tests.
+/// different values. Anything a backend does beyond the binding belongs in that backend's
+/// own tests, including the other half of the commit phase's transcript contract: that a
+/// rejected commitment leaves the sponge untouched. Reaching that needs a witness the
+/// backend refuses, which is backend-specific, so it cannot be asked for here.
 ///
 /// # Panics
 ///
