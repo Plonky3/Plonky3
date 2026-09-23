@@ -128,6 +128,10 @@ impl JaggedSelector<'_> {
     /// Reading one layer above the wider point leaves both points at zero there, which absorbs the overflow bit of an endpoint at the dense capacity and forces the last carry to vanish.
     ///
     /// The two conditions together say exactly that the row index is below the column height.
+    ///
+    /// Above the dense arity both endpoints vanish, every surviving transition keeps its state, and the block collapses to one shared scalar.
+    ///
+    /// The cost is therefore the dense arity per column plus one pass over the row bound.
     pub(super) fn evaluate<F: Field>(
         &self,
         sparse_point: &JaggedPoint<F>,
@@ -138,8 +142,15 @@ impl JaggedSelector<'_> {
         // One extra zero layer checks the final carry and the endpoint's overflow bit.
         let top = row_point.num_variables().max(dense_point.num_variables());
 
+        // Every boundary lies inside the envelope, so no public bit above this layer is set.
+        let split = self
+            .layout
+            .dense_variables()
+            .max(dense_point.num_variables())
+            .min(top);
+
         // The four products of a row and a dense coordinate depend only on the layer, so every column shares them.
-        let layer_weights = (0..=top)
+        let layer_weights = (0..=split)
             .map(|layer| {
                 let row = point_coordinate_from_low(row_point, layer);
                 let dense = point_coordinate_from_low(dense_point, layer);
@@ -152,6 +163,11 @@ impl JaggedSelector<'_> {
             })
             .collect::<Vec<_>>();
 
+        // Reaching the accepting state through the collapsed block asks every leading row bit to vanish.
+        let leading = (split + 1..=top)
+            .map(|layer| F::ONE - point_coordinate_from_low(row_point, layer))
+            .product::<F>();
+
         // The column equality table supplies the coefficient of each boundary pair.
         let column_weights = Poly::new_from_point(sparse_point.column().as_slice(), F::ONE);
 
@@ -161,21 +177,26 @@ impl JaggedSelector<'_> {
             .zip(column_weights.as_slice())
             .map(|(bounds, &weight)| {
                 // Each column asks the same automaton about its own start and end.
-                weight * boundary_evaluation(&layer_weights, bounds[0], bounds[1])
+                weight * boundary_evaluation(&layer_weights, leading, bounds[0], bounds[1])
             })
             .sum()
     }
 }
 
 /// Evaluates one boundary pair through the branching program's multilinear extension.
-fn boundary_evaluation<F: Field>(layer_weights: &[[F; 4]], start: usize, end: usize) -> F {
+fn boundary_evaluation<F: Field>(
+    layer_weights: &[[F; 4]],
+    leading: F,
+    start: usize,
+    end: usize,
+) -> F {
     // States encode `(carry, less_than)` in the low and high bits.
     // The accepting state has no remaining carry and a proven strict inequality.
     const INITIAL: usize = 0;
     const ACCEPT: usize = 2;
 
     let mut suffix = [F::ZERO; 4];
-    suffix[ACCEPT] = F::ONE;
+    suffix[ACCEPT] = leading;
 
     for (layer, weights) in layer_weights.iter().enumerate().rev() {
         // Both endpoints are public, so twelve of the sixteen symbols have an identically zero factor.
@@ -348,13 +369,30 @@ mod tests {
         point
     }
 
+    // Multilinear extension of the paper's own function, summed straight over its Boolean domain.
+    // It reads as "the second part equals the first plus the third, and is below the fourth".
+    //
+    // No automaton, carry or comparison register appears, so it shares no model with the shipped code.
+    fn definitional_g(row: &Point<F>, dense: &Point<F>, start: usize, end: usize) -> F {
+        let mut total = F::ZERO;
+        for a in 0..(1usize << row.num_variables()) {
+            for b in 0..(1usize << dense.num_variables()) {
+                if b < end && b == a + start {
+                    total += definitional_weight(row.as_slice(), a)
+                        * definitional_weight(dense.as_slice(), b);
+                }
+            }
+        }
+        total
+    }
+
     #[test]
     fn branching_program_matches_the_materialized_selector() {
         // Fixture state:
         //
-        //     rows       2^3
-        //     heights    [3, 0, 5, 1]
-        //     dense      9 live cells in a 16-cell envelope
+        //     Rows       2^3
+        //     Heights    [3, 0, 5, 1]
+        //     Dense      9 live cells in a 16-cell envelope
         let layout = JaggedLayout::new(3, &[3, 0, 5, 1]).unwrap();
         let sparse = JaggedPoint::new(field_point(&[2, 3, 5]), field_point(&[7, 11]));
         let dense = field_point(&[13, 17, 19, 23]);
@@ -433,6 +471,91 @@ mod tests {
         assert_eq!(
             evaluation,
             Poly::new(selector.table(&sparse)).eval_base(&dense)
+        );
+    }
+
+    #[test]
+    fn the_automaton_computes_the_function_the_paper_defines() {
+        // Fixture state: one column spanning rows 3 to 8, read under two row bounds.
+        //
+        // ```text
+        //     start   3
+        //     end     9
+        // ```
+        //
+        // The second bound is above the dense arity, which the paper assumes away.
+        let dense = field_point(&[7, 11, 13, 17]);
+        let narrow = field_point(&[2, 3, 5]);
+        let wide = field_point(&[2, 3, 5, 19, 23, 29]);
+
+        for row in [&narrow, &wide] {
+            for (start, end) in [(0usize, 1usize), (3, 9), (0, 16), (5, 5), (9, 16)] {
+                let top = row.num_variables().max(dense.num_variables());
+                let split = dense.num_variables();
+                let layers = (0..=split)
+                    .map(|layer| {
+                        let r = point_coordinate_from_low(row, layer);
+                        let z = point_coordinate_from_low(&dense, layer);
+                        [
+                            (F::ONE - r) * (F::ONE - z),
+                            r * (F::ONE - z),
+                            (F::ONE - r) * z,
+                            r * z,
+                        ]
+                    })
+                    .collect::<Vec<_>>();
+
+                // Reaching the accepting state above the dense arity asks every leading row bit to vanish.
+                let leading = (split + 1..=top)
+                    .map(|layer| F::ONE - point_coordinate_from_low(row, layer))
+                    .product::<F>();
+
+                assert_eq!(
+                    boundary_evaluation(&layers, leading, start, end),
+                    definitional_g(row, &dense, start, end),
+                    "boundary pair {start}..{end}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn collapsing_the_leading_row_layers_changes_no_value() {
+        // A forty-variable row bound over sixteen live cells is the shape the collapse exists for.
+        // The reference below walks every layer of every column, which is what the collapse replaces.
+        let layout = JaggedLayout::new(40, &[7, 0, 6, 3]).unwrap();
+        let sparse = JaggedPoint::new(
+            field_point(&(0..40).map(|i| 2 + 3 * i).collect::<Vec<_>>()),
+            field_point(&[7, 11]),
+        );
+        let dense = field_point(&[13, 17, 19, 23]);
+
+        let evaluation = JaggedSelector::new(&layout).evaluate(&sparse, &dense);
+        assert_ne!(evaluation, F::ZERO);
+        assert_eq!(evaluation, reference_evaluate(&layout, &sparse, &dense));
+    }
+
+    #[test]
+    fn the_selector_is_the_column_sum_the_paper_writes_down() {
+        // Equation five of the paper weights one boundary pair per column by the column equality table.
+        let layout = JaggedLayout::new(3, &[3, 0, 5, 1]).unwrap();
+        let sparse = JaggedPoint::new(field_point(&[2, 3, 5]), field_point(&[7, 11]));
+        let dense = field_point(&[13, 17, 19, 23]);
+
+        let expected = layout
+            .cumulative_heights()
+            .windows(2)
+            .enumerate()
+            .map(|(column, bounds)| {
+                definitional_weight(sparse.column().as_slice(), column)
+                    * definitional_g(sparse.row(), &dense, bounds[0], bounds[1])
+            })
+            .sum::<F>();
+
+        assert_ne!(expected, F::ZERO);
+        assert_eq!(
+            JaggedSelector::new(&layout).evaluate(&sparse, &dense),
+            expected
         );
     }
 

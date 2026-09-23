@@ -51,6 +51,10 @@ name = "sumcheck"
 harness = false
 
 [[bench]]
+name = "jagged"
+harness = false
+
+[[bench]]
 name = "ring_switch"
 harness = false
 

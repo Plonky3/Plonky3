@@ -44,6 +44,12 @@ pub enum JaggedLayoutError {
         /// Sum of all live column lengths.
         area: usize,
     },
+    /// The requested envelope arity cannot be represented by a machine index.
+    #[error("an envelope of {variables} variables does not fit in a machine index")]
+    DenseVariablesOverflow {
+        /// Number of envelope variables the floor asks for.
+        variables: usize,
+    },
 }
 
 /// A malformed prover input or rejected jagged proof.
@@ -82,4 +88,107 @@ pub enum JaggedError {
     /// The terminal product does not equal the sumcheck claim.
     #[error("the terminal jagged relation is inconsistent")]
     TerminalMismatch,
+}
+
+/// A trace a jagged geometry cannot read.
+#[derive(Clone, Debug, Error, PartialEq, Eq)]
+pub enum JaggedIngestError {
+    /// The producer supplies a different number of columns than the geometry has.
+    #[error("the trace has {actual} columns, expected {expected}")]
+    ColumnCountMismatch {
+        /// Number of columns the geometry reserves.
+        expected: usize,
+        /// Number of columns the producer supplies.
+        actual: usize,
+    },
+    /// One column supplies a different number of cells than the geometry reserves.
+    #[error("column {column} supplies {actual} cells, expected {expected}")]
+    ColumnHeightMismatch {
+        /// Index of the disagreeing column.
+        column: usize,
+        /// Number of cells the geometry reserves.
+        expected: usize,
+        /// Number of cells the producer supplies.
+        actual: usize,
+    },
+    /// An interleaved column would read past the block it is drawn from.
+    #[error("column {column} needs {required} cells of its block, which holds {available}")]
+    StrideOutOfRange {
+        /// Index of the invalid column.
+        column: usize,
+        /// Position one past the last cell the column reads.
+        required: usize,
+        /// Number of cells in the block.
+        available: usize,
+    },
+    /// An interleaved column declares a step of zero.
+    #[error("column {column} declares a step of zero between its cells")]
+    ZeroStride {
+        /// Index of the invalid column.
+        column: usize,
+    },
+    /// A packed column holds fewer words than its height needs.
+    #[error("column {column} needs {required} packed words and holds {available}")]
+    PackedWordsTooShort {
+        /// Index of the invalid column.
+        column: usize,
+        /// Number of words the height needs.
+        required: usize,
+        /// Number of words the producer supplies.
+        available: usize,
+    },
+    /// A pre-concatenated trace is shorter than the envelope the geometry commits.
+    #[error("the committed vector holds {available} cells and the envelope needs {required}")]
+    CommittedVectorTooShort {
+        /// Size of the envelope.
+        required: usize,
+        /// Number of cells the producer supplies.
+        available: usize,
+    },
+}
+
+/// A sparse claim the dense commitment did not authenticate.
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum JaggedOpeningError<E> {
+    /// The sparse-to-dense reduction failed.
+    #[error(transparent)]
+    Reduction(#[from] JaggedError),
+    /// The dense commitment scheme failed.
+    #[error("the dense commitment scheme reported {0:?}")]
+    Commitment(E),
+    /// No sparse claim was supplied to discharge.
+    #[error("a jagged opening must carry at least one sparse claim")]
+    NoClaims,
+    /// The proof carries a different number of reductions than there are claims.
+    #[error("the proof carries {actual} reductions for {expected} claims")]
+    ReductionCountMismatch {
+        /// Number of claims the caller stated.
+        expected: usize,
+        /// Number of reductions the proof carries.
+        actual: usize,
+    },
+    /// The dense opening returned a different number of readings than there are claims.
+    #[error("the dense opening returned {actual} readings for {expected} claims")]
+    OpeningCountMismatch {
+        /// Number of claims the caller stated.
+        expected: usize,
+        /// Number of readings the opening returned.
+        actual: usize,
+    },
+    /// One dense reading does not have the shape a claim asked for.
+    #[error("reading {reading} returned {direct} direct and {successor} successor values")]
+    OpeningShape {
+        /// Position of the malformed reading.
+        reading: usize,
+        /// Number of direct readings it returned.
+        direct: usize,
+        /// Number of successor readings it returned.
+        successor: usize,
+    },
+    /// The committed vector does not take a reduced value at its reduced point.
+    #[error("the dense commitment does not carry the value reduction {reading} produced")]
+    DenseMismatch {
+        /// Position of the claim the commitment refused.
+        reading: usize,
+    },
 }
