@@ -43,6 +43,15 @@ pub enum PcsOptions {
     Stir,
 }
 
+/// How a prover example prints its measurements.
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum OutputFormat {
+    /// Labelled lines for a person to read.
+    Human,
+    /// One JSON object per run, for collecting runs into a scoreboard.
+    Json,
+}
+
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum BinaryHashOptions {
     Blake3Compressions,
@@ -201,6 +210,19 @@ impl ValueEnum for PcsOptions {
         Some(match self {
             Self::Fri => get_aliases("fri", 1, None),
             Self::Stir => get_aliases("stir", 1, None),
+        })
+    }
+}
+
+impl ValueEnum for OutputFormat {
+    fn value_variants<'a>() -> &'a [Self] {
+        &[Self::Human, Self::Json]
+    }
+
+    fn to_possible_value(&self) -> Option<PossibleValue> {
+        Some(match self {
+            Self::Human => get_aliases("human", 1, None),
+            Self::Json => get_aliases("json", 1, None),
         })
     }
 }

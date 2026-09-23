@@ -1,3 +1,6 @@
+use std::io;
+use std::time::Instant;
+
 use clap::{Parser, ValueEnum};
 use p3_binary_field::{BinaryField128, Gf2};
 use p3_blake3_air::Blake3BinaryAir;
@@ -5,14 +8,16 @@ use p3_examples::binary::{
     Backend, BinaryProofOptions, BinaryWhirBudget, BooleanPcsChoice, HashFamily, WhirOptions,
     WhirRegime, WhirSummary, preflight_boolean_air_with_summary, prove_boolean_air_with_backend,
 };
-use p3_examples::parsers::{BinaryCommitmentHashOptions, BinaryHashOptions, RepresentationOptions};
+use p3_examples::parsers::{
+    BinaryCommitmentHashOptions, BinaryHashOptions, OutputFormat, RepresentationOptions,
+};
 use p3_keccak_air::{KECCAK_BINARY_ROWS_PER_PERM, KeccakBinaryAir, NUM_KECCAK_BINARY_COLS};
 use p3_matrix::Matrix;
 use p3_sha256_air::{NUM_SHA256_BINARY_COLS, Sha256BinaryAir};
 use p3_sumcheck::TableShape;
 use p3_sumcheck::layout::Table;
-use tracing_forest::ForestLayer;
 use tracing_forest::util::LevelFilter;
+use tracing_forest::{ForestLayer, PrettyPrinter};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{EnvFilter, Registry};
@@ -46,6 +51,14 @@ struct Args {
     /// The log base 2 of the desired trace length.
     #[arg(short, long)]
     log_trace_length: u8,
+
+    /// How to print the measurements.
+    ///
+    /// In `json` mode, standard output carries only the JSON report.
+    ///
+    /// Progress lines and tracing spans move to standard error.
+    #[arg(long, ignore_case = true, value_enum, default_value_t = OutputFormat::Human)]
+    format: OutputFormat,
 
     /// The field representation the zerocheck prover runs its later rounds in.
     ///
@@ -236,12 +249,21 @@ fn requested_shape(
     Ok((trace_height, TableShape::new(log_height, width)))
 }
 
+/// Prints a status line where it cannot corrupt the JSON report on standard output.
+fn status(format: OutputFormat, line: &str) {
+    match format {
+        OutputFormat::Human => println!("{line}"),
+        OutputFormat::Json => eprintln!("{line}"),
+    }
+}
+
 fn preflight_then_maybe_prove<A, Generate>(
     air: &A,
     shape: TableShape,
     options: BinaryProofOptions,
     backend: Backend,
     preflight_only: bool,
+    format: OutputFormat,
     generate: Generate,
 ) -> Result<Option<p3_examples::binary::BinaryProofReport>, String>
 where
@@ -252,14 +274,18 @@ where
     if selected_whir || preflight_only {
         let (security_bits, summary) = preflight_boolean_air_with_summary(air, shape, options)
             .map_err(|error| format!("Boolean PCS preflight failed: {error}"))?;
-        print_preflight_result(options, security_bits, summary);
+        print_preflight_result(options, security_bits, summary, format);
         if preflight_only {
             return Ok(None);
         }
     }
+    // Time the witness here, since the prover only ever sees the finished trace.
+    let witness_start = Instant::now();
     let trace = generate();
+    let witness_seconds = witness_start.elapsed().as_secs_f64();
+
     prove_boolean_air_with_backend(air, trace, options, backend)
-        .map(Some)
+        .map(|report| Some(report.with_witness_seconds(witness_seconds)))
         .map_err(|error| format!("proof failed: {error}"))
 }
 
@@ -267,19 +293,21 @@ fn print_preflight_result(
     options: BinaryProofOptions,
     security_bits: f64,
     summary: Option<WhirSummary>,
+    format: OutputFormat,
 ) {
-    match options.pcs {
+    let line = match options.pcs {
         BooleanPcsChoice::Folding => {
-            println!("Preflight accepted: folding, composed security {security_bits:.2} bits");
+            format!("Preflight accepted: folding, composed security {security_bits:.2} bits")
         }
         BooleanPcsChoice::Whir(whir) => {
             let summary = summary.expect("WHIR preflight must return its schedule summary");
-            println!(
+            format!(
                 "Preflight accepted: WHIR {:?}, composed security {security_bits:.2} bits, schedule={summary:?}",
                 whir.regime
-            );
+            )
         }
-    }
+    };
+    status(format, &line);
 }
 
 fn run(args: &Args) -> Result<(), String> {
@@ -287,9 +315,14 @@ fn run(args: &Args) -> Result<(), String> {
         .with_default_directive(LevelFilter::INFO.into())
         .from_env_lossy();
 
+    // Exactly one of these two layers is installed.
+    //
+    // Both render the same span tree, only to a different stream.
+    let json = args.format == OutputFormat::Json;
     Registry::default()
         .with(env_filter)
-        .with(ForestLayer::default())
+        .with((!json).then(ForestLayer::default))
+        .with(json.then(|| ForestLayer::from(PrettyPrinter::new().writer(io::stderr))))
         .init();
 
     let options = args.proof_options()?;
@@ -310,59 +343,98 @@ fn run(args: &Args) -> Result<(), String> {
         BinaryHashOptions::KeccakFPermutations => {
             let num_hashes = trace_height / KECCAK_BINARY_ROWS_PER_PERM;
             let air = KeccakBinaryAir::assuming_boolean_trace();
-            preflight_then_maybe_prove(&air, shape, options, backend, args.preflight, || {
-                println!("Proving {num_hashes} Keccak-f permutations");
-                let words = air.generate_random_trace_packed::<Gf2>(num_hashes);
-                assert_eq!(
-                    words.height(),
-                    trace_height.div_ceil(64),
-                    "generated trace height must match the requested log-trace-length {}",
-                    args.log_trace_length
-                );
-                Table::<BinaryField128>::from_packed_bits(words, args.log_trace_length as usize)
-            })
+            preflight_then_maybe_prove(
+                &air,
+                shape,
+                options,
+                backend,
+                args.preflight,
+                args.format,
+                || {
+                    status(
+                        args.format,
+                        &format!("Proving {num_hashes} Keccak-f permutations"),
+                    );
+                    let words = air.generate_random_trace_packed::<Gf2>(num_hashes);
+                    assert_eq!(
+                        words.height(),
+                        trace_height.div_ceil(64),
+                        "generated trace height must match the requested log-trace-length {}",
+                        args.log_trace_length
+                    );
+                    Table::<BinaryField128>::from_packed_bits(words, args.log_trace_length as usize)
+                },
+            )
         }
         BinaryHashOptions::Blake3Compressions => {
             let air = Blake3BinaryAir::default();
-            preflight_then_maybe_prove(&air, shape, options, backend, args.preflight, || {
-                println!("Proving {trace_height} Blake-3 compressions");
-                let words = air.generate_random_trace_packed::<Gf2>(trace_height);
-                let trace = Table::<BinaryField128>::from_packed_bits(
-                    words,
-                    args.log_trace_length as usize,
-                );
-                assert_eq!(
-                    trace.num_variables(),
-                    args.log_trace_length as usize,
-                    "generated trace height must match the requested log-trace-length"
-                );
-                trace
-            })
+            preflight_then_maybe_prove(
+                &air,
+                shape,
+                options,
+                backend,
+                args.preflight,
+                args.format,
+                || {
+                    status(
+                        args.format,
+                        &format!("Proving {trace_height} Blake-3 compressions"),
+                    );
+                    let words = air.generate_random_trace_packed::<Gf2>(trace_height);
+                    let trace = Table::<BinaryField128>::from_packed_bits(
+                        words,
+                        args.log_trace_length as usize,
+                    );
+                    assert_eq!(
+                        trace.num_variables(),
+                        args.log_trace_length as usize,
+                        "generated trace height must match the requested log-trace-length"
+                    );
+                    trace
+                },
+            )
         }
         BinaryHashOptions::Sha256Compressions => {
             let air = Sha256BinaryAir::default();
-            preflight_then_maybe_prove(&air, shape, options, backend, args.preflight, || {
-                println!("Proving {trace_height} SHA-256 compressions");
-                let words = air.generate_random_trace_packed::<Gf2>(trace_height);
-                let trace = Table::<BinaryField128>::from_packed_bits(
-                    words,
-                    args.log_trace_length as usize,
-                );
-                assert_eq!(
-                    trace.num_variables(),
-                    args.log_trace_length as usize,
-                    "generated trace height must match the requested log-trace-length"
-                );
-                trace
-            })
+            preflight_then_maybe_prove(
+                &air,
+                shape,
+                options,
+                backend,
+                args.preflight,
+                args.format,
+                || {
+                    status(
+                        args.format,
+                        &format!("Proving {trace_height} SHA-256 compressions"),
+                    );
+                    let words = air.generate_random_trace_packed::<Gf2>(trace_height);
+                    let trace = Table::<BinaryField128>::from_packed_bits(
+                        words,
+                        args.log_trace_length as usize,
+                    );
+                    assert_eq!(
+                        trace.num_variables(),
+                        args.log_trace_length as usize,
+                        "generated trace height must match the requested log-trace-length"
+                    );
+                    trace
+                },
+            )
         }
     };
 
     match result {
-        Ok(Some(report)) => {
-            println!("{report}");
-            println!("Proof Verified Successfully");
-        }
+        Ok(Some(report)) => match args.format {
+            OutputFormat::Human => {
+                println!("{report}");
+                println!("Proof Verified Successfully");
+            }
+            OutputFormat::Json => println!(
+                "{}",
+                serde_json::to_string(&report).expect("the report serializes")
+            ),
+        },
         Ok(None) => {}
         Err(error) => return Err(error),
     }
@@ -402,9 +474,28 @@ mod tests {
         assert_eq!(args.pcs_pow_bits, 0);
         assert_eq!(args.security_bits, 100);
         assert!(!args.preflight);
+        assert_eq!(args.format, OutputFormat::Human);
         assert!(args.whir_regime.is_none());
         assert!(args.whir_term_security_bits.is_none());
         assert_eq!(args.proof_options().unwrap().merkle_arity, 4);
+    }
+
+    #[test]
+    fn cli_selects_the_json_format_in_any_case() {
+        // Scripts spell the format however they like, so matching ignores case.
+        for spelling in ["json", "JSON", "Json"] {
+            let args = Args::try_parse_from([
+                "prove_hash_binary",
+                "--objective",
+                "blake-3-compressions",
+                "--log-trace-length",
+                "2",
+                "--format",
+                spelling,
+            ])
+            .expect("the JSON format parses");
+            assert_eq!(args.format, OutputFormat::Json);
+        }
     }
 
     #[test]
@@ -667,11 +758,16 @@ mod tests {
         let options = args.proof_options().expect("preflight options convert");
         let air = Blake3BinaryAir::default();
         let shape = TableShape::new(2, p3_blake3_air::NUM_BLAKE3_BINARY_COLS);
-        let result =
-            preflight_then_maybe_prove(&air, shape, options, Backend::preferred(), true, || {
-                panic!("preflight must not invoke the witness generator")
-            })
-            .expect("accepted preflight returns successfully");
+        let result = preflight_then_maybe_prove(
+            &air,
+            shape,
+            options,
+            Backend::preferred(),
+            true,
+            OutputFormat::Human,
+            || panic!("preflight must not invoke the witness generator"),
+        )
+        .expect("accepted preflight returns successfully");
         assert!(result.is_none());
     }
 
@@ -698,11 +794,16 @@ mod tests {
         let options = args.proof_options().expect("budget options convert");
         let air = Blake3BinaryAir::default();
         let shape = TableShape::new(2, p3_blake3_air::NUM_BLAKE3_BINARY_COLS);
-        let error =
-            preflight_then_maybe_prove(&air, shape, options, Backend::preferred(), false, || {
-                panic!("rejected preflight must not invoke the witness generator")
-            })
-            .expect_err("the zero-query budget must be rejected before generation");
+        let error = preflight_then_maybe_prove(
+            &air,
+            shape,
+            options,
+            Backend::preferred(),
+            false,
+            OutputFormat::Human,
+            || panic!("rejected preflight must not invoke the witness generator"),
+        )
+        .expect_err("the zero-query budget must be rejected before generation");
         assert!(error.contains("preflight"));
     }
 }

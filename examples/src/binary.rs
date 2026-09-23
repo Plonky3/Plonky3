@@ -29,6 +29,7 @@ use p3_keccak::Keccak256Hash;
 use p3_lookup::InteractionSymbolicBuilder;
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
+use p3_maybe_rayon::prelude::current_num_threads;
 use p3_multi_stark::config::{Commitment, MultiStarkConfig, PcsError, PcsProverError, ProverData};
 use p3_multi_stark::folder::{InteractionMultilinearFolder, MultilinearFolder};
 use p3_multi_stark::packed_ext::{PackedExt, PackedRepr};
@@ -44,6 +45,7 @@ use p3_sumcheck::ring_switch::bits::BitRingSwitch;
 use p3_sumcheck::{PrescribedPointPcs, TableShape};
 use p3_symmetric::{CompressionFunctionFromHasher, CryptographicHasher, SerializingHasher};
 use p3_util::log2_strict_usize;
+use serde::Serialize;
 
 mod whir;
 use p3_binary_pcs::BooleanTraceCommitmentError;
@@ -98,17 +100,20 @@ impl HarnessHash for Blake3 {
 /// Both choices emit a 32-byte digest and are capped at the same collision resistance, so the
 /// composed security a statement reports does not move between them. Proof bytes do: the two
 /// hashes produce different roots and different challenges.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
 pub enum HashFamily {
     /// Keccak-256.
     #[default]
+    #[serde(rename = "keccak-256")]
     Keccak256,
     /// BLAKE3, which compresses a 64-byte block where Keccak-256 permutes a 136-byte rate.
+    #[serde(rename = "blake3")]
     Blake3,
 }
 
 /// Commitment scheme selected for a proof run.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum PcsIdentity {
     /// The existing folding-only binary commitment.
     Folding,
@@ -411,7 +416,13 @@ impl BinaryProofOptions {
 }
 
 /// Measurements from one [`prove_binary_air`] run.
-#[derive(Clone, Copy, Debug)]
+///
+/// Every time is wall clock.
+///
+/// The witness time is left empty here.
+///
+/// The caller builds the trace before proving, so only the caller can time it.
+#[derive(Clone, Copy, Debug, Serialize)]
 pub struct BinaryProofReport {
     /// Trace row count.
     pub rows: usize,
@@ -442,6 +453,27 @@ pub struct BinaryProofReport {
     pub pcs: PcsIdentity,
     /// WHIR schedule metadata, when the WHIR commitment was selected.
     pub whir: Option<WhirSummary>,
+    /// Wall-clock time to serialize the proof with postcard.
+    pub serialize_seconds: f64,
+    /// Wall-clock time to deserialize the proof back from those bytes.
+    pub deserialize_seconds: f64,
+    /// Worker threads the prover ran on.
+    ///
+    /// This is the Rayon pool size, which `RAYON_NUM_THREADS` sets.
+    ///
+    /// A build without Rayon reports one thread.
+    pub threads: usize,
+    /// Wall-clock time the caller spent generating the trace, if it measured it.
+    pub witness_seconds: Option<f64>,
+}
+
+impl BinaryProofReport {
+    /// Records the time the caller spent generating the trace.
+    #[must_use]
+    pub const fn with_witness_seconds(mut self, seconds: f64) -> Self {
+        self.witness_seconds = Some(seconds);
+        self
+    }
 }
 
 impl fmt::Display for BinaryProofReport {
@@ -466,8 +498,14 @@ impl fmt::Display for BinaryProofReport {
             )?;
         }
         writeln!(f, ")")?;
+        writeln!(f, "Threads: {}", self.threads)?;
+        if let Some(seconds) = self.witness_seconds {
+            writeln!(f, "Witness time: {seconds:.3}s")?;
+        }
         writeln!(f, "Proof size: {} bytes", self.proof_bytes)?;
         writeln!(f, "Prove time: {:.3}s", self.prove_seconds)?;
+        writeln!(f, "Serialize time: {:.3}s", self.serialize_seconds)?;
+        writeln!(f, "Deserialize time: {:.3}s", self.deserialize_seconds)?;
         writeln!(f, "Verify time: {:.3}s", self.verify_seconds)?;
         writeln!(f, "Setup/security time: {:.3}s", self.setup_seconds)?;
         writeln!(f, "Composed security: {:.2} bits", self.security_bits)?;
@@ -1204,11 +1242,16 @@ where
         .map_err(C::prove_error)?;
     let prove_seconds = prove_start.elapsed().as_secs_f64();
 
+    let serialize_start = Instant::now();
     let bytes = postcard::to_allocvec(&proof).expect("postcard serialization must not fail");
+    let serialize_seconds = serialize_start.elapsed().as_secs_f64();
     let proof_bytes = bytes.len();
     config.check_proof_bytes(proof_bytes)?;
+
+    let deserialize_start = Instant::now();
     let proof: MultiStarkProof<C> =
         postcard::from_bytes(&bytes).expect("postcard round trip must not fail");
+    let deserialize_seconds = deserialize_start.elapsed().as_secs_f64();
 
     let verify_start = Instant::now();
     verify(
@@ -1239,6 +1282,10 @@ where
             PcsIdentity::Folding
         },
         whir: config.whir_summary(),
+        serialize_seconds,
+        deserialize_seconds,
+        threads: current_num_threads(),
+        witness_seconds: None,
     })
 }
 
@@ -2875,6 +2922,84 @@ mod tests {
         )
         .expect("a tiny binary AIR proof must verify at arity 4");
         assert_ne!(report2.proof_bytes, report4.proof_bytes);
+    }
+
+    #[test]
+    fn the_report_measures_every_stage() {
+        // Prove a 16-row recurrence with the default folding commitment.
+        let report = prove_binary_air(
+            &RecurrenceAir,
+            recurrence_trace(4),
+            BinaryProofOptions::default(),
+        )
+        .expect("a tiny binary AIR proof must verify");
+
+        // Proving and verifying do real work, so both clocks advance.
+        assert!(report.prove_seconds > 0.0);
+        assert!(report.verify_seconds > 0.0);
+
+        // The thread count is whatever pool the prover actually ran on.
+        //
+        //     serial build : 1
+        //     Rayon build  : RAYON_NUM_THREADS, or the core count
+        assert_eq!(report.threads, current_num_threads());
+
+        // The prover never sees trace generation, so the witness time starts empty.
+        assert_eq!(report.witness_seconds, None);
+
+        // A caller that timed the trace attaches its measurement.
+        assert_eq!(report.with_witness_seconds(1.5).witness_seconds, Some(1.5));
+
+        // A scoreboard reads the JSON form, so its keys are pinned exactly.
+        //
+        // Adding a report field without updating this list fails here.
+        let json = serde_json::to_value(report).expect("the report serializes");
+        let mut keys: Vec<&str> = json
+            .as_object()
+            .expect("the report is a JSON object")
+            .keys()
+            .map(String::as_str)
+            .collect();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            [
+                "deserialize_seconds",
+                "hash",
+                "leaf_elements",
+                "pcs",
+                "proof_bytes",
+                "prove_seconds",
+                "requested_leaf_elements",
+                "rows",
+                "security_bits",
+                "serialize_seconds",
+                "setup_seconds",
+                "stacked_variables",
+                "threads",
+                "verify_seconds",
+                "whir",
+                "width",
+                "witness_seconds",
+            ]
+        );
+
+        // Names match the command-line spelling, so runs from both forms join cleanly.
+        assert_eq!(json["pcs"], "folding");
+        assert_eq!(json["whir"], serde_json::Value::Null);
+        assert_eq!(json["witness_seconds"], serde_json::Value::Null);
+    }
+
+    #[test]
+    fn hash_names_agree_between_json_and_human_output() {
+        // A scoreboard collects both output forms, so each hash must print the same name in each.
+        //
+        //     keccak-256 : "keccak-256" in JSON, "keccak-256" in the human report
+        //     blake3     : "blake3"     in JSON, "blake3"     in the human report
+        for hash in [HashFamily::Keccak256, HashFamily::Blake3] {
+            let json = serde_json::to_value(hash).expect("the hash serializes");
+            assert_eq!(json, hash.to_string());
+        }
     }
 
     #[test]

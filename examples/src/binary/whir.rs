@@ -13,6 +13,7 @@ use p3_multi_stark::config::MultiStarkConfig;
 use p3_sumcheck::TableShape;
 use p3_sumcheck::layout::{Table, plan_stacked_layout};
 use p3_sumcheck::ring_switch::bits::BitRingSwitch;
+use serde::Serialize;
 
 use super::{
     BinaryAir, BinaryProofError, BinaryProofOptions, BooleanWhirProveError, BooleanWhirVerifyError,
@@ -30,7 +31,8 @@ const ENCODED_EXTENSION_ELEMENT_BYTES: usize = 19;
 const DIGEST_BYTES: usize = 32;
 
 /// The proximity regime used for the WHIR schedule.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum WhirRegime {
     /// Decode from the unique-codeword radius.
     UniqueDecoding,
@@ -145,7 +147,7 @@ pub enum WhirIncompatibility {
 }
 
 /// Small scalar metadata describing a derived WHIR schedule.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 pub struct WhirSummary {
     /// Proximity regime.
     pub regime: WhirRegime,
