@@ -3,7 +3,7 @@
 use core::array;
 
 use p3_field::integers::QuotientMap;
-use p3_field::{Dup, Field, PrimeCharacteristicRing};
+use p3_field::{Algebra, Dup, Field, PrimeCharacteristicRing};
 
 use crate::AirBuilder;
 
@@ -21,6 +21,35 @@ where
         .map(Into::into)
         .reduce(|acc, elem| acc.double() + elem)
         .unwrap_or(R::ZERO)
+}
+
+/// Read a run of bit cells as one field element, over a fixed basis.
+///
+/// ```text
+///     word = sum_i bits[i] * basis[i]
+/// ```
+///
+/// The view is linear in the bits, so it costs no committed column and no constraint degree.
+///
+/// # Panics
+///
+/// Panics if the two slices differ in length.
+#[inline]
+pub fn word_view<R, F, Var>(bits: &[Var], basis: &[F]) -> R
+where
+    R: Algebra<F>,
+    F: Field,
+    Var: Into<R> + Clone,
+{
+    assert_eq!(
+        bits.len(),
+        basis.len(),
+        "a word view needs one basis element per bit"
+    );
+    bits.iter()
+        .zip(basis)
+        .map(|(bit, &element)| bit.clone().into() * element)
+        .sum()
 }
 
 /// Compute `xor` on a list of boolean field elements.
@@ -258,6 +287,26 @@ mod tests {
         let bits = [F::ZERO, F::ZERO, F::ZERO, F::ZERO, F::ONE];
         let packed = pack_bits_le::<F, _, _>(bits.iter().cloned());
         assert_eq!(packed, F::from_u8(16));
+    }
+
+    #[test]
+    fn a_word_view_over_powers_of_two_is_the_packed_integer() {
+        // Over the basis 1, 2, 4, 8 the view is the little-endian integer.
+        let basis = [1u8, 2, 4, 8].map(F::from_u8);
+        let bits = [F::ONE, F::ZERO, F::ONE, F::ONE];
+        assert_eq!(word_view::<F, F, F>(&bits, &basis), F::from_u8(13));
+        assert_eq!(
+            word_view::<F, F, F>(&bits, &basis),
+            pack_bits_le::<F, _, _>(bits.iter().copied())
+        );
+        // No bits read as zero.
+        assert_eq!(word_view::<F, F, F>(&[], &[]), F::ZERO);
+    }
+
+    #[test]
+    #[should_panic(expected = "one basis element per bit")]
+    fn a_word_view_refuses_a_basis_of_the_wrong_length() {
+        let _ = word_view::<F, F, F>(&[F::ONE], &[F::ONE, F::TWO]);
     }
 
     #[test]

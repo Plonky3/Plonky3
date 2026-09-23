@@ -282,6 +282,17 @@ pub enum BooleanTraceCommitmentError<E> {
         actual: usize,
     },
 
+    /// A table's bit region is wider than the table itself.
+    #[error("table {table} declares {bits} bit columns out of {width}")]
+    BitRegionWidth {
+        /// Table whose bit region overflows it.
+        table: usize,
+        /// Columns the bit region names.
+        bits: usize,
+        /// Columns the table has.
+        width: usize,
+    },
+
     /// A trace cell holds neither zero nor one, so it addresses no bit.
     #[error("column {column} of table {table} holds a cell outside the two Boolean values")]
     NonBooleanCell {

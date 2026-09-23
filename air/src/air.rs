@@ -251,6 +251,27 @@ pub trait BaseAir<F>: Sync {
     fn assumes_boolean_trace(&self) -> bool {
         false
     }
+
+    /// Number of leading main-trace columns that hold bits.
+    ///
+    /// These columns form the bit region, committed one bit per cell.
+    ///
+    /// The remaining columns form the dense region, committed one field element per cell.
+    ///
+    /// Both regions share one height, so one row reads both.
+    ///
+    /// A backend that commits every cell as a field element ignores the split.
+    ///
+    /// A wrapper or enum AIR must forward this method along with [`Self::width`].
+    ///
+    /// Returns the whole width when [`Self::assumes_boolean_trace`] holds, and zero otherwise.
+    fn boolean_columns(&self) -> usize {
+        if self.assumes_boolean_trace() {
+            self.width()
+        } else {
+            0
+        }
+    }
 }
 
 /// An algebraic intermediate representation (AIR) definition.
