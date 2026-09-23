@@ -30,11 +30,12 @@
 //!
 //! It applies the charge exactly once, when the report is closed.
 //!
-//! Its lists are private to the module it lives in.
+//! Its lists, and the finished report's terms, are private to the module they live in.
 //!
-//! So a term reaches the report only through a method that decides the charge for it.
+//! So a term reaches the report only through a builder method that decides its charge.
+//!
+//! Nothing outside that module can append to a report after it is closed.
 
-use alloc::vec::Vec;
 use core::num::NonZeroUsize;
 
 use p3_air::boundary;
@@ -91,70 +92,18 @@ pub enum SecurityError {
     },
 }
 
-/// Labeled, union-composed accounting for a concrete multilinear AIR statement.
-///
-/// Missing scheme or collision evidence leaves the report with no number to give.
-///
-/// The number is conditional on the schemes' own assessments and the configured cap.
-///
-/// It is not a claim about arbitrary primitives.
-///
-/// Every term here is final.
-///
-/// The draws made before an opening named a candidate paid for the set once, on assembly.
-///
-/// The finished report keeps no set, so a reader composes these terms as they stand.
-#[derive(Clone, Debug)]
-pub struct MultiStarkSecurityReport {
-    terms: Vec<SecurityTerm>,
-    unassessed: Vec<&'static str>,
-}
-
-impl MultiStarkSecurityReport {
-    /// Every assessed contribution, including the commitment and transcript cap.
-    ///
-    /// Each is already charged for whatever candidate set it had to pay for.
-    pub fn terms(&self) -> &[SecurityTerm] {
-        &self.terms
-    }
-
-    /// Components that prevent a complete bound from being returned.
-    pub fn unassessed_components(&self) -> &[&'static str] {
-        &self.unassessed
-    }
-
-    /// Negative log of the union bound, or `None` if any component is unassessed.
-    pub fn security_bits(&self) -> Option<f64> {
-        self.unassessed.is_empty().then(|| {
-            ErrorBits::sum(&self.terms.iter().map(|term| term.bits).collect::<Vec<_>>())
-                .bits()
-                .max(0.0)
-        })
-    }
-
-    /// Fail closed on missing evidence or an unattainable minimum.
-    pub fn require_security(&self, target_bits: usize) -> Result<(), SecurityError> {
-        if let Some(&component) = self.unassessed.first() {
-            return Err(SecurityError::UnassessedComponent(component));
-        }
-        let available = self.security_bits().expect("all components were assessed");
-        if available < target_bits as f64 {
-            return Err(SecurityError::InsufficientSecurity {
-                requested: target_bits,
-                available,
-            });
-        }
-        Ok(())
-    }
-}
-
+pub use builder::MultiStarkSecurityReport;
 use builder::{CommittedTrace, ReportBuilder};
 
 /// Assembly of the report, behind a boundary the rest of this module cannot reach past.
 ///
 /// The builder's fields are private to this child module.
 ///
-/// So a term reaches the report only through one of the methods below.
+/// The finished report is defined here too, so its terms are just as private.
+///
+/// So a term reaches the report only through one of the builder methods below.
+///
+/// And nothing outside this module can append to a report once it is closed.
 ///
 /// Each decides the charge itself, rather than trusting the caller to have done it.
 mod builder {
@@ -163,7 +112,64 @@ mod builder {
     use p3_security::{CandidateSet, ErrorBits, SecurityTerm};
     use p3_sumcheck::PrescribedOpeningSecurity;
 
-    use super::{COLLISION_CAP_LABEL, MultiStarkSecurityReport};
+    use super::{COLLISION_CAP_LABEL, SecurityError};
+
+    /// Labeled, union-composed accounting for a concrete multilinear AIR statement.
+    ///
+    /// Missing scheme or collision evidence leaves the report with no number to give.
+    ///
+    /// The number is conditional on the schemes' own assessments and the configured cap.
+    ///
+    /// It is not a claim about arbitrary primitives.
+    ///
+    /// Every term here is final.
+    ///
+    /// The draws made before an opening named a candidate paid for the set once, on assembly.
+    ///
+    /// The finished report keeps no set, so a reader composes these terms as they stand.
+    #[derive(Clone, Debug)]
+    pub struct MultiStarkSecurityReport {
+        terms: Vec<SecurityTerm>,
+        unassessed: Vec<&'static str>,
+    }
+
+    impl MultiStarkSecurityReport {
+        /// Every assessed contribution, including the commitment and transcript cap.
+        ///
+        /// Each is already charged for whatever candidate set it had to pay for.
+        pub fn terms(&self) -> &[SecurityTerm] {
+            &self.terms
+        }
+
+        /// Components that prevent a complete bound from being returned.
+        pub fn unassessed_components(&self) -> &[&'static str] {
+            &self.unassessed
+        }
+
+        /// Negative log of the union bound, or `None` if any component is unassessed.
+        pub fn security_bits(&self) -> Option<f64> {
+            self.unassessed.is_empty().then(|| {
+                ErrorBits::sum(&self.terms.iter().map(|term| term.bits).collect::<Vec<_>>())
+                    .bits()
+                    .max(0.0)
+            })
+        }
+
+        /// Fail closed on missing evidence or an unattainable minimum.
+        pub fn require_security(&self, target_bits: usize) -> Result<(), SecurityError> {
+            if let Some(&component) = self.unassessed.first() {
+                return Err(SecurityError::UnassessedComponent(component));
+            }
+            let available = self.security_bits().expect("all components were assessed");
+            if available < target_bits as f64 {
+                return Err(SecurityError::InsufficientSecurity {
+                    requested: target_bits,
+                    available,
+                });
+            }
+            Ok(())
+        }
+    }
 
     /// Which commitment an opening's errors belong to.
     ///
@@ -726,6 +732,8 @@ where
 
 #[cfg(test)]
 mod tests {
+    use alloc::vec::Vec;
+
     use p3_sumcheck::PrescribedOpeningSecurity;
 
     use super::*;

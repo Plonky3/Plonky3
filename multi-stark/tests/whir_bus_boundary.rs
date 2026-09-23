@@ -21,7 +21,7 @@ use p3_multi_stark::config::MultiStarkConfig;
 use p3_multi_stark::zerocheck::ZerocheckError;
 use p3_multi_stark::{
     ProverInstance, ProverInstances, ProvingError, VerificationError, VerifierInstance,
-    VerifierInstances, prove, setup, verify,
+    VerifierInstances, prove, security_report, setup, verify,
 };
 use p3_sumcheck::layout::{Layout, PrefixProver, Table, Witness};
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
@@ -452,4 +452,70 @@ fn a_table_of_boundary_flushes_alone_panics_in_setup() {
     let pull = BareBoundaryAir(BusDirection::Pull);
     let config = config_for(2, 2);
     let _ = setup(&config, &[&push, &pull], &mut challenger());
+}
+
+#[test]
+fn every_bus_draw_is_charged_over_a_list_decoding_commitment() {
+    // WHIR under the capacity bound decodes to a list, so the commitment leaves several candidates open.
+    //
+    // The bus draws land after the commitment and before the opening names one.
+    //
+    // So a prover may pick its candidate after seeing them, and each draw pays for the whole list.
+    let push = BoundaryStateAir::ends(BusDirection::Push);
+    let pull = BoundaryStateAir::ends(BusDirection::Pull);
+    let log_height = 2;
+    let config = config_for(log_height, 2);
+    let (_, vk) = setup(&config, &[&push, &pull], &mut challenger()).unwrap();
+    let report = security_report(
+        &config,
+        &VerifierInstances::new(vec![
+            VerifierInstance::new(&push, &vk, log_height, &[]),
+            VerifierInstance::new(&pull, &vk, log_height, &[]),
+        ]),
+    )
+    .unwrap();
+
+    // This configuration names no collision cap, so the report has no composed number.
+    //
+    // Every assertion below is therefore on the individual terms.
+    assert_eq!(
+        report.unassessed_components(),
+        ["commitment-and-transcript-collision"]
+    );
+    assert_eq!(report.security_bits(), None);
+
+    // Every bus draw reaches the report, and none is attributed to the commitment.
+    //
+    // A component name would mean the draw took the opening route and settled uncharged.
+    for label in ["binary-bus", "binary-bus-batching"] {
+        let term = report
+            .terms()
+            .iter()
+            .find(|term| term.label == label)
+            .unwrap_or_else(|| panic!("the report drops the {label} draw"));
+        assert_eq!(
+            term.component, None,
+            "{label} is attributed to a commitment"
+        );
+    }
+
+    // The batching scalar is one fresh draw from the challenge field.
+    //
+    // It must avoid the roots of a degree-two polynomial in that scalar.
+    //
+    //     uncharged  ->  floor(log2 |EF|) - 1 bits  ->  122 bits here
+    //
+    // Charged over the candidate list, it has to come out strictly below that.
+    let uncharged_bits = (EF::order().bits() - 2) as f64;
+    assert_eq!(uncharged_bits, 122.0);
+    let batching = report
+        .terms()
+        .iter()
+        .find(|term| term.label == "binary-bus-batching")
+        .unwrap();
+    assert!(
+        batching.bits.bits() < uncharged_bits,
+        "the batching draw reads {} bits, uncharged",
+        batching.bits.bits()
+    );
 }

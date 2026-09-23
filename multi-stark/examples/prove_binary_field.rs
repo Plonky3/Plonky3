@@ -355,15 +355,13 @@ mod tests {
 
     #[test]
     fn the_report_charges_every_binary_bus_draw() {
-        // The bus contributes three draws this composition makes for itself.
+        // The bus contributes two draws this composition makes for itself.
         //
         // Each lands after the commitment and before the opening names a candidate.
         //
         // Nothing else in the suite builds a report that contains them.
         //
         // So a bus draw could be dropped, or misattributed, with every other test green.
-        //
-        // # What this catches, and what the types catch instead
         //
         // This commitment decodes uniquely, so its candidate set holds one member.
         //
@@ -375,9 +373,11 @@ mod tests {
         //
         // It also catches one attributed to a commitment, which shows as a component.
         //
-        // The remaining misroutes do not compile at all.
+        // An uncharged bus draw is caught by the list-decoding bus test in the WHIR suite.
         //
-        // The builder keeps its lists private, and the commitment name is a closed set.
+        // Pushing a term past the builder, or onto a closed report, does not compile.
+        //
+        // The builder and the report keep their lists private, and the commitment name is a closed set.
         let log_height = 3;
         let config = config(log_height + 1);
         let push = BinaryBusAir {
@@ -397,11 +397,7 @@ mod tests {
         .unwrap();
         assert!(report.unassessed_components().is_empty());
 
-        for label in [
-            "binary-bus",
-            "binary-bus-direction-batching",
-            "binary-bus-composition-sumcheck",
-        ] {
+        for label in ["binary-bus", "binary-bus-batching"] {
             let term = report
                 .terms()
                 .iter()
@@ -418,18 +414,20 @@ mod tests {
                 "{label} is attributed to a commitment"
             );
 
-            // Every bus draw is a real bound, well short of the field's own width.
+            // Every bus draw is a real bound, and none exceeds the field's own width.
             assert!(term.bits.bits().is_finite() && term.bits.bits() > 0.0);
             assert!(term.bits.bits() <= 128.0);
         }
 
-        // The direction scalar is one fresh draw, so it costs the field width exactly.
-        let direction = report
+        // The batching scalar is one fresh draw that must avoid two roots.
+        //
+        //     128 field bits - log2(2)  ->  127 bits
+        let batching = report
             .terms()
             .iter()
-            .find(|term| term.label == "binary-bus-direction-batching")
+            .find(|term| term.label == "binary-bus-batching")
             .unwrap();
-        assert_eq!(direction.bits.bits(), 128.0);
+        assert_eq!(batching.bits.bits(), 127.0);
 
         // The bus is part of the composed bound the statement is graded against.
         report.require_security(100).unwrap();
