@@ -139,7 +139,7 @@ impl PrescribedOpeningSecurity {
 ///
 /// Deriving it from the zerocheck challenges does that, since those follow the commitment.
 ///
-/// The point must be fixed before either the opening or the verification call.
+/// The point must be fixed before [`open_at`](PrescribedPointPcs::open_at) or `verify_at` is called.
 ///
 /// A prover-influenceable point breaks the batched claim this opening feeds into.
 pub trait PrescribedPointPcs<Challenge, Challenger>: MultilinearPcs<Challenge, Challenger>
@@ -183,7 +183,7 @@ where
     ///
     /// Configuration and budget errors come back before the transcript moves.
     ///
-    /// No private randomness is consumed either, as on the sampled-point path.
+    /// No private randomness is consumed either, as for [`MultilinearPcs::open`].
     ///
     /// # Panics
     ///

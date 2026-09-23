@@ -1,8 +1,8 @@
 //! Labeled soundness breakdown produced by the composite orchestration.
 //!
-//! The report is the audit-facing output of the proven-security composite.
+//! [`SecurityReport`] is the audit-facing output of [`crate::stark::proven_security_report`].
 //!
-//! Every soundness contribution arrives as a named term, one set per proximity regime.
+//! Every soundness contribution arrives as a named [`SecurityTerm`], one set per proximity regime.
 //!
 //! The binding term stays inspectable instead of collapsing into a single number.
 
@@ -21,7 +21,9 @@ pub const DEEP_LABEL: &str = "deep-ali";
 ///
 /// # Asymmetry with the conjectured path
 ///
-/// The proven path reports one label here, and the conjectured path reports two.
+/// The proven path reports one label here.
+///
+/// The conjectured path reports [`LDT_QUERY_LABEL`] and [`LDT_COMMIT_LABEL`] separately.
 ///
 /// A consumer diffing the two sees different label sets for the same protocol phases.
 ///
@@ -29,7 +31,7 @@ pub const DEEP_LABEL: &str = "deep-ali";
 ///
 /// The proven error is already a minimum by the time the composite sees it.
 ///
-/// The regime search picks the proximity parameter that maximises the weaker phase.
+/// The regime search, [`crate::fri::best_ldr_m`], picks the proximity parameter that maximises the weaker phase.
 ///
 /// Splitting the label would force that search to carry both phases through.
 ///
@@ -38,6 +40,8 @@ pub const DEEP_LABEL: &str = "deep-ali";
 /// The conjectured path runs no such search, so nothing forces its phases together.
 pub const LDT_LABEL: &str = "low-degree-test";
 /// Label for the low-degree test's query phase, when the phases are reported apart.
+///
+/// See [`crate::ldt::LowDegreeTest::conjectured_terms`].
 pub const LDT_QUERY_LABEL: &str = "ldt-query-phase";
 /// Label for the low-degree test's commit phase, when the phases are reported apart.
 pub const LDT_COMMIT_LABEL: &str = "ldt-commit-phase";
@@ -326,7 +330,7 @@ mod candidate_tests {
     }
 }
 
-/// The proximity regime a report was evaluated in.
+/// The proximity regime a [`RegimeReport`] was evaluated in.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize)]
 #[non_exhaustive]
 pub enum Regime {
@@ -337,10 +341,14 @@ pub enum Regime {
     /// Conjectured random-words regime, at list size one.
     ///
     /// Correlated agreement is assumed up to list-decoding capacity.
+    ///
+    /// See [`crate::proximity::list_size_conjectured`].
     Conjectured,
     /// Legacy conjectured regime, on the pre-random-words ethSTARK query bound.
     ///
     /// For FRI this omits the folding round.
+    ///
+    /// See [`crate::fri::legacy_conjectured_error`] and [`crate::stark::legacy_security_report`].
     Legacy,
 }
 
@@ -352,9 +360,11 @@ pub enum Regime {
 ///
 /// A collision, or any single binding error, forges the proof.
 ///
-/// The conjectured and legacy paths also stop here.
+/// It is also the top-level output of [`crate::stark::conjectured_security_report`].
 ///
-/// Each has one regime, so neither needs an envelope to maximize over.
+/// The same holds for [`crate::stark::legacy_security_report`].
+///
+/// Each has one regime, so neither needs a [`SecurityReport`] envelope to maximize over.
 #[derive(Clone, Debug, Serialize)]
 pub struct RegimeReport {
     pub regime: Regime,
@@ -364,7 +374,9 @@ pub struct RegimeReport {
 impl RegimeReport {
     /// Builds a report from its labeled terms.
     ///
-    /// The terms must be non-empty, and every regime carries at least four of them.
+    /// The terms must be non-empty.
+    ///
+    /// Every regime carries at least [`ALI_LABEL`], [`DEEP_LABEL`], a low-degree-test term and [`COLLISION_LABEL`].
     pub(crate) fn new(regime: Regime, terms: Vec<SecurityTerm>) -> Self {
         debug_assert!(
             !terms.is_empty(),

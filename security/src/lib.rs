@@ -8,7 +8,9 @@
 //!
 //! The protocol assembles the regime and picks which error terms apply.
 //!
-//! It then composes them by union bound, or by minimum, or through the composite.
+//! It then composes them by union bound with [`ErrorBits::sum`], or by minimum with [`ErrorBits::min`].
+//!
+//! The AIR, DEEP and low-degree-test composite goes through [`stark::proven_security`].
 //!
 //! # Layering
 //!
