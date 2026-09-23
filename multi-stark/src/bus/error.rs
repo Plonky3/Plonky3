@@ -18,14 +18,6 @@ pub enum BusBindingError {
     /// A symbolic declaration cannot be evaluated from its supplied values.
     #[error(transparent)]
     Evaluation(#[from] BusEvaluationError),
-    /// A declaration reads a periodic column, which this backend does not evaluate.
-    #[error("binary-bus declaration {declaration} of AIR {air} reads a periodic column")]
-    PeriodicColumn {
-        /// AIR position in the statement.
-        air: usize,
-        /// Declaration position within that AIR.
-        declaration: usize,
-    },
     /// ProductGKR returned a terminal point of the wrong dimension.
     #[error("binary-bus ProductGKR point has dimension {actual}, expected {expected}")]
     ProductPointDimension {

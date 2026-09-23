@@ -168,6 +168,26 @@ impl<C: Field, F: ExtensionField<C>> BaseAir<F> for TimestampedBoundaryAir<C, F>
             _ => Cow::Borrowed(&[]),
         }
     }
+
+    fn periodic_periods(&self) -> Vec<usize> {
+        match &self.seed {
+            TimestampedSeed::Public(image) => vec![1 << image.log_cells(); image.value_width()],
+            _ => Vec::new(),
+        }
+    }
+
+    fn periodic_evaluations<EF: ExtensionField<F>>(&self, point: &[EF]) -> Option<Vec<EF>> {
+        // A period of `2^j` rows depends only on the last `j` coordinates.
+        //
+        // A trace shorter than the image leaves the backend to reject the declaration.
+        match &self.seed {
+            TimestampedSeed::Public(image) => {
+                let low = point.len().checked_sub(image.log_cells())?;
+                Some(image.evaluate(&point[low..]))
+            }
+            _ => None,
+        }
+    }
 }
 
 impl<C, F, AB> Air<AB> for TimestampedBoundaryAir<C, F>

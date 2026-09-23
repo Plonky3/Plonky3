@@ -47,7 +47,9 @@ use crate::folder::{
 use crate::lookup::{ActiveLookupRuntime, AirLinkClaim, LookupRuntime};
 use crate::opening::{OpeningClaims, TableOpening};
 use crate::rounds::{AirDegrees, AirOpenings, AirProfile, RoundStateBase, Stage, StageCoupling};
-use crate::selectors::{BoundaryEvals, PeriodicError, periodic_evals_at, periodic_num_variables};
+use crate::selectors::{
+    BoundaryEvals, PeriodicError, air_periodic_evals_at, periodic_num_variables,
+};
 use crate::zerocheck::transcript::{
     ZerocheckChallenges, ZerocheckProverTranscript, ZerocheckShape, ZerocheckVerifierTranscript,
 };
@@ -532,7 +534,7 @@ impl<'a, A> AirZerocheck<'a, A> {
                 assert_eq!(public_values.len(), air.num_public_values());
                 periodic_num_variables(
                     layout.num_periodic_columns,
-                    &air.periodic_columns(),
+                    &air.periodic_periods(),
                     table.num_variables(),
                 )
                 .expect("periodic column declaration must fit the trace height");
@@ -820,11 +822,17 @@ impl<'a, A> AirZerocheck<'a, A> {
                 .output
                 .batched_terminal_claim(lambda)
                 .expect("the prover's own product-tree output has one claim per direction");
+            let num_variables = tables
+                .iter()
+                .map(|table| table.num_variables())
+                .collect::<Vec<_>>();
+            let periodic = family.context.periodic_tables(self.airs, &num_variables);
             let prover = BusCompositionProver::new(
                 family.context,
                 family.output,
                 tables,
                 preprocessed,
+                &periodic,
                 public_values,
                 lambda,
                 log_height,
@@ -1572,6 +1580,7 @@ impl<'a, A> AirZerocheck<'a, A> {
         assert_eq!(reduction.point.as_slice().len(), max_log_height);
 
         let mut g = EF::ZERO;
+        let mut periodic_by_air = Vec::with_capacity(self.airs.len());
         for (air_index, ((((&air, &log_height), main), preprocessed), beta)) in self
             .airs
             .iter()
@@ -1630,14 +1639,10 @@ impl<'a, A> AirZerocheck<'a, A> {
 
             // Periodic columns are not committed and nothing opens them.
             // Recompute each column's multilinear extension at the bound point instead.
+            // An AIR with a closed form, such as a sparse image, supplies it itself.
             //
             //     declaration too large for this AIR's height → rejected here
-            let periodic_columns = air.periodic_columns();
-            let periodic = periodic_evals_at::<F, EF>(
-                air.num_periodic_columns(),
-                &periodic_columns,
-                claims.point.as_slice(),
-            )?;
+            let periodic = air_periodic_evals_at::<F, EF, _>(air, claims.point.as_slice())?;
 
             let folder = MultilinearFolder::new(
                 &claims.local,
@@ -1665,6 +1670,7 @@ impl<'a, A> AirZerocheck<'a, A> {
                 // Declaring no lookup was already checked against having no link.
                 None => g += beta * folder.eval_air(air),
             }
+            periodic_by_air.push(periodic);
         }
 
         // Every opening group was checked against its declared width above.
@@ -1676,6 +1682,10 @@ impl<'a, A> AirZerocheck<'a, A> {
                     .iter()
                     .map(|opening| opening.local)
                     .collect::<Vec<_>>();
+                let periodic = periodic_by_air
+                    .iter()
+                    .map(Vec::as_slice)
+                    .collect::<Vec<_>>();
                 family
                     .context
                     .terminal_composition(
@@ -1684,6 +1694,7 @@ impl<'a, A> AirZerocheck<'a, A> {
                         &reduction.point,
                         &main,
                         &preprocessed,
+                        &periodic,
                         public_values,
                     )
                     .map_err(ZerocheckError::BusBinding)?
@@ -1830,6 +1841,7 @@ mod tests {
     use rand::{RngExt, SeedableRng};
 
     use super::*;
+    use crate::selectors::periodic_evals_at;
 
     type F = BabyBear;
     type EF = BinomialExtensionField<F, 4>;

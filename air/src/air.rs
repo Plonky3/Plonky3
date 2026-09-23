@@ -1,6 +1,7 @@
 use alloc::borrow::Cow;
 use alloc::vec::Vec;
 
+use p3_field::{ExtensionField, Field};
 use p3_matrix::dense::RowMajorMatrix;
 
 use crate::boundary::BoundaryPublic;
@@ -60,6 +61,33 @@ pub trait BaseAir<F>: Sync {
         F: Clone,
     {
         Cow::Borrowed(&[])
+    }
+
+    /// Return the period of each periodic column, in declaration order.
+    ///
+    /// Override when the columns are expensive to materialize.
+    fn periodic_periods(&self) -> Vec<usize>
+    where
+        F: Clone,
+    {
+        self.periodic_columns().iter().map(Vec::len).collect()
+    }
+
+    /// Evaluate every periodic column's multilinear extension at `point`, when the AIR has a closed form.
+    ///
+    /// Each column is first repeated to the trace height, one row per Boolean point.
+    ///
+    /// `point` has one coordinate per trace variable, the most significant bit first.
+    ///
+    /// Returns `None` to let the backend evaluate the columns itself.
+    ///
+    /// An override must return what the backend would compute, one value per column.
+    fn periodic_evaluations<EF>(&self, _point: &[EF]) -> Option<Vec<EF>>
+    where
+        F: Field,
+        EF: ExtensionField<F>,
+    {
+        None
     }
 
     /// Return the periodic values for the given row index.

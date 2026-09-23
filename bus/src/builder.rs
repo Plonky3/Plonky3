@@ -223,11 +223,12 @@ impl<F: Field> SymbolicBusInteraction<F> {
         )
     }
 
-    /// Whether this declaration reads a periodic column.
+    /// Sorted periodic columns this declaration reads.
     ///
-    /// A backend that evaluates no periodic column refuses such a declaration.
+    /// The verifier evaluates these itself, since nothing commits them.
     #[must_use]
-    pub fn reads_periodic(&self) -> bool {
+    pub fn referenced_periodic_columns(&self) -> Vec<usize> {
+        let mut periodic = alloc::collections::BTreeSet::new();
         let mut seen = alloc::collections::BTreeSet::new();
         let mut pending = self
             .fields
@@ -246,7 +247,7 @@ impl<F: Field> SymbolicBusInteraction<F> {
             match expression {
                 SymbolicExpr::Leaf(BaseLeaf::Variable(variable)) => {
                     if variable.entry == BaseEntry::Periodic {
-                        return true;
+                        periodic.insert(variable.index);
                     }
                 }
                 SymbolicExpr::Leaf(_) => {}
@@ -259,7 +260,7 @@ impl<F: Field> SymbolicBusInteraction<F> {
                 SymbolicExpr::Neg { x, .. } => pending.push(x),
             }
         }
-        false
+        periodic.into_iter().collect()
     }
 
     /// Degree of this interaction's selected factor under a transition-degree scale.
