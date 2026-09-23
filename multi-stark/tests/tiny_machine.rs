@@ -51,12 +51,13 @@ use p3_merkle_tree::MerkleTreeMmcs;
 use p3_multi_stark::config::{MultiStarkConfig, PcsError, PcsProverError};
 use p3_multi_stark::contract::{
     ChainError, EnvelopeError, HeightRange, MachineDeclaration, PublicSlot,
-    SealedVerificationError, SegmentClaim, SegmentInterface, TableCost, TableDeclaration, chain,
+    SealedVerificationError, SegmentInterface, TableCost, TableDeclaration, VerifiedSegment, chain,
 };
 use p3_multi_stark::{
-    ProverInstance, ProverInstances, ProvingError, ProvingKey, VerifierInstance, VerifierInstances,
-    VerifyingKey, prove, setup,
+    MultiStarkProof, ProverInstance, ProverInstances, ProvingError, ProvingKey, VerifierInstance,
+    VerifierInstances, VerifyingKey, prove, setup,
 };
+use p3_sumcheck::OpeningBatch;
 use p3_sumcheck::layout::{Layout, PrefixProver, Table, TableShape, Witness, plan_stacked_layout};
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
 use p3_whir::{
@@ -336,6 +337,12 @@ struct ImageRow<T> {
 
 const IMAGE_WIDTH: usize = size_of::<ImageRow<u8>>();
 
+/// Column of an image row's first inherited value, after the address, its bits and the flag.
+const INCOMING_COLUMN: usize = 1 + ADDRESS_BITS + 1;
+
+/// Column of an image row's first handed-on value.
+const OUTGOING_COLUMN: usize = INCOMING_COLUMN + CELLS;
+
 impl<T> Borrow<ImageRow<T>> for [T] {
     fn borrow(&self) -> &ImageRow<T> {
         debug_assert_eq!(self.len(), IMAGE_WIDTH);
@@ -568,11 +575,14 @@ fn eval_image<AB: BusInteractionBuilder>(builder: &mut AB) {
         .collect();
 
     // Row i names cell i, in both forms.
+    //
+    // The bits hold the address in 0..=3, and four rows step it by one.
+    //
+    // So row zero can only name cell 0, and no first-row pin is needed.
     for &bit in &local.address_bits {
         builder.assert_bool(bit);
     }
     builder.assert_eq(local.address, from_bits::<AB>(&local.address_bits));
-    builder.when_first_row().assert_zero(local.address);
     builder
         .when_transition()
         .assert_eq(next.address, local.address + AB::Expr::ONE);
@@ -650,6 +660,28 @@ fn initial_boundary() -> Boundary {
     }
 }
 
+/// The machine after both segments ran.
+fn final_boundary() -> Boundary {
+    Boundary {
+        pc: 8,
+        clock: 8,
+        acc: F::from_u32(22_444),
+        memory: [3, 2040, 7, 11].map(F::from_u32),
+    }
+}
+
+/// One side of a boundary as the segment interface lists it: pc, clock, acc, then every cell.
+fn side(boundary: Boundary) -> Vec<F> {
+    [
+        F::from_u32(boundary.pc),
+        F::from_u32(boundary.clock),
+        boundary.acc,
+    ]
+    .into_iter()
+    .chain(boundary.memory)
+    .collect()
+}
+
 /// The low `count` bits of a value, least significant first.
 fn bits(value: u32, count: usize) -> impl Iterator<Item = F> {
     (0..count).map(move |bit| F::from_bool((value >> bit) & 1 == 1))
@@ -657,6 +689,13 @@ fn bits(value: u32, count: usize) -> impl Iterator<Item = F> {
 
 /// Run `STEPS` instructions from a boundary and write down every table.
 fn execute(entry: Boundary) -> SegmentWitness {
+    execute_with(entry, |_, _| {})
+}
+
+/// Run `STEPS` instructions, letting a forger rewrite the state before each step.
+///
+/// The public values still claim `entry`, so a rewrite is a lie the tables must catch.
+fn execute_with(entry: Boundary, tamper: impl Fn(usize, &mut Boundary)) -> SegmentWitness {
     let mut state = entry;
     let mut cpu = Vec::with_capacity(STEPS * CPU_WIDTH);
     let mut accesses = Vec::with_capacity(STEPS);
@@ -664,7 +703,8 @@ fn execute(entry: Boundary) -> SegmentWitness {
     let mut multiplicities = vec![F::ZERO; PROGRAM.len()];
     let mut touched = [false; CELLS];
 
-    for _ in 0..STEPS {
+    for step in 0..STEPS {
+        tamper(step, &mut state);
         let (opcode, address, immediate) = PROGRAM[state.pc as usize];
         let cell = address as usize;
         let (value, next_acc) = match opcode {
@@ -817,6 +857,16 @@ impl Machine {
         &self,
         witness: &SegmentWitness,
     ) -> Result<Vec<u8>, ProvingError<PcsProverError<MachineConfig>>> {
+        let proof = self.prove_unsealed(witness)?;
+        let run = self.declaration.run(&LOG_HEIGHTS, 0).unwrap();
+        Ok(self.declaration.seal(&run, &proof).unwrap().into_bytes())
+    }
+
+    /// Prove one segment, keeping the proof as the prover built it.
+    fn prove_unsealed(
+        &self,
+        witness: &SegmentWitness,
+    ) -> Result<MultiStarkProof<MachineConfig>, ProvingError<PcsProverError<MachineConfig>>> {
         let instances = self
             .chips
             .iter()
@@ -831,14 +881,12 @@ impl Machine {
                 )
             })
             .collect();
-        let proof = prove(
+        prove(
             &self.config,
             ProverInstances::new(instances),
             0,
             &mut challenger(),
-        )?;
-        let run = self.declaration.run(&LOG_HEIGHTS, 0).unwrap();
-        Ok(self.declaration.seal(&run, &proof).unwrap().into_bytes())
+        )
     }
 
     /// Whether a witness yields a proof that verifies against its own public values.
@@ -847,8 +895,8 @@ impl Machine {
             .is_ok_and(|bytes: Vec<u8>| self.verify(&bytes, &witness.public_values).is_ok())
     }
 
-    /// Verify one sealed segment against public values, and return its boundary claim.
-    fn verify(&self, bytes: &[u8], public_values: &[Vec<F>]) -> Verdict<SegmentClaim> {
+    /// Verify one sealed segment against public values, and return the boundary it proved.
+    fn verify(&self, bytes: &[u8], public_values: &[Vec<F>]) -> Verdict<VerifiedSegment> {
         let run = self.declaration.run(&LOG_HEIGHTS, 0).unwrap();
         let instances = self
             .chips
@@ -880,25 +928,16 @@ fn segments() -> [SegmentWitness; 2] {
 fn the_execution_is_the_one_the_program_describes() {
     // Pin the witness itself, so every proof below proves the intended run.
     let [first, second] = segments();
-    let memory = |cells: [u32; CELLS]| cells.map(F::from_u32);
     assert_eq!(
         first.exit,
         Boundary {
             pc: 4,
             clock: 4,
             acc: F::from_u32(120),
-            memory: memory([3, 17, 7, 11]),
+            memory: [3, 17, 7, 11].map(F::from_u32),
         }
     );
-    assert_eq!(
-        second.exit,
-        Boundary {
-            pc: 8,
-            clock: 8,
-            acc: F::from_u32(22_444),
-            memory: memory([3, 2040, 7, 11]),
-        }
-    );
+    assert_eq!(second.exit, final_boundary());
 }
 
 #[test]
@@ -906,7 +945,7 @@ fn two_segments_prove_verify_and_chain() {
     let machine = Machine::new();
     let segments = segments();
 
-    let claims: Vec<SegmentClaim> = segments
+    let verified: Vec<VerifiedSegment> = segments
         .iter()
         .map(|segment| {
             let bytes = machine.prove(segment);
@@ -915,20 +954,35 @@ fn two_segments_prove_verify_and_chain() {
         .collect();
 
     // The prover could have predicted each claim before proving.
-    for (claim, segment) in claims.iter().zip(&segments) {
+    for (verified, segment) in verified.iter().zip(&segments) {
         let public: Vec<&[F]> = segment.public_values.iter().map(Vec::as_slice).collect();
-        assert_eq!(*claim, machine.declaration.segment_claim(&public).unwrap());
+        assert_eq!(
+            verified.claim(),
+            machine.declaration.segment_claim(&public).unwrap()
+        );
     }
 
-    // The two segments join into one execution from the initial boundary to the final one.
-    let execution = chain(&claims).unwrap();
-    assert_eq!(execution.segments, 2);
-    assert_eq!(execution.entry, claims[0].entry());
-    assert_eq!(execution.exit, claims[1].exit());
+    // The two segments join into one execution under the one statement.
+    let execution = chain(&verified).unwrap();
+    assert_eq!(execution.segments(), 2);
+    assert_eq!(
+        execution.statement(),
+        machine.declaration.statement_digest()
+    );
+
+    // A checker who knows only where the machine starts and ends ties the chain to both.
+    let digest = |boundary| {
+        machine
+            .declaration
+            .boundary_digest(&side(boundary))
+            .unwrap()
+    };
+    assert_eq!(execution.entry(), digest(initial_boundary()));
+    assert_eq!(execution.exit(), digest(final_boundary()));
 
     // Out of order, the second segment does not start where nothing stopped.
     assert_eq!(
-        chain(&[claims[1], claims[0]]).unwrap_err(),
+        chain(&[verified[1], verified[0]]).unwrap_err(),
         ChainError::Broken { segment: 1 }
     );
 }
@@ -943,82 +997,276 @@ fn a_segment_that_skips_ahead_does_not_chain() {
         ..first.exit
     });
 
-    let claims = [&first, &forged].map(|segment| {
+    let verified = [&first, &forged].map(|segment| {
         let bytes = machine.prove(segment);
         machine.verify(&bytes, &segment.public_values).unwrap()
     });
 
     // Each proof is valid on its own, and only the chain notices the gap.
     assert_eq!(
-        chain(&claims).unwrap_err(),
+        chain(&verified).unwrap_err(),
         ChainError::Broken { segment: 1 }
     );
 }
 
 #[test]
-fn the_proof_shape_is_fixed_by_the_statement() {
+fn the_cost_report_matches_the_proof() {
     let machine = Machine::new();
     let run = machine.declaration.run(&LOG_HEIGHTS, 0).unwrap();
     let report = machine.declaration.cost_report::<EF>(&run).unwrap();
+    let [first, _] = segments();
+    let proof = machine.prove_unsealed(&first).unwrap();
 
-    // Committed cells, channel slots, live rounds, opened bytes, scratch bound, per table.
-    let cost = |log_height: u32, committed, preprocessed, flushes, peak| TableCost {
-        log_height,
-        committed_cells: committed,
-        preprocessed_cells: preprocessed,
-        bus_flushes: flushes,
-        sumcheck_rounds: log_height as usize,
-        opening_bytes: (committed + preprocessed) >> log_height << 4,
-        peak_temporary_bytes: peak,
+    // Values the proof opens, batch by batch, in schedule order.
+    let opened = |batches: &[OpeningBatch<EF>]| -> Vec<usize> {
+        batches
+            .iter()
+            .map(|batch| batch.current().len() + batch.next().len())
+            .collect()
     };
+    let main = opened(&proof.opening.evals);
+    let preprocessed = opened(&proof.preprocessed_opening.as_ref().unwrap().evals);
+
+    // Each table opens one zerocheck batch, and one bus batch when it declares a bus.
+    //
+    // Only the bytecode commits a preprocessed trace, and it declares no bus.
+    let mut batches = main.iter();
+    let mut take = |count: usize| batches.by_ref().take(count).sum::<usize>();
+    let from_proof = [
+        take(2),
+        take(1) + preprocessed[0],
+        take(1),
+        take(2),
+        take(2),
+    ];
+    assert_eq!(batches.next(), None);
+    assert_eq!(preprocessed.len(), 1);
+
+    // Every table opens exactly what the report counts.
+    let from_report: Vec<usize> = report
+        .tables()
+        .iter()
+        .map(|table| table.opened_values)
+        .collect();
+    assert_eq!(from_report, from_proof);
+    assert_eq!(from_proof, [35, 10, 20, 47, 29]);
+    assert_eq!(report.total().opened_values, 141);
+
+    // The zerocheck runs over the lookup tree: 24 leaves pad to 32, five rounds past the tallest table's three.
+    assert_eq!(report.total().lookup_leaves, 32);
+    assert_eq!(
+        report.total().sumcheck_rounds,
+        proof.sumcheck.round_polys.len()
+    );
+    assert_eq!(proof.sumcheck.round_polys.len(), 5);
+
+    // Cells, channel slots, lookup leaves, live rounds, opened values and the scratch estimate.
+    let cost =
+        |log_height: u32, committed, preprocessed, flushes, leaves, opened, scratch| TableCost {
+            log_height,
+            committed_cells: committed,
+            preprocessed_cells: preprocessed,
+            bus_flushes: flushes,
+            lookup_leaves: leaves,
+            sumcheck_rounds: log_height as usize,
+            opened_values: opened,
+            opening_bytes: opened * 16,
+            estimated_peak_bytes: scratch * 16,
+        };
     let ram_width = BaseAir::<F>::width(&machine.chips[3]);
     assert_eq!(
         report.tables(),
         &[
             // cpu: 14 columns; two lookup flushes and one bus declaration per row.
-            cost(2, 14 * 4, 0, 3 * 4, (14 * 2 + 2 * 2 * 4 + 4) * 16),
+            cost(2, 14 * 4, 0, 3 * 4, 2 * 4, 35, 14 * 2 + 2 * 2 * 4 + 4),
             // bytecode: one multiplicity column over four fixed ones; one lookup flush.
-            cost(3, 8, 4 * 8, 8, (5 * 4 + 2 * 8) * 16),
+            cost(3, 8, 4 * 8, 8, 8, 10, 5 * 4 + 2 * 8),
             // macc: two lanes of five columns; one lookup flush per lane.
-            cost(2, 10 * 4, 0, 2 * 4, (10 * 2 + 2 * 2 * 4) * 16),
+            cost(2, 10 * 4, 0, 2 * 4, 2 * 4, 20, 10 * 2 + 2 * 2 * 4),
             // ram: one access pull and two image declarations per row.
-            cost(2, ram_width * 4, 0, 3 * 4, (ram_width * 2 + 3 * 4) * 16),
+            cost(2, ram_width * 4, 0, 3 * 4, 0, 47, ram_width * 2 + 3 * 4),
             // image: two image declarations per row.
-            cost(2, IMAGE_WIDTH * 4, 0, 2 * 4, (IMAGE_WIDTH * 2 + 2 * 4) * 16),
+            cost(2, IMAGE_WIDTH * 4, 0, 2 * 4, 0, 29, IMAGE_WIDTH * 2 + 2 * 4),
         ]
     );
-    assert_eq!(report.total().sumcheck_rounds, 3);
+
+    // The whole run adds the tree's eight padding leaves and 31 reduced nodes, two elements each.
+    let tables: usize = report
+        .tables()
+        .iter()
+        .map(|table| table.estimated_peak_bytes)
+        .sum();
+    assert_eq!(
+        report.total().estimated_peak_bytes,
+        tables + (8 + 31) * 2 * 16
+    );
 
     // Proving the same segment twice yields the same bytes.
-    let [first, _] = segments();
     let bytes = machine.prove(&first);
     assert_eq!(bytes, machine.prove(&first));
     assert!(bytes.len() <= PROOF_BUDGET);
 }
 
 #[test]
-fn a_tampered_boundary_is_refused() {
+fn every_boundary_value_is_pinned_to_the_trace() {
+    let machine = Machine::new();
+
+    // The trace stays honest, and the prover proves one false public value.
+    //
+    // Inherited cell 0 nudged from 3 to 4 is one of them.
+    for (table, count) in [(CPU_TABLE, CPU_PUBLIC), (IMAGE_TABLE, IMAGE_PUBLIC)] {
+        for index in 0..count {
+            let mut forged = execute(initial_boundary());
+            forged.public_values[table][index] += F::ONE;
+            assert!(
+                !machine.accepts(&forged),
+                "public value {index} of table {table} is not pinned"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_segment_cannot_claim_an_accumulator_it_did_not_start_from() {
     let machine = Machine::new();
     let [first, _] = segments();
-    let bytes = machine.prove(&first);
 
-    // Each public value of the boundary, nudged by one, breaks verification.
-    for (table, index) in [
-        (CPU_TABLE, 0),
-        (CPU_TABLE, 5),
-        (IMAGE_TABLE, 1),
-        (IMAGE_TABLE, 6),
-    ] {
-        let mut public = first.public_values.clone();
-        public[table][index] += F::ONE;
-        assert!(
-            matches!(
-                machine.verify(&bytes, &public),
-                Err(SealedVerificationError::Verification(_))
-            ),
-            "public value {index} of table {table} was not bound"
-        );
+    // The second segment claims to start at acc 120 but runs from acc 0.
+    let forged = execute_with(first.exit, |step, state| {
+        if step == 0 {
+            state.acc = F::ZERO;
+        }
+    });
+    assert_eq!(forged.public_values[CPU_TABLE][2], F::from_u32(120));
+
+    // It would end at acc 4 rather than 22444, and its entry would chain after the first segment.
+    assert_eq!(forged.exit.acc, F::from_u32(4));
+    assert!(!machine.accepts(&forged));
+}
+
+#[test]
+fn a_cpu_step_that_breaks_the_sequence_is_refused() {
+    let machine = Machine::new();
+
+    // Before the third step: skip an instruction, skip a clock tick, or reset the accumulator.
+    let breaks: [fn(&mut Boundary); 3] = [
+        |state| state.pc += 1,
+        |state| state.clock += 1,
+        |state| state.acc = F::ZERO,
+    ];
+    for (which, tamper) in breaks.into_iter().enumerate() {
+        let forged = execute_with(initial_boundary(), |step, state| {
+            if step == 2 {
+                tamper(state);
+            }
+        });
+        assert!(!machine.accepts(&forged), "break {which} was accepted");
     }
+}
+
+#[test]
+fn a_window_forged_in_row_zero_alone_is_refused() {
+    let machine = Machine::new();
+
+    // Each cell past the first, on either side, claimed one higher in row zero and the public image.
+    //
+    // The rows below keep the honest value, so only the window shift can object.
+    //
+    // Inherited cell 2 claimed as 8 instead of 7 is one of them.
+    for column in [INCOMING_COLUMN, OUTGOING_COLUMN] {
+        for cell in 1..CELLS {
+            let mut forged = execute(initial_boundary());
+            let public = (column - INCOMING_COLUMN) + cell;
+            forged.public_values[IMAGE_TABLE][public] += F::ONE;
+            forged.traces[IMAGE_TABLE].values[column + cell] += F::ONE;
+            assert!(
+                !machine.accepts(&forged),
+                "cell {cell} forged in row zero of column {column} was accepted"
+            );
+        }
+    }
+}
+
+/// Overwrite one cell of one side of a segment's image, in its public values and its trace.
+///
+/// The trace keeps the window shape, so only the claim itself is false.
+fn misstate_image(witness: &mut SegmentWitness, outgoing: bool, cell: usize, value: F) {
+    let side = usize::from(outgoing) * CELLS;
+    witness.public_values[IMAGE_TABLE][side + cell] = value;
+    // Cell `c` sits in window slot `c - r` of every row `r <= c`.
+    let image = &mut witness.traces[IMAGE_TABLE];
+    for row in 0..=cell {
+        image.values[row * IMAGE_WIDTH + INCOMING_COLUMN + side + cell - row] = value;
+    }
+}
+
+#[test]
+fn an_image_that_misstates_memory_is_refused() {
+    let machine = Machine::new();
+    let [honest, _] = segments();
+    assert!(machine.accepts(&honest));
+
+    // Cell 0 is read in this segment, so claiming it held 4 unbalances the inherited image.
+    let mut inherited = execute(initial_boundary());
+    misstate_image(&mut inherited, false, 0, F::from_u32(4));
+    assert!(!machine.accepts(&inherited));
+
+    // Cell 1 is written, so claiming it ends at 18 unbalances the handed-on image.
+    let mut handed_on = execute(initial_boundary());
+    misstate_image(&mut handed_on, true, 1, F::from_u32(18));
+    assert!(!machine.accepts(&handed_on));
+
+    // Cell 3 is never touched, so it must leave as it came.
+    let mut untouched = execute(initial_boundary());
+    misstate_image(&mut untouched, true, 3, F::from_u32(12));
+    assert!(!machine.accepts(&untouched));
+}
+
+/// Reorder the rows of a segment's image, so row `r` stands for cell `order[r]`.
+///
+/// The windows are rebuilt around the new order, and the public image follows them.
+///
+/// Every row still hands memory the value of the cell its own address names.
+fn relabel_image(witness: &mut SegmentWitness, order: [usize; CELLS]) {
+    let honest = witness.traces[IMAGE_TABLE].values.clone();
+    let row = |cell: usize| &honest[cell * IMAGE_WIDTH..(cell + 1) * IMAGE_WIDTH];
+    let incoming = order.map(|cell| row(cell)[INCOMING_COLUMN]);
+    let outgoing = order.map(|cell| row(cell)[OUTGOING_COLUMN]);
+
+    let image = &mut witness.traces[IMAGE_TABLE].values;
+    for (position, &cell) in order.iter().enumerate() {
+        let target = &mut image[position * IMAGE_WIDTH..(position + 1) * IMAGE_WIDTH];
+        // Address, its bits and the touched flag move with the cell.
+        target[..INCOMING_COLUMN].copy_from_slice(&row(cell)[..INCOMING_COLUMN]);
+        for slot in 0..CELLS {
+            let window = |side: &[F; CELLS]| side.get(position + slot).copied().unwrap_or(F::ZERO);
+            target[INCOMING_COLUMN + slot] = window(&incoming);
+            target[OUTGOING_COLUMN + slot] = window(&outgoing);
+        }
+    }
+    witness.public_values[IMAGE_TABLE] = incoming.into_iter().chain(outgoing).collect();
+}
+
+#[test]
+fn an_image_that_relabels_cells_is_refused() {
+    let machine = Machine::new();
+
+    // The segment really runs on a memory with cells 1 and 2 swapped.
+    let swapped = [3, 7, 5, 11].map(F::from_u32);
+    let mut forged = execute(Boundary {
+        memory: swapped,
+        ..initial_boundary()
+    });
+
+    // Rows 1 and 2 trade places, so the public image reads the initial memory.
+    relabel_image(&mut forged, [0, 2, 1, 3]);
+    assert_eq!(
+        forged.public_values[IMAGE_TABLE][..CELLS],
+        INITIAL_MEMORY.map(F::from_u32)
+    );
+
+    // Only the row addresses betray the swap.
+    assert!(!machine.accepts(&forged));
 }
 
 #[test]
@@ -1046,39 +1294,4 @@ fn a_malformed_proof_is_refused() {
         machine.verify(&bytes, &second.public_values),
         Err(SealedVerificationError::Verification(_))
     ));
-}
-
-/// Overwrite one cell of one side of a segment's image, in its public values and its trace.
-///
-/// The trace keeps the window shape, so only the claim itself is false.
-fn misstate_image(witness: &mut SegmentWitness, outgoing: bool, cell: usize, value: F) {
-    let side = usize::from(outgoing) * CELLS;
-    witness.public_values[IMAGE_TABLE][side + cell] = value;
-    // Cell `c` sits in window slot `c - r` of every row `r <= c`.
-    let image = &mut witness.traces[IMAGE_TABLE];
-    for row in 0..=cell {
-        image.values[row * IMAGE_WIDTH + 4 + side + cell - row] = value;
-    }
-}
-
-#[test]
-fn an_image_that_misstates_memory_is_refused() {
-    let machine = Machine::new();
-    let [honest, _] = segments();
-    assert!(machine.accepts(&honest));
-
-    // Cell 0 is read in this segment, so claiming it held 4 unbalances the inherited image.
-    let mut inherited = execute(initial_boundary());
-    misstate_image(&mut inherited, false, 0, F::from_u32(4));
-    assert!(!machine.accepts(&inherited));
-
-    // Cell 1 is written, so claiming it ends at 18 unbalances the handed-on image.
-    let mut handed_on = execute(initial_boundary());
-    misstate_image(&mut handed_on, true, 1, F::from_u32(18));
-    assert!(!machine.accepts(&handed_on));
-
-    // Cell 3 is never touched, so it must leave as it came.
-    let mut untouched = execute(initial_boundary());
-    misstate_image(&mut untouched, true, 3, F::from_u32(12));
-    assert!(!machine.accepts(&untouched));
 }

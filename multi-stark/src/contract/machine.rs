@@ -17,7 +17,7 @@ use crate::contract::digest::Preimage;
 use crate::contract::envelope::{AcceptedProof, HEADER_LEN, Header, SealedProof};
 use crate::contract::error::{DeclarationError, EnvelopeError, SealedVerificationError};
 use crate::contract::run::Run;
-use crate::contract::segment::{SegmentClaim, SegmentInterface};
+use crate::contract::segment::{SegmentClaim, SegmentInterface, VerifiedSegment};
 use crate::contract::table::TableDeclaration;
 use crate::folder::VerifierAir;
 use crate::instance::VerifierInstances;
@@ -151,7 +151,9 @@ where
     ///
     /// A prover calls this to learn the claim it is about to prove.
     ///
-    /// The claim means nothing until the proof verifies; [`Self::verify_segment`] ties the two.
+    /// The claim means nothing until the proof verifies.
+    ///
+    /// [`Self::verify_segment`] ties the two, and only its result chains.
     ///
     /// # Errors
     ///
@@ -166,6 +168,24 @@ where
             .as_ref()
             .ok_or(DeclarationError::NoSegmentInterface)?
             .claim(&self.hasher, self.statement, &self.tables, public_values)
+    }
+
+    /// Digest of one side of a segment boundary, from its values in slot order.
+    ///
+    /// Entry and exit sides hash alike, so one digest can be compared with either.
+    ///
+    /// A checker uses it to tie a chain to the start and the end it expects.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the statement declares no segment boundary.
+    ///
+    /// Returns an error when the values are not one per slot of a side.
+    pub fn boundary_digest<F: Field>(&self, values: &[F]) -> Result<[u8; 32], DeclarationError> {
+        self.segment
+            .as_ref()
+            .ok_or(DeclarationError::NoSegmentInterface)?
+            .boundary(&self.hasher, values)
     }
 
     /// What each table of one run costs, read off the declared shape alone.
@@ -441,6 +461,8 @@ where
     ///
     /// No caller can therefore pair a proof with the boundary of another.
     ///
+    /// The result is the only input [`chain`](crate::contract::chain) accepts.
+    ///
     /// # Errors
     ///
     /// Returns an error when the statement declares no segment boundary.
@@ -453,7 +475,7 @@ where
         config: &C,
         instances: VerifierInstances<'a, C, A>,
         challenger: &mut C::Challenger,
-    ) -> Result<SegmentClaim, SealedVerificationError<PcsError<C>>>
+    ) -> Result<VerifiedSegment, SealedVerificationError<PcsError<C>>>
     where
         C: MultiStarkConfig,
         C::Pcs: PrescribedPointPcs<C::Challenge, C::Challenger>,
@@ -474,7 +496,7 @@ where
         })?;
 
         self.verify(run, bytes, config, instances, challenger)?;
-        Ok(claim)
+        Ok(VerifiedSegment::new(claim))
     }
 
     /// Reject a decoded proof whose parts disagree with what the statement declares.

@@ -1,5 +1,6 @@
 //! What one table fixes before a proof exists.
 
+use alloc::collections::BTreeSet;
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::fmt::{Debug, Formatter, Result as FmtResult};
@@ -8,7 +9,7 @@ use p3_air::symbolic::AirLayout;
 use p3_air::{Air, BaseAir};
 use p3_bus::BusSymbolicBuilder;
 use p3_field::{ExtensionField, Field};
-use p3_lookup::InteractionSymbolicBuilder;
+use p3_lookup::{InteractionSymbolicBuilder, TraceWindow};
 
 use crate::contract::constraints;
 use crate::contract::digest::Preimage;
@@ -114,10 +115,23 @@ pub struct TableDeclaration {
     heights: HeightRange,
     flushes: Vec<FlushDeclaration>,
     local_lookups: usize,
+    lookup_tuples: usize,
     buses: usize,
     indexed_reads: usize,
     indexed_tables: usize,
+    opened: OpenedValues,
     system: Vec<u8>,
+}
+
+/// How many values the proof opens for one table, in each committed window.
+///
+/// Both counts follow from the constraint system, which the statement already fingerprints.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(super) struct OpenedValues {
+    /// Values opened out of the main trace.
+    pub(super) main: usize,
+    /// Values opened out of the trace fixed at setup.
+    pub(super) preprocessed: usize,
 }
 
 impl Debug for TableDeclaration {
@@ -128,9 +142,11 @@ impl Debug for TableDeclaration {
             .field("heights", &self.heights)
             .field("flushes", &self.flushes)
             .field("local_lookups", &self.local_lookups)
+            .field("lookup_tuples", &self.lookup_tuples)
             .field("buses", &self.buses)
             .field("indexed_reads", &self.indexed_reads)
             .field("indexed_tables", &self.indexed_tables)
+            .field("opened", &self.opened)
             .field("system_bytes", &self.system.len())
             .finish()
     }
@@ -206,6 +222,16 @@ impl TableDeclaration {
             .filter(|interaction| !interaction.tuples.is_empty())
             .count();
 
+        // A global flush is one tuple per row; a local lookup carries every tuple it lists.
+        let lookup_tuples = builder.global_interactions().len()
+            + builder
+                .local_interactions()
+                .iter()
+                .map(|interaction| interaction.tuples.len())
+                .sum::<usize>();
+
+        let opened = opened_values(table, &builder, &buses);
+
         Self {
             columns: ColumnCounts {
                 committed: table.width(),
@@ -219,9 +245,11 @@ impl TableDeclaration {
             heights,
             flushes,
             local_lookups,
+            lookup_tuples,
             buses: buses.interactions().len(),
             indexed_reads: builder.indexed_reads().len(),
             indexed_tables: builder.indexed_tables().len(),
+            opened,
             system: constraints::encode(table, &builder, &buses),
         }
     }
@@ -271,6 +299,16 @@ impl TableDeclaration {
     /// How many bus declarations this table makes.
     pub(super) const fn bus_declarations(&self) -> usize {
         self.buses
+    }
+
+    /// How many leaves this table adds to the lookup tree per row.
+    pub(super) const fn lookup_tuples(&self) -> usize {
+        self.lookup_tuples
+    }
+
+    /// How many values the proof opens for this table.
+    pub(super) const fn opened_values(&self) -> OpenedValues {
+        self.opened
     }
 
     /// Name the first part on which this table and a constraint system disagree.
@@ -389,6 +427,91 @@ impl TableDeclaration {
 }
 
 #[cfg(test)]
+impl TableDeclaration {
+    /// A table with these columns and nothing else, which no constraint system has to produce.
+    ///
+    /// Every committed column is opened once, as a table with no next-row view opens it.
+    pub(super) fn shaped(columns: ColumnCounts, heights: HeightRange) -> Self {
+        Self {
+            columns,
+            constraints: LocalConstraints::default(),
+            heights,
+            flushes: Vec::new(),
+            local_lookups: 0,
+            lookup_tuples: 0,
+            buses: 0,
+            indexed_reads: 0,
+            indexed_tables: 0,
+            opened: OpenedValues {
+                main: columns.committed,
+                preprocessed: columns.preprocessed,
+            },
+            system: Vec::new(),
+        }
+    }
+}
+
+/// Count the values the opening schedule takes out of each window of one table.
+///
+/// It walks the same batches the prover and verifier schedule, in the same windows:
+///
+/// ```text
+///     main          every column, the next-row columns, one position per indexed read,
+///                   the columns of a main-window indexed table, the columns a bus reads
+///     preprocessed  every column, the next-row columns,
+///                   the columns of a preprocessed indexed table, the columns a bus reads
+/// ```
+///
+/// A table with no preprocessed column commits no preprocessed trace, so it opens none there.
+fn opened_values<F, EF, A>(
+    table: &A,
+    builder: &InteractionSymbolicBuilder<F, EF>,
+    buses: &BusSymbolicBuilder<F, EF>,
+) -> OpenedValues
+where
+    F: Field,
+    EF: ExtensionField<F>,
+    A: BaseAir<F>,
+{
+    // The bus batch opens the union of the columns every declaration reads.
+    let mut bus_main = BTreeSet::new();
+    let mut bus_preprocessed = BTreeSet::new();
+    for interaction in buses.interactions() {
+        let (main, preprocessed) = interaction.referenced_columns();
+        bus_main.extend(main);
+        bus_preprocessed.extend(preprocessed);
+    }
+
+    // An indexed table opens the columns it carries, in the window that holds them.
+    let indexed = |window| {
+        builder
+            .indexed_tables()
+            .iter()
+            .filter(|indexed| indexed.window == window)
+            .map(|indexed| indexed.columns.len())
+            .sum::<usize>()
+    };
+
+    let main = table.width()
+        + table.main_next_row_columns().len()
+        + builder.indexed_reads().len()
+        + indexed(TraceWindow::Main)
+        + bus_main.len();
+
+    let preprocessed = match table.preprocessed_width() {
+        0 => 0,
+        width => {
+            width
+                + table.preprocessed_next_row_columns().len()
+                + indexed(TraceWindow::Preprocessed)
+                + bus_preprocessed.len()
+        }
+    };
+
+    OpenedValues { main, preprocessed }
+}
+
+#[cfg(test)]
 mod tests {
     use alloc::vec;
 
@@ -397,17 +520,7 @@ mod tests {
     use super::*;
 
     fn declared(heights: HeightRange) -> TableDeclaration {
-        TableDeclaration {
-            columns: ColumnCounts::default(),
-            constraints: LocalConstraints::default(),
-            heights,
-            flushes: Vec::new(),
-            local_lookups: 0,
-            buses: 0,
-            indexed_reads: 0,
-            indexed_tables: 0,
-            system: Vec::new(),
-        }
+        TableDeclaration::shaped(ColumnCounts::default(), heights)
     }
 
     #[test]

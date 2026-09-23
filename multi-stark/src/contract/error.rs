@@ -97,6 +97,14 @@ pub enum DeclarationError {
     /// A claim was asked of a statement that declares no segment boundary.
     #[error("the statement declares no segment boundary")]
     NoSegmentInterface,
+    /// One side of a segment boundary was given a different number of values than it names.
+    #[error("a segment boundary names {expected} values, but {found} were supplied")]
+    BoundaryValueCount {
+        /// Number of slots one side names.
+        expected: usize,
+        /// Number of values supplied.
+        found: usize,
+    },
     /// Public values were supplied for a different number of tables.
     #[error("public values cover {found} tables where the statement declares {expected}")]
     PublicValueTables {

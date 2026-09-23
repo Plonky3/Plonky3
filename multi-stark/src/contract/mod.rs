@@ -26,7 +26,8 @@ pub use machine::{
 };
 pub use run::Run;
 pub use segment::{
-    ChainError, ChainedExecution, PublicSlot, SegmentClaim, SegmentInterface, chain,
+    ChainError, ChainedExecution, PublicSlot, SegmentClaim, SegmentInterface, VerifiedSegment,
+    chain,
 };
 pub use table::{
     ColumnCounts, FlushDeclaration, HeightRange, LocalConstraints, MAX_COLUMNS,
