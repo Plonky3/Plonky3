@@ -10,3 +10,6 @@ proptest-regressions/
 
 # Claude cache
 .claude
+
+# Lean
+.lake/
