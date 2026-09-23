@@ -892,10 +892,17 @@ fn a_call_with_no_live_instances_addresses_nothing() {
 }
 
 // ---------------------------------------------------------------------------
-// The relation family this protocol does not prove
+// Repeated full-width products
 // ---------------------------------------------------------------------------
 
-/// A gadget declaring one full-width unsigned product, which is not proved.
+/// A gadget declaring one full-width unsigned product of its two inputs.
+///
+/// ```text
+/// public  left = slot 0, right = slot 1
+/// local   low  = slot 0, high  = slot 1
+///
+/// left * right = low + 2^64 * high
+/// ```
 fn product_gadget() -> Component<Word64> {
     let left = ValueIndex::public(0).expect("slot fits");
     let right = ValueIndex::public(1).expect("slot fits");
@@ -917,26 +924,100 @@ fn product_gadget() -> Component<Word64> {
     Component::new(body, 2, 0).expect("two inputs span the interface")
 }
 
-#[test]
-fn a_composed_product_relation_leaves_no_key_to_price() {
-    // Four live instances declare four products, and the count names all of them.
-    let composition = Composition::new(vec![ComponentCall::new(product_gadget(), 4)])
-        .expect("the fixture fits the compact address space");
-    assert_eq!(composition.relation_counts(), [0, 0, 4]);
-    assert_eq!(
-        WordProofKey::new(composition),
-        Err(p3_word_backend::KeyCompileError::UnprovedRelation { count: 4 })
-    );
+/// Fills every product instance of one call with its factors and native 128-bit limbs.
+fn fill_products(
+    composition: &Composition<Word64>,
+    call: usize,
+    public: &mut [Word64],
+    witness: &mut [Word64],
+) {
+    for instance in 0..composition.calls()[call].instances() {
+        let (left, right) = instance_inputs(instance + 100);
+        let product = u128::from(left) * u128::from(right);
 
-    // A product beside a proved gadget is refused just the same.
-    let mixed = Composition::new(vec![
+        let interface = composition
+            .interface_mut(public, call, instance)
+            .expect("the instance exists");
+        interface[0] = Word64::new(left);
+        interface[1] = Word64::new(right);
+
+        let private = composition
+            .locals_mut(witness, call, instance)
+            .expect("the instance exists");
+        private[0] = Word64::new(product as u64);
+        private[1] = Word64::new((product >> 64) as u64);
+    }
+}
+
+/// Two bitwise gadgets beside three product gadgets, with every word filled honestly.
+fn mixed_products() -> (Composition<Word64>, Vec<Word64>, Vec<Word64>) {
+    let composition = Composition::new(vec![
         ComponentCall::new(gadget(), 2),
-        ComponentCall::new(product_gadget(), 1),
+        ComponentCall::new(product_gadget(), 3),
     ])
     .expect("the fixture fits the compact address space");
-    assert_eq!(
-        WordProofKey::new(mixed),
-        Err(p3_word_backend::KeyCompileError::UnprovedRelation { count: 1 })
+    assert_eq!(composition.relation_counts(), [2, 4, 3]);
+
+    // The bitwise call reuses the single-call filler, which only writes call zero.
+    let (bitwise_public, bitwise_witness) = honest_values(&composition);
+    let mut public = bitwise_public;
+    let mut witness = bitwise_witness;
+    fill_products(&composition, 1, &mut public, &mut witness);
+    (composition, public, witness)
+}
+
+#[test]
+fn repeated_products_prove_as_instances_of_one_component() {
+    // Fixture state: three product instances composed beside two bitwise instances.
+    let (composition, public, witness) = mixed_products();
+    let flat = composition
+        .lower()
+        .expect("the lowered system is well formed");
+    assert_eq!(flat.verify(&public, &witness), Ok(()));
+
+    let composed_key = WordProofKey::new(composition).expect("the composed key compiles");
+    let flat_key = WordProofKey::new(flat).expect("the flat key compiles");
+    let scheme = commitment_scheme(composed_key.trace_variables());
+    let (commitment, composed_proof) =
+        prove(&composed_key, &scheme, &public, &witness).expect("the composed statement holds");
+    let (_, flat_proof) =
+        prove(&flat_key, &scheme, &public, &witness).expect("the flat statement holds");
+
+    // Products are one more description of the same statement, byte for byte.
+    assert_eq!(bytes(&composed_proof), bytes(&flat_proof));
+    assert!(
+        verify(
+            &composed_key,
+            &scheme,
+            &commitment,
+            &public,
+            &composed_proof
+        )
+        .is_ok()
+    );
+    assert!(verify(&flat_key, &scheme, &commitment, &public, &composed_proof).is_ok());
+}
+
+#[test]
+fn a_wrong_limb_in_one_product_instance_is_rejected() {
+    // Mutation: raise the high limb of the middle product instance by one.
+    let (composition, public, mut witness) = mixed_products();
+    let private = composition
+        .locals_mut(&mut witness, 1, 1)
+        .expect("the instance exists");
+    private[1] = Word64::new(private[1].get() + 1);
+    let flat = composition
+        .lower()
+        .expect("the lowered system is well formed");
+    assert!(flat.verify(&public, &witness).is_err());
+
+    let key = WordProofKey::new(composition).expect("the composed key compiles");
+    let scheme = commitment_scheme(key.trace_variables());
+    let (commitment, proof) = prove(&key, &scheme, &public, &witness).expect("a proof is produced");
+    let verdict = verify(&key, &scheme, &commitment, &public, &proof);
+    assert!(
+        matches!(verdict, Err(WordProofError::IntegerMul(_))),
+        "the multiplication reduction must reject, got {verdict:?}"
     );
 }
 

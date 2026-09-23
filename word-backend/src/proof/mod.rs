@@ -4,6 +4,8 @@
 
 mod error;
 mod key;
+#[cfg(test)]
+mod product_tests;
 mod prover;
 mod record;
 mod relation;

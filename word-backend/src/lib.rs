@@ -13,6 +13,7 @@
 extern crate alloc;
 
 mod columns;
+mod integer_mul;
 mod keys;
 mod proof;
 mod shift;
@@ -20,6 +21,7 @@ mod statement;
 mod witness;
 
 pub use columns::OperationColumns;
+pub use integer_mul::IntegerMulError;
 pub use keys::{
     CompiledKey, CompiledKeyLayout, CompiledSegment, ConstraintReference, KeyCompileError,
     LayoutComponent, LayoutFootprint,

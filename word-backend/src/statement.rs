@@ -12,7 +12,7 @@
 //!
 //! That is why both forms reach the same transcript and the same proof.
 
-use p3_word::{Composition, ConstraintKind, ConstraintSystem, Segment, ShapeError, Word};
+use p3_word::{Composition, ConstraintSystem, Segment, ShapeError, Word};
 
 use crate::{CompiledKeyLayout, KeyCompileError};
 
@@ -143,12 +143,6 @@ impl<W: Word> Statement<W> {
             ],
             Self::Composed(composition) => composition.relation_counts(),
         }
-    }
-
-    /// Returns the relations in the family the protocol cannot prove.
-    #[inline]
-    pub fn unproved_relations(&self) -> usize {
-        self.relation_counts()[ConstraintKind::IntegerMul.code() as usize]
     }
 
     /// Returns the flat relations, when the statement is written out.

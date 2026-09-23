@@ -3,8 +3,10 @@
 //! # Step order
 //!
 //! ```text
-//!     commitment -> statement -> vanishing point -> batching coefficient
-//!                -> batched zerocheck -> operand claims
+//!     commitment -> statement
+//!                -> integer multiplication: row point, both product trees, product claims
+//!                -> vanishing point -> batching coefficient
+//!                -> batched zerocheck: zero, AND, low bit, product claims -> operand claims
 //!                -> shift batching, public share subtracted
 //!                -> bit sumcheck -> word sumcheck -> trace evaluation
 //!                -> commitment opening
@@ -12,14 +14,17 @@
 //!
 //! The order is load-bearing and the verifier must not diverge from it.
 //!
-//! One zerocheck covers both proved families under one coefficient.
+//! One zerocheck covers every local family and the product claims under one coefficient.
+//!
+//! Binary-field multiplication is not a relation of this language, so no step proves it.
 //!
 //! # Why the order is sound
 //!
 //! Every step binds its claims before the challenge that consumes them.
 //!
 //! - The commitment is bound before the vanishing point, so the trace cannot follow it.
-//! - Public words and every dimension are bound before both relation challenges.
+//! - Public words and every dimension are bound before the multiplication row point.
+//! - Every product claim is bound before the vanishing point and coefficient that weight it.
 //! - The four operand evaluations are bound before the shift reduction draws its batching axes.
 //! - The reduced trace value is bound before the commitment draws its opening challenges.
 //!
@@ -33,16 +38,17 @@ use p3_binary_field::Gf2;
 use p3_binary_pcs::BooleanMultilinearPcs;
 use p3_challenger::fs::TranscriptField;
 use p3_challenger::{FieldChallenger, GrindingChallenger};
-use p3_field::{Algebra, ExtensionField, Field};
+use p3_field::{Algebra, ExtensionField};
 use p3_multilinear_util::point::Point;
 use p3_sumcheck::generic_degree::RoundProver;
 
 use super::error::WordProofError;
 use super::key::WordProofKey;
 use super::record::WordProof;
-use super::relation::{RelationZerocheck, ZEROCHECK_DEGREE};
+use super::relation::{ProductTables, RelationZerocheck, ZEROCHECK_DEGREE, claimed_sum};
 use super::transcript::ProofProverTranscript;
-use crate::{OperationColumns, Packed, PackedWitness, PackedWord};
+use crate::columns::bit_table;
+use crate::{OperationColumns, PackedWitness, PackedWord};
 
 impl<W: PackedWord> WordProofKey<W> {
     /// Proves every declared relation and discharges the result through the commitment.
@@ -54,6 +60,7 @@ impl<W: PackedWord> WordProofKey<W> {
     /// Returns an error when any of the following holds.
     ///
     /// - The witness has the wrong shape, or the commitment is too narrow for it.
+    /// - The statement declares products the challenge field is too small to lift.
     /// - The sampled batching coefficient vanishes.
     /// - The commitment refuses the trace or its opening.
     #[allow(
@@ -82,6 +89,9 @@ impl<W: PackedWord> WordProofKey<W> {
                 actual: error.actual,
             }
         })?;
+        if let Some(reduction) = &self.integer_mul {
+            reduction.check_field::<EF>()?;
+        }
 
         // Binding the commitment first stops the trace being chosen after the challenges.
         let (commitment, prover_data) = pcs
@@ -101,12 +111,32 @@ impl<W: PackedWord> WordProofKey<W> {
             self.transcript_shape(commitment_variables),
             &public_words,
         );
+
+        // Every product reduces to claims on its four columns before either relation draw.
+        let product = transcript.integer_mul(|challenger| {
+            self.integer_mul
+                .map(|reduction| reduction.prove::<F, EF, W, _>(columns.integer_mul(), challenger))
+        });
         let (vanishing_point, batching) = transcript
             .challenges(variables)
             .ok_or(WordProofError::DegenerateBatching)?;
 
-        // The batched relation polynomial vanishes on the whole padded cube.
+        // The local terms vanish on the padded cube and each claim term sums to its claim.
         let rows = 1 << self.shift.constraint_variables();
+        let (integer_mul, tables, sum) = match product {
+            Some((proof, claims)) => {
+                let tables = ProductTables {
+                    columns: columns
+                        .integer_mul()
+                        .each_ref()
+                        .map(|column| bit_table::<W, EF>(column, rows)),
+                    weights: self.product_weights(&vanishing_point, &claims),
+                };
+                let sum = claimed_sum(&claims.each_ref().map(|claim| claim.value), batching);
+                (Some(proof), Some(tables), sum)
+            }
+            None => (None, None, EF::ZERO),
+        };
         let mut prover = RelationZerocheck::new(
             Point::new(vanishing_point.as_slice()).equality_weights_msb(),
             bit_table::<W, EF>(columns.zero(), rows),
@@ -114,10 +144,11 @@ impl<W: PackedWord> WordProofKey<W> {
                 .bitwise_and()
                 .each_ref()
                 .map(|column| bit_table::<W, EF>(column, rows)),
+            tables,
             batching,
         );
         let (zerocheck, point) = transcript.zerocheck(|challenger| {
-            prover.prove::<F, _>(challenger, variables, ZEROCHECK_DEGREE, 0, EF::ZERO)
+            prover.prove::<F, _>(challenger, variables, ZEROCHECK_DEGREE, 0, sum)
         });
         let operands = prover.terminal_operands();
         transcript.finish();
@@ -144,67 +175,12 @@ impl<W: PackedWord> WordProofKey<W> {
         Ok((
             commitment,
             WordProof {
+                integer_mul,
                 zerocheck,
                 operands,
                 shift,
                 opening: opening_proof,
             },
         ))
-    }
-}
-
-/// Expands one packed column into its bit multilinear over the padded cube.
-pub(super) fn bit_table<W: PackedWord, EF: Field>(column: &[Packed<W>], rows: usize) -> Vec<EF> {
-    // Row index leads the flat address and within-word bit index trails it.
-    let width = W::BITS as usize;
-    let mut table = EF::zero_vec(rows * width);
-    for (row, &packed) in column.iter().enumerate() {
-        let mut remaining = W::unpack(packed).to_u64();
-        while remaining != 0 {
-            // Visit only set lanes, which halves the scatter on random words.
-            let bit = remaining.trailing_zeros() as usize;
-            table[row * width + bit] = EF::ONE;
-            remaining &= remaining - 1;
-        }
-    }
-    table
-}
-
-#[cfg(test)]
-mod tests {
-    use p3_binary_field::BinaryField128;
-    use p3_field::PrimeCharacteristicRing;
-    use p3_word::{Word32, Word64};
-
-    use super::*;
-
-    type EF = BinaryField128;
-
-    #[test]
-    fn a_packed_column_expands_to_its_set_bits() {
-        // Fixture state: one 32-bit word with its lowest and highest bits set.
-        let column = [Word32::pack(Word32::new(0x8000_0001))];
-        let table = bit_table::<Word32, EF>(&column, 2);
-
-        // Set lanes are one, every other lane of both rows is zero.
-        assert_eq!(table.len(), 64);
-        for (index, value) in table.iter().enumerate() {
-            let expected = if index == 0 || index == 31 {
-                EF::ONE
-            } else {
-                EF::ZERO
-            };
-            assert_eq!(*value, expected, "lane {index}");
-        }
-    }
-
-    #[test]
-    fn a_padded_row_contributes_no_bits() {
-        // Fixture state: one 64-bit row inside a two-row padded cube.
-        let column = [Word64::pack(Word64::new(u64::MAX))];
-        let table = bit_table::<Word64, EF>(&column, 2);
-
-        assert!(table[..64].iter().all(|value| *value == EF::ONE));
-        assert!(table[64..].iter().all(|value| *value == EF::ZERO));
     }
 }

@@ -80,6 +80,103 @@ impl WordShiftSecurityModel {
     }
 }
 
+/// Label for the complete full-width unsigned multiplication reduction error.
+pub const WORD_INTEGER_MUL_LABEL: &str = "word-integer-mul";
+
+/// Label for the row point the two exponent lifts are compared at.
+pub const WORD_INTEGER_MUL_POINT_LABEL: &str = "word-integer-mul-point";
+
+/// Label for the layer, line, and leaf checks of both product trees.
+pub const WORD_INTEGER_MUL_PRODUCT_LABEL: &str = "word-integer-mul-product-check";
+
+/// Per-variable degree of every sumcheck the multiplication reduction runs.
+const INTEGER_MUL_DEGREE: u128 = 3;
+
+/// Checked dimensions of one full-width unsigned multiplication reduction.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct WordIntegerMulSecurityModel {
+    /// Lower bound on the base-two logarithm of the challenge-field order.
+    field_bits: usize,
+    /// Variables selecting one padded multiplication row.
+    row_variables: usize,
+    /// Variables selecting one bit within a word.
+    bit_variables: usize,
+}
+
+impl WordIntegerMulSecurityModel {
+    /// Creates a model when the challenge field has a nonzero security width.
+    #[must_use]
+    pub const fn new(
+        field_bits: usize,
+        row_variables: usize,
+        bit_variables: usize,
+    ) -> Option<Self> {
+        // A zero-bit challenge field cannot support a statistical reduction.
+        if field_bits == 0 {
+            return None;
+        }
+
+        Some(Self {
+            field_bits,
+            row_variables,
+            bit_variables,
+        })
+    }
+
+    /// Returns the error numerator of one product tree of the given depth.
+    ///
+    /// ```text
+    ///     layer d      cubic sumcheck over m + d variables, then one line draw
+    ///     leaf check   cubic sumcheck over m + depth variables
+    ///
+    ///     numerator = sum_{d < depth} (3 * (m + d) + 1) + 3 * (m + depth)
+    /// ```
+    const fn tree_numerator(&self, depth: usize) -> u128 {
+        let rows = self.row_variables as u128;
+        let depth = depth as u128;
+
+        // The layer sum of 3 * (m + d) is 3 * (m * depth + depth * (depth - 1) / 2).
+        let layers = INTEGER_MUL_DEGREE * (rows * depth + depth * depth.saturating_sub(1) / 2);
+        layers + depth + INTEGER_MUL_DEGREE * (rows + depth)
+    }
+
+    /// Returns each algebraic error source for diagnostic reporting.
+    #[must_use]
+    pub fn components(self) -> Vec<SecurityTerm> {
+        let mut terms = Vec::with_capacity(2);
+
+        // Two lifts differing on some row agree at a random row point only at a root.
+        if self.row_variables != 0 {
+            terms.push(SecurityTerm::new(
+                WORD_INTEGER_MUL_POINT_LABEL,
+                error_from_numerator(self.field_bits, self.row_variables as u128),
+            ));
+        }
+
+        // The factor tree spans two bit indices and the result tree one index over twice the width.
+        let numerator = self.tree_numerator(2 * self.bit_variables)
+            + self.tree_numerator(self.bit_variables + 1);
+        terms.push(SecurityTerm::new(
+            WORD_INTEGER_MUL_PRODUCT_LABEL,
+            error_from_numerator(self.field_bits, numerator),
+        ));
+
+        terms
+    }
+
+    /// Returns the union bound used by an enclosing proof system.
+    #[must_use]
+    pub fn combined_term(self) -> SecurityTerm {
+        // Compose the independently labelled failure events by probability addition.
+        let errors = self
+            .components()
+            .iter()
+            .map(|component| component.bits)
+            .collect::<Vec<_>>();
+        SecurityTerm::new(WORD_INTEGER_MUL_LABEL, ErrorBits::sum(&errors))
+    }
+}
+
 /// Label for the complete word-level relation proof error.
 pub const WORD_PROOF_LABEL: &str = "word-proof";
 
@@ -97,12 +194,14 @@ pub const WORD_ZEROCHECK_ROUNDS_LABEL: &str = "word-relation-zerocheck-rounds";
 pub struct WordProofSecurityModel {
     /// Lower bound on the base-two logarithm of the challenge-field order.
     field_bits: usize,
-    /// Relation families combined under one batching coefficient.
+    /// Relation terms separated by the powers of one batching coefficient.
     relation_families: usize,
     /// Constraint and within-word variables the vanishing check binds.
     zerocheck_variables: usize,
     /// Per-variable degree of the batched relation polynomial.
     zerocheck_degree: usize,
+    /// Dimensions of the multiplication reduction that precedes the vanishing check, if any.
+    integer_mul: Option<WordIntegerMulSecurityModel>,
     /// Dimensions of the shift reduction that follows.
     shift: WordShiftSecurityModel,
     /// Labelled errors the commitment charges for discharging the one surviving claim.
@@ -121,12 +220,19 @@ impl WordProofSecurityModel {
     /// The last two arguments both come from the commitment.
     ///
     /// They are what it charges, and how many candidates it still leaves open.
+    ///
+    /// A statement without multiplication relations passes no multiplication model.
     #[must_use]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "each argument is one independently derived stage of the schedule"
+    )]
     pub fn new(
         field_bits: usize,
         relation_families: usize,
         zerocheck_variables: usize,
         zerocheck_degree: usize,
+        integer_mul: Option<WordIntegerMulSecurityModel>,
         shift: WordShiftSecurityModel,
         commitment: Vec<SecurityTerm>,
         log2_candidates: f64,
@@ -146,6 +252,7 @@ impl WordProofSecurityModel {
             relation_families,
             zerocheck_variables,
             zerocheck_degree,
+            integer_mul,
             shift,
             commitment,
             log2_candidates,
@@ -157,7 +264,12 @@ impl WordProofSecurityModel {
     pub fn components(&self) -> Vec<SecurityTerm> {
         let mut terms = Vec::new();
 
-        // One coefficient separates the families, so its degree is one below their count.
+        // The multiplication reduction runs first and publishes its own labelled experiments.
+        if let Some(integer_mul) = self.integer_mul {
+            terms.extend(integer_mul.components());
+        }
+
+        // Powers of one coefficient separate the terms, so its degree is one below their count.
         let separated = self.relation_families.saturating_sub(1);
         if separated != 0 {
             terms.push(SecurityTerm::new(
@@ -262,8 +374,8 @@ mod tests {
         let shift = WordShiftSecurityModel::new(128, 4, 26).unwrap();
         let pcs = BinaryPcsRegime::new(128, 6, 2, 1, 40, 0).unwrap();
         let commitment = vec![bit_ring_switch_term(1, 7, 6, 128), pcs.opening_term(1)];
-        let model =
-            WordProofSecurityModel::new(128, 2, 9, 3, shift, commitment.clone(), 0.0).unwrap();
+        let model = WordProofSecurityModel::new(128, 2, 9, 3, None, shift, commitment.clone(), 0.0)
+            .unwrap();
         let components = model.components();
 
         // One coefficient separates two families, so its numerator is one.
@@ -303,14 +415,16 @@ mod tests {
         let shift = WordShiftSecurityModel::new(128, 4, 26).unwrap();
 
         // A challenge field must expose at least one bit of entropy.
-        assert!(WordProofSecurityModel::new(0, 2, 9, 3, shift, Vec::new(), 0.0).is_none());
+        assert!(WordProofSecurityModel::new(0, 2, 9, 3, None, shift, Vec::new(), 0.0).is_none());
 
         // A degree-zero composition carries no round polynomial to separate against.
-        assert!(WordProofSecurityModel::new(128, 2, 9, 0, shift, Vec::new(), 0.0).is_none());
+        assert!(WordProofSecurityModel::new(128, 2, 9, 0, None, shift, Vec::new(), 0.0).is_none());
 
         // A candidate count that names no real set size prices nothing.
         for count in [f64::NAN, f64::INFINITY, -1.0] {
-            assert!(WordProofSecurityModel::new(128, 2, 9, 3, shift, Vec::new(), count).is_none());
+            assert!(
+                WordProofSecurityModel::new(128, 2, 9, 3, None, shift, Vec::new(), count).is_none()
+            );
         }
     }
 
@@ -321,9 +435,10 @@ mod tests {
         let pcs = BinaryPcsRegime::new(128, 6, 2, 1, 40, 0).unwrap();
         let commitment = vec![bit_ring_switch_term(1, 7, 6, 128), pcs.opening_term(1)];
         let settled =
-            WordProofSecurityModel::new(128, 2, 9, 3, shift, commitment.clone(), 0.0).unwrap();
-        let open =
-            WordProofSecurityModel::new(128, 2, 9, 3, shift, commitment.clone(), 5.0).unwrap();
+            WordProofSecurityModel::new(128, 2, 9, 3, None, shift, commitment.clone(), 0.0)
+                .unwrap();
+        let open = WordProofSecurityModel::new(128, 2, 9, 3, None, shift, commitment.clone(), 5.0)
+            .unwrap();
 
         // Each of the proof's own five draws loses exactly the candidate bound.
         let before = settled.components();
@@ -336,6 +451,68 @@ mod tests {
         // The commitment already charged its own reductions, so its terms do not move.
         assert_eq!(after[5..], commitment);
         assert_eq!(before[5..], commitment);
+    }
+
+    #[test]
+    fn a_multiplication_reduction_charges_its_point_and_both_trees() {
+        // Fixture state: eight padded rows of 64-bit products.
+        //
+        //     factor tree   depth 12, layer d over 3 + d variables, leaf over 15
+        //     result tree   depth 7,  layer d over 3 + d variables, leaf over 10
+        let model = WordIntegerMulSecurityModel::new(128, 3, 6).unwrap();
+        let components = model.components();
+
+        // Three row variables give the comparison point the numerator three.
+        assert_eq!(components[0].label, WORD_INTEGER_MUL_POINT_LABEL);
+        assert_eq!(components[0].bits.bits(), 128.0 - libm::log2(3.0));
+
+        // Factor tree: 3 * (36 + 66) + 12 + 45 = 363.
+        // Result tree: 3 * (21 + 21) + 7 + 30 = 163.
+        assert_eq!(components[1].label, WORD_INTEGER_MUL_PRODUCT_LABEL);
+        assert_eq!(components[1].bits.bits(), 128.0 - libm::log2(526.0));
+
+        // A single row needs no comparison point, but both trees still run.
+        let single = WordIntegerMulSecurityModel::new(128, 0, 6).unwrap();
+        let components = single.components();
+        assert_eq!(components.len(), 1);
+        assert_eq!(components[0].label, WORD_INTEGER_MUL_PRODUCT_LABEL);
+
+        // A challenge field must expose at least one bit of entropy.
+        assert_eq!(WordIntegerMulSecurityModel::new(0, 3, 6), None);
+    }
+
+    #[test]
+    fn the_multiplication_terms_precede_the_vanishing_check() {
+        // Fixture state: the complete proof above, now also proving 64-bit products.
+        let shift = WordShiftSecurityModel::new(128, 4, 26).unwrap();
+        let integer_mul = WordIntegerMulSecurityModel::new(128, 3, 6).unwrap();
+        let model =
+            WordProofSecurityModel::new(128, 7, 9, 3, Some(integer_mul), shift, Vec::new(), 2.0)
+                .unwrap();
+        let components = model.components();
+
+        // The transcript runs the products first, so their terms lead the list.
+        let labels = components.iter().map(|term| term.label).collect::<Vec<_>>();
+        assert_eq!(
+            labels,
+            [
+                WORD_INTEGER_MUL_POINT_LABEL,
+                WORD_INTEGER_MUL_PRODUCT_LABEL,
+                WORD_RELATION_BATCHING_LABEL,
+                WORD_ZEROCHECK_POINT_LABEL,
+                WORD_ZEROCHECK_ROUNDS_LABEL,
+                WORD_SHIFT_BATCHING_LABEL,
+                WORD_SHIFT_SUMCHECK_LABEL,
+            ]
+        );
+
+        // Seven batched terms under powers of one coefficient give the numerator six.
+        assert_eq!(components[2].bits.bits(), 128.0 - libm::log2(6.0) - 2.0);
+
+        // The products are drawn before the opening too, so they pay the candidate bound.
+        let expected = integer_mul.components();
+        assert_eq!(components[0].bits.bits(), expected[0].bits.bits() - 2.0);
+        assert_eq!(components[1].bits.bits(), expected[1].bits.bits() - 2.0);
     }
 
     #[test]

@@ -13,7 +13,7 @@ use p3_word::{Segment, Word};
 use super::error::WordProofError;
 use super::key::WordProofKey;
 use super::record::WordProof;
-use super::relation::{ZEROCHECK_DEGREE, closing_value};
+use super::relation::{ZEROCHECK_DEGREE, claimed_sum, closing_value};
 use super::transcript::ProofVerifierTranscript;
 
 impl<W: Word> WordProofKey<W> {
@@ -24,6 +24,7 @@ impl<W: Word> WordProofKey<W> {
     /// Returns an error when any of the following holds.
     ///
     /// - The statement has the wrong shape, or the commitment is too narrow for it.
+    /// - The multiplication record is missing, unexpected, or rejected.
     /// - The sampled batching coefficient vanishes.
     /// - A reduction or the final opening does not close.
     pub fn verify<F, EF, Pcs, Challenger>(
@@ -50,6 +51,9 @@ impl<W: Word> WordProofKey<W> {
                 actual: public.len(),
             });
         }
+        if proof.integer_mul.is_some() != self.integer_mul.is_some() {
+            return Err(WordProofError::ProductRecord);
+        }
 
         // The verifier reaches the prover's sponge state from the same commitment.
         pcs.observe_commitment(commitment, challenger);
@@ -59,12 +63,29 @@ impl<W: Word> WordProofKey<W> {
             self.transcript_shape(commitment_variables),
             public,
         );
+
+        // Every product claim is replayed and bound before either relation draw.
+        let replay =
+            transcript.integer_mul(|challenger| match (&self.integer_mul, &proof.integer_mul) {
+                (Some(reduction), Some(record)) => reduction.verify(record, challenger).map(Some),
+                _ => Ok(None),
+            });
+        let claims = match replay {
+            Ok(claims) => claims,
+            Err(error) => {
+                transcript.abort();
+                return Err(error.into());
+            }
+        };
         let (vanishing_point, batching) = transcript
             .challenges(variables)
             .ok_or(WordProofError::DegenerateBatching)?;
 
-        // A relation set that fails anywhere on the cube cannot sum to zero here.
-        if !proof.zerocheck.claimed_sum.is_zero() {
+        // The local terms vanish on the cube, so only the product claims may move the sum.
+        let expected = claims.as_ref().map_or(EF::ZERO, |claims| {
+            claimed_sum(&claims.each_ref().map(|claim| claim.value), batching)
+        });
+        if proof.zerocheck.claimed_sum != expected {
             transcript.abort();
             return Err(WordProofError::RelationSum);
         }
@@ -82,9 +103,21 @@ impl<W: Word> WordProofKey<W> {
         };
         transcript.finish();
 
-        // The equality factor is public and is evaluated from the sampled point directly.
+        // Every equality factor is public and is evaluated from its point directly.
         let equality = Point::eval_eq(&vanishing_point, point.as_slice());
-        if final_claim != closing_value(equality, &proof.operands, batching) {
+        let weights = match &claims {
+            Some(claims) => self
+                .product_points(&vanishing_point, claims)
+                .map(|weight| Point::eval_eq(&weight, point.as_slice())),
+            None => {
+                // Without products the product columns are zero, so their claims must be too.
+                if proof.operands[4..].iter().any(|value| !value.is_zero()) {
+                    return Err(WordProofError::RelationClaim);
+                }
+                [EF::ZERO; 4]
+            }
+        };
+        if final_claim != closing_value(equality, &weights, &proof.operands, batching) {
             return Err(WordProofError::RelationClaim);
         }
 
@@ -130,7 +163,7 @@ mod tests {
     };
 
     use super::*;
-    use crate::proof::prover::bit_table;
+    use crate::columns::bit_table;
     use crate::proof::relation::{OPERAND_EVALUATIONS, RelationZerocheck, ZEROCHECK_DEGREE};
     use crate::proof::transcript::{ProofProverTranscript, ProofVerifierTranscript};
     use crate::{OperationColumns, PackedWitness, PackedWord, ShiftReductionError, WordProofKey};
@@ -354,6 +387,7 @@ mod tests {
             key.transcript_shape(arity),
             &public_words,
         );
+        transcript.integer_mul(|_| {});
         let _ = transcript.challenges(variables).unwrap();
         let (point, _) = transcript
             .zerocheck(|challenger| {
@@ -389,7 +423,13 @@ mod tests {
             bitwise[2] += evaluate(relation.output(), row);
         }
 
-        assert_eq!(proof.operands, [linear, bitwise[0], bitwise[1], bitwise[2]]);
+        assert_eq!(
+            proof.operands[..4],
+            [linear, bitwise[0], bitwise[1], bitwise[2]]
+        );
+
+        // No product is declared, so the four product evaluations are zero.
+        assert_eq!(proof.operands[4..], [EF::ZERO; 4]);
     }
 
     #[test]
@@ -567,6 +607,7 @@ mod tests {
             key.transcript_shape(arity),
             &public_words,
         );
+        transcript.integer_mul(|_| {});
         let (vanishing_point, batching) = transcript.challenges(variables).unwrap();
 
         // Sum the batched relation over the cube directly, from the relation definition.
@@ -587,7 +628,7 @@ mod tests {
         assert_ne!(claimed, EF::ZERO, "a false statement has a nonzero sum");
 
         // Everything after the claimed sum is an honest run over that sum.
-        let mut prover = RelationZerocheck::new(equality, linear, bitwise, batching);
+        let mut prover = RelationZerocheck::new(equality, linear, bitwise, None, batching);
         let (zerocheck, point) = transcript.zerocheck(|challenger| {
             prover.prove::<EF, _>(challenger, variables, ZEROCHECK_DEGREE, 0, claimed)
         });
@@ -605,6 +646,7 @@ mod tests {
             )
             .unwrap();
         let forged = WordProof {
+            integer_mul: None,
             zerocheck,
             operands,
             shift,
@@ -619,6 +661,7 @@ mod tests {
             key.transcript_shape(arity),
             &public_words,
         );
+        verifier.integer_mul(|_| {});
         let (replayed_point, replayed_batching) = verifier.challenges(variables).unwrap();
         let (end, final_claim) = verifier
             .zerocheck(|challenger| {
@@ -632,6 +675,7 @@ mod tests {
             final_claim,
             closing_value(
                 Point::eval_eq(&replayed_point, end.as_slice()),
+                &[EF::ZERO; 4],
                 &forged.operands,
                 replayed_batching,
             )
