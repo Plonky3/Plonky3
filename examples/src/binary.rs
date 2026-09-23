@@ -716,11 +716,12 @@ impl Backend {
     /// The backend this build proves with.
     ///
     /// With a hardware carryless multiply, later rounds run in the polynomial basis, where a
-    /// product is that multiply alone and a tower product adds three changes of basis around it.
-    /// Without one, later rounds stay in the tower basis.
+    /// product is that multiply alone and a tower product adds three changes of basis around it,
+    /// and an eligible stage keeps its planes for one more round before its first residual is
+    /// built, at half the size. Without one, later rounds stay in the tower basis.
     pub const fn preferred() -> Self {
         if poly_basis::HAS_HARDWARE_CLMUL {
-            Self::PolyBasis
+            Self::PolyBasisLate
         } else {
             Self::Subfield
         }

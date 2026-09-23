@@ -50,8 +50,9 @@ struct Args {
     /// The field representation the zerocheck prover runs its later rounds in.
     ///
     /// Every choice proves and verifies the same statement and emits a byte-identical proof;
-    /// this only trades off performance. `auto` picks polynomial basis when the build has a
-    /// hardware carryless multiply, and subfield-tower basis otherwise.
+    /// this only trades off performance. `auto` picks polynomial basis with the delayed first
+    /// residual (`poly-basis-late`) when the build has a hardware carryless multiply, and
+    /// subfield-tower basis otherwise.
     #[arg(short, long, ignore_case = true, value_enum, default_value_t = RepresentationOptions::Auto)]
     representation: RepresentationOptions,
 
