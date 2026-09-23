@@ -40,15 +40,15 @@ tracing.workspace = true
 [dev-dependencies]
 criterion.workspace = true
 p3-baby-bear = { path = "../baby-bear" }
-p3-binary-field.workspace = true
-p3-binary-pcs.workspace = true
-p3-blake3-air.workspace = true
-p3-dft.workspace = true
-p3-keccak.workspace = true
-p3-merkle-tree.workspace = true
-p3-monty-31.workspace = true
-p3-poseidon2-air.workspace = true
-p3-whir.workspace = true
+p3-binary-field = { path = "../binary-field" }
+p3-binary-pcs = { path = "../binary-pcs" }
+p3-blake3-air = { path = "../blake3-air" }
+p3-dft = { path = "../dft" }
+p3-keccak = { path = "../keccak" }
+p3-merkle-tree = { path = "../merkle-tree" }
+p3-monty-31 = { path = "../monty-31" }
+p3-poseidon2-air = { path = "../poseidon2-air" }
+p3-whir = { path = "../whir" }
 proptest.workspace = true
 rand = { workspace = true }
 tracing-forest = { workspace = true, features = ["ansi", "smallvec"] }

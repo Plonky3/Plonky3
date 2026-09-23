@@ -31,11 +31,11 @@ serde = { workspace = true, features = ["derive", "alloc"] }
 thiserror.workspace = true
 
 [dev-dependencies]
-p3-baby-bear.workspace = true
-p3-binary-field.workspace = true
-p3-challenger = { workspace = true, features = ["test-utils"] }
-p3-keccak.workspace = true
-p3-matrix.workspace = true
+p3-baby-bear = { path = "../baby-bear" }
+p3-binary-field = { path = "../binary-field" }
+p3-challenger = { path = "../challenger", features = ["test-utils"] }
+p3-keccak = { path = "../keccak" }
+p3-matrix = { path = "../matrix" }
 
 criterion.workspace = true
 proptest.workspace = true
