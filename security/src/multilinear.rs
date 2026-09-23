@@ -116,6 +116,7 @@ pub fn bit_ring_switch_term(
 /// ```
 ///
 /// Reductions at different points share no challenge, so `k` of them union to `k` times that.
+/// Claims folded into one sumcheck pay this once, beside [`bit_ring_switch_claim_batching_error`].
 ///
 /// The commitment the surviving claims are discharged against charges its own budget.
 ///
@@ -169,6 +170,43 @@ pub fn bit_ring_switch_tensors_term(
             surviving_variables,
             field_bits,
         ),
+    )
+}
+
+/// Label for the challenge folding several bit ring-switch claims into one sumcheck.
+pub const BIT_RING_SWITCH_CLAIM_BATCHING_LABEL: &str = "bit-ring-switch-claim-batching";
+
+/// Error of folding `num_claims` bit ring-switch claims into one sumcheck under powers of lambda.
+///
+/// Every claim's elements are bound before lambda is drawn.
+/// A wrong element leaves a batched starting sum of degree `num_claims - 1` in lambda.
+///
+/// ```text
+///     error = (num_claims - 1) / |F|
+/// ```
+///
+/// The batch pays [`bit_ring_switch_tensors_error`] once, at `num_reductions = 1`, beside this.
+/// That replaces `num_claims` reductions, each with its own rounds.
+///
+/// # Arguments
+///
+/// - `num_claims`: claims folded together, one point each.
+/// - `field_bits`: bit width of the field lambda is drawn from.
+#[must_use]
+pub fn bit_ring_switch_claim_batching_error(num_claims: usize, field_bits: usize) -> ErrorBits {
+    // Zero or one claim draws no lambda.
+    if num_claims <= 1 {
+        return ErrorBits::from_log2(f64::INFINITY);
+    }
+    ErrorBits::from_log2(field_bits as f64 - log2((num_claims - 1) as f64))
+}
+
+/// The claim-batching term of a batch of bit ring-switch claims, labelled for a report.
+#[must_use]
+pub fn bit_ring_switch_claim_batching_term(num_claims: usize, field_bits: usize) -> SecurityTerm {
+    SecurityTerm::new(
+        BIT_RING_SWITCH_CLAIM_BATCHING_LABEL,
+        bit_ring_switch_claim_batching_error(num_claims, field_bits),
     )
 }
 
@@ -946,5 +984,40 @@ mod tests {
         assert!((three - (128.0 - libm::log2(17.0))).abs() < 1e-9);
         let term = bit_ring_switch_tensors_term(1, 3, 7, 4, 128);
         assert_eq!(term.label, BIT_RING_SWITCH_LABEL);
+    }
+
+    #[test]
+    fn claim_batching_charges_the_degree_of_lambda() {
+        // Invariant: k claims folded under powers of lambda cost (k - 1) / |F|.
+        //
+        //     k = 0, 1   ->  no lambda, nothing to charge
+        //     k = 5      ->  4 / 2^128, two bits below one draw
+        assert!(
+            bit_ring_switch_claim_batching_error(0, 128)
+                .bits()
+                .is_infinite()
+        );
+        assert!(
+            bit_ring_switch_claim_batching_error(1, 128)
+                .bits()
+                .is_infinite()
+        );
+        assert_eq!(bit_ring_switch_claim_batching_error(2, 128).bits(), 128.0);
+        let five = bit_ring_switch_claim_batching_error(5, 128).bits();
+        assert!((five - 126.0).abs() < 1e-9, "{five}");
+
+        // One batched reduction plus lambda beats k reductions of their own.
+        //
+        //     batched     (7 + 4 + 2 * 4) / 2^128  =  19 draws
+        //     per claim   5 * (7 + 2 * 4) / 2^128  =  75 draws
+        let batched = bit_ring_switch_error(1, 7, 4, 128).bits();
+        let separate = bit_ring_switch_error(5, 7, 4, 128).bits();
+        let union = -log2(libm::exp2(-batched) + libm::exp2(-five));
+        assert!((union - (128.0 - log2(19.0))).abs() < 1e-9, "{union}");
+        assert!(union > separate);
+
+        let term = bit_ring_switch_claim_batching_term(5, 128);
+        assert_eq!(term.label, BIT_RING_SWITCH_CLAIM_BATCHING_LABEL);
+        assert_eq!(term.bits.bits(), five);
     }
 }

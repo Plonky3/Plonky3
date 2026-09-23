@@ -14,18 +14,19 @@
 //!
 //! # Soundness
 //!
-//! Two errors compose by a union bound.
+//! Three errors compose by a union bound.
 //!
 //! ```text
-//!     commitment   the proximity argument's own budget, its claim batching included
-//!     reduction    one bit ring switch per claim
+//!     commitment       the proximity argument's own budget, at one opened point
+//!     reduction        one bit ring switch for every claim, its rounds run once
+//!     claim batching   the claims folded under powers of lambda
 //! ```
 //!
-//! Both come back labelled, so a report says which one is short.
+//! All come back labelled, so a report says which one is short.
 //!
-//! The reductions run before the proximity argument names one codeword.
+//! The batch runs before the proximity argument names one codeword.
 //!
-//! So each is charged over every candidate the commitment still leaves open.
+//! So it is charged over every candidate the commitment still leaves open.
 
 use alloc::vec;
 use alloc::vec::Vec;
@@ -36,9 +37,11 @@ use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingC
 use p3_commit::Mmcs;
 use p3_field::Field;
 use p3_multilinear_util::point::Point;
-use p3_security::multilinear::bit_ring_switch_tensors_term;
+use p3_security::multilinear::{bit_ring_switch_claim_batching_term, bit_ring_switch_tensors_term};
 use p3_sumcheck::layout::{Layout, SuffixProver};
-use p3_sumcheck::ring_switch::bits::{BitPacking, BitPackingView, BitRingSwitch};
+use p3_sumcheck::ring_switch::bits::{
+    BitPacking, BitPackingView, BitRingSwitch, BitRingSwitchClaims,
+};
 use p3_sumcheck::{
     OpeningBatch, OpeningProtocol, PrescribedOpeningSecurity, PrescribedPointPcs, TableShape,
     TableSpec,
@@ -137,6 +140,7 @@ where
     /// The opening schedule this many surviving claims are discharged through.
     ///
     /// One table of one column, opened directly at one point per claim.
+    /// A batch of claims leaves one surviving claim, whatever its size.
     fn protocol(&self, num_claims: usize) -> OpeningProtocol {
         OpeningProtocol::new(vec![TableSpec::new(
             TableShape::new(self.inner.num_variables(), 1),
@@ -144,6 +148,15 @@ where
                 .map(|_| OpeningBatch::new(vec![0], Vec::new()))
                 .collect(),
         )])
+    }
+
+    /// Every opening's reduction, gathered into the one batch that reduces them all.
+    fn claims(openings: &[BitOpening<EF>]) -> Result<BitRingSwitchClaims<EF>, BooleanWhirError> {
+        let reductions = openings
+            .iter()
+            .map(Self::reduction)
+            .collect::<Result<Vec<_>, _>>()?;
+        BitRingSwitchClaims::new(reductions).map_err(BooleanWhirError::Reduction)
     }
 
     /// The reduction answering every reading one opening asks for.
@@ -221,11 +234,12 @@ where
     /// Every labelled algebraic error one opening of this many claims charges.
     ///
     /// ```text
-    ///     commitment   the proximity argument's own budget, its claim batching included
-    ///     reduction    one bit ring switch per claim, batching its elements under one draw
+    ///     commitment       the proximity argument's own budget, at the one surviving point
+    ///     reduction        one batched bit ring switch, batching its elements under one draw
+    ///     claim batching   the claims folded under powers of lambda
     /// ```
     ///
-    /// The two are independent draws, so they compose by a union bound.
+    /// The terms are independent draws, so they compose by a union bound.
     ///
     /// The reduction is charged over every candidate the commitment leaves open.
     ///
@@ -242,18 +256,23 @@ where
         num_claims: usize,
         successor_tensors: bool,
     ) -> Option<PrescribedOpeningSecurity> {
-        let protocol = self.protocol(num_claims);
+        // Every claim of a batch survives as one claim, at one point.
+        let protocol = self.protocol(num_claims.min(1));
         let mut security = self.inner.prescribed_security(&protocol)?;
         // The tensor alone, or the tensor with carry and last.
         let num_tensors = if successor_tensors { 3 } else { 1 };
-        // The reductions run before one candidate is named, so they pay for every one left open.
+        // The batch runs before one candidate is named, so it pays for every one left open.
         security.charge_reduction(bit_ring_switch_tensors_term(
-            num_claims,
+            num_claims.min(1),
             num_tensors,
             BitRingSwitch::<EF>::ABSORBED,
             self.inner.num_variables(),
             EF::bits(),
         ));
+        // A single claim draws no lambda, so its report carries no batching term.
+        if num_claims > 1 {
+            security.charge_reduction(bit_ring_switch_claim_batching_term(num_claims, EF::bits()));
+        }
         Some(security)
     }
 
@@ -287,58 +306,46 @@ where
     ) -> Result<(Vec<BitReadings<EF>>, BooleanWhirProof<EF, MT>), BooleanWhirError> {
         self.check_openings(openings)?;
         // Every reduction is set up before any runs, so a refused one leaves the transcript alone.
-        let reductions = openings
-            .iter()
-            .map(Self::reduction)
-            .collect::<Result<Vec<_>, _>>()?;
+        let claims = Self::claims(openings)?;
         let packing = Self::packing(&prover_data);
 
-        let mut readings = Vec::with_capacity(openings.len());
-        let mut sent = Vec::with_capacity(openings.len());
-        let mut surviving_points = Vec::with_capacity(openings.len());
+        // One batch for every opening, leaving one claim about the packing.
+        let (reduction, surviving_point, _) =
+            tracing::info_span!("bit ring switch").in_scope(|| {
+                claims.prove::<<EF as ChallengeField<EF>>::SumcheckRepr, _, _>(&packing, challenger)
+            });
 
-        for (opening, reduction) in openings.iter().zip(&reductions) {
-            let (proof, surviving_point, _) =
-                tracing::info_span!("bit ring switch").in_scope(|| {
-                    reduction.prove::<<EF as ChallengeField<EF>>::SumcheckRepr, _, _>(
-                        &packing, challenger,
-                    )
-                });
+        // The elements each claim sends already hold its readings.
+        let readings = openings
+            .iter()
+            .zip(claims.reductions())
+            .zip(&reduction.claims)
+            .map(|((opening, switch), elements)| {
+                let current = opening
+                    .current
+                    .then(|| switch.incoming_claim(&elements.tensor));
+                let next = opening
+                    .next
+                    .then(|| switch.successor_claim(&elements.tensor, elements.successor.as_ref()))
+                    .transpose()
+                    .map_err(BooleanWhirError::Reduction)?;
+                Ok(BitReadings { current, next })
+            })
+            .collect::<Result<Vec<_>, BooleanWhirError>>()?;
 
-            // The elements the reduction sends already hold the witness's readings.
-            let current = opening
-                .current
-                .then(|| reduction.incoming_claim(&proof.tensor));
-            let next = opening
-                .next
-                .then(|| reduction.successor_claim(&proof.tensor, proof.successor.as_ref()))
-                .transpose()
-                .map_err(BooleanWhirError::Reduction)?;
-
-            readings.push(BitReadings { current, next });
-            surviving_points.push(surviving_point);
-            sent.push(proof);
-        }
-
-        // Each surviving value crosses the wire twice, and the closing check is that the two agree.
-        // Every surviving point came out of a reduction's rounds, so all are bound already.
+        // The surviving value crosses the wire twice, and the closing check is that the two agree.
+        // The surviving point came out of the batch's rounds, so it is bound already.
         let opening = self
             .inner
             .open_at(
                 prover_data,
-                &self.protocol(openings.len()),
-                &surviving_points,
+                &self.protocol(1),
+                &[surviving_point],
                 challenger,
             )
             .map_err(BooleanWhirError::Commit)?;
 
-        Ok((
-            readings,
-            BooleanWhirProof {
-                reductions: sent,
-                opening,
-            },
-        ))
+        Ok((readings, BooleanWhirProof { reduction, opening }))
     }
 
     /// Check one proof against the readings it claims at every opening.
@@ -359,11 +366,11 @@ where
         challenger: &mut Challenger,
     ) -> Result<(), BooleanWhirError> {
         self.check_openings(openings)?;
-        if readings.len() != openings.len() || proof.reductions.len() != openings.len() {
+        if readings.len() != openings.len() || proof.reduction.claims.len() != openings.len() {
             return Err(BooleanWhirError::ClaimCount {
                 expected: openings.len(),
                 values: readings.len(),
-                reductions: proof.reductions.len(),
+                reductions: proof.reduction.claims.len(),
             });
         }
         // The openings fix which readings are checked, so a missing one is never skipped.
@@ -377,44 +384,34 @@ where
         {
             return Err(BooleanWhirError::ReadingShape { index });
         }
-        let reductions = openings
+        let claims = Self::claims(openings)?;
+
+        // The batch turns every reading about the bits into one claim about the packing.
+        let readings = readings
             .iter()
-            .map(Self::reduction)
-            .collect::<Result<Vec<_>, _>>()?;
+            .map(|reading| (reading.current, reading.next))
+            .collect::<Vec<_>>();
+        let (surviving_point, surviving_value) = claims
+            .verify_readings(&proof.reduction, &readings, challenger)
+            .map_err(BooleanWhirError::ReductionProof)?;
 
-        let mut surviving_points = Vec::with_capacity(openings.len());
-        let mut surviving_values = Vec::with_capacity(openings.len());
-        for ((reduction, reading), sent) in reductions.iter().zip(readings).zip(&proof.reductions) {
-            let (surviving_point, surviving_value) = reduction
-                .verify_readings(sent, reading.current, reading.next, challenger)
-                .map_err(BooleanWhirError::ReductionProof)?;
-            surviving_points.push(surviving_point);
-            surviving_values.push(surviving_value);
-        }
-
-        // One commitment opening answers for every surviving point at once.
+        // One proximity opening pins the one surviving point to the committed polynomial.
         let evals = self
             .inner
             .verify_at(
                 commitment,
                 &proof.opening,
-                &self.protocol(openings.len()),
-                &surviving_points,
+                &self.protocol(1),
+                &[surviving_point],
                 challenger,
             )
             .map_err(BooleanWhirError::Opening)?;
 
-        // Each reduction closes against its own opened value.
-        if evals.len() != surviving_values.len() {
-            return Err(BooleanWhirError::SurvivingClaim);
+        // The batch closes against the value opened at its surviving point.
+        match evals.as_slice() {
+            [batch] if batch.current().first() == Some(&surviving_value) => Ok(()),
+            _ => Err(BooleanWhirError::SurvivingClaim),
         }
-        for (batch, &surviving) in evals.iter().zip(&surviving_values) {
-            if batch.current().first() != Some(&surviving) {
-                return Err(BooleanWhirError::SurvivingClaim);
-            }
-        }
-
-        Ok(())
     }
 }
 
