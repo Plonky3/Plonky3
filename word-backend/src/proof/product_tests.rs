@@ -30,7 +30,7 @@ type SchemeError = BooleanPcsError<EF, <MyMmcs as Mmcs<EF>>::Error>;
 type Commitment = <MyMmcs as Mmcs<EF>>::Commitment;
 type Record = WordProof<EF, EF, BooleanProof<EF, MyMmcs, MyMmcs>>;
 type Verdict = Result<(), WordProofError<SchemeError>>;
-type Mutation = (&'static str, fn(&mut Record));
+type Mutation = (&'static str, IntegerMulError, fn(&mut Record));
 
 /// Base-two logarithm of the bits one committed element holds.
 const ABSORBED: usize = 7;
@@ -382,46 +382,56 @@ fn every_multiplication_record_value_is_load_bearing() {
     let (commitment, proof) = fixture.prove();
 
     // Each mutation perturbs one value the multiplication record carries.
+    //
+    // Each names the first check that sees it, so a deleted check moves the variant.
     let mutations: [Mutation; 9] = [
-        ("root", |proof| {
+        ("root", IntegerMulError::EnteringClaim, |proof| {
             proof.integer_mul.as_mut().unwrap().root += EF::ONE;
         }),
-        ("factor leaf value", |proof| {
+        ("factor leaf value", IntegerMulError::LeafClaim, |proof| {
             proof.integer_mul.as_mut().unwrap().factor.values[1] += EF::ONE;
         }),
-        ("result leaf value", |proof| {
+        ("result leaf value", IntegerMulError::LeafClaim, |proof| {
             proof.integer_mul.as_mut().unwrap().result.values[0] += EF::ONE;
         }),
-        ("factor leaf round", |proof| {
+        ("factor leaf round", IntegerMulError::LeafClaim, |proof| {
             proof.integer_mul.as_mut().unwrap().factor.leaf.round_polys[0][0] += EF::ONE;
         }),
-        ("result leaf sum", |proof| {
+        ("result leaf sum", IntegerMulError::EnteringClaim, |proof| {
             proof.integer_mul.as_mut().unwrap().result.leaf.claimed_sum += EF::ONE;
         }),
-        ("first factor half", |proof| {
+        ("first factor half", IntegerMulError::LayerClaim, |proof| {
             proof.integer_mul.as_mut().unwrap().factor.layers[0].halves[0] += EF::ONE;
         }),
-        ("last result half", |proof| {
+        ("last result half", IntegerMulError::LayerClaim, |proof| {
             let layers = &mut proof.integer_mul.as_mut().unwrap().result.layers;
             layers.last_mut().unwrap().halves[1] += EF::ONE;
         }),
-        ("last factor layer round", |proof| {
-            let layers = &mut proof.integer_mul.as_mut().unwrap().factor.layers;
-            layers.last_mut().unwrap().sumcheck.round_polys[0][2] += EF::ONE;
-        }),
-        ("first result layer sum", |proof| {
-            let layers = &mut proof.integer_mul.as_mut().unwrap().result.layers;
-            layers[0].sumcheck.claimed_sum += EF::ONE;
-        }),
+        (
+            "last factor layer round",
+            IntegerMulError::LayerClaim,
+            |proof| {
+                let layers = &mut proof.integer_mul.as_mut().unwrap().factor.layers;
+                layers.last_mut().unwrap().sumcheck.round_polys[0][2] += EF::ONE;
+            },
+        ),
+        (
+            "first result layer sum",
+            IntegerMulError::EnteringClaim,
+            |proof| {
+                let layers = &mut proof.integer_mul.as_mut().unwrap().result.layers;
+                layers[0].sumcheck.claimed_sum += EF::ONE;
+            },
+        ),
     ];
 
-    for (name, mutate) in mutations {
+    for (name, expected, mutate) in mutations {
         let mut tampered = proof.clone();
         mutate(&mut tampered);
         let verdict = fixture.check(&commitment, &tampered);
         assert!(
-            is_product_rejection(&verdict),
-            "{name} must be rejected, got {verdict:?}"
+            matches!(&verdict, Err(WordProofError::IntegerMul(error)) if *error == expected),
+            "{name} must fail with {expected:?}, got {verdict:?}"
         );
     }
 
