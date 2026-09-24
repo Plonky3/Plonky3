@@ -1,6 +1,9 @@
-//! The constants BLAKE2s is defined by: its initialization vector and message schedule.
+//! The constants that define BLAKE2s, from RFC 7693.
 
-/// The initialization vector, the same eight words SHA-256 starts from.
+/// The initialization vector, from RFC 7693 section 2.6.
+///
+/// - Word `i` is the first 32 fractional bits of the square root of the `(i + 1)`-th prime.
+/// - These are the same eight words SHA-256 starts from.
 pub(crate) const IV: [u32; 8] = [
     0x6a09_e667,
     0xbb67_ae85,
@@ -12,10 +15,12 @@ pub(crate) const IV: [u32; 8] = [
     0x5be0_cd19,
 ];
 
-/// Which message word each of the sixteen G inputs reads, for each round.
+/// The message schedule, from RFC 7693 section 2.7.
 ///
-/// BLAKE3 permutes one schedule between rounds; BLAKE2s names all ten outright, and the
-/// tenth is not the ninth permuted, so the table is written out.
+/// Row `r` lists which message word each of the sixteen G inputs reads in round `r`.
+///
+/// Each row is a fixed permutation of `0..16`.
+/// The rows are not powers of one another, so all ten are written out.
 pub(crate) const SIGMA: [[usize; 16]; 10] = [
     [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
     [14, 10, 4, 8, 9, 15, 13, 6, 1, 12, 0, 2, 11, 7, 5, 3],

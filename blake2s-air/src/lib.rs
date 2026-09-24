@@ -1,9 +1,8 @@
-//! An AIR for the BLAKE2s compression function.
+//! An AIR for the BLAKE2s compression function over fields of characteristic 2.
 //!
-//! [`Blake2sBinaryAir`] works over fields of characteristic 2, where XOR is addition.
+//! BLAKE2s is the hash behind Lean Ethereum's XMSS signatures.
 //!
-//! BLAKE2s is the hash Lean Ethereum's XMSS signatures are built from, so its cost on the
-//! binary backend is the cost of verifying those signatures.
+//! Its proving cost is therefore the cost of verifying those signatures.
 
 #![no_std]
 
