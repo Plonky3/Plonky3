@@ -17,6 +17,12 @@ Key items:
 - `Ghash128` — `GF(2^128)` in the GHASH polynomial basis, with `From` conversions to and from the widest tower level, and an `Algebra<BinaryField128>` action whose results stay in the polynomial basis
 - `PackedGhash128` — the SIMD packing, two elements per register on `avx2` and four on `avx512f`,
   in both cases only when `vpclmulqdq` is also enabled, so it is absent from the rendered docs
+- `Poly64` — `GF(2^64)` in the polynomial basis of `x^64 + x^4 + x^3 + x + 1`
+- `Poly192` — `GF(2^192)` as the cubic extension `y^3 + y + 1` of `Poly64`
+- `PackedPoly64` — the packing of `Poly64`, four elements per 256-bit register, under the same
+  `vpclmulqdq` condition
+- `PackedPoly192` — the extension packing of `Poly192` over `PackedPoly64`, one register per
+  coordinate, under the same condition
 - `BasedVectorSpace` / `ExtensionField` between every pair of byte-aligned tower levels, in the tower basis
 - `BinaryChallenger` — Fiat–Shamir over a byte challenger; every bit pattern is a field element, so no rejection sampling is needed
 - Carryless-multiply fast paths on x86-64 (`pclmulqdq`, `vpclmulqdq`) and AArch64 (`aes`), with a software backend everywhere else
@@ -52,9 +58,22 @@ constructors.
 `TowerLevel` exposes the tower structure and typed generator multiplication.
 
 The tower levels are unpacked: `Packing` is `Self` at every one of them, because a tower
-product is table lookups that no vector unit widens. Only `Ghash128` has a packing; its
-polynomial slice kernels process independent SIMD products while preserving the scalar field
-layout.
+product is table lookups that no vector unit widens.
+
+The polynomial-basis fields pack wherever `vpclmulqdq` widens the multiply:
+
+- `Ghash128` packs one element per 128-bit lane.
+- `Poly64` packs one element per quadword, so a product is two carryless multiplies per register.
+- `Poly192` packs over `Poly64` with one register per coordinate, so twelve carryless multiplies
+  make four products.
+
+`GF(2^64)` stays at 256 bits even with `avx512f`.
+A prover keeps one packed value per trace column, and a 512-bit `GF(2^192)` value is 192 bytes.
+Measured end to end on Zen 5, the smaller footprint beats twice the products per instruction.
+
+Reductions modulo the `GF(2^64)` polynomial use shifts and one byte shuffle, never a multiply.
+Dot products at every level accumulate unreduced products and reduce the sum once.
+Without a wide carryless multiply every one of these fields is its own packing.
 
 GHASH coordinates assign the coefficient of `x^i` to bit `i` of the backing integer.
 NIST GCM blocks assign `x^0` to the leftmost bit instead.
@@ -70,6 +89,11 @@ GHASH inversion, tower arithmetic, and conversions between the two bases use ope
 These operations are not constant-time and should not process secrets when cache or timing leakage matters.
 Hardware GHASH inversion uses five precomputed maps, totaling 320 KiB of read-only tables.
 Software GHASH inversion uses the tower norm instead, and does not compile those tables.
+
+`Poly64` and `Poly192` multiplication, squaring and inversion use no operand-indexed tables.
+With `gfni`, `avx512f`, `avx512bw` and `avx512vbmi`, each run of squarings in the `GF(2^64)`
+inversion chain is one bit-matrix product on the byte-affine instruction.
+Its matrices are compile-time constants read whole, so the chain stays constant-time.
 
 Hardware dispatch is selected at compile time, so this `no_std` crate performs no CPU checks
 inside scalar arithmetic. `poly_basis::HAS_HARDWARE_CLMUL` describes that compiled choice.

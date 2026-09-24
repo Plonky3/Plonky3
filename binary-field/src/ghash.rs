@@ -298,7 +298,7 @@ impl Field for Ghash128 {
     //
     // Without a packing the alias resolves to this type itself, which is why the lint is off.
     #[allow(clippy::use_self)]
-    type Packing = crate::packed::Packing;
+    type Packing = crate::packed::Ghash128Packing;
 
     const GENERATOR: Self = Self(clmul::tower_image_128(TOWER_GENERATOR));
 
