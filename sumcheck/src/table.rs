@@ -176,10 +176,16 @@ impl TableSpec {
         // Invariant: a column appears at most once per side of a batch.
         // Opening one column on both sides is intended.
         // Repeating it within one side only burns a challenge power on a duplicate claim.
+        //
+        // A side can name thousands of columns, so check a sorted copy for repeats.
+        // A side already in increasing order has none and skips the copy.
         let side_has_no_repeat = |cols: &[usize]| {
-            cols.iter()
-                .enumerate()
-                .all(|(i, col)| !cols[..i].contains(col))
+            if cols.is_sorted_by(|a, b| a < b) {
+                return true;
+            }
+            let mut sorted = cols.to_vec();
+            sorted.sort_unstable();
+            sorted.windows(2).all(|pair| pair[0] != pair[1])
         };
         assert!(
             point_schedule.iter().all(
@@ -577,6 +583,20 @@ mod tests {
         let _ = TableSpec::new(
             TableShape::new(3, 2),
             vec![OpeningBatch::new(vec![0, 0], Vec::new())],
+        );
+    }
+
+    #[test]
+    #[should_panic]
+    fn table_spec_new_panics_on_non_adjacent_duplicate_column_in_next_side() {
+        // Invariant:
+        //     A repeat is rejected wherever it sits in a side, not only next to its twin.
+        //
+        // Fixture state:
+        //     width = 3; the successor-view side names column 1 at both ends.
+        let _ = TableSpec::new(
+            TableShape::new(3, 3),
+            vec![OpeningBatch::new(vec![0], vec![1, 0, 1])],
         );
     }
 
