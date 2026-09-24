@@ -10,7 +10,11 @@ The machine's own chips are the copy in issuing order, and the plan's ordinary m
 
 `RamAir` constrains the sorted copy: cell and clock digits, unsigned non-wrapping order, read continuity, write updates, and the boundary its `RamBoundary` names.
 
-No second memory protocol is introduced, and static indexed tables keep the lookup path they already had.
+A second, timestamped read-write memory serves tables whose rows come in no particular order.
+
+Its clock is a power of a generator, and each access proves a strictly positive gap through two fixed read-only range tables.
+
+Static indexed tables keep the lookup path they already had.
 
 Its debugger replays symbolic declarations and reports unmatched tuples with their source rows.
 
