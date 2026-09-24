@@ -108,6 +108,7 @@ pub(crate) fn broadcast(value: u128) -> Reg {
 /// # Safety
 ///
 /// The address must be readable for 32 bytes.
+///
 /// No alignment is required.
 #[inline(always)]
 pub(crate) unsafe fn load(from: *const u128) -> Reg {
@@ -120,6 +121,7 @@ pub(crate) unsafe fn load(from: *const u128) -> Reg {
 /// # Safety
 ///
 /// The address must be writable for 32 bytes.
+///
 /// No alignment is required.
 #[inline(always)]
 pub(crate) unsafe fn store(to: *mut u128, value: Reg) {

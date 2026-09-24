@@ -193,6 +193,7 @@ impl Algebra<Gf2> for PackedPoly64 {}
 impl_packed_value!(PackedPoly64, Poly64, WIDTH_64);
 
 // SAFETY: the transparent array satisfies the packed layout contract.
+//
 // Arithmetic acts independently on each quadword.
 unsafe impl PackedField for PackedPoly64 {
     type Scalar = Poly64;

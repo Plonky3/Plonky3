@@ -1,6 +1,7 @@
 //! The packing of the polynomial-basis `GF(2^128)` over the wide carryless multiply.
 //!
 //! `VPCLMULQDQ` applies the carryless multiply to every 128-bit lane of a wide register.
+//!
 //! One field element is exactly one lane, so the scalar kernel becomes the packed one.
 //!
 //! Every other operation is exclusive or, a lane-local shift, or a permutation of lanes.
@@ -39,8 +40,10 @@ impl PackedGhash128 {
     #[inline]
     #[must_use]
     fn to_vector(self) -> lanes::Reg {
-        // SAFETY: the scalar is `repr(transparent)` over `u128`, so the array is `WIDTH`
-        // contiguous `u128` values, which is the register's own layout.
+        // SAFETY: the scalar is `repr(transparent)` over `u128`.
+        //
+        // So the array is `WIDTH` contiguous `u128` values, the register's own layout.
+        //
         // This type is `repr(transparent)` over that array.
         unsafe { transmute(self) }
     }
@@ -49,6 +52,7 @@ impl PackedGhash128 {
     #[inline]
     fn from_vector(vector: lanes::Reg) -> Self {
         // SAFETY: the inverse of the transmute above.
+        //
         // Every bit pattern is a valid element, so no value can be out of range.
         unsafe { transmute(vector) }
     }
@@ -115,8 +119,10 @@ impl Mul for PackedGhash128 {
         //     middle = (a0 + a1)(b0 + b1) + a0 b0 + a1 b1
         //
         // The scalar kernel takes the schoolbook form instead.
-        // A wide carryless multiply has half the throughput of the 128-bit one on Zen 4 and
-        // Zen 5, so trading a product for two shuffles and three exclusive ors pays only here.
+        //
+        // A wide carryless multiply has half the throughput of the 128-bit one on Zen 4 and 5.
+        //
+        // So trading a product for two shuffles and three exclusive ors pays only here.
         //
         // Measured on Zen 5, four lanes: 0.47 ns per element against 0.55 for schoolbook.
         let mixed_x = lanes::xor(x, lanes::swap_halves(x));
@@ -152,16 +158,18 @@ impl PrimeCharacteristicRing for PackedGhash128 {
     fn square(&self) -> Self {
         let x = self.to_vector();
 
-        // The cross term of `(p0 + p1 x^64)^2` doubles to zero, so the square has no middle
-        // coefficient and the inner fold has nothing to add to.
+        // The cross term of `(p0 + p1 x^64)^2` doubles to zero.
+        //
+        // So the square has no middle coefficient, and the inner fold has nothing to add to.
         let low = lanes::clmul::<LOW_BY_LOW>(x, x);
         let high = lanes::clmul::<HIGH_BY_HIGH>(x, x);
 
         Self::from_vector(fold_shifted(low, fold_shifted(lanes::zero(), high)))
     }
 
-    /// `x·(x - 1) = x² - x = x² + x` in characteristic 2, and [`Self::square`] skips the
-    /// cross-term carryless multiplies a general product pays for.
+    /// `x (x - 1) = x^2 - x = x^2 + x` in characteristic 2.
+    ///
+    /// A square skips the cross-term carryless multiplies a general product pays for.
     #[inline]
     fn bool_check(&self) -> Self {
         self.square() + *self
@@ -224,8 +232,9 @@ impl Algebra<Gf2> for PackedGhash128 {}
 impl From<BinaryField128> for PackedGhash128 {
     /// The same field element, seen in the polynomial basis, in every lane.
     ///
-    /// The change of basis is a field isomorphism, so it makes this packing an algebra over
-    /// the tower, exactly as it does for one lane's [`Ghash128`].
+    /// The change of basis is a field isomorphism.
+    ///
+    /// So this packing is an algebra over the tower, exactly as one lane is.
     #[inline]
     fn from(x: BinaryField128) -> Self {
         Self::broadcast(Ghash128::from(x))
@@ -241,6 +250,7 @@ impl Algebra<BinaryField128> for PackedGhash128 {}
 impl_packed_value!(PackedGhash128, Ghash128, WIDTH);
 
 // SAFETY: the transparent array satisfies the packed layout contract.
+//
 // Arithmetic acts independently on each 128-bit field element.
 unsafe impl PackedField for PackedGhash128 {
     type Scalar = Ghash128;
@@ -374,8 +384,9 @@ mod tests {
         //
         // That includes the squaring-shaped case where both operands are the same value.
         //
-        // The other lanes rotate through the corners, so a value that crosses a lane
-        // boundary lands on a different extreme and shows as a mismatch.
+        // The other lanes rotate through the corners.
+        //
+        // A value that crosses a lane boundary then lands on a different extreme and mismatches.
         for (i, &x) in SPECIAL.iter().enumerate() {
             for (j, &y) in SPECIAL.iter().enumerate() {
                 let a = core::array::from_fn(|lane| match lane {
@@ -412,16 +423,17 @@ mod tests {
         }
     }
 
-    /// The squaring shortcut must answer what the general product answers, lane by lane.
-    ///
-    /// `bool_check` is taken on every booleanity constraint an AIR states, so the register
-    /// takes the shortcut the scalar already does. The corners cover the two roots the check
-    /// exists to accept, and the patterns whose reduction is extreme.
     #[test]
     fn bool_check_matches_the_general_product_in_every_lane() {
+        // Invariant: the squaring shortcut answers what the general product answers.
+        //
+        // Every booleanity constraint an AIR states takes this shortcut.
+        //
+        // The corners cover the two roots the check accepts and the extreme reductions.
         for (index, &value) in SPECIAL.iter().enumerate() {
-            // Lane 0 carries the value under test; the rest rotate through the corners, so a
-            // result that crossed a lane boundary lands on a different extreme.
+            // Lane 0 carries the value under test.
+            //
+            // The rest rotate through the corners, so a lane-crossing result lands elsewhere.
             let lanes: [Ghash128; WIDTH] = core::array::from_fn(|lane| {
                 let pattern = if lane == 0 {
                     value
