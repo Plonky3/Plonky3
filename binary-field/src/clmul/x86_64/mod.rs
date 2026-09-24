@@ -34,14 +34,16 @@ pub(crate) use ghash::{poly_dot_128, poly_mul_128, poly_mul_128_by_64, poly_squa
 /// The carryless product of two 64-bit polynomials over `GF(2)`.
 ///
 /// The instruction accumulates `b << i` for every set bit `i` of `a`.
+///
 /// Bit `j` of the result is therefore the coefficient of `x^j`.
 #[inline]
 pub(super) fn clmul_64x64(a: u64, b: u64) -> u128 {
-    // SAFETY: this module is compiled only when `target_feature = "pclmulqdq"` is enabled for
-    // the crate, which is what the carryless multiply requires.
+    // SAFETY: this module compiles only with `pclmulqdq`, which the carryless multiply needs.
+    //
     // The remaining intrinsics are `sse2`, always available on `x86_64`.
     unsafe {
         // Arguments run from the highest lane down.
+        //
         // The operand goes second and the unused high lane first.
         let a = _mm_set_epi64x(0, a as i64);
         let b = _mm_set_epi64x(0, b as i64);

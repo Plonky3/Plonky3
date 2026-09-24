@@ -37,6 +37,7 @@ const LOW_BY_HIGH: i32 = 0x10;
 /// ```
 ///
 /// The first term is a byte-wise shift by eight.
+///
 /// The second has degree at most `63 + 7`, so nothing overflows again.
 ///
 /// # Safety
@@ -75,12 +76,14 @@ unsafe fn fold_shifted(t0: __m128i, t1: __m128i) -> __m128i {
 /// # Performance
 ///
 /// Every intermediate stays in a vector register.
+///
 /// The general-purpose file has no 128-bit shift.
+///
 /// Folding there costs several instructions per step instead of one.
 #[inline]
 pub(crate) fn poly_mul_128(a: u128, b: u128) -> u128 {
-    // SAFETY: this module is compiled only when `target_feature = "pclmulqdq"` is enabled for
-    // the crate.
+    // SAFETY: this module compiles only with `pclmulqdq`, which the carryless multiply needs.
+    //
     // The remaining intrinsics are `sse2`, always available on `x86_64`.
     unsafe {
         let x = transmute::<u128, __m128i>(a);
@@ -104,6 +107,7 @@ pub(crate) fn poly_mul_128(a: u128, b: u128) -> u128 {
 /// Squaring in `GF(2^128)`, taking and returning the polynomial representation.
 ///
 /// The cross term of `(p0 + p1 x^64)^2` is `2 p0 p1`, which vanishes in characteristic 2.
+///
 /// The 256-bit square is therefore `p0^2 + p1^2 x^128`, with nothing between the halves.
 #[inline]
 pub(crate) fn poly_square_128(a: u128) -> u128 {
@@ -128,6 +132,7 @@ pub(crate) fn poly_square_128(a: u128) -> u128 {
 #[inline]
 pub(crate) fn poly_dot_128(pairs: impl Iterator<Item = (u128, u128)>) -> u128 {
     // SAFETY: this module requires PCLMULQDQ and x86-64 supplies SSE2.
+    //
     // Every bit pattern is valid in both the integer and vector representations.
     unsafe {
         let mut low = _mm_setzero_si128();

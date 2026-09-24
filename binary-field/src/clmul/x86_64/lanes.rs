@@ -18,7 +18,9 @@ use crate::clmul::wide::TOP_NIBBLE_FOLD;
 const XOR3: i32 = 0x96;
 
 // SAFETY for every method below: this module is compiled only when `pclmulqdq` is enabled.
+//
 // `sse2` is part of the `x86_64` baseline.
+//
 // The shuffle and ternary arms are compiled only under the features they require.
 impl Lanes64 for __m128i {
     #[inline(always)]
