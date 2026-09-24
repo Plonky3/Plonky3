@@ -685,7 +685,10 @@ fn each_route_emits_the_reductions_its_plan_counts() {
     //     every column, both rows, two batches   batched      2 reductions
     //     current [2, 0]                         per column   2 reductions
     //     current [0, 1, 2], next [1]            per column   3 reductions
-    //     two tables, every column               per column   3 + 2 reductions
+    //     two tables, every column               batched      2 + 1 reductions
+    //
+    // The first table's three slots split into blocks of two and one.
+    // The second table ends the stack, so its two slots are one block.
     let shape = TableShape::new(8, 3);
     let two_tables = [shape, TableShape::new(6, 2)];
     let reordered = OpeningProtocol::new(vec![TableSpec::new(
@@ -703,7 +706,7 @@ fn each_route_emits_the_reductions_its_plan_counts() {
             3,
             0xB730,
         ),
-        (two_tables.to_vec(), protocol(&two_tables), false, 5, 0xB740),
+        (two_tables.to_vec(), protocol(&two_tables), true, 3, 0xB740),
     ] {
         let route = OpeningRoute::new(&protocol);
         assert_eq!(
@@ -1863,4 +1866,125 @@ fn a_forged_next_value_is_rejected_at_every_position() {
             );
         }
     }
+}
+
+proptest::proptest! {
+    #![proptest_config(proptest::prelude::ProptestConfig::with_cases(24))]
+
+    #[test]
+    fn complete_batches_over_several_tables_share_one_reduction_per_block(
+        tables in proptest::collection::vec((3usize..9, 1usize..9, proptest::bool::ANY), 2..5),
+        batches in 1usize..3,
+        seed in proptest::prelude::any::<u64>(),
+        tampered in proptest::prelude::any::<proptest::sample::Index>(),
+    ) {
+        // Invariant: every table's batches are complete, so the route is batched.
+        //
+        // Each batch raises one claim per aligned block of its table's column slots.
+        //
+        // The opened values are each column's own multilinear, and a moved one is refused.
+        let shapes: Vec<TableShape> = tables
+            .iter()
+            .map(|&(rows, width, _)| TableShape::new(rows, width))
+            .collect();
+        proptest::prop_assume!(plan_stacked_layout(&shapes).0 > 7);
+        let protocol = OpeningProtocol::new(
+            shapes
+                .iter()
+                .zip(&tables)
+                .map(|(shape, &(_, width, next))| {
+                    let all: Vec<usize> = (0..width).collect();
+                    let successor = if next { all.clone() } else { Vec::new() };
+                    TableSpec::new(
+                        *shape,
+                        (0..batches)
+                            .map(|_| OpeningBatch::new(all.clone(), successor.clone()))
+                            .collect(),
+                    )
+                })
+                .collect(),
+        );
+        let route = OpeningRoute::new(&protocol);
+        let OpeningRoute::Batched(runs) = &route else {
+            panic!("a complete protocol takes the batched route");
+        };
+        // The blocks of one table cover each of its columns exactly once.
+        for run in runs {
+            let mut covered = vec![0usize; run.shape.width];
+            for block in &run.blocks {
+                let stop = (block.first + (1 << block.variables)).min(run.shape.width);
+                for count in &mut covered[block.first..stop] {
+                    *count += 1;
+                }
+            }
+            proptest::prop_assert!(covered.iter().all(|&count| count == 1));
+        }
+
+        let scheme = pcs(&shapes);
+        let sources: Vec<Table<EF>> = shapes
+            .iter()
+            .enumerate()
+            .map(|(index, shape)| {
+                table_with_width(seed ^ index as u64, shape.num_variables(), shape.width())
+            })
+            .collect();
+        let mut rng = SmallRng::seed_from_u64(seed);
+        let points: Vec<Point<EF>> = protocol
+            .iter_openings()
+            .map(|(table, _)| Point::rand(&mut rng, shapes[table].num_variables()))
+            .collect();
+
+        let mut prover_chal = challenger();
+        let (commitment, data) = scheme.commit(sources.clone(), &mut prover_chal).unwrap();
+        let mut proof = scheme
+            .open_at(data, &protocol, &points, &mut prover_chal)
+            .unwrap();
+        proptest::prop_assert_eq!(proof.opening.reduction.claims.len(), route.num_reductions());
+
+        let mut verifier_chal = challenger();
+        scheme.observe_commitment(&commitment, &mut verifier_chal);
+        let evals = scheme
+            .verify_at(&commitment, &proof, &protocol, &points, &mut verifier_chal)
+            .unwrap();
+        for ((table, _), (batch, point)) in protocol.iter_openings().zip(evals.iter().zip(&points)) {
+            for (column, &value) in batch.current().iter().enumerate() {
+                let cells = sources[table].poly(column).as_slice().to_vec();
+                proptest::prop_assert_eq!(value, Poly::new(cells.clone()).eval_base(point));
+                if tables[table].2 {
+                    proptest::prop_assert_eq!(batch.next()[column], successor_reading(&cells, point));
+                }
+            }
+        }
+
+        // Every claimed value feeds one block's combined claim, so moving any is caught.
+        let at = tampered.index(proof.values.len());
+        proof.values[at] += EF::ONE;
+        let mut verifier_chal = challenger();
+        scheme.observe_commitment(&commitment, &mut verifier_chal);
+        proptest::prop_assert!(
+            scheme
+                .verify_at(&commitment, &proof, &protocol, &points, &mut verifier_chal)
+                .is_err()
+        );
+    }
+}
+
+#[test]
+fn a_batched_run_over_several_tables_charges_every_block() {
+    // Two tables: three slots split into blocks of two and one, then one block of two.
+    //
+    //     claims = 2 + 1 blocks, one view each, one batch each  ->  3 * 2 / 2^128
+    let shapes = [TableShape::new(8, 3), TableShape::new(6, 2)];
+    let scheme = pcs(&shapes);
+    let security = <BooleanTracePcs<EF, MyMmcs, MyMmcs> as PrescribedPointPcs<
+        EF,
+        MyChallenger,
+    >>::prescribed_security(&scheme, &protocol(&shapes))
+    .unwrap();
+    let batching = security
+        .terms
+        .iter()
+        .find(|term| term.label == "column-batching")
+        .unwrap();
+    assert!((batching.bits.bits() - (128.0 - 6f64.log2())).abs() < 1e-9);
 }

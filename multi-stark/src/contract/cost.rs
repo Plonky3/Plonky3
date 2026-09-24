@@ -244,6 +244,7 @@ mod tests {
         let widest = TableDeclaration::shaped(
             ColumnCounts {
                 committed: MAX_COLUMNS,
+                boolean: 0,
                 preprocessed: 0,
                 public: 0,
             },
@@ -268,6 +269,7 @@ mod tests {
         let tables = [TableDeclaration::shaped(
             ColumnCounts {
                 committed: 1,
+                boolean: 0,
                 preprocessed: 0,
                 public: 0,
             },

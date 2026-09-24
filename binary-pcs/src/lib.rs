@@ -11,6 +11,7 @@ mod boolean_trace_transcript;
 mod error;
 mod fold;
 mod grouped_mmcs;
+mod mixed_trace;
 mod packing;
 mod params;
 mod pcs;
@@ -36,6 +37,9 @@ pub use boolean_trace::{
 pub use error::BinaryPcsError;
 pub use fold::{ChallengeField, FoldAlphabet, fold_codeword, fold_pair};
 pub use grouped_mmcs::GroupedCodewordMmcs;
+pub use mixed_trace::{
+    MixedTraceCommitment, MixedTraceData, MixedTracePcs, committed_shapes, coordinate_basis,
+};
 pub use packing::{Coordinates, PackError, PackedStack, coordinate_bytes, pack, unpack};
 pub use params::{BinaryPcsConfig, BinaryPcsConfigError, BinaryPcsParams};
 pub use pcs::BinaryPcs;

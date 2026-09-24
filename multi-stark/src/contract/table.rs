@@ -57,6 +57,10 @@ pub struct FlushDeclaration {
 pub struct ColumnCounts {
     /// Columns committed once per proof.
     pub committed: usize,
+    /// Leading committed columns that hold bits, committed one bit per cell.
+    ///
+    /// The other committed columns hold field elements.
+    pub boolean: usize,
     /// Columns fixed by the statement and committed once at setup.
     pub preprocessed: usize,
     /// Values supplied in the clear alongside the proof.
@@ -234,6 +238,7 @@ impl TableDeclaration {
         Self {
             columns: ColumnCounts {
                 committed: table.width(),
+                boolean: table.boolean_columns(),
                 preprocessed: table.preprocessed_width(),
                 public: table.num_public_values(),
             },
@@ -322,6 +327,7 @@ impl TableDeclaration {
         let read = Self::from_constraints::<F, EF, A>(table, self.heights);
         [
             (self.columns.committed != read.columns.committed).then_some("the committed columns"),
+            (self.columns.boolean != read.columns.boolean).then_some("the bit columns"),
             (self.columns.preprocessed != read.columns.preprocessed)
                 .then_some("the preprocessed columns"),
             (self.columns.public != read.columns.public).then_some("the public values"),
@@ -364,6 +370,12 @@ impl TableDeclaration {
             MAX_COLUMNS,
         )?;
         check("public value count", self.columns.public, MAX_COLUMNS)?;
+        // The bit region is a prefix of the committed columns.
+        check(
+            "bit column count",
+            self.columns.boolean,
+            self.columns.committed,
+        )?;
         check("constraint count", self.constraints.count, MAX_CONSTRAINTS)?;
         check(
             "constraint degree",
@@ -405,6 +417,7 @@ impl TableDeclaration {
     /// Absorb everything this table fixes into a statement fingerprint.
     pub(super) fn absorb(&self, preimage: &mut Preimage) {
         preimage.usize(self.columns.committed);
+        preimage.usize(self.columns.boolean);
         preimage.usize(self.columns.preprocessed);
         preimage.usize(self.columns.public);
         preimage.usize(self.constraints.count);
@@ -563,6 +576,43 @@ mod tests {
                 limit: 1_048_576,
             }
         );
+    }
+
+    #[test]
+    fn a_bit_region_wider_than_the_table_is_refused() {
+        // The bit region is a prefix of the committed columns, so it cannot outgrow them.
+        let columns = |boolean| ColumnCounts {
+            committed: 4,
+            boolean,
+            ..ColumnCounts::default()
+        };
+        let table = |boolean| TableDeclaration::shaped(columns(boolean), HeightRange::exactly(4));
+        assert!(table(4).validate(0).is_ok());
+        assert_eq!(
+            table(5).validate(1).unwrap_err(),
+            DeclarationError::AboveLimit {
+                table: 1,
+                what: "bit column count",
+                found: 5,
+                limit: 4,
+            }
+        );
+    }
+
+    #[test]
+    fn where_the_bit_region_ends_reaches_the_fingerprint() {
+        // Two tables alike but for the split must not absorb the same bytes.
+        let absorb = |boolean| {
+            let columns = ColumnCounts {
+                committed: 4,
+                boolean,
+                ..ColumnCounts::default()
+            };
+            let mut preimage = Preimage::new(b"test");
+            TableDeclaration::shaped(columns, HeightRange::exactly(4)).absorb(&mut preimage);
+            preimage.finish(&Keccak256Hash)
+        };
+        assert_ne!(absorb(0), absorb(3));
     }
 
     #[test]
