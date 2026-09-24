@@ -192,7 +192,8 @@ impl PrivateRegion {
     /// Index of the last cell.
     #[must_use]
     pub const fn last_cell(&self) -> usize {
-        self.first_cell + (1 << self.log_cells) - 1
+        // Add the span, not the length: a region may end exactly at `usize::MAX`.
+        self.first_cell + ((1 << self.log_cells) - 1)
     }
 
     /// Index of the first cell.

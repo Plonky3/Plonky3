@@ -699,6 +699,26 @@ fn a_seeded_block_pins_its_height() {
 }
 
 #[test]
+fn a_private_region_may_end_at_the_last_machine_word() {
+    // A single cell at the top index is its own first and last cell.
+    let top = PrivateRegion::new(usize::MAX, 0).unwrap();
+    assert_eq!(top.last_cell(), usize::MAX);
+
+    // The widest region ending at the top index.
+    let log_cells = usize::BITS as usize - 1;
+    let first_cell = usize::MAX - ((1 << log_cells) - 1);
+    let widest = PrivateRegion::new(first_cell, log_cells).unwrap();
+    assert_eq!(widest.last_cell(), usize::MAX);
+
+    // One cell further would end past the top index.
+    assert_eq!(PrivateRegion::new(usize::MAX, 1), None);
+    assert_eq!(PrivateRegion::new(first_cell + 1, log_cells), None);
+
+    // A region of `2^BITS` cells cannot be counted in a machine word.
+    assert_eq!(PrivateRegion::new(0, usize::BITS as usize), None);
+}
+
+#[test]
 fn a_public_image_refuses_malformed_runs() {
     let log_cells = CELLS.trailing_zeros() as usize;
     let image = |runs| PublicImage::new(&memory(), log_cells, runs);
