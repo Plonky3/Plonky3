@@ -101,7 +101,7 @@ impl Blake2sBinaryAir {
     ///
     /// It does not change the resulting bits.
     pub fn generate_random_trace_packed<F: Field>(&self, num_hashes: usize) -> RowMajorMatrix<u64> {
-        generate_binary_trace_packed::<F>(random_inputs(num_hashes))
+        generate_binary_trace_packed::<F>(&random_inputs(num_hashes))
     }
 }
 

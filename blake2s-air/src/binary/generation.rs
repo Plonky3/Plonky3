@@ -106,9 +106,8 @@ pub fn generate_binary_trace_rows<F: Field>(
 /// - There are no inputs.
 /// - The number of inputs is not a power of two.
 #[instrument(name = "generate packed BLAKE2s binary trace", skip_all)]
-#[allow(clippy::needless_pass_by_value)]
 pub fn generate_binary_trace_packed<F: Field>(
-    inputs: Vec<Blake2sCompressionInput>,
+    inputs: &[Blake2sCompressionInput],
 ) -> RowMajorMatrix<u64> {
     // XOR is field addition only when 1 + 1 = 0.
     assert_eq!(

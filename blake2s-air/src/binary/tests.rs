@@ -482,8 +482,8 @@ fn packed_trace_matches_dense_trace_at_word_boundaries() {
     for height in [1usize, 2, 32, 64, 128] {
         let random = random_compression_inputs(&mut rng, height);
         for inputs in [random, vec![all_ones; height]] {
-            let dense = generate_binary_trace_rows::<F>(inputs.clone(), 0);
-            let packed = generate_binary_trace_packed::<F>(inputs);
+            let packed = generate_binary_trace_packed::<F>(&inputs);
+            let dense = generate_binary_trace_rows::<F>(inputs, 0);
             assert_eq!(packed.width, NUM_BLAKE2S_BINARY_COLS);
             assert_eq!(packed.height(), height.div_ceil(64));
 
@@ -528,13 +528,13 @@ fn packed_random_trace_uses_the_dense_generator_sequence() {
 #[test]
 #[should_panic(expected = "at least one input")]
 fn packed_generator_rejects_empty_input() {
-    let _ = generate_binary_trace_packed::<F>(Vec::new());
+    let _ = generate_binary_trace_packed::<F>(&[]);
 }
 
 #[test]
 #[should_panic(expected = "power of two")]
 fn packed_generator_rejects_non_power_of_two_input() {
-    let _ = generate_binary_trace_packed::<F>(vec![Blake2sCompressionInput::default(); 3]);
+    let _ = generate_binary_trace_packed::<F>(&[Blake2sCompressionInput::default(); 3]);
 }
 
 #[test]
