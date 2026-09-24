@@ -51,8 +51,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::ops::Range;
 
-use p3_binary_dft::EncodableLevel;
-use p3_binary_field::{BinaryField8, TowerLevel};
+use p3_binary_field::{BinaryField8, BitCoordinates, TowerLevel};
 use p3_challenger::fs::TranscriptField;
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
 use p3_commit::MultilinearPcs;
@@ -71,7 +70,6 @@ use crate::boolean_trace::{
     BooleanTraceCommitment, BooleanTraceCommitmentData, BooleanTraceCommitmentError,
     BooleanTraceCommitmentProof,
 };
-use crate::fold::{ChallengeField, FoldAlphabet};
 use crate::packing::{Coordinates, coordinate_bytes, pack};
 
 /// Rows one packed word holds.
@@ -374,13 +372,8 @@ impl<EF: Field, D> MixedTraceData<EF, D> {
 
 impl<EF, B, Challenger> MultilinearPcs<EF, Challenger> for MixedTraceCommitment<EF, B>
 where
-    EF: ChallengeField<EF>
-        + EncodableLevel
-        + TranscriptField
-        + TowerLevel
-        + FoldAlphabet<EF>
-        + Coordinates,
-    B: BooleanMultilinearPcs<EF, Challenger>,
+    EF: BitCoordinates + TranscriptField + TowerLevel + Coordinates,
+    B: BooleanMultilinearPcs<EF, Challenger, Val = EF>,
     Challenger: FieldChallenger<EF>
         + GrindingChallenger<Witness = EF>
         + CanSampleUniformBits<EF>
@@ -454,13 +447,8 @@ where
 
 impl<EF, B, Challenger> PrescribedPointPcs<EF, Challenger> for MixedTraceCommitment<EF, B>
 where
-    EF: ChallengeField<EF>
-        + EncodableLevel
-        + TranscriptField
-        + TowerLevel
-        + FoldAlphabet<EF>
-        + Coordinates,
-    B: BooleanMultilinearPcs<EF, Challenger>,
+    EF: BitCoordinates + TranscriptField + TowerLevel + Coordinates,
+    B: BooleanMultilinearPcs<EF, Challenger, Val = EF>,
     Challenger: FieldChallenger<EF>
         + GrindingChallenger<Witness = EF>
         + CanSampleUniformBits<EF>
