@@ -1,6 +1,6 @@
 //! What a derived schedule fixes about the proofs it can produce.
 
-use p3_binary_field::TowerLevel;
+use p3_binary_field::{BitCoordinates, TowerLevel};
 use p3_challenger::{FieldChallenger, GrindingChallenger};
 use p3_field::{ExtensionField, Field};
 use p3_sumcheck::ring_switch::bits::BitTensor;
@@ -114,27 +114,28 @@ impl ProofShape {
     ///
     /// One batched reduction travels beside a proximity opening of its one surviving point.
     ///
-    /// Each claim sends its elements by rows.
+    /// Each claim sends its elements by rows, one packing-level element per row.
     /// The batch sends one run of degree-two rounds and the value it survives with.
     #[must_use]
-    pub fn of_bit_readings<EF, Challenger>(
-        config: &WhirConfig<EF, EF, Challenger>,
+    pub fn of_bit_readings<F, EF, Challenger>(
+        config: &WhirConfig<EF, F, Challenger>,
         num_claims: usize,
         successor_tensors: bool,
     ) -> Self
     where
-        EF: Field + TowerLevel,
-        Challenger: FieldChallenger<EF> + GrindingChallenger<Witness = EF>,
+        F: TowerLevel,
+        EF: BitCoordinates + ExtensionField<F>,
+        Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
     {
         // The batch leaves one surviving claim, however many claims it folds.
         let surviving = num_claims.min(1);
         let mut shape = Self::of(config, surviving);
         // The element alone, or the element with carry and last.
         let num_tensors = if successor_tensors { 3 } else { 1 };
-        let rows = num_tensors * BitTensor::<EF>::DIMENSION;
+        let rows = num_tensors * BitTensor::<EF, F>::DIMENSION;
+        shape.sent_base_elements += num_claims * rows;
         // A Boolean prefix only removes rounds, so the packing's arity bounds them.
-        shape.sent_extension_elements +=
-            num_claims * rows + surviving * (2 * config.num_variables() + 1);
+        shape.sent_extension_elements += surviving * (2 * config.num_variables() + 1);
         shape
     }
 

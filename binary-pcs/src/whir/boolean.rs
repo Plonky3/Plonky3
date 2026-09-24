@@ -31,11 +31,11 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use p3_binary_field::{PackedGf2, TowerLevel, Underlier};
+use p3_binary_field::{BitCoordinates, PackedGf2, TowerLevel, Underlier};
 use p3_challenger::fs::TranscriptField;
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
 use p3_commit::Mmcs;
-use p3_field::Field;
+use p3_field::{ExtensionField, Field};
 use p3_multilinear_util::point::Point;
 use p3_security::multilinear::{bit_ring_switch_claim_batching_term, bit_ring_switch_tensors_term};
 use p3_sumcheck::layout::{Layout, SuffixProver};
@@ -50,7 +50,7 @@ use p3_whir::{WhirDomain, WhirProver, WhirProverData};
 
 use crate::boolean::{BitOpening, BitReadings, BooleanBackend, BooleanMultilinearPcs};
 use crate::boolean_trace::BooleanTraceCommitment;
-use crate::fold::ChallengeField;
+use crate::fold::BitChallengeField;
 use crate::packing::{Coordinates, PackedStack};
 use crate::whir::error::BooleanWhirError;
 use crate::whir::proof::BooleanWhirProof;
@@ -59,36 +59,44 @@ use crate::whir::shape::ProofShape;
 /// The binding mode the committed layout uses.
 ///
 /// One mode is fixed rather than chosen, so a commitment and its replay never disagree.
-type Binding<EF> = SuffixProver<EF, EF>;
+type Binding<F, EF> = SuffixProver<F, EF>;
 
 /// The proximity argument every packed claim is discharged against.
-pub type BooleanWhirProver<EF, Dft, MT, Challenger> =
-    WhirProver<EF, EF, Dft, MT, Challenger, Binding<EF>>;
+///
+/// It commits the packing level `F` and draws its challenges from `EF`.
+pub type BooleanWhirProver<F, EF, Dft, MT, Challenger> =
+    WhirProver<EF, F, Dft, MT, Challenger, Binding<F, EF>>;
 
 /// Prover-side data retained between committing and opening.
-pub type BooleanWhirData<EF, MT> = WhirProverData<EF, EF, MT, SuffixProver<EF, EF>>;
+pub type BooleanWhirData<F, EF, MT> = WhirProverData<F, EF, MT, Binding<F, EF>>;
 
 /// A batched trace of Boolean columns, discharged through the additive-domain proximity argument.
-pub type BooleanWhirTracePcs<EF, Dft, MT, Challenger> =
-    BooleanTraceCommitment<EF, BooleanWhirPcs<EF, Dft, MT, Challenger>>;
+pub type BooleanWhirTracePcs<F, EF, Dft, MT, Challenger> =
+    BooleanTraceCommitment<EF, BooleanWhirPcs<F, EF, Dft, MT, Challenger>>;
 
 /// A commitment to a function from the hypercube to `{0, 1}`, opened through WHIR.
 ///
-/// The committed object is a bit witness.
+/// The committed object is a bit witness, packed into the tower level `F`.
 ///
-/// An opening answers for its multilinear extension at a point of the challenge field.
-pub struct BooleanWhirPcs<EF: Field, Dft, MT, Challenger> {
+/// An opening answers for its multilinear extension at a point of the challenge field `EF`.
+///
+/// ```text
+///     F = EF = GF(2^128)                 128 bits per committed element
+///     F = GF(2^64),  EF = GF(2^192)      64 bits per committed element, wider challenges
+/// ```
+pub struct BooleanWhirPcs<F: Field, EF: ExtensionField<F>, Dft, MT, Challenger> {
     /// The proximity argument the packed multilinear is discharged against.
-    inner: BooleanWhirProver<EF, Dft, MT, Challenger>,
+    inner: BooleanWhirProver<F, EF, Dft, MT, Challenger>,
     /// Variables the bit witness has, which is the packing's plus the absorbed ones.
     num_variables: usize,
 }
 
-impl<EF, Dft, MT, Challenger> BooleanWhirPcs<EF, Dft, MT, Challenger>
+impl<F, EF, Dft, MT, Challenger> BooleanWhirPcs<F, EF, Dft, MT, Challenger>
 where
-    EF: Field + TranscriptField + TowerLevel + Coordinates + Ord,
-    Dft: WhirDomain<EF, EF>,
-    MT: Mmcs<EF>,
+    F: Field + TranscriptField + TowerLevel + Coordinates + Ord,
+    EF: BitCoordinates + ExtensionField<F>,
+    Dft: WhirDomain<F, EF>,
+    MT: Mmcs<F>,
 {
     /// Wrap a proximity argument as a commitment to a bit witness of this many variables.
     ///
@@ -98,7 +106,7 @@ where
     ///
     /// Returns an error unless the schedule commits exactly the elements the packing holds.
     pub fn new(
-        inner: BooleanWhirProver<EF, Dft, MT, Challenger>,
+        inner: BooleanWhirProver<F, EF, Dft, MT, Challenger>,
         num_variables: usize,
     ) -> Result<Self, BooleanWhirError> {
         let packed = Self::packed_variables(num_variables)?;
@@ -128,7 +136,7 @@ where
 
     /// Variables the packing keeps, the witness's less the ones one element absorbs.
     fn packed_variables(num_variables: usize) -> Result<usize, BooleanWhirError> {
-        let absorbed = BitRingSwitch::<EF>::ABSORBED;
+        let absorbed = BitRingSwitch::<F, EF>::ABSORBED;
         num_variables
             .checked_sub(absorbed)
             .ok_or(BooleanWhirError::WitnessTooNarrow {
@@ -151,7 +159,7 @@ where
     }
 
     /// Every opening's reduction, gathered into the one batch that reduces them all.
-    fn claims(openings: &[BitOpening<EF>]) -> Result<BitRingSwitchClaims<EF>, BooleanWhirError> {
+    fn claims(openings: &[BitOpening<EF>]) -> Result<BitRingSwitchClaims<F, EF>, BooleanWhirError> {
         let reductions = openings
             .iter()
             .map(Self::reduction)
@@ -160,7 +168,7 @@ where
     }
 
     /// The reduction answering every reading one opening asks for.
-    fn reduction(opening: &BitOpening<EF>) -> Result<BitRingSwitch<EF>, BooleanWhirError> {
+    fn reduction(opening: &BitOpening<EF>) -> Result<BitRingSwitch<F, EF>, BooleanWhirError> {
         if opening.next {
             BitRingSwitch::with_successor(&opening.point, opening.row_variables)
         } else {
@@ -215,20 +223,21 @@ where
     /// Never for a table this scheme committed.
     ///
     /// Its alphabet is byte aligned and its height is a power of two.
-    fn packing(prover_data: &BooleanWhirData<EF, MT>) -> BitPackingView<'_, EF> {
+    fn packing(prover_data: &BooleanWhirData<F, EF, MT>) -> BitPackingView<'_, F> {
         BitPacking::from_packed(prover_data.table(0).poly(0))
             .expect("a committed table is a hypercube over a byte-aligned level")
     }
 }
 
-impl<EF, Dft, MT, Challenger> BooleanWhirPcs<EF, Dft, MT, Challenger>
+impl<F, EF, Dft, MT, Challenger> BooleanWhirPcs<F, EF, Dft, MT, Challenger>
 where
-    EF: Field + TranscriptField + TowerLevel + Coordinates + Ord + Send + Sync + ChallengeField<EF>,
-    Dft: WhirDomain<EF, EF>,
-    MT: Mmcs<EF>,
-    Challenger: FieldChallenger<EF>
-        + GrindingChallenger<Witness = EF>
-        + CanSampleUniformBits<EF>
+    F: Field + TranscriptField + TowerLevel + Coordinates + Ord + Send + Sync,
+    EF: BitChallengeField<F>,
+    Dft: WhirDomain<F, EF>,
+    MT: Mmcs<F>,
+    Challenger: FieldChallenger<F>
+        + GrindingChallenger<Witness = F>
+        + CanSampleUniformBits<F>
         + CanObserve<MT::Commitment>,
 {
     /// Every labelled algebraic error one opening of this many claims charges.
@@ -275,7 +284,7 @@ where
         security.charge_reduction(bit_ring_switch_tensors_term(
             num_claims.min(1),
             num_tensors,
-            BitRingSwitch::<EF>::ABSORBED,
+            BitRingSwitch::<F, EF>::BATCHED,
             self.inner.num_variables(),
             EF::bits(),
         ));
@@ -310,10 +319,10 @@ where
     #[allow(clippy::type_complexity)]
     pub fn open_readings(
         &self,
-        prover_data: BooleanWhirData<EF, MT>,
+        prover_data: BooleanWhirData<F, EF, MT>,
         openings: &[BitOpening<EF>],
         challenger: &mut Challenger,
-    ) -> Result<(Vec<BitReadings<EF>>, BooleanWhirProof<EF, MT>), BooleanWhirError> {
+    ) -> Result<(Vec<BitReadings<EF>>, BooleanWhirProof<F, EF, MT>), BooleanWhirError> {
         self.check_openings(openings)?;
         // Every reduction is set up before any runs, so a refused one leaves the transcript alone.
         let claims = Self::claims(openings)?;
@@ -322,7 +331,8 @@ where
         // One batch for every opening, leaving one claim about the packing.
         let (reduction, surviving_point, _) =
             tracing::info_span!("bit ring switch").in_scope(|| {
-                claims.prove::<<EF as ChallengeField<EF>>::SumcheckRepr, _, _>(&packing, challenger)
+                claims
+                    .prove::<<EF as BitChallengeField<F>>::SumcheckRepr, _, _>(&packing, challenger)
             });
 
         // The elements each claim sends already hold its readings.
@@ -372,7 +382,7 @@ where
         commitment: &MT::Commitment,
         openings: &[BitOpening<EF>],
         readings: &[BitReadings<EF>],
-        proof: &BooleanWhirProof<EF, MT>,
+        proof: &BooleanWhirProof<F, EF, MT>,
         challenger: &mut Challenger,
     ) -> Result<(), BooleanWhirError> {
         self.check_openings(openings)?;
@@ -425,15 +435,16 @@ where
     }
 }
 
-impl<EF, Dft, MT, Challenger> BooleanMultilinearPcs<EF, Challenger>
-    for BooleanWhirPcs<EF, Dft, MT, Challenger>
+impl<F, EF, Dft, MT, Challenger> BooleanMultilinearPcs<EF, Challenger>
+    for BooleanWhirPcs<F, EF, Dft, MT, Challenger>
 where
-    EF: Field + TranscriptField + TowerLevel + Coordinates + Ord + Send + Sync + ChallengeField<EF>,
-    Dft: WhirDomain<EF, EF>,
-    MT: Mmcs<EF>,
-    Challenger: FieldChallenger<EF>
-        + GrindingChallenger<Witness = EF>
-        + CanSampleUniformBits<EF>
+    F: Field + TranscriptField + TowerLevel + Coordinates + Ord + Send + Sync,
+    EF: BitChallengeField<F>,
+    Dft: WhirDomain<F, EF>,
+    MT: Mmcs<F>,
+    Challenger: FieldChallenger<F>
+        + GrindingChallenger<Witness = F>
+        + CanSampleUniformBits<F>
         + CanObserve<MT::Commitment>,
 {
     fn observe_commitment(&self, commitment: &Self::Commitment, challenger: &mut Challenger) {
@@ -450,7 +461,7 @@ where
         challenger: &mut Challenger,
     ) -> Result<(Self::Commitment, Self::ProverData), Self::Error> {
         // The packing is one copy of the bits, so the witness is never swept for arithmetic.
-        let stack = PackedStack::<PackedGf2<U>, EF>::from_columns(&[bits])
+        let stack = PackedStack::<PackedGf2<U>, F>::from_columns(&[bits])
             .map_err(BooleanWhirError::Packing)?;
         if stack.column_num_variables() != self.inner.num_variables() {
             return Err(BooleanWhirError::WitnessArity {
@@ -460,7 +471,7 @@ where
         }
 
         let folding = self.inner.round_folding_factor(0);
-        let witness = Binding::<EF>::new_witness(vec![stack.into_table()], folding);
+        let witness = Binding::<F, EF>::new_witness(vec![stack.into_table()], folding);
         p3_commit::MultilinearPcs::<EF, Challenger>::commit(&self.inner, witness, challenger)
             .map_err(BooleanWhirError::Commit)
     }
@@ -537,15 +548,17 @@ where
     }
 }
 
-impl<EF, Dft, MT, Challenger> BooleanBackend<EF> for BooleanWhirPcs<EF, Dft, MT, Challenger>
+impl<F, EF, Dft, MT, Challenger> BooleanBackend<EF> for BooleanWhirPcs<F, EF, Dft, MT, Challenger>
 where
-    EF: Field + TranscriptField + TowerLevel + Coordinates + Ord + Send + Sync,
-    Dft: WhirDomain<EF, EF>,
-    MT: Mmcs<EF>,
+    F: Field + TranscriptField + TowerLevel + Coordinates + Ord + Send + Sync,
+    EF: BitCoordinates + ExtensionField<F>,
+    Dft: WhirDomain<F, EF>,
+    MT: Mmcs<F>,
 {
+    type Val = F;
     type Commitment = MT::Commitment;
-    type ProverData = BooleanWhirData<EF, MT>;
-    type Proof = BooleanWhirProof<EF, MT>;
+    type ProverData = BooleanWhirData<F, EF, MT>;
+    type Proof = BooleanWhirProof<F, EF, MT>;
     type Error = BooleanWhirError;
 
     fn num_variables(&self) -> usize {

@@ -111,7 +111,12 @@ use crate::proof::BinaryPcsProof;
 use crate::prover::BinaryPcsProverData;
 
 /// What a bit commitment keeps and sends, named without reference to a transcript.
+///
+/// `EF` is the field openings are asked at, and [`Self::Val`] the level the bits are packed into.
 pub trait BooleanBackend<EF> {
+    /// The level the committed bits are packed into, and the cells a trace table holds.
+    type Val: Field;
+
     /// Succinct binding commitment sent to the verifier.
     type Commitment: Clone + Serialize + DeserializeOwned;
 
@@ -358,7 +363,7 @@ where
         [
             bit_ring_switch_term(
                 num_claims.min(1),
-                BitRingSwitch::<EF>::ABSORBED,
+                BitRingSwitch::<EF>::BATCHED,
                 self.inner.num_variables(),
                 EF::bits(),
             ),
@@ -405,7 +410,7 @@ where
             bit_ring_switch_tensors_term(
                 num_claims.min(1),
                 num_tensors,
-                BitRingSwitch::<EF>::ABSORBED,
+                BitRingSwitch::<EF>::BATCHED,
                 self.inner.num_variables(),
                 EF::bits(),
             ),
@@ -901,6 +906,7 @@ where
     MT: Mmcs<EF>,
     MX: Mmcs<EF, Error = MT::Error>,
 {
+    type Val = EF;
     type Commitment = MT::Commitment;
     type ProverData = BinaryPcsProverData<EF, EF, MT>;
     type Proof = BooleanProof<EF, MT, MX>;

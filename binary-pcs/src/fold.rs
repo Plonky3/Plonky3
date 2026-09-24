@@ -66,12 +66,12 @@ use alloc::vec::Vec;
 
 use p3_binary_dft::{EncodableLevel, domain_point, domain_point_steps};
 use p3_binary_field::{
-    BinaryField8, BinaryField16, BinaryField32, BinaryField64, BinaryField128, Ghash128, Poly64,
-    TowerLevel, poly_basis,
+    BinaryField8, BinaryField16, BinaryField32, BinaryField64, BinaryField128, BitCoordinates,
+    Ghash128, Poly64, Poly192, TowerLevel, poly_basis,
 };
 use p3_field::{Algebra, ExtensionField, Field, PackedValue, PrimeCharacteristicRing};
 use p3_maybe_rayon::prelude::*;
-use p3_sumcheck::strategy::IntoTranscriptField;
+use p3_sumcheck::strategy::{FromTable, IntoTranscriptField};
 
 /// The polynomial-basis type the fold multiplies with.
 ///
@@ -343,6 +343,30 @@ where
     Poly64: Algebra<F>,
 {
     type SumcheckRepr = Poly64;
+}
+
+/// A challenge field the bit ring switch draws from, and the representation its rounds run in.
+///
+/// `F` is the level the bits are packed into.
+///
+/// ```text
+///     EF = F           the representation `ChallengeField` names
+///     EF = GF(2^192)   over F = GF(2^64), rounds in the field itself
+/// ```
+pub trait BitChallengeField<F: Field>: BitCoordinates + ExtensionField<F> {
+    /// Isomorphic field the ring-switch rounds run in.
+    type SumcheckRepr: IntoTranscriptField<Self> + FromTable<F> + Sync;
+}
+
+impl<EF> BitChallengeField<EF> for EF
+where
+    EF: ChallengeField<EF> + BitCoordinates,
+{
+    type SumcheckRepr = <EF as ChallengeField<EF>>::SumcheckRepr;
+}
+
+impl BitChallengeField<Poly64> for Poly192 {
+    type SumcheckRepr = Self;
 }
 
 /// The domain point each lane adds on top of the one evaluated at its group's first index.

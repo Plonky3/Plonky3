@@ -77,10 +77,10 @@
 use alloc::vec::Vec;
 use core::borrow::Borrow;
 
-use p3_binary_field::TowerLevel;
+use p3_binary_field::{BitCoordinates, TowerLevel};
 use p3_challenger::fs::TranscriptField;
 use p3_challenger::{FieldChallenger, GrindingChallenger};
-use p3_field::Field;
+use p3_field::{ExtensionField, Field};
 use p3_maybe_rayon::prelude::*;
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
@@ -97,26 +97,29 @@ use super::transcript::{
     BitRingSwitchClaimsVerifierTranscript, ClaimStatement, ClaimsDraws,
 };
 use crate::data::SumcheckData;
-use crate::strategy::{Basis, IntoTranscriptField, ReprSumcheckProver, VariableOrder};
+use crate::strategy::{Basis, FromTable, IntoTranscriptField, ReprSumcheckProver, VariableOrder};
 
 /// Several claims about one packing, each at a point of its own, reduced together.
 ///
 /// Every claim is a [`BitRingSwitch`] set up at its own point.
 /// All of them name the same number of variables, since they read the same packing.
 #[derive(Clone, Debug)]
-pub struct BitRingSwitchClaims<EF> {
+pub struct BitRingSwitchClaims<F, EF = F> {
     /// One reduction per claim, in the order the claims are bound.
-    reductions: Vec<BitRingSwitch<EF>>,
+    reductions: Vec<BitRingSwitch<F, EF>>,
 }
 
 /// What one claim of a batch sends: its tensor element, and its successor elements.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(bound(serialize = "EF: TowerLevel", deserialize = "EF: TowerLevel"))]
-pub struct ClaimElements<EF> {
+#[serde(bound(
+    serialize = "F: BitCoordinates, EF: BitCoordinates",
+    deserialize = "F: BitCoordinates, EF: BitCoordinates"
+))]
+pub struct ClaimElements<F, EF = F> {
     /// The tensor element both checks read, by rows and by columns.
-    pub tensor: BitTensor<EF>,
+    pub tensor: BitTensor<EF, F>,
     /// The carry and last elements, present exactly when the claim's setup sends them.
-    pub successor: Option<SuccessorTensors<EF>>,
+    pub successor: Option<SuccessorTensors<F, EF>>,
 }
 
 /// The messages a batch of claims puts on the wire.
@@ -126,19 +129,22 @@ pub struct ClaimElements<EF> {
 ///     once        the rounds, and the surviving value
 /// ```
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(bound(serialize = "EF: TowerLevel", deserialize = "EF: TowerLevel"))]
-pub struct BitRingSwitchClaimsProof<EF> {
+#[serde(bound(
+    serialize = "F: BitCoordinates, EF: BitCoordinates",
+    deserialize = "F: BitCoordinates, EF: BitCoordinates"
+))]
+pub struct BitRingSwitchClaimsProof<F, EF = F> {
     /// Every claim's elements, in the order the claims are bound.
-    pub claims: Vec<ClaimElements<EF>>,
+    pub claims: Vec<ClaimElements<F, EF>>,
     /// The one degree-two sumcheck every claim shares.
-    pub sumcheck: SumcheckData<EF, EF>,
+    pub sumcheck: SumcheckData<F, EF>,
     /// The value of the one surviving claim.
     pub final_eval: EF,
 }
 
-impl<EF> BitRingSwitchClaimsProof<EF> {
+impl<F, EF> BitRingSwitchClaimsProof<F, EF> {
     /// Repackage a one-claim proof as a batch of one.
-    fn of_single(proof: BitRingSwitchProof<EF>) -> Self {
+    fn of_single(proof: BitRingSwitchProof<F, EF>) -> Self {
         Self {
             claims: alloc::vec![ClaimElements {
                 tensor: proof.tensor,
@@ -150,14 +156,14 @@ impl<EF> BitRingSwitchClaimsProof<EF> {
     }
 }
 
-impl<EF: TowerLevel> BitRingSwitchClaims<EF> {
+impl<F: TowerLevel, EF: BitCoordinates + ExtensionField<F>> BitRingSwitchClaims<F, EF> {
     /// Gather claims to be reduced together.
     ///
     /// # Errors
     ///
     /// - No claim is given.
     /// - Two claims name different numbers of variables.
-    pub fn new(reductions: Vec<BitRingSwitch<EF>>) -> Result<Self, BitRingSwitchError> {
+    pub fn new(reductions: Vec<BitRingSwitch<F, EF>>) -> Result<Self, BitRingSwitchError> {
         let first = reductions.first().ok_or(BitRingSwitchError::NoClaims)?;
         let expected = first.num_variables();
         if let Some(other) = reductions
@@ -174,7 +180,7 @@ impl<EF: TowerLevel> BitRingSwitchClaims<EF> {
 
     /// The claims, in the order they are bound.
     #[must_use]
-    pub fn reductions(&self) -> &[BitRingSwitch<EF>] {
+    pub fn reductions(&self) -> &[BitRingSwitch<F, EF>] {
         &self.reductions
     }
 
@@ -242,9 +248,13 @@ fn boolean_equality<EF: Field>(bits: &[EF], r: &[EF]) -> EF {
         .product()
 }
 
-impl<EF: TranscriptField + TowerLevel> BitRingSwitchClaims<EF> {
+impl<F, EF> BitRingSwitchClaims<F, EF>
+where
+    F: TranscriptField + TowerLevel,
+    EF: BitCoordinates + ExtensionField<F>,
+{
     /// Each claim's second stage, over the challenges the batch drew.
-    fn batches(&self, draws: &ClaimsDraws<EF>) -> Vec<BitRingSwitchBatch<'_, EF>> {
+    fn batches(&self, draws: &ClaimsDraws<EF>) -> Vec<BitRingSwitchBatch<'_, F, EF>> {
         self.reductions
             .iter()
             .map(|reduction| {
@@ -273,14 +283,15 @@ impl<EF: TranscriptField + TowerLevel> BitRingSwitchClaims<EF> {
     /// Panics unless the packing has the variables the evaluation points leave.
     pub fn prove<R, Challenger, S>(
         &self,
-        packing: &BitPacking<EF, S>,
+        packing: &BitPacking<F, S>,
         challenger: &mut Challenger,
-    ) -> (BitRingSwitchClaimsProof<EF>, Point<EF>, EF)
+    ) -> (BitRingSwitchClaimsProof<F, EF>, Point<EF>, EF)
     where
+        F: Send + Sync,
         EF: Send + Sync,
-        R: IntoTranscriptField<EF> + Sync,
-        Challenger: FieldChallenger<EF> + GrindingChallenger<Witness = EF>,
-        S: Borrow<[EF]>,
+        R: IntoTranscriptField<EF> + FromTable<F> + Sync,
+        Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
+        S: Borrow<[F]>,
     {
         // A batch of one is the one-claim reduction, its compact rounds included.
         if let [reduction] = self.reductions.as_slice() {
@@ -313,7 +324,7 @@ impl<EF: TranscriptField + TowerLevel> BitRingSwitchClaims<EF> {
             .collect::<Vec<_>>();
 
         let mut transcript =
-            BitRingSwitchClaimsProverTranscript::<Challenger, EF>::new(challenger, self.shape());
+            BitRingSwitchClaimsProverTranscript::<Challenger, F, EF>::new(challenger, self.shape());
         let statements = self.statements(&claims);
         let draws = transcript.statement(&statements);
         let batches = self.batches(&draws);
@@ -331,7 +342,7 @@ impl<EF: TranscriptField + TowerLevel> BitRingSwitchClaims<EF> {
         {
             let claim_weights = batch.weights_over::<R>(equality);
             let start = offset - slot_offset;
-            let weight = R::from(weight);
+            let weight = <R as From<EF>>::from(weight);
             table.as_mut_slice()[start..start + claim_weights.num_evals()]
                 .par_iter_mut()
                 .zip(claim_weights.as_slice().par_iter())
@@ -339,7 +350,7 @@ impl<EF: TranscriptField + TowerLevel> BitRingSwitchClaims<EF> {
         }
         let initial_sum = Self::batched_sum(&batches, &claims, &weights);
 
-        let mut prover = ReprSumcheckProver::<EF, EF, R>::from_repr_tables(
+        let mut prover = ReprSumcheckProver::<F, EF, R>::from_repr_tables(
             VariableOrder::Prefix,
             slot_packing(packing, slot_offset, slot),
             table,
@@ -389,12 +400,12 @@ impl<EF: TranscriptField + TowerLevel> BitRingSwitchClaims<EF> {
     /// - A failed round, or a surviving value that does not close the batched sum.
     pub fn verify_readings<Challenger>(
         &self,
-        proof: &BitRingSwitchClaimsProof<EF>,
+        proof: &BitRingSwitchClaimsProof<F, EF>,
         readings: &[(Option<EF>, Option<EF>)],
         challenger: &mut Challenger,
     ) -> Result<(Point<EF>, EF), BitRingSwitchProofError>
     where
-        Challenger: FieldChallenger<EF> + GrindingChallenger<Witness = EF>,
+        Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
     {
         let expected = self.reductions.len();
         if let Some(actual) = [proof.claims.len(), readings.len()]
@@ -430,8 +441,10 @@ impl<EF: TranscriptField + TowerLevel> BitRingSwitchClaims<EF> {
         // The verifier derives the shared slot from the public points alone.
         let (prefix, _) = self.common_prefix();
         let rounds = self.num_variables() - prefix;
-        let mut transcript =
-            BitRingSwitchClaimsVerifierTranscript::<Challenger, EF>::new(challenger, self.shape());
+        let mut transcript = BitRingSwitchClaimsVerifierTranscript::<Challenger, F, EF>::new(
+            challenger,
+            self.shape(),
+        );
         let draws = transcript.statement(&self.statements(&proof.claims))?;
 
         // Each reading is checked against its own claim's columns, before any round.
@@ -479,7 +492,10 @@ impl<EF: TranscriptField + TowerLevel> BitRingSwitchClaims<EF> {
     }
 
     /// What every claim binds, borrowed from the claims and their elements.
-    fn statements<'a>(&'a self, claims: &'a [ClaimElements<EF>]) -> Vec<ClaimStatement<'a, EF>> {
+    fn statements<'a>(
+        &'a self,
+        claims: &'a [ClaimElements<F, EF>],
+    ) -> Vec<ClaimStatement<'a, F, EF>> {
         self.reductions
             .iter()
             .zip(claims)
@@ -496,8 +512,8 @@ impl<EF: TranscriptField + TowerLevel> BitRingSwitchClaims<EF> {
 
     /// `sum_i lambda^i * sigma_i`, the sum the shared rounds start from.
     fn batched_sum(
-        batches: &[BitRingSwitchBatch<'_, EF>],
-        claims: &[ClaimElements<EF>],
+        batches: &[BitRingSwitchBatch<'_, F, EF>],
+        claims: &[ClaimElements<F, EF>],
         weights: &[EF],
     ) -> EF {
         batches
@@ -522,7 +538,7 @@ impl<EF: TranscriptField + TowerLevel> BitRingSwitchClaims<EF> {
     /// ```
     fn closing_weight(
         &self,
-        batches: &[BitRingSwitchBatch<'_, EF>],
+        batches: &[BitRingSwitchBatch<'_, F, EF>],
         weights: &[EF],
         prefix: usize,
         r_prime: &Point<EF>,
@@ -612,8 +628,8 @@ mod tests {
         fn reduction(&self) -> BitRingSwitch<EF> {
             self.successor
                 .map_or_else(
-                    || BitRingSwitch::new(&self.point),
-                    |rows| BitRingSwitch::with_successor(&self.point, rows),
+                    || BitRingSwitch::<EF>::new(&self.point),
+                    |rows| BitRingSwitch::<EF>::with_successor(&self.point, rows),
                 )
                 .unwrap()
         }
@@ -680,8 +696,8 @@ mod tests {
 
         // Two claims over packings of different widths.
         let mut rng = SmallRng::seed_from_u64(1);
-        let narrow = BitRingSwitch::new(&Point::<EF>::rand(&mut rng, 8)).unwrap();
-        let wide = BitRingSwitch::new(&Point::<EF>::rand(&mut rng, 9)).unwrap();
+        let narrow = BitRingSwitch::<EF>::new(&Point::<EF>::rand(&mut rng, 8)).unwrap();
+        let wide = BitRingSwitch::<EF>::new(&Point::<EF>::rand(&mut rng, 9)).unwrap();
         assert_eq!(
             BitRingSwitchClaims::new(vec![narrow, wide]).unwrap_err(),
             BitRingSwitchError::WidthMismatch {
@@ -697,7 +713,7 @@ mod tests {
         let witness = bits(0xB1, 64);
         let packing = BitPacking::<EF>::new(&witness).unwrap();
         let point = Point::<EF>::rand(&mut SmallRng::seed_from_u64(0xB2), 9);
-        let reduction = BitRingSwitch::new(&point).unwrap();
+        let reduction = BitRingSwitch::<EF>::new(&point).unwrap();
         let (single, single_point, _) = reduction.prove::<EF, _, _>(&packing, &mut challenger());
         let setup = BitRingSwitchClaims::new(vec![reduction]).unwrap();
         let (batched, batched_point, _) = setup.prove::<EF, _, _>(&packing, &mut challenger());
@@ -1161,6 +1177,94 @@ mod tests {
                         .unwrap();
                     prop_assert_eq!(Some(successor), next);
                 }
+            }
+        }
+    }
+
+    /// Several claims at a cubic challenge field, packed at sixty-four bits.
+    mod wide_challenge {
+        use p3_binary_field::{Poly64, Poly192};
+
+        use super::*;
+
+        type F = Poly64;
+        type EF = Poly192;
+        type NarrowChal = BinaryChallenger<F, HashChallenger<u8, Keccak256Hash, 32>>;
+
+        fn challenger() -> NarrowChal {
+            NarrowChal::from_hasher(Vec::new(), Keccak256Hash)
+        }
+
+        /// The bit witness, one challenge-field element per bit.
+        fn embedded(witness: &[u8]) -> Poly<EF> {
+            Poly::new(
+                (0..witness.len() * 8)
+                    .map(|cell| EF::from_bool((witness[cell / 8] >> (cell % 8)) & 1 == 1))
+                    .collect(),
+            )
+        }
+
+        #[test]
+        fn a_mixed_batch_round_trips_and_lands_on_the_packing() {
+            // Three claims share one sumcheck: a plain one, a short and a long successor view.
+            let witness = bits(0xC1A1, 1 << 7);
+            let packing = BitPacking::<F>::new(&witness).unwrap();
+            let mut rng = SmallRng::seed_from_u64(0xC1A2);
+            let points = (0..3)
+                .map(|_| Point::<EF>::rand(&mut rng, 10))
+                .collect::<Vec<_>>();
+            let setup = BitRingSwitchClaims::new(vec![
+                BitRingSwitch::<F, EF>::new(&points[0]).unwrap(),
+                BitRingSwitch::<F, EF>::with_successor(&points[1], 4).unwrap(),
+                BitRingSwitch::<F, EF>::with_successor(&points[2], 9).unwrap(),
+            ])
+            .unwrap();
+
+            // The successor readings come from the square-case definition, lifted.
+            let cells = embedded(&witness);
+            let successor = |point: &Point<EF>, rows: usize| {
+                let (selector, rho) = point.split_at(point.num_variables() - rows);
+                let eq_selector = Poly::<EF>::new_from_point(selector.as_slice(), EF::ONE);
+                let eq_rho = Poly::<EF>::new_from_point(rho.as_slice(), EF::ONE);
+                let height = 1usize << rows;
+                let mut claim = EF::ZERO;
+                for (c, &gate) in eq_selector.as_slice().iter().enumerate() {
+                    for (z, &weight) in eq_rho.as_slice().iter().enumerate() {
+                        let x = (z + 1).min(height - 1);
+                        claim += gate * weight * cells.as_slice()[c * height + x];
+                    }
+                }
+                claim
+            };
+            let readings = vec![
+                (Some(cells.eval_base(&points[0])), None),
+                (
+                    Some(cells.eval_base(&points[1])),
+                    Some(successor(&points[1], 4)),
+                ),
+                (
+                    Some(cells.eval_base(&points[2])),
+                    Some(successor(&points[2], 9)),
+                ),
+            ];
+
+            let (proof, point_p, value_p) = setup.prove::<EF, _, _>(&packing, &mut challenger());
+            let (point, value) = setup
+                .verify_readings(&proof, &readings, &mut challenger())
+                .unwrap();
+            assert_eq!((&point, value), (&point_p, value_p));
+            assert_eq!(value, packing.poly().eval_base(&point));
+
+            // A reading one off is refused, whichever claim carries it.
+            for index in 0..readings.len() {
+                let mut wrong = readings.clone();
+                wrong[index].0 = wrong[index].0.map(|value| value + EF::ONE);
+                assert!(
+                    setup
+                        .verify_readings(&proof, &wrong, &mut challenger())
+                        .is_err(),
+                    "claim {index}"
+                );
             }
         }
     }

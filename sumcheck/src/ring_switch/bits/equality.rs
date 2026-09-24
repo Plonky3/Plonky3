@@ -1,6 +1,6 @@
 //! The equality table of one run, held as the two factors it is a product of.
 
-use p3_binary_field::TowerLevel;
+use p3_binary_field::BitCoordinates;
 use p3_field::Field;
 use p3_multilinear_util::poly::Poly;
 
@@ -129,14 +129,14 @@ impl<F: Field> FactoredEquality<F> {
 /// So a sweep whose values all carry the same scale multiplies once per coordinate, however
 /// many values it then reads.
 ///
-/// The scale is a level element, and the weights are whatever the sums hold, so a sweep
+/// The scale is a field element, and the weights are whatever the sums hold, so a sweep
 /// whose sums already live in another representation stays there.
 ///
 /// # Performance
 ///
 /// The table the caller already holds is written through, so a sweep rescaling once per
 /// block allocates its `d/8 * 256` entries once rather than at every block.
-pub(crate) fn scaled_sums_into<EF: TowerLevel, A: Field>(
+pub(crate) fn scaled_sums_into<EF: BitCoordinates, A: Field>(
     out: &mut CoordinateSums<EF, A>,
     sums: &CoordinateSums<EF, A>,
     scale: EF,

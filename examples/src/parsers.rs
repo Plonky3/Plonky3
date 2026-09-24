@@ -65,6 +65,7 @@ pub enum RepresentationOptions {
     Subfield,
     PolyBasis,
     PolyBasisLate,
+    Generic,
 }
 
 /// The byte hash a binary-field proof builds its Merkle trees and transcript from.
@@ -277,6 +278,7 @@ impl ValueEnum for RepresentationOptions {
             Self::Subfield,
             Self::PolyBasis,
             Self::PolyBasisLate,
+            Self::Generic,
         ]
     }
 
@@ -292,6 +294,7 @@ impl ValueEnum for RepresentationOptions {
                 11,
                 Some(vec![("polybasislate", 10), ("pbl", 3)]),
             ),
+            Self::Generic => get_aliases("generic", 1, None),
         })
     }
 }

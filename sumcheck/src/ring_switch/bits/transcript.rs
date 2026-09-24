@@ -33,12 +33,13 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::marker::PhantomData;
 
-use p3_binary_field::TowerLevel;
+use p3_binary_field::{BitCoordinates, TowerLevel};
 use p3_challenger::fs::{
     DomainSeparator, FieldToFieldCodec, FieldUnit, Hierarchy, Interaction, InteractionPattern,
     Kind, Length, ProverState, TranscriptBound, TranscriptField, VerifierState,
 };
 use p3_challenger::{CanObserve, CanSample};
+use p3_field::ExtensionField;
 use p3_multilinear_util::point::Point;
 
 use super::basis::Coefficients;
@@ -138,9 +139,13 @@ impl BitRingSwitchShape {
 
     /// Describe every step of one reduction, which one matched bracket always validates.
     #[must_use]
-    pub fn pattern<EF: TranscriptField + TowerLevel>(&self) -> InteractionPattern {
+    pub fn pattern<F, EF>(&self) -> InteractionPattern
+    where
+        F: TranscriptField + TowerLevel,
+        EF: BitCoordinates + ExtensionField<F>,
+    {
         let rows = |label| {
-            Interaction::algebra::<EF, EF>(
+            Interaction::algebra::<F, F>(
                 Hierarchy::Atomic,
                 Kind::Message,
                 label,
@@ -151,7 +156,7 @@ impl BitRingSwitchShape {
 
         let mut steps = vec![
             // The point comes first, so no later draw is chosen before the claim is placed.
-            Interaction::algebra::<EF, EF>(
+            Interaction::algebra::<F, EF>(
                 Hierarchy::Atomic,
                 Kind::Message,
                 EVALUATION_POINT,
@@ -166,15 +171,15 @@ impl BitRingSwitchShape {
             steps.extend([rows(CARRY_ROWS), rows(LAST_ROWS)]);
         }
         // One challenge per absorbed coordinate collapses the rows into a single claim.
-        steps.push(Interaction::algebra::<EF, EF>(
+        steps.push(Interaction::algebra::<F, EF>(
             Hierarchy::Atomic,
             Kind::Challenge,
             BATCHING_POINT,
-            Length::Fixed(BitRingSwitch::<EF>::ABSORBED),
+            Length::Fixed(BitRingSwitch::<F, EF>::BATCHED),
         ));
         // One more challenge collapses the three elements' batched rows into one sum.
         if successor {
-            steps.push(Interaction::algebra::<EF, EF>(
+            steps.push(Interaction::algebra::<F, EF>(
                 Hierarchy::Atomic,
                 Kind::Challenge,
                 TENSOR_BATCHING,
@@ -195,7 +200,7 @@ impl BitRingSwitchShape {
             ),
             // The value left behind is bound before the sponge goes back.
             // That is what ties whatever discharges it to this run.
-            Interaction::algebra::<EF, EF>(
+            Interaction::algebra::<F, EF>(
                 Hierarchy::Atomic,
                 Kind::Message,
                 SURVIVING_CLAIM,
@@ -211,10 +216,12 @@ impl BitRingSwitchShape {
     /// The successor row count, when there is one, is an instance label.
     /// A plain shape adds none, so its seed is the protocol's and the pattern's alone.
     #[must_use]
-    pub fn domain_separator<EF: TranscriptField + TowerLevel>(
-        &self,
-    ) -> DomainSeparator<Alphabet<EF>> {
-        let mut separator = DomainSeparator::new(VERSION, NAME, self.pattern::<EF>());
+    pub fn domain_separator<F, EF>(&self) -> DomainSeparator<Alphabet<F>>
+    where
+        F: TranscriptField + TowerLevel,
+        EF: BitCoordinates + ExtensionField<F>,
+    {
+        let mut separator = DomainSeparator::new(VERSION, NAME, self.pattern::<F, EF>());
         if let Some(rows) = self.successor_rows {
             separator.instance(&(rows as u64).to_be_bytes());
         }
@@ -225,23 +232,27 @@ impl BitRingSwitchShape {
 /// Prover-side transcript of one bit-alphabet reduction.
 ///
 /// The challenger is borrowed, because a reduction always runs inside something larger.
-pub struct BitRingSwitchProverTranscript<'a, C, EF: TranscriptField> {
+pub struct BitRingSwitchProverTranscript<'a, C, F: TranscriptField, EF = F> {
     /// Driver walking the description and holding the borrowed sponge.
-    state: ProverState<&'a mut C, Alphabet<EF>>,
+    state: ProverState<&'a mut C, Alphabet<F>>,
     /// The numbers this run was described with.
     shape: BitRingSwitchShape,
+    /// Marker for the challenge field the points and draws live in.
+    _challenge: PhantomData<EF>,
 }
 
-impl<'a, C, EF> BitRingSwitchProverTranscript<'a, C, EF>
+impl<'a, C, F, EF> BitRingSwitchProverTranscript<'a, C, F, EF>
 where
-    EF: TranscriptField + TowerLevel,
-    C: CanObserve<EF> + CanSample<EF>,
+    F: TranscriptField + TowerLevel,
+    EF: BitCoordinates + ExtensionField<F>,
+    C: CanObserve<F> + CanSample<F>,
 {
     /// Seed the transcript from the shape, folding its fingerprint into the sponge.
     pub fn new(challenger: &'a mut C, shape: BitRingSwitchShape) -> Self {
         Self {
-            state: ProverState::new(challenger, &shape.domain_separator::<EF>()),
+            state: ProverState::new(challenger, &shape.domain_separator::<F, EF>()),
             shape,
+            _challenge: PhantomData,
         }
     }
 
@@ -265,8 +276,8 @@ where
     pub fn statement(
         &mut self,
         point: &Point<EF>,
-        rows: &[EF],
-        successor: Option<(&[EF], &[EF])>,
+        rows: &[F],
+        successor: Option<(&[F], &[F])>,
     ) -> (Point<EF>, Option<EF>) {
         assert_eq!(
             successor.is_some(),
@@ -276,25 +287,22 @@ where
 
         // The point is bound first, so the element cannot be chosen to suit it.
         self.state
-            .observe_extensions::<EF, EF, FieldToFieldCodec<EF>>(
-                EVALUATION_POINT,
-                point.as_slice(),
-            );
+            .observe_extensions::<F, EF, FieldToFieldCodec<F>>(EVALUATION_POINT, point.as_slice());
         self.state
-            .observe_extensions::<EF, EF, FieldToFieldCodec<EF>>(TENSOR_ROWS, rows);
+            .observe_extensions::<F, F, FieldToFieldCodec<F>>(TENSOR_ROWS, rows);
         if let Some((carry, last)) = successor {
             self.state
-                .observe_extensions::<EF, EF, FieldToFieldCodec<EF>>(CARRY_ROWS, carry);
+                .observe_extensions::<F, F, FieldToFieldCodec<F>>(CARRY_ROWS, carry);
             self.state
-                .observe_extensions::<EF, EF, FieldToFieldCodec<EF>>(LAST_ROWS, last);
+                .observe_extensions::<F, F, FieldToFieldCodec<F>>(LAST_ROWS, last);
         }
 
         // Only now are the batching challenges drawn, so no message above them knew them.
         let batching_point = Point::new(
             self.state
-                .challenge_extensions::<EF, EF, FieldToFieldCodec<EF>>(
+                .challenge_extensions::<F, EF, FieldToFieldCodec<F>>(
                     BATCHING_POINT,
-                    BitRingSwitch::<EF>::ABSORBED,
+                    BitRingSwitch::<F, EF>::BATCHED,
                 )
                 .into_iter()
                 .map(TranscriptBound::into_inner)
@@ -302,7 +310,7 @@ where
         );
         let alpha = successor.map(|_| {
             self.state
-                .challenge_extension::<EF, EF, FieldToFieldCodec<EF>>(TENSOR_BATCHING)
+                .challenge_extension::<F, EF, FieldToFieldCodec<F>>(TENSOR_BATCHING)
                 .into_inner()
         });
         (batching_point, alpha)
@@ -320,7 +328,7 @@ where
     /// Bind the value the surviving claim carries.
     pub fn surviving_claim(&mut self, value: EF) {
         self.state
-            .observe_extension::<EF, EF, FieldToFieldCodec<EF>>(SURVIVING_CLAIM, &value);
+            .observe_extension::<F, EF, FieldToFieldCodec<F>>(SURVIVING_CLAIM, &value);
     }
 
     /// Close the transcript, panicking unless every described step was played.
@@ -335,24 +343,25 @@ where
 /// Verifier-side transcript of one bit-alphabet reduction.
 ///
 /// Mirrors the prover side call for call, over the same description.
-pub struct BitRingSwitchVerifierTranscript<'a, C, EF: TranscriptField> {
+pub struct BitRingSwitchVerifierTranscript<'a, C, F: TranscriptField, EF = F> {
     /// Driver walking the description and holding the borrowed sponge.
-    state: VerifierState<'static, &'a mut C, Alphabet<EF>>,
+    state: VerifierState<'static, &'a mut C, Alphabet<F>>,
     /// The numbers this run was described with.
     shape: BitRingSwitchShape,
     /// Marker keeping the level out of the driver's own signature.
-    _level: PhantomData<EF>,
+    _level: PhantomData<(F, EF)>,
 }
 
-impl<'a, C, EF> BitRingSwitchVerifierTranscript<'a, C, EF>
+impl<'a, C, F, EF> BitRingSwitchVerifierTranscript<'a, C, F, EF>
 where
-    EF: TranscriptField + TowerLevel,
-    C: CanObserve<EF> + CanSample<EF>,
+    F: TranscriptField + TowerLevel,
+    EF: BitCoordinates + ExtensionField<F>,
+    C: CanObserve<F> + CanSample<F>,
 {
     /// Seed the transcript from the shape.
     pub fn new(challenger: &'a mut C, shape: BitRingSwitchShape) -> Self {
         Self {
-            state: VerifierState::new(challenger, &shape.domain_separator::<EF>(), &[]),
+            state: VerifierState::new(challenger, &shape.domain_separator::<F, EF>(), &[]),
             shape,
             _level: PhantomData,
         }
@@ -371,8 +380,8 @@ where
     pub fn statement(
         &mut self,
         point: &Point<EF>,
-        rows: &[EF],
-        successor: Option<(&[EF], &[EF])>,
+        rows: &[F],
+        successor: Option<(&[F], &[F])>,
     ) -> Result<(Point<EF>, Option<EF>), TranscriptWidth> {
         if let Err(error) = self.check_widths(point, rows, successor) {
             self.state.abort();
@@ -381,27 +390,24 @@ where
 
         let _ = self
             .state
-            .observe_extensions::<EF, EF, FieldToFieldCodec<EF>>(
-                EVALUATION_POINT,
-                point.as_slice(),
-            );
+            .observe_extensions::<F, EF, FieldToFieldCodec<F>>(EVALUATION_POINT, point.as_slice());
         let _ = self
             .state
-            .observe_extensions::<EF, EF, FieldToFieldCodec<EF>>(TENSOR_ROWS, rows);
+            .observe_extensions::<F, F, FieldToFieldCodec<F>>(TENSOR_ROWS, rows);
         if let Some((carry, last)) = successor {
             let _ = self
                 .state
-                .observe_extensions::<EF, EF, FieldToFieldCodec<EF>>(CARRY_ROWS, carry);
+                .observe_extensions::<F, F, FieldToFieldCodec<F>>(CARRY_ROWS, carry);
             let _ = self
                 .state
-                .observe_extensions::<EF, EF, FieldToFieldCodec<EF>>(LAST_ROWS, last);
+                .observe_extensions::<F, F, FieldToFieldCodec<F>>(LAST_ROWS, last);
         }
 
         let batching_point = Point::new(
             self.state
-                .challenge_extensions::<EF, EF, FieldToFieldCodec<EF>>(
+                .challenge_extensions::<F, EF, FieldToFieldCodec<F>>(
                     BATCHING_POINT,
-                    BitRingSwitch::<EF>::ABSORBED,
+                    BitRingSwitch::<F, EF>::BATCHED,
                 )
                 .into_iter()
                 .map(TranscriptBound::into_inner)
@@ -409,7 +415,7 @@ where
         );
         let alpha = successor.map(|_| {
             self.state
-                .challenge_extension::<EF, EF, FieldToFieldCodec<EF>>(TENSOR_BATCHING)
+                .challenge_extension::<F, EF, FieldToFieldCodec<F>>(TENSOR_BATCHING)
                 .into_inner()
         });
         Ok((batching_point, alpha))
@@ -419,8 +425,8 @@ where
     fn check_widths(
         &self,
         point: &Point<EF>,
-        rows: &[EF],
-        successor: Option<(&[EF], &[EF])>,
+        rows: &[F],
+        successor: Option<(&[F], &[F])>,
     ) -> Result<(), TranscriptWidth> {
         check_statement_widths(&self.shape, point, rows, successor)
     }
@@ -437,7 +443,7 @@ where
     /// Replay the value the surviving claim carries.
     pub fn surviving_claim(&mut self, value: EF) {
         self.state
-            .observe_extension::<EF, EF, FieldToFieldCodec<EF>>(SURVIVING_CLAIM, &value);
+            .observe_extension::<F, EF, FieldToFieldCodec<F>>(SURVIVING_CLAIM, &value);
     }
 
     /// Release the completeness check because the proof is being rejected.
@@ -454,11 +460,11 @@ where
 }
 
 /// Check one claim's statement against the shape it was described with, absorbing nothing.
-fn check_statement_widths<EF: TowerLevel>(
+fn check_statement_widths<F, EF: BitCoordinates>(
     shape: &BitRingSwitchShape,
     point: &Point<EF>,
-    rows: &[EF],
-    successor: Option<(&[EF], &[EF])>,
+    rows: &[F],
+    successor: Option<(&[F], &[F])>,
 ) -> Result<(), TranscriptWidth> {
     if point.num_variables() != shape.num_variables {
         return Err(TranscriptWidth::Point {
@@ -499,13 +505,13 @@ const CLAIM_BATCHING: &str = "claim_batching";
 
 /// What one claim of a batch binds before any batching draw.
 #[derive(Clone, Copy, Debug)]
-pub struct ClaimStatement<'a, EF> {
+pub struct ClaimStatement<'a, F, EF = F> {
     /// The evaluation point of the claim.
     pub point: &'a Point<EF>,
     /// The rows of its tensor element.
-    pub rows: &'a [EF],
+    pub rows: &'a [F],
     /// The rows of its carry and last elements, when its shape has successor rows.
-    pub successor: Option<(&'a [EF], &'a [EF])>,
+    pub successor: Option<(&'a [F], &'a [F])>,
 }
 
 /// The challenges a batch of claims draws once every claim is bound.
@@ -545,9 +551,13 @@ impl BitRingSwitchClaimsShape {
 
     /// Describe every step of one batched run, which one matched bracket always validates.
     #[must_use]
-    pub fn pattern<EF: TranscriptField + TowerLevel>(&self) -> InteractionPattern {
+    pub fn pattern<F, EF>(&self) -> InteractionPattern
+    where
+        F: TranscriptField + TowerLevel,
+        EF: BitCoordinates + ExtensionField<F>,
+    {
         let rows = |label| {
-            Interaction::algebra::<EF, EF>(
+            Interaction::algebra::<F, F>(
                 Hierarchy::Atomic,
                 Kind::Message,
                 label,
@@ -555,18 +565,13 @@ impl BitRingSwitchClaimsShape {
             )
         };
         let scalar_challenge = |label| {
-            Interaction::algebra::<EF, EF>(
-                Hierarchy::Atomic,
-                Kind::Challenge,
-                label,
-                Length::Scalar,
-            )
+            Interaction::algebra::<F, EF>(Hierarchy::Atomic, Kind::Challenge, label, Length::Scalar)
         };
 
         let mut steps = Vec::new();
         // Every claim is bound whole before any draw, which is what the batching bound needs.
         for claim in &self.claims {
-            steps.push(Interaction::algebra::<EF, EF>(
+            steps.push(Interaction::algebra::<F, EF>(
                 Hierarchy::Atomic,
                 Kind::Message,
                 EVALUATION_POINT,
@@ -578,11 +583,11 @@ impl BitRingSwitchClaimsShape {
             }
         }
         // One batching point shared by every claim collapses each claim's rows.
-        steps.push(Interaction::algebra::<EF, EF>(
+        steps.push(Interaction::algebra::<F, EF>(
             Hierarchy::Atomic,
             Kind::Challenge,
             BATCHING_POINT,
-            Length::Fixed(BitRingSwitch::<EF>::ABSORBED),
+            Length::Fixed(BitRingSwitch::<F, EF>::BATCHED),
         ));
         if self.sends_successor() {
             steps.push(scalar_challenge(TENSOR_BATCHING));
@@ -600,7 +605,7 @@ impl BitRingSwitchClaimsShape {
                 Kind::Protocol,
                 BATCHED_SUMCHECK,
             ),
-            Interaction::algebra::<EF, EF>(
+            Interaction::algebra::<F, EF>(
                 Hierarchy::Atomic,
                 Kind::Message,
                 SURVIVING_CLAIM,
@@ -616,10 +621,12 @@ impl BitRingSwitchClaimsShape {
     /// Each claim's successor row count is an instance label, as in the one-claim run.
     /// An empty label marks a claim without successor rows, so no two shapes share a seed.
     #[must_use]
-    pub fn domain_separator<EF: TranscriptField + TowerLevel>(
-        &self,
-    ) -> DomainSeparator<Alphabet<EF>> {
-        let mut separator = DomainSeparator::new(VERSION, CLAIMS_NAME, self.pattern::<EF>());
+    pub fn domain_separator<F, EF>(&self) -> DomainSeparator<Alphabet<F>>
+    where
+        F: TranscriptField + TowerLevel,
+        EF: BitCoordinates + ExtensionField<F>,
+    {
+        let mut separator = DomainSeparator::new(VERSION, CLAIMS_NAME, self.pattern::<F, EF>());
         separator.instance(&(self.claims.len() as u64).to_be_bytes());
         for claim in &self.claims {
             match claim.successor_rows {
@@ -632,23 +639,27 @@ impl BitRingSwitchClaimsShape {
 }
 
 /// Prover-side transcript of a batch of bit-alphabet claims.
-pub struct BitRingSwitchClaimsProverTranscript<'a, C, EF: TranscriptField> {
+pub struct BitRingSwitchClaimsProverTranscript<'a, C, F: TranscriptField, EF = F> {
     /// Driver walking the description and holding the borrowed sponge.
-    state: ProverState<&'a mut C, Alphabet<EF>>,
+    state: ProverState<&'a mut C, Alphabet<F>>,
     /// The numbers this run was described with.
     shape: BitRingSwitchClaimsShape,
+    /// Marker for the challenge field the points and draws live in.
+    _challenge: PhantomData<EF>,
 }
 
-impl<'a, C, EF> BitRingSwitchClaimsProverTranscript<'a, C, EF>
+impl<'a, C, F, EF> BitRingSwitchClaimsProverTranscript<'a, C, F, EF>
 where
-    EF: TranscriptField + TowerLevel,
-    C: CanObserve<EF> + CanSample<EF>,
+    F: TranscriptField + TowerLevel,
+    EF: BitCoordinates + ExtensionField<F>,
+    C: CanObserve<F> + CanSample<F>,
 {
     /// Seed the transcript from the shape, folding its fingerprint into the sponge.
     pub fn new(challenger: &'a mut C, shape: BitRingSwitchClaimsShape) -> Self {
         Self {
-            state: ProverState::new(challenger, &shape.domain_separator::<EF>()),
+            state: ProverState::new(challenger, &shape.domain_separator::<F, EF>()),
             shape,
+            _challenge: PhantomData,
         }
     }
 
@@ -658,7 +669,7 @@ where
     ///
     /// - When the claim count or a claim's successor rows disagree with the shape.
     /// - When a list is not the width the run was described with.
-    pub fn statement(&mut self, claims: &[ClaimStatement<'_, EF>]) -> ClaimsDraws<EF> {
+    pub fn statement(&mut self, claims: &[ClaimStatement<'_, F, EF>]) -> ClaimsDraws<EF> {
         assert_eq!(
             claims.len(),
             self.shape.claims.len(),
@@ -671,25 +682,25 @@ where
                 "the successor elements are sent exactly when the shape describes them",
             );
             self.state
-                .observe_extensions::<EF, EF, FieldToFieldCodec<EF>>(
+                .observe_extensions::<F, EF, FieldToFieldCodec<F>>(
                     EVALUATION_POINT,
                     claim.point.as_slice(),
                 );
             self.state
-                .observe_extensions::<EF, EF, FieldToFieldCodec<EF>>(TENSOR_ROWS, claim.rows);
+                .observe_extensions::<F, F, FieldToFieldCodec<F>>(TENSOR_ROWS, claim.rows);
             if let Some((carry, last)) = claim.successor {
                 self.state
-                    .observe_extensions::<EF, EF, FieldToFieldCodec<EF>>(CARRY_ROWS, carry);
+                    .observe_extensions::<F, F, FieldToFieldCodec<F>>(CARRY_ROWS, carry);
                 self.state
-                    .observe_extensions::<EF, EF, FieldToFieldCodec<EF>>(LAST_ROWS, last);
+                    .observe_extensions::<F, F, FieldToFieldCodec<F>>(LAST_ROWS, last);
             }
         }
         // Only now are the batching challenges drawn, so no message above them knew them.
         let batching_point = Point::new(
             self.state
-                .challenge_extensions::<EF, EF, FieldToFieldCodec<EF>>(
+                .challenge_extensions::<F, EF, FieldToFieldCodec<F>>(
                     BATCHING_POINT,
-                    BitRingSwitch::<EF>::ABSORBED,
+                    BitRingSwitch::<F, EF>::BATCHED,
                 )
                 .into_iter()
                 .map(TranscriptBound::into_inner)
@@ -697,12 +708,12 @@ where
         );
         let alpha = self.shape.sends_successor().then(|| {
             self.state
-                .challenge_extension::<EF, EF, FieldToFieldCodec<EF>>(TENSOR_BATCHING)
+                .challenge_extension::<F, EF, FieldToFieldCodec<F>>(TENSOR_BATCHING)
                 .into_inner()
         });
         let lambda = self
             .state
-            .challenge_extension::<EF, EF, FieldToFieldCodec<EF>>(CLAIM_BATCHING)
+            .challenge_extension::<F, EF, FieldToFieldCodec<F>>(CLAIM_BATCHING)
             .into_inner();
         ClaimsDraws {
             batching_point,
@@ -723,7 +734,7 @@ where
     /// Bind the value the surviving claim carries.
     pub fn surviving_claim(&mut self, value: EF) {
         self.state
-            .observe_extension::<EF, EF, FieldToFieldCodec<EF>>(SURVIVING_CLAIM, &value);
+            .observe_extension::<F, EF, FieldToFieldCodec<F>>(SURVIVING_CLAIM, &value);
     }
 
     /// Close the transcript, panicking unless every described step was played.
@@ -738,23 +749,27 @@ where
 /// Verifier-side transcript of a batch of bit-alphabet claims.
 ///
 /// Mirrors the prover side call for call, over the same description.
-pub struct BitRingSwitchClaimsVerifierTranscript<'a, C, EF: TranscriptField> {
+pub struct BitRingSwitchClaimsVerifierTranscript<'a, C, F: TranscriptField, EF = F> {
     /// Driver walking the description and holding the borrowed sponge.
-    state: VerifierState<'static, &'a mut C, Alphabet<EF>>,
+    state: VerifierState<'static, &'a mut C, Alphabet<F>>,
     /// The numbers this run was described with.
     shape: BitRingSwitchClaimsShape,
+    /// Marker for the challenge field the points and draws live in.
+    _challenge: PhantomData<EF>,
 }
 
-impl<'a, C, EF> BitRingSwitchClaimsVerifierTranscript<'a, C, EF>
+impl<'a, C, F, EF> BitRingSwitchClaimsVerifierTranscript<'a, C, F, EF>
 where
-    EF: TranscriptField + TowerLevel,
-    C: CanObserve<EF> + CanSample<EF>,
+    F: TranscriptField + TowerLevel,
+    EF: BitCoordinates + ExtensionField<F>,
+    C: CanObserve<F> + CanSample<F>,
 {
     /// Seed the transcript from the shape.
     pub fn new(challenger: &'a mut C, shape: BitRingSwitchClaimsShape) -> Self {
         Self {
-            state: VerifierState::new(challenger, &shape.domain_separator::<EF>(), &[]),
+            state: VerifierState::new(challenger, &shape.domain_separator::<F, EF>(), &[]),
             shape,
+            _challenge: PhantomData,
         }
     }
 
@@ -769,7 +784,7 @@ where
     /// - when a claim's successor rows disagree with its shape
     pub fn statement(
         &mut self,
-        claims: &[ClaimStatement<'_, EF>],
+        claims: &[ClaimStatement<'_, F, EF>],
     ) -> Result<ClaimsDraws<EF>, TranscriptWidth> {
         let checked = if claims.len() == self.shape.claims.len() {
             claims
@@ -792,28 +807,28 @@ where
         for claim in claims {
             let _ = self
                 .state
-                .observe_extensions::<EF, EF, FieldToFieldCodec<EF>>(
+                .observe_extensions::<F, EF, FieldToFieldCodec<F>>(
                     EVALUATION_POINT,
                     claim.point.as_slice(),
                 );
             let _ = self
                 .state
-                .observe_extensions::<EF, EF, FieldToFieldCodec<EF>>(TENSOR_ROWS, claim.rows);
+                .observe_extensions::<F, F, FieldToFieldCodec<F>>(TENSOR_ROWS, claim.rows);
             if let Some((carry, last)) = claim.successor {
                 let _ = self
                     .state
-                    .observe_extensions::<EF, EF, FieldToFieldCodec<EF>>(CARRY_ROWS, carry);
+                    .observe_extensions::<F, F, FieldToFieldCodec<F>>(CARRY_ROWS, carry);
                 let _ = self
                     .state
-                    .observe_extensions::<EF, EF, FieldToFieldCodec<EF>>(LAST_ROWS, last);
+                    .observe_extensions::<F, F, FieldToFieldCodec<F>>(LAST_ROWS, last);
             }
         }
         // Only now are the batching challenges drawn, so no message above them knew them.
         let batching_point = Point::new(
             self.state
-                .challenge_extensions::<EF, EF, FieldToFieldCodec<EF>>(
+                .challenge_extensions::<F, EF, FieldToFieldCodec<F>>(
                     BATCHING_POINT,
-                    BitRingSwitch::<EF>::ABSORBED,
+                    BitRingSwitch::<F, EF>::BATCHED,
                 )
                 .into_iter()
                 .map(TranscriptBound::into_inner)
@@ -821,12 +836,12 @@ where
         );
         let alpha = self.shape.sends_successor().then(|| {
             self.state
-                .challenge_extension::<EF, EF, FieldToFieldCodec<EF>>(TENSOR_BATCHING)
+                .challenge_extension::<F, EF, FieldToFieldCodec<F>>(TENSOR_BATCHING)
                 .into_inner()
         });
         let lambda = self
             .state
-            .challenge_extension::<EF, EF, FieldToFieldCodec<EF>>(CLAIM_BATCHING)
+            .challenge_extension::<F, EF, FieldToFieldCodec<F>>(CLAIM_BATCHING)
             .into_inner();
         Ok(ClaimsDraws {
             batching_point,
@@ -847,7 +862,7 @@ where
     /// Replay the value the surviving claim carries.
     pub fn surviving_claim(&mut self, value: EF) {
         self.state
-            .observe_extension::<EF, EF, FieldToFieldCodec<EF>>(SURVIVING_CLAIM, &value);
+            .observe_extension::<F, EF, FieldToFieldCodec<F>>(SURVIVING_CLAIM, &value);
     }
 
     /// Release the completeness check because the proof is being rejected.
@@ -964,7 +979,7 @@ mod tests {
     ///
     /// Comparing seed streams keeps the sponge out of the separation claim.
     fn seed_of(shape: BitRingSwitchShape) -> SeedDigest {
-        seed_digest(&shape.domain_separator::<EF>())
+        seed_digest(&shape.domain_separator::<EF, EF>())
     }
 
     /// Every field of the shape, each moved one step away from the baseline.
@@ -1110,7 +1125,7 @@ mod tests {
         // Invariant: this reduction grinds nowhere.
         //
         // A step appearing here would be a cost neither side accounts for.
-        assert!(pow_difficulties(&base_shape().pattern::<EF>()).is_empty());
+        assert!(pow_difficulties(&base_shape().pattern::<EF, EF>()).is_empty());
     }
 
     #[test]
@@ -1231,7 +1246,7 @@ mod tests {
         //                                ^             ^
         //                                |             the first challenge of the run
         //                                bound before it
-        let pattern = base_shape().pattern::<EF>();
+        let pattern = base_shape().pattern::<EF, EF>();
         let labels: Vec<&str> = pattern
             .interactions()
             .iter()
@@ -1465,7 +1480,7 @@ mod tests {
         //                                       ^             ^
         //                                       |             the first challenge of the run
         //                                       bound before it
-        let pattern = successor_shape().pattern::<EF>();
+        let pattern = successor_shape().pattern::<EF, EF>();
         let labels: Vec<&str> = pattern
             .interactions()
             .iter()
@@ -1557,7 +1572,7 @@ mod tests {
                 &BitRingSwitchClaimsShape {
                     claims: claims.to_vec(),
                 }
-                .domain_separator::<EF>(),
+                .domain_separator::<EF, EF>(),
             )
         };
         let seeds = [
@@ -1576,7 +1591,7 @@ mod tests {
                 &BitRingSwitchClaimsShape {
                     claims: vec![plain, successor]
                 }
-                .pattern::<EF>()
+                .pattern::<EF, EF>()
             )
             .is_empty()
         );

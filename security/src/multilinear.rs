@@ -54,26 +54,26 @@ pub fn column_batch_term(num_batches: usize, k: usize, field_bits: usize) -> Sec
 /// The single-tensor case of [`bit_ring_switch_tensors_error`], with `num_tensors = 1`.
 ///
 /// ```text
-///     error = (absorbed_log + 2 * surviving) / |F|
+///     error = (batching_variables + 2 * surviving) / |F|
 /// ```
 ///
 /// # Arguments
 ///
 /// - `num_reductions`: points reduced, one reduction each.
-/// - `absorbed_log`: log of the bits one packed element holds.
+/// - `batching_variables`: coordinates the batching draw names, `ceil(log2(dim F))`.
 /// - `surviving_variables`: variables the packed multilinear has.
 /// - `field_bits`: bit width of the field the challenges are drawn from.
 #[must_use]
 pub fn bit_ring_switch_error(
     num_reductions: usize,
-    absorbed_log: usize,
+    batching_variables: usize,
     surviving_variables: usize,
     field_bits: usize,
 ) -> ErrorBits {
     bit_ring_switch_tensors_error(
         num_reductions,
         1,
-        absorbed_log,
+        batching_variables,
         surviving_variables,
         field_bits,
     )
@@ -83,14 +83,14 @@ pub fn bit_ring_switch_error(
 #[must_use]
 pub fn bit_ring_switch_term(
     num_reductions: usize,
-    absorbed_log: usize,
+    batching_variables: usize,
     surviving_variables: usize,
     field_bits: usize,
 ) -> SecurityTerm {
     bit_ring_switch_tensors_term(
         num_reductions,
         1,
-        absorbed_log,
+        batching_variables,
         surviving_variables,
         field_bits,
     )
@@ -99,20 +99,19 @@ pub fn bit_ring_switch_term(
 /// Error of reducing claims about a bit witness to claims about the elements packing it,
 /// batching `num_tensors` claims at the same point under powers of a challenge alpha.
 ///
-/// One element holds `2^absorbed_log` bits, so a point of `n` variables splits in two:
+/// The sent element has one row per `F_2`-coordinate of the challenge field.
+/// The batching draw indexes those rows:
 ///
 /// ```text
-///     absorbed_log         coordinates inside one element
-///     n - absorbed_log     coordinates addressing the elements
+///     batching_variables = ceil(log2(dim F))     7 at GF(2^128), 8 at GF(2^192)
 /// ```
 ///
-/// One reduction draws `absorbed_log` batching coordinates and, when `num_tensors > 1`, one
-/// challenge alpha.
+/// One reduction draws those coordinates and, when `num_tensors > 1`, one challenge alpha.
 /// The batched row claim is multilinear in the coordinates and of degree `num_tensors - 1`
 /// in alpha. It then runs one degree-two sumcheck round per surviving variable.
 ///
 /// ```text
-///     error = (absorbed_log + (num_tensors - 1) + 2 * surviving) / |F|
+///     error = (batching_variables + (num_tensors - 1) + 2 * surviving) / |F|
 /// ```
 ///
 /// Reductions at different points share no challenge, so `k` of them union to `k` times that.
@@ -124,14 +123,14 @@ pub fn bit_ring_switch_term(
 ///
 /// - `num_reductions`: points reduced, one reduction each.
 /// - `num_tensors`: tensors batched together at each point under powers of alpha.
-/// - `absorbed_log`: log of the bits one packed element holds.
+/// - `batching_variables`: coordinates the batching draw names, `ceil(log2(dim F))`.
 /// - `surviving_variables`: variables the packed multilinear has.
 /// - `field_bits`: bit width of the field the challenges are drawn from.
 #[must_use]
 pub fn bit_ring_switch_tensors_error(
     num_reductions: usize,
     num_tensors: usize,
-    absorbed_log: usize,
+    batching_variables: usize,
     surviving_variables: usize,
     field_bits: usize,
 ) -> ErrorBits {
@@ -139,9 +138,9 @@ pub fn bit_ring_switch_tensors_error(
     if num_reductions == 0 {
         return ErrorBits::from_log2(f64::INFINITY);
     }
-    // Rounds per reduction: one batching draw per absorbed coordinate, degree
+    // Rounds per reduction: one batching draw per batching coordinate, degree
     // num_tensors - 1 in the alpha challenge, two per sumcheck round.
-    let per_reduction = absorbed_log as f64
+    let per_reduction = batching_variables as f64
         + num_tensors.saturating_sub(1) as f64
         + 2.0 * surviving_variables as f64;
     // A reduction over a point the packing absorbs whole, with a single tensor, runs no
@@ -157,7 +156,7 @@ pub fn bit_ring_switch_tensors_error(
 pub fn bit_ring_switch_tensors_term(
     num_reductions: usize,
     num_tensors: usize,
-    absorbed_log: usize,
+    batching_variables: usize,
     surviving_variables: usize,
     field_bits: usize,
 ) -> SecurityTerm {
@@ -166,7 +165,7 @@ pub fn bit_ring_switch_tensors_term(
         bit_ring_switch_tensors_error(
             num_reductions,
             num_tensors,
-            absorbed_log,
+            batching_variables,
             surviving_variables,
             field_bits,
         ),

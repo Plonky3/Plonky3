@@ -1,67 +1,90 @@
-//! The tensor algebra `EF ⊗_{F_2} EF`, held as a bit matrix.
+//! The tensor algebra `EF ⊗_{F_2} R`, held as a bit matrix.
 
 use alloc::vec::Vec;
+use core::marker::PhantomData;
 use core::ops::AddAssign;
 
-use p3_binary_field::TowerLevel;
+use p3_binary_field::BitCoordinates;
 use serde::{Deserialize, Serialize};
 
 use super::basis::Coefficients;
 
-/// An element of `EF ⊗_{F_2} EF`, held as the `d` rows of a `d x d` bit matrix.
+/// An element of `EF ⊗_{F_2} R`, held as the rows of a `dim EF x dim R` bit matrix.
 ///
 /// # Overview
 ///
-/// Fix the `F_2`-basis the coordinates define.
-/// The element is the matrix `m`, with `m[u][v]` the `beta_u ⊗ beta_v` term.
-/// A row of bits is an element of `EF`, so the matrix is `d` elements:
+/// Fix the `F_2`-bases the coordinates define: `beta_u` for `EF`, `gamma_v` for `R`.
+/// The element is the matrix `m`, with `m[u][v]` the `beta_u ⊗ gamma_v` term.
+/// A row of bits is an element of `R`, a column of bits an element of `EF`:
 ///
 /// ```text
-///     row u     =  sum_v m[u][v] * beta_v
-///     column v  =  sum_u m[u][v] * beta_u
+///     row u     =  sum_v m[u][v] * gamma_v      one per coordinate of EF
+///     column v  =  sum_u m[u][v] * beta_u       one per coordinate of R
 /// ```
 ///
 /// Rows are what this type stores, so the row reading is free.
 /// The column reading is one bit transpose away.
 ///
+/// # Two legs
+///
+/// The first leg carries the challenge field, the second whatever the rows hold.
+///
+/// ```text
+///     sent element       EF ⊗ F     the rows are packed-level elements
+///     equality element   EF ⊗ EF    the rows are challenge-field elements
+/// ```
+///
+/// Neither dimension needs to be a power of two.
+///
 /// # What crosses the wire
 ///
-/// The rows, as `d` elements of `EF`: the whole element, one bit per entry.
-/// 2 KB at `d = 128`, against the 16 KB a byte per coefficient would cost.
+/// The rows, as `dim EF` elements of `R`: the whole element, one bit per entry.
+/// 2 KB at `EF = R = GF(2^128)`, against the 16 KB a byte per coefficient would cost.
 ///
 /// The only route from untrusted data to this type checks the row count.
 /// A deserialized element is therefore already the right shape.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(
-    into = "Vec<EF>",
-    try_from = "Vec<EF>",
-    bound(serialize = "EF: TowerLevel", deserialize = "EF: TowerLevel")
+    into = "Vec<R>",
+    try_from = "Vec<R>",
+    bound(
+        serialize = "EF: BitCoordinates, R: BitCoordinates",
+        deserialize = "EF: BitCoordinates, R: BitCoordinates"
+    )
 )]
-pub struct BitTensor<EF> {
-    /// Row `u` as an element: bit `v` is the coefficient of `beta_u ⊗ beta_v`.
-    rows: Vec<EF>,
+pub struct BitTensor<EF, R = EF> {
+    /// Row `u` as an element: bit `v` is the coefficient of `beta_u ⊗ gamma_v`.
+    rows: Vec<R>,
+    /// Marker for the first leg, which the row count follows.
+    _first: PhantomData<EF>,
 }
 
-impl<EF: TowerLevel> BitTensor<EF> {
-    /// The side length of the matrix: the field's dimension over `F_2`.
+impl<EF: BitCoordinates, R: BitCoordinates> BitTensor<EF, R> {
+    /// The row count: the first leg's dimension over `F_2`.
     pub const DIMENSION: usize = Coefficients::<EF>::DIMENSION;
 
     /// The additive identity: the all-zero matrix.
     #[must_use]
     pub fn zero() -> Self {
-        Self {
-            rows: alloc::vec![EF::ZERO; Self::DIMENSION],
-        }
+        Self::from_rows(alloc::vec![R::ZERO; Self::DIMENSION])
     }
 
     /// The multiplicative identity `1 ⊗ 1`.
     ///
     /// Formed from the coordinates of one rather than placed at the corner.
     ///
-    /// That is correct whichever basis the level carries.
+    /// That is correct whichever basis the fields carry.
     #[must_use]
     pub fn one() -> Self {
-        Self::exterior_product(EF::ONE, EF::ONE)
+        Self::exterior_product(EF::ONE, R::ONE)
+    }
+
+    /// Wrap rows already known to number one per coordinate of the first leg.
+    const fn from_rows(rows: Vec<R>) -> Self {
+        Self {
+            rows,
+            _first: PhantomData,
+        }
     }
 
     /// Adds `a ⊗ b` into this element, without forming the product separately.
@@ -69,7 +92,7 @@ impl<EF: TowerLevel> BitTensor<EF> {
     /// Coordinates are bits, so a term is an addition, not a multiplication.
     ///
     /// Row `u` takes `b` exactly when coordinate `u` of `a` is set.
-    pub fn add_exterior_product(&mut self, a: EF, b: EF) {
+    pub fn add_exterior_product(&mut self, a: EF, b: R) {
         for u in Coefficients::of(a).iter_set() {
             self.rows[u] += b;
         }
@@ -77,7 +100,7 @@ impl<EF: TowerLevel> BitTensor<EF> {
 
     /// `a ⊗ b`.
     #[must_use]
-    pub fn exterior_product(a: EF, b: EF) -> Self {
+    pub fn exterior_product(a: EF, b: R) -> Self {
         let mut out = Self::zero();
         out.add_exterior_product(a, b);
         out
@@ -93,23 +116,21 @@ impl<EF: TowerLevel> BitTensor<EF> {
         self.rows.len() == Self::DIMENSION
     }
 
-    /// The rows, each read as an element.
+    /// The rows, each read as an element of the second leg.
     ///
     /// These are what a transcript absorbs, being what crosses the wire.
     #[must_use]
-    pub fn rows(&self) -> &[EF] {
+    pub fn rows(&self) -> &[R] {
         &self.rows
     }
 
-    /// The columns, each read as an element.
+    /// The columns, each read as an element of the first leg.
     ///
-    /// The matrix transposed, which is `d^2` bit moves.
+    /// The matrix transposed, which is `dim EF * dim R` bit moves.
     ///
     /// Taken once per use rather than maintained alongside the rows.
     #[must_use]
     pub fn columns(&self) -> Vec<EF> {
-        let d = Self::DIMENSION;
-
         // Read each row's coordinates once, so the transpose is one gather.
         let source = self
             .rows
@@ -117,7 +138,7 @@ impl<EF: TowerLevel> BitTensor<EF> {
             .map(|&row| Coefficients::of(row))
             .collect::<Vec<_>>();
 
-        (0..d)
+        (0..Coefficients::<R>::DIMENSION)
             .map(|v| {
                 let mut column = Coefficients::<EF>::zero();
                 for (u, row) in source.iter().enumerate() {
@@ -133,7 +154,7 @@ impl<EF: TowerLevel> BitTensor<EF> {
     /// Scales the row reading: row `u` becomes `b * row u`.
     ///
     /// This is multiplication by `1 ⊗ b`, acting on the second tensor leg.
-    pub fn scale_rows(&mut self, b: EF) {
+    pub fn scale_rows(&mut self, b: R) {
         for row in &mut self.rows {
             *row *= b;
         }
@@ -163,7 +184,7 @@ impl<EF: TowerLevel> BitTensor<EF> {
     /// A zero row scales to nothing, so its multiplication is never formed.
     pub fn add_scaled_columns(&mut self, other: &Self, a: EF) {
         for (u, &row) in other.rows.iter().enumerate() {
-            if row != EF::ZERO {
+            if row != R::ZERO {
                 let mut basis = Coefficients::<EF>::zero();
                 basis.set(u);
                 self.add_exterior_product(a * basis.element(), row);
@@ -175,7 +196,7 @@ impl<EF: TowerLevel> BitTensor<EF> {
     ///
     /// In characteristic two `eq(X, Y) = XY + (1 + X)(1 + Y) = 1 + X + Y`.
     /// `X` lands on the first leg and `Y` on the second, so one factor is two scalings.
-    pub fn mul_equality_factor(&mut self, a: EF, b: EF) {
+    pub fn mul_equality_factor(&mut self, a: EF, b: R) {
         let mut first = self.clone();
         first.scale_columns(a);
         let mut second = self.clone();
@@ -209,26 +230,26 @@ impl<EF: TowerLevel> BitTensor<EF> {
     ///
     /// Panics unless the two points name the same number of coordinates.
     #[must_use]
-    pub fn successor_element(point: &[EF], other: &[EF]) -> Self {
+    pub fn successor_element(point: &[EF], other: &[R]) -> Self {
         assert_eq!(
             point.len(),
             other.len(),
             "the successor element pairs one coordinate of each point"
         );
-        let (mut carry_a, mut carry_b) = (EF::ONE, EF::ONE);
+        let (mut carry_a, mut carry_b) = (EF::ONE, R::ONE);
         let mut done = Self::zero();
         for (&a, &b) in point.iter().zip(other).rev() {
             done.mul_equality_factor(a, b);
             done.add_exterior_product(carry_a * (EF::ONE + a), carry_b * b);
             carry_a *= a;
-            carry_b *= EF::ONE + b;
+            carry_b *= R::ONE + b;
         }
         done
     }
 
-    /// Column `v` alone, read as an element.
+    /// Column `v` alone, read as an element of the first leg.
     ///
-    /// Coordinate `u` of the column is coordinate `v` of row `u`, so this is `d` bit reads.
+    /// Coordinate `u` of the column is coordinate `v` of row `u`, so this is `dim EF` bit reads.
     #[must_use]
     pub fn column(&self, v: usize) -> EF {
         let mut column = Coefficients::<EF>::zero();
@@ -254,26 +275,29 @@ impl<EF: TowerLevel> BitTensor<EF> {
 ///     row 8k + j   = sum of bucket[k][s] over the s with bit j set
 /// ```
 ///
-/// The closing pass over the buckets is `d/8 * 256` entries, whatever the sum was over.
+/// The closing pass over the buckets is `dim EF / 8 * 256` entries, whatever the sum was over.
 ///
 /// The buckets are an accumulation detail of the reductions here, not a wire or API type.
 #[derive(Clone, Debug)]
-pub(crate) struct BitTensorBuckets<EF> {
+pub(crate) struct BitTensorBuckets<EF, R = EF> {
     /// Per byte position of the left factor, one sum per value that byte takes.
-    buckets: Vec<[EF; 256]>,
+    buckets: Vec<[R; 256]>,
+    /// Marker for the left factor, whose bytes index the buckets.
+    _left: PhantomData<EF>,
 }
 
-impl<EF: TowerLevel> BitTensorBuckets<EF> {
+impl<EF: BitCoordinates, R: BitCoordinates> BitTensorBuckets<EF, R> {
     /// Empty buckets, which read back as the zero element.
     pub(crate) fn zero() -> Self {
         Self {
-            buckets: alloc::vec![[EF::ZERO; 256]; EF::NUM_BYTES],
+            buckets: alloc::vec![[R::ZERO; 256]; EF::NUM_BYTES],
+            _left: PhantomData,
         }
     }
 
     /// Add `a (x) b` to the sum.
     #[inline]
-    pub(crate) fn add_exterior_product(&mut self, a: EF, b: EF) {
+    pub(crate) fn add_exterior_product(&mut self, a: EF, b: R) {
         for (bucket, byte) in self.buckets.iter_mut().zip(a.into_bytes()) {
             bucket[usize::from(byte)] += b;
         }
@@ -284,12 +308,12 @@ impl<EF: TowerLevel> BitTensorBuckets<EF> {
     /// A sweep that reads back one partial sum per block accumulates them in turn.
     pub(crate) fn clear(&mut self) {
         for bucket in &mut self.buckets {
-            bucket.fill(EF::ZERO);
+            bucket.fill(R::ZERO);
         }
     }
 
     /// The element the buckets hold.
-    pub(crate) fn tensor(&self) -> BitTensor<EF> {
+    pub(crate) fn tensor(&self) -> BitTensor<EF, R> {
         let mut tensor = BitTensor::zero();
         for (position, bucket) in self.buckets.iter().enumerate() {
             for (value, &sum) in bucket.iter().enumerate() {
@@ -311,7 +335,7 @@ impl<EF: TowerLevel> BitTensorBuckets<EF> {
     }
 }
 
-impl<EF: TowerLevel> AddAssign<&Self> for BitTensor<EF> {
+impl<EF: BitCoordinates, R: BitCoordinates> AddAssign<&Self> for BitTensor<EF, R> {
     fn add_assign(&mut self, rhs: &Self) {
         for (row, &other) in self.rows.iter_mut().zip(&rhs.rows) {
             *row += other;
@@ -319,25 +343,25 @@ impl<EF: TowerLevel> AddAssign<&Self> for BitTensor<EF> {
     }
 }
 
-impl<EF: TowerLevel> AddAssign for BitTensor<EF> {
+impl<EF: BitCoordinates, R: BitCoordinates> AddAssign for BitTensor<EF, R> {
     fn add_assign(&mut self, rhs: Self) {
         *self += &rhs;
     }
 }
 
-impl<EF> From<BitTensor<EF>> for Vec<EF> {
-    fn from(value: BitTensor<EF>) -> Self {
+impl<EF, R> From<BitTensor<EF, R>> for Vec<R> {
+    fn from(value: BitTensor<EF, R>) -> Self {
         value.rows
     }
 }
 
-impl<EF: TowerLevel> TryFrom<Vec<EF>> for BitTensor<EF> {
+impl<EF: BitCoordinates, R: BitCoordinates> TryFrom<Vec<R>> for BitTensor<EF, R> {
     type Error = MalformedBitTensor;
 
-    fn try_from(rows: Vec<EF>) -> Result<Self, Self::Error> {
-        // Both readings index a square matrix, so a wrong count defines none.
+    fn try_from(rows: Vec<R>) -> Result<Self, Self::Error> {
+        // Both readings index the first leg's coordinates, so a wrong count defines none.
         if rows.len() == Self::DIMENSION {
-            Ok(Self { rows })
+            Ok(Self::from_rows(rows))
         } else {
             Err(MalformedBitTensor {
                 expected: Self::DIMENSION,
@@ -347,7 +371,7 @@ impl<EF: TowerLevel> TryFrom<Vec<EF>> for BitTensor<EF> {
     }
 }
 
-/// A tensor element whose row count is not the field's dimension over `F_2`.
+/// A tensor element whose row count is not the first leg's dimension over `F_2`.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 #[error("a bit tensor element carries {actual} rows, expected {expected}")]
 pub struct MalformedBitTensor {
@@ -359,7 +383,7 @@ pub struct MalformedBitTensor {
 
 #[cfg(test)]
 mod tests {
-    use p3_binary_field::{BinaryField16, BinaryField128, Gf2};
+    use p3_binary_field::{BinaryField16, BinaryField128, Gf2, TowerLevel};
     use p3_field::PrimeCharacteristicRing;
     use p3_multilinear_util::point::Point;
     use p3_multilinear_util::poly::Poly;
@@ -492,7 +516,7 @@ mod tests {
     }
 
     /// The column scaling at one level, read back through the columns it acts on.
-    fn the_columns_scale_at<F: TowerLevel>(seed: u64)
+    fn the_columns_scale_at<F: BitCoordinates>(seed: u64)
     where
         rand::distr::StandardUniform: rand::distr::Distribution<F>,
     {
