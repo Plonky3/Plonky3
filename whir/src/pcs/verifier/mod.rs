@@ -192,6 +192,14 @@ where
             });
         }
 
+        // A schedule whose folds use up every variable plays no closing sumcheck.
+        //
+        //     final rounds = 0 -> prover writes None, verifier reads nothing -> pin it here
+        //     final rounds > 0 -> the closing fold replays the data          -> the replay binds it
+        if self.final_sumcheck_rounds == 0 && proof.final_sumcheck.is_some() {
+            return Err(VerifierError::UnexpectedFinalSumcheck);
+        }
+
         // One driver spans the whole run, so the description is walked exactly once.
         let shape = WhirShape::new(self.config, num_opening_claims);
         let mut transcript = WhirVerifierTranscript::<Challenger, F, EF>::new(challenger, shape);
