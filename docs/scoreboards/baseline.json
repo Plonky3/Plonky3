@@ -1,0 +1,23 @@
+{
+  "note": "Proof size and security are identical on every machine and at every thread count at these parameters, so they gate exactly. Proving time is not portable, so no budget is committed here; add prove_seconds_budget to a row to gate it on a machine you control.",
+  "runs": [
+    {
+      "objective": "keccak-f-permutations",
+      "log_trace_length": 14,
+      "proof_bytes": 480862,
+      "security_bits": 97.118009
+    },
+    {
+      "objective": "blake-3-compressions",
+      "log_trace_length": 10,
+      "proof_bytes": 597212,
+      "security_bits": 97.118384
+    },
+    {
+      "objective": "sha-256-compressions",
+      "log_trace_length": 10,
+      "proof_bytes": 856140,
+      "security_bits": 97.117993
+    }
+  ]
+}

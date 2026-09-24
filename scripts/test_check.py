@@ -117,7 +117,16 @@ class CheckCliTests(unittest.TestCase):
             "docs": "+ cargo +stable doc --no-deps --workspace --document-private-items",
             "fmt": "+ cargo +nightly fmt --all -- --check",
             "scripts": "+ "
-            + shlex.join([sys.executable, "-m", "unittest", "scripts/test_check.py", "-v"]),
+            + shlex.join(
+                [
+                    sys.executable,
+                    "-m",
+                    "unittest",
+                    "scripts/test_check.py",
+                    "scripts/test_scoreboard.py",
+                    "-v",
+                ]
+            ),
         }
         for check, command in expected.items():
             with self.subTest(check=check):

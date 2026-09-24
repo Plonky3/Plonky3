@@ -27,7 +27,14 @@ LINT_COMMANDS = {
         "--document-private-items",
     ],
     "fmt": ["cargo", "+nightly", "fmt", "--all", "--", "--check"],
-    "scripts": [sys.executable, "-m", "unittest", "scripts/test_check.py", "-v"],
+    "scripts": [
+        sys.executable,
+        "-m",
+        "unittest",
+        "scripts/test_check.py",
+        "scripts/test_scoreboard.py",
+        "-v",
+    ],
 }
 
 DOC_ONLY_NAMES = {"CHANGELOG.md", "LICENSE-APACHE", "LICENSE-MIT"}

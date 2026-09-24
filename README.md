@@ -122,6 +122,14 @@ RUSTFLAGS="-Ctarget-cpu=native" cargo run --example prove_hash_binary --release 
   prove `2^log-trace-length` compressions, one row per compression.
 - `--format`: `human` (default) or `json`. With `json`, standard output is one JSON object per
   run carrying the same measurements, and progress lines and tracing spans go to standard error.
+
+`scripts/scoreboard.py` runs a frozen set of these workloads, single-threaded and
+multi-threaded, and prints one table with witness, proving, serialization and verification
+times, proof size, peak memory and the security each run proved.
+[docs/scoreboards/apple-m2.md](docs/scoreboards/apple-m2.md) is such a run. Passing
+`--gate docs/scoreboards/baseline.json` turns it into a regression check on proof size and
+security, which is what the weekly bench job runs.
+
 - `--representation` (`-r`): the field representation the zerocheck prover runs its later
   rounds in: `auto` (default; `poly-basis-late` with a hardware carryless multiply,
   subfield-tower basis otherwise), `subfield`, `poly-basis`, or `poly-basis-late` (polynomial

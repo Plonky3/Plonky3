@@ -30,3 +30,16 @@ jobs:
       # make even a single pass too slow.
       - name: Run each benchmark once
         run: python3 scripts/check.py bench
+
+      # The scoreboard's own gate: prove the smallest frozen workload of each objective
+      # and require the committed proof size and security. Both are identical on every
+      # machine at these parameters, so this runner holds the same baseline an M2 wrote.
+      # Timings are not gated here, because a shared runner cannot promise them.
+      - name: Build the binary prover
+        run: cargo build --release -p p3-examples --features parallel --example prove_hash_binary
+
+      - name: Gate the binary scoreboard
+        run: |
+          python3 scripts/scoreboard.py \
+            --binary target/release/examples/prove_hash_binary \
+            --quick --gate docs/scoreboards/baseline.json
