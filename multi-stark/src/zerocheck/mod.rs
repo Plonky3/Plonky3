@@ -21,6 +21,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::iter;
 
+use hashbrown::HashSet;
 use p3_air::symbolic::{BaseEntry, BaseLeaf, ExtLeaf, SymbolicExpr};
 use p3_air::{Air, AirLayout, BaseAir};
 use p3_bus::{BusArgumentError, BusReductionOutput};
@@ -331,7 +332,7 @@ where
 /// A freed address would otherwise hide a live node later allocated there.
 fn visit_leaves<A>(
     expression: &SymbolicExpr<A>,
-    seen: &mut BTreeSet<*const SymbolicExpr<A>>,
+    seen: &mut HashSet<*const SymbolicExpr<A>>,
     visit: &mut impl FnMut(&A),
 ) {
     if !seen.insert(expression) {
@@ -385,11 +386,11 @@ fn validate_successor_columns<F: Field, EF: ExtensionField<F>, A: BaseAir<F>>(
             );
         }
     };
-    let mut seen = BTreeSet::new();
+    let mut seen = HashSet::new();
     for expression in base {
         visit_leaves(expression, &mut seen, &mut check);
     }
-    let mut seen_ext = BTreeSet::new();
+    let mut seen_ext = HashSet::new();
     for expression in extension {
         visit_leaves(expression, &mut seen_ext, &mut |leaf| {
             if let ExtLeaf::Base(expression) = leaf {
