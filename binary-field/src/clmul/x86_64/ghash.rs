@@ -1,12 +1,12 @@
-//! The `PCLMULQDQ` backend.
+//! `GF(2)[x] / (x^128 + x^7 + x^2 + x + 1)`, the GHASH basis, one element per register.
 
 use core::arch::x86_64::{
-    __m128i, _mm_clmulepi64_si128, _mm_cvtsi128_si64, _mm_set_epi64x, _mm_setzero_si128,
-    _mm_shuffle_epi32, _mm_slli_si128, _mm_unpackhi_epi64, _mm_xor_si128,
+    __m128i, _mm_clmulepi64_si128, _mm_set_epi64x, _mm_setzero_si128, _mm_shuffle_epi32,
+    _mm_slli_si128, _mm_xor_si128,
 };
 use core::mem::transmute;
 
-use super::basis::{TAIL_64, TAIL_128};
+use crate::clmul::basis::TAIL_128;
 
 /// Selects the low quadword of both operands.
 ///
@@ -21,29 +21,6 @@ const HIGH_BY_LOW: i32 = 0x01;
 
 /// Selects the low quadword of the first operand and the high quadword of the second.
 const LOW_BY_HIGH: i32 = 0x10;
-
-/// The carryless product of two 64-bit polynomials over `GF(2)`.
-///
-/// The instruction accumulates `b << i` for every set bit `i` of `a`.
-/// Bit `j` of the result is therefore the coefficient of `x^j`.
-#[inline]
-pub(super) fn clmul_64x64(a: u64, b: u64) -> u128 {
-    // SAFETY: this module is compiled only when `target_feature = "pclmulqdq"` is enabled for
-    // the crate, which is what the carryless multiply requires.
-    // The remaining intrinsics are `sse2`, always available on `x86_64`.
-    unsafe {
-        // Arguments run from the highest lane down.
-        // The operand goes second and the unused high lane first.
-        let a = _mm_set_epi64x(0, a as i64);
-        let b = _mm_set_epi64x(0, b as i64);
-        let product = _mm_clmulepi64_si128::<LOW_BY_LOW>(a, b);
-
-        // Extracting the high lane directly would need `sse4.1`, so it is moved down instead.
-        let low = _mm_cvtsi128_si64(product) as u64;
-        let high = _mm_cvtsi128_si64(_mm_unpackhi_epi64(product, product)) as u64;
-        u128::from(low) | (u128::from(high) << 64)
-    }
-}
 
 /// One Horner step of the reduction: `t0 + t1 x^64` modulo the field polynomial.
 ///
@@ -185,118 +162,5 @@ pub(crate) fn poly_mul_128_by_64(a: u128, b: u64) -> u128 {
         let low = _mm_clmulepi64_si128::<LOW_BY_LOW>(a, b);
         let middle = _mm_clmulepi64_si128::<HIGH_BY_LOW>(a, b);
         transmute::<__m128i, u128>(fold_shifted(low, middle))
-    }
-}
-
-/// Reduces a 128-bit carryless product modulo `x^64 + x^4 + x^3 + x + 1`, in one register.
-///
-/// Writing `T = x^4 + x^3 + x + 1` for the modulus tail, so that `x^64 = T`:
-///
-/// ```text
-///     p        =  p_lo + p_hi x^64  =  p_lo + p_hi T     (mod the modulus)
-///     p_hi T   =  f_lo + f_hi x^64                        deg f_hi <= 2
-///     f_hi T                                              deg <= 6, so it stops here
-/// ```
-///
-/// # Safety
-///
-/// The caller must be compiled with the `pclmulqdq` target feature.
-#[inline]
-unsafe fn fold_64(product: __m128i) -> u64 {
-    // SAFETY: guaranteed by the caller.
-    unsafe {
-        let tail = _mm_set_epi64x(0, TAIL_64 as i64);
-        let first = _mm_clmulepi64_si128::<HIGH_BY_LOW>(product, tail);
-        let second = _mm_clmulepi64_si128::<HIGH_BY_LOW>(first, tail);
-        let acc = _mm_xor_si128(_mm_xor_si128(product, first), second);
-        _mm_cvtsi128_si64(acc) as u64
-    }
-}
-
-/// Multiplication in `GF(2^64) = GF(2)[x] / (x^64 + x^4 + x^3 + x + 1)`.
-///
-/// The product and both fold steps stay in one vector register.
-///
-/// Reducing in the integer file would move both halves back across the register files.
-///
-/// At this width that move is most of a multiply's latency.
-#[inline]
-pub(crate) fn poly_mul_64(a: u64, b: u64) -> u64 {
-    // SAFETY: this module is compiled only when `target_feature = "pclmulqdq"` is enabled.
-    // The remaining intrinsics are `sse2`, always available on `x86_64`.
-    unsafe {
-        let x = _mm_set_epi64x(0, a as i64);
-        let y = _mm_set_epi64x(0, b as i64);
-        fold_64(_mm_clmulepi64_si128::<LOW_BY_LOW>(x, y))
-    }
-}
-
-/// Squaring in `GF(2^64)`, taking and returning the polynomial representation.
-#[inline]
-pub(crate) fn poly_square_64(a: u64) -> u64 {
-    // SAFETY: as in the multiplication above.
-    unsafe {
-        let x = _mm_set_epi64x(0, a as i64);
-        fold_64(_mm_clmulepi64_si128::<LOW_BY_LOW>(x, x))
-    }
-}
-
-/// Sum unreduced products before paying for one reduction.
-#[inline]
-pub(crate) fn poly_dot_64(pairs: impl Iterator<Item = (u64, u64)>) -> u64 {
-    // SAFETY: as in the multiplication above.
-    unsafe {
-        let mut acc = _mm_setzero_si128();
-        for (a, b) in pairs {
-            let x = _mm_set_epi64x(0, a as i64);
-            let y = _mm_set_epi64x(0, b as i64);
-            // Reduction is linear, so the sum stays unreduced until the fold below.
-            acc = _mm_xor_si128(acc, _mm_clmulepi64_si128::<LOW_BY_LOW>(x, y));
-        }
-        fold_64(acc)
-    }
-}
-
-/// Multiplication in the cubic extension `y^3 + y + 1` of `GF(2^64)`.
-///
-/// Karatsuba over the three limbs, recombined and folded without leaving the vector file.
-///
-/// Reduction is `F_2`-linear, so only the three output coordinates need folding:
-///
-/// ```text
-///     deferred   six products  +  three folds of two each  =  twelve
-///     immediate  six products of three each                =  eighteen
-/// ```
-#[inline]
-pub(crate) fn poly_mul_192(a: [u64; 3], b: [u64; 3]) -> [u64; 3] {
-    // SAFETY: this module is compiled only when `target_feature = "pclmulqdq"` is enabled.
-    // The remaining intrinsics are `sse2`, always available on `x86_64`.
-    unsafe {
-        let lift = |v: u64| _mm_set_epi64x(0, v as i64);
-        let [a0, a1, a2] = a.map(lift);
-        let [b0, b1, b2] = b.map(lift);
-
-        let product = |x, y| _mm_clmulepi64_si128::<LOW_BY_LOW>(x, y);
-        let sum = _mm_xor_si128;
-
-        // Three diagonal products, then one per off-diagonal pair.
-        let c0 = product(a0, b0);
-        let c1 = product(a1, b1);
-        let c2 = product(a2, b2);
-        let d01 = product(sum(a0, a1), sum(b0, b1));
-        let d02 = product(sum(a0, a2), sum(b0, b2));
-        let d12 = product(sum(a1, a2), sum(b1, b2));
-
-        // Each pair carries both of its cross terms, which the diagonals separate out.
-        let p1 = sum(d01, sum(c0, c1));
-        let p2 = sum(d02, sum(sum(c0, c1), c2));
-        let p3 = sum(d12, sum(c1, c2));
-
-        // The modulus rewrites the top two coefficients, then each output folds once.
-        [
-            fold_64(sum(c0, p3)),
-            fold_64(sum(sum(p1, p3), c2)),
-            fold_64(sum(p2, c2)),
-        ]
     }
 }

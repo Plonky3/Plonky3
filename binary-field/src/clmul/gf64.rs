@@ -89,12 +89,34 @@ fn composed_dot_64(pairs: impl Iterator<Item = (u64, u64)>) -> u64 {
 }
 
 /// Squaring repeated a fixed number of times.
+///
+/// With `GFNI` the whole power is one bit-matrix product, whatever the count.
+///
+/// Otherwise it is `K` dependent squarings.
 #[inline]
-fn square_times(mut x: u64, count: usize) -> u64 {
-    for _ in 0..count {
-        x = poly_square_64(x);
+fn square_times<const K: usize>(x: u64) -> u64 {
+    #[cfg(all(
+        target_arch = "x86_64",
+        target_feature = "gfni",
+        target_feature = "avx512f",
+        target_feature = "avx512bw",
+        target_feature = "avx512vbmi"
+    ))]
+    {
+        // One broadcast, eight affine products and a byte permute, for any K.
+        super::x86_64::square_times::<K>(x)
     }
-    x
+    #[cfg(not(all(
+        target_arch = "x86_64",
+        target_feature = "gfni",
+        target_feature = "avx512f",
+        target_feature = "avx512bw",
+        target_feature = "avx512vbmi"
+    )))]
+    {
+        // K dependent squarings, each one carryless product and one fold.
+        (0..K).fold(x, |y, _| poly_square_64(y))
+    }
 }
 
 /// The square root, which every element of a binary field has exactly one of.
@@ -123,21 +145,23 @@ pub(crate) fn poly_sqrt_64(a: u64) -> u64 {
 ///
 /// Nine exponents is eight steps, so eight products and sixty-three squarings.
 ///
+/// With `GFNI`, each run of squarings is one bit-matrix product instead.
+///
 /// None of them is indexed by the operand.
 #[inline]
 pub(crate) fn poly_inverse_64(x: u64) -> u64 {
     let b2 = poly_mul_64(poly_square_64(x), x);
     let b3 = poly_mul_64(poly_square_64(b2), x);
-    let b6 = poly_mul_64(square_times(b3, 3), b3);
+    let b6 = poly_mul_64(square_times::<3>(b3), b3);
 
     // Doubling the exponent index reuses the same intermediate on both sides.
-    let b12 = poly_mul_64(square_times(b6, 6), b6);
-    let b24 = poly_mul_64(square_times(b12, 12), b12);
-    let b48 = poly_mul_64(square_times(b24, 24), b24);
+    let b12 = poly_mul_64(square_times::<6>(b6), b6);
+    let b24 = poly_mul_64(square_times::<12>(b12), b12);
+    let b48 = poly_mul_64(square_times::<24>(b24), b24);
 
     // Finish 48 + 12 = 60, then 60 + 3 = 63.
-    let b60 = poly_mul_64(square_times(b48, 12), b12);
-    let b63 = poly_mul_64(square_times(b60, 3), b3);
+    let b60 = poly_mul_64(square_times::<12>(b48), b12);
+    let b63 = poly_mul_64(square_times::<3>(b60), b3);
 
     // One more squaring turns `2^63 - 1` into `2^64 - 2`.
     poly_square_64(b63)
