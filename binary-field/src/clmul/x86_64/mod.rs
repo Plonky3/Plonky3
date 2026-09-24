@@ -1,14 +1,4 @@
 //! The `PCLMULQDQ` backend.
-//!
-//! One file per field, over one shared register wrapper:
-//!
-//! ```text
-//!     lanes.rs    the 128-bit register as a backend of the shared GF(2^64) algebra
-//!     gf64.rs     GF(2^64), one element in the low quadword
-//!     gf192.rs    its cubic extension, two coordinates per register
-//!     ghash.rs    GF(2^128) in the GHASH basis, one element per register
-//!     gfni.rs     repeated GF(2^64) squaring as one bit-matrix product
-//! ```
 
 use core::arch::x86_64::{
     _mm_clmulepi64_si128, _mm_cvtsi128_si64, _mm_set_epi64x, _mm_unpackhi_epi64,
