@@ -94,7 +94,7 @@ Software GHASH inversion uses the tower norm instead, and does not compile those
 With `gfni`, `avx512f`, `avx512bw` and `avx512vbmi`, each run of squarings in the `GF(2^64)`
 inversion chain is one bit-matrix product on the byte-affine instruction.
 Its matrices are compile-time constants read whole, so the chain stays constant-time.
-On AArch64 each run is one bit-matrix product from NEON compares and masks, over columns also read whole.
+On AArch64 each run of more than three squarings is one bit-matrix product from NEON compares and masks, over columns also read whole.
 
 Hardware dispatch is selected at compile time, so this `no_std` crate performs no CPU checks
 inside scalar arithmetic. `poly_basis::HAS_HARDWARE_CLMUL` describes that compiled choice.

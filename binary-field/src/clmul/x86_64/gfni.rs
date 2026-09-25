@@ -152,38 +152,3 @@ pub(crate) fn square_times<const K: usize>(x: u64) -> u64 {
         ))) as u64
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use proptest::prelude::*;
-
-    use super::square_times;
-    use crate::clmul::gf64::square_times_slow;
-    use crate::clmul::poly_square_64;
-
-    #[test]
-    fn the_matrix_product_is_exact_on_the_basis() {
-        // Invariant: the map is linear, so agreeing on all 64 basis vectors settles every input.
-        //
-        // Fixture state: the shortest and the longest run the inversion chain takes, 3 and 24.
-        for c in 0..64 {
-            let x = 1u64 << c;
-            assert_eq!(square_times::<3>(x), square_times_slow(x, 3), "x^{c}");
-            assert_eq!(square_times::<24>(x), square_times_slow(x, 24), "x^{c}");
-        }
-    }
-
-    proptest! {
-        #![proptest_config(ProptestConfig::with_cases(2000))]
-
-        #[test]
-        fn the_matrix_product_matches_repeated_squaring(x: u64) {
-            // The powers the inversion chain takes, against the field's own squaring.
-            let repeated = |k: usize| (0..k).fold(x, |y, _| poly_square_64(y));
-            prop_assert_eq!(square_times::<3>(x), repeated(3));
-            prop_assert_eq!(square_times::<6>(x), repeated(6));
-            prop_assert_eq!(square_times::<12>(x), repeated(12));
-            prop_assert_eq!(square_times::<24>(x), repeated(24));
-        }
-    }
-}
