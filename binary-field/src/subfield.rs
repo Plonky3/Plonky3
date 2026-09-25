@@ -11,10 +11,11 @@
 use core::ops::{Add, Mul, Sub};
 
 use p3_field::op_assign_macros::{impl_add_base_field, impl_sub_base_field};
-use p3_field::{Algebra, HasSubfield};
+use p3_field::{Algebra, HasSubfield, PrimeCharacteristicRing};
 
+use crate::poly64::GF4_GENERATOR;
 use crate::tower::TowerLevel;
-use crate::{BinaryField2, BinaryField128};
+use crate::{BinaryField2, BinaryField128, Poly64, Poly192};
 
 /// The coefficient of `1` in every 2-bit chunk.
 const LOW_BITS: u128 = 0x5555_5555_5555_5555_5555_5555_5555_5555;
@@ -88,16 +89,100 @@ impl HasSubfield<BinaryField2> for BinaryField128 {
     }
 }
 
+// Carry the tower's GF(4) generator into the polynomial basis through the same
+// isomorphism used by Poly64::from(BinaryField64). This is a root of x²+x+1.
+impl From<BinaryField2> for Poly64 {
+    #[inline]
+    fn from(value: BinaryField2) -> Self {
+        let bits = value.to_repr();
+        Self::new(u64::from(bits & 1) ^ (u64::from(bits >> 1) * GF4_GENERATOR))
+    }
+}
+
+impl_add_base_field!(Poly64, BinaryField2);
+impl_sub_base_field!(Poly64, BinaryField2);
+
+impl Mul<BinaryField2> for Poly64 {
+    type Output = Self;
+
+    #[inline]
+    fn mul(self, rhs: BinaryField2) -> Self {
+        self * Self::from(rhs)
+    }
+}
+
+impl Mul<Poly64> for BinaryField2 {
+    type Output = Poly64;
+
+    #[inline]
+    fn mul(self, rhs: Poly64) -> Poly64 {
+        rhs * self
+    }
+}
+
+impl Algebra<BinaryField2> for Poly64 {}
+
+impl HasSubfield<BinaryField2> for Poly64 {
+    #[inline]
+    fn as_subfield(&self) -> Option<BinaryField2> {
+        let bits = self.to_bits();
+        [0, 1, GF4_GENERATOR, GF4_GENERATOR ^ 1]
+            .iter()
+            .position(|&element| bits == element)
+            .map(|index| BinaryField2::from_repr(index as u8))
+    }
+}
+
+impl From<BinaryField2> for Poly192 {
+    #[inline]
+    fn from(value: BinaryField2) -> Self {
+        Self::from(Poly64::from(value))
+    }
+}
+
+impl_add_base_field!(Poly192, BinaryField2);
+impl_sub_base_field!(Poly192, BinaryField2);
+
+impl Mul<BinaryField2> for Poly192 {
+    type Output = Self;
+
+    #[inline]
+    fn mul(self, rhs: BinaryField2) -> Self {
+        self * Poly64::from(rhs)
+    }
+}
+
+impl Mul<Poly192> for BinaryField2 {
+    type Output = Poly192;
+
+    #[inline]
+    fn mul(self, rhs: Poly192) -> Poly192 {
+        rhs * self
+    }
+}
+
+impl Algebra<BinaryField2> for Poly192 {}
+
+impl HasSubfield<BinaryField2> for Poly192 {
+    #[inline]
+    fn as_subfield(&self) -> Option<BinaryField2> {
+        let [constant, linear, quadratic] = self.coefficients();
+        (linear == Poly64::ZERO && quadratic == Poly64::ZERO)
+            .then(|| constant.as_subfield())
+            .flatten()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use alloc::vec::Vec;
 
-    use p3_field::{HasSubfield, PrimeCharacteristicRing};
+    use p3_field::{Field, HasSubfield, PrimeCharacteristicRing};
     use p3_field_testing::test_has_subfield;
     use proptest::prelude::*;
 
     use crate::tower::TowerLevel;
-    use crate::{BinaryField2, BinaryField8, BinaryField128};
+    use crate::{BinaryField2, BinaryField8, BinaryField128, Poly64, Poly192};
 
     /// Every element of `GF(4)`, in bit-pattern order.
     fn gf4() -> impl Iterator<Item = BinaryField2> {
@@ -150,6 +235,30 @@ mod tests {
     #[test]
     fn the_has_subfield_contract_holds() {
         test_has_subfield::<BinaryField128, BinaryField2>();
+    }
+
+    #[test]
+    fn the_polynomial_fields_embed_the_same_gf4() {
+        test_has_subfield::<Poly64, BinaryField2>();
+        test_has_subfield::<Poly192, BinaryField2>();
+        for a in gf4() {
+            assert_eq!(Poly192::from(a), Poly192::from(Poly64::from(a)));
+        }
+    }
+
+    #[test]
+    fn polynomial_interpolation_nodes_start_in_gf4() {
+        for index in 0..4 {
+            let expected = BinaryField2::from_repr(index);
+            assert_eq!(
+                Poly64::interpolation_node(index as usize),
+                Poly64::from(expected)
+            );
+            assert_eq!(
+                Poly192::interpolation_node(index as usize),
+                Poly192::from(expected)
+            );
+        }
     }
 
     /// A single bit above the lowest two keeps an element out, whichever bit it is.

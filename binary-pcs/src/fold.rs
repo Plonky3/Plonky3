@@ -66,10 +66,12 @@ use alloc::vec::Vec;
 
 use p3_binary_dft::{EncodableLevel, domain_point, domain_point_steps};
 use p3_binary_field::{
-    BinaryField8, BinaryField16, BinaryField32, BinaryField64, BinaryField128, BitCoordinates,
-    Ghash128, Poly64, Poly192, TowerLevel, poly_basis,
+    BinaryField2, BinaryField4, BinaryField8, BinaryField16, BinaryField32, BinaryField64,
+    BinaryField128, BitCoordinates, Ghash128, Poly64, Poly192, TowerLevel, poly_basis,
 };
+use p3_commit::Encoder;
 use p3_field::{Algebra, ExtensionField, Field, PackedValue, PrimeCharacteristicRing};
+use p3_matrix::dense::RowMajorMatrix;
 use p3_maybe_rayon::prelude::*;
 use p3_sumcheck::strategy::{FromTable, IntoTranscriptField};
 
@@ -78,6 +80,52 @@ use p3_sumcheck::strategy::{FromTable, IntoTranscriptField};
 /// This is the widest carryless-multiply register the target offers.
 /// Where the target has none it is a single element, and every loop below still holds.
 type Packed = <Ghash128 as Field>::Packing;
+
+/// A field containing the binary PCS's Cantor domain. Folded extensions use
+/// the committed alphabet's domain, embedded in the extension field.
+pub trait FoldingDomain: Field {
+    fn folding_domain_point(index: usize) -> Self;
+    fn folding_domain_steps(count: usize) -> Vec<Self>;
+}
+
+macro_rules! impl_folding_domain {
+    ($($field:ty),* $(,)?) => {$(
+        impl FoldingDomain for $field {
+            fn folding_domain_point(index: usize) -> Self {
+                domain_point(index)
+            }
+
+            fn folding_domain_steps(count: usize) -> Vec<Self> {
+                domain_point_steps(count)
+            }
+        }
+    )*};
+}
+
+impl_folding_domain!(
+    BinaryField2,
+    BinaryField4,
+    BinaryField8,
+    BinaryField16,
+    BinaryField32,
+    BinaryField64,
+    BinaryField128,
+    Ghash128,
+    Poly64,
+);
+
+impl FoldingDomain for Poly192 {
+    fn folding_domain_point(index: usize) -> Self {
+        Poly64::folding_domain_point(index).into()
+    }
+
+    fn folding_domain_steps(count: usize) -> Vec<Self> {
+        Poly64::folding_domain_steps(count)
+            .into_iter()
+            .map(Into::into)
+            .collect()
+    }
+}
 
 /// How many output symbols one packed multiplication covers.
 const WIDTH: usize = Packed::WIDTH;
@@ -121,10 +169,10 @@ const _: () = assert!(
 #[inline]
 pub fn fold_pair<F, EF>(index: usize, beta: EF, lo: F, hi: F) -> EF
 where
-    F: TowerLevel,
+    F: FoldingDomain,
     EF: ExtensionField<F>,
 {
-    let x: F = domain_point(index << 1);
+    let x = F::folding_domain_point(index << 1);
     let f1 = lo + hi;
     let f0 = lo + x * f1;
     beta * (f0 + f1) + f0
@@ -138,7 +186,7 @@ where
 /// A task evaluates the domain once and then walks it by one addition per symbol.
 fn fold_round<F, EF>(codeword: &[F], beta: EF) -> Vec<EF>
 where
-    F: TowerLevel + Sync,
+    F: FoldingDomain + Sync,
     EF: ExtensionField<F> + Send + Sync,
 {
     // A trailing unpaired symbol produces no output, so it is never read.
@@ -148,7 +196,7 @@ where
     // The walk over those points is the one the transform already owns.
     // Symbol indices run below the pair count.
     // So one entry per bit of that count covers every step.
-    let steps = domain_point_steps::<F>(num_pairs.next_power_of_two().trailing_zeros() as usize);
+    let steps = F::folding_domain_steps(num_pairs.next_power_of_two().trailing_zeros() as usize);
 
     let mut folded = EF::zero_vec(num_pairs);
     folded
@@ -158,7 +206,7 @@ where
         .for_each(|(task, (slots, symbols))| {
             // Task `t` opens at output symbol `t * GRAIN`, the walk's only domain evaluation.
             let start = task * FOLD_GRAIN;
-            let mut x: F = domain_point(start << 1);
+            let mut x = F::folding_domain_point(start << 1);
 
             // A trailing unpaired symbol feeds no slot, so it never enters the loop.
             let (pairs, _) = symbols.as_chunks::<2>();
@@ -183,7 +231,7 @@ where
 /// Fold one round per challenge in the tower basis, materialising each round.
 fn fold_rounds_scalar<EF>(codeword: &[EF], challenges: &[EF]) -> Vec<EF>
 where
-    EF: TowerLevel + Send + Sync,
+    EF: FoldingDomain + Send + Sync,
 {
     let mut folded = fold_round(codeword, challenges[0]);
     for &beta in &challenges[1..] {
@@ -198,7 +246,7 @@ where
 /// Every later fold runs whichever route the wide field itself offers.
 fn fold_rounds_lifting<F, EF>(codeword: &[F], challenges: &[EF]) -> Vec<EF>
 where
-    F: TowerLevel + Sync,
+    F: FoldingDomain + Sync,
     EF: ExtensionField<F> + FoldAlphabet<EF> + Send + Sync,
 {
     let lifted = fold_round(codeword, challenges[0]);
@@ -226,7 +274,7 @@ where
 ///
 /// Every implementation panics unless there is at least one challenge.
 /// A fold with no round would leave every output slot at zero rather than fail.
-pub trait FoldAlphabet<EF: TowerLevel>: TowerLevel {
+pub trait FoldAlphabet<EF: FoldingDomain>: FoldingDomain {
     /// Fold one round per challenge, halving the codeword each time.
     ///
     /// `challenges` stays in the order the sumcheck drew it.
@@ -242,6 +290,18 @@ impl FoldAlphabet<Self> for BinaryField128 {
 impl FoldAlphabet<Self> for BinaryField64 {
     fn fold_rounds(codeword: &[Self], challenges: &[Self]) -> Vec<Self> {
         fold_rounds_scalar(codeword, challenges)
+    }
+}
+
+impl FoldAlphabet<Self> for Poly192 {
+    fn fold_rounds(codeword: &[Self], challenges: &[Self]) -> Vec<Self> {
+        fold_rounds_scalar(codeword, challenges)
+    }
+}
+
+impl FoldAlphabet<Poly192> for Poly64 {
+    fn fold_rounds(codeword: &[Self], challenges: &[Poly192]) -> Vec<Poly192> {
+        fold_rounds_lifting(codeword, challenges)
     }
 }
 
@@ -297,9 +357,15 @@ const REPR_CONVERSION_BLOCK: usize = 1 << 10;
 /// A 64-bit challenge uses its polynomial-basis carryless-multiply representation.
 ///
 /// A folded codeword over this field is an encoding under its own level's encoder.
-pub trait ChallengeField<F: Field>: EncodableLevel {
+pub trait ChallengeField<F: Field>: FoldingDomain {
     /// Isomorphic field used for residual sumcheck arithmetic.
     type SumcheckRepr: IntoTranscriptField<Self> + Algebra<F>;
+
+    /// Encode a zero-padded bound message over the committed domain.
+    fn encode_bound_message(
+        message: RowMajorMatrix<Self>,
+        log_inv_rate: usize,
+    ) -> RowMajorMatrix<Self>;
 
     /// Writes every value of `values`, held in the sumcheck representation, into `out`.
     ///
@@ -322,6 +388,13 @@ where
 {
     type SumcheckRepr = Ghash128;
 
+    fn encode_bound_message(
+        message: RowMajorMatrix<Self>,
+        log_inv_rate: usize,
+    ) -> RowMajorMatrix<Self> {
+        <Self as EncodableLevel>::Encoder::default().encode_batch_padded(message, log_inv_rate)
+    }
+
     /// Crosses a block of polynomial coordinates back into the tower basis in one pass.
     fn from_sumcheck_repr(values: &[Ghash128], out: &mut [Self]) {
         assert_eq!(values.len(), out.len(), "one output per value");
@@ -343,6 +416,29 @@ where
     Poly64: Algebra<F>,
 {
     type SumcheckRepr = Poly64;
+
+    fn encode_bound_message(
+        message: RowMajorMatrix<Self>,
+        log_inv_rate: usize,
+    ) -> RowMajorMatrix<Self> {
+        <Self as EncodableLevel>::Encoder::default().encode_batch_padded(message, log_inv_rate)
+    }
+}
+
+impl ChallengeField<Poly64> for Poly192 {
+    type SumcheckRepr = Self;
+
+    fn encode_bound_message(
+        message: RowMajorMatrix<Self>,
+        log_inv_rate: usize,
+    ) -> RowMajorMatrix<Self> {
+        use p3_field::BasedVectorSpace;
+        let width = message.width;
+        let coefficients = Self::flatten_to_base(message.values);
+        let encoded = <Poly64 as EncodableLevel>::Encoder::default()
+            .encode_batch_padded(RowMajorMatrix::new(coefficients, width * 3), log_inv_rate);
+        RowMajorMatrix::new(Self::reconstitute_from_base(encoded.values), width)
+    }
 }
 
 /// A challenge field the bit ring switch draws from, and the representation its rounds run in.
@@ -597,7 +693,7 @@ fn fold_pairs(
 pub fn fold_codeword<F, EF>(codeword: &[F], beta: EF) -> Vec<EF>
 where
     F: FoldAlphabet<EF>,
-    EF: TowerLevel,
+    EF: FoldingDomain,
 {
     assert!(
         codeword.is_empty() || codeword.len().is_power_of_two(),
@@ -620,8 +716,8 @@ pub(crate) fn fold_coset<F, EF>(
     scratch: &mut Vec<EF>,
 ) -> EF
 where
-    F: TowerLevel,
-    EF: ExtensionField<F> + TowerLevel,
+    F: FoldingDomain,
+    EF: ExtensionField<F> + FoldingDomain,
 {
     assert_eq!(values.len(), 1usize << challenges.len());
 
@@ -658,7 +754,7 @@ where
 pub(crate) fn fold_codeword_batch<F, EF>(codeword: &[F], challenges: &[EF]) -> Vec<EF>
 where
     F: FoldAlphabet<EF>,
-    EF: TowerLevel,
+    EF: FoldingDomain,
 {
     assert!(!challenges.is_empty());
     assert!(codeword.len().is_power_of_two());

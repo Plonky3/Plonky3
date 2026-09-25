@@ -8,25 +8,23 @@ use p3_multilinear_util::point::Point;
 /// The embedding is the sum of the basis elements the position's set bits pick out:
 ///
 /// ```text
-///     iota(v) = sum_{k : bit k of v is set} interpolation_node(2^k)
+///     iota(v) = sum_{k : bit k of v is set} position_bit_node(2^k)
 /// ```
 ///
 /// Defining it over bits is what makes the closed form below its multilinear extension.
 ///
-/// That enumeration promises injectivity and nothing about how it treats bits.
+/// Interpolation nodes may follow a different order from position bits.
 ///
 /// An implementation free to choose could part the explicit table from the closed form.
 ///
 /// This definition cannot.
 ///
 /// The two coincide in odd characteristic, extensions included, and over a binary tower.
-///
-/// A test pins both.
 #[inline]
 pub fn embed<F: Field>(entry: usize) -> F {
     (0..usize::BITS as usize)
         .filter(|bit| (entry >> bit) & 1 == 1)
-        .map(|bit| F::interpolation_node(1 << bit))
+        .map(|bit| F::position_bit_node(1 << bit))
         .sum()
 }
 
@@ -70,7 +68,7 @@ mod tests {
     use alloc::vec::Vec;
 
     use p3_baby_bear::BabyBear;
-    use p3_binary_field::BinaryField128;
+    use p3_binary_field::{BinaryField128, Poly64, Poly192};
     use p3_field::PrimeCharacteristicRing;
     use p3_field::extension::BinomialExtensionField;
     use p3_multilinear_util::poly::Poly;
@@ -82,6 +80,17 @@ mod tests {
     type Small = BabyBear;
     type SmallExt = BinomialExtensionField<Small, 4>;
     type Binary = BinaryField128;
+
+    #[test]
+    fn polynomial_basis_positions_keep_their_raw_bit_patterns() {
+        for entry in 0..8usize {
+            assert_eq!(embed::<Poly64>(entry), Poly64::new(entry as u64));
+            assert_eq!(
+                embed::<Poly192>(entry),
+                Poly192::from(Poly64::new(entry as u64))
+            );
+        }
+    }
 
     #[test]
     fn distinct_entries_embed_to_distinct_elements() {

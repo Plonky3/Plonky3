@@ -328,6 +328,11 @@ impl Field for Poly192 {
     fn interpolation_node(i: usize) -> Self {
         Self::embed(Poly64::interpolation_node(i))
     }
+
+    #[inline]
+    fn position_bit_node(bit: usize) -> Self {
+        Self::embed(Poly64::new(bit as u64))
+    }
 }
 
 impl RawDataSerializable for Poly192 {

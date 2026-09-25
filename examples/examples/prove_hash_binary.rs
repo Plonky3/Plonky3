@@ -7,7 +7,8 @@ use p3_blake3_air::Blake3BinaryAir;
 use p3_examples::binary::{
     Backend, BinaryAir, BinaryFields, BinaryProofOptions, BinaryProofReport, BinaryWhirBudget,
     BooleanPcsChoice, CubicAir, HashFamily, WhirOptions, WhirRegime, WhirSummary,
-    preflight_boolean_air_with_summary, prove_boolean_air_cubic, prove_boolean_air_with_backend,
+    preflight_boolean_air_cubic, preflight_boolean_air_with_summary, prove_boolean_air_cubic,
+    prove_boolean_air_with_backend,
 };
 use p3_examples::parsers::{
     BinaryCommitmentHashOptions, BinaryHashOptions, OutputFormat, RepresentationOptions,
@@ -35,7 +36,7 @@ enum PcsOptions {
 enum FieldOptions {
     /// `GF(2^128)` for the committed values and the challenges.
     Gf128,
-    /// `GF(2^64)` values, `GF(2^192)` challenges, WHIR only.
+    /// `GF(2^64)` values with `GF(2^192)` challenges.
     #[value(name = "gf64-gf192")]
     Gf64Gf192,
 }
@@ -90,9 +91,9 @@ struct Args {
 
     /// Composed security target of the whole proof, in bits.
     ///
-    /// The Boolean commitment packs the trace's bits into `BinaryField128` elements, which caps
-    /// it at roughly 125 - (log-trace-length + ceil(log2(width)) - 7 + log-inv-rate) on the
-    /// binary PCS over those packed elements; PCS grinding does not raise that cap.
+    /// Folding security depends on the selected challenge field and the committed arity.
+    /// For `gf128`, the Boolean PCS cap is roughly
+    /// 125 - (log-trace-length + ceil(log2(width)) - 7 + log-inv-rate).
     #[arg(long, default_value_t = 100)]
     security_bits: usize,
 
@@ -291,12 +292,11 @@ where
 {
     let selected_whir = matches!(options.pcs, BooleanPcsChoice::Whir(_));
     if fields == BinaryFields::Gf64Gf192 {
-        // The prover assesses the statement itself before it proves.
         if preflight_only {
-            return Err("--preflight supports --field gf128 only".to_string());
-        }
-        if !selected_whir {
-            return Err("--field gf64-gf192 requires --pcs whir".to_string());
+            let security_bits = preflight_boolean_air_cubic(air, shape, options)
+                .map_err(|error| format!("Boolean PCS preflight failed: {error}"))?;
+            print_preflight_result(options, security_bits, None, format);
+            return Ok(None);
         }
     } else if selected_whir || preflight_only {
         let (security_bits, summary) = preflight_boolean_air_with_summary(air, shape, options)
@@ -505,6 +505,51 @@ mod tests {
         assert!(args.whir_regime.is_none());
         assert!(args.whir_term_security_bits.is_none());
         assert_eq!(args.proof_options().unwrap().merkle_arity, 4);
+    }
+
+    #[test]
+    fn cli_folds_with_gf64_values_and_gf192_challenges() {
+        let args = Args::try_parse_from([
+            "prove_hash_binary",
+            "--objective",
+            "blake-3-compressions",
+            "--log-trace-length",
+            "2",
+            "--field",
+            "gf64-gf192",
+        ])
+        .expect("cubic folding arguments parse");
+        let options = args.proof_options().unwrap();
+        let air = Blake3BinaryAir::default();
+        let shape = requested_shape(args.objective, args.log_trace_length)
+            .unwrap()
+            .1;
+        let preflight = preflight_then_maybe_prove(
+            &air,
+            shape,
+            options,
+            BinaryFields::Gf64Gf192,
+            Backend::preferred(),
+            true,
+            OutputFormat::Human,
+            || panic!("preflight must not build the witness"),
+        )
+        .expect("folding preflight succeeds");
+        assert!(preflight.is_none());
+        let report = preflight_then_maybe_prove(
+            &air,
+            shape,
+            options,
+            BinaryFields::Gf64Gf192,
+            Backend::preferred(),
+            false,
+            OutputFormat::Human,
+            || air.generate_random_trace_packed::<Gf2>(4),
+        )
+        .expect("folding proof verifies")
+        .unwrap();
+        assert_eq!(report.fields, BinaryFields::Gf64Gf192);
+        assert_eq!(report.pcs, p3_examples::binary::PcsIdentity::Folding);
     }
 
     #[test]

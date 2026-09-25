@@ -9,7 +9,7 @@
 //! from the caller.
 
 use p3_binary_dft::EncodableLevel;
-use p3_binary_field::TowerLevel;
+use p3_field::Field;
 use p3_security::binary::BinaryPcsRegime;
 use thiserror::Error;
 
@@ -73,7 +73,7 @@ pub enum BinaryPcsConfigError {
     ///
     /// Every algebraic error is charged against this width.
     /// A width the model does not recognise would be reported against nothing.
-    #[error("a {bits}-bit challenge field is not a priced binary tower level")]
+    #[error("a {bits}-bit challenge field is not priced by the binary PCS")]
     UnpricedChallengeField { bits: usize },
 
     /// The base codeword is longer than the committed alphabet's additive domain.
@@ -177,7 +177,7 @@ impl BinaryPcsConfig {
     ///
     /// The domain cap is the one a caller at a narrow alphabet meets first.
     /// The arity and the rate expansion together must stay within the alphabet's bit width.
-    pub fn try_new<F: EncodableLevel, EF: TowerLevel>(
+    pub fn try_new<F: EncodableLevel, EF: Field>(
         num_variables: usize,
         params: BinaryPcsParams,
     ) -> Result<Self, BinaryPcsConfigError> {
@@ -189,7 +189,7 @@ impl BinaryPcsConfig {
     /// Unlike starting with `try_new` and then changing the folding factor, this admits
     /// targets that need exhaustive batched queries to release the query-error reserve.
     /// Returns the same configuration errors as [`Self::try_new`], or an invalid fold factor.
-    pub fn try_new_with_folding<F: EncodableLevel, EF: TowerLevel>(
+    pub fn try_new_with_folding<F: EncodableLevel, EF: Field>(
         num_variables: usize,
         params: BinaryPcsParams,
         log_folding_factor: usize,
@@ -410,7 +410,7 @@ impl BinaryPcsConfig {
     /// # Errors
     ///
     /// Returns an error if either width differs from the one the schedule was derived for.
-    pub fn check_alphabets<F: EncodableLevel, EF: TowerLevel>(
+    pub fn check_alphabets<F: EncodableLevel, EF: Field>(
         &self,
     ) -> Result<(), BinaryPcsConfigError> {
         if self.committed_field_bits != F::bits() {
@@ -507,8 +507,9 @@ mod tests {
     }
 
     #[test]
-    fn the_alphabet_width_matches_the_field() {
-        assert_eq!(BINARY_PCS_FIELD_BITS, BinaryField128::bits());
+    fn the_model_prices_the_cubic_extension_beyond_the_tower() {
+        assert_eq!(BINARY_PCS_FIELD_BITS, 192);
+        assert!(BINARY_PCS_FIELD_BITS > BinaryField128::bits());
     }
 
     #[test]
@@ -650,8 +651,8 @@ mod tests {
                         &regime,
                         &InstanceShape {
                             log_trace_length: remaining,
-                            modulus_bits: BINARY_PCS_FIELD_BITS,
-                            collision_resistance: BINARY_PCS_FIELD_BITS,
+                            modulus_bits: BinaryField128::bits(),
+                            collision_resistance: BinaryField128::bits(),
                             num_batched_functions: 1,
                         },
                     )

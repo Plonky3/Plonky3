@@ -20,7 +20,7 @@ use p3_field::{ExtensionField, Field};
 use p3_matrix::Dimensions;
 
 use crate::error::BinaryPcsError;
-use crate::fold::{fold_coset, fold_pair};
+use crate::fold::{FoldingDomain, fold_coset, fold_pair};
 use crate::params::BinaryPcsConfig;
 use crate::proof::BinaryPcsProof;
 use crate::transcript::BinaryPcsVerifierTranscript;
@@ -172,8 +172,8 @@ fn fold_query_coset<A, EF>(
     scratch: &mut Vec<EF>,
 ) -> EF
 where
-    A: TowerLevel,
-    EF: ExtensionField<A> + TowerLevel,
+    A: FoldingDomain,
+    EF: ExtensionField<A> + FoldingDomain,
 {
     if let [beta] = betas {
         return fold_pair(
@@ -224,8 +224,8 @@ pub(crate) fn verify_query_paths<F, EF, MT, MX, Ch>(
     transcript: &mut BinaryPcsVerifierTranscript<'_, F, EF, Ch>,
 ) -> Result<(), BinaryPcsError<F, MT::Error>>
 where
-    F: TranscriptField + TowerLevel,
-    EF: ExtensionField<F> + TowerLevel,
+    F: TranscriptField + TowerLevel + FoldingDomain,
+    EF: ExtensionField<F> + FoldingDomain,
     MT: Mmcs<F>,
     MX: Mmcs<EF, Error = MT::Error>,
     Ch: FieldChallenger<F> + GrindingChallenger<Witness = F> + CanSampleUniformBits<F>,

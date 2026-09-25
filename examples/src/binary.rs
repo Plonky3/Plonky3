@@ -1,4 +1,4 @@
-//! A multi-STARK proving harness for AIRs over `BinaryField128`, using the binary PCS.
+//! Multi-STARK proving harnesses for binary-field AIRs.
 //!
 //! [`prove_binary_air`] proves and verifies one AIR instance end to end: it derives the
 //! commitment scheme's arity from the trace shape, builds a [`BinaryStarkConfig`], times the
@@ -50,7 +50,7 @@ mod cubic;
 mod whir;
 pub use cubic::{
     CubicAir, CubicProveError, CubicVerifyError, CubicWhirStarkConfig, cubic_whir_config,
-    prove_boolean_air_cubic,
+    preflight_boolean_air_cubic, prove_boolean_air_cubic,
 };
 use p3_binary_pcs::BooleanTraceCommitmentError;
 pub use p3_binary_pcs::whir::{BinaryWhirBudget, BudgetError};
@@ -403,7 +403,7 @@ pub struct BinaryProofOptions {
     pub pcs_pow_bits: usize,
     /// Composed security target of the whole proof, in bits.
     ///
-    /// The binary PCS caps it at `125 - arity - log_inv_rate` once its queries are sampled.
+    /// The folding PCS cap depends on the challenge field, committed arity, and inverse rate.
     pub security_bits: usize,
     /// Sequential variable folds batched between binary-PCS commitments.
     pub folding: usize,
@@ -615,6 +615,9 @@ pub enum BinaryProofError {
     /// Verifying with `GF(2^64)` values and `GF(2^192)` challenges failed.
     #[error("GF(2^64) x GF(2^192) proof verification failed: {0}")]
     CubicVerify(CubicVerifyError),
+    /// Folding with 64-bit values and 192-bit challenges failed.
+    #[error("GF(2^64) x GF(2^192) folding failed: {0}")]
+    CubicFolding(String),
     /// The statement's security assessment left a component unassessed or below target.
     #[error("binary proof security check failed: {0}")]
     Security(SecurityError),

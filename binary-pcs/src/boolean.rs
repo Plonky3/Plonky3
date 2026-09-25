@@ -83,7 +83,7 @@ use p3_binary_field::{PackedGf2, TowerLevel, Underlier};
 use p3_challenger::fs::TranscriptField;
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
 use p3_commit::{Mmcs, MultilinearPcs};
-use p3_field::Field;
+use p3_field::{ExtensionField, Field};
 use p3_multilinear_util::point::Point;
 use p3_security::SecurityTerm;
 use p3_security::multilinear::{
@@ -103,7 +103,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::error::BinaryPcsError;
-use crate::fold::{ChallengeField, FoldAlphabet};
+use crate::fold::{BitChallengeField, ChallengeField, FoldAlphabet};
 use crate::packing::{Coordinates, PackError, PackedStack};
 use crate::params::{BinaryPcsConfig, BinaryPcsConfigError};
 use crate::pcs::BinaryPcs;
@@ -277,24 +277,23 @@ pub struct BitReadings<EF> {
 ///
 /// The committed elements hold `d` bits each.
 /// The codeword is therefore `d` times shorter than an element-per-bit one.
-pub struct BooleanPcs<EF: EncodableLevel, MT, MX> {
+pub struct FoldingBooleanPcs<F: EncodableLevel, EF, MT, MX> {
     /// The commitment the packed multilinear is discharged against.
-    inner: BinaryPcs<EF, EF, MT, MX>,
+    inner: BinaryPcs<F, EF, MT, MX>,
     /// Schedule the commitment was built from, which prices its own openings.
     config: BinaryPcsConfig,
     /// Variables the bit witness has, which is the packing's plus the absorbed ones.
     num_variables: usize,
 }
 
-impl<EF, MT, MX> BooleanPcs<EF, MT, MX>
+/// Folding Boolean commitment with identical value and challenge fields.
+pub type BooleanPcs<EF, MT, MX> = FoldingBooleanPcs<EF, EF, MT, MX>;
+
+impl<F, EF, MT, MX> FoldingBooleanPcs<F, EF, MT, MX>
 where
-    EF: ChallengeField<EF>
-        + EncodableLevel
-        + TranscriptField
-        + TowerLevel
-        + FoldAlphabet<EF>
-        + Coordinates,
-    MT: Mmcs<EF>,
+    F: EncodableLevel + TranscriptField + TowerLevel + FoldAlphabet<EF> + Coordinates,
+    EF: ChallengeField<F> + BitChallengeField<F> + ExtensionField<F> + FoldAlphabet<EF>,
+    MT: Mmcs<F>,
     MX: Mmcs<EF, Error = MT::Error>,
 {
     /// Build a Boolean commitment over a bit witness of `num_variables` variables.
@@ -308,27 +307,30 @@ where
         mmcs: MT,
         round_mmcs: MX,
         num_variables: usize,
-    ) -> Result<Self, BooleanPcsError<EF, MT::Error>> {
+    ) -> Result<Self, FoldingBooleanPcsError<F, MT::Error>> {
         let packed = Self::packed_variables(num_variables)?;
         if config.num_variables() != packed {
-            return Err(BooleanPcsError::ConfigArity {
+            return Err(FoldingBooleanPcsError::ConfigArity {
                 expected: packed,
                 actual: config.num_variables(),
             });
         }
         Ok(Self {
-            inner: BinaryPcs::new(config, mmcs, round_mmcs).map_err(BooleanPcsError::Config)?,
+            inner: BinaryPcs::new(config, mmcs, round_mmcs)
+                .map_err(FoldingBooleanPcsError::Config)?,
             config,
             num_variables,
         })
     }
 
     /// Variables the packing keeps, the witness's less the ones one element absorbs.
-    fn packed_variables(num_variables: usize) -> Result<usize, BooleanPcsError<EF, MT::Error>> {
-        let absorbed = BitRingSwitch::<EF>::ABSORBED;
+    fn packed_variables(
+        num_variables: usize,
+    ) -> Result<usize, FoldingBooleanPcsError<F, MT::Error>> {
+        let absorbed = BitRingSwitch::<F, EF>::ABSORBED;
         num_variables
             .checked_sub(absorbed)
-            .ok_or(BooleanPcsError::WitnessTooNarrow {
+            .ok_or(FoldingBooleanPcsError::WitnessTooNarrow {
                 needed: absorbed,
                 actual: num_variables,
             })
@@ -363,7 +365,7 @@ where
         [
             bit_ring_switch_term(
                 num_claims.min(1),
-                BitRingSwitch::<EF>::BATCHED,
+                BitRingSwitch::<F, EF>::BATCHED,
                 self.inner.num_variables(),
                 EF::bits(),
             ),
@@ -410,7 +412,7 @@ where
             bit_ring_switch_tensors_term(
                 num_claims.min(1),
                 num_tensors,
-                BitRingSwitch::<EF>::BATCHED,
+                BitRingSwitch::<F, EF>::BATCHED,
                 self.inner.num_variables(),
                 EF::bits(),
             ),
@@ -436,7 +438,7 @@ where
     ///     sub-byte level   excluded by the encodable bound, which starts at a byte
     ///     no hypercube     excluded by the layout, whose tables are power-of-two
     /// ```
-    fn packing(prover_data: &BinaryPcsProverData<EF, EF, MT>) -> BitPackingView<'_, EF> {
+    fn packing(prover_data: &BinaryPcsProverData<F, EF, MT>) -> BitPackingView<'_, F> {
         BitPacking::from_packed(prover_data.table(0).poly(0))
             .expect("a committed table is a hypercube over a byte-aligned level")
     }
@@ -445,22 +447,22 @@ where
     fn check_openings(
         &self,
         openings: &[BitOpening<EF>],
-    ) -> Result<(), BooleanPcsError<EF, MT::Error>> {
+    ) -> Result<(), FoldingBooleanPcsError<F, MT::Error>> {
         if openings.is_empty() {
-            return Err(BooleanPcsError::NoPoints);
+            return Err(FoldingBooleanPcsError::NoPoints);
         }
         for (index, opening) in openings.iter().enumerate() {
             if opening.point.num_variables() != self.num_variables {
-                return Err(BooleanPcsError::PointArity {
+                return Err(FoldingBooleanPcsError::PointArity {
                     expected: self.num_variables,
                     actual: opening.point.num_variables(),
                 });
             }
             if !opening.current && !opening.next {
-                return Err(BooleanPcsError::NoReading { index });
+                return Err(FoldingBooleanPcsError::NoReading { index });
             }
             if opening.row_variables > self.num_variables {
-                return Err(BooleanPcsError::RowVariables {
+                return Err(FoldingBooleanPcsError::RowVariables {
                     index,
                     row_variables: opening.row_variables,
                     num_variables: self.num_variables,
@@ -473,12 +475,12 @@ where
     /// Every opening's reduction, gathered into the one batch that reduces them all.
     fn claims(
         openings: &[BitOpening<EF>],
-    ) -> Result<BitRingSwitchClaims<EF>, BooleanPcsError<EF, MT::Error>> {
+    ) -> Result<BitRingSwitchClaims<F, EF>, FoldingBooleanPcsError<F, MT::Error>> {
         let reductions = openings
             .iter()
             .map(Self::reduction)
             .collect::<Result<Vec<_>, _>>()?;
-        BitRingSwitchClaims::new(reductions).map_err(BooleanPcsError::Reduction)
+        BitRingSwitchClaims::new(reductions).map_err(FoldingBooleanPcsError::Reduction)
     }
 
     /// The reduction answering every reading one opening asks for.
@@ -487,13 +489,13 @@ where
     /// An opening asking for the current reading alone plays the plain reduction.
     fn reduction(
         opening: &BitOpening<EF>,
-    ) -> Result<BitRingSwitch<EF>, BooleanPcsError<EF, MT::Error>> {
+    ) -> Result<BitRingSwitch<F, EF>, FoldingBooleanPcsError<F, MT::Error>> {
         if opening.next {
             BitRingSwitch::with_successor(&opening.point, opening.row_variables)
         } else {
             BitRingSwitch::new(&opening.point)
         }
-        .map_err(BooleanPcsError::Reduction)
+        .map_err(FoldingBooleanPcsError::Reduction)
     }
 
     /// Each point as an opening asking for the current reading alone.
@@ -528,14 +530,17 @@ where
     #[allow(clippy::type_complexity)]
     pub fn open_readings<Challenger>(
         &self,
-        prover_data: BinaryPcsProverData<EF, EF, MT>,
+        prover_data: BinaryPcsProverData<F, EF, MT>,
         openings: &[BitOpening<EF>],
         challenger: &mut Challenger,
-    ) -> Result<(Vec<BitReadings<EF>>, BooleanProof<EF, MT, MX>), BooleanPcsError<EF, MT::Error>>
+    ) -> Result<
+        (Vec<BitReadings<EF>>, FoldingBooleanProof<F, EF, MT, MX>),
+        FoldingBooleanPcsError<F, MT::Error>,
+    >
     where
-        Challenger: FieldChallenger<EF>
-            + GrindingChallenger<Witness = EF>
-            + CanSampleUniformBits<EF>
+        Challenger: FieldChallenger<F>
+            + GrindingChallenger<Witness = F>
+            + CanSampleUniformBits<F>
             + CanObserve<MT::Commitment>
             + CanObserve<MX::Commitment>,
     {
@@ -548,7 +553,8 @@ where
         // One batch for every opening, leaving one claim about the packing.
         let (reduction, surviving_point, surviving_value) = tracing::info_span!("bit ring switch")
             .in_scope(|| {
-                claims.prove::<<EF as ChallengeField<EF>>::SumcheckRepr, _, _>(&packing, challenger)
+                claims
+                    .prove::<<EF as BitChallengeField<F>>::SumcheckRepr, _, _>(&packing, challenger)
             });
 
         // The elements each claim sends already hold its readings.
@@ -565,10 +571,10 @@ where
                     .next
                     .then(|| switch.successor_claim(&elements.tensor, elements.successor.as_ref()))
                     .transpose()
-                    .map_err(BooleanPcsError::Reduction)?;
+                    .map_err(FoldingBooleanPcsError::Reduction)?;
                 Ok(BitReadings { current, next })
             })
-            .collect::<Result<Vec<_>, BooleanPcsError<EF, MT::Error>>>()?;
+            .collect::<Result<Vec<_>, FoldingBooleanPcsError<F, MT::Error>>>()?;
 
         // The surviving value crosses the wire twice, and the closing check is that the two agree.
         // The surviving point came out of the batch's rounds, so it is bound already.
@@ -582,9 +588,9 @@ where
                 &[OpeningBatch::new(vec![surviving_value], Vec::new())],
                 challenger,
             )
-            .map_err(BooleanPcsError::Commitment)?;
+            .map_err(FoldingBooleanPcsError::Commitment)?;
 
-        Ok((readings, BooleanProof { reduction, opening }))
+        Ok((readings, FoldingBooleanProof { reduction, opening }))
     }
 
     /// Check one proof against the readings it claims at every opening.
@@ -605,19 +611,19 @@ where
         commitment: &MT::Commitment,
         openings: &[BitOpening<EF>],
         readings: &[BitReadings<EF>],
-        proof: &BooleanProof<EF, MT, MX>,
+        proof: &FoldingBooleanProof<F, EF, MT, MX>,
         challenger: &mut Challenger,
-    ) -> Result<(), BooleanPcsError<EF, MT::Error>>
+    ) -> Result<(), FoldingBooleanPcsError<F, MT::Error>>
     where
-        Challenger: FieldChallenger<EF>
-            + GrindingChallenger<Witness = EF>
-            + CanSampleUniformBits<EF>
+        Challenger: FieldChallenger<F>
+            + GrindingChallenger<Witness = F>
+            + CanSampleUniformBits<F>
             + CanObserve<MT::Commitment>
             + CanObserve<MX::Commitment>,
     {
         self.check_openings(openings)?;
         if readings.len() != openings.len() || proof.reduction.claims.len() != openings.len() {
-            return Err(BooleanPcsError::ClaimCount {
+            return Err(FoldingBooleanPcsError::ClaimCount {
                 expected: openings.len(),
                 values: readings.len(),
                 reductions: proof.reduction.claims.len(),
@@ -632,7 +638,7 @@ where
                     || reading.next.is_some() != opening.next
             })
         {
-            return Err(BooleanPcsError::ReadingShape { index });
+            return Err(FoldingBooleanPcsError::ReadingShape { index });
         }
         let claims = Self::claims(openings)?;
 
@@ -643,7 +649,7 @@ where
             .collect::<Vec<_>>();
         let (surviving_point, surviving_value) = claims
             .verify_readings(&proof.reduction, &readings, challenger)
-            .map_err(BooleanPcsError::ReductionProof)?;
+            .map_err(FoldingBooleanPcsError::ReductionProof)?;
 
         // One commitment opening pins the one surviving point to the committed polynomial.
         let evals = self
@@ -655,7 +661,7 @@ where
                 &[surviving_point],
                 challenger,
             )
-            .map_err(BooleanPcsError::Commitment)?;
+            .map_err(FoldingBooleanPcsError::Commitment)?;
 
         // The batch closes against the value opened at its surviving point.
         //
@@ -663,24 +669,21 @@ where
         //     opening  ->  the value the committed polynomial takes at r'
         match evals.as_slice() {
             [batch] if batch.current().first() == Some(&surviving_value) => Ok(()),
-            _ => Err(BooleanPcsError::SurvivingClaim),
+            _ => Err(FoldingBooleanPcsError::SurvivingClaim),
         }
     }
 }
 
-impl<EF, MT, MX, Challenger> BooleanMultilinearPcs<EF, Challenger> for BooleanPcs<EF, MT, MX>
+impl<F, EF, MT, MX, Challenger> BooleanMultilinearPcs<EF, Challenger>
+    for FoldingBooleanPcs<F, EF, MT, MX>
 where
-    EF: ChallengeField<EF>
-        + EncodableLevel
-        + TranscriptField
-        + TowerLevel
-        + FoldAlphabet<EF>
-        + Coordinates,
-    MT: Mmcs<EF>,
+    F: EncodableLevel + TranscriptField + TowerLevel + FoldAlphabet<EF> + Coordinates,
+    EF: ChallengeField<F> + BitChallengeField<F> + ExtensionField<F> + FoldAlphabet<EF>,
+    MT: Mmcs<F>,
     MX: Mmcs<EF, Error = MT::Error>,
-    Challenger: FieldChallenger<EF>
-        + GrindingChallenger<Witness = EF>
-        + CanSampleUniformBits<EF>
+    Challenger: FieldChallenger<F>
+        + GrindingChallenger<Witness = F>
+        + CanSampleUniformBits<F>
         + CanObserve<MT::Commitment>
         + CanObserve<MX::Commitment>,
 {
@@ -722,18 +725,18 @@ where
         challenger: &mut Challenger,
     ) -> Result<(Self::Commitment, Self::ProverData), Self::Error> {
         // The packing is one copy of the bits, so the witness is never swept for arithmetic.
-        let stack = PackedStack::<PackedGf2<U>, EF>::from_columns(&[bits])?;
+        let stack = PackedStack::<PackedGf2<U>, F>::from_columns(&[bits])?;
         if stack.column_num_variables() != self.inner.num_variables() {
-            return Err(BooleanPcsError::WitnessArity {
+            return Err(FoldingBooleanPcsError::WitnessArity {
                 expected: self.inner.num_variables(),
                 actual: stack.column_num_variables(),
             });
         }
 
-        let witness = SuffixProver::<EF, EF>::new_witness(vec![stack.into_table()], 0);
+        let witness = SuffixProver::<F, EF>::new_witness(vec![stack.into_table()], 0);
         self.inner
             .commit(witness, challenger)
-            .map_err(BooleanPcsError::Commitment)
+            .map_err(FoldingBooleanPcsError::Commitment)
     }
 
     fn open_at_points(
@@ -783,20 +786,23 @@ where
 /// One Boolean opening: the reductions, and the commitment opening that discharges them.
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(bound(
-    serialize = "EF: TowerLevel, MT::Commitment: Serialize, MT::MultiProof: Serialize, MX::Commitment: Serialize, MX::MultiProof: Serialize",
-    deserialize = "EF: TowerLevel, MT::Commitment: Deserialize<'de>, MT::MultiProof: Deserialize<'de>, MX::Commitment: Deserialize<'de>, MX::MultiProof: Deserialize<'de>"
+    serialize = "F: p3_binary_field::BitCoordinates, EF: p3_binary_field::BitCoordinates, MT::Commitment: Serialize, MT::MultiProof: Serialize, MX::Commitment: Serialize, MX::MultiProof: Serialize",
+    deserialize = "F: p3_binary_field::BitCoordinates, EF: p3_binary_field::BitCoordinates, MT::Commitment: Deserialize<'de>, MT::MultiProof: Deserialize<'de>, MX::Commitment: Deserialize<'de>, MX::MultiProof: Deserialize<'de>"
 ))]
-pub struct BooleanProof<EF: Field, MT: Mmcs<EF>, MX: Mmcs<EF>> {
+pub struct FoldingBooleanProof<F: Field, EF: Field, MT: Mmcs<F>, MX: Mmcs<EF>> {
     /// One batched bit-alphabet ring switch, with every claim's elements in the order they came in.
-    pub reduction: BitRingSwitchClaimsProof<EF>,
+    pub reduction: BitRingSwitchClaimsProof<F, EF>,
     /// The single commitment opening that discharges the one surviving claim.
-    pub opening: BinaryPcsProof<EF, EF, MT, MX>,
+    pub opening: BinaryPcsProof<F, EF, MT, MX>,
 }
+
+/// Proof for the same-field folding Boolean commitment.
+pub type BooleanProof<EF, MT, MX> = FoldingBooleanProof<EF, EF, MT, MX>;
 
 /// Why a Boolean commitment or opening was refused.
 #[derive(Debug, Error)]
 #[non_exhaustive]
-pub enum BooleanPcsError<EF, MmcsError> {
+pub enum FoldingBooleanPcsError<F, MmcsError> {
     /// The witness is narrower than the coordinates one element absorbs.
     #[error("a bit witness of {actual} variables cannot absorb {needed} into one element")]
     WitnessTooNarrow {
@@ -891,7 +897,7 @@ pub enum BooleanPcsError<EF, MmcsError> {
 
     /// The commitment refused the opening.
     #[error(transparent)]
-    Commitment(BinaryPcsError<EF, MmcsError>),
+    Commitment(BinaryPcsError<F, MmcsError>),
 
     /// The commitment opened a value the reduction did not leave behind.
     ///
@@ -900,17 +906,21 @@ pub enum BooleanPcsError<EF, MmcsError> {
     SurvivingClaim,
 }
 
-impl<EF, MT, MX> BooleanBackend<EF> for BooleanPcs<EF, MT, MX>
+/// Error for the same-field folding Boolean commitment.
+pub type BooleanPcsError<EF, MmcsError> = FoldingBooleanPcsError<EF, MmcsError>;
+
+impl<F, EF, MT, MX> BooleanBackend<EF> for FoldingBooleanPcs<F, EF, MT, MX>
 where
-    EF: EncodableLevel + TowerLevel,
-    MT: Mmcs<EF>,
+    F: EncodableLevel + TowerLevel,
+    EF: BitChallengeField<F> + ExtensionField<F>,
+    MT: Mmcs<F>,
     MX: Mmcs<EF, Error = MT::Error>,
 {
-    type Val = EF;
+    type Val = F;
     type Commitment = MT::Commitment;
-    type ProverData = BinaryPcsProverData<EF, EF, MT>;
-    type Proof = BooleanProof<EF, MT, MX>;
-    type Error = BooleanPcsError<EF, MT::Error>;
+    type ProverData = BinaryPcsProverData<F, EF, MT>;
+    type Proof = FoldingBooleanProof<F, EF, MT, MX>;
+    type Error = FoldingBooleanPcsError<F, MT::Error>;
 
     fn num_variables(&self) -> usize {
         self.num_variables

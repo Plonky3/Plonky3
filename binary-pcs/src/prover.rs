@@ -318,9 +318,8 @@ where
     // The tail past the message stays zero, which is the padding the encoding reads it as.
     let mut message = EF::zero_vec(column.len() << log_inv_rate);
     EF::from_sumcheck_repr(column, &mut message[..column.len()]);
-    let codeword = tracing::info_span!("encode bound message").in_scope(|| {
-        EF::Encoder::default().encode_batch_padded(RowMajorMatrix::new(message, 1), log_inv_rate)
-    });
+    let codeword = tracing::info_span!("encode bound message")
+        .in_scope(|| EF::encode_bound_message(RowMajorMatrix::new(message, 1), log_inv_rate));
     Some(codeword.values)
 }
 

@@ -29,11 +29,10 @@ use alloc::vec::Vec;
 use core::marker::PhantomData;
 
 use p3_binary_dft::{AdditiveNtt, AdditiveRsEncoder, EncodableLevel};
-use p3_binary_field::TowerLevel;
 use p3_challenger::fs::TranscriptField;
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
 use p3_commit::{Encoder, Mmcs, MultilinearPcs};
-use p3_field::ExtensionField;
+use p3_field::{ExtensionField, Field};
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
 use p3_sumcheck::layout::{Layout, Verifier, Witness, observe_commitment};
@@ -98,7 +97,7 @@ pub struct BinaryPcs<F: EncodableLevel, EF, MT, MX, E = <F as EncodableLevel>::E
     _fields: PhantomData<(F, EF)>,
 }
 
-impl<F: EncodableLevel, EF: TowerLevel, MT, MX> BinaryPcs<F, EF, MT, MX> {
+impl<F: EncodableLevel, EF: Field, MT, MX> BinaryPcs<F, EF, MT, MX> {
     /// Builds a PCS instance from a derived configuration and its two commitment schemes.
     ///
     /// The schedule carries the two widths it was derived for, and both are checked here.
@@ -148,7 +147,7 @@ impl<F: EncodableLevel, EF: TowerLevel, MT, MX> BinaryPcs<F, EF, MT, MX> {
 impl<F, EF, MT, MX, Ntt> BinaryPcs<F, EF, MT, MX, AdditiveRsEncoder<F, Ntt>>
 where
     F: EncodableLevel,
-    EF: TowerLevel,
+    EF: Field,
     Ntt: AdditiveNtt<F> + Sync,
 {
     /// Builds an instance around an explicitly selected additive transform.
@@ -180,7 +179,7 @@ where
 impl<F, EF, MT, MX, E> BinaryPcs<F, EF, MT, MX, E>
 where
     F: EncodableLevel + TranscriptField + FoldAlphabet<EF>,
-    EF: ChallengeField<F> + ExtensionField<F> + TowerLevel + FoldAlphabet<EF>,
+    EF: ChallengeField<F> + ExtensionField<F> + FoldAlphabet<EF>,
     MT: Mmcs<F>,
     MX: Mmcs<EF, Error = MT::Error>,
     E: Encoder<F> + Sync,
@@ -679,7 +678,7 @@ where
 impl<F, EF, MT, MX, E, Challenger> MultilinearPcs<EF, Challenger> for BinaryPcs<F, EF, MT, MX, E>
 where
     F: EncodableLevel + TranscriptField + FoldAlphabet<EF>,
-    EF: ChallengeField<F> + ExtensionField<F> + TowerLevel + FoldAlphabet<EF>,
+    EF: ChallengeField<F> + ExtensionField<F> + FoldAlphabet<EF>,
     MT: Mmcs<F>,
     MX: Mmcs<EF, Error = MT::Error>,
     E: Encoder<F> + Sync,
@@ -748,7 +747,7 @@ impl<F, EF, MT, MX, E, Challenger> PrescribedPointPcs<EF, Challenger>
     for BinaryPcs<F, EF, MT, MX, E>
 where
     F: EncodableLevel + TranscriptField + FoldAlphabet<EF>,
-    EF: ChallengeField<F> + ExtensionField<F> + TowerLevel + FoldAlphabet<EF>,
+    EF: ChallengeField<F> + ExtensionField<F> + FoldAlphabet<EF>,
     MT: Mmcs<F>,
     MX: Mmcs<EF, Error = MT::Error>,
     E: Encoder<F> + Sync,
@@ -812,7 +811,9 @@ mod tests {
     use alloc::{format, vec};
 
     use p3_binary_dft::EncodableLevel;
-    use p3_binary_field::{BinaryField8, BinaryField16, BinaryField64, BinaryField128};
+    use p3_binary_field::{
+        BinaryField8, BinaryField16, BinaryField64, BinaryField128, Poly64, Poly192,
+    };
     use p3_challenger::fs::TranscriptField;
     use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
     use p3_commit::{Mmcs, MultilinearPcs};
@@ -985,6 +986,11 @@ mod tests {
             a_single_column_round_trip::<BinaryField64, F>(10, log_folding_factor, 1, 4);
             a_single_column_round_trip::<F, F>(10, log_folding_factor, 1, 5);
         }
+    }
+
+    #[test]
+    fn cubic_extension_folding_round_trips() {
+        a_single_column_round_trip::<Poly64, Poly192>(10, 4, 2, 0x192);
     }
 
     /// Commit, open at a transcript-sampled point, verify. The prover and verifier run on

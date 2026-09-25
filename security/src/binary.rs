@@ -1,4 +1,4 @@
-//! Additive-domain binary PCS soundness over a binary tower field.
+//! Additive-domain binary PCS soundness over binary fields.
 //!
 //! Only unique decoding is supported.
 //! Write K for the field every challenge is drawn from.
@@ -24,11 +24,8 @@ use crate::{ErrorBits, SecurityAssumption, SecurityTerm};
 /// Label the additive-domain opening error is reported under.
 pub const BINARY_PCS_OPENING_LABEL: &str = "binary-pcs-opening";
 
-/// Widest challenge alphabet the binary tower offers.
-///
-/// A schedule may draw from any narrower tower level.
-/// This is the ceiling each one is validated against.
-pub const BINARY_PCS_FIELD_BITS: usize = 128;
+/// Widest challenge field the folding PCS prices, including the cubic extension.
+pub const BINARY_PCS_FIELD_BITS: usize = 192;
 
 /// Validated mirror of the binary PCS schedule. Constructed by the protocol crate.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -44,7 +41,7 @@ pub struct BinaryPcsRegime {
 impl BinaryPcsRegime {
     /// Reject empty, overflowing, rate-one, or query-free schedules.
     ///
-    /// The challenge width must be a power-of-two tower level, one byte or wider.
+    /// The challenge width must be a priced tower level or the 192-bit cubic extension.
     /// Every algebraic error below is measured against it.
     pub const fn new(
         challenge_field_bits: usize,
@@ -60,7 +57,7 @@ impl BinaryPcsRegime {
         };
         if challenge_field_bits < 8
             || challenge_field_bits > BINARY_PCS_FIELD_BITS
-            || !challenge_field_bits.is_power_of_two()
+            || !(challenge_field_bits.is_power_of_two() || challenge_field_bits == 192)
             || num_variables == 0
             || log_inv_rate == 0
             || log_domain >= usize::BITS as usize
@@ -154,7 +151,11 @@ impl BinaryPcsRegime {
         {
             return 0;
         }
-        let budget = 1u128 << (self.challenge_field_bits - security_level - reserve);
+        let exponent = self.challenge_field_bits - security_level - reserve;
+        if exponent >= u128::BITS as usize {
+            return usize::MAX;
+        }
+        let budget = 1u128 << exponent;
         let Some(remaining) = budget.checked_sub(self.field_error_numerator()) else {
             return 0;
         };
@@ -253,6 +254,15 @@ mod tests {
         assert!(BinaryPcsRegime::new(96, 10, 2, 1, 150, 0).is_none());
         assert!(BinaryPcsRegime::new(256, 10, 2, 1, 150, 0).is_none());
         assert!(BinaryPcsRegime::new(4, 10, 2, 1, 150, 0).is_none());
+    }
+
+    #[test]
+    fn cubic_extension_challenges_are_priced_at_192_bits() {
+        let regime = BinaryPcsRegime::new(192, 10, 2, 4, 400, 0).unwrap();
+        assert_eq!(regime.field_security_bits(), 178);
+        assert!(regime.max_opening_claims(127) > 0);
+        assert_eq!(regime.max_opening_claims(60), usize::MAX);
+        assert!(regime.opening_error(4).bits() >= 127.0);
     }
 
     #[test]

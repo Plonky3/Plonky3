@@ -104,12 +104,12 @@ use thiserror::Error;
 use self::plan::{OpeningRoute, TableRun, opening_evals, sample_points, value_count};
 use crate::boolean::{
     BitOpening, BitReadings, BooleanBackend, BooleanMultilinearPcs, BooleanPcs, BooleanPcsError,
-    BooleanProof,
+    BooleanProof, FoldingBooleanPcs, FoldingBooleanPcsError, FoldingBooleanProof,
 };
 use crate::boolean_trace_transcript::{
     ColumnBatchProverTranscript, ColumnBatchShape, ColumnBatchVerifierTranscript,
 };
-use crate::fold::{ChallengeField, FoldAlphabet};
+use crate::fold::{BitChallengeField, ChallengeField, FoldAlphabet};
 use crate::packing::Coordinates;
 use crate::params::BinaryPcsConfig;
 use crate::prover::BinaryPcsProverData;
@@ -132,15 +132,15 @@ pub struct BooleanTraceCommitment<EF, B> {
 /// The trace commitment discharged through the folding-only bit commitment.
 pub type BooleanTracePcs<EF, MT, MX> = BooleanTraceCommitment<EF, BooleanPcs<EF, MT, MX>>;
 
-impl<EF, MT, MX> BooleanTraceCommitment<EF, BooleanPcs<EF, MT, MX>>
+/// Folding trace commitment with a wider challenge field.
+pub type FoldingBooleanTracePcs<F, EF, MT, MX> =
+    BooleanTraceCommitment<EF, FoldingBooleanPcs<F, EF, MT, MX>>;
+
+impl<F, EF, MT, MX> BooleanTraceCommitment<EF, FoldingBooleanPcs<F, EF, MT, MX>>
 where
-    EF: ChallengeField<EF>
-        + EncodableLevel
-        + TranscriptField
-        + TowerLevel
-        + FoldAlphabet<EF>
-        + Coordinates,
-    MT: Mmcs<EF>,
+    F: EncodableLevel + TranscriptField + TowerLevel + FoldAlphabet<EF> + Coordinates,
+    EF: ChallengeField<F> + BitChallengeField<F> + ExtensionField<F> + FoldAlphabet<EF>,
+    MT: Mmcs<F>,
     MX: Mmcs<EF, Error = MT::Error>,
 {
     /// Build a commitment over a batch of tables stacking to `num_variables` bits.
@@ -157,8 +157,8 @@ where
         mmcs: MT,
         round_mmcs: MX,
         num_variables: usize,
-    ) -> Result<Self, BooleanTraceError<EF, MT::Error>> {
-        BooleanPcs::new(config, mmcs, round_mmcs, num_variables)
+    ) -> Result<Self, BooleanTraceCommitmentError<FoldingBooleanPcsError<F, MT::Error>>> {
+        FoldingBooleanPcs::new(config, mmcs, round_mmcs, num_variables)
             .map(Self::from_commitment)
             .map_err(BooleanTraceCommitmentError::Boolean)
     }
@@ -238,6 +238,10 @@ pub struct BooleanTraceCommitmentData<EF: Field, D> {
 /// The retained data of a trace behind the folding-only bit commitment.
 pub type BooleanTraceData<EF, MT> = BooleanTraceCommitmentData<EF, BinaryPcsProverData<EF, EF, MT>>;
 
+/// Retained data for a trace committed in a narrower field.
+pub type FoldingBooleanTraceData<F, EF, MT> =
+    BooleanTraceCommitmentData<F, BinaryPcsProverData<F, EF, MT>>;
+
 impl<EF: Field, D> Clone for BooleanTraceCommitmentData<EF, D>
 where
     D: Clone,
@@ -274,6 +278,10 @@ pub struct BooleanTraceCommitmentProof<EF: Field, P> {
 
 /// One opening of a trace behind the folding-only bit commitment.
 pub type BooleanTraceProof<EF, MT, MX> = BooleanTraceCommitmentProof<EF, BooleanProof<EF, MT, MX>>;
+
+/// Proof of a trace committed in a narrower field.
+pub type FoldingBooleanTraceProof<F, EF, MT, MX> =
+    BooleanTraceCommitmentProof<EF, FoldingBooleanProof<F, EF, MT, MX>>;
 
 /// Why a trace behind the folding-only bit commitment could not be committed or opened.
 pub type BooleanTraceError<EF, MmcsError> =

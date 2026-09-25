@@ -106,7 +106,7 @@ const PROGRAM: [(bool, u64, usize); STEPS] = [
     (false, 1, 0), // read mem[1]
     (true, 2, 2),  // mem[2] = rom[2]
     (false, 0, 0), // read mem[0], never written
-    (true, 1, 3),  // mem[1] = rom[3]
+    (true, 1, 6),  // mem[1] = rom[6]
     (false, 1, 0), // read mem[1]
     (false, 2, 0), // read mem[2]
     (false, 3, 0), // read mem[3], never written
@@ -478,8 +478,8 @@ where
 
 #[test]
 fn the_machine_proves_with_dense_tables() {
-    // Four rom entries of arbitrary field values, so no cell is confined to a bit.
-    let traces = Traces::run(&random_rom(4, 0xD15E));
+    // Eight rom entries of arbitrary field values exercise multi-bit positions.
+    let traces = Traces::run(&random_rom(8, 0xD15E));
     let chips = Chip::all();
     let config = DenseConfig::new(&traces.shapes());
     let (proof, union) = prove_and_verify(&config, &chips, &traces);

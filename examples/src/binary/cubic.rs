@@ -1,4 +1,4 @@
-//! The Boolean WHIR harness at values in `GF(2^64)` and challenges in `GF(2^192)`.
+//! Boolean folding and WHIR harnesses at values in `GF(2^64)` and challenges in `GF(2^192)`.
 //!
 //! ```text
 //!     GF(2^128)              one field for values and challenges
@@ -6,15 +6,14 @@
 //! ```
 //!
 //! Every challenge-field term then sits near 190 bits.
-//! The proximity schedule and the 32-byte hash are what bound the proof.
+//! The PCS schedule and the 32-byte hash are what bound the proof.
 //!
-//! The zerocheck runs through the generic backend.
-//! The sliced `GF(4)` kernels are wired for `GF(2^128)` alone.
+//! The folding zerocheck keeps early rounds on bit-sliced `GF(4)` planes.
 
 use std::time::Instant;
 
 use p3_air::{Air, BaseAir};
-use p3_binary_field::{BinaryChallenger, Poly64, Poly192};
+use p3_binary_field::{BinaryChallenger, BinaryField2, Poly64, Poly192};
 use p3_binary_pcs::BooleanTraceCommitmentData;
 use p3_binary_pcs::whir::{
     BinaryWhirBudget, BinaryWhirDomain, BinaryWhirProfile, BooleanWhirData, BooleanWhirPcs,
@@ -31,6 +30,8 @@ use p3_merkle_tree::MerkleTreeMmcs;
 use p3_multi_stark::config::{MultiStarkConfig, PcsError, PcsProverError};
 use p3_multi_stark::folder::{InteractionMultilinearFolder, MultilinearFolder};
 use p3_multi_stark::packed_ext::PackedExt;
+use p3_multi_stark::sliced::SlicedFolder;
+use p3_multi_stark::subfield::{SubfieldAcc, SubfieldVar};
 use p3_multi_stark::{
     MultiStarkProof, ProverInstance, ProverInstances, ProvingError, VerificationError,
     VerifierInstance, VerifierInstances, prove, security_report, setup, verify,
@@ -45,6 +46,9 @@ use super::{
     BooleanPcsChoice, Compress, HarnessHash, Hash, HashFamily, PcsIdentity, WhirIncompatibility,
     WhirOptions, WhirRegime, WhirSummary,
 };
+
+mod folding;
+use folding::{preflight_boolean_air_cubic_folding, prove_boolean_air_cubic_folding};
 
 /// Committed values: sixty-four bits each, in the polynomial basis.
 pub type Val = Poly64;
@@ -130,6 +134,14 @@ pub trait CubicAir:
     + for<'a> Air<MultilinearFolder<'a, Val, Challenge, Challenge>>
     + for<'a> Air<InteractionMultilinearFolder<'a, Val, Challenge, Challenge>>
     + for<'a> Air<MultilinearFolder<'a, Val, Val, Challenge>>
+    + for<'a> Air<
+        MultilinearFolder<
+            'a,
+            Val,
+            SubfieldVar<Val, BinaryField2>,
+            SubfieldAcc<Challenge, BinaryField2>,
+        >,
+    > + for<'a> Air<SlicedFolder<'a, Val, BinaryField2, Challenge>>
     + for<'a> Air<MultilinearFolder<'a, Val, PackedExt<Val, Challenge>, PackedExt<Val, Challenge>>>
     + for<'a> Air<InteractionMultilinearFolder<'a, Val, Val, Challenge>>
     + for<'a> Air<
@@ -145,6 +157,14 @@ impl<A> CubicAir for A where
         + for<'a> Air<MultilinearFolder<'a, Val, Challenge, Challenge>>
         + for<'a> Air<InteractionMultilinearFolder<'a, Val, Challenge, Challenge>>
         + for<'a> Air<MultilinearFolder<'a, Val, Val, Challenge>>
+        + for<'a> Air<
+            MultilinearFolder<
+                'a,
+                Val,
+                SubfieldVar<Val, BinaryField2>,
+                SubfieldAcc<Challenge, BinaryField2>,
+            >,
+        > + for<'a> Air<SlicedFolder<'a, Val, BinaryField2, Challenge>>
         + for<'a> Air<
             MultilinearFolder<'a, Val, PackedExt<Val, Challenge>, PackedExt<Val, Challenge>>,
         > + for<'a> Air<InteractionMultilinearFolder<'a, Val, Val, Challenge>>
@@ -323,11 +343,10 @@ pub fn cubic_whir_config<A: BinaryAir, H: HarnessHash>(
 
 /// Prove and verify a Boolean-valued `air` at this field pair, reporting size and timing.
 ///
-/// The trace is committed as bits through the WHIR commitment `options.pcs` selects.
+/// The trace is committed as bits through the commitment `options.pcs` selects.
 ///
 /// # Errors
 ///
-/// - `options.pcs` is not WHIR, which is the only commitment built at this field pair.
 /// - Any failure of the configuration, the security target, proving, or verification.
 ///
 /// # Panics
@@ -341,14 +360,30 @@ pub fn prove_boolean_air_cubic<A>(
 where
     A: BinaryAir + CubicAir,
 {
-    let BooleanPcsChoice::Whir(whir) = options.pcs else {
-        return Err(BinaryProofError::WhirIncompatible(
-            WhirIncompatibility::DenseField,
-        ));
+    let whir = match options.pcs {
+        BooleanPcsChoice::Folding => return prove_boolean_air_cubic_folding(air, trace, options),
+        BooleanPcsChoice::Whir(whir) => whir,
     };
     match options.hash {
         HashFamily::Keccak256 => prove_with::<A, Keccak256Hash>(air, trace, options, whir),
         HashFamily::Blake3 => prove_with::<A, Blake3>(air, trace, options, whir),
+    }
+}
+
+/// Assess a cubic-field folding statement without generating its trace.
+pub fn preflight_boolean_air_cubic<A>(
+    air: &A,
+    shape: TableShape,
+    options: BinaryProofOptions,
+) -> Result<f64, BinaryProofError>
+where
+    A: BinaryAir + CubicAir,
+{
+    match options.pcs {
+        BooleanPcsChoice::Folding => preflight_boolean_air_cubic_folding(air, shape, options),
+        BooleanPcsChoice::Whir(_) => Err(BinaryProofError::WhirIncompatible(
+            WhirIncompatibility::DenseField,
+        )),
     }
 }
 
@@ -509,19 +544,36 @@ mod tests {
     }
 
     #[test]
-    fn the_folding_commitment_is_refused() {
-        // Only the WHIR commitment is built at this field pair.
+    fn the_folding_commitment_proves_a_packed_hash_trace() {
         let air = Blake3BinaryAir::default();
         let words = air.generate_random_trace_packed::<Gf2>(8);
-        let error = prove_boolean_air_cubic(
+        let report = prove_boolean_air_cubic(
             &air,
             Table::from_packed_bits(words, 3),
             BinaryProofOptions::default(),
         )
-        .unwrap_err();
-        assert!(matches!(
-            error,
-            BinaryProofError::WhirIncompatible(WhirIncompatibility::DenseField)
-        ));
+        .expect("the folding proof verifies");
+        assert_eq!(report.fields, BinaryFields::Gf64Gf192);
+        assert_eq!(report.pcs, PcsIdentity::Folding);
+        assert!(report.security_bits >= 100.0);
+    }
+
+    #[test]
+    fn folding_opens_successor_rows_at_127_bits() {
+        let air = KeccakBinaryAir::default();
+        let words = air.generate_random_trace_packed::<Gf2>(1);
+        let options = BinaryProofOptions {
+            pcs: BooleanPcsChoice::Folding,
+            log_inv_rate: 2,
+            folding: 4,
+            merkle_arity: 4,
+            security_bits: 127,
+            hash: HashFamily::Blake3,
+            ..BinaryProofOptions::default()
+        };
+        let report = prove_boolean_air_cubic(&air, Table::from_packed_bits(words, 5), options)
+            .expect("the successor-row folding proof verifies");
+        assert_eq!(report.pcs, PcsIdentity::Folding);
+        assert!(report.security_bits >= 127.0);
     }
 }

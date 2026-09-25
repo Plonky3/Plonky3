@@ -44,6 +44,9 @@ const CANTOR_BASIS: [u64; 64] = {
 /// Its image here is the generator, so the change of basis carries one onto the other.
 const TOWER_GENERATOR: u64 = 0x1_0000_0004;
 
+/// The tower's GF(4) generator in this polynomial basis.
+pub(crate) const GF4_GENERATOR: u64 = clmul::tower_image_64(2);
+
 /// The generator of this level over the one below, in this representation.
 ///
 /// The tower carries that element as a single basis vector, at bit 32.
@@ -219,14 +222,25 @@ impl Field for Poly64 {
         Self::BITS
     }
 
-    /// The enumeration by bit pattern.
+    /// An injective enumeration that puts the embedded GF(4) first.
     ///
-    /// The coordinates of the returned element over `GF(2)` are the bits of the index.
-    ///
-    /// A pointer is never wider than 64 bits, so every index is in range.
+    /// Swapping two pairs of indices preserves the usual polynomial-basis enumeration
+    /// everywhere else and makes the zerocheck's first interpolation nodes slicable.
     #[inline]
     fn interpolation_node(i: usize) -> Self {
-        Self(i as u64)
+        let bits = i as u64;
+        Self(match bits {
+            2 => GF4_GENERATOR,
+            3 => GF4_GENERATOR ^ 1,
+            value if value == GF4_GENERATOR => 2,
+            value if value == (GF4_GENERATOR ^ 1) => 3,
+            value => value,
+        })
+    }
+
+    #[inline]
+    fn position_bit_node(bit: usize) -> Self {
+        Self::new(bit as u64)
     }
 }
 

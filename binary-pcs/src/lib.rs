@@ -27,15 +27,15 @@ pub mod whir;
 
 pub use boolean::{
     BitOpening, BitReadings, BooleanBackend, BooleanMultilinearPcs, BooleanPcs, BooleanPcsError,
-    BooleanProof,
+    BooleanProof, FoldingBooleanPcs, FoldingBooleanPcsError, FoldingBooleanProof,
 };
 pub use boolean_trace::{
     BooleanTraceCommitment, BooleanTraceCommitmentData, BooleanTraceCommitmentError,
     BooleanTraceCommitmentProof, BooleanTraceData, BooleanTraceError, BooleanTracePcs,
-    BooleanTraceProof,
+    BooleanTraceProof, FoldingBooleanTraceData, FoldingBooleanTracePcs, FoldingBooleanTraceProof,
 };
 pub use error::BinaryPcsError;
-pub use fold::{ChallengeField, FoldAlphabet, fold_codeword, fold_pair};
+pub use fold::{ChallengeField, FoldAlphabet, FoldingDomain, fold_codeword, fold_pair};
 pub use grouped_mmcs::GroupedCodewordMmcs;
 pub use mixed_trace::{
     MixedTraceCommitment, MixedTraceData, MixedTracePcs, committed_shapes, coordinate_basis,

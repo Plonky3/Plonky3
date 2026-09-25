@@ -107,13 +107,15 @@ Currently the options for the command line arguments are:
 - `--merkle-hash` (`-m`): `poseidon-2, keccak-f`.
 
 `prove_hash_binary` proves Keccak-f permutations, BLAKE3 compressions or SHA-256 compressions
-over `BinaryField128` with the multilinear STARK prover. They commit their bit-valued traces
+over `BinaryField128` or `GF(2^64)` values with `GF(2^192)` challenges using the multilinear
+STARK prover. They commit their bit-valued traces
 through the `BooleanTracePcs`, which opens the current and the next row of every column. Every
 objective generates its trace already packed into bits:
 ```bash
 RUSTFLAGS="-Ctarget-cpu=native" cargo run --example prove_hash_binary --release --features parallel -- --objective keccak-f-permutations --log-trace-length 14 --security-bits 96
 RUSTFLAGS="-Ctarget-cpu=native" cargo run --example prove_hash_binary --release --features parallel -- --objective blake-3-compressions --log-trace-length 10 --security-bits 96
 RUSTFLAGS="-Ctarget-cpu=native" cargo run --example prove_hash_binary --release --features parallel -- --objective sha-256-compressions --log-trace-length 10 --security-bits 96
+RUSTFLAGS="-Ctarget-cpu=native" cargo run --example prove_hash_binary --release --features parallel -- --objective blake-3-compressions --log-trace-length 10 --field gf64-gf192 --pcs folding --security-bits 96
 ```
 - `--objective` (`-o`): `keccak-f-permutations`, `blake-3-compressions` or `sha-256-compressions`.
 - `--log-trace-length` (`-l`): required. The binary Keccak-f AIR uses 25 rows per permutation
@@ -132,11 +134,12 @@ RUSTFLAGS="-Ctarget-cpu=native" cargo run --example prove_hash_binary --release 
   `--merkle-arity` (`2` or `4`, default `4`) tune the PCS. The defaults are inverse rate 1,
   folding 4, and Merkle arity 4.
 
-The Boolean commitment packs each trace's bits into `BinaryField128` elements and reduces column
-claims through a bit-ring switch, which caps the proven security at roughly
+For the default field, the Boolean commitment packs each trace's bits into `BinaryField128`
+elements and reduces column claims through a bit-ring switch, which caps the proven security at roughly
 `125 - (log-trace-length + ceil(log2(width)) - 7 + log-inv-rate)` bits, with width 1625 for Keccak-f
 and 11536 for BLAKE3; PCS grinding does not raise that cap. Lower `--security-bits` for larger
-traces.
+traces. With `--field gf64-gf192`, the commitment packs 64 bits per value and draws 192-bit
+challenges; the composed security report checks its folding schedule and hash cap.
 
 Extra speedups may be possible with some configuration changes:
 - `JEMALLOC_SYS_WITH_MALLOC_CONF=retain:true,dirty_decay_ms:-1,muzzy_decay_ms:-1` will cause jemalloc to hang on to virtual memory. This may not affect the very first proof much, but can help significantly with subsequent proofs as fewer pages (if any) will need to be newly assigned by the OS. These settings might not be suitable for all production environments, e.g. if the process' virtual memory is limited by `ulimit` or `max_map_count`.

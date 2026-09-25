@@ -1136,6 +1136,15 @@ pub trait Field:
         Self::from_usize(i)
     }
 
+    /// Field element contributed by a set bit when embedding an indexed table position.
+    ///
+    /// The default preserves the existing interpolation-node encoding. Fields whose
+    /// interpolation order differs from their position bit pattern should override it.
+    #[must_use]
+    fn position_bit_node(bit: usize) -> Self {
+        Self::interpolation_node(bit)
+    }
+
     /// Add two slices of field elements together, returning the result in the first slice.
     ///
     /// Makes use of packing to speed up the addition.
