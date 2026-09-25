@@ -1,28 +1,8 @@
 # Binary backend scoreboards
 
-A scoreboard is one run of the frozen workloads in `scripts/scoreboard.py`: the same
-objectives, the same heights, single-threaded and on every thread the machine has, with
-the security each run proved beside its timings.
-
-## Where the numbers come from
-
-Published numbers are produced by CI, on runners anyone can rent, so a reader can
-reproduce them without trusting the machine they were measured on:
-
-| Runner | Architecture |
-| --- | --- |
-| `ubuntu-latest` | x86-64 |
-| `ubuntu-24.04-arm` | 64-bit ARM |
-
-The weekly bench job runs both and writes the tables into its job summary. Nothing in
-this directory records a timing, because a timing is only meaningful together with the
-machine that produced it, and this repository cannot vouch for a machine it does not run.
-
-Apple silicon is not covered there. A maintainer with an M-series machine can run the
-same command locally and paste the table into an issue or a release note, where it is
-attributed to that machine rather than presented as the project's figure.
-
-## Running it yourself
+`scripts/scoreboard.py` runs a frozen set of workloads through the `prove_hash_binary`
+example: the same objectives at the same heights, single-threaded and on every thread the
+machine has, with the security each run proved beside its timings.
 
 ```bash
 cargo build --release -p p3-examples --features parallel --example prove_hash_binary
@@ -32,26 +12,31 @@ python3 scripts/scoreboard.py --binary target/release/examples/prove_hash_binary
 `--format json` reports every field the example carries, including deserialization time
 and the WHIR summary. `--quick` measures only the smallest height of each workload.
 
+## Timings are not published here
+
+Nothing in this directory records a proving time, and CI does not measure one.
+
+A timing means something only together with the machine that produced it, and a shared CI
+runner is too noisy to compare against itself a week later, let alone against a
+contributor's desk. Where the project's official figures should come from, and on which
+instance types, is a decision for the maintainers. Until it is made, run the command above
+on a machine you can vouch for and attribute the table to it.
+
 ## What is gated
 
-`baseline.json` carries proof size and security, and nothing else.
-
-Both are identical on every machine and at every thread count at these parameters, so
-they can be committed by one contributor and checked by another without anyone having to
-trust the first one's hardware. A change to either is a change in the protocol.
-
-That is a claim worth checking rather than asserting, so the committed baseline was
-compared across architectures before it was written: the same workloads built for
-`aarch64-apple-darwin` and for `x86_64-apple-darwin` emit byte-identical proofs at
-identical security. The weekly job then checks it again on each runner, so a wrong
-baseline fails the first time CI runs rather than being believed.
+`baseline.json` holds proof size and security, and nothing else. Neither is a measurement:
+the same workload at the same parameters emits the same proof on every machine and at
+every thread count, which was checked across architectures before the file was written,
+`aarch64-apple-darwin` against `x86_64-apple-darwin`, byte for byte.
 
 ```bash
 python3 scripts/scoreboard.py --binary <prover> --quick --gate docs/scoreboards/baseline.json
 ```
 
-The gate also fails a proof that changes with the thread count, which needs no baseline
-to be wrong.
+That is what the weekly bench job runs. It is a determinism check rather than a benchmark,
+so runner noise cannot move it: a failure means the proof or the security changed, which is
+a change in the protocol.
 
-Proving time is deliberately not gated here. A row gates on time only where someone adds
-`prove_seconds_budget` to it, on a machine they control and can keep quiet.
+The gate also fails a proof that changes with the thread count, which needs no baseline to
+be wrong. A row gates on proving time only where someone adds `prove_seconds_budget` to it,
+on a machine they control, and nothing committed here carries one.
