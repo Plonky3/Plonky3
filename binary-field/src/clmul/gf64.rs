@@ -88,13 +88,92 @@ fn composed_dot_64(pairs: impl Iterator<Item = (u64, u64)>) -> u64 {
     reduce_64(pairs.fold(0, |sum, (a, b)| sum ^ clmul_64x64(a, b)))
 }
 
-/// Squaring repeated a fixed number of times.
-#[inline]
-fn square_times(mut x: u64, count: usize) -> u64 {
-    for _ in 0..count {
-        x = poly_square_64(x);
+/// Bits `0 .. 32` of `v`, each moved to twice its position: the carryless square of `v`.
+const fn spread_32(v: u64) -> u64 {
+    let mut out = 0;
+    let mut i = 0;
+    while i < 32 {
+        // Bit i of v becomes the coefficient of x^(2i), since (x^i)^2 = x^(2i).
+        out |= ((v >> i) & 1) << (2 * i);
+        i += 1;
+    }
+    out
+}
+
+/// `x^(2^K)`, one squaring at a time.
+///
+/// The bit-matrix backends build their tables from it at compile time.
+//
+// Compiled on every target, so its test runs even where no bit-matrix backend does.
+#[cfg_attr(
+    not(any(
+        all(
+            target_arch = "x86_64",
+            target_feature = "gfni",
+            target_feature = "avx512f",
+            target_feature = "avx512bw",
+            target_feature = "avx512vbmi"
+        ),
+        all(target_arch = "aarch64", target_feature = "neon")
+    )),
+    allow(dead_code)
+)]
+pub(super) const fn square_times_slow(mut x: u64, k: usize) -> u64 {
+    let mut i = 0;
+    while i < k {
+        // The carryless square of a 64-bit value is its two halves, each spread.
+        let square = (spread_32(x >> 32) as u128) << 64 | spread_32(x) as u128;
+        x = reduce_64(square);
+        i += 1;
     }
     x
+}
+
+/// Squaring repeated a fixed number of times.
+///
+/// With `GFNI` the whole power is one bit-matrix product, whatever the count.
+///
+/// With AArch64 NEON it is one for runs of more than three squarings.
+///
+/// Otherwise it is `K` dependent squarings.
+#[inline]
+fn square_times<const K: usize>(x: u64) -> u64 {
+    #[cfg(all(
+        target_arch = "x86_64",
+        target_feature = "gfni",
+        target_feature = "avx512f",
+        target_feature = "avx512bw",
+        target_feature = "avx512vbmi"
+    ))]
+    {
+        // One broadcast, eight affine products and a byte permute, for any K.
+        super::x86_64::square_times::<K>(x)
+    }
+    #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
+    {
+        // Up to three squarings the product saves little latency and costs throughput.
+        //
+        // Longer runs take thirty-two masked column pairs and an exclusive-or tree.
+        if K <= 3 {
+            (0..K).fold(x, |y, _| poly_square_64(y))
+        } else {
+            super::neon::square_times::<K>(x)
+        }
+    }
+    #[cfg(not(any(
+        all(
+            target_arch = "x86_64",
+            target_feature = "gfni",
+            target_feature = "avx512f",
+            target_feature = "avx512bw",
+            target_feature = "avx512vbmi"
+        ),
+        all(target_arch = "aarch64", target_feature = "neon")
+    )))]
+    {
+        // K dependent squarings, each one carryless product and one fold.
+        (0..K).fold(x, |y, _| poly_square_64(y))
+    }
 }
 
 /// The square root, which every element of a binary field has exactly one of.
@@ -123,21 +202,25 @@ pub(crate) fn poly_sqrt_64(a: u64) -> u64 {
 ///
 /// Nine exponents is eight steps, so eight products and sixty-three squarings.
 ///
+/// With `GFNI` each run of squarings is one bit-matrix product instead.
+///
+/// With AArch64 NEON each run of more than three squarings is.
+///
 /// None of them is indexed by the operand.
 #[inline]
 pub(crate) fn poly_inverse_64(x: u64) -> u64 {
     let b2 = poly_mul_64(poly_square_64(x), x);
     let b3 = poly_mul_64(poly_square_64(b2), x);
-    let b6 = poly_mul_64(square_times(b3, 3), b3);
+    let b6 = poly_mul_64(square_times::<3>(b3), b3);
 
     // Doubling the exponent index reuses the same intermediate on both sides.
-    let b12 = poly_mul_64(square_times(b6, 6), b6);
-    let b24 = poly_mul_64(square_times(b12, 12), b12);
-    let b48 = poly_mul_64(square_times(b24, 24), b24);
+    let b12 = poly_mul_64(square_times::<6>(b6), b6);
+    let b24 = poly_mul_64(square_times::<12>(b12), b12);
+    let b48 = poly_mul_64(square_times::<24>(b24), b24);
 
     // Finish 48 + 12 = 60, then 60 + 3 = 63.
-    let b60 = poly_mul_64(square_times(b48, 12), b12);
-    let b63 = poly_mul_64(square_times(b60, 3), b3);
+    let b60 = poly_mul_64(square_times::<12>(b48), b12);
+    let b63 = poly_mul_64(square_times::<3>(b60), b3);
 
     // One more squaring turns `2^63 - 1` into `2^64 - 2`.
     poly_square_64(b63)
@@ -149,7 +232,7 @@ mod tests {
 
     use super::{
         ROOT_X, composed_dot_64, composed_mul_64, composed_square_64, poly_dot_64, poly_inverse_64,
-        poly_mul_64, poly_sqrt_64, poly_square_64,
+        poly_mul_64, poly_sqrt_64, poly_square_64, square_times, square_times_slow,
     };
 
     /// Multiplication from the modulus alone, with no carryless product and no fold.
@@ -166,6 +249,30 @@ mod tests {
             }
         }
         acc
+    }
+
+    #[test]
+    fn the_reference_squaring_matches_the_field() {
+        // Invariant: the compile-time squaring that builds the bit matrices is the field's own.
+        //
+        // Fixture state: the identities, all ones and the top bits, whose images are extreme.
+        for x in [0, 1, u64::MAX, 1 << 63, 0xf << 60] {
+            assert_eq!(square_times_slow(x, 1), poly_square_64(x), "{x:#x}");
+        }
+    }
+
+    #[test]
+    fn repeated_squaring_is_exact_on_the_basis() {
+        // Invariant: the map is linear, so agreeing on all 64 basis vectors settles every input.
+        //
+        // Fixture state: every run length the inversion chain takes, on this target's route.
+        for c in 0..64 {
+            let x = 1u64 << c;
+            assert_eq!(square_times::<3>(x), square_times_slow(x, 3), "x^{c}");
+            assert_eq!(square_times::<6>(x), square_times_slow(x, 6), "x^{c}");
+            assert_eq!(square_times::<12>(x), square_times_slow(x, 12), "x^{c}");
+            assert_eq!(square_times::<24>(x), square_times_slow(x, 24), "x^{c}");
+        }
     }
 
     #[test]
@@ -242,6 +349,16 @@ mod tests {
         #[test]
         fn the_inverse_multiplies_back_to_one(a: u64) {
             prop_assert_eq!(schoolbook(a, poly_inverse_64(a)), u64::from(a != 0));
+        }
+
+        /// Every run the inversion chain takes, on this target's route, against the squaring loop.
+        #[test]
+        fn repeated_squaring_matches_the_squaring_loop(a: u64) {
+            let repeated = |k: usize| (0..k).fold(a, |y, _| poly_square_64(y));
+            prop_assert_eq!(square_times::<3>(a), repeated(3));
+            prop_assert_eq!(square_times::<6>(a), repeated(6));
+            prop_assert_eq!(square_times::<12>(a), repeated(12));
+            prop_assert_eq!(square_times::<24>(a), repeated(24));
         }
     }
 }

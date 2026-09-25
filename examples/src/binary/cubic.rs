@@ -29,7 +29,18 @@ use p3_lookup::InteractionSymbolicBuilder;
 use p3_maybe_rayon::prelude::current_num_threads;
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_multi_stark::config::{MultiStarkConfig, PcsError, PcsProverError};
+#[cfg(all(
+    target_arch = "x86_64",
+    target_feature = "vpclmulqdq",
+    any(target_feature = "avx2", target_feature = "avx512f")
+))]
+use p3_multi_stark::folder::ProverAir;
 use p3_multi_stark::folder::{InteractionMultilinearFolder, MultilinearFolder};
+#[cfg(not(all(
+    target_arch = "x86_64",
+    target_feature = "vpclmulqdq",
+    any(target_feature = "avx2", target_feature = "avx512f")
+)))]
 use p3_multi_stark::packed_ext::PackedExt;
 use p3_multi_stark::{
     MultiStarkProof, ProverInstance, ProverInstances, ProvingError, VerificationError,
@@ -119,10 +130,53 @@ impl<H: HarnessHash> MultiStarkConfig for CubicWhirStarkConfig<H> {
     }
 }
 
+/// AIR obligations of the generic prover at this field pair.
+///
+/// Where the target packs `Poly64` into SIMD registers, every folder the prover names is distinct.
+///
+/// The prover's own bound can then state them all directly.
+#[cfg(all(
+    target_arch = "x86_64",
+    target_feature = "vpclmulqdq",
+    any(target_feature = "avx2", target_feature = "avx512f")
+))]
+pub trait CubicAir:
+    BaseAir<Val>
+    + Air<InteractionSymbolicBuilder<Val, Challenge>>
+    + Air<BusSymbolicBuilder<Val, Challenge>>
+    + ProverAir<Val, Challenge>
+    + for<'a> Air<MultilinearFolder<'a, Val, Challenge, Challenge>>
+    + for<'a> Air<InteractionMultilinearFolder<'a, Val, Challenge, Challenge>>
+{
+}
+
+#[cfg(all(
+    target_arch = "x86_64",
+    target_feature = "vpclmulqdq",
+    any(target_feature = "avx2", target_feature = "avx512f")
+))]
+impl<A> CubicAir for A where
+    A: BaseAir<Val>
+        + Air<InteractionSymbolicBuilder<Val, Challenge>>
+        + Air<BusSymbolicBuilder<Val, Challenge>>
+        + ProverAir<Val, Challenge>
+        + for<'a> Air<MultilinearFolder<'a, Val, Challenge, Challenge>>
+        + for<'a> Air<InteractionMultilinearFolder<'a, Val, Challenge, Challenge>>
+{
+}
+
 /// AIR obligations of the generic prover at this field pair, each stated once.
 ///
-/// `Poly64` is its own packing and `Poly192` its own extension packing.
-/// So [`p3_multi_stark::folder::ProverAir`] names some folders twice, which this trait does not.
+/// Elsewhere `Poly64` is its own packing and `Poly192` its own extension packing.
+///
+/// The prover's own bound then names some folders twice, which the solver rejects as ambiguous.
+///
+/// So this list names each distinct folder once.
+#[cfg(not(all(
+    target_arch = "x86_64",
+    target_feature = "vpclmulqdq",
+    any(target_feature = "avx2", target_feature = "avx512f")
+)))]
 pub trait CubicAir:
     BaseAir<Val>
     + Air<InteractionSymbolicBuilder<Val, Challenge>>
@@ -138,6 +192,11 @@ pub trait CubicAir:
 {
 }
 
+#[cfg(not(all(
+    target_arch = "x86_64",
+    target_feature = "vpclmulqdq",
+    any(target_feature = "avx2", target_feature = "avx512f")
+)))]
 impl<A> CubicAir for A where
     A: BaseAir<Val>
         + Air<InteractionSymbolicBuilder<Val, Challenge>>

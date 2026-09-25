@@ -13,6 +13,7 @@ use core::fmt::{self, Debug, Display, Formatter};
 use core::iter::{Product, Sum};
 use core::mem::ManuallyDrop;
 use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
+use core::ptr;
 
 use num_bigint::BigUint;
 use p3_field::extension::HasFrobenius;
@@ -22,14 +23,20 @@ use p3_field::op_assign_macros::{
 };
 use p3_field::{
     Algebra, AlgebraIdentity, BasedVectorSpace, ExtensionField, Field, Packable,
-    PackedFieldExtension, Powers, PrimeCharacteristicRing, RawDataSerializable,
+    PrimeCharacteristicRing, RawDataSerializable,
 };
+#[cfg(not(all(
+    target_arch = "x86_64",
+    target_feature = "vpclmulqdq",
+    any(target_feature = "avx2", target_feature = "avx512f")
+)))]
+use p3_field::{PackedFieldExtension, Powers};
 use rand::Rng;
 use rand::distr::{Distribution, StandardUniform};
 use serde::{Deserialize, Serialize};
 
 use crate::gf2::characteristic_two_methods;
-use crate::{Gf2, Poly64};
+use crate::{Gf2, Poly64, clmul};
 
 /// The number of coordinates over the coefficient field.
 const DEGREE: usize = 3;
@@ -91,6 +98,20 @@ impl Poly192 {
         let p3 = d12 + c1 + c2;
 
         Self([c0 + p3, p1 + p3 + c2, p2 + c2])
+    }
+
+    /// The coordinates as raw bit patterns, borrowed in place.
+    #[inline]
+    const fn limbs(&self) -> &[u64; DEGREE] {
+        // SAFETY: `Poly64` is `repr(transparent)` over `u64`, so the arrays share one layout.
+        unsafe { &*ptr::from_ref(&self.0).cast() }
+    }
+
+    /// The element with the given raw coordinates.
+    #[inline]
+    const fn from_limbs([a0, a1, a2]: [u64; DEGREE]) -> Self {
+        // Every bit pattern is an element, so the coordinates wrap as they are.
+        Self([Poly64::new(a0), Poly64::new(a1), Poly64::new(a2)])
     }
 
     /// The inverse of this element, with zero sent to zero.
@@ -176,17 +197,12 @@ impl Mul for Poly192 {
     ///     y^3    = y + 1
     ///     y^4    = y^2 + y
     /// ```
+    ///
+    /// The base-field reduction waits until after that fold, so only three coordinates reduce.
     #[inline]
     fn mul(self, rhs: Self) -> Self {
-        #[cfg(all(target_arch = "x86_64", target_feature = "pclmulqdq"))]
-        {
-            let limbs = |x: Self| x.0.map(Poly64::to_bits);
-            Self(crate::clmul::poly_mul_192(limbs(self), limbs(rhs)).map(Poly64::new))
-        }
-        #[cfg(not(all(target_arch = "x86_64", target_feature = "pclmulqdq")))]
-        {
-            self.composed_mul(rhs)
-        }
+        // Six carryless products, the fold of y, and one reduction per coordinate.
+        Self::from_limbs(clmul::poly_mul_192(self.limbs(), rhs.limbs()))
     }
 }
 
@@ -196,7 +212,8 @@ impl Mul<Poly64> for Poly192 {
     /// Scaling stays inside each coordinate, so it costs three products rather than six.
     #[inline]
     fn mul(self, rhs: Poly64) -> Self {
-        Self(self.0.map(|c| c * rhs))
+        // One carryless product and one reduction per coordinate.
+        Self::from_limbs(clmul::poly_mul_192_by_64(self.limbs(), rhs.as_bits()))
     }
 }
 
@@ -240,9 +257,17 @@ impl PrimeCharacteristicRing for Poly192 {
     /// ```
     #[inline]
     fn square(&self) -> Self {
-        let [a0, a1, a2] = self.0;
-        let (s0, s1, s2) = (a0.square(), a1.square(), a2.square());
-        Self([s0, s2, s1 + s2])
+        // Three coordinate squares, the fold of y^4, then three reductions.
+        Self::from_limbs(clmul::poly_square_192(self.limbs()))
+    }
+
+    /// Reduction is linear, so the whole sum reduces its three coordinates once.
+    #[inline]
+    fn dot_product<const N: usize>(u: &[Self; N], v: &[Self; N]) -> Self {
+        // Six carryless products per term, three reductions for the whole sum.
+        Self::from_limbs(clmul::poly_dot_192(
+            u.iter().zip(v).map(|(a, b)| (a.limbs(), b.limbs())),
+        ))
     }
 
     characteristic_two_methods!();
@@ -386,7 +411,16 @@ impl_sub_base_field!(Poly192, Poly64);
 impl_add_base_field!(Poly192, Gf2);
 impl_sub_base_field!(Poly192, Gf2);
 
-impl Algebra<Poly64> for Poly192 {}
+impl Algebra<Poly64> for Poly192 {
+    /// Three products per term and one reduction per coordinate for the whole sum.
+    #[inline]
+    fn mixed_dot_product<const N: usize>(a: &[Self; N], f: &[Poly64; N]) -> Self {
+        // Three carryless products per term, three reductions for the whole sum.
+        Self::from_limbs(clmul::poly_dot_192_by_64(
+            a.iter().zip(f).map(|(x, k)| (x.limbs(), k.as_bits())),
+        ))
+    }
+}
 
 impl Algebra<Gf2> for Poly192 {}
 
@@ -433,7 +467,11 @@ impl BasedVectorSpace<Poly64> for Poly192 {
 }
 
 impl ExtensionField<Poly64> for Poly192 {
-    type ExtensionPacking = Self;
+    // One register of coefficient-field lanes per coordinate, where the base field packs.
+    //
+    // Without a packing the alias resolves to this type itself, which is why the lint is off.
+    #[allow(clippy::use_self)]
+    type ExtensionPacking = crate::packed::Poly192Packing;
 
     #[inline]
     fn is_in_basefield(&self) -> bool {
@@ -448,6 +486,12 @@ impl ExtensionField<Poly64> for Poly192 {
 }
 
 /// One element per vector, so every lane index is zero.
+// Only where no register widens the coefficient field's multiply.
+#[cfg(not(all(
+    target_arch = "x86_64",
+    target_feature = "vpclmulqdq",
+    any(target_feature = "avx2", target_feature = "avx512f")
+)))]
 impl PackedFieldExtension<Poly64, Self> for Poly192 {
     #[inline]
     fn from_ext_fn(f: impl Fn(usize) -> Self) -> Self {

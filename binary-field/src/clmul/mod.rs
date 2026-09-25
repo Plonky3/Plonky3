@@ -14,11 +14,23 @@
 //! registers; every backend is checked against portable arithmetic.
 
 mod basis;
+mod gf192;
 mod gf64;
 mod powers;
 mod sqrt;
 
+// The algebra of `GF(2^64)` over a register of lanes.
+//
+// The scalar vector kernels and the packings share it.
+//
+// Its model runs under `test` on every target, so no leg misses the algebra.
+#[cfg(any(test, all(target_arch = "x86_64", target_feature = "pclmulqdq")))]
+pub(crate) mod wide;
+
 pub(crate) use gf64::{poly_dot_64, poly_inverse_64, poly_mul_64, poly_sqrt_64, poly_square_64};
+pub(crate) use gf192::{
+    poly_dot_192, poly_dot_192_by_64, poly_mul_192, poly_mul_192_by_64, poly_square_192,
+};
 pub(crate) use powers::poly_dot_powers_128;
 pub(crate) use sqrt::poly_sqrt_128;
 
@@ -32,8 +44,6 @@ pub(crate) use sqrt::poly_sqrt_128;
 mod inverse;
 #[cfg(all(target_arch = "x86_64", target_feature = "pclmulqdq"))]
 pub(crate) use inverse::poly_inverse_128;
-#[cfg(all(target_arch = "x86_64", target_feature = "pclmulqdq"))]
-pub(crate) use x86_64::poly_mul_192;
 
 // Compiled on every target, even where a backend supersedes it.
 // Its tests then run everywhere.
@@ -69,6 +79,11 @@ use crate::tower::TowerLevel;
 
 #[cfg(all(target_arch = "aarch64", target_feature = "aes"))]
 mod aarch64;
+// Repeated squaring as one bit-matrix product, from compares, masks and exclusive ors.
+//
+// It needs NEON only, so AArch64 without the carryless multiply takes it too.
+#[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
+mod neon;
 #[cfg(all(target_arch = "x86_64", target_feature = "pclmulqdq"))]
 mod x86_64;
 
@@ -140,18 +155,27 @@ fn clmul_128x128(a: u128, b: u128) -> (u128, u128) {
 
 /// Reduces a 128-bit carryless product modulo `x^64 + x^4 + x^3 + x + 1`.
 ///
-/// The modulus rewrites `x^64` as the tail `x^4 + x^3 + x + 1`.
-/// The high half therefore folds down by that tail.
-/// Degree 4 spills 4 bits back over the top; a second fold lands at degree `3 + 4`.
+/// The modulus rewrites `x^64` as the tail `T = x^4 + x^3 + x + 1`:
+///
+/// ```text
+///     high x^64  =  g(high) + spill(high) x^64
+///     g(v)       =  v ^ (v << 1) ^ (v << 3) ^ (v << 4)       truncated to 64 bits
+///     spill(v)   =  (v >> 63) ^ (v >> 61) ^ (v >> 60)
+/// ```
+///
+/// `g` is linear and the spill has degree at most 3, so both folds are one `g` of a sum.
 #[inline]
 const fn reduce_64(product: u128) -> u64 {
     let low = product as u64;
     let high = (product >> 64) as u64;
 
-    let folded = (high << 4) ^ (high << 3) ^ (high << 1) ^ high;
-    let spill = (high >> 60) ^ (high >> 61) ^ (high >> 63);
+    // high + spill(high), summed first because g is linear.
+    //
+    // The spill's own fold stays below degree 8, so nothing crosses x^64 a third time.
+    let folded = high ^ (high >> 63) ^ (high >> 61) ^ (high >> 60);
 
-    low ^ folded ^ ((spill << 4) ^ (spill << 3) ^ (spill << 1) ^ spill)
+    // low + g(high + spill(high)).
+    low ^ folded ^ (folded << 1) ^ (folded << 3) ^ (folded << 4)
 }
 
 /// Reduces a 256-bit carryless product modulo `x^128 + x^7 + x^2 + x + 1`.

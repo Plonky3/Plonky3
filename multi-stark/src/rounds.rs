@@ -1645,6 +1645,7 @@ where
         let scratch = eq_suffix
             .as_slice()
             .par_chunks_exact(packing_width)
+            .with_min_len(rows_per_task(packed_half))
             .enumerate()
             .par_fold_reduce(
                 || {
@@ -2583,6 +2584,7 @@ where
         let scratch = eq_suffix
             .as_slice()
             .par_chunks_exact(packing_width)
+            .with_min_len(rows_per_task(packed_half))
             .enumerate()
             .par_fold_reduce(
                 || {
