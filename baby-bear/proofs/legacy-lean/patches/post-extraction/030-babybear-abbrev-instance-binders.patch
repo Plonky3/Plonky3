@@ -1,0 +1,36 @@
+# Patch:     030-babybear-abbrev-instance-binders
+# Phase:     post-extraction
+# Target:    extraction/p3_baby_bear.lean
+# Hunks:     1
+# Cost:      none
+# Upstream:  hax bug -- trait obligations on a Rust type alias are not
+#            propagated onto the emitted Lean abbrev.
+# Drop when: hax propagates those obligations itself.
+#
+# Rust has `pub type BabyBear = MontyField31<BabyBearParameters>;`, and
+# `MontyField31<MP>` requires `MP: MontyParameters`. hax emits
+#
+#     abbrev BabyBear : Type := (p3_monty_31.monty_31.MontyField31 BabyBearParameters)
+#
+# with no instance binders, so elaboration cannot discharge the `MontyParameters`
+# obligation and the abbrev is rejected. The patch adds the two binders hax
+# dropped (`MontyParameters.AssociatedTypes` and `MontyParameters`).
+#
+# The original line is preserved as a comment directly below, so the deviation is
+# greppable and trivially reversible.
+#
+--- a/extraction/p3_baby_bear.lean
++++ b/extraction/p3_baby_bear.lean
+@@ -20,7 +20,11 @@
+   -- no fields
+ 
+ --  The prime field `2^31 - 2^27 + 1`, a.k.a. the Baby Bear field.
+-abbrev BabyBear : Type := (p3_monty_31.monty_31.MontyField31 BabyBearParameters)
++abbrev BabyBear -- PATCHED: instance binders hax does not propagate
++  [ p3_monty_31.data_traits.MontyParameters.AssociatedTypes BabyBearParameters ]
++  [ p3_monty_31.data_traits.MontyParameters BabyBearParameters ] :
++  Type := (p3_monty_31.monty_31.MontyField31 BabyBearParameters)
++-- abbrev BabyBear : Type := (p3_monty_31.monty_31.MontyField31 BabyBearParameters)
+ 
+ @[instance] opaque Impl_11.AssociatedTypes :
+   core_models.clone.Clone.AssociatedTypes BabyBearParameters :=

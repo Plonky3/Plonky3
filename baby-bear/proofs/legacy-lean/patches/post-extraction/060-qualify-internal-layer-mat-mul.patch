@@ -1,0 +1,32 @@
+# Patch:     060-qualify-internal-layer-mat-mul
+# Phase:     post-extraction
+# Target:    extraction/p3_baby_bear.lean
+# Hunks:     1
+# Cost:      none
+# Upstream:  hax bug -- a hoisted helper is referenced unqualified from inside an
+#            instance that has a field of the same name, so the reference
+#            resolves to the instance's own projection.
+# Drop when: hax fully qualifies references to helpers it hoists.
+#
+# hax hoists `internal_layer_mat_mul` out of the Poseidon2 instance into
+# `Impl_2.internal_layer_mat_mul_hoisted`, then refers to it unqualified from
+# within the instance of the same name. Name resolution prefers the enclosing
+# instance's projection, producing a self-reference that does not elaborate.
+#
+# The patch spells the intended target in full
+# (`p3_baby_bear.poseidon2.Impl_2.internal_layer_mat_mul_hoisted`). The original
+# is preserved as a comment. No definition changes -- only which of two
+# same-named things the reference points at.
+#
+--- a/extraction/p3_baby_bear.lean
++++ b/extraction/p3_baby_bear.lean
+@@ -4207,7 +4207,8 @@
+         R]
+       [trait_constr__i0 : p3_field.field.PrimeCharacteristicRing R ]
+       =>
+-    (Impl_2.internal_layer_mat_mul_hoisted R)
++    (p3_baby_bear.poseidon2.Impl_2.internal_layer_mat_mul_hoisted R) -- PATCHED
++    -- (Impl_2.internal_layer_mat_mul_hoisted R)
+ 
+ --  Create a default width-32 Poseidon2 permutation for BabyBear.
+ @[spec]
