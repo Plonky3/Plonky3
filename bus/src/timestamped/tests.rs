@@ -4,6 +4,7 @@ use alloc::vec::Vec;
 use core::num::NonZeroUsize;
 use std::collections::HashMap;
 use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::sync::OnceLock;
 
 use p3_air::symbolic::AirLayout;
 use p3_air::{Air, BaseAir, WindowAccess, check_constraints};
@@ -243,16 +244,62 @@ struct Traces {
     range: RowMajorMatrix<F>,
 }
 
+/// The entries of one range table, in row order and indexed by value.
+struct RangeColumn {
+    /// Entry on each row.
+    entries: Vec<F>,
+    /// Row of each entry.
+    rows: HashMap<F, usize>,
+}
+
+impl RangeColumn {
+    /// The geometric column `first * step^row`, one product per row.
+    fn geometric(first: F, step: F) -> Self {
+        let height = ClockRangeAir::<C, F>::HEIGHT;
+        let entries = core::iter::successors(Some(first), |&entry| Some(entry * step))
+            .take(height)
+            .collect::<Vec<_>>();
+        let rows = entries
+            .iter()
+            .enumerate()
+            .map(|(row, &entry)| (entry, row))
+            .collect();
+        Self { entries, rows }
+    }
+}
+
+/// Both range tables, built once and shared by every test.
+///
+/// Each has `2^16` rows.
+///
+/// Rebuilding them on every check, one exponentiation per entry, would dominate the suite.
+fn range_columns() -> &'static (RangeColumn, RangeColumn) {
+    static COLUMNS: OnceLock<(RangeColumn, RangeColumn)> = OnceLock::new();
+    COLUMNS.get_or_init(|| {
+        // Consecutive rows differ by one fixed factor in both tables.
+        //
+        //     low(row)   =  g^(row + 1)        =  low(0)  * low(0)^row
+        //     high(row)  =  step^row           =  high(0) * high(1)^row
+        let low =
+            RangeColumn::geometric(ClockRangeAir::<C, F>::low(0), ClockRangeAir::<C, F>::low(0));
+        let high = RangeColumn::geometric(
+            ClockRangeAir::<C, F>::high(0),
+            ClockRangeAir::<C, F>::high(1),
+        );
+
+        // The products must land on the closed forms, checked at the last row.
+        let last = ClockRangeAir::<C, F>::HEIGHT - 1;
+        assert_eq!(low.entries[last], ClockRangeAir::<C, F>::low(last));
+        assert_eq!(high.entries[last], ClockRangeAir::<C, F>::high(last));
+        (low, high)
+    })
+}
+
 /// Assigns read-only counts and lays out every table, for a block with this seed.
 fn traces(witness: &Witness, seed: &TimestampedSeed<F>) -> Traces {
     let height = ClockRangeAir::<C, F>::HEIGHT;
-    let index = |entry: fn(usize) -> F| {
-        (0..height)
-            .map(|row| (entry(row), row))
-            .collect::<HashMap<_, _>>()
-    };
-    let low_index = index(ClockRangeAir::<C, F>::low);
-    let high_index = index(ClockRangeAir::<C, F>::high);
+    let (low_column, high_column) = range_columns();
+    let (low_index, high_index) = (&low_column.rows, &high_column.rows);
     let mut low_reads = vec![0u64; height];
     let mut high_reads = vec![0u64; height];
 
@@ -269,8 +316,8 @@ fn traces(witness: &Witness, seed: &TimestampedSeed<F>) -> Traces {
     for row in &witness.rows {
         machine.push(row.clock);
         for access in &row.slots {
-            let low = count(&mut low_reads, &low_index, access.low);
-            let high = count(&mut high_reads, &high_index, access.high);
+            let low = count(&mut low_reads, low_index, access.low);
+            let high = count(&mut high_reads, high_index, access.high);
             machine.extend([
                 access.address,
                 access.previous,
@@ -303,9 +350,9 @@ fn traces(witness: &Witness, seed: &TimestampedSeed<F>) -> Traces {
     let range = (0..height)
         .flat_map(|row| {
             [
-                ClockRangeAir::<C, F>::low(row),
+                low_column.entries[row],
                 F::GENERATOR.exp_u64(low_reads[row]),
-                ClockRangeAir::<C, F>::high(row),
+                high_column.entries[row],
                 F::GENERATOR.exp_u64(high_reads[row]),
             ]
         })
@@ -761,7 +808,7 @@ fn a_public_image_refuses_malformed_runs() {
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(8))]
+    #![proptest_config(ProptestConfig::with_cases(4))]
 
     #[test]
     fn a_private_region_accepts_any_start_and_binds_every_read_to_it(

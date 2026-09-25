@@ -230,15 +230,31 @@ fn table(values: Vec<F>, width: usize) -> Table<F> {
 fn traces(starts: &[F], program: &[(u64, usize, Option<u128>)]) -> [Table<F>; 3] {
     let tick = Memory::tick();
     let height = ClockRangeAir::<C, F>::HEIGHT;
-    let index = |entry: fn(usize) -> F| {
-        (0..height)
-            .map(|row| (entry(row), row))
+
+    // Consecutive rows differ by one fixed factor.
+    //
+    // Each entry is then one product, not one exponentiation.
+    //
+    //     low(row)   =  g^(row + 1)   =  low(0)  * low(0)^row
+    //     high(row)  =  step^row      =  high(0) * high(1)^row
+    let geometric = |first: F, step: F| {
+        core::iter::successors(Some(first), move |&entry| Some(entry * step))
+            .take(height)
+            .collect::<Vec<_>>()
+    };
+    let low_entries = geometric(ClockRangeAir::<C, F>::low(0), ClockRangeAir::<C, F>::low(0));
+    let high_entries = geometric(
+        ClockRangeAir::<C, F>::high(0),
+        ClockRangeAir::<C, F>::high(1),
+    );
+    let index = |entries: &[F]| {
+        entries
+            .iter()
+            .enumerate()
+            .map(|(row, &entry)| (entry, row))
             .collect::<HashMap<_, _>>()
     };
-    let (low_index, high_index) = (
-        index(ClockRangeAir::<C, F>::low),
-        index(ClockRangeAir::<C, F>::high),
-    );
+    let (low_index, high_index) = (index(&low_entries), index(&high_entries));
     let mut reads = [vec![0u64; height], vec![0u64; height]];
 
     // The k-th read of a range entry holds count `G^k`.
@@ -303,9 +319,9 @@ fn traces(starts: &[F], program: &[(u64, usize, Option<u128>)]) -> [Table<F>; 3]
     let range = (0..height)
         .flat_map(|row| {
             [
-                ClockRangeAir::<C, F>::low(row),
+                low_entries[row],
                 F::GENERATOR.exp_u64(reads[0][row]),
-                ClockRangeAir::<C, F>::high(row),
+                high_entries[row],
                 F::GENERATOR.exp_u64(reads[1][row]),
             ]
         })
@@ -387,6 +403,7 @@ fn verify_against(
 }
 
 #[test]
+#[ignore = "proves a 2^16-row range table, minutes unoptimized; run from heavy CI"]
 fn a_proof_from_a_public_image_verifies_only_against_that_image() {
     let cells = [ROWS * MACHINE_WIDTH, 3 << LOG_CELLS, 4 << 16];
     let config = config(log2_ceil_usize(cells.iter().sum()));
