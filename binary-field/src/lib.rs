@@ -37,7 +37,7 @@ pub use ghash::Ghash128;
     target_feature = "vpclmulqdq",
     any(target_feature = "avx2", target_feature = "avx512f")
 ))]
-pub use packed::*;
+pub use packed::{PackedGhash128, PackedPoly64, PackedPoly192};
 pub use poly64::Poly64;
 pub use poly192::Poly192;
 pub use tower::{
