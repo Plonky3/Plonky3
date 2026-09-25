@@ -79,6 +79,11 @@ use crate::tower::TowerLevel;
 
 #[cfg(all(target_arch = "aarch64", target_feature = "aes"))]
 mod aarch64;
+// Repeated squaring as one bit-matrix product, from compares, masks and exclusive ors.
+//
+// It needs NEON only, so AArch64 without the carryless multiply takes it too.
+#[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
+mod neon;
 #[cfg(all(target_arch = "x86_64", target_feature = "pclmulqdq"))]
 mod x86_64;
 

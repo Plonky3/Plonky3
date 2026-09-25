@@ -28,34 +28,10 @@ use core::arch::x86_64::{
     _mm512_permutexvar_epi8, _mm512_rol_epi64, _mm512_ternarylogic_epi64, _mm512_xor_si512,
 };
 
-use crate::clmul::reduce_64;
+use crate::clmul::gf64::square_times_slow;
 
 /// The truth table of `a ^ b ^ c` for a ternary logic instruction.
 const XOR3: i32 = 0x96;
-
-/// Bits `0 .. 32` of `v`, each moved to twice its position: the carryless square of `v`.
-const fn spread_32(v: u64) -> u64 {
-    let mut out = 0;
-    let mut i = 0;
-    while i < 32 {
-        // Bit i of v becomes the coefficient of x^(2i), since (x^i)^2 = x^(2i).
-        out |= ((v >> i) & 1) << (2 * i);
-        i += 1;
-    }
-    out
-}
-
-/// `x^(2^K)`, one squaring at a time.
-const fn square_times_slow(mut x: u64, k: usize) -> u64 {
-    let mut i = 0;
-    while i < k {
-        // The carryless square of a 64-bit value is its two halves, each spread.
-        let square = (spread_32(x >> 32) as u128) << 64 | spread_32(x) as u128;
-        x = reduce_64(square);
-        i += 1;
-    }
-    x
-}
 
 /// The affine matrices of `x -> x^(2^K)`, product `t` then quadword `q`.
 ///
@@ -181,19 +157,9 @@ pub(crate) fn square_times<const K: usize>(x: u64) -> u64 {
 mod tests {
     use proptest::prelude::*;
 
-    use super::{square_times, square_times_slow};
+    use super::square_times;
+    use crate::clmul::gf64::square_times_slow;
     use crate::clmul::poly_square_64;
-
-    /// The operands whose images are extreme: the identities, all ones, the top bits.
-    const CORNERS: [u64; 5] = [0, 1, u64::MAX, 1 << 63, 0xf << 60];
-
-    #[test]
-    fn the_reference_squaring_matches_the_field() {
-        // Invariant: the compile-time squaring that builds the matrices is the field's own.
-        for x in CORNERS {
-            assert_eq!(square_times_slow(x, 1), poly_square_64(x), "{x:#x}");
-        }
-    }
 
     #[test]
     fn the_matrix_product_is_exact_on_the_basis() {

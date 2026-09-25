@@ -88,9 +88,63 @@ fn composed_dot_64(pairs: impl Iterator<Item = (u64, u64)>) -> u64 {
     reduce_64(pairs.fold(0, |sum, (a, b)| sum ^ clmul_64x64(a, b)))
 }
 
+/// Bits `0 .. 32` of `v`, each moved to twice its position: the carryless square of `v`.
+#[cfg_attr(
+    not(any(
+        all(
+            target_arch = "x86_64",
+            target_feature = "gfni",
+            target_feature = "avx512f",
+            target_feature = "avx512bw",
+            target_feature = "avx512vbmi"
+        ),
+        all(target_arch = "aarch64", target_feature = "neon")
+    )),
+    allow(dead_code)
+)]
+const fn spread_32(v: u64) -> u64 {
+    let mut out = 0;
+    let mut i = 0;
+    while i < 32 {
+        // Bit i of v becomes the coefficient of x^(2i), since (x^i)^2 = x^(2i).
+        out |= ((v >> i) & 1) << (2 * i);
+        i += 1;
+    }
+    out
+}
+
+/// `x^(2^K)`, one squaring at a time.
+///
+/// The bit-matrix backends build their tables from it at compile time.
+//
+// Compiled on every target, so its test runs even where no bit-matrix backend does.
+#[cfg_attr(
+    not(any(
+        all(
+            target_arch = "x86_64",
+            target_feature = "gfni",
+            target_feature = "avx512f",
+            target_feature = "avx512bw",
+            target_feature = "avx512vbmi"
+        ),
+        all(target_arch = "aarch64", target_feature = "neon")
+    )),
+    allow(dead_code)
+)]
+pub(super) const fn square_times_slow(mut x: u64, k: usize) -> u64 {
+    let mut i = 0;
+    while i < k {
+        // The carryless square of a 64-bit value is its two halves, each spread.
+        let square = (spread_32(x >> 32) as u128) << 64 | spread_32(x) as u128;
+        x = reduce_64(square);
+        i += 1;
+    }
+    x
+}
+
 /// Squaring repeated a fixed number of times.
 ///
-/// With `GFNI` the whole power is one bit-matrix product, whatever the count.
+/// With `GFNI` or AArch64 NEON the whole power is one bit-matrix product, whatever the count.
 ///
 /// Otherwise it is `K` dependent squarings.
 #[inline]
@@ -106,12 +160,20 @@ fn square_times<const K: usize>(x: u64) -> u64 {
         // One broadcast, eight affine products and a byte permute, for any K.
         super::x86_64::square_times::<K>(x)
     }
-    #[cfg(not(all(
-        target_arch = "x86_64",
-        target_feature = "gfni",
-        target_feature = "avx512f",
-        target_feature = "avx512bw",
-        target_feature = "avx512vbmi"
+    #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
+    {
+        // Thirty-two masked column pairs and an exclusive-or tree, for any K.
+        super::neon::square_times::<K>(x)
+    }
+    #[cfg(not(any(
+        all(
+            target_arch = "x86_64",
+            target_feature = "gfni",
+            target_feature = "avx512f",
+            target_feature = "avx512bw",
+            target_feature = "avx512vbmi"
+        ),
+        all(target_arch = "aarch64", target_feature = "neon")
     )))]
     {
         // K dependent squarings, each one carryless product and one fold.
@@ -145,7 +207,7 @@ pub(crate) fn poly_sqrt_64(a: u64) -> u64 {
 ///
 /// Nine exponents is eight steps, so eight products and sixty-three squarings.
 ///
-/// With `GFNI`, each run of squarings is one bit-matrix product instead.
+/// With `GFNI` or AArch64 NEON, each run of squarings is one bit-matrix product instead.
 ///
 /// None of them is indexed by the operand.
 #[inline]
@@ -173,7 +235,7 @@ mod tests {
 
     use super::{
         ROOT_X, composed_dot_64, composed_mul_64, composed_square_64, poly_dot_64, poly_inverse_64,
-        poly_mul_64, poly_sqrt_64, poly_square_64,
+        poly_mul_64, poly_sqrt_64, poly_square_64, square_times_slow,
     };
 
     /// Multiplication from the modulus alone, with no carryless product and no fold.
@@ -190,6 +252,16 @@ mod tests {
             }
         }
         acc
+    }
+
+    #[test]
+    fn the_reference_squaring_matches_the_field() {
+        // Invariant: the compile-time squaring that builds the bit matrices is the field's own.
+        //
+        // Fixture state: the identities, all ones and the top bits, whose images are extreme.
+        for x in [0, 1, u64::MAX, 1 << 63, 0xf << 60] {
+            assert_eq!(square_times_slow(x, 1), poly_square_64(x), "{x:#x}");
+        }
     }
 
     #[test]
