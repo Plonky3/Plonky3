@@ -3,6 +3,7 @@
 
 extern crate alloc;
 
+mod builder;
 mod hiding_mmcs;
 mod merkle_tree;
 mod mmcs;

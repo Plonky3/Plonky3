@@ -1,5 +1,4 @@
 //! Compare equal-width commitments split across matrices, including injected layers.
-//! `current` uses the hasher's staging hint; `unstaged` retains the flat iterator.
 //! Input matrices are generated once and borrowed during each timed commitment.
 //!
 //! Run with a fixed worker count, for example:
@@ -27,38 +26,6 @@ use rand::rngs::SmallRng;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
-#[derive(Clone)]
-struct Unstaged<H>(H);
-
-impl<T: Clone, Out, H: CryptographicHasher<T, Out>> CryptographicHasher<T, Out> for Unstaged<H> {
-    const LANES: usize = H::LANES;
-    const PREFER_CONTIGUOUS_INPUT: bool = false;
-
-    fn hash_iter<I: IntoIterator<Item = T>>(&self, input: I) -> Out {
-        self.0.hash_iter(input)
-    }
-
-    fn hash_iter_slices<'a, I>(&self, input: I) -> Out
-    where
-        I: IntoIterator<Item = &'a [T]>,
-        T: 'a,
-    {
-        self.0.hash_iter_slices(input)
-    }
-
-    fn hash_slice(&self, input: &[T]) -> Out {
-        self.0.hash_slice(input)
-    }
-
-    fn hash_item(&self, input: T) -> Out {
-        self.0.hash_item(input)
-    }
-
-    fn hash_many(&self, input: &[T], out: &mut [Out]) {
-        self.0.hash_many(input, out);
-    }
-}
-
 fn split<F: Field>(matrix: &RowMajorMatrix<F>, widths: &[usize]) -> Vec<RowMajorMatrix<F>> {
     let mut start = 0;
     widths
@@ -85,8 +52,7 @@ where
     H: CryptographicHasher<F, [PW::Value; D]> + CryptographicHasher<P, [PW; D]> + Sync,
     C: PseudoCompressionFunction<[PW::Value; D], 2> + PseudoCompressionFunction<[PW; D], 2> + Sync,
 {
-    let mmcs = MerkleTreeMmcs::<P, PW, _, _, 2, D>::new(h.clone(), c.clone(), 0);
-    let reference = MerkleTreeMmcs::<P, PW, _, _, 2, D>::new(Unstaged(h), c, 0);
+    let mmcs = MerkleTreeMmcs::<P, PW, _, _, 2, D>::new(h, c, 0);
     let mut group = criterion.benchmark_group(format!("multi_matrix/{name}"));
     group.sample_size(10);
     group.warm_up_time(Duration::from_millis(200));
@@ -117,14 +83,9 @@ where
                 }
                 let params = format!("{layer}/{rows}x{layout}");
                 // Borrow the input data so cloning a potentially large trace is not timed.
-                group.bench_function(BenchmarkId::new("current", &params), |b| {
+                group.bench_function(BenchmarkId::from_parameter(&params), |b| {
                     b.iter(|| {
                         black_box(mmcs.commit(matrices.iter().map(|m| m.as_view()).collect()))
-                    });
-                });
-                group.bench_function(BenchmarkId::new("unstaged", &params), |b| {
-                    b.iter(|| {
-                        black_box(reference.commit(matrices.iter().map(|m| m.as_view()).collect()))
                     });
                 });
             }
