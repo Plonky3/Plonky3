@@ -40,6 +40,52 @@ const RECURSIVE_LIMIT: usize = 128;
 #[cfg(feature = "parallel")]
 const PARALLEL_THRESHOLD: usize = 4 << 20;
 
+/// Whether whole tiles of this element type move through register tiles.
+///
+/// Only the 16-lane AVX-512 tile beats the compiler's own vectorization of the scalar tile.
+///
+/// Narrower tiles lose to it on cache-resident matrices, so they keep the scalar kernels here.
+///
+/// Every input is a constant, so the check folds away per element type.
+const fn word_tiles<T>() -> bool {
+    cfg!(all(target_arch = "x86_64", target_feature = "avx512f"))
+        && size_of::<T>() == 4
+        && align_of::<T>() == 4
+}
+
+/// Transpose one block through the register-tile kernel.
+///
+/// # Arguments
+///
+/// - `total_cols`: input row stride.
+/// - `total_rows`: output row stride.
+/// - `start_x`, `start_y`: the block's first source column and row.
+/// - `out_col_start`: the output row that receives the block's first source column.
+/// - `block_width`, `block_height`: the block's extent.
+#[inline]
+#[allow(clippy::too_many_arguments)]
+fn transpose_block_tiled<T: Copy>(
+    input: &[T],
+    output: &mut [T],
+    total_cols: usize,
+    total_rows: usize,
+    start_x: usize,
+    start_y: usize,
+    out_col_start: usize,
+    block_width: usize,
+    block_height: usize,
+) {
+    // Source row i of the block, from its first column.
+    let row = |i: usize| {
+        let start = (start_y + i) * total_cols + start_x;
+        &input[start..start + block_width]
+    };
+
+    // Output run j of the block starts one output stride after run j - 1.
+    let dst = &mut output[out_col_start * total_rows + start_y..];
+    super::rows::transpose_rows_strided(block_height, block_width, row, dst, total_rows);
+}
+
 /// Transpose a row-major matrix from `input` into `output`.
 ///
 /// - `input` is read as `height` rows of `width` columns.
@@ -236,7 +282,9 @@ unsafe fn transpose_tile_segmented<T: Copy>(
 /// Whole `TILE x TILE` tiles use a constant-bound kernel.
 /// Partial tiles at the right and bottom edges use the generic block kernel.
 ///
-/// `SEGMENTED` selects the whole-tile kernel:
+/// Element types with a register-tile kernel take it for every whole tile, in column-stripe order.
+///
+/// For the others, `SEGMENTED` selects the whole-tile kernel:
 /// - `false` (medium path): plain tiles stream best while the matrix is cache-resident.
 /// - `true` (recursive leaves): segmented passes cut TLB/L1 pressure on large matrices.
 ///
@@ -275,23 +323,53 @@ unsafe fn transpose_region<const SEGMENTED: bool, T: Copy>(
     // Output row index of this region's first source column.
     let out_col_start = col_start - col_out_base;
 
-    unsafe {
-        // Whole tiles: tight hot loop, no per-tile bookkeeping.
-        // `SEGMENTED` is const, so the branch is resolved at compile time.
-        for y_tile in 0..y_tiles {
-            let row = row_start + y_tile * TILE;
-            for x_tile in 0..x_tiles {
-                // Source column and matching output row for this tile.
-                let col = col_start + x_tile * TILE;
-                let out_col = out_col_start + x_tile * TILE;
-                if SEGMENTED {
-                    transpose_tile_segmented(
-                        input, output, total_cols, total_rows, col, row, out_col,
-                    );
-                } else {
-                    transpose_tile_plain(input, output, total_cols, total_rows, col, row, out_col);
+    if word_tiles::<T>() {
+        // Register tiles: walk column stripes, so each output row is written front to back.
+        //
+        // Row stripes would scatter every tile's stores across the whole output instead.
+        for x_tile in 0..x_tiles {
+            for y_tile in 0..y_tiles {
+                transpose_block_tiled(
+                    input,
+                    output,
+                    total_cols,
+                    total_rows,
+                    col_start + x_tile * TILE,
+                    row_start + y_tile * TILE,
+                    out_col_start + x_tile * TILE,
+                    TILE,
+                    TILE,
+                );
+            }
+        }
+    } else {
+        // SAFETY: every whole tile lies inside the region, which the caller bounds.
+        unsafe {
+            // Whole tiles: tight hot loop, no per-tile bookkeeping.
+            // `SEGMENTED` is const, so the branch is resolved at compile time.
+            for y_tile in 0..y_tiles {
+                let row = row_start + y_tile * TILE;
+                for x_tile in 0..x_tiles {
+                    // Source column and matching output row for this tile.
+                    let col = col_start + x_tile * TILE;
+                    let out_col = out_col_start + x_tile * TILE;
+                    if SEGMENTED {
+                        transpose_tile_segmented(
+                            input, output, total_cols, total_rows, col, row, out_col,
+                        );
+                    } else {
+                        transpose_tile_plain(
+                            input, output, total_cols, total_rows, col, row, out_col,
+                        );
+                    }
                 }
             }
+        }
+    }
+
+    unsafe {
+        for y_tile in 0..y_tiles {
+            let row = row_start + y_tile * TILE;
 
             // Right edge: partial-width tiles for this band of rows.
             if remainder_x > 0 {
