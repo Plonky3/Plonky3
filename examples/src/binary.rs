@@ -1347,6 +1347,7 @@ mod tests {
     use p3_air::symbolic::AirLayout;
     use p3_air::{Air, AirBuilder, BaseAir, WindowAccess};
     use p3_binary_field::{Gf2, TowerLevel};
+    use p3_blake2s_air::Blake2sBinaryAir;
     use p3_blake3_air::{Blake3BinaryAir, NUM_BLAKE3_BINARY_COLS};
     use p3_bus::{BusActivation, BusDirection, BusInteractionBuilder, BusName, BusSymbolicBuilder};
     use p3_challenger::CanSample;
@@ -2892,6 +2893,34 @@ mod tests {
     #[test]
     fn dense_and_packed_sha256_tables_have_identical_boolean_proofs() {
         let air = Sha256BinaryAir::assuming_boolean_trace();
+        let dense = Table::new(air.generate_random_trace_rows::<F>(4, 0).transpose());
+        let packed = Table::from_packed_bits(air.generate_random_trace_packed::<Gf2>(4), 2);
+        for backend in [
+            Backend::Subfield,
+            Backend::PolyBasis,
+            Backend::PolyBasisLate,
+        ] {
+            assert_eq!(
+                boolean_proof_transcript(&air, dense.clone(), backend),
+                boolean_proof_transcript(&air, packed.clone(), backend),
+                "{backend:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn backends_prove_the_blake2s_air_byte_for_byte() {
+        // Four compressions, one bit-valued row each, of the ten-round hash lean consensus
+        // signs with. Its width sits between Blake3's and SHA-256's.
+        let air = Blake2sBinaryAir::default();
+        let trace = air.generate_random_trace_rows::<F>(4, 0);
+        assert!(cells_fit_gf4(&trace));
+        assert_backends_prove_byte_for_byte(&air, &trace);
+    }
+
+    #[test]
+    fn dense_and_packed_blake2s_tables_have_identical_boolean_proofs() {
+        let air = Blake2sBinaryAir::assuming_boolean_trace();
         let dense = Table::new(air.generate_random_trace_rows::<F>(4, 0).transpose());
         let packed = Table::from_packed_bits(air.generate_random_trace_packed::<Gf2>(4), 2);
         for backend in [

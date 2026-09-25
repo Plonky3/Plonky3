@@ -7,6 +7,7 @@ members = [
     "binary-dft",
     "binary-field",
     "binary-pcs",
+    "blake2s-air",
     "blake3",
     "blake3-air",
     "bn254",
@@ -76,6 +77,7 @@ transmute_undefined_repr = "allow"
 cognitive_complexity = "allow"
 
 [workspace.dependencies]
+blake2 = { version = "0.10.6", default-features = false }
 blake3 = { version = "1.8.4", default-features = false }
 clap = { version = "4.6.1", features = ["derive"] }
 criterion = "0.8"
@@ -114,6 +116,7 @@ p3-baby-bear = { path = "baby-bear", version = "0.8.0" }
 p3-binary-dft = { path = "binary-dft", version = "0.8.0" }
 p3-binary-field = { path = "binary-field", version = "0.8.0" }
 p3-binary-pcs = { path = "binary-pcs", version = "0.8.0" }
+p3-blake2s-air = { path = "blake2s-air", version = "0.8.0" }
 p3-blake3 = { path = "blake3", version = "0.8.0" }
 p3-blake3-air = { path = "blake3-air", version = "0.8.0" }
 p3-bn254 = { path = "bn254", version = "0.8.0" }
