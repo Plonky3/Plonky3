@@ -27,13 +27,6 @@ pub struct Blake2sBinaryCols<T> {
     /// One cell leaves only the all-zero and all-one words reachable, as RFC 7693 requires.
     pub last_block: T,
 
-    /// One bit, set on the last node of a tree hash.
-    ///
-    /// When set, every bit of `v[15]` is inverted.
-    ///
-    /// Plain sequential hashing never sets it.
-    pub last_node: T,
-
     /// Witness of every G step, indexed by round then by step within the round.
     pub rounds: [[Blake2sBinaryGCols<T>; G_PER_ROUND]; NUM_ROUNDS],
 }

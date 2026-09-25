@@ -19,8 +19,8 @@ use super::generation::{
 use super::{G_PER_ROUND, G_SCHEDULE, NUM_ROUNDS};
 use crate::constants::{IV, SIGMA};
 
-/// Number of input cells: 32 per input word, plus one per finalization flag.
-pub(super) const NUM_INPUT_BITS: usize = NUM_INPUT_WORDS * 32 + 2;
+/// Number of input cells: 32 per input word, plus one for the finalization flag.
+pub(super) const NUM_INPUT_BITS: usize = NUM_INPUT_WORDS * 32 + 1;
 
 /// Constraints per G step.
 ///
@@ -84,7 +84,7 @@ impl Blake2sBinaryAir {
     ///
     /// Each row draws a random chaining value and block.
     ///
-    /// Row `i` counts `64 * (i + 1)` bytes and is a final block that is not a last node.
+    /// Row `i` counts `64 * (i + 1)` bytes and is a final block.
     ///
     /// This is for benches and examples only.
     pub fn generate_random_trace_rows<F: Field>(
@@ -118,7 +118,6 @@ fn random_inputs(num_hashes: usize) -> Vec<Blake2sCompressionInput> {
             // Row i ends a message of i + 1 full blocks.
             counter: 64 * (i as u64 + 1),
             last_block: true,
-            last_node: false,
         })
         .collect()
 }
@@ -181,7 +180,6 @@ impl<AB: AirBuilder> Air<AB> for Blake2sBinaryAir {
         //     constraints 256..768    message block
         //     constraints 768..832    counter, low word then high word
         //     constraint  832         last-block flag
-        //     constraint  833         last-node flag
         if self.constrain_booleanity {
             for word in local
                 .chaining_value
@@ -192,25 +190,26 @@ impl<AB: AirBuilder> Air<AB> for Blake2sBinaryAir {
                 builder.assert_bools(*word);
             }
             builder.assert_bool(local.last_block);
-            builder.assert_bool(local.last_node);
         }
 
-        // The four words XORed into v[12..16], from RFC 7693 section 3.2.
+        // The three words XORed into v[12..15], from RFC 7693 section 3.2.
         //
-        // Each flag is one cell, repeated over all 32 bits.
+        // The flag is one cell, repeated over all 32 bits.
         // XORing a set flag into every bit inverts the word, as the RFC requires.
+        //
+        // v[15] takes IV[7] unchanged: section 3.2 inverts v[14] alone.
         let parameters = [
             local.counter_low,
             local.counter_high,
             [local.last_block; 32],
-            [local.last_node; 32],
         ];
 
         // Initialize the working state.
         //
         //     v[0..8]   = h[0..8]
         //     v[8..12]  = IV[0..4]
-        //     v[12..16] = IV[4..8] ^ parameters
+        //     v[12..15] = IV[4..7] ^ (t_low, t_high, f)
+        //     v[15]     = IV[7]
         //
         // Every word is linear in the inputs, so this costs no column.
         let mut state = State::<AB> {
@@ -219,7 +218,10 @@ impl<AB: AirBuilder> Air<AB> for Blake2sBinaryAir {
             c: array::from_fn(|i| u32_to_bits_le(IV[i])),
             d: array::from_fn(|i| {
                 let iv: [AB::Expr; 32] = u32_to_bits_le(IV[4 + i]);
-                array::from_fn(|bit| iv[bit].clone() + parameters[i][bit])
+                parameters.get(i).map_or_else(
+                    || iv.clone(),
+                    |word| array::from_fn(|bit| iv[bit].clone() + word[bit]),
+                )
             }),
         };
 

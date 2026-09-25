@@ -12,7 +12,8 @@
 //!     a = v[0..4]      starts as the chaining value, first half
 //!     b = v[4..8]      starts as the chaining value, second half
 //!     c = v[8..12]     starts as IV[0..4]
-//!     d = v[12..16]    starts as IV[4..8] ^ (counter_low, counter_high, last_block, last_node)
+//!     d = v[12..15]    starts as IV[4..7] ^ (counter_low, counter_high, last_block)
+//!     v[15]            starts as IV[7], which section 3.2 never touches
 //! ```
 
 mod air;

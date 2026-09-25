@@ -24,17 +24,12 @@ pub struct Blake2sCompressionInput {
     pub counter: u64,
     /// Whether this is the final block of the message.
     pub last_block: bool,
-    /// Whether this is the last node of a tree hash.
-    pub last_node: bool,
 }
 
 impl Blake2sCompressionInput {
-    /// The two finalization words: all ones when their flag is set, zero otherwise.
-    const fn flag_words(&self) -> (u32, u32) {
-        (
-            if self.last_block { u32::MAX } else { 0 },
-            if self.last_node { u32::MAX } else { 0 },
-        )
+    /// The finalization word: all ones when the flag is set, zero otherwise.
+    const fn flag_word(&self) -> u32 {
+        if self.last_block { u32::MAX } else { 0 }
     }
 }
 
@@ -178,13 +173,11 @@ fn generate_block(block: &mut [u64], inputs: &[Blake2sCompressionInput]) {
         counter_low,
         counter_high,
         last_block,
-        last_node,
         rounds,
     } = block.borrow_mut();
 
-    // Phase 2: the finalization flags, one plane each, bit k set when input k sets the flag.
+    // Phase 2: the finalization flag, one plane, bit k set when input k sets the flag.
     *last_block = lane_mask(inputs, |input| input.last_block);
-    *last_node = lane_mask(inputs, |input| input.last_node);
 
     // Phase 3: the initial state.
     //
@@ -195,21 +188,18 @@ fn generate_block(block: &mut [u64], inputs: &[Blake2sCompressionInput]) {
     let iv_planes =
         |word: u32| array::from_fn(|bit| if (word >> bit) & 1 == 1 { lanes } else { 0 });
 
-    // Each flag plane is repeated over all 32 bits.
-    // This inverts the word in the lanes that set the flag.
-    let parameters = [
-        *counter_low,
-        *counter_high,
-        [*last_block; 32],
-        [*last_node; 32],
-    ];
+    // The flag plane is repeated over all 32 bits.
+    // This inverts v[14] in the lanes that set the flag.
+    let parameters: [[u64; 32]; 3] = [*counter_low, *counter_high, [*last_block; 32]];
     let mut state = [
         [cv[0], cv[1], cv[2], cv[3]],
         [cv[4], cv[5], cv[6], cv[7]],
         array::from_fn(|i| iv_planes(IV[i])),
         array::from_fn(|i| {
             let iv: [u64; 32] = iv_planes(IV[4 + i]);
-            array::from_fn(|bit| iv[bit] ^ parameters[i][bit])
+            parameters
+                .get(i)
+                .map_or(iv, |word| array::from_fn(|bit| iv[bit] ^ word[bit]))
         }),
     ];
 
@@ -354,7 +344,7 @@ fn xor_rotate_right(x: &[u64; 32], y: &[u64; 32], amount: usize) -> [u64; 32] {
 fn generate_trace_row<F: Field>(row: &mut Blake2sBinaryCols<F>, input: &Blake2sCompressionInput) {
     let counter_low = input.counter as u32;
     let counter_high = (input.counter >> 32) as u32;
-    let (last_block, last_node) = input.flag_words();
+    let last_block = input.flag_word();
 
     // The input cells.
     row.chaining_value = input.chaining_value.map(u32_to_bits_le);
@@ -362,20 +352,22 @@ fn generate_trace_row<F: Field>(row: &mut Blake2sBinaryCols<F>, input: &Blake2sC
     row.counter_low = u32_to_bits_le(counter_low);
     row.counter_high = u32_to_bits_le(counter_high);
     row.last_block = F::from_bool(input.last_block);
-    row.last_node = F::from_bool(input.last_node);
 
     // The initial state, from RFC 7693 section 3.2.
     //
     //     v[0..8]   = h[0..8]
     //     v[8..12]  = IV[0..4]
-    //     v[12..16] = IV[4..8] ^ (t_low, t_high, f_0, f_1)
+    //     v[12..15] = IV[4..7] ^ (t_low, t_high, f)
+    //     v[15]     = IV[7]
+    //
+    // Section 3.2 inverts v[14] alone, so v[15] takes IV[7] unchanged.
     let cv = input.chaining_value;
-    let parameters = [counter_low, counter_high, last_block, last_node];
+    let parameters = [counter_low, counter_high, last_block];
     let mut state = [
         [cv[0], cv[1], cv[2], cv[3]],
         [cv[4], cv[5], cv[6], cv[7]],
         array::from_fn(|i| IV[i]),
-        array::from_fn(|i| IV[4 + i] ^ parameters[i]),
+        array::from_fn(|i| IV[4 + i] ^ parameters.get(i).copied().unwrap_or(0)),
     ];
     let m = input.block;
 

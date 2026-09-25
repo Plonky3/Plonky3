@@ -124,7 +124,7 @@ fn reference_initial_state(input: &Blake2sCompressionInput) -> [u32; 16] {
     let cv = input.chaining_value;
     // A set flag inverts every bit of its word.
     let last_block = if input.last_block { u32::MAX } else { 0 };
-    let last_node = if input.last_node { u32::MAX } else { 0 };
+
     [
         cv[0],
         cv[1],
@@ -141,7 +141,7 @@ fn reference_initial_state(input: &Blake2sCompressionInput) -> [u32; 16] {
         IV[4] ^ (input.counter as u32),
         IV[5] ^ ((input.counter >> 32) as u32),
         IV[6] ^ last_block,
-        IV[7] ^ last_node,
+        IV[7],
     ]
 }
 
@@ -211,7 +211,6 @@ fn hash_inputs(key: &[u8], message: &[u8]) -> Vec<Blake2sCompressionInput> {
                     (BLOCK_BYTES * (i + 1)) as u64
                 },
                 last_block: last,
-                last_node: false,
             }
         })
         .collect()
@@ -293,7 +292,6 @@ fn random_compression_inputs(rng: &mut SmallRng, count: usize) -> Vec<Blake2sCom
             block: rng.random(),
             counter: rng.random(),
             last_block: rng.random(),
-            last_node: rng.random(),
         })
         .collect()
 }
@@ -318,15 +316,15 @@ fn self_test_sequence(len: usize, seed: u32) -> Vec<u8> {
 fn width_and_constraint_hints_match_symbolic_evaluation() {
     // Fixture state:
     //
-    //     inputs     26 words * 32 bits + 2 flag cells     =    834 columns
+    //     inputs     26 words * 32 bits + 1 flag cell      =    833 columns
     //     witness    10 rounds * 8 steps * 190 columns     = 15,200 columns
-    //     total                                            = 16,034 columns
+    //     total                                            = 16,033 columns
     //
     // Constraints: one booleanity per input cell, plus 190 per G step.
     let air = Blake2sBinaryAir::default();
-    assert_eq!(NUM_INPUT_BITS, 834);
-    assert_eq!(NUM_BLAKE2S_BINARY_COLS, 16_034);
-    assert_eq!(<Blake2sBinaryAir as BaseAir<F>>::width(&air), 16_034);
+    assert_eq!(NUM_INPUT_BITS, 833);
+    assert_eq!(NUM_BLAKE2S_BINARY_COLS, 16_033);
+    assert_eq!(<Blake2sBinaryAir as BaseAir<F>>::width(&air), 16_033);
     assert!(<Blake2sBinaryAir as BaseAir<F>>::main_next_row_columns(&air).is_empty());
 
     let layout = AirLayout {
@@ -334,7 +332,7 @@ fn width_and_constraint_hints_match_symbolic_evaluation() {
         ..Default::default()
     };
     for (air, assumes_boolean_trace, num_constraints) in [
-        (Blake2sBinaryAir::default(), false, 16_034),
+        (Blake2sBinaryAir::default(), false, 16_033),
         (Blake2sBinaryAir::assuming_boolean_trace(), true, 15_200),
     ] {
         // The declared counts must match what the constraints actually are.
@@ -476,7 +474,6 @@ fn packed_trace_matches_dense_trace_at_word_boundaries() {
         block: [u32::MAX; 16],
         counter: u64::MAX,
         last_block: true,
-        last_node: true,
     };
     // Heights below, at and above one packed word of 64 rows.
     for height in [1usize, 2, 32, 64, 128] {
@@ -562,7 +559,7 @@ fn rejects_flipped_output_bits_in_last_round() {
 
 #[test]
 fn rejects_a_flipped_counter_or_flag_bit() {
-    // The counter and the flags reach the state only through the initial d words.
+    // The counter and the flag reach the state only through the initial d words.
     //
     // A flip in one of them is caught only if it breaks the first round's additions.
     let failures = failures_after_edit(1, |row| row.counter_low[9] += F::ONE);
@@ -570,13 +567,11 @@ fn rejects_a_flipped_counter_or_flag_bit() {
     let failures = failures_after_edit(2, |row| row.counter_high[0] += F::ONE);
     assert!(!failures.is_empty(), "counter high");
 
-    // Fixture state: every random row is a final block that is not a last node.
+    // Fixture state: every random row is a final block, so the flag is set.
     //
-    // Mutation: clear the last-block flag, then set the last-node flag.
+    // Mutation: clear it, which un-inverts v[14] and changes the whole compression.
     let failures = failures_after_edit(3, |row| row.last_block += F::ONE);
     assert!(!failures.is_empty(), "last block flag");
-    let failures = failures_after_edit(0, |row| row.last_node += F::ONE);
-    assert!(!failures.is_empty(), "last node flag");
 }
 
 #[test]
@@ -709,8 +704,8 @@ fn only_booleanity_rejects_a_non_boolean_input() {
     // Input cell i is booleanity constraint i.
     assert!(F::GENERATOR != F::ZERO && F::GENERATOR != F::ONE);
     let air = Blake2sBinaryAir::default();
-    // A chaining value bit, a message bit, a counter bit, and both flags.
-    for cell in [0, 447, 800, 832, 833] {
+    // A chaining value bit, a message bit, a counter bit, and the flag.
+    for cell in [0, 447, 800, 832] {
         let mut trace = air.generate_random_trace_rows::<F>(1, 0);
         let row = trace.row_mut(0);
         row[cell] = F::GENERATOR;
