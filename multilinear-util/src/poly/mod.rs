@@ -1,6 +1,6 @@
+mod eq_table;
 mod maybe_packed;
 
-use alloc::vec;
 use alloc::vec::Vec;
 use core::borrow::Borrow;
 use core::marker::PhantomData;
@@ -9,50 +9,31 @@ pub use maybe_packed::{PolyMaybePacked, PolyMaybePackedView};
 use p3_field::{
     Algebra, ExtensionField, Field, PackedFieldExtension, PackedValue, PrimeCharacteristicRing,
 };
-use p3_matrix::dense::RowMajorMatrixView;
 use p3_maybe_rayon::prelude::*;
 use p3_util::log2_strict_usize;
 use rand::RngExt;
 use rand::distr::{Distribution, StandardUniform};
 use serde::{Deserialize, Serialize};
 
-use crate::eq_batch::eval_eq_batch;
+use self::eq_table::{eq_doubled, packed_eq_serial, split_low};
+pub(crate) use self::eq_table::{tensor_packed, tensor_unpacked};
 use crate::point::Point;
 use crate::split_eq::SplitEq;
 
-/// Number of variables at which we switch from recursive scalar evaluation to the
-/// SIMD-packed `SplitEq` path.
+/// Number of variables from which evaluation goes through the factored `SplitEq` path.
 ///
-/// Crossover depends on the base-field byte width (smaller base ⇒ wider packing
-/// ⇒ `SplitEq` wins earlier), measured on aarch64 (NEON) and x86-64 (AVX2):
+/// Below it, the unrolled scalar recursion wins.
+/// Measured on x86-64 (AVX-512 and AVX2 packings), base polynomial, time per call:
 ///
-/// - 4-byte bases (BabyBear, KoalaBear, Mersenne31): `SplitEq` wins from n=9.
-/// - 8-byte bases (Goldilocks): recursive still wins at n=9, crosses at n=10.
+/// ```text
+///     base field            n = 8 recursive / split     n = 9 recursive / split
+///     BabyBear, EF4         0.73 / 0.86 us              1.06 / 0.91 us
+///     Goldilocks, EF2       0.52 / 0.66 us              1.04 / 0.81 us
+///     GF(2^64), GF(2^192)   0.60 / 0.94 us              1.20 / 0.58 us
+/// ```
 ///
-/// Wider bases (e.g. BN254) keep the default 10.
-#[inline]
-const fn mle_recursion_threshold<B>() -> usize {
-    if core::mem::size_of::<B>() <= 4 {
-        9
-    } else {
-        10
-    }
-}
-
-/// Returns a vector of uninitialized elements of type `A` with the specified length.
-///
-/// # Safety
-///
-/// Entries should be overwritten before use.
-#[must_use]
-unsafe fn uninitialized_vec<A>(len: usize) -> Vec<A> {
-    #[allow(clippy::uninit_vec)]
-    unsafe {
-        let mut vec = Vec::with_capacity(len);
-        vec.set_len(len);
-        vec
-    }
-}
+/// Every base width crosses at the same count, so one constant serves them all.
+const MLE_RECURSION_THRESHOLD: usize = 9;
 
 /// Represents a multilinear polynomial `f` in `n` variables, stored by its evaluations
 /// over the boolean hypercube `{0,1}^n`.
@@ -238,8 +219,16 @@ impl<Packed> Poly<Packed> {
     /// ## Returns
     /// A packed polynomial containing `scale * eq(point, X)` for all `X` in `{0,1}^n`.
     ///
-    /// The last `log2(W)` variables fold into one packed seed (filling the SIMD lanes).
-    /// The remaining variables expand across the thread pool, one output chunk per worker.
+    /// The table is one tensor product of two factors:
+    /// - the last `LOW_VARS` coordinates give a packed low factor that stays in L1,
+    /// - the leading coordinates give one scalar seed per output row.
+    ///
+    /// Each packed entry is then written once, by one multiplication.
+    ///
+    /// # Panics
+    ///
+    /// - Panics if `scale` is zero.
+    /// - Panics if the point has fewer than `log2(W)` coordinates.
     #[inline]
     pub fn new_packed_from_point<F, EF>(point: &[EF], scale: EF) -> Self
     where
@@ -247,69 +236,65 @@ impl<Packed> Poly<Packed> {
         EF: ExtensionField<F, ExtensionPacking = Packed>,
         Packed: PackedFieldExtension<F, EF> + Copy + Send + Sync,
     {
-        /// Computes eq(point, X) * scale for all X in {0,1}^n, writing results into `out`.
-        ///
-        /// # Safety invariant
-        ///
-        /// This function initializes **every** entry of `out`.
-        /// Callers rely on this guarantee when passing uninitialized memory.
-        fn eq_serial<F: Field, A: Algebra<F> + Copy>(out: &mut [A], point: &[F], scale: A) {
-            assert_eq!(out.len(), 1 << point.len());
-            out[0] = scale;
-            for (i, &var) in point.iter().rev().enumerate() {
-                let (lo, hi) = out.split_at_mut(1 << i);
-                lo.iter_mut().zip(hi.iter_mut()).for_each(|(lo, hi)| {
-                    *hi = *lo * var;
-                    *lo -= *hi;
-                });
-            }
-        }
-
-        let n = point.len();
         assert_ne!(scale, EF::ZERO);
-        let n_pack = log2_strict_usize(F::Packing::WIDTH);
-        assert!(n >= n_pack);
+        let (high_point, low_point) = split_low(point, log2_strict_usize(F::Packing::WIDTH));
 
-        let (point_rest, point_init) = point.split_at(n - n_pack);
-
-        // COMPUTE SUFFIX (inside the SIMD lanes)
-        //
-        // We compute the equality polynomial for the last `n_pack` variables.
-        // This forms a single `Packed` element which acts as the seed for the next stage.
-        let mut init: Vec<EF> = EF::zero_vec(1 << n_pack);
-        eq_serial(&mut init, point_init, scale);
-        let seed = Packed::from_ext_slice(&init);
-
-        // COMPUTE PREFIX (vector expansion over `point_rest`)
-        //
-        // We expand the seed across the remaining variables using Packed arithmetic.
-        let mut packed = unsafe { uninitialized_vec::<Packed>(1 << point_rest.len()) };
-
-        // Split the prefix into [leading `log_chunks` vars | middle vars].
-        //
-        // The leading vars index the output chunks; the middle vars expand within each chunk.
-        // eq factorizes across this split:
-        //     eq(point_rest, c·2^|mid| + y) = eq(leading, c) * eq(middle, y).
-        let log_chunks = log2_strict_usize(current_num_threads().next_power_of_two());
-        if point_rest.len() <= log_chunks + 1 {
-            // Too small to be worth fanning out: expand serially.
-            eq_serial(&mut packed, point_rest, seed);
-        } else {
-            let (leading, middle) = point_rest.split_at(log_chunks);
-
-            // One packed seed per chunk: buffer[c] = seed * eq(leading, c).
-            let mut buffer = unsafe { uninitialized_vec::<Packed>(1 << log_chunks) };
-            eq_serial(&mut buffer, leading, seed);
-
-            // Each chunk holds 2^|middle| entries and expands independently from its seed.
-            let chunk_size = 1 << middle.len();
-            packed
-                .par_chunks_mut(chunk_size)
-                .zip(buffer.par_iter())
-                .for_each(|(chunk, &chunk_seed)| eq_serial(chunk, middle, chunk_seed));
+        // A table no wider than the low factor is doubled directly, with the scale folded in.
+        if high_point.is_empty() {
+            return Self(packed_eq_serial::<F, EF>(low_point, scale), PhantomData);
         }
 
-        Self(packed, PhantomData)
+        // One scaled seed per output row, and one unscaled packed row they all share.
+        let high = eq_doubled(high_point, scale);
+        let low = packed_eq_serial::<F, EF>(low_point, EF::ONE);
+        Self(tensor_packed::<F, EF>(&high, &low), PhantomData)
+    }
+}
+
+impl<EF: Field> Poly<EF> {
+    /// Computes `scale * eq(point, X)` for all `X` in `{0,1}^n`, vectorized over a base field.
+    ///
+    /// This is the table [`Self::new_from_point`] builds, stored the same way.
+    ///
+    /// The extension arithmetic runs on the extension packing of `F`.
+    /// Only the final store unpacks the lanes.
+    ///
+    /// An extension field is usually its own packing.
+    /// So the scalar builder multiplies one extension element at a time.
+    /// Naming the base lets this one multiply `W` at a time.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `2^n` overflows `usize`.
+    pub fn new_from_point_over<F>(point: &[EF], scale: EF) -> Self
+    where
+        F: Field,
+        EF: ExtensionField<F>,
+    {
+        let log_width = log2_strict_usize(F::Packing::WIDTH);
+
+        // Too short to fill a lane group, the table is doubled as scalars.
+        //
+        // A packing one lane wide still takes the tensor below, which is what splits across threads.
+        if point.len() < log_width {
+            return Self(eq_doubled(point, scale), PhantomData);
+        }
+        let (high_point, low_point) = split_low(point, log_width);
+
+        // A table no wider than the low factor is doubled packed, then unpacked once.
+        if high_point.is_empty() {
+            let low = Poly::<EF::ExtensionPacking>(
+                packed_eq_serial::<F, EF>(low_point, scale),
+                PhantomData,
+            );
+            return low.unpack::<F, EF>();
+        }
+
+        // The high seeds carry the scale, so the low factor stays unscaled.
+        let high = eq_doubled(high_point, scale);
+        let low = packed_eq_serial::<F, EF>(low_point, EF::ONE);
+
+        Self(tensor_unpacked::<F, EF>(&high, &low), PhantomData)
     }
 }
 
@@ -327,16 +312,21 @@ where
         EF: ExtensionField<F, ExtensionPacking = Packed>,
         Packed: PackedFieldExtension<F, EF> + Copy,
     {
-        // Allocate uninitialized output; every entry will be written by the unpacking.
-        let num_variables = self.num_variables();
-        let mut out = Poly(
-            unsafe {
-                uninitialized_vec(1 << (num_variables + log2_strict_usize(F::Packing::WIDTH)))
-            },
-            PhantomData,
-        );
-        self.unpack_into(&mut out);
-        out
+        let width = F::Packing::WIDTH;
+        let len = self.num_evals() * width;
+        let mut out = Vec::with_capacity(len);
+        // Every lane is written once, straight into fresh capacity.
+        for (slots, packed) in out.spare_capacity_mut()[..len]
+            .chunks_exact_mut(width)
+            .zip(self.iter())
+        {
+            for (lane, slot) in slots.iter_mut().enumerate() {
+                slot.write(packed.extract(lane));
+            }
+        }
+        // SAFETY: the packed entries tile the first `len` slots, and each writes its W lanes.
+        unsafe { out.set_len(len) };
+        Poly::new(out)
     }
 
     /// Unpacks into a pre-allocated scalar polynomial buffer.
@@ -354,13 +344,11 @@ where
             out.num_variables(),
             self.num_variables() + log2_strict_usize(F::Packing::WIDTH)
         );
-        // Expand each packed element into W scalar extension-field elements.
-        out.0
-            .iter_mut()
-            .zip(Packed::to_ext_iter(self.iter().copied()))
-            .for_each(|(out, packed)| {
-                *out = packed;
-            });
+        // Transpose each packed element into its W scalar lanes.
+        let width = F::Packing::WIDTH;
+        for (out, packed) in out.0.chunks_exact_mut(width).zip(self.iter()) {
+            packed.to_ext_slice(out);
+        }
     }
 
     /// Evaluates the multilinear polynomial at `point ∈ EF^n`.
@@ -394,22 +382,17 @@ impl<F: Field> Poly<F> {
     ///
     /// ## Returns
     /// A polynomial containing `scale * eq(point, X)` for all `X` in `{0,1}^n`.
+    ///
+    /// The table is one tensor product over `F`'s own packing.
+    /// An extension field is usually its own packing, so it multiplies one element at a time.
+    /// [`Self::new_from_point_over`] names the base and multiplies a whole packing at once.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `2^n` overflows `usize`.
     #[inline]
     pub fn new_from_point(point: &[F], scale: F) -> Self {
-        let n = point.len();
-        if n == 0 {
-            return Self(vec![scale], PhantomData);
-        }
-        let len: usize = 1_usize
-            .checked_shl(n as u32)
-            .expect("Point length too large: 2^n overflows usize.");
-        debug_assert!(
-            len.is_power_of_two(),
-            "Evaluation list length must be a power of two."
-        );
-        let mut evals = F::zero_vec(len);
-        eval_eq_batch::<_, _, false>(RowMajorMatrixView::new_col(point), &mut evals, &[scale]);
-        Self(evals, PhantomData)
+        Self::new_from_point_over::<F>(point, scale)
     }
 
     /// Materializes the dense repeat-last successor weight table for a point.
@@ -768,11 +751,12 @@ where
         // Require at least W evaluations to fill one packed element.
         assert!(self.num_variables() >= log2_strict_usize(F::Packing::WIDTH));
         // Group W consecutive extension-field elements into each packed element.
+        // One item reads W scalars and writes their packed transpose.
+        let item_bytes = 2 * F::Packing::WIDTH * size_of::<A>();
         Poly(
             evals
-                .par_chunks(F::Packing::WIDTH)
-                .map(|ext| A::ExtensionPacking::from_ext_slice(ext))
-                .collect(),
+                .par_chunks_exact(F::Packing::WIDTH)
+                .map_collect_min_task_bytes(item_bytes, A::ExtensionPacking::from_ext_slice),
             PhantomData,
         )
     }
@@ -796,7 +780,7 @@ where
     #[must_use]
     #[inline]
     pub fn eval_base<EF: ExtensionField<F>>(&self, point: &Point<EF>) -> EF {
-        if point.num_variables() < mle_recursion_threshold::<F>() {
+        if point.num_variables() < MLE_RECURSION_THRESHOLD {
             eval_multilinear_recursive(self.as_slice(), point.as_slice())
         } else {
             SplitEq::new_packed(point, EF::ONE).eval_base(self.as_view())
@@ -833,7 +817,7 @@ where
     where
         F: ExtensionField<BaseField>,
     {
-        if point.num_variables() < mle_recursion_threshold::<BaseField>() {
+        if point.num_variables() < MLE_RECURSION_THRESHOLD {
             eval_multilinear_recursive(self.as_slice(), point.as_slice())
         } else {
             SplitEq::new_packed(point, F::ONE).eval_ext(self.as_view())
@@ -981,9 +965,9 @@ where
             // Split the evaluations into two halves, corresponding to the first variable being 0 or 1.
             let (f0, f1) = evals.split_at(evals.len() / 2);
 
-            // Sequential recurse: callers gate this function with `num_variables <
-            // mle_recursion_threshold`, so `evals.len()` is always small enough that
-            // Rayon `join` overhead would dominate.
+            // Sequential recurse: callers gate this below `MLE_RECURSION_THRESHOLD` variables.
+            //
+            // The table is then small enough that a rayon `join` would cost more than it saves.
             let f0_eval = eval_multilinear_recursive(f0, sub_point);
             let f1_eval = eval_multilinear_recursive(f1, sub_point);
 
@@ -1000,6 +984,7 @@ pub(crate) mod test {
     use alloc::vec::Vec;
 
     use p3_baby_bear::BabyBear;
+    use p3_binary_field::{Poly64, Poly192};
     use p3_field::extension::BinomialExtensionField;
     use p3_field::{
         ExtensionField, Field, PackedValue, PrimeCharacteristicRing, PrimeField64, dot_product,
@@ -1008,12 +993,14 @@ pub(crate) mod test {
     use p3_maybe_rayon::prelude::{current_num_threads, should_split};
     use p3_util::log2_strict_usize;
     use proptest::prelude::*;
+    use rand::distr::{Distribution, StandardUniform};
     use rand::rngs::SmallRng;
     use rand::{RngExt, SeedableRng};
 
     use crate::eq_batch::eval_eq_batch;
     use crate::point::Point;
     use crate::poly::Poly;
+    use crate::split_eq::SplitEq;
 
     type F = BabyBear;
     type PackedF = <F as p3_field::Field>::Packing;
@@ -2493,26 +2480,65 @@ pub(crate) mod test {
         }
     }
 
+    /// Every equality-table builder, checked against the product formula at each vertex.
+    ///
+    /// The oracle shares no code with the builders, so they cannot agree on a wrong table.
+    fn check_eq_builders<F, EF>(num_variables: usize, seed: u64)
+    where
+        F: Field,
+        EF: ExtensionField<F>,
+        StandardUniform: Distribution<EF>,
+    {
+        let mut rng = SmallRng::seed_from_u64(seed);
+        let point = Point::<EF>::rand(&mut rng, num_variables);
+        let scale: EF = rng.random();
+        let expected: Vec<EF> = (0..1 << num_variables)
+            .map(|x| point.equality_at_vertex(x).unwrap() * scale)
+            .collect();
+
+        // Scalar builder over the field's own packing.
+        assert_eq!(
+            Poly::new_from_point(point.as_slice(), scale).as_slice(),
+            expected
+        );
+        // Scalar builder vectorized over the base field.
+        assert_eq!(
+            Poly::new_from_point_over::<F>(point.as_slice(), scale).as_slice(),
+            expected
+        );
+        // Factored table, materialized from either storage of its suffix half.
+        assert_eq!(
+            SplitEq::<F, EF>::new_unpacked(&point, scale)
+                .materialize()
+                .as_slice(),
+            expected
+        );
+        assert_eq!(
+            SplitEq::<F, EF>::new_packed(&point, scale)
+                .materialize()
+                .as_slice(),
+            expected
+        );
+        // Packed builder, once the point fills a lane group.
+        if num_variables >= log2_strict_usize(F::Packing::WIDTH) {
+            let packed = Poly::new_packed_from_point::<F, EF>(point.as_slice(), scale);
+            assert_eq!(packed.unpack::<F, EF>().as_slice(), expected);
+        }
+    }
+
     proptest! {
         #[test]
-        fn new_packed_from_point_matches_scalar_reference(
-            // Sweep across the serial/parallel boundary: the parallel fan-out engages
-            // once `n - log2(W) > log_chunks + 1`, so cover small and large `n`.
-            k in (log2_strict_usize(PackedF::WIDTH))..=18usize,
-            scale_raw in 1u64..F::ORDER_U64,
+        fn eq_builders_match_the_product_formula(
+            // Invariant: past 10 variables the builders switch to the tensor product.
+            //
+            // The sweep covers the doubled, the unpacked-once and the tensored branches.
+            num_variables in 0usize..=14,
             seed in any::<u64>(),
         ) {
-            let mut rng = SmallRng::seed_from_u64(seed);
-            let point: Vec<EF> = (0..k).map(|_| rng.random()).collect();
-            let scale = EF::from(F::from_u64(scale_raw));
-
-            // Packed builder, unpacked back to scalar extension form.
-            let packed = Poly::new_packed_from_point::<F, EF>(&point, scale).unpack::<F, EF>();
-
-            // Scalar reference: the same eq table built directly.
-            let reference = Poly::new_from_point(&point, scale);
-
-            prop_assert_eq!(packed, reference);
+            // Prime field, 16 lanes on AVX-512, degree 4.
+            check_eq_builders::<F, EF>(num_variables, seed);
+            // Binary field, 4 lanes on AVX2, degree 3 over GF(2^64).
+            check_eq_builders::<Poly64, Poly192>(num_variables, seed);
         }
     }
 }
