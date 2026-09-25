@@ -561,7 +561,7 @@ impl HasFrobenius<Poly64> for Poly192 {
 #[cfg(test)]
 mod tests {
     use p3_field::extension::HasFrobenius;
-    use p3_field::{BasedVectorSpace, ExtensionField, Field, PrimeCharacteristicRing};
+    use p3_field::{Algebra, BasedVectorSpace, ExtensionField, Field, PrimeCharacteristicRing};
     use proptest::prelude::*;
 
     use super::{DEGREE, Poly192};
@@ -603,6 +603,21 @@ mod tests {
         raw[0] += raw[3];
 
         Poly192::new([raw[0], raw[1], raw[2]])
+    }
+
+    /// The mixed dot product of the first `N` pairs, against the plain sum of products.
+    fn check_mixed_dot_product<const N: usize>(a: &[[u64; 3]], f: &[u64]) {
+        let a: [Poly192; N] = core::array::from_fn(|i| element(a[i]));
+        let f: [Poly64; N] = core::array::from_fn(|i| Poly64::new(f[i]));
+
+        // One product per term, each reduced on its own.
+        let expected: Poly192 = a.iter().zip(&f).map(|(&x, &k)| x * k).sum();
+
+        assert_eq!(
+            <Poly192 as Algebra<Poly64>>::mixed_dot_product(&a, &f),
+            expected,
+            "N = {N}"
+        );
     }
 
     /// The inverse by Gaussian elimination on the multiplication matrix.
@@ -754,6 +769,15 @@ mod tests {
         fn the_frobenius_is_the_power_map_it_claims_to_be(a: [u64; 3]) {
             let x = element(a);
             prop_assert_eq!(x.frobenius(), x.exp_power_of_2(64));
+        }
+
+        #[test]
+        fn the_mixed_dot_product_matches_the_sum_of_products(a: [[u64; 3]; 5], f: [u64; 5]) {
+            // The empty sum, a single term, and sums long enough to defer the reduction.
+            check_mixed_dot_product::<0>(&a, &f);
+            check_mixed_dot_product::<1>(&a, &f);
+            check_mixed_dot_product::<2>(&a, &f);
+            check_mixed_dot_product::<5>(&a, &f);
         }
 
         /// Scaling by a coefficient must agree with embedding the scalar first.
