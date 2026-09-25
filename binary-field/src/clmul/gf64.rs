@@ -97,6 +97,7 @@ fn composed_dot_64(pairs: impl Iterator<Item = (u64, u64)>) -> u64 {
 fn square_times<const K: usize>(x: u64) -> u64 {
     #[cfg(all(
         target_arch = "x86_64",
+        target_feature = "pclmulqdq",
         target_feature = "gfni",
         target_feature = "avx512f",
         target_feature = "avx512bw",
@@ -108,6 +109,7 @@ fn square_times<const K: usize>(x: u64) -> u64 {
     }
     #[cfg(not(all(
         target_arch = "x86_64",
+        target_feature = "pclmulqdq",
         target_feature = "gfni",
         target_feature = "avx512f",
         target_feature = "avx512bw",
