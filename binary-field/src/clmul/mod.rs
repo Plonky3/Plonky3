@@ -30,6 +30,8 @@ pub(crate) use sqrt::poly_sqrt_128;
 // compiles the maps.
 #[cfg(all(target_arch = "x86_64", target_feature = "pclmulqdq"))]
 mod inverse;
+#[cfg(all(target_arch = "aarch64", target_feature = "aes"))]
+pub(crate) use aarch64::poly_mul_192;
 #[cfg(all(target_arch = "x86_64", target_feature = "pclmulqdq"))]
 pub(crate) use inverse::poly_inverse_128;
 #[cfg(all(target_arch = "x86_64", target_feature = "pclmulqdq"))]

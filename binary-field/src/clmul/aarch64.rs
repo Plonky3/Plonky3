@@ -235,3 +235,26 @@ pub(super) fn poly_mul_128_batch(a: u128, b: u128) -> u128 {
         ))
     }
 }
+
+/// Multiplication in the cubic extension `y^3 + y + 1` of `GF(2^64)`.
+///
+/// Karatsuba over three limbs: six `PMULL` products, then three `GF(2^64)` folds.
+#[inline]
+pub(crate) fn poly_mul_192(a: [u64; 3], b: [u64; 3]) -> [u64; 3] {
+    let c0 = clmul_64x64(a[0], b[0]);
+    let c1 = clmul_64x64(a[1], b[1]);
+    let c2 = clmul_64x64(a[2], b[2]);
+    let d01 = clmul_64x64(a[0] ^ a[1], b[0] ^ b[1]);
+    let d02 = clmul_64x64(a[0] ^ a[2], b[0] ^ b[2]);
+    let d12 = clmul_64x64(a[1] ^ a[2], b[1] ^ b[2]);
+
+    let p1 = d01 ^ c0 ^ c1;
+    let p2 = d02 ^ c0 ^ c1 ^ c2;
+    let p3 = d12 ^ c1 ^ c2;
+
+    [
+        super::reduce_64(c0 ^ p3),
+        super::reduce_64(p1 ^ p3 ^ c2),
+        super::reduce_64(p2 ^ c2),
+    ]
+}
