@@ -125,10 +125,11 @@ RUSTFLAGS="-Ctarget-cpu=native" cargo run --example prove_hash_binary --release 
 
 `scripts/scoreboard.py` runs a frozen set of these workloads, single-threaded and
 multi-threaded, and prints one table with witness, proving, serialization and verification
-times, proof size, peak memory and the security each run proved.
-[docs/scoreboards/apple-m2.md](docs/scoreboards/apple-m2.md) is such a run. Passing
+times, proof size, peak memory and the security each run proved. The weekly bench job runs
+it on an x86-64 and an ARM runner and writes the tables into its job summary. Passing
 `--gate docs/scoreboards/baseline.json` turns it into a regression check on proof size and
-security, which is what the weekly bench job runs.
+security, which are the same on every machine. See
+[docs/scoreboards/README.md](docs/scoreboards/README.md).
 
 - `--representation` (`-r`): the field representation the zerocheck prover runs its later
   rounds in: `auto` (default; `poly-basis-late` with a hardware carryless multiply,

@@ -31,10 +31,10 @@ jobs:
       - name: Run each benchmark once
         run: python3 scripts/check.py bench
 
-      # The scoreboard's own gate: prove the smallest frozen workload of each objective
-      # and require the committed proof size and security. Both are identical on every
-      # machine at these parameters, so this runner holds the same baseline an M2 wrote.
-      # Timings are not gated here, because a shared runner cannot promise them.
+      # The scoreboard's own gate: prove the smallest frozen workload of each
+      # objective and require the committed proof size and security. Both are identical
+      # on every machine at these parameters, so any runner holds the same baseline.
+      # Timings are not gated, because a shared runner cannot promise them.
       - name: Build the binary prover
         run: cargo build --release -p p3-examples --features parallel --example prove_hash_binary
 
@@ -43,3 +43,34 @@ jobs:
           python3 scripts/scoreboard.py \
             --binary target/release/examples/prove_hash_binary \
             --quick --gate docs/scoreboards/baseline.json
+
+  # The published scoreboard, measured where a reader can rent the same machine rather
+  # than on a contributor's desk. The tables go to the job summary, so no timing is
+  # committed to the tree and every number carries the runner that produced it.
+  scoreboard:
+    name: Binary scoreboard (${{ matrix.runner }})
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-latest, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build the binary prover
+        run: cargo build --release -p p3-examples --features parallel --example prove_hash_binary
+
+      - name: Measure the frozen workloads
+        run: |
+          {
+            echo "## Binary scoreboard on ${{ matrix.runner }}"
+            echo
+            python3 scripts/scoreboard.py \
+              --binary target/release/examples/prove_hash_binary \
+              --gate docs/scoreboards/baseline.json
+          } >> "$GITHUB_STEP_SUMMARY"
