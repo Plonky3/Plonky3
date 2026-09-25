@@ -28,6 +28,8 @@ pub struct BusDebugInstance<'a, F: Field> {
     preprocessed: Option<&'a Table<F>>,
     /// Public inputs supplied to the AIR.
     public_values: &'a [F],
+    /// Optional periodic columns, each materialized to the trace height.
+    periodic: Option<&'a Table<F>>,
     /// Symbolic tuple declarations in AIR emission order.
     interactions: &'a [SymbolicBusInteraction<F>],
 }
@@ -46,6 +48,7 @@ impl<F: Field> fmt::Debug for BusDebugInstance<'_, F> {
             )
             .field("preprocessed", &self.preprocessed.map(Table::num_polys))
             .field("public_values", &self.public_values.len())
+            .field("periodic", &self.periodic.map(Table::num_polys))
             .field("declarations", &self.interactions.len())
             .finish()
     }
@@ -94,8 +97,16 @@ impl<'a, F: Field> BusDebugInstance<'a, F> {
             main,
             preprocessed,
             public_values,
+            periodic: None,
             interactions: profile.interactions(),
         })
+    }
+
+    /// Supplies the periodic columns, each materialized to the trace height.
+    #[must_use]
+    pub const fn with_periodic(mut self, periodic: &'a Table<F>) -> Self {
+        self.periodic = Some(periodic);
+        self
     }
 }
 
@@ -342,6 +353,30 @@ pub enum BusDebugError {
         /// Base-two logarithm of the fixed trace height.
         actual: usize,
     },
+    /// Periodic columns use a different height from committed columns.
+    #[error("binary-bus AIR {air} periodic table has height 2^{actual}, expected 2^{expected}")]
+    PeriodicHeightMismatch {
+        /// AIR position in statement order.
+        air: usize,
+        /// Base-two logarithm of the committed trace height.
+        expected: usize,
+        /// Base-two logarithm of the periodic table height.
+        actual: usize,
+    },
+    /// An expression reads a periodic column that was not supplied.
+    #[error(
+        "binary-bus AIR {air} declaration {declaration} reads periodic column {column}, but only {width} were supplied"
+    )]
+    PeriodicColumnOutOfRange {
+        /// AIR position in statement order.
+        air: usize,
+        /// Declaration position within the AIR.
+        declaration: usize,
+        /// Missing column position.
+        column: usize,
+        /// Supplied periodic column count.
+        width: usize,
+    },
     /// An expression reads a missing committed column.
     #[error(
         "binary-bus AIR {air} declaration {declaration} reads main column {column}, but the trace has width {width}"
@@ -483,6 +518,15 @@ impl<F: Field> BusDebugReport<F> {
                     air,
                     expected: instance.main.num_variables(),
                     actual: preprocessed.num_variables(),
+                });
+            }
+            if let Some(periodic) = instance.periodic
+                && periodic.num_variables() != instance.main.num_variables()
+            {
+                return Err(BusDebugError::PeriodicHeightMismatch {
+                    air,
+                    expected: instance.main.num_variables(),
+                    actual: periodic.num_variables(),
                 });
             }
         }
@@ -785,6 +829,9 @@ fn compile_instance<'a, F: Field>(
     let preprocessed = instance
         .preprocessed
         .map(|table| table.columns().collect::<Vec<_>>());
+    let periodic = instance
+        .periodic
+        .map_or_else(Vec::new, |table| table.columns().collect::<Vec<_>>());
 
     instance
         .interactions
@@ -796,6 +843,7 @@ fn compile_instance<'a, F: Field>(
                 declaration,
                 main: &main,
                 preprocessed: preprocessed.as_deref(),
+                periodic: &periodic,
                 public_values: instance.public_values,
             };
             let fields = interaction
@@ -835,6 +883,8 @@ struct Compiler<'a, 'b, F: Field> {
     main: &'b [ColumnView<'a, F>],
     /// Optional fixed trace columns.
     preprocessed: Option<&'b [ColumnView<'a, F>]>,
+    /// Periodic columns, empty when none were supplied.
+    periodic: &'b [ColumnView<'a, F>],
     /// Public inputs supplied to the AIR.
     public_values: &'a [F],
 }
@@ -962,9 +1012,17 @@ impl<'a, F: Field> Compiler<'a, '_, F> {
                     }
                     BaseEntry::Preprocessed { offset } => Err(self
                         .unsupported(location, UnsupportedBusAccess::PreprocessedOffset(offset))),
-                    BaseEntry::Periodic => {
-                        Err(self.unsupported(location, UnsupportedBusAccess::Periodic))
-                    }
+                    BaseEntry::Periodic => self
+                        .periodic
+                        .get(variable.index)
+                        .copied()
+                        .map(Op::Column)
+                        .ok_or(BusDebugError::PeriodicColumnOutOfRange {
+                            air: self.air,
+                            declaration: self.declaration,
+                            column: variable.index,
+                            width: self.periodic.len(),
+                        }),
                 }
             }
             BaseLeaf::IsFirstRow => Ok(Op::FirstRow),
@@ -1082,18 +1140,21 @@ mod tests {
                 main: &tall_push,
                 preprocessed: None,
                 public_values: &[],
+                periodic: None,
                 interactions: &pushes,
             },
             BusDebugInstance {
                 main: &short_pull,
                 preprocessed: None,
                 public_values: &[],
+                periodic: None,
                 interactions: &pulls,
             },
             BusDebugInstance {
                 main: &tall_pull,
                 preprocessed: None,
                 public_values: &[],
+                periodic: None,
                 interactions: &selected_pulls,
             },
         ];
@@ -1125,12 +1186,14 @@ mod tests {
                 main: &push,
                 preprocessed: None,
                 public_values: &[],
+                periodic: None,
                 interactions: &pushes,
             },
             BusDebugInstance {
                 main: &pull,
                 preprocessed: None,
                 public_values: &[],
+                periodic: None,
                 interactions: &pulls,
             },
         ];
@@ -1180,24 +1243,28 @@ mod tests {
                 main: &push,
                 preprocessed: None,
                 public_values: &[],
+                periodic: None,
                 interactions: &pushes,
             },
             BusDebugInstance {
                 main: &pull_four,
                 preprocessed: None,
                 public_values: &[],
+                periodic: None,
                 interactions: &pulls,
             },
             BusDebugInstance {
                 main: &pull_two,
                 preprocessed: None,
                 public_values: &[],
+                periodic: None,
                 interactions: &pulls,
             },
             BusDebugInstance {
                 main: &pull_one,
                 preprocessed: None,
                 public_values: &[],
+                periodic: None,
                 interactions: &pulls,
             },
         ];
@@ -1252,6 +1319,7 @@ mod tests {
             main: &trace,
             preprocessed: None,
             public_values: &[],
+            periodic: None,
             interactions: &interactions,
         }];
 
@@ -1371,6 +1439,7 @@ mod tests {
             main: &trace,
             preprocessed: None,
             public_values: &[],
+            periodic: None,
             interactions: &interactions,
         }];
 
@@ -1393,6 +1462,7 @@ mod tests {
             main: &trace,
             preprocessed: None,
             public_values: &[],
+            periodic: None,
             interactions: &interactions,
         }];
 
@@ -1425,6 +1495,7 @@ mod tests {
             main: &trace,
             preprocessed: None,
             public_values: &[],
+            periodic: None,
             interactions: &interactions,
         }];
 
@@ -1454,6 +1525,7 @@ mod tests {
                 main: &trace,
                 preprocessed: None,
                 public_values: &[],
+                periodic: None,
                 interactions: &interactions,
             }];
             BusDebugReport::check(&instances)
@@ -1495,12 +1567,14 @@ mod tests {
                 main: &main,
                 preprocessed: None,
                 public_values: &[],
+                periodic: None,
                 interactions: &pushes,
             },
             BusDebugInstance {
                 main: &main,
                 preprocessed: Some(&fixed_trace),
                 public_values: &[],
+                periodic: None,
                 interactions: &pulls,
             },
         ];
@@ -1514,6 +1588,7 @@ mod tests {
             main: &main,
             preprocessed: Some(&short),
             public_values: &[],
+            periodic: None,
             interactions: &pulls,
         }];
         assert_eq!(
@@ -1530,6 +1605,7 @@ mod tests {
             main: &main,
             preprocessed: None,
             public_values: &[],
+            periodic: None,
             interactions: &pulls,
         }];
         assert_eq!(
@@ -1552,6 +1628,7 @@ mod tests {
             main: &main,
             preprocessed: Some(&fixed_trace),
             public_values: &[],
+            periodic: None,
             interactions: &beyond,
         }];
         assert_eq!(
@@ -1579,6 +1656,7 @@ mod tests {
             main: &trace,
             preprocessed: None,
             public_values: &[],
+            periodic: None,
             interactions: &beyond_main,
         }];
         assert_eq!(
@@ -1601,6 +1679,7 @@ mod tests {
             main: &trace,
             preprocessed: None,
             public_values: &[F::ONE],
+            periodic: None,
             interactions: &beyond_public,
         }];
         assert_eq!(
@@ -1628,6 +1707,7 @@ mod tests {
             main: &trace,
             preprocessed: None,
             public_values: &[],
+            periodic: None,
             interactions: &interactions,
         }];
 
@@ -1664,12 +1744,14 @@ mod tests {
                 main: &push,
                 preprocessed: None,
                 public_values: &[],
+                periodic: None,
                 interactions: &pushes,
             },
             BusDebugInstance {
                 main: &pull,
                 preprocessed: None,
                 public_values: &[],
+                periodic: None,
                 interactions: &pulls,
             },
         ];
@@ -1715,18 +1797,21 @@ mod tests {
                 main: &idle,
                 preprocessed: None,
                 public_values: &[],
+                periodic: None,
                 interactions: &none,
             },
             BusDebugInstance {
                 main: &push,
                 preprocessed: None,
                 public_values: &[],
+                periodic: None,
                 interactions: &pushes,
             },
             BusDebugInstance {
                 main: &pull,
                 preprocessed: None,
                 public_values: &[],
+                periodic: None,
                 interactions: &pulls,
             },
         ];
@@ -1749,6 +1834,7 @@ mod tests {
             main: &trace,
             preprocessed: None,
             public_values: &[],
+            periodic: None,
             interactions: &interactions,
         }];
         let limits = BusDebugLimits {
@@ -1803,6 +1889,7 @@ mod tests {
             main: &trace,
             preprocessed: None,
             public_values: &[],
+            periodic: None,
             interactions: &interactions,
         }];
 
@@ -1833,18 +1920,21 @@ mod tests {
                 main: &push,
                 preprocessed: None,
                 public_values: &[],
+                periodic: None,
                 interactions: &pushes,
             },
             BusDebugInstance {
                 main: &middle,
                 preprocessed: None,
                 public_values: &[],
+                periodic: None,
                 interactions: &pulls,
             },
             BusDebugInstance {
                 main: &last,
                 preprocessed: None,
                 public_values: &[],
+                periodic: None,
                 interactions: &pulls,
             },
         ];
@@ -1894,6 +1984,7 @@ mod tests {
             main: &trace,
             preprocessed: None,
             public_values: &[],
+            periodic: None,
             interactions: &interactions,
         }];
 
@@ -1913,7 +2004,7 @@ mod tests {
 
     #[test]
     fn an_unsupported_leaf_is_named_rather_than_panicked_on() {
-        // Fixture state: a next-row access and a periodic access, both rejected by planning first.
+        // Fixture state: a next-row access, and a periodic access with no periodic table.
         let column = [F::ZERO];
         let main = [ColumnView::Dense(column.as_slice())];
         let compiler = Compiler {
@@ -1921,6 +2012,7 @@ mod tests {
             declaration: 1,
             main: &main,
             preprocessed: None,
+            periodic: &[],
             public_values: &[],
         };
 
@@ -1944,12 +2036,12 @@ mod tests {
                 .compile_leaf(BusExpressionLocation::Activation, &periodic)
                 .err()
                 .unwrap(),
-            BusDebugError::Plan(BusPlanError::UnsupportedExpression {
+            BusDebugError::PeriodicColumnOutOfRange {
                 air: 2,
                 declaration: 1,
-                location: BusExpressionLocation::Activation,
-                access: UnsupportedBusAccess::Periodic,
-            }),
+                column: 0,
+                width: 0,
+            },
         );
     }
 
@@ -1987,12 +2079,14 @@ mod tests {
                     main: &push,
                     preprocessed: None,
                     public_values: &[],
+                    periodic: None,
                     interactions: &pushes,
                 },
                 BusDebugInstance {
                     main: &pull,
                     preprocessed: None,
                     public_values: &[],
+                    periodic: None,
                     interactions: &pulls,
                 },
             ];
@@ -2038,6 +2132,7 @@ mod tests {
                 main,
                 preprocessed: Some(preprocessed),
                 public_values: &[],
+                periodic: None,
                 interactions: &interactions,
             }])
             .unwrap()
@@ -2091,12 +2186,14 @@ mod tests {
                 main: &first,
                 preprocessed: None,
                 public_values: &[],
+                periodic: None,
                 interactions: &alpha,
             },
             BusDebugInstance {
                 main: &second,
                 preprocessed: None,
                 public_values: &[],
+                periodic: None,
                 interactions: &zulu,
             },
         ];

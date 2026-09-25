@@ -13,6 +13,8 @@ on:
       - "batch-stark/**"
       - "multilinear-util/src/**"
       - "multi-stark/src/**"
+      - "multi-stark/tests/**"
+      - "bus/src/**"
       - "uni-stark/src/**"
       - "uni-stark/tests/**"
       - "binary-dft/src/**"

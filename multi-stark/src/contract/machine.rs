@@ -809,4 +809,29 @@ mod tests {
             Some("the constraints themselves")
         );
     }
+
+    #[test]
+    fn two_public_images_differing_in_one_word_name_different_statements() {
+        type B = p3_binary_field::BinaryField128;
+        type C = p3_binary_field::BinaryField64;
+        let memory =
+            p3_bus::TimestampedMemory::<C, B>::new("tm-memory", "tm-low", "tm-high", 1).unwrap();
+
+        // Two images of eight cells, alike but for the word in cell 5.
+        let digest = |word: u64| {
+            let words = vec![
+                B::from_le_bytes(9u128.to_le_bytes()),
+                B::from_le_bytes(u128::from(word).to_le_bytes()),
+            ];
+            let image = p3_bus::PublicImage::new(&memory, 3, vec![(4, words)]).unwrap();
+            let seed = p3_bus::TimestampedSeed::Public(image);
+            let air = p3_bus::TimestampedBoundaryAir::new(memory.clone(), seed).unwrap();
+            let table = TableDeclaration::from_constraints::<B, B, _>(&air, HeightRange::new(3, 3));
+            Declaration::new(Keccak256Hash, vec![table], 1024, TARGET)
+                .unwrap()
+                .statement_digest()
+        };
+        assert_eq!(digest(7), digest(7));
+        assert_ne!(digest(7), digest(8));
+    }
 }

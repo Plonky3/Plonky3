@@ -412,6 +412,7 @@ where
                 .expect("the transcript describes a bus argument");
             // Checking widths once per AIR keeps a caller mistake out of the row loop below.
             context.check_tables(&bus_tables, &preprocessed_tables, &public_values)?;
+            let periodic = context.periodic_tables(&airs, &instances.num_variables());
             context
                 .plan()
                 .prove::<C::Val, C::Challenge, _>(
@@ -419,6 +420,7 @@ where
                         context.materialize(
                             &bus_tables,
                             &preprocessed_tables,
+                            &periodic,
                             &public_values,
                             challenges,
                         )

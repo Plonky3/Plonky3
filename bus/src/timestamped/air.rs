@@ -1,37 +1,55 @@
 //! Boundary and range tables of one timestamped read-write memory.
 
+use alloc::borrow::Cow;
 use alloc::vec;
 use alloc::vec::Vec;
 
 use p3_air::{Air, AirBuilder, BaseAir, WindowAccess};
 use p3_field::{ExtensionField, Field, PrimeCharacteristicRing};
 
-use super::{CLOCK_RANGE_BITS, TimestampedMemory, TimestampedMemoryInteractionBuilder, high_step};
+use super::{
+    CLOCK_RANGE_BITS, PrivateRegion, PublicImage, TimestampedMemory, TimestampedMemoryError,
+    TimestampedMemoryInteractionBuilder, high_step,
+};
 use crate::{BusActivation, BusDirection, BusInteractionBuilder};
 
 /// Where the initial value of every cell comes from.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
-pub enum TimestampedSeed {
+pub enum TimestampedSeed<F> {
     /// Every cell starts at zero.
     Zero,
+    /// Cells start from an image the verifier knows.
+    ///
+    /// The image is a periodic column, so nothing is committed for it.
+    ///
+    /// The verifier evaluates it with [`PublicImage::evaluate`].
+    ///
+    /// The block covers exactly the image's cells, from cell zero.
+    Public(PublicImage<F>),
+    /// Cells of one region start from committed columns only the prover knows.
+    ///
+    /// The block covers exactly the region's cells.
+    Private(PrivateRegion),
 }
 
 /// Seed and close block of one timestamped memory, one cell per row.
 ///
-/// Columns: the cell address, its last access time, then its final value.
+/// Columns: the cell address, its last access time, its final value, then any private initial value.
 ///
-/// Row `i` holds cell `F::GENERATOR^i`, so no two rows name the same cell.
+/// Row `i` holds cell `first + i` at address `F::GENERATOR^(first + i)`, so no two rows name the same cell.
 ///
 /// The last time and final value are committed by the prover.
 ///
 /// Balance forces them to match what the last access left.
+///
+/// A public or private seed pins the height to the cells it covers.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TimestampedBoundaryAir<C, F: Field> {
     /// Memory this block seeds and closes.
     memory: TimestampedMemory<C, F>,
     /// Where the initial values come from.
-    seed: TimestampedSeed,
+    seed: TimestampedSeed<F>,
 }
 
 impl<C: Field, F: ExtensionField<C>> TimestampedBoundaryAir<C, F> {
@@ -43,9 +61,23 @@ impl<C: Field, F: ExtensionField<C>> TimestampedBoundaryAir<C, F> {
     pub const FINAL: usize = 2;
 
     /// Builds the block of one memory with one seed source.
-    #[must_use]
-    pub const fn new(memory: TimestampedMemory<C, F>, seed: TimestampedSeed) -> Self {
-        Self { memory, seed }
+    ///
+    /// # Errors
+    ///
+    /// A public image whose words have a different width than the memory's values.
+    pub fn new(
+        memory: TimestampedMemory<C, F>,
+        seed: TimestampedSeed<F>,
+    ) -> Result<Self, TimestampedMemoryError> {
+        if let TimestampedSeed::Public(image) = &seed
+            && image.value_width() != memory.value_width
+        {
+            return Err(TimestampedMemoryError::ImageWidth {
+                expected: memory.value_width,
+                actual: image.value_width(),
+            });
+        }
+        Ok(Self { memory, seed })
     }
 
     /// Memory this block seeds and closes.
@@ -56,27 +88,105 @@ impl<C: Field, F: ExtensionField<C>> TimestampedBoundaryAir<C, F> {
 
     /// Where the initial values come from.
     #[must_use]
-    pub const fn seed(&self) -> TimestampedSeed {
-        self.seed
+    pub const fn seed(&self) -> &TimestampedSeed<F> {
+        &self.seed
     }
 
-    /// Address of the cell on row `row`, which is `F::GENERATOR^row`.
+    /// Address of cell `cell`, which is `F::GENERATOR^cell`.
     #[must_use]
-    pub fn cell_address(row: usize) -> F {
-        F::GENERATOR.exp_u64(row as u64)
+    pub fn cell_address(cell: usize) -> F {
+        F::GENERATOR.exp_u64(cell as u64)
+    }
+
+    /// Index of the cell on row zero.
+    #[must_use]
+    pub const fn first_cell(&self) -> usize {
+        match &self.seed {
+            TimestampedSeed::Zero | TimestampedSeed::Public(_) => 0,
+            TimestampedSeed::Private(region) => region.first_cell(),
+        }
+    }
+
+    /// Index of the cell on the last row, when the seed pins the height.
+    #[must_use]
+    pub const fn last_cell(&self) -> Option<usize> {
+        match &self.seed {
+            TimestampedSeed::Zero => None,
+            TimestampedSeed::Public(image) => Some((1 << image.log_cells()) - 1),
+            TimestampedSeed::Private(region) => Some(region.last_cell()),
+        }
+    }
+
+    /// First column of the committed initial value, for a private seed.
+    #[must_use]
+    pub const fn initial_column(&self) -> Option<usize> {
+        match &self.seed {
+            TimestampedSeed::Private(_) => Some(Self::FINAL + self.memory.value_width),
+            _ => None,
+        }
     }
 
     /// Initial value of the cell on the current row.
-    fn initial<AB: AirBuilder<F = F>>(&self, _builder: &AB) -> Vec<AB::Expr> {
-        match self.seed {
-            TimestampedSeed::Zero => vec![AB::Expr::ZERO; self.memory.value_width],
+    fn initial<AB: AirBuilder<F = F>>(&self, builder: &AB) -> Vec<AB::Expr> {
+        let width = self.memory.value_width;
+        match &self.seed {
+            TimestampedSeed::Zero => vec![AB::Expr::ZERO; width],
+            TimestampedSeed::Public(_) => builder.periodic_values()[..width]
+                .iter()
+                .map(|&value| value.into())
+                .collect(),
+            TimestampedSeed::Private(_) => {
+                let first = Self::FINAL + width;
+                builder.main().current_slice()[first..first + width]
+                    .iter()
+                    .map(|&column| column.into())
+                    .collect()
+            }
         }
     }
 }
 
-impl<C: Field, F: ExtensionField<C>, F2> BaseAir<F2> for TimestampedBoundaryAir<C, F> {
+impl<C: Field, F: ExtensionField<C>> BaseAir<F> for TimestampedBoundaryAir<C, F> {
     fn width(&self) -> usize {
-        Self::FINAL + self.memory.value_width
+        let private = match &self.seed {
+            TimestampedSeed::Private(_) => self.memory.value_width,
+            _ => 0,
+        };
+        Self::FINAL + self.memory.value_width + private
+    }
+
+    fn num_periodic_columns(&self) -> usize {
+        match &self.seed {
+            TimestampedSeed::Public(image) => image.value_width(),
+            _ => 0,
+        }
+    }
+
+    fn periodic_columns(&self) -> Cow<'_, [Vec<F>]> {
+        match &self.seed {
+            TimestampedSeed::Public(image) => Cow::Owned(image.columns()),
+            _ => Cow::Borrowed(&[]),
+        }
+    }
+
+    fn periodic_periods(&self) -> Vec<usize> {
+        match &self.seed {
+            TimestampedSeed::Public(image) => vec![1 << image.log_cells(); image.value_width()],
+            _ => Vec::new(),
+        }
+    }
+
+    fn periodic_evaluations<EF: ExtensionField<F>>(&self, point: &[EF]) -> Option<Vec<EF>> {
+        // A period of `2^j` rows depends only on the last `j` coordinates.
+        //
+        // A trace shorter than the image leaves the backend to reject the declaration.
+        match &self.seed {
+            TimestampedSeed::Public(image) => {
+                let low = point.len().checked_sub(image.log_cells())?;
+                Some(image.evaluate(&point[low..]))
+            }
+            _ => None,
+        }
     }
 }
 
@@ -102,11 +212,20 @@ where
             )
         };
 
-        // Cell addresses walk the generator orbit from one, so they are distinct and fixed.
-        builder.when_first_row().assert_one(address);
+        // Cell addresses walk the generator orbit from the first cell, so they are distinct and fixed.
+        builder
+            .when_first_row()
+            .assert_eq(address, Self::cell_address(self.first_cell()));
         builder
             .when_transition()
             .assert_eq(next_address, address.into() * F::GENERATOR);
+
+        // A seeded block ends on its last cell, which pins its height.
+        if let Some(last_cell) = self.last_cell() {
+            builder
+                .when_last_row()
+                .assert_eq(address, Self::cell_address(last_cell));
+        }
 
         let initial = self.initial(builder);
         builder.timestamped_boundary(

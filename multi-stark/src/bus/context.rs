@@ -4,11 +4,12 @@
 //! It materializes the ProductGKR leaves for proving.
 //! It evaluates the bus shares at the shared sumcheck point for verification.
 //! Those evaluations read each AIR's single opening at that point.
+//! A periodic column is never opened; the verifier evaluates it at that point instead.
 
 use alloc::vec::Vec;
 
-use p3_air::Air;
 use p3_air::symbolic::AirLayout;
+use p3_air::{Air, BaseAir};
 use p3_bus::{
     BusBlock, BusBlockOwner, BusDirection, BusEvaluation, BusPlan, BusPlanInput,
     BusSymbolicBuilder, SymbolicBusInteraction,
@@ -19,6 +20,7 @@ use p3_multilinear_util::point::Point;
 use p3_sumcheck::layout::Table;
 
 use super::error::BusBindingError;
+use crate::selectors::periodic_table;
 
 /// Verifier-derived bus declarations and their checked physical layout.
 pub(crate) struct BusContext<F: Field, EF: ExtensionField<F>> {
@@ -30,6 +32,10 @@ pub(crate) struct BusContext<F: Field, EF: ExtensionField<F>> {
     main_columns: Vec<Vec<usize>>,
     /// Sorted preprocessed columns each AIR's declarations read, in AIR order.
     preprocessed_columns: Vec<Vec<usize>>,
+    /// Sorted periodic columns each AIR's declarations read, in AIR order.
+    periodic_columns: Vec<Vec<usize>>,
+    /// Periodic columns each AIR declares, in AIR order.
+    periodic_widths: Vec<usize>,
 }
 
 impl<F, EF> BusContext<F, EF>
@@ -83,11 +89,28 @@ where
                 )
             })
             .collect::<(Vec<_>, Vec<_>)>();
+
+        // Periodic columns are never opened; the verifier evaluates them at the shared point.
+        let periodic_columns = profiles
+            .iter()
+            .map(|profile| {
+                profile
+                    .interactions()
+                    .iter()
+                    .flat_map(SymbolicBusInteraction::referenced_periodic_columns)
+                    .collect::<alloc::collections::BTreeSet<_>>()
+                    .into_iter()
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        let periodic_widths = airs.iter().map(|air| air.num_periodic_columns()).collect();
         Ok(Some(Self {
             profiles,
             plan,
             main_columns,
             preprocessed_columns,
+            periodic_columns,
+            periodic_widths,
         }))
     }
 
@@ -99,6 +122,32 @@ where
     /// Preprocessed columns one AIR's declarations read, in ascending order.
     pub(crate) fn preprocessed_columns(&self, air: usize) -> &[usize] {
         &self.preprocessed_columns[air]
+    }
+
+    /// Periodic columns one AIR's declarations read, in ascending order.
+    pub(crate) fn periodic_columns(&self, air: usize) -> &[usize] {
+        &self.periodic_columns[air]
+    }
+
+    /// Periodic tables at full trace height, for the AIRs whose declarations read one.
+    ///
+    /// An AIR whose declarations read none gets `None`, so its columns are never materialized.
+    pub(crate) fn periodic_tables<A: BaseAir<F>>(
+        &self,
+        airs: &[&A],
+        num_variables: &[usize],
+    ) -> Vec<Option<Table<F>>> {
+        airs.iter()
+            .zip(num_variables)
+            .zip(&self.periodic_columns)
+            .map(|((air, &num_vars), read)| {
+                if read.is_empty() {
+                    None
+                } else {
+                    periodic_table(*air, num_vars)
+                }
+            })
+            .collect()
     }
 
     /// Reject committed tables that cannot resolve the declarations their AIR owns.
@@ -119,6 +168,7 @@ where
             let air = block.owner.air;
             let main = F::zero_vec(tables[air].num_polys());
             let fixed = F::zero_vec(preprocessed[air].map_or(0, Table::num_polys));
+            let periodic = F::zero_vec(self.periodic_widths[air]);
             self.plan
                 .compile_factor(block.bus, self.interaction(block.owner), &weights, EF::ZERO)?
                 .evaluate(
@@ -127,6 +177,7 @@ where
                         main: &main,
                         preprocessed: &fixed,
                         public: public_values[air],
+                        periodic: &periodic,
                         is_first_row: F::ZERO,
                         is_last_row: F::ZERO,
                         is_transition: F::ZERO,
@@ -181,6 +232,9 @@ where
     /// The point spans the shared cube, which may be wider than any bus table.
     /// Each share reads its rows off the point's suffix.
     /// Every coordinate ahead of that suffix joins its all-one-vertex selector.
+    ///
+    /// `periodic` holds each AIR's periodic columns evaluated at that same suffix.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn terminal_composition(
         &self,
         output: &p3_bus::BusReductionOutput<EF>,
@@ -188,6 +242,7 @@ where
         point: &Point<EF>,
         main: &[&[EF]],
         preprocessed: &[&[EF]],
+        periodic: &[&[EF]],
         public_values: &[&[F]],
     ) -> Result<EF, BusBindingError> {
         // The terminal point must at least address the tallest participating table.
@@ -240,6 +295,7 @@ where
                         main: main[air],
                         preprocessed: preprocessed[air],
                         public: public_values[air],
+                        periodic: periodic[air],
                         is_first_row: boundary.first,
                         is_last_row: boundary.last,
                         is_transition: boundary.transition,
@@ -258,10 +314,13 @@ where
     }
 
     /// Materialize both direction-specific product prefixes from committed tables.
+    ///
+    /// `periodic` holds the tables [`Self::periodic_tables`] returns.
     pub(crate) fn materialize(
         &self,
         tables: &[&Table<F>],
         preprocessed: &[Option<&Table<F>>],
+        periodic: &[Option<Table<F>>],
         public_values: &[&[F]],
         challenges: &p3_bus::BusChallenges<EF>,
     ) -> [Vec<EF>; 2] {
@@ -277,6 +336,7 @@ where
                         block,
                         tables,
                         preprocessed,
+                        periodic,
                         public_values,
                         &weights,
                         challenges.offset,
@@ -288,11 +348,13 @@ where
     }
 
     /// Materialize one aligned block from the exact tables committed by this proof.
+    #[allow(clippy::too_many_arguments)]
     fn materialize_block(
         &self,
         block: &BusBlock,
         tables: &[&Table<F>],
         preprocessed: &[Option<&Table<F>>],
+        periodic: &[Option<Table<F>>],
         public_values: &[&[F]],
         weights: &[EF],
         offset: EF,
@@ -317,8 +379,14 @@ where
             .iter()
             .flat_map(|table| fixed_indices.iter().map(|&column| table.column(column)))
             .collect::<Vec<_>>();
+        let periodic_indices = self.periodic_columns(air);
+        let periodic_columns = periodic[air]
+            .iter()
+            .flat_map(|table| periodic_indices.iter().map(|&column| table.column(column)))
+            .collect::<Vec<_>>();
         let main_width = tables[air].num_polys();
         let fixed_width = preprocessed[air].map_or(0, Table::num_polys);
+        let periodic_width = self.periodic_widths[air];
         let public = public_values[air];
         let height = 1usize << block.log_height;
 
@@ -330,16 +398,20 @@ where
                     (
                         F::zero_vec(main_width),
                         F::zero_vec(fixed_width),
+                        F::zero_vec(periodic_width),
                         Vec::new(),
                     )
                 },
-                |(main, fixed, scratch), row| {
+                |(main, fixed, periodic, scratch), row| {
                     // Unread columns keep their zero, which no planned expression names.
                     for (&index, column) in main_indices.iter().zip(&main_columns) {
                         main[index] = column.value(row);
                     }
                     for (&index, column) in fixed_indices.iter().zip(&fixed_columns) {
                         fixed[index] = column.value(row);
+                    }
+                    for (&index, column) in periodic_indices.iter().zip(&periodic_columns) {
+                        periodic[index] = column.value(row);
                     }
                     factor
                         .evaluate(
@@ -348,6 +420,7 @@ where
                                 main,
                                 preprocessed: fixed,
                                 public,
+                                periodic,
                                 is_first_row: F::from_bool(row == 0),
                                 is_last_row: F::from_bool(row + 1 == height),
                                 is_transition: F::from_bool(row + 1 < height),

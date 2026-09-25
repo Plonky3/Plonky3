@@ -141,7 +141,7 @@ where
     }
 
     // Period (cycle length) of each periodic column, indexed by periodic column index.
-    let periodic_periods: Vec<usize> = air.periodic_columns().iter().map(Vec::len).collect();
+    let periodic_periods = air.periodic_periods();
 
     let base_degree = base_constraints
         .iter()

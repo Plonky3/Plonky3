@@ -17,7 +17,6 @@ use p3_field::{
     Algebra, ExtensionField, Field, PackedFieldExtension, PackedValue, PrimeCharacteristicRing,
     dot_product,
 };
-use p3_matrix::dense::RowMajorMatrix;
 use p3_maybe_rayon::prelude::*;
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::{Poly, PolyView};
@@ -27,7 +26,7 @@ use p3_sumcheck::layout::{ColumnView, Table};
 use crate::folder::{FolderEvaluations, InteractionMultilinearFolder, MultilinearFolder};
 use crate::lookup::AirLinkInstance;
 use crate::packed_ext::PackedExt;
-use crate::selectors::{BoundaryEvals, periodic_num_variables};
+use crate::selectors::{BoundaryEvals, periodic_table};
 
 #[inline]
 fn packed_column_at<F: Field>(column: ColumnView<'_, F>, row: usize) -> F::Packing {
@@ -1398,36 +1397,10 @@ where
             num_vars,
             coupling,
         } = stage;
-        // Materialize each AIR's periodic columns to the full trace height.
-        //
-        //     period vector  : [v_0, v_1]
-        //     trace height 8 : [v_0, v_1, v_0, v_1, v_0, v_1, v_0, v_1]
-        //
-        // The full-height column is a genuine multilinear polynomial.
-        // It therefore folds through the sumcheck exactly like a committed column.
-        let trace_height = 1 << num_vars;
+        // Periodic columns fold through the sumcheck exactly like committed ones.
         let periodic = airs
             .iter()
-            .map(|air| {
-                let cols = air.periodic_columns();
-                if cols.is_empty() {
-                    return None;
-                }
-
-                // Reject a declaration the trace cannot hold, matching the verifier's own check.
-                let num_variables =
-                    periodic_num_variables(air.num_periodic_columns(), &cols, num_vars)
-                        .expect("periodic column declaration must fit the trace height");
-
-                let mut values = Vec::with_capacity(cols.len() * trace_height);
-                for (col, j) in cols.iter().zip(num_variables) {
-                    // Copy the whole period vector once per cycle it spans.
-                    for _ in 0..trace_height >> j {
-                        values.extend_from_slice(col);
-                    }
-                }
-                Some(Table::new(RowMajorMatrix::new(values, trace_height)))
-            })
+            .map(|air| periodic_table(*air, num_vars))
             .collect::<Vec<_>>();
         let column_widths = tables
             .iter()
@@ -2765,6 +2738,7 @@ mod tests {
     use p3_air::{AirBuilder, WindowAccess};
     use p3_baby_bear::BabyBear;
     use p3_binary_field::BinaryField128;
+    use p3_matrix::dense::RowMajorMatrix;
     use rand::SeedableRng;
     use rand::rngs::SmallRng;
 

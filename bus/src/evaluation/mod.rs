@@ -24,6 +24,8 @@ pub struct BusEvaluation<'a, F, EF> {
     pub preprocessed: &'a [EF],
     /// Public values in declaration order.
     pub public: &'a [F],
+    /// Current-row periodic-column evaluations in column order, computed by the verifier.
+    pub periodic: &'a [EF],
     /// Multilinear first-row selector evaluation.
     pub is_first_row: EF,
     /// Multilinear last-row selector evaluation.
@@ -43,6 +45,8 @@ enum BusNode<F> {
     Preprocessed(usize),
     /// Public value at this index.
     Public(usize),
+    /// Current-row periodic column at this index.
+    Periodic(usize),
     /// First-row selector.
     IsFirstRow,
     /// Last-row selector.
@@ -81,11 +85,7 @@ const fn compile_leaf<F: Field>(leaf: &BaseLeaf<F>) -> Result<BusNode<F>, BusEva
                 });
             }
             BaseEntry::Public => BusNode::Public(variable.index),
-            BaseEntry::Periodic => {
-                return Err(BusEvaluationError::PeriodicColumn {
-                    column: variable.index,
-                });
-            }
+            BaseEntry::Periodic => BusNode::Periodic(variable.index),
         },
         BaseLeaf::IsFirstRow => BusNode::IsFirstRow,
         BaseLeaf::IsLastRow => BusNode::IsLastRow,
@@ -243,6 +243,10 @@ where
                     .copied()
                     .map(Into::into)
                     .ok_or(BusEvaluationError::PublicValue { index })?,
+                BusNode::Periodic(column) => *values
+                    .periodic
+                    .get(column)
+                    .ok_or(BusEvaluationError::PeriodicColumn { column })?,
                 BusNode::IsFirstRow => values.is_first_row,
                 BusNode::IsLastRow => values.is_last_row,
                 BusNode::IsTransition => values.is_transition,
@@ -426,6 +430,7 @@ mod tests {
                 main: &[],
                 preprocessed: &[],
                 public: &[],
+                periodic: &[],
                 is_first_row: F::ZERO,
                 is_last_row: F::ZERO,
                 is_transition: F::ZERO,
@@ -457,7 +462,7 @@ mod tests {
             })
         );
 
-        // No periodic-column evaluation exists in the public evaluation view.
+        // A periodic column the caller does not evaluate has no value.
         let periodic = SymbolicVariable::new(BaseEntry::Periodic, 7).into();
         assert_eq!(
             evaluate(periodic),
@@ -495,6 +500,7 @@ mod tests {
                     main: &[leaf],
                     preprocessed: &[],
                     public: &[],
+                    periodic: &[],
                     is_first_row: F::ZERO,
                     is_last_row: F::ZERO,
                     is_transition: F::ZERO,
@@ -574,6 +580,7 @@ mod boundary_tests {
                 main: &[F::from_usize(row + 1)],
                 preprocessed: &[],
                 public: &[],
+                periodic: &[],
                 is_first_row: F::from_bool(row == 0),
                 is_last_row: F::from_bool(row == 3),
                 is_transition: F::from_bool(row < 3),
