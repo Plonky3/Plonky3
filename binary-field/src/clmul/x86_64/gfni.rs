@@ -22,15 +22,18 @@
 //!
 //! The cost is the same for every `K`, and nothing is indexed by the operand.
 
+#[cfg(not(miri))]
+use core::arch::x86_64::_mm512_ternarylogic_epi64;
 use core::arch::x86_64::{
     __m128i, __m512i, _mm_cvtsi64_si128, _mm_cvtsi128_si64, _mm512_broadcastq_epi64,
     _mm512_castsi512_si128, _mm512_gf2p8affine_epi64_epi8, _mm512_loadu_si512,
-    _mm512_permutexvar_epi8, _mm512_rol_epi64, _mm512_ternarylogic_epi64, _mm512_xor_si512,
+    _mm512_permutexvar_epi8, _mm512_rol_epi64, _mm512_xor_si512,
 };
 
 use crate::clmul::reduce_64;
 
 /// The truth table of `a ^ b ^ c` for a ternary logic instruction.
+#[cfg(not(miri))]
 const XOR3: i32 = 0x96;
 
 /// Bits `0 .. 32` of `v`, each moved to twice its position: the carryless square of `v`.
@@ -158,11 +161,22 @@ pub(crate) fn square_times<const K: usize>(x: u64) -> u64 {
         ];
 
         // A two-level tree keeps the sum at two instructions of latency.
+        #[cfg(not(miri))]
         let sum = _mm512_ternarylogic_epi64::<XOR3>(
             _mm512_ternarylogic_epi64::<XOR3>(terms[0], terms[1], terms[2]),
             _mm512_ternarylogic_epi64::<XOR3>(terms[3], terms[4], terms[5]),
             _mm512_xor_si512(terms[6], terms[7]),
         );
+
+        // Miri has no shim for the 512-bit ternary logic instruction.
+        //
+        // A plain exclusive-or chain computes the same sum.
+        //
+        // With it, the interpreter runs every other step of the kernel.
+        #[cfg(miri)]
+        let sum = terms[1..]
+            .iter()
+            .fold(terms[0], |acc, &term| _mm512_xor_si512(acc, term));
 
         // Only byte q of quadword q is wanted.
         //

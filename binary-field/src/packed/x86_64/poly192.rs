@@ -476,6 +476,10 @@ mod tests {
     use alloc::vec::Vec;
 
     use p3_field::{PackedFieldExtension, PrimeCharacteristicRing};
+    use p3_field_testing::{
+        test_add_assign_lane_ext, test_batched_linear_combination_ext, test_packed_extension,
+        test_ring_axioms_proptest_char2, test_ring_with_eq_char2,
+    };
     use proptest::prelude::*;
 
     use super::super::lanes::gf64::WIDTH_64;
@@ -528,6 +532,21 @@ mod tests {
                 a.iter().map(Poly192::square).collect::<Vec<_>>()
             );
         }
+    }
+
+    #[test]
+    fn the_shared_packed_extension_suite_passes() {
+        // The transposes, the lane injection, the powers and the batched combination.
+        test_packed_extension::<Poly64, Poly192>();
+        test_add_assign_lane_ext::<Poly64, Poly192, PackedPoly192>();
+        test_batched_linear_combination_ext::<Poly64, Poly192, PackedPoly192>();
+    }
+
+    #[test]
+    fn the_shared_ring_suite_passes() {
+        // The packing is a ring of characteristic 2 in its own right.
+        test_ring_with_eq_char2::<PackedPoly192>(&[PackedPoly192::ZERO], &[PackedPoly192::ONE]);
+        test_ring_axioms_proptest_char2::<PackedPoly192>();
     }
 
     proptest! {
