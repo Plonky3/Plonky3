@@ -20,15 +20,17 @@
 
 pub mod eq;
 mod packed_kernel;
+mod spread;
 
-use eq::EqMaybePacked;
+use eq::{EqMaybePacked, packed_mixed_dot};
 use itertools::Itertools;
 use p3_field::{ExtensionField, Field, PackedFieldExtension, PackedValue};
 use p3_maybe_rayon::prelude::*;
 use p3_util::log2_strict_usize;
+use spread::SpreadWeights;
 
 use crate::point::Point;
-use crate::poly::{Poly, PolyView};
+use crate::poly::{Poly, PolyView, tensor_packed, tensor_unpacked};
 
 /// Extension widths one extension-by-extension multiply-accumulate is charged as.
 ///
@@ -43,7 +45,7 @@ use crate::poly::{Poly, PolyView};
 ///     aarch64, NEON packing   : 2.5 to 3.5 ns
 ///     three widths at 100 ps  : 4.8 ns
 /// ```
-const MUL_ACC_BYTES: usize = 3;
+pub(crate) const MUL_ACC_BYTES: usize = 3;
 
 /// Extension widths one base-by-extension multiply-accumulate is charged as, per lane.
 ///
@@ -152,7 +154,7 @@ impl<F: Field, EF: ExtensionField<F>> SplitEq<F, EF> {
         // Split z into (z_prefix, z_suffix) at the midpoint.
         let (z0, z1) = point.split_at(point.num_variables() / 2);
         // Build eq0 = scale * eq(z_prefix, .) and eq1 = eq(z_suffix, .).
-        let eq0 = Poly::new_from_point(z0.as_slice(), scale);
+        let eq0 = Poly::new_from_point_over::<F>(z0.as_slice(), scale);
         let eq1 = EqMaybePacked::new_unpacked(&z1);
         Self { eq0, eq1 }
     }
@@ -165,7 +167,7 @@ impl<F: Field, EF: ExtensionField<F>> SplitEq<F, EF> {
         // Split z into (z_prefix, z_suffix) at the midpoint.
         let (z0, z1) = point.split_at(point.num_variables() / 2);
         // Build eq0 with scale, and attempt SIMD packing for eq1.
-        let eq0 = Poly::new_from_point(z0.as_slice(), scale);
+        let eq0 = Poly::new_from_point_over::<F>(z0.as_slice(), scale);
         let eq1 = EqMaybePacked::new_packed(&z1);
         Self { eq0, eq1 }
     }
@@ -269,12 +271,25 @@ impl<F: Field, EF: ExtensionField<F>> SplitEq<F, EF> {
         }
 
         let cs = self.eq1.num_scalar_evals();
+        let item_bytes = MUL_ACC_BYTES * cs * size_of::<EF>();
+
+        // Spread the suffix weights once, so no block of values is transposed.
+        if let Some(spread) = SpreadWeights::<F, EF>::new(&self.eq1.to_scalars()) {
+            return poly
+                .as_slice()
+                .par_chunks(cs)
+                .zip_eq(self.eq0.as_slice().par_iter())
+                .with_min_task_bytes(item_bytes)
+                .map(|(chunk, &w0)| spread.dot(chunk) * w0)
+                .sum();
+        }
+
         // One item dots one suffix block of extension evals, scaled by one prefix weight.
         // A block is priced by its multiply-accumulates, which cost far more than its reads.
         poly.as_slice()
             .par_chunks(cs)
             .zip_eq(self.eq0.as_slice().par_iter())
-            .with_min_task_bytes(MUL_ACC_BYTES * cs * size_of::<EF>())
+            .with_min_task_bytes(item_bytes)
             .map(|(chunk, &w0)| self.eq1.dot_with_ext(chunk) * w0)
             .sum::<EF>()
     }
@@ -339,7 +354,12 @@ impl<F: Field, EF: ExtensionField<F>> SplitEq<F, EF> {
     }
 
     /// Materializes the full eq table as a polynomial.
+    ///
+    /// A packed suffix half writes the table as one tensor product, each entry stored once.
     pub fn materialize(&self) -> Poly<EF> {
+        if let Some(eq1) = self.eq1.as_packed() {
+            return Poly::new(tensor_unpacked::<F, EF>(self.eq0.as_slice(), eq1));
+        }
         let mut out = Poly::zero(self.num_variables());
         self.accumulate_into(out.as_mut_slice(), None);
         out
@@ -398,6 +418,13 @@ impl<F: Field, EF: ExtensionField<F>> SplitEq<F, EF> {
         let k_inner = poly.num_variables() - self.num_variables();
         // Number of base-field elements per eq0 entry.
         let size_outer = poly.num_evals() / self.eq0.num_evals();
+
+        // An inner block that fills whole lane groups accumulates packed, then unpacks once.
+        //
+        // The scalar accumulator would multiply one extension lane at a time.
+        if k_inner >= log2_strict_usize(F::Packing::WIDTH) && self.eq1.is_packed() {
+            return self.compress_prefix_to_packed(poly).unpack::<F, EF>();
+        }
 
         // One item folds one prefix block of base evals into a whole inner accumulator.
         //
@@ -573,9 +600,30 @@ impl<F: Field, EF: ExtensionField<F>> SplitEq<F, EF> {
         assert!(self.num_variables() <= poly.num_variables());
         assert_eq!(out.len(), poly.num_evals() >> self.num_variables());
 
+        let suffix_rows = 1 << self.num_variables();
+
+        // Every output row dots against the same suffix weights.
+        //
+        //     factored : |eq0| short dots per row, each one extension multiply to scale
+        //     tensored : one dot of 2^m per row, against a table built once
+        //
+        // The table costs one packed multiply per W weights, less than a single row's dot.
+        if let Some(eq1) = self.eq1.as_packed()
+            && out.len() > 1
+        {
+            let table = tensor_packed::<F, EF>(self.eq0.as_slice(), eq1);
+            out.par_iter_mut()
+                .zip(poly.as_slice().par_chunks_exact(suffix_rows))
+                .with_min_task_bytes(base_mul_acc_bytes::<EF>(suffix_rows, F::Packing::WIDTH))
+                .for_each(|(out, row)| {
+                    let sum = packed_mixed_dot::<F, EF>(&table, F::Packing::pack_slice(row));
+                    *out = EF::ExtensionPacking::to_ext_iter([sum]).sum();
+                });
+            return;
+        }
+
         // One item dots one suffix block of base evals into a single output entry.
         // A block is priced by its multiply-accumulates, which cost far more than its reads.
-        let suffix_rows = 1 << self.num_variables();
         out.par_iter_mut()
             .zip(poly.as_slice().par_chunks(suffix_rows))
             .with_min_task_bytes(base_mul_acc_bytes::<EF>(suffix_rows, self.dot_lanes()))

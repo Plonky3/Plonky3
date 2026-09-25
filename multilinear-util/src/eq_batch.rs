@@ -61,6 +61,8 @@ use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
 use p3_maybe_rayon::prelude::*;
 use p3_util::log2_strict_usize;
 
+use crate::split_eq::MUL_ACC_BYTES;
+
 /// Computes the batched multilinear equality polynomial `\sum_i \γ_i ⋅ eq(x, z_i)` over all
 /// `x ∈ \{0,1\}^n` for multiple points `z_i ∈ EF^n` with weights `\γ_i ∈ EF`.
 ///
@@ -580,14 +582,19 @@ fn eval_eq_batch_common<F, IF, EF, E, const INITIALIZED: bool>(
 
     // Validate input dimensions
     let num_variables = evals.height();
+    let num_points = evals.width();
     debug_assert_eq!(evals.width(), scalars.len());
     debug_assert_eq!(out.len(), 1 << num_variables);
 
     // For small problems, use the basic recursive approach
     let packing_width = F::Packing::WIDTH;
     let log_packing_width = log2_strict_usize(packing_width);
-    let num_threads = current_num_threads().next_power_of_two();
-    let log_num_threads = log2_strict_usize(num_threads);
+    let log_num_threads = log_task_count(
+        out.len(),
+        MUL_ACC_BYTES * num_points * size_of::<EF>(),
+        num_variables.saturating_sub(log_packing_width),
+    );
+    let num_threads = 1 << log_num_threads;
 
     // Small problems stay scalar: setting up SIMD lanes and threads costs more than it saves.
     //
@@ -638,6 +645,20 @@ fn eval_eq_batch_common<F, IF, EF, E, const INITIALIZED: bool>(
                 E::process_chunk_batch::<INITIALIZED>(middle_rows, out_chunk, buffer_row, scalars);
             });
     }
+}
+
+/// Log of the task count a batched table of `len` entries splits into.
+///
+/// The cost model's count, capped at one task per worker and at `max_log`:
+/// - a table too cheap to split stays one task, so small batches never wake the pool,
+/// - the count also sets the scalar cutoff, so an uncapped one would send large batches to scalar code.
+///
+/// Kept out of line so the policy does not perturb how the kernels around it inline.
+#[inline(never)]
+fn log_task_count(len: usize, entry_bytes: usize, max_log: usize) -> usize {
+    let tasks = len / min_task_len(len, entry_bytes);
+    let pool = current_num_threads().next_power_of_two();
+    (tasks.ilog2().min(pool.ilog2()) as usize).min(max_log)
 }
 
 /// Computes the batched equality polynomial evaluations via a recursive algorithm.
@@ -1210,6 +1231,25 @@ mod tests {
 
             prop_assert_eq!(output_batch, expected_output);
         }
+    }
+
+    #[test]
+    fn task_count_never_exceeds_the_pool() {
+        // Invariant: the task count also sets the scalar cutoff.
+        //
+        // A count past the pool would send a large batch down the scalar recursion.
+        //
+        // Fixture state: 2^20 entries of 64 points each, which the cost model would cut
+        // into thousands of tasks.
+        let pool_log = current_num_threads().next_power_of_two().ilog2() as usize;
+        let entry_bytes = MUL_ACC_BYTES * 64 * size_of::<EF4>();
+        assert!(log_task_count(1 << 20, entry_bytes, 16) <= pool_log);
+
+        // The variable budget caps the count as well.
+        assert_eq!(log_task_count(1 << 20, entry_bytes, 0), 0);
+
+        // A table too cheap to split stays one task.
+        assert_eq!(log_task_count(16, size_of::<EF4>(), 16), 0);
     }
 
     #[test]
