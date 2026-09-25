@@ -24,6 +24,7 @@ rand.workspace = true
 
 [dev-dependencies]
 p3-baby-bear = { path = "../baby-bear" }
+p3-binary-field = { path = "../binary-field" }
 
 criterion.workspace = true
 proptest.workspace = true
@@ -38,6 +39,10 @@ harness = false
 
 [[bench]]
 name = "poly"
+harness = false
+
+[[bench]]
+name = "kernels"
 harness = false
 
 [lints]

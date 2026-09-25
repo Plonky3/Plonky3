@@ -14,8 +14,10 @@
 //!
 //! Evaluating eq(z, .) over all x in {0,1}^k produces a table of 2^k values.
 
+use alloc::vec::Vec;
+
 use itertools::Itertools;
-use p3_field::{ExtensionField, Field, PackedFieldExtension, PackedValue, dot_product};
+use p3_field::{Algebra, ExtensionField, Field, PackedFieldExtension, PackedValue, dot_product};
 use p3_util::log2_strict_usize;
 
 use super::packed_kernel::{compress_hi_dot_packed, compress_prefix_to_packed_packed};
@@ -128,6 +130,25 @@ impl<F: Field, EF: ExtensionField<F>> EqMaybePacked<F, EF> {
         }
     }
 
+    /// The stored packed entries, or `None` when the table is stored as scalars.
+    #[inline]
+    pub(super) fn as_packed(&self) -> Option<&[EF::ExtensionPacking]> {
+        match &self.0 {
+            PolyMaybePacked::Packed(eq1) => Some(eq1.as_slice()),
+            PolyMaybePacked::Scalar(_) => None,
+        }
+    }
+
+    /// The table's scalar entries in index order, unpacking the lanes of a packed table.
+    pub(super) fn to_scalars(&self) -> Vec<EF> {
+        match &self.0 {
+            PolyMaybePacked::Scalar(eq1) => eq1.as_slice().to_vec(),
+            PolyMaybePacked::Packed(eq1) => {
+                EF::ExtensionPacking::to_ext_iter(eq1.iter().copied()).collect()
+            }
+        }
+    }
+
     /// Inner product of this eq table with a base-field slice.
     ///
     /// Computes `sum_{i} eq1[i] * chunk[i]`.
@@ -141,10 +162,7 @@ impl<F: Field, EF: ExtensionField<F>> EqMaybePacked<F, EF> {
             PolyMaybePacked::Packed(eq1) => {
                 // Reinterpret the flat scalar slice as packed SIMD elements.
                 // Compute packed dot product, then reduce lanes to a single scalar.
-                let sum = dot_product(
-                    eq1.iter().copied(),
-                    F::Packing::pack_slice(chunk).iter().copied(),
-                );
+                let sum = packed_mixed_dot::<F, EF>(eq1.as_slice(), F::Packing::pack_slice(chunk));
                 // Horizontal reduction: sum the W lanes of each packed result element.
                 EF::ExtensionPacking::to_ext_iter([sum]).sum()
             }
@@ -210,15 +228,14 @@ impl<F: Field, EF: ExtensionField<F>> EqMaybePacked<F, EF> {
                     .for_each(|(out, &w1)| *out += weight * w1);
             }
             PolyMaybePacked::Packed(eq1) => {
-                // Unpack each SIMD element into W scalar lanes,
-                // then accumulate weight * lane_value into the output.
-                out.chunks_mut(F::Packing::WIDTH)
-                    .zip(eq1.iter())
-                    .for_each(|(out, &w1)| {
-                        out.iter_mut()
-                            .zip_eq(EF::ExtensionPacking::to_ext_iter([w1]))
-                            .for_each(|(out, w1)| *out += w1 * weight);
-                    });
+                // Multiply W lanes at once, then transpose the sum back into the scalar output.
+                //
+                // Unpacking first would leave every multiplication one lane wide.
+                let width = F::Packing::WIDTH;
+                for (out, &w1) in out.chunks_exact_mut(width).zip(eq1.iter()) {
+                    let sum = EF::ExtensionPacking::from_ext_slice(out) + w1 * weight;
+                    sum.to_ext_slice(out);
+                }
             }
         }
     }
@@ -507,7 +524,8 @@ impl<F: Field, EF: ExtensionField<F>> EqMaybePacked<F, EF> {
                 // Lane-parallel part: dot the packed weights with the packed chunk,
                 // then reduce the resulting packed value across its lanes.
                 if !packed.is_empty() {
-                    let packed_sum = dot_product(eq1.iter().copied(), packed.iter().copied());
+                    let packed_sum =
+                        packed_mixed_dot::<F, EF>(&eq1.as_slice()[..packed.len()], packed);
                     sum += EF::ExtensionPacking::to_ext_iter([packed_sum]).sum::<EF>();
                 }
 
@@ -545,6 +563,56 @@ impl<F: Field, EF: ExtensionField<F>> EqMaybePacked<F, EF> {
             }
         }
     }
+}
+
+/// Terms each unreduced block of a packed mixed dot product accumulates.
+///
+/// The block is the grain `mixed_dot_product` reduces at:
+/// - a Monty-31 packing sums the block's 64-bit products and reduces once,
+/// - a binary packing XORs the block's carry-less products and reduces once.
+///
+/// Eight terms keep the block inside the widest unrolled kernel either family ships.
+const DOT_BLOCK: usize = 8;
+
+/// Packed inner product of extension weights against base values, reduced once per block.
+///
+/// ```text
+///     sum_i weights[i] * values[i]
+/// ```
+///
+/// Each block goes through `mixed_dot_product`, which a packing overrides with a delayed reduction.
+/// The iterator form reduces after every single product instead.
+///
+/// # Panics
+///
+/// Panics if the two slices differ in length.
+#[inline]
+pub(crate) fn packed_mixed_dot<F, EF>(
+    weights: &[EF::ExtensionPacking],
+    values: &[F::Packing],
+) -> EF::ExtensionPacking
+where
+    F: Field,
+    EF: ExtensionField<F>,
+{
+    assert_eq!(weights.len(), values.len());
+    let (weight_blocks, weight_tail) = weights.as_chunks::<DOT_BLOCK>();
+    let (value_blocks, value_tail) = values.as_chunks::<DOT_BLOCK>();
+
+    // Full blocks: one reduction per coordinate per block.
+    let body: EF::ExtensionPacking = weight_blocks
+        .iter()
+        .zip(value_blocks)
+        .map(|(w, v)| {
+            <EF::ExtensionPacking as Algebra<F::Packing>>::mixed_dot_product::<DOT_BLOCK>(w, v)
+        })
+        .sum();
+
+    // Tail: fewer than one block, reduced after each product.
+    body + dot_product::<EF::ExtensionPacking, _, _>(
+        weight_tail.iter().copied(),
+        value_tail.iter().copied(),
+    )
 }
 
 /// Adds one outer chunk of the successor decomposition from a stream of equality weights.
