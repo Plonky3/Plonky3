@@ -389,7 +389,7 @@ pub enum BooleanTraceCommitmentError<E> {
         batch: usize,
     },
 
-    /// The inner opening disagreed with the prover's independently computed batch value.
+    /// The inner opening disagreed with the value combined from the claimed column values.
     #[error("column batch {batch} returned an aggregate value different from its claimed columns")]
     ColumnBatchValueMismatch {
         /// Batch whose aggregate value disagreed.
@@ -602,8 +602,8 @@ where
             let offset = values.len();
             tracing::info_span!("evaluate boolean columns", width, next).in_scope(|| {
                 for (point, known) in run_points.iter().zip(run_known) {
-                    // A supplied run is bound as it stands; the reduction below still reads
-                    // every value it combines off the committed bits and refuses a mismatch.
+                    // A supplied run is bound as it stands; the reduction below compares each
+                    // block's combination of it against the committed bits.
                     if let Some(known) = known {
                         values.extend_from_slice(known.current());
                         values.extend_from_slice(known.next());

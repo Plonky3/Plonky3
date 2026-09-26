@@ -132,6 +132,8 @@ where
 /// AIRs with no preprocessed columns. Each proof clones the committed data to open
 /// it at this proof's point without rebuilding the preprocessed commitment.
 ///
+/// The proving key must come from `setup` over these AIRs, in this order.
+///
 /// # Arguments
 ///
 /// - `config`: proof configuration selecting the commitment schemes.

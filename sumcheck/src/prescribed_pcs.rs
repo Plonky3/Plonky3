@@ -208,9 +208,17 @@ where
     ///
     /// # Soundness
     ///
-    /// A supplied value is bound exactly as a computed one is, and the verifier never reads it
-    /// from anywhere but the proof. A wrong one therefore yields a refused opening or a proof
-    /// that does not verify, never one that does.
+    /// A scheme that binds a supplied value must bind it exactly as a computed one is bound.
+    ///
+    /// The verifier then reads it only from the proof, so a wrong one yields a refused opening
+    /// or a proof that does not verify, never one that does.
+    ///
+    /// # Errors
+    ///
+    /// A scheme that reads `known` refuses a list without one entry per batch, or an entry
+    /// shaped unlike its batch, before the transcript moves.
+    ///
+    /// Otherwise as [`open_at`](PrescribedPointPcs::open_at).
     ///
     /// # Panics
     ///
