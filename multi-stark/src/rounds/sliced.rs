@@ -56,15 +56,21 @@ use crate::sliced::{
 /// Each round doubles both the plane work and the corner words a residual row folds, so the
 /// count has a ceiling. A stage is also capped by the row variables its words leave unbound.
 /// With its late-materialization parameter set, [`ReprBackend`](crate::ReprBackend) also serves
-/// the round after a qualifying stage's boundary round from its planes.
+/// the one or two rounds after a qualifying stage's boundary round from its planes.
 pub const MAX_SLICED_ROUNDS: usize = 4;
+
+/// Longest prefix a round evaluated on the planes has bound.
+///
+/// A stage evaluates its sliced rounds with at most [`MAX_SLICED_ROUNDS`] challenges bound. The
+/// delayed boundary path evaluates rounds four and five on the planes as well, the last with
+/// one challenge more.
+const MAX_PLANE_ROUND_PREFIX: usize = MAX_SLICED_ROUNDS + 1;
 
 /// Longest prefix a plane fold binds.
 ///
-/// A stage evaluates rounds on its planes with at most [`MAX_SLICED_ROUNDS`] challenges bound.
-/// The boundary fold and the delayed boundary path bind the challenge of their last such round
-/// as they unslice, so a plane fold binds at most one challenge more.
-const MAX_PLANE_FOLD_ROUNDS: usize = MAX_SLICED_ROUNDS + 1;
+/// The boundary fold and the delayed boundary path bind the challenge of their last round on the
+/// planes as they unslice, so a plane fold binds at most one challenge more than such a round.
+const MAX_PLANE_FOLD_ROUNDS: usize = MAX_PLANE_ROUND_PREFIX + 1;
 
 /// How a sliced first round is used by a backend.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -73,7 +79,7 @@ pub(crate) enum SlicedStrategy {
     Sequential,
     /// Build the four-variable tensor used by the representation backend lookahead.
     TensorBoundary,
-    /// Build the tensor, then retain its planes for one later representation round.
+    /// Build the tensor, then retain its planes for one or two later representation rounds.
     TensorBoundaryLate,
 }
 
@@ -82,10 +88,29 @@ const LANE_VARIABLES: usize = SLICED_LANES.trailing_zeros() as usize;
 
 /// Fewest row variables a stage takes the delayed boundary path with.
 ///
-/// Its round-four fold binds [`MAX_PLANE_FOLD_ROUNDS`] challenges, which must leave a whole
-/// word of residual rows. Its round-four evaluation binds one challenge fewer, which must leave
-/// a whole word pair. Either way the stage needs [`LANE_VARIABLES`] past the fold's prefix.
-const MIN_LATE_BOUNDARY_VARS: usize = MAX_PLANE_FOLD_ROUNDS + LANE_VARIABLES;
+/// Its round-four fold binds five challenges, which must leave a whole word of residual rows.
+/// Its round-four evaluation binds one challenge fewer, which must leave a whole word pair.
+/// Either way the stage needs [`LANE_VARIABLES`] past the fold's prefix.
+const MIN_LATE_BOUNDARY_VARS: usize = MAX_SLICED_ROUNDS + 1 + LANE_VARIABLES;
+
+/// Fewest row variables with which the delayed boundary path also serves round five.
+///
+/// Its round-five fold binds [`MAX_PLANE_FOLD_ROUNDS`] challenges, which must leave a whole word.
+const MIN_LATE_ROUND_FIVE_VARS: usize = MAX_PLANE_FOLD_ROUNDS + LANE_VARIABLES;
+
+/// The last round the delayed boundary path evaluates on the planes of a stage of `num_vars` row
+/// variables, whose representation field packs `lanes` rows to a lane group.
+///
+/// Round five also needs [`MIN_LATE_ROUND_FIVE_VARS`] row variables and a packing wider than one
+/// row. With one row to a lane group, a round on the planes reads each residual row of every
+/// column on its own, and round five runs faster over the residual columns it would spare.
+pub(crate) const fn last_late_round(num_vars: usize, lanes: usize) -> usize {
+    if lanes > 1 && num_vars >= MIN_LATE_ROUND_FIVE_VARS {
+        5
+    } else {
+        4
+    }
+}
 
 #[cfg(test)]
 std::thread_local! {
@@ -1368,7 +1393,8 @@ pub(super) struct SlicedColumns<'data, EF> {
     challenges: Vec<EF>,
     /// Optional four-variable tensor retained by the representation backend.
     tensor: Option<SlicedTensor<EF>>,
-    /// Whether the representation backend may defer materialization through round four.
+    /// Whether the representation backend may defer materialization through round four, or
+    /// through round five, see [`last_late_round`].
     late_boundary: bool,
 }
 
@@ -1385,9 +1411,9 @@ impl<EF> SlicedColumns<'_, EF> {
 
     /// Whether the stage's sliced rounds are spent and its planes can still serve a round.
     ///
-    /// This admits the boundary round alone. The delayed boundary path evaluates its round four
-    /// with one more challenge bound, so this is false there, and
-    /// [`RoundStateExt::round_poly_late_boundary`] gates that round instead.
+    /// This admits the boundary round alone. The delayed boundary path evaluates its rounds four
+    /// and five with more challenges bound, so this is false there, and
+    /// [`RoundStateExt::round_poly_late_boundary`] gates those rounds instead.
     ///
     /// A word pair is the shortest run of residual rows that holds both halves of a row pair.
     const fn at_boundary(&self) -> bool {
@@ -1498,10 +1524,11 @@ mod gfni {
         __m128i, __m512i, _mm_storel_epi64, _mm_storeu_si128, _mm_unpackhi_epi64,
         _mm512_castsi512_si128, _mm512_extracti32x4_epi32, _mm512_gf2p8affine_epi64_epi8,
         _mm512_maskz_loadu_epi64, _mm512_permutexvar_epi8, _mm512_set1_epi64, _mm512_storeu_si512,
-        _mm512_unpackhi_epi8, _mm512_unpackhi_epi16, _mm512_unpacklo_epi8, _mm512_unpacklo_epi16,
+        _mm512_unpackhi_epi8, _mm512_unpackhi_epi16, _mm512_unpackhi_epi32, _mm512_unpacklo_epi8,
+        _mm512_unpacklo_epi16, _mm512_unpacklo_epi32,
     };
 
-    use super::{GROUP_CORNERS, ROW_HALVES, SLICED_LANES, TILE_GROUPS};
+    use super::{GROUP_CORNERS, ROW_HALVES, SLICED_LANES};
 
     /// Lanes one lane group of the cell writers spans.
     ///
@@ -1620,11 +1647,7 @@ mod gfni {
     /// lines up each lane's four bytes in cell order. It stays inside 128-bit lanes: 128-bit lane
     /// `k` of the `j`-th result holds lanes `16 k + 4 j .. 16 k + 4 j + 4`, lane group `4 k + j`.
     #[inline]
-    pub(super) fn write_cells_two(
-        words: [[&[u64]; TILE_GROUPS]; ROW_HALVES],
-        stride: usize,
-        out: &mut [u8],
-    ) {
+    pub(super) fn write_cells_two(words: [[&[u64]; 2]; ROW_HALVES], stride: usize, out: &mut [u8]) {
         let [[m0, m1], [m2, m3]] = words.map(|half| half.map(masks));
         // SAFETY: this module is compiled only where the build enables every target feature the
         // intrinsics name. Each store writes the sixteen bytes of the slice `out` it is handed,
@@ -1642,6 +1665,52 @@ mod gfni {
                 for (k, cells) in quarters(cells).into_iter().enumerate() {
                     let out = &mut out[(4 * k + j) * stride..][..16];
                     _mm_storeu_si128(out.as_mut_ptr().cast(), cells);
+                }
+            }
+        }
+    }
+
+    /// One plane's cells of one column for every lane, four corner groups to a half.
+    ///
+    /// `words[h][g]` are the corners of group `g` in half `h`, and the cells of lane group `j`
+    /// start `j * stride` bytes into `out`, see [`super::PlaneFold::write_cells`].
+    ///
+    /// Three rounds of unpacking, of bytes, byte pairs, then quadruples, line up each lane's
+    /// eight bytes in cell order. They stay inside 128-bit lanes: 128-bit lane `k` of the `j`-th
+    /// pair of results holds lanes `16 k + 4 j .. 16 k + 4 j + 2`, then the next two lanes, the
+    /// two halves of lane group `4 k + j`.
+    #[inline]
+    pub(super) fn write_cells_four(
+        words: [[&[u64]; 4]; ROW_HALVES],
+        stride: usize,
+        out: &mut [u8],
+    ) {
+        let [[m0, m1, m2, m3], [m4, m5, m6, m7]] = words.map(|half| half.map(masks));
+        // SAFETY: this module is compiled only where the build enables every target feature the
+        // intrinsics name. Each store writes the sixteen bytes of the slice `out` it is handed,
+        // unaligned.
+        unsafe {
+            let pairs = [(m0, m1), (m2, m3), (m4, m5), (m6, m7)]
+                .map(|(a, b)| [_mm512_unpacklo_epi8(a, b), _mm512_unpackhi_epi8(a, b)]);
+            let quads = [(0, 1), (2, 3)].map(|(a, b)| {
+                let [a, b] = [pairs[a], pairs[b]];
+                [
+                    _mm512_unpacklo_epi16(a[0], b[0]),
+                    _mm512_unpackhi_epi16(a[0], b[0]),
+                    _mm512_unpacklo_epi16(a[1], b[1]),
+                    _mm512_unpackhi_epi16(a[1], b[1]),
+                ]
+            });
+            for (j, (low, high)) in quads[0].into_iter().zip(quads[1]).enumerate() {
+                let halves = [
+                    _mm512_unpacklo_epi32(low, high),
+                    _mm512_unpackhi_epi32(low, high),
+                ];
+                for (half, cells) in halves.into_iter().enumerate() {
+                    for (k, cells) in quarters(cells).into_iter().enumerate() {
+                        let out = &mut out[(4 * k + j) * stride + 16 * half..][..16];
+                        _mm_storeu_si128(out.as_mut_ptr().cast(), cells);
+                    }
                 }
             }
         }
@@ -1674,8 +1743,11 @@ const GROUP_CORNERS: usize = 8;
 /// Entries of one corner group's subset-sum table, one per value of a mask byte.
 const GROUP_ENTRIES: usize = 1 << u8::BITS;
 
-/// Corners the bound variables of a stage evaluating a round on its planes can range over.
+/// Corners the bound variables of a stage evaluating a sliced round can range over.
 const MAX_CORNERS: usize = 1 << MAX_SLICED_ROUNDS;
+
+/// Corners the bound variables of any round evaluated on the planes can range over.
+const MAX_PLANE_ROUND_CORNERS: usize = 1 << MAX_PLANE_ROUND_PREFIX;
 
 /// Corners the bound variables of an unslice that binds the boundary challenge range over.
 const MAX_PLANE_FOLD_CORNERS: usize = 1 << MAX_PLANE_FOLD_ROUNDS;
@@ -1685,8 +1757,8 @@ const MAX_PLANE_FOLD_GROUPS: usize = MAX_PLANE_FOLD_CORNERS / GROUP_CORNERS;
 
 /// Corner groups a tile cell holds at most, one byte each per half, see [`RowTile`].
 ///
-/// A tile's plane fold binds at most [`MAX_SLICED_ROUNDS`] challenges.
-const TILE_GROUPS: usize = MAX_CORNERS.div_ceil(GROUP_CORNERS);
+/// A tile's plane fold binds at most [`MAX_PLANE_ROUND_PREFIX`] challenges.
+const TILE_GROUPS: usize = MAX_PLANE_ROUND_CORNERS.div_ceil(GROUP_CORNERS);
 
 /// Halves of the residual rows a round reads side by side: the low one and the high one.
 const ROW_HALVES: usize = 2;
@@ -1707,8 +1779,8 @@ const STAGED_COLUMNS: usize = 64;
 /// so one set serves a whole round.
 ///
 /// Each word's corners are gathered into buffers of `CORNERS` words per plane. Only an unslice
-/// that binds one challenge past [`MAX_SLICED_ROUNDS`] needs [`MAX_PLANE_FOLD_CORNERS`].
-struct PlaneFold<'a, R, const CORNERS: usize = MAX_CORNERS> {
+/// that binds one challenge past [`MAX_PLANE_ROUND_PREFIX`] needs [`MAX_PLANE_FOLD_CORNERS`].
+struct PlaneFold<'a, R, const CORNERS: usize = MAX_PLANE_ROUND_CORNERS> {
     /// The stage's planes.
     trace: &'a SlicedTrace<'a>,
     /// Subset sums of the eq weights, one table per corner group.
@@ -2019,6 +2091,11 @@ impl<'a, R: Field, const CORNERS: usize> PlaneFold<'a, R, CORNERS> {
                         halves.map(|words| [0, 1].map(|group| self.plane_group(words, group)));
                     return gfni::write_cells_two(halves, stride, out);
                 }
+                4 => {
+                    let halves = halves
+                        .map(|words| [0, 1, 2, 3].map(|group| self.plane_group(words, group)));
+                    return gfni::write_cells_four(halves, stride, out);
+                }
                 _ => {}
             }
         }
@@ -2233,14 +2310,19 @@ impl RowTile {
         scratch: &mut Scratch<R, R>,
     ) {
         const ONE: usize = ROW_HALVES;
-        const TWO: usize = TILE_GROUPS * ROW_HALVES;
+        const TWO: usize = 2 * ROW_HALVES;
+        const FOUR: usize = TILE_GROUPS * ROW_HALVES;
         match (self.cell, self.high) {
             (ONE, false) => self.read_row_cells::<R, ONE, false>(fold, lane, next_columns, scratch),
             (ONE, true) => self.read_row_cells::<R, ONE, true>(fold, lane, next_columns, scratch),
             (TWO, false) => self.read_row_cells::<R, TWO, false>(fold, lane, next_columns, scratch),
             (TWO, true) => self.read_row_cells::<R, TWO, true>(fold, lane, next_columns, scratch),
+            (FOUR, false) => {
+                self.read_row_cells::<R, FOUR, false>(fold, lane, next_columns, scratch);
+            }
+            (FOUR, true) => self.read_row_cells::<R, FOUR, true>(fold, lane, next_columns, scratch),
             (cell, _) => {
-                unreachable!("a tile's rows read one or two corner groups, not {cell} bytes")
+                unreachable!("a tile's rows read one, two or four corner groups, not {cell} bytes")
             }
         }
     }
@@ -2306,7 +2388,8 @@ impl RowTile {
         scratch: &mut PackedScratch<PackedRepr<F, R>, PackedRepr<F, R>>,
     ) {
         const ONE: usize = ROW_HALVES;
-        const TWO: usize = TILE_GROUPS * ROW_HALVES;
+        const TWO: usize = 2 * ROW_HALVES;
+        const FOUR: usize = TILE_GROUPS * ROW_HALVES;
         match (self.cell, self.high) {
             (ONE, false) => {
                 self.read_lane_group_cells::<F, R, ONE, false>(fold, lane, next_columns, scratch);
@@ -2320,8 +2403,14 @@ impl RowTile {
             (TWO, true) => {
                 self.read_lane_group_cells::<F, R, TWO, true>(fold, lane, next_columns, scratch);
             }
+            (FOUR, false) => {
+                self.read_lane_group_cells::<F, R, FOUR, false>(fold, lane, next_columns, scratch);
+            }
+            (FOUR, true) => {
+                self.read_lane_group_cells::<F, R, FOUR, true>(fold, lane, next_columns, scratch);
+            }
             (cell, _) => {
-                unreachable!("a tile's rows read one or two corner groups, not {cell} bytes")
+                unreachable!("a tile's rows read one, two or four corner groups, not {cell} bytes")
             }
         }
     }
@@ -2590,30 +2679,33 @@ where
         true
     }
 
-    /// Bind round three or four of the delayed boundary path without materializing an
+    /// Bind round three, four or five of the delayed boundary path without materializing an
     /// intermediate residual column.
     ///
-    /// The round-three fold only drops the tensor. The round-four fold consumes all five
-    /// recorded challenges through [`Self::unslice_with`] at [`MAX_PLANE_FOLD_CORNERS`] corners,
-    /// so its first scalar columns have length `N / 32`.
+    /// The round-three fold only drops the tensor. The fold of the path's last round on the
+    /// planes, see [`last_late_round`], consumes every recorded challenge through
+    /// [`Self::unslice_with`] at [`MAX_PLANE_FOLD_CORNERS`] corners, so its first scalar columns
+    /// have length `N / 32` or `N / 64`. A round-four fold before a round five on the planes only
+    /// records its challenge.
     pub(crate) fn fold_late_boundary<S>(&mut self, r: EF) -> bool
     where
         S: Field,
         EF: HasSubfield<S>,
     {
-        let (round, prefix_len, tensor_present, late) = match &self.columns {
+        let (round, prefix_len, tensor_present, late, last) = match &self.columns {
             ExtColumns::Sliced(columns) => (
                 self.round,
                 columns.challenges.len(),
                 columns.tensor.is_some(),
                 columns.late_boundary,
+                last_late_round(columns.trace.num_vars, R::Packing::WIDTH),
             ),
             _ => return false,
         };
         let valid = late
             && match round {
                 3 => prefix_len == 3 && tensor_present,
-                4 => prefix_len == 4 && !tensor_present,
+                4 | 5 => round <= last && prefix_len == round && !tensor_present,
                 _ => false,
             };
         if !valid {
@@ -2631,16 +2723,18 @@ where
                 self.boundary.apply(R::from(r));
                 self.round += 1;
             }
-            4 => {
+            4 | 5 => {
                 let ExtColumns::Sliced(columns) = &mut self.columns else {
                     unreachable!("late boundary gate checked sliced columns")
                 };
                 columns.challenges.push(r);
-                self.unslice_with::<S, MAX_PLANE_FOLD_CORNERS>();
+                if round == last {
+                    self.unslice_with::<S, MAX_PLANE_FOLD_CORNERS>();
+                }
                 self.boundary.apply(R::from(r));
                 self.round += 1;
             }
-            _ => unreachable!("late boundary gate checked round three or four"),
+            _ => unreachable!("late boundary gate checked round three, four or five"),
         }
         true
     }
@@ -2681,8 +2775,8 @@ where
 
     /// Evaluate one representation-field round directly from the stage's planes.
     ///
-    /// This is shared by the incumbent boundary round and the delayed fifth-challenge path so
-    /// both use the same row/packed evaluator, node schedule, and finish-round semantics.
+    /// This is shared by the incumbent boundary round and the delayed boundary path's rounds so
+    /// all use the same row/packed evaluator, node schedule, and finish-round semantics.
     ///
     /// # Panics
     ///
@@ -2726,7 +2820,9 @@ where
         )
     }
 
-    /// Evaluate round four of the delayed boundary path from the retained planes.
+    /// Evaluate round four or five of the delayed boundary path from the retained planes.
+    ///
+    /// Round five is served only when [`last_late_round`] is five.
     pub(crate) fn round_poly_late_boundary<S>(&mut self, eq_suffix: &Poly<EF>) -> Option<Vec<EF>>
     where
         S: Field,
@@ -2743,8 +2839,9 @@ where
         };
         if !columns.late_boundary
             || columns.tensor.is_some()
-            || self.round != 4
-            || columns.challenges.len() != 4
+            || !(4..=last_late_round(columns.trace.num_vars, R::Packing::WIDTH))
+                .contains(&self.round)
+            || columns.challenges.len() != self.round
             || !SLICED_LANES.is_multiple_of(R::Packing::WIDTH)
         {
             return None;

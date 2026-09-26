@@ -16,7 +16,7 @@ use p3_binary_field::{BinaryChallenger, BinaryField2, BinaryField128, Ghash128, 
 use p3_challenger::{
     CanObserve, CanSample, CanSampleBits, FieldChallenger, GrindingChallenger, HashChallenger,
 };
-use p3_field::{HasSubfield, PrimeCharacteristicRing};
+use p3_field::{Field, HasSubfield, PackedValue, PrimeCharacteristicRing};
 use p3_keccak::Keccak256Hash;
 use p3_lookup::{Count, InteractionBuilder};
 use p3_matrix::dense::RowMajorMatrix;
@@ -31,7 +31,7 @@ use crate::config::DEFAULT_SLICED_ROUNDS;
 use crate::lookup::{
     ActiveLookupRuntime, AirLinkClaim, AirLinkInstance, AirLinkLookup, LookupRuntime,
 };
-use crate::rounds::sliced::{LATE_BOUNDARY_ROUNDS, MAX_SLICED_ROUNDS};
+use crate::rounds::sliced::{LATE_BOUNDARY_ROUNDS, MAX_SLICED_ROUNDS, last_late_round};
 use crate::sliced::SLICED_LANES;
 
 /// The trace and challenge field of every fixture.
@@ -1261,6 +1261,12 @@ fn only_the_late_backend_dispatch_serves_round_four_from_the_planes() {
         late_boundary_rounds::<ReprBackend<Gf4, PolyBasis, true>>(&short),
         0,
         "a stage below the floor refuses the delayed round"
+    );
+    let tall = [Instance::honest(FixtureAir::Pair, 1 << 12, 0x007E_5052)];
+    assert_eq!(
+        late_boundary_rounds::<ReprBackend<Gf4, PolyBasis, true>>(&tall),
+        last_late_round(12, <PolyBasis as Field>::Packing::WIDTH) - 3,
+        "the late backend serves round five of a taller stage from its planes where it packs"
     );
 }
 

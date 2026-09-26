@@ -693,9 +693,9 @@ fn plane_fold_reference_covers_prefixes_widths_and_special_challenges() {
 #[should_panic(
     expected = "a plane fold's corner buffers must hold every corner of its bound prefix"
 )]
-fn a_default_plane_fold_refuses_the_delayed_five_challenge_prefix() {
-    // Only an unslice that binds the challenge past the sliced rounds gathers five challenges'
-    // worth of corners, through a fold sized for them.
+fn a_default_plane_fold_refuses_the_delayed_six_challenge_prefix() {
+    // Only an unslice that binds the challenge past the last round on the planes gathers six
+    // challenges' worth of corners, through a fold sized for them.
     let (trace, _) = plane_fold_trace_fixture(11, 1, true);
     let prefix = [Tower::from_repr(0x1234); MAX_PLANE_FOLD_ROUNDS];
     let _ = PlaneFold::<Tower>::new::<Gf4, Tower>(&trace, &prefix);
@@ -833,25 +833,37 @@ fn late_boundary_keeps_planes_until_fifth_challenge() {
                 matches!(&state.columns, ExtColumns::Sliced(columns) if columns.challenges.len() == 4 && columns.late_boundary && columns.tensor.is_none() && columns.num_evals() == height >> 4)
             );
 
+            // A stage with a whole word left past six challenges keeps its planes through round
+            // five as well, where the packing reads the planes by lane group.
+            let last = last_late_round(
+                height.trailing_zeros() as usize,
+                <Ghash128 as Field>::Packing::WIDTH,
+            );
             let tau = state.tau.as_slice().to_vec();
-            let suffix = Poly::new_from_point(&tau[5..], Tower::ONE);
-            let round_four = state
-                .round_poly_late_boundary::<Gf4>(&suffix)
-                .expect("late plane evaluator should serve round four");
-            assert_eq!(
-                round_four,
-                state
+            for round in 4..=last {
+                let suffix = Poly::new_from_point(&tau[round + 1..], Tower::ONE);
+                let round_poly = state
                     .round_poly_late_boundary::<Gf4>(&suffix)
-                    .expect("late round should replay deterministically")
-            );
-
-            assert!(state.fold_late_boundary::<Gf4>(challenge(4)));
+                    .expect("late plane evaluator should serve the round");
+                assert_eq!(
+                    round_poly,
+                    state
+                        .round_poly_late_boundary::<Gf4>(&suffix)
+                        .expect("late round should replay deterministically")
+                );
+                assert!(state.fold_late_boundary::<Gf4>(challenge(round)));
+                if round < last {
+                    assert!(
+                        matches!(&state.columns, ExtColumns::Sliced(columns) if columns.challenges.len() == round + 1 && columns.num_evals() == height >> (round + 1))
+                    );
+                }
+            }
             assert!(
-                matches!(&state.columns, ExtColumns::Scalar(columns) if columns.len() == 3 && columns.iter().all(|column| column.num_evals() == height >> 5))
+                matches!(&state.columns, ExtColumns::Scalar(columns) if columns.len() == 3 && columns.iter().all(|column| column.num_evals() == height >> (last + 1)))
             );
-            assert_eq!(state.round, 5);
+            assert_eq!(state.round, last + 1);
 
-            for round in 5..tau.len() {
+            for round in last + 1..tau.len() {
                 let tau = state.tau.as_slice().to_vec();
                 let suffix = Poly::new_from_point(&tau[round + 1..], Tower::ONE);
                 state.round_poly_repr(&suffix);
@@ -1184,14 +1196,18 @@ fn tensor4_evaluates_mixed_linear_and_quadratic_airs() {
 }
 
 /// Collect the complete direct-state transcript for the incumbent tensor4 path or the delayed
-/// plane path, using caller-supplied first five fold challenges.
-fn collect_late_boundary_rounds(instances: &[Instance], prefix: [Tower; 5], late: bool) -> Rounds {
+/// plane path, using caller-supplied first `N` fold challenges.
+fn collect_late_boundary_rounds<const N: usize>(
+    instances: &[Instance],
+    prefix: [Tower; N],
+    late: bool,
+) -> Rounds {
     collect_late_boundary_rounds_with_tau(instances, prefix, late, None, None)
 }
 
-fn collect_late_boundary_rounds_with_tau(
+fn collect_late_boundary_rounds_with_tau<const N: usize>(
     instances: &[Instance],
-    prefix: [Tower; 5],
+    prefix: [Tower; N],
     late: bool,
     tau4: Option<Tower>,
     tau5: Option<Tower>,
@@ -1202,9 +1218,9 @@ fn collect_late_boundary_rounds_with_tau(
 }
 
 /// The complete transcript [`collect_late_boundary_rounds_with_tau`] collects, from `state`.
-fn late_boundary_transcript(
+fn late_boundary_transcript<const N: usize>(
     mut state: RoundStateBase<'_, '_, FixtureAir, Tower, Tower>,
-    prefix: [Tower; 5],
+    prefix: [Tower; N],
     late: bool,
     tau4: Option<Tower>,
     tau5: Option<Tower>,
@@ -1229,6 +1245,7 @@ fn late_boundary_transcript(
         .expect("eligible tensor stage should build");
     let mut state = state.fold_sliced::<Ghash128>(prefix[0]);
     let tau = state.tau.as_slice().to_vec();
+    let late_rounds = 4..=last_late_round(tau.len(), <Ghash128 as Field>::Packing::WIDTH);
     let mut round_polys = vec![first];
     for round in 1..tau.len() {
         let suffix = Poly::new_from_point(&tau[round + 1..], Tower::ONE);
@@ -1236,10 +1253,10 @@ fn late_boundary_transcript(
             state
                 .round_poly_sliced::<Gf4>(&suffix)
                 .expect("tensor should serve its four rounds")
-        } else if late && round == 4 {
+        } else if late && late_rounds.contains(&round) {
             state
                 .round_poly_late_boundary::<Gf4>(&suffix)
-                .expect("late boundary should serve round four")
+                .expect("late boundary should serve its rounds")
         } else {
             state.round_poly_repr(&suffix)
         };
@@ -1255,7 +1272,7 @@ fn late_boundary_transcript(
             assert!(state.fold_late_boundary::<Gf4>(challenge));
         } else if !late && round == 3 {
             assert!(state.fold_boundary::<Gf4>(challenge));
-        } else if late && round == 4 {
+        } else if late && late_rounds.contains(&round) {
             assert!(state.fold_late_boundary::<Gf4>(challenge));
         } else {
             state.fold_repr(challenge);
@@ -1278,9 +1295,11 @@ fn late_boundary_transcript(
 
 /// A stage of packed Boolean tables runs the tensor and delayed boundary paths on its low plane
 /// alone, borrowed from one table or copied from several, to the dense stage's transcript.
+///
+/// The taller stage also serves round five from its planes where the packing reads them by lane
+/// group.
 #[test]
 fn packed_tables_match_dense_on_the_late_boundary_path() {
-    let height = 1 << 11;
     let prefix = [
         challenge(0),
         challenge(1),
@@ -1288,17 +1307,23 @@ fn packed_tables_match_dense_on_the_late_boundary_path() {
         challenge(3),
         challenge(4),
     ];
-    for instances in [
-        vec![Instance::honest(FixtureAir::Pair, height, 0x007E_50D1)],
-        vec![
-            Instance::honest(FixtureAir::Pair, height, 0x007E_50D2),
-            Instance::honest(
-                FixtureAir::Linear { scale: Tower::ONE },
-                height,
-                0x007E_50D3,
-            ),
-        ],
-    ] {
+    for (height, instances) in [1 << 11, 1 << MIN_LATE_ROUND_FIVE_VARS]
+        .into_iter()
+        .flat_map(|height| {
+            [
+                vec![Instance::honest(FixtureAir::Pair, height, 0x007E_50D1)],
+                vec![
+                    Instance::honest(FixtureAir::Pair, height, 0x007E_50D2),
+                    Instance::honest(
+                        FixtureAir::Linear { scale: Tower::ONE },
+                        height,
+                        0x007E_50D3,
+                    ),
+                ],
+            ]
+            .map(|instances| (height, instances))
+        })
+    {
         let dense = instances
             .iter()
             .map(Instance::main_table)
@@ -1326,7 +1351,7 @@ fn packed_tables_match_dense_on_the_late_boundary_path() {
             assert_eq!(
                 run(&packed),
                 run(&dense),
-                "{} tables, late {late}",
+                "{} tables, height {height}, late {late}",
                 instances.len()
             );
         }
@@ -1372,9 +1397,29 @@ fn late_boundary_matches_incumbent_for_all_special_prefix_coordinates() {
 }
 
 #[test]
+fn late_round_five_matches_incumbent_for_all_special_prefix_coordinates() {
+    // Round five on the planes binds the round-four challenge into its fold, and its own
+    // challenge into the unslice.
+    let height = 1 << MIN_LATE_ROUND_FIVE_VARS;
+    let instances = [Instance::honest(FixtureAir::Pair, height, 0x007E_50B5)];
+    let lambda = Tower::interpolation_node(2);
+    let special = [Tower::ZERO, Tower::ONE, lambda, Tower::from_repr(0x1234)];
+    let ordinary = core::array::from_fn::<_, 6, _>(challenge);
+    for coordinate in 0..ordinary.len() {
+        for &value in &special {
+            let mut prefix = ordinary;
+            prefix[coordinate] = value;
+            assert_eq!(
+                collect_late_boundary_rounds(&instances, prefix, true),
+                collect_late_boundary_rounds(&instances, prefix, false),
+                "special coordinate {coordinate}, value {value:?}"
+            );
+        }
+    }
+}
+
+#[test]
 fn late_boundary_matches_incumbent_for_special_tau4_and_tau5() {
-    let height = 1 << 11;
-    let instances = [Instance::honest(FixtureAir::Pair, height, 0x007E_50B3)];
     let special = [
         Tower::ONE,
         Tower::interpolation_node(2),
@@ -1387,25 +1432,28 @@ fn late_boundary_matches_incumbent_for_special_tau4_and_tau5() {
         challenge(3),
         challenge(4),
     ];
-    for &tau4 in &special {
-        for &tau5 in &special {
-            assert_eq!(
-                collect_late_boundary_rounds_with_tau(
-                    &instances,
-                    prefix,
-                    true,
-                    Some(tau4),
-                    Some(tau5),
-                ),
-                collect_late_boundary_rounds_with_tau(
-                    &instances,
-                    prefix,
-                    false,
-                    Some(tau4),
-                    Some(tau5),
-                ),
-                "special tau4={tau4:?}, tau5={tau5:?}"
-            );
+    for height in [1 << 11, 1 << MIN_LATE_ROUND_FIVE_VARS] {
+        let instances = [Instance::honest(FixtureAir::Pair, height, 0x007E_50B3)];
+        for &tau4 in &special {
+            for &tau5 in &special {
+                assert_eq!(
+                    collect_late_boundary_rounds_with_tau(
+                        &instances,
+                        prefix,
+                        true,
+                        Some(tau4),
+                        Some(tau5),
+                    ),
+                    collect_late_boundary_rounds_with_tau(
+                        &instances,
+                        prefix,
+                        false,
+                        Some(tau4),
+                        Some(tau5),
+                    ),
+                    "height {height}, special tau4={tau4:?}, tau5={tau5:?}"
+                );
+            }
         }
     }
 }
@@ -2542,7 +2590,7 @@ fn successor_planes(trace: &SlicedTrace<'_>) -> Planes<'static> {
 #[test]
 fn a_reused_tile_reads_the_plane_fold_of_every_row_pair() {
     let lanes = <Ghash128 as Field>::Packing::WIDTH;
-    for (prefix_len, width) in [(3, 5), (4, 5), (3, 70), (4, 130)] {
+    for (prefix_len, width) in [(3, 5), (4, 5), (3, 70), (4, 130), (5, 5), (5, 70)] {
         let (mut trace, _) = plane_fold_trace_fixture(prefix_len + LANE_VARIABLES + 3, width, true);
         let challenges = (0..prefix_len)
             .map(|index| Tower::from_repr(0x51 + index as u128))
@@ -2726,7 +2774,7 @@ fn a_low_plane_reads_like_its_plane_pairs() {
             );
         }
 
-        if prefix_len <= MAX_SLICED_ROUNDS {
+        if prefix_len <= MAX_PLANE_ROUND_PREFIX {
             let fold_pairs = PlaneFold::<Ghash128>::new::<Gf4, Tower>(&pairs, &challenges);
             let fold_low = PlaneFold::<Ghash128>::new::<Gf4, Tower>(&low, &challenges);
             let mut tile_pairs = RowTile::new::<Ghash128>(fold_pairs.corners, width);
