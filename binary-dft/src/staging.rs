@@ -190,16 +190,20 @@ pub(crate) fn prefault(values: &mut [u128]) {
 /// Gather every tile of the leading coset once, and scatter one result per coset from it.
 ///
 /// `values` is `values.len() / coset_len` cosets of `coset_len` elements, and the tiles lay out
-/// the leading one. Each gathered tile goes to `prepare` once. Every coset then gets its own
-/// copy of the prepared tile, handed to `process` with its block and the coset's index, and
-/// scattered to the same runs of that coset. The leading coset is processed last, from the
-/// gathered tile itself, once every other coset has taken its copy.
+/// the leading one. The tiles are gathered from `source` when one is given, a run of
+/// `coset_len` elements standing in for the leading coset, and from the leading coset itself
+/// otherwise. Each gathered tile goes to `prepare` once. Every coset then gets its own copy of
+/// the prepared tile, handed to `process` with its block and the coset's index, and scattered
+/// to the same runs of that coset. The leading coset is processed last, from the gathered tile
+/// itself, once every other coset has taken its copy.
 ///
 /// # Panics
-/// Panics if the cosets do not partition `values`, if the tiles do not partition one coset, if
-/// a tile's walk reaches past the end of a coset, or if `coset_len` or `run` is zero.
+/// Panics if the cosets do not partition `values`, if a source is not one coset long, if the
+/// tiles do not partition one coset, if a tile's walk reaches past the end of a coset, or if
+/// `coset_len` or `run` is zero.
 pub(crate) fn for_each_staged_tile_into_cosets<T, Q, P>(
     values: &mut [T],
+    source: Option<&[T]>,
     coset_len: usize,
     runs: StagedRuns,
     dispatch: Dispatch,
@@ -222,6 +226,10 @@ pub(crate) fn for_each_staged_tile_into_cosets<T, Q, P>(
         values.len(),
         "cosets do not partition the matrix"
     );
+    assert!(
+        source.is_none_or(|source| source.len() == coset_len),
+        "the source is not one coset long"
+    );
     assert_eq!(
         tiles * tile_len,
         coset_len,
@@ -242,13 +250,17 @@ pub(crate) fn for_each_staged_tile_into_cosets<T, Q, P>(
 
         tile.clear();
         for k in 0..rows {
-            // SAFETY: `run_index` is injective over `(index, k)`, as `StagedRuns` sets out, and
-            // the assert above keeps every run inside the leading coset, so no two tasks and no
-            // two iterations of one task reach the same element. The exclusive borrow the
-            // pointer came from outlives every task, since the pass returns only once all of
-            // them have run.
-            let source = unsafe { base.slice(slice_of(index, k, 0), run) };
-            tile.extend_from_slice(source);
+            let start = slice_of(index, k, 0);
+            let gathered = source.map_or_else(
+                // SAFETY: `run_index` is injective over `(index, k)`, as `StagedRuns` sets out,
+                // and the assert above keeps every run inside the leading coset, so no two tasks
+                // and no two iterations of one task reach the same element. The exclusive borrow
+                // the pointer came from outlives every task, since the pass returns only once
+                // all of them have run.
+                || unsafe { base.slice(start, run) },
+                |source| &source[start..start + run],
+            );
+            tile.extend_from_slice(gathered);
         }
         debug_assert_eq!(tile.len(), tile_len, "the gather left the tile short");
         prepare(tile.as_mut_slice());
@@ -405,6 +417,7 @@ mod tests {
 
                         for_each_staged_tile_into_cosets(
                             &mut values,
+                            None,
                             coset_len,
                             StagedRuns::new(run, log_stride, depth),
                             dispatch,
@@ -454,11 +467,76 @@ mod tests {
     }
 
     #[test]
+    fn a_separate_source_stands_in_for_the_leading_coset() {
+        // Invariant: gathering from a source fills every coset, the leading one included, as
+        // gathering the same values out of the leading coset itself does.
+        let dispatches = [Dispatch::Serial, Dispatch::Parallel { min_len: 1 }];
+        let cosets = 4;
+        for dispatch in dispatches {
+            for (run, log_runs, log_stride, depth) in [(1, 6, 2, 3), (3, 5, 1, 2), (1, 6, 0, 6)] {
+                let coset_len = run << log_runs;
+                let runs = StagedRuns::new(run, log_stride, depth);
+                let label = format!("{dispatch:?} run={run} log_runs={log_runs} depth={depth}");
+                let source: Vec<u64> = (0..coset_len as u64).map(|v| 7 * v + 1).collect();
+                let prepare = |tile: &mut [u64]| tile.iter_mut().for_each(|value| *value ^= 0x55);
+                let process = |tile: &mut [u64], block: usize, coset: usize| {
+                    for (k, value) in tile.iter_mut().enumerate() {
+                        *value = 3 * *value + (1000 * block + 100 * coset + k) as u64;
+                    }
+                };
+
+                let mut in_place: Vec<u64> = source
+                    .iter()
+                    .copied()
+                    .chain(core::iter::repeat_n(u64::MAX, (cosets - 1) * coset_len))
+                    .collect();
+                for_each_staged_tile_into_cosets(
+                    &mut in_place,
+                    None,
+                    coset_len,
+                    runs,
+                    dispatch,
+                    prepare,
+                    process,
+                );
+
+                let mut separate = vec![u64::MAX; cosets * coset_len];
+                for_each_staged_tile_into_cosets(
+                    &mut separate,
+                    Some(source.as_slice()),
+                    coset_len,
+                    runs,
+                    dispatch,
+                    prepare,
+                    process,
+                );
+                assert_eq!(separate, in_place, "{label}");
+            }
+        }
+    }
+
+    #[test]
+    #[should_panic = "the source is not one coset long"]
+    fn a_source_of_another_length_is_refused() {
+        let mut values = vec![0u8; 16];
+        for_each_staged_tile_into_cosets(
+            &mut values,
+            Some(&[0u8; 4][..]),
+            8,
+            StagedRuns::new(1, 1, 2),
+            Dispatch::Serial,
+            |_| {},
+            |_, _, _| {},
+        );
+    }
+
+    #[test]
     #[should_panic = "cosets do not partition the matrix"]
     fn cosets_that_do_not_partition_the_matrix_are_refused() {
         let mut values = vec![0u8; 12];
         for_each_staged_tile_into_cosets(
             &mut values,
+            None,
             8,
             StagedRuns::new(1, 1, 2),
             Dispatch::Serial,

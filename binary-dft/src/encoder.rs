@@ -6,8 +6,10 @@ use p3_binary_field::{
     BinaryField8, BinaryField16, BinaryField32, BinaryField64, BinaryField128, Poly64, TowerLevel,
 };
 use p3_commit::Encoder;
+use p3_field::Field;
 use p3_matrix::Matrix;
-use p3_matrix::dense::RowMajorMatrix;
+use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
+use p3_maybe_rayon::prelude::*;
 use p3_util::log2_strict_usize;
 
 use crate::lch::LchNtt;
@@ -27,6 +29,27 @@ pub(crate) fn padded_message_len(len: usize, log_inv_rate: usize) -> usize {
         .and_then(|rate| len.checked_shl(rate))
         .filter(|&padded| padded >> log_inv_rate == len)
         .expect("codeword length overflows usize")
+}
+
+/// Elements one task of a borrowed message's copy moves, enough to outweigh the fork-join cost.
+const COPY_GRAIN: usize = 1 << 16;
+
+/// A borrowed message copied into a zeroed matrix `2^log_inv_rate` times its height.
+///
+/// # Panics
+///
+/// Panics if that height does not fit the address space.
+pub(crate) fn padded_copy<F: Field>(
+    message: RowMajorMatrixView<'_, F>,
+    log_inv_rate: usize,
+) -> RowMajorMatrix<F> {
+    let len = message.values.len();
+    let mut values = F::zero_vec(padded_message_len(len, log_inv_rate));
+    values[..len]
+        .par_chunks_mut(COPY_GRAIN)
+        .zip(message.values.par_chunks(COPY_GRAIN))
+        .for_each(|(destination, source)| destination.copy_from_slice(source));
+    RowMajorMatrix::new(values, message.width)
 }
 
 /// Reed–Solomon over the additive NTT domain.
@@ -135,6 +158,14 @@ macro_rules! impl_additive_rs_encoder {
                 log_inv_rate: usize,
             ) -> RowMajorMatrix<$field> {
                 self.ntt.ntt_batch_padded(message, log_inv_rate)
+            }
+
+            fn encode_batch_borrowed(
+                &self,
+                message: RowMajorMatrixView<'_, $field>,
+                log_inv_rate: usize,
+            ) -> RowMajorMatrix<$field> {
+                self.ntt.ntt_batch_padded_borrowed(message, log_inv_rate)
             }
         }
     )*};
