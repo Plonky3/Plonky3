@@ -184,6 +184,43 @@ fn suffix_prover_commits_the_hand_stacked_message() {
     }
 }
 
+/// A lone column filling the hypercube is handed to the encoder where it lies, and commits the
+/// root that writing it into the codeword buffer commits. The column is tall enough for its
+/// cosets to share their first staging group on a host with a few workers, which is the route
+/// that reads the message in place; any other route pads a copy of it.
+///
+/// A witness of two columns, or of two tables, holds no one slice that is its message.
+#[test]
+fn a_lone_column_commits_the_root_of_its_written_message() {
+    const LOG_HEIGHT: usize = 17;
+    const RATE: usize = 1;
+    let mmcs = mmcs();
+    let encoder = AdditiveRsEncoder::<F>::default();
+    let mut rng = SmallRng::seed_from_u64(5);
+
+    let column = Table::rand(&mut rng, 1, LOG_HEIGHT);
+    let witness = SuffixProver::<F, F>::new_witness(vec![column.clone()], 0);
+    assert_eq!(
+        SuffixProver::<F, F>::borrowed_message(&witness),
+        Some(column.poly(0).as_slice())
+    );
+
+    let stacked = witness.stacked_poly();
+    let (expected_root, _) = commit_base(&encoder, &mmcs, LOG_HEIGHT, 0, RATE, |message| {
+        write_stacked_message(VariableOrder::Suffix, &stacked, 0, message);
+    });
+    let (_layout, root, _data) = SuffixProver::<F, F>::commit(&encoder, &mmcs, witness, 0, RATE);
+    assert_eq!(root, expected_root);
+
+    let two_columns = SuffixProver::<F, F>::new_witness(vec![Table::rand(&mut rng, 2, 6)], 0);
+    assert_eq!(SuffixProver::<F, F>::borrowed_message(&two_columns), None);
+    let two_tables = SuffixProver::<F, F>::new_witness(
+        vec![Table::rand(&mut rng, 1, 6), Table::rand(&mut rng, 1, 6)],
+        0,
+    );
+    assert_eq!(SuffixProver::<F, F>::borrowed_message(&two_tables), None);
+}
+
 /// The padded production path preserves both layouts and their independently encoded roots.
 #[test]
 #[ignore = "20-way naive-vs-fast binary NTT sweep; run from heavy CI"]
