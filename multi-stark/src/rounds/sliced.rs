@@ -23,6 +23,7 @@
 #[cfg(test)]
 extern crate std;
 
+use alloc::borrow::Cow;
 use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
@@ -95,22 +96,73 @@ std::thread_local! {
 }
 
 /// A stage's cells as bit planes, laid out word by word.
-pub(super) struct SlicedTrace {
+pub(super) struct SlicedTrace<'data> {
     /// Number of variables of the stage.
     num_vars: usize,
     /// Number of columns, in merged-buffer order.
     width: usize,
     /// `cells[w * width + c]`: the planes of column `c` over rows `64 w .. 64 w + 63`.
-    cells: Vec<[u64; 2]>,
+    cells: Planes<'data>,
     /// The successor planes, laid out like `cells`.
     ///
     /// Row `s` holds the cell at row `min(s + 1, height - 1)`, the repeat-last successor.
     /// Zero for every column no AIR reads on the next row.
-    successors: Vec<[u64; 2]>,
+    successors: Planes<'data>,
     /// The first-row, last-row, and transition selectors of each word, one bit per row.
     boundary: Vec<[u64; 3]>,
     /// Number of rounds evaluated on the planes.
     rounds: usize,
+}
+
+/// Bit planes laid out word by word, one entry per word of one column.
+enum Planes<'data> {
+    /// The low plane alone, for cells of the Boolean subfield, whose high plane is clear.
+    ///
+    /// A stage of one packed Boolean table borrows that table's words, which share the layout.
+    Low(Cow<'data, [u64]>),
+    /// Both planes of every cell.
+    Pairs(Vec<[u64; 2]>),
+}
+
+impl Planes<'_> {
+    /// Number of entries.
+    fn len(&self) -> usize {
+        match self {
+            Self::Low(words) => words.len(),
+            Self::Pairs(pairs) => pairs.len(),
+        }
+    }
+
+    /// The low and high planes of entry `index`.
+    #[cfg(test)]
+    fn planes(&self, index: usize) -> [u64; 2] {
+        match self {
+            Self::Low(words) => PlaneWords::planes(&**words, index),
+            Self::Pairs(pairs) => PlaneWords::planes(&**pairs, index),
+        }
+    }
+}
+
+/// One layout of word-major planes, as a plane reader indexes it.
+///
+/// The readers are generic over it, so a stage holding its low plane alone reads no high word.
+trait PlaneWords {
+    /// The low and high planes of entry `index`.
+    fn planes(&self, index: usize) -> [u64; 2];
+}
+
+impl PlaneWords for [u64] {
+    #[inline(always)]
+    fn planes(&self, index: usize) -> [u64; 2] {
+        [self[index], 0]
+    }
+}
+
+impl PlaneWords for [[u64; 2]] {
+    #[inline(always)]
+    fn planes(&self, index: usize) -> [u64; 2] {
+        self[index]
+    }
 }
 
 /// Pack sixty-four cells into their two coordinate planes.
@@ -133,13 +185,13 @@ where
     Some(planes)
 }
 
-/// Copy packed Boolean source tables into the final word-major plane layout.
+/// Copy packed Boolean source tables into the final word-major low plane.
 ///
-/// Every source matrix already stores one row-block per physical row, so this path only adds the
-/// zero high plane and interleaves table segments in their merged-buffer order. `None` keeps the
-/// caller on the representation-independent path when any source is dense or has an unexpected
-/// number of word blocks.
-fn direct_packed_cells<F: Field>(tables: &[&Table<F>], words: usize) -> Option<Vec<[u64; 2]>> {
+/// Every source matrix already stores one row-block per physical row, so this path only
+/// interleaves table segments in their merged-buffer order. `None` keeps the caller on the
+/// representation-independent path when any source is dense or has an unexpected number of word
+/// blocks.
+fn direct_packed_cells<F: Field>(tables: &[&Table<F>], words: usize) -> Option<Vec<u64>> {
     if tables.is_empty() {
         return None;
     }
@@ -153,7 +205,7 @@ fn direct_packed_cells<F: Field>(tables: &[&Table<F>], words: usize) -> Option<V
         return None;
     }
 
-    let mut cells = vec![[0; 2]; words * width];
+    let mut cells = vec![0; words * width];
     cells
         .par_chunks_mut(width)
         .enumerate()
@@ -163,12 +215,9 @@ fn direct_packed_cells<F: Field>(tables: &[&Table<F>], words: usize) -> Option<V
                 let packed = table
                     .packed_bits()
                     .expect("direct packed ingestion checked every source table");
-                let source = &packed.values[word * packed.width..(word + 1) * packed.width];
-                for (destination, &value) in
-                    output[offset..offset + packed.width].iter_mut().zip(source)
-                {
-                    *destination = [value, 0];
-                }
+                output[offset..offset + packed.width].copy_from_slice(
+                    &packed.values[word * packed.width..(word + 1) * packed.width],
+                );
                 offset += packed.width;
             }
         });
@@ -258,7 +307,7 @@ impl PrefixFold {
 /// What every task of one sliced round shares.
 struct SlicedRound<'a, 'air, A, F, S, R> {
     /// The stage's planes.
-    trace: &'a SlicedTrace,
+    trace: &'a SlicedTrace<'a>,
     /// The stage's AIRs and their column spans.
     slots: &'a [AirSlot<'air, A>],
     /// Public inputs of each AIR.
@@ -341,7 +390,26 @@ where
     #[inline]
     fn fold_columns<const CORNERS: usize>(
         &self,
-        planes: &[[u64; 2]],
+        planes: &Planes<'_>,
+        columns: Range<usize>,
+        word: usize,
+        prefix: &PrefixFold,
+        values: &mut [SlicedGf4<F, S>],
+        steps: &mut [SlicedGf4<F, S>],
+    ) {
+        match planes {
+            Planes::Low(words) => self
+                .fold_plane_columns::<_, CORNERS>(&**words, columns, word, prefix, values, steps),
+            Planes::Pairs(pairs) => self
+                .fold_plane_columns::<_, CORNERS>(&**pairs, columns, word, prefix, values, steps),
+        }
+    }
+
+    /// [`Self::fold_columns`] over planes of one layout.
+    #[inline]
+    fn fold_plane_columns<P: PlaneWords + ?Sized, const CORNERS: usize>(
+        &self,
+        planes: &P,
         columns: Range<usize>,
         word: usize,
         prefix: &PrefixFold,
@@ -353,7 +421,7 @@ where
             core::array::from_fn(|corner| (prefix.corners[corner] * self.words + word) * width);
         for column in columns {
             let corners = starts.map(|start| {
-                let [low, high] = planes[start + column];
+                let [low, high] = planes.planes(start + column);
                 SlicedGf4::from_planes(low, high)
             });
             let (lo, hi) = fold_corners(corners, &prefix.nodes);
@@ -595,7 +663,7 @@ struct SlicedRaw<R> {
 #[tracing::instrument(skip_all, level = "debug", fields(round = challenges.len()))]
 fn sliced_raw<A, F, EF, S, R>(
     eq_suffix: Option<&Poly<EF>>,
-    trace: &SlicedTrace,
+    trace: &SlicedTrace<'_>,
     slots: &[AirSlot<'_, A>],
     public_values: &[&[F]],
     alpha_powers: &[Vec<R>],
@@ -718,7 +786,7 @@ where
 #[allow(clippy::too_many_arguments)]
 fn sliced_round<A, F, EF, S, R>(
     eq_suffix: &Poly<EF>,
-    trace: &SlicedTrace,
+    trace: &SlicedTrace<'_>,
     slots: &[AirSlot<'_, A>],
     public_values: &[&[F]],
     alpha_powers: &[Vec<R>],
@@ -786,7 +854,7 @@ struct SlicedTensor<EF> {
 #[tracing::instrument(skip_all, level = "debug", fields(round = 3))]
 fn sliced_tensor<A, F, EF, S, R>(
     eq_suffix: Option<&Poly<EF>>,
-    trace: &SlicedTrace,
+    trace: &SlicedTrace<'_>,
     slots: &[AirSlot<'_, A>],
     public_values: &[&[F]],
     alpha_powers: &[Vec<R>],
@@ -912,7 +980,7 @@ where
     /// `None` when `S` is not `GF(4)`, the stage is too short to fill a word per half, or a cell
     /// lies outside `S`.
     #[tracing::instrument(skip_all, level = "debug")]
-    fn sliced_trace<S>(&self) -> Option<SlicedTrace>
+    fn sliced_trace<S>(&self) -> Option<SlicedTrace<'data>>
     where
         S: Field,
         F: HasSubfield<S>,
@@ -949,18 +1017,39 @@ where
             is_successor[column] = true;
         }
 
-        // Each table's packed matrix is already word-major. Copy directly into the final layout
-        // when no successor planes are needed; otherwise retain the generic column path, which
-        // also computes the repeat-last successor words.
-        let words = 1 << (num_vars - LANE_VARIABLES);
-        let (cells, successors) = if next_columns.is_empty() {
-            if let Some(cells) = direct_packed_cells(&tables, words) {
-                (cells, vec![[0; 2]; words * width])
-            } else {
-                pack_sliced_columns::<F, S>(&columns, &is_successor, words, width)?
-            }
+        // Each table's packed matrix is already word-major: the low plane of its columns. When no
+        // successor planes are needed, a stage of one such table borrows it and several are
+        // copied into the final layout; otherwise retain the generic column path, which also
+        // computes the repeat-last successor words.
+        let words: usize = 1 << (num_vars - LANE_VARIABLES);
+        let low = if next_columns.is_empty() {
+            // One table is one AIR's main table, with no preprocessed or periodic table beside it.
+            let borrowed = match self.slots.as_slice() {
+                [slot] if tables.len() == 1 => {
+                    let table: &'data Table<F> = self.tables[slot.stage_index];
+                    table
+                        .packed_bits()
+                        .filter(|packed| {
+                            packed.width == width
+                                && words.checked_mul(width) == Some(packed.values.len())
+                        })
+                        .map(|packed| Cow::Borrowed(packed.values.as_slice()))
+                }
+                _ => None,
+            };
+            borrowed.or_else(|| direct_packed_cells(&tables, words).map(Cow::Owned))
         } else {
-            pack_sliced_columns::<F, S>(&columns, &is_successor, words, width)?
+            None
+        };
+        let (cells, successors) = if let Some(low) = low {
+            (
+                Planes::Low(low),
+                Planes::Low(Cow::Owned(vec![0; words * width])),
+            )
+        } else {
+            let (cells, successors) =
+                pack_sliced_columns::<F, S>(&columns, &is_successor, words, width)?;
+            (Planes::Pairs(cells), Planes::Pairs(successors))
         };
 
         let last = SLICED_LANES - 1;
@@ -1238,9 +1327,9 @@ where
 }
 
 /// A sliced stage's planes and the challenges bound so far.
-pub(super) struct SlicedColumns<EF> {
+pub(super) struct SlicedColumns<'data, EF> {
     /// The stage's planes, none of whose columns has folded yet.
-    trace: SlicedTrace,
+    trace: SlicedTrace<'data>,
     /// Every challenge bound so far, first variable first.
     challenges: Vec<EF>,
     /// Optional four-variable tensor retained by the representation backend.
@@ -1249,7 +1338,7 @@ pub(super) struct SlicedColumns<EF> {
     late_boundary: bool,
 }
 
-impl<EF> SlicedColumns<EF> {
+impl<EF> SlicedColumns<'_, EF> {
     /// Number of columns.
     pub(super) const fn width(&self) -> usize {
         self.trace.width
@@ -1362,7 +1451,7 @@ const STAGED_COLUMNS: usize = 64;
 /// that binds one challenge past [`MAX_SLICED_ROUNDS`] needs [`MAX_PLANE_FOLD_CORNERS`].
 struct PlaneFold<'a, R, const CORNERS: usize = MAX_CORNERS> {
     /// The stage's planes.
-    trace: &'a SlicedTrace,
+    trace: &'a SlicedTrace<'a>,
     /// Subset sums of the eq weights, one table per corner group.
     low_sums: Vec<[R; GROUP_ENTRIES]>,
     /// The same sums scaled by the generator of `S`, indexed the same way.
@@ -1377,7 +1466,7 @@ struct PlaneFold<'a, R, const CORNERS: usize = MAX_CORNERS> {
 
 impl<'a, R: Field, const CORNERS: usize> PlaneFold<'a, R, CORNERS> {
     /// Tabulate the fold of `trace` at every challenge bound so far.
-    fn new<S, EF>(trace: &'a SlicedTrace, challenges: &[EF]) -> Self
+    fn new<S, EF>(trace: &'a SlicedTrace<'a>, challenges: &[EF]) -> Self
     where
         S: Field,
         EF: Field + HasSubfield<S>,
@@ -1430,7 +1519,21 @@ impl<'a, R: Field, const CORNERS: usize> PlaneFold<'a, R, CORNERS> {
     #[inline]
     fn corner_words(
         &self,
-        planes: &[[u64; 2]],
+        planes: &Planes<'_>,
+        column: usize,
+        word: usize,
+    ) -> ([u64; CORNERS], [u64; CORNERS]) {
+        match planes {
+            Planes::Low(words) => self.corner_plane_words(&**words, column, word),
+            Planes::Pairs(pairs) => self.corner_plane_words(&**pairs, column, word),
+        }
+    }
+
+    /// [`Self::corner_words`] from planes of one layout.
+    #[inline]
+    fn corner_plane_words<P: PlaneWords + ?Sized>(
+        &self,
+        planes: &P,
         column: usize,
         word: usize,
     ) -> ([u64; CORNERS], [u64; CORNERS]) {
@@ -1443,7 +1546,7 @@ impl<'a, R: Field, const CORNERS: usize> PlaneFold<'a, R, CORNERS> {
             .zip(&mut high[..self.corners])
             .enumerate()
         {
-            let planes = planes[base + corner * stride];
+            let planes = planes.planes(base + corner * stride);
             *low = planes[0];
             *high = planes[1];
         }
@@ -1464,7 +1567,7 @@ impl<'a, R: Field, const CORNERS: usize> PlaneFold<'a, R, CORNERS> {
     }
 
     /// The value at every residual row of one word.
-    fn fold_word(&self, planes: &[[u64; 2]], column: usize, word: usize, out: &mut [R]) {
+    fn fold_word(&self, planes: &Planes<'_>, column: usize, word: usize, out: &mut [R]) {
         let (low, high) = self.corner_words(planes, column, word);
         for (out, value) in out.iter_mut().zip(self.corner_values(&low, &high)) {
             *out = value;
@@ -1475,10 +1578,12 @@ impl<'a, R: Field, const CORNERS: usize> PlaneFold<'a, R, CORNERS> {
     ///
     /// Each buffer then holds the block's columns one after another, and each column's corner
     /// words side by side in corner order, see [`Self::staged_words`].
+    ///
+    /// Planes holding the low plane alone leave `high` as it is, so its words must be clear.
     #[inline]
     fn stage(
         &self,
-        planes: &[[u64; 2]],
+        planes: &Planes<'_>,
         columns: Range<usize>,
         word: usize,
         low: &mut [u64],
@@ -1486,15 +1591,31 @@ impl<'a, R: Field, const CORNERS: usize> PlaneFold<'a, R, CORNERS> {
     ) {
         let base = word * self.trace.width + columns.start;
         let stride = self.words * self.trace.width;
-        for corner in 0..self.corners {
-            let start = base + corner * stride;
-            for ((low, high), &[low_word, high_word]) in low
-                .chunks_exact_mut(self.corners)
-                .zip(high.chunks_exact_mut(self.corners))
-                .zip(&planes[start..start + columns.len()])
-            {
-                low[corner] = low_word;
-                high[corner] = high_word;
+        match planes {
+            Planes::Low(words) => {
+                debug_assert!(high.iter().all(|&high| high == 0));
+                for corner in 0..self.corners {
+                    let start = base + corner * stride;
+                    for (low, &low_word) in low
+                        .chunks_exact_mut(self.corners)
+                        .zip(&words[start..start + columns.len()])
+                    {
+                        low[corner] = low_word;
+                    }
+                }
+            }
+            Planes::Pairs(pairs) => {
+                for corner in 0..self.corners {
+                    let start = base + corner * stride;
+                    for ((low, high), &[low_word, high_word]) in low
+                        .chunks_exact_mut(self.corners)
+                        .zip(high.chunks_exact_mut(self.corners))
+                        .zip(&pairs[start..start + columns.len()])
+                    {
+                        low[corner] = low_word;
+                        high[corner] = high_word;
+                    }
+                }
             }
         }
     }
@@ -1667,7 +1788,7 @@ impl<'a, R: Field, const CORNERS: usize> PlaneFold<'a, R, CORNERS> {
     /// Whether any corner's high plane is set.
     fn write_top_lane_mask(
         &self,
-        planes: &[[u64; 2]],
+        planes: &Planes<'_>,
         column: usize,
         word: usize,
         out: &mut [u8],
@@ -2044,7 +2165,7 @@ where
     /// # Returns
     ///
     /// `None` when the stage is not on its planes, which then stay where they are.
-    fn take_planes(&mut self) -> Option<(SlicedTrace, Vec<EF>)> {
+    fn take_planes(&mut self) -> Option<(SlicedTrace<'data>, Vec<EF>)> {
         match core::mem::replace(&mut self.columns, ExtColumns::Scalar(Vec::new())) {
             ExtColumns::Sliced(SlicedColumns {
                 trace,
