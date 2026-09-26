@@ -1,0 +1,375 @@
+//! The four-variable tensor of a bit-valued stage on the nodes `0`, `1`, and infinity.
+//!
+//! A polynomial of degree at most two in one variable is pinned down by its values at `0` and
+//! `1` and by its leading coefficient, its value "at infinity":
+//!
+//! ```text
+//!     q(x) = q(0) (1 - x) + q(1) x + q(inf) (x^2 - x)
+//! ```
+//!
+//! Fix every tensor coordinate but `v`. Each AIR input, a column or a boundary selector, is the
+//! multilinear extension of its rows, so affine in `v`, and a constraint is `P = Q + L + K` of
+//! total degree at most two in its inputs, with `B` the bilinear form of `Q`:
+//!
+//! ```text
+//!     input(v)    = lo + v (hi - lo)
+//!     P(input(v)) = P(lo) + v (B(lo, hi - lo) + L(hi - lo)) + v^2 Q(hi - lo)
+//! ```
+//!
+//! Its value at infinity is `Q(hi - lo)`, where `hi - lo` is again multilinear in the other
+//! coordinates. In a second coordinate `u`, `Q(a + u b) = Q(a) + u B(a, b) + u^2 Q(b)` has value
+//! `Q(b)` at infinity, and at `0` or `1` it is `Q` of the half `u` selects. The maps of different
+//! coordinates act on different variables and commute with the eq-weighted sum over the rows, so
+//! every cell with a coordinate at infinity holds `Q` at the inputs each coordinate picks from
+//! its corners:
+//!
+//! ```text
+//!     0: lo        1: hi        inf: hi - lo = lo + hi
+//! ```
+//!
+//! A cell with every coordinate at `0` or `1` is a row of the trace and holds `P` itself.
+//!
+//! The boundary selectors' rows are bits like any bit column's, and a public boundary pin is the
+//! quadratic `selector * (column - public)` with its public value a constant. So over bit-valued
+//! corners every picked input is a bit and, while every constant the AIRs use is a bit, `P` and
+//! `Q` are polynomials over `GF(2)` that [`SlicedQuadraticFolder`] evaluates sixty-four lanes at a
+//! time. Any other constant poisons the pass, and a corner outside `GF(2)` discards it.
+
+use alloc::vec;
+use alloc::vec::Vec;
+
+use p3_air::Air;
+use p3_field::Field;
+use p3_maybe_rayon::prelude::*;
+use p3_multilinear_util::poly::Poly;
+
+use super::{LANE_VARIABLES, PlaneWords, Planes, SlicedTensor, SlicedTrace, TensorNodes};
+use crate::rounds::{AirSlot, rows_per_task};
+use crate::selectors::BoundaryEvals;
+use crate::sliced::{BitLaneSums, SlicedBit, SlicedQuadraticFolder};
+
+/// Variables the tensor spans: three prefix variables, then the active variable `t`.
+const DEPTH: usize = 4;
+
+/// Nodes each tensor coordinate takes, `0`, `1`, and infinity, in tensor-index order.
+const NODES: usize = 3;
+
+/// The tensor index digit of infinity.
+const INFINITY: usize = 2;
+
+/// Prefixes of the three variables before `t`, one per assignment of nodes.
+const PREFIXES: usize = NODES.pow(DEPTH as u32 - 1);
+
+/// The corners one prefix reads, `t = 0` and `t = 1` side by side.
+///
+/// A corner's bits are the prefix variables, first variable highest, then `t`. A variable at `0`
+/// or `1` selects the low or the high half of the corners, and a variable at infinity reads both
+/// halves, whose sum is its input there.
+fn prefix_corners(prefix: [usize; DEPTH - 1]) -> Vec<usize> {
+    let mut corners = vec![0];
+    for (variable, &node) in prefix.iter().enumerate() {
+        let bit = 2 << (DEPTH - 2 - variable);
+        match node {
+            0 => {}
+            1 => corners.iter_mut().for_each(|corner| *corner |= bit),
+            _ => {
+                corners = corners
+                    .iter()
+                    .flat_map(|&corner| [corner, corner | bit])
+                    .collect();
+            }
+        }
+    }
+    corners
+        .iter()
+        .flat_map(|&corner| [corner, corner | 1])
+        .collect()
+}
+
+/// What every task of the tensor pass shares.
+struct InfinityTensor<'a, 'air, A, F, R> {
+    /// The stage's planes.
+    trace: &'a SlicedTrace<'a>,
+    /// The stage's AIRs and their column spans.
+    slots: &'a [AirSlot<'air, A>],
+    /// Public inputs of each AIR.
+    public_values: &'a [&'a [F]],
+    /// Descending alpha powers of each AIR, in the accumulation field.
+    alpha_powers: &'a [Vec<R>],
+    /// The corners of every prefix, in prefix-index order.
+    prefixes: Vec<Vec<usize>>,
+    /// Words each corner block spans.
+    words: usize,
+    /// The lane weights: the eq factor of the variables inside a word.
+    lanes: BitLaneSums<R>,
+    /// The eq factor of the word variables, one per word of a corner block.
+    word_weights: Vec<R>,
+}
+
+/// Per-worker sums of the tensor pass.
+struct InfinityScratch<F, R> {
+    /// `sums[air][prefix * 3 + node]`: eq-weighted, alpha-batched constraint sums.
+    sums: Vec<Vec<R>>,
+    /// Column inputs at `t = 0`, then at infinity.
+    low: Vec<SlicedBit<F>>,
+    /// Column inputs at `t = 1`.
+    high: Vec<SlicedBit<F>>,
+    /// The next-row inputs, which no AIR on the tensor declares.
+    zeros: Vec<SlicedBit<F>>,
+    /// Whether any evaluation was poisoned.
+    poisoned: bool,
+    /// Every high-plane bit the pass read, which a bit-valued stage leaves clear.
+    high_planes: u64,
+}
+
+impl<F, R: Field> InfinityScratch<F, R> {
+    fn new(airs: usize, width: usize) -> Self {
+        Self {
+            sums: vec![R::zero_vec(PREFIXES * NODES); airs],
+            low: vec![SlicedBit::default(); width],
+            high: vec![SlicedBit::default(); width],
+            zeros: vec![SlicedBit::default(); width],
+            poisoned: false,
+            high_planes: 0,
+        }
+    }
+
+    /// Add another worker's sums into this one, poison and high planes included.
+    fn merge(mut self, other: Self) -> Self {
+        for (lhs, rhs) in self.sums.iter_mut().zip(other.sums) {
+            R::add_slices(lhs, &rhs);
+        }
+        self.poisoned |= other.poisoned;
+        self.high_planes |= other.high_planes;
+        self
+    }
+}
+
+impl<A, F, R> InfinityTensor<'_, '_, A, F, R>
+where
+    F: Field,
+    R: Field,
+    A: for<'b> Air<SlicedQuadraticFolder<'b, F, R>>,
+{
+    /// Add one word of residual rows at one prefix to the scratch sums.
+    fn accumulate(&self, scratch: &mut InfinityScratch<F, R>, word: usize, prefix: usize) {
+        match self.prefixes[prefix].len() {
+            2 => self.accumulate_corners::<2>(scratch, word, prefix),
+            4 => self.accumulate_corners::<4>(scratch, word, prefix),
+            8 => self.accumulate_corners::<8>(scratch, word, prefix),
+            16 => self.accumulate_corners::<16>(scratch, word, prefix),
+            corners => unreachable!("a tensor prefix reads 2 to 16 corners, not {corners}"),
+        }
+    }
+
+    /// [`Self::accumulate`] at a prefix that reads `CORNERS` corners.
+    fn accumulate_corners<const CORNERS: usize>(
+        &self,
+        scratch: &mut InfinityScratch<F, R>,
+        word: usize,
+        prefix: usize,
+    ) {
+        let corners = &self.prefixes[prefix];
+        let width = self.trace.width;
+        let starts: [usize; CORNERS] =
+            core::array::from_fn(|corner| (corners[corner] * self.words + word) * width);
+        let (low, high) = (&mut scratch.low[..width], &mut scratch.high[..width]);
+        scratch.high_planes |= match &self.trace.cells {
+            Planes::Low(words) => fold_corner_rows(&**words, starts, low, high),
+            Planes::Pairs(pairs) => fold_corner_rows(&**pairs, starts, low, high),
+        };
+
+        let mut boundary = [[0; 3]; 2];
+        for pair in corners.as_chunks::<2>().0 {
+            for (selectors, &corner) in boundary.iter_mut().zip(pair) {
+                let planes = self.trace.boundary[corner * self.words + word];
+                for (selector, plane) in selectors.iter_mut().zip(planes) {
+                    *selector ^= plane;
+                }
+            }
+        }
+        self.evaluate_cells(scratch, boundary, self.word_weights[word], prefix);
+    }
+
+    /// Evaluate one word at `t = 0`, `t = 1`, and infinity.
+    ///
+    /// A prefix with no variable at infinity leaves `t = 0` and `t = 1` on the rows, where each
+    /// constraint contributes its whole value. Every other cell takes the quadratic part, which
+    /// an AIR below degree two does not have.
+    ///
+    /// Never inlined: the AIR evaluation needs a large stack frame, which inside the parallel
+    /// fold would be reserved again at every level of Rayon's recursive split.
+    #[inline(never)]
+    fn evaluate_cells(
+        &self,
+        scratch: &mut InfinityScratch<F, R>,
+        [at_zero, at_one]: [[u64; 3]; 2],
+        weight: R,
+        prefix: usize,
+    ) {
+        let InfinityScratch {
+            sums,
+            low,
+            high,
+            zeros,
+            poisoned,
+            ..
+        } = scratch;
+        let mut evaluate =
+            |values: &[SlicedBit<F>], selectors: [u64; 3], cell: usize, rows: bool| {
+                let [first, last, transition] = selectors.map(SlicedBit::new);
+                let boundary = BoundaryEvals::new(first, last, transition);
+                for slot in self.slots {
+                    if slot.constraint_degree == 0 || (!rows && slot.constraint_degree < 2) {
+                        continue;
+                    }
+                    let main = slot.main_offset..slot.main_offset + slot.main_width;
+                    let preprocessed = slot.preprocessed_offset
+                        ..slot.preprocessed_offset + slot.preprocessed_width;
+                    let periodic = slot.periodic_offset..slot.periodic_offset + slot.periodic_width;
+                    let evaluation = SlicedQuadraticFolder::new(
+                        &values[main.clone()],
+                        &zeros[main],
+                        boundary,
+                        self.public_values[slot.stage_index],
+                        &self.alpha_powers[slot.stage_index],
+                        &self.lanes,
+                        rows,
+                    )
+                    .with_preprocessed(&values[preprocessed.clone()], &zeros[preprocessed])
+                    .with_periodic(&values[periodic])
+                    .eval_air(slot.air);
+                    *poisoned |= evaluation.poisoned;
+                    sums[slot.stage_index][prefix * NODES + cell] += weight * evaluation.value;
+                }
+            };
+        let rows = self.prefixes[prefix].len() == 2;
+        evaluate(low.as_slice(), at_zero, 0, rows);
+        evaluate(high.as_slice(), at_one, 1, rows);
+        for (low, &high) in low.iter_mut().zip(high.iter()) {
+            *low = SlicedBit::new(low.bits() ^ high.bits());
+        }
+        let at_infinity = core::array::from_fn(|index| at_zero[index] ^ at_one[index]);
+        evaluate(low.as_slice(), at_infinity, INFINITY, false);
+    }
+}
+
+/// Fold the corner rows starting at `starts`, `t = 0` and `t = 1` side by side, into every
+/// column's words at `t = 0` and `t = 1`.
+///
+/// # Returns
+///
+/// Every high-plane bit read, which a bit-valued stage leaves clear.
+fn fold_corner_rows<F, P: PlaneWords + ?Sized, const CORNERS: usize>(
+    planes: &P,
+    starts: [usize; CORNERS],
+    low: &mut [SlicedBit<F>],
+    high: &mut [SlicedBit<F>],
+) -> u64 {
+    let mut high_planes = 0;
+    for (column, (low, high)) in low.iter_mut().zip(high.iter_mut()).enumerate() {
+        let (mut at_zero, mut at_one) = (0, 0);
+        for pair in starts.as_chunks::<2>().0 {
+            let [zero, zero_high] = planes.planes(pair[0] + column);
+            let [one, one_high] = planes.planes(pair[1] + column);
+            at_zero ^= zero;
+            at_one ^= one;
+            high_planes |= zero_high | one_high;
+        }
+        *low = SlicedBit::new(at_zero);
+        *high = SlicedBit::new(at_one);
+    }
+    high_planes
+}
+
+/// Evaluate all 81 tensor entries of a bit-valued stage on the nodes `0`, `1`, and infinity.
+///
+/// # Returns
+///
+/// `None` when a cell lies outside `GF(2)` or a value outside `GF(2)` poisoned an evaluation.
+#[tracing::instrument(skip_all, level = "debug", fields(round = 3))]
+pub(super) fn sliced_tensor_infinity<A, F, EF, R>(
+    trace: &SlicedTrace<'_>,
+    slots: &[AirSlot<'_, A>],
+    public_values: &[&[F]],
+    alpha_powers: &[Vec<R>],
+    tau: &[EF],
+) -> Option<SlicedTensor<EF>>
+where
+    F: Field,
+    EF: Field + From<R>,
+    R: Field + From<EF>,
+    A: for<'b> Air<SlicedQuadraticFolder<'b, F, R>>,
+{
+    let num_vars = trace.num_vars;
+    debug_assert!(trace.rounds == DEPTH - 1 && tau.len() == num_vars);
+    debug_assert!(F::TWO == F::ZERO, "bit lanes add in characteristic two");
+    debug_assert!(
+        slots.iter().all(|slot| slot.constraint_degree <= 2),
+        "the tensor holds three nodes of each variable, which pin at most a quadratic"
+    );
+
+    // Row variables split three ways: the tensor, the words of a corner block, and the lanes.
+    let lane_weights = Poly::new_from_point(&tau[num_vars - LANE_VARIABLES..], EF::ONE);
+    let word_weights = Poly::new_from_point(&tau[DEPTH..num_vars - LANE_VARIABLES], EF::ONE);
+    let lift = |values: &[EF]| {
+        values
+            .iter()
+            .map(|&value| R::from(value))
+            .collect::<Vec<_>>()
+    };
+    let word_weights = lift(word_weights.as_slice());
+
+    // The prefixes in index order, the last variable varying fastest.
+    let prefixes = (0..PREFIXES)
+        .map(|index| {
+            let mut prefix = [0; DEPTH - 1];
+            let mut remaining = index;
+            for node in prefix.iter_mut().rev() {
+                *node = remaining % NODES;
+                remaining /= NODES;
+            }
+            prefix_corners(prefix)
+        })
+        .collect();
+    let context = InfinityTensor {
+        trace,
+        slots,
+        public_values,
+        alpha_powers,
+        prefixes,
+        words: word_weights.len(),
+        lanes: BitLaneSums::new(&lift(lane_weights.as_slice())),
+        word_weights,
+    };
+
+    let tasks = context.words * PREFIXES;
+    let scratch = (0..tasks)
+        .into_par_iter()
+        .with_min_len(rows_per_task(tasks))
+        .par_fold_reduce(
+            || InfinityScratch::new(slots.len(), trace.width),
+            |mut scratch, task| {
+                context.accumulate(&mut scratch, task / PREFIXES, task % PREFIXES);
+                scratch
+            },
+            InfinityScratch::merge,
+        );
+    if scratch.high_planes != 0 {
+        tracing::debug!("a cell outside GF(2) keeps the tensor off the infinity nodes");
+        return None;
+    }
+    if scratch.poisoned {
+        tracing::debug!("an AIR constant outside GF(2) reached the infinity tensor");
+        return None;
+    }
+    Some(SlicedTensor {
+        values: scratch
+            .sums
+            .into_iter()
+            .map(|sums| sums.into_iter().map(EF::from).collect())
+            .collect(),
+        depth: DEPTH,
+        nodes: TensorNodes::Infinity,
+    })
+}

@@ -4,6 +4,7 @@ use core::cmp::Ordering;
 
 use p3_air::BaseAir;
 use p3_binary_field::{Ghash128, TowerLevel};
+use p3_blake3_air::Blake3BinaryAir;
 use p3_field::{Field, HasSubfield, PrimeCharacteristicRing};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_multilinear_util::point::Point;
@@ -2354,10 +2355,191 @@ fn tensor4_contraction_skips_zero_degree_slots_in_mixed_stage() {
     let tensor = SlicedTensor {
         values: vec![vec![Tower::ZERO; 81], vec![Tower::ONE; 81]],
         depth: 4,
+        nodes: TensorNodes::Interpolation,
     };
     let evals = tensor_round(&tensor, &slots, &[Tower::ZERO; 4], &[], 0);
     assert!(evals[0].is_empty());
     assert_eq!(evals[1].len(), 2);
+}
+
+/// Require the stage's tensor on the infinity nodes to contract to the round polynomials of its
+/// tensor on the interpolation nodes, at every round and several challenge prefixes.
+fn assert_infinity_rounds_match<A>(state: &RoundStateBase<'_, '_, A, Tower, Tower>)
+where
+    A: BaseAir<Tower>
+        + for<'b> Air<SlicedFolder<'b, Tower, Gf4, Ghash128>>
+        + for<'b> Air<SlicedQuadraticFolder<'b, Tower, Ghash128>>,
+{
+    let trace = state.sliced_trace::<Gf4>().expect("the stage is sliced");
+    let alpha_powers = state
+        .alpha_powers
+        .iter()
+        .map(|powers| powers.iter().map(|&power| Ghash128::from(power)).collect())
+        .collect::<Vec<Vec<_>>>();
+    let tau = state.tau.as_slice();
+    let infinity = sliced_tensor_infinity::<A, Tower, Tower, Ghash128>(
+        &trace,
+        &state.slots,
+        &state.public_values,
+        &alpha_powers,
+        tau,
+    )
+    .expect("a bit-valued stage with bit constants builds the infinity tensor");
+    assert_eq!(infinity.nodes, TensorNodes::Infinity);
+    let eq_suffix = Poly::new_from_point(&tau[4..], Tower::ONE);
+    let interpolation = sliced_tensor::<A, Tower, Tower, Gf4, Ghash128>(
+        Some(&eq_suffix),
+        &trace,
+        &state.slots,
+        &state.public_values,
+        &alpha_powers,
+        tau,
+    )
+    .expect("the stage builds the interpolation tensor");
+
+    let mut rng = SmallRng::seed_from_u64(0x1F_0000);
+    let random: [Tower; 4] = core::array::from_fn(|_| rng.random());
+    let lambda = Tower::interpolation_node(2);
+    for challenges in [
+        random,
+        [Tower::ZERO; 4],
+        [Tower::ONE; 4],
+        [lambda; 4],
+        [Tower::ONE, lambda, Tower::ZERO, random[3]],
+    ] {
+        for round in 0..4 {
+            assert_eq!(
+                tensor_round(&infinity, &state.slots, tau, &challenges[..round], round),
+                tensor_round(
+                    &interpolation,
+                    &state.slots,
+                    tau,
+                    &challenges[..round],
+                    round
+                ),
+                "round {round} at {challenges:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn infinity_tensor_rounds_match_the_interpolation_tensor() {
+    let height = 1 << 10;
+    // Every row violates the product, so every cell on the rows holds a nonzero sum.
+    let mut invalid_pair = Instance::honest(FixtureAir::Pair, height, 0x1F_0001);
+    for row in 0..height {
+        invalid_pair.main.values[3 * row..3 * row + 3].copy_from_slice(&[
+            Tower::ZERO,
+            Tower::ZERO,
+            Tower::ONE,
+        ]);
+    }
+    // Column s of row 5 breaks the product, and column a of row 0 the first-row constraint.
+    let mut invalid_bits = Instance::honest(FixtureAir::BitQuadratic, height, 0x1F_0002);
+    invalid_bits.main.values[4 * 5 + 2] += Tower::ONE;
+    invalid_bits.main.values[0] += Tower::ONE;
+    // A degree-one AIR has no quadratic part, so it is read on the rows alone.
+    let mut unequal = Instance::honest(FixtureAir::Linear { scale: Tower::ONE }, height, 0x1F_0003);
+    unequal.main.values[2 * 7] += Tower::ONE;
+
+    for instances in [
+        vec![Instance::honest(FixtureAir::Pair, height, 0x1F_0004)],
+        vec![invalid_pair],
+        vec![Instance::honest(
+            FixtureAir::BitQuadratic,
+            height,
+            0x1F_0005,
+        )],
+        vec![invalid_bits],
+        vec![
+            Instance::honest(FixtureAir::BitQuadratic, height, 0x1F_0006),
+            unequal,
+            Instance::honest(FixtureAir::Pair, height, 0x1F_0007),
+        ],
+    ] {
+        with_state(&instances, no_lookups(), |state, _| {
+            assert_infinity_rounds_match(&state);
+        });
+    }
+}
+
+#[test]
+fn infinity_tensor_rounds_match_the_interpolation_tensor_on_blake3() {
+    let height = 1 << 10;
+    let no_publics: &[Tower] = &[];
+    for air in [
+        Blake3BinaryAir::default(),
+        Blake3BinaryAir::assuming_boolean_trace(),
+    ] {
+        let honest = air.generate_random_trace_packed::<Tower>(height);
+        let mut invalid = honest.clone();
+        invalid.values[3] ^= 1 << 17;
+        for trace in [honest, invalid] {
+            let main = Table::from_packed_bits(trace, 10);
+            with_stage_state(
+                &[&air],
+                &[no_publics],
+                &[None],
+                &[&main],
+                no_lookups(),
+                |state, _| assert_infinity_rounds_match(&state),
+            );
+        }
+    }
+}
+
+#[test]
+fn only_bit_cells_and_bit_constants_take_the_infinity_nodes() {
+    let height = 1 << 10;
+    let nodes = |instances: &[Instance]| {
+        with_state(instances, no_lookups(), |mut state, eq_suffix| {
+            state
+                .round_poly_sliced_with_strategy::<Gf4, Ghash128>(
+                    eq_suffix,
+                    SlicedStrategy::TensorBoundary,
+                )
+                .expect("the stage is sliced");
+            state
+                .sliced
+                .as_ref()
+                .and_then(|columns| columns.tensor.as_ref())
+                .map(|tensor| tensor.nodes)
+        })
+    };
+    assert_eq!(
+        nodes(&[Instance::honest(FixtureAir::Pair, height, 0x1F_0010)]),
+        Some(TensorNodes::Infinity)
+    );
+    assert_eq!(
+        nodes(&[Instance::honest(
+            FixtureAir::BitQuadratic,
+            height,
+            0x1F_0011
+        )]),
+        Some(TensorNodes::Infinity)
+    );
+    // Cells of GF(4) outside GF(2).
+    assert_eq!(
+        nodes(&[Instance::honest(
+            FixtureAir::QuadraticInputs,
+            height,
+            0x1F_0012
+        )]),
+        Some(TensorNodes::Interpolation)
+    );
+    // An AIR constant of GF(4) outside GF(2).
+    assert_eq!(
+        nodes(&[
+            Instance::honest(FixtureAir::Pair, height, 0x1F_0013),
+            Instance::honest(FixtureAir::Linear { scale: gf4(2) }, height, 0x1F_0014),
+        ]),
+        Some(TensorNodes::Interpolation)
+    );
+    // A public value of GF(4) outside GF(2).
+    let mut public = Instance::honest(FixtureAir::BitQuadratic, height, 0x1F_0015);
+    public.public_values[0] = gf4(2);
+    assert_eq!(nodes(&[public]), Some(TensorNodes::Interpolation));
 }
 
 /// Every round polynomial of a stage, then its openings.
@@ -2396,6 +2578,7 @@ where
     Tower: From<R>,
     R::Packing: p3_field::Algebra<Tower>,
     FixtureAir: for<'b> Air<SlicedFolder<'b, Tower, Gf4, R>>
+        + for<'b> Air<SlicedQuadraticFolder<'b, Tower, R>>
         + for<'b> Air<crate::folder::MultilinearFolder<'b, Tower, R, R>>
         + for<'b> Air<crate::folder::InteractionMultilinearFolder<'b, Tower, R, R>>
         + for<'b> Air<

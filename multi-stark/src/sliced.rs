@@ -39,6 +39,10 @@ use p3_lookup::{Count, IndexedLookupBuilder, InteractionBuilder, TraceWindow};
 use crate::folder::eval_boundary_io;
 use crate::selectors::BoundaryEvals;
 
+mod quadratic;
+
+pub use quadratic::{BitLaneSums, SlicedBit, SlicedQuadratic, SlicedQuadraticFolder};
+
 /// Rows one sliced value carries, one per bit of a word.
 pub const SLICED_LANES: usize = u64::BITS as usize;
 
