@@ -1728,6 +1728,15 @@ fn top_lane_mask(words: &[u64]) -> u8 {
     })
 }
 
+/// Whether any bit of `words` is set.
+///
+/// The words are OR-ed together without an early exit, which vectorizes; a corner's high plane
+/// is clear in every word of a Boolean stage, so an early exit never pays off there.
+#[inline]
+fn any_set(words: &[u64]) -> bool {
+    words.iter().fold(0, |any, &word| any | word) != 0
+}
+
 /// Subset sums of up to eight weights, indexed by the byte of the weights they include.
 fn subset_sums<R: Field>(weights: &[R]) -> Vec<R> {
     let mut sums = R::zero_vec(1 << weights.len());
@@ -1974,7 +1983,7 @@ impl<'a, R: Field, const CORNERS: usize> PlaneFold<'a, R, CORNERS> {
     /// do so needs none of the high plane's masks or lookups.
     #[inline]
     fn corner_values(&self, low: &[u64], high: &[u64]) -> impl Iterator<Item = R> + '_ {
-        let has_high = high.iter().any(|&word| word != 0);
+        let has_high = any_set(high);
         let mut low_masks = [[0; SLICED_LANES]; MAX_PLANE_FOLD_GROUPS];
         let mut high_masks = [[0; SLICED_LANES]; MAX_PLANE_FOLD_GROUPS];
         for (group, (low_masks, high_masks)) in low_masks
@@ -2265,11 +2274,7 @@ impl RowTile {
                 let low_cells = &mut self.low_cells[at..];
                 fold.write_cells(halves.map(|(low, _)| low), lanes, stride, low_cells);
                 let high_halves = halves.map(|(_, high)| high);
-                if high_halves
-                    .iter()
-                    .flat_map(|words| words.iter())
-                    .any(|&word| word != 0)
-                {
+                if high_halves.iter().any(|words| any_set(words)) {
                     fold.write_cells(high_halves, lanes, stride, &mut self.high_cells[at..]);
                     high = true;
                 } else if clear_high {
