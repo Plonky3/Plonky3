@@ -204,7 +204,9 @@ fn composed_poly_mul_128(a: u128, b: u128) -> u128 {
 #[cfg(all(target_arch = "aarch64", target_feature = "aes"))]
 pub(crate) use aarch64::SplitMultiplier as BatchMultiplier;
 #[cfg(all(target_arch = "aarch64", target_feature = "aes"))]
-pub(crate) use aarch64::{poly_dot_128, poly_mul_128, poly_mul_128_by_64, poly_square_128};
+pub(crate) use aarch64::{
+    poly_add_128, poly_dot_128, poly_mul_128, poly_mul_128_by_64, poly_square_128,
+};
 #[cfg(not(any(
     all(target_arch = "x86_64", target_feature = "pclmulqdq"),
     all(target_arch = "aarch64", target_feature = "aes"),
