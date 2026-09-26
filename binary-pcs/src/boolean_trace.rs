@@ -384,7 +384,7 @@ impl<EF, B, Challenger> MultilinearPcs<EF, Challenger> for BooleanTraceCommitmen
 where
     EF: BitCoordinates + ExtensionField<B::Val>,
     B: BooleanMultilinearPcs<EF, Challenger>,
-    B::Val: TranscriptField + TowerLevel,
+    B::Val: TranscriptField + TowerLevel + Coordinates,
     Challenger: FieldChallenger<B::Val>
         + GrindingChallenger<Witness = B::Val>
         + CanSampleUniformBits<B::Val>
@@ -409,11 +409,11 @@ where
         challenger: &mut Challenger,
     ) -> Result<(Self::Commitment, Self::ProverData), Self::ProverError> {
         // Gathering runs before the transcript is touched, so a refusal leaves it alone.
-        let bits =
+        let elements =
             tracing::info_span!("gather boolean bits").in_scope(|| self.gather_bits(&witness))?;
         let (commitment, inner) = self
             .inner
-            .commit_bits(&bits, challenger)
+            .commit_packed(elements, challenger)
             .map_err(BooleanTraceCommitmentError::Boolean)?;
         Ok((
             commitment,
@@ -465,7 +465,7 @@ impl<EF, B, Challenger> PrescribedPointPcs<EF, Challenger> for BooleanTraceCommi
 where
     EF: BitCoordinates + ExtensionField<B::Val>,
     B: BooleanMultilinearPcs<EF, Challenger>,
-    B::Val: TranscriptField + TowerLevel,
+    B::Val: TranscriptField + TowerLevel + Coordinates,
     Challenger: FieldChallenger<B::Val>
         + GrindingChallenger<Witness = B::Val>
         + CanSampleUniformBits<B::Val>

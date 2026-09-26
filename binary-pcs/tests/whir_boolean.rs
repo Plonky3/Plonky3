@@ -16,7 +16,7 @@ use p3_binary_pcs::whir::{
 };
 use p3_binary_pcs::{
     BinaryPcsConfig, BinaryPcsParams, BitOpening, BitReadings, BooleanMultilinearPcs, BooleanPcs,
-    BooleanTraceCommitmentError, GroupedCodewordMmcs,
+    BooleanTraceCommitmentError, GroupedCodewordMmcs, pack,
 };
 use p3_challenger::HashChallenger;
 use p3_commit::{Encoder, MultilinearPcs};
@@ -179,6 +179,19 @@ fn basefold_pcs() -> BooleanPcs<EF, Grouped, Grouped> {
         LOG_BITS,
     )
     .unwrap()
+}
+
+#[test]
+fn a_packed_witness_commits_through_whir_as_its_bits_do() {
+    // Invariant: the elements the packing builds are the column the bits commit to.
+    let bits = witness(0x5719);
+    let profile = BinaryWhirProfile::proven_list_decoding(SECURITY_LEVEL, LOG_INV_RATE, FOLDING);
+    let pcs = whir_pcs(profile);
+
+    let (by_bits, _) = pcs.commit_bits(&bits, &mut challenger()).unwrap();
+    let elements = pack::<PackedGf2x64, EF>(&bits);
+    let (by_elements, _) = pcs.commit_packed(elements, &mut challenger()).unwrap();
+    assert_eq!(by_elements, by_bits);
 }
 
 #[test]

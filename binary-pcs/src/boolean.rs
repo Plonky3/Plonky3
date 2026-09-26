@@ -84,12 +84,13 @@ use p3_challenger::fs::TranscriptField;
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
 use p3_commit::{Mmcs, MultilinearPcs};
 use p3_field::Field;
+use p3_matrix::dense::RowMajorMatrix;
 use p3_multilinear_util::point::Point;
 use p3_security::SecurityTerm;
 use p3_security::multilinear::{
     bit_ring_switch_claim_batching_term, bit_ring_switch_tensors_term, bit_ring_switch_term,
 };
-use p3_sumcheck::layout::{Layout, SuffixProver};
+use p3_sumcheck::layout::{Layout, SuffixProver, Table};
 use p3_sumcheck::ring_switch::bits::{
     BitPacking, BitPackingView, BitRingSwitch, BitRingSwitchClaims, BitRingSwitchClaimsProof,
     BitRingSwitchProofError,
@@ -98,6 +99,7 @@ use p3_sumcheck::{
     OpeningBatch, OpeningProtocol, PrescribedOpeningSecurity, PrescribedPointPcs, TableShape,
     TableSpec,
 };
+use p3_util::log2_strict_usize;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -173,6 +175,19 @@ pub trait BooleanMultilinearPcs<EF, Challenger>: BooleanBackend<EF> {
     fn commit_bits<U: Underlier>(
         &self,
         bits: &[PackedGf2<U>],
+        challenger: &mut Challenger,
+    ) -> Result<(Self::Commitment, Self::ProverData), Self::Error>;
+
+    /// Commit to a bit witness already packed, coordinate `j` of element `w` being bit `d*w + j`.
+    ///
+    /// The elements are the packing [`Self::commit_bits`] builds, and become the committed column.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error unless the elements cover exactly the committed hypercube.
+    fn commit_packed(
+        &self,
+        elements: Vec<Self::Val>,
         challenger: &mut Challenger,
     ) -> Result<(Self::Commitment, Self::ProverData), Self::Error>;
 
@@ -723,14 +738,29 @@ where
     ) -> Result<(Self::Commitment, Self::ProverData), Self::Error> {
         // The packing is one copy of the bits, so the witness is never swept for arithmetic.
         let stack = PackedStack::<PackedGf2<U>, EF>::from_columns(&[bits])?;
-        if stack.column_num_variables() != self.inner.num_variables() {
+        self.commit_packed(stack.into_poly().into_evals(), challenger)
+    }
+
+    fn commit_packed(
+        &self,
+        elements: Vec<EF>,
+        challenger: &mut Challenger,
+    ) -> Result<(Self::Commitment, Self::ProverData), Self::Error> {
+        let len = elements.len();
+        if !len.is_power_of_two() {
+            return Err(PackError::NotAHypercube { elements: len }.into());
+        }
+        let actual = log2_strict_usize(len);
+        if actual != self.inner.num_variables() {
             return Err(BooleanPcsError::WitnessArity {
                 expected: self.inner.num_variables(),
-                actual: stack.column_num_variables(),
+                actual,
             });
         }
 
-        let witness = SuffixProver::<EF, EF>::new_witness(vec![stack.into_table()], 0);
+        // The elements are the one column of the one table the layout stacks.
+        let table = Table::new(RowMajorMatrix::new(elements, len));
+        let witness = SuffixProver::<EF, EF>::new_witness(vec![table], 0);
         self.inner
             .commit(witness, challenger)
             .map_err(BooleanPcsError::Commitment)
@@ -927,6 +957,7 @@ mod tests {
     use rand::{RngExt, SeedableRng};
 
     use super::*;
+    use crate::packing::pack;
     use crate::params::BinaryPcsParams;
     use crate::test_util::{MyChallenger, MyMmcs, challenger, mmcs};
 
@@ -1144,6 +1175,40 @@ mod tests {
             )
             .unwrap_err();
         assert!(matches!(err, BooleanPcsError::ReductionProof(_)), "{err:?}");
+    }
+
+    #[test]
+    fn a_packed_witness_commits_as_its_bits_do() {
+        // Invariant: the elements the packing builds commit to the root the bits commit to,
+        // and elements covering no hypercube, or another one, are refused.
+        //
+        // Fixture state: 2^13 bits, so 64 elements and six committed variables.
+        const LOG_BITS: usize = 13;
+
+        let pcs = boolean_pcs(LOG_BITS);
+        let bits = witness(0x7AC4, LOG_BITS);
+        let (by_bits, _) = pcs.commit_bits(&bits, &mut challenger()).unwrap();
+        let elements = pack::<PackedGf2x64, EF>(&bits);
+        let (by_elements, _) = pcs
+            .commit_packed(elements.clone(), &mut challenger())
+            .unwrap();
+        assert_eq!(by_elements, by_bits);
+
+        let ragged = pcs.commit_packed(elements[..3].to_vec(), &mut challenger());
+        assert!(matches!(
+            ragged,
+            Err(BooleanPcsError::Packing(PackError::NotAHypercube {
+                elements: 3
+            }))
+        ));
+        let short = pcs.commit_packed(elements[..32].to_vec(), &mut challenger());
+        assert!(matches!(
+            short,
+            Err(BooleanPcsError::WitnessArity {
+                expected: 6,
+                actual: 5
+            })
+        ));
     }
 
     #[test]

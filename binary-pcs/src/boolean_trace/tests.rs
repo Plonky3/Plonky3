@@ -1,7 +1,7 @@
 use alloc::string::String;
 use alloc::{format, vec};
 
-use p3_binary_field::BinaryField128;
+use p3_binary_field::{BinaryField32, BinaryField128, PackedGf2, PackedGf2x64};
 use p3_field::PrimeCharacteristicRing;
 use p3_keccak::Keccak256Hash;
 use p3_matrix::dense::RowMajorMatrix;
@@ -13,9 +13,10 @@ use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
 
 use super::evaluate::{BLOCKS_PER_TASK, packed_column_sums};
-use super::gather::GATHER_GROUP;
+use super::gather::{GATHER_GROUP, Staging};
 use super::plan::{ClaimPlan, ColumnClaim, column_claims};
 use super::*;
+use crate::packing::{coordinate_bytes, pack};
 use crate::params::BinaryPcsParams;
 use crate::test_util::{MyChallenger, MyMmcs, challenger, mmcs};
 
@@ -155,11 +156,52 @@ fn gathered_bits_place_every_cell_at_its_slot() {
     }
 
     let gathered = scheme.gather_bits(&tables).unwrap();
-    let gathered = gathered
+    assert_eq!(words_of(&gathered), expected);
+}
+
+/// The words a run of elements holds, lowest coordinate first.
+fn words_of<V: Coordinates>(elements: &[V]) -> Vec<u64> {
+    coordinate_bytes(elements)
+        .chunks_exact(size_of::<u64>())
+        .map(|bytes| u64::from_le_bytes(bytes.try_into().unwrap()))
+        .collect()
+}
+
+/// A witness staged word by word, then read back as the elements a commitment holds.
+fn staged<V: Field + Coordinates>(words: &[u64]) -> Vec<V> {
+    let mut staging = Staging::<V>::zeroed(words.len());
+    staging.words_mut().copy_from_slice(words);
+    staging.into_elements()
+}
+
+#[test]
+fn a_staged_witness_is_the_packing_of_its_words() {
+    // Invariant: a level wide enough for a word view and a narrower one pack the same words
+    // the same way, so either holding of the witness commits the same elements.
+    let mut rng = SmallRng::seed_from_u64(0x57a6);
+    let words = (0..16).map(|_| rng.random::<u64>()).collect::<Vec<_>>();
+    let blocks = words
         .iter()
-        .map(|word| word.to_bits())
+        .copied()
+        .map(PackedGf2::new)
         .collect::<Vec<_>>();
-    assert_eq!(gathered, expected);
+
+    // The wide level is written in place, and the narrow one packs its words afterwards.
+    assert!(matches!(
+        Staging::<BinaryField128>::zeroed(words.len()),
+        Staging::Elements(_)
+    ));
+    assert!(matches!(
+        Staging::<BinaryField32>::zeroed(words.len()),
+        Staging::Words(_)
+    ));
+
+    let wide = staged::<BinaryField128>(&words);
+    assert_eq!(wide, pack::<PackedGf2x64, BinaryField128>(&blocks));
+    assert_eq!(words_of(&wide), words);
+    let narrow = staged::<BinaryField32>(&words);
+    assert_eq!(narrow, pack::<PackedGf2x64, BinaryField32>(&blocks));
+    assert_eq!(words_of(&narrow), words);
 }
 
 #[test]
