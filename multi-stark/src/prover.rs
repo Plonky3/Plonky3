@@ -9,7 +9,7 @@ use p3_commit::MultilinearPcs;
 use p3_field::PrimeCharacteristicRing;
 use p3_field::{ExtensionField, Field};
 use p3_lookup::InteractionSymbolicBuilder;
-use p3_sumcheck::PrescribedPointPcs;
+use p3_sumcheck::{OpeningEvals, PrescribedPointPcs};
 
 use crate::ProverInstances;
 use crate::backend::{GenericBackend, ZerocheckBackend};
@@ -457,7 +457,8 @@ where
 
     // 6. Reduce AIR constraints, lookup links, and bus shares to one sumcheck and one point.
     // The committed prover opens columns through the commitment schemes below, so
-    // the zerocheck's own opened values are not used as the final proof openings.
+    // the zerocheck's own opened values reach the proof only through an opening that
+    // binds them to the commitment.
     //
     // Under test the bus tables may stand in for the committed ones.
     // The closing check then meets openings the sumcheck never folded, and rejects.
@@ -560,15 +561,29 @@ where
     drop(preprocessed_tables);
 
     // 8. Open each main trace table at every point a claim was left at.
+    //
+    // A table's first batch reads its AIR's columns at the suffix of the bound point.
+    // The zerocheck folded each of those columns down to exactly that value, so the scheme is
+    // handed them rather than left to evaluate the table again.
     let points = RunPoints::new(&point, indexed_output.as_ref());
     let opening = transcript.main_opening(|challenger| {
         let schedule = instances.main_schedule(indexed_plan.as_ref(), |role, rows| {
             trace_suffix(points.at(role), rows)
         });
-        config.pcs().open_at(
+        let mut known = alloc::vec![None; schedule.protocol().num_openings()];
+        for ((batch, local), next) in schedule
+            .first_batch_per_table()
+            .into_iter()
+            .zip(zerocheck_proof.local)
+            .zip(zerocheck_proof.next)
+        {
+            known[batch] = Some(OpeningEvals::new(local, next));
+        }
+        config.pcs().open_at_known(
             prover_data,
             schedule.protocol(),
             &schedule.against(),
+            &known,
             challenger,
         )
     });

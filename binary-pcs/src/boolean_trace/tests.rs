@@ -1470,6 +1470,94 @@ fn packed_successor_tables_match_dense_proof_bytes() {
 }
 
 #[test]
+fn supplied_values_open_to_the_evaluated_proof_and_a_wrong_one_is_refused() {
+    // Invariant: a batch opened from values its caller supplies is the batch opened from
+    // values the scheme evaluates, byte for byte and sponge state for sponge state.
+    //
+    // Fixture state: one packed table read at both rows, twice, so one batch is supplied
+    // and the other still evaluated from the table.
+    //
+    // A supplied run that is off by one value, or shaped for another batch, is refused.
+    let shape = TableShape::new(9, 5);
+    let scheme = pcs(&[shape]);
+    let protocol = both_views_protocol(shape, 2);
+    let table = packed_table(&table_with_width(0xB700, 9, 5));
+    let mut rng = SmallRng::seed_from_u64(0xB701);
+    let points = (0..2)
+        .map(|_| Point::<EF>::rand(&mut rng, 9))
+        .collect::<Vec<_>>();
+
+    let mut evaluated_chal = challenger();
+    let (commitment, data) = scheme
+        .commit(vec![table.clone()], &mut evaluated_chal)
+        .unwrap();
+    let evaluated = scheme
+        .open_at(data, &protocol, &points, &mut evaluated_chal)
+        .unwrap();
+    let evaluated_after_open = p3_challenger::CanSample::<EF>::sample(&mut evaluated_chal);
+
+    let mut verifier = challenger();
+    scheme.observe_commitment(&commitment, &mut verifier);
+    let evals = scheme
+        .verify_at(&commitment, &evaluated, &protocol, &points, &mut verifier)
+        .unwrap();
+
+    let open_known = |known: &[Option<OpeningEvals<EF>>]| {
+        let mut chal = challenger();
+        let (_, data) = scheme.commit(vec![table.clone()], &mut chal).unwrap();
+        let untouched = chal.clone();
+        let result = scheme.open_at_known(data, &protocol, &points, known, &mut chal);
+        (result, chal, untouched)
+    };
+
+    let (supplied, mut supplied_chal, _) = open_known(&[Some(evals[0].clone()), None]);
+    assert_eq!(
+        postcard::to_allocvec(&supplied.unwrap()).unwrap(),
+        postcard::to_allocvec(&evaluated).unwrap()
+    );
+    assert_eq!(
+        p3_challenger::CanSample::<EF>::sample(&mut supplied_chal),
+        evaluated_after_open
+    );
+
+    let mut current = evals[1].current().to_vec();
+    current[3] += EF::ONE;
+    let moved = OpeningEvals::new(current, evals[1].next().to_vec());
+    let (result, _, _) = open_known(&[None, Some(moved)]);
+    assert!(matches!(
+        result,
+        Err(BooleanTraceCommitmentError::ColumnBatchValueMismatch { .. })
+    ));
+
+    // A shape or count error is found before the transcript moves.
+    let short = OpeningEvals::new(evals[0].current().to_vec(), Vec::new());
+    for (known, expected_batch) in [
+        (vec![None, Some(short)], Some(1)),
+        (vec![Some(evals[0].clone())], None),
+    ] {
+        let (result, mut chal, mut untouched) = open_known(&known);
+        match (result, expected_batch) {
+            (Err(BooleanTraceCommitmentError::KnownValueShape { batch }), Some(expected)) => {
+                assert_eq!(batch, expected);
+            }
+            (
+                Err(BooleanTraceCommitmentError::KnownValueCount {
+                    expected: 2,
+                    actual: 1,
+                }),
+                None,
+            ) => {}
+            (Err(other), _) => panic!("{other:?}"),
+            (Ok(_), _) => panic!("a mis-shaped supplied run must be refused"),
+        }
+        assert_eq!(
+            p3_challenger::CanSample::<EF>::sample(&mut chal),
+            p3_challenger::CanSample::<EF>::sample(&mut untouched),
+        );
+    }
+}
+
+#[test]
 fn partial_successor_views_use_the_fallback_column_route() {
     // Invariant: a batch naming the two views differently is answered column by column,
     // one claim per column either view names, a column in both sharing one claim.
