@@ -19,7 +19,7 @@ use crate::folder::ProverAir;
 use crate::indexed::{IndexedPlan, IndexedWitness};
 use crate::instance::{ProverParts, RunPoints, trace_suffix};
 use crate::logup_star::LogupStarProof;
-use crate::lookup::prove_lookup;
+use crate::lookup::{LookupRuntime, prove_lookup};
 use crate::opening::TableOpening;
 use crate::proof::{IndexedLookupProof, MultiStarkProof};
 use crate::security::{SecurityError, assess_statement};
@@ -281,9 +281,16 @@ where
     }
 
     // Indexed lookups change the described sequence, so the plan is settled first.
-    let indexed_plan =
+    //
+    // Setup already read every AIR's declarations off its one symbolic pass.
+    // A batch declaring no indexed lookup has no plan, so it skips the pass that finds none.
+    let profiles = &proving_key.air_profiles;
+    let indexed_plan = if profiles.iter().any(|profile| profile.declares_indexed) {
         IndexedPlan::build::<C::Val, C::Challenge, A>(&airs, &instances.num_variables())
-            .expect("an indexed lookup the statement cannot plan is a caller error");
+            .expect("an indexed lookup the statement cannot plan is a caller error")
+    } else {
+        None
+    };
     let bus = BusContext::<C::Val, C::Challenge>::build(&airs, &instances.num_variables())?;
 
     // IndexedWitness currently borrows dense field slices for both payload and position columns.
@@ -445,7 +452,12 @@ where
 
     // 5. Materialize the lookup fractions and reduce them, inside the delegation bracket.
     // The resulting claim feeds the coupled AIR sumcheck below.
+    //
+    // A batch whose AIRs declare no lookup has no plan, so it touches no transcript either.
     let (lookup_proof, lookup_data) = transcript.lookup_argument(|challenger| {
+        if !profiles.iter().any(|profile| profile.declares_lookups) {
+            return (None, LookupRuntime::Inactive);
+        }
         prove_lookup::<C::Val, C::Challenge, A, _>(
             &airs,
             &tables,

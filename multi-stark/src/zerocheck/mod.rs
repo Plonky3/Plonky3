@@ -320,6 +320,10 @@ where
         },
         // The folder batches every asserted constraint, then one pin per listed cell.
         num_constraints: base_constraints.len() + extension_constraints.len() + pins.count,
+        declares_lookups: !builder.global_interactions().is_empty()
+            || !builder.local_interactions().is_empty(),
+        declares_indexed: !builder.indexed_reads().is_empty()
+            || !builder.indexed_tables().is_empty(),
     }
 }
 
