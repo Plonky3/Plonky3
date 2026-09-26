@@ -1904,6 +1904,12 @@ impl<'a, R: Field, const CORNERS: usize> PlaneFold<'a, R, CORNERS> {
         (self.plane_group(low, group), self.plane_group(high, group))
     }
 
+    /// Whether the stage keeps its low planes alone, every high plane being clear.
+    #[inline]
+    const fn low_only(&self) -> bool {
+        matches!(self.trace.cells, Planes::Low(_))
+    }
+
     /// The corners of one group in one plane.
     #[inline]
     fn plane_group<'b>(&self, words: &'b [u64], group: usize) -> &'b [u64] {
@@ -1983,7 +1989,7 @@ impl<'a, R: Field, const CORNERS: usize> PlaneFold<'a, R, CORNERS> {
     /// do so needs none of the high plane's masks or lookups.
     #[inline]
     fn corner_values(&self, low: &[u64], high: &[u64]) -> impl Iterator<Item = R> + '_ {
-        let has_high = any_set(high);
+        let has_high = !self.low_only() && any_set(high);
         let mut low_masks = [[0; SLICED_LANES]; MAX_PLANE_FOLD_GROUPS];
         let mut high_masks = [[0; SLICED_LANES]; MAX_PLANE_FOLD_GROUPS];
         for (group, (low_masks, high_masks)) in low_masks
@@ -2248,6 +2254,7 @@ impl RowTile {
         let (lanes, stride) = (self.lanes, self.group_stride);
         let column_bytes = lanes * self.cell;
         let clear_high = self.stale_high;
+        let low_only = fold.low_only();
         let mut high = false;
         for start in (0..fold.trace.width).step_by(STAGED_COLUMNS) {
             let columns = start..(start + STAGED_COLUMNS).min(fold.trace.width);
@@ -2274,7 +2281,7 @@ impl RowTile {
                 let low_cells = &mut self.low_cells[at..];
                 fold.write_cells(halves.map(|(low, _)| low), lanes, stride, low_cells);
                 let high_halves = halves.map(|(_, high)| high);
-                if high_halves.iter().any(|words| any_set(words)) {
+                if !low_only && high_halves.iter().any(|words| any_set(words)) {
                     fold.write_cells(high_halves, lanes, stride, &mut self.high_cells[at..]);
                     high = true;
                 } else if clear_high {
