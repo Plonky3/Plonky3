@@ -31,32 +31,56 @@ use super::{SLICED_LANES, SlicedEvaluation, TABLE_BITS, TABLE_ENTRIES, TABLES_PE
 use crate::folder::eval_boundary_io;
 use crate::selectors::BoundaryEvals;
 
-/// Sixty-four bits of one AIR input, one per lane.
+/// Evaluations one AIR walk carries side by side, each over its own sixty-four lanes.
+pub const SLICED_CELLS: usize = 4;
+
+/// One word per evaluation: bit `i` of word `c` is lane `i` of evaluation `c`.
+pub type CellWords = [u64; SLICED_CELLS];
+
+/// The words `f(a[c], b[c])`, one per evaluation.
+#[inline(always)]
+fn zip(a: CellWords, b: CellWords, f: impl Fn(u64, u64) -> u64) -> CellWords {
+    core::array::from_fn(|cell| f(a[cell], b[cell]))
+}
+
+/// The words `a & b`.
+#[inline(always)]
+fn and(a: CellWords, b: CellWords) -> CellWords {
+    zip(a, b, |a, b| a & b)
+}
+
+/// The words `a ^ b`.
+#[inline(always)]
+fn xor(a: CellWords, b: CellWords) -> CellWords {
+    zip(a, b, |a, b| a ^ b)
+}
+
+/// The words of one AIR input, one per evaluation.
 ///
 /// An input is linear: its quadratic and constant parts are zero.
 #[repr(transparent)]
 pub struct SlicedBit<F> {
-    /// The input's bit in every lane.
-    bits: u64,
+    /// The input's bits, one word per evaluation.
+    bits: CellWords,
     /// The trace field the AIR believes it computes over.
     _field: PhantomData<fn() -> F>,
 }
 
 impl<F> SlicedBit<F> {
-    /// The input with the given bit in every lane.
+    /// The input with the given bits, one word per evaluation.
     #[inline]
     #[must_use]
-    pub const fn new(bits: u64) -> Self {
+    pub const fn new(bits: CellWords) -> Self {
         Self {
             bits,
             _field: PhantomData,
         }
     }
 
-    /// The input's bit in every lane.
+    /// The input's bits, one word per evaluation.
     #[inline]
     #[must_use]
-    pub const fn bits(self) -> u64 {
+    pub const fn bits(self) -> CellWords {
         self.bits
     }
 }
@@ -73,27 +97,28 @@ impl<F> Copy for SlicedBit<F> {}
 impl<F> Default for SlicedBit<F> {
     #[inline]
     fn default() -> Self {
-        Self::new(0)
+        Self::new([0; SLICED_CELLS])
     }
 }
 
 impl<F> fmt::Debug for SlicedBit<F> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "SlicedBit({:#018x})", self.bits)
+        write!(f, "SlicedBit({:#018x?})", self.bits)
     }
 }
 
-/// Sixty-four values of an expression of degree at most two, split into homogeneous parts.
+/// An expression of degree at most two, split into homogeneous parts, over the lanes of every
+/// evaluation.
 ///
-/// Lane `i` of each part is that part of the expression evaluated at lane `i`'s inputs.
+/// Bit `i` of a part's word `c` is that part of the expression at lane `i` of evaluation `c`.
 ///
 /// `F` must have characteristic two, as a field holding `GF(4)` does.
 pub struct SlicedQuadratic<F> {
-    /// The quadratic part of every lane.
-    quadratic: u64,
-    /// The linear part of every lane.
-    linear: u64,
-    /// The constant part: every bit clear, or every bit set.
+    /// The quadratic part, one word per evaluation.
+    quadratic: CellWords,
+    /// The linear part, one word per evaluation.
+    linear: CellWords,
+    /// The constant part, the same in every lane: every bit clear, or every bit set.
     constant: u64,
     /// Whether some `F` value outside `GF(2)` reached this value.
     poisoned: bool,
@@ -105,7 +130,7 @@ impl<F> SlicedQuadratic<F> {
     /// The value with the given parts, reached by no value outside `GF(2)`.
     #[inline]
     #[must_use]
-    pub(crate) const fn from_parts(quadratic: u64, linear: u64, constant: u64) -> Self {
+    pub(crate) const fn from_parts(quadratic: CellWords, linear: CellWords, constant: u64) -> Self {
         Self {
             quadratic,
             linear,
@@ -117,8 +142,8 @@ impl<F> SlicedQuadratic<F> {
 
     /// A value a trace-field value outside `GF(2)` reached; its parts carry no meaning.
     const POISONED: Self = Self {
-        quadratic: 0,
-        linear: 0,
+        quadratic: [0; SLICED_CELLS],
+        linear: [0; SLICED_CELLS],
         constant: 0,
         poisoned: true,
         _field: PhantomData,
@@ -126,7 +151,13 @@ impl<F> SlicedQuadratic<F> {
 
     /// Combine two operands' parts into one value, poisoned when either operand is.
     #[inline]
-    const fn with_flags(quadratic: u64, linear: u64, constant: u64, lhs: bool, rhs: bool) -> Self {
+    const fn with_flags(
+        quadratic: CellWords,
+        linear: CellWords,
+        constant: u64,
+        lhs: bool,
+        rhs: bool,
+    ) -> Self {
         Self {
             quadratic,
             linear,
@@ -136,18 +167,21 @@ impl<F> SlicedQuadratic<F> {
         }
     }
 
-    /// The quadratic part of every lane.
+    /// The quadratic part, one word per evaluation.
     #[inline]
     #[must_use]
-    pub const fn quadratic(self) -> u64 {
+    pub const fn quadratic(self) -> CellWords {
         self.quadratic
     }
 
-    /// The whole value of every lane, the sum of its three parts.
+    /// The whole value, the sum of the three parts, one word per evaluation.
     #[inline]
     #[must_use]
-    pub const fn value(self) -> u64 {
-        self.quadratic ^ self.linear ^ self.constant
+    pub fn value(self) -> CellWords {
+        xor(
+            xor(self.quadratic, self.linear),
+            [self.constant; SLICED_CELLS],
+        )
     }
 
     /// Whether a trace-field value outside `GF(2)` has reached this value.
@@ -157,12 +191,53 @@ impl<F> SlicedQuadratic<F> {
         self.poisoned
     }
 
+    /// The sum of two values, part by part.
+    #[inline]
+    fn add_parts(self, rhs: Self) -> Self {
+        Self::with_flags(
+            xor(self.quadratic, rhs.quadratic),
+            xor(self.linear, rhs.linear),
+            self.constant ^ rhs.constant,
+            self.poisoned,
+            rhs.poisoned,
+        )
+    }
+
+    /// The product of two values:
+    ///
+    /// ```text
+    ///     (Qa + La + Ka)(Qb + Lb + Kb) = (La Lb + Qa Kb + Ka Qb) + (La Kb + Ka Lb) + Ka Kb
+    /// ```
+    ///
+    /// up to the parts of degree three and four.
+    #[inline]
+    fn mul_parts(self, rhs: Self) -> Self {
+        let (lhs_constant, rhs_constant) =
+            ([self.constant; SLICED_CELLS], [rhs.constant; SLICED_CELLS]);
+        Self::with_flags(
+            xor(
+                and(self.linear, rhs.linear),
+                xor(
+                    and(self.quadratic, rhs_constant),
+                    and(lhs_constant, rhs.quadratic),
+                ),
+            ),
+            xor(
+                and(self.linear, rhs_constant),
+                and(lhs_constant, rhs.linear),
+            ),
+            self.constant & rhs.constant,
+            self.poisoned,
+            rhs.poisoned,
+        )
+    }
+
     /// The sum with an input, whose only part is linear.
     #[inline]
-    const fn add_input(self, bits: u64) -> Self {
+    fn add_input(self, bits: CellWords) -> Self {
         Self::with_flags(
             self.quadratic,
-            self.linear ^ bits,
+            xor(self.linear, bits),
             self.constant,
             self.poisoned,
             false,
@@ -171,10 +246,10 @@ impl<F> SlicedQuadratic<F> {
 
     /// The product with an input, whose only part is linear.
     #[inline]
-    const fn mul_input(self, bits: u64) -> Self {
+    fn mul_input(self, bits: CellWords) -> Self {
         Self::with_flags(
-            self.linear & bits,
-            self.constant & bits,
+            and(self.linear, bits),
+            and([self.constant; SLICED_CELLS], bits),
             0,
             self.poisoned,
             false,
@@ -211,8 +286,8 @@ impl<F> Copy for SlicedQuadratic<F> {}
 impl<F> fmt::Debug for SlicedQuadratic<F> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("SlicedQuadratic")
-            .field("quadratic", &format_args!("{:#018x}", self.quadratic))
-            .field("linear", &format_args!("{:#018x}", self.linear))
+            .field("quadratic", &format_args!("{:#018x?}", self.quadratic))
+            .field("linear", &format_args!("{:#018x?}", self.linear))
             .field("constant", &format_args!("{:#018x}", self.constant))
             .field("poisoned", &self.poisoned)
             .finish()
@@ -222,14 +297,14 @@ impl<F> fmt::Debug for SlicedQuadratic<F> {
 impl<F> Default for SlicedQuadratic<F> {
     #[inline]
     fn default() -> Self {
-        Self::from_parts(0, 0, 0)
+        Self::from_parts([0; SLICED_CELLS], [0; SLICED_CELLS], 0)
     }
 }
 
 impl<F> From<SlicedBit<F>> for SlicedQuadratic<F> {
     #[inline]
     fn from(x: SlicedBit<F>) -> Self {
-        Self::from_parts(0, x.bits, 0)
+        Self::from_parts([0; SLICED_CELLS], x.bits, 0)
     }
 }
 
@@ -238,13 +313,7 @@ impl<F> Add for SlicedQuadratic<F> {
 
     #[inline]
     fn add(self, rhs: Self) -> Self {
-        Self::with_flags(
-            self.quadratic ^ rhs.quadratic,
-            self.linear ^ rhs.linear,
-            self.constant ^ rhs.constant,
-            self.poisoned,
-            rhs.poisoned,
-        )
+        self.add_parts(rhs)
     }
 }
 
@@ -261,7 +330,7 @@ impl<F> Sub for SlicedQuadratic<F> {
     /// Characteristic two: subtracting is adding.
     #[inline]
     fn sub(self, rhs: Self) -> Self {
-        self.add(rhs)
+        self.add_parts(rhs)
     }
 }
 
@@ -285,24 +354,9 @@ impl<F> Neg for SlicedQuadratic<F> {
 impl<F> Mul for SlicedQuadratic<F> {
     type Output = Self;
 
-    /// ```text
-    ///     (Qa + La + Ka)(Qb + Lb + Kb) = (La Lb + Qa Kb + Ka Qb) + (La Kb + Ka Lb) + Ka Kb
-    /// ```
-    ///
-    /// up to the parts of degree three and four.
-    // Clippy's nursery lint reads the cross terms `Qa Kb` and `Ka Qb` as typos for `Qa Qb`.
-    #[allow(clippy::suspicious_operation_groupings)]
     #[inline]
     fn mul(self, rhs: Self) -> Self {
-        Self::with_flags(
-            (self.linear & rhs.linear)
-                ^ (self.quadratic & rhs.constant)
-                ^ (self.constant & rhs.quadratic),
-            (self.linear & rhs.constant) ^ (self.constant & rhs.linear),
-            self.constant & rhs.constant,
-            self.poisoned,
-            rhs.poisoned,
-        )
+        self.mul_parts(rhs)
     }
 }
 
@@ -331,8 +385,8 @@ impl<F: Field> PrimeCharacteristicRing for SlicedQuadratic<F> {
     // The prime subfield embeds the same way into every field of its characteristic.
     type PrimeSubfield = F::PrimeSubfield;
 
-    const ZERO: Self = Self::from_parts(0, 0, 0);
-    const ONE: Self = Self::from_parts(0, 0, u64::MAX);
+    const ZERO: Self = Self::from_parts([0; SLICED_CELLS], [0; SLICED_CELLS], 0);
+    const ONE: Self = Self::from_parts([0; SLICED_CELLS], [0; SLICED_CELLS], u64::MAX);
     // `F` has characteristic two.
     const TWO: Self = Self::ZERO;
     const NEG_ONE: Self = Self::ONE;
@@ -344,7 +398,13 @@ impl<F: Field> PrimeCharacteristicRing for SlicedQuadratic<F> {
 
     #[inline]
     fn double(&self) -> Self {
-        Self::with_flags(0, 0, 0, self.poisoned, false)
+        Self::with_flags(
+            [0; SLICED_CELLS],
+            [0; SLICED_CELLS],
+            0,
+            self.poisoned,
+            false,
+        )
     }
 
     /// ```text
@@ -354,7 +414,13 @@ impl<F: Field> PrimeCharacteristicRing for SlicedQuadratic<F> {
     /// `L^2` is `L` on a bit.
     #[inline]
     fn square(&self) -> Self {
-        Self::with_flags(self.linear, 0, self.constant, self.poisoned, false)
+        Self::with_flags(
+            self.linear,
+            [0; SLICED_CELLS],
+            self.constant,
+            self.poisoned,
+            false,
+        )
     }
 
     /// ```text
@@ -363,7 +429,7 @@ impl<F: Field> PrimeCharacteristicRing for SlicedQuadratic<F> {
     #[inline]
     fn bool_check(&self) -> Self {
         Self::with_flags(
-            self.linear ^ self.quadratic,
+            xor(self.linear, self.quadratic),
             self.linear,
             0,
             self.poisoned,
@@ -611,12 +677,14 @@ impl<R: Field> BitLaneSums<R> {
     }
 }
 
-/// AIR folder over sixty-four rows, each constraint reduced to one bit per lane.
+/// AIR folder over [`SLICED_CELLS`] evaluations of sixty-four rows, each constraint reduced to one
+/// bit per lane.
 ///
-/// Every asserted constraint contributes its quadratic part, or its whole value when the folder
-/// is built for whole values. The bits are summed across the lanes with the weights of a
-/// [`BitLaneSums`], then weighted by the constraint's descending alpha power. Lookup declarations
-/// are dropped, as in [`SlicedFolder`](super::SlicedFolder).
+/// In each evaluation every asserted constraint contributes its quadratic part, or its whole
+/// value where the folder is built for whole values. The bits are summed across the lanes with
+/// the weights of a [`BitLaneSums`], then weighted by the constraint's descending alpha power, one
+/// sum per evaluation. Lookup declarations are dropped, as in
+/// [`SlicedFolder`](super::SlicedFolder).
 #[derive(Debug)]
 pub struct SlicedQuadraticFolder<'a, F, R> {
     /// Two-row main window holding the current and shifted-by-one rows.
@@ -633,10 +701,11 @@ pub struct SlicedQuadraticFolder<'a, F, R> {
     alpha_powers: &'a [R],
     /// The lane weights every constraint is summed with.
     lanes: &'a BitLaneSums<R>,
-    /// Every bit set when a constraint contributes its whole value, clear for its quadratic part.
-    whole: u64,
-    /// Running lane-weighted, alpha-batched sum.
-    accumulator: R,
+    /// Per evaluation, every bit set when a constraint contributes its whole value, clear for its
+    /// quadratic part.
+    whole: CellWords,
+    /// Running lane-weighted, alpha-batched sums, one per evaluation.
+    accumulators: [R; SLICED_CELLS],
     /// Number of constraints asserted so far, which is the next position in `alpha_powers`.
     constraint_index: usize,
     /// Whether any asserted value was poisoned.
@@ -653,8 +722,8 @@ impl<'a, F, R: Field> SlicedQuadraticFolder<'a, F, R> {
     /// - `public_values`: public inputs forwarded to the AIR.
     /// - `alpha_powers`: `alpha^(n - 1 - i)` for each of the `n` constraints, pins included.
     /// - `lanes`: the weights summing each constraint across the lanes.
-    /// - `whole`: whether each constraint contributes its whole value rather than its quadratic
-    ///   part.
+    /// - `whole`: per evaluation, whether each constraint contributes its whole value rather than
+    ///   its quadratic part.
     #[inline]
     #[must_use]
     pub fn new(
@@ -664,7 +733,7 @@ impl<'a, F, R: Field> SlicedQuadraticFolder<'a, F, R> {
         public_values: &'a [F],
         alpha_powers: &'a [R],
         lanes: &'a BitLaneSums<R>,
-        whole: bool,
+        whole: [bool; SLICED_CELLS],
     ) -> Self {
         Self {
             main_window: RowWindow::from_two_rows(local, next),
@@ -674,8 +743,8 @@ impl<'a, F, R: Field> SlicedQuadraticFolder<'a, F, R> {
             public_values,
             alpha_powers,
             lanes,
-            whole: u64::from(whole).wrapping_neg(),
-            accumulator: R::ZERO,
+            whole: whole.map(|whole| u64::from(whole).wrapping_neg()),
+            accumulators: [R::ZERO; SLICED_CELLS],
             constraint_index: 0,
             poisoned: false,
         }
@@ -701,14 +770,14 @@ impl<'a, F, R: Field> SlicedQuadraticFolder<'a, F, R> {
         self
     }
 
-    /// Run the AIR, then its public boundary pins, and return the batched sum.
+    /// Run the AIR, then its public boundary pins, and return the batched sum of each evaluation.
     ///
     /// # Panics
     ///
     /// Panics if the alpha powers do not number one per asserted constraint.
     #[inline]
     #[must_use]
-    pub fn eval_air<A>(mut self, air: &A) -> SlicedEvaluation<R>
+    pub fn eval_air<A>(mut self, air: &A) -> SlicedEvaluation<[R; SLICED_CELLS]>
     where
         A: Air<Self>,
         Self: AirBuilder,
@@ -721,15 +790,21 @@ impl<'a, F, R: Field> SlicedQuadraticFolder<'a, F, R> {
             "attached alpha powers must match the number of asserted constraints"
         );
         SlicedEvaluation {
-            value: self.accumulator,
+            value: self.accumulators,
             poisoned: self.poisoned,
         }
     }
 
-    /// Add the lane-weighted sum of `bits`, scaled by `power`, to the running sum.
+    /// Add the lane-weighted sum of each evaluation's bits, scaled by `power`, to its running sum.
+    ///
+    /// A word that vanishes on every lane adds nothing, as a selector-gated one mostly does.
     #[inline]
-    fn accumulate(&mut self, power: R, bits: u64) {
-        self.accumulator += power * self.lanes.sum(bits);
+    fn accumulate(&mut self, power: R, bits: CellWords) {
+        for (accumulator, bits) in self.accumulators.iter_mut().zip(bits) {
+            if bits != 0 {
+                *accumulator += power * self.lanes.sum(bits);
+            }
+        }
     }
 }
 
@@ -776,12 +851,12 @@ where
     fn assert_zero<I: Into<Self::Expr>>(&mut self, x: I) {
         let x = x.into();
         self.poisoned |= x.poisoned;
-        let bits = x.quadratic ^ ((x.linear ^ x.constant) & self.whole);
+        let rest = zip(x.linear, self.whole, |linear, whole| {
+            (linear ^ x.constant) & whole
+        });
+        let bits = xor(x.quadratic, rest);
         // A constraint past the last power is only counted; the count check rejects it.
-        // A value that vanishes on every lane adds nothing.
-        if let Some(&power) = self.alpha_powers.get(self.constraint_index)
-            && bits != 0
-        {
+        if let Some(&power) = self.alpha_powers.get(self.constraint_index) {
             self.accumulate(power, bits);
         }
         self.constraint_index += 1;

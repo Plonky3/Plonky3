@@ -61,64 +61,83 @@ fn arb_quadratic() -> impl Strategy<Value = TestQuadratic> {
         })
 }
 
+fn arb_words() -> impl Strategy<Value = CellWords> {
+    prop::array::uniform4(any::<u64>())
+}
+
+/// Words of every input, one per evaluation.
+fn arb_inputs() -> impl Strategy<Value = [CellWords; INPUTS]> {
+    prop::array::uniform4(arb_words())
+}
+
 fn arb_parts() -> impl Strategy<Value = Quadratic> {
-    (any::<u64>(), any::<u64>(), any::<bool>()).prop_map(|(quadratic, linear, constant)| {
+    (arb_words(), arb_words(), any::<bool>()).prop_map(|(quadratic, linear, constant)| {
         Quadratic::from_parts(quadratic, linear, u64::from(constant).wrapping_neg())
     })
 }
 
 /// The three parts and the poison flag of a value.
-fn parts(x: Quadratic) -> (u64, u64, u64, bool) {
+fn parts(x: Quadratic) -> (CellWords, CellWords, u64, bool) {
     (x.quadratic, x.linear, x.constant, x.poisoned)
+}
+
+/// Every lane of a sliced `GF(4)` value.
+fn gf4_lanes(x: Gf4) -> Vec<BinaryField2> {
+    (0..SLICED_LANES).map(|lane| x.lane(lane)).collect()
+}
+
+/// Every lane of one word, as bits of `GF(4)`.
+fn bit_lanes(word: u64) -> Vec<BinaryField2> {
+    (0..SLICED_LANES)
+        .map(|lane| BinaryField2::from_bool((word >> lane) & 1 == 1))
+        .collect()
 }
 
 proptest! {
     #[test]
     fn the_quadratic_part_is_the_coefficient_of_the_square(
         quadratic in arb_quadratic(),
-        lo in prop::array::uniform4(any::<u64>()),
-        hi in prop::array::uniform4(any::<u64>()),
+        lo in arb_inputs(),
+        hi in arb_inputs(),
     ) {
         // On the line lo + v (hi - lo) the quadratic has degree two in v, and its value at the
         // node g of GF(4) interpolates its values at 0 and 1 and its coefficient of v^2:
         //
         //     q(g) = q(0) (1 + g) + q(1) g + q(inf) (g^2 + g),        g^2 + g = 1
-        let at = |low: [u64; INPUTS], high: [u64; INPUTS]| {
-            quadratic.eval(core::array::from_fn(|i| Gf4::from_planes(low[i], high[i])))
-        };
-        let delta: [u64; INPUTS] = core::array::from_fn(|i| lo[i] ^ hi[i]);
-        let on_node = at(lo, delta);
-        let (at_zero, at_one) = (at(lo, [0; INPUTS]), at(hi, [0; INPUTS]));
-        let leading = quadratic.eval(delta.map(|bits| Quadratic::from(Bit::new(bits))));
+        let delta: [CellWords; INPUTS] = core::array::from_fn(|i| xor(lo[i], hi[i]));
+        let leading = quadratic.eval(delta.map(|words| Quadratic::from(Bit::new(words))));
         prop_assert!(!leading.is_poisoned());
-        let interpolated = at_zero.scale(true, true)
-            + at_one.scale(false, true)
-            + Gf4::from_planes(leading.quadratic(), 0);
-        prop_assert_eq!(
-            (0..SLICED_LANES).map(|lane| on_node.lane(lane)).collect::<Vec<_>>(),
-            (0..SLICED_LANES).map(|lane| interpolated.lane(lane)).collect::<Vec<_>>()
-        );
+        for cell in 0..SLICED_CELLS {
+            let at = |low: &[CellWords; INPUTS], high: Option<&[CellWords; INPUTS]>| {
+                quadratic.eval(core::array::from_fn(|i| {
+                    Gf4::from_planes(low[i][cell], high.map_or(0, |high| high[i][cell]))
+                }))
+            };
+            let on_node = at(&lo, Some(&delta));
+            let interpolated = at(&lo, None).scale(true, true)
+                + at(&hi, None).scale(false, true)
+                + Gf4::from_planes(leading.quadratic()[cell], 0);
+            prop_assert_eq!(gf4_lanes(on_node), gf4_lanes(interpolated));
+        }
     }
 
     #[test]
     fn the_whole_value_is_the_quadratic_on_the_bits(
         quadratic in arb_quadratic(),
-        bits in prop::array::uniform4(any::<u64>()),
+        bits in arb_inputs(),
     ) {
-        let whole = quadratic.eval(bits.map(|bits| Quadratic::from(Bit::new(bits))));
-        let reference = quadratic.eval(bits.map(|bits| Gf4::from_planes(bits, 0)));
-        prop_assert_eq!(
-            (0..SLICED_LANES)
-                .map(|lane| BinaryField2::from_bool((whole.value() >> lane) & 1 == 1))
-                .collect::<Vec<_>>(),
-            (0..SLICED_LANES).map(|lane| reference.lane(lane)).collect::<Vec<_>>()
-        );
+        let whole = quadratic.eval(bits.map(|words| Quadratic::from(Bit::new(words))));
+        for (cell, value) in whole.value().into_iter().enumerate() {
+            let reference =
+                quadratic.eval(core::array::from_fn(|i| Gf4::from_planes(bits[i][cell], 0)));
+            prop_assert_eq!(bit_lanes(value), gf4_lanes(reference));
+        }
     }
 
     #[test]
     fn input_arithmetic_matches_the_general_product(
-        a in any::<u64>(),
-        b in any::<u64>(),
+        a in arb_words(),
+        b in arb_words(),
         x in arb_parts(),
     ) {
         let (a, b) = (Bit::new(a), Bit::new(b));
@@ -167,15 +186,19 @@ proptest! {
 
 #[test]
 fn constants_narrow_to_bits_or_poison() {
-    assert_eq!(parts(Quadratic::narrow(F::ZERO)), (0, 0, 0, false));
-    assert_eq!(parts(Quadratic::narrow(F::ONE)), (0, 0, u64::MAX, false));
+    let zero = [0; SLICED_CELLS];
+    assert_eq!(parts(Quadratic::narrow(F::ZERO)), (zero, zero, 0, false));
+    assert_eq!(
+        parts(Quadratic::narrow(F::ONE)),
+        (zero, zero, u64::MAX, false)
+    );
     for bits in 2..8_u128 {
         assert!(Quadratic::narrow(F::from_repr(bits)).is_poisoned());
     }
     // Poison survives every operation it takes part in.
     let outside = Quadratic::narrow(F::from_repr(2));
-    let clean = Quadratic::from(Bit::new(0x0123_4567_89ab_cdef));
-    let input = Bit::new(u64::MAX);
+    let clean = Quadratic::from(Bit::new([0x0123_4567_89ab_cdef; SLICED_CELLS]));
+    let input = Bit::new([u64::MAX; SLICED_CELLS]);
     assert!((clean * outside).is_poisoned());
     assert!((outside + clean).is_poisoned());
     assert!((outside * input).is_poisoned());
@@ -188,8 +211,9 @@ fn constants_narrow_to_bits_or_poison() {
 
 #[test]
 fn ring_constants_are_those_of_gf2() {
-    assert_eq!(parts(Quadratic::ZERO), (0, 0, 0, false));
-    assert_eq!(parts(Quadratic::ONE), (0, 0, u64::MAX, false));
+    let zero = [0; SLICED_CELLS];
+    assert_eq!(parts(Quadratic::ZERO), (zero, zero, 0, false));
+    assert_eq!(parts(Quadratic::ONE), (zero, zero, u64::MAX, false));
     assert_eq!(parts(Quadratic::TWO), parts(Quadratic::ZERO));
     assert_eq!(parts(Quadratic::NEG_ONE), parts(Quadratic::ONE));
     assert_eq!(

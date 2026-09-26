@@ -46,16 +46,13 @@ use p3_multilinear_util::poly::Poly;
 use super::{LANE_VARIABLES, PlaneWords, Planes, SlicedTensor, SlicedTrace, TensorNodes};
 use crate::rounds::{AirSlot, rows_per_task};
 use crate::selectors::BoundaryEvals;
-use crate::sliced::{BitLaneSums, SlicedBit, SlicedQuadraticFolder};
+use crate::sliced::{BitLaneSums, SLICED_CELLS, SlicedBit, SlicedQuadraticFolder};
 
 /// Variables the tensor spans: three prefix variables, then the active variable `t`.
 const DEPTH: usize = 4;
 
 /// Nodes each tensor coordinate takes, `0`, `1`, and infinity, in tensor-index order.
 const NODES: usize = 3;
-
-/// The tensor index digit of infinity.
-const INFINITY: usize = 2;
 
 /// Prefixes of the three variables before `t`, one per assignment of nodes.
 const PREFIXES: usize = NODES.pow(DEPTH as u32 - 1);
@@ -110,10 +107,8 @@ struct InfinityTensor<'a, 'air, A, F, R> {
 struct InfinityScratch<F, R> {
     /// `sums[air][prefix * 3 + node]`: eq-weighted, alpha-batched constraint sums.
     sums: Vec<Vec<R>>,
-    /// Column inputs at `t = 0`, then at infinity.
-    low: Vec<SlicedBit<F>>,
-    /// Column inputs at `t = 1`.
-    high: Vec<SlicedBit<F>>,
+    /// Column inputs at `t = 0`, `t = 1`, and infinity, one word each.
+    inputs: Vec<SlicedBit<F>>,
     /// The next-row inputs, which no AIR on the tensor declares.
     zeros: Vec<SlicedBit<F>>,
     /// Whether any evaluation was poisoned.
@@ -126,8 +121,7 @@ impl<F, R: Field> InfinityScratch<F, R> {
     fn new(airs: usize, width: usize) -> Self {
         Self {
             sums: vec![R::zero_vec(PREFIXES * NODES); airs],
-            low: vec![SlicedBit::default(); width],
-            high: vec![SlicedBit::default(); width],
+            inputs: vec![SlicedBit::default(); width],
             zeros: vec![SlicedBit::default(); width],
             poisoned: false,
             high_planes: 0,
@@ -173,10 +167,10 @@ where
         let width = self.trace.width;
         let starts: [usize; CORNERS] =
             core::array::from_fn(|corner| (corners[corner] * self.words + word) * width);
-        let (low, high) = (&mut scratch.low[..width], &mut scratch.high[..width]);
+        let inputs = &mut scratch.inputs[..width];
         scratch.high_planes |= match &self.trace.cells {
-            Planes::Low(words) => fold_corner_rows(&**words, starts, low, high),
-            Planes::Pairs(pairs) => fold_corner_rows(&**pairs, starts, low, high),
+            Planes::Low(words) => fold_corner_rows(&**words, starts, inputs),
+            Planes::Pairs(pairs) => fold_corner_rows(&**pairs, starts, inputs),
         };
 
         let mut boundary = [[0; 3]; 2];
@@ -188,10 +182,10 @@ where
                 }
             }
         }
-        self.evaluate_cells(scratch, boundary, self.word_weights[word], prefix);
+        self.evaluate_nodes(scratch, boundary, self.word_weights[word], prefix);
     }
 
-    /// Evaluate one word at `t = 0`, `t = 1`, and infinity.
+    /// Evaluate one word at `t = 0`, `t = 1`, and infinity, in one walk of each AIR.
     ///
     /// A prefix with no variable at infinity leaves `t = 0` and `t = 1` on the rows, where each
     /// constraint contributes its whole value. Every other cell takes the quadratic part, which
@@ -200,62 +194,54 @@ where
     /// Never inlined: the AIR evaluation needs a large stack frame, which inside the parallel
     /// fold would be reserved again at every level of Rayon's recursive split.
     #[inline(never)]
-    fn evaluate_cells(
+    fn evaluate_nodes(
         &self,
         scratch: &mut InfinityScratch<F, R>,
         [at_zero, at_one]: [[u64; 3]; 2],
         weight: R,
         prefix: usize,
     ) {
-        let InfinityScratch {
-            sums,
-            low,
-            high,
-            zeros,
-            poisoned,
-            ..
-        } = scratch;
-        let mut evaluate =
-            |values: &[SlicedBit<F>], selectors: [u64; 3], cell: usize, rows: bool| {
-                let [first, last, transition] = selectors.map(SlicedBit::new);
-                let boundary = BoundaryEvals::new(first, last, transition);
-                for slot in self.slots {
-                    if slot.constraint_degree == 0 || (!rows && slot.constraint_degree < 2) {
-                        continue;
-                    }
-                    let main = slot.main_offset..slot.main_offset + slot.main_width;
-                    let preprocessed = slot.preprocessed_offset
-                        ..slot.preprocessed_offset + slot.preprocessed_width;
-                    let periodic = slot.periodic_offset..slot.periodic_offset + slot.periodic_width;
-                    let evaluation = SlicedQuadraticFolder::new(
-                        &values[main.clone()],
-                        &zeros[main],
-                        boundary,
-                        self.public_values[slot.stage_index],
-                        &self.alpha_powers[slot.stage_index],
-                        &self.lanes,
-                        rows,
-                    )
-                    .with_preprocessed(&values[preprocessed.clone()], &zeros[preprocessed])
-                    .with_periodic(&values[periodic])
-                    .eval_air(slot.air);
-                    *poisoned |= evaluation.poisoned;
-                    sums[slot.stage_index][prefix * NODES + cell] += weight * evaluation.value;
-                }
-            };
         let rows = self.prefixes[prefix].len() == 2;
-        evaluate(low.as_slice(), at_zero, 0, rows);
-        evaluate(high.as_slice(), at_one, 1, rows);
-        for (low, &high) in low.iter_mut().zip(high.iter()) {
-            *low = SlicedBit::new(low.bits() ^ high.bits());
+        let [first, last, transition] = core::array::from_fn(|selector| {
+            SlicedBit::new(node_words(at_zero[selector], at_one[selector]))
+        });
+        let boundary = BoundaryEvals::new(first, last, transition);
+        let mut whole = [false; SLICED_CELLS];
+        whole[..2].fill(rows);
+        for slot in self.slots {
+            if slot.constraint_degree == 0 || (!rows && slot.constraint_degree < 2) {
+                continue;
+            }
+            let main = slot.main_offset..slot.main_offset + slot.main_width;
+            let preprocessed =
+                slot.preprocessed_offset..slot.preprocessed_offset + slot.preprocessed_width;
+            let periodic = slot.periodic_offset..slot.periodic_offset + slot.periodic_width;
+            let evaluation = SlicedQuadraticFolder::new(
+                &scratch.inputs[main.clone()],
+                &scratch.zeros[main],
+                boundary,
+                self.public_values[slot.stage_index],
+                &self.alpha_powers[slot.stage_index],
+                &self.lanes,
+                whole,
+            )
+            .with_preprocessed(
+                &scratch.inputs[preprocessed.clone()],
+                &scratch.zeros[preprocessed],
+            )
+            .with_periodic(&scratch.inputs[periodic])
+            .eval_air(slot.air);
+            scratch.poisoned |= evaluation.poisoned;
+            let sums = &mut scratch.sums[slot.stage_index][prefix * NODES..][..NODES];
+            for (sum, &value) in sums.iter_mut().zip(&evaluation.value) {
+                *sum += weight * value;
+            }
         }
-        let at_infinity = core::array::from_fn(|index| at_zero[index] ^ at_one[index]);
-        evaluate(low.as_slice(), at_infinity, INFINITY, false);
     }
 }
 
 /// Fold the corner rows starting at `starts`, `t = 0` and `t = 1` side by side, into every
-/// column's words at `t = 0` and `t = 1`.
+/// column's words at `t = 0`, `t = 1`, and infinity.
 ///
 /// # Returns
 ///
@@ -263,11 +249,10 @@ where
 fn fold_corner_rows<F, P: PlaneWords + ?Sized, const CORNERS: usize>(
     planes: &P,
     starts: [usize; CORNERS],
-    low: &mut [SlicedBit<F>],
-    high: &mut [SlicedBit<F>],
+    inputs: &mut [SlicedBit<F>],
 ) -> u64 {
     let mut high_planes = 0;
-    for (column, (low, high)) in low.iter_mut().zip(high.iter_mut()).enumerate() {
+    for (column, input) in inputs.iter_mut().enumerate() {
         let (mut at_zero, mut at_one) = (0, 0);
         for pair in starts.as_chunks::<2>().0 {
             let [zero, zero_high] = planes.planes(pair[0] + column);
@@ -276,10 +261,23 @@ fn fold_corner_rows<F, P: PlaneWords + ?Sized, const CORNERS: usize>(
             at_one ^= one;
             high_planes |= zero_high | one_high;
         }
-        *low = SlicedBit::new(at_zero);
-        *high = SlicedBit::new(at_one);
+        *input = SlicedBit::new(node_words(at_zero, at_one));
     }
     high_planes
+}
+
+/// An input's words at `t = 0`, `t = 1`, and infinity, from its values at `t = 0` and `t = 1`.
+///
+/// The word past the three nodes is clear, so every evaluation there vanishes.
+#[inline]
+const fn node_words(at_zero: u64, at_one: u64) -> [u64; SLICED_CELLS] {
+    const {
+        assert!(
+            SLICED_CELLS == NODES + 1,
+            "one evaluation per node and one spare"
+        );
+    };
+    [at_zero, at_one, at_zero ^ at_one, 0]
 }
 
 /// Evaluate all 81 tensor entries of a bit-valued stage on the nodes `0`, `1`, and infinity.

@@ -41,7 +41,9 @@ use crate::selectors::BoundaryEvals;
 
 mod quadratic;
 
-pub use quadratic::{BitLaneSums, SlicedBit, SlicedQuadratic, SlicedQuadraticFolder};
+pub use quadratic::{
+    BitLaneSums, CellWords, SLICED_CELLS, SlicedBit, SlicedQuadratic, SlicedQuadraticFolder,
+};
 
 /// Rows one sliced value carries, one per bit of a word.
 pub const SLICED_LANES: usize = u64::BITS as usize;
