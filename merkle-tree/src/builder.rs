@@ -425,17 +425,28 @@ where
                     let layer = &self.layers[l];
                     let first = j * sizes[offset];
 
-                    // The children of this piece start at `arity * first` one layer down.
+                    // Only nodes below the computed count are hashed.
+                    //
+                    // The rest is padding.
                     let (done, rest) = block.split_at_mut(offset);
+                    let out = &mut *rest[0];
+                    let nodes = layer.computed.saturating_sub(first).min(out.len());
+
+                    // A block can start inside the padding tail of a layer.
+                    //
+                    // Its piece there keeps the default digest, and its children may not exist.
+                    //
+                    // That padding still feeds real nodes one layer up, so the block keeps climbing.
+                    if nodes == 0 {
+                        continue;
+                    }
+
+                    // The children of this piece start at `arity * first` one layer down.
                     let kids: &[_] = match (done.last(), children) {
                         (Some(piece), _) => piece,
                         (None, Some(below)) => &below[layer.arity * first..],
                         (None, None) => &[],
                     };
-
-                    // Only nodes below the computed count are hashed; the rest is padding.
-                    let out = &mut *rest[0];
-                    let nodes = layer.computed.saturating_sub(first).min(out.len());
                     self.fill_layer(layer, kids, &mut out[..nodes], first, scratch);
                 }
             };
@@ -1238,6 +1249,64 @@ mod tests {
                 lo = hi + 1;
             }
             assert_eq!(lo, builder.layers.len());
+        }
+    }
+
+    #[test]
+    fn every_band_and_block_count_matches_one_block() {
+        // Invariant: the digests do not depend on how a pass splits its band into blocks.
+        //
+        // The thread count picks the split in a real build, so every split is pinned here.
+        //
+        // Scalar primitives make a vector group one node on every host.
+        //
+        // Fixture state: heights [17, 9, 5, 3] in a quaternary tree, band 1..=3, four blocks.
+        //
+        //     layer 3:   4 nodes, block 3 starts at node 3    real node
+        //     layer 2:   6 nodes, block 3 starts at node 6    padding, 6 -> 8
+        //     layer 1:  10 nodes, block 3 starts at node 12   padding, 10 -> 12
+        //     layer 0:  20 slots, block 3 children would start at slot 24
+        //
+        // The block owns a real node on top while its lowest piece has no children.
+        type Sponge = PaddingFreeSponge<Poseidon2BabyBear<16>, 16, 8, 8>;
+        type Compress = TruncatedPermutation<Poseidon2BabyBear<32>, 4, 8, 32>;
+        type Builder<'a> = TreeBuilder<'a, F, F, Sponge, Compress, RowMajorMatrix<F>, 4, 8>;
+        let mut rng = SmallRng::seed_from_u64(7);
+        let h = Sponge::new(Poseidon2BabyBear::<16>::new_from_rng_128(&mut rng));
+        let c = Compress::new(Poseidon2BabyBear::<32>::new_from_rng_128(&mut rng));
+        let empty = |builder: &Builder<'_>| -> Vec<_> {
+            builder
+                .layers
+                .iter()
+                .map(|layer| default_digest_layer(padded_len(layer.computed, 4)))
+                .collect()
+        };
+
+        // Small trees keep every band and block count cheap to enumerate.
+        for &(heights, width) in SHAPES.iter().filter(|(heights, _)| heights[0] < 100) {
+            let leaves = matrices(heights, width);
+            let builder = Builder::new(&h, &c, &leaves);
+            let top = builder.layers.len() - 1;
+
+            // Baseline: one block builds every layer.
+            let mut expected = empty(&builder);
+            builder.run_pass(&mut expected, 0..=top, 1);
+
+            // Mutation: rebuild one band on top of the finished layers below it.
+            for lo in 0..=top {
+                for hi in lo..=top {
+                    for blocks in 1..=8 {
+                        let mut got = empty(&builder);
+                        got[..lo].clone_from_slice(&expected[..lo]);
+                        got[hi + 1..].clone_from_slice(&expected[hi + 1..]);
+                        builder.run_pass(&mut got, lo..=hi, blocks);
+                        assert!(
+                            got == expected,
+                            "heights {heights:?}, band {lo}..={hi}, {blocks} blocks"
+                        );
+                    }
+                }
+            }
         }
     }
 
