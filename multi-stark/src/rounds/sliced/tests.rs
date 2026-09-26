@@ -2575,8 +2575,8 @@ fn a_reused_tile_reads_the_plane_fold_of_every_row_pair() {
             (halves, poly_halves)
         };
         for next_columns in [vec![], vec![0..width / 2, width / 2..width]] {
-            let mut tower_tile = RowTile::new(tower.corners, width);
-            let mut poly_tile = RowTile::new(poly.corners, width);
+            let mut tower_tile = RowTile::new::<Tower>(tower.corners, width);
+            let mut poly_tile = RowTile::new::<Ghash128>(poly.corners, width);
             let mut rows = Scratch::<Tower, Tower>::new(&[], &[], width, None);
             let mut groups = PackedScratch::<
                 PackedRepr<Tower, Ghash128>,
@@ -2729,13 +2729,20 @@ fn a_low_plane_reads_like_its_plane_pairs() {
         if prefix_len <= MAX_SLICED_ROUNDS {
             let fold_pairs = PlaneFold::<Ghash128>::new::<Gf4, Tower>(&pairs, &challenges);
             let fold_low = PlaneFold::<Ghash128>::new::<Gf4, Tower>(&low, &challenges);
-            let mut tile_pairs = RowTile::new(fold_pairs.corners, width);
-            let mut tile_low = RowTile::new(fold_low.corners, width);
+            let mut tile_pairs = RowTile::new::<Ghash128>(fold_pairs.corners, width);
+            let mut tile_low = RowTile::new::<Ghash128>(fold_low.corners, width);
             for pair in 0..fold_pairs.words / ROW_HALVES {
                 tile_pairs.fill(&fold_pairs, pair, &[]);
                 tile_low.fill(&fold_low, pair, &[]);
                 assert!(!tile_low.high, "pair {pair}, {case}");
-                assert_eq!(tile_low.bytes, tile_pairs.bytes, "pair {pair}, {case}");
+                assert_eq!(
+                    tile_low.low_cells, tile_pairs.low_cells,
+                    "pair {pair}, {case}"
+                );
+                assert_eq!(
+                    tile_low.high_cells, tile_pairs.high_cells,
+                    "pair {pair}, {case}"
+                );
             }
         }
     }
