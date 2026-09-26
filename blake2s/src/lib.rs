@@ -1,16 +1,14 @@
-//! The BLAKE2s hash function, as specified by RFC 7693.
+//! The BLAKE2s hash function of RFC 7693, with a batched path for many messages at once.
 //!
-//! One message at a time this wraps RustCrypto's `blake2`, which is maintained and already
-//! vectorized.
+//! One message at a time, this wraps RustCrypto's `blake2`.
 //!
-//! What it adds is the batched path that crate has no entry point for. Hashing many
-//! equal-length messages is the shape a Merkle tree asks for, and those messages share
-//! everything a compression depends on except the bytes: the same block count, the same
-//! counter, the same final-block flag. So their compressions run in lockstep, one lane per
-//! message, over arrays the compiler fills with whatever vector unit the target has.
+//! Many equal-length messages share their block count, byte counter and final-block flag.
 //!
-//! On an M2 that batched path runs about 1.4x the throughput of hashing the same messages
-//! one at a time through `blake2`.
+//! So the batched path compresses them in lockstep, one vector lane per message.
+//!
+//! The vector backend is picked at build time: AVX-512, AVX2 or SSE2 on x86-64, NEON on AArch64.
+//!
+//! Other targets hash a batch one message at a time.
 
 #![no_std]
 
@@ -19,21 +17,35 @@ extern crate alloc;
 #[cfg(test)]
 mod tests;
 
+#[cfg_attr(
+    not(any(
+        target_arch = "x86_64",
+        all(
+            target_arch = "aarch64",
+            target_feature = "neon",
+            target_endian = "little"
+        )
+    )),
+    path = "scalar.rs"
+)]
 mod batch;
-mod compress;
 
-pub use batch::LANES;
 use blake2::digest::consts::U32;
 use blake2::{Blake2s, Digest};
 use p3_symmetric::CryptographicHasher;
+
+/// Messages one batched compression advances at once.
+///
+/// - 32 with AVX-512, 16 with AVX2, 8 with SSE2 or NEON, and 1 elsewhere.
+/// - Any batch size works, and a partial group costs one full group of work.
+pub const LANES: usize = batch::LANES;
 
 /// Bytes in a BLAKE2s-256 digest.
 pub const DIGEST_BYTES: usize = 32;
 
 /// The BLAKE2s hash function at a 256-bit digest, unkeyed and sequential.
 ///
-/// That is the configuration lean Ethereum's signatures use: no key, no tree mode, and the
-/// full 32-byte digest.
+/// That is the configuration lean Ethereum's signatures use.
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub struct Blake2s256;
 
@@ -46,7 +58,6 @@ impl Blake2s256 {
 }
 
 impl CryptographicHasher<u8, [u8; DIGEST_BYTES]> for Blake2s256 {
-    /// Messages one batched compression advances at once.
     const LANES: usize = LANES;
 
     fn hash_iter<I>(&self, input: I) -> [u8; DIGEST_BYTES]
@@ -70,12 +81,11 @@ impl CryptographicHasher<u8, [u8; DIGEST_BYTES]> for Blake2s256 {
         hasher.finalize().into()
     }
 
-    /// Hash a batch of equal-length messages, several of them per compression.
+    /// Hash equal-length messages laid end to end, several of them per compression.
     ///
     /// # Panics
     ///
-    /// Panics if the batch is ragged: the input length must be a whole multiple of the
-    /// digest count.
+    /// Panics if the input length is not a whole multiple of the digest count.
     fn hash_many(&self, input: &[u8], out: &mut [[u8; DIGEST_BYTES]]) {
         batch::hash_many(input, out);
     }

@@ -34,9 +34,26 @@ fn fixture(bytes: usize) -> Vec<u8> {
         .collect()
 }
 
+/// BLAKE2s-256 of the empty message, from the BLAKE2 reference test vectors.
+const EMPTY_DIGEST: [u8; DIGEST_BYTES] =
+    hex!("69217A3079908094E11121D042354A7C1F55B6482CA1A51E1B250DFD1ED0EEF9");
+
 #[test]
 fn the_rfc_7693_vector_matches() {
     assert_eq!(Blake2s256::hash(b"abc"), ABC_DIGEST);
+    assert_eq!(Blake2s256::hash(b""), EMPTY_DIGEST);
+}
+
+#[test]
+fn known_answers_match_in_every_lane_of_a_batch() {
+    // Two full lane groups plus one spare, all of the same known message.
+    for (message, expected) in [(&b"abc"[..], ABC_DIGEST), (&b""[..], EMPTY_DIGEST)] {
+        let count = 2 * LANES + 1;
+        let messages = message.repeat(count);
+        let mut digests = vec![[0u8; DIGEST_BYTES]; count];
+        Blake2s256.hash_many(&messages, &mut digests);
+        assert!(digests.iter().all(|digest| digest == &expected));
+    }
 }
 
 #[test]
@@ -83,8 +100,10 @@ fn hash_iter_matches_the_contiguous_message() {
 #[test]
 fn batches_match_the_blake2_crate() {
     // Counts that fill a group exactly, leave a remainder, and fall short of one.
+    //
+    // Lengths cover every final-block size twice, plus one long message.
     for count in [1, 3, LANES, LANES + 1, 2 * LANES, 2 * LANES + 5] {
-        for len in [0, 32, 64, 65, 200] {
+        for len in (0..=130).chain([1000]) {
             let messages = fixture(len * count);
             let mut digests = vec![[0u8; DIGEST_BYTES]; count];
             Blake2s256.hash_many(&messages, &mut digests);
