@@ -109,6 +109,25 @@ where
 
     assert_eq!(extension_elements, unpacked_extension);
 
+    // Packed products must agree lane by lane with the scalar product.
+    //
+    // The scalar product is itself pinned by the inverse tests, so this pins every packed kernel.
+    for _ in 0..16 {
+        let lhs: Vec<EF> = (0..width).map(|_| rng.random()).collect();
+        let rhs: Vec<EF> = (0..width).map(|_| rng.random()).collect();
+        let scalar: EF = rng.random();
+        let packed_lhs = EF::ExtensionPacking::from_ext_slice(&lhs);
+        let packed_rhs = EF::ExtensionPacking::from_ext_slice(&rhs);
+
+        let products = EF::ExtensionPacking::to_ext_iter([packed_lhs * packed_rhs]);
+        let expected = lhs.iter().zip(&rhs).map(|(&l, &r)| l * r);
+        assert!(products.eq(expected), "packed times packed");
+
+        let products = EF::ExtensionPacking::to_ext_iter([packed_lhs * scalar]);
+        let expected = lhs.iter().map(|&l| l * scalar);
+        assert!(products.eq(expected), "packed times broadcast");
+    }
+
     // The fused unpack-and-transpose must equal a flat unpack followed by a transpose.
     //
     // `check` pins one shape against that naive reference.
