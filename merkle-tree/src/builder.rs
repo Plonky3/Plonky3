@@ -1311,9 +1311,13 @@ mod tests {
     }
 
     proptest! {
+        // Each case hashes every leaf twice, once through the scalar reference.
+        //
+        // The fixed shapes above already cover the tall trees.
+        #![proptest_config(ProptestConfig::with_cases(64))]
         #[test]
         fn random_ladders_match_reference(
-            max_height in 1usize..3000,
+            max_height in 1usize..=2049,
             depths in collection::vec(0u32..12, 0..4),
             width in 1usize..12,
         ) {
