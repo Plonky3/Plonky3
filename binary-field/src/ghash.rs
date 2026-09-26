@@ -478,7 +478,16 @@ impl Add for Ghash128 {
     #[allow(clippy::suspicious_arithmetic_impl)]
     fn add(self, rhs: Self) -> Self {
         // Addition in characteristic 2 is `XOR`.
-        Self(self.0 ^ rhs.0)
+        //
+        // AArch64 takes it in the vector register file, where the products it feeds run.
+        #[cfg(all(target_arch = "aarch64", target_feature = "aes"))]
+        {
+            Self(clmul::poly_add_128(self.0, rhs.0))
+        }
+        #[cfg(not(all(target_arch = "aarch64", target_feature = "aes")))]
+        {
+            Self(self.0 ^ rhs.0)
+        }
     }
 }
 

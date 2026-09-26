@@ -93,6 +93,22 @@ unsafe fn fold_high(low: uint8x16_t, high: uint8x16_t) -> uint8x16_t {
     }
 }
 
+/// The sum of two polynomial-basis elements, taken in a vector register.
+///
+/// The operands of the carryless products live there, so a sum computed in the integer file
+/// would cross over and back around every product it feeds.
+#[inline(always)]
+pub(crate) fn poly_add_128(a: u128, b: u128) -> u128 {
+    // SAFETY: this module is compiled only with the aes target feature, which implies neon.
+    // Every bit pattern is valid in both the integer and vector representations.
+    unsafe {
+        transmute::<uint8x16_t, u128>(veorq_u8(
+            transmute::<u128, uint8x16_t>(a),
+            transmute::<u128, uint8x16_t>(b),
+        ))
+    }
+}
+
 /// Multiplication in `GF(2^128) = GF(2)[x] / (x^128 + x^7 + x^2 + x + 1)`.
 ///
 /// Both operands and the result are in the polynomial basis.
