@@ -178,20 +178,14 @@ impl Mul for Poly192 {
     /// ```
     #[inline]
     fn mul(self, rhs: Self) -> Self {
-        #[cfg(any(
-            all(target_arch = "x86_64", target_feature = "pclmulqdq"),
-            all(target_arch = "aarch64", target_feature = "aes"),
-        ))]
+        let limbs = |x: Self| x.0.map(Poly64::to_bits);
+        #[cfg(all(target_arch = "x86_64", target_feature = "pclmulqdq"))]
         {
-            let limbs = |x: Self| x.0.map(Poly64::to_bits);
             Self(crate::clmul::poly_mul_192(limbs(self), limbs(rhs)).map(Poly64::new))
         }
-        #[cfg(not(any(
-            all(target_arch = "x86_64", target_feature = "pclmulqdq"),
-            all(target_arch = "aarch64", target_feature = "aes"),
-        )))]
+        #[cfg(not(all(target_arch = "x86_64", target_feature = "pclmulqdq")))]
         {
-            self.composed_mul(rhs)
+            Self(crate::clmul::composed_poly_mul_192(limbs(self), limbs(rhs)).map(Poly64::new))
         }
     }
 }
