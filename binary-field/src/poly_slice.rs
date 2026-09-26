@@ -44,8 +44,9 @@ pub(crate) fn scale(values: &mut [u128], scalar: u128) {
     };
 
     // Whatever is left over costs one carryless multiply per element.
+    let multiplier = clmul::BatchMultiplier::new(scalar);
     for value in &mut values[packed..] {
-        *value = clmul::poly_mul_128_batch(*value, scalar);
+        *value = multiplier.mul(*value);
     }
 }
 
@@ -63,9 +64,19 @@ pub(crate) fn butterfly_forward(lo: &mut [u128], hi: &mut [u128], scalar: u128) 
         wide::butterfly_forward(lo, hi, scalar)
     };
 
-    for (lo, hi) in lo[packed..].iter_mut().zip(&mut hi[packed..]) {
+    forward_tail(
+        &mut lo[packed..],
+        &mut hi[packed..],
+        clmul::BatchMultiplier::new(scalar),
+    );
+}
+
+/// The forward butterfly one element at a time, the multiplier already prepared.
+#[inline(always)]
+fn forward_tail(lo: &mut [u128], hi: &mut [u128], multiplier: clmul::BatchMultiplier) {
+    for (lo, hi) in lo.iter_mut().zip(hi) {
         // The scaled upper half lands in the lower one first.
-        *lo ^= clmul::poly_mul_128_batch(scalar, *hi);
+        *lo ^= multiplier.mul(*hi);
         // The upper half then carries the sum of both, so the two differ by its old value.
         *hi ^= *lo;
     }
@@ -85,11 +96,12 @@ pub(crate) fn butterfly_inverse(lo: &mut [u128], hi: &mut [u128], scalar: u128) 
         wide::butterfly_inverse(lo, hi, scalar)
     };
 
+    let multiplier = clmul::BatchMultiplier::new(scalar);
     for (lo, hi) in lo[packed..].iter_mut().zip(&mut hi[packed..]) {
         // Undo the second step of the forward pass, recovering the old upper half.
         *hi ^= *lo;
         // Then take the scaled upper half back out of the lower one.
-        *lo ^= clmul::poly_mul_128_batch(scalar, *hi);
+        *lo ^= multiplier.mul(*hi);
     }
 }
 
@@ -350,11 +362,49 @@ mod low {
     }
 }
 
+/// The low stages one at a time within each run, each twiddle prepared from its companion.
+#[cfg(all(target_arch = "aarch64", target_feature = "aes"))]
+mod low {
+    use super::{LOW_RUN, LOW_STAGES};
+    use crate::clmul::BatchMultiplier;
+    use crate::poly_basis::LowStageTwiddles;
+
+    pub(super) fn forward(values: &mut [u128], first_run: usize, twiddles: &LowStageTwiddles) {
+        // Each twiddle travels beside its companion, so no product has to derive one.
+        let mut run_twiddles = twiddles.run_twiddles(first_run);
+        // Blocks within a run always use the same basis offsets.
+        let offsets: [[u128; 2]; 8] = core::array::from_fn(|block| twiddles.span(block, 0));
+        for (index, run) in values.as_chunks_mut::<LOW_RUN>().0.iter_mut().enumerate() {
+            if index != 0 {
+                let step = twiddles.step(first_run + index - 1);
+                for (twiddle, step) in run_twiddles.iter_mut().zip(step) {
+                    twiddle[0] ^= step[0];
+                    twiddle[1] ^= step[1];
+                }
+            }
+            for j in (0..LOW_STAGES).rev() {
+                let half = 1 << j;
+                for (block, pair) in run.chunks_exact_mut(2 * half).enumerate() {
+                    let (lo, hi) = pair.split_at_mut(half);
+                    let multiplier = BatchMultiplier::from_parts(
+                        run_twiddles[j][0] ^ offsets[block][0],
+                        run_twiddles[j][1] ^ offsets[block][1],
+                    );
+                    super::forward_tail(lo, hi, multiplier);
+                }
+            }
+        }
+    }
+}
+
 /// The low stages one at a time within each run, through the slice butterflies.
-#[cfg(not(all(
-    target_arch = "x86_64",
-    target_feature = "vpclmulqdq",
-    target_feature = "avx512f"
+#[cfg(not(any(
+    all(
+        target_arch = "x86_64",
+        target_feature = "vpclmulqdq",
+        target_feature = "avx512f"
+    ),
+    all(target_arch = "aarch64", target_feature = "aes")
 )))]
 mod low {
     use super::{LOW_RUN, LOW_STAGES};

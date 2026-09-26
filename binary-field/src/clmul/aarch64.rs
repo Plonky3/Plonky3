@@ -1,9 +1,9 @@
 //! The `PMULL` backend, which lives under the `aes` target feature.
 
 use core::arch::aarch64::{
-    uint8x16_t, uint64x2_t, vdupq_n_u8, vdupq_n_u64, veorq_u8, veorq_u64, vextq_u8, vextq_u64,
-    vgetq_lane_u64, vmull_high_p64, vmull_p64, vreinterpretq_p64_u8, vreinterpretq_u8_u64,
-    vreinterpretq_u64_u8,
+    uint8x16_t, uint64x2_t, vdupq_n_u8, vdupq_n_u64, veorq_u8, vextq_u8, vgetq_lane_u64,
+    vmull_high_p64, vmull_p64, vreinterpretq_p64_u8, vreinterpretq_u8_u64, vreinterpretq_u64_u8,
+    vzip1q_u64, vzip2q_u64,
 };
 use core::mem::transmute;
 
@@ -205,33 +205,97 @@ pub(crate) fn poly_mul_128_by_64(a: u128, b: u64) -> u128 {
     }
 }
 
-/// Register-resident Karatsuba product and PMULL reduction for independent batch lanes.
-#[inline]
-pub(super) fn poly_mul_128_batch(a: u128, b: u128) -> u128 {
-    // SAFETY: this module is compiled only with the aes target feature.
-    unsafe {
-        let av: uint64x2_t = core::mem::transmute(a);
-        let bv: uint64x2_t = core::mem::transmute(b);
-        let low: uint64x2_t =
-            core::mem::transmute(vmull_p64(vgetq_lane_u64::<0>(av), vgetq_lane_u64::<0>(bv)));
-        let high: uint64x2_t =
-            core::mem::transmute(vmull_p64(vgetq_lane_u64::<1>(av), vgetq_lane_u64::<1>(bv)));
-        let mid: uint64x2_t = core::mem::transmute(vmull_p64(
-            vgetq_lane_u64::<0>(av) ^ vgetq_lane_u64::<1>(av),
-            vgetq_lane_u64::<0>(bv) ^ vgetq_lane_u64::<1>(bv),
-        ));
-        let middle = veorq_u64(veorq_u64(mid, low), high);
-        let zero = vdupq_n_u64(0);
-        let lo = veorq_u64(low, vextq_u64::<1>(zero, middle));
-        let hi = veorq_u64(high, vextq_u64::<1>(middle, zero));
-        // Fold the high polynomial by x^128 = 0x87. The upper fold spills at
-        // most seven bits; one more multiplication by 0x87 reduces those too.
-        let f0: uint64x2_t = core::mem::transmute(vmull_p64(vgetq_lane_u64::<0>(hi), 0x87));
-        let f1: uint64x2_t = core::mem::transmute(vmull_p64(vgetq_lane_u64::<1>(hi), 0x87));
-        let spill: uint64x2_t = core::mem::transmute(vmull_p64(vgetq_lane_u64::<1>(f1), 0x87));
-        core::mem::transmute(veorq_u64(
-            veorq_u64(lo, f0),
-            veorq_u64(vextq_u64::<1>(zero, f1), spill),
-        ))
+/// A multiplier held fixed across a run of products, beside its companion `t x^64`.
+///
+/// # Algorithm
+///
+/// Reduction modulo the field polynomial is a ring homomorphism, so the `x^64` weight of the
+/// varying operand's upper half can move onto the fixed one:
+///
+/// ```text
+///     v   = v0 + v1 x^64
+///     u   = t x^64 mod p                  the companion, once per multiplier
+///
+///     t v = t v0 + u v1
+///         = (t0 v0 + u0 v1) + (t1 v0 + u1 v1) x^64
+///         =       low       +       high      x^64          both halves below x^127
+/// ```
+///
+/// The four half products pair low with low and high with high once the multiplier and its
+/// companion are interleaved half by half, so `PMULL` and `PMULL2` take them straight from
+/// the registers:
+///
+/// ```text
+///     halves_low  = [t0, u0]     low  = PMULL(v, halves_low)  + PMULL2(v, halves_low)
+///     halves_high = [t1, u1]     high = PMULL(v, halves_high) + PMULL2(v, halves_high)
+/// ```
+///
+/// The product spans three limbs, so one step finishes it: `high x^64` is the low limb of
+/// `high` raised by `x^64`, plus its top limb times the modulus tail, both below `x^128`.
+/// That is five carryless products per element, against six for a general product.
+#[derive(Clone, Copy)]
+pub(crate) struct SplitMultiplier {
+    /// The low halves of the multiplier and of its companion, in that order.
+    halves_low: uint8x16_t,
+    /// Their high halves, in the same order.
+    halves_high: uint8x16_t,
+}
+
+impl SplitMultiplier {
+    /// Prepare a multiplier, deriving its companion.
+    #[inline]
+    pub(crate) fn new(t: u128) -> Self {
+        // SAFETY: this module is compiled only with the aes target feature.
+        let companion = unsafe {
+            let t = transmute::<u128, uint8x16_t>(t);
+            // `t x^64 = t0 x^64 + t1 T`, and neither term reaches `x^128`.
+            let raised = vextq_u8::<8>(vdupq_n_u8(0), t);
+            transmute::<uint8x16_t, u128>(veorq_u8(raised, clmul_high(t, tail())))
+        };
+        Self::from_parts(t, companion)
     }
+
+    /// Prepare a multiplier whose companion `t x^64 mod p` is already known.
+    #[inline(always)]
+    pub(crate) fn from_parts(t: u128, companion: u128) -> Self {
+        // SAFETY: this module is compiled only with the aes target feature, which implies neon.
+        unsafe {
+            let t = transmute::<u128, uint64x2_t>(t);
+            let companion = transmute::<u128, uint64x2_t>(companion);
+            Self {
+                halves_low: transmute::<uint64x2_t, uint8x16_t>(vzip1q_u64(t, companion)),
+                halves_high: transmute::<uint64x2_t, uint8x16_t>(vzip2q_u64(t, companion)),
+            }
+        }
+    }
+
+    /// The reduced product of the multiplier with `v`.
+    #[inline(always)]
+    pub(crate) fn mul(self, v: u128) -> u128 {
+        // SAFETY: this module is compiled only with the aes target feature.
+        unsafe {
+            let v = transmute::<u128, uint8x16_t>(v);
+            let low = veorq_u8(
+                clmul_low(v, self.halves_low),
+                clmul_high(v, self.halves_low),
+            );
+            let high = veorq_u8(
+                clmul_low(v, self.halves_high),
+                clmul_high(v, self.halves_high),
+            );
+            let raised = vextq_u8::<8>(vdupq_n_u8(0), high);
+            transmute::<uint8x16_t, u128>(veorq_u8(low, veorq_u8(raised, clmul_high(high, tail()))))
+        }
+    }
+}
+
+/// The modulus tail in both halves, so either multiply can take it against either half.
+///
+/// # Safety
+///
+/// The caller must be compiled with the `neon` target feature.
+#[inline(always)]
+unsafe fn tail() -> uint8x16_t {
+    // SAFETY: guaranteed by the caller.
+    unsafe { vreinterpretq_u8_u64(vdupq_n_u64(super::basis::TAIL_128 as u64)) }
 }
