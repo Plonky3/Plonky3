@@ -392,6 +392,71 @@ fn the_planes_hold_every_cell_and_its_repeat_last_successor() {
 }
 
 #[test]
+fn packed_successor_planes_match_the_dense_planes() {
+    for height in [128, 256, 512] {
+        // Random bits make every successor column vary from row to row; the planes need no valid
+        // witness.
+        let random_bits = |air, seed: u64| {
+            let mut instance = Instance::honest(air, height, seed);
+            let mut rng = SmallRng::seed_from_u64(seed);
+            for value in &mut instance.main.values {
+                *value = Tower::from_bool(rng.random());
+            }
+            instance
+        };
+        for instances in [
+            vec![random_bits(FixtureAir::QuadraticSuccessor, 0x5C01)],
+            vec![
+                random_bits(FixtureAir::Pair, 0x5C02),
+                random_bits(FixtureAir::QuadraticSuccessor, 0x5C03),
+            ],
+        ] {
+            let dense = instances
+                .iter()
+                .map(Instance::main_table)
+                .collect::<Vec<_>>();
+            let packed = dense.iter().map(packed_boolean_table).collect::<Vec<_>>();
+            let airs = instances
+                .iter()
+                .map(|instance| &instance.air)
+                .collect::<Vec<_>>();
+            let publics = instances
+                .iter()
+                .map(|instance| instance.public_values.as_slice())
+                .collect::<Vec<_>>();
+            let entries = |planes: &Planes<'_>| {
+                (0..planes.len())
+                    .map(|index| planes.planes(index))
+                    .collect::<Vec<_>>()
+            };
+            let planes = |main: &[Table<Tower>], low: bool| -> (Vec<_>, Vec<_>) {
+                with_stage_state(
+                    &airs,
+                    &publics,
+                    &vec![None; airs.len()],
+                    &main.iter().collect::<Vec<_>>(),
+                    no_lookups(),
+                    |state, _| {
+                        let trace = state
+                            .sliced_trace::<Gf4>()
+                            .expect("Boolean tables should fit the sliced path");
+                        assert_eq!(matches!(trace.cells, Planes::Low(_)), low);
+                        assert_eq!(matches!(trace.successors, Planes::Low(_)), low);
+                        (entries(&trace.cells), entries(&trace.successors))
+                    },
+                )
+            };
+            assert_eq!(
+                planes(&packed, true),
+                planes(&dense, false),
+                "{} tables at height {height}",
+                instances.len()
+            );
+        }
+    }
+}
+
+#[test]
 fn plane_fold_five_challenges_matches_explicit_corner_sum() {
     let prefix = [
         Tower::from_repr(0x11),

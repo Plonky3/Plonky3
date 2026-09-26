@@ -236,6 +236,30 @@ fn successor_word(planes: [u64; 2], carry: (bool, bool)) -> [u64; 2] {
     ]
 }
 
+/// The successor planes of the low plane `cells`, `width` columns per word, laid out alike.
+///
+/// Zero for every column that is not a successor column.
+fn low_successors(cells: &[u64], is_successor: &[bool], width: usize) -> Vec<u64> {
+    let top = SLICED_LANES - 1;
+    let mut successors = vec![0; cells.len()];
+    successors
+        .par_chunks_mut(width)
+        .enumerate()
+        .for_each(|(word, output)| {
+            let current = &cells[word * width..(word + 1) * width];
+            // Each word's top lane reads the lowest lane of the next word, and the last word's
+            // top lane repeats itself.
+            let next = cells.get((word + 1) * width..(word + 2) * width);
+            for (column, (successor, &low)) in output.iter_mut().zip(current).enumerate() {
+                if is_successor[column] {
+                    let carry = next.map_or(low >> top, |next| next[column] & 1) == 1;
+                    *successor = successor_word([low, 0], (carry, false))[0];
+                }
+            }
+        });
+    successors
+}
+
 /// The multilinear value of one column at `(v, t)` for `t = 0` and `t = 1`, over one word of rows.
 ///
 /// `corners[c]` holds corner `c`, whose bits are the prefix bits, first variable highest, then
@@ -1017,35 +1041,33 @@ where
             is_successor[column] = true;
         }
 
-        // Each table's packed matrix is already word-major: the low plane of its columns. When no
-        // successor planes are needed, a stage of one such table borrows it and several are
-        // copied into the final layout; otherwise retain the generic column path, which also
-        // computes the repeat-last successor words.
+        // Each table's packed matrix is already word-major: the low plane of its columns. A stage
+        // of one such table borrows it and several are copied into the final layout, and the
+        // successor planes are shifted out of that low plane; otherwise retain the generic column
+        // path, which also computes the repeat-last successor words.
         let words: usize = 1 << (num_vars - LANE_VARIABLES);
-        let low = if next_columns.is_empty() {
-            // One table is one AIR's main table, with no preprocessed or periodic table beside it.
-            let borrowed = match self.slots.as_slice() {
-                [slot] if tables.len() == 1 => {
-                    let table: &'data Table<F> = self.tables[slot.stage_index];
-                    table
-                        .packed_bits()
-                        .filter(|packed| {
-                            packed.width == width
-                                && words.checked_mul(width) == Some(packed.values.len())
-                        })
-                        .map(|packed| Cow::Borrowed(packed.values.as_slice()))
-                }
-                _ => None,
-            };
-            borrowed.or_else(|| direct_packed_cells(&tables, words).map(Cow::Owned))
-        } else {
-            None
+        // One table is one AIR's main table, with no preprocessed or periodic table beside it.
+        let borrowed = match self.slots.as_slice() {
+            [slot] if tables.len() == 1 => {
+                let table: &'data Table<F> = self.tables[slot.stage_index];
+                table
+                    .packed_bits()
+                    .filter(|packed| {
+                        packed.width == width
+                            && words.checked_mul(width) == Some(packed.values.len())
+                    })
+                    .map(|packed| Cow::Borrowed(packed.values.as_slice()))
+            }
+            _ => None,
         };
+        let low = borrowed.or_else(|| direct_packed_cells(&tables, words).map(Cow::Owned));
         let (cells, successors) = if let Some(low) = low {
-            (
-                Planes::Low(low),
-                Planes::Low(Cow::Owned(vec![0; words * width])),
-            )
+            let successors = if next_columns.is_empty() {
+                vec![0; words * width]
+            } else {
+                low_successors(&low, &is_successor, width)
+            };
+            (Planes::Low(low), Planes::Low(Cow::Owned(successors)))
         } else {
             let (cells, successors) =
                 pack_sliced_columns::<F, S>(&columns, &is_successor, words, width)?;
