@@ -187,7 +187,7 @@ where
 }
 
 /// Native per-variable degrees of one AIR's ordinary constraints and lookup links,
-/// and the number of constraints the folder batches.
+/// the number of constraints the folder batches, and which lookup families the AIR declares.
 ///
 /// Both families come from one symbolic pass and are measured with the eq weight stripped.
 /// A degree of zero means the AIR declares nothing in that family.
