@@ -36,9 +36,10 @@ use p3_challenger::fs::TranscriptField;
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
 use p3_commit::Mmcs;
 use p3_field::{ExtensionField, Field};
+use p3_matrix::dense::RowMajorMatrix;
 use p3_multilinear_util::point::Point;
 use p3_security::multilinear::{bit_ring_switch_claim_batching_term, bit_ring_switch_tensors_term};
-use p3_sumcheck::layout::{Layout, SuffixProver};
+use p3_sumcheck::layout::{Layout, SuffixProver, Table};
 use p3_sumcheck::ring_switch::bits::{
     BitPacking, BitPackingView, BitRingSwitch, BitRingSwitchClaims,
 };
@@ -46,12 +47,13 @@ use p3_sumcheck::{
     OpeningBatch, OpeningProtocol, PrescribedOpeningSecurity, PrescribedPointPcs, TableShape,
     TableSpec,
 };
+use p3_util::log2_strict_usize;
 use p3_whir::{WhirDomain, WhirProver, WhirProverData};
 
 use crate::boolean::{BitOpening, BitReadings, BooleanBackend, BooleanMultilinearPcs};
 use crate::boolean_trace::BooleanTraceCommitment;
 use crate::fold::BitChallengeField;
-use crate::packing::{Coordinates, PackedStack};
+use crate::packing::{Coordinates, PackError, PackedStack};
 use crate::whir::error::BooleanWhirError;
 use crate::whir::proof::BooleanWhirProof;
 use crate::whir::shape::ProofShape;
@@ -463,15 +465,32 @@ where
         // The packing is one copy of the bits, so the witness is never swept for arithmetic.
         let stack = PackedStack::<PackedGf2<U>, F>::from_columns(&[bits])
             .map_err(BooleanWhirError::Packing)?;
-        if stack.column_num_variables() != self.inner.num_variables() {
+        self.commit_packed(stack.into_poly().into_evals(), challenger)
+    }
+
+    fn commit_packed(
+        &self,
+        elements: Vec<F>,
+        challenger: &mut Challenger,
+    ) -> Result<(Self::Commitment, Self::ProverData), Self::Error> {
+        let len = elements.len();
+        if !len.is_power_of_two() {
+            return Err(BooleanWhirError::Packing(PackError::NotAHypercube {
+                elements: len,
+            }));
+        }
+        let actual = log2_strict_usize(len);
+        if actual != self.inner.num_variables() {
             return Err(BooleanWhirError::WitnessArity {
                 expected: self.inner.num_variables(),
-                actual: stack.column_num_variables(),
+                actual,
             });
         }
 
+        // The elements are the one column of the one table the layout stacks.
+        let table = Table::new(RowMajorMatrix::new(elements, len));
         let folding = self.inner.round_folding_factor(0);
-        let witness = Binding::<F, EF>::new_witness(vec![stack.into_table()], folding);
+        let witness = Binding::<F, EF>::new_witness(vec![table], folding);
         p3_commit::MultilinearPcs::<EF, Challenger>::commit(&self.inner, witness, challenger)
             .map_err(BooleanWhirError::Commit)
     }
