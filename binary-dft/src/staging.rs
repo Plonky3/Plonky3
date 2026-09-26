@@ -276,9 +276,10 @@ pub(crate) fn for_each_staged_tile_into_cosets<T, Q, P>(
             };
             process(staged.as_mut_slice(), block, coset);
             for (k, source) in staged.chunks_exact(run).enumerate() {
-                // SAFETY: the runs the gather reached, moved whole cosets along, so they stay
-                // disjoint across tasks, iterations and cosets, and inside `values` since every
-                // coset is `coset_len` long.
+                // SAFETY: the runs `slice_of` names for this tile are the leading coset's runs
+                // the assert above bounds, moved whole cosets along, so they stay disjoint across
+                // tasks, iterations and cosets, and inside `values` since every coset is
+                // `coset_len` long.
                 let target = unsafe { base.slice_mut(slice_of(index, k, coset), run) };
                 target.copy_from_slice(source);
             }

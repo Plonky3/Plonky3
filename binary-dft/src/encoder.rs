@@ -165,7 +165,7 @@ macro_rules! impl_additive_rs_encoder {
                 message: RowMajorMatrixView<'_, $field>,
                 log_inv_rate: usize,
             ) -> RowMajorMatrix<$field> {
-                self.ntt.ntt_batch_padded_borrowed(message, log_inv_rate)
+                self.ntt.ntt_batch_borrowed(message, log_inv_rate)
             }
         }
     )*};

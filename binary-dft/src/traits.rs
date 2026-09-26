@@ -53,13 +53,14 @@ pub trait AdditiveNtt<F: TowerLevel> {
 
     /// Transforms a borrowed coefficient matrix zero-padded to `2^log_inv_rate` times its height.
     ///
-    /// The result is what [`ntt_batch_padded`](Self::ntt_batch_padded) makes of the padded
-    /// matrix, and `mat` is left as it is. The default copies it into a zeroed matrix of the
-    /// padded height first; a transform that reads it where it lies skips the copy.
+    /// `mat` is the unpadded matrix, and is left as it is. The result is what
+    /// [`ntt_batch_padded`](Self::ntt_batch_padded) makes of the padded one. The default copies
+    /// `mat` into a zeroed matrix of the padded height first; a transform that reads it where it
+    /// lies skips the copy.
     ///
     /// # Panics
     /// Panics for an invalid transform height or if the padded height overflows `usize`.
-    fn ntt_batch_padded_borrowed(
+    fn ntt_batch_borrowed(
         &self,
         mat: RowMajorMatrixView<'_, F>,
         log_inv_rate: usize,
@@ -120,12 +121,35 @@ pub trait AdditiveNtt<F: TowerLevel> {
 mod tests {
     use alloc::vec;
 
-    use p3_binary_field::BinaryField8;
+    use p3_binary_field::{BinaryField8, BinaryField64, TowerLevel};
     use p3_field::PrimeCharacteristicRing;
     use p3_matrix::dense::RowMajorMatrix;
 
     use super::AdditiveNtt;
     use crate::LchNtt;
+
+    #[test]
+    fn a_borrowed_matrix_transforms_as_its_zero_padded_copy() {
+        // The default copies the borrowed matrix under a zero tail, then transforms that.
+        let mat = RowMajorMatrix::new(
+            (0..32u64)
+                .map(|i| BinaryField64::from_repr(i.wrapping_mul(0x9e37_79b9_7f4a_7c15)))
+                .collect(),
+            4,
+        );
+        let ntt = LchNtt::<BinaryField64>::default();
+        for log_inv_rate in 0..=2 {
+            let mut padded = mat.clone();
+            padded
+                .values
+                .resize(mat.values.len() << log_inv_rate, BinaryField64::ZERO);
+            assert_eq!(
+                ntt.ntt_batch_borrowed(mat.as_view(), log_inv_rate),
+                ntt.ntt_batch_padded(padded, log_inv_rate),
+                "rate={log_inv_rate}"
+            );
+        }
+    }
 
     #[test]
     fn identity_lde_preserves_input_allocation() {
