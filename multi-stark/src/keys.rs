@@ -9,7 +9,9 @@
 
 use alloc::vec::Vec;
 
+use p3_air::symbolic::AirLayout;
 use p3_air::{Air, BaseAir};
+use p3_bus::BusSymbolicBuilder;
 use p3_commit::MultilinearPcs;
 use p3_lookup::InteractionSymbolicBuilder;
 use p3_sumcheck::layout::Table;
@@ -39,6 +41,8 @@ pub struct ProvingKey<C: MultiStarkConfig> {
     pub(crate) preprocessed: Option<PreprocessedProverData<C>>,
     /// Zerocheck metadata fixed by the AIRs at setup.
     pub(crate) air_profiles: Vec<AirProfile>,
+    /// Whether any AIR declares a binary-bus interaction, read off one bus pass at setup.
+    pub(crate) declares_bus: bool,
 }
 
 /// The verifier's key for an ordered AIR batch and its fixed trace heights.
@@ -83,13 +87,23 @@ pub fn setup<C, A>(
 ) -> Result<(ProvingKey<C>, VerifyingKey<C>), ProvingError<PcsProverError<C>>>
 where
     C: MultiStarkConfig,
-    A: BaseAir<C::Val> + Air<InteractionSymbolicBuilder<C::Val, C::Challenge>>,
+    A: BaseAir<C::Val>
+        + Air<InteractionSymbolicBuilder<C::Val, C::Challenge>>
+        + Air<BusSymbolicBuilder<C::Val, C::Challenge>>,
     Commitment<C>: Clone,
 {
     let air_profiles = airs
         .iter()
         .map(|&air| get_air_profile::<C::Val, C::Challenge, A>(air))
         .collect::<Vec<_>>();
+    // Binary-bus declarations are recorded by their own builder, so they take their own pass.
+    let declares_bus = airs.iter().any(|&air| {
+        let profile = BusSymbolicBuilder::<C::Val, C::Challenge>::from_air(
+            air,
+            AirLayout::from_air::<C::Val>(air),
+        );
+        !profile.interactions().is_empty()
+    });
     let mut tables = Vec::new();
 
     for air in airs.iter().filter(|air| air.preprocessed_width() != 0) {
@@ -105,6 +119,7 @@ where
             ProvingKey {
                 preprocessed: None,
                 air_profiles: air_profiles.clone(),
+                declares_bus,
             },
             VerifyingKey {
                 preprocessed: None,
@@ -130,6 +145,7 @@ where
             prover_data,
         }),
         air_profiles: air_profiles.clone(),
+        declares_bus,
     };
     // The verifier key keeps only the commitment; shape facts come from AIR metadata.
     let verifying = VerifyingKey {

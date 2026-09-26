@@ -291,7 +291,12 @@ where
     } else {
         None
     };
-    let bus = BusContext::<C::Val, C::Challenge>::build(&airs, &instances.num_variables())?;
+    // A batch declaring no binary-bus interaction has no bus statement either.
+    let bus = if proving_key.declares_bus {
+        BusContext::<C::Val, C::Challenge>::build(&airs, &instances.num_variables())?
+    } else {
+        None
+    };
 
     // IndexedWitness currently borrows dense field slices for both payload and position columns.
     // Reject a packed source before the statement transcript or commitment can mutate the caller's
