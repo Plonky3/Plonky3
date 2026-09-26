@@ -709,10 +709,8 @@ where
         // Summed one at a time, a value that vanishes on every lane adds nothing, as a
         // selector-gated one mostly does.
         if let Some(prepared) = self.prepared {
-            if self.constraint_index < self.alpha_powers.len() {
-                self.lane_sums
-                    .add(prepared, self.constraint_index, x.low, x.high);
-            }
+            self.lane_sums
+                .add(prepared, self.constraint_index, x.low, x.high);
         } else if let Some(&power) = self.alpha_powers.get(self.constraint_index)
             && (x.low | x.high) != 0
         {
@@ -1011,6 +1009,9 @@ mod kernel {
     /// where one wide load of them would otherwise wait for eight narrow stores to land.
     const WAITING: usize = 2;
 
+    /// Words of the ring each plane waits in, one block after another.
+    const RING: usize = WAITING * BLOCK;
+
     /// Running sums of one evaluation's constraints against a [`PreparedPowers`] layout.
     ///
     /// Constraint `i` enters as its two planes, the constraints in order and each once, and
@@ -1025,9 +1026,9 @@ mod kernel {
     pub(crate) struct PreparedSums {
         /// Coordinate bytes of every lane's sum, one register's worth per coordinate byte.
         sums: [[u64; REGISTER_WORDS]; BYTES],
-        /// Block `b` waits at `b % WAITING`: its low planes, then its high planes, constraint `j`
-        /// of the block at word `j`.
-        planes: [[[u64; BLOCK]; 2]; WAITING],
+        /// The waiting low planes, then the waiting high planes, constraint `i` at word
+        /// `i % RING` of each ring.
+        planes: [[u64; RING]; 2],
     }
 
     impl PreparedSums {
@@ -1035,7 +1036,7 @@ mod kernel {
         pub(crate) const fn new() -> Self {
             Self {
                 sums: [[0; REGISTER_WORDS]; BYTES],
-                planes: [[[0; BLOCK]; 2]; WAITING],
+                planes: [[0; RING]; 2],
             }
         }
 
@@ -1050,14 +1051,12 @@ mod kernel {
             low: u64,
             high: u64,
         ) {
-            let (block, slot) = (index / BLOCK, index % BLOCK);
-            let planes = &mut self.planes[block % WAITING];
-            planes[0][slot] = low;
-            planes[1][slot] = high;
-            if slot == BLOCK - 1 && block > 0 {
+            self.planes[0][index % RING] = low;
+            self.planes[1][index % RING] = high;
+            if index % BLOCK == BLOCK - 1 && index >= BLOCK {
                 // SAFETY: this module is compiled only where the build enables every target
                 // feature the kernel names.
-                unsafe { self.flush(&prepared.0, block - 1) };
+                unsafe { self.flush(&prepared.0, index / BLOCK - 1) };
             }
         }
 
@@ -1086,19 +1085,24 @@ mod kernel {
 
         /// Add block `block` to the sums through its matrices, and clear its planes.
         ///
-        /// A plane on which the whole block vanishes adds nothing.
+        /// A plane on which the whole block vanishes adds nothing. A block past the prepared
+        /// powers holds constraints the folder's count check rejects, and adds nothing either.
         #[target_feature(enable = "avx512f,avx512bw,gfni")]
         fn flush<R>(&mut self, prepared: &Prepared<R>, block: usize) {
-            let matrices = &prepared.blocks[block];
-            let waiting = &mut self.planes[block % WAITING];
-            let planes = waiting.map(|words| load(&words));
+            let at = block % WAITING;
+            let planes = [0, 1].map(|plane| load(&self.planes[plane].as_chunks::<BLOCK>().0[at]));
             if planes
                 .iter()
                 .all(|&words| _mm512_test_epi64_mask(words, words) == 0)
             {
                 return;
             }
-            *waiting = [[0; BLOCK]; 2];
+            for ring in &mut self.planes {
+                ring.as_chunks_mut::<BLOCK>().0[at] = [0; BLOCK];
+            }
+            let Some(matrices) = prepared.blocks.get(block) else {
+                return;
+            };
             let mut sums = self.sums.map(|words| load(&words));
             for (&words, matrices) in planes.iter().zip(matrices) {
                 if _mm512_test_epi64_mask(words, words) == 0 {
