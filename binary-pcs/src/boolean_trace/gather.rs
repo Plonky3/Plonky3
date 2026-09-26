@@ -1,9 +1,8 @@
 //! Gathering every table's Boolean cells into one bit witness.
 
 use alloc::vec::Vec;
-use core::slice;
 
-use p3_binary_field::{BitCoordinates, PackedGf2, PackedGf2x64, TowerLevel};
+use p3_binary_field::{BitCoordinates, TowerLevel};
 use p3_challenger::fs::TranscriptField;
 use p3_field::{ExtensionField, Field};
 use p3_maybe_rayon::prelude::*;
@@ -11,7 +10,6 @@ use p3_sumcheck::layout::{Table, TablePlacement};
 
 use super::{BooleanTraceCommitment, BooleanTraceCommitmentError, WORD_BITS};
 use crate::boolean::BooleanBackend;
-use crate::packing::{Coordinates, pack};
 
 /// Adjacent packed columns one gather task copies, one source line's worth of words.
 pub(super) const GATHER_GROUP: usize = 8;
@@ -20,25 +18,33 @@ impl<EF, B> BooleanTraceCommitment<EF, B>
 where
     EF: BitCoordinates + ExtensionField<B::Val>,
     B: BooleanBackend<EF>,
-    B::Val: TranscriptField + TowerLevel + Coordinates,
+    B::Val: TranscriptField + TowerLevel,
 {
-    /// Gather the Boolean cells of every table into one bit witness, packed into the elements
-    /// a commitment holds.
+    /// Gather the Boolean cells of every table into one bit witness.
+    ///
+    /// `words` holds one word per sixty-four bits of the padded witness, zeroed, and bit `j` of
+    /// word `w` is bit `64 * w + j` of the witness. The tail past every slot is left as it is.
     ///
     /// # Errors
     ///
     /// - The shapes do not stack to the committed arity.
     /// - A cell holds neither zero nor one, so it addresses no bit.
+    ///
+    /// # Panics
+    ///
+    /// Panics unless `words` holds one word per sixty-four bits of the witness.
     pub(super) fn gather_bits(
         &self,
         tables: &[Table<B::Val>],
-    ) -> Result<Vec<B::Val>, BooleanTraceCommitmentError<B::Error>> {
+        words: &mut [u64],
+    ) -> Result<(), BooleanTraceCommitmentError<B::Error>> {
         let shapes = tables.iter().map(Table::shape).collect::<Vec<_>>();
         let placements = self.placements(&shapes)?;
-
-        // One word per sixty-four bits of the padded witness, the tail left at zero.
-        let mut staging = Staging::<B::Val>::zeroed(1 << (self.num_variables() - 6));
-        let words = staging.words_mut();
+        assert_eq!(
+            words.len(),
+            1 << (self.num_variables() - 6),
+            "the witness holds one word per sixty-four bits"
+        );
 
         // A column of at least one word owns a run of whole words; a shorter one shares a word.
         //
@@ -125,64 +131,7 @@ where
             });
         }
 
-        Ok(staging.into_elements())
-    }
-}
-
-/// The bit witness while it is gathered, written one 64-bit word at a time.
-///
-/// Bit `j` of word `w` is coordinate `64 * w + j` of the run, which is the packing's convention.
-pub(super) enum Staging<V> {
-    /// The elements themselves, their bytes written through a word view.
-    Elements(Vec<V>),
-    /// Words packed once gathered, for a level a word view would misalign.
-    Words(Vec<u64>),
-}
-
-impl<V: Field + Coordinates> Staging<V> {
-    /// Whether a run of elements can be read as a run of words in place.
-    const WORD_VIEW: bool = cfg!(target_endian = "little")
-        && size_of::<V>().is_multiple_of(size_of::<u64>())
-        && align_of::<V>() >= align_of::<u64>();
-
-    /// A zeroed witness of `words` words.
-    pub(super) fn zeroed(words: usize) -> Self {
-        let bytes = words * size_of::<u64>();
-        if Self::WORD_VIEW && bytes.is_multiple_of(size_of::<V>()) {
-            Self::Elements(V::zero_vec(bytes / size_of::<V>()))
-        } else {
-            Self::Words(alloc::vec![0; words])
-        }
-    }
-
-    /// Every word of the witness, in order.
-    pub(super) fn words_mut(&mut self) -> &mut [u64] {
-        match self {
-            Self::Elements(elements) => {
-                let len = size_of_val(elements.as_slice()) / size_of::<u64>();
-                // SAFETY: the elements are a padding-free run of coordinates by the `Coordinates`
-                // contract, and every bit pattern of their bytes is a value, as it is of a word.
-                //
-                // `WORD_VIEW` puts the run on a word boundary, and `zeroed` sized it to whole
-                // words, so the view covers exactly the elements' bytes. It borrows them
-                // exclusively for as long as the elements are borrowed.
-                //
-                // On a little-endian target bit `j` of word `w` is then coordinate `64 * w + j`.
-                unsafe { slice::from_raw_parts_mut(elements.as_mut_ptr().cast::<u64>(), len) }
-            }
-            Self::Words(words) => words,
-        }
-    }
-
-    /// The gathered witness as the elements a commitment holds.
-    pub(super) fn into_elements(self) -> Vec<V> {
-        match self {
-            Self::Elements(elements) => elements,
-            Self::Words(words) => {
-                let blocks = words.into_iter().map(PackedGf2::new).collect::<Vec<_>>();
-                pack::<PackedGf2x64, V>(&blocks)
-            }
-        }
+        Ok(())
     }
 }
 

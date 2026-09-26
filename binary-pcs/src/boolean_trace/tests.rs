@@ -1,7 +1,7 @@
 use alloc::string::String;
 use alloc::{format, vec};
 
-use p3_binary_field::{BinaryField32, BinaryField128, PackedGf2, PackedGf2x64};
+use p3_binary_field::{BinaryField128, Underlier};
 use p3_field::PrimeCharacteristicRing;
 use p3_keccak::Keccak256Hash;
 use p3_matrix::dense::RowMajorMatrix;
@@ -13,10 +13,10 @@ use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
 
 use super::evaluate::{BLOCKS_PER_TASK, packed_column_sums};
-use super::gather::{GATHER_GROUP, Staging};
+use super::gather::GATHER_GROUP;
 use super::plan::{ClaimPlan, ColumnClaim, column_claims};
 use super::*;
-use crate::packing::{coordinate_bytes, pack};
+use crate::packing::PackedWords;
 use crate::params::BinaryPcsParams;
 use crate::test_util::{MyChallenger, MyMmcs, challenger, mmcs};
 
@@ -155,53 +155,124 @@ fn gathered_bits_place_every_cell_at_its_slot() {
         }
     }
 
-    let gathered = scheme.gather_bits(&tables).unwrap();
-    assert_eq!(words_of(&gathered), expected);
+    let mut gathered = alloc::vec![0u64; expected.len()];
+    scheme.gather_bits(&tables, &mut gathered).unwrap();
+    assert_eq!(gathered, expected);
 }
 
-/// The words a run of elements holds, lowest coordinate first.
-fn words_of<V: Coordinates>(elements: &[V]) -> Vec<u64> {
-    coordinate_bytes(elements)
-        .chunks_exact(size_of::<u64>())
-        .map(|bytes| u64::from_le_bytes(bytes.try_into().unwrap()))
-        .collect()
+/// The bit commitment every fixture's trace commitment stacks into.
+type Inner = BooleanPcs<EF, MyMmcs, MyMmcs>;
+
+/// A bit commitment that takes its witness as bits alone, its packed entry points at their
+/// defaults, as one written against the required methods only would be.
+struct BitsOnly(Inner);
+
+impl BooleanBackend<EF> for BitsOnly {
+    type Val = EF;
+    type Commitment = <Inner as BooleanBackend<EF>>::Commitment;
+    type ProverData = <Inner as BooleanBackend<EF>>::ProverData;
+    type Proof = <Inner as BooleanBackend<EF>>::Proof;
+    type Error = <Inner as BooleanBackend<EF>>::Error;
+
+    fn num_variables(&self) -> usize {
+        self.0.num_variables()
+    }
 }
 
-/// A witness staged word by word, then read back as the elements a commitment holds.
-fn staged<V: Field + Coordinates>(words: &[u64]) -> Vec<V> {
-    let mut staging = Staging::<V>::zeroed(words.len());
-    staging.words_mut().copy_from_slice(words);
-    staging.into_elements()
+impl BooleanMultilinearPcs<EF, MyChallenger> for BitsOnly {
+    fn observe_commitment(&self, commitment: &Self::Commitment, challenger: &mut MyChallenger) {
+        BooleanMultilinearPcs::observe_commitment(&self.0, commitment, challenger);
+    }
+
+    fn commit_bits<U: Underlier>(
+        &self,
+        bits: &[PackedGf2<U>],
+        challenger: &mut MyChallenger,
+    ) -> Result<(Self::Commitment, Self::ProverData), Self::Error> {
+        BooleanMultilinearPcs::commit_bits(&self.0, bits, challenger)
+    }
+
+    fn open_readings(
+        &self,
+        prover_data: Self::ProverData,
+        openings: &[BitOpening<EF>],
+        challenger: &mut MyChallenger,
+    ) -> Result<(Vec<BitReadings<EF>>, Self::Proof), Self::Error> {
+        self.0.open_readings(prover_data, openings, challenger)
+    }
+
+    fn verify_readings(
+        &self,
+        commitment: &Self::Commitment,
+        openings: &[BitOpening<EF>],
+        readings: &[BitReadings<EF>],
+        proof: &Self::Proof,
+        challenger: &mut MyChallenger,
+    ) -> Result<(), Self::Error> {
+        self.0
+            .verify_readings(commitment, openings, readings, proof, challenger)
+    }
+
+    fn readings_security(
+        &self,
+        num_claims: usize,
+        successor_tensors: bool,
+    ) -> Option<PrescribedOpeningSecurity> {
+        Some(self.0.readings_security(num_claims, successor_tensors))
+    }
+
+    fn open_at_points(
+        &self,
+        prover_data: Self::ProverData,
+        points: &[Point<EF>],
+        challenger: &mut MyChallenger,
+    ) -> Result<(Vec<EF>, Self::Proof), Self::Error> {
+        BooleanMultilinearPcs::open_at_points(&self.0, prover_data, points, challenger)
+    }
+
+    fn verify_at_points(
+        &self,
+        commitment: &Self::Commitment,
+        points: &[Point<EF>],
+        values: &[EF],
+        proof: &Self::Proof,
+        challenger: &mut MyChallenger,
+    ) -> Result<(), Self::Error> {
+        BooleanMultilinearPcs::verify_at_points(
+            &self.0, commitment, points, values, proof, challenger,
+        )
+    }
 }
 
 #[test]
-fn a_staged_witness_is_the_packing_of_its_words() {
-    // Invariant: a level wide enough for a word view and a narrower one pack the same words
-    // the same way, so either holding of the witness commits the same elements.
-    let mut rng = SmallRng::seed_from_u64(0x57a6);
-    let words = (0..16).map(|_| rng.random::<u64>()).collect::<Vec<_>>();
-    let blocks = words
+fn a_commitment_taking_bits_alone_commits_the_root_the_packed_one_does() {
+    // Invariant: a bit commitment left at the packed defaults is handed the witness as bits,
+    // or reads packed elements back as bits, and either way commits to the root a commitment
+    // writing the packed elements in place commits to.
+    let shapes = [TableShape::new(7, 3), TableShape::new(6, 2)];
+    let tables = shapes
         .iter()
-        .copied()
-        .map(PackedGf2::new)
+        .enumerate()
+        .map(|(seed, shape)| {
+            table_with_width(0xB175 + seed as u64, shape.num_variables(), shape.width())
+        })
         .collect::<Vec<_>>();
+    let (arity, _) = plan_stacked_layout(&shapes);
+    let packed = pcs(&shapes);
+    let bits_only =
+        BooleanTraceCommitment::<EF, BitsOnly>::from_commitment(BitsOnly(boolean_pcs(arity)));
 
-    // The wide level is written in place, and the narrow one packs its words afterwards.
-    assert!(matches!(
-        Staging::<BinaryField128>::zeroed(words.len()),
-        Staging::Elements(_)
-    ));
-    assert!(matches!(
-        Staging::<BinaryField32>::zeroed(words.len()),
-        Staging::Words(_)
-    ));
+    let (by_packed, _) = packed.commit(tables.clone(), &mut challenger()).unwrap();
+    let (by_bits, _) = bits_only.commit(tables.clone(), &mut challenger()).unwrap();
+    assert_eq!(by_bits, by_packed);
 
-    let wide = staged::<BinaryField128>(&words);
-    assert_eq!(wide, pack::<PackedGf2x64, BinaryField128>(&blocks));
-    assert_eq!(words_of(&wide), words);
-    let narrow = staged::<BinaryField32>(&words);
-    assert_eq!(narrow, pack::<PackedGf2x64, BinaryField32>(&blocks));
-    assert_eq!(words_of(&narrow), words);
+    let mut words = PackedWords::<EF>::zeroed(1 << (arity - 6)).unwrap();
+    packed.gather_bits(&tables, words.words_mut()).unwrap();
+    let (by_default, _) = bits_only
+        .inner
+        .commit_packed(words, &mut challenger())
+        .unwrap();
+    assert_eq!(by_default, by_packed);
 }
 
 #[test]
@@ -223,7 +294,8 @@ fn a_gather_refuses_the_first_non_boolean_column_in_placement_order() {
                 Table::new(RowMajorMatrix::new(cells, rows))
             })
             .collect::<Vec<_>>();
-        match scheme.gather_bits(&tables) {
+        let mut words = alloc::vec![0u64; 1 << (scheme.num_variables() - 6)];
+        match scheme.gather_bits(&tables, &mut words) {
             Err(BooleanTraceCommitmentError::NonBooleanCell { table, column }) => (table, column),
             _ => panic!("a non-Boolean cell must be refused"),
         }
@@ -235,15 +307,20 @@ fn a_gather_refuses_the_first_non_boolean_column_in_placement_order() {
 
 /// A commitment over the batch these shapes describe.
 fn pcs(shapes: &[TableShape]) -> BooleanTracePcs<EF, MyMmcs, MyMmcs> {
+    let (arity, _) = plan_stacked_layout(shapes);
+    BooleanTraceCommitment::from_commitment(boolean_pcs(arity))
+}
+
+/// The bit commitment a batch stacking to `arity` variables is discharged against.
+fn boolean_pcs(arity: usize) -> Inner {
     let params = BinaryPcsParams {
         log_inv_rate: 2,
         pow_bits: 0,
         security_level: 40,
     };
-    let (arity, _) = plan_stacked_layout(shapes);
     // The packing absorbs seven variables, so the commitment holds the rest.
     let config = BinaryPcsConfig::try_new::<EF, EF>(arity - 7, params).unwrap();
-    BooleanTracePcs::new(config, mmcs(), mmcs(), arity).unwrap()
+    BooleanPcs::new(config, mmcs(), mmcs(), arity).unwrap()
 }
 
 /// Every column of every table, opened at one point per table.
