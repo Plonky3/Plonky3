@@ -1401,14 +1401,21 @@ fn supplied_values_open_to_the_evaluated_proof_and_a_wrong_one_is_refused() {
         evaluated_after_open
     );
 
+    // A value moved on either side of the run is caught by the combination that reads it.
     let mut current = evals[1].current().to_vec();
     current[3] += EF::ONE;
-    let moved = OpeningEvals::new(current, evals[1].next().to_vec());
-    let (result, _, _) = open_known(&[None, Some(moved)]);
-    assert!(matches!(
-        result,
-        Err(BooleanTraceCommitmentError::ColumnBatchValueMismatch { .. })
-    ));
+    let mut next = evals[1].next().to_vec();
+    next[2] += EF::ONE;
+    for moved in [
+        OpeningEvals::new(current, evals[1].next().to_vec()),
+        OpeningEvals::new(evals[1].current().to_vec(), next),
+    ] {
+        let (result, _, _) = open_known(&[None, Some(moved)]);
+        assert!(matches!(
+            result,
+            Err(BooleanTraceCommitmentError::ColumnBatchValueMismatch { .. })
+        ));
+    }
 
     // A shape or count error is found before the transcript moves.
     let short = OpeningEvals::new(evals[0].current().to_vec(), Vec::new());
@@ -1436,6 +1443,59 @@ fn supplied_values_open_to_the_evaluated_proof_and_a_wrong_one_is_refused() {
             p3_challenger::CanSample::<EF>::sample(&mut untouched),
         );
     }
+}
+
+#[test]
+fn the_per_column_route_reads_its_values_off_the_readings_whatever_is_supplied() {
+    // Invariant: the per-column route takes every value from its readings, so a supplied run
+    // changes nothing, not even a wrong one. Its count and shape are still checked.
+    //
+    // Fixture state: one batch reading a subset one row ahead, which takes that route.
+    let shape = TableShape::new(8, 3);
+    let scheme = pcs(&[shape]);
+    let table = table_with_width(0xB710, 8, 3);
+    let point = Point::<EF>::rand(&mut SmallRng::seed_from_u64(0xB711), 8);
+    let protocol = OpeningProtocol::new(vec![TableSpec::new(
+        shape,
+        vec![OpeningBatch::new(vec![0, 1, 2], vec![1])],
+    )]);
+    let open_known = |known: Option<&[Option<OpeningEvals<EF>>]>| {
+        let mut chal = challenger();
+        let (_, data) = scheme.commit(vec![table.clone()], &mut chal).unwrap();
+        let untouched = chal.clone();
+        let points = core::slice::from_ref(&point);
+        let result = match known {
+            Some(known) => scheme.open_at_known(data, &protocol, points, known, &mut chal),
+            None => scheme.open_at(data, &protocol, points, &mut chal),
+        };
+        (result, chal, untouched)
+    };
+
+    let (evaluated, mut evaluated_chal, _) = open_known(None);
+    let evaluated = evaluated.unwrap();
+    let wrong = OpeningEvals::new(vec![EF::ONE; 3], vec![EF::ONE]);
+    let (supplied, mut supplied_chal, _) = open_known(Some(&[Some(wrong)]));
+    assert_eq!(
+        postcard::to_allocvec(&supplied.unwrap()).unwrap(),
+        postcard::to_allocvec(&evaluated).unwrap()
+    );
+    assert_eq!(
+        p3_challenger::CanSample::<EF>::sample(&mut supplied_chal),
+        p3_challenger::CanSample::<EF>::sample(&mut evaluated_chal),
+    );
+
+    let (result, mut chal, mut untouched) = open_known(Some(&[None, None]));
+    assert!(matches!(
+        result,
+        Err(BooleanTraceCommitmentError::KnownValueCount {
+            expected: 1,
+            actual: 2,
+        })
+    ));
+    assert_eq!(
+        p3_challenger::CanSample::<EF>::sample(&mut chal),
+        p3_challenger::CanSample::<EF>::sample(&mut untouched),
+    );
 }
 
 #[test]
