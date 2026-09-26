@@ -2,7 +2,9 @@
 
 use p3_binary_field::TowerLevel;
 use p3_matrix::Matrix;
-use p3_matrix::dense::RowMajorMatrix;
+use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
+
+use crate::encoder::padded_copy;
 
 /// An additive NTT: evaluation of the novel polynomial basis on an `F_2`-linear subspace.
 ///
@@ -47,6 +49,22 @@ pub trait AdditiveNtt<F: TowerLevel> {
         let log_n = p3_util::log2_strict_usize(mat.height());
         assert!(log_inv_rate <= log_n, "padding exceeds matrix height");
         self.ntt_batch(mat)
+    }
+
+    /// Transforms a borrowed coefficient matrix zero-padded to `2^log_inv_rate` times its height.
+    ///
+    /// The result is what [`ntt_batch_padded`](Self::ntt_batch_padded) makes of the padded
+    /// matrix, and `mat` is left as it is. The default copies it into a zeroed matrix of the
+    /// padded height first; a transform that reads it where it lies skips the copy.
+    ///
+    /// # Panics
+    /// Panics for an invalid transform height or if the padded height overflows `usize`.
+    fn ntt_batch_padded_borrowed(
+        &self,
+        mat: RowMajorMatrixView<'_, F>,
+        log_inv_rate: usize,
+    ) -> RowMajorMatrix<F> {
+        self.ntt_batch_padded(padded_copy(mat, log_inv_rate), log_inv_rate)
     }
 
     /// Inverse of [`ntt_batch`](Self::ntt_batch).

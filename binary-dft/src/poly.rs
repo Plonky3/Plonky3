@@ -6,11 +6,12 @@ use p3_binary_field::poly_basis::{LOW_STAGES, LowStageTwiddles};
 use p3_binary_field::{BinaryField128, TowerLevel, poly_basis};
 use p3_field::PrimeCharacteristicRing;
 use p3_matrix::Matrix;
-use p3_matrix::dense::RowMajorMatrix;
+use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
 use p3_maybe_rayon::prelude::*;
 use p3_util::{log2_ceil_usize, log2_floor_usize, log2_strict_usize};
 
 use crate::domain::domain_point;
+use crate::encoder::{padded_copy, padded_message_len};
 use crate::lch::BUTTERFLY_GRAIN;
 use crate::staging::{
     Dispatch, StagedRuns, for_each_staged_tile, for_each_staged_tile_into_cosets, prefault,
@@ -111,6 +112,18 @@ fn copy_coset(dst: &mut [u128], src: &[u128]) {
     } else {
         dst.copy_from_slice(src);
     }
+}
+
+/// Whether cosets of `len` elements are large enough to spread over every worker on their own.
+fn large_cosets(len: usize) -> bool {
+    len >= 2 * BUTTERFLY_GRAIN * current_num_threads()
+}
+
+/// The tower-basis bit patterns of a run of elements, read where they lie.
+const fn reprs(values: &[BinaryField128]) -> &[u128] {
+    // SAFETY: `BinaryField128` is `#[repr(transparent)]` over `u128`, so a run of one is a run
+    // of the other with the same length and alignment, borrowed for the same lifetime.
+    unsafe { core::slice::from_raw_parts(values.as_ptr().cast::<u128>(), values.len()) }
 }
 
 /// A change of basis applied to a whole run of elements at once.
@@ -769,14 +782,15 @@ fn staged_group(
 
 /// Run the first staging group of every coset of a zero-padded message in one pass.
 ///
-/// `values` is one coset per twiddle set, the leading one holding the message in the tower
-/// basis. Every coset's transform starts from the message's coefficients, and its first group
-/// is its first read of every element. So one gather of the message serves every coset: the
-/// tile changes basis once, and each coset runs the group on its own copy of the tile and
-/// scatters it into its own slot. Neither a pass converting the message nor a copy of it into
-/// each coset is taken.
+/// `values` is one coset per twiddle set. The message, in the tower basis, is `source` when
+/// one is given and the leading coset otherwise. Every coset's transform starts from the
+/// message's coefficients, and its first group is its first read of every element. So one
+/// gather of the message serves every coset: the tile changes basis once, and each coset runs
+/// the group on its own copy of the tile and scatters it into its own slot. Neither a pass
+/// converting the message nor a copy of it into each coset is taken.
 fn first_group_into_cosets(
     values: &mut [u128],
+    source: Option<&[u128]>,
     message_len: usize,
     plan: Plan,
     depth: usize,
@@ -786,6 +800,7 @@ fn first_group_into_cosets(
     let (runs, run, dispatch) = staged_group(plan, top, depth, values.len());
     for_each_staged_tile_into_cosets(
         values,
+        source,
         message_len,
         runs,
         dispatch,
@@ -796,18 +811,27 @@ fn first_group_into_cosets(
 
 /// Encode a zero-padded message whose cosets all share a first staging group of `depth`.
 ///
-/// `values` is `2^log_inv_rate` cosets of one message each, the leading one holding the
-/// message in the tower basis, and every coset comes back evaluated in the tower basis.
-fn padded_sharing_first_group(values: &mut [u128], plan: Plan, depth: usize, log_inv_rate: usize) {
+/// `values` is `2^log_inv_rate` cosets of one message each, and every coset comes back
+/// evaluated in the tower basis. The message, in the tower basis, is `source` when one is
+/// given, and otherwise the leading coset holds it.
+fn padded_sharing_first_group(
+    values: &mut [u128],
+    source: Option<&[u128]>,
+    plan: Plan,
+    depth: usize,
+    log_inv_rate: usize,
+) {
     let log_message = plan.log_n;
     let len = values.len() >> log_inv_rate;
     let twiddles: Vec<Twiddles> = (0..1 << log_inv_rate)
         .map(|c| Twiddles::new(log_message, domain_point(c << log_message)))
         .collect();
-    // The cosets past the leading one hold zeros, and the first group's scatter is their first
-    // write, so their pages are faulted in by a contiguous sweep beforehand.
-    prefault(&mut values[len..]);
-    first_group_into_cosets(values, len, plan, depth, &twiddles);
+    // The cosets the first group's scatter writes first hold zeros, so their pages are faulted
+    // in by a contiguous sweep beforehand. The leading coset is one of them unless it holds the
+    // message.
+    let first_written = if source.is_some() { 0 } else { len };
+    prefault(&mut values[first_written..]);
+    first_group_into_cosets(values, source, len, plan, depth, &twiddles);
     for_chunks(values, len, log_message, |(c, coset)| {
         forward_below(coset, plan, &twiddles[c], 1, Fold::EXIT);
     });
@@ -970,11 +994,11 @@ impl AdditiveNtt<BinaryField128> for PolyBasisNtt {
             .map(BinaryField128::to_repr)
             .collect();
         let plan = Plan::new(width, log_message);
-        let large = len >= 2 * BUTTERFLY_GRAIN * p3_maybe_rayon::prelude::current_num_threads();
+        let large = large_cosets(len);
         if let Some(depth) = plan.group_sizes().next().filter(|_| large) {
             // Large cosets that stage their first group read the message once for all of them,
             // and every coset finishes on its own.
-            padded_sharing_first_group(&mut values, plan, depth, log_inv_rate);
+            padded_sharing_first_group(&mut values, None, plan, depth, log_inv_rate);
             mat.values = values.into_iter().map(BinaryField128::from_repr).collect();
             return mat;
         }
@@ -1008,6 +1032,34 @@ impl AdditiveNtt<BinaryField128> for PolyBasisNtt {
         }
         mat.values = values.into_iter().map(BinaryField128::from_repr).collect();
         mat
+    }
+
+    fn ntt_batch_padded_borrowed(
+        &self,
+        mat: RowMajorMatrixView<'_, BinaryField128>,
+        log_inv_rate: usize,
+    ) -> RowMajorMatrix<BinaryField128> {
+        let width = mat.width;
+        let log_message = log2_strict_usize(mat.height());
+        let len = mat.values.len();
+        let plan = Plan::new(width, log_message);
+        let shared = log_inv_rate > 0 && poly_basis::HAS_HARDWARE_CLMUL && large_cosets(len);
+        // Only cosets that share their first group gather the message themselves, and any
+        // other encoding transforms a padded copy of it.
+        let Some(depth) = plan.group_sizes().next().filter(|_| shared) else {
+            return self.ntt_batch_padded(padded_copy(mat, log_inv_rate), log_inv_rate);
+        };
+        // Every coset is written in full by its first group, the leading one included.
+        let mut values = alloc::vec![0u128; padded_message_len(len, log_inv_rate)];
+        padded_sharing_first_group(
+            &mut values,
+            Some(reprs(mat.values)),
+            plan,
+            depth,
+            log_inv_rate,
+        );
+        let values = values.into_iter().map(BinaryField128::from_repr).collect();
+        RowMajorMatrix::new(values, width)
     }
 
     fn shifted_lde_batch(
@@ -1747,10 +1799,25 @@ mod tests {
                     .collect();
                 let mut actual = message.clone();
                 actual.resize(len << log_cosets, 0);
-                super::first_group_into_cosets(&mut actual, len, plan, depth, &twiddles);
+                super::first_group_into_cosets(&mut actual, None, len, plan, depth, &twiddles);
                 for (c, coset) in actual.chunks_mut(len).enumerate() {
                     super::forward_below(coset, plan, &twiddles[c], 1, Fold::EXIT);
                 }
+
+                // The message gathered from a buffer of its own fills the leading coset too.
+                let mut separate = alloc::vec![0; len << log_cosets];
+                super::first_group_into_cosets(
+                    &mut separate,
+                    Some(message.as_slice()),
+                    len,
+                    plan,
+                    depth,
+                    &twiddles,
+                );
+                for (c, coset) in separate.chunks_mut(len).enumerate() {
+                    super::forward_below(coset, plan, &twiddles[c], 1, Fold::EXIT);
+                }
+                assert_eq!(separate, actual, "{plan:?} separate source");
 
                 for (c, coset) in actual.chunks(len).enumerate() {
                     let mut expected = message.clone();
@@ -1784,11 +1851,27 @@ mod tests {
                 let expected = tower.ntt_batch(mat.clone());
 
                 let mut values: Vec<u128> = mat.values.iter().map(|v| v.to_repr()).collect();
-                super::padded_sharing_first_group(&mut values, plan, depth, log_inv_rate);
+                let message = values[..values.len() >> log_inv_rate].to_vec();
+                super::padded_sharing_first_group(&mut values, None, plan, depth, log_inv_rate);
                 let actual: Vec<_> = values.into_iter().map(BinaryField128::from_repr).collect();
                 assert_eq!(
                     actual, expected.values,
                     "width={width} log_message={log_message} rate={log_inv_rate}"
+                );
+
+                // A message read from its own buffer encodes into a codeword left zero.
+                let mut values = alloc::vec![0; mat.values.len()];
+                super::padded_sharing_first_group(
+                    &mut values,
+                    Some(message.as_slice()),
+                    plan,
+                    depth,
+                    log_inv_rate,
+                );
+                let actual: Vec<_> = values.into_iter().map(BinaryField128::from_repr).collect();
+                assert_eq!(
+                    actual, expected.values,
+                    "borrowed width={width} log_message={log_message} rate={log_inv_rate}"
                 );
             }
         }
@@ -1806,6 +1889,30 @@ mod tests {
                     PolyBasisNtt::default().ntt_batch_padded(mat, added),
                     expected
                 );
+            }
+        }
+    }
+
+    #[test]
+    fn a_borrowed_message_encodes_as_its_padding_and_is_left_as_it_was() {
+        // Small messages take the copy, and a tall single column shares its first group on a
+        // host with a few workers, so both routes of the entry point are compared.
+        for (width, log_message) in [(1, 4), (4, 6), (1, 17), (4, 15)] {
+            for log_inv_rate in 0..=2 {
+                let message = matrix(log_message, width, 31);
+                let mut padded = message.clone();
+                padded
+                    .values
+                    .resize(padded.values.len() << log_inv_rate, BinaryField128::ZERO);
+                let expected = PolyBasisNtt::default().ntt_batch_padded(padded, log_inv_rate);
+
+                let actual = PolyBasisNtt::default()
+                    .ntt_batch_padded_borrowed(message.as_view(), log_inv_rate);
+                assert_eq!(
+                    actual, expected,
+                    "width={width} log_message={log_message} rate={log_inv_rate}"
+                );
+                assert_eq!(message, matrix(log_message, width, 31));
             }
         }
     }

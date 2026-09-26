@@ -5,7 +5,7 @@ use p3_binary_field::{BinaryField32, BinaryField128, Poly64, TowerLevel};
 use p3_challenger::{FieldChallenger, GrindingChallenger};
 use p3_commit::Encoder;
 use p3_field::{BasedVectorSpace, ExtensionField, Field};
-use p3_matrix::dense::RowMajorMatrix;
+use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
 use p3_multilinear_util::point::Point;
 use p3_whir::transcript::query_draws;
 use p3_whir::{SecurityAssumption, WhirConfig, WhirDomain, WhirQueryPoint};
@@ -183,6 +183,14 @@ where
     ) -> RowMajorMatrix<Poly64> {
         self.encoder.encode_batch_padded(message, log_inv_rate)
     }
+
+    fn encode_batch_borrowed(
+        &self,
+        message: RowMajorMatrixView<'_, Poly64>,
+        log_inv_rate: usize,
+    ) -> RowMajorMatrix<Poly64> {
+        self.encoder.encode_batch_borrowed(message, log_inv_rate)
+    }
 }
 
 impl<EF, Ntt> WhirDomain<Poly64, EF> for BinaryWhirDomain<Poly64, Ntt>
@@ -244,6 +252,14 @@ where
     ) -> RowMajorMatrix<BinaryField32> {
         self.encoder.encode_batch_padded(message, log_inv_rate)
     }
+
+    fn encode_batch_borrowed(
+        &self,
+        message: RowMajorMatrixView<'_, BinaryField32>,
+        log_inv_rate: usize,
+    ) -> RowMajorMatrix<BinaryField32> {
+        self.encoder.encode_batch_borrowed(message, log_inv_rate)
+    }
 }
 
 impl<EF, Ntt> WhirDomain<BinaryField32, EF> for BinaryWhirDomain<BinaryField32, Ntt>
@@ -304,6 +320,14 @@ where
         log_inv_rate: usize,
     ) -> RowMajorMatrix<BinaryField128> {
         self.encoder.encode_batch_padded(message, log_inv_rate)
+    }
+
+    fn encode_batch_borrowed(
+        &self,
+        message: RowMajorMatrixView<'_, BinaryField128>,
+        log_inv_rate: usize,
+    ) -> RowMajorMatrix<BinaryField128> {
+        self.encoder.encode_batch_borrowed(message, log_inv_rate)
     }
 }
 
