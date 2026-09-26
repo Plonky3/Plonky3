@@ -199,6 +199,10 @@ fn composed_poly_mul_128(a: u128, b: u128) -> u128 {
 //
 // A backend keeps every intermediate in a vector register and folds the modulus with a
 // carryless product, where the integer file would need several instructions per shift.
+// AArch64 prepares a multiplier held fixed across a run of products once, so that each
+// product takes five carryless multiplies.
+#[cfg(all(target_arch = "aarch64", target_feature = "aes"))]
+pub(crate) use aarch64::SplitMultiplier as BatchMultiplier;
 #[cfg(all(target_arch = "aarch64", target_feature = "aes"))]
 pub(crate) use aarch64::{poly_dot_128, poly_mul_128, poly_mul_128_by_64, poly_square_128};
 #[cfg(not(any(
@@ -209,17 +213,26 @@ pub(crate) use portable::{poly_dot_128, poly_mul_128, poly_mul_128_by_64, poly_s
 #[cfg(all(target_arch = "x86_64", target_feature = "pclmulqdq"))]
 pub(crate) use x86_64::{poly_dot_128, poly_mul_128, poly_mul_128_by_64, poly_square_128};
 
+/// A multiplier held fixed across a run of independent products.
+///
 /// Batch products favor instruction throughput over the latency of a dependent chain.
-#[inline]
-#[allow(clippy::missing_const_for_fn)]
-pub(crate) fn poly_mul_128_batch(a: u128, b: u128) -> u128 {
-    #[cfg(all(target_arch = "aarch64", target_feature = "aes"))]
-    {
-        aarch64::poly_mul_128_batch(a, b)
+#[cfg(not(all(target_arch = "aarch64", target_feature = "aes")))]
+#[derive(Clone, Copy)]
+pub(crate) struct BatchMultiplier(u128);
+
+#[cfg(not(all(target_arch = "aarch64", target_feature = "aes")))]
+impl BatchMultiplier {
+    /// Prepare a multiplier.
+    #[inline]
+    pub(crate) const fn new(t: u128) -> Self {
+        Self(t)
     }
-    #[cfg(not(all(target_arch = "aarch64", target_feature = "aes")))]
-    {
-        poly_mul_128(a, b)
+
+    /// The reduced product of the multiplier with `v`.
+    #[inline]
+    #[allow(clippy::missing_const_for_fn)]
+    pub(crate) fn mul(self, v: u128) -> u128 {
+        poly_mul_128(v, self.0)
     }
 }
 
@@ -452,7 +465,7 @@ mod tests {
             let x = BinaryField128::from_repr(a);
             let y = BinaryField128::from_repr(b);
             prop_assert_eq!(super::mul_128(a, b), x.reference_mul(y).to_repr());
-            prop_assert_eq!(super::poly_mul_128_batch(a, b), poly_mul(a, b, 128, TAIL_128));
+            prop_assert_eq!(super::BatchMultiplier::new(b).mul(a), poly_mul(a, b, 128, TAIL_128));
         }
 
         #[test]
@@ -569,6 +582,11 @@ mod tests {
                     super::poly_mul_128(a, b),
                     poly_mul(a, b, 128, TAIL_128),
                     "{a:#x} * {b:#x}"
+                );
+                assert_eq!(
+                    super::BatchMultiplier::new(b).mul(a),
+                    poly_mul(a, b, 128, TAIL_128),
+                    "{a:#x} * {b:#x}, prepared"
                 );
             }
         }
