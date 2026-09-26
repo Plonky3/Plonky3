@@ -1398,6 +1398,15 @@ impl<EF> SlicedColumns<'_, EF> {
 /// Transpose an 8 x 8 bit matrix held one row per byte.
 ///
 /// Bit `j` of byte `i` becomes bit `i` of byte `j`.
+#[cfg(any(
+    test,
+    not(all(
+        target_arch = "x86_64",
+        target_feature = "avx512f",
+        target_feature = "avx512vbmi",
+        target_feature = "gfni"
+    ))
+))]
 #[inline]
 const fn transpose_bytes(mut x: u64) -> u64 {
     let t = (x ^ (x >> 7)) & 0x00AA_00AA_00AA_00AA;
@@ -1411,15 +1420,128 @@ const fn transpose_bytes(mut x: u64) -> u64 {
 /// For each lane, the byte whose bit `i` is that lane's bit in `words[i]`, for up to eight words.
 #[inline]
 fn lane_masks(words: &[u64]) -> [u8; SLICED_LANES] {
-    debug_assert!(words.len() <= 8);
+    #[cfg(all(
+        target_arch = "x86_64",
+        target_feature = "avx512f",
+        target_feature = "avx512vbmi",
+        target_feature = "gfni"
+    ))]
+    {
+        gfni::lane_masks(words)
+    }
+    #[cfg(not(all(
+        target_arch = "x86_64",
+        target_feature = "avx512f",
+        target_feature = "avx512vbmi",
+        target_feature = "gfni"
+    )))]
+    {
+        portable_lane_masks(words)
+    }
+}
+
+/// [`lane_masks`] in 64-bit words.
+///
+/// The words, padded to eight with zeros, are an `8 x 8` matrix of bytes, word `i` in row `i`.
+/// Three rounds of block swaps transpose it, so row `k` then holds byte `k` of every word, and
+/// its own bit transpose is the masks of lanes `8 k .. 8 k + 8`.
+#[cfg(any(
+    test,
+    not(all(
+        target_arch = "x86_64",
+        target_feature = "avx512f",
+        target_feature = "avx512vbmi",
+        target_feature = "gfni"
+    ))
+))]
+#[inline]
+fn portable_lane_masks(words: &[u64]) -> [u8; SLICED_LANES] {
+    debug_assert!(words.len() <= GROUP_CORNERS);
+    let mut rows = [0_u64; GROUP_CORNERS];
+    rows[..words.len()].copy_from_slice(words);
+    // Blocks of four, two, then one byte: each swap trades the bytes of row `i` whose index has
+    // the block's bit set with those of row `i + span` whose index has it clear.
+    for (span, keep) in [
+        (4, 0x0000_0000_FFFF_FFFF_u64),
+        (2, 0x0000_FFFF_0000_FFFF),
+        (1, 0x00FF_00FF_00FF_00FF),
+    ] {
+        let shift = 8 * span;
+        for i in (0..GROUP_CORNERS).filter(|i| i & span == 0) {
+            let (a, b) = (rows[i], rows[i + span]);
+            rows[i] = (a & keep) | ((b & keep) << shift);
+            rows[i + span] = ((a >> shift) & keep) | (b & !keep);
+        }
+    }
     let mut masks = [0; SLICED_LANES];
-    for (byte, masks) in masks.as_chunks_mut::<8>().0.iter_mut().enumerate() {
-        let rows = words.iter().enumerate().fold(0_u64, |rows, (i, &word)| {
-            rows | (((word >> (8 * byte)) & 0xff) << (8 * i))
-        });
-        masks.copy_from_slice(&transpose_bytes(rows).to_le_bytes());
+    for (masks, &row) in masks.as_chunks_mut::<8>().0.iter_mut().zip(&rows) {
+        *masks = transpose_bytes(row).to_le_bytes();
     }
     masks
+}
+
+/// [`lane_masks`] on a target with a byte permute and `8 x 8` bit-matrix multiplication.
+#[cfg(all(
+    target_arch = "x86_64",
+    target_feature = "avx512f",
+    target_feature = "avx512vbmi",
+    target_feature = "gfni"
+))]
+mod gfni {
+    use core::arch::x86_64::{
+        __m512i, _mm512_gf2p8affine_epi64_epi8, _mm512_maskz_loadu_epi64, _mm512_permutexvar_epi8,
+        _mm512_set1_epi64, _mm512_storeu_si512,
+    };
+
+    use super::{GROUP_CORNERS, SLICED_LANES};
+
+    /// Quadword whose byte `j` is `1 << j`.
+    ///
+    /// As the input of an affine map it reads the matrix out transposed, row order reversed:
+    ///
+    /// ```text
+    ///     bit t of byte j of the image  =  bit j of byte 7 - t of the matrix
+    /// ```
+    const UNIT: u64 = 0x8040_2010_0804_0201;
+
+    /// The byte permutation that moves byte `k` of word `i` to byte `7 - i` of quadword `k`.
+    ///
+    /// Quadword `k` is then the matrix whose image of [`UNIT`] holds, at bit `t` of byte `j`,
+    /// bit `8 k + j` of word `t`: the masks of lanes `8 k .. 8 k + 8`.
+    const GATHER: __m512i = {
+        let mut index = [0_u8; SLICED_LANES];
+        let mut word = 0;
+        while word < GROUP_CORNERS {
+            let mut byte = 0;
+            while byte < 8 {
+                index[8 * byte + 7 - word] = (8 * word + byte) as u8;
+                byte += 1;
+            }
+            word += 1;
+        }
+        // SAFETY: a 512-bit register is 64 bytes, and every bit pattern is one of its values.
+        unsafe { core::mem::transmute::<[u8; SLICED_LANES], __m512i>(index) }
+    };
+
+    /// [`super::lane_masks`]: one masked load, one byte permute, one affine map.
+    #[inline]
+    pub(super) fn lane_masks(words: &[u64]) -> [u8; SLICED_LANES] {
+        debug_assert!(words.len() <= GROUP_CORNERS);
+        let present = ((1_u16 << words.len()) - 1) as u8;
+        let mut masks = [0; SLICED_LANES];
+        // SAFETY: this module is compiled only where the build enables every target feature the
+        // intrinsics name. The load's mask selects the first `words.len()` quadwords, all inside
+        // `words`, and a masked-off quadword is never read. The store writes the 64 bytes of
+        // `masks`. Both accesses are the unaligned forms.
+        unsafe {
+            let words = _mm512_maskz_loadu_epi64(present, words.as_ptr().cast());
+            let gathered = _mm512_permutexvar_epi8(GATHER, words);
+            let transposed =
+                _mm512_gf2p8affine_epi64_epi8::<0>(_mm512_set1_epi64(UNIT as i64), gathered);
+            _mm512_storeu_si512(masks.as_mut_ptr().cast(), transposed);
+        }
+        masks
+    }
 }
 
 /// For each lane, the byte whose bit `i` is that lane's bit in `words[i]`, for up to eight words.

@@ -6,6 +6,7 @@ use p3_binary_field::{Ghash128, TowerLevel};
 use p3_field::{Field, HasSubfield, PrimeCharacteristicRing};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_multilinear_util::point::Point;
+use proptest::prelude::{any, prop_assert_eq, proptest};
 use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
 
@@ -2418,13 +2419,26 @@ fn lane_masks_transpose_the_corner_words() {
     let mut rng = SmallRng::seed_from_u64(22);
     for corners in 1..=8 {
         let words = (0..corners).map(|_| rng.random()).collect::<Vec<u64>>();
-        let masks = lane_masks(&words);
-        for (lane, &mask) in masks.iter().enumerate() {
-            let expected = words.iter().enumerate().fold(0_u8, |mask, (i, &word)| {
-                mask | ((((word >> lane) & 1) as u8) << i)
-            });
-            assert_eq!(mask, expected, "lane {lane} of {corners} corners");
+        for (kernel, masks) in [
+            ("dispatched", lane_masks(&words)),
+            ("portable", portable_lane_masks(&words)),
+        ] {
+            for (lane, &mask) in masks.iter().enumerate() {
+                let expected = words.iter().enumerate().fold(0_u8, |mask, (i, &word)| {
+                    mask | ((((word >> lane) & 1) as u8) << i)
+                });
+                assert_eq!(mask, expected, "{kernel}: lane {lane} of {corners} corners");
+            }
         }
+    }
+}
+
+proptest! {
+    #[test]
+    fn lane_masks_match_the_portable_transpose(
+        words in proptest::collection::vec(any::<u64>(), 0..=GROUP_CORNERS),
+    ) {
+        prop_assert_eq!(lane_masks(&words), portable_lane_masks(&words));
     }
 }
 
