@@ -16,7 +16,7 @@ use p3_binary_pcs::whir::{
 };
 use p3_binary_pcs::{
     BinaryPcsConfig, BinaryPcsParams, BitOpening, BitReadings, BooleanMultilinearPcs, BooleanPcs,
-    BooleanTraceCommitmentError, GroupedCodewordMmcs, pack,
+    BooleanTraceCommitmentError, GroupedCodewordMmcs, PackError, PackedWords,
 };
 use p3_challenger::HashChallenger;
 use p3_commit::{Encoder, MultilinearPcs};
@@ -90,6 +90,15 @@ fn witness(seed: u64) -> Vec<PackedGf2x64> {
     (0..1 << (LOG_BITS - 6))
         .map(|_| PackedGf2x64::new(rng.random::<u64>()))
         .collect()
+}
+
+/// A bit witness written into the words a commitment lends.
+fn packed(bits: &[PackedGf2x64]) -> PackedWords<EF> {
+    let mut packed = PackedWords::zeroed(bits.len()).unwrap();
+    for (word, block) in packed.words_mut().iter_mut().zip(bits) {
+        *word = block.to_bits();
+    }
+    packed
 }
 
 /// The witness as a multilinear over every variable, one element per bit.
@@ -183,15 +192,31 @@ fn basefold_pcs() -> BooleanPcs<EF, Grouped, Grouped> {
 
 #[test]
 fn a_packed_witness_commits_through_whir_as_its_bits_do() {
-    // Invariant: the elements the packing builds are the column the bits commit to.
+    // Invariant: the words the bits are written into are the column the bits commit to, and
+    // words covering no hypercube, or another one, are refused.
     let bits = witness(0x5719);
     let profile = BinaryWhirProfile::proven_list_decoding(SECURITY_LEVEL, LOG_INV_RATE, FOLDING);
     let pcs = whir_pcs(profile);
 
     let (by_bits, _) = pcs.commit_bits(&bits, &mut challenger()).unwrap();
-    let elements = pack::<PackedGf2x64, EF>(&bits);
-    let (by_elements, _) = pcs.commit_packed(elements, &mut challenger()).unwrap();
-    assert_eq!(by_elements, by_bits);
+    let (by_words, _) = pcs.commit_packed(packed(&bits), &mut challenger()).unwrap();
+    assert_eq!(by_words, by_bits);
+
+    // Six words fill three elements. One element absorbs seven variables, so the column holds
+    // the rest, and half the words cover one variable fewer.
+    let ragged = pcs.commit_packed(packed(&bits[..6]), &mut challenger());
+    assert!(matches!(
+        ragged,
+        Err(BooleanWhirError::Packing(PackError::NotAHypercube {
+            elements: 3
+        }))
+    ));
+    let short = pcs.commit_packed(packed(&bits[..bits.len() / 2]), &mut challenger());
+    assert!(matches!(
+        short,
+        Err(BooleanWhirError::WitnessArity { expected, actual })
+            if expected == LOG_BITS - 7 && actual == LOG_BITS - 8
+    ));
 }
 
 #[test]
