@@ -13,7 +13,7 @@ use p3_util::{log2_ceil_usize, log2_floor_usize, log2_strict_usize};
 use crate::domain::domain_point;
 use crate::lch::BUTTERFLY_GRAIN;
 use crate::staging::{
-    Dispatch, StagedRuns, for_each_staged_tile, for_each_staged_tile_into_cosets,
+    Dispatch, StagedRuns, for_each_staged_tile, for_each_staged_tile_into_cosets, prefault,
 };
 use crate::traits::AdditiveNtt;
 
@@ -804,6 +804,9 @@ fn padded_sharing_first_group(values: &mut [u128], plan: Plan, depth: usize, log
     let twiddles: Vec<Twiddles> = (0..1 << log_inv_rate)
         .map(|c| Twiddles::new(log_message, domain_point(c << log_message)))
         .collect();
+    // The cosets past the leading one hold zeros, and the first group's scatter is their first
+    // write, so their pages are faulted in by a contiguous sweep beforehand.
+    prefault(&mut values[len..]);
     first_group_into_cosets(values, len, plan, depth, &twiddles);
     for_chunks(values, len, log_message, |(c, coset)| {
         forward_below(coset, plan, &twiddles[c], 1, Fold::EXIT);
