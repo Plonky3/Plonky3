@@ -642,6 +642,9 @@ impl<F: TowerLevel, EF: BitCoordinates + ExtensionField<F>> BitRingSwitch<F, EF>
     ///
     /// Every block of every run reads the same inner weights, so the sweep splits over all the
     /// runs' blocks at once rather than over one run at a time.
+    ///
+    /// A block of zero elements adds nothing to its bank, so it is read but never summed.
+    /// A stacked trace leaves the slots past its last column zero, so its tail costs one read.
     fn bank_tensors_over<S: Borrow<[F]>>(
         packing: &BitPacking<F, S>,
         offset: usize,
@@ -664,6 +667,9 @@ impl<F: TowerLevel, EF: BitCoordinates + ExtensionField<F>> BitRingSwitch<F, EF>
                 // The scratch is what a block accumulates into, so only a fold arm holds one.
                 || (alloc::vec![BitTensor::zero(); banks], None),
                 |(mut totals, mut scratch), (index, values)| {
+                    if values.iter().all(F::is_zero) {
+                        return (totals, scratch);
+                    }
                     let (bank, block) = (index / blocks, index % blocks);
                     totals[bank].add_scaled_columns(
                         &inner.sum(values, &mut scratch),
@@ -801,6 +807,10 @@ impl<F: TowerLevel, EF: BitCoordinates + ExtensionField<F>> BitRingSwitch<F, EF>
             // The scratch is what a block accumulates into, so only a fold arm holds one.
             || (alloc::vec![zero.clone(); banks], None),
             |(mut totals, mut scratch), (index, values)| {
+                // Every term of a block reads one of its own elements, so a zero block adds none.
+                if values.iter().all(F::is_zero) {
+                    return (totals, scratch);
+                }
                 // A run holds whole columns, so the row bits restart with every run.
                 let (bank, index) = (index / blocks, index % blocks);
                 let SuccessorTensors { carry, last } = &mut totals[bank];
@@ -3690,6 +3700,76 @@ mod tests {
                     tensors,
                     "{case}"
                 );
+                assert_eq!(
+                    reduction.bank_successor_tensors_over(&packing, 0, banks, &equality),
+                    Some(successors.clone()),
+                    "{case}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn zero_blocks_leave_every_bank_its_own_elements() {
+        // Invariant: a block of zero elements adds nothing, so skipping it changes no bank.
+        //
+        // Fixture state: four banks of 2^8 wide elements, with zero runs of every reach:
+        //
+        //     bank 0   one run of 64 elements, a whole block at every size swept
+        //     bank 1   all of it
+        //     bank 3   its second half, the tail a stacked trace leaves
+        //
+        // Each bank's rows are checked against the packing itself, weighed by the dense
+        // equality table. Its successor elements are checked against a sweep of one element
+        // at a time.
+        type Wide = BinaryField128;
+        let absorbed = BitRingSwitch::<Wide>::ABSORBED;
+        let (head, tail, banks) = (2, 8, 4);
+        let bank_len = 1 << tail;
+        let element_bytes = 1 << (absorbed - 3);
+        let mut witness = bits(0x2E0B, banks * bank_len * element_bytes);
+        for zero in [
+            64..128,
+            bank_len..2 * bank_len,
+            3 * bank_len + bank_len / 2..4 * bank_len,
+        ] {
+            witness[zero.start * element_bytes..zero.end * element_bytes].fill(0);
+        }
+        let packing = BitPacking::<Wide>::new(&witness).unwrap();
+        let num_variables = head + tail + absorbed;
+        assert_eq!(packing.num_variables() + absorbed, num_variables);
+        let mut rng = SmallRng::seed_from_u64(0x2E0C);
+
+        for row_variables in [absorbed + 1, absorbed + 6, absorbed + tail] {
+            let r = Point::<Wide>::rand(&mut rng, num_variables);
+            let reduction =
+                BitRingSwitch::<BinaryField128>::with_successor(&r, row_variables).unwrap();
+            let run = &reduction.high()[head..];
+
+            let single = FactoredEquality::new(run, 0);
+            let eq = single.outer();
+            let successors = (0..banks)
+                .map(|bank| {
+                    reduction
+                        .successor_tensors_over(&packing, bank * bank_len, &single)
+                        .unwrap()
+                })
+                .collect::<Vec<_>>();
+
+            for log_block in 3..=6 {
+                let equality = FactoredEquality::new(run, log_block);
+                let case = alloc::format!("{row_variables} rows, 2^{log_block} block");
+                let tensors = BitRingSwitch::bank_tensors_over(&packing, 0, banks, &equality);
+                for (bank, tensor) in tensors.iter().enumerate() {
+                    let elements = &packing.poly().as_slice()[bank * bank_len..][..bank_len];
+                    for (u, &row) in tensor.rows().iter().enumerate() {
+                        let expected: Wide = (0..bank_len)
+                            .filter(|&w| Coefficients::of(eq[w]).get(u))
+                            .map(|w| elements[w])
+                            .sum();
+                        assert_eq!(row, expected, "{case}, bank {bank}, row {u}");
+                    }
+                }
                 assert_eq!(
                     reduction.bank_successor_tensors_over(&packing, 0, banks, &equality),
                     Some(successors.clone()),
