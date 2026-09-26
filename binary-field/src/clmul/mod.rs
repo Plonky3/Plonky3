@@ -206,6 +206,10 @@ fn composed_poly_mul_128(a: u128, b: u128) -> u128 {
 //
 // Only the composed route is `const`, so the signature stays uniform across targets.
 #[allow(clippy::missing_const_for_fn)]
+#[cfg_attr(
+    all(target_arch = "x86_64", target_feature = "pclmulqdq"),
+    allow(dead_code)
+)]
 #[inline]
 pub(crate) fn composed_poly_mul_192(a: [u64; 3], b: [u64; 3]) -> [u64; 3] {
     let c0 = clmul_64x64(a[0], b[0]);
