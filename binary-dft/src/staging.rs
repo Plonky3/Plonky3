@@ -5,9 +5,16 @@
 //! those stages inside the cache, and scattering it back writes the matrix once.
 
 use alloc::vec::Vec;
+use core::ptr;
 
 use p3_maybe_rayon::prelude::*;
 use p3_util::DisjointMutPtr;
+
+/// Bytes in the smallest page a target maps, so a write at this stride reaches every page.
+const PAGE_BYTES: usize = 1 << 12;
+
+/// Bytes one prefault task sweeps: a transparent huge page, so one worker faults each.
+const PREFAULT_BYTES: usize = 1 << 21;
 
 /// How the tiles of one staging pass are spread over the workers.
 #[derive(Copy, Clone, Debug)]
@@ -158,6 +165,28 @@ pub(crate) fn for_each_staged_tile<T, P>(
     }
 }
 
+/// Fault in every page of a region a staging pass is about to overwrite, before it does.
+///
+/// A staging pass scatters each tile's runs across the whole region, so the first writes of
+/// every worker land on the same few pages at once. Where a fault maps and clears a huge page,
+/// every worker that loses the race to map it has cleared one for nothing. A contiguous sweep
+/// gives each huge page to a single task, which faults it once at the sequential rate.
+///
+/// Each page takes one zero, so the region must hold zeros or be overwritten in full next.
+pub(crate) fn prefault(values: &mut [u128]) {
+    let page = PAGE_BYTES / size_of::<u128>();
+    values
+        .par_chunks_mut(PREFAULT_BYTES / size_of::<u128>())
+        .for_each(|chunk| {
+            for element in chunk.iter_mut().step_by(page) {
+                // SAFETY: `element` is an exclusive reference to an initialised element, so it
+                // is valid and aligned for a write. The write is volatile so that it reaches
+                // memory even where the region is known to hold zeros already.
+                unsafe { ptr::write_volatile(element, 0) };
+            }
+        });
+}
+
 /// Gather every tile of the leading coset once, and scatter one result per coset from it.
 ///
 /// `values` is `values.len() / coset_len` cosets of `coset_len` elements, and the tiles lay out
@@ -265,7 +294,9 @@ mod tests {
     use alloc::vec::Vec;
     use alloc::{format, vec};
 
-    use super::{Dispatch, StagedRuns, for_each_staged_tile, for_each_staged_tile_into_cosets};
+    use super::{
+        Dispatch, StagedRuns, for_each_staged_tile, for_each_staged_tile_into_cosets, prefault,
+    };
 
     #[test]
     fn the_tiles_partition_the_runs() {
@@ -409,6 +440,16 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    #[test]
+    fn a_prefault_leaves_a_zeroed_region_zero() {
+        // Regions shorter than a page, spanning several, and spanning several prefault tasks.
+        for len in [0usize, 1, 255, 256, 257, 3 * 256 + 5, (1 << 17) + 3] {
+            let mut values = vec![0u128; len];
+            prefault(&mut values);
+            assert!(values.iter().all(|&value| value == 0), "len={len}");
         }
     }
 
