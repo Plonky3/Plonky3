@@ -1835,7 +1835,7 @@ mod tests {
     use p3_field::PrimeCharacteristicRing;
     use p3_field::extension::BinomialExtensionField;
     use p3_keccak::Keccak256Hash;
-    use p3_lookup::{Count, InteractionBuilder};
+    use p3_lookup::{Count, IndexedLookupBuilder, InteractionBuilder, TraceWindow};
     use p3_matrix::Matrix;
     use p3_matrix::dense::RowMajorMatrix;
     use p3_multilinear_util::poly::Poly;
@@ -2052,6 +2052,79 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+    }
+
+    /// One constraint and one global interaction, and no local one.
+    struct GlobalInteractionAir;
+
+    impl<X> BaseAir<X> for GlobalInteractionAir {
+        fn width(&self) -> usize {
+            1
+        }
+    }
+
+    impl<AB: InteractionBuilder> Air<AB> for GlobalInteractionAir {
+        fn eval(&self, builder: &mut AB) {
+            let cell: AB::Expr = builder.main().current_slice()[0].into();
+            builder.assert_zero(cell.clone() * cell.clone());
+            builder.push_interaction("global", [cell.clone()], Count::bounded(cell, 1));
+        }
+    }
+
+    /// One constraint, and either one indexed read or one indexed table.
+    struct IndexedDeclarationAir {
+        /// Whether the AIR provides the table rather than reading it.
+        table: bool,
+    }
+
+    impl<X> BaseAir<X> for IndexedDeclarationAir {
+        fn width(&self) -> usize {
+            2
+        }
+    }
+
+    impl<AB: IndexedLookupBuilder> Air<AB> for IndexedDeclarationAir {
+        fn eval(&self, builder: &mut AB) {
+            builder.assert_zero(builder.main().current_slice()[0]);
+            if self.table {
+                builder.push_indexed_table("indexed", TraceWindow::Main, [1]);
+            } else {
+                builder.push_indexed_read("indexed", 0, [1]);
+            }
+        }
+    }
+
+    #[test]
+    fn the_profile_records_which_lookup_families_an_air_declares() {
+        // Invariant: a family counts as declared once the AIR names it, whatever it names.
+        //
+        //     plain constraints        -> neither
+        //     one global interaction   -> lookups
+        //     a local one of no tuple  -> lookups, though the plan finds it inert
+        //     an indexed read alone    -> indexed
+        //     an indexed table alone   -> indexed
+        let declared = |profile: AirProfile| (profile.declares_lookups, profile.declares_indexed);
+        assert_eq!(
+            declared(get_air_profile::<F, EF, _>(&FibAir)),
+            (false, false)
+        );
+        assert_eq!(
+            declared(get_air_profile::<F, EF, _>(&GlobalInteractionAir)),
+            (true, false)
+        );
+        assert_eq!(
+            declared(get_air_profile::<F, EF, _>(&EmptyLocalInteractionAir)),
+            (true, false)
+        );
+        for table in [false, true] {
+            assert_eq!(
+                declared(get_air_profile::<F, EF, _>(&IndexedDeclarationAir {
+                    table
+                })),
+                (false, true),
+                "table: {table}"
+            );
+        }
     }
 
     struct ConstantInteractionAir;

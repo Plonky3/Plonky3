@@ -1643,6 +1643,28 @@ mod tests {
     }
 
     #[test]
+    fn setup_records_whether_any_air_of_the_batch_declares_a_bus() {
+        // Invariant: the prover skips the bus pass only when no AIR of the batch declares one.
+        //
+        //     steep, then a bus end   -> declared, by the second AIR alone
+        //     steep alone             -> not declared
+        //     silent alone            -> not declared
+        let config = config(4, FOLDING);
+        let bus = MixedAir::Bus(ConditionalBusAir {
+            direction: BusDirection::Push,
+            conditional: true,
+        });
+        let declares_bus = |airs: &[&MixedAir]| {
+            let (pk, _) = setup(&config, airs, &mut challenger()).unwrap();
+            pk.declares_bus
+        };
+        assert!(declares_bus(&[&MixedAir::Steep, &bus]));
+        assert!(!declares_bus(&[&MixedAir::Steep]));
+        let (silent, _) = setup(&config, &[&SilentAir], &mut challenger()).unwrap();
+        assert!(!silent.declares_bus);
+    }
+
+    #[test]
     fn verify_rejects_a_bus_section_for_airs_declaring_no_bus() {
         // Fixture state: this AIR declares no bus, so the proof carries no bus section.
         //
