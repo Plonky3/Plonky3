@@ -47,7 +47,9 @@ use super::{
 use crate::folder::{InteractionMultilinearFolder, MultilinearFolder};
 use crate::packed_ext::PackedRepr;
 use crate::selectors::BoundaryEvals;
-use crate::sliced::{LaneSums, SLICED_LANES, SlicedFolder, SlicedGf4, gf4_coordinates, is_gf4};
+use crate::sliced::{
+    LaneSums, PreparedPowers, SLICED_LANES, SlicedFolder, SlicedGf4, gf4_coordinates, is_gf4,
+};
 
 /// Most rounds a stage may evaluate on its planes.
 ///
@@ -338,6 +340,8 @@ struct SlicedRound<'a, 'air, A, F, S, R> {
     public_values: &'a [&'a [F]],
     /// Descending alpha powers of each AIR, in the accumulation field.
     alpha_powers: &'a [Vec<R>],
+    /// The same powers laid out for the folder's kernel, where the target has one.
+    prepared_powers: Vec<Option<PreparedPowers<R>>>,
     /// Every prefix of this round, as the corners it reads and the nodes it folds them at.
     prefixes: Vec<PrefixFold>,
     /// Nodes this round evaluates, each with the step that reaches it.
@@ -603,7 +607,7 @@ where
                 let preprocessed =
                     slot.preprocessed_offset..slot.preprocessed_offset + slot.preprocessed_width;
                 let periodic = slot.periodic_offset..slot.periodic_offset + slot.periodic_width;
-                let evaluation = SlicedFolder::new(
+                let mut folder = SlicedFolder::new(
                     &local[main.clone()],
                     &next[main],
                     boundary,
@@ -612,8 +616,11 @@ where
                     &self.lanes,
                 )
                 .with_preprocessed(&local[preprocessed.clone()], &next[preprocessed])
-                .with_periodic(&local[periodic])
-                .eval_air(slot.air);
+                .with_periodic(&local[periodic]);
+                if let Some(prepared) = &self.prepared_powers[slot.stage_index] {
+                    folder = folder.with_prepared_powers(prepared);
+                }
+                let evaluation = folder.eval_air(slot.air);
                 *poisoned |= evaluation.poisoned;
                 sums[slot.stage_index][prefix_index][eval_index] += weight * evaluation.value;
             }
@@ -753,6 +760,10 @@ where
     let generator = R::from(EF::from(S::GENERATOR));
     let lanes = LaneSums::new(&lift(lane_weights.as_slice()), generator);
     let word_weights = lift(word_weights.as_slice());
+    let prepared_powers = alpha_powers
+        .iter()
+        .map(|powers| PreparedPowers::new(powers, generator))
+        .collect();
 
     // The prefixes in index order, the last variable varying fastest.
     let prefixes = (0..nodes.len().pow(round as u32))
@@ -770,6 +781,7 @@ where
         slots,
         public_values,
         alpha_powers,
+        prepared_powers,
         prefixes,
         schedule,
         next_columns: next_row_runs(slots),

@@ -103,6 +103,58 @@ proptest! {
     }
 }
 
+/// The kernel's batched sum of `count` random constraints beside the one-at-a-time sum.
+///
+/// Blocks of eight constraints take turns vanishing whole, clearing their high planes, and
+/// losing every third constraint.
+#[cfg(all(
+    target_arch = "x86_64",
+    target_feature = "gfni",
+    target_feature = "avx512f",
+    target_feature = "avx512bw"
+))]
+fn kernel_and_lane_sums<R>(seed: u64, count: usize) -> (R, R)
+where
+    R: Field + From<F>,
+    rand::distr::StandardUniform: rand::distr::Distribution<R>,
+{
+    let mut rng = SmallRng::seed_from_u64(seed);
+    let weights = (0..SLICED_LANES).map(|_| rng.random()).collect::<Vec<R>>();
+    let generator = R::from(F::from(S::GENERATOR));
+    let lanes = LaneSums::new(&weights, generator);
+    let powers = (0..count).map(|_| rng.random()).collect::<Vec<R>>();
+    let prepared =
+        PreparedPowers::new(&powers, generator).expect("the kernel takes a 128-bit binary field");
+    let mut sums = PreparedSums::new();
+    let mut expected = R::ZERO;
+    for (index, &power) in powers.iter().enumerate() {
+        let (low, high) = match ((index / 8) % 3, index % 3) {
+            (0, _) | (2, 0) => (0, 0),
+            (1, _) => (rng.random::<u64>(), 0),
+            _ => (rng.random::<u64>(), rng.random::<u64>()),
+        };
+        sums.add(&prepared, index, low, high);
+        expected += power * lanes.sum(low, high);
+    }
+    (sums.finish(&prepared, &lanes), expected)
+}
+
+#[cfg(all(
+    target_arch = "x86_64",
+    target_feature = "gfni",
+    target_feature = "avx512f",
+    target_feature = "avx512bw"
+))]
+proptest! {
+    #[test]
+    fn prepared_powers_sum_as_the_lane_sums_do(seed in any::<u64>(), count in 0_usize..70) {
+        let (kernel, expected) = kernel_and_lane_sums::<Ghash128>(seed, count);
+        prop_assert_eq!(kernel, expected);
+        let (kernel, expected) = kernel_and_lane_sums::<F>(seed, count);
+        prop_assert_eq!(kernel, expected);
+    }
+}
+
 #[test]
 fn constants_narrow_or_poison() {
     for bits in 0..4_u128 {
