@@ -306,9 +306,17 @@ impl<F, S> MulAssign for SlicedGf4<F, S> {
 }
 
 impl<F, S: Field> Sum for SlicedGf4<F, S> {
+    /// The planes and the flag accumulate on their own: a whole value carried around the loop
+    /// drags its padding bytes through memory with it.
     #[inline]
     fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
-        iter.fold(Self::ZERO, |acc, x| acc + x)
+        let (mut low, mut high, mut poisoned) = (0, 0, false);
+        for x in iter {
+            low ^= x.low;
+            high ^= x.high;
+            poisoned |= x.poisoned;
+        }
+        Self::with_flags(low, high, poisoned, false)
     }
 }
 

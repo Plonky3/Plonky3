@@ -66,6 +66,7 @@ proptest! {
         prop_assert_eq!(lanes(a + b), lanewise(|x, y| x + y));
         prop_assert_eq!(lanes(a - b), lanewise(|x, y| x - y));
         prop_assert_eq!(lanes(a * b), lanewise(|x, y| x * y));
+        prop_assert_eq!(lanes([a, b, a * b].into_iter().sum()), lanewise(|x, y| x + y + x * y));
         prop_assert_eq!(lanes(-a), x.iter().map(|&x| -x).collect::<Vec<_>>());
         prop_assert_eq!(lanes(a.square()), x.iter().map(|&x| x.square()).collect::<Vec<_>>());
         prop_assert_eq!(lanes(a.double()), x.iter().map(|&x| x.double()).collect::<Vec<_>>());
@@ -170,6 +171,12 @@ fn constants_narrow_or_poison() {
     assert!((clean * outside).is_poisoned());
     assert!((outside + clean).is_poisoned());
     assert!(outside.square().is_poisoned());
+    assert!(
+        [clean, outside, clean]
+            .into_iter()
+            .sum::<Sliced>()
+            .is_poisoned()
+    );
     assert!((clean + F::from_repr(7)).is_poisoned());
 }
 
