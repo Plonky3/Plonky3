@@ -98,14 +98,20 @@ const MIN_LATE_BOUNDARY_VARS: usize = MAX_SLICED_ROUNDS + 1 + LANE_VARIABLES;
 /// Its round-five fold binds [`MAX_PLANE_FOLD_ROUNDS`] challenges, which must leave a whole word.
 const MIN_LATE_ROUND_FIVE_VARS: usize = MAX_PLANE_FOLD_ROUNDS + LANE_VARIABLES;
 
+/// Fewest rows to a lane group with which the delayed boundary path also serves round five.
+///
+/// A round on the planes spares round five's residual columns but reads every row's value out of
+/// the corner tables. With fewer rows to a lane group, reading the planes that way is slower than
+/// the materialized round five.
+const MIN_LATE_ROUND_FIVE_LANES: usize = 4;
+
 /// The last round the delayed boundary path evaluates on the planes of a stage of `num_vars` row
 /// variables, whose representation field packs `lanes` rows to a lane group.
 ///
-/// Round five also needs [`MIN_LATE_ROUND_FIVE_VARS`] row variables and a packing wider than one
-/// row. With one row to a lane group, a round on the planes reads each residual row of every
-/// column on its own, and round five runs faster over the residual columns it would spare.
+/// Round five also needs [`MIN_LATE_ROUND_FIVE_VARS`] row variables and
+/// [`MIN_LATE_ROUND_FIVE_LANES`] rows to a lane group.
 pub(crate) const fn last_late_round(num_vars: usize, lanes: usize) -> usize {
-    if lanes > 1 && num_vars >= MIN_LATE_ROUND_FIVE_VARS {
+    if lanes >= MIN_LATE_ROUND_FIVE_LANES && num_vars >= MIN_LATE_ROUND_FIVE_VARS {
         5
     } else {
         4
@@ -2808,8 +2814,8 @@ where
 
     /// Evaluate one representation-field round directly from the stage's planes.
     ///
-    /// This is shared by the incumbent boundary round and the delayed boundary path's rounds so
-    /// all use the same row/packed evaluator, node schedule, and finish-round semantics.
+    /// This is shared by the boundary round and the delayed boundary path's rounds so all use
+    /// the same row/packed evaluator, node schedule, and finish-round semantics.
     ///
     /// # Panics
     ///
