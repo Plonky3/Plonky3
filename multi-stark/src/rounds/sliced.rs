@@ -1083,8 +1083,8 @@ where
 
         // Each table's packed matrix is already word-major: the low plane of its columns. A stage
         // of one such table borrows it and several are copied into the final layout, and the
-        // successor planes are shifted out of that low plane; otherwise retain the generic column
-        // path, which also computes the repeat-last successor words.
+        // successor planes are shifted out of that low plane. A dense or mismatched table sends
+        // the stage down the column path, which packs both planes.
         let words: usize = 1 << (num_vars - LANE_VARIABLES);
         // One table is one AIR's main table, with no preprocessed or periodic table beside it.
         let borrowed = match self.slots.as_slice() {
@@ -2171,7 +2171,7 @@ impl<'a, R: Field, const CORNERS: usize> PlaneFold<'a, R, CORNERS> {
                 low_cell[half * self.groups + group] = top_lane_mask(low);
                 high_cell[half * self.groups + group] = top_lane_mask(high);
             }
-            has_high |= high.iter().any(|&word| word != 0);
+            has_high |= any_set(&high);
         }
         has_high
     }
@@ -2348,6 +2348,12 @@ impl RowTile {
         next_columns: &[Range<usize>],
         scratch: &mut Scratch<R, R>,
     ) {
+        const {
+            assert!(
+                TILE_GROUPS == 4,
+                "a tile's cells hold one, two or four corner groups, one dispatch arm each"
+            );
+        }
         const ONE: usize = ROW_HALVES;
         const TWO: usize = 2 * ROW_HALVES;
         const FOUR: usize = TILE_GROUPS * ROW_HALVES;
@@ -2426,6 +2432,12 @@ impl RowTile {
         next_columns: &[Range<usize>],
         scratch: &mut PackedScratch<PackedRepr<F, R>, PackedRepr<F, R>>,
     ) {
+        const {
+            assert!(
+                TILE_GROUPS == 4,
+                "a tile's cells hold one, two or four corner groups, one dispatch arm each"
+            );
+        }
         const ONE: usize = ROW_HALVES;
         const TWO: usize = 2 * ROW_HALVES;
         const FOUR: usize = TILE_GROUPS * ROW_HALVES;
@@ -2663,7 +2675,14 @@ where
         S: Field,
         EF: HasSubfield<S>,
     {
-        self.unslice_with::<S, MAX_CORNERS>();
+        let ExtColumns::Sliced(columns) = &self.columns else {
+            return;
+        };
+        if columns.challenges.len() <= MAX_SLICED_ROUNDS {
+            self.unslice_with::<S, MAX_CORNERS>();
+        } else {
+            self.unslice_with::<S, MAX_PLANE_FOLD_CORNERS>();
+        }
     }
 
     /// [`Self::unslice`], gathering each word's corners into buffers of `CORNERS` words.
