@@ -6,7 +6,7 @@ use p3_binary_field::{Ghash128, TowerLevel};
 use p3_field::{Field, HasSubfield, PrimeCharacteristicRing};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_multilinear_util::point::Point;
-use proptest::prelude::{any, prop_assert_eq, proptest};
+use proptest::prelude::{any, prop_assert_eq, prop_oneof, proptest};
 use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
 
@@ -2487,6 +2487,29 @@ proptest! {
         words in proptest::collection::vec(any::<u64>(), 0..=GROUP_CORNERS),
     ) {
         prop_assert_eq!(lane_masks(&words), portable_lane_masks(&words));
+    }
+
+    /// The cells of one, two and four corner groups, the last group short or full, in the lane
+    /// groups the byte-unpack writers serve.
+    ///
+    /// The cells land in the second column of each lane group, so a byte written past them
+    /// shows as a change to the filler around them.
+    #[test]
+    fn cells_match_the_portable_writer(
+        corners in prop_oneof![1..=8_usize, 9..=16_usize, 25..=32_usize],
+        seed in any::<u64>(),
+    ) {
+        let lanes = 4;
+        let mut rng = SmallRng::seed_from_u64(seed);
+        let words = (0..ROW_HALVES * corners).map(|_| rng.random()).collect::<Vec<u64>>();
+        let halves = [&words[..corners], &words[corners..]];
+        let column_bytes = lanes * ROW_HALVES * corners.div_ceil(GROUP_CORNERS);
+        let stride = 2 * column_bytes;
+        let mut expected = vec![0xA5_u8; SLICED_LANES / lanes * stride];
+        let mut actual = expected.clone();
+        write_cells(halves, lanes, stride, &mut actual[column_bytes..]);
+        portable_write_cells(halves, lanes, stride, &mut expected[column_bytes..]);
+        prop_assert_eq!(actual, expected);
     }
 }
 

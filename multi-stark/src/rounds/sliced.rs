@@ -1451,7 +1451,8 @@ fn lane_masks(words: &[u64]) -> [u8; SLICED_LANES] {
         target_feature = "avx512vbmi",
         target_feature = "gfni"
     ))]
-    {
+    // SAFETY: the kernel is compiled only where the build enables every target feature it names.
+    unsafe {
         gfni::lane_masks(words)
     }
     #[cfg(not(all(
@@ -1520,9 +1521,9 @@ mod gfni {
     use core::arch::x86_64::{
         __m128i, __m512i, _mm_storel_epi64, _mm_storeu_si128, _mm_unpackhi_epi64,
         _mm512_castsi512_si128, _mm512_extracti32x4_epi32, _mm512_gf2p8affine_epi64_epi8,
-        _mm512_maskz_loadu_epi64, _mm512_permutexvar_epi8, _mm512_set1_epi64, _mm512_storeu_si512,
-        _mm512_unpackhi_epi8, _mm512_unpackhi_epi16, _mm512_unpackhi_epi32, _mm512_unpacklo_epi8,
-        _mm512_unpacklo_epi16, _mm512_unpacklo_epi32,
+        _mm512_maskz_loadu_epi64, _mm512_permutexvar_epi8, _mm512_set1_epi64, _mm512_setzero_si512,
+        _mm512_storeu_si512, _mm512_unpackhi_epi8, _mm512_unpackhi_epi16, _mm512_unpackhi_epi32,
+        _mm512_unpacklo_epi8, _mm512_unpacklo_epi16, _mm512_unpacklo_epi32,
     };
 
     use super::{GROUP_CORNERS, ROW_HALVES, SLICED_LANES};
@@ -1562,74 +1563,69 @@ mod gfni {
 
     /// [`super::lane_masks`] as one register, byte `l` for lane `l`: one masked load, one byte
     /// permute, one affine map.
+    ///
+    /// Words past the eighth are not read.
     #[inline]
+    #[target_feature(enable = "avx512f,avx512bw,avx512vbmi,gfni")]
     fn masks(words: &[u64]) -> __m512i {
         debug_assert!(words.len() <= GROUP_CORNERS);
-        let present = ((1_u16 << words.len()) - 1) as u8;
-        // SAFETY: this module is compiled only where the build enables every target feature the
-        // intrinsics name. The load's mask selects the first `words.len()` quadwords, all inside
-        // `words`, and a masked-off quadword is never read. The load is the unaligned form.
-        unsafe {
-            let words = _mm512_maskz_loadu_epi64(present, words.as_ptr().cast());
-            let gathered = _mm512_permutexvar_epi8(GATHER, words);
-            _mm512_gf2p8affine_epi64_epi8::<0>(_mm512_set1_epi64(UNIT as i64), gathered)
-        }
+        let present = ((1_u16 << words.len().min(GROUP_CORNERS)) - 1) as u8;
+        // SAFETY: the mask selects the first `min(words.len(), 8)` quadwords, all inside `words`,
+        // and a masked-off quadword is neither read nor faulted on. The load takes any alignment.
+        let words = unsafe { _mm512_maskz_loadu_epi64(present, words.as_ptr().cast()) };
+        let gathered = _mm512_permutexvar_epi8(GATHER, words);
+        _mm512_gf2p8affine_epi64_epi8::<0>(_mm512_set1_epi64(UNIT as i64), gathered)
     }
 
     /// [`super::lane_masks`].
     #[inline]
+    #[target_feature(enable = "avx512f,avx512bw,avx512vbmi,gfni")]
     pub(super) fn lane_masks(words: &[u64]) -> [u8; SLICED_LANES] {
         let mut out = [0; SLICED_LANES];
-        // SAFETY: the store writes the 64 bytes of `out`, unaligned.
+        // SAFETY: the store writes the 64 bytes of `out` and takes any alignment.
         unsafe { _mm512_storeu_si512(out.as_mut_ptr().cast(), masks(words)) };
         out
     }
 
     /// The four 128-bit lanes of a register, lowest first.
     #[inline]
+    #[target_feature(enable = "avx512f")]
     fn quarters(register: __m512i) -> [__m128i; 4] {
-        // SAFETY: this module is compiled only where the build enables every target feature the
-        // intrinsics name.
-        unsafe {
-            [
-                _mm512_castsi512_si128(register),
-                _mm512_extracti32x4_epi32::<1>(register),
-                _mm512_extracti32x4_epi32::<2>(register),
-                _mm512_extracti32x4_epi32::<3>(register),
-            ]
-        }
+        [
+            _mm512_castsi512_si128(register),
+            _mm512_extracti32x4_epi32::<1>(register),
+            _mm512_extracti32x4_epi32::<2>(register),
+            _mm512_extracti32x4_epi32::<3>(register),
+        ]
     }
 
     /// One plane's cells of one column for every lane, one corner group to a half.
     ///
     /// `words[h]` are the corners of half `h`, and the cells of lane group `j` start
-    /// `j * stride` bytes into `out`, see [`super::PlaneFold::write_cells`].
+    /// `j * stride` bytes into `out`, see [`super::write_cells`].
     ///
     /// Unpacking the two halves' masks puts each lane's two bytes side by side. It stays inside
     /// 128-bit lanes: 128-bit lane `k` of the unpack of the low bytes holds lanes
     /// `16 k .. 16 k + 8`, lane groups `4 k` and `4 k + 1`, and that of the high bytes the next
     /// eight lanes.
     #[inline]
+    #[target_feature(enable = "avx512f,avx512bw,avx512vbmi,gfni")]
     pub(super) fn write_cells_one(words: [&[u64]; ROW_HALVES], stride: usize, out: &mut [u8]) {
-        let [low, high] = words.map(masks);
-        // SAFETY: this module is compiled only where the build enables every target feature the
-        // intrinsics name. Each store writes the eight bytes of the slice `out` it is handed,
-        // unaligned.
-        unsafe {
-            let cells = [
-                _mm512_unpacklo_epi8(low, high),
-                _mm512_unpackhi_epi8(low, high),
-            ];
-            for (unpack, cells) in cells.into_iter().enumerate() {
-                for (k, cells) in quarters(cells).into_iter().enumerate() {
-                    let group = 4 * k + 2 * unpack;
-                    for (group, cells) in [
-                        (group, cells),
-                        (group + 1, _mm_unpackhi_epi64(cells, cells)),
-                    ] {
-                        let out = &mut out[group * stride..][..8];
-                        _mm_storel_epi64(out.as_mut_ptr().cast(), cells);
-                    }
+        let (low, high) = (masks(words[0]), masks(words[1]));
+        let cells = [
+            _mm512_unpacklo_epi8(low, high),
+            _mm512_unpackhi_epi8(low, high),
+        ];
+        for (unpack, cells) in cells.into_iter().enumerate() {
+            for (k, cells) in quarters(cells).into_iter().enumerate() {
+                let group = 4 * k + 2 * unpack;
+                for (group, cells) in [
+                    (group, cells),
+                    (group + 1, _mm_unpackhi_epi64(cells, cells)),
+                ] {
+                    let out = &mut out[group * stride..][..8];
+                    // SAFETY: the store writes the eight bytes of `out` and takes any alignment.
+                    unsafe { _mm_storel_epi64(out.as_mut_ptr().cast(), cells) };
                 }
             }
         }
@@ -1638,31 +1634,29 @@ mod gfni {
     /// One plane's cells of one column for every lane, two corner groups to a half.
     ///
     /// `words[h][g]` are the corners of group `g` in half `h`, and the cells of lane group `j`
-    /// start `j * stride` bytes into `out`, see [`super::PlaneFold::write_cells`].
+    /// start `j * stride` bytes into `out`, see [`super::write_cells`].
     ///
     /// Unpacking the masks' bytes within each half, then those byte pairs across the halves,
     /// lines up each lane's four bytes in cell order. It stays inside 128-bit lanes: 128-bit lane
     /// `k` of the `j`-th result holds lanes `16 k + 4 j .. 16 k + 4 j + 4`, lane group `4 k + j`.
     #[inline]
+    #[target_feature(enable = "avx512f,avx512bw,avx512vbmi,gfni")]
     pub(super) fn write_cells_two(words: [[&[u64]; 2]; ROW_HALVES], stride: usize, out: &mut [u8]) {
-        let [[m0, m1], [m2, m3]] = words.map(|half| half.map(masks));
-        // SAFETY: this module is compiled only where the build enables every target feature the
-        // intrinsics name. Each store writes the sixteen bytes of the slice `out` it is handed,
-        // unaligned.
-        unsafe {
-            let (a, b) = (_mm512_unpacklo_epi8(m0, m1), _mm512_unpackhi_epi8(m0, m1));
-            let (c, d) = (_mm512_unpacklo_epi8(m2, m3), _mm512_unpackhi_epi8(m2, m3));
-            let cells = [
-                _mm512_unpacklo_epi16(a, c),
-                _mm512_unpackhi_epi16(a, c),
-                _mm512_unpacklo_epi16(b, d),
-                _mm512_unpackhi_epi16(b, d),
-            ];
-            for (j, cells) in cells.into_iter().enumerate() {
-                for (k, cells) in quarters(cells).into_iter().enumerate() {
-                    let out = &mut out[(4 * k + j) * stride..][..16];
-                    _mm_storeu_si128(out.as_mut_ptr().cast(), cells);
-                }
+        let [[w0, w1], [w2, w3]] = words;
+        let (m0, m1, m2, m3) = (masks(w0), masks(w1), masks(w2), masks(w3));
+        let (a, b) = (_mm512_unpacklo_epi8(m0, m1), _mm512_unpackhi_epi8(m0, m1));
+        let (c, d) = (_mm512_unpacklo_epi8(m2, m3), _mm512_unpackhi_epi8(m2, m3));
+        let cells = [
+            _mm512_unpacklo_epi16(a, c),
+            _mm512_unpackhi_epi16(a, c),
+            _mm512_unpacklo_epi16(b, d),
+            _mm512_unpackhi_epi16(b, d),
+        ];
+        for (j, cells) in cells.into_iter().enumerate() {
+            for (k, cells) in quarters(cells).into_iter().enumerate() {
+                let out = &mut out[(4 * k + j) * stride..][..16];
+                // SAFETY: the store writes the sixteen bytes of `out` and takes any alignment.
+                unsafe { _mm_storeu_si128(out.as_mut_ptr().cast(), cells) };
             }
         }
     }
@@ -1670,44 +1664,116 @@ mod gfni {
     /// One plane's cells of one column for every lane, four corner groups to a half.
     ///
     /// `words[h][g]` are the corners of group `g` in half `h`, and the cells of lane group `j`
-    /// start `j * stride` bytes into `out`, see [`super::PlaneFold::write_cells`].
+    /// start `j * stride` bytes into `out`, see [`super::write_cells`].
     ///
     /// Three rounds of unpacking, of bytes, byte pairs, then quadruples, line up each lane's
     /// eight bytes in cell order. They stay inside 128-bit lanes: 128-bit lane `k` of the `j`-th
     /// pair of results holds lanes `16 k + 4 j .. 16 k + 4 j + 2`, then the next two lanes, the
     /// two halves of lane group `4 k + j`.
     #[inline]
+    #[target_feature(enable = "avx512f,avx512bw,avx512vbmi,gfni")]
     pub(super) fn write_cells_four(
         words: [[&[u64]; 4]; ROW_HALVES],
         stride: usize,
         out: &mut [u8],
     ) {
-        let [[m0, m1, m2, m3], [m4, m5, m6, m7]] = words.map(|half| half.map(masks));
-        // SAFETY: this module is compiled only where the build enables every target feature the
-        // intrinsics name. Each store writes the sixteen bytes of the slice `out` it is handed,
-        // unaligned.
-        unsafe {
-            let pairs = [(m0, m1), (m2, m3), (m4, m5), (m6, m7)]
-                .map(|(a, b)| [_mm512_unpacklo_epi8(a, b), _mm512_unpackhi_epi8(a, b)]);
-            let quads = [(0, 1), (2, 3)].map(|(a, b)| {
-                let [a, b] = [pairs[a], pairs[b]];
-                [
-                    _mm512_unpacklo_epi16(a[0], b[0]),
-                    _mm512_unpackhi_epi16(a[0], b[0]),
-                    _mm512_unpacklo_epi16(a[1], b[1]),
-                    _mm512_unpackhi_epi16(a[1], b[1]),
-                ]
-            });
-            for (j, (low, high)) in quads[0].into_iter().zip(quads[1]).enumerate() {
-                let halves = [
-                    _mm512_unpacklo_epi32(low, high),
-                    _mm512_unpackhi_epi32(low, high),
-                ];
-                for (half, cells) in halves.into_iter().enumerate() {
-                    for (k, cells) in quarters(cells).into_iter().enumerate() {
-                        let out = &mut out[(4 * k + j) * stride + 16 * half..][..16];
-                        _mm_storeu_si128(out.as_mut_ptr().cast(), cells);
-                    }
+        let [[w0, w1, w2, w3], [w4, w5, w6, w7]] = words;
+        let mut pairs = [[_mm512_setzero_si512(); 2]; 4];
+        for (pair, (a, b)) in pairs
+            .iter_mut()
+            .zip([(w0, w1), (w2, w3), (w4, w5), (w6, w7)])
+        {
+            let (a, b) = (masks(a), masks(b));
+            *pair = [_mm512_unpacklo_epi8(a, b), _mm512_unpackhi_epi8(a, b)];
+        }
+        let mut quads = [[_mm512_setzero_si512(); 4]; 2];
+        for (quad, [a, b]) in quads
+            .iter_mut()
+            .zip([[pairs[0], pairs[1]], [pairs[2], pairs[3]]])
+        {
+            *quad = [
+                _mm512_unpacklo_epi16(a[0], b[0]),
+                _mm512_unpackhi_epi16(a[0], b[0]),
+                _mm512_unpacklo_epi16(a[1], b[1]),
+                _mm512_unpackhi_epi16(a[1], b[1]),
+            ];
+        }
+        for (j, (low, high)) in quads[0].into_iter().zip(quads[1]).enumerate() {
+            let halves = [
+                _mm512_unpacklo_epi32(low, high),
+                _mm512_unpackhi_epi32(low, high),
+            ];
+            for (half, cells) in halves.into_iter().enumerate() {
+                for (k, cells) in quarters(cells).into_iter().enumerate() {
+                    let out = &mut out[(4 * k + j) * stride + 16 * half..][..16];
+                    // SAFETY: the store writes the sixteen bytes of `out` and takes any alignment.
+                    unsafe { _mm_storeu_si128(out.as_mut_ptr().cast(), cells) };
+                }
+            }
+        }
+    }
+}
+
+/// The corners of group `group` among `words`, eight to a group, the last one short when the
+/// words do not fill it.
+#[inline]
+fn corner_group(words: &[u64], group: usize) -> &[u64] {
+    let start = group * GROUP_CORNERS;
+    &words[start..(start + GROUP_CORNERS).min(words.len())]
+}
+
+/// Write one plane's cells of one column for every lane, from the corner words of each half.
+///
+/// Both halves hold the same corners, eight to a corner group. The cells of lane group `j`,
+/// `lanes` lanes wide, start `j * stride` bytes into `out`, see [`RowTile`].
+#[inline]
+fn write_cells(halves: [&[u64]; ROW_HALVES], lanes: usize, stride: usize, out: &mut [u8]) {
+    debug_assert_eq!(halves[0].len(), halves[1].len());
+    #[cfg(all(
+        target_arch = "x86_64",
+        target_feature = "avx512f",
+        target_feature = "avx512bw",
+        target_feature = "avx512vbmi",
+        target_feature = "gfni"
+    ))]
+    if lanes == gfni::CELL_LANES {
+        match halves[0].len().div_ceil(GROUP_CORNERS) {
+            1 => {
+                // SAFETY: the kernel is compiled only where the build enables every target
+                // feature it names.
+                return unsafe { gfni::write_cells_one(halves, stride, out) };
+            }
+            2 => {
+                let halves = halves.map(|words| [0, 1].map(|group| corner_group(words, group)));
+                // SAFETY: the kernel is compiled only where the build enables every target
+                // feature it names.
+                return unsafe { gfni::write_cells_two(halves, stride, out) };
+            }
+            4 => {
+                let halves =
+                    halves.map(|words| [0, 1, 2, 3].map(|group| corner_group(words, group)));
+                // SAFETY: the kernel is compiled only where the build enables every target
+                // feature it names.
+                return unsafe { gfni::write_cells_four(halves, stride, out) };
+            }
+            _ => {}
+        }
+    }
+    portable_write_cells(halves, lanes, stride, out);
+}
+
+/// [`write_cells`], one corner group's lane masks at a time.
+#[inline]
+fn portable_write_cells(halves: [&[u64]; ROW_HALVES], lanes: usize, stride: usize, out: &mut [u8]) {
+    let groups = halves[0].len().div_ceil(GROUP_CORNERS);
+    let cell = ROW_HALVES * groups;
+    for (half, words) in halves.into_iter().enumerate() {
+        for group in 0..groups {
+            let masks = lane_masks(corner_group(words, group));
+            let at = half * groups + group;
+            for (masks, cells) in masks.chunks_exact(lanes).zip(out.chunks_mut(stride)) {
+                for (&mask, cell) in masks.iter().zip(cells.chunks_exact_mut(cell)) {
+                    cell[at] = mask;
                 }
             }
         }
@@ -2077,54 +2143,6 @@ impl<'a, R: Field, const CORNERS: usize> PlaneFold<'a, R, CORNERS> {
         (lo, hi)
     }
 
-    /// Write one plane's cells of one column for every lane, from the corner words of each half.
-    ///
-    /// The cells of lane group `j`, `lanes` lanes wide, start `j * stride` bytes into `out`.
-    #[inline]
-    fn write_cells(
-        &self,
-        halves: [&[u64]; ROW_HALVES],
-        lanes: usize,
-        stride: usize,
-        out: &mut [u8],
-    ) {
-        #[cfg(all(
-            target_arch = "x86_64",
-            target_feature = "avx512f",
-            target_feature = "avx512bw",
-            target_feature = "avx512vbmi",
-            target_feature = "gfni"
-        ))]
-        if lanes == gfni::CELL_LANES {
-            match self.groups {
-                1 => return gfni::write_cells_one(halves, stride, out),
-                2 => {
-                    let halves =
-                        halves.map(|words| [0, 1].map(|group| self.plane_group(words, group)));
-                    return gfni::write_cells_two(halves, stride, out);
-                }
-                4 => {
-                    let halves = halves
-                        .map(|words| [0, 1, 2, 3].map(|group| self.plane_group(words, group)));
-                    return gfni::write_cells_four(halves, stride, out);
-                }
-                _ => {}
-            }
-        }
-        let cell = ROW_HALVES * self.groups;
-        for (half, words) in halves.into_iter().enumerate() {
-            for group in 0..self.groups {
-                let masks = lane_masks(self.plane_group(words, group));
-                let at = half * self.groups + group;
-                for (masks, cells) in masks.chunks_exact(lanes).zip(out.chunks_mut(stride)) {
-                    for (&mask, cell) in masks.iter().zip(cells.chunks_exact_mut(cell)) {
-                        cell[at] = mask;
-                    }
-                }
-            }
-        }
-    }
-
     /// Write one column's top-lane cells of both planes, from the corner words of one word per
     /// half.
     ///
@@ -2276,10 +2294,10 @@ impl RowTile {
                 });
                 let at = column * column_bytes;
                 let low_cells = &mut self.low_cells[at..];
-                fold.write_cells(halves.map(|(low, _)| low), lanes, stride, low_cells);
+                write_cells(halves.map(|(low, _)| low), lanes, stride, low_cells);
                 let high_halves = halves.map(|(_, high)| high);
                 if !low_only && high_halves.iter().any(|words| any_set(words)) {
-                    fold.write_cells(high_halves, lanes, stride, &mut self.high_cells[at..]);
+                    write_cells(high_halves, lanes, stride, &mut self.high_cells[at..]);
                     high = true;
                 } else if clear_high {
                     for cells in self.high_cells[at..]
