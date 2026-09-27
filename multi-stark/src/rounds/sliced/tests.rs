@@ -2,7 +2,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::cmp::Ordering;
 
-use p3_air::BaseAir;
+use p3_air::{Air, AirBuilder, BaseAir, WindowAccess};
 use p3_binary_field::{Ghash128, TowerLevel};
 use p3_field::{Field, HasSubfield, PrimeCharacteristicRing};
 use p3_matrix::dense::RowMajorMatrix;
@@ -2561,6 +2561,174 @@ fn a_boundary_round_and_fold_on_the_planes_match_the_unsliced_kernels() {
             assert_eq!(planes.0, generic, "{case}");
             assert_eq!(planes.2, unsliced.2, "{case}");
         }
+    }
+}
+
+/// Asserts every main column, then its product with the next one: two constraints a column.
+struct Columns(usize);
+
+impl<T> BaseAir<T> for Columns {
+    fn width(&self) -> usize {
+        self.0
+    }
+
+    fn main_next_row_columns(&self) -> Vec<usize> {
+        Vec::new()
+    }
+}
+
+impl<AB: AirBuilder> Air<AB> for Columns {
+    fn eval(&self, builder: &mut AB) {
+        let main = builder.main();
+        let local = main.current_slice();
+        for (column, &value) in local.iter().enumerate() {
+            builder.assert_zero(value);
+            builder.assert_zero(value * local[(column + 1) % local.len()]);
+        }
+    }
+}
+
+/// Every round polynomial and the openings of a stage of `Columns` AIRs over `main`.
+///
+/// `path` picks the kernels: the generic ones, or the planes accumulated in the polynomial
+/// basis round by round or through the four-variable tensor, until the boundary round and fold
+/// leave them.
+fn columns_rounds(airs: &[&Columns], main: &[Table<Tower>], path: &str) -> Rounds {
+    let publics = vec![[].as_slice(); airs.len()];
+    let preprocessed = vec![None; airs.len()];
+    let main = main.iter().collect::<Vec<_>>();
+    with_stage_state(
+        airs,
+        &publics,
+        &preprocessed,
+        &main,
+        no_lookups(),
+        |mut state, eq_suffix| {
+            let tau = state.tau.as_slice().to_vec();
+            let mut round_polys = Vec::new();
+            let openings = if path == "generic" {
+                round_polys.push(state.round_poly(eq_suffix));
+                let mut state = state.fold(challenge(0));
+                for round in 1..tau.len() {
+                    let suffix = Poly::new_from_point(&tau[round + 1..], Tower::ONE);
+                    round_polys.push(state.round_poly(&suffix));
+                    state.fold(challenge(round));
+                }
+                state.into_openings()
+            } else {
+                let tensor = path == "tensor";
+                round_polys.push(if tensor {
+                    state
+                        .round_poly_sliced_with_strategy::<Gf4, Ghash128>(
+                            eq_suffix,
+                            SlicedStrategy::TensorBoundary,
+                        )
+                        .expect("the stage should build the tensor")
+                } else {
+                    state
+                        .round_poly_sliced::<Gf4, Ghash128>(eq_suffix)
+                        .expect("the stage should be sliced")
+                });
+                assert_eq!(state.has_sliced_tensor(), tensor, "{path}");
+                let mut state = state.fold_sliced::<Ghash128>(challenge(0));
+                for round in 1..tau.len() {
+                    let suffix = Poly::new_from_point(&tau[round + 1..], Tower::ONE);
+                    round_polys.push(if round < 3 || (tensor && round == 3) {
+                        state
+                            .round_poly_sliced::<Gf4>(&suffix)
+                            .expect("the planes should serve the round")
+                    } else if round == 3 {
+                        state
+                            .round_poly_boundary::<Gf4>(&suffix)
+                            .expect("the planes should serve the boundary round")
+                    } else {
+                        state.round_poly_repr(&suffix)
+                    });
+                    if round < 3 {
+                        assert!(state.fold_sliced(challenge(round)), "{path} round {round}");
+                    } else if round == 3 {
+                        assert!(
+                            state.fold_boundary::<Gf4>(challenge(round)),
+                            "{path} round {round}"
+                        );
+                    } else {
+                        state.fold_repr(challenge(round));
+                    }
+                }
+                state.into_openings()
+            };
+            let openings = openings
+                .into_iter()
+                .map(|(_, opening)| {
+                    [
+                        opening.local,
+                        opening.next,
+                        opening.preprocessed_local,
+                        opening.preprocessed_next,
+                    ]
+                })
+                .collect();
+            (round_polys, openings)
+        },
+    )
+}
+
+#[test]
+fn a_stage_mixing_kernel_and_narrow_airs_matches_the_generic_kernel() {
+    // 640 constraints take the byte-sliced kernel where the target has one; 8 do not.
+    let (wide, narrow) = (Columns(320), Columns(4));
+    let airs = [&wide, &narrow];
+    let height = 1 << 10;
+    let mut rng = SmallRng::seed_from_u64(0x7E_4E1);
+    let main = airs
+        .iter()
+        .map(|air| {
+            let width = <Columns as BaseAir<Tower>>::width(air);
+            let values = (0..width * height)
+                .map(|_| Tower::from_bool(rng.random()))
+                .collect();
+            Table::new(RowMajorMatrix::new(values, width).transpose())
+        })
+        .collect::<Vec<_>>();
+
+    let kernel = cfg!(all(
+        target_arch = "x86_64",
+        target_feature = "gfni",
+        target_feature = "avx512f",
+        target_feature = "avx512bw"
+    ));
+    let first_rounds = with_stage_state(
+        &airs,
+        &[&[], &[]],
+        &[None, None],
+        &main.iter().collect::<Vec<_>>(),
+        no_lookups(),
+        |mut state, eq_suffix| {
+            let prepared =
+                PreparedPowers::per_air(&state.alpha_powers, Tower::from(Gf4::GENERATOR));
+            assert_eq!(
+                prepared.iter().map(Option::is_some).collect::<Vec<_>>(),
+                [kernel, false],
+                "only the wide AIR should take the kernel, and only where the target has one"
+            );
+            let tower = state.round_poly_sliced::<Gf4, Tower>(eq_suffix);
+            let poly_basis = state.round_poly_sliced::<Gf4, Ghash128>(eq_suffix);
+            [tower, poly_basis, Some(state.round_poly(eq_suffix))]
+        },
+    );
+    assert!(first_rounds[0].is_some());
+    assert_eq!(first_rounds[0], first_rounds[2], "tower sums");
+    assert_eq!(first_rounds[1], first_rounds[2], "polynomial-basis sums");
+
+    let generic = columns_rounds(&airs, &main, "generic");
+    assert!(
+        generic
+            .0
+            .iter()
+            .any(|poly| poly.iter().any(|&value| value != Tower::ZERO))
+    );
+    for path in ["sequential", "tensor"] {
+        assert_eq!(columns_rounds(&airs, &main, path), generic, "{path}");
     }
 }
 
