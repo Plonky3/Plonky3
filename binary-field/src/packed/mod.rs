@@ -4,6 +4,8 @@
 //! Only the widest such register is used, so there is one packing per build.
 //!
 //! On AArch64 the multiply reaches one lane, and a packing of two lanes groups rows instead.
+//! Only AArch64 takes that grouping: it is the one target without a wide multiply on which the
+//! row grouping has been measured.
 //!
 //! The tower representation has no packing.
 //! A product there is table lookups, which no vector unit widens.
