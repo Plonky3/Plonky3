@@ -154,6 +154,8 @@ where
 /// - The trace arity must meet the commitment scheme's padding floor.
 /// - This keeps the committed successor view in the same frame as zerocheck.
 /// - The prover instances must all use the same proving key.
+/// - That key must come from `setup` over these AIRs, in this order: their count, widths and
+///   public-value counts are checked, and a debug build also checks what they declare.
 /// - The proving key must carry a preprocessed commitment exactly when an AIR declares columns.
 /// - Every instance must supply the public-value count its AIR declares.
 /// - The preprocessed key width must match the AIR's declared preprocessed width.
@@ -270,9 +272,15 @@ where
         "every trace arity must be at least the commitment scheme's padding floor"
     );
 
+    // What setup recorded about each AIR decides which phases below run at all.
+    let airs = instances.airs();
+    assert!(
+        proving_key.describes(&airs),
+        "the proving key must come from setup over these AIRs, in this order"
+    );
+
     // Reject a malformed public boundary declaration before anything indexes by it.
     // The pins the folder injects read columns and public values by those numbers.
-    let airs = instances.airs();
     for (instance, air) in airs.iter().enumerate() {
         boundary::validate(
             air.public_boundary_io(),
@@ -1662,6 +1670,79 @@ mod tests {
         assert!(!declares_bus(&[&MixedAir::Steep]));
         let (silent, _) = setup(&config, &[&SilentAir], &mut challenger()).unwrap();
         assert!(!silent.declares_bus);
+    }
+
+    /// Prove one AIR, of two columns, over zeros, under a key set up over another.
+    fn prove_under_foreign_key<A>(setup_air: &A, proved_air: &A)
+    where
+        A: ProverAir<F, EF>,
+    {
+        let height = packed_floor();
+        let config = config(log2_strict_usize(height), FOLDING);
+        let (pk, _) = setup(&config, &[setup_air], &mut challenger()).unwrap();
+        let _ = prove(
+            &config,
+            ProverInstances::new(vec![ProverInstance::new(
+                proved_air,
+                Table::new(RowMajorMatrix::new(F::zero_vec(2 * height), height)),
+                &pk,
+                &[],
+            )]),
+            0,
+            &mut challenger(),
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "the proving key must come from setup over these AIRs")]
+    fn a_key_set_up_over_other_shapes_is_refused_before_any_phase() {
+        // Fixture state: the key's AIR declares no bus and has one column; the proved AIR
+        // declares one and has two. Skipping the bus pass on the key's word would drop the
+        // bus section and leave the refusal to the verifier.
+        let bus = MixedAir::Bus(ConditionalBusAir {
+            direction: BusDirection::Push,
+            conditional: true,
+        });
+        prove_under_foreign_key(&MixedAir::Steep, &bus);
+    }
+
+    /// Two columns and one first-row constraint, with a bus declaration on top or without one.
+    #[cfg(debug_assertions)]
+    #[derive(Clone, Copy)]
+    struct ToggledBusAir(bool);
+
+    #[cfg(debug_assertions)]
+    impl BaseAir<F> for ToggledBusAir {
+        fn width(&self) -> usize {
+            2
+        }
+    }
+
+    #[cfg(debug_assertions)]
+    impl<AB> Air<AB> for ToggledBusAir
+    where
+        AB: BusInteractionBuilder<F = F>,
+    {
+        fn eval(&self, builder: &mut AB) {
+            let cell = builder.main().current_slice()[0];
+            builder.when_first_row().assert_zero(cell);
+            if self.0 {
+                ConditionalBusAir {
+                    direction: BusDirection::Push,
+                    conditional: true,
+                }
+                .eval(builder);
+            }
+        }
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "the proving key must come from setup over these AIRs")]
+    fn a_key_whose_airs_declare_no_bus_under_the_same_shapes_is_refused_in_debug() {
+        // Fixture state: one AIR type whose widths do not depend on whether it declares a bus.
+        // Only the rerun of setup's passes a debug build makes can tell the two apart.
+        prove_under_foreign_key(&ToggledBusAir(false), &ToggledBusAir(true));
     }
 
     #[test]
