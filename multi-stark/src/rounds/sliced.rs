@@ -48,8 +48,13 @@ use crate::folder::{InteractionMultilinearFolder, MultilinearFolder};
 use crate::packed_ext::PackedRepr;
 use crate::selectors::BoundaryEvals;
 use crate::sliced::{
-    LaneSums, PreparedPowers, SLICED_LANES, SlicedFolder, SlicedGf4, gf4_coordinates, is_gf4,
+    LaneSums, PreparedPowers, SLICED_LANES, SlicedFolder, SlicedGf4, SlicedQuadraticFolder,
+    gf4_coordinates, is_gf4,
 };
+
+mod infinity;
+
+use infinity::sliced_tensor_infinity;
 
 /// Most rounds a stage may evaluate on its planes.
 ///
@@ -72,11 +77,9 @@ const MAX_PLANE_ROUND_PREFIX: usize = MAX_SLICED_ROUNDS + 1;
 /// planes as they unslice, so a plane fold binds at most one challenge more than such a round.
 const MAX_PLANE_FOLD_ROUNDS: usize = MAX_PLANE_ROUND_PREFIX + 1;
 
-/// How a sliced first round is used by a backend.
+/// How the representation backend uses the four-variable tensor of a sliced first round.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SlicedStrategy {
-    /// Evaluate only the sparse nodes needed by the current sliced round.
-    Sequential,
     /// Build the four-variable tensor used by the representation backend lookahead.
     TensorBoundary,
     /// Build the tensor, then retain its planes for one or two later representation rounds.
@@ -179,6 +182,14 @@ impl Planes<'_> {
         match self {
             Self::Low(words) => words.len(),
             Self::Pairs(pairs) => pairs.len(),
+        }
+    }
+
+    /// Whether every entry's high plane is clear, as every cell of the Boolean subfield leaves it.
+    fn high_planes_clear(&self) -> bool {
+        match self {
+            Self::Low(_) => true,
+            Self::Pairs(pairs) => pairs.par_iter().all(|&[_, high]| high == 0),
         }
     }
 }
@@ -710,6 +721,16 @@ fn lagrange_weights<EF: Field>(degree: usize, point: EF) -> Vec<EF> {
         .collect()
 }
 
+/// The basis over the nodes `0`, `1`, and infinity, evaluated at `point`.
+///
+/// ```text
+///     q(x) = q(0) (1 - x) + q(1) x + q(inf) (x^2 - x)      q of degree at most two,
+///                                                          q(inf) its coefficient of x^2
+/// ```
+fn infinity_weights<EF: Field>(point: EF) -> [EF; 3] {
+    [EF::ONE - point, point, point.square() - point]
+}
+
 /// The coordinates of a step between two interpolation nodes, if it lies in `S`.
 fn step_coordinates<S, EF>(step: NodeStep<EF>) -> Option<NodeStep<(bool, bool)>>
 where
@@ -918,6 +939,27 @@ struct SlicedTensor<EF> {
     values: Vec<Vec<EF>>,
     /// Number of variables covered by the tensor.
     depth: usize,
+    /// The three nodes each coordinate of the tensor is evaluated at.
+    nodes: TensorNodes,
+}
+
+/// The three nodes each coordinate of a [`SlicedTensor`] is evaluated at, in index order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TensorNodes {
+    /// The challenge field's interpolation nodes `0`, `1`, and `2`.
+    Interpolation,
+    /// `0`, `1`, and infinity, the coefficient of the square; see [`infinity`].
+    Infinity,
+}
+
+impl TensorNodes {
+    /// The basis over these nodes, evaluated at `point`.
+    fn weights<EF: Field>(self, point: EF) -> Vec<EF> {
+        match self {
+            Self::Interpolation => lagrange_weights(2, point),
+            Self::Infinity => infinity_weights(point).to_vec(),
+        }
+    }
 }
 
 /// Evaluate all 81 tensor entries before the first sliced fold.
@@ -965,10 +1007,14 @@ where
             })
             .collect(),
         depth: 4,
+        nodes: TensorNodes::Interpolation,
     })
 }
 
 /// Contract a cached tensor at one round's prefix and active interpolation node.
+///
+/// A tensor on the infinity nodes yields the active variable's values at `0`, `1`, and infinity,
+/// and its value at interpolation node `2` follows from those three.
 fn tensor_round<EF: Field, A>(
     tensor: &SlicedTensor<EF>,
     slots: &[AirSlot<'_, A>],
@@ -984,7 +1030,7 @@ fn tensor_round<EF: Field, A>(
     );
     let prefix_weights = challenges
         .iter()
-        .map(|&challenge| lagrange_weights(2, challenge))
+        .map(|&challenge| tensor.nodes.weights(challenge))
         .collect::<Vec<_>>();
     slots
         .iter()
@@ -993,11 +1039,8 @@ fn tensor_round<EF: Field, A>(
             if slot.constraint_degree == 0 {
                 return Vec::new();
             }
-            let mut evals = EF::zero_vec(slot.constraint_degree);
-            for node in [0, 2] {
-                if node > slot.constraint_degree {
-                    continue;
-                }
+            // The contraction over every entry whose active coordinate is the node of index `node`.
+            let active = |node: usize| {
                 let mut value = EF::ZERO;
                 for index in 0..81 {
                     let mut coordinates = [0usize; 4];
@@ -1028,10 +1071,23 @@ fn tensor_round<EF: Field, A>(
                     }
                     value += weight * tensor.values[air][index];
                 }
-                if round == 0 && node == 0 {
-                    value = EF::ZERO;
-                }
-                evals[if node == 0 { 0 } else { 1 }] = value;
+                value
+            };
+            let mut evals = EF::zero_vec(slot.constraint_degree);
+            let at_zero = active(0);
+            if slot.constraint_degree >= 2 {
+                evals[1] = match tensor.nodes {
+                    TensorNodes::Interpolation => active(2),
+                    TensorNodes::Infinity => {
+                        let [zero, one, infinity] = infinity_weights(EF::interpolation_node(2));
+                        zero * at_zero + one * active(1) + infinity * active(2)
+                    }
+                };
+            }
+            // Round zero sends node zero as zero, as the generic kernel does, while its value at
+            // node two still interpolates the value at zero the tensor holds.
+            if round != 0 {
+                evals[0] = at_zero;
             }
             evals
         })
@@ -1158,10 +1214,12 @@ where
         R: Field + From<EF>,
         A: for<'b> Air<SlicedFolder<'b, F, S, R>>,
     {
-        self.round_poly_sliced_with_strategy::<S, R>(eq_suffix, SlicedStrategy::Sequential)
+        let (trace, alpha_powers) = self.sliced_planes::<S, R>()?;
+        self.round_poly_on_planes::<S, R>(eq_suffix, trace, &alpha_powers)
     }
 
-    /// Evaluate the first round on planes, optionally retaining the tensor lookahead cache.
+    /// [`Self::round_poly_sliced`], retaining the four-variable tensor as a lookahead cache when
+    /// the stage is eligible for it.
     #[tracing::instrument(skip_all, level = "debug")]
     pub(crate) fn round_poly_sliced_with_strategy<S, R>(
         &mut self,
@@ -1173,20 +1231,10 @@ where
         F: HasSubfield<S>,
         EF: HasSubfield<S> + From<R>,
         R: Field + From<EF>,
-        A: for<'b> Air<SlicedFolder<'b, F, S, R>>,
+        A: for<'b> Air<SlicedFolder<'b, F, S, R>> + for<'b> Air<SlicedQuadraticFolder<'b, F, R>>,
     {
-        self.subfield_schedule::<S>()?;
-        let trace = self.sliced_trace::<S>()?;
-        self.fits_subfield = true;
-        let alpha_powers = self
-            .alpha_powers
-            .iter()
-            .map(|powers| powers.iter().map(|&power| R::from(power)).collect())
-            .collect::<Vec<Vec<R>>>();
-        let tensor_eligible = matches!(
-            strategy,
-            SlicedStrategy::TensorBoundary | SlicedStrategy::TensorBoundaryLate
-        ) && trace.rounds == 3
+        let (trace, alpha_powers) = self.sliced_planes::<S, R>()?;
+        let tensor_eligible = trace.rounds == 3
             && trace.num_vars >= 10
             && self.degree() == 2
             && self
@@ -1195,17 +1243,27 @@ where
                 .all(|slot| slot.constraint_degree <= 2 && slot.interaction.is_none())
             && next_row_runs(&self.slots).is_empty();
         if tensor_eligible {
-            // Only the factorization check inside the tensor pass reads this table.
-            let tensor_eq_suffix = cfg!(debug_assertions)
-                .then(|| Poly::new_from_point(&self.tau.as_slice()[4..], EF::ONE));
-            if let Some(tensor) = sliced_tensor::<A, F, EF, S, R>(
-                tensor_eq_suffix.as_ref(),
+            let tensor = sliced_tensor_infinity::<A, F, EF, R>(
                 &trace,
                 &self.slots,
                 &self.public_values,
                 &alpha_powers,
                 self.tau.as_slice(),
-            ) {
+            )
+            .or_else(|| {
+                // Only the factorization check inside the tensor pass reads this table.
+                let tensor_eq_suffix = cfg!(debug_assertions)
+                    .then(|| Poly::new_from_point(&self.tau.as_slice()[4..], EF::ONE));
+                sliced_tensor::<A, F, EF, S, R>(
+                    tensor_eq_suffix.as_ref(),
+                    &trace,
+                    &self.slots,
+                    &self.public_values,
+                    &alpha_powers,
+                    self.tau.as_slice(),
+                )
+            });
+            if let Some(tensor) = tensor {
                 let evals = tensor_round(&tensor, &self.slots, self.tau.as_slice(), &[], 0);
                 let late_boundary = strategy == SlicedStrategy::TensorBoundaryLate
                     && trace.num_vars >= MIN_LATE_BOUNDARY_VARS
@@ -1227,12 +1285,57 @@ where
                 ));
             }
         }
+        self.round_poly_on_planes::<S, R>(eq_suffix, trace, &alpha_powers)
+    }
+
+    /// Repack the stage into planes of `S`, and lift its alpha powers into `R`.
+    ///
+    /// # Returns
+    ///
+    /// `None` when the stage does not fit `S`, see [`Self::sliced_trace`]. Otherwise the fit is
+    /// recorded for [`Self::fits_subfield`].
+    fn sliced_planes<S, R>(&mut self) -> Option<(SlicedTrace<'data>, Vec<Vec<R>>)>
+    where
+        S: Field,
+        F: HasSubfield<S>,
+        EF: HasSubfield<S>,
+        R: Field + From<EF>,
+    {
+        self.subfield_schedule::<S>()?;
+        let trace = self.sliced_trace::<S>()?;
+        self.fits_subfield = true;
+        let alpha_powers = self
+            .alpha_powers
+            .iter()
+            .map(|powers| powers.iter().map(|&power| R::from(power)).collect())
+            .collect();
+        Some((trace, alpha_powers))
+    }
+
+    /// Evaluate the first round on `trace` at the sparse nodes it needs, and keep the planes.
+    ///
+    /// # Returns
+    ///
+    /// `None` when an AIR constant outside `S` poisoned a value; no round group has changed.
+    fn round_poly_on_planes<S, R>(
+        &mut self,
+        eq_suffix: &Poly<EF>,
+        trace: SlicedTrace<'data>,
+        alpha_powers: &[Vec<R>],
+    ) -> Option<Vec<EF>>
+    where
+        S: Field,
+        F: HasSubfield<S>,
+        EF: HasSubfield<S> + From<R>,
+        R: Field + From<EF>,
+        A: for<'b> Air<SlicedFolder<'b, F, S, R>>,
+    {
         let evals = sliced_round::<A, F, EF, S, R>(
             eq_suffix,
             &trace,
             &self.slots,
             &self.public_values,
-            &alpha_powers,
+            alpha_powers,
             self.tau.as_slice(),
             &[],
             self.degree(),

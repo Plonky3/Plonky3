@@ -32,7 +32,7 @@ use p3_maybe_rayon::prelude::current_num_threads;
 use p3_multi_stark::config::{Commitment, MultiStarkConfig, PcsError, PcsProverError, ProverData};
 use p3_multi_stark::folder::{InteractionMultilinearFolder, MultilinearFolder};
 use p3_multi_stark::packed_ext::{PackedExt, PackedRepr};
-use p3_multi_stark::sliced::SlicedFolder;
+use p3_multi_stark::sliced::{SlicedFolder, SlicedQuadraticFolder};
 use p3_multi_stark::subfield::{SubfieldAcc, SubfieldVar};
 use p3_multi_stark::{
     GenericBackend, MultiStarkProof, ProverInstance, ProverInstances, ProvingError, ProvingKey,
@@ -733,8 +733,10 @@ impl<const N: usize, H: HarnessHash> HarnessConfig for BooleanStarkConfig<N, H> 
 /// one exactly once, so its blanket impl below is what callers actually need to satisfy.
 ///
 /// The subfield bound is the folder [`SubfieldBackend`] evaluates the first zerocheck round with,
-/// inside `GF(4)`, and the two sliced bounds are the folders it and [`ReprBackend`] evaluate it
-/// with sixty-four rows at a time. The last four are the folders [`ReprBackend`] evaluates the
+/// inside `GF(4)`, and the two `GF(4)` sliced bounds are the folders it and [`ReprBackend`]
+/// evaluate it with sixty-four rows at a time. The quadratic sliced bound is the folder
+/// [`ReprBackend`] evaluates a bit-valued stage's four-variable tensor with, as the `GF(2)` parts
+/// of its constraints. The last four are the folders [`ReprBackend`] evaluates the
 /// later rounds with, in the polynomial basis, one row or one lane group of rows at a time.
 ///
 /// The bus-symbolic bound lets setup discover an AIR's optional binary-bus declarations.
@@ -750,6 +752,7 @@ pub trait BinaryAir:
         MultilinearFolder<'a, F, SubfieldVar<F, BinaryField2>, SubfieldAcc<F, BinaryField2>>,
     > + for<'a> Air<SlicedFolder<'a, F, BinaryField2, F>>
     + for<'a> Air<SlicedFolder<'a, F, BinaryField2, Ghash128>>
+    + for<'a> Air<SlicedQuadraticFolder<'a, F, Ghash128>>
     + for<'a> Air<MultilinearFolder<'a, F, Ghash128, Ghash128>>
     + for<'a> Air<InteractionMultilinearFolder<'a, F, Ghash128, Ghash128>>
     + for<'a> Air<MultilinearFolder<'a, F, PackedRepr<F, Ghash128>, PackedRepr<F, Ghash128>>>
@@ -771,6 +774,7 @@ impl<A> BinaryAir for A where
             MultilinearFolder<'a, F, SubfieldVar<F, BinaryField2>, SubfieldAcc<F, BinaryField2>>,
         > + for<'a> Air<SlicedFolder<'a, F, BinaryField2, F>>
         + for<'a> Air<SlicedFolder<'a, F, BinaryField2, Ghash128>>
+        + for<'a> Air<SlicedQuadraticFolder<'a, F, Ghash128>>
         + for<'a> Air<MultilinearFolder<'a, F, Ghash128, Ghash128>>
         + for<'a> Air<InteractionMultilinearFolder<'a, F, Ghash128, Ghash128>>
         + for<'a> Air<MultilinearFolder<'a, F, PackedRepr<F, Ghash128>, PackedRepr<F, Ghash128>>>
@@ -2641,6 +2645,10 @@ mod tests {
         fn eval(&self, _builder: &mut SlicedFolder<'a, F, BinaryField2, Ghash128>) {}
     }
 
+    impl<'a> Air<SlicedQuadraticFolder<'a, F, Ghash128>> for BinaryBusAir {
+        fn eval(&self, _builder: &mut SlicedQuadraticFolder<'a, F, Ghash128>) {}
+    }
+
     impl<'a> Air<MultilinearFolder<'a, F, Ghash128, Ghash128>> for BinaryBusAir {
         fn eval(&self, builder: &mut MultilinearFolder<'a, F, Ghash128, Ghash128>) {
             eval_bus(self, builder);
@@ -2823,6 +2831,15 @@ mod tests {
             1 << table.num_variables() < LATE_BOUNDARY_FLOOR,
             "a harness table this tall would exercise the deferral, not its fallback"
         );
+        boolean_proof_transcript_at_any_height(air, table, backend)
+    }
+
+    /// [`boolean_proof_transcript`] for a table of any height.
+    fn boolean_proof_transcript_at_any_height<A: BinaryAir>(
+        air: &A,
+        table: Table<F>,
+        backend: Backend,
+    ) -> (Vec<u8>, F) {
         let shape = table.shape();
         let config = boolean_config::<2, Keccak256Hash>(
             shape,
@@ -2956,6 +2973,44 @@ mod tests {
                 boolean_proof_transcript(&air, packed.clone(), backend),
                 "{backend:?}"
             );
+        }
+    }
+
+    /// Require every harness backend to emit the Boolean-committed proof of [`Backend::Generic`].
+    fn assert_boolean_backends_prove_byte_for_byte<A: BinaryAir>(air: &A, table: &Table<F>) {
+        let generic = boolean_proof_transcript_at_any_height(air, table.clone(), Backend::Generic);
+        for backend in [
+            Backend::Subfield,
+            Backend::PolyBasis,
+            Backend::PolyBasisLate,
+        ] {
+            assert_eq!(
+                boolean_proof_transcript_at_any_height(air, table.clone(), backend),
+                generic,
+                "{backend:?} at 2^{} rows",
+                table.num_variables()
+            );
+        }
+    }
+
+    #[test]
+    fn backends_prove_the_quadratic_hash_airs_byte_for_byte_on_the_tensor() {
+        // From 2^10 rows the representation backends evaluate the four-variable tensor of these
+        // degree-two AIRs, and from 2^11 the late one serves its boundary round from the planes.
+        for log_height in [10, 11] {
+            let blake3 = Blake3BinaryAir::assuming_boolean_trace();
+            let table = Table::from_packed_bits(
+                blake3.generate_random_trace_packed::<Gf2>(1 << log_height),
+                log_height,
+            );
+            assert_boolean_backends_prove_byte_for_byte(&blake3, &table);
+
+            let sha256 = Sha256BinaryAir::assuming_boolean_trace();
+            let table = Table::from_packed_bits(
+                sha256.generate_random_trace_packed::<Gf2>(1 << log_height),
+                log_height,
+            );
+            assert_boolean_backends_prove_byte_for_byte(&sha256, &table);
         }
     }
 
