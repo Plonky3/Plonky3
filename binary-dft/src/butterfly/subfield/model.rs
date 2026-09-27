@@ -2,7 +2,7 @@
 //!
 //! Without it only a target carrying the byte-map instruction would exercise any of them.
 
-use crate::lanes::{ByteLanes, ByteRegister};
+use super::lanes::{ByteLanes, ByteRegister};
 
 /// Bytes one modelled register holds.
 ///

@@ -34,13 +34,11 @@ pub(crate) const MIN_BYTES: usize = 256;
 /// Linearity splits the product along that same sum:
 ///
 /// ```text
-///     x         =  (x & 0xf)      +  (x >> 4) << 4
-///
-///     t . x     =  low[x & 0xf]   ^  high[x >> 4]
-///
-///     low[n]    =  t . n                              for n < 16
-///     high[n]   =  t . (n << 4)                       for n < 16
+///     t * x = low[x & 0xf] ^ high[x >> 4]
 /// ```
+///
+/// - `low[n]` is `t * n`, for every nibble `n`.
+/// - `high[n]` is `t * (n << 4)`, for every nibble `n`.
 ///
 /// Both indices are nibbles, so neither table is ever read out of range.
 ///
@@ -106,7 +104,7 @@ pub(crate) fn byte_butterfly<const INVERSE: bool>(
         uint8x16_t, vandq_u8, vdupq_n_u8, veorq_u8, vld1q_u8, vqtbl1q_u8, vshrq_n_u8,
     };
 
-    use crate::lanes::butterfly_run;
+    use super::lanes::butterfly_run;
 
     // Both tables are sixteen bytes, which is exactly one register.
     let (low, high) = nibble_tables(columns);

@@ -868,7 +868,7 @@ pub fn prove_binary_air<A>(
 where
     A: BinaryAir,
 {
-    prove_binary_air_with_ntt(air, trace, options, PolyBasisNtt::default())
+    prove_binary_air_with_ntt(air, trace, options, PolyBasisNtt)
 }
 
 /// Proves and verifies `air` against `trace`, reporting size and timing measurements.
@@ -2788,14 +2788,9 @@ mod tests {
             pow_bits: 0,
             security_level: 100,
         };
-        let config = binary_config::<2, PolyBasisNtt, Keccak256Hash>(
-            arity,
-            params,
-            3,
-            None,
-            PolyBasisNtt::default(),
-        )
-        .expect("the test shape configures the PCS");
+        let config =
+            binary_config::<2, PolyBasisNtt, Keccak256Hash>(arity, params, 3, None, PolyBasisNtt)
+                .expect("the test shape configures the PCS");
         let (pk, _) = setup(&config, &[air], &mut binary_challenger()).expect("setup succeeds");
 
         let public_values: [F; 0] = [];

@@ -1,102 +1,45 @@
-//! The Lin–Chung–Han additive NTT.
+//! The Lin-Chung-Han additive NTT.
+
+mod schedule;
+mod twiddles;
 
 use alloc::vec::Vec;
 use core::marker::PhantomData;
 
-use p3_binary_field::TowerLevel;
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_maybe_rayon::prelude::*;
-use p3_util::{log2_ceil_usize, log2_floor_usize, log2_strict_usize};
+use p3_util::log2_strict_usize;
+pub(crate) use schedule::BUTTERFLY_GRAIN;
+use schedule::{DEEP_TILE_BYTES, Schedule, run, run_cosets, stage_pass};
+use twiddles::Twiddles;
 
 use crate::butterfly::ButterflyField;
-use crate::domain::{domain_point, domain_point_steps};
-use crate::staging::{Dispatch, StagedRuns, for_each_staged_tile};
+use crate::domain::domain_point;
 use crate::traits::AdditiveNtt;
 
-/// The Lin–Chung–Han additive NTT over the Cantor-basis domain.
+/// The Lin-Chung-Han additive NTT over the Cantor-basis domain.
 ///
-/// Twiddles are index shifts (D8): at stage `j` and butterfly block `blk` the twiddle is
-/// `W_j(shift) + domain_point(blk << 1)`, so there is no twiddle table.
-///
-/// Consecutive blocks differ by a fixed increment, so a block takes its twiddle from the one
-/// before it rather than walking its own index.
-/// The `ℓ - 1` increments are shared by every stage and are the only per-size precomputation.
-///
-/// `W_j` is `F_2`-linear and `domain_point(0)` is zero, so over the subspace itself — the
-/// coset with `shift = 0` — the first block of every stage has a zero twiddle and its
-/// butterfly collapses to a single addition. The inner loop takes that as a separate case,
-/// which removes one multiply in `2/ℓ` of them.
-///
-/// At the wide stages a pair of rows is megabytes apart, so a stage alone costs a pass over
-/// memory. The schedule groups adjacent stages into row sets closed under all of them.
+/// - Twiddles are index shifts, so there is no twiddle table.
+/// - Each block steps its twiddle from the block before it.
+/// - Over the subspace itself, most twiddles lie in a small subfield, which the butterfly exploits.
+/// - Adjacent stages are grouped into cache-sized row sets, so the matrix is swept a few times, not once per stage.
 #[derive(Clone, Debug, Default)]
 pub struct LchNtt<F> {
     _marker: PhantomData<F>,
 }
 
-/// The number of field elements one butterfly task covers on each side of a block.
-///
-/// Stage `j` has `2^(ℓ − 1 − j)` blocks of `half = 2^j · width` elements per side, so cutting
-/// each side into pieces of this size leaves `n · width / (2 · BUTTERFLY_GRAIN)` pieces at
-/// every stage, independent of `j`: the wide stages, which have too few blocks to fill a
-/// machine, are split from within instead. Stages with `half ≤ BUTTERFLY_GRAIN` keep a single
-/// piece per side and instead gather `BUTTERFLY_GRAIN / half` whole blocks into one task, so a
-/// task is a piece of this size on either side of the crossover.
-///
-/// At a few nanoseconds per butterfly a piece of this size is microseconds of work, well above
-/// the cost of handing a task to another thread, while still leaving hundreds of pieces per
-/// stage at the smallest useful heights.
-pub(crate) const BUTTERFLY_GRAIN: usize = 1 << 10;
-
-/// The byte budget of one contiguous row tile.
-///
-/// A worker holds one tile for every stage its rows are closed under, so a tile per worker has
-/// to fit a core's private second-level cache.
-///
-/// Doubling buys one more stage inside the tile. A sweep of 32 KiB to 256 KiB flattens here.
-const DEEP_TILE_BYTES: usize = 128 * 1024;
-
-/// The byte budget of one staging tile.
-///
-/// Every worker holds one for the whole group, so the budget is paid per worker.
-///
-/// Halving it fuses one stage fewer, which is one more traversal. A sweep of 32 KiB to 1 MiB
-/// is flat from here up, so this is the smallest budget at the floor.
-const STAGING_TILE_BYTES: usize = 64 * 1024;
-
-/// The smallest number of stages a staging tile has to cover to be worth gathering for.
-///
-/// One stage gathered and scattered moves the memory traffic one plain pass moves.
-/// It then adds a copy in each direction, so grouping pays only from two stages up.
-const MIN_FUSED_STAGES: usize = 2;
-
-/// Workers a transform needs before the stages above the tile are worth staging.
-///
-/// Staging trades one pass per stage for a strided gather and scatter. Few workers issue those
-/// passes far below what memory will serve, so the copies have nothing to pay for them.
-///
-/// The turn is fixed by the last-level cache, which a `no_std` crate cannot read, so the worker
-/// count is the signal left. Measured, staging loses up to a third below this count and wins
-/// from it up. Fewer workers give up a win rather than take a loss.
-const STAGED_WORKERS: usize = 16;
-
-/// The smallest cache line among the supported targets, in bytes.
-///
-/// A gather that picks up less than a line from each row it visits pays for bytes it cannot
-/// use. Apple Silicon reports 128, so this is the smallest line rather than the transfer
-/// granularity: past it no target wastes more than half of a line.
-///
-/// A staging tile therefore holds whole runs of rows wherever a row is shorter than this.
-const CACHE_LINE_BYTES: usize = 64;
-
 impl<F: ButterflyField> AdditiveNtt<F> for LchNtt<F> {
-    fn shifted_ntt_batch(&self, mat: RowMajorMatrix<F>, shift: F) -> RowMajorMatrix<F> {
-        transform::<F, false>(mat, shift)
+    fn shifted_ntt_batch(&self, mut mat: RowMajorMatrix<F>, shift: F) -> RowMajorMatrix<F> {
+        let width = mat.width();
+        transform::<F, false>(&mut mat.values, width, shift);
+        mat
     }
 
-    fn shifted_intt_batch(&self, mat: RowMajorMatrix<F>, shift: F) -> RowMajorMatrix<F> {
-        transform::<F, true>(mat, shift)
+    fn shifted_intt_batch(&self, mut mat: RowMajorMatrix<F>, shift: F) -> RowMajorMatrix<F> {
+        let width = mat.width();
+        transform::<F, true>(&mut mat.values, width, shift);
+        mat
     }
 
     fn ntt_batch_padded(
@@ -109,403 +52,39 @@ impl<F: ButterflyField> AdditiveNtt<F> for LchNtt<F> {
         assert!(log_inv_rate <= log_n, "padding exceeds matrix height");
         assert!(log_n <= 1 << F::LOG_BITS, "domain exceeds field dimension");
 
-        // The zero tail starts where the message ends, which is what fixes the coset size.
-        transform_cosets::<F>(&mut mat.values, width, log_n - log_inv_rate);
+        // The zero tail starts where the message ends, which fixes the coset size.
+        transform_cosets(&mut mat.values, width, log_n - log_inv_rate);
         mat
     }
 }
 
-/// Stage twiddle bases and the increments between consecutive block twiddles.
-struct Twiddles<F> {
-    /// `W_j(shift)`, the twiddle of the first block of stage `j`, for every stage.
-    bases: Vec<F>,
-    /// The difference between consecutive block twiddles, indexed by trailing-zero count.
-    steps: Vec<F>,
-}
-
-impl<F: TowerLevel> Twiddles<F> {
-    /// Precompute the twiddle state a transform of `2^log_n` rows over `shift + S_ℓ` needs.
-    fn new(log_n: usize, shift: F) -> Self {
-        // `W_0` is the identity, and `W_{j+1}(x) = W_j(x)² + W_j(x)`.
-        //
-        // So the bases form a chain, one squaring each rather than `j` squarings apiece.
-        let mut base = shift;
-        let bases = (0..log_n)
-            .map(|_| {
-                let current = base;
-                base = base.square() + base;
-                current
-            })
-            .collect();
-
-        // An increment depends only on a block index's trailing-zero count, never on the stage,
-        // so one table serves every stage and each stage uses the prefix it reaches.
-        // A height of one runs no stage and needs no table.
-        let steps = domain_point_steps::<F>(log_n.saturating_sub(1));
-
-        Self { bases, steps }
-    }
-
-    /// The twiddle of butterfly block `block` at stage `stage`.
-    #[inline]
-    fn at(&self, stage: usize, block: usize) -> F {
-        self.bases[stage] + domain_point::<F>(block << 1)
-    }
-
-    /// What to add to block `index - 1`'s twiddle to reach block `index`'s.
-    #[inline]
-    fn step(&self, index: usize) -> F {
-        self.steps[index.trailing_zeros() as usize]
-    }
-}
-
-/// One stage, as a single pass over every row.
-fn stage_pass<F: ButterflyField, const INVERSE: bool>(
-    values: &mut [F],
-    width: usize,
-    j: usize,
-    twiddles: &Twiddles<F>,
-) {
-    let half = (1 << j) * width;
-    let per_task = (BUTTERFLY_GRAIN / half).max(1);
-    let task_len = per_task * (half << 1);
-    let task = |(task, group): (usize, &mut [F])| {
-        let first = task * per_task;
-        let mut t = twiddles.at(j, first);
-        // Invariant: blocks are visited in ascending index order.
-        // Carrying the twiddle from one block to the next relies on it.
-        for (i, block) in group.chunks_mut(half << 1).enumerate() {
-            if i != 0 {
-                t += twiddles.step(first + i);
-            }
-            let (lo, hi) = block.split_at_mut(half);
-            let butterfly = |lo: &mut [F], hi: &mut [F]| {
-                F::butterfly::<INVERSE>(lo, hi, t);
-            };
-            // Pairs are independent across the block.
-            //
-            // So a block wider than the grain is split further, not run on one thread.
-            if half <= BUTTERFLY_GRAIN {
-                butterfly(lo, hi);
-            } else {
-                lo.par_chunks_mut(BUTTERFLY_GRAIN)
-                    .zip(hi.par_chunks_mut(BUTTERFLY_GRAIN))
-                    .for_each(|(lo, hi)| butterfly(lo, hi));
-            }
-        }
-    };
-
-    // A pass covering one task has nothing to spread over the machine.
-    //
-    // Dispatching it anyway costs a thread handoff per stage.
-    // The narrow stages of a short transform pay that once each and get nothing back.
-    if values.len() > task_len {
-        values.par_chunks_mut(task_len).enumerate().for_each(task);
-    } else {
-        values.chunks_mut(task_len).enumerate().for_each(task);
-    }
-}
-
-/// Run the `log_rows` adjacent stages a tile of `2^log_rows` rows is closed under.
-///
-/// Tile row `q` sits in global block `(index << (log_rows - 1 - jj)) + (q >> (jj + 1))` at the
-/// stage pairing rows `2^jj` apart. The second term is what the tile-local pass already walks,
-/// so only the first has to be passed in.
-///
-/// Forward runs its widest stage first, inverse the narrowest.
-fn tile_stages<F: ButterflyField, const INVERSE: bool>(
-    tile: &mut [F],
-    row_len: usize,
-    log_rows: usize,
-    stage_base: usize,
-    index: usize,
-    twiddles: &Twiddles<F>,
-) {
-    for step in 0..log_rows {
-        let jj = if INVERSE { step } else { log_rows - 1 - step };
-        let half = (1 << jj) * row_len;
-
-        // The tile's own blocks continue the global numbering from here.
-        let first = index << (log_rows - 1 - jj);
-        let mut t = twiddles.at(stage_base + jj, first);
-
-        // Invariant: blocks are visited in ascending index order.
-        for (i, block) in tile.chunks_mut(half << 1).enumerate() {
-            if i != 0 {
-                t += twiddles.step(first + i);
-            }
-            let (lo, hi) = block.split_at_mut(half);
-            F::butterfly::<INVERSE>(lo, hi, t);
-        }
-    }
-}
-
-/// Finish the bottom stages inside each contiguous tile of `2^log_rows` rows.
-///
-/// Those stages pair rows less than `2^log_rows` apart, so a tile is closed under all of them
-/// and is read once and written once instead of once per stage.
-fn deep_tiles<F: ButterflyField, const INVERSE: bool>(
-    values: &mut [F],
-    width: usize,
-    log_rows: usize,
-    twiddles: &Twiddles<F>,
-) {
-    values
-        .par_chunks_mut((1 << log_rows) * width)
-        .enumerate()
-        .for_each(|(index, tile)| {
-            tile_stages::<F, INVERSE>(tile, width, log_rows, 0, index, twiddles);
-        });
-}
-
-/// The runs that the `depth` stages ending at stage `top` gather, `2^log_slab` matrix rows to a
-/// run.
-///
-/// A task owns one butterfly block of the group's widest stage and one run of rows inside it,
-/// so with `S = 2^(top + 1 - depth)` the narrowest stage's row distance, its staged run `k`
-/// begins at matrix row
-///
-/// ```text
-///     R(t, k) = S · ((t / runs) · 2^depth + k) + (t % runs) · 2^log_slab ,   runs = S / 2^log_slab
-/// ```
-const fn staged_runs(width: usize, top: usize, depth: usize, log_slab: usize) -> StagedRuns {
-    StagedRuns::new((1 << log_slab) * width, top + 1 - depth - log_slab, depth)
-}
-
-/// Run the `depth` stages ending at stage `top` through a staging tile, `2^log_slab` matrix
-/// rows to a staged row.
-///
-/// # Algorithm
-///
-/// Write `S = 2^(top + 1 - depth)`, the row distance of the group's narrowest stage. For a
-/// block `blk` of stage `top` and an offset `r < S`, stage the rows
-///
-/// ```text
-///     R(k) = S · (blk · 2^depth + k) + r ,     k = 0 .. 2^depth
-/// ```
-///
-/// Stage `top - s` moves `2^(depth - 1 - s)` in `k`, so the set is closed under the group, and
-/// since `r < S` the global block of `R(k)` is `(blk << s) + (k >> (depth - s))` — what a
-/// contiguous tile of index `blk` sees. The pairs `(blk, r)` partition the matrix.
+/// Transform a row-major buffer of `width` columns in place, over the coset `shift + S_l`.
 ///
 /// # Panics
-/// Panics if a task's row walk reaches past the end of `values`.
-fn fused_group<F: ButterflyField, const INVERSE: bool>(
-    values: &mut [F],
-    width: usize,
-    log_n: usize,
-    top: usize,
-    depth: usize,
-    log_slab: usize,
-    twiddles: &Twiddles<F>,
-) {
-    // A staged row is a run of `2^log_slab` matrix rows.
-    //
-    // So a run has to fit inside the distance the group's narrowest stage pairs across.
-    debug_assert!(depth >= 1 && log_slab + depth <= top + 1);
-    debug_assert!(top < log_n);
-
-    let row_len = (1 << log_slab) * width;
-    // The tiles the staged pass lays out, each `2^depth` staged rows.
-    let tasks = values.len() / (row_len << depth);
-
-    // Rayon splits a range as far as it likes, and a split is what a staging tile belongs to.
-    //
-    // So bound the splits to a few per thread, rather than let every task allocate one.
-    let min_len = (tasks / (4 * current_num_threads())).max(1);
-    for_each_staged_tile(
-        values,
-        staged_runs(width, top, depth, log_slab),
-        Dispatch::Parallel { min_len },
-        |tile, block| {
-            tile_stages::<F, INVERSE>(tile, row_len, depth, top + 1 - depth, block, twiddles);
-        },
-    );
-}
-
-/// How wide the two kinds of row tile are for a given element size and matrix width.
-struct Schedule {
-    /// Base-two log of the rows in one contiguous tile.
-    log_tile_rows: usize,
-    /// Base-two log of the staged rows one group of stages covers.
-    log_staged_rows: usize,
-    /// Base-two log of the matrix rows one staged row holds.
-    log_slab_rows: usize,
-}
-
-impl Schedule {
-    /// The tile shapes a matrix gets from the worker count the transform will run on.
-    fn new<F: TowerLevel>(width: usize, log_n: usize) -> Self {
-        Self::for_workers::<F>(width, log_n, current_num_threads())
-    }
-
-    /// Divide each byte budget by the bytes one row occupies, then cut the contiguous tile
-    /// back until there is one per worker.
-    ///
-    /// A tile is also a task, so growing it past one per worker would buy depth no thread is
-    /// left to run. Below [`STAGED_WORKERS`] workers nothing is staged at all.
-    fn for_workers<F: TowerLevel>(width: usize, log_n: usize, workers: usize) -> Self {
-        let row_bytes = core::mem::size_of::<F>() * width;
-
-        // A tile of at least one row, even where a row alone overruns the budget.
-        let capacity = log2_floor_usize((DEEP_TILE_BYTES / row_bytes).max(1));
-        let log_tile_rows = capacity.min(log_n.saturating_sub(log2_ceil_usize(workers)));
-
-        // Rows shorter than a cache line are staged in runs, so every byte a gather fetches is
-        // a byte the tile uses.
-        let log_slab_rows =
-            log2_ceil_usize(CACHE_LINE_BYTES.div_ceil(row_bytes)).min(log_tile_rows);
-
-        // A staged row is a whole run, so it is the run that the staging budget divides.
-        let slab_bytes = row_bytes << log_slab_rows;
-        let log_staged_rows = if workers >= STAGED_WORKERS {
-            log2_floor_usize((STAGING_TILE_BYTES / slab_bytes).max(1))
-        } else {
-            0
-        };
-
-        Self {
-            log_tile_rows,
-            log_staged_rows,
-            log_slab_rows,
-        }
-    }
-}
-
-/// Run the stages `low` up to, but not including, `high` as one group.
 ///
-/// A group of a single stage is a plain pass: gathering two rows half the matrix apart moves
-/// the bytes the pass moves, and copies them twice on top.
-fn group_pass<F: ButterflyField, const INVERSE: bool>(
-    values: &mut [F],
-    width: usize,
-    log_n: usize,
-    low: usize,
-    high: usize,
-    log_slab: usize,
-    twiddles: &Twiddles<F>,
-) {
-    if high - low == 1 {
-        stage_pass::<F, INVERSE>(values, width, low, twiddles);
-    } else {
-        fused_group::<F, INVERSE>(
-            values,
-            width,
-            log_n,
-            high - 1,
-            high - low,
-            log_slab,
-            twiddles,
-        );
-    }
-}
-
-/// Run the `top` narrowest stages of the transform under one tile shape.
-///
-/// # Algorithm
-///
-/// Stages below the contiguous tile run inside it. The stages above it are cut into groups of
-/// adjacent stages, each short enough that the rows it is closed under fit one staging tile:
-///
-/// ```text
-///     stage   top-1 .............. t+2f  t+2f-1 ..... t+f  t+f-1 ..... t  t-1 ... 0
-///             \____ staged group ____/  \_ staged group _/  \_ group _/  \_ tile _/
-/// ```
-///
-/// The boundaries are counted up from the tile, so a short remainder falls to the top group.
-/// The forward direction runs the groups from the top and the tile last, the inverse the other
-/// way round.
-fn run<F: ButterflyField, const INVERSE: bool>(
-    values: &mut [F],
-    width: usize,
-    log_n: usize,
-    top: usize,
-    twiddles: &Twiddles<F>,
-    schedule: &Schedule,
-) {
-    // The schedule is the caller's, so bring it inside what this call can use.
-    //
-    // - A tile is at most the range of stages asked for.
-    // - A staged row is a run of matrix rows.
-    // - That run must not straddle a butterfly of the narrowest stage above the tile.
-    let tile = schedule.log_tile_rows.min(top);
-    let slab = schedule.log_slab_rows.min(tile);
-    let group = if schedule.log_staged_rows >= MIN_FUSED_STAGES {
-        schedule.log_staged_rows
-    } else {
-        1
-    };
-    let groups = (top - tile).div_ceil(group);
-    let bounds = |g: usize| {
-        let low = tile + g * group;
-        (low, (low + group).min(top))
-    };
-
-    if INVERSE {
-        if tile > 0 {
-            deep_tiles::<F, INVERSE>(values, width, tile, twiddles);
-        }
-        for g in 0..groups {
-            let (low, high) = bounds(g);
-            group_pass::<F, INVERSE>(values, width, log_n, low, high, slab, twiddles);
-        }
-    } else {
-        for g in (0..groups).rev() {
-            let (low, high) = bounds(g);
-            group_pass::<F, INVERSE>(values, width, log_n, low, high, slab, twiddles);
-        }
-        if tile > 0 {
-            deep_tiles::<F, INVERSE>(values, width, tile, twiddles);
-        }
-    }
-}
-
-/// Run the `top` narrowest stages over a row-major buffer of `width` columns, in place.
-///
-/// Stages are numbered by the distance they pair rows across, so stage zero is the narrowest.
-/// The whole transform is every stage the row count allows.
-///
-/// Asking for fewer than all of them leaves the matrix part-way through the network.
-/// The two directions traverse that network in opposite orders, so they stop at opposite ends:
-///
-/// ```text
-///     forward   stage l-1 ... stage top   then   stage top-1 ... stage 0
-///               \___ the caller's own ___/        \___ this call _____/
-///
-///     inverse   stage 0 ... stage top-1   then   stage top ... stage l-1
-///               \___ this call _______/          \___ the caller's own ___/
-/// ```
-///
-/// So a forward caller has to have run the wider stages already.
-/// An inverse caller still has them ahead of it.
-///
-/// # Panics
-/// Panics if the row count is not a power of two.
-/// Panics if the subspace dimension it calls for exceeds the bit width of the level.
-/// Panics if the stage count exceeds that dimension.
-pub(crate) fn transform_stages<F: ButterflyField, const INVERSE: bool>(
-    values: &mut [F],
-    width: usize,
-    top: usize,
-    shift: F,
-) {
+/// - Panics if the row count is not a power of two.
+/// - Panics if the domain dimension exceeds the bit width of the level.
+fn transform<F: ButterflyField, const INVERSE: bool>(values: &mut [F], width: usize, shift: F) {
     let log_n = log2_strict_usize(values.len() / width);
     assert!(log_n <= 1 << F::LOG_BITS, "domain exceeds field dimension");
-    assert!(top <= log_n, "stage count exceeds the domain dimension");
     let twiddles = Twiddles::new(log_n, shift);
 
-    // A matrix no larger than a tile is cache-resident for the whole transform, so blocking it
-    // would only add bookkeeping to stages already free of memory traffic.
-    if core::mem::size_of_val(values) <= DEEP_TILE_BYTES {
-        for step in 0..top {
-            let j = if INVERSE { step } else { top - 1 - step };
+    // A matrix within one tile stays in cache throughout, so blocking would only add bookkeeping.
+    if size_of_val(values) <= DEEP_TILE_BYTES {
+        for step in 0..log_n {
+            let j = if INVERSE { step } else { log_n - 1 - step };
             stage_pass::<F, INVERSE>(values, width, j, &twiddles);
         }
         return;
     }
 
-    let schedule = Schedule::new::<F>(width, log_n);
-    run::<F, INVERSE>(values, width, log_n, top, &twiddles, &schedule);
+    run::<F, INVERSE>(
+        values,
+        width,
+        log_n,
+        &twiddles,
+        &Schedule::new::<F>(width, log_n),
+    );
 }
 
 /// Transform a buffer whose leading `2^log_message` rows hold the message and the rest zeros.
@@ -518,57 +97,48 @@ pub(crate) fn transform_stages<F: ButterflyField, const INVERSE: bool>(
 ///     (u, 0)  ->  (u + t*0, u + t*0 + 0)  =  (u, u)
 /// ```
 ///
-/// They therefore copy the message into each coset of its own subspace and compute nothing.
-/// What is left is one shifted transform per coset, over that coset's own rows:
+/// So they copy the message into each coset of its own subspace and compute nothing.
 ///
-/// ```text
-///     coset 0    the message itself, transformed over the subspace
-///     coset c    a contiguous copy of coset 0, then its own shifted transform
-/// ```
+/// What is left is one shifted transform per coset, over that coset's own rows.
 ///
-/// A coset's shift is the domain point its first row sits at.
-/// The subspace polynomials are `F_2`-linear, so its blocks read the network's own twiddles.
+/// Coset `c` is the message transformed over `domain_point(c * 2^log_message) + S_log_message`.
 ///
-/// The copy is what a coset costs instead of one butterfly pass per skipped stage.
-pub(crate) fn transform_cosets<F: ButterflyField>(
-    values: &mut [F],
-    width: usize,
-    log_message: usize,
-) {
-    // One coset is the message's own footprint, so the buffer divides into whole cosets.
+/// The subspace polynomials are linear, so every coset's blocks read the full network's twiddles.
+fn transform_cosets<F: ButterflyField>(values: &mut [F], width: usize, log_message: usize) {
     let len = width << log_message;
-    let (first, rest) = values.split_at_mut(len);
 
-    // Coset `c + 1` starts at domain point `(c + 1) * 2^log_message`, which is its shift.
-    // Transforming it right after the copy finds its rows still in cache.
-    rest.par_chunks_mut(len).enumerate().for_each(|(c, coset)| {
-        coset.copy_from_slice(first);
-        let shift = domain_point::<F>((c + 1) << log_message);
-        transform_stages::<F, false>(coset, width, log_message, shift);
-    });
+    // A coset within one tile is cheap to copy and transform on its own.
+    if size_of::<F>() * len <= DEEP_TILE_BYTES {
+        let (message, rest) = values.split_at_mut(len);
+        rest.par_chunks_mut(len).enumerate().for_each(|(c, coset)| {
+            coset.copy_from_slice(message);
+            transform::<F, false>(coset, width, domain_point::<F>((c + 1) << log_message));
+        });
+        transform::<F, false>(message, width, F::ZERO);
+        return;
+    }
 
-    // The subspace itself is the coset with no shift, and it is the source every copy read.
-    transform_stages::<F, false>(first, width, log_message, F::ZERO);
-}
-
-/// Transform a matrix in place, in whichever direction the flag selects.
-fn transform<F: ButterflyField, const INVERSE: bool>(
-    mut mat: RowMajorMatrix<F>,
-    shift: F,
-) -> RowMajorMatrix<F> {
-    let width = mat.width();
-    let log_n = log2_strict_usize(mat.height());
-    transform_stages::<F, INVERSE>(&mut mat.values, width, log_n, shift);
-    mat
+    // Coset c starts at domain point c * 2^log_message, which is its shift.
+    let twiddles: Vec<_> = (0..values.len() / len)
+        .map(|c| Twiddles::new(log_message, domain_point::<F>(c << log_message)))
+        .collect();
+    run_cosets(
+        values,
+        width,
+        log_message,
+        &twiddles,
+        &Schedule::new::<F>(width, log_message),
+    );
 }
 
 #[cfg(test)]
 mod tests {
+    use alloc::vec::Vec;
     use alloc::{format, vec};
 
     use p3_binary_field::{
         BinaryField8, BinaryField16, BinaryField32, BinaryField64, BinaryField128, Ghash128,
-        TowerLevel,
+        Poly64, TowerLevel,
     };
     use p3_field::PrimeCharacteristicRing;
     use p3_matrix::Matrix;
@@ -576,10 +146,11 @@ mod tests {
     use p3_util::log2_strict_usize;
     use proptest::prelude::*;
 
-    use super::{
-        ButterflyField, DEEP_TILE_BYTES, LchNtt, MIN_FUSED_STAGES, STAGED_WORKERS, Schedule,
-        Twiddles, run, stage_pass, staged_runs,
+    use super::schedule::{
+        DEEP_TILE_BYTES, MIN_FUSED_STAGES, STAGED_WORKERS, Schedule, run, run_cosets, stage_pass,
+        staged_runs,
     };
+    use super::{ButterflyField, LchNtt, Twiddles};
     use crate::domain::{domain_point, subspace_polynomial};
     use crate::naive::NaiveAdditiveNtt;
     use crate::traits::AdditiveNtt;
@@ -595,12 +166,12 @@ mod tests {
 
     /// The widths a tile-boundary sweep covers.
     ///
-    /// A shape's boundary height is `2^t`, where `2^t · row_bytes` is one tile budget.
+    /// A shape's boundary height is `2^t`, where `2^t * row_bytes` is one tile budget.
     /// So the matrix a boundary sweep builds is four budgets whatever the width, and the cost
     /// is one budget per width rather than one per element.
     ///
-    /// This subset keeps the two rows [`HEAVY_LOG_HEIGHTS`] leaves below its boundary — one
-    /// element and two of them — plus an odd row, a SIMD-sized row and a wide one.
+    /// This subset keeps the two rows the heavy sweep leaves below its boundary - one
+    /// element and two of them - plus an odd row, a SIMD-sized row and a wide one.
     const BOUNDARY_WIDTHS: [usize; 5] = [1, 2, 3, 16, 64];
 
     /// The heights every sweep covers.
@@ -610,7 +181,7 @@ mod tests {
     /// named worker counts.
     const LOG_HEIGHTS: core::ops::RangeInclusive<usize> = 0..=10;
 
-    /// The heights the heavy sweep covers on top of [`LOG_HEIGHTS`].
+    /// The heights the heavy sweep covers on top of the ordinary sweep.
     ///
     /// By `2^14` every row wider than 8 bytes has passed one tile budget; the three narrower
     /// shapes block only in the boundary sweep. At width 64 this is minutes of oracle in a
@@ -697,56 +268,9 @@ mod tests {
     ) {
         let width = mat.width();
         let log_n = log2_strict_usize(mat.height());
-        stages_one_at_a_time::<F, INVERSE>(&mut mat.values, width, log_n, twiddles);
-    }
-
-    /// The narrowest `top` stages as plain passes, in the order the direction traverses them.
-    fn stages_one_at_a_time<F: ButterflyField, const INVERSE: bool>(
-        values: &mut [F],
-        width: usize,
-        top: usize,
-        twiddles: &Twiddles<F>,
-    ) {
-        for step in 0..top {
-            let j = if INVERSE { step } else { top - 1 - step };
-            stage_pass::<F, INVERSE>(values, width, j, twiddles);
-        }
-    }
-
-    /// Every stage range of one shape, blocked against the same stages run one pass at a time.
-    fn check_every_stage_range_agrees<F: ButterflyField>(
-        log_n: usize,
-        width: usize,
-        schedule: &Schedule,
-    ) {
-        let coeffs = matrix::<F>(log_n, width, 3);
-        for shift_bits in SHIFTS {
-            let shift = sample::<F>(shift_bits);
-            let twiddles = Twiddles::new(log_n, shift);
-
-            for top in 0..=log_n {
-                let label = format!("log_n={log_n} width={width} shift={shift_bits:#x} top={top}");
-
-                // Forward: the range is the tail of the network, so it runs widest stage first.
-                let mut expected = coeffs.clone();
-                stages_one_at_a_time::<F, false>(&mut expected.values, width, top, &twiddles);
-
-                let mut blocked = coeffs.clone();
-                run::<F, false>(&mut blocked.values, width, log_n, top, &twiddles, schedule);
-                assert_eq!(blocked, expected, "forward {label}");
-
-                // The same range undone puts the coefficients back, whatever the blocking.
-                run::<F, true>(&mut blocked.values, width, log_n, top, &twiddles, schedule);
-                assert_eq!(blocked, coeffs, "round trip {label}");
-
-                // Inverse: the range is the head of the network, so it runs narrowest first.
-                let mut expected = coeffs.clone();
-                stages_one_at_a_time::<F, true>(&mut expected.values, width, top, &twiddles);
-
-                let mut blocked = coeffs.clone();
-                run::<F, true>(&mut blocked.values, width, log_n, top, &twiddles, schedule);
-                assert_eq!(blocked, expected, "inverse {label}");
-            }
+        for step in 0..log_n {
+            let j = if INVERSE { step } else { log_n - 1 - step };
+            stage_pass::<F, INVERSE>(&mut mat.values, width, j, twiddles);
         }
     }
 
@@ -763,14 +287,7 @@ mod tests {
             stage_by_stage::<F, false>(&mut expected, &twiddles);
 
             let mut blocked = coeffs.clone();
-            run::<F, false>(
-                &mut blocked.values,
-                width,
-                log_n,
-                log_n,
-                &twiddles,
-                schedule,
-            );
+            run::<F, false>(&mut blocked.values, width, log_n, &twiddles, schedule);
             assert_eq!(blocked, expected, "forward {label}");
 
             // Inverse: same comparison with the stage order reversed.
@@ -778,14 +295,7 @@ mod tests {
             stage_by_stage::<F, true>(&mut expected, &twiddles);
 
             let mut blocked = coeffs.clone();
-            run::<F, true>(
-                &mut blocked.values,
-                width,
-                log_n,
-                log_n,
-                &twiddles,
-                schedule,
-            );
+            run::<F, true>(&mut blocked.values, width, log_n, &twiddles, schedule);
             assert_eq!(blocked, expected, "inverse {label}");
         }
     }
@@ -862,7 +372,7 @@ mod tests {
 
     /// The blocked schedule of a named worker count, against the same independent walk.
     ///
-    /// [`transform`] picks its own schedule from the shape and the thread count, so what it
+    /// The transform picks its own schedule from the shape and the thread count, so what it
     /// covers moves with the machine. This drives `run` directly instead: the walk then pins the
     /// blocked path whatever the ambient thread count is.
     fn check_the_blocked_walk_agrees<F: ButterflyField>(
@@ -882,26 +392,12 @@ mod tests {
                 format!("log_n={log_n} width={width} shift={shift_bits:#x} workers={workers}");
 
             let mut blocked = coeffs.clone();
-            run::<F, false>(
-                &mut blocked.values,
-                width,
-                log_n,
-                log_n,
-                &twiddles,
-                &schedule,
-            );
+            run::<F, false>(&mut blocked.values, width, log_n, &twiddles, &schedule);
             assert_eq!(blocked, walked, "ntt {label}");
 
             // Undoing the walk's own codeword holds the inverse schedule to the same twiddles.
             let mut blocked = walked.clone();
-            run::<F, true>(
-                &mut blocked.values,
-                width,
-                log_n,
-                log_n,
-                &twiddles,
-                &schedule,
-            );
+            run::<F, true>(&mut blocked.values, width, log_n, &twiddles, &schedule);
             assert_eq!(blocked, coeffs, "intt {label}");
         }
     }
@@ -1188,45 +684,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn a_partial_stage_range_matches_the_plain_passes() {
-        // Invariant: a schedule asked for part of the network runs those stages and no others.
-        //
-        // The subfield split is the only caller that stops short, and it stops forward.
-        //
-        // Below the staging worker count no partial range reaches a fused group at all.
-        // So the shapes below are named rather than read off the machine.
-        //
-        // Fixture state: rows per contiguous tile, staged rows per group, rows per staged row.
-        let shape = |tile: usize, staged: usize, slab: usize| Schedule {
-            log_tile_rows: tile,
-            log_staged_rows: staged,
-            log_slab_rows: slab,
-        };
-
-        for width in [1usize, 3, 16] {
-            // A three-stage tile with two-stage groups above it.
-            // The sweep then ends inside the tile, at its edge, inside a group, and past one.
-            check_every_stage_range_agrees::<BinaryField128>(8, width, &shape(3, 2, 0));
-
-            // Groups deeper than the stages left over them, so the top group is always clipped.
-            check_every_stage_range_agrees::<BinaryField128>(7, width, &shape(2, 4, 0));
-
-            // No tile at all, so every stage of the range belongs to a group.
-            check_every_stage_range_agrees::<BinaryField128>(6, width, &shape(0, 3, 0));
-
-            // Staged rows holding a run of matrix rows each, as narrow rows call for.
-            check_every_stage_range_agrees::<BinaryField32>(8, width, &shape(4, 3, 2));
-        }
-
-        // The production shapes at a named worker count, where a cache budget does the grouping.
-        for workers in [1usize, 32] {
-            let schedule = Schedule::for_workers::<BinaryField128>(16, 11, workers);
-            assert!(schedule.log_tile_rows < 11, "no group above the tile");
-            check_every_stage_range_agrees::<BinaryField128>(11, 16, &schedule);
-        }
-    }
-
     /// One padded shape: skipping the layers that cross the padding against running them.
     fn check_the_padded_transform_agrees<F: ButterflyField>(
         log_message: usize,
@@ -1270,6 +727,104 @@ mod tests {
                     );
                     check_the_padded_transform_agrees::<Ghash128>(log_message, width, log_inv_rate);
                 }
+            }
+        }
+    }
+
+    /// Every coset of one padded shape through a named schedule, against the serial walk of the whole codeword.
+    fn check_the_shared_cosets_agree<F: ButterflyField>(
+        log_message: usize,
+        width: usize,
+        log_inv_rate: usize,
+        schedule: &Schedule,
+    ) {
+        // The reference pads the message and walks every stage of the whole codeword.
+        let message = matrix::<F>(log_message, width, 67);
+        let mut padded = message.values;
+        padded.resize(padded.len() << log_inv_rate, F::ZERO);
+        let expected = twiddle_walk_ntt::<F>(RowMajorMatrix::new(padded.clone(), width), F::ZERO);
+
+        // Coset c is the message transformed over the domain point it starts at.
+        let twiddles: Vec<_> = (0..1usize << log_inv_rate)
+            .map(|c| Twiddles::new(log_message, domain_point::<F>(c << log_message)))
+            .collect();
+        run_cosets(&mut padded, width, log_message, &twiddles, schedule);
+        assert_eq!(
+            padded, expected.values,
+            "log_message={log_message} width={width} rate={log_inv_rate} {schedule:?}"
+        );
+    }
+
+    #[test]
+    fn cosets_sharing_their_first_pass_match_the_full_walk() {
+        // Invariant: one gather of the message feeds every coset's first pass.
+        // Each coset then finishes alone, and the result is the codeword a full transform gives.
+        //
+        // Fixture state: rows per contiguous tile, staged rows per group, rows per staged row.
+        //
+        //     tile 3, staged 2    groups above the tile, so the top group is the shared pass
+        //     tile 8, staged 2    the tile covers every stage, so the tile pass is the shared one
+        //     tile 0, staged 3    no tile at all, every stage in a group
+        //     tile 2, staged 0    groups of one stage, a plain pass shared through a staging tile
+        //     tile 4, staged 3, slab 2   staged rows holding runs of matrix rows
+        let shape = |tile: usize, staged: usize, slab: usize| Schedule {
+            log_tile_rows: tile,
+            log_staged_rows: staged,
+            log_slab_rows: slab,
+        };
+        let shapes = [
+            shape(3, 2, 0),
+            shape(8, 2, 0),
+            shape(0, 3, 0),
+            shape(2, 0, 0),
+            shape(4, 3, 2),
+        ];
+        for schedule in &shapes {
+            for width in [1usize, 3, 16] {
+                for log_message in 0..=7 {
+                    for log_inv_rate in 0..=3 {
+                        check_the_shared_cosets_agree::<BinaryField32>(
+                            log_message,
+                            width,
+                            log_inv_rate,
+                            schedule,
+                        );
+                        check_the_shared_cosets_agree::<Poly64>(
+                            log_message,
+                            width,
+                            log_inv_rate,
+                            schedule,
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_padded_transform_past_one_tile_matches_the_full_one() {
+        // Invariant: a coset larger than one tile takes the shared-pass route, at production budgets.
+        //
+        // Fixture state: each message below is 256 KiB, twice the tile budget.
+        //
+        //     BinaryField32   2^16 rows of 1 column
+        //     Poly64          2^12 rows of 8 columns
+        //     BinaryField128  2^10 rows of 16 columns
+        for log_inv_rate in 0..=2 {
+            check_the_padded_transform_agrees::<BinaryField32>(16, 1, log_inv_rate);
+            check_the_padded_transform_agrees::<Poly64>(12, 8, log_inv_rate);
+            check_the_padded_transform_agrees::<BinaryField128>(10, 16, log_inv_rate);
+        }
+
+        // The same shapes at named worker counts, since the pool size moves the tile and the groups.
+        for workers in [1usize, 32] {
+            for log_inv_rate in 0..=2 {
+                check_the_shared_cosets_agree::<Poly64>(
+                    12,
+                    8,
+                    log_inv_rate,
+                    &Schedule::for_workers::<Poly64>(8, 12, workers),
+                );
             }
         }
     }
@@ -1467,6 +1022,11 @@ mod tests {
     }
 
     #[test]
+    fn the_schedule_matches_an_independent_walk_in_the_64_bit_polynomial_basis() {
+        sweep_against_the_walk::<Poly64>(LOG_HEIGHTS);
+    }
+
+    #[test]
     #[ignore = "serial oracle over every width and level up to 2^14; run from heavy CI"]
     fn the_schedule_matches_an_independent_walk_at_every_blocked_shape() {
         // Invariant: the same sweep, carried to the first height that blocks at every shape.
@@ -1522,6 +1082,11 @@ mod tests {
         sweep_across_the_tile_boundaries::<Ghash128>();
     }
 
+    #[test]
+    fn every_tile_boundary_is_crossed_in_the_64_bit_polynomial_basis() {
+        sweep_across_the_tile_boundaries::<Poly64>();
+    }
+
     /// The narrow shapes whose staging tile stages a run of rows rather than a single row.
     ///
     /// A row shorter than a cache line turns one staged row into a run of matrix rows. The
@@ -1555,11 +1120,11 @@ mod tests {
     fn the_transform_matches_the_reference_oracle_at_every_width() {
         // Invariant: the transform is the same map as the reference oracle, at every width.
         //
-        // The oracle evaluates `Σ_i d_i · X_i(x)` straight from the product definition and
+        // The oracle evaluates `sum_i d_i * X_i(x)` straight from the product definition and
         // depends on none of D8's identities, so it pins the transform to the novel basis
         // rather than to another consistent network.
         //
-        // It costs `O(n² · width)`, which is what caps the heights below; the walk sweeps carry
+        // It costs `O(n^2 * width)`, which is what caps the heights below; the walk sweeps carry
         // the taller shapes, and together they reach every branch.
         for width in WIDTHS {
             for log_n in 0..=6 {
@@ -1568,6 +1133,7 @@ mod tests {
                     check_oracle_agrees::<BinaryField64>(log_n, width, shift_bits);
                     check_oracle_agrees::<BinaryField128>(log_n, width, shift_bits);
                     check_oracle_agrees::<Ghash128>(log_n, width, shift_bits);
+                    check_oracle_agrees::<Poly64>(log_n, width, shift_bits);
                 }
             }
         }
@@ -1589,7 +1155,7 @@ mod tests {
     #[test]
     #[should_panic]
     fn shifted_ntt_batch_rejects_l_past_the_bit_width() {
-        // An index of `S_ℓ` past the bit width of `F` asks for a Cantor basis vector.
+        // An index of `S_l` past the bit width of `F` asks for a Cantor basis vector.
         //
         // This level does not have one.
         // `BinaryField8` has `2^LOG_BITS = 8` Cantor basis vectors, indices `0..8`.
@@ -1597,7 +1163,7 @@ mod tests {
         let _ = LchNtt::<BinaryField8>::default().ntt_batch(coeffs);
     }
 
-    /// A height that is not a power of two has no well-defined `ℓ`.
+    /// A height that is not a power of two has no well-defined `l`.
     #[test]
     #[should_panic]
     fn shifted_ntt_batch_rejects_a_non_power_of_two_height() {
