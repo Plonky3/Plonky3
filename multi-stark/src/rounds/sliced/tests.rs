@@ -26,6 +26,16 @@ use crate::zerocheck::backend_tests::{
 /// The smallest height whose residual half fills a word.
 const SHORTEST: usize = 2 * SLICED_LANES;
 
+impl Planes<'_> {
+    /// The low and high planes of entry `index`, whichever layout holds them.
+    fn planes(&self, index: usize) -> [u64; 2] {
+        match self {
+            Self::Low(words) => PlaneWords::planes(&**words, index),
+            Self::Pairs(pairs) => PlaneWords::planes(&**pairs, index),
+        }
+    }
+}
+
 fn packed_boolean_table(table: &Table<Tower>) -> Table<Tower> {
     let height = 1usize << table.num_variables();
     let words = (0..height / SLICED_LANES)

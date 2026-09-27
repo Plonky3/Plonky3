@@ -181,15 +181,6 @@ impl Planes<'_> {
             Self::Pairs(pairs) => pairs.len(),
         }
     }
-
-    /// The low and high planes of entry `index`.
-    #[cfg(test)]
-    fn planes(&self, index: usize) -> [u64; 2] {
-        match self {
-            Self::Low(words) => PlaneWords::planes(&**words, index),
-            Self::Pairs(pairs) => PlaneWords::planes(&**pairs, index),
-        }
-    }
 }
 
 /// One layout of word-major planes, as a plane reader indexes it.
