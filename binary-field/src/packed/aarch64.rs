@@ -212,10 +212,10 @@ mod tests {
     use crate::tower::TowerLevel;
     use crate::{Ghash128, PackedGhash128};
 
-    /// The bit patterns a random search is unlikely to reach, one per lane.
+    /// The bit patterns a random search is unlikely to reach.
     const SPECIAL: [u128; 4] = [0, u128::MAX, 1 << 127, 0x87];
 
-    /// One extreme bit pattern per lane.
+    /// The first extreme bit patterns, one per lane.
     fn specials() -> PackedGhash128 {
         PackedValue::from_fn(|i| Ghash128::from_repr(SPECIAL[i]))
     }
@@ -223,6 +223,46 @@ mod tests {
     /// Two distinct lanes from two patterns.
     fn packed(values: [u128; WIDTH]) -> PackedGhash128 {
         PackedValue::from_fn(|i| Ghash128::from_repr(values[i]))
+    }
+
+    /// Every lane of every operation against the scalar field on that lane alone.
+    fn lanes_agree(
+        a: [u128; WIDTH],
+        b: [u128; WIDTH],
+        c: [u128; WIDTH],
+    ) -> Result<(), TestCaseError> {
+        let (x, y, z) = (packed(a), packed(b), packed(c));
+        for lane in 0..WIDTH {
+            let (s, t, u) = (
+                Ghash128::from_repr(a[lane]),
+                Ghash128::from_repr(b[lane]),
+                Ghash128::from_repr(c[lane]),
+            );
+            prop_assert_eq!((x + y).as_slice()[lane], s + t);
+            prop_assert_eq!((x * y).as_slice()[lane], s * t);
+            prop_assert_eq!(x.square().as_slice()[lane], s.square());
+            prop_assert_eq!(x.bool_check().as_slice()[lane], s * (s - Ghash128::ONE));
+            prop_assert_eq!(
+                PackedGhash128::dot_product(&[x, y], &[y, z]).as_slice()[lane],
+                s * t + t * u
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn every_lane_matches_the_scalar_field_at_the_corners() {
+        // Lane 0 walks every triple of corners, and lane 1 the next corner along each one, so
+        // every pattern meets every other in both lanes and a lane crossing lands on another.
+        let next = |i: usize| SPECIAL[(i + 1) % SPECIAL.len()];
+        for (i, &x) in SPECIAL.iter().enumerate() {
+            for (j, &y) in SPECIAL.iter().enumerate() {
+                for (k, &z) in SPECIAL.iter().enumerate() {
+                    lanes_agree([x, next(i)], [y, next(j)], [z, next(k)])
+                        .unwrap_or_else(|e| panic!("{x:#x}, {y:#x}, {z:#x}: {e}"));
+                }
+            }
+        }
     }
 
     proptest! {
@@ -233,22 +273,7 @@ mod tests {
             b in prop::array::uniform::<_, WIDTH>(any::<u128>()),
             c in prop::array::uniform::<_, WIDTH>(any::<u128>()),
         ) {
-            let (x, y, z) = (packed(a), packed(b), packed(c));
-            for lane in 0..WIDTH {
-                let (s, t, u) = (
-                    Ghash128::from_repr(a[lane]),
-                    Ghash128::from_repr(b[lane]),
-                    Ghash128::from_repr(c[lane]),
-                );
-                prop_assert_eq!((x + y).as_slice()[lane], s + t);
-                prop_assert_eq!((x * y).as_slice()[lane], s * t);
-                prop_assert_eq!(x.square().as_slice()[lane], s.square());
-                prop_assert_eq!(x.bool_check().as_slice()[lane], s * (s - Ghash128::ONE));
-                prop_assert_eq!(
-                    PackedGhash128::dot_product(&[x, y], &[y, z]).as_slice()[lane],
-                    s * t + t * u
-                );
-            }
+            lanes_agree(a, b, c)?;
         }
     }
 
