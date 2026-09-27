@@ -226,7 +226,8 @@ pub(crate) struct BatchMultiplier(u128);
 impl BatchMultiplier {
     /// Prepare a multiplier.
     #[inline]
-    pub(crate) const fn new(t: u128) -> Self {
+    #[allow(clippy::missing_const_for_fn)]
+    pub(crate) fn new(t: u128) -> Self {
         Self(t)
     }
 

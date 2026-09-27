@@ -7,6 +7,14 @@ use core::arch::aarch64::{
 };
 use core::mem::transmute;
 
+// `target_arch = "aarch64"` covers the big-endian AArch64 targets too.
+// There the halves of a `u128` and the lanes of a vector run in opposite orders, which every
+// transmute between the two below relies on.
+const _: () = assert!(
+    cfg!(target_endian = "little"),
+    "the halves of a `u128` are its vector lanes only on little-endian targets"
+);
+
 /// The carryless product of two 64-bit polynomials over `GF(2)`.
 ///
 /// `PMULL` accumulates `b << i` for every set bit `i` of `a`.
@@ -261,7 +269,8 @@ impl SplitMultiplier {
     /// Prepare a multiplier, deriving its companion.
     #[inline]
     pub(crate) fn new(t: u128) -> Self {
-        // SAFETY: this module is compiled only with the aes target feature.
+        // SAFETY: this module is compiled only with the aes target feature, which implies neon.
+        // Every bit pattern is valid in both the integer and vector representations.
         let companion = unsafe {
             let t = transmute::<u128, uint8x16_t>(t);
             // `t x^64 = t0 x^64 + t1 T`, and neither term reaches `x^128`.
@@ -275,6 +284,7 @@ impl SplitMultiplier {
     #[inline(always)]
     pub(crate) fn from_parts(t: u128, companion: u128) -> Self {
         // SAFETY: this module is compiled only with the aes target feature, which implies neon.
+        // Every bit pattern is valid in both the integer and vector representations.
         unsafe {
             let t = transmute::<u128, uint64x2_t>(t);
             let companion = transmute::<u128, uint64x2_t>(companion);
@@ -288,7 +298,8 @@ impl SplitMultiplier {
     /// The reduced product of the multiplier with `v`.
     #[inline(always)]
     pub(crate) fn mul(self, v: u128) -> u128 {
-        // SAFETY: this module is compiled only with the aes target feature.
+        // SAFETY: this module is compiled only with the aes target feature, which implies neon.
+        // Every bit pattern is valid in both the integer and vector representations.
         unsafe {
             let v = transmute::<u128, uint8x16_t>(v);
             let low = veorq_u8(
