@@ -371,6 +371,37 @@ mod tests {
         low ^ clmul_low(high ^ spill, tail) ^ carried
     }
 
+    /// The split multiplier's lane choreography, written with shifts instead of intrinsics.
+    ///
+    /// The multiplier compiles only on AArch64 with `aes`, so on every other target nothing
+    /// checks its algebra. This mirrors it step for step, with the same extract as above, and
+    /// with the interleave that pairs the two low halves and the two high halves:
+    ///
+    /// ```text
+    ///     zip_low(x, y)  = [x_lo, y_lo]  =  x_lo | (y_lo << 64)
+    ///     zip_high(x, y) = [x_hi, y_hi]  =  x_hi | (y_hi << 64)
+    /// ```
+    fn split_multiplier_shape(t: u128, v: u128) -> u128 {
+        let ext = |x: u128, y: u128| (x >> 64) | (y << 64);
+        let zip_low = |x: u128, y: u128| (x as u64 as u128) | (y << 64);
+        let zip_high = |x: u128, y: u128| (x >> 64) | ((y >> 64) << 64);
+        let clmul_low = |x: u128, y: u128| super::clmul_64x64(x as u64, y as u64);
+        let clmul_high = |x: u128, y: u128| super::clmul_64x64((x >> 64) as u64, (y >> 64) as u64);
+        let tail = (TAIL_128 as u64 as u128) | ((TAIL_128 as u64 as u128) << 64);
+
+        // The companion `t x^64 = t0 x^64 + t1 T`: the low half raised, the high half folded.
+        let companion = ext(0, t) ^ clmul_high(t, tail);
+        let halves_low = zip_low(t, companion);
+        let halves_high = zip_high(t, companion);
+
+        // `t0 v0 + u0 v1` and `t1 v0 + u1 v1`, each from one register of halves.
+        let low = clmul_low(v, halves_low) ^ clmul_high(v, halves_low);
+        let high = clmul_low(v, halves_high) ^ clmul_high(v, halves_high);
+
+        // `high x^64`: its low half raised by `x^64`, its high half times the tail.
+        low ^ ext(0, high) ^ clmul_high(high, tail)
+    }
+
     /// The operands whose half products and reduction spill are maximal, plus the identities.
     const KERNEL_CORNERS: [u128; 10] = [
         0,
@@ -384,6 +415,37 @@ mod tests {
         1 << 121,
         TAIL_128,
     ];
+
+    #[test]
+    fn the_split_multiplier_algebra_matches_modular_multiplication_on_extremes() {
+        // Invariant: moving the `x^64` weight onto the fixed operand changes nothing modulo the
+        // field polynomial, on every pair of corner operands, including the companion's own.
+        for t in KERNEL_CORNERS {
+            for v in KERNEL_CORNERS {
+                assert_eq!(
+                    split_multiplier_shape(t, v),
+                    poly_mul(t, v, 128, TAIL_128),
+                    "{t:#x} * {v:#x}"
+                );
+            }
+        }
+    }
+
+    /// A multiplier prepared from a companion computed elsewhere is the one that derives it.
+    #[cfg(all(target_arch = "aarch64", target_feature = "aes"))]
+    #[test]
+    fn a_multiplier_prepared_from_parts_matches_one_that_derives_its_companion() {
+        for t in KERNEL_CORNERS {
+            let companion = super::poly_mul_128(t, 1 << 64);
+            for v in KERNEL_CORNERS {
+                assert_eq!(
+                    super::aarch64::SplitMultiplier::from_parts(t, companion).mul(v),
+                    super::aarch64::SplitMultiplier::new(t).mul(v),
+                    "{t:#x} * {v:#x}"
+                );
+            }
+        }
+    }
 
     #[test]
     fn the_vector_kernel_algebra_matches_the_composition_on_extremes() {
@@ -519,6 +581,24 @@ mod tests {
         #[test]
         fn the_vector_kernel_algebra_matches_the_composition(a: u128, b: u128) {
             prop_assert_eq!(vector_kernel_shape(a, b), super::composed_poly_mul_128(a, b));
+        }
+
+        /// The split multiplier's choreography must reduce to the modular product, on every
+        /// target rather than only the ones that run it.
+        #[test]
+        fn the_split_multiplier_algebra_matches_modular_multiplication(t: u128, v: u128) {
+            prop_assert_eq!(split_multiplier_shape(t, v), poly_mul(t, v, 128, TAIL_128));
+        }
+
+        /// A companion computed by a general product prepares the same multiplier.
+        #[cfg(all(target_arch = "aarch64", target_feature = "aes"))]
+        #[test]
+        fn a_multiplier_prepared_from_parts_matches_on_random_operands(t: u128, v: u128) {
+            let companion = super::poly_mul_128(t, 1 << 64);
+            prop_assert_eq!(
+                super::aarch64::SplitMultiplier::from_parts(t, companion).mul(v),
+                super::aarch64::SplitMultiplier::new(t).mul(v)
+            );
         }
 
         /// The half-product decomposition must reproduce the bit-serial 256-bit product.
