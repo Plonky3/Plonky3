@@ -113,8 +113,6 @@ struct InfinityScratch<F, R> {
     zeros: Vec<SlicedBit<F>>,
     /// Whether any evaluation was poisoned.
     poisoned: bool,
-    /// Every high-plane bit the pass read, which a bit-valued stage leaves clear.
-    high_planes: u64,
 }
 
 impl<F, R: Field> InfinityScratch<F, R> {
@@ -124,17 +122,15 @@ impl<F, R: Field> InfinityScratch<F, R> {
             inputs: vec![SlicedBit::default(); width],
             zeros: vec![SlicedBit::default(); width],
             poisoned: false,
-            high_planes: 0,
         }
     }
 
-    /// Add another worker's sums into this one, poison and high planes included.
+    /// Add another worker's sums into this one, poison included.
     fn merge(mut self, other: Self) -> Self {
         for (lhs, rhs) in self.sums.iter_mut().zip(other.sums) {
             R::add_slices(lhs, &rhs);
         }
         self.poisoned |= other.poisoned;
-        self.high_planes |= other.high_planes;
         self
     }
 }
@@ -168,10 +164,10 @@ where
         let starts: [usize; CORNERS] =
             core::array::from_fn(|corner| (corners[corner] * self.words + word) * width);
         let inputs = &mut scratch.inputs[..width];
-        scratch.high_planes |= match &self.trace.cells {
+        match &self.trace.cells {
             Planes::Low(words) => fold_corner_rows(&**words, starts, inputs),
             Planes::Pairs(pairs) => fold_corner_rows(&**pairs, starts, inputs),
-        };
+        }
 
         let mut boundary = [[0; 3]; 2];
         for pair in corners.as_chunks::<2>().0 {
@@ -243,27 +239,20 @@ where
 /// Fold the corner rows starting at `starts`, `t = 0` and `t = 1` side by side, into every
 /// column's words at `t = 0`, `t = 1`, and infinity.
 ///
-/// # Returns
-///
-/// Every high-plane bit read, which a bit-valued stage leaves clear.
+/// Only the low planes are read: the pass runs on a stage whose high planes are clear.
 fn fold_corner_rows<F, P: PlaneWords + ?Sized, const CORNERS: usize>(
     planes: &P,
     starts: [usize; CORNERS],
     inputs: &mut [SlicedBit<F>],
-) -> u64 {
-    let mut high_planes = 0;
+) {
     for (column, input) in inputs.iter_mut().enumerate() {
         let (mut at_zero, mut at_one) = (0, 0);
         for pair in starts.as_chunks::<2>().0 {
-            let [zero, zero_high] = planes.planes(pair[0] + column);
-            let [one, one_high] = planes.planes(pair[1] + column);
-            at_zero ^= zero;
-            at_one ^= one;
-            high_planes |= zero_high | one_high;
+            at_zero ^= planes.planes(pair[0] + column)[0];
+            at_one ^= planes.planes(pair[1] + column)[0];
         }
         *input = SlicedBit::new(node_words(at_zero, at_one));
     }
-    high_planes
 }
 
 /// An input's words at `t = 0`, `t = 1`, and infinity, from its values at `t = 0` and `t = 1`.
@@ -301,6 +290,10 @@ where
 {
     let num_vars = trace.num_vars;
     debug_assert!(trace.rounds == DEPTH - 1 && tau.len() == num_vars);
+    if !trace.cells.high_planes_clear() {
+        tracing::debug!("a cell outside GF(2) keeps the tensor off the infinity nodes");
+        return None;
+    }
     debug_assert!(F::TWO == F::ZERO, "bit lanes add in characteristic two");
     debug_assert!(
         slots.iter().all(|slot| slot.constraint_degree <= 2),
@@ -341,8 +334,22 @@ where
         word_weights,
     };
 
+    // Every evaluation narrows the same AIR constants and public values, and the prefix of
+    // nodes zero evaluates every AIR of nonzero degree. Its first task alone therefore meets any
+    // value outside GF(2) before the parallel pass starts.
+    let mut first = InfinityScratch::new(slots.len(), trace.width);
+    context.accumulate(&mut first, 0, 0);
+    let poisoned = |scratch: &InfinityScratch<F, R>| {
+        if scratch.poisoned {
+            tracing::debug!("an AIR constant outside GF(2) reached the infinity tensor");
+        }
+        scratch.poisoned
+    };
+    if poisoned(&first) {
+        return None;
+    }
     let tasks = context.words * PREFIXES;
-    let scratch = (0..tasks)
+    let scratch = (1..tasks)
         .into_par_iter()
         .with_min_len(rows_per_task(tasks))
         .par_fold_reduce(
@@ -352,13 +359,9 @@ where
                 scratch
             },
             InfinityScratch::merge,
-        );
-    if scratch.high_planes != 0 {
-        tracing::debug!("a cell outside GF(2) keeps the tensor off the infinity nodes");
-        return None;
-    }
-    if scratch.poisoned {
-        tracing::debug!("an AIR constant outside GF(2) reached the infinity tensor");
+        )
+        .merge(first);
+    if poisoned(&scratch) {
         return None;
     }
     Some(SlicedTensor {

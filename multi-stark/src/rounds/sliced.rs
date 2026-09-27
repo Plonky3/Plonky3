@@ -169,6 +169,14 @@ impl Planes<'_> {
         }
     }
 
+    /// Whether every entry's high plane is clear, as every cell of the Boolean subfield leaves it.
+    fn high_planes_clear(&self) -> bool {
+        match self {
+            Self::Low(_) => true,
+            Self::Pairs(pairs) => pairs.par_iter().all(|&[_, high]| high == 0),
+        }
+    }
+
     /// The low and high planes of entry `index`.
     #[cfg(test)]
     fn planes(&self, index: usize) -> [u64; 2] {
