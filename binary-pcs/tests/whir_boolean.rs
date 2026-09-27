@@ -16,7 +16,7 @@ use p3_binary_pcs::whir::{
 };
 use p3_binary_pcs::{
     BinaryPcsConfig, BinaryPcsParams, BitOpening, BitReadings, BooleanMultilinearPcs, BooleanPcs,
-    BooleanTraceCommitmentError, GroupedCodewordMmcs,
+    BooleanTraceCommitmentError, GroupedCodewordMmcs, PackError, PackedWords,
 };
 use p3_challenger::HashChallenger;
 use p3_commit::{Encoder, MultilinearPcs};
@@ -30,9 +30,11 @@ use p3_sumcheck::layout::{Table, plan_stacked_layout};
 use p3_sumcheck::ring_switch::bits::{
     BitPacking, BitRingSwitch, BitRingSwitchClaims, BitRingSwitchProofError,
 };
-use p3_sumcheck::{OpeningBatch, OpeningProtocol, PrescribedPointPcs, TableShape, TableSpec};
+use p3_sumcheck::{
+    OpeningBatch, OpeningProtocol, PrescribedPointPcs, SumcheckData, TableShape, TableSpec,
+};
 use p3_symmetric::{CompressionFunctionFromHasher, SerializingHasher};
-use p3_whir::{SecurityAssumption, WhirDomain, WhirQueryPoint};
+use p3_whir::{SecurityAssumption, VerifierError, WhirDomain, WhirQueryPoint};
 use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
 
@@ -88,6 +90,15 @@ fn witness(seed: u64) -> Vec<PackedGf2x64> {
     (0..1 << (LOG_BITS - 6))
         .map(|_| PackedGf2x64::new(rng.random::<u64>()))
         .collect()
+}
+
+/// A bit witness written into the words a commitment lends.
+fn packed(bits: &[PackedGf2x64]) -> PackedWords<EF> {
+    let mut packed = PackedWords::zeroed(bits.len()).unwrap();
+    for (word, block) in packed.words_mut().iter_mut().zip(bits) {
+        *word = block.to_bits();
+    }
+    packed
 }
 
 /// The witness as a multilinear over every variable, one element per bit.
@@ -177,6 +188,35 @@ fn basefold_pcs() -> BooleanPcs<EF, Grouped, Grouped> {
         LOG_BITS,
     )
     .unwrap()
+}
+
+#[test]
+fn a_packed_witness_commits_through_whir_as_its_bits_do() {
+    // Invariant: the words the bits are written into are the column the bits commit to, and
+    // words covering no hypercube, or another one, are refused.
+    let bits = witness(0x5719);
+    let profile = BinaryWhirProfile::proven_list_decoding(SECURITY_LEVEL, LOG_INV_RATE, FOLDING);
+    let pcs = whir_pcs(profile);
+
+    let (by_bits, _) = pcs.commit_bits(&bits, &mut challenger()).unwrap();
+    let (by_words, _) = pcs.commit_packed(packed(&bits), &mut challenger()).unwrap();
+    assert_eq!(by_words, by_bits);
+
+    // Six words fill three elements. One element absorbs seven variables, so the column holds
+    // the rest, and half the words cover one variable fewer.
+    let ragged = pcs.commit_packed(packed(&bits[..6]), &mut challenger());
+    assert!(matches!(
+        ragged,
+        Err(BooleanWhirError::Packing(PackError::NotAHypercube {
+            elements: 3
+        }))
+    ));
+    let short = pcs.commit_packed(packed(&bits[..bits.len() / 2]), &mut challenger());
+    assert!(matches!(
+        short,
+        Err(BooleanWhirError::WitnessArity { expected, actual })
+            if expected == LOG_BITS - 7 && actual == LOG_BITS - 8
+    ));
 }
 
 #[test]
@@ -513,6 +553,49 @@ fn a_tampered_proximity_transcript_is_refused_by_the_opening() {
     pcs.observe_commitment(&commitment, &mut verifier_chal);
     pcs.verify_at_points(&commitment, &points, &values, &proof, &mut verifier_chal)
         .unwrap();
+}
+
+#[test]
+fn unread_final_sumcheck_data_is_refused_by_the_opening() {
+    // Folding every packed variable at once leaves no closing sumcheck to play.
+    // The prover then writes no final sumcheck, and nothing would read data attached there.
+    let packed_variables = LOG_BITS - ABSORBED;
+    let pcs = whir_pcs(BinaryWhirProfile::proven_list_decoding(
+        SECURITY_LEVEL,
+        LOG_INV_RATE,
+        packed_variables,
+    ));
+    let bits = witness(0x5731);
+    let points = points(0x5732);
+
+    let mut prover_chal = challenger();
+    let (commitment, data) = pcs.commit_bits(&bits, &mut prover_chal).unwrap();
+    let (values, proof) = pcs.open_at_points(data, &points, &mut prover_chal).unwrap();
+    assert!(proof.opening.whir.final_sumcheck.is_none());
+
+    // The untouched proof is accepted, so the rejection below is the attached data alone.
+    let mut verifier_chal = challenger();
+    pcs.observe_commitment(&commitment, &mut verifier_chal);
+    pcs.verify_at_points(&commitment, &points, &values, &proof, &mut verifier_chal)
+        .unwrap();
+
+    let mut tampered = proof;
+    tampered.opening.whir.final_sumcheck = Some(SumcheckData {
+        polynomial_evaluations: vec![[EF::ONE, EF::TWO]],
+        pow_witnesses: vec![],
+    });
+    let mut verifier_chal = challenger();
+    pcs.observe_commitment(&commitment, &mut verifier_chal);
+    let refused = pcs
+        .verify_at_points(&commitment, &points, &values, &tampered, &mut verifier_chal)
+        .unwrap_err();
+    assert!(
+        matches!(
+            refused,
+            BooleanWhirError::Opening(VerifierError::UnexpectedFinalSumcheck)
+        ),
+        "{refused:?}"
+    );
 }
 
 #[test]

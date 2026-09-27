@@ -2,7 +2,7 @@
 
 use alloc::vec::Vec;
 
-use p3_binary_field::{BitCoordinates, PackedGf2, PackedGf2x64, TowerLevel};
+use p3_binary_field::{BitCoordinates, TowerLevel};
 use p3_challenger::fs::TranscriptField;
 use p3_field::{ExtensionField, Field};
 use p3_maybe_rayon::prelude::*;
@@ -22,19 +22,29 @@ where
 {
     /// Gather the Boolean cells of every table into one bit witness.
     ///
+    /// `words` holds one word per sixty-four bits of the padded witness, zeroed, and bit `j` of
+    /// word `w` is bit `64 * w + j` of the witness. The tail past every slot is left as it is.
+    ///
     /// # Errors
     ///
     /// - The shapes do not stack to the committed arity.
     /// - A cell holds neither zero nor one, so it addresses no bit.
+    ///
+    /// # Panics
+    ///
+    /// Panics unless `words` holds one word per sixty-four bits of the witness.
     pub(super) fn gather_bits(
         &self,
         tables: &[Table<B::Val>],
-    ) -> Result<Vec<PackedGf2x64>, BooleanTraceCommitmentError<B::Error>> {
+        words: &mut [u64],
+    ) -> Result<(), BooleanTraceCommitmentError<B::Error>> {
         let shapes = tables.iter().map(Table::shape).collect::<Vec<_>>();
         let placements = self.placements(&shapes)?;
-
-        // One word per sixty-four bits of the padded witness, the tail left at zero.
-        let mut words = alloc::vec![0u64; 1 << (self.num_variables() - 6)];
+        assert_eq!(
+            words.len(),
+            1 << (self.num_variables() - 6),
+            "the witness holds one word per sixty-four bits"
+        );
 
         // A column of at least one word owns a run of whole words; a shorter one shares a word.
         //
@@ -59,7 +69,7 @@ where
         // Packed columns of one table go in groups of adjacent columns: one block row holds
         // their words side by side, so a group reads each source line once.
         runs.sort_unstable_by_key(|&(offset, ..)| offset);
-        let mut rest = words.as_mut_slice();
+        let mut rest = &mut *words;
         let mut consumed = 0;
         let mut carved = Vec::with_capacity(runs.len());
         for (offset, position, column) in runs {
@@ -121,8 +131,7 @@ where
             });
         }
 
-        // Lane `j` of a block is bit `j` of its word, which is the packing's own convention.
-        Ok(words.into_iter().map(PackedGf2::new).collect())
+        Ok(())
     }
 }
 

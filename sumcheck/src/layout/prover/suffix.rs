@@ -103,6 +103,11 @@ impl<F: Field, EF: ExtensionField<F>> Layout<F, EF> for SuffixProver<F, EF> {
         witness.write_stacked_slots(message);
     }
 
+    fn borrowed_message(witness: &Witness<F>) -> Option<&[F]> {
+        // A lone column filling the hypercube occupies the one slot, so it is the message.
+        witness.lone_column()
+    }
+
     fn claims(&self) -> &StackedClaims<F, EF> {
         &self.claims
     }

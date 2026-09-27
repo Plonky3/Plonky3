@@ -223,6 +223,46 @@ impl<F: Field> SymbolicBusInteraction<F> {
         )
     }
 
+    /// Sorted periodic columns this declaration reads.
+    ///
+    /// The verifier evaluates these itself, since nothing commits them.
+    #[must_use]
+    pub fn referenced_periodic_columns(&self) -> Vec<usize> {
+        let mut periodic = alloc::collections::BTreeSet::new();
+        let mut seen = alloc::collections::BTreeSet::new();
+        let mut pending = self
+            .fields
+            .iter()
+            .chain(match &self.activation {
+                BusActivation::Always | BusActivation::Boundary(_) => None,
+                BusActivation::Boolean(selector) => Some(selector),
+            })
+            .collect::<Vec<_>>();
+
+        // Arithmetic nodes share their operands, so each distinct node is visited once.
+        while let Some(expression) = pending.pop() {
+            if !seen.insert(core::ptr::from_ref(expression)) {
+                continue;
+            }
+            match expression {
+                SymbolicExpr::Leaf(BaseLeaf::Variable(variable)) => {
+                    if variable.entry == BaseEntry::Periodic {
+                        periodic.insert(variable.index);
+                    }
+                }
+                SymbolicExpr::Leaf(_) => {}
+                SymbolicExpr::Add { x, y, .. }
+                | SymbolicExpr::Sub { x, y, .. }
+                | SymbolicExpr::Mul { x, y, .. } => {
+                    pending.push(x);
+                    pending.push(y);
+                }
+                SymbolicExpr::Neg { x, .. } => pending.push(x),
+            }
+        }
+        periodic.into_iter().collect()
+    }
+
     /// Degree of this interaction's selected factor under a transition-degree scale.
     #[must_use]
     pub fn factor_degree_multiple_with_transition(&self, multiple: usize) -> usize {

@@ -66,6 +66,48 @@ pub enum TimestampedMemoryError {
         /// Bits of the largest gap one access proves.
         gap_bits: usize,
     },
+    /// A public image covers more cells than a machine word counts.
+    #[error("timestamped memory public image of 2^{log_cells} cells overflows usize")]
+    ImageTooLarge {
+        /// Base-two logarithm of the requested cell count.
+        log_cells: usize,
+    },
+    /// A public image's words have a different width than the memory's values.
+    #[error(
+        "timestamped memory public image has words of {actual} components, expected {expected}"
+    )]
+    ImageWidth {
+        /// Components of one memory value.
+        expected: usize,
+        /// Components of one image word.
+        actual: usize,
+    },
+    /// A public image run is empty or does not hold whole words.
+    #[error(
+        "timestamped memory image run {run} holds {len} components, not whole words of {value_width}"
+    )]
+    ImageRunWidth {
+        /// Position of the run.
+        run: usize,
+        /// Components the run holds.
+        len: usize,
+        /// Components of one word.
+        value_width: usize,
+    },
+    /// A public image run starts before the previous one ends.
+    #[error("timestamped memory image run {run} overlaps or precedes the previous run")]
+    OverlappingImageRuns {
+        /// Position of the run.
+        run: usize,
+    },
+    /// A public image run ends past the last cell.
+    #[error("timestamped memory image run {run} ends past the image's {cells} cells")]
+    ImageRunOutOfRange {
+        /// Position of the run.
+        run: usize,
+        /// Cells the image covers.
+        cells: usize,
+    },
     /// The transcript's challenge field has no room for a challenge.
     #[error("timestamped memory needs a challenge field larger than one element")]
     TrivialChallengeField,

@@ -51,7 +51,7 @@ pub use ram::{
     RamStatement, RamTrace,
 };
 pub use timestamped::{
-    CLOCK_GAP_BITS, CLOCK_RANGE_BITS, ClockGap, ClockRangeAir, RangeRead, TimestampedAccess,
-    TimestampedBoundaryAir, TimestampedMemory, TimestampedMemoryError,
-    TimestampedMemoryInteractionBuilder, TimestampedSeed,
+    CLOCK_GAP_BITS, CLOCK_RANGE_BITS, ClockGap, ClockRangeAir, PrivateRegion, PublicImage,
+    RangeRead, TimestampedAccess, TimestampedBoundaryAir, TimestampedMemory,
+    TimestampedMemoryError, TimestampedMemoryInteractionBuilder, TimestampedSeed,
 };

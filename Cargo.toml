@@ -7,6 +7,7 @@ members = [
     "binary-dft",
     "binary-field",
     "binary-pcs",
+    "blake2s",
     "blake2s-air",
     "blake3",
     "blake3-air",
@@ -116,6 +117,7 @@ p3-baby-bear = { path = "baby-bear", version = "0.8.0" }
 p3-binary-dft = { path = "binary-dft", version = "0.8.0" }
 p3-binary-field = { path = "binary-field", version = "0.8.0" }
 p3-binary-pcs = { path = "binary-pcs", version = "0.8.0" }
+p3-blake2s = { path = "blake2s", version = "0.8.0" }
 p3-blake2s-air = { path = "blake2s-air", version = "0.8.0" }
 p3-blake3 = { path = "blake3", version = "0.8.0" }
 p3-blake3-air = { path = "blake3-air", version = "0.8.0" }

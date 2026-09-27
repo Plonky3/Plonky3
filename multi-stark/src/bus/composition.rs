@@ -63,6 +63,10 @@ struct AirState<F: Field, EF: ExtensionField<F>> {
     preprocessed: Vec<Poly<EF>>,
     /// Column index of each of those, and the declared width they are placed into.
     preprocessed_layout: (Vec<usize>, usize),
+    /// Polynomials of the periodic columns this AIR's declarations read, at full height.
+    periodic: Vec<Poly<EF>>,
+    /// Column index of each of those, and the declared width they are placed into.
+    periodic_layout: (Vec<usize>, usize),
     /// First-row, last-row, and transition selector polynomials.
     selectors: [Poly<EF>; 3],
     /// Equality polynomial anchored at the ProductGKR row point.
@@ -115,6 +119,8 @@ where
         let fixed_polys = &self.preprocessed;
         let (fixed_indices, fixed_width) =
             (&self.preprocessed_layout.0, self.preprocessed_layout.1);
+        let periodic_polys = &self.periodic;
+        let (periodic_indices, periodic_width) = (&self.periodic_layout.0, self.periodic_layout.1);
         let selectors = &self.selectors;
         let equality = &self.equality;
         let public_values = &self.public_values;
@@ -126,10 +132,11 @@ where
                         EF::zero_vec(factors.len()),
                         EF::zero_vec(main_width),
                         EF::zero_vec(fixed_width),
+                        EF::zero_vec(periodic_width),
                         Vec::new(),
                     )
                 },
-                |(mut claims, mut main, mut preprocessed, mut scratch), row| {
+                |(mut claims, mut main, mut preprocessed, mut periodic, mut scratch), row| {
                     // Unread columns keep their zero, which no planned expression names.
                     for (&index, column) in main_indices.iter().zip(main_polys) {
                         main[index] = column.as_slice()[row];
@@ -137,10 +144,14 @@ where
                     for (&index, column) in fixed_indices.iter().zip(fixed_polys) {
                         preprocessed[index] = column.as_slice()[row];
                     }
+                    for (&index, column) in periodic_indices.iter().zip(periodic_polys) {
+                        periodic[index] = column.as_slice()[row];
+                    }
                     let evaluation = BusEvaluation {
                         main: &main,
                         preprocessed: &preprocessed,
                         public: public_values,
+                        periodic: &periodic,
                         is_first_row: selectors[0].as_slice()[row],
                         is_last_row: selectors[1].as_slice()[row],
                         is_transition: selectors[2].as_slice()[row],
@@ -152,13 +163,13 @@ where
                             .expect("a planned expression resolves against its owning table");
                         *claim += weight * (value - EF::ONE);
                     }
-                    (claims, main, preprocessed, scratch)
+                    (claims, main, preprocessed, periodic, scratch)
                 },
-                |(mut left, main, preprocessed, scratch), (right, ..)| {
+                |(mut left, main, preprocessed, periodic, scratch), (right, ..)| {
                     for (claim, partial) in left.iter_mut().zip(right) {
                         *claim += partial;
                     }
-                    (left, main, preprocessed, scratch)
+                    (left, main, preprocessed, periodic, scratch)
                 },
             )
             .0;
@@ -179,11 +190,14 @@ where
     /// # Arguments
     ///
     /// - `num_variables`: width of the shared cube, at least the tallest bus table.
+    /// - `periodic`: the tables [`BusContext::periodic_tables`] returns.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         context: &'a BusContext<F, EF>,
         output: &BusReductionOutput<EF>,
         tables: &[&Table<F>],
         preprocessed: &[Option<&Table<F>>],
+        periodic: &[Option<Table<F>>],
         public_values: &[&[F]],
         direction_challenge: EF,
         num_variables: usize,
@@ -230,6 +244,17 @@ where
                             })
                         })
                         .collect::<Vec<_>>();
+                    // Periodic columns fold exactly like committed ones.
+                    let periodic_columns = context.periodic_columns(air);
+                    let periodic_width = periodic[air].as_ref().map_or(0, Table::num_polys);
+                    let periodic = periodic[air]
+                        .iter()
+                        .flat_map(|table| {
+                            periodic_columns.iter().map(|&column| {
+                                Poly::new(table.column(column).values().map(Into::into).collect())
+                            })
+                        })
+                        .collect::<Vec<_>>();
                     let height = 1usize << share.row_variables;
                     let selectors = [
                         Poly::new((0..height).map(|row| EF::from_bool(row == 0)).collect()),
@@ -249,6 +274,8 @@ where
                         main_layout: (main_columns.to_vec(), tables[air].num_polys()),
                         preprocessed,
                         preprocessed_layout: (fixed_columns.to_vec(), fixed_width),
+                        periodic,
+                        periodic_layout: (periodic_columns.to_vec(), periodic_width),
                         selectors,
                         equality: Poly::new(Point::new(row_point).equality_weights_msb()),
                         terms: Vec::new(),
@@ -318,10 +345,11 @@ where
                     (
                         EF::zero_vec(air.main_layout.1),
                         EF::zero_vec(air.preprocessed_layout.1),
+                        EF::zero_vec(air.periodic_layout.1),
                         Vec::new(),
                     )
                 },
-                |(main, prep, scratch), row| {
+                |(main, prep, periodic, scratch), row| {
                     let interpolate = |poly: &Poly<EF>| {
                         let values = poly.as_slice();
                         values[row] + (values[row + half] - values[row]) * node
@@ -335,10 +363,14 @@ where
                     {
                         prep[index] = interpolate(polynomial);
                     }
+                    for (&index, polynomial) in air.periodic_layout.0.iter().zip(&air.periodic) {
+                        periodic[index] = interpolate(polynomial);
+                    }
                     let evaluation = BusEvaluation {
                         main,
                         preprocessed: prep,
                         public: &air.public_values,
+                        periodic,
                         is_first_row: interpolate(&air.selectors[0]),
                         is_last_row: interpolate(&air.selectors[1]),
                         is_transition: interpolate(&air.selectors[2]),
@@ -376,6 +408,7 @@ where
                 .main
                 .iter_mut()
                 .chain(&mut air.preprocessed)
+                .chain(&mut air.periodic)
                 .chain(&mut air.selectors)
                 .chain(core::iter::once(&mut air.equality))
             {

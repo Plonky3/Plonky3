@@ -23,6 +23,7 @@
 #[cfg(test)]
 extern crate std;
 
+use alloc::borrow::Cow;
 use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
@@ -46,22 +47,30 @@ use super::{
 use crate::folder::{InteractionMultilinearFolder, MultilinearFolder};
 use crate::packed_ext::PackedRepr;
 use crate::selectors::BoundaryEvals;
-use crate::sliced::{LaneSums, SLICED_LANES, SlicedFolder, SlicedGf4, gf4_coordinates, is_gf4};
+use crate::sliced::{
+    LaneSums, PreparedPowers, SLICED_LANES, SlicedFolder, SlicedGf4, gf4_coordinates, is_gf4,
+};
 
 /// Most rounds a stage may evaluate on its planes.
 ///
 /// Each round doubles both the plane work and the corner words a residual row folds, so the
 /// count has a ceiling. A stage is also capped by the row variables its words leave unbound.
 /// With its late-materialization parameter set, [`ReprBackend`](crate::ReprBackend) also serves
-/// the round after a qualifying stage's boundary round from its planes.
+/// the one or two rounds after a qualifying stage's boundary round from its planes.
 pub const MAX_SLICED_ROUNDS: usize = 4;
+
+/// Longest prefix a round evaluated on the planes has bound.
+///
+/// A stage evaluates its sliced rounds with at most [`MAX_SLICED_ROUNDS`] challenges bound. The
+/// delayed boundary path evaluates rounds four and five on the planes as well, the last with
+/// one challenge more.
+const MAX_PLANE_ROUND_PREFIX: usize = MAX_SLICED_ROUNDS + 1;
 
 /// Longest prefix a plane fold binds.
 ///
-/// A stage evaluates rounds on its planes with at most [`MAX_SLICED_ROUNDS`] challenges bound.
-/// The boundary fold and the delayed boundary path bind the challenge of their last such round
-/// as they unslice, so a plane fold binds at most one challenge more.
-const MAX_PLANE_FOLD_ROUNDS: usize = MAX_SLICED_ROUNDS + 1;
+/// The boundary fold and the delayed boundary path bind the challenge of their last round on the
+/// planes as they unslice, so a plane fold binds at most one challenge more than such a round.
+const MAX_PLANE_FOLD_ROUNDS: usize = MAX_PLANE_ROUND_PREFIX + 1;
 
 /// How a sliced first round is used by a backend.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -70,7 +79,7 @@ pub(crate) enum SlicedStrategy {
     Sequential,
     /// Build the four-variable tensor used by the representation backend lookahead.
     TensorBoundary,
-    /// Build the tensor, then retain its planes for one later representation round.
+    /// Build the tensor, then retain its planes for one or two later representation rounds.
     TensorBoundaryLate,
 }
 
@@ -79,10 +88,42 @@ const LANE_VARIABLES: usize = SLICED_LANES.trailing_zeros() as usize;
 
 /// Fewest row variables a stage takes the delayed boundary path with.
 ///
-/// Its round-four fold binds [`MAX_PLANE_FOLD_ROUNDS`] challenges, which must leave a whole
-/// word of residual rows. Its round-four evaluation binds one challenge fewer, which must leave
-/// a whole word pair. Either way the stage needs [`LANE_VARIABLES`] past the fold's prefix.
-const MIN_LATE_BOUNDARY_VARS: usize = MAX_PLANE_FOLD_ROUNDS + LANE_VARIABLES;
+/// Its round-four fold binds five challenges, which must leave a whole word of residual rows.
+/// Its round-four evaluation binds one challenge fewer, which must leave a whole word pair.
+/// Either way the stage needs [`LANE_VARIABLES`] past the fold's prefix.
+const MIN_LATE_BOUNDARY_VARS: usize = MAX_SLICED_ROUNDS + 1 + LANE_VARIABLES;
+
+/// Fewest row variables with which the delayed boundary path also serves round five.
+///
+/// Its round-five fold binds [`MAX_PLANE_FOLD_ROUNDS`] challenges, which must leave a whole word.
+const MIN_LATE_ROUND_FIVE_VARS: usize = MAX_PLANE_FOLD_ROUNDS + LANE_VARIABLES;
+
+/// Fewest rows to a lane group with which the delayed boundary path also serves round five.
+///
+/// A round on the planes spares round five's residual columns but reads every row's value out of
+/// the corner tables. With fewer rows to a lane group, reading the planes that way is slower than
+/// the materialized round five.
+const MIN_LATE_ROUND_FIVE_LANES: usize = 4;
+
+/// The last round the delayed boundary path evaluates on the planes of a stage of `num_vars` row
+/// variables, whose representation field packs `lanes` rows to a lane group.
+///
+/// Round five also needs [`MIN_LATE_ROUND_FIVE_VARS`] row variables and
+/// [`MIN_LATE_ROUND_FIVE_LANES`] rows to a lane group. A test may lower the lane count on its own
+/// thread, so that round five runs on the planes whatever the target packs.
+// A test build reads the thread's lane count, so only the build without tests could be `const`.
+#[allow(clippy::missing_const_for_fn)]
+pub(crate) fn last_late_round(num_vars: usize, lanes: usize) -> usize {
+    #[cfg(not(test))]
+    let min_lanes = MIN_LATE_ROUND_FIVE_LANES;
+    #[cfg(test)]
+    let min_lanes = LATE_ROUND_FIVE_LANES.with(core::cell::Cell::get);
+    if lanes >= min_lanes && num_vars >= MIN_LATE_ROUND_FIVE_VARS {
+        5
+    } else {
+        4
+    }
+}
 
 #[cfg(test)]
 std::thread_local! {
@@ -92,25 +133,76 @@ std::thread_local! {
     /// proof to see whether the dispatch took the delayed round.
     pub(crate) static LATE_BOUNDARY_ROUNDS: core::cell::Cell<usize> =
         const { core::cell::Cell::new(0) };
+
+    /// Fewest rows to a lane group with which this thread's delayed boundary path serves round
+    /// five, [`MIN_LATE_ROUND_FIVE_LANES`] unless a test lowers it.
+    ///
+    /// A proof's round loop runs on the thread that calls it, so a test that sets it to one runs
+    /// round five on the planes whatever the target packs, row by row where the packing holds a
+    /// single row.
+    pub(crate) static LATE_ROUND_FIVE_LANES: core::cell::Cell<usize> =
+        const { core::cell::Cell::new(MIN_LATE_ROUND_FIVE_LANES) };
 }
 
 /// A stage's cells as bit planes, laid out word by word.
-pub(super) struct SlicedTrace {
+pub(super) struct SlicedTrace<'data> {
     /// Number of variables of the stage.
     num_vars: usize,
     /// Number of columns, in merged-buffer order.
     width: usize,
     /// `cells[w * width + c]`: the planes of column `c` over rows `64 w .. 64 w + 63`.
-    cells: Vec<[u64; 2]>,
+    cells: Planes<'data>,
     /// The successor planes, laid out like `cells`.
     ///
     /// Row `s` holds the cell at row `min(s + 1, height - 1)`, the repeat-last successor.
     /// Zero for every column no AIR reads on the next row.
-    successors: Vec<[u64; 2]>,
+    successors: Planes<'data>,
     /// The first-row, last-row, and transition selectors of each word, one bit per row.
     boundary: Vec<[u64; 3]>,
     /// Number of rounds evaluated on the planes.
     rounds: usize,
+}
+
+/// Bit planes laid out word by word, one entry per word of one column.
+enum Planes<'data> {
+    /// The low plane alone, for cells of the Boolean subfield, whose high plane is clear.
+    ///
+    /// A stage of one packed Boolean table borrows that table's words, which share the layout.
+    Low(Cow<'data, [u64]>),
+    /// Both planes of every cell.
+    Pairs(Vec<[u64; 2]>),
+}
+
+impl Planes<'_> {
+    /// Number of entries.
+    fn len(&self) -> usize {
+        match self {
+            Self::Low(words) => words.len(),
+            Self::Pairs(pairs) => pairs.len(),
+        }
+    }
+}
+
+/// One layout of word-major planes, as a plane reader indexes it.
+///
+/// The readers are generic over it, so a stage holding its low plane alone reads no high word.
+trait PlaneWords {
+    /// The low and high planes of entry `index`.
+    fn planes(&self, index: usize) -> [u64; 2];
+}
+
+impl PlaneWords for [u64] {
+    #[inline(always)]
+    fn planes(&self, index: usize) -> [u64; 2] {
+        [self[index], 0]
+    }
+}
+
+impl PlaneWords for [[u64; 2]] {
+    #[inline(always)]
+    fn planes(&self, index: usize) -> [u64; 2] {
+        self[index]
+    }
 }
 
 /// Pack sixty-four cells into their two coordinate planes.
@@ -133,13 +225,13 @@ where
     Some(planes)
 }
 
-/// Copy packed Boolean source tables into the final word-major plane layout.
+/// Copy packed Boolean source tables into the final word-major low plane.
 ///
-/// Every source matrix already stores one row-block per physical row, so this path only adds the
-/// zero high plane and interleaves table segments in their merged-buffer order. `None` keeps the
-/// caller on the representation-independent path when any source is dense or has an unexpected
-/// number of word blocks.
-fn direct_packed_cells<F: Field>(tables: &[&Table<F>], words: usize) -> Option<Vec<[u64; 2]>> {
+/// Every source matrix already stores one row-block per physical row, so this path only
+/// interleaves table segments in their merged-buffer order. `None` keeps the caller on the
+/// representation-independent path when any source is dense or has an unexpected number of word
+/// blocks.
+fn direct_packed_cells<F: Field>(tables: &[&Table<F>], words: usize) -> Option<Vec<u64>> {
     if tables.is_empty() {
         return None;
     }
@@ -153,7 +245,7 @@ fn direct_packed_cells<F: Field>(tables: &[&Table<F>], words: usize) -> Option<V
         return None;
     }
 
-    let mut cells = vec![[0; 2]; words * width];
+    let mut cells = vec![0; words * width];
     cells
         .par_chunks_mut(width)
         .enumerate()
@@ -163,12 +255,9 @@ fn direct_packed_cells<F: Field>(tables: &[&Table<F>], words: usize) -> Option<V
                 let packed = table
                     .packed_bits()
                     .expect("direct packed ingestion checked every source table");
-                let source = &packed.values[word * packed.width..(word + 1) * packed.width];
-                for (destination, &value) in
-                    output[offset..offset + packed.width].iter_mut().zip(source)
-                {
-                    *destination = [value, 0];
-                }
+                output[offset..offset + packed.width].copy_from_slice(
+                    &packed.values[word * packed.width..(word + 1) * packed.width],
+                );
                 offset += packed.width;
             }
         });
@@ -185,6 +274,30 @@ fn successor_word(planes: [u64; 2], carry: (bool, bool)) -> [u64; 2] {
         (planes[0] >> 1) | (u64::from(carry.0) << top),
         (planes[1] >> 1) | (u64::from(carry.1) << top),
     ]
+}
+
+/// The successor planes of the low plane `cells`, `width` columns per word, laid out alike.
+///
+/// Zero for every column that is not a successor column.
+fn low_successors(cells: &[u64], is_successor: &[bool], width: usize) -> Vec<u64> {
+    let top = SLICED_LANES - 1;
+    let mut successors = vec![0; cells.len()];
+    successors
+        .par_chunks_mut(width)
+        .enumerate()
+        .for_each(|(word, output)| {
+            let current = &cells[word * width..(word + 1) * width];
+            // Each word's top lane reads the lowest lane of the next word, and the last word's
+            // top lane repeats itself.
+            let next = cells.get((word + 1) * width..(word + 2) * width);
+            for (column, (successor, &low)) in output.iter_mut().zip(current).enumerate() {
+                if is_successor[column] {
+                    let carry = next.map_or(low >> top, |next| next[column] & 1) == 1;
+                    *successor = successor_word([low, 0], (carry, false))[0];
+                }
+            }
+        });
+    successors
 }
 
 /// The multilinear value of one column at `(v, t)` for `t = 0` and `t = 1`, over one word of rows.
@@ -258,13 +371,15 @@ impl PrefixFold {
 /// What every task of one sliced round shares.
 struct SlicedRound<'a, 'air, A, F, S, R> {
     /// The stage's planes.
-    trace: &'a SlicedTrace,
+    trace: &'a SlicedTrace<'a>,
     /// The stage's AIRs and their column spans.
     slots: &'a [AirSlot<'air, A>],
     /// Public inputs of each AIR.
     public_values: &'a [&'a [F]],
     /// Descending alpha powers of each AIR, in the accumulation field.
     alpha_powers: &'a [Vec<R>],
+    /// The same powers laid out for the folder's kernel, where the target has one.
+    prepared_powers: Vec<Option<PreparedPowers<R>>>,
     /// Every prefix of this round, as the corners it reads and the nodes it folds them at.
     prefixes: Vec<PrefixFold>,
     /// Nodes this round evaluates, each with the step that reaches it.
@@ -341,7 +456,26 @@ where
     #[inline]
     fn fold_columns<const CORNERS: usize>(
         &self,
-        planes: &[[u64; 2]],
+        planes: &Planes<'_>,
+        columns: Range<usize>,
+        word: usize,
+        prefix: &PrefixFold,
+        values: &mut [SlicedGf4<F, S>],
+        steps: &mut [SlicedGf4<F, S>],
+    ) {
+        match planes {
+            Planes::Low(words) => self
+                .fold_plane_columns::<_, CORNERS>(&**words, columns, word, prefix, values, steps),
+            Planes::Pairs(pairs) => self
+                .fold_plane_columns::<_, CORNERS>(&**pairs, columns, word, prefix, values, steps),
+        }
+    }
+
+    /// [`Self::fold_columns`] over planes of one layout.
+    #[inline]
+    fn fold_plane_columns<P: PlaneWords + ?Sized, const CORNERS: usize>(
+        &self,
+        planes: &P,
         columns: Range<usize>,
         word: usize,
         prefix: &PrefixFold,
@@ -353,7 +487,7 @@ where
             core::array::from_fn(|corner| (prefix.corners[corner] * self.words + word) * width);
         for column in columns {
             let corners = starts.map(|start| {
-                let [low, high] = planes[start + column];
+                let [low, high] = planes.planes(start + column);
                 SlicedGf4::from_planes(low, high)
             });
             let (lo, hi) = fold_corners(corners, &prefix.nodes);
@@ -511,7 +645,7 @@ where
                 let preprocessed =
                     slot.preprocessed_offset..slot.preprocessed_offset + slot.preprocessed_width;
                 let periodic = slot.periodic_offset..slot.periodic_offset + slot.periodic_width;
-                let evaluation = SlicedFolder::new(
+                let mut folder = SlicedFolder::new(
                     &local[main.clone()],
                     &next[main],
                     boundary,
@@ -520,8 +654,11 @@ where
                     &self.lanes,
                 )
                 .with_preprocessed(&local[preprocessed.clone()], &next[preprocessed])
-                .with_periodic(&local[periodic])
-                .eval_air(slot.air);
+                .with_periodic(&local[periodic]);
+                if let Some(prepared) = &self.prepared_powers[slot.stage_index] {
+                    folder = folder.with_prepared_powers(prepared);
+                }
+                let evaluation = folder.eval_air(slot.air);
                 *poisoned |= evaluation.poisoned;
                 sums[slot.stage_index][prefix_index][eval_index] += weight * evaluation.value;
             }
@@ -595,7 +732,7 @@ struct SlicedRaw<R> {
 #[tracing::instrument(skip_all, level = "debug", fields(round = challenges.len()))]
 fn sliced_raw<A, F, EF, S, R>(
     eq_suffix: Option<&Poly<EF>>,
-    trace: &SlicedTrace,
+    trace: &SlicedTrace<'_>,
     slots: &[AirSlot<'_, A>],
     public_values: &[&[F]],
     alpha_powers: &[Vec<R>],
@@ -661,6 +798,7 @@ where
     let generator = R::from(EF::from(S::GENERATOR));
     let lanes = LaneSums::new(&lift(lane_weights.as_slice()), generator);
     let word_weights = lift(word_weights.as_slice());
+    let prepared_powers = PreparedPowers::per_air(alpha_powers, generator);
 
     // The prefixes in index order, the last variable varying fastest.
     let prefixes = (0..nodes.len().pow(round as u32))
@@ -678,6 +816,7 @@ where
         slots,
         public_values,
         alpha_powers,
+        prepared_powers,
         prefixes,
         schedule,
         next_columns: next_row_runs(slots),
@@ -718,7 +857,7 @@ where
 #[allow(clippy::too_many_arguments)]
 fn sliced_round<A, F, EF, S, R>(
     eq_suffix: &Poly<EF>,
-    trace: &SlicedTrace,
+    trace: &SlicedTrace<'_>,
     slots: &[AirSlot<'_, A>],
     public_values: &[&[F]],
     alpha_powers: &[Vec<R>],
@@ -786,7 +925,7 @@ struct SlicedTensor<EF> {
 #[tracing::instrument(skip_all, level = "debug", fields(round = 3))]
 fn sliced_tensor<A, F, EF, S, R>(
     eq_suffix: Option<&Poly<EF>>,
-    trace: &SlicedTrace,
+    trace: &SlicedTrace<'_>,
     slots: &[AirSlot<'_, A>],
     public_values: &[&[F]],
     alpha_powers: &[Vec<R>],
@@ -912,7 +1051,7 @@ where
     /// `None` when `S` is not `GF(4)`, the stage is too short to fill a word per half, or a cell
     /// lies outside `S`.
     #[tracing::instrument(skip_all, level = "debug")]
-    fn sliced_trace<S>(&self) -> Option<SlicedTrace>
+    fn sliced_trace<S>(&self) -> Option<SlicedTrace<'data>>
     where
         S: Field,
         F: HasSubfield<S>,
@@ -949,18 +1088,37 @@ where
             is_successor[column] = true;
         }
 
-        // Each table's packed matrix is already word-major. Copy directly into the final layout
-        // when no successor planes are needed; otherwise retain the generic column path, which
-        // also computes the repeat-last successor words.
-        let words = 1 << (num_vars - LANE_VARIABLES);
-        let (cells, successors) = if next_columns.is_empty() {
-            if let Some(cells) = direct_packed_cells(&tables, words) {
-                (cells, vec![[0; 2]; words * width])
-            } else {
-                pack_sliced_columns::<F, S>(&columns, &is_successor, words, width)?
+        // Each table's packed matrix is already word-major: the low plane of its columns. A stage
+        // of one such table borrows it and several are copied into the final layout, and the
+        // successor planes are shifted out of that low plane. A dense or mismatched table sends
+        // the stage down the column path, which packs both planes.
+        let words: usize = 1 << (num_vars - LANE_VARIABLES);
+        // One table is one AIR's main table, with no preprocessed or periodic table beside it.
+        let borrowed = match self.slots.as_slice() {
+            [slot] if tables.len() == 1 => {
+                let table: &'data Table<F> = self.tables[slot.stage_index];
+                table
+                    .packed_bits()
+                    .filter(|packed| {
+                        packed.width == width
+                            && words.checked_mul(width) == Some(packed.values.len())
+                    })
+                    .map(|packed| Cow::Borrowed(packed.values.as_slice()))
             }
+            _ => None,
+        };
+        let low = borrowed.or_else(|| direct_packed_cells(&tables, words).map(Cow::Owned));
+        let (cells, successors) = if let Some(low) = low {
+            let successors = if next_columns.is_empty() {
+                vec![0; words * width]
+            } else {
+                low_successors(&low, &is_successor, width)
+            };
+            (Planes::Low(low), Planes::Low(Cow::Owned(successors)))
         } else {
-            pack_sliced_columns::<F, S>(&columns, &is_successor, words, width)?
+            let (cells, successors) =
+                pack_sliced_columns::<F, S>(&columns, &is_successor, words, width)?;
+            (Planes::Pairs(cells), Planes::Pairs(successors))
         };
 
         let last = SLICED_LANES - 1;
@@ -1238,18 +1396,19 @@ where
 }
 
 /// A sliced stage's planes and the challenges bound so far.
-pub(super) struct SlicedColumns<EF> {
+pub(super) struct SlicedColumns<'data, EF> {
     /// The stage's planes, none of whose columns has folded yet.
-    trace: SlicedTrace,
+    trace: SlicedTrace<'data>,
     /// Every challenge bound so far, first variable first.
     challenges: Vec<EF>,
     /// Optional four-variable tensor retained by the representation backend.
     tensor: Option<SlicedTensor<EF>>,
-    /// Whether the representation backend may defer materialization through round four.
+    /// Whether the representation backend may defer materialization through round four, or
+    /// through round five, see [`last_late_round`].
     late_boundary: bool,
 }
 
-impl<EF> SlicedColumns<EF> {
+impl<EF> SlicedColumns<'_, EF> {
     /// Number of columns.
     pub(super) const fn width(&self) -> usize {
         self.trace.width
@@ -1262,9 +1421,9 @@ impl<EF> SlicedColumns<EF> {
 
     /// Whether the stage's sliced rounds are spent and its planes can still serve a round.
     ///
-    /// This admits the boundary round alone. The delayed boundary path evaluates its round four
-    /// with one more challenge bound, so this is false there, and
-    /// [`RoundStateExt::round_poly_late_boundary`] gates that round instead.
+    /// This admits the boundary round alone. The delayed boundary path evaluates its rounds four
+    /// and five with more challenges bound, so this is false there, and
+    /// [`RoundStateExt::round_poly_late_boundary`] gates those rounds instead.
     ///
     /// A word pair is the shortest run of residual rows that holds both halves of a row pair.
     const fn at_boundary(&self) -> bool {
@@ -1275,6 +1434,16 @@ impl<EF> SlicedColumns<EF> {
 /// Transpose an 8 x 8 bit matrix held one row per byte.
 ///
 /// Bit `j` of byte `i` becomes bit `i` of byte `j`.
+#[cfg(any(
+    test,
+    not(all(
+        target_arch = "x86_64",
+        target_feature = "avx512f",
+        target_feature = "avx512bw",
+        target_feature = "avx512vbmi",
+        target_feature = "gfni"
+    ))
+))]
 #[inline]
 const fn transpose_bytes(mut x: u64) -> u64 {
     let t = (x ^ (x >> 7)) & 0x00AA_00AA_00AA_00AA;
@@ -1288,15 +1457,340 @@ const fn transpose_bytes(mut x: u64) -> u64 {
 /// For each lane, the byte whose bit `i` is that lane's bit in `words[i]`, for up to eight words.
 #[inline]
 fn lane_masks(words: &[u64]) -> [u8; SLICED_LANES] {
-    debug_assert!(words.len() <= 8);
+    #[cfg(all(
+        target_arch = "x86_64",
+        target_feature = "avx512f",
+        target_feature = "avx512bw",
+        target_feature = "avx512vbmi",
+        target_feature = "gfni"
+    ))]
+    // SAFETY: the kernel is compiled only where the build enables every target feature it names.
+    unsafe {
+        gfni::lane_masks(words)
+    }
+    #[cfg(not(all(
+        target_arch = "x86_64",
+        target_feature = "avx512f",
+        target_feature = "avx512bw",
+        target_feature = "avx512vbmi",
+        target_feature = "gfni"
+    )))]
+    {
+        portable_lane_masks(words)
+    }
+}
+
+/// [`lane_masks`] in 64-bit words.
+///
+/// The words, padded to eight with zeros, are an `8 x 8` matrix of bytes, word `i` in row `i`.
+/// Three rounds of block swaps transpose it, so row `k` then holds byte `k` of every word, and
+/// its own bit transpose is the masks of lanes `8 k .. 8 k + 8`.
+#[cfg(any(
+    test,
+    not(all(
+        target_arch = "x86_64",
+        target_feature = "avx512f",
+        target_feature = "avx512bw",
+        target_feature = "avx512vbmi",
+        target_feature = "gfni"
+    ))
+))]
+#[inline]
+fn portable_lane_masks(words: &[u64]) -> [u8; SLICED_LANES] {
+    debug_assert!(words.len() <= GROUP_CORNERS);
+    let mut rows = [0_u64; GROUP_CORNERS];
+    rows[..words.len()].copy_from_slice(words);
+    // Blocks of four, two, then one byte: each swap trades the bytes of row `i` whose index has
+    // the block's bit set with those of row `i + span` whose index has it clear.
+    for (span, keep) in [
+        (4, 0x0000_0000_FFFF_FFFF_u64),
+        (2, 0x0000_FFFF_0000_FFFF),
+        (1, 0x00FF_00FF_00FF_00FF),
+    ] {
+        let shift = 8 * span;
+        for i in (0..GROUP_CORNERS).filter(|i| i & span == 0) {
+            let (a, b) = (rows[i], rows[i + span]);
+            rows[i] = (a & keep) | ((b & keep) << shift);
+            rows[i + span] = ((a >> shift) & keep) | (b & !keep);
+        }
+    }
     let mut masks = [0; SLICED_LANES];
-    for (byte, masks) in masks.as_chunks_mut::<8>().0.iter_mut().enumerate() {
-        let rows = words.iter().enumerate().fold(0_u64, |rows, (i, &word)| {
-            rows | (((word >> (8 * byte)) & 0xff) << (8 * i))
-        });
-        masks.copy_from_slice(&transpose_bytes(rows).to_le_bytes());
+    for (masks, &row) in masks.as_chunks_mut::<8>().0.iter_mut().zip(&rows) {
+        *masks = transpose_bytes(row).to_le_bytes();
     }
     masks
+}
+
+/// [`lane_masks`] and the tile's cells on a target with byte permutes and unpacks and `8 x 8`
+/// bit-matrix multiplication.
+#[cfg(all(
+    target_arch = "x86_64",
+    target_feature = "avx512f",
+    target_feature = "avx512bw",
+    target_feature = "avx512vbmi",
+    target_feature = "gfni"
+))]
+mod gfni {
+    use core::arch::x86_64::{
+        __m128i, __m512i, _mm_storel_epi64, _mm_storeu_si128, _mm_unpackhi_epi64,
+        _mm512_castsi512_si128, _mm512_extracti32x4_epi32, _mm512_gf2p8affine_epi64_epi8,
+        _mm512_maskz_loadu_epi64, _mm512_permutexvar_epi8, _mm512_set1_epi64, _mm512_setzero_si512,
+        _mm512_storeu_si512, _mm512_unpackhi_epi8, _mm512_unpackhi_epi16, _mm512_unpackhi_epi32,
+        _mm512_unpacklo_epi8, _mm512_unpacklo_epi16, _mm512_unpacklo_epi32,
+    };
+
+    use super::{GROUP_CORNERS, ROW_HALVES, SLICED_LANES};
+
+    /// Lanes one lane group of the cell writers spans.
+    ///
+    /// A 128-bit lane of a register holds four lanes' cells of two corner groups.
+    pub(super) const CELL_LANES: usize = 4;
+
+    /// Quadword whose byte `j` is `1 << j`.
+    ///
+    /// As the input of an affine map it reads the matrix out transposed, row order reversed:
+    ///
+    /// ```text
+    ///     bit t of byte j of the image  =  bit j of byte 7 - t of the matrix
+    /// ```
+    const UNIT: u64 = 0x8040_2010_0804_0201;
+
+    /// The byte permutation that moves byte `k` of word `i` to byte `7 - i` of quadword `k`.
+    ///
+    /// Quadword `k` is then the matrix whose image of [`UNIT`] holds, at bit `t` of byte `j`,
+    /// bit `8 k + j` of word `t`: the masks of lanes `8 k .. 8 k + 8`.
+    const GATHER: __m512i = {
+        let mut index = [0_u8; SLICED_LANES];
+        let mut word = 0;
+        while word < GROUP_CORNERS {
+            let mut byte = 0;
+            while byte < 8 {
+                index[8 * byte + 7 - word] = (8 * word + byte) as u8;
+                byte += 1;
+            }
+            word += 1;
+        }
+        // SAFETY: a 512-bit register is 64 bytes, and every bit pattern is one of its values.
+        unsafe { core::mem::transmute::<[u8; SLICED_LANES], __m512i>(index) }
+    };
+
+    /// [`super::lane_masks`] as one register, byte `l` for lane `l`: one masked load, one byte
+    /// permute, one affine map.
+    ///
+    /// Words past the eighth are not read.
+    #[inline]
+    #[target_feature(enable = "avx512f,avx512bw,avx512vbmi,gfni")]
+    fn masks(words: &[u64]) -> __m512i {
+        debug_assert!(words.len() <= GROUP_CORNERS);
+        let present = ((1_u16 << words.len().min(GROUP_CORNERS)) - 1) as u8;
+        // SAFETY: the mask selects the first `min(words.len(), 8)` quadwords, all inside `words`,
+        // and a masked-off quadword is neither read nor faulted on. The load takes any alignment.
+        let words = unsafe { _mm512_maskz_loadu_epi64(present, words.as_ptr().cast()) };
+        let gathered = _mm512_permutexvar_epi8(GATHER, words);
+        _mm512_gf2p8affine_epi64_epi8::<0>(_mm512_set1_epi64(UNIT as i64), gathered)
+    }
+
+    /// [`super::lane_masks`].
+    #[inline]
+    #[target_feature(enable = "avx512f,avx512bw,avx512vbmi,gfni")]
+    pub(super) fn lane_masks(words: &[u64]) -> [u8; SLICED_LANES] {
+        let mut out = [0; SLICED_LANES];
+        // SAFETY: the store writes the 64 bytes of `out` and takes any alignment.
+        unsafe { _mm512_storeu_si512(out.as_mut_ptr().cast(), masks(words)) };
+        out
+    }
+
+    /// The four 128-bit lanes of a register, lowest first.
+    #[inline]
+    #[target_feature(enable = "avx512f")]
+    fn quarters(register: __m512i) -> [__m128i; 4] {
+        [
+            _mm512_castsi512_si128(register),
+            _mm512_extracti32x4_epi32::<1>(register),
+            _mm512_extracti32x4_epi32::<2>(register),
+            _mm512_extracti32x4_epi32::<3>(register),
+        ]
+    }
+
+    /// One plane's cells of one column for every lane, one corner group to a half.
+    ///
+    /// `words[h]` are the corners of half `h`, and the cells of lane group `j` start
+    /// `j * stride` bytes into `out`, see [`super::write_cells`].
+    ///
+    /// Unpacking the two halves' masks puts each lane's two bytes side by side. It stays inside
+    /// 128-bit lanes: 128-bit lane `k` of the unpack of the low bytes holds lanes
+    /// `16 k .. 16 k + 8`, lane groups `4 k` and `4 k + 1`, and that of the high bytes the next
+    /// eight lanes.
+    #[inline]
+    #[target_feature(enable = "avx512f,avx512bw,avx512vbmi,gfni")]
+    pub(super) fn write_cells_one(words: [&[u64]; ROW_HALVES], stride: usize, out: &mut [u8]) {
+        let (low, high) = (masks(words[0]), masks(words[1]));
+        let cells = [
+            _mm512_unpacklo_epi8(low, high),
+            _mm512_unpackhi_epi8(low, high),
+        ];
+        for (unpack, cells) in cells.into_iter().enumerate() {
+            for (k, cells) in quarters(cells).into_iter().enumerate() {
+                let group = 4 * k + 2 * unpack;
+                for (group, cells) in [
+                    (group, cells),
+                    (group + 1, _mm_unpackhi_epi64(cells, cells)),
+                ] {
+                    let out = &mut out[group * stride..][..8];
+                    // SAFETY: the store writes the eight bytes of `out` and takes any alignment.
+                    unsafe { _mm_storel_epi64(out.as_mut_ptr().cast(), cells) };
+                }
+            }
+        }
+    }
+
+    /// One plane's cells of one column for every lane, two corner groups to a half.
+    ///
+    /// `words[h][g]` are the corners of group `g` in half `h`, and the cells of lane group `j`
+    /// start `j * stride` bytes into `out`, see [`super::write_cells`].
+    ///
+    /// Unpacking the masks' bytes within each half, then those byte pairs across the halves,
+    /// lines up each lane's four bytes in cell order. It stays inside 128-bit lanes: 128-bit lane
+    /// `k` of the `j`-th result holds lanes `16 k + 4 j .. 16 k + 4 j + 4`, lane group `4 k + j`.
+    #[inline]
+    #[target_feature(enable = "avx512f,avx512bw,avx512vbmi,gfni")]
+    pub(super) fn write_cells_two(words: [[&[u64]; 2]; ROW_HALVES], stride: usize, out: &mut [u8]) {
+        let [[w0, w1], [w2, w3]] = words;
+        let (m0, m1, m2, m3) = (masks(w0), masks(w1), masks(w2), masks(w3));
+        let (a, b) = (_mm512_unpacklo_epi8(m0, m1), _mm512_unpackhi_epi8(m0, m1));
+        let (c, d) = (_mm512_unpacklo_epi8(m2, m3), _mm512_unpackhi_epi8(m2, m3));
+        let cells = [
+            _mm512_unpacklo_epi16(a, c),
+            _mm512_unpackhi_epi16(a, c),
+            _mm512_unpacklo_epi16(b, d),
+            _mm512_unpackhi_epi16(b, d),
+        ];
+        for (j, cells) in cells.into_iter().enumerate() {
+            for (k, cells) in quarters(cells).into_iter().enumerate() {
+                let out = &mut out[(4 * k + j) * stride..][..16];
+                // SAFETY: the store writes the sixteen bytes of `out` and takes any alignment.
+                unsafe { _mm_storeu_si128(out.as_mut_ptr().cast(), cells) };
+            }
+        }
+    }
+
+    /// One plane's cells of one column for every lane, four corner groups to a half.
+    ///
+    /// `words[h][g]` are the corners of group `g` in half `h`, and the cells of lane group `j`
+    /// start `j * stride` bytes into `out`, see [`super::write_cells`].
+    ///
+    /// Three rounds of unpacking, of bytes, byte pairs, then quadruples, line up each lane's
+    /// eight bytes in cell order. They stay inside 128-bit lanes: 128-bit lane `k` of the `j`-th
+    /// pair of results holds lanes `16 k + 4 j .. 16 k + 4 j + 2`, then the next two lanes, the
+    /// two halves of lane group `4 k + j`.
+    #[inline]
+    #[target_feature(enable = "avx512f,avx512bw,avx512vbmi,gfni")]
+    pub(super) fn write_cells_four(
+        words: [[&[u64]; 4]; ROW_HALVES],
+        stride: usize,
+        out: &mut [u8],
+    ) {
+        let [[w0, w1, w2, w3], [w4, w5, w6, w7]] = words;
+        let mut pairs = [[_mm512_setzero_si512(); 2]; 4];
+        for (pair, (a, b)) in pairs
+            .iter_mut()
+            .zip([(w0, w1), (w2, w3), (w4, w5), (w6, w7)])
+        {
+            let (a, b) = (masks(a), masks(b));
+            *pair = [_mm512_unpacklo_epi8(a, b), _mm512_unpackhi_epi8(a, b)];
+        }
+        let mut quads = [[_mm512_setzero_si512(); 4]; 2];
+        for (quad, [a, b]) in quads
+            .iter_mut()
+            .zip([[pairs[0], pairs[1]], [pairs[2], pairs[3]]])
+        {
+            *quad = [
+                _mm512_unpacklo_epi16(a[0], b[0]),
+                _mm512_unpackhi_epi16(a[0], b[0]),
+                _mm512_unpacklo_epi16(a[1], b[1]),
+                _mm512_unpackhi_epi16(a[1], b[1]),
+            ];
+        }
+        for (j, (low, high)) in quads[0].into_iter().zip(quads[1]).enumerate() {
+            let halves = [
+                _mm512_unpacklo_epi32(low, high),
+                _mm512_unpackhi_epi32(low, high),
+            ];
+            for (half, cells) in halves.into_iter().enumerate() {
+                for (k, cells) in quarters(cells).into_iter().enumerate() {
+                    let out = &mut out[(4 * k + j) * stride + 16 * half..][..16];
+                    // SAFETY: the store writes the sixteen bytes of `out` and takes any alignment.
+                    unsafe { _mm_storeu_si128(out.as_mut_ptr().cast(), cells) };
+                }
+            }
+        }
+    }
+}
+
+/// The corners of group `group` among `words`, eight to a group, the last one short when the
+/// words do not fill it.
+#[inline]
+fn corner_group(words: &[u64], group: usize) -> &[u64] {
+    let start = group * GROUP_CORNERS;
+    &words[start..(start + GROUP_CORNERS).min(words.len())]
+}
+
+/// Write one plane's cells of one column for every lane, from the corner words of each half.
+///
+/// Both halves hold the same corners, eight to a corner group. The cells of lane group `j`,
+/// `lanes` lanes wide, start `j * stride` bytes into `out`, see [`RowTile`].
+#[inline]
+fn write_cells(halves: [&[u64]; ROW_HALVES], lanes: usize, stride: usize, out: &mut [u8]) {
+    debug_assert_eq!(halves[0].len(), halves[1].len());
+    #[cfg(all(
+        target_arch = "x86_64",
+        target_feature = "avx512f",
+        target_feature = "avx512bw",
+        target_feature = "avx512vbmi",
+        target_feature = "gfni"
+    ))]
+    if lanes == gfni::CELL_LANES {
+        match halves[0].len().div_ceil(GROUP_CORNERS) {
+            1 => {
+                // SAFETY: the kernel is compiled only where the build enables every target
+                // feature it names.
+                return unsafe { gfni::write_cells_one(halves, stride, out) };
+            }
+            2 => {
+                let halves = halves.map(|words| [0, 1].map(|group| corner_group(words, group)));
+                // SAFETY: the kernel is compiled only where the build enables every target
+                // feature it names.
+                return unsafe { gfni::write_cells_two(halves, stride, out) };
+            }
+            4 => {
+                let halves =
+                    halves.map(|words| [0, 1, 2, 3].map(|group| corner_group(words, group)));
+                // SAFETY: the kernel is compiled only where the build enables every target
+                // feature it names.
+                return unsafe { gfni::write_cells_four(halves, stride, out) };
+            }
+            _ => {}
+        }
+    }
+    portable_write_cells(halves, lanes, stride, out);
+}
+
+/// [`write_cells`], one corner group's lane masks at a time.
+#[inline]
+fn portable_write_cells(halves: [&[u64]; ROW_HALVES], lanes: usize, stride: usize, out: &mut [u8]) {
+    let groups = halves[0].len().div_ceil(GROUP_CORNERS);
+    let cell = ROW_HALVES * groups;
+    for (half, words) in halves.into_iter().enumerate() {
+        for group in 0..groups {
+            let masks = lane_masks(corner_group(words, group));
+            let at = half * groups + group;
+            for (masks, cells) in masks.chunks_exact(lanes).zip(out.chunks_mut(stride)) {
+                for (&mask, cell) in masks.iter().zip(cells.chunks_exact_mut(cell)) {
+                    cell[at] = mask;
+                }
+            }
+        }
+    }
 }
 
 /// For each lane, the byte whose bit `i` is that lane's bit in `words[i]`, for up to eight words.
@@ -1308,6 +1802,15 @@ fn top_lane_mask(words: &[u64]) -> u8 {
     words.iter().enumerate().fold(0, |mask, (index, &word)| {
         mask | (((word >> (SLICED_LANES - 1)) as u8) << index)
     })
+}
+
+/// Whether any bit of `words` is set.
+///
+/// The words are OR-ed together without an early exit, which vectorizes; a corner's high plane
+/// is clear in every word of a Boolean stage, so an early exit never pays off there.
+#[inline]
+fn any_set(words: &[u64]) -> bool {
+    words.iter().fold(0, |any, &word| any | word) != 0
 }
 
 /// Subset sums of up to eight weights, indexed by the byte of the weights they include.
@@ -1325,8 +1828,11 @@ const GROUP_CORNERS: usize = 8;
 /// Entries of one corner group's subset-sum table, one per value of a mask byte.
 const GROUP_ENTRIES: usize = 1 << u8::BITS;
 
-/// Corners the bound variables of a stage evaluating a round on its planes can range over.
+/// Corners the bound variables of a stage evaluating a sliced round can range over.
 const MAX_CORNERS: usize = 1 << MAX_SLICED_ROUNDS;
+
+/// Corners the bound variables of any round evaluated on the planes can range over.
+const MAX_PLANE_ROUND_CORNERS: usize = 1 << MAX_PLANE_ROUND_PREFIX;
 
 /// Corners the bound variables of an unslice that binds the boundary challenge range over.
 const MAX_PLANE_FOLD_CORNERS: usize = 1 << MAX_PLANE_FOLD_ROUNDS;
@@ -1334,11 +1840,10 @@ const MAX_PLANE_FOLD_CORNERS: usize = 1 << MAX_PLANE_FOLD_ROUNDS;
 /// Corner groups the bound variables of a plane fold span at most.
 const MAX_PLANE_FOLD_GROUPS: usize = MAX_PLANE_FOLD_CORNERS / GROUP_CORNERS;
 
-/// Mask bytes one corner group of one residual row reads, one per plane.
-const PLANE_BYTES: usize = 2;
-
-/// Bytes one corner group adds to a residual row pair's tile cell, one plane pair per half.
-const GROUP_CELL_BYTES: usize = ROW_HALVES * PLANE_BYTES;
+/// Corner groups a tile cell holds at most, one byte each per half, see [`RowTile`].
+///
+/// A tile's plane fold binds at most [`MAX_PLANE_ROUND_PREFIX`] challenges.
+const TILE_GROUPS: usize = MAX_PLANE_ROUND_CORNERS.div_ceil(GROUP_CORNERS);
 
 /// Halves of the residual rows a round reads side by side: the low one and the high one.
 const ROW_HALVES: usize = 2;
@@ -1359,10 +1864,10 @@ const STAGED_COLUMNS: usize = 64;
 /// so one set serves a whole round.
 ///
 /// Each word's corners are gathered into buffers of `CORNERS` words per plane. Only an unslice
-/// that binds one challenge past [`MAX_SLICED_ROUNDS`] needs [`MAX_PLANE_FOLD_CORNERS`].
-struct PlaneFold<'a, R, const CORNERS: usize = MAX_CORNERS> {
+/// that binds one challenge past [`MAX_PLANE_ROUND_PREFIX`] needs [`MAX_PLANE_FOLD_CORNERS`].
+struct PlaneFold<'a, R, const CORNERS: usize = MAX_PLANE_ROUND_CORNERS> {
     /// The stage's planes.
-    trace: &'a SlicedTrace,
+    trace: &'a SlicedTrace<'a>,
     /// Subset sums of the eq weights, one table per corner group.
     low_sums: Vec<[R; GROUP_ENTRIES]>,
     /// The same sums scaled by the generator of `S`, indexed the same way.
@@ -1377,7 +1882,7 @@ struct PlaneFold<'a, R, const CORNERS: usize = MAX_CORNERS> {
 
 impl<'a, R: Field, const CORNERS: usize> PlaneFold<'a, R, CORNERS> {
     /// Tabulate the fold of `trace` at every challenge bound so far.
-    fn new<S, EF>(trace: &'a SlicedTrace, challenges: &[EF]) -> Self
+    fn new<S, EF>(trace: &'a SlicedTrace<'a>, challenges: &[EF]) -> Self
     where
         S: Field,
         EF: Field + HasSubfield<S>,
@@ -1430,7 +1935,21 @@ impl<'a, R: Field, const CORNERS: usize> PlaneFold<'a, R, CORNERS> {
     #[inline]
     fn corner_words(
         &self,
-        planes: &[[u64; 2]],
+        planes: &Planes<'_>,
+        column: usize,
+        word: usize,
+    ) -> ([u64; CORNERS], [u64; CORNERS]) {
+        match planes {
+            Planes::Low(words) => self.corner_plane_words(&**words, column, word),
+            Planes::Pairs(pairs) => self.corner_plane_words(&**pairs, column, word),
+        }
+    }
+
+    /// [`Self::corner_words`] from planes of one layout.
+    #[inline]
+    fn corner_plane_words<P: PlaneWords + ?Sized>(
+        &self,
+        planes: &P,
         column: usize,
         word: usize,
     ) -> ([u64; CORNERS], [u64; CORNERS]) {
@@ -1443,7 +1962,7 @@ impl<'a, R: Field, const CORNERS: usize> PlaneFold<'a, R, CORNERS> {
             .zip(&mut high[..self.corners])
             .enumerate()
         {
-            let planes = planes[base + corner * stride];
+            let planes = planes.planes(base + corner * stride);
             *low = planes[0];
             *high = planes[1];
         }
@@ -1458,13 +1977,24 @@ impl<'a, R: Field, const CORNERS: usize> PlaneFold<'a, R, CORNERS> {
         high: &'b [u64],
         group: usize,
     ) -> (&'b [u64], &'b [u64]) {
+        (self.plane_group(low, group), self.plane_group(high, group))
+    }
+
+    /// Whether the stage keeps its low planes alone, every high plane being clear.
+    #[inline]
+    const fn low_only(&self) -> bool {
+        matches!(self.trace.cells, Planes::Low(_))
+    }
+
+    /// The corners of one group in one plane.
+    #[inline]
+    fn plane_group<'b>(&self, words: &'b [u64], group: usize) -> &'b [u64] {
         let start = group * GROUP_CORNERS;
-        let end = (start + GROUP_CORNERS).min(self.corners);
-        (&low[start..end], &high[start..end])
+        &words[start..(start + GROUP_CORNERS).min(self.corners)]
     }
 
     /// The value at every residual row of one word.
-    fn fold_word(&self, planes: &[[u64; 2]], column: usize, word: usize, out: &mut [R]) {
+    fn fold_word(&self, planes: &Planes<'_>, column: usize, word: usize, out: &mut [R]) {
         let (low, high) = self.corner_words(planes, column, word);
         for (out, value) in out.iter_mut().zip(self.corner_values(&low, &high)) {
             *out = value;
@@ -1475,10 +2005,12 @@ impl<'a, R: Field, const CORNERS: usize> PlaneFold<'a, R, CORNERS> {
     ///
     /// Each buffer then holds the block's columns one after another, and each column's corner
     /// words side by side in corner order, see [`Self::staged_words`].
+    ///
+    /// Planes holding the low plane alone leave `high` as it is, so its words must be clear.
     #[inline]
     fn stage(
         &self,
-        planes: &[[u64; 2]],
+        planes: &Planes<'_>,
         columns: Range<usize>,
         word: usize,
         low: &mut [u64],
@@ -1486,15 +2018,31 @@ impl<'a, R: Field, const CORNERS: usize> PlaneFold<'a, R, CORNERS> {
     ) {
         let base = word * self.trace.width + columns.start;
         let stride = self.words * self.trace.width;
-        for corner in 0..self.corners {
-            let start = base + corner * stride;
-            for ((low, high), &[low_word, high_word]) in low
-                .chunks_exact_mut(self.corners)
-                .zip(high.chunks_exact_mut(self.corners))
-                .zip(&planes[start..start + columns.len()])
-            {
-                low[corner] = low_word;
-                high[corner] = high_word;
+        match planes {
+            Planes::Low(words) => {
+                debug_assert!(high.iter().all(|&high| high == 0));
+                for corner in 0..self.corners {
+                    let start = base + corner * stride;
+                    for (low, &low_word) in low
+                        .chunks_exact_mut(self.corners)
+                        .zip(&words[start..start + columns.len()])
+                    {
+                        low[corner] = low_word;
+                    }
+                }
+            }
+            Planes::Pairs(pairs) => {
+                for corner in 0..self.corners {
+                    let start = base + corner * stride;
+                    for ((low, high), &[low_word, high_word]) in low
+                        .chunks_exact_mut(self.corners)
+                        .zip(high.chunks_exact_mut(self.corners))
+                        .zip(&pairs[start..start + columns.len()])
+                    {
+                        low[corner] = low_word;
+                        high[corner] = high_word;
+                    }
+                }
             }
         }
     }
@@ -1517,7 +2065,7 @@ impl<'a, R: Field, const CORNERS: usize> PlaneFold<'a, R, CORNERS> {
     /// do so needs none of the high plane's masks or lookups.
     #[inline]
     fn corner_values(&self, low: &[u64], high: &[u64]) -> impl Iterator<Item = R> + '_ {
-        let has_high = high.iter().any(|&word| word != 0);
+        let has_high = !self.low_only() && any_set(high);
         let mut low_masks = [[0; SLICED_LANES]; MAX_PLANE_FOLD_GROUPS];
         let mut high_masks = [[0; SLICED_LANES]; MAX_PLANE_FOLD_GROUPS];
         for (group, (low_masks, high_masks)) in low_masks
@@ -1581,54 +2129,26 @@ impl<'a, R: Field, const CORNERS: usize> PlaneFold<'a, R, CORNERS> {
             .collect()
     }
 
-    /// The value one half of one residual row's mask bytes stands for.
+    /// The low-half and high-half values of one residual row pair, from its cells.
     ///
-    /// The high-plane masks are read only when `HIGH` is set, so a caller clears it only when
-    /// every one of them is clear.
-    ///
-    /// # Panics
-    ///
-    /// Debug builds panic unless `bytes` holds one plane pair per corner group.
-    #[inline]
-    fn row_value<const HIGH: bool>(&self, bytes: &[u8]) -> R {
-        debug_assert_eq!(bytes.len(), self.groups * PLANE_BYTES);
-        let mut value = R::ZERO;
-        for ((low_table, high_table), masks) in self
-            .low_sums
-            .iter()
-            .zip(&self.high_sums)
-            .zip(bytes.as_chunks::<PLANE_BYTES>().0)
-        {
-            value += low_table[usize::from(masks[0])];
-            if HIGH {
-                value += high_table[usize::from(masks[1])];
-            }
-        }
-        value
-    }
-
-    /// The low-half and high-half values one residual row's mask bytes stand for.
-    #[inline]
-    fn row_pair<const HIGH: bool>(&self, bytes: &[u8]) -> (R, R) {
-        let half = self.groups * PLANE_BYTES;
-        (
-            self.row_value::<HIGH>(&bytes[..half]),
-            self.row_value::<HIGH>(&bytes[half..]),
-        )
-    }
-
-    /// [`Self::row_pair`] for a tile cell of `CELL` bytes, one [`GROUP_CELL_BYTES`] per group.
+    /// A cell holds one mask byte per half and corner group, see [`RowTile`]. The high plane's
+    /// cell is read only when `HIGH` is set, so a caller clears it only when every one of its
+    /// bytes is clear.
     #[inline(always)]
-    fn row_pair_cell<const CELL: usize, const HIGH: bool>(&self, bytes: &[u8; CELL]) -> (R, R) {
-        let groups = CELL / GROUP_CELL_BYTES;
+    fn row_pair_cell<const CELL: usize, const HIGH: bool>(
+        &self,
+        low: &[u8; CELL],
+        high: &[u8; CELL],
+    ) -> (R, R) {
+        let groups = CELL / ROW_HALVES;
         let (low_sums, high_sums) = (&self.low_sums[..groups], &self.high_sums[..groups]);
         let [lo, hi] = [0, 1].map(|half| {
             let mut value = R::ZERO;
             for (group, (low_table, high_table)) in low_sums.iter().zip(high_sums).enumerate() {
-                let at = (half * groups + group) * PLANE_BYTES;
-                value += low_table[usize::from(bytes[at])];
+                let at = half * groups + group;
+                value += low_table[usize::from(low[at])];
                 if HIGH {
-                    value += high_table[usize::from(bytes[at + 1])];
+                    value += high_table[usize::from(high[at])];
                 }
             }
             value
@@ -1636,72 +2156,69 @@ impl<'a, R: Field, const CORNERS: usize> PlaneFold<'a, R, CORNERS> {
         (lo, hi)
     }
 
-    /// Write one word's mask bytes lane by lane, `stride` bytes apart, from its corner words.
+    /// Write one column's top-lane cells of both planes, from the corner words of one word per
+    /// half.
     ///
     /// # Returns
     ///
     /// Whether any corner's high plane is set.
-    fn write_lane_masks(&self, low: &[u64], high: &[u64], stride: usize, out: &mut [u8]) -> bool {
-        let has_high = high.iter().any(|&word| word != 0);
-        for group in 0..self.groups {
-            let (low, high) = self.group_words(low, high, group);
-            let low = lane_masks(low);
-            let high = if has_high {
-                lane_masks(high)
-            } else {
-                [0; SLICED_LANES]
-            };
-            for (lane, (&low, &high)) in low.iter().zip(&high).enumerate() {
-                let at = lane * stride + group * PLANE_BYTES;
-                out[at] = low;
-                out[at + 1] = high;
+    fn write_top_lane_cells(
+        &self,
+        planes: &Planes<'_>,
+        column: usize,
+        words: [usize; ROW_HALVES],
+        low_cell: &mut [u8],
+        high_cell: &mut [u8],
+    ) -> bool {
+        let mut has_high = false;
+        for (half, word) in words.into_iter().enumerate() {
+            let (low, high) = self.corner_words(planes, column, word);
+            for group in 0..self.groups {
+                let (low, high) = self.group_words(&low, &high, group);
+                low_cell[half * self.groups + group] = top_lane_mask(low);
+                high_cell[half * self.groups + group] = top_lane_mask(high);
             }
+            has_high |= any_set(&high);
         }
         has_high
     }
-
-    /// Write one `(column, word)`'s top-lane mask bytes.
-    ///
-    /// # Returns
-    ///
-    /// Whether any corner's high plane is set.
-    fn write_top_lane_mask(
-        &self,
-        planes: &[[u64; 2]],
-        column: usize,
-        word: usize,
-        out: &mut [u8],
-    ) -> bool {
-        let (low, high) = self.corner_words(planes, column, word);
-        for group in 0..self.groups {
-            let (low, high) = self.group_words(&low, &high, group);
-            out[group * PLANE_BYTES] = top_lane_mask(low);
-            out[group * PLANE_BYTES + 1] = top_lane_mask(high);
-        }
-        high.iter().any(|&word| word != 0)
-    }
 }
 
-/// One word pair's mask bytes, transposed so each residual row reads its columns in order.
+/// One word pair's mask bytes, laid out so each lane group reads its columns in order.
+///
+/// A residual row pair's cell holds one mask byte per half and corner group, the low half's
+/// groups first. The cells of a lane group of `L` lanes sit side by side, column by column:
 ///
 /// ```text
-///     lane l : | column 0 | column 1 | ... |    residual rows 64 p + l and 64 p + l + half
-///     column : the low half's mask bytes, group by group, then the high half's
+///     lane group j : | column 0 : lanes jL .. jL + L - 1 | column 1 : the same lanes | ...
+///     lane l       : the cell of residual rows 64 p + l and 64 p + l + half
 /// ```
 ///
-/// The lane past the last holds the successor planes, whose lane `l` is the cell of lane `l + 1`.
-/// A row's next-row values are therefore the following lane's bytes, inside the word or not.
+/// The low planes' cells and the high planes' cells each fill one such layout. The lane group
+/// past the last starts with the successor planes' cells, whose lane `l` is the cell of lane
+/// `l + 1`. A row's next-row values are therefore the following lane's cells, inside the word or
+/// not.
 struct RowTile {
-    /// The mask bytes, lane by lane.
-    bytes: Vec<u8>,
-    /// Bytes one column spans inside a lane.
-    column_stride: usize,
-    /// Bytes one lane spans.
-    lane_stride: usize,
+    /// The low planes' cells, lane group by lane group.
+    low_cells: Vec<u8>,
+    /// The high planes' cells, laid out the same way.
+    ///
+    /// A word pair whose corners all leave their high planes clear sets no byte here.
+    high_cells: Vec<u8>,
+    /// Lanes one lane group spans.
+    lanes: usize,
+    /// Bytes one cell spans, one per half and corner group.
+    cell: usize,
+    /// Bytes one lane group spans.
+    group_stride: usize,
     /// Whether any high-plane mask byte of the word pair laid out last is set.
     ///
     /// When none is, every read skips the high plane's lookups.
     high: bool,
+    /// Whether the high planes' cells may still hold a set byte of an earlier word pair.
+    ///
+    /// Only then does a fill clear the cells of a column whose high planes are clear.
+    stale_high: bool,
     /// Both halves' low-plane corner words of one block of columns, see [`PlaneFold::stage`].
     staged_low: Vec<u64>,
     /// The high-plane corner words, laid out the same way.
@@ -1709,31 +2226,49 @@ struct RowTile {
 }
 
 impl RowTile {
-    /// An empty tile for a stage of `width` columns whose rows read `corners` corners.
-    fn new(corners: usize, width: usize) -> Self {
-        let groups = corners.div_ceil(GROUP_CORNERS);
-        let column_stride = ROW_HALVES * groups * PLANE_BYTES;
-        let lane_stride = column_stride * width;
+    /// An empty tile for a stage of `width` columns whose rows read `corners` corners, in lane
+    /// groups as wide as `R`'s packing.
+    ///
+    /// # Panics
+    ///
+    /// When a lane group would straddle two words.
+    fn new<R: Field>(corners: usize, width: usize) -> Self {
+        Self::with_lanes(corners, width, R::Packing::WIDTH)
+    }
+
+    /// [`Self::new`], in lane groups of `lanes` lanes.
+    ///
+    /// # Panics
+    ///
+    /// When a lane group would straddle two words.
+    fn with_lanes(corners: usize, width: usize, lanes: usize) -> Self {
+        assert!(
+            SLICED_LANES.is_multiple_of(lanes),
+            "a lane group covers consecutive rows of one word"
+        );
+        let cell = ROW_HALVES * corners.div_ceil(GROUP_CORNERS);
+        let group_stride = width * lanes * cell;
+        // The lane group past the last holds the successor lane.
+        let len = (SLICED_LANES / lanes + 1) * group_stride;
         Self {
-            bytes: vec![0; (SLICED_LANES + 1) * lane_stride],
-            column_stride,
-            lane_stride,
+            low_cells: vec![0; len],
+            high_cells: vec![0; len],
+            lanes,
+            cell,
+            group_stride,
             high: false,
+            stale_high: false,
             staged_low: vec![0; ROW_HALVES * corners * STAGED_COLUMNS],
             staged_high: vec![0; ROW_HALVES * corners * STAGED_COLUMNS],
         }
     }
 
-    /// One lane's mask bytes, column by column.
+    /// One plane's cells of the lane group holding `lane`, column by column and lane by lane.
     #[inline]
-    fn lane(&self, lane: usize) -> &[u8] {
-        &self.bytes[lane * self.lane_stride..][..self.lane_stride]
-    }
-
-    /// One column's mask bytes inside one lane.
-    #[inline]
-    fn cell(&self, lane: usize, column: usize) -> &[u8] {
-        &self.lane(lane)[column * self.column_stride..][..self.column_stride]
+    fn group_cells<'b, const CELL: usize>(&self, cells: &'b [u8], lane: usize) -> &'b [[u8; CELL]] {
+        cells[(lane / self.lanes) * self.group_stride..][..self.group_stride]
+            .as_chunks::<CELL>()
+            .0
     }
 
     /// Lay out the mask bytes of word pair `pair`.
@@ -1747,10 +2282,13 @@ impl RowTile {
         pair: usize,
         next_columns: &[Range<usize>],
     ) {
-        debug_assert_eq!(self.column_stride, ROW_HALVES * fold.groups * PLANE_BYTES);
-        debug_assert_eq!(self.lane_stride, self.column_stride * fold.trace.width);
+        debug_assert_eq!(self.cell, ROW_HALVES * fold.groups);
+        debug_assert_eq!(self.group_stride, fold.trace.width * self.lanes * self.cell);
         let words = [pair, pair + fold.words / ROW_HALVES];
-        let half_bytes = fold.groups * PLANE_BYTES;
+        let (lanes, stride) = (self.lanes, self.group_stride);
+        let column_bytes = lanes * self.cell;
+        let clear_high = self.stale_high;
+        let low_only = fold.low_only();
         let mut high = false;
         for start in (0..fold.trace.width).step_by(STAGED_COLUMNS) {
             let columns = start..(start + STAGED_COLUMNS).min(fold.trace.width);
@@ -1765,39 +2303,48 @@ impl RowTile {
                 fold.stage(&fold.trace.cells, columns.clone(), word, low, high_words);
             }
             for (offset, column) in columns.clone().enumerate() {
-                for (half, (low, high_words)) in staged_low
-                    .chunks_exact(half_len)
-                    .zip(staged_high.chunks_exact(half_len))
-                    .enumerate()
-                {
-                    let (low, high_words) = fold.staged_words(low, high_words, offset);
-                    let at = column * self.column_stride + half * half_bytes;
-                    high |= fold.write_lane_masks(
-                        low,
-                        high_words,
-                        self.lane_stride,
-                        &mut self.bytes[at..],
-                    );
+                let halves = [0, 1].map(|half| {
+                    let at = half * half_len;
+                    fold.staged_words(
+                        &staged_low[at..at + half_len],
+                        &staged_high[at..at + half_len],
+                        offset,
+                    )
+                });
+                let at = column * column_bytes;
+                let low_cells = &mut self.low_cells[at..];
+                write_cells(halves.map(|(low, _)| low), lanes, stride, low_cells);
+                let high_halves = halves.map(|(_, high)| high);
+                if !low_only && high_halves.iter().any(|words| any_set(words)) {
+                    write_cells(high_halves, lanes, stride, &mut self.high_cells[at..]);
+                    high = true;
+                } else if clear_high {
+                    for cells in self.high_cells[at..]
+                        .chunks_mut(stride)
+                        .take(SLICED_LANES / lanes)
+                    {
+                        cells[..column_bytes].fill(0);
+                    }
                 }
             }
         }
 
         // Only a successor column is ever read one row on, so only it needs the extra lane.
-        let extra = SLICED_LANES * self.lane_stride;
+        let extra = (SLICED_LANES / lanes) * stride;
         for run in next_columns {
             for column in run.clone() {
-                for (half, &word) in words.iter().enumerate() {
-                    let at = extra + column * self.column_stride + half * half_bytes;
-                    high |= fold.write_top_lane_mask(
-                        &fold.trace.successors,
-                        column,
-                        word,
-                        &mut self.bytes[at..],
-                    );
-                }
+                let at = extra + column * column_bytes;
+                high |= fold.write_top_lane_cells(
+                    &fold.trace.successors,
+                    column,
+                    words,
+                    &mut self.low_cells[at..at + self.cell],
+                    &mut self.high_cells[at..at + self.cell],
+                );
             }
         }
         self.high = high;
+        self.stale_high = high;
     }
 
     /// Read one residual row pair of every column into the buffers a node walk steps.
@@ -1808,15 +2355,33 @@ impl RowTile {
         next_columns: &[Range<usize>],
         scratch: &mut Scratch<R, R>,
     ) {
-        if self.high {
-            self.read_row_planes::<R, true>(fold, lane, next_columns, scratch);
-        } else {
-            self.read_row_planes::<R, false>(fold, lane, next_columns, scratch);
+        const {
+            assert!(
+                TILE_GROUPS == 4,
+                "a tile's cells hold one, two or four corner groups, one dispatch arm each"
+            );
+        }
+        const ONE: usize = ROW_HALVES;
+        const TWO: usize = 2 * ROW_HALVES;
+        const FOUR: usize = TILE_GROUPS * ROW_HALVES;
+        match (self.cell, self.high) {
+            (ONE, false) => self.read_row_cells::<R, ONE, false>(fold, lane, next_columns, scratch),
+            (ONE, true) => self.read_row_cells::<R, ONE, true>(fold, lane, next_columns, scratch),
+            (TWO, false) => self.read_row_cells::<R, TWO, false>(fold, lane, next_columns, scratch),
+            (TWO, true) => self.read_row_cells::<R, TWO, true>(fold, lane, next_columns, scratch),
+            (FOUR, false) => {
+                self.read_row_cells::<R, FOUR, false>(fold, lane, next_columns, scratch);
+            }
+            (FOUR, true) => self.read_row_cells::<R, FOUR, true>(fold, lane, next_columns, scratch),
+            (cell, _) => {
+                unreachable!("a tile's rows read one, two or four corner groups, not {cell} bytes")
+            }
         }
     }
 
-    /// [`Self::read_row`], reading the high plane only when `HIGH` is set.
-    fn read_row_planes<R: Field, const HIGH: bool>(
+    /// [`Self::read_row`] for cells of `CELL` bytes, reading the high plane only when `HIGH` is
+    /// set.
+    fn read_row_cells<R: Field, const CELL: usize, const HIGH: bool>(
         &self,
         fold: &PlaneFold<'_, R>,
         lane: usize,
@@ -1830,52 +2395,39 @@ impl RowTile {
             next_diff,
             ..
         } = scratch;
-        for ((local, local_delta), bytes) in local_point
+        let (low, high) = (
+            self.group_cells::<CELL>(&self.low_cells, lane),
+            self.group_cells::<CELL>(&self.high_cells, lane),
+        );
+        let step = lane % self.lanes;
+        for (column, (local, local_delta)) in local_point
             .iter_mut()
             .zip(local_diff.iter_mut())
-            .zip(self.lane(lane).chunks_exact(self.column_stride))
+            .enumerate()
         {
-            let (lo, hi) = fold.row_pair::<HIGH>(bytes);
+            let at = column * self.lanes + step;
+            let high = if HIGH { &high[at] } else { &low[at] };
+            let (lo, hi) = fold.row_pair_cell::<CELL, HIGH>(&low[at], high);
             *local = lo;
             *local_delta = hi - lo;
         }
+        let (low, high) = (
+            self.group_cells::<CELL>(&self.low_cells, lane + 1),
+            self.group_cells::<CELL>(&self.high_cells, lane + 1),
+        );
+        let step = (lane + 1) % self.lanes;
         for run in next_columns {
             for ((column, next), next_delta) in run
                 .clone()
                 .zip(next_point.fill()[run.clone()].iter_mut())
                 .zip(next_diff.fill()[run.clone()].iter_mut())
             {
-                let (lo, hi) = fold.row_pair::<HIGH>(self.cell(lane + 1, column));
+                let at = column * self.lanes + step;
+                let high = if HIGH { &high[at] } else { &low[at] };
+                let (lo, hi) = fold.row_pair_cell::<CELL, HIGH>(&low[at], high);
                 *next = lo;
                 *next_delta = hi - lo;
             }
-        }
-    }
-
-    /// Write one lane group of one column's residual row pairs: the low halves into `local`, and
-    /// each high half less its low half into `delta`.
-    ///
-    /// Each lane's table sums go straight into that lane of the buffers.
-    #[inline(always)]
-    fn write_lane_pair<F, R: Field, const CELL: usize, const HIGH: bool>(
-        &self,
-        fold: &PlaneFold<'_, R>,
-        lane: usize,
-        column: usize,
-        local: &mut PackedRepr<F, R>,
-        delta: &mut PackedRepr<F, R>,
-    ) {
-        for (step, (local, delta)) in local
-            .0
-            .as_slice_mut()
-            .iter_mut()
-            .zip(delta.0.as_slice_mut())
-            .enumerate()
-        {
-            let bytes = &self.lane(lane + step).as_chunks::<CELL>().0[column];
-            let (lo, hi) = fold.row_pair_cell::<CELL, HIGH>(bytes);
-            *local = lo;
-            *delta = hi - lo;
         }
     }
 
@@ -1887,17 +2439,16 @@ impl RowTile {
         next_columns: &[Range<usize>],
         scratch: &mut PackedScratch<PackedRepr<F, R>, PackedRepr<F, R>>,
     ) {
-        // A tile's plane fold binds at most `MAX_SLICED_ROUNDS` challenges, so its cells hold
-        // one or two corner groups, and the arms below cover every width a tile lays out.
         const {
             assert!(
-                MAX_CORNERS <= 2 * GROUP_CORNERS,
-                "a tile's cells hold at most two corner groups"
+                TILE_GROUPS == 4,
+                "a tile's cells hold one, two or four corner groups, one dispatch arm each"
             );
         }
-        const ONE: usize = GROUP_CELL_BYTES;
-        const TWO: usize = 2 * GROUP_CELL_BYTES;
-        match (self.column_stride, self.high) {
+        const ONE: usize = ROW_HALVES;
+        const TWO: usize = 2 * ROW_HALVES;
+        const FOUR: usize = TILE_GROUPS * ROW_HALVES;
+        match (self.cell, self.high) {
             (ONE, false) => {
                 self.read_lane_group_cells::<F, R, ONE, false>(fold, lane, next_columns, scratch);
             }
@@ -1910,14 +2461,23 @@ impl RowTile {
             (TWO, true) => {
                 self.read_lane_group_cells::<F, R, TWO, true>(fold, lane, next_columns, scratch);
             }
-            (stride, _) => {
-                unreachable!("a tile's rows read one or two corner groups, not {stride} bytes")
+            (FOUR, false) => {
+                self.read_lane_group_cells::<F, R, FOUR, false>(fold, lane, next_columns, scratch);
+            }
+            (FOUR, true) => {
+                self.read_lane_group_cells::<F, R, FOUR, true>(fold, lane, next_columns, scratch);
+            }
+            (cell, _) => {
+                unreachable!("a tile's rows read one, two or four corner groups, not {cell} bytes")
             }
         }
     }
 
     /// [`Self::read_lane_group`] for cells of `CELL` bytes, reading the high plane only when
     /// `HIGH` is set.
+    ///
+    /// Each lane's table sums go straight into that lane of the buffers: the low halves into the
+    /// points, and each high half less its low half into the differences.
     fn read_lane_group_cells<F, R: Field, const CELL: usize, const HIGH: bool>(
         &self,
         fold: &PlaneFold<'_, R>,
@@ -1925,6 +2485,9 @@ impl RowTile {
         next_columns: &[Range<usize>],
         scratch: &mut PackedScratch<PackedRepr<F, R>, PackedRepr<F, R>>,
     ) {
+        let lanes = R::Packing::WIDTH;
+        debug_assert_eq!(self.lanes, lanes);
+        debug_assert!(lane.is_multiple_of(lanes));
         let PackedScratch {
             local_point,
             local_diff,
@@ -1932,20 +2495,58 @@ impl RowTile {
             next_diff,
             ..
         } = scratch;
+        let [(low, high), (next_low, next_high)] = [lane, lane + lanes].map(|lane| {
+            (
+                self.group_cells::<CELL>(&self.low_cells, lane),
+                self.group_cells::<CELL>(&self.high_cells, lane),
+            )
+        });
         for (column, (local, local_delta)) in local_point
             .iter_mut()
             .zip(local_diff.iter_mut())
             .enumerate()
         {
-            self.write_lane_pair::<F, R, CELL, HIGH>(fold, lane, column, local, local_delta);
+            let at = column * lanes;
+            let low = &low[at..at + lanes];
+            let high = if HIGH { &high[at..at + lanes] } else { low };
+            for (((local, delta), low), high) in local
+                .0
+                .as_slice_mut()
+                .iter_mut()
+                .zip(local_delta.0.as_slice_mut())
+                .zip(low)
+                .zip(high)
+            {
+                let (lo, hi) = fold.row_pair_cell::<CELL, HIGH>(low, high);
+                *local = lo;
+                *delta = hi - lo;
+            }
         }
+        // Each lane reads the cells of the lane after it, and the group's last lane those of the
+        // next group's first.
         for run in next_columns {
             for ((column, next), next_delta) in run
                 .clone()
                 .zip(next_point.fill()[run.clone()].iter_mut())
                 .zip(next_diff.fill()[run.clone()].iter_mut())
             {
-                self.write_lane_pair::<F, R, CELL, HIGH>(fold, lane + 1, column, next, next_delta);
+                for (step, (next, delta)) in next
+                    .0
+                    .as_slice_mut()
+                    .iter_mut()
+                    .zip(next_delta.0.as_slice_mut())
+                    .enumerate()
+                {
+                    let (low, high, at) = if step + 1 < lanes {
+                        (low, high, column * lanes + step + 1)
+                    } else {
+                        (next_low, next_high, column * lanes)
+                    };
+                    let high = if HIGH { &high[at] } else { &low[at] };
+                    let (lo, hi) = fold.row_pair_cell::<CELL, HIGH>(&low[at], high);
+                    *next = lo;
+                    *delta = hi - lo;
+                }
             }
         }
     }
@@ -2044,7 +2645,7 @@ where
     /// # Returns
     ///
     /// `None` when the stage is not on its planes, which then stay where they are.
-    fn take_planes(&mut self) -> Option<(SlicedTrace, Vec<EF>)> {
+    fn take_planes(&mut self) -> Option<(SlicedTrace<'data>, Vec<EF>)> {
         match core::mem::replace(&mut self.columns, ExtColumns::Scalar(Vec::new())) {
             ExtColumns::Sliced(SlicedColumns {
                 trace,
@@ -2081,7 +2682,14 @@ where
         S: Field,
         EF: HasSubfield<S>,
     {
-        self.unslice_with::<S, MAX_CORNERS>();
+        let ExtColumns::Sliced(columns) = &self.columns else {
+            return;
+        };
+        if columns.challenges.len() <= MAX_SLICED_ROUNDS {
+            self.unslice_with::<S, MAX_CORNERS>();
+        } else {
+            self.unslice_with::<S, MAX_PLANE_FOLD_CORNERS>();
+        }
     }
 
     /// [`Self::unslice`], gathering each word's corners into buffers of `CORNERS` words.
@@ -2136,30 +2744,33 @@ where
         true
     }
 
-    /// Bind round three or four of the delayed boundary path without materializing an
+    /// Bind round three, four or five of the delayed boundary path without materializing an
     /// intermediate residual column.
     ///
-    /// The round-three fold only drops the tensor. The round-four fold consumes all five
-    /// recorded challenges through [`Self::unslice_with`] at [`MAX_PLANE_FOLD_CORNERS`] corners,
-    /// so its first scalar columns have length `N / 32`.
+    /// The round-three fold only drops the tensor. The fold of the path's last round on the
+    /// planes, see [`last_late_round`], consumes every recorded challenge through
+    /// [`Self::unslice_with`] at [`MAX_PLANE_FOLD_CORNERS`] corners, so its first scalar columns
+    /// have length `N / 32` or `N / 64`. A round-four fold before a round five on the planes only
+    /// records its challenge.
     pub(crate) fn fold_late_boundary<S>(&mut self, r: EF) -> bool
     where
         S: Field,
         EF: HasSubfield<S>,
     {
-        let (round, prefix_len, tensor_present, late) = match &self.columns {
+        let (round, prefix_len, tensor_present, late, last) = match &self.columns {
             ExtColumns::Sliced(columns) => (
                 self.round,
                 columns.challenges.len(),
                 columns.tensor.is_some(),
                 columns.late_boundary,
+                last_late_round(columns.trace.num_vars, R::Packing::WIDTH),
             ),
             _ => return false,
         };
         let valid = late
             && match round {
                 3 => prefix_len == 3 && tensor_present,
-                4 => prefix_len == 4 && !tensor_present,
+                4 | 5 => round <= last && prefix_len == round && !tensor_present,
                 _ => false,
             };
         if !valid {
@@ -2177,16 +2788,18 @@ where
                 self.boundary.apply(R::from(r));
                 self.round += 1;
             }
-            4 => {
+            4 | 5 => {
                 let ExtColumns::Sliced(columns) = &mut self.columns else {
                     unreachable!("late boundary gate checked sliced columns")
                 };
                 columns.challenges.push(r);
-                self.unslice_with::<S, MAX_PLANE_FOLD_CORNERS>();
+                if round == last {
+                    self.unslice_with::<S, MAX_PLANE_FOLD_CORNERS>();
+                }
                 self.boundary.apply(R::from(r));
                 self.round += 1;
             }
-            _ => unreachable!("late boundary gate checked round three or four"),
+            _ => unreachable!("late boundary gate checked round three, four or five"),
         }
         true
     }
@@ -2227,8 +2840,8 @@ where
 
     /// Evaluate one representation-field round directly from the stage's planes.
     ///
-    /// This is shared by the incumbent boundary round and the delayed fifth-challenge path so
-    /// both use the same row/packed evaluator, node schedule, and finish-round semantics.
+    /// This is shared by the boundary round and the delayed boundary path's rounds so all use
+    /// the same row/packed evaluator, node schedule, and finish-round semantics.
     ///
     /// # Panics
     ///
@@ -2272,7 +2885,9 @@ where
         )
     }
 
-    /// Evaluate round four of the delayed boundary path from the retained planes.
+    /// Evaluate round four or five of the delayed boundary path from the retained planes.
+    ///
+    /// Round five is served only when [`last_late_round`] is five.
     pub(crate) fn round_poly_late_boundary<S>(&mut self, eq_suffix: &Poly<EF>) -> Option<Vec<EF>>
     where
         S: Field,
@@ -2289,8 +2904,9 @@ where
         };
         if !columns.late_boundary
             || columns.tensor.is_some()
-            || self.round != 4
-            || columns.challenges.len() != 4
+            || !(4..=last_late_round(columns.trace.num_vars, R::Packing::WIDTH))
+                .contains(&self.round)
+            || columns.challenges.len() != self.round
             || !SLICED_LANES.is_multiple_of(R::Packing::WIDTH)
         {
             return None;
@@ -2347,7 +2963,7 @@ where
                             width,
                             next_zeros.as_ref(),
                         ),
-                        RowTile::new(fold.corners, width),
+                        RowTile::new::<R>(fold.corners, width),
                     )
                 },
                 |(mut scratch, mut tile), pair| {
@@ -2428,7 +3044,7 @@ where
                             width,
                             next_zeros.as_ref(),
                         ),
-                        RowTile::new(fold.corners, width),
+                        RowTile::new::<R>(fold.corners, width),
                     )
                 },
                 |(mut scratch, mut tile), pair| {

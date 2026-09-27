@@ -182,7 +182,7 @@ def ci_plan(
         "wasm": "p3-goldilocks" in affected,
         "keccak": "p3-keccak" in affected,
         "sha_ni": "p3-sha256" in affected,
-        "gfni": bool({"p3-binary-field", "p3-sumcheck"} & affected),
+        "gfni": bool({"p3-binary-field", "p3-multi-stark", "p3-sumcheck"} & affected),
         "toml": full or any_toml,
         "manifests": full or any_manifest,
         "scripts": full or scripts,
@@ -505,6 +505,18 @@ def commands_for(args: argparse.Namespace) -> list[list[str]]:
         ]
     if command == "slow-regressions":
         return [
+            [
+                "cargo",
+                "test",
+                "-p",
+                "p3-multi-stark",
+                "--test",
+                "timestamped_image",
+                "a_proof_from_a_public_image_verifies_only_against_that_image",
+                "--",
+                "--ignored",
+                "--exact",
+            ],
             [
                 "cargo",
                 "test",

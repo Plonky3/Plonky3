@@ -41,7 +41,11 @@ pub(crate) use x86_64::poly_mul_192;
 #[cfg_attr(
     any(
         all(target_arch = "x86_64", target_feature = "pclmulqdq"),
-        all(target_arch = "aarch64", target_feature = "aes"),
+        all(
+            target_arch = "aarch64",
+            target_endian = "little",
+            target_feature = "aes"
+        ),
     ),
     allow(dead_code)
 )]
@@ -67,7 +71,11 @@ pub(crate) use basis::{
 use crate::BinaryField64;
 use crate::tower::TowerLevel;
 
-#[cfg(all(target_arch = "aarch64", target_feature = "aes"))]
+#[cfg(all(
+    target_arch = "aarch64",
+    target_endian = "little",
+    target_feature = "aes"
+))]
 mod aarch64;
 #[cfg(all(target_arch = "x86_64", target_feature = "pclmulqdq"))]
 mod x86_64;
@@ -84,9 +92,14 @@ mod x86_64;
 /// This is a compile-time decision, and neither feature is in the baseline of most targets:
 /// `aarch64-apple-darwin` has `aes`, but generic AArch64 Linux and every `x86_64` target need
 /// `-C target-feature=+aes` / `+pclmulqdq` (or `-C target-cpu=native`) for the fast path.
+/// Big-endian AArch64 takes the software path even with `aes`.
 pub(crate) const HAS_HARDWARE_CLMUL: bool = cfg!(any(
     all(target_arch = "x86_64", target_feature = "pclmulqdq"),
-    all(target_arch = "aarch64", target_feature = "aes"),
+    all(
+        target_arch = "aarch64",
+        target_endian = "little",
+        target_feature = "aes"
+    ),
 ));
 
 /// The carryless product of two 64-bit polynomials over `GF(2)`, one bit of `b` at a time.
@@ -110,11 +123,19 @@ const fn scalar_clmul_64x64(a: u64, b: u64) -> u128 {
     acc
 }
 
-#[cfg(all(target_arch = "aarch64", target_feature = "aes"))]
+#[cfg(all(
+    target_arch = "aarch64",
+    target_endian = "little",
+    target_feature = "aes"
+))]
 use aarch64::clmul_64x64;
 #[cfg(not(any(
     all(target_arch = "x86_64", target_feature = "pclmulqdq"),
-    all(target_arch = "aarch64", target_feature = "aes"),
+    all(
+        target_arch = "aarch64",
+        target_endian = "little",
+        target_feature = "aes"
+    ),
 )))]
 use portable::clmul_64x64;
 #[cfg(all(target_arch = "x86_64", target_feature = "pclmulqdq"))]
@@ -195,31 +216,102 @@ fn composed_poly_mul_128(a: u128, b: u128) -> u128 {
     reduce_128(low, high)
 }
 
+/// Multiplication in the cubic extension `y^3 + y + 1` of `GF(2^64)`.
+///
+/// Karatsuba over three limbs: six carryless products, then three `GF(2^64)` folds.
+/// Built entirely from `clmul_64x64` and `reduce_64`, so it dispatches to whichever
+/// backend those already resolve to on the target.
+///
+/// Used directly on AArch64 and as the portable fallback; x86_64 keeps its own
+/// specialized version, which stays entirely inside one vector register.
+//
+// Only the composed route is `const`, so the signature stays uniform across targets.
+#[allow(clippy::missing_const_for_fn)]
+#[cfg_attr(
+    all(target_arch = "x86_64", target_feature = "pclmulqdq"),
+    allow(dead_code)
+)]
+#[inline]
+pub(crate) fn composed_poly_mul_192(a: [u64; 3], b: [u64; 3]) -> [u64; 3] {
+    let c0 = clmul_64x64(a[0], b[0]);
+    let c1 = clmul_64x64(a[1], b[1]);
+    let c2 = clmul_64x64(a[2], b[2]);
+    let d01 = clmul_64x64(a[0] ^ a[1], b[0] ^ b[1]);
+    let d02 = clmul_64x64(a[0] ^ a[2], b[0] ^ b[2]);
+    let d12 = clmul_64x64(a[1] ^ a[2], b[1] ^ b[2]);
+
+    let p1 = d01 ^ c0 ^ c1;
+    let p2 = d02 ^ c0 ^ c1 ^ c2;
+    let p3 = d12 ^ c1 ^ c2;
+
+    [
+        reduce_64(c0 ^ p3),
+        reduce_64(p1 ^ p3 ^ c2),
+        reduce_64(p2 ^ c2),
+    ]
+}
+
 // The polynomial-basis arithmetic, chosen at compile time.
 //
 // A backend keeps every intermediate in a vector register and folds the modulus with a
 // carryless product, where the integer file would need several instructions per shift.
-#[cfg(all(target_arch = "aarch64", target_feature = "aes"))]
-pub(crate) use aarch64::{poly_dot_128, poly_mul_128, poly_mul_128_by_64, poly_square_128};
+// AArch64 prepares a multiplier held fixed across a run of products once, so that each
+// product takes five carryless multiplies.
+#[cfg(all(
+    target_arch = "aarch64",
+    target_endian = "little",
+    target_feature = "aes"
+))]
+pub(crate) use aarch64::SplitMultiplier as BatchMultiplier;
+#[cfg(all(
+    target_arch = "aarch64",
+    target_endian = "little",
+    target_feature = "aes"
+))]
+pub(crate) use aarch64::{
+    poly_add_128, poly_dot_128, poly_mul_128, poly_mul_128_by_64, poly_square_128,
+};
 #[cfg(not(any(
     all(target_arch = "x86_64", target_feature = "pclmulqdq"),
-    all(target_arch = "aarch64", target_feature = "aes"),
+    all(
+        target_arch = "aarch64",
+        target_endian = "little",
+        target_feature = "aes"
+    ),
 )))]
 pub(crate) use portable::{poly_dot_128, poly_mul_128, poly_mul_128_by_64, poly_square_128};
 #[cfg(all(target_arch = "x86_64", target_feature = "pclmulqdq"))]
 pub(crate) use x86_64::{poly_dot_128, poly_mul_128, poly_mul_128_by_64, poly_square_128};
 
+/// A multiplier held fixed across a run of independent products.
+///
 /// Batch products favor instruction throughput over the latency of a dependent chain.
-#[inline]
-#[allow(clippy::missing_const_for_fn)]
-pub(crate) fn poly_mul_128_batch(a: u128, b: u128) -> u128 {
-    #[cfg(all(target_arch = "aarch64", target_feature = "aes"))]
-    {
-        aarch64::poly_mul_128_batch(a, b)
+#[cfg(not(all(
+    target_arch = "aarch64",
+    target_endian = "little",
+    target_feature = "aes"
+)))]
+#[derive(Clone, Copy)]
+pub(crate) struct BatchMultiplier(u128);
+
+#[cfg(not(all(
+    target_arch = "aarch64",
+    target_endian = "little",
+    target_feature = "aes"
+)))]
+impl BatchMultiplier {
+    /// Prepare a multiplier.
+    #[inline]
+    #[allow(clippy::missing_const_for_fn)]
+    pub(crate) fn new(t: u128) -> Self {
+        Self(t)
     }
-    #[cfg(not(all(target_arch = "aarch64", target_feature = "aes")))]
-    {
-        poly_mul_128(a, b)
+
+    /// The reduced product of the multiplier with `v`.
+    #[inline]
+    #[allow(clippy::missing_const_for_fn)]
+    pub(crate) fn mul(self, v: u128) -> u128 {
+        poly_mul_128(v, self.0)
     }
 }
 
@@ -355,6 +447,37 @@ mod tests {
         low ^ clmul_low(high ^ spill, tail) ^ carried
     }
 
+    /// The split multiplier's lane choreography, written with shifts instead of intrinsics.
+    ///
+    /// The multiplier compiles only on AArch64 with `aes`, so on every other target nothing
+    /// checks its algebra. This mirrors it step for step, with the same extract as above, and
+    /// with the interleave that pairs the two low halves and the two high halves:
+    ///
+    /// ```text
+    ///     zip_low(x, y)  = [x_lo, y_lo]  =  x_lo | (y_lo << 64)
+    ///     zip_high(x, y) = [x_hi, y_hi]  =  x_hi | (y_hi << 64)
+    /// ```
+    fn split_multiplier_shape(t: u128, v: u128) -> u128 {
+        let ext = |x: u128, y: u128| (x >> 64) | (y << 64);
+        let zip_low = |x: u128, y: u128| (x as u64 as u128) | (y << 64);
+        let zip_high = |x: u128, y: u128| (x >> 64) | ((y >> 64) << 64);
+        let clmul_low = |x: u128, y: u128| super::clmul_64x64(x as u64, y as u64);
+        let clmul_high = |x: u128, y: u128| super::clmul_64x64((x >> 64) as u64, (y >> 64) as u64);
+        let tail = (TAIL_128 as u64 as u128) | ((TAIL_128 as u64 as u128) << 64);
+
+        // The companion `t x^64 = t0 x^64 + t1 T`: the low half raised, the high half folded.
+        let companion = ext(0, t) ^ clmul_high(t, tail);
+        let halves_low = zip_low(t, companion);
+        let halves_high = zip_high(t, companion);
+
+        // `t0 v0 + u0 v1` and `t1 v0 + u1 v1`, each from one register of halves.
+        let low = clmul_low(v, halves_low) ^ clmul_high(v, halves_low);
+        let high = clmul_low(v, halves_high) ^ clmul_high(v, halves_high);
+
+        // `high x^64`: its low half raised by `x^64`, its high half times the tail.
+        low ^ ext(0, high) ^ clmul_high(high, tail)
+    }
+
     /// The operands whose half products and reduction spill are maximal, plus the identities.
     const KERNEL_CORNERS: [u128; 10] = [
         0,
@@ -368,6 +491,41 @@ mod tests {
         1 << 121,
         TAIL_128,
     ];
+
+    #[test]
+    fn the_split_multiplier_algebra_matches_modular_multiplication_on_extremes() {
+        // Invariant: moving the `x^64` weight onto the fixed operand changes nothing modulo the
+        // field polynomial, on every pair of corner operands, including the companion's own.
+        for t in KERNEL_CORNERS {
+            for v in KERNEL_CORNERS {
+                assert_eq!(
+                    split_multiplier_shape(t, v),
+                    poly_mul(t, v, 128, TAIL_128),
+                    "{t:#x} * {v:#x}"
+                );
+            }
+        }
+    }
+
+    /// A multiplier prepared from a companion computed elsewhere is the one that derives it.
+    #[cfg(all(
+        target_arch = "aarch64",
+        target_endian = "little",
+        target_feature = "aes"
+    ))]
+    #[test]
+    fn a_multiplier_prepared_from_parts_matches_one_that_derives_its_companion() {
+        for t in KERNEL_CORNERS {
+            let companion = super::poly_mul_128(t, 1 << 64);
+            for v in KERNEL_CORNERS {
+                assert_eq!(
+                    super::aarch64::SplitMultiplier::from_parts(t, companion).mul(v),
+                    super::aarch64::SplitMultiplier::new(t).mul(v),
+                    "{t:#x} * {v:#x}"
+                );
+            }
+        }
+    }
 
     #[test]
     fn the_vector_kernel_algebra_matches_the_composition_on_extremes() {
@@ -452,7 +610,7 @@ mod tests {
             let x = BinaryField128::from_repr(a);
             let y = BinaryField128::from_repr(b);
             prop_assert_eq!(super::mul_128(a, b), x.reference_mul(y).to_repr());
-            prop_assert_eq!(super::poly_mul_128_batch(a, b), poly_mul(a, b, 128, TAIL_128));
+            prop_assert_eq!(super::BatchMultiplier::new(b).mul(a), poly_mul(a, b, 128, TAIL_128));
         }
 
         #[test]
@@ -503,6 +661,24 @@ mod tests {
         #[test]
         fn the_vector_kernel_algebra_matches_the_composition(a: u128, b: u128) {
             prop_assert_eq!(vector_kernel_shape(a, b), super::composed_poly_mul_128(a, b));
+        }
+
+        /// The split multiplier's choreography must reduce to the modular product, on every
+        /// target rather than only the ones that run it.
+        #[test]
+        fn the_split_multiplier_algebra_matches_modular_multiplication(t: u128, v: u128) {
+            prop_assert_eq!(split_multiplier_shape(t, v), poly_mul(t, v, 128, TAIL_128));
+        }
+
+        /// A companion computed by a general product prepares the same multiplier.
+        #[cfg(all(target_arch = "aarch64", target_endian = "little", target_feature = "aes"))]
+        #[test]
+        fn a_multiplier_prepared_from_parts_matches_on_random_operands(t: u128, v: u128) {
+            let companion = super::poly_mul_128(t, 1 << 64);
+            prop_assert_eq!(
+                super::aarch64::SplitMultiplier::from_parts(t, companion).mul(v),
+                super::aarch64::SplitMultiplier::new(t).mul(v)
+            );
         }
 
         /// The half-product decomposition must reproduce the bit-serial 256-bit product.
@@ -569,6 +745,11 @@ mod tests {
                     super::poly_mul_128(a, b),
                     poly_mul(a, b, 128, TAIL_128),
                     "{a:#x} * {b:#x}"
+                );
+                assert_eq!(
+                    super::BatchMultiplier::new(b).mul(a),
+                    poly_mul(a, b, 128, TAIL_128),
+                    "{a:#x} * {b:#x}, prepared"
                 );
             }
         }

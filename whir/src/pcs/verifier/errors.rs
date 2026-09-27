@@ -88,6 +88,19 @@ pub enum VerifierError {
     #[error("Non-canonical proof-of-work witness in round {round} at zero difficulty")]
     NonCanonicalPowWitness { round: usize },
 
+    /// Final sumcheck data is present, but the folding schedule leaves no closing rounds.
+    ///
+    /// Raised with the other shape checks, before any transcript work.
+    //
+    // Why: with no closing rounds the final fold delegates nothing.
+    //
+    //     prover  : no closing fold -> None on the wire
+    //     verifier: no closing fold -> the field is never read
+    //
+    // The field is then bound to nothing: any value rides along and still verifies.
+    #[error("Unexpected final sumcheck data: the folding schedule leaves no closing rounds")]
+    UnexpectedFinalSumcheck,
+
     /// Proof is missing the Merkle commitment for a round.
     #[error("Proof is missing the Merkle commitment for round {round}")]
     MissingRoundCommitment { round: usize },

@@ -530,7 +530,7 @@ where
                 "trace width or public-value count disagrees with the AIR",
             ));
         }
-        periodic_num_variables(air.num_periodic_columns(), &air.periodic_columns(), height)?;
+        periodic_num_variables(air.num_periodic_columns(), &air.periodic_periods(), height)?;
         for (width, next, total) in [
             (air.width(), air.main_next_row_columns(), &mut main_cells),
             (

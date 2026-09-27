@@ -849,7 +849,9 @@ mod error_variant_tests {
     use p3_field::PrimeCharacteristicRing;
     use p3_multilinear_util::poly::Poly;
     use p3_sumcheck::layout::{Layout, SuffixProver, Table};
-    use p3_sumcheck::{OpeningBatch, OpeningProtocol, SumcheckError, TableShape, TableSpec};
+    use p3_sumcheck::{
+        OpeningBatch, OpeningProtocol, SumcheckData, SumcheckError, TableShape, TableSpec,
+    };
     use rand::SeedableRng;
     use rand::rngs::SmallRng;
 
@@ -905,13 +907,27 @@ mod error_variant_tests {
         PcsProof<F, EF, MyMmcs>,
         OpeningProtocol,
     ) {
+        commit_and_open_with(NUM_VARIABLES, FOLDING)
+    }
+
+    /// The same fixture over a table of `num_variables` folded by a constant `folding`.
+    #[allow(clippy::type_complexity)]
+    fn commit_and_open_with(
+        num_variables: usize,
+        folding: usize,
+    ) -> (
+        TestWhirPcs<L>,
+        <TestWhirPcs<L> as MultilinearPcs<EF, MyChallenger>>::Commitment,
+        PcsProof<F, EF, MyMmcs>,
+        OpeningProtocol,
+    ) {
         // Random table of two columns; deterministic seed for reproducibility.
         let mut rng = SmallRng::seed_from_u64(1);
-        let table = Table::rand(&mut rng, 2, NUM_VARIABLES);
-        let witness = L::new_witness(vec![table], FOLDING);
+        let table = Table::rand(&mut rng, 2, num_variables);
+        let witness = L::new_witness(vec![table], folding);
         // Two opening batches: (cols [0, 1]) and (col [0]).
         let protocol = OpeningProtocol::new(vec![TableSpec::new(
-            TableShape::new(NUM_VARIABLES, 2),
+            TableShape::new(num_variables, 2),
             vec![
                 OpeningBatch::new(vec![0, 1], vec![]),
                 OpeningBatch::new(vec![0], vec![]),
@@ -928,7 +944,7 @@ mod error_variant_tests {
             security_level: 32,
             pow_bits: 0,
             round_log_inv_rates: vec![4],
-            folding_factor: FoldingFactor::Constant(FOLDING),
+            folding_factor: FoldingFactor::Constant(folding),
             soundness_type: SecurityAssumption::CapacityBound,
             starting_log_inv_rate: 1,
         };
@@ -1308,6 +1324,35 @@ mod error_variant_tests {
             VerifierError::NonCanonicalPowWitness { round } => assert_eq!(round, rounds),
             other => panic!("expected NonCanonicalPowWitness, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn rejects_final_sumcheck_data_when_no_final_rounds_are_played() {
+        // Invariant: a schedule whose folds use up every variable plays no closing sumcheck,
+        // so only a presence check can bind the final sumcheck field.
+        //
+        //     final rounds = 0  ->  prover writes None, verifier never reads the field
+        //     final rounds > 0  ->  the closing fold replays and checks it
+        //
+        // Fixture state: 16 stacked variables folded by 8, so the schedule is [8, 8].
+        //
+        // Mutation: attach sumcheck data that nothing reads.
+        let (pcs, commitment, proof, protocol) = commit_and_open_with(15, 8);
+        assert_eq!(pcs.config.folding_schedule, vec![8, 8]);
+        assert_eq!(pcs.final_sumcheck_rounds(), 0);
+        assert!(proof.whir.final_sumcheck.is_none());
+        verify(&pcs, &commitment, &proof, protocol.clone()).expect("the honest proof must verify");
+
+        let mut mutated = proof;
+        mutated.whir.final_sumcheck = Some(SumcheckData {
+            polynomial_evaluations: vec![[EF::ONE, EF::TWO]],
+            pow_witnesses: vec![],
+        });
+        let err = verify(&pcs, &commitment, &mutated, protocol).unwrap_err();
+        assert!(
+            matches!(err, VerifierError::UnexpectedFinalSumcheck),
+            "expected UnexpectedFinalSumcheck, got {err:?}"
+        );
     }
 
     #[test]
