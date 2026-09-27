@@ -115,6 +115,8 @@ fn copy_coset(dst: &mut [u128], src: &[u128]) {
 }
 
 /// Whether cosets of `len` elements are large enough to spread over every worker on their own.
+// The thread-count query is `const` only in the serial configuration, as for `use_parallel`.
+#[allow(clippy::missing_const_for_fn)]
 fn large_cosets(len: usize) -> bool {
     len >= 2 * BUTTERFLY_GRAIN * current_num_threads()
 }
