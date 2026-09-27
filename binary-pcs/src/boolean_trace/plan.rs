@@ -126,6 +126,28 @@ where
         }
         Ok(())
     }
+
+    /// Check that supplied values name one run per batch, each with its batch's shape.
+    pub(super) fn validate_known(
+        protocol: &OpeningProtocol,
+        known: &[Option<OpeningEvals<EF>>],
+    ) -> Result<(), BooleanTraceCommitmentError<B::Error>> {
+        if known.len() != protocol.num_openings() {
+            return Err(BooleanTraceCommitmentError::KnownValueCount {
+                expected: protocol.num_openings(),
+                actual: known.len(),
+            });
+        }
+        for (batch, ((_, request), known)) in protocol.iter_openings().zip(known).enumerate() {
+            if known
+                .as_ref()
+                .is_some_and(|known| !request.has_same_shape(known))
+            {
+                return Err(BooleanTraceCommitmentError::KnownValueShape { batch });
+            }
+        }
+        Ok(())
+    }
 }
 
 /// How one opening protocol is discharged against the bit commitment.

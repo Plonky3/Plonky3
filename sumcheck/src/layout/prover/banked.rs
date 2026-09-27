@@ -279,14 +279,21 @@ fn dense_column<F: Field>(table: &Table<F>) -> &[F] {
         .expect("a banked column is held densely")
 }
 
-/// A run of source values, crossed into `R` in one conversion.
-fn to_repr<F, EF, R>(values: &[F]) -> Vec<R>
+/// A run of source values, crossed into `R` in one conversion, unless every one is zero.
+///
+/// A zero run adds nothing to a bank sum and binds to zero, so no kernel needs it converted.
+/// A stacked column is zero past its last table, so its tail costs one read.
+fn to_repr<'a, F, EF, R>(values: &[F]) -> Option<Cow<'a, [R]>>
 where
     F: Field,
     EF: ExtensionField<F>,
-    R: FromTable<EF>,
+    R: FromTable<EF> + Clone,
 {
-    R::from_table(values.iter().map(|&value| EF::from(value)).collect())
+    if values.iter().all(F::is_zero) {
+        return None;
+    }
+    let image = R::from_table(values.iter().map(|&value| EF::from(value)).collect());
+    Some(Cow::Owned(image))
 }
 
 /// Every claim's bank sums, `2^banks` per claim, claim after claim.
@@ -307,23 +314,25 @@ where
     R: Field + FromTable<EF>,
 {
     bank_sums_over(column.len(), high_points, banks, |rows| {
-        Cow::Owned(to_repr::<F, EF, R>(&column[rows]))
+        to_repr::<F, EF, R>(&column[rows])
     })
 }
 
 /// [`bank_sums`] over a column already in `R`, read in place.
 fn bank_sums_repr<R: Field>(column: &[R], high_points: &[Point<R>], banks: usize) -> Vec<R> {
     bank_sums_over(column.len(), high_points, banks, |rows| {
-        Cow::Borrowed(&column[rows])
+        Some(Cow::Borrowed(&column[rows]))
     })
 }
 
 /// [`bank_sums`] over a column of `len` entries, whose rows `block` hands out in `R`.
+///
+/// A block handing out nothing holds only zero rows, which no bank sum reads.
 fn bank_sums_over<'a, R: Field>(
     len: usize,
     high_points: &[Point<R>],
     banks: usize,
-    block: impl Fn(Range<usize>) -> Cow<'a, [R]> + Sync,
+    block: impl Fn(Range<usize>) -> Option<Cow<'a, [R]>> + Sync,
 ) -> Vec<R> {
     // A row of banks narrower than the packing is weighed one lane at a time.
     if (1usize << banks).is_multiple_of(R::Packing::WIDTH) {
@@ -338,7 +347,7 @@ fn bank_sums_in<'a, R, P>(
     len: usize,
     high_points: &[Point<R>],
     banks: usize,
-    block: impl Fn(Range<usize>) -> Cow<'a, [R]> + Sync,
+    block: impl Fn(Range<usize>) -> Option<Cow<'a, [R]>> + Sync,
 ) -> Vec<R>
 where
     R: Field,
@@ -366,7 +375,9 @@ where
     let sums = (0..len / block_len).into_par_iter().par_fold_reduce(
         || P::zero_vec(high_points.len() * groups),
         |mut sums, index| {
-            let values = block(index * block_len..(index + 1) * block_len);
+            let Some(values) = block(index * block_len..(index + 1) * block_len) else {
+                return sums;
+            };
             let rows = P::pack_slice(&values);
             for ((outer, inner), sums) in weights.iter().zip(sums.chunks_exact_mut(groups)) {
                 let scale = P::from(outer[index]);
@@ -397,21 +408,21 @@ where
     EF: ExtensionField<F>,
     R: Field + FromTable<EF>,
 {
-    bind_column_over(column.len(), eq, |rows| {
-        Cow::Owned(to_repr::<F, EF, R>(&column[rows]))
-    })
+    bind_column_over(column.len(), eq, |rows| to_repr::<F, EF, R>(&column[rows]))
 }
 
 /// [`bind_column`] over a column already in `R`, read in place.
 fn bind_repr<R: Field>(column: &[R], eq: &[R]) -> Vec<R> {
-    bind_column_over(column.len(), eq, |rows| Cow::Borrowed(&column[rows]))
+    bind_column_over(column.len(), eq, |rows| Some(Cow::Borrowed(&column[rows])))
 }
 
 /// [`bind_column`] over a column of `len` entries, whose rows `block` hands out in `R`.
+///
+/// A block handing out nothing holds only zero rows, which bind to zero.
 fn bind_column_over<'a, R: Field>(
     len: usize,
     eq: &[R],
-    block: impl Fn(Range<usize>) -> Cow<'a, [R]> + Sync,
+    block: impl Fn(Range<usize>) -> Option<Cow<'a, [R]>> + Sync,
 ) -> Vec<R> {
     // A row of banks narrower than the packing is bound one lane at a time.
     if eq.len().is_multiple_of(R::Packing::WIDTH) {
@@ -425,7 +436,7 @@ fn bind_column_over<'a, R: Field>(
 fn bind_column_in<'a, R, P>(
     len: usize,
     eq: &[R],
-    block: impl Fn(Range<usize>) -> Cow<'a, [R]> + Sync,
+    block: impl Fn(Range<usize>) -> Option<Cow<'a, [R]>> + Sync,
 ) -> Vec<R>
 where
     R: Field,
@@ -441,7 +452,10 @@ where
         .enumerate()
         .for_each(|(index, bound)| {
             let first = index * BLOCK_ROWS * banks;
-            let values = block(first..first + bound.len() * banks);
+            // The output starts at zero, which is what a zero block binds to.
+            let Some(values) = block(first..first + bound.len() * banks) else {
+                return;
+            };
             let rows = P::pack_slice(&values).chunks_exact(groups);
             for (slot, row) in bound.iter_mut().zip(rows) {
                 *slot = dot::<_, 4>(eq, |group| row[group])
@@ -506,7 +520,14 @@ mod tests {
     ///
     /// Each kernel runs twice: over the source column, converting it block by block, and over
     /// the same column already in `R`, read in place as every later stage reads it.
-    fn assert_kernels_match_reference<F, EF, R>(seed: u64)
+    ///
+    /// A sparse column is zero in its first quarter and its second half:
+    ///
+    /// ```text
+    ///     one block      part of it zero, so it is still converted and read
+    ///     several        whole blocks zero, which the source kernels skip
+    /// ```
+    fn assert_kernels_match_reference<F, EF, R>(seed: u64, sparse: bool)
     where
         F: Field,
         EF: ExtensionField<F>,
@@ -517,7 +538,11 @@ mod tests {
         for num_variables in ARITIES {
             for depth in DEPTHS.into_iter().filter(|&depth| depth <= num_variables) {
                 let banks = 1usize << depth;
-                let column: Vec<F> = (0..1 << num_variables).map(|_| rng.random()).collect();
+                let len = 1usize << num_variables;
+                let zero = |row: usize| sparse && (row < len / 4 || row >= len / 2);
+                let column: Vec<F> = (0..len)
+                    .map(|row| if zero(row) { F::ZERO } else { rng.random() })
+                    .collect();
                 let lifted: Vec<R> = R::from_table(column.iter().map(|&v| EF::from(v)).collect());
                 let shape = alloc::format!("num_variables={num_variables}, depth={depth}");
 
@@ -575,11 +600,17 @@ mod tests {
 
     #[test]
     fn kernels_match_reference_over_binary_field() {
-        assert_kernels_match_reference::<BinaryField128, BinaryField128, Ghash128>(1);
+        assert_kernels_match_reference::<BinaryField128, BinaryField128, Ghash128>(1, false);
     }
 
     #[test]
     fn kernels_match_reference_over_extension_of_prime_field() {
-        assert_kernels_match_reference::<BabyBear, BabyBearExt4, BabyBearExt4>(2);
+        assert_kernels_match_reference::<BabyBear, BabyBearExt4, BabyBearExt4>(2, false);
+    }
+
+    #[test]
+    fn kernels_match_reference_over_zero_blocks() {
+        assert_kernels_match_reference::<BinaryField128, BinaryField128, Ghash128>(3, true);
+        assert_kernels_match_reference::<BabyBear, BabyBearExt4, BabyBearExt4>(4, true);
     }
 }

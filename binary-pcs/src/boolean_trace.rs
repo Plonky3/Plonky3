@@ -373,7 +373,29 @@ pub enum BooleanTraceCommitmentError<E> {
     #[error(transparent)]
     ColumnBatchTranscript(#[from] p3_challenger::fs::TranscriptError),
 
-    /// The inner opening disagreed with the prover's independently computed batch value.
+    /// Supplied values name a different number of batches than the protocol opens.
+    #[error("{actual} supplied value runs against {expected} opening batches")]
+    KnownValueCount {
+        /// Batches the protocol schedules.
+        expected: usize,
+        /// Value runs supplied, present or not.
+        actual: usize,
+    },
+
+    /// A supplied value run does not read the columns its batch names.
+    #[error("the value run supplied for batch {batch} does not match the columns it reads")]
+    KnownValueShape {
+        /// Batch whose supplied run has another shape.
+        batch: usize,
+    },
+
+    /// The inner opening disagreed with the value combined from the claimed column values.
+    ///
+    /// This is the only check a supplied value run meets on the prover's side.
+    ///
+    /// The combination is taken at a column point drawn after the run is bound. A wrong run
+    /// therefore escapes it with probability at most `j / |EF|` for a block of `2^j` columns,
+    /// the bound the verifier's own check has.
     #[error("column batch {batch} returned an aggregate value different from its claimed columns")]
     ColumnBatchValueMismatch {
         /// Batch whose aggregate value disagreed.
@@ -539,9 +561,22 @@ where
         points: &[Point<EF>],
         challenger: &mut Challenger,
     ) -> Result<Self::Proof, Self::ProverError> {
-        // Every shape and every point is checked before the transcript moves.
+        let known = alloc::vec![None; protocol.num_openings()];
+        self.open_at_known(prover_data, protocol, points, &known, challenger)
+    }
+
+    fn open_at_known(
+        &self,
+        prover_data: Self::ProverData,
+        protocol: &OpeningProtocol,
+        points: &[Point<EF>],
+        known: &[Option<OpeningEvals<EF>>],
+        challenger: &mut Challenger,
+    ) -> Result<Self::Proof, Self::ProverError> {
+        // Every shape, point and supplied value run is checked before the transcript moves.
         Self::validate_source_shapes(&prover_data.tables, protocol)?;
         let placements = self.validate_opening(protocol, points)?;
+        Self::validate_known(protocol, known)?;
         let runs = match OpeningRoute::new(protocol) {
             OpeningRoute::PerColumn(plan) => {
                 let openings = Self::bit_openings(protocol, plan.claims(), points, &placements);
@@ -560,6 +595,7 @@ where
         let mut openings = Vec::new();
         let mut expected = Vec::new();
         let mut batch_points = points.iter();
+        let mut batch_known = known.iter();
         for run in &runs {
             let ColumnBatchShape {
                 width,
@@ -568,9 +604,19 @@ where
                 ..
             } = run.shape;
             let run_points: Vec<_> = batch_points.by_ref().take(num_batches).collect();
+            let run_known = batch_known.by_ref().take(num_batches);
             let offset = values.len();
             tracing::info_span!("evaluate boolean columns", width, next).in_scope(|| {
-                for point in &run_points {
+                for (point, known) in run_points.iter().zip(run_known) {
+                    // A supplied run is bound as it stands; the reduction below compares each
+                    // block's combination of it against the committed bits. That comparison is
+                    // a random check, the only one the run meets: a wrong run passes it with
+                    // probability at most `j / |EF|` per block of `2^j` columns.
+                    if let Some(known) = known {
+                        values.extend_from_slice(known.current());
+                        values.extend_from_slice(known.next());
+                        continue;
+                    }
                     let (current, successor) =
                         Self::evaluate_views(&tables[run.table], point, next);
                     values.extend(current);

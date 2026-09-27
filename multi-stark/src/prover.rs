@@ -9,7 +9,7 @@ use p3_commit::MultilinearPcs;
 use p3_field::PrimeCharacteristicRing;
 use p3_field::{ExtensionField, Field};
 use p3_lookup::InteractionSymbolicBuilder;
-use p3_sumcheck::PrescribedPointPcs;
+use p3_sumcheck::{OpeningEvals, PrescribedPointPcs};
 
 use crate::ProverInstances;
 use crate::backend::{GenericBackend, ZerocheckBackend};
@@ -19,7 +19,7 @@ use crate::folder::ProverAir;
 use crate::indexed::{IndexedPlan, IndexedWitness};
 use crate::instance::{ProverParts, RunPoints, trace_suffix};
 use crate::logup_star::LogupStarProof;
-use crate::lookup::prove_lookup;
+use crate::lookup::{LookupRuntime, prove_lookup};
 use crate::opening::TableOpening;
 use crate::proof::{IndexedLookupProof, MultiStarkProof};
 use crate::security::{SecurityError, assess_statement};
@@ -132,6 +132,8 @@ where
 /// AIRs with no preprocessed columns. Each proof clones the committed data to open
 /// it at this proof's point without rebuilding the preprocessed commitment.
 ///
+/// The proving key must come from `setup` over these AIRs, in this order.
+///
 /// # Arguments
 ///
 /// - `config`: proof configuration selecting the commitment schemes.
@@ -152,6 +154,8 @@ where
 /// - The trace arity must meet the commitment scheme's padding floor.
 /// - This keeps the committed successor view in the same frame as zerocheck.
 /// - The prover instances must all use the same proving key.
+/// - That key must come from `setup` over these AIRs, in this order: their count, widths and
+///   public-value counts are checked, and a debug build also checks what they declare.
 /// - The proving key must carry a preprocessed commitment exactly when an AIR declares columns.
 /// - Every instance must supply the public-value count its AIR declares.
 /// - The preprocessed key width must match the AIR's declared preprocessed width.
@@ -268,9 +272,15 @@ where
         "every trace arity must be at least the commitment scheme's padding floor"
     );
 
+    // What setup recorded about each AIR decides which phases below run at all.
+    let airs = instances.airs();
+    assert!(
+        proving_key.describes(&airs),
+        "the proving key must come from setup over these AIRs, in this order"
+    );
+
     // Reject a malformed public boundary declaration before anything indexes by it.
     // The pins the folder injects read columns and public values by those numbers.
-    let airs = instances.airs();
     for (instance, air) in airs.iter().enumerate() {
         boundary::validate(
             air.public_boundary_io(),
@@ -281,10 +291,22 @@ where
     }
 
     // Indexed lookups change the described sequence, so the plan is settled first.
-    let indexed_plan =
+    //
+    // Setup already read every AIR's declarations off its one symbolic pass.
+    // A batch declaring no indexed lookup has no plan, so it skips the pass that finds none.
+    let profiles = &proving_key.air_profiles;
+    let indexed_plan = if profiles.iter().any(|profile| profile.declares_indexed) {
         IndexedPlan::build::<C::Val, C::Challenge, A>(&airs, &instances.num_variables())
-            .expect("an indexed lookup the statement cannot plan is a caller error");
-    let bus = BusContext::<C::Val, C::Challenge>::build(&airs, &instances.num_variables())?;
+            .expect("an indexed lookup the statement cannot plan is a caller error")
+    } else {
+        None
+    };
+    // A batch declaring no binary-bus interaction has no bus statement either.
+    let bus = if proving_key.declares_bus {
+        BusContext::<C::Val, C::Challenge>::build(&airs, &instances.num_variables())?
+    } else {
+        None
+    };
 
     // IndexedWitness currently borrows dense field slices for both payload and position columns.
     // Reject a packed source before the statement transcript or commitment can mutate the caller's
@@ -445,7 +467,12 @@ where
 
     // 5. Materialize the lookup fractions and reduce them, inside the delegation bracket.
     // The resulting claim feeds the coupled AIR sumcheck below.
+    //
+    // A batch whose AIRs declare no lookup has no plan, so it touches no transcript either.
     let (lookup_proof, lookup_data) = transcript.lookup_argument(|challenger| {
+        if !profiles.iter().any(|profile| profile.declares_lookups) {
+            return (None, LookupRuntime::Inactive);
+        }
         prove_lookup::<C::Val, C::Challenge, A, _>(
             &airs,
             &tables,
@@ -457,7 +484,8 @@ where
 
     // 6. Reduce AIR constraints, lookup links, and bus shares to one sumcheck and one point.
     // The committed prover opens columns through the commitment schemes below, so
-    // the zerocheck's own opened values are not used as the final proof openings.
+    // the zerocheck's own opened values reach the proof only through an opening that
+    // binds them to the commitment.
     //
     // Under test the bus tables may stand in for the committed ones.
     // The closing check then meets openings the sumcheck never folded, and rejects.
@@ -560,15 +588,34 @@ where
     drop(preprocessed_tables);
 
     // 8. Open each main trace table at every point a claim was left at.
+    //
+    // A table's first batch reads its AIR's columns at the suffix of the bound point.
+    // The zerocheck folded each of those columns down to exactly that value, so the scheme is
+    // handed them rather than left to evaluate the table again.
     let points = RunPoints::new(&point, indexed_output.as_ref());
     let opening = transcript.main_opening(|challenger| {
         let schedule = instances.main_schedule(indexed_plan.as_ref(), |role, rows| {
             trace_suffix(points.at(role), rows)
         });
-        config.pcs().open_at(
+        let mut known = alloc::vec![None; schedule.protocol().num_openings()];
+        let first_batches = schedule.first_batch_per_table();
+        debug_assert_eq!(
+            (zerocheck_proof.local.len(), zerocheck_proof.next.len()),
+            (first_batches.len(), first_batches.len()),
+            "the zerocheck opens every committed table once"
+        );
+        for ((batch, local), next) in first_batches
+            .into_iter()
+            .zip(zerocheck_proof.local)
+            .zip(zerocheck_proof.next)
+        {
+            known[batch] = Some(OpeningEvals::new(local, next));
+        }
+        config.pcs().open_at_known(
             prover_data,
             schedule.protocol(),
             &schedule.against(),
+            &known,
             challenger,
         )
     });
@@ -1606,6 +1653,101 @@ mod tests {
                 ZerocheckError::FinalSumMismatch
             ))
         ));
+    }
+
+    #[test]
+    fn setup_records_whether_any_air_of_the_batch_declares_a_bus() {
+        // Invariant: the prover skips the bus pass only when no AIR of the batch declares one.
+        //
+        //     steep, then a bus end   -> declared, by the second AIR alone
+        //     steep alone             -> not declared
+        //     silent alone            -> not declared
+        let config = config(4, FOLDING);
+        let bus = MixedAir::Bus(ConditionalBusAir {
+            direction: BusDirection::Push,
+            conditional: true,
+        });
+        let declares_bus = |airs: &[&MixedAir]| {
+            let (pk, _) = setup(&config, airs, &mut challenger()).unwrap();
+            pk.declares_bus
+        };
+        assert!(declares_bus(&[&MixedAir::Steep, &bus]));
+        assert!(!declares_bus(&[&MixedAir::Steep]));
+        let (silent, _) = setup(&config, &[&SilentAir], &mut challenger()).unwrap();
+        assert!(!silent.declares_bus);
+    }
+
+    /// Prove one AIR, of two columns, over zeros, under a key set up over another.
+    fn prove_under_foreign_key<A>(setup_air: &A, proved_air: &A)
+    where
+        A: ProverAir<F, EF>,
+    {
+        let height = packed_floor();
+        let config = config(log2_strict_usize(height), FOLDING);
+        let (pk, _) = setup(&config, &[setup_air], &mut challenger()).unwrap();
+        let _ = prove(
+            &config,
+            ProverInstances::new(vec![ProverInstance::new(
+                proved_air,
+                Table::new(RowMajorMatrix::new(F::zero_vec(2 * height), height)),
+                &pk,
+                &[],
+            )]),
+            0,
+            &mut challenger(),
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "the proving key must come from setup over these AIRs")]
+    fn a_key_set_up_over_other_shapes_is_refused_before_any_phase() {
+        // Fixture state: the key's AIR declares no bus and has one column; the proved AIR
+        // declares one and has two. Skipping the bus pass on the key's word would drop the
+        // bus section and leave the refusal to the verifier.
+        let bus = MixedAir::Bus(ConditionalBusAir {
+            direction: BusDirection::Push,
+            conditional: true,
+        });
+        prove_under_foreign_key(&MixedAir::Steep, &bus);
+    }
+
+    /// Two columns and one first-row constraint, with a bus declaration on top or without one.
+    #[cfg(debug_assertions)]
+    #[derive(Clone, Copy)]
+    struct ToggledBusAir(bool);
+
+    #[cfg(debug_assertions)]
+    impl BaseAir<F> for ToggledBusAir {
+        fn width(&self) -> usize {
+            2
+        }
+    }
+
+    #[cfg(debug_assertions)]
+    impl<AB> Air<AB> for ToggledBusAir
+    where
+        AB: BusInteractionBuilder<F = F>,
+    {
+        fn eval(&self, builder: &mut AB) {
+            let cell = builder.main().current_slice()[0];
+            builder.when_first_row().assert_zero(cell);
+            if self.0 {
+                ConditionalBusAir {
+                    direction: BusDirection::Push,
+                    conditional: true,
+                }
+                .eval(builder);
+            }
+        }
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "the proving key must come from setup over these AIRs")]
+    fn a_key_whose_airs_declare_no_bus_under_the_same_shapes_is_refused_in_debug() {
+        // Fixture state: one AIR type whose widths do not depend on whether it declares a bus.
+        // Only the rerun of setup's passes a debug build makes can tell the two apart.
+        prove_under_foreign_key(&ToggledBusAir(false), &ToggledBusAir(true));
     }
 
     #[test]

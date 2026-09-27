@@ -196,6 +196,47 @@ where
         challenger: &mut Challenger,
     ) -> Result<Self::Proof, Self::ProverError>;
 
+    /// Open as [`open_at`](PrescribedPointPcs::open_at) does, given values the caller holds.
+    ///
+    /// Entry `i` of `known`, when present, is batch `i`'s claimed values at its point.
+    ///
+    /// Those are its current values, then its successor values, in the order the batch names them.
+    ///
+    /// A scheme may bind them in place of evaluating the committed columns itself.
+    ///
+    /// The default ignores them and evaluates every batch.
+    ///
+    /// # Soundness
+    ///
+    /// A scheme that binds a supplied value must bind it exactly as a computed one is bound.
+    ///
+    /// The verifier then reads it only from the proof, so a wrong one is accepted only within
+    /// the opening's own soundness error.
+    ///
+    /// A scheme may refuse a wrong one before the proof leaves. That refusal is itself a random
+    /// check, so a wrong value escapes it with the probability that check allows.
+    ///
+    /// # Errors
+    ///
+    /// A scheme that reads `known` refuses a list without one entry per batch, or an entry
+    /// shaped unlike its batch, before the transcript moves.
+    ///
+    /// Otherwise as [`open_at`](PrescribedPointPcs::open_at).
+    ///
+    /// # Panics
+    ///
+    /// Panics if the number of points differs from the number of opening batches.
+    fn open_at_known(
+        &self,
+        prover_data: Self::ProverData,
+        protocol: &OpeningProtocol,
+        points: &[Point<Challenge>],
+        _known: &[Option<OpeningEvals<Challenge>>],
+        challenger: &mut Challenger,
+    ) -> Result<Self::Proof, Self::ProverError> {
+        self.open_at(prover_data, protocol, points, challenger)
+    }
+
     /// Verify a prescribed-point opening and return the opened column values.
     ///
     /// # Arguments

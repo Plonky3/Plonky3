@@ -60,7 +60,7 @@ impl AirDegrees {
     }
 }
 
-/// What one symbolic pass over an AIR fixes for its zerocheck fold.
+/// What one symbolic pass over an AIR fixes: its zerocheck fold, and which lookups it declares.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct AirProfile {
     /// Native per-variable degrees of the ordinary constraints and the lookup links.
@@ -69,6 +69,10 @@ pub(crate) struct AirProfile {
     ///
     /// The AIR's own constraints, plus one pin per cell it lists as a public input.
     pub(crate) num_constraints: usize,
+    /// Whether the AIR declares any lookup interaction, even one with no tuple.
+    pub(crate) declares_lookups: bool,
+    /// Whether the AIR declares any indexed read or indexed table.
+    pub(crate) declares_indexed: bool,
 }
 
 /// One batch of AIRs that share a single trace height.
@@ -2856,6 +2860,8 @@ mod tests {
                     interactions: 0,
                 },
                 num_constraints: 3,
+                declares_lookups: false,
+                declares_indexed: false,
             }],
             StageCoupling::new(BTreeMap::new(), BTreeMap::new(), vec![]),
         );
@@ -3100,6 +3106,8 @@ mod tests {
                         interactions: 0,
                     },
                     num_constraints: 3,
+                    declares_lookups: false,
+                    declares_indexed: false,
                 }],
                 StageCoupling::new(BTreeMap::new(), BTreeMap::new(), vec![]),
             );
