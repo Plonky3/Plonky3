@@ -785,10 +785,7 @@ where
     let generator = R::from(EF::from(S::GENERATOR));
     let lanes = LaneSums::new(&lift(lane_weights.as_slice()), generator);
     let word_weights = lift(word_weights.as_slice());
-    let prepared_powers = alpha_powers
-        .iter()
-        .map(|powers| PreparedPowers::new(powers, generator))
-        .collect();
+    let prepared_powers = PreparedPowers::per_air(alpha_powers, generator);
 
     // The prefixes in index order, the last variable varying fastest.
     let prefixes = (0..nodes.len().pow(round as u32))

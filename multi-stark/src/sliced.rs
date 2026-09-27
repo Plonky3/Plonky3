@@ -19,7 +19,7 @@
 //! ```
 //!
 //! Where the target has a kernel for it, the powers are summed per lane first instead, eight
-//! constraints at a time, and each lane meets its weight once; see [`PreparedPowers`].
+//! constraints at a time, and each lane meets its weight once; see `PreparedPowers`.
 //!
 //! As with [`crate::subfield::SubfieldVar`], a trace-field value outside `GF(4)` poisons every
 //! result it reaches, and a poisoned evaluation must be discarded.
@@ -496,10 +496,10 @@ impl<R: Field> LaneSums<R> {
 /// lane, and an `8 x 8` bit matrix per coordinate byte adds the eight powers they pick.
 /// A lane's coordinates then leave through its weight once per evaluation.
 #[derive(Debug)]
-pub struct PreparedPowers<R>(kernel::Prepared<R>);
+pub(crate) struct PreparedPowers<R>(kernel::Prepared<R>);
 
 impl<R: Field> PreparedPowers<R> {
-    /// Lay out `alpha_powers` and their products with `generator`, the image of `g`.
+    /// Lay out each AIR's alpha powers and their products with `generator`, the image of `g`.
     ///
     /// The coordinates are read from `R`'s byte encoding, which must be linear over `F_2`:
     /// sixteen bytes, and the encoding of a sum the XOR of the encodings. Preparing checks
@@ -509,15 +509,28 @@ impl<R: Field> PreparedPowers<R> {
     ///
     /// # Returns
     ///
-    /// `None` where the target has no kernel, or when `R`'s encoding fails the checks.
-    /// [`SlicedFolder`] then sums constraint by constraint.
+    /// One layout per AIR, or `None` where [`SlicedFolder`] sums constraint by constraint
+    /// instead: the target has no kernel, `R`'s encoding fails the checks, or the AIR asserts
+    /// too few constraints to repay the kernel's fixed cost per evaluation.
     #[must_use]
-    pub fn new(alpha_powers: &[R], generator: R) -> Option<Self> {
-        kernel::Prepared::new(alpha_powers, generator).map(Self)
+    pub(crate) fn per_air(alpha_powers: &[Vec<R>], generator: R) -> Vec<Option<Self>> {
+        kernel::Prepared::per_air(alpha_powers, generator)
+            .into_iter()
+            .map(|prepared| prepared.map(Self))
+            .collect()
     }
 }
 
 pub(crate) use kernel::PreparedSums;
+
+/// The kernel's running sums of one evaluation, beside the layout of the powers they add.
+#[derive(Debug)]
+struct KernelSums<'a, R> {
+    /// The alpha powers laid out for the kernel.
+    prepared: &'a PreparedPowers<R>,
+    /// The per-lane sums of the constraints asserted so far.
+    sums: PreparedSums,
+}
 
 /// One AIR evaluation over sixty-four rows, lane-weighted and alpha-batched.
 #[derive(Clone, Copy, Debug)]
@@ -553,10 +566,8 @@ pub struct SlicedFolder<'a, F, S, R> {
     ///
     /// Beside the kernel only debug builds keep it, to check the kernel's sum against.
     accumulator: R,
-    /// The same powers laid out for the kernel, which then sums in `lane_sums` instead.
-    prepared: Option<&'a PreparedPowers<R>>,
-    /// The kernel's per-lane sums of the constraints asserted so far.
-    lane_sums: PreparedSums,
+    /// The kernel's sums, when the kernel sums the constraints instead.
+    kernel: Option<KernelSums<'a, R>>,
     /// Number of constraints asserted so far, which is the next position in `alpha_powers`.
     constraint_index: usize,
     /// Whether any asserted value was poisoned.
@@ -592,8 +603,7 @@ impl<'a, F, S, R: Field> SlicedFolder<'a, F, S, R> {
             alpha_powers,
             lanes,
             accumulator: R::ZERO,
-            prepared: None,
-            lane_sums: PreparedSums::new(),
+            kernel: None,
             constraint_index: 0,
             poisoned: false,
         }
@@ -606,13 +616,16 @@ impl<'a, F, S, R: Field> SlicedFolder<'a, F, S, R> {
     /// Panics if `prepared` does not hold one power per alpha power.
     #[inline]
     #[must_use]
-    pub fn with_prepared_powers(mut self, prepared: &'a PreparedPowers<R>) -> Self {
+    pub(crate) fn with_prepared_powers(mut self, prepared: &'a PreparedPowers<R>) -> Self {
         assert_eq!(
             prepared.0.len(),
             self.alpha_powers.len(),
             "the prepared powers must be the attached alpha powers"
         );
-        self.prepared = Some(prepared);
+        self.kernel = Some(KernelSums {
+            prepared,
+            sums: PreparedSums::new(),
+        });
         self
     }
 
@@ -655,9 +668,9 @@ impl<'a, F, S, R: Field> SlicedFolder<'a, F, S, R> {
             self.alpha_powers.len(),
             "attached alpha powers must match the number of asserted constraints"
         );
-        let value = match self.prepared {
-            Some(prepared) => {
-                let value = self.lane_sums.finish(prepared, self.lanes);
+        let value = match &mut self.kernel {
+            Some(kernel) => {
+                let value = kernel.sums.finish(kernel.prepared, self.lanes);
                 debug_assert_eq!(
                     value, self.accumulator,
                     "the kernel must sum what the lane tables sum"
@@ -720,13 +733,14 @@ where
         let x = x.into();
         self.poisoned |= x.poisoned;
         // A constraint past the last power is only counted; the count check rejects it.
-        if let Some(prepared) = self.prepared {
-            self.lane_sums
-                .add(prepared, self.constraint_index, x.low, x.high);
+        if let Some(kernel) = &mut self.kernel {
+            kernel
+                .sums
+                .add(kernel.prepared, self.constraint_index, x.low, x.high);
         }
         // Summed one at a time, a value that vanishes on every lane adds nothing, as a
         // selector-gated one mostly does.
-        if (self.prepared.is_none() || cfg!(debug_assertions))
+        if (self.kernel.is_none() || cfg!(debug_assertions))
             && let Some(&power) = self.alpha_powers.get(self.constraint_index)
             && (x.low | x.high) != 0
         {
@@ -812,6 +826,7 @@ where
 ))]
 mod kernel {
     use alloc::boxed::Box;
+    use alloc::sync::Arc;
     use alloc::vec::Vec;
     use core::arch::x86_64::*;
 
@@ -890,6 +905,13 @@ mod kernel {
     /// See [`gather`].
     const GATHER: [i64; 8] = gather();
 
+    /// Fewest constraints an AIR asserts for its evaluations to take the kernel.
+    ///
+    /// Each evaluation pays the kernel a fixed cost, clearing its sums and reading them out
+    /// through 128 plane sums and a 128-term product. An AIR asserting fewer constraints saves
+    /// less than that over summing them one at a time.
+    pub(super) const MIN_CONSTRAINTS: usize = 640;
+
     /// Descending alpha powers as the bit matrices that add them, eight constraints a block.
     #[derive(Debug)]
     pub(super) struct Prepared<R> {
@@ -900,18 +922,33 @@ mod kernel {
         blocks: Vec<[[u64; BYTES]; 2]>,
         /// Number of powers.
         len: usize,
-        /// `basis[b]`: the element whose encoding sets coordinate `b` alone.
-        basis: Box<[R; COORDINATES]>,
+        /// `basis[b]`: the element whose encoding sets coordinate `b` alone, one for every AIR.
+        basis: Arc<[R; COORDINATES]>,
     }
 
     impl<R: Field> Prepared<R> {
-        /// Lay out `alpha_powers` and their products with `generator`.
+        /// Lay out each AIR's powers against one basis of `R`, see [`PreparedPowers::per_air`].
+        pub(super) fn per_air(alpha_powers: &[Vec<R>], generator: R) -> Vec<Option<Self>> {
+            let basis = alpha_powers
+                .iter()
+                .any(|powers| powers.len() >= MIN_CONSTRAINTS)
+                .then(coordinate_basis::<R>)
+                .flatten()
+                .map(Arc::from);
+            alpha_powers
+                .iter()
+                .map(|powers| {
+                    let basis = basis.as_ref()?;
+                    (powers.len() >= MIN_CONSTRAINTS)
+                        .then(|| Self::new(powers, generator, Arc::clone(basis)))
+                })
+                .collect()
+        }
+
+        /// Lay out `alpha_powers` and their products with `generator`, whatever their number.
         ///
-        /// # Returns
-        ///
-        /// `None` when `R` is not a field of 128 coordinates encoded one per bit.
-        pub(super) fn new(alpha_powers: &[R], generator: R) -> Option<Self> {
-            let basis = coordinate_basis::<R>()?;
+        /// `basis` must be what [`coordinate_basis`] returns for `R`.
+        pub(super) fn new(alpha_powers: &[R], generator: R, basis: Arc<[R; COORDINATES]>) -> Self {
             let blocks = alpha_powers
                 .par_chunks(BLOCK)
                 .map(|powers| {
@@ -925,11 +962,11 @@ mod kernel {
                     unsafe { [block_matrices(&low), block_matrices(&high)] }
                 })
                 .collect();
-            Some(Self {
+            Self {
                 blocks,
                 len: alpha_powers.len(),
                 basis,
-            })
+            }
         }
 
         /// Number of powers laid out.
@@ -1073,6 +1110,8 @@ mod kernel {
         /// The waiting low planes, then the waiting high planes, constraint `i` at word
         /// `i % RING` of each ring.
         planes: [[u64; RING]; 2],
+        /// Whether a block has reached the sums, which are all zero until one does.
+        carried: bool,
     }
 
     impl PreparedSums {
@@ -1081,6 +1120,7 @@ mod kernel {
             Self {
                 sums: [[0; REGISTER_WORDS]; BYTES],
                 planes: [[0; RING]; 2],
+                carried: false,
             }
         }
 
@@ -1111,6 +1151,7 @@ mod kernel {
         /// The lane-weighted, alpha-batched sum, once every prepared constraint has been added.
         ///
         /// The last full block still waits for a next one, and so does a partial block after it.
+        /// When no block carried a set bit, the sum is zero without reading the lanes out.
         pub(crate) fn finish<R: Field>(
             &mut self,
             prepared: &PreparedPowers<R>,
@@ -1127,8 +1168,13 @@ mod kernel {
                 if !prepared.len.is_multiple_of(BLOCK) {
                     self.flush(prepared, full);
                 }
-                self.contract(lanes, &prepared.basis)
             }
+            if !self.carried {
+                return R::ZERO;
+            }
+            // SAFETY: this module is compiled only where the build enables every target feature
+            // the kernel names.
+            unsafe { self.contract(lanes, &prepared.basis) }
         }
 
         /// Add block `block` to the sums through its matrices, and clear its planes.
@@ -1148,6 +1194,7 @@ mod kernel {
                 ring.as_chunks_mut::<BLOCK>().0[at] = [0; BLOCK];
             }
             let matrices = &prepared.blocks[block];
+            self.carried = true;
             let mut sums = self.sums.map(|words| load(&words));
             for (&words, matrices) in planes.iter().zip(matrices) {
                 if _mm512_test_epi64_mask(words, words) == 0 {
@@ -1239,6 +1286,7 @@ mod kernel {
     target_feature = "avx512bw"
 )))]
 mod kernel {
+    use alloc::vec::Vec;
     use core::convert::Infallible;
     use core::marker::PhantomData;
 
@@ -1254,9 +1302,9 @@ mod kernel {
     // Keeping these the same stops constness from leaking into callers on some targets only.
     #[allow(clippy::missing_const_for_fn)]
     impl<R> Prepared<R> {
-        /// Refuses every list, the target having no kernel to prepare for.
-        pub(super) fn new(_alpha_powers: &[R], _generator: R) -> Option<Self> {
-            None
+        /// Refuses every AIR, the target having no kernel to prepare for.
+        pub(super) fn per_air(alpha_powers: &[Vec<R>], _generator: R) -> Vec<Option<Self>> {
+            alpha_powers.iter().map(|_| None).collect()
         }
 
         /// Never called: no value of this type exists.

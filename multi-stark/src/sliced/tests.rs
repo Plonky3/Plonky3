@@ -112,6 +112,7 @@ proptest! {
     target_feature = "avx512bw"
 ))]
 mod kernel_tests {
+    use alloc::sync::Arc;
     use alloc::vec::Vec;
 
     use p3_air::{Air, AirBuilder, BaseAir, WindowAccess};
@@ -131,9 +132,11 @@ mod kernel_tests {
         kernel,
     };
 
-    /// `powers` laid out for the kernel.
+    /// `powers` laid out for the kernel, however few they are.
     fn prepared<R: Field>(powers: &[R], generator: R) -> PreparedPowers<R> {
-        PreparedPowers::new(powers, generator).expect("the kernel takes a 128-bit binary field")
+        let basis =
+            kernel::coordinate_basis::<R>().expect("the kernel takes a 128-bit binary field");
+        PreparedPowers(kernel::Prepared::new(powers, generator, Arc::from(basis)))
     }
 
     /// The generator of `S` as an element of `R`.
@@ -272,6 +275,21 @@ mod kernel_tests {
     )]
     fn a_prepared_power_left_over_fails_the_count_check() {
         let _ = folder_sums(2, 12, 25);
+    }
+
+    #[test]
+    fn only_an_air_asserting_enough_constraints_takes_the_kernel() {
+        let mut rng = SmallRng::seed_from_u64(3);
+        let mut powers = |len| (0..len).map(|_| rng.random()).collect::<Vec<Ghash128>>();
+        let airs = [
+            powers(kernel::MIN_CONSTRAINTS - 1),
+            powers(kernel::MIN_CONSTRAINTS),
+            Vec::new(),
+        ];
+        let prepared = PreparedPowers::per_air(&airs, generator());
+        assert!(prepared[0].is_none());
+        assert!(prepared[1].is_some());
+        assert!(prepared[2].is_none());
     }
 
     /// The byte encoding of `value`, read as a little-endian word.
