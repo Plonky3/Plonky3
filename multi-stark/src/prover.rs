@@ -598,8 +598,13 @@ where
             trace_suffix(points.at(role), rows)
         });
         let mut known = alloc::vec![None; schedule.protocol().num_openings()];
-        for ((batch, local), next) in schedule
-            .first_batch_per_table()
+        let first_batches = schedule.first_batch_per_table();
+        debug_assert_eq!(
+            (zerocheck_proof.local.len(), zerocheck_proof.next.len()),
+            (first_batches.len(), first_batches.len()),
+            "the zerocheck opens every committed table once"
+        );
+        for ((batch, local), next) in first_batches
             .into_iter()
             .zip(zerocheck_proof.local)
             .zip(zerocheck_proof.next)

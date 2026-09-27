@@ -476,13 +476,17 @@ fn main() {
 mod tests {
     use p3_binary_field::TowerLevel;
     use p3_binary_pcs::BooleanTraceError;
+    use p3_challenger::CanSample;
     use p3_commit::MultilinearPcs;
     use p3_multi_stark::config::PcsError;
     use p3_multi_stark::zerocheck::ZerocheckError;
     use p3_multi_stark::{VerificationError, security_report};
     use p3_multilinear_util::point::Point;
     use p3_multilinear_util::poly::Poly;
-    use p3_sumcheck::{OpeningBatch, OpeningProtocol, PrescribedPointPcs, TableSpec};
+    use p3_sumcheck::{
+        OpeningBatch, OpeningEvals, OpeningProtocol, PrescribedOpeningSecurity, PrescribedPointPcs,
+        TableSpec,
+    };
 
     use super::*;
 
@@ -1038,6 +1042,259 @@ mod tests {
             &mut challenger(),
         )
         .unwrap();
+    }
+
+    /// The Boolean commitment the packed arm uses.
+    type Packed = BooleanTracePcs<F, Mmcs, Mmcs>;
+
+    /// The Boolean commitment with every opening evaluated from the committed tables.
+    ///
+    /// Its supplied-value entry point is the trait default, which ignores what it is handed.
+    /// A proof through it is therefore the one supplied values must reproduce.
+    struct EvaluatingPcs(Packed);
+
+    impl MultilinearPcs<F, Challenger> for EvaluatingPcs {
+        type Val = F;
+        type Commitment = <Packed as MultilinearPcs<F, Challenger>>::Commitment;
+        type ProverData = <Packed as MultilinearPcs<F, Challenger>>::ProverData;
+        type Proof = <Packed as MultilinearPcs<F, Challenger>>::Proof;
+        type Error = <Packed as MultilinearPcs<F, Challenger>>::Error;
+        type ProverError = <Packed as MultilinearPcs<F, Challenger>>::ProverError;
+        type Witness = <Packed as MultilinearPcs<F, Challenger>>::Witness;
+        type OpeningProtocol = <Packed as MultilinearPcs<F, Challenger>>::OpeningProtocol;
+
+        fn num_vars(&self) -> usize {
+            MultilinearPcs::<F, Challenger>::num_vars(&self.0)
+        }
+
+        fn commit(
+            &self,
+            witness: Self::Witness,
+            challenger: &mut Challenger,
+        ) -> Result<(Self::Commitment, Self::ProverData), Self::ProverError> {
+            self.0.commit(witness, challenger)
+        }
+
+        fn observe_commitment(&self, commitment: &Self::Commitment, challenger: &mut Challenger) {
+            self.0.observe_commitment(commitment, challenger);
+        }
+
+        fn open(
+            &self,
+            prover_data: Self::ProverData,
+            protocol: Self::OpeningProtocol,
+            challenger: &mut Challenger,
+        ) -> Result<Self::Proof, Self::ProverError> {
+            self.0.open(prover_data, protocol, challenger)
+        }
+
+        fn verify(
+            &self,
+            commitment: &Self::Commitment,
+            proof: &Self::Proof,
+            challenger: &mut Challenger,
+            protocol: Self::OpeningProtocol,
+        ) -> Result<(), Self::Error> {
+            self.0.verify(commitment, proof, challenger, protocol)
+        }
+    }
+
+    impl PrescribedPointPcs<F, Challenger> for EvaluatingPcs {
+        fn prescribed_security(
+            &self,
+            protocol: &OpeningProtocol,
+        ) -> Option<PrescribedOpeningSecurity> {
+            PrescribedPointPcs::<F, Challenger>::prescribed_security(&self.0, protocol)
+        }
+
+        fn open_at(
+            &self,
+            prover_data: Self::ProverData,
+            protocol: &OpeningProtocol,
+            points: &[Point<F>],
+            challenger: &mut Challenger,
+        ) -> Result<Self::Proof, Self::ProverError> {
+            self.0.open_at(prover_data, protocol, points, challenger)
+        }
+
+        fn verify_at(
+            &self,
+            commitment: &Self::Commitment,
+            proof: &Self::Proof,
+            protocol: &OpeningProtocol,
+            points: &[Point<F>],
+            challenger: &mut Challenger,
+        ) -> Result<Vec<OpeningEvals<F>>, Self::Error> {
+            self.0
+                .verify_at(commitment, proof, protocol, points, challenger)
+        }
+    }
+
+    /// The packed arm, with every opening evaluated from the committed tables.
+    struct EvaluatingConfig {
+        /// The bit commitment, its supplied values ignored.
+        pcs: EvaluatingPcs,
+    }
+
+    impl MultiStarkConfig for EvaluatingConfig {
+        type Val = F;
+        type Challenge = F;
+        type Challenger = Challenger;
+        type Pcs = EvaluatingPcs;
+
+        fn pcs(&self) -> &Self::Pcs {
+            &self.pcs
+        }
+
+        fn collision_resistance_bits(&self) -> Option<usize> {
+            Some(128)
+        }
+
+        fn min_num_variables(&self) -> usize {
+            1
+        }
+
+        fn build_witness(&self, tables: Vec<Table<F>>) -> Vec<Table<F>> {
+            tables
+        }
+
+        fn committed_table<'a>(
+            &self,
+            prover_data: &'a BooleanTraceData<F, Mmcs>,
+            table_index: usize,
+        ) -> &'a Table<F> {
+            prover_data.table(table_index)
+        }
+    }
+
+    /// A gate table or a shift register, so one batch mixes the two kinds of opening.
+    ///
+    /// ```text
+    ///     gate    the current row alone
+    ///     shift   every column at both rows
+    /// ```
+    #[derive(Clone, Copy)]
+    enum BatchAir {
+        /// A [`GateTableAir`].
+        Gate,
+        /// A [`ShiftRegisterAir`].
+        Shift,
+    }
+
+    impl<T> BaseAir<T> for BatchAir {
+        fn width(&self) -> usize {
+            WIDTH
+        }
+
+        fn num_public_values(&self) -> usize {
+            match self {
+                Self::Gate => BaseAir::<T>::num_public_values(&GateTableAir),
+                Self::Shift => BaseAir::<T>::num_public_values(&ShiftRegisterAir),
+            }
+        }
+
+        fn main_next_row_columns(&self) -> Vec<usize> {
+            match self {
+                Self::Gate => BaseAir::<T>::main_next_row_columns(&GateTableAir),
+                Self::Shift => BaseAir::<T>::main_next_row_columns(&ShiftRegisterAir),
+            }
+        }
+    }
+
+    impl<AB: AirBuilder<F = F>> Air<AB> for BatchAir {
+        fn eval(&self, builder: &mut AB) {
+            match self {
+                Self::Gate => Air::<AB>::eval(&GateTableAir, builder),
+                Self::Shift => Air::<AB>::eval(&ShiftRegisterAir, builder),
+            }
+        }
+    }
+
+    /// Prove and verify one batch, returning the proof's bytes and the sponge's next draw.
+    fn prove_batch<C>(
+        config: &C,
+        airs: &[BatchAir],
+        tables: Vec<Table<F>>,
+        publics: &[&[F]],
+    ) -> (Vec<u8>, F)
+    where
+        C: MultiStarkConfig<Val = F, Challenge = F, Challenger = Challenger>,
+        C::Pcs: PrescribedPointPcs<F, Challenger>,
+        Challenger: CanObserve<Commitment<C>>,
+        Commitment<C>: Clone,
+        ProverData<C>: Clone,
+    {
+        let refs = airs.iter().collect::<Vec<_>>();
+        let log_heights = tables.iter().map(Table::num_variables).collect::<Vec<_>>();
+        let (pk, vk) = setup(config, &refs, &mut challenger()).unwrap();
+
+        let prover = ProverInstances::new(
+            airs.iter()
+                .zip(tables)
+                .zip(publics)
+                .map(|((air, table), public)| ProverInstance::new(air, table, &pk, public))
+                .collect(),
+        );
+        let mut prover_chal = challenger();
+        let proof =
+            prove_with_security(config, prover, 0, SECURITY_BITS, &mut prover_chal).unwrap();
+
+        let verifier = VerifierInstances::new(
+            airs.iter()
+                .zip(&log_heights)
+                .zip(publics)
+                .map(|((air, &log_height), public)| {
+                    VerifierInstance::new(air, &vk, log_height, public)
+                })
+                .collect(),
+        );
+        verify_with_security(
+            config,
+            verifier,
+            &proof,
+            0,
+            SECURITY_BITS,
+            &mut challenger(),
+        )
+        .unwrap();
+
+        (
+            postcard::to_allocvec(&proof).unwrap(),
+            CanSample::<F>::sample(&mut prover_chal),
+        )
+    }
+
+    /// Tables of three heights open at the values the zerocheck folded each one to.
+    #[test]
+    fn a_mixed_height_batch_opens_at_the_zerocheck_values() {
+        // Invariant: each table's first batch is supplied the zerocheck's values for that table,
+        // read at the suffix of the bound point its own height names.
+        //
+        // Fixture state: three tables, each one complete batch, in commitment order.
+        //
+        //     shift register, 2^9 rows   every column at both rows
+        //     gate table,     2^7 rows   the current row alone
+        //     shift register, 2^8 rows   every column at both rows
+        //
+        // A value handed to another table's batch, or read at another suffix, fails the
+        // prover's column-batch check. A proof through a scheme evaluating every batch itself
+        // is the reference, and both are one byte run and one sponge state.
+        let airs = [BatchAir::Shift, BatchAir::Gate, BatchAir::Shift];
+        let (gate, gate_public) = trace(0x9800, 7);
+        let tables = vec![
+            shift_register_trace(0x9801, 9),
+            gate,
+            shift_register_trace(0x9802, 8),
+        ];
+        let publics: [&[F]; 3] = [&[], &gate_public, &[]];
+        let shapes = shapes(&[9, 7, 8]);
+
+        let supplied = prove_batch(&PackedConfig::new(&shapes), &airs, tables.clone(), &publics);
+        let evaluating = EvaluatingConfig {
+            pcs: EvaluatingPcs(PackedConfig::new(&shapes).pcs),
+        };
+        let evaluated = prove_batch(&evaluating, &airs, tables, &publics);
+        assert_eq!(supplied, evaluated);
     }
 
     /// An AIR linking each row to the next proves on the bit commitment.
