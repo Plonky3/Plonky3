@@ -210,8 +210,11 @@ where
     ///
     /// A scheme that binds a supplied value must bind it exactly as a computed one is bound.
     ///
-    /// The verifier then reads it only from the proof, so a wrong one yields a refused opening
-    /// or a proof that does not verify, never one that does.
+    /// The verifier then reads it only from the proof, so a wrong one is accepted only within
+    /// the opening's own soundness error.
+    ///
+    /// A scheme may refuse a wrong one before the proof leaves. That refusal is itself a random
+    /// check, so a wrong value escapes it with the probability that check allows.
     ///
     /// # Errors
     ///

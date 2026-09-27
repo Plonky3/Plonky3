@@ -389,6 +389,12 @@ pub enum BooleanTraceCommitmentError<E> {
     },
 
     /// The inner opening disagreed with the value combined from the claimed column values.
+    ///
+    /// This is the only check a supplied value run meets on the prover's side.
+    ///
+    /// The combination is taken at a column point drawn after the run is bound. A wrong run
+    /// therefore escapes it with probability at most `j / |EF|` for a block of `2^j` columns,
+    /// the bound the verifier's own check has.
     #[error("column batch {batch} returned an aggregate value different from its claimed columns")]
     ColumnBatchValueMismatch {
         /// Batch whose aggregate value disagreed.
@@ -583,7 +589,9 @@ where
             tracing::info_span!("evaluate boolean columns", width, next).in_scope(|| {
                 for (point, known) in run_points.iter().zip(run_known) {
                     // A supplied run is bound as it stands; the reduction below compares each
-                    // block's combination of it against the committed bits.
+                    // block's combination of it against the committed bits. That comparison is
+                    // a random check, the only one the run meets: a wrong run passes it with
+                    // probability at most `j / |EF|` per block of `2^j` columns.
                     if let Some(known) = known {
                         values.extend_from_slice(known.current());
                         values.extend_from_slice(known.next());

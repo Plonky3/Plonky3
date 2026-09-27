@@ -445,6 +445,8 @@ where
     }
 }
 
+/// Supplied values are not forwarded: `open_at_known` keeps its default and evaluates every
+/// batch, since the values would first need mapping through `expand_protocol`.
 impl<EF, B, Challenger> PrescribedPointPcs<EF, Challenger> for MixedTraceCommitment<EF, B>
 where
     EF: BitCoordinates + TranscriptField + TowerLevel + Coordinates,
