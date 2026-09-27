@@ -294,7 +294,8 @@ impl PrimeCharacteristicRing for Ghash128 {
 
 impl Field for Ghash128 {
     // One element is one 128-bit lane, so a wide carryless multiply packs several of them.
-    // Which register that is, and whether there is one at all, is settled in `packed`.
+    // On AArch64 the multiply reaches one lane, and the packing holds two elements side by side.
+    // Which packing that is, and whether there is one at all, is settled in `packed`.
     //
     // Without a packing the alias resolves to this type itself, which is why the lint is off.
     #[allow(clippy::use_self)]
