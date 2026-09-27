@@ -28,6 +28,15 @@ fn from_lanes(values: &[S]) -> Sliced {
     Sliced::from_planes(low, high)
 }
 
+/// The byte encoding of `value`, read as a little-endian word.
+fn encoding<R: Field>(value: R) -> u128 {
+    let mut bytes = [0u8; 16];
+    for (slot, byte) in bytes.iter_mut().zip(value.into_bytes()) {
+        *slot = byte;
+    }
+    u128::from_le_bytes(bytes)
+}
+
 fn arb_sliced() -> impl Strategy<Value = Sliced> {
     (any::<u64>(), any::<u64>()).prop_map(|(low, high)| Sliced::from_planes(low, high))
 }
@@ -85,6 +94,16 @@ proptest! {
         }
     }
 
+    // The sliced kernel adds field elements as the XOR of their byte encodings.
+    #[test]
+    fn byte_encodings_add_as_xor(seed in any::<u64>()) {
+        let mut rng = SmallRng::seed_from_u64(seed);
+        let (a, b): (Ghash128, Ghash128) = (rng.random(), rng.random());
+        prop_assert_eq!(encoding(a + b), encoding(a) ^ encoding(b));
+        let (a, b): (F, F) = (rng.random(), rng.random());
+        prop_assert_eq!(encoding(a + b), encoding(a) ^ encoding(b));
+    }
+
     #[test]
     fn lane_sums_weight_every_set_lane(value in arb_sliced(), seed in any::<u64>()) {
         let mut rng = SmallRng::seed_from_u64(seed);
@@ -125,7 +144,7 @@ mod kernel_tests {
     use rand::rngs::SmallRng;
     use rand::{RngExt, SeedableRng};
 
-    use super::{F, S, Sliced};
+    use super::{F, S, Sliced, encoding};
     use crate::selectors::BoundaryEvals;
     use crate::sliced::{
         LaneSums, PreparedPowers, PreparedSums, SLICED_LANES, SlicedEvaluation, SlicedFolder,
@@ -290,15 +309,6 @@ mod kernel_tests {
         assert!(prepared[0].is_none());
         assert!(prepared[1].is_some());
         assert!(prepared[2].is_none());
-    }
-
-    /// The byte encoding of `value`, read as a little-endian word.
-    fn encoding<R: Field>(value: R) -> u128 {
-        let mut bytes = [0u8; 16];
-        for (slot, byte) in bytes.iter_mut().zip(value.into_bytes()) {
-            *slot = byte;
-        }
-        u128::from_le_bytes(bytes)
     }
 
     #[test]
