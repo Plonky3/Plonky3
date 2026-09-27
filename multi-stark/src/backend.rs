@@ -176,8 +176,7 @@ where
     EF: ExtensionField<F> + HasSubfield<S>,
     A: ProverAir<F, EF>
         + for<'a> Air<MultilinearFolder<'a, F, SubfieldVar<F, S>, SubfieldAcc<EF, S>>>
-        + for<'a> Air<SlicedFolder<'a, F, S, EF>>
-        + for<'a> Air<SlicedQuadraticFolder<'a, F, EF>>,
+        + for<'a> Air<SlicedFolder<'a, F, S, EF>>,
     EF::ExtensionPacking: From<EF> + From<F::Packing>,
 {
     type Repr = EF;

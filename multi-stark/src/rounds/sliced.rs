@@ -77,11 +77,9 @@ const MAX_PLANE_ROUND_PREFIX: usize = MAX_SLICED_ROUNDS + 1;
 /// planes as they unslice, so a plane fold binds at most one challenge more than such a round.
 const MAX_PLANE_FOLD_ROUNDS: usize = MAX_PLANE_ROUND_PREFIX + 1;
 
-/// How a sliced first round is used by a backend.
+/// How the representation backend uses the four-variable tensor of a sliced first round.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SlicedStrategy {
-    /// Evaluate only the sparse nodes needed by the current sliced round.
-    Sequential,
     /// Build the four-variable tensor used by the representation backend lookahead.
     TensorBoundary,
     /// Build the tensor, then retain its planes for one or two later representation rounds.
@@ -1199,12 +1197,14 @@ where
         F: HasSubfield<S>,
         EF: HasSubfield<S> + From<R>,
         R: Field + From<EF>,
-        A: for<'b> Air<SlicedFolder<'b, F, S, R>> + for<'b> Air<SlicedQuadraticFolder<'b, F, R>>,
+        A: for<'b> Air<SlicedFolder<'b, F, S, R>>,
     {
-        self.round_poly_sliced_with_strategy::<S, R>(eq_suffix, SlicedStrategy::Sequential)
+        let (trace, alpha_powers) = self.sliced_planes::<S, R>()?;
+        self.round_poly_on_planes::<S, R>(eq_suffix, trace, &alpha_powers)
     }
 
-    /// Evaluate the first round on planes, optionally retaining the tensor lookahead cache.
+    /// [`Self::round_poly_sliced`], retaining the four-variable tensor as a lookahead cache when
+    /// the stage is eligible for it.
     #[tracing::instrument(skip_all, level = "debug")]
     pub(crate) fn round_poly_sliced_with_strategy<S, R>(
         &mut self,
@@ -1218,18 +1218,8 @@ where
         R: Field + From<EF>,
         A: for<'b> Air<SlicedFolder<'b, F, S, R>> + for<'b> Air<SlicedQuadraticFolder<'b, F, R>>,
     {
-        self.subfield_schedule::<S>()?;
-        let trace = self.sliced_trace::<S>()?;
-        self.fits_subfield = true;
-        let alpha_powers = self
-            .alpha_powers
-            .iter()
-            .map(|powers| powers.iter().map(|&power| R::from(power)).collect())
-            .collect::<Vec<Vec<R>>>();
-        let tensor_eligible = matches!(
-            strategy,
-            SlicedStrategy::TensorBoundary | SlicedStrategy::TensorBoundaryLate
-        ) && trace.rounds == 3
+        let (trace, alpha_powers) = self.sliced_planes::<S, R>()?;
+        let tensor_eligible = trace.rounds == 3
             && trace.num_vars >= 10
             && self.degree() == 2
             && self
@@ -1238,9 +1228,6 @@ where
                 .all(|slot| slot.constraint_degree <= 2 && slot.interaction.is_none())
             && next_row_runs(&self.slots).is_empty();
         if tensor_eligible {
-            // Only the factorization check inside the tensor pass reads this table.
-            let tensor_eq_suffix = cfg!(debug_assertions)
-                .then(|| Poly::new_from_point(&self.tau.as_slice()[4..], EF::ONE));
             let tensor = sliced_tensor_infinity::<A, F, EF, R>(
                 &trace,
                 &self.slots,
@@ -1249,6 +1236,9 @@ where
                 self.tau.as_slice(),
             )
             .or_else(|| {
+                // Only the factorization check inside the tensor pass reads this table.
+                let tensor_eq_suffix = cfg!(debug_assertions)
+                    .then(|| Poly::new_from_point(&self.tau.as_slice()[4..], EF::ONE));
                 sliced_tensor::<A, F, EF, S, R>(
                     tensor_eq_suffix.as_ref(),
                     &trace,
@@ -1280,12 +1270,57 @@ where
                 ));
             }
         }
+        self.round_poly_on_planes::<S, R>(eq_suffix, trace, &alpha_powers)
+    }
+
+    /// Repack the stage into planes of `S`, and lift its alpha powers into `R`.
+    ///
+    /// # Returns
+    ///
+    /// `None` when the stage does not fit `S`, see [`Self::sliced_trace`]. Otherwise the fit is
+    /// recorded for [`Self::fits_subfield`].
+    fn sliced_planes<S, R>(&mut self) -> Option<(SlicedTrace<'data>, Vec<Vec<R>>)>
+    where
+        S: Field,
+        F: HasSubfield<S>,
+        EF: HasSubfield<S>,
+        R: Field + From<EF>,
+    {
+        self.subfield_schedule::<S>()?;
+        let trace = self.sliced_trace::<S>()?;
+        self.fits_subfield = true;
+        let alpha_powers = self
+            .alpha_powers
+            .iter()
+            .map(|powers| powers.iter().map(|&power| R::from(power)).collect())
+            .collect();
+        Some((trace, alpha_powers))
+    }
+
+    /// Evaluate the first round on `trace` at the sparse nodes it needs, and keep the planes.
+    ///
+    /// # Returns
+    ///
+    /// `None` when an AIR constant outside `S` poisoned a value; no round group has changed.
+    fn round_poly_on_planes<S, R>(
+        &mut self,
+        eq_suffix: &Poly<EF>,
+        trace: SlicedTrace<'data>,
+        alpha_powers: &[Vec<R>],
+    ) -> Option<Vec<EF>>
+    where
+        S: Field,
+        F: HasSubfield<S>,
+        EF: HasSubfield<S> + From<R>,
+        R: Field + From<EF>,
+        A: for<'b> Air<SlicedFolder<'b, F, S, R>>,
+    {
         let evals = sliced_round::<A, F, EF, S, R>(
             eq_suffix,
             &trace,
             &self.slots,
             &self.public_values,
-            &alpha_powers,
+            alpha_powers,
             self.tau.as_slice(),
             &[],
             self.degree(),

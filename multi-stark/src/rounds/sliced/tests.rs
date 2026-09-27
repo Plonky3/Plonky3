@@ -2578,7 +2578,6 @@ where
     Tower: From<R>,
     R::Packing: p3_field::Algebra<Tower>,
     FixtureAir: for<'b> Air<SlicedFolder<'b, Tower, Gf4, R>>
-        + for<'b> Air<SlicedQuadraticFolder<'b, Tower, R>>
         + for<'b> Air<crate::folder::MultilinearFolder<'b, Tower, R, R>>
         + for<'b> Air<crate::folder::InteractionMultilinearFolder<'b, Tower, R, R>>
         + for<'b> Air<

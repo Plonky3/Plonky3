@@ -733,9 +733,10 @@ impl<const N: usize, H: HarnessHash> HarnessConfig for BooleanStarkConfig<N, H> 
 /// one exactly once, so its blanket impl below is what callers actually need to satisfy.
 ///
 /// The subfield bound is the folder [`SubfieldBackend`] evaluates the first zerocheck round with,
-/// inside `GF(4)`, and the four sliced bounds are the folders it and [`ReprBackend`] evaluate it
-/// with sixty-four rows at a time, in `GF(4)` and as the `GF(2)` parts of a bit-valued stage's
-/// four-variable tensor. The last four are the folders [`ReprBackend`] evaluates the
+/// inside `GF(4)`, and the two `GF(4)` sliced bounds are the folders it and [`ReprBackend`]
+/// evaluate it with sixty-four rows at a time. The quadratic sliced bound is the folder
+/// [`ReprBackend`] evaluates a bit-valued stage's four-variable tensor with, as the `GF(2)` parts
+/// of its constraints. The last four are the folders [`ReprBackend`] evaluates the
 /// later rounds with, in the polynomial basis, one row or one lane group of rows at a time.
 ///
 /// The bus-symbolic bound lets setup discover an AIR's optional binary-bus declarations.
@@ -751,7 +752,6 @@ pub trait BinaryAir:
         MultilinearFolder<'a, F, SubfieldVar<F, BinaryField2>, SubfieldAcc<F, BinaryField2>>,
     > + for<'a> Air<SlicedFolder<'a, F, BinaryField2, F>>
     + for<'a> Air<SlicedFolder<'a, F, BinaryField2, Ghash128>>
-    + for<'a> Air<SlicedQuadraticFolder<'a, F, F>>
     + for<'a> Air<SlicedQuadraticFolder<'a, F, Ghash128>>
     + for<'a> Air<MultilinearFolder<'a, F, Ghash128, Ghash128>>
     + for<'a> Air<InteractionMultilinearFolder<'a, F, Ghash128, Ghash128>>
@@ -774,7 +774,6 @@ impl<A> BinaryAir for A where
             MultilinearFolder<'a, F, SubfieldVar<F, BinaryField2>, SubfieldAcc<F, BinaryField2>>,
         > + for<'a> Air<SlicedFolder<'a, F, BinaryField2, F>>
         + for<'a> Air<SlicedFolder<'a, F, BinaryField2, Ghash128>>
-        + for<'a> Air<SlicedQuadraticFolder<'a, F, F>>
         + for<'a> Air<SlicedQuadraticFolder<'a, F, Ghash128>>
         + for<'a> Air<MultilinearFolder<'a, F, Ghash128, Ghash128>>
         + for<'a> Air<InteractionMultilinearFolder<'a, F, Ghash128, Ghash128>>
@@ -2630,10 +2629,6 @@ mod tests {
 
     impl<'a> Air<SlicedFolder<'a, F, BinaryField2, Ghash128>> for BinaryBusAir {
         fn eval(&self, _builder: &mut SlicedFolder<'a, F, BinaryField2, Ghash128>) {}
-    }
-
-    impl<'a> Air<SlicedQuadraticFolder<'a, F, F>> for BinaryBusAir {
-        fn eval(&self, _builder: &mut SlicedQuadraticFolder<'a, F, F>) {}
     }
 
     impl<'a> Air<SlicedQuadraticFolder<'a, F, Ghash128>> for BinaryBusAir {
