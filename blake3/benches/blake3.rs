@@ -9,13 +9,18 @@ const MESSAGES: usize = 4096;
 
 /// Message lengths that cover every shape the batched path distinguishes.
 ///
-/// 32 is a digest, below one block and therefore one compression per message, and 64 is a
-/// two-to-one Merkle compression, exactly one block. 256 is a wide leaf row, four whole blocks.
+/// 32 is a digest, shorter than one block.
 ///
-/// 540 is the 135-column leaf row of `merkle-tree`'s benchmark: whole blocks plus a short tail,
-/// which costs one extra scalar compression per message. 1024 is a full chunk, the largest
-/// message the batched path accepts, and 1025 the smallest one it hands to the scalar hasher.
-const LENGTHS: [usize; 6] = [32, 64, 256, 540, 1024, 1025];
+/// 64 is a two-to-one Merkle compression, exactly one block.
+///
+/// 256 is a wide leaf row of four whole blocks.
+///
+/// 540 is the leaf row of `merkle-tree`'s benchmark: whole blocks plus a short tail.
+///
+/// 1024 is one full chunk, and 1025 spills one byte into a second chunk.
+///
+/// 4096 and 8192 are multi-chunk rows, whose chunks fold into a tree.
+const LENGTHS: [usize; 8] = [32, 64, 256, 540, 1024, 1025, 4096, 8192];
 
 /// A deterministic byte stream, so every run hashes the same fixture.
 fn fixture(bytes: usize) -> Vec<u8> {

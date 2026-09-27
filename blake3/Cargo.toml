@@ -1,6 +1,6 @@
 [package]
 name = "p3-blake3"
-description = "A wrapper for the standard BLAKE3 cryptographic hash function allowing it to be used in the Plonky3 environment."
+description = "The BLAKE3 hash function for Plonky3, with a batched SIMD path for many equal-length messages."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -25,6 +25,7 @@ p3-util.workspace = true
 blake3.workspace = true
 
 [dev-dependencies]
+hex-literal.workspace = true
 proptest.workspace = true
 
 [[bench]]
