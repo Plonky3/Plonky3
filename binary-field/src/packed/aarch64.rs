@@ -210,7 +210,7 @@ mod tests {
 
     use super::WIDTH;
     use crate::tower::TowerLevel;
-    use crate::{Ghash128, PackedGhash128};
+    use crate::{BinaryField128, Gf2, Ghash128, PackedGhash128};
 
     /// The bit patterns a random search is unlikely to reach.
     const SPECIAL: [u128; 4] = [0, u128::MAX, 1 << 127, 0x87];
@@ -226,12 +226,19 @@ mod tests {
     }
 
     /// Every lane of every operation against the scalar field on that lane alone.
+    ///
+    /// The actions of the three algebras the packing is over take one scalar, `c[0]`, in each
+    /// field. The tower's is checked against the scalar field's product with the image of that
+    /// element, so its change of basis is taken on an independent path.
     fn lanes_agree(
         a: [u128; WIDTH],
         b: [u128; WIDTH],
         c: [u128; WIDTH],
     ) -> Result<(), TestCaseError> {
         let (x, y, z) = (packed(a), packed(b), packed(c));
+        let ghash = Ghash128::from_repr(c[0]);
+        let tower = BinaryField128::from_repr(c[0]);
+        let bit = Gf2::from_bool(c[0] & 1 == 1);
         for lane in 0..WIDTH {
             let (s, t, u) = (
                 Ghash128::from_repr(a[lane]),
@@ -239,6 +246,7 @@ mod tests {
                 Ghash128::from_repr(c[lane]),
             );
             prop_assert_eq!((x + y).as_slice()[lane], s + t);
+            prop_assert_eq!((x - y).as_slice()[lane], s - t);
             prop_assert_eq!((x * y).as_slice()[lane], s * t);
             prop_assert_eq!(x.square().as_slice()[lane], s.square());
             prop_assert_eq!(x.bool_check().as_slice()[lane], s * (s - Ghash128::ONE));
@@ -246,6 +254,23 @@ mod tests {
                 PackedGhash128::dot_product(&[x, y], &[y, z]).as_slice()[lane],
                 s * t + t * u
             );
+
+            prop_assert_eq!((x + ghash).as_slice()[lane], s + ghash);
+            prop_assert_eq!((x - ghash).as_slice()[lane], s - ghash);
+            prop_assert_eq!((x * ghash).as_slice()[lane], s * ghash);
+            if ghash != Ghash128::ZERO {
+                prop_assert_eq!((x / ghash).as_slice()[lane], s / ghash);
+            }
+
+            let image = Ghash128::from(tower);
+            prop_assert_eq!((x + tower).as_slice()[lane], s + image);
+            prop_assert_eq!((x - tower).as_slice()[lane], s - image);
+            prop_assert_eq!((x * tower).as_slice()[lane], s * image);
+
+            let embedded = Ghash128::from(bit);
+            prop_assert_eq!((x + bit).as_slice()[lane], s + embedded);
+            prop_assert_eq!((x - bit).as_slice()[lane], s - embedded);
+            prop_assert_eq!((x * bit).as_slice()[lane], s * embedded);
         }
         Ok(())
     }
