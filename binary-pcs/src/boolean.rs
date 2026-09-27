@@ -84,12 +84,13 @@ use p3_challenger::fs::TranscriptField;
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
 use p3_commit::{Mmcs, MultilinearPcs};
 use p3_field::Field;
+use p3_matrix::dense::RowMajorMatrix;
 use p3_multilinear_util::point::Point;
 use p3_security::SecurityTerm;
 use p3_security::multilinear::{
     bit_ring_switch_claim_batching_term, bit_ring_switch_tensors_term, bit_ring_switch_term,
 };
-use p3_sumcheck::layout::{Layout, SuffixProver};
+use p3_sumcheck::layout::{Layout, SuffixProver, Table};
 use p3_sumcheck::ring_switch::bits::{
     BitPacking, BitPackingView, BitRingSwitch, BitRingSwitchClaims, BitRingSwitchClaimsProof,
     BitRingSwitchProofError,
@@ -104,7 +105,7 @@ use thiserror::Error;
 
 use crate::error::BinaryPcsError;
 use crate::fold::{ChallengeField, FoldAlphabet};
-use crate::packing::{Coordinates, PackError, PackedStack};
+use crate::packing::{Coordinates, PackError, PackedStack, PackedWords, hypercube_variables};
 use crate::params::{BinaryPcsConfig, BinaryPcsConfigError};
 use crate::pcs::BinaryPcs;
 use crate::proof::BinaryPcsProof;
@@ -175,6 +176,37 @@ pub trait BooleanMultilinearPcs<EF, Challenger>: BooleanBackend<EF> {
         bits: &[PackedGf2<U>],
         challenger: &mut Challenger,
     ) -> Result<(Self::Commitment, Self::ProverData), Self::Error>;
+
+    /// Commit to a bit witness written into packed words, bit `j` of word `w` being bit `64w + j`.
+    ///
+    /// The elements holding the words are the packing [`Self::commit_bits`] builds.
+    ///
+    /// The default hands the words over as bits.
+    ///
+    /// An implementation committing the elements as they are skips that copy.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error unless the witness covers exactly the committed hypercube.
+    fn commit_packed(
+        &self,
+        packed: PackedWords<Self::Val>,
+        challenger: &mut Challenger,
+    ) -> Result<(Self::Commitment, Self::ProverData), Self::Error> {
+        self.commit_bits(&packed.into_bits(), challenger)
+    }
+
+    /// Zeroed elements a bit witness of the given count of 64-bit words can be written into.
+    ///
+    /// A witness written into them goes to [`Self::commit_packed`].
+    ///
+    /// A witness this declines goes to [`Self::commit_bits`] as words.
+    ///
+    /// The default declines every witness.
+    #[must_use]
+    fn packed_words(_words: usize) -> Option<PackedWords<Self::Val>> {
+        None
+    }
 
     /// Open the bit witness with the readings every opening asks for, in one proof.
     ///
@@ -509,6 +541,36 @@ where
             .collect()
     }
 
+    /// Commit to packed elements as the one column of the one table the layout stacks.
+    #[allow(clippy::type_complexity)]
+    fn commit_column<Challenger>(
+        &self,
+        elements: Vec<EF>,
+        challenger: &mut Challenger,
+    ) -> Result<(MT::Commitment, BinaryPcsProverData<EF, EF, MT>), BooleanPcsError<EF, MT::Error>>
+    where
+        Challenger: FieldChallenger<EF>
+            + GrindingChallenger<Witness = EF>
+            + CanSampleUniformBits<EF>
+            + CanObserve<MT::Commitment>
+            + CanObserve<MX::Commitment>,
+    {
+        let actual = hypercube_variables(elements.len())?;
+        if actual != self.inner.num_variables() {
+            return Err(BooleanPcsError::WitnessArity {
+                expected: self.inner.num_variables(),
+                actual,
+            });
+        }
+
+        let len = elements.len();
+        let table = Table::new(RowMajorMatrix::new(elements, len));
+        let witness = SuffixProver::<EF, EF>::new_witness(vec![table], 0);
+        self.inner
+            .commit(witness, challenger)
+            .map_err(BooleanPcsError::Commitment)
+    }
+
     /// Open the bit witness with the readings every opening asks for, in one proof.
     ///
     /// No point needs prior transcript binding: each reduction binds its own.
@@ -723,17 +785,19 @@ where
     ) -> Result<(Self::Commitment, Self::ProverData), Self::Error> {
         // The packing is one copy of the bits, so the witness is never swept for arithmetic.
         let stack = PackedStack::<PackedGf2<U>, EF>::from_columns(&[bits])?;
-        if stack.column_num_variables() != self.inner.num_variables() {
-            return Err(BooleanPcsError::WitnessArity {
-                expected: self.inner.num_variables(),
-                actual: stack.column_num_variables(),
-            });
-        }
+        self.commit_column(stack.into_poly().into_evals(), challenger)
+    }
 
-        let witness = SuffixProver::<EF, EF>::new_witness(vec![stack.into_table()], 0);
-        self.inner
-            .commit(witness, challenger)
-            .map_err(BooleanPcsError::Commitment)
+    fn commit_packed(
+        &self,
+        packed: PackedWords<EF>,
+        challenger: &mut Challenger,
+    ) -> Result<(Self::Commitment, Self::ProverData), Self::Error> {
+        self.commit_column(packed.into_elements(), challenger)
+    }
+
+    fn packed_words(words: usize) -> Option<PackedWords<EF>> {
+        PackedWords::zeroed(words)
     }
 
     fn open_at_points(
@@ -968,6 +1032,15 @@ mod tests {
             .collect()
     }
 
+    /// A bit witness written into the words a commitment lends.
+    fn packed(bits: &[PackedGf2x64]) -> PackedWords<EF> {
+        let mut packed = PackedWords::zeroed(bits.len()).unwrap();
+        for (word, block) in packed.words_mut().iter_mut().zip(bits) {
+            *word = block.to_bits();
+        }
+        packed
+    }
+
     /// The witness as a multilinear over every variable, one element per bit.
     ///
     /// The definition of what an opening answers for, with no packing in it.
@@ -1144,6 +1217,38 @@ mod tests {
             )
             .unwrap_err();
         assert!(matches!(err, BooleanPcsError::ReductionProof(_)), "{err:?}");
+    }
+
+    #[test]
+    fn a_packed_witness_commits_as_its_bits_do() {
+        // Invariant: the words the bits are written into commit to the root the bits commit to,
+        // and words covering no hypercube, or another one, are refused.
+        //
+        // Fixture state: 2^13 bits, so 128 words, 64 elements and six committed variables.
+        const LOG_BITS: usize = 13;
+
+        let pcs = boolean_pcs(LOG_BITS);
+        let bits = witness(0x7AC4, LOG_BITS);
+        let (by_bits, _) = pcs.commit_bits(&bits, &mut challenger()).unwrap();
+        let (by_words, _) = pcs.commit_packed(packed(&bits), &mut challenger()).unwrap();
+        assert_eq!(by_words, by_bits);
+
+        // Six words fill three elements, and half the words half the elements.
+        let ragged = pcs.commit_packed(packed(&bits[..6]), &mut challenger());
+        assert!(matches!(
+            ragged,
+            Err(BooleanPcsError::Packing(PackError::NotAHypercube {
+                elements: 3
+            }))
+        ));
+        let short = pcs.commit_packed(packed(&bits[..64]), &mut challenger());
+        assert!(matches!(
+            short,
+            Err(BooleanPcsError::WitnessArity {
+                expected: 6,
+                actual: 5
+            })
+        ));
     }
 
     #[test]

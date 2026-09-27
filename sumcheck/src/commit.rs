@@ -2,6 +2,7 @@
 
 use p3_commit::{Encoder, Mmcs};
 use p3_field::Field;
+use p3_matrix::Matrix;
 use p3_matrix::dense::{DenseMatrix, RowMajorMatrix, RowMajorMatrixView, RowMajorMatrixViewMut};
 use p3_maybe_rayon::prelude::*;
 use p3_multilinear_util::poly::Poly;
@@ -100,6 +101,42 @@ where
     info_span!("commit_matrix").in_scope(|| mmcs.commit_matrix(encoded))
 }
 
+/// Encodes and Merkle-commits an initial base-field message the caller already holds.
+///
+/// The message is the committed polynomial laid out in the residual variable order.
+///
+/// It holds one cell per stacked evaluation, the cells [`commit_base`] has its callback write.
+///
+/// The encoder reads the message where it lies, and zero-pads it to codeword height itself.
+///
+/// Nothing is absorbed here.
+///
+/// The caller owns the transcript and absorbs the returned root itself.
+///
+/// # Panics
+///
+/// - The message must hold a power of two cells, and at least one row of `2^folding` of them.
+pub fn commit_borrowed_base<F, E, MT>(
+    encoder: &E,
+    mmcs: &MT,
+    folding: usize,
+    starting_log_inv_rate: usize,
+    message: &[F],
+) -> (MT::Commitment, MT::ProverData<DenseMatrix<F>>)
+where
+    F: Field,
+    E: Encoder<F>,
+    MT: Mmcs<F>,
+{
+    let message = RowMajorMatrixView::new(message, 1 << folding);
+    let codeword_height = message.height() << starting_log_inv_rate;
+
+    let encoded = info_span!("encode", height = codeword_height, width = message.width)
+        .in_scope(|| encoder.encode_batch_borrowed(message, starting_log_inv_rate));
+
+    info_span!("commit_matrix").in_scope(|| mmcs.commit_matrix(encoded))
+}
+
 #[cfg(test)]
 mod tests {
     use alloc::vec::Vec;
@@ -114,7 +151,7 @@ mod tests {
     use rand::SeedableRng;
     use rand::rngs::SmallRng;
 
-    use super::{commit_base, write_stacked_message};
+    use super::{commit_base, commit_borrowed_base, write_stacked_message};
     use crate::strategy::VariableOrder;
 
     type F = BabyBear;
@@ -179,6 +216,32 @@ mod tests {
         let expected_codeword = DoublingEncoder.encode_batch(expected_message, LOG_INV_RATE);
         let (expected_root, _) = mmcs.commit_matrix(expected_codeword);
         assert_eq!(root, expected_root);
+    }
+
+    #[test]
+    fn a_borrowed_message_commits_as_the_suffix_layout_it_already_is() {
+        // Invariant: the message a caller already holds commits to the root that writing the
+        // same cells into the codeword buffer commits to.
+        const NUM_VARIABLES: usize = 5;
+        const LOG_INV_RATE: usize = 1;
+        let mmcs = mmcs();
+        let values = (0..1 << NUM_VARIABLES)
+            .map(F::from_usize)
+            .collect::<Vec<_>>();
+
+        for folding in 0..=2 {
+            let (expected, _) = commit_base(
+                &DoublingEncoder,
+                &mmcs,
+                NUM_VARIABLES,
+                folding,
+                LOG_INV_RATE,
+                |message| message.copy_from_slice(&values),
+            );
+            let (root, _) =
+                commit_borrowed_base(&DoublingEncoder, &mmcs, folding, LOG_INV_RATE, &values);
+            assert_eq!(root, expected, "folding={folding}");
+        }
     }
 
     #[test]

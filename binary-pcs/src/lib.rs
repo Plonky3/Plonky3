@@ -40,7 +40,9 @@ pub use grouped_mmcs::GroupedCodewordMmcs;
 pub use mixed_trace::{
     MixedTraceCommitment, MixedTraceData, MixedTracePcs, committed_shapes, coordinate_basis,
 };
-pub use packing::{Coordinates, PackError, PackedStack, coordinate_bytes, pack, unpack};
+pub use packing::{
+    Coordinates, PackError, PackedStack, PackedWords, coordinate_bytes, pack, unpack,
+};
 pub use params::{BinaryPcsConfig, BinaryPcsConfigError, BinaryPcsParams};
 pub use pcs::BinaryPcs;
 pub use proof::{BinaryPcsProof, RoundProof};

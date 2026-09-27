@@ -7,7 +7,7 @@ use p3_binary_field::{
 };
 use p3_commit::Encoder;
 use p3_matrix::Matrix;
-use p3_matrix::dense::RowMajorMatrix;
+use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
 use p3_util::log2_strict_usize;
 
 use crate::lch::LchNtt;
@@ -135,6 +135,14 @@ macro_rules! impl_additive_rs_encoder {
                 log_inv_rate: usize,
             ) -> RowMajorMatrix<$field> {
                 self.ntt.ntt_batch_padded(message, log_inv_rate)
+            }
+
+            fn encode_batch_borrowed(
+                &self,
+                message: RowMajorMatrixView<'_, $field>,
+                log_inv_rate: usize,
+            ) -> RowMajorMatrix<$field> {
+                self.ntt.ntt_batch_borrowed(message, log_inv_rate)
             }
         }
     )*};

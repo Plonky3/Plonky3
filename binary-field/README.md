@@ -15,11 +15,13 @@ Key items:
 - `BinaryField2`, `BinaryField4`, `BinaryField8`, `BinaryField16`, `BinaryField32`, `BinaryField64`, `BinaryField128` — the tower levels, each a quadratic extension of the one below
 - `HasSubfield<BinaryField2>` for `BinaryField128` — `GF(4)` as a subfield of `GF(2^128)`, with a slice membership test and `GF(4)` scalars applied without a product
 - `Ghash128` — `GF(2^128)` in the GHASH polynomial basis, with `From` conversions to and from the widest tower level, and an `Algebra<BinaryField128>` action whose results stay in the polynomial basis
-- `PackedGhash128` — the SIMD packing, two elements per register on `avx2` and four on `avx512f`,
-  in both cases only when `vpclmulqdq` is also enabled, so it is absent from the rendered docs
+- `PackedGhash128` — the packing: on `x86_64` with `vpclmulqdq`, two elements per register on
+  `avx2` and four on `avx512f`; on AArch64 with `aes`, two elements side by side, one register
+  each, so packed kernels take two rows per pass. Neither is the docs build's target, so it is
+  absent from the rendered docs
 - `BasedVectorSpace` / `ExtensionField` between every pair of byte-aligned tower levels, in the tower basis
 - `BinaryChallenger` — Fiat–Shamir over a byte challenger; every bit pattern is a field element, so no rejection sampling is needed
-- Carryless-multiply fast paths on x86-64 (`pclmulqdq`, `vpclmulqdq`) and AArch64 (`aes`), with a software backend everywhere else
+- Carryless-multiply fast paths on x86-64 (`pclmulqdq`, `vpclmulqdq`) and little-endian AArch64 (`aes`), with a software backend everywhere else
 
 ## Which representation to use
 
@@ -28,7 +30,8 @@ polynomial coordinates and converts the result back.
 Each conversion reads sixteen operand-indexed table entries.
 
 `Ghash128` works directly in polynomial coordinates and avoids those conversions.
-Its SIMD packings process two or four independent elements per register.
+On `x86_64` its SIMD packings process two or four independent elements per register; on
+AArch64 its packing holds two elements, one register each.
 Dot products accumulate unreduced polynomials and reduce the sum once.
 
 What it gives up is the subfield structure: `GF(2^8)`, `GF(2^16)`, `GF(2^32)` and `GF(2^64)`
