@@ -122,6 +122,15 @@ fn large_cosets(len: usize) -> bool {
     len >= 2 * BUTTERFLY_GRAIN * current_num_threads()
 }
 
+/// The depth of the first staging group a borrowed message's cosets share, where they share one.
+///
+/// They share it when the encoding is padded, the target multiplies carrylessly, the cosets are
+/// large, and the plan stages a group at all.
+fn borrowed_first_group(plan: Plan, len: usize, log_inv_rate: usize) -> Option<usize> {
+    let shared = log_inv_rate > 0 && poly_basis::HAS_HARDWARE_CLMUL && large_cosets(len);
+    plan.group_sizes().next().filter(|_| shared)
+}
+
 /// A change of basis applied to a whole run of elements at once.
 ///
 /// The kernel behind it converts several elements together where the target allows.
@@ -1039,10 +1048,10 @@ impl AdditiveNtt<BinaryField128> for PolyBasisNtt {
         let log_message = log2_strict_usize(mat.height());
         let len = mat.values.len();
         let plan = Plan::new(width, log_message);
-        let shared = log_inv_rate > 0 && poly_basis::HAS_HARDWARE_CLMUL && large_cosets(len);
-        // Only cosets that share their first group gather the message themselves, and any
-        // other encoding transforms a padded copy of it.
-        let Some(depth) = plan.group_sizes().next().filter(|_| shared) else {
+        // Only cosets that share their first group gather the message themselves.
+        //
+        // Any other encoding transforms a padded copy of it.
+        let Some(depth) = borrowed_first_group(plan, len, log_inv_rate) else {
             return self.ntt_batch_padded(zero_padded(mat, log_inv_rate), log_inv_rate);
         };
         // Every coset is written in full by its first group, the leading one included.
@@ -1133,11 +1142,13 @@ impl AdditiveNtt<BinaryField128> for PolyBasisNtt {
 
 #[cfg(test)]
 mod tests {
+    use alloc::format;
     use alloc::vec::Vec;
 
     use p3_binary_field::{BinaryField128, TowerLevel, poly_basis};
     use p3_field::PrimeCharacteristicRing;
     use p3_matrix::dense::RowMajorMatrix;
+    use p3_maybe_rayon::prelude::current_num_threads;
     use p3_util::log2_floor_usize;
     use proptest::prelude::*;
 
@@ -1889,27 +1900,78 @@ mod tests {
         }
     }
 
+    /// Runs a check under a fixed pool of [`STAGED_WORKERS`] workers.
+    ///
+    /// That many workers stage a single column's first group.
+    ///
+    /// Every length past `2^13` elements then counts as large, whatever the host's own count.
+    #[cfg(feature = "parallel")]
+    fn with_staging_workers<R: Send>(check: impl FnOnce() -> R + Send) -> R {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(STAGED_WORKERS)
+            .build()
+            .unwrap()
+            .install(check)
+    }
+
+    /// Runs a check on the one worker a build without rayon has.
+    #[cfg(not(feature = "parallel"))]
+    fn with_staging_workers<R: Send>(check: impl FnOnce() -> R + Send) -> R {
+        check()
+    }
+
+    /// The transform of a borrowed message, and the transform of its zero-padded copy.
+    fn borrowed_and_padded(
+        width: usize,
+        log_message: usize,
+        log_inv_rate: usize,
+        seed: u64,
+    ) -> (
+        RowMajorMatrix<BinaryField128>,
+        RowMajorMatrix<BinaryField128>,
+    ) {
+        let message = matrix(log_message, width, seed);
+        let mut padded = message.clone();
+        padded
+            .values
+            .resize(padded.values.len() << log_inv_rate, BinaryField128::ZERO);
+        let borrowed = PolyBasisNtt::default().ntt_batch_borrowed(message.as_view(), log_inv_rate);
+        let padded = PolyBasisNtt::default().ntt_batch_padded(padded, log_inv_rate);
+        (borrowed, padded)
+    }
+
     #[test]
     fn a_borrowed_message_encodes_as_its_padding() {
-        // Small messages take the copy, and a tall single column shares its first group on a
-        // host with a few workers, so both routes of the entry point are compared.
-        for (width, log_message) in [(1, 4), (4, 6), (1, 17), (4, 15)] {
-            for log_inv_rate in 0..=2 {
-                let message = matrix(log_message, width, 31);
-                let mut padded = message.clone();
-                padded
-                    .values
-                    .resize(padded.values.len() << log_inv_rate, BinaryField128::ZERO);
-                let expected = PolyBasisNtt::default().ntt_batch_padded(padded, log_inv_rate);
+        // Small messages take the copy, and tall ones share their first group.
+        //
+        // A row of a whole line stages at any worker count, a single column from four workers.
+        // The route is asserted, so a host that would skip it fails instead of passing.
+        with_staging_workers(|| {
+            let workers = current_num_threads();
+            for (width, log_message, routed) in [
+                (1, 4, false),
+                (4, 6, false),
+                (4, 15, true),
+                (8, 14, true),
+                (1, 17, workers >= STAGED_WORKERS),
+            ] {
+                for log_inv_rate in 0..=2 {
+                    let label =
+                        format!("width={width} log_message={log_message} rate={log_inv_rate}");
+                    let plan = Plan::new(width, log_message);
+                    let len = width << log_message;
+                    assert_eq!(
+                        super::borrowed_first_group(plan, len, log_inv_rate).is_some(),
+                        routed && log_inv_rate > 0 && poly_basis::HAS_HARDWARE_CLMUL,
+                        "{label}"
+                    );
 
-                let actual =
-                    PolyBasisNtt::default().ntt_batch_borrowed(message.as_view(), log_inv_rate);
-                assert_eq!(
-                    actual, expected,
-                    "width={width} log_message={log_message} rate={log_inv_rate}"
-                );
+                    let (borrowed, padded) =
+                        borrowed_and_padded(width, log_message, log_inv_rate, 31);
+                    assert_eq!(borrowed, padded, "{label}");
+                }
             }
-        }
+        });
     }
 
     #[test]
@@ -1970,6 +2032,22 @@ mod tests {
 
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(32))]
+
+        /// A borrowed message transforms as its zero-padded copy does, at every width and rate.
+        ///
+        /// The pool is fixed, so the tall messages take the route that reads the message in place.
+        #[test]
+        fn a_borrowed_message_matches_its_padded_copy(
+            width in prop::sample::select(alloc::vec![1usize, 2, 3, 4, 8]),
+            log_message in 0usize..=13,
+            log_inv_rate in 0usize..=3,
+            seed in any::<u64>(),
+        ) {
+            let (borrowed, padded) = with_staging_workers(|| {
+                borrowed_and_padded(width, log_message, log_inv_rate, seed)
+            });
+            prop_assert_eq!(borrowed, padded);
+        }
 
         /// The polynomial-basis transform is the same map as the reference oracle.
         #[test]

@@ -184,10 +184,28 @@ fn suffix_prover_commits_the_hand_stacked_message() {
     }
 }
 
-/// A lone column filling the hypercube is handed to the encoder where it lies, and commits the
-/// root that writing it into the codeword buffer commits. The column is tall enough for its
-/// cosets to share their first staging group on a host with a few workers, which is the route
-/// that reads the message in place; any other route pads a copy of it.
+/// Runs a check under a fixed pool of four workers where the build is parallel.
+///
+/// Four workers stage a single column's first group, whatever the host's own count.
+fn with_four_workers(check: impl FnOnce() + Send) {
+    #[cfg(feature = "parallel")]
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(4)
+        .build()
+        .unwrap()
+        .install(check);
+    #[cfg(not(feature = "parallel"))]
+    check();
+}
+
+/// A lone column filling the hypercube is handed to the encoder where it lies.
+///
+/// It commits the root that writing it into the codeword buffer commits.
+///
+/// The column is tall enough for its cosets to share their first staging group, the route that
+/// reads the message in place.
+///
+/// A row of four elements stages at any worker count, and a single column does under the pool.
 ///
 /// A witness of two columns, or of two tables, holds no one slice that is its message.
 #[test]
@@ -199,18 +217,24 @@ fn a_lone_column_commits_the_root_of_its_written_message() {
     let mut rng = SmallRng::seed_from_u64(5);
 
     let column = Table::rand(&mut rng, 1, LOG_HEIGHT);
-    let witness = SuffixProver::<F, F>::new_witness(vec![column.clone()], 0);
-    assert_eq!(
-        SuffixProver::<F, F>::borrowed_message(&witness),
-        Some(column.poly(0).as_slice())
-    );
+    for folding in [0, 2] {
+        let witness = SuffixProver::<F, F>::new_witness(vec![column.clone()], folding);
+        assert_eq!(
+            SuffixProver::<F, F>::borrowed_message(&witness),
+            Some(column.poly(0).as_slice())
+        );
 
-    let stacked = witness.stacked_poly();
-    let (expected_root, _) = commit_base(&encoder, &mmcs, LOG_HEIGHT, 0, RATE, |message| {
-        write_stacked_message(VariableOrder::Suffix, &stacked, 0, message);
-    });
-    let (_layout, root, _data) = SuffixProver::<F, F>::commit(&encoder, &mmcs, witness, 0, RATE);
-    assert_eq!(root, expected_root);
+        let stacked = witness.stacked_poly();
+        with_four_workers(|| {
+            let (expected_root, _) =
+                commit_base(&encoder, &mmcs, LOG_HEIGHT, folding, RATE, |message| {
+                    write_stacked_message(VariableOrder::Suffix, &stacked, folding, message);
+                });
+            let (_layout, root, _data) =
+                SuffixProver::<F, F>::commit(&encoder, &mmcs, witness, folding, RATE);
+            assert_eq!(root, expected_root, "folding={folding}");
+        });
+    }
 
     let two_columns = SuffixProver::<F, F>::new_witness(vec![Table::rand(&mut rng, 2, 6)], 0);
     assert_eq!(SuffixProver::<F, F>::borrowed_message(&two_columns), None);
