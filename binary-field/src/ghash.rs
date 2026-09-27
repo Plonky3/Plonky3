@@ -294,7 +294,8 @@ impl PrimeCharacteristicRing for Ghash128 {
 
 impl Field for Ghash128 {
     // One element is one 128-bit lane, so a wide carryless multiply packs several of them.
-    // Which register that is, and whether there is one at all, is settled in `packed`.
+    // On AArch64 the multiply reaches one lane, and the packing holds two elements side by side.
+    // Which packing that is, and whether there is one at all, is settled in `packed`.
     //
     // Without a packing the alias resolves to this type itself, which is why the lint is off.
     #[allow(clippy::use_self)]
@@ -478,7 +479,24 @@ impl Add for Ghash128 {
     #[allow(clippy::suspicious_arithmetic_impl)]
     fn add(self, rhs: Self) -> Self {
         // Addition in characteristic 2 is `XOR`.
-        Self(self.0 ^ rhs.0)
+        //
+        // AArch64 takes it in the vector register file, where the products it feeds run.
+        #[cfg(all(
+            target_arch = "aarch64",
+            target_endian = "little",
+            target_feature = "aes"
+        ))]
+        {
+            Self(clmul::poly_add_128(self.0, rhs.0))
+        }
+        #[cfg(not(all(
+            target_arch = "aarch64",
+            target_endian = "little",
+            target_feature = "aes"
+        )))]
+        {
+            Self(self.0 ^ rhs.0)
+        }
     }
 }
 

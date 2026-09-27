@@ -1,11 +1,17 @@
 use alloc::vec;
 use alloc::vec::Vec;
+use core::cell::Cell;
+use core::cmp::Ordering;
 
-use p3_air::BaseAir;
+use p3_air::{Air, AirBuilder, BaseAir, WindowAccess};
 use p3_binary_field::{Ghash128, TowerLevel};
+use p3_blake3_air::Blake3BinaryAir;
 use p3_field::{Field, HasSubfield, PrimeCharacteristicRing};
+use p3_lookup::InteractionSymbolicBuilder;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_multilinear_util::point::Point;
+use p3_sha256_air::Sha256BinaryAir;
+use proptest::prelude::{any, prop_assert_eq, prop_oneof, proptest};
 use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
 
@@ -16,10 +22,22 @@ use crate::rounds::subfield::tests::{
     first_challenge, later_rounds, link_coupling, no_lookups, with_stage_state, with_state,
 };
 use crate::rounds::{AirSlot, StageCoupling};
-use crate::zerocheck::backend_tests::{FixtureAir, Gf4, Instance, Tower, gf4, outside};
+use crate::zerocheck::backend_tests::{
+    FixtureAir, Gf4, Instance, RoundFiveOnThePlanes, Tower, gf4, outside,
+};
 
 /// The smallest height whose residual half fills a word.
 const SHORTEST: usize = 2 * SLICED_LANES;
+
+impl Planes<'_> {
+    /// The low and high planes of entry `index`, whichever layout holds them.
+    fn planes(&self, index: usize) -> [u64; 2] {
+        match self {
+            Self::Low(words) => PlaneWords::planes(&**words, index),
+            Self::Pairs(pairs) => PlaneWords::planes(&**pairs, index),
+        }
+    }
+}
 
 fn packed_boolean_table(table: &Table<Tower>) -> Table<Tower> {
     let height = 1usize << table.num_variables();
@@ -165,7 +183,7 @@ fn packed_tables_ingest_directly_in_merged_order() {
                     table.packed_bits().unwrap().values
                         [word * table.num_polys()..(word + 1) * table.num_polys()]
                         .iter()
-                        .map(|&value| [value, 0])
+                        .copied()
                 })
             })
             .collect::<Vec<_>>();
@@ -186,8 +204,41 @@ fn packed_tables_ingest_directly_in_merged_order() {
                     .sliced_trace::<Gf4>()
                     .expect("packed Boolean tables should fit the sliced path");
                 assert_eq!(trace.width, 5);
-                assert_eq!(trace.cells, expected, "height {height}");
-                assert!(trace.successors.iter().all(|planes| *planes == [0; 2]));
+                let Planes::Low(cells) = &trace.cells else {
+                    panic!("packed Boolean tables should keep the low plane alone");
+                };
+                assert_eq!(&**cells, expected.as_slice(), "height {height}");
+                assert!(
+                    (0..trace.successors.len())
+                        .all(|index| trace.successors.planes(index) == [0; 2])
+                );
+            },
+        );
+    }
+}
+
+#[test]
+fn a_single_packed_table_lends_its_words_as_the_low_plane() {
+    for height in [128, 256, 512] {
+        let instance = Instance::honest(FixtureAir::Pair, height, 0x10AF);
+        let packed = packed_boolean_table(&instance.main_table());
+        with_stage_state(
+            &[&instance.air],
+            &[instance.public_values.as_slice()],
+            &[None],
+            &[&packed],
+            no_lookups(),
+            |state, _| {
+                let trace = state
+                    .sliced_trace::<Gf4>()
+                    .expect("a packed Boolean table should fit the sliced path");
+                let Planes::Low(Cow::Borrowed(cells)) = &trace.cells else {
+                    panic!("a single packed table should lend its words at height {height}");
+                };
+                assert!(
+                    core::ptr::eq(*cells, packed.packed_bits().unwrap().values.as_slice()),
+                    "height {height}"
+                );
             },
         );
     }
@@ -331,8 +382,8 @@ fn the_planes_hold_every_cell_and_its_repeat_last_successor() {
             .into_iter()
             .flatten()
             .collect::<Vec<_>>();
-        let cell = |planes: &[[u64; 2]], column: usize, row: usize| {
-            let [low, high] = planes[(row / SLICED_LANES) * trace.width + column];
+        let cell = |planes: &Planes<'_>, column: usize, row: usize| {
+            let [low, high] = planes.planes((row / SLICED_LANES) * trace.width + column);
             let bit = |plane: u64| (plane >> (row % SLICED_LANES)) & 1 == 1;
             Tower::from(Gf4::from_bool(bit(low)) + Gf4::from_bool(bit(high)) * Gf4::GENERATOR)
         };
@@ -356,6 +407,71 @@ fn the_planes_hold_every_cell_and_its_repeat_last_successor() {
             }
         }
     });
+}
+
+#[test]
+fn packed_successor_planes_match_the_dense_planes() {
+    for height in [128, 256, 512] {
+        // Random bits make every successor column vary from row to row; the planes need no valid
+        // witness.
+        let random_bits = |air, seed: u64| {
+            let mut instance = Instance::honest(air, height, seed);
+            let mut rng = SmallRng::seed_from_u64(seed);
+            for value in &mut instance.main.values {
+                *value = Tower::from_bool(rng.random());
+            }
+            instance
+        };
+        for instances in [
+            vec![random_bits(FixtureAir::QuadraticSuccessor, 0x5C01)],
+            vec![
+                random_bits(FixtureAir::Pair, 0x5C02),
+                random_bits(FixtureAir::QuadraticSuccessor, 0x5C03),
+            ],
+        ] {
+            let dense = instances
+                .iter()
+                .map(Instance::main_table)
+                .collect::<Vec<_>>();
+            let packed = dense.iter().map(packed_boolean_table).collect::<Vec<_>>();
+            let airs = instances
+                .iter()
+                .map(|instance| &instance.air)
+                .collect::<Vec<_>>();
+            let publics = instances
+                .iter()
+                .map(|instance| instance.public_values.as_slice())
+                .collect::<Vec<_>>();
+            let entries = |planes: &Planes<'_>| {
+                (0..planes.len())
+                    .map(|index| planes.planes(index))
+                    .collect::<Vec<_>>()
+            };
+            let planes = |main: &[Table<Tower>], low: bool| -> (Vec<_>, Vec<_>) {
+                with_stage_state(
+                    &airs,
+                    &publics,
+                    &vec![None; airs.len()],
+                    &main.iter().collect::<Vec<_>>(),
+                    no_lookups(),
+                    |state, _| {
+                        let trace = state
+                            .sliced_trace::<Gf4>()
+                            .expect("Boolean tables should fit the sliced path");
+                        assert_eq!(matches!(trace.cells, Planes::Low(_)), low);
+                        assert_eq!(matches!(trace.successors, Planes::Low(_)), low);
+                        (entries(&trace.cells), entries(&trace.successors))
+                    },
+                )
+            };
+            assert_eq!(
+                planes(&packed, true),
+                planes(&dense, false),
+                "{} tables at height {height}",
+                instances.len()
+            );
+        }
+    }
 }
 
 #[test]
@@ -460,7 +576,7 @@ fn plane_fold_trace_fixture(
     num_vars: usize,
     width: usize,
     boolean: bool,
-) -> (SlicedTrace, Vec<Tower>) {
+) -> (SlicedTrace<'static>, Vec<Tower>) {
     let height = 1 << num_vars;
     let words = height / SLICED_LANES;
     let mut values = vec![Tower::ZERO; height * width];
@@ -481,13 +597,33 @@ fn plane_fold_trace_fixture(
         SlicedTrace {
             num_vars,
             width,
-            cells,
-            successors: vec![],
+            cells: Planes::Pairs(cells),
+            successors: Planes::Pairs(vec![]),
             boundary: vec![],
             rounds: 0,
         },
         values,
     )
+}
+
+/// The same trace with its cells as the low plane alone.
+///
+/// # Panics
+///
+/// Panics unless every high plane of `trace` is clear.
+fn low_plane_twin(trace: &SlicedTrace<'_>) -> SlicedTrace<'static> {
+    let Planes::Pairs(cells) = &trace.cells else {
+        panic!("the twin of a trace holding both planes");
+    };
+    assert!(cells.iter().all(|&[_, high]| high == 0));
+    SlicedTrace {
+        num_vars: trace.num_vars,
+        width: trace.width,
+        cells: Planes::Low(Cow::Owned(cells.iter().map(|&[low, _]| low).collect())),
+        successors: Planes::Low(Cow::Owned(vec![])),
+        boundary: trace.boundary.clone(),
+        rounds: trace.rounds,
+    }
 }
 
 #[test]
@@ -574,9 +710,9 @@ fn plane_fold_reference_covers_prefixes_widths_and_special_challenges() {
 #[should_panic(
     expected = "a plane fold's corner buffers must hold every corner of its bound prefix"
 )]
-fn a_default_plane_fold_refuses_the_delayed_five_challenge_prefix() {
-    // Only an unslice that binds the challenge past the sliced rounds gathers five challenges'
-    // worth of corners, through a fold sized for them.
+fn a_default_plane_fold_refuses_the_delayed_six_challenge_prefix() {
+    // Only an unslice that binds the challenge past the last round on the planes gathers six
+    // challenges' worth of corners, through a fold sized for them.
     let (trace, _) = plane_fold_trace_fixture(11, 1, true);
     let prefix = [Tower::from_repr(0x1234); MAX_PLANE_FOLD_ROUNDS];
     let _ = PlaneFold::<Tower>::new::<Gf4, Tower>(&trace, &prefix);
@@ -672,6 +808,7 @@ fn tensor4_path_retains_all_entries_and_replays_cached_rounds() {
 
 #[test]
 fn late_boundary_keeps_planes_until_fifth_challenge() {
+    let _round_five = RoundFiveOnThePlanes::force();
     for height in [1 << 11, 1 << 12] {
         let instances = [Instance::honest(
             FixtureAir::Pair,
@@ -714,25 +851,42 @@ fn late_boundary_keeps_planes_until_fifth_challenge() {
                 matches!(&state.columns, ExtColumns::Sliced(columns) if columns.challenges.len() == 4 && columns.late_boundary && columns.tensor.is_none() && columns.num_evals() == height >> 4)
             );
 
-            let tau = state.tau.as_slice().to_vec();
-            let suffix = Poly::new_from_point(&tau[5..], Tower::ONE);
-            let round_four = state
-                .round_poly_late_boundary::<Gf4>(&suffix)
-                .expect("late plane evaluator should serve round four");
+            // A stage with a whole word left past six challenges keeps its planes through round
+            // five as well.
+            let last = last_late_round(
+                height.trailing_zeros() as usize,
+                <Ghash128 as Field>::Packing::WIDTH,
+            );
             assert_eq!(
-                round_four,
-                state
+                last,
+                late_rounds_on_the_planes(height) + 3,
+                "height {height}"
+            );
+            let tau = state.tau.as_slice().to_vec();
+            for round in 4..=last {
+                let suffix = Poly::new_from_point(&tau[round + 1..], Tower::ONE);
+                let round_poly = state
                     .round_poly_late_boundary::<Gf4>(&suffix)
-                    .expect("late round should replay deterministically")
-            );
-
-            assert!(state.fold_late_boundary::<Gf4>(challenge(4)));
+                    .expect("late plane evaluator should serve the round");
+                assert_eq!(
+                    round_poly,
+                    state
+                        .round_poly_late_boundary::<Gf4>(&suffix)
+                        .expect("late round should replay deterministically")
+                );
+                assert!(state.fold_late_boundary::<Gf4>(challenge(round)));
+                if round < last {
+                    assert!(
+                        matches!(&state.columns, ExtColumns::Sliced(columns) if columns.challenges.len() == round + 1 && columns.num_evals() == height >> (round + 1))
+                    );
+                }
+            }
             assert!(
-                matches!(&state.columns, ExtColumns::Scalar(columns) if columns.len() == 3 && columns.iter().all(|column| column.num_evals() == height >> 5))
+                matches!(&state.columns, ExtColumns::Scalar(columns) if columns.len() == 3 && columns.iter().all(|column| column.num_evals() == height >> (last + 1)))
             );
-            assert_eq!(state.round, 5);
+            assert_eq!(state.round, last + 1);
 
-            for round in 5..tau.len() {
+            for round in last + 1..tau.len() {
                 let tau = state.tau.as_slice().to_vec();
                 let suffix = Poly::new_from_point(&tau[round + 1..], Tower::ONE);
                 state.round_poly_repr(&suffix);
@@ -1064,86 +1218,301 @@ fn tensor4_evaluates_mixed_linear_and_quadratic_airs() {
     );
 }
 
+/// `body`'s result, beside the delayed rounds the planes served on this thread while it ran.
+fn served_late_rounds<T>(body: impl FnOnce() -> T) -> (T, usize) {
+    let before = LATE_BOUNDARY_ROUNDS.with(Cell::get);
+    let result = body();
+    (result, LATE_BOUNDARY_ROUNDS.with(Cell::get) - before)
+}
+
+/// The delayed rounds the planes serve a stage of `height` rows under [`RoundFiveOnThePlanes`]:
+/// round four, and round five too once a whole word is left past six challenges.
+const fn late_rounds_on_the_planes(height: usize) -> usize {
+    if height >= 1 << MIN_LATE_ROUND_FIVE_VARS {
+        2
+    } else {
+        1
+    }
+}
+
 /// Collect the complete direct-state transcript for the incumbent tensor4 path or the delayed
-/// plane path, using caller-supplied first five fold challenges.
-fn collect_late_boundary_rounds(instances: &[Instance], prefix: [Tower; 5], late: bool) -> Rounds {
+/// plane path, using caller-supplied first `N` fold challenges.
+fn collect_late_boundary_rounds<const N: usize>(
+    instances: &[Instance],
+    prefix: [Tower; N],
+    late: bool,
+) -> Rounds {
     collect_late_boundary_rounds_with_tau(instances, prefix, late, None, None)
 }
 
-fn collect_late_boundary_rounds_with_tau(
+fn collect_late_boundary_rounds_with_tau<const N: usize>(
     instances: &[Instance],
-    prefix: [Tower; 5],
+    prefix: [Tower; N],
     late: bool,
     tau4: Option<Tower>,
     tau5: Option<Tower>,
 ) -> Rounds {
-    with_state(instances, no_lookups(), |mut state, _eq_suffix| {
-        let mut tau = state.tau.as_slice().to_vec();
-        if let Some(value) = tau4 {
-            tau[4] = value;
-        }
-        if let Some(value) = tau5 {
-            tau[5] = value;
-        }
-        state.tau = Point::new(tau);
-        let tau = state.tau.as_slice().to_vec();
-        let eq_suffix = Poly::new_from_point(&tau[1..], Tower::ONE);
-        let strategy = if late {
-            SlicedStrategy::TensorBoundaryLate
-        } else {
-            SlicedStrategy::TensorBoundary
-        };
-        let first = state
-            .round_poly_sliced_with_strategy::<Gf4, Ghash128>(&eq_suffix, strategy)
-            .expect("eligible tensor stage should build");
-        let mut state = state.fold_sliced::<Ghash128>(prefix[0]);
-        let tau = state.tau.as_slice().to_vec();
-        let mut round_polys = vec![first];
-        for round in 1..tau.len() {
-            let suffix = Poly::new_from_point(&tau[round + 1..], Tower::ONE);
-            let round_poly = if round < 4 {
-                state
-                    .round_poly_sliced::<Gf4>(&suffix)
-                    .expect("tensor should serve its four rounds")
-            } else if late && round == 4 {
-                state
-                    .round_poly_late_boundary::<Gf4>(&suffix)
-                    .expect("late boundary should serve round four")
-            } else {
-                state.round_poly_repr(&suffix)
-            };
-            round_polys.push(round_poly);
-
-            let challenge = prefix
-                .get(round)
-                .copied()
-                .unwrap_or_else(|| challenge(round));
-            if round < 3 {
-                assert!(state.fold_sliced(challenge));
-            } else if late && round == 3 {
-                assert!(state.fold_late_boundary::<Gf4>(challenge));
-            } else if !late && round == 3 {
-                assert!(state.fold_boundary::<Gf4>(challenge));
-            } else if late && round == 4 {
-                assert!(state.fold_late_boundary::<Gf4>(challenge));
-            } else {
-                state.fold_repr(challenge);
-            }
-        }
-        let openings = state
-            .into_openings()
-            .into_iter()
-            .map(|(_, opening)| {
-                [
-                    opening.local,
-                    opening.next,
-                    opening.preprocessed_local,
-                    opening.preprocessed_next,
-                ]
-            })
-            .collect();
-        (round_polys, openings)
+    with_state(instances, no_lookups(), |state, _eq_suffix| {
+        late_boundary_transcript(state, prefix, late, tau4, tau5)
     })
+}
+
+/// The complete transcript [`collect_late_boundary_rounds_with_tau`] collects, from `state`.
+fn late_boundary_transcript<const N: usize>(
+    mut state: RoundStateBase<'_, '_, FixtureAir, Tower, Tower>,
+    prefix: [Tower; N],
+    late: bool,
+    tau4: Option<Tower>,
+    tau5: Option<Tower>,
+) -> Rounds {
+    let mut tau = state.tau.as_slice().to_vec();
+    if let Some(value) = tau4 {
+        tau[4] = value;
+    }
+    if let Some(value) = tau5 {
+        tau[5] = value;
+    }
+    state.tau = Point::new(tau);
+    let tau = state.tau.as_slice().to_vec();
+    let eq_suffix = Poly::new_from_point(&tau[1..], Tower::ONE);
+    let strategy = if late {
+        SlicedStrategy::TensorBoundaryLate
+    } else {
+        SlicedStrategy::TensorBoundary
+    };
+    let first = state
+        .round_poly_sliced_with_strategy::<Gf4, Ghash128>(&eq_suffix, strategy)
+        .expect("eligible tensor stage should build");
+    let mut state = state.fold_sliced::<Ghash128>(prefix[0]);
+    let tau = state.tau.as_slice().to_vec();
+    let late_rounds = 4..=last_late_round(tau.len(), <Ghash128 as Field>::Packing::WIDTH);
+    let mut round_polys = vec![first];
+    for round in 1..tau.len() {
+        let suffix = Poly::new_from_point(&tau[round + 1..], Tower::ONE);
+        let round_poly = if round < 4 {
+            state
+                .round_poly_sliced::<Gf4>(&suffix)
+                .expect("tensor should serve its four rounds")
+        } else if late && late_rounds.contains(&round) {
+            state
+                .round_poly_late_boundary::<Gf4>(&suffix)
+                .expect("late boundary should serve its rounds")
+        } else {
+            state.round_poly_repr(&suffix)
+        };
+        round_polys.push(round_poly);
+
+        let challenge = prefix
+            .get(round)
+            .copied()
+            .unwrap_or_else(|| challenge(round));
+        if round < 3 {
+            assert!(state.fold_sliced(challenge));
+        } else if late && round == 3 {
+            assert!(state.fold_late_boundary::<Gf4>(challenge));
+        } else if !late && round == 3 {
+            assert!(state.fold_boundary::<Gf4>(challenge));
+        } else if late && late_rounds.contains(&round) {
+            assert!(state.fold_late_boundary::<Gf4>(challenge));
+        } else {
+            state.fold_repr(challenge);
+        }
+    }
+    let openings = state
+        .into_openings()
+        .into_iter()
+        .map(|(_, opening)| {
+            [
+                opening.local,
+                opening.next,
+                opening.preprocessed_local,
+                opening.preprocessed_next,
+            ]
+        })
+        .collect();
+    (round_polys, openings)
+}
+
+/// A stage of packed Boolean tables runs the tensor and delayed boundary paths on its low plane
+/// alone, borrowed from one table or copied from several, to the dense stage's transcript.
+///
+/// The taller stage also serves round five from its planes, whatever the target packs.
+#[test]
+fn packed_tables_match_dense_on_the_late_boundary_path() {
+    let _round_five = RoundFiveOnThePlanes::force();
+    let prefix = [
+        challenge(0),
+        challenge(1),
+        challenge(2),
+        challenge(3),
+        challenge(4),
+    ];
+    for (height, instances) in [1 << 11, 1 << MIN_LATE_ROUND_FIVE_VARS]
+        .into_iter()
+        .flat_map(|height| {
+            [
+                vec![Instance::honest(FixtureAir::Pair, height, 0x007E_50D1)],
+                vec![
+                    Instance::honest(FixtureAir::Pair, height, 0x007E_50D2),
+                    Instance::honest(
+                        FixtureAir::Linear { scale: Tower::ONE },
+                        height,
+                        0x007E_50D3,
+                    ),
+                ],
+            ]
+            .map(|instances| (height, instances))
+        })
+    {
+        let dense = instances
+            .iter()
+            .map(Instance::main_table)
+            .collect::<Vec<_>>();
+        let packed = dense.iter().map(packed_boolean_table).collect::<Vec<_>>();
+        let airs = instances
+            .iter()
+            .map(|instance| &instance.air)
+            .collect::<Vec<_>>();
+        let publics = instances
+            .iter()
+            .map(|instance| instance.public_values.as_slice())
+            .collect::<Vec<_>>();
+        for late in [true, false] {
+            let run = |main: &[Table<Tower>]| {
+                with_stage_state(
+                    &airs,
+                    &publics,
+                    &vec![None; airs.len()],
+                    &main.iter().collect::<Vec<_>>(),
+                    no_lookups(),
+                    |state, _| late_boundary_transcript(state, prefix, late, None, None),
+                )
+            };
+            let ((packed, dense), served) = served_late_rounds(|| (run(&packed), run(&dense)));
+            let case = alloc::format!("{} tables, height {height}, late {late}", instances.len());
+            assert_eq!(packed, dense, "{case}");
+            let expected = if late {
+                2 * late_rounds_on_the_planes(height)
+            } else {
+                0
+            };
+            assert_eq!(served, expected, "{case}");
+        }
+    }
+}
+
+/// The complete transcript of a stage evaluated round by round on its planes: its sliced rounds,
+/// then the boundary round and its fold, then the representation rounds.
+fn boundary_transcript<const N: usize>(
+    mut state: RoundStateBase<'_, '_, FixtureAir, Tower, Tower>,
+    prefix: [Tower; N],
+) -> Rounds {
+    let tau = state.tau.as_slice().to_vec();
+    let eq_suffix = Poly::new_from_point(&tau[1..], Tower::ONE);
+    let first = state
+        .round_poly_sliced_with_strategy::<Gf4, Ghash128>(
+            &eq_suffix,
+            SlicedStrategy::TensorBoundaryLate,
+        )
+        .expect("the stage should fit the sliced path");
+    let mut state = state.fold_sliced::<Ghash128>(prefix[0]);
+    let boundary = DEFAULT_SLICED_ROUNDS;
+    let mut round_polys = vec![first];
+    for round in 1..tau.len() {
+        let suffix = Poly::new_from_point(&tau[round + 1..], Tower::ONE);
+        let round_poly = match round.cmp(&boundary) {
+            Ordering::Less => state
+                .round_poly_sliced::<Gf4>(&suffix)
+                .expect("the planes should serve the sliced rounds"),
+            Ordering::Equal => state
+                .round_poly_boundary::<Gf4>(&suffix)
+                .expect("the planes should serve the boundary round"),
+            Ordering::Greater => state.round_poly_repr(&suffix),
+        };
+        round_polys.push(round_poly);
+
+        let challenge = prefix
+            .get(round)
+            .copied()
+            .unwrap_or_else(|| challenge(round));
+        match round.cmp(&boundary) {
+            Ordering::Less => assert!(state.fold_sliced(challenge)),
+            Ordering::Equal => assert!(state.fold_boundary::<Gf4>(challenge)),
+            Ordering::Greater => state.fold_repr(challenge),
+        }
+    }
+    let openings = state
+        .into_openings()
+        .into_iter()
+        .map(|(_, opening)| {
+            [
+                opening.local,
+                opening.next,
+                opening.preprocessed_local,
+                opening.preprocessed_next,
+            ]
+        })
+        .collect();
+    (round_polys, openings)
+}
+
+/// A stage of packed Boolean tables that reads successor rows takes the boundary round and its
+/// fold on its low planes, successor lane and repeat-last tails included, to the dense stage's
+/// transcript.
+///
+/// A stage reading successor rows builds no tensor, so its sliced rounds run one at a time and
+/// the boundary round follows them on the planes. Random bits make every successor column vary
+/// from row to row; the transcript needs no valid witness.
+#[test]
+fn packed_successor_tables_match_dense_through_the_boundary_round() {
+    let prefix = [challenge(0), challenge(1), challenge(2), challenge(3)];
+    for height in [1 << 10, 1 << 11] {
+        let random_bits = |air, seed: u64| {
+            let mut instance = Instance::honest(air, height, seed);
+            let mut rng = SmallRng::seed_from_u64(seed);
+            for value in &mut instance.main.values {
+                *value = Tower::from_bool(rng.random());
+            }
+            instance
+        };
+        for instances in [
+            vec![random_bits(FixtureAir::QuadraticSuccessor, 0x5C11)],
+            vec![
+                random_bits(FixtureAir::Pair, 0x5C12),
+                random_bits(FixtureAir::QuadraticSuccessor, 0x5C13),
+            ],
+        ] {
+            let dense = instances
+                .iter()
+                .map(Instance::main_table)
+                .collect::<Vec<_>>();
+            let packed = dense.iter().map(packed_boolean_table).collect::<Vec<_>>();
+            let airs = instances
+                .iter()
+                .map(|instance| &instance.air)
+                .collect::<Vec<_>>();
+            let publics = instances
+                .iter()
+                .map(|instance| instance.public_values.as_slice())
+                .collect::<Vec<_>>();
+            let run = |main: &[Table<Tower>]| {
+                with_stage_state(
+                    &airs,
+                    &publics,
+                    &vec![None; airs.len()],
+                    &main.iter().collect::<Vec<_>>(),
+                    no_lookups(),
+                    |state, _| boundary_transcript(state, prefix),
+                )
+            };
+            assert_eq!(
+                run(&packed),
+                run(&dense),
+                "{} tables at height {height}",
+                instances.len()
+            );
+        }
+    }
 }
 
 #[test]
@@ -1185,9 +1554,34 @@ fn late_boundary_matches_incumbent_for_all_special_prefix_coordinates() {
 }
 
 #[test]
+fn late_round_five_matches_incumbent_for_all_special_prefix_coordinates() {
+    // Round five on the planes binds the round-four challenge into its fold, and its own
+    // challenge into the unslice. It runs whatever the target packs.
+    let _round_five = RoundFiveOnThePlanes::force();
+    let height = 1 << MIN_LATE_ROUND_FIVE_VARS;
+    let instances = [Instance::honest(FixtureAir::Pair, height, 0x007E_50B5)];
+    let lambda = Tower::interpolation_node(2);
+    let special = [Tower::ZERO, Tower::ONE, lambda, Tower::from_repr(0x1234)];
+    let ordinary = core::array::from_fn::<_, 6, _>(challenge);
+    for coordinate in 0..ordinary.len() {
+        for &value in &special {
+            let mut prefix = ordinary;
+            prefix[coordinate] = value;
+            let case = alloc::format!("special coordinate {coordinate}, value {value:?}");
+            let (late, served) =
+                served_late_rounds(|| collect_late_boundary_rounds(&instances, prefix, true));
+            assert_eq!(served, 2, "rounds four and five on the planes, {case}");
+            assert_eq!(
+                late,
+                collect_late_boundary_rounds(&instances, prefix, false),
+                "{case}"
+            );
+        }
+    }
+}
+
+#[test]
 fn late_boundary_matches_incumbent_for_special_tau4_and_tau5() {
-    let height = 1 << 11;
-    let instances = [Instance::honest(FixtureAir::Pair, height, 0x007E_50B3)];
     let special = [
         Tower::ONE,
         Tower::interpolation_node(2),
@@ -1200,25 +1594,33 @@ fn late_boundary_matches_incumbent_for_special_tau4_and_tau5() {
         challenge(3),
         challenge(4),
     ];
-    for &tau4 in &special {
-        for &tau5 in &special {
-            assert_eq!(
-                collect_late_boundary_rounds_with_tau(
-                    &instances,
-                    prefix,
-                    true,
-                    Some(tau4),
-                    Some(tau5),
-                ),
-                collect_late_boundary_rounds_with_tau(
-                    &instances,
-                    prefix,
-                    false,
-                    Some(tau4),
-                    Some(tau5),
-                ),
-                "special tau4={tau4:?}, tau5={tau5:?}"
-            );
+    let _round_five = RoundFiveOnThePlanes::force();
+    for height in [1 << 11, 1 << MIN_LATE_ROUND_FIVE_VARS] {
+        let instances = [Instance::honest(FixtureAir::Pair, height, 0x007E_50B3)];
+        for &tau4 in &special {
+            for &tau5 in &special {
+                let (late, served) = served_late_rounds(|| {
+                    collect_late_boundary_rounds_with_tau(
+                        &instances,
+                        prefix,
+                        true,
+                        Some(tau4),
+                        Some(tau5),
+                    )
+                });
+                assert_eq!(served, late_rounds_on_the_planes(height), "height {height}");
+                assert_eq!(
+                    late,
+                    collect_late_boundary_rounds_with_tau(
+                        &instances,
+                        prefix,
+                        false,
+                        Some(tau4),
+                        Some(tau5),
+                    ),
+                    "height {height}, special tau4={tau4:?}, tau5={tau5:?}"
+                );
+            }
         }
     }
 }
@@ -2004,10 +2406,355 @@ fn tensor4_contraction_skips_zero_degree_slots_in_mixed_stage() {
     let tensor = SlicedTensor {
         values: vec![vec![Tower::ZERO; 81], vec![Tower::ONE; 81]],
         depth: 4,
+        nodes: TensorNodes::Interpolation,
     };
     let evals = tensor_round(&tensor, &slots, &[Tower::ZERO; 4], &[], 0);
     assert!(evals[0].is_empty());
     assert_eq!(evals[1].len(), 2);
+}
+
+/// Require the stage's tensor on the infinity nodes to contract to the round polynomials of its
+/// tensor on the interpolation nodes, at every round and several challenge prefixes.
+fn assert_infinity_rounds_match<A>(state: &RoundStateBase<'_, '_, A, Tower, Tower>)
+where
+    A: BaseAir<Tower>
+        + for<'b> Air<SlicedFolder<'b, Tower, Gf4, Ghash128>>
+        + for<'b> Air<SlicedQuadraticFolder<'b, Tower, Ghash128>>,
+{
+    let trace = state.sliced_trace::<Gf4>().expect("the stage is sliced");
+    let alpha_powers = state
+        .alpha_powers
+        .iter()
+        .map(|powers| powers.iter().map(|&power| Ghash128::from(power)).collect())
+        .collect::<Vec<Vec<_>>>();
+    let tau = state.tau.as_slice();
+    let infinity = sliced_tensor_infinity::<A, Tower, Tower, Ghash128>(
+        &trace,
+        &state.slots,
+        &state.public_values,
+        &alpha_powers,
+        tau,
+    )
+    .expect("a bit-valued stage with bit constants builds the infinity tensor");
+    assert_eq!(infinity.nodes, TensorNodes::Infinity);
+    let eq_suffix = Poly::new_from_point(&tau[4..], Tower::ONE);
+    let interpolation = sliced_tensor::<A, Tower, Tower, Gf4, Ghash128>(
+        Some(&eq_suffix),
+        &trace,
+        &state.slots,
+        &state.public_values,
+        &alpha_powers,
+        tau,
+    )
+    .expect("the stage builds the interpolation tensor");
+
+    let mut rng = SmallRng::seed_from_u64(0x1F_0000);
+    let random: [Tower; 4] = core::array::from_fn(|_| rng.random());
+    let lambda = Tower::interpolation_node(2);
+    for challenges in [
+        random,
+        [Tower::ZERO; 4],
+        [Tower::ONE; 4],
+        [lambda; 4],
+        [Tower::ONE, lambda, Tower::ZERO, random[3]],
+    ] {
+        for round in 0..4 {
+            assert_eq!(
+                tensor_round(&infinity, &state.slots, tau, &challenges[..round], round),
+                tensor_round(
+                    &interpolation,
+                    &state.slots,
+                    tau,
+                    &challenges[..round],
+                    round
+                ),
+                "round {round} at {challenges:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn infinity_tensor_rounds_match_the_interpolation_tensor() {
+    let height = 1 << 10;
+    // Every row violates the product, so every cell on the rows holds a nonzero sum.
+    let mut invalid_pair = Instance::honest(FixtureAir::Pair, height, 0x1F_0001);
+    for row in 0..height {
+        invalid_pair.main.values[3 * row..3 * row + 3].copy_from_slice(&[
+            Tower::ZERO,
+            Tower::ZERO,
+            Tower::ONE,
+        ]);
+    }
+    // Column s of row 5 breaks the product, and column a of row 0 the first-row constraint.
+    let mut invalid_bits = Instance::honest(FixtureAir::BitQuadratic, height, 0x1F_0002);
+    invalid_bits.main.values[4 * 5 + 2] += Tower::ONE;
+    invalid_bits.main.values[0] += Tower::ONE;
+    // A degree-one AIR has no quadratic part, so it is read on the rows alone.
+    let mut unequal = Instance::honest(FixtureAir::Linear { scale: Tower::ONE }, height, 0x1F_0003);
+    unequal.main.values[2 * 7] += Tower::ONE;
+
+    for instances in [
+        vec![Instance::honest(FixtureAir::Pair, height, 0x1F_0004)],
+        vec![invalid_pair],
+        vec![Instance::honest(
+            FixtureAir::BitQuadratic,
+            height,
+            0x1F_0005,
+        )],
+        vec![invalid_bits],
+        vec![
+            Instance::honest(FixtureAir::BitQuadratic, height, 0x1F_0006),
+            unequal,
+            Instance::honest(FixtureAir::Pair, height, 0x1F_0007),
+        ],
+    ] {
+        with_state(&instances, no_lookups(), |state, _| {
+            assert_infinity_rounds_match(&state);
+        });
+    }
+}
+
+/// [`assert_infinity_rounds_match`] on a hash AIR's packed trace, and on the same trace with one
+/// bit flipped so that some row breaks a constraint.
+fn assert_hash_air_rounds_match<A>(air: &A, honest: RowMajorMatrix<u64>, log_height: usize)
+where
+    A: BaseAir<Tower>
+        + Air<InteractionSymbolicBuilder<Tower, Tower>>
+        + for<'b> Air<SlicedFolder<'b, Tower, Gf4, Ghash128>>
+        + for<'b> Air<SlicedQuadraticFolder<'b, Tower, Ghash128>>,
+{
+    let no_publics: &[Tower] = &[];
+    let mut invalid = honest.clone();
+    invalid.values[3] ^= 1 << 17;
+    for trace in [honest, invalid] {
+        let main = Table::from_packed_bits(trace, log_height);
+        with_stage_state(
+            &[air],
+            &[no_publics],
+            &[None],
+            &[&main],
+            no_lookups(),
+            |state, _| assert_infinity_rounds_match(&state),
+        );
+    }
+}
+
+#[test]
+fn infinity_tensor_rounds_match_the_interpolation_tensor_on_the_hash_airs() {
+    let log_height = 10;
+    for air in [
+        Blake3BinaryAir::default(),
+        Blake3BinaryAir::assuming_boolean_trace(),
+    ] {
+        let trace = air.generate_random_trace_packed::<Tower>(1 << log_height);
+        assert_hash_air_rounds_match(&air, trace, log_height);
+    }
+    for air in [
+        Sha256BinaryAir::default(),
+        Sha256BinaryAir::assuming_boolean_trace(),
+    ] {
+        let trace = air.generate_random_trace_packed::<Tower>(1 << log_height);
+        assert_hash_air_rounds_match(&air, trace, log_height);
+    }
+}
+
+#[test]
+fn infinity_tensor_rounds_match_at_special_points_over_several_words() {
+    // At 2^12 rows every prefix spans four words, weighted by the eq factor of two word variables.
+    let height = 1 << 12;
+    let mut invalid = Instance::honest(FixtureAir::BitQuadratic, height, 0x1F_0020);
+    invalid.main.values[4 * (height / 2 + 5) + 2] += Tower::ONE;
+    for instances in [
+        vec![Instance::honest(
+            FixtureAir::BitQuadratic,
+            height,
+            0x1F_0021,
+        )],
+        vec![invalid],
+        vec![Instance::honest(FixtureAir::Pair, height, 0x1F_0022)],
+    ] {
+        with_state(&instances, no_lookups(), |mut state, _| {
+            // Special coordinates on the tensor's own variables, a word variable, and a lane
+            // variable.
+            let mut tau = state.tau.as_slice().to_vec();
+            let lane = tau.len() - 1;
+            tau[1] = Tower::ONE;
+            tau[2] = gf4(2);
+            tau[3] = Tower::from_repr(0x4567);
+            tau[4] = Tower::ONE;
+            tau[lane] = gf4(3);
+            state.tau = Point::new(tau);
+            assert_infinity_rounds_match(&state);
+        });
+    }
+}
+
+#[test]
+fn infinity_tensor_refuses_a_slot_above_degree_two() {
+    // Both stages are bit-valued with bit constants, so only their degree keeps them off the
+    // infinity nodes: the quartic's transition has degree four, the periodic booleanity three.
+    let height = 1 << 10;
+    for air in [
+        FixtureAir::Quartic,
+        FixtureAir::Periodic {
+            period: [Tower::ZERO, Tower::ONE],
+        },
+    ] {
+        let instances = [Instance::honest(air, height, 0x1F_0040)];
+        with_state(&instances, no_lookups(), |state, _| {
+            assert!(state.slots.iter().any(|slot| slot.constraint_degree > 2));
+            let trace = state.sliced_trace::<Gf4>().expect("the stage is sliced");
+            let alpha_powers = state
+                .alpha_powers
+                .iter()
+                .map(|powers| powers.iter().map(|&power| Ghash128::from(power)).collect())
+                .collect::<Vec<Vec<_>>>();
+            assert!(
+                sliced_tensor_infinity::<FixtureAir, Tower, Tower, Ghash128>(
+                    &trace,
+                    &state.slots,
+                    &state.public_values,
+                    &alpha_powers,
+                    state.tau.as_slice(),
+                )
+                .is_none()
+            );
+        });
+    }
+}
+
+#[test]
+fn infinity_tensor_leaves_a_zero_degree_slot_empty() {
+    let height = 1 << 10;
+    let instances = [Instance::honest(FixtureAir::Pair, height, 0x1F_0030)];
+    let empty = FixtureAir::Empty;
+    with_state(&instances, no_lookups(), |state, _| {
+        let trace = state.sliced_trace::<Gf4>().expect("the stage is sliced");
+        let pair = &state.slots[0];
+        let lift = |powers: &[Tower]| {
+            powers
+                .iter()
+                .map(|&power| Ghash128::from(power))
+                .collect::<Vec<_>>()
+        };
+        let alpha_powers = vec![lift(&state.alpha_powers[0]), vec![]];
+        let public_values = [state.public_values[0], &[]];
+        // The empty AIR reads the pair's first column and asserts nothing.
+        let slots = [
+            AirSlot {
+                air: pair.air,
+                stage_index: 0,
+                caller_index: 0,
+                main_offset: pair.main_offset,
+                main_width: pair.main_width,
+                preprocessed_offset: 0,
+                preprocessed_width: 0,
+                periodic_offset: 0,
+                periodic_width: 0,
+                main_next_columns: vec![],
+                preprocessed_next_columns: vec![],
+                constraint_degree: pair.constraint_degree,
+                interaction: None,
+            },
+            AirSlot {
+                air: &empty,
+                stage_index: 1,
+                caller_index: 1,
+                main_offset: 0,
+                main_width: 1,
+                preprocessed_offset: 0,
+                preprocessed_width: 0,
+                periodic_offset: 0,
+                periodic_width: 0,
+                main_next_columns: vec![],
+                preprocessed_next_columns: vec![],
+                constraint_degree: 0,
+                interaction: None,
+            },
+        ];
+        let tau = state.tau.as_slice();
+        let mixed = sliced_tensor_infinity::<FixtureAir, Tower, Tower, Ghash128>(
+            &trace,
+            &slots,
+            &public_values,
+            &alpha_powers,
+            tau,
+        )
+        .expect("the zero-degree slot is skipped, not poisoned");
+        let alone = sliced_tensor_infinity::<FixtureAir, Tower, Tower, Ghash128>(
+            &trace,
+            &slots[..1],
+            &public_values[..1],
+            &alpha_powers[..1],
+            tau,
+        )
+        .expect("the pair stage builds the infinity tensor");
+        assert_eq!(mixed.values[0], alone.values[0]);
+        assert!(mixed.values[1].iter().all(|&value| value == Tower::ZERO));
+        for round in 0..4 {
+            let challenges = [first_challenge(); 3];
+            let evals = tensor_round(&mixed, &slots, tau, &challenges[..round], round);
+            assert!(evals[1].is_empty());
+            assert_eq!(
+                evals[0],
+                tensor_round(&alone, &slots[..1], tau, &challenges[..round], round)[0]
+            );
+        }
+    });
+}
+
+#[test]
+fn only_bit_cells_and_bit_constants_take_the_infinity_nodes() {
+    let height = 1 << 10;
+    let nodes = |instances: &[Instance]| {
+        with_state(instances, no_lookups(), |mut state, eq_suffix| {
+            state
+                .round_poly_sliced_with_strategy::<Gf4, Ghash128>(
+                    eq_suffix,
+                    SlicedStrategy::TensorBoundary,
+                )
+                .expect("the stage is sliced");
+            state
+                .sliced
+                .as_ref()
+                .and_then(|columns| columns.tensor.as_ref())
+                .map(|tensor| tensor.nodes)
+        })
+    };
+    assert_eq!(
+        nodes(&[Instance::honest(FixtureAir::Pair, height, 0x1F_0010)]),
+        Some(TensorNodes::Infinity)
+    );
+    assert_eq!(
+        nodes(&[Instance::honest(
+            FixtureAir::BitQuadratic,
+            height,
+            0x1F_0011
+        )]),
+        Some(TensorNodes::Infinity)
+    );
+    // Cells of GF(4) outside GF(2).
+    assert_eq!(
+        nodes(&[Instance::honest(
+            FixtureAir::QuadraticInputs,
+            height,
+            0x1F_0012
+        )]),
+        Some(TensorNodes::Interpolation)
+    );
+    // An AIR constant of GF(4) outside GF(2).
+    assert_eq!(
+        nodes(&[
+            Instance::honest(FixtureAir::Pair, height, 0x1F_0013),
+            Instance::honest(FixtureAir::Linear { scale: gf4(2) }, height, 0x1F_0014),
+        ]),
+        Some(TensorNodes::Interpolation)
+    );
+    // A public value of GF(4) outside GF(2).
+    let mut public = Instance::honest(FixtureAir::BitQuadratic, height, 0x1F_0015);
+    public.public_values[0] = gf4(2);
+    assert_eq!(nodes(&[public]), Some(TensorNodes::Interpolation));
 }
 
 /// Every round polynomial of a stage, then its openings.
@@ -2214,6 +2961,174 @@ fn a_boundary_round_and_fold_on_the_planes_match_the_unsliced_kernels() {
     }
 }
 
+/// Asserts every main column, then its product with the next one: two constraints a column.
+struct Columns(usize);
+
+impl<T> BaseAir<T> for Columns {
+    fn width(&self) -> usize {
+        self.0
+    }
+
+    fn main_next_row_columns(&self) -> Vec<usize> {
+        Vec::new()
+    }
+}
+
+impl<AB: AirBuilder> Air<AB> for Columns {
+    fn eval(&self, builder: &mut AB) {
+        let main = builder.main();
+        let local = main.current_slice();
+        for (column, &value) in local.iter().enumerate() {
+            builder.assert_zero(value);
+            builder.assert_zero(value * local[(column + 1) % local.len()]);
+        }
+    }
+}
+
+/// Every round polynomial and the openings of a stage of `Columns` AIRs over `main`.
+///
+/// `path` picks the kernels: the generic ones, or the planes accumulated in the polynomial
+/// basis round by round or through the four-variable tensor, until the boundary round and fold
+/// leave them.
+fn columns_rounds(airs: &[&Columns], main: &[Table<Tower>], path: &str) -> Rounds {
+    let publics = vec![[].as_slice(); airs.len()];
+    let preprocessed = vec![None; airs.len()];
+    let main = main.iter().collect::<Vec<_>>();
+    with_stage_state(
+        airs,
+        &publics,
+        &preprocessed,
+        &main,
+        no_lookups(),
+        |mut state, eq_suffix| {
+            let tau = state.tau.as_slice().to_vec();
+            let mut round_polys = Vec::new();
+            let openings = if path == "generic" {
+                round_polys.push(state.round_poly(eq_suffix));
+                let mut state = state.fold(challenge(0));
+                for round in 1..tau.len() {
+                    let suffix = Poly::new_from_point(&tau[round + 1..], Tower::ONE);
+                    round_polys.push(state.round_poly(&suffix));
+                    state.fold(challenge(round));
+                }
+                state.into_openings()
+            } else {
+                let tensor = path == "tensor";
+                round_polys.push(if tensor {
+                    state
+                        .round_poly_sliced_with_strategy::<Gf4, Ghash128>(
+                            eq_suffix,
+                            SlicedStrategy::TensorBoundary,
+                        )
+                        .expect("the stage should build the tensor")
+                } else {
+                    state
+                        .round_poly_sliced::<Gf4, Ghash128>(eq_suffix)
+                        .expect("the stage should be sliced")
+                });
+                assert_eq!(state.has_sliced_tensor(), tensor, "{path}");
+                let mut state = state.fold_sliced::<Ghash128>(challenge(0));
+                for round in 1..tau.len() {
+                    let suffix = Poly::new_from_point(&tau[round + 1..], Tower::ONE);
+                    round_polys.push(if round < 3 || (tensor && round == 3) {
+                        state
+                            .round_poly_sliced::<Gf4>(&suffix)
+                            .expect("the planes should serve the round")
+                    } else if round == 3 {
+                        state
+                            .round_poly_boundary::<Gf4>(&suffix)
+                            .expect("the planes should serve the boundary round")
+                    } else {
+                        state.round_poly_repr(&suffix)
+                    });
+                    if round < 3 {
+                        assert!(state.fold_sliced(challenge(round)), "{path} round {round}");
+                    } else if round == 3 {
+                        assert!(
+                            state.fold_boundary::<Gf4>(challenge(round)),
+                            "{path} round {round}"
+                        );
+                    } else {
+                        state.fold_repr(challenge(round));
+                    }
+                }
+                state.into_openings()
+            };
+            let openings = openings
+                .into_iter()
+                .map(|(_, opening)| {
+                    [
+                        opening.local,
+                        opening.next,
+                        opening.preprocessed_local,
+                        opening.preprocessed_next,
+                    ]
+                })
+                .collect();
+            (round_polys, openings)
+        },
+    )
+}
+
+#[test]
+fn a_stage_mixing_kernel_and_narrow_airs_matches_the_generic_kernel() {
+    // 640 constraints take the byte-sliced kernel where the target has one; 8 do not.
+    let (wide, narrow) = (Columns(320), Columns(4));
+    let airs = [&wide, &narrow];
+    let height = 1 << 10;
+    let mut rng = SmallRng::seed_from_u64(0x7E_4E1);
+    let main = airs
+        .iter()
+        .map(|air| {
+            let width = <Columns as BaseAir<Tower>>::width(air);
+            let values = (0..width * height)
+                .map(|_| Tower::from_bool(rng.random()))
+                .collect();
+            Table::new(RowMajorMatrix::new(values, width).transpose())
+        })
+        .collect::<Vec<_>>();
+
+    let kernel = cfg!(all(
+        target_arch = "x86_64",
+        target_feature = "gfni",
+        target_feature = "avx512f",
+        target_feature = "avx512bw"
+    ));
+    let first_rounds = with_stage_state(
+        &airs,
+        &[&[], &[]],
+        &[None, None],
+        &main.iter().collect::<Vec<_>>(),
+        no_lookups(),
+        |mut state, eq_suffix| {
+            let prepared =
+                PreparedPowers::per_air(&state.alpha_powers, Tower::from(Gf4::GENERATOR));
+            assert_eq!(
+                prepared.iter().map(Option::is_some).collect::<Vec<_>>(),
+                [kernel, false],
+                "only the wide AIR should take the kernel, and only where the target has one"
+            );
+            let tower = state.round_poly_sliced::<Gf4, Tower>(eq_suffix);
+            let poly_basis = state.round_poly_sliced::<Gf4, Ghash128>(eq_suffix);
+            [tower, poly_basis, Some(state.round_poly(eq_suffix))]
+        },
+    );
+    assert!(first_rounds[0].is_some());
+    assert_eq!(first_rounds[0], first_rounds[2], "tower sums");
+    assert_eq!(first_rounds[1], first_rounds[2], "polynomial-basis sums");
+
+    let generic = columns_rounds(&airs, &main, "generic");
+    assert!(
+        generic
+            .0
+            .iter()
+            .any(|poly| poly.iter().any(|&value| value != Tower::ZERO))
+    );
+    for path in ["sequential", "tensor"] {
+        assert_eq!(columns_rounds(&airs, &main, path), generic, "{path}");
+    }
+}
+
 #[test]
 fn the_top_lane_mask_is_the_transpose_of_the_top_lane() {
     let mut rng = SmallRng::seed_from_u64(27);
@@ -2232,13 +3147,49 @@ fn lane_masks_transpose_the_corner_words() {
     let mut rng = SmallRng::seed_from_u64(22);
     for corners in 1..=8 {
         let words = (0..corners).map(|_| rng.random()).collect::<Vec<u64>>();
-        let masks = lane_masks(&words);
-        for (lane, &mask) in masks.iter().enumerate() {
-            let expected = words.iter().enumerate().fold(0_u8, |mask, (i, &word)| {
-                mask | ((((word >> lane) & 1) as u8) << i)
-            });
-            assert_eq!(mask, expected, "lane {lane} of {corners} corners");
+        for (kernel, masks) in [
+            ("dispatched", lane_masks(&words)),
+            ("portable", portable_lane_masks(&words)),
+        ] {
+            for (lane, &mask) in masks.iter().enumerate() {
+                let expected = words.iter().enumerate().fold(0_u8, |mask, (i, &word)| {
+                    mask | ((((word >> lane) & 1) as u8) << i)
+                });
+                assert_eq!(mask, expected, "{kernel}: lane {lane} of {corners} corners");
+            }
         }
+    }
+}
+
+proptest! {
+    #[test]
+    fn lane_masks_match_the_portable_transpose(
+        words in proptest::collection::vec(any::<u64>(), 0..=GROUP_CORNERS),
+    ) {
+        prop_assert_eq!(lane_masks(&words), portable_lane_masks(&words));
+    }
+
+    /// The cells of one, two and four corner groups, the last group short or full, in the lane
+    /// groups the byte-unpack writers serve.
+    ///
+    /// The cells land in the second column of each lane group, so a byte written past them
+    /// shows as a change to the filler around them.
+    #[test]
+    fn cells_match_the_portable_writer(
+        corners in prop_oneof![1..=8_usize, 9..=16_usize, 25..=32_usize],
+        seed in any::<u64>(),
+    ) {
+        let lanes = 4;
+        let mut rng = SmallRng::seed_from_u64(seed);
+        let words = (0..ROW_HALVES * corners).map(|_| rng.random()).collect::<Vec<u64>>();
+        let halves = [&words[..corners], &words[corners..]];
+        let column_bytes = lanes * ROW_HALVES * corners.div_ceil(GROUP_CORNERS);
+        let stride = 2 * column_bytes;
+        let mut expected = vec![0xA5_u8; SLICED_LANES / lanes * stride];
+        let mut actual = expected.clone();
+        write_cells(halves, lanes, stride, &mut actual[column_bytes..]);
+        portable_write_cells(halves, lanes, stride, &mut expected[column_bytes..]);
+        prop_assert_eq!(actual, expected);
     }
 }
 
@@ -2309,38 +3260,41 @@ fn a_prefix_fold_matches_the_multilinear_interpolation() {
 }
 
 /// The successor planes of `trace`'s cells: row `s` holds the cell at row `min(s + 1, height - 1)`.
-fn successor_planes(trace: &SlicedTrace) -> Vec<[u64; 2]> {
+fn successor_planes(trace: &SlicedTrace<'_>) -> Planes<'static> {
     let lane = |planes: [u64; 2], lane: usize| {
         ((planes[0] >> lane) & 1 == 1, (planes[1] >> lane) & 1 == 1)
     };
     let words = trace.cells.len() / trace.width;
-    (0..words)
-        .flat_map(|word| {
-            (0..trace.width).map(move |column| {
-                let planes = trace.cells[word * trace.width + column];
-                let carry = if word + 1 < words {
-                    lane(trace.cells[(word + 1) * trace.width + column], 0)
-                } else {
-                    lane(planes, SLICED_LANES - 1)
-                };
-                successor_word(planes, carry)
+    Planes::Pairs(
+        (0..words)
+            .flat_map(|word| {
+                (0..trace.width).map(move |column| {
+                    let planes = trace.cells.planes(word * trace.width + column);
+                    let carry = if word + 1 < words {
+                        lane(trace.cells.planes((word + 1) * trace.width + column), 0)
+                    } else {
+                        lane(planes, SLICED_LANES - 1)
+                    };
+                    successor_word(planes, carry)
+                })
             })
-        })
-        .collect()
+            .collect(),
+    )
 }
 
 /// Every row pair a tile reads, in the tower's scalar rows and in the polynomial basis's lane
 /// groups, beside the plane fold of the two words it joins and of their successor words.
 ///
-/// One tile lays out every word pair in turn. A few words carry a high plane, so the tile's
-/// reads switch between the plane pairs and the low plane alone from one pair to the next. The
-/// prefixes span one and two corner groups, and the widths end in a partial block of staged
-/// columns. When every column is a successor column, across two runs, pair zero's only
+/// The tower's rows are read through tiles of every lane-group width a word divides into, from
+/// one lane to the whole word, whatever the target packs. One tile of each lays out every word
+/// pair in turn. A few words carry a high plane, so the tile's reads switch between the plane
+/// pairs and the low plane alone from one pair to the next. The prefixes span one, two and four
+/// corner groups, and the widths end in a partial block of staged columns. When every column is a successor column, across two runs, pair zero's only
 /// high-plane bit lies in its successor lane, past the last lane of its words.
 #[test]
 fn a_reused_tile_reads_the_plane_fold_of_every_row_pair() {
     let lanes = <Ghash128 as Field>::Packing::WIDTH;
-    for (prefix_len, width) in [(3, 5), (4, 5), (3, 70), (4, 130)] {
+    for (prefix_len, width) in [(3, 5), (4, 5), (3, 70), (4, 130), (5, 5), (5, 70)] {
         let (mut trace, _) = plane_fold_trace_fixture(prefix_len + LANE_VARIABLES + 3, width, true);
         let challenges = (0..prefix_len)
             .map(|index| Tower::from_repr(0x51 + index as u128))
@@ -2349,18 +3303,21 @@ fn a_reused_tile_reads_the_plane_fold_of_every_row_pair() {
         let pairs = words / ROW_HALVES;
         // Pair one's high word and pair three's low word each set one high-plane bit. So does
         // lane zero of pair one's low word, the successor of pair zero's last lane.
+        let Planes::Pairs(cells) = &mut trace.cells else {
+            unreachable!("the fixture holds both planes");
+        };
         for (corner, word, column, lane) in [
             (1, 1 + pairs, 2, 17),
             ((1 << prefix_len) - 1, 3, 4, 17),
             (2, 1, width - 1, 0),
         ] {
-            trace.cells[(corner * words + word) * width + column][1] |= 1 << lane;
+            cells[(corner * words + word) * width + column][1] |= 1 << lane;
         }
         trace.successors = successor_planes(&trace);
 
         let tower = PlaneFold::<Tower>::new::<Gf4, Tower>(&trace, &challenges);
         let poly = PlaneFold::<Ghash128>::new::<Gf4, Tower>(&trace, &challenges);
-        let fold_pair = |planes: &[[u64; 2]], column: usize, pair: usize| {
+        let fold_pair = |planes: &Planes<'_>, column: usize, pair: usize| {
             let mut halves = [[Tower::ZERO; SLICED_LANES]; ROW_HALVES];
             let mut poly_halves = [[Ghash128::ZERO; SLICED_LANES]; ROW_HALVES];
             for (half, word) in [pair, pair + pairs].into_iter().enumerate() {
@@ -2370,8 +3327,9 @@ fn a_reused_tile_reads_the_plane_fold_of_every_row_pair() {
             (halves, poly_halves)
         };
         for next_columns in [vec![], vec![0..width / 2, width / 2..width]] {
-            let mut tower_tile = RowTile::new(tower.corners, width);
-            let mut poly_tile = RowTile::new(poly.corners, width);
+            let mut tower_tiles = [1, 2, 4, 8, SLICED_LANES]
+                .map(|tile_lanes| RowTile::with_lanes(tower.corners, width, tile_lanes));
+            let mut poly_tile = RowTile::new::<Ghash128>(poly.corners, width);
             let mut rows = Scratch::<Tower, Tower>::new(&[], &[], width, None);
             let mut groups = PackedScratch::<
                 PackedRepr<Tower, Ghash128>,
@@ -2382,10 +3340,14 @@ fn a_reused_tile_reads_the_plane_fold_of_every_row_pair() {
                     "pair {pair}, prefix {prefix_len}, width {width}, {} successor runs",
                     next_columns.len()
                 );
-                tower_tile.fill(&tower, pair, &next_columns);
+                for tower_tile in &mut tower_tiles {
+                    tower_tile.fill(&tower, pair, &next_columns);
+                }
                 poly_tile.fill(&poly, pair, &next_columns);
                 let high = pair % 2 == 1 || (pair == 0 && !next_columns.is_empty());
-                assert_eq!(tower_tile.high, high, "{case}");
+                for tower_tile in &tower_tiles {
+                    assert_eq!(tower_tile.high, high, "{} lanes, {case}", tower_tile.lanes);
+                }
                 assert_eq!(poly_tile.high, high, "{case}");
                 let (cells, successors): (Vec<_>, Vec<_>) = (0..width)
                     .map(|column| {
@@ -2395,24 +3357,20 @@ fn a_reused_tile_reads_the_plane_fold_of_every_row_pair() {
                         )
                     })
                     .unzip();
-                for lane in 0..SLICED_LANES {
+                for (tower_tile, lane) in tower_tiles
+                    .iter()
+                    .flat_map(|tile| (0..SLICED_LANES).map(move |lane| (tile, lane)))
+                {
+                    let case = alloc::format!("lane {lane} of {} lanes, {case}", tower_tile.lanes);
                     tower_tile.read_row(&tower, lane, &next_columns, &mut rows);
                     for column in 0..width {
                         let ([lo, hi], _) = cells[column];
-                        assert_eq!(rows.local_point[column], lo[lane], "lane {lane}, {case}");
-                        assert_eq!(
-                            rows.local_diff[column],
-                            hi[lane] - lo[lane],
-                            "lane {lane}, {case}"
-                        );
+                        assert_eq!(rows.local_point[column], lo[lane], "{case}");
+                        assert_eq!(rows.local_diff[column], hi[lane] - lo[lane], "{case}");
                         if !next_columns.is_empty() {
                             let ([lo, hi], _) = successors[column];
-                            assert_eq!(rows.next_point[column], lo[lane], "lane {lane}, {case}");
-                            assert_eq!(
-                                rows.next_diff[column],
-                                hi[lane] - lo[lane],
-                                "lane {lane}, {case}"
-                            );
+                            assert_eq!(rows.next_point[column], lo[lane], "{case}");
+                            assert_eq!(rows.next_diff[column], hi[lane] - lo[lane], "{case}");
                         }
                     }
                 }
@@ -2481,6 +3439,63 @@ fn folded_columns_match_the_plane_fold_across_block_boundaries() {
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+/// A Boolean trace's low plane alone reads as its plane pairs do, through every plane reader.
+///
+/// The prefixes span one to four corner groups, and the widths end in a partial block of staged
+/// columns.
+#[test]
+fn a_low_plane_reads_like_its_plane_pairs() {
+    for (prefix_len, width) in [(3, 5), (4, 70), (5, 130)] {
+        let (pairs, _) = plane_fold_trace_fixture(prefix_len + LANE_VARIABLES + 3, width, true);
+        let low = low_plane_twin(&pairs);
+        let challenges = (0..prefix_len)
+            .map(|index| Tower::from_repr(0x91 + index as u128))
+            .collect::<Vec<_>>();
+        let case = alloc::format!("prefix {prefix_len}, width {width}");
+
+        let fold_pairs =
+            PlaneFold::<Ghash128, MAX_PLANE_FOLD_CORNERS>::new::<Gf4, Tower>(&pairs, &challenges);
+        let fold_low =
+            PlaneFold::<Ghash128, MAX_PLANE_FOLD_CORNERS>::new::<Gf4, Tower>(&low, &challenges);
+        let mut expected = [Ghash128::ZERO; SLICED_LANES];
+        let mut actual = [Ghash128::ZERO; SLICED_LANES];
+        for column in 0..width {
+            for word in 0..fold_pairs.words {
+                fold_pairs.fold_word(&pairs.cells, column, word, &mut expected);
+                fold_low.fold_word(&low.cells, column, word, &mut actual);
+                assert_eq!(actual, expected, "column {column}, word {word}, {case}");
+            }
+        }
+        for block_columns in [7, STAGED_COLUMNS] {
+            assert_eq!(
+                fold_low.unslice_columns(block_columns),
+                fold_pairs.unslice_columns(block_columns),
+                "blocks of {block_columns}, {case}"
+            );
+        }
+
+        if prefix_len <= MAX_PLANE_ROUND_PREFIX {
+            let fold_pairs = PlaneFold::<Ghash128>::new::<Gf4, Tower>(&pairs, &challenges);
+            let fold_low = PlaneFold::<Ghash128>::new::<Gf4, Tower>(&low, &challenges);
+            let mut tile_pairs = RowTile::new::<Ghash128>(fold_pairs.corners, width);
+            let mut tile_low = RowTile::new::<Ghash128>(fold_low.corners, width);
+            for pair in 0..fold_pairs.words / ROW_HALVES {
+                tile_pairs.fill(&fold_pairs, pair, &[]);
+                tile_low.fill(&fold_low, pair, &[]);
+                assert!(!tile_low.high, "pair {pair}, {case}");
+                assert_eq!(
+                    tile_low.low_cells, tile_pairs.low_cells,
+                    "pair {pair}, {case}"
+                );
+                assert_eq!(
+                    tile_low.high_cells, tile_pairs.high_cells,
+                    "pair {pair}, {case}"
+                );
             }
         }
     }

@@ -24,7 +24,7 @@ pub use prefix::PrefixProver;
 pub use residual::SuffixResidualProver;
 pub use suffix::SuffixProver;
 
-use crate::commit::commit_base;
+use crate::commit::{commit_base, commit_borrowed_base};
 use crate::layout::transcript::{
     BatchingShape, LayoutBinding, OpeningProverTranscript, OpeningShape, PointSource,
     VirtualProverTranscript, VirtualShape, prover_batching_challenge,
@@ -72,6 +72,18 @@ pub trait Layout<F: Field, EF: ExtensionField<F>>: Sized {
     /// implementation leaves untouched is committed as zero.
     fn write_message(witness: &Witness<F>, folding: usize, message: &mut [F]);
 
+    /// The committed message itself, where the witness already holds it in this layout's order.
+    ///
+    /// The encoder then reads it where it lies, instead of from a copy the layout writes.
+    ///
+    /// A returned slice is committed in place of what [`Self::write_message`] writes.
+    ///
+    /// It must therefore equal, cell for cell, what that writes into a zeroed buffer of one cell
+    /// per stacked evaluation.
+    fn borrowed_message(_witness: &Witness<F>) -> Option<&[F]> {
+        None
+    }
+
     /// Returns the shared claim state recorded against the stacked polynomial.
     fn claims(&self) -> &StackedClaims<F, EF>;
 
@@ -106,13 +118,18 @@ pub trait Layout<F: Field, EF: ExtensionField<F>>: Sized {
         MT: Mmcs<F>,
     {
         // Encode and Merkle-commit the stacked polynomial in the mode's variable order.
-        let (root, prover_data) = commit_base(
-            encoder,
-            mmcs,
-            witness.num_variables(),
-            folding,
-            starting_log_inv_rate,
-            |message| Self::write_message(&witness, folding, message),
+        let (root, prover_data) = Self::borrowed_message(&witness).map_or_else(
+            || {
+                commit_base(
+                    encoder,
+                    mmcs,
+                    witness.num_variables(),
+                    folding,
+                    starting_log_inv_rate,
+                    |message| Self::write_message(&witness, folding, message),
+                )
+            },
+            |message| commit_borrowed_base(encoder, mmcs, folding, starting_log_inv_rate, message),
         );
 
         // The witness is consumed into the layout once its codeword is committed.

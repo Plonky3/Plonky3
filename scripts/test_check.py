@@ -480,6 +480,26 @@ class CiPlanTests(unittest.TestCase):
             plan = check.ci_plan(metadata, ["sumcheck/src/lib.rs"])
         self.assertTrue(plan["gfni"])
 
+    def test_multi_stark_change_selects_gfni_jobs(self):
+        import check  # noqa: PLC0415
+
+        with tempfile.TemporaryDirectory() as temp:
+            metadata = {
+                "workspace_root": temp,
+                "workspace_members": ["p3-multi-stark"],
+                "packages": [{
+                    "id": "p3-multi-stark",
+                    "name": "p3-multi-stark",
+                    "manifest_path": str(Path(temp) / "multi-stark" / "Cargo.toml"),
+                    "dependencies": [],
+                    "targets": [{"kind": ["lib"]}],
+                    "metadata": {},
+                    "features": {},
+                }],
+            }
+            plan = check.ci_plan(metadata, ["multi-stark/src/lib.rs"])
+        self.assertTrue(plan["gfni"])
+
     def test_changed_paths_keep_both_sides_of_a_rename(self):
         import check  # noqa: PLC0415
 

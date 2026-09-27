@@ -1113,6 +1113,18 @@ impl<F: Field> Witness<F> {
         });
     }
 
+    /// The one dense column of the one table, when it fills the whole stacked hypercube.
+    ///
+    /// Its slot is then the entire contiguous stacked layout, so the column is that layout.
+    pub(super) fn lone_column(&self) -> Option<&[F]> {
+        match self.tables.as_slice() {
+            [table] if table.num_polys() == 1 && table.num_variables() == self.num_variables => {
+                table.column(0).as_dense()
+            }
+            _ => None,
+        }
+    }
+
     /// Returns the retained stacked polynomial.
     ///
     /// # Panics

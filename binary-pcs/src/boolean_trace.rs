@@ -81,11 +81,12 @@ mod evaluate;
 mod gather;
 mod plan;
 
+use alloc::vec;
 use alloc::vec::Vec;
 use core::marker::PhantomData;
 
 use p3_binary_dft::EncodableLevel;
-use p3_binary_field::{BitCoordinates, TowerLevel};
+use p3_binary_field::{BitCoordinates, PackedGf2, PackedGf2x64, TowerLevel};
 use p3_challenger::fs::TranscriptField;
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
 use p3_commit::{Mmcs, MultilinearPcs};
@@ -430,13 +431,32 @@ where
         witness: Self::Witness,
         challenger: &mut Challenger,
     ) -> Result<(Self::Commitment, Self::ProverData), Self::ProverError> {
+        // One word per sixty-four bits of the padded witness, the tail left at zero.
+        let num_words = 1 << (self.num_variables() - 6);
         // Gathering runs before the transcript is touched, so a refusal leaves it alone.
-        let bits =
-            tracing::info_span!("gather boolean bits").in_scope(|| self.gather_bits(&witness))?;
-        let (commitment, inner) = self
-            .inner
-            .commit_bits(&bits, challenger)
-            .map_err(BooleanTraceCommitmentError::Boolean)?;
+        let gather = |words: &mut [u64]| {
+            tracing::info_span!("gather boolean bits")
+                .in_scope(|| self.gather_bits(&witness, words))
+        };
+        // A commitment that takes the witness packed has it written into its elements in place.
+        let committed = match B::packed_words(num_words) {
+            Some(mut packed) => {
+                gather(packed.words_mut())?;
+                self.inner.commit_packed(packed, challenger)
+            }
+            None => {
+                let mut words = vec![0u64; num_words];
+                gather(&mut words)?;
+                // Lane `j` of a block is bit `j` of its word, which is the packing's own
+                // convention.
+                let bits = words
+                    .into_iter()
+                    .map(PackedGf2::new)
+                    .collect::<Vec<PackedGf2x64>>();
+                self.inner.commit_bits(&bits, challenger)
+            }
+        };
+        let (commitment, inner) = committed.map_err(BooleanTraceCommitmentError::Boolean)?;
         Ok((
             commitment,
             BooleanTraceCommitmentData {

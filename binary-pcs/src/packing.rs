@@ -39,7 +39,7 @@ use core::{ptr, slice};
 
 use p3_binary_field::{
     BinaryField8, BinaryField16, BinaryField32, BinaryField64, BinaryField128, Gf2, PackedGf2,
-    Poly64, TowerLevel, Underlier,
+    PackedGf2x64, Poly64, TowerLevel, Underlier,
 };
 use p3_field::PrimeCharacteristicRing;
 use p3_matrix::dense::RowMajorMatrix;
@@ -458,6 +458,94 @@ where
     }
 }
 
+/// Variables a packed column of `len` elements covers.
+///
+/// # Errors
+///
+/// The length is no power of two, so the column covers no hypercube.
+pub(crate) const fn hypercube_variables(len: usize) -> Result<usize, PackError> {
+    if len.is_power_of_two() {
+        Ok(log2_strict_usize(len))
+    } else {
+        Err(PackError::NotAHypercube { elements: len })
+    }
+}
+
+/// Zeroed elements of a level, written one 64-bit word of coordinates at a time.
+///
+/// Bit `j` of word `w` is coordinate `64 * w + j` of the run, which is the packing's convention.
+///
+/// Filling the words fills the elements, so a bit witness is packed as it is written.
+#[derive(Debug)]
+pub struct PackedWords<V> {
+    /// The elements whose bytes the words are.
+    elements: Vec<V>,
+}
+
+impl<V: PrimeCharacteristicRing + Coordinates> PackedWords<V> {
+    /// Zeroed elements holding the given count of words, where the level takes whole words.
+    ///
+    /// # Returns
+    ///
+    /// Nothing for a level narrower or less aligned than a word.
+    ///
+    /// Nothing for a word count that fills no whole number of elements.
+    #[must_use]
+    pub fn zeroed(words: usize) -> Option<Self> {
+        const {
+            check_coordinates::<V>();
+            assert!(
+                cfg!(target_endian = "little"),
+                "writing coordinates as words needs a little-endian target"
+            );
+        }
+        let bytes = words.checked_mul(size_of::<u64>())?;
+        (Self::WORD_VIEW && bytes.is_multiple_of(size_of::<V>())).then(|| Self {
+            elements: V::zero_vec(bytes / size_of::<V>()),
+        })
+    }
+}
+
+impl<V> PackedWords<V> {
+    /// Whether a run of elements can be read as a run of words in place.
+    const WORD_VIEW: bool =
+        size_of::<V>().is_multiple_of(size_of::<u64>()) && align_of::<V>() >= align_of::<u64>();
+
+    /// Every word of the elements, in order.
+    pub fn words_mut(&mut self) -> &mut [u64] {
+        assert!(Self::WORD_VIEW, "the elements are no run of words");
+        let len = size_of_val(self.elements.as_slice()) / size_of::<u64>();
+        // SAFETY: the only constructor, `zeroed`, requires `V: Coordinates`.
+        //
+        // The elements are therefore a padding-free run of coordinates.
+        //
+        // Every bit pattern of their bytes is a value, as it is of a word.
+        //
+        // The assert above puts the run on a word boundary and makes each element whole words.
+        //
+        // The view therefore covers exactly the elements' bytes.
+        //
+        // It borrows them exclusively for as long as the elements are borrowed.
+        unsafe { slice::from_raw_parts_mut(self.elements.as_mut_ptr().cast::<u64>(), len) }
+    }
+
+    /// The elements the words were written into.
+    #[must_use]
+    pub fn into_elements(self) -> Vec<V> {
+        self.elements
+    }
+
+    /// The words as bit-sliced blocks, lane `j` of block `w` being bit `j` of word `w`.
+    #[must_use]
+    pub fn into_bits(mut self) -> Vec<PackedGf2x64> {
+        self.words_mut()
+            .iter()
+            .copied()
+            .map(PackedGf2::new)
+            .collect()
+    }
+}
+
 /// Why a run of columns could not be packed.
 #[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
 #[non_exhaustive]
@@ -704,6 +792,50 @@ mod tests {
         assert_eq!(stack.num_columns(), 40);
         for (column, blocks) in expected.iter().enumerate() {
             assert_eq!(&stack.unpack_column(column), blocks, "column={column}");
+        }
+    }
+
+    #[test]
+    fn words_written_into_a_level_are_its_packing() {
+        // Invariant: the elements a run of words is written into are the packing of the same
+        // bits, and a level a word cannot be written into gets no words at all.
+        let mut rng = SmallRng::seed_from_u64(0x57a6);
+        let words = (0..16).map(|_| rng.random::<u64>()).collect::<Vec<_>>();
+        let blocks = words
+            .iter()
+            .copied()
+            .map(PackedGf2::new)
+            .collect::<Vec<_>>();
+
+        let mut wide = PackedWords::<EF>::zeroed(words.len()).unwrap();
+        assert!(wide.words_mut().iter().all(|&word| word == 0));
+        wide.words_mut().copy_from_slice(&words);
+        let mut same = PackedWords::<EF>::zeroed(words.len()).unwrap();
+        same.words_mut().copy_from_slice(&words);
+        assert_eq!(same.into_bits(), blocks);
+        assert_eq!(wide.into_elements(), pack::<PackedGf2x64, EF>(&blocks));
+
+        let mut word_sized = PackedWords::<BinaryField64>::zeroed(words.len()).unwrap();
+        word_sized.words_mut().copy_from_slice(&words);
+        assert_eq!(
+            word_sized.into_elements(),
+            pack::<PackedGf2x64, BinaryField64>(&blocks)
+        );
+
+        // A narrower level, and an odd word count of a two-word level, fill no whole elements.
+        assert!(PackedWords::<BinaryField32>::zeroed(words.len()).is_none());
+        assert!(PackedWords::<EF>::zeroed(3).is_none());
+    }
+
+    #[test]
+    fn only_a_power_of_two_length_covers_a_hypercube() {
+        assert_eq!(hypercube_variables(1), Ok(0));
+        assert_eq!(hypercube_variables(64), Ok(6));
+        for len in [0, 3, 96] {
+            assert_eq!(
+                hypercube_variables(len),
+                Err(PackError::NotAHypercube { elements: len })
+            );
         }
     }
 

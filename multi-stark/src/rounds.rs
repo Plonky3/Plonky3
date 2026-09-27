@@ -245,7 +245,7 @@ pub(crate) struct RoundStateBase<'air, 'data, A, F: Field, EF> {
     /// Every other kernel leaves it false.
     fits_subfield: bool,
     /// The stage's bit planes, once its first round ran on them.
-    sliced: Option<sliced::SlicedColumns<EF>>,
+    sliced: Option<sliced::SlicedColumns<'data, EF>>,
     /// Rounds this stage evaluates on its planes, when the sliced kernel takes it.
     sliced_rounds: usize,
 }
@@ -257,16 +257,16 @@ pub(crate) struct RoundStateBase<'air, 'data, A, F: Field, EF> {
 ///
 /// Packed lanes hold challenge-field elements; scalar columns hold elements of the arithmetic
 /// field `R` of the round state.
-enum ExtColumns<F: Field, EF: ExtensionField<F>, R = EF> {
+enum ExtColumns<'data, F: Field, EF: ExtensionField<F>, R = EF> {
     /// One SIMD lane per residual row, holding several rows per stored element.
     Packed(Vec<Poly<EF::ExtensionPacking>>),
     /// One arithmetic-field element per residual row.
     Scalar(Vec<Poly<R>>),
     /// The stage's bit planes and the challenges bound so far, with no column folded yet.
-    Sliced(sliced::SlicedColumns<EF>),
+    Sliced(sliced::SlicedColumns<'data, EF>),
 }
 
-impl<F: Field, EF: ExtensionField<F>, R> ExtColumns<F, EF, R> {
+impl<F: Field, EF: ExtensionField<F>, R> ExtColumns<'_, F, EF, R> {
     /// Number of stored columns.
     const fn len(&self) -> usize {
         match self {
@@ -331,7 +331,7 @@ impl<F: Field, EF: ExtensionField<F>, R> ExtColumns<F, EF, R> {
     }
 }
 
-impl<F: Field, EF: ExtensionField<F>> ExtColumns<F, EF> {
+impl<F: Field, EF: ExtensionField<F>> ExtColumns<'_, F, EF> {
     /// Fold the prefix variable of every column at `r`.
     ///
     /// Stays packed when `want_packed` holds; otherwise unpacks to scalar form in the same pass.
@@ -425,7 +425,7 @@ pub(crate) struct RoundStateExt<'air, 'data, A, F: Field, EF: ExtensionField<F>,
     /// Folded boundary-selector values at the current sumcheck prefix.
     boundary: BoundaryEvals<R>,
     /// Main and preprocessed columns after the first base-field fold.
-    columns: ExtColumns<F, EF, R>,
+    columns: ExtColumns<'data, F, EF, R>,
     /// Beta power for each AIR in canonical input order.
     betas: Vec<EF>,
     /// Ordinary AIR constraints grouped by their native round-polynomial degree.

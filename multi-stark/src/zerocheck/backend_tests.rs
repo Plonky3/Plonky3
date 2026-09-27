@@ -16,7 +16,7 @@ use p3_binary_field::{BinaryChallenger, BinaryField2, BinaryField128, Ghash128, 
 use p3_challenger::{
     CanObserve, CanSample, CanSampleBits, FieldChallenger, GrindingChallenger, HashChallenger,
 };
-use p3_field::{HasSubfield, PrimeCharacteristicRing};
+use p3_field::{Field, HasSubfield, PackedValue, PrimeCharacteristicRing};
 use p3_keccak::Keccak256Hash;
 use p3_lookup::{Count, InteractionBuilder};
 use p3_matrix::dense::RowMajorMatrix;
@@ -31,7 +31,9 @@ use crate::config::DEFAULT_SLICED_ROUNDS;
 use crate::lookup::{
     ActiveLookupRuntime, AirLinkClaim, AirLinkInstance, AirLinkLookup, LookupRuntime,
 };
-use crate::rounds::sliced::{LATE_BOUNDARY_ROUNDS, MAX_SLICED_ROUNDS};
+use crate::rounds::sliced::{
+    LATE_BOUNDARY_ROUNDS, LATE_ROUND_FIVE_LANES, MAX_SLICED_ROUNDS, last_late_round,
+};
 use crate::sliced::SLICED_LANES;
 
 /// The trace and challenge field of every fixture.
@@ -108,6 +110,9 @@ const GATE_CELLS: [BoundaryPublic; 1] = [BoundaryPublic::new(0, BoundaryEnd::Fir
 
 /// Public boundary pin used by the eligible quadratic-input fixture.
 const QUADRATIC_PUBLIC: [BoundaryPublic; 1] = [BoundaryPublic::new(0, BoundaryEnd::First, 0)];
+
+/// The cell the bit-valued quadratic fixture binds to a public value: column `b` of the last row.
+const BIT_QUADRATIC_PUBLIC: [BoundaryPublic; 1] = [BoundaryPublic::new(1, BoundaryEnd::Last, 0)];
 
 /// Period of the gate AIR's periodic column.
 const GATE_PERIOD: usize = 4;
@@ -196,12 +201,26 @@ pub(crate) enum FixtureAir {
     QuadraticPreprocessedSuccessor,
     /// AIR with a main column but no constraints, whose native degree is zero.
     Empty,
+    /// Bit-valued degree-two AIR reading every input group but successors, every boundary
+    /// selector, a public pin, and a constant.
+    ///
+    /// Main columns `a, b, s, x`, preprocessed column `q`, periodic column `p = [0, 1]`:
+    ///
+    /// ```text
+    ///     always     : s = a * b
+    ///     always     : p * (x + a + b + 1) = 0
+    ///     always     : (q + 1) * s = 0
+    ///     transition : x = a + b + 1
+    ///     first row  : a = 0
+    ///     pin        : last row, b = public[0]
+    /// ```
+    BitQuadratic,
 }
 
 impl BaseAir<Tower> for FixtureAir {
     fn width(&self) -> usize {
         match self {
-            Self::Gate { .. } | Self::Quartic => 4,
+            Self::Gate { .. } | Self::Quartic | Self::BitQuadratic => 4,
             Self::Pair => 3,
             Self::Link | Self::Recurrence | Self::Linear { .. } => 2,
             Self::QuadraticInputs
@@ -216,6 +235,7 @@ impl BaseAir<Tower> for FixtureAir {
     fn preprocessed_width(&self) -> usize {
         match self {
             Self::Gate { .. }
+            | Self::BitQuadratic
             | Self::QuadraticInputs
             | Self::QuadraticInputsOutsidePeriodic
             | Self::QuadraticPreprocessedSuccessor => 1,
@@ -226,7 +246,7 @@ impl BaseAir<Tower> for FixtureAir {
     fn num_public_values(&self) -> usize {
         match self {
             Self::Gate { .. } => 2,
-            Self::QuadraticInputs | Self::QuadraticInputsOutsidePeriodic => 1,
+            Self::QuadraticInputs | Self::QuadraticInputsOutsidePeriodic | Self::BitQuadratic => 1,
             _ => 0,
         }
     }
@@ -235,6 +255,7 @@ impl BaseAir<Tower> for FixtureAir {
         match self {
             Self::Gate { .. }
             | Self::Periodic { .. }
+            | Self::BitQuadratic
             | Self::QuadraticInputs
             | Self::QuadraticInputsOutsidePeriodic => 1,
             _ => 0,
@@ -249,6 +270,7 @@ impl BaseAir<Tower> for FixtureAir {
             Self::QuadraticInputsOutsidePeriodic => {
                 Cow::Owned(vec![vec![outside(), gf4(1), gf4(2), gf4(3)]])
             }
+            Self::BitQuadratic => Cow::Owned(vec![vec![Tower::ZERO, Tower::ONE]]),
             _ => Cow::Owned(vec![]),
         }
     }
@@ -264,7 +286,8 @@ impl BaseAir<Tower> for FixtureAir {
             | Self::Linear { .. }
             | Self::QuadraticInputs
             | Self::QuadraticInputsOutsidePeriodic
-            | Self::Empty => vec![],
+            | Self::Empty
+            | Self::BitQuadratic => vec![],
             Self::QuadraticSuccessor => vec![0],
             Self::QuadraticPreprocessedSuccessor => vec![],
         }
@@ -282,6 +305,7 @@ impl BaseAir<Tower> for FixtureAir {
         match self {
             Self::Gate { .. } => &GATE_CELLS,
             Self::QuadraticInputs | Self::QuadraticInputsOutsidePeriodic => &QUADRATIC_PUBLIC,
+            Self::BitQuadratic => &BIT_QUADRATIC_PUBLIC,
             _ => &[],
         }
     }
@@ -364,6 +388,17 @@ impl<AB: AirBuilder<F = Tower> + InteractionBuilder> Air<AB> for FixtureAir {
                 };
                 builder.assert_zero(value.bool_check());
                 builder.when_transition().assert_eq(fixed_next, fixed_local);
+            }
+            Self::BitQuadratic => {
+                let (a, b, s, x) = (local[0], local[1], local[2], local[3]);
+                let q = builder.preprocessed().current_slice()[0];
+                let p: AB::Expr = builder.periodic_values()[0].into();
+                let flip = x + a + b + AB::Expr::ONE;
+                builder.assert_eq(s, a * b);
+                builder.assert_zero(p * flip.clone());
+                builder.assert_zero((q + AB::Expr::ONE) * s);
+                builder.when_transition().assert_zero(flip);
+                builder.when_first_row().assert_zero(a);
             }
             Self::Empty => {}
         }
@@ -483,6 +518,26 @@ impl Instance {
                 None,
                 vec![],
             ),
+            FixtureAir::BitQuadratic => {
+                let q = (0..height)
+                    .map(|row| Tower::from_bool(row % 2 == 1))
+                    .collect::<Vec<_>>();
+                let values = q
+                    .iter()
+                    .flat_map(|&q| {
+                        // Where q is clear, a is too, so s = a * b is.
+                        let a = bit() * q;
+                        let b = bit();
+                        [a, b, a * b, a + b + Tower::ONE]
+                    })
+                    .collect::<Vec<_>>();
+                let public_values = vec![values[4 * height - 3]];
+                (
+                    RowMajorMatrix::new(values, 4),
+                    Some(RowMajorMatrix::new(q, 1)),
+                    public_values,
+                )
+            }
             FixtureAir::Recurrence => {
                 let (mut a, mut b): (Tower, Tower) = (rng.random(), rng.random());
                 let mut values = Vec::with_capacity(2 * height);
@@ -1230,6 +1285,82 @@ fn representation_tensor4_matches_generic_at_two_eligible_heights() {
     assert_eq!(repr, generic, "two eligible tensor4 activation heights");
 }
 
+#[test]
+fn representation_infinity_tensor_matches_generic_on_bit_quadratic_stages() {
+    // The tensor at 2^10 rows, and at 2^11 the delayed boundary path after it.
+    for height in [1 << 10, 1 << 11] {
+        let seed = 0x1F_1000 + height as u64;
+        let honest = Instance::honest(FixtureAir::BitQuadratic, height, seed);
+        // Bit-valued but violating two constraints, so the cells on the rows are nonzero.
+        let mut invalid = Instance::honest(FixtureAir::BitQuadratic, height, seed + 1);
+        invalid.main.values[4 * 5 + 2] += Tower::ONE;
+        invalid.main.values[4 * (height - 2) + 3] += Tower::ONE;
+        // A public value outside GF(2) keeps the stage on the interpolation nodes.
+        let mut public = Instance::honest(FixtureAir::BitQuadratic, height, seed + 2);
+        public.public_values[0] = gf4(2);
+        // A degree-one AIR beside the quadratic ones is read on the rows alone.
+        let mut unequal =
+            Instance::honest(FixtureAir::Linear { scale: Tower::ONE }, height, seed + 3);
+        unequal.main.values[2 * 9] += Tower::ONE;
+        let mixed = vec![
+            Instance::honest(FixtureAir::BitQuadratic, height, seed + 4),
+            unequal,
+            Instance::honest(FixtureAir::Pair, height, seed + 5),
+        ];
+        for instances in [vec![honest], vec![invalid], vec![public], mixed] {
+            let generic =
+                transcript::<GenericBackend>(&instances, LookupRuntime::Inactive, 0, false);
+            let repr = transcript::<ReprBackend<Gf4, PolyBasis>>(
+                &instances,
+                LookupRuntime::Inactive,
+                0,
+                false,
+            );
+            let late = transcript::<ReprBackend<Gf4, PolyBasis, true>>(
+                &instances,
+                LookupRuntime::Inactive,
+                0,
+                false,
+            );
+            assert_eq!(repr, generic, "representation backend at {height} rows");
+            assert_eq!(
+                late, generic,
+                "late representation backend at {height} rows"
+            );
+        }
+    }
+    assert_packed_matches_dense(
+        &[Instance::honest(
+            FixtureAir::BitQuadratic,
+            1 << 10,
+            0x1F_1001,
+        )],
+        || LookupRuntime::Inactive,
+        0,
+    );
+}
+
+#[test]
+fn representation_infinity_tensor_proof_verifies() {
+    let instance = Instance::honest(FixtureAir::BitQuadratic, 1 << 11, 0x1F_1002);
+    let airs = [&instance.air];
+    let zerocheck = AirZerocheck::new(&airs, 0);
+    let (main, preprocessed) = (instance.main_table(), instance.preprocessed_table());
+    let (proof, point) = zerocheck
+        .prove_with_lookup::<Tower, Tower, ReprBackend<Gf4, PolyBasis, true>, _>(
+            &[preprocessed.as_ref()],
+            &[&main],
+            &[&instance.public_values],
+            LookupRuntime::Inactive,
+            DEFAULT_SLICED_ROUNDS,
+            &mut challenger(),
+        );
+    let verified = zerocheck
+        .verify::<Tower, Tower, _>(&proof, &[11], &[&instance.public_values], &mut challenger())
+        .expect("honest infinity-tensor proof must verify");
+    assert_eq!(verified, point);
+}
+
 /// How many delayed rounds the planes serve over one proof through `B`'s dispatch.
 ///
 /// The round loop runs on the calling thread, so only this proof moves the thread's counter.
@@ -1240,6 +1371,31 @@ where
     let before = LATE_BOUNDARY_ROUNDS.with(Cell::get);
     let _ = transcript::<B>(instances, LookupRuntime::Inactive, 0, false);
     LATE_BOUNDARY_ROUNDS.with(Cell::get) - before
+}
+
+/// While it lives, this thread's delayed boundary path serves round five on the planes at every
+/// packing, a single row to a lane group included.
+///
+/// Round five otherwise needs the wide packing of a few targets, so a test holding this reaches
+/// it on every target. Dropping it restores the thread's lane gate.
+pub(crate) struct RoundFiveOnThePlanes {
+    /// The lane gate in force before.
+    lanes: usize,
+}
+
+impl RoundFiveOnThePlanes {
+    /// Lower this thread's lane gate to one row.
+    pub(crate) fn force() -> Self {
+        Self {
+            lanes: LATE_ROUND_FIVE_LANES.replace(1),
+        }
+    }
+}
+
+impl Drop for RoundFiveOnThePlanes {
+    fn drop(&mut self) {
+        LATE_ROUND_FIVE_LANES.set(self.lanes);
+    }
 }
 
 #[test]
@@ -1262,6 +1418,27 @@ fn only_the_late_backend_dispatch_serves_round_four_from_the_planes() {
         0,
         "a stage below the floor refuses the delayed round"
     );
+    let tall = [Instance::honest(FixtureAir::Pair, 1 << 12, 0x007E_5052)];
+    assert_eq!(
+        late_boundary_rounds::<ReprBackend<Gf4, PolyBasis, true>>(&tall),
+        last_late_round(12, <PolyBasis as Field>::Packing::WIDTH) - 3,
+        "the late backend serves round five of a taller stage from its planes where it packs"
+    );
+}
+
+#[test]
+fn a_forced_late_backend_serves_round_five_from_the_planes_at_every_packing() {
+    let _round_five = RoundFiveOnThePlanes::force();
+    let tall = [Instance::honest(FixtureAir::Pair, 1 << 12, 0x007E_5053)];
+    assert_eq!(
+        late_boundary_rounds::<ReprBackend<Gf4, PolyBasis, true>>(&tall),
+        2,
+        "the late backend serves rounds four and five of a taller stage from its planes"
+    );
+    let generic = transcript::<GenericBackend>(&tall, LookupRuntime::Inactive, 0, false);
+    let late =
+        transcript::<ReprBackend<Gf4, PolyBasis, true>>(&tall, LookupRuntime::Inactive, 0, false);
+    assert_eq!(late, generic, "round five on the planes");
 }
 
 #[test]

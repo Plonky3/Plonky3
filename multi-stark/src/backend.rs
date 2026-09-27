@@ -25,7 +25,7 @@ use crate::folder::{InteractionMultilinearFolder, MultilinearFolder, ProverAir};
 use crate::packed_ext::PackedRepr;
 use crate::rounds::sliced::SlicedStrategy;
 use crate::rounds::{AirOpenings, RoundStateBase, RoundStateExt};
-use crate::sliced::SlicedFolder;
+use crate::sliced::{SlicedFolder, SlicedQuadraticFolder};
 use crate::subfield::{SubfieldAcc, SubfieldVar};
 
 // The trait lives in a private module, so no caller outside this crate can name or call it.
@@ -269,6 +269,7 @@ where
     A: ProverAir<F, EF>
         + for<'a> Air<MultilinearFolder<'a, F, SubfieldVar<F, S>, SubfieldAcc<EF, S>>>
         + for<'a> Air<SlicedFolder<'a, F, S, R>>
+        + for<'a> Air<SlicedQuadraticFolder<'a, F, R>>
         + for<'a> Air<MultilinearFolder<'a, F, R, R>>
         + for<'a> Air<InteractionMultilinearFolder<'a, F, R, R>>
         + for<'a> Air<MultilinearFolder<'a, F, PackedRepr<F, R>, PackedRepr<F, R>>>
