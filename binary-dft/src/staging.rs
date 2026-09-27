@@ -175,16 +175,28 @@ pub(crate) fn for_each_staged_tile<T, P>(
 /// Each page takes one zero, so the region must hold zeros or be overwritten in full next.
 pub(crate) fn prefault(values: &mut [u128]) {
     let page = PAGE_BYTES / size_of::<u128>();
-    values
-        .par_chunks_mut(PREFAULT_BYTES / size_of::<u128>())
-        .for_each(|chunk| {
-            for element in chunk.iter_mut().step_by(page) {
-                // SAFETY: `element` is an exclusive reference to an initialised element, so it
-                // is valid and aligned for a write. The write is volatile so that it reaches
-                // memory even where the region is known to hold zeros already.
-                unsafe { ptr::write_volatile(element, 0) };
-            }
-        });
+    let touch = |chunk: &mut [u128]| {
+        for element in chunk.iter_mut().step_by(page) {
+            // SAFETY: `element` is an exclusive reference to an initialised element.
+            //
+            // It is therefore valid and aligned for a write.
+            //
+            // The write is volatile so that it reaches memory even where the region holds zeros.
+            unsafe { ptr::write_volatile(element, 0) };
+        }
+    };
+
+    // The run up to the first huge-page boundary is swept on its own.
+    //
+    // Every task after it then starts on a boundary and owns whole huge pages.
+    let head = values
+        .as_ptr()
+        .align_offset(PREFAULT_BYTES)
+        .min(values.len());
+    let (head, body) = values.split_at_mut(head);
+    touch(head);
+    body.par_chunks_mut(PREFAULT_BYTES / size_of::<u128>())
+        .for_each(touch);
 }
 
 /// Gather every tile of the leading coset once, and scatter one result per coset from it.
@@ -460,9 +472,21 @@ mod tests {
     #[test]
     fn a_prefault_leaves_a_zeroed_region_zero() {
         // Regions shorter than a page, spanning several, and spanning several prefault tasks.
-        for len in [0usize, 1, 255, 256, 257, 3 * 256 + 5, (1 << 17) + 3] {
+        //
+        // A region starting past the allocation's own start has a head before its first boundary.
+        for len in [
+            0usize,
+            1,
+            255,
+            256,
+            257,
+            3 * 256 + 5,
+            (1 << 17) + 3,
+            3 << 17,
+        ] {
             let mut values = vec![0u128; len];
             prefault(&mut values);
+            prefault(&mut values[len / 3..]);
             assert!(values.iter().all(|&value| value == 0), "len={len}");
         }
     }
