@@ -31,7 +31,9 @@ use crate::config::DEFAULT_SLICED_ROUNDS;
 use crate::lookup::{
     ActiveLookupRuntime, AirLinkClaim, AirLinkInstance, AirLinkLookup, LookupRuntime,
 };
-use crate::rounds::sliced::{LATE_BOUNDARY_ROUNDS, MAX_SLICED_ROUNDS, last_late_round};
+use crate::rounds::sliced::{
+    LATE_BOUNDARY_ROUNDS, LATE_ROUND_FIVE_LANES, MAX_SLICED_ROUNDS, last_late_round,
+};
 use crate::sliced::SLICED_LANES;
 
 /// The trace and challenge field of every fixture.
@@ -1242,6 +1244,31 @@ where
     LATE_BOUNDARY_ROUNDS.with(Cell::get) - before
 }
 
+/// While it lives, this thread's delayed boundary path serves round five on the planes at every
+/// packing, a single row to a lane group included.
+///
+/// Round five otherwise needs the wide packing of a few targets, so a test holding this reaches
+/// it on every target. Dropping it restores the thread's lane gate.
+pub(crate) struct RoundFiveOnThePlanes {
+    /// The lane gate in force before.
+    lanes: usize,
+}
+
+impl RoundFiveOnThePlanes {
+    /// Lower this thread's lane gate to one row.
+    pub(crate) fn force() -> Self {
+        Self {
+            lanes: LATE_ROUND_FIVE_LANES.replace(1),
+        }
+    }
+}
+
+impl Drop for RoundFiveOnThePlanes {
+    fn drop(&mut self) {
+        LATE_ROUND_FIVE_LANES.set(self.lanes);
+    }
+}
+
 #[test]
 fn only_the_late_backend_dispatch_serves_round_four_from_the_planes() {
     // The late transcript is the incumbent's by construction, so only the counter tells them apart.
@@ -1268,6 +1295,21 @@ fn only_the_late_backend_dispatch_serves_round_four_from_the_planes() {
         last_late_round(12, <PolyBasis as Field>::Packing::WIDTH) - 3,
         "the late backend serves round five of a taller stage from its planes where it packs"
     );
+}
+
+#[test]
+fn a_forced_late_backend_serves_round_five_from_the_planes_at_every_packing() {
+    let _round_five = RoundFiveOnThePlanes::force();
+    let tall = [Instance::honest(FixtureAir::Pair, 1 << 12, 0x007E_5053)];
+    assert_eq!(
+        late_boundary_rounds::<ReprBackend<Gf4, PolyBasis, true>>(&tall),
+        2,
+        "the late backend serves rounds four and five of a taller stage from its planes"
+    );
+    let generic = transcript::<GenericBackend>(&tall, LookupRuntime::Inactive, 0, false);
+    let late =
+        transcript::<ReprBackend<Gf4, PolyBasis, true>>(&tall, LookupRuntime::Inactive, 0, false);
+    assert_eq!(late, generic, "round five on the planes");
 }
 
 #[test]

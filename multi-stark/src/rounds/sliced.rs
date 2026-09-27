@@ -109,9 +109,16 @@ const MIN_LATE_ROUND_FIVE_LANES: usize = 4;
 /// variables, whose representation field packs `lanes` rows to a lane group.
 ///
 /// Round five also needs [`MIN_LATE_ROUND_FIVE_VARS`] row variables and
-/// [`MIN_LATE_ROUND_FIVE_LANES`] rows to a lane group.
-pub(crate) const fn last_late_round(num_vars: usize, lanes: usize) -> usize {
-    if lanes >= MIN_LATE_ROUND_FIVE_LANES && num_vars >= MIN_LATE_ROUND_FIVE_VARS {
+/// [`MIN_LATE_ROUND_FIVE_LANES`] rows to a lane group. A test may lower the lane count on its own
+/// thread, so that round five runs on the planes whatever the target packs.
+// A test build reads the thread's lane count, so only the build without tests could be `const`.
+#[allow(clippy::missing_const_for_fn)]
+pub(crate) fn last_late_round(num_vars: usize, lanes: usize) -> usize {
+    #[cfg(not(test))]
+    let min_lanes = MIN_LATE_ROUND_FIVE_LANES;
+    #[cfg(test)]
+    let min_lanes = LATE_ROUND_FIVE_LANES.with(core::cell::Cell::get);
+    if lanes >= min_lanes && num_vars >= MIN_LATE_ROUND_FIVE_VARS {
         5
     } else {
         4
@@ -126,6 +133,15 @@ std::thread_local! {
     /// proof to see whether the dispatch took the delayed round.
     pub(crate) static LATE_BOUNDARY_ROUNDS: core::cell::Cell<usize> =
         const { core::cell::Cell::new(0) };
+
+    /// Fewest rows to a lane group with which this thread's delayed boundary path serves round
+    /// five, [`MIN_LATE_ROUND_FIVE_LANES`] unless a test lowers it.
+    ///
+    /// A proof's round loop runs on the thread that calls it, so a test that sets it to one runs
+    /// round five on the planes whatever the target packs, row by row where the packing holds a
+    /// single row.
+    pub(crate) static LATE_ROUND_FIVE_LANES: core::cell::Cell<usize> =
+        const { core::cell::Cell::new(MIN_LATE_ROUND_FIVE_LANES) };
 }
 
 /// A stage's cells as bit planes, laid out word by word.

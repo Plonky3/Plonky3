@@ -1,5 +1,6 @@
 use alloc::vec;
 use alloc::vec::Vec;
+use core::cell::Cell;
 use core::cmp::Ordering;
 
 use p3_air::{Air, AirBuilder, BaseAir, WindowAccess};
@@ -18,7 +19,9 @@ use crate::rounds::subfield::tests::{
     first_challenge, later_rounds, link_coupling, no_lookups, with_stage_state, with_state,
 };
 use crate::rounds::{AirSlot, StageCoupling};
-use crate::zerocheck::backend_tests::{FixtureAir, Gf4, Instance, Tower, gf4, outside};
+use crate::zerocheck::backend_tests::{
+    FixtureAir, Gf4, Instance, RoundFiveOnThePlanes, Tower, gf4, outside,
+};
 
 /// The smallest height whose residual half fills a word.
 const SHORTEST: usize = 2 * SLICED_LANES;
@@ -792,6 +795,7 @@ fn tensor4_path_retains_all_entries_and_replays_cached_rounds() {
 
 #[test]
 fn late_boundary_keeps_planes_until_fifth_challenge() {
+    let _round_five = RoundFiveOnThePlanes::force();
     for height in [1 << 11, 1 << 12] {
         let instances = [Instance::honest(
             FixtureAir::Pair,
@@ -835,10 +839,15 @@ fn late_boundary_keeps_planes_until_fifth_challenge() {
             );
 
             // A stage with a whole word left past six challenges keeps its planes through round
-            // five as well, where the packing reads the planes by lane group.
+            // five as well.
             let last = last_late_round(
                 height.trailing_zeros() as usize,
                 <Ghash128 as Field>::Packing::WIDTH,
+            );
+            assert_eq!(
+                last,
+                late_rounds_on_the_planes(height) + 3,
+                "height {height}"
             );
             let tau = state.tau.as_slice().to_vec();
             for round in 4..=last {
@@ -1196,6 +1205,23 @@ fn tensor4_evaluates_mixed_linear_and_quadratic_airs() {
     );
 }
 
+/// `body`'s result, beside the delayed rounds the planes served on this thread while it ran.
+fn served_late_rounds<T>(body: impl FnOnce() -> T) -> (T, usize) {
+    let before = LATE_BOUNDARY_ROUNDS.with(Cell::get);
+    let result = body();
+    (result, LATE_BOUNDARY_ROUNDS.with(Cell::get) - before)
+}
+
+/// The delayed rounds the planes serve a stage of `height` rows under [`RoundFiveOnThePlanes`]:
+/// round four, and round five too once a whole word is left past six challenges.
+const fn late_rounds_on_the_planes(height: usize) -> usize {
+    if height >= 1 << MIN_LATE_ROUND_FIVE_VARS {
+        2
+    } else {
+        1
+    }
+}
+
 /// Collect the complete direct-state transcript for the incumbent tensor4 path or the delayed
 /// plane path, using caller-supplied first `N` fold challenges.
 fn collect_late_boundary_rounds<const N: usize>(
@@ -1297,10 +1323,10 @@ fn late_boundary_transcript<const N: usize>(
 /// A stage of packed Boolean tables runs the tensor and delayed boundary paths on its low plane
 /// alone, borrowed from one table or copied from several, to the dense stage's transcript.
 ///
-/// The taller stage also serves round five from its planes where the packing reads them by lane
-/// group.
+/// The taller stage also serves round five from its planes, whatever the target packs.
 #[test]
 fn packed_tables_match_dense_on_the_late_boundary_path() {
+    let _round_five = RoundFiveOnThePlanes::force();
     let prefix = [
         challenge(0),
         challenge(1),
@@ -1349,12 +1375,15 @@ fn packed_tables_match_dense_on_the_late_boundary_path() {
                     |state, _| late_boundary_transcript(state, prefix, late, None, None),
                 )
             };
-            assert_eq!(
-                run(&packed),
-                run(&dense),
-                "{} tables, height {height}, late {late}",
-                instances.len()
-            );
+            let ((packed, dense), served) = served_late_rounds(|| (run(&packed), run(&dense)));
+            let case = alloc::format!("{} tables, height {height}, late {late}", instances.len());
+            assert_eq!(packed, dense, "{case}");
+            let expected = if late {
+                2 * late_rounds_on_the_planes(height)
+            } else {
+                0
+            };
+            assert_eq!(served, expected, "{case}");
         }
     }
 }
@@ -1514,7 +1543,8 @@ fn late_boundary_matches_incumbent_for_all_special_prefix_coordinates() {
 #[test]
 fn late_round_five_matches_incumbent_for_all_special_prefix_coordinates() {
     // Round five on the planes binds the round-four challenge into its fold, and its own
-    // challenge into the unslice.
+    // challenge into the unslice. It runs whatever the target packs.
+    let _round_five = RoundFiveOnThePlanes::force();
     let height = 1 << MIN_LATE_ROUND_FIVE_VARS;
     let instances = [Instance::honest(FixtureAir::Pair, height, 0x007E_50B5)];
     let lambda = Tower::interpolation_node(2);
@@ -1524,10 +1554,14 @@ fn late_round_five_matches_incumbent_for_all_special_prefix_coordinates() {
         for &value in &special {
             let mut prefix = ordinary;
             prefix[coordinate] = value;
+            let case = alloc::format!("special coordinate {coordinate}, value {value:?}");
+            let (late, served) =
+                served_late_rounds(|| collect_late_boundary_rounds(&instances, prefix, true));
+            assert_eq!(served, 2, "rounds four and five on the planes, {case}");
             assert_eq!(
-                collect_late_boundary_rounds(&instances, prefix, true),
+                late,
                 collect_late_boundary_rounds(&instances, prefix, false),
-                "special coordinate {coordinate}, value {value:?}"
+                "{case}"
             );
         }
     }
@@ -1547,18 +1581,23 @@ fn late_boundary_matches_incumbent_for_special_tau4_and_tau5() {
         challenge(3),
         challenge(4),
     ];
+    let _round_five = RoundFiveOnThePlanes::force();
     for height in [1 << 11, 1 << MIN_LATE_ROUND_FIVE_VARS] {
         let instances = [Instance::honest(FixtureAir::Pair, height, 0x007E_50B3)];
         for &tau4 in &special {
             for &tau5 in &special {
-                assert_eq!(
+                let (late, served) = served_late_rounds(|| {
                     collect_late_boundary_rounds_with_tau(
                         &instances,
                         prefix,
                         true,
                         Some(tau4),
                         Some(tau5),
-                    ),
+                    )
+                });
+                assert_eq!(served, late_rounds_on_the_planes(height), "height {height}");
+                assert_eq!(
+                    late,
                     collect_late_boundary_rounds_with_tau(
                         &instances,
                         prefix,
