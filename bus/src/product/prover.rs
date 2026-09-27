@@ -3,6 +3,7 @@
 use alloc::vec::Vec;
 
 use p3_field::Field;
+use p3_maybe_rayon::prelude::*;
 
 use super::ROUND_POLY_LEN;
 use super::math::interpolate_pair;
@@ -34,25 +35,25 @@ impl<F: Field> IdentityPrefix<F> {
         // A partial final group is completed by implicit identity factors.
         let values = self
             .values
-            .chunks(arity)
-            .map(|chunk| chunk.iter().copied().product())
-            .collect();
+            .par_chunks(arity)
+            .map_collect_min_task_bytes((arity + 1) * size_of::<F>(), |chunk| {
+                chunk.iter().copied().product()
+            });
         Self::new(values)
     }
 
-    /// Binds the lowest remaining variable in place.
+    /// Binds the lowest remaining variable.
     fn fold(&mut self, logical_len: usize, challenge: F) {
         debug_assert!(self.values.len() <= logical_len);
         debug_assert!(logical_len >= 2);
         let output_len = self.values.len().div_ceil(2);
 
         // Missing entries retain the constant-one suffix during interpolation.
-        for row in 0..output_len {
-            let zero = self.get(2 * row);
-            let one = self.get(2 * row + 1);
-            self.values[row] = interpolate_pair([zero, one], challenge);
-        }
-        self.values.truncate(output_len);
+        self.values = (0..output_len)
+            .into_par_iter()
+            .map_collect_min_task_bytes(3 * size_of::<F>(), |row| {
+                interpolate_pair([self.get(2 * row), self.get(2 * row + 1)], challenge)
+            });
 
         // Restore the canonical shortest representation after folding.
         while self.values.last() == Some(&F::ONE) {
@@ -171,9 +172,7 @@ impl<F: Field> RadixFourBatch<F> {
 
         // Node one is omitted because the running sum reconstructs it.
         let nodes = [0, 2, 3, 4, 5].map(F::interpolation_node);
-        let mut evaluations = [F::ZERO; ROUND_POLY_LEN];
-
-        for row in 0..logical_len / 2 {
+        let accumulate = |evaluations: &mut [F; ROUND_POLY_LEN], row: usize| {
             let eq_zero = equality[2 * row];
             let eq_one = equality[2 * row + 1];
 
@@ -198,9 +197,30 @@ impl<F: Field> RadixFourBatch<F> {
 
                 evaluations[node_index] += eq_value * batched_product;
             }
-        }
+        };
 
-        evaluations
+        // A row reads two equality values and eight child values per tree, once per node.
+        let rows = logical_len / 2;
+        let row_bytes = nodes.len() * (2 + 8 * self.states.len()) * size_of::<F>();
+
+        // Each task sums one run of rows, so only its partial message crosses threads.
+        let task_rows = min_task_len(rows, row_bytes);
+        (0..rows.div_ceil(task_rows))
+            .into_par_iter()
+            .map_collect_min_task_bytes(task_rows * row_bytes, |task| {
+                let mut evaluations = [F::ZERO; ROUND_POLY_LEN];
+                for row in task * task_rows..rows.min((task + 1) * task_rows) {
+                    accumulate(&mut evaluations, row);
+                }
+                evaluations
+            })
+            .into_iter()
+            .fold([F::ZERO; ROUND_POLY_LEN], |mut evaluations, partial| {
+                for (evaluation, partial) in evaluations.iter_mut().zip(partial) {
+                    *evaluation += partial;
+                }
+                evaluations
+            })
     }
 
     /// Binds one parent variable across every tree in the batch.

@@ -14,12 +14,14 @@ default = ["diagnostics"]
 # Out-of-circuit bus diagnostics. No proving or verifying path reads them, so a
 # production build can turn them off without changing a proof or a transcript.
 diagnostics = []
+parallel = ["p3-maybe-rayon/parallel"]
 
 [dependencies]
 p3-air.workspace = true
 p3-challenger.workspace = true
 p3-field.workspace = true
 p3-lookup.workspace = true
+p3-maybe-rayon.workspace = true
 p3-multilinear-util.workspace = true
 p3-security.workspace = true
 p3-sumcheck.workspace = true
