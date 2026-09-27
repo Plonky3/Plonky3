@@ -1,0 +1,32 @@
+[package]
+name = "p3-blake2s-air"
+description = "An AIR implementation for the BLAKE2s compression function over binary fields."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[features]
+parallel = ["p3-maybe-rayon/parallel"]
+
+[dependencies]
+p3-air.workspace = true
+p3-field.workspace = true
+p3-matrix.workspace = true
+p3-maybe-rayon.workspace = true
+
+itertools.workspace = true
+rand.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+p3-binary-field = { path = "../binary-field" }
+
+blake2.workspace = true
+hex-literal.workspace = true
+
+[lints]
+workspace = true

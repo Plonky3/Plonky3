@@ -114,12 +114,14 @@ objective generates its trace already packed into bits:
 RUSTFLAGS="-Ctarget-cpu=native" cargo run --example prove_hash_binary --release --features parallel -- --objective keccak-f-permutations --log-trace-length 14 --security-bits 96
 RUSTFLAGS="-Ctarget-cpu=native" cargo run --example prove_hash_binary --release --features parallel -- --objective blake-3-compressions --log-trace-length 10 --security-bits 96
 RUSTFLAGS="-Ctarget-cpu=native" cargo run --example prove_hash_binary --release --features parallel -- --objective sha-256-compressions --log-trace-length 10 --security-bits 96
+RUSTFLAGS="-Ctarget-cpu=native" cargo run --example prove_hash_binary --release --features parallel -- --objective blake-2s-compressions --log-trace-length 10 --security-bits 96
 ```
-- `--objective` (`-o`): `keccak-f-permutations`, `blake-3-compressions` or `sha-256-compressions`.
+- `--objective` (`-o`): `keccak-f-permutations`, `blake-3-compressions`, `sha-256-compressions` or
+  `blake-2s-compressions`.
 - `--log-trace-length` (`-l`): required. The binary Keccak-f AIR uses 25 rows per permutation
   (one per round, plus the output row), so `keccak-f-permutations` proves
-  `2^log-trace-length / 25` permutations; `blake-3-compressions` and `sha-256-compressions` each
-  prove `2^log-trace-length` compressions, one row per compression.
+  `2^log-trace-length / 25` permutations; the three compression objectives each prove
+  `2^log-trace-length` compressions, one row per compression.
 - `--format`: `human` (default) or `json`. With `json`, standard output is one JSON object per
   run carrying the same measurements, and progress lines and tracing spans go to standard error.
 - `--representation` (`-r`): the field representation the zerocheck prover runs its later

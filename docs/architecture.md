@@ -14,7 +14,7 @@ Plonky3 is a collection of small crates rather than one fixed proof system. Appl
 | Transcripts and analysis | `p3-challenger`, `p3-security` | Typed Fiat–Shamir challengers and composable soundness accounting |
 | STARK systems | `p3-uni-stark`, `p3-batch-stark`, `p3-multi-stark`, `p3-lookup` | Single-AIR, batched, and multilinear STARK proving plus LogUp lookup arguments |
 | Permutations and hashes | `p3-mds`, `p3-poseidon1`, `p3-poseidon2`, `p3-rescue`, `p3-monolith`, `p3-blake3`, `p3-keccak`, `p3-sha256` | Algebraic permutations, conventional hashes, and shared MDS layers |
-| AIR implementations | `p3-poseidon1-air`, `p3-poseidon2-air`, `p3-monolith-air`, `p3-blake3-air`, `p3-keccak-air`, `p3-sha256-air` | AIR constraints and trace generation for the corresponding primitive |
+| AIR implementations | `p3-poseidon1-air`, `p3-poseidon2-air`, `p3-monolith-air`, `p3-blake2s-air`, `p3-blake3-air`, `p3-keccak-air`, `p3-sha256-air` | AIR constraints and trace generation for the corresponding primitive |
 | Development | `p3-field-testing`, `p3-examples` | Reusable field test helpers and runnable proof examples |
 
 The common univariate path is:

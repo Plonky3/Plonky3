@@ -54,6 +54,7 @@ pub enum OutputFormat {
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum BinaryHashOptions {
+    Blake2sCompressions,
     Blake3Compressions,
     KeccakFPermutations,
     Sha256Compressions,
@@ -231,6 +232,7 @@ impl ValueEnum for OutputFormat {
 impl ValueEnum for BinaryHashOptions {
     fn value_variants<'a>() -> &'a [Self] {
         &[
+            Self::Blake2sCompressions,
             Self::Blake3Compressions,
             Self::KeccakFPermutations,
             Self::Sha256Compressions,
@@ -239,6 +241,11 @@ impl ValueEnum for BinaryHashOptions {
 
     fn to_possible_value(&self) -> Option<PossibleValue> {
         Some(match self {
+            Self::Blake2sCompressions => get_aliases(
+                "blake-2s-compressions",
+                7,
+                Some(vec![("blake2s-compressions", 6), ("b2s", 3)]),
+            ),
             Self::Blake3Compressions => get_aliases(
                 "blake-3-compressions",
                 1,

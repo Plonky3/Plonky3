@@ -3,6 +3,7 @@ use std::time::Instant;
 
 use clap::{Parser, ValueEnum};
 use p3_binary_field::{BinaryField128, Gf2, Poly64};
+use p3_blake2s_air::Blake2sBinaryAir;
 use p3_blake3_air::Blake3BinaryAir;
 use p3_examples::binary::{
     Backend, BinaryAir, BinaryFields, BinaryProofOptions, BinaryProofReport, BinaryWhirBudget,
@@ -252,6 +253,7 @@ fn requested_shape(
         .checked_shl(log_trace_length as u32)
         .ok_or_else(|| format!("log trace length {log_trace_length} does not fit this platform"))?;
     let width = match objective {
+        BinaryHashOptions::Blake2sCompressions => p3_blake2s_air::NUM_BLAKE2S_BINARY_COLS,
         BinaryHashOptions::Blake3Compressions => p3_blake3_air::NUM_BLAKE3_BINARY_COLS,
         BinaryHashOptions::KeccakFPermutations => {
             if trace_height < KECCAK_BINARY_ROWS_PER_PERM {
@@ -408,6 +410,25 @@ fn run(args: &Args) -> Result<(), String> {
                         &format!("Proving {num_hashes} Keccak-f permutations"),
                     );
                     air.generate_random_trace_packed::<Gf2>(num_hashes)
+                },
+            )
+        }
+        BinaryHashOptions::Blake2sCompressions => {
+            let air = Blake2sBinaryAir::default();
+            preflight_then_maybe_prove(
+                &air,
+                shape,
+                options,
+                fields,
+                backend,
+                args.preflight,
+                args.format,
+                || {
+                    status(
+                        args.format,
+                        &format!("Proving {trace_height} BLAKE2s compressions"),
+                    );
+                    air.generate_random_trace_packed::<Gf2>(trace_height)
                 },
             )
         }
@@ -753,6 +774,39 @@ mod tests {
             ])
             .is_err()
         );
+    }
+
+    /// Every objective's name reaches its AIR, with the width that AIR reports.
+    ///
+    /// A name wired to the wrong AIR still proves something and still verifies, so only the
+    /// width says which hash the row actually holds.
+    #[test]
+    fn cli_objectives_select_their_own_air_width() {
+        for (objective, expected) in [
+            (
+                "blake-2s-compressions",
+                p3_blake2s_air::NUM_BLAKE2S_BINARY_COLS,
+            ),
+            ("b2s", p3_blake2s_air::NUM_BLAKE2S_BINARY_COLS),
+            (
+                "blake-3-compressions",
+                p3_blake3_air::NUM_BLAKE3_BINARY_COLS,
+            ),
+            ("sha-256-compressions", NUM_SHA256_BINARY_COLS),
+        ] {
+            let args = Args::try_parse_from([
+                "prove_hash_binary",
+                "--objective",
+                objective,
+                "--log-trace-length",
+                "4",
+            ])
+            .unwrap_or_else(|error| panic!("{objective} parses: {error}"));
+            let (height, shape) =
+                requested_shape(args.objective, args.log_trace_length).expect("shape");
+            assert_eq!(height, 16, "{objective} rows");
+            assert_eq!(shape.width(), expected, "{objective} width");
+        }
     }
 
     #[test]
