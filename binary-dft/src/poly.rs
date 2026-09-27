@@ -4,6 +4,7 @@ use alloc::vec::Vec;
 
 use p3_binary_field::poly_basis::{LOW_STAGES, LowStageTwiddles};
 use p3_binary_field::{BinaryField128, TowerLevel, poly_basis};
+use p3_commit::zero_padded;
 use p3_field::PrimeCharacteristicRing;
 use p3_matrix::Matrix;
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
@@ -11,7 +12,7 @@ use p3_maybe_rayon::prelude::*;
 use p3_util::{log2_ceil_usize, log2_floor_usize, log2_strict_usize};
 
 use crate::domain::domain_point;
-use crate::encoder::{padded_copy, padded_message_len};
+use crate::encoder::padded_message_len;
 use crate::lch::BUTTERFLY_GRAIN;
 use crate::staging::{
     Dispatch, StagedRuns, for_each_staged_tile, for_each_staged_tile_into_cosets, prefault,
@@ -1042,7 +1043,7 @@ impl AdditiveNtt<BinaryField128> for PolyBasisNtt {
         // Only cosets that share their first group gather the message themselves, and any
         // other encoding transforms a padded copy of it.
         let Some(depth) = plan.group_sizes().next().filter(|_| shared) else {
-            return self.ntt_batch_padded(padded_copy(mat, log_inv_rate), log_inv_rate);
+            return self.ntt_batch_padded(zero_padded(mat, log_inv_rate), log_inv_rate);
         };
         // Every coset is written in full by its first group, the leading one included.
         let mut values = alloc::vec![0u128; padded_message_len(len, log_inv_rate)];

@@ -1,10 +1,9 @@
 //! The additive NTT interface shared by the reference and fast transforms.
 
 use p3_binary_field::TowerLevel;
+use p3_commit::zero_padded;
 use p3_matrix::Matrix;
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
-
-use crate::encoder::padded_copy;
 
 /// An additive NTT: evaluation of the novel polynomial basis on an `F_2`-linear subspace.
 ///
@@ -65,7 +64,7 @@ pub trait AdditiveNtt<F: TowerLevel> {
         mat: RowMajorMatrixView<'_, F>,
         log_inv_rate: usize,
     ) -> RowMajorMatrix<F> {
-        self.ntt_batch_padded(padded_copy(mat, log_inv_rate), log_inv_rate)
+        self.ntt_batch_padded(zero_padded(mat, log_inv_rate), log_inv_rate)
     }
 
     /// Inverse of [`ntt_batch`](Self::ntt_batch).

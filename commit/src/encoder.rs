@@ -3,11 +3,44 @@
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::{Field, TwoAdicField};
 use p3_matrix::Matrix;
-use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView, RowMajorMatrixViewMut};
+use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
+use p3_maybe_rayon::prelude::*;
 
-/// Elements one row of the default borrowed-message copy holds, so each row is a task of its
-/// own that outweighs the fork-join overhead.
-const COPY_CHUNK: usize = 1 << 16;
+/// A borrowed message copied into a zeroed matrix `2^log_inv_rate` times its height.
+///
+/// The message fills the leading rows and every row after it is zero.
+///
+/// That is the matrix [`Encoder::encode_batch_padded`] takes.
+///
+/// The copy splits across workers only where the cost model says the message is worth it.
+///
+/// # Panics
+///
+/// Panics if the padded length overflows `usize`.
+#[must_use]
+pub fn zero_padded<F: Field>(
+    message: RowMajorMatrixView<'_, F>,
+    log_inv_rate: usize,
+) -> RowMajorMatrix<F> {
+    let len = message.values.len();
+    let padded_len = u32::try_from(log_inv_rate)
+        .ok()
+        .and_then(|rate| len.checked_shl(rate))
+        // `checked_shl` only rejects a shift amount that is too wide.
+        //
+        // Recovering the original length from the shifted one is what proves no bits were lost.
+        .filter(|&padded| padded >> log_inv_rate == len)
+        .expect("codeword length overflows usize");
+    let mut values = F::zero_vec(padded_len);
+
+    // Each element is read once and written once.
+    let chunk = min_task_len(len, 2 * size_of::<F>());
+    values[..len]
+        .par_chunks_mut(chunk)
+        .zip(message.values.par_chunks(chunk))
+        .for_each(|(destination, source)| destination.copy_from_slice(source));
+    RowMajorMatrix::new(values, message.width)
+}
 
 /// A linear code applied to every column of a matrix.
 ///
@@ -63,23 +96,7 @@ pub trait Encoder<F: Field> {
         message: RowMajorMatrixView<'_, F>,
         log_inv_rate: usize,
     ) -> RowMajorMatrix<F> {
-        let len = message.values.len();
-        let padded_len = u32::try_from(log_inv_rate)
-            .ok()
-            .and_then(|rate| len.checked_shl(rate))
-            // `checked_shl` only rejects a shift amount that is too wide, so recovering `len`
-            // from the shifted result is what proves no bits were lost.
-            .filter(|&padded| padded >> log_inv_rate == len)
-            .expect("codeword length overflows usize");
-        let mut values = F::zero_vec(padded_len);
-        // Rows of whole chunks copy in parallel, and a message no chunk divides is copied at once.
-        if len.is_multiple_of(COPY_CHUNK) {
-            RowMajorMatrixViewMut::new(&mut values[..len], COPY_CHUNK)
-                .copy_from(&RowMajorMatrixView::new(message.values, COPY_CHUNK));
-        } else {
-            values[..len].copy_from_slice(message.values);
-        }
-        self.encode_batch_padded(RowMajorMatrix::new(values, message.width), log_inv_rate)
+        self.encode_batch_padded(zero_padded(message, log_inv_rate), log_inv_rate)
     }
 }
 
@@ -142,15 +159,37 @@ mod tests {
     }
 
     #[test]
-    fn a_borrowed_message_long_enough_to_copy_in_chunks_encodes_as_its_padding() {
-        // The message fills whole copy chunks, so the default copies it row by row in parallel.
-        let mut rng = SmallRng::seed_from_u64(2);
-        let message = RowMajorMatrix::<BabyBear>::rand(&mut rng, 1 << 14, 8);
-        assert!(message.values.len().is_multiple_of(super::COPY_CHUNK));
-
+    fn a_long_borrowed_message_encodes_as_its_padding() {
+        // Widths of three and eight rows of 2^14 give lengths a power of two does and does not
+        // divide, both long enough for the copy to split across workers.
         let dft = Radix2DitParallel::<BabyBear>::default();
-        let expected = dft.encode_batch(message.clone(), 1);
-        assert_eq!(dft.encode_batch_borrowed(message.as_view(), 1), expected);
+        for width in [3, 8] {
+            let mut rng = SmallRng::seed_from_u64(2);
+            let message = RowMajorMatrix::<BabyBear>::rand(&mut rng, 1 << 14, width);
+            let expected = dft.encode_batch(message.clone(), 1);
+            assert_eq!(
+                dft.encode_batch_borrowed(message.as_view(), 1),
+                expected,
+                "width={width}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_zero_padded_copy_holds_the_message_over_a_zero_tail() {
+        // Lengths the copy keeps whole, splits, and splits with a short last chunk.
+        for (height, width) in [(1, 1), (4, 3), (1 << 12, 5), (1 << 14, 7)] {
+            let mut rng = SmallRng::seed_from_u64(height as u64 ^ width as u64);
+            let message = RowMajorMatrix::<BabyBear>::rand(&mut rng, height, width);
+            for log_inv_rate in 0..=2 {
+                let padded = super::zero_padded(message.as_view(), log_inv_rate);
+                let len = message.values.len();
+                assert_eq!(padded.width, width);
+                assert_eq!(padded.values.len(), len << log_inv_rate);
+                assert_eq!(&padded.values[..len], message.values.as_slice());
+                assert!(padded.values[len..].iter().all(|v| *v == BabyBear::ZERO));
+            }
+        }
     }
 
     #[test]
