@@ -1,4 +1,4 @@
-//! The `PMULL` backend, which lives under the `aes` target feature.
+//! The `PMULL` backend, which lives under the `aes` target feature on little-endian AArch64.
 
 use core::arch::aarch64::{
     uint8x16_t, uint64x2_t, vdupq_n_u8, vdupq_n_u64, veorq_u8, vextq_u8, vgetq_lane_u64,
@@ -7,9 +7,9 @@ use core::arch::aarch64::{
 };
 use core::mem::transmute;
 
-// `target_arch = "aarch64"` covers the big-endian AArch64 targets too.
-// There the halves of a `u128` and the lanes of a vector run in opposite orders, which every
-// transmute between the two below relies on.
+// Every transmute between a `u128` and a vector below relies on its halves being the lanes.
+// On big-endian AArch64 they run in opposite orders, so the gates that select this module
+// name `target_endian = "little"` beside the architecture, and this holds them to it.
 const _: () = assert!(
     cfg!(target_endian = "little"),
     "the halves of a `u128` are its vector lanes only on little-endian targets"

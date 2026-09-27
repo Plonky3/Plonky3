@@ -41,7 +41,11 @@ pub(crate) use x86_64::poly_mul_192;
 #[cfg_attr(
     any(
         all(target_arch = "x86_64", target_feature = "pclmulqdq"),
-        all(target_arch = "aarch64", target_feature = "aes"),
+        all(
+            target_arch = "aarch64",
+            target_endian = "little",
+            target_feature = "aes"
+        ),
     ),
     allow(dead_code)
 )]
@@ -67,7 +71,11 @@ pub(crate) use basis::{
 use crate::BinaryField64;
 use crate::tower::TowerLevel;
 
-#[cfg(all(target_arch = "aarch64", target_feature = "aes"))]
+#[cfg(all(
+    target_arch = "aarch64",
+    target_endian = "little",
+    target_feature = "aes"
+))]
 mod aarch64;
 #[cfg(all(target_arch = "x86_64", target_feature = "pclmulqdq"))]
 mod x86_64;
@@ -84,9 +92,14 @@ mod x86_64;
 /// This is a compile-time decision, and neither feature is in the baseline of most targets:
 /// `aarch64-apple-darwin` has `aes`, but generic AArch64 Linux and every `x86_64` target need
 /// `-C target-feature=+aes` / `+pclmulqdq` (or `-C target-cpu=native`) for the fast path.
+/// Big-endian AArch64 takes the software path even with `aes`.
 pub(crate) const HAS_HARDWARE_CLMUL: bool = cfg!(any(
     all(target_arch = "x86_64", target_feature = "pclmulqdq"),
-    all(target_arch = "aarch64", target_feature = "aes"),
+    all(
+        target_arch = "aarch64",
+        target_endian = "little",
+        target_feature = "aes"
+    ),
 ));
 
 /// The carryless product of two 64-bit polynomials over `GF(2)`, one bit of `b` at a time.
@@ -110,11 +123,19 @@ const fn scalar_clmul_64x64(a: u64, b: u64) -> u128 {
     acc
 }
 
-#[cfg(all(target_arch = "aarch64", target_feature = "aes"))]
+#[cfg(all(
+    target_arch = "aarch64",
+    target_endian = "little",
+    target_feature = "aes"
+))]
 use aarch64::clmul_64x64;
 #[cfg(not(any(
     all(target_arch = "x86_64", target_feature = "pclmulqdq"),
-    all(target_arch = "aarch64", target_feature = "aes"),
+    all(
+        target_arch = "aarch64",
+        target_endian = "little",
+        target_feature = "aes"
+    ),
 )))]
 use portable::clmul_64x64;
 #[cfg(all(target_arch = "x86_64", target_feature = "pclmulqdq"))]
@@ -201,15 +222,27 @@ fn composed_poly_mul_128(a: u128, b: u128) -> u128 {
 // carryless product, where the integer file would need several instructions per shift.
 // AArch64 prepares a multiplier held fixed across a run of products once, so that each
 // product takes five carryless multiplies.
-#[cfg(all(target_arch = "aarch64", target_feature = "aes"))]
+#[cfg(all(
+    target_arch = "aarch64",
+    target_endian = "little",
+    target_feature = "aes"
+))]
 pub(crate) use aarch64::SplitMultiplier as BatchMultiplier;
-#[cfg(all(target_arch = "aarch64", target_feature = "aes"))]
+#[cfg(all(
+    target_arch = "aarch64",
+    target_endian = "little",
+    target_feature = "aes"
+))]
 pub(crate) use aarch64::{
     poly_add_128, poly_dot_128, poly_mul_128, poly_mul_128_by_64, poly_square_128,
 };
 #[cfg(not(any(
     all(target_arch = "x86_64", target_feature = "pclmulqdq"),
-    all(target_arch = "aarch64", target_feature = "aes"),
+    all(
+        target_arch = "aarch64",
+        target_endian = "little",
+        target_feature = "aes"
+    ),
 )))]
 pub(crate) use portable::{poly_dot_128, poly_mul_128, poly_mul_128_by_64, poly_square_128};
 #[cfg(all(target_arch = "x86_64", target_feature = "pclmulqdq"))]
@@ -218,11 +251,19 @@ pub(crate) use x86_64::{poly_dot_128, poly_mul_128, poly_mul_128_by_64, poly_squ
 /// A multiplier held fixed across a run of independent products.
 ///
 /// Batch products favor instruction throughput over the latency of a dependent chain.
-#[cfg(not(all(target_arch = "aarch64", target_feature = "aes")))]
+#[cfg(not(all(
+    target_arch = "aarch64",
+    target_endian = "little",
+    target_feature = "aes"
+)))]
 #[derive(Clone, Copy)]
 pub(crate) struct BatchMultiplier(u128);
 
-#[cfg(not(all(target_arch = "aarch64", target_feature = "aes")))]
+#[cfg(not(all(
+    target_arch = "aarch64",
+    target_endian = "little",
+    target_feature = "aes"
+)))]
 impl BatchMultiplier {
     /// Prepare a multiplier.
     #[inline]
@@ -432,7 +473,11 @@ mod tests {
     }
 
     /// A multiplier prepared from a companion computed elsewhere is the one that derives it.
-    #[cfg(all(target_arch = "aarch64", target_feature = "aes"))]
+    #[cfg(all(
+        target_arch = "aarch64",
+        target_endian = "little",
+        target_feature = "aes"
+    ))]
     #[test]
     fn a_multiplier_prepared_from_parts_matches_one_that_derives_its_companion() {
         for t in KERNEL_CORNERS {
@@ -591,7 +636,7 @@ mod tests {
         }
 
         /// A companion computed by a general product prepares the same multiplier.
-        #[cfg(all(target_arch = "aarch64", target_feature = "aes"))]
+        #[cfg(all(target_arch = "aarch64", target_endian = "little", target_feature = "aes"))]
         #[test]
         fn a_multiplier_prepared_from_parts_matches_on_random_operands(t: u128, v: u128) {
             let companion = super::poly_mul_128(t, 1 << 64);

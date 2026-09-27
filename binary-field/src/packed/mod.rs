@@ -51,11 +51,23 @@ pub use x86_64::PackedGhash128;
 ))]
 pub(crate) use x86_64::lanes;
 
-#[cfg(all(target_arch = "aarch64", target_feature = "aes"))]
+#[cfg(all(
+    target_arch = "aarch64",
+    target_endian = "little",
+    target_feature = "aes"
+))]
 mod aarch64;
-#[cfg(all(target_arch = "aarch64", target_feature = "aes"))]
+#[cfg(all(
+    target_arch = "aarch64",
+    target_endian = "little",
+    target_feature = "aes"
+))]
 pub(crate) use PackedGhash128 as Packing;
-#[cfg(all(target_arch = "aarch64", target_feature = "aes"))]
+#[cfg(all(
+    target_arch = "aarch64",
+    target_endian = "little",
+    target_feature = "aes"
+))]
 pub use aarch64::PackedGhash128;
 
 #[cfg(not(any(
@@ -64,6 +76,10 @@ pub use aarch64::PackedGhash128;
         target_feature = "vpclmulqdq",
         any(target_feature = "avx2", target_feature = "avx512f")
     ),
-    all(target_arch = "aarch64", target_feature = "aes")
+    all(
+        target_arch = "aarch64",
+        target_endian = "little",
+        target_feature = "aes"
+    )
 )))]
 pub(crate) use crate::Ghash128 as Packing;

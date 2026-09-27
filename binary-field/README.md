@@ -21,7 +21,7 @@ Key items:
   absent from the rendered docs
 - `BasedVectorSpace` / `ExtensionField` between every pair of byte-aligned tower levels, in the tower basis
 - `BinaryChallenger` — Fiat–Shamir over a byte challenger; every bit pattern is a field element, so no rejection sampling is needed
-- Carryless-multiply fast paths on x86-64 (`pclmulqdq`, `vpclmulqdq`) and AArch64 (`aes`), with a software backend everywhere else
+- Carryless-multiply fast paths on x86-64 (`pclmulqdq`, `vpclmulqdq`) and little-endian AArch64 (`aes`), with a software backend everywhere else
 
 ## Which representation to use
 

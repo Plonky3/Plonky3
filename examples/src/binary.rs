@@ -2531,7 +2531,11 @@ mod tests {
             target_feature = "vpclmulqdq",
             any(target_feature = "avx2", target_feature = "avx512f")
         ),
-        all(target_arch = "aarch64", target_feature = "aes")
+        all(
+            target_arch = "aarch64",
+            target_endian = "little",
+            target_feature = "aes"
+        )
     ))]
     type BinaryBusPacked = PackedExt<F, p3_binary_field::PackedGhash128>;
     #[cfg(not(any(
@@ -2540,7 +2544,11 @@ mod tests {
             target_feature = "vpclmulqdq",
             any(target_feature = "avx2", target_feature = "avx512f")
         ),
-        all(target_arch = "aarch64", target_feature = "aes")
+        all(
+            target_arch = "aarch64",
+            target_endian = "little",
+            target_feature = "aes"
+        )
     )))]
     type BinaryBusPacked = PackedExt<F, Ghash128>;
 

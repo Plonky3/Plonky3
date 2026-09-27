@@ -363,7 +363,11 @@ mod low {
 }
 
 /// The low stages one at a time within each run, each twiddle prepared from its companion.
-#[cfg(all(target_arch = "aarch64", target_feature = "aes"))]
+#[cfg(all(
+    target_arch = "aarch64",
+    target_endian = "little",
+    target_feature = "aes"
+))]
 mod low {
     use super::{LOW_RUN, LOW_STAGES};
     use crate::clmul::BatchMultiplier;
@@ -404,7 +408,11 @@ mod low {
         target_feature = "vpclmulqdq",
         target_feature = "avx512f"
     ),
-    all(target_arch = "aarch64", target_feature = "aes")
+    all(
+        target_arch = "aarch64",
+        target_endian = "little",
+        target_feature = "aes"
+    )
 )))]
 mod low {
     use super::{LOW_RUN, LOW_STAGES};
