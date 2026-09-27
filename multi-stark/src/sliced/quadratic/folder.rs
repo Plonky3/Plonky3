@@ -97,8 +97,8 @@ pub struct SlicedQuadraticFolder<'a, F, R> {
     poisoned: bool,
 }
 
-impl<'a, F, R: Field> SlicedQuadraticFolder<'a, F, R> {
-    /// Build a folder for one evaluation over sixty-four rows.
+impl<'a, F: Field, R: Field> SlicedQuadraticFolder<'a, F, R> {
+    /// Build a folder for [`SLICED_CELLS`] evaluations over sixty-four rows each.
     ///
     /// # Arguments
     ///
@@ -109,6 +109,10 @@ impl<'a, F, R: Field> SlicedQuadraticFolder<'a, F, R> {
     /// - `lanes`: the weights summing each constraint across the lanes.
     /// - `whole`: per evaluation, whether each constraint contributes its whole value rather than
     ///   its quadratic part.
+    ///
+    /// # Panics
+    ///
+    /// Panics unless `F` has characteristic two, where the lanes' parts add as bits.
     #[inline]
     #[must_use]
     pub fn new(
@@ -120,6 +124,10 @@ impl<'a, F, R: Field> SlicedQuadraticFolder<'a, F, R> {
         lanes: &'a BitLaneSums<R>,
         whole: [bool; SLICED_CELLS],
     ) -> Self {
+        assert!(
+            F::TWO == F::ZERO,
+            "sliced GF(2) parts add in characteristic two"
+        );
         Self {
             main_window: RowWindow::from_two_rows(local, next),
             preprocessed_window: RowWindow::from_two_rows(&[], &[]),

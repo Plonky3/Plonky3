@@ -41,9 +41,8 @@ use crate::selectors::BoundaryEvals;
 
 mod quadratic;
 
-pub use quadratic::{
-    BitLaneSums, CellWords, SLICED_CELLS, SlicedBit, SlicedQuadratic, SlicedQuadraticFolder,
-};
+pub(crate) use quadratic::SLICED_CELLS;
+pub use quadratic::{BitLaneSums, SlicedBit, SlicedQuadratic, SlicedQuadraticFolder};
 
 /// Rows one sliced value carries, one per bit of a word.
 pub const SLICED_LANES: usize = u64::BITS as usize;
@@ -541,7 +540,8 @@ struct KernelSums<'a, R> {
 /// One AIR evaluation over sixty-four rows, lane-weighted and alpha-batched.
 #[derive(Clone, Copy, Debug)]
 pub struct SlicedEvaluation<R> {
-    /// `sum_i alpha^(n-1-i) * sum_lane w(lane) * C_i(lane)`.
+    /// `sum_i alpha^(n-1-i) * sum_lane w(lane) * C_i(lane)`, one such sum per evaluation for a
+    /// folder that carries several side by side.
     pub value: R,
     /// Whether any constraint value was poisoned, which makes `value` meaningless.
     pub poisoned: bool,

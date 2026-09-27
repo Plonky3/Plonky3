@@ -27,10 +27,10 @@ mod folder;
 pub use folder::{BitLaneSums, SlicedQuadraticFolder};
 
 /// Evaluations one AIR walk carries side by side, each over its own sixty-four lanes.
-pub const SLICED_CELLS: usize = 4;
+pub(crate) const SLICED_CELLS: usize = 4;
 
 /// One word per evaluation: bit `i` of word `c` is lane `i` of evaluation `c`.
-pub type CellWords = [u64; SLICED_CELLS];
+pub(crate) type CellWords = [u64; SLICED_CELLS];
 
 /// The words `f(a[c], b[c])`, one per evaluation.
 #[inline(always)]
@@ -65,18 +65,11 @@ impl<F> SlicedBit<F> {
     /// The input with the given bits, one word per evaluation.
     #[inline]
     #[must_use]
-    pub const fn new(bits: CellWords) -> Self {
+    pub(crate) const fn new(bits: CellWords) -> Self {
         Self {
             bits,
             _field: PhantomData,
         }
-    }
-
-    /// The input's bits, one word per evaluation.
-    #[inline]
-    #[must_use]
-    pub const fn bits(self) -> CellWords {
-        self.bits
     }
 }
 
@@ -163,16 +156,16 @@ impl<F> SlicedQuadratic<F> {
     }
 
     /// The quadratic part, one word per evaluation.
-    #[inline]
+    #[cfg(test)]
     #[must_use]
-    pub const fn quadratic(self) -> CellWords {
+    pub(crate) const fn quadratic(self) -> CellWords {
         self.quadratic
     }
 
     /// The whole value, the sum of the three parts, one word per evaluation.
-    #[inline]
+    #[cfg(test)]
     #[must_use]
-    pub fn value(self) -> CellWords {
+    pub(crate) fn value(self) -> CellWords {
         xor(
             xor(self.quadratic, self.linear),
             [self.constant; SLICED_CELLS],

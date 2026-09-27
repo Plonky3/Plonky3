@@ -43,7 +43,9 @@ use p3_field::Field;
 use p3_maybe_rayon::prelude::*;
 use p3_multilinear_util::poly::Poly;
 
-use super::{LANE_VARIABLES, PlaneWords, Planes, SlicedTensor, SlicedTrace, TensorNodes};
+use super::{
+    LANE_VARIABLES, PlaneWords, Planes, PrefixFold, SlicedTensor, SlicedTrace, TensorNodes,
+};
 use crate::rounds::{AirSlot, rows_per_task};
 use crate::selectors::BoundaryEvals;
 use crate::sliced::{BitLaneSums, SLICED_CELLS, SlicedBit, SlicedQuadraticFolder};
@@ -56,32 +58,6 @@ const NODES: usize = 3;
 
 /// Prefixes of the three variables before `t`, one per assignment of nodes.
 const PREFIXES: usize = NODES.pow(DEPTH as u32 - 1);
-
-/// The corners one prefix reads, `t = 0` and `t = 1` side by side.
-///
-/// A corner's bits are the prefix variables, first variable highest, then `t`. A variable at `0`
-/// or `1` selects the low or the high half of the corners, and a variable at infinity reads both
-/// halves, whose sum is its input there.
-fn prefix_corners(prefix: [usize; DEPTH - 1]) -> Vec<usize> {
-    let mut corners = vec![0];
-    for (variable, &node) in prefix.iter().enumerate() {
-        let bit = 2 << (DEPTH - 2 - variable);
-        match node {
-            0 => {}
-            1 => corners.iter_mut().for_each(|corner| *corner |= bit),
-            _ => {
-                corners = corners
-                    .iter()
-                    .flat_map(|&corner| [corner, corner | bit])
-                    .collect();
-            }
-        }
-    }
-    corners
-        .iter()
-        .flat_map(|&corner| [corner, corner | 1])
-        .collect()
-}
 
 /// What every task of the tensor pass shares.
 struct InfinityTensor<'a, 'air, A, F, R> {
@@ -294,7 +270,6 @@ where
         tracing::debug!("a cell outside GF(2) keeps the tensor off the infinity nodes");
         return None;
     }
-    debug_assert!(F::TWO == F::ZERO, "bit lanes add in characteristic two");
     debug_assert!(
         slots.iter().all(|slot| slot.constraint_degree <= 2),
         "the tensor holds three nodes of each variable, which pin at most a quadratic"
@@ -311,16 +286,19 @@ where
     };
     let word_weights = lift(word_weights.as_slice());
 
-    // The prefixes in index order, the last variable varying fastest.
+    // The prefixes in index order, the last variable varying fastest. A variable at `0` or `1`
+    // selects the low or the high half of the corners, and a variable at infinity reads both, as
+    // `PrefixFold` does for any node outside `0` and `1`.
+    let node_coordinates = [(false, false), (true, false), (false, true)];
     let prefixes = (0..PREFIXES)
         .map(|index| {
-            let mut prefix = [0; DEPTH - 1];
+            let mut prefix = [(false, false); DEPTH - 1];
             let mut remaining = index;
             for node in prefix.iter_mut().rev() {
-                *node = remaining % NODES;
+                *node = node_coordinates[remaining % NODES];
                 remaining /= NODES;
             }
-            prefix_corners(prefix)
+            PrefixFold::new(&prefix).corners
         })
         .collect();
     let context = InfinityTensor {
