@@ -787,12 +787,21 @@ fn staged_group(
 
 /// Run the first staging group of every coset of a zero-padded message in one pass.
 ///
-/// `values` is one coset per twiddle set. The message, in the tower basis, is `source` when
-/// one is given and the leading coset otherwise. Every coset's transform starts from the
-/// message's coefficients, and its first group is its first read of every element. So one
-/// gather of the message serves every coset: the tile changes basis once, and each coset runs
-/// the group on its own copy of the tile and scatters it into its own slot. Neither a pass
-/// converting the message nor a copy of it into each coset is taken.
+/// The matrix holds one coset per twiddle set.
+///
+/// The message, in the tower basis, is the separate run when one is given, and the leading
+/// coset otherwise.
+///
+/// Every coset's transform starts from the message's coefficients.
+///
+/// Its first group is its first read of every element, so one gather of the message serves
+/// every coset.
+///
+/// The tile changes basis once, and each coset runs the group on its own copy of the tile.
+///
+/// Each coset then scatters its copy into its own slot.
+///
+/// Neither a pass converting the message nor a copy of it into each coset is taken.
 fn first_group_into_cosets(
     values: &mut [u128],
     source: Option<&[u128]>,
@@ -816,9 +825,12 @@ fn first_group_into_cosets(
 
 /// Encode a zero-padded message whose cosets all share a first staging group of `depth`.
 ///
-/// `values` is `2^log_inv_rate` cosets of one message each, and every coset comes back
-/// evaluated in the tower basis. The message, in the tower basis, is `source` when one is
-/// given, and otherwise the leading coset holds it.
+/// The matrix holds `2^log_inv_rate` cosets of one message each.
+///
+/// Every coset comes back evaluated in the tower basis.
+///
+/// The message, in the tower basis, is the separate run when one is given, and otherwise the
+/// leading coset holds it.
 fn padded_sharing_first_group(
     values: &mut [u128],
     source: Option<&[u128]>,
@@ -831,9 +843,11 @@ fn padded_sharing_first_group(
     let twiddles: Vec<Twiddles> = (0..1 << log_inv_rate)
         .map(|c| Twiddles::new(log_message, domain_point(c << log_message)))
         .collect();
-    // The cosets the first group's scatter writes first hold zeros, so their pages are faulted
-    // in by a contiguous sweep beforehand. The leading coset is one of them unless it holds the
-    // message.
+    // The cosets the first group's scatter writes first hold zeros.
+    //
+    // A contiguous sweep faults their pages in beforehand.
+    //
+    // The leading coset is one of them unless it holds the message.
     let first_written = if source.is_some() { 0 } else { len };
     prefault(&mut values[first_written..]);
     first_group_into_cosets(values, source, len, plan, depth, &twiddles);

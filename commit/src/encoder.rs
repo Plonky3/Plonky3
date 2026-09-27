@@ -82,15 +82,20 @@ pub trait Encoder<F: Field> {
         self.encode_batch(message, 0)
     }
 
-    /// Encodes each column of a borrowed `message` into a codeword, leaving the message as it is.
+    /// Encodes each column of a borrowed message into a codeword, leaving the message as it is.
     ///
-    /// The codeword is the one [`Self::encode_batch_padded`] makes of the message zero-padded to
-    /// `2^(k + log_inv_rate)` rows. The default builds that padded matrix, copying the message
-    /// into it; an encoder that reads the message where it lies skips the copy.
+    /// The codeword is what [`Self::encode_batch_padded`] makes of the message zero-padded to
+    /// `2^(k + log_inv_rate)` rows.
+    ///
+    /// The default builds that padded matrix, copying the message into it.
+    ///
+    /// An encoder that reads the message where it lies skips the copy.
     ///
     /// # Panics
-    /// Panics if the height of `message` is not a power of two, or if the codeword height
-    /// `2^(k + log_inv_rate)` overflows `usize`.
+    ///
+    /// Panics if the message height is not a power of two.
+    ///
+    /// Panics if the codeword height `2^(k + log_inv_rate)` overflows `usize`.
     fn encode_batch_borrowed(
         &self,
         message: RowMajorMatrixView<'_, F>,

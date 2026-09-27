@@ -167,10 +167,15 @@ pub(crate) fn for_each_staged_tile<T, P>(
 
 /// Fault in every page of a region a staging pass is about to overwrite, before it does.
 ///
-/// A staging pass scatters each tile's runs across the whole region, so the first writes of
-/// every worker land on the same few pages at once. Where a fault maps and clears a huge page,
-/// every worker that loses the race to map it has cleared one for nothing. A contiguous sweep
-/// gives each huge page to a single task, which faults it once at the sequential rate.
+/// A staging pass scatters each tile's runs across the whole region.
+///
+/// The first writes of every worker therefore land on the same few pages at once.
+///
+/// Where a fault maps and clears a huge page, every worker that loses the race to map it has
+/// cleared one for nothing.
+///
+/// A contiguous sweep gives each huge page to a single task, which faults it once at the
+/// sequential rate.
 ///
 /// Each page takes one zero, so the region must hold zeros or be overwritten in full next.
 pub(crate) fn prefault(values: &mut [u128]) {
@@ -201,18 +206,31 @@ pub(crate) fn prefault(values: &mut [u128]) {
 
 /// Gather every tile of the leading coset once, and scatter one result per coset from it.
 ///
-/// `values` is `values.len() / coset_len` cosets of `coset_len` elements, and the tiles lay out
-/// the leading one. The tiles are gathered from `source` when one is given, a run of
-/// `coset_len` elements standing in for the leading coset, and from the leading coset itself
-/// otherwise. Each gathered tile goes to `prepare` once. Every coset then gets its own copy of
-/// the prepared tile, handed to `process` with its block and the coset's index, and scattered
-/// to the same runs of that coset. The leading coset is processed last, from the gathered tile
-/// itself, once every other coset has taken its copy.
+/// The matrix is a run of equal cosets, and the tiles lay out the leading one.
+///
+/// The tiles are gathered from the separate run when one is given, which stands in for the
+/// leading coset.
+///
+/// Otherwise they are gathered from the leading coset itself.
+///
+/// Each gathered tile goes to the preparing callback once.
+///
+/// Every coset then gets its own copy of the prepared tile.
+///
+/// The processing callback takes that copy with its block and the coset's index.
+///
+/// The copy is then scattered to the same runs of that coset.
+///
+/// The leading coset is processed last, from the gathered tile itself, once every other coset
+/// has taken its copy.
 ///
 /// # Panics
-/// Panics if the cosets do not partition `values`, if a source is not one coset long, if the
-/// tiles do not partition one coset, if a tile's walk reaches past the end of a coset, or if
-/// `coset_len` or `run` is zero.
+///
+/// - The cosets do not partition the matrix.
+/// - A separate run is not one coset long.
+/// - The tiles do not partition one coset.
+/// - A tile's walk reaches past the end of a coset.
+/// - The coset length or the run length is zero.
 pub(crate) fn for_each_staged_tile_into_cosets<T, Q, P>(
     values: &mut [T],
     source: Option<&[T]>,
@@ -264,11 +282,15 @@ pub(crate) fn for_each_staged_tile_into_cosets<T, Q, P>(
         for k in 0..rows {
             let start = slice_of(index, k, 0);
             let gathered = source.map_or_else(
-                // SAFETY: `run_index` is injective over `(index, k)`, as `StagedRuns` sets out,
-                // and the assert above keeps every run inside the leading coset, so no two tasks
-                // and no two iterations of one task reach the same element. The exclusive borrow
-                // the pointer came from outlives every task, since the pass returns only once
-                // all of them have run.
+                // SAFETY: `run_index` is injective over `(index, k)`, as `StagedRuns` sets out.
+                //
+                // The assert above keeps every run inside the leading coset.
+                //
+                // So no two tasks and no two iterations of one task reach the same element.
+                //
+                // The exclusive borrow the pointer came from outlives every task.
+                //
+                // The pass returns only once all of them have run.
                 || unsafe { base.slice(start, run) },
                 |source| &source[start..start + run],
             );
@@ -288,10 +310,13 @@ pub(crate) fn for_each_staged_tile_into_cosets<T, Q, P>(
             };
             process(staged.as_mut_slice(), block, coset);
             for (k, source) in staged.chunks_exact(run).enumerate() {
-                // SAFETY: the runs `slice_of` names for this tile are the leading coset's runs
-                // the assert above bounds, moved whole cosets along, so they stay disjoint across
-                // tasks, iterations and cosets, and inside `values` since every coset is
-                // `coset_len` long.
+                // SAFETY: the runs `slice_of` names for this tile are leading-coset runs.
+                //
+                // The assert above bounds them, and they are moved whole cosets along.
+                //
+                // So they stay disjoint across tasks, iterations and cosets.
+                //
+                // They stay inside the matrix, since every coset is one coset length long.
                 let target = unsafe { base.slice_mut(slice_of(index, k, coset), run) };
                 target.copy_from_slice(source);
             }

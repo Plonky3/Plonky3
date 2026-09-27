@@ -76,8 +76,10 @@ pub trait Layout<F: Field, EF: ExtensionField<F>>: Sized {
     ///
     /// The encoder then reads it where it lies, instead of from a copy the layout writes.
     ///
-    /// A returned slice must equal what [`Self::write_message`] writes into a zeroed buffer of
-    /// one cell per stacked evaluation, cell for cell, since it is committed in its place.
+    /// A returned slice is committed in place of what [`Self::write_message`] writes.
+    ///
+    /// It must therefore equal, cell for cell, what that writes into a zeroed buffer of one cell
+    /// per stacked evaluation.
     fn borrowed_message(_witness: &Witness<F>) -> Option<&[F]> {
         None
     }

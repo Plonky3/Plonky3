@@ -483,12 +483,13 @@ pub struct PackedWords<V> {
 }
 
 impl<V: PrimeCharacteristicRing + Coordinates> PackedWords<V> {
-    /// Zeroed elements holding `words` words, where the level can be written one word at a time.
+    /// Zeroed elements holding the given count of words, where the level takes whole words.
     ///
     /// # Returns
     ///
-    /// Nothing for a level narrower or less aligned than a word, or for a word count that
-    /// fills no whole number of elements.
+    /// Nothing for a level narrower or less aligned than a word.
+    ///
+    /// Nothing for a word count that fills no whole number of elements.
     #[must_use]
     pub fn zeroed(words: usize) -> Option<Self> {
         const {
@@ -514,13 +515,17 @@ impl<V> PackedWords<V> {
     pub fn words_mut(&mut self) -> &mut [u64] {
         assert!(Self::WORD_VIEW, "the elements are no run of words");
         let len = size_of_val(self.elements.as_slice()) / size_of::<u64>();
-        // SAFETY: `zeroed`, the only constructor, requires `V: Coordinates`, so the elements are
-        // a padding-free run of coordinates and every bit pattern of their bytes is a value, as
-        // it is of a word.
+        // SAFETY: the only constructor, `zeroed`, requires `V: Coordinates`.
         //
-        // The assert above puts the run on a word boundary and makes each element a whole
-        // number of words, so the view covers exactly the elements' bytes. It borrows them
-        // exclusively for as long as `self` is borrowed.
+        // The elements are therefore a padding-free run of coordinates.
+        //
+        // Every bit pattern of their bytes is a value, as it is of a word.
+        //
+        // The assert above puts the run on a word boundary and makes each element whole words.
+        //
+        // The view therefore covers exactly the elements' bytes.
+        //
+        // It borrows them exclusively for as long as the elements are borrowed.
         unsafe { slice::from_raw_parts_mut(self.elements.as_mut_ptr().cast::<u64>(), len) }
     }
 

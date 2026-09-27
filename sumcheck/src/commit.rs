@@ -103,8 +103,9 @@ where
 
 /// Encodes and Merkle-commits an initial base-field message the caller already holds.
 ///
-/// `message` is the committed polynomial laid out in the residual variable order, one cell per
-/// stacked evaluation, the cells [`commit_base`] would have its callback write.
+/// The message is the committed polynomial laid out in the residual variable order.
+///
+/// It holds one cell per stacked evaluation, the cells [`commit_base`] has its callback write.
 ///
 /// The encoder reads the message where it lies, and zero-pads it to codeword height itself.
 ///
@@ -114,7 +115,7 @@ where
 ///
 /// # Panics
 ///
-/// - `message` must hold a power of two cells, and at least one row of `2^folding` of them.
+/// - The message must hold a power of two cells, and at least one row of `2^folding` of them.
 pub fn commit_borrowed_base<F, E, MT>(
     encoder: &E,
     mmcs: &MT,

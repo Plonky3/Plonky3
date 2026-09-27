@@ -179,9 +179,11 @@ pub trait BooleanMultilinearPcs<EF, Challenger>: BooleanBackend<EF> {
 
     /// Commit to a bit witness written into packed words, bit `j` of word `w` being bit `64w + j`.
     ///
-    /// The elements holding the words are the packing [`Self::commit_bits`] builds. The default
-    /// hands the words over as bits; an implementation committing the elements as they are skips
-    /// that copy.
+    /// The elements holding the words are the packing [`Self::commit_bits`] builds.
+    ///
+    /// The default hands the words over as bits.
+    ///
+    /// An implementation committing the elements as they are skips that copy.
     ///
     /// # Errors
     ///
@@ -194,10 +196,13 @@ pub trait BooleanMultilinearPcs<EF, Challenger>: BooleanBackend<EF> {
         self.commit_bits(&packed.into_bits(), challenger)
     }
 
-    /// Zeroed elements a bit witness of `words` 64-bit words can be written into, packed.
+    /// Zeroed elements a bit witness of the given count of 64-bit words can be written into.
     ///
-    /// A witness written into them goes to [`Self::commit_packed`], and one this declines goes
-    /// to [`Self::commit_bits`] as words. The default declines every witness.
+    /// A witness written into them goes to [`Self::commit_packed`].
+    ///
+    /// A witness this declines goes to [`Self::commit_bits`] as words.
+    ///
+    /// The default declines every witness.
     #[must_use]
     fn packed_words(_words: usize) -> Option<PackedWords<Self::Val>> {
         None

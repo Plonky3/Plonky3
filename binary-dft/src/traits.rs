@@ -52,12 +52,16 @@ pub trait AdditiveNtt<F: TowerLevel> {
 
     /// Transforms a borrowed coefficient matrix zero-padded to `2^log_inv_rate` times its height.
     ///
-    /// `mat` is the unpadded matrix, and is left as it is. The result is what
-    /// [`ntt_batch_padded`](Self::ntt_batch_padded) makes of the padded one. The default copies
-    /// `mat` into a zeroed matrix of the padded height first; a transform that reads it where it
-    /// lies skips the copy.
+    /// The borrowed matrix is the unpadded one, and is left as it is.
+    ///
+    /// The result is what [`ntt_batch_padded`](Self::ntt_batch_padded) makes of the padded one.
+    ///
+    /// The default copies the matrix into a zeroed one of the padded height first.
+    ///
+    /// A transform that reads it where it lies skips the copy.
     ///
     /// # Panics
+    ///
     /// Panics for an invalid transform height or if the padded height overflows `usize`.
     fn ntt_batch_borrowed(
         &self,
