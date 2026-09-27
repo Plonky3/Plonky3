@@ -7,7 +7,7 @@ use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
 
 use super::*;
-use crate::sliced::SlicedGf4;
+use crate::sliced::{SLICED_LANES, SlicedGf4};
 
 type F = BinaryField128;
 type Quadratic = SlicedQuadratic<F>;
