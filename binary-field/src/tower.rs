@@ -150,6 +150,18 @@ macro_rules! binary_tower_level {
             /// Selects the bits of a canonical representative of the level below.
             const HALF_MASK: $repr = Self::MASK >> Self::HALF_BITS;
 
+            /// A run of elements read in place as the backing integers they wrap.
+            #[inline]
+            #[must_use]
+            pub const fn as_repr_slice(values: &[Self]) -> &[$repr] {
+                // SAFETY: the level is `#[repr(transparent)]` over its backing integer.
+                //
+                // A run of one is therefore a run of the other, of the same length and alignment.
+                //
+                // The view borrows the same elements for the same lifetime.
+                unsafe { core::slice::from_raw_parts(values.as_ptr().cast::<$repr>(), values.len()) }
+            }
+
             /// The coefficients `(a0, a1)` of `self = a0 + a1·X`.
             #[inline]
             pub(crate) fn split(self) -> ($lower, $lower) {
@@ -809,6 +821,24 @@ mod tests {
     use proptest::prelude::*;
 
     use super::*;
+
+    #[test]
+    fn a_run_read_as_integers_is_its_elements_backing_integers() {
+        macro_rules! check {
+            ($field:ty) => {
+                let values = (0..9u8)
+                    .map(|i| <$field>::from_u8(i.wrapping_mul(37)))
+                    .collect::<Vec<_>>();
+                let reprs = values.iter().map(|x| x.to_repr()).collect::<Vec<_>>();
+                assert_eq!(<$field>::as_repr_slice(&values), reprs.as_slice());
+            };
+        }
+        check!(BinaryField8);
+        check!(BinaryField16);
+        check!(BinaryField32);
+        check!(BinaryField64);
+        check!(BinaryField128);
+    }
 
     #[test]
     fn zero_vectors_preserve_layout_and_support_growth() {

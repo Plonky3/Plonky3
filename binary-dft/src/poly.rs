@@ -121,13 +121,6 @@ fn large_cosets(len: usize) -> bool {
     len >= 2 * BUTTERFLY_GRAIN * current_num_threads()
 }
 
-/// The tower-basis bit patterns of a run of elements, read where they lie.
-const fn reprs(values: &[BinaryField128]) -> &[u128] {
-    // SAFETY: `BinaryField128` is `#[repr(transparent)]` over `u128`, so a run of one is a run
-    // of the other with the same length and alignment, borrowed for the same lifetime.
-    unsafe { core::slice::from_raw_parts(values.as_ptr().cast::<u128>(), values.len()) }
-}
-
 /// A change of basis applied to a whole run of elements at once.
 ///
 /// The kernel behind it converts several elements together where the target allows.
@@ -1055,7 +1048,7 @@ impl AdditiveNtt<BinaryField128> for PolyBasisNtt {
         let mut values = alloc::vec![0u128; padded_message_len(len, log_inv_rate)];
         padded_sharing_first_group(
             &mut values,
-            Some(reprs(mat.values)),
+            Some(BinaryField128::as_repr_slice(mat.values)),
             plan,
             depth,
             log_inv_rate,
