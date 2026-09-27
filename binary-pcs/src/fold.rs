@@ -47,7 +47,8 @@
 //! Each change of basis is sixteen dependent byte-table lookups, so the wrapper dominates.
 //!
 //! One route therefore runs in the polynomial basis.
-//! It multiplies with the widest carryless-multiply register the target offers.
+//! It multiplies with the field's packing: the widest carryless-multiply register on `x86_64`,
+//! two elements side by side on AArch64.
 //!
 //! Symbols cross into that basis a block at a time and back a task at a time, so a target that
 //! changes the basis of many elements in one pass does so for every symbol the fold loads or
@@ -75,8 +76,9 @@ use p3_sumcheck::strategy::{FromTable, IntoTranscriptField};
 
 /// The polynomial-basis type the fold multiplies with.
 ///
-/// This is the widest carryless-multiply register the target offers.
-/// Where the target has none it is a single element, and every loop below still holds.
+/// On `x86_64` this is the widest carryless-multiply register the target offers, and on
+/// AArch64 two elements side by side.
+/// Where the target has neither it is a single element, and every loop below still holds.
 type Packed = <Ghash128 as Field>::Packing;
 
 /// How many output symbols one packed multiplication covers.
@@ -1318,7 +1320,7 @@ mod tests {
         // Widths swept here, none of them requiring the register that would carry them:
         //
         //     1   no packing
-        //     2   the 256-bit carryless multiply
+        //     2   the 256-bit carryless multiply, and the AArch64 pair
         //     4   the 512-bit carryless multiply
         //     8   past every packing this workspace defines
         //
