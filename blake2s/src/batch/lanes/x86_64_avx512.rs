@@ -12,6 +12,12 @@ pub(super) type Vector = __m512i;
 /// Lanes in one register.
 pub(super) const WIDTH: usize = 16;
 
+/// Independent register groups hashed together.
+///
+/// Two beat one and four here: one leaves the pipeline waiting on the dependency chains of
+/// G, and four spill the working vectors out of the 32 registers.
+pub(super) const GROUPS: usize = 2;
+
 // SAFETY (every block below): this module only compiles when the target enables AVX-512F.
 impl Word for __m512i {
     #[inline(always)]

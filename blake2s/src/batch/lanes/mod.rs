@@ -35,16 +35,12 @@ pub(super) type Vector = backend::Vector;
 /// Lanes in one register.
 const WIDTH: usize = backend::WIDTH;
 
-/// Independent register groups hashed together.
+/// Independent register groups hashed together, as many as this backend wants in flight.
 ///
-/// Two groups beat one and four on every x86-64 backend.
-///
-/// - One group leaves the pipeline waiting on the dependency chains of G.
-/// - Two groups overlap those chains.
-/// - Four groups spill the working vectors out of the register file.
-///
-/// NEON has the same 32-register budget as AVX-512, so it takes the same count.
-pub(super) const GROUPS: usize = 2;
+/// One group leaves the pipeline waiting on the dependency chains of G, and too many spill
+/// the working vectors out of the register file. Where the balance falls is a property of
+/// the target, so each backend carries its own count and the reason for it.
+pub(super) const GROUPS: usize = backend::GROUPS;
 
 /// Messages one batched compression advances at once.
 pub(crate) const LANES: usize = WIDTH * GROUPS;

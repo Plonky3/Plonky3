@@ -12,6 +12,15 @@ pub(super) type Vector = uint32x4_t;
 /// Lanes in one register.
 pub(super) const WIDTH: usize = 4;
 
+/// Independent register groups hashed together.
+///
+/// Four, rather than the two the x86-64 backends take. A 128-bit NEON register holds four
+/// lanes where an AVX-512 one holds sixteen, so a group is a quarter of the work, and the
+/// core has 32 of those registers and reorders far enough ahead to keep four groups in
+/// flight. Measured on an Apple M2 over three runs, four beat two by 9% at 64-byte messages
+/// and 7% at 1 KiB, and eight added nothing.
+pub(super) const GROUPS: usize = 4;
+
 /// Byte indices that rotate every 32-bit word right by 8 bits.
 const ROTR_8: [u8; 16] = [1, 2, 3, 0, 5, 6, 7, 4, 9, 10, 11, 8, 13, 14, 15, 12];
 

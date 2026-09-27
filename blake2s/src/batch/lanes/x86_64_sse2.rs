@@ -12,6 +12,12 @@ pub(super) type Vector = __m128i;
 /// Lanes in one register.
 pub(super) const WIDTH: usize = 4;
 
+/// Independent register groups hashed together.
+///
+/// Two beat one and four here: one leaves the pipeline waiting on the dependency chains of
+/// G, and four spill the working vectors out of the 16 registers.
+pub(super) const GROUPS: usize = 2;
+
 // SAFETY (every block below): SSE2 is part of the x86-64 baseline, and SSSE3 is checked.
 impl Word for __m128i {
     #[inline(always)]
