@@ -2605,10 +2605,11 @@ fn successor_planes(trace: &SlicedTrace<'_>) -> Planes<'static> {
 /// Every row pair a tile reads, in the tower's scalar rows and in the polynomial basis's lane
 /// groups, beside the plane fold of the two words it joins and of their successor words.
 ///
-/// One tile lays out every word pair in turn. A few words carry a high plane, so the tile's
-/// reads switch between the plane pairs and the low plane alone from one pair to the next. The
-/// prefixes span one and two corner groups, and the widths end in a partial block of staged
-/// columns. When every column is a successor column, across two runs, pair zero's only
+/// The tower's rows are read through tiles of every lane-group width a word divides into, from
+/// one lane to the whole word, whatever the target packs. One tile of each lays out every word
+/// pair in turn. A few words carry a high plane, so the tile's reads switch between the plane
+/// pairs and the low plane alone from one pair to the next. The prefixes span one, two and four
+/// corner groups, and the widths end in a partial block of staged columns. When every column is a successor column, across two runs, pair zero's only
 /// high-plane bit lies in its successor lane, past the last lane of its words.
 #[test]
 fn a_reused_tile_reads_the_plane_fold_of_every_row_pair() {
@@ -2646,7 +2647,8 @@ fn a_reused_tile_reads_the_plane_fold_of_every_row_pair() {
             (halves, poly_halves)
         };
         for next_columns in [vec![], vec![0..width / 2, width / 2..width]] {
-            let mut tower_tile = RowTile::new::<Tower>(tower.corners, width);
+            let mut tower_tiles = [1, 2, 4, 8, SLICED_LANES]
+                .map(|tile_lanes| RowTile::with_lanes(tower.corners, width, tile_lanes));
             let mut poly_tile = RowTile::new::<Ghash128>(poly.corners, width);
             let mut rows = Scratch::<Tower, Tower>::new(&[], &[], width, None);
             let mut groups = PackedScratch::<
@@ -2658,10 +2660,14 @@ fn a_reused_tile_reads_the_plane_fold_of_every_row_pair() {
                     "pair {pair}, prefix {prefix_len}, width {width}, {} successor runs",
                     next_columns.len()
                 );
-                tower_tile.fill(&tower, pair, &next_columns);
+                for tower_tile in &mut tower_tiles {
+                    tower_tile.fill(&tower, pair, &next_columns);
+                }
                 poly_tile.fill(&poly, pair, &next_columns);
                 let high = pair % 2 == 1 || (pair == 0 && !next_columns.is_empty());
-                assert_eq!(tower_tile.high, high, "{case}");
+                for tower_tile in &tower_tiles {
+                    assert_eq!(tower_tile.high, high, "{} lanes, {case}", tower_tile.lanes);
+                }
                 assert_eq!(poly_tile.high, high, "{case}");
                 let (cells, successors): (Vec<_>, Vec<_>) = (0..width)
                     .map(|column| {
@@ -2671,24 +2677,20 @@ fn a_reused_tile_reads_the_plane_fold_of_every_row_pair() {
                         )
                     })
                     .unzip();
-                for lane in 0..SLICED_LANES {
+                for (tower_tile, lane) in tower_tiles
+                    .iter()
+                    .flat_map(|tile| (0..SLICED_LANES).map(move |lane| (tile, lane)))
+                {
+                    let case = alloc::format!("lane {lane} of {} lanes, {case}", tower_tile.lanes);
                     tower_tile.read_row(&tower, lane, &next_columns, &mut rows);
                     for column in 0..width {
                         let ([lo, hi], _) = cells[column];
-                        assert_eq!(rows.local_point[column], lo[lane], "lane {lane}, {case}");
-                        assert_eq!(
-                            rows.local_diff[column],
-                            hi[lane] - lo[lane],
-                            "lane {lane}, {case}"
-                        );
+                        assert_eq!(rows.local_point[column], lo[lane], "{case}");
+                        assert_eq!(rows.local_diff[column], hi[lane] - lo[lane], "{case}");
                         if !next_columns.is_empty() {
                             let ([lo, hi], _) = successors[column];
-                            assert_eq!(rows.next_point[column], lo[lane], "lane {lane}, {case}");
-                            assert_eq!(
-                                rows.next_diff[column],
-                                hi[lane] - lo[lane],
-                                "lane {lane}, {case}"
-                            );
+                            assert_eq!(rows.next_point[column], lo[lane], "{case}");
+                            assert_eq!(rows.next_diff[column], hi[lane] - lo[lane], "{case}");
                         }
                     }
                 }

@@ -2220,7 +2220,15 @@ impl RowTile {
     ///
     /// When a lane group would straddle two words.
     fn new<R: Field>(corners: usize, width: usize) -> Self {
-        let lanes = R::Packing::WIDTH;
+        Self::with_lanes(corners, width, R::Packing::WIDTH)
+    }
+
+    /// [`Self::new`], in lane groups of `lanes` lanes.
+    ///
+    /// # Panics
+    ///
+    /// When a lane group would straddle two words.
+    fn with_lanes(corners: usize, width: usize, lanes: usize) -> Self {
         assert!(
             SLICED_LANES.is_multiple_of(lanes),
             "a lane group covers consecutive rows of one word"
@@ -2254,15 +2262,13 @@ impl RowTile {
     ///
     /// # Panics
     ///
-    /// Debug builds panic unless the tile was laid out for `fold`'s corner groups and width, and
-    /// for `R`'s lane groups.
+    /// Debug builds panic unless the tile was laid out for `fold`'s corner groups and width.
     fn fill<R: Field>(
         &mut self,
         fold: &PlaneFold<'_, R>,
         pair: usize,
         next_columns: &[Range<usize>],
     ) {
-        debug_assert_eq!(self.lanes, R::Packing::WIDTH);
         debug_assert_eq!(self.cell, ROW_HALVES * fold.groups);
         debug_assert_eq!(self.group_stride, fold.trace.width * self.lanes * self.cell);
         let words = [pair, pair + fold.words / ROW_HALVES];
