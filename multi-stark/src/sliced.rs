@@ -501,11 +501,16 @@ pub struct PreparedPowers<R>(kernel::Prepared<R>);
 impl<R: Field> PreparedPowers<R> {
     /// Lay out `alpha_powers` and their products with `generator`, the image of `g`.
     ///
+    /// The coordinates are read from `R`'s byte encoding, which must be linear over `F_2`:
+    /// sixteen bytes, and the encoding of a sum the XOR of the encodings. Preparing checks
+    /// the size, characteristic two, that zero encodes to zero, that a run of sums encodes to
+    /// the XOR of their terms, and that each element of the basis it solves for encodes to its
+    /// unit vector. That rejects a broken encoding it meets but does not prove a sound one.
+    ///
     /// # Returns
     ///
-    /// `None` where the target has no kernel, or when `R` is not a field of 128 coordinates
-    /// over `F_2` encoded one bit per coordinate. [`SlicedFolder`] then sums constraint by
-    /// constraint.
+    /// `None` where the target has no kernel, or when `R`'s encoding fails the checks.
+    /// [`SlicedFolder`] then sums constraint by constraint.
     #[must_use]
     pub fn new(alpha_powers: &[R], generator: R) -> Option<Self> {
         kernel::Prepared::new(alpha_powers, generator).map(Self)
@@ -544,7 +549,9 @@ pub struct SlicedFolder<'a, F, S, R> {
     alpha_powers: &'a [R],
     /// The lane weights every constraint is summed with.
     lanes: &'a LaneSums<R>,
-    /// Running lane-weighted, alpha-batched sum.
+    /// Running lane-weighted, alpha-batched sum, one constraint at a time.
+    ///
+    /// Beside the kernel only debug builds keep it, to check the kernel's sum against.
     accumulator: R,
     /// The same powers laid out for the kernel, which then sums in `lane_sums` instead.
     prepared: Option<&'a PreparedPowers<R>>,
@@ -649,7 +656,14 @@ impl<'a, F, S, R: Field> SlicedFolder<'a, F, S, R> {
             "attached alpha powers must match the number of asserted constraints"
         );
         let value = match self.prepared {
-            Some(prepared) => self.lane_sums.finish(prepared, self.lanes),
+            Some(prepared) => {
+                let value = self.lane_sums.finish(prepared, self.lanes);
+                debug_assert_eq!(
+                    value, self.accumulator,
+                    "the kernel must sum what the lane tables sum"
+                );
+                value
+            }
             None => self.accumulator,
         };
         SlicedEvaluation {
@@ -706,12 +720,14 @@ where
         let x = x.into();
         self.poisoned |= x.poisoned;
         // A constraint past the last power is only counted; the count check rejects it.
-        // Summed one at a time, a value that vanishes on every lane adds nothing, as a
-        // selector-gated one mostly does.
         if let Some(prepared) = self.prepared {
             self.lane_sums
                 .add(prepared, self.constraint_index, x.low, x.high);
-        } else if let Some(&power) = self.alpha_powers.get(self.constraint_index)
+        }
+        // Summed one at a time, a value that vanishes on every lane adds nothing, as a
+        // selector-gated one mostly does.
+        if (self.prepared.is_none() || cfg!(debug_assertions))
+            && let Some(&power) = self.alpha_powers.get(self.constraint_index)
             && (x.low | x.high) != 0
         {
             self.accumulator += power * self.lanes.sum(x.low, x.high);
@@ -815,6 +831,10 @@ mod kernel {
 
     /// Words one register holds.
     const REGISTER_WORDS: usize = 8;
+
+    // `UNIT`, `REVERSED`, `interleave` and `gather` repeat the constants of the ring-switch
+    // products kernel in `p3_sumcheck`'s `ring_switch::bits::products`, where `gather` is
+    // `transpose_words`. That kernel keeps them private, so a fix to either copy belongs in both.
 
     /// Quadword whose byte `i` is `1 << i`, the input that transposes a matrix operand.
     const UNIT: u64 = 0x8040_2010_0804_0201;
@@ -929,22 +949,46 @@ mod kernel {
 
     /// The elements whose encodings are the unit vectors, element `b` setting coordinate `b`.
     ///
+    /// # Returns
+    ///
+    /// `None` unless `R` has characteristic two and a sixteen-byte encoding that passes the
+    /// checks of [`basis_under`].
+    pub(super) fn coordinate_basis<R: Field>() -> Option<Box<[R; COORDINATES]>> {
+        if R::NUM_BYTES != BYTES || R::ONE + R::ONE != R::ZERO {
+            return None;
+        }
+        basis_under(coordinates::<R>)
+    }
+
+    /// The elements whose images under `encode` are the unit vectors.
+    ///
     /// The first 128 powers of a generator of a field of 128 coordinates span it. Reducing their
-    /// encodings to the identity, and adding the powers alongside, leaves each unit vector beside
-    /// the element it encodes.
+    /// images to the identity, and adding the powers alongside, leaves each unit vector beside
+    /// the element it encodes, provided `encode` is linear over `F_2`.
+    ///
+    /// Linearity is spot-checked, not proved: zero must encode to zero, each power plus the next
+    /// to the XOR of their images, and every element found to its unit vector.
     ///
     /// # Returns
     ///
-    /// `None` unless `R` has characteristic two and 128 coordinates, one per bit of its encoding.
-    fn coordinate_basis<R: Field>() -> Option<Box<[R; COORDINATES]>> {
-        if R::NUM_BYTES != BYTES || R::ONE + R::ONE != R::ZERO {
+    /// `None` when a check fails or the powers span fewer than 128 coordinates.
+    pub(super) fn basis_under<R: Field>(
+        encode: impl Fn(R) -> u128,
+    ) -> Option<Box<[R; COORDINATES]>> {
+        if encode(R::ZERO) != 0 {
             return None;
         }
         let mut rows = R::GENERATOR
             .powers()
             .take(COORDINATES)
-            .map(|power| (coordinates(power), power))
+            .map(|power| (encode(power), power))
             .collect::<Vec<_>>();
+        if !rows
+            .windows(2)
+            .all(|pair| encode(pair[0].1 + pair[1].1) == pair[0].0 ^ pair[1].0)
+        {
+            return None;
+        }
         for bit in 0..COORDINATES {
             let pivot = (bit..COORDINATES).find(|&row| (rows[row].0 >> bit) & 1 == 1)?;
             rows.swap(bit, pivot);
@@ -964,7 +1008,7 @@ mod kernel {
         if !basis
             .iter()
             .enumerate()
-            .all(|(bit, &element)| coordinates(element) == 1 << bit)
+            .all(|(bit, &element)| encode(element) == 1 << bit)
         {
             return None;
         }
@@ -1042,7 +1086,8 @@ mod kernel {
 
         /// Add constraint `index` with planes `low` and `high`.
         ///
-        /// Filling a block adds the one before it.
+        /// Filling a block adds the one before it. A constraint past the prepared powers adds
+        /// nothing, and the folder's count check rejects it.
         #[inline]
         pub(crate) fn add<R>(
             &mut self,
@@ -1051,6 +1096,9 @@ mod kernel {
             low: u64,
             high: u64,
         ) {
+            if index >= prepared.0.len {
+                return;
+            }
             self.planes[0][index % RING] = low;
             self.planes[1][index % RING] = high;
             if index % BLOCK == BLOCK - 1 && index >= BLOCK {
@@ -1085,8 +1133,7 @@ mod kernel {
 
         /// Add block `block` to the sums through its matrices, and clear its planes.
         ///
-        /// A plane on which the whole block vanishes adds nothing. A block past the prepared
-        /// powers holds constraints the folder's count check rejects, and adds nothing either.
+        /// A plane on which the whole block vanishes adds nothing.
         #[target_feature(enable = "avx512f,avx512bw,gfni")]
         fn flush<R>(&mut self, prepared: &Prepared<R>, block: usize) {
             let at = block % WAITING;
@@ -1100,9 +1147,7 @@ mod kernel {
             for ring in &mut self.planes {
                 ring.as_chunks_mut::<BLOCK>().0[at] = [0; BLOCK];
             }
-            let Some(matrices) = prepared.blocks.get(block) else {
-                return;
-            };
+            let matrices = &prepared.blocks[block];
             let mut sums = self.sums.map(|words| load(&words));
             for (&words, matrices) in planes.iter().zip(matrices) {
                 if _mm512_test_epi64_mask(words, words) == 0 {

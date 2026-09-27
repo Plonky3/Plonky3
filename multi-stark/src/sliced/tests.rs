@@ -104,55 +104,220 @@ proptest! {
     }
 }
 
-/// The kernel's batched sum of `count` random constraints beside the one-at-a-time sum.
-///
-/// Blocks of eight constraints take turns vanishing whole, clearing their high planes, and
-/// losing every third constraint.
+/// The byte-sliced kernel, on the targets that have it.
 #[cfg(all(
     target_arch = "x86_64",
     target_feature = "gfni",
     target_feature = "avx512f",
     target_feature = "avx512bw"
 ))]
-fn kernel_and_lane_sums<R>(seed: u64, count: usize) -> (R, R)
-where
-    R: Field + From<F>,
-    rand::distr::StandardUniform: rand::distr::Distribution<R>,
-{
-    let mut rng = SmallRng::seed_from_u64(seed);
-    let weights = (0..SLICED_LANES).map(|_| rng.random()).collect::<Vec<R>>();
-    let generator = R::from(F::from(S::GENERATOR));
-    let lanes = LaneSums::new(&weights, generator);
-    let powers = (0..count).map(|_| rng.random()).collect::<Vec<R>>();
-    let prepared =
-        PreparedPowers::new(&powers, generator).expect("the kernel takes a 128-bit binary field");
-    let mut sums = PreparedSums::new();
-    let mut expected = R::ZERO;
-    for (index, &power) in powers.iter().enumerate() {
-        let (low, high) = match ((index / 8) % 3, index % 3) {
-            (0, _) | (2, 0) => (0, 0),
-            (1, _) => (rng.random::<u64>(), 0),
-            _ => (rng.random::<u64>(), rng.random::<u64>()),
-        };
-        sums.add(&prepared, index, low, high);
-        expected += power * lanes.sum(low, high);
-    }
-    (sums.finish(&prepared, &lanes), expected)
-}
+mod kernel_tests {
+    use alloc::vec::Vec;
 
-#[cfg(all(
-    target_arch = "x86_64",
-    target_feature = "gfni",
-    target_feature = "avx512f",
-    target_feature = "avx512bw"
-))]
-proptest! {
+    use p3_air::{Air, AirBuilder, BaseAir, WindowAccess};
+    use p3_baby_bear::BabyBear;
+    use p3_binary_field::{Ghash128, Poly64, Poly192};
+    use p3_field::extension::BinomialExtensionField;
+    use p3_field::{Field, PrimeCharacteristicRing, RawDataSerializable};
+    use proptest::prelude::*;
+    use rand::distr::{Distribution, StandardUniform};
+    use rand::rngs::SmallRng;
+    use rand::{RngExt, SeedableRng};
+
+    use super::{F, S, Sliced};
+    use crate::selectors::BoundaryEvals;
+    use crate::sliced::{
+        LaneSums, PreparedPowers, PreparedSums, SLICED_LANES, SlicedEvaluation, SlicedFolder,
+        kernel,
+    };
+
+    /// `powers` laid out for the kernel.
+    fn prepared<R: Field>(powers: &[R], generator: R) -> PreparedPowers<R> {
+        PreparedPowers::new(powers, generator).expect("the kernel takes a 128-bit binary field")
+    }
+
+    /// The generator of `S` as an element of `R`.
+    fn generator<R: Field + From<F>>() -> R {
+        R::from(F::from(S::GENERATOR))
+    }
+
+    /// Random lane weights and their tables.
+    fn random_lanes<R>(rng: &mut SmallRng) -> LaneSums<R>
+    where
+        R: Field + From<F>,
+        StandardUniform: Distribution<R>,
+    {
+        let weights = (0..SLICED_LANES).map(|_| rng.random()).collect::<Vec<R>>();
+        LaneSums::new(&weights, generator())
+    }
+
+    /// Planes of a constraint in block `index / 8`, the blocks taking turns being zero, low
+    /// plane only, high plane only, and full but for every third constraint.
+    fn planes(rng: &mut SmallRng, index: usize) -> (u64, u64) {
+        match ((index / 8) % 4, index % 3) {
+            (0, _) | (3, 0) => (0, 0),
+            (1, _) => (rng.random(), 0),
+            (2, _) => (0, rng.random()),
+            _ => (rng.random(), rng.random()),
+        }
+    }
+
+    /// The kernel's sum of `count` random constraints, then `extra` more past the prepared
+    /// powers, beside the one-at-a-time sum of the first `count`.
+    fn kernel_and_lane_sums<R>(seed: u64, count: usize, extra: usize) -> (R, R)
+    where
+        R: Field + From<F>,
+        StandardUniform: Distribution<R>,
+    {
+        let mut rng = SmallRng::seed_from_u64(seed);
+        let lanes = random_lanes::<R>(&mut rng);
+        let powers = (0..count).map(|_| rng.random()).collect::<Vec<R>>();
+        let prepared = prepared(&powers, generator());
+        let mut sums = PreparedSums::new();
+        let mut expected = R::ZERO;
+        for index in 0..count + extra {
+            let (low, high) = planes(&mut rng, index);
+            sums.add(&prepared, index, low, high);
+            if let Some(&power) = powers.get(index) {
+                expected += power * lanes.sum(low, high);
+            }
+        }
+        (sums.finish(&prepared, &lanes), expected)
+    }
+
+    proptest! {
+        #[test]
+        fn prepared_powers_sum_as_the_lane_sums_do(
+            seed in any::<u64>(),
+            count in 0_usize..70,
+            extra in 0_usize..20,
+        ) {
+            let (kernel, expected) = kernel_and_lane_sums::<Ghash128>(seed, count, extra);
+            prop_assert_eq!(kernel, expected);
+            let (kernel, expected) = kernel_and_lane_sums::<F>(seed, count, extra);
+            prop_assert_eq!(kernel, expected);
+        }
+    }
+
+    /// Asserts every main column, then its product with the next one.
+    struct Columns(usize);
+
+    impl<T> BaseAir<T> for Columns {
+        fn width(&self) -> usize {
+            self.0
+        }
+    }
+
+    impl<AB: AirBuilder> Air<AB> for Columns {
+        fn eval(&self, builder: &mut AB) {
+            let main = builder.main();
+            let local = main.current_slice();
+            for (column, &value) in local.iter().enumerate() {
+                builder.assert_zero(value);
+                builder.assert_zero(value * local[(column + 1) % local.len()]);
+            }
+        }
+    }
+
+    /// One evaluation of `Columns(width)` over random planes against `powers` random powers,
+    /// with the kernel and without it.
+    fn folder_sums(
+        seed: u64,
+        width: usize,
+        powers: usize,
+    ) -> (SlicedEvaluation<Ghash128>, SlicedEvaluation<Ghash128>) {
+        let mut rng = SmallRng::seed_from_u64(seed);
+        let local = (0..width)
+            .map(|column| {
+                let (low, high) = planes(&mut rng, 2 * column);
+                Sliced::from_planes(low, high)
+            })
+            .collect::<Vec<_>>();
+        let lanes = random_lanes::<Ghash128>(&mut rng);
+        let powers = (0..powers).map(|_| rng.random()).collect::<Vec<Ghash128>>();
+        let prepared = prepared(&powers, generator());
+        let boundary = BoundaryEvals {
+            first: Sliced::ZERO,
+            last: Sliced::ZERO,
+            transition: Sliced::ONE,
+        };
+        let folder = || SlicedFolder::new(&local, &local, boundary, &[], &powers, &lanes);
+        let air = Columns(width);
+        (
+            folder().with_prepared_powers(&prepared).eval_air(&air),
+            folder().eval_air(&air),
+        )
+    }
+
+    proptest! {
+        #[test]
+        fn the_folder_sums_as_well_with_the_kernel(seed in any::<u64>(), width in 1_usize..40) {
+            let (kernel, lanes) = folder_sums(seed, width, 2 * width);
+            prop_assert!(!kernel.poisoned && !lanes.poisoned);
+            prop_assert_eq!(kernel.value, lanes.value);
+        }
+    }
+
     #[test]
-    fn prepared_powers_sum_as_the_lane_sums_do(seed in any::<u64>(), count in 0_usize..70) {
-        let (kernel, expected) = kernel_and_lane_sums::<Ghash128>(seed, count);
-        prop_assert_eq!(kernel, expected);
-        let (kernel, expected) = kernel_and_lane_sums::<F>(seed, count);
-        prop_assert_eq!(kernel, expected);
+    #[should_panic(
+        expected = "attached alpha powers must match the number of asserted constraints"
+    )]
+    fn a_constraint_past_the_prepared_powers_fails_the_count_check() {
+        let _ = folder_sums(1, 12, 23);
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "attached alpha powers must match the number of asserted constraints"
+    )]
+    fn a_prepared_power_left_over_fails_the_count_check() {
+        let _ = folder_sums(2, 12, 25);
+    }
+
+    /// The byte encoding of `value`, read as a little-endian word.
+    fn encoding<R: Field>(value: R) -> u128 {
+        let mut bytes = [0u8; 16];
+        for (slot, byte) in bytes.iter_mut().zip(value.into_bytes()) {
+            *slot = byte;
+        }
+        u128::from_le_bytes(bytes)
+    }
+
+    #[test]
+    fn a_binary_field_of_128_coordinates_has_a_coordinate_basis() {
+        let ghash = kernel::coordinate_basis::<Ghash128>().expect("GHASH is linear over F_2");
+        let tower = kernel::coordinate_basis::<F>().expect("the tower is linear over F_2");
+        for bit in 0..128 {
+            assert_eq!(encoding(ghash[bit]), 1 << bit);
+            assert_eq!(encoding(tower[bit]), 1 << bit);
+        }
+    }
+
+    #[test]
+    fn a_field_of_another_size_or_characteristic_has_no_coordinate_basis() {
+        assert_eq!(Poly64::NUM_BYTES, 8);
+        assert!(kernel::coordinate_basis::<Poly64>().is_none());
+        assert_eq!(Poly192::NUM_BYTES, 24);
+        assert!(kernel::coordinate_basis::<Poly192>().is_none());
+        // Sixteen bytes, but odd characteristic.
+        type Quartic = BinomialExtensionField<BabyBear, 4>;
+        assert_eq!(Quartic::NUM_BYTES, 16);
+        assert!(kernel::coordinate_basis::<Quartic>().is_none());
+    }
+
+    #[test]
+    fn a_nonlinear_encoding_has_no_basis() {
+        assert!(kernel::basis_under::<Ghash128>(encoding).is_some());
+        // Affine: zero does not encode to zero.
+        assert!(kernel::basis_under::<Ghash128>(|x| encoding(x) ^ 1).is_none());
+        // Zero to zero, but the top bit takes the product of the two lowest coordinates.
+        assert!(
+            kernel::basis_under::<Ghash128>(|x| {
+                let bits = encoding(x);
+                bits ^ ((bits & (bits >> 1) & 1) << 127)
+            })
+            .is_none()
+        );
     }
 }
 
