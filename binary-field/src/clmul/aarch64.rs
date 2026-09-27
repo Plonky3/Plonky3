@@ -281,8 +281,15 @@ impl SplitMultiplier {
     }
 
     /// Prepare a multiplier whose companion `t x^64 mod p` is already known.
+    ///
+    /// A companion that is not that product gives wrong products, so debug builds recompute it.
     #[inline(always)]
     pub(crate) fn from_parts(t: u128, companion: u128) -> Self {
+        debug_assert_eq!(
+            companion,
+            poly_mul_128(t, 1 << 64),
+            "the companion must be the multiplier times x^64"
+        );
         // SAFETY: this module is compiled only with the aes target feature, which implies neon.
         // Every bit pattern is valid in both the integer and vector representations.
         unsafe {
