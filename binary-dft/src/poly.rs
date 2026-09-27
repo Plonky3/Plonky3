@@ -4,16 +4,18 @@ use alloc::vec::Vec;
 
 use p3_binary_field::poly_basis::{LOW_STAGES, LowStageTwiddles};
 use p3_binary_field::{BinaryField128, TowerLevel, poly_basis};
+use p3_commit::zero_padded;
 use p3_field::PrimeCharacteristicRing;
 use p3_matrix::Matrix;
-use p3_matrix::dense::RowMajorMatrix;
+use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
 use p3_maybe_rayon::prelude::*;
 use p3_util::{log2_ceil_usize, log2_floor_usize, log2_strict_usize};
 
 use crate::domain::domain_point;
+use crate::encoder::padded_message_len;
 use crate::lch::BUTTERFLY_GRAIN;
 use crate::staging::{
-    Dispatch, StagedRuns, for_each_staged_tile, for_each_staged_tile_into_cosets,
+    Dispatch, StagedRuns, for_each_staged_tile, for_each_staged_tile_into_cosets, prefault,
 };
 use crate::traits::AdditiveNtt;
 
@@ -111,6 +113,22 @@ fn copy_coset(dst: &mut [u128], src: &[u128]) {
     } else {
         dst.copy_from_slice(src);
     }
+}
+
+/// Whether cosets of `len` elements are large enough to spread over every worker on their own.
+// The thread-count query is `const` only in the serial configuration, as for `use_parallel`.
+#[allow(clippy::missing_const_for_fn)]
+fn large_cosets(len: usize) -> bool {
+    len >= 2 * BUTTERFLY_GRAIN * current_num_threads()
+}
+
+/// The depth of the first staging group a borrowed message's cosets share, where they share one.
+///
+/// They share it when the encoding is padded, the target multiplies carrylessly, the cosets are
+/// large, and the plan stages a group at all.
+fn borrowed_first_group(plan: Plan, len: usize, log_inv_rate: usize) -> Option<usize> {
+    let shared = log_inv_rate > 0 && poly_basis::HAS_HARDWARE_CLMUL && large_cosets(len);
+    plan.group_sizes().next().filter(|_| shared)
 }
 
 /// A change of basis applied to a whole run of elements at once.
@@ -769,14 +787,24 @@ fn staged_group(
 
 /// Run the first staging group of every coset of a zero-padded message in one pass.
 ///
-/// `values` is one coset per twiddle set, the leading one holding the message in the tower
-/// basis. Every coset's transform starts from the message's coefficients, and its first group
-/// is its first read of every element. So one gather of the message serves every coset: the
-/// tile changes basis once, and each coset runs the group on its own copy of the tile and
-/// scatters it into its own slot. Neither a pass converting the message nor a copy of it into
-/// each coset is taken.
+/// The matrix holds one coset per twiddle set.
+///
+/// The message, in the tower basis, is the separate run when one is given, and the leading
+/// coset otherwise.
+///
+/// Every coset's transform starts from the message's coefficients.
+///
+/// Its first group is its first read of every element, so one gather of the message serves
+/// every coset.
+///
+/// The tile changes basis once, and each coset runs the group on its own copy of the tile.
+///
+/// Each coset then scatters its copy into its own slot.
+///
+/// Neither a pass converting the message nor a copy of it into each coset is taken.
 fn first_group_into_cosets(
     values: &mut [u128],
+    source: Option<&[u128]>,
     message_len: usize,
     plan: Plan,
     depth: usize,
@@ -786,6 +814,7 @@ fn first_group_into_cosets(
     let (runs, run, dispatch) = staged_group(plan, top, depth, values.len());
     for_each_staged_tile_into_cosets(
         values,
+        source,
         message_len,
         runs,
         dispatch,
@@ -796,15 +825,32 @@ fn first_group_into_cosets(
 
 /// Encode a zero-padded message whose cosets all share a first staging group of `depth`.
 ///
-/// `values` is `2^log_inv_rate` cosets of one message each, the leading one holding the
-/// message in the tower basis, and every coset comes back evaluated in the tower basis.
-fn padded_sharing_first_group(values: &mut [u128], plan: Plan, depth: usize, log_inv_rate: usize) {
+/// The matrix holds `2^log_inv_rate` cosets of one message each.
+///
+/// Every coset comes back evaluated in the tower basis.
+///
+/// The message, in the tower basis, is the separate run when one is given, and otherwise the
+/// leading coset holds it.
+fn padded_sharing_first_group(
+    values: &mut [u128],
+    source: Option<&[u128]>,
+    plan: Plan,
+    depth: usize,
+    log_inv_rate: usize,
+) {
     let log_message = plan.log_n;
     let len = values.len() >> log_inv_rate;
     let twiddles: Vec<Twiddles> = (0..1 << log_inv_rate)
         .map(|c| Twiddles::new(log_message, domain_point(c << log_message)))
         .collect();
-    first_group_into_cosets(values, len, plan, depth, &twiddles);
+    // The cosets the first group's scatter writes first hold zeros.
+    //
+    // A contiguous sweep faults their pages in beforehand.
+    //
+    // The leading coset is one of them unless it holds the message.
+    let first_written = if source.is_some() { 0 } else { len };
+    prefault(&mut values[first_written..]);
+    first_group_into_cosets(values, source, len, plan, depth, &twiddles);
     for_chunks(values, len, log_message, |(c, coset)| {
         forward_below(coset, plan, &twiddles[c], 1, Fold::EXIT);
     });
@@ -967,11 +1013,11 @@ impl AdditiveNtt<BinaryField128> for PolyBasisNtt {
             .map(BinaryField128::to_repr)
             .collect();
         let plan = Plan::new(width, log_message);
-        let large = len >= 2 * BUTTERFLY_GRAIN * p3_maybe_rayon::prelude::current_num_threads();
+        let large = large_cosets(len);
         if let Some(depth) = plan.group_sizes().next().filter(|_| large) {
             // Large cosets that stage their first group read the message once for all of them,
             // and every coset finishes on its own.
-            padded_sharing_first_group(&mut values, plan, depth, log_inv_rate);
+            padded_sharing_first_group(&mut values, None, plan, depth, log_inv_rate);
             mat.values = values.into_iter().map(BinaryField128::from_repr).collect();
             return mat;
         }
@@ -1005,6 +1051,34 @@ impl AdditiveNtt<BinaryField128> for PolyBasisNtt {
         }
         mat.values = values.into_iter().map(BinaryField128::from_repr).collect();
         mat
+    }
+
+    fn ntt_batch_borrowed(
+        &self,
+        mat: RowMajorMatrixView<'_, BinaryField128>,
+        log_inv_rate: usize,
+    ) -> RowMajorMatrix<BinaryField128> {
+        let width = mat.width;
+        let log_message = log2_strict_usize(mat.height());
+        let len = mat.values.len();
+        let plan = Plan::new(width, log_message);
+        // Only cosets that share their first group gather the message themselves.
+        //
+        // Any other encoding transforms a padded copy of it.
+        let Some(depth) = borrowed_first_group(plan, len, log_inv_rate) else {
+            return self.ntt_batch_padded(zero_padded(mat, log_inv_rate), log_inv_rate);
+        };
+        // Every coset is written in full by its first group, the leading one included.
+        let mut values = alloc::vec![0u128; padded_message_len(len, log_inv_rate)];
+        padded_sharing_first_group(
+            &mut values,
+            Some(BinaryField128::as_repr_slice(mat.values)),
+            plan,
+            depth,
+            log_inv_rate,
+        );
+        let values = values.into_iter().map(BinaryField128::from_repr).collect();
+        RowMajorMatrix::new(values, width)
     }
 
     fn shifted_lde_batch(
@@ -1082,11 +1156,13 @@ impl AdditiveNtt<BinaryField128> for PolyBasisNtt {
 
 #[cfg(test)]
 mod tests {
+    use alloc::format;
     use alloc::vec::Vec;
 
     use p3_binary_field::{BinaryField128, TowerLevel, poly_basis};
     use p3_field::PrimeCharacteristicRing;
     use p3_matrix::dense::RowMajorMatrix;
+    use p3_maybe_rayon::prelude::current_num_threads;
     use p3_util::log2_floor_usize;
     use proptest::prelude::*;
 
@@ -1744,10 +1820,25 @@ mod tests {
                     .collect();
                 let mut actual = message.clone();
                 actual.resize(len << log_cosets, 0);
-                super::first_group_into_cosets(&mut actual, len, plan, depth, &twiddles);
+                super::first_group_into_cosets(&mut actual, None, len, plan, depth, &twiddles);
                 for (c, coset) in actual.chunks_mut(len).enumerate() {
                     super::forward_below(coset, plan, &twiddles[c], 1, Fold::EXIT);
                 }
+
+                // The message gathered from a buffer of its own fills the leading coset too.
+                let mut separate = alloc::vec![0; len << log_cosets];
+                super::first_group_into_cosets(
+                    &mut separate,
+                    Some(message.as_slice()),
+                    len,
+                    plan,
+                    depth,
+                    &twiddles,
+                );
+                for (c, coset) in separate.chunks_mut(len).enumerate() {
+                    super::forward_below(coset, plan, &twiddles[c], 1, Fold::EXIT);
+                }
+                assert_eq!(separate, actual, "{plan:?} separate source");
 
                 for (c, coset) in actual.chunks(len).enumerate() {
                     let mut expected = message.clone();
@@ -1781,11 +1872,27 @@ mod tests {
                 let expected = tower.ntt_batch(mat.clone());
 
                 let mut values: Vec<u128> = mat.values.iter().map(|v| v.to_repr()).collect();
-                super::padded_sharing_first_group(&mut values, plan, depth, log_inv_rate);
+                let message = values[..values.len() >> log_inv_rate].to_vec();
+                super::padded_sharing_first_group(&mut values, None, plan, depth, log_inv_rate);
                 let actual: Vec<_> = values.into_iter().map(BinaryField128::from_repr).collect();
                 assert_eq!(
                     actual, expected.values,
                     "width={width} log_message={log_message} rate={log_inv_rate}"
+                );
+
+                // A message read from its own buffer encodes into a codeword left zero.
+                let mut values = alloc::vec![0; mat.values.len()];
+                super::padded_sharing_first_group(
+                    &mut values,
+                    Some(message.as_slice()),
+                    plan,
+                    depth,
+                    log_inv_rate,
+                );
+                let actual: Vec<_> = values.into_iter().map(BinaryField128::from_repr).collect();
+                assert_eq!(
+                    actual, expected.values,
+                    "borrowed width={width} log_message={log_message} rate={log_inv_rate}"
                 );
             }
         }
@@ -1805,6 +1912,80 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// Runs a check under a fixed pool of [`STAGED_WORKERS`] workers.
+    ///
+    /// That many workers stage a single column's first group.
+    ///
+    /// Every length past `2^13` elements then counts as large, whatever the host's own count.
+    #[cfg(feature = "parallel")]
+    fn with_staging_workers<R: Send>(check: impl FnOnce() -> R + Send) -> R {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(STAGED_WORKERS)
+            .build()
+            .unwrap()
+            .install(check)
+    }
+
+    /// Runs a check on the one worker a build without rayon has.
+    #[cfg(not(feature = "parallel"))]
+    fn with_staging_workers<R: Send>(check: impl FnOnce() -> R + Send) -> R {
+        check()
+    }
+
+    /// The transform of a borrowed message, and the transform of its zero-padded copy.
+    fn borrowed_and_padded(
+        width: usize,
+        log_message: usize,
+        log_inv_rate: usize,
+        seed: u64,
+    ) -> (
+        RowMajorMatrix<BinaryField128>,
+        RowMajorMatrix<BinaryField128>,
+    ) {
+        let message = matrix(log_message, width, seed);
+        let mut padded = message.clone();
+        padded
+            .values
+            .resize(padded.values.len() << log_inv_rate, BinaryField128::ZERO);
+        let borrowed = PolyBasisNtt::default().ntt_batch_borrowed(message.as_view(), log_inv_rate);
+        let padded = PolyBasisNtt::default().ntt_batch_padded(padded, log_inv_rate);
+        (borrowed, padded)
+    }
+
+    #[test]
+    fn a_borrowed_message_encodes_as_its_padding() {
+        // Small messages take the copy, and tall ones share their first group.
+        //
+        // A row of a whole line stages at any worker count, a single column from four workers.
+        // The route is asserted, so a host that would skip it fails instead of passing.
+        with_staging_workers(|| {
+            let workers = current_num_threads();
+            for (width, log_message, routed) in [
+                (1, 4, false),
+                (4, 6, false),
+                (4, 15, true),
+                (8, 14, true),
+                (1, 17, workers >= STAGED_WORKERS),
+            ] {
+                for log_inv_rate in 0..=2 {
+                    let label =
+                        format!("width={width} log_message={log_message} rate={log_inv_rate}");
+                    let plan = Plan::new(width, log_message);
+                    let len = width << log_message;
+                    assert_eq!(
+                        super::borrowed_first_group(plan, len, log_inv_rate).is_some(),
+                        routed && log_inv_rate > 0 && poly_basis::HAS_HARDWARE_CLMUL,
+                        "{label}"
+                    );
+
+                    let (borrowed, padded) =
+                        borrowed_and_padded(width, log_message, log_inv_rate, 31);
+                    assert_eq!(borrowed, padded, "{label}");
+                }
+            }
+        });
     }
 
     #[test]
@@ -1865,6 +2046,22 @@ mod tests {
 
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(32))]
+
+        /// A borrowed message transforms as its zero-padded copy does, at every width and rate.
+        ///
+        /// The pool is fixed, so the tall messages take the route that reads the message in place.
+        #[test]
+        fn a_borrowed_message_matches_its_padded_copy(
+            width in prop::sample::select(alloc::vec![1usize, 2, 3, 4, 8]),
+            log_message in 0usize..=13,
+            log_inv_rate in 0usize..=3,
+            seed in any::<u64>(),
+        ) {
+            let (borrowed, padded) = with_staging_workers(|| {
+                borrowed_and_padded(width, log_message, log_inv_rate, seed)
+            });
+            prop_assert_eq!(borrowed, padded);
+        }
 
         /// The polynomial-basis transform is the same map as the reference oracle.
         #[test]

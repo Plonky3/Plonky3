@@ -36,9 +36,10 @@ use p3_challenger::fs::TranscriptField;
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
 use p3_commit::Mmcs;
 use p3_field::{ExtensionField, Field};
+use p3_matrix::dense::RowMajorMatrix;
 use p3_multilinear_util::point::Point;
 use p3_security::multilinear::{bit_ring_switch_claim_batching_term, bit_ring_switch_tensors_term};
-use p3_sumcheck::layout::{Layout, SuffixProver};
+use p3_sumcheck::layout::{Layout, SuffixProver, Table};
 use p3_sumcheck::ring_switch::bits::{
     BitPacking, BitPackingView, BitRingSwitch, BitRingSwitchClaims,
 };
@@ -51,7 +52,7 @@ use p3_whir::{WhirDomain, WhirProver, WhirProverData};
 use crate::boolean::{BitOpening, BitReadings, BooleanBackend, BooleanMultilinearPcs};
 use crate::boolean_trace::BooleanTraceCommitment;
 use crate::fold::BitChallengeField;
-use crate::packing::{Coordinates, PackedStack};
+use crate::packing::{Coordinates, PackedStack, PackedWords, hypercube_variables};
 use crate::whir::error::BooleanWhirError;
 use crate::whir::proof::BooleanWhirProof;
 use crate::whir::shape::ProofShape;
@@ -303,6 +304,29 @@ where
         ProofShape::of_bit_readings(&self.inner, num_claims, successor_tensors)
     }
 
+    /// Commit to packed elements as the one column of the one table the layout stacks.
+    #[allow(clippy::type_complexity)]
+    fn commit_column(
+        &self,
+        elements: Vec<F>,
+        challenger: &mut Challenger,
+    ) -> Result<(MT::Commitment, BooleanWhirData<F, EF, MT>), BooleanWhirError> {
+        let actual = hypercube_variables(elements.len()).map_err(BooleanWhirError::Packing)?;
+        if actual != self.inner.num_variables() {
+            return Err(BooleanWhirError::WitnessArity {
+                expected: self.inner.num_variables(),
+                actual,
+            });
+        }
+
+        let len = elements.len();
+        let table = Table::new(RowMajorMatrix::new(elements, len));
+        let folding = self.inner.round_folding_factor(0);
+        let witness = Binding::<F, EF>::new_witness(vec![table], folding);
+        p3_commit::MultilinearPcs::<EF, Challenger>::commit(&self.inner, witness, challenger)
+            .map_err(BooleanWhirError::Commit)
+    }
+
     /// Open the bit witness with the readings every opening asks for, in one proof.
     ///
     /// No point needs prior transcript binding: each reduction binds its own.
@@ -463,17 +487,19 @@ where
         // The packing is one copy of the bits, so the witness is never swept for arithmetic.
         let stack = PackedStack::<PackedGf2<U>, F>::from_columns(&[bits])
             .map_err(BooleanWhirError::Packing)?;
-        if stack.column_num_variables() != self.inner.num_variables() {
-            return Err(BooleanWhirError::WitnessArity {
-                expected: self.inner.num_variables(),
-                actual: stack.column_num_variables(),
-            });
-        }
+        self.commit_column(stack.into_poly().into_evals(), challenger)
+    }
 
-        let folding = self.inner.round_folding_factor(0);
-        let witness = Binding::<F, EF>::new_witness(vec![stack.into_table()], folding);
-        p3_commit::MultilinearPcs::<EF, Challenger>::commit(&self.inner, witness, challenger)
-            .map_err(BooleanWhirError::Commit)
+    fn commit_packed(
+        &self,
+        packed: PackedWords<F>,
+        challenger: &mut Challenger,
+    ) -> Result<(Self::Commitment, Self::ProverData), Self::Error> {
+        self.commit_column(packed.into_elements(), challenger)
+    }
+
+    fn packed_words(words: usize) -> Option<PackedWords<F>> {
+        PackedWords::zeroed(words)
     }
 
     fn open_readings(
