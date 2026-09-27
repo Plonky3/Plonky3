@@ -1,5 +1,6 @@
 use alloc::vec;
 use alloc::vec::Vec;
+use core::cmp::Ordering;
 
 use p3_air::BaseAir;
 use p3_binary_field::{Ghash128, TowerLevel};
@@ -1352,6 +1353,120 @@ fn packed_tables_match_dense_on_the_late_boundary_path() {
                 run(&packed),
                 run(&dense),
                 "{} tables, height {height}, late {late}",
+                instances.len()
+            );
+        }
+    }
+}
+
+/// The complete transcript of a stage evaluated round by round on its planes: its sliced rounds,
+/// then the boundary round and its fold, then the representation rounds.
+fn boundary_transcript<const N: usize>(
+    mut state: RoundStateBase<'_, '_, FixtureAir, Tower, Tower>,
+    prefix: [Tower; N],
+) -> Rounds {
+    let tau = state.tau.as_slice().to_vec();
+    let eq_suffix = Poly::new_from_point(&tau[1..], Tower::ONE);
+    let first = state
+        .round_poly_sliced_with_strategy::<Gf4, Ghash128>(
+            &eq_suffix,
+            SlicedStrategy::TensorBoundaryLate,
+        )
+        .expect("the stage should fit the sliced path");
+    let mut state = state.fold_sliced::<Ghash128>(prefix[0]);
+    let boundary = DEFAULT_SLICED_ROUNDS;
+    let mut round_polys = vec![first];
+    for round in 1..tau.len() {
+        let suffix = Poly::new_from_point(&tau[round + 1..], Tower::ONE);
+        let round_poly = match round.cmp(&boundary) {
+            Ordering::Less => state
+                .round_poly_sliced::<Gf4>(&suffix)
+                .expect("the planes should serve the sliced rounds"),
+            Ordering::Equal => state
+                .round_poly_boundary::<Gf4>(&suffix)
+                .expect("the planes should serve the boundary round"),
+            Ordering::Greater => state.round_poly_repr(&suffix),
+        };
+        round_polys.push(round_poly);
+
+        let challenge = prefix
+            .get(round)
+            .copied()
+            .unwrap_or_else(|| challenge(round));
+        match round.cmp(&boundary) {
+            Ordering::Less => assert!(state.fold_sliced(challenge)),
+            Ordering::Equal => assert!(state.fold_boundary::<Gf4>(challenge)),
+            Ordering::Greater => state.fold_repr(challenge),
+        }
+    }
+    let openings = state
+        .into_openings()
+        .into_iter()
+        .map(|(_, opening)| {
+            [
+                opening.local,
+                opening.next,
+                opening.preprocessed_local,
+                opening.preprocessed_next,
+            ]
+        })
+        .collect();
+    (round_polys, openings)
+}
+
+/// A stage of packed Boolean tables that reads successor rows takes the boundary round and its
+/// fold on its low planes, successor lane and repeat-last tails included, to the dense stage's
+/// transcript.
+///
+/// A stage reading successor rows builds no tensor, so its sliced rounds run one at a time and
+/// the boundary round follows them on the planes. Random bits make every successor column vary
+/// from row to row; the transcript needs no valid witness.
+#[test]
+fn packed_successor_tables_match_dense_through_the_boundary_round() {
+    let prefix = [challenge(0), challenge(1), challenge(2), challenge(3)];
+    for height in [1 << 10, 1 << 11] {
+        let random_bits = |air, seed: u64| {
+            let mut instance = Instance::honest(air, height, seed);
+            let mut rng = SmallRng::seed_from_u64(seed);
+            for value in &mut instance.main.values {
+                *value = Tower::from_bool(rng.random());
+            }
+            instance
+        };
+        for instances in [
+            vec![random_bits(FixtureAir::QuadraticSuccessor, 0x5C11)],
+            vec![
+                random_bits(FixtureAir::Pair, 0x5C12),
+                random_bits(FixtureAir::QuadraticSuccessor, 0x5C13),
+            ],
+        ] {
+            let dense = instances
+                .iter()
+                .map(Instance::main_table)
+                .collect::<Vec<_>>();
+            let packed = dense.iter().map(packed_boolean_table).collect::<Vec<_>>();
+            let airs = instances
+                .iter()
+                .map(|instance| &instance.air)
+                .collect::<Vec<_>>();
+            let publics = instances
+                .iter()
+                .map(|instance| instance.public_values.as_slice())
+                .collect::<Vec<_>>();
+            let run = |main: &[Table<Tower>]| {
+                with_stage_state(
+                    &airs,
+                    &publics,
+                    &vec![None; airs.len()],
+                    &main.iter().collect::<Vec<_>>(),
+                    no_lookups(),
+                    |state, _| boundary_transcript(state, prefix),
+                )
+            };
+            assert_eq!(
+                run(&packed),
+                run(&dense),
+                "{} tables at height {height}",
                 instances.len()
             );
         }
