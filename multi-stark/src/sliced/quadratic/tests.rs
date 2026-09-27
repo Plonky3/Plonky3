@@ -162,6 +162,44 @@ proptest! {
     }
 
     #[test]
+    fn the_truncated_product_is_a_ring_product(
+        x in arb_parts(),
+        y in arb_parts(),
+        z in arb_parts(),
+    ) {
+        prop_assert_eq!(parts((x * y) * z), parts(x * (y * z)));
+        prop_assert_eq!(parts(x * (y + z)), parts(x * y + x * z));
+        prop_assert_eq!(parts(x * y), parts(y * x));
+    }
+
+    #[test]
+    fn cubic_intermediates_leave_the_quadratic_parts_exact(
+        quadratic in arb_quadratic(),
+        bits in arb_inputs(),
+        triple in prop::array::uniform3(0..INPUTS),
+    ) {
+        let x = bits.map(|words| Quadratic::from(Bit::new(words)));
+        let [i, j, k] = triple;
+        // The same cubic monomial twice, associated two ways, cancels in characteristic two.
+        let cubic = (x[i] * x[j]) * x[k] + x[i] * (x[j] * x[k]);
+        prop_assert_eq!(parts(quadratic.eval(x) + cubic), parts(quadratic.eval(x)));
+
+        // (a + 1)(b + 1)(c + 1) = abc + (ab + ac + bc) + (a + b + c) + 1, abc dropped.
+        let (a, b, c) = (bits[i], bits[j], bits[k]);
+        let one = Quadratic::ONE;
+        let product = (x[i] + one) * (x[j] + one) * (x[k] + one);
+        prop_assert_eq!(
+            parts(product),
+            (
+                xor(xor(and(a, b), and(a, c)), and(b, c)),
+                xor(xor(a, b), c),
+                u64::MAX,
+                false,
+            )
+        );
+    }
+
+    #[test]
     fn squaring_and_booleanity_match_the_product(x in arb_parts()) {
         prop_assert_eq!(parts(x.square()), parts(x * x));
         prop_assert_eq!(parts(x.bool_check()), parts(x * x - x));

@@ -6,8 +6,10 @@ use p3_air::BaseAir;
 use p3_binary_field::{Ghash128, TowerLevel};
 use p3_blake3_air::Blake3BinaryAir;
 use p3_field::{Field, HasSubfield, PrimeCharacteristicRing};
+use p3_lookup::InteractionSymbolicBuilder;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_multilinear_util::point::Point;
+use p3_sha256_air::Sha256BinaryAir;
 use proptest::prelude::{any, prop_assert_eq, prop_oneof, proptest};
 use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
@@ -2464,29 +2466,159 @@ fn infinity_tensor_rounds_match_the_interpolation_tensor() {
     }
 }
 
-#[test]
-fn infinity_tensor_rounds_match_the_interpolation_tensor_on_blake3() {
-    let height = 1 << 10;
+/// [`assert_infinity_rounds_match`] on a hash AIR's packed trace, and on the same trace with one
+/// bit flipped so that some row breaks a constraint.
+fn assert_hash_air_rounds_match<A>(air: &A, honest: RowMajorMatrix<u64>, log_height: usize)
+where
+    A: BaseAir<Tower>
+        + Air<InteractionSymbolicBuilder<Tower, Tower>>
+        + for<'b> Air<SlicedFolder<'b, Tower, Gf4, Ghash128>>
+        + for<'b> Air<SlicedQuadraticFolder<'b, Tower, Ghash128>>,
+{
     let no_publics: &[Tower] = &[];
+    let mut invalid = honest.clone();
+    invalid.values[3] ^= 1 << 17;
+    for trace in [honest, invalid] {
+        let main = Table::from_packed_bits(trace, log_height);
+        with_stage_state(
+            &[air],
+            &[no_publics],
+            &[None],
+            &[&main],
+            no_lookups(),
+            |state, _| assert_infinity_rounds_match(&state),
+        );
+    }
+}
+
+#[test]
+fn infinity_tensor_rounds_match_the_interpolation_tensor_on_the_hash_airs() {
+    let log_height = 10;
     for air in [
         Blake3BinaryAir::default(),
         Blake3BinaryAir::assuming_boolean_trace(),
     ] {
-        let honest = air.generate_random_trace_packed::<Tower>(height);
-        let mut invalid = honest.clone();
-        invalid.values[3] ^= 1 << 17;
-        for trace in [honest, invalid] {
-            let main = Table::from_packed_bits(trace, 10);
-            with_stage_state(
-                &[&air],
-                &[no_publics],
-                &[None],
-                &[&main],
-                no_lookups(),
-                |state, _| assert_infinity_rounds_match(&state),
+        let trace = air.generate_random_trace_packed::<Tower>(1 << log_height);
+        assert_hash_air_rounds_match(&air, trace, log_height);
+    }
+    for air in [
+        Sha256BinaryAir::default(),
+        Sha256BinaryAir::assuming_boolean_trace(),
+    ] {
+        let trace = air.generate_random_trace_packed::<Tower>(1 << log_height);
+        assert_hash_air_rounds_match(&air, trace, log_height);
+    }
+}
+
+#[test]
+fn infinity_tensor_rounds_match_at_special_points_over_several_words() {
+    // At 2^12 rows every prefix spans four words, weighted by the eq factor of two word variables.
+    let height = 1 << 12;
+    let mut invalid = Instance::honest(FixtureAir::BitQuadratic, height, 0x1F_0020);
+    invalid.main.values[4 * (height / 2 + 5) + 2] += Tower::ONE;
+    for instances in [
+        vec![Instance::honest(
+            FixtureAir::BitQuadratic,
+            height,
+            0x1F_0021,
+        )],
+        vec![invalid],
+        vec![Instance::honest(FixtureAir::Pair, height, 0x1F_0022)],
+    ] {
+        with_state(&instances, no_lookups(), |mut state, _| {
+            // Special coordinates on the tensor's own variables, a word variable, and a lane
+            // variable.
+            let mut tau = state.tau.as_slice().to_vec();
+            let lane = tau.len() - 1;
+            tau[1] = Tower::ONE;
+            tau[2] = gf4(2);
+            tau[3] = Tower::from_repr(0x4567);
+            tau[4] = Tower::ONE;
+            tau[lane] = gf4(3);
+            state.tau = Point::new(tau);
+            assert_infinity_rounds_match(&state);
+        });
+    }
+}
+
+#[test]
+fn infinity_tensor_leaves_a_zero_degree_slot_empty() {
+    let height = 1 << 10;
+    let instances = [Instance::honest(FixtureAir::Pair, height, 0x1F_0030)];
+    let empty = FixtureAir::Empty;
+    with_state(&instances, no_lookups(), |state, _| {
+        let trace = state.sliced_trace::<Gf4>().expect("the stage is sliced");
+        let pair = &state.slots[0];
+        let lift = |powers: &[Tower]| {
+            powers
+                .iter()
+                .map(|&power| Ghash128::from(power))
+                .collect::<Vec<_>>()
+        };
+        let alpha_powers = vec![lift(&state.alpha_powers[0]), vec![]];
+        let public_values = [state.public_values[0], &[]];
+        // The empty AIR reads the pair's first column and asserts nothing.
+        let slots = [
+            AirSlot {
+                air: pair.air,
+                stage_index: 0,
+                caller_index: 0,
+                main_offset: pair.main_offset,
+                main_width: pair.main_width,
+                preprocessed_offset: 0,
+                preprocessed_width: 0,
+                periodic_offset: 0,
+                periodic_width: 0,
+                main_next_columns: vec![],
+                preprocessed_next_columns: vec![],
+                constraint_degree: pair.constraint_degree,
+                interaction: None,
+            },
+            AirSlot {
+                air: &empty,
+                stage_index: 1,
+                caller_index: 1,
+                main_offset: 0,
+                main_width: 1,
+                preprocessed_offset: 0,
+                preprocessed_width: 0,
+                periodic_offset: 0,
+                periodic_width: 0,
+                main_next_columns: vec![],
+                preprocessed_next_columns: vec![],
+                constraint_degree: 0,
+                interaction: None,
+            },
+        ];
+        let tau = state.tau.as_slice();
+        let mixed = sliced_tensor_infinity::<FixtureAir, Tower, Tower, Ghash128>(
+            &trace,
+            &slots,
+            &public_values,
+            &alpha_powers,
+            tau,
+        )
+        .expect("the zero-degree slot is skipped, not poisoned");
+        let alone = sliced_tensor_infinity::<FixtureAir, Tower, Tower, Ghash128>(
+            &trace,
+            &slots[..1],
+            &public_values[..1],
+            &alpha_powers[..1],
+            tau,
+        )
+        .expect("the pair stage builds the infinity tensor");
+        assert_eq!(mixed.values[0], alone.values[0]);
+        assert!(mixed.values[1].iter().all(|&value| value == Tower::ZERO));
+        for round in 0..4 {
+            let challenges = [first_challenge(); 3];
+            let evals = tensor_round(&mixed, &slots, tau, &challenges[..round], round);
+            assert!(evals[1].is_empty());
+            assert_eq!(
+                evals[0],
+                tensor_round(&alone, &slots[..1], tau, &challenges[..round], round)[0]
             );
         }
-    }
+    });
 }
 
 #[test]
