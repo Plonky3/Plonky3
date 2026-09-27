@@ -2542,6 +2542,40 @@ fn infinity_tensor_rounds_match_at_special_points_over_several_words() {
 }
 
 #[test]
+fn infinity_tensor_refuses_a_slot_above_degree_two() {
+    // Both stages are bit-valued with bit constants, so only their degree keeps them off the
+    // infinity nodes: the quartic's transition has degree four, the periodic booleanity three.
+    let height = 1 << 10;
+    for air in [
+        FixtureAir::Quartic,
+        FixtureAir::Periodic {
+            period: [Tower::ZERO, Tower::ONE],
+        },
+    ] {
+        let instances = [Instance::honest(air, height, 0x1F_0040)];
+        with_state(&instances, no_lookups(), |state, _| {
+            assert!(state.slots.iter().any(|slot| slot.constraint_degree > 2));
+            let trace = state.sliced_trace::<Gf4>().expect("the stage is sliced");
+            let alpha_powers = state
+                .alpha_powers
+                .iter()
+                .map(|powers| powers.iter().map(|&power| Ghash128::from(power)).collect())
+                .collect::<Vec<Vec<_>>>();
+            assert!(
+                sliced_tensor_infinity::<FixtureAir, Tower, Tower, Ghash128>(
+                    &trace,
+                    &state.slots,
+                    &state.public_values,
+                    &alpha_powers,
+                    state.tau.as_slice(),
+                )
+                .is_none()
+            );
+        });
+    }
+}
+
+#[test]
 fn infinity_tensor_leaves_a_zero_degree_slot_empty() {
     let height = 1 << 10;
     let instances = [Instance::honest(FixtureAir::Pair, height, 0x1F_0030)];

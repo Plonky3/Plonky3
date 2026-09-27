@@ -249,7 +249,8 @@ const fn node_words(at_zero: u64, at_one: u64) -> [u64; SLICED_CELLS] {
 ///
 /// # Returns
 ///
-/// `None` when a cell lies outside `GF(2)` or a value outside `GF(2)` poisoned an evaluation.
+/// `None` when a slot's degree exceeds two, a cell lies outside `GF(2)`, or a value outside
+/// `GF(2)` poisoned an evaluation.
 #[tracing::instrument(skip_all, level = "debug", fields(round = 3))]
 pub(super) fn sliced_tensor_infinity<A, F, EF, R>(
     trace: &SlicedTrace<'_>,
@@ -266,14 +267,16 @@ where
 {
     let num_vars = trace.num_vars;
     debug_assert!(trace.rounds == DEPTH - 1 && tau.len() == num_vars);
+    // The tensor holds three nodes of each variable, which pin at most a quadratic, and the
+    // folder drops every part of degree three and up.
+    if slots.iter().any(|slot| slot.constraint_degree > 2) {
+        tracing::debug!("an AIR above degree two keeps the tensor off the infinity nodes");
+        return None;
+    }
     if !trace.cells.high_planes_clear() {
         tracing::debug!("a cell outside GF(2) keeps the tensor off the infinity nodes");
         return None;
     }
-    debug_assert!(
-        slots.iter().all(|slot| slot.constraint_degree <= 2),
-        "the tensor holds three nodes of each variable, which pin at most a quadratic"
-    );
 
     // Row variables split three ways: the tensor, the words of a corner block, and the lanes.
     let lane_weights = Poly::new_from_point(&tau[num_vars - LANE_VARIABLES..], EF::ONE);
