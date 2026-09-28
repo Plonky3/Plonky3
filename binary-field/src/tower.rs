@@ -704,6 +704,42 @@ binary_tower_level!(
     reference_try_inverse
 );
 
+/// A mutable integer view, for each level whose backing integer has no spare bits.
+///
+/// Every integer of such a width is a canonical element, so no write through the view breaks one.
+///
+/// The narrower levels keep spare high bits clear, so they get no mutable view.
+macro_rules! full_width_repr_view {
+    ($($name:ident: $repr:ty),* $(,)?) => {$(
+        impl $name {
+            /// A run of elements written in place as the backing integers they wrap.
+            #[inline]
+            #[must_use]
+            pub const fn as_repr_slice_mut(values: &mut [Self]) -> &mut [$repr] {
+                const { assert!(Self::BITS == <$repr>::BITS as usize) };
+                // SAFETY: the level is `#[repr(transparent)]` over its backing integer.
+                //
+                // A run of one is therefore a run of the other, of the same length and alignment.
+                //
+                // The integer has exactly the level's width, so any integer written back is a canonical element.
+                //
+                // The view borrows the same elements exclusively for the same lifetime.
+                unsafe {
+                    core::slice::from_raw_parts_mut(values.as_mut_ptr().cast::<$repr>(), values.len())
+                }
+            }
+        }
+    )*};
+}
+
+full_width_repr_view!(
+    BinaryField8: u8,
+    BinaryField16: u16,
+    BinaryField32: u32,
+    BinaryField64: u64,
+    BinaryField128: u128,
+);
+
 impl BinaryField8 {
     /// Multiplication through the `GF(2^8)` log and exponential tables.
     #[inline]
@@ -838,6 +874,29 @@ mod tests {
         check!(BinaryField32);
         check!(BinaryField64);
         check!(BinaryField128);
+    }
+
+    #[test]
+    fn a_run_written_as_integers_holds_the_elements_of_those_integers() {
+        macro_rules! check {
+            ($field:ty, $repr:ty) => {
+                let mut values = <$field>::zero_vec(9);
+
+                // Every integer written through the view, the top bit included, is the element read back.
+                for (i, word) in <$field>::as_repr_slice_mut(&mut values).iter_mut().enumerate() {
+                    *word = <$repr>::MAX.wrapping_mul(i as $repr).rotate_left(i as u32);
+                }
+                for (i, value) in values.iter().enumerate() {
+                    let expected = <$repr>::MAX.wrapping_mul(i as $repr).rotate_left(i as u32);
+                    assert_eq!(value.to_repr(), expected);
+                }
+            };
+        }
+        check!(BinaryField8, u8);
+        check!(BinaryField16, u16);
+        check!(BinaryField32, u32);
+        check!(BinaryField64, u64);
+        check!(BinaryField128, u128);
     }
 
     #[test]

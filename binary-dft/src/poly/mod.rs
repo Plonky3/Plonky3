@@ -32,14 +32,6 @@ use crate::traits::{AdditiveNtt, padded_len};
 #[derive(Clone, Copy, Debug, Default)]
 pub struct PolyBasisNtt;
 
-/// View tower-basis elements as their bit patterns, in place.
-const fn as_words(values: &mut [BinaryField128]) -> &mut [u128] {
-    // SAFETY: the element is a transparent wrapper over a 128-bit word.
-    //
-    // Every word is a valid element, so any write through the view leaves valid elements.
-    unsafe { core::slice::from_raw_parts_mut(values.as_mut_ptr().cast::<u128>(), values.len()) }
-}
-
 /// Whether cosets of `len` elements are large enough to spread over every worker on their own.
 // The serial pool exposes a `const` thread count and the parallel one does not.
 #[allow(clippy::missing_const_for_fn)]
@@ -67,7 +59,12 @@ impl AdditiveNtt<BinaryField128> for PolyBasisNtt {
         let plan = Plan::new(mat.width(), log2_strict_usize(mat.height()));
 
         // Both basis changes ride on the transform's first and last touch of each element.
-        forward(as_words(&mut mat.values), plan, shift, Fold::BOTH);
+        forward(
+            BinaryField128::as_repr_slice_mut(&mut mat.values),
+            plan,
+            shift,
+            Fold::BOTH,
+        );
         mat
     }
 
@@ -82,7 +79,12 @@ impl AdditiveNtt<BinaryField128> for PolyBasisNtt {
         let plan = Plan::new(mat.width(), log2_strict_usize(mat.height()));
 
         // Both basis changes ride on the transform's first and last touch of each element.
-        inverse(as_words(&mut mat.values), plan, shift, Fold::BOTH);
+        inverse(
+            BinaryField128::as_repr_slice_mut(&mut mat.values),
+            plan,
+            shift,
+            Fold::BOTH,
+        );
         mat
     }
 
@@ -98,7 +100,7 @@ impl AdditiveNtt<BinaryField128> for PolyBasisNtt {
         }
         let log_message = log_n - log_inv_rate;
         let plan = Plan::new(mat.width(), log_message);
-        let values = as_words(&mut mat.values);
+        let values = BinaryField128::as_repr_slice_mut(&mut mat.values);
         let len = values.len() >> log_inv_rate;
         let large = large_cosets(len);
 
@@ -150,7 +152,7 @@ impl AdditiveNtt<BinaryField128> for PolyBasisNtt {
         // Every coset is written in full by its first group, the leading one included.
         let mut values = BinaryField128::zero_vec(padded_len(len, log_inv_rate));
         padded_sharing_first_group(
-            as_words(&mut values),
+            BinaryField128::as_repr_slice_mut(&mut values),
             Some(BinaryField128::as_repr_slice(mat.values)),
             plan,
             depth,
@@ -183,13 +185,13 @@ impl AdditiveNtt<BinaryField128> for PolyBasisNtt {
         //
         // Every further coset starts from a copy of them.
         let plan = Plan::new(width, log_n);
-        let coeffs = as_words(&mut mat.values);
+        let coeffs = BinaryField128::as_repr_slice_mut(&mut mat.values);
         inverse(coeffs, plan, shift, Fold::ENTRY);
         let coeffs: &[u128] = coeffs;
 
         // Coset c + 1 of the extended domain starts at domain point (c + 1) * 2^log_n.
         for_chunks(
-            &mut as_words(&mut extended)[len..],
+            &mut BinaryField128::as_repr_slice_mut(&mut extended)[len..],
             len,
             log_n,
             |(c, chunk)| {
