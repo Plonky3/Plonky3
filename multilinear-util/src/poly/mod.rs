@@ -20,20 +20,25 @@ pub(crate) use self::eq_table::{tensor_packed, tensor_unpacked};
 use crate::point::Point;
 use crate::split_eq::SplitEq;
 
-/// Number of variables from which evaluation goes through the factored `SplitEq` path.
+/// Number of variables from which evaluation over the base `F` goes through the factored `SplitEq` path.
 ///
 /// Below it, the unrolled scalar recursion wins.
-/// Measured on x86-64 (AVX-512 and AVX2 packings), base polynomial, time per call:
+///
+/// Measured on x86-64 (AVX-512 and AVX2 packings), base polynomial, recursive / split time per call in us:
 ///
 /// ```text
-///     base field            n = 8 recursive / split     n = 9 recursive / split
-///     BabyBear, EF4         0.73 / 0.86 us              1.06 / 0.91 us
-///     Goldilocks, EF2       0.52 / 0.66 us              1.04 / 0.81 us
-///     GF(2^64), GF(2^192)   0.60 / 0.94 us              1.20 / 0.58 us
+///     base field                  n = 8           n = 9           n = 10
+///     BabyBear, EF4               0.73 / 0.86     1.06 / 0.91     -
+///     Goldilocks, EF2             0.52 / 0.66     1.04 / 0.81     -
+///     GF(2^64), GF(2^192), W = 1  0.98 / 1.08     1.95 / 1.96     3.90 / 3.76
 /// ```
 ///
-/// Every base width crosses at the same count, so one constant serves them all.
-const MLE_RECURSION_THRESHOLD: usize = 9;
+/// A packing of several lanes makes the split win from 9 variables, whatever the base width.
+///
+/// A one-lane packing gains no SIMD from the split, so it keeps the recursion one variable longer.
+const fn mle_recursion_threshold<F: Field>() -> usize {
+    if F::Packing::WIDTH > 1 { 9 } else { 10 }
+}
 
 /// Represents a multilinear polynomial `f` in `n` variables, stored by its evaluations
 /// over the boolean hypercube `{0,1}^n`.
@@ -780,7 +785,7 @@ where
     #[must_use]
     #[inline]
     pub fn eval_base<EF: ExtensionField<F>>(&self, point: &Point<EF>) -> EF {
-        if point.num_variables() < MLE_RECURSION_THRESHOLD {
+        if point.num_variables() < mle_recursion_threshold::<F>() {
             eval_multilinear_recursive(self.as_slice(), point.as_slice())
         } else {
             SplitEq::new_packed(point, EF::ONE).eval_base(self.as_view())
@@ -817,7 +822,7 @@ where
     where
         F: ExtensionField<BaseField>,
     {
-        if point.num_variables() < MLE_RECURSION_THRESHOLD {
+        if point.num_variables() < mle_recursion_threshold::<BaseField>() {
             eval_multilinear_recursive(self.as_slice(), point.as_slice())
         } else {
             SplitEq::new_packed(point, F::ONE).eval_ext(self.as_view())
@@ -965,7 +970,7 @@ where
             // Split the evaluations into two halves, corresponding to the first variable being 0 or 1.
             let (f0, f1) = evals.split_at(evals.len() / 2);
 
-            // Sequential recurse: callers gate this below `MLE_RECURSION_THRESHOLD` variables.
+            // Sequential recurse: callers gate this below `mle_recursion_threshold` variables.
             //
             // The table is then small enough that a rayon `join` would cost more than it saves.
             let f0_eval = eval_multilinear_recursive(f0, sub_point);
@@ -2537,7 +2542,7 @@ pub(crate) mod test {
         ) {
             // Prime field, 16 lanes on AVX-512, degree 4.
             check_eq_builders::<F, EF>(num_variables, seed);
-            // Binary field, 4 lanes on AVX2, degree 3 over GF(2^64).
+            // Binary field, degree 3 over GF(2^64), whose packing may be a single lane.
             check_eq_builders::<Poly64, Poly192>(num_variables, seed);
         }
     }

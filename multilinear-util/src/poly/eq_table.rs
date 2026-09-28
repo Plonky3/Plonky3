@@ -108,13 +108,16 @@ pub(crate) fn split_low<EF>(point: &[EF], min_low: usize) -> (&[EF], &[EF]) {
 
 /// Bytes one tensor row is charged, for a row of `packed_len` packed products.
 ///
-/// A packed product multiplies all `W` lanes in about the time one extension
-/// multiply-accumulate is charged, measured at 10 ns for a degree-4 prime extension on
-/// AVX-512 and 4.6 ns for `GF(2^192)` on AVX2.
+/// A packed product multiplies all `W` lanes in about the time one extension multiply-accumulate is charged.
+///
+/// Measured per packed product on x86-64:
+/// - 10 ns for a degree-4 prime extension, 16 lanes on AVX-512,
+/// - 4.8 ns for `GF(2^192)`, one lane on PCLMULQDQ.
 ///
 /// Unpacking the lanes as they are stored costs about as much again, so it doubles the charge.
 ///
 /// Pricing each product by its packed width instead overcharges by `W`.
+///
 /// That splits tables worth a few microseconds, and the dispatch then costs more than the work.
 const fn row_bytes<EF>(packed_len: usize, passes: usize) -> usize {
     passes * MUL_ACC_BYTES * size_of::<EF>() * packed_len
