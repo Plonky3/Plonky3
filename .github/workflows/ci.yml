@@ -120,12 +120,14 @@ jobs:
             os: ubuntu-latest
             features: "+avx2,+vpclmulqdq"
             compile_only: true
+            miri_clmul: true
             target: x86_64-unknown-linux-gnu
             modes: serial parallel
           - name: linux, avx512f+vpclmulqdq, build only
             os: ubuntu-latest
             features: "+avx512f,+vpclmulqdq"
             compile_only: true
+            miri_clmul: true
             target: x86_64-unknown-linux-gnu
             modes: serial parallel
           # `+avx512f` does not imply `+avx512vl`, yet every AVX-512 server with VPCLMULQDQ has it.
@@ -360,6 +362,41 @@ jobs:
             cargo +nightly miri test --package p3-binary-field --lib \
               clmul::x86_64::gfni::tests::the_matrix_product_is_exact_on_the_basis
           fi
+
+      # Neither wide carryless-multiply leg can run its tests on the runner's own processor.
+      #
+      # The interpreter has shims for the 256- and 512-bit `vpclmulqdq` and for every lane move the packings use.
+      #
+      # So the corner differentials, the interleaves, the transposes and the shared extension suite run here, on every host.
+      #
+      # The proptests around them take minutes under interpretation, so they stay out.
+      #
+      # The `avx512vl` leg stays out too: the interpreter has no shim for its ternary logic op.
+      - uses: dtolnay/rust-toolchain@nightly
+        if: >-
+          needs.plan.outputs.rust == 'true' &&
+          matrix.miri_clmul &&
+          needs.plan.outputs.gfni == 'true'
+        with:
+          components: miri
+
+      - name: Interpret binary-field (x86-64 VPCLMULQDQ)
+        if: >-
+          needs.plan.outputs.rust == 'true' &&
+          matrix.miri_clmul &&
+          needs.plan.outputs.gfni == 'true'
+        env:
+          MIRIFLAGS: -Zmiri-disable-isolation
+        run: |
+          cargo +nightly miri test --package p3-binary-field --lib -- --exact \
+            packed::x86_64::ghash128::tests::the_register_matches_the_scalar_model_at_the_corners \
+            packed::x86_64::ghash128::tests::bool_check_matches_the_general_product_in_every_lane \
+            packed::x86_64::ghash128::tests::packed_field_tests::test_interleaves \
+            packed::x86_64::poly64::tests::every_lane_matches_the_scalar_field_at_the_corners \
+            packed::x86_64::poly64::tests::packed_field_tests::test_interleaves \
+            packed::x86_64::poly192::tests::every_lane_matches_the_scalar_field_at_the_corners \
+            packed::x86_64::poly192::tests::the_shared_packed_extension_suite_passes \
+            packed::x86_64::lanes::triples::tests::the_plans_round_trip_at_both_widths
 
   check_embedded:
     name: Build embedded
