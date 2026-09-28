@@ -312,11 +312,11 @@ impl Field for Poly192 {
 
         // The cofactors along the top row.
         let c0 = diagonal.square() + a1.square() + a1 * a2;
-        let c1 = a1 * diagonal + (a1 + a2) * a2;
+        let c1 = Poly64::dot_product::<2>(&[a1, a1 + a2], &[diagonal, a2]);
         let c2 = a1.square() + diagonal * a2;
 
         // Expanding along that row gives the determinant.
-        let norm = a0 * c0 + a2 * c1 + a1 * c2;
+        let norm = Poly64::dot_product::<3>(&[a0, a2, a1], &[c0, c1, c2]);
 
         // Every step runs whatever the operand is, so the cost says nothing about the value.
         let candidate = Self([c0, c1, c2]) * norm.invert_or_zero();

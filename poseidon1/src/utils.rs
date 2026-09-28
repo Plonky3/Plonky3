@@ -69,7 +69,7 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use p3_field::{Field, dot_product};
+use p3_field::Field;
 
 /// Expand a circulant matrix from its first column into a dense NxN matrix.
 ///
@@ -82,7 +82,7 @@ pub fn circulant_to_dense<F: Field, const N: usize>(first_col: &[i64; N]) -> [[F
 /// Dense NxN matrix multiplication: `C = A * B`.
 fn matrix_mul<F: Field, const N: usize>(a: &[[F; N]; N], b: &[[F; N]; N]) -> [[F; N]; N] {
     core::array::from_fn(|i| {
-        core::array::from_fn(|j| dot_product(a[i].iter().copied(), (0..N).map(|k| b[k][j])))
+        core::array::from_fn(|j| F::dot_product(&a[i], &core::array::from_fn(|k| b[k][j])))
     })
 }
 
@@ -268,7 +268,7 @@ fn compute_equivalent_matrices<F: Field, const N: usize>(
         // Stored in a flat [F; N] array, padded with zero at index N-1.
         let w_hat_arr: [F; N] = core::array::from_fn(|i| {
             if i < N - 1 {
-                dot_product(m_hat_inv[i].iter().copied(), w.iter().copied())
+                F::batched_linear_combination(&m_hat_inv[i], &w)
             } else {
                 F::ZERO
             }

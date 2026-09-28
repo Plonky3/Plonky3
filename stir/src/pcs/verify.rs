@@ -585,11 +585,13 @@ where
                         // `point_data` is keyed by the commitment's full claim order, which
                         // `group_mats` maps back to.
                         let claim_idx = group_mats[mat_idx];
-                        let p_x: Challenge = row_vals_by_mat[mat_idx]
-                            .iter()
-                            .zip(alpha_powers.iter())
-                            .map(|(&v, &ap)| ap * v)
-                            .sum();
+                        let row = &row_vals_by_mat[mat_idx];
+                        // Only the overlap of the opened row and the alpha powers contributes.
+                        let width = row.len().min(alpha_powers.len());
+                        let p_x = Challenge::batched_linear_combination(
+                            &alpha_powers[..width],
+                            &row[..width],
+                        );
 
                         let ro_class = &mut expected_ro_by_class[mat_class_indices[mat_idx]];
 

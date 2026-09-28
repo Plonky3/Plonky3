@@ -251,11 +251,7 @@ impl<EF: Field + Coordinates, B> MixedTraceCommitment<EF, B> {
                                 values[range.start]
                             } else {
                                 // v(r) = sum_k c_k(r) * e_k
-                                values[range]
-                                    .iter()
-                                    .zip(&self.basis)
-                                    .map(|(&value, &element)| value * element)
-                                    .sum()
+                                EF::batched_linear_combination(&values[range], &self.basis)
                             }
                         })
                         .collect()

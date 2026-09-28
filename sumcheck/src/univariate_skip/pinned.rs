@@ -283,11 +283,7 @@ impl<F: Field> PinnedEqWeights<F> {
         assert_eq!(block.len(), self.weights.len(), "one value per weight");
 
         // The weights are fixed, so this is a plain inner product over the block.
-        block
-            .iter()
-            .zip(&self.weights)
-            .map(|(&value, &weight)| value * weight)
-            .sum()
+        A::batched_linear_combination(block, &self.weights)
     }
 
     /// Combine every block of a slice under the pinned weights.

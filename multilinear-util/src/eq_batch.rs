@@ -54,7 +54,6 @@ use alloc::vec::Vec;
 
 use p3_field::{
     Algebra, ExtensionField, Field, PackedFieldExtension, PackedValue, PrimeCharacteristicRing,
-    dot_product,
 };
 use p3_matrix::Matrix;
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
@@ -214,10 +213,7 @@ where
     // Compute ∑_i γ_i * z_{i,0}
     //
     // This gives us eq_sum(1) directly since eq(1, z) = z
-    let eq_1_sum: FP = dot_product(
-        scalars.iter().map(|s| s.dup()),
-        evals.values.iter().copied(),
-    );
+    let eq_1_sum = FP::batched_linear_combination(scalars, evals.values);
 
     // Use the identity: eq(0, z_i) = 1 - z_i.
     //
@@ -527,22 +523,38 @@ impl<F: Field, EF: ExtensionField<F>> EqualityEvaluator for BaseFieldEvaluator<F
             return;
         }
 
-        // Iterate through each lane of the packed values (from 0 to WIDTH-1).
+        // Every lane shares the same scalars, so broadcast them and work on all lanes at once:
         //
-        // For each lane `k`, we compute the dot product across the entire batch.
-        for (k, out_val) in out.iter_mut().enumerate() {
-            // This computes: ∑_i scalars[i] * final_packed_evals[i][k]
-            let dot_product = scalars
-                .iter()
-                .zip(final_packed_evals)
-                .map(|(&scalar, packed_eval)| scalar * packed_eval.as_slice()[k])
-                .sum::<Self::OutputField>();
+        //     packed_sum = sum_i broadcast(scalars[i]) * final_packed_evals[i]
+        //     lane k of packed_sum = sum_i scalars[i] * final_packed_evals[i][k]
+        //
+        // Blocks of 8 go through the extension-by-base dot product on stack arrays.
+        const BLOCK: usize = 8;
+        let (scalar_blocks, scalar_tail) = scalars.as_chunks::<BLOCK>();
+        let (eval_blocks, eval_tail) = final_packed_evals.as_chunks::<BLOCK>();
+        let mut packed_sum = EF::ExtensionPacking::ZERO;
+        for (scalar_block, eval_block) in scalar_blocks.iter().zip(eval_blocks) {
+            let broadcast: [EF::ExtensionPacking; BLOCK] =
+                core::array::from_fn(|i| scalar_block[i].into());
+            packed_sum += <EF::ExtensionPacking as Algebra<F::Packing>>::mixed_dot_product(
+                &broadcast, eval_block,
+            );
+        }
+        // Tail: the last few points that do not fill a block.
+        for (&scalar, &packed_eval) in scalar_tail.iter().zip(eval_tail) {
+            packed_sum += EF::ExtensionPacking::from(scalar) * packed_eval;
+        }
 
-            if INITIALIZED {
-                *out_val += dot_product;
-            } else {
-                *out_val = dot_product;
-            }
+        // Split the packed sum back into one scalar per lane.
+        let lanes = EF::ExtensionPacking::to_ext_iter([packed_sum]);
+        if INITIALIZED {
+            out.iter_mut()
+                .zip(lanes)
+                .for_each(|(out_val, lane)| *out_val += lane);
+        } else {
+            out.iter_mut()
+                .zip(lanes)
+                .for_each(|(out_val, lane)| *out_val = lane);
         }
     }
 }
@@ -1360,6 +1372,54 @@ mod tests {
             eval_eq_batch_basic::<F, F, EF4, false>(evals, &scalars, &mut basic, &mut workspace);
 
             assert_eq!(parallel, basic, "mismatch at num_variables={num_variables}");
+        }
+    }
+
+    #[test]
+    fn base_batch_packed_path_matches_basic_across_batch_sizes() {
+        // The packed leaf sums the points in blocks of 8, then sweeps a tail.
+        //
+        //     num_points = 8  -> one full block, no tail
+        //     num_points = 9  -> one full block, tail of 1
+        //     num_points = 23 -> two full blocks, tail of 7
+        let packing_width = <F as Field>::Packing::WIDTH;
+        let num_threads = current_num_threads().next_power_of_two();
+        let log_num_threads = log2_strict_usize(num_threads);
+        let num_variables = packing_width.ilog2() as usize + 2 + log_num_threads;
+        let mut rng = SmallRng::seed_from_u64(0xB10C);
+
+        for num_points in [8, 9, 23] {
+            let eval_points: Vec<Vec<F>> = (0..num_points)
+                .map(|_| (0..num_variables).map(|_| rng.random()).collect())
+                .collect();
+            let scalars: Vec<EF4> = (0..num_points).map(|_| rng.random()).collect();
+
+            // Matrix layout: each row is a variable, each column an evaluation point.
+            let evals_data: Vec<F> = (0..num_variables)
+                .flat_map(|var_idx| eval_points.iter().map(move |point| point[var_idx]))
+                .collect();
+            let evals = RowMajorMatrixView::new(&evals_data, num_points);
+
+            // Reference: plain sequential recursion.
+            let mut basic = EF4::zero_vec(1 << num_variables);
+            let mut workspace = EF4::zero_vec(2 * num_points * num_variables);
+            eval_eq_batch_basic::<F, F, EF4, false>(evals, &scalars, &mut basic, &mut workspace);
+
+            // Overwrite mode must equal the reference.
+            let mut packed = EF4::zero_vec(1 << num_variables);
+            eval_eq_base_batch::<F, EF4, false>(evals, &mut packed, &scalars);
+            assert_eq!(
+                packed, basic,
+                "overwrite mismatch at num_points={num_points}"
+            );
+
+            // Accumulate mode on top of that result must double it.
+            eval_eq_base_batch::<F, EF4, true>(evals, &mut packed, &scalars);
+            let doubled: Vec<EF4> = basic.iter().map(|&v| v.double()).collect();
+            assert_eq!(
+                packed, doubled,
+                "accumulate mismatch at num_points={num_points}"
+            );
         }
     }
 }
