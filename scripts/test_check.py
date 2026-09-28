@@ -523,6 +523,26 @@ class CiPlanTests(unittest.TestCase):
         self.assertTrue(plan["wasm_blake3"])
         self.assertFalse(plan["wasm"])
 
+    def test_sha256_change_selects_avx512_jobs(self):
+        import check  # noqa: PLC0415
+
+        with tempfile.TemporaryDirectory() as temp:
+            metadata = {
+                "workspace_root": temp,
+                "workspace_members": ["p3-sha256"],
+                "packages": [{
+                    "id": "p3-sha256",
+                    "name": "p3-sha256",
+                    "manifest_path": str(Path(temp) / "sha256" / "Cargo.toml"),
+                    "dependencies": [],
+                    "targets": [{"kind": ["lib"]}],
+                    "metadata": {},
+                    "features": {},
+                }],
+            }
+            plan = check.ci_plan(metadata, ["sha256/src/lib.rs"])
+        self.assertTrue(plan["avx512"])
+
     def test_changed_paths_keep_both_sides_of_a_rename(self):
         import check  # noqa: PLC0415
 

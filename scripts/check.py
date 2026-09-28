@@ -184,7 +184,7 @@ def ci_plan(
         "keccak": "p3-keccak" in affected,
         "sha_ni": "p3-sha256" in affected,
         "gfni": bool({"p3-binary-field", "p3-multi-stark", "p3-sumcheck"} & affected),
-        "avx512": "p3-blake3" in affected,
+        "avx512": bool({"p3-blake3", "p3-sha256"} & affected),
         "vpclmulqdq": "p3-binary-dft" in affected,
         "toml": full or any_toml,
         "manifests": full or any_manifest,
