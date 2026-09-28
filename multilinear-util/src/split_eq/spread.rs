@@ -151,8 +151,10 @@ mod tests {
 
     use p3_baby_bear::BabyBear;
     use p3_field::dot_product;
-    use p3_field::extension::BinomialExtensionField;
+    use p3_field::extension::{BinomialExtensionField, Complex};
+    use p3_mersenne_31::Mersenne31;
     use proptest::prelude::*;
+    use rand::distr::{Distribution, StandardUniform};
     use rand::rngs::SmallRng;
     use rand::{RngExt, SeedableRng};
 
@@ -161,20 +163,37 @@ mod tests {
     type F = BabyBear;
     type EF = BinomialExtensionField<F, 4>;
 
+    fn check_spread_dot<F, EF>(log_len: usize, seed: u64) -> Result<(), TestCaseError>
+    where
+        F: Field,
+        EF: ExtensionField<F>,
+        StandardUniform: Distribution<EF>,
+    {
+        let mut rng = SmallRng::seed_from_u64(seed);
+        let len = 1 << log_len;
+        let weights: Vec<EF> = (0..len).map(|_| rng.random()).collect();
+        let values: Vec<EF> = (0..len).map(|_| rng.random()).collect();
+        let expected: EF = dot_product(weights.iter().copied(), values.iter().copied());
+
+        // A shape the kernel rejects must say so, never compute a wrong answer.
+        if let Some(spread) = SpreadWeights::<F, EF>::new(&weights) {
+            prop_assert_eq!(spread.dot(&values), expected);
+        }
+        Ok(())
+    }
+
     proptest! {
         #[test]
         fn spread_dot_matches_the_extension_dot(log_len in 0usize..=10, seed in any::<u64>()) {
             // Invariant: whenever the shape fits, the spread kernel equals the plain dot product.
-            let mut rng = SmallRng::seed_from_u64(seed);
-            let len = 1 << log_len;
-            let weights: Vec<EF> = (0..len).map(|_| rng.random()).collect();
-            let values: Vec<EF> = (0..len).map(|_| rng.random()).collect();
-            let expected: EF = dot_product(weights.iter().copied(), values.iter().copied());
+            //
+            // Degree 4 fills a whole NEON vector with one element.
+            check_spread_dot::<F, EF>(log_len, seed)?;
 
-            // A shape the kernel rejects must say so, never compute a wrong answer.
-            if let Some(spread) = SpreadWeights::<F, EF>::new(&weights) {
-                prop_assert_eq!(spread.dot(&values), expected);
-            }
+            // Degree 2 packs several elements per vector on every SIMD packing.
+            //
+            // So each lane must read the element that fills it, not a neighbor.
+            check_spread_dot::<Mersenne31, Complex<Mersenne31>>(log_len, seed)?;
         }
     }
 
