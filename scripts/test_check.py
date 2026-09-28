@@ -85,6 +85,7 @@ class CheckCliTests(unittest.TestCase):
                 "+ cargo run --release --target wasm32-wasip1 --bin wasm_smoke -p p3-goldilocks",
                 "+ cargo run --release --target wasm32-wasip1 --bin wasm_bench -p p3-goldilocks",
                 "+ cargo run --release --target wasm32-wasip1 --example wasm_merkle_bench -p p3-goldilocks",
+                "+ cargo test --release --target wasm32-wasip1 -p p3-blake3",
             ],
         )
 
@@ -500,7 +501,7 @@ class CiPlanTests(unittest.TestCase):
             plan = check.ci_plan(metadata, ["multi-stark/src/lib.rs"])
         self.assertTrue(plan["gfni"])
 
-    def test_blake3_change_selects_avx512_jobs(self):
+    def test_blake3_change_selects_avx512_and_wasm_jobs(self):
         import check  # noqa: PLC0415
 
         with tempfile.TemporaryDirectory() as temp:
@@ -519,6 +520,8 @@ class CiPlanTests(unittest.TestCase):
             }
             plan = check.ci_plan(metadata, ["blake3/src/lib.rs"])
         self.assertTrue(plan["avx512"])
+        self.assertTrue(plan["wasm_blake3"])
+        self.assertFalse(plan["wasm"])
 
     def test_changed_paths_keep_both_sides_of_a_rename(self):
         import check  # noqa: PLC0415

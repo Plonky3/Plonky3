@@ -14,7 +14,7 @@ categories.workspace = true
 criterion.workspace = true
 
 # Picks the widest x86-64 backend the running CPU has, without `std`.
-[target.'cfg(target_arch = "x86_64")'.dependencies]
+[target.'cfg(all(target_arch = "x86_64", target_feature = "sse2"))'.dependencies]
 cpufeatures.workspace = true
 
 [features]

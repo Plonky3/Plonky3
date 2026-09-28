@@ -212,11 +212,19 @@ mod tests {
         any(target_feature = "simd128", feature = "wasm32-simd")
     ))]
     use core::arch::wasm32::v128;
-    #[cfg(all(target_arch = "x86_64", not(target_feature = "avx2")))]
+    #[cfg(all(
+        target_arch = "x86_64",
+        target_feature = "sse2",
+        not(target_feature = "avx2")
+    ))]
     use core::arch::x86_64::__m128i;
-    #[cfg(all(target_arch = "x86_64", not(target_feature = "avx512f")))]
+    #[cfg(all(
+        target_arch = "x86_64",
+        target_feature = "sse2",
+        not(target_feature = "avx512f")
+    ))]
     use core::arch::x86_64::__m256i;
-    #[cfg(target_arch = "x86_64")]
+    #[cfg(all(target_arch = "x86_64", target_feature = "sse2"))]
     use core::arch::x86_64::__m512i;
 
     use proptest::prelude::*;
@@ -278,11 +286,11 @@ mod tests {
             let flags = u32::from(flags);
 
             // Every backend this build compiles, each on the CPUs that have it.
-            #[cfg(target_arch = "x86_64")]
+            #[cfg(all(target_arch = "x86_64", target_feature = "sse2"))]
             check_pair::<__m512i, 16>(&h, &m, counter, block_len, flags)?;
-            #[cfg(all(target_arch = "x86_64", not(target_feature = "avx512f")))]
+            #[cfg(all(target_arch = "x86_64", target_feature = "sse2", not(target_feature = "avx512f")))]
             check_pair::<__m256i, 8>(&h, &m, counter, block_len, flags)?;
-            #[cfg(all(target_arch = "x86_64", not(target_feature = "avx2")))]
+            #[cfg(all(target_arch = "x86_64", target_feature = "sse2", not(target_feature = "avx2")))]
             check_pair::<__m128i, 4>(&h, &m, counter, block_len, flags)?;
             #[cfg(all(target_arch = "aarch64", target_feature = "neon", target_endian = "little"))]
             check_pair::<uint32x4_t, 4>(&h, &m, counter, block_len, flags)?;
@@ -292,7 +300,7 @@ mod tests {
             ))]
             check_pair::<v128, 4>(&h, &m, counter, block_len, flags)?;
             #[cfg(not(any(
-                target_arch = "x86_64",
+                all(target_arch = "x86_64", target_feature = "sse2"),
                 all(target_arch = "aarch64", target_feature = "neon", target_endian = "little"),
                 all(
                     target_arch = "wasm32",

@@ -32,6 +32,7 @@ jobs:
       parallel: ${{ steps.impact.outputs.parallel }}
       embedded: ${{ steps.impact.outputs.embedded }}
       wasm: ${{ steps.impact.outputs.wasm }}
+      wasm_blake3: ${{ steps.impact.outputs.wasm_blake3 }}
       keccak: ${{ steps.impact.outputs.keccak }}
       sha_ni: ${{ steps.impact.outputs.sha_ni }}
       gfni: ${{ steps.impact.outputs.gfni }}
@@ -451,7 +452,7 @@ jobs:
     needs: plan
     runs-on: ubuntu-latest
     if: >-
-      needs.plan.outputs.wasm == 'true' &&
+      (needs.plan.outputs.wasm == 'true' || needs.plan.outputs.wasm_blake3 == 'true') &&
       !contains(toJSON(github.event.commits.*.message), '[skip-ci]')
     env:
       # Compile-coverage target for browser-style consumers.
@@ -480,15 +481,24 @@ jobs:
           tar -xJf /tmp/wasmtime.tar.xz -C "$HOME"
           echo "$HOME/wasmtime-${WASMTIME_VERSION}-x86_64-linux" >> "$GITHUB_PATH"
       - name: Build p3-goldilocks for wasm32-unknown-unknown
+        if: needs.plan.outputs.wasm == 'true'
         run: python3 scripts/check.py wasm --step build --build-target ${{ env.build_target }}
       - name: Run wasm32+simd128 SIMD tests under wasmtime
+        if: needs.plan.outputs.wasm == 'true'
         run: python3 scripts/check.py wasm --step test --run-target ${{ env.run_target }}
       - name: Run wasm_smoke under wasmtime
+        if: needs.plan.outputs.wasm == 'true'
         run: python3 scripts/check.py wasm --step smoke --run-target ${{ env.run_target }}
       - name: Run wasm_bench under wasmtime
+        if: needs.plan.outputs.wasm == 'true'
         run: python3 scripts/check.py wasm --step bench --run-target ${{ env.run_target }}
       - name: Run wasm_merkle_bench under wasmtime
+        if: needs.plan.outputs.wasm == 'true'
         run: python3 scripts/check.py wasm --step merkle --run-target ${{ env.run_target }}
+      # The batched BLAKE3 kernel has a SIMD128 backend, so its tests pin that backend to upstream.
+      - name: Test p3-blake3 under wasmtime
+        if: needs.plan.outputs.wasm_blake3 == 'true'
+        run: python3 scripts/check.py wasm --step blake3 --run-target ${{ env.run_target }}
 
   lint:
     name: Formatting and Clippy

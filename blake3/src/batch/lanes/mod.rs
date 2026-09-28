@@ -5,6 +5,10 @@
 //! It then picks the widest backend the running CPU has, falling back to SSE2.
 //!
 //! Other targets pick their backend at build time: NEON on AArch64, SIMD128 on wasm32, and one lane elsewhere.
+//!
+//! Soft-float x86-64 targets lack SSE2, so they take the one-lane backend.
+//!
+//! Their ABI forbids enabling vector features on a function, so no x86 backend compiles there.
 
 /// Implement the out-of-line steps of [`Backend`] for `W` lanes, with an optional target feature.
 ///
@@ -62,13 +66,21 @@ macro_rules! out_of_line_steps {
     };
 }
 
-#[cfg(target_arch = "x86_64")]
+#[cfg(all(target_arch = "x86_64", target_feature = "sse2"))]
 mod x86_64_avx512;
 
-#[cfg(all(target_arch = "x86_64", not(target_feature = "avx512f")))]
+#[cfg(all(
+    target_arch = "x86_64",
+    target_feature = "sse2",
+    not(target_feature = "avx512f")
+))]
 mod x86_64_avx2;
 
-#[cfg(all(target_arch = "x86_64", not(target_feature = "avx2")))]
+#[cfg(all(
+    target_arch = "x86_64",
+    target_feature = "sse2",
+    not(target_feature = "avx2")
+))]
 mod x86_64_sse2;
 
 #[cfg(all(
@@ -85,7 +97,7 @@ mod aarch64_neon;
 mod wasm32_simd128;
 
 #[cfg(not(any(
-    target_arch = "x86_64",
+    all(target_arch = "x86_64", target_feature = "sse2"),
     all(
         target_arch = "aarch64",
         target_feature = "neon",
@@ -109,11 +121,19 @@ use super::{Lanes, Mode, State};
 ///
 /// The last one runs on every CPU of the target.
 const KERNELS: &[Kernel] = &[
-    #[cfg(target_arch = "x86_64")]
+    #[cfg(all(target_arch = "x86_64", target_feature = "sse2"))]
     x86_64_avx512::KERNEL,
-    #[cfg(all(target_arch = "x86_64", not(target_feature = "avx512f")))]
+    #[cfg(all(
+        target_arch = "x86_64",
+        target_feature = "sse2",
+        not(target_feature = "avx512f")
+    ))]
     x86_64_avx2::KERNEL,
-    #[cfg(all(target_arch = "x86_64", not(target_feature = "avx2")))]
+    #[cfg(all(
+        target_arch = "x86_64",
+        target_feature = "sse2",
+        not(target_feature = "avx2")
+    ))]
     x86_64_sse2::KERNEL,
     #[cfg(all(
         target_arch = "aarch64",
@@ -127,7 +147,7 @@ const KERNELS: &[Kernel] = &[
     ))]
     wasm32_simd128::KERNEL,
     #[cfg(not(any(
-        target_arch = "x86_64",
+        all(target_arch = "x86_64", target_feature = "sse2"),
         all(
             target_arch = "aarch64",
             target_feature = "neon",
