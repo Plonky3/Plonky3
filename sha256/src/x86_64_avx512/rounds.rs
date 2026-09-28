@@ -3,6 +3,8 @@
 //! The eight working words of both groups take 16 of the 32 vector registers.
 //! The other 16 are scratch, so no round ever spills.
 //!
+//! One group alone runs the same rounds in its half of the registers.
+//!
 //! The message schedule lives in a stack buffer, and enters the rounds as memory operands.
 //!
 //! # Performance
@@ -156,6 +158,84 @@ macro_rules! eight_rounds {
     };
 }
 
+/// Eight rounds of group A alone, in the registers group A uses above.
+macro_rules! eight_rounds_one {
+    ($input:ident) => {
+        concat!(
+            round!($input 0 [0 1 2 3 4 5 6 7 16 17 18 19 24 0]),
+            round!($input 1 [7 0 1 2 3 4 5 6 16 17 18 19 25 0]),
+            round!($input 2 [6 7 0 1 2 3 4 5 16 17 18 19 24 0]),
+            round!($input 3 [5 6 7 0 1 2 3 4 16 17 18 19 25 0]),
+            round!($input 4 [4 5 6 7 0 1 2 3 16 17 18 19 24 0]),
+            round!($input 5 [3 4 5 6 7 0 1 2 16 17 18 19 25 0]),
+            round!($input 6 [2 3 4 5 6 7 0 1 16 17 18 19 24 0]),
+            round!($input 7 [1 2 3 4 5 6 7 0 16 17 18 19 25 0]),
+        )
+    };
+}
+
+/// W_14 and W_15 of both groups, the inputs of the first two extensions.
+macro_rules! seed_schedule {
+    () => {
+        concat!(
+            "vmovdqa64 zmm24, zmmword ptr [{w} - 128 * 2]\n",
+            "vmovdqa64 zmm25, zmmword ptr [{w} - 128 * 1]\n",
+            "vmovdqa64 zmm26, zmmword ptr [{w} + 64 - 128 * 2]\n",
+            "vmovdqa64 zmm27, zmmword ptr [{w} + 64 - 128 * 1]\n",
+        )
+    };
+}
+
+/// W_14 and W_15 of group A alone.
+macro_rules! seed_schedule_one {
+    () => {
+        concat!(
+            "vmovdqa64 zmm24, zmmword ptr [{w} - 128 * 2]\n",
+            "vmovdqa64 zmm25, zmmword ptr [{w} - 128 * 1]\n",
+        )
+    };
+}
+
+/// Load the chaining values of group A into zmm0 to zmm7.
+macro_rules! load_state_one {
+    () => {
+        concat!(
+            "vmovdqu64 zmm0, zmmword ptr [{h} + 64 * 0]\n",
+            "vmovdqu64 zmm1, zmmword ptr [{h} + 64 * 1]\n",
+            "vmovdqu64 zmm2, zmmword ptr [{h} + 64 * 2]\n",
+            "vmovdqu64 zmm3, zmmword ptr [{h} + 64 * 3]\n",
+            "vmovdqu64 zmm4, zmmword ptr [{h} + 64 * 4]\n",
+            "vmovdqu64 zmm5, zmmword ptr [{h} + 64 * 5]\n",
+            "vmovdqu64 zmm6, zmmword ptr [{h} + 64 * 6]\n",
+            "vmovdqu64 zmm7, zmmword ptr [{h} + 64 * 7]\n",
+        )
+    };
+}
+
+/// Feed-forward of group A alone.
+macro_rules! feed_forward_one {
+    () => {
+        concat!(
+            "vpaddd zmm0, zmm0, zmmword ptr [{h} + 64 * 0]\n",
+            "vpaddd zmm1, zmm1, zmmword ptr [{h} + 64 * 1]\n",
+            "vpaddd zmm2, zmm2, zmmword ptr [{h} + 64 * 2]\n",
+            "vpaddd zmm3, zmm3, zmmword ptr [{h} + 64 * 3]\n",
+            "vpaddd zmm4, zmm4, zmmword ptr [{h} + 64 * 4]\n",
+            "vpaddd zmm5, zmm5, zmmword ptr [{h} + 64 * 5]\n",
+            "vpaddd zmm6, zmm6, zmmword ptr [{h} + 64 * 6]\n",
+            "vpaddd zmm7, zmm7, zmmword ptr [{h} + 64 * 7]\n",
+            "vmovdqu64 zmmword ptr [{h} + 64 * 0], zmm0\n",
+            "vmovdqu64 zmmword ptr [{h} + 64 * 1], zmm1\n",
+            "vmovdqu64 zmmword ptr [{h} + 64 * 2], zmm2\n",
+            "vmovdqu64 zmmword ptr [{h} + 64 * 3], zmm3\n",
+            "vmovdqu64 zmmword ptr [{h} + 64 * 4], zmm4\n",
+            "vmovdqu64 zmmword ptr [{h} + 64 * 5], zmm5\n",
+            "vmovdqu64 zmmword ptr [{h} + 64 * 6], zmm6\n",
+            "vmovdqu64 zmmword ptr [{h} + 64 * 7], zmm7\n",
+        )
+    };
+}
+
 /// Load the chaining values of both groups into zmm0 to zmm15.
 macro_rules! load_state {
     () => {
@@ -220,59 +300,34 @@ macro_rules! feed_forward {
     };
 }
 
-/// Advance both groups by one block each.
+/// The block kernel, for the group count its three macros cover.
 ///
-/// `block[g][w]` holds message word `w` of every lane of group `g`.
-#[inline(always)]
-pub(super) fn compress_blocks(
-    state: &mut [[__m512i; STATE_WORDS]; GROUPS],
-    block: &[[__m512i; BLOCK_WORDS]; GROUPS],
-) {
-    // The schedule buffer: slot t holds W_t of group A, then W_t of group B.
-    //
-    // The block opens it, and the kernel writes the other 48 slots before reading them.
-    let mut w = [[MaybeUninit::<__m512i>::uninit(); GROUPS]; ROUNDS];
-    for (t, w) in w[..BLOCK_WORDS].iter_mut().enumerate() {
-        for (w, block) in w.iter_mut().zip(block) {
-            w.write(block[t]);
-        }
-    }
-
-    // SAFETY:
-    // - this module only compiles when the target enables AVX-512F;
-    // - `state` is 1024 bytes, read and then written in place;
-    // - `w` is 8192 bytes: 16 slots written above, and 48 the kernel writes before it reads them;
-    // - `K` is 256 bytes, only read;
-    // - every vector register is declared clobbered, and the stack is never touched.
-    unsafe {
+/// Rounds 0 to 15 read the block, in two passes of eight.
+/// Rounds 16 to 63 extend the schedule as they go, in six passes of eight.
+macro_rules! block_kernel {
+    ($load:ident, $seed:ident, $rounds:ident, $feed_forward:ident, $h:expr, $w:expr) => {
         core::arch::asm!(
-            load_state!(),
-            // Rounds 0 to 15 read the block, in two passes of eight.
+            $load!(),
             "mov {n:e}, 2",
             ".p2align 6",
             "2:",
-            eight_rounds!(block),
+            $rounds!(block),
             "add {w}, 1024",
             "add {k}, 32",
             "dec {n:e}",
             "jnz 2b",
-            // W_14 and W_15 of both groups, the inputs of the first two extensions.
-            "vmovdqa64 zmm24, zmmword ptr [{w} - 128 * 2]",
-            "vmovdqa64 zmm25, zmmword ptr [{w} - 128 * 1]",
-            "vmovdqa64 zmm26, zmmword ptr [{w} + 64 - 128 * 2]",
-            "vmovdqa64 zmm27, zmmword ptr [{w} + 64 - 128 * 1]",
-            // Rounds 16 to 63 extend the schedule as they go, in six passes of eight.
+            $seed!(),
             "mov {n:e}, 6",
             ".p2align 6",
             "3:",
-            eight_rounds!(expand),
+            $rounds!(expand),
             "add {w}, 1024",
             "add {k}, 32",
             "dec {n:e}",
             "jnz 3b",
-            feed_forward!(),
-            h = in(reg) state.as_mut_ptr(),
-            w = inout(reg) w.as_mut_ptr() => _,
+            $feed_forward!(),
+            h = in(reg) $h,
+            w = inout(reg) $w => _,
             k = inout(reg) K.as_ptr() => _,
             n = out(reg) _,
             out("zmm0") _, out("zmm1") _, out("zmm2") _, out("zmm3") _,
@@ -284,34 +339,25 @@ pub(super) fn compress_blocks(
             out("zmm24") _, out("zmm25") _, out("zmm26") _, out("zmm27") _,
             out("zmm28") _, out("zmm29") _, out("zmm30") _, out("zmm31") _,
             options(nostack),
-        );
-    }
+        )
+    };
 }
 
-/// Advance both groups by one block that every lane shares.
-///
-/// `kw[t]` holds `K_t + W_t`, so the kernel computes no schedule.
-#[inline(always)]
-pub(super) fn compress_shared(state: &mut [[__m512i; STATE_WORDS]; GROUPS], kw: &[u32; ROUNDS]) {
-    // SAFETY:
-    // - this module only compiles when the target enables AVX-512F;
-    // - `state` is 1024 bytes, read and then written in place;
-    // - `kw` is 256 bytes, only read;
-    // - every vector register is declared clobbered, and the stack is never touched.
-    unsafe {
+/// The shared-block kernel: all 64 rounds, in eight passes of eight.
+macro_rules! shared_kernel {
+    ($load:ident, $rounds:ident, $feed_forward:ident, $h:expr, $kw:expr) => {
         core::arch::asm!(
-            load_state!(),
-            // All 64 rounds, in eight passes of eight.
+            $load!(),
             "mov {n:e}, 8",
             ".p2align 6",
             "2:",
-            eight_rounds!(shared),
+            $rounds!(shared),
             "add {k}, 32",
             "dec {n:e}",
             "jnz 2b",
-            feed_forward!(),
-            h = in(reg) state.as_mut_ptr(),
-            k = inout(reg) kw.as_ptr() => _,
+            $feed_forward!(),
+            h = in(reg) $h,
+            k = inout(reg) $kw => _,
             n = out(reg) _,
             out("zmm0") _, out("zmm1") _, out("zmm2") _, out("zmm3") _,
             out("zmm4") _, out("zmm5") _, out("zmm6") _, out("zmm7") _,
@@ -322,6 +368,93 @@ pub(super) fn compress_shared(state: &mut [[__m512i; STATE_WORDS]; GROUPS], kw: 
             out("zmm24") _, out("zmm25") _, out("zmm26") _, out("zmm27") _,
             out("zmm28") _, out("zmm29") _, out("zmm30") _, out("zmm31") _,
             options(nostack),
-        );
+        )
+    };
+}
+
+/// Advance `G` groups by one block each, for `G` of one or two.
+///
+/// `block[g][w]` holds message word `w` of every lane of group `g`.
+#[inline(always)]
+pub(super) fn compress_blocks<const G: usize>(
+    state: &mut [[__m512i; STATE_WORDS]; G],
+    block: &[[__m512i; BLOCK_WORDS]; G],
+) {
+    const { assert!(G == 1 || G == 2) };
+
+    // The schedule buffer: slot t holds W_t of group A, then W_t of group B.
+    //
+    // The block opens it, and the kernel writes the other 48 slots before reading them.
+    //
+    // A lone group uses only the first half of every slot.
+    let mut w = [[MaybeUninit::<__m512i>::uninit(); GROUPS]; ROUNDS];
+    for (t, w) in w[..BLOCK_WORDS].iter_mut().enumerate() {
+        for (w, block) in w.iter_mut().zip(block) {
+            w.write(block[t]);
+        }
+    }
+
+    // SAFETY:
+    // - this module only compiles when the target enables AVX-512F;
+    // - `state` is `G` times 512 bytes, read and then written in place;
+    // - `w` is 8192 bytes: the block's slots written above, and the rest written before any read;
+    // - `K` is 256 bytes, only read;
+    // - every vector register is declared clobbered, and the stack is never touched.
+    unsafe {
+        if G == 2 {
+            block_kernel!(
+                load_state,
+                seed_schedule,
+                eight_rounds,
+                feed_forward,
+                state.as_mut_ptr(),
+                w.as_mut_ptr()
+            );
+        } else {
+            block_kernel!(
+                load_state_one,
+                seed_schedule_one,
+                eight_rounds_one,
+                feed_forward_one,
+                state.as_mut_ptr(),
+                w.as_mut_ptr()
+            );
+        }
+    }
+}
+
+/// Advance `G` groups by one block that every lane shares, for `G` of one or two.
+///
+/// `kw[t]` holds `K_t + W_t`, so the kernel computes no schedule.
+#[inline(always)]
+pub(super) fn compress_shared<const G: usize>(
+    state: &mut [[__m512i; STATE_WORDS]; G],
+    kw: &[u32; ROUNDS],
+) {
+    const { assert!(G == 1 || G == 2) };
+
+    // SAFETY:
+    // - this module only compiles when the target enables AVX-512F;
+    // - `state` is `G` times 512 bytes, read and then written in place;
+    // - `kw` is 256 bytes, only read;
+    // - every vector register is declared clobbered, and the stack is never touched.
+    unsafe {
+        if G == 2 {
+            shared_kernel!(
+                load_state,
+                eight_rounds,
+                feed_forward,
+                state.as_mut_ptr(),
+                kw.as_ptr()
+            );
+        } else {
+            shared_kernel!(
+                load_state_one,
+                eight_rounds_one,
+                feed_forward_one,
+                state.as_mut_ptr(),
+                kw.as_ptr()
+            );
+        }
     }
 }

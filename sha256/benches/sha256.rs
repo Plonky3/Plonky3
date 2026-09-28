@@ -50,6 +50,29 @@ fn bench_hash_many(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_short_batches(c: &mut Criterion) {
+    let mut group = c.benchmark_group("sha256 short batches");
+
+    // Batches that do not fill whole groups of 32.
+    //
+    // - 3, 8 and 16 fit one short pass.
+    // - 20 takes sixteen in one pass, then four.
+    // - 40 takes 32 in one pass, then eight.
+    for len in [64, 4096] {
+        for count in [3, 8, 16, 20, 40] {
+            let input = random_bytes(len * count, 0x452821e6_38d01377 ^ (len * count) as u64);
+            let mut out = vec![[0u8; 32]; count];
+
+            group.throughput(Throughput::Bytes((len * count) as u64));
+            group.bench_function(format!("{count} x {len}"), |b| {
+                b.iter(|| Sha256.hash_many(black_box(&input), black_box(&mut out)));
+            });
+        }
+    }
+
+    group.finish();
+}
+
 fn bench_compress_many(c: &mut Criterion) {
     let bytes = random_bytes(64 * BATCH, 0x13198a2e_03707344);
     let inputs: Vec<[[u8; 32]; 2]> = bytes
@@ -82,5 +105,10 @@ fn bench_compress_many(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_hash_many, bench_compress_many);
+criterion_group!(
+    benches,
+    bench_hash_many,
+    bench_short_batches,
+    bench_compress_many
+);
 criterion_main!(benches);

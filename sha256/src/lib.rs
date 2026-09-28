@@ -4,7 +4,7 @@
 //!
 //! The backend is picked at compile time, the first match winning:
 //!
-//! - x86-64 with `avx512f` and `avx512bw`: 32 messages, one per 32-bit lane;
+//! - x86-64 with `avx512f` and `avx512bw`: 32 messages, one per 32-bit lane, and SHA-NI streams for the last few when `sha` is on too;
 //! - x86-64 with `sha` and `sse4.1`: four messages, as four interleaved SHA-NI streams;
 //! - AArch64 with `neon` and `sha2`: four messages, as four streams of the SHA-2 extension;
 //! - wasm32 with `simd128`: four messages, one per lane.
@@ -36,8 +36,7 @@ mod wasm32_simd128;
 #[cfg(all(
     target_arch = "x86_64",
     target_feature = "sha",
-    target_feature = "sse4.1",
-    not(all(target_feature = "avx512f", target_feature = "avx512bw"))
+    target_feature = "sse4.1"
 ))]
 mod x86_64_sha_ni;
 
@@ -248,13 +247,14 @@ mod many {
 /// A backend supplies only the vector core, through [`FourLane`](four_lane::FourLane). Everything
 /// that turns a batch of messages into blocks lives here, so a padding fix cannot reach one
 /// backend and miss the others.
+///
+/// An AVX-512 build with SHA-NI also compiles it, for the last few messages of a batch.
 #[cfg(any(
     all(target_arch = "wasm32", target_feature = "simd128"),
     all(
         target_arch = "x86_64",
         target_feature = "sha",
-        target_feature = "sse4.1",
-        not(all(target_feature = "avx512f", target_feature = "avx512bw"))
+        target_feature = "sse4.1"
     ),
     all(
         target_arch = "aarch64",
@@ -307,17 +307,23 @@ mod four_lane {
 
         /// Serialize the four states as big-endian digests.
         fn write_digests(state: &Self::State, out: &mut [[u8; 32]; LANES]);
+
+        /// Leftover messages, after the whole groups, that one call with spare lanes still beats.
+        ///
+        /// Fewer leftovers are hashed one at a time.
+        ///
+        /// The default of four never pads, which suits a backend whose streams cost as much as separate calls.
+        const PADDED_FROM: usize = LANES;
     }
 
     /// Hash four messages of a common length, padding included.
     ///
     /// # Panics
     ///
-    /// Panics in debug builds if `messages` does not hold exactly four messages of `len` bytes.
-    fn hash_four<B: FourLane>(messages: &[u8], len: usize) -> [[u8; 32]; LANES] {
-        debug_assert_eq!(messages.len(), len * LANES);
-        let lane_messages: [&[u8]; LANES] =
-            core::array::from_fn(|lane| &messages[lane * len..(lane + 1) * len]);
+    /// Panics in debug builds if a message is not `len` bytes long.
+    #[inline(always)]
+    fn hash_four<B: FourLane>(lane_messages: [&[u8]; LANES], len: usize) -> [[u8; 32]; LANES] {
+        debug_assert!(lane_messages.iter().all(|message| message.len() == len));
         let mut state = B::initial_state();
 
         for block in 0..len / BLOCK_BYTES {
@@ -355,8 +361,9 @@ mod four_lane {
 
     /// Hash `out.len()` equal-length messages laid end to end in `input`.
     ///
-    /// Whole groups of four go through the backend and the short tail falls back to the scalar
-    /// hasher, so the batch count is unconstrained.
+    /// Whole groups of four go through the backend.
+    ///
+    /// The few messages left over go through it too when the backend asks for padding, and one at a time otherwise.
     ///
     /// # Panics
     ///
@@ -373,15 +380,29 @@ mod four_lane {
         );
 
         let len = input.len() / out.len();
-        let full_groups = out.len() / LANES;
-        for group in 0..full_groups {
-            let message_start = group * LANES * len;
-            let digests = hash_four::<B>(&input[message_start..message_start + LANES * len], len);
-            out[group * LANES..(group + 1) * LANES].copy_from_slice(&digests);
+        let message = |index: usize| &input[index * len..(index + 1) * len];
+
+        let (groups, rest) = out.as_chunks_mut::<LANES>();
+        for (group, digests) in groups.iter_mut().enumerate() {
+            *digests = hash_four::<B>(
+                core::array::from_fn(|lane| message(group * LANES + lane)),
+                len,
+            );
         }
 
-        for message in full_groups * LANES..out.len() {
-            out[message] = Sha256.hash_slice(&input[message * len..(message + 1) * len]);
+        // The spare lanes repeat the last message, and their digests are never written out.
+        let first = groups.len() * LANES;
+        if rest.len() >= B::PADDED_FROM {
+            let last = rest.len() - 1;
+            let digests = hash_four::<B>(
+                core::array::from_fn(|lane| message(first + lane.min(last))),
+                len,
+            );
+            rest.copy_from_slice(&digests[..rest.len()]);
+        } else {
+            for (index, digest) in (first..).zip(rest) {
+                *digest = Sha256.hash_slice(message(index));
+            }
         }
     }
 
@@ -399,23 +420,43 @@ mod four_lane {
             out.len()
         );
 
-        let full_groups = out.len() / LANES;
-        for group in 0..full_groups {
-            let mut state = B::initial_state();
-            let blocks: [&[u8; BLOCK_BYTES]; LANES] = core::array::from_fn(|lane| {
-                // SAFETY: `[[u8; 32]; 2]` and `[u8; 64]` have identical contiguous byte layouts.
-                unsafe { transmute(&inputs[group * LANES + lane]) }
-            });
-            B::compress(&mut state, blocks);
+        // SAFETY: `[[u8; 32]; 2]` and `[u8; 64]` have identical contiguous byte layouts.
+        let block = |index: usize| -> &[u8; BLOCK_BYTES] { unsafe { transmute(&inputs[index]) } };
 
+        let (groups, rest) = out.as_chunks_mut::<LANES>();
+        for (group, digests) in groups.iter_mut().enumerate() {
+            compress_four::<B>(
+                core::array::from_fn(|lane| block(group * LANES + lane)),
+                digests,
+            );
+        }
+
+        // The spare lanes repeat the last block, and their digests are never written out.
+        let first = groups.len() * LANES;
+        if rest.len() >= B::PADDED_FROM {
+            let last = rest.len() - 1;
             let mut digests = [[0u8; 32]; LANES];
-            B::write_digests(&state, &mut digests);
-            out[group * LANES..(group + 1) * LANES].copy_from_slice(&digests);
+            compress_four::<B>(
+                core::array::from_fn(|lane| block(first + lane.min(last))),
+                &mut digests,
+            );
+            rest.copy_from_slice(&digests[..rest.len()]);
+        } else {
+            for (index, digest) in (first..).zip(rest) {
+                *digest = Sha256Compress.compress(inputs[index]);
+            }
         }
+    }
 
-        for group in full_groups * LANES..out.len() {
-            out[group] = Sha256Compress.compress(inputs[group]);
-        }
+    /// Compress one block per lane from the initial hash value.
+    #[inline(always)]
+    fn compress_four<B: FourLane>(
+        blocks: [&[u8; BLOCK_BYTES]; LANES],
+        out: &mut [[u8; 32]; LANES],
+    ) {
+        let mut state = B::initial_state();
+        B::compress(&mut state, blocks);
+        B::write_digests(&state, out);
     }
 }
 
@@ -441,10 +482,13 @@ mod tests {
 
     // Batch sizes around every group size of every backend.
     //
-    // - 4 is the four-lane backends' group.
-    // - 32 is the AVX-512 group: below 16 the remainder goes one message at a time.
-    // - From 16 up, a short group fills its spare lanes by repeating the last message.
-    const BATCH_COUNTS: [usize; 16] = [0, 1, 3, 4, 5, 9, 15, 16, 17, 31, 32, 33, 48, 64, 65, 100];
+    // - 4 is the four-lane backends' group, and 3 or 7 leave a padded group of three.
+    // - 16 is one AVX-512 register, and 32 two of them.
+    // - 8, 9, 20 and 21 sit on each side of the points where AVX-512 changes pass.
+    // - 52 and 53 leave 20 and 21 after a whole group of 32.
+    const BATCH_COUNTS: [usize; 23] = [
+        0, 1, 2, 3, 4, 5, 7, 8, 9, 15, 16, 17, 20, 21, 31, 32, 33, 48, 52, 53, 64, 65, 100,
+    ];
 
     // Enough messages to fill every lane of the compiled backend at least once.
     const EVERY_LANE: usize = {
@@ -674,15 +718,25 @@ mod tests {
 
         for (message, expected) in vectors {
             // One copy per lane fills a whole group, so every lane of the backend is checked.
-            let input = message.repeat(EVERY_LANE);
-            let mut out = vec![[0u8; 32]; EVERY_LANE];
-            Sha256.hash_many(&input, &mut out);
+            //
+            // The other counts leave a batch end for each shorter pass of the AVX-512 backend.
+            // The million-byte message keeps to one group, as it alone is a million bytes per lane.
+            let counts: &[usize] = if message.len() > 1000 {
+                &[EVERY_LANE]
+            } else {
+                &[EVERY_LANE, 3, 9, 20, 40]
+            };
+            for &count in counts {
+                let input = message.repeat(count);
+                let mut out = vec![[0u8; 32]; count];
+                Sha256.hash_many(&input, &mut out);
 
-            assert!(
-                out.iter().all(|digest| *digest == expected),
-                "message of {} bytes",
-                message.len()
-            );
+                assert!(
+                    out.iter().all(|digest| *digest == expected),
+                    "message of {} bytes, {count} copies",
+                    message.len()
+                );
+            }
         }
     }
 

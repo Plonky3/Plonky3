@@ -167,6 +167,11 @@ fn round_group(abef: &mut __m128i, cdgh: &mut __m128i, schedule: __m128i, group:
 impl FourLane for ShaNi {
     type State = State;
 
+    // Three streams in one call cost less than three single-stream calls.
+    //
+    // Two do not: a lone stream already keeps the round unit half busy.
+    const PADDED_FROM: usize = 3;
+
     #[inline]
     fn initial_state() -> Self::State {
         // SAFETY: `__m128i` and `[u32; 4]` are both 16 bytes and every bit pattern is valid.
