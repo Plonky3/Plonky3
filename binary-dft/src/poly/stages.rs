@@ -6,11 +6,12 @@ use p3_binary_field::poly_basis::{LOW_STAGES, LowStageTwiddles};
 use p3_binary_field::{BinaryField128, TowerLevel, poly_basis};
 use p3_maybe_rayon::prelude::*;
 
-use super::plan::Plan;
+use super::plan::{Plan, SHARED_CACHE_BYTES};
 use crate::domain::domain_point;
 use crate::lch::BUTTERFLY_GRAIN;
 use crate::staging::{
-    Dispatch, StagedRuns, for_each_staged_tile, for_each_staged_tile_into_cosets, prefault,
+    Dispatch, StagedRuns, Store, for_each_staged_tile, for_each_staged_tile_into_cosets_stored,
+    prefault,
 };
 
 /// Stage bases and the steps between consecutive block twiddles, in polynomial coordinates.
@@ -382,12 +383,22 @@ pub(super) fn first_group_into_cosets(
 ) {
     let top = plan.log_n;
     let (runs, run, dispatch) = staged_group(plan, top, depth, values.len());
-    for_each_staged_tile_into_cosets(
+    // Stream 64-byte cache-line stores when the matrix exceeds shared cache: the first shared
+    // pass reads every coset back from memory, so retaining this scatter in cache adds no reuse.
+    let store = if cfg!(all(target_arch = "x86_64", target_feature = "avx512f"))
+        && size_of_val(values) > SHARED_CACHE_BYTES
+    {
+        Store::Streamed
+    } else {
+        Store::Cached
+    };
+    for_each_staged_tile_into_cosets_stored(
         values,
         source,
         message_len,
         runs,
         dispatch,
+        store,
         INTO_POLY,
         |tile, block, coset| tile_stages(tile, run, depth, top, &twiddles[coset], false, block),
     );
