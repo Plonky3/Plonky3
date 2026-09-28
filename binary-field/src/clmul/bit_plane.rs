@@ -2,10 +2,11 @@
 
 use alloc::vec::Vec;
 use core::arch::x86_64::{
-    __m512i, _mm512_gf2p8affine_epi64_epi8, _mm512_loadu_si512, _mm512_permutexvar_epi8,
-    _mm512_set1_epi64, _mm512_storeu_si512, _mm512_ternarylogic_epi64, _mm512_unpackhi_epi8,
-    _mm512_unpackhi_epi16, _mm512_unpackhi_epi32, _mm512_unpackhi_epi64, _mm512_unpacklo_epi8,
-    _mm512_unpacklo_epi16, _mm512_unpacklo_epi32, _mm512_unpacklo_epi64, _mm512_xor_si512,
+    __m512i, _mm_sfence, _mm512_alignr_epi32, _mm512_gf2p8affine_epi64_epi8, _mm512_loadu_si512,
+    _mm512_mask_storeu_epi64, _mm512_permutexvar_epi8, _mm512_set1_epi64, _mm512_stream_si512,
+    _mm512_ternarylogic_epi64, _mm512_unpackhi_epi8, _mm512_unpackhi_epi16, _mm512_unpackhi_epi32,
+    _mm512_unpackhi_epi64, _mm512_unpacklo_epi8, _mm512_unpacklo_epi16, _mm512_unpacklo_epi32,
+    _mm512_unpacklo_epi64, _mm512_xor_si512,
 };
 
 use crate::Ghash128;
@@ -114,6 +115,66 @@ unsafe fn plane(input: &[__m512i; 8], row: &[u64; 8]) -> __m512i {
     }
 }
 
+/// Writes 64 values to memory around the cache, then fences them.
+///
+/// Cached stores would first read every fresh output line from memory.
+///
+/// # Safety
+///
+/// The target must address 64 writable, 16-byte aligned values.
+#[inline(always)]
+unsafe fn stream(target: *mut u128, lines: &[__m512i; 16]) {
+    // SAFETY: guaranteed by the caller; the build target supplies every intrinsic used here.
+    unsafe {
+        // Dispatch on how many values sit before the first 64-byte boundary.
+        match (target as usize / 16) % 4 {
+            0 => {
+                for (k, &line) in lines.iter().enumerate() {
+                    _mm512_stream_si512(target.add(4 * k).cast(), line);
+                }
+            }
+            1 => stream_shifted::<12>(target, lines),
+            2 => stream_shifted::<8>(target, lines),
+            _ => stream_shifted::<4>(target, lines),
+        }
+        // Publish the streamed lines before any later store, such as a length update.
+        _mm_sfence();
+    }
+}
+
+/// Streams 64 values whose first few share a cache line with earlier data.
+///
+/// The two partial lines take masked cached stores.
+///
+/// ```text
+///     values:  | head | 15 whole lines ............................ | tail |
+///     stores:   masked  streamed                                     masked
+/// ```
+///
+/// # Safety
+///
+/// As for the aligned case, with the shift matching the target's offset into its line.
+#[inline(always)]
+unsafe fn stream_shifted<const SHIFT: i32>(target: *mut u128, lines: &[__m512i; 16]) {
+    // Values before the first boundary, and the quadword mask covering them.
+    let head = SHIFT as usize / 4;
+    let head_mask = ((1_u16 << (2 * head)) - 1) as u8;
+    // The remaining values of the last register, which share the next line with later data.
+    let tail_mask = ((1_u16 << (8 - 2 * head)) - 1) as u8;
+    // SAFETY: every store stays inside the 64 values, and each streamed line is 64-byte aligned.
+    unsafe {
+        _mm512_mask_storeu_epi64(target.cast(), head_mask, lines[0]);
+        let body = target.add(head);
+        for k in 0..15 {
+            // Join the top of one register with the bottom of the next into one aligned line.
+            let line = _mm512_alignr_epi32::<SHIFT>(lines[k + 1], lines[k]);
+            _mm512_stream_si512(body.add(4 * k).cast(), line);
+        }
+        let tail = _mm512_alignr_epi32::<SHIFT>(lines[15], lines[15]);
+        _mm512_mask_storeu_epi64(body.add(60).cast(), tail_mask, tail);
+    }
+}
+
 /// A prepared 64-corner Boolean-to-`Ghash128` expansion.
 pub(crate) struct PreparedBitPlaneExpansion {
     blocks: [[u64; 8]; 16],
@@ -135,10 +196,10 @@ impl PreparedBitPlaneExpansion {
         let old_len = output.len();
 
         // SAFETY: each input load reads one of the eight disjoint eight-word groups in `words`.
-        // The output has reserved space for 64 more `Ghash128` values. The sixteen stores write
-        // exactly those 64 entries, four per register, without assuming alignment. `Ghash128` is
-        // transparent over `u128` and every 128-bit pattern is valid. No operation below can
-        // panic, so the vector length is raised only after every entry has been initialized.
+        // The output has reserved space for 64 more `Ghash128` values.
+        // The streamed stores write exactly those 64 entries and fence before returning.
+        // `Ghash128` is transparent over `u128` and every 128-bit pattern is valid.
+        // No operation below can panic, so the length is raised only once every entry is set.
         unsafe {
             let input: [__m512i; 8] =
                 core::array::from_fn(|group| masks(words.as_ptr().add(8 * group)));
@@ -321,23 +382,11 @@ impl PreparedBitPlaneExpansion {
                 _mm512_unpackhi_epi64
             );
 
-            let destination = output.as_mut_ptr().add(old_len);
-            _mm512_storeu_si512(destination.cast(), d0);
-            _mm512_storeu_si512(destination.add(4).cast(), d8);
-            _mm512_storeu_si512(destination.add(8).cast(), d4);
-            _mm512_storeu_si512(destination.add(12).cast(), d12);
-            _mm512_storeu_si512(destination.add(16).cast(), d2);
-            _mm512_storeu_si512(destination.add(20).cast(), d10);
-            _mm512_storeu_si512(destination.add(24).cast(), d6);
-            _mm512_storeu_si512(destination.add(28).cast(), d14);
-            _mm512_storeu_si512(destination.add(32).cast(), d1);
-            _mm512_storeu_si512(destination.add(36).cast(), d9);
-            _mm512_storeu_si512(destination.add(40).cast(), d5);
-            _mm512_storeu_si512(destination.add(44).cast(), d13);
-            _mm512_storeu_si512(destination.add(48).cast(), d3);
-            _mm512_storeu_si512(destination.add(52).cast(), d11);
-            _mm512_storeu_si512(destination.add(56).cast(), d7);
-            _mm512_storeu_si512(destination.add(60).cast(), d15);
+            let destination = output.as_mut_ptr().add(old_len).cast::<u128>();
+            let lines = [
+                d0, d8, d4, d12, d2, d10, d6, d14, d1, d9, d5, d13, d3, d11, d7, d15,
+            ];
+            stream(destination, &lines);
             output.set_len(old_len + 64);
         }
     }

@@ -676,21 +676,24 @@ mod tests {
 
             let mut cases = Vec::from([[0; 64], [u64::MAX; 64]]);
             cases.extend((0..32).map(|_| core::array::from_fn(|_| next_word(&mut state) as u64)));
-            let prefix = Ghash128::from_repr(0xfeed_face);
-            let mut output = vec![prefix];
-            for words in &cases {
-                expand(words, &mut output);
-            }
+            // Prefixes of 0 to 3 values reach every 16-byte offset into a 64-byte line.
+            for prefix_len in 0..4 {
+                let prefix = Ghash128::from_repr(0xfeed_face);
+                let mut output = vec![prefix; prefix_len];
+                for words in &cases {
+                    expand(words, &mut output);
+                }
 
-            assert_eq!(output[0], prefix);
-            assert_eq!(output.len(), 1 + 64 * cases.len());
-            for (case, words) in cases.iter().enumerate() {
-                let start = 1 + 64 * case;
-                assert_eq!(
-                    &output[start..start + 64],
-                    &scalar_expansion(&weights, words),
-                    "case {case}"
-                );
+                assert!(output[..prefix_len].iter().all(|&value| value == prefix));
+                assert_eq!(output.len(), prefix_len + 64 * cases.len());
+                for (case, words) in cases.iter().enumerate() {
+                    let start = prefix_len + 64 * case;
+                    assert_eq!(
+                        &output[start..start + 64],
+                        &scalar_expansion(&weights, words),
+                        "prefix {prefix_len}, case {case}"
+                    );
+                }
             }
         }
     }
