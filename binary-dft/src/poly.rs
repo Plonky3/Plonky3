@@ -15,7 +15,8 @@ use crate::domain::domain_point;
 use crate::encoder::padded_message_len;
 use crate::lch::BUTTERFLY_GRAIN;
 use crate::staging::{
-    Dispatch, StagedRuns, for_each_staged_tile, for_each_staged_tile_into_cosets, prefault,
+    Dispatch, StagedRuns, Store, for_each_staged_tile, for_each_staged_tile_into_cosets_stored,
+    prefault,
 };
 use crate::traits::AdditiveNtt;
 
@@ -812,12 +813,22 @@ fn first_group_into_cosets(
 ) {
     let top = plan.log_n;
     let (runs, run, dispatch) = staged_group(plan, top, depth, values.len());
-    for_each_staged_tile_into_cosets(
+    // Stream 64-byte cache-line stores when the matrix exceeds shared cache: the first shared
+    // pass reads every coset back from memory, so retaining this scatter in cache adds no reuse.
+    let store = if cfg!(all(target_arch = "x86_64", target_feature = "avx512f"))
+        && size_of_val(values) > SHARED_CACHE_BYTES
+    {
+        Store::Streamed
+    } else {
+        Store::Cached
+    };
+    for_each_staged_tile_into_cosets_stored(
         values,
         source,
         message_len,
         runs,
         dispatch,
+        store,
         |tile| convert_tile(tile, INTO_POLY),
         |tile, block, coset| tile_stages(tile, run, depth, top, &twiddles[coset], false, block),
     );
