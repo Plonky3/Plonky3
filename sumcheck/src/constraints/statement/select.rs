@@ -3,8 +3,8 @@ use alloc::vec::Vec;
 
 use itertools::Itertools;
 use p3_field::{
-    ExtensionField, Field, HornerIter, PackedFieldExtension, PackedValue, PrimeCharacteristicRing,
-    dot_product,
+    Algebra, ExtensionField, Field, HornerIter, PackedFieldExtension, PackedValue,
+    PrimeCharacteristicRing, dot_product,
 };
 use p3_matrix::Matrix;
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
@@ -442,8 +442,7 @@ impl<F: Field, EF: ExtensionField<F>> SelectStatement<F, EF> {
         acc.par_chunks(n)
             .zip(acc_weights.as_mut_slice().par_iter_mut())
             .for_each(|(row, weight_out)| {
-                *weight_out +=
-                    dot_product::<EF, _, _>(challenges.iter().copied(), row.iter().copied());
+                *weight_out += <EF as Algebra<F>>::batched_linear_combination(&challenges, row);
             });
 
         // S += sum_i gamma^{i+shift} * s_i
@@ -577,11 +576,10 @@ impl<F: Field, EF: ExtensionField<F>> SelectStatement<F, EF> {
                             .zip(alphas.iter())
                             .map(|(&right, &alpha)| EF::ExtensionPacking::from(alpha * right)),
                     );
-                    out.iter_mut().zip(left.rows()).for_each(|(out, left)| {
-                        *out += left
-                            .zip(scaled.iter())
-                            .map(|(left, &scaled)| scaled * left)
-                            .sum::<EF::ExtensionPacking>();
+                    out.iter_mut().zip(left.row_slices()).for_each(|(out, left)| {
+                        *out += <EF::ExtensionPacking as Algebra<F::Packing>>::batched_linear_combination(
+                            scaled, left,
+                        );
                     });
                 },
             );

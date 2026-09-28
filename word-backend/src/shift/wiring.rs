@@ -296,13 +296,7 @@ where
         .witness()
         .shift_sequences()
         .iter()
-        .map(|&shifts| {
-            shift_weights(shifts, &output)
-                .into_iter()
-                .zip(&input)
-                .map(|(value, &weight)| value * weight)
-                .sum()
-        })
+        .map(|&shifts| F::batched_linear_combination(&shift_weights(shifts, &output), &input))
         .collect()
 }
 

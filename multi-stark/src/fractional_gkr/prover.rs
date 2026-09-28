@@ -111,7 +111,10 @@ where
                 let n1_dif = n1_hi - n1_lo;
                 let d0_dif = d0_hi - d0_lo;
                 let d1_dif = d1_hi - d1_lo;
-                let evaluate = |n0: N, n1: N, d0: A, d1: A| d1 * n0 + d0 * n1 + lambda * d0 * d1;
+                // The two cross terms share one reduction.
+                let evaluate = |n0: N, n1: N, d0: A, d1: A| {
+                    A::mixed_dot_product::<2>(&[d1, d0], &[n0, n1]) + lambda * d0 * d1
+                };
 
                 acc[0] += eq_suffix * evaluate(n0_lo, n1_lo, d0_lo, d1_lo);
 
@@ -138,9 +141,14 @@ where
                 let (&n1_lo, &n1_hi) = n1;
                 let (&d0_lo, &d0_hi) = d0;
                 let (&d1_lo, &d1_hi) = d1;
-                let evaluate = |n0: A, n1: A, d0: A, d1: A| d1 * n0 + d0 * n1 + lambda * d0 * d1;
+                // Every operand is in the extension here, so the whole gate is one dot product.
+                let evaluate = |n0: A, n1: A, d0: A, d1: A| {
+                    A::dot_product::<3>(&[d1, d0, lambda * d0], &[n0, n1, d1])
+                };
 
-                acc[0] += eq_suffix * (d1_lo * n0_lo + d0_lo * n1_lo + lambda * d0_lo * d1_lo);
+                acc[0] += eq_suffix
+                    * (A::mixed_dot_product::<2>(&[d1_lo, d0_lo], &[n0_lo, n1_lo])
+                        + lambda * d0_lo * d1_lo);
 
                 let n0 = node * (n0_hi - n0_lo) + n0_lo;
                 let n1 = node * (n1_hi - n1_lo) + n1_lo;
@@ -177,7 +185,9 @@ where
             .zip(n1.par_iter())
             .zip(d0.par_iter())
             .zip(d1.par_iter())
-            .map(|(((&n0, &n1), &d0), &d1)| (d1 * n0 + d0 * n1, d0 * d1))
+            .map(|(((&n0, &n1), &d0), &d1)| {
+                (A::mixed_dot_product::<2>(&[d1, d0], &[n0, n1]), d0 * d1)
+            })
             .unzip::<_, _, Vec<_>, Vec<_>>()
     };
 

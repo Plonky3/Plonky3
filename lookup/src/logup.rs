@@ -808,8 +808,7 @@ impl LookupProtocol for LogUpGadget {
                         let inv_slice = &local_inverses[inv_base + start..inv_base + end];
                         let mult_slice = &local_mults[inv_base + start..inv_base + end];
                         // Dot product: sum of (1 / denominator) * multiplicity for each tuple.
-                        let frac =
-                            dot_product(inv_slice.iter().copied(), mult_slice.iter().copied());
+                        let frac = EF::batched_linear_combination(inv_slice, mult_slice);
                         // Lookup slot `lookup_idx` lives at fraction column `lookup_idx + 1`.
                         chunk_aux[row_offset + lookup_idx + 1] = frac;
                         row_total += frac;
