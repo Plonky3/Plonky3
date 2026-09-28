@@ -1,8 +1,8 @@
-use core::iter;
 use core::marker::PhantomData;
+use core::{array, iter};
 
 use crate::field::Field;
-use crate::{Algebra, ExtensionField, PackedField};
+use crate::{Algebra, ExtensionField, PackedField, PrimeCharacteristicRing};
 
 mod binomial_extension;
 mod complex;
@@ -419,4 +419,27 @@ pub trait HasTwoAdicQuinticExtension: QuinticTrinomialExtendable {
     /// Panics if `bits > EXT_TWO_ADICITY`.
     #[must_use]
     fn ext_two_adic_generator(bits: usize) -> [Self; 5];
+}
+
+/// Dot product of extension elements, given by their coordinates, with base scalars.
+///
+/// A base scalar scales every coordinate on its own:
+///
+/// ```text
+///     (sum_i a_i * f_i)[k] = sum_i a_i[k] * f_i
+/// ```
+///
+/// So the result is `D` base dot products of length `N`.
+///
+/// Each one keeps its products unreduced and reduces once, where the base ring allows it.
+#[inline]
+pub(crate) fn coordinatewise_dot_product<R, const D: usize, const N: usize>(
+    a: &[[R; D]; N],
+    f: &[R; N],
+) -> [R; D]
+where
+    R: PrimeCharacteristicRing + Copy,
+{
+    // Gather coordinate k of every input, then dot it with the scalars.
+    array::from_fn(|k| R::dot_product::<N>(&array::from_fn(|i| a[i][k]), f))
 }

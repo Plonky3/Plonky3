@@ -18,7 +18,7 @@ use num_bigint::BigUint;
 use p3_util::{as_base_slice, as_base_slice_mut, reconstitute_from_base};
 
 use super::packed_quintic_extension::PackedQuinticTrinomialExtensionField;
-use super::{ExtField, HasFrobenius, HasTwoAdicQuinticExtension};
+use super::{ExtField, HasFrobenius, HasTwoAdicQuinticExtension, coordinatewise_dot_product};
 use crate::extension::{ExtensionAlgebra, QuinticTrinomial, QuinticTrinomialExtendable};
 use crate::field::Field;
 use crate::{
@@ -194,7 +194,15 @@ where
     }
 }
 
-impl<F: QuinticTrinomialExtendable> Algebra<F> for QuinticTrinomialExtensionField<F> {}
+impl<F: QuinticTrinomialExtendable> Algebra<F> for QuinticTrinomialExtensionField<F> {
+    #[inline]
+    fn mixed_dot_product<const N: usize>(a: &[Self; N], f: &[F; N]) -> Self {
+        Self::new(coordinatewise_dot_product(
+            &array::from_fn(|i| a[i].value),
+            f,
+        ))
+    }
+}
 
 impl<F: QuinticTrinomialExtendable> RawDataSerializable for QuinticTrinomialExtensionField<F> {
     const NUM_BYTES: usize = F::NUM_BYTES * 5;

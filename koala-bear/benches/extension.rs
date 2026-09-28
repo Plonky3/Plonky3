@@ -2,7 +2,7 @@ use criterion::{Criterion, criterion_group, criterion_main};
 use p3_field::extension::{BinomialExtensionField, QuinticTrinomialExtensionField};
 use p3_field_testing::bench_func::{
     benchmark_add_latency, benchmark_add_slices, benchmark_add_throughput, benchmark_inv,
-    benchmark_mul_latency, benchmark_mul_throughput, benchmark_square,
+    benchmark_mixed_dot_array, benchmark_mul_latency, benchmark_mul_throughput, benchmark_square,
 };
 use p3_koala_bear::KoalaBear;
 
@@ -25,6 +25,8 @@ fn bench_quartic_extension(c: &mut Criterion) {
     benchmark_inv::<EF4>(c, name);
     benchmark_mul_throughput::<EF4, REPS>(c, name);
     benchmark_mul_latency::<EF4, L_REPS>(c, name);
+    benchmark_mixed_dot_array::<EF4, KoalaBear, 4>(c, name);
+    benchmark_mixed_dot_array::<EF4, KoalaBear, 16>(c, name);
 }
 
 fn bench_quintic_extension(c: &mut Criterion) {
@@ -32,6 +34,8 @@ fn bench_quintic_extension(c: &mut Criterion) {
     benchmark_square::<EF5>(c, name);
     benchmark_mul_throughput::<EF5, REPS>(c, name);
     benchmark_mul_latency::<EF5, L_REPS>(c, name);
+    benchmark_mixed_dot_array::<EF5, KoalaBear, 4>(c, name);
+    benchmark_mixed_dot_array::<EF5, KoalaBear, 16>(c, name);
 }
 
 fn bench_octic_extension(c: &mut Criterion) {

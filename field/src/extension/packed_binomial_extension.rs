@@ -7,12 +7,12 @@ use p3_util::{flatten_to_base, reconstitute_from_base};
 use rand::distr::{Distribution, StandardUniform};
 
 use super::{
-    BinomialExtensionField, PackedExtField, binomial_mul, binomial_mul_by_scalar, vector_add,
-    vector_sub,
+    BinomialExtensionField, PackedExtField, binomial_mul, binomial_mul_by_scalar,
+    coordinatewise_dot_product, vector_add, vector_sub,
 };
 use crate::extension::{Binomial, BinomiallyExtendable, binomial_square};
 use crate::{
-    Algebra, BasedVectorSpace, Dup, Field, PackedField, PackedFieldExtension, PackedValue, Powers,
+    Algebra, BasedVectorSpace, Field, PackedField, PackedFieldExtension, PackedValue, Powers,
     PrimeCharacteristicRing, field_to_array,
 };
 
@@ -69,28 +69,11 @@ impl<F: BinomiallyExtendable<D>, PF: PackedField<Scalar = F>, const D: usize> Al
     for PackedBinomialExtensionField<F, PF, D>
 {
     #[inline]
-    fn mixed_dot_product<const N: usize>(a: &[Self; N], f: &[PF; N]) -> Self
-    where
-        PF: Dup,
-    {
-        // Output container; each coordinate is filled independently below.
-        let mut result = Self::default();
-
-        // One base-field dot product per output coordinate.
-        for k in 0..D {
-            // Strided gather of the k-th coordinate from each extension input:
-            //
-            //     coord_k = [ a_0[k], a_1[k], ..., a_{N-1}[k] ]
-            let coord_k: [PF; N] = core::array::from_fn(|i| a[i].value[k]);
-
-            // Base-level dot product.
-            //
-            // - For Monty-31 packings this is the delayed-reduction primitive;
-            // - For other packings it falls back to the eager default and the override is a no-op gain.
-            result.value[k] = PF::dot_product::<N>(&coord_k, f);
-        }
-
-        result
+    fn mixed_dot_product<const N: usize>(a: &[Self; N], f: &[PF; N]) -> Self {
+        Self::new(coordinatewise_dot_product(
+            &array::from_fn(|i| a[i].value),
+            f,
+        ))
     }
 }
 
