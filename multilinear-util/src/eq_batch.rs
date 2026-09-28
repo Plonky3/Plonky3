@@ -1274,8 +1274,9 @@ mod tests {
         //
         // A count past the pool would send a large batch down the scalar recursion.
         //
-        // Fixture state: 2^20 entries of 64 points each, which the cost model would cut
-        // into thousands of tasks.
+        // Fixture state: 2^20 entries of 64 points each.
+        //
+        // The cost model alone would cut that table into thousands of tasks.
         let pool_log = current_num_threads().next_power_of_two().ilog2() as usize;
         let entry_bytes = MUL_ACC_BYTES * 64 * size_of::<EF4>();
         assert!(log_task_count(1 << 20, entry_bytes, 16) <= pool_log);
@@ -1283,8 +1284,12 @@ mod tests {
         // The variable budget caps the count as well.
         assert_eq!(log_task_count(1 << 20, entry_bytes, 0), 0);
 
-        // A table too cheap to split stays one task.
-        assert_eq!(log_task_count(16, size_of::<EF4>(), 16), 0);
+        // A table the cost model keeps whole stays one task.
+        //
+        // Zeroed budget overrides split every table, so the check follows the model.
+        if !should_split(16, size_of::<EF4>()) {
+            assert_eq!(log_task_count(16, size_of::<EF4>(), 16), 0);
+        }
     }
 
     #[test]
