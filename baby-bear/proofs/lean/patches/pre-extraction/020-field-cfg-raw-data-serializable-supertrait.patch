@@ -1,0 +1,183 @@
+# Patch:     020-field-cfg-raw-data-serializable-supertrait
+# Phase:     pre-extraction
+# Target:    field/src/extension/binomial_extension.rs, field/src/extension/cubic_extension.rs, field/src/extension/quintic_extension.rs, field/src/field.rs, symmetric/src/serializing_hasher.rs
+# Hunks:     11
+# Cost:      none in a normal build (see below). In the extracted variant,
+#            `Field` no longer implies `RawDataSerializable`.
+# Upstream:  charon#1266 (RPITIT/GAT lift is out of scope for
+#            `--lift-associated-types`); aeneas has no GAT model.
+# Drop when: charon lifts RPITIT to a named associated type, or aeneas models
+#            GATs.
+#
+# Every method of `RawDataSerializable` except `NUM_BYTES` returns
+# `impl IntoIterator`. rustc desugars each one into a hidden generic
+# associated type on the trait, and `--preset=aeneas` cannot lift GATs.
+# Charon writes type errors into the LLBC, and aeneas then fails on every
+# item that mentions `Field`, which is nearly all of p3-baby-bear (803
+# errors). The trait is only reached through `Field`'s supertrait list.
+#
+# The edge now goes through `FieldRawData`:
+#   normal build:          trait FieldRawData: RawDataSerializable {}   + blanket impl
+#   cfg(hax_backend_lean): trait FieldRawData {}                        + blanket impl
+# Supertraits are transitive, so in a normal build `F: Field` still implies
+# `F: RawDataSerializable` and every caller in the workspace compiles
+# unchanged. Under the cfg the edge is gone. The generic code in p3-baby-bear's
+# dependency graph that used the implication then states the bound itself
+# (`F: … + RawDataSerializable`):
+#   - the three extension-field impls of `RawDataSerializable`, and
+#   - the six `SerializingHasher` impls in p3-symmetric.
+# In a normal build these bounds are redundant, i.e. implied, so they change
+# nothing. No expression, constant or body is changed.
+#
+# rustc checks it: extract.sh compiles p3-baby-bear under the cfg (what
+# charon extracts) and the whole workspace without it (what upstream's tests
+# run), both warning-free.
+#
+# Tested:     test-pre-patches.py: 4625 of 4671 upstream tests pass as
+#             shipped, 4625 with the pre-patches; 0 divergences from this patch.
+#
+diff --git a/field/src/extension/binomial_extension.rs b/field/src/extension/binomial_extension.rs
+index 496a075e..d22fbbb8 100644
+--- a/field/src/extension/binomial_extension.rs
++++ b/field/src/extension/binomial_extension.rs
+@@ -204,7 +204,7 @@ where
+ 
+ impl<F: BinomiallyExtendable<D>, const D: usize> Algebra<F> for BinomialExtensionField<F, D> {}
+ 
+-impl<F: BinomiallyExtendable<D>, const D: usize> RawDataSerializable
++impl<F: BinomiallyExtendable<D> + RawDataSerializable, const D: usize> RawDataSerializable
+     for BinomialExtensionField<F, D>
+ {
+     const NUM_BYTES: usize = F::NUM_BYTES * D;
+diff --git a/field/src/extension/cubic_extension.rs b/field/src/extension/cubic_extension.rs
+index 69d40e65..7356aa7c 100644
+--- a/field/src/extension/cubic_extension.rs
++++ b/field/src/extension/cubic_extension.rs
+@@ -179,7 +179,9 @@ where
+ 
+ impl<F: CubicTrinomialExtendable> Algebra<F> for CubicTrinomialExtensionField<F> {}
+ 
+-impl<F: CubicTrinomialExtendable> RawDataSerializable for CubicTrinomialExtensionField<F> {
++impl<F: CubicTrinomialExtendable + RawDataSerializable> RawDataSerializable
++    for CubicTrinomialExtensionField<F>
++{
+     const NUM_BYTES: usize = F::NUM_BYTES * 3;
+ 
+     #[inline]
+diff --git a/field/src/extension/quintic_extension.rs b/field/src/extension/quintic_extension.rs
+index f3d287af..2a16c8ee 100644
+--- a/field/src/extension/quintic_extension.rs
++++ b/field/src/extension/quintic_extension.rs
+@@ -196,7 +196,9 @@ where
+ 
+ impl<F: QuinticTrinomialExtendable> Algebra<F> for QuinticTrinomialExtensionField<F> {}
+ 
+-impl<F: QuinticTrinomialExtendable> RawDataSerializable for QuinticTrinomialExtensionField<F> {
++impl<F: QuinticTrinomialExtendable + RawDataSerializable> RawDataSerializable
++    for QuinticTrinomialExtensionField<F>
++{
+     const NUM_BYTES: usize = F::NUM_BYTES * 5;
+ 
+     #[inline]
+diff --git a/field/src/field.rs b/field/src/field.rs
+index 9444da7d..56433cf3 100644
+--- a/field/src/field.rs
++++ b/field/src/field.rs
+@@ -1035,13 +1035,30 @@ pub trait RawDataSerializable: Sized {
+     }
+ }
+ 
++/// PATCHED: the `RawDataSerializable` edge of [`Field`], behind `hax_backend_lean`.
++///
++/// In a normal build this is exactly `RawDataSerializable` (blanket-implemented,
++/// and supertraits are transitive), so `F: Field` still implies
++/// `F: RawDataSerializable`. Under hax's Lean backend it is empty, which cuts
++/// `RawDataSerializable`'s `-> impl IntoIterator` methods (hidden GATs, which
++/// aeneas cannot translate) out of everything that mentions `Field`.
++#[cfg(not(hax_backend_lean))]
++pub trait FieldRawData: RawDataSerializable {}
++#[cfg(not(hax_backend_lean))]
++impl<T: RawDataSerializable> FieldRawData for T {}
++/// See the normal-build definition.
++#[cfg(hax_backend_lean)]
++pub trait FieldRawData {}
++#[cfg(hax_backend_lean)]
++impl<T> FieldRawData for T {}
++
+ /// A field `F`. This permits both modular fields `ℤ/p` along with their field extensions.
+ ///
+ /// A ring is a field if every element `x` has a unique multiplicative inverse `x^{-1}`
+ /// which satisfies `x * x^{-1} = F::ONE`.
+ pub trait Field:
+     Algebra<Self>
+-    + RawDataSerializable
++    + FieldRawData // PATCHED: was `RawDataSerializable`
+     + Packable
+     + 'static
+     + Copy
+diff --git a/symmetric/src/serializing_hasher.rs b/symmetric/src/serializing_hasher.rs
+index 1c363370..424d1e87 100644
+--- a/symmetric/src/serializing_hasher.rs
++++ b/symmetric/src/serializing_hasher.rs
+@@ -1,6 +1,6 @@
+ use alloc::vec::Vec;
+ 
+-use p3_field::Field;
++use p3_field::{Field, RawDataSerializable};
+ 
+ use crate::CryptographicHasher;
+ 
+@@ -32,7 +32,7 @@ impl<Inner> SerializingHasher<Inner> {
+ 
+ impl<F, Inner, const N: usize> CryptographicHasher<F, [u8; N]> for SerializingHasher<Inner>
+ where
+-    F: Field,
++    F: Field + RawDataSerializable,
+     Inner: CryptographicHasher<u8, [u8; N]>,
+ {
+     /// Forwarded from the inner byte hasher, the one digest shape here that batches.
+@@ -133,7 +133,7 @@ where
+ 
+ impl<F, Inner, const N: usize> CryptographicHasher<F, [u32; N]> for SerializingHasher<Inner>
+ where
+-    F: Field,
++    F: Field + RawDataSerializable,
+     Inner: CryptographicHasher<u32, [u32; N]>,
+ {
+     fn hash_iter<I>(&self, input: I) -> [u32; N]
+@@ -146,7 +146,7 @@ where
+ 
+ impl<F, Inner, const N: usize> CryptographicHasher<F, [u64; N]> for SerializingHasher<Inner>
+ where
+-    F: Field,
++    F: Field + RawDataSerializable,
+     Inner: CryptographicHasher<u64, [u64; N]>,
+ {
+     fn hash_iter<I>(&self, input: I) -> [u64; N]
+@@ -160,7 +160,7 @@ where
+ impl<F, Inner, const N: usize, const M: usize> CryptographicHasher<[F; M], [[u8; M]; N]>
+     for SerializingHasher<Inner>
+ where
+-    F: Field,
++    F: Field + RawDataSerializable,
+     Inner: CryptographicHasher<[u8; M], [[u8; M]; N]>,
+ {
+     fn hash_iter<I>(&self, input: I) -> [[u8; M]; N]
+@@ -174,7 +174,7 @@ where
+ impl<F, Inner, const N: usize, const M: usize> CryptographicHasher<[F; M], [[u32; M]; N]>
+     for SerializingHasher<Inner>
+ where
+-    F: Field,
++    F: Field + RawDataSerializable,
+     Inner: CryptographicHasher<[u32; M], [[u32; M]; N]>,
+ {
+     fn hash_iter<I>(&self, input: I) -> [[u32; M]; N]
+@@ -188,7 +188,7 @@ where
+ impl<F, Inner, const N: usize, const M: usize> CryptographicHasher<[F; M], [[u64; M]; N]>
+     for SerializingHasher<Inner>
+ where
+-    F: Field,
++    F: Field + RawDataSerializable,
+     Inner: CryptographicHasher<[u64; M], [[u64; M]; N]>,
+ {
+     // Flattened iterators inhibit vectorization when pairing 32-bit elements into u64s.

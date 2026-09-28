@@ -1,0 +1,124 @@
+# Patch:     030-field-cfg-rpitit-packed-methods
+# Phase:     pre-extraction
+# Target:    field/src/packed/packed_traits.rs, matrix/src/lib.rs
+# Hunks:     5
+# Cost:      none in a normal build: every change is behind
+#            cfg(hax_backend_lean). In the extracted variant, four default
+#            methods are absent and `to_ext_iter` sits on an extension trait.
+# Upstream:  charon#1266 (same root cause as 020).
+# Drop when: as for 020.
+#
+# Same root cause as 020, but these traits cannot be cut loose, because
+# `Field::Packing: PackedField` is load-bearing. Four default methods return
+# `impl Iterator`, so each one adds a hidden GAT to `PackedValue` or
+# `PackedFieldExtension`. `unpack_iter`'s closure also forms a mixed
+# type/function recursion group with `PackedValue`, which aeneas rejects on
+# its own terms.
+#
+# Under cfg(hax_backend_lean) only:
+#   PackedValue::unpack_iter                        absent
+#   PackedFieldExtension::unpack_ext_iter           absent
+#   PackedFieldExtension::packed_ext_powers_capped  absent
+#   PackedFieldExtension::to_ext_iter               moved, same body, to a
+#                                                   blanket extension trait
+#                                                   `PackedFieldExtensionIter`
+# `to_ext_iter` is called by p3-matrix, which is in p3-baby-bear's graph (via
+# p3-mds), so under the cfg it moves rather than disappears, and p3-matrix
+# imports the trait under the same cfg. Charon only translates dependency
+# items that are reachable, and nothing reachable from p3-baby-bear uses the
+# new trait, so it never reaches aeneas.
+#
+# In a normal build none of this exists: the methods are where they were,
+# unchanged, and upstream's callers and tests (field-testing, fri, stir,
+# sumcheck, multilinear-util, …) compile and run against them as shipped.
+# Under the cfg, rustc checks that nothing reachable still uses an absent
+# method (see 020).
+#
+# Tested:     test-pre-patches.py: 4625 of 4671 upstream tests pass as
+#             shipped, 4625 with the pre-patches; 0 divergences from this patch.
+#
+diff --git a/field/src/packed/packed_traits.rs b/field/src/packed/packed_traits.rs
+index b16afb10..15c9175a 100644
+--- a/field/src/packed/packed_traits.rs
++++ b/field/src/packed/packed_traits.rs
+@@ -234,6 +234,7 @@ pub unsafe trait PackedValue: 'static + Copy + Send + Sync {
+     ///
+     /// This is the iterator equivalent of `unpack_into`, yielding each row
+     /// without requiring a pre-allocated buffer.
++    #[cfg(not(hax_backend_lean))] // PATCHED: `-> impl Iterator`, a hidden GAT for aeneas
+     #[inline]
+     fn unpack_iter<const N: usize>(packed: [Self; N]) -> impl Iterator<Item = [Self::Value; N]> {
+         (0..Self::WIDTH).map(move |lane| array::from_fn(|col| packed[col].extract(lane)))
+@@ -518,6 +519,7 @@ pub trait PackedFieldExtension<
+     ///
+     /// Yields `WIDTH` rows of `N` extension elements without requiring a pre-allocated
+     /// buffer. Analog of [`PackedValue::unpack_iter`].
++    #[cfg(not(hax_backend_lean))] // PATCHED: `-> impl Iterator`, a hidden GAT for aeneas
+     #[inline]
+     fn unpack_ext_iter<const N: usize>(packed: [Self; N]) -> impl Iterator<Item = [ExtField; N]> {
+         (0..BaseField::Packing::WIDTH).map(move |lane| {
+@@ -531,6 +533,7 @@ pub trait PackedFieldExtension<
+ 
+     /// Convert an iterator of packed extension field elements to an iterator of
+     /// extension field elements (flat — one `ExtField` per lane per packed value).
++    #[cfg(not(hax_backend_lean))] // PATCHED: `-> impl Iterator`, a hidden GAT for aeneas
+     #[inline]
+     #[must_use]
+     fn to_ext_iter(iter: impl IntoIterator<Item = Self>) -> impl Iterator<Item = ExtField> {
+@@ -607,12 +610,42 @@ pub trait PackedFieldExtension<
+     /// Note that the length of the returned iterator will be `unpacked_len / WIDTH` and
+     /// not `len` as the iterator is over packed extension field elements. If `unpacked_len`
+     /// is not divisible by `WIDTH`, `unpacked_len` will be rounded up to the next multiple of `WIDTH`.
++    #[cfg(not(hax_backend_lean))] // PATCHED: `-> impl Iterator`, a hidden GAT for aeneas
+     #[must_use]
+     fn packed_ext_powers_capped(base: ExtField, unpacked_len: usize) -> impl Iterator<Item = Self> {
+         Self::packed_ext_powers(base).take(unpacked_len.div_ceil(BaseField::Packing::WIDTH))
+     }
+ }
+ 
++/// PATCHED: under hax's Lean backend, [`PackedFieldExtension::to_ext_iter`] is
++/// moved here (same body) so that `PackedFieldExtension` declares no hidden GAT.
++/// It is blanket-implemented, so `EF::ExtensionPacking::to_ext_iter(..)`
++/// resolves unchanged wherever this trait is in scope. Normal builds do not
++/// have this trait.
++#[cfg(hax_backend_lean)]
++pub trait PackedFieldExtensionIter<
++    BaseField: Field,
++    ExtField: ExtensionField<BaseField, ExtensionPacking = Self>,
++>: PackedFieldExtension<BaseField, ExtField>
++{
++    /// See [`PackedFieldExtension`]'s normal-build `to_ext_iter`.
++    #[inline]
++    #[must_use]
++    fn to_ext_iter(iter: impl IntoIterator<Item = Self>) -> impl Iterator<Item = ExtField> {
++        iter.into_iter()
++            .flat_map(|x| (0..BaseField::Packing::WIDTH).map(move |lane| x.extract(lane)))
++    }
++}
++
++#[cfg(hax_backend_lean)]
++impl<BaseField, ExtField, P> PackedFieldExtensionIter<BaseField, ExtField> for P
++where
++    BaseField: Field,
++    ExtField: ExtensionField<BaseField, ExtensionPacking = P>,
++    P: PackedFieldExtension<BaseField, ExtField>,
++{
++}
++
+ unsafe impl<T: Packable> PackedValue for T {
+     type Value = Self;
+ 
+diff --git a/matrix/src/lib.rs b/matrix/src/lib.rs
+index 1f326e3f..5dbde4ed 100644
+--- a/matrix/src/lib.rs
++++ b/matrix/src/lib.rs
+@@ -8,6 +8,9 @@ use core::fmt::{Debug, Display, Formatter};
+ use core::ops::Deref;
+ 
+ use itertools::Itertools;
++// PATCHED: under hax's Lean backend `to_ext_iter` lives on this extension trait.
++#[cfg(hax_backend_lean)]
++use p3_field::PackedFieldExtensionIter;
+ use p3_field::{
+     BasedVectorSpace, ExtensionField, Field, FieldArray, PackedField, PackedFieldExtension,
+     PackedValue, PrimeCharacteristicRing,

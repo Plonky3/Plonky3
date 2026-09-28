@@ -1,0 +1,75 @@
+name = "p3_baby_bear"
+version = "0.1.0"
+defaultTargets = ["P3BabyBear", "Assumptions", "P3BabyBearProofs"]
+
+# Two kinds of source, in two kinds of directory:
+#
+#   generated/    machine output, rewritten by extract.sh and never committed:
+#                 aeneas's translation of each crate, plus the post-extraction
+#                 patches. `lake build` needs it, so run ./extract.sh first.
+#   assumptions/  hand-written and trusted (TCB.md, layer 3); spec/ is
+#                 hand-written and holds the theorems.
+#
+# Each generated library is the `--output-dir` extract.sh gives hax for one
+# crate. p3-monty-31 and p3-mds are scoped: only the items p3-baby-bear's
+# output refers to (the roots in `DEPS` in extract.sh).
+[[lean_lib]]
+name = "P3BabyBear"
+srcDir = "generated/p3-baby-bear"
+
+[[lean_lib]]
+name = "P3Monty31"
+srcDir = "generated/p3-monty-31"
+
+[[lean_lib]]
+name = "P3Mds"
+srcDir = "generated/p3-mds"
+
+# Everything the generated code needs that aeneas does not produce. aeneas's
+# output imports its hand-filled stubs by fixed names
+# (`P3BabyBear.Assumptions.TypesExternal`, ...), so those are roots here, under
+# the same names, rather than files inside generated/. `Interface.*` are the
+# stand-ins for the dependency items aeneas cannot translate.
+[[lean_lib]]
+name = "Assumptions"
+srcDir = "assumptions"
+roots = [
+    "P3BabyBear.Assumptions.TypesExternal",
+    "P3BabyBear.Assumptions.FunsExternal",
+    "P3Monty31.Assumptions.TypesExternal",
+    "P3Monty31.Assumptions.FunsExternal",
+    "Interface.CoreModelsExt",
+    "Interface.P3Field",
+    "Interface.P3Monty31",
+    "Interface.P3Poseidon1",
+    "Interface.P3Poseidon2",
+]
+
+# What we assert about the extraction.
+[[lean_lib]]
+name = "P3BabyBearProofs"
+srcDir = "spec"
+
+# The two Lean libraries the generated code imports (`Aeneas`, `CoreModels`).
+# Pinned to exactly what hax 0.4.1 resolves (`cargo hax tools show`): the
+# generated files and the libraries must come from the same aeneas build, and
+# a floating `rev` would let them drift apart silently.
+[[require]]
+name = "aeneas"
+git = "https://github.com/cryspen/aeneas"
+rev = "build-183e4f0"
+subDir = "backends/lean"
+
+[[require]]
+name = "hax"
+git = "https://github.com/cryspen/hax-lean"
+rev = "v0.3.27"
+
+# Mathematical specification of the BabyBear field (fieldSize, twoAdicity,
+# primality). The theorems in `P3BabyBearProofs` relate the extracted constants
+# to these. `v4.31.0` pins the same mathlib (`fabf563`) as aeneas above, so the
+# two share one mathlib.
+[[require]]
+name = "CompPoly"
+git = "https://github.com/Verified-zkEVM/CompPoly"
+rev = "v4.31.0"

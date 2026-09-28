@@ -1,0 +1,31 @@
+# Patch:     010-declare-hax-backend-lean-cfg
+# Phase:     pre-extraction
+# Target:    Cargo.toml
+# Hunks:     1
+# Cost:      none. Declares a cfg name to rustc's check-cfg; no code changes.
+# Drop when: 020 and 030 are both dropped.
+#
+# Patches 020 and 030 gate items on `hax_backend_lean`, the cfg that hax's
+# Lean backend compiles with. extract.sh sets it for every crate through
+# RUSTFLAGS, because hax itself passes it only to the crate being extracted.
+# Normal builds do not set it, and rustc's `unexpected_cfgs` lint warns about
+# any cfg name it has not been told about. This adds the name to the
+# workspace's lint table. Declaring the name is the lint's intended fix; it
+# does not allow or silence the lint.
+#
+# Tested:     test-pre-patches.py: 4625 of 4671 upstream tests pass as
+#             shipped, 4625 with the pre-patches; 0 divergences from this patch.
+#
+diff --git a/Cargo.toml b/Cargo.toml
+index 34c1ecf5..fff69148 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -54,6 +54,8 @@ members = [
+ rust.rust_2018_idioms = { level = "deny", priority = -1 }
+ rust.unused_must_use = "deny"
+ rust.rust_2024_incompatible_pat = "warn"
++# PATCHED: hax's Lean backend compiles with `--cfg hax_backend_lean`.
++rust.unexpected_cfgs = { level = "warn", check-cfg = ["cfg(hax_backend_lean)"] }
+ rustdoc.all = "warn"
+ 
+ [workspace.lints.clippy]

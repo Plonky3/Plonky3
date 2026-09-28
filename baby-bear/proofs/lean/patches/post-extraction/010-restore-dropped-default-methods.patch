@@ -1,0 +1,94 @@
+# Patch:     010-restore-dropped-default-methods
+# Phase:     post-extraction
+# Target:    p3-monty-31/P3Monty31/Extraction/Funs.lean, p3-baby-bear/P3BabyBear/Extraction/Funs.lean
+# Hunks:     6
+# Cost:      none. Each added field is the body of the CoreModels default
+#            method it stands for (`clone.Clone.clone_from.default`,
+#            `cmp.PartialEq.ne.default`), inlined.
+# Upstream:  charon multi-target mode (`--targets`) forces
+#            `--translate-all-methods`, then filters unused methods after the
+#            merge, and that drops the default-method roots hax adds with
+#            `--start-from core::clone::Clone::clone_from` and
+#            `core::cmp::PartialEq::ne`.
+# Drop when: charon keeps `--start-from` roots through the multi-target merge,
+#            or hax can pass `--target` to charon's cargo (then extract.sh
+#            can drop `--targets`).
+#
+# CoreModels' `core.clone.Clone` has a `clone_from` field and
+# `core.cmp.PartialEq` has `ne`. A derived `Clone`/`PartialEq` never defines
+# them, so aeneas fills them with the trait's default method, but only if charon
+# translated it. hax adds the default methods as charon roots for exactly this
+# purpose. We extract with `--targets thumbv7em-none-eabi` (the only way to reach
+# charon's cargo with a target through hax 0.4.1), and in that mode charon
+# drops them again (measured: 11 `clone_from` in the LLBC without `--targets`,
+# 2 with it). So every derived impl comes out missing the field, and Lean
+# rejects the structure literal.
+#
+# The alternative, `--translate-all-methods`, grows the extraction until it
+# fails with 276 errors. Adding the field by hand is the narrow fix:
+#   clone_from := fun _ source => <clone> source        (= clone_from.default)
+#   ne := fun self other => do let b ← <eq> self other; ok (b = false)
+#                                                       (= ne.default)
+# Five derived `Clone` impls (4 in p3-baby-bear, 1 in p3-monty-31) and one
+# derived `PartialEq`.
+#
+--- a/p3-monty-31/P3Monty31/Extraction/Funs.lean
++++ b/p3-monty-31/P3Monty31/Extraction/Funs.lean
+@@ -212,6 +212,8 @@
+   := {
+   clone := monty_31.MontyField31.Insts.CoreCloneClone.clone corecloneCloneInst
+     data_traitsMontyParametersInst
++  -- PATCHED: default method, body of `core.clone.Clone.clone_from.default`
++  clone_from := fun _ source => (monty_31.MontyField31.Insts.CoreCloneClone.clone corecloneCloneInst data_traitsMontyParametersInst) source
+ }
+ 
+ /-- [p3_monty_31::poseidon1::PartialRoundBaseParameters::USE_TEXTBOOK]
+--- a/p3-baby-bear/P3BabyBear/Extraction/Funs.lean
++++ b/p3-baby-bear/P3BabyBear/Extraction/Funs.lean
+@@ -41,6 +41,8 @@
+ def baby_bear.BabyBearParameters.Insts.CoreCloneClone : core.clone.Clone
+   baby_bear.BabyBearParameters := {
+   clone := baby_bear.BabyBearParameters.Insts.CoreCloneClone.clone
++  -- PATCHED: default method, body of `core.clone.Clone.clone_from.default`
++  clone_from := fun _ source => (baby_bear.BabyBearParameters.Insts.CoreCloneClone.clone) source
+ }
+ 
+ /-- Trait implementation: [p3_baby_bear::baby_bear::{impl core::marker::Copy for p3_baby_bear::baby_bear::BabyBearParameters}]
+@@ -92,6 +94,10 @@
+   := {
+   eq :=
+     baby_bear.BabyBearParameters.Insts.CoreCmpPartialEqBabyBearParameters.eq
++  -- PATCHED: default method, body of `core.cmp.PartialEq.ne.default`
++  ne := fun self other => do
++    let b ← (baby_bear.BabyBearParameters.Insts.CoreCmpPartialEqBabyBearParameters.eq) self other
++    ok (b = false)
+ }
+ 
+ /-- Trait implementation: [p3_baby_bear::baby_bear::{impl core::cmp::Eq for p3_baby_bear::baby_bear::BabyBearParameters}]
+@@ -776,6 +788,8 @@
+ def mds.MDSBabyBearData.Insts.CoreCloneClone : core.clone.Clone
+   mds.MDSBabyBearData := {
+   clone := mds.MDSBabyBearData.Insts.CoreCloneClone.clone
++  -- PATCHED: default method, body of `core.clone.Clone.clone_from.default`
++  clone_from := fun _ source => (mds.MDSBabyBearData.Insts.CoreCloneClone.clone) source
+ }
+ 
+ /-- [p3_baby_bear::mds::{impl core::default::Default for p3_baby_bear::mds::MDSBabyBearData}::default]:
+@@ -1371,6 +1385,8 @@
+ def poseidon1.BabyBearPoseidonParameters.Insts.CoreCloneClone :
+   core.clone.Clone poseidon1.BabyBearPoseidonParameters := {
+   clone := poseidon1.BabyBearPoseidonParameters.Insts.CoreCloneClone.clone
++  -- PATCHED: default method, body of `core.clone.Clone.clone_from.default`
++  clone_from := fun _ source => (poseidon1.BabyBearPoseidonParameters.Insts.CoreCloneClone.clone) source
+ }
+ 
+ /-- [p3_baby_bear::poseidon1::{impl core::default::Default for p3_baby_bear::poseidon1::BabyBearPoseidonParameters}::default]:
+@@ -2133,6 +2151,8 @@
+ def poseidon2.BabyBearInternalLayerParameters.Insts.CoreCloneClone :
+   core.clone.Clone poseidon2.BabyBearInternalLayerParameters := {
+   clone := poseidon2.BabyBearInternalLayerParameters.Insts.CoreCloneClone.clone
++  -- PATCHED: default method, body of `core.clone.Clone.clone_from.default`
++  clone_from := fun _ source => (poseidon2.BabyBearInternalLayerParameters.Insts.CoreCloneClone.clone) source
+ }
+ 
+ /-- Trait implementation: [p3_baby_bear::poseidon2::{impl p3_monty_31::poseidon2::InternalLayerBaseParameters<p3_baby_bear::baby_bear::BabyBearParameters, 16usize> for p3_baby_bear::poseidon2::BabyBearInternalLayerParameters}]
