@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.8.0] - 2026-09-23
+### Merged PRs
+- Fix(circle): account for transition selectors in quotient sizing (#2046)
+- Review: couple tweaks here and there (#2120)
+- Feat(air,multi-stark)!: public inputs bound by trace position (#1947)
+- Refactor(commit): own the periodic column shape rule where every consumer can reach it (#2276)
+- Perf(binary)!: leave Keccak-f booleanity to the Boolean commitment in `prove_hash_binary` (#2287)
+
 ## [0.7.0] - 2026-09-04
 ## [0.6.0] - 2026-06-11
 ### Merged PRs

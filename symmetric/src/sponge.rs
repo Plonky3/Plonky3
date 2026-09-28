@@ -88,7 +88,7 @@
 //!
 //! The fix is 10-padding -- see `Pad10Sponge` for the full scheme.
 
-use alloc::string::String;
+use core::any::type_name;
 use core::marker::PhantomData;
 use core::ops::Add;
 
@@ -97,10 +97,26 @@ use p3_field::{
     PrimeField, PrimeField32, absorb_radix_bits, max_shifted_absorb_injective_limbs,
     reduce_packed_shifted,
 };
+use thiserror::Error;
 
 use crate::Permutation;
 use crate::hasher::CryptographicHasher;
 use crate::permutation::{CryptographicPermutation, Derangement};
+
+/// Reasons a cross-field sponge cannot encode its input field injectively.
+#[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
+pub enum MultiFieldSpongeError {
+    /// The packing field is not strictly larger than the input field.
+    #[error(
+        "input field `{input_field}` must have smaller order than packing field `{packing_field}`"
+    )]
+    FieldOrderNotIncreasing {
+        /// Concrete input-field type supplied by the caller.
+        input_field: &'static str,
+        /// Concrete packing-field type supplied by the caller.
+        packing_field: &'static str,
+    },
+}
 
 /// A derangement d(x) = x + increment.
 ///
@@ -428,7 +444,12 @@ where
     F: PrimeField32,
     PF: PrimeField,
 {
-    pub fn new(permutation: P) -> Result<Self, String> {
+    /// Construct a padding-free sponge that packs elements of `F` into `PF`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `PF` is not strictly larger than `F`.
+    pub fn new(permutation: P) -> Result<Self, MultiFieldSpongeError> {
         const {
             assert!(RATE > 0);
             assert!(RATE < WIDTH);
@@ -436,7 +457,10 @@ where
             assert!(OUT <= RATE);
         }
         if F::order() >= PF::order() {
-            return Err(String::from("F::order() must be less than PF::order()"));
+            return Err(MultiFieldSpongeError::FieldOrderNotIncreasing {
+                input_field: type_name::<F>(),
+                packing_field: type_name::<PF>(),
+            });
         }
 
         // Use shifted-radix injective packing for robust absorb encoding.
@@ -543,7 +567,12 @@ where
     F: PrimeField32,
     PF: PrimeField,
 {
-    pub fn new(permutation: P) -> Result<Self, String> {
+    /// Construct a padded sponge that packs elements of `F` into `PF`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `PF` is not strictly larger than `F`.
+    pub fn new(permutation: P) -> Result<Self, MultiFieldSpongeError> {
         const {
             assert!(RATE > 0);
             assert!(RATE < WIDTH);
@@ -551,7 +580,10 @@ where
             assert!(OUT <= RATE);
         }
         if F::order() >= PF::order() {
-            return Err(String::from("F::order() must be less than PF::order()"));
+            return Err(MultiFieldSpongeError::FieldOrderNotIncreasing {
+                input_field: type_name::<F>(),
+                packing_field: type_name::<PF>(),
+            });
         }
 
         // Use shifted-radix injective packing for robust absorb encoding.
@@ -656,6 +688,10 @@ where
 
 #[cfg(test)]
 mod tests {
+    use alloc::format;
+    use alloc::string::ToString;
+    use core::any::type_name;
+
     use p3_field::PrimeCharacteristicRing;
     use p3_koala_bear::KoalaBear;
     use proptest::prelude::*;
@@ -681,6 +717,42 @@ mod tests {
     impl<T, const WIDTH: usize> CryptographicPermutation<[T; WIDTH]> for MockPermutation where
         T: Copy + core::ops::Add<Output = T> + Default
     {
+    }
+
+    #[test]
+    fn padding_free_cross_field_sponge_names_both_incompatible_fields() {
+        let Err(error) =
+            MultiField32PaddingFreeSponge::<KoalaBear, KoalaBear, _, 4, 2, 2>::new(MockPermutation)
+        else {
+            panic!("equal-order fields must be rejected");
+        };
+
+        let field = type_name::<KoalaBear>();
+        assert_eq!(
+            error,
+            MultiFieldSpongeError::FieldOrderNotIncreasing {
+                input_field: field,
+                packing_field: field,
+            }
+        );
+        assert_eq!(
+            error.to_string(),
+            format!("input field `{field}` must have smaller order than packing field `{field}`")
+        );
+    }
+
+    #[test]
+    fn padded_cross_field_sponge_uses_the_shared_typed_error() {
+        let Err(error) =
+            MultiField32Pad10Sponge::<KoalaBear, KoalaBear, _, 4, 2, 2>::new(MockPermutation)
+        else {
+            panic!("equal-order fields must be rejected");
+        };
+
+        assert!(matches!(
+            error,
+            MultiFieldSpongeError::FieldOrderNotIncreasing { .. }
+        ));
     }
 
     /// Mock: weighted sum. output[i] = sum_j state[j] * (j+1).

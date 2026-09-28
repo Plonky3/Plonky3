@@ -425,12 +425,16 @@ fn security_requires_the_actual_preprocessed_opening_shape() {
         .bits
         .bits();
     assert!((sumcheck_bits - (123.0 - 12f64.log2() - (2560f64 * 1280f64).log2())).abs() < 1e-10);
-    assert!(
-        report
-            .terms()
-            .iter()
-            .any(|term| term.label == "preprocessed-pcs")
-    );
+    // Both commitments are charged, so the opening label appears once for each of them.
+    //
+    // The label alone cannot say which is which, so each term names its own commitment.
+    let openings: Vec<Option<&str>> = report
+        .terms()
+        .iter()
+        .filter(|term| term.label == "whir-opening")
+        .map(|term| term.component)
+        .collect();
+    assert_eq!(openings, [Some("main-pcs"), Some("preprocessed-pcs")]);
     report.require_security(20).unwrap();
     config.preprocessed_pcs = pcs_for(5, PREPROCESSED_WIDTH);
     let report = p3_multi_stark::security_report(&config, &instances).unwrap();
@@ -632,6 +636,63 @@ fn verify_rejects_violated_main_constraint() {
             VerificationError::Zerocheck(ZerocheckError::FinalSumMismatch)
         ),
         "expected zerocheck final-sum mismatch, got {err:?}"
+    );
+}
+
+#[test]
+fn verify_rejects_a_proof_missing_its_expected_preprocessed_opening() {
+    // Fixture state: the AIR declares one preprocessed column, so the key commits to it.
+    //
+    //     key   -> Some(commitment)
+    //     proof -> Some(opening)
+    let n = 256;
+    let fixed = fixed_column(n);
+    let air = PreprocessedAir {
+        height: n,
+        cells: &[],
+    };
+    let trace = main_trace(&fixed);
+    let log_height = log2_strict_usize(n);
+    let config = config_for(log_height);
+    let (pk, vk) = setup(&config, &[&air], &mut challenger()).unwrap();
+    let mut proof = prove(
+        &config,
+        ProverInstances::new(vec![ProverInstance::new(
+            &air,
+            Table::new(trace.transpose()),
+            &pk,
+            &[],
+        )]),
+        0,
+        &mut challenger(),
+    )
+    .unwrap();
+    assert!(proof.preprocessed_opening.is_some());
+
+    // Mutation: drop the opening that commitment requires.
+    //
+    //     key   -> Some(commitment)
+    //     proof -> None
+    proof.preprocessed_opening = None;
+
+    // Expected rejection: the key expects an opening the proof does not carry.
+    // Why: the rejection has to land before the opening schedule is described.
+    //   the step that replays the preprocessed opening assumes the section is there
+    //   -> reaching it empty-handed is an internal contradiction, not a verdict.
+    //
+    // This is presence, not contents.
+    // A test further down tampers with the values inside an opening that is present.
+    let err = verify(
+        &config,
+        VerifierInstances::new(vec![VerifierInstance::new(&air, &vk, log_height, &[])]),
+        &proof,
+        0,
+        &mut challenger(),
+    )
+    .unwrap_err();
+    assert!(
+        matches!(err, VerificationError::MissingPreprocessedOpening),
+        "expected MissingPreprocessedOpening, got {err:?}"
     );
 }
 

@@ -264,7 +264,7 @@ pub fn proven_security_report<L: LowDegreeTest>(
     );
 
     // Pick `m` by the composite rather than by the low-degree test alone. The
-    // batching term grows as `(m + 1/2)⁵`, so the LDT's own optimum can be far
+    // batching term grows as `(m + 1/2)^3`, so the LDT's own optimum can be far
     // from the composite's; see `LowDegreeTest::ldr_candidates`.
     let ldr = ldt
         .ldr_candidates(air, shape)
@@ -753,7 +753,7 @@ mod tests {
         assert!((batch_term.bits.bits() - expected_bits).abs() < 1e-9);
 
         // The fixed m = 10 WHIR default would report a tighter (larger)
-        // batch error here, since (m + 1/2)^5 grows with m.
+        // batch error here, since (m + 1/2)^3 grows with m.
         let fixed_m_bits = SecurityAssumption::JohnsonBound
             .prox_gaps_error(
                 shape.log_trace_length,
@@ -795,7 +795,7 @@ mod tests {
 
     /// A regime whose low-degree test can be pushed to a large proximity
     /// parameter by grinding, which is what exposes the batching term's
-    /// `(m + 1/2)⁵` growth.
+    /// `(m + 1/2)^3` growth.
     fn grindable_regime(commit_pow_bits: usize) -> crate::fri::FriRegime {
         crate::fri::FriRegime {
             log_blowup: 1,

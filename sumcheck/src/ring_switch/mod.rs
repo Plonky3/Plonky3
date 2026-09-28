@@ -101,6 +101,7 @@ use crate::error::SumcheckError;
 use crate::product_polynomial::ProductPolynomial;
 use crate::strategy::{Basis, SumcheckProver, VariableOrder};
 
+pub mod bits;
 pub mod equality;
 pub mod packing;
 pub mod tensor;

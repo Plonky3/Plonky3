@@ -22,7 +22,9 @@ use p3_lookup::{
 use p3_matrix::Matrix;
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
 use p3_maybe_rayon::prelude::*;
-use p3_uni_stark::{OpenedValues, PackedChallenge, PackedVal, ProverConstraintFolder};
+use p3_uni_stark::{
+    OpenedValues, PackedChallenge, PackedVal, PreprocessedOpenedValues, ProverConstraintFolder,
+};
 use p3_util::{DisjointMutPtr, log2_strict_usize};
 use tracing::{debug_span, info_span, instrument};
 
@@ -721,29 +723,30 @@ where
         }
 
         // Preprocessed openings: local and optionally next row.
-        let (preprocessed_local, preprocessed_next) = if let (Some(global), Some(pre_round)) =
-            (&common.preprocessed, preprocessed_openings)
-        {
-            global.instances[i].as_ref().map_or((None, None), |meta| {
+        let preprocessed = match (&common.preprocessed, preprocessed_openings) {
+            (Some(global), Some(pre_round)) => global.instances[i].as_ref().map(|meta| {
                 let vals = &pre_round[meta.matrix_index];
-                if !airs[i].preprocessed_next_row_columns().is_empty() {
+                let next = if !airs[i].preprocessed_next_row_columns().is_empty() {
                     assert_eq!(
                         vals.len(),
                         2,
                         "expected two opening points (zeta, zeta_next) for preprocessed trace"
                     );
-                    (Some(vals[0].clone()), Some(vals[1].clone()))
+                    Some(vals[1].clone())
                 } else {
                     assert_eq!(
                         vals.len(),
                         1,
                         "expected one opening point (zeta) for preprocessed trace"
                     );
-                    (Some(vals[0].clone()), None)
+                    None
+                };
+                PreprocessedOpenedValues {
+                    local: vals[0].clone(),
+                    next,
                 }
-            })
-        } else {
-            (None, None)
+            }),
+            _ => None,
         };
 
         // Permutation openings: present only for instances with lookups.
@@ -760,8 +763,7 @@ where
         let base_opened = OpenedValues {
             trace_local,
             trace_next,
-            preprocessed_local,
-            preprocessed_next,
+            preprocessed,
             quotient_chunks: qcs,
             random,
         };
@@ -892,20 +894,22 @@ where
     let periodic_table =
         pcs.build_periodic_lde_table(&periodic_cols, trace_domain, quotient_domain);
 
-    let periodic_packed: Vec<Vec<PackedVal<SC>>> = if periodic_table.is_empty() {
+    // The packed row groups of the periodic table repeat every `groups_in_period`
+    // groups, so only those are materialized and group `g` reads `g % groups_in_period`.
+    let ncols = periodic_table.width();
+    let groups_in_period = periodic_table.packed_group_period(pack_width);
+    let periodic_packed: Vec<PackedVal<SC>> = if periodic_table.is_empty() {
         Vec::new()
     } else {
-        let ncols = periodic_table.width();
-        (0..quotient_size)
-            .step_by(pack_width)
-            .map(|i_start| {
-                (0..ncols)
-                    .map(|col_idx| {
-                        PackedVal::<SC>::from_fn(|offset| {
-                            *periodic_table.get(i_start + offset, col_idx)
-                        })
+        let periodic_table_ref = &periodic_table;
+        (0..groups_in_period)
+            .flat_map(move |group| {
+                let i_start = group * pack_width;
+                (0..ncols).map(move |col_idx| {
+                    PackedVal::<SC>::from_fn(|offset| {
+                        *periodic_table_ref.get(i_start + offset, col_idx)
                     })
-                    .collect()
+                })
             })
             .collect()
     };
@@ -1026,7 +1030,8 @@ where
                 let periodic_values: &[PackedVal<SC>] = if periodic_packed.is_empty() {
                     &[]
                 } else {
-                    &periodic_packed[i_start / pack_width]
+                    let group = (i_start / pack_width) % groups_in_period;
+                    &periodic_packed[group * ncols..group * ncols + ncols]
                 };
                 let inner_folder = ProverConstraintFolder {
                     main,

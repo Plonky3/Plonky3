@@ -1,6 +1,7 @@
 use alloc::borrow::Cow;
 use alloc::vec::Vec;
 
+use p3_field::{ExtensionField, Field};
 use p3_matrix::dense::RowMajorMatrix;
 
 use crate::boundary::BoundaryPublic;
@@ -60,6 +61,33 @@ pub trait BaseAir<F>: Sync {
         F: Clone,
     {
         Cow::Borrowed(&[])
+    }
+
+    /// Return the period of each periodic column, in declaration order.
+    ///
+    /// Override when the columns are expensive to materialize.
+    fn periodic_periods(&self) -> Vec<usize>
+    where
+        F: Clone,
+    {
+        self.periodic_columns().iter().map(Vec::len).collect()
+    }
+
+    /// Evaluate every periodic column's multilinear extension at `point`, when the AIR has a closed form.
+    ///
+    /// Each column is first repeated to the trace height, one row per Boolean point.
+    ///
+    /// `point` has one coordinate per trace variable, the most significant bit first.
+    ///
+    /// Returns `None` to let the backend evaluate the columns itself.
+    ///
+    /// An override must return what the backend would compute, one value per column.
+    fn periodic_evaluations<EF>(&self, _point: &[EF]) -> Option<Vec<EF>>
+    where
+        F: Field,
+        EF: ExtensionField<F>,
+    {
+        None
     }
 
     /// Return the periodic values for the given row index.
@@ -234,6 +262,43 @@ pub trait BaseAir<F>: Sync {
     /// - No two cells name the same column and trace end.
     fn public_boundary_io(&self) -> &[BoundaryPublic] {
         &[]
+    }
+
+    /// Whether the AIR is sound only when every main-trace cell is a bit, which its constraints
+    /// do not enforce.
+    ///
+    /// Such an AIR must be proven under a commitment whose alphabet is one bit per cell, such as a
+    /// commitment to the trace's bits, where a cell outside `{0, 1}` is not representable.
+    ///
+    /// The hint is advisory: no prover or verifier consults it. Code that pairs an AIR with a
+    /// commitment to field elements must check it and refuse an AIR that reports `true`.
+    ///
+    /// A wrapper or enum AIR must forward this method, since the default reports no reliance.
+    ///
+    /// Returns `false` by default.
+    fn assumes_boolean_trace(&self) -> bool {
+        false
+    }
+
+    /// Number of leading main-trace columns that hold bits.
+    ///
+    /// These columns form the bit region, committed one bit per cell.
+    ///
+    /// The remaining columns form the dense region, committed one field element per cell.
+    ///
+    /// Both regions share one height, so one row reads both.
+    ///
+    /// A backend that commits every cell as a field element ignores the split.
+    ///
+    /// A wrapper or enum AIR must forward this method along with [`Self::width`].
+    ///
+    /// Returns the whole width when [`Self::assumes_boolean_trace`] holds, and zero otherwise.
+    fn boolean_columns(&self) -> usize {
+        if self.assumes_boolean_trace() {
+            self.width()
+        } else {
+            0
+        }
     }
 }
 

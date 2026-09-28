@@ -155,13 +155,14 @@ impl PartialOrd for Mersenne31 {
 
 impl Display for Mersenne31 {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        Display::fmt(&self.value, f)
+        // `value` may be the non-canonical `P` encoding of zero; print the field element.
+        Display::fmt(&self.as_canonical_u32(), f)
     }
 }
 
 impl Debug for Mersenne31 {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        Debug::fmt(&self.value, f)
+        Debug::fmt(&self.as_canonical_u32(), f)
     }
 }
 
@@ -739,6 +740,16 @@ mod tests {
         let max_canonical_json = serde_json::to_string(&((1u32 << 31) - 2)).unwrap();
         let max_canonical: F = serde_json::from_str(&max_canonical_json).unwrap();
         assert_eq!(max_canonical, F::new((1 << 31) - 2));
+    }
+
+    #[test]
+    fn display_and_debug_are_canonical() {
+        // `-ZERO` keeps the redundant `value == P` encoding of zero.
+        let neg_zero = -F::ZERO;
+        assert_eq!(neg_zero, F::ZERO);
+        assert_eq!(alloc::format!("{neg_zero}"), "0");
+        assert_eq!(alloc::format!("{neg_zero:?}"), "0");
+        assert_eq!(alloc::format!("{}", F::NEG_ONE), "2147483646");
     }
 
     #[test]

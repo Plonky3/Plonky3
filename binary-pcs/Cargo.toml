@@ -28,6 +28,7 @@ p3-multilinear-util.workspace = true
 p3-security.workspace = true
 p3-sumcheck.workspace = true
 p3-util.workspace = true
+p3-whir.workspace = true
 serde = { workspace = true, features = ["derive"] }
 thiserror.workspace = true
 tracing.workspace = true
@@ -44,6 +45,18 @@ rand.workspace = true
 
 [[bench]]
 name = "pcs"
+harness = false
+
+[[bench]]
+name = "packing"
+harness = false
+
+[[bench]]
+name = "boolean"
+harness = false
+
+[[bench]]
+name = "whir"
 harness = false
 
 [lints]

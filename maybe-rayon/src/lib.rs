@@ -3,6 +3,11 @@
 
 #![no_std]
 
+extern crate alloc;
+
+#[cfg(any(feature = "parallel", test))]
+extern crate std;
+
 /// Whether this crate uses the Rayon backend instead of the serial fallback.
 ///
 /// This reflects feature unification across dependents and remains true for a
@@ -11,6 +16,8 @@ pub const PARALLEL_ENABLED: bool = cfg!(feature = "parallel");
 
 #[cfg(not(feature = "parallel"))]
 mod serial;
+
+pub mod task_size;
 
 pub mod prelude {
     #[cfg(not(feature = "parallel"))]
@@ -26,6 +33,7 @@ pub mod prelude {
 
     #[cfg(not(feature = "parallel"))]
     pub use super::serial::*;
+    pub use super::task_size::{TaskSizeExt, min_task_len, should_split};
 
     pub trait SharedExt: ParallelIterator {
         /// Folds each split of the iterator with `fold_op` (seeded by `identity`), then

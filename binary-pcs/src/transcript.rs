@@ -1,13 +1,14 @@
 //! Fiat-Shamir transcript of one binary-tower PCS run.
 
 use alloc::vec::Vec;
+use core::marker::PhantomData;
 
-use p3_binary_field::BinaryField128;
 use p3_challenger::fs::{
     DomainSeparator, FieldToFieldCodec, FieldUnit, Hierarchy, Interaction, InteractionPattern,
-    Kind, Length, ProverState, VerifierState,
+    Kind, Length, ProverState, TranscriptField, VerifierState,
 };
 use p3_challenger::{CanObserve, CanSample, CanSampleUniformBits, GrindingChallenger};
+use p3_field::{AlgebraIdentity, Field};
 use p3_util::log2_strict_usize;
 
 use crate::params::BinaryPcsConfig;
@@ -35,8 +36,8 @@ const QUERY_POW: &str = "query_pow";
 /// Step label of the query positions.
 const QUERY_INDICES: &str = "query_indices";
 
-/// Sponge alphabet of a challenger that speaks the tower field natively.
-type Alphabet = FieldUnit<BinaryField128>;
+/// Sponge alphabet of a challenger that speaks the committed tower level natively.
+type Alphabet<F> = FieldUnit<F>;
 
 /// Numbers that fix the transcript of one binary-tower PCS run.
 ///
@@ -105,7 +106,11 @@ impl BinaryPcsShape {
     ///
     /// A flat sequence of leaf steps always passes structural validation.
     #[must_use]
-    pub fn pattern(&self) -> InteractionPattern {
+    pub fn pattern<F, EF>(&self) -> InteractionPattern
+    where
+        F: TranscriptField,
+        EF: Field + AlgebraIdentity<F>,
+    {
         let mut steps = Vec::with_capacity(self.num_oracles + 3);
 
         // One root per folded oracle, so the oracle count is the step count.
@@ -119,7 +124,7 @@ impl BinaryPcsShape {
         }
 
         // The last word is uncommitted, so every symbol of it is bound.
-        steps.push(Interaction::algebra::<BinaryField128, BinaryField128>(
+        steps.push(Interaction::algebra::<F, EF>(
             Hierarchy::Atomic,
             Kind::Message,
             FINAL_CODEWORD,
@@ -128,7 +133,7 @@ impl BinaryPcsShape {
 
         // A zero difficulty describes no work, so it contributes no step.
         if self.pow_bits > 0 {
-            steps.push(Interaction::algebra::<BinaryField128, BinaryField128>(
+            steps.push(Interaction::algebra::<F, F>(
                 Hierarchy::Atomic,
                 Kind::Pow,
                 QUERY_POW,
@@ -169,8 +174,12 @@ impl BinaryPcsShape {
     ///
     /// This makes the seed self-contained rather than closing a reachable gap.
     #[must_use]
-    pub fn domain_separator(&self) -> DomainSeparator<Alphabet> {
-        let mut separator = DomainSeparator::new(VERSION, NAME, self.pattern());
+    pub fn domain_separator<F, EF>(&self) -> DomainSeparator<Alphabet<F>>
+    where
+        F: TranscriptField,
+        EF: Field + AlgebraIdentity<F>,
+    {
+        let mut separator = DomainSeparator::new(VERSION, NAME, self.pattern::<F, EF>());
 
         separator
             .instance(&(self.num_variables as u64).to_be_bytes())
@@ -185,19 +194,20 @@ impl BinaryPcsShape {
 /// The challenger is borrowed, not consumed.
 ///
 /// The run sits inside a larger protocol, whose transcript continues where this one stops.
-pub struct BinaryPcsProverTranscript<'a, C> {
+pub struct BinaryPcsProverTranscript<'a, F: TranscriptField, EF, C> {
     /// Driver walking the description and holding the borrowed sponge.
-    state: ProverState<&'a mut C, Alphabet>,
+    state: ProverState<&'a mut C, Alphabet<F>>,
     /// The numbers this run was described with.
     shape: BinaryPcsShape,
+    /// Marker for the field the folded codewords live in.
+    _challenge: PhantomData<EF>,
 }
 
-impl<'a, C> BinaryPcsProverTranscript<'a, C>
+impl<'a, F, EF, C> BinaryPcsProverTranscript<'a, F, EF, C>
 where
-    C: CanObserve<BinaryField128>
-        + CanSample<BinaryField128>
-        + CanSampleUniformBits<BinaryField128>
-        + GrindingChallenger<Witness = BinaryField128>,
+    F: TranscriptField,
+    EF: Field + AlgebraIdentity<F>,
+    C: CanObserve<F> + CanSample<F> + CanSampleUniformBits<F> + GrindingChallenger<Witness = F>,
 {
     /// Seed the transcript from the shape.
     ///
@@ -207,11 +217,12 @@ where
     /// - `shape`: the numbers that fix this run's transcript.
     pub fn new(challenger: &'a mut C, shape: BinaryPcsShape) -> Self {
         // Seeding folds the shape fingerprint into the sponge before any step.
-        let separator = shape.domain_separator();
+        let separator = shape.domain_separator::<F, EF>();
 
         Self {
             state: ProverState::new(challenger, &separator),
             shape,
+            _challenge: PhantomData,
         }
     }
 
@@ -236,7 +247,7 @@ where
     /// # Panics
     ///
     /// When the codeword is not the length the run was described with.
-    pub fn final_codeword(&mut self, codeword: &[BinaryField128]) {
+    pub fn final_codeword(&mut self, codeword: &[EF]) {
         assert_eq!(
             codeword.len(),
             self.shape.final_codeword_len,
@@ -244,10 +255,7 @@ where
         );
         let _bound = self
             .state
-            .observe_extensions::<BinaryField128, BinaryField128, FieldToFieldCodec<BinaryField128>>(
-                FINAL_CODEWORD,
-                codeword,
-            );
+            .observe_extensions::<F, EF, FieldToFieldCodec<F>>(FINAL_CODEWORD, codeword);
     }
 
     /// Grind the site guarding the query positions.
@@ -255,9 +263,9 @@ where
     /// # Returns
     ///
     /// The witness the search found, or zero when the site asks for no work.
-    pub fn query_pow(&mut self) -> BinaryField128 {
+    pub fn query_pow(&mut self) -> F {
         if self.shape.pow_bits == 0 {
-            return BinaryField128::default();
+            return F::ZERO;
         }
         self.state.observe_pow(QUERY_POW, self.shape.pow_bits)
     }
@@ -268,14 +276,12 @@ where
     ///
     /// Each pair's low-indexed position, in ascending order.
     pub fn query_pairs(&mut self) -> Vec<usize> {
-        let kept = self
-            .state
-            .challenge_uniform_bits_rejecting::<BinaryField128>(
-                QUERY_INDICES,
-                self.shape.pair_bits,
-                self.shape.num_pairs,
-                |candidate, kept| !kept.contains(&candidate),
-            );
+        let kept = self.state.challenge_uniform_bits_rejecting::<F>(
+            QUERY_INDICES,
+            self.shape.pair_bits,
+            self.shape.num_pairs,
+            |candidate, kept| !kept.contains(&candidate),
+        );
         sorted_pairs(kept)
     }
 
@@ -304,19 +310,20 @@ where
 /// Verifier-side transcript of one binary-tower PCS run.
 ///
 /// Mirrors the prover driver step for step, so the two walk one description.
-pub struct BinaryPcsVerifierTranscript<'a, C> {
+pub struct BinaryPcsVerifierTranscript<'a, F: TranscriptField, EF, C> {
     /// Driver walking the description and holding the borrowed sponge.
-    state: VerifierState<'static, &'a mut C, Alphabet>,
+    state: VerifierState<'static, &'a mut C, Alphabet<F>>,
     /// The numbers this run was described with.
     shape: BinaryPcsShape,
+    /// Marker for the field the folded codewords live in.
+    _challenge: PhantomData<EF>,
 }
 
-impl<'a, C> BinaryPcsVerifierTranscript<'a, C>
+impl<'a, F, EF, C> BinaryPcsVerifierTranscript<'a, F, EF, C>
 where
-    C: CanObserve<BinaryField128>
-        + CanSample<BinaryField128>
-        + CanSampleUniformBits<BinaryField128>
-        + GrindingChallenger<Witness = BinaryField128>,
+    F: TranscriptField,
+    EF: Field + AlgebraIdentity<F>,
+    C: CanObserve<F> + CanSample<F> + CanSampleUniformBits<F> + GrindingChallenger<Witness = F>,
 {
     /// Seed the transcript from the shape.
     ///
@@ -325,11 +332,12 @@ where
     /// - `challenger`: sponge of the surrounding protocol, borrowed for this run.
     /// - `shape`: the numbers that fix this run's transcript.
     pub fn new(challenger: &'a mut C, shape: BinaryPcsShape) -> Self {
-        let separator = shape.domain_separator();
+        let separator = shape.domain_separator::<F, EF>();
 
         Self {
             state: VerifierState::new(challenger, &separator, &[]),
             shape,
+            _challenge: PhantomData,
         }
     }
 
@@ -352,7 +360,7 @@ where
     /// # Errors
     ///
     /// When the codeword is not the length the run was described with.
-    pub fn final_codeword(&mut self, codeword: &[BinaryField128]) -> Result<(), TranscriptFailure> {
+    pub fn final_codeword(&mut self, codeword: &[EF]) -> Result<(), TranscriptFailure<F>> {
         // The length comes from the proof, so a mismatch is a rejection.
         //
         // Releasing the completeness check keeps this the only failure.
@@ -366,10 +374,7 @@ where
 
         let _bound = self
             .state
-            .observe_extensions::<BinaryField128, BinaryField128, FieldToFieldCodec<BinaryField128>>(
-                FINAL_CODEWORD,
-                codeword,
-            );
+            .observe_extensions::<F, EF, FieldToFieldCodec<F>>(FINAL_CODEWORD, codeword);
 
         Ok(())
     }
@@ -380,12 +385,12 @@ where
     ///
     /// - The witness is not zero where the site asks for no work.
     /// - The witness misses the difficulty the site requires.
-    pub fn query_pow(&mut self, witness: BinaryField128) -> Result<(), TranscriptFailure> {
+    pub fn query_pow(&mut self, witness: F) -> Result<(), TranscriptFailure<F>> {
         if self.shape.pow_bits == 0 {
             // A zero-difficulty site plays no step, so nothing else reads this field.
             //
             // Pinning it here is what stops any value from riding along unbound.
-            if witness != BinaryField128::default() {
+            if witness != F::ZERO {
                 // Releasing the completeness check keeps this rejection the only failure.
                 self.state.abort();
                 return Err(TranscriptFailure::NonCanonicalPowWitness { actual: witness });
@@ -402,14 +407,12 @@ where
 
     /// Redraw the distinct fold pairs this run opens.
     pub fn query_pairs(&mut self) -> Vec<usize> {
-        let kept = self
-            .state
-            .challenge_uniform_bits_rejecting::<BinaryField128>(
-                QUERY_INDICES,
-                self.shape.pair_bits,
-                self.shape.num_pairs,
-                |candidate, kept| !kept.contains(&candidate),
-            );
+        let kept = self.state.challenge_uniform_bits_rejecting::<F>(
+            QUERY_INDICES,
+            self.shape.pair_bits,
+            self.shape.num_pairs,
+            |candidate, kept| !kept.contains(&candidate),
+        );
         sorted_pairs(kept)
     }
 
@@ -433,7 +436,7 @@ where
 /// A transcript step the proof failed to satisfy.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
-pub enum TranscriptFailure {
+pub enum TranscriptFailure<F> {
     /// The final codeword carries a symbol count the run never described.
     #[error("final codeword length mismatch: expected {expected}, got {got}")]
     FinalCodewordLength {
@@ -456,7 +459,7 @@ pub enum TranscriptFailure {
     #[error("query grinding witness is {actual} at zero difficulty, expected zero")]
     NonCanonicalPowWitness {
         /// The witness the proof carries.
-        actual: BinaryField128,
+        actual: F,
     },
 }
 
@@ -480,6 +483,7 @@ mod tests {
     use alloc::string::String;
     use alloc::vec;
 
+    use p3_binary_field::BinaryField128;
     use p3_challenger::CanSample;
     use p3_challenger::fs::PROTOCOL_ID_LEN;
     use p3_challenger::testing::{assert_seeds_pairwise_distinct, pow_difficulties, seed_digest};
@@ -497,7 +501,7 @@ mod tests {
 
     /// The configuration every shape below is derived from.
     fn base_config() -> BinaryPcsConfig {
-        BinaryPcsConfig::try_new(
+        BinaryPcsConfig::try_new::<BinaryField128, BinaryField128>(
             8,
             BinaryPcsParams {
                 log_inv_rate: 2,
@@ -529,7 +533,9 @@ mod tests {
             num_pairs: _,
         } = BinaryPcsShape::new(&base_config());
 
-        let digest = |shape: BinaryPcsShape| seed_digest(&shape.domain_separator());
+        let digest = |shape: BinaryPcsShape| {
+            seed_digest(&shape.domain_separator::<BinaryField128, BinaryField128>())
+        };
         let base = BinaryPcsShape::new(&base_config());
 
         let mut seeds = vec![(String::from("baseline"), digest(base))];
@@ -582,10 +588,13 @@ mod tests {
         //     bits = 4  ->  one step carrying the difficulty
         let mut unground = BinaryPcsShape::new(&base_config());
         unground.pow_bits = 0;
-        assert!(pow_difficulties(&unground.pattern()).is_empty());
+        assert!(pow_difficulties(&unground.pattern::<BinaryField128, BinaryField128>()).is_empty());
 
         let ground = BinaryPcsShape::new(&base_config());
-        assert_eq!(pow_difficulties(&ground.pattern()), vec![(QUERY_POW, 4)]);
+        assert_eq!(
+            pow_difficulties(&ground.pattern::<BinaryField128, BinaryField128>()),
+            vec![(QUERY_POW, 4)]
+        );
     }
 
     #[test]
@@ -617,7 +626,7 @@ mod tests {
         // Its separator has a different sponge alphabet, so it cannot join that sweep.
         let shape = BinaryPcsShape::new(&base_config());
 
-        for (label, _bits) in pow_difficulties(&shape.pattern()) {
+        for (label, _bits) in pow_difficulties(&shape.pattern::<BinaryField128, BinaryField128>()) {
             let budgeted = grinding_step(NAME_STR, label).is_some();
             let priced_elsewhere = is_unpriced_grinding_site(NAME_STR, label);
 
@@ -634,10 +643,11 @@ mod tests {
         // The other direction: a listed row must name a step this run describes.
         //
         // Without it, dropping the grind would leave the row silently stale.
-        let described: Vec<&str> = pow_difficulties(&shape.pattern())
-            .into_iter()
-            .map(|(label, _)| label)
-            .collect();
+        let described: Vec<&str> =
+            pow_difficulties(&shape.pattern::<BinaryField128, BinaryField128>())
+                .into_iter()
+                .map(|(label, _)| label)
+                .collect();
 
         for &(protocol, label) in &UNPRICED_GRINDING_SITES {
             if protocol != NAME_STR {

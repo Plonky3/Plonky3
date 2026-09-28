@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.8.0] - 2026-09-23
+### Merged PRs
+- Feat(binary-field): Ghash128, GF(2^128) in the polynomial basis, with SIMD packings (#2030)
+- Perf(field): route the self-algebra mixed dot product to the type's own dot product (#2050)
+- Chore: share local and CI check commands (#2062)
+- Feat(binary-field)!: add the AES field, GF(2^64) and the Frobenius engine (#2162)
+- Perf(sumcheck,multi-stark,binary-field): faster binary PCS openings, zerocheck kernels and tower serialization (#2165)
+- Perf(monty-31): fuse x86 dot products of length 5 to 8 into one reduction (#2157)
+- Perf(field): interleave independent multiplication chains in Powers::collect_n (#2196)
+
 ## [0.7.0] - 2026-09-04
 ### Merged PRs
 - Feat(field): characteristic-agnostic groundwork for binary fields (#2000)

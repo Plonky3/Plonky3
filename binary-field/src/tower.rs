@@ -28,6 +28,7 @@ use serde::de::Error;
 use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::clmul::{HAS_HARDWARE_CLMUL, mul_64, mul_128};
+use crate::gf2::characteristic_two_methods;
 use crate::{Gf2, tables};
 
 /// Seals [`TowerLevel`] against implementation outside this crate.
@@ -148,6 +149,18 @@ macro_rules! binary_tower_level {
 
             /// Selects the bits of a canonical representative of the level below.
             const HALF_MASK: $repr = Self::MASK >> Self::HALF_BITS;
+
+            /// A run of elements read in place as the backing integers they wrap.
+            #[inline]
+            #[must_use]
+            pub const fn as_repr_slice(values: &[Self]) -> &[$repr] {
+                // SAFETY: the level is `#[repr(transparent)]` over its backing integer.
+                //
+                // A run of one is therefore a run of the other, of the same length and alignment.
+                //
+                // The view borrows the same elements for the same lifetime.
+                unsafe { core::slice::from_raw_parts(values.as_ptr().cast::<$repr>(), values.len()) }
+            }
 
             /// The coefficients `(a0, a1)` of `self = a0 + a1·X`.
             #[inline]
@@ -333,18 +346,7 @@ macro_rules! binary_tower_level {
                 Self(<$repr>::from(b))
             }
 
-            #[inline]
-            fn double(&self) -> Self {
-                // `a + a = 0` in characteristic 2.
-                Self::ZERO
-            }
-
-            /// # Panics
-            /// Always panics: `2` is not invertible in characteristic 2.
-            #[inline]
-            fn halve(&self) -> Self {
-                panic!("halve is undefined in characteristic 2")
-            }
+            characteristic_two_methods!();
 
             #[inline]
             fn square(&self) -> Self {
@@ -419,21 +421,12 @@ macro_rules! binary_tower_level {
                 }
             }
 
+            /// `x·(x - 1) = x² - x = x² + x` in characteristic 2, and squaring is a linear
+            /// map here, so this avoids the tower/polynomial basis changes a general product
+            /// pays for.
             #[inline]
-            fn xor(&self, y: &Self) -> Self {
-                *self + *y
-            }
-
-            #[inline]
-            fn mul_2exp_u64(&self, exp: u64) -> Self {
-                if exp == 0 { *self } else { Self::ZERO }
-            }
-
-            /// # Panics
-            /// Always panics: `2` is not invertible in characteristic 2.
-            #[inline]
-            fn div_2exp_u64(&self, _exp: u64) -> Self {
-                panic!("div_2exp_u64 is undefined in characteristic 2")
+            fn bool_check(&self) -> Self {
+                self.square() + *self
             }
         }
 
@@ -494,9 +487,62 @@ macro_rules! binary_tower_level {
         impl RawDataSerializable for $name {
             const NUM_BYTES: usize = core::mem::size_of::<$repr>();
 
+            #[allow(refining_impl_trait)]
             #[inline]
-            fn into_bytes(self) -> impl IntoIterator<Item = u8> {
+            fn into_bytes(self) -> [u8; core::mem::size_of::<$repr>()] {
                 self.0.to_le_bytes()
+            }
+
+            #[inline]
+            fn into_parallel_byte_streams<const N: usize>(
+                input: impl IntoIterator<Item = [Self; N]>,
+            ) -> impl IntoIterator<Item = [u8; N]> {
+                input.into_iter().flat_map(|vector| {
+                    let bytes = vector.map(Self::into_bytes);
+                    (0..Self::NUM_BYTES).map(move |i| core::array::from_fn(|j| bytes[j][i]))
+                })
+            }
+
+            #[inline]
+            fn into_u64_stream(input: impl IntoIterator<Item = Self>) -> impl IntoIterator<Item = u64> {
+                Self::into_parallel_u64_streams(input.into_iter().map(|elem| [elem]))
+                    .into_iter()
+                    .map(|[word]| word)
+            }
+
+            #[inline]
+            fn into_parallel_u64_streams<const N: usize>(
+                input: impl IntoIterator<Item = [Self; N]>,
+            ) -> impl IntoIterator<Item = [u64; N]> {
+                // A backing integer of at least 64 bits fills one or two whole words, low word
+                // first. Narrower backing integers pack little-endian into one word, zero-padded
+                // at the end.
+                let mut input = input.into_iter();
+                let mut high: Option<[u64; N]> = None;
+                core::iter::from_fn(move || {
+                    if let Some(word) = high.take() {
+                        return Some(word);
+                    }
+                    let first = input.next()?;
+                    if Self::NUM_BYTES >= 8 {
+                        let wide = first.map(|elem| elem.0 as u128);
+                        if Self::NUM_BYTES == 16 {
+                            high = Some(wide.map(|value| (value >> 64) as u64));
+                        }
+                        return Some(wide.map(|value| value as u64));
+                    }
+                    let bits = 8 * Self::NUM_BYTES;
+                    let mut word = first.map(|elem| elem.0 as u64);
+                    let mut shift = bits;
+                    while shift < 64 {
+                        let Some(next) = input.next() else { break };
+                        for (lane, elem) in word.iter_mut().zip(next) {
+                            *lane |= (elem.0 as u64) << shift;
+                        }
+                        shift += bits;
+                    }
+                    Some(word)
+                })
             }
         }
 
@@ -775,6 +821,24 @@ mod tests {
     use proptest::prelude::*;
 
     use super::*;
+
+    #[test]
+    fn a_run_read_as_integers_is_its_elements_backing_integers() {
+        macro_rules! check {
+            ($field:ty) => {
+                let values = (0..9u8)
+                    .map(|i| <$field>::from_u8(i.wrapping_mul(37)))
+                    .collect::<Vec<_>>();
+                let reprs = values.iter().map(|x| x.to_repr()).collect::<Vec<_>>();
+                assert_eq!(<$field>::as_repr_slice(&values), reprs.as_slice());
+            };
+        }
+        check!(BinaryField8);
+        check!(BinaryField16);
+        check!(BinaryField32);
+        check!(BinaryField64);
+        check!(BinaryField128);
+    }
 
     #[test]
     fn zero_vectors_preserve_layout_and_support_growth() {
@@ -1154,8 +1218,86 @@ mod tests {
     }
 
     #[test]
-    fn field_testing_into_stream_matches_binary_field_128() {
+    fn field_testing_into_stream_matches_every_level() {
+        p3_field_testing::test_into_stream::<BinaryField2>();
+        p3_field_testing::test_into_stream::<BinaryField4>();
+        p3_field_testing::test_into_stream::<BinaryField8>();
+        p3_field_testing::test_into_stream::<BinaryField16>();
+        p3_field_testing::test_into_stream::<BinaryField32>();
+        p3_field_testing::test_into_stream::<BinaryField64>();
         p3_field_testing::test_into_stream::<BinaryField128>();
+    }
+
+    #[test]
+    fn word_streams_zero_pad_a_partial_final_word_at_every_level() {
+        // Reference: the little-endian byte stream, cut into words and zero-padded.
+        fn words_of(bytes: &[u8]) -> Vec<u64> {
+            bytes
+                .chunks(8)
+                .map(|chunk| {
+                    let mut word = [0u8; 8];
+                    word[..chunk.len()].copy_from_slice(chunk);
+                    u64::from_le_bytes(word)
+                })
+                .collect()
+        }
+
+        macro_rules! check {
+            ($field:ty) => {
+                for len in 0..=17 {
+                    let lanes: Vec<[$field; 3]> = (0..len)
+                        .map(|i| {
+                            core::array::from_fn(|lane| {
+                                <$field>::from_le_bytes(core::array::from_fn(|byte| {
+                                    (i * 31 + lane * 7 + byte * 13 + 1) as u8
+                                }))
+                            })
+                        })
+                        .collect();
+
+                    let lane_words: [Vec<u64>; 3] = core::array::from_fn(|lane| {
+                        let bytes: Vec<u8> = lanes
+                            .iter()
+                            .flat_map(|vector| vector[lane].into_bytes())
+                            .collect();
+                        words_of(&bytes)
+                    });
+
+                    let scalar: Vec<u64> =
+                        <$field>::into_u64_stream(lanes.iter().map(|vector| vector[0]))
+                            .into_iter()
+                            .collect();
+                    assert_eq!(
+                        scalar,
+                        lane_words[0],
+                        "{} scalar, len {len}",
+                        stringify!($field)
+                    );
+
+                    let parallel: Vec<[u64; 3]> =
+                        <$field>::into_parallel_u64_streams(lanes.iter().copied())
+                            .into_iter()
+                            .collect();
+                    let expected: Vec<[u64; 3]> = (0..lane_words[0].len())
+                        .map(|word| core::array::from_fn(|lane| lane_words[lane][word]))
+                        .collect();
+                    assert_eq!(
+                        parallel,
+                        expected,
+                        "{} parallel, len {len}",
+                        stringify!($field)
+                    );
+                }
+            };
+        }
+
+        check!(BinaryField2);
+        check!(BinaryField4);
+        check!(BinaryField8);
+        check!(BinaryField16);
+        check!(BinaryField32);
+        check!(BinaryField64);
+        check!(BinaryField128);
     }
 
     #[test]
@@ -1317,6 +1459,36 @@ mod tests {
         any::<u16>().prop_map(BinaryField16::from_repr)
     }
 
+    fn bf8() -> impl Strategy<Value = BinaryField8> {
+        any::<u8>().prop_map(BinaryField8::from_repr)
+    }
+
+    fn bf4() -> impl Strategy<Value = BinaryField4> {
+        any::<u8>().prop_map(BinaryField4::from_repr)
+    }
+
+    fn bf2() -> impl Strategy<Value = BinaryField2> {
+        any::<u8>().prop_map(BinaryField2::from_repr)
+    }
+
+    #[test]
+    fn bool_check_matches_the_vanishing_polynomial_at_zero_and_one() {
+        macro_rules! check {
+            ($field:ty) => {
+                for x in [<$field>::ZERO, <$field>::ONE] {
+                    assert_eq!(x.bool_check(), x * (x - <$field>::ONE));
+                }
+            };
+        }
+        check!(BinaryField2);
+        check!(BinaryField4);
+        check!(BinaryField8);
+        check!(BinaryField16);
+        check!(BinaryField32);
+        check!(BinaryField64);
+        check!(BinaryField128);
+    }
+
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(1000))]
 
@@ -1383,6 +1555,28 @@ mod tests {
             prop_assert_eq!(c.karatsuba_mul(d), c.reference_mul(d));
             prop_assert_eq!(e.karatsuba_mul(f), e.reference_mul(f));
             prop_assert_eq!(g.karatsuba_mul(h), g.reference_mul(h));
+        }
+
+        /// `bool_check` must agree with the vanishing polynomial `x * (x - 1)` at every level,
+        /// computed here through the ordinary `Mul` and `Sub` operators rather than the
+        /// squaring shortcut `bool_check` itself takes.
+        #[test]
+        fn bool_check_agrees_with_the_vanishing_polynomial(
+            a2 in bf2(),
+            a4 in bf4(),
+            a8 in bf8(),
+            a16 in bf16(),
+            a32 in bf32(),
+            a64 in bf64(),
+            a128 in bf128(),
+        ) {
+            prop_assert_eq!(a2.bool_check(), a2 * (a2 - BinaryField2::ONE));
+            prop_assert_eq!(a4.bool_check(), a4 * (a4 - BinaryField4::ONE));
+            prop_assert_eq!(a8.bool_check(), a8 * (a8 - BinaryField8::ONE));
+            prop_assert_eq!(a16.bool_check(), a16 * (a16 - BinaryField16::ONE));
+            prop_assert_eq!(a32.bool_check(), a32 * (a32 - BinaryField32::ONE));
+            prop_assert_eq!(a64.bool_check(), a64 * (a64 - BinaryField64::ONE));
+            prop_assert_eq!(a128.bool_check(), a128 * (a128 - BinaryField128::ONE));
         }
     }
 }

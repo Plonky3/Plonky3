@@ -2,7 +2,6 @@
 
 use core::fmt::Debug;
 
-use p3_binary_field::BinaryField128;
 use thiserror::Error;
 
 use crate::transcript::TranscriptFailure;
@@ -14,7 +13,7 @@ use crate::transcript::TranscriptFailure;
 /// cannot apply here.
 #[derive(Debug, Error)]
 #[non_exhaustive]
-pub enum BinaryPcsError<MmcsError> {
+pub enum BinaryPcsError<F, MmcsError> {
     /// The proof carries a different number of intermediate folding rounds than the config
     /// derives.
     ///
@@ -54,7 +53,7 @@ pub enum BinaryPcsError<MmcsError> {
     FinalCodewordLengthMismatch { expected: usize, actual: usize },
 
     /// A Merkle multiproof did not verify.
-    #[error("Merkle opening failed in round {round}")]
+    #[error("Merkle opening failed in round {round}: {source:?}")]
     MerkleFailed {
         round: usize,
         #[source]
@@ -103,13 +102,35 @@ pub enum BinaryPcsError<MmcsError> {
     #[error("prescribed opening points do not match the opening protocol")]
     OpeningPointShapeMismatch,
 
+    /// Supplied evaluations must cover every batch the protocol schedules.
+    ///
+    /// Reported apart from the points, which the same protocol also prescribes, so a caller
+    /// that got one of the two lists wrong learns which.
+    #[error("expected {expected} evaluation batches, {actual} supplied")]
+    OpeningEvalCountMismatch { expected: usize, actual: usize },
+
     /// One opening batch has the wrong number of evaluations for its column list.
-    #[error("table {table_idx} opening expected {expected} evaluations, got {actual}")]
+    ///
+    /// A batch's shape is the pair of side lengths, not their total, so the two sides are
+    /// reported apart: a request and a list that agree on the total can still disagree here.
+    #[error(
+        "table {table_idx} opening expected {expected_current} direct and {expected_next} successor evaluations, got {actual_current} and {actual_next}"
+    )]
     OpeningBatchSizeMismatch {
         table_idx: usize,
-        expected: usize,
-        actual: usize,
+        expected_current: usize,
+        expected_next: usize,
+        actual_current: usize,
+        actual_next: usize,
     },
+
+    /// The committed layout runs preprocessing rounds the opening pipeline does not lay out.
+    ///
+    /// The commit phase lays out a single committed column, so no round has a per-round
+    /// residual to read. Checked before any transcript operation, like every other shape
+    /// check here, so a layout the pipeline cannot open leaves the challenger alone.
+    #[error("the committed layout runs {folding} preprocessing rounds, expected none")]
+    OpeningPreprocessingDepth { folding: usize },
 
     /// The sumcheck transcript did not verify.
     #[error(transparent)]
@@ -137,11 +158,11 @@ pub enum BinaryPcsError<MmcsError> {
     // `pow_witness` is then bound to nothing: any value rides along and still verifies.
     // Zero is the only value an honest prover emits, so zero is the only value accepted.
     #[error("the grinding witness is {actual} at zero difficulty, expected zero")]
-    NonCanonicalPowWitness { actual: BinaryField128 },
+    NonCanonicalPowWitness { actual: F },
 }
 
-impl<E: Debug> From<TranscriptFailure> for BinaryPcsError<E> {
-    fn from(failure: TranscriptFailure) -> Self {
+impl<F: Debug, E: Debug> From<TranscriptFailure<F>> for BinaryPcsError<F, E> {
+    fn from(failure: TranscriptFailure<F>) -> Self {
         match failure {
             TranscriptFailure::FinalCodewordLength { expected, got } => {
                 Self::FinalCodewordLengthMismatch {

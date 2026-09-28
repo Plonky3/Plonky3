@@ -4,17 +4,18 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
-use p3_challenger::{CanSample, DuplexChallenger};
+use p3_challenger::{CanSample, DuplexChallenger, FieldChallenger};
 use p3_commit::MultilinearPcs;
 use p3_dft::Radix2DFTSmallBatch;
 use p3_field::extension::BinomialExtensionField;
 use p3_field::{Field, PackedValue, PrimeCharacteristicRing};
+use p3_keccak::Keccak256Hash;
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_multilinear_util::point::Point;
 use p3_sumcheck::layout::{Layout, PrefixProver, SuffixProver, Table, Witness, observe_commitment};
 use p3_sumcheck::test_util::{random_table_specs, table_specs_to_tables};
 use p3_sumcheck::{OpeningBatch, OpeningProtocol, PrescribedPointPcs, TableShape, TableSpec};
-use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
+use p3_symmetric::{CryptographicHasher, PaddingFreeSponge, TruncatedPermutation};
 use p3_util::log2_strict_usize;
 use rand::SeedableRng;
 use rand::rngs::SmallRng;
@@ -848,7 +849,9 @@ mod error_variant_tests {
     use p3_field::PrimeCharacteristicRing;
     use p3_multilinear_util::poly::Poly;
     use p3_sumcheck::layout::{Layout, SuffixProver, Table};
-    use p3_sumcheck::{OpeningBatch, OpeningProtocol, SumcheckError, TableShape, TableSpec};
+    use p3_sumcheck::{
+        OpeningBatch, OpeningProtocol, SumcheckData, SumcheckError, TableShape, TableSpec,
+    };
     use rand::SeedableRng;
     use rand::rngs::SmallRng;
 
@@ -904,13 +907,27 @@ mod error_variant_tests {
         PcsProof<F, EF, MyMmcs>,
         OpeningProtocol,
     ) {
+        commit_and_open_with(NUM_VARIABLES, FOLDING)
+    }
+
+    /// The same fixture over a table of `num_variables` folded by a constant `folding`.
+    #[allow(clippy::type_complexity)]
+    fn commit_and_open_with(
+        num_variables: usize,
+        folding: usize,
+    ) -> (
+        TestWhirPcs<L>,
+        <TestWhirPcs<L> as MultilinearPcs<EF, MyChallenger>>::Commitment,
+        PcsProof<F, EF, MyMmcs>,
+        OpeningProtocol,
+    ) {
         // Random table of two columns; deterministic seed for reproducibility.
         let mut rng = SmallRng::seed_from_u64(1);
-        let table = Table::rand(&mut rng, 2, NUM_VARIABLES);
-        let witness = L::new_witness(vec![table], FOLDING);
+        let table = Table::rand(&mut rng, 2, num_variables);
+        let witness = L::new_witness(vec![table], folding);
         // Two opening batches: (cols [0, 1]) and (col [0]).
         let protocol = OpeningProtocol::new(vec![TableSpec::new(
-            TableShape::new(NUM_VARIABLES, 2),
+            TableShape::new(num_variables, 2),
             vec![
                 OpeningBatch::new(vec![0, 1], vec![]),
                 OpeningBatch::new(vec![0], vec![]),
@@ -927,7 +944,7 @@ mod error_variant_tests {
             security_level: 32,
             pow_bits: 0,
             round_log_inv_rates: vec![4],
-            folding_factor: FoldingFactor::Constant(FOLDING),
+            folding_factor: FoldingFactor::Constant(folding),
             soundness_type: SecurityAssumption::CapacityBound,
             starting_log_inv_rate: 1,
         };
@@ -1310,6 +1327,35 @@ mod error_variant_tests {
     }
 
     #[test]
+    fn rejects_final_sumcheck_data_when_no_final_rounds_are_played() {
+        // Invariant: a schedule whose folds use up every variable plays no closing sumcheck,
+        // so only a presence check can bind the final sumcheck field.
+        //
+        //     final rounds = 0  ->  prover writes None, verifier never reads the field
+        //     final rounds > 0  ->  the closing fold replays and checks it
+        //
+        // Fixture state: 16 stacked variables folded by 8, so the schedule is [8, 8].
+        //
+        // Mutation: attach sumcheck data that nothing reads.
+        let (pcs, commitment, proof, protocol) = commit_and_open_with(15, 8);
+        assert_eq!(pcs.config.folding_schedule, vec![8, 8]);
+        assert_eq!(pcs.final_sumcheck_rounds(), 0);
+        assert!(proof.whir.final_sumcheck.is_none());
+        verify(&pcs, &commitment, &proof, protocol.clone()).expect("the honest proof must verify");
+
+        let mut mutated = proof;
+        mutated.whir.final_sumcheck = Some(SumcheckData {
+            polynomial_evaluations: vec![[EF::ONE, EF::TWO]],
+            pow_witnesses: vec![],
+        });
+        let err = verify(&pcs, &commitment, &mutated, protocol).unwrap_err();
+        assert!(
+            matches!(err, VerifierError::UnexpectedFinalSumcheck),
+            "expected UnexpectedFinalSumcheck, got {err:?}"
+        );
+    }
+
+    #[test]
     fn rejects_with_round_count_mismatch_when_intermediate_sumcheck_is_short() {
         // Invariant: an intermediate round's sumcheck sends one polynomial per folded variable.
         // That count is the next round's folding factor.
@@ -1514,4 +1560,85 @@ fn the_commit_phase_binds_exactly_what_the_binding_method_binds() {
         CanSample::<F>::sample(&mut committed),
         CanSample::<F>::sample(&mut replayed),
     );
+}
+
+#[test]
+fn the_opening_proof_bytes_are_pinned() {
+    // Fixture state: the first spec set of `test_whir_end_to_end`, folded 2 vars
+    // at a time under `CapacityBound`, with no grinding anywhere.
+    type L = PrefixProver<F, EF>;
+    let specs = [
+        TableSpec::new(
+            TableShape::new(12, 3),
+            vec![
+                OpeningBatch::new(vec![0, 1, 2], Default::default()),
+                OpeningBatch::new(vec![0, 2], Default::default()),
+                OpeningBatch::new(vec![1], Default::default()),
+            ],
+        ),
+        TableSpec::new(
+            TableShape::new(10, 2),
+            vec![
+                OpeningBatch::new(vec![0, 1], Default::default()),
+                OpeningBatch::new(vec![1], Default::default()),
+            ],
+        ),
+    ];
+    let folding_factor = FoldingFactor::Constant(2);
+    let folding = folding_factor.at_round(0);
+    let tables = table_specs_to_tables(&specs);
+    let witness = L::new_witness(tables, folding);
+    let protocol = OpeningProtocol::new(specs.to_vec()).pad_to_min_num_variables(folding);
+    assert_eq!(witness.table_shapes(), protocol.table_shapes());
+
+    let num_variables = witness.num_variables();
+    let mut rng = SmallRng::seed_from_u64(1);
+    let perm = Perm::new_from_rng_128(&mut rng);
+    let mmcs = MyMmcs::new(MyHash::new(perm.clone()), MyCompress::new(perm), 0);
+    let params = ProtocolParameters {
+        security_level: 32,
+        pow_bits: 0,
+        round_log_inv_rates: default_round_log_inv_rates(num_variables, &folding_factor),
+        folding_factor,
+        soundness_type: SecurityAssumption::CapacityBound,
+        starting_log_inv_rate: 1,
+    };
+    let config = WhirConfig::new(num_variables, params).unwrap();
+    let pcs = TestWhirPcs::<L>::new(config, MyDft::default(), mmcs);
+
+    let mut prover_challenger = challenger();
+    let (commitment, prover_data) = <TestWhirPcs<L> as MultilinearPcs<EF, MyChallenger>>::commit(
+        &pcs,
+        witness,
+        &mut prover_challenger,
+    )
+    .unwrap();
+    let proof = <TestWhirPcs<L> as MultilinearPcs<EF, MyChallenger>>::open(
+        &pcs,
+        prover_data,
+        protocol.clone(),
+        &mut prover_challenger,
+    )
+    .unwrap();
+    let next: EF = prover_challenger.sample_algebra_element();
+
+    assert_eq!(
+        Keccak256Hash.hash_iter(postcard::to_allocvec(&(&commitment, &proof, next)).unwrap()),
+        [
+            244, 65, 206, 249, 114, 107, 168, 30, 243, 43, 239, 111, 44, 71, 21, 83, 202, 168, 253,
+            72, 104, 217, 96, 201, 234, 132, 227, 21, 110, 57, 180, 150
+        ]
+    );
+
+    let mut verifier_challenger = challenger();
+    <TestWhirPcs<L> as MultilinearPcs<EF, MyChallenger>>::verify(
+        &pcs,
+        &commitment,
+        &proof,
+        &mut verifier_challenger,
+        protocol,
+    )
+    .expect("verification failed");
+    let verifier_next: EF = verifier_challenger.sample_algebra_element();
+    assert_eq!(verifier_next, next);
 }

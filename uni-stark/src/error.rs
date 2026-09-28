@@ -3,6 +3,7 @@
 use alloc::format;
 use alloc::string::String;
 
+pub use p3_commit::PeriodicColumnShapeError;
 use thiserror::Error;
 
 use crate::StarkTranscriptFailure;
@@ -16,7 +17,11 @@ pub enum ProvingError<E> {
 }
 
 /// Specific reasons why a proof's shape is invalid.
+///
+/// New reasons appear whenever the verifier learns to reject another malformed shape.
+/// Matching on this list from another crate therefore requires a catch-all arm.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum InvalidProofShapeError {
     /// Instance arrays (airs, opened_values, public_values, degree_bits) have different lengths.
     #[error("instance count mismatch")]
@@ -29,11 +34,23 @@ pub enum InvalidProofShapeError {
         got: usize,
     },
     /// Trace next values have wrong width or are unexpectedly missing.
-    #[error("air {air}: trace next width mismatch or missing")]
-    TraceNextMismatch { air: usize },
+    #[error(
+        "{}trace next width mismatch or missing",
+        air.map_or_else(String::new, |air| format!("air {air}: "))
+    )]
+    TraceNextMismatch { air: Option<usize> },
     /// Trace next values present when AIR doesn't use next row.
-    #[error("air {air}: unexpected trace next values")]
-    UnexpectedTraceNext { air: usize },
+    #[error(
+        "{}unexpected trace next values",
+        air.map_or_else(String::new, |air| format!("air {air}: "))
+    )]
+    UnexpectedTraceNext { air: Option<usize> },
+    /// Preprocessed next values present when the AIR doesn't read the next preprocessed row.
+    #[error(
+        "{}unexpected preprocessed next values",
+        air.map_or_else(String::new, |air| format!("air {air}: "))
+    )]
+    UnexpectedPreprocessedNext { air: Option<usize> },
     /// Quotient chunks count doesn't match expected.
     #[error("air {air}: quotient chunks count mismatch: expected {expected}, got {got}")]
     QuotientChunksCountMismatch {
@@ -72,11 +89,14 @@ pub enum InvalidProofShapeError {
     #[error("air {air}: preprocessed width mismatch")]
     PreprocessedWidthMismatch { air: usize },
     /// Preprocessed values present when preprocessed width is zero.
-    #[error("air {air}: unexpected preprocessed values")]
-    UnexpectedPreprocessedValues { air: usize },
-    /// Proof degree bits are too small for the PCS ZK setting.
     #[error(
-        "{}degree_bits too small for zk setting: expected at least {minimum}, got {got}",
+        "{}unexpected preprocessed values",
+        air.map_or_else(String::new, |air| format!("air {air}: "))
+    )]
+    UnexpectedPreprocessedValues { air: Option<usize> },
+    /// Proof degree bits fall below the smallest trace height the commitment scheme accepts.
+    #[error(
+        "{}degree_bits too small for the pcs: expected at least {minimum}, got {got}",
         air.map_or_else(String::new, |air| format!("air {air}: "))
     )]
     DegreeBitsTooSmall {
@@ -131,20 +151,6 @@ pub enum InvalidProofShapeError {
     NonCanonicalOodPowWitness,
 }
 
-/// Reasons a periodic column cannot be evaluated.
-///
-/// - Periodic columns are AIR definition, not proof data.
-/// - A malformed one is an AIR bug, surfaced here instead of a panic.
-#[derive(Debug, Error)]
-pub enum PeriodicColumnError {
-    /// A periodic column length is not a power of two.
-    #[error("periodic column length must be a power of two, got {got}")]
-    LengthNotPowerOfTwo { got: usize },
-    /// A periodic column is longer than the trace it repeats over.
-    #[error("periodic column length too large: expected at most {maximum}, got {got}")]
-    LengthTooLarge { maximum: usize, got: usize },
-}
-
 /// Top-level verification error.
 #[derive(Debug, Error)]
 pub enum VerificationError<PcsErr>
@@ -156,7 +162,7 @@ where
     InvalidProofShape(#[from] InvalidProofShapeError),
     /// A periodic column declared by the AIR cannot be evaluated.
     #[error(transparent)]
-    PeriodicColumn(#[from] PeriodicColumnError),
+    PeriodicColumn(#[from] PeriodicColumnShapeError),
     /// An error occurred while verifying the claimed openings.
     #[error("invalid opening argument: {0:?}")]
     InvalidOpeningArgument(PcsErr),

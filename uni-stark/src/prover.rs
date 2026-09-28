@@ -17,8 +17,8 @@ use tracing::{debug_span, info_span, instrument};
 
 use crate::{
     Com, Commitments, Domain, OpenedValues, PackedChallenge, PackedVal, PcsProverError,
-    PreprocessedProverData, Proof, ProverConstraintFolder, ProvingError, StarkGenericConfig,
-    StarkProverTranscript, StarkShape, Val, get_constraint_layout,
+    PreprocessedOpenedValues, PreprocessedProverData, Proof, ProverConstraintFolder, ProvingError,
+    StarkGenericConfig, StarkProverTranscript, StarkShape, Val, get_constraint_layout,
     get_log_num_quotient_chunks_for_domain,
 };
 #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
@@ -462,22 +462,14 @@ where
     } else {
         None
     };
-    let (preprocessed_local, preprocessed_next) = if preprocessed_width > 0 {
-        let local = Some(opened_values[opening_layout.preprocessed][0][0].clone());
-        let next = if pre_next {
-            Some(opened_values[opening_layout.preprocessed][0][1].clone())
-        } else {
-            None
-        };
-        (local, next)
-    } else {
-        (None, None)
-    };
+    let preprocessed = (preprocessed_width > 0).then(|| PreprocessedOpenedValues {
+        local: opened_values[opening_layout.preprocessed][0][0].clone(),
+        next: pre_next.then(|| opened_values[opening_layout.preprocessed][0][1].clone()),
+    });
     let opened_values = OpenedValues {
         trace_local,
         trace_next,
-        preprocessed_local,
-        preprocessed_next,
+        preprocessed,
         quotient_chunks,
         random,
     };
@@ -768,20 +760,22 @@ where
         pcs.build_periodic_lde_table(&periodic_cols, trace_domain, quotient_domain);
 
     let pack_width = Pack::<SC, A, Strat>::WIDTH;
-    let periodic_packed: Vec<Vec<Pack<SC, A, Strat>>> = if periodic_table.is_empty() {
+    // The packed row groups of the periodic table repeat every `groups_in_period`
+    // groups, so only those are materialized and group `g` reads `g % groups_in_period`.
+    let ncols = periodic_table.width();
+    let groups_in_period = periodic_table.packed_group_period(pack_width);
+    let periodic_packed: Vec<Pack<SC, A, Strat>> = if periodic_table.is_empty() {
         Vec::new()
     } else {
-        let ncols = periodic_table.width();
-        (0..quotient_size)
-            .step_by(pack_width)
-            .map(|i_start| {
-                (0..ncols)
-                    .map(|col_idx| {
-                        Pack::<SC, A, Strat>::from_fn(|offset| {
-                            *periodic_table.get(i_start + offset, col_idx)
-                        })
+        let periodic_table_ref = &periodic_table;
+        (0..groups_in_period)
+            .flat_map(move |group| {
+                let i_start = group * pack_width;
+                (0..ncols).map(move |col_idx| {
+                    Pack::<SC, A, Strat>::from_fn(|offset| {
+                        *periodic_table_ref.get(i_start + offset, col_idx)
                     })
-                    .collect()
+                })
             })
             .collect()
     };
@@ -850,7 +844,8 @@ where
                 let periodic_values: &[Pack<SC, A, Strat>] = if periodic_packed.is_empty() {
                     &[]
                 } else {
-                    &periodic_packed[i_start / pack_width]
+                    let group = (i_start / pack_width) % groups_in_period;
+                    &periodic_packed[group * ncols..group * ncols + ncols]
                 };
 
                 let (quotient, base_constraints, ext_constraints) = Strat::eval_row_group(

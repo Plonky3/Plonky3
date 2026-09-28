@@ -385,7 +385,12 @@ where
             )?;
             let query_points: Vec<EF> = stir_indexes
                 .iter()
-                .map(|&index| EF::from(round_params.folded_domain_gen.exp_u64(index as u64)))
+                .map(|&index| {
+                    EF::from(
+                        F::two_adic_generator(round_params.log_folded_domain_size)
+                            .exp_u64(index as u64),
+                    )
+                })
                 .collect();
 
             // Batch the carried claim with the fresh constraints.

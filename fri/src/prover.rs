@@ -312,10 +312,16 @@ where
             // to the current folded polynomial, we need to multiply by a random factor.
             // We use beta^arity as the random factor to maintain independence.
             let beta_pow = beta.exp_power_of_2(log_arity);
+            // One item reads the running coefficient and the incoming one.
+            // It rewrites the running coefficient in place, so it moves three elements.
+            //
+            // Each round folds the vector down by the arity.
+            // The last rounds are therefore short enough that a dispatch outweighs the pass.
+            let item_bytes = 3 * size_of::<Challenge>();
             folded
                 .par_iter_mut()
                 .zip(v.par_iter())
-                .for_each(|(c, &x)| *c += beta_pow * x);
+                .for_each_min_task_bytes(item_bytes, |(c, &x)| *c += beta_pow * x);
         }
     }
 

@@ -6,8 +6,7 @@ use core::marker::PhantomData;
 use p3_challenger::fs::TranscriptField;
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
 use p3_commit::{Mmcs, MultilinearPcs};
-use p3_dft::TwoAdicSubgroupDft;
-use p3_field::{ExtensionField, PrimeField64, TwoAdicField};
+use p3_field::{ExtensionField, Field};
 use p3_matrix::dense::DenseMatrix;
 use p3_multilinear_util::point::Point;
 use p3_sumcheck::layout::{Layout, Table, Verifier, Witness, observe_commitment};
@@ -17,6 +16,7 @@ use super::prover::WhirProver;
 use super::verifier::WhirVerifier;
 use super::verifier::errors::VerifierError;
 use crate::WhirConfigError;
+use crate::domain::WhirDomain;
 use crate::pcs::proof::PcsProof;
 
 /// Prover-side handoff between the commit and open phases of the PCS.
@@ -34,7 +34,7 @@ use crate::pcs::proof::PcsProof;
 #[derive(Clone)]
 pub struct WhirProverData<F, EF, MT, L>
 where
-    F: TwoAdicField,
+    F: Field,
     EF: ExtensionField<F>,
     MT: Mmcs<F>,
     L: Layout<F, EF>,
@@ -49,7 +49,7 @@ where
 
 impl<F, EF, MT, L> WhirProverData<F, EF, MT, L>
 where
-    F: TwoAdicField,
+    F: Field,
     EF: ExtensionField<F>,
     MT: Mmcs<F>,
     L: Layout<F, EF>,
@@ -63,9 +63,9 @@ where
 impl<EF, F, Dft, MT, Challenger, L> MultilinearPcs<EF, Challenger>
     for WhirProver<EF, F, Dft, MT, Challenger, L>
 where
-    F: TwoAdicField + PrimeField64 + TranscriptField + Ord,
-    EF: ExtensionField<F> + TwoAdicField,
-    Dft: TwoAdicSubgroupDft<F>,
+    F: Field + TranscriptField + Ord,
+    EF: ExtensionField<F>,
+    Dft: WhirDomain<F, EF>,
     MT: Mmcs<F>,
     Challenger: FieldChallenger<F>
         + GrindingChallenger<Witness = F>
@@ -126,10 +126,8 @@ where
     ) -> Result<Self::Proof, Self::ProverError> {
         self.config.validate_initial_claims(
             protocol
-                .iter_openings()
-                .try_fold(self.commitment_ood_samples, |n, (_, batch)| {
-                    n.checked_add(batch.len())
-                })
+                .checked_num_claims()
+                .and_then(|n| n.checked_add(self.commitment_ood_samples))
                 .ok_or(WhirConfigError::InitialClaimCountOverflow)?,
         )?;
         let initial_ood_answers = tracing::info_span!("ood claims").in_scope(|| {
@@ -215,8 +213,9 @@ where
                 .sum::<usize>()
                 .saturating_add(self.commitment_ood_samples),
         )?;
-        let verifier = WhirVerifier::new(&self.config, &self.mmcs, L::variable_order());
-        verifier.verify(
+        let verifier = WhirVerifier::new(&self.config, &self.dft, &self.mmcs, L::variable_order());
+        // The run closes its own terminal check, so its folding point is informational.
+        let _ = verifier.verify(
             &proof.whir,
             challenger,
             commitment,
@@ -231,9 +230,9 @@ where
 impl<EF, F, Dft, MT, Challenger, L> PrescribedPointPcs<EF, Challenger>
     for WhirProver<EF, F, Dft, MT, Challenger, L>
 where
-    F: TwoAdicField + PrimeField64 + TranscriptField + Ord,
-    EF: ExtensionField<F> + TwoAdicField,
-    Dft: TwoAdicSubgroupDft<F>,
+    F: Field + TranscriptField + Ord,
+    EF: ExtensionField<F>,
+    Dft: WhirDomain<F, EF>,
     MT: Mmcs<F>,
     Challenger: FieldChallenger<F>
         + GrindingChallenger<Witness = F>
@@ -262,10 +261,8 @@ where
     ) -> Result<Self::Proof, Self::ProverError> {
         self.config.validate_initial_claims(
             protocol
-                .iter_openings()
-                .try_fold(self.commitment_ood_samples, |n, (_, batch)| {
-                    n.checked_add(batch.len())
-                })
+                .checked_num_claims()
+                .and_then(|n| n.checked_add(self.commitment_ood_samples))
                 .ok_or(WhirConfigError::InitialClaimCountOverflow)?,
         )?;
         // One prescribed point per opening batch.
@@ -362,8 +359,9 @@ where
                 .sum::<usize>()
                 .saturating_add(self.commitment_ood_samples),
         )?;
-        let verifier = WhirVerifier::new(&self.config, &self.mmcs, L::variable_order());
-        verifier.verify(
+        let verifier = WhirVerifier::new(&self.config, &self.dft, &self.mmcs, L::variable_order());
+        // The run closes its own terminal check, so its folding point is informational.
+        let _ = verifier.verify(
             &proof.whir,
             challenger,
             commitment,

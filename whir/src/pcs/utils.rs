@@ -47,7 +47,7 @@ use p3_util::log2_strict_usize;
 /// `num_queries >= folded_domain_size` returns the full domain, in
 /// ascending order, with **no challenger draws**: every position is opened,
 /// so there is nothing left to decide. This is WHIR's final round: 1-4
-/// folded positions vs. `final_queries` up to 75.
+/// folded positions vs. `terminal.num_queries` up to 75.
 ///
 /// # Cost
 ///

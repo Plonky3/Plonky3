@@ -267,6 +267,10 @@ fn verify_stir_compat_fixture() -> Result<(), Box<dyn std::error::Error>> {
     );
     let proof: p3_uni_stark::Proof<MyConfig> = postcard::from_bytes(&proof_bytes)?;
     verify(&config, &air, &proof, &pis)?;
+
+    // Re-encoding must reproduce the stored bytes.
+    // The wire layout is then pinned in both directions, not just on decode.
+    assert_eq!(postcard::to_allocvec(&proof)?, proof_bytes);
     Ok(())
 }
 

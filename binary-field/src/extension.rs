@@ -45,10 +45,13 @@ macro_rules! binary_tower_extension {
 
             #[inline]
             fn mul(self, rhs: $lower) -> Self {
-                // These intermediate subfields need more coefficient products than the
-                // native full-width backend; the byte and quadratic subfields do not.
+                // Coordinate expansion costs one narrow product per coordinate.
+                // A carryless multiply makes the wide product cheaper than that from here up.
+                //
+                // The byte level stays on the expansion: its products are table lookups.
+                // The half-width level stays on it too: two products still beat the wide one.
                 if crate::clmul::HAS_HARDWARE_CLMUL
-                    && <$upper>::BITS == 128
+                    && matches!(<$upper>::BITS, 64 | 128)
                     && matches!(<$lower>::BITS, 16 | 32)
                 {
                     return self * Self::from(rhs);

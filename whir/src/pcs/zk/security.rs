@@ -35,7 +35,7 @@ where
             self.oracle_randomness[self.n_rounds()],
             final_config.domain_size >> final_config.folding_factor,
             1,
-            self.final_queries,
+            self.randomized_terminal.num_queries,
         );
 
         let mask_groups = self
@@ -64,7 +64,7 @@ where
             self.soundness_type,
             source,
             mask_groups,
-            self.final_pow_bits,
+            self.randomized_terminal.pow_bits,
         )
     }
 }
@@ -182,6 +182,18 @@ mod tests {
     }
 
     #[test]
+    fn stock_config_spends_different_pow_bits_on_the_plain_and_randomized_terminals() {
+        let config = stock_config(SecurityAssumption::CapacityBound);
+
+        let randomized_pow_bits = config.base_case_config().pow_bits;
+        let plain_pow_bits = config.inner().terminal().pow_bits;
+
+        assert_eq!(randomized_pow_bits, 10);
+        assert_eq!(plain_pow_bits, 13);
+        assert_ne!(randomized_pow_bits, plain_pow_bits);
+    }
+
+    #[test]
     fn mask_groups_keep_chronological_roles() {
         let report =
             stock_config(SecurityAssumption::CapacityBound).hiding_base_case_security_report();
@@ -234,17 +246,17 @@ mod tests {
         );
         assert_eq!(
             johnson.source.mca.classification,
-            HidingBoundClassification::Approximation
+            HidingBoundClassification::Proven
         );
         assert_eq!(
             johnson.gamma_round.combined.classification,
-            HidingBoundClassification::Approximation
+            HidingBoundClassification::Proven
         );
         assert_eq!(
             johnson.round_by_round.classification,
-            HidingBoundClassification::Approximation
+            HidingBoundClassification::Proven
         );
-        assert_eq!(johnson.round_by_round.proven_bits(), None);
+        assert!(johnson.round_by_round.proven_bits().is_some());
 
         let capacity =
             stock_config(SecurityAssumption::CapacityBound).hiding_base_case_security_report();

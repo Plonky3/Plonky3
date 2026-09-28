@@ -26,7 +26,19 @@ use p3_field::Field;
 ///   makes the fingerprint injective only across tuples of equal declared
 ///   width — a shorter tuple is equivalent to a longer one left-padded with
 ///   zeros, so e.g. `[x]` and `[0, x]` fingerprint identically on one bus.
-///   Callers must keep every tuple on a given bus at a fixed width.
+///   Every tuple on a given bus must therefore share a width.
+///
+/// Two checks cover part of that, and neither covers all of it.
+///
+/// Local lookups are checked when they are built.
+///
+/// Every global on a bus, exclusive branches included, is checked when that AIR is packed.
+///
+/// Both look at one AIR, and a bus spans AIRs.
+///
+/// Senders and receivers cancel in the cross-AIR sum, so tuples alias without sharing a column.
+///
+/// The cross-AIR check is a separate call, and an assembler owes it.
 ///
 /// # Soundness
 ///

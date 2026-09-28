@@ -1,8 +1,10 @@
 //! Property-based and edge-case tests for the DFT crate internals.
 //!
-//! Complements the generic harness in `field-testing/dft_testing.rs`.
+//! Complements the generic harness in `field-testing/src/dft_testing.rs`.
 
 use core::mem::MaybeUninit;
+use std::cell::Cell;
+use std::rc::Rc;
 
 use p3_baby_bear::BabyBear;
 use p3_dft::{
@@ -11,15 +13,14 @@ use p3_dft::{
 };
 use p3_field::extension::BinomialExtensionField;
 use p3_field::{Field, PrimeCharacteristicRing, TwoAdicField};
+use p3_goldilocks::Goldilocks;
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
 use proptest::prelude::*;
 use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
 
-/// Concrete field used throughout this test module.
-///
-/// A single 31-bit prime field is sufficient to validate the field-agnostic DFT algorithms.
+/// Default field for the property tests.
 type F = BabyBear;
 
 /// Derive a deterministic random field element from a seed.
@@ -744,6 +745,78 @@ proptest! {
 // -----------------------------------------------------------------------------
 // `coset_lde_batch_with_transform`
 // -----------------------------------------------------------------------------
+
+fn check_coset_lde_table_order_and_transform<F: TwoAdicField + Ord>() {
+    for log_h in 0..=4 {
+        let h = 1 << log_h;
+        for width in [1, 3] {
+            let coeffs = RowMajorMatrix::new(
+                (0..h * width).map(|i| F::from_usize(i + 1)).collect(),
+                width,
+            );
+            let input = NaiveDft.dft_batch(coeffs.clone());
+            for added_bits in 0..=3 {
+                let dft = Radix2DitParallel::default();
+                for shift in [F::ZERO, F::ONE, F::GENERATOR] {
+                    let mut expected_coeffs = coeffs.clone();
+                    for (index, row) in expected_coeffs.values.chunks_exact_mut(width).enumerate() {
+                        for value in row {
+                            *value *= F::from_usize(index + 2);
+                        }
+                    }
+                    expected_coeffs
+                        .values
+                        .resize((h << added_bits) * width, F::ZERO);
+                    let expected = NaiveDft.coset_dft_batch(expected_coeffs, shift);
+
+                    for pass in 0..2 {
+                        // Rc also checks that the callback need not implement Send or Sync.
+                        let calls = Rc::new(Cell::new(0));
+                        let callback_calls = Rc::clone(&calls);
+                        let actual = dft.coset_lde_batch_with_transform(
+                            input.clone(),
+                            added_bits,
+                            shift,
+                            move |coeffs, layout| {
+                                assert_eq!(layout, Layout::BitReversed);
+                                callback_calls.set(callback_calls.get() + 1);
+                                for (physical_row, row) in
+                                    coeffs.values.chunks_exact_mut(width).enumerate()
+                                {
+                                    let index = p3_util::reverse_bits_len(physical_row, log_h);
+                                    for (column, value) in row.iter_mut().enumerate() {
+                                        assert_eq!(
+                                            *value,
+                                            F::from_usize(index * width + column + 1)
+                                        );
+                                        *value *= F::from_usize(index + 2);
+                                    }
+                                }
+                            },
+                        );
+
+                        assert_eq!(calls.get(), 1);
+                        assert_eq!(
+                            actual.to_row_major_matrix(),
+                            expected,
+                            "log_h={log_h}, width={width}, added_bits={added_bits}, shift={shift:?}, pass={pass}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn coset_lde_table_order_and_transform_baby_bear() {
+    check_coset_lde_table_order_and_transform::<BabyBear>();
+}
+
+#[test]
+fn coset_lde_table_order_and_transform_goldilocks() {
+    check_coset_lde_table_order_and_transform::<Goldilocks>();
+}
 
 proptest! {
     /// A per-row scaling closure (whose factor depends on the natural-order

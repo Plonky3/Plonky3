@@ -39,8 +39,8 @@ use p3_util::log2_ceil_usize;
 use thiserror::Error;
 
 use crate::fractional_gkr::{
-    Fraction, FractionGkrError, FractionGkrOutput, FractionGkrProof, prove_fractional_gkr,
-    verify_fractional_gkr,
+    Fraction, FractionGkrError, FractionGkrOutput, FractionGkrProof, LeafNumerator,
+    prove_fractional_gkr, verify_fractional_gkr,
 };
 use crate::lookup::transcript::{LookupProverTranscript, LookupShape, LookupVerifierTranscript};
 
@@ -694,8 +694,16 @@ where
     // Materialize every `multiplicity / denominator` fraction.
     // Prove their padded sum is zero and open both tables at one output point.
     let fraction = plan.materialize_fraction(main, preprocessed, public_values, alpha, beta);
-    let (fractional_gkr, output) =
-        transcript.reduction(|challenger| prove_fractional_gkr(&fraction, challenger));
+    let (fractional_gkr, output) = transcript.reduction(|challenger| {
+        // LogUp's numerators are multiplicities, so this leaf keeps them in the base field.
+        prove_fractional_gkr(
+            Fraction {
+                n: LeafNumerator::Base(&fraction.n),
+                d: &fraction.d,
+            },
+            challenger,
+        )
+    });
 
     // Theta is drawn only after the reduction has fixed its point and openings.
     // It folds the two openings into the one claim the zerocheck carries:
@@ -807,6 +815,8 @@ mod tests {
     use rand::{RngExt, SeedableRng};
 
     use super::*;
+    use crate::backend::GenericBackend;
+    use crate::config::DEFAULT_SLICED_ROUNDS;
     use crate::zerocheck::{AirZerocheck, ZerocheckError, get_air_degrees};
 
     type F = BabyBear;
@@ -1337,11 +1347,12 @@ mod tests {
         let lookup_proof = lookup_proof.unwrap();
         let airs = [&air];
         let sumcheck = AirZerocheck::new(&airs, 0);
-        let (proof, prover_point) = sumcheck.prove_with_lookup(
+        let (proof, prover_point) = sumcheck.prove_with_lookup::<F, EF, GenericBackend, _>(
             &[None],
             &[&main],
             &[public_values],
             lookup,
+            DEFAULT_SLICED_ROUNDS,
             &mut prover_challenger,
         );
 
@@ -1457,13 +1468,15 @@ mod tests {
         );
         let lookup_proof = lookup_proof.unwrap();
         let loose_airs = [&loose];
-        let (proof, _) = AirZerocheck::new(&loose_airs, 0).prove_with_lookup(
-            &[None],
-            &[&main],
-            &[public_values],
-            lookup,
-            &mut prover_challenger,
-        );
+        let (proof, _) = AirZerocheck::new(&loose_airs, 0)
+            .prove_with_lookup::<F, EF, GenericBackend, _>(
+                &[None],
+                &[&main],
+                &[public_values],
+                lookup,
+                DEFAULT_SLICED_ROUNDS,
+                &mut prover_challenger,
+            );
 
         let check = |air: &PermutationSumAir| {
             let mut verifier_challenger = challenger();
@@ -1486,7 +1499,7 @@ mod tests {
         };
 
         // Control: the loose AIR never reads the claim, so the shifted output slips through.
-        check(&loose).expect("an unbound public value is not checked at all");
+        let _ = check(&loose).expect("an unbound public value is not checked at all");
 
         // Listing the cell adds one surviving pin to the closing check:
         //
@@ -1526,11 +1539,12 @@ mod tests {
         );
         let lookup_proof = lookup_proof.unwrap();
         let sumcheck = AirZerocheck::new(&air_refs, 0);
-        let (proof, prover_point) = sumcheck.prove_with_lookup(
+        let (proof, prover_point) = sumcheck.prove_with_lookup::<F, EF, GenericBackend, _>(
             &preprocessed,
             &table_refs,
             &public_values,
             lookup,
+            DEFAULT_SLICED_ROUNDS,
             &mut prover_challenger,
         );
 
@@ -1585,11 +1599,12 @@ mod tests {
         );
         let lookup_proof = lookup_proof.unwrap();
         let sumcheck = AirZerocheck::new(&airs, 0);
-        let (proof, prover_point) = sumcheck.prove_with_lookup(
+        let (proof, prover_point) = sumcheck.prove_with_lookup::<F, EF, GenericBackend, _>(
             &[None, None],
             &[&tall, &short],
             &publics,
             lookup,
+            DEFAULT_SLICED_ROUNDS,
             &mut prover_challenger,
         );
 

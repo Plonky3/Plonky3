@@ -1,16 +1,21 @@
-//! An AIR for the Keccak-f permutation. Assumes the field size is between 2^16 and 2^32.
+//! AIRs for the Keccak-f permutation.
+//!
+//! [`KeccakAir`] assumes the field size is between 2^16 and 2^32.
+//! [`KeccakBinaryAir`] assumes the field has characteristic 2.
 
 #![no_std]
 
 extern crate alloc;
 
 mod air;
+mod binary;
 mod columns;
 mod constants;
 mod generation;
 mod round_flags;
 
 pub use air::*;
+pub use binary::*;
 pub use columns::*;
 pub use constants::*;
 pub use generation::*;

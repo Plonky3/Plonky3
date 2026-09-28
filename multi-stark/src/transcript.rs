@@ -85,8 +85,14 @@ const MAIN_COMMITMENT: &str = "main_commitment";
 /// Step label of one instance's public values.
 const PUBLIC_VALUES: &str = "public_values";
 
+/// Step label of the bracket around the binary-native bus argument.
+const BUS_ARGUMENT: &str = "bus_argument";
+
 /// Step label of the bracket around the delegated lookup argument.
 const LOOKUP_ARGUMENT: &str = "lookup_argument";
+
+/// Step label of the bracket around the delegated indexed-lookup reduction.
+const INDEXED_LOOKUP: &str = "indexed_lookup";
 
 /// Step label of the bracket around the delegated AIR zerocheck.
 const ZEROCHECK: &str = "zerocheck";
@@ -106,8 +112,14 @@ type Alphabet<F> = FieldUnit<F>;
 /// It does not reach the pattern fingerprint.
 struct MainCommitment;
 
+/// Type-level name of the binary-native bus argument.
+struct BusArgument;
+
 /// Type-level name of the sub-protocol the statement delegates its lookups to.
 struct LookupArgument;
+
+/// Type-level name of the sub-protocol the statement delegates its indexed lookups to.
+struct IndexedLookup;
 
 /// Type-level name of the sub-protocol the statement delegates its constraints to.
 struct Zerocheck;
@@ -163,6 +175,14 @@ pub struct MultiStarkShape {
     pub instances: Vec<MultiStarkInstanceShape>,
     /// Grinding difficulty each delegated sumcheck round runs at.
     pub pow_bits: usize,
+    /// Whether any AIR of the batch declares an indexed read.
+    ///
+    /// A batch declaring none plays no indexed bracket.
+    ///
+    /// Its transcript is then the one it had before indexed lookups existed.
+    pub has_indexed: bool,
+    /// Whether any AIR declares a binary-native bus interaction.
+    pub has_bus: bool,
 }
 
 impl MultiStarkShape {
@@ -187,7 +207,13 @@ impl MultiStarkShape {
     /// When the two slices disagree on length.
     /// Both are keyed by the instance's position in batch order.
     #[must_use]
-    pub fn new<F, A>(airs: &[&A], num_variables: &[usize], pow_bits: usize) -> Self
+    pub fn new<F, A>(
+        airs: &[&A],
+        num_variables: &[usize],
+        pow_bits: usize,
+        has_indexed: bool,
+        has_bus: bool,
+    ) -> Self
     where
         A: BaseAir<F> + ?Sized,
     {
@@ -211,6 +237,8 @@ impl MultiStarkShape {
                 })
                 .collect(),
             pow_bits,
+            has_indexed,
+            has_bus,
         }
     }
 
@@ -277,12 +305,26 @@ impl MultiStarkShape {
             ));
         }
 
-        // Four delegations follow, in the order the run performs them.
+        // Bus challenges must follow every commitment and public statement value.
+        if self.has_bus {
+            steps.extend(delegation::<BusArgument>(BUS_ARGUMENT));
+        }
+
+        // The remaining delegations follow in the order the run performs them.
         //
         // Each one's steps live in the callee's own pattern, under the callee's own seed.
         // What this pattern states is that the delegation happens, and where.
         steps.extend(delegation::<LookupArgument>(LOOKUP_ARGUMENT));
         steps.extend(delegation::<Zerocheck>(ZEROCHECK));
+
+        // The indexed reduction reads the point the zerocheck bound.
+        //
+        // It also closes on claims the opening below has to cover, so it sits between them.
+        //
+        // A batch declaring no indexed read never runs it, and never describes it.
+        if self.has_indexed {
+            steps.extend(delegation::<IndexedLookup>(INDEXED_LOOKUP));
+        }
         steps.extend(delegation::<MainOpening>(MAIN_OPENING));
 
         // Nothing is opened against a commitment the batch never made.
@@ -438,6 +480,16 @@ where
         }
     }
 
+    /// Lend the sponge to the binary-native bus argument when declared.
+    pub fn bus_argument<R>(&mut self, run: impl FnOnce(&mut C) -> R) -> Option<R> {
+        self.shape.has_bus.then(|| {
+            self.state.begin_protocol::<BusArgument>(BUS_ARGUMENT);
+            let output = run(self.state.challenger_mut());
+            self.state.end_protocol::<BusArgument>(BUS_ARGUMENT);
+            output
+        })
+    }
+
     /// Lend the sponge to the lookup argument, bracketed as a sub-protocol.
     ///
     /// The callee seeds its own driver from the state this one has reached.
@@ -449,6 +501,20 @@ where
         self.state.begin_protocol::<LookupArgument>(LOOKUP_ARGUMENT);
         let output = run(self.state.challenger_mut());
         self.state.end_protocol::<LookupArgument>(LOOKUP_ARGUMENT);
+        output
+    }
+
+    /// Lend the sponge to the indexed-lookup reduction, bracketed as a sub-protocol.
+    ///
+    /// The callee seeds its own driver from the state this one has reached.
+    ///
+    /// # Returns
+    ///
+    /// Whatever the delegated run produced.
+    pub fn indexed_lookup<R>(&mut self, run: impl FnOnce(&mut C) -> R) -> R {
+        self.state.begin_protocol::<IndexedLookup>(INDEXED_LOOKUP);
+        let output = run(self.state.challenger_mut());
+        self.state.end_protocol::<IndexedLookup>(INDEXED_LOOKUP);
         output
     }
 
@@ -627,6 +693,16 @@ where
         Ok(())
     }
 
+    /// Replay the binary-native bus argument when the statement declares one.
+    pub fn bus_argument<R>(&mut self, run: impl FnOnce(&mut C) -> R) -> Option<R> {
+        self.shape.has_bus.then(|| {
+            self.state.begin_protocol::<BusArgument>(BUS_ARGUMENT);
+            let output = run(self.state.challenger_mut());
+            self.state.end_protocol::<BusArgument>(BUS_ARGUMENT);
+            output
+        })
+    }
+
     /// Lend the sponge to the lookup argument, bracketed as a sub-protocol.
     ///
     /// The bracket closes whatever the delegated run returned.
@@ -639,6 +715,20 @@ where
         self.state.begin_protocol::<LookupArgument>(LOOKUP_ARGUMENT);
         let output = run(self.state.challenger_mut());
         self.state.end_protocol::<LookupArgument>(LOOKUP_ARGUMENT);
+        output
+    }
+
+    /// Lend the sponge to the indexed-lookup reduction, bracketed as a sub-protocol.
+    ///
+    /// The callee seeds its own driver from the state this one has reached.
+    ///
+    /// # Returns
+    ///
+    /// Whatever the delegated run produced.
+    pub fn indexed_lookup<R>(&mut self, run: impl FnOnce(&mut C) -> R) -> R {
+        self.state.begin_protocol::<IndexedLookup>(INDEXED_LOOKUP);
+        let output = run(self.state.challenger_mut());
+        self.state.end_protocol::<IndexedLookup>(INDEXED_LOOKUP);
         output
     }
 
@@ -788,6 +878,8 @@ mod tests {
                 },
             ],
             pow_bits: 4,
+            has_indexed: false,
+            has_bus: false,
         }
     }
 
@@ -820,15 +912,20 @@ mod tests {
                 self.1.clone()
             }
         }
-        let baseline =
-            MultiStarkShape::new::<F, _>(&[&ColumnsAir(vec![0, 1], vec![0, 1])], &[4], 0);
+        let baseline = MultiStarkShape::new::<F, _>(
+            &[&ColumnsAir(vec![0, 1], vec![0, 1])],
+            &[4],
+            0,
+            false,
+            false,
+        );
         for air in [
             ColumnsAir(vec![1, 0], vec![0, 1]),
             ColumnsAir(vec![0, 2], vec![0, 1]),
             ColumnsAir(vec![0, 1], vec![1, 0]),
             ColumnsAir(vec![0, 1], vec![0, 2]),
         ] {
-            let changed = MultiStarkShape::new::<F, _>(&[&air], &[4], 0);
+            let changed = MultiStarkShape::new::<F, _>(&[&air], &[4], 0, false, false);
             assert!(!seeds_agree(&baseline, &changed));
         }
     }
@@ -853,6 +950,8 @@ mod tests {
         let MultiStarkShape {
             instances,
             pow_bits,
+            has_indexed,
+            has_bus,
         } = base_shape();
         let num_instances = instances.len();
         let MultiStarkInstanceShape {
@@ -872,6 +971,14 @@ mod tests {
         let mut shape = base_shape();
         shape.pow_bits = pow_bits + 1;
         mutations.push(("pow_bits", shape));
+
+        let mut shape = base_shape();
+        shape.has_indexed = !has_indexed;
+        mutations.push(("has_indexed", shape));
+
+        let mut shape = base_shape();
+        shape.has_bus = !has_bus;
+        mutations.push(("has_bus", shape));
 
         let mut shape = base_shape();
         shape.instances.truncate(num_instances - 1);
@@ -942,6 +1049,7 @@ mod tests {
         transcript.preprocessed_commitment(preprocessed);
         transcript.main_commitment(|challenger| challenger.observe(main));
         transcript.public_values(public_values);
+        transcript.bus_argument(|_| ());
         transcript.lookup_argument(|_| ());
         transcript.zerocheck(|_| ());
         transcript.main_opening(|_| ());
@@ -969,6 +1077,7 @@ mod tests {
         transcript
             .public_values(public_values)
             .expect("the public values match the described counts");
+        transcript.bus_argument(|_| ());
         transcript.lookup_argument(|_| ());
         transcript.zerocheck(|_| ());
         transcript.main_opening(|_| ());
@@ -1054,7 +1163,7 @@ mod tests {
         };
 
         // The arities and the difficulty come from the caller's own configuration.
-        let shape = MultiStarkShape::new::<F, _>(&[&first, &second], &[9, 4], 6);
+        let shape = MultiStarkShape::new::<F, _>(&[&first, &second], &[9, 4], 6, false, false);
 
         assert_eq!(
             shape,
@@ -1078,6 +1187,8 @@ mod tests {
                     },
                 ],
                 pow_bits: 6,
+                has_indexed: false,
+                has_bus: false,
             }
         );
         assert_eq!(shape.num_preprocessed_tables(), 1);
@@ -1101,6 +1212,26 @@ mod tests {
             straight.pattern::<F>().pattern_hash(),
             swapped.pattern::<F>().pattern_hash()
         );
+    }
+
+    #[test]
+    fn declaring_an_indexed_read_describes_one_more_delegation() {
+        // The indexed bracket is described only by a batch that declares a read.
+        //
+        //     declares none : 5 brackets
+        //     declares one  : 6 brackets, the extra one between zerocheck and opening
+        //
+        // A pattern that never described it would leave the two batches sharing a seed.
+        //
+        // A proof of one would then replay against the other.
+        let without = base_shape();
+        let with = MultiStarkShape {
+            has_indexed: true,
+            ..base_shape()
+        };
+
+        assert_eq!(with.pattern::<F>().len(), without.pattern::<F>().len() + 2);
+        assert!(!seeds_agree(&without, &with));
     }
 
     #[test]
@@ -1361,6 +1492,8 @@ mod tests {
             |(instances, pow_bits)| MultiStarkShape {
                 instances,
                 pow_bits,
+                has_indexed: false,
+                has_bus: false,
             },
         )
     }

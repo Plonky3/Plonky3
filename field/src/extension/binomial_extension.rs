@@ -604,6 +604,43 @@ pub fn binomial_mul<F: Field, R: Algebra<F> + Algebra<R2>, R2: Algebra<F>, const
     }
 }
 
+/// Multiplies by a fixed extension element, with `W` folded into its coefficients.
+///
+/// Wrapping `X^(k+D)` back to `W * X^k` makes every output coefficient one dot product:
+///
+/// ```text
+///     c_k = sum_{j <= k} a_j * b_{k-j}  +  sum_{j > k} a_j * (W * b_{k+D-j})
+/// ```
+///
+/// The `D - 1` products `W * b_i` stay in the scalar field.
+///
+/// So a SIMD left operand pays one reduction per coefficient, and nothing for `W`.
+#[inline]
+pub fn binomial_mul_by_scalar<F: Field, R: Algebra<F>, const D: usize>(
+    a: &[R; D],
+    b: &[F; D],
+    res: &mut [R; D],
+    w: F,
+) {
+    // Both copies of `b` are lifted into `R` once, so every row below is plain moves.
+    //
+    // The constant coefficient never wraps, so its scaled slot is left unused.
+    let b_lift: [R; D] = b.map(R::from);
+    let wb: [R; D] = array::from_fn(|i| R::from(if i == 0 { F::ZERO } else { b[i] * w }));
+
+    for (k, c) in res.iter_mut().enumerate() {
+        // Row `k` of the multiplication matrix: `b` reversed up to `X^k`, then the wrapped tail.
+        let row: [R; D] = array::from_fn(|j| {
+            if j <= k {
+                b_lift[k - j].dup()
+            } else {
+                wb[D + k - j].dup()
+            }
+        });
+        *c = R::dot_product(a, &row);
+    }
+}
+
 /// Square a vector representing an element in a binomial extension.
 ///
 /// This is optimized for the case that R is a prime field or its packing.

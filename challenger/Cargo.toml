@@ -27,9 +27,11 @@ tracing.workspace = true
 [dev-dependencies]
 num-bigint.workspace = true
 p3-baby-bear = { path = "../baby-bear" }
+p3-blake3 = { path = "../blake3" }
 p3-bn254 = { path = "../bn254" }
 p3-goldilocks = { path = "../goldilocks" }
 p3-koala-bear = { path = "../koala-bear" }
+p3-sha256 = { path = "../sha256" }
 proptest.workspace = true
 
 [lints]

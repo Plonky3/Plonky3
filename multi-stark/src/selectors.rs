@@ -3,9 +3,14 @@
 use alloc::vec::Vec;
 use core::ops::{AddAssign, Sub};
 
-use p3_field::{ExtensionField, Field, PackedFieldExtension, PackedValue, PrimeCharacteristicRing};
+use p3_air::BaseAir;
+use p3_field::{
+    ExtensionField, Field, PackedField, PackedFieldExtension, PackedValue, PrimeCharacteristicRing,
+};
+use p3_matrix::dense::RowMajorMatrix;
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::PolyView;
+use p3_sumcheck::layout::Table;
 use p3_util::log2_strict_usize;
 use thiserror::Error;
 
@@ -318,6 +323,55 @@ impl<EF: Field> BoundaryEvals<EF> {
             ),
         )
     }
+
+    /// The full selector values at a residual-cube row, combined with the bound-coordinate
+    /// prefix, spread across the lanes of `P`: one lane per consecutive residual row from `row`.
+    ///
+    /// Same construction as [`Self::from_row_with_prefix`], evaluated once per lane.
+    fn from_lane_group_with_prefix<P>(row: usize, height: usize, prefix: Self) -> BoundaryEvals<P>
+    where
+        P: PackedField<Scalar = EF>,
+    {
+        BoundaryEvals::new(
+            P::from_fn(|lane| prefix.first * EF::from_bool(row + lane == 0)),
+            P::from_fn(|lane| prefix.last * EF::from_bool(row + lane + 1 == height)),
+            P::from_fn(|lane| {
+                let suffix_last = EF::from_bool(row + lane + 1 == height);
+                EF::from_bool(row + lane + 1 < height) + suffix_last * prefix.transition
+            }),
+        )
+    }
+
+    /// Packed `(value, per-step difference)` pair for folding one variable, with a
+    /// bound-coordinate prefix: the twin of [`Self::row_pair_with_prefix`] over a packing of
+    /// the same field.
+    ///
+    /// # Arguments
+    ///
+    /// - `row`: index of the first low-half row in this lane group.
+    /// - `half`: distance from a low row to its matching high row.
+    /// - `height`: number of rows in the residual cube.
+    /// - `prefix`: partial products over the coordinates bound so far.
+    pub(super) fn row_pair_with_prefix_lanes<P>(
+        row: usize,
+        half: usize,
+        height: usize,
+        prefix: Self,
+    ) -> (BoundaryEvals<P>, BoundaryEvals<P>)
+    where
+        P: PackedField<Scalar = EF>,
+    {
+        let boundary = Self::from_lane_group_with_prefix::<P>(row, height, prefix);
+        let hi_boundary = Self::from_lane_group_with_prefix::<P>(row + half, height, prefix);
+        (
+            boundary,
+            BoundaryEvals::new(
+                hi_boundary.first - boundary.first,
+                hi_boundary.last - boundary.last,
+                hi_boundary.transition - boundary.transition,
+            ),
+        )
+    }
 }
 
 impl<EF> AddAssign for BoundaryEvals<EF>
@@ -393,7 +447,7 @@ pub enum PeriodicError {
 /// # Arguments
 ///
 /// - `declared`: periodic column count the AIR advertises.
-/// - `columns`: one period vector per column, in declaration order.
+/// - `periods`: the period of each column, in declaration order.
 /// - `log_height`: base-two logarithm of the trace height.
 ///
 /// # Returns
@@ -406,26 +460,24 @@ pub enum PeriodicError {
 /// - A period vector is empty.
 /// - A period is not a power of two.
 /// - A period exceeds the trace height.
-pub(super) fn periodic_num_variables<F>(
+pub(super) fn periodic_num_variables(
     declared: usize,
-    columns: &[Vec<F>],
+    periods: &[usize],
     log_height: usize,
 ) -> Result<Vec<usize>, PeriodicError> {
     // The opening layout steps over the advertised count to reach the next AIR's columns.
     // A disagreement there misplaces every column laid out after this AIR.
-    if declared != columns.len() {
+    if declared != periods.len() {
         return Err(PeriodicError::CountMismatch {
             declared,
-            supplied: columns.len(),
+            supplied: periods.len(),
         });
     }
 
-    columns
+    periods
         .iter()
         .enumerate()
-        .map(|(column, values)| {
-            let period = values.len();
-
+        .map(|(column, &period)| {
             // An empty vector names no values to repeat.
             if period == 0 {
                 return Err(PeriodicError::Empty { column });
@@ -503,7 +555,8 @@ where
     let k = point.len();
 
     // Reject a declaration that does not fit before indexing the point with it.
-    let num_variables = periodic_num_variables(declared, columns, k)?;
+    let periods = columns.iter().map(Vec::len).collect::<Vec<_>>();
+    let num_variables = periodic_num_variables(declared, &periods, k)?;
 
     Ok(columns
         .iter()
@@ -513,6 +566,73 @@ where
             PolyView::new(values).eval_base(&Point::new(point[k - j..].to_vec()))
         })
         .collect())
+}
+
+/// Evaluate an AIR's periodic columns at the bound point, through its closed form when it has one.
+///
+/// An AIR without a closed form falls back to [`periodic_evals_at`].
+///
+/// # Errors
+///
+/// Returns an error when the declaration does not fit the trace, or the closed form has the wrong count.
+pub(super) fn air_periodic_evals_at<F, EF, A>(
+    air: &A,
+    point: &[EF],
+) -> Result<Vec<EF>, PeriodicError>
+where
+    F: Field,
+    EF: ExtensionField<F>,
+    A: BaseAir<F> + ?Sized,
+{
+    let declared = air.num_periodic_columns();
+    match air.periodic_evaluations(point) {
+        Some(values) if values.len() == declared => Ok(values),
+        Some(values) => Err(PeriodicError::CountMismatch {
+            declared,
+            supplied: values.len(),
+        }),
+        None => periodic_evals_at::<F, EF>(declared, &air.periodic_columns(), point),
+    }
+}
+
+/// Materialize an AIR's periodic columns to the full trace height, or `None` when it has none.
+///
+/// ```text
+///     period vector  : [v_0, v_1]
+///     trace height 8 : [v_0, v_1, v_0, v_1, v_0, v_1, v_0, v_1]
+/// ```
+///
+/// The full-height column is a genuine multilinear polynomial.
+///
+/// It therefore folds through a sumcheck exactly like a committed column.
+///
+/// # Panics
+///
+/// Panics when the declaration does not fit a trace of `2^num_vars` rows.
+pub(super) fn periodic_table<F, A>(air: &A, num_vars: usize) -> Option<Table<F>>
+where
+    F: Field,
+    A: BaseAir<F> + ?Sized,
+{
+    let cols = air.periodic_columns();
+    if cols.is_empty() {
+        return None;
+    }
+
+    // Reject a declaration the trace cannot hold, matching the verifier's own check.
+    let periods = cols.iter().map(Vec::len).collect::<Vec<_>>();
+    let num_variables = periodic_num_variables(air.num_periodic_columns(), &periods, num_vars)
+        .expect("periodic column declaration must fit the trace height");
+
+    let trace_height = 1 << num_vars;
+    let mut values = Vec::with_capacity(cols.len() * trace_height);
+    for (col, j) in cols.iter().zip(num_variables) {
+        // Copy the whole period vector once per cycle it spans.
+        for _ in 0..trace_height >> j {
+            values.extend_from_slice(col);
+        }
+    }
+    Some(Table::new(RowMajorMatrix::new(values, trace_height)))
 }
 
 #[cfg(test)]

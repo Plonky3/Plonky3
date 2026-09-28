@@ -7,12 +7,13 @@ use core::slice::from_ref;
 use std::borrow::Cow;
 
 use config::{
-    Challenge, CircleConfig, CircleVal, MyConfig, MyConfigWide, MyHidingConfig, Val,
-    make_circle_config, make_config, make_config_allow_tiny_trace, make_config_wide,
+    Challenge, CircleChallenge, CircleConfig, CircleVal, MyConfig, MyConfigWide, MyHidingConfig,
+    Val, make_circle_config, make_config, make_config_allow_tiny_trace, make_config_wide,
     make_config_zk, make_two_adic_compat_config,
 };
 use p3_air::{Air, AirBuilder, BaseAir, PermutationAirBuilder, WindowAccess};
 use p3_batch_stark::proof::{BatchProof, OpenedValuesWithLookups};
+use p3_batch_stark::verifier::commitments_with_opening_points;
 use p3_batch_stark::{
     BatchShape, BatchTranscriptFailure, BatchVerificationError, ProverData, StarkGenericConfig,
     StarkInstance, VerificationError, prove_batch, verify_batch,
@@ -24,7 +25,7 @@ use p3_lookup::{Count, InteractionBuilder, LookupError, LookupTerminal};
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_security::grinding::{GrindingBudget, GrindingSites, RecordedGrind};
-use p3_uni_stark::{InvalidProofShapeError, OpeningShape, PeriodicColumnError};
+use p3_uni_stark::{InvalidProofShapeError, OpeningShape, PeriodicColumnShapeError};
 use p3_util::log2_strict_usize;
 
 const TWO_ADIC_FIXTURE: &str = "tests/fixtures/batch_stark_two_adic_v0_8_0.postcard";
@@ -834,18 +835,66 @@ fn periodic_column_non_power_of_two_is_rejected() {
     };
     let result = verify_batch(&config, &[bad], &proof, &[vec![]], common);
 
-    // The shared check fires here exactly as it does in the single-AIR verifier.
+    // The shape rule fires here exactly as it does in the single-AIR verifier.
     assert!(
         matches!(
             result,
             Err(BatchVerificationError::Verification(
-                VerificationError::PeriodicColumn(PeriodicColumnError::LengthNotPowerOfTwo {
-                    got: 3
+                VerificationError::PeriodicColumn(PeriodicColumnShapeError::LengthNotPowerOfTwo {
+                    index: 0,
+                    length: 3
                 })
             ))
         ),
-        "expected LengthNotPowerOfTwo {{ got: 3 }}, got {result:?}"
+        "expected column 0 to be reported as a non-power-of-two length, got {result:?}"
     );
+}
+
+#[test]
+fn test_periodic_air_wide_period_range() -> Result<(), impl Debug> {
+    let config = make_config(42);
+
+    // A constant period-1 column alongside a period-32 column over a 64-row
+    // trace: one period is smaller than every packed field width used in
+    // practice, the other spans several packed row groups on all of them.
+    let air = PeriodicAir::<Val> {
+        periodic: vec![vec![Val::from_u64(7)], (0..32).map(Val::from_u64).collect()],
+    };
+    let trace = air.valid_trace(1 << 6);
+    let instances = vec![StarkInstance {
+        air: &air,
+        trace: &trace,
+        public_values: vec![],
+    }];
+    let prover_data = ProverData::from_instances(&config, &instances).unwrap();
+    let common = &prover_data.common;
+    let proof = prove_batch(&config, &instances, &prover_data).unwrap();
+    verify_batch(&config, &[air], &proof, &[vec![]], common)
+}
+
+#[test]
+fn test_periodic_air_tiny_quotient() -> Result<(), impl Debug> {
+    let config = make_config_allow_tiny_trace(77_008);
+
+    // A 2-row trace with period-1 and period-2 columns. The constraint degree is
+    // padded to 2, so the quotient domain has size 2 here: smaller than every
+    // packed field width used in practice.
+    let air = PeriodicAir::<Val> {
+        periodic: vec![
+            vec![Val::from_u64(9)],
+            vec![Val::from_u64(1), Val::from_u64(2)],
+        ],
+    };
+    let trace = air.valid_trace(2);
+    let instances = vec![StarkInstance {
+        air: &air,
+        trace: &trace,
+        public_values: vec![],
+    }];
+    let prover_data = ProverData::from_instances(&config, &instances).unwrap();
+    let common = &prover_data.common;
+    let proof = prove_batch(&config, &instances, &prover_data).unwrap();
+    verify_batch(&config, &[air], &proof, &[vec![]], common)
 }
 
 #[test]
@@ -1211,6 +1260,106 @@ fn test_preprocessed_tampered_fails() -> Result<(), Box<dyn std::error::Error>> 
 }
 
 #[test]
+fn test_preprocessed_rejects_present_preprocessed_next() {
+    let config = make_config(1337);
+
+    // Fixture state: two instances, each reading its preprocessed trace on the current row.
+    //
+    // Two rather than one, so a reported index of 1 cannot come from a constant or an off-by-one.
+    let (air0, trace0, pis0) = create_preprocessed_mul_instance(4, 2);
+    let (air1, trace1, pis1) = create_preprocessed_mul_instance(4, 3);
+    let instances = vec![
+        StarkInstance {
+            air: &air0,
+            trace: &trace0,
+            public_values: pis0.clone(),
+        },
+        StarkInstance {
+            air: &air1,
+            trace: &trace1,
+            public_values: pis1.clone(),
+        },
+    ];
+
+    let prover_data = ProverData::from_instances(&config, &instances).unwrap();
+    let common = &prover_data.common;
+    let mut proof = prove_batch(&config, &instances, &prover_data).unwrap();
+
+    // Both AIRs declare one preprocessed column, opened on the current row only.
+    let pre_w = proof.opened_values.instances[1]
+        .base_opened_values
+        .preprocessed_local()
+        .expect("instance 1 declares preprocessed columns")
+        .len();
+    assert_eq!(pre_w, 1);
+    assert!(
+        proof.opened_values.instances[1]
+            .base_opened_values
+            .preprocessed_next()
+            .is_none()
+    );
+
+    let airs = vec![air0, air1];
+    let pvs = vec![pis0, pis1];
+
+    // The untampered proof verifies, so every rejection below is caused by the mutation alone.
+    verify_batch(&config, &airs, &proof, &pvs, common).expect("untampered proof verifies");
+
+    // Invariant: a proof carries exactly the openings its AIR reads, and no others.
+    //
+    // Mutation: give instance 1 an empty next-row preprocessed opening.
+    //
+    //     honest:   instance 1 preprocessed next = absent
+    //     tampered: instance 1 preprocessed next = [] (present, zero columns)
+    //
+    // Zero columns is the width expected of an absent opening, so presence is what rejects it.
+    proof.opened_values.instances[1]
+        .base_opened_values
+        .preprocessed
+        .as_mut()
+        .unwrap()
+        .next = Some(vec![]);
+
+    let err = verify_batch(&config, &airs, &proof, &pvs, common)
+        .expect_err("a present next-row preprocessed opening must be rejected");
+
+    // The reported index is 1, the instance that was tampered with.
+    assert!(
+        matches!(
+            err,
+            BatchVerificationError::Verification(VerificationError::InvalidProofShape(
+                InvalidProofShapeError::UnexpectedPreprocessedNext { air: Some(1) },
+            ))
+        ),
+        "unexpected error: {err:?}"
+    );
+
+    // Mutation: the other half of the same rule, a next-row opening of full width.
+    //
+    //     tampered: instance 1 preprocessed next = [0] (present, one column)
+    //
+    // This one is caught by the width comparison rather than by presence.
+    proof.opened_values.instances[1]
+        .base_opened_values
+        .preprocessed
+        .as_mut()
+        .unwrap()
+        .next = Some(vec![Challenge::ZERO; pre_w]);
+
+    let err = verify_batch(&config, &airs, &proof, &pvs, common)
+        .expect_err("a full-width next-row preprocessed opening must be rejected");
+    assert!(
+        matches!(
+            err,
+            BatchVerificationError::Verification(VerificationError::InvalidProofShape(
+                InvalidProofShapeError::PreprocessedWidthMismatch { air: 1 },
+            ))
+        ),
+        "unexpected error: {err:?}"
+    );
+}
+
+#[test]
 fn test_preprocessed_reuse_common_multi_proofs() -> Result<(), Box<dyn std::error::Error>> {
     let config = make_config(2026);
 
@@ -1375,8 +1524,7 @@ fn test_invalid_trace_width_rejected() {
                         .base_opened_values
                         .trace_next
                         .clone(),
-                    preprocessed_local: None,
-                    preprocessed_next: None,
+                    preprocessed: None,
                     quotient_chunks: valid_proof.opened_values.instances[0]
                         .base_opened_values
                         .quotient_chunks
@@ -1559,6 +1707,113 @@ fn test_circle_stark_batch() -> Result<(), impl Debug> {
     let common = &prover_data.common;
     verify_batch(&config, &airs, &proof, &public_values, common)
         .map_err(|e| format!("Verification failed: {:?}", e))
+}
+
+#[test]
+fn test_batch_degree_bits_below_circle_pcs_minimum_rejected() {
+    // Invariant: a claimed trace height is proof data, and the circle scheme needs four rows.
+    //
+    // The verifier builds each trace domain from that claim before the opening argument runs.
+    // A claim that is too small therefore has to be rejected up front.
+    let config = make_circle_config();
+
+    // Fixture state: two instances without preprocessed columns.
+    //
+    //     instance 0: 8 rows -> claimed height of 3 bits
+    //     instance 1: 4 rows -> claimed height of 2 bits, exactly the minimum
+    let airs = vec![
+        FibonacciAir {
+            log_height: 0,
+            tamper_index: None,
+        },
+        FibonacciAir {
+            log_height: 0,
+            tamper_index: None,
+        },
+    ];
+    let pis0 = vec![
+        CircleVal::from_u64(0),
+        CircleVal::from_u64(1),
+        CircleVal::from_u64(fib_n(8)),
+    ];
+    let pis1 = vec![
+        CircleVal::from_u64(0),
+        CircleVal::from_u64(1),
+        CircleVal::from_u64(fib_n(4)),
+    ];
+    let trace0 = fib_trace::<CircleVal>(0, 1, 8);
+    let trace1 = fib_trace::<CircleVal>(0, 1, 4);
+    let instances = vec![
+        StarkInstance {
+            air: &airs[0],
+            trace: &trace0,
+            public_values: pis0.clone(),
+        },
+        StarkInstance {
+            air: &airs[1],
+            trace: &trace1,
+            public_values: pis1.clone(),
+        },
+    ];
+
+    let prover_data = ProverData::empty(airs.len());
+    let common = &prover_data.common;
+    let mut proof = prove_batch(&config, &instances, &prover_data).unwrap();
+    let public_values = vec![pis0, pis1];
+    assert_eq!(proof.degree_bits, vec![3, 2]);
+
+    // The smaller instance sits exactly on the boundary, so an honest batch there verifies.
+    // The rejection below is therefore strictly less than, not less than or equal.
+    verify_batch(&config, &airs, &proof, &public_values, common)
+        .expect("a claim exactly at the minimum must verify");
+
+    // Mutation: shrink the second instance's claimed height below the minimum.
+    //
+    //     honest:   degree_bits = [3, 2]
+    //     tampered: degree_bits = [3, 1]
+    proof.degree_bits[1] = 1;
+
+    let err = verify_batch(&config, &airs, &proof, &public_values, common)
+        .expect_err("a claim below the minimum trace height must be rejected");
+
+    // The rejection names the offending instance and the backend's own minimum.
+    match err {
+        BatchVerificationError::Verification(VerificationError::InvalidProofShape(
+            InvalidProofShapeError::DegreeBitsTooSmall { air, minimum, got },
+        )) => {
+            assert_eq!(air, Some(1));
+            assert_eq!(minimum, 2);
+            assert_eq!(got, 1);
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+
+    // Recursive verifiers reach this public builder directly, never the whole-proof entry point.
+    //
+    // It re-derives every trace domain from the claimed heights, so it applies the same bound.
+    // The heights are rejected before any of the later arguments are read.
+    let err = commitments_with_opening_points::<CircleConfig, _>(
+        &config,
+        &airs,
+        CircleChallenge::ZERO,
+        &proof.commitments,
+        &proof.opened_values,
+        common,
+        &proof.degree_bits,
+        &[0, 0],
+        &[0, 0],
+    )
+    .expect_err("the opening-claim builder must apply the same bound");
+    match err {
+        BatchVerificationError::Verification(VerificationError::InvalidProofShape(
+            InvalidProofShapeError::DegreeBitsTooSmall { air, minimum, got },
+        )) => {
+            assert_eq!(air, Some(1));
+            assert_eq!(minimum, 2);
+            assert_eq!(got, 1);
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
 }
 
 #[derive(Clone)]
@@ -1830,6 +2085,10 @@ fn verify_two_adic_compat_fixture() -> Result<(), Box<dyn std::error::Error>> {
         ProverData::from_airs_and_degrees(&config, &airs, &proof.degree_bits).unwrap();
     let common = &prover_data.common;
     verify_batch(&config, &airs, &proof, &pvs, common)?;
+
+    // Re-encoding must reproduce the stored bytes.
+    // The wire layout is then pinned in both directions, not just on decode.
+    assert_eq!(postcard::to_allocvec(&proof)?, proof_bytes);
     Ok(())
 }
 
@@ -1843,6 +2102,10 @@ fn verify_circle_compat_fixture() -> Result<(), Box<dyn std::error::Error>> {
         ProverData::from_airs_and_degrees(&config, &airs, &proof.degree_bits).unwrap();
     let common = &prover_data.common;
     verify_batch(&config, &airs, &proof, &pvs, common)?;
+
+    // Re-encoding must reproduce the stored bytes.
+    // The wire layout is then pinned in both directions, not just on decode.
+    assert_eq!(postcard::to_allocvec(&proof)?, proof_bytes);
     Ok(())
 }
 
@@ -2685,8 +2948,8 @@ fn test_batch_stark_both_lookups_zk() -> Result<(), impl Debug> {
             let base = &opened.base_opened_values;
             base.trace_local.len()
                 + base.trace_next.as_ref().map_or(0, Vec::len)
-                + base.preprocessed_local.as_ref().map_or(0, Vec::len)
-                + base.preprocessed_next.as_ref().map_or(0, Vec::len)
+                + base.preprocessed_local().map_or(0, <[_]>::len)
+                + base.preprocessed_next().map_or(0, <[_]>::len)
                 + base.quotient_chunks.iter().map(Vec::len).sum::<usize>()
                 + base.random.as_ref().map_or(0, Vec::len)
                 + opened.permutation_local.len()

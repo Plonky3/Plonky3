@@ -10,6 +10,9 @@ pub mod hiding;
 
 pub use crate::assumption::SecurityAssumption;
 
+/// Label the composed opening error of this family is reported under.
+pub const WHIR_OPENING_LABEL: &str = "whir-opening";
+
 impl SecurityAssumption {
     /// Initial claim-combination error in bits, before any folding or grinding.
     ///

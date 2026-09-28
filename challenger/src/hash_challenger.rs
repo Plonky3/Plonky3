@@ -1,9 +1,12 @@
 use alloc::vec;
 use alloc::vec::Vec;
+use core::array;
 
+use p3_maybe_rayon::prelude::*;
 use p3_symmetric::{CryptographicHasher, Hash, MerkleCap};
 
-use crate::{CanFinalizeDigest, CanObserve, CanSample};
+use crate::grinding_challenger::find_witness_by_cloning;
+use crate::{ByteGrindingChallenger, CanFinalizeDigest, CanObserve, CanSample};
 
 /// A generic challenger that uses a cryptographic hash function to generate challenges.
 #[derive(Debug)]
@@ -199,6 +202,82 @@ where
     }
 }
 
+impl<H, const OUT_LEN: usize> ByteGrindingChallenger for HashChallenger<u8, H, OUT_LEN>
+where
+    H: CryptographicHasher<u8, [u8; OUT_LEN]> + Send + Sync,
+{
+    /// Hash the candidates in batches of equal-length messages.
+    ///
+    /// Observing a non-empty slice discards the buffered output, so every sample of candidate `c`
+    /// comes from the one flush its first sample triggers, popped from the back of the digest:
+    ///
+    /// ```text
+    ///     digest   = H(input_buffer || encode(c))
+    ///     sample k = digest[OUT_LEN - 1 - k]          k = 0..S
+    /// ```
+    ///
+    /// Every message shares the `input_buffer` prefix, so a worker writes that prefix into each
+    /// slot of its batch once and only rewrites the encoded candidates between batches:
+    ///
+    /// ```text
+    ///     messages: [ input_buffer | encode(c_0) | input_buffer | encode(c_1) | ... ]
+    /// ```
+    ///
+    /// A batch is one call to [`CryptographicHasher::hash_many`], sized to the hasher's lanes.
+    fn find_witness<const W: usize, const S: usize>(
+        &self,
+        num_candidates: u64,
+        encode: impl Fn(u64) -> [u8; W] + Sync,
+        accepts: impl Fn([u8; S]) -> bool + Sync,
+    ) -> Option<u64> {
+        // An empty encoding keeps the buffered output, and more samples than one digest holds reach
+        // a second flush. Neither fits the single-flush layout above.
+        if W == 0 || S > OUT_LEN {
+            return find_witness_by_cloning(self, num_candidates, encode, accepts);
+        }
+
+        let prefix_len = self.input_buffer.len();
+        let message_len = prefix_len + W;
+        let batch_len = H::LANES.max(1);
+        let num_batches = num_candidates.div_ceil(batch_len as u64);
+
+        (0..num_batches)
+            .into_par_iter()
+            .map_init(
+                || {
+                    let mut messages = Vec::with_capacity(batch_len * message_len);
+                    for _ in 0..batch_len {
+                        messages.extend_from_slice(&self.input_buffer);
+                        messages.extend_from_slice(&[0; W]);
+                    }
+                    (messages, vec![[0; OUT_LEN]; batch_len])
+                },
+                |(messages, digests), batch| {
+                    let first = batch * batch_len as u64;
+                    // The last batch stops at the end of the candidate range.
+                    let count = (num_candidates - first).min(batch_len as u64) as usize;
+
+                    for (offset, message) in messages
+                        .chunks_exact_mut(message_len)
+                        .take(count)
+                        .enumerate()
+                    {
+                        message[prefix_len..].copy_from_slice(&encode(first + offset as u64));
+                    }
+                    self.hasher
+                        .hash_many(&messages[..count * message_len], &mut digests[..count]);
+
+                    // Scanning in candidate order keeps a serial search on the smallest pass.
+                    digests[..count]
+                        .iter()
+                        .position(|digest| accepts(array::from_fn(|k| digest[OUT_LEN - 1 - k])))
+                        .map(|offset| first + offset as u64)
+                },
+            )
+            .find_map_any(|found| found)
+    }
+}
+
 impl<T, H, const OUT_LEN: usize> CanFinalizeDigest for HashChallenger<T, H, OUT_LEN>
 where
     T: Clone,
@@ -220,8 +299,12 @@ where
 
 #[cfg(test)]
 mod tests {
+    use p3_blake3::Blake3;
     use p3_field::PrimeCharacteristicRing;
     use p3_goldilocks::Goldilocks;
+    use p3_keccak::Keccak256Hash;
+    use p3_maybe_rayon::PARALLEL_ENABLED;
+    use p3_sha256::Sha256;
 
     use super::*;
 
@@ -604,6 +687,132 @@ mod tests {
 
         // Within the second batch, the digest is again stable.
         assert_eq!(digest(OUT_LEN + 1), digest(2 * OUT_LEN));
+    }
+
+    /// Keccak-256 reporting `L` lanes, so batches of any width run on every target.
+    #[derive(Clone)]
+    struct WithLanes<const L: usize>;
+
+    impl<const L: usize> CryptographicHasher<u8, [u8; 32]> for WithLanes<L> {
+        const LANES: usize = L;
+
+        fn hash_iter<I>(&self, input: I) -> [u8; 32]
+        where
+            I: IntoIterator<Item = u8>,
+        {
+            Keccak256Hash.hash_iter(input)
+        }
+
+        fn hash_many(&self, input: &[u8], out: &mut [[u8; 32]]) {
+            Keccak256Hash.hash_many(input, out);
+        }
+    }
+
+    /// Byte challengers whose pending input puts the candidate across the block boundaries of the
+    /// batched hashers.
+    ///
+    /// Each comes with a squeezed copy, the state the serializing challengers search from: one
+    /// sampled byte leaves the 32-byte chaining value pending and the rest of the digest buffered
+    /// for observing the candidate to discard.
+    fn byte_transcripts<H>(hasher: &H) -> Vec<HashChallenger<u8, H, 32>>
+    where
+        H: CryptographicHasher<u8, [u8; 32]>,
+    {
+        let mut transcripts = Vec::new();
+        for len in [0, 1, 32, 52, 56, 60, 64, 124, 128, 132, 136, 1020] {
+            let fresh =
+                HashChallenger::new((0..len).map(|i| (i * 7) as u8).collect(), hasher.clone());
+            let mut squeezed = fresh.clone();
+            let _: u8 = squeezed.sample();
+            transcripts.push(fresh);
+            transcripts.push(squeezed);
+        }
+        transcripts
+    }
+
+    /// Check the batched search against a fresh clone at every candidate of a few ranges.
+    ///
+    /// The ranges leave one candidate and one short of a full batch in the last batch.
+    ///
+    /// The target bytes pin a single candidate, so the search has to return that one:
+    /// any other candidate would have sampled different bytes. A target sampled only by a
+    /// candidate in the batch past the range must not be found at all.
+    fn assert_find_witness_matches_clones<H, const W: usize, const S: usize>(
+        challenger: &HashChallenger<u8, H, 32>,
+    ) where
+        H: CryptographicHasher<u8, [u8; 32]> + Send + Sync,
+    {
+        let lanes = H::LANES.max(1) as u64;
+        // Distinct candidates encode to distinct bytes.
+        let encode =
+            |c: u64| -> [u8; W] { array::from_fn(|i| (c >> (8 * (i % 8))) as u8 ^ i as u8) };
+
+        for num_candidates in [3 * lanes + 1, 4 * lanes - 1] {
+            let expected: Vec<[u8; S]> = (0..num_candidates + lanes)
+                .map(|c| {
+                    let mut clone = challenger.clone();
+                    clone.observe_slice(&encode(c));
+                    clone.sample_array()
+                })
+                .collect();
+            let in_range = &expected[..num_candidates as usize];
+
+            for target in &expected {
+                let found = challenger.find_witness(num_candidates, encode, |s| s == *target);
+                if !in_range.contains(target) {
+                    assert_eq!(found, None);
+                    continue;
+                }
+                let found = found.expect("the candidate sampling the target must pass");
+                assert_eq!(in_range[found as usize], *target);
+                // A serial search returns the smallest candidate sampling the target.
+                if !PARALLEL_ENABLED {
+                    assert_eq!(
+                        in_range.iter().position(|s| s == target),
+                        Some(found as usize)
+                    );
+                }
+            }
+
+            assert_eq!(
+                challenger.find_witness(num_candidates, encode, |_: [u8; S]| false),
+                None
+            );
+        }
+
+        // An empty range has no candidate to pass, however permissive the check.
+        assert_eq!(challenger.find_witness(0, encode, |_: [u8; S]| true), None);
+    }
+
+    fn assert_find_witness_matches_clones_for<H>(hasher: &H)
+    where
+        H: CryptographicHasher<u8, [u8; 32]> + Send + Sync,
+    {
+        for challenger in byte_transcripts(hasher) {
+            // The encodings and sample widths of the 32- and 64-bit serializing challengers.
+            assert_find_witness_matches_clones::<H, 4, 4>(&challenger);
+            assert_find_witness_matches_clones::<H, 8, 8>(&challenger);
+            // A sample as wide as the digest still comes from a single flush.
+            assert_find_witness_matches_clones::<H, 4, 32>(&challenger);
+            // Shapes the single-flush layout cannot express fall back to the default search.
+            assert_find_witness_matches_clones::<H, 0, 4>(&challenger);
+            assert_find_witness_matches_clones::<H, 4, 33>(&challenger);
+            assert_find_witness_matches_clones::<H, 4, 40>(&challenger);
+        }
+    }
+
+    #[test]
+    fn find_witness_matches_clones_at_any_lane_count() {
+        assert_find_witness_matches_clones_for(&WithLanes::<1>);
+        assert_find_witness_matches_clones_for(&WithLanes::<3>);
+        assert_find_witness_matches_clones_for(&WithLanes::<4>);
+    }
+
+    #[test]
+    fn find_witness_matches_clones_for_byte_hashers() {
+        assert_find_witness_matches_clones_for(&Keccak256Hash);
+        assert_find_witness_matches_clones_for(&Sha256);
+        assert_find_witness_matches_clones_for(&Blake3);
     }
 
     #[test]

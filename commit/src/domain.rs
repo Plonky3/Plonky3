@@ -9,6 +9,8 @@ use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
 use p3_matrix::interpolation::Interpolate;
 use p3_util::{log2_ceil_usize, log2_strict_usize};
 
+use crate::PeriodicColumns;
+
 /// Given a `PolynomialSpace`, `S`, and a subset `R`, a Lagrange selector `P_R` is
 /// a polynomial which is not equal to `0` for every element in `R` but is equal
 /// to `0` for every element of `S` not in `R`.
@@ -165,21 +167,20 @@ pub trait PolynomialSpace: Copy {
         point: Ext,
     ) -> Ext;
 
-    /// Evaluate a periodic column polynomial at `point`.
+    /// Evaluate one periodic column polynomial at `point`.
     ///
-    /// `col` contains the period-length evaluations: row `i` of the full trace
-    /// gets value `col[i % col.len()]`. The default expands to trace size and
-    /// delegates to [`Self::evaluate_polynomial_at`]; domains with algebraic
-    /// structure (e.g. two-adic cosets) can override for O(period) work.
+    /// The column lists one period of values, and row `i` of the trace reads position `i mod p`.
+    ///
+    /// This is the per-column primitive behind the batched entry point.
+    /// It assumes the length is a power of two that divides the domain size.
+    /// Callers reach it through the batched entry point, which is where that is established.
     ///
     /// # Performance
     ///
-    /// This default is O(`self.size()`) time and allocates a `self.size()`-length
-    /// vector, versus O(`col.len()`) for an override that exploits the domain's
-    /// algebraic structure (e.g. two-adic cosets folding onto a sub-coset). For a
-    /// small period on a large trace this is a large (potentially many-orders-of-
-    /// magnitude) verifier slowdown. Any new `PolynomialSpace` implementor should
-    /// override this method rather than rely on the default.
+    /// The default expands the column to the full domain size, so it costs `O(n)` time and space.
+    /// A domain with algebraic structure can fold onto a sub-coset instead and pay `O(p)`.
+    /// On a large trace with a small period that gap is many orders of magnitude of verifier time.
+    /// Every new implementor should override this rather than rely on the default.
     fn evaluate_periodic_column_at<Ext: ExtensionField<Self::Val>>(
         &self,
         col: &[Self::Val],
@@ -193,16 +194,26 @@ pub trait PolynomialSpace: Copy {
 
     /// Evaluate several periodic column polynomials at `point`.
     ///
-    /// The default expands to one call to [`Self::evaluate_periodic_column_at`] per
-    /// column. Domains with algebraic structure (e.g. two-adic cosets) can override
-    /// to batch columns that share a period, paying for one interpolation instead
-    /// of one per column.
+    /// Taking screened columns is what makes the shape rule unskippable.
+    /// Every caller has to establish it before it can name this method at all.
+    ///
+    /// The default evaluates one column at a time.
+    /// Domains with algebraic structure can override to batch columns that share a period.
+    /// That pays for one interpolation per period instead of one per column.
+    ///
+    /// # Panics
+    ///
+    /// Debug builds panic when the columns were screened against a different number of rows.
+    /// The rule is a relation between the lengths and the height, so the wrong height voids it.
     fn evaluate_periodic_columns_at<Ext: ExtensionField<Self::Val>>(
         &self,
-        periodic_columns: &[Vec<Self::Val>],
+        periodic_columns: PeriodicColumns<'_, Self::Val>,
         point: Ext,
     ) -> Vec<Ext> {
+        debug_assert_eq!(periodic_columns.height(), self.size());
+
         periodic_columns
+            .as_slice()
             .iter()
             .map(|col| self.evaluate_periodic_column_at(col, point))
             .collect()
@@ -385,14 +396,18 @@ impl<Val: TwoAdicField> PolynomialSpace for TwoAdicMultiplicativeCoset<Val> {
         sub_coset.evaluate_polynomial_at(col, point.exp_power_of_2(folds))
     }
 
-    /// Evaluate several periodic column polynomials at `point`, sharing one coset
-    /// materialization and batch inversion (via [`Interpolate::interpolate_coset`])
-    /// across all columns of a given period.
+    /// Evaluate several periodic column polynomials at `point`.
+    ///
+    /// Columns sharing a period share one coset materialization and one batch inversion.
     fn evaluate_periodic_columns_at<Ext: ExtensionField<Val>>(
         &self,
-        periodic_columns: &[Vec<Val>],
+        periodic_columns: PeriodicColumns<'_, Val>,
         point: Ext,
     ) -> Vec<Ext> {
+        debug_assert_eq!(periodic_columns.height(), self.size());
+
+        let periodic_columns = periodic_columns.as_slice();
+
         let mut cols_by_period: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
         for (i, col) in periodic_columns.iter().enumerate() {
             cols_by_period.entry(col.len()).or_default().push(i);
@@ -455,7 +470,8 @@ mod tests {
             .iter()
             .map(|col| domain.evaluate_periodic_column_at(col, point))
             .collect();
-        let actual = domain.evaluate_periodic_columns_at(&columns, point);
+        let screened = PeriodicColumns::new(&columns, domain.size()).unwrap();
+        let actual = domain.evaluate_periodic_columns_at(screened, point);
 
         assert_eq!(actual, expected);
     }
@@ -465,9 +481,10 @@ mod tests {
         let domain = TwoAdicMultiplicativeCoset::<F>::new(F::GENERATOR, 4).unwrap();
         let point = F::from_u32(7);
         let columns: Vec<Vec<F>> = vec![];
+        let screened = PeriodicColumns::new(&columns, domain.size()).unwrap();
 
         assert_eq!(
-            domain.evaluate_periodic_columns_at(&columns, point),
+            domain.evaluate_periodic_columns_at(screened, point),
             Vec::<F>::new()
         );
     }

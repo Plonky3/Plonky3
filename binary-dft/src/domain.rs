@@ -36,7 +36,7 @@ pub fn domain_point<F: TowerLevel>(index: usize) -> F {
 /// # Panics
 /// Panics if `count` is at least the bit width of `F`.
 #[must_use]
-pub(crate) fn domain_point_steps<F: TowerLevel>(count: usize) -> Vec<F> {
+pub fn domain_point_steps<F: TowerLevel>(count: usize) -> Vec<F> {
     let mut point = F::ZERO;
     (0..count)
         .map(|r| {

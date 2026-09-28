@@ -32,14 +32,14 @@ type Mmcs = GroupedCodewordMmcs<MerkleMmcs>;
 type Challenger = BinaryChallenger<F, HashChallenger<u8, Keccak256Hash, 32>>;
 
 struct Config {
-    pcs: BinaryPcs<Mmcs>,
+    pcs: BinaryPcs<F, F, Mmcs, Mmcs>,
 }
 
 impl MultiStarkConfig for Config {
     type Val = F;
     type Challenge = F;
     type Challenger = Challenger;
-    type Pcs = BinaryPcs<Mmcs>;
+    type Pcs = BinaryPcs<F, F, Mmcs, Mmcs>;
 
     fn pcs(&self) -> &Self::Pcs {
         &self.pcs
@@ -61,7 +61,7 @@ impl MultiStarkConfig for Config {
 
     fn committed_table<'a>(
         &self,
-        prover_data: &'a BinaryPcsProverData<Mmcs>,
+        prover_data: &'a BinaryPcsProverData<F, F, Mmcs>,
         table_index: usize,
     ) -> &'a Table<F> {
         prover_data.table(table_index)
@@ -77,14 +77,14 @@ fn config(log_height: usize) -> Config {
     };
     // Commit after up to three variable folds, with one coset per leaf.
     // The final batch and its leaves shrink to the number of remaining variables.
-    let pcs_config = BinaryPcsConfig::try_new(log_height + 1, params)
+    let pcs_config = BinaryPcsConfig::try_new::<F, F>(log_height + 1, params)
         .unwrap()
         .try_with_folding(3.min(log_height + 1))
         .unwrap();
     let merkle = MerkleMmcs::new(Hash::new(Keccak256Hash), Compress::new(Keccak256Hash), 0);
     let mmcs = Mmcs::for_folding(merkle, &pcs_config);
     Config {
-        pcs: BinaryPcs::new(pcs_config, mmcs),
+        pcs: BinaryPcs::new(pcs_config, mmcs.clone(), mmcs).unwrap(),
     }
 }
 
@@ -97,8 +97,9 @@ fn challenger() -> Challenger {
 
 /// A nonlinear recurrence: (a, b) -> (b, a * b + a).
 ///
-/// Addition is XOR and multiplication is tower-field multiplication. Nonlinear
-/// constraints exercise interpolation beyond the two prime-subfield elements.
+/// Addition is XOR and multiplication is tower-field multiplication.
+///
+/// Nonlinear constraints exercise interpolation past the two prime-subfield elements.
 struct RecurrenceAir;
 
 impl<F> BaseAir<F> for RecurrenceAir {
@@ -200,11 +201,93 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use p3_binary_pcs::{BinaryPcsError, BinaryPcsProof};
+    use p3_bus::{BusActivation, BusDirection, BusInteractionBuilder, BusName};
     use p3_field::PrimeCharacteristicRing;
     use p3_multi_stark::config::PcsError;
-    use p3_multi_stark::{VerificationError, VerifyingKey, prove, verify};
+    use p3_multi_stark::zerocheck::ZerocheckError;
+    use p3_multi_stark::{SecurityError, VerificationError, VerifyingKey, prove, verify};
 
     use super::*;
+
+    /// Binary-field AIR that contributes selected nonlinear payloads to one bus side.
+    struct BinaryBusAir {
+        /// Multiset side receiving this table's active rows.
+        direction: BusDirection,
+    }
+
+    impl BaseAir<F> for BinaryBusAir {
+        fn width(&self) -> usize {
+            2
+        }
+    }
+
+    impl<AB> Air<AB> for BinaryBusAir
+    where
+        AB: BusInteractionBuilder<F = F>,
+    {
+        fn eval(&self, builder: &mut AB) {
+            let main = builder.main();
+            let row = main.current_slice();
+            let value: AB::Expr = row[0].into();
+            let selector: AB::Expr = row[1].into();
+            builder.push_bus_interaction(
+                BusName::new("binary-selected-square"),
+                self.direction,
+                [value.clone() * value],
+                BusActivation::Boolean(selector),
+            );
+        }
+    }
+
+    /// Either the recurrence or one end of the binary bus, so both fit one batch.
+    enum LiftedAir {
+        /// The nonlinear recurrence, which declares no bus.
+        Recurrence,
+        /// One end of the selected-square bus.
+        Bus(BinaryBusAir),
+    }
+
+    impl BaseAir<F> for LiftedAir {
+        fn width(&self) -> usize {
+            match self {
+                Self::Recurrence => BaseAir::<F>::width(&RecurrenceAir),
+                Self::Bus(air) => air.width(),
+            }
+        }
+
+        fn num_public_values(&self) -> usize {
+            match self {
+                Self::Recurrence => BaseAir::<F>::num_public_values(&RecurrenceAir),
+                Self::Bus(air) => air.num_public_values(),
+            }
+        }
+    }
+
+    impl<AB> Air<AB> for LiftedAir
+    where
+        AB: BusInteractionBuilder<F = F>,
+    {
+        fn eval(&self, builder: &mut AB) {
+            match self {
+                Self::Recurrence => RecurrenceAir.eval(builder),
+                Self::Bus(air) => air.eval(builder),
+            }
+        }
+    }
+
+    /// Builds one two-column binary bus table in trace-row order.
+    ///
+    /// Even rows below `live` are selected, so tables of any height can carry the same multiset.
+    fn binary_bus_table(log_height: usize, live: usize) -> Table<F> {
+        let mut rows = Vec::with_capacity(2 << log_height);
+        for row in 0usize..1usize << log_height {
+            rows.extend([
+                F::from_repr((row + 2) as u128),
+                F::from_bool(row < live && row.is_multiple_of(2)),
+            ]);
+        }
+        Table::new(RowMajorMatrix::new(rows, 2).transpose())
+    }
 
     struct Fixture {
         config: Config,
@@ -271,6 +354,209 @@ mod tests {
     }
 
     #[test]
+    fn the_report_charges_every_binary_bus_draw() {
+        // The bus contributes two draws this composition makes for itself.
+        //
+        // Each lands after the commitment and before the opening names a candidate.
+        //
+        // Nothing else in the suite builds a report that contains them.
+        //
+        // So a bus draw could be dropped, or misattributed, with every other test green.
+        //
+        // This commitment decodes uniquely, so its candidate set holds one member.
+        //
+        // The charge over it is therefore the identity.
+        //
+        // A bus draw that went uncharged would therefore read the same here.
+        //
+        // What this does catch is a bus draw that never reached the report at all.
+        //
+        // It also catches one attributed to a commitment, which shows as a component.
+        //
+        // An uncharged bus draw is caught by the list-decoding bus test in the WHIR suite.
+        //
+        // Pushing a term past the builder, or onto a closed report, does not compile.
+        //
+        // The builder and the report keep their lists private, and the commitment name is a closed set.
+        let log_height = 3;
+        let config = config(log_height + 1);
+        let push = BinaryBusAir {
+            direction: BusDirection::Push,
+        };
+        let pull = BinaryBusAir {
+            direction: BusDirection::Pull,
+        };
+        let (_, vk) = setup(&config, &[&push, &pull], &mut challenger()).unwrap();
+        let report = p3_multi_stark::security_report(
+            &config,
+            &VerifierInstances::new(vec![
+                VerifierInstance::new(&push, &vk, log_height, &[]),
+                VerifierInstance::new(&pull, &vk, log_height, &[]),
+            ]),
+        )
+        .unwrap();
+        assert!(report.unassessed_components().is_empty());
+
+        for label in ["binary-bus", "binary-bus-batching"] {
+            let term = report
+                .terms()
+                .iter()
+                .find(|term| term.label == label)
+                .unwrap_or_else(|| panic!("the report drops the {label} draw"));
+
+            // A draw this composition makes belongs to no commitment.
+            //
+            // A component name here would mean the term took the opening route.
+            //
+            // It would then have settled at full strength instead of being charged.
+            assert_eq!(
+                term.component, None,
+                "{label} is attributed to a commitment"
+            );
+
+            // Every bus draw is a real bound, and none exceeds the field's own width.
+            assert!(term.bits.bits().is_finite() && term.bits.bits() > 0.0);
+            assert!(term.bits.bits() <= 128.0);
+        }
+
+        // The batching scalar is one fresh draw that must avoid two roots.
+        //
+        //     128 field bits - log2(2)  ->  127 bits
+        let batching = report
+            .terms()
+            .iter()
+            .find(|term| term.label == "binary-bus-batching")
+            .unwrap();
+        assert_eq!(batching.bits.bits(), 127.0);
+
+        // The bus is part of the composed bound the statement is graded against.
+        report.require_security(100).unwrap();
+    }
+
+    #[test]
+    fn binary_bus_proof_round_trips() {
+        let log_height = 3;
+        // Four stacked columns need two variables above the trace height.
+        let config = config(log_height + 1);
+        let push = BinaryBusAir {
+            direction: BusDirection::Push,
+        };
+        let pull = BinaryBusAir {
+            direction: BusDirection::Pull,
+        };
+        let (pk, vk) = setup(&config, &[&push, &pull], &mut challenger()).unwrap();
+        let proof = prove(
+            &config,
+            ProverInstances::new(vec![
+                ProverInstance::new(
+                    &push,
+                    binary_bus_table(log_height, 1 << log_height),
+                    &pk,
+                    &[],
+                ),
+                ProverInstance::new(
+                    &pull,
+                    binary_bus_table(log_height, 1 << log_height),
+                    &pk,
+                    &[],
+                ),
+            ]),
+            0,
+            &mut challenger(),
+        )
+        .unwrap();
+
+        verify(
+            &config,
+            VerifierInstances::new(vec![
+                VerifierInstance::new(&push, &vk, log_height, &[]),
+                VerifierInstance::new(&pull, &vk, log_height, &[]),
+            ]),
+            &proof,
+            0,
+            &mut challenger(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn lifted_binary_bus_shares_round_trip() {
+        // Each share shorter than the cube is lifted by the all-one-vertex selector.
+        //
+        //     lift(x) = prod over the unused coordinates of x_k
+        //
+        // A constant lift would multiply the share by 2^k, which is zero in characteristic two.
+        let push = BinaryBusAir {
+            direction: BusDirection::Push,
+        };
+        let pull = BinaryBusAir {
+            direction: BusDirection::Pull,
+        };
+
+        // Both sides select rows 0 and 2, so they carry the same multiset at any height.
+        let live = 4;
+
+        // Push at 3 and pull at 2: the cube has 3 variables and only the pull share is lifted.
+        // The 24 stacked cells pad to 2^5, which config(4) commits.
+        let config_short = config(4);
+        let (pk, vk) = setup(&config_short, &[&push, &pull], &mut challenger()).unwrap();
+        let proof = prove(
+            &config_short,
+            ProverInstances::new(vec![
+                ProverInstance::new(&push, binary_bus_table(3, live), &pk, &[]),
+                ProverInstance::new(&pull, binary_bus_table(2, live), &pk, &[]),
+            ]),
+            0,
+            &mut challenger(),
+        )
+        .unwrap();
+        verify(
+            &config_short,
+            VerifierInstances::new(vec![
+                VerifierInstance::new(&push, &vk, 3, &[]),
+                VerifierInstance::new(&pull, &vk, 2, &[]),
+            ]),
+            &proof,
+            0,
+            &mut challenger(),
+        )
+        .unwrap();
+
+        // The same bus under a recurrence at 5: the cube has 5 variables and both shares are lifted.
+        // The 88 stacked cells pad to 2^7, which config(6) commits.
+        let config_tall = config(6);
+        let (table, public) = trace(5);
+        let recurrence = LiftedAir::Recurrence;
+        let push = LiftedAir::Bus(push);
+        let pull = LiftedAir::Bus(pull);
+        let airs = [&recurrence, &push, &pull];
+        let (pk, vk) = setup(&config_tall, &airs, &mut challenger()).unwrap();
+        let proof = prove(
+            &config_tall,
+            ProverInstances::new(vec![
+                ProverInstance::new(airs[0], table, &pk, &public),
+                ProverInstance::new(airs[1], binary_bus_table(3, live), &pk, &[]),
+                ProverInstance::new(airs[2], binary_bus_table(2, live), &pk, &[]),
+            ]),
+            0,
+            &mut challenger(),
+        )
+        .unwrap();
+        verify(
+            &config_tall,
+            VerifierInstances::new(vec![
+                VerifierInstance::new(airs[0], &vk, 5, &public),
+                VerifierInstance::new(airs[1], &vk, 3, &[]),
+                VerifierInstance::new(airs[2], &vk, 2, &[]),
+            ]),
+            &proof,
+            0,
+            &mut challenger(),
+        )
+        .unwrap();
+    }
+
+    #[test]
     fn security_certifies_binary_pcs_and_rejects_an_excessive_target() {
         for log_height in [1, 4, 18] {
             let config = config(log_height);
@@ -285,7 +571,17 @@ mod tests {
             let report = p3_multi_stark::security_report(&config, &instances).unwrap();
             assert!(report.unassessed_components().is_empty());
             report.require_security(100).unwrap();
-            assert!(report.require_security(128).is_err());
+
+            // The union bound lies between the target that passes and the one that does not.
+            let Err(SecurityError::InsufficientSecurity {
+                requested,
+                available,
+            }) = report.require_security(128)
+            else {
+                panic!("a 128-bit target must be refused for lack of bits");
+            };
+            assert_eq!(requested, 128);
+            assert!((100.0..128.0).contains(&available), "{available}");
         }
         let config = config(4);
         let (table, public) = trace(4);
@@ -319,7 +615,12 @@ mod tests {
         for index in 0..3 {
             let mut fixture = Fixture::new(3, 0);
             fixture.public[index] += F::ONE;
-            assert!(fixture.verify().is_err());
+
+            // Public values are bound before any challenge, so every later one moves with them.
+            assert!(matches!(
+                fixture.verify(),
+                Err(VerificationError::Opening(BinaryPcsError::FinalCheck))
+            ));
         }
     }
 
@@ -327,7 +628,12 @@ mod tests {
     fn rejects_changed_sumcheck_polynomial() {
         let mut fixture = Fixture::new(3, 0);
         fixture.proof.sumcheck.round_polys[0][0] += F::ONE;
-        assert!(fixture.verify().is_err());
+
+        // A changed round message moves the challenge, and so the point the opening answers.
+        assert!(matches!(
+            fixture.verify(),
+            Err(VerificationError::Opening(BinaryPcsError::FinalCheck))
+        ));
     }
 
     #[test]
@@ -370,7 +676,14 @@ mod tests {
             log_height,
             pow_bits: 0,
         };
-        assert!(fixture.verify().is_err());
+
+        // The corrupted row leaves the constraint nonzero at the bound point.
+        assert!(matches!(
+            fixture.verify(),
+            Err(VerificationError::Zerocheck(
+                ZerocheckError::FinalSumMismatch
+            ))
+        ));
     }
 
     #[test]
@@ -397,7 +710,7 @@ mod tests {
             for (actual, expected) in cloned.table(0).iter_polys().zip(expected.iter_polys()) {
                 assert_eq!(actual, expected);
             }
-            let proof: BinaryPcsProof<Mmcs> = config
+            let proof: BinaryPcsProof<F, F, Mmcs, Mmcs> = config
                 .pcs
                 .open(cloned, protocol.clone(), &mut prover)
                 .unwrap();
@@ -451,7 +764,7 @@ mod tests {
         type Val = F;
         type Challenge = F;
         type Challenger = Challenger;
-        type Pcs = BinaryPcs<Mmcs>;
+        type Pcs = BinaryPcs<F, F, Mmcs, Mmcs>;
 
         fn pcs(&self) -> &Self::Pcs {
             self.0.pcs()
@@ -467,7 +780,7 @@ mod tests {
         }
         fn committed_table<'a>(
             &self,
-            data: &'a BinaryPcsProverData<Mmcs>,
+            data: &'a BinaryPcsProverData<F, F, Mmcs>,
             index: usize,
         ) -> &'a Table<F> {
             self.0.committed_table(data, index)
@@ -558,7 +871,12 @@ mod tests {
                 .unwrap()
                 .final_codeword
                 .as_mut_slice()[1] += F::ONE;
-            assert!(check(&proof).is_err());
+
+            // The tampered codeword fails the scheme's own final check, not a later one.
+            assert!(matches!(
+                check(&proof),
+                Err(VerificationError::Opening(BinaryPcsError::FinalCheck))
+            ));
         }
     }
 }

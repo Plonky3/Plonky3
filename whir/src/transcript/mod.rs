@@ -21,7 +21,7 @@
 //!                 End   fold
 //!     final polynomial       2^final_sumcheck_rounds extension elements
 //!     final grinding         only when the difficulty is positive
-//!     final queries          final_queries draws of index_bits bits
+//!     final queries          terminal.num_queries draws of index_bits bits
 //!     Begin final fold       the closing delegated sumcheck, when it runs at all
 //!     End   final fold
 //! ```
@@ -86,12 +86,13 @@ use core::marker::PhantomData;
 
 use p3_challenger::fs::{
     DomainSeparator, FieldToFieldCodec, FieldUnit, Hierarchy, Interaction, InteractionPattern,
-    Kind, Length, ProverState, TranscriptBound, TranscriptField, Unit, VerifierState,
+    Kind, Length, ProverState, SymmetricSteps, TranscriptBound, TranscriptField, Unit,
+    VerifierState,
 };
 use p3_challenger::{
     CanObserve, CanSample, CanSampleUniformBits, FieldChallenger, GrindingChallenger,
 };
-use p3_field::{ExtensionField, TwoAdicField};
+use p3_field::{ExtensionField, Field};
 use p3_util::log2_strict_usize;
 use thiserror::Error;
 
@@ -179,6 +180,81 @@ pub const fn query_draws(folded_domain_size: usize, num_queries: usize) -> usize
     }
 }
 
+/// Canonical power-of-two decomposition of a query count, deepest strata first.
+///
+/// A summand `2^c` samples once in each of `2^c` equal subtrees.
+///
+/// If the strata have bad densities `delta_j` with average `delta`, then the
+/// summand misses with probability at most
+/// `prod_j (1 - delta_j) <= (1 - delta)^(2^c)` by AM--GM.
+fn query_summand_depths(draws: usize) -> Vec<usize> {
+    // Peel one power-of-two summand from the remaining query count per pass.
+    let mut remaining = draws;
+    // One entry suffices for each set bit in the count.
+    let mut depths = Vec::with_capacity(draws.count_ones() as usize);
+    while remaining != 0 {
+        // The highest set bit gives the deepest remaining stratum partition.
+        let depth = usize::BITS as usize - 1 - remaining.leading_zeros() as usize;
+        depths.push(depth);
+        remaining -= 1usize << depth;
+    }
+    depths
+}
+
+/// Recompose an index sampled inside one fixed stratum.
+#[inline]
+const fn stratified_index(width: usize, depth: usize, stratum: usize, low: usize) -> usize {
+    (stratum << (width - depth)) | low
+}
+
+/// Assemble one query phase's indices from a caller-supplied draw.
+///
+/// Both drivers share this body, so their index schedules cannot drift apart.
+fn assemble_query_indices(
+    width: usize,
+    draws: usize,
+    stratified: bool,
+    depths: &[usize],
+    mut draw: impl FnMut(usize, usize) -> Vec<usize>,
+) -> Vec<usize> {
+    // A saturated phase has nothing left to decide, so it opens every position.
+    if draws == 0 {
+        return (0..1usize << width).collect();
+    }
+    if !stratified {
+        return draw(width, draws);
+    }
+    let mut indices = Vec::with_capacity(draws);
+    for &depth in depths {
+        let lows = draw(width - depth, 1usize << depth);
+        indices.extend(
+            lows.into_iter()
+                .enumerate()
+                .map(|(stratum, low)| stratified_index(width, depth, stratum, low)),
+        );
+    }
+    indices
+}
+
+/// Draw the query indices of one site through either driver.
+///
+/// A `round` at or past the last one names the final site.
+/// A saturated phase opens every position instead and draws nothing.
+fn play_query_indices<F, S>(state: &mut S, shape: &WhirShape, round: usize) -> Vec<usize>
+where
+    S: SymmetricSteps,
+    S::Challenger: CanSampleUniformBits<F>,
+{
+    let (label, width, draws, stratified, depths) = shape.query_index_site(round);
+    assemble_query_indices(width, draws, stratified, depths, |bits, count| {
+        state
+            .challenge_uniform_bits::<F>(label, bits, count)
+            .into_iter()
+            .map(TranscriptBound::into_inner)
+            .collect()
+    })
+}
+
 /// Append `value` as eight big-endian bytes to the instance label.
 fn push_u64<U: Unit>(separator: &mut DomainSeparator<U>, value: usize) {
     separator.instance(&(value as u64).to_be_bytes());
@@ -219,6 +295,18 @@ fn push_query_indices(
             index_bits,
             Length::Fixed(draws),
         ));
+    }
+}
+
+/// Append one fixed-width draw for each summand of a stratified query schedule.
+fn push_stratified_query_indices(
+    steps: &mut Vec<Interaction>,
+    label: &'static str,
+    index_bits: usize,
+    summand_depths: &[usize],
+) {
+    for &depth in summand_depths {
+        push_query_indices(steps, label, index_bits - depth, 1usize << depth);
     }
 }
 
@@ -300,7 +388,7 @@ impl SumcheckShape {
 }
 
 /// Numbers that fix one intermediate WHIR round.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WhirRoundShape {
     /// Out-of-domain samples drawn against the new commitment.
     pub ood_samples: usize,
@@ -310,6 +398,10 @@ pub struct WhirRoundShape {
     pub query_draws: usize,
     /// Bit width of each query index.
     pub index_bits: usize,
+    /// Binary decomposition of the query count as stratum depths.
+    pub query_summand_depths: Vec<usize>,
+    /// Whether the draws are allocated one per protocol-fixed stratum.
+    pub stratified_queries: bool,
     /// Sumcheck phase folding the polynomial for the next round.
     pub sumcheck: SumcheckShape,
     /// Log-inverse rate of the codeword committed by this round.
@@ -349,7 +441,16 @@ impl WhirRoundShape {
 
         // Grinding raises the cost of searching for favourable query indices.
         push_pow::<F>(steps, QUERY_POW, self.query_pow_bits);
-        push_query_indices(steps, QUERY_INDICES, self.index_bits, self.query_draws);
+        if self.stratified_queries {
+            push_stratified_query_indices(
+                steps,
+                QUERY_INDICES,
+                self.index_bits,
+                &self.query_summand_depths,
+            );
+        } else {
+            push_query_indices(steps, QUERY_INDICES, self.index_bits, self.query_draws);
+        }
 
         // One challenge weights this round's fresh constraints against the carried claim.
         steps.push(Interaction::algebra::<F, EF>(
@@ -367,7 +468,13 @@ impl WhirRoundShape {
         // Commitment, batching challenge, and the two bracket markers.
         4 + 2 * self.ood_samples
             + if self.query_pow_bits > 0 { 1 } else { 0 }
-            + if self.query_draws > 0 { 1 } else { 0 }
+            + if self.stratified_queries {
+                self.query_summand_depths.len()
+            } else if self.query_draws > 0 {
+                1
+            } else {
+                0
+            }
     }
 }
 
@@ -401,6 +508,10 @@ pub struct WhirShape {
     pub final_query_draws: usize,
     /// Bit width of each final query index.
     pub final_index_bits: usize,
+    /// Binary decomposition of the final query count as stratum depths.
+    pub final_query_summand_depths: Vec<usize>,
+    /// Whether final queries are allocated to protocol-fixed strata.
+    pub stratified_queries: bool,
     /// Sumcheck phase closing the run.
     pub final_sumcheck: SumcheckShape,
     /// Security level the parameters were derived against, in bits.
@@ -413,6 +524,8 @@ pub struct WhirShape {
     pub soundness_type: SecurityAssumption,
     /// Folding strategy the schedule was derived from.
     pub folding_factor: FoldingFactor,
+    /// Stable identity of the evaluation code and selector map.
+    pub domain_id: Vec<u8>,
 }
 
 impl WhirShape {
@@ -428,8 +541,8 @@ impl WhirShape {
         num_opening_claims: usize,
     ) -> Self
     where
-        F: TwoAdicField,
-        EF: ExtensionField<F> + TwoAdicField,
+        F: Field,
+        EF: ExtensionField<F>,
         Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
     {
         // Each round queries its own domain, folded by that round's arity.
@@ -439,11 +552,14 @@ impl WhirShape {
             .enumerate()
             .map(|(index, params)| {
                 let folded = params.domain_size >> config.round_folding_factor(index);
+                let query_draws = query_draws(folded, params.num_queries);
                 WhirRoundShape {
                     ood_samples: params.ood_samples,
                     query_pow_bits: params.pow_bits,
-                    query_draws: query_draws(folded, params.num_queries),
+                    query_draws,
                     index_bits: log2_strict_usize(folded),
+                    query_summand_depths: query_summand_depths(query_draws),
+                    stratified_queries: config.stratified_queries,
                     sumcheck: SumcheckShape {
                         rounds: config.round_folding_factor(index + 1),
                         pow_bits: params.folding_pow_bits,
@@ -457,6 +573,7 @@ impl WhirShape {
         let final_config = config.final_round_config();
         let final_folded = final_config.domain_size >> final_config.folding_factor;
 
+        let final_query_draws = query_draws(final_folded, config.terminal.num_queries);
         Self {
             num_variables: config.num_variables,
             commitment_ood_samples: config.commitment_ood_samples,
@@ -469,9 +586,11 @@ impl WhirShape {
             },
             rounds,
             final_poly_len: 1 << final_config.num_variables,
-            final_pow_bits: config.final_pow_bits,
-            final_query_draws: query_draws(final_folded, config.final_queries),
+            final_pow_bits: config.terminal.pow_bits,
+            final_query_draws,
             final_index_bits: log2_strict_usize(final_folded),
+            final_query_summand_depths: query_summand_depths(final_query_draws),
+            stratified_queries: config.stratified_queries,
             final_sumcheck: SumcheckShape {
                 rounds: config.final_sumcheck_rounds,
                 pow_bits: config.final_folding_pow_bits,
@@ -481,6 +600,7 @@ impl WhirShape {
             starting_log_inv_rate: config.starting_log_inv_rate,
             soundness_type: config.soundness_type,
             folding_factor: config.folding_factor.clone(),
+            domain_id: config.domain_id.clone(),
         }
     }
 
@@ -507,15 +627,23 @@ impl WhirShape {
     /// Index label, index width, and draw count of the query site of `round`.
     ///
     /// A draw count of zero means the phase opens every position instead.
-    fn query_index_site(&self, round: usize) -> (&'static str, usize, usize) {
+    fn query_index_site(&self, round: usize) -> (&'static str, usize, usize, bool, &[usize]) {
         if round < self.rounds.len() {
             let shape = &self.rounds[round];
-            (QUERY_INDICES, shape.index_bits, shape.query_draws)
+            (
+                QUERY_INDICES,
+                shape.index_bits,
+                shape.query_draws,
+                shape.stratified_queries,
+                &shape.query_summand_depths,
+            )
         } else {
             (
                 FINAL_QUERY_INDICES,
                 self.final_index_bits,
                 self.final_query_draws,
+                self.stratified_queries,
+                &self.final_query_summand_depths,
             )
         }
     }
@@ -558,12 +686,21 @@ impl WhirShape {
         ));
 
         push_pow::<F>(&mut steps, FINAL_QUERY_POW, self.final_pow_bits);
-        push_query_indices(
-            &mut steps,
-            FINAL_QUERY_INDICES,
-            self.final_index_bits,
-            self.final_query_draws,
-        );
+        if self.stratified_queries {
+            push_stratified_query_indices(
+                &mut steps,
+                FINAL_QUERY_INDICES,
+                self.final_index_bits,
+                &self.final_query_summand_depths,
+            );
+        } else {
+            push_query_indices(
+                &mut steps,
+                FINAL_QUERY_INDICES,
+                self.final_index_bits,
+                self.final_query_draws,
+            );
+        }
 
         // A run described with no closing rounds delegates nothing at all.
         if self.final_sumcheck.rounds > 0 {
@@ -613,6 +750,11 @@ impl WhirShape {
         push_u64(&mut separator, self.pow_budget);
         push_u64(&mut separator, self.starting_log_inv_rate);
         push_u64(&mut separator, self.soundness_type as usize);
+        if !self.domain_id.is_empty() {
+            separator
+                .instance(&self.domain_id)
+                .instance(&[u8::from(self.stratified_queries)]);
+        }
 
         bind_folding_factor(&mut separator, &self.folding_factor);
 
@@ -776,16 +918,7 @@ where
     /// Every index in draw order, repeats included.
     /// A saturated phase opens every position instead and draws nothing.
     pub fn query_indices(&mut self, round: usize) -> Vec<usize> {
-        let (label, width, draws) = self.shape.query_index_site(round);
-        // A saturated phase has nothing left to decide, so no draw is described.
-        if draws == 0 {
-            return (0..1usize << width).collect();
-        }
-        self.state
-            .challenge_uniform_bits::<F>(label, width, draws)
-            .into_iter()
-            .map(TranscriptBound::into_inner)
-            .collect()
+        play_query_indices::<F, _>(&mut self.state, &self.shape, round)
     }
 
     /// Draw the challenge weighting one round's fresh constraints.
@@ -927,16 +1060,7 @@ where
     ///
     /// A `round` at or past the last one names the final site.
     pub fn query_indices(&mut self, round: usize) -> Vec<usize> {
-        let (label, width, draws) = self.shape.query_index_site(round);
-        // A saturated phase has nothing left to decide, so no draw is described.
-        if draws == 0 {
-            return (0..1usize << width).collect();
-        }
-        self.state
-            .challenge_uniform_bits::<F>(label, width, draws)
-            .into_iter()
-            .map(TranscriptBound::into_inner)
-            .collect()
+        play_query_indices::<F, _>(&mut self.state, &self.shape, round)
     }
 
     /// Redraw the challenge weighting one round's fresh constraints.
@@ -1002,9 +1126,12 @@ mod tests {
 
     use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
     use p3_challenger::fs::TypeTag;
+    use p3_challenger::testing::pow_difficulties;
     use p3_challenger::{CanSample, DuplexChallenger};
-    use p3_field::PrimeCharacteristicRing;
     use p3_field::extension::BinomialExtensionField;
+    use p3_field::{BasedVectorSpace, PrimeCharacteristicRing, PrimeField64};
+    use p3_keccak::Keccak256Hash;
+    use p3_symmetric::CryptographicHasher;
     use proptest::prelude::*;
     use rand::rngs::SmallRng;
     use rand::{RngExt, SeedableRng};
@@ -1052,6 +1179,11 @@ mod tests {
         // Fixed seed so two runs differ only where the transcript makes them differ.
         let mut rng = SmallRng::seed_from_u64(0x5EED);
         Ch::new(Perm::new_from_rng_128(&mut rng))
+    }
+
+    /// Keccak-256 over canonical values, eight little-endian bytes each.
+    pub(super) fn stream_digest(values: &[u64]) -> [u8; 32] {
+        Keccak256Hash.hash_iter(values.iter().flat_map(|v| v.to_le_bytes()))
     }
 
     /// One code rate per intermediate round, growing with the folding schedule.
@@ -1401,6 +1533,20 @@ mod tests {
     }
 
     #[test]
+    fn domain_identity_and_query_schedule_split_the_seed() {
+        let mut additive = config_from(base_params());
+        additive.domain_id = b"test:additive-v1".to_vec();
+        let base = first_challenge(&additive);
+
+        additive.domain_id = b"test:additive-v2".to_vec();
+        assert_ne!(first_challenge(&additive), base);
+
+        additive.domain_id = b"test:additive-v1".to_vec();
+        additive.stratified_queries = true;
+        assert_ne!(first_challenge(&additive), base);
+    }
+
+    #[test]
     fn every_derived_field_that_shapes_the_transcript_reaches_the_seed() {
         // Walk `WhirConfig` field by field, perturbing the derived value itself.
         //
@@ -1412,8 +1558,8 @@ mod tests {
             c.starting_folding_pow_bits += 1;
         });
         derived_field_moves_the_seed("folding_schedule", |c| c.folding_schedule[0] -= 1);
-        derived_field_moves_the_seed("final_queries", |c| c.final_queries += 1);
-        derived_field_moves_the_seed("final_pow_bits", |c| c.final_pow_bits += 1);
+        derived_field_moves_the_seed("terminal.num_queries", |c| c.terminal.num_queries += 1);
+        derived_field_moves_the_seed("terminal.pow_bits", |c| c.terminal.pow_bits += 1);
         derived_field_moves_the_seed("final_sumcheck_rounds", |c| c.final_sumcheck_rounds -= 1);
         derived_field_moves_the_seed("final_folding_pow_bits", |c| c.final_folding_pow_bits += 1);
 
@@ -1495,6 +1641,84 @@ mod tests {
         let prover_next: F = prover_challenger.sample();
         let verifier_next: F = verifier_challenger.sample();
         assert_eq!(prover_next, verifier_next);
+    }
+
+    #[test]
+    fn the_challenge_stream_is_pinned() {
+        let extension_words = |value: &EF| -> Vec<u64> {
+            value
+                .as_basis_coefficients_slice()
+                .iter()
+                .map(F::as_canonical_u64)
+                .collect()
+        };
+
+        // Play one variant of the fixture and assert its digest, its verifier
+        // replay, and the agreement of both sides' next sample.
+        let assert_pinned = |mut shape: WhirShape, digest: [u8; 32]| {
+            // Fixture state: no grinding anywhere, so a zero witness clears every site.
+            for round in &mut shape.rounds {
+                round.query_pow_bits = 0;
+            }
+            shape.final_pow_bits = 0;
+            let carried = Carried::new(&shape, 0xC1A1);
+
+            let mut prover_challenger = fresh_challenger();
+            let prover = play_prover(&mut prover_challenger, &shape, &carried);
+            let prover_next: F = prover_challenger.sample();
+
+            let mut stream: Vec<u64> = prover.challenges.iter().flat_map(extension_words).collect();
+            stream.extend(prover.indices.iter().flatten().map(|&index| index as u64));
+            stream.extend(prover.witnesses.iter().map(F::as_canonical_u64));
+            stream.push(prover_next.as_canonical_u64());
+            assert_eq!(stream_digest(&stream), digest);
+
+            let mut verifier_challenger = fresh_challenger();
+            let verifier = play_verifier(
+                &mut verifier_challenger,
+                &shape,
+                &carried,
+                &prover.witnesses,
+            );
+            assert_eq!(prover, verifier);
+            let verifier_next: F = verifier_challenger.sample();
+            assert_eq!(prover_next, verifier_next);
+        };
+
+        // (a) the fixture as-is.
+        assert_pinned(
+            shape_of(&config_from(base_params())),
+            [
+                239, 237, 48, 39, 140, 119, 127, 173, 71, 146, 27, 102, 238, 140, 189, 24, 211,
+                174, 32, 255, 99, 5, 89, 146, 186, 209, 231, 139, 123, 160, 129, 137,
+            ],
+        );
+
+        // (b) stratified: every query site draws through the stratified schedule.
+        let mut stratified = shape_of(&config_from(base_params()));
+        stratified.stratified_queries = true;
+        for round in &mut stratified.rounds {
+            round.stratified_queries = true;
+        }
+        assert_pinned(
+            stratified,
+            [
+                140, 154, 214, 44, 134, 232, 156, 153, 66, 10, 224, 123, 82, 176, 156, 89, 43, 43,
+                84, 0, 146, 197, 34, 72, 120, 96, 78, 90, 96, 164, 20, 93,
+            ],
+        );
+
+        // (c) saturated first round: asking for every position opens them all, drawing nothing.
+        let mut saturated = shape_of(&config_from(base_params()));
+        saturated.rounds[0].query_draws = 0;
+        saturated.rounds[0].query_summand_depths.clear();
+        assert_pinned(
+            saturated,
+            [
+                27, 168, 114, 184, 180, 232, 236, 16, 9, 149, 25, 203, 140, 186, 163, 92, 209, 254,
+                128, 52, 155, 209, 253, 155, 26, 167, 249, 213, 29, 123, 100, 155,
+            ],
+        );
     }
 
     proptest! {
@@ -1688,5 +1912,79 @@ mod tests {
         assert_eq!(query_draws(8, 8), 0);
         assert_eq!(query_draws(8, 9), 0);
         assert_eq!(query_draws(8, 7), 7);
+    }
+
+    #[test]
+    fn stratified_schedule_is_the_binary_decomposition() {
+        assert_eq!(query_summand_depths(0), Vec::<usize>::new());
+        assert_eq!(query_summand_depths(1), vec![0]);
+        assert_eq!(query_summand_depths(43), vec![5, 3, 1, 0]);
+        assert_eq!(
+            query_summand_depths(43)
+                .into_iter()
+                .map(|depth| 1usize << depth)
+                .sum::<usize>(),
+            43
+        );
+    }
+
+    #[test]
+    fn stratified_indices_cover_each_fixed_subtree_once() {
+        const WIDTH: usize = 9;
+        for depth in query_summand_depths(43) {
+            let low_bits = WIDTH - depth;
+            for stratum in 0..1usize << depth {
+                let low = (17 * stratum + 5) & ((1 << low_bits) - 1);
+                let index = stratified_index(WIDTH, depth, stratum, low);
+                assert!(index < 1 << WIDTH);
+                assert_eq!(index >> low_bits, stratum);
+                assert_eq!(index & ((1 << low_bits) - 1), low);
+            }
+        }
+    }
+
+    #[test]
+    fn the_described_grinding_matches_the_configured_difficulty() {
+        // Invariant: a grinding difficulty lives in two places.
+        //
+        //     transcript  ->  the bits the pattern describes
+        //     report      ->  the bits the configuration derives
+        //
+        // WHIR prices its own grinding, so the shared budget never compares it.
+        //
+        // Reading both sides through the shape compares it against itself.
+        // So only the described side is read there.
+        //
+        // The folding sites belong to the delegated sumcheck's description.
+        // A query site is all this pattern carries.
+        //
+        // Fixture state: the reference configuration, and one with no budget.
+        for ground in [false, true] {
+            let mut params = base_params();
+            if !ground {
+                params.pow_bits = 0;
+            }
+            let config = config_from(params);
+
+            // One query site per round, then one closing the run.
+            //
+            // A zero difficulty describes no step, so it contributes nothing.
+            let mut expected: Vec<(&str, usize)> = config
+                .round_parameters
+                .iter()
+                .filter(|round| round.pow_bits > 0)
+                .map(|round| (QUERY_POW, round.pow_bits))
+                .collect();
+            if config.terminal.pow_bits > 0 {
+                expected.push((FINAL_QUERY_POW, config.terminal.pow_bits));
+            }
+
+            // The ground run really grinds and the unground one never does.
+            // Otherwise an empty list on both sides would satisfy this.
+            assert_eq!(expected.is_empty(), !ground, "the budget did not bite");
+
+            let described = pow_difficulties(&shape_of(&config).pattern::<F, EF>());
+            assert_eq!(described, expected);
+        }
     }
 }

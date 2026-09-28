@@ -6,7 +6,10 @@ use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAss
 use p3_util::{flatten_to_base, reconstitute_from_base};
 use rand::distr::{Distribution, StandardUniform};
 
-use super::{BinomialExtensionField, PackedExtField, binomial_mul, vector_add, vector_sub};
+use super::{
+    BinomialExtensionField, PackedExtField, binomial_mul, binomial_mul_by_scalar, vector_add,
+    vector_sub,
+};
 use crate::extension::{Binomial, BinomiallyExtendable, binomial_square};
 use crate::{
     Algebra, BasedVectorSpace, Dup, Field, PackedField, PackedFieldExtension, PackedValue, Powers,
@@ -435,13 +438,8 @@ where
 
     #[inline]
     fn mul(self, rhs: BinomialExtensionField<F, D>) -> Self {
-        let a = self.value;
-        let b = rhs.value;
         let mut res = Self::default();
-        let w = F::W;
-
-        binomial_mul(&a, &b, &mut res.value, w);
-
+        binomial_mul_by_scalar(&self.value, &rhs.value, &mut res.value, F::W);
         res
     }
 }
@@ -454,8 +452,11 @@ where
     type Output = Self;
 
     #[inline]
-    fn mul(self, rhs: PF) -> Self {
-        Self::new(self.value.map(|x| x * rhs))
+    fn mul(mut self, rhs: PF) -> Self {
+        for x in &mut self.value {
+            *x *= rhs;
+        }
+        self
     }
 }
 

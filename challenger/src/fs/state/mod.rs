@@ -1,9 +1,11 @@
 //! Prover-side and verifier-side transcript drivers.
 
 mod prover;
+mod symmetric;
 mod verifier;
 
 pub use prover::ProverState;
+pub use symmetric::SymmetricSteps;
 pub use verifier::VerifierState;
 
 use crate::fs::codecs::{Codec, MIN_CHALLENGE_SECURITY_BITS};

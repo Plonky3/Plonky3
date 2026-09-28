@@ -43,6 +43,39 @@ pub enum PcsOptions {
     Stir,
 }
 
+/// How a prover example prints its measurements.
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum OutputFormat {
+    /// Labelled lines for a person to read.
+    Human,
+    /// One JSON object per run, for collecting runs into a scoreboard.
+    Json,
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum BinaryHashOptions {
+    Blake2sCompressions,
+    Blake3Compressions,
+    KeccakFPermutations,
+    Sha256Compressions,
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum RepresentationOptions {
+    Auto,
+    Subfield,
+    PolyBasis,
+    PolyBasisLate,
+    Generic,
+}
+
+/// The byte hash a binary-field proof builds its Merkle trees and transcript from.
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum BinaryCommitmentHashOptions {
+    Keccak256,
+    Blake3,
+}
+
 /// Produce a collection of PossibleValue's for an Enum variant.
 ///
 /// We allow any prefix of the full name which uniquely determines the variant.
@@ -180,5 +213,132 @@ impl ValueEnum for PcsOptions {
             Self::Fri => get_aliases("fri", 1, None),
             Self::Stir => get_aliases("stir", 1, None),
         })
+    }
+}
+
+impl ValueEnum for OutputFormat {
+    fn value_variants<'a>() -> &'a [Self] {
+        &[Self::Human, Self::Json]
+    }
+
+    fn to_possible_value(&self) -> Option<PossibleValue> {
+        Some(match self {
+            Self::Human => get_aliases("human", 1, None),
+            Self::Json => get_aliases("json", 1, None),
+        })
+    }
+}
+
+impl ValueEnum for BinaryHashOptions {
+    fn value_variants<'a>() -> &'a [Self] {
+        &[
+            Self::Blake2sCompressions,
+            Self::Blake3Compressions,
+            Self::KeccakFPermutations,
+            Self::Sha256Compressions,
+        ]
+    }
+
+    fn to_possible_value(&self) -> Option<PossibleValue> {
+        Some(match self {
+            Self::Blake2sCompressions => get_aliases(
+                "blake-2s-compressions",
+                7,
+                Some(vec![("blake2s-compressions", 6), ("b2s", 3)]),
+            ),
+            Self::Blake3Compressions => get_aliases(
+                "blake-3-compressions",
+                1,
+                Some(vec![("blake3-compressions", 6), ("b3", 2)]),
+            ),
+            Self::KeccakFPermutations => get_aliases(
+                "keccak-f-permutations",
+                1,
+                Some(vec![("keccakf-permutations", 7), ("kf", 2)]),
+            ),
+            Self::Sha256Compressions => get_aliases(
+                "sha-256-compressions",
+                1,
+                Some(vec![("sha256-compressions", 4)]),
+            ),
+        })
+    }
+}
+
+impl ValueEnum for BinaryCommitmentHashOptions {
+    fn value_variants<'a>() -> &'a [Self] {
+        &[Self::Keccak256, Self::Blake3]
+    }
+
+    fn to_possible_value(&self) -> Option<PossibleValue> {
+        Some(match self {
+            Self::Keccak256 => get_aliases("keccak-256", 1, Some(vec![("keccak256", 7)])),
+            Self::Blake3 => get_aliases("blake-3", 1, Some(vec![("blake3", 6), ("b3", 2)])),
+        })
+    }
+}
+
+impl ValueEnum for RepresentationOptions {
+    fn value_variants<'a>() -> &'a [Self] {
+        &[
+            Self::Auto,
+            Self::Subfield,
+            Self::PolyBasis,
+            Self::PolyBasisLate,
+            Self::Generic,
+        ]
+    }
+
+    fn to_possible_value(&self) -> Option<PossibleValue> {
+        Some(match self {
+            Self::Auto => get_aliases("auto", 1, None),
+            Self::Subfield => get_aliases("subfield", 1, None),
+            Self::PolyBasis => {
+                get_aliases("poly-basis", 1, Some(vec![("polybasis", 4), ("pb", 2)]))
+            }
+            Self::PolyBasisLate => get_aliases(
+                "poly-basis-late",
+                11,
+                Some(vec![("polybasislate", 10), ("pbl", 3)]),
+            ),
+            Self::Generic => get_aliases("generic", 1, None),
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn poly_basis_late_has_an_explicit_cli_spelling() {
+        assert_eq!(
+            RepresentationOptions::from_str("poly-basis-late", true),
+            Ok(RepresentationOptions::PolyBasisLate)
+        );
+        assert_eq!(
+            RepresentationOptions::from_str("poly-basis", true),
+            Ok(RepresentationOptions::PolyBasis)
+        );
+        assert_eq!(
+            RepresentationOptions::from_str("poly", true),
+            Ok(RepresentationOptions::PolyBasis)
+        );
+        assert_eq!(
+            RepresentationOptions::from_str("polybasis", true),
+            Ok(RepresentationOptions::PolyBasis)
+        );
+        assert_eq!(
+            RepresentationOptions::from_str("p", true),
+            Ok(RepresentationOptions::PolyBasis)
+        );
+        assert_eq!(
+            RepresentationOptions::from_str("pbl", true),
+            Ok(RepresentationOptions::PolyBasisLate)
+        );
+        assert_eq!(
+            RepresentationOptions::from_str("polybasislate", true),
+            Ok(RepresentationOptions::PolyBasisLate)
+        );
     }
 }

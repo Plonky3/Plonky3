@@ -1,0 +1,194 @@
+//! Errors returned by the jagged sparse-to-dense reduction.
+
+use thiserror::Error;
+
+use crate::SumcheckError;
+
+/// A malformed sparse layout.
+#[derive(Clone, Debug, Error, PartialEq, Eq)]
+pub enum JaggedLayoutError {
+    /// The layout has no column to address.
+    #[error("a jagged layout needs at least one column")]
+    NoColumns,
+    /// The column count cannot be addressed by a Boolean point.
+    #[error("the jagged column count must be a power of two, got {columns}")]
+    ColumnCountNotPowerOfTwo {
+        /// Number of columns supplied by the caller.
+        columns: usize,
+    },
+    /// The row bound cannot be represented by a machine index.
+    #[error("the row-variable count {variables} does not fit in a machine index")]
+    RowVariablesOverflow {
+        /// Number of row variables supplied by the caller.
+        variables: usize,
+    },
+    /// A live column extends past the declared row space.
+    #[error("column {column} has height {height}, above the row bound {maximum}")]
+    HeightExceedsRowBound {
+        /// Index of the invalid column.
+        column: usize,
+        /// Number of live entries in the invalid column.
+        height: usize,
+        /// Maximum number of rows described by the row variables.
+        maximum: usize,
+    },
+    /// The sum of live column lengths overflowed a machine index.
+    #[error("the jagged trace area overflows a machine index at column {column}")]
+    AreaOverflow {
+        /// Column whose height made the running area overflow.
+        column: usize,
+    },
+    /// The padded dense area cannot be represented by a machine index.
+    #[error("the jagged trace area {area} has no representable power-of-two envelope")]
+    DenseAreaOverflow {
+        /// Sum of all live column lengths.
+        area: usize,
+    },
+    /// The requested envelope arity cannot be represented by a machine index.
+    #[error("an envelope of {variables} variables does not fit in a machine index")]
+    DenseVariablesOverflow {
+        /// Number of envelope variables the floor asks for.
+        variables: usize,
+    },
+}
+
+/// A malformed prover input or rejected jagged proof.
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum JaggedError {
+    /// The row point does not match the public row bound.
+    #[error("the row point has {actual} coordinates, expected {expected}")]
+    RowPointWidthMismatch {
+        /// Number of coordinates required by the layout.
+        expected: usize,
+        /// Number of coordinates supplied by the caller.
+        actual: usize,
+    },
+    /// The column point cannot address the public column count.
+    #[error("the column point has {actual} coordinates, expected {expected}")]
+    ColumnPointWidthMismatch {
+        /// Number of coordinates required by the layout.
+        expected: usize,
+        /// Number of coordinates supplied by the caller.
+        actual: usize,
+    },
+    /// The dense witness does not fill the power-of-two envelope exactly.
+    #[error("the dense witness has {actual} cells, expected {expected}")]
+    DenseLengthMismatch {
+        /// Envelope size fixed by the layout.
+        expected: usize,
+        /// Number of cells supplied by the prover.
+        actual: usize,
+    },
+    /// The witness does not take the value the caller asked to have proved.
+    #[error("the dense witness does not evaluate to the claimed sparse value")]
+    ClaimMismatch,
+    /// The delegated quadratic sumcheck rejected.
+    #[error(transparent)]
+    Sumcheck(#[from] SumcheckError),
+    /// The terminal product does not equal the sumcheck claim.
+    #[error("the terminal jagged relation is inconsistent")]
+    TerminalMismatch,
+}
+
+/// A trace a jagged geometry cannot read.
+#[derive(Clone, Debug, Error, PartialEq, Eq)]
+pub enum JaggedIngestError {
+    /// The producer supplies a different number of columns than the geometry has.
+    #[error("the trace has {actual} columns, expected {expected}")]
+    ColumnCountMismatch {
+        /// Number of columns the geometry reserves.
+        expected: usize,
+        /// Number of columns the producer supplies.
+        actual: usize,
+    },
+    /// One column supplies a different number of cells than the geometry reserves.
+    #[error("column {column} supplies {actual} cells, expected {expected}")]
+    ColumnHeightMismatch {
+        /// Index of the disagreeing column.
+        column: usize,
+        /// Number of cells the geometry reserves.
+        expected: usize,
+        /// Number of cells the producer supplies.
+        actual: usize,
+    },
+    /// An interleaved column would read past the block it is drawn from.
+    #[error("column {column} needs {required} cells of its block, which holds {available}")]
+    StrideOutOfRange {
+        /// Index of the invalid column.
+        column: usize,
+        /// Position one past the last cell the column reads.
+        required: usize,
+        /// Number of cells in the block.
+        available: usize,
+    },
+    /// An interleaved column declares a step of zero.
+    #[error("column {column} declares a step of zero between its cells")]
+    ZeroStride {
+        /// Index of the invalid column.
+        column: usize,
+    },
+    /// A packed column holds fewer words than its height needs.
+    #[error("column {column} needs {required} packed words and holds {available}")]
+    PackedWordsTooShort {
+        /// Index of the invalid column.
+        column: usize,
+        /// Number of words the height needs.
+        required: usize,
+        /// Number of words the producer supplies.
+        available: usize,
+    },
+    /// A pre-concatenated trace is shorter than the envelope the geometry commits.
+    #[error("the committed vector holds {available} cells and the envelope needs {required}")]
+    CommittedVectorTooShort {
+        /// Size of the envelope.
+        required: usize,
+        /// Number of cells the producer supplies.
+        available: usize,
+    },
+}
+
+/// A sparse claim the dense commitment did not authenticate.
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum JaggedOpeningError<E> {
+    /// The sparse-to-dense reduction failed.
+    #[error(transparent)]
+    Reduction(#[from] JaggedError),
+    /// The dense commitment scheme failed.
+    #[error("the dense commitment scheme reported {0:?}")]
+    Commitment(E),
+    /// No sparse claim was supplied to discharge.
+    #[error("a jagged opening must carry at least one sparse claim")]
+    NoClaims,
+    /// The proof carries a different number of reductions than there are claims.
+    #[error("the proof carries {actual} reductions for {expected} claims")]
+    ReductionCountMismatch {
+        /// Number of claims the caller stated.
+        expected: usize,
+        /// Number of reductions the proof carries.
+        actual: usize,
+    },
+    /// The dense opening returned a different number of readings than there are claims.
+    #[error("the dense opening returned {actual} readings for {expected} claims")]
+    OpeningCountMismatch {
+        /// Number of claims the caller stated.
+        expected: usize,
+        /// Number of readings the opening returned.
+        actual: usize,
+    },
+    /// One dense reading does not have the shape a claim asked for.
+    #[error("reading {reading} returned {direct} direct and {successor} successor values")]
+    OpeningShape {
+        /// Position of the malformed reading.
+        reading: usize,
+        /// Number of direct readings it returned.
+        direct: usize,
+        /// Number of successor readings it returned.
+        successor: usize,
+    },
+    /// The committed vector does not take a reduced value at its reduced point.
+    #[error("the dense commitment does not carry the value reduction {reading} produced")]
+    DenseMismatch {
+        /// Position of the claim the commitment refused.
+        reading: usize,
+    },
+}

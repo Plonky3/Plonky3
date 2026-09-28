@@ -25,10 +25,14 @@ tracing.workspace = true
 
 [dev-dependencies]
 p3-baby-bear = { path = "../baby-bear" }
+p3-field-testing = { path = "../field-testing" }
 p3-goldilocks = { path = "../goldilocks" }
+p3-koala-bear = { path = "../koala-bear" }
+p3-mersenne-31 = { path = "../mersenne-31" }
 
 criterion.workspace = true
 proptest.workspace = true
+rayon.workspace = true
 
 [[bench]]
 name = "batch_inverse"

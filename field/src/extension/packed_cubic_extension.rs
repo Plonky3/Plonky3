@@ -405,8 +405,11 @@ where
     type Output = Self;
 
     #[inline]
-    fn mul(self, rhs: PF) -> Self {
-        Self::new(self.value.map(|x| x * rhs))
+    fn mul(mut self, rhs: PF) -> Self {
+        for x in &mut self.value {
+            *x *= rhs;
+        }
+        self
     }
 }
 

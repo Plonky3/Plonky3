@@ -3,7 +3,8 @@
 use alloc::vec::Vec;
 
 use p3_challenger::{FieldChallenger, GrindingChallenger};
-use p3_field::{ExtensionField, TwoAdicField};
+use p3_field::{ExtensionField, Field};
+use p3_security::whir::WHIR_OPENING_LABEL;
 use p3_security::{ErrorBits, SecurityAssumption};
 use p3_sumcheck::{OpeningProtocol, PrescribedOpeningSecurity};
 use p3_util::log2_ceil_usize;
@@ -17,57 +18,17 @@ pub(super) fn prescribed_security<EF, F, Challenger>(
     protocol: &OpeningProtocol,
 ) -> Option<PrescribedOpeningSecurity>
 where
-    F: TwoAdicField,
-    EF: ExtensionField<F> + TwoAdicField,
+    F: Field,
+    EF: ExtensionField<F>,
     Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
 {
-    // Public derived fields can be changed after construction. Only certify a
-    // schedule which agrees with the validated parameter derivation.
-    let canonical =
-        WhirConfig::<EF, F, Challenger>::new(config.num_variables, config.params.clone()).ok()?;
-    if config.commitment_ood_samples != canonical.commitment_ood_samples
-        || config.folding_schedule != canonical.folding_schedule
-        || config.starting_folding_pow_bits != canonical.starting_folding_pow_bits
-        || config.final_queries != canonical.final_queries
-        || config.final_pow_bits != canonical.final_pow_bits
-        || config.final_sumcheck_rounds != canonical.final_sumcheck_rounds
-        || config.final_folding_pow_bits != canonical.final_folding_pow_bits
-        || config.round_parameters.len() != canonical.round_parameters.len()
-        || config
-            .round_parameters
-            .iter()
-            .zip(&canonical.round_parameters)
-            .any(|(a, b)| {
-                a.pow_bits != b.pow_bits
-                    || a.folding_pow_bits != b.folding_pow_bits
-                    || a.num_queries != b.num_queries
-                    || a.ood_samples != b.ood_samples
-                    || a.num_variables != b.num_variables
-                    || a.folding_factor != b.folding_factor
-                    || a.log_inv_rate != b.log_inv_rate
-                    || a.domain_size != b.domain_size
-                    || a.folded_domain_gen != b.folded_domain_gen
-            })
-    {
-        return None;
-    }
-
-    let total_cells = protocol
-        .table_shapes()
-        .iter()
-        .try_fold(0usize, |total, table| {
-            let cells = (1usize.checked_shl(table.num_variables().try_into().ok()?)?)
-                .checked_mul(table.width())?;
-            total.checked_add(cells)
-        })?;
+    let total_cells = protocol.checked_num_cells()?;
     if total_cells == 0 || log2_ceil_usize(total_cells) != config.num_variables {
         return None;
     }
     let num_claims = protocol
-        .iter_openings()
-        .try_fold(config.commitment_ood_samples, |total, (_, batch)| {
-            total.checked_add(batch.len())
-        })?;
+        .checked_num_claims()?
+        .checked_add(config.commitment_ood_samples)?;
     config.validate_initial_claims(num_claims).ok()?;
 
     // Field::bits() rounds upward. A whole-bit lower bound avoids granting
@@ -88,8 +49,8 @@ where
     };
     let add_folds = |errors: &mut Vec<ErrorBits>, variables, rate, folds, pow| {
         // Use the largest degree/rate bound for every binary fold in a phase.
-        // The Johnson helper retains the dominant term; one additional bit
-        // covers its positive lower-order terms at the fixed m = 10.
+        // Retain the legacy one-bit Johnson reserve. The shared helper now
+        // includes a complete theorem bound, so this is extra conservatism.
         let gap = assumption.prox_gaps_error(variables, rate, field_bits, 2)
             - if assumption == SecurityAssumption::JohnsonBound {
                 1.0
@@ -145,7 +106,8 @@ where
         old_rate = round.log_inv_rate;
     }
     errors.push(ErrorBits::from_log2(
-        assumption.queries_error(old_rate, config.final_queries) + config.final_pow_bits as f64,
+        assumption.queries_error(old_rate, config.terminal.num_queries)
+            + config.terminal.pow_bits as f64,
     ));
     for _ in 0..config.final_sumcheck_rounds {
         errors.push(ErrorBits::from_log2(
@@ -153,12 +115,14 @@ where
         ));
     }
     let bits = ErrorBits::sum(&errors).bits();
-    bits.is_finite().then_some(PrescribedOpeningSecurity {
-        error: ErrorBits::from_log2(bits.max(0.0)),
-        // Initial OOD samples are drawn only in open_at, after outer AIR/GKR
-        // challenges. They cannot shrink the candidate set for those reductions.
-        log2_max_candidates: assumption
-            .list_size_bits(config.num_variables, config.starting_log_inv_rate),
+    bits.is_finite().then(|| {
+        PrescribedOpeningSecurity::single(
+            WHIR_OPENING_LABEL,
+            ErrorBits::from_log2(bits.max(0.0)),
+            // Initial OOD samples are drawn only in open_at, after outer AIR/GKR
+            // challenges. They cannot shrink the candidate set for those reductions.
+            assumption.list_size_bits(config.num_variables, config.starting_log_inv_rate),
+        )
     })
 }
 
@@ -172,6 +136,7 @@ mod tests {
     use p3_field::Field;
     use p3_field::extension::BinomialExtensionField;
     use p3_merkle_tree::MerkleTreeMmcs;
+    use p3_security::ErrorBits;
     use p3_sumcheck::layout::PrefixProver;
     use p3_sumcheck::{OpeningBatch, OpeningProtocol, PrescribedPointPcs, TableShape, TableSpec};
     use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
@@ -209,6 +174,24 @@ mod tests {
         Pcs::new(config, Radix2DFTSmallBatch::default(), mmcs)
     }
 
+    fn johnson_reserve_pcs() -> Pcs {
+        let perm = Perm::new_from_rng_128(&mut SmallRng::seed_from_u64(73));
+        let mmcs = Mmcs::new(Hash::new(perm.clone()), Compress::new(perm), 0);
+        let config = WhirConfig::new(
+            4,
+            ProtocolParameters {
+                starting_log_inv_rate: 1,
+                round_log_inv_rates: vec![],
+                folding_factor: FoldingFactor::Constant(4),
+                soundness_type: SecurityAssumption::JohnsonBound,
+                security_level: 112,
+                pow_bits: 16,
+            },
+        )
+        .unwrap();
+        Pcs::new(config, Radix2DFTSmallBatch::default(), mmcs)
+    }
+
     fn pcs() -> Pcs {
         pcs_with_assumption(SecurityAssumption::UniqueDecoding)
     }
@@ -225,7 +208,7 @@ mod tests {
         let bits = pcs()
             .prescribed_security(&protocol(12))
             .expect("WHIR supplies shape-checked algebraic security")
-            .error
+            .error()
             .bits();
         // Each proximity phase targets 32 bits. Union-composing the phases must
         // lose bits, while remaining useful for a lower security target.
@@ -257,9 +240,54 @@ mod tests {
     }
 
     #[test]
-    fn modified_derived_parameters_have_no_security_evidence() {
-        let mut pcs = pcs();
-        pcs.config.final_queries = 0;
-        assert!(pcs.prescribed_security(&protocol(12)).is_none());
+    fn johnson_report_reserves_one_bit_for_each_proximity_gap() {
+        let pcs = johnson_reserve_pcs();
+        let protocol = protocol(4);
+        let report = pcs
+            .prescribed_security(&protocol)
+            .expect("WHIR supplies Johnson security evidence");
+        assert!(pcs.config.round_parameters.is_empty());
+        assert_eq!(pcs.config.folding_schedule, [4]);
+        assert_eq!(pcs.config.final_sumcheck_rounds, 0);
+        let assumption = SecurityAssumption::JohnsonBound;
+        let field_bits = EF::bits() - 1;
+        let num_claims = pcs.config.commitment_ood_samples + 1;
+        let mut expected_terms = vec![
+            ErrorBits::from_log2(pcs.config.initial_claims_error(num_claims)),
+            ErrorBits::from_log2(assumption.ood_error(
+                pcs.config.num_variables,
+                pcs.config.starting_log_inv_rate,
+                field_bits,
+                pcs.config.commitment_ood_samples,
+            )),
+        ];
+        // The four identical binary folds compose to two terms with two bits
+        // subtracted; the first subtraction is the Johnson reserve under test.
+        expected_terms.push(ErrorBits::from_log2(
+            assumption.prox_gaps_error(
+                pcs.config.num_variables,
+                pcs.config.starting_log_inv_rate,
+                field_bits,
+                2,
+            ) - 1.0
+                + pcs.config.starting_folding_pow_bits as f64
+                - 2.0,
+        ));
+        expected_terms.push(ErrorBits::from_log2(
+            assumption.fold_sumcheck_error(
+                field_bits,
+                pcs.config.num_variables,
+                pcs.config.starting_log_inv_rate,
+            ) + pcs.config.starting_folding_pow_bits as f64
+                - 2.0,
+        ));
+        expected_terms.push(ErrorBits::from_log2(
+            assumption.queries_error(
+                pcs.config.starting_log_inv_rate,
+                pcs.config.terminal.num_queries,
+            ) + pcs.config.terminal.pow_bits as f64,
+        ));
+        let expected = ErrorBits::sum(&expected_terms).bits();
+        assert!((report.error().bits() - expected).abs() < 1e-10);
     }
 }

@@ -29,7 +29,7 @@
 
 use alloc::vec::Vec;
 
-use p3_commit::{PeriodicEvaluator, PeriodicLdeTable};
+use p3_commit::{PeriodicColumns, PeriodicEvaluator, PeriodicLdeTable};
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::coset::TwoAdicMultiplicativeCoset;
 use p3_field::{ExtensionField, TwoAdicField};
@@ -77,10 +77,6 @@ impl<Dft> TwoAdicPeriodicEvaluator<Dft> {
         F: TwoAdicField,
         Dft: TwoAdicSubgroupDft<F>,
     {
-        if periodic_table.is_empty() {
-            return PeriodicLdeTable::empty();
-        }
-
         let trace_len = trace_domain.size();
         let lde_len = lde_domain.size();
         assert!(
@@ -99,18 +95,14 @@ impl<Dft> TwoAdicPeriodicEvaluator<Dft> {
         );
         let log_blowup = log2_strict_usize(blowup);
 
-        for col in periodic_table {
-            let period = col.len();
-            assert!(
-                period > 0 && period.is_power_of_two(),
-                "periodic column length must be a non-zero power of 2, got {period}",
-            );
-            assert!(
-                trace_len.is_multiple_of(period),
-                "trace domain size ({trace_len}) must be divisible by periodic column length ({period})",
-            );
-        }
-        let max_period = periodic_table.iter().map(|c| c.len()).max().unwrap();
+        // A malformed declaration is a bug in the AIR the prover was handed, not proof data.
+        let periodic_table =
+            PeriodicColumns::new(periodic_table, trace_len).unwrap_or_else(|err| panic!("{err}"));
+
+        // No declared column means no table, and no longest period to pad up to.
+        let Some(max_period) = periodic_table.max_period() else {
+            return PeriodicLdeTable::empty();
+        };
 
         let extended_height = max_period
             .checked_mul(blowup)
@@ -132,7 +124,7 @@ impl<Dft> TwoAdicPeriodicEvaluator<Dft> {
         // Build the result in column-major order first, then transpose to row-major
         let mut columns: Vec<Vec<F>> = Vec::with_capacity(num_cols);
 
-        for col in periodic_table {
+        for col in periodic_table.as_slice() {
             let period = col.len();
 
             // Pad column to max_period by repeating values
@@ -179,18 +171,15 @@ where
     ) -> Vec<EF> {
         let trace_len = trace_domain.size();
 
+        // A malformed declaration is a bug in the AIR, so there is no proof-shape error to raise.
+        let periodic_table =
+            PeriodicColumns::new(periodic_table, trace_len).unwrap_or_else(|err| panic!("{err}"));
+
         periodic_table
+            .as_slice()
             .iter()
             .map(|col| {
                 let period = col.len();
-                assert!(
-                    period > 0 && period.is_power_of_two(),
-                    "periodic column length must be a non-zero power of 2, got {period}",
-                );
-                assert!(
-                    trace_len.is_multiple_of(period),
-                    "trace domain size ({trace_len}) must be divisible by periodic column length ({period})",
-                );
 
                 // Project point to periodic subdomain: ζ^(n/p)
                 let periodic_point = point.exp_u64((trace_len / period) as u64);
@@ -264,7 +253,8 @@ mod tests {
     use alloc::vec::Vec;
 
     use p3_baby_bear::BabyBear;
-    use p3_field::PrimeCharacteristicRing;
+    use p3_dft::Radix2Dit;
+    use p3_field::{Field, PrimeCharacteristicRing};
 
     use super::*;
 
@@ -290,5 +280,47 @@ mod tests {
             let result = eval_periodic_poly(&values, point);
             assert_eq!(result, expected, "Failed at root index {}", i);
         }
+    }
+
+    // Trace domain of 8 points, blown up by 2 to a 16-point LDE domain.
+    fn domains() -> (TwoAdicMultiplicativeCoset<F>, TwoAdicMultiplicativeCoset<F>) {
+        let trace = TwoAdicMultiplicativeCoset::new(F::ONE, 3).unwrap();
+        let lde = TwoAdicMultiplicativeCoset::new(F::GENERATOR, 4).unwrap();
+        (trace, lde)
+    }
+
+    // Three values are not the evaluations of a polynomial over a two-adic subgroup.
+    //
+    //     trace domain: 8 points
+    //     column:       [1, 2, 3]  -> no subgroup of order 3 exists
+    //
+    // The table build extrapolates by DFT, which needs that subgroup, so it must refuse.
+    #[test]
+    #[should_panic(expected = "periodic column 0 has length 3, which is not a power of two")]
+    fn lde_table_rejects_a_non_power_of_two_column() {
+        let (trace, lde) = domains();
+        let table = vec![vec![F::ONE, F::TWO, F::from_u64(3)]];
+
+        TwoAdicPeriodicEvaluator::eval_on_lde_with_dft(&Radix2Dit::default(), &table, &trace, &lde);
+    }
+
+    // Sixteen values over an 8-point trace domain.
+    //
+    //     [v_0,...,v_7 | v_8,...,v_15]  <- only the first half would ever be read
+    //
+    // Projecting the opening point raises it to the power trace_len / period, which is not an
+    // integer here, so the point-wise evaluation must refuse as well.
+    #[test]
+    #[should_panic(
+        expected = "periodic column 0 has length 16, which does not divide the trace height 8"
+    )]
+    fn point_evaluation_rejects_a_column_longer_than_the_trace() {
+        let (trace, _) = domains();
+        let table = vec![vec![F::ONE; 16]];
+
+        <TwoAdicPeriodicEvaluator<Radix2Dit<F>> as PeriodicEvaluator<
+            F,
+            TwoAdicMultiplicativeCoset<F>,
+        >>::eval_at_point::<F>(&table, &trace, F::from_u64(7));
     }
 }

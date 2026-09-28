@@ -12,7 +12,9 @@ use thiserror::Error;
 use super::base_case::BaseCaseZkConfig;
 use super::committer::FoldedRsCode;
 use super::mask::{MaskCodeShape, MaskGroupShape};
-use crate::parameters::{ProtocolParameters, SecurityAssumption, WhirConfig, WhirConfigError};
+use crate::parameters::{
+    ProtocolParameters, SecurityAssumption, TerminalBudget, WhirConfig, WhirConfigError,
+};
 
 /// Reasons ZK parameters cannot extend a WHIR configuration.
 #[derive(Debug, Error)]
@@ -70,6 +72,27 @@ pub struct ZkParameters {
 ///
 /// Wraps the plain [`WhirConfig`] round structure and adds the ZK budgets:
 /// per-oracle encoding randomness, mask code shapes, and spot-check counts.
+///
+/// Fields are written only by the constructor in this module; the budgets
+/// are read through accessors.
+///
+/// ```
+/// use p3_field::{ExtensionField, Field};
+/// use p3_whir::ZkWhirConfig;
+///
+/// fn first_budget<EF: ExtensionField<F>, F: Field, C>(config: &ZkWhirConfig<EF, F, C>) -> usize {
+///     config.oracle_randomness()[0]
+/// }
+/// ```
+///
+/// ```compile_fail
+/// use p3_field::{ExtensionField, Field};
+/// use p3_whir::ZkWhirConfig;
+///
+/// fn weaken<EF: ExtensionField<F>, F: Field, C>(config: &mut ZkWhirConfig<EF, F, C>) {
+///     config.oracle_randomness[0] = 0;
+/// }
+/// ```
 #[derive(Debug, Clone)]
 pub struct ZkWhirConfig<EF, F, Challenger>
 where
@@ -84,26 +107,18 @@ where
     /// case. Consequently, `commitment_ood_samples` and
     /// `final_folding_pow_bits` are not transcript steps here;
     /// `final_sumcheck_rounds` still determines the terminal message length.
-    /// `inner.final_queries` and `inner.final_pow_bits` size the plain
-    /// message code; the base case runs against a randomized code instead,
-    /// sized by [`Self::final_queries`] and [`Self::final_pow_bits`].
-    pub inner: WhirConfig<EF, F, Challenger>,
+    /// `inner.terminal` sizes the plain message code. The base case runs
+    /// against a randomized code instead, sized by `randomized_terminal`.
+    pub(crate) inner: WhirConfig<EF, F, Challenger>,
     /// ZK extension parameters.
-    pub zk: ZkParameters,
-    /// Spot checks against the base case's randomized terminal source code.
+    pub(crate) zk: ZkParameters,
+    /// Budget of the masked base case against the randomized terminal source code.
     ///
     /// The base case tests proximity to a code of dimension
-    /// `message_len + final_queries`, not the plain message code
-    /// `inner.final_queries` was sized against. Shadows `inner.final_queries`
-    /// for every field access on this type, so every base-case use site
-    /// picks it up automatically. Also serves as the terminal oracle's
-    /// randomness budget, i.e. `oracle_randomness[n_rounds]`.
-    pub final_queries: usize,
-    /// PoW bits bridging the gap between `final_queries` and
-    /// `security_level` at the randomized terminal code's rate.
-    ///
-    /// Shadows `inner.final_pow_bits` for every field access on this type.
-    pub final_pow_bits: usize,
+    /// `message_len + randomized_terminal.num_queries`, not the plain message code
+    /// `inner.terminal` was sized against. The query count is also the terminal
+    /// oracle's randomness budget, i.e. `oracle_randomness[n_rounds]`.
+    pub(crate) randomized_terminal: TerminalBudget,
     /// ZK randomness coefficients per limb of each committed oracle
     /// `u_0, ..., u_{n_rounds}`.
     ///
@@ -115,14 +130,14 @@ where
     /// `log_inv_rate` fixes the outer geometry `H / M`, not that coefficient
     /// occupancy. [`ZkWhirConfig::new`] therefore enforces `M + t_i <= H` for
     /// every oracle.
-    pub oracle_randomness: Vec<usize>,
+    pub(crate) oracle_randomness: Vec<usize>,
     /// Mask code for the HVZK sumcheck rounds.
-    pub sumcheck_mask: MaskCodeShape,
+    pub(crate) sumcheck_mask: MaskCodeShape,
     /// Mask code per code-switching round.
     /// It commits the previous oracle's folded randomness plus the OOD pad.
-    pub switch_masks: Vec<MaskCodeShape>,
+    pub(crate) switch_masks: Vec<MaskCodeShape>,
     /// Base-case spot checks per mask group, derived from `security_level`.
-    pub mask_queries: usize,
+    pub(crate) mask_queries: usize,
 }
 
 impl<EF, F, Challenger> Deref for ZkWhirConfig<EF, F, Challenger>
@@ -134,6 +149,56 @@ where
 
     fn deref(&self) -> &Self::Target {
         &self.inner
+    }
+}
+
+impl<EF, F, Challenger> ZkWhirConfig<EF, F, Challenger>
+where
+    F: Field,
+    EF: ExtensionField<F>,
+{
+    /// Plain WHIR schedule the hiding pipeline reuses.
+    #[must_use]
+    pub const fn inner(&self) -> &WhirConfig<EF, F, Challenger> {
+        &self.inner
+    }
+
+    /// ZK extension parameters the configuration was derived from.
+    #[must_use]
+    pub const fn zk(&self) -> &ZkParameters {
+        &self.zk
+    }
+
+    /// Budget of the masked base case against the randomized terminal source code.
+    ///
+    /// `terminal()`, reached through `Deref`, is the plain budget `inner` was sized with.
+    #[must_use]
+    pub const fn randomized_terminal(&self) -> TerminalBudget {
+        self.randomized_terminal
+    }
+
+    /// ZK randomness coefficients per limb of each committed oracle.
+    #[must_use]
+    pub fn oracle_randomness(&self) -> &[usize] {
+        &self.oracle_randomness
+    }
+
+    /// Mask code for the HVZK sumcheck rounds.
+    #[must_use]
+    pub const fn sumcheck_mask(&self) -> MaskCodeShape {
+        self.sumcheck_mask
+    }
+
+    /// Mask code per code-switching round.
+    #[must_use]
+    pub fn switch_masks(&self) -> &[MaskCodeShape] {
+        &self.switch_masks
+    }
+
+    /// Base-case spot checks per mask group.
+    #[must_use]
+    pub const fn mask_queries(&self) -> usize {
+        self.mask_queries
     }
 }
 
@@ -192,14 +257,18 @@ where
         let final_message_len = 1 << final_config.num_variables;
         let final_domain_size = final_config.domain_size >> final_config.folding_factor;
         let protocol_security_level = security_level.saturating_sub(inner.pow_bits);
-        let (final_queries, final_pow_bits) = terminal_source_budget(
+        let (num_queries, pow_bits) = terminal_source_budget(
             soundness_type,
             security_level,
             protocol_security_level,
             final_message_len,
             final_domain_size,
-            inner.final_queries,
+            inner.terminal.num_queries,
         );
+        let randomized_terminal = TerminalBudget {
+            num_queries,
+            pow_bits,
+        };
 
         // Per-oracle ZK budget.
         //
@@ -212,7 +281,7 @@ where
                 if i < n_rounds {
                     inner.round_parameters[i].num_queries
                 } else {
-                    final_queries
+                    randomized_terminal.num_queries
                 }
             })
             .collect();
@@ -289,8 +358,7 @@ where
         Ok(Self {
             inner,
             zk,
-            final_queries,
-            final_pow_bits,
+            randomized_terminal,
             oracle_randomness,
             sumcheck_mask,
             switch_masks,
@@ -350,9 +418,9 @@ where
                 final_config.domain_size >> final_config.folding_factor,
             ),
             mask_groups: self.mask_groups(),
-            num_queries: self.final_queries,
+            num_queries: self.randomized_terminal.num_queries,
             mask_queries: self.mask_queries,
-            pow_bits: self.final_pow_bits,
+            pow_bits: self.randomized_terminal.pow_bits,
         }
     }
 }
@@ -438,7 +506,7 @@ mod tests {
         // The last oracle absorbs the final spot checks.
         assert_eq!(
             config.oracle_randomness[config.n_rounds()],
-            config.final_queries
+            config.randomized_terminal.num_queries
         );
         // One code-switch mask per intermediate round.
         assert_eq!(config.switch_masks.len(), config.n_rounds());
@@ -539,5 +607,37 @@ mod tests {
         let shape = MaskCodeShape::new(5, 3, 1);
         // (5 + 3).next_power_of_two() << 1 = 16.
         assert_eq!(shape.domain_size, 16);
+    }
+
+    #[test]
+    fn base_case_spends_the_randomized_terminal_budget() {
+        let config = ZkWhirConfig::<EF, F, MyChallenger>::new(16, params(), zk_params()).unwrap();
+        let base = config.base_case_config();
+
+        assert_eq!(base.num_queries, config.randomized_terminal.num_queries);
+        assert_eq!(base.pow_bits, config.randomized_terminal.pow_bits);
+        assert_eq!(
+            base.code.randomness_len,
+            config.randomized_terminal.num_queries
+        );
+
+        assert_ne!(
+            config.randomized_terminal.num_queries,
+            config.inner.terminal.num_queries
+        );
+        assert_eq!(
+            (
+                config.inner.terminal.num_queries,
+                config.inner.terminal.pow_bits
+            ),
+            (5, 0)
+        );
+        assert_eq!(
+            (
+                config.randomized_terminal.num_queries,
+                config.randomized_terminal.pow_bits
+            ),
+            (6, 0)
+        );
     }
 }

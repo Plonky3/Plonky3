@@ -6,12 +6,16 @@ use core::fmt::Debug;
 use p3_air::{BoundaryIoError, boundary};
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
 use p3_commit::MultilinearPcs;
-use p3_sumcheck::PrescribedPointPcs;
+use p3_lookup::TraceWindow;
+use p3_sumcheck::{OpeningEvals, PrescribedPointPcs};
 use thiserror::Error;
 
 use crate::VerifierInstances;
+use crate::bus::{BusBindingError, BusContext};
 use crate::config::{Commitment, MultiStarkConfig, PcsError};
 use crate::folder::VerifierAir;
+use crate::indexed::IndexedPlan;
+use crate::instance::{BatchRole, RunPoints, trace_suffix};
 use crate::lookup::{LookupError, verify_lookup};
 use crate::opening::TableOpening;
 use crate::proof::MultiStarkProof;
@@ -19,7 +23,7 @@ use crate::security::{SecurityError, security_report};
 use crate::transcript::{
     MultiStarkShape, MultiStarkTranscriptFailure, MultiStarkVerifierTranscript,
 };
-use crate::zerocheck::{AirZerocheck, ZerocheckError};
+use crate::zerocheck::{AirZerocheck, BusFamily, ZerocheckError};
 
 /// Reasons the multilinear AIR verifier rejects a proof.
 #[derive(Debug, Error)]
@@ -48,6 +52,27 @@ where
     /// A statement-level transcript step could not be replayed.
     #[error("transcript: {0}")]
     Transcript(MultiStarkTranscriptFailure),
+    /// The batch's indexed lookups do not describe a reduction.
+    #[error("indexed lookup: {0}")]
+    IndexedLookup(p3_lookup::IndexedLookupError),
+    /// The indexed reduction failed its own checks.
+    #[error("indexed reduction: {0}")]
+    IndexedReduction(crate::logup_star::LogupStarError),
+    /// A claim the indexed reduction closed on is not what the commitment opens.
+    #[error("an indexed claim is not the value its trace opens to")]
+    IndexedClaimsUnopened,
+    /// The proof and the AIRs disagree on whether an indexed reduction exists.
+    #[error("indexed reduction present but not expected, or absent but described")]
+    UnexpectedIndexedReduction,
+    /// The product-tree bus proof is malformed or inconsistent.
+    #[error("binary-bus product reduction failed: {0}")]
+    BusArgument(#[from] p3_bus::BusArgumentError),
+    /// The bus declarations do not describe a supported statement.
+    #[error("binary-bus commitment binding failed: {0}")]
+    BusBinding(#[from] BusBindingError),
+    /// The proof and AIRs disagree on whether a binary-native bus exists.
+    #[error("binary-bus proof present but not expected, or absent but described")]
+    UnexpectedBus,
     /// An AIR names a public boundary cell or public value it does not have.
     #[error("instance {instance} boundary IO: {error}")]
     BoundaryIo {
@@ -99,12 +124,14 @@ where
 ///     1. replay batched preprocessed commitment (if any)
 ///     2. replay main commitment
 ///     3. replay public values, one step per instance
-///     4. verify the lookup reduction (if any)  -> delegated
-///     5. verify zerocheck sumcheck             -> delegated, yields bound point r
-///     6. open main tables at r                 -> delegated, bound to the main commitment
-///     7. open preprocessed tables at r (if any)
+///     4. verify the binary bus (if any)        -> delegated, leaves two terminal claims
+///     5. verify the lookup reduction (if any)  -> delegated
+///     6. verify the shared sumcheck            -> delegated, yields bound point r
+///     7. verify the indexed reduction (if any) -> delegated, closes on claims from the proof
+///     8. open main tables                      -> delegated, binds every terminal claim
+///     9. open preprocessed tables (if any)
 ///                                              -> delegated, bound to the preprocessed commitment
-///     8. recompute the batched constraint at r and match the reduced sum
+///    10. discharge indexed claims, then close the AIR and bus families at r
 /// ```
 ///
 /// Both sides walk one pattern, and each driver checks only its own party against it:
@@ -128,7 +155,8 @@ where
 /// - Opened values come from the commitment proofs.
 /// - The proof body never supplies those values directly.
 /// - The closing check therefore uses committed trace values.
-/// - The point is the bound point returned by zerocheck.
+/// - The zerocheck closes at the bound point it returned.
+/// - An indexed claim is discharged at the point the reduction chose for it.
 ///
 /// # Arguments
 ///
@@ -207,9 +235,22 @@ where
         .map_err(|error| VerificationError::BoundaryIo { instance, error })?;
     }
 
+    // Indexed lookups change the described sequence, so the plan is settled first.
+    //
+    // Both sides derive it from the AIRs alone, so no proof value reaches it.
+    let indexed_plan = IndexedPlan::build::<C::Val, C::Challenge, A>(&airs, &log_heights)
+        .map_err(VerificationError::IndexedLookup)?;
+    let bus = BusContext::<C::Val, C::Challenge>::build(&airs, &log_heights)?;
+
     let mut transcript = MultiStarkVerifierTranscript::<C::Challenger, C::Val>::new(
         challenger,
-        MultiStarkShape::new::<C::Val, A>(&airs, &log_heights, pow_bits),
+        MultiStarkShape::new::<C::Val, A>(
+            &airs,
+            &log_heights,
+            pow_bits,
+            indexed_plan.is_some(),
+            bus.is_some(),
+        ),
     );
 
     // 1. Replay the reusable batched preprocessed commitment before any challenge
@@ -234,7 +275,33 @@ where
         .public_values(&public_values)
         .map_err(VerificationError::Transcript)?;
 
-    // 4. Verify the lookup reduction, inside the delegation bracket.
+    // 4. Reduce the bus products to their two terminal claims.
+    // They stay unauthenticated until the shared sumcheck closes on committed openings.
+    let bus_output = match (bus.as_ref(), proof.bus.as_ref()) {
+        (Some(context), Some(bus_proof)) => {
+            let output = transcript
+                .bus_argument(|challenger| {
+                    context
+                        .plan()
+                        .verify::<C::Val, C::Challenge, _>(bus_proof, challenger)
+                })
+                .expect("the statement describes a bus delegation");
+            match output {
+                Ok(output) => Some(output),
+                Err(error) => {
+                    transcript.abort();
+                    return Err(VerificationError::BusArgument(error));
+                }
+            }
+        }
+        (None, None) => None,
+        _ => {
+            transcript.abort();
+            return Err(VerificationError::UnexpectedBus);
+        }
+    };
+
+    // 5. Verify the lookup reduction, inside the delegation bracket.
     // Its claim feeds the coupled AIR sumcheck below, so a rejection stops the replay here.
     let lookup = match transcript.lookup_argument(|challenger| {
         verify_lookup::<C::Val, C::Challenge, A, _>(
@@ -252,15 +319,20 @@ where
         }
     };
 
-    // 5. Verify the batched zerocheck sumcheck, inside the delegation bracket.
+    // 6. Verify the shared sumcheck, inside the delegation bracket.
     // It yields the common bound point and the reduced sum, which both openings need.
-    let zerocheck = AirZerocheck::new(&airs, pow_bits);
+    let bus_family = bus
+        .as_ref()
+        .zip(bus_output.as_ref())
+        .map(|(context, output)| BusFamily { context, output });
+    let zerocheck = AirZerocheck::with_profiles(&airs, &verifying_key.air_profiles, pow_bits);
     let reduction = match transcript.zerocheck(|challenger| {
-        zerocheck.verify_reduction_with_lookup::<C::Val, C::Challenge, _>(
+        zerocheck.verify_reduction_with_lookup_and_bus::<C::Val, C::Challenge, _>(
             &proof.sumcheck,
             &log_heights,
             &public_values,
             lookup.as_ref(),
+            bus_family,
             challenger,
         )
     }) {
@@ -268,6 +340,51 @@ where
         Err(error) => {
             transcript.abort();
             return Err(VerificationError::Zerocheck(error));
+        }
+    };
+
+    // 7. Verify the indexed reduction against the point the zerocheck bound.
+    //
+    // The claims come from the proof, since only the opening supplies committed values.
+    //
+    // The closing check below is what ties them to the commitment.
+    let indexed = match (indexed_plan.as_ref(), proof.indexed.as_ref()) {
+        (Some(plan), Some(round)) => {
+            // Proof data decides no count here.
+            //
+            // A list of the wrong shape is rejected rather than measured against.
+            let statement =
+                match plan.statement_from_claims(&reduction.point, round.reader_claims.clone()) {
+                    Ok(statement) => statement,
+                    // The driver refuses to be dropped mid-pattern, so it is released first.
+                    Err(error) => {
+                        transcript.abort();
+                        return Err(VerificationError::IndexedLookup(error));
+                    }
+                };
+            let readers = statement.readers();
+            let lookups = statement.lookups(&readers);
+
+            match transcript
+                .indexed_lookup(|challenger| round.reduction.verify(&lookups, challenger))
+            {
+                Ok(output) => Some((statement, output)),
+                Err(error) => {
+                    transcript.abort();
+                    return Err(VerificationError::IndexedReduction(error));
+                }
+            }
+        }
+        (None, None) => None,
+        // The shape describes the bracket exactly when the AIRs declare a read.
+        //
+        // Either direction of disagreement lands here.
+        //
+        //     the proof carries a section nobody asked for
+        //     the AIRs declare a read the proof does not answer
+        _ => {
+            transcript.abort();
+            return Err(VerificationError::UnexpectedIndexedReduction);
         }
     };
 
@@ -281,14 +398,19 @@ where
     //
     // A rejected batch with preprocessed columns therefore costs one opening, not two.
 
-    // 6. Open the committed main trace tables at their suffixes of the bound point.
+    // 8. Open the committed main trace tables at every point a claim was left at.
     // The returned values are bound to the main commitment.
+    let indexed_output = indexed.as_ref().map(|(_, output)| output);
+    let points = RunPoints::new(&reduction.point, indexed_output);
+    let main_schedule = instances.main_schedule(indexed_plan.as_ref(), |role, rows| {
+        trace_suffix(points.at(role), rows)
+    });
     let main_evals = match transcript.main_opening(|challenger| {
         config.pcs().verify_at(
             &proof.commitment,
             &proof.opening,
-            &instances.opening_protocol(),
-            &instances.main_points(&reduction.point),
+            main_schedule.protocol(),
+            &main_schedule.against(),
             challenger,
         )
     }) {
@@ -300,8 +422,12 @@ where
         }
     };
 
-    // 7. Open the preprocessed tables at their suffixes of the same bound point.
+    // 9. Open the preprocessed tables at every point a claim was left at.
     // The owned batches are kept local so the closing check can borrow them.
+    let preprocessed_schedule = instances
+        .preprocessed_schedule(indexed_plan.as_ref(), |role, rows| {
+            trace_suffix(points.at(role), rows)
+        });
     let opened_preprocessed = transcript.preprocessed_opening(|challenger| {
         let commitment = preprocessed_commitment
             .expect("a described preprocessed commitment is checked before the replay");
@@ -312,8 +438,8 @@ where
         config.preprocessed_pcs().verify_at(
             commitment,
             opening,
-            &instances.preprocessed_opening_protocol(),
-            &instances.preprocessed_points(&reduction.point),
+            preprocessed_schedule.protocol(),
+            &preprocessed_schedule.against(),
             challenger,
         )
     });
@@ -327,11 +453,73 @@ where
 
     let preprocessed_next_columns = instances.preprocessed_next_columns();
     let next_columns = instances.next_columns();
-    let main_openings = main_evals
-        .iter()
+    // An AIR reads its own columns out of the first batch its table is opened in.
+    //
+    // Walking the results in order agrees with the AIR order only while each table owns one.
+    let main_openings = main_schedule
+        .first_batch_per_table()
+        .into_iter()
+        .filter_map(|batch| main_evals.get(batch))
         .zip(next_columns.iter())
         .map(|(batch, next_columns)| TableOpening::new(batch.current(), next_columns, batch.next()))
         .collect::<Vec<_>>();
+
+    // The reduction is a statement about claims, and two sets of them arrive unauthenticated.
+    //
+    // The reader claims came out of the proof, and the reduction's output claims out of the
+    // reduction.
+    //
+    // The openings carry the committed values at every point both were taken at.
+    //
+    // Discharging both is what makes this a statement about the committed traces.
+    if let Some((statement, output)) = &indexed {
+        let plan = indexed_plan
+            .as_ref()
+            .expect("an indexed reduction comes from an indexed plan");
+
+        // What each reader claims it pulled, against its own payload columns at the bound
+        // point.
+        //
+        // Skipping this lets a prover claim values its trace never held.
+        let opened = plan.statement(&reduction.point, &main_openings);
+        if statement.claims() != opened.claims() {
+            return Err(VerificationError::IndexedClaimsUnopened);
+        }
+
+        // What the reduction closed on, against the batches opened at its own two points.
+        //
+        // Skipping this lets a prover reduce against a table nobody committed.
+        for (table, planned) in plan.tables().iter().enumerate() {
+            let claims = &output.tables[table];
+
+            for (reader, claimed) in claims.position_claims.iter().enumerate() {
+                let role = BatchRole::Position { table, reader };
+                let opened = main_schedule
+                    .batch_answering(role)
+                    .and_then(|batch| main_evals.get(batch))
+                    .and_then(|batch| batch.current().first());
+                if opened != Some(claimed) {
+                    return Err(VerificationError::IndexedClaimsUnopened);
+                }
+            }
+
+            // A table's columns live in whichever window its AIR committed them to.
+            let role = BatchRole::TableColumns { table };
+            let opened = match planned.table.window {
+                TraceWindow::Main => main_schedule
+                    .batch_answering(role)
+                    .and_then(|batch| main_evals.get(batch))
+                    .map(OpeningEvals::current),
+                TraceWindow::Preprocessed => preprocessed_schedule
+                    .batch_answering(role)
+                    .and_then(|batch| preprocessed_evals.iter().flatten().nth(batch))
+                    .map(OpeningEvals::current),
+            };
+            if opened != Some(claims.column_claims.as_slice()) {
+                return Err(VerificationError::IndexedClaimsUnopened);
+            }
+        }
+    }
 
     // Build one preprocessed opening view per instance, in instance order.
     //
@@ -339,9 +527,12 @@ where
     // Opened batches and their next-column lists share the non-empty order.
     // One iterator advances through them, stepping only for non-empty AIRs.
     // A shortfall yields an empty view, which the closing check rejects instead of panicking.
-    let mut preprocessed_batches = preprocessed_evals
+    // As on the main side, a table's own columns are the first batch it owns.
+    let preprocessed_own_batches = preprocessed_schedule.first_batch_per_table();
+    let opened = preprocessed_evals.iter().flatten().collect::<Vec<_>>();
+    let mut preprocessed_batches = preprocessed_own_batches
         .iter()
-        .flatten()
+        .filter_map(|&batch| opened.get(batch).copied())
         .zip(preprocessed_next_columns.iter());
     let preprocessed_openings = instances
         .iter()
@@ -359,16 +550,18 @@ where
         })
         .collect::<Vec<_>>();
 
-    // 7. Close the zerocheck.
-    // Recompute the batched constraint from commitment-bound values and match the reduced sum.
+    // 10. Close the shared sumcheck.
+    // Recompute the AIR and bus families from commitment-bound values and match the reduced sum.
+    // ProductGKR terminal values are authenticated only by this check.
     zerocheck
-        .check_constraint_with_lookup(
+        .check_constraint_with_lookup_and_bus(
             &reduction,
             &main_openings,
             &preprocessed_openings,
             &log_heights,
             &public_values,
             lookup.as_ref(),
+            bus_family,
         )
         .map_err(VerificationError::Zerocheck)
 }

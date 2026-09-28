@@ -40,15 +40,20 @@ struct CombineRequirement {
 /// closed form for when Combine fits:
 ///
 /// ```text
-/// EF::bits() >= security_level + union_bound_buffer + 3*log_blowup + 1
-///               + log2(ell - 1) + log_d_star
+/// field_size_bits >= security_level + union_bound_buffer + 3*log_blowup + 1
+///                    + log2(ell - 1) + log_d_star
 /// ```
+///
+/// The field size on the left is the rigorous integer lower bound on `log2(|E|)`.
+///
+/// - Capacity assumption: one bit below the bit length of the field order.
+/// - Johnson assumption: two bits below it.
 ///
 /// At `d* = 2^20`, `log_blowup = 1` and 100-bit security that is ~151 bits, so a 155-bit
 /// quintic extension fits with a few bits to spare and narrower challenge fields do not.
-/// `JohnsonBound` does not fit at production scale at all: the largest permitted
-/// `eta = sqrt(rho)/20` pins BCSS25's multiplicity at `m = 10`, which retains only ~95 bits at
-/// the same shape.
+/// `JohnsonBound` also pays the Combine multiplicity: the largest permitted
+/// `eta = sqrt(rho)/20` pins the interpolation multiplicity at `m = 10`. The DKT26
+/// bound improves this term, but feasibility still depends on the full buffered target.
 /// Outside the envelope, derivation reports the shortfall rather than silently weakening the
 /// parameters; callers that need wider height spreads should commit the outliers separately.
 /// The PCS derives a separate joint alpha/Combine budget and credits its configured
@@ -197,60 +202,79 @@ type NonOwning<F, EF, Challenger> = PhantomData<fn() -> (F, EF, Challenger)>;
 ///
 /// Built from [`StirParameters`] plus the starting polynomial degree.
 /// Contains all precomputed values needed by the prover and verifier.
+///
+/// Fields are written only by the constructors in this module; the schedule is read through
+/// accessors.
+///
+/// ```
+/// use p3_stir::StirConfig;
+///
+/// fn read<F, EF, M, C>(config: &StirConfig<F, EF, M, C>) -> usize {
+///     config.final_queries()
+/// }
+/// ```
+///
+/// ```compile_fail
+/// use p3_stir::StirConfig;
+///
+/// fn weaken<F, EF, M, C>(config: &mut StirConfig<F, EF, M, C>) {
+///     config.final_queries = 0;
+/// }
+/// ```
 #[derive(Debug, Clone)]
 pub struct StirConfig<F, EF, M, Challenger> {
     options: StirOptions,
     /// `(log_native_degree, num_quotients)` for each PCS alpha batch on the initial domain.
     /// Standalone STIR configurations leave this empty.
-    pub quotient_batches: Vec<(usize, usize)>,
+    pub(crate) quotient_batches: Vec<(usize, usize)>,
     /// Log₂ of the degree of the initial polynomial.
-    pub log_starting_degree: usize,
+    pub(crate) log_starting_degree: usize,
 
     /// Which Reed-Solomon proximity bound is assumed for soundness.
-    pub soundness_type: SecurityAssumption,
+    pub(crate) soundness_type: SecurityAssumption,
 
     /// Target security level in bits.
-    pub security_level: usize,
+    pub(crate) security_level: usize,
 
     /// Fixed proof-of-work difficulty in bits applied to each grinding step.
-    pub max_pow_bits: usize,
+    pub(crate) max_pow_bits: usize,
 
     /// Log₂ of the inverse rate of the initial RS code.
     ///
     /// The effective inverse rate increases by `log_folding_factor - 1` each round.
-    pub log_blowup: usize,
+    pub(crate) log_blowup: usize,
 
     /// Log₂ of the folding arity used from round 1 onward.
-    pub log_folding_factor: usize,
+    pub(crate) log_folding_factor: usize,
 
     /// Log₂ of the folding arity used in round 0 (the fold of the initial oracle).
-    pub log_starting_folding_factor: usize,
+    pub(crate) log_starting_folding_factor: usize,
 
     /// Per-round derived configurations for each intermediate STIR round.
-    pub round_configs: Vec<StirRoundConfig<F>>,
+    pub(crate) round_configs: Vec<StirRoundConfig<F>>,
 
     /// Log₂ of the degree of the final (directly-sent) polynomial.
-    pub log_final_degree: usize,
+    pub(crate) log_final_degree: usize,
 
     /// Number of STIR proximity queries in the final round.
-    pub final_queries: usize,
+    pub(crate) final_queries: usize,
 
     /// The final round's `eta_M` parameter from the paper's recommended schedule.
-    pub final_eta: f64,
+    pub(crate) final_eta: f64,
 
     /// Proof-of-work difficulty used for the final query phase.
     ///
     /// Derived per the same rule as [`StirRoundConfig::pow_bits`], but using only the
     /// final-round query-failure soundness (no OOD or combination in the final round).
-    pub final_pow_bits: usize,
+    pub(crate) final_pow_bits: usize,
 
     /// Proof-of-work difficulty used for the final folding step.
     ///
     /// Derived per the same rule as [`StirRoundConfig::folding_pow_bits`].
-    pub final_folding_pow_bits: usize,
+    pub(crate) final_folding_pow_bits: usize,
 
     /// Merkle tree commitment scheme.
-    pub mmcs: M,
+    pub(crate) mmcs: M,
 
     /// `fn() -> _` rather than a bare tuple: this config *mentions* these types but owns no
     /// value of any of them, and the function-pointer form is unconditionally `Send + Sync`
@@ -478,9 +502,10 @@ pub enum StirConfigError {
     #[error(
         "Combine over {num_classes} height classes (multiplicity ell = {ell}) at degree \
          2^{log_d_star} needs eta = {eta}, above the side-condition ceiling {upper_bound}. \
-         CapacityBound admits Combine only when EF::bits() >= security_level + \
+         CapacityBound admits Combine only when field_size_bits >= security_level + \
          union_bound_buffer + 3*log_blowup + 1 + log2(ell - 1) + log_d_star \
-         (>= {required_field_bits:.2} here; EF::bits() = {field_size_bits}). Widen the \
+         (>= {required_field_bits:.2} here; field_size_bits = {field_size_bits}, the \
+         rigorous lower bound on log2(|E|), not the bit length of the field order). Widen the \
          challenge field, lower security_level, raise log_blowup, or narrow the committed \
          height spread."
     )]
@@ -500,6 +525,84 @@ pub enum StirConfigError {
          Field::GENERATOR^(2^{n_i}) != 1"
     )]
     NonDisjointCosets { round_index: usize, n_i: usize },
+}
+
+impl<F, EF, M, Challenger> StirConfig<F, EF, M, Challenger> {
+    /// `(log_native_degree, num_quotients)` for each PCS alpha batch on the initial domain.
+    /// Standalone STIR configurations leave this empty.
+    pub fn quotient_batches(&self) -> &[(usize, usize)] {
+        &self.quotient_batches
+    }
+
+    /// Log₂ of the degree of the initial polynomial.
+    pub const fn log_starting_degree(&self) -> usize {
+        self.log_starting_degree
+    }
+
+    /// Which Reed-Solomon proximity bound is assumed for soundness.
+    pub const fn soundness_type(&self) -> SecurityAssumption {
+        self.soundness_type
+    }
+
+    /// Target security level in bits.
+    pub const fn security_level(&self) -> usize {
+        self.security_level
+    }
+
+    /// Fixed proof-of-work difficulty in bits applied to each grinding step.
+    pub const fn max_pow_bits(&self) -> usize {
+        self.max_pow_bits
+    }
+
+    /// Log₂ of the inverse rate of the initial RS code.
+    pub const fn log_blowup(&self) -> usize {
+        self.log_blowup
+    }
+
+    /// Log₂ of the folding arity used from round 1 onward.
+    pub const fn log_folding_factor(&self) -> usize {
+        self.log_folding_factor
+    }
+
+    /// Log₂ of the folding arity used in round 0 (the fold of the initial oracle).
+    pub const fn log_starting_folding_factor(&self) -> usize {
+        self.log_starting_folding_factor
+    }
+
+    /// Per-round derived configurations for each intermediate STIR round.
+    pub fn round_configs(&self) -> &[StirRoundConfig<F>] {
+        &self.round_configs
+    }
+
+    /// Log₂ of the degree of the final (directly-sent) polynomial.
+    pub const fn log_final_degree(&self) -> usize {
+        self.log_final_degree
+    }
+
+    /// Number of STIR proximity queries in the final round.
+    pub const fn final_queries(&self) -> usize {
+        self.final_queries
+    }
+
+    /// The final round's `eta_M` parameter from the paper's recommended schedule.
+    pub const fn final_eta(&self) -> f64 {
+        self.final_eta
+    }
+
+    /// Proof-of-work difficulty used for the final query phase.
+    pub const fn final_pow_bits(&self) -> usize {
+        self.final_pow_bits
+    }
+
+    /// Proof-of-work difficulty used for the final folding step.
+    pub const fn final_folding_pow_bits(&self) -> usize {
+        self.final_folding_pow_bits
+    }
+
+    /// Merkle tree commitment scheme.
+    pub const fn mmcs(&self) -> &M {
+        &self.mmcs
+    }
 }
 
 impl<F, EF, M, Challenger> StirConfig<F, EF, M, Challenger>
@@ -789,12 +892,19 @@ where
             });
         }
 
-        let field_size_bits = if let Some(batch) = pcs_batch {
+        if let Some(batch) = pcs_batch {
             batch.validate(log_starting_degree)?;
-            crate::pcs_budget::field_bits::<EF>(params.soundness_type)
-        } else {
-            EF::bits()
-        };
+        }
+        // One field size prices every stage, whichever entry point built the schedule.
+        //
+        // That size is the rigorous integer lower bound on log2(|E|).
+        //
+        // The bit length of the field order rounds up, crediting security the field lacks.
+        //
+        // Johnson drops one bit further.
+        //
+        // This is a legacy conservative reserve; the DKT26 bound includes all terms.
+        let field_size_bits = crate::pcs_budget::field_bits::<EF>(params.soundness_type);
         let log_blowup = params.log_blowup;
         let log_folding_factor = params.log_folding_factor;
         let log_starting_folding_factor = params.log_starting_folding_factor;
@@ -970,7 +1080,7 @@ where
                 |eta| {
                     initial_batching_error(
                         params.soundness_type,
-                        EF::bits() - 1,
+                        field_size_bits,
                         log_degree,
                         log_inv_rate,
                         quotient_batches,
@@ -1179,7 +1289,7 @@ where
         let eta = self.round_configs.first().map_or(self.final_eta, |r| r.eta);
         initial_batching_error(
             self.soundness_type,
-            EF::bits() - 1,
+            crate::pcs_budget::field_bits::<EF>(self.soundness_type),
             self.log_starting_degree,
             self.log_blowup,
             &self.quotient_batches,
@@ -1843,7 +1953,6 @@ mod tests {
         let mut rng = rand::rngs::SmallRng::seed_from_u64(99);
         let perm = Perm::new_from_rng_128(&mut rng);
         let val_mmcs = ValMmcs::new(MyHash::new(perm.clone()), MyCompress::new(perm), 0);
-        let field_size_bits = EF::bits();
 
         // (log_starting_degree, log_blowup, log_folding_factor, log_starting_folding_factor,
         // security_level, max_pow_bits, soundness_type).
@@ -1882,6 +1991,9 @@ mod tests {
                         ..Default::default()
                     },
                 );
+
+                // Recompute with the rigorous field size the schedule is accountable to.
+                let field_size_bits = crate::pcs_budget::field_bits::<EF>(soundness_type);
 
                 // Mirror `StirConfig::new`'s buffered target.
                 let total_folds = config.num_rounds() + 1;
@@ -2084,5 +2196,272 @@ mod tests {
             .downcast_ref::<alloc::string::String>()
             .unwrap();
         assert_eq!(*panic_message, err);
+    }
+
+    #[test]
+    fn standalone_and_pcs_paths_derive_the_same_schedule() {
+        use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
+        use p3_challenger::DuplexChallenger;
+        use p3_commit::ExtensionMmcs;
+        use p3_field::Field;
+        use p3_field::extension::BinomialExtensionField;
+        use p3_merkle_tree::MerkleTreeMmcs;
+        use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
+        use rand::SeedableRng;
+
+        type F = BabyBear;
+        type EF = BinomialExtensionField<F, 4>;
+        type Perm = Poseidon2BabyBear<16>;
+        type MyHash = PaddingFreeSponge<Perm, 16, 8, 8>;
+        type MyCompress = TruncatedPermutation<Perm, 2, 8, 16>;
+        type PackedF = <F as Field>::Packing;
+        type ValMmcs = MerkleTreeMmcs<PackedF, PackedF, MyHash, MyCompress, 2, 8>;
+        type MyMmcs = ExtensionMmcs<F, EF, ValMmcs>;
+        type MyChallenger = DuplexChallenger<F, Perm, 16, 8>;
+
+        let mut rng = rand::rngs::SmallRng::seed_from_u64(99);
+        let perm = Perm::new_from_rng_128(&mut rng);
+        let val_mmcs = ValMmcs::new(MyHash::new(perm.clone()), MyCompress::new(perm), 0);
+
+        // Two entry points reach the same derivation.
+        //
+        //     bare STIR          :  no quotient batch
+        //     commitment scheme  :  also budgets its quotient batch
+        //
+        // An empty batch leaves the second nothing extra to budget.
+        //
+        // The two must then agree on every derived number.
+        //
+        // They can only disagree by pricing the challenge field differently.
+        let cb = SecurityAssumption::CapacityBound;
+        let jb = SecurityAssumption::JohnsonBound;
+        for &(log_deg, log_blowup, log_fold, log_starting_fold, sec, max_pow, soundness_type) in &[
+            (8usize, 1usize, 2usize, 2usize, 80usize, 20usize, cb),
+            (8, 1, 2, 2, 80, 20, jb),
+            (8, 2, 2, 2, 80, 20, jb),
+            (16, 1, 2, 2, 80, 20, cb),
+            (16, 1, 3, 2, 100, 20, jb),
+            (12, 1, 3, 2, 128, 16, jb),
+        ] {
+            let params = || StirParameters {
+                log_blowup,
+                log_folding_factor: log_fold,
+                log_starting_folding_factor: log_starting_fold,
+                soundness_type,
+                security_level: sec,
+                max_pow_bits: max_pow,
+                mmcs: MyMmcs::new(val_mmcs.clone()),
+            };
+            // Bare STIR: no quotient batch at all.
+            let Ok(standalone) = StirConfig::<F, EF, MyMmcs, MyChallenger>::try_new_with_options(
+                log_deg,
+                params(),
+                StirOptions::default(),
+            ) else {
+                // Some shapes are infeasible at any permitted safety gap.
+                //
+                // Both paths then refuse, and there is no schedule to compare.
+                assert!(
+                    StirConfig::<F, EF, MyMmcs, MyChallenger>::try_new_with_pcs_batch(
+                        log_deg,
+                        params(),
+                        PcsBatch {
+                            classes: &[],
+                            combine: None,
+                            pow_bits: 0,
+                        },
+                        StirOptions::default(),
+                    )
+                    .is_err(),
+                    "one path refused these parameters and the other did not"
+                );
+                continue;
+            };
+            // Commitment-scheme derivation, handed a batch with no classes and no merge.
+            //
+            // It adds no error term and claims no grinding credit.
+            let via_pcs = StirConfig::<F, EF, MyMmcs, MyChallenger>::try_new_with_pcs_batch(
+                log_deg,
+                params(),
+                PcsBatch {
+                    classes: &[],
+                    combine: None,
+                    pow_bits: 0,
+                },
+                StirOptions::default(),
+            )
+            .expect("an empty batch adds no requirement, so the schedule must still derive");
+
+            let label = alloc::format!(
+                "{soundness_type} (log_deg={log_deg}, log_blowup={log_blowup}, \
+                 log_fold={log_fold}, sec={sec}, max_pow={max_pow})"
+            );
+            assert_eq!(
+                standalone.round_configs.len(),
+                via_pcs.round_configs.len(),
+                "{label}: round count differs"
+            );
+            for (i, (a, b)) in standalone
+                .round_configs
+                .iter()
+                .zip(&via_pcs.round_configs)
+                .enumerate()
+            {
+                // The safety gap is fed by the field size directly.
+                //
+                // It is the first number to move if the two paths disagree.
+                assert_eq!(a.eta, b.eta, "{label}: round {i} eta differs");
+                assert_eq!(
+                    a.num_queries, b.num_queries,
+                    "{label}: round {i} query count differs"
+                );
+                assert_eq!(
+                    a.pow_bits, b.pow_bits,
+                    "{label}: round {i} query grind differs"
+                );
+                assert_eq!(
+                    a.folding_pow_bits, b.folding_pow_bits,
+                    "{label}: round {i} folding grind differs"
+                );
+                assert_eq!(
+                    a.num_ood_samples, b.num_ood_samples,
+                    "{label}: round {i} out-of-domain sample count differs"
+                );
+            }
+            assert_eq!(
+                standalone.final_eta, via_pcs.final_eta,
+                "{label}: final eta differs"
+            );
+            assert_eq!(
+                standalone.final_queries, via_pcs.final_queries,
+                "{label}: final query count differs"
+            );
+            assert_eq!(
+                standalone.final_pow_bits, via_pcs.final_pow_bits,
+                "{label}: final query grind differs"
+            );
+            assert_eq!(
+                standalone.final_folding_pow_bits, via_pcs.final_folding_pow_bits,
+                "{label}: final folding grind differs"
+            );
+            assert_eq!(
+                standalone.log_final_degree, via_pcs.log_final_degree,
+                "{label}: final degree differs"
+            );
+        }
+    }
+
+    #[test]
+    fn the_initial_quotient_batching_stage_meets_the_buffered_target() {
+        use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
+        use p3_challenger::DuplexChallenger;
+        use p3_commit::ExtensionMmcs;
+        use p3_field::Field;
+        use p3_field::extension::BinomialExtensionField;
+        use p3_merkle_tree::MerkleTreeMmcs;
+        use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
+        use rand::SeedableRng;
+
+        use crate::soundness::initial_batching_error;
+
+        type F = BabyBear;
+        type EF = BinomialExtensionField<F, 4>;
+        type Perm = Poseidon2BabyBear<16>;
+        type MyHash = PaddingFreeSponge<Perm, 16, 8, 8>;
+        type MyCompress = TruncatedPermutation<Perm, 2, 8, 16>;
+        type PackedF = <F as Field>::Packing;
+        type ValMmcs = MerkleTreeMmcs<PackedF, PackedF, MyHash, MyCompress, 2, 8>;
+        type MyMmcs = ExtensionMmcs<F, EF, ValMmcs>;
+        type MyChallenger = DuplexChallenger<F, Perm, 16, 8>;
+
+        let mut rng = rand::rngs::SmallRng::seed_from_u64(99);
+        let perm = Perm::new_from_rng_128(&mut rng);
+        let val_mmcs = ValMmcs::new(MyHash::new(perm.clone()), MyCompress::new(perm), 0);
+
+        // Height classes with more than one quotient each, so the batching stage is live.
+        //
+        //     (8, 64)  ->  64 quotients sharing a degree-2^8 class
+        //     (7, 32)  ->  32 quotients one height below
+        let batch_sets: [&[(usize, usize)]; 3] =
+            [&[(8, 64), (7, 32)], &[(8, 4)], &[(8, 256), (6, 8), (4, 2)]];
+        let cb = SecurityAssumption::CapacityBound;
+        let jb = SecurityAssumption::JohnsonBound;
+
+        for batches in batch_sets {
+            for &(log_deg, log_blowup, log_fold, sec, max_pow, soundness_type) in &[
+                (8usize, 1usize, 2usize, 80usize, 20usize, cb),
+                (8, 2, 2, 80, 20, cb),
+                (8, 1, 2, 80, 20, jb),
+                (8, 2, 2, 80, 20, jb),
+            ] {
+                let Ok(config) = StirConfig::<F, EF, MyMmcs, MyChallenger>::try_new_with_batching(
+                    log_deg,
+                    StirParameters {
+                        log_blowup,
+                        log_folding_factor: log_fold,
+                        log_starting_folding_factor: log_fold,
+                        soundness_type,
+                        security_level: sec,
+                        max_pow_bits: max_pow,
+                        mmcs: MyMmcs::new(val_mmcs.clone()),
+                    },
+                    batches,
+                    None,
+                    StirOptions::default(),
+                ) else {
+                    // Some shapes cannot clear the target at any permitted safety gap.
+                    //
+                    // Refusing to derive is the sound outcome, so there is nothing to check.
+                    continue;
+                };
+
+                // Mirror the constructor's buffered target.
+                //
+                // That is the security level plus a union bound over every error term summed.
+                let total_folds = config.num_rounds() + 1;
+                let buffer = libm::ceil(libm::log2((6 * (total_folds - 1) + 4) as f64)) as usize;
+                let buffered = (sec + buffer) as f64;
+
+                // The batching stage is sized against round 0's safety gap.
+                //
+                // With no intermediate rounds, the final gap is the one it used.
+                let eta = config
+                    .round_configs
+                    .first()
+                    .map_or(config.final_eta, |rc| rc.eta);
+
+                // Recompute independently against the rigorous field size.
+                //
+                // That is the size the stage is accountable to.
+                //
+                // Pricing it off the rounded-up field order credits an unearned Johnson bit.
+                let honest = initial_batching_error(
+                    soundness_type,
+                    crate::pcs_budget::field_bits::<EF>(soundness_type),
+                    config.log_starting_degree,
+                    config.log_blowup,
+                    &config.quotient_batches,
+                    eta,
+                );
+                let label = alloc::format!(
+                    "{soundness_type} (log_deg={log_deg}, log_blowup={log_blowup}, \
+                     log_fold={log_fold}, sec={sec}, batches={batches:?})"
+                );
+                // Float rounding in the comparison is the only slack allowed.
+                let eps = 1e-9;
+                assert!(
+                    honest >= buffered - eps,
+                    "{label}: batching retains {honest:.4} bits < {buffered:.4}"
+                );
+                // The reporting accessor must quote the number the schedule was sized against.
+                //
+                // A more optimistic figure would misreport the schedule.
+                assert!(
+                    (config.initial_batching_error() - honest).abs() < eps,
+                    "{label}: reported {:.4} but the stage delivers {honest:.4}",
+                    config.initial_batching_error()
+                );
+            }
+        }
     }
 }

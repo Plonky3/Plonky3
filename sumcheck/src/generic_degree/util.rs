@@ -21,6 +21,14 @@ pub struct RoundPolyInterpolator<EF> {
 }
 
 impl<EF: Field> RoundPolyInterpolator<EF> {
+    /// Return the node encoded by one transmitted round-polynomial entry.
+    ///
+    /// Entry zero carries `h(0)`; every later entry skips the derived value `h(1)`.
+    #[must_use]
+    pub fn transmitted_node(index: usize) -> EF {
+        EF::interpolation_node(if index == 0 { 0 } else { index + 1 })
+    }
+
     /// Precomputes the domain and barycentric weights for a degree-`degree` round polynomial.
     ///
     /// # Arguments

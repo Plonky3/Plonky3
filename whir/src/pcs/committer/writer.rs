@@ -1,12 +1,13 @@
 use p3_commit::{ExtensionMmcs, Mmcs};
-use p3_dft::TwoAdicSubgroupDft;
-use p3_field::{ExtensionField, PackedFieldExtension, TwoAdicField};
+use p3_field::{ExtensionField, Field, PackedFieldExtension};
 use p3_matrix::Matrix;
 use p3_matrix::dense::{DenseMatrix, RowMajorMatrix, RowMajorMatrixView, RowMajorMatrixViewMut};
 use p3_matrix::extension::FlatMatrixView;
 use p3_multilinear_util::poly::{PolyMaybePacked, PolyMaybePackedView};
 use p3_sumcheck::strategy::VariableOrder;
 use tracing::info_span;
+
+use crate::domain::WhirDomain;
 
 /// Encodes and commits a folded extension-field polynomial.
 ///
@@ -24,19 +25,19 @@ pub(crate) fn commit_extension<F, EF, Dft, MT>(
     extension_mmcs: &ExtensionMmcs<F, EF, MT>,
     poly: PolyMaybePackedView<'_, F, EF>,
     folding: usize,
-    inv_rate: usize,
+    log_inv_rate: usize,
 ) -> (
     MT::Commitment,
     <MT as Mmcs<F>>::ProverData<FlatMatrixView<F, EF, DenseMatrix<EF>>>,
 )
 where
-    F: TwoAdicField,
-    EF: ExtensionField<F> + TwoAdicField,
-    Dft: TwoAdicSubgroupDft<F>,
+    F: Field,
+    EF: ExtensionField<F>,
+    Dft: WhirDomain<F, EF>,
     MT: Mmcs<F>,
 {
     let num_variables = poly.num_variables();
-    let height = inv_rate * (1 << (num_variables - folding));
+    let height = (1 << log_inv_rate) * (1 << (num_variables - folding));
     let width = 1 << folding;
 
     let encoded = match order {
@@ -68,7 +69,7 @@ where
                 RowMajorMatrix::new(values, width)
             });
             info_span!("dft", height = padded.height(), width = padded.width())
-                .in_scope(|| dft.dft_algebra_batch(padded))
+                .in_scope(|| dft.encode_extension_batch_padded(padded, log_inv_rate))
         }
         VariableOrder::Suffix => {
             let padded = info_span!("pad").in_scope(|| {
@@ -78,7 +79,7 @@ where
                 RowMajorMatrix::new(values, width)
             });
             info_span!("dft", height = padded.height(), width = padded.width())
-                .in_scope(|| dft.dft_algebra_batch(padded))
+                .in_scope(|| dft.encode_extension_batch_padded(padded, log_inv_rate))
         }
     };
 

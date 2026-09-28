@@ -414,8 +414,14 @@ where
         self.inner.verify(rounds, inner_proof, challenger)
     }
 
-    fn log_max_lde_height(&self) -> usize {
-        <TwoAdicFriPcs<Val, Dft, InputMmcs, FriMmcs> as UnivariateStarkPcs<Challenge, Challenger>>::log_max_lde_height(
+    fn log_max_trace_height(&self) -> usize {
+        <TwoAdicFriPcs<Val, Dft, InputMmcs, FriMmcs> as UnivariateStarkPcs<Challenge, Challenger>>::log_max_trace_height(
+            &self.inner)
+    }
+
+    fn log_min_trace_height(&self) -> usize {
+        // Hiding only adds randomness rows, so the bound is the wrapped scheme's.
+        <TwoAdicFriPcs<Val, Dft, InputMmcs, FriMmcs> as UnivariateStarkPcs<Challenge, Challenger>>::log_min_trace_height(
             &self.inner)
     }
 

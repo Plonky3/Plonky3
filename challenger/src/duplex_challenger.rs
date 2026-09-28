@@ -1,7 +1,5 @@
 use alloc::vec;
 use alloc::vec::Vec;
-use core::error::Error;
-use core::fmt::{Display, Formatter};
 
 use p3_field::{
     BasedVectorSpace, Field, PrimeCharacteristicRing, PrimeField, PrimeField64,
@@ -299,25 +297,14 @@ pub(super) struct ErrorOnRejection;
 
 /// Custom error raised when resampling is required for uniform bits but disabled
 /// via `ErrorOnRejection` strategy.
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
+#[error("sampled value {value} is not below rejection bound {m}, but resampling is disabled")]
 pub struct ResamplingError {
     /// The sampled value
     value: u64,
     /// The target value we need to be smaller than
     m: u64,
 }
-
-impl Display for ResamplingError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
-        write!(
-            f,
-            "Encountered value {0}, which requires resampling for uniform bits as it not smaller than {1}. But resampling is not enabled.",
-            self.value, self.m
-        )
-    }
-}
-
-impl Error for ResamplingError {}
 
 /// A trait that defines a strategy for handling out-of-range samples.
 pub(super) trait BitSamplingStrategy<F, P, const W: usize, const R: usize>
@@ -452,6 +439,8 @@ where
 
 #[cfg(test)]
 mod tests {
+    use alloc::string::ToString;
+
     use p3_baby_bear::BabyBear;
     use p3_field::PrimeCharacteristicRing;
     use p3_field::extension::BinomialExtensionField;
@@ -460,6 +449,15 @@ mod tests {
 
     use super::*;
     use crate::grinding_challenger::{GrindingChallenger, UniformGrindingChallenger};
+
+    #[test]
+    fn resampling_error_reports_the_sample_and_bound() {
+        let error = ResamplingError { value: 17, m: 13 };
+        assert_eq!(
+            error.to_string(),
+            "sampled value 17 is not below rejection bound 13, but resampling is disabled"
+        );
+    }
 
     #[test]
     fn uniform_zero_bit_grinding_is_canonical_and_preserves_state() {

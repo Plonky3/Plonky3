@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.8.0] - 2026-09-23
+### Merged PRs
+- Refactor(merkle-tree): make the opening shape check self-contained (#2026)
+- Chore: expose the parallel feature on every crate that uses rayon (#2049)
+- Perf(merkle-tree): reach the vectorized Keccak from the Merkle tree (#2051)
+- Perf(merkle-tree): optimize same-height multi-matrix hashing (#2057)
+- Docs(merkle-tree): state the real bound on the staged row buffer (#2069)
+- Perf(symmetric): keep lane-group batching for rows past the scratch budget (#2194)
+- Feat(errors)!: make diagnostics actionable (#2202)
+
 ## [0.7.0] - 2026-09-04
 ### Merged PRs
 - Chore: fix latest stable clippy (#1994)

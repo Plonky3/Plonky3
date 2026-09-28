@@ -375,7 +375,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use p3_field::{Field, PackedValue, PrimeCharacteristicRing};
+    use p3_field::PrimeCharacteristicRing;
     use proptest::prelude::*;
 
     use super::*;
@@ -767,21 +767,10 @@ mod tests {
         tamper_round_seed: usize,
         tamper_pos_seed: usize,
     ) -> Result<(), TestCaseError> {
-        // Per-mode folding-factor window:
-        //
-        //     binding | precondition         | folding range
-        //     --------+----------------------+--------------------
-        //     prefix  | n_vars > k_pack      | 1 ..= n_vars - k_pack
-        //     suffix  | folding <= n_vars    | 1 ..= n_vars - 1
-        //
-        // The prefix reservation keeps at least one full SIMD lane after the
-        // first packed round; suffix has no such constraint.
+        // Prefix mode permits folding every variable through the scalar fallback.
+        // Suffix mode keeps one variable for the handoff.
         let folding_factor = match binding {
-            VariableOrder::Prefix => {
-                let k_pack = p3_util::log2_strict_usize(<F as Field>::Packing::WIDTH);
-                prop_assume!(n_vars > k_pack);
-                1 + (seed as usize % (n_vars - k_pack))
-            }
+            VariableOrder::Prefix => 1 + (seed as usize % n_vars),
             VariableOrder::Suffix => 1 + (seed as usize % (n_vars - 1).max(1)),
         };
 

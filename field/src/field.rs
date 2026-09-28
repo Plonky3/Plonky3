@@ -1421,18 +1421,17 @@ impl<F: Field> BoundedPowers<F> {
     ///
     /// # Details
     ///
-    /// The computation is split evenly amongst available threads, and each chunk is computed
-    /// using packed fields. Small requests are computed on the current thread, as a parallel
-    /// dispatch would cost more than the fill itself.
+    /// Each chunk is computed using packed fields.
+    ///
+    /// The shared task-size policy picks the chunk length.
+    ///
+    /// A request too short to pay for a dispatch is filled on the calling thread.
     ///
     /// # Performance
     ///
     /// Enable the `parallel` feature to enable parallelization.
     #[must_use]
     pub fn collect(self) -> Vec<F> {
-        // Below this many scalars, a parallel dispatch costs more than the packed fill itself.
-        const PARALLEL_THRESHOLD: usize = 1 << 10;
-
         let num_powers = self.n;
 
         // When num_powers is small, fallback to serial computation
@@ -1448,13 +1447,18 @@ impl<F: Field> BoundedPowers<F> {
         let base = self.iter.base;
         let shift = self.iter.current;
 
-        if num_powers < PARALLEL_THRESHOLD {
-            F::Packing::packed_shifted_powers(base, shift).fill(&mut points_packed);
-        } else {
-            // Split computation evenly among threads
-            let num_threads = current_num_threads().max(1);
-            let chunk_size = num_packed.div_ceil(num_threads);
+        // One item writes a packed element and reads none.
+        // It therefore moves exactly that element's width.
+        //
+        // One number answers both questions this fill has:
+        //
+        //     chunk >= total  ->  fill the whole buffer on this thread
+        //     chunk <  total  ->  packed elements one parallel chunk holds
+        let chunk_size = min_task_len(num_packed, size_of::<F::Packing>());
 
+        if chunk_size >= num_packed {
+            fill_packed_shifted_powers(base, shift, &mut points_packed);
+        } else {
             // Precompute base for each chunk.
             let chunk_base = base.exp_u64((chunk_size * width) as u64);
 
@@ -1466,7 +1470,7 @@ impl<F: Field> BoundedPowers<F> {
                     let chunk_start = shift * chunk_base.exp_u64(chunk_idx as u64);
 
                     // Fill the chunk with packed powers.
-                    F::Packing::packed_shifted_powers(base, chunk_start).fill(chunk_slice);
+                    fill_packed_shifted_powers(base, chunk_start, chunk_slice);
                 });
         }
 
@@ -1476,6 +1480,35 @@ impl<F: Field> BoundedPowers<F> {
         points.truncate(num_powers);
         points
     }
+}
+
+/// Number of independent multiplication chains advanced together by [`fill_packed_shifted_powers`].
+const NUM_POWER_CHAINS: usize = 8;
+
+/// Fill `out` with `start, start * base, start * base^2, ...` packed into `P`.
+///
+/// Packed output `i` comes from chain `i % NUM_POWER_CHAINS`, and each chain steps by
+/// `base^(NUM_POWER_CHAINS * P::WIDTH)`. The chains are independent of each other, so
+/// their multiplications can overlap in the pipeline. Outputs shorter than two rounds
+/// are filled by a single chain, as setting up the others would cost more than it saves.
+fn fill_packed_shifted_powers<P: PackedField>(base: P::Scalar, start: P::Scalar, out: &mut [P]) {
+    let mut powers = P::packed_shifted_powers(base, start);
+    if out.len() < 2 * NUM_POWER_CHAINS {
+        powers.fill(out);
+        return;
+    }
+
+    let mut chains: [P; NUM_POWER_CHAINS] = array::from_fn(|_| powers.next().unwrap());
+    let step: P = base.exp_u64((NUM_POWER_CHAINS * P::WIDTH) as u64).into();
+
+    let (rounds, tail) = out.as_chunks_mut::<NUM_POWER_CHAINS>();
+    for round in rounds {
+        *round = chains;
+        for chain in &mut chains {
+            *chain *= step;
+        }
+    }
+    tail.copy_from_slice(&chains[..tail.len()]);
 }
 
 /// Same as [`Powers`], but returns a bounded number of powers.

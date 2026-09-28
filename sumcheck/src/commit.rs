@@ -2,23 +2,19 @@
 
 use p3_commit::{Encoder, Mmcs};
 use p3_field::Field;
+use p3_matrix::Matrix;
 use p3_matrix::dense::{DenseMatrix, RowMajorMatrix, RowMajorMatrixView, RowMajorMatrixViewMut};
+use p3_maybe_rayon::prelude::*;
 use p3_multilinear_util::poly::Poly;
 use tracing::info_span;
 
 use crate::strategy::VariableOrder;
 
-/// Encodes and Merkle-commits the initial base-field polynomial.
-///
-/// # Overview
-///
-/// The polynomial is laid out in the residual variable order.
-///
-/// It is then expanded by the Reed-Solomon encoder, and committed.
-///
-/// Nothing is absorbed here.
-///
-/// The caller owns the transcript and absorbs the returned root itself.
+/// Chunk size for the parallel copy of the suffix-order message, chosen so each
+/// rayon task copies enough elements to outweigh the fork-join overhead.
+const COPY_CHUNK: usize = 1 << 16;
+
+/// Writes a stacked polynomial into the committed message, in the residual variable order.
 ///
 /// # Layout
 ///
@@ -26,45 +22,117 @@ use crate::strategy::VariableOrder;
 ///
 /// The first folded variables then become columns.
 ///
-/// Suffix order keeps the folding block as the row width.
+/// Suffix order keeps the folding block as the row width, so the blocks are already
+/// contiguous and the row width alone selects them.
 ///
-/// The message is built directly at codeword height, with a zero tail.
+/// # Panics
 ///
-/// The encoder can then skip the zero coefficients, and reuse this one allocation.
-pub fn commit_base<F, E, MT>(
+/// - `message` must hold one cell per evaluation of `poly`.
+pub fn write_stacked_message<F: Field>(
     order: VariableOrder,
-    encoder: &E,
-    mmcs: &MT,
     poly: &Poly<F>,
     folding: usize,
+    message: &mut [F],
+) {
+    let values = poly.as_slice();
+    assert_eq!(
+        message.len(),
+        values.len(),
+        "message must cover the whole stacked hypercube"
+    );
+    let width = 1 << folding;
+    match order {
+        VariableOrder::Prefix => info_span!("transpose").in_scope(|| {
+            let view = RowMajorMatrixView::new(values, values.len() / width);
+            let mut prefix = RowMajorMatrixViewMut::new(message, width);
+            view.transpose_into(&mut prefix);
+        }),
+        VariableOrder::Suffix => message
+            .par_chunks_mut(COPY_CHUNK)
+            .zip(values.par_chunks(COPY_CHUNK))
+            .for_each(|(destination, source)| destination.copy_from_slice(source)),
+    }
+}
+
+/// Encodes and Merkle-commits the initial base-field message.
+///
+/// # Overview
+///
+/// `write_message` receives the leading `2^num_variables` cells of the codeword buffer,
+/// zeroed, and lays the committed polynomial out in the residual variable order.
+///
+/// Every cell it leaves untouched is committed as zero, so a callback that means to commit
+/// a non-zero value at a cell must write it: there is no guard against a partial write, and
+/// a callback that writes nothing at all commits the zero polynomial without complaint.
+///
+/// The message is therefore built directly at codeword height, with a zero tail.
+///
+/// The encoder can then skip the zero coefficients, and reuse this one allocation.
+///
+/// It is then expanded by the Reed-Solomon encoder, and committed.
+///
+/// Nothing is absorbed here.
+///
+/// The caller owns the transcript and absorbs the returned root itself.
+pub fn commit_base<F, E, MT>(
+    encoder: &E,
+    mmcs: &MT,
+    num_variables: usize,
+    folding: usize,
     starting_log_inv_rate: usize,
+    write_message: impl FnOnce(&mut [F]),
 ) -> (MT::Commitment, MT::ProverData<DenseMatrix<F>>)
 where
     F: Field,
     E: Encoder<F>,
     MT: Mmcs<F>,
 {
-    let num_variables = poly.num_variables();
     let width = 1 << folding;
     let message_height = 1 << (num_variables - folding);
     let codeword_height = message_height << starting_log_inv_rate;
 
     let mut values = F::zero_vec(codeword_height * width);
-    match order {
-        VariableOrder::Prefix => info_span!("transpose").in_scope(|| {
-            // Transposing the folding blocks turns the first folded variables into columns.
-            let view = RowMajorMatrixView::new(poly.as_slice(), message_height);
-            let mut prefix =
-                RowMajorMatrixViewMut::new(&mut values[..message_height * width], width);
-            view.transpose_into(&mut prefix);
-        }),
-        // Folding blocks are already contiguous, so the row width alone selects them.
-        VariableOrder::Suffix => values[..poly.as_slice().len()].copy_from_slice(poly.as_slice()),
-    };
+    write_message(&mut values[..message_height * width]);
     let message = RowMajorMatrix::new(values, width);
 
     let encoded = info_span!("encode", height = codeword_height, width)
         .in_scope(|| encoder.encode_batch_padded(message, starting_log_inv_rate));
+
+    info_span!("commit_matrix").in_scope(|| mmcs.commit_matrix(encoded))
+}
+
+/// Encodes and Merkle-commits an initial base-field message the caller already holds.
+///
+/// The message is the committed polynomial laid out in the residual variable order.
+///
+/// It holds one cell per stacked evaluation, the cells [`commit_base`] has its callback write.
+///
+/// The encoder reads the message where it lies, and zero-pads it to codeword height itself.
+///
+/// Nothing is absorbed here.
+///
+/// The caller owns the transcript and absorbs the returned root itself.
+///
+/// # Panics
+///
+/// - The message must hold a power of two cells, and at least one row of `2^folding` of them.
+pub fn commit_borrowed_base<F, E, MT>(
+    encoder: &E,
+    mmcs: &MT,
+    folding: usize,
+    starting_log_inv_rate: usize,
+    message: &[F],
+) -> (MT::Commitment, MT::ProverData<DenseMatrix<F>>)
+where
+    F: Field,
+    E: Encoder<F>,
+    MT: Mmcs<F>,
+{
+    let message = RowMajorMatrixView::new(message, 1 << folding);
+    let codeword_height = message.height() << starting_log_inv_rate;
+
+    let encoded = info_span!("encode", height = codeword_height, width = message.width)
+        .in_scope(|| encoder.encode_batch_borrowed(message, starting_log_inv_rate));
 
     info_span!("commit_matrix").in_scope(|| mmcs.commit_matrix(encoded))
 }
@@ -83,7 +151,7 @@ mod tests {
     use rand::SeedableRng;
     use rand::rngs::SmallRng;
 
-    use super::commit_base;
+    use super::{commit_base, commit_borrowed_base, write_stacked_message};
     use crate::strategy::VariableOrder;
 
     type F = BabyBear;
@@ -136,12 +204,44 @@ mod tests {
         );
         let mmcs = mmcs();
 
-        let (root, _data) =
-            commit_base(order, &DoublingEncoder, &mmcs, &poly, FOLDING, LOG_INV_RATE);
+        let (root, _data) = commit_base(
+            &DoublingEncoder,
+            &mmcs,
+            NUM_VARIABLES,
+            FOLDING,
+            LOG_INV_RATE,
+            |message| write_stacked_message(order, &poly, FOLDING, message),
+        );
 
         let expected_codeword = DoublingEncoder.encode_batch(expected_message, LOG_INV_RATE);
         let (expected_root, _) = mmcs.commit_matrix(expected_codeword);
         assert_eq!(root, expected_root);
+    }
+
+    #[test]
+    fn a_borrowed_message_commits_as_the_suffix_layout_it_already_is() {
+        // Invariant: the message a caller already holds commits to the root that writing the
+        // same cells into the codeword buffer commits to.
+        const NUM_VARIABLES: usize = 5;
+        const LOG_INV_RATE: usize = 1;
+        let mmcs = mmcs();
+        let values = (0..1 << NUM_VARIABLES)
+            .map(F::from_usize)
+            .collect::<Vec<_>>();
+
+        for folding in 0..=2 {
+            let (expected, _) = commit_base(
+                &DoublingEncoder,
+                &mmcs,
+                NUM_VARIABLES,
+                folding,
+                LOG_INV_RATE,
+                |message| message.copy_from_slice(&values),
+            );
+            let (root, _) =
+                commit_borrowed_base(&DoublingEncoder, &mmcs, folding, LOG_INV_RATE, &values);
+            assert_eq!(root, expected, "folding={folding}");
+        }
     }
 
     #[test]

@@ -983,7 +983,7 @@ fn zk_whir_rejects_tampered_base_case_pow_witness() {
     //     supplied   witness + 1   -> clears 5 bits with probability 2^-5
     let mut proven = Setup::new(63).pow_bits(5).prove();
     assert!(
-        proven.pcs.config.final_pow_bits > 0,
+        proven.pcs.config.randomized_terminal.pow_bits > 0,
         "the fixture must grind before its spot checks",
     );
     proven.proof.base_case.pow_witness += F::ONE;

@@ -8,8 +8,13 @@
 use alloc::vec::Vec;
 
 use p3_air::{Air, AirBuilder, BaseAir, BoundaryEnd, BoundaryPublic, RowWindow, WindowAccess};
+use p3_bus::{
+    BusActivation, BusDirection, BusInteractionRecorder, BusName, BusSymbolicBuilder, RecordToken,
+};
 use p3_field::{Algebra, ExtensionField, Field, PrimeCharacteristicRing, dot_product};
-use p3_lookup::{Count, InteractionBuilder, InteractionSymbolicBuilder};
+use p3_lookup::{
+    Count, IndexedLookupBuilder, InteractionBuilder, InteractionSymbolicBuilder, TraceWindow,
+};
 
 use crate::lookup::AirLinkInstance;
 use crate::packed_ext::PackedExt;
@@ -23,6 +28,7 @@ use crate::selectors::BoundaryEvals;
 pub trait VerifierAir<F, EF>:
     BaseAir<F>
     + Air<InteractionSymbolicBuilder<F, EF>>
+    + Air<BusSymbolicBuilder<F, EF>>
     + for<'a> Air<MultilinearFolder<'a, F, EF, EF>>
     + for<'a> Air<InteractionMultilinearFolder<'a, F, EF, EF>>
 where
@@ -37,9 +43,31 @@ where
     EF: ExtensionField<F>,
     A: BaseAir<F>
         + Air<InteractionSymbolicBuilder<F, EF>>
+        + Air<BusSymbolicBuilder<F, EF>>
         + for<'a> Air<MultilinearFolder<'a, F, EF, EF>>
         + for<'a> Air<InteractionMultilinearFolder<'a, F, EF, EF>>,
 {
+}
+
+impl<'a, F, Var, Acc> BusInteractionRecorder for MultilinearFolder<'a, F, Var, Acc>
+where
+    F: PrimeCharacteristicRing + Copy + Sync,
+    Var: Algebra<F> + Copy + Send + Sync,
+    Acc: Algebra<Var> + Copy,
+{
+    fn record_bus_interaction<E: Into<Self::Expr>>(
+        &mut self,
+        _token: RecordToken,
+        _bus: BusName<'_>,
+        _direction: BusDirection,
+        fields: impl IntoIterator<Item = E>,
+        _activation: BusActivation<Self::Expr>,
+    ) {
+        // The bus protocol evaluates its retained symbolic profile after commitment.
+        fields.into_iter().for_each(|field| {
+            let _ = field.into();
+        });
+    }
 }
 
 /// An AIR the multilinear prover can evaluate.
@@ -108,6 +136,14 @@ where
 {
 }
 
+/// Constraints weighted by their alpha powers in one dot product.
+///
+/// A ring whose modular reduction is linear over the accumulated representation reduces once
+/// per batch instead of once per constraint, so a wider batch spreads that reduction further.
+/// It also keeps one more constraint in the folder per unit of width, and leaves a longer
+/// tail to weight one at a time when an evaluation ends part way through a batch.
+const ALPHA_BATCH: usize = 8;
+
 /// The two independently batched expression families emitted by one AIR evaluation.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct FolderEvaluations<Acc> {
@@ -138,10 +174,20 @@ pub struct MultilinearFolder<'a, F, Var, Acc> {
     /// Horner. `Some(powers)` means the AIR asserts exactly `powers.len()` constraints,
     /// including the case where that is zero: unlike an empty slice, `Some(&[])` cannot be
     /// confused with "no powers attached" and still asserts the count via
-    /// [`Self::into_accumulator`]'s debug check.
+    /// [`Self::into_accumulator`].
     alpha_powers: Option<&'a [Acc]>,
-    /// Position of the next asserted constraint inside `alpha_powers`.
+    /// Number of constraints asserted so far, which is also the next position in `alpha_powers`.
+    ///
+    /// Keeps counting past the end of the powers, so a surplus is reported with a shortfall.
     constraint_index: usize,
+    /// Constraints asserted since the last batched product with their alpha powers.
+    ///
+    /// Position `i` holds constraint `ALPHA_BATCH * q + i` of the batch being filled.
+    /// Unused while the accumulator folds by Horner.
+    ///
+    /// Every slot is zeroed when the folder is built, so an AIR asserting fewer than
+    /// `ALPHA_BATCH` constraints still pays for the whole width.
+    pending: [Var; ALPHA_BATCH],
     /// Two-row preprocessed window; zero-width when the AIR has no preprocessed columns.
     pub preprocessed_window: RowWindow<'a, Var>,
     /// Periodic column values at the current evaluation point, one per declared periodic column.
@@ -152,7 +198,8 @@ pub struct MultilinearFolder<'a, F, Var, Acc> {
 
 impl<'a, F, Var, Acc> MultilinearFolder<'a, F, Var, Acc>
 where
-    Acc: PrimeCharacteristicRing,
+    Var: PrimeCharacteristicRing,
+    Acc: Algebra<Var> + Copy,
 {
     /// Build a folder for a single AIR evaluation.
     ///
@@ -188,6 +235,7 @@ where
             // No precomputed powers until attached; batching folds by Horner.
             alpha_powers: None,
             constraint_index: 0,
+            pending: core::array::from_fn(|_| Var::ZERO),
         }
     }
 
@@ -243,15 +291,70 @@ where
     ///
     /// - `C_0, ..., C_{n-1}` are the asserted constraints in declaration order.
     /// - `n` is the AIR's own constraint count plus one pin per listed boundary cell.
+    ///
+    /// # Panics
+    ///
+    /// Panics if attached alpha powers do not number one per asserted constraint.
     #[inline]
     #[must_use]
-    pub fn into_accumulator(self) -> Acc {
-        debug_assert!(
+    pub fn into_accumulator(mut self) -> Acc {
+        self.finish()
+    }
+
+    /// Weight the trailing partial batch and return the accumulator it completes.
+    ///
+    /// The count check and the drain belong together, so every read of the accumulator goes
+    /// through here. The check on its own passes on a held batch that was never added, since
+    /// each held constraint still advanced the index.
+    ///
+    /// # Panics
+    ///
+    /// Panics if attached alpha powers do not number one per asserted constraint.
+    #[inline]
+    fn finish(&mut self) -> Acc {
+        self.assert_alpha_power_count();
+        self.drain_pending();
+        self.accumulator
+    }
+
+    /// Weight the constraints left below a whole batch and add them to the accumulator.
+    ///
+    /// Each drained slot is emptied, so a second call adds nothing.
+    ///
+    /// # Panics
+    ///
+    /// Panics in debug builds if the asserted constraints do not number one per attached power.
+    #[inline]
+    fn drain_pending(&mut self) {
+        let Some(powers) = self.alpha_powers else {
+            return;
+        };
+        // `Self::finish` checks the count first, so the two already agree here.
+        debug_assert_eq!(self.constraint_index, powers.len());
+        let start = powers.len() - powers.len() % ALPHA_BATCH;
+        for (slot, &power) in powers[start..].iter().enumerate() {
+            self.accumulator += power * core::mem::replace(&mut self.pending[slot], Var::ZERO);
+        }
+    }
+
+    /// Check that attached alpha powers were consumed exactly, one per asserted constraint.
+    ///
+    /// A wrong count shifts every weight by a power of alpha, and nothing downstream sees it.
+    ///
+    /// ```text
+    ///     n powers, m asserted constraints, m < n:  C_i weighted by alpha^(n-1-i), not alpha^(m-1-i)
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// Panics if powers are attached and their count differs from the constraints asserted.
+    #[inline]
+    fn assert_alpha_power_count(&self) {
+        assert!(
             self.alpha_powers
                 .is_none_or(|powers| self.constraint_index == powers.len()),
             "attached alpha powers must match the number of asserted constraints"
         );
-        self.accumulator
     }
 
     /// Run the AIR through this folder and return its alpha-batched constraint value.
@@ -340,7 +443,7 @@ pub(crate) const fn boundary_io_pins(cells: &[BoundaryPublic]) -> BoundaryIoPins
 ///
 /// Both folders run this after the AIR's own evaluation, so every node batches the same family.
 #[inline]
-fn eval_boundary_io<AB: AirBuilder>(builder: &mut AB, cells: &[BoundaryPublic]) {
+pub(crate) fn eval_boundary_io<AB: AirBuilder>(builder: &mut AB, cells: &[BoundaryPublic]) {
     for cell in cells {
         // Read both operands out first.
         // Asserting takes a mutable borrow of the folder.
@@ -389,6 +492,47 @@ where
         &mut self,
         _tuples: impl IntoIterator<Item = (Vec<Self::Expr>, Count<Self::Expr>)>,
     ) {
+    }
+}
+
+/// Indexed reads are dropped here, as every other declaration is.
+///
+/// This folder evaluates ordinary constraints, and a read has no row-local form.
+///
+/// The reduction reads the declarations off the symbolic pass instead.
+impl<'a, F, Var, Acc> IndexedLookupBuilder for MultilinearFolder<'a, F, Var, Acc>
+where
+    F: PrimeCharacteristicRing + Copy + Sync,
+    Var: Algebra<F> + Copy + Send + Sync,
+    Acc: Algebra<Var> + Copy,
+{
+    fn push_indexed_read(
+        &mut self,
+        _table: &str,
+        _position: usize,
+        payload: impl IntoIterator<Item = usize>,
+    ) {
+        // This folder evaluates constraints at one point and carries no reduction.
+        //
+        // The indexed reduction discharges it, reading the declaration off the symbolic pass.
+        payload.into_iter().for_each(drop);
+    }
+
+    fn push_indexed_table(
+        &mut self,
+        _name: &str,
+        _window: TraceWindow,
+        columns: impl IntoIterator<Item = usize>,
+    ) {
+        columns.into_iter().for_each(drop);
+    }
+
+    fn num_indexed_reads(&self) -> usize {
+        0
+    }
+
+    fn num_indexed_tables(&self) -> usize {
+        0
     }
 }
 
@@ -449,11 +593,27 @@ where
                 // Same sum reached term by term, weighting `C_i` by the precomputed
                 // `alpha^(n-1-i)`.
                 //
-                // The product is `Acc * Var` rather than `Acc * Acc`, which is the cheaper
-                // multiplication whenever the constraint value lives in a smaller ring than
-                // the accumulator.
-                self.accumulator += powers[self.constraint_index] * x.into();
-                self.constraint_index += 1;
+                // A whole batch of constraints is held back and weighted in one dot product,
+                // so a ring with a linear reduction pays for it once rather than once per
+                // constraint. The batch the evaluation ends inside is drained on the way out.
+                //
+                // A constraint past the last power is only counted.
+                // The count check at the end of the evaluation then rejects it.
+                let index = self.constraint_index;
+                self.constraint_index = index + 1;
+                if index < powers.len() {
+                    let slot = index % ALPHA_BATCH;
+                    self.pending[slot] = x.into();
+                    if slot + 1 == ALPHA_BATCH {
+                        let window = powers[index + 1 - ALPHA_BATCH..]
+                            .first_chunk::<ALPHA_BATCH>()
+                            .expect("the powers reach the end of a batch that holds a constraint");
+                        self.accumulator += <Acc as Algebra<Var>>::mixed_dot_product::<ALPHA_BATCH>(
+                            window,
+                            &self.pending,
+                        );
+                    }
+                }
             }
         }
     }
@@ -508,7 +668,8 @@ pub struct InteractionMultilinearFolder<'a, F, Var, Acc> {
 
 impl<'a, F, Var, Acc> InteractionMultilinearFolder<'a, F, Var, Acc>
 where
-    Acc: PrimeCharacteristicRing,
+    Var: PrimeCharacteristicRing,
+    Acc: Algebra<Var> + Copy,
 {
     /// Wrap an ordinary folder so the same AIR evaluation also builds the lookup link.
     ///
@@ -539,6 +700,11 @@ where
     /// Run the AIR once and return its ordinary and lookup expressions separately.
     ///
     /// Cells the AIR lists as public inputs add one pin each to the ordinary family.
+    ///
+    /// # Panics
+    ///
+    /// Panics if constraints are enabled and attached alpha powers do not number one per
+    /// asserted constraint.
     #[inline]
     #[must_use]
     pub(crate) fn eval_air<A>(mut self, air: &A) -> FolderEvaluations<Acc>
@@ -550,7 +716,13 @@ where
         eval_boundary_io(&mut self, air.public_boundary_io());
         // Both families come out of the one pass, batched independently.
         FolderEvaluations {
-            constraints: self.inner.accumulator,
+            // Disabled constraints never reach the inner folder, so they consume no power
+            // and leave the accumulator untouched.
+            constraints: if self.constraints_enabled {
+                self.inner.finish()
+            } else {
+                self.inner.accumulator
+            },
             interactions: self.interaction_accumulator,
         }
     }
@@ -610,6 +782,42 @@ where
     #[inline]
     fn periodic_values(&self) -> &[Self::PeriodicVar] {
         self.inner.periodic_values()
+    }
+}
+
+impl<'a, F, Var, Acc> IndexedLookupBuilder for InteractionMultilinearFolder<'a, F, Var, Acc>
+where
+    F: PrimeCharacteristicRing + Copy + Sync,
+    Var: Algebra<F> + Copy + Send + Sync,
+    Acc: Algebra<Var> + Copy,
+{
+    fn push_indexed_read(
+        &mut self,
+        _table: &str,
+        _position: usize,
+        payload: impl IntoIterator<Item = usize>,
+    ) {
+        // This folder evaluates constraints at one point and carries no reduction.
+        //
+        // The indexed reduction discharges it, reading the declaration off the symbolic pass.
+        payload.into_iter().for_each(drop);
+    }
+
+    fn push_indexed_table(
+        &mut self,
+        _name: &str,
+        _window: TraceWindow,
+        columns: impl IntoIterator<Item = usize>,
+    ) {
+        columns.into_iter().for_each(drop);
+    }
+
+    fn num_indexed_reads(&self) -> usize {
+        0
+    }
+
+    fn num_indexed_tables(&self) -> usize {
+        0
     }
 }
 
@@ -679,6 +887,27 @@ where
     }
 }
 
+impl<'a, F, Var, Acc> BusInteractionRecorder for InteractionMultilinearFolder<'a, F, Var, Acc>
+where
+    F: PrimeCharacteristicRing + Copy + Sync,
+    Var: Algebra<F> + Copy + Send + Sync,
+    Acc: Algebra<Var> + Copy,
+{
+    fn record_bus_interaction<E: Into<Self::Expr>>(
+        &mut self,
+        _token: RecordToken,
+        _bus: BusName<'_>,
+        _direction: BusDirection,
+        fields: impl IntoIterator<Item = E>,
+        _activation: BusActivation<Self::Expr>,
+    ) {
+        // Bus expressions are reduced independently from this legacy lookup accumulator.
+        fields.into_iter().for_each(|field| {
+            let _ = field.into();
+        });
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use alloc::vec;
@@ -687,6 +916,7 @@ mod tests {
 
     use p3_air::{Air, AirBuilder, BaseAir, WindowAccess};
     use p3_baby_bear::BabyBear;
+    use p3_binary_field::{BinaryField128, Ghash128, TowerLevel};
     use p3_field::PrimeCharacteristicRing;
     use p3_field::extension::BinomialExtensionField;
     use p3_lookup::Count;
@@ -907,6 +1137,106 @@ mod tests {
             .with_alpha_powers(&alpha_powers)
             .eval_air(&FibAir);
         assert_eq!(batched, expected);
+    }
+
+    /// AIR asserting one constraint per column, enough to span more than one alpha batch.
+    ///
+    /// The count is deliberately not a multiple of [`ALPHA_BATCH`], so the evaluation ends
+    /// part way through a batch.
+    struct WideAir;
+
+    /// Columns of [`WideAir`], one per asserted constraint.
+    ///
+    /// An odd number of whole batches keeps a constant error repeated once per batch from
+    /// cancelling itself in characteristic two, and the remainder leaves a tail to drain.
+    const WIDE_COLS: usize = 3 * ALPHA_BATCH + 3;
+
+    impl<X> BaseAir<X> for WideAir {
+        fn width(&self) -> usize {
+            WIDE_COLS
+        }
+    }
+
+    impl<AB: AirBuilder> Air<AB> for WideAir {
+        fn eval(&self, builder: &mut AB) {
+            let main = builder.main();
+            let local = main.current_slice();
+            for value in local {
+                builder.assert_zero(*value);
+            }
+        }
+    }
+
+    /// Check both exits from [`WideAir`]'s batched fold against its Horner fold over one ring.
+    ///
+    /// The caller supplies one column value per constraint, so it can pick a fixture the ring
+    /// cannot degenerate: over a binary field the small integers are only `0` and `1`.
+    ///
+    /// # Arguments
+    ///
+    /// - `local`: one value per column, none of them zero.
+    /// - `alpha`: the scalar both folds batch with.
+    fn check_wide_air_batching<BF, R>(local: &[R], alpha: R)
+    where
+        BF: Field,
+        R: Field + Algebra<BF>,
+    {
+        let next = R::zero_vec(WIDE_COLS);
+        let pis: [BF; 0] = [];
+        let boundary = BoundaryEvals {
+            first: R::ZERO,
+            last: R::ZERO,
+            transition: R::ONE,
+        };
+
+        let horner = MultilinearFolder::<BF, R, R>::new(local, &next, boundary, &pis, alpha)
+            .eval_air(&WideAir);
+
+        let alpha_powers = (0..WIDE_COLS)
+            .map(|i| alpha.exp_u64((WIDE_COLS - 1 - i) as u64))
+            .collect::<Vec<_>>();
+        let batched = MultilinearFolder::<BF, R, R>::new(local, &next, boundary, &pis, alpha)
+            .with_alpha_powers(&alpha_powers)
+            .eval_air(&WideAir);
+        assert_eq!(batched, horner);
+
+        // The lookup-aware folder is the second exit, and it has to weight the trailing
+        // partial batch too. The AIR declares no lookup, so the link carries none.
+        let link = AirLinkInstance {
+            num_local_lookups: 0,
+            lookups: Vec::new(),
+        };
+        let folder = MultilinearFolder::<BF, R, R>::new(local, &next, boundary, &pis, alpha)
+            .with_alpha_powers(&alpha_powers);
+        let evaluations =
+            InteractionMultilinearFolder::new(folder, &link, &[] as &[R], true).eval_air(&WideAir);
+        assert_eq!(evaluations.constraints, horner);
+    }
+
+    #[test]
+    fn alpha_batching_matches_horner_across_several_batches() {
+        // Fixture state: one distinct non-zero value per column, so no constraint vanishes
+        // and every alpha power shows up in the batched sum.
+        let local = (0..WIDE_COLS)
+            .map(|i| EF::from_u64(i as u64 + 1))
+            .collect::<Vec<_>>();
+        check_wide_air_batching::<F, EF>(&local, EF::from_u64(11));
+    }
+
+    #[test]
+    fn alpha_batching_matches_horner_over_a_deferred_reduction_ring() {
+        // `Ghash128` answers a dot product by accumulating every product unreduced and
+        // reducing the sum once, which is the kernel a batch is held back for. The two folds
+        // must still agree term for term.
+        //
+        // Fixture state: an odd multiplier walked over the representation, so the columns are
+        // distinct and non-zero where the small integers would collapse onto `0` and `1`.
+        const STRIDE: u128 = 0x9E37_79B9_7F4A_7C15_F39C_C060_5CED_C835;
+        let local = (0..WIDE_COLS)
+            .map(|i| Ghash128::from_repr(STRIDE.wrapping_mul(i as u128 + 1)))
+            .collect::<Vec<_>>();
+        let alpha = Ghash128::from_repr(0x0123_4567_89AB_CDEF_FEDC_BA98_7654_3210);
+        check_wide_air_batching::<BinaryField128, Ghash128>(&local, alpha);
     }
 
     /// Single-column AIR that ties the main column to a preprocessed and a periodic column.
@@ -1160,6 +1490,111 @@ mod tests {
             InteractionMultilinearFolder::new(folder, &link, &theta_beta_powers, false)
                 .eval_air(&LinkedIoAir);
         assert_eq!(evaluations.constraints, EF::ZERO);
+    }
+
+    #[test]
+    fn alpha_powers_batch_the_boundary_io_pins_like_horner() {
+        // Invariant: both folders reach the Horner value from precomputed powers, pins included.
+        //
+        // Fixture state: the first row, columns 5 and 9, the public value 6.
+        //
+        //     C_0 : a - b                  = -4    (own constraint)
+        //     C_1 : is_first_row * (a - 6) = -1    (injected pin)
+        //
+        // Two batched constraints take the powers `alpha^1, alpha^0`.
+        let link = AirLinkInstance {
+            num_local_lookups: 1,
+            lookups: vec![AirLinkLookup {
+                theta_bus_offset: EF::from_u64(13),
+                block_weights: vec![EF::from_u64(3), EF::from_u64(7)],
+            }],
+        };
+        let theta_beta_powers = [EF::from_u64(2)];
+        let boundary = BoundaryEvals {
+            first: EF::ONE,
+            last: EF::ZERO,
+            transition: EF::ONE,
+        };
+        let alpha = EF::from_u64(11);
+        let alpha_powers = [alpha, EF::ONE];
+        let local = [EF::from_u64(5), EF::from_u64(9)];
+        let next = [EF::ZERO, EF::ZERO];
+        let pis = [F::from_u64(6)];
+
+        let horner = TestFolder::new(&local, &next, boundary, &pis, alpha).eval_air(&LinkedIoAir);
+        assert_eq!(
+            horner,
+            alpha * (local[0] - local[1]) + (local[0] - EF::from_u64(6))
+        );
+
+        let ordinary = TestFolder::new(&local, &next, boundary, &pis, alpha)
+            .with_alpha_powers(&alpha_powers)
+            .eval_air(&LinkedIoAir);
+        assert_eq!(ordinary, horner);
+
+        let folder =
+            TestFolder::new(&local, &next, boundary, &pis, alpha).with_alpha_powers(&alpha_powers);
+        let evaluations =
+            InteractionMultilinearFolder::new(folder, &link, &theta_beta_powers, true)
+                .eval_air(&LinkedIoAir);
+        assert_eq!(evaluations.constraints, horner);
+    }
+
+    /// Evaluate the linked boundary-IO AIR through the lookup-aware folder with the given powers.
+    ///
+    /// The AIR asserts two constraints: its own, then one pin.
+    fn eval_linked_io_with_powers(alpha_powers: &[EF]) -> FolderEvaluations<EF> {
+        let link = AirLinkInstance {
+            num_local_lookups: 1,
+            lookups: vec![AirLinkLookup {
+                theta_bus_offset: EF::from_u64(13),
+                block_weights: vec![EF::from_u64(3), EF::from_u64(7)],
+            }],
+        };
+        let theta_beta_powers = [EF::from_u64(2)];
+        let boundary = BoundaryEvals {
+            first: EF::ONE,
+            last: EF::ZERO,
+            transition: EF::ONE,
+        };
+        let local = [EF::from_u64(5), EF::from_u64(9)];
+        let next = [EF::ZERO, EF::ZERO];
+        let pis = [F::from_u64(6)];
+        let folder = TestFolder::new(&local, &next, boundary, &pis, EF::from_u64(11))
+            .with_alpha_powers(alpha_powers);
+        InteractionMultilinearFolder::new(folder, &link, &theta_beta_powers, true)
+            .eval_air(&LinkedIoAir)
+    }
+
+    #[test]
+    #[should_panic = "attached alpha powers must match the number of asserted constraints"]
+    fn interaction_folder_rejects_too_many_alpha_powers() {
+        // Three powers for two constraints: every weight would carry one extra alpha.
+        let _evaluations =
+            eval_linked_io_with_powers(&[EF::from_u64(121), EF::from_u64(11), EF::ONE]);
+    }
+
+    #[test]
+    #[should_panic = "attached alpha powers must match the number of asserted constraints"]
+    fn interaction_folder_rejects_too_few_alpha_powers() {
+        // One power for two constraints: the pin runs past the end instead of indexing out.
+        let _evaluations = eval_linked_io_with_powers(&[EF::ONE]);
+    }
+
+    #[test]
+    #[should_panic = "attached alpha powers must match the number of asserted constraints"]
+    fn ordinary_folder_rejects_a_wrong_alpha_power_count() {
+        let boundary = BoundaryEvals {
+            first: EF::ONE,
+            last: EF::ZERO,
+            transition: EF::ONE,
+        };
+        let local = [EF::from_u64(5), EF::from_u64(9)];
+        let next = [EF::ZERO, EF::ZERO];
+        let pis = [F::from_u64(6)];
+        let _value = TestFolder::new(&local, &next, boundary, &pis, EF::from_u64(11))
+            .with_alpha_powers(&[EF::ONE])
+            .eval_air(&LinkedIoAir);
     }
 
     #[test]

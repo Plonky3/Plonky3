@@ -58,10 +58,9 @@ where
 
     let values = values.as_mut_ptr() as usize;
 
-    // SAFETY: Due to the i < j check, we are guaranteed that `swap_rows_raw
-    // will never try and access a particular slice of data more than once
-    // across all parallel threads. Hence the following code is safe and does
-    // not trigger undefined behaviour.
+    // SAFETY: Bit reversal is an involution on 0..h. Visiting each index once and
+    // swapping only when i < j gives each row pair a single owner, so concurrent
+    // swaps use disjoint rows within the matrix.
     let swap = |i, use_outline| {
         let values = values as *mut F;
         let j = reverse_bits_len(i, log_h);
@@ -73,10 +72,20 @@ where
     if total_bytes <= 32 * 1024 {
         (0..h).for_each(|i| swap(i, true));
     } else {
-        // Keep Rayon jobs, including one-worker pools, free of a helper call per row pair.
-        (0..h)
+        // Amortize scheduling over roughly 64 KiB of candidate rows; swap partners may
+        // lie outside the chunk.
+        const CHUNK_BYTES: usize = 64 * 1024;
+        let rows_per_chunk = CHUNK_BYTES.div_ceil(w * core::mem::size_of::<F>());
+        (0..h.div_ceil(rows_per_chunk))
             .into_par_iter()
-            .for_each(|i| swap(i, !PARALLEL_ENABLED));
+            .for_each(|chunk| {
+                let start = chunk * rows_per_chunk;
+                let end = start + rows_per_chunk.min(h - start);
+                // Keep Rayon jobs, including one-worker pools, free of a helper call per row pair.
+                for i in start..end {
+                    swap(i, !PARALLEL_ENABLED);
+                }
+            });
     }
 }
 
@@ -285,6 +294,38 @@ mod tests {
                 assert!(drops.iter().all(|count| count.load(Ordering::Relaxed) == 1));
             }
         }
+    }
+
+    #[test]
+    fn test_reverse_matrix_index_bits_work_unit_boundaries() {
+        use alloc::vec::Vec;
+
+        // An uneven final chunk, then rows just below, at, and above 64 KiB.
+        for (width, height) in [(3, 8192), (16_383, 8), (16_384, 8), (16_385, 8)] {
+            let original: Vec<u32> = (0..width * height).map(|i| i as u32).collect();
+            let mut matrix = RowMajorMatrix::new(original.clone(), width);
+
+            reverse_matrix_index_bits(&mut matrix.as_view_mut());
+            for (row, values) in matrix.values.chunks_exact(width).enumerate() {
+                let source = row.reverse_bits() >> (usize::BITS - height.ilog2());
+                assert_eq!(
+                    values,
+                    &original[source * width..(source + 1) * width],
+                    "width={width}, height={height}, row={row}"
+                );
+            }
+            reverse_matrix_index_bits(&mut matrix);
+            assert_eq!(matrix.values, original, "width={width}, height={height}");
+        }
+    }
+
+    #[test]
+    fn test_reverse_matrix_index_bits_zero_sized_elements() {
+        let mut matrix = RowMajorMatrix::new(vec![(); 3 * 8192], 3);
+        reverse_matrix_index_bits(&mut matrix);
+        assert_eq!(matrix.width(), 3);
+        assert_eq!(matrix.height(), 8192);
+        assert_eq!(matrix.values.len(), 3 * 8192);
     }
 
     #[test]

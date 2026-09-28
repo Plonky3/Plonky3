@@ -163,7 +163,10 @@ where
         let (opened_values, opening_proof) = batch_proof.unpack();
         // Check that the openings have the correct shape.
         if dimensions.len() != opened_values.len() {
-            return Err(WrongBatchSize);
+            return Err(WrongBatchSize {
+                expected: dimensions.len(),
+                got: opened_values.len(),
+            });
         }
         // Geometry gate: the claimed heights must form a tree the commitment can build.
         // The tallest height anchors the index bound and the leaf layer width below.

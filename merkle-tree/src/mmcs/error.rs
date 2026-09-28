@@ -6,8 +6,13 @@ use thiserror::Error;
 #[derive(Debug, Error)]
 pub enum MerkleTreeError {
     /// The number of openings provided does not match the expected number.
-    #[error("wrong batch size: number of openings does not match expected")]
-    WrongBatchSize,
+    #[error("batch size mismatch: expected {expected} entries, got {got}")]
+    WrongBatchSize {
+        /// Number of openings fixed by the commitment or query set.
+        expected: usize,
+        /// Number of openings supplied by the proof.
+        got: usize,
+    },
 
     /// An opened row's length does not match the width of its matrix.
     #[error("wrong width: matrix {matrix} expected {expected} values, got {got}")]

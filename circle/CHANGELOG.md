@@ -6,6 +6,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.8.0] - 2026-09-23
+### Merged PRs
+- Fix(fri)!: derive the folding schedule instead of accepting the prover's (#2033)
+- Fix(circle): account for transition selectors in quotient sizing (#2046)
+- Fix(security,fri): accounting and grinding hygiene fixes (#2048)
+- Chore: expose the parallel feature on every crate that uses rayon (#2049)
+- Refactor(commit): separate univariate STARK capabilities from PCS (#2059)
+- Feat(circle)!: drive the Circle PCS transcript through the typed Fiat-Shamir layer (#2087)
+- Fix(security): reject non-canonical grinding witnesses at zero difficulty (#2106)
+- Feat(pcs)!: add batching grinding to STIR and Circle (#2112)
+- Fix(transcript): address the review follow-ups from the typed-transcript stack (#2117)
+- Review: couple tweaks here and there (#2120)
+- Refactor(fri)!: derive the commit-round shape from configuration rather than the proof (#2125)
+- Perf: optimize Circle and Mersenne-31 hot paths (#2128)
+- Fix(uni-stark,circle): reject degree_bits below the PCS minimum trace height (#2257)
+- Refactor(commit): own the periodic column shape rule where every consumer can reach it (#2276)
+- Refactor!(uni-stark,batch-stark,commit): group the preprocessed openings and name the trace-height bounds as a pair (#2281)
+
 ## [0.7.0] - 2026-09-04
 ### Merged PRs
 - Feat: adapt log levels of some inner functions (#1999)

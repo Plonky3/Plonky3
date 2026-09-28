@@ -3,7 +3,7 @@ use core::fmt::Debug;
 use p3_challenger::fs::TranscriptField;
 use p3_challenger::{CanObserve, CanSample, CanSampleUniformBits, GrindingChallenger};
 use p3_commit::Mmcs;
-use p3_field::{ExtensionField, Field, TwoAdicField};
+use p3_field::{ExtensionField, Field};
 use p3_multilinear_util::point::Point;
 use p3_sumcheck::constraints::statement::EqStatement;
 
@@ -41,8 +41,8 @@ where
         round_index: usize,
     ) -> Result<ParsedCommitment<EF, MT::Commitment>, VerifierError>
     where
-        F: TwoAdicField + TranscriptField,
-        EF: ExtensionField<F> + TwoAdicField,
+        F: Field + TranscriptField,
+        EF: ExtensionField<F>,
         Challenger: CanObserve<F>
             + CanSample<F>
             + CanSampleUniformBits<F>

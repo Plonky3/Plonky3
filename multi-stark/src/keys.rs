@@ -9,12 +9,18 @@
 
 use alloc::vec::Vec;
 
-use p3_air::BaseAir;
+use p3_air::symbolic::AirLayout;
+use p3_air::{Air, BaseAir};
+use p3_bus::BusSymbolicBuilder;
 use p3_commit::MultilinearPcs;
+use p3_field::{ExtensionField, Field};
+use p3_lookup::InteractionSymbolicBuilder;
 use p3_sumcheck::layout::Table;
 
 use crate::ProvingError;
 use crate::config::{Commitment, MultiStarkConfig, PcsProverError, ProverData};
+use crate::rounds::AirProfile;
+use crate::zerocheck::get_air_profile;
 
 /// Batched preprocessed data the prover reuses across proofs.
 ///
@@ -27,16 +33,96 @@ pub(crate) struct PreprocessedProverData<C: MultiStarkConfig> {
     pub(crate) prover_data: ProverData<C>,
 }
 
-/// The prover's key for a fixed AIR and trace height.
+/// The prover's key for an ordered AIR batch and its fixed trace heights.
+///
+/// The proof must use the same AIRs in the same order as setup.
+/// This remains required when no AIR has preprocessed columns.
 pub struct ProvingKey<C: MultiStarkConfig> {
     /// Batched preprocessed data, present only when at least one AIR declares it.
     pub(crate) preprocessed: Option<PreprocessedProverData<C>>,
+    /// Zerocheck metadata fixed by the AIRs at setup.
+    pub(crate) air_profiles: Vec<AirProfile>,
+    /// Whether any AIR declares a binary-bus interaction, read off one bus pass at setup.
+    pub(crate) declares_bus: bool,
+    /// Every AIR's widths and public-value count, in setup order.
+    air_shapes: Vec<AirShape>,
 }
 
-/// The verifier's key for a fixed AIR and trace height.
+/// The widths and public-value count of one AIR, which cost nothing to read again.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct AirShape {
+    /// Main columns.
+    width: usize,
+    /// Preprocessed columns.
+    preprocessed_width: usize,
+    /// Public values the AIR reads.
+    num_public_values: usize,
+}
+
+impl AirShape {
+    /// The shape `air` declares.
+    fn of<F, A: BaseAir<F>>(air: &A) -> Self {
+        Self {
+            width: air.width(),
+            preprocessed_width: air.preprocessed_width(),
+            num_public_values: air.num_public_values(),
+        }
+    }
+}
+
+impl<C: MultiStarkConfig> ProvingKey<C> {
+    /// Whether this key can have come from `setup` over `airs`, in this order.
+    ///
+    /// The count, every width and every public-value count are compared on each call.
+    ///
+    /// A debug build also reruns setup's symbolic passes and compares what they record, so a
+    /// key whose AIRs declare other lookups or buses under the same shapes is caught there too.
+    pub(crate) fn describes<A>(&self, airs: &[&A]) -> bool
+    where
+        A: BaseAir<C::Val>
+            + Air<InteractionSymbolicBuilder<C::Val, C::Challenge>>
+            + Air<BusSymbolicBuilder<C::Val, C::Challenge>>,
+    {
+        let shapes = airs.len() == self.air_shapes.len()
+            && airs
+                .iter()
+                .zip(&self.air_shapes)
+                .all(|(&air, &shape)| AirShape::of::<C::Val, A>(air) == shape);
+        #[cfg(debug_assertions)]
+        let shapes = shapes
+            && airs
+                .iter()
+                .zip(&self.air_profiles)
+                .all(|(&air, &profile)| get_air_profile::<C::Val, C::Challenge, A>(air) == profile)
+            && declares_bus::<C::Val, C::Challenge, A>(airs) == self.declares_bus;
+        shapes
+    }
+}
+
+/// Whether any AIR declares a binary-bus interaction.
+///
+/// Those declarations are recorded by their own builder, so they take their own pass.
+fn declares_bus<F, EF, A>(airs: &[&A]) -> bool
+where
+    F: Field,
+    EF: ExtensionField<F>,
+    A: Air<BusSymbolicBuilder<F, EF>>,
+{
+    airs.iter().any(|&air| {
+        let profile = BusSymbolicBuilder::<F, EF>::from_air(air, AirLayout::from_air::<F>(air));
+        !profile.interactions().is_empty()
+    })
+}
+
+/// The verifier's key for an ordered AIR batch and its fixed trace heights.
+///
+/// Verification must use the same AIRs in the same order as setup.
+/// This remains required when no AIR has preprocessed columns.
 pub struct VerifyingKey<C: MultiStarkConfig> {
     /// Batched preprocessed commitment, present only when at least one AIR declares it.
     pub(crate) preprocessed: Option<Commitment<C>>,
+    /// Zerocheck metadata fixed by the AIRs at setup.
+    pub(crate) air_profiles: Vec<AirProfile>,
 }
 
 /// Commit all AIR preprocessed traces once, returning matched prover and verifier keys.
@@ -70,9 +156,20 @@ pub fn setup<C, A>(
 ) -> Result<(ProvingKey<C>, VerifyingKey<C>), ProvingError<PcsProverError<C>>>
 where
     C: MultiStarkConfig,
-    A: BaseAir<C::Val>,
+    A: BaseAir<C::Val>
+        + Air<InteractionSymbolicBuilder<C::Val, C::Challenge>>
+        + Air<BusSymbolicBuilder<C::Val, C::Challenge>>,
     Commitment<C>: Clone,
 {
+    let air_profiles = airs
+        .iter()
+        .map(|&air| get_air_profile::<C::Val, C::Challenge, A>(air))
+        .collect::<Vec<_>>();
+    let declares_bus = declares_bus::<C::Val, C::Challenge, A>(airs);
+    let air_shapes = airs
+        .iter()
+        .map(|&air| AirShape::of::<C::Val, A>(air))
+        .collect::<Vec<_>>();
     let mut tables = Vec::new();
 
     for air in airs.iter().filter(|air| air.preprocessed_width() != 0) {
@@ -85,8 +182,16 @@ where
 
     if tables.is_empty() {
         return Ok((
-            ProvingKey { preprocessed: None },
-            VerifyingKey { preprocessed: None },
+            ProvingKey {
+                preprocessed: None,
+                air_profiles: air_profiles.clone(),
+                declares_bus,
+                air_shapes,
+            },
+            VerifyingKey {
+                preprocessed: None,
+                air_profiles,
+            },
         ));
     }
 
@@ -106,10 +211,14 @@ where
             commitment: commitment.clone(),
             prover_data,
         }),
+        air_profiles: air_profiles.clone(),
+        declares_bus,
+        air_shapes,
     };
     // The verifier key keeps only the commitment; shape facts come from AIR metadata.
     let verifying = VerifyingKey {
         preprocessed: Some(commitment),
+        air_profiles,
     };
     Ok((proving, verifying))
 }

@@ -208,7 +208,13 @@ mod tests {
             &pruned_opening.pruned_proof,
         );
         assert!(
-            matches!(result, Err(MerkleTreeError::WrongBatchSize)),
+            matches!(
+                result,
+                Err(MerkleTreeError::WrongBatchSize {
+                    expected: 3,
+                    got: 4,
+                })
+            ),
             "an index/opening count mismatch should be rejected, got {result:?}"
         );
     }

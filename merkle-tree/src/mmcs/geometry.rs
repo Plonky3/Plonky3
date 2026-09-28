@@ -26,7 +26,10 @@ pub(crate) fn check_widths<T, R: AsRef<[T]>>(
     opened_values: &[R],
 ) -> Result<(), MerkleTreeError> {
     if opened_values.len() != dimensions.len() {
-        return Err(WrongBatchSize);
+        return Err(WrongBatchSize {
+            expected: dimensions.len(),
+            got: opened_values.len(),
+        });
     }
 
     for (matrix, (dims, row)) in dimensions.iter().zip(opened_values).enumerate() {
@@ -137,6 +140,7 @@ where
 
 #[cfg(test)]
 mod tests {
+    use alloc::string::ToString;
     use alloc::vec;
 
     use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
@@ -176,10 +180,18 @@ mod tests {
         ];
         let one_row = vec![vec![BabyBear::ONE; 4]];
 
+        let error = check_widths(&dims, &one_row).expect_err("one row cannot open two matrices");
         assert!(matches!(
-            check_widths(&dims, &one_row),
-            Err(MerkleTreeError::WrongBatchSize)
+            &error,
+            MerkleTreeError::WrongBatchSize {
+                expected: 2,
+                got: 1,
+            }
         ));
+        assert_eq!(
+            error.to_string(),
+            "batch size mismatch: expected 2 entries, got 1"
+        );
 
         // A second row of the right width completes the shape.
         let both_rows = vec![vec![BabyBear::ONE; 4], vec![BabyBear::ONE; 4]];

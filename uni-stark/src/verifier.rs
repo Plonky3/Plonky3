@@ -7,7 +7,9 @@ use itertools::Itertools;
 use p3_air::symbolic::SymbolicAirBuilder;
 use p3_air::{Air, RowWindow};
 use p3_challenger::GrindingChallenger;
-use p3_commit::{CommitmentWithOpeningPoints, Pcs, PolynomialSpace, UnivariateStarkPcs};
+use p3_commit::{
+    CommitmentWithOpeningPoints, Pcs, PeriodicColumns, PolynomialSpace, UnivariateStarkPcs,
+};
 use p3_field::{BasedVectorSpace, ExtensionField, Field, PrimeCharacteristicRing};
 use p3_matrix::dense::RowMajorMatrixView;
 use p3_matrix::stack::VerticalPair;
@@ -15,62 +17,35 @@ use p3_util::zip_eq::zip_eq;
 use p3_util::{checked_log_size_sum, checked_pow2};
 use tracing::instrument;
 
-use crate::error::{InvalidProofShapeError, PeriodicColumnError, VerificationError};
+use crate::error::{InvalidProofShapeError, VerificationError};
 use crate::symbolic::get_log_num_quotient_chunks_for_domain;
 use crate::{
-    AirLayout, Com, Commitments, Domain, PcsError, PreprocessedVerifierKey, Proof,
-    StarkGenericConfig, StarkShape, StarkVerifierTranscript, Val, VerifierConstraintFolder,
+    AirLayout, Com, Commitments, Domain, PcsError, PreprocessedOpenedValues,
+    PreprocessedVerifierKey, Proof, StarkGenericConfig, StarkShape, StarkVerifierTranscript, Val,
+    VerifierConstraintFolder,
 };
-
-/// Reject periodic columns the verifier cannot evaluate over the trace domain.
-///
-/// - Evaluation samples a subdomain whose size is the column length.
-/// - Both verifiers call this before evaluating.
-/// - A malformed AIR therefore errors instead of panicking.
-///
-/// # Arguments
-///
-/// - `periodic_columns` — the periodic columns declared by the AIR.
-/// - `trace_length` — the number of rows the columns repeat over.
-///
-/// # Errors
-///
-/// - A length that is not a power of two has no evaluation subdomain.
-/// - A length larger than the trace cannot sit inside the trace domain.
-pub fn check_periodic_column_lengths<F>(
-    periodic_columns: &[Vec<F>],
-    trace_length: usize,
-) -> Result<(), PeriodicColumnError> {
-    for col in periodic_columns {
-        let period = col.len();
-
-        // A subdomain of size `period` exists only for powers of two.
-        if !period.is_power_of_two() {
-            return Err(PeriodicColumnError::LengthNotPowerOfTwo { got: period });
-        }
-
-        // That subdomain must sit inside the trace domain.
-        if period > trace_length {
-            return Err(PeriodicColumnError::LengthTooLarge {
-                maximum: trace_length,
-                got: period,
-            });
-        }
-    }
-
-    Ok(())
-}
 
 pub fn validate_degree_bits(
     air: Option<usize>,
     degree_bits: usize,
     is_zk: usize,
+    min_log_degree: usize,
     max_log_degree: usize,
 ) -> Result<(usize, usize), InvalidProofShapeError> {
-    if degree_bits < is_zk {
+    // A claimed degree is the height of the extended trace domain, in bits.
+    // Removing the zero-knowledge blowup bit leaves the base trace domain.
+    // That is the domain the selectors and the periodic columns are evaluated over.
+    //
+    //     extended domain : degree_bits
+    //     base domain     : degree_bits - is_zk
+    //
+    // Why: the base domain is built from this proof-supplied height before the opening runs.
+    // A height the backend's domain arithmetic cannot handle has to be caught here.
+    let minimum = is_zk + min_log_degree;
+    if degree_bits < minimum {
         return Err(InvalidProofShapeError::DegreeBitsTooSmall {
             air,
-            minimum: is_zk,
+            minimum,
             got: degree_bits,
         });
     }
@@ -171,6 +146,28 @@ where
         RowMajorMatrixView::new_row(trace_next),
     );
 
+    // The constraint window stacks two preprocessed rows, so both must have the same width.
+    //
+    //     current = [p_0, ..., p_{w-1}]   next = [p'_0, ..., p'_{w-1}]   accepted
+    //     current = [p_0, ..., p_{w-1}]   next = absent                  rejected
+    //     current = absent                next = absent                  accepted, width 0
+    //
+    // Why: stacking rows of different widths has no meaning.
+    // Treating a missing row as width zero would leave the constraints a matrix with no columns.
+    //
+    // Recursive verifiers reach this public entry point directly, so the rows are checked here.
+    let preprocessed_local_len = preprocessed_local.map_or(0, <[_]>::len);
+    let preprocessed_next_len = preprocessed_next.map_or(0, <[_]>::len);
+    if preprocessed_local_len != preprocessed_next_len {
+        return Err(InvalidProofShapeError::PreprocessedTraceWidthMismatch {
+            expected_local: preprocessed_local_len,
+            expected_next: preprocessed_local_len,
+            got_local: preprocessed_local_len,
+            got_next: preprocessed_next_len,
+        }
+        .into());
+    }
+
     let preprocessed = match (preprocessed_local, preprocessed_next) {
         (Some(local), Some(next)) => VerticalPair::new(
             RowMajorMatrixView::new_row(local),
@@ -207,23 +204,30 @@ where
     Ok(())
 }
 
-/// Validates and commits the preprocessed trace if present.
-/// Returns the preprocessed width and its commitment hash (available iff width > 0).
+/// Validates the preprocessed trace and pairs its commitment with its opening.
+///
+/// # Returns
+///
+/// - The preprocessed width in force, taken from the verifier key when one is supplied.
+/// - The commitment and the opening it binds, present together exactly when that width is positive.
 #[allow(clippy::type_complexity)]
-fn process_preprocessed_trace<SC, A>(
+fn process_preprocessed_trace<'a, SC, A>(
     air: &A,
-    opened_values: &crate::proof::OpenedValues<SC::Challenge>,
+    opened_values: &'a crate::proof::OpenedValues<SC::Challenge>,
     preprocessed_vk: Option<&PreprocessedVerifierKey<SC>>,
 ) -> Result<
     (
         usize,
-        Option<<SC::Pcs as Pcs<SC::Challenge, SC::Challenger>>::Commitment>,
+        Option<(
+            <SC::Pcs as Pcs<SC::Challenge, SC::Challenger>>::Commitment,
+            &'a PreprocessedOpenedValues<SC::Challenge>,
+        )>,
     ),
     VerificationError<PcsError<SC>>,
 >
 where
     SC: StarkGenericConfig,
-    A: for<'a> Air<VerifierConstraintFolder<'a, SC>>,
+    A: for<'b> Air<VerifierConstraintFolder<'b, SC>>,
 {
     // Determine expected preprocessed width.
     // - If a verifier key is provided, trust its width.
@@ -232,29 +236,59 @@ where
         .map(|vk| vk.width)
         .unwrap_or_else(|| air.preprocessed_width());
 
-    // Check that the proof's opened preprocessed values match the expected width.
-    let preprocessed_local_len = opened_values
-        .preprocessed_local
-        .as_ref()
-        .map_or(0, |v| v.len());
-    let preprocessed_next_len = opened_values
-        .preprocessed_next
-        .as_ref()
-        .map_or(0, |v| v.len());
-    let expected_next_len = if !air.preprocessed_next_row_columns().is_empty() {
-        preprocessed_width
-    } else {
-        0
-    };
-    if preprocessed_width != preprocessed_local_len || expected_next_len != preprocessed_next_len {
-        return Err(InvalidProofShapeError::PreprocessedTraceWidthMismatch {
-            expected_local: preprocessed_width,
-            expected_next: expected_next_len,
-            got_local: preprocessed_local_len,
-            got_next: preprocessed_next_len,
+    // The proof carries a preprocessed opening exactly when the AIR has preprocessed columns,
+    // and it reads the next row exactly when the AIR does.
+    //
+    //     no preprocessed columns    -> no opening at all
+    //     reads the next row         -> next row present, as wide as the current row
+    //     does not read the next row -> next row absent
+    //
+    // Why: a present-but-empty next row is zero columns wide yet still a present opening.
+    // Nothing in the opening argument covers it.
+    // Its value is therefore unbound, under a full-width current row.
+    let preprocessed_next_used = !air.preprocessed_next_row_columns().is_empty();
+    let preprocessed = match &opened_values.preprocessed {
+        Some(_) if preprocessed_width == 0 => {
+            return Err(InvalidProofShapeError::UnexpectedPreprocessedValues { air: None }.into());
         }
-        .into());
-    }
+        Some(preprocessed) => {
+            let expected_next_len = if preprocessed_next_used {
+                preprocessed_width
+            } else {
+                0
+            };
+            let got_next = preprocessed.next.as_ref().map_or(0, Vec::len);
+            if preprocessed.local.len() != preprocessed_width || got_next != expected_next_len {
+                return Err(InvalidProofShapeError::PreprocessedTraceWidthMismatch {
+                    expected_local: preprocessed_width,
+                    expected_next: expected_next_len,
+                    got_local: preprocessed.local.len(),
+                    got_next,
+                }
+                .into());
+            }
+            if !preprocessed_next_used && preprocessed.next.is_some() {
+                return Err(
+                    InvalidProofShapeError::UnexpectedPreprocessedNext { air: None }.into(),
+                );
+            }
+            Some(preprocessed)
+        }
+        None if preprocessed_width > 0 => {
+            return Err(InvalidProofShapeError::PreprocessedTraceWidthMismatch {
+                expected_local: preprocessed_width,
+                expected_next: if preprocessed_next_used {
+                    preprocessed_width
+                } else {
+                    0
+                },
+                got_local: 0,
+                got_next: 0,
+            }
+            .into());
+        }
+        None => None,
+    };
 
     // Validate consistency between width, verifier key, and zk settings.
     match (preprocessed_width, preprocessed_vk) {
@@ -266,7 +300,11 @@ where
         // Case: Preprocessed columns exist.
         //
         // Valid only if VK exists, widths match, and we are NOT in zk mode.
-        (w, Some(vk)) if w == vk.width => Ok((w, Some(vk.commitment.clone()))),
+        //
+        // A zero width leaves the opening absent.
+        // The commitment then binds nothing.
+        // It is dropped rather than carried forward.
+        (w, Some(vk)) if w == vk.width => Ok((w, preprocessed.map(|p| (vk.commitment.clone(), p)))),
 
         // Catch-all for invalid states, such as:
         // - Width is 0 but VK is provided.
@@ -296,7 +334,7 @@ struct OpeningClaims<SC: StarkGenericConfig> {
 /// - `air`: the AIR being verified, read for its periodic columns and its next-row usage.
 /// - `commitments`: the commitments the proof carries.
 /// - `opened_values`: the claimed evaluations the proof carries.
-/// - `preprocessed_commit`: the preprocessed commitment, when the width in force is positive.
+/// - `preprocessed`: the preprocessed commitment and the opening it binds, when there is one.
 /// - `trace_domain`: the domain every committed matrix is defined over.
 /// - `init_trace_domain`: the trace domain before any zero-knowledge extension.
 /// - `randomized_quotient_chunks_domains`: one domain per committed quotient chunk.
@@ -314,7 +352,7 @@ fn prepare_opening_claims<SC, A>(
     air: &A,
     commitments: &Commitments<Com<SC>>,
     opened_values: &crate::proof::OpenedValues<SC::Challenge>,
-    preprocessed_commit: Option<Com<SC>>,
+    preprocessed: Option<(Com<SC>, &PreprocessedOpenedValues<SC::Challenge>)>,
     trace_domain: Domain<SC>,
     init_trace_domain: Domain<SC>,
     randomized_quotient_chunks_domains: &[Domain<SC>],
@@ -332,11 +370,11 @@ where
     }
 
     // Periodic columns are AIR logic; a malformed one must error, not panic.
-    let periodic_columns = air.periodic_columns();
-    check_periodic_column_lengths(&periodic_columns, init_trace_domain.size())?;
+    let declared = air.periodic_columns();
+    let periodic_columns = PeriodicColumns::new(&declared, init_trace_domain.size())?;
 
     let periodic_values: Vec<SC::Challenge> =
-        init_trace_domain.evaluate_periodic_columns_at(&periodic_columns, zeta);
+        init_trace_domain.evaluate_periodic_columns_at(periodic_columns, zeta);
 
     let zeta_next = init_trace_domain
         .next_point(zeta)
@@ -392,10 +430,12 @@ where
     ]);
 
     // Add the preprocessed commitment when the AIR declares preprocessed columns.
-    if let Some(preprocessed_commit) = preprocessed_commit {
-        let mut pre_points = vec![(zeta, opened_values.preprocessed_local.clone().unwrap())];
-        if !air.preprocessed_next_row_columns().is_empty() {
-            pre_points.push((zeta_next, opened_values.preprocessed_next.clone().unwrap()));
+    //
+    // The shape check that produced this pair already matched the rows to the AIR.
+    if let Some((preprocessed_commit, preprocessed)) = preprocessed {
+        let mut pre_points = vec![(zeta, preprocessed.local.clone())];
+        if let Some(next) = &preprocessed.next {
+            pre_points.push((zeta_next, next.clone()));
         }
         claims.push((preprocessed_commit, vec![(trace_domain, pre_points)]));
     }
@@ -451,11 +491,16 @@ where
     let degree_bits = *degree_bits;
 
     let pcs = config.pcs();
-    let (base_degree_bits, degree) =
-        validate_degree_bits(None, degree_bits, config.is_zk(), pcs.log_max_lde_height())?;
+    let (base_degree_bits, degree) = validate_degree_bits(
+        None,
+        degree_bits,
+        config.is_zk(),
+        pcs.log_min_trace_height(),
+        pcs.log_max_trace_height(),
+    )?;
     let trace_domain = pcs.natural_domain_for_degree(degree);
     // TODO: allow moving preprocessed commitment to preprocess time, if known in advance
-    let (preprocessed_width, preprocessed_commit) =
+    let (preprocessed_width, preprocessed) =
         process_preprocessed_trace::<SC, A>(air, opened_values, preprocessed_vk)?;
 
     // Ensure the preprocessed trace and main trace have the same height.
@@ -507,7 +552,7 @@ where
         .try_create_disjoint_domain(quotient_domain_size)
         .ok_or_else(|| InvalidProofShapeError::QuotientDomainTooLarge {
             air: None,
-            maximum: pcs.log_max_lde_height(),
+            maximum: pcs.log_max_trace_height(),
             got: quotient_domain_log_size,
         })?;
     let quotient_chunks_domains = quotient_domain.split_domains(num_quotient_chunks);
@@ -535,17 +580,28 @@ where
         .into());
     }
 
-    let main_next = !air.main_next_row_columns().is_empty();
-    let trace_next_ok = if main_next {
-        opened_values
+    // An AIR either reads the main trace on the next row or it does not.
+    //
+    //     reads the next row         -> opening present, as wide as the main trace
+    //     does not read the next row -> opening absent
+    //
+    // Why: the opening argument never covers a row the constraints do not index into.
+    // Nothing then binds its value.
+    //
+    // The two failures are reported separately, so a rejection names the rule it broke.
+    if !air.main_next_row_columns().is_empty() {
+        if opened_values
             .trace_next
             .as_ref()
-            .is_some_and(|v| v.len() == air_width)
-    } else {
-        opened_values.trace_next.is_none()
-    };
+            .is_none_or(|v| v.len() != air_width)
+        {
+            return Err(InvalidProofShapeError::TraceNextMismatch { air: None }.into());
+        }
+    } else if opened_values.trace_next.is_some() {
+        return Err(InvalidProofShapeError::UnexpectedTraceNext { air: None }.into());
+    }
+
     let valid_shape = opened_values.trace_local.len() == air_width
-        && trace_next_ok
         && opened_values.quotient_chunks.len() == num_quotient_chunks
         && opened_values
             .quotient_chunks
@@ -566,9 +622,10 @@ where
         return Err(InvalidProofShapeError::NonCanonicalOodPowWitness.into());
     }
 
-    // A preprocessed commitment is bound only when the width in force is positive.
-    let preprocessed_commit = preprocessed_commit.filter(|_| preprocessed_width > 0);
-    let preprocessed_index = preprocessed_commit
+    // The transcript binds the commitment alone.
+    // The opening travels with the claims instead.
+    let preprocessed_commit = preprocessed.as_ref().map(|(commit, _)| commit.clone());
+    let preprocessed_index = preprocessed
         .as_ref()
         .map(|_| crate::StarkOpeningLayout::new(SC::Pcs::ZK).preprocessed);
 
@@ -595,7 +652,7 @@ where
     // Soundness Error: n/|EF| where n is the number of constraints.
     let alpha = transcript.constraint_phase::<Com<SC>>(
         commitments.trace.clone(),
-        preprocessed_commit.clone(),
+        preprocessed_commit,
         public_values,
     )?;
 
@@ -622,7 +679,7 @@ where
         air,
         commitments,
         opened_values,
-        preprocessed_commit,
+        preprocessed,
         trace_domain,
         init_trace_domain,
         &randomized_quotient_chunks_domains,
@@ -660,8 +717,8 @@ where
         }
     };
     let pre_next_zeros;
-    let preprocessed_next_for_verify = match &opened_values.preprocessed_next {
-        Some(v) => Some(v.as_slice()),
+    let preprocessed_next_for_verify = match opened_values.preprocessed_next() {
+        Some(v) => Some(v),
         None if preprocessed_width > 0 => {
             pre_next_zeros = SC::Challenge::zero_vec(preprocessed_width);
             Some(pre_next_zeros.as_slice())
@@ -672,7 +729,7 @@ where
         air,
         &opened_values.trace_local,
         trace_next_slice,
-        opened_values.preprocessed_local.as_deref(),
+        opened_values.preprocessed_local(),
         preprocessed_next_for_verify,
         &periodic_values,
         public_values,

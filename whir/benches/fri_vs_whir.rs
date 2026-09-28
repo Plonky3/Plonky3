@@ -871,8 +871,7 @@ fn print_diagnostic_table() {
 
                 let whir_queries = whir_rig
                     .pcs
-                    .config
-                    .round_parameters
+                    .round_parameters()
                     .iter()
                     .map(|r| r.num_queries.to_string())
                     .join(",");
@@ -890,7 +889,7 @@ fn print_diagnostic_table() {
                 );
 
                 assert!(
-                    whir_rig.pcs.config.check_pow_bits(),
+                    whir_rig.pcs.check_pow_bits(),
                     "WHIR PoW budget below {SECURITY_LEVEL}-bit target at m = {m}"
                 );
 

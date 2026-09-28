@@ -25,7 +25,7 @@ pub use pattern::{
     Hierarchy, Interaction, InteractionPattern, Kind, Label, Length, Pattern, PatternPlayer,
     PatternState, TypeTag,
 };
-pub use state::{ProverState, VerifierState};
+pub use state::{ProverState, SymmetricSteps, VerifierState};
 pub use transcript_field::TranscriptField;
 pub use unit::{FieldUnit, Unit};
 

@@ -10,6 +10,7 @@ mod radix_2_dit;
 mod radix_2_dit_parallel;
 mod radix_2_small_batch;
 mod traits;
+mod twiddle_cache;
 mod util;
 
 pub use butterflies::*;

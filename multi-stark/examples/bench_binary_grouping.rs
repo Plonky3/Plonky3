@@ -35,7 +35,7 @@ type Mmcs = p3_merkle_tree::MerkleTreeMmcs<F, u8, Hash, Compress, 2, 32>;
 type Challenger = BinaryChallenger<F, HashChallenger<u8, Keccak256Hash, 32>>;
 
 struct Config<M> {
-    pcs: BinaryPcs<M>,
+    pcs: BinaryPcs<F, F, M, M>,
 }
 
 impl<M: MmcsTrait<F, Commitment = <Mmcs as MmcsTrait<F>>::Commitment>> MultiStarkConfig
@@ -44,7 +44,7 @@ impl<M: MmcsTrait<F, Commitment = <Mmcs as MmcsTrait<F>>::Commitment>> MultiStar
     type Val = F;
     type Challenge = F;
     type Challenger = Challenger;
-    type Pcs = BinaryPcs<M>;
+    type Pcs = BinaryPcs<F, F, M, M>;
 
     fn pcs(&self) -> &Self::Pcs {
         &self.pcs
@@ -61,7 +61,7 @@ impl<M: MmcsTrait<F, Commitment = <Mmcs as MmcsTrait<F>>::Commitment>> MultiStar
 
     fn committed_table<'a>(
         &self,
-        prover_data: &'a BinaryPcsProverData<M>,
+        prover_data: &'a BinaryPcsProverData<F, F, M>,
         table_index: usize,
     ) -> &'a Table<F> {
         prover_data.table(table_index)
@@ -75,15 +75,20 @@ fn pcs_config(log_height: usize, log_folding_factor: usize) -> BinaryPcsConfig {
         pow_bits: 0,
         security_level: 100,
     };
-    BinaryPcsConfig::try_new(log_height + 1, params)
+    BinaryPcsConfig::try_new::<F, F>(log_height + 1, params)
         .unwrap()
         .try_with_folding(log_folding_factor)
         .unwrap()
 }
 
-fn config<M>(log_height: usize, mmcs: M, log_folding_factor: usize) -> Config<M> {
+fn config<M: Clone>(log_height: usize, mmcs: M, log_folding_factor: usize) -> Config<M> {
     Config {
-        pcs: BinaryPcs::new(pcs_config(log_height, log_folding_factor), mmcs),
+        pcs: BinaryPcs::new(
+            pcs_config(log_height, log_folding_factor),
+            mmcs.clone(),
+            mmcs,
+        )
+        .unwrap(),
     }
 }
 

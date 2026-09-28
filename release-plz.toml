@@ -29,6 +29,14 @@ name = "p3-binary-pcs"
 version_group = "plonky3"
 
 [[package]]
+name = "p3-blake2s"
+version_group = "plonky3"
+
+[[package]]
+name = "p3-blake2s-air"
+version_group = "plonky3"
+
+[[package]]
 name = "p3-blake3"
 version_group = "plonky3"
 
@@ -38,6 +46,10 @@ version_group = "plonky3"
 
 [[package]]
 name = "p3-bn254"
+version_group = "plonky3"
+
+[[package]]
+name = "p3-bus"
 version_group = "plonky3"
 
 [[package]]
@@ -182,6 +194,14 @@ version_group = "plonky3"
 
 [[package]]
 name = "p3-whir"
+version_group = "plonky3"
+
+[[package]]
+name = "p3-word"
+version_group = "plonky3"
+
+[[package]]
+name = "p3-word-backend"
 version_group = "plonky3"
 
 [[package]]

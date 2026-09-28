@@ -65,8 +65,13 @@ pub enum VerifierError {
     InvalidRoundIndex { index: usize },
 
     /// Proof-of-work witness verification failed.
-    #[error("Invalid proof-of-work witness")]
-    InvalidPowWitness,
+    #[error("round {round}: query grinding witness clears fewer than {bits} bits")]
+    InvalidPowWitness {
+        /// Round whose query grind rejected the witness, `n_rounds` for the final one.
+        round: usize,
+        /// Difficulty the witness must meet.
+        bits: usize,
+    },
 
     /// A grinding witness is not the value its zero difficulty admits.
     ///
@@ -82,6 +87,19 @@ pub enum VerifierError {
     // The field is then bound to nothing: any value rides along and still verifies.
     #[error("Non-canonical proof-of-work witness in round {round} at zero difficulty")]
     NonCanonicalPowWitness { round: usize },
+
+    /// Final sumcheck data is present, but the folding schedule leaves no closing rounds.
+    ///
+    /// Raised with the other shape checks, before any transcript work.
+    //
+    // Why: with no closing rounds the final fold delegates nothing.
+    //
+    //     prover  : no closing fold -> None on the wire
+    //     verifier: no closing fold -> the field is never read
+    //
+    // The field is then bound to nothing: any value rides along and still verifies.
+    #[error("Unexpected final sumcheck data: the folding schedule leaves no closing rounds")]
+    UnexpectedFinalSumcheck,
 
     /// Proof is missing the Merkle commitment for a round.
     #[error("Proof is missing the Merkle commitment for round {round}")]
@@ -122,7 +140,9 @@ pub enum VerifierError {
 impl From<TranscriptFailure> for VerifierError {
     fn from(failure: TranscriptFailure) -> Self {
         match failure {
-            TranscriptFailure::PowWitness { .. } => Self::InvalidPowWitness,
+            TranscriptFailure::PowWitness { round, bits } => {
+                Self::InvalidPowWitness { round, bits }
+            }
             TranscriptFailure::NonCanonicalPowWitness { round } => {
                 Self::NonCanonicalPowWitness { round }
             }
@@ -131,5 +151,27 @@ impl From<TranscriptFailure> for VerifierError {
                 actual: got,
             },
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use alloc::string::ToString;
+
+    use super::VerifierError;
+    use crate::transcript::TranscriptFailure;
+
+    #[test]
+    fn pow_witness_failure_preserves_round_and_difficulty() {
+        let error = VerifierError::from(TranscriptFailure::PowWitness { round: 3, bits: 17 });
+
+        assert!(matches!(
+            error,
+            VerifierError::InvalidPowWitness { round: 3, bits: 17 }
+        ));
+        assert_eq!(
+            error.to_string(),
+            "round 3: query grinding witness clears fewer than 17 bits"
+        );
     }
 }

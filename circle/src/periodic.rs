@@ -29,7 +29,7 @@
 
 use alloc::vec::Vec;
 
-use p3_commit::{PeriodicEvaluator, PeriodicLdeTable, PolynomialSpace};
+use p3_commit::{PeriodicColumns, PeriodicEvaluator, PeriodicLdeTable, PolynomialSpace};
 use p3_field::ExtensionField;
 use p3_field::extension::ComplexExtendable;
 use p3_matrix::Matrix;
@@ -67,10 +67,6 @@ impl<F: ComplexExtendable> PeriodicEvaluator<F, CircleDomain<F>> for CirclePerio
         trace_domain: &CircleDomain<F>,
         lde_domain: &CircleDomain<F>,
     ) -> PeriodicLdeTable<F> {
-        if periodic_table.is_empty() {
-            return PeriodicLdeTable::empty();
-        }
-
         let trace_len = trace_domain.size();
         let log_blowup = lde_domain
             .log_n
@@ -80,18 +76,14 @@ impl<F: ComplexExtendable> PeriodicEvaluator<F, CircleDomain<F>> for CirclePerio
             .checked_shl(log_blowup as u32)
             .expect("blowup overflow when computing 1 << log_blowup");
 
-        for col in periodic_table {
-            let period = col.len();
-            assert!(
-                period > 0 && period.is_power_of_two(),
-                "periodic column length must be a non-zero power of 2, got {period}",
-            );
-            assert!(
-                trace_len.is_multiple_of(period),
-                "trace domain size ({trace_len}) must be divisible by periodic column length ({period})",
-            );
-        }
-        let max_period = periodic_table.iter().map(|c| c.len()).max().unwrap();
+        // A malformed declaration is a bug in the AIR the prover was handed, not proof data.
+        let periodic_table =
+            PeriodicColumns::new(periodic_table, trace_len).unwrap_or_else(|err| panic!("{err}"));
+
+        // No declared column means no table, and no longest period to pad up to.
+        let Some(max_period) = periodic_table.max_period() else {
+            return PeriodicLdeTable::empty();
+        };
 
         let log_max_period = log2_strict_usize(max_period);
         let log_repetitions = log2_strict_usize(trace_len / max_period);
@@ -115,7 +107,7 @@ impl<F: ComplexExtendable> PeriodicEvaluator<F, CircleDomain<F>> for CirclePerio
         // Build the result in column-major order first, then transpose to row-major
         let mut columns: Vec<Vec<F>> = Vec::with_capacity(num_cols);
 
-        for col in periodic_table {
+        for col in periodic_table.as_slice() {
             let period = col.len();
 
             // Pad column to max_period by repeating values
@@ -154,22 +146,11 @@ impl<F: ComplexExtendable> PeriodicEvaluator<F, CircleDomain<F>> for CirclePerio
         trace_domain: &CircleDomain<F>,
         point: EF,
     ) -> Vec<EF> {
-        let trace_len = trace_domain.size();
-        periodic_table
-            .iter()
-            .map(|col| {
-                let period = col.len();
-                assert!(
-                    period > 0 && period.is_power_of_two(),
-                    "periodic column length must be a non-zero power of 2, got {period}",
-                );
-                assert!(
-                    trace_len.is_multiple_of(period),
-                    "trace domain size ({trace_len}) must be divisible by periodic column length ({period})",
-                );
-                PolynomialSpace::evaluate_periodic_column_at(trace_domain, col, point)
-            })
-            .collect()
+        // A malformed declaration is a bug in the AIR, so there is no proof-shape error to raise.
+        let periodic_table = PeriodicColumns::new(periodic_table, trace_domain.size())
+            .unwrap_or_else(|err| panic!("{err}"));
+
+        PolynomialSpace::evaluate_periodic_columns_at(trace_domain, periodic_table, point)
     }
 }
 

@@ -24,6 +24,7 @@ tracing.workspace = true
 
 [dev-dependencies]
 p3-baby-bear = { path = "../baby-bear" }
+p3-binary-field = { path = "../binary-field" }
 p3-challenger = { path = "../challenger" }
 p3-commit = { path = "../commit" }
 p3-dft = { path = "../dft" }

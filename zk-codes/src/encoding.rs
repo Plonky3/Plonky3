@@ -3,7 +3,7 @@ use alloc::vec::Vec;
 use p3_field::Field;
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
-use rand::Rng;
+use rand::{CryptoRng, Rng};
 
 /// A randomized encoding such that any `t` codeword positions reveal nothing about the message.
 ///
@@ -38,7 +38,17 @@ pub trait ZkEncoding<F: Field> {
     /// - The message space is an encoding invariant.
     /// - Constrained message spaces (e.g. punctured codes) need a non-trivial draw.
     /// - Callers stay agnostic to the field's sampling bound.
-    fn sample_message<R: Rng>(&self, rng: &mut R) -> Vec<F>;
+    ///
+    /// # Why a cryptographic generator
+    ///
+    /// The draw exists to produce hiding material.
+    ///
+    /// An adversary who can predict the stream reconstructs the mask and strips the hiding.
+    ///
+    /// Encoding and simulation keep the looser requirement.
+    ///
+    /// Those two have legitimate deterministic uses, such as fixed test vectors.
+    fn sample_message<R: CryptoRng>(&self, rng: &mut R) -> Vec<F>;
 
     /// Samples encoding randomness from this encoding's randomness space.
     ///
@@ -52,7 +62,13 @@ pub trait ZkEncoding<F: Field> {
     ///   randomness (e.g. an HVZK base case).
     /// - Those callers draw it here and encode with the explicit-randomness
     ///   entry point, retaining the vector.
-    fn sample_randomness<R: Rng>(&self, rng: &mut R) -> Vec<F>;
+    ///
+    /// # Why a cryptographic generator
+    ///
+    /// The vector is hiding material, exactly like the message draw above.
+    ///
+    /// A predictable stream therefore undoes the masking.
+    fn sample_randomness<R: CryptoRng>(&self, rng: &mut R) -> Vec<F>;
 
     /// Encodes a message with random masking.
     fn encode<R: Rng>(&self, msg: &[F], rng: &mut R) -> Self::Codeword;

@@ -74,7 +74,9 @@ pub(crate) fn fold_shifted<L: Lanes>(t0: L, t1: L) -> L {
     t0.xor(raised.xor(folded))
 }
 
-/// A multiplier held fixed across a slice, in every lane, beside its shifted companion.
+/// A multiplier beside its shifted companion, one lane of each per lane of the argument.
+///
+/// [`SplitScalar::new`] holds one multiplier fixed across a slice, repeated in every lane.
 ///
 /// # Algorithm
 ///
@@ -122,9 +124,9 @@ pub(crate) fn fold_shifted<L: Lanes>(t0: L, t1: L) -> L {
 /// Neither term reaches `x^128`, so nothing spills over the top a second time.
 #[derive(Clone, Copy)]
 pub(crate) struct SplitScalar<L> {
-    /// The multiplier, repeated in every lane.
+    /// The multiplier, lane by lane.
     t: L,
-    /// The multiplier shifted by `x^64` and reduced, repeated in every lane.
+    /// Each lane of the multiplier shifted by `x^64` and reduced.
     t_x64: L,
 }
 
@@ -137,6 +139,23 @@ impl<L: Lanes> SplitScalar<L> {
         // The companion is one Horner step with nothing underneath the shifted part.
         let t_x64 = fold_shifted(L::zero(), t);
 
+        Self { t, t_x64 }
+    }
+
+    /// A multiplier whose lanes may differ, given beside its companion.
+    ///
+    /// Every lane of `t_x64` must hold the same lane of `t` scaled by `x^64` and reduced.
+    /// The companion is linear in the multiplier, so it can be carried along a sum of them.
+    #[cfg(any(
+        test,
+        all(
+            target_arch = "x86_64",
+            target_feature = "vpclmulqdq",
+            target_feature = "avx512f"
+        )
+    ))]
+    #[inline(always)]
+    pub(crate) const fn from_parts(t: L, t_x64: L) -> Self {
         Self { t, t_x64 }
     }
 
@@ -285,6 +304,18 @@ mod tests {
             let companion = fold_shifted(Model::<LANES>::zero(), Model::broadcast(scalar));
             let want = clmul::poly_mul_128(scalar, 1 << 64);
             prop_assert_eq!(companion, Model::broadcast(want));
+        }
+
+        /// A multiplier given lane by lane, beside its companion, scales each lane by its own.
+        #[test]
+        fn a_multiplier_from_its_parts_scales_each_lane_by_its_own(
+            scalars in any::<[u128; LANES]>(),
+            values in any::<[u128; LANES]>(),
+        ) {
+            let t = Model(scalars);
+            let got = SplitScalar::from_parts(t, fold_shifted(Model::zero(), t)).apply(Model(values));
+            let want = core::array::from_fn(|i| clmul::poly_mul_128(scalars[i], values[i]));
+            prop_assert_eq!(got, Model(want));
         }
     }
 }

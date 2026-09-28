@@ -1,6 +1,6 @@
 [package]
 name = "p3-keccak-air"
-description = "An AIR for the Keccak-f permutation, assuming a field size between 2^16 and 2^32."
+description = "AIRs for the Keccak-f permutation, over fields of size between 2^16 and 2^32 or of characteristic 2."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -24,6 +24,7 @@ tracing.workspace = true
 
 [dev-dependencies]
 p3-baby-bear = { path = "../baby-bear" }
+p3-binary-field = { path = "../binary-field" }
 p3-challenger = { path = "../challenger" }
 p3-circle = { path = "../circle" }
 p3-commit = { path = "../commit" }

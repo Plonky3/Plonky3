@@ -6,6 +6,41 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.8.0] - 2026-09-23
+### Merged PRs
+- Ci: fail on unused dependencies, and drop the ones already there (#2029)
+- Wire STIR into the full proving pipeline (#2037)
+- Perf(stir): committed round-0 oracle with single-row input openings (#2041)
+- Fix(circle): account for transition selectors in quotient sizing (#2046)
+- Fix(security,fri): accounting and grinding hygiene fixes (#2048)
+- Refactor: rename fixtures according to versioning (#2058)
+- Feat(fri)!: drive the FRI transcript through the typed Fiat-Shamir layer (#2035)
+- Refactor(commit): separate univariate STARK capabilities from PCS (#2059)
+- Feat(fri)!: drive the FRI PCS transcript through the typed Fiat-Shamir layer (#2086)
+- Feat(circle)!: drive the Circle PCS transcript through the typed Fiat-Shamir layer (#2087)
+- Feat(stir)!: drive the STIR transcript through the typed Fiat-Shamir layer (#2088)
+- Feat(uni-stark)!: drive the uni-STARK transcript through the typed Fiat-Shamir layer (#2090)
+- Feat(security): integrate legacy conjectured regime (#2064)
+- Fix(security)!: enforce PCS budgets and compose multi-STARK soundness (#2100)
+- Fix(security): reject non-canonical grinding witnesses at zero difficulty (#2106)
+- Test(challenger): assert no two protocols share a transcript seed (#2108)
+- Feat(security): check recorded grinding difficulties against the security model (#2109)
+- Feat(pcs)!: add batching grinding to STIR and Circle (#2112)
+- Perf(ci): speed up slow test-suite tests (#2118)
+- Fix(transcript): address the review follow-ups from the typed-transcript stack (#2117)
+- Fix(stir)!: seed the batching phase at every difficulty (#2121)
+- Review: couple tweaks here and there (#2120)
+- Feat(sumcheck)!: drive the ring-switching transcript through the typed Fiat-Shamir layer (#2122)
+- Refactor(fri)!: derive the commit-round shape from configuration rather than the proof (#2125)
+- Feat(air,multi-stark)!: public inputs bound by trace position (#1947)
+- Perf(uni-stark,batch-stark): pack only the repeating period of periodic columns (#2197)
+- Perf(challenger)!: squeeze the transcript before a proof-of-work search (#2199)
+- Fix(uni-stark,batch-stark): reject a present-but-empty preprocessed_next opening (#2256)
+- Fix(uni-stark,circle): reject degree_bits below the PCS minimum trace height (#2257)
+- Refactor(commit): own the periodic column shape rule where every consumer can reach it (#2276)
+- Refactor!(uni-stark,batch-stark,commit): group the preprocessed openings and name the trace-height bounds as a pair (#2281)
+- Feat(security): use the DKT26 Johnson MCA bound (#2282)
+
 ## [0.7.0] - 2026-09-04
 ### Merged PRs
 - Perf: fixed-width binary serialization for field elements (#1988)

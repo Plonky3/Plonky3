@@ -96,28 +96,62 @@ impl<F: TowerLevel, Inner: CanObserve<u8>> CanObserve<F> for BinaryChallenger<F,
     }
 }
 
-impl<F, const N: usize, Inner: CanObserve<u8>> CanObserve<Hash<F, u8, N>>
+impl<F, G, const N: usize, Inner: CanObserve<u8>> CanObserve<Hash<G, u8, N>>
     for BinaryChallenger<F, Inner>
 {
-    fn observe(&mut self, values: Hash<F, u8, N>) {
+    fn observe(&mut self, values: Hash<G, u8, N>) {
         self.inner.observe_slice(values.as_ref());
     }
 }
 
-impl<F, const N: usize, Inner: CanObserve<u8>> CanObserve<&MerkleCap<F, [u8; N]>>
+impl<F, G, const N: usize, Inner: CanObserve<u8>> CanObserve<&MerkleCap<G, [u8; N]>>
     for BinaryChallenger<F, Inner>
 {
-    fn observe(&mut self, cap: &MerkleCap<F, [u8; N]>) {
+    fn observe(&mut self, cap: &MerkleCap<G, [u8; N]>) {
         for digest in cap.roots() {
             self.inner.observe_slice(digest);
         }
     }
 }
 
-impl<F, const N: usize, Inner: CanObserve<u8>> CanObserve<MerkleCap<F, [u8; N]>>
+impl<F, G, const N: usize, Inner: CanObserve<u8>> CanObserve<MerkleCap<G, [u8; N]>>
     for BinaryChallenger<F, Inner>
 {
-    fn observe(&mut self, cap: MerkleCap<F, [u8; N]>) {
+    fn observe(&mut self, cap: MerkleCap<G, [u8; N]>) {
+        self.observe(&cap);
+    }
+}
+
+/// Word digests are absorbed as the little-endian bytes of each word, in order.
+///
+/// The digest's own field is free of this challenger's, as it is for a byte digest.
+/// A commitment over one level can then be bound into a transcript over another.
+impl<F, G, const N: usize, Inner: CanObserve<u8>> CanObserve<Hash<G, u64, N>>
+    for BinaryChallenger<F, Inner>
+{
+    fn observe(&mut self, values: Hash<G, u64, N>) {
+        for value in values {
+            self.inner.observe_slice(&value.to_le_bytes());
+        }
+    }
+}
+
+impl<F, G, const N: usize, Inner: CanObserve<u8>> CanObserve<&MerkleCap<G, [u64; N]>>
+    for BinaryChallenger<F, Inner>
+{
+    fn observe(&mut self, cap: &MerkleCap<G, [u64; N]>) {
+        for digest in cap.roots() {
+            for value in digest {
+                self.inner.observe_slice(&value.to_le_bytes());
+            }
+        }
+    }
+}
+
+impl<F, G, const N: usize, Inner: CanObserve<u8>> CanObserve<MerkleCap<G, [u64; N]>>
+    for BinaryChallenger<F, Inner>
+{
+    fn observe(&mut self, cap: MerkleCap<G, [u64; N]>) {
         self.observe(&cap);
     }
 }
@@ -431,6 +465,35 @@ mod tests {
         hash_bytes.observe_slice(&digest);
         let mut cap_bytes = mk_inner();
         cap_bytes.observe_slice(&[1, 2, 3, 4, 5, 6, 7, 8]);
+
+        for _ in 0..32 {
+            let expected: u8 = hash_bytes.sample();
+            assert_eq!(from_hash.inner.sample(), expected);
+
+            let expected: u8 = cap_bytes.sample();
+            assert_eq!(from_cap_ref.inner.sample(), expected);
+            assert_eq!(from_cap.inner.sample(), expected);
+        }
+    }
+
+    #[test]
+    fn observing_word_digests_matches_observing_their_little_endian_bytes() {
+        let digest = [0x0807_0605_0403_0201_u64, 0x100f_0e0d_0c0b_0a09];
+        let second = [0x1817_1615_1413_1211_u64, 0x201f_1e1d_1c1b_1a19];
+
+        let mut from_hash = mk::<BinaryField128>();
+        from_hash.observe(Hash::<BinaryField128, u64, 2>::from(digest));
+
+        let cap = MerkleCap::<BinaryField128, [u64; 2]>::new(vec![digest, second]);
+        let mut from_cap_ref = mk::<BinaryField128>();
+        from_cap_ref.observe(&cap);
+        let mut from_cap = mk::<BinaryField128>();
+        from_cap.observe(cap);
+
+        let mut hash_bytes = mk_inner();
+        hash_bytes.observe_slice(&core::array::from_fn::<u8, 16, _>(|i| i as u8 + 1));
+        let mut cap_bytes = mk_inner();
+        cap_bytes.observe_slice(&core::array::from_fn::<u8, 32, _>(|i| i as u8 + 1));
 
         for _ in 0..32 {
             let expected: u8 = hash_bytes.sample();

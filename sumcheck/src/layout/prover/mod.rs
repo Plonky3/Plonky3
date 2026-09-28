@@ -5,8 +5,10 @@
 //! - Prefix prover: SVO-accumulator preprocessing, packed handoff.
 //! - Suffix prover: SVO-accumulator preprocessing, unpacked handoff.
 
+mod banked;
 mod claims;
 mod prefix;
+mod residual;
 mod suffix;
 
 use alloc::vec::Vec;
@@ -19,17 +21,42 @@ use p3_field::{ExtensionField, Field};
 use p3_matrix::dense::DenseMatrix;
 use p3_multilinear_util::point::Point;
 pub use prefix::PrefixProver;
+pub use residual::SuffixResidualProver;
 pub use suffix::SuffixProver;
 
-use crate::SumcheckData;
-use crate::commit::commit_base;
+use crate::commit::{commit_base, commit_borrowed_base};
 use crate::layout::transcript::{
     BatchingShape, LayoutBinding, OpeningProverTranscript, OpeningShape, PointSource,
     VirtualProverTranscript, VirtualShape, prover_batching_challenge,
 };
 use crate::layout::{LayoutStrategy, Table, Witness};
-use crate::strategy::{SumcheckProver, VariableOrder};
+use crate::strategy::{Basis, SumcheckProver, VariableOrder};
 use crate::table::{OpeningEvals, OpeningRequest, TableShape};
+use crate::transcript::{ProverTranscript, SumcheckShape};
+use crate::{SumcheckData, extrapolate_01inf};
+
+/// The description an opening of one batch at a caller-fixed point plays.
+///
+/// A caller-fixed point contributes no step, so the description holds no challenge.
+fn given_opening_shape<F, EF, L>(
+    layout: &L,
+    table_idx: usize,
+    batch: &OpeningRequest,
+) -> OpeningShape
+where
+    F: Field,
+    EF: ExtensionField<F>,
+    L: Layout<F, EF>,
+{
+    OpeningShape::new(
+        LayoutBinding::new(layout.num_variables(), L::strategy(), layout.table_shapes()),
+        table_idx,
+        layout.num_variables_table(table_idx),
+        batch.current(),
+        batch.next(),
+        PointSource::Given,
+    )
+}
 
 /// Stacked-sumcheck prover layout
 pub trait Layout<F: Field, EF: ExtensionField<F>>: Sized {
@@ -38,6 +65,24 @@ pub trait Layout<F: Field, EF: ExtensionField<F>>: Sized {
 
     /// Builds a witness structure for this layout from source tables.
     fn new_witness(tables: Vec<Table<F>>, folding: usize) -> Witness<F>;
+
+    /// Lays the witness out in this layout's variable order, inside the committed message.
+    ///
+    /// The message arrives zeroed and holds one cell per stacked evaluation. Every cell an
+    /// implementation leaves untouched is committed as zero.
+    fn write_message(witness: &Witness<F>, folding: usize, message: &mut [F]);
+
+    /// The committed message itself, where the witness already holds it in this layout's order.
+    ///
+    /// The encoder then reads it where it lies, instead of from a copy the layout writes.
+    ///
+    /// A returned slice is committed in place of what [`Self::write_message`] writes.
+    ///
+    /// It must therefore equal, cell for cell, what that writes into a zeroed buffer of one cell
+    /// per stacked evaluation.
+    fn borrowed_message(_witness: &Witness<F>) -> Option<&[F]> {
+        None
+    }
 
     /// Returns the shared claim state recorded against the stacked polynomial.
     fn claims(&self) -> &StackedClaims<F, EF>;
@@ -73,13 +118,18 @@ pub trait Layout<F: Field, EF: ExtensionField<F>>: Sized {
         MT: Mmcs<F>,
     {
         // Encode and Merkle-commit the stacked polynomial in the mode's variable order.
-        let (root, prover_data) = commit_base(
-            Self::variable_order(),
-            encoder,
-            mmcs,
-            &witness.poly,
-            folding,
-            starting_log_inv_rate,
+        let (root, prover_data) = Self::borrowed_message(&witness).map_or_else(
+            || {
+                commit_base(
+                    encoder,
+                    mmcs,
+                    witness.num_variables(),
+                    folding,
+                    starting_log_inv_rate,
+                    |message| Self::write_message(&witness, folding, message),
+                )
+            },
+            |message| commit_borrowed_base(encoder, mmcs, folding, starting_log_inv_rate, message),
         );
 
         // The witness is consumed into the layout once its codeword is committed.
@@ -256,17 +306,7 @@ pub trait Layout<F: Field, EF: ExtensionField<F>>: Sized {
             "opening schedule must name at least one column"
         );
 
-        // A caller-fixed point contributes no step.
-        //
-        // This description therefore holds no challenge.
-        let shape = OpeningShape::new(
-            LayoutBinding::new(self.num_variables(), Self::strategy(), self.table_shapes()),
-            table_idx,
-            self.num_variables_table(table_idx),
-            batch.current(),
-            batch.next(),
-            PointSource::Given,
-        );
+        let shape = given_opening_shape(self, table_idx, batch);
         let mut transcript = OpeningProverTranscript::<Ch, F, EF>::new(challenger, shape);
 
         // Evaluate at the supplied point, then bind what was found.
@@ -277,6 +317,60 @@ pub trait Layout<F: Field, EF: ExtensionField<F>>: Sized {
         transcript.finish();
 
         evals
+    }
+
+    /// Records opening claims at a given point from evaluations the caller already holds.
+    ///
+    /// Plays exactly the transcript [`Self::eval_at`] plays. Only the source of the
+    /// evaluations differs: they are supplied rather than read off the columns.
+    ///
+    /// # Soundness
+    ///
+    /// A supplied evaluation is bound like any other, and the verifier recomputes its own.
+    /// A wrong one therefore yields a proof that does not verify, never one that does.
+    ///
+    /// # Arguments
+    ///
+    /// - Index of the table whose columns are opened.
+    /// - Column indices opened directly and through the successor view.
+    /// - Local-frame opening point.
+    /// - Evaluations, in the order [`Self::record_opening`] returns them.
+    /// - Sponge of the surrounding protocol, borrowed for this call.
+    ///
+    /// # Panics
+    ///
+    /// When the request names no column at all, or the evaluations do not match its shape.
+    fn eval_at_known<Ch>(
+        &mut self,
+        table_idx: usize,
+        batch: &OpeningRequest,
+        point: &Point<EF>,
+        evals: &OpeningEvals<EF>,
+        challenger: &mut Ch,
+    ) where
+        F: TranscriptField,
+        Ch: FieldChallenger<F> + GrindingChallenger<Witness = F>,
+    {
+        // Opening nothing would silently record an empty claim.
+        assert!(
+            !batch.is_empty(),
+            "opening schedule must name at least one column"
+        );
+        // One evaluation per column the request names, in the same two groups.
+        assert!(
+            batch.has_same_shape(evals),
+            "one evaluation per opened column, direct and successor alike"
+        );
+
+        let shape = given_opening_shape(self, table_idx, batch);
+        let mut transcript = OpeningProverTranscript::<Ch, F, EF>::new(challenger, shape);
+
+        // Record the supplied evaluations against the point, then bind them.
+        self.record_opening_known(table_idx, batch, point, evals);
+        transcript.evaluations(evals);
+
+        // Require that every described step was played.
+        transcript.finish();
     }
 
     /// Evaluates the selected columns of one table and records the resulting claim.
@@ -304,6 +398,35 @@ pub trait Layout<F: Field, EF: ExtensionField<F>>: Sized {
         batch: &OpeningRequest,
         point: &Point<EF>,
     ) -> OpeningEvals<EF>;
+
+    /// Records opening claims for the selected columns of one table from known evaluations.
+    ///
+    /// The arithmetic half of [`Self::eval_at_known`], with no transcript of its own.
+    ///
+    /// # Overview
+    ///
+    /// - Each evaluation is taken as the claim its column's pass would have produced.
+    /// - The claim is appended to this table's list in insertion order, as
+    ///   [`Self::record_opening`] appends it.
+    ///
+    /// # Arguments
+    ///
+    /// - Index of the table whose columns are opened.
+    /// - Column indices opened directly and through the successor view.
+    /// - Local-frame opening point, one coordinate per table variable.
+    /// - Evaluations, in the order [`Self::record_opening`] returns them.
+    ///
+    /// # Panics
+    ///
+    /// When the layout runs preprocessing rounds: those rounds read per-round residuals
+    /// of the column, which an evaluation alone does not carry.
+    fn record_opening_known(
+        &mut self,
+        table_idx: usize,
+        batch: &OpeningRequest,
+        point: &Point<EF>,
+        evals: &OpeningEvals<EF>,
+    );
 
     /// Records an out-of-domain evaluation of the full stacked polynomial.
     ///
@@ -433,6 +556,63 @@ pub trait Layout<F: Field, EF: ExtensionField<F>>: Sized {
     where
         F: TranscriptField,
         Ch: FieldChallenger<F> + GrindingChallenger<Witness = F>;
+}
+
+/// Draws the batching challenge and plays the preprocessing rounds of a stacked layout.
+///
+/// Both binding modes play these rounds; only the residual handoff that follows differs.
+///
+/// # Returns
+///
+/// - Batching challenge that weights the recorded openings.
+/// - Running claimed sum after the preprocessing rounds.
+/// - Folding challenges, in sampling order.
+fn preprocess<F, EF, L, Ch>(
+    layout: &L,
+    sumcheck_data: &mut SumcheckData<F, EF>,
+    pow_bits: usize,
+    challenger: &mut Ch,
+) -> (EF, EF, Point<EF>)
+where
+    F: TranscriptField,
+    EF: ExtensionField<F>,
+    L: Layout<F, EF>,
+    Ch: FieldChallenger<F> + GrindingChallenger<Witness = F>,
+{
+    let claims = layout.claims();
+
+    // Sanity: preprocessing cannot consume more rounds than the stacked arity.
+    assert!(claims.folding <= claims.num_variables);
+
+    // The batching challenge seeds a sub-transcript of its own.
+    //
+    // Both claim counts therefore reach the sponge before the challenge is drawn.
+    let alpha: EF = layout.batching_challenge(challenger);
+
+    // Batch every recorded claim's accumulators under the drawn challenge.
+    let accumulators = claims.batched_accumulators(alpha);
+
+    // Drive the preprocessing rounds from the accumulators.
+    let mut sum = claims.sum(alpha);
+    let mut rs = Vec::new();
+
+    // One driver spans the whole preprocessing batch, so the description is walked exactly once.
+    let shape = SumcheckShape::new(claims.folding, pow_bits, Basis::Evaluation);
+    let mut transcript = ProverTranscript::<Ch, F, EF>::new(challenger, shape);
+
+    for _ in 0..claims.folding {
+        let (c0, c_inf) = accumulators.round_coefficients(&rs);
+
+        // Observe coefficients, sample r, extrapolate the running sum.
+        let r = sumcheck_data.observe_and_sample(&mut transcript, c0, c_inf);
+        sum = extrapolate_01inf(c0, sum - c0, c_inf, r);
+        rs.push(r);
+    }
+
+    // Require that every described step was played.
+    transcript.finish();
+
+    (alpha, sum, Point::new(rs))
 }
 
 #[cfg(test)]
@@ -712,7 +892,7 @@ pub(super) mod test_utils {
         let mut prover_challenger = challenger();
         let stacked_num_variables = witness.num_variables();
         // Snapshot the stacked polynomial before the witness is consumed.
-        let stacked_poly = witness.poly().clone();
+        let stacked_poly = witness.stacked_poly();
 
         // Prover: build the selected layout, record openings, add a virtual claim.
         let mut prover_state = L::from_witness(witness);
@@ -896,7 +1076,7 @@ mod tests {
     use crate::layout::prover::test_utils::{
         FOLDING, build_tables, run_roundtrip_test, table_shapes, tables_from_shape,
     };
-    use crate::layout::{Layout, Verifier};
+    use crate::layout::{Layout, SuffixLayoutPlan, SuffixTableSource, Verifier};
     use crate::strategy::Basis;
     use crate::table::{OpeningBatch, OpeningEvals};
     use crate::tests::*;
@@ -1023,6 +1203,74 @@ mod tests {
     }
 
     #[test]
+    fn direct_fill_roundtrips_through_the_suffix_prover() {
+        // Build the commitment stack through the ingestion API rather than dense restacking.
+        let tables = build_tables();
+        let plan =
+            SuffixLayoutPlan::new(tables.iter().map(|table| table.shape()).collect(), FOLDING)
+                .expect("the fixture dimensions fit the suffix layout");
+        let sources = tables
+            .iter()
+            .map(|table| table as &dyn SuffixTableSource<F>)
+            .collect::<Vec<_>>();
+        let filled = plan
+            .fill(&sources)
+            .expect("every dense source writes each declared column");
+
+        // Dense suffix-round tables are derived from the committed stack itself.
+        let witness = filled.into_witness();
+        let shapes = witness.table_shapes();
+        run_roundtrip_test::<SuffixProver<F, EF>>(witness, &shapes, ASCENDING_POLYS);
+    }
+
+    #[test]
+    fn prefix_handoff_narrower_than_one_packed_element() {
+        // Two columns leave one selector variable after preprocessing.
+        let witness =
+            PrefixProver::<F, EF>::new_witness(tables_from_shape(&[(FOLDING, 2)]), FOLDING);
+        let stacked_num_variables = witness.num_variables();
+        assert_eq!(stacked_num_variables, FOLDING + 1);
+
+        // Keep the original polynomial for an independent evaluation.
+        let stacked_poly = witness.stacked_poly();
+
+        // Exercise both concrete and virtual claims.
+        let mut prover_challenger = challenger();
+        let mut prover_state = PrefixProver::<F, EF>::from_witness(witness);
+        let batch = OpeningBatch::new(vec![0, 1], Vec::new());
+        let _ = prover_state.eval(0, &batch, &mut prover_challenger);
+        let _ = prover_state.add_virtual_eval(&mut prover_challenger);
+
+        // Fold until only the selector variable remains.
+        let mut preprocessing_data = SumcheckData::<F, EF>::default();
+        let (mut prover, mut prover_randomness) =
+            prover_state.into_sumcheck(&mut preprocessing_data, 0, &mut prover_challenger);
+        let residual = stacked_num_variables - FOLDING;
+        assert_eq!(prover.num_variables(), residual);
+
+        // Bind the scalar residual.
+        let mut residual_data = SumcheckData::<F, EF>::default();
+        prover_randomness.extend(&prover.compute_sumcheck_polynomials(
+            &mut residual_data,
+            &mut prover_challenger,
+            residual,
+            0,
+            None,
+        ));
+
+        // The folded constant must equal direct evaluation at the sampled point.
+        let folded = prover
+            .evals()
+            .as_constant()
+            .expect("all variables were bound");
+        let expected = stacked_poly.eval_base(&prover_randomness);
+        assert_eq!(
+            folded, expected,
+            "the scalar handoff must preserve the original evaluation"
+        );
+    }
+
+    #[test]
     fn roundtrip_non_ascending_polys() {
         run_roundtrip_test::<PrefixProver<F, EF>>(
             PrefixProver::<F, EF>::new_witness(build_tables(), FOLDING),
@@ -1045,7 +1293,7 @@ mod tests {
         let shapes = table_shapes();
         let stacked_num_variables = witness.num_variables();
         // Keep a copy of the stacked polynomial to cross-check the final fold.
-        let stacked_poly = witness.poly().clone();
+        let stacked_poly = witness.stacked_poly();
         let strategy = SuffixProver::<F, EF>::strategy();
 
         // Mixed schedule: each tuple is (table, current columns, next columns).
@@ -1178,7 +1426,7 @@ mod tests {
         let witness = PrefixProver::<F, EF>::new_witness(build_tables(), FOLDING);
         let shapes = table_shapes();
         let stacked_num_variables = witness.num_variables();
-        let stacked_poly = witness.poly().clone();
+        let stacked_poly = witness.stacked_poly();
         let strategy = PrefixProver::<F, EF>::strategy();
 
         // Mixed schedule: each tuple is (table, current columns, next columns).
@@ -1700,5 +1948,43 @@ mod tests {
             run_shape_test::<PrefixProver<F, EF>>(&shape, &schedule);
             run_shape_test::<SuffixProver<F, EF>>(&shape, &schedule);
         }
+    }
+
+    #[test]
+    fn preprocessing_transcripts_are_pinned() {
+        // Invariant: every message the openings, the preprocessing rounds and the
+        // residual rounds send, and every challenge they draw, stays the same value
+        // over this fixed run.
+        //
+        // Fixture state: the mixed schedule (both direct and successor openings on
+        // both fixture tables), two virtual claims (so the virtual alpha offset moves
+        // past one claim's worth of powers), then the residual handoff folded to a
+        // constant and one further challenge drawn.
+        //
+        // Grinding stays off: under `--features parallel`, a PoW search may return
+        // any valid witness, so a pinned value would be flaky with grinding on.
+        //
+        // The constants below depend on the seeded `SmallRng` streams `challenger()`
+        // and `build_tables()` draw from.
+        fn run<L: Layout<F, EF>>() -> [u32; 4] {
+            let mut prover = L::from_witness(L::new_witness(build_tables(), FOLDING));
+            let mut ch = challenger();
+            for (table_idx, batch) in mixed_schedule() {
+                prover.eval(table_idx, &batch, &mut ch);
+            }
+            let _ = prover.add_virtual_eval(&mut ch);
+            let _ = prover.add_virtual_eval(&mut ch);
+            let mut data = SumcheckData::<F, EF>::default();
+            let (mut residual, _) = prover.into_sumcheck(&mut data, 0, &mut ch);
+            transcript_fingerprint(&mut residual, &mut ch)
+        }
+        assert_eq!(
+            run::<PrefixProver<F, EF>>(),
+            [1375370533, 1850241826, 503846959, 749811634]
+        );
+        assert_eq!(
+            run::<SuffixProver<F, EF>>(),
+            [1607413650, 68580243, 436414694, 1835455702]
+        );
     }
 }

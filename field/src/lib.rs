@@ -15,6 +15,7 @@ pub mod integers;
 pub mod op_assign_macros;
 mod packed;
 mod sqrt;
+mod subfield;
 mod vectorized;
 
 pub use array::*;
@@ -29,4 +30,5 @@ pub use packed::*;
 #[doc(hidden)]
 pub use paste;
 pub use sqrt::{tonelli_shanks, tonelli_shanks_two_adic};
+pub use subfield::HasSubfield;
 pub use vectorized::*;

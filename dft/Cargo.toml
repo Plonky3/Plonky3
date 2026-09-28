@@ -31,6 +31,7 @@ p3-monty-31 = { path = "../monty-31" }
 criterion.workspace = true
 proptest.workspace = true
 rand.workspace = true
+rayon.workspace = true
 
 [[bench]]
 name = "fft"

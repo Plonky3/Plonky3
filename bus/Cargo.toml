@@ -1,0 +1,54 @@
+[package]
+name = "p3-bus"
+description = "Binary-native multiset bus primitives"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[features]
+default = ["diagnostics"]
+# Out-of-circuit bus diagnostics. No proving or verifying path reads them, so a
+# production build can turn them off without changing a proof or a transcript.
+diagnostics = []
+
+[dependencies]
+p3-air.workspace = true
+p3-challenger.workspace = true
+p3-field.workspace = true
+p3-lookup.workspace = true
+p3-multilinear-util.workspace = true
+p3-security.workspace = true
+p3-sumcheck.workspace = true
+p3-util.workspace = true
+
+hashbrown.workspace = true
+num-bigint.workspace = true
+serde = { workspace = true, features = ["derive", "alloc"] }
+thiserror.workspace = true
+
+[dev-dependencies]
+p3-baby-bear = { path = "../baby-bear" }
+p3-binary-field = { path = "../binary-field" }
+p3-challenger = { path = "../challenger", features = ["test-utils"] }
+p3-keccak = { path = "../keccak" }
+p3-matrix = { path = "../matrix" }
+
+criterion.workspace = true
+proptest.workspace = true
+rand.workspace = true
+rand_xoshiro.workspace = true
+
+[[bench]]
+name = "product_gkr"
+harness = false
+
+[[bench]]
+name = "factor"
+harness = false
+
+[lints]
+workspace = true

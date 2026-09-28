@@ -4,31 +4,30 @@ use alloc::vec::Vec;
 
 use p3_challenger::fs::TranscriptField;
 use p3_challenger::{FieldChallenger, GrindingChallenger};
-use p3_field::{ExtensionField, Field, PackedFieldExtension, PackedValue, dot_product};
+use p3_field::{ExtensionField, Field, PackedFieldExtension, PackedValue};
 use p3_maybe_rayon::prelude::*;
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
 use p3_multilinear_util::split_eq::SplitEq;
 use p3_util::log2_strict_usize;
 
-use crate::lagrange::lagrange_weights_01inf_multi;
+use crate::commit::write_stacked_message;
 use crate::layout::opening::Opening;
-use crate::layout::prover::{Layout, StackedClaims};
+use crate::layout::prover::{Layout, StackedClaims, preprocess};
 use crate::layout::witness::Table;
 use crate::layout::{LayoutStrategy, ProverMultiClaim, Witness};
 use crate::product_polynomial::ProductPolynomial;
-use crate::strategy::{Basis, SumcheckProver, VariableOrder};
+use crate::strategy::{SumcheckProver, VariableOrder};
 use crate::svo::{SvoPoint, calculate_accumulators_batch};
 use crate::table::{OpeningBatch, OpeningEvals, OpeningRequest};
-use crate::transcript::{ProverTranscript, SumcheckShape};
-use crate::{Claim, SumcheckData, extrapolate_01inf};
+use crate::{Claim, SumcheckData};
 
 /// Stacked-sumcheck prover with prefix-first variable binding.
 ///
 /// # Flow
 ///
 /// - Every folding round is driven from precomputed SVO accumulators.
-/// - The handoff to the residual product polynomial is packed.
+/// - Residual compression uses packed storage when possible and scalar storage otherwise.
 #[derive(Debug, Clone)]
 pub struct PrefixProver<F: Field, EF: ExtensionField<F>> {
     /// Recorded opening claims and the layout context that batches them.
@@ -51,12 +50,23 @@ impl<F: Field, EF: ExtensionField<F>> Layout<F, EF> for PrefixProver<F, EF> {
                 parts.num_variables,
                 parts.folding,
             ),
-            poly: parts.poly,
+            poly: parts
+                .poly
+                .expect("this layout retains its stacked polynomial"),
         }
     }
 
     fn new_witness(tables: Vec<Table<F>>, folding: usize) -> Witness<F> {
         Witness::new_interleaved(tables, folding)
+    }
+
+    fn write_message(witness: &Witness<F>, folding: usize, message: &mut [F]) {
+        write_stacked_message(
+            Self::variable_order(),
+            witness.retained_poly(),
+            folding,
+            message,
+        );
     }
 
     fn claims(&self) -> &StackedClaims<F, EF> {
@@ -81,7 +91,7 @@ impl<F: Field, EF: ExtensionField<F>> Layout<F, EF> for PrefixProver<F, EF> {
     ///
     /// - The point is factorised once and reused by every selected column.
     /// - Each column is an independent linear pass, so columns run in parallel.
-    #[tracing::instrument(skip_all)]
+    #[tracing::instrument(skip_all, level = "debug")]
     fn record_opening(
         &mut self,
         table_idx: usize,
@@ -130,6 +140,25 @@ impl<F: Field, EF: ExtensionField<F>> Layout<F, EF> for PrefixProver<F, EF> {
 
         // Return both eval groups in the canonical current-then-next order.
         OpeningBatch::new(current_evals, next_evals)
+    }
+
+    fn record_opening_known(
+        &mut self,
+        table_idx: usize,
+        batch: &OpeningRequest,
+        point: &Point<EF>,
+        evals: &OpeningEvals<EF>,
+    ) {
+        // The opening point lives in the table's local frame, one coordinate per variable.
+        debug_assert_eq!(
+            point.num_variables(),
+            self.claims.tables[table_idx].num_variables()
+        );
+        debug_assert!(self.known_evals_agree(table_idx, batch, point, evals));
+
+        // The point is factorised as the evaluating route factorises it; only the pass is skipped.
+        let point = SvoPoint::new_packed(self.claims.folding, point);
+        self.claims.record_known(table_idx, batch, point, evals);
     }
 
     /// Evaluates the full stacked polynomial at a point and records the claim.
@@ -223,7 +252,7 @@ impl<F: Field, EF: ExtensionField<F>> Layout<F, EF> for PrefixProver<F, EF> {
     ///
     /// # Returns
     ///
-    /// - Residual sumcheck prover over the packed product polynomial.
+    /// - Residual sumcheck prover.
     /// - Folding challenges sampled during preprocessing.
     ///
     /// # Algorithm
@@ -235,7 +264,7 @@ impl<F: Field, EF: ExtensionField<F>> Layout<F, EF> for PrefixProver<F, EF> {
     ///       2   | running sum  = sum_{i}  a^i * eval_i.
     ///       3   | weight poly  = sum_{i}  a^i * eq(z_i, X).
     ///       4   | Fold rounds 1..folding from precomputed SVO accumulators.
-    ///       5   | Hand off to the residual product polynomial, packed.
+    ///       5   | Hand off using storage suited to the residual width.
     /// ```
     ///
     /// # Precondition
@@ -253,87 +282,9 @@ impl<F: Field, EF: ExtensionField<F>> Layout<F, EF> for PrefixProver<F, EF> {
         F: TranscriptField,
         Ch: FieldChallenger<F> + GrindingChallenger<Witness = F>,
     {
-        // Sanity: preprocessing cannot consume more rounds than the stacked arity.
-        assert!(self.claims.folding <= self.claims.num_variables);
+        let (alpha, sum, rs) = preprocess(&self, sumcheck_data, pow_bits, challenger);
 
-        // The batching challenge seeds a sub-transcript of its own.
-        //
-        // Both claim counts therefore reach the sponge before the challenge is drawn.
-        let alpha: EF = self.batching_challenge(challenger);
-        let n_claims = self.num_claims();
-
-        let mut alphas = alpha.powers();
-        let accumulators: Vec<_> = self
-            .claims
-            .concrete_claims()
-            .map(|claim| {
-                let per_claim: Vec<EF> = alphas.by_ref().take(claim.len()).collect();
-                calculate_accumulators_batch(claim, &per_claim)
-            })
-            .collect();
-
-        let mut sum = self.claims.sum(alpha);
-        let mut rs = Vec::new();
-
-        // First alpha power assigned to the virtual claims, sitting just past the concrete claims.
-        // The claim count is fixed for the whole fold, so this exponentiation is loop-invariant.
-        let alpha_base = alpha.exp_u64(n_claims as u64);
-
-        // One driver spans the whole preprocessing batch, so the description is walked exactly once.
-        let shape = SumcheckShape::new(self.claims.folding, pow_bits, Basis::Evaluation);
-        let mut transcript = ProverTranscript::<Ch, F, EF>::new(challenger, shape);
-
-        for round_idx in 0..self.claims.folding {
-            let weights = lagrange_weights_01inf_multi(&rs);
-
-            let mut c0 = EF::ZERO;
-            let mut c_inf = EF::ZERO;
-
-            for accs in &accumulators {
-                c0 += dot_product::<EF, _, _>(
-                    accs[round_idx][0].iter().copied(),
-                    weights.iter().copied(),
-                );
-                c_inf += dot_product::<EF, _, _>(
-                    accs[round_idx][1].iter().copied(),
-                    weights.iter().copied(),
-                );
-            }
-
-            for (vc, alpha_i) in self
-                .claims
-                .virtual_claims
-                .iter()
-                .zip(alpha.shifted_powers(alpha_base))
-            {
-                let vc_accs = &vc.data;
-                c0 += alpha_i
-                    * dot_product::<EF, _, _>(
-                        vc_accs[round_idx][0].iter().copied(),
-                        weights.iter().copied(),
-                    );
-                c_inf += alpha_i
-                    * dot_product::<EF, _, _>(
-                        vc_accs[round_idx][1].iter().copied(),
-                        weights.iter().copied(),
-                    );
-            }
-
-            let r = sumcheck_data.observe_and_sample(&mut transcript, c0, c_inf);
-            sum = extrapolate_01inf(c0, sum - c0, c_inf, r);
-            rs.push(r);
-        }
-
-        // Require that every described step was played.
-        transcript.finish();
-
-        let rs = Point::new(rs);
-        let compressed = tracing::info_span!("compress_prefix_to_packed")
-            .in_scope(|| self.poly.compress_prefix_to_packed(&rs, EF::ONE));
-
-        let weights = self.residual_weights_packed(&rs, alpha);
-        let prod_poly =
-            ProductPolynomial::<F, EF>::new_packed(VariableOrder::Prefix, compressed, weights);
+        let prod_poly = self.residual_product(&rs, alpha, EF::ONE);
         debug_assert_eq!(prod_poly.dot_product(), sum);
 
         (SumcheckProver::new(prod_poly, sum), rs)
@@ -345,6 +296,57 @@ impl<F: Field, EF: ExtensionField<F>> Layout<F, EF> for PrefixProver<F, EF> {
 }
 
 impl<F: Field, EF: ExtensionField<F>> PrefixProver<F, EF> {
+    /// Whether supplied evaluations are the ones the opened columns hold at the point.
+    ///
+    /// This runs exactly the passes a supplied evaluation exists to avoid, so it is only
+    /// ever reached from a debug assertion.
+    fn known_evals_agree(
+        &self,
+        table_idx: usize,
+        batch: &OpeningRequest,
+        point: &Point<EF>,
+        evals: &OpeningEvals<EF>,
+    ) -> bool {
+        let table = &self.claims.tables[table_idx];
+        let point = SvoPoint::new_packed(self.claims.folding, point);
+
+        batch.has_same_shape(evals)
+            && batch
+                .current()
+                .iter()
+                .zip(evals.current())
+                .all(|(&poly_idx, &eval)| point.eval(table.poly(poly_idx)).0 == eval)
+            && batch
+                .next()
+                .iter()
+                .zip(evals.next())
+                .all(|(&poly_idx, &eval)| point.eval_next_prefix(table.poly(poly_idx)).0 == eval)
+    }
+
+    /// Builds the residual product polynomial with packed or scalar compression.
+    pub(crate) fn residual_product(
+        &self,
+        rs: &Point<EF>,
+        alpha: EF,
+        scale: EF,
+    ) -> ProductPolynomial<F, EF> {
+        // Packed compression requires one full packed element.
+        let k_pack = log2_strict_usize(<F as Field>::Packing::WIDTH);
+        if self.num_variables() - rs.num_variables() >= k_pack {
+            // Keep the vectorized compression path for wide residuals.
+            let compressed = tracing::info_span!("compress_prefix_to_packed")
+                .in_scope(|| self.poly.compress_prefix_to_packed(rs, scale));
+            let weights = self.residual_weights_packed(rs, alpha);
+            ProductPolynomial::new_packed(VariableOrder::Prefix, compressed, weights)
+        } else {
+            // Use scalar storage below one packed element.
+            let compressed = tracing::info_span!("compress_prefix")
+                .in_scope(|| self.poly.compress_prefix(rs, scale));
+            let weights = self.combine_weights(rs, alpha);
+            ProductPolynomial::new_unpacked(VariableOrder::Prefix, compressed, weights)
+        }
+    }
+
     /// Builds the residual equality weights in packed form.
     ///
     /// Two routes produce the identical polynomial; each call takes the cheaper one:

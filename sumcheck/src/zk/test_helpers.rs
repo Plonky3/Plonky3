@@ -13,7 +13,7 @@ use p3_matrix::dense::RowMajorMatrix;
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
 use p3_zk_codes::reed_solomon::ReedSolomonZkEncoding;
-use rand::rngs::SmallRng;
+use rand::rngs::StdRng;
 use rand::{RngExt, SeedableRng};
 
 use crate::layout::{PrefixProver, SuffixProver, Table, TableShape};
@@ -69,7 +69,7 @@ pub fn make_setup(seed: u64, ell_zk: usize) -> (Perm, MyMmcs, MyEnc) {
     // Deterministic permutation.
     //
     // Same seed => same permutation state on both challengers in a test.
-    let mut perm_rng = SmallRng::seed_from_u64(seed);
+    let mut perm_rng = StdRng::seed_from_u64(seed);
     let perm = Perm::new_from_rng_128(&mut perm_rng);
 
     // Leaf hash + inner-node compression wrappers.
@@ -181,7 +181,7 @@ pub fn run_prover(
     // Phase 2: witness vector.
     //
     // Distinct seed so draws never collide with later RNG use.
-    let mut data_rng = SmallRng::seed_from_u64(seed.wrapping_add(1));
+    let mut data_rng = StdRng::seed_from_u64(seed.wrapping_add(1));
     let evals: Vec<F> = (0..(1usize << n_vars)).map(|_| data_rng.random()).collect();
 
     // Phase 3: parallel challengers from the same permutation state.
@@ -191,7 +191,7 @@ pub fn run_prover(
     // Phase 4: matched prover + verifier on this witness, dispatching on the
     //          binding direction.
     let zk_data = ZkSumcheckData::<F, EF>::default();
-    let prover_rng = SmallRng::seed_from_u64(seed.wrapping_add(2));
+    let prover_rng = StdRng::seed_from_u64(seed.wrapping_add(2));
 
     // The per-mode body is identical once the prover and verifier are typed.
     // Dispatch once on `binding` to pick the layout type; the rest is shared.
@@ -241,7 +241,7 @@ fn drive_prover_run<L>(
     mut prover_challenger: MyChallenger,
     mut verifier_challenger: MyChallenger,
     mut zk_data: ZkSumcheckData<F, EF>,
-    mut prover_rng: SmallRng,
+    mut prover_rng: StdRng,
 ) -> ProverRun
 where
     L: ZkLayout<F, EF>,

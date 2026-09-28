@@ -43,7 +43,7 @@ pub trait LowDegreeTest {
     /// [`crate::stark::proven_security_report`] evaluates the *full* composite
     /// at each candidate and keeps the best, instead of trusting the LDT's own
     /// optimum. The two disagree whenever a term outside the LDT depends on
-    /// `m`: the batched-openings term grows as `(m + 1/2)⁵`, so an `m` chosen
+    /// `m`: the batched-openings term grows as `(m + 1/2)^3`, so an `m` chosen
     /// to maximise the LDT alone can sit far from the one that maximises the
     /// composite. Left to [`Self::best_ldr`], grinding that lets the LDT
     /// tolerate a larger `m` would then *lower* the reported level, breaking

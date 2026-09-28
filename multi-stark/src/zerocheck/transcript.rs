@@ -13,6 +13,7 @@
 //!     alpha                        one extension element
 //!     beta                         one extension element
 //!     eta                          only when a lookup reduction supplies a point
+//!     lambda                       only when a binary bus shares the sumcheck
 //!     tau                          one element per free coordinate, all nonzero
 //!     Begin  constraint sumcheck   bracket around the delegated run
 //!     End    constraint sumcheck
@@ -65,6 +66,9 @@ const BETA: &str = "beta";
 /// Step label of the challenge separating lookup links from ordinary constraints.
 const ETA: &str = "eta";
 
+/// Step label of the challenge batching the binary-bus family into the sumcheck.
+const BUS_BATCHING: &str = "bus_batching";
+
 /// Step label of the freely drawn coordinates of the zerocheck point.
 const TAU: &str = "tau";
 
@@ -80,7 +84,7 @@ type Alphabet<F> = FieldUnit<F>;
 /// It does not reach the pattern fingerprint.
 struct ConstraintSumcheck;
 
-/// The four challenges one zerocheck run draws before its sumcheck.
+/// The challenges one zerocheck run draws before its sumcheck.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ZerocheckChallenges<EF> {
     /// Batches one AIR's own constraints against each other.
@@ -89,6 +93,10 @@ pub struct ZerocheckChallenges<EF> {
     pub beta: EF,
     /// Separates lookup links from ordinary constraints, or zero when there are no links.
     pub eta: EF,
+    /// Batches the binary-bus family into the sumcheck, or zero when no bus shares it.
+    ///
+    /// It weighs both the pull direction against the push one and the bus against the AIRs.
+    pub lambda: EF,
     /// The zerocheck point, freely drawn coordinates first and the lookup tail last.
     pub tau: Vec<EF>,
 }
@@ -106,6 +114,8 @@ pub struct ZerocheckShape {
     pub pow_bits: usize,
     /// Per-variable degrees of every AIR in the batch, in caller order.
     pub air_degrees: Vec<AirDegrees>,
+    /// Per-variable degree of the binary-bus composition sharing the sumcheck, if any.
+    pub bus_degree: Option<usize>,
 }
 
 impl ZerocheckShape {
@@ -129,7 +139,15 @@ impl ZerocheckShape {
             lookup_point_len,
             pow_bits,
             air_degrees: air_degrees.to_vec(),
+            bus_degree: None,
         }
+    }
+
+    /// Let a binary-bus composition of this per-variable degree share the sumcheck.
+    #[must_use]
+    pub const fn with_bus(mut self, degree: usize) -> Self {
+        self.bus_degree = Some(degree);
+        self
     }
 
     /// Coordinates of the zerocheck point this run draws for itself.
@@ -156,8 +174,8 @@ impl ZerocheckShape {
             Interaction::algebra::<F, EF>(Hierarchy::Atomic, Kind::Challenge, label, length)
         };
 
-        // Two batching challenges, then at most two more steps and the bracket.
-        let mut steps = Vec::with_capacity(6);
+        // Two batching challenges, then at most three more steps and the bracket.
+        let mut steps = Vec::with_capacity(7);
 
         // Alpha batches one AIR's constraints, beta batches the AIRs against each other.
         steps.push(challenge(ALPHA, Length::Scalar));
@@ -167,6 +185,12 @@ impl ZerocheckShape {
         // With no reduction point there are no links, so the step is absent.
         if self.lookup_point_len > 0 {
             steps.push(challenge(ETA, Length::Scalar));
+        }
+
+        // Lambda exists only to weigh a bus family against the AIR family.
+        // Both of its claims are fixed by now, so it cannot be steered by either.
+        if self.bus_degree.is_some() {
+            steps.push(challenge(BUS_BATCHING, Length::Scalar));
         }
 
         // The freely drawn coordinates form one step, whatever the rejection costs.
@@ -222,6 +246,12 @@ impl ZerocheckShape {
             separator
                 .instance(&(degrees.constraints as u64).to_be_bytes())
                 .instance(&(degrees.interactions as u64).to_be_bytes());
+        }
+
+        // The bus degree widens the round message, so it is bound as well.
+        // Without a bus the label is left as it is.
+        if let Some(degree) = self.bus_degree {
+            separator.instance(&(degree as u64).to_be_bytes());
         }
 
         separator
@@ -305,6 +335,15 @@ where
             EF::ZERO
         };
 
+        // With no bus to weigh, lambda contributes nothing and no step describes it.
+        let lambda = if self.shape.bus_degree.is_some() {
+            self.state
+                .challenge_extension::<F, EF, FieldToFieldCodec<F>>(BUS_BATCHING)
+                .into_inner()
+        } else {
+            EF::ZERO
+        };
+
         let free = if self.shape.free_coordinates() > 0 {
             self.state
                 .challenge_extensions_rejecting::<F, EF, FieldToFieldCodec<F>>(
@@ -320,6 +359,7 @@ where
             alpha,
             beta,
             eta,
+            lambda,
             tau: zerocheck_point(free, lookup_tail),
         }
     }
@@ -418,6 +458,15 @@ where
             EF::ZERO
         };
 
+        // With no bus to weigh, lambda contributes nothing and no step describes it.
+        let lambda = if self.shape.bus_degree.is_some() {
+            self.state
+                .challenge_extension::<F, EF, FieldToFieldCodec<F>>(BUS_BATCHING)
+                .into_inner()
+        } else {
+            EF::ZERO
+        };
+
         let free = if self.shape.free_coordinates() > 0 {
             self.state
                 .challenge_extensions_rejecting::<F, EF, FieldToFieldCodec<F>>(
@@ -433,6 +482,7 @@ where
             alpha,
             beta,
             eta,
+            lambda,
             tau: zerocheck_point(free, lookup_tail),
         }
     }
@@ -514,6 +564,7 @@ mod tests {
                     interactions: 0,
                 },
             ],
+            bus_degree: None,
         }
     }
 
@@ -556,6 +607,22 @@ mod tests {
         });
         field_moves_the_seed("air.constraints", |s| s.air_degrees[0].constraints += 1);
         field_moves_the_seed("air.interactions", |s| s.air_degrees[1].interactions += 1);
+        field_moves_the_seed("bus_degree presence", |s| s.bus_degree = Some(3));
+
+        // Two bus degrees share a step sequence, so the label alone must split them.
+        let low = base_shape().with_bus(3);
+        let high = base_shape().with_bus(4);
+        assert_ne!(first_challenge(&low), first_challenge(&high));
+    }
+
+    #[test]
+    fn only_a_batch_with_a_bus_describes_lambda() {
+        // Lambda is the one step a bus adds ahead of the zerocheck point.
+        //
+        //     without a bus : alpha, beta, eta,         tau, Begin, End  -> 6 steps
+        //     with a bus    : alpha, beta, eta, lambda, tau, Begin, End  -> 7 steps
+        assert_eq!(base_shape().pattern::<F, EF>().len(), 6);
+        assert_eq!(base_shape().with_bus(3).pattern::<F, EF>().len(), 7);
     }
 
     #[test]

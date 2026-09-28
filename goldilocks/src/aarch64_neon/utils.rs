@@ -173,8 +173,14 @@ pub(super) unsafe fn add_asm(a: u64, b: u64) -> u64 {
 /// Safe call sites are those where `b` is provably canonical:
 /// - the output of `add_asm` / `sub_asm` / `mul_asm` / `mul_add_asm`
 ///   (each performs a final `subs/csel` reduction to `[0, P)`);
-/// - an RC stored on `Poseidon2GoldilocksFused`, canonicalized at
-///   construction time by `to_canonical_u64`.
+/// - a round constant from any Poseidon2 layer here, reduced once at construction time.
+///
+/// # Why an unreduced first operand is what breaks it
+///
+/// A reduced first operand makes the wrap-around folding through `EPSILON` exact.
+/// The trailing reduction then lands in `[0, P)` for any second operand below `2^64`.
+/// Both operands must sit above the modulus before the result is wrong.
+/// In practice that needs a state that did not just come out of the light MDS permutation.
 #[inline(always)]
 pub(super) unsafe fn add_canonical_asm(a: u64, b: u64) -> u64 {
     debug_assert!(

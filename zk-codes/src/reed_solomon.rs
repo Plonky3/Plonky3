@@ -7,7 +7,7 @@ use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_util::log2_strict_usize;
 use rand::distr::{Distribution, StandardUniform};
-use rand::{Rng, RngExt};
+use rand::{CryptoRng, Rng, RngExt};
 
 use crate::{LinearZkEncoding, ZkEncoding, ZkEncodingWithRandomness};
 
@@ -118,13 +118,13 @@ where
         0.0
     }
 
-    fn sample_message<R: Rng>(&self, rng: &mut R) -> Vec<F> {
+    fn sample_message<R: CryptoRng>(&self, rng: &mut R) -> Vec<F> {
         // Reed-Solomon's message space is unrestricted: any vector in `F^msg_len`
         // is a valid message, so a uniform draw coordinate-by-coordinate is correct.
         (0..self.msg_len).map(|_| rng.random()).collect()
     }
 
-    fn sample_randomness<R: Rng>(&self, rng: &mut R) -> Vec<F> {
+    fn sample_randomness<R: CryptoRng>(&self, rng: &mut R) -> Vec<F> {
         // Uniform masking coefficients; one per query the encoding can hide.
         (0..self.t).map(|_| rng.random()).collect()
     }

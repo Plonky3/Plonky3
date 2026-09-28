@@ -152,7 +152,7 @@ pub(super) fn make_config_zk(seed: u64) -> MyHidingConfig {
 }
 
 pub(super) type CircleVal = Mersenne31;
-type CircleChallenge = BinomialExtensionField<CircleVal, 3>;
+pub(super) type CircleChallenge = BinomialExtensionField<CircleVal, 3>;
 type CircleByteHash = Keccak256Hash;
 type CircleFieldHash = SerializingHasher<CircleByteHash>;
 type CircleCompress = CompressionFunctionFromHasher<CircleByteHash, 2, 32>;

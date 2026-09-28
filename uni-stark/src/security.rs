@@ -531,8 +531,9 @@ impl LegacySecurity {
 ///
 /// Follows Theorems 2 and 3 of [2024/1553](https://eprint.iacr.org/2024/1553)
 /// (round-by-round soundness; unique-decoding and list-decoding regimes), with the
-/// improved LDR FRI commit-phase bound from [2025/2055](https://eprint.iacr.org/2025/2055)
-/// Theorem 4.2. Cross-checked against [`soundcalc`](https://github.com/ethereum/soundcalc).
+/// Johnson MCA bound from [2026/2056](https://eprint.iacr.org/2026/2056)
+/// Theorem 5.12 and §7.2, Equation (88)'s order-zero case (Lemma 5.3),
+/// composed by `p3-security`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProvenSecurity {
     pub unique_decoding_bits: usize,
@@ -920,7 +921,10 @@ mod tests {
     /// changes nothing at all, at any value.
     #[test]
     fn from_air_threads_the_grinding_sites_into_the_report() {
-        let regime = benchmark_high_arity_params(124).fri_regime();
+        let mut regime = benchmark_high_arity_params(124).fri_regime();
+        // Keep queries above the improved Johnson batching bound, so this test
+        // still detects a dropped batching-grinding site.
+        regime.num_queries = 140;
         // Wide enough that the batched-openings round is the binding one, which
         // is the round the batch site protects.
         let air = MockAir {
@@ -979,10 +983,12 @@ mod tests {
     fn deriving_the_count_lowers_the_reported_level() {
         let optimistic = StarkSecurityParams {
             num_batched_functions: 1,
+            fri_num_queries: 140,
             ..benchmark_high_arity_params(124)
         };
         let honest = StarkSecurityParams {
             num_batched_functions: 208,
+            fri_num_queries: 140,
             ..benchmark_high_arity_params(124)
         };
 

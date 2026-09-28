@@ -1,0 +1,44 @@
+name: Heavy CI (binary-pcs large configuration)
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 3 * * *"
+  pull_request:
+    branches: [ "*" ]
+    paths:
+      - "binary-pcs/**"
+      # p3-binary-pcs depends on p3-binary-dft for its additive-NTT codeword encoder.
+      - "binary-dft/src/**"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  RUSTFLAGS: -C debuginfo=0
+
+jobs:
+  binary_pcs_large_configuration:
+    name: binary-pcs 2^16 round trip
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Set flags
+        # No x86_64 target carries carry-less multiply in its baseline, so without this the
+        # runner falls back to recursive tower multiplication and the job measures that
+        # instead. Appended to the existing flags so we keep -C debuginfo=0.
+        run: echo "RUSTFLAGS=$RUSTFLAGS -C target-feature=+pclmulqdq" >> "$GITHUB_ENV"
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Test the 2^16 round trip
+        run: python3 scripts/check.py binary-large

@@ -4,7 +4,10 @@ use alloc::vec::Vec;
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_challenger::{DuplexChallenger, FieldChallenger, GrindingChallenger};
 use p3_field::extension::BinomialExtensionField;
-use p3_field::{Field, HornerIter, PackedValue, PrimeCharacteristicRing, TwoAdicField};
+use p3_field::{
+    BasedVectorSpace, Field, HornerIter, PackedValue, PrimeCharacteristicRing, PrimeField32,
+    TwoAdicField,
+};
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
 use p3_util::log2_strict_usize;
@@ -15,7 +18,7 @@ use rand::rngs::SmallRng;
 use crate::constraints::statement::{EqStatement, SelectStatement};
 use crate::constraints::{Constraint, Statements};
 use crate::layout::{Layout, PrefixProver, SuffixProver, TableShape, Verifier};
-use crate::strategy::{Basis, VariableOrder};
+use crate::strategy::{Basis, SumcheckProver, VariableOrder};
 use crate::test_util::{stacked_num_variables, table_point_schedule, table_specs_to_tables};
 use crate::{
     OpeningBatch, OpeningEvals, OpeningProtocol, SumcheckData, SumcheckError, TableSpec,
@@ -44,19 +47,44 @@ pub(crate) fn challenger() -> MyChallenger {
     MyChallenger::new(perm)
 }
 
+/// Folds a residual prover to a constant through the sponge, binds the constant, then draws one element.
+///
+/// Every value sent before and during the fold reaches the sponge ahead of the draw, so the
+/// drawn coordinates move with any of them.
+pub(crate) fn transcript_fingerprint(
+    residual: &mut SumcheckProver<F, EF>,
+    challenger: &mut MyChallenger,
+) -> [u32; 4] {
+    let rounds = residual.num_variables();
+    let mut data = SumcheckData::<F, EF>::default();
+    // The fingerprint is the draw below, which already follows every challenge of the fold.
+    let _ = residual.compute_sumcheck_polynomials(&mut data, challenger, rounds, 0, None);
+    let folded = residual
+        .evals()
+        .as_constant()
+        .expect("every variable is bound");
+    challenger.observe_algebra_element(folded);
+    let digest: EF = challenger.sample_algebra_element();
+    let coeffs = BasedVectorSpace::<F>::as_basis_coefficients_slice(&digest);
+    core::array::from_fn(|i| coeffs[i].as_canonical_u32())
+}
+
 // Simulates the prover side of STIR constraint derivation for an intermediate round.
 //
-// In the WHIR protocol, between sumcheck folding rounds, the verifier asks for evaluations
-// of the current polynomial at randomly chosen points. These evaluations become constraints
-// that the next sumcheck round must satisfy. This function:
-//   1. Samples `num_eqs` random multilinear points, evaluates the polynomial, and records
-//      them as "equality" constraints (poly(point) == eval).
-//   2. Samples `num_sels` random indices in the multiplicative subgroup, evaluates the
-//      polynomial as a univariate (Horner's method), and records them as "select" constraints.
-//   3. Draws a random combining coefficient alpha and bundles everything into a Constraint.
+// Between sumcheck folding rounds the verifier asks for evaluations.
+// The points it asks about are drawn at random.
 //
-// The evaluations are pushed into `constraint_evals` so the verifier can read them later
-// (simulating what would normally be transmitted in the proof).
+// Those evaluations become constraints the next sumcheck round must satisfy.
+//
+// Three steps build them:
+//
+// - Sample random multilinear points, evaluate, and record equality constraints.
+// - Sample random subgroup indices, evaluate as a univariate, and record select ones.
+// - Draw a combining coefficient and bundle everything into one constraint.
+//
+// The evaluations are collected so the verifier can read them later.
+//
+// That stands in for what would normally be transmitted in the proof.
 pub(crate) fn make_constraint_ext<Challenger>(
     challenger: &mut Challenger,
     constraint_evals: &mut Vec<EF>,
@@ -98,9 +126,12 @@ where
         eq_statement.add_evaluated_constraint(point, eval);
     });
 
-    // Build "select" constraints: sample indices in the multiplicative subgroup H = {omega^i},
-    // evaluate the polynomial as a univariate at omega^index using Horner's method,
-    // and record (omega^index, eval) pairs.
+    // Build the select constraints over the multiplicative subgroup.
+    //
+    //     - index    sampled below the subgroup size
+    //     - point    omega^index
+    //     - value    the polynomial read as a univariate there
+
     (0..num_sels).for_each(|_| {
         // Sample a random index in [0, 2^num_variables) from the challenger.
         let index: usize = challenger.sample_bits(num_variables);
@@ -108,9 +139,13 @@ where
         // Compute the corresponding evaluation point in the multiplicative subgroup.
         let var = omega.exp_u64(index as u64);
 
-        // Evaluate the polynomial as a univariate at `var` using Horner's method.
-        // This treats the evaluation vector as coefficients of a univariate polynomial
-        // and computes f(var) = c_0 + c_1*var + c_2*var^2 + ... by folding from the right.
+        // Evaluate the polynomial as a univariate, by Horner's rule.
+        //
+        // The evaluation vector is read as univariate coefficients:
+        //
+        //     f(var) = c_0 + c_1*var + c_2*var^2 + ...
+        //
+        // Folding from the right computes that with one multiply per coefficient.
         let eval: EF = poly.iter().copied().horner(var);
 
         // Store evaluation for verifier to read later.
@@ -123,9 +158,11 @@ where
         sel_statement.add_constraint(var, eval);
     });
 
-    // Sample a random combining coefficient alpha from the Fiat-Shamir transcript.
-    // This alpha is used to take a random linear combination of all eq and sel constraints
-    // into a single aggregated constraint for the next sumcheck round.
+    // Sample a random combining coefficient from the Fiat-Shamir transcript.
+    //
+    // It takes a random linear combination of every equality and select constraint.
+    //
+    // The next sumcheck round then runs against that one aggregate.
     let alpha: EF = challenger.sample_algebra_element();
 
     Constraint::new(
@@ -138,13 +175,18 @@ where
     )
 }
 
-// Verifier-side counterpart of `make_constraint_ext`. Reconstructs the same Constraint
-// that the prover built, but without access to the polynomial -- only from the
-// evaluations that the prover committed to (passed in via `constraint_evals`).
+// The verifier side of the same constraint derivation.
 //
-// The key invariant is that the verifier's challenger must stay perfectly synchronized
-// with the prover's challenger: both sample the same random points and observe the same
-// evaluations, so their Fiat-Shamir transcripts remain identical.
+// It rebuilds the constraint the prover built, without access to the polynomial.
+//
+// The committed evaluations are supplied instead.
+//
+// Invariant: the two challengers stay in step.
+//
+//     prover    samples the points, observes the evaluations
+//     verifier  samples the same points, observes the same evaluations
+//
+// Their Fiat-Shamir transcripts are identical only while that holds.
 pub(crate) fn read_constraint<Challenger>(
     challenger: &mut Challenger,
     constraint_evals: &[EF],
@@ -158,8 +200,9 @@ where
     // Initialize an empty eq statement for this round.
     let mut eq_statement = EqStatement::initialize(num_variables);
 
-    // Reconstruct each eq constraint: sample the same random point as the prover,
-    // then read the evaluation from the proof data (instead of computing it).
+    // Rebuild each equality constraint from the same draw the prover made.
+    //
+    // The evaluation is read from the proof data rather than computed.
     for &eval in constraint_evals.iter().take(num_eqs) {
         // Sample a univariate challenge and expand to a multilinear point.
         let point =
@@ -178,8 +221,11 @@ where
     // Same domain generator as the prover used.
     let omega = F::two_adic_generator(num_variables);
 
-    // Reconstruct each select constraint: sample the same random index as the prover,
-    // compute the same evaluation point omega^index, then read the evaluation from the proof.
+    // Rebuild each select constraint from the same draw the prover made.
+    //
+    //     - index  sampled identically
+    //     - point  omega^index, recomputed
+    //     - value  read from the proof
     for i in 0..num_sels {
         // Sample the same random index as the prover did.
         let index: usize = challenger.sample_bits(num_variables);
@@ -272,7 +318,7 @@ where
     let mut all_constraint_evals: Vec<Vec<EF>> = Vec::new();
 
     // Snapshot the stacked polynomial before the witness is consumed.
-    let stacked_poly = witness.poly().clone();
+    let stacked_poly = witness.stacked_poly();
     let mut layout = L::from_witness(witness);
     let strategy = L::strategy();
 
@@ -628,15 +674,26 @@ fn test_invalid_pow_witness() {
     ));
 }
 
-/// Every protocol name this crate seeds a transcript from.
+/// Every protocol name this crate seeds a transcript from, where the constant is reachable.
 ///
-/// `p3-examples` runs the workspace-wide pairwise check, but it can only reach
-/// names whose shapes are public. The three layout names are `pub(crate)`, so
-/// they are checked here instead, against the four that do travel.
-const CRATE_PROTOCOL_NAMES: [(&str, &[u8]); 8] = [
+/// The workspace-wide pairwise check can only reach names whose shapes are public.
+///
+/// The three layout names are crate-private, so they are checked here instead.
+///
+/// The bit-alphabet reduction seeds over a binary tower field.
+/// Its separator has a different sponge alphabet, so it cannot travel either.
+const CRATE_PROTOCOL_NAMES: [(&str, &[u8]); 10] = [
     ("quadratic", crate::transcript::NAME),
     ("hvzk", crate::zk::transcript::NAME),
     ("ring switch", crate::ring_switch::transcript::NAME),
+    (
+        "bit ring switch",
+        crate::ring_switch::bits::transcript::NAME,
+    ),
+    (
+        "bit ring switch claims",
+        crate::ring_switch::bits::transcript::CLAIMS_NAME,
+    ),
     ("generic degree", crate::generic_degree::transcript::NAME),
     (
         "layout commitment",
@@ -647,26 +704,63 @@ const CRATE_PROTOCOL_NAMES: [(&str, &[u8]); 8] = [
     ("layout batching", crate::layout::transcript::BATCHING_NAME),
 ];
 
+/// Every name this crate seeds with, whether or not its constant is reachable.
+fn crate_protocol_names() -> Vec<(&'static str, Vec<u8>)> {
+    CRATE_PROTOCOL_NAMES
+        .iter()
+        .map(|&(label, name)| (label, name.to_vec()))
+        .collect()
+}
+
 #[test]
 fn no_two_protocols_in_this_crate_share_a_name() {
     // Invariant: a name is what separates two protocols on the typed layer.
     //
     // Two protocols sharing one name derive the same seed from the same shape.
     //
-    // Fixture state: the seven names above, taken from the constants themselves.
+    // Fixture state: every name the crate seeds with, taken from the seeds themselves.
     //
     // Renaming one therefore moves this check with it.
-    for (i, (left_label, left)) in CRATE_PROTOCOL_NAMES.iter().enumerate() {
+    let names = crate_protocol_names();
+
+    for (i, (left_label, left)) in names.iter().enumerate() {
+        // Every name this crate seeds with carries the crate's own stem.
+        //
+        // Reading one back out of a seed could otherwise hand over empty bytes.
+        // An empty name collides with nothing, so the sweep would pass for free.
+        assert!(
+            left.starts_with(b"p3-sumcheck-"),
+            "{left_label} does not carry this crate's name stem"
+        );
+
         // A name is one length byte in the identifier, so it must fit.
         assert!(
             left.len() < p3_challenger::fs::PROTOCOL_ID_LEN - 1,
             "{left_label} does not fit the protocol identifier"
         );
 
-        for (right_label, right) in &CRATE_PROTOCOL_NAMES[i + 1..] {
+        for (right_label, right) in &names[i + 1..] {
             assert_ne!(left, right, "{left_label} and {right_label} share a name");
         }
     }
+}
+
+#[test]
+fn the_two_reductions_over_a_bit_alphabet_and_over_a_field_are_named_apart() {
+    // Invariant: one name is not a prefix of the other once the length byte is read.
+    //
+    //     [1 | p3-sumcheck-ring-switch     | 0 .. 0 | 23]
+    //     [1 | p3-sumcheck-bit-ring-switch | 0 .. 0 | 27]
+    //
+    // Neither starts with the other, so the stem they share parts them on its own.
+    //
+    // The two reductions run the same construction at two alphabets.
+    // A shared name would let one run's transcript replay as the other's.
+    let general = crate::ring_switch::transcript::NAME;
+    let bits = crate::ring_switch::bits::transcript::NAME;
+
+    assert!(!bits.starts_with(general));
+    assert!(!general.starts_with(bits));
 }
 
 #[test]
@@ -675,10 +769,10 @@ fn a_layout_name_is_separated_from_the_one_it_extends() {
     //
     // Fixture state: the four layout names all extend `p3-sumcheck-layout`.
     //
-    //     [1 | p3-sumcheck-layout-ood        | 0 .. 0 | 22]
-    //     [1 | p3-sumcheck-layout-opening    | 0 .. 0 | 26]
-    //     [1 | p3-sumcheck-layout-batching   | 0 .. 0 | 27]
-    //     [1 | p3-sumcheck-layout-commitment | 0 .. 0 | 29]
+    //     - [1 | p3-sumcheck-layout-ood        | 0 .. 0 | 22]
+    //     - [1 | p3-sumcheck-layout-opening    | 0 .. 0 | 26]
+    //     - [1 | p3-sumcheck-layout-batching   | 0 .. 0 | 27]
+    //     - [1 | p3-sumcheck-layout-commitment | 0 .. 0 | 29]
     //
     // Zero padding alone cannot part names in a prefix relation.
     //

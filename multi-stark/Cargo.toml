@@ -17,8 +17,10 @@ parallel = [
 ]
 
 [dependencies]
+hashbrown.workspace = true
 itertools.workspace = true
 p3-air.workspace = true
+p3-bus.workspace = true
 p3-challenger.workspace = true
 p3-commit.workspace = true
 p3-field.workspace = true
@@ -28,7 +30,9 @@ p3-maybe-rayon.workspace = true
 p3-multilinear-util.workspace = true
 p3-security.workspace = true
 p3-sumcheck.workspace = true
+p3-symmetric.workspace = true
 p3-util.workspace = true
+postcard = { workspace = true, features = ["alloc"] }
 serde = { workspace = true, features = ["derive", "alloc"] }
 thiserror.workspace = true
 tracing.workspace = true
@@ -36,17 +40,17 @@ tracing.workspace = true
 [dev-dependencies]
 criterion.workspace = true
 p3-baby-bear = { path = "../baby-bear" }
-p3-binary-field.workspace = true
-p3-binary-pcs.workspace = true
-p3-blake3-air.workspace = true
-p3-dft.workspace = true
-p3-keccak.workspace = true
-p3-merkle-tree.workspace = true
-p3-monty-31.workspace = true
-p3-poseidon2-air.workspace = true
-p3-symmetric.workspace = true
-p3-whir.workspace = true
-postcard = { workspace = true, features = ["alloc"] }
+p3-binary-field = { path = "../binary-field" }
+p3-binary-pcs = { path = "../binary-pcs" }
+p3-blake3-air = { path = "../blake3-air" }
+p3-bus = { path = "../bus", features = ["diagnostics"] }
+p3-dft = { path = "../dft" }
+p3-keccak = { path = "../keccak" }
+p3-merkle-tree = { path = "../merkle-tree" }
+p3-monty-31 = { path = "../monty-31" }
+p3-poseidon2-air = { path = "../poseidon2-air" }
+p3-sha256-air = { path = "../sha256-air" }
+p3-whir = { path = "../whir" }
 proptest.workspace = true
 rand = { workspace = true }
 tracing-forest = { workspace = true, features = ["ansi", "smallvec"] }
@@ -54,6 +58,10 @@ tracing-subscriber = { workspace = true, features = ["std", "env-filter"] }
 
 [[example]]
 name = "prove_binary_field"
+test = true
+
+[[example]]
+name = "prove_boolean_trace"
 test = true
 
 [[bench]]

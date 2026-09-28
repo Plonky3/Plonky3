@@ -6,6 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.8.0] - 2026-09-23
+### Merged PRs
+- Ci: fail on unused dependencies, and drop the ones already there (#2029)
+- Feat(multi-stark): add multilinear lookups (#1968)
+- Feat(multi-stark): add binary-field end-to-end example (#2047)
+- Fix(circle): account for transition selectors in quotient sizing (#2046)
+- Refactor(lookup): remove univariate STARK dependency (#2060)
+- Review: couple tweaks here and there (#2120)
+- Feat(lookup,multi-stark)!: declare and plan indexed lookups (#2146)
+- Feat(multi-stark): run the indexed reduction inside the proof (#2150)
+- Perf(maybe-rayon): size parallel tasks from a cost model (#2039)
+- Feat(sumcheck,binary-pcs,lookup,multilinear-util)!: enforce caller soundness obligations instead of documenting them (#2293)
+
 ## [0.7.0] - 2026-09-04
 ### Merged PRs
 - Feat(field): characteristic-agnostic groundwork for binary fields (#2000)

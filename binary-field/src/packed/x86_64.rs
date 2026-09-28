@@ -24,7 +24,8 @@ use rand::distr::{Distribution, StandardUniform};
 use rand::{Rng, RngExt};
 
 use super::split::{HIGH_BY_HIGH, LOW_BY_LOW, Lanes, fold_shifted};
-use crate::{Gf2, Ghash128};
+use crate::gf2::characteristic_two_methods;
+use crate::{BinaryField128, Gf2, Ghash128};
 
 /// Swaps the two quadwords of every lane, so `x ^ swap(x)` holds `x_lo ^ x_hi` in both halves.
 const SWAP_QUADWORDS: i32 = 0x4e;
@@ -385,18 +386,7 @@ impl PrimeCharacteristicRing for PackedGhash128 {
         Self::broadcast(Ghash128::from_prime_subfield(f))
     }
 
-    #[inline]
-    fn double(&self) -> Self {
-        // `a + a = 0` in characteristic 2.
-        Self::ZERO
-    }
-
-    /// # Panics
-    /// Always panics: `2` is not invertible in characteristic 2.
-    #[inline]
-    fn halve(&self) -> Self {
-        panic!("halve is undefined in characteristic 2")
-    }
+    characteristic_two_methods!();
 
     #[inline]
     fn square(&self) -> Self {
@@ -408,6 +398,13 @@ impl PrimeCharacteristicRing for PackedGhash128 {
         let high = lanes::clmul::<HIGH_BY_HIGH>(x, x);
 
         Self::from_vector(fold_shifted(low, fold_shifted(lanes::zero(), high)))
+    }
+
+    /// `x·(x - 1) = x² - x = x² + x` in characteristic 2, and [`Self::square`] skips the
+    /// cross-term carryless multiplies a general product pays for.
+    #[inline]
+    fn bool_check(&self) -> Self {
+        self.square() + *self
     }
 
     #[inline]
@@ -432,23 +429,6 @@ impl PrimeCharacteristicRing for PackedGhash128 {
 
         // Reduction is linear, so the whole sum folds the modulus once.
         Self::from_vector(fold_shifted(low, fold_shifted(middle, high)))
-    }
-
-    #[inline]
-    fn xor(&self, y: &Self) -> Self {
-        *self + *y
-    }
-
-    #[inline]
-    fn mul_2exp_u64(&self, exp: u64) -> Self {
-        if exp == 0 { *self } else { Self::ZERO }
-    }
-
-    /// # Panics
-    /// Always panics: `2` is not invertible in characteristic 2.
-    #[inline]
-    fn div_2exp_u64(&self, _exp: u64) -> Self {
-        panic!("div_2exp_u64 is undefined in characteristic 2")
     }
 }
 
@@ -481,6 +461,23 @@ impl_mul_base_field!(PackedGhash128, Gf2);
 
 impl Algebra<Gf2> for PackedGhash128 {}
 
+impl From<BinaryField128> for PackedGhash128 {
+    /// The same field element, seen in the polynomial basis, in every lane.
+    ///
+    /// The change of basis is a field isomorphism, so it makes this packing an algebra over
+    /// the tower, exactly as it does for one lane's [`Ghash128`].
+    #[inline]
+    fn from(x: BinaryField128) -> Self {
+        Self::broadcast(Ghash128::from(x))
+    }
+}
+
+impl_add_base_field!(PackedGhash128, BinaryField128);
+impl_sub_base_field!(PackedGhash128, BinaryField128);
+impl_mul_base_field!(PackedGhash128, BinaryField128);
+
+impl Algebra<BinaryField128> for PackedGhash128 {}
+
 impl_packed_value!(PackedGhash128, Ghash128, WIDTH);
 
 // SAFETY: the transparent array satisfies the packed layout contract.
@@ -502,7 +499,7 @@ unsafe impl PackedFieldPow2 for PackedGhash128 {
 
 #[cfg(test)]
 mod tests {
-    use p3_field::PackedValue;
+    use p3_field::{PackedValue, PrimeCharacteristicRing};
     use p3_field_testing::test_packed_binary_field;
     use proptest::prelude::*;
 
@@ -652,6 +649,49 @@ mod tests {
             //
             // Each intrinsic must be the one the algebra was written against, lane by lane.
             lanes_conform(a, b, scalar)?;
+        }
+    }
+
+    /// The squaring shortcut must answer what the general product answers, lane by lane.
+    ///
+    /// `bool_check` is taken on every booleanity constraint an AIR states, so the register
+    /// takes the shortcut the scalar already does. The corners cover the two roots the check
+    /// exists to accept, and the patterns whose reduction is extreme.
+    #[test]
+    fn bool_check_matches_the_general_product_in_every_lane() {
+        for (index, &value) in SPECIAL.iter().enumerate() {
+            // Lane 0 carries the value under test; the rest rotate through the corners, so a
+            // result that crossed a lane boundary lands on a different extreme.
+            let lanes: [Ghash128; WIDTH] = core::array::from_fn(|lane| {
+                let pattern = if lane == 0 {
+                    value
+                } else {
+                    SPECIAL[(index + lane) % SPECIAL.len()]
+                };
+                Ghash128::from_le_bytes(pattern.to_le_bytes())
+            });
+            let packed: PackedGhash128 = PackedValue::from_fn(|lane| lanes[lane]);
+
+            for (lane, &scalar) in lanes.iter().enumerate() {
+                assert_eq!(
+                    packed.bool_check().as_slice()[lane],
+                    scalar * (scalar - Ghash128::ONE),
+                    "lane {lane} of corner {value:#x}"
+                );
+                assert_eq!(packed.bool_check().as_slice()[lane], scalar.bool_check());
+            }
+        }
+
+        // Zero and one are the roots the check accepts, so both must vanish in every lane.
+        for root in [Ghash128::ZERO, Ghash128::ONE] {
+            let packed: PackedGhash128 = PackedValue::from_fn(|_| root);
+            assert!(
+                packed
+                    .bool_check()
+                    .as_slice()
+                    .iter()
+                    .all(|&value| value == Ghash128::ZERO)
+            );
         }
     }
 

@@ -9,6 +9,10 @@ homepage.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
+# Criterion pulls Rayon transitively, which does not build for WASI.
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+criterion.workspace = true
+
 [features]
 neon = ["blake3/neon"]
 parallel = ["blake3/rayon"]
@@ -19,6 +23,13 @@ p3-symmetric.workspace = true
 p3-util.workspace = true
 
 blake3.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+
+[[bench]]
+name = "blake3"
+harness = false
 
 [lints]
 workspace = true
