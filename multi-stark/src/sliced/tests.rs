@@ -347,6 +347,30 @@ mod kernel_tests {
     }
 
     #[test]
+    #[should_panic(expected = "the prepared powers must be the attached alpha powers")]
+    fn prepared_powers_one_short_of_the_alpha_powers_fail_to_attach() {
+        let mut rng = SmallRng::seed_from_u64(5);
+        let powers = (0..25).map(|_| rng.random()).collect::<Vec<Ghash128>>();
+        let prepared = prepared(&powers[..24], Ghash128::ZERO);
+        let lanes = BitLaneSums::new(&[Ghash128::ZERO; SLICED_LANES]);
+        let boundary = BoundaryEvals {
+            first: SlicedBit::<F>::default(),
+            last: SlicedBit::default(),
+            transition: SlicedBit::default(),
+        };
+        let folder = SlicedQuadraticFolder::new(
+            &[],
+            &[],
+            boundary,
+            &[],
+            &powers,
+            &lanes,
+            [false; SLICED_CELLS],
+        );
+        let _ = folder.with_prepared_powers(&prepared);
+    }
+
+    #[test]
     fn only_an_air_asserting_enough_constraints_takes_the_kernel() {
         let mut rng = SmallRng::seed_from_u64(3);
         let mut powers = |len| (0..len).map(|_| rng.random()).collect::<Vec<Ghash128>>();
