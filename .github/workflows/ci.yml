@@ -337,19 +337,25 @@ jobs:
             echo "This runner lacks the required SIMD features; the build above is the coverage."
           fi
 
-      # Miri cannot run the `asm!` of the AVX-512 BLAKE3 kernel, so only the processor can.
+      # Miri cannot run the `asm!` of the AVX-512 kernels, so only the processor can.
       #
-      # This leg compiles that kernel in, so its tests pin it to upstream on a runner that has it.
-      - name: Test blake3 (x86-64 AVX-512)
+      # This leg compiles those kernels in, so their tests pin them to the reference on a runner that has them.
+      #
+      # Every feature the leg sets is checked, since the binary runs none of them conditionally.
+      - name: Test blake3 and sha256 (x86-64 AVX-512)
         if: >-
           needs.plan.outputs.rust == 'true' &&
           matrix.avx512 &&
           needs.plan.outputs.avx512 == 'true'
         run: |
-          if grep -qw avx512f /proc/cpuinfo; then
-            python3 scripts/check.py test --package p3-blake3
+          supported=true
+          for feature in $(tr ',+' '  ' <<< "${{ matrix.features }}"); do
+            grep -qw "$feature" /proc/cpuinfo || supported=false
+          done
+          if $supported; then
+            python3 scripts/check.py test --package p3-blake3 --package p3-sha256
           else
-            echo "This runner has no AVX-512F; the build above is the coverage."
+            echo "This runner lacks the required SIMD features; the build above is the coverage."
           fi
 
       # Whatever the runner's own processor is, the interpreter has shims for the three
