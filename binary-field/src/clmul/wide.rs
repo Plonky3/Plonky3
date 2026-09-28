@@ -126,7 +126,69 @@ pub(crate) trait Lanes64: Copy {
             .xor3(spill.shl::<1>(), spill.shl::<3>())
             .xor(spill.shl::<4>())
     }
+
+    /// Reduces the 128-bit product in each 128-bit lane, leaving the element in its low quadword.
+    ///
+    /// The upper quadword of each lane is left unspecified.
+    ///
+    /// Written with the shift fold here.
+    ///
+    /// A backend whose multiplier is as cheap as an exclusive or folds with it instead.
+    #[inline(always)]
+    fn reduce_lane(self) -> Self {
+        // The fold reads the high half from the low quadword of its second argument.
+        fold(self, self.unpack_high(self))
+    }
+
+    /// Reduces products split by quadword parity, putting the elements back in lane order.
+    #[inline(always)]
+    fn reduce_wide(even: Self, odd: Self) -> Self {
+        // Interleave the halves so quadword k holds the low, then the high, half of product k.
+        //
+        //     low   = [ lo(p_0) lo(p_1) | lo(p_2) lo(p_3) | ... ]
+        //     high  = [ hi(p_0) hi(p_1) | hi(p_2) hi(p_3) | ... ]
+        fold(even.unpack_low(odd), even.unpack_high(odd))
+    }
 }
+
+/// Reduces the 128-bit product in each 128-bit lane with two carryless multiplies by the tail.
+///
+/// # Algorithm
+///
+/// Writing the product as `lo + hi x^64`, with `T = x^4 + x^3 + x + 1`:
+///
+/// ```text
+///     hi T     =  a + s x^64          s has degree at most 3
+///     s T      =  b                   degree at most 7, nothing left to fold
+///     result   =  lo + a + b
+/// ```
+///
+/// Both products take the high quadword of their first operand.
+///
+/// So the sum of the three registers holds the result in its low quadword:
+///
+/// ```text
+///     product  = [ lo , hi ]
+///     folded   = [ a  , s  ]          high quadword of product, times T
+///     spill    = [ b  , 0  ]          high quadword of folded, times T
+/// ```
+///
+/// Three instructions, against about nine for the shift fold.
+///
+/// The caller passes the tail, `0x1b`, in the high quadword of every 128-bit lane.
+// Only a backend with a cheap multiplier takes it, and the model tests it everywhere.
+#[cfg_attr(not(target_arch = "aarch64"), allow(dead_code))]
+#[inline(always)]
+pub(crate) fn reduce_by_multiply<L: Lanes64>(product: L, tail: L) -> L {
+    // The first fold, then the fold of its own spill.
+    let folded = product.clmul::<HIGH_BY_HIGH>(tail);
+    let spill = folded.clmul::<HIGH_BY_HIGH>(tail);
+    product.xor3(folded, spill)
+}
+
+/// The modulus tail `x^4 + x^3 + x + 1`, since `x^64` reduces to it.
+#[cfg_attr(not(target_arch = "aarch64"), allow(dead_code))]
+pub(crate) const TAIL_64: u64 = 0b1_1011;
 
 /// Reduces `low + high x^64` modulo `x^64 + x^4 + x^3 + x + 1`, lane by lane.
 ///
@@ -208,14 +270,7 @@ impl<L: Lanes64> Wide<L> {
     /// The reduced elements, back in their original lane order.
     #[inline(always)]
     pub(crate) fn reduce(self) -> L {
-        // Interleave the halves so quadword k holds the low, then the high, half of product k.
-        //
-        //     low   = [ lo(p_0) lo(p_1) | lo(p_2) lo(p_3) | ... ]
-        //     high  = [ hi(p_0) hi(p_1) | hi(p_2) hi(p_3) | ... ]
-        fold(
-            self.even.unpack_low(self.odd),
-            self.even.unpack_high(self.odd),
-        )
+        L::reduce_wide(self.even, self.odd)
     }
 }
 
@@ -354,7 +409,10 @@ mod tests {
     use proptest::prelude::*;
 
     use super::model::Model;
-    use super::{Lanes64, TOP_NIBBLE_FOLD, Wide, cubic_mul, cubic_mul_base, cubic_square, fold};
+    use super::{
+        Lanes64, TAIL_64, TOP_NIBBLE_FOLD, Wide, cubic_mul, cubic_mul_base, cubic_square, fold,
+        reduce_by_multiply,
+    };
     use crate::clmul::scalar_clmul_64x64;
 
     /// Lanes in the model: two 128-bit lanes, so a lane-crossing slip shows as a mismatch.
@@ -448,6 +506,26 @@ mod tests {
                     Model::<1>([[(product >> 64) as u64, 0]]),
                 );
                 assert_eq!(got.0[0][0], schoolbook(a, b), "{a:#x} * {b:#x}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_multiply_fold_is_exact_on_the_extremes() {
+        // Invariant: two products by the tail reduce `lo + hi x^64` exactly.
+        //
+        // Fixture state: 6 corners squared = 36 pairs, one product per 128-bit lane.
+        for a in CORNERS {
+            for b in CORNERS {
+                let product = scalar_clmul_64x64(a, b);
+                let lane = [product as u64, (product >> 64) as u64];
+
+                // The second lane holds the high half alone, so it reduces to hi x^64 = hi x^63 x.
+                let tail = Model::<2>([[TAIL_64; 2]; 2]);
+                let got = reduce_by_multiply(Model::<2>([lane, [0, lane[1]]]), tail);
+                let raised = schoolbook(schoolbook(lane[1], 1 << 63), 2);
+                assert_eq!(got.0[0][0], schoolbook(a, b), "{a:#x} * {b:#x}");
+                assert_eq!(got.0[1][0], raised, "{a:#x} * {b:#x}, high half");
             }
         }
     }

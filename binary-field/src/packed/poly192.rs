@@ -12,9 +12,9 @@
 //!
 //! So the cubic algebra runs on whole registers, and every carryless multiply fills every lane.
 //!
-//! A product costs twelve 256-bit carryless multiplies for four elements.
+//! A product costs six carryless multiplies per element, all of them filling every lane.
 //!
-//! The scalar route pays six 128-bit ones per element, twenty-four for the same four.
+//! Only three reductions follow, one per coordinate register.
 
 use core::array;
 use core::iter::{Product, Sum};
@@ -27,7 +27,7 @@ use p3_field::{
 use rand::Rng;
 use rand::distr::{Distribution, StandardUniform};
 
-use super::lanes::gf64::{self as lanes, Reg, WIDTH_64};
+use super::gf64::{self as lanes, Reg, WIDTH_64};
 use super::poly64::PackedPoly64;
 use crate::clmul::wide::{Wide, cubic_mul, cubic_mul_base, cubic_square};
 use crate::{Gf2, Poly64, Poly192};
@@ -412,14 +412,8 @@ impl PackedFieldExtension<Poly64, Poly192> for PackedPoly192 {
         // SAFETY: an element is `repr(transparent)` over three quadwords.
         //
         // One packing's worth of elements is then exactly three registers of quadwords.
-        //
-        // The loads are the unaligned form.
-        let interleaved = unsafe {
-            let base = rows.as_ptr().cast::<u128>();
-            array::from_fn(|r| lanes::load(base.add(r * lanes::WIDTH)))
-        };
-        // Six blends and three permutes gather each coordinate into its own register.
-        Self::from_vectors(lanes::deinterleave_3(interleaved))
+        let coordinates = unsafe { lanes::gather_3(rows.as_ptr().cast()) };
+        Self::from_vectors(coordinates)
     }
 
     /// The inverse transpose, written straight into the slice.
@@ -431,16 +425,8 @@ impl PackedFieldExtension<Poly64, Poly192> for PackedPoly192 {
     fn to_ext_slice(&self, out: &mut [Poly192]) {
         let rows: &mut [Poly192; WIDTH_64] = out.try_into().expect("slice length is not the width");
 
-        // Back to consecutive elements, three registers of them.
-        let interleaved = lanes::interleave_3(self.to_vectors());
-
         // SAFETY: the destination is one packing's worth of elements, exactly three registers.
-        unsafe {
-            let base = rows.as_mut_ptr().cast::<u128>();
-            for (r, register) in interleaved.into_iter().enumerate() {
-                lanes::store(base.add(r * lanes::WIDTH), register);
-            }
-        }
+        unsafe { lanes::scatter_3(rows.as_mut_ptr().cast(), self.to_vectors()) }
     }
 
     #[inline]
@@ -482,7 +468,7 @@ mod tests {
     };
     use proptest::prelude::*;
 
-    use super::super::lanes::gf64::WIDTH_64;
+    use crate::packed::gf64::WIDTH_64;
     use crate::{PackedPoly64, PackedPoly192, Poly64, Poly192};
 
     /// A packing of the given elements.

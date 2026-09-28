@@ -29,17 +29,31 @@ use p3_lookup::InteractionSymbolicBuilder;
 use p3_maybe_rayon::prelude::current_num_threads;
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_multi_stark::config::{MultiStarkConfig, PcsError, PcsProverError};
-#[cfg(all(
-    target_arch = "x86_64",
-    target_feature = "vpclmulqdq",
-    any(target_feature = "avx2", target_feature = "avx512f")
+#[cfg(any(
+    all(
+        target_arch = "x86_64",
+        target_feature = "vpclmulqdq",
+        any(target_feature = "avx2", target_feature = "avx512f")
+    ),
+    all(
+        target_arch = "aarch64",
+        target_endian = "little",
+        target_feature = "aes"
+    )
 ))]
 use p3_multi_stark::folder::ProverAir;
 use p3_multi_stark::folder::{InteractionMultilinearFolder, MultilinearFolder};
-#[cfg(not(all(
-    target_arch = "x86_64",
-    target_feature = "vpclmulqdq",
-    any(target_feature = "avx2", target_feature = "avx512f")
+#[cfg(not(any(
+    all(
+        target_arch = "x86_64",
+        target_feature = "vpclmulqdq",
+        any(target_feature = "avx2", target_feature = "avx512f")
+    ),
+    all(
+        target_arch = "aarch64",
+        target_endian = "little",
+        target_feature = "aes"
+    )
 )))]
 use p3_multi_stark::packed_ext::PackedExt;
 use p3_multi_stark::{
@@ -135,10 +149,17 @@ impl<H: HarnessHash> MultiStarkConfig for CubicWhirStarkConfig<H> {
 /// Where the target packs `Poly64` into SIMD registers, every folder the prover names is distinct.
 ///
 /// The prover's own bound can then state them all directly.
-#[cfg(all(
-    target_arch = "x86_64",
-    target_feature = "vpclmulqdq",
-    any(target_feature = "avx2", target_feature = "avx512f")
+#[cfg(any(
+    all(
+        target_arch = "x86_64",
+        target_feature = "vpclmulqdq",
+        any(target_feature = "avx2", target_feature = "avx512f")
+    ),
+    all(
+        target_arch = "aarch64",
+        target_endian = "little",
+        target_feature = "aes"
+    )
 ))]
 pub trait CubicAir:
     BaseAir<Val>
@@ -150,10 +171,17 @@ pub trait CubicAir:
 {
 }
 
-#[cfg(all(
-    target_arch = "x86_64",
-    target_feature = "vpclmulqdq",
-    any(target_feature = "avx2", target_feature = "avx512f")
+#[cfg(any(
+    all(
+        target_arch = "x86_64",
+        target_feature = "vpclmulqdq",
+        any(target_feature = "avx2", target_feature = "avx512f")
+    ),
+    all(
+        target_arch = "aarch64",
+        target_endian = "little",
+        target_feature = "aes"
+    )
 ))]
 impl<A> CubicAir for A where
     A: BaseAir<Val>
@@ -172,10 +200,17 @@ impl<A> CubicAir for A where
 /// The prover's own bound then names some folders twice, which the solver rejects as ambiguous.
 ///
 /// So this list names each distinct folder once.
-#[cfg(not(all(
-    target_arch = "x86_64",
-    target_feature = "vpclmulqdq",
-    any(target_feature = "avx2", target_feature = "avx512f")
+#[cfg(not(any(
+    all(
+        target_arch = "x86_64",
+        target_feature = "vpclmulqdq",
+        any(target_feature = "avx2", target_feature = "avx512f")
+    ),
+    all(
+        target_arch = "aarch64",
+        target_endian = "little",
+        target_feature = "aes"
+    )
 )))]
 pub trait CubicAir:
     BaseAir<Val>
@@ -192,10 +227,17 @@ pub trait CubicAir:
 {
 }
 
-#[cfg(not(all(
-    target_arch = "x86_64",
-    target_feature = "vpclmulqdq",
-    any(target_feature = "avx2", target_feature = "avx512f")
+#[cfg(not(any(
+    all(
+        target_arch = "x86_64",
+        target_feature = "vpclmulqdq",
+        any(target_feature = "avx2", target_feature = "avx512f")
+    ),
+    all(
+        target_arch = "aarch64",
+        target_endian = "little",
+        target_feature = "aes"
+    )
 )))]
 impl<A> CubicAir for A where
     A: BaseAir<Val>

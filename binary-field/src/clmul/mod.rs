@@ -24,8 +24,40 @@ mod sqrt;
 // The scalar vector kernels and the packings share it.
 //
 // Its model runs under `test` on every target, so no leg misses the algebra.
-#[cfg(any(test, all(target_arch = "x86_64", target_feature = "pclmulqdq")))]
+#[cfg(any(
+    test,
+    all(target_arch = "x86_64", target_feature = "pclmulqdq"),
+    all(
+        target_arch = "aarch64",
+        target_endian = "little",
+        target_feature = "aes"
+    ),
+))]
 pub(crate) mod wide;
+
+// The scalar kernels on one 128-bit register, written once over the lane algebra.
+#[cfg(any(
+    test,
+    all(target_arch = "x86_64", target_feature = "pclmulqdq"),
+    all(
+        target_arch = "aarch64",
+        target_endian = "little",
+        target_feature = "aes"
+    ),
+))]
+mod register;
+
+/// The 128-bit register the scalar kernels run on.
+#[cfg(all(target_arch = "x86_64", target_feature = "pclmulqdq"))]
+type Register = core::arch::x86_64::__m128i;
+
+/// The 128-bit register the scalar kernels run on.
+#[cfg(all(
+    target_arch = "aarch64",
+    target_endian = "little",
+    target_feature = "aes"
+))]
+type Register = core::arch::aarch64::uint64x2_t;
 
 pub(crate) use gf64::{poly_dot_64, poly_inverse_64, poly_mul_64, poly_sqrt_64, poly_square_64};
 pub(crate) use gf192::{
@@ -431,6 +463,25 @@ mod tests {
         low ^ clmul_low(high ^ spill, tail) ^ carried
     }
 
+    /// The AArch64 kernel's three-limb reduction, written with shifts instead of intrinsics.
+    ///
+    /// The top limb folds onto the middle one before the middle one is raised by `x^64`.
+    fn three_limb_shape(a: u128, b: u128) -> u128 {
+        let ext = |x: u128, y: u128| (x >> 64) | (y << 64);
+        let clmul_low = |x: u128, y: u128| super::clmul_64x64(x as u64, y as u64);
+        let clmul_high = |x: u128, y: u128| super::clmul_64x64((x >> 64) as u64, (y >> 64) as u64);
+        let tail = (TAIL_128 as u64 as u128) | ((TAIL_128 as u64 as u128) << 64);
+
+        // The three limbs of the 256-bit product, the middle one left whole.
+        let swapped = ext(b, b);
+        let middle = clmul_low(a, swapped) ^ clmul_high(a, swapped);
+        let (low, high) = (clmul_low(a, b), clmul_high(a, b));
+
+        // m = middle + h_1 T, then low + h_0 T + m_1 T + m_0 x^64.
+        let m = middle ^ clmul_high(high, tail);
+        low ^ clmul_low(high, tail) ^ clmul_high(m, tail) ^ ext(0, m)
+    }
+
     /// The split multiplier's lane choreography, written with shifts instead of intrinsics.
     ///
     /// The multiplier compiles only on AArch64 with `aes`, so on every other target nothing
@@ -521,6 +572,11 @@ mod tests {
                     vector_kernel_shape(a, b),
                     super::composed_poly_mul_128(a, b),
                     "{a:#x} * {b:#x}"
+                );
+                assert_eq!(
+                    three_limb_shape(a, b),
+                    super::composed_poly_mul_128(a, b),
+                    "{a:#x} * {b:#x}, three limbs"
                 );
             }
         }
@@ -645,6 +701,7 @@ mod tests {
         #[test]
         fn the_vector_kernel_algebra_matches_the_composition(a: u128, b: u128) {
             prop_assert_eq!(vector_kernel_shape(a, b), super::composed_poly_mul_128(a, b));
+            prop_assert_eq!(three_limb_shape(a, b), super::composed_poly_mul_128(a, b));
         }
 
         /// The split multiplier's choreography must reduce to the modular product, on every

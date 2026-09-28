@@ -36,6 +36,7 @@ jobs:
       keccak: ${{ steps.impact.outputs.keccak }}
       sha_ni: ${{ steps.impact.outputs.sha_ni }}
       gfni: ${{ steps.impact.outputs.gfni }}
+      binary_field: ${{ steps.impact.outputs.binary_field }}
       avx512: ${{ steps.impact.outputs.avx512 }}
       vpclmulqdq: ${{ steps.impact.outputs.vpclmulqdq }}
       toml: ${{ steps.impact.outputs.toml }}
@@ -295,6 +296,17 @@ jobs:
         env:
           RUSTFLAGS: -C debuginfo=0 -C target-feature=-sha3
         run: python3 scripts/check.py test --package p3-keccak
+
+      # Apple silicon always has `sha3`, so the three-way exclusive or the NEON kernels take is
+      # `EOR3` there. This run turns it off to cover the two-instruction fallback.
+      - name: Test binary-field (aarch64, no SHA3)
+        if: >-
+          needs.plan.outputs.rust == 'true' &&
+          matrix.os == 'macos-latest' &&
+          needs.plan.outputs.binary_field == 'true'
+        env:
+          RUSTFLAGS: -C debuginfo=0 -C target-feature=-sha3
+        run: python3 scripts/check.py test --package p3-binary-field
 
       # `+sha` also makes `sha2` emit SHA-NI unconditionally, so every SHA-256 test here
       # needs the instructions rather than just the four-lane kernel under test.

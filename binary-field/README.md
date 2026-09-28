@@ -21,8 +21,8 @@ Key items:
   absent from the rendered docs
 - `Poly64` — `GF(2^64)` in the polynomial basis of `x^64 + x^4 + x^3 + x + 1`
 - `Poly192` — `GF(2^192)` as the cubic extension `y^3 + y + 1` of `Poly64`
-- `PackedPoly64` — the packing of `Poly64`, four elements per 256-bit register, on `x86_64`
-  with `vpclmulqdq` only
+- `PackedPoly64` — the packing of `Poly64`: four elements per 256-bit register on `x86_64`
+  with `vpclmulqdq`, two per 128-bit register on AArch64 with `aes`
 - `PackedPoly192` — the extension packing of `Poly192` over `PackedPoly64`, one register per
   coordinate, under the same condition
 - `BasedVectorSpace` / `ExtensionField` between every pair of byte-aligned tower levels, in the tower basis
@@ -63,9 +63,9 @@ constructors.
 The tower levels are unpacked: `Packing` is `Self` at every one of them, because a tower
 product is table lookups that no vector unit widens.
 
-The polynomial-basis fields pack wherever `vpclmulqdq` widens the multiply:
+The polynomial-basis fields pack wherever the carryless multiply has room for more than one element:
 
-- `Ghash128` packs one element per 128-bit lane.
+- `Ghash128` packs one element per 128-bit lane, on `vpclmulqdq` registers.
 - `Poly64` packs one element per quadword, so a product is two carryless multiplies per register.
 - `Poly192` packs over `Poly64` with one register per coordinate, so twelve carryless multiplies
   make four products.
@@ -74,7 +74,13 @@ The polynomial-basis fields pack wherever `vpclmulqdq` widens the multiply:
 A prover keeps one packed value per trace column, and a 512-bit `GF(2^192)` value is 192 bytes.
 Measured end to end on Zen 5, the smaller footprint beats twice the products per instruction.
 
-Reductions modulo the `GF(2^64)` polynomial use shifts and one byte shuffle, never a multiply.
+On AArch64, `Poly64` packs two elements per 128-bit register, and `Poly192` three such registers.
+
+Reductions modulo the `GF(2^64)` polynomial use shifts and one byte shuffle on `x86_64`.
+
+On AArch64 they use two carryless multiplies by the tail `0x1b` instead.
+
+Apple cores issue `PMULL` as cheaply as an exclusive or, so three instructions replace about nine.
 Dot products at every level accumulate unreduced products and reduce the sum once.
 Without a wide carryless multiply every one of these fields is its own packing.
 
@@ -97,6 +103,10 @@ Software GHASH inversion uses the tower norm instead, and does not compile those
 With `gfni`, `avx512f`, `avx512bw` and `avx512vbmi`, each run of squarings in the `GF(2^64)`
 inversion chain is one bit-matrix product on the byte-affine instruction.
 Its matrices are compile-time constants read whole, so the chain stays constant-time.
+
+On AArch64 each run is 64 fixed columns, each kept or cleared by a mask built from one bit of the operand.
+
+No address or branch depends on the operand, so that chain is constant-time too.
 
 Hardware dispatch is selected at compile time, so this `no_std` crate performs no CPU checks
 inside scalar arithmetic. `poly_basis::HAS_HARDWARE_CLMUL` describes that compiled choice.
