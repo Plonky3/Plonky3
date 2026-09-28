@@ -55,5 +55,9 @@ harness = false
 name = "wide_rows"
 harness = false
 
+[[bench]]
+name = "leaf_pass"
+harness = false
+
 [lints]
 workspace = true

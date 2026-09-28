@@ -326,6 +326,8 @@ where
     /// The block count, and the highest layer where every block holds its minimum of groups.
     ///
     /// Once some thread would get no block, one block takes every remaining layer.
+    ///
+    /// Rows still to hash are the exception, when they are worth spreading over the pool.
     fn pass_shape(&self, lo: usize) -> (usize, usize) {
         let group = Self::group();
         let min_block = group * MIN_BLOCK_GROUPS;
@@ -344,7 +346,11 @@ where
         // Once some thread would get no block, the layers left are too narrow to share.
         //
         // One block then finishes them, cheaper than a dispatch per remaining layer.
-        if blocks == 1 || blocks < threads {
+        //
+        // Wide rows break that rule: a few blocks of them still beat one thread.
+        //
+        //     256 rows of 64 KiB, 32 lanes, 32 threads  ->  8 blocks, not 1
+        if blocks == 1 || (blocks < threads && !self.rows_worth_splitting(lo)) {
             return (1, self.layers.len() - 1);
         }
 
@@ -354,6 +360,25 @@ where
             .last()
             .unwrap_or(lo);
         (blocks, hi)
+    }
+
+    /// Whether the rows hashed from a layer up are worth spreading over the pool.
+    ///
+    /// Rows are priced by their bytes, at the rate of a streaming pass over memory.
+    ///
+    /// That rate is what the fastest vectorized byte hashes cost.
+    ///
+    /// A slower hash is priced low, which errs toward keeping a small layer on one thread.
+    fn rows_worth_splitting(&self, lo: usize) -> bool {
+        // Every row still to hash, the leaves and each later injection alike.
+        let elements: usize = self.layers[lo..]
+            .iter()
+            .flat_map(|layer| &layer.matrices)
+            .map(|m| m.height() * m.width())
+            .sum();
+
+        // One item per byte, so the pool's own gate decides.
+        should_split(elements.saturating_mul(size_of::<P::Value>()), 1)
     }
 
     /// Build a band of layers as independent subtree blocks, one task each.
@@ -1259,8 +1284,12 @@ mod tests {
                 assert!((lo..builder.layers.len()).contains(&hi), "height {height}");
                 if blocks > 1 {
                     assert!(blocks <= BLOCKS_PER_THREAD * current_num_threads());
-                    assert!(blocks >= current_num_threads(), "height {height}");
                     assert!(builder.layers[hi].computed >= blocks * group * MIN_BLOCK_GROUPS);
+
+                    // Fewer blocks than threads only when rows worth splitting lie ahead.
+                    if blocks < current_num_threads() {
+                        assert!(builder.rows_worth_splitting(lo), "height {height}");
+                    }
                 } else {
                     // A single block always finishes the tree.
                     assert_eq!(hi, builder.layers.len() - 1, "height {height}");
@@ -1268,6 +1297,47 @@ mod tests {
                 lo = hi + 1;
             }
             assert_eq!(lo, builder.layers.len());
+        }
+    }
+
+    #[test]
+    fn wide_rows_split_below_one_block_per_thread() {
+        // Invariant: rows worth spreading get one block per full vector group, whatever the pool.
+        //
+        // Invariant: narrow rows that leave a thread idle stay on one block.
+        //
+        // Fixture state: 2, 3 and 16 groups of rows, 2 MiB of them in total, or 4 bytes each.
+        //
+        //     2 groups x 16 rows, 2 MiB   ->  2 blocks
+        //     2 groups x 16 rows x 4 B    ->  1 block on a pool of 3 or more
+        let mut rng = SmallRng::seed_from_u64(6);
+        let perm = Poseidon2BabyBear::<16>::new_from_rng_128(&mut rng);
+        type Sponge = PaddingFreeSponge<Poseidon2BabyBear<16>, 16, 8, 8>;
+        type Compress = TruncatedPermutation<Poseidon2BabyBear<16>, 2, 8, 16>;
+        type Builder<'a> =
+            TreeBuilder<'a, Packed, Packed, Sponge, Compress, RowMajorMatrix<F>, 2, 8>;
+        let h = Sponge::new(perm.clone());
+        let c = Compress::new(perm);
+        let group = Builder::group();
+        let threads = current_num_threads();
+
+        for groups in [2usize, 3, BLOCKS_PER_THREAD] {
+            let rows = groups * group;
+
+            // Wide rows: the leaf pass splits at every group, below the cap of 16 per thread.
+            //
+            // Two mebibytes in total clear the gate of any pool below a few hundred workers.
+            let width = (2 << 20) / size_of::<F>() / rows;
+            let wide = [RowMajorMatrix::<F>::new(vec![F::ZERO; rows * width], width)];
+            let (blocks, _) = Builder::new(&h, &c, &wide).pass_shape(0);
+            assert_eq!(blocks, groups, "{groups} groups of wide rows");
+
+            // Narrow rows: too cheap to spread, so a pool wider than the groups keeps one block.
+            let narrow = [RowMajorMatrix::<F>::new(vec![F::ZERO; rows], 1)];
+            let (blocks, _) = Builder::new(&h, &c, &narrow).pass_shape(0);
+            if threads > groups {
+                assert_eq!(blocks, 1, "{groups} groups of narrow rows");
+            }
         }
     }
 
