@@ -1076,6 +1076,19 @@ pub trait Field:
     /// field's packed multiplication is latency-bound enough for lockstep evaluation to help.
     const BENEFITS_FROM_LOCKSTEP_EVALUATION: bool = false;
 
+    /// Prepares a target-specific expansion of 64 bit-plane words into 64 weighted sums.
+    ///
+    /// For lane `l`, the prepared operation appends the sum of `weights[c]` for every corner
+    /// `c` whose word has bit `l` set. Unsupported fields and targets return `None` so callers
+    /// retain their portable path.
+    #[must_use]
+    fn prepare_bit_plane_expansion(
+        weights: &[Self; 64],
+    ) -> Option<impl Fn(&[u64; 64], &mut Vec<Self>) + Send + Sync + 'static> {
+        let _ = weights;
+        None::<fn(&[u64; 64], &mut Vec<Self>)>
+    }
+
     /// Check if the given field element is equal to the unique additive identity (ZERO).
     #[must_use]
     #[inline]
