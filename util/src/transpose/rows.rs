@@ -37,6 +37,12 @@ use core::slice;
 ///
 /// The rows need not be adjacent in memory, so a caller can gather them from anywhere.
 ///
+/// On AVX2 and NEON targets, a 4-byte, 4-byte-aligned element is copied as a `u32` vector lane.
+///
+/// Such an element must have no padding and no uninitialized bytes, which every field element and integer satisfies.
+///
+/// A type like `#[repr(C, align(4))] struct P(u8)`, or `MaybeUninit<u32>`, is undefined behavior on those targets.
+///
 /// # Arguments
 ///
 /// - `rows`: number of input rows.
@@ -119,6 +125,10 @@ pub(crate) fn transpose_rows_strided<'a, T, R>(
         // SAFETY: `T` has the size and alignment of `u32`.
         //
         // So every row and the output reinterpret as 32-bit words over the same memory.
+        //
+        // The documented contract rules out padding and uninitialized bytes in `T`.
+        //
+        // So every word the kernel loads is an initialized integer.
         //
         // The kernel only copies whole elements to whole elements.
         //

@@ -171,6 +171,14 @@ const PARALLEL_THRESHOLD: usize = 4 * 1024 * 1024;
 /// - Initial element at `input[row * width + col]`,
 /// - Transposed position is `output[col * height + row]`.
 ///
+/// On AVX2 and NEON targets, a 4-byte, 4-byte-aligned element is copied as a `u32` vector lane.
+///
+/// On NEON targets, an 8-byte, 8-byte-aligned element is copied as a `u64` vector lane.
+///
+/// Such an element must have no padding and no uninitialized bytes, which every field element and integer satisfies.
+///
+/// A type like `#[repr(C, align(4))] struct P(u8)`, or `MaybeUninit<u32>`, is undefined behavior on those targets.
+///
 /// # Arguments
 ///
 /// * `input` - Source matrix in row-major order
@@ -225,6 +233,7 @@ pub fn transpose<T: Copy + Send + Sync>(
             // SAFETY:
             // - input/output lengths verified above
             // - T is 4 bytes and 4-byte aligned, matching u32 size and alignment
+            // - The documented contract rules out padding and uninitialized bytes in T
             // - Pointers derived from valid slices
             unsafe {
                 transpose_neon_4b(
@@ -246,6 +255,7 @@ pub fn transpose<T: Copy + Send + Sync>(
             // SAFETY:
             // - input/output lengths verified above
             // - T is 8 bytes and 8-byte aligned, matching u64 size and alignment
+            // - The documented contract rules out padding and uninitialized bytes in T
             // - Pointers derived from valid slices
             unsafe {
                 transpose_neon_8b(
