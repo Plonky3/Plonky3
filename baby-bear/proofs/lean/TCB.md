@@ -15,7 +15,7 @@ Measured totals (regenerate with the commands in [`SYNC.md`](SYNC.md)):
 | Generated for dependencies (`generated/p3-{monty-31,mds}/…/{Types,Funs}.lean`) | **568** lines, **0** `sorry` |
 | Hand-written assumptions (`assumptions/`) | **522** lines, **0** `sorry`, **0** `axiom`, **10** `opaque` |
 | Pre-extraction patches (Rust source) | **3** files, **17** hunks. Hidden items are behind `cfg(hax_backend_lean)`; the cfg declaration and some redundant bounds are not |
-| Upstream tests diverging under the pre-patches | **0** (4671 run) |
+| Upstream tests diverging under the pre-patches | **0** (6742 run) |
 | Post-extraction patches | **3** files, **17** hunks |
 | Theorems in `spec/` | **27**, axiom footprint `[propext, Classical.choice, Quot.sound]` |
 | **`lake build` warnings** | **0** |
@@ -120,7 +120,7 @@ differs. Two checks back that up:
 1. *The normal build is unchanged.* `test-pre-patches.py` (step 2) runs
    `cargo test --workspace` on the tree as shipped and with the patches, and
    compares per test and per test source: **0 divergences
-   (4671 tests)**. It writes the result into each patch's header (`# Tested:`
+   (6742 tests)**. It writes the result into each patch's header (`# Tested:`
    and one `# Divergence:` entry per diverging test), and fails while any
    entry is unclassified. The only unconditional edits are implied bounds and
    the cfg declaration.
@@ -128,7 +128,7 @@ differs. Two checks back that up:
    for `thumbv7em-none-eabi` under the cfg (the variant charon sees),
    warning-free.
 
-The upstream run is 4671 tests: 4625 pass in both trees and 46 are
+The upstream run is 6742 tests: 6688 pass in both trees and 54 are
 `#[ignore]`d in both.
 
 ### Charon scope flags (not patches, but they restrict what is extracted)
@@ -197,7 +197,7 @@ certificate), `BabyBear.fieldSize_sub_one_factorization`.
 * `Constants.lean`: seven theorems about the constants
   (`monty_prime_eq_fieldSize`, `monty_prime_is_prime`, `two_adicity_eq_spec`,
   `monty_bits_eq_thirtyTwo`, `monty_mu_inverse`, `coprime_seven_pred_prime`,
-  `fieldSize_sub_one_factorization'`), four wiring lemmas that the trait
+  `fieldSize_sub_one_factorization`), four wiring lemmas that the trait
   instances return those constants, and `two_adicity_maximal`
   (`2^(TWO_ADICITY+1) ∤ p - 1`). The factorization lemma fixes the odd part by
   hand, so on its own it does not say `TWO_ADICITY` is the *largest* such

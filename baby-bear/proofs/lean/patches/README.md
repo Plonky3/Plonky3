@@ -47,8 +47,8 @@ introduces it, and **the script writes it into that patch's header**, in a
 block it maintains just above the diff:
 
 ```
-# Tested:     test-pre-patches.py: 4625 of 4671 upstream tests pass as
-#             shipped, 4623 with the pre-patches; 1 divergence from this patch.
+# Tested:     test-pre-patches.py: 6688 of 6742 upstream tests pass as
+#             shipped, 6687 with the pre-patches; 1 divergence from this patch.
 # Divergence: p3_mds[unittests src/lib.rs]::util::tests::first_row_to_first_col_odd_length
 #   observed: passes as shipped; FAILED with the patches: assertion `left == right` failed
 #   class:    TODO

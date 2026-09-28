@@ -34,8 +34,8 @@
 # Under the cfg, rustc checks that nothing reachable still uses an absent
 # method (see 020).
 #
-# Tested:     test-pre-patches.py: 4625 of 4671 upstream tests pass as
-#             shipped, 4625 with the pre-patches; 0 divergences from this patch.
+# Tested:     test-pre-patches.py: 6688 of 6742 upstream tests pass as
+#             shipped, 6688 with the pre-patches; 0 divergences from this patch.
 #
 diff --git a/field/src/packed/packed_traits.rs b/field/src/packed/packed_traits.rs
 index b16afb10..15c9175a 100644

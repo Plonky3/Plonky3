@@ -95,17 +95,17 @@ KoalaBear the odd part is `127`; for BabyBear it is `15 = 3 * 5`.
 On its own this relates two extracted constants with an odd part chosen by
 hand. Read it together with `two_adicity_eq_spec` (the constant is CompPoly's)
 and `two_adicity_maximal` (it is the largest such power). -/
-theorem fieldSize_sub_one_factorization' :
+theorem fieldSize_sub_one_factorization :
     P.val - 1 = 2 ^ TWO_ADICITY.val * 15 := by
   rw [monty_prime_eq_fieldSize, two_adicity_eq_spec]
   exact BabyBear.fieldSize_sub_one_factorization
 
 /-- `TWO_ADICITY` is maximal: `2^(TWO_ADICITY + 1)` does not divide `p - 1`, so
 `2^TWO_ADICITY` is the largest power of two dividing it. This is what the
-constant has to mean; `fieldSize_sub_one_factorization'` alone would also hold
+constant has to mean; `fieldSize_sub_one_factorization` alone would also hold
 for a smaller exponent with a larger (even) cofactor. -/
 theorem two_adicity_maximal : ¬ 2 ^ (TWO_ADICITY.val + 1) ∣ P.val - 1 := by
-  rw [fieldSize_sub_one_factorization', pow_succ,
+  rw [fieldSize_sub_one_factorization, pow_succ,
     Nat.mul_dvd_mul_iff_left (Nat.two_pow_pos _)]
   decide
 

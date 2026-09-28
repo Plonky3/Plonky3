@@ -33,8 +33,8 @@
 # charon extracts) and the whole workspace without it (what upstream's tests
 # run), both warning-free.
 #
-# Tested:     test-pre-patches.py: 4625 of 4671 upstream tests pass as
-#             shipped, 4625 with the pre-patches; 0 divergences from this patch.
+# Tested:     test-pre-patches.py: 6688 of 6742 upstream tests pass as
+#             shipped, 6688 with the pre-patches; 0 divergences from this patch.
 #
 diff --git a/field/src/extension/binomial_extension.rs b/field/src/extension/binomial_extension.rs
 index 496a075e..d22fbbb8 100644
@@ -127,7 +127,7 @@ index 1c363370..424d1e87 100644
  
  use crate::CryptographicHasher;
  
-@@ -32,7 +32,7 @@ impl<Inner> SerializingHasher<Inner> {
+@@ -33,7 +33,7 @@
  
  impl<F, Inner, const N: usize> CryptographicHasher<F, [u8; N]> for SerializingHasher<Inner>
  where
@@ -136,7 +136,7 @@ index 1c363370..424d1e87 100644
      Inner: CryptographicHasher<u8, [u8; N]>,
  {
      /// Forwarded from the inner byte hasher, the one digest shape here that batches.
-@@ -133,7 +133,7 @@ where
+@@ -121,7 +121,7 @@
  
  impl<F, Inner, const N: usize> CryptographicHasher<F, [u32; N]> for SerializingHasher<Inner>
  where
@@ -145,7 +145,7 @@ index 1c363370..424d1e87 100644
      Inner: CryptographicHasher<u32, [u32; N]>,
  {
      fn hash_iter<I>(&self, input: I) -> [u32; N]
-@@ -146,7 +146,7 @@ where
+@@ -134,7 +134,7 @@
  
  impl<F, Inner, const N: usize> CryptographicHasher<F, [u64; N]> for SerializingHasher<Inner>
  where
@@ -154,7 +154,7 @@ index 1c363370..424d1e87 100644
      Inner: CryptographicHasher<u64, [u64; N]>,
  {
      fn hash_iter<I>(&self, input: I) -> [u64; N]
-@@ -160,7 +160,7 @@ where
+@@ -148,7 +148,7 @@
  impl<F, Inner, const N: usize, const M: usize> CryptographicHasher<[F; M], [[u8; M]; N]>
      for SerializingHasher<Inner>
  where
@@ -163,7 +163,7 @@ index 1c363370..424d1e87 100644
      Inner: CryptographicHasher<[u8; M], [[u8; M]; N]>,
  {
      fn hash_iter<I>(&self, input: I) -> [[u8; M]; N]
-@@ -174,7 +174,7 @@ where
+@@ -162,7 +162,7 @@
  impl<F, Inner, const N: usize, const M: usize> CryptographicHasher<[F; M], [[u32; M]; N]>
      for SerializingHasher<Inner>
  where
@@ -172,7 +172,7 @@ index 1c363370..424d1e87 100644
      Inner: CryptographicHasher<[u32; M], [[u32; M]; N]>,
  {
      fn hash_iter<I>(&self, input: I) -> [[u32; M]; N]
-@@ -188,7 +188,7 @@ where
+@@ -176,7 +176,7 @@
  impl<F, Inner, const N: usize, const M: usize> CryptographicHasher<[F; M], [[u64; M]; N]>
      for SerializingHasher<Inner>
  where
@@ -180,4 +180,4 @@ index 1c363370..424d1e87 100644
 +    F: Field + RawDataSerializable,
      Inner: CryptographicHasher<[u64; M], [[u64; M]; N]>,
  {
-     // Flattened iterators inhibit vectorization when pairing 32-bit elements into u64s.
+     fn hash_iter<I>(&self, input: I) -> [[u64; M]; N]

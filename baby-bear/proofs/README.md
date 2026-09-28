@@ -39,7 +39,7 @@ missing tool stops it with the command to run.
 
 | Tool | Version | Install |
 |---|---|---|
-| Rust | via `rustup` | <https://rustup.rs> |
+| Rust | current `stable`, via `rustup`: upstream CI builds with the latest stable, and step 2 builds upstream's tests with yours | <https://rustup.rs>; `rustup update stable` |
 | `cargo-hax` | **0.4.1**, on `PATH` (or set `HAX_BIN`) | `cargo install --locked cargo-hax@0.4.1` |
 | charon and aeneas | the versions hax 0.4.1 pins (`charon nightly-2026.09.02`, `aeneas build-183e4f0`) | `(cd baby-bear && cargo hax tools install)` (checksum-verified, into `~/.cache/hax/`) |
 | charon's Rust toolchain | `nightly-2026-08-18` with `rustc-dev`, `llvm-tools`, `rust-src` and target `thumbv7em-none-eabi` | `rustup toolchain install nightly-2026-08-18 --profile minimal --component rustc-dev,llvm-tools,rust-src --target thumbv7em-none-eabi` |
