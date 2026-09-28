@@ -487,6 +487,19 @@ impl<R: Field> LaneSums<R> {
     }
 }
 
+/// Fewest constraints for the ordinary sliced folder to take the prepared kernel.
+///
+/// Each evaluation pays the kernel a fixed cost, clearing its sums and reading them out
+/// through 128 plane sums and a 128-term product. An AIR asserting fewer constraints saves
+/// less than that over summing them one at a time.
+const MIN_CONSTRAINTS: usize = 640;
+
+/// Fewest constraints for the four-cell single-plane folder to take the prepared kernel.
+///
+/// The higher cutoff reflects its four prepared states. On the quadratic folder's measured
+/// all-quadratic path, the kernel was slower at 1,280 constraints and faster at 2,560.
+const MIN_BIT_CONSTRAINTS: usize = 2_560;
+
 /// Descending alpha powers laid out for the sliced folders to sum constraints eight at a time.
 ///
 /// Every constraint's lanes are weighted the same way, so the weights can wait until the end:
@@ -519,7 +532,16 @@ impl<R: Field> PreparedPowers<R> {
     /// constraints to repay the kernel's fixed cost per evaluation.
     #[must_use]
     pub(crate) fn per_air(alpha_powers: &[Vec<R>], generator: R) -> Vec<Option<Self>> {
-        kernel::Prepared::per_air(alpha_powers, generator)
+        kernel::Prepared::per_air(alpha_powers, generator, MIN_CONSTRAINTS)
+            .into_iter()
+            .map(|prepared| prepared.map(Self))
+            .collect()
+    }
+
+    /// Lay out powers for the single-plane folder, using its measured activation threshold.
+    #[must_use]
+    pub(crate) fn per_air_bits(alpha_powers: &[Vec<R>]) -> Vec<Option<Self>> {
+        kernel::Prepared::per_air(alpha_powers, R::ZERO, MIN_BIT_CONSTRAINTS)
             .into_iter()
             .map(|prepared| prepared.map(Self))
             .collect()
@@ -913,13 +935,6 @@ mod kernel {
     /// See [`gather`].
     const GATHER: [i64; 8] = gather();
 
-    /// Fewest constraints an AIR asserts for its evaluations to take the kernel.
-    ///
-    /// Each evaluation pays the kernel a fixed cost, clearing its sums and reading them out
-    /// through 128 plane sums and a 128-term product. An AIR asserting fewer constraints saves
-    /// less than that over summing them one at a time.
-    pub(super) const MIN_CONSTRAINTS: usize = 640;
-
     /// Descending alpha powers as the bit matrices that add them, eight constraints a block.
     #[derive(Debug)]
     pub(super) struct Prepared<R> {
@@ -936,10 +951,14 @@ mod kernel {
 
     impl<R: Field> Prepared<R> {
         /// Lay out each AIR's powers against one basis of `R`, see [`PreparedPowers::per_air`].
-        pub(super) fn per_air(alpha_powers: &[Vec<R>], generator: R) -> Vec<Option<Self>> {
+        pub(super) fn per_air(
+            alpha_powers: &[Vec<R>],
+            generator: R,
+            min_constraints: usize,
+        ) -> Vec<Option<Self>> {
             let basis = alpha_powers
                 .iter()
-                .any(|powers| powers.len() >= MIN_CONSTRAINTS)
+                .any(|powers| powers.len() >= min_constraints)
                 .then(coordinate_basis::<R>)
                 .flatten()
                 .map(Arc::from);
@@ -947,7 +966,7 @@ mod kernel {
                 .iter()
                 .map(|powers| {
                     let basis = basis.as_ref()?;
-                    (powers.len() >= MIN_CONSTRAINTS)
+                    (powers.len() >= min_constraints)
                         .then(|| Self::new(powers, generator, Arc::clone(basis)))
                 })
                 .collect()
@@ -1333,7 +1352,11 @@ mod kernel {
     #[allow(clippy::missing_const_for_fn)]
     impl<R> Prepared<R> {
         /// Refuses every AIR, the target having no kernel to prepare for.
-        pub(super) fn per_air(alpha_powers: &[Vec<R>], _generator: R) -> Vec<Option<Self>> {
+        pub(super) fn per_air(
+            alpha_powers: &[Vec<R>],
+            _generator: R,
+            _min_constraints: usize,
+        ) -> Vec<Option<Self>> {
             alpha_powers.iter().map(|_| None).collect()
         }
 

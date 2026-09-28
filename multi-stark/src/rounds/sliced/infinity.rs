@@ -294,7 +294,7 @@ where
             .collect::<Vec<_>>()
     };
     let word_weights = lift(word_weights.as_slice());
-    let prepared_powers = PreparedPowers::per_air(alpha_powers, R::ZERO);
+    let prepared_powers = PreparedPowers::per_air_bits(alpha_powers);
 
     // The prefixes in index order, the last variable varying fastest. A variable at `0` or `1`
     // selects the low or the high half of the corners, and a variable at infinity reads both, as
