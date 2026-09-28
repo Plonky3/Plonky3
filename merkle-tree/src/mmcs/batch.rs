@@ -1396,4 +1396,44 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn byte_hash_openings_verify_against_batched_commits() {
+        // Invariant: the verifier's one-at-a-time node hash equals the committer's batched one.
+        //
+        // Commit hashes each tree layer as one slice of many nodes.
+        // Verify hashes one node per path level.
+        //
+        //     heights 1, 7, 64 and 100: one leaf, padding, a full tree, a padded one
+        //     a second matrix of half the height is injected one layer up
+        use p3_symmetric::CompressionFunctionFromHasher;
+
+        fn check<H>(hasher: H)
+        where
+            H: CryptographicHasher<u8, [u8; 32]> + Sync + Clone,
+        {
+            type Mmcs<H> =
+                MerkleTreeMmcs<u8, u8, H, CompressionFunctionFromHasher<H, 2, 32>, 2, 32>;
+            let mmcs = Mmcs::new(
+                hasher.clone(),
+                CompressionFunctionFromHasher::new(hasher),
+                0,
+            );
+            let mut rng = SmallRng::seed_from_u64(5);
+            for height in [1, 7, 64, 100] {
+                let tall = RowMajorMatrix::<u8>::rand(&mut rng, height, 33);
+                let short = RowMajorMatrix::<u8>::rand(&mut rng, height.div_ceil(2), 5);
+                let dims = [tall.dimensions(), short.dimensions()];
+                let (commit, data) = mmcs.commit(vec![tall, short]);
+                for index in [0, height / 2, height - 1] {
+                    let opening = mmcs.open_batch(index, &data);
+                    mmcs.verify_batch(&commit, &dims, index, (&opening).into())
+                        .unwrap_or_else(|e| panic!("height {height} index {index}: {e:?}"));
+                }
+            }
+        }
+
+        check(p3_blake3::Blake3);
+        check(p3_keccak::Keccak256Hash);
+    }
 }

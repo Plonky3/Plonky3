@@ -59,5 +59,9 @@ harness = false
 name = "leaf_pass"
 harness = false
 
+[[bench]]
+name = "verify_batch"
+harness = false
+
 [lints]
 workspace = true
