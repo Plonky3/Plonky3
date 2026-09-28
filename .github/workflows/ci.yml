@@ -120,11 +120,21 @@ jobs:
             os: ubuntu-latest
             features: "+avx2,+vpclmulqdq"
             compile_only: true
+            miri_clmul: true
             target: x86_64-unknown-linux-gnu
             modes: serial parallel
           - name: linux, avx512f+vpclmulqdq, build only
             os: ubuntu-latest
             features: "+avx512f,+vpclmulqdq"
+            compile_only: true
+            miri_clmul: true
+            target: x86_64-unknown-linux-gnu
+            modes: serial parallel
+          # `+avx512f` does not imply `+avx512vl`, yet every AVX-512 server with VPCLMULQDQ has it.
+          # This leg compiles the 256-bit ternary-logic arm those servers run.
+          - name: linux, avx512vl+vpclmulqdq, build only
+            os: ubuntu-latest
+            features: "+avx512f,+avx512vl,+vpclmulqdq"
             compile_only: true
             target: x86_64-unknown-linux-gnu
             modes: serial parallel
@@ -152,6 +162,15 @@ jobs:
           - name: linux, avx512f+avx512bw+gfni, build only
             os: ubuntu-latest
             features: "+avx512f,+avx512bw,+gfni,+avx512vbmi"
+            compile_only: true
+            gfni: true
+            target: x86_64-unknown-linux-gnu
+            modes: serial parallel
+          # The inversion's repeated-squaring kernel also needs PCLMULQDQ and AVX-512 VBMI.
+          # No other leg sets both, so this one compiles and tests that kernel.
+          - name: linux, pclmulqdq+avx512vbmi+gfni, build only
+            os: ubuntu-latest
+            features: "+pclmulqdq,+avx512f,+avx512bw,+avx512vbmi,+gfni"
             compile_only: true
             gfni: true
             target: x86_64-unknown-linux-gnu
@@ -289,19 +308,18 @@ jobs:
       # the instructions. The 512-bit ring-switch kernel also needs AVX-512F and AVX-512BW, and
       # the sliced zerocheck's plane-fold transposes also need AVX-512 VBMI.
       #
-      # `+avx512bw` and `+avx512vbmi` are checked too, since the 512-bit kernels need them.
+      # Every feature the leg sets is checked, since the binary runs none of them conditionally.
       - name: Test binary-field and sumcheck (x86-64 GFNI)
         if: >-
           needs.plan.outputs.rust == 'true' &&
           matrix.gfni &&
           needs.plan.outputs.gfni == 'true'
         run: |
-          if grep -qw gfni /proc/cpuinfo &&
-             { ! grep -q avx512bw <<< "${{ matrix.features }}" ||
-               { grep -qw avx512f /proc/cpuinfo &&
-                 grep -qw avx512bw /proc/cpuinfo; }; } &&
-             { ! grep -q avx512vbmi <<< "${{ matrix.features }}" ||
-               grep -qw avx512vbmi /proc/cpuinfo; }; then
+          supported=true
+          for feature in $(tr ',+' '  ' <<< "${{ matrix.features }}"); do
+            grep -qw "$feature" /proc/cpuinfo || supported=false
+          done
+          if $supported; then
             python3 scripts/check.py test --package p3-binary-field
             if grep -q avx512bw <<< "${{ matrix.features }}"; then
               cargo test -p p3-sumcheck --lib ring_switch::bits
@@ -319,6 +337,9 @@ jobs:
       #
       # One deterministic test rather than the module: the proptests around it take minutes
       # under interpretation.
+      #
+      # Where the leg also sets PCLMULQDQ, the repeated-squaring kernel's basis test runs too.
+      # The map is linear, so agreeing on the 64 basis vectors settles every input.
       - uses: dtolnay/rust-toolchain@nightly
         if: >-
           needs.plan.outputs.rust == 'true' &&
@@ -337,6 +358,45 @@ jobs:
         run: |
           cargo +nightly miri test --package p3-binary-field --lib \
             aes::packed::tests::every_width_agrees_with_the_scalar_routines_at_the_corners
+          if grep -q pclmulqdq <<< "${{ matrix.features }}"; then
+            cargo +nightly miri test --package p3-binary-field --lib \
+              clmul::x86_64::gfni::tests::the_matrix_product_is_exact_on_the_basis
+          fi
+
+      # Neither wide carryless-multiply leg can run its tests on the runner's own processor.
+      #
+      # The interpreter has shims for the 256- and 512-bit `vpclmulqdq` and for every lane move the packings use.
+      #
+      # So the corner differentials, the interleaves, the transposes and the shared extension suite run here, on every host.
+      #
+      # The proptests around them take minutes under interpretation, so they stay out.
+      #
+      # The `avx512vl` leg stays out too: the interpreter has no shim for its ternary logic op.
+      - uses: dtolnay/rust-toolchain@nightly
+        if: >-
+          needs.plan.outputs.rust == 'true' &&
+          matrix.miri_clmul &&
+          needs.plan.outputs.gfni == 'true'
+        with:
+          components: miri
+
+      - name: Interpret binary-field (x86-64 VPCLMULQDQ)
+        if: >-
+          needs.plan.outputs.rust == 'true' &&
+          matrix.miri_clmul &&
+          needs.plan.outputs.gfni == 'true'
+        env:
+          MIRIFLAGS: -Zmiri-disable-isolation
+        run: |
+          cargo +nightly miri test --package p3-binary-field --lib -- --exact \
+            packed::x86_64::ghash128::tests::the_register_matches_the_scalar_model_at_the_corners \
+            packed::x86_64::ghash128::tests::bool_check_matches_the_general_product_in_every_lane \
+            packed::x86_64::ghash128::tests::packed_field_tests::test_interleaves \
+            packed::x86_64::poly64::tests::every_lane_matches_the_scalar_field_at_the_corners \
+            packed::x86_64::poly64::tests::packed_field_tests::test_interleaves \
+            packed::x86_64::poly192::tests::every_lane_matches_the_scalar_field_at_the_corners \
+            packed::x86_64::poly192::tests::the_shared_packed_extension_suite_passes \
+            packed::x86_64::lanes::triples::tests::the_plans_round_trip_at_both_widths
 
   check_embedded:
     name: Build embedded
