@@ -3023,6 +3023,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "sixteen BLAKE3 and SHA-256 proofs at 2^10 and 2^11 rows; run from heavy CI"]
     fn backends_prove_the_quadratic_hash_airs_byte_for_byte_on_the_tensor() {
         // From 2^10 rows the representation backends evaluate the four-variable tensor of these
         // degree-two AIRs, and from 2^11 the late one serves its boundary round from the planes.
