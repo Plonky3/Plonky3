@@ -63,5 +63,48 @@ fn blake3_hash_many(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, blake3_hash_many);
+/// Batches with fewer messages than lanes: a message count, then a message length.
+///
+/// 1, 2 and 8 long messages leave most lanes idle when each message takes one lane.
+///
+/// 24 messages fill a group only partly, and 8 of 4 KiB have few chunks each.
+const FEW: [(usize, usize); 6] = [
+    (1, 65536),
+    (2, 65536),
+    (8, 65536),
+    (24, 65536),
+    (8, 4096),
+    (24, 16384),
+];
+
+fn blake3_few_long_messages(c: &mut Criterion) {
+    let mut group = c.benchmark_group("blake3 few long messages");
+
+    for (count, len) in FEW {
+        let messages = fixture(len * count);
+        let mut digests = vec![[0u8; 32]; count];
+        let id = format!("{count} x {len}");
+
+        group.throughput(Throughput::Bytes((len * count) as u64));
+
+        group.bench_function(BenchmarkId::new("one at a time", &id), |b| {
+            b.iter(|| {
+                for (digest, message) in digests.iter_mut().zip(messages.chunks_exact(len)) {
+                    *digest = Blake3.hash_slice(black_box(message));
+                }
+                black_box(&digests);
+            });
+        });
+
+        group.bench_function(BenchmarkId::new("hash_many", &id), |b| {
+            b.iter(|| {
+                Blake3.hash_many(black_box(&messages), black_box(&mut digests));
+            });
+        });
+    }
+
+    group.finish();
+}
+
+criterion_group!(benches, blake3_hash_many, blake3_few_long_messages);
 criterion_main!(benches);

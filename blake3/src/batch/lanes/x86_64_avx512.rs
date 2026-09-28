@@ -34,6 +34,25 @@ impl Word for __m512i {
     }
 
     #[inline(always)]
+    fn compress_scheduled_counters<const G: usize>(
+        h: &mut [[Self; STATE_WORDS]; G],
+        m: &[[Self; BLOCK_WORDS]; G],
+        params: &[u32; STATE_WORDS],
+        counters: &[[Self; 2]; G],
+    ) -> bool {
+        // As above, only the two-group shape has a hand-scheduled kernel.
+        let (Ok(h), Ok(m), Ok(counters)) = (
+            h.as_mut_slice().try_into(),
+            m.as_slice().try_into(),
+            counters.as_slice().try_into(),
+        ) else {
+            return false;
+        };
+        compress_pair_counters(h, m, params, counters);
+        true
+    }
+
+    #[inline(always)]
     fn splat(value: u32) -> Self {
         unsafe { _mm512_set1_epi32(value as i32) }
     }
@@ -156,30 +175,13 @@ macro_rules! round {
     };
 }
 
-/// Advance two register groups by one block, entirely inside the 32 vector registers.
+/// The two-group compression, with optional template lines run just before the rounds.
 ///
-/// On cores with two-cycle vector latency, one group stalls on the four G chains of a half round.
+/// Those lines may overwrite any word of the working vector, such as the counter words.
 ///
-/// Two groups double the chains, but their working vectors take every register.
-///
-/// The compiler spills under that pressure, so the rounds are written out by hand.
-///
-/// Message words stay in memory and enter as operands of the adds.
-///
-/// `params` is the second half of the working vector: IV[0..4], counter, block length, flags.
-#[inline(always)]
-fn compress_pair(
-    h: &mut [[__m512i; STATE_WORDS]; 2],
-    m: &[[__m512i; BLOCK_WORDS]; 2],
-    params: &[u32; STATE_WORDS],
-) {
-    // SAFETY:
-    // - the driver only runs this backend on a CPU with AVX-512F;
-    // - `h` is 1024 bytes of chaining values, read and then written in place;
-    // - `m` is 2048 bytes of message words, only read;
-    // - `params` is 32 bytes, only read;
-    // - every vector register is declared clobbered, and no flags are touched.
-    unsafe {
+/// Their operands follow the fixed ones.
+macro_rules! compress_pair_asm {
+    ($h:ident, $m:ident, $params:ident, [$($extra:literal),*], $($operands:tt)*) => {
         core::arch::asm!(
             // Chaining values into v[0..8] of both groups.
             "vmovdqu64 zmm0, zmmword ptr [{h} + 64 * 0]",
@@ -215,6 +217,8 @@ fn compress_pair(
             "vmovdqa64 zmm29, zmm13",
             "vmovdqa64 zmm30, zmm14",
             "vmovdqa64 zmm31, zmm15",
+            // The caller's lines, such as a counter per lane.
+            $($extra,)*
             // The rows of `SCHEDULE`, one per round.
             round!(0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15),
             round!(2 6 3 10 7 0 4 13 1 11 12 5 9 14 15 8),
@@ -256,9 +260,10 @@ fn compress_pair(
             "vmovdqu64 zmmword ptr [{h} + 512 + 64 * 5], zmm21",
             "vmovdqu64 zmmword ptr [{h} + 512 + 64 * 6], zmm22",
             "vmovdqu64 zmmword ptr [{h} + 512 + 64 * 7], zmm23",
-            h = in(reg) h.as_mut_ptr(),
-            m = in(reg) m.as_ptr(),
-            p = in(reg) params.as_ptr(),
+            h = in(reg) $h.as_mut_ptr(),
+            m = in(reg) $m.as_ptr(),
+            p = in(reg) $params.as_ptr(),
+            $($operands)*
             out("zmm0") _, out("zmm1") _, out("zmm2") _, out("zmm3") _,
             out("zmm4") _, out("zmm5") _, out("zmm6") _, out("zmm7") _,
             out("zmm8") _, out("zmm9") _, out("zmm10") _, out("zmm11") _,
@@ -268,6 +273,63 @@ fn compress_pair(
             out("zmm24") _, out("zmm25") _, out("zmm26") _, out("zmm27") _,
             out("zmm28") _, out("zmm29") _, out("zmm30") _, out("zmm31") _,
             options(nostack, preserves_flags),
+        );
+    };
+}
+
+/// Advance two register groups by one block, entirely inside the 32 vector registers.
+///
+/// On cores with two-cycle vector latency, one group stalls on the four G chains of a half round.
+///
+/// Two groups double the chains, but their working vectors take every register.
+///
+/// The compiler spills under that pressure, so the rounds are written out by hand.
+///
+/// Message words stay in memory and enter as operands of the adds.
+///
+/// `params` is the second half of the working vector: IV[0..4], counter, block length, flags.
+#[inline(always)]
+fn compress_pair(
+    h: &mut [[__m512i; STATE_WORDS]; 2],
+    m: &[[__m512i; BLOCK_WORDS]; 2],
+    params: &[u32; STATE_WORDS],
+) {
+    // SAFETY:
+    // - the driver only runs this backend on a CPU with AVX-512F;
+    // - `h` is 1024 bytes of chaining values, read and then written in place;
+    // - `m` is 2048 bytes of message words, only read;
+    // - `params` is 32 bytes, only read;
+    // - every vector register is declared clobbered, and no flags are touched.
+    unsafe {
+        compress_pair_asm!(h, m, params, [],);
+    }
+}
+
+/// The two-group compression with a counter per lane.
+///
+/// `counters` holds, in order, the low and high counter words of group A, then of group B.
+///
+/// They replace words 12 and 13 of each group's working vector before the first round.
+#[inline(always)]
+fn compress_pair_counters(
+    h: &mut [[__m512i; STATE_WORDS]; 2],
+    m: &[[__m512i; BLOCK_WORDS]; 2],
+    params: &[u32; STATE_WORDS],
+    counters: &[[__m512i; 2]; 2],
+) {
+    // SAFETY: as for the shared-counter kernel, plus `counters` is 256 bytes, only read.
+    unsafe {
+        compress_pair_asm!(
+            h,
+            m,
+            params,
+            [
+                "vmovdqu64 zmm12, zmmword ptr [{c} + 64 * 0]",
+                "vmovdqu64 zmm13, zmmword ptr [{c} + 64 * 1]",
+                "vmovdqu64 zmm28, zmmword ptr [{c} + 64 * 2]",
+                "vmovdqu64 zmm29, zmmword ptr [{c} + 64 * 3]"
+            ],
+            c = in(reg) counters.as_ptr(),
         );
     }
 }

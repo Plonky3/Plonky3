@@ -7,18 +7,21 @@
 //! The tree over the chunks has the same shape in every lane too.
 //!
 //! Parent nodes therefore run in lockstep as well, straight from the registers.
+//!
+//! Messages short of a full group can instead spread their chunks across the lanes.
 
 mod compress;
 mod lanes;
+mod spread;
 
 use blake3::{BLOCK_LEN, CHUNK_LEN, OUT_LEN};
 
 pub(crate) use self::compress::IV;
 use self::compress::{BLOCK_WORDS, CHUNK_END, CHUNK_START, PARENT, ROOT, STATE_WORDS, compress};
-pub(crate) use self::lanes::LANES;
-use self::lanes::{Backend, Word, detect};
+use self::lanes::{Backend, Word};
 #[cfg(test)]
 pub(crate) use self::lanes::{Kernel, supported};
+pub(crate) use self::lanes::{LANES, detect};
 
 /// Chaining values of every lane of `G` register groups of `V`.
 type State<V, const G: usize> = [[V; STATE_WORDS]; G];
@@ -83,15 +86,6 @@ impl Mode {
     }
 }
 
-/// Hash equal-length messages of `len` bytes laid end to end in `input`.
-///
-/// The widest backend the running CPU supports does the work.
-///
-/// The caller guarantees `input.len() == len * out.len()`.
-pub(crate) fn hash_many(mode: Mode, input: &[u8], len: usize, out: &mut [[u8; OUT_LEN]]) {
-    detect().hash_many(mode, input, len, out);
-}
-
 /// Hash equal-length messages with backend `V`, in groups of `G` registers of `W` lanes.
 ///
 /// The caller guarantees `input.len() == len * out.len()`.
@@ -107,9 +101,10 @@ unsafe fn hash_many_with<V: Backend<W>, const W: usize, const G: usize>(
 ) {
     debug_assert_eq!(input.len(), len * out.len());
 
-    // Full register groups first, then the single registers left over.
-    let (registers, rest) = out.as_chunks_mut::<W>();
-    let (groups, singles) = registers.as_chunks_mut::<G>();
+    // Full register groups first, one lane per message.
+    let full = out.len() / (W * G) * (W * G);
+    let (grouped, out) = out.split_at_mut(full);
+    let (groups, _) = grouped.as_chunks_mut::<W>().0.as_chunks_mut::<G>();
     for (index, digests) in groups.iter_mut().enumerate() {
         let first = index * W * G;
         let starts = core::array::from_fn(|g| core::array::from_fn(|l| (first + g * W + l) * len));
@@ -122,7 +117,18 @@ unsafe fn hash_many_with<V: Backend<W>, const W: usize, const G: usize>(
         unsafe { V::hash_group::<G>(mode, &lanes, len, digests) };
     }
 
-    let mut first = groups.len() * W * G;
+    // The messages short of a group leave lanes idle in lockstep.
+    //
+    // Long enough messages fill those lanes with their own chunks instead.
+    if spread::pays::<W, G>(out.len(), len) {
+        // SAFETY: the caller runs this on a CPU with the features of `V`.
+        unsafe { V::spread::<G>(mode, &input[full * len..], len, out) };
+        return;
+    }
+
+    // Otherwise single registers, then one short register.
+    let (singles, rest) = out.as_chunks_mut::<W>();
+    let mut first = full;
     for digests in singles {
         let lanes = Lanes {
             batch: input,

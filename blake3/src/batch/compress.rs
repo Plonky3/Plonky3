@@ -98,8 +98,48 @@ pub(super) fn compress<V: Word, const G: usize>(
     if V::compress_scheduled(h, m, &params) {
         return;
     }
+    let v = working_vector(h, &params);
+    rounds(h, v, m);
+}
+
+/// Advance every lane of every group by one block, each lane with its own counter.
+///
+/// Lanes that hash different chunks of one message differ only in the counter.
+///
+/// - `counters[g][0]` holds the low counter word of every lane of group `g`.
+/// - `counters[g][1]` holds the high word.
+///
+/// The block length and the flags stay shared.
+#[inline(always)]
+pub(super) fn compress_counters<V: Word, const G: usize>(
+    h: &mut [[V; STATE_WORDS]; G],
+    m: &[[V; BLOCK_WORDS]; G],
+    counters: &[[V; 2]; G],
+    block_len: u32,
+    flags: u32,
+) {
+    // The counter slots are overwritten per lane, so they start at zero here.
+    let params = [IV[0], IV[1], IV[2], IV[3], 0, 0, block_len, flags];
+    if V::compress_scheduled_counters(h, m, &params, counters) {
+        return;
+    }
     let mut v = working_vector(h, &params);
 
+    // Words 12 and 13 of the working vector are the counter, low word first.
+    for (v, counter) in v.iter_mut().zip(counters) {
+        v[12] = counter[0];
+        v[13] = counter[1];
+    }
+    rounds(h, v, m);
+}
+
+/// Run the seven rounds on the working vector, then fold it into the chaining value.
+#[inline(always)]
+fn rounds<V: Word, const G: usize>(
+    h: &mut [[V; STATE_WORDS]; G],
+    mut v: [[V; BLOCK_WORDS]; G],
+    m: &[[V; BLOCK_WORDS]; G],
+) {
     // Seven literal rounds, so every schedule index is a constant.
     //
     // Constant indices keep the working vector in registers instead of memory.
