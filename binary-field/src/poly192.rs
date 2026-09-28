@@ -261,6 +261,13 @@ impl PrimeCharacteristicRing for Poly192 {
         Self::from_limbs(clmul::poly_square_192(self.limbs()))
     }
 
+    /// `x (x - 1) = x^2 + x` in characteristic 2, and squaring is the cheaper product.
+    #[inline]
+    fn bool_check(&self) -> Self {
+        // Zero exactly on the two roots of x^2 + x, which are zero and one.
+        self.square() + *self
+    }
+
     /// Reduction is linear, so the whole sum reduces its three coordinates once.
     #[inline]
     fn dot_product<const N: usize>(u: &[Self; N], v: &[Self; N]) -> Self {
@@ -732,6 +739,12 @@ mod tests {
         fn the_square_matches_the_product_with_itself(a: [u64; 3]) {
             let x = element(a);
             prop_assert_eq!(x.square(), schoolbook(x, x));
+        }
+
+        #[test]
+        fn bool_check_agrees_with_the_vanishing_polynomial(a: [u64; 3]) {
+            let x = element(a);
+            prop_assert_eq!(x.bool_check(), schoolbook(x, x - Poly192::ONE));
         }
 
         #[test]

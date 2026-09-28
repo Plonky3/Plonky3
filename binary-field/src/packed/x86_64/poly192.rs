@@ -16,7 +16,6 @@
 //!
 //! The scalar route pays six 128-bit ones per element, twenty-four for the same four.
 
-use alloc::vec::Vec;
 use core::array;
 use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign};
@@ -315,6 +314,13 @@ impl PrimeCharacteristicRing for PackedPoly192 {
         Self::reduce(cubic_square(self.to_vectors()))
     }
 
+    /// `x (x - 1) = x^2 + x` in characteristic 2, and squaring is the cheaper product.
+    #[inline]
+    fn bool_check(&self) -> Self {
+        // Zero exactly on the two roots of x^2 + x, which are zero and one.
+        self.square() + *self
+    }
+
     /// Reduction is linear, so the whole sum reduces its three coordinates once.
     #[inline]
     fn dot_product<const N: usize>(u: &[Self; N], v: &[Self; N]) -> Self {
@@ -326,12 +332,6 @@ impl PrimeCharacteristicRing for PackedPoly192 {
 
         // Three reductions for the whole sum, not three per term.
         Self::reduce(sum)
-    }
-
-    #[inline]
-    fn zero_vec(len: usize) -> Vec<Self> {
-        // Zero is all-zero bits, so the allocator's zeroed path applies.
-        alloc::vec![Self::ZERO; len]
     }
 }
 
@@ -531,6 +531,13 @@ mod tests {
                 unpacked(packed(&a).square()),
                 a.iter().map(Poly192::square).collect::<Vec<_>>()
             );
+            // The booleanity shortcut against the general product it replaces.
+            assert_eq!(
+                unpacked(packed(&a).bool_check()),
+                a.iter()
+                    .map(|&x| x * (x - Poly192::ONE))
+                    .collect::<Vec<_>>()
+            );
         }
     }
 
@@ -587,6 +594,7 @@ mod tests {
 
             prop_assert_eq!(unpacked(px * py), each(&|l| x[l] * y[l]));
             prop_assert_eq!(unpacked(px.square()), each(&|l| x[l].square()));
+            prop_assert_eq!(unpacked(px.bool_check()), each(&|l| x[l] * (x[l] - Poly192::ONE)));
             prop_assert_eq!(unpacked(px * pk), each(&|l| x[l] * scalars[l]));
             prop_assert_eq!(unpacked(px * broadcast), each(&|l| x[l] * broadcast));
 
