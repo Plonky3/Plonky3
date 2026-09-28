@@ -32,9 +32,11 @@ jobs:
       parallel: ${{ steps.impact.outputs.parallel }}
       embedded: ${{ steps.impact.outputs.embedded }}
       wasm: ${{ steps.impact.outputs.wasm }}
+      wasm_blake3: ${{ steps.impact.outputs.wasm_blake3 }}
       keccak: ${{ steps.impact.outputs.keccak }}
       sha_ni: ${{ steps.impact.outputs.sha_ni }}
       gfni: ${{ steps.impact.outputs.gfni }}
+      avx512: ${{ steps.impact.outputs.avx512 }}
       toml: ${{ steps.impact.outputs.toml }}
       manifests: ${{ steps.impact.outputs.manifests }}
       scripts: ${{ steps.impact.outputs.scripts }}
@@ -164,6 +166,7 @@ jobs:
             features: "+avx512f,+avx512bw,+gfni,+avx512vbmi"
             compile_only: true
             gfni: true
+            avx512: true
             target: x86_64-unknown-linux-gnu
             modes: serial parallel
           # The inversion's repeated-squaring kernel also needs PCLMULQDQ and AVX-512 VBMI.
@@ -217,7 +220,8 @@ jobs:
           needs.plan.outputs.rust == 'true' &&
           (!matrix.compile_only ||
            (matrix.sha_ni && needs.plan.outputs.sha_ni == 'true') ||
-           (matrix.gfni && needs.plan.outputs.gfni == 'true'))
+           (matrix.gfni && needs.plan.outputs.gfni == 'true') ||
+           (matrix.avx512 && needs.plan.outputs.avx512 == 'true'))
         with:
           tool: cargo-nextest
 
@@ -331,6 +335,21 @@ jobs:
             echo "This runner lacks the required SIMD features; the build above is the coverage."
           fi
 
+      # Miri cannot run the `asm!` of the AVX-512 BLAKE3 kernel, so only the processor can.
+      #
+      # This leg compiles that kernel in, so its tests pin it to upstream on a runner that has it.
+      - name: Test blake3 (x86-64 AVX-512)
+        if: >-
+          needs.plan.outputs.rust == 'true' &&
+          matrix.avx512 &&
+          needs.plan.outputs.avx512 == 'true'
+        run: |
+          if grep -qw avx512f /proc/cpuinfo; then
+            python3 scripts/check.py test --package p3-blake3
+          else
+            echo "This runner has no AVX-512F; the build above is the coverage."
+          fi
+
       # Whatever the runner's own processor is, the interpreter has shims for the three
       # byte-wise field instructions, so the corner differential against the scalar model
       # runs on every host.
@@ -433,7 +452,7 @@ jobs:
     needs: plan
     runs-on: ubuntu-latest
     if: >-
-      needs.plan.outputs.wasm == 'true' &&
+      (needs.plan.outputs.wasm == 'true' || needs.plan.outputs.wasm_blake3 == 'true') &&
       !contains(toJSON(github.event.commits.*.message), '[skip-ci]')
     env:
       # Compile-coverage target for browser-style consumers.
@@ -462,15 +481,24 @@ jobs:
           tar -xJf /tmp/wasmtime.tar.xz -C "$HOME"
           echo "$HOME/wasmtime-${WASMTIME_VERSION}-x86_64-linux" >> "$GITHUB_PATH"
       - name: Build p3-goldilocks for wasm32-unknown-unknown
+        if: needs.plan.outputs.wasm == 'true'
         run: python3 scripts/check.py wasm --step build --build-target ${{ env.build_target }}
       - name: Run wasm32+simd128 SIMD tests under wasmtime
+        if: needs.plan.outputs.wasm == 'true'
         run: python3 scripts/check.py wasm --step test --run-target ${{ env.run_target }}
       - name: Run wasm_smoke under wasmtime
+        if: needs.plan.outputs.wasm == 'true'
         run: python3 scripts/check.py wasm --step smoke --run-target ${{ env.run_target }}
       - name: Run wasm_bench under wasmtime
+        if: needs.plan.outputs.wasm == 'true'
         run: python3 scripts/check.py wasm --step bench --run-target ${{ env.run_target }}
       - name: Run wasm_merkle_bench under wasmtime
+        if: needs.plan.outputs.wasm == 'true'
         run: python3 scripts/check.py wasm --step merkle --run-target ${{ env.run_target }}
+      # The batched BLAKE3 kernel has a SIMD128 backend, so its tests pin that backend to upstream.
+      - name: Test p3-blake3 under wasmtime
+        if: needs.plan.outputs.wasm_blake3 == 'true'
+        run: python3 scripts/check.py wasm --step blake3 --run-target ${{ env.run_target }}
 
   lint:
     name: Formatting and Clippy
