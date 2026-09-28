@@ -1,30 +1,88 @@
-//! Vector words for the batched compression, one lane per message.
+//! Vector backends for the batched compression, one lane per message.
 //!
-//! Each target compiles exactly one backend, picked from its enabled features at build time.
+//! x86-64 compiles AVX-512 and AVX2 even when the build does not enable them.
+//!
+//! It then picks the widest backend the running CPU has, falling back to SSE2.
+//!
+//! Other targets pick their backend at build time: NEON on AArch64, SIMD128 on wasm32, and one lane elsewhere.
 
-#[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
-#[path = "x86_64_avx512.rs"]
-mod backend;
+/// Implement the out-of-line steps of [`Backend`] for `W` lanes, with an optional target feature.
+///
+/// Each step forwards to its generic body in the driver.
+///
+/// The feature compiles that body for the backend, so its word arithmetic inlines to single instructions.
+macro_rules! out_of_line_steps {
+    ($w:ident $(, $feature:literal)?) => {
+        $(#[target_feature(enable = $feature)])?
+        unsafe fn hash_group<const G: usize>(
+            mode: $crate::batch::Mode,
+            lanes: &$crate::batch::Lanes<'_, $w, G>,
+            len: usize,
+            out: &mut [[[u8; blake3::OUT_LEN]; $w]; G],
+        ) {
+            // SAFETY: the caller runs this on a CPU with the backend's features.
+            unsafe { $crate::batch::hash_group::<Self, $w, G>(mode, lanes, len, out) }
+        }
 
-#[cfg(all(
-    target_arch = "x86_64",
-    target_feature = "avx2",
-    not(target_feature = "avx512f")
-))]
-#[path = "x86_64_avx2.rs"]
-mod backend;
+        $(#[target_feature(enable = $feature)])?
+        unsafe fn subtree<const G: usize>(
+            mode: $crate::batch::Mode,
+            lanes: &$crate::batch::Lanes<'_, $w, G>,
+            len: usize,
+            first: usize,
+            chunks: usize,
+            root: u32,
+        ) -> $crate::batch::State<Self, G> {
+            // SAFETY: the caller runs this on a CPU with the backend's features.
+            unsafe { $crate::batch::subtree::<Self, $w, G>(mode, lanes, len, first, chunks, root) }
+        }
+
+        #[inline(never)]
+        $(#[target_feature(enable = $feature)])?
+        unsafe fn leaf<const G: usize>(
+            mode: $crate::batch::Mode,
+            lanes: &$crate::batch::Lanes<'_, $w, G>,
+            len: usize,
+            index: usize,
+            root: u32,
+        ) -> $crate::batch::State<Self, G> {
+            $crate::batch::chunk::<Self, $w, G>(mode, lanes, len, index, root)
+        }
+
+        #[inline(never)]
+        $(#[target_feature(enable = $feature)])?
+        unsafe fn parent<const G: usize>(
+            mode: $crate::batch::Mode,
+            left: &$crate::batch::State<Self, G>,
+            right: &$crate::batch::State<Self, G>,
+            root: u32,
+        ) -> $crate::batch::State<Self, G> {
+            $crate::batch::parent::<Self, G>(mode, left, right, root)
+        }
+    };
+}
+
+#[cfg(target_arch = "x86_64")]
+mod x86_64_avx512;
+
+#[cfg(all(target_arch = "x86_64", not(target_feature = "avx512f")))]
+mod x86_64_avx2;
 
 #[cfg(all(target_arch = "x86_64", not(target_feature = "avx2")))]
-#[path = "x86_64_sse2.rs"]
-mod backend;
+mod x86_64_sse2;
 
 #[cfg(all(
     target_arch = "aarch64",
     target_feature = "neon",
     target_endian = "little"
 ))]
-#[path = "aarch64_neon.rs"]
-mod backend;
+mod aarch64_neon;
+
+#[cfg(all(
+    target_arch = "wasm32",
+    any(target_feature = "simd128", feature = "wasm32-simd")
+))]
+mod wasm32_simd128;
 
 #[cfg(not(any(
     target_arch = "x86_64",
@@ -32,30 +90,120 @@ mod backend;
         target_arch = "aarch64",
         target_feature = "neon",
         target_endian = "little"
+    ),
+    all(
+        target_arch = "wasm32",
+        any(target_feature = "simd128", feature = "wasm32-simd")
     )
 )))]
-#[path = "portable.rs"]
-mod backend;
+mod portable;
+
+use core::fmt;
 
 use blake3::{BLOCK_LEN, OUT_LEN};
 
 use super::compress::{BLOCK_WORDS, STATE_WORDS};
+use super::{Lanes, Mode, State};
 
-/// One state or message word for every lane of one register.
-pub(super) type Vector = backend::Vector;
-
-/// Lanes in one register.
-pub(crate) const WIDTH: usize = backend::WIDTH;
-
-/// Independent register groups hashed together.
+/// Every backend this build compiles, widest first.
 ///
-/// One group leaves the core waiting on the dependency chains of G.
-///
-/// Too many spill the working vectors out of the register file.
-pub(super) const GROUPS: usize = backend::GROUPS;
+/// The last one runs on every CPU of the target.
+const KERNELS: &[Kernel] = &[
+    #[cfg(target_arch = "x86_64")]
+    x86_64_avx512::KERNEL,
+    #[cfg(all(target_arch = "x86_64", not(target_feature = "avx512f")))]
+    x86_64_avx2::KERNEL,
+    #[cfg(all(target_arch = "x86_64", not(target_feature = "avx2")))]
+    x86_64_sse2::KERNEL,
+    #[cfg(all(
+        target_arch = "aarch64",
+        target_feature = "neon",
+        target_endian = "little"
+    ))]
+    aarch64_neon::KERNEL,
+    #[cfg(all(
+        target_arch = "wasm32",
+        any(target_feature = "simd128", feature = "wasm32-simd")
+    ))]
+    wasm32_simd128::KERNEL,
+    #[cfg(not(any(
+        target_arch = "x86_64",
+        all(
+            target_arch = "aarch64",
+            target_feature = "neon",
+            target_endian = "little"
+        ),
+        all(
+            target_arch = "wasm32",
+            any(target_feature = "simd128", feature = "wasm32-simd")
+        )
+    )))]
+    portable::KERNEL,
+];
 
-/// Messages one batched compression advances at once.
-pub(crate) const LANES: usize = WIDTH * GROUPS;
+/// Messages the widest compiled backend advances at once.
+pub(crate) const LANES: usize = KERNELS[0].lanes;
+
+/// The batched driver of one backend, picked at run time.
+#[derive(Clone, Copy)]
+pub(crate) struct Kernel {
+    /// The backend's name, for diagnostics.
+    name: &'static str,
+    /// Lanes in one register.
+    #[cfg(test)]
+    pub(crate) width: usize,
+    /// Messages one batched compression advances at once.
+    pub(crate) lanes: usize,
+    /// Whether the running CPU has the backend's target features.
+    supported: fn() -> bool,
+    /// The driver compiled for the backend, sound to call only when `supported` holds.
+    run: unsafe fn(Mode, &[u8], usize, &mut [[u8; OUT_LEN]]),
+}
+
+impl Kernel {
+    /// The kernel of backend `V`, with `W` lanes per register and `G` register groups.
+    const fn new<V: Backend<W>, const W: usize, const G: usize>(name: &'static str) -> Self {
+        Self {
+            name,
+            #[cfg(test)]
+            width: W,
+            lanes: W * G,
+            supported: V::supported,
+            run: super::hash_many_with::<V, W, G>,
+        }
+    }
+
+    /// Hash equal-length messages of `len` bytes laid end to end in `input`.
+    ///
+    /// The caller guarantees `input.len() == len * out.len()`.
+    #[inline]
+    pub(crate) fn hash_many(self, mode: Mode, input: &[u8], len: usize, out: &mut [[u8; OUT_LEN]]) {
+        // SAFETY: kernels only leave this module through `supported`, which checks the CPU.
+        unsafe { (self.run)(mode, input, len, out) }
+    }
+}
+
+impl fmt::Debug for Kernel {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.name)
+    }
+}
+
+/// Every backend the running CPU supports, widest first.
+pub(crate) fn supported() -> impl Iterator<Item = Kernel> {
+    KERNELS
+        .iter()
+        .copied()
+        .filter(|kernel| (kernel.supported)())
+}
+
+/// The widest backend the running CPU supports.
+#[inline]
+pub(crate) fn detect() -> Kernel {
+    supported()
+        .next()
+        .expect("the last backend runs on every CPU of the target")
+}
 
 /// The arithmetic the compression function needs, on every lane at once.
 pub(super) trait Word: Copy {
@@ -98,31 +246,88 @@ pub(super) trait Word: Copy {
     }
 }
 
+/// A register of `W` lanes, with the out-of-line steps of the driver compiled for it.
+///
+/// Its word arithmetic runs the backend's instructions, which the running CPU may lack.
+///
+/// The driver only reaches a backend through a [`Kernel`], and only once [`Backend::supported`] holds.
+pub(super) trait Backend<const W: usize>: Word {
+    /// Whether the running CPU has this backend's target features.
+    fn supported() -> bool;
+
+    /// Transpose one block from each lane into sixteen message words.
+    ///
+    /// - `rows[l]` is one block of lane `l`.
+    /// - Word `w` of the result holds word `w` of every lane.
+    fn load_block(rows: &[&[u8; BLOCK_LEN]; W]) -> [Self; BLOCK_WORDS];
+
+    /// Write the chaining value of every lane as a digest.
+    fn store_digests(state: &[Self; STATE_WORDS], out: &mut [[u8; OUT_LEN]; W]);
+
+    /// [`super::hash_group`], compiled with this backend's target features.
+    ///
+    /// # Safety
+    ///
+    /// The running CPU has this backend's target features.
+    unsafe fn hash_group<const G: usize>(
+        mode: Mode,
+        lanes: &Lanes<'_, W, G>,
+        len: usize,
+        out: &mut [[[u8; OUT_LEN]; W]; G],
+    );
+
+    /// [`super::subtree`], compiled with this backend's target features.
+    ///
+    /// # Safety
+    ///
+    /// The running CPU has this backend's target features.
+    unsafe fn subtree<const G: usize>(
+        mode: Mode,
+        lanes: &Lanes<'_, W, G>,
+        len: usize,
+        first: usize,
+        chunks: usize,
+        root: u32,
+    ) -> State<Self, G>;
+
+    /// A chunk of the tree, kept out of line so the recursion in [`super::subtree`] carries small frames.
+    ///
+    /// # Safety
+    ///
+    /// The running CPU has this backend's target features.
+    unsafe fn leaf<const G: usize>(
+        mode: Mode,
+        lanes: &Lanes<'_, W, G>,
+        len: usize,
+        index: usize,
+        root: u32,
+    ) -> State<Self, G>;
+
+    /// A parent node, kept out of line like [`Backend::leaf`].
+    ///
+    /// # Safety
+    ///
+    /// The running CPU has this backend's target features.
+    unsafe fn parent<const G: usize>(
+        mode: Mode,
+        left: &State<Self, G>,
+        right: &State<Self, G>,
+        root: u32,
+    ) -> State<Self, G>;
+}
+
 /// Every lane of one vector, in lane order.
 #[cfg(test)]
-pub(super) const fn to_lanes(vector: Vector) -> [u32; WIDTH] {
+pub(super) const fn to_lanes<V: Backend<W>, const W: usize>(vector: V) -> [u32; W] {
+    const { assert!(size_of::<V>() == size_of::<[u32; W]>()) };
     // SAFETY: a vector is exactly its lanes, packed from lane 0 at the lowest address.
     unsafe { core::mem::transmute_copy(&vector) }
 }
 
 /// One vector holding the given lanes, in lane order.
 #[cfg(test)]
-pub(super) const fn from_lanes(lanes: [u32; WIDTH]) -> Vector {
+pub(super) const fn from_lanes<V: Backend<W>, const W: usize>(lanes: [u32; W]) -> V {
+    const { assert!(size_of::<V>() == size_of::<[u32; W]>()) };
     // SAFETY: a vector is exactly its lanes, packed from lane 0 at the lowest address.
     unsafe { core::mem::transmute_copy(&lanes) }
-}
-
-/// Transpose one block from each lane into the sixteen message words of one register group.
-///
-/// - `rows[l]` is one block of lane `l`.
-/// - Word `w` of the result holds word `w` of every lane.
-#[inline(always)]
-pub(super) fn load_block(rows: &[&[u8; BLOCK_LEN]; WIDTH]) -> [Vector; BLOCK_WORDS] {
-    backend::load_block(rows)
-}
-
-/// Write the chaining value of every lane of one register group as a digest.
-#[inline(always)]
-pub(super) fn store_digests(state: &[Vector; STATE_WORDS], out: &mut [[u8; OUT_LEN]; WIDTH]) {
-    backend::store_digests(state, out);
 }

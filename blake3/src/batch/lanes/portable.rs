@@ -2,19 +2,16 @@
 
 use blake3::{BLOCK_LEN, OUT_LEN};
 
-use super::Word;
+use super::{Backend, Kernel, Word};
 use crate::batch::compress::{BLOCK_WORDS, STATE_WORDS};
 
-/// One state or message word for a single lane.
-pub(super) type Vector = u32;
-
 /// Lanes in one register.
-pub(super) const WIDTH: usize = 1;
+const WIDTH: usize = 1;
 
 /// Independent register groups hashed together.
 ///
 /// One state already fills a general-purpose register file, so a second only spills.
-pub(super) const GROUPS: usize = 1;
+const GROUPS: usize = 1;
 
 impl Word for u32 {
     #[inline(always)]
@@ -58,17 +55,29 @@ impl Word for u32 {
     }
 }
 
-/// Read one block as sixteen little-endian words.
-#[inline(always)]
-pub(super) fn load_block([row]: &[&[u8; BLOCK_LEN]; WIDTH]) -> [u32; BLOCK_WORDS] {
-    let (words, _) = row.as_chunks::<4>();
-    core::array::from_fn(|w| u32::from_le_bytes(words[w]))
-}
+/// The batched driver on this backend.
+pub(super) const KERNEL: Kernel = Kernel::new::<u32, WIDTH, GROUPS>("portable");
 
-/// Write one chaining value as a little-endian digest.
-#[inline(always)]
-pub(super) fn store_digests(state: &[u32; STATE_WORDS], [out]: &mut [[u8; OUT_LEN]; WIDTH]) {
-    for (bytes, word) in out.as_chunks_mut::<4>().0.iter_mut().zip(state) {
-        *bytes = word.to_le_bytes();
+impl Backend<WIDTH> for u32 {
+    #[inline]
+    fn supported() -> bool {
+        true
     }
+
+    /// Read one block as sixteen little-endian words.
+    #[inline(always)]
+    fn load_block([row]: &[&[u8; BLOCK_LEN]; WIDTH]) -> [Self; BLOCK_WORDS] {
+        let (words, _) = row.as_chunks::<4>();
+        core::array::from_fn(|w| Self::from_le_bytes(words[w]))
+    }
+
+    /// Write one chaining value as a little-endian digest.
+    #[inline(always)]
+    fn store_digests(state: &[Self; STATE_WORDS], [out]: &mut [[u8; OUT_LEN]; WIDTH]) {
+        for (bytes, word) in out.as_chunks_mut::<4>().0.iter_mut().zip(state) {
+            *bytes = word.to_le_bytes();
+        }
+    }
+
+    out_of_line_steps!(WIDTH);
 }

@@ -6,7 +6,7 @@ use hex_literal::hex;
 use p3_symmetric::CryptographicHasher;
 use proptest::prelude::*;
 
-use crate::batch::{self, Mode};
+use crate::batch::{self, Kernel, Mode};
 use crate::{Blake3, LANES};
 
 /// Spec table 3: flag of the keyed hash mode.
@@ -274,22 +274,37 @@ fn key_words(key: &[u8; 32]) -> [u32; 8] {
     core::array::from_fn(|w| u32::from_le_bytes(words[w]))
 }
 
-/// Hash `count` copies of one message through the batched kernel.
+/// Hash `count` copies of one message through `kernel`.
 ///
 /// Every lane must agree, and the common digest is returned.
-fn kernel(mode: Mode, message: &[u8], count: usize) -> [u8; OUT_LEN] {
+fn digest(kernel: Kernel, mode: Mode, message: &[u8], count: usize) -> [u8; OUT_LEN] {
     let input = message.repeat(count);
     let mut digests = vec![[0u8; OUT_LEN]; count];
-    batch::hash_many(mode, &input, message.len(), &mut digests);
-    assert!(digests.iter().all(|d| d == &digests[0]), "lanes disagree");
+    kernel.hash_many(mode, &input, message.len(), &mut digests);
+    assert!(
+        digests.iter().all(|d| d == &digests[0]),
+        "{kernel:?}: lanes disagree"
+    );
     digests[0]
 }
 
-/// Batch sizes around every register boundary.
+/// Batch sizes around every register boundary of `kernel`.
 ///
 /// One lane, a full register, a full group, and a group plus a short register.
-fn counts() -> [usize; 4] {
-    [1, batch::WIDTH, LANES, LANES + batch::WIDTH + 1]
+const fn counts(kernel: Kernel) -> [usize; 4] {
+    [
+        1,
+        kernel.width,
+        kernel.lanes,
+        kernel.lanes + kernel.width + 1,
+    ]
+}
+
+/// Hash a batch through `kernel`, one digest per `len`-byte message.
+fn hash_many(kernel: Kernel, messages: &[u8], len: usize, count: usize) -> Vec<[u8; OUT_LEN]> {
+    let mut digests = vec![[0u8; OUT_LEN]; count];
+    kernel.hash_many(Mode::HASH, messages, len, &mut digests);
+    digests
 }
 
 /// Plain digests of each message on its own, from the upstream crate.
@@ -301,15 +316,17 @@ fn upstream(messages: &[u8], len: usize, count: usize) -> Vec<[u8; OUT_LEN]> {
 
 #[test]
 fn hash_many_matches_the_official_vectors() {
-    for v in VECTORS {
-        let input = vector_input(v.len);
-        for count in counts() {
-            assert_eq!(
-                kernel(Mode::HASH, &input, count),
-                v.hash,
-                "len {}, count {count}",
-                v.len
-            );
+    for kernel in batch::supported() {
+        for v in VECTORS {
+            let input = vector_input(v.len);
+            for count in counts(kernel) {
+                assert_eq!(
+                    digest(kernel, Mode::HASH, &input, count),
+                    v.hash,
+                    "{kernel:?}, len {}, count {count}",
+                    v.len
+                );
+            }
         }
     }
 }
@@ -321,9 +338,16 @@ fn keyed_mode_matches_the_official_vectors() {
         key: key_words(KEY),
         flags: KEYED_HASH,
     };
-    for v in VECTORS {
-        let input = vector_input(v.len);
-        assert_eq!(kernel(mode, &input, LANES), v.keyed_hash, "len {}", v.len);
+    for kernel in batch::supported() {
+        for v in VECTORS {
+            let input = vector_input(v.len);
+            assert_eq!(
+                digest(kernel, mode, &input, kernel.lanes),
+                v.keyed_hash,
+                "{kernel:?}, len {}",
+                v.len
+            );
+        }
     }
 }
 
@@ -334,18 +358,20 @@ fn key_derivation_matches_the_official_vectors() {
         key: batch::IV,
         flags: DERIVE_KEY_CONTEXT,
     };
-    let material = Mode {
-        key: key_words(&kernel(context, CONTEXT, 1)),
-        flags: DERIVE_KEY_MATERIAL,
-    };
-    for v in VECTORS {
-        let input = vector_input(v.len);
-        assert_eq!(
-            kernel(material, &input, LANES),
-            v.derive_key,
-            "len {}",
-            v.len
-        );
+    for kernel in batch::supported() {
+        let material = Mode {
+            key: key_words(&digest(kernel, context, CONTEXT, 1)),
+            flags: DERIVE_KEY_MATERIAL,
+        };
+        for v in VECTORS {
+            let input = vector_input(v.len);
+            assert_eq!(
+                digest(kernel, material, &input, kernel.lanes),
+                v.derive_key,
+                "{kernel:?}, len {}",
+                v.len
+            );
+        }
     }
 }
 
@@ -397,16 +423,16 @@ fn hash_many_matches_upstream_across_shapes() {
         3 * CHUNK_LEN,
         8 * CHUNK_LEN + 1,
     ];
-    for len in lengths {
-        for count in 1..=2 * LANES + 1 {
-            let messages = stream(len * count, 0x2545_f491_4f6c_dd1d);
-            let mut digests = vec![[0u8; OUT_LEN]; count];
-            Blake3.hash_many(&messages, &mut digests);
-            assert_eq!(
-                digests,
-                upstream(&messages, len, count),
-                "len {len}, count {count}"
-            );
+    for kernel in batch::supported() {
+        for len in lengths {
+            for count in 1..=2 * kernel.lanes + 1 {
+                let messages = stream(len * count, 0x2545_f491_4f6c_dd1d);
+                assert_eq!(
+                    hash_many(kernel, &messages, len, count),
+                    upstream(&messages, len, count),
+                    "{kernel:?}, len {len}, count {count}"
+                );
+            }
         }
     }
 }
@@ -417,16 +443,16 @@ fn bytes_past_a_message_do_not_leak_into_its_digest() {
     //
     // Flipping every byte of the next message must leave the first digest alone.
     let len = BLOCK_LEN + 3;
-    let mut messages = stream(2 * len, 7);
-    let mut before = [[0u8; OUT_LEN]; 2];
-    Blake3.hash_many(&messages, &mut before);
+    for kernel in batch::supported() {
+        let mut messages = stream(2 * len, 7);
+        let before = hash_many(kernel, &messages, len, 2);
 
-    messages[len..].iter_mut().for_each(|b| *b = !*b);
-    let mut after = [[0u8; OUT_LEN]; 2];
-    Blake3.hash_many(&messages, &mut after);
+        messages[len..].iter_mut().for_each(|b| *b = !*b);
+        let after = hash_many(kernel, &messages, len, 2);
 
-    assert_eq!(before[0], after[0]);
-    assert_ne!(before[1], after[1]);
+        assert_eq!(before[0], after[0], "{kernel:?}");
+        assert_ne!(before[1], after[1], "{kernel:?}");
+    }
 }
 
 #[test]
@@ -451,8 +477,14 @@ proptest! {
         seed in any::<u64>(),
     ) {
         let messages = stream(len * count, seed);
+        let expected = upstream(&messages, len, count);
+        for kernel in batch::supported() {
+            prop_assert_eq!(&hash_many(kernel, &messages, len, count), &expected, "{:?}", kernel);
+        }
+
+        // The public entry point runs the widest of them.
         let mut digests = vec![[0u8; OUT_LEN]; count];
         Blake3.hash_many(&messages, &mut digests);
-        prop_assert_eq!(digests, upstream(&messages, len, count));
+        prop_assert_eq!(digests, expected);
     }
 }

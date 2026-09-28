@@ -81,6 +81,7 @@ cognitive_complexity = "allow"
 blake2 = { version = "0.10.6", default-features = false }
 blake3 = { version = "1.8.4", default-features = false }
 clap = { version = "4.6.1", features = ["derive"] }
+cpufeatures = "0.3.0"
 criterion = "0.8"
 hashbrown = "0.17.1"
 hex-literal = "1.1.0"

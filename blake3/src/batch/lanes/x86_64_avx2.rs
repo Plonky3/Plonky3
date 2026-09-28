@@ -4,23 +4,20 @@ use core::arch::x86_64::*;
 
 use blake3::{BLOCK_LEN, OUT_LEN};
 
-use super::Word;
+use super::{Backend, Kernel, Word};
 use crate::batch::compress::{BLOCK_WORDS, STATE_WORDS};
 
-/// One state or message word for eight lanes.
-pub(super) type Vector = __m256i;
-
 /// Lanes in one register.
-pub(super) const WIDTH: usize = 8;
+const WIDTH: usize = 8;
 
 /// Independent register groups hashed together.
 ///
 /// Two beat one, whose G chains leave the core idle.
 ///
 /// Three or four spill too much of the working vectors out of the 16 registers.
-pub(super) const GROUPS: usize = 2;
+const GROUPS: usize = 2;
 
-// SAFETY (every block below): this module only compiles when the target enables AVX2.
+// SAFETY (every block below): the driver only runs this backend on a CPU with AVX2.
 impl Word for __m256i {
     #[inline(always)]
     fn splat(value: u32) -> Self {
@@ -81,40 +78,39 @@ impl Word for __m256i {
 ///
 /// - Phase 1 unpacks 32-bit pairs, then 64-bit pairs, inside each 128-bit half.
 /// - Phase 2 swaps 128-bit halves between the two quads of rows.
-#[inline(always)]
+#[inline]
+#[target_feature(enable = "avx2")]
 fn transpose(r: [__m256i; 8]) -> [__m256i; 8] {
-    // SAFETY: this module only compiles when the target enables AVX2.
-    unsafe {
-        // Phase 1: a 4 x 4 transpose inside each 128-bit half of each quad of rows.
-        //
-        //     u[q][j], half k = word 4k + j of rows 4q .. 4q + 3
-        let u: [[__m256i; 4]; 2] = core::array::from_fn(|q| {
-            let [a, b, c, d] = [r[4 * q], r[4 * q + 1], r[4 * q + 2], r[4 * q + 3]];
-            let ab_lo = _mm256_unpacklo_epi32(a, b);
-            let ab_hi = _mm256_unpackhi_epi32(a, b);
-            let cd_lo = _mm256_unpacklo_epi32(c, d);
-            let cd_hi = _mm256_unpackhi_epi32(c, d);
-            [
-                _mm256_unpacklo_epi64(ab_lo, cd_lo),
-                _mm256_unpackhi_epi64(ab_lo, cd_lo),
-                _mm256_unpacklo_epi64(ab_hi, cd_hi),
-                _mm256_unpackhi_epi64(ab_hi, cd_hi),
-            ]
-        });
+    // Phase 1: a 4 x 4 transpose inside each 128-bit half of each quad of rows.
+    //
+    //     u[q][j], half k = word 4k + j of rows 4q .. 4q + 3
+    let u: [[__m256i; 4]; 2] = core::array::from_fn(|q| {
+        let [a, b, c, d] = [r[4 * q], r[4 * q + 1], r[4 * q + 2], r[4 * q + 3]];
+        let ab_lo = _mm256_unpacklo_epi32(a, b);
+        let ab_hi = _mm256_unpackhi_epi32(a, b);
+        let cd_lo = _mm256_unpacklo_epi32(c, d);
+        let cd_hi = _mm256_unpackhi_epi32(c, d);
+        [
+            _mm256_unpacklo_epi64(ab_lo, cd_lo),
+            _mm256_unpackhi_epi64(ab_lo, cd_lo),
+            _mm256_unpacklo_epi64(ab_hi, cd_hi),
+            _mm256_unpackhi_epi64(ab_hi, cd_hi),
+        ]
+    });
 
-        // Phase 2: word 4k + j joins half k of both quads.
-        let mut out = [_mm256_setzero_si256(); 8];
-        for j in 0..4 {
-            out[j] = _mm256_permute2x128_si256::<0x20>(u[0][j], u[1][j]);
-            out[4 + j] = _mm256_permute2x128_si256::<0x31>(u[0][j], u[1][j]);
-        }
-        out
+    // Phase 2: word 4k + j joins half k of both quads.
+    let mut out = [_mm256_setzero_si256(); 8];
+    for j in 0..4 {
+        out[j] = _mm256_permute2x128_si256::<0x20>(u[0][j], u[1][j]);
+        out[4 + j] = _mm256_permute2x128_si256::<0x31>(u[0][j], u[1][j]);
     }
+    out
 }
 
 /// Load one block from each of eight lanes as sixteen message words.
-#[inline(always)]
-pub(super) fn load_block(rows: &[&[u8; BLOCK_LEN]; WIDTH]) -> [__m256i; BLOCK_WORDS] {
+#[inline]
+#[target_feature(enable = "avx2")]
+fn load(rows: &[&[u8; BLOCK_LEN]; WIDTH]) -> [__m256i; BLOCK_WORDS] {
     // Each block is two registers: words 0 to 7, then words 8 to 15.
     //
     // SAFETY: each half is 32 readable bytes, and the load has no alignment requirement.
@@ -128,11 +124,39 @@ pub(super) fn load_block(rows: &[&[u8; BLOCK_LEN]; WIDTH]) -> [__m256i; BLOCK_WO
 }
 
 /// Write the digests of eight lanes.
-#[inline(always)]
-pub(super) fn store_digests(state: &[__m256i; STATE_WORDS], out: &mut [[u8; OUT_LEN]; WIDTH]) {
+#[inline]
+#[target_feature(enable = "avx2")]
+fn store(state: &[__m256i; STATE_WORDS], out: &mut [[u8; OUT_LEN]; WIDTH]) {
     // Eight words of eight lanes is a square, so row l comes back as lane l.
     for (digest, row) in out.iter_mut().zip(transpose(*state)) {
         // SAFETY: a digest is 32 writable bytes, and the store has no alignment requirement.
         unsafe { _mm256_storeu_si256(digest.as_mut_ptr().cast(), row) };
     }
+}
+
+/// The batched driver on this backend.
+pub(super) const KERNEL: Kernel = Kernel::new::<__m256i, WIDTH, GROUPS>("AVX2");
+
+impl Backend<WIDTH> for __m256i {
+    #[inline]
+    fn supported() -> bool {
+        cpufeatures::new!(has_avx2, "avx2");
+        has_avx2::get()
+    }
+
+    /// Load one block from each of eight lanes as sixteen message words.
+    #[inline(always)]
+    fn load_block(rows: &[&[u8; BLOCK_LEN]; WIDTH]) -> [Self; BLOCK_WORDS] {
+        // SAFETY: the driver only runs this backend on a CPU with AVX2.
+        unsafe { load(rows) }
+    }
+
+    /// Write the digests of eight lanes.
+    #[inline(always)]
+    fn store_digests(state: &[Self; STATE_WORDS], out: &mut [[u8; OUT_LEN]; WIDTH]) {
+        // SAFETY: the driver only runs this backend on a CPU with AVX2.
+        unsafe { store(state, out) }
+    }
+
+    out_of_line_steps!(WIDTH, "avx2");
 }

@@ -205,33 +205,101 @@ fn mix<V: Word, const G: usize>(
 
 #[cfg(test)]
 mod tests {
+    #[cfg(target_arch = "aarch64")]
+    use core::arch::aarch64::uint32x4_t;
+    #[cfg(all(
+        target_arch = "wasm32",
+        any(target_feature = "simd128", feature = "wasm32-simd")
+    ))]
+    use core::arch::wasm32::v128;
+    #[cfg(all(target_arch = "x86_64", not(target_feature = "avx2")))]
+    use core::arch::x86_64::__m128i;
+    #[cfg(all(target_arch = "x86_64", not(target_feature = "avx512f")))]
+    use core::arch::x86_64::__m256i;
+    #[cfg(target_arch = "x86_64")]
+    use core::arch::x86_64::__m512i;
+
     use proptest::prelude::*;
 
     use super::*;
-    use crate::batch::lanes::{Vector, WIDTH, from_lanes, to_lanes};
+    use crate::batch::lanes::{Backend, from_lanes, to_lanes};
+
+    /// Lanes in the widest register of any backend.
+    const MAX_WIDTH: usize = 16;
+
+    /// Lane words of two groups, wide enough for any backend.
+    type Words<const N: usize> = [[[u32; MAX_WIDTH]; N]; 2];
+
+    /// Check that backend `V` compresses two groups as it compresses each group alone.
+    fn check_pair<V: Backend<W>, const W: usize>(
+        h: &Words<STATE_WORDS>,
+        m: &Words<BLOCK_WORDS>,
+        counter: u64,
+        block_len: u32,
+        flags: u32,
+    ) -> Result<(), TestCaseError> {
+        // The running CPU may lack this backend.
+        if !V::supported() {
+            return Ok(());
+        }
+
+        // Each backend reads the first `W` lanes of every word.
+        let vector =
+            |lanes: &[u32; MAX_WIDTH]| from_lanes::<V, W>(core::array::from_fn(|l| lanes[l]));
+        let h: [[V; STATE_WORDS]; 2] = h.each_ref().map(|group| group.each_ref().map(vector));
+        let m: [[V; BLOCK_WORDS]; 2] = m.each_ref().map(|group| group.each_ref().map(vector));
+
+        // Two groups may take a hand-scheduled kernel, and one group never does.
+        let mut pair = h;
+        compress(&mut pair, &m, counter, block_len, flags);
+
+        for g in 0..2 {
+            let mut single = [h[g]];
+            compress(&mut single, &[m[g]], counter, block_len, flags);
+            prop_assert_eq!(
+                single[0].map(to_lanes::<V, W>),
+                pair[g].map(to_lanes::<V, W>),
+                "group {}",
+                g
+            );
+        }
+        Ok(())
+    }
 
     proptest! {
         #[test]
         fn two_groups_match_one_group_at_a_time(
-            h in prop::array::uniform2(prop::array::uniform8(any::<[u32; WIDTH]>())),
-            m in prop::array::uniform2(prop::array::uniform16(any::<[u32; WIDTH]>())),
+            h in prop::array::uniform2(prop::array::uniform8(any::<[u32; MAX_WIDTH]>())),
+            m in prop::array::uniform2(prop::array::uniform16(any::<[u32; MAX_WIDTH]>())),
             counter in any::<u64>(),
             block_len in 0u32..=64,
             flags in any::<u8>(),
         ) {
-            // Two groups may take a hand-scheduled kernel, and one group never does.
-            let h: [[Vector; STATE_WORDS]; 2] = h.map(|group| group.map(from_lanes));
-            let m: [[Vector; BLOCK_WORDS]; 2] = m.map(|group| group.map(from_lanes));
             let flags = u32::from(flags);
 
-            let mut pair = h;
-            compress(&mut pair, &m, counter, block_len, flags);
-
-            for g in 0..2 {
-                let mut single = [h[g]];
-                compress(&mut single, &[m[g]], counter, block_len, flags);
-                prop_assert_eq!(single[0].map(to_lanes), pair[g].map(to_lanes), "group {}", g);
-            }
+            // Every backend this build compiles, each on the CPUs that have it.
+            #[cfg(target_arch = "x86_64")]
+            check_pair::<__m512i, 16>(&h, &m, counter, block_len, flags)?;
+            #[cfg(all(target_arch = "x86_64", not(target_feature = "avx512f")))]
+            check_pair::<__m256i, 8>(&h, &m, counter, block_len, flags)?;
+            #[cfg(all(target_arch = "x86_64", not(target_feature = "avx2")))]
+            check_pair::<__m128i, 4>(&h, &m, counter, block_len, flags)?;
+            #[cfg(all(target_arch = "aarch64", target_feature = "neon", target_endian = "little"))]
+            check_pair::<uint32x4_t, 4>(&h, &m, counter, block_len, flags)?;
+            #[cfg(all(
+                target_arch = "wasm32",
+                any(target_feature = "simd128", feature = "wasm32-simd")
+            ))]
+            check_pair::<v128, 4>(&h, &m, counter, block_len, flags)?;
+            #[cfg(not(any(
+                target_arch = "x86_64",
+                all(target_arch = "aarch64", target_feature = "neon", target_endian = "little"),
+                all(
+                    target_arch = "wasm32",
+                    any(target_feature = "simd128", feature = "wasm32-simd")
+                )
+            )))]
+            check_pair::<u32, 1>(&h, &m, counter, block_len, flags)?;
         }
     }
 }

@@ -6,9 +6,9 @@
 //!
 //! So the batched path compresses them in lockstep, one vector lane per message.
 //!
-//! The vector backend is picked at build time: AVX-512, AVX2 or SSE2 on x86-64, NEON on AArch64.
+//! On x86-64 the batched path picks AVX-512, AVX2 or SSE2 at run time, the widest the CPU has.
 //!
-//! Other targets run the same kernel one lane at a time.
+//! Other targets pick at build time: NEON on AArch64, SIMD128 on wasm32, and one lane elsewhere.
 
 #![no_std]
 
@@ -22,9 +22,10 @@ mod batch;
 use blake3::OUT_LEN;
 use p3_symmetric::CryptographicHasher;
 
-/// Messages one batched compression advances at once.
+/// Messages the widest compiled backend advances in one batched compression.
 ///
-/// - 32 with AVX-512, 16 with AVX2 or NEON, 4 with SSE2, and 1 elsewhere.
+/// - 32 on x86-64, which is AVX-512 and a multiple of the 16 of AVX2 and the 4 of SSE2.
+/// - 16 with NEON, 4 with SIMD128, and 1 elsewhere.
 /// - Any batch size works, and a partial register costs one full register of work.
 pub const LANES: usize = batch::LANES;
 

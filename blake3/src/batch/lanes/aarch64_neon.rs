@@ -4,21 +4,18 @@ use core::arch::aarch64::*;
 
 use blake3::{BLOCK_LEN, OUT_LEN};
 
-use super::Word;
+use super::{Backend, Kernel, Word};
 use crate::batch::compress::{BLOCK_WORDS, STATE_WORDS};
 
-/// One state or message word for four lanes.
-pub(super) type Vector = uint32x4_t;
-
 /// Lanes in one register.
-pub(super) const WIDTH: usize = 4;
+const WIDTH: usize = 4;
 
 /// Independent register groups hashed together.
 ///
 /// A NEON register holds a quarter of an AVX-512 one, so a group is a quarter of the work.
 ///
 /// The core has 32 registers and a deep reorder window, enough to keep four groups in flight.
-pub(super) const GROUPS: usize = 4;
+const GROUPS: usize = 4;
 
 /// Byte indices that rotate every 32-bit word right by 8 bits.
 const ROTR_8: [u8; 16] = [1, 2, 3, 0, 5, 6, 7, 4, 9, 10, 11, 8, 13, 14, 15, 12];
@@ -90,32 +87,45 @@ fn transpose([a, b, c, d]: [uint32x4_t; 4]) -> [uint32x4_t; 4] {
     }
 }
 
-/// Load one block from each of four lanes as sixteen message words.
-#[inline(always)]
-pub(super) fn load_block(rows: &[&[u8; BLOCK_LEN]; WIDTH]) -> [uint32x4_t; BLOCK_WORDS] {
-    // Each block is four registers, and quarter k holds words 4k to 4k + 3.
-    //
-    // SAFETY: each quarter is 16 readable bytes, and a byte load has no alignment requirement.
-    // The target is little-endian, so the bytes of each word land in the order BLAKE3 reads.
-    let quarters: [[uint32x4_t; 4]; 4] = core::array::from_fn(|k| {
-        transpose(core::array::from_fn(|l| unsafe {
-            vreinterpretq_u32_u8(vld1q_u8(rows[l][16 * k..].as_ptr()))
-        }))
-    });
-    core::array::from_fn(|w| quarters[w / 4][w % 4])
-}
+/// The batched driver on this backend.
+pub(super) const KERNEL: Kernel = Kernel::new::<uint32x4_t, WIDTH, GROUPS>("NEON");
 
-/// Write the digests of four lanes.
-#[inline(always)]
-pub(super) fn store_digests(state: &[uint32x4_t; STATE_WORDS], out: &mut [[u8; OUT_LEN]; WIDTH]) {
-    // Words 0 to 3, then words 4 to 7, of every lane.
-    let low = transpose([state[0], state[1], state[2], state[3]]);
-    let high = transpose([state[4], state[5], state[6], state[7]]);
-    for ((digest, low), high) in out.iter_mut().zip(low).zip(high) {
-        // SAFETY: each half of a digest is 16 writable bytes, and a byte store needs no alignment.
-        unsafe {
-            vst1q_u8(digest.as_mut_ptr(), vreinterpretq_u8_u32(low));
-            vst1q_u8(digest[16..].as_mut_ptr(), vreinterpretq_u8_u32(high));
+impl Backend<WIDTH> for uint32x4_t {
+    #[inline]
+    fn supported() -> bool {
+        // NEON is part of the AArch64 baseline.
+        true
+    }
+
+    /// Load one block from each of four lanes as sixteen message words.
+    #[inline(always)]
+    fn load_block(rows: &[&[u8; BLOCK_LEN]; WIDTH]) -> [Self; BLOCK_WORDS] {
+        // Each block is four registers, and quarter k holds words 4k to 4k + 3.
+        //
+        // SAFETY: each quarter is 16 readable bytes, and a byte load has no alignment requirement.
+        // The target is little-endian, so the bytes of each word land in the order BLAKE3 reads.
+        let quarters: [[Self; 4]; 4] = core::array::from_fn(|k| {
+            transpose(core::array::from_fn(|l| unsafe {
+                vreinterpretq_u32_u8(vld1q_u8(rows[l][16 * k..].as_ptr()))
+            }))
+        });
+        core::array::from_fn(|w| quarters[w / 4][w % 4])
+    }
+
+    /// Write the digests of four lanes.
+    #[inline(always)]
+    fn store_digests(state: &[Self; STATE_WORDS], out: &mut [[u8; OUT_LEN]; WIDTH]) {
+        // Words 0 to 3, then words 4 to 7, of every lane.
+        let low = transpose([state[0], state[1], state[2], state[3]]);
+        let high = transpose([state[4], state[5], state[6], state[7]]);
+        for ((digest, low), high) in out.iter_mut().zip(low).zip(high) {
+            // SAFETY: each half of a digest is 16 writable bytes, and a byte store needs no alignment.
+            unsafe {
+                vst1q_u8(digest.as_mut_ptr(), vreinterpretq_u8_u32(low));
+                vst1q_u8(digest[16..].as_mut_ptr(), vreinterpretq_u8_u32(high));
+            }
         }
     }
+
+    out_of_line_steps!(WIDTH);
 }

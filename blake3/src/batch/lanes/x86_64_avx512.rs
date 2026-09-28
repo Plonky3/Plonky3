@@ -4,23 +4,20 @@ use core::arch::x86_64::*;
 
 use blake3::{BLOCK_LEN, OUT_LEN};
 
-use super::Word;
+use super::{Backend, Kernel, Word};
 use crate::batch::compress::{BLOCK_WORDS, STATE_WORDS};
 
-/// One state or message word for sixteen lanes.
-pub(super) type Vector = __m512i;
-
 /// Lanes in one register.
-pub(super) const WIDTH: usize = 16;
+const WIDTH: usize = 16;
 
 /// Independent register groups hashed together.
 ///
 /// Two groups fill all 32 registers, driven by the hand-scheduled kernel below.
 ///
 /// Four only spill their transposes.
-pub(super) const GROUPS: usize = 2;
+const GROUPS: usize = 2;
 
-// SAFETY (every block below): this module only compiles when the target enables AVX-512F.
+// SAFETY (every block below): the driver only runs this backend on a CPU with AVX-512F.
 impl Word for __m512i {
     #[inline(always)]
     fn compress_scheduled<const G: usize>(
@@ -80,91 +77,20 @@ impl Word for __m512i {
 /// A 4 x 4 transpose inside every 128-bit block of four rows.
 ///
 /// Block `k` of output `j` holds word `4k + j` of rows `a`, `b`, `c` and `d`, in that order.
-#[inline(always)]
+#[inline]
+#[target_feature(enable = "avx512f")]
 fn transpose_blocks(a: __m512i, b: __m512i, c: __m512i, d: __m512i) -> [__m512i; 4] {
-    // SAFETY: this module only compiles when the target enables AVX-512F.
-    unsafe {
-        // Interleave 32-bit words of row pairs, then 64-bit pairs of those.
-        let ab_lo = _mm512_unpacklo_epi32(a, b);
-        let ab_hi = _mm512_unpackhi_epi32(a, b);
-        let cd_lo = _mm512_unpacklo_epi32(c, d);
-        let cd_hi = _mm512_unpackhi_epi32(c, d);
-        [
-            _mm512_unpacklo_epi64(ab_lo, cd_lo),
-            _mm512_unpackhi_epi64(ab_lo, cd_lo),
-            _mm512_unpacklo_epi64(ab_hi, cd_hi),
-            _mm512_unpackhi_epi64(ab_hi, cd_hi),
-        ]
-    }
-}
-
-/// Load one block from each of sixteen lanes as sixteen message words.
-#[inline(always)]
-pub(super) fn load_block(rows: &[&[u8; BLOCK_LEN]; WIDTH]) -> [__m512i; BLOCK_WORDS] {
-    // SAFETY: each row is 64 readable bytes, and the load has no alignment requirement.
-    let r: [__m512i; WIDTH] =
-        core::array::from_fn(|l| unsafe { _mm512_loadu_si512(rows[l].as_ptr().cast()) });
-
-    // Phase 1: block k of u[q][j] is word 4k + j of rows 4q to 4q + 3.
-    let u: [[__m512i; 4]; 4] = core::array::from_fn(|q| {
-        transpose_blocks(r[4 * q], r[4 * q + 1], r[4 * q + 2], r[4 * q + 3])
-    });
-
-    // Phase 2: word 4k + j gathers block k of u[0][j] to u[3][j], in quad order.
-    let mut out = [r[0]; BLOCK_WORDS];
-    // SAFETY: this module only compiles when the target enables AVX-512F.
-    unsafe {
-        for j in 0..4 {
-            // Blocks 0 and 1, then blocks 2 and 3, of each pair of quads.
-            let q01_lo = _mm512_shuffle_i32x4::<0x44>(u[0][j], u[1][j]);
-            let q01_hi = _mm512_shuffle_i32x4::<0xEE>(u[0][j], u[1][j]);
-            let q23_lo = _mm512_shuffle_i32x4::<0x44>(u[2][j], u[3][j]);
-            let q23_hi = _mm512_shuffle_i32x4::<0xEE>(u[2][j], u[3][j]);
-
-            // Even blocks, then odd blocks, of each half.
-            out[j] = _mm512_shuffle_i32x4::<0x88>(q01_lo, q23_lo);
-            out[4 + j] = _mm512_shuffle_i32x4::<0xDD>(q01_lo, q23_lo);
-            out[8 + j] = _mm512_shuffle_i32x4::<0x88>(q01_hi, q23_hi);
-            out[12 + j] = _mm512_shuffle_i32x4::<0xDD>(q01_hi, q23_hi);
-        }
-    }
-    out
-}
-
-/// Write the digests of sixteen lanes.
-///
-/// Two adjacent digests fill one 64-byte store, so eight stores cover all sixteen lanes.
-#[inline(always)]
-pub(super) fn store_digests(state: &[__m512i; STATE_WORDS], out: &mut [[u8; OUT_LEN]; WIDTH]) {
-    // Block k of lo[j] is words 0 to 3 of lane 4k + j, and hi[j] holds words 4 to 7.
-    let lo = transpose_blocks(state[0], state[1], state[2], state[3]);
-    let hi = transpose_blocks(state[4], state[5], state[6], state[7]);
-
-    // SAFETY: this module only compiles when the target enables AVX-512F.
-    unsafe {
-        for j in [0, 2] {
-            // Blocks 0 and 1 of each half, then blocks 2 and 3.
-            let pairs = [
-                _mm512_shuffle_i32x4::<0x44>(lo[j], hi[j]),
-                _mm512_shuffle_i32x4::<0x44>(lo[j + 1], hi[j + 1]),
-                _mm512_shuffle_i32x4::<0xEE>(lo[j], hi[j]),
-                _mm512_shuffle_i32x4::<0xEE>(lo[j + 1], hi[j + 1]),
-            ];
-
-            // The digests of lanes 4k + j and 4k + j + 1, back to back.
-            let digests = [
-                _mm512_shuffle_i32x4::<0x88>(pairs[0], pairs[1]),
-                _mm512_shuffle_i32x4::<0xDD>(pairs[0], pairs[1]),
-                _mm512_shuffle_i32x4::<0x88>(pairs[2], pairs[3]),
-                _mm512_shuffle_i32x4::<0xDD>(pairs[2], pairs[3]),
-            ];
-            for (k, digests) in digests.into_iter().enumerate() {
-                // SAFETY: lanes 4k + j and 4k + j + 1 exist, and their digests are adjacent.
-                let pair = out[4 * k + j..][..2].as_flattened_mut();
-                _mm512_storeu_si512(pair.as_mut_ptr().cast(), digests);
-            }
-        }
-    }
+    // Interleave 32-bit words of row pairs, then 64-bit pairs of those.
+    let ab_lo = _mm512_unpacklo_epi32(a, b);
+    let ab_hi = _mm512_unpackhi_epi32(a, b);
+    let cd_lo = _mm512_unpacklo_epi32(c, d);
+    let cd_hi = _mm512_unpackhi_epi32(c, d);
+    [
+        _mm512_unpacklo_epi64(ab_lo, cd_lo),
+        _mm512_unpackhi_epi64(ab_lo, cd_lo),
+        _mm512_unpacklo_epi64(ab_hi, cd_hi),
+        _mm512_unpackhi_epi64(ab_hi, cd_hi),
+    ]
 }
 
 /// Eight G functions, four per group, issued one step at a time across all eight.
@@ -248,7 +174,7 @@ fn compress_pair(
     params: &[u32; STATE_WORDS],
 ) {
     // SAFETY:
-    // - AVX-512F is enabled for this module;
+    // - the driver only runs this backend on a CPU with AVX-512F;
     // - `h` is 1024 bytes of chaining values, read and then written in place;
     // - `m` is 2048 bytes of message words, only read;
     // - `params` is 32 bytes, only read;
@@ -344,4 +270,101 @@ fn compress_pair(
             options(nostack, preserves_flags),
         );
     }
+}
+
+/// Load one block from each of sixteen lanes as sixteen message words.
+#[inline]
+#[target_feature(enable = "avx512f")]
+fn load(rows: &[&[u8; BLOCK_LEN]; WIDTH]) -> [__m512i; BLOCK_WORDS] {
+    // SAFETY: each row is 64 readable bytes, and the load has no alignment requirement.
+    let r: [__m512i; WIDTH] =
+        core::array::from_fn(|l| unsafe { _mm512_loadu_si512(rows[l].as_ptr().cast()) });
+
+    // Phase 1: block k of u[q][j] is word 4k + j of rows 4q to 4q + 3.
+    let u: [[__m512i; 4]; 4] = core::array::from_fn(|q| {
+        transpose_blocks(r[4 * q], r[4 * q + 1], r[4 * q + 2], r[4 * q + 3])
+    });
+
+    // Phase 2: word 4k + j gathers block k of u[0][j] to u[3][j], in quad order.
+    let mut out = [r[0]; BLOCK_WORDS];
+    for j in 0..4 {
+        // Blocks 0 and 1, then blocks 2 and 3, of each pair of quads.
+        let q01_lo = _mm512_shuffle_i32x4::<0x44>(u[0][j], u[1][j]);
+        let q01_hi = _mm512_shuffle_i32x4::<0xEE>(u[0][j], u[1][j]);
+        let q23_lo = _mm512_shuffle_i32x4::<0x44>(u[2][j], u[3][j]);
+        let q23_hi = _mm512_shuffle_i32x4::<0xEE>(u[2][j], u[3][j]);
+
+        // Even blocks, then odd blocks, of each half.
+        out[j] = _mm512_shuffle_i32x4::<0x88>(q01_lo, q23_lo);
+        out[4 + j] = _mm512_shuffle_i32x4::<0xDD>(q01_lo, q23_lo);
+        out[8 + j] = _mm512_shuffle_i32x4::<0x88>(q01_hi, q23_hi);
+        out[12 + j] = _mm512_shuffle_i32x4::<0xDD>(q01_hi, q23_hi);
+    }
+    out
+}
+
+/// Write the digests of sixteen lanes.
+///
+/// Two adjacent digests fill one 64-byte store, so eight stores cover all sixteen lanes.
+#[inline]
+#[target_feature(enable = "avx512f")]
+fn store(state: &[__m512i; STATE_WORDS], out: &mut [[u8; OUT_LEN]; WIDTH]) {
+    // Block k of lo[j] is words 0 to 3 of lane 4k + j, and hi[j] holds words 4 to 7.
+    let lo = transpose_blocks(state[0], state[1], state[2], state[3]);
+    let hi = transpose_blocks(state[4], state[5], state[6], state[7]);
+
+    // SAFETY: the driver only runs this backend on a CPU with AVX-512F.
+    unsafe {
+        for j in [0, 2] {
+            // Blocks 0 and 1 of each half, then blocks 2 and 3.
+            let pairs = [
+                _mm512_shuffle_i32x4::<0x44>(lo[j], hi[j]),
+                _mm512_shuffle_i32x4::<0x44>(lo[j + 1], hi[j + 1]),
+                _mm512_shuffle_i32x4::<0xEE>(lo[j], hi[j]),
+                _mm512_shuffle_i32x4::<0xEE>(lo[j + 1], hi[j + 1]),
+            ];
+
+            // The digests of lanes 4k + j and 4k + j + 1, back to back.
+            let digests = [
+                _mm512_shuffle_i32x4::<0x88>(pairs[0], pairs[1]),
+                _mm512_shuffle_i32x4::<0xDD>(pairs[0], pairs[1]),
+                _mm512_shuffle_i32x4::<0x88>(pairs[2], pairs[3]),
+                _mm512_shuffle_i32x4::<0xDD>(pairs[2], pairs[3]),
+            ];
+            for (k, digests) in digests.into_iter().enumerate() {
+                // SAFETY: lanes 4k + j and 4k + j + 1 exist, and their digests are adjacent.
+                let pair = out[4 * k + j..][..2].as_flattened_mut();
+                _mm512_storeu_si512(pair.as_mut_ptr().cast(), digests);
+            }
+        }
+    }
+}
+
+/// The batched driver on this backend.
+pub(super) const KERNEL: Kernel = Kernel::new::<__m512i, WIDTH, GROUPS>("AVX-512");
+
+impl Backend<WIDTH> for __m512i {
+    #[inline]
+    fn supported() -> bool {
+        cpufeatures::new!(has_avx512f, "avx512f");
+        has_avx512f::get()
+    }
+
+    /// Load one block from each of sixteen lanes as sixteen message words.
+    #[inline(always)]
+    fn load_block(rows: &[&[u8; BLOCK_LEN]; WIDTH]) -> [Self; BLOCK_WORDS] {
+        // SAFETY: the driver only runs this backend on a CPU with AVX-512F.
+        unsafe { load(rows) }
+    }
+
+    /// Write the digests of sixteen lanes.
+    ///
+    /// Two adjacent digests fill one 64-byte store, so eight stores cover all sixteen lanes.
+    #[inline(always)]
+    fn store_digests(state: &[Self; STATE_WORDS], out: &mut [[u8; OUT_LEN]; WIDTH]) {
+        // SAFETY: the driver only runs this backend on a CPU with AVX-512F.
+        unsafe { store(state, out) }
+    }
+
+    out_of_line_steps!(WIDTH, "avx512f");
 }

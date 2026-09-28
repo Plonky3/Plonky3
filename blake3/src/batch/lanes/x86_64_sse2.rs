@@ -4,19 +4,16 @@ use core::arch::x86_64::*;
 
 use blake3::{BLOCK_LEN, OUT_LEN};
 
-use super::Word;
+use super::{Backend, Kernel, Word};
 use crate::batch::compress::{BLOCK_WORDS, STATE_WORDS};
 
-/// One state or message word for four lanes.
-pub(super) type Vector = __m128i;
-
 /// Lanes in one register.
-pub(super) const WIDTH: usize = 4;
+const WIDTH: usize = 4;
 
 /// Independent register groups hashed together.
 ///
 /// A second group spills more than its extra chains recover.
-pub(super) const GROUPS: usize = 1;
+const GROUPS: usize = 1;
 
 // SAFETY (every block below): SSE2 is part of the x86-64 baseline, and SSSE3 is checked.
 impl Word for __m128i {
@@ -90,31 +87,44 @@ fn transpose([a, b, c, d]: [__m128i; 4]) -> [__m128i; 4] {
     }
 }
 
-/// Load one block from each of four lanes as sixteen message words.
-#[inline(always)]
-pub(super) fn load_block(rows: &[&[u8; BLOCK_LEN]; WIDTH]) -> [__m128i; BLOCK_WORDS] {
-    // Each block is four registers, and quarter k holds words 4k to 4k + 3.
-    //
-    // SAFETY: each quarter is 16 readable bytes, and the load has no alignment requirement.
-    let quarters: [[__m128i; 4]; 4] = core::array::from_fn(|k| {
-        transpose(core::array::from_fn(|l| unsafe {
-            _mm_loadu_si128(rows[l][16 * k..].as_ptr().cast())
-        }))
-    });
-    core::array::from_fn(|w| quarters[w / 4][w % 4])
-}
+/// The batched driver on this backend.
+pub(super) const KERNEL: Kernel = Kernel::new::<__m128i, WIDTH, GROUPS>("SSE2");
 
-/// Write the digests of four lanes.
-#[inline(always)]
-pub(super) fn store_digests(state: &[__m128i; STATE_WORDS], out: &mut [[u8; OUT_LEN]; WIDTH]) {
-    // Words 0 to 3, then words 4 to 7, of every lane.
-    let low = transpose([state[0], state[1], state[2], state[3]]);
-    let high = transpose([state[4], state[5], state[6], state[7]]);
-    for ((digest, low), high) in out.iter_mut().zip(low).zip(high) {
-        // SAFETY: each half of a digest is 16 writable bytes, with no alignment requirement.
-        unsafe {
-            _mm_storeu_si128(digest.as_mut_ptr().cast(), low);
-            _mm_storeu_si128(digest[16..].as_mut_ptr().cast(), high);
+impl Backend<WIDTH> for __m128i {
+    #[inline]
+    fn supported() -> bool {
+        // SSE2 is part of the x86-64 baseline.
+        true
+    }
+
+    /// Load one block from each of four lanes as sixteen message words.
+    #[inline(always)]
+    fn load_block(rows: &[&[u8; BLOCK_LEN]; WIDTH]) -> [Self; BLOCK_WORDS] {
+        // Each block is four registers, and quarter k holds words 4k to 4k + 3.
+        //
+        // SAFETY: each quarter is 16 readable bytes, and the load has no alignment requirement.
+        let quarters: [[Self; 4]; 4] = core::array::from_fn(|k| {
+            transpose(core::array::from_fn(|l| unsafe {
+                _mm_loadu_si128(rows[l][16 * k..].as_ptr().cast())
+            }))
+        });
+        core::array::from_fn(|w| quarters[w / 4][w % 4])
+    }
+
+    /// Write the digests of four lanes.
+    #[inline(always)]
+    fn store_digests(state: &[Self; STATE_WORDS], out: &mut [[u8; OUT_LEN]; WIDTH]) {
+        // Words 0 to 3, then words 4 to 7, of every lane.
+        let low = transpose([state[0], state[1], state[2], state[3]]);
+        let high = transpose([state[4], state[5], state[6], state[7]]);
+        for ((digest, low), high) in out.iter_mut().zip(low).zip(high) {
+            // SAFETY: each half of a digest is 16 writable bytes, with no alignment requirement.
+            unsafe {
+                _mm_storeu_si128(digest.as_mut_ptr().cast(), low);
+                _mm_storeu_si128(digest[16..].as_mut_ptr().cast(), high);
+            }
         }
     }
+
+    out_of_line_steps!(WIDTH);
 }
