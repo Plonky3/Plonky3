@@ -48,6 +48,37 @@ pub trait PseudoCompressionFunction<T, const N: usize>: Clone {
             *output = self.compress(group.clone());
         }
     }
+
+    /// Compress a group whose first `len` inputs are children and whose other slots are padding.
+    ///
+    /// A tree calls this for a node with fewer than `N` children.
+    ///
+    /// That happens at a binary step inside an `N`-ary tree, and where a second digest is mixed into a node.
+    ///
+    /// The default compresses the whole padded group.
+    ///
+    /// An override may compute any other function of the first `len` inputs.
+    ///
+    /// Prover and verifier both call this one, so they always agree.
+    fn compress_prefix(&self, inputs: [T; N], len: usize) -> T {
+        debug_assert!(len <= N, "prefix length {len} exceeds the arity {N}");
+        self.compress(inputs)
+    }
+
+    /// Compress a batch of padded groups with [`Self::compress_prefix`], one output per group.
+    ///
+    /// Every group shares the same prefix length.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the group count differs from the output count.
+    fn compress_prefix_many(&self, inputs: &[[T; N]], len: usize, out: &mut [T])
+    where
+        T: Clone,
+    {
+        debug_assert!(len <= N, "prefix length {len} exceeds the arity {N}");
+        self.compress_many(inputs, out);
+    }
 }
 
 /// An `N`-to-1 compression function.

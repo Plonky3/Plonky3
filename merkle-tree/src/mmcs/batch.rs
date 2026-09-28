@@ -15,7 +15,7 @@ use super::{check_widths, validate_commit_reachable_heights};
 use crate::MerkleTreeError::{
     CapMismatch, EmptyBatch, IndexOutOfBounds, WrongBatchSize, WrongHeight,
 };
-use crate::merkle_tree::padded_len;
+use crate::merkle_tree::padded_layer_len;
 use crate::pruning::PrunedMerklePaths;
 use crate::{MerkleCap, MerkleTree, MerkleTreeError, MerkleTreeMmcs};
 
@@ -71,7 +71,7 @@ where
     ///
     /// At each tree level the number of siblings is `step - 1`, where `step` is either
     /// `N` (full N-ary compression) or `2` (binary) at levels that sit between N-ary layers).
-    /// For binary levels the remaining `N - 2` inputs are padded with the default digest.
+    /// A binary level compresses its pair through `compress_prefix`.
     fn open_batch<M: Matrix<P::Value>>(
         &self,
         index: usize,
@@ -132,8 +132,9 @@ where
     /// At each tree level, the verifier determines whether this level used a full
     /// N-ary step or a binary step (when a matrix injection sits between N-ary
     /// layers). Binary steps carry `1` sibling in the proof; N-ary steps carry
-    /// `N-1` siblings. Both cases use the same N-to-1 compression function —
-    /// binary steps pad the remaining `N-2` slots with the default digest.
+    /// `N-1` siblings.
+    ///
+    /// A binary step compresses its pair through `compress_prefix`, which by default pads it with the default digest.
     ///
     /// # Arguments
     /// - `commit`: The Merkle cap of the tree.
@@ -194,9 +195,6 @@ where
             .sorted_by_key(|(_, dims)| Reverse(dims.height))
             .peekable();
 
-        // Leaf layer width before the walk starts, padded to a full N-ary group.
-        let mut curr_height_padded = padded_len(max_height, N);
-
         if index >= max_height {
             return Err(IndexOutOfBounds { max_height, index });
         }
@@ -208,6 +206,10 @@ where
                 .peeking_take_while(|(_, dims)| dims.height.next_power_of_two() == leaf_height_npt)
                 .map(|(i, _)| opened_values[i].as_slice()),
         );
+
+        // Leaf layer width before the walk starts, padded the way the prover pads it.
+        let mut curr_height_padded =
+            padded_layer_len::<N>(max_height, heights_tallest_first.peek().is_some());
 
         let default_digest = [PW::Value::default(); DIGEST_ELEMS];
 
@@ -234,10 +236,9 @@ where
                 }
             });
 
-            digest = self.compress.compress(inputs);
+            digest = self.compress.compress_prefix(inputs, step);
             index /= step;
             let logical_next = curr_height_padded / step;
-            curr_height_padded = padded_len(logical_next, N);
 
             // Check if there are any new matrix rows to inject at the next height.
             let logical_next_npt = logical_next.next_power_of_two();
@@ -261,8 +262,12 @@ where
                         default_digest
                     }
                 });
-                digest = self.compress.compress(inject_inputs);
+                digest = self.compress.compress_prefix(inject_inputs, 2);
             }
+
+            // Re-pad the new layer the way the prover does.
+            curr_height_padded =
+                padded_layer_len::<N>(logical_next, heights_tallest_first.peek().is_some());
         }
 
         // After processing the proof, `index` has been shifted by the proof length.
@@ -310,7 +315,8 @@ mod tests {
     use p3_matrix::dense::RowMajorMatrix;
     use p3_matrix::{Dimensions, Matrix};
     use p3_symmetric::{
-        CryptographicHasher, PaddingFreeSponge, PseudoCompressionFunction, TruncatedPermutation,
+        CryptographicHasher, FieldAdd, PaddingFreeSponge, PseudoCompressionFunction, T5,
+        TruncatedPermutation,
     };
     use proptest::prelude::*;
     use rand::SeedableRng;
@@ -334,6 +340,69 @@ mod tests {
     type MyCompress4 = TruncatedPermutation<PermWide, 4, 8, 32>;
     type MyMmcs4 =
         MerkleTreeMmcs<<F as Field>::Packing, <F as Field>::Packing, MyHash, MyCompress4, 4, 8>;
+
+    // 5-ary T5 MMCS: three independent 2-to-1 Poseidon2 compressions per node.
+    type MyT5 = T5<MyCompress, FieldAdd>;
+    type MyMmcs5 = MerkleTreeMmcs<Packing, Packing, MyHash, MyT5, 5, 8>;
+
+    /// A T5 node over three permutations with independent round constants.
+    fn t5(rng: &mut SmallRng) -> MyT5 {
+        let [h1, h2, h3] = core::array::from_fn(|_| MyCompress::new(Perm::new_from_rng_128(rng)));
+        T5::new(h1, h2, h3)
+    }
+
+    #[test]
+    fn t5_root_is_a_tree_of_t5_nodes() {
+        // Seven leaves pad to ten: two full nodes, then a root over two children and padding.
+        //
+        //     layer 0:  l0 .. l6, 0, 0, 0
+        //     layer 1:  n0 = T5(l0..l4), n1 = T5(l5, l6, 0, 0, 0), then padding to five
+        //     root:     T5(n0, n1, 0, 0, 0)
+        let mut rng = SmallRng::seed_from_u64(11);
+        let perm = Perm::new_from_rng_128(&mut rng);
+        let hash = MyHash::new(perm);
+        let node = t5(&mut rng);
+        let mmcs = MyMmcs5::new(hash.clone(), node.clone(), 0);
+
+        let mat = RowMajorMatrix::<F>::rand(&mut rng, 7, 3);
+        let leaves: Vec<[F; 8]> = mat.rows().map(|row| hash.hash_iter(row)).collect();
+        let zero = [F::ZERO; 8];
+        let n0 = node.compress([leaves[0], leaves[1], leaves[2], leaves[3], leaves[4]]);
+        let n1 = node.compress([leaves[5], leaves[6], zero, zero, zero]);
+        let root = node.compress([n0, n1, zero, zero, zero]);
+
+        let (commit, data) = mmcs.commit_matrix(mat);
+        assert_eq!(data.arity_schedule, [5, 5]);
+        assert_eq!(commit.roots(), [root]);
+    }
+
+    #[test]
+    fn t5_steps_in_binary_below_the_last_injection() {
+        // A shorter matrix sits on the binary ladder, so the tree halves until it is injected.
+        //
+        //     32 -> 16 -> 8 (inject the height-8 matrix) -> 2 -> 1
+        //
+        // Above it the layers take full T5 steps.
+        let mut rng = SmallRng::seed_from_u64(12);
+        let mmcs = MyMmcs5::new(
+            MyHash::new(Perm::new_from_rng_128(&mut rng)),
+            t5(&mut rng),
+            0,
+        );
+        let tall = RowMajorMatrix::<F>::rand(&mut rng, 32, 2);
+        let short = RowMajorMatrix::<F>::rand(&mut rng, 8, 3);
+        let dims = [tall.dimensions(), short.dimensions()];
+        let (commit, data) = mmcs.commit(vec![tall, short]);
+        assert_eq!(data.arity_schedule, [2, 2, 5, 5]);
+
+        // Every leaf opens, with one sibling per binary level and four per T5 level.
+        for index in 0..32 {
+            let opening = mmcs.open_batch(index, &data);
+            assert_eq!(opening.opening_proof.len(), 1 + 1 + 4 + 4);
+            mmcs.verify_batch(&commit, &dims, index, (&opening).into())
+                .unwrap();
+        }
+    }
 
     #[test]
     fn commit_single_1x8() {
@@ -1285,21 +1354,40 @@ mod tests {
         /// 4-ary trees, where the per-level chunks are 3 wide and the restoration offsets are
         /// no longer identically zero.
         ///
-        /// `cap_height` is pinned to 0: a 4-ary commit with a non-zero cap and non-power-of-two
-        /// heights trips a pre-existing `assert!(cap.len().is_power_of_two())` in `p3_symmetric`,
-        /// which has nothing to do with restoration.
+        /// A non-zero cap over non-power-of-two heights mixes arities, so its root count is no power of two.
         #[test]
         fn proptest_restored_paths_verify_individually_4ary(
             max_height in 1usize..=70,
             extra_exponents in prop::collection::vec(1usize..=3, 0..3),
             widths in prop::collection::vec(1usize..=4, 1..4),
+            cap_height in 0usize..=2,
             raw_queries in prop::collection::vec(0usize..70, 1..=6),
             seed in any::<u64>(),
         ) {
             let mut rng = SmallRng::seed_from_u64(seed);
             let perm16 = Perm::new_from_rng_128(&mut rng);
             let perm32 = PermWide::new_from_rng_128(&mut rng);
-            let mmcs = MyMmcs4::new(MyHash::new(perm16), MyCompress4::new(perm32), 0);
+            let mmcs = MyMmcs4::new(MyHash::new(perm16), MyCompress4::new(perm32), cap_height);
+            cross_check_restored_paths(
+                &mmcs, max_height, &extra_exponents, &widths, &raw_queries, seed,
+            );
+        }
+
+        /// T5 trees: four siblings per full level, one per binary level, and caps of `5^h` roots.
+        ///
+        /// Heights up to 130 give up to three T5 levels, with and without injected matrices.
+        #[test]
+        fn proptest_restored_paths_verify_individually_t5(
+            max_height in 1usize..=130,
+            extra_exponents in prop::collection::vec(1usize..=3, 0..3),
+            widths in prop::collection::vec(1usize..=4, 1..4),
+            cap_height in 0usize..=2,
+            raw_queries in prop::collection::vec(0usize..130, 1..=6),
+            seed in any::<u64>(),
+        ) {
+            let mut rng = SmallRng::seed_from_u64(seed);
+            let hash = MyHash::new(Perm::new_from_rng_128(&mut rng));
+            let mmcs = MyMmcs5::new(hash, t5(&mut rng), cap_height);
             cross_check_restored_paths(
                 &mmcs, max_height, &extra_exponents, &widths, &raw_queries, seed,
             );

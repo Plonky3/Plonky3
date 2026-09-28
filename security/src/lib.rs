@@ -40,6 +40,7 @@
 //! - DKT26 — Johnson-regime line MCA (Theorem 5.12, Appendix B.1–B.2)
 //!   ([2026/2056](https://eprint.iacr.org/2026/2056))
 //! - HVZK-WHIR ([2026/391](https://eprint.iacr.org/2026/391))
+//! - T5 Merkle trees ([2021/373](https://eprint.iacr.org/2021/373))
 
 #![no_std]
 #![allow(clippy::too_many_arguments)]
@@ -58,6 +59,7 @@ pub mod air;
 pub mod deep;
 pub mod grinding;
 pub mod logup;
+pub mod merkle;
 pub mod multilinear;
 
 pub mod ldt;
@@ -74,6 +76,7 @@ pub use assumption::SecurityAssumption;
 pub use error::ErrorBits;
 pub use grinding::GrindingSites;
 pub use ldt::LowDegreeTest;
+pub use merkle::{Evidence, MerkleScheme, TreeBuilder};
 pub use multilinear::{
     BIT_RING_SWITCH_CLAIM_BATCHING_LABEL, BIT_RING_SWITCH_LABEL, COLUMN_BATCH_LABEL,
     bit_ring_switch_claim_batching_error, bit_ring_switch_claim_batching_term,

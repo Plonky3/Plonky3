@@ -34,8 +34,10 @@ p3-goldilocks = { path = "../goldilocks" }
 p3-keccak = { path = "../keccak" }
 p3-mds = { path = "../mds" }
 p3-rescue = { path = "../rescue" }
+p3-security = { path = "../security" }
 
 criterion.workspace = true
+postcard = { workspace = true, features = ["alloc"] }
 proptest.workspace = true
 
 [[bench]]
@@ -48,6 +50,10 @@ harness = false
 
 [[bench]]
 name = "multi_matrix"
+harness = false
+
+[[bench]]
+name = "t5"
 harness = false
 
 [lints]

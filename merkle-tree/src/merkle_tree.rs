@@ -103,7 +103,6 @@ impl<F: Clone + Send + Sync, W: Clone, M: Matrix<F>, const N: usize, const DIGES
         assert!(!leaves.is_empty(), "No matrices given?");
         const {
             assert!(N >= 2, "Arity N must be at least 2");
-            assert!(N.is_power_of_two(), "Arity N must be a power of two");
             assert!(P::WIDTH == PW::WIDTH, "Packing widths must match");
         }
 
@@ -181,11 +180,21 @@ impl<F: Clone + Send + Sync, W: Clone, M: Matrix<F>, const N: usize, const DIGES
 ///
 /// Returns `N` for a full N-ary step, or `2` for a binary bridge step when a
 /// matrix injection must happen before the next N-ary target level.
+///
+/// An arity that is not a power of two never lands on the `ceil(max_height / 2^k)` injection ladder.
+///
+/// Such a tree steps in binary while a shorter matrix remains, and in full `N`-ary steps above the last one.
 pub(crate) fn select_arity_step<const N: usize>(
     curr_height_padded: usize,
     leaf_height_npt: usize,
-    remaining_heights_tallest_first: impl Iterator<Item = usize>,
+    mut remaining_heights_tallest_first: impl Iterator<Item = usize>,
 ) -> usize {
+    if !N.is_power_of_two() {
+        let injections_remain = remaining_heights_tallest_first
+            .any(|height| height.next_power_of_two() != leaf_height_npt);
+        return if injections_remain { 2 } else { N };
+    }
+
     if curr_height_padded < N {
         return 2;
     }
@@ -216,6 +225,26 @@ pub(crate) const fn padded_len(raw_len: usize, n: usize) -> usize {
         raw_len.div_ceil(n) * n
     } else {
         n
+    }
+}
+
+/// Padded length of a layer of `raw_len` nodes in an `N`-ary tree.
+///
+/// `injections_remain` says whether a shorter matrix is still to be injected above the layer.
+///
+/// A power-of-two arity pads every layer to groups of `N`, which every bridge step also divides.
+///
+/// Any other arity steps in binary below its last injection, so it pads those layers to pairs.
+///
+/// That keeps each of them exactly `ceil(max_height / 2^k)` nodes long, the height an injected matrix has.
+pub(crate) const fn padded_layer_len<const N: usize>(
+    raw_len: usize,
+    injections_remain: bool,
+) -> usize {
+    if N.is_power_of_two() || !injections_remain {
+        padded_len(raw_len, N)
+    } else {
+        padded_len(raw_len, 2)
     }
 }
 

@@ -21,6 +21,12 @@
 //! Every shorter matrix height must equal `ceil(max_height / 2^k)` for some `k`.
 //! This guarantees that each global leaf index maps to a row in every committed matrix.
 //!
+//! The arity `N` need not be a power of two.
+//!
+//! A tree of [`T5`](p3_symmetric::T5) nodes takes `N = 5` and spends a quarter fewer compression calls.
+//!
+//! Such a tree steps in binary while a shorter matrix is still to be injected, and in full `N`-ary steps above.
+//!
 
 use alloc::vec;
 use alloc::vec::Vec;
@@ -38,7 +44,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::MerkleTree;
 use crate::MerkleTreeError::{CapMismatch, IndexOutOfBounds, WrongBatchSize, WrongHeight};
-use crate::merkle_tree::{padded_len, select_arity_step};
+use crate::merkle_tree::{padded_layer_len, select_arity_step};
 use crate::pruning::{MerkleAuthPath, PrunedMerklePaths, prune_paths, restore_paths};
 
 mod batch;
@@ -129,7 +135,6 @@ impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
     pub const fn new(hash: H, compress: C, cap_height: usize) -> Self {
         const {
             assert!(N >= 2, "Arity N must be at least 2");
-            assert!(N.is_power_of_two(), "Arity N must be a power of two");
         }
         Self {
             hash,
@@ -234,11 +239,6 @@ impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
             .peekable();
 
         // Phase 2: walk from leaves toward the root.
-        //
-        // Seed length is the leaf layer width rounded up to a full N-ary group —
-        // the same padding the prover applies when building the tree.
-        let mut curr_height_padded = padded_len(max_height, N);
-
         let leaf_height_npt = max_height.next_power_of_two();
 
         // Drop matrices already hashed into the leaf layer.
@@ -247,6 +247,10 @@ impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
         heights_tallest_first
             .peeking_take_while(|(_, dims)| dims.height.next_power_of_two() == leaf_height_npt)
             .for_each(|_| {});
+
+        // Seed length is the leaf layer width, padded the way the prover pads it.
+        let mut curr_height_padded =
+            padded_layer_len::<N>(max_height, heights_tallest_first.peek().is_some());
 
         // One schedule entry per non-root layer.
         //
@@ -265,10 +269,8 @@ impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
             );
             schedule.push(step);
 
-            // - Shrink by `step`,
-            // - Re-pad so the next layer can form complete N-ary groups for the compression after it.
+            // Shrink by `step`.
             let logical_next = curr_height_padded / step;
-            curr_height_padded = padded_len(logical_next, N);
 
             // - Inject any matrix whose rounded height matches the next layer's pre-pad width,
             // - Consume it so it stops driving arity below.
@@ -282,6 +284,10 @@ impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
                     .peeking_take_while(|(_, dims)| dims.height == next_height)
                     .for_each(|_| {});
             }
+
+            // Re-pad so the next layer forms complete groups for the compression after it.
+            curr_height_padded =
+                padded_layer_len::<N>(logical_next, heights_tallest_first.peek().is_some());
         }
 
         // Phase 3: strip the top `cap_height` entries
@@ -610,9 +616,6 @@ impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
             .sorted_by_key(|(_, dims)| Reverse(dims.height))
             .peekable();
 
-        // Leaf layer width before the walk starts, padded to a full N-ary group.
-        let mut curr_height_padded = padded_len(max_height, N);
-
         let leaf_height_npt = max_height.next_power_of_two();
 
         // Phase 7: Initial leaf hashes for every unique path.
@@ -625,6 +628,10 @@ impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
             .peeking_take_while(|(_, dims)| dims.height.next_power_of_two() == leaf_height_npt)
             .map(|(i, _)| i)
             .collect();
+
+        // Leaf layer width before the walk starts, padded the way the prover pads it.
+        let mut curr_height_padded =
+            padded_layer_len::<N>(max_height, heights_tallest_first.peek().is_some());
 
         let mut digests: Vec<[PW::Value; DIGEST_ELEMS]> = reps
             .iter()
@@ -755,7 +762,7 @@ impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
                     }
                 }
 
-                new_digests.push(self.compress.compress(inputs));
+                new_digests.push(self.compress.compress_prefix(inputs, step));
                 new_indices.push(parent_idx);
                 new_lead.push(lead_path);
                 new_group_lo.push(group_lo[i]);
@@ -772,7 +779,6 @@ impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
 
             // Layer geometry update mirrors `verify_batch`.
             let logical_next = curr_height_padded / step;
-            curr_height_padded = padded_len(logical_next, N);
 
             // Inject any shorter matrices whose padded height matches the
             // new layer. Paths in the same group share the row index, so we
@@ -828,9 +834,13 @@ impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
                             default_digest
                         }
                     });
-                    digests[g] = self.compress.compress(inject_inputs);
+                    digests[g] = self.compress.compress_prefix(inject_inputs, 2);
                 }
             }
+
+            // Re-pad the new layer the way the prover does.
+            curr_height_padded =
+                padded_layer_len::<N>(logical_next, heights_tallest_first.peek().is_some());
         }
 
         Ok(PrunedFrontier {

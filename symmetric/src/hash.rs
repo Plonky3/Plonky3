@@ -20,14 +20,15 @@ pub struct Hash<F, W, const DIGEST_ELEMS: usize> {
 /// The Merkle cap of height `h` of a Merkle tree is the `h`-th layer (from the root) of the tree.
 /// It can be used in place of the root to verify Merkle paths, which are `h` elements shorter.
 ///
-/// A cap of height 0 contains a single element (the root), while a cap of height `h` contains
-/// `2^h` elements. The `Digest` type is the full digest (e.g. `[W; DIGEST_ELEMS]`).
+/// A cap of height 0 contains a single element (the root).
 ///
-/// The root count is always a power of two.
+/// A cap of height `h` holds the product of the arities of the `h` levels above it.
 ///
-/// A cap is one full layer of a binary tree, so a layer at depth `h` holds `2^h` digests.
+/// That is `2^h` digests in a binary tree and `5^h` in a tree of T5 nodes.
 ///
-/// The height is recovered as `log_2` of the root count, which exists only for a power of two.
+/// The `Digest` type is the full digest (e.g. `[W; DIGEST_ELEMS]`).
+///
+/// The root count is never zero, since every tree layer holds at least one digest.
 ///
 /// Every path that builds a cap enforces this, including the one that reads it off the wire.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -57,25 +58,18 @@ struct MerkleCapRepr<F, Digest> {
 impl<'de, F, Digest: Deserialize<'de>> Deserialize<'de> for MerkleCap<F, Digest> {
     /// # Errors
     ///
-    /// Returns an error when the root count is not a power of two.
-    ///
-    /// Such a count has no base-two logarithm, so the cap would have no height.
+    /// Returns an error when the cap holds no root.
     ///
     /// Untrusted bytes are the only route by which such a cap could reach a verifier.
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         // Read the wire shape first, so the check runs on a fully decoded layer.
         let MerkleCapRepr { cap, _marker } = MerkleCapRepr::<F, Digest>::deserialize(deserializer)?;
 
-        // Invariant: a cap is a full tree layer, so it holds 2^h digests for its depth h.
+        // Invariant: a cap is a full tree layer, and every layer holds at least one digest.
         //
-        //     4 roots -> depth 2, accepted
-        //     3 roots -> no layer has that size, rejected
-        //     0 roots -> no layer has that size, rejected
-        if !cap.len().is_power_of_two() {
-            return Err(D::Error::invalid_length(
-                cap.len(),
-                &"a power-of-two number of Merkle cap roots",
-            ));
+        // Its exact size depends on the arity of the tree, which only the verifier knows.
+        if cap.is_empty() {
+            return Err(D::Error::invalid_length(0, &"at least one Merkle cap root"));
         }
 
         Ok(Self { cap, _marker })
@@ -87,14 +81,10 @@ impl<F, Digest> MerkleCap<F, Digest> {
     ///
     /// # Panics
     ///
-    /// Panics when the number of digests is not a power of two.
+    /// Panics when there are no digests.
     pub fn new(cap: Vec<Digest>) -> Self {
-        // Invariant: a cap is a full tree layer, so it holds 2^h digests for its depth h.
-        assert!(
-            cap.len().is_power_of_two(),
-            "a Merkle cap holds a power-of-two number of roots, got {}",
-            cap.len()
-        );
+        // Invariant: a cap is a full tree layer, and every layer holds at least one digest.
+        assert!(!cap.is_empty(), "a Merkle cap holds at least one root");
         Self {
             cap,
             _marker: PhantomData,
@@ -107,8 +97,13 @@ impl<F, Digest> MerkleCap<F, Digest> {
         self.cap.len()
     }
 
-    /// Returns the height of the cap (log2 of the number of elements).
+    /// Returns the height of a binary cap (log2 of the number of elements).
+    ///
     /// A cap with 1 element has height 0, a cap with 2 elements has height 1, etc.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the root count is not a power of two, as in a cap of a T5 tree.
     #[must_use]
     pub const fn height(&self) -> usize {
         log2_strict_usize(self.num_roots())
@@ -267,69 +262,39 @@ mod tests {
     }
 
     #[test]
-    fn test_merkle_cap_deserialize_rejects_non_power_of_two_root_count() {
-        // Three roots is the smallest count no tree layer can have.
-        //
+    fn test_merkle_cap_deserialize_rejects_an_empty_cap() {
         // Zero roots is the degenerate count a truncating encoder would produce.
         //
         // The self-describing decoder reports the count and the requirement verbatim.
-        //
-        // Pinning the whole message keeps the count in it and keeps it readable to an operator.
-        for (json, message) in [
-            (
-                r#"{"cap":[[1,1,1,1],[2,2,2,2],[3,3,3,3]],"_marker":null}"#,
-                "invalid length 3, expected a power-of-two number of Merkle cap roots",
-            ),
-            (
-                r#"{"cap":[],"_marker":null}"#,
-                "invalid length 0, expected a power-of-two number of Merkle cap roots",
-            ),
-        ] {
-            let err = serde_json::from_str::<MerkleCap<F, Digest>>(json)
-                .expect_err("a cap with a non-power-of-two root count must not deserialize");
-            assert_eq!(err.to_string(), message);
-        }
+        let err = serde_json::from_str::<MerkleCap<F, Digest>>(r#"{"cap":[],"_marker":null}"#)
+            .expect_err("a cap with no root must not deserialize");
+        assert_eq!(
+            err.to_string(),
+            "invalid length 0, expected at least one Merkle cap root"
+        );
+
+        // The compact decoder refuses the empty count and accepts a single root.
+        postcard::from_bytes::<MerkleCap<F, Digest>>(&[0u8])
+            .expect_err("a cap with no root must not deserialize");
+        let cap = postcard::from_bytes::<MerkleCap<F, Digest>>(&[1u8, 1, 1, 1, 1])
+            .expect("one root is accepted");
+        assert_eq!(cap.num_roots(), 1);
     }
 
     #[test]
-    fn test_merkle_cap_compact_decoding_rejects_a_non_power_of_two_root_count() {
-        // The compact decoder collapses every failure into one opaque message.
-        //
-        // Asserting that text would pin a catch-all that a truncated buffer also produces.
-        //
-        // Instead each rejected count is paired with the next legal one:
-        //
-        //     03 | three roots  -> refused
-        //     04 | four roots   -> accepted
-        //
-        // Only the count differs between the two, so the count is what the refusal turns on.
-        for (rejected, accepted, roots) in [
-            (
-                &[3u8, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3][..],
-                &[4u8, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4][..],
-                4,
-            ),
-            (&[0u8][..], &[1u8, 1, 1, 1, 1][..], 1),
-        ] {
-            postcard::from_bytes::<MerkleCap<F, Digest>>(rejected)
-                .expect_err("a cap with a non-power-of-two root count must not deserialize");
-
-            let cap = postcard::from_bytes::<MerkleCap<F, Digest>>(accepted)
-                .expect("a power-of-two root count is accepted");
-            assert_eq!(cap.num_roots(), roots);
-        }
+    fn test_merkle_cap_of_a_five_ary_layer_round_trips() {
+        // A T5 tree's cap of height 1 is the five children of the root.
+        let cap = MerkleCap::<F, Digest>::new(vec![[9u8; 4]; 5]);
+        let bytes = postcard::to_allocvec(&cap).unwrap();
+        let back: MerkleCap<F, Digest> = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!(back.num_roots(), 5);
+        assert_eq!(back, cap);
     }
 
     #[test]
     #[should_panic]
     fn test_merkle_cap_new_panics_on_empty() {
         let _ = MerkleCap::<F, Digest>::new(vec![]);
-    }
-
-    #[test]
-    #[should_panic]
-    fn test_merkle_cap_new_panics_on_three() {
-        let _ = MerkleCap::<F, Digest>::new(vec![[0u8; 4]; 3]);
     }
 
     #[test]

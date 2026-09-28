@@ -10,6 +10,7 @@ mod hasher;
 mod permutation;
 mod serializing_hasher;
 mod sponge;
+mod t5;
 
 pub use compression::*;
 pub use hash::*;
@@ -17,3 +18,4 @@ pub use hasher::*;
 pub use permutation::*;
 pub use serializing_hasher::*;
 pub use sponge::*;
+pub use t5::*;

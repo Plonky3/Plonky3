@@ -37,7 +37,7 @@ use p3_maybe_rayon::prelude::*;
 use p3_symmetric::{CryptographicHasher, PseudoCompressionFunction};
 use p3_util::transpose::transpose_rows;
 
-use crate::merkle_tree::{padded_len, select_arity_step};
+use crate::merkle_tree::{padded_layer_len, select_arity_step};
 
 /// Blocks per worker thread in the first pass.
 ///
@@ -164,14 +164,16 @@ where
 
 /// One digest layer, as fixed by the plan before any hashing.
 ///
-/// A node at an upper layer is, with `a` its arity and the default digest `0` as filler:
+/// A node at an upper layer is, with `a` its arity, `C_k` the compression of a `k`-prefix and `0` the filler:
 ///
 /// ```text
-///     folded = C(child_{a*i}, ..., child_{a*i + a - 1}, 0, ..., 0)
+///     folded = C_a(child_{a*i}, ..., child_{a*i + a - 1}, 0, ..., 0)
 ///     node_i = folded                                 no injected matrices
-///     node_i = C(folded, H(row_i), 0, ..., 0)         injected matrices, i < their height
-///     node_i = C(folded, 0, 0, ..., 0)                injected matrices, i >= their height
+///     node_i = C_2(folded, H(row_i), 0, ..., 0)       injected matrices, i < their height
+///     node_i = C_2(folded, 0, 0, ..., 0)              injected matrices, i >= their height
 /// ```
+///
+/// `C_N` is the full compression, and a shorter prefix goes through `compress_prefix`.
 ///
 /// A leaf is the hash of row `i` concatenated across the tallest matrices.
 #[derive(Debug)]
@@ -186,6 +188,9 @@ pub(crate) struct Layer<'a, M> {
     ///
     /// The allocated layer is padded past them with default digests.
     pub(crate) computed: usize,
+
+    /// Allocated length of the layer: the computed nodes and their padding tail.
+    pub(crate) len: usize,
 }
 
 /// Builds every digest layer of one tree.
@@ -247,14 +252,15 @@ where
         let tallest = by_height
             .peeking_take_while(|m| m.height() == max_height)
             .collect_vec();
+        let mut len = padded_layer_len::<N>(max_height, by_height.peek().is_some());
         let mut layers = vec![Layer {
             arity: 0,
             matrices: tallest,
             computed: max_height,
+            len,
         }];
 
         // Each further layer folds the padded layer below it, until one digest remains.
-        let mut len = padded_len(max_height, N);
         while len > 1 {
             // A binary bridge step lands a shorter matrix on its own layer.
             let arity =
@@ -267,12 +273,14 @@ where
                 .peeking_take_while(|m| m.height().next_power_of_two() == target)
                 .collect_vec();
 
+            // The padding depends on whether any injection is still to come above.
+            len = padded_layer_len::<N>(computed, by_height.peek().is_some());
             layers.push(Layer {
                 arity,
                 matrices,
                 computed,
+                len,
             });
-            len = padded_len(computed, N);
         }
 
         Self {
@@ -294,7 +302,7 @@ where
         let mut digests: Vec<_> = self
             .layers
             .iter()
-            .map(|layer| default_digest_layer(padded_len(layer.computed, N)))
+            .map(|layer| default_digest_layer(layer.len))
             .collect();
 
         // Each pass covers a contiguous band of layers, lowest first.
@@ -654,7 +662,7 @@ where
                 layer.arity,
                 &mut scratch.digests,
             );
-            let mut packed = self.c.compress(children);
+            let mut packed = self.c.compress_prefix(children, layer.arity);
 
             // Mix in the row digest, or the default digest past the injected rows.
             if !layer.matrices.is_empty() {
@@ -664,11 +672,12 @@ where
                 } else {
                     default
                 };
-                packed = self.c.compress(array::from_fn(|slot| match slot {
+                let pair = array::from_fn(|slot| match slot {
                     0 => packed,
                     1 => row,
                     _ => default,
-                }));
+                });
+                packed = self.c.compress_prefix(pair, 2);
             }
 
             unpack_digests(&packed, digests);
@@ -731,7 +740,7 @@ where
                     })
                 })
                 .collect();
-            self.c.compress_many(&pairs, out);
+            self.c.compress_prefix_many(&pairs, 2, out);
         }
     }
 
@@ -783,13 +792,14 @@ where
         let arity = layer.arity;
 
         // Fold the node's children, padded to the full arity.
-        let folded = self.c.compress(array::from_fn(|slot| {
+        let children = array::from_fn(|slot| {
             if slot < arity {
                 kids[arity * local + slot]
             } else {
                 default
             }
-        }));
+        });
+        let folded = self.c.compress_prefix(children, arity);
         if layer.matrices.is_empty() {
             return folded;
         }
@@ -800,11 +810,12 @@ where
         } else {
             default
         };
-        self.c.compress(array::from_fn(|slot| match slot {
+        let pair = array::from_fn(|slot| match slot {
             0 => folded,
             1 => row,
             _ => default,
-        }))
+        });
+        self.c.compress_prefix(pair, 2)
     }
 }
 
@@ -898,7 +909,8 @@ mod tests {
     use p3_keccak::{Keccak256Hash, KeccakF, VECTOR_LEN};
     use p3_matrix::dense::RowMajorMatrix;
     use p3_symmetric::{
-        CompressionFunctionFromHasher, PaddingFreeSponge, SerializingHasher, TruncatedPermutation,
+        CompressionFunctionFromHasher, FieldAdd, PaddingFreeSponge, SerializingHasher, T5,
+        TruncatedPermutation, Xor,
     };
     use proptest::collection;
     use proptest::prelude::*;
@@ -963,7 +975,7 @@ mod tests {
 
         // Leaf layer: one digest per row, then default padding.
         let mut layer: Vec<_> = (0..max_height).map(|r| hash_row(tallest, r)).collect();
-        layer.resize(padded_len(max_height, N), zero);
+        layer.resize(padded_layer_len::<N>(max_height, !rest.is_empty()), zero);
         let mut layers = vec![layer];
         let mut arities = Vec::new();
 
@@ -986,13 +998,14 @@ mod tests {
 
             let mut layer: Vec<_> = (0..computed)
                 .map(|i| {
-                    let folded = c.compress(array::from_fn(|n| {
+                    let children = array::from_fn(|n| {
                         if n < arity {
                             below[arity * i + n]
                         } else {
                             zero
                         }
-                    }));
+                    });
+                    let folded = c.compress_prefix(children, arity);
                     if inject.is_empty() {
                         return folded;
                     }
@@ -1001,14 +1014,15 @@ mod tests {
                     } else {
                         zero
                     };
-                    c.compress(array::from_fn(|n| match n {
+                    let pair = array::from_fn(|n| match n {
                         0 => folded,
                         1 => row,
                         _ => zero,
-                    }))
+                    });
+                    c.compress_prefix(pair, 2)
                 })
                 .collect();
-            layer.resize(padded_len(computed, N), zero);
+            layer.resize(padded_layer_len::<N>(computed, !rest.is_empty()), zero);
             layers.push(layer);
             arities.push(arity);
         }
@@ -1116,6 +1130,10 @@ mod tests {
         fn compress(&self, input: [[u64; 4]; N]) -> [u64; 4] {
             to_words(&self.0.compress(input.map(to_bytes)))
         }
+
+        fn compress_prefix(&self, input: [[u64; 4]; N], len: usize) -> [u64; 4] {
+            to_words(&self.0.compress_prefix(input.map(to_bytes), len))
+        }
     }
 
     #[test]
@@ -1135,6 +1153,15 @@ mod tests {
         let perm32 = Poseidon2BabyBear::<32>::new_from_rng_128(&mut rng);
         let c4 = TruncatedPermutation::<_, 4, 8, 32>::new(perm32);
         assert_field_matches_reference::<_, _, 4>(&h, &c4);
+
+        // T5 tree: full steps fold five, bridge steps and injections go through `h1` alone.
+        let [h1, h2, h3] = array::from_fn(|_| {
+            TruncatedPermutation::<_, 2, 8, 16>::new(Poseidon2BabyBear::<16>::new_from_rng_128(
+                &mut rng,
+            ))
+        });
+        let t5 = T5::<_, FieldAdd>::new(h1, h2, h3);
+        assert_field_matches_reference::<_, _, 5>(&h, &t5);
     }
 
     /// The reference comparison over field digests, for the packed field sponges.
@@ -1189,6 +1216,13 @@ mod tests {
             let input = input.map(|d| d.map(F::from_u64));
             self.0.compress(input).map(|x| x.as_canonical_u64())
         }
+
+        fn compress_prefix(&self, input: [[u64; 8]; N], len: usize) -> [u64; 8] {
+            let input = input.map(|d| d.map(F::from_u64));
+            self.0
+                .compress_prefix(input, len)
+                .map(|x| x.as_canonical_u64())
+        }
     }
 
     #[test]
@@ -1203,6 +1237,11 @@ mod tests {
             &h,
             &CompressionFunctionFromHasher::<_, 4, 32>::new(Keccak256Hash),
         );
+
+        // One function in all three slots is insecure, but the wiring under test is the same.
+        let pair = CompressionFunctionFromHasher::<_, 2, 32>::new(Keccak256Hash);
+        let t5 = T5::<_, Xor>::new(pair.clone(), pair.clone(), pair);
+        assert_bytes_match_reference::<_, _, 5>(&h, &t5);
     }
 
     #[test]
@@ -1213,6 +1252,10 @@ mod tests {
         let h = SerializingHasher::new(sponge);
         let c = CompressionFunctionFromHasher::<_, 2, 4>::new(sponge);
         assert_matches_reference::<[F; VECTOR_LEN], [u64; VECTOR_LEN], _, _, 2, 4>(&h, &c);
+
+        // XOR acts lane by lane on the packed words.
+        let t5 = T5::<_, Xor>::new(c.clone(), c.clone(), c);
+        assert_matches_reference::<[F; VECTOR_LEN], [u64; VECTOR_LEN], _, _, 5, 4>(&h, &t5);
     }
 
     #[test]
@@ -1278,7 +1321,7 @@ mod tests {
             builder
                 .layers
                 .iter()
-                .map(|layer| default_digest_layer(padded_len(layer.computed, 4)))
+                .map(|layer| default_digest_layer(layer.len))
                 .collect()
         };
 
