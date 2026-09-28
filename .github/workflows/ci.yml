@@ -35,6 +35,7 @@ jobs:
       keccak: ${{ steps.impact.outputs.keccak }}
       sha_ni: ${{ steps.impact.outputs.sha_ni }}
       gfni: ${{ steps.impact.outputs.gfni }}
+      avx512: ${{ steps.impact.outputs.avx512 }}
       toml: ${{ steps.impact.outputs.toml }}
       manifests: ${{ steps.impact.outputs.manifests }}
       scripts: ${{ steps.impact.outputs.scripts }}
@@ -164,6 +165,7 @@ jobs:
             features: "+avx512f,+avx512bw,+gfni,+avx512vbmi"
             compile_only: true
             gfni: true
+            avx512: true
             target: x86_64-unknown-linux-gnu
             modes: serial parallel
           # The inversion's repeated-squaring kernel also needs PCLMULQDQ and AVX-512 VBMI.
@@ -217,7 +219,8 @@ jobs:
           needs.plan.outputs.rust == 'true' &&
           (!matrix.compile_only ||
            (matrix.sha_ni && needs.plan.outputs.sha_ni == 'true') ||
-           (matrix.gfni && needs.plan.outputs.gfni == 'true'))
+           (matrix.gfni && needs.plan.outputs.gfni == 'true') ||
+           (matrix.avx512 && needs.plan.outputs.avx512 == 'true'))
         with:
           tool: cargo-nextest
 
@@ -329,6 +332,21 @@ jobs:
             fi
           else
             echo "This runner lacks the required SIMD features; the build above is the coverage."
+          fi
+
+      # Miri cannot run the `asm!` of the AVX-512 BLAKE3 kernel, so only the processor can.
+      #
+      # This leg compiles that kernel in, so its tests pin it to upstream on a runner that has it.
+      - name: Test blake3 (x86-64 AVX-512)
+        if: >-
+          needs.plan.outputs.rust == 'true' &&
+          matrix.avx512 &&
+          needs.plan.outputs.avx512 == 'true'
+        run: |
+          if grep -qw avx512f /proc/cpuinfo; then
+            python3 scripts/check.py test --package p3-blake3
+          else
+            echo "This runner has no AVX-512F; the build above is the coverage."
           fi
 
       # Whatever the runner's own processor is, the interpreter has shims for the three
