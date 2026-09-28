@@ -47,6 +47,23 @@ use crate::poly::{Poly, PolyView, tensor_packed, tensor_unpacked};
 /// ```
 pub(crate) const MUL_ACC_BYTES: usize = 3;
 
+/// Largest tensored weight table the suffix compression builds, in bytes.
+///
+/// Every output row rereads the whole table, so every worker pulls all of it into its own cache.
+///
+/// Past a core's near cache, that traffic costs more than the short dots the table replaces.
+///
+/// Measured on x86-64 (AVX-512) with BabyBear and EF4, tensored / factored time over 2 to 1024 rows:
+///
+/// ```text
+///     table     1 thread        32 threads
+///     16 KiB    0.17 to 0.52    0.17 to 0.79
+///     64 KiB    0.32 to 0.91    0.36 to 1.39
+///     256 KiB   0.40 to 1.41    0.85 to 2.7
+///     1 MiB     0.65 to 1.82    1.4 to 4.7
+/// ```
+const TENSOR_MAX_TABLE_BYTES: usize = 64 << 10;
+
 /// Extension widths one base-by-extension multiply-accumulate is charged as, per lane.
 ///
 /// A base element times an extension weight is a handful of base multiplies.
@@ -607,9 +624,14 @@ impl<F: Field, EF: ExtensionField<F>> SplitEq<F, EF> {
         //     factored : |eq0| short dots per row, each one extension multiply to scale
         //     tensored : one dot of 2^m per row, against a table built once
         //
-        // The table costs one packed multiply per W weights, less than a single row's dot.
-        if let Some(eq1) = self.eq1.as_packed()
+        // Every row rereads the whole table, so the table must stay small.
+        //
+        // A one-lane packing has no vector dot to gain, so it keeps the factored form.
+        let tensored = F::Packing::WIDTH > 1
             && out.len() > 1
+            && size_of::<EF>() * suffix_rows <= TENSOR_MAX_TABLE_BYTES;
+        if let Some(eq1) = self.eq1.as_packed()
+            && tensored
         {
             let table = tensor_packed::<F, EF>(self.eq0.as_slice(), eq1);
             out.par_iter_mut()
