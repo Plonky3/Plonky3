@@ -12,7 +12,10 @@ use p3_lookup::{Count, IndexedLookupBuilder, InteractionBuilder, TraceWindow};
 use super::{CellWords, SLICED_CELLS, SlicedBit, SlicedQuadratic, xor, zip};
 use crate::folder::eval_boundary_io;
 use crate::selectors::BoundaryEvals;
-use crate::sliced::{SLICED_LANES, SlicedEvaluation, TABLE_BITS, TABLE_ENTRIES, TABLES_PER_PLANE};
+use crate::sliced::{
+    PreparedPowers, PreparedSums, SLICED_LANES, SlicedEvaluation, TABLE_BITS, TABLE_ENTRIES,
+    TABLES_PER_PLANE,
+};
 
 /// Byte-indexed partial sums of sixty-four lane weights, for values with one bit per lane.
 ///
@@ -62,6 +65,15 @@ impl<R: Field> BitLaneSums<R> {
     }
 }
 
+/// The kernel's running sums for every cell of one evaluation.
+#[derive(Debug)]
+struct KernelSums<'a, R> {
+    /// The alpha powers laid out for the kernel.
+    prepared: &'a PreparedPowers<R>,
+    /// Per-cell sums of the constraints asserted so far.
+    sums: [PreparedSums; SLICED_CELLS],
+}
+
 /// AIR folder over [`SLICED_CELLS`] evaluations of sixty-four rows, each constraint reduced to one
 /// bit per lane.
 ///
@@ -90,7 +102,11 @@ pub struct SlicedQuadraticFolder<'a, F, R> {
     /// quadratic part.
     whole: CellWords,
     /// Running lane-weighted, alpha-batched sums, one per evaluation.
+    ///
+    /// Beside the kernel only debug builds keep these, to check the kernel's sums against them.
     accumulators: [R; SLICED_CELLS],
+    /// The kernel's sums, when the kernel sums the constraints instead.
+    kernel: Option<KernelSums<'a, R>>,
     /// Number of constraints asserted so far, which is the next position in `alpha_powers`.
     constraint_index: usize,
     /// Whether any asserted value was poisoned.
@@ -138,9 +154,30 @@ impl<'a, F: Field, R: Field> SlicedQuadraticFolder<'a, F, R> {
             lanes,
             whole: whole.map(|whole| u64::from(whole).wrapping_neg()),
             accumulators: [R::ZERO; SLICED_CELLS],
+            kernel: None,
             constraint_index: 0,
             poisoned: false,
         }
+    }
+
+    /// Sum the constraints with the kernel, from `prepared`, the layout of the alpha powers.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `prepared` does not hold one power per alpha power.
+    #[inline]
+    #[must_use]
+    pub(crate) fn with_prepared_powers(mut self, prepared: &'a PreparedPowers<R>) -> Self {
+        assert_eq!(
+            prepared.0.len(),
+            self.alpha_powers.len(),
+            "the prepared powers must be the attached alpha powers"
+        );
+        self.kernel = Some(KernelSums {
+            prepared,
+            sums: core::array::from_fn(|_| PreparedSums::new()),
+        });
+        self
     }
 
     /// Attach the two-row preprocessed window read by the AIR.
@@ -182,8 +219,22 @@ impl<'a, F: Field, R: Field> SlicedQuadraticFolder<'a, F, R> {
             self.alpha_powers.len(),
             "attached alpha powers must match the number of asserted constraints"
         );
+        let value = match &mut self.kernel {
+            Some(kernel) => {
+                let mut value = [R::ZERO; SLICED_CELLS];
+                for (value, sums) in value.iter_mut().zip(&mut kernel.sums) {
+                    *value = sums.finish_bits(kernel.prepared, self.lanes);
+                }
+                debug_assert_eq!(
+                    value, self.accumulators,
+                    "the kernel must sum what the lane tables sum"
+                );
+                value
+            }
+            None => self.accumulators,
+        };
         SlicedEvaluation {
-            value: self.accumulators,
+            value,
             poisoned: self.poisoned,
         }
     }
@@ -193,9 +244,16 @@ impl<'a, F: Field, R: Field> SlicedQuadraticFolder<'a, F, R> {
     /// A word that vanishes on every lane adds nothing, as a selector-gated one mostly does.
     #[inline]
     fn accumulate(&mut self, power: R, bits: CellWords) {
-        for (accumulator, bits) in self.accumulators.iter_mut().zip(bits) {
-            if bits != 0 {
-                *accumulator += power * self.lanes.sum(bits);
+        if self.kernel.is_none() || cfg!(debug_assertions) {
+            for (accumulator, bits) in self.accumulators.iter_mut().zip(bits) {
+                if bits != 0 {
+                    *accumulator += power * self.lanes.sum(bits);
+                }
+            }
+        }
+        if let Some(kernel) = &mut self.kernel {
+            for (sums, bits) in kernel.sums.iter_mut().zip(bits) {
+                sums.add(kernel.prepared, self.constraint_index, bits, 0);
             }
         }
     }

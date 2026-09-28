@@ -487,7 +487,7 @@ impl<R: Field> LaneSums<R> {
     }
 }
 
-/// Descending alpha powers laid out for [`SlicedFolder`] to sum constraints eight at a time.
+/// Descending alpha powers laid out for the sliced folders to sum constraints eight at a time.
 ///
 /// Every constraint's lanes are weighted the same way, so the weights can wait until the end:
 ///
@@ -514,9 +514,9 @@ impl<R: Field> PreparedPowers<R> {
     ///
     /// # Returns
     ///
-    /// One layout per AIR, or `None` where [`SlicedFolder`] sums constraint by constraint
-    /// instead: the target has no kernel, `R`'s encoding fails the checks, or the AIR asserts
-    /// too few constraints to repay the kernel's fixed cost per evaluation.
+    /// One layout per AIR, or `None` where the folder sums constraint by constraint instead: the
+    /// target has no kernel, `R`'s encoding fails the checks, or the AIR asserts too few
+    /// constraints to repay the kernel's fixed cost per evaluation.
     #[must_use]
     pub(crate) fn per_air(alpha_powers: &[Vec<R>], generator: R) -> Vec<Option<Self>> {
         kernel::Prepared::per_air(alpha_powers, generator)
@@ -839,7 +839,9 @@ mod kernel {
     use p3_field::Field;
     use p3_maybe_rayon::prelude::*;
 
-    use super::{LaneSums, PreparedPowers, SLICED_LANES, TABLE_BITS, TABLES_PER_PLANE};
+    use super::{
+        BitLaneSums, LaneSums, PreparedPowers, SLICED_LANES, TABLE_BITS, TABLES_PER_PLANE,
+    };
 
     /// Constraints one block gathers, one per bit of a lane byte.
     const BLOCK: usize = 8;
@@ -1163,6 +1165,24 @@ mod kernel {
             prepared: &PreparedPowers<R>,
             lanes: &LaneSums<R>,
         ) -> R {
+            self.finish_with(prepared, |plane| plane_sum(lanes, plane))
+        }
+
+        /// [`Self::finish`], for values with only a low bit plane.
+        pub(crate) fn finish_bits<R: Field>(
+            &mut self,
+            prepared: &PreparedPowers<R>,
+            lanes: &BitLaneSums<R>,
+        ) -> R {
+            self.finish_with(prepared, |plane| lanes.sum(plane))
+        }
+
+        /// Finish the byte-sliced sums, contracting every coordinate plane through `plane_sum`.
+        fn finish_with<R: Field>(
+            &mut self,
+            prepared: &PreparedPowers<R>,
+            plane_sum: impl FnMut(u64) -> R,
+        ) -> R {
             let prepared = &prepared.0;
             let full = prepared.len / BLOCK;
             // SAFETY: this module is compiled only where the build enables every target feature
@@ -1180,7 +1200,7 @@ mod kernel {
             }
             // SAFETY: this module is compiled only where the build enables every target feature
             // the kernel names.
-            unsafe { self.contract(lanes, &prepared.basis) }
+            unsafe { self.contract(&prepared.basis, plane_sum) }
         }
 
         /// Add block `block` to the sums through its matrices, and clear its planes.
@@ -1224,13 +1244,17 @@ mod kernel {
         ///     sum_lane w(lane) * A(lane)  =  sum_b basis[b] * (sum of w over the lanes with bit b)
         /// ```
         #[target_feature(enable = "avx512f,avx512bw")]
-        fn contract<R: Field>(&self, lanes: &LaneSums<R>, basis: &[R; COORDINATES]) -> R {
+        fn contract<R: Field>(
+            &self,
+            basis: &[R; COORDINATES],
+            mut plane_sum: impl FnMut(u64) -> R,
+        ) -> R {
             let mut sums = [R::ZERO; COORDINATES];
             for (bytes, sums) in self.sums.iter().zip(sums.as_chunks_mut::<8>().0.iter_mut()) {
                 let bytes = load(bytes);
                 for (bit, sum) in sums.iter_mut().enumerate() {
                     let plane = _mm512_test_epi8_mask(bytes, _mm512_set1_epi8((1u8 << bit) as i8));
-                    *sum = plane_sum(lanes, plane);
+                    *sum = plane_sum(plane);
                 }
             }
             R::dot_product(basis, &sums)
@@ -1298,7 +1322,7 @@ mod kernel {
 
     use p3_field::Field;
 
-    use super::{LaneSums, PreparedPowers};
+    use super::{BitLaneSums, LaneSums, PreparedPowers};
 
     /// A layout no value can take, so every constraint is summed on its own.
     #[derive(Debug)]
@@ -1348,6 +1372,15 @@ mod kernel {
             &mut self,
             prepared: &PreparedPowers<R>,
             _lanes: &LaneSums<R>,
+        ) -> R {
+            match prepared.0.0 {}
+        }
+
+        /// Never called: no prepared layout exists.
+        pub(crate) fn finish_bits<R: Field>(
+            &mut self,
+            prepared: &PreparedPowers<R>,
+            _lanes: &BitLaneSums<R>,
         ) -> R {
             match prepared.0.0 {}
         }

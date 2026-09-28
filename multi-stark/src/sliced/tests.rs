@@ -147,8 +147,8 @@ mod kernel_tests {
     use super::{F, S, Sliced, encoding};
     use crate::selectors::BoundaryEvals;
     use crate::sliced::{
-        LaneSums, PreparedPowers, PreparedSums, SLICED_LANES, SlicedEvaluation, SlicedFolder,
-        kernel,
+        BitLaneSums, LaneSums, PreparedPowers, PreparedSums, SLICED_CELLS, SLICED_LANES, SlicedBit,
+        SlicedEvaluation, SlicedFolder, SlicedQuadraticFolder, kernel,
     };
 
     /// `powers` laid out for the kernel, however few they are.
@@ -275,6 +275,55 @@ mod kernel_tests {
         #[test]
         fn the_folder_sums_as_well_with_the_kernel(seed in any::<u64>(), width in 1_usize..40) {
             let (kernel, lanes) = folder_sums(seed, width, 2 * width);
+            prop_assert!(!kernel.poisoned && !lanes.poisoned);
+            prop_assert_eq!(kernel.value, lanes.value);
+        }
+    }
+
+    /// One four-cell bit evaluation of `Columns(width)` against random powers and lane weights,
+    /// with the kernel and without it.
+    fn quadratic_folder_sums(
+        seed: u64,
+        width: usize,
+        whole: [bool; SLICED_CELLS],
+    ) -> (
+        SlicedEvaluation<[Ghash128; SLICED_CELLS]>,
+        SlicedEvaluation<[Ghash128; SLICED_CELLS]>,
+    ) {
+        let mut rng = SmallRng::seed_from_u64(seed);
+        let local = (0..width)
+            .map(|_| SlicedBit::<F>::new(core::array::from_fn(|_| rng.random())))
+            .collect::<Vec<_>>();
+        let weights = (0..SLICED_LANES)
+            .map(|_| rng.random())
+            .collect::<Vec<Ghash128>>();
+        let lanes = BitLaneSums::new(&weights);
+        let powers = (0..2 * width)
+            .map(|_| rng.random())
+            .collect::<Vec<Ghash128>>();
+        let prepared = prepared(&powers, Ghash128::ZERO);
+        let boundary = BoundaryEvals {
+            first: SlicedBit::default(),
+            last: SlicedBit::default(),
+            transition: SlicedBit::new([u64::MAX; SLICED_CELLS]),
+        };
+        let folder =
+            || SlicedQuadraticFolder::new(&local, &local, boundary, &[], &powers, &lanes, whole);
+        let air = Columns(width);
+        (
+            folder().with_prepared_powers(&prepared).eval_air(&air),
+            folder().eval_air(&air),
+        )
+    }
+
+    proptest! {
+        #[test]
+        fn the_quadratic_folder_sums_all_cells_as_well_with_the_kernel(
+            seed in any::<u64>(),
+            width in 1_usize..40,
+            whole in prop::array::uniform4(any::<bool>()),
+        ) {
+            let (kernel, lanes) = quadratic_folder_sums(seed, width, whole);
             prop_assert!(!kernel.poisoned && !lanes.poisoned);
             prop_assert_eq!(kernel.value, lanes.value);
         }
