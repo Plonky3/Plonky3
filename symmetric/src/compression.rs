@@ -107,7 +107,10 @@ where
     const LANES: usize = <H as CryptographicHasher<T, [T; CHUNK]>>::LANES;
 
     fn compress(&self, input: [[T; CHUNK]; N]) -> [T; CHUNK] {
-        self.hasher.hash_iter(input.into_iter().flatten())
+        // The `N` chunks sit back to back, so the preimage is already one slice.
+        //
+        // A slice lets a byte hasher take the whole preimage in one call instead of item by item.
+        self.hasher.hash_slice(input.as_flattened())
     }
 
     fn compress_many(&self, inputs: &[[[T; CHUNK]; N]], out: &mut [[T; CHUNK]]) {
@@ -148,6 +151,8 @@ mod tests {
     use alloc::vec;
     use alloc::vec::Vec;
     use core::array;
+
+    use proptest::prelude::*;
 
     use super::*;
     use crate::Permutation;
@@ -326,5 +331,51 @@ mod tests {
         let groups = [[[0u64; CHUNK]; N]; 3];
         let mut out = [[0u64; CHUNK]; 2];
         compressor.compress_many(&groups, &mut out);
+    }
+
+    /// A hasher that folds its items in order and records the slices it is handed.
+    #[derive(Clone, Default)]
+    struct SliceRecorder {
+        /// Length of every slice passed to the one-slice entry point, in call order.
+        slices: alloc::rc::Rc<core::cell::RefCell<Vec<usize>>>,
+    }
+
+    impl CryptographicHasher<u64, [u64; 4]> for SliceRecorder {
+        fn hash_iter<I: IntoIterator<Item = u64>>(&self, iter: I) -> [u64; 4] {
+            // An order-sensitive fold, so a reordered preimage gives a different digest.
+            let acc = iter.into_iter().fold(0u64, |acc, x| {
+                acc.wrapping_mul(0x100_0000_01b3).wrapping_add(x)
+            });
+            [acc, acc ^ 1, acc ^ 2, acc ^ 3]
+        }
+
+        fn hash_slice(&self, input: &[u64]) -> [u64; 4] {
+            self.slices.borrow_mut().push(input.len());
+            self.hash_iter(input.iter().copied())
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn compress_from_hasher_hashes_the_preimage_as_one_slice(
+            two in prop::array::uniform2(any::<[u64; 4]>()),
+            four in prop::array::uniform4(any::<[u64; 4]>()),
+        ) {
+            // Invariant: one compression hashes the N chunks as one slice, in order.
+            //
+            //     2 chunks of 4 -> one slice of 8 items
+            //     4 chunks of 4 -> one slice of 16 items
+            let hasher = SliceRecorder::default();
+            let two_to_one = CompressionFunctionFromHasher::<_, 2, 4>::new(hasher.clone());
+            let four_to_one = CompressionFunctionFromHasher::<_, 4, 4>::new(hasher.clone());
+
+            // Same digest as hashing the chunks item by item.
+            prop_assert_eq!(two_to_one.compress(two), hasher.hash_iter(two.into_iter().flatten()));
+            prop_assert_eq!(four_to_one.compress(four), hasher.hash_iter(four.into_iter().flatten()));
+
+            // Each compression reached the hasher once, with the whole preimage.
+            let slices = hasher.slices.borrow().clone();
+            prop_assert_eq!(slices, vec![8, 16]);
+        }
     }
 }
