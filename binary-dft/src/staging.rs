@@ -1,8 +1,8 @@
 //! Strided runs of rows, staged through one contiguous tile per worker.
 //!
-//! A stage pairs rows a power of two apart, so a set of rows closed under several adjacent
-//! stages lies spread across the matrix. Gathering the set into a contiguous tile runs all of
-//! those stages inside the cache, and scattering it back writes the matrix once.
+//! - A set of rows closed under several adjacent stages lies spread across the matrix.
+//! - Gathering it into a contiguous tile runs all of those stages inside the cache.
+//! - Scattering it back then writes the matrix once for the whole group.
 
 use alloc::vec::Vec;
 #[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
@@ -117,17 +117,19 @@ pub(crate) enum Dispatch {
 
 /// The runs a staging pass moves through its tiles.
 ///
-/// The matrix is read as consecutive runs of `run` elements, and tile `index` holds `2^depth`
-/// runs `2^log_stride` apart:
+/// The matrix is read as consecutive runs of `run` elements.
+///
+/// Tile `index` holds `2^depth` runs, `2^log_stride` runs apart:
 ///
 /// ```text
-///     block  = index >> log_stride
-///     offset = index mod 2^log_stride
-///     run(k) = block · 2^(log_stride + depth) + offset + k · 2^log_stride ,   k = 0 .. 2^depth
+///     run(k) = block * 2^(log_stride + depth) + offset + k * 2^log_stride
 /// ```
 ///
-/// With `offset < 2^log_stride` and `k < 2^depth` that is a mixed-radix decomposition of the
-/// run index, so distinct `(index, k)` name distinct runs.
+/// - `block` is the index shifted right by `log_stride`.
+/// - `offset` is the index modulo `2^log_stride`.
+/// - `k` runs over `0 .. 2^depth`.
+///
+/// That is a mixed-radix decomposition of the run index, so distinct pairs `(index, k)` name distinct runs.
 #[derive(Copy, Clone, Debug)]
 pub(crate) struct StagedRuns {
     /// Elements in one run.
@@ -142,7 +144,8 @@ impl StagedRuns {
     /// Runs of `run` elements, `2^depth` to a tile and `2^log_stride` runs apart.
     ///
     /// # Panics
-    /// Panics if `2^(log_stride + depth)` does not fit a `usize`.
+    ///
+    /// Panics if `2^(log_stride + depth)` does not fit a word.
     pub(crate) const fn new(run: usize, log_stride: usize, depth: usize) -> Self {
         assert!(
             depth < usize::BITS as usize && log_stride < usize::BITS as usize - depth,
@@ -171,12 +174,14 @@ impl StagedRuns {
 
 /// Gather every tile, hand it to `process` with its block, and scatter it back.
 ///
-/// A tile is gathered into a buffer grown from empty, so `process` sees only elements the
-/// gather wrote, and no worker zeroes a buffer it is about to overwrite in full.
+/// - Each tile is gathered into a buffer grown from empty, so no worker zeroes what it overwrites.
+/// - The closure then sees only elements the gather wrote.
 ///
 /// # Panics
-/// Panics if the tiles do not partition `values`, if a tile's walk reaches past the end of
-/// `values`, or if `run == 0`, which divides by zero laying out the tiles.
+///
+/// - Panics if the tiles do not partition the buffer.
+/// - Panics if a tile's walk reaches past its end.
+/// - Panics if a run is empty, which leaves no tile layout.
 pub(crate) fn for_each_staged_tile<T, P>(
     values: &mut [T],
     runs: StagedRuns,
@@ -193,15 +198,16 @@ pub(crate) fn for_each_staged_tile<T, P>(
     let tiles = len / tile_len;
     // Runs in the matrix.
     let count = len / run;
-    // A tile longer than the matrix lays out no tiles at all, which would return the matrix
-    // untransformed. The check runs once per pass, not once per tile.
+    // A tile longer than the matrix lays out no tile at all, and would return it untransformed.
+    //
+    // The check runs once per pass, not once per tile.
     assert_eq!(tiles * tile_len, len, "tiles do not partition the matrix");
 
     let base = DisjointMutPtr::new(values);
     let task = move |tile: &mut Vec<T>, index: usize| {
-        // The walk ascends, so bounding its last run bounds all of them. It runs once per
-        // tile rather than once per run, which is what a hard check costs, and a run past the
-        // end would be a write past the end of the matrix.
+        // The walk ascends, so bounding its last run bounds all of them.
+        //
+        // One hard check per tile is cheap, and a run past the end would be a write out of bounds.
         assert!(
             runs.run_index(index, rows - 1) < count,
             "staged row walk leaves the matrix"
@@ -209,16 +215,12 @@ pub(crate) fn for_each_staged_tile<T, P>(
 
         tile.clear();
         for k in 0..rows {
-            // SAFETY: `run_index` is injective over `(index, k)`, as `StagedRuns` sets out, and
-            // runs of one fixed length at distinct indices are disjoint element ranges. So no
-            // two tasks and no two iterations of one task reach the same element.
+            // SAFETY: distinct pairs (index, k) name distinct runs of one fixed length.
             //
-            // The assert above puts every run of this walk inside `values`. The exclusive
-            // borrow the pointer came from outlives every task, since the pass returns only
-            // once all of them have run.
-            //
-            // `index < tiles <= len / 2^depth` keeps every `run_index` below `len`, so none of
-            // its shifts or sums wrap.
+            // - So no two tasks, and no two iterations of one task, reach the same element.
+            // - The assert above keeps every run of this walk inside the buffer.
+            // - The exclusive borrow behind the pointer outlives every task, since the pass joins them all.
+            // - Every run index stays below the run count, so no shift or sum wraps.
             let source = unsafe { base.slice(runs.run_index(index, k) * run, run) };
             tile.extend_from_slice(source);
         }
@@ -233,8 +235,7 @@ pub(crate) fn for_each_staged_tile<T, P>(
         }
     };
 
-    // One buffer per worker, not per tile: a tile is microseconds of work and tens of
-    // kilobytes of memory.
+    // One buffer per worker, not per tile, since a tile is microseconds of work and tens of kilobytes.
     let new_tile = || Vec::with_capacity(tile_len);
     match dispatch {
         Dispatch::Parallel { min_len } => (0..tiles)
@@ -256,23 +257,23 @@ pub(crate) fn for_each_staged_tile<T, P>(
 ///
 /// The first writes of every worker therefore land on the same few pages at once.
 ///
-/// Where a fault maps and clears a huge page, every worker that loses the race to map it has
-/// cleared one for nothing.
+/// Where a fault maps and clears a huge page, every worker that loses the race to map it clears one for nothing.
 ///
-/// A contiguous sweep gives each huge page to a single task, which faults it once at the
-/// sequential rate.
+/// A contiguous sweep gives each huge page to a single task, which faults it once at the sequential rate.
 ///
-/// Each page takes one zero, so the region must hold zeros or be overwritten in full next.
-pub(crate) fn prefault(values: &mut [u128]) {
-    let page = PAGE_BYTES / size_of::<u128>();
-    let touch = |chunk: &mut [u128]| {
+/// Each page takes one copy of the given zero, so the region must hold zeros or be overwritten in full next.
+pub(crate) fn prefault<T: Copy + Send + Sync>(values: &mut [T], zero: T) {
+    // A stride of whole elements, at least one, reaches every page whatever the element size.
+    let size = size_of::<T>().max(1);
+    let page = (PAGE_BYTES / size).max(1);
+    let touch = |chunk: &mut [T]| {
         for element in chunk.iter_mut().step_by(page) {
             // SAFETY: `element` is an exclusive reference to an initialised element.
             //
             // It is therefore valid and aligned for a write.
             //
             // The write is volatile so that it reaches memory even where the region holds zeros.
-            unsafe { ptr::write_volatile(element, 0) };
+            unsafe { ptr::write_volatile(element, zero) };
         }
     };
 
@@ -285,38 +286,25 @@ pub(crate) fn prefault(values: &mut [u128]) {
         .min(values.len());
     let (head, body) = values.split_at_mut(head);
     touch(head);
-    body.par_chunks_mut(PREFAULT_BYTES / size_of::<u128>())
+    body.par_chunks_mut((PREFAULT_BYTES / size).max(1))
         .for_each(touch);
 }
 
 /// Gather every tile of the leading coset once, and scatter one result per coset from it.
 ///
-/// The matrix is a run of equal cosets, and the tiles lay out the leading one.
-///
-/// The tiles are gathered from the separate run when one is given, which stands in for the
-/// leading coset.
-///
-/// Otherwise they are gathered from the leading coset itself.
-///
-/// Each gathered tile goes to the preparing callback once.
-///
-/// Every coset then gets its own copy of the prepared tile.
-///
-/// The processing callback takes that copy with its block and the coset's index.
-///
-/// The copy is then scattered to the same runs of that coset.
-///
-/// The leading coset is processed last, from the gathered tile itself, once every other coset
-/// has taken its copy.
+/// - The buffer is a sequence of equal cosets, and the tiles lay out the leading one.
+/// - The tiles are gathered from the separate source when one is given, which stands in for the leading coset.
+/// - Otherwise they are gathered from the leading coset itself.
+/// - Each gathered tile is prepared once.
+/// - Every coset then processes its own copy and scatters it to the same runs of that coset.
+/// - The leading coset goes last, from the gathered tile itself, once every other coset has its copy.
 ///
 /// # Panics
 ///
-/// - The cosets do not partition the matrix.
-/// - A separate run is not one coset long.
-/// - The tiles do not partition one coset.
-/// - A tile's walk reaches past the end of a coset.
-/// - The coset length or the run length is zero.
-#[cfg_attr(not(test), allow(dead_code))]
+/// - Panics if the cosets do not partition the buffer, or the tiles one coset.
+/// - Panics if a separate source is not one coset long.
+/// - Panics if a tile's walk reaches past the end of a coset.
+/// - Panics if a coset or a run is empty.
 pub(crate) fn for_each_staged_tile_into_cosets<T, Q, P>(
     values: &mut [T],
     source: Option<&[T]>,
@@ -434,7 +422,7 @@ fn for_each_staged_tile_into_cosets_with<T, Q, P, W, F>(
         // issuing thread and fences them both on normal return and while unwinding a panic.
         let _fence = FenceOnDrop { fence: &fence };
 
-        // As in `for_each_staged_tile`: the walk ascends, so bounding its last run bounds all.
+        // The walk ascends, so bounding its last run bounds all of them.
         assert!(
             runs.run_index(index, rows - 1) < count,
             "staged row walk leaves the coset"
@@ -444,15 +432,10 @@ fn for_each_staged_tile_into_cosets_with<T, Q, P, W, F>(
         for k in 0..rows {
             let start = slice_of(index, k, 0);
             let gathered = source.map_or_else(
-                // SAFETY: `run_index` is injective over `(index, k)`, as `StagedRuns` sets out.
+                // SAFETY: distinct pairs (index, k) name distinct runs, and the assert keeps them in the leading coset.
                 //
-                // The assert above keeps every run inside the leading coset.
-                //
-                // So no two tasks and no two iterations of one task reach the same element.
-                //
-                // The exclusive borrow the pointer came from outlives every task.
-                //
-                // The pass returns only once all of them have run.
+                // - So no two tasks, and no two iterations of one task, reach the same element.
+                // - The exclusive borrow behind the pointer outlives every task, since the pass joins them all.
                 || unsafe { base.slice(start, run) },
                 |source| &source[start..start + run],
             );
@@ -472,13 +455,9 @@ fn for_each_staged_tile_into_cosets_with<T, Q, P, W, F>(
             };
             process(staged.as_mut_slice(), block, coset);
             for (k, source) in staged.chunks_exact(run).enumerate() {
-                // SAFETY: the runs `slice_of` names for this tile are leading-coset runs.
+                // SAFETY: the gathered runs moved by whole cosets, so they stay disjoint.
                 //
-                // The assert above bounds them, and they are moved whole cosets along.
-                //
-                // So they stay disjoint across tasks, iterations and cosets.
-                //
-                // They stay inside the matrix, since every coset is one coset length long.
+                // Every coset has the leading coset's length, so they also stay in bounds.
                 let target = unsafe { base.slice_mut(slice_of(index, k, coset), run) };
                 write(target, source);
             }
@@ -748,9 +727,15 @@ mod tests {
             3 << 17,
         ] {
             let mut values = vec![0u128; len];
-            prefault(&mut values);
-            prefault(&mut values[len / 3..]);
+            prefault(&mut values, 0);
+            prefault(&mut values[len / 3..], 0);
             assert!(values.iter().all(|&value| value == 0), "len={len}");
+
+            // A narrower element takes a longer stride to the next page, and the same result.
+            let mut words = vec![0u64; len];
+            prefault(&mut words, 0);
+            prefault(&mut words[len / 3..], 0);
+            assert!(words.iter().all(|&word| word == 0), "words len={len}");
         }
     }
 

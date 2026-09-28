@@ -22,11 +22,23 @@ mod basis;
     target_feature = "avx512vbmi"
 ))]
 mod bit_plane;
+mod gf192;
 mod gf64;
 mod powers;
 mod sqrt;
 
+// The algebra of `GF(2^64)` over a register of lanes.
+//
+// The scalar vector kernels and the packings share it.
+//
+// Its model runs under `test` on every target, so no leg misses the algebra.
+#[cfg(any(test, all(target_arch = "x86_64", target_feature = "pclmulqdq")))]
+pub(crate) mod wide;
+
 pub(crate) use gf64::{poly_dot_64, poly_inverse_64, poly_mul_64, poly_sqrt_64, poly_square_64};
+pub(crate) use gf192::{
+    poly_dot_192, poly_dot_192_by_64, poly_mul_192, poly_mul_192_by_64, poly_square_192,
+};
 pub(crate) use powers::poly_dot_powers_128;
 pub(crate) use sqrt::poly_sqrt_128;
 
@@ -40,8 +52,6 @@ pub(crate) use sqrt::poly_sqrt_128;
 mod inverse;
 #[cfg(all(target_arch = "x86_64", target_feature = "pclmulqdq"))]
 pub(crate) use inverse::poly_inverse_128;
-#[cfg(all(target_arch = "x86_64", target_feature = "pclmulqdq"))]
-pub(crate) use x86_64::poly_mul_192;
 
 // Compiled on every target, even where a backend supersedes it.
 // Its tests then run everywhere.
@@ -177,18 +187,27 @@ fn clmul_128x128(a: u128, b: u128) -> (u128, u128) {
 
 /// Reduces a 128-bit carryless product modulo `x^64 + x^4 + x^3 + x + 1`.
 ///
-/// The modulus rewrites `x^64` as the tail `x^4 + x^3 + x + 1`.
-/// The high half therefore folds down by that tail.
-/// Degree 4 spills 4 bits back over the top; a second fold lands at degree `3 + 4`.
+/// The modulus rewrites `x^64` as the tail `T = x^4 + x^3 + x + 1`:
+///
+/// ```text
+///     high x^64  =  g(high) + spill(high) x^64
+///     g(v)       =  v ^ (v << 1) ^ (v << 3) ^ (v << 4)       truncated to 64 bits
+///     spill(v)   =  (v >> 63) ^ (v >> 61) ^ (v >> 60)
+/// ```
+///
+/// `g` is linear and the spill has degree at most 3, so both folds are one `g` of a sum.
 #[inline]
 const fn reduce_64(product: u128) -> u64 {
     let low = product as u64;
     let high = (product >> 64) as u64;
 
-    let folded = (high << 4) ^ (high << 3) ^ (high << 1) ^ high;
-    let spill = (high >> 60) ^ (high >> 61) ^ (high >> 63);
+    // high + spill(high), summed first because g is linear.
+    //
+    // The spill's own fold stays below degree 8, so nothing crosses x^64 a third time.
+    let folded = high ^ (high >> 63) ^ (high >> 61) ^ (high >> 60);
 
-    low ^ folded ^ ((spill << 4) ^ (spill << 3) ^ (spill << 1) ^ spill)
+    // low + g(high + spill(high)).
+    low ^ folded ^ (folded << 1) ^ (folded << 3) ^ (folded << 4)
 }
 
 /// Reduces a 256-bit carryless product modulo `x^128 + x^7 + x^2 + x + 1`.
@@ -230,41 +249,6 @@ pub(crate) fn mul_pair_64(a: u64, b: u64, scalar: u64) -> (u64, u64) {
 fn composed_poly_mul_128(a: u128, b: u128) -> u128 {
     let (low, high) = clmul_128x128(a, b);
     reduce_128(low, high)
-}
-
-/// Multiplication in the cubic extension `y^3 + y + 1` of `GF(2^64)`.
-///
-/// Karatsuba over three limbs: six carryless products, then three `GF(2^64)` folds.
-/// Built entirely from `clmul_64x64` and `reduce_64`, so it dispatches to whichever
-/// backend those already resolve to on the target.
-///
-/// Used directly on AArch64 and as the portable fallback; x86_64 keeps its own
-/// specialized version, which stays entirely inside one vector register.
-//
-// Only the composed route is `const`, so the signature stays uniform across targets.
-#[allow(clippy::missing_const_for_fn)]
-#[cfg_attr(
-    all(target_arch = "x86_64", target_feature = "pclmulqdq"),
-    allow(dead_code)
-)]
-#[inline]
-pub(crate) fn composed_poly_mul_192(a: [u64; 3], b: [u64; 3]) -> [u64; 3] {
-    let c0 = clmul_64x64(a[0], b[0]);
-    let c1 = clmul_64x64(a[1], b[1]);
-    let c2 = clmul_64x64(a[2], b[2]);
-    let d01 = clmul_64x64(a[0] ^ a[1], b[0] ^ b[1]);
-    let d02 = clmul_64x64(a[0] ^ a[2], b[0] ^ b[2]);
-    let d12 = clmul_64x64(a[1] ^ a[2], b[1] ^ b[2]);
-
-    let p1 = d01 ^ c0 ^ c1;
-    let p2 = d02 ^ c0 ^ c1 ^ c2;
-    let p3 = d12 ^ c1 ^ c2;
-
-    [
-        reduce_64(c0 ^ p3),
-        reduce_64(p1 ^ p3 ^ c2),
-        reduce_64(p2 ^ c2),
-    ]
 }
 
 // The polynomial-basis arithmetic, chosen at compile time.

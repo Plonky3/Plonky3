@@ -30,12 +30,14 @@ pub(crate) trait ByteRegister: Copy {
     /// Read one register of bytes, at any alignment.
     ///
     /// # Safety
+    ///
     /// The address must be readable for that many bytes.
     unsafe fn load(from: *const u8) -> Self;
 
     /// Write one register of bytes, at any alignment.
     ///
     /// # Safety
+    ///
     /// The address must be writable for that many bytes.
     unsafe fn store(to: *mut u8, value: Self);
 
@@ -60,6 +62,7 @@ pub(crate) trait ByteLanes: ByteRegister {
     /// Rotate every group of `GROUP` bytes, so a position takes the byte `shift` above it.
     ///
     /// # Panics
+    ///
     /// Panics on a group size this backend cannot rotate, or a shift not below it.
     fn rotate_group<const GROUP: usize>(self, shift: usize) -> Self;
 
@@ -75,6 +78,7 @@ pub(crate) trait ByteLanes: ByteRegister {
 /// Forward sends `(a, b)` to `(a + map(b), a + map(b) + b)`, and the flag inverts that.
 ///
 /// # Panics
+///
 /// Panics if the two runs have different lengths.
 // A register width is an associated constant, which a const-generic chunk size cannot take.
 #[allow(clippy::chunks_exact_to_as_chunks)]
