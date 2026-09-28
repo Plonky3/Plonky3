@@ -298,7 +298,7 @@ where
         self.boundary.transition.into()
     }
 
-    #[inline]
+    #[inline(always)]
     fn assert_zero<I: Into<Self::Expr>>(&mut self, x: I) {
         let x = x.into();
         self.poisoned |= x.poisoned;
