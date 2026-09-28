@@ -418,7 +418,7 @@ pub(super) fn padded_sharing_first_group(
     //
     // The leading coset is one of them unless it holds the message.
     let first_written = if source.is_some() { 0 } else { len };
-    prefault(&mut values[first_written..]);
+    prefault(&mut values[first_written..], 0);
     first_group_into_cosets(values, source, len, plan, depth, &twiddles);
 
     // Each coset finishes below the shared group on its own rows.

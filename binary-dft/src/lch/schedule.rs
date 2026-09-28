@@ -15,7 +15,7 @@ use p3_util::{log2_ceil_usize, log2_floor_usize};
 use super::twiddles::Twiddles;
 use crate::butterfly::ButterflyField;
 use crate::staging::{
-    Dispatch, StagedRuns, for_each_staged_tile, for_each_staged_tile_into_cosets,
+    Dispatch, StagedRuns, for_each_staged_tile, for_each_staged_tile_into_cosets, prefault,
 };
 
 /// Field elements one butterfly task covers on each side of a block.
@@ -399,6 +399,11 @@ pub(super) fn run_cosets<F: ButterflyField>(
 ) {
     let len = width << log_message;
     let cut = Cut::new(schedule, log_message);
+
+    // The cosets past the leading one hold zeros, and the shared pass is their first write.
+    //
+    // A contiguous sweep faults their pages in beforehand.
+    prefault(&mut values[len..], F::ZERO);
 
     if cut.groups == 0 {
         // The contiguous tile covers every stage, so the shared pass is the whole transform.

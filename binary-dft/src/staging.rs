@@ -172,23 +172,23 @@ pub(crate) fn for_each_staged_tile<T, P>(
 ///
 /// The first writes of every worker therefore land on the same few pages at once.
 ///
-/// Where a fault maps and clears a huge page, every worker that loses the race to map it has
-/// cleared one for nothing.
+/// Where a fault maps and clears a huge page, every worker that loses the race to map it clears one for nothing.
 ///
-/// A contiguous sweep gives each huge page to a single task, which faults it once at the
-/// sequential rate.
+/// A contiguous sweep gives each huge page to a single task, which faults it once at the sequential rate.
 ///
-/// Each page takes one zero, so the region must hold zeros or be overwritten in full next.
-pub(crate) fn prefault(values: &mut [u128]) {
-    let page = PAGE_BYTES / size_of::<u128>();
-    let touch = |chunk: &mut [u128]| {
+/// Each page takes one copy of the given zero, so the region must hold zeros or be overwritten in full next.
+pub(crate) fn prefault<T: Copy + Send + Sync>(values: &mut [T], zero: T) {
+    // A stride of whole elements, at least one, reaches every page whatever the element size.
+    let size = size_of::<T>().max(1);
+    let page = (PAGE_BYTES / size).max(1);
+    let touch = |chunk: &mut [T]| {
         for element in chunk.iter_mut().step_by(page) {
             // SAFETY: `element` is an exclusive reference to an initialised element.
             //
             // It is therefore valid and aligned for a write.
             //
             // The write is volatile so that it reaches memory even where the region holds zeros.
-            unsafe { ptr::write_volatile(element, 0) };
+            unsafe { ptr::write_volatile(element, zero) };
         }
     };
 
@@ -201,7 +201,7 @@ pub(crate) fn prefault(values: &mut [u128]) {
         .min(values.len());
     let (head, body) = values.split_at_mut(head);
     touch(head);
-    body.par_chunks_mut(PREFAULT_BYTES / size_of::<u128>())
+    body.par_chunks_mut((PREFAULT_BYTES / size).max(1))
         .for_each(touch);
 }
 
@@ -490,9 +490,15 @@ mod tests {
             3 << 17,
         ] {
             let mut values = vec![0u128; len];
-            prefault(&mut values);
-            prefault(&mut values[len / 3..]);
+            prefault(&mut values, 0);
+            prefault(&mut values[len / 3..], 0);
             assert!(values.iter().all(|&value| value == 0), "len={len}");
+
+            // A narrower element takes a longer stride to the next page, and the same result.
+            let mut words = vec![0u64; len];
+            prefault(&mut words, 0);
+            prefault(&mut words[len / 3..], 0);
+            assert!(words.iter().all(|&word| word == 0), "words len={len}");
         }
     }
 
