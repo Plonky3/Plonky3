@@ -12,7 +12,8 @@ const BATCH: usize = 4096;
 /// - 32 bytes is a single padded block.
 /// - 64 bytes spills the padding into a second block.
 /// - 256 bytes is a five-block message, where the schedule dominates.
-const LENGTHS: [usize; 3] = [32, 64, 256];
+/// - 540 bytes is the leaf row of the `merkle-tree` benchmarks, with a partial last block.
+const LENGTHS: [usize; 4] = [32, 64, 256, 540];
 
 /// A cheap deterministic byte stream, so every run benches the same bytes.
 fn random_bytes(len: usize, mut state: u64) -> Vec<u8> {
