@@ -64,6 +64,21 @@ pub(crate) const MUL_ACC_BYTES: usize = 3;
 /// ```
 const TENSOR_MAX_TABLE_BYTES: usize = 64 << 10;
 
+/// Fewest output rows the suffix compression tensors for.
+///
+/// Building the table costs about one extension multiply per suffix row.
+///
+/// Each output row then saves the factored scaling of its short dots.
+///
+/// Below eight rows that saving does not repay the build on NEON (Apple M4).
+///
+/// Measured there with 2 rows, the tensored path is 1.3x to 1.9x slower at m = 10 to 12.
+///
+/// With 4 rows it is still 1.1x to 1.3x slower at m = 11 and 12.
+///
+/// From 8 rows it breaks even or wins for BabyBear/EF4, Goldilocks/EF2 and GHASH.
+const TENSOR_MIN_ROWS: usize = 8;
+
 /// Extension widths one base-by-extension multiply-accumulate is charged as, per lane.
 ///
 /// A base element times an extension weight is a handful of base multiplies.
@@ -626,9 +641,11 @@ impl<F: Field, EF: ExtensionField<F>> SplitEq<F, EF> {
         //
         // Every row rereads the whole table, so the table must stay small.
         //
+        // The table is built once, so enough rows must share it to repay the build.
+        //
         // A one-lane packing has no vector dot to gain, so it keeps the factored form.
         let tensored = F::Packing::WIDTH > 1
-            && out.len() > 1
+            && out.len() >= TENSOR_MIN_ROWS
             && size_of::<EF>() * suffix_rows <= TENSOR_MAX_TABLE_BYTES;
         if let Some(eq1) = self.eq1.as_packed()
             && tensored
