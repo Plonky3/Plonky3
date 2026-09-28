@@ -240,16 +240,21 @@ mod tests {
     }
 
     #[test]
-    fn every_level_agrees_with_the_element_loop_at_the_corners() {
-        // The five byte-aligned levels take the subfield paths.
-        //
-        // The GHASH basis takes its packing, and the 64-bit polynomial basis its register kernel.
+    fn every_tower_level_agrees_with_the_element_loop_at_the_corners() {
+        // The five byte-aligned levels take the subfield paths, and the GHASH basis its packing.
         sweep::<BinaryField8>("BinaryField8");
         sweep::<BinaryField16>("BinaryField16");
         sweep::<BinaryField32>("BinaryField32");
         sweep::<BinaryField64>("BinaryField64");
         sweep::<BinaryField128>("BinaryField128");
         sweep::<Ghash128>("Ghash128");
+    }
+
+    #[test]
+    fn the_polynomial_basis_level_agrees_with_the_element_loop_at_the_corners() {
+        // The 64-bit polynomial basis takes its carryless-multiply register kernel where the build enables one.
+        //
+        // CI interprets this test alone under Miri with that kernel enabled, since no runner is guaranteed to execute it.
         sweep::<Poly64>("Poly64");
     }
 
