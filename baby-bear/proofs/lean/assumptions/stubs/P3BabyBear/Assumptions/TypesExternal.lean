@@ -5,10 +5,10 @@
 import Aeneas
 import CoreModels
 -- The dependency interface: the scoped extractions of p3-monty-31 and p3-mds
--- (generated/), plus the hand-written rest (assumptions/Interface/). `Interface.P3Monty31`
+-- (generated/), plus the hand-written rest (assumptions/Interface/). `Interface.P3Monty31Missing`
 -- imports `P3Monty31.Extraction` and the p3-field/p3-poseidon{1,2} files.
 import P3Mds.Extraction
-import Interface.P3Monty31
+import Interface.P3Monty31Missing
 open CoreModels Aeneas
 open Aeneas.Std hiding namespace core alloc
 open RustM ControlFlow Error

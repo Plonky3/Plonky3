@@ -10,7 +10,7 @@ There are two kinds of patches.
 | Checked in | the `.patch` files | the `.patch` files (never `generated/`) |
 | Trust cost | **changes the artifact under verification** | changes only the Lean encoding of it |
 | Checked by | `test-pre-patches.py` + a `cargo check` of the extracted variant | `lake build` |
-| Currently | 3 patches, `010-`..`030-`, all behind `cfg(hax_backend_lean)` | 3 patches, `010-`..`030-` |
+| Currently | 3 patches, `010-`..`030-`. The hidden items are behind `cfg(hax_backend_lean)`; the cfg declaration and some redundant bounds are unconditional | 3 patches, `010-`..`030-` |
 
 A **pre-extraction** patch says *charon/aeneas could not cope with this Rust,
 so we modified the Rust*. That is strictly worse: the thing verified is no

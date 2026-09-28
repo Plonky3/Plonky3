@@ -1,6 +1,11 @@
 name = "p3_baby_bear"
 version = "0.1.0"
-defaultTargets = ["P3BabyBear", "Assumptions", "P3BabyBearProofs"]
+defaultTargets = [
+    "P3BabyBear",
+    "AssumptionStubs",
+    "Interface",
+    "P3BabyBearProofs",
+]
 
 # Two kinds of source, in two kinds of directory:
 #
@@ -25,22 +30,32 @@ srcDir = "generated/p3-monty-31"
 name = "P3Mds"
 srcDir = "generated/p3-mds"
 
-# Everything the generated code needs that aeneas does not produce. aeneas's
-# output imports its hand-filled stubs by fixed names
-# (`P3BabyBear.Assumptions.TypesExternal`, ...), so those are roots here, under
-# the same names, rather than files inside generated/. `Interface.*` are the
-# stand-ins for the dependency items aeneas cannot translate.
+# Hand-written and trusted (TCB.md, layer 3), in two libraries:
+#
+#   AssumptionStubs  assumptions/stubs/: the modules aeneas's output imports by
+#                    fixed names (`P3BabyBear.Assumptions.TypesExternal`, ...),
+#                    so each generated library's own imports resolve here,
+#                    below it. extract.sh checks them against aeneas's templates.
+#   Interface        assumptions/Interface/: stand-ins for the dependency items
+#                    aeneas cannot translate or drops. `P3Monty31Missing` builds
+#                    on the generated p3-monty-31, above it.
 [[lean_lib]]
-name = "Assumptions"
-srcDir = "assumptions"
+name = "AssumptionStubs"
+srcDir = "assumptions/stubs"
 roots = [
     "P3BabyBear.Assumptions.TypesExternal",
     "P3BabyBear.Assumptions.FunsExternal",
     "P3Monty31.Assumptions.TypesExternal",
     "P3Monty31.Assumptions.FunsExternal",
+]
+
+[[lean_lib]]
+name = "Interface"
+srcDir = "assumptions"
+roots = [
     "Interface.CoreModelsExt",
     "Interface.P3Field",
-    "Interface.P3Monty31",
+    "Interface.P3Monty31Missing",
     "Interface.P3Poseidon1",
     "Interface.P3Poseidon2",
 ]

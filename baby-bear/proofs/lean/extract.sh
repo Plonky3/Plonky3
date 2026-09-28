@@ -7,9 +7,10 @@
 # The generated Lean is not committed (generated/ is gitignored), so this script
 # is the way to build. After one run, `lake build` alone rebuilds the proofs.
 #
-#   0. tools: check that `cargo-hax` is the pinned release; let it fetch its
-#      charon and aeneas; install the Rust toolchain charon needs; check that
-#      lakefile.toml, lean-toolchain and SYNC.md's pin table agree
+#   0. tools: check (never install) the requirements listed in
+#      ../README.md: `cargo-hax` is the pinned release, its charon and aeneas
+#      are fetched, charon's Rust toolchain is present, and lakefile.toml,
+#      lean-toolchain and SYNC.md's pin table agree
 #   1. check the patch conventions (patches/check-patches.sh)
 #   2. run upstream's tests with and without the pre-extraction patches, and
 #      record every difference in the patch headers (patches/test-pre-patches.py)
@@ -37,11 +38,13 @@
 # `patches/pre-extraction/` is NOT empty. The Lean
 # backend cannot translate the generic associated types that rustc desugars
 # `-> impl Iterator` trait methods into, and p3-field is full of them. The
-# patches hide exactly those items behind `cfg(hax_backend_lean)` and change
-# nothing else. Step 2 shows the normal build is unaffected (upstream's own
-# tests, per test), and step 3 has rustc confirm that nothing still reachable
-# from p3-baby-bear depended on the hidden items. Each patch header gives its
-# own argument; see patches/README.md and TCB.md.
+# patches hide those items behind `cfg(hax_backend_lean)`. Two edits are
+# unconditional and inert on a normal build: the cfg is declared to
+# check-cfg, and some implied trait bounds are restated. Step 2 shows the
+# normal build is unaffected (upstream's own tests, per test), and step 3
+# has rustc confirm that nothing still reachable from p3-baby-bear depended
+# on the hidden items. Each patch header gives its own argument; see
+# patches/README.md and TCB.md.
 #
 # Usage:  ./baby-bear/proofs/lean/extract.sh [--tools-only]
 #
@@ -55,6 +58,7 @@ CRATE_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"             # baby-bear/
 PKG_DIR="$SCRIPT_DIR"                                     # Lake package root
 GEN_DIR="$PKG_DIR/generated"
 ASSUME_DIR="$PKG_DIR/assumptions"
+STUB_DIR="$ASSUME_DIR/stubs"
 PRE_PATCH_DIR="$PKG_DIR/patches/pre-extraction"
 POST_PATCH_DIR="$PKG_DIR/patches/post-extraction"
 PRISTINE="$GEN_DIR/pristine"
@@ -147,29 +151,24 @@ done
 
 # --- 0. tools -----------------------------------------------------------------
 echo "==> 0/8 tools"
-need() {   # need <command> <how to get it>
-    command -v "$1" >/dev/null 2>&1 && return 0
-    echo "error: '$1' not found. $2" >&2
+# Nothing here installs anything: a missing tool is an error that names the
+# requirement in baby-bear/proofs/README.md.
+missing() {   # missing <what> <install command>
+    echo "error: $1 is missing. Install it (see baby-bear/proofs/README.md):" >&2
+    echo "       $2" >&2
     exit 1
 }
-need rustup  "Install Rust with rustup: https://rustup.rs"
-need cargo   "Install Rust with rustup: https://rustup.rs"
-need lake    "Install Lean with elan: https://github.com/leanprover/elan (lean-toolchain pins the version)"
-need python3 "Install Python 3."
-need rsync   "Install rsync."
-need patch   "Install patch."
-need git     "Install git."
+for cmd in rustup cargo lake python3 rsync patch git; do
+    command -v "$cmd" >/dev/null 2>&1 || missing "'$cmd'" "see the requirements table"
+done
 
 # The toolchain charon runs under, with the target it does not ship.
-# Idempotent: a no-op once installed.
-if ! rustup target list --toolchain "$CHARON_TOOLCHAIN" --installed 2>/dev/null \
+rustup target list --toolchain "$CHARON_TOOLCHAIN" --installed 2>/dev/null \
         | grep -qx "$HAX_TARGET" \
-   || ! rustup component list --toolchain "$CHARON_TOOLCHAIN" --installed 2>/dev/null \
-        | grep -q '^rustc-dev'; then
-    echo "    installing Rust $CHARON_TOOLCHAIN (+ $CHARON_COMPONENTS, $HAX_TARGET)"
-    rustup toolchain install "$CHARON_TOOLCHAIN" --profile minimal \
-        --component "$CHARON_COMPONENTS" --target "$HAX_TARGET" >/dev/null
-fi
+    && rustup component list --toolchain "$CHARON_TOOLCHAIN" --installed 2>/dev/null \
+        | grep -q '^rustc-dev' \
+    || missing "Rust $CHARON_TOOLCHAIN with $CHARON_COMPONENTS and $HAX_TARGET" \
+        "rustup toolchain install $CHARON_TOOLCHAIN --profile minimal --component $CHARON_COMPONENTS --target $HAX_TARGET"
 echo "    rust     $CHARON_TOOLCHAIN (for charon), target $HAX_TARGET"
 
 HAX_BIN="${HAX_BIN:-cargo-hax}"
@@ -180,7 +179,7 @@ if ! printf '%s\n' "$hax_id" | grep -qxE "version=$HAX_VERSION|commit=$HAX_COMMI
     else
         echo "error: $HAX_BIN is not hax $HAX_VERSION ($(printf '%s\n' "$hax_id" | grep -m1 '^version=')):" >&2
     fi
-    echo "       cargo install --locked cargo-hax@$HAX_VERSION --force" >&2
+    echo "       cargo install --locked cargo-hax@$HAX_VERSION --force  (see baby-bear/proofs/README.md)" >&2
     exit 1
 fi
 echo "    hax      $HAX_VERSION ($(command -v "$HAX_BIN"))"
@@ -191,12 +190,18 @@ if [ -n "$latest" ] && [ "$latest" != "$HAX_VERSION" ]; then
     echo "    note: hax $latest is released; this build pins $HAX_VERSION (SYNC.md, bumping hax)"
 fi
 
-# charon and aeneas: download (checksum-verified) what hax resolves for this
-# crate, then confirm it resolves the pinned versions. The Lean side must agree
+# charon and aeneas: confirm hax resolves the pinned versions and has already
+# fetched them (`cargo hax tools install`, once). The Lean side must agree
 # too: the generated code and the Lean libraries it imports have to come from
 # the same aeneas build, so lakefile.toml and lean-toolchain are checked here.
-(cd "$CRATE_ROOT" && "$HAX_BIN" hax tools install >/dev/null)
 shown="$(cd "$CRATE_ROOT" && "$HAX_BIN" hax tools show)"
+fetched="$("$HAX_BIN" hax tools list 2>/dev/null)"
+for tool in "charon $EXPECT_CHARON" "aeneas $EXPECT_AENEAS"; do
+    printf '%s\n' "$fetched" | awk -v t="${tool%% *}:" -v v="${tool#* }" \
+        '$1 == t { in_t = 1; next } /^[a-z]+:$/ { in_t = 0 }
+         in_t && $1 == v && /installed/ { found = 1 } END { exit !found }' \
+        || missing "hax's ${tool%% *} ${tool#* }" "(cd baby-bear && cargo hax tools install)"
+done
 resolved() { printf '%s\n' "$shown" | awk -v t="$1" '$1 == t { print $2; exit }'; }
 lake_rev() {   # the `rev` of the [[require]] named $1 in lakefile.toml
     awk -v n="$1" '/^\[\[require\]\]/ { hit = 0 }
@@ -224,9 +229,19 @@ for v in "$HAX_VERSION" "$HAX_COMMIT" "$EXPECT_CHARON" "$EXPECT_AENEAS" "$CHARON
         pin_fail=1
     }
 done
+# ../README.md lists the requirements, including these versions.
+reqs="$(sed -n '/^## Requirements/,/^## /p' "$PKG_DIR/../README.md")"
+for v in "$HAX_VERSION" "$EXPECT_CHARON" "$EXPECT_AENEAS" "$CHARON_TOOLCHAIN" \
+         "$(cat "$PKG_DIR/lean-toolchain")"; do
+    printf '%s\n' "$reqs" | grep -qF "$v" || {
+        echo "error: the Requirements table in baby-bear/proofs/README.md does not mention '$v'." >&2
+        pin_fail=1
+    }
+done
 if [ "$pin_fail" -ne 0 ]; then
     echo "       Look for a hax.toml above $CRATE_ROOT, or update the pins in" >&2
-    echo "       extract.sh, lakefile.toml, lean-toolchain and SYNC.md together" >&2
+    echo "       extract.sh, lakefile.toml, lean-toolchain, SYNC.md and ../README.md" >&2
+    echo "       together" >&2
     echo "       (SYNC.md, bumping hax)." >&2
     exit 1
 fi
@@ -374,7 +389,7 @@ echo "==> 6/8 checking assumptions/ against the regenerated stubs; snapshotting"
 # aeneas emits `Extraction/<X>External_Template.lean`, the declarations the
 # generated code expects someone to supply, and hax seeds a fillable copy of it
 # as `Assumptions/<X>External.lean` in its output dir. The filled-in copies are
-# hand-written, so they live in assumptions/ (same module names; see
+# hand-written, so they live in assumptions/stubs/ (same module names; see
 # lakefile.toml). Here the seeded copies are removed, after checking that each
 # hand-written file still declares exactly the names the template does. The
 # signatures may differ on purpose (TCB.md); `lake build` checks those.
@@ -388,8 +403,8 @@ for lib in $LIBS; do
     for tpl in "$GEN_DIR/$out/$name/Extraction/"*External_Template.lean; do
         [ -e "$tpl" ] || continue
         stub="$(basename "$tpl" _Template.lean)"
-        mine="$ASSUME_DIR/$name/Assumptions/$stub.lean"
-        rel_mine="assumptions/$name/Assumptions/$stub.lean"
+        mine="$STUB_DIR/$name/Assumptions/$stub.lean"
+        rel_mine="assumptions/stubs/$name/Assumptions/$stub.lean"
         if [ ! -f "$mine" ]; then
             echo "error: the extraction needs $rel_mine, which does not exist." >&2
             echo "       Start from hax's copy: generated/$out/$name/Assumptions/$stub.lean" >&2
@@ -418,9 +433,12 @@ apply_phase "$POST_PATCH_DIR" "$GEN_DIR" ""
 
 echo "==> 8/8 lake build"
 # Aeneas's Lean library pulls in mathlib; without the prebuilt cache this is an
-# hours-long from-source build. `cache get` is a no-op once warm.
-(cd "$PKG_DIR" && lake exe cache get >/dev/null 2>&1) || \
-    echo "note: 'lake exe cache get' failed; mathlib may build from source" >&2
+# hours-long from-source build. `cache get` takes ~10 s even when warm, so it
+# runs only while mathlib's build is missing.
+if [ ! -f "$PKG_DIR/.lake/packages/mathlib/.lake/build/lib/lean/Mathlib.olean" ]; then
+    (cd "$PKG_DIR" && lake exe cache get >/dev/null 2>&1) || \
+        echo "note: 'lake exe cache get' failed; mathlib may build from source" >&2
+fi
 if (cd "$PKG_DIR" && lake build); then
     n_sorry=$(cd "$GEN_DIR" && find . -path ./pristine -prune -o -name '*.lean' ! -name '*_Template.lean' -print \
                   | xargs cat | grep -c 'sorry' || true)

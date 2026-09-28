@@ -88,7 +88,10 @@ def split_header(text):
 
 def cache_key(ps):
     h = hashlib.sha256()
-    h.update(sh(["git", "rev-parse", "HEAD"], cwd=REPO).stdout.encode())
+    # The tree's content, not the commit: a commit that only touches the
+    # proofs directory (which the tests never see) must not invalidate this.
+    tree = sh(["git", "ls-tree", "-r", "HEAD"], cwd=REPO).stdout.splitlines()
+    h.update("\n".join(l for l in tree if "\tbaby-bear/proofs/" not in l).encode())
     # Uncommitted changes to tracked Rust/manifests are part of the tree tested.
     h.update(sh(["git", "diff", "HEAD", "--", ".", ":(exclude)baby-bear/proofs"], cwd=REPO).stdout.encode())
     for p in ps:

@@ -13,8 +13,9 @@ impl). This file holds what that extraction does not produce:
 * the `no_packing` Poseidon layer types and their constructor impls. On a
   target with no SIMD these are the layers baby-bear's Poseidon instances use.
   The constructor bodies are one struct literal each and are transcribed.
-* the `PrimeField` witness for `MontyField31`. `PrimeField` is memberless in
-  `Interface.P3Field`, so the witness carries no content.
+* memberless `Field` and `PrimeField` witnesses for `MontyField31`. Both
+  traits are memberless in `Interface.P3Field`, so the witnesses carry no
+  content.
 -/
 import P3Monty31.Extraction
 import Interface.P3Poseidon1

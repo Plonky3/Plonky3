@@ -21,8 +21,9 @@ pins it uses, and prints a note when a newer hax release exists.
 | Lean | `leanprover/lean4:v4.31.0` | `lean-toolchain` |
 | CompPoly | `v4.31.0` (same mathlib as aeneas) | `lakefile.toml`: CompPoly `rev` |
 
-Install the pinned hax with `cargo install --locked cargo-hax@0.4.1`; the
-script uses the `cargo-hax` on `PATH` (or `HAX_BIN`).
+How to install each tool is in the Requirements table of
+[`../README.md`](../README.md), which repeats these versions; step 0 checks it
+too.
 
 ## Does an upstream change need re-extraction?
 
@@ -30,12 +31,16 @@ The generated Lean is not committed, so every `extract.sh` run re-extracts from
 the Rust as it is. The question is only whether an upstream change can break
 the build. It can if it touched `baby-bear/src/**`, `baby-bear/Cargo.toml`, or
 any source a pre-extraction patch applies to (`field/src`, `symmetric/src`,
-`matrix/src`, the workspace `Cargo.toml`). The same goes for `monty-31/src` or
-`mds/src`: their items are **extracted** (`generated/p3-monty-31/`,
-`generated/p3-mds/`), so a body change there is visible here. For `field/src`,
-`poseidon1/src` and `poseidon2/src` only a change to something mirrored in
-`assumptions/Interface/` matters (see `TCB.md`, layer 3), and nothing detects
-that automatically: read the diff.
+`matrix/src`, the workspace `Cargo.toml`). A change to an item that is
+actually extracted from `monty-31/src` or `mds/src` (`DEPS` in `extract.sh`:
+the parameter traits, `MontyField31::new`, its `Clone` impl,
+`utils::to_monty`, `first_row_to_first_col`) shows up in
+`generated/p3-monty-31/` or `generated/p3-mds/`. A change to something that is
+hand-mirrored does not: `MontyField31::new_array`, `new_2d_array` and the
+`no_packing` Poseidon layers in `assumptions/Interface/P3Monty31Missing.lean`,
+and the p3-field / p3-poseidon1 / p3-poseidon2 items in the other
+`assumptions/Interface/` files (see `TCB.md`, layer 3). Nothing detects that
+drift automatically: read the diff.
 
 ## Step 1 — re-extract
 
@@ -53,7 +58,7 @@ first failure. Steps, and what a failure at each one means:
 | 2 upstream tests | a test diverges under the pre-patches: the script writes a `# Divergence:` entry into the responsible patch's header, and fails while any entry's `class` is `TODO` | that patch's header; `patches/README.md` |
 | 3 cfg'd check | a pre-patch hid something that is still reachable | rustc's error names the use |
 | 4 extraction | charon or aeneas reports an error | the log; see the troubleshooting table below |
-| 6 stubs | a template in `generated/*/*/Extraction/*External_Template.lean` declares names the matching file in `assumptions/*/Assumptions/` does not, or the reverse | the message lists the names; step 2 below |
+| 6 stubs | a template in `generated/*/*/Extraction/*External_Template.lean` declares names the matching file in `assumptions/stubs/*/Assumptions/` does not, or the reverse | the message lists the names; step 2 below |
 | 8 `lake build` | the Lean does not elaborate | step 2 below |
 
 ## Step 2 — reconcile drift
@@ -68,7 +73,7 @@ there except by a post-extraction patch. Everything else (`assumptions/`,
    aeneas cannot translate it, add it to the matching `assumptions/Interface/`
    file with a docstring citing the upstream source.
 3. A step-6 failure means aeneas now expects different external declarations.
-   Update the named `assumptions/<Lib>/Assumptions/` file, starting from the
+   Update the named `assumptions/stubs/<Lib>/Assumptions/` file, starting from the
    template, and keep every body `opaque`.
 4. Hand-edit the generated files until `lake build` is green, marking every
    edit `-- PATCHED`, then capture it before the next `extract.sh` run:
@@ -127,7 +132,8 @@ git ls-remote --tags https://github.com/cryspen/hax 'refs/tags/cargo-hax-v*'   #
 
 A new `cargo-hax` resolves a new charon, aeneas, Lean toolchain and hax-lean.
 
-1. `cargo install --locked cargo-hax@<new> --force`, then
+1. `cargo install --locked cargo-hax@<new> --force` and
+   `(cd baby-bear && cargo hax tools install)`, then
    `cargo hax tools show` (run in `baby-bear/`) for the versions it resolves,
    and `git ls-remote https://github.com/cryspen/hax refs/tags/cargo-hax-v<new>^{}`
    for the tag's commit.
@@ -137,7 +143,8 @@ A new `cargo-hax` resolves a new charon, aeneas, Lean toolchain and hax-lean.
 3. Put the aeneas and hax-lean `rev`s into `lakefile.toml` and the Lean version
    into `lean-toolchain`. Choose the CompPoly tag whose mathlib matches
    aeneas's, then `lake update`.
-4. Update the **Current pins** table above, including the date checked.
+4. Update the **Current pins** table above, including the date checked, and
+   the Requirements table in `../README.md`.
 5. Run step 1. Step 0 fails until every pin agrees. Re-check each "Drop when"
    in the patch headers: a bump is the usual moment a patch becomes deletable.
 

@@ -12,11 +12,13 @@ that consumes them.
   `MONTY_BITS = 32`, `PRIME · MONTY_MU ≡ 1 mod 2^32`); aeneas keeps them as
   runtime `massert`s, and this proof discharges each one.
 * `new_array_ok`, `new_2d_array_ok`: the table constructors never panic. This
-  is about the hand-written transcriptions in `assumptions/Interface/P3Monty31.lean`,
+  is about the hand-written transcriptions in `assumptions/Interface/P3Monty31Missing.lean`,
   built on the extracted `new`.
-* `poseidon{1,2}_const_check_N`: every Poseidon round-constant table has the
-  length its `const _: () = assert!(..)` item demands. These are the nine
-  assertions patch 030 renames.
+* `poseidon{1,2}_const_check_N`: nine of the eleven Poseidon length
+  assertions. aeneas names the first anonymous const in each module `_` and
+  the rest `__N`; patch 030 renames the `__N` ones, and these theorems are
+  those nine. `poseidon1._` (`BABYBEAR_POSEIDON1_RC_16`) and `poseidon2._`
+  (`BABYBEAR_POSEIDON2_RC_16_EXTERNAL_INITIAL`) are not proved here.
 
 Nothing here is about the Poseidon permutations or field arithmetic.
 -/

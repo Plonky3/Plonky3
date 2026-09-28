@@ -9,13 +9,13 @@
 # Drop when: aeneas generates a name without a double underscore.
 #
 # baby-bear's Poseidon tables carry their length invariants as anonymous
-# const assertions (`const _: () = assert!(RC.len() == 2 * HALF + PARTIAL)`).
-# aeneas translates each to a `RustM Unit` definition whose body is the
-# assertion (a `massert`), and names it `poseidon{1,2}.__N`. The name is valid
-# Lean, but each one raises a linter warning, and the build must stay
-# warning-clean without switching linters off. They are renamed to
-# `const_check_N`. Nothing refers to them, and spec/ proves each one returns
-# `ok ()`.
+# const assertions (eleven of them: two in poseidon1.rs, nine in poseidon2.rs).
+# aeneas names the first in each module `_` and the rest `__1`, `__2`, ….
+# This patch renames the nine `__N` definitions to `const_check_N`. A `__`
+# name is valid Lean, but mathlib's `nameCheck` warns on each one, and the
+# build must stay warning-clean without switching linters off. The `_` names
+# do not warn, so they are left as `poseidon1._` and `poseidon2._`; spec/
+# proves the nine renamed checks and not those two.
 #
 --- a/p3-baby-bear/P3BabyBear/Extraction/Funs.lean
 +++ b/p3-baby-bear/P3BabyBear/Extraction/Funs.lean
