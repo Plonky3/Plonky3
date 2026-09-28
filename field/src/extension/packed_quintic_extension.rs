@@ -11,7 +11,10 @@ use p3_util::{flatten_to_base, reconstitute_from_base};
 use rand::distr::{Distribution, StandardUniform};
 
 use super::quintic_extension::{quintic_square, trinomial_quintic_mul};
-use super::{PackedExtField, QuinticTrinomialExtensionField, vector_add, vector_sub};
+use super::{
+    PackedExtField, QuinticTrinomialExtensionField, coordinatewise_dot_product, vector_add,
+    vector_sub,
+};
 use crate::extension::{QuinticTrinomial, QuinticTrinomialExtendable};
 use crate::{
     Algebra, BasedVectorSpace, Field, PackedField, PackedFieldExtension, PackedValue, Powers,
@@ -72,6 +75,13 @@ impl<F: QuinticTrinomialExtendable, PF: PackedField<Scalar = F>>
 impl<F: QuinticTrinomialExtendable, PF: PackedField<Scalar = F>> Algebra<PF>
     for PackedQuinticTrinomialExtensionField<F, PF>
 {
+    #[inline]
+    fn mixed_dot_product<const N: usize>(a: &[Self; N], f: &[PF; N]) -> Self {
+        Self::new(coordinatewise_dot_product(
+            &array::from_fn(|i| a[i].value),
+            f,
+        ))
+    }
 }
 
 impl<F, PF> PrimeCharacteristicRing for PackedQuinticTrinomialExtensionField<F, PF>

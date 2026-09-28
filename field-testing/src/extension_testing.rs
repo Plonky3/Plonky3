@@ -1,7 +1,7 @@
 use alloc::vec::Vec;
 
 use p3_field::extension::HasFrobenius;
-use p3_field::{ExtensionField, Field, PackedFieldExtension, PackedValue};
+use p3_field::{Algebra, ExtensionField, Field, PackedFieldExtension, PackedValue};
 use proptest::prelude::*;
 use rand::distr::{Distribution, StandardUniform};
 use rand::rngs::SmallRng;
@@ -89,6 +89,67 @@ where
         extension_elem, ext_power_p_d,
         "The element {extension_elem} raised to the power of p^d does not equal itself.",
     );
+}
+
+/// Pin the extension-by-base dot product to the plain sum of products.
+///
+/// Covers the scalar extension and its packing, at every length up to 9 and at 16.
+pub fn test_mixed_dot_product_ext<F, EF>()
+where
+    F: Field,
+    EF: ExtensionField<F>,
+    StandardUniform: Distribution<EF> + Distribution<F>,
+{
+    // One length `N`, checked on random inputs and on all-(p - 1) inputs.
+    fn check<F, EF, const N: usize>(rng: &mut SmallRng)
+    where
+        F: Field,
+        EF: ExtensionField<F>,
+        StandardUniform: Distribution<EF> + Distribution<F>,
+    {
+        let width = F::Packing::WIDTH;
+
+        // Random inputs, then the largest canonical value everywhere.
+        //
+        // The second case drives every unreduced accumulator to its maximum.
+        let random: ([EF; N], [F; N]) = (rng.random(), rng.random());
+        let extreme = ([EF::NEG_ONE; N], [F::NEG_ONE; N]);
+
+        for (a, f) in [random, extreme] {
+            // Scalar extension against the naive sum.
+            let naive: EF = a.iter().zip(&f).map(|(&x, &y)| x * y).sum();
+            assert_eq!(EF::mixed_dot_product(&a, &f), naive, "scalar, N = {N}");
+
+            // Packed extension: lane j holds `a` rotated by j, against the naive sum per lane.
+            let lanes: [Vec<EF>; N] =
+                core::array::from_fn(|i| (0..width).map(|j| a[(i + j) % N]).collect());
+            let packed_a = lanes
+                .each_ref()
+                .map(|l| EF::ExtensionPacking::from_ext_slice(l));
+            let packed_f = f.map(F::Packing::from);
+            let got = <EF::ExtensionPacking as Algebra<F::Packing>>::mixed_dot_product(
+                &packed_a, &packed_f,
+            );
+            let expected = (0..width).map(|j| (0..N).map(|i| a[(i + j) % N] * f[i]).sum::<EF>());
+            assert!(
+                EF::ExtensionPacking::to_ext_iter([got]).eq(expected),
+                "packed, N = {N}"
+            );
+        }
+    }
+
+    let mut rng = SmallRng::seed_from_u64(7);
+    check::<F, EF, 0>(&mut rng);
+    check::<F, EF, 1>(&mut rng);
+    check::<F, EF, 2>(&mut rng);
+    check::<F, EF, 3>(&mut rng);
+    check::<F, EF, 4>(&mut rng);
+    check::<F, EF, 5>(&mut rng);
+    check::<F, EF, 6>(&mut rng);
+    check::<F, EF, 7>(&mut rng);
+    check::<F, EF, 8>(&mut rng);
+    check::<F, EF, 9>(&mut rng);
+    check::<F, EF, 16>(&mut rng);
 }
 
 /// Ensure that the methods `from_ext_slice`, `to_ext_iter`, `unpack_transpose_into`,
