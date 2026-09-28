@@ -1,13 +1,24 @@
 use core::arch::x86_64::{
-    __m512i, _mm512_rol_epi64, _mm512_set1_epi64, _mm512_ternarylogic_epi64, _mm512_xor_epi64,
+    __m512i, _mm256_storeu_si256, _mm512_castsi512_si256, _mm512_extracti64x4_epi64,
+    _mm512_loadu_si512, _mm512_permutex2var_epi64, _mm512_rol_epi64, _mm512_set_epi64,
+    _mm512_set1_epi64, _mm512_setzero_si512, _mm512_shuffle_i64x2, _mm512_storeu_si512,
+    _mm512_ternarylogic_epi64, _mm512_unpackhi_epi64, _mm512_unpacklo_epi64, _mm512_xor_epi64,
 };
 use core::mem::transmute;
 
+#[cfg(target_feature = "avx512f")]
 use p3_symmetric::{CryptographicPermutation, Permutation};
 
+#[cfg(target_feature = "avx512f")]
 use crate::KeccakF;
+use crate::batch::{self, DIGEST_BYTES, Lanes, State};
 
-pub const VECTOR_LEN: usize = 8;
+/// Keccak states interleaved in one register, one per 64-bit lane.
+const WIDTH: usize = 8;
+
+/// Keccak states the packed permutation advances at once.
+#[cfg(target_feature = "avx512f")]
+pub const VECTOR_LEN: usize = WIDTH;
 
 const RC: [u64; 24] = [
     1u64,
@@ -36,6 +47,7 @@ const RC: [u64; 24] = [
     0x8000000080008008u64,
 ];
 
+// SAFETY (every intrinsic below): the permutation runs only on a CPU with AVX-512F.
 #[inline(always)]
 fn form_matrix(buf: [__m512i; 25]) -> [[__m512i; 5]; 5] {
     unsafe { transmute(buf) }
@@ -348,20 +360,179 @@ fn round(i: usize, state: [__m512i; 25]) -> [__m512i; 25] {
     flatten(state)
 }
 
-fn keccak_perm(buf: &mut [[u64; VECTOR_LEN]; 25]) {
+/// Permute eight interleaved Keccak states.
+///
+/// # Safety
+///
+/// The running CPU has AVX-512F.
+#[inline(always)]
+unsafe fn keccak_perm(buf: &mut [[u64; WIDTH]; 25]) {
     let mut state: [__m512i; 25] = unsafe { transmute(*buf) };
     for i in 0..24 {
         state = round(i, state);
     }
-    *buf = unsafe { transmute::<[__m512i; 25], [[u64; VECTOR_LEN]; 25]>(state) };
+    *buf = unsafe { transmute::<[__m512i; 25], [[u64; WIDTH]; 25]>(state) };
 }
 
-impl Permutation<[[u64; VECTOR_LEN]; 25]> for KeccakF {
-    fn permute_mut(&self, state: &mut [[u64; VECTOR_LEN]; 25]) {
-        keccak_perm(state);
+/// Whether the running CPU has AVX-512F.
+fn supported() -> bool {
+    cpufeatures::new!(has_avx512f, "avx512f");
+    has_avx512f::get()
+}
+
+/// Transpose an 8 x 8 matrix of 64-bit words held one row per register.
+///
+/// Row `l` holds eight consecutive words of lane `l`; output row `w` holds word `w` of every lane.
+///
+/// ```text
+///     phase 1, 64-bit pairs:   t_{2k}   = [r_{2k}[0] r_{2k+1}[0] | r_{2k}[2] r_{2k+1}[2] | ...]
+///                              t_{2k+1} = [r_{2k}[1] r_{2k+1}[1] | r_{2k}[3] r_{2k+1}[3] | ...]
+///     phase 2, 128-bit blocks: gather the even and the odd blocks of two pairs
+///     phase 3, 128-bit blocks: gather the four blocks holding one word
+/// ```
+///
+/// That is 24 shuffles for 64 words, against one gather per word.
+#[inline(always)]
+fn transpose(r: [__m512i; 8]) -> [__m512i; 8] {
+    // Blocks 0 and 2 of each operand, then blocks 1 and 3.
+    const EVEN: i32 = 0b10_00_10_00;
+    const ODD: i32 = 0b11_01_11_01;
+
+    unsafe {
+        // Phase 1: interleave 64-bit words of neighbouring lanes.
+        let t0 = _mm512_unpacklo_epi64(r[0], r[1]);
+        let t1 = _mm512_unpackhi_epi64(r[0], r[1]);
+        let t2 = _mm512_unpacklo_epi64(r[2], r[3]);
+        let t3 = _mm512_unpackhi_epi64(r[2], r[3]);
+        let t4 = _mm512_unpacklo_epi64(r[4], r[5]);
+        let t5 = _mm512_unpackhi_epi64(r[4], r[5]);
+        let t6 = _mm512_unpacklo_epi64(r[6], r[7]);
+        let t7 = _mm512_unpackhi_epi64(r[6], r[7]);
+
+        // Phase 2: pair lanes 0..4 and 4..8 by 128-bit block parity.
+        let a0 = _mm512_shuffle_i64x2::<EVEN>(t0, t2);
+        let a1 = _mm512_shuffle_i64x2::<ODD>(t0, t2);
+        let b0 = _mm512_shuffle_i64x2::<EVEN>(t4, t6);
+        let b1 = _mm512_shuffle_i64x2::<ODD>(t4, t6);
+        let c0 = _mm512_shuffle_i64x2::<EVEN>(t1, t3);
+        let c1 = _mm512_shuffle_i64x2::<ODD>(t1, t3);
+        let d0 = _mm512_shuffle_i64x2::<EVEN>(t5, t7);
+        let d1 = _mm512_shuffle_i64x2::<ODD>(t5, t7);
+
+        // Phase 3: one 128-bit block per lane pair, word by word.
+        [
+            _mm512_shuffle_i64x2::<EVEN>(a0, b0),
+            _mm512_shuffle_i64x2::<EVEN>(c0, d0),
+            _mm512_shuffle_i64x2::<EVEN>(a1, b1),
+            _mm512_shuffle_i64x2::<EVEN>(c1, d1),
+            _mm512_shuffle_i64x2::<ODD>(a0, b0),
+            _mm512_shuffle_i64x2::<ODD>(c0, d0),
+            _mm512_shuffle_i64x2::<ODD>(a1, b1),
+            _mm512_shuffle_i64x2::<ODD>(c1, d1),
+        ]
     }
 }
 
+/// The steps of the batched sponge on this backend.
+///
+/// Messages enter and digests leave through register transposes instead of gathers.
+struct Backend;
+
+impl Lanes<WIDTH> for Backend {
+    #[inline(always)]
+    unsafe fn permute(state: &mut State<WIDTH>) {
+        // SAFETY: the caller runs this on a CPU with AVX-512F.
+        unsafe { keccak_perm(state) };
+    }
+
+    #[inline(always)]
+    unsafe fn absorb_words(state: &mut [[u64; WIDTH]], lanes: &[&[u8]; WIDTH], offset: usize) {
+        // Eight words at a time: one 64-byte load per lane, then a transpose.
+        //
+        //     lane l, bytes offset .. offset + 64  ->  row l = [m_l[0] ... m_l[7]]
+        //     transpose                            ->  row w = [m_0[w] ... m_7[w]]
+        let (groups, rest) = state.as_chunks_mut::<8>();
+        for (g, group) in groups.iter_mut().enumerate() {
+            let at = offset + 64 * g;
+            let mut rows = [unsafe { _mm512_setzero_si512() }; 8];
+            for (row, lane) in rows.iter_mut().zip(lanes) {
+                let bytes: &[u8; 64] = lane[at..][..64].try_into().unwrap();
+                // SAFETY: the load reads exactly the 64 bytes just bounds-checked.
+                *row = unsafe { _mm512_loadu_si512(bytes.as_ptr().cast()) };
+            }
+            for (word, column) in group.iter_mut().zip(transpose(rows)) {
+                let word = word.as_mut_ptr().cast();
+                // SAFETY: a state word is 64 bytes, and unaligned access is allowed.
+                unsafe {
+                    let sum = _mm512_xor_epi64(_mm512_loadu_si512(word), column);
+                    _mm512_storeu_si512(word, sum);
+                }
+            }
+        }
+
+        // Fewer than eight words left: one word at a time.
+        batch::absorb_words(rest, lanes, offset + 64 * groups.len());
+    }
+
+    #[inline(always)]
+    unsafe fn squeeze(state: &State<WIDTH>, digests: &mut [[u8; DIGEST_BYTES]; WIDTH]) {
+        // A digest is words 0..4 of one lane, so the squeeze is a 4 x 8 transpose.
+        let mut w = [unsafe { _mm512_setzero_si512() }; 4];
+        for (w, word) in w.iter_mut().zip(state) {
+            // SAFETY: a state word is 64 bytes, and unaligned access is allowed.
+            *w = unsafe { _mm512_loadu_si512(word.as_ptr().cast()) };
+        }
+
+        // SAFETY (whole block): every store writes one 32-byte digest.
+        unsafe {
+            // Interleave neighbouring words, so block b holds two words of one lane:
+            //
+            //     lo01 block b = [ s_0^(2b)   s_1^(2b)   ]    hi01 block b = [ s_0^(2b+1) s_1^(2b+1) ]
+            //     lo23 block b = [ s_2^(2b)   s_3^(2b)   ]    hi23 block b = [ s_2^(2b+1) s_3^(2b+1) ]
+            let lo01 = _mm512_unpacklo_epi64(w[0], w[1]);
+            let hi01 = _mm512_unpackhi_epi64(w[0], w[1]);
+            let lo23 = _mm512_unpacklo_epi64(w[2], w[3]);
+            let hi23 = _mm512_unpackhi_epi64(w[2], w[3]);
+
+            // Join block b of both halves for two lanes at once:
+            //
+            //     first  = [ lo01.b0 lo23.b0 | lo01.b1 lo23.b1 ] = [ digest 0 | digest 2 ]
+            //     second = [ lo01.b2 lo23.b2 | lo01.b3 lo23.b3 ] = [ digest 4 | digest 6 ]
+            let first = _mm512_set_epi64(11, 10, 3, 2, 9, 8, 1, 0);
+            let second = _mm512_set_epi64(15, 14, 7, 6, 13, 12, 5, 4);
+            let pairs = [
+                (_mm512_permutex2var_epi64(lo01, first, lo23), 0),
+                (_mm512_permutex2var_epi64(hi01, first, hi23), 1),
+                (_mm512_permutex2var_epi64(lo01, second, lo23), 4),
+                (_mm512_permutex2var_epi64(hi01, second, hi23), 5),
+            ];
+
+            // The low half is one lane's digest, the high half the digest two lanes on.
+            for (pair, lane) in pairs {
+                _mm256_storeu_si256(
+                    digests[lane].as_mut_ptr().cast(),
+                    _mm512_castsi512_si256(pair),
+                );
+                _mm256_storeu_si256(
+                    digests[lane + 2].as_mut_ptr().cast(),
+                    _mm512_extracti64x4_epi64::<1>(pair),
+                );
+            }
+        }
+    }
+}
+
+batch::kernel!("AVX-512F", Backend, WIDTH, "avx512f");
+
+#[cfg(target_feature = "avx512f")]
+impl Permutation<[[u64; VECTOR_LEN]; 25]> for KeccakF {
+    fn permute_mut(&self, state: &mut [[u64; VECTOR_LEN]; 25]) {
+        // SAFETY: the build enables AVX-512F.
+        unsafe { keccak_perm(state) };
+    }
+}
+
+#[cfg(target_feature = "avx512f")]
 impl CryptographicPermutation<[[u64; VECTOR_LEN]; 25]> for KeccakF {}
 
 #[cfg(test)]
@@ -604,7 +775,8 @@ mod tests {
             ];
         }
 
-        keccak_perm(&mut packed_result);
+        // SAFETY: the test runs only on a CPU with this backend.
+        unsafe { keccak_perm(&mut packed_result) };
 
         let mut result = [[0; 25]; 8];
         for (i, packed_res) in packed_result.iter_mut().enumerate() {
@@ -635,6 +807,11 @@ mod tests {
 
     #[test]
     fn test_vs_tiny_keccak() {
+        // Every x86-64 build compiles this backend, but only a CPU with AVX-512F runs it.
+        if !supported() {
+            return;
+        }
+
         let expected = tiny_keccak_res();
         let computed = our_res();
         assert_eq!(expected, computed);

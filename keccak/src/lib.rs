@@ -8,8 +8,15 @@ extern crate alloc;
 use p3_symmetric::{CryptographicHasher, CryptographicPermutation, Permutation};
 use tiny_keccak::{Hasher, Keccak, Sha3, keccakf};
 
+mod batch;
+
+// On x86-64 every wide backend is compiled, for the batched hash to pick at run time.
+//
+// Only the one the build enables is public, as the permutation of packed states.
 #[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
 pub mod avx512;
+#[cfg(all(target_arch = "x86_64", not(target_feature = "avx512f")))]
+mod avx512;
 #[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
 pub use avx512::*;
 
@@ -19,6 +26,8 @@ pub use avx512::*;
     not(target_feature = "avx512f")
 ))]
 pub mod avx2;
+#[cfg(all(target_arch = "x86_64", not(target_feature = "avx2")))]
+mod avx2;
 #[cfg(all(
     target_arch = "x86_64",
     target_feature = "avx2",
@@ -104,224 +113,6 @@ impl Permutation<[u8; 200]> for KeccakF {
 
 impl CryptographicPermutation<[u8; 200]> for KeccakF {}
 
-/// Byte rate of both 256-bit sponges.
-///
-/// Capacity is twice the 256-bit digest, taken out of the 1600-bit permutation.
-/// That leaves 1088 bits, exactly 136 bytes, absorbed per permutation.
-const RATE: usize = (1600 - 2 * 256) / 8;
-
-/// Digest length of both 256-bit sponges in bytes.
-const DIGEST_BYTES: usize = 32;
-
-/// Index of the state word holding the last byte of the rate.
-const LAST_RATE_WORD: usize = (RATE - 1) / 8;
-
-/// Closing padding mark, placed at the last byte of the rate.
-const CLOSING_MARK: u64 = 0x80u64 << (8 * ((RATE - 1) % 8));
-
-/// First padding byte of Keccak-256.
-///
-/// The original submission appends the `pad10*1` rule directly after the message.
-/// Its first one bit is the low bit of the byte.
-const KECCAK_DOMAIN: u8 = 0x01;
-
-/// First padding byte of SHA3-256.
-///
-/// FIPS 202 appends the two domain bits `01` before the `pad10*1` rule.
-/// Bits enter the byte from the low end, so `0 1 1` reads as `0x06`.
-const SHA3_DOMAIN: u8 = 0x06;
-
-/// Exclusive-or one whole state word, every lane at once.
-///
-/// The permutation loads a state word as a single `VECTOR_LEN`-wide vector, and a partially
-/// written word cannot be store-to-load forwarded into that load, so every write here covers
-/// the word in full.
-#[inline(always)]
-fn xor_state_word(word: &mut [u64; VECTOR_LEN], value: [u64; VECTOR_LEN]) {
-    for (lane, value) in word.iter_mut().zip(value) {
-        *lane ^= value;
-    }
-}
-
-/// Read the eight message bytes at `offset` in every lane into one state word value.
-///
-/// Bytes enter the state little-endian, eight to a state word, matching the Keccak convention.
-#[inline(always)]
-fn gather_word(lanes: &[&[u8]; VECTOR_LEN], offset: usize) -> [u64; VECTOR_LEN] {
-    let mut word = [0u64; VECTOR_LEN];
-    for (value, lane) in word.iter_mut().zip(lanes) {
-        *value = u64::from_le_bytes(lane[offset..][..8].try_into().unwrap());
-    }
-    word
-}
-
-/// Absorb a run of whole state words, one message per lane, starting at `offset` in each.
-///
-/// A vectorized state keeps one independent sponge per lane, side by side.
-/// The lane count is whatever the target's permutation is wide.
-///
-/// ```text
-///     state[word][lane]      word = 0..25, lane = 0..L
-///
-///     state[0]  [ s_0^(0)  s_0^(1)  ...  s_0^(L-1) ]
-///     state[1]  [ s_1^(0)  s_1^(1)  ...  s_1^(L-1) ]
-///     ...
-/// ```
-///
-/// Each row is assembled across all lanes first and then stored once, so no state word is
-/// built out of partial writes. The transpose happens in registers; the messages themselves
-/// are never copied or reordered.
-#[inline(always)]
-fn absorb_words(
-    state: &mut [[u64; VECTOR_LEN]; 25],
-    lanes: &[&[u8]; VECTOR_LEN],
-    offset: usize,
-    words: usize,
-) {
-    debug_assert!(words <= RATE / 8);
-
-    for (word_index, word) in state[..words].iter_mut().enumerate() {
-        xor_state_word(word, gather_word(lanes, offset + 8 * word_index));
-    }
-}
-
-/// Absorb the final, shorter block of every lane and close it with the padding.
-///
-/// The first padding byte `d` carries the domain bits of the hash, then the rule's first one bit:
-///
-/// ```text
-///     [ message bytes | d | 0x00 ... 0x00 | 0x80 ]
-///                       ^                   ^
-///                  block_len            rate - 1
-///
-///     Keccak-256:  d = 0x01
-///     SHA3-256:    d = 0x06
-/// ```
-///
-/// A block ending one byte short of the rate puts both marks in the same byte.
-/// Exclusive-or makes that byte `d | 0x80`, exactly what the rule requires.
-///
-/// The leftover bytes and the marks meet in the word value before it reaches the state,
-/// so the closing word is stored once like every other one.
-#[inline(always)]
-fn absorb_final_block<const DOMAIN: u8>(
-    state: &mut [[u64; VECTOR_LEN]; 25],
-    lanes: &[&[u8]; VECTOR_LEN],
-    offset: usize,
-    block_len: usize,
-) {
-    debug_assert!(block_len < RATE);
-
-    let words = block_len / 8;
-    let tail = block_len % 8;
-    absorb_words(state, lanes, offset, words);
-
-    // The first mark sits immediately after the last message byte, in the same word as any
-    // leftover bytes. The second mark joins it when that word is already the closing word of
-    // the rate.
-    let mut marks = u64::from(DOMAIN) << (8 * tail);
-    if words == LAST_RATE_WORD {
-        marks ^= CLOSING_MARK;
-    }
-    let mut value = [0u64; VECTOR_LEN];
-    for (value, lane) in value.iter_mut().zip(lanes) {
-        let mut bytes = [0u8; 8];
-        bytes[..tail].copy_from_slice(&lane[offset + 8 * words..][..tail]);
-        *value = u64::from_le_bytes(bytes) ^ marks;
-    }
-    xor_state_word(&mut state[words], value);
-
-    // The closing word is otherwise untouched by the message and the first mark, so it takes
-    // the second mark alone.
-    if words != LAST_RATE_WORD {
-        xor_state_word(&mut state[LAST_RATE_WORD], [CLOSING_MARK; VECTOR_LEN]);
-    }
-}
-
-/// Read the digest of one lane out of a permuted vectorized state.
-#[inline(always)]
-fn squeeze_lane(state: &[[u64; VECTOR_LEN]; 25], lane: usize) -> [u8; DIGEST_BYTES] {
-    let mut digest = [0u8; DIGEST_BYTES];
-
-    // The digest is the leading bytes of the rate portion, little-endian per state word.
-    for (word_index, word) in digest.as_chunks_mut::<8>().0.iter_mut().enumerate() {
-        *word = state[word_index][lane].to_le_bytes();
-    }
-
-    digest
-}
-
-/// Hash a batch of equal-length messages, one message per lane per permutation.
-///
-/// The const parameter is the first padding byte, which alone tells the two 256-bit hashes apart.
-///
-/// # Panics
-///
-/// Panics if the input length is not a whole multiple of the digest count.
-#[inline(always)]
-fn hash_many_with_domain<const DOMAIN: u8>(input: &[u8], out: &mut [[u8; DIGEST_BYTES]]) {
-    // No digests requested means there is nothing to read from the input.
-    if out.is_empty() {
-        return;
-    }
-
-    // Every message has the same length, so the split is exact by contract.
-    assert!(
-        input.len().is_multiple_of(out.len()),
-        "input length ({}) must be a whole multiple of the digest count ({})",
-        input.len(),
-        out.len()
-    );
-    let len = input.len() / out.len();
-
-    // Empty messages all share one digest.
-    // One padding-only block in a single state gives it, with no message to split.
-    if len == 0 {
-        let mut state = [[0u64; VECTOR_LEN]; 25];
-        absorb_final_block::<DOMAIN>(&mut state, &[&[]; VECTOR_LEN], 0, 0);
-        KeccakF.permute_mut(&mut state);
-        out.fill(squeeze_lane(&state, 0));
-        return;
-    }
-
-    // Whole rate blocks are absorbed in lockstep, then one shorter final block.
-    // That final block carries the padding and is empty when the length divides the rate.
-    let full_blocks = len / RATE;
-    let final_block = len % RATE;
-
-    // One message per lane per permutation.
-    for (messages, digests) in input
-        .chunks(len * VECTOR_LEN)
-        .zip(out.chunks_mut(VECTOR_LEN))
-    {
-        let mut state = [[0u64; VECTOR_LEN]; 25];
-
-        // A short last group repeats its first message in the spare lanes, which keeps the
-        // lane count fixed at compile time. Those lanes are hashed alongside the requested
-        // ones and never squeezed.
-        let present = digests.len();
-        let lanes: [&[u8]; VECTOR_LEN] = core::array::from_fn(|lane| {
-            let index = if lane < present { lane } else { 0 };
-            &messages[index * len..][..len]
-        });
-
-        // Every lane contributes its block, then one permutation advances all the sponges.
-        for block in 0..full_blocks {
-            absorb_words(&mut state, &lanes, block * RATE, RATE / 8);
-            KeccakF.permute_mut(&mut state);
-        }
-
-        // The final partial block carries the padding and permutes once more.
-        absorb_final_block::<DOMAIN>(&mut state, &lanes, full_blocks * RATE, final_block);
-        KeccakF.permute_mut(&mut state);
-
-        // Squeeze one digest per requested message.
-        for (lane, digest) in digests.iter_mut().enumerate() {
-            *digest = squeeze_lane(&state, lane);
-        }
-    }
-}
-
 /// Feed a byte stream to a one-message sponge and return its 256-bit digest.
 #[inline]
 fn finalize_iter<S: Hasher>(mut sponge: S, input: impl IntoIterator<Item = u8>) -> [u8; 32] {
@@ -354,7 +145,7 @@ fn finalize_slices<'a, S: Hasher>(
 pub struct Keccak256Hash;
 
 impl CryptographicHasher<u8, [u8; 32]> for Keccak256Hash {
-    const LANES: usize = VECTOR_LEN;
+    const LANES: usize = batch::LANES;
 
     fn hash_iter<I>(&self, input: I) -> [u8; 32]
     where
@@ -371,7 +162,7 @@ impl CryptographicHasher<u8, [u8; 32]> for Keccak256Hash {
     }
 
     fn hash_many(&self, input: &[u8], out: &mut [[u8; 32]]) {
-        hash_many_with_domain::<KECCAK_DOMAIN>(input, out);
+        batch::hash_many(batch::KECCAK_DOMAIN, input, out);
     }
 }
 
@@ -389,7 +180,7 @@ impl CryptographicHasher<u8, [u8; 32]> for Keccak256Hash {
 pub struct Sha3_256Hash;
 
 impl CryptographicHasher<u8, [u8; 32]> for Sha3_256Hash {
-    const LANES: usize = VECTOR_LEN;
+    const LANES: usize = batch::LANES;
 
     fn hash_iter<I>(&self, input: I) -> [u8; 32]
     where
@@ -406,7 +197,7 @@ impl CryptographicHasher<u8, [u8; 32]> for Sha3_256Hash {
     }
 
     fn hash_many(&self, input: &[u8], out: &mut [[u8; 32]]) {
-        hash_many_with_domain::<SHA3_DOMAIN>(input, out);
+        batch::hash_many(batch::SHA3_DOMAIN, input, out);
     }
 }
 
@@ -423,6 +214,7 @@ mod tests {
     use sha3::{Digest, Sha3_256};
 
     use super::*;
+    use crate::batch::{KECCAK_DOMAIN, LANES, LAST_RATE_WORD, RATE, SHA3_DOMAIN, supported};
 
     /// Every message length that changes the shape of the absorb loop.
     ///
@@ -470,39 +262,43 @@ mod tests {
     }
 
     /// Batch every shape length at every count up to two lane groups plus one.
-    fn check_block_shapes<H>(hasher: &H)
+    ///
+    /// The public batched path runs first, then every backend the CPU supports.
+    fn check_block_shapes<H>(hasher: &H, domain: u8)
     where
         H: CryptographicHasher<u8, [u8; 32]>,
     {
-        // Batch sizes below, at, and above one full lane group.
-        // The final short group is then exercised at every lane count the target compiles to.
-        let counts: Vec<usize> = (1..=2 * VECTOR_LEN + 1).collect();
+        // Batch sizes below, at, and above one full group of the widest backend.
+        // The final short group is then exercised at every lane count.
+        let counts: Vec<usize> = (1..=2 * LANES + 1).collect();
 
         for len in SHAPE_LENGTHS {
             for &count in &counts {
                 // Fixture: a deterministic byte ramp, distinct per position.
                 let messages: Vec<u8> = (0..len * count).map(|i| (i * 31 + 7) as u8).collect();
+                let expected = reference(hasher, &messages, len, count);
 
                 let mut batched = vec![[0u8; 32]; count];
                 hasher.hash_many(&messages, &mut batched);
+                assert_eq!(batched, expected, "len {len}, count {count}");
 
-                assert_eq!(
-                    batched,
-                    reference(hasher, &messages, len, count),
-                    "len {len}, count {count}"
-                );
+                for kernel in supported() {
+                    let mut batched = vec![[0u8; 32]; count];
+                    kernel.hash_many(domain, &messages, len, &mut batched);
+                    assert_eq!(batched, expected, "{kernel:?}, len {len}, count {count}");
+                }
             }
         }
     }
 
     #[test]
     fn keccak256_hash_many_matches_scalar_across_block_shapes() {
-        check_block_shapes(&Keccak256Hash);
+        check_block_shapes(&Keccak256Hash, KECCAK_DOMAIN);
     }
 
     #[test]
     fn sha3_256_hash_many_matches_scalar_across_block_shapes() {
-        check_block_shapes(&Sha3_256Hash);
+        check_block_shapes(&Sha3_256Hash, SHA3_DOMAIN);
     }
 
     #[test]
@@ -598,7 +394,7 @@ mod tests {
         #[test]
         fn sha3_256_matches_an_independent_implementation(
             len in 0usize..=600,
-            count in 1usize..=2 * VECTOR_LEN + 1,
+            count in 1usize..=2 * LANES + 1,
             seed in any::<u64>(),
         ) {
             // Fixture: `count` random messages of `len` bytes, back to back.
@@ -616,6 +412,13 @@ mod tests {
 
             prop_assert_eq!(&batched, &expected);
             prop_assert_eq!(&scalar, &expected);
+
+            // Every backend the CPU supports, not only the one picked at run time.
+            for kernel in supported() {
+                let mut batched = vec![[0u8; 32]; count];
+                kernel.hash_many(SHA3_DOMAIN, &messages, len, &mut batched);
+                prop_assert_eq!(&batched, &expected, "{:?}", kernel);
+            }
         }
     }
 
